@@ -19,6 +19,7 @@
 #include "micant/km/drivers/fs/npfs.hpp"
 #include "micant/km/drivers/fs/ntfs.hpp"
 #include "micant/km/drivers/fs/exfat.hpp"
+#include "micant/km/drivers/fs/cdfs.hpp"
 
 namespace micant::fs {
 
@@ -294,6 +295,27 @@ public:
         return exfatFs_;
     }
 
+    NtStatus mountCdfs(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        cdfsFs_ = std::make_shared<cdfs::CdfsFileSystem>();
+        NtStatus st = cdfsFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            cdfsFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedCdfs(std::shared_ptr<cdfs::CdfsFileSystem> cdfs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cdfsFs_ = cdfs;
+    }
+
+    [[nodiscard]] std::shared_ptr<cdfs::CdfsFileSystem> getMountedCdfs() const noexcept {
+        return cdfsFs_;
+    }
+
     NtStatus createOrOpenFile(
         std::wstring_view path,
         uint32_t desiredAccess,
@@ -404,6 +426,28 @@ public:
             return NtStatus::Success;
         }
 
+        // 0.4 Check for CDFS / UDFS Optical Volume (Drive F: or \Device\CdRom0)
+        if (cdfsFs_ && (path.starts_with(L"F:") || path.starts_with(L"f:") ||
+                        path.starts_with(L"\\DosDevices\\F:") || path.starts_with(L"\\??\\F:") ||
+                        path.starts_with(L"\\Device\\CdRom0") || path.starts_with(L"\\Device\\CdRom_F"))) {
+            if ((desiredAccess & FILE_WRITE_DATA) || disposition == FILE_CREATE || disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF) {
+                return NtStatus::MediaWriteProtected;
+            }
+            std::wstring normCdfs = normalizePath(sPath);
+            if (normCdfs.starts_with(L"F:\\") || normCdfs.starts_with(L"f:\\")) {
+                normCdfs = normCdfs.substr(3);
+            }
+            cdfs::CdfsFileEntry entry;
+            NtStatus lookupSt = cdfsFs_->lookupPath(normCdfs, entry);
+            if (!NT_SUCCESS(lookupSt)) {
+                return NtStatus::NoSuchFile;
+            }
+
+            outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+            openCdfsFiles_[outFileObj.get()] = normCdfs;
+            return NtStatus::Success;
+        }
+
         // 1. Check if path targets a registered device node in \Device
         std::wstring resolvedPath = ob::ObjectNamespace::get().resolvePath(path);
         auto directDevice = io::IoManager::get().lookupDevice(resolvedPath);
@@ -503,6 +547,19 @@ public:
             return st;
         }
 
+        auto itCdfs = openCdfsFiles_.find(fileObj);
+        if (itCdfs != openCdfsFiles_.end() && cdfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t cdfsBytes = 0;
+            NtStatus st = cdfsFs_->readFile(itCdfs->second, buffer, length, static_cast<uint64_t>(offset), cdfsBytes);
+            bytesRead = static_cast<uint32_t>(cdfsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp readIrp{};
@@ -594,6 +651,12 @@ public:
             return st;
         }
 
+        auto itCdfs = openCdfsFiles_.find(fileObj);
+        if (itCdfs != openCdfsFiles_.end() && cdfsFs_) {
+            bytesWritten = 0;
+            return NtStatus::MediaWriteProtected;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp writeIrp{};
@@ -656,6 +719,7 @@ public:
         openMailslots_.erase(fileObj);
         openNtfsFiles_.erase(fileObj);
         openExfatFiles_.erase(fileObj);
+        openCdfsFiles_.erase(fileObj);
         openFiles_.erase(fileObj);
     }
 
@@ -946,6 +1010,8 @@ private:
     std::unordered_map<FileObject*, std::pair<uint64_t, std::wstring>> openNtfsFiles_;
     std::shared_ptr<exfat::ExfatFileSystem> exfatFs_;
     std::unordered_map<FileObject*, std::wstring> openExfatFiles_;
+    std::shared_ptr<cdfs::CdfsFileSystem> cdfsFs_;
+    std::unordered_map<FileObject*, std::wstring> openCdfsFiles_;
     io::FastIoDispatch fastIoTable_{};
     std::unique_ptr<io::Vpb> vpb_;
 };

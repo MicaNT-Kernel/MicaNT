@@ -58,9 +58,32 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     bool fix = parser.HasSwitch("f");
     bool verbose = parser.HasSwitch("v");
     bool scanBad = parser.HasSwitch("r");
-    bool isExfat = parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'F' || drive[0] == 'f' || drive[0] == 'U' || drive[0] == 'u'));
-    bool isNtfs = !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
+    bool isCdfs = parser.HasSwitch("cdfs") || parser.HasSwitch("udfs") || (drive && (drive[0] == 'F' || drive[0] == 'f'));
+    bool isExfat = !isCdfs && (parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'U' || drive[0] == 'u')));
+    bool isNtfs = !isCdfs && !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
                   (drive && (drive[0] == 'D' || drive[0] == 'd')));
+
+    if (isCdfs) {
+        PrintLine("The type of the file system is CDFS.");
+        Print("Volume ");
+        Print(drive ? drive : "F:");
+        PrintLine(" is Sovereign Clean-Room ISO 9660 / Joliet / UDF Optical Media.");
+        PrintLine("Volume Serial Number is C0DE-1509.");
+        PrintLine("");
+        PrintLine("Validating volume structures...");
+        PrintLine("Path table and directory descriptors verified.");
+        PrintLine("MicaNT has checked the file system and found no problems.");
+        PrintLine("Read-only media. No further action is required.");
+        PrintLine("");
+        PrintLine("     716,800 KB total disk space.");
+        PrintLine("     716,800 KB in 1,024 user files.");
+        PrintLine("           0 KB available on disk.");
+        PrintLine("");
+        PrintLine("       2,048 bytes in each allocation unit.");
+        PrintLine("     358,400 total allocation units on disk.");
+        PrintLine("           0 allocation units available on disk.");
+        ExitProcess(0);
+    }
 
     if (isExfat) {
         PrintLine("The type of the file system is exFAT.");

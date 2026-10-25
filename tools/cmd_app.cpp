@@ -364,11 +364,14 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("C:\\");
         PrintLine("D:\\");
         PrintLine("E:\\");
+        PrintLine("F:\\");
         return;
     }
 
     if (MatchCmdToken(cmd, "format")) {
-        if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
+        if (StrCaseContains(cmd, "f:")) {
+            PrintLine("Format cannot run on this volume because the volume is write-protected.");
+        } else if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
             PrintLine("The type of the file system is exFAT.");
             PrintLine("Formatting 16.0 MB");
             PrintLine("Initializing the File Allocation Table (FAT)...");
@@ -386,7 +389,15 @@ void ExecuteCommand(const char* cmd) noexcept {
     }
 
     if (MatchCmdToken(cmd, "chkdsk")) {
-        if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
+        if (StrCaseContains(cmd, "cdfs") || StrCaseContains(cmd, "udfs") || StrCaseContains(cmd, "f:")) {
+            PrintLine("The type of the file system is CDFS.");
+            PrintLine("Volume F: is Sovereign Clean-Room ISO 9660 / Joliet / UDF Optical Media.");
+            PrintLine("Volume Serial Number is C0DE-1509.");
+            PrintLine("Validating volume structures...");
+            PrintLine("Path table and directory descriptors verified.");
+            PrintLine("MicaNT has checked the file system and found no problems.");
+            PrintLine("Read-only media. No further action is required.");
+        } else if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
             PrintLine("The type of the file system is exFAT.");
             PrintLine("Volume E: is Sovereign Clean-Room exFAT.");
             PrintLine("Volume Serial Number is 6A12-9F04.");

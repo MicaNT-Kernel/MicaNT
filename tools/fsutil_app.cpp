@@ -43,9 +43,27 @@ void FsInfoDrives() noexcept {
     PrintLine("C:\\");
     PrintLine("D:\\");
     PrintLine("E:\\");
+    PrintLine("F:\\");
 }
 
 void FsInfoVolumeInfo(const char* drive) noexcept {
+    if (drive && (drive[0] == 'F' || drive[0] == 'f')) {
+        Print("Volume Name : ");
+        PrintLine(drive);
+        PrintLine("Volume Serial Number : 0xC0DE1509");
+        PrintLine("Max Component Length : 110");
+        PrintLine("File System Name : CDFS");
+        PrintLine("Is Volume Dirty : No");
+        PrintLine("Total Sectors : 358,400 (700.00 MB)");
+        PrintLine("Bytes Per Sector : 2048");
+        PrintLine("Sectors Per Allocation Unit : 1");
+        PrintLine("Bytes Per Cluster : 2,048");
+        PrintLine("Total Clusters : 358,400");
+        PrintLine("Free Clusters : 0");
+        PrintLine("Supports Case-Preserving Names : Yes");
+        PrintLine("Supports Unicode in Filenames : Yes (Joliet / UDF)");
+        return;
+    }
     if (drive && (drive[0] == 'E' || drive[0] == 'e')) {
         Print("Volume Name : ");
         PrintLine(drive);

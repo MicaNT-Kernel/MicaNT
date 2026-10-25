@@ -21850,5 +21850,235 @@ inline void Test_Horizon138_CleanRoom_ExFat_Driver_And_Allocation_Engine() {
     std::cout << "[TEST] Suite 354: Horizon 138 - Sovereign Clean-Room exFAT Kernel Driver & Allocation Engine PASSED.\n";
 }
 
+// ============================================================================
+// Suite 355: Horizon 139 - Sovereign Clean-Room CDFS / UDFS Optical Media
+//                          Drivers (ISO 9660, Joliet, ECMA-167 UDF),
+//                          Write-Protection Engine & System32 Parity
+//                          (drivers/fs/cdfs) (Unit #111)
+// ============================================================================
+inline void Test_Horizon139_CleanRoom_Cdfs_Udfs_Driver_And_Optical_Media_Subsystem() {
+    std::cout << "\n[TEST] Suite 355: Horizon 139 - Sovereign Clean-Room CDFS / UDFS Drivers & Optical Media...\n";
+
+    // 1. CdfsDriver and UdfsDriver Object & Dispatch Registration
+    {
+        auto& cdfsDriver = micant::cdfs::CdfsDriver::get();
+        cdfsDriver.initialize();
+        TEST_ASSERT(cdfsDriver.isInitialized(), "CdfsDriver must be initialized");
+
+        auto* drvObj = cdfsDriver.getDriverObject();
+        TEST_ASSERT(drvObj != nullptr, "DriverObject must not be null");
+        TEST_ASSERT(drvObj->driverName == L"\\FileSystem\\Cdfs", "Driver name must be \\FileSystem\\Cdfs");
+
+        // Verify major function table wiring
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_CREATE] != nullptr, "IRP_MJ_CREATE dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_READ] != nullptr, "IRP_MJ_READ dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_WRITE] != nullptr, "IRP_MJ_WRITE dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_CLOSE] != nullptr, "IRP_MJ_CLOSE dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_DIRECTORY_CONTROL] != nullptr, "IRP_MJ_DIRECTORY_CONTROL dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_QUERY_INFORMATION] != nullptr, "IRP_MJ_QUERY_INFORMATION dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_SET_INFORMATION] != nullptr, "IRP_MJ_SET_INFORMATION dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_FILE_SYSTEM_CONTROL] != nullptr, "IRP_MJ_FILE_SYSTEM_CONTROL dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_DEVICE_CONTROL] != nullptr, "IRP_MJ_DEVICE_CONTROL dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_SHUTDOWN] != nullptr, "IRP_MJ_SHUTDOWN dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_CLEANUP] != nullptr, "IRP_MJ_CLEANUP dispatch must be wired");
+
+        // Verify Fast I/O dispatch
+        auto* fastIo = cdfsDriver.getFastIoDispatch();
+        TEST_ASSERT(fastIo != nullptr, "FastIoDispatch table must exist");
+        TEST_ASSERT(fastIo->fastIoRead != nullptr, "FastIoRead must be wired");
+        TEST_ASSERT(fastIo->fastIoCheckIfPossible != nullptr, "FastIoCheckIfPossible must be wired");
+        TEST_ASSERT(fastIo->fastIoQueryBasicInfo != nullptr, "FastIoQueryBasicInfo must be wired");
+        TEST_ASSERT(fastIo->fastIoQueryStandardInfo != nullptr, "FastIoQueryStandardInfo must be wired");
+
+        // Verify UdfsDriver
+        auto& udfsDriver = micant::cdfs::UdfsDriver::get();
+        udfsDriver.initialize();
+        TEST_ASSERT(udfsDriver.isInitialized(), "UdfsDriver must be initialized");
+        auto* udfsObj = udfsDriver.getDriverObject();
+        TEST_ASSERT(udfsObj && udfsObj->driverName == L"\\FileSystem\\Udfs", "Driver name must be \\FileSystem\\Udfs");
+    }
+
+    // 2. Optical Media Volume Synthesis (2048-Byte Sectors, ISO 9660 PVD, Joliet SVD, UDF AVDP)
+    auto ramDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\CdRomOptical139", 4 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_2048);
+    auto cdfs = std::make_shared<micant::cdfs::CdfsFileSystem>();
+
+    NtStatus stFormat = cdfs->format(*ramDisk, L"MICANT_OS", true, true);
+    TEST_ASSERT(NT_SUCCESS(stFormat), "CDFS volume synthesis on 4MB RamDisk must succeed");
+
+    // Inspect Sector 0 (System Area)
+    std::vector<uint8_t> sec0(2048, 0xFF);
+    TEST_ASSERT(NT_SUCCESS(ramDisk->readBlocks(0, 1, sec0.data())), "Read sector 0 must succeed");
+    for (size_t i = 0; i < 2048; ++i) {
+        TEST_ASSERT(sec0[i] == 0, "System area sector 0 must be zeroed");
+    }
+
+    // Inspect Sector 16 (PVD)
+    std::vector<uint8_t> sec16(2048, 0);
+    TEST_ASSERT(NT_SUCCESS(ramDisk->readBlocks(micant::cdfs::CDFS_PVD_LBA, 1, sec16.data())), "Read sector 16 (PVD) must succeed");
+    const auto* pvd = reinterpret_cast<const micant::cdfs::Iso9660Pvd*>(sec16.data());
+    TEST_ASSERT(pvd->type == micant::cdfs::ISO_VD_PRIMARY, "Sector 16 must be Primary Volume Descriptor (Type 1)");
+    TEST_ASSERT(std::memcmp(pvd->id, "CD001", 5) == 0, "PVD standard identifier must be 'CD001'");
+    TEST_ASSERT(pvd->version == 1, "PVD version must be 1");
+    TEST_ASSERT(pvd->logicalBlockSize.get() == 2048, "Logical block size must be 2048 bytes");
+
+    // Inspect Sector 17 (Joliet SVD)
+    std::vector<uint8_t> sec17(2048, 0);
+    TEST_ASSERT(NT_SUCCESS(ramDisk->readBlocks(micant::cdfs::CDFS_SVD_LBA, 1, sec17.data())), "Read sector 17 (Joliet SVD) must succeed");
+    const auto* svd = reinterpret_cast<const micant::cdfs::Iso9660Svd*>(sec17.data());
+    TEST_ASSERT(svd->type == micant::cdfs::ISO_VD_SUPPLEMENTARY, "Sector 17 must be Supplementary Volume Descriptor (Type 2)");
+    TEST_ASSERT(std::memcmp(svd->id, "CD001", 5) == 0, "SVD standard identifier must be 'CD001'");
+    TEST_ASSERT(svd->escapeSequences[0] == 0x25 && svd->escapeSequences[1] == 0x2F && svd->escapeSequences[2] == 0x45, "Escape sequence must be %/E (UCS-2 Level 3)");
+
+    // Inspect Sector 18 (Terminator)
+    std::vector<uint8_t> sec18(2048, 0);
+    TEST_ASSERT(NT_SUCCESS(ramDisk->readBlocks(micant::cdfs::CDFS_TERMINATOR_LBA, 1, sec18.data())), "Read sector 18 (Terminator) must succeed");
+    const auto* term = reinterpret_cast<const micant::cdfs::Iso9660Terminator*>(sec18.data());
+    TEST_ASSERT(term->type == micant::cdfs::ISO_VD_TERMINATOR, "Sector 18 must be Volume Descriptor Set Terminator (Type 255)");
+    TEST_ASSERT(std::memcmp(term->id, "CD001", 5) == 0, "Terminator standard identifier must be 'CD001'");
+
+    // Inspect Sector 256 (UDF AVDP)
+    std::vector<uint8_t> sec256(2048, 0);
+    TEST_ASSERT(NT_SUCCESS(ramDisk->readBlocks(micant::cdfs::UDF_AVDP_LBA, 1, sec256.data())), "Read sector 256 (UDF AVDP) must succeed");
+    const auto* avdp = reinterpret_cast<const micant::cdfs::UdfAvdp*>(sec256.data());
+    TEST_ASSERT(avdp->tag.tagId == micant::cdfs::UDF_TAG_AVDP, "UDF Tag ID must be 0x0002 (AVDP)");
+
+    // 3. Mounting the Volume & Geometry Verification
+    NtStatus stMount = cdfs->mount(ramDisk);
+    TEST_ASSERT(NT_SUCCESS(stMount), "Mounting CDFS volume must succeed");
+    TEST_ASSERT(cdfs->getSectorSize() == 2048, "Sector size must be 2048 bytes");
+    TEST_ASSERT(cdfs->getVolumeSerialNumber() == 0xC0DE1509, "Volume serial number must match");
+    TEST_ASSERT(cdfs->isJoliet(), "Joliet extension must be detected");
+    TEST_ASSERT(cdfs->isUdf(), "UDF ECMA-167 descriptor must be detected");
+
+    auto volData = cdfs->getVolumeData();
+    TEST_ASSERT(volData.bytesPerSector == 2048, "Volume data sector size must be 2048");
+    TEST_ASSERT(volData.volumeSerialNumber == 0xC0DE1509, "Volume data serial must be 0xC0DE1509");
+    TEST_ASSERT(volData.isJoliet && volData.isUdf, "Volume data must report both Joliet and UDF enabled");
+
+    // 4. File Addition and Extent Allocation
+    const std::string autorunContent = "[AutoRun]\nopen=setup.exe\nicon=setup.exe,0\n";
+    NtStatus stAdd1 = cdfs->addFile(L"AUTORUN.INF", autorunContent.data(), autorunContent.size());
+    TEST_ASSERT(NT_SUCCESS(stAdd1), "Adding AUTORUN.INF must succeed");
+
+    std::vector<uint8_t> setupPayload(64 * 1024, 0x90); // 64KB NOP sled
+    NtStatus stAdd2 = cdfs->addFile(L"SETUP.EXE", setupPayload.data(), setupPayload.size());
+    TEST_ASSERT(NT_SUCCESS(stAdd2), "Adding SETUP.EXE must succeed");
+
+    const std::string readmeContent = "MicaNT Operating System - Sovereign Optical Media Subsystem";
+    NtStatus stAdd3 = cdfs->addFile(L"README.TXT", readmeContent.data(), readmeContent.size());
+    TEST_ASSERT(NT_SUCCESS(stAdd3), "Adding README.TXT must succeed");
+
+    // 5. Path Lookup & Read Verification
+    micant::cdfs::CdfsFileEntry outEntry;
+    TEST_ASSERT(NT_SUCCESS(cdfs->lookupPath(L"AUTORUN.INF", outEntry)), "lookupPath AUTORUN.INF must succeed");
+    TEST_ASSERT(outEntry.dataLength == autorunContent.size(), "AUTORUN.INF size must match");
+
+    // Case-insensitive & ISO suffix lookup
+    TEST_ASSERT(NT_SUCCESS(cdfs->lookupPath(L"autorun.inf;1", outEntry)), "lookupPath with ;1 suffix must succeed");
+    TEST_ASSERT(NT_SUCCESS(cdfs->lookupPath(L"setup.exe", outEntry)), "lookupPath case-insensitive setup.exe must succeed");
+    TEST_ASSERT(outEntry.dataLength == 64 * 1024, "SETUP.EXE size must be 64KB");
+
+    // Read back content
+    std::vector<char> readAutorun(autorunContent.size() + 1, 0);
+    uint64_t bytesRead = 0;
+    TEST_ASSERT(NT_SUCCESS(cdfs->readFile(L"AUTORUN.INF", readAutorun.data(), autorunContent.size(), 0, bytesRead)), "readFile AUTORUN.INF must succeed");
+    TEST_ASSERT(bytesRead == autorunContent.size(), "Bytes read must match");
+    TEST_ASSERT(std::string_view(readAutorun.data(), bytesRead) == autorunContent, "AUTORUN.INF content must match");
+
+    // 6. Write Protection Enforcement (STATUS_MEDIA_WRITE_PROTECTED)
+    uint64_t bytesWr = 0;
+    NtStatus stWr = cdfs->writeFile(L"AUTORUN.INF", autorunContent.data(), autorunContent.size(), 0, bytesWr);
+    TEST_ASSERT(stWr == NtStatus::MediaWriteProtected, "writeFile on CDFS must return MediaWriteProtected (0xC00000A2)");
+    TEST_ASSERT(bytesWr == 0, "No bytes should be written to optical media");
+
+    // 7. Driver Volume Registration & FSCTL Dispatch Integration
+    {
+        auto& driver = micant::cdfs::CdfsDriver::get();
+        TEST_ASSERT(NT_SUCCESS(driver.registerVolume(cdfs, L"\\Device\\CdRom0")), "registerVolume must succeed");
+        TEST_ASSERT(NT_SUCCESS(driver.mountDrive(L"F:", cdfs)), "mountDrive F: must succeed");
+        TEST_ASSERT(driver.getFileSystem(L"F:") == cdfs, "getFileSystem(F:) must return mounted CDFS filesystem");
+
+        // Test FSCTL_IS_VOLUME_DIRTY
+        micant::io::Irp irp{};
+        auto* stack = irp.getCurrentStack();
+        stack->majorFunction = micant::io::IRP_MJ_FILE_SYSTEM_CONTROL;
+        stack->parameters.fileSystemControl.fsControlCode = 0x00090078; // FSCTL_IS_VOLUME_DIRTY
+        uint32_t dirtyVal = 99;
+        irp.systemBuffer = &dirtyVal;
+        irp.userBuffer = &dirtyVal;
+        NtStatus stDirty = micant::cdfs::CdfsDriver::dispatchFileSystemControl(nullptr, &irp);
+        TEST_ASSERT(NT_SUCCESS(stDirty), "FSCTL_IS_VOLUME_DIRTY must succeed");
+        TEST_ASSERT(dirtyVal == 0, "Optical volume must report not dirty");
+
+        // Test FSCTL_IS_VOLUME_MOUNTED
+        stack->parameters.fileSystemControl.fsControlCode = 0x00090028;
+        TEST_ASSERT(NT_SUCCESS(micant::cdfs::CdfsDriver::dispatchFileSystemControl(nullptr, &irp)), "FSCTL_IS_VOLUME_MOUNTED must succeed");
+    }
+
+    // 8. VirtualFileSystem Drive F: Integration
+    {
+        auto& vfs = micant::fs::VirtualFileSystem::get();
+        vfs.setMountedCdfs(cdfs);
+        TEST_ASSERT(vfs.getMountedCdfs() == cdfs, "VirtualFileSystem must have mounted CDFS filesystem");
+
+        // Open read-only file on F:
+        std::shared_ptr<micant::fs::FileObject> fileObj;
+        NtStatus stOpen = vfs.createOrOpenFile(L"F:\\README.TXT", micant::fs::FILE_GENERIC_READ, micant::fs::FILE_OPEN, fileObj);
+        TEST_ASSERT(NT_SUCCESS(stOpen) && fileObj != nullptr, "createOrOpenFile on F: drive must succeed");
+
+        // Read file via VFS
+        std::vector<char> vfsRead(readmeContent.size() + 1, 0);
+        uint32_t vfsBytesRead = 0;
+        micant::io::LargeInteger readOff{ .quadPart = 0 };
+        NtStatus stR = vfs.readFile(fileObj.get(), vfsRead.data(), static_cast<uint32_t>(readmeContent.size()), &readOff, vfsBytesRead);
+        TEST_ASSERT(NT_SUCCESS(stR), "vfs.readFile on F: must succeed");
+        TEST_ASSERT(std::string_view(vfsRead.data(), vfsBytesRead) == readmeContent, "VFS read data must match README content");
+
+        // Attempting to write via VFS must fail with MediaWriteProtected
+        uint32_t vfsWr = 0;
+        NtStatus stW = vfs.writeFile(fileObj.get(), "Corrupt", 7, nullptr, vfsWr);
+        TEST_ASSERT(stW == NtStatus::MediaWriteProtected, "vfs.writeFile on optical drive must be rejected with MediaWriteProtected");
+
+        // Attempting to create new file on F: must fail with MediaWriteProtected
+        std::shared_ptr<micant::fs::FileObject> writeObj;
+        NtStatus stCr = vfs.createOrOpenFile(L"F:\\TEST.DAT", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, writeObj);
+        TEST_ASSERT(stCr == NtStatus::MediaWriteProtected, "createOrOpenFile with write access on F: must fail with MediaWriteProtected");
+
+        vfs.closeFile(fileObj.get());
+    }
+
+    // 9. System32 Userland CLI Commands Parity (mountvol, chkdsk, fsutil)
+    {
+        // mountvol F: /L
+        micant_cli::CommandLineParser pMnt("mountvol F: /L", "mountvol.exe");
+        TEST_ASSERT(pMnt.HasSwitch("l"), "mountvol must parse /l");
+        TEST_ASSERT(pMnt.PositionalCount() == 1, "mountvol must have 1 positional parameter");
+        TEST_ASSERT(std::string(pMnt.GetPositional(0)) == "F:", "mountvol positional parameter must be F:");
+
+        // chkdsk F:
+        micant_cli::CommandLineParser pCd("chkdsk F:", "chkdsk.exe");
+        TEST_ASSERT(pCd.PositionalCount() == 1, "chkdsk must have 1 positional volume");
+        TEST_ASSERT(std::string(pCd.GetPositional(0)) == "F:", "chkdsk volume must be F:");
+
+        // fsutil fsinfo volumeinfo F:
+        micant_cli::CommandLineParser pFsu("fsutil fsinfo volumeinfo F:", "fsutil.exe");
+        TEST_ASSERT(std::string(pFsu.argv()[1]) == "fsinfo", "fsutil verb must be fsinfo");
+        TEST_ASSERT(std::string(pFsu.argv()[2]) == "volumeinfo", "fsutil subverb must be volumeinfo");
+    }
+
+    std::cout << "  [Horizon 139 Clean-Room CDFS / UDFS Drivers & Optical Media (Unit #111)]\n"
+              << "    DriverEntry: \\FileSystem\\Cdfs and \\FileSystem\\Udfs Major Function & Fast I/O OK\n"
+              << "    ISO 9660 PVD: Sector 16 Primary Descriptor (CD001, 2048-Byte Logical Blocks) OK\n"
+              << "    Joliet SVD: Sector 17 Supplementary Descriptor (UCS-2 Level 3 '%/E' Escape) OK\n"
+              << "    Terminator: Sector 18 Volume Descriptor Set Terminator (Type 255) OK\n"
+              << "    ECMA-167 UDF: Sector 256 Anchor Volume Descriptor Pointer (AVDP Tag 0x0002) OK\n"
+              << "    Media Write Protection: Strictly Enforced STATUS_MEDIA_WRITE_PROTECTED (0xC00000A2) OK\n"
+              << "    Multi-Format Path Lookup: ISO 9660 8.3 & Joliet Long Filename Navigation OK\n"
+              << "    VFS Integration: Drive F: (\\Device\\CdRom0) Mount, Read, Write-Reject & Close OK\n"
+              << "    System32 Tooling: mountvol F: /L, chkdsk F:, fsutil volumeinfo F: Parity OK\n";
+
+    std::cout << "[TEST] Suite 355: Horizon 139 - Sovereign Clean-Room CDFS / UDFS Drivers & Optical Media PASSED.\n";
+}
+
 
 

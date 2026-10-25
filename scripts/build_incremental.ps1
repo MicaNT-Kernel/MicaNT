@@ -123,7 +123,8 @@ try {
         @{ Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Obj = "ps_winnt_msvcp140_pdata_unwind_44dll_seal.o" },
         @{ Src = "kernel/fsrtl/extfs.cpp";                             Obj = "fsrtl_extfs.o" },
         @{ Src = "kernel/fsrtl/ntfs.cpp";                              Obj = "fsrtl_ntfs.o" },
-        @{ Src = "kernel/fsrtl/exfat.cpp";                             Obj = "fsrtl_exfat.o" }
+        @{ Src = "kernel/fsrtl/exfat.cpp";                             Obj = "fsrtl_exfat.o" },
+        @{ Src = "kernel/fsrtl/cdfs.cpp";                              Obj = "fsrtl_cdfs.o" }
     )
 
     $staleUnits = @()

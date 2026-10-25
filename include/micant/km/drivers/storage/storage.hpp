@@ -30,8 +30,9 @@
 namespace micant::storage {
 
 // Standard Sector Sizing
-inline constexpr uint32_t SECTOR_SIZE_512 = 512;
-inline constexpr uint32_t SECTOR_SIZE_4K  = 4096;
+inline constexpr uint32_t SECTOR_SIZE_512  = 512;
+inline constexpr uint32_t SECTOR_SIZE_2048 = 2048; // CD-ROM / DVD / Blu-ray / ISO 9660 / UDF
+inline constexpr uint32_t SECTOR_SIZE_4K   = 4096;
 
 // MBR Partition Types
 inline constexpr uint8_t MBR_TYPE_EMPTY       = 0x00;

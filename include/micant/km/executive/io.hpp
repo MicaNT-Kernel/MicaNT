@@ -82,12 +82,14 @@ inline constexpr uint32_t FILE_DEVICE_SECURE_OPEN        = 0x00000100;
 
 // Device Types
 enum class DeviceType : uint32_t {
-    Disk        = 0x00000007,
-    FileSystem  = 0x00000009,
-    Null        = 0x00000015,
-    Console     = 0x00000050,
-    Battery     = 0x00000029,
-    Unknown     = 0x00000022
+    CdRom           = 0x00000002,
+    CdRomFileSystem = 0x00000003,
+    Disk            = 0x00000007,
+    FileSystem      = 0x00000009,
+    Null            = 0x00000015,
+    Console         = 0x00000050,
+    Battery         = 0x00000029,
+    Unknown         = 0x00000022
 };
 
 // ============================================================================

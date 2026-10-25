@@ -49,7 +49,10 @@ void ShowHelp() noexcept {
     PrintLine("        D:\\");
     PrintLine("");
     PrintLine("    \\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\");
-    PrintLine("        E:\\ (Ext4 Linux VFS Read-Only)");
+    PrintLine("        E:\\");
+    PrintLine("");
+    PrintLine("    \\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\");
+    PrintLine("        F:\\ (CD-ROM / DVD-ROM ISO 9660 / Joliet / UDF)");
     PrintLine("");
 }
 
@@ -71,6 +74,8 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
             PrintLine("\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\");
         } else if (StrCaseStartsWith(target, "E:")) {
             PrintLine("\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\");
+        } else if (StrCaseStartsWith(target, "F:")) {
+            PrintLine("\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\");
         } else {
             PrintLine("\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\");
         }
