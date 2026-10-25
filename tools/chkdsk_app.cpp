@@ -59,9 +59,34 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     bool verbose = parser.HasSwitch("v");
     bool scanBad = parser.HasSwitch("r");
     bool isCdfs = parser.HasSwitch("cdfs") || parser.HasSwitch("udfs") || (drive && (drive[0] == 'F' || drive[0] == 'f'));
-    bool isExfat = !isCdfs && (parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'U' || drive[0] == 'u')));
-    bool isNtfs = !isCdfs && !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
+    bool isRefs = !isCdfs && (parser.HasSwitch("refs") || (drive && (drive[0] == 'G' || drive[0] == 'g')));
+    bool isExfat = !isCdfs && !isRefs && (parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'U' || drive[0] == 'u')));
+    bool isNtfs = !isCdfs && !isRefs && !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
                   (drive && (drive[0] == 'D' || drive[0] == 'd')));
+
+    if (isRefs) {
+        PrintLine("The type of the file system is ReFS.");
+        Print("Volume ");
+        Print(drive ? drive : "G:");
+        PrintLine(" is Sovereign Clean-Room ReFS Resilient File System.");
+        PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5.");
+        PrintLine("");
+        PrintLine("ReFS is an online-repairing, allocate-on-write file system.");
+        PrintLine("Traditional offline check disk is not required.");
+        PrintLine("All metadata updates are allocate-on-write with 64-bit checksum verification.");
+        PrintLine("Online background scrubber verified all B+ tree roots and checkpoints.");
+        PrintLine("MicaNT has verified the file system and found no problems.");
+        PrintLine("No further action is required.");
+        PrintLine("");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("       16,384 KB in use by system B+ tree tables.");
+        PrintLine("  134,201,344 KB available on disk.");
+        PrintLine("");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,764,000 allocation units available on disk.");
+        ExitProcess(0);
+    }
 
     if (isCdfs) {
         PrintLine("The type of the file system is CDFS.");

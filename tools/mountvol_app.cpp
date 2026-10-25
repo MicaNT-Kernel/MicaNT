@@ -54,6 +54,9 @@ void ShowHelp() noexcept {
     PrintLine("    \\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\");
     PrintLine("        F:\\ (CD-ROM / DVD-ROM ISO 9660 / Joliet / UDF)");
     PrintLine("");
+    PrintLine("    \\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
+    PrintLine("        G:\\ (ReFS v3.4 Resilient File System)");
+    PrintLine("");
 }
 
 } // namespace
@@ -76,6 +79,8 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
             PrintLine("\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\");
         } else if (StrCaseStartsWith(target, "F:")) {
             PrintLine("\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\");
+        } else if (StrCaseStartsWith(target, "G:")) {
+            PrintLine("\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
         } else {
             PrintLine("\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\");
         }

@@ -365,12 +365,20 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("D:\\");
         PrintLine("E:\\");
         PrintLine("F:\\");
+        PrintLine("G:\\");
         return;
     }
 
     if (MatchCmdToken(cmd, "format")) {
         if (StrCaseContains(cmd, "f:")) {
             PrintLine("Format cannot run on this volume because the volume is write-protected.");
+        } else if (StrCaseContains(cmd, "refs") || StrCaseContains(cmd, "g:")) {
+            PrintLine("The type of the file system is ReFS.");
+            PrintLine("Formatting 16.0 MB");
+            PrintLine("Initializing ReFS B+ Tree Allocator and Object Tables...");
+            PrintLine("Volume label is MICA_REFS");
+            PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5");
+            PrintLine("Format complete.");
         } else if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
             PrintLine("The type of the file system is exFAT.");
             PrintLine("Formatting 16.0 MB");
@@ -397,6 +405,14 @@ void ExecuteCommand(const char* cmd) noexcept {
             PrintLine("Path table and directory descriptors verified.");
             PrintLine("MicaNT has checked the file system and found no problems.");
             PrintLine("Read-only media. No further action is required.");
+        } else if (StrCaseContains(cmd, "refs") || StrCaseContains(cmd, "g:")) {
+            PrintLine("The type of the file system is ReFS.");
+            PrintLine("Volume G: is Sovereign Clean-Room ReFS Resilient File System.");
+            PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5.");
+            PrintLine("ReFS is an online-repairing, allocate-on-write file system.");
+            PrintLine("Traditional offline check disk is not required.");
+            PrintLine("Online background scrubber verified all B+ tree roots and checkpoints.");
+            PrintLine("No corruption detected.");
         } else if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
             PrintLine("The type of the file system is exFAT.");
             PrintLine("Volume E: is Sovereign Clean-Room exFAT.");

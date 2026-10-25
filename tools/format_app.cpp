@@ -24,7 +24,7 @@ void ShowHelp() noexcept {
     PrintLine("");
     PrintLine("  volume          Specifies the drive letter (followed by a colon),");
     PrintLine("                  mount point, or volume name.");
-    PrintLine("  /FS:filesystem  Specifies the type of the file system (FAT32, NTFS, exFAT).");
+    PrintLine("  /FS:filesystem  Specifies the type of the file system (FAT32, NTFS, exFAT, ReFS).");
     PrintLine("  /V:label        Specifies the volume label.");
     PrintLine("  /Q              Performs a quick format. Note that this switch overrides /P.");
     PrintLine("  /A:size         Overrides the default allocation unit size.");
@@ -52,11 +52,27 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
 
     bool isNtfs = StrCaseEqual(fs, "NTFS");
     bool isExfat = StrCaseEqual(fs, "exFAT") || StrCaseEqual(fs, "exfat");
-    Print("The type of the file system is "); PrintLine(isNtfs ? "NTFS" : (isExfat ? "exFAT" : fs));
+    bool isRefs = StrCaseEqual(fs, "ReFS") || StrCaseEqual(fs, "refs");
+    Print("The type of the file system is "); PrintLine(isNtfs ? "NTFS" : (isExfat ? "exFAT" : (isRefs ? "ReFS" : fs)));
     Print("Formatting volume "); Print(volume); PrintLine("...");
     Print("Volume label is "); PrintLine(label);
 
-    if (isNtfs) {
+    if (isRefs) {
+        PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5");
+        PrintLine("Allocation unit size: 4096 bytes.");
+        PrintLine("Creating file system structures.");
+        PrintLine("  Formatting ReFS Superblock 1 and Superblock 2...");
+        PrintLine("  Creating Checkpoint sequence...");
+        PrintLine("  Building B+ Tree tables (Object ID, Schema, Security, Allocator, Root Directory)...");
+        PrintLine("  Initializing 64-bit metadata integrity checksum streams...");
+        PrintLine("Format complete.");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("  134,086,656 KB available on disk.");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,736,000 allocation units available on disk.");
+        PrintLine("Volume integrity: 100% PASS (Resilient B+ Tree)");
+    } else if (isNtfs) {
         PrintLine("Volume Serial Number is 78E2-A1C9");
         PrintLine("Allocation unit size: 4096 bytes.");
         PrintLine("Creating file system structures.");

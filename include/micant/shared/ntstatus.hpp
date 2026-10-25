@@ -107,6 +107,7 @@ enum class NtStatus : uint32_t {
     VolumeTooSmall                   = 0xC0000287,
     DeviceError                      = 0xC00000E0,
     FileCorrupted                    = 0xC0000102,
+    DataChecksumError                = 0xC00003FD,
     Cancelled                        = 0xC0000120,
     VariableNotFound                 = 0xC0000100,
     NotFound                         = 0xC0000225,
@@ -225,6 +226,7 @@ inline constexpr NTSTATUS STATUS_NO_SUCH_FILE           = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_END_OF_FILE            = static_cast<NTSTATUS>(0xC0000011);
 inline constexpr NTSTATUS STATUS_NOT_A_DIRECTORY        = static_cast<NTSTATUS>(0xC0000103);
 inline constexpr NTSTATUS STATUS_DISK_CORRUPT_ERROR     = static_cast<NTSTATUS>(0xC0000032);
+inline constexpr NTSTATUS STATUS_DATA_CHECKSUM_ERROR     = static_cast<NTSTATUS>(0xC00003FD);
 inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(0xC00000E0);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
@@ -299,6 +301,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::VolumeTooSmall: return "STATUS_VOLUME_TOO_SMALL";
         case NtStatus::DeviceError: return "STATUS_DEVICE_DATA_ERROR";
         case NtStatus::FileCorrupted: return "STATUS_FILE_CORRUPT_ERROR";
+        case NtStatus::DataChecksumError: return "STATUS_DATA_CHECKSUM_ERROR";
         case NtStatus::Cancelled: return "STATUS_CANCELLED";
         case NtStatus::NoMoreEntries: return "STATUS_NO_MORE_ENTRIES";
         case NtStatus::VariableNotFound: return "STATUS_VARIABLE_NOT_FOUND";

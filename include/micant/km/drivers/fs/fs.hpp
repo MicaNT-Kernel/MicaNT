@@ -20,6 +20,7 @@
 #include "micant/km/drivers/fs/ntfs.hpp"
 #include "micant/km/drivers/fs/exfat.hpp"
 #include "micant/km/drivers/fs/cdfs.hpp"
+#include "micant/km/drivers/fs/refs.hpp"
 
 namespace micant::fs {
 
@@ -316,6 +317,27 @@ public:
         return cdfsFs_;
     }
 
+    NtStatus mountRefs(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        refsFs_ = std::make_shared<refs::RefsFileSystem>();
+        NtStatus st = refsFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            refsFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedRefs(std::shared_ptr<refs::RefsFileSystem> refs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        refsFs_ = refs;
+    }
+
+    [[nodiscard]] std::shared_ptr<refs::RefsFileSystem> getMountedRefs() const noexcept {
+        return refsFs_;
+    }
+
     NtStatus createOrOpenFile(
         std::wstring_view path,
         uint32_t desiredAccess,
@@ -448,6 +470,31 @@ public:
             return NtStatus::Success;
         }
 
+        // 0.5 Check for ReFS Volume (Drive G: or \Device\Harddisk0\Partition4 or \Device\ReFS0)
+        if (refsFs_ && (path.starts_with(L"G:") || path.starts_with(L"g:") ||
+                        path.starts_with(L"\\DosDevices\\G:") || path.starts_with(L"\\??\\G:") ||
+                        path.starts_with(L"\\Device\\Harddisk0\\Partition4") ||
+                        path.starts_with(L"\\Device\\ReFS0") || path.starts_with(L"\\Device\\ReFS_G"))) {
+            std::wstring normRefs = normalizePath(sPath);
+            if (normRefs.starts_with(L"G:\\") || normRefs.starts_with(L"g:\\")) {
+                normRefs = normRefs.substr(3);
+            }
+            uint64_t frn = 0;
+            NtStatus lookupSt = refsFs_->lookupPath(normRefs, frn);
+            if (!NT_SUCCESS(lookupSt)) {
+                if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    NtStatus crSt = refsFs_->createFile(normRefs, FILE_ATTRIBUTE_NORMAL, frn);
+                    if (!NT_SUCCESS(crSt)) return crSt;
+                } else {
+                    return NtStatus::NoSuchFile;
+                }
+            }
+
+            outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+            openRefsFiles_[outFileObj.get()] = frn;
+            return NtStatus::Success;
+        }
+
         // 1. Check if path targets a registered device node in \Device
         std::wstring resolvedPath = ob::ObjectNamespace::get().resolvePath(path);
         auto directDevice = io::IoManager::get().lookupDevice(resolvedPath);
@@ -560,6 +607,19 @@ public:
             return st;
         }
 
+        auto itRefs = openRefsFiles_.find(fileObj);
+        if (itRefs != openRefsFiles_.end() && refsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t refsBytes = 0;
+            NtStatus st = refsFs_->readFile(itRefs->second, buffer, length, static_cast<uint64_t>(offset), refsBytes);
+            bytesRead = static_cast<uint32_t>(refsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp readIrp{};
@@ -657,6 +717,19 @@ public:
             return NtStatus::MediaWriteProtected;
         }
 
+        auto itRefs = openRefsFiles_.find(fileObj);
+        if (itRefs != openRefsFiles_.end() && refsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t refsBytes = 0;
+            NtStatus st = refsFs_->writeFile(itRefs->second, buffer, length, static_cast<uint64_t>(offset), refsBytes);
+            bytesWritten = static_cast<uint32_t>(refsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp writeIrp{};
@@ -720,6 +793,7 @@ public:
         openNtfsFiles_.erase(fileObj);
         openExfatFiles_.erase(fileObj);
         openCdfsFiles_.erase(fileObj);
+        openRefsFiles_.erase(fileObj);
         openFiles_.erase(fileObj);
     }
 
@@ -1012,6 +1086,8 @@ private:
     std::unordered_map<FileObject*, std::wstring> openExfatFiles_;
     std::shared_ptr<cdfs::CdfsFileSystem> cdfsFs_;
     std::unordered_map<FileObject*, std::wstring> openCdfsFiles_;
+    std::shared_ptr<refs::RefsFileSystem> refsFs_;
+    std::unordered_map<FileObject*, uint64_t> openRefsFiles_;
     io::FastIoDispatch fastIoTable_{};
     std::unique_ptr<io::Vpb> vpb_;
 };

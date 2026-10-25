@@ -280,6 +280,7 @@ DRIVER_STUBS = [
     ("tools/drivers/exfat_driver.cpp", "build/exfat.sys", "exfat.sys"),
     ("tools/drivers/cdfs_driver.cpp", "build/cdfs.sys", "cdfs.sys"),
     ("tools/drivers/udfs_driver.cpp", "build/udfs.sys", "udfs.sys"),
+    ("tools/drivers/refs_driver.cpp", "build/refs.sys", "refs.sys"),
 ]
 
 NETWORK_FILES = [
@@ -497,7 +498,7 @@ def run_local_build():
             sys.exit(1)
 
     # Compile Kernel Driver Stubs (PE32+ Native Drivers, Incremental)
-    print("      Compiling 13 Kernel Driver Stubs (.sys)...")
+    print("      Compiling 14 Kernel Driver Stubs (.sys)...")
     for src, out_path, name in DRIVER_STUBS:
         full_src = os.path.join(REPO_ROOT, src)
         full_out = os.path.join(REPO_ROOT, out_path)

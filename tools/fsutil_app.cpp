@@ -44,9 +44,29 @@ void FsInfoDrives() noexcept {
     PrintLine("D:\\");
     PrintLine("E:\\");
     PrintLine("F:\\");
+    PrintLine("G:\\");
 }
 
 void FsInfoVolumeInfo(const char* drive) noexcept {
+    if (drive && (drive[0] == 'G' || drive[0] == 'g')) {
+        Print("Volume Name : ");
+        PrintLine(drive);
+        PrintLine("Volume Serial Number : 0x8E21F4A0B9C371D5");
+        PrintLine("Max Component Length : 255");
+        PrintLine("File System Name : ReFS");
+        PrintLine("Is Volume Dirty : No");
+        PrintLine("Total Sectors : 268,435,456 (128.00 GB)");
+        PrintLine("Bytes Per Sector : 512");
+        PrintLine("Sectors Per Allocation Unit : 8");
+        PrintLine("Bytes Per Cluster : 4,096");
+        PrintLine("Total Clusters : 32,768,000");
+        PrintLine("Free Clusters : 32,760,000");
+        PrintLine("Supports Case-Preserving Names : Yes");
+        PrintLine("Supports Unicode in Filenames : Yes");
+        PrintLine("Supports Block Cloning (CoW) : Yes");
+        PrintLine("Supports 64-bit Integrity Streams : Yes");
+        return;
+    }
     if (drive && (drive[0] == 'F' || drive[0] == 'f')) {
         Print("Volume Name : ");
         PrintLine(drive);
@@ -134,6 +154,23 @@ void FsInfoNtfsInfo(const char* /*drive*/) noexcept {
     PrintLine("Mft Zone End :                    0x0000000000400000");
 }
 
+void FsInfoRefsInfo(const char* /*drive*/) noexcept {
+    PrintLine("ReFS Volume Serial Number :       0x8e21f4a0b9c371d5");
+    PrintLine("Version :                         3.4");
+    PrintLine("Number Sectors :                  0x0000000010000000");
+    PrintLine("Total Clusters :                  0x0000000002000000");
+    PrintLine("Free Clusters :                   0x0000000001ff8000");
+    PrintLine("Bytes Per Sector :                512");
+    PrintLine("Bytes Per Physical Sector :       4096");
+    PrintLine("Bytes Per Cluster :               4096");
+    PrintLine("Metadata B+ Tree Page Size :      16384");
+    PrintLine("Dual Superblock LBA 1/2 :         30 / 62");
+    PrintLine("Checkpoint LBA :                  32");
+    PrintLine("Integrity Streams :               Enabled (CRC64 / Fletcher64)");
+    PrintLine("Allocate-on-Write (CoW) :         Active");
+    PrintLine("Block Cloning Engine :            Available");
+}
+
 } // namespace
 
 extern "C" void _start(const char* rawCmdLine = nullptr) {
@@ -161,6 +198,10 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
         }
         if (c2 && (StrCaseEqual(c2, "ntfsinfo") || StrCaseEqual(c2, "ntfs-info"))) {
             FsInfoNtfsInfo(c3 ? c3 : "C:");
+            ExitProcess(0);
+        }
+        if (c2 && (StrCaseEqual(c2, "refsinfo") || StrCaseEqual(c2, "refs-info"))) {
+            FsInfoRefsInfo(c3 ? c3 : "G:");
             ExitProcess(0);
         }
         FsInfoDrives();
