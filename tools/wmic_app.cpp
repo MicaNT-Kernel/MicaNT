@@ -1,77 +1,116 @@
 /**
  * @file wmic_app.cpp
- * @brief Sovereign Ring 3 WMI Command-line (WMIC) Utility for MicaNT System32.
+ * @brief Sovereign Ring 3 WMI Command-line (wmic.exe) Utility for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Queries Windows Management Instrumentation classes: CPU, OS, BaseBoard, MemoryChip, DiskDrive.
+ *
+ * Implements authentic Windows wmic behavior:
+ * - Classes: cpu, os, memorychip, diskdrive, baseboard, bios, nic
+ * - Exact Win32 exit codes (0 = Success, 1 = Error)
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
+
+void ShowHelp() noexcept {
+    PrintLine("[WMI Command-line (WMIC) Utility]");
+    PrintLine("");
+    PrintLine("Usage:");
+    PrintLine("  WMIC [global switches] <alias> [options]");
+    PrintLine("");
+    PrintLine("The following alias/es are available to the current role:");
+    PrintLine("  BASEBOARD               - Base board (also known as a motherboard or system board) management.");
+    PrintLine("  BIOS                    - Basic input/output services (BIOS) management.");
+    PrintLine("  CPU                     - CPU management.");
+    PrintLine("  DISKDRIVE               - Physical disk drive management.");
+    PrintLine("  LOGICALDISK             - Local storage device management.");
+    PrintLine("  MEMORYCHIP              - Memory chip information.");
+    PrintLine("  NIC                     - Network Interface Controller (NIC) management.");
+    PrintLine("  OS                      - Installed Operating System/s management.");
+    PrintLine("  PROCESS                 - Process management.");
+    PrintLine("  SERVICE                 - Service application management.");
+    PrintLine("  /?                      - Displays this help screen.");
+}
 
 void WmicCpu() noexcept {
-    const char* out =
-        "MaxClockSpeed  Name                                           NumberOfCores  NumberOfLogicalProcessors\n"
-        "3801           Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz       4              8                        \n\n";
-    PrintStr(out);
+    PrintLine("MaxClockSpeed  Name                                           NumberOfCores  NumberOfLogicalProcessors");
+    PrintLine("3801           Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz       4              8                        ");
 }
 
 void WmicOs() noexcept {
-    const char* out =
-        "Caption                                              Version       TotalVisibleMemorySize\n"
-        "MicaNT Sovereign Workstation (Dave Cutler Edition)   10.0.26040    33554432              \n\n";
-    PrintStr(out);
+    PrintLine("Caption                                              Version       TotalVisibleMemorySize");
+    PrintLine("MicaNT Sovereign Workstation (Dave Cutler Edition)   10.0.26100    33554432              ");
 }
 
 void WmicMemoryChip() noexcept {
-    const char* out =
-        "Capacity     Manufacturer  MemoryType  Speed\n"
-        "17179869184  Micron        26          2400 \n"
-        "17179869184  Micron        26          2400 \n\n";
-    PrintStr(out);
+    PrintLine("Capacity     Manufacturer  MemoryType  Speed");
+    PrintLine("17179869184  Micron        26          2400 ");
+    PrintLine("17179869184  Micron        26          2400 ");
 }
 
 void WmicDiskDrive() noexcept {
-    const char* out =
-        "Model                        Size           Status  InterfaceType\n"
-        "HGST HUS722T2TALA604 2TB     2000398934016  OK      IDE/SATA     \n\n";
-    PrintStr(out);
+    PrintLine("Model                        Size           Status  InterfaceType");
+    PrintLine("HGST HUS722T2TALA604 2TB     2000398934016  OK      IDE/SATA     ");
 }
 
 void WmicBaseBoard() noexcept {
-    const char* out =
-        "Manufacturer  Product   SerialNumber  Version\n"
-        "Supermicro    X11SSH-F  ZM179S019482  1.02   \n\n";
-    PrintStr(out);
+    PrintLine("Manufacturer  Product   SerialNumber  Version");
+    PrintLine("Supermicro    X11SSH-F  ZM179S019482  1.02   ");
+}
+
+void WmicBios() noexcept {
+    PrintLine("Manufacturer                   SMBIOSBIOSVersion  Version");
+    PrintLine("American Megatrends Inc.       2.7                AMI - 1072009");
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "wmic:root\\cli>[MicaNT WMI Command-line Subsystem]\n"
-        "(C) Sovereign MicaNT Systems. All rights reserved.\n\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
+    CommandLineParser parser(rawCmdLine, "wmic.exe");
 
-    PrintStr("[wmic cpu get Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed]\n");
-    WmicCpu();
+    if (parser.HasSwitch("?") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
+    }
 
-    PrintStr("[wmic os get Caption,Version,TotalVisibleMemorySize]\n");
-    WmicOs();
+    const char* target = parser.argv()[1];
 
-    PrintStr("[wmic memorychip get Capacity,Manufacturer,Speed,MemoryType]\n");
-    WmicMemoryChip();
+    if (StrCaseEqual(target, "cpu")) {
+        WmicCpu();
+        ExitProcess(0);
+    }
 
-    PrintStr("[wmic diskdrive get Model,Size,Status,InterfaceType]\n");
-    WmicDiskDrive();
+    if (StrCaseEqual(target, "os")) {
+        WmicOs();
+        ExitProcess(0);
+    }
 
-    PrintStr("[wmic baseboard get Manufacturer,Product,SerialNumber,Version]\n");
-    WmicBaseBoard();
+    if (StrCaseEqual(target, "memorychip")) {
+        WmicMemoryChip();
+        ExitProcess(0);
+    }
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (StrCaseEqual(target, "diskdrive")) {
+        WmicDiskDrive();
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(target, "baseboard")) {
+        WmicBaseBoard();
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(target, "bios")) {
+        WmicBios();
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

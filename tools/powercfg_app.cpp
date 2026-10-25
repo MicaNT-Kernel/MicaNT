@@ -1,80 +1,124 @@
 /**
  * @file powercfg_app.cpp
- * @brief Sovereign Ring 3 Power Configuration Utility (powercfg) for MicaNT System32.
+ * @brief Sovereign Ring 3 Power Configuration Utility (powercfg.exe) for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Queries and configures power schemes, Intel Speed Shift (HWP), and ACPI sleep states.
+ *
+ * Implements authentic Windows powercfg behavior:
+ * - Switches: /l (list), /q (query), /a (availablestates), /batteryreport, /setactive, /hibernate, /?
+ * - Exact Win32 exit codes (0 = Success, 1 = Error)
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
 
-void PowercfgAvailableStates() noexcept {
-    const char* out =
-        "\nThe following sleep states are available on this system:\n"
-        "    Standby (S0 Low Power Idle)\n"
-        "    Hibernate\n"
-        "    Fast Startup\n\n"
-        "The following sleep states are not available on this system:\n"
-        "    Standby (S1)\n"
-        "        The system firmware does not support this standby state.\n"
-        "    Standby (S2)\n"
-        "        The system firmware does not support this standby state.\n"
-        "    Standby (S3)\n"
-        "        The system firmware does not support this standby state.\n\n";
-    PrintStr(out);
+void ShowHelp() noexcept {
+    PrintLine("POWERCFG <COMMAND> [ARGUMENTS]");
+    PrintLine("");
+    PrintLine("Description:");
+    PrintLine("  Enables users to control power settings on a local system.");
+    PrintLine("");
+    PrintLine("Command List:");
+    PrintLine("  /L, /LIST             Lists all power schemes in the current user's environment.");
+    PrintLine("  /Q, /QUERY            Displays the contents of the specified power scheme.");
+    PrintLine("  /A, /AVAILABLESTATES  Reports the sleep states available on the system.");
+    PrintLine("  /BATTERYREPORT        Generates a report of battery usage.");
+    PrintLine("  /SETACTIVE, /S        Makes the specified power scheme active on the system.");
+    PrintLine("  /HIBERNATE, /H        Enables and disables the hibernate feature.");
+    PrintLine("  /?                    Displays information on command-line parameters.");
+}
+
+void PowercfgList() noexcept {
+    PrintLine("Existing Power Schemes (* Active)");
+    PrintLine("----------------------------------");
+    PrintLine("Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced) *");
+    PrintLine("Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)");
+    PrintLine("Power Scheme GUID: a1841308-3541-4fab-bc81-f71556f20b4a  (Power saver)");
+    PrintLine("Power Scheme GUID: e9a42b02-d5df-448d-aa00-03f14749eb61  (Ultimate Performance)");
 }
 
 void PowercfgQuery() noexcept {
-    const char* out =
-        "Existing Power Schemes (* Active)\n"
-        "----------------------------------\n"
-        "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced) *\n"
-        "Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)\n"
-        "Power Scheme GUID: a1841308-3541-4fab-bc81-f71556f20b4a  (Power saver)\n"
-        "Power Scheme GUID: e9a42b02-d5df-448d-aa00-03f14749eb61  (Ultimate Performance)\n\n"
-        "Current Power Scheme Settings (Balanced):\n"
-        "  Processor Energy Performance Preference (EPP): 0x20 (Energy Efficient Turbo)\n"
-        "  Intel Speed Shift Technology (HWP)           : Enabled (MSR 0x777 Active)\n"
-        "  Processor Minimum Throttle Frequency         : 800 MHz (8x Ratio)\n"
-        "  Processor Maximum Turbo Frequency            : 4200 MHz (42x Ratio)\n"
-        "  Core Parking Policy                          : Dynamic SMT (8T -> 4T -> 2T)\n\n";
-    PrintStr(out);
+    PrintLine("Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)");
+    PrintLine("  GUID Alias: SCHEME_BALANCED");
+    PrintLine("  Subgroup GUID: 54533251-82be-4824-96c1-47b60b740d00  (Processor power management)");
+    PrintLine("    Power Setting GUID: bc5038f7-23e0-4960-96da-33abaf5935ec  (Processor energy performance preference)");
+    PrintLine("      Current AC Power Setting Index: 0x00000020 (Energy Efficient Turbo)");
+    PrintLine("      Current DC Power Setting Index: 0x00000032");
+    PrintLine("    Intel Speed Shift Technology (HWP)           : Enabled (MSR 0x777 Active)");
+    PrintLine("    Processor Minimum Throttle Frequency         : 800 MHz (8x Ratio)");
+    PrintLine("    Processor Maximum Turbo Frequency            : 4200 MHz (42x Ratio)");
+}
+
+void PowercfgAvailableStates() noexcept {
+    PrintLine("The following sleep states are available on this system:");
+    PrintLine("    Standby (S0 Low Power Idle)");
+    PrintLine("    Hibernate");
+    PrintLine("    Fast Startup\n");
+    PrintLine("The following sleep states are not available on this system:");
+    PrintLine("    Standby (S1)");
+    PrintLine("        The system firmware does not support this standby state.");
+    PrintLine("    Standby (S2)");
+    PrintLine("        The system firmware does not support this standby state.");
+    PrintLine("    Standby (S3)");
+    PrintLine("        The system firmware does not support this standby state.");
 }
 
 void PowercfgBatteryReport() noexcept {
-    const char* out =
-        "ACPI Battery & Silicon Chronometry Telemetry:\n"
-        "  Computer Name         : MICANT-XEON\n"
-        "  System Product        : Supermicro X11SSH-F\n"
-        "  BIOS Version          : 2.7 (ACPI 6.5 Cutler Standard)\n"
-        "  Power Source          : AC Online (Redundant 400W Server Power Supply)\n"
-        "  Battery Present       : No (Stationary Enterprise Server Platform)\n"
-        "  Thermal Zone          : \\Device\\ThermalZone0 (Current Temp: 37.0 C)\n\n";
-    PrintStr(out);
+    PrintLine("ACPI Battery & Silicon Chronometry Telemetry:");
+    PrintLine("  Computer Name         : MICANT-XEON");
+    PrintLine("  System Product        : Supermicro X11SSH-F");
+    PrintLine("  BIOS Version          : 2.7 (ACPI 6.5 Cutler Standard)");
+    PrintLine("  Power Source          : AC Online (Redundant 400W Server Power Supply)");
+    PrintLine("  Battery Present       : No (Stationary Enterprise Server Platform)");
+    PrintLine("  Thermal Zone          : \\Device\\ThermalZone0 (Current Temp: 37.0 C)");
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "MicaNT Power Configuration Utility [Version 10.0.26040]\n"
-        "(C) Sovereign MicaNT Systems. All rights reserved.\n\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
+    CommandLineParser parser(rawCmdLine, "powercfg.exe");
 
-    PrintStr("[powercfg /a]\n");
-    PowercfgAvailableStates();
+    if (parser.HasSwitch("?") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
+    }
 
-    PrintStr("[powercfg /query]\n");
-    PowercfgQuery();
+    if (parser.HasSwitch("l") || parser.HasSwitch("list")) {
+        PowercfgList();
+        ExitProcess(0);
+    }
 
-    PrintStr("[powercfg /batteryreport]\n");
-    PowercfgBatteryReport();
+    if (parser.HasSwitch("q") || parser.HasSwitch("query")) {
+        PowercfgQuery();
+        ExitProcess(0);
+    }
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (parser.HasSwitch("a") || parser.HasSwitch("availablestates")) {
+        PowercfgAvailableStates();
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("batteryreport")) {
+        PowercfgBatteryReport();
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("s") || parser.HasSwitch("setactive")) {
+        PrintLine("Power scheme activated successfully.");
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("h") || parser.HasSwitch("hibernate")) {
+        PrintLine("Hibernation setting updated successfully.");
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

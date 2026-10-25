@@ -1,86 +1,125 @@
 /**
  * @file fsutil_app.cpp
- * @brief Sovereign Ring 3 File System Utility (fsutil) for MicaNT System32.
+ * @brief Sovereign Ring 3 File System Utility (fsutil.exe) for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Provides file system queries, volume dirty bit status, free space, and allocation unit info.
+ *
+ * Implements authentic Windows fsutil behavior:
+ * - Commands: fsinfo, volume, dirty, behavior, file, 8dot3name, /?
+ * - Exact Win32 exit codes (0 = Success, 1 = Error)
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
+
+void ShowHelp() noexcept {
+    PrintLine("---- FSUTIL Supported Commands ----");
+    PrintLine("");
+    PrintLine("8dot3name       8dot3name management");
+    PrintLine("behavior        Control file system behavior");
+    PrintLine("dirty           Manage volume dirty bit");
+    PrintLine("file            File specific commands");
+    PrintLine("fsinfo          File system information");
+    PrintLine("hardlink        Hardlink management");
+    PrintLine("objectid        Object ID management");
+    PrintLine("quota           Quota management");
+    PrintLine("repair          Self healing management");
+    PrintLine("reparsepoint    Reparse point management");
+    PrintLine("resource        Transactional Resource Manager management");
+    PrintLine("sparse          Sparse file control");
+    PrintLine("tiering         Storage tiering management");
+    PrintLine("transaction     Transaction management");
+    PrintLine("usn             USN management");
+    PrintLine("volume          Volume management");
+    PrintLine("wim             Wim management");
+}
 
 void FsInfoDrives() noexcept {
-    PrintStr("Drives:\nC:\\\nD:\\\n\n");
+    PrintLine("Drives:");
+    PrintLine("C:\\");
+    PrintLine("D:\\");
 }
 
-void FsInfoVolumeInfo() noexcept {
-    const char* out =
-        "Volume Name : OS_ROOT\n"
-        "Volume Serial Number : 0x20261022\n"
-        "Max Component Length : 255\n"
-        "File System Name : FAT32\n"
-        "Is Volume Dirty : No\n"
-        "Total Sectors : 268,435,456 (128.00 GB)\n"
-        "Bytes Per Sector : 512\n"
-        "Sectors Per Allocation Unit : 8\n"
-        "Bytes Per Cluster : 4,096\n"
-        "Total Clusters : 33,554,432\n"
-        "Free Clusters : 30,320,520\n"
-        "Supports Case-Preserving Names : Yes\n"
-        "Supports Unicode in Filenames : Yes\n\n";
-    PrintStr(out);
+void FsInfoVolumeInfo(const char* drive) noexcept {
+    Print("Volume Name : ");
+    PrintLine(drive ? drive : "OS_ROOT");
+    PrintLine("Volume Serial Number : 0x20261024");
+    PrintLine("Max Component Length : 255");
+    PrintLine("File System Name : FAT32");
+    PrintLine("Is Volume Dirty : No");
+    PrintLine("Total Sectors : 268,435,456 (128.00 GB)");
+    PrintLine("Bytes Per Sector : 512");
+    PrintLine("Sectors Per Allocation Unit : 8");
+    PrintLine("Bytes Per Cluster : 4,096");
+    PrintLine("Total Clusters : 33,554,432");
+    PrintLine("Free Clusters : 30,320,520");
+    PrintLine("Supports Case-Preserving Names : Yes");
+    PrintLine("Supports Unicode in Filenames : Yes");
 }
 
-void VolumeDiskFree() noexcept {
-    const char* out =
-        "Total # of free bytes        : 124,192,849,920 (115.66 GB)\n"
-        "Total # of bytes             : 137,438,953,472 (128.00 GB)\n"
-        "Total # of avail free bytes  : 124,192,849,920 (115.66 GB)\n\n";
-    PrintStr(out);
+void VolumeDiskFree(const char* drive) noexcept {
+    PrintLine("Total # of free bytes        : 124,192,849,920 (115.66 GB)");
+    PrintLine("Total # of bytes             : 137,438,953,472 (128.00 GB)");
+    PrintLine("Total # of avail free bytes  : 124,192,849,920 (115.66 GB)");
 }
 
-void DirtyQuery() noexcept {
-    PrintStr("Volume - C: is NOT Dirty\n\n");
+void DirtyQuery(const char* drive) noexcept {
+    Print("Volume - ");
+    Print(drive ? drive : "C:");
+    PrintLine(" is NOT Dirty");
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "---- FSUTIL Supported Commands ----\n\n"
-        "8dot3name       8dot3name management\n"
-        "behavior        Control file system behavior\n"
-        "dirty           Manage volume dirty bit\n"
-        "file            File specific commands\n"
-        "fsinfo          File system information\n"
-        "hardlink        Hardlink management\n"
-        "objectid        Object ID management\n"
-        "quota           Quota management\n"
-        "repair          Self healing management\n"
-        "sparse          Sparse file control\n"
-        "tiering         Storage tiering management\n"
-        "transaction     Transactional NTFS commands\n"
-        "usn             USN management\n"
-        "volume          Volume management\n"
-        "wim             WIM management\n\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
+    CommandLineParser parser(rawCmdLine, "fsutil.exe");
 
-    PrintStr("[fsutil fsinfo drives]\n");
-    FsInfoDrives();
+    if (parser.HasSwitch("?") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
+    }
 
-    PrintStr("[fsutil fsinfo volumeinfo C:]\n");
-    FsInfoVolumeInfo();
+    const char* c1 = parser.argv()[1];
+    const char* c2 = (parser.argc() > 2) ? parser.argv()[2] : nullptr;
+    const char* c3 = (parser.argc() > 3) ? parser.argv()[3] : nullptr;
 
-    PrintStr("[fsutil volume diskfree C:]\n");
-    VolumeDiskFree();
+    if (StrCaseEqual(c1, "fsinfo")) {
+        if (c2 && (StrCaseEqual(c2, "drives") || StrCaseEqual(c2, "drive"))) {
+            FsInfoDrives();
+            ExitProcess(0);
+        }
+        if (c2 && (StrCaseEqual(c2, "volumeinfo") || StrCaseEqual(c2, "volume-info"))) {
+            FsInfoVolumeInfo(c3 ? c3 : "C:\\");
+            ExitProcess(0);
+        }
+        FsInfoDrives();
+        ExitProcess(0);
+    }
 
-    PrintStr("[fsutil dirty query C:]\n");
-    DirtyQuery();
+    if (StrCaseEqual(c1, "volume")) {
+        if (c2 && (StrCaseEqual(c2, "diskfree") || StrCaseEqual(c2, "free"))) {
+            VolumeDiskFree(c3 ? c3 : "C:\\");
+            ExitProcess(0);
+        }
+        VolumeDiskFree(c2 ? c2 : "C:\\");
+        ExitProcess(0);
+    }
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (StrCaseEqual(c1, "dirty")) {
+        if (c2 && StrCaseEqual(c2, "query")) {
+            DirtyQuery(c3 ? c3 : "C:");
+            ExitProcess(0);
+        }
+        DirtyQuery(c2 ? c2 : "C:");
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

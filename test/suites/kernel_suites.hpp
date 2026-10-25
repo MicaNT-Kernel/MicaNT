@@ -21116,6 +21116,85 @@ inline void test_suite_352_cli_common_and_cmd_parity() {
         TEST_ASSERT(std::string(pCu.argv()[3]) == "SHA256", "certutil algorithm must match");
     }
 
+    // 6. Batch 2 System32 CLI Parity (bcdedit, sfc, reg, slmgr, wevtutil, tzutil, wpr, pnputil, gpresult, reagentc)
+    {
+        // bcdedit /timeout 10
+        micant_cli::CommandLineParser pBcd("bcdedit /timeout 10", "bcdedit.exe");
+        TEST_ASSERT(pBcd.HasSwitch("timeout"), "bcdedit must parse /timeout");
+        TEST_ASSERT(pBcd.PositionalCount() == 1, "bcdedit must have 1 positional arg");
+        TEST_ASSERT(std::string(pBcd.GetPositional(0)) == "10", "bcdedit timeout value must be 10");
+
+        // sfc /scannow
+        micant_cli::CommandLineParser pSfc("sfc /scannow", "sfc.exe");
+        TEST_ASSERT(pSfc.HasSwitch("scannow"), "sfc must parse /scannow");
+
+        // reg query HKLM\SOFTWARE /v ProductName
+        micant_cli::CommandLineParser pReg("reg query HKLM\\SOFTWARE /v ProductName", "reg.exe");
+        TEST_ASSERT(std::string(pReg.argv()[1]) == "query", "reg verb must be query");
+        TEST_ASSERT(pReg.HasSwitch("v"), "reg must parse /v switch");
+        TEST_ASSERT(std::string(pReg.GetSwitchValue("v")) == "ProductName", "reg /v value must match");
+
+        // slmgr /xpr
+        micant_cli::CommandLineParser pSlm("slmgr.vbs /xpr", "slmgr.exe");
+        TEST_ASSERT(pSlm.HasSwitch("xpr"), "slmgr must parse /xpr");
+
+        // wevtutil qe System
+        micant_cli::CommandLineParser pWev("wevtutil qe System", "wevtutil.exe");
+        TEST_ASSERT(std::string(pWev.argv()[1]) == "qe", "wevtutil verb must be qe");
+        TEST_ASSERT(std::string(pWev.argv()[2]) == "System", "wevtutil target log must be System");
+
+        // tzutil /g
+        micant_cli::CommandLineParser pTz("tzutil /g", "tzutil.exe");
+        TEST_ASSERT(pTz.HasSwitch("g"), "tzutil must parse /g");
+
+        // wpr -status
+        micant_cli::CommandLineParser pWpr("wpr -status", "wpr.exe");
+        TEST_ASSERT(pWpr.HasSwitch("status"), "wpr must parse -status");
+
+        // pnputil /enum-drivers
+        micant_cli::CommandLineParser pPnp("pnputil /enum-drivers", "pnputil.exe");
+        TEST_ASSERT(pPnp.HasSwitch("enum-drivers"), "pnputil must parse /enum-drivers");
+
+        // gpresult /r
+        micant_cli::CommandLineParser pGp("gpresult /r", "gpresult.exe");
+        TEST_ASSERT(pGp.HasSwitch("r"), "gpresult must parse /r");
+
+        // reagentc /info
+        micant_cli::CommandLineParser pRea("reagentc /info", "reagentc.exe");
+        TEST_ASSERT(pRea.HasSwitch("info"), "reagentc must parse /info");
+    }
+
+    // 7. Batch 3 System32 CLI Parity (tracert, diskpart, fsutil, wmic, powercfg)
+    {
+        // tracert -d -h 15 1.1.1.1
+        micant_cli::CommandLineParser pTr("tracert -d -h 15 1.1.1.1", "tracert.exe");
+        TEST_ASSERT(pTr.HasSwitch("d"), "tracert must parse -d");
+        TEST_ASSERT(pTr.HasSwitch("h"), "tracert must parse -h");
+        TEST_ASSERT(std::string(pTr.GetSwitchValue("h")) == "15", "tracert -h value must be 15");
+        TEST_ASSERT(pTr.PositionalCount() == 1, "tracert must have 1 positional arg");
+        TEST_ASSERT(std::string(pTr.GetPositional(0)) == "1.1.1.1", "tracert target must be 1.1.1.1");
+
+        // diskpart /s script.txt
+        micant_cli::CommandLineParser pDp("diskpart /s script.txt", "diskpart.exe");
+        TEST_ASSERT(pDp.HasSwitch("s"), "diskpart must parse /s");
+        TEST_ASSERT(std::string(pDp.GetSwitchValue("s")) == "script.txt", "diskpart script value must match");
+
+        // fsutil fsinfo drives
+        micant_cli::CommandLineParser pFs("fsutil fsinfo drives", "fsutil.exe");
+        TEST_ASSERT(std::string(pFs.argv()[1]) == "fsinfo", "fsutil verb must be fsinfo");
+        TEST_ASSERT(std::string(pFs.argv()[2]) == "drives", "fsutil subverb must be drives");
+
+        // wmic cpu get name
+        micant_cli::CommandLineParser pWm("wmic cpu get name", "wmic.exe");
+        TEST_ASSERT(std::string(pWm.argv()[1]) == "cpu", "wmic target alias must be cpu");
+        TEST_ASSERT(std::string(pWm.argv()[2]) == "get", "wmic verb must be get");
+
+        // powercfg /q
+        micant_cli::CommandLineParser pPwr("powercfg /q", "powercfg.exe");
+        TEST_ASSERT(pPwr.HasSwitch("q"), "powercfg must parse /q");
+        TEST_ASSERT(!pPwr.HasSwitch("l"), "powercfg /q must not set /l");
+    }
+
     std::cout << "  [Horizon 136 Track I Sovereign CLI Common & System32 Execution Parity (Unit #108)]\n"
               << "    CommandLineParser: Clean-Room Freestanding Argc/Argv Tokenization Verified OK\n"
               << "    Switch Extraction: /c, /k, /user, /priv, /svc, /pid, /fo:{TABLE|LIST|CSV} OK\n"

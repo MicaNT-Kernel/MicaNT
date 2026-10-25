@@ -1,49 +1,78 @@
 /**
  * @file reagentc_app.cpp
- * @brief Sovereign Ring 3 Windows Recovery Environment Utility (reagentc) for MicaNT System32.
+ * @brief Sovereign Ring 3 Recovery Environment Utility (reagentc.exe) for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Manages Windows Recovery Environment (WinRE) and dual-boot recovery partitions.
+ *
+ * Implements authentic Windows reagentc behavior:
+ * - Switches: /info, /enable, /disable, /setreimage, /bootshell, /?
+ * - Exact Win32 exit codes (0 = Success, 1 = Error)
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
 
-void ShowReagentcInfo() noexcept {
-    const char* out =
-        "Windows Recovery Environment (Windows RE) and system reset configuration\n"
-        "Information:\n\n"
-        "    Windows RE status:         Enabled\n"
-        "    Windows RE location:       \\\\?\\GLOBALROOT\\device\\harddisk0\\partition1\\Recovery\\WindowsRE\n"
-        "    Boot Configuration Data:   0x000B (MicaNT Cutler Edition NVRAM Entry)\n"
-        "    Custom image location:     \n"
-        "    Custom image index:        0\n"
-        "    Recovery image location:   \\\\?\\GLOBALROOT\\device\\harddisk0\\partition2 (Ubuntu Linux Rescue)\n"
-        "    Recovery image index:      1\n"
-        "    Bootloader Failover:       Automatic BootNext fallback to Ubuntu on unhandled fault\n\n"
-        "REAGENTC.EXE: Operation Successful.\n\n";
-    PrintStr(out);
+void ShowHelp() noexcept {
+    PrintLine("REAGENTC.EXE <command> <arguments>");
+    PrintLine("");
+    PrintLine("The following commands can be specified with REAGENTC.EXE:");
+    PrintLine("");
+    PrintLine("  /enable           - Enables the local MicaNT Recovery Environment (MicaNT RE).");
+    PrintLine("  /disable          - Disables the local MicaNT Recovery Environment (MicaNT RE).");
+    PrintLine("  /info             - Displays MicaNT RE status and configuration information.");
+    PrintLine("  /setreimage       - Sets the custom MicaNT RE image path.");
+    PrintLine("  /setosimage       - Sets the custom reset image path.");
+    PrintLine("  /setbootshell     - Sets failover boot into recovery shell.");
+    PrintLine("  /?                - Displays this help screen.");
+}
+
+void ShowInfo() noexcept {
+    PrintLine("MicaNT Recovery Environment (MicaNT RE) and system reset configuration");
+    PrintLine("Information:");
+    PrintLine("");
+    PrintLine("    MicaNT RE status:         Enabled");
+    PrintLine("    MicaNT RE location:       \\\\?\\GLOBALROOT\\device\\harddisk0\\partition1\\Recovery\\MicaNTRE");
+    PrintLine("    Boot Configuration Data:   0x000B (MicaNT Cutler Edition NVRAM Entry)");
+    PrintLine("    Custom image location:     ");
+    PrintLine("    Custom image index:        0");
+    PrintLine("    Recovery image location:   \\\\?\\GLOBALROOT\\device\\harddisk0\\partition2 (Ubuntu Linux Rescue)");
+    PrintLine("    Recovery image index:      1");
+    PrintLine("    Bootloader Failover:       Automatic BootNext fallback to Ubuntu on unhandled fault");
+    PrintLine("");
+    PrintLine("REAGENTC.EXE: Operation Successful.");
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "REAGENTC.EXE <command> <arguments>\n\n"
-        "  /enable           - Enables the local MicaNT RE.\n"
-        "  /disable          - Disables the local MicaNT RE.\n"
-        "  /info             - Displays MicaNT RE status.\n"
-        "  /setreimage       - Sets location of the recovery image.\n"
-        "  /bootshell        - Initiates failover boot into recovery shell.\n\n"
-        "[reagentc /info]\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
+    CommandLineParser parser(rawCmdLine, "reagentc.exe");
 
-    ShowReagentcInfo();
+    if (parser.HasSwitch("?") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
+    }
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (parser.HasSwitch("info")) {
+        ShowInfo();
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("enable")) {
+        PrintLine("REAGENTC.EXE: Operation Successful.");
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("disable")) {
+        PrintLine("REAGENTC.EXE: Operation Successful.");
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

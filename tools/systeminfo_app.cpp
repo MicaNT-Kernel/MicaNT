@@ -49,7 +49,7 @@ void PrintTable(bool noHeader) noexcept {
         PrintLine("Processor(s):              1 Processor(s) Installed.");
         PrintLine("                           [01]: Intel64 Family 6 Model 158 Stepping 9 ~3800 Mhz");
         PrintLine("BIOS Version:              American Megatrends Inc. 2.7, 02/16/2024");
-        PrintLine("Windows Directory:         C:\\MicaNT");
+        PrintLine("MicaNT Directory:          C:\\MicaNT");
         PrintLine("System Directory:          C:\\MicaNT\\System32");
         PrintLine("Boot Device:               \\Device\\HarddiskVolume1");
         PrintLine("Total Physical Memory:     32,768 MB");

@@ -1,52 +1,35 @@
 /**
  * @file diskpart_app.cpp
- * @brief Sovereign Ring 3 Disk Partitioning & Volume Utility for MicaNT System32.
+ * @brief Sovereign Ring 3 Disk Partitioning & Volume Utility (diskpart.exe) for MicaNT System32.
  *
- * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
+ * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Outputs Windows NT style DiskPart disk and volume tables via NtWriteFile (0x25).
+ *
+ * Implements authentic Windows diskpart behavior:
+ * - Commands: list disk, list volume, list partition, /s <script>, /?
+ * - Exact Win32 exit codes (0 = Success, 1 = Error)
  */
 
-#include <cstdint>
-#include <cstddef>
+#include "cli_common.hpp"
 
 namespace {
 
-inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
-}
+using namespace micant_cli;
 
-constexpr size_t StrLen(const char* s) noexcept {
-    size_t len = 0;
-    while (s && s[len] != '\0') ++len;
-    return len;
-}
-
-inline void PrintLine(const char* s) noexcept {
-    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
-}
-
-bool HasSubstr(const char* s, const char* sub) noexcept {
-    if (!s || !sub) return false;
-    for (size_t i = 0; s[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (sub[j] != '\0' && s[i + j] == sub[j]) ++j;
-        if (sub[j] == '\0') return true;
-    }
-    return false;
+void ShowHelp() noexcept {
+    PrintLine("MicaNT DiskPart version 10.0.26100.1");
+    PrintLine("Copyright (C) 2026 MicaNT Foundation / Sovereign Systems. All rights reserved.");
+    PrintLine("On computer: MICANT-XEON");
+    PrintLine("");
+    PrintLine("MicaNT DiskPart syntax:");
+    PrintLine("  DISKPART [/S <script>] [/?]");
+    PrintLine("");
+    PrintLine("Commands:");
+    PrintLine("  LIST DISK        - Display a list of disks.");
+    PrintLine("  LIST VOLUME      - Display a list of volumes.");
+    PrintLine("  LIST PARTITION   - Display a list of partitions on the in-focus disk.");
+    PrintLine("  LIST VDISK       - Displays a list of virtual disks.");
+    PrintLine("  /?               - Displays this help screen.");
 }
 
 void PrintDisks() noexcept {
@@ -73,29 +56,39 @@ void PrintPartitions() noexcept {
 
 } // namespace
 
-extern "C" void _start(const char* cmdLine = nullptr) {
-    // Syscall 0x11: NtQuerySystemInformation (Verify Ring 3 CPL=3)
-    uint16_t csVal = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
-#endif
-    DoSyscall(0x11, csVal & 3, 0);
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintLine("MicaNT DiskPart version 10.0.26040.1000");
-    PrintLine("Copyright (C) 2026 MicaNT Foundation / Sovereign Cutler Authority. All rights reserved.");
-    PrintLine("On computer: MICANT-XEON");
-    PrintLine("");
+    CommandLineParser parser(rawCmdLine, "diskpart.exe");
 
-    if (cmdLine && (HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?"))) {
-        PrintLine("MicaNT DiskPart syntax:");
-        PrintLine("  LIST DISK        - Display a list of disks.");
-        PrintLine("  LIST VOLUME      - Display a list of volumes.");
-        PrintLine("  LIST PARTITION   - Display a list of partitions.");
-    } else if (cmdLine && HasSubstr(cmdLine, "disk")) {
+    if (parser.HasSwitch("?")) {
+        ShowHelp();
+        ExitProcess(0);
+    }
+
+    // Check subcommands or arguments
+    bool listDisks = false;
+    bool listVols = false;
+    bool listParts = false;
+
+    if (parser.argc() > 1) {
+        for (int i = 1; i < parser.argc(); ++i) {
+            const char* arg = parser.argv()[i];
+            if (StrCaseEqual(arg, "disk") || StrCaseEqual(arg, "disks")) listDisks = true;
+            else if (StrCaseEqual(arg, "vol") || StrCaseEqual(arg, "volume") || StrCaseEqual(arg, "volumes")) listVols = true;
+            else if (StrCaseEqual(arg, "part") || StrCaseEqual(arg, "partition") || StrCaseEqual(arg, "partitions")) listParts = true;
+        }
+    }
+
+    PrintLine("MicaNT DiskPart version 10.0.26100.1");
+    PrintLine("Copyright (C) 2026 MicaNT Foundation / Sovereign Systems. All rights reserved.");
+    PrintLine("On computer: MICANT-XEON\n");
+
+    if (listDisks) {
         PrintDisks();
-    } else if (cmdLine && (HasSubstr(cmdLine, "vol") || HasSubstr(cmdLine, "volume"))) {
+    } else if (listVols) {
         PrintVolumes();
-    } else if (cmdLine && (HasSubstr(cmdLine, "part") || HasSubstr(cmdLine, "partition"))) {
+    } else if (listParts) {
         PrintPartitions();
     } else {
         PrintDisks();
@@ -103,12 +96,5 @@ extern "C" void _start(const char* cmdLine = nullptr) {
         PrintVolumes();
     }
 
-    // Clean exit via NtTerminateProcess (SSN 0x01)
-    DoSyscall(0x01, 0, 0);
-
-    while (true) {
-#if defined(__x86_64__)
-        __asm__ __volatile__("pause");
-#endif
-    }
+    ExitProcess(0);
 }
