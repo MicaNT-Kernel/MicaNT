@@ -1130,6 +1130,39 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus deleteFile(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring canon = canonicalizePath(path);
+        auto it = records_.find(canon);
+        if (it == records_.end()) {
+            for (auto searchIt = records_.begin(); searchIt != records_.end(); ++searchIt) {
+                if (caseInsensitiveCompare(searchIt->first, canon)) {
+                    it = searchIt;
+                    break;
+                }
+            }
+        }
+        if (it == records_.end()) return NtStatus::NoSuchFile;
+        if (it->second.isDirectory && !it->second.childNames.empty()) {
+            return NtStatus::DirectoryNotEmpty;
+        }
+        auto itRoot = records_.find(L"\\");
+        if (itRoot != records_.end()) {
+            std::erase(itRoot->second.childNames, it->first);
+        }
+        records_.erase(it);
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::vector<RefsFileRecord> getAllRecords() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<RefsFileRecord> res;
+        for (const auto& [name, rec] : records_) {
+            if (name != L"\\") res.push_back(rec);
+        }
+        return res;
+    }
+
     /**
      * @brief Corrupt in-memory file data to simulate storage bit-rot/media decay for integrity testing.
      */

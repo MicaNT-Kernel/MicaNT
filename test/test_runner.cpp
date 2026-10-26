@@ -391,6 +391,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite360") {
+        RUN_TEST(Test_Horizon144_MultiFormat_Storage_Interoperability_And_Win32_Harmony);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite359") {
         RUN_TEST(Test_Horizon143_Unified_MultiFormat_Storage_And_FileSystem_Awareness);
         return g_FailedTests;
@@ -432,6 +436,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
         RUN_TEST(Test_Horizon142_CleanRoom_Zfs_Driver_And_RaidPool_Engine);
         RUN_TEST(Test_Horizon143_Unified_MultiFormat_Storage_And_FileSystem_Awareness);
+        RUN_TEST(Test_Horizon144_MultiFormat_Storage_Interoperability_And_Win32_Harmony);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1719,6 +1724,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
         RUN_TEST(Test_Horizon142_CleanRoom_Zfs_Driver_And_RaidPool_Engine);
     RUN_TEST(Test_Horizon143_Unified_MultiFormat_Storage_And_FileSystem_Awareness);
+    RUN_TEST(Test_Horizon144_MultiFormat_Storage_Interoperability_And_Win32_Harmony);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -501,6 +501,31 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus deleteFile(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring canon = canonicalizePath(path);
+        auto it = records_.find(canon);
+        if (it == records_.end()) return NtStatus::NoSuchFile;
+        if ((it->second.attributes & 0x10) && !it->second.childNames.empty()) {
+            return NtStatus::DirectoryNotEmpty;
+        }
+        auto itRoot = records_.find(L"\\");
+        if (itRoot != records_.end()) {
+            std::erase(itRoot->second.childNames, canon);
+        }
+        records_.erase(it);
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::vector<ExfatFileRecord> getAllRecords() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<ExfatFileRecord> res;
+        for (const auto& [name, rec] : records_) {
+            if (name != L"\\") res.push_back(rec);
+        }
+        return res;
+    }
+
     [[nodiscard]] bool isDirty() const noexcept {
         return (volumeFlags_ & EXFAT_VOLUME_DIRTY) != 0;
     }

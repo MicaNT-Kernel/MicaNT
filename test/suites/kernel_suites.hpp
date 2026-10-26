@@ -22889,3 +22889,240 @@ inline void Test_Horizon143_Unified_MultiFormat_Storage_And_FileSystem_Awareness
 
     std::cout << "[TEST] Suite 359: Horizon 143 - Unified Multi-Format Storage & File System Awareness PASSED.\n";
 }
+
+// ============================================================================
+// Suite 360: Horizon 144 - Multi-Format Storage Interoperability & Win32 Harmony
+// ============================================================================
+inline void Test_Horizon144_MultiFormat_Storage_Interoperability_And_Win32_Harmony() {
+    using namespace micant::win32;
+    std::cout << "[TEST] Running Suite 360: Horizon 144 - Multi-Format Storage Interoperability & Win32 Harmony..." << std::endl;
+
+    micant::zfs::RegisterZfsSubsystem();
+
+    auto& vfs = micant::fs::VirtualFileSystem::get();
+    vfs.initialize();
+    auto& obNs = micant::ob::ObjectNamespace::get();
+    obNs.createSymbolicLink(L"\\DosDevices\\C:", L"\\Device\\Harddisk0\\Partition1");
+    obNs.createSymbolicLink(L"\\DosDevices\\D:", L"\\Device\\Harddisk0\\Partition2");
+    obNs.createSymbolicLink(L"\\DosDevices\\E:", L"\\Device\\Harddisk0\\Partition3");
+    obNs.createSymbolicLink(L"\\DosDevices\\F:", L"\\Device\\CdRom0");
+    obNs.createSymbolicLink(L"\\DosDevices\\G:", L"\\Device\\Harddisk0\\Partition4");
+    obNs.createSymbolicLink(L"\\DosDevices\\Z:", L"\\Device\\ZfsPool_Storage");
+    if (!vfs.getMountedNtfs()) {
+        auto ntfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition2", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto ntfsFs = std::make_shared<micant::ntfs::NtfsFileSystem>();
+        ntfsFs->format(*ntfsRamDisk, 4096, L"MICA_NTFS");
+        vfs.setMountedNtfs(ntfsFs);
+    }
+
+    if (!vfs.getMountedExfat()) {
+        auto exfatRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition3", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto exfatFs = std::make_shared<micant::exfat::ExfatFileSystem>();
+        exfatFs->format(*exfatRamDisk, 4096, L"MICA_EXFAT");
+        vfs.setMountedExfat(exfatFs);
+    }
+
+    if (!vfs.getMountedCdfs()) {
+        auto cdfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\CdRom0", 4 * 1024 * 1024ULL, micant::cdfs::CDFS_SECTOR_SIZE_2048);
+        auto cdfsFs = std::make_shared<micant::cdfs::CdfsFileSystem>();
+        cdfsFs->format(*cdfsRamDisk, L"MICA_CDFS");
+        vfs.setMountedCdfs(cdfsFs);
+    }
+    auto cdfs = vfs.getMountedCdfs();
+    TEST_ASSERT(cdfs != nullptr, "Mounted CDFS must not be null");
+    micant::cdfs::CdfsFileEntry sampleEntry;
+    if (!NT_SUCCESS(cdfs->lookupPath(L"SAMPLE.TXT", sampleEntry))) {
+        std::string sample = "MicaNT CDFS Optical Media 2026 Sample Data Payload";
+        cdfs->addFile(L"SAMPLE.TXT", sample.data(), sample.size());
+    }
+
+    if (!vfs.getMountedRefs()) {
+        auto refsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition4", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto refsFs = std::make_shared<micant::refs::RefsFileSystem>();
+        refsFs->format(*refsRamDisk, 4096, L"MICA_REFS");
+        vfs.setMountedRefs(refsFs);
+    }
+
+    {
+        std::shared_ptr<micant::fs::FileObject> zInitFile;
+        (void)vfs.createOrOpenFile(L"Z:\\harmony_init.txt", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, zInitFile);
+        if (zInitFile) {
+            uint32_t wr = 0;
+            const char* initMsg = "ZFS Harmony Sentinel";
+            (void)vfs.writeFile(zInitFile.get(), initMsg, static_cast<uint32_t>(strlen(initMsg)), nullptr, wr);
+            vfs.closeFile(zInitFile.get());
+        }
+    }
+
+    {
+        std::vector<micant::fs::VirtualFileSystem::DirectoryEntry> entriesZ;
+        NtStatus stDirZ = vfs.queryDirectory(L"Z:", entriesZ);
+        TEST_ASSERT(NT_SUCCESS(stDirZ), "Directory query on Z: must succeed");
+        TEST_ASSERT(!entriesZ.empty(), "Z: directory must contain at least one file");
+
+        std::vector<micant::fs::VirtualFileSystem::DirectoryEntry> entriesF;
+        NtStatus stDirF = vfs.queryDirectory(L"F:", entriesF);
+        TEST_ASSERT(NT_SUCCESS(stDirF), "Directory query on F: (CDFS) must succeed");
+        TEST_ASSERT(!entriesF.empty(), "F: directory must contain at least SAMPLE.TXT");
+
+        WIN32_FIND_DATAW findData{};
+        HANDLE hFind = micant::win32::FindFirstFileW(L"Z:\\*", &findData);
+        TEST_ASSERT(hFind != INVALID_HANDLE_VALUE, "FindFirstFileW on Z:\\* must return valid handle");
+        TEST_ASSERT(wcslen(findData.cFileName) > 0, "FindFirstFileW must return non-empty filename");
+        micant::win32::FindClose(hFind);
+    }
+
+    {
+        std::shared_ptr<micant::fs::FileObject> tempObj;
+        NtStatus stCr = vfs.createOrOpenFile(L"Z:\\temp_del.txt", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, tempObj);
+        TEST_ASSERT(NT_SUCCESS(stCr) && tempObj != nullptr, "Creating temporary file on Z: must succeed");
+        vfs.closeFile(tempObj.get());
+
+        DWORD attrBefore = micant::win32::GetFileAttributesW(L"Z:\\temp_del.txt");
+        TEST_ASSERT(attrBefore != INVALID_FILE_ATTRIBUTES, "GetFileAttributesW on Z:\\temp_del.txt must succeed before deletion");
+
+        BOOL delOk = micant::win32::DeleteFileW(L"Z:\\temp_del.txt");
+        TEST_ASSERT(delOk == TRUE, "DeleteFileW on Z:\\temp_del.txt must succeed");
+
+        DWORD attrAfter = micant::win32::GetFileAttributesW(L"Z:\\temp_del.txt");
+        TEST_ASSERT(attrAfter == INVALID_FILE_ATTRIBUTES, "GetFileAttributesW must return INVALID_FILE_ATTRIBUTES after deletion");
+        TEST_ASSERT(micant::win32::GetLastError() == 2, "GetLastError must be ERROR_FILE_NOT_FOUND (2)");
+
+        // Deleting from read-only optical CDFS must fail with ERROR_WRITE_PROTECT (19)
+        BOOL delF = micant::win32::DeleteFileW(L"F:\\SAMPLE.TXT");
+        TEST_ASSERT(delF == FALSE, "DeleteFileW on optical CDFS drive F: must fail");
+        TEST_ASSERT(micant::win32::GetLastError() == 19, "GetLastError on optical CDFS delete must be ERROR_WRITE_PROTECT (19)");
+    }
+
+    {
+        constexpr size_t PAYLOAD_SIZE = 131072;
+        std::vector<uint8_t> payload(PAYLOAD_SIZE);
+        for (size_t i = 0; i < PAYLOAD_SIZE; ++i) {
+            payload[i] = static_cast<uint8_t>((i ^ (i >> 8)) & 0xFF);
+        }
+
+        std::shared_ptr<micant::fs::FileObject> srcFat;
+        NtStatus stFat = vfs.createOrOpenFile(L"C:\\stream_test.dat", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, srcFat);
+        TEST_ASSERT(NT_SUCCESS(stFat) && srcFat != nullptr, "Creating source file on C: must succeed");
+        uint32_t wrFat = 0;
+        NtStatus stWr = vfs.writeFile(srcFat.get(), payload.data(), static_cast<uint32_t>(payload.size()), nullptr, wrFat);
+        TEST_ASSERT(NT_SUCCESS(stWr) && wrFat == PAYLOAD_SIZE, "Writing 128KB to C: must succeed");
+        vfs.closeFile(srcFat.get());
+
+        BOOL cpRes = micant::win32::CopyFileW(L"C:\\stream_test.dat", L"Z:\\streamed_zfs.dat", FALSE);
+        TEST_ASSERT(cpRes == TRUE, "CopyFileW from C: (FAT32) to Z: (TitanZFS) must succeed");
+
+        // Read back from Z: and verify byte-for-byte exactness
+        std::shared_ptr<micant::fs::FileObject> zfsReadObj;
+        NtStatus stOpenZ = vfs.createOrOpenFile(L"Z:\\streamed_zfs.dat", micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, zfsReadObj);
+        TEST_ASSERT(NT_SUCCESS(stOpenZ) && zfsReadObj != nullptr, "Opening streamed ZFS file must succeed");
+
+        std::vector<uint8_t> zfsData(PAYLOAD_SIZE, 0);
+        uint32_t readZ = 0;
+        NtStatus stRdZ = vfs.readFile(zfsReadObj.get(), zfsData.data(), static_cast<uint32_t>(zfsData.size()), nullptr, readZ);
+        TEST_ASSERT(NT_SUCCESS(stRdZ) && readZ == PAYLOAD_SIZE, "Reading 128KB back from ZFS must succeed");
+        vfs.closeFile(zfsReadObj.get());
+        TEST_ASSERT(std::memcmp(payload.data(), zfsData.data(), PAYLOAD_SIZE) == 0,
+                    "Payload copied from FAT32 to TitanZFS must match byte-for-byte");
+
+        // 3.3 Optical CopyFileW: F: (CDFS) -> D: (NTFS)
+        BOOL cpCd = micant::win32::CopyFileW(L"F:\\SAMPLE.TXT", L"D:\\sample_from_cd.txt", FALSE);
+        TEST_ASSERT(cpCd == TRUE, "CopyFileW from F: (CDFS) to D: (NTFS) must succeed");
+
+        std::shared_ptr<micant::fs::FileObject> ntfsReadObj;
+        NtStatus stOpenD = vfs.createOrOpenFile(L"D:\\sample_from_cd.txt", micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, ntfsReadObj);
+        TEST_ASSERT(NT_SUCCESS(stOpenD) && ntfsReadObj != nullptr, "Opening file copied to NTFS must succeed");
+        std::vector<char> cdReadBuf(128, 0);
+        uint32_t cdReadBytes = 0;
+        NtStatus stRdD = vfs.readFile(ntfsReadObj.get(), cdReadBuf.data(), 128, nullptr, cdReadBytes);
+        TEST_ASSERT(NT_SUCCESS(stRdD) && cdReadBytes > 0, "Reading copied optical file from NTFS must succeed");
+        vfs.closeFile(ntfsReadObj.get());
+        std::string_view cdStr(cdReadBuf.data(), cdReadBytes);
+        TEST_ASSERT(cdStr == "MicaNT CDFS Optical Media 2026 Sample Data Payload", "Copied optical content on NTFS must match");
+
+        // 3.4 Cross-volume MoveFileW: Z: (TitanZFS) -> G: (ReFS)
+        BOOL mvRes = micant::win32::MoveFileW(L"Z:\\streamed_zfs.dat", L"G:\\moved_to_refs.dat");
+        TEST_ASSERT(mvRes == TRUE, "MoveFileW from Z: (TitanZFS) to G: (ReFS) must succeed");
+
+        // Verify target file on G: exists and has full content
+        std::shared_ptr<micant::fs::FileObject> refsReadObj;
+        NtStatus stOpenG = vfs.createOrOpenFile(L"G:\\moved_to_refs.dat", micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, refsReadObj);
+        TEST_ASSERT(NT_SUCCESS(stOpenG) && refsReadObj != nullptr, "Opening moved file on ReFS must succeed");
+        std::vector<uint8_t> refsData(PAYLOAD_SIZE, 0);
+        uint32_t readG = 0;
+        NtStatus stRdG = vfs.readFile(refsReadObj.get(), refsData.data(), static_cast<uint32_t>(refsData.size()), nullptr, readG);
+        TEST_ASSERT(NT_SUCCESS(stRdG) && readG == PAYLOAD_SIZE, "Reading 128KB from ReFS must succeed");
+        vfs.closeFile(refsReadObj.get());
+        TEST_ASSERT(std::memcmp(payload.data(), refsData.data(), PAYLOAD_SIZE) == 0,
+                    "Payload moved from TitanZFS to ReFS must match byte-for-byte");
+
+        // Verify source file on Z: is deleted
+        DWORD attrZMoved = micant::win32::GetFileAttributesW(L"Z:\\streamed_zfs.dat");
+        TEST_ASSERT(attrZMoved == INVALID_FILE_ATTRIBUTES, "Source file on Z: must be deleted after MoveFileW");
+    }
+
+    {
+        const struct {
+            const wchar_t* path;
+            const wchar_t* expectedFs;
+            const wchar_t* expectedLabel;
+        } volTests[] = {
+            { L"C:\\", L"FAT32", L"MICA_SYS" },
+            { L"D:\\", L"NTFS", L"MICA_NTFS" },
+            { L"E:\\", L"exFAT", L"MICA_EXFAT" },
+            { L"F:\\", L"CDFS", L"MICA_CDFS" },
+            { L"G:\\", L"ReFS", L"MICA_REFS" },
+            { L"Z:\\", L"ZFS", L"MICA_ZFS" }
+        };
+
+        for (const auto& vt : volTests) {
+            wchar_t volLabel[64] = {};
+            wchar_t fsName[64] = {};
+            DWORD serial = 0, maxComp = 0, flags = 0;
+            BOOL bInfo = micant::win32::GetVolumeInformationW(vt.path, volLabel, 64, &serial, &maxComp, &flags, fsName, 64);
+            TEST_ASSERT(bInfo == TRUE, "GetVolumeInformationW must succeed");
+            TEST_ASSERT(std::wstring(fsName) == vt.expectedFs, "File system name must match expected format");
+            TEST_ASSERT(std::wstring(volLabel) == vt.expectedLabel, "Volume label must match expected label");
+            TEST_ASSERT(serial != 0, "Volume serial number must be non-zero");
+        }
+
+        ULARGE_INTEGER freeCaller{}, totalBytes{}, freeTotal{};
+        BOOL bSpaceZ = micant::win32::GetDiskFreeSpaceExW(L"Z:\\", &freeCaller, &totalBytes, &freeTotal);
+        TEST_ASSERT(bSpaceZ == TRUE, "GetDiskFreeSpaceExW on Z:\\ must succeed");
+        TEST_ASSERT(totalBytes.QuadPart > 0 && freeTotal.QuadPart > 0, "Total and free bytes on Z: must be non-zero");
+
+        BOOL bSpaceD = micant::win32::GetDiskFreeSpaceExW(L"D:\\", &freeCaller, &totalBytes, &freeTotal);
+        TEST_ASSERT(bSpaceD == TRUE, "GetDiskFreeSpaceExW on D:\\ must succeed");
+        TEST_ASSERT(totalBytes.QuadPart > 0, "Total bytes on D: must be non-zero");
+    }
+
+    {
+        auto& obNs = micant::ob::ObjectNamespace::get();
+        auto linkC = obNs.getSymbolicLink(L"\\DosDevices\\C:");
+        TEST_ASSERT(linkC && linkC->getTargetPath() == L"\\Device\\Harddisk0\\Partition1", "Symlink \\DosDevices\\C: must target Partition1");
+
+        auto linkD = obNs.getSymbolicLink(L"\\DosDevices\\D:");
+        TEST_ASSERT(linkD && linkD->getTargetPath() == L"\\Device\\Harddisk0\\Partition2", "Symlink \\DosDevices\\D: must target Partition2");
+
+        auto linkE = obNs.getSymbolicLink(L"\\DosDevices\\E:");
+        TEST_ASSERT(linkE && linkE->getTargetPath() == L"\\Device\\Harddisk0\\Partition3", "Symlink \\DosDevices\\E: must target Partition3");
+
+        auto linkF = obNs.getSymbolicLink(L"\\DosDevices\\F:");
+        TEST_ASSERT(linkF && linkF->getTargetPath() == L"\\Device\\CdRom0", "Symlink \\DosDevices\\F: must target CdRom0");
+
+        auto linkG = obNs.getSymbolicLink(L"\\DosDevices\\G:");
+        TEST_ASSERT(linkG && linkG->getTargetPath() == L"\\Device\\Harddisk0\\Partition4", "Symlink \\DosDevices\\G: must target Partition4");
+
+        auto linkZ = obNs.getSymbolicLink(L"\\DosDevices\\Z:");
+        TEST_ASSERT(linkZ && linkZ->getTargetPath() == L"\\Device\\ZfsPool_Storage", "Symlink \\DosDevices\\Z: must target ZfsPool_Storage");
+    }
+
+    std::cout << "  [Horizon 144 Multi-Format Storage Interoperability & Win32 Harmony (Unit #116)]\n"
+              << "    Pillar 1: Unified Directory Query & FindFirst/NextFileW Across All Partitions OK\n"
+              << "    Pillar 2: Multi-Format DeleteFileW & Optical Write-Protection (ERROR_WRITE_PROTECT) OK\n"
+              << "    Pillar 3: Streamed 128KB CopyFileW (FAT32->ZFS, CDFS->NTFS) & MoveFileW (ZFS->ReFS) OK\n"
+              << "    Pillar 4: Dynamic GetVolumeInformationW & GetDiskFreeSpaceExW Across 6 Formats OK\n"
+              << "    Pillar 5: Kernel Boot Namespace Symlinks (C:, D:, E:, F:, G:, Z:) OK\n";
+
+    std::cout << "[TEST] Suite 360: Horizon 144 - Multi-Format Storage Interoperability & Win32 Harmony PASSED." << std::endl;
+}

@@ -1837,18 +1837,44 @@ inline BOOL CopyFileW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, BOOL bF
     std::shared_ptr<fs::FileObject> dstObj;
     st = fs::VirtualFileSystem::get().createOrOpenFile(lpNewFileName, fs::FILE_GENERIC_WRITE, fs::FILE_OVERWRITE_IF, dstObj);
     if (!NT_SUCCESS(st) || !dstObj) {
+        fs::VirtualFileSystem::get().closeFile(srcObj.get());
         SetLastError(ntdll::RtlNtStatusToDosError(st));
         return FALSE;
     }
-    uint32_t written = 0;
-    st = fs::VirtualFileSystem::get().writeFile(dstObj.get(), srcObj->getData().data(), static_cast<uint32_t>(srcObj->getData().size()), nullptr, written);
+
+    constexpr size_t CHUNK_SIZE = 65536;
+    std::vector<uint8_t> buffer(CHUNK_SIZE);
+    LargeInteger readOffset{};
+    readOffset.quadPart = 0;
+    LargeInteger writeOffset{};
+    writeOffset.quadPart = 0;
+    BOOL copySuccess = TRUE;
+
+    while (true) {
+        uint32_t bytesRead = 0;
+        NtStatus readSt = fs::VirtualFileSystem::get().readFile(srcObj.get(), buffer.data(), static_cast<uint32_t>(buffer.size()), &readOffset, bytesRead);
+        if (readSt == NtStatus::EndOfFile || bytesRead == 0) {
+            break;
+        }
+        if (!NT_SUCCESS(readSt)) {
+            SetLastError(ntdll::RtlNtStatusToDosError(readSt));
+            copySuccess = FALSE;
+            break;
+        }
+        uint32_t bytesWritten = 0;
+        NtStatus writeSt = fs::VirtualFileSystem::get().writeFile(dstObj.get(), buffer.data(), bytesRead, &writeOffset, bytesWritten);
+        if (!NT_SUCCESS(writeSt)) {
+            SetLastError(ntdll::RtlNtStatusToDosError(writeSt));
+            copySuccess = FALSE;
+            break;
+        }
+        readOffset.quadPart += bytesRead;
+        writeOffset.quadPart += bytesWritten;
+    }
+
     fs::VirtualFileSystem::get().closeFile(srcObj.get());
     fs::VirtualFileSystem::get().closeFile(dstObj.get());
-    if (!NT_SUCCESS(st)) {
-        SetLastError(ntdll::RtlNtStatusToDosError(st));
-        return FALSE;
-    }
-    return TRUE;
+    return copySuccess;
 }
 
 inline BOOL CopyFileA(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, BOOL bFailIfExists) noexcept {
@@ -2988,27 +3014,67 @@ inline BOOL GlobalMemoryStatusEx(LPMEMORYSTATUSEX lpBuffer) noexcept {
 }
 
 inline BOOL GetDiskFreeSpaceW(
-    LPCWSTR /*lpRootPathName*/,
+    LPCWSTR lpRootPathName,
     DWORD* lpSectorsPerCluster,
     DWORD* lpBytesPerSector,
     DWORD* lpNumberOfFreeClusters,
     DWORD* lpTotalNumberOfClusters
 ) noexcept {
-    if (lpSectorsPerCluster) *lpSectorsPerCluster = 8;
-    if (lpBytesPerSector) *lpBytesPerSector = 512;
-    if (lpNumberOfFreeClusters) *lpNumberOfFreeClusters = 100000000;
-    if (lpTotalNumberOfClusters) *lpTotalNumberOfClusters = 200000000;
+    wchar_t driveLetter = L'C';
+    if (lpRootPathName && lpRootPathName[0] != L'\0') {
+        std::wstring_view root(lpRootPathName);
+        if (root.starts_with(L"\\DosDevices\\") && root.size() >= 14 && root[13] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[12]));
+        } else if (root.starts_with(L"\\?\\") && root.size() >= 6 && root[5] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[4]));
+        } else if (root.size() >= 2 && root[1] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[0]));
+        }
+    }
+
+    fs::FileSystemVolumeInfo vi{};
+    NtStatus st = fs::VirtualFileSystem::get().queryVolumeInfo(driveLetter, vi);
+    if (!NT_SUCCESS(st)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+
+    if (lpSectorsPerCluster) *lpSectorsPerCluster = vi.sectorsPerCluster;
+    if (lpBytesPerSector) *lpBytesPerSector = vi.bytesPerSector;
+    if (lpNumberOfFreeClusters) *lpNumberOfFreeClusters = static_cast<DWORD>(vi.freeClusters & 0xFFFFFFFF);
+    if (lpTotalNumberOfClusters) *lpTotalNumberOfClusters = static_cast<DWORD>(vi.totalClusters & 0xFFFFFFFF);
     return TRUE;
 }
 
 inline BOOL GetDiskFreeSpaceExW(
-    LPCWSTR /*lpDirectoryName*/,
+    LPCWSTR lpDirectoryName,
     PULARGE_INTEGER lpFreeBytesAvailableToCaller,
     PULARGE_INTEGER lpTotalNumberOfBytes,
     PULARGE_INTEGER lpTotalNumberOfFreeBytes
 ) noexcept {
-    constexpr uint64_t freeBytes = 500ULL * 1024 * 1024 * 1024;  // 500 GB
-    constexpr uint64_t totalBytes = 1000ULL * 1024 * 1024 * 1024; // 1 TB
+    wchar_t driveLetter = L'C';
+    if (lpDirectoryName && lpDirectoryName[0] != L'\0') {
+        std::wstring_view root(lpDirectoryName);
+        if (root.starts_with(L"\\DosDevices\\") && root.size() >= 14 && root[13] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[12]));
+        } else if (root.starts_with(L"\\?\\") && root.size() >= 6 && root[5] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[4]));
+        } else if (root.size() >= 2 && root[1] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[0]));
+        }
+    }
+
+    fs::FileSystemVolumeInfo vi{};
+    NtStatus st = fs::VirtualFileSystem::get().queryVolumeInfo(driveLetter, vi);
+    if (!NT_SUCCESS(st)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+
+    uint64_t clusterBytes = static_cast<uint64_t>(vi.bytesPerSector) * vi.sectorsPerCluster;
+    uint64_t totalBytes = vi.totalClusters * clusterBytes;
+    uint64_t freeBytes = vi.freeClusters * clusterBytes;
+
     if (lpFreeBytesAvailableToCaller) lpFreeBytesAvailableToCaller->QuadPart = freeBytes;
     if (lpTotalNumberOfBytes) lpTotalNumberOfBytes->QuadPart = totalBytes;
     if (lpTotalNumberOfFreeBytes) lpTotalNumberOfFreeBytes->QuadPart = freeBytes;
@@ -3094,7 +3160,7 @@ inline UINT GetDriveTypeW(LPCWSTR /*lpRootPathName*/) noexcept {
 }
 
 inline BOOL GetVolumeInformationW(
-    LPCWSTR /*lpRootPathName*/,
+    LPCWSTR lpRootPathName,
     LPWSTR lpVolumeNameBuffer,
     DWORD nVolumeNameSize,
     LPDWORD lpVolumeSerialNumber,
@@ -3103,14 +3169,37 @@ inline BOOL GetVolumeInformationW(
     LPWSTR lpFileSystemNameBuffer,
     DWORD nFileSystemNameSize
 ) noexcept {
-    if (lpVolumeNameBuffer && nVolumeNameSize > 6) {
-        std::wmemcpy(lpVolumeNameBuffer, L"MicaNT", 7);
+    wchar_t driveLetter = L'C';
+    if (lpRootPathName && lpRootPathName[0] != L'\0') {
+        std::wstring_view root(lpRootPathName);
+        if (root.starts_with(L"\\DosDevices\\") && root.size() >= 14 && root[13] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[12]));
+        } else if (root.starts_with(L"\\?\\") && root.size() >= 6 && root[5] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[4]));
+        } else if (root.size() >= 2 && root[1] == L':') {
+            driveLetter = static_cast<wchar_t>(std::towupper(root[0]));
+        }
     }
-    if (lpVolumeSerialNumber) *lpVolumeSerialNumber = 0x19851120;
-    if (lpMaximumComponentLength) *lpMaximumComponentLength = 255;
-    if (lpFileSystemFlags) *lpFileSystemFlags = 0x00000003; // CASE_SENSITIVE | CASE_PRESERVED
-    if (lpFileSystemNameBuffer && nFileSystemNameSize > 4) {
-        std::wmemcpy(lpFileSystemNameBuffer, L"NTFS", 5);
+
+    fs::FileSystemVolumeInfo vi{};
+    NtStatus st = fs::VirtualFileSystem::get().queryVolumeInfo(driveLetter, vi);
+    if (!NT_SUCCESS(st)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+
+    if (lpVolumeNameBuffer && nVolumeNameSize > 0) {
+        size_t copyLen = std::min<size_t>(nVolumeNameSize - 1, vi.volumeLabel.size());
+        std::wmemcpy(lpVolumeNameBuffer, vi.volumeLabel.c_str(), copyLen);
+        lpVolumeNameBuffer[copyLen] = L'\0';
+    }
+    if (lpVolumeSerialNumber) *lpVolumeSerialNumber = vi.serialNumber;
+    if (lpMaximumComponentLength) *lpMaximumComponentLength = vi.maxComponentLength;
+    if (lpFileSystemFlags) *lpFileSystemFlags = vi.fileSystemAttributes;
+    if (lpFileSystemNameBuffer && nFileSystemNameSize > 0) {
+        size_t copyLen = std::min<size_t>(nFileSystemNameSize - 1, vi.fileSystemName.size());
+        std::wmemcpy(lpFileSystemNameBuffer, vi.fileSystemName.c_str(), copyLen);
+        lpFileSystemNameBuffer[copyLen] = L'\0';
     }
     return TRUE;
 }

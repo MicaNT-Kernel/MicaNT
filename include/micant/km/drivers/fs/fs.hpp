@@ -249,6 +249,15 @@ public:
         std::vector<uint8_t> hiveBytes(systemHiveStub.begin(), systemHiveStub.end());
         createFileInternal(L"Windows\\System32\\config\\SYSTEM", hiveBytes);
 
+        // Register standard DOS drive symlinks in Object Manager
+        auto& obNs = ob::ObjectNamespace::get();
+        obNs.createSymbolicLink(L"\\DosDevices\\C:", L"\\Device\\Harddisk0\\Partition1");
+        obNs.createSymbolicLink(L"\\DosDevices\\D:", L"\\Device\\Harddisk0\\Partition2");
+        obNs.createSymbolicLink(L"\\DosDevices\\E:", L"\\Device\\Harddisk0\\Partition3");
+        obNs.createSymbolicLink(L"\\DosDevices\\F:", L"\\Device\\CdRom0");
+        obNs.createSymbolicLink(L"\\DosDevices\\G:", L"\\Device\\Harddisk0\\Partition4");
+        obNs.createSymbolicLink(L"\\DosDevices\\Z:", L"\\Device\\ZfsPool_Storage");
+
         initialized_ = true;
     }
 
@@ -1094,80 +1103,260 @@ public:
         bool isDirectory{false};
     };
 
+    struct PartitionResolution {
+        enum class VolumeType { Fat32, Ntfs, Exfat, Cdfs, Refs, Zfs };
+        VolumeType type{VolumeType::Fat32};
+        std::wstring relPath;
+    };
+
+    static PartitionResolution resolvePartitionPath(std::wstring_view rawPath) {
+        std::wstring s(rawPath);
+        for (auto& c : s) {
+            if (c == L'/') c = L'\\';
+        }
+        if (s.starts_with(L"\\DosDevices\\")) s = s.substr(12);
+        else if (s.starts_with(L"\\??\\")) s = s.substr(4);
+
+        PartitionResolution pr;
+        if (s.starts_with(L"\\Device\\ZfsPool_Storage\\") || s.starts_with(L"\\Device\\Zfs0\\")) {
+            pr.type = PartitionResolution::VolumeType::Zfs;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\ZfsPool_Storage" || s == L"\\Device\\Zfs0") {
+            pr.type = PartitionResolution::VolumeType::Zfs;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\Harddisk0\\Partition2\\")) {
+            pr.type = PartitionResolution::VolumeType::Ntfs;
+            pr.relPath = s.substr(29);
+        } else if (s == L"\\Device\\Harddisk0\\Partition2") {
+            pr.type = PartitionResolution::VolumeType::Ntfs;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\Harddisk0\\Partition3\\") || s.starts_with(L"\\Device\\ExFat0\\") || s.starts_with(L"\\Device\\ExFat_E\\")) {
+            pr.type = PartitionResolution::VolumeType::Exfat;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\Harddisk0\\Partition3" || s == L"\\Device\\ExFat0" || s == L"\\Device\\ExFat_E") {
+            pr.type = PartitionResolution::VolumeType::Exfat;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\CdRom0\\") || s.starts_with(L"\\Device\\CdRom_F\\")) {
+            pr.type = PartitionResolution::VolumeType::Cdfs;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\CdRom0" || s == L"\\Device\\CdRom_F") {
+            pr.type = PartitionResolution::VolumeType::Cdfs;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\Harddisk0\\Partition4\\") || s.starts_with(L"\\Device\\ReFS0\\") || s.starts_with(L"\\Device\\ReFS_G\\")) {
+            pr.type = PartitionResolution::VolumeType::Refs;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\Harddisk0\\Partition4" || s == L"\\Device\\ReFS0" || s == L"\\Device\\ReFS_G") {
+            pr.type = PartitionResolution::VolumeType::Refs;
+            pr.relPath = L"";
+        } else if (s.size() >= 2 && s[1] == L':') {
+            wchar_t drive = static_cast<wchar_t>(std::towupper(s[0]));
+            std::wstring rel = s.substr(2);
+            while (rel.starts_with(L"\\")) rel = rel.substr(1);
+
+            switch (drive) {
+                case L'Z': pr.type = PartitionResolution::VolumeType::Zfs; break;
+                case L'D': pr.type = PartitionResolution::VolumeType::Ntfs; break;
+                case L'E': pr.type = PartitionResolution::VolumeType::Exfat; break;
+                case L'F': pr.type = PartitionResolution::VolumeType::Cdfs; break;
+                case L'G': pr.type = PartitionResolution::VolumeType::Refs; break;
+                case L'C': default: pr.type = PartitionResolution::VolumeType::Fat32; break;
+            }
+            pr.relPath = std::move(rel);
+        } else {
+            while (s.starts_with(L"\\")) s = s.substr(1);
+            pr.type = PartitionResolution::VolumeType::Fat32;
+            pr.relPath = std::move(s);
+        }
+
+        // Clean up any trailing wildcard or slashes
+        if (pr.relPath.ends_with(L"\\*")) {
+            pr.relPath.resize(pr.relPath.size() - 2);
+        } else if (pr.relPath == L"*") {
+            pr.relPath.clear();
+        } else if (pr.relPath.ends_with(L"*")) {
+            pr.relPath.pop_back();
+        }
+        while (pr.relPath.ends_with(L"\\")) {
+            pr.relPath.pop_back();
+        }
+
+        return pr;
+    }
+
     NtStatus createDirectory(std::wstring_view path) {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring norm = normalizePath(path);
-        if (findEntry(norm)) return NtStatus::ObjectNameCollision;
-        auto entry = createPathEntries(norm, true);
-        return entry ? NtStatus::Success : NtStatus::ObjectPathNotFound;
+        auto pr = resolvePartitionPath(path);
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Cdfs:
+                return NtStatus::MediaWriteProtected;
+            case PartitionResolution::VolumeType::Zfs:
+                if (!zfsFs_) return NtStatus::VolumeNotMounted;
+                return zfsFs_->createFile(pr.relPath, 0x10, true);
+            case PartitionResolution::VolumeType::Ntfs: {
+                if (!ntfsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t rec = 0;
+                return ntfsFs_->createDirectory(pr.relPath, rec);
+            }
+            case PartitionResolution::VolumeType::Exfat: {
+                if (!exfatFs_) return NtStatus::VolumeNotMounted;
+                uint32_t clus = 0;
+                return exfatFs_->createDirectory(pr.relPath, clus);
+            }
+            case PartitionResolution::VolumeType::Refs: {
+                if (!refsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t frn = 0;
+                return refsFs_->createFile(pr.relPath, 0x10, frn);
+            }
+            case PartitionResolution::VolumeType::Fat32:
+            default: {
+                std::wstring norm = normalizePath(path);
+                if (findEntry(norm)) return NtStatus::ObjectNameCollision;
+                auto entry = createPathEntries(norm, true);
+                return entry ? NtStatus::Success : NtStatus::ObjectPathNotFound;
+            }
+        }
     }
 
     NtStatus deleteFile(std::wstring_view path) {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring norm = normalizePath(path);
-        size_t lastSlash = norm.find_last_of(L'\\');
-        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
-        std::wstring fileName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
+        auto pr = resolvePartitionPath(path);
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Cdfs:
+                return NtStatus::MediaWriteProtected;
+            case PartitionResolution::VolumeType::Zfs:
+                if (!zfsFs_) return NtStatus::VolumeNotMounted;
+                return zfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Ntfs:
+                if (!ntfsFs_) return NtStatus::VolumeNotMounted;
+                return ntfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Exfat:
+                if (!exfatFs_) return NtStatus::VolumeNotMounted;
+                return exfatFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Refs:
+                if (!refsFs_) return NtStatus::VolumeNotMounted;
+                return refsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Fat32:
+            default: {
+                std::wstring norm = normalizePath(path);
+                size_t lastSlash = norm.find_last_of(L'\\');
+                std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
+                std::wstring fileName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
 
-        auto parent = findEntry(parentPath);
-        if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
+                auto parent = findEntry(parentPath);
+                if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
 
-        auto it = parent->children.find(fileName);
-        if (it == parent->children.end()) return NtStatus::NoSuchFile;
-        if (it->second->isDirectory) return NtStatus::FileIsADirectory;
+                auto it = parent->children.find(fileName);
+                if (it == parent->children.end()) return NtStatus::NoSuchFile;
+                if (it->second->isDirectory) return NtStatus::FileIsADirectory;
 
-        parent->children.erase(it);
-        return NtStatus::Success;
+                parent->children.erase(it);
+                return NtStatus::Success;
+            }
+        }
     }
 
     NtStatus removeDirectory(std::wstring_view path) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring norm = normalizePath(path);
-        size_t lastSlash = norm.find_last_of(L'\\');
-        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
-        std::wstring dirName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
-
-        auto parent = findEntry(parentPath);
-        if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
-
-        auto it = parent->children.find(dirName);
-        if (it == parent->children.end()) return NtStatus::NoSuchFile;
-        if (!it->second->isDirectory) return NtStatus::NotADirectory;
-        if (!it->second->children.empty()) return NtStatus::DirectoryNotEmpty;
-
-        parent->children.erase(it);
-        return NtStatus::Success;
+        return deleteFile(path);
     }
 
     NtStatus removeDirectoryRecursive(std::wstring_view path) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring norm = normalizePath(path);
-        size_t lastSlash = norm.find_last_of(L'\\');
-        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
-        std::wstring dirName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
-
-        auto parent = findEntry(parentPath);
-        if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
-
-        auto it = parent->children.find(dirName);
-        if (it == parent->children.end()) return NtStatus::NoSuchFile;
-        if (!it->second->isDirectory) return NtStatus::NotADirectory;
-
-        parent->children.erase(it);
-        return NtStatus::Success;
+        return deleteFile(path);
     }
 
     NtStatus queryFileAttributes(std::wstring_view path, uint32_t& attributes) {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring norm = normalizePath(path);
-        auto entry = findEntry(norm);
-        if (!entry) return NtStatus::NoSuchFile;
-        attributes = entry->attributes;
-        return NtStatus::Success;
+        auto pr = resolvePartitionPath(path);
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Zfs: {
+                if (!zfsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10; // FILE_ATTRIBUTE_DIRECTORY
+                    return NtStatus::Success;
+                }
+                zfs::ZfsFileRecord zRec{};
+                if (zfsFs_->lookupPath(pr.relPath, zRec)) {
+                    attributes = zRec.attributes;
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Ntfs: {
+                if (!ntfsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint64_t recNum = 0;
+                if (NT_SUCCESS(ntfsFs_->lookupPath(pr.relPath, recNum))) {
+                    const auto* rec = ntfsFs_->getRecord(recNum);
+                    if (rec) {
+                        attributes = (rec->flags & ntfs::MFT_RECORD_DIRECTORY) ? 0x10u : 0x80u;
+                        if (rec->stdInfo.dosPermissions) attributes |= rec->stdInfo.dosPermissions;
+                        return NtStatus::Success;
+                    }
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Exfat: {
+                if (!exfatFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint32_t clus = 0;
+                if (NT_SUCCESS(exfatFs_->lookupPath(pr.relPath, clus))) {
+                    attributes = 0x80; // FILE_ATTRIBUTE_NORMAL
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Cdfs: {
+                if (!cdfsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x11; // DIRECTORY | READONLY
+                    return NtStatus::Success;
+                }
+                cdfs::CdfsFileEntry cEntry;
+                if (NT_SUCCESS(cdfsFs_->lookupPath(pr.relPath, cEntry))) {
+                    attributes = (cEntry.isDirectory ? 0x10u : 0x80u) | 0x01u; // READONLY
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Refs: {
+                if (!refsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint64_t frn = 0;
+                if (NT_SUCCESS(refsFs_->lookupPath(pr.relPath, frn))) {
+                    attributes = 0x80;
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Fat32:
+            default: {
+                std::wstring norm = normalizePath(path);
+                auto entry = findEntry(norm);
+                if (!entry) return NtStatus::NoSuchFile;
+                attributes = entry->attributes;
+                return NtStatus::Success;
+            }
+        }
     }
 
     NtStatus setFileAttributes(std::wstring_view path, uint32_t attributes) {
         std::lock_guard<std::mutex> lock(mutex_);
+        auto pr = resolvePartitionPath(path);
+        if (pr.type == PartitionResolution::VolumeType::Cdfs) {
+            return NtStatus::MediaWriteProtected;
+        }
         std::wstring norm = normalizePath(path);
         auto entry = findEntry(norm);
         if (!entry) return NtStatus::NoSuchFile;
@@ -1177,23 +1366,179 @@ public:
 
     NtStatus queryDirectory(std::wstring_view path, std::vector<DirectoryEntry>& entries) {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::wstring norm = normalizePath(path);
-        auto entry = findEntry(norm);
-        if (!entry) return NtStatus::NoSuchFile;
-        if (!entry->isDirectory) return NtStatus::NotADirectory;
-
+        auto pr = resolvePartitionPath(path);
         entries.clear();
-        for (const auto& [name, child] : entry->children) {
-            entries.push_back(DirectoryEntry{
-                .name = name,
-                .attributes = child->attributes,
-                .size = child->content.size(),
-                .isDirectory = child->isDirectory
-            });
-        }
-        return NtStatus::Success;
-    }
 
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Zfs: {
+                if (!zfsFs_) return NtStatus::VolumeNotMounted;
+                auto files = zfsFs_->getAllFiles();
+                for (const auto& f : files) {
+                    if (pr.relPath.empty()) {
+                        if (f.name.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = f.name,
+                                .attributes = f.attributes,
+                                .size = f.size,
+                                .isDirectory = f.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (f.name.starts_with(prefix)) {
+                            std::wstring sub = f.name.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = f.attributes,
+                                    .size = f.size,
+                                    .isDirectory = f.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Ntfs: {
+                if (!ntfsFs_) return NtStatus::VolumeNotMounted;
+                auto recs = ntfsFs_->getAllRecords();
+                for (const auto& r : recs) {
+                    if (pr.relPath.empty()) {
+                        if (r.fileName.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = r.fileName,
+                                .attributes = (r.flags & ntfs::MFT_RECORD_DIRECTORY) ? 0x10u : 0x80u,
+                                .size = r.primaryData.size(),
+                                .isDirectory = (r.flags & ntfs::MFT_RECORD_DIRECTORY) != 0
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (r.fileName.starts_with(prefix)) {
+                            std::wstring sub = r.fileName.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = (r.flags & ntfs::MFT_RECORD_DIRECTORY) ? 0x10u : 0x80u,
+                                    .size = r.primaryData.size(),
+                                    .isDirectory = (r.flags & ntfs::MFT_RECORD_DIRECTORY) != 0
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Exfat: {
+                if (!exfatFs_) return NtStatus::VolumeNotMounted;
+                auto recs = exfatFs_->getAllRecords();
+                for (const auto& r : recs) {
+                    if (pr.relPath.empty()) {
+                        if (r.fileName.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = r.fileName,
+                                .attributes = r.attributes,
+                                .size = r.data.size(),
+                                .isDirectory = (r.attributes & 0x10) != 0
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (r.fileName.starts_with(prefix)) {
+                            std::wstring sub = r.fileName.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = r.attributes,
+                                    .size = r.data.size(),
+                                    .isDirectory = (r.attributes & 0x10) != 0
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Cdfs: {
+                if (!cdfsFs_) return NtStatus::VolumeNotMounted;
+                auto recs = cdfsFs_->getAllRecords();
+                for (const auto& r : recs) {
+                    if (pr.relPath.empty()) {
+                        if (r.fileName.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = r.fileName,
+                                .attributes = (r.isDirectory ? 0x10u : 0x80u) | 0x01u,
+                                .size = r.dataLength,
+                                .isDirectory = r.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (r.fileName.starts_with(prefix)) {
+                            std::wstring sub = r.fileName.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = (r.isDirectory ? 0x10u : 0x80u) | 0x01u,
+                                    .size = r.dataLength,
+                                    .isDirectory = r.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Refs: {
+                if (!refsFs_) return NtStatus::VolumeNotMounted;
+                auto recs = refsFs_->getAllRecords();
+                for (const auto& r : recs) {
+                    if (pr.relPath.empty()) {
+                        if (r.fileName.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = r.fileName,
+                                .attributes = r.attributes,
+                                .size = r.size,
+                                .isDirectory = r.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (r.fileName.starts_with(prefix)) {
+                            std::wstring sub = r.fileName.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = r.attributes,
+                                    .size = r.size,
+                                    .isDirectory = r.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Fat32:
+            default: {
+                std::wstring norm = normalizePath(path);
+                auto entry = findEntry(norm);
+                if (!entry) return NtStatus::NoSuchFile;
+                if (!entry->isDirectory) return NtStatus::NotADirectory;
+
+                for (const auto& [name, child] : entry->children) {
+                    entries.push_back(DirectoryEntry{
+                        .name = name,
+                        .attributes = child->attributes,
+                        .size = child->content.size(),
+                        .isDirectory = child->isDirectory
+                    });
+                }
+                return NtStatus::Success;
+            }
+        }
+    }
 
 private:
     VirtualFileSystem() = default;

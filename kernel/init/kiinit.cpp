@@ -184,6 +184,12 @@ extern "C" NtStatus KiSystemStartup(
     vfs.mountBlockDevice(bootPartition);
     ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\C:", L"\\Device\\Harddisk0\\Partition1");
     std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounted \\DosDevices\\C: -> \\Device\\Harddisk0\\Partition1 (Status: MOUNTED, FAT32 4KB Clusters)\n";
+    ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\D:", L"\\Device\\Harddisk0\\Partition2");
+    ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\E:", L"\\Device\\Harddisk0\\Partition3");
+    ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\F:", L"\\Device\\CdRom0");
+    ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\G:", L"\\Device\\Harddisk0\\Partition4");
+    ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\Z:", L"\\Device\\ZfsPool_Storage");
+    std::cout << "[MicaNT Boot] [VFS] Registered multi-format storage symlinks (C:, D:, E:, F:, G:, Z:)\n";
 
     // 5.2 Initialize Kernel Hardware Telemetry Driver via DriverEntry
     std::cout << "[MicaNT Boot] [Driver] Loading Kernel Telemetry Driver via DriverEntry...\n";

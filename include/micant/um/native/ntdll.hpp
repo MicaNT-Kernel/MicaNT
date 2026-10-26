@@ -936,6 +936,7 @@ inline uint32_t RtlGetLastWin32Error() noexcept {
 inline uint32_t RtlNtStatusToDosError(NtStatus status) noexcept {
     if (status == NtStatus::Success) return 0; // ERROR_SUCCESS
     switch (status) {
+        case NtStatus::MediaWriteProtected:     return 19;  // ERROR_WRITE_PROTECT
         case NtStatus::NoSuchFile:              return 2;   // ERROR_FILE_NOT_FOUND
         case NtStatus::ObjectPathNotFound:      return 3;   // ERROR_PATH_NOT_FOUND
         case NtStatus::AccessDenied:            return 5;   // ERROR_ACCESS_DENIED

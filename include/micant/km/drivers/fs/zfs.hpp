@@ -314,19 +314,22 @@ public:
             stats_.readErrors++;
             return NtStatus::NoSuchDevice;
         }
+        if (length == 0) return NtStatus::Success;
 
-        const uint32_t sectorSize = device_->getBlockSize();
+        const uint32_t sectorSize = device_->getBlockSize() ? device_->getBlockSize() : 512;
         const uint64_t startSector = offset / sectorSize;
-        const uint32_t sectorCount = static_cast<uint32_t>((length + sectorSize - 1) / sectorSize);
+        const uint64_t endSector = (offset + length + sectorSize - 1) / sectorSize;
+        const uint32_t sectorCount = (startSector < endSector) ? static_cast<uint32_t>(endSector - startSector) : 1;
+        const size_t bufferSize = static_cast<size_t>(sectorCount) * sectorSize;
 
-        std::vector<uint8_t> tmp(sectorCount * sectorSize);
+        std::vector<uint8_t> tmp(bufferSize, 0);
         NtStatus st = device_->readBlocks(startSector, sectorCount, tmp.data());
         if (!NT_SUCCESS(st)) {
             stats_.readErrors++;
             return st;
         }
 
-        const size_t byteOffsetInFirstSector = offset % sectorSize;
+        const size_t byteOffsetInFirstSector = static_cast<size_t>(offset % sectorSize);
         std::memcpy(buffer, tmp.data() + byteOffsetInFirstSector, length);
 
         if (expectedCksum) {
@@ -344,17 +347,20 @@ public:
             stats_.writeErrors++;
             return NtStatus::NoSuchDevice;
         }
+        if (length == 0) return NtStatus::Success;
 
-        const uint32_t sectorSize = device_->getBlockSize();
+        const uint32_t sectorSize = device_->getBlockSize() ? device_->getBlockSize() : 512;
         const uint64_t startSector = offset / sectorSize;
-        const uint32_t sectorCount = static_cast<uint32_t>((length + sectorSize - 1) / sectorSize);
+        const uint64_t endSector = (offset + length + sectorSize - 1) / sectorSize;
+        const uint32_t sectorCount = (startSector < endSector) ? static_cast<uint32_t>(endSector - startSector) : 1;
+        const size_t bufferSize = static_cast<size_t>(sectorCount) * sectorSize;
 
-        std::vector<uint8_t> tmp(sectorCount * sectorSize);
-        if (offset % sectorSize != 0 || length < tmp.size()) {
+        std::vector<uint8_t> tmp(bufferSize, 0);
+        if (offset % sectorSize != 0 || (length % sectorSize) != 0) {
             (void)device_->readBlocks(startSector, sectorCount, tmp.data());
         }
 
-        const size_t byteOffsetInFirstSector = offset % sectorSize;
+        const size_t byteOffsetInFirstSector = static_cast<size_t>(offset % sectorSize);
         std::memcpy(tmp.data() + byteOffsetInFirstSector, buffer, length);
 
         NtStatus st = device_->writeBlocks(startSector, sectorCount, tmp.data());
@@ -416,6 +422,7 @@ public:
     NtStatus read(uint64_t offset, void* buffer, size_t length, const ZfsChecksum* expectedCksum = nullptr) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (children_.empty()) return NtStatus::NoSuchDevice;
+        if (length == 0) return NtStatus::Success;
 
         NtStatus lastStatus = NtStatus::Unsuccessful;
         size_t healthyChildIdx = static_cast<size_t>(-1);
@@ -459,6 +466,7 @@ public:
     NtStatus write(uint64_t offset, const void* buffer, size_t length) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (children_.empty()) return NtStatus::NoSuchDevice;
+        if (length == 0) return NtStatus::Success;
 
         size_t successCount = 0;
         for (auto& child : children_) {
@@ -558,6 +566,7 @@ public:
     NtStatus read(uint64_t offset, void* buffer, size_t length, const ZfsChecksum* expectedCksum = nullptr) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (children_.size() < 2) return NtStatus::NoSuchDevice;
+        if (length == 0) return NtStatus::Success;
 
         const size_t numDataDisks = children_.size() - 1; // N-1 data disks, 1 parity disk
         const size_t stripeSize = (length + numDataDisks - 1) / numDataDisks;
@@ -629,6 +638,7 @@ public:
     NtStatus write(uint64_t offset, const void* buffer, size_t length) override {
         std::lock_guard<std::mutex> lock(mutex_);
         if (children_.size() < 2) return NtStatus::NoSuchDevice;
+        if (length == 0) return NtStatus::Success;
 
         const size_t numDataDisks = children_.size() - 1;
         const size_t stripeSize = (length + numDataDisks - 1) / numDataDisks;
@@ -825,8 +835,12 @@ public:
         rec.bp.fill = rec.size;
 
         // Write through VDEV tree if available
-        if (vdev_) {
-            vdev_->write(0x100000 + (reinterpret_cast<uintptr_t>(&rec) % 0x1000000), rec.content.data(), rec.content.size());
+        if (vdev_ && !rec.content.empty()) {
+            uint64_t vdevOffset = (rec.bp.dva[0].offset != 0)
+                ? rec.bp.dva[0].offset
+                : (0x100000 + (((reinterpret_cast<uintptr_t>(&rec) >> 4) & 0xFFF) * 4096));
+            rec.bp.dva[0].offset = vdevOffset;
+            vdev_->write(vdevOffset, rec.content.data(), rec.content.size());
         }
 
         bytesWritten = length;
@@ -854,7 +868,10 @@ public:
         if (rec.size > 0 && !VerifyFletcher4(rec.content.data(), rec.content.size(), rec.bp.checksum)) {
             // Read from VDEV with self-healing!
             if (vdev_) {
-                vdev_->read(0x100000 + (reinterpret_cast<uintptr_t>(&rec) % 0x1000000), buffer, toRead, &rec.bp.checksum);
+                uint64_t vdevOffset = (rec.bp.dva[0].offset != 0)
+                    ? rec.bp.dva[0].offset
+                    : (0x100000 + (((reinterpret_cast<uintptr_t>(&rec) >> 4) & 0xFFF) * 4096));
+                vdev_->read(vdevOffset, buffer, toRead, &rec.bp.checksum);
             }
         }
         return NtStatus::Success;
@@ -901,6 +918,33 @@ public:
         for (const auto& chName : it->second.childNames) {
             auto itCh = files_.find(chName);
             if (itCh != files_.end()) res.push_back(itCh->second);
+        }
+        return res;
+    }
+
+    NtStatus deleteFile(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = files_.find(std::wstring(path));
+        if (it == files_.end()) return NtStatus::NoSuchFile;
+        if (it->second.isDirectory && !it->second.childNames.empty()) return NtStatus::DirectoryNotEmpty;
+
+        std::wstring sPath(path);
+        size_t lastSlash = sPath.find_last_of(L"\\/");
+        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : sPath.substr(0, lastSlash);
+        auto itP = files_.find(parentPath);
+        if (itP != files_.end()) {
+            std::erase(itP->second.childNames, sPath);
+        }
+
+        files_.erase(it);
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::vector<ZfsFileRecord> getAllFiles() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<ZfsFileRecord> res;
+        for (const auto& [name, rec] : files_) {
+            if (!name.empty()) res.push_back(rec);
         }
         return res;
     }
@@ -1077,6 +1121,16 @@ public:
     [[nodiscard]] std::vector<ZfsFileRecord> listDirectory(std::wstring_view dirPath) const {
         if (!activeDataset_) return {};
         return activeDataset_->listDirectory(dirPath);
+    }
+
+    NtStatus deleteFile(std::wstring_view path) {
+        if (!activeDataset_) return NtStatus::VolumeNotMounted;
+        return activeDataset_->deleteFile(path);
+    }
+
+    [[nodiscard]] std::vector<ZfsFileRecord> getAllFiles() const {
+        if (!activeDataset_) return {};
+        return activeDataset_->getAllFiles();
     }
 
     NtStatus createSnapshot(std::string_view snapName) {

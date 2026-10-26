@@ -563,6 +563,15 @@ public:
         return NtStatus::Success;
     }
 
+    [[nodiscard]] std::vector<CdfsFileEntry> getAllRecords() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<CdfsFileEntry> res;
+        for (const auto& [name, rec] : records_) {
+            if (name != L"\\") res.push_back(rec);
+        }
+        return res;
+    }
+
     NtStatus lookupPath(std::wstring_view path, CdfsFileEntry& outEntry) const {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!mounted_) return NtStatus::VolumeNotMounted;

@@ -436,7 +436,8 @@ enum class LogOperation : uint32_t {
     AllocateClusters     = 0x04,
     AddIndexEntry        = 0x05,
     CommitTransaction    = 0x06,
-    Checkpoint           = 0x07
+    Checkpoint           = 0x07,
+    DeleteFileRecord     = 0x08
 };
 
 struct LogEntry {
@@ -901,6 +902,43 @@ public:
         }
 
         return NtStatus::Success;
+    }
+
+    /**
+     * @brief Deletes a file or directory from the NTFS volume.
+     */
+    NtStatus deleteFile(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring canon = canonicalizePath(path);
+        for (auto it = records_.begin(); it != records_.end(); ++it) {
+            if ((it->second.flags & MFT_RECORD_IN_USE) && it->second.fileName == canon) {
+                if ((it->second.flags & MFT_RECORD_DIRECTORY) && !it->second.childRecords.empty()) {
+                    return NtStatus::DirectoryNotEmpty;
+                }
+                uint64_t recNum = it->first;
+                auto itRoot = records_.find(MFT_REC_ROOT);
+                if (itRoot != records_.end()) {
+                    std::erase(itRoot->second.childRecords, recNum);
+                }
+                if (journal_) {
+                    journal_->logAction(LogOperation::DeleteFileRecord, recNum);
+                }
+                records_.erase(it);
+                return NtStatus::Success;
+            }
+        }
+        return NtStatus::NoSuchFile;
+    }
+
+    [[nodiscard]] std::vector<NtfsFileRecord> getAllRecords() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<NtfsFileRecord> res;
+        for (const auto& [num, rec] : records_) {
+            if ((rec.flags & MFT_RECORD_IN_USE) && !rec.fileName.empty() && num >= MFT_REC_USER_START) {
+                res.push_back(rec);
+            }
+        }
+        return res;
     }
 
     /**
