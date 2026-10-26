@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include "micant/shared/ntdef.hpp"
 #include "micant/um/subsystems/winbase/kernel32.hpp"
 #include "micant/um/subsystems/com/ole32.hpp"

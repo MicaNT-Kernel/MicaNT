@@ -31,6 +31,7 @@
 #include <mutex>
 #include <span>
 #include <cstring>
+#include <cwctype>
 #include <algorithm>
 #include <unordered_map>
 #include <chrono>
@@ -229,7 +230,7 @@ public:
     static uint16_t computeNameHash(std::wstring_view name) noexcept {
         uint16_t hash = 0;
         for (wchar_t ch : name) {
-            wchar_t up = static_cast<wchar_t>(std::towupper(ch));
+            wchar_t up = (ch >= L'a' && ch <= L'z') ? static_cast<wchar_t>(ch - (L'a' - L'A')) : static_cast<wchar_t>(std::towupper(ch));
             uint8_t b1 = static_cast<uint8_t>(up & 0xFF);
             uint8_t b2 = static_cast<uint8_t>((up >> 8) & 0xFF);
             hash = ((hash << 15) | (hash >> 1)) + b1;

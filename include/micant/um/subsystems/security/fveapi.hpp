@@ -65,6 +65,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <unordered_map>
 #include <sstream>
 #include <iomanip>
