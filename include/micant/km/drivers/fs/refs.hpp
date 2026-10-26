@@ -868,6 +868,7 @@ private:
     std::wstring volumeLabel_{L"MICA_REFS"};
     uint64_t nextFileId_{0x600};
     std::unordered_map<std::wstring, RefsFileRecord> records_;
+    std::unordered_map<std::string, std::unordered_map<std::wstring, RefsFileRecord>> checkpoints_;
 
 public:
     RefsFileSystem() = default;
@@ -1091,6 +1092,17 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus truncateFile(uint64_t frn, uint64_t newSize) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = findByFrn(frn);
+        if (it == records_.end()) return NtStatus::NoSuchFile;
+        it->second.data.resize(static_cast<size_t>(newSize), 0);
+        it->second.size = newSize;
+        it->second.allocatedSize = ((newSize + clusterSize_ - 1) / clusterSize_) * clusterSize_;
+        it->second.dataChecksum = RefsChecksum::compute64(it->second.data.data(), it->second.data.size());
+        return NtStatus::Success;
+    }
+
     NtStatus readFile(
         uint64_t frn,
         void* buffer,
@@ -1248,6 +1260,39 @@ public:
     [[nodiscard]] uint64_t getVolumeSerialNumber() const noexcept { return volumeSerialNumber_; }
     [[nodiscard]] std::wstring getVolumeLabel() const noexcept { return volumeLabel_; }
     [[nodiscard]] size_t getFileCount() const noexcept { return records_.size(); }
+
+    NtStatus createCheckpoint(std::string_view name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!mounted_) return NtStatus::VolumeNotMounted;
+        std::string sName(name);
+        if (checkpoints_.contains(sName)) return NtStatus::ObjectNameCollision;
+        checkpoints_[sName] = records_;
+        return NtStatus::Success;
+    }
+
+    NtStatus rollbackCheckpoint(std::string_view name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!mounted_) return NtStatus::VolumeNotMounted;
+        auto it = checkpoints_.find(std::string(name));
+        if (it == checkpoints_.end()) return NtStatus::NoSuchFile;
+        records_ = it->second;
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::vector<std::string> listCheckpoints() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::string> res;
+        for (const auto& [name, _] : checkpoints_) res.push_back(name);
+        return res;
+    }
+
+    NtStatus deleteCheckpoint(std::string_view name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = checkpoints_.find(std::string(name));
+        if (it == checkpoints_.end()) return NtStatus::NoSuchFile;
+        checkpoints_.erase(it);
+        return NtStatus::Success;
+    }
 };
 
 // ============================================================================

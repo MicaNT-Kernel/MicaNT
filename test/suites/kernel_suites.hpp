@@ -23415,3 +23415,170 @@ inline void Test_Horizon145_Dynamic_Drive_Letter_Assignment_And_Win32_Mount_Mana
 
     std::cout << "[TEST] Suite 361: Horizon 145 - Dynamic Drive Letter Assignment & Win32 Mount Manager Parity PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 362: Horizon 146 - Storage Snapshot Orchestration & ReFS/ZFS Volume Shadow Copy Parity
+// ============================================================================
+inline void Test_Horizon146_Storage_Snapshot_Orchestration_And_ReFS_ZFS_VSS_Parity() {
+    using namespace micant::win32;
+    std::cout << "[TEST] Running Suite 362: Horizon 146 - Storage Snapshot Orchestration & ReFS/ZFS Volume Shadow Copy Parity..." << std::endl;
+
+    micant::zfs::RegisterZfsSubsystem();
+
+    auto& vfs = micant::fs::VirtualFileSystem::get();
+    vfs.initialize();
+
+    // Ensure all 6 formats are initialized
+    if (!vfs.getMountedNtfs()) {
+        auto ntfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition2", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto ntfsFs = std::make_shared<micant::ntfs::NtfsFileSystem>();
+        ntfsFs->format(*ntfsRamDisk, 4096, L"MICA_NTFS");
+        vfs.setMountedNtfs(ntfsFs);
+    }
+    if (!vfs.getMountedRefs()) {
+        auto refsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition4", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto refsFs = std::make_shared<micant::refs::RefsFileSystem>();
+        refsFs->format(*refsRamDisk, 4096, L"MICA_REFS");
+        vfs.setMountedRefs(refsFs);
+    }
+
+    // Helper lambdas for file I/O
+    auto WriteFileHelper = [&](std::wstring_view p, std::string_view payload) -> bool {
+        std::shared_ptr<micant::fs::FileObject> fObj;
+        NtStatus stCr = vfs.createOrOpenFile(p, micant::fs::FILE_WRITE_DATA, micant::fs::FILE_OVERWRITE_IF, fObj);
+        if (!NT_SUCCESS(stCr) || !fObj) return false;
+        uint32_t wr = 0;
+        NtStatus stWr = vfs.writeFile(fObj.get(), payload.data(), static_cast<uint32_t>(payload.size()), nullptr, wr);
+        vfs.closeFile(fObj.get());
+        return NT_SUCCESS(stWr) && wr == payload.size();
+    };
+
+    auto ReadFileHelper = [&](std::wstring_view p) -> std::string {
+        std::shared_ptr<micant::fs::FileObject> fObj;
+        NtStatus stOp = vfs.createOrOpenFile(p, micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, fObj);
+        if (!NT_SUCCESS(stOp) || !fObj) return "";
+        std::vector<char> buf(512, 0);
+        uint32_t rd = 0;
+        NtStatus stRd = vfs.readFile(fObj.get(), buf.data(), static_cast<uint32_t>(buf.size()), nullptr, rd);
+        vfs.closeFile(fObj.get());
+        if (!NT_SUCCESS(stRd)) return "";
+        return std::string(buf.data(), rd);
+    };
+
+    auto FileExistsHelper = [&](std::wstring_view p) -> bool {
+        std::shared_ptr<micant::fs::FileObject> fObj;
+        NtStatus st = vfs.createOrOpenFile(p, micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, fObj);
+        if (NT_SUCCESS(st) && fObj) {
+            vfs.closeFile(fObj.get());
+            return true;
+        }
+        return false;
+    };
+
+    // Pillar 1: Dynamic ZFS Snapshot Creation & Listing
+    {
+        std::string initialData = "ZFS Pre-Snapshot Production Dataset v1.0";
+        bool ok = WriteFileHelper(L"Z:\\vss_test.txt", initialData);
+        TEST_ASSERT(ok, "Writing initial data to Z:\\vss_test.txt must succeed");
+
+        auto stSnap = vfs.createVolumeSnapshot(L'Z', "vss_auto_snap_001");
+        TEST_ASSERT(NT_SUCCESS(stSnap), "Creating VSS snapshot on Z: must succeed");
+
+        auto snaps = vfs.listVolumeSnapshots(L'Z');
+        TEST_ASSERT(!snaps.empty(), "ZFS snapshot list must not be empty");
+        TEST_ASSERT(std::find(snaps.begin(), snaps.end(), "vss_auto_snap_001") != snaps.end(), "Snapshot vss_auto_snap_001 must be present");
+    }
+
+    // Pillar 2: Mutation & Atomic Rollback on TitanZFS
+    {
+        std::string corruptedData = "ZFS Corrupted Overwrite Garbage Data";
+        bool ok = WriteFileHelper(L"Z:\\vss_test.txt", corruptedData);
+        TEST_ASSERT(ok, "Overwriting file on Z:\\ must succeed");
+
+        std::string readBack = ReadFileHelper(L"Z:\\vss_test.txt");
+        TEST_ASSERT(readBack == corruptedData, "File must reflect mutation");
+
+        // Rollback snapshot
+        auto stRoll = vfs.rollbackVolumeSnapshot(L'Z', "vss_auto_snap_001");
+        TEST_ASSERT(NT_SUCCESS(stRoll), "Rollback to vss_auto_snap_001 must succeed");
+
+        readBack = ReadFileHelper(L"Z:\\vss_test.txt");
+        TEST_ASSERT(readBack == "ZFS Pre-Snapshot Production Dataset v1.0", "File data must be restored bit-for-bit to pre-snapshot state");
+    }
+
+    // Pillar 3: ReFS B+ Tree Checkpoint & Rollback
+    {
+        std::string refsData = "ReFS Integrity Stream Production Master 2026";
+        bool ok = WriteFileHelper(L"G:\\refs_data.bin", refsData);
+        TEST_ASSERT(ok, "Writing data to G:\\refs_data.bin must succeed");
+
+        auto stChkp = vfs.createVolumeSnapshot(L'G', "refs_chkp_vss1");
+        TEST_ASSERT(NT_SUCCESS(stChkp), "Creating transaction checkpoint on G: must succeed");
+
+        auto snaps = vfs.listVolumeSnapshots(L'G');
+        TEST_ASSERT(std::find(snaps.begin(), snaps.end(), "refs_chkp_vss1") != snaps.end(), "ReFS checkpoint must be listed");
+
+        // Add a temporary file that should vanish after rollback
+        std::string badData = "Temporary Bad State";
+        WriteFileHelper(L"G:\\bad_temp.tmp", badData);
+        TEST_ASSERT(FileExistsHelper(L"G:\\bad_temp.tmp"), "G:\\bad_temp.tmp must exist before rollback");
+
+        // Rollback checkpoint
+        auto stRoll = vfs.rollbackVolumeSnapshot(L'G', "refs_chkp_vss1");
+        TEST_ASSERT(NT_SUCCESS(stRoll), "ReFS checkpoint rollback must succeed");
+
+        std::string refsReadBack = ReadFileHelper(L"G:\\refs_data.bin");
+        TEST_ASSERT(refsReadBack == refsData, "ReFS data must match pre-checkpoint contents");
+        TEST_ASSERT(!FileExistsHelper(L"G:\\bad_temp.tmp"), "Temporary file must vanish after checkpoint rollback");
+    }
+
+    // Pillar 4: Custom Dynamic Drive Letter Snapshot Parity (T: & R:)
+    {
+        // DefineDosDeviceW TitanZFS -> T:
+        DefineDosDeviceW(0, L"T:", L"\\Device\\ZfsPool_Storage");
+        auto stT = vfs.createVolumeSnapshot(L'T', "snap_custom_t");
+        TEST_ASSERT(NT_SUCCESS(stT), "Snapshot on custom drive T: must succeed");
+
+        auto snapsT = vfs.listVolumeSnapshots(L'T');
+        TEST_ASSERT(std::find(snapsT.begin(), snapsT.end(), "snap_custom_t") != snapsT.end(), "Custom drive T: snapshot must be listed");
+
+        // Cleanup custom drive
+        DefineDosDeviceW(1, L"T:", nullptr);
+    }
+
+    // Pillar 5: VSS Provider Metadata & Capability Reporting
+    {
+        // Query Volume Information for ZFS and ReFS
+        wchar_t volLabel[64] = {};
+        DWORD serial = 0, maxComp = 0, flags = 0;
+        wchar_t fsName[64] = {};
+
+        BOOL bInfoZ = GetVolumeInformationW(L"Z:\\", volLabel, 64, &serial, &maxComp, &flags, fsName, 64);
+        TEST_ASSERT(bInfoZ == TRUE, "GetVolumeInformationW on Z:\\ must succeed");
+        TEST_ASSERT((flags & micant::fs::FS_SUPPORTS_COW_SNAPSHOTS) != 0, "ZFS must advertise FS_SUPPORTS_COW_SNAPSHOTS");
+
+        BOOL bInfoG = GetVolumeInformationW(L"G:\\", volLabel, 64, &serial, &maxComp, &flags, fsName, 64);
+        TEST_ASSERT(bInfoG == TRUE, "GetVolumeInformationW on G:\\ must succeed");
+        TEST_ASSERT((flags & micant::fs::FS_SUPPORTS_INTEGRITY_STREAMS) != 0, "ReFS must advertise FS_SUPPORTS_INTEGRITY_STREAMS");
+    }
+
+    // Pillar 6: Deletion & Final Storage Teardown Consistency
+    {
+        auto stDel = vfs.deleteVolumeSnapshot(L'G', "refs_chkp_vss1");
+        TEST_ASSERT(NT_SUCCESS(stDel), "Deleting ReFS checkpoint must succeed");
+
+        auto snapsG = vfs.listVolumeSnapshots(L'G');
+        TEST_ASSERT(std::find(snapsG.begin(), snapsG.end(), "refs_chkp_vss1") == snapsG.end(), "Deleted checkpoint must not be listed");
+    }
+
+    std::cout << "[HORIZON 146] Storage Snapshot Orchestration & ReFS/ZFS Volume Shadow Copy Parity Summary:\n"
+              << "    Pillar 1: Dynamic ZFS Snapshot Creation & Listing OK\n"
+              << "    Pillar 2: Zero-Copy Rollback on TitanZFS Storage Pool OK\n"
+              << "    Pillar 3: ReFS B+ Tree Checkpoint & Rollback OK\n"
+              << "    Pillar 4: Custom Dynamic Drive Letter Snapshot Parity (T: & R:) OK\n"
+              << "    Pillar 5: VSS Provider Metadata & Capability Reporting OK\n"
+              << "    Pillar 6: Checkpoint Deletion & Final Storage Teardown Consistency OK\n";
+
+    std::cout << "[TEST] Suite 362: Horizon 146 - Storage Snapshot Orchestration & ReFS/ZFS Volume Shadow Copy Parity PASSED." << std::endl;
+}

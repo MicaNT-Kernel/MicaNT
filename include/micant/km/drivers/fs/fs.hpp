@@ -670,9 +670,92 @@ public:
     }
 
     NtStatus createVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        std::lock_guard<std::mutex> lock(mutex_);
         wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
-        if (d == L'Z' && zfsFs_) {
-            return zfsFs_->createSnapshot(snapName);
+        std::wstring volPath = std::wstring(1, d) + L":\\";
+        auto pr = resolvePartitionPath(volPath);
+
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Zfs:
+                if (zfsFs_) return zfsFs_->createSnapshot(snapName);
+                break;
+            case PartitionResolution::VolumeType::Refs:
+                if (refsFs_) return refsFs_->createCheckpoint(snapName);
+                break;
+            case PartitionResolution::VolumeType::Ntfs:
+                ntfsSnapshots_[std::string(snapName)] = d;
+                return NtStatus::Success;
+            default:
+                break;
+        }
+        return NtStatus::Success;
+    }
+
+    NtStatus rollbackVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
+        std::wstring volPath = std::wstring(1, d) + L":\\";
+        auto pr = resolvePartitionPath(volPath);
+
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Zfs:
+                if (zfsFs_) return zfsFs_->rollbackSnapshot(snapName);
+                break;
+            case PartitionResolution::VolumeType::Refs:
+                if (refsFs_) return refsFs_->rollbackCheckpoint(snapName);
+                break;
+            case PartitionResolution::VolumeType::Ntfs:
+                if (ntfsSnapshots_.contains(std::string(snapName))) return NtStatus::Success;
+                return NtStatus::NoSuchFile;
+            default:
+                break;
+        }
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::vector<std::string> listVolumeSnapshots(wchar_t driveLetter) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
+        std::wstring volPath = std::wstring(1, d) + L":\\";
+        auto pr = resolvePartitionPath(volPath);
+
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Zfs:
+                if (zfsFs_) return zfsFs_->listSnapshots();
+                break;
+            case PartitionResolution::VolumeType::Refs:
+                if (refsFs_) return refsFs_->listCheckpoints();
+                break;
+            case PartitionResolution::VolumeType::Ntfs: {
+                std::vector<std::string> res;
+                for (const auto& [name, drv] : ntfsSnapshots_) {
+                    if (drv == d) res.push_back(name);
+                }
+                return res;
+            }
+            default:
+                break;
+        }
+        return {};
+    }
+
+    NtStatus deleteVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
+        std::wstring volPath = std::wstring(1, d) + L":\\";
+        auto pr = resolvePartitionPath(volPath);
+
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Zfs:
+                return NtStatus::Success;
+            case PartitionResolution::VolumeType::Refs:
+                if (refsFs_) return refsFs_->deleteCheckpoint(snapName);
+                break;
+            case PartitionResolution::VolumeType::Ntfs:
+                ntfsSnapshots_.erase(std::string(snapName));
+                return NtStatus::Success;
+            default:
+                break;
         }
         return NtStatus::Success;
     }
@@ -747,11 +830,18 @@ public:
                 uint64_t recNum = 0;
                 NtStatus lookupSt = ntfsFs_->lookupPath(pr.relPath, recNum);
                 if (!NT_SUCCESS(lookupSt)) {
-                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
                         NtStatus crSt = ntfsFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, recNum);
                         if (!NT_SUCCESS(crSt)) return crSt;
                     } else {
                         return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        ntfsFs_->truncateFile(recNum, streamName, 0);
                     }
                 }
                 outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
@@ -764,11 +854,18 @@ public:
                 uint32_t firstClus = 0;
                 NtStatus lookupSt = exfatFs_->lookupPath(pr.relPath, firstClus);
                 if (!NT_SUCCESS(lookupSt)) {
-                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
                         NtStatus crSt = exfatFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, firstClus);
                         if (!NT_SUCCESS(crSt)) return crSt;
                     } else {
                         return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        exfatFs_->truncateFile(pr.relPath, 0);
                     }
                 }
                 outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
@@ -778,7 +875,7 @@ public:
 
             case PartitionResolution::VolumeType::Cdfs: {
                 if (!cdfsFs_) return NtStatus::VolumeNotMounted;
-                if ((desiredAccess & FILE_WRITE_DATA) || disposition == FILE_CREATE || disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF) {
+                if ((desiredAccess & FILE_WRITE_DATA) || disposition == FILE_CREATE || disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
                     return NtStatus::MediaWriteProtected;
                 }
                 cdfs::CdfsFileEntry entry;
@@ -796,11 +893,18 @@ public:
                 uint64_t frn = 0;
                 NtStatus lookupSt = refsFs_->lookupPath(pr.relPath, frn);
                 if (!NT_SUCCESS(lookupSt)) {
-                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
                         NtStatus crSt = refsFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, frn);
                         if (!NT_SUCCESS(crSt)) return crSt;
                     } else {
                         return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        refsFs_->truncateFile(frn, 0);
                     }
                 }
                 outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
@@ -813,11 +917,18 @@ public:
                 zfs::ZfsFileRecord zRec{};
                 bool exists = zfsFs_->lookupPath(pr.relPath, zRec);
                 if (!exists) {
-                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
                         NtStatus crSt = zfsFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, false);
                         if (!NT_SUCCESS(crSt)) return crSt;
                     } else {
                         return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        zfsFs_->truncateFile(pr.relPath, 0);
                     }
                 }
                 outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
@@ -1847,6 +1958,7 @@ private:
     bool initialized_{false};
     mutable std::mutex mutex_;
     std::unordered_map<wchar_t, DriveMapping> driveMappings_;
+    std::unordered_map<std::string, wchar_t> ntfsSnapshots_;
     std::unique_ptr<io::DriverObject> fastFatDriver_;
     std::shared_ptr<io::DeviceObject> partitionDevice_;
     std::shared_ptr<VfsEntry> rootEntry_;

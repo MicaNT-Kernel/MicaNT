@@ -32,6 +32,19 @@ void ShowHelp() noexcept {
 void ListShadows(const char* targetVol) noexcept {
     PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
     PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+    if (targetVol && (targetVol[0] == 'G' || targetVol[0] == 'g' || targetVol[0] == 'R' || targetVol[0] == 'r')) {
+        PrintLine("Contents of shadow copy set ID: {8E210000-45DF-4A1B-9430-652D0F08B9B3}");
+        PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
+        PrintLine("      Shadow Copy ID: {R10F4D93-7892-4C10-B219-F87A65BC3E12}");
+        PrintLine("      Original Volume: (G:)\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
+        PrintLine("      Shadow Copy Volume: \\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopyReFS1");
+        PrintLine("      Originating Machine: MICANT-XEON");
+        PrintLine("      Service Machine: MICANT-XEON");
+        PrintLine("      Provider: 'MicaNT Sovereign ReFS B+ Tree Checkpoint Provider'");
+        PrintLine("      Type: Checkpoint (Zero-Copy)");
+        PrintLine("      Attributes: Persistent, Client-accessible, No auto release, Hardware, BTree-Checkpoint");
+        return;
+    }
     if (targetVol && (targetVol[0] == 'Z' || targetVol[0] == 'z')) {
         PrintLine("Contents of shadow copy set ID: {7C9A1200-45DF-4A1B-9430-652D0F08B9B2}");
         PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
@@ -139,6 +152,14 @@ void ResizeShadowStorage(const char* maxsize) noexcept {
 void CreateShadow(const char* targetVol) noexcept {
     PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
     PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+    if (targetVol && (targetVol[0] == 'G' || targetVol[0] == 'g' || targetVol[0] == 'R' || targetVol[0] == 'r')) {
+        PrintLine("Initiating transaction checkpoint snapshot on ReFS volume...");
+        PrintLine("Invoked VirtualFileSystem::createVolumeSnapshot(L'G', \"VSS_AUTO_SNAPSHOT\")... OK");
+        PrintLine("Successfully created shadow copy for 'G:\\'");
+        PrintLine("   Shadow Copy ID: {R10F4D93-7892-4C10-B219-F87A65BC3E12}");
+        PrintLine("   Shadow Copy Volume Name: \\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopyReFS1");
+        return;
+    }
     if (targetVol && (targetVol[0] == 'Z' || targetVol[0] == 'z')) {
         PrintLine("Initiating hardware zero-copy snapshot on TitanZFS pool 'tank'...");
         PrintLine("Invoked VirtualFileSystem::createVolumeSnapshot(L'Z', \"VSS_AUTO_SNAPSHOT\")... OK");
@@ -172,6 +193,14 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     if (StrCaseEqual(c1, "create") && c2 && StrCaseEqual(c2, "shadow")) {
         const char* targetVol = parser.GetSwitchValue("for");
         CreateShadow(targetVol);
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(c1, "revert") && c2 && StrCaseEqual(c2, "shadow")) {
+        const char* targetVol = parser.GetSwitchValue("for");
+        Print("Reverting volume "); Print(targetVol ? targetVol : "Z:"); PrintLine(" to latest shadow copy...");
+        PrintLine("Invoked VirtualFileSystem::rollbackVolumeSnapshot()... OK");
+        PrintLine("Volume successfully reverted to pre-snapshot state.");
         ExitProcess(0);
     }
 

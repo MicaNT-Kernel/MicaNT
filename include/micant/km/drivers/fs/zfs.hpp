@@ -847,6 +847,17 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus truncateFile(std::wstring_view path, uint64_t newSize) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = files_.find(std::wstring(path));
+        if (it == files_.end()) return NtStatus::NoSuchFile;
+        it->second.content.resize(static_cast<size_t>(newSize));
+        it->second.size = newSize;
+        it->second.bp.checksum = ComputeFletcher4(it->second.content.data(), it->second.content.size());
+        it->second.bp.fill = newSize;
+        return NtStatus::Success;
+    }
+
     NtStatus readFile(std::wstring_view path, void* buffer, size_t length, uint64_t offset, uint64_t& bytesRead) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = files_.find(std::wstring(path));
@@ -1103,6 +1114,11 @@ public:
         return activeDataset_->createFile(path, attributes, isDirectory);
     }
 
+    NtStatus truncateFile(std::wstring_view path, uint64_t newSize) {
+        if (!activeDataset_) return NtStatus::VolumeNotMounted;
+        return activeDataset_->truncateFile(path, newSize);
+    }
+
     NtStatus readFile(std::wstring_view path, void* buffer, size_t length, uint64_t offset, uint64_t& bytesRead) {
         if (!activeDataset_) return NtStatus::VolumeNotMounted;
         return activeDataset_->readFile(path, buffer, length, offset, bytesRead);
@@ -1143,6 +1159,12 @@ public:
         std::lock_guard<std::mutex> lock(fsMutex_);
         if (!activeDataset_) return NtStatus::VolumeNotMounted;
         return activeDataset_->rollbackSnapshot(snapName);
+    }
+
+    [[nodiscard]] std::vector<std::string> listSnapshots() const {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        if (!activeDataset_) return {};
+        return activeDataset_->listSnapshots();
     }
 
 private:

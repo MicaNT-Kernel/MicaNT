@@ -501,6 +501,16 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus truncateFile(std::wstring_view path, uint64_t newSize) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring canon = canonicalizePath(path);
+        auto it = records_.find(canon);
+        if (it == records_.end()) return NtStatus::NoSuchFile;
+        it->second.data.resize(static_cast<size_t>(newSize), 0);
+        it->second.dataLength = newSize;
+        return NtStatus::Success;
+    }
+
     NtStatus deleteFile(std::wstring_view path) {
         std::lock_guard<std::mutex> lock(mutex_);
         std::wstring canon = canonicalizePath(path);

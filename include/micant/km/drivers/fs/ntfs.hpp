@@ -907,6 +907,24 @@ public:
     /**
      * @brief Deletes a file or directory from the NTFS volume.
      */
+    NtStatus truncateFile(uint64_t recordNumber, std::wstring_view streamName, uint64_t newSize) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = records_.find(recordNumber);
+        if (it == records_.end() || !(it->second.flags & MFT_RECORD_IN_USE)) {
+            return NtStatus::InvalidHandle;
+        }
+        auto& rec = it->second;
+        if (streamName.empty()) {
+            rec.primaryData.resize(static_cast<size_t>(newSize), 0);
+        } else {
+            auto sIt = rec.alternateStreams.find(std::wstring(streamName));
+            if (sIt != rec.alternateStreams.end()) {
+                sIt->second.resize(static_cast<size_t>(newSize), 0);
+            }
+        }
+        return NtStatus::Success;
+    }
+
     NtStatus deleteFile(std::wstring_view path) {
         std::lock_guard<std::mutex> lock(mutex_);
         std::wstring canon = canonicalizePath(path);
