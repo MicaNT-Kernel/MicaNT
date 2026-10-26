@@ -7,53 +7,108 @@
  * Graphically displays the folder structure of a drive or path.
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
 
-void ShowSampleTree() noexcept {
-    const char* out =
-        "Folder PATH listing for volume MicaNT_OS\n"
-        "Volume serial number is 3A8B-4129\n"
-        "C:\\MICANT\n"
-        "+---Config\n"
-        "|       DEFAULT\n"
-        "|       SAM\n"
-        "|       SECURITY\n"
-        "|       SOFTWARE\n"
-        "|       SYSTEM\n"
-        "+---Fonts\n"
-        "|       segoeui.ttf\n"
-        "|       consola.ttf\n"
-        "\\---System32\n"
-        "    |   ntoskrnl.exe\n"
-        "    |   explorer.exe\n"
-        "    |   cmd.exe\n"
-        "    +---drivers\n"
-        "    |       ahci.sys\n"
-        "    |       i210.sys\n"
-        "    |       tcpip.sys\n"
-        "    |       hmb.sys\n"
-        "    \\---etc\n"
-        "            hosts\n"
-        "            services\n\n";
-    PrintStr(out);
+void ShowHelp() noexcept {
+    PrintLine("Graphically displays the folder structure of a drive or path.");
+    PrintLine("");
+    PrintLine("TREE [drive:][path] [/F] [/A]");
+    PrintLine("");
+    PrintLine("   /F   Display the names of the files in each folder.");
+    PrintLine("   /A   Use ASCII instead of extended characters.");
+}
+
+void RenderTree(const char* rootPath, bool showFiles, bool asciiMode) noexcept {
+    PrintLine("Folder PATH listing for volume MICA_SYS");
+    PrintLine("Volume serial number is 4C2A-18E9");
+    PrintLine(rootPath ? rootPath : "C:\\MICANT");
+
+    if (asciiMode) {
+        PrintLine("+---Config");
+        if (showFiles) {
+            PrintLine("|       DEFAULT");
+            PrintLine("|       SAM");
+            PrintLine("|       SECURITY");
+            PrintLine("|       SOFTWARE");
+            PrintLine("|       SYSTEM");
+        }
+        PrintLine("+---Fonts");
+        if (showFiles) {
+            PrintLine("|       segoeui.ttf");
+            PrintLine("|       consola.ttf");
+        }
+        PrintLine("\\---System32");
+        if (showFiles) {
+            PrintLine("    |   ntoskrnl.exe");
+            PrintLine("    |   explorer.exe");
+            PrintLine("    |   cmd.exe");
+        }
+        PrintLine("    +---drivers");
+        if (showFiles) {
+            PrintLine("    |       ahci.sys");
+            PrintLine("    |       ntfs.sys");
+            PrintLine("    |       refs.sys");
+        }
+        PrintLine("    \\---etc");
+        if (showFiles) {
+            PrintLine("            hosts");
+            PrintLine("            services");
+        }
+    } else {
+        // Extended characters
+        PrintLine("├── Config");
+        if (showFiles) {
+            PrintLine("│   ├── DEFAULT");
+            PrintLine("│   ├── SAM");
+            PrintLine("│   ├── SECURITY");
+            PrintLine("│   ├── SOFTWARE");
+            PrintLine("│   └── SYSTEM");
+        }
+        PrintLine("├── Fonts");
+        if (showFiles) {
+            PrintLine("│   ├── segoeui.ttf");
+            PrintLine("│   └── consola.ttf");
+        }
+        PrintLine("└── System32");
+        if (showFiles) {
+            PrintLine("    ├── ntoskrnl.exe");
+            PrintLine("    ├── explorer.exe");
+            PrintLine("    ├── cmd.exe");
+        }
+        PrintLine("    ├── drivers");
+        if (showFiles) {
+            PrintLine("    │   ├── ahci.sys");
+            PrintLine("    │   ├── ntfs.sys");
+            PrintLine("    │   └── refs.sys");
+        }
+        PrintLine("    └── etc");
+        if (showFiles) {
+            PrintLine("        ├── hosts");
+            PrintLine("        └── services");
+        }
+    }
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "Graphically displays the folder structure of a drive or path.\n\n"
-        "TREE [drive:][path] [/F] [/A]\n\n"
-        "   /F   Display the names of the files in each folder.\n"
-        "   /A   Use ASCII instead of extended characters.\n\n"
-        "[tree C:\\MicaNT /F]\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
-    ShowSampleTree();
+    CommandLineParser parser(rawCmdLine, "tree.exe");
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (parser.HasSwitch("?") || parser.HasSwitch("help")) {
+        ShowHelp();
+        ExitProcess(0);
+    }
+
+    bool showFiles = parser.HasSwitch("f");
+    bool asciiMode = parser.HasSwitch("a");
+    const char* root = (parser.PositionalCount() > 0) ? parser.GetPositional(0) : "C:\\MicaNT";
+
+    RenderTree(root, showFiles, asciiMode);
+    ExitProcess(0);
 }

@@ -430,6 +430,9 @@ public:
                             StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
                             StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d") ||
                             StrCaseEqual(prev, "target") || StrCaseEqual(prev, "size") ||
+                            StrCaseEqual(prev, "recoverypassword") || StrCaseEqual(prev, "rp") ||
+                            StrCaseEqual(prev, "recoverykey") || StrCaseEqual(prev, "rk") ||
+                            StrCaseEqual(prev, "include") || StrCaseEqual(prev, "backuptarget") ||
                             StrCaseEqual(prev, "timeout") || StrCaseEqual(prev, "id")) {
                             continue;
                         }
@@ -463,6 +466,9 @@ public:
                             StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
                             StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d") ||
                             StrCaseEqual(prev, "target") || StrCaseEqual(prev, "size") ||
+                            StrCaseEqual(prev, "recoverypassword") || StrCaseEqual(prev, "rp") ||
+                            StrCaseEqual(prev, "recoverykey") || StrCaseEqual(prev, "rk") ||
+                            StrCaseEqual(prev, "include") || StrCaseEqual(prev, "backuptarget") ||
                             StrCaseEqual(prev, "timeout") || StrCaseEqual(prev, "id")) {
                             continue;
                         }

@@ -7,47 +7,159 @@
  * Manages volume shadow copies, storage allocation, and VSS writer states.
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
 
-void ShowSampleShadows() noexcept {
-    const char* out =
-        "vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
-        "(C) Copyright MicaNT Operating System Authority.\n\n"
-        "Contents of shadow copy set ID: {3E8C127A-45DF-4A1B-9430-652D0F08B9B1}\n"
-        "   Contained 1 shadow copies at creation time: 10/23/2026 09:00:00 AM\n"
-        "      Shadow Copy ID: {A10F4D93-7892-4C10-B219-F87A65BC3E10}\n"
-        "      Original Volume: (C:)\\\\?\\Volume{3a8b4129-0000-0000-0000-100000000000}\\\n"
-        "      Shadow Copy Volume: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\n"
-        "      Originating Machine: MICANT-HOST\n"
-        "      Service Machine: MICANT-HOST\n"
-        "      Provider: 'MicaNT Sovereign VSS Copy-On-Write Provider'\n"
-        "      Type: ClientAccessible\n"
-        "      Attributes: Persistent, Client-accessible, No auto release, Differential\n\n";
-    PrintStr(out);
+void ShowHelp() noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority. All rights reserved.");
+    PrintLine("");
+    PrintLine("Commands:");
+    PrintLine("  Delete Shadows        - Delete volume shadow copies");
+    PrintLine("  List Providers        - List registered volume shadow copy providers");
+    PrintLine("  List Shadows          - List existing volume shadow copies");
+    PrintLine("  List ShadowStorage    - List volume shadow copy storage associations");
+    PrintLine("  List Volumes          - List volumes that can be shadow copied");
+    PrintLine("  List Writers          - List subscribed volume shadow copy writers");
+    PrintLine("  Resize ShadowStorage  - Resize a volume shadow copy storage association");
+    PrintLine("  Revert Shadow         - Revert a volume to a shadow copy");
+}
+
+void ListShadows(const char* targetVol) noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+    PrintLine("Contents of shadow copy set ID: {3E8C127A-45DF-4A1B-9430-652D0F08B9B1}");
+    PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
+    PrintLine("      Shadow Copy ID: {A10F4D93-7892-4C10-B219-F87A65BC3E10}");
+    Print("      Original Volume: (");
+    Print(targetVol ? targetVol : "C:");
+    PrintLine(")\\\\?\\Volume{3a8b4129-0000-0000-0000-100000000000}\\");
+    PrintLine("      Shadow Copy Volume: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1");
+    PrintLine("      Originating Machine: MICANT-XEON");
+    PrintLine("      Service Machine: MICANT-XEON");
+    PrintLine("      Provider: 'MicaNT Sovereign VSS Copy-On-Write Software Provider'");
+    PrintLine("      Type: ClientAccessible");
+    PrintLine("      Attributes: Persistent, Client-accessible, No auto release, Differential");
+}
+
+void ListWriters() noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+
+    PrintLine("Writer name: 'System Writer'");
+    PrintLine("   Writer Id: {e81062d3-180c-4366-9814-3243ac485912}");
+    PrintLine("   Writer Instance Id: {1f9e2b10-6421-42cb-b4c2-9e90954b0a11}");
+    PrintLine("   State: [1] Stable");
+    PrintLine("   Last error: No error\n");
+
+    PrintLine("Writer name: 'Shadow Copy Optimization Writer'");
+    PrintLine("   Writer Id: {4dc3e18e-da16-4d15-a51f-9bda1c00d573}");
+    PrintLine("   Writer Instance Id: {a03e1205-0941-4c12-9214-cb904a2918bb}");
+    PrintLine("   State: [1] Stable");
+    PrintLine("   Last error: No error\n");
+
+    PrintLine("Writer name: 'Registry Writer'");
+    PrintLine("   Writer Id: {afbab4a2-ac72-4911-875a-94fb4ee824fe}");
+    PrintLine("   Writer Instance Id: {29b13904-4192-4821-b0e1-456012ea4901}");
+    PrintLine("   State: [1] Stable");
+    PrintLine("   Last error: No error\n");
+
+    PrintLine("Writer name: 'WMI Writer'");
+    PrintLine("   Writer Id: {a6ad56c2-b509-4e6c-bb19-49d8f43532f0}");
+    PrintLine("   Writer Instance Id: {84192051-1209-41b2-a490-cb41094ba120}");
+    PrintLine("   State: [1] Stable");
+    PrintLine("   Last error: No error");
+}
+
+void ListProviders() noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+
+    PrintLine("Provider name: 'MicaNT Sovereign VSS Copy-On-Write Software Provider'");
+    PrintLine("   Provider type: Software");
+    PrintLine("   Provider Id: {b5946137-7b9f-4925-af80-51abd60b20d5}");
+    PrintLine("   Version: 1.0.0.1");
+}
+
+void ListVolumes() noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+
+    PrintLine("Volume path: C:\\");
+    PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\");
+    PrintLine("Volume path: D:\\");
+    PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\");
+    PrintLine("Volume path: E:\\");
+    PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\");
+    PrintLine("Volume path: G:\\");
+    PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
+}
+
+void ListShadowStorage() noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+
+    PrintLine("Shadow Copy Storage association");
+    PrintLine("   For volume: (C:)\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\");
+    PrintLine("   Shadow Copy Storage volume: (C:)\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\");
+    PrintLine("   Used Shadow Copy Storage space: 1.25 GB (1%)");
+    PrintLine("   Allocated Shadow Copy Storage space: 2.50 GB (2%)");
+    PrintLine("   Maximum Shadow Copy Storage space: 10.00 GB (8%)");
+}
+
+void ResizeShadowStorage(const char* maxsize) noexcept {
+    Print("Successfully resized the shadow copy storage association to maximum size: ");
+    PrintLine(maxsize ? maxsize : "10GB");
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "vssadmin <command> [options]\n\n"
-        "Commands:\n"
-        "  Delete Shadows        - Delete volume shadow copies\n"
-        "  List Providers        - List registered volume shadow copy providers\n"
-        "  List Shadows          - List existing volume shadow copies\n"
-        "  List ShadowStorage    - List volume shadow copy storage associations\n"
-        "  List Volumes          - List volumes that can be shadow copied\n"
-        "  List Writers          - List subscribed volume shadow copy writers\n"
-        "  Resize ShadowStorage  - Resize a volume shadow copy storage association\n"
-        "  Revert Shadow         - Revert a volume to a shadow copy\n\n"
-        "[vssadmin list shadows]\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
-    ShowSampleShadows();
+    CommandLineParser parser(rawCmdLine, "vssadmin.exe");
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (parser.HasSwitch("?") || parser.HasSwitch("help") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
+    }
+
+    const char* c1 = parser.argv()[1];
+    const char* c2 = (parser.argc() > 2) ? parser.argv()[2] : nullptr;
+
+    if (StrCaseEqual(c1, "list")) {
+        if (!c2 || StrCaseEqual(c2, "shadows")) {
+            const char* targetVol = parser.GetSwitchValue("for");
+            ListShadows(targetVol);
+            ExitProcess(0);
+        }
+        if (StrCaseEqual(c2, "writers")) {
+            ListWriters();
+            ExitProcess(0);
+        }
+        if (StrCaseEqual(c2, "providers")) {
+            ListProviders();
+            ExitProcess(0);
+        }
+        if (StrCaseEqual(c2, "volumes")) {
+            ListVolumes();
+            ExitProcess(0);
+        }
+        if (StrCaseEqual(c2, "shadowstorage") || StrCaseEqual(c2, "storage")) {
+            ListShadowStorage();
+            ExitProcess(0);
+        }
+    }
+
+    if (StrCaseEqual(c1, "resize") && c2 && (StrCaseEqual(c2, "shadowstorage") || StrCaseEqual(c2, "storage"))) {
+        const char* maxsize = parser.GetSwitchValue("maxsize");
+        ResizeShadowStorage(maxsize);
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

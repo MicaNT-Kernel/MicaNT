@@ -517,6 +517,101 @@ void ExecuteCommand(const char* cmd) noexcept {
         return;
     }
 
+    if (MatchCmdToken(cmd, "vol")) {
+        if (StrCaseContains(cmd, "d:")) {
+            PrintLine(" Volume in drive D is MICA_NTFS");
+            PrintLine(" Volume Serial Number is 78E2-A1C9");
+        } else if (StrCaseContains(cmd, "e:")) {
+            PrintLine(" Volume in drive E is MICA_EXFAT");
+            PrintLine(" Volume Serial Number is 6A12-9F04");
+        } else if (StrCaseContains(cmd, "f:")) {
+            PrintLine(" Volume in drive F is MICANT_OS");
+            PrintLine(" Volume Serial Number is C0DE-1509");
+        } else if (StrCaseContains(cmd, "g:")) {
+            PrintLine(" Volume in drive G is MICA_REFS");
+            PrintLine(" Volume Serial Number is 8E21-F4A0");
+        } else {
+            PrintLine(" Volume in drive C is MICA_SYS");
+            PrintLine(" Volume Serial Number is 4C2A-18E9");
+        }
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "label")) {
+        PrintLine("Volume in drive C: is MICA_SYS");
+        PrintLine("Volume Serial Number is 4C2A-18E9");
+        PrintLine("Volume label unchanged.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "subst")) {
+        PrintLine("P:\\: => \\Device\\HmbPagingVolume (Haven Memory Bus 2.0 Direct-Stride Volume)");
+        PrintLine("X:\\: => C:\\MicaNT\\System32");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "tree")) {
+        PrintLine("Folder PATH listing for volume MICA_SYS");
+        PrintLine("Volume serial number is 4C2A-18E9");
+        PrintLine("C:\\MICANT");
+        PrintLine("+---Config");
+        PrintLine("+---Fonts");
+        PrintLine("\\---System32");
+        PrintLine("    +---drivers");
+        PrintLine("    \\---etc");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "recover")) {
+        PrintLine("Reading file cluster map from file system driver...");
+        PrintLine("Scanning clusters with hardware read-retry and ECC syndrome correction...");
+        PrintLine("16,769,024 of 16,777,216 bytes recovered (99.95% data integrity preserved).");
+        PrintLine("File recovery completed.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "vssadmin")) {
+        PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+        PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+        PrintLine("Contents of shadow copy set ID: {3E8C127A-45DF-4A1B-9430-652D0F08B9B1}");
+        PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
+        PrintLine("      Shadow Copy Volume: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "diskshadow")) {
+        PrintLine("MicaNT DiskShadow version 1.0 (MicaNT Sovereign Cutler Edition)");
+        PrintLine("Shadow copy set successfully created.");
+        PrintLine("Backup sequence completed successfully.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "manage-bde")) {
+        PrintLine("BitLocker Drive Encryption: Configuration Tool version 10.0.26100\n");
+        PrintLine("Volume C: [MicaNT OS]");
+        PrintLine("    Conversion Status:    Fully Encrypted (100.0%)");
+        PrintLine("    Encryption Method:    XTS-AES 256");
+        PrintLine("    Protection Status:    Protection On");
+        PrintLine("    Lock Status:          Unlocked");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "repair-bde")) {
+        PrintLine("BitLocker Recovery Tool (repair-bde.exe) Version 10.0.26100\n");
+        PrintLine("Validating encrypted volume metadata and FVEK key package...");
+        PrintLine("Decryption progress: 100% complete.");
+        PrintLine("Action: repair-bde completed successfully.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "wbadmin")) {
+        PrintLine("wbadmin 1.0 - Backup command-line tool");
+        PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+        PrintLine("Snapshot Volume: C: (MicaNT OS Partition)");
+        PrintLine("Status         : The backup operation has completed successfully.");
+        return;
+    }
+
     // Unrecognized command
     char err[128];
     StrCopy(err, "'", sizeof(err));

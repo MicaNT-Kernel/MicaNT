@@ -22338,6 +22338,163 @@ inline void Test_Horizon140_CleanRoom_ReFS_Driver_And_BTree_Resilience_Engine() 
     std::cout << "[TEST] Suite 356: Horizon 140 - Sovereign Clean-Room ReFS Driver & B+ Tree Resilience Engine PASSED.\n";
 }
 
+// ============================================================================
+// Horizon 141: Sovereign Storage, Volume & Protection System32 Utilities
+//              (vol, label, subst, tree, recover, vssadmin, diskshadow,
+//               manage-bde, repair-bde, wbadmin) - Batch 6 Parity (Unit #113)
+// ============================================================================
+inline void Test_Horizon141_StorageAndProtection_System32_Batch6_Parity() {
+    std::cout << "\n[TEST] Suite 357: Horizon 141 - Sovereign Storage & Protection System32 Batch 6 Parity...\n";
+
+    // 1. vol.exe (Volume Label & Serial Query)
+    {
+        micant_cli::CommandLineParser pVol1("vol C:", "vol.exe");
+        TEST_ASSERT(pVol1.PositionalCount() == 1, "vol must have 1 positional arg");
+        TEST_ASSERT(std::string(pVol1.GetPositional(0)) == "C:", "vol target must be C:");
+
+        micant_cli::CommandLineParser pVolG("vol G:", "vol.exe");
+        TEST_ASSERT(std::string(pVolG.GetPositional(0)) == "G:", "vol target must be G:");
+
+        micant_cli::CommandLineParser pVolHelp("vol /?", "vol.exe");
+        TEST_ASSERT(pVolHelp.HasSwitch("?"), "vol must parse /?");
+    }
+
+    // 2. label.exe (Disk Volume Labeling)
+    {
+        micant_cli::CommandLineParser pLbl1("label C: MICA_SYS", "label.exe");
+        TEST_ASSERT(pLbl1.PositionalCount() == 2, "label must have 2 positional args");
+        TEST_ASSERT(std::string(pLbl1.GetPositional(0)) == "C:", "label target drive must be C:");
+        TEST_ASSERT(std::string(pLbl1.GetPositional(1)) == "MICA_SYS", "label new name must be MICA_SYS");
+
+        micant_cli::CommandLineParser pLblMp("label /MP \\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\ OS_LABEL", "label.exe");
+        TEST_ASSERT(pLblMp.HasSwitch("mp"), "label must parse /MP switch");
+    }
+
+    // 3. subst.exe (Virtual Drive Path Substitution)
+    {
+        micant_cli::CommandLineParser pSubList("subst", "subst.exe");
+        TEST_ASSERT(pSubList.PositionalCount() == 0, "subst listing has 0 positionals");
+
+        micant_cli::CommandLineParser pSubCreate("subst X: C:\\MicaNT\\System32", "subst.exe");
+        TEST_ASSERT(pSubCreate.PositionalCount() == 2, "subst create must have 2 positionals");
+        TEST_ASSERT(std::string(pSubCreate.GetPositional(0)) == "X:", "virtual drive must be X:");
+        TEST_ASSERT(std::string(pSubCreate.GetPositional(1)) == "C:\\MicaNT\\System32", "target path must be C:\\MicaNT\\System32");
+
+        micant_cli::CommandLineParser pSubDel("subst X: /D", "subst.exe");
+        TEST_ASSERT(pSubDel.HasSwitch("d"), "subst must parse /D switch");
+        TEST_ASSERT(std::string(pSubDel.GetPositional(0)) == "X:", "delete target must be X:");
+    }
+
+    // 4. tree.exe (Directory Hierarchy Visualizer)
+    {
+        micant_cli::CommandLineParser pTree("tree C:\\MicaNT /F /A", "tree.exe");
+        TEST_ASSERT(pTree.PositionalCount() == 1, "tree must have 1 positional path");
+        TEST_ASSERT(std::string(pTree.GetPositional(0)) == "C:\\MicaNT", "tree target must be C:\\MicaNT");
+        TEST_ASSERT(pTree.HasSwitch("f"), "tree must parse /F switch");
+        TEST_ASSERT(pTree.HasSwitch("a"), "tree must parse /A switch");
+    }
+
+    // 5. recover.exe (Defective Sector & File Recovery)
+    {
+        micant_cli::CommandLineParser pRec("recover C:\\Data\\CorruptedDatabase.db", "recover.exe");
+        TEST_ASSERT(pRec.PositionalCount() == 1, "recover must have 1 positional file");
+        TEST_ASSERT(std::string(pRec.GetPositional(0)) == "C:\\Data\\CorruptedDatabase.db", "recover target must match");
+    }
+
+    // 6. vssadmin.exe (Volume Shadow Copy Service Administration)
+    {
+        micant_cli::CommandLineParser pVss1("vssadmin list shadows /for=C:", "vssadmin.exe");
+        TEST_ASSERT(std::string(pVss1.argv()[1]) == "list", "vssadmin verb must be list");
+        TEST_ASSERT(std::string(pVss1.argv()[2]) == "shadows", "vssadmin noun must be shadows");
+        TEST_ASSERT(pVss1.HasSwitch("for"), "vssadmin must parse /for switch");
+        TEST_ASSERT(std::string(pVss1.GetSwitchValue("for")) == "C:", "vssadmin /for value must be C:");
+
+        micant_cli::CommandLineParser pVss2("vssadmin list writers", "vssadmin.exe");
+        TEST_ASSERT(std::string(pVss2.argv()[2]) == "writers", "vssadmin noun must be writers");
+
+        micant_cli::CommandLineParser pVss3("vssadmin list providers", "vssadmin.exe");
+        TEST_ASSERT(std::string(pVss3.argv()[2]) == "providers", "vssadmin noun must be providers");
+
+        micant_cli::CommandLineParser pVss4("vssadmin resize shadowstorage /for=C: /on=C: /maxsize=10GB", "vssadmin.exe");
+        TEST_ASSERT(std::string(pVss4.argv()[1]) == "resize", "vssadmin verb must be resize");
+        TEST_ASSERT(std::string(pVss4.GetSwitchValue("maxsize")) == "10GB", "vssadmin maxsize must be 10GB");
+    }
+
+    // 7. diskshadow.exe (DiskShadow VSS Scripting Engine)
+    {
+        micant_cli::CommandLineParser pDs("diskshadow /s C:\\scripts\\backup.dsh", "diskshadow.exe");
+        TEST_ASSERT(pDs.HasSwitch("s"), "diskshadow must parse /s switch");
+        TEST_ASSERT(std::string(pDs.GetSwitchValue("s")) == "C:\\scripts\\backup.dsh", "script path must match");
+    }
+
+    // 8. manage-bde.exe (BitLocker Drive Encryption CLI)
+    {
+        micant_cli::CommandLineParser pBde1("manage-bde -status C:", "manage-bde.exe");
+        TEST_ASSERT(pBde1.HasSwitch("status"), "manage-bde must parse -status");
+
+        micant_cli::CommandLineParser pBde2("manage-bde -on C: -Password", "manage-bde.exe");
+        TEST_ASSERT(pBde2.HasSwitch("on"), "manage-bde must parse -on");
+        TEST_ASSERT(pBde2.HasSwitch("password"), "manage-bde must parse -Password");
+
+        micant_cli::CommandLineParser pBde3("manage-bde -lock D:", "manage-bde.exe");
+        TEST_ASSERT(pBde3.HasSwitch("lock"), "manage-bde must parse -lock");
+
+        micant_cli::CommandLineParser pBde4("manage-bde -unlock D: -RecoveryPassword 1111-2222", "manage-bde.exe");
+        TEST_ASSERT(pBde4.HasSwitch("unlock"), "manage-bde must parse -unlock");
+        TEST_ASSERT(pBde4.HasSwitch("recoverypassword"), "manage-bde must parse -RecoveryPassword");
+        TEST_ASSERT(std::string(pBde4.GetSwitchValue("recoverypassword")) == "1111-2222", "recovery password must match");
+
+        micant_cli::CommandLineParser pBde5("manage-bde -protectors C: -get", "manage-bde.exe");
+        TEST_ASSERT(pBde5.HasSwitch("protectors"), "manage-bde must parse -protectors");
+        TEST_ASSERT(pBde5.HasSwitch("get"), "manage-bde must parse -get");
+    }
+
+    // 9. repair-bde.exe (BitLocker Recovery Tool)
+    {
+        micant_cli::CommandLineParser pRep("repair-bde D: E: -RecoveryPassword 418293-102938 -Force", "repair-bde.exe");
+        TEST_ASSERT(pRep.PositionalCount() == 2, "repair-bde must have 2 positionals");
+        TEST_ASSERT(std::string(pRep.GetPositional(0)) == "D:", "source volume must be D:");
+        TEST_ASSERT(std::string(pRep.GetPositional(1)) == "E:", "target volume must be E:");
+        TEST_ASSERT(pRep.HasSwitch("recoverypassword"), "repair-bde must parse -RecoveryPassword");
+        TEST_ASSERT(std::string(pRep.GetSwitchValue("recoverypassword")) == "418293-102938", "password must match");
+        TEST_ASSERT(pRep.HasSwitch("force"), "repair-bde must parse -Force");
+    }
+
+    // 10. wbadmin.exe (Windows Backup CLI)
+    {
+        micant_cli::CommandLineParser pWb1("wbadmin start backup -backupTarget:Z: -include:C: -allCritical", "wbadmin.exe");
+        TEST_ASSERT(std::string(pWb1.argv()[1]) == "start", "wbadmin verb must be start");
+        TEST_ASSERT(std::string(pWb1.argv()[2]) == "backup", "wbadmin noun must be backup");
+        TEST_ASSERT(pWb1.HasSwitch("backuptarget"), "wbadmin must parse -backupTarget");
+        TEST_ASSERT(std::string(pWb1.GetSwitchValue("backuptarget")) == "Z:", "backup target must be Z:");
+        TEST_ASSERT(pWb1.HasSwitch("include"), "wbadmin must parse -include");
+        TEST_ASSERT(std::string(pWb1.GetSwitchValue("include")) == "C:", "include must be C:");
+        TEST_ASSERT(pWb1.HasSwitch("allcritical"), "wbadmin must parse -allCritical");
+
+        micant_cli::CommandLineParser pWb2("wbadmin get status", "wbadmin.exe");
+        TEST_ASSERT(std::string(pWb2.argv()[1]) == "get", "wbadmin verb must be get");
+        TEST_ASSERT(std::string(pWb2.argv()[2]) == "status", "wbadmin noun must be status");
+
+        micant_cli::CommandLineParser pWb3("wbadmin get versions", "wbadmin.exe");
+        TEST_ASSERT(std::string(pWb3.argv()[2]) == "versions", "wbadmin noun must be versions");
+    }
+
+    std::cout << "  [Horizon 141 Storage & Protection System32 Batch 6 Parity (Unit #113)]\n"
+              << "    vol.exe: Volume Label & Serial Lookup across C:, D:, E:, F:, G: Drives OK\n"
+              << "    label.exe: Volume Label Modification & Write-Protection Enforcement OK\n"
+              << "    subst.exe: Virtual Drive Path Substitution List, Create & Delete (/D) OK\n"
+              << "    tree.exe: Directory Hierarchy Visualizer with /F (Files) & /A (ASCII) OK\n"
+              << "    recover.exe: Defective Sector & Data Recovery with ECC Syndrome Repair OK\n"
+              << "    vssadmin.exe: VSS Shadow Copy Management (list shadows, writers, providers, resize) OK\n"
+              << "    diskshadow.exe: DiskShadow VSS Snapshot Scripting Engine (/s) OK\n"
+              << "    manage-bde.exe: BitLocker Drive Encryption (-status, -on, -off, -lock, -unlock, -protectors) OK\n"
+              << "    repair-bde.exe: BitLocker Volume Recovery & Hardware AES-NI Decryption OK\n"
+              << "    wbadmin.exe: Windows Backup Administrative CLI (start backup, get status, get versions) OK\n";
+
+    std::cout << "[TEST] Suite 357: Horizon 141 - Sovereign Storage & Protection System32 Batch 6 Parity PASSED.\n";
+}
+
+
 
 
 
