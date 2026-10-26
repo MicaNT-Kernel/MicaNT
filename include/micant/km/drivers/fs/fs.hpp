@@ -1375,11 +1375,80 @@ public:
     }
 
     NtStatus removeDirectory(std::wstring_view path) {
-        return deleteFile(path);
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto pr = resolvePartitionPath(path);
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Cdfs:
+                return NtStatus::MediaWriteProtected;
+            case PartitionResolution::VolumeType::Zfs:
+                if (!zfsFs_) return NtStatus::VolumeNotMounted;
+                return zfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Ntfs:
+                if (!ntfsFs_) return NtStatus::VolumeNotMounted;
+                return ntfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Exfat:
+                if (!exfatFs_) return NtStatus::VolumeNotMounted;
+                return exfatFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Refs:
+                if (!refsFs_) return NtStatus::VolumeNotMounted;
+                return refsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Fat32:
+            default: {
+                std::wstring norm = normalizePath(path);
+                size_t lastSlash = norm.find_last_of(L'\\');
+                std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
+                std::wstring dirName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
+
+                auto parent = findEntry(parentPath);
+                if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
+
+                auto it = parent->children.find(dirName);
+                if (it == parent->children.end()) return NtStatus::NoSuchFile;
+                if (!it->second->isDirectory) return NtStatus::NotADirectory;
+                if (!it->second->children.empty()) return NtStatus::DirectoryNotEmpty;
+
+                parent->children.erase(it);
+                return NtStatus::Success;
+            }
+        }
     }
 
     NtStatus removeDirectoryRecursive(std::wstring_view path) {
-        return deleteFile(path);
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto pr = resolvePartitionPath(path);
+        switch (pr.type) {
+            case PartitionResolution::VolumeType::Cdfs:
+                return NtStatus::MediaWriteProtected;
+            case PartitionResolution::VolumeType::Zfs:
+                if (!zfsFs_) return NtStatus::VolumeNotMounted;
+                return zfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Ntfs:
+                if (!ntfsFs_) return NtStatus::VolumeNotMounted;
+                return ntfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Exfat:
+                if (!exfatFs_) return NtStatus::VolumeNotMounted;
+                return exfatFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Refs:
+                if (!refsFs_) return NtStatus::VolumeNotMounted;
+                return refsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Fat32:
+            default: {
+                std::wstring norm = normalizePath(path);
+                size_t lastSlash = norm.find_last_of(L'\\');
+                std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
+                std::wstring dirName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
+
+                auto parent = findEntry(parentPath);
+                if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
+
+                auto it = parent->children.find(dirName);
+                if (it == parent->children.end()) return NtStatus::NoSuchFile;
+                if (!it->second->isDirectory) return NtStatus::NotADirectory;
+
+                parent->children.erase(it);
+                return NtStatus::Success;
+            }
+        }
     }
 
     NtStatus queryFileAttributes(std::wstring_view path, uint32_t& attributes) {
