@@ -395,7 +395,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon142_CleanRoom_Zfs_Driver_And_RaidPool_Engine);
         return g_FailedTests;
     }
-    if (argc > 1 && std::string(argv[1]) == "--suite358" || std::string(argv[1]) == "--suite357") {
+    if (argc > 1 && std::string(argv[1]) == "--suite357") {
         RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
         return g_FailedTests;
     }
