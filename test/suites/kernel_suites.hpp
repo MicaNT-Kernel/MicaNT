@@ -23126,3 +23126,292 @@ inline void Test_Horizon144_MultiFormat_Storage_Interoperability_And_Win32_Harmo
 
     std::cout << "[TEST] Suite 360: Horizon 144 - Multi-Format Storage Interoperability & Win32 Harmony PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 361: Horizon 145 - Dynamic Drive Letter Assignment & Win32 Mount Manager Parity
+// ============================================================================
+inline void Test_Horizon145_Dynamic_Drive_Letter_Assignment_And_Win32_Mount_Manager_Parity() {
+    using namespace micant::win32;
+    std::cout << "[TEST] Running Suite 361: Horizon 145 - Dynamic Drive Letter Assignment & Win32 Mount Manager Parity..." << std::endl;
+
+    micant::zfs::RegisterZfsSubsystem();
+
+    auto& vfs = micant::fs::VirtualFileSystem::get();
+    vfs.initialize();
+
+    // Ensure all 6 filesystem formats are mounted
+    if (!vfs.getMountedNtfs()) {
+        auto ntfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition2", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto ntfsFs = std::make_shared<micant::ntfs::NtfsFileSystem>();
+        ntfsFs->format(*ntfsRamDisk, 4096, L"MICA_NTFS");
+        vfs.setMountedNtfs(ntfsFs);
+    }
+    if (!vfs.getMountedExfat()) {
+        auto exfatRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition3", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto exfatFs = std::make_shared<micant::exfat::ExfatFileSystem>();
+        exfatFs->format(*exfatRamDisk, 4096, L"MICA_EXFAT");
+        vfs.setMountedExfat(exfatFs);
+    }
+    if (!vfs.getMountedCdfs()) {
+        auto cdfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\CdRom0", 4 * 1024 * 1024ULL, micant::cdfs::CDFS_SECTOR_SIZE_2048);
+        auto cdfsFs = std::make_shared<micant::cdfs::CdfsFileSystem>();
+        cdfsFs->format(*cdfsRamDisk, L"MICA_CDFS");
+        vfs.setMountedCdfs(cdfsFs);
+    }
+    auto cdfs = vfs.getMountedCdfs();
+    TEST_ASSERT(cdfs != nullptr, "Mounted CDFS must not be null");
+    micant::cdfs::CdfsFileEntry sampleEntry;
+    if (!NT_SUCCESS(cdfs->lookupPath(L"SAMPLE.TXT", sampleEntry))) {
+        std::string sample = "MicaNT CDFS Optical Media 2026 Sample Data Payload";
+        cdfs->addFile(L"SAMPLE.TXT", sample.data(), sample.size());
+    }
+
+    if (!vfs.getMountedRefs()) {
+        auto refsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition4", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto refsFs = std::make_shared<micant::refs::RefsFileSystem>();
+        refsFs->format(*refsRamDisk, 4096, L"MICA_REFS");
+        vfs.setMountedRefs(refsFs);
+    }
+
+    // 1. Dynamic Drive Bitmask & Logical String Enumeration
+    {
+        DWORD drivesMask = GetLogicalDrives();
+        TEST_ASSERT((drivesMask & (1U << (L'C' - L'A'))) != 0, "Drive C: bitmask must be active");
+        TEST_ASSERT((drivesMask & (1U << (L'D' - L'A'))) != 0, "Drive D: bitmask must be active");
+        TEST_ASSERT((drivesMask & (1U << (L'E' - L'A'))) != 0, "Drive E: bitmask must be active");
+        TEST_ASSERT((drivesMask & (1U << (L'F' - L'A'))) != 0, "Drive F: bitmask must be active");
+        TEST_ASSERT((drivesMask & (1U << (L'G' - L'A'))) != 0, "Drive G: bitmask must be active");
+        TEST_ASSERT((drivesMask & (1U << (L'Z' - L'A'))) != 0, "Drive Z: bitmask must be active");
+
+        wchar_t driveStringsW[256] = {};
+        DWORD charsCopied = GetLogicalDriveStringsW(256, driveStringsW);
+        TEST_ASSERT(charsCopied > 0, "GetLogicalDriveStringsW must return positive character count");
+
+        // Parse null-separated list
+        std::vector<std::wstring> parsedDrives;
+        const wchar_t* p = driveStringsW;
+        while (*p != L'\0') {
+            parsedDrives.push_back(std::wstring(p));
+            p += wcslen(p) + 1;
+        }
+        TEST_ASSERT(parsedDrives.size() >= 6, "Must enumerate at least 6 root drive strings");
+        TEST_ASSERT(std::find(parsedDrives.begin(), parsedDrives.end(), L"C:\\") != parsedDrives.end(), "C:\\ must be present");
+        TEST_ASSERT(std::find(parsedDrives.begin(), parsedDrives.end(), L"Z:\\") != parsedDrives.end(), "Z:\\ must be present");
+
+        // QueryDosDeviceW enumeration (double null-terminated)
+        wchar_t dosDevices[512] = {};
+        DWORD qRet = QueryDosDeviceW(nullptr, dosDevices, 512);
+        TEST_ASSERT(qRet > 0, "QueryDosDeviceW with NULL device must enumerate all devices");
+    }
+
+    // 2. Custom Drive Letter Assignment (User Chooses T: for TitanZFS)
+    {
+        // User maps TitanZFS to custom drive letter T:
+        BOOL bDefT = DefineDosDeviceW(0, L"T:", L"\\Device\\ZfsPool_Storage");
+        TEST_ASSERT(bDefT == TRUE, "DefineDosDeviceW for T: -> \\Device\\ZfsPool_Storage must succeed");
+
+        wchar_t targetBuf[260] = {};
+        DWORD qT = QueryDosDeviceW(L"T:", targetBuf, 260);
+        TEST_ASSERT(qT > 0, "QueryDosDeviceW on T: must succeed");
+        TEST_ASSERT(std::wstring(targetBuf) == L"\\Device\\ZfsPool_Storage", "Target device of T: must be \\Device\\ZfsPool_Storage");
+
+        // Dynamic bitmask must now contain T: (bit 19)
+        DWORD maskWithT = GetLogicalDrives();
+        TEST_ASSERT((maskWithT & (1U << (L'T' - L'A'))) != 0, "Drive T: bitmask must be active after DefineDosDeviceW");
+
+        // Verify volume info on custom drive T:
+        wchar_t fsNameT[64] = {};
+        wchar_t volLabelT[64] = {};
+        DWORD serialT = 0, maxCompT = 0, flagsT = 0;
+        BOOL bInfoT = GetVolumeInformationW(L"T:\\", volLabelT, 64, &serialT, &maxCompT, &flagsT, fsNameT, 64);
+        TEST_ASSERT(bInfoT == TRUE, "GetVolumeInformationW on T:\\ must succeed");
+        TEST_ASSERT(std::wstring(fsNameT) == L"ZFS", "Drive T: file system must report ZFS");
+        TEST_ASSERT(std::wstring(volLabelT) == L"MICA_ZFS", "Drive T: volume label must be MICA_ZFS");
+        TEST_ASSERT((flagsT & micant::fs::FS_SUPPORTS_COW_SNAPSHOTS) != 0, "Drive T: must advertise COW snapshot capability");
+
+        // User removes forced Z: drive mapping
+        BOOL bDelZ = DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"Z:", nullptr);
+        TEST_ASSERT(bDelZ == TRUE, "DefineDosDeviceW DDD_REMOVE_DEFINITION for Z: must succeed");
+
+        DWORD maskWithoutZ = GetLogicalDrives();
+        TEST_ASSERT((maskWithoutZ & (1U << (L'Z' - L'A'))) == 0, "Drive Z: bitmask must be inactive after removal");
+
+        // Z: should now be unmapped / fail volume query
+        BOOL bInfoZ = GetVolumeInformationW(L"Z:\\", volLabelT, 64, &serialT, &maxCompT, &flagsT, fsNameT, 64);
+        TEST_ASSERT(bInfoZ == FALSE, "GetVolumeInformationW on unmapped Z:\\ must fail");
+    }
+
+    // 3. Full I/O and Checksum Integrity via Custom Drive Letter T:
+    {
+        std::shared_ptr<micant::fs::FileObject> tFile;
+        NtStatus stCrT = vfs.createOrOpenFile(L"T:\\titan_custom_mount.txt", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, tFile);
+        TEST_ASSERT(NT_SUCCESS(stCrT) && tFile != nullptr, "Creating file on custom drive T: must succeed");
+
+        std::string customPayload = "MicaNT Custom Drive Mapping Test: TitanZFS mounted cleanly on T: with Fletcher-4 integrity.";
+        uint32_t bytesWritten = 0;
+        NtStatus stWrT = vfs.writeFile(tFile.get(), customPayload.data(), static_cast<uint32_t>(customPayload.size()), nullptr, bytesWritten);
+        TEST_ASSERT(NT_SUCCESS(stWrT) && bytesWritten == customPayload.size(), "Writing to custom drive T: file must succeed");
+        vfs.closeFile(tFile.get());
+
+        // Read back via T:\ and verify byte-exact contents
+        std::shared_ptr<micant::fs::FileObject> tRead;
+        NtStatus stOpT = vfs.createOrOpenFile(L"T:\\titan_custom_mount.txt", micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, tRead);
+        TEST_ASSERT(NT_SUCCESS(stOpT) && tRead != nullptr, "Opening file on custom drive T: for reading must succeed");
+
+        std::vector<char> readBuf(128, 0);
+        uint32_t bytesRead = 0;
+        NtStatus stRdT = vfs.readFile(tRead.get(), readBuf.data(), static_cast<uint32_t>(readBuf.size()), nullptr, bytesRead);
+        TEST_ASSERT(NT_SUCCESS(stRdT) && bytesRead == customPayload.size(), "Reading from custom drive T: must succeed");
+        TEST_ASSERT(std::string(readBuf.data(), bytesRead) == customPayload, "Read data on T: must match written data bit-for-bit");
+        vfs.closeFile(tRead.get());
+
+        // Fletcher-4 checksum verification of data on custom drive T:
+        auto fletch = micant::zfs::ComputeFletcher4(readBuf.data(), bytesRead);
+        TEST_ASSERT(fletch.words[0] != 0 && fletch.words[1] != 0, "Fletcher-4 checksum on T: data must be non-zero");
+        TEST_ASSERT(micant::zfs::VerifyFletcher4(readBuf.data(), bytesRead, fletch), "VerifyFletcher4 on T: data must succeed");
+
+        // Directory enumeration on T:
+        std::vector<micant::fs::VirtualFileSystem::DirectoryEntry> entriesT;
+        NtStatus stDirT = vfs.queryDirectory(L"T:", entriesT);
+        TEST_ASSERT(NT_SUCCESS(stDirT), "queryDirectory on custom drive T: must succeed");
+        TEST_ASSERT(!entriesT.empty(), "Custom drive T: must contain entries");
+        bool foundCustom = false;
+        for (const auto& e : entriesT) {
+            if (e.name == L"titan_custom_mount.txt") {
+                foundCustom = true;
+                TEST_ASSERT(e.size == customPayload.size(), "Directory entry size must match written size");
+            }
+        }
+        TEST_ASSERT(foundCustom, "titan_custom_mount.txt must be listed in T: directory query");
+
+        // Win32 FindFirstFileW on T:\*
+        WIN32_FIND_DATAW findDataT{};
+        HANDLE hFindT = FindFirstFileW(L"T:\\*", &findDataT);
+        TEST_ASSERT(hFindT != INVALID_HANDLE_VALUE, "FindFirstFileW on T:\\* must succeed");
+        FindClose(hFindT);
+    }
+
+    // 4. Dynamic Re-assignment of Optical & Other Formats (CDFS to O:, NTFS to N:, exFAT to X:, ReFS to R:)
+    {
+        // 4.1 Optical media CDFS to O: instead of forced F:
+        BOOL bDefO = DefineDosDeviceW(0, L"O:", L"\\Device\\CdRom0");
+        TEST_ASSERT(bDefO == TRUE, "Mapping CDFS optical drive to O: must succeed");
+
+        wchar_t fsNameO[64] = {};
+        wchar_t volLabelO[64] = {};
+        DWORD serialO = 0, maxCompO = 0, flagsO = 0;
+        BOOL bInfoO = GetVolumeInformationW(L"O:\\", volLabelO, 64, &serialO, &maxCompO, &flagsO, fsNameO, 64);
+        TEST_ASSERT(bInfoO == TRUE && std::wstring(fsNameO) == L"CDFS", "Drive O: must identify as CDFS");
+        TEST_ASSERT((flagsO & micant::fs::FS_READ_ONLY_VOLUME) != 0, "Drive O: must report FS_READ_ONLY_VOLUME");
+
+        // Write protection test on custom optical drive O:
+        std::shared_ptr<micant::fs::FileObject> oWrite;
+        NtStatus stWriteO = vfs.createOrOpenFile(L"O:\\test_fail.txt", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, oWrite);
+        TEST_ASSERT(stWriteO == NtStatus::MediaWriteProtected, "Writing to custom optical drive O: must fail with MediaWriteProtected");
+
+        BOOL bDelOFile = DeleteFileW(L"O:\\SAMPLE.TXT");
+        TEST_ASSERT(bDelOFile == FALSE && GetLastError() == 19, "DeleteFileW on O: must fail with ERROR_WRITE_PROTECT (19)");
+
+        // 4.2 NTFS to N: instead of forced D:
+        BOOL bDefN = DefineDosDeviceW(0, L"N:", L"\\Device\\Harddisk0\\Partition2");
+        TEST_ASSERT(bDefN == TRUE, "Mapping NTFS volume to N: must succeed");
+
+        wchar_t fsNameN[64] = {};
+        wchar_t volLabelN[64] = {};
+        DWORD serialN = 0, maxCompN = 0, flagsN = 0;
+        BOOL bInfoN = GetVolumeInformationW(L"N:\\", volLabelN, 64, &serialN, &maxCompN, &flagsN, fsNameN, 64);
+        TEST_ASSERT(bInfoN == TRUE && std::wstring(fsNameN) == L"NTFS", "Drive N: must identify as NTFS");
+
+        // Create file with ADS on custom NTFS drive N:
+        std::shared_ptr<micant::fs::FileObject> nAdsFile;
+        NtStatus stAds = vfs.createOrOpenFile(L"N:\\custom_doc.txt:summary", micant::fs::FILE_WRITE_DATA, micant::fs::FILE_CREATE, nAdsFile);
+        TEST_ASSERT(NT_SUCCESS(stAds) && nAdsFile != nullptr, "Creating ADS stream on custom NTFS drive N: must succeed");
+        vfs.closeFile(nAdsFile.get());
+
+        // 4.3 exFAT to X: instead of forced E:
+        BOOL bDefX = DefineDosDeviceW(0, L"X:", L"\\Device\\Harddisk0\\Partition3");
+        TEST_ASSERT(bDefX == TRUE, "Mapping exFAT to X: must succeed");
+        wchar_t fsNameX[64] = {};
+        wchar_t volLabelX[64] = {};
+        DWORD serialX = 0, maxCompX = 0, flagsX = 0;
+        BOOL bInfoX = GetVolumeInformationW(L"X:\\", volLabelX, 64, &serialX, &maxCompX, &flagsX, fsNameX, 64);
+        TEST_ASSERT(bInfoX == TRUE && std::wstring(fsNameX) == L"exFAT", "Drive X: must identify as exFAT");
+
+        // 4.4 ReFS to R: instead of forced G:
+        BOOL bDefR = DefineDosDeviceW(0, L"R:", L"\\Device\\Harddisk0\\Partition4");
+        TEST_ASSERT(bDefR == TRUE, "Mapping ReFS to R: must succeed");
+        wchar_t fsNameR[64] = {};
+        wchar_t volLabelR[64] = {};
+        DWORD serialR = 0, maxCompR = 0, flagsR = 0;
+        BOOL bInfoR = GetVolumeInformationW(L"R:\\", volLabelR, 64, &serialR, &maxCompR, &flagsR, fsNameR, 64);
+        TEST_ASSERT(bInfoR == TRUE && std::wstring(fsNameR) == L"ReFS", "Drive R: must identify as ReFS");
+    }
+
+    // 5. Win32 Mount Point APIs (SetVolumeMountPointW / DeleteVolumeMountPointW) & mountvol / diskpart CLI Parity
+    {
+        // 5.1 SetVolumeMountPointW with Volume GUID string
+        BOOL bMntM = SetVolumeMountPointW(L"M:\\", L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\");
+        TEST_ASSERT(bMntM == TRUE, "SetVolumeMountPointW for M:\\ -> TitanZFS GUID must succeed");
+
+        wchar_t fsNameM[64] = {};
+        wchar_t volLabelM[64] = {};
+        DWORD serialM = 0, maxCompM = 0, flagsM = 0;
+        BOOL bInfoM = GetVolumeInformationW(L"M:\\", volLabelM, 64, &serialM, &maxCompM, &flagsM, fsNameM, 64);
+        TEST_ASSERT(bInfoM == TRUE && std::wstring(fsNameM) == L"ZFS", "Mounted volume M: must report ZFS");
+
+        // 5.2 DeleteVolumeMountPointW
+        BOOL bDelM = DeleteVolumeMountPointW(L"M:\\");
+        TEST_ASSERT(bDelM == TRUE, "DeleteVolumeMountPointW on M:\\ must succeed");
+
+        DWORD maskAfterDelM = GetLogicalDrives();
+        TEST_ASSERT((maskAfterDelM & (1U << (L'M' - L'A'))) == 0, "Drive M: bitmask must be cleared after DeleteVolumeMountPointW");
+
+        // 5.3 mountvol CLI parser parity
+        micant_cli::CommandLineParser pMntVolCustom("mountvol T: \\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\", "mountvol.exe");
+        TEST_ASSERT(std::string(pMntVolCustom.GetPositional(0)) == "T:", "mountvol target drive must be T:");
+        TEST_ASSERT(std::string(pMntVolCustom.GetPositional(1)).contains("Volume{a4bf011e-0006"), "mountvol volume GUID must match TitanZFS");
+
+        micant_cli::CommandLineParser pMntVolDel("mountvol T: /D", "mountvol.exe");
+        TEST_ASSERT(std::string(pMntVolDel.GetPositional(0)) == "T:", "mountvol /D target must be T:");
+        TEST_ASSERT(pMntVolDel.HasSwitch("d"), "mountvol /D switch must be parsed");
+
+        // 5.4 diskpart CLI parser parity for flexible drive letters
+        micant_cli::CommandLineParser pDiskPartAssign("diskpart assign letter=T", "diskpart.exe");
+        TEST_ASSERT(std::string(pDiskPartAssign.GetPositional(0)) == "assign", "diskpart command must be assign");
+        TEST_ASSERT(std::string(pDiskPartAssign.GetPositional(1)) == "letter=T", "diskpart argument must be letter=T");
+
+        // 5.5 subst CLI parser parity
+        micant_cli::CommandLineParser pSubstAssign("subst S: C:\\Users\\Default", "subst.exe");
+        TEST_ASSERT(std::string(pSubstAssign.GetPositional(0)) == "S:", "subst target drive must be S:");
+        TEST_ASSERT(std::string(pSubstAssign.GetPositional(1)) == "C:\\Users\\Default", "subst path must match");
+    }
+
+    // 6. Restoration & Consistency Verification
+    {
+        // Restore standard Z: mapping
+        DefineDosDeviceW(0, L"Z:", L"\\Device\\ZfsPool_Storage");
+        DefineDosDeviceW(0, L"D:", L"\\Device\\Harddisk0\\Partition2");
+        DefineDosDeviceW(0, L"E:", L"\\Device\\Harddisk0\\Partition3");
+        DefineDosDeviceW(0, L"F:", L"\\Device\\CdRom0");
+        DefineDosDeviceW(0, L"G:", L"\\Device\\Harddisk0\\Partition4");
+
+        // Cleanup custom transient drive letters
+        DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"O:", nullptr);
+        DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"N:", nullptr);
+        DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"X:", nullptr);
+        DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"R:", nullptr);
+
+        auto vols = vfs.queryAllVolumes();
+        TEST_ASSERT(vols.size() >= 6, "queryAllVolumes must return at least 6 volume descriptors");
+    }
+
+    std::cout << "  [Horizon 145 Dynamic Drive Letter Assignment & Win32 Mount Manager Parity (Unit #117)]\n"
+              << "    Pillar 1: Dynamic Drive Bitmask & Logical String Enumeration OK\n"
+              << "    Pillar 2: Custom Drive Letter Assignment via DefineDosDeviceW (TitanZFS->T:) OK\n"
+              << "    Pillar 3: Full I/O & Fletcher-4 Checksum Integrity via Custom Drive T:\\ OK\n"
+              << "    Pillar 4: Dynamic Re-assignment of Optical & Resilient Media (CDFS->O:, NTFS->N:, exFAT->X:, ReFS->R:) OK\n"
+              << "    Pillar 5: Win32 Volume Mount Point APIs (Set/DeleteVolumeMountPointW) & mountvol/diskpart Parity OK\n"
+              << "    Pillar 6: Restoration & Multi-Format Consistency Verification OK\n";
+
+    std::cout << "[TEST] Suite 361: Horizon 145 - Dynamic Drive Letter Assignment & Win32 Mount Manager Parity PASSED." << std::endl;
+}

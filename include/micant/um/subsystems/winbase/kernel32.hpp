@@ -3240,12 +3240,23 @@ inline BOOL FindNextStreamW(HANDLE /*hFindStream*/, LPVOID /*lpFindStreamData*/)
 }
 
 inline DWORD GetLogicalDriveStringsW(DWORD nBufferLength, LPWSTR lpBuffer) noexcept {
-    const wchar_t drives[] = L"C:\\\0D:\\\0";
-    constexpr DWORD len = 8;
-    if (nBufferLength < len + 1) return len + 1;
-    if (!lpBuffer) return 0;
-    std::memcpy(lpBuffer, drives, (len + 1) * sizeof(wchar_t));
-    return len;
+    auto letters = fs::VirtualFileSystem::get().getMountedDriveLetters();
+    DWORD totalChars = static_cast<DWORD>(letters.size() * 4 + 1); // "X:\\\0" for each + trailing '\0'
+    if (nBufferLength < totalChars) {
+        return totalChars;
+    }
+    if (!lpBuffer) {
+        return 0;
+    }
+    LPWSTR cur = lpBuffer;
+    for (wchar_t l : letters) {
+        *cur++ = static_cast<wchar_t>(std::towupper(l));
+        *cur++ = L':';
+        *cur++ = L'\\';
+        *cur++ = L'\0';
+    }
+    *cur = L'\0';
+    return totalChars - 1;
 }
 
 inline BOOL DeviceIoControl(
@@ -4281,7 +4292,15 @@ inline BOOL WINAPI GetFileTime([[maybe_unused]] HANDLE hFile, void* lpCreationTi
 }
 
 inline DWORD WINAPI GetLogicalDrives() noexcept {
-    return 0x0000000C; // Bit 2 = C:, Bit 3 = D:
+    DWORD mask = 0;
+    auto letters = fs::VirtualFileSystem::get().getMountedDriveLetters();
+    for (wchar_t l : letters) {
+        wchar_t u = static_cast<wchar_t>(std::towupper(l));
+        if (u >= L'A' && u <= L'Z') {
+            mask |= (1U << (u - L'A'));
+        }
+    }
+    return mask ? mask : 0x0000000C;
 }
 
 inline BOOL WINAPI GetVolumePathNameW(LPCWSTR lpszFileName, LPWSTR lpszVolumePathName, DWORD cchBufferLength) noexcept {
@@ -4598,28 +4617,181 @@ inline BOOL WINAPI GetVolumeInformationByHandleW(
     return TRUE;
 }
 
-inline BOOL WINAPI SetVolumeMountPointA(const char* /*lpszVolumeMountPoint*/, const char* /*lpszVolumeName*/) noexcept {
+inline constexpr DWORD DDD_RAW_TARGET_PATH         = 0x00000001;
+inline constexpr DWORD DDD_REMOVE_DEFINITION       = 0x00000002;
+inline constexpr DWORD DDD_EXACT_MATCH_ON_REMOVE   = 0x00000004;
+inline constexpr DWORD DDD_NO_BROADCAST_SYSTEM     = 0x00000008;
+
+inline BOOL WINAPI DefineDosDeviceW(DWORD dwFlags, LPCWSTR lpDeviceName, LPCWSTR lpTargetPath) noexcept {
+    if (!lpDeviceName || lpDeviceName[0] == L'\0') {
+        SetLastError(87);
+        return FALSE;
+    }
+    wchar_t d = static_cast<wchar_t>(std::towupper(lpDeviceName[0]));
+    if (d < L'A' || d > L'Z') {
+        SetLastError(87);
+        return FALSE;
+    }
+
+    if (dwFlags & DDD_REMOVE_DEFINITION) {
+        fs::VirtualFileSystem::get().removeDriveLetter(d);
+        SetLastError(0);
+        return TRUE;
+    }
+
+    if (!lpTargetPath) {
+        SetLastError(87);
+        return FALSE;
+    }
+
+    NtStatus st = fs::VirtualFileSystem::get().assignDriveLetter(d, lpTargetPath);
+    if (!NT_SUCCESS(st)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+    SetLastError(0);
     return TRUE;
 }
 
-inline BOOL WINAPI DeleteVolumeMountPointA(const char* /*lpszVolumeMountPoint*/) noexcept {
+inline BOOL WINAPI DefineDosDeviceA(DWORD dwFlags, const char* lpDeviceName, const char* lpTargetPath) noexcept {
+    if (!lpDeviceName) {
+        SetLastError(87);
+        return FALSE;
+    }
+    std::string sDev(lpDeviceName);
+    std::wstring wDev(sDev.begin(), sDev.end());
+    std::wstring wTgt;
+    if (lpTargetPath) {
+        std::string sTgt(lpTargetPath);
+        wTgt.assign(sTgt.begin(), sTgt.end());
+    }
+    return DefineDosDeviceW(dwFlags, wDev.c_str(), lpTargetPath ? wTgt.c_str() : nullptr);
+}
+
+inline DWORD WINAPI QueryDosDeviceW(LPCWSTR lpDeviceName, LPWSTR lpTargetPath, DWORD ucchMax) noexcept {
+    if (!lpTargetPath || ucchMax == 0) {
+        SetLastError(87);
+        return 0;
+    }
+
+    auto& vfs = fs::VirtualFileSystem::get();
+
+    if (!lpDeviceName || lpDeviceName[0] == L'\0') {
+        auto letters = vfs.getMountedDriveLetters();
+        size_t totalNeeded = 0;
+        for (wchar_t l : letters) {
+            totalNeeded += 3; // "C:\0"
+        }
+        totalNeeded += 1; // Trailing '\0'
+
+        if (ucchMax < totalNeeded) {
+            SetLastError(122); // ERROR_INSUFFICIENT_BUFFER
+            return 0;
+        }
+
+        LPWSTR cur = lpTargetPath;
+        for (wchar_t l : letters) {
+            *cur++ = l;
+            *cur++ = L':';
+            *cur++ = L'\0';
+        }
+        *cur++ = L'\0';
+        SetLastError(0);
+        return static_cast<DWORD>(totalNeeded);
+    }
+
+    wchar_t d = static_cast<wchar_t>(std::towupper(lpDeviceName[0]));
+    std::wstring symName = std::wstring(L"\\DosDevices\\") + d + L":";
+    auto sym = ob::ObjectNamespace::get().getSymbolicLink(symName);
+    std::wstring target;
+    if (sym) {
+        target = sym->getTargetPath();
+    } else {
+        target = vfs.getDeviceForDriveLetter(d);
+    }
+
+    if (target.empty()) {
+        SetLastError(2); // ERROR_FILE_NOT_FOUND
+        return 0;
+    }
+
+    size_t needed = target.size() + 2; // target + \0\0
+    if (ucchMax < needed) {
+        SetLastError(122);
+        return 0;
+    }
+
+    std::memcpy(lpTargetPath, target.c_str(), (target.size() + 1) * sizeof(wchar_t));
+    lpTargetPath[target.size() + 1] = L'\0';
+    SetLastError(0);
+    return static_cast<DWORD>(needed);
+}
+
+inline DWORD WINAPI QueryDosDeviceA(const char* lpDeviceName, char* lpTargetPath, DWORD ucchMax) noexcept {
+    if (!lpTargetPath || ucchMax == 0) {
+        SetLastError(87);
+        return 0;
+    }
+    std::wstring wDev;
+    if (lpDeviceName) {
+        std::string sDev(lpDeviceName);
+        wDev.assign(sDev.begin(), sDev.end());
+    }
+    std::vector<wchar_t> wBuf(ucchMax);
+    DWORD res = QueryDosDeviceW(lpDeviceName ? wDev.c_str() : nullptr, wBuf.data(), ucchMax);
+    if (res == 0) return 0;
+    for (DWORD i = 0; i < res; ++i) {
+        lpTargetPath[i] = static_cast<char>(wBuf[i]);
+    }
+    return res;
+}
+
+inline BOOL WINAPI SetVolumeMountPointW(LPCWSTR lpszVolumeMountPoint, LPCWSTR lpszVolumeName) noexcept {
+    if (!lpszVolumeMountPoint || !lpszVolumeName) {
+        SetLastError(87);
+        return FALSE;
+    }
+    wchar_t d = static_cast<wchar_t>(std::towupper(lpszVolumeMountPoint[0]));
+    if (d < L'A' || d > L'Z') {
+        SetLastError(87);
+        return FALSE;
+    }
+    NtStatus st = fs::VirtualFileSystem::get().assignDriveLetter(d, lpszVolumeName, lpszVolumeName);
+    if (!NT_SUCCESS(st)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+    SetLastError(0);
     return TRUE;
+}
+
+inline BOOL WINAPI SetVolumeMountPointA(const char* lpszVolumeMountPoint, const char* lpszVolumeName) noexcept {
+    if (!lpszVolumeMountPoint || !lpszVolumeName) return FALSE;
+    std::string sMnt(lpszVolumeMountPoint), sVol(lpszVolumeName);
+    std::wstring wMnt(sMnt.begin(), sMnt.end()), wVol(sVol.begin(), sVol.end());
+    return SetVolumeMountPointW(wMnt.c_str(), wVol.c_str());
+}
+
+inline BOOL WINAPI DeleteVolumeMountPointW(LPCWSTR lpszVolumeMountPoint) noexcept {
+    if (!lpszVolumeMountPoint) {
+        SetLastError(87);
+        return FALSE;
+    }
+    wchar_t d = static_cast<wchar_t>(std::towupper(lpszVolumeMountPoint[0]));
+    fs::VirtualFileSystem::get().removeDriveLetter(d);
+    SetLastError(0);
+    return TRUE;
+}
+
+inline BOOL WINAPI DeleteVolumeMountPointA(const char* lpszVolumeMountPoint) noexcept {
+    if (!lpszVolumeMountPoint) return FALSE;
+    std::string sMnt(lpszVolumeMountPoint);
+    std::wstring wMnt(sMnt.begin(), sMnt.end());
+    return DeleteVolumeMountPointW(wMnt.c_str());
 }
 
 inline BOOL WINAPI SetVolumeLabelA(const char* /*lpRootPathName*/, const char* /*lpVolumeName*/) noexcept {
     return TRUE;
-}
-
-inline BOOL WINAPI DefineDosDeviceA(DWORD /*dwFlags*/, const char* /*lpDeviceName*/, const char* /*lpTargetPath*/) noexcept {
-    return TRUE;
-}
-
-inline DWORD WINAPI QueryDosDeviceA(const char* /*lpDeviceName*/, char* lpTargetPath, DWORD ucchMax) noexcept {
-    if (lpTargetPath && ucchMax > 16) {
-        std::snprintf(lpTargetPath, ucchMax, "\\Device\\HarddiskVolume1");
-        return static_cast<DWORD>(std::strlen(lpTargetPath));
-    }
-    return 0;
 }
 
 inline BOOL WINAPI GetDiskFreeSpaceExA(
@@ -4637,13 +4809,23 @@ inline BOOL WINAPI GetDiskFreeSpaceExA(
 }
 
 inline DWORD WINAPI GetLogicalDriveStringsA(DWORD nBufferLength, char* lpBuffer) noexcept {
-    const char drives[] = "C:\\\0D:\\\0";
-    constexpr DWORD reqSize = sizeof(drives);
-    if (lpBuffer && nBufferLength >= reqSize) {
-        std::memcpy(lpBuffer, drives, reqSize);
-        return reqSize - 1;
+    auto letters = fs::VirtualFileSystem::get().getMountedDriveLetters();
+    DWORD totalChars = static_cast<DWORD>(letters.size() * 4 + 1);
+    if (nBufferLength < totalChars) {
+        return totalChars;
     }
-    return reqSize;
+    if (!lpBuffer) {
+        return 0;
+    }
+    char* cur = lpBuffer;
+    for (wchar_t l : letters) {
+        *cur++ = static_cast<char>(std::towupper(l));
+        *cur++ = ':';
+        *cur++ = '\\';
+        *cur++ = '\0';
+    }
+    *cur = '\0';
+    return totalChars - 1;
 }
 
 inline BOOL WINAPI CancelIoEx(HANDLE /*hFile*/, void* /*lpOverlapped*/) noexcept {
@@ -5125,7 +5307,7 @@ inline BOOL WINAPI WaitOnAddress(volatile void* /*Address*/, void* /*CompareAddr
 inline void WINAPI WakeByAddressSingle(void* /*Address*/) noexcept {}
 inline void WINAPI WakeByAddressAll(void* /*Address*/) noexcept {}
 
-inline BOOL QueryDosDeviceW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+// QueryDosDeviceW defined above
 inline BOOL ReadProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* GetCPInfoExW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
 inline BOOL WriteProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
@@ -5639,7 +5821,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SetVolumeMountPointA", reinterpret_cast<void*>(SetVolumeMountPointA));
     ldr.registerExport("kernel32.dll", "DeleteVolumeMountPointA", reinterpret_cast<void*>(DeleteVolumeMountPointA));
     ldr.registerExport("kernel32.dll", "SetVolumeLabelA", reinterpret_cast<void*>(SetVolumeLabelA));
+    ldr.registerExport("kernel32.dll", "DefineDosDeviceW", reinterpret_cast<void*>(DefineDosDeviceW));
     ldr.registerExport("kernel32.dll", "DefineDosDeviceA", reinterpret_cast<void*>(DefineDosDeviceA));
+    ldr.registerExport("kernel32.dll", "SetVolumeMountPointW", reinterpret_cast<void*>(SetVolumeMountPointW));
+    ldr.registerExport("kernel32.dll", "DeleteVolumeMountPointW", reinterpret_cast<void*>(DeleteVolumeMountPointW));
     ldr.registerExport("kernel32.dll", "QueryDosDeviceA", reinterpret_cast<void*>(QueryDosDeviceA));
     ldr.registerExport("kernel32.dll", "GetDiskFreeSpaceExA", reinterpret_cast<void*>(GetDiskFreeSpaceExA));
     ldr.registerExport("kernel32.dll", "GetLogicalDriveStringsA", reinterpret_cast<void*>(GetLogicalDriveStringsA));
