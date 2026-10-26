@@ -48,6 +48,10 @@ void PrintVolumeInfo(const char* drive) noexcept {
         PrintLine(" Volume in drive G is MICA_REFS");
         PrintLine(" Volume Serial Number is 8E21-F4A0");
         break;
+    case 'Z':
+        PrintLine(" Volume in drive Z is MICA_ZFS");
+        PrintLine(" Volume Serial Number is 00BA-B10C");
+        break;
     case 'P':
         PrintLine(" Volume in drive P is HMB_PAGING");
         PrintLine(" Volume Serial Number is 1143-6000");

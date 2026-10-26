@@ -391,7 +391,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && std::string(argv[1]) == "--suite357") {
+    if (argc > 1 && std::string(argv[1]) == "--suite358") {
+        RUN_TEST(Test_Horizon142_CleanRoom_Zfs_Driver_And_RaidPool_Engine);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite358" || std::string(argv[1]) == "--suite357") {
         RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
         return g_FailedTests;
     }
@@ -407,7 +411,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon138_CleanRoom_ExFat_Driver_And_Allocation_Engine);
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite357" || std::string(argv[1]) == "--suite356" || std::string(argv[1]) == "--suite355" || std::string(argv[1]) == "--suite354" || std::string(argv[1]) == "--suite353" || std::string(argv[1]) == "--suite352" || std::string(argv[1]) == "--suite351" || std::string(argv[1]) == "--suite350" || std::string(argv[1]) == "--suite349" || std::string(argv[1]) == "--suite348" || std::string(argv[1]) == "--suite347")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite358" || std::string(argv[1]) == "--suite357" || std::string(argv[1]) == "--suite356" || std::string(argv[1]) == "--suite355" || std::string(argv[1]) == "--suite354" || std::string(argv[1]) == "--suite353" || std::string(argv[1]) == "--suite352" || std::string(argv[1]) == "--suite351" || std::string(argv[1]) == "--suite350" || std::string(argv[1]) == "--suite349" || std::string(argv[1]) == "--suite348" || std::string(argv[1]) == "--suite347")) {
         RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
         RUN_TEST(Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing);
         RUN_TEST(Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking);
@@ -422,6 +426,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon139_CleanRoom_Cdfs_Udfs_Driver_And_Optical_Media_Subsystem);
         RUN_TEST(Test_Horizon140_CleanRoom_ReFS_Driver_And_BTree_Resilience_Engine);
         RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
+        RUN_TEST(Test_Horizon142_CleanRoom_Zfs_Driver_And_RaidPool_Engine);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1705,8 +1710,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon137_CleanRoom_Ntfs_Driver_And_Mft_Engine);
     RUN_TEST(Test_Horizon138_CleanRoom_ExFat_Driver_And_Allocation_Engine);
     RUN_TEST(Test_Horizon139_CleanRoom_Cdfs_Udfs_Driver_And_Optical_Media_Subsystem);
-    RUN_TEST(Test_Horizon140_CleanRoom_ReFS_Driver_And_BTree_Resilience_Engine);
-    RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
+        RUN_TEST(Test_Horizon140_CleanRoom_ReFS_Driver_And_BTree_Resilience_Engine);
+        RUN_TEST(Test_Horizon141_StorageAndProtection_System32_Batch6_Parity);
+        RUN_TEST(Test_Horizon142_CleanRoom_Zfs_Driver_And_RaidPool_Engine);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

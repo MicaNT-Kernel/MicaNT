@@ -21,6 +21,7 @@
 #include "micant/km/drivers/fs/exfat.hpp"
 #include "micant/km/drivers/fs/cdfs.hpp"
 #include "micant/km/drivers/fs/refs.hpp"
+#include "micant/km/drivers/fs/zfs.hpp"
 
 namespace micant::fs {
 
@@ -338,6 +339,15 @@ public:
         return refsFs_;
     }
 
+    void setMountedZfs(std::shared_ptr<zfs::ZfsFileSystem> zfs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        zfsFs_ = zfs;
+    }
+
+    [[nodiscard]] std::shared_ptr<zfs::ZfsFileSystem> getMountedZfs() const noexcept {
+        return zfsFs_;
+    }
+
     NtStatus createOrOpenFile(
         std::wstring_view path,
         uint32_t desiredAccess,
@@ -495,6 +505,31 @@ public:
             return NtStatus::Success;
         }
 
+        // 0.6 Check for ZFS Volume (Drive Z: or \Device\ZfsPool_Storage or \Device\Zfs0)
+        if (zfsFs_ && (path.starts_with(L"Z:") || path.starts_with(L"z:") ||
+                        path.starts_with(L"\\DosDevices\\Z:") || path.starts_with(L"\\??\\Z:") ||
+                        path.starts_with(L"\\Device\\ZfsPool_Storage") ||
+                        path.starts_with(L"\\Device\\Zfs0"))) {
+            std::wstring normZfs = normalizePath(sPath);
+            if (normZfs.starts_with(L"Z:\\") || normZfs.starts_with(L"z:\\")) {
+                normZfs = normZfs.substr(3);
+            }
+            zfs::ZfsFileRecord zRec{};
+            bool exists = zfsFs_->lookupPath(normZfs, zRec);
+            if (!exists) {
+                if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    NtStatus crSt = zfsFs_->createFile(normZfs, FILE_ATTRIBUTE_NORMAL, false);
+                    if (!NT_SUCCESS(crSt)) return crSt;
+                } else {
+                    return NtStatus::NoSuchFile;
+                }
+            }
+
+            outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+            openZfsFiles_[outFileObj.get()] = normZfs;
+            return NtStatus::Success;
+        }
+
         // 1. Check if path targets a registered device node in \Device
         std::wstring resolvedPath = ob::ObjectNamespace::get().resolvePath(path);
         auto directDevice = io::IoManager::get().lookupDevice(resolvedPath);
@@ -620,6 +655,19 @@ public:
             return st;
         }
 
+        auto itZfs = openZfsFiles_.find(fileObj);
+        if (itZfs != openZfsFiles_.end() && zfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t zfsBytes = 0;
+            NtStatus st = zfsFs_->readFile(itZfs->second, buffer, length, static_cast<uint64_t>(offset), zfsBytes);
+            bytesRead = static_cast<uint32_t>(zfsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp readIrp{};
@@ -730,6 +778,19 @@ public:
             return st;
         }
 
+        auto itZfs = openZfsFiles_.find(fileObj);
+        if (itZfs != openZfsFiles_.end() && zfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t zfsBytes = 0;
+            NtStatus st = zfsFs_->writeFile(itZfs->second, buffer, length, static_cast<uint64_t>(offset), zfsBytes);
+            bytesWritten = static_cast<uint32_t>(zfsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp writeIrp{};
@@ -794,6 +855,7 @@ public:
         openExfatFiles_.erase(fileObj);
         openCdfsFiles_.erase(fileObj);
         openRefsFiles_.erase(fileObj);
+        openZfsFiles_.erase(fileObj);
         openFiles_.erase(fileObj);
     }
 
@@ -1088,6 +1150,8 @@ private:
     std::unordered_map<FileObject*, std::wstring> openCdfsFiles_;
     std::shared_ptr<refs::RefsFileSystem> refsFs_;
     std::unordered_map<FileObject*, uint64_t> openRefsFiles_;
+    std::shared_ptr<zfs::ZfsFileSystem> zfsFs_;
+    std::unordered_map<FileObject*, std::wstring> openZfsFiles_;
     io::FastIoDispatch fastIoTable_{};
     std::unique_ptr<io::Vpb> vpb_;
 };

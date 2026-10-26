@@ -582,6 +582,8 @@ public:
             if (cmd == "hotpatch" || cmd == "klp" || cmd == "liveupdate") { cmdHotpatch(tokens, out); return 0; }
             if (cmd == "hyperv" || cmd == "hv" || cmd == "hvr" || cmd == "nestedvm") { cmdHyperv(tokens, out); return 0; }
             if (cmd == "refs" || cmd == "refsutil") { cmdRefs(tokens, out); return 0; }
+            if (cmd == "zpool") { cmdZpool(tokens, out); return 0; }
+            if (cmd == "zfs") { cmdZfs(tokens, out); return 0; }
             if (cmd == "csvfs" || cmd == "csv") { cmdCsvfs(tokens, out); return 0; }
             if (cmd == "wcn" || cmd == "wcifs" || cmd == "hcs" || cmd == "container" || cmd == "docker") { cmdWcn(tokens, out); return 0; }
             if (cmd == "s2d" || cmd == "spaces" || cmd == "storagespaces") { cmdDstorage(tokens, out); return 0; }

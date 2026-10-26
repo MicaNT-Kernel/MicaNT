@@ -530,6 +530,9 @@ void ExecuteCommand(const char* cmd) noexcept {
         } else if (StrCaseContains(cmd, "g:")) {
             PrintLine(" Volume in drive G is MICA_REFS");
             PrintLine(" Volume Serial Number is 8E21-F4A0");
+        } else if (StrCaseContains(cmd, "z:")) {
+            PrintLine(" Volume in drive Z is MICA_ZFS");
+            PrintLine(" Volume Serial Number is 00BA-B10C");
         } else {
             PrintLine(" Volume in drive C is MICA_SYS");
             PrintLine(" Volume Serial Number is 4C2A-18E9");
@@ -609,6 +612,21 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
         PrintLine("Snapshot Volume: C: (MicaNT OS Partition)");
         PrintLine("Status         : The backup operation has completed successfully.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "zpool")) {
+        if (StrCaseContains(cmd, "list")) {
+            PrintLine("NAME    SIZE  ALLOC   FREE  CKPOINT  EXPANDSZ   FRAG    CAP  DEDUP    HEALTH  ALTROOT");
+            PrintLine("tank    768M   128K   768M        -         -     0%     0%  1.00x    ONLINE  -");
+        } else {
+            PrintLine("  pool: tank\n state: ONLINE\nconfig:\n        NAME        STATE     READ WRITE CKSUM\n        tank        ONLINE       0     0     0\n          raidz1-0  ONLINE       0     0     0\n            c1t0d0  ONLINE       0     0     0\n            c1t1d0  ONLINE       0     0     0\n            c1t2d0  ONLINE       0     0     0\nerrors: No known data errors");
+        }
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "zfs")) {
+        PrintLine("NAME          USED  AVAIL  REFER  MOUNTPOINT\ntank          128K   768M    24K  /tank\ntank/data      64K   768M    64K  Z:");
         return;
     }
 

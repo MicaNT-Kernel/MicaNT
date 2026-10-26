@@ -125,7 +125,8 @@ try {
         @{ Src = "kernel/fsrtl/ntfs.cpp";                              Obj = "fsrtl_ntfs.o" },
         @{ Src = "kernel/fsrtl/exfat.cpp";                             Obj = "fsrtl_exfat.o" },
         @{ Src = "kernel/fsrtl/cdfs.cpp";                              Obj = "fsrtl_cdfs.o" },
-        @{ Src = "kernel/fsrtl/refs.cpp";                              Obj = "fsrtl_refs.o" }
+        @{ Src = "kernel/fsrtl/refs.cpp";                              Obj = "fsrtl_refs.o" },
+        @{ Src = "kernel/fsrtl/zfs.cpp";                               Obj = "fsrtl_zfs.o" }
     )
 
     $staleUnits = @()

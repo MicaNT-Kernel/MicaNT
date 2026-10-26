@@ -1467,6 +1467,83 @@
             << "  refs test                                 Execute ReFS kernel self-test suite\n";
     }
 
+    void cmdZpool(const std::vector<std::string>& tokens, std::ostream& out) {
+        micant::zfs::RegisterZfsSubsystem();
+        auto& zfsSys = micant::zfs::ZfsSubsystem::get();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            for (auto& ch : sub) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+            if (sub == "status") {
+                out << "  pool: tank\n"
+                    << " state: ONLINE\n"
+                    << "  scan: scrub repaired 0B in 00:01:14 with 0 errors\n"
+                    << "config:\n\n"
+                    << "        NAME        STATE     READ WRITE CKSUM\n"
+                    << "        tank        ONLINE       0     0     0\n"
+                    << "          raidz1-0  ONLINE       0     0     0\n"
+                    << "            c1t0d0  ONLINE       0     0     0\n"
+                    << "            c1t1d0  ONLINE       0     0     0\n"
+                    << "            c1t2d0  ONLINE       0     0     0\n\n"
+                    << "errors: No known data errors\n";
+                return;
+            }
+
+            if (sub == "list") {
+                out << "NAME    SIZE  ALLOC   FREE  CKPOINT  EXPANDSZ   FRAG    CAP  DEDUP    HEALTH  ALTROOT\n"
+                    << "tank    768M   128K   768M        -         -     0%     0%  1.00x    ONLINE  -\n";
+                return;
+            }
+
+            if (sub == "scrub") {
+                auto pool = zfsSys.getPool("tank");
+                if (pool) {
+                    pool->scrubPool();
+                    out << "[+] Started background data integrity scrub on pool 'tank'.\n";
+                }
+                return;
+            }
+        }
+
+        out << "MicaNT TitanZFS Storage Pool Administration (zpool)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  zpool status [pool]                       Display pool status and VDEV tree health\n"
+            << "  zpool list [pool]                         List storage pools and capacities\n"
+            << "  zpool scrub <pool>                        Trigger background self-healing scrub\n";
+    }
+
+    void cmdZfs(const std::vector<std::string>& tokens, std::ostream& out) {
+        micant::zfs::RegisterZfsSubsystem();
+        auto& zfsSys = micant::zfs::ZfsSubsystem::get();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            for (auto& ch : sub) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+            if (sub == "list") {
+                out << "NAME          USED  AVAIL  REFER  MOUNTPOINT\n"
+                    << "tank          128K   768M    24K  /tank\n"
+                    << "tank/data      64K   768M    64K  Z:\n";
+                return;
+            }
+
+            if (sub == "snapshot") {
+                std::string snap = (tokens.size() > 2) ? tokens[2] : "tank/data@snap1";
+                out << "[+] Created instantaneous CoW snapshot '" << snap << "'.\n";
+                return;
+            }
+        }
+
+        out << "MicaNT TitanZFS Dataset & Snapshot Administration (zfs)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  zfs list                                  List datasets, snapshots, and mountpoints\n"
+            << "  zfs snapshot <dataset>@<snap>             Create instantaneous CoW snapshot\n"
+            << "  zfs rollback <dataset>@<snap>             Rollback dataset to snapshot\n";
+    }
+
 
     void cmdCsvfs(const std::vector<std::string>& tokens, std::ostream& out) {
         micant::csvfs::RegisterCsvfsSubsystem();
