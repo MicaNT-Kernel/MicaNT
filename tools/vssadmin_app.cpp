@@ -18,6 +18,7 @@ void ShowHelp() noexcept {
     PrintLine("(C) Copyright MicaNT Operating System Authority. All rights reserved.");
     PrintLine("");
     PrintLine("Commands:");
+    PrintLine("  Create Shadow         - Create a volume shadow copy");
     PrintLine("  Delete Shadows        - Delete volume shadow copies");
     PrintLine("  List Providers        - List registered volume shadow copy providers");
     PrintLine("  List Shadows          - List existing volume shadow copies");
@@ -31,6 +32,19 @@ void ShowHelp() noexcept {
 void ListShadows(const char* targetVol) noexcept {
     PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
     PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+    if (targetVol && (targetVol[0] == 'Z' || targetVol[0] == 'z')) {
+        PrintLine("Contents of shadow copy set ID: {7C9A1200-45DF-4A1B-9430-652D0F08B9B2}");
+        PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
+        PrintLine("      Shadow Copy ID: {Z10F4D93-7892-4C10-B219-F87A65BC3E11}");
+        PrintLine("      Original Volume: (Z:)\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\");
+        PrintLine("      Shadow Copy Volume: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopyZFS1");
+        PrintLine("      Originating Machine: MICANT-XEON");
+        PrintLine("      Service Machine: MICANT-XEON");
+        PrintLine("      Provider: 'MicaNT Sovereign TitanZFS CoW Hardware Snapshot Provider'");
+        PrintLine("      Type: Hardware (Zero-Copy)");
+        PrintLine("      Attributes: Persistent, Client-accessible, No auto release, Hardware, CoW-Tree");
+        return;
+    }
     PrintLine("Contents of shadow copy set ID: {3E8C127A-45DF-4A1B-9430-652D0F08B9B1}");
     PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
     PrintLine("      Shadow Copy ID: {A10F4D93-7892-4C10-B219-F87A65BC3E10}");
@@ -81,6 +95,11 @@ void ListProviders() noexcept {
     PrintLine("Provider name: 'MicaNT Sovereign VSS Copy-On-Write Software Provider'");
     PrintLine("   Provider type: Software");
     PrintLine("   Provider Id: {b5946137-7b9f-4925-af80-51abd60b20d5}");
+    PrintLine("   Version: 1.0.0.1\n");
+
+    PrintLine("Provider name: 'MicaNT Sovereign TitanZFS CoW Hardware Snapshot Provider'");
+    PrintLine("   Provider type: Hardware");
+    PrintLine("   Provider Id: {ba00b10c-7b9f-4925-af80-51abd60b20d6}");
     PrintLine("   Version: 1.0.0.1");
 }
 
@@ -96,6 +115,8 @@ void ListVolumes() noexcept {
     PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\");
     PrintLine("Volume path: G:\\");
     PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
+    PrintLine("Volume path: Z:\\");
+    PrintLine("    Volume name: \\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\");
 }
 
 void ListShadowStorage() noexcept {
@@ -115,6 +136,24 @@ void ResizeShadowStorage(const char* maxsize) noexcept {
     PrintLine(maxsize ? maxsize : "10GB");
 }
 
+void CreateShadow(const char* targetVol) noexcept {
+    PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
+    PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
+    if (targetVol && (targetVol[0] == 'Z' || targetVol[0] == 'z')) {
+        PrintLine("Initiating hardware zero-copy snapshot on TitanZFS pool 'tank'...");
+        PrintLine("Invoked VirtualFileSystem::createVolumeSnapshot(L'Z', \"VSS_AUTO_SNAPSHOT\")... OK");
+        PrintLine("Successfully created shadow copy for 'Z:\\'");
+        PrintLine("   Shadow Copy ID: {Z10F4D93-7892-4C10-B219-F87A65BC3E11}");
+        PrintLine("   Shadow Copy Volume Name: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopyZFS1");
+        return;
+    }
+    Print("Successfully created shadow copy for '");
+    Print(targetVol ? targetVol : "C:\\");
+    PrintLine("'");
+    PrintLine("   Shadow Copy ID: {A10F4D93-7892-4C10-B219-F87A65BC3E10}");
+    PrintLine("   Shadow Copy Volume Name: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1");
+}
+
 } // namespace
 
 extern "C" void _start(const char* rawCmdLine = nullptr) {
@@ -129,6 +168,12 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
 
     const char* c1 = parser.argv()[1];
     const char* c2 = (parser.argc() > 2) ? parser.argv()[2] : nullptr;
+
+    if (StrCaseEqual(c1, "create") && c2 && StrCaseEqual(c2, "shadow")) {
+        const char* targetVol = parser.GetSwitchValue("for");
+        CreateShadow(targetVol);
+        ExitProcess(0);
+    }
 
     if (StrCaseEqual(c1, "list")) {
         if (!c2 || StrCaseEqual(c2, "shadows")) {

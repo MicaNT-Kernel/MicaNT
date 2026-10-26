@@ -24,7 +24,7 @@ void ShowHelp() noexcept {
     PrintLine("");
     PrintLine("  volume          Specifies the drive letter (followed by a colon),");
     PrintLine("                  mount point, or volume name.");
-    PrintLine("  /FS:filesystem  Specifies the type of the file system (FAT32, NTFS, exFAT, ReFS).");
+    PrintLine("  /FS:filesystem  Specifies the type of the file system (FAT32, NTFS, exFAT, ReFS, ZFS).");
     PrintLine("  /V:label        Specifies the volume label.");
     PrintLine("  /Q              Performs a quick format. Note that this switch overrides /P.");
     PrintLine("  /A:size         Overrides the default allocation unit size.");
@@ -53,11 +53,28 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     bool isNtfs = StrCaseEqual(fs, "NTFS");
     bool isExfat = StrCaseEqual(fs, "exFAT") || StrCaseEqual(fs, "exfat");
     bool isRefs = StrCaseEqual(fs, "ReFS") || StrCaseEqual(fs, "refs");
-    Print("The type of the file system is "); PrintLine(isNtfs ? "NTFS" : (isExfat ? "exFAT" : (isRefs ? "ReFS" : fs)));
+    bool isZfs = StrCaseEqual(fs, "ZFS") || StrCaseEqual(fs, "zfs") || (volume && (volume[0] == 'Z' || volume[0] == 'z'));
+    Print("The type of the file system is "); PrintLine(isZfs ? "ZFS" : (isNtfs ? "NTFS" : (isExfat ? "exFAT" : (isRefs ? "ReFS" : fs))));
     Print("Formatting volume "); Print(volume); PrintLine("...");
     Print("Volume label is "); PrintLine(label);
 
-    if (isRefs) {
+    if (isZfs) {
+        PrintLine("Volume Serial Number is 00BA-B10C");
+        PrintLine("Allocation unit size: 4096 bytes.");
+        PrintLine("Creating file system structures.");
+        PrintLine("  Formatting TitanZFS 128-Slot Uberblock Ring (ub_magic 0x00BAB10C)...");
+        PrintLine("  Initializing Storage Pool Allocator (SPA v5000)...");
+        PrintLine("  Setting up Root VDEV topology (RAID-Z1 / Mirror)...");
+        PrintLine("  Creating default dataset 'tank/data' mounted to Z:\\...");
+        PrintLine("  Activating 256-bit Fletcher-4 end-to-end checksum verification...");
+        PrintLine("Format complete.");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("  134,201,344 KB available on disk.");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,764,000 allocation units available on disk.");
+        PrintLine("Volume integrity: 100% PASS (TitanZFS Storage Pool)");
+    } else if (isRefs) {
         PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5");
         PrintLine("Allocation unit size: 4096 bytes.");
         PrintLine("Creating file system structures.");

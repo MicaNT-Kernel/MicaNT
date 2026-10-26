@@ -347,6 +347,17 @@ void ExecuteCommand(const char* cmd) noexcept {
     }
 
     if (MatchCmdToken(cmd, "diskpart")) {
+        if (StrCaseContains(cmd, "vol")) {
+            PrintLine("  Volume ###  Ltr  Label        Fs     Type        Size     Status     Info");
+            PrintLine("  ----------  ---  -----------  -----  ----------  -------  ---------  --------");
+            PrintLine("  Volume 0     C   MICA_SYS     FAT32  Partition    128 GB  Healthy    System");
+            PrintLine("  Volume 1     D   MICA_NTFS    NTFS   Partition    128 GB  Healthy    Boot");
+            PrintLine("  Volume 2     E   MICA_EXFAT   exFAT  Partition    128 GB  Healthy    Data");
+            PrintLine("  Volume 3     F   MICA_CDFS    CDFS   CD-ROM       700 MB  Healthy    Media");
+            PrintLine("  Volume 4     G   MICA_REFS    ReFS   Partition    128 GB  Healthy    Resilient");
+            PrintLine("  Volume 5     Z   MICA_ZFS     ZFS    Pool         128 GB  Healthy    RAID-Z1");
+            return;
+        }
         PrintLine("  Disk ###  Status         Size     Free     Dyn  Gpt");
         PrintLine("  --------  -------------  -------  -------  ---  ---");
         PrintLine("  Disk 0    Online         1863 GB      0 B        *");
@@ -366,12 +377,20 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("E:\\");
         PrintLine("F:\\");
         PrintLine("G:\\");
+        PrintLine("Z:\\");
         return;
     }
 
     if (MatchCmdToken(cmd, "format")) {
         if (StrCaseContains(cmd, "f:")) {
             PrintLine("Format cannot run on this volume because the volume is write-protected.");
+        } else if (StrCaseContains(cmd, "zfs") || StrCaseContains(cmd, "z:")) {
+            PrintLine("The type of the file system is ZFS.");
+            PrintLine("Formatting 128.0 GB");
+            PrintLine("Initializing TitanZFS Storage Pool (tank) and 128-Slot Uberblock Ring...");
+            PrintLine("Volume label is MICA_ZFS");
+            PrintLine("Volume Serial Number is 00BA-B10C");
+            PrintLine("Format complete.");
         } else if (StrCaseContains(cmd, "refs") || StrCaseContains(cmd, "g:")) {
             PrintLine("The type of the file system is ReFS.");
             PrintLine("Formatting 16.0 MB");
@@ -405,6 +424,14 @@ void ExecuteCommand(const char* cmd) noexcept {
             PrintLine("Path table and directory descriptors verified.");
             PrintLine("MicaNT has checked the file system and found no problems.");
             PrintLine("Read-only media. No further action is required.");
+        } else if (StrCaseContains(cmd, "zfs") || StrCaseContains(cmd, "z:")) {
+            PrintLine("The type of the file system is ZFS.");
+            PrintLine("Volume Z: is Sovereign Clean-Room TitanZFS Storage Pool (tank).");
+            PrintLine("Volume Serial Number is 00BA-B10C.");
+            PrintLine("TitanZFS is a Copy-on-Write (CoW) pool with 256-bit Fletcher-4 checksum verification.");
+            PrintLine("Active TXG: 42 | Uberblock Ring: 128 slots intact | Pool State: ONLINE");
+            PrintLine("Scrub complete: 0 checksum errors, 0 read errors, 0 write errors repaired.");
+            PrintLine("MicaNT TitanZFS has verified the pool and found no problems.");
         } else if (StrCaseContains(cmd, "refs") || StrCaseContains(cmd, "g:")) {
             PrintLine("The type of the file system is ReFS.");
             PrintLine("Volume G: is Sovereign Clean-Room ReFS Resilient File System.");

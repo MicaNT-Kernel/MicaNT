@@ -42,8 +42,11 @@ void PrintVolumes() noexcept {
     PrintLine("  Volume ###  Ltr  Label        Fs     Type        Size     Status     Info");
     PrintLine("  ----------  ---  -----------  -----  ----------  -------  ---------  --------");
     PrintLine("  Volume 0     C   MICA_SYS     FAT32  Partition    128 GB  Healthy    System");
-    PrintLine("  Volume 1     E   MICA_ESP     FAT32  Partition   1024 MB  Healthy    Hidden");
-    PrintLine("  Volume 2         UBUNTU_ROOT  EXT4   Partition   1734 GB  Healthy    ");
+    PrintLine("  Volume 1     D   MICA_NTFS    NTFS   Partition    128 GB  Healthy    Boot");
+    PrintLine("  Volume 2     E   MICA_EXFAT   exFAT  Partition    128 GB  Healthy    Data");
+    PrintLine("  Volume 3     F   MICA_CDFS    CDFS   CD-ROM       700 MB  Healthy    Media");
+    PrintLine("  Volume 4     G   MICA_REFS    ReFS   Partition    128 GB  Healthy    Resilient");
+    PrintLine("  Volume 5     Z   MICA_ZFS     ZFS    Pool         128 GB  Healthy    RAID-Z1");
 }
 
 void PrintPartitions() noexcept {

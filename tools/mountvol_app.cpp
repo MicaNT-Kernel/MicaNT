@@ -57,6 +57,9 @@ void ShowHelp() noexcept {
     PrintLine("    \\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
     PrintLine("        G:\\ (ReFS v3.4 Resilient File System)");
     PrintLine("");
+    PrintLine("    \\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\");
+    PrintLine("        Z:\\ (TitanZFS Storage Pool \"tank\" / RAID-Z1)");
+    PrintLine("");
 }
 
 } // namespace
@@ -81,6 +84,8 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
             PrintLine("\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\");
         } else if (StrCaseStartsWith(target, "G:")) {
             PrintLine("\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\");
+        } else if (StrCaseStartsWith(target, "Z:")) {
+            PrintLine("\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\");
         } else {
             PrintLine("\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\");
         }

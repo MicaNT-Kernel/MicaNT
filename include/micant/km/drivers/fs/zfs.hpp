@@ -1079,6 +1079,18 @@ public:
         return activeDataset_->listDirectory(dirPath);
     }
 
+    NtStatus createSnapshot(std::string_view snapName) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        if (!activeDataset_ || !pool_) return NtStatus::VolumeNotMounted;
+        return activeDataset_->createSnapshot(snapName, pool_->getCurrentTxg());
+    }
+
+    NtStatus rollbackSnapshot(std::string_view snapName) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        if (!activeDataset_) return NtStatus::VolumeNotMounted;
+        return activeDataset_->rollbackSnapshot(snapName);
+    }
+
 private:
     bool mounted_{false};
     std::shared_ptr<ZfsPool> pool_;

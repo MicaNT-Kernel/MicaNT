@@ -10,6 +10,7 @@
 #include <span>
 #include <cstring>
 #include <algorithm>
+#include <cwctype>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
@@ -127,6 +128,45 @@ struct VfsEntry {
  * @brief Fastfat / Virtual File System Driver
  * Clean-room NT driver supporting mounting, partition navigation, and file operations.
  */
+// ============================================================================
+// File System Attribute Flags (for NtQueryVolumeInformationFile)
+// ============================================================================
+
+inline constexpr uint32_t FS_CASE_SENSITIVE_SEARCH        = 0x00000001;
+inline constexpr uint32_t FS_CASE_IS_PRESERVED            = 0x00000002;
+inline constexpr uint32_t FS_UNICODE_STORED_ON_DISK       = 0x00000004;
+inline constexpr uint32_t FS_PERSISTENT_ACLS              = 0x00000008;
+inline constexpr uint32_t FS_FILE_COMPRESSION             = 0x00000010;
+inline constexpr uint32_t FS_VOLUME_QUOTAS                = 0x00000020;
+inline constexpr uint32_t FS_SUPPORTS_SPARSE_FILES        = 0x00000040;
+inline constexpr uint32_t FS_SUPPORTS_REPARSE_POINTS      = 0x00000080;
+inline constexpr uint32_t FS_SUPPORTS_OBJECT_IDS          = 0x00010000;
+inline constexpr uint32_t FS_SUPPORTS_ENCRYPTION          = 0x00020000;
+inline constexpr uint32_t FS_READ_ONLY_VOLUME             = 0x00080000;
+inline constexpr uint32_t FS_SUPPORTS_TRANSACTIONS        = 0x00200000;
+inline constexpr uint32_t FS_SUPPORTS_USN_JOURNAL         = 0x02000000;
+inline constexpr uint32_t FS_SUPPORTS_INTEGRITY_STREAMS   = 0x04000000;
+inline constexpr uint32_t FS_SUPPORTS_BLOCK_REFCOUNTING   = 0x08000000;
+inline constexpr uint32_t FS_SUPPORTS_COW_SNAPSHOTS       = 0x10000000;
+inline constexpr uint32_t FS_SUPPORTS_RAID_PARITY         = 0x20000000;
+
+struct FileSystemVolumeInfo {
+    wchar_t driveLetter{L'C'};
+    std::wstring volumeLabel{L"MICA_SYS"};
+    std::wstring fileSystemName{L"FAT32"};
+    std::wstring volumeGuid{L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\"};
+    std::wstring devicePath{L"\\Device\\Harddisk0\\Partition1"};
+    uint32_t serialNumber{0x1337B007};
+    uint32_t bytesPerSector{512};
+    uint32_t sectorsPerCluster{8};
+    uint64_t totalClusters{32768000};
+    uint64_t freeClusters{32760000};
+    uint32_t maxComponentLength{255};
+    uint32_t fileSystemAttributes{FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK};
+    bool isReadOnly{false};
+    bool isDirty{false};
+};
+
 class VirtualFileSystem {
 public:
     static VirtualFileSystem& get() {
@@ -347,6 +387,149 @@ public:
     [[nodiscard]] std::shared_ptr<zfs::ZfsFileSystem> getMountedZfs() const noexcept {
         return zfsFs_;
     }
+
+    NtStatus queryVolumeInfo(wchar_t driveLetter, FileSystemVolumeInfo& outInfo) const {
+        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
+        switch (d) {
+            case L'C':
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = L'C',
+                    .volumeLabel = L"MICA_SYS",
+                    .fileSystemName = L"FAT32",
+                    .volumeGuid = L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\",
+                    .devicePath = L"\\Device\\Harddisk0\\Partition1",
+                    .serialNumber = 0x1337B007,
+                    .bytesPerSector = 512,
+                    .sectorsPerCluster = 8,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32760000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case L'D':
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = L'D',
+                    .volumeLabel = L"MICA_NTFS",
+                    .fileSystemName = L"NTFS",
+                    .volumeGuid = L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\",
+                    .devicePath = L"\\Device\\Harddisk0\\Partition2",
+                    .serialNumber = 0x78E2A1C9,
+                    .bytesPerSector = 512,
+                    .sectorsPerCluster = 8,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32736000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_FILE_COMPRESSION | FS_SUPPORTS_SPARSE_FILES | FS_SUPPORTS_REPARSE_POINTS | FS_SUPPORTS_OBJECT_IDS | FS_SUPPORTS_ENCRYPTION | FS_SUPPORTS_TRANSACTIONS | FS_SUPPORTS_USN_JOURNAL,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case L'E':
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = L'E',
+                    .volumeLabel = L"MICA_EXFAT",
+                    .fileSystemName = L"exFAT",
+                    .volumeGuid = L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\",
+                    .devicePath = L"\\Device\\Harddisk0\\Partition3",
+                    .serialNumber = 0x6A129F04,
+                    .bytesPerSector = 512,
+                    .sectorsPerCluster = 8,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32767000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case L'F':
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = L'F',
+                    .volumeLabel = L"MICA_CDFS",
+                    .fileSystemName = L"CDFS",
+                    .volumeGuid = L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\",
+                    .devicePath = L"\\Device\\CdRom0",
+                    .serialNumber = 0xC0DE1509,
+                    .bytesPerSector = 2048,
+                    .sectorsPerCluster = 1,
+                    .totalClusters = 358400,
+                    .freeClusters = 0,
+                    .maxComponentLength = 110,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_READ_ONLY_VOLUME,
+                    .isReadOnly = true,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case L'G':
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = L'G',
+                    .volumeLabel = L"MICA_REFS",
+                    .fileSystemName = L"ReFS",
+                    .volumeGuid = L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\",
+                    .devicePath = L"\\Device\\Harddisk0\\Partition4",
+                    .serialNumber = 0x8E21F4A0,
+                    .bytesPerSector = 512,
+                    .sectorsPerCluster = 8,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32764000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_SUPPORTS_INTEGRITY_STREAMS | FS_SUPPORTS_BLOCK_REFCOUNTING,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case L'Z':
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = L'Z',
+                    .volumeLabel = L"MICA_ZFS",
+                    .fileSystemName = L"ZFS",
+                    .volumeGuid = L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\",
+                    .devicePath = L"\\Device\\ZfsPool_Storage",
+                    .serialNumber = 0x00BAB10C,
+                    .bytesPerSector = 4096,
+                    .sectorsPerCluster = 1,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32764000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_SUPPORTS_INTEGRITY_STREAMS | FS_SUPPORTS_COW_SNAPSHOTS | FS_SUPPORTS_RAID_PARITY,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            default:
+                return NtStatus::NoSuchDevice;
+        }
+    }
+
+    std::vector<FileSystemVolumeInfo> queryAllVolumes() const {
+        std::vector<FileSystemVolumeInfo> vols;
+        const wchar_t letters[] = { L'C', L'D', L'E', L'F', L'G', L'Z' };
+        for (wchar_t l : letters) {
+            FileSystemVolumeInfo vi;
+            if (NT_SUCCESS(queryVolumeInfo(l, vi))) {
+                vols.push_back(vi);
+            }
+        }
+        return vols;
+    }
+
+    NtStatus createVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
+        if (d == L'Z' && zfsFs_) {
+            return zfsFs_->createSnapshot(snapName);
+        }
+        return NtStatus::Success;
+    }
+
 
     NtStatus createOrOpenFile(
         std::wstring_view path,

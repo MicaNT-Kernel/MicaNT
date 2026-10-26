@@ -281,6 +281,7 @@ DRIVER_STUBS = [
     ("tools/drivers/cdfs_driver.cpp", "build/cdfs.sys", "cdfs.sys"),
     ("tools/drivers/udfs_driver.cpp", "build/udfs.sys", "udfs.sys"),
     ("tools/drivers/refs_driver.cpp", "build/refs.sys", "refs.sys"),
+    ("tools/drivers/zfs_driver.cpp", "build/zfs.sys", "zfs.sys"),
 ]
 
 NETWORK_FILES = [

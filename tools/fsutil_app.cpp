@@ -45,9 +45,30 @@ void FsInfoDrives() noexcept {
     PrintLine("E:\\");
     PrintLine("F:\\");
     PrintLine("G:\\");
+    PrintLine("Z:\\");
 }
 
 void FsInfoVolumeInfo(const char* drive) noexcept {
+    if (drive && (drive[0] == 'Z' || drive[0] == 'z')) {
+        Print("Volume Name : ");
+        PrintLine(drive);
+        PrintLine("Volume Serial Number : 0x00BAB10C");
+        PrintLine("Max Component Length : 255");
+        PrintLine("File System Name : ZFS");
+        PrintLine("Is Volume Dirty : No");
+        PrintLine("Total Sectors : 268,435,456 (128.00 GB)");
+        PrintLine("Bytes Per Sector : 512");
+        PrintLine("Sectors Per Allocation Unit : 8");
+        PrintLine("Bytes Per Cluster : 4,096");
+        PrintLine("Total Clusters : 32,768,000");
+        PrintLine("Free Clusters : 32,764,000");
+        PrintLine("Supports Case-Preserving Names : Yes");
+        PrintLine("Supports Unicode in Filenames : Yes");
+        PrintLine("Supports Copy-on-Write Snapshots : Yes");
+        PrintLine("Supports 256-bit Fletcher-4 Checksums : Yes");
+        PrintLine("Supports Storage Pools & RAID Parity : Yes");
+        return;
+    }
     if (drive && (drive[0] == 'G' || drive[0] == 'g')) {
         Print("Volume Name : ");
         PrintLine(drive);
@@ -99,6 +120,25 @@ void FsInfoVolumeInfo(const char* drive) noexcept {
         PrintLine("Free Clusters : 32,767,000");
         PrintLine("Supports Case-Preserving Names : Yes");
         PrintLine("Supports Unicode in Filenames : Yes");
+        return;
+    }
+    if (drive && (drive[0] == 'D' || drive[0] == 'd')) {
+        Print("Volume Name : ");
+        PrintLine(drive);
+        PrintLine("Volume Serial Number : 0x78E2A1C9");
+        PrintLine("Max Component Length : 255");
+        PrintLine("File System Name : NTFS");
+        PrintLine("Is Volume Dirty : No");
+        PrintLine("Total Sectors : 268,435,456 (128.00 GB)");
+        PrintLine("Bytes Per Sector : 512");
+        PrintLine("Sectors Per Allocation Unit : 8");
+        PrintLine("Bytes Per Cluster : 4,096");
+        PrintLine("Total Clusters : 32,768,000");
+        PrintLine("Free Clusters : 32,760,000");
+        PrintLine("Supports Case-Preserving Names : Yes");
+        PrintLine("Supports Unicode in Filenames : Yes");
+        PrintLine("Supports USN Journal : Yes");
+        PrintLine("Supports Alternate Data Streams : Yes");
         return;
     }
     Print("Volume Name : ");
@@ -171,6 +211,19 @@ void FsInfoRefsInfo(const char* /*drive*/) noexcept {
     PrintLine("Block Cloning Engine :            Available");
 }
 
+void FsInfoZfsInfo(const char* /*drive*/) noexcept {
+    PrintLine("TitanZFS Pool Name :              tank");
+    PrintLine("Pool GUID :                       0x00bab10c00bab10c");
+    PrintLine("SPA Version :                     5000");
+    PrintLine("Current TXG :                     42");
+    PrintLine("Uberblock Slots :                 128 (Slot 42 active)");
+    PrintLine("Checksum Algorithm :              256-bit Fletcher-4");
+    PrintLine("VDEV Topology :                   RAID-Z1 (3 Disks) / Mirror");
+    PrintLine("Allocate-on-Write (CoW) :         Active");
+    PrintLine("Hardware Snapshots :              Enabled");
+    PrintLine("Self-Healing Scrub Engine :       ONLINE");
+}
+
 } // namespace
 
 extern "C" void _start(const char* rawCmdLine = nullptr) {
@@ -202,6 +255,10 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
         }
         if (c2 && (StrCaseEqual(c2, "refsinfo") || StrCaseEqual(c2, "refs-info"))) {
             FsInfoRefsInfo(c3 ? c3 : "G:");
+            ExitProcess(0);
+        }
+        if (c2 && (StrCaseEqual(c2, "zfsinfo") || StrCaseEqual(c2, "zfs-info"))) {
+            FsInfoZfsInfo(c3 ? c3 : "Z:");
             ExitProcess(0);
         }
         FsInfoDrives();

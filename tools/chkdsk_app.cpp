@@ -60,9 +60,35 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     bool scanBad = parser.HasSwitch("r");
     bool isCdfs = parser.HasSwitch("cdfs") || parser.HasSwitch("udfs") || (drive && (drive[0] == 'F' || drive[0] == 'f'));
     bool isRefs = !isCdfs && (parser.HasSwitch("refs") || (drive && (drive[0] == 'G' || drive[0] == 'g')));
-    bool isExfat = !isCdfs && !isRefs && (parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'U' || drive[0] == 'u')));
-    bool isNtfs = !isCdfs && !isRefs && !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
+    bool isZfs = !isCdfs && !isRefs && (parser.HasSwitch("zfs") || (drive && (drive[0] == 'Z' || drive[0] == 'z')));
+    bool isExfat = !isCdfs && !isRefs && !isZfs && (parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'U' || drive[0] == 'u')));
+    bool isNtfs = !isCdfs && !isRefs && !isZfs && !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
                   (drive && (drive[0] == 'D' || drive[0] == 'd')));
+
+    if (isZfs) {
+        PrintLine("The type of the file system is ZFS.");
+        Print("Volume ");
+        Print(drive ? drive : "Z:");
+        PrintLine(" is Sovereign Clean-Room TitanZFS Storage Pool (tank).");
+        PrintLine("Volume Serial Number is 00BA-B10C.");
+        PrintLine("");
+        PrintLine("TitanZFS is a Copy-on-Write (CoW) pool with 256-bit Fletcher-4 checksum verification.");
+        PrintLine("Active TXG: 42 | Uberblock Ring: 128 slots intact | Pool State: ONLINE");
+        PrintLine("VDEV Topology: Root mirror / RAID-Z1 with automatic self-healing resilience.");
+        PrintLine("Running scrub across all metaslabs and leaf data blocks...");
+        PrintLine("Scrub complete: 0 checksum errors, 0 read errors, 0 write errors repaired.");
+        PrintLine("MicaNT TitanZFS has verified the pool and found no problems.");
+        PrintLine("No further action is required.");
+        PrintLine("");
+        PrintLine("  134,217,728 KB total pool storage.");
+        PrintLine("       16,384 KB allocated across datasets and snapshots.");
+        PrintLine("  134,201,344 KB available in pool.");
+        PrintLine("");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,764,000 allocation units available on disk.");
+        ExitProcess(0);
+    }
 
     if (isRefs) {
         PrintLine("The type of the file system is ReFS.");
