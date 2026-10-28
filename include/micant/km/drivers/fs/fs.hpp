@@ -23,6 +23,10 @@
 #include "micant/km/drivers/fs/cdfs.hpp"
 #include "micant/km/drivers/fs/refs.hpp"
 #include "micant/km/drivers/fs/zfs.hpp"
+#include "micant/km/drivers/fs/btrfs.hpp"
+#include "micant/km/drivers/fs/extfs.hpp"
+#include "micant/km/drivers/fs/xfs.hpp"
+#include "micant/km/drivers/fs/f2fs.hpp"
 
 namespace micant::fs {
 
@@ -170,7 +174,7 @@ struct FileSystemVolumeInfo {
 class VirtualFileSystem {
 public:
     struct PartitionResolution {
-        enum class VolumeType { Fat32, Ntfs, Exfat, Cdfs, Refs, Zfs };
+        enum class VolumeType { Fat32, Ntfs, Exfat, Cdfs, Refs, Zfs, Btrfs, Ext4, Xfs, F2fs };
         VolumeType type{VolumeType::Fat32};
         std::wstring relPath;
     };
@@ -204,7 +208,27 @@ public:
         std::wstring vLabel(volumeLabel);
         std::wstring guid(volumeGuid);
 
-        if (target.contains(L"Zfs") || target.contains(L"tank") || target.contains(L"0006")) {
+        if (target.contains(L"Btrfs") || target.contains(L"btrfs") || target.contains(L"0007")) {
+            vType = PartitionResolution::VolumeType::Btrfs;
+            if (vLabel.empty()) vLabel = L"MICA_BTRFS";
+            if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0007-0000-0000-000000000007}\\";
+            if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Btrfs0";
+        } else if (target.contains(L"Ext") || target.contains(L"ext") || target.contains(L"0008")) {
+            vType = PartitionResolution::VolumeType::Ext4;
+            if (vLabel.empty()) vLabel = L"MICA_EXT4";
+            if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0008-0000-0000-000000000008}\\";
+            if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\ExtFs0";
+        } else if (target.contains(L"Xfs") || target.contains(L"xfs") || target.contains(L"0009")) {
+            vType = PartitionResolution::VolumeType::Xfs;
+            if (vLabel.empty()) vLabel = L"MICA_XFS";
+            if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0009-0000-0000-000000000009}\\";
+            if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Xfs0";
+        } else if (target.contains(L"F2fs") || target.contains(L"f2fs") || target.contains(L"0010")) {
+            vType = PartitionResolution::VolumeType::F2fs;
+            if (vLabel.empty()) vLabel = L"MICA_F2FS";
+            if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\";
+            if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\F2fs0";
+        } else if (target.contains(L"Zfs") || target.contains(L"tank") || target.contains(L"0006")) {
             vType = PartitionResolution::VolumeType::Zfs;
             if (vLabel.empty()) vLabel = L"MICA_ZFS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\";
@@ -229,11 +253,64 @@ public:
             if (vLabel.empty()) vLabel = L"MICA_REFS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Harddisk0\\Partition4";
-        } else {
+        } else if (target.contains(L"Partition1") || target.contains(L"Fat") || target.contains(L"FAT") || target.contains(L"0001")) {
             vType = PartitionResolution::VolumeType::Fat32;
             if (vLabel.empty()) vLabel = L"MICA_SYS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Harddisk0\\Partition1";
+        } else {
+            // Target is unspecified or arbitrary, fall back to drive letter defaults
+            if (d == L'B') {
+                vType = PartitionResolution::VolumeType::Btrfs;
+                if (vLabel.empty()) vLabel = L"MICA_BTRFS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0007-0000-0000-000000000007}\\";
+                if (target.empty()) target = L"\\Device\\Btrfs0";
+            } else if (d == L'X') {
+                vType = PartitionResolution::VolumeType::Ext4;
+                if (vLabel.empty()) vLabel = L"MICA_EXT4";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0008-0000-0000-000000000008}\\";
+                if (target.empty()) target = L"\\Device\\ExtFs0";
+            } else if (d == L'S') {
+                vType = PartitionResolution::VolumeType::Xfs;
+                if (vLabel.empty()) vLabel = L"MICA_XFS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0009-0000-0000-000000000009}\\";
+                if (target.empty()) target = L"\\Device\\Xfs0";
+            } else if (d == L'Y') {
+                vType = PartitionResolution::VolumeType::F2fs;
+                if (vLabel.empty()) vLabel = L"MICA_F2FS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\";
+                if (target.empty()) target = L"\\Device\\F2fs0";
+            } else if (d == L'Z') {
+                vType = PartitionResolution::VolumeType::Zfs;
+                if (vLabel.empty()) vLabel = L"MICA_ZFS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\";
+                if (target.empty()) target = L"\\Device\\ZfsPool_Storage";
+            } else if (d == L'D') {
+                vType = PartitionResolution::VolumeType::Ntfs;
+                if (vLabel.empty()) vLabel = L"MICA_NTFS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\";
+                if (target.empty()) target = L"\\Device\\Harddisk0\\Partition2";
+            } else if (d == L'E') {
+                vType = PartitionResolution::VolumeType::Exfat;
+                if (vLabel.empty()) vLabel = L"MICA_EXFAT";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\";
+                if (target.empty()) target = L"\\Device\\Harddisk0\\Partition3";
+            } else if (d == L'F') {
+                vType = PartitionResolution::VolumeType::Cdfs;
+                if (vLabel.empty()) vLabel = L"MICA_CDFS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\";
+                if (target.empty()) target = L"\\Device\\CdRom0";
+            } else if (d == L'G') {
+                vType = PartitionResolution::VolumeType::Refs;
+                if (vLabel.empty()) vLabel = L"MICA_REFS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\";
+                if (target.empty()) target = L"\\Device\\Harddisk0\\Partition4";
+            } else {
+                vType = PartitionResolution::VolumeType::Fat32;
+                if (vLabel.empty()) vLabel = L"MICA_SYS";
+                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\";
+                if (target.empty()) target = L"\\Device\\Harddisk0\\Partition1";
+            }
         }
 
         driveMappings_[d] = DriveMapping{
@@ -530,6 +607,90 @@ public:
         return zfsFs_;
     }
 
+    NtStatus mountBtrfs(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        btrfsFs_ = std::make_shared<btrfs::BtrfsFileSystem>();
+        NtStatus st = btrfsFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            btrfsFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedBtrfs(std::shared_ptr<btrfs::BtrfsFileSystem> btrfs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        btrfsFs_ = btrfs;
+    }
+
+    [[nodiscard]] std::shared_ptr<btrfs::BtrfsFileSystem> getMountedBtrfs() const noexcept {
+        return btrfsFs_;
+    }
+
+    NtStatus mountExt4(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        extFs_ = std::make_shared<fs::ext::ExtFileSystem>();
+        NtStatus st = extFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            extFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedExt(std::shared_ptr<fs::ext::ExtFileSystem> ext) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        extFs_ = ext;
+    }
+
+    [[nodiscard]] std::shared_ptr<fs::ext::ExtFileSystem> getMountedExt() const noexcept {
+        return extFs_;
+    }
+
+    NtStatus mountXfs(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        xfsFs_ = std::make_shared<xfs::XfsFileSystem>();
+        NtStatus st = xfsFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            xfsFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedXfs(std::shared_ptr<xfs::XfsFileSystem> xfs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        xfsFs_ = xfs;
+    }
+
+    [[nodiscard]] std::shared_ptr<xfs::XfsFileSystem> getMountedXfs() const noexcept {
+        return xfsFs_;
+    }
+
+    NtStatus mountF2fs(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        f2fsFs_ = std::make_shared<f2fs::F2fsFileSystem>();
+        NtStatus st = f2fsFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            f2fsFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedF2fs(std::shared_ptr<f2fs::F2fsFileSystem> f2fs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        f2fsFs_ = f2fs;
+    }
+
+    [[nodiscard]] std::shared_ptr<f2fs::F2fsFileSystem> getMountedF2fs() const noexcept {
+        return f2fsFs_;
+    }
+
     NtStatus queryVolumeInfo(wchar_t driveLetter, FileSystemVolumeInfo& outInfo) const {
         std::lock_guard<std::mutex> lock(mutex_);
         wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
@@ -653,6 +814,82 @@ public:
                     .isDirty = false
                 };
                 return NtStatus::Success;
+
+            case PartitionResolution::VolumeType::Btrfs:
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = d,
+                    .volumeLabel = map.volumeLabel.empty() ? L"MICA_BTRFS" : map.volumeLabel,
+                    .fileSystemName = L"Btrfs",
+                    .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0007-0000-0000-000000000007}\\" : map.volumeGuid,
+                    .devicePath = map.targetDevice,
+                    .serialNumber = 0xB78F5C01,
+                    .bytesPerSector = 4096,
+                    .sectorsPerCluster = 1,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32764000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_SUPPORTS_INTEGRITY_STREAMS | FS_SUPPORTS_COW_SNAPSHOTS | FS_SUPPORTS_RAID_PARITY,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case PartitionResolution::VolumeType::Ext4:
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = d,
+                    .volumeLabel = map.volumeLabel.empty() ? L"MICA_EXT4" : map.volumeLabel,
+                    .fileSystemName = L"EXT4",
+                    .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0008-0000-0000-000000000008}\\" : map.volumeGuid,
+                    .devicePath = map.targetDevice,
+                    .serialNumber = 0xEF534800,
+                    .bytesPerSector = 4096,
+                    .sectorsPerCluster = 1,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32736000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_SUPPORTS_SPARSE_FILES,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case PartitionResolution::VolumeType::Xfs:
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = d,
+                    .volumeLabel = map.volumeLabel.empty() ? L"MICA_XFS" : map.volumeLabel,
+                    .fileSystemName = L"XFS",
+                    .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0009-0000-0000-000000000009}\\" : map.volumeGuid,
+                    .devicePath = map.targetDevice,
+                    .serialNumber = 0x58465342,
+                    .bytesPerSector = 4096,
+                    .sectorsPerCluster = 1,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32760000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_SUPPORTS_SPARSE_FILES | FS_SUPPORTS_INTEGRITY_STREAMS,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
+
+            case PartitionResolution::VolumeType::F2fs:
+                outInfo = FileSystemVolumeInfo{
+                    .driveLetter = d,
+                    .volumeLabel = map.volumeLabel.empty() ? L"MICA_F2FS" : map.volumeLabel,
+                    .fileSystemName = L"F2FS",
+                    .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\" : map.volumeGuid,
+                    .devicePath = map.targetDevice,
+                    .serialNumber = 0xF2F52026,
+                    .bytesPerSector = 4096,
+                    .sectorsPerCluster = 1,
+                    .totalClusters = 32768000,
+                    .freeClusters = 32762000,
+                    .maxComponentLength = 255,
+                    .fileSystemAttributes = FS_CASE_IS_PRESERVED | FS_UNICODE_STORED_ON_DISK | FS_PERSISTENT_ACLS | FS_SUPPORTS_SPARSE_FILES | FS_SUPPORTS_INTEGRITY_STREAMS,
+                    .isReadOnly = false,
+                    .isDirty = false
+                };
+                return NtStatus::Success;
         }
         return NtStatus::NoSuchDevice;
     }
@@ -676,6 +913,9 @@ public:
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
+            case PartitionResolution::VolumeType::Btrfs:
+                if (btrfsFs_) return btrfsFs_->createSnapshot(snapName);
+                break;
             case PartitionResolution::VolumeType::Zfs:
                 if (zfsFs_) return zfsFs_->createSnapshot(snapName);
                 break;
@@ -698,6 +938,9 @@ public:
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
+            case PartitionResolution::VolumeType::Btrfs:
+                if (btrfsFs_) return btrfsFs_->rollbackSnapshot(snapName);
+                break;
             case PartitionResolution::VolumeType::Zfs:
                 if (zfsFs_) return zfsFs_->rollbackSnapshot(snapName);
                 break;
@@ -720,6 +963,9 @@ public:
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
+            case PartitionResolution::VolumeType::Btrfs:
+                if (btrfsFs_) return btrfsFs_->listSnapshots();
+                break;
             case PartitionResolution::VolumeType::Zfs:
                 if (zfsFs_) return zfsFs_->listSnapshots();
                 break;
@@ -746,6 +992,9 @@ public:
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
+            case PartitionResolution::VolumeType::Btrfs:
+                if (btrfsFs_) return btrfsFs_->deleteSnapshot(snapName);
+                break;
             case PartitionResolution::VolumeType::Zfs:
                 return NtStatus::Success;
             case PartitionResolution::VolumeType::Refs:
@@ -936,6 +1185,102 @@ public:
                 return NtStatus::Success;
             }
 
+            case PartitionResolution::VolumeType::Btrfs: {
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t ino = 0;
+                NtStatus lookupSt = btrfsFs_->lookupPath(pr.relPath, ino);
+                if (!NT_SUCCESS(lookupSt)) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        NtStatus crSt = btrfsFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, ino);
+                        if (!NT_SUCCESS(crSt)) return crSt;
+                    } else {
+                        return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        btrfsFs_->truncateFile(ino, 0);
+                    }
+                }
+                outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+                openBtrfsFiles_[outFileObj.get()] = ino;
+                return NtStatus::Success;
+            }
+
+            case PartitionResolution::VolumeType::Ext4: {
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                uint32_t ino = 0;
+                NtStatus lookupSt = extFs_->lookupPath(pr.relPath, ino);
+                if (!NT_SUCCESS(lookupSt)) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        NtStatus crSt = extFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, ino);
+                        if (!NT_SUCCESS(crSt)) return crSt;
+                    } else {
+                        return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        extFs_->truncateFile(ino, 0);
+                    }
+                }
+                outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+                openExtFiles_[outFileObj.get()] = ino;
+                return NtStatus::Success;
+            }
+
+            case PartitionResolution::VolumeType::Xfs: {
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t ino = 0;
+                NtStatus lookupSt = xfsFs_->lookupPath(pr.relPath, ino);
+                if (!NT_SUCCESS(lookupSt)) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        NtStatus crSt = xfsFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, ino);
+                        if (!NT_SUCCESS(crSt)) return crSt;
+                    } else {
+                        return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        xfsFs_->truncateFile(ino, 0);
+                    }
+                }
+                outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+                openXfsFiles_[outFileObj.get()] = ino;
+                return NtStatus::Success;
+            }
+
+            case PartitionResolution::VolumeType::F2fs: {
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t ino = 0;
+                NtStatus lookupSt = f2fsFs_->lookupPath(pr.relPath, ino);
+                if (!NT_SUCCESS(lookupSt)) {
+                    if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        NtStatus crSt = f2fsFs_->createFile(pr.relPath, FILE_ATTRIBUTE_NORMAL, ino);
+                        if (!NT_SUCCESS(crSt)) return crSt;
+                    } else {
+                        return NtStatus::NoSuchFile;
+                    }
+                } else {
+                    if (disposition == FILE_CREATE) {
+                        return NtStatus::ObjectNameCollision;
+                    }
+                    if (disposition == FILE_OVERWRITE || disposition == FILE_OVERWRITE_IF || disposition == FILE_SUPERSEDE) {
+                        f2fsFs_->truncateFile(ino, 0);
+                    }
+                }
+                outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+                openF2fsFiles_[outFileObj.get()] = ino;
+                return NtStatus::Success;
+            }
+
             case PartitionResolution::VolumeType::Fat32:
             default:
                 break;
@@ -1079,6 +1424,58 @@ public:
             return st;
         }
 
+        auto itBtrfs = openBtrfsFiles_.find(fileObj);
+        if (itBtrfs != openBtrfsFiles_.end() && btrfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t bBytes = 0;
+            NtStatus st = btrfsFs_->readFile(itBtrfs->second, buffer, length, static_cast<uint64_t>(offset), bBytes);
+            bytesRead = static_cast<uint32_t>(bBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
+        auto itExt = openExtFiles_.find(fileObj);
+        if (itExt != openExtFiles_.end() && extFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t eBytes = 0;
+            NtStatus st = extFs_->readFile(itExt->second, buffer, length, static_cast<uint64_t>(offset), eBytes);
+            bytesRead = static_cast<uint32_t>(eBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
+        auto itXfs = openXfsFiles_.find(fileObj);
+        if (itXfs != openXfsFiles_.end() && xfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t xBytes = 0;
+            NtStatus st = xfsFs_->readFile(itXfs->second, buffer, length, static_cast<uint64_t>(offset), xBytes);
+            bytesRead = static_cast<uint32_t>(xBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
+        auto itF2fs = openF2fsFiles_.find(fileObj);
+        if (itF2fs != openF2fsFiles_.end() && f2fsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t fBytes = 0;
+            NtStatus st = f2fsFs_->readFile(itF2fs->second, buffer, length, static_cast<uint64_t>(offset), fBytes);
+            bytesRead = static_cast<uint32_t>(fBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp readIrp{};
@@ -1202,6 +1599,58 @@ public:
             return st;
         }
 
+        auto itBtrfs = openBtrfsFiles_.find(fileObj);
+        if (itBtrfs != openBtrfsFiles_.end() && btrfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t bBytes = 0;
+            NtStatus st = btrfsFs_->writeFile(itBtrfs->second, buffer, length, static_cast<uint64_t>(offset), bBytes);
+            bytesWritten = static_cast<uint32_t>(bBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
+        auto itExt = openExtFiles_.find(fileObj);
+        if (itExt != openExtFiles_.end() && extFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t eBytes = 0;
+            NtStatus st = extFs_->writeFile(itExt->second, buffer, length, static_cast<uint64_t>(offset), eBytes);
+            bytesWritten = static_cast<uint32_t>(eBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
+        auto itXfs = openXfsFiles_.find(fileObj);
+        if (itXfs != openXfsFiles_.end() && xfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t xBytes = 0;
+            NtStatus st = xfsFs_->writeFile(itXfs->second, buffer, length, static_cast<uint64_t>(offset), xBytes);
+            bytesWritten = static_cast<uint32_t>(xBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
+        auto itF2fs = openF2fsFiles_.find(fileObj);
+        if (itF2fs != openF2fsFiles_.end() && f2fsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t fBytes = 0;
+            NtStatus st = f2fsFs_->writeFile(itF2fs->second, buffer, length, static_cast<uint64_t>(offset), fBytes);
+            bytesWritten = static_cast<uint32_t>(fBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp writeIrp{};
@@ -1267,6 +1716,10 @@ public:
         openCdfsFiles_.erase(fileObj);
         openRefsFiles_.erase(fileObj);
         openZfsFiles_.erase(fileObj);
+        openBtrfsFiles_.erase(fileObj);
+        openExtFiles_.erase(fileObj);
+        openXfsFiles_.erase(fileObj);
+        openF2fsFiles_.erase(fileObj);
         openFiles_.erase(fileObj);
     }
 
@@ -1331,7 +1784,35 @@ public:
         else if (s.starts_with(L"\\??\\")) s = s.substr(4);
 
         PartitionResolution pr;
-        if (s.starts_with(L"\\Device\\ZfsPool_Storage\\") || s.starts_with(L"\\Device\\Zfs0\\")) {
+        if (s.starts_with(L"\\Device\\Btrfs0\\") || s.starts_with(L"\\Device\\Harddisk0\\PartitionBtrfs\\") || s.starts_with(L"\\Device\\Btrfs\\")) {
+            pr.type = PartitionResolution::VolumeType::Btrfs;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\Btrfs0" || s == L"\\Device\\Harddisk0\\PartitionBtrfs" || s == L"\\Device\\Btrfs") {
+            pr.type = PartitionResolution::VolumeType::Btrfs;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\ExtFs0\\") || s.starts_with(L"\\Device\\Harddisk0\\PartitionExt4\\") || s.starts_with(L"\\Device\\ExtFs\\")) {
+            pr.type = PartitionResolution::VolumeType::Ext4;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\ExtFs0" || s == L"\\Device\\Harddisk0\\PartitionExt4" || s == L"\\Device\\ExtFs") {
+            pr.type = PartitionResolution::VolumeType::Ext4;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\Xfs0\\") || s.starts_with(L"\\Device\\Harddisk0\\PartitionXfs\\") || s.starts_with(L"\\Device\\Xfs\\")) {
+            pr.type = PartitionResolution::VolumeType::Xfs;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\Xfs0" || s == L"\\Device\\Harddisk0\\PartitionXfs" || s == L"\\Device\\Xfs") {
+            pr.type = PartitionResolution::VolumeType::Xfs;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\F2fs0\\") || s.starts_with(L"\\Device\\Harddisk0\\PartitionF2fs\\") || s.starts_with(L"\\Device\\F2fs\\")) {
+            pr.type = PartitionResolution::VolumeType::F2fs;
+            size_t devEnd = s.find(L'\\', 8);
+            pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
+        } else if (s == L"\\Device\\F2fs0" || s == L"\\Device\\Harddisk0\\PartitionF2fs" || s == L"\\Device\\F2fs") {
+            pr.type = PartitionResolution::VolumeType::F2fs;
+            pr.relPath = L"";
+        } else if (s.starts_with(L"\\Device\\ZfsPool_Storage\\") || s.starts_with(L"\\Device\\Zfs0\\")) {
             pr.type = PartitionResolution::VolumeType::Zfs;
             size_t devEnd = s.find(L'\\', 8);
             pr.relPath = (devEnd != std::wstring::npos) ? s.substr(devEnd + 1) : L"";
@@ -1378,6 +1859,10 @@ public:
                 if (sym) {
                     const auto& tgt = sym->getTargetPath();
                     if (tgt.contains(L"Zfs") || tgt.contains(L"tank")) pr.type = PartitionResolution::VolumeType::Zfs;
+                    else if (tgt.contains(L"Btrfs") || tgt.contains(L"btrfs")) pr.type = PartitionResolution::VolumeType::Btrfs;
+                    else if (tgt.contains(L"Ext") || tgt.contains(L"ext")) pr.type = PartitionResolution::VolumeType::Ext4;
+                    else if (tgt.contains(L"Xfs") || tgt.contains(L"xfs")) pr.type = PartitionResolution::VolumeType::Xfs;
+                    else if (tgt.contains(L"F2fs") || tgt.contains(L"f2fs")) pr.type = PartitionResolution::VolumeType::F2fs;
                     else if (tgt.contains(L"Partition2") || tgt.contains(L"Ntfs")) pr.type = PartitionResolution::VolumeType::Ntfs;
                     else if (tgt.contains(L"Partition3") || tgt.contains(L"ExFat")) pr.type = PartitionResolution::VolumeType::Exfat;
                     else if (tgt.contains(L"CdRom") || tgt.contains(L"Cdfs")) pr.type = PartitionResolution::VolumeType::Cdfs;
@@ -1422,6 +1907,26 @@ public:
             case PartitionResolution::VolumeType::Zfs:
                 if (!zfsFs_) return NtStatus::VolumeNotMounted;
                 return zfsFs_->createFile(pr.relPath, 0x10, true);
+            case PartitionResolution::VolumeType::Btrfs: {
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t ino = 0;
+                return btrfsFs_->createFile(pr.relPath, 0x10, ino);
+            }
+            case PartitionResolution::VolumeType::Ext4: {
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                uint32_t ino = 0;
+                return extFs_->createFile(pr.relPath, 0x10, ino);
+            }
+            case PartitionResolution::VolumeType::Xfs: {
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t ino = 0;
+                return xfsFs_->createFile(pr.relPath, 0x10, ino);
+            }
+            case PartitionResolution::VolumeType::F2fs: {
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                uint64_t ino = 0;
+                return f2fsFs_->createFile(pr.relPath, 0x10, ino);
+            }
             case PartitionResolution::VolumeType::Ntfs: {
                 if (!ntfsFs_) return NtStatus::VolumeNotMounted;
                 uint64_t rec = 0;
@@ -1456,6 +1961,18 @@ public:
             case PartitionResolution::VolumeType::Zfs:
                 if (!zfsFs_) return NtStatus::VolumeNotMounted;
                 return zfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Btrfs:
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                return btrfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Ext4:
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                return extFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Xfs:
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                return xfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::F2fs:
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                return f2fsFs_->deleteFile(pr.relPath);
             case PartitionResolution::VolumeType::Ntfs:
                 if (!ntfsFs_) return NtStatus::VolumeNotMounted;
                 return ntfsFs_->deleteFile(pr.relPath);
@@ -1494,6 +2011,18 @@ public:
             case PartitionResolution::VolumeType::Zfs:
                 if (!zfsFs_) return NtStatus::VolumeNotMounted;
                 return zfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Btrfs:
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                return btrfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Ext4:
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                return extFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Xfs:
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                return xfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::F2fs:
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                return f2fsFs_->deleteFile(pr.relPath);
             case PartitionResolution::VolumeType::Ntfs:
                 if (!ntfsFs_) return NtStatus::VolumeNotMounted;
                 return ntfsFs_->deleteFile(pr.relPath);
@@ -1533,6 +2062,18 @@ public:
             case PartitionResolution::VolumeType::Zfs:
                 if (!zfsFs_) return NtStatus::VolumeNotMounted;
                 return zfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Btrfs:
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                return btrfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Ext4:
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                return extFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::Xfs:
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                return xfsFs_->deleteFile(pr.relPath);
+            case PartitionResolution::VolumeType::F2fs:
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                return f2fsFs_->deleteFile(pr.relPath);
             case PartitionResolution::VolumeType::Ntfs:
                 if (!ntfsFs_) return NtStatus::VolumeNotMounted;
                 return ntfsFs_->deleteFile(pr.relPath);
@@ -1575,6 +2116,58 @@ public:
                 zfs::ZfsFileRecord zRec{};
                 if (zfsFs_->lookupPath(pr.relPath, zRec)) {
                     attributes = zRec.attributes;
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Btrfs: {
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint64_t ino = 0;
+                if (NT_SUCCESS(btrfsFs_->lookupPath(pr.relPath, ino))) {
+                    attributes = 0x80;
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Ext4: {
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint32_t ino = 0;
+                if (NT_SUCCESS(extFs_->lookupPath(pr.relPath, ino))) {
+                    attributes = 0x80;
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::Xfs: {
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint64_t ino = 0;
+                if (NT_SUCCESS(xfsFs_->lookupPath(pr.relPath, ino))) {
+                    attributes = 0x80;
+                    return NtStatus::Success;
+                }
+                return NtStatus::NoSuchFile;
+            }
+            case PartitionResolution::VolumeType::F2fs: {
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                if (pr.relPath.empty()) {
+                    attributes = 0x10;
+                    return NtStatus::Success;
+                }
+                uint64_t ino = 0;
+                if (NT_SUCCESS(f2fsFs_->lookupPath(pr.relPath, ino))) {
+                    attributes = 0x80;
                     return NtStatus::Success;
                 }
                 return NtStatus::NoSuchFile;
@@ -1682,6 +2275,138 @@ public:
                         std::wstring prefix = pr.relPath + L"\\";
                         if (f.name.starts_with(prefix)) {
                             std::wstring sub = f.name.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = f.attributes,
+                                    .size = f.size,
+                                    .isDirectory = f.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Btrfs: {
+                if (!btrfsFs_) return NtStatus::VolumeNotMounted;
+                auto files = btrfsFs_->getAllFiles();
+                for (const auto& f : files) {
+                    if (f.fileName == L"\\") continue;
+                    std::wstring fname = f.fileName;
+                    while (fname.starts_with(L"\\")) fname = fname.substr(1);
+                    if (pr.relPath.empty()) {
+                        if (fname.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = fname,
+                                .attributes = f.attributes,
+                                .size = f.size,
+                                .isDirectory = f.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (fname.starts_with(prefix)) {
+                            std::wstring sub = fname.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = f.attributes,
+                                    .size = f.size,
+                                    .isDirectory = f.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Ext4: {
+                if (!extFs_) return NtStatus::VolumeNotMounted;
+                auto files = extFs_->getAllFiles();
+                for (const auto& f : files) {
+                    if (f.fileName == L"\\") continue;
+                    std::wstring fname = f.fileName;
+                    while (fname.starts_with(L"\\")) fname = fname.substr(1);
+                    if (pr.relPath.empty()) {
+                        if (fname.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = fname,
+                                .attributes = f.attributes,
+                                .size = f.size,
+                                .isDirectory = f.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (fname.starts_with(prefix)) {
+                            std::wstring sub = fname.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = f.attributes,
+                                    .size = f.size,
+                                    .isDirectory = f.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::Xfs: {
+                if (!xfsFs_) return NtStatus::VolumeNotMounted;
+                auto files = xfsFs_->getAllFiles();
+                for (const auto& f : files) {
+                    if (f.fileName == L"\\") continue;
+                    std::wstring fname = f.fileName;
+                    while (fname.starts_with(L"\\")) fname = fname.substr(1);
+                    if (pr.relPath.empty()) {
+                        if (fname.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = fname,
+                                .attributes = f.attributes,
+                                .size = f.size,
+                                .isDirectory = f.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (fname.starts_with(prefix)) {
+                            std::wstring sub = fname.substr(prefix.size());
+                            if (sub.find(L'\\') == std::wstring::npos) {
+                                entries.push_back(DirectoryEntry{
+                                    .name = sub,
+                                    .attributes = f.attributes,
+                                    .size = f.size,
+                                    .isDirectory = f.isDirectory
+                                });
+                            }
+                        }
+                    }
+                }
+                return NtStatus::Success;
+            }
+            case PartitionResolution::VolumeType::F2fs: {
+                if (!f2fsFs_) return NtStatus::VolumeNotMounted;
+                auto files = f2fsFs_->getAllFiles();
+                for (const auto& f : files) {
+                    if (f.fileName == L"\\") continue;
+                    std::wstring fname = f.fileName;
+                    while (fname.starts_with(L"\\")) fname = fname.substr(1);
+                    if (pr.relPath.empty()) {
+                        if (fname.find(L'\\') == std::wstring::npos) {
+                            entries.push_back(DirectoryEntry{
+                                .name = fname,
+                                .attributes = f.attributes,
+                                .size = f.size,
+                                .isDirectory = f.isDirectory
+                            });
+                        }
+                    } else {
+                        std::wstring prefix = pr.relPath + L"\\";
+                        if (fname.starts_with(prefix)) {
+                            std::wstring sub = fname.substr(prefix.size());
                             if (sub.find(L'\\') == std::wstring::npos) {
                                 entries.push_back(DirectoryEntry{
                                     .name = sub,
@@ -1977,6 +2702,14 @@ private:
     std::unordered_map<FileObject*, uint64_t> openRefsFiles_;
     std::shared_ptr<zfs::ZfsFileSystem> zfsFs_;
     std::unordered_map<FileObject*, std::wstring> openZfsFiles_;
+    std::shared_ptr<btrfs::BtrfsFileSystem> btrfsFs_;
+    std::unordered_map<FileObject*, uint64_t> openBtrfsFiles_;
+    std::shared_ptr<fs::ext::ExtFileSystem> extFs_;
+    std::unordered_map<FileObject*, uint32_t> openExtFiles_;
+    std::shared_ptr<xfs::XfsFileSystem> xfsFs_;
+    std::unordered_map<FileObject*, uint64_t> openXfsFiles_;
+    std::shared_ptr<f2fs::F2fsFileSystem> f2fsFs_;
+    std::unordered_map<FileObject*, uint64_t> openF2fsFiles_;
     io::FastIoDispatch fastIoTable_{};
     std::unique_ptr<io::Vpb> vpb_;
 };

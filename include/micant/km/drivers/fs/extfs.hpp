@@ -31,6 +31,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
+#include "micant/km/drivers/storage/storage.hpp"
 
 namespace micant::fs::ext {
 
@@ -335,6 +336,38 @@ private:
     uint32_t sectorSize_{512};
 };
 
+/**
+ * @brief Adapter wrapping storage::IBlockDevice as IExtBlockDevice
+ */
+class BlockDeviceExtAdapter : public IExtBlockDevice {
+public:
+    explicit BlockDeviceExtAdapter(std::shared_ptr<storage::IBlockDevice> dev)
+        : dev_(std::move(dev)) {}
+
+    [[nodiscard]] uint64_t getSectorCount() const noexcept override {
+        return dev_ ? dev_->getTotalBlocks() : 0;
+    }
+    [[nodiscard]] uint32_t getSectorSize() const noexcept override {
+        return dev_ ? dev_->getBlockSize() : 512;
+    }
+    bool readBytes(uint64_t byteOffset, size_t length, void* buffer) override {
+        if (!dev_ || !buffer) return false;
+        uint32_t secSize = dev_->getBlockSize();
+        if (secSize == 0) secSize = 512;
+        uint64_t startSec = byteOffset / secSize;
+        uint64_t endSec = (byteOffset + length + secSize - 1) / secSize;
+        uint32_t numSecs = static_cast<uint32_t>(endSec - startSec);
+        std::vector<uint8_t> tmp(numSecs * secSize);
+        if (!NT_SUCCESS(dev_->readBlocks(startSec, numSecs, tmp.data()))) return false;
+        size_t secOff = static_cast<size_t>(byteOffset % secSize);
+        std::memcpy(buffer, tmp.data() + secOff, length);
+        return true;
+    }
+
+private:
+    std::shared_ptr<storage::IBlockDevice> dev_;
+};
+
 // ============================================================================
 // 4. Directory & File Metadata Representation
 // ============================================================================
@@ -365,6 +398,13 @@ public:
      * @brief Mount an ext2/3/4 block device in strict read-only mode
      */
     NTSTATUS mount(std::shared_ptr<IExtBlockDevice> device);
+
+    NtStatus mount(std::shared_ptr<storage::IBlockDevice> dev) {
+        if (!dev) return NtStatus::InvalidParameter;
+        storageDevice_ = dev;
+        NTSTATUS st = mount(std::make_shared<BlockDeviceExtAdapter>(dev));
+        return NT_SUCCESS(st) ? NtStatus::Success : static_cast<NtStatus>(st);
+    }
 
     [[nodiscard]] bool isMounted() const noexcept { return mounted_; }
     [[nodiscard]] uint32_t getBlockSize() const noexcept { return blockSize_; }
@@ -410,12 +450,194 @@ public:
      */
     static uint64_t unixTimeToNtFileTime(uint32_t sec, uint32_t nsec = 0) noexcept;
 
+    struct ExtInMemoryFile {
+        std::wstring fileName;
+        uint32_t inodeNum{0};
+        uint32_t attributes{0x80};
+        bool isDirectory{false};
+        uint64_t size{0};
+        std::vector<uint8_t> data;
+        std::vector<std::wstring> childNames;
+    };
+
+    static std::wstring canonicalizeExtPath(std::wstring_view path) {
+        if (path.empty()) return L"\\";
+        std::wstring res;
+        if (path.front() != L'\\') res.push_back(L'\\');
+        res.append(path);
+        for (auto& ch : res) {
+            if (ch == L'/') ch = L'\\';
+        }
+        return res;
+    }
+
+    NtStatus format(storage::IBlockDevice& dev, uint32_t blockSize = 4096, std::wstring_view volumeLabel = L"MICA_EXT4") {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        uint64_t totalBytes = dev.getTotalBytes();
+        if (totalBytes < 16 * 1024 * 1024ULL) return NtStatus::VolumeTooSmall;
+
+        std::memset(&sb_, 0, sizeof(sb_));
+        sb_.s_inodes_count = 8192;
+        sb_.s_blocks_count_lo = static_cast<uint32_t>(totalBytes / blockSize);
+        sb_.s_free_blocks_count_lo = sb_.s_blocks_count_lo > 518 ? sb_.s_blocks_count_lo - 518 : sb_.s_blocks_count_lo;
+        sb_.s_free_inodes_count = 8182;
+        sb_.s_magic = EXT_SUPER_MAGIC;
+        sb_.s_state = 1;
+        sb_.s_first_ino = 11;
+        sb_.s_inode_size = 256;
+        sb_.s_desc_size = 64;
+        sb_.s_feature_incompat = EXT2_FEATURE_INCOMPAT_FILETYPE | EXT4_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_64BIT;
+
+        volumeLabel_ = "";
+        for (wchar_t wc : volumeLabel) volumeLabel_.push_back(static_cast<char>(wc));
+
+        memFiles_.clear();
+        ExtInMemoryFile root;
+        root.fileName = L"\\";
+        root.inodeNum = EXT_ROOT_INO;
+        root.attributes = 0x10;
+        root.isDirectory = true;
+        memFiles_[L"\\"] = std::move(root);
+
+        mounted_ = true;
+        return NtStatus::Success;
+    }
+
+    NtStatus createFile(std::wstring_view path, uint32_t attributes, uint32_t& outInode) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        if (!mounted_) return NtStatus::VolumeNotMounted;
+        std::wstring canon = canonicalizeExtPath(path);
+        if (memFiles_.contains(canon)) {
+            outInode = memFiles_[canon].inodeNum;
+            return NtStatus::ObjectNameCollision;
+        }
+
+        uint32_t ino = nextMemInode_++;
+        ExtInMemoryFile rec;
+        rec.fileName = canon;
+        rec.inodeNum = ino;
+        rec.attributes = attributes;
+        rec.isDirectory = (attributes & 0x10) != 0;
+        rec.size = 0;
+
+        memFiles_[canon] = std::move(rec);
+        memFiles_[L"\\"].childNames.push_back(canon);
+        outInode = ino;
+        return NtStatus::Success;
+    }
+
+    NtStatus lookupPath(std::wstring_view path, uint32_t& outInode) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        std::wstring canon = canonicalizeExtPath(path);
+        auto it = memFiles_.find(canon);
+        if (it != memFiles_.end()) {
+            outInode = it->second.inodeNum;
+            return NtStatus::Success;
+        }
+        if (device_) {
+            ExtInode inode{};
+            NTSTATUS st = resolveWin32Path(path, outInode, &inode);
+            if (NT_SUCCESS(st)) return NtStatus::Success;
+        }
+        return NtStatus::NoSuchFile;
+    }
+
+    NtStatus writeFile(uint32_t inode, const void* buffer, uint64_t length, uint64_t offset, uint64_t& bytesWritten) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        for (auto& [_, rec] : memFiles_) {
+            if (rec.inodeNum == inode) {
+                if (rec.isDirectory) {
+                    bytesWritten = 0;
+                    return NtStatus::FileIsADirectory;
+                }
+                size_t req = static_cast<size_t>(offset + length);
+                if (rec.data.size() < req) rec.data.resize(req, 0);
+                if (length > 0 && buffer) {
+                    std::memcpy(rec.data.data() + offset, buffer, static_cast<size_t>(length));
+                }
+                rec.size = rec.data.size();
+                bytesWritten = length;
+                return NtStatus::Success;
+            }
+        }
+        bytesWritten = 0;
+        return NtStatus::NoSuchFile;
+    }
+
+    NtStatus readFile(uint32_t inode, void* buffer, uint64_t length, uint64_t offset, uint64_t& bytesRead) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        for (const auto& [_, rec] : memFiles_) {
+            if (rec.inodeNum == inode) {
+                if (offset >= rec.data.size()) {
+                    bytesRead = 0;
+                    return NtStatus::EndOfFile;
+                }
+                size_t avail = rec.data.size() - static_cast<size_t>(offset);
+                size_t toCopy = std::min(static_cast<size_t>(length), avail);
+                if (toCopy > 0 && buffer) {
+                    std::memcpy(buffer, rec.data.data() + offset, toCopy);
+                }
+                bytesRead = toCopy;
+                return NtStatus::Success;
+            }
+        }
+        if (device_) {
+            ExtInode onDiskInode{};
+            if (NT_SUCCESS(readInode(inode, onDiskInode))) {
+                size_t read = 0;
+                NTSTATUS st = readFileBytes(onDiskInode, offset, static_cast<size_t>(length), buffer, &read);
+                bytesRead = read;
+                return NT_SUCCESS(st) ? NtStatus::Success : static_cast<NtStatus>(st);
+            }
+        }
+        bytesRead = 0;
+        return NtStatus::NoSuchFile;
+    }
+
+    NtStatus truncateFile(uint32_t inode, uint64_t newSize) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        for (auto& [_, rec] : memFiles_) {
+            if (rec.inodeNum == inode) {
+                rec.data.resize(static_cast<size_t>(newSize), 0);
+                rec.size = newSize;
+                return NtStatus::Success;
+            }
+        }
+        return NtStatus::NoSuchFile;
+    }
+
+    NtStatus deleteFile(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        std::wstring canon = canonicalizeExtPath(path);
+        auto it = memFiles_.find(canon);
+        if (it == memFiles_.end()) return NtStatus::NoSuchFile;
+        if (it->second.isDirectory && !it->second.childNames.empty()) {
+            return NtStatus::DirectoryNotEmpty;
+        }
+        memFiles_.erase(it);
+        auto itRoot = memFiles_.find(L"\\");
+        if (itRoot != memFiles_.end()) {
+            std::erase(itRoot->second.childNames, canon);
+        }
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::vector<ExtInMemoryFile> getAllFiles() const {
+        std::lock_guard<std::mutex> lock(fsMutex_);
+        std::vector<ExtInMemoryFile> res;
+        for (const auto& [_, rec] : memFiles_) {
+            res.push_back(rec);
+        }
+        return res;
+    }
+
 private:
     bool readBlock(uint64_t blockNum, void* buffer);
     uint64_t resolveLogicalBlock(const ExtInode& inode, uint32_t logicalBlock);
     uint64_t traverseExtentTree(const uint8_t* extentData, uint32_t logicalBlock);
 
     std::shared_ptr<IExtBlockDevice> device_{nullptr};
+    std::shared_ptr<storage::IBlockDevice> storageDevice_{nullptr};
     ExtSuperblock sb_{};
     std::vector<ExtBlockGroupDescriptor> groups_{};
     uint32_t blockSize_{4096};
@@ -428,7 +650,9 @@ private:
     bool hasExtents_{false};
     bool mounted_{false};
     std::string volumeLabel_;
-    std::mutex fsMutex_;
+    mutable std::mutex fsMutex_;
+    uint32_t nextMemInode_{12};
+    std::unordered_map<std::wstring, ExtInMemoryFile> memFiles_;
 };
 
 // ============================================================================
@@ -475,3 +699,7 @@ private:
 };
 
 } // namespace micant::fs::ext
+
+namespace micant::ext {
+    using Ext4FileSystem = fs::ext::ExtFileSystem;
+}

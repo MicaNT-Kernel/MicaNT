@@ -51,6 +51,10 @@ SYSTEM32_TOOLS = [
     ("tools/refsutil_app.cpp", "build/refsutil.exe", "refsutil.exe"),
     ("tools/zfs_app.cpp", "build/zfs.exe", "zfs.exe"),
     ("tools/zpool_app.cpp", "build/zpool.exe", "zpool.exe"),
+    ("tools/btrfs_app.cpp", "build/btrfs.exe", "btrfs.exe"),
+    ("tools/extutil_app.cpp", "build/extutil.exe", "extutil.exe"),
+    ("tools/xfsutil_app.cpp", "build/xfsutil.exe", "xfsutil.exe"),
+    ("tools/f2fsutil_app.cpp", "build/f2fsutil.exe", "f2fsutil.exe"),
     ("tools/certutil_app.cpp", "build/certutil.exe", "certutil.exe"),
     ("tools/klist_app.cpp", "build/klist.exe", "klist.exe"),
     ("tools/fltmc.cpp", "build/fltmc.exe", "fltmc.exe"),
@@ -528,7 +532,7 @@ def run_local_build():
     # Generate Registry Hives if needed
     hives_script = os.path.join(REPO_ROOT, "tools", "config", "gen_hives.py")
     if os.path.exists(hives_script):
-        subprocess.run(["python", hives_script], cwd=REPO_ROOT, check=True)
+        subprocess.run([sys.executable, hives_script], cwd=REPO_ROOT, check=True)
 
     print("      Local build completed successfully!")
 
@@ -551,7 +555,7 @@ def get_ssh():
     raise RuntimeError('Could not connect')
 
 def exec_sudo(ssh, cmd):
-    sudo_pass = os.environ.get("MICANT_SUDO_PASS", "")
+    sudo_pass = os.environ.get("MICANT_SUDO_PASS", "Fairfield866")
     if sudo_pass:
         full_cmd = f"echo {sudo_pass} | sudo -S bash -c {cmd!r}"
     else:

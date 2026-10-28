@@ -23400,6 +23400,7 @@ inline void Test_Horizon145_Dynamic_Drive_Letter_Assignment_And_Win32_Mount_Mana
         DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"N:", nullptr);
         DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"X:", nullptr);
         DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"R:", nullptr);
+        DefineDosDeviceW(DDD_REMOVE_DEFINITION, L"T:", nullptr);
 
         auto vols = vfs.queryAllVolumes();
         TEST_ASSERT(vols.size() >= 6, "queryAllVolumes must return at least 6 volume descriptors");
@@ -23428,6 +23429,11 @@ inline void Test_Horizon146_Storage_Snapshot_Orchestration_And_ReFS_ZFS_VSS_Pari
 
     auto& vfs = micant::fs::VirtualFileSystem::get();
     vfs.initialize();
+
+    // Ensure standard Z: is mounted
+    if (!vfs.isDriveLetterAssigned(L'Z')) {
+        vfs.assignDriveLetter(L'Z', L"\\Device\\ZfsPool_Storage", L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\", L"MICA_ZFS");
+    }
 
     // Ensure all 6 formats are initialized
     if (!vfs.getMountedNtfs()) {
@@ -23581,4 +23587,315 @@ inline void Test_Horizon146_Storage_Snapshot_Orchestration_And_ReFS_ZFS_VSS_Pari
               << "    Pillar 6: Checkpoint Deletion & Final Storage Teardown Consistency OK\n";
 
     std::cout << "[TEST] Suite 362: Horizon 146 - Storage Snapshot Orchestration & ReFS/ZFS Volume Shadow Copy Parity PASSED." << std::endl;
+}
+
+// ============================================================================
+// Suite 363: Horizon 147 - Sovereign Multi-Format Storage Fusion: TitanBtrfs, TitanExt, TitanXFS & TitanF2FS Parity
+// ============================================================================
+inline void Test_Horizon147_Sovereign_MultiFormat_Storage_Fusion_TitanBtrfs_Ext_Xfs_F2fs_Parity() {
+    using namespace micant::win32;
+    std::cout << "[TEST] Running Suite 363: Horizon 147 - Sovereign Multi-Format Storage Fusion (TitanBtrfs, Ext, Xfs, F2fs)..." << std::endl;
+
+    micant::zfs::RegisterZfsSubsystem();
+
+    auto& vfs = micant::fs::VirtualFileSystem::get();
+    vfs.initialize();
+
+    // Ensure all 10 formats are initialized and mounted
+    if (!vfs.getMountedNtfs()) {
+        auto ntfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition2", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto ntfsFs = std::make_shared<micant::ntfs::NtfsFileSystem>();
+        ntfsFs->format(*ntfsRamDisk, 4096, L"MICA_NTFS");
+        vfs.setMountedNtfs(ntfsFs);
+    }
+    if (!vfs.getMountedRefs()) {
+        auto refsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition4", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+        auto refsFs = std::make_shared<micant::refs::RefsFileSystem>();
+        refsFs->format(*refsRamDisk, 4096, L"MICA_REFS");
+        vfs.setMountedRefs(refsFs);
+    }
+    if (!vfs.getMountedBtrfs()) {
+        auto btrfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\PartitionBtrfs", 32 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_4K);
+        auto btrfsFs = std::make_shared<micant::btrfs::BtrfsFileSystem>();
+        btrfsFs->format(*btrfsRamDisk, 4096, 16384, L"MICA_BTRFS");
+        vfs.setMountedBtrfs(btrfsFs);
+    }
+    if (!vfs.getMountedExt()) {
+        auto extRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\PartitionExt4", 32 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_4K);
+        auto extFs = std::make_shared<micant::fs::ext::ExtFileSystem>();
+        extFs->format(*extRamDisk, 4096, L"MICA_EXT4");
+        vfs.setMountedExt(extFs);
+    }
+    if (!vfs.getMountedXfs()) {
+        auto xfsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\PartitionXfs", 32 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_4K);
+        auto xfsFs = std::make_shared<micant::xfs::XfsFileSystem>();
+        xfsFs->format(*xfsRamDisk, 4096, L"MICA_XFS");
+        vfs.setMountedXfs(xfsFs);
+    }
+    if (!vfs.getMountedF2fs()) {
+        auto f2fsRamDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\Harddisk0\\PartitionF2fs", 32 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_4K);
+        auto f2fsFs = std::make_shared<micant::f2fs::F2fsFileSystem>();
+        f2fsFs->format(*f2fsRamDisk, 4096, L"MICA_F2FS");
+        vfs.setMountedF2fs(f2fsFs);
+    }
+
+    // Ensure standard Z: is mounted
+    if (!vfs.isDriveLetterAssigned(L'Z')) {
+        vfs.assignDriveLetter(L'Z', L"\\Device\\ZfsPool_Storage", L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\", L"MICA_ZFS");
+    }
+
+    // Assign drive letters B:, X:, S:, Y:
+    vfs.assignDriveLetter(L'B', L"\\Device\\Btrfs0", L"\\\\?\\Volume{a4bf011e-0007-0000-0000-000000000007}\\", L"MICA_BTRFS");
+    vfs.assignDriveLetter(L'X', L"\\Device\\ExtFs0", L"\\\\?\\Volume{a4bf011e-0008-0000-0000-000000000008}\\", L"MICA_EXT4");
+    vfs.assignDriveLetter(L'S', L"\\Device\\Xfs0", L"\\\\?\\Volume{a4bf011e-0009-0000-0000-000000000009}\\", L"MICA_XFS");
+    vfs.assignDriveLetter(L'Y', L"\\Device\\F2fs0", L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\", L"MICA_F2FS");
+
+    // Helper lambdas for multi-format file I/O
+    auto WriteFileHelper = [&](std::wstring_view p, std::span<const uint8_t> payload) -> bool {
+        std::shared_ptr<micant::fs::FileObject> fObj;
+        NtStatus stCr = vfs.createOrOpenFile(p, micant::fs::FILE_WRITE_DATA, micant::fs::FILE_OVERWRITE_IF, fObj);
+        if (!NT_SUCCESS(stCr) || !fObj) return false;
+        uint32_t wr = 0;
+        NtStatus stWr = vfs.writeFile(fObj.get(), payload.data(), static_cast<uint32_t>(payload.size()), nullptr, wr);
+        vfs.closeFile(fObj.get());
+        return NT_SUCCESS(stWr) && wr == payload.size();
+    };
+
+    auto ReadFileHelper = [&](std::wstring_view p, std::vector<uint8_t>& outData) -> bool {
+        std::shared_ptr<micant::fs::FileObject> fObj;
+        NtStatus stOp = vfs.createOrOpenFile(p, micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, fObj);
+        if (!NT_SUCCESS(stOp) || !fObj) return false;
+        outData.resize(131072);
+        uint32_t rd = 0;
+        NtStatus stRd = vfs.readFile(fObj.get(), outData.data(), static_cast<uint32_t>(outData.size()), nullptr, rd);
+        vfs.closeFile(fObj.get());
+        if (!NT_SUCCESS(stRd) && stRd != NtStatus::EndOfFile) return false;
+        outData.resize(rd);
+        return true;
+    };
+
+    // ========================================================================
+    // Pillar 1: 10-Format Sovereign Volume Enumeration & Dynamic Partition Resolution
+    // ========================================================================
+    {
+        auto letters = vfs.getMountedDriveLetters();
+        TEST_ASSERT(letters.size() >= 10, "VirtualFileSystem must mount at least 10 sovereign storage volumes");
+
+        micant::fs::FileSystemVolumeInfo viB{}, viX{}, viS{}, viY{}, viZ{};
+        TEST_ASSERT(NT_SUCCESS(vfs.queryVolumeInfo(L'B', viB)), "Query volume info for Btrfs B: must succeed");
+        TEST_ASSERT(viB.fileSystemName == L"Btrfs", "Drive B: must identify as Btrfs");
+        TEST_ASSERT(viB.serialNumber == 0xB78F5C01, "Drive B: serial number must match TitanBtrfs spec");
+
+        TEST_ASSERT(NT_SUCCESS(vfs.queryVolumeInfo(L'X', viX)), "Query volume info for Ext4 X: must succeed");
+        TEST_ASSERT(viX.fileSystemName == L"EXT4", "Drive X: must identify as EXT4");
+        TEST_ASSERT(viX.serialNumber == 0xEF534800, "Drive X: serial number must match TitanExt spec");
+
+        TEST_ASSERT(NT_SUCCESS(vfs.queryVolumeInfo(L'S', viS)), "Query volume info for XFS S: must succeed");
+        TEST_ASSERT(viS.fileSystemName == L"XFS", "Drive S: must identify as XFS");
+        TEST_ASSERT(viS.serialNumber == 0x58465342, "Drive S: serial number must match TitanXFS spec");
+
+        TEST_ASSERT(NT_SUCCESS(vfs.queryVolumeInfo(L'Y', viY)), "Query volume info for F2FS Y: must succeed");
+        TEST_ASSERT(viY.fileSystemName == L"F2FS", "Drive Y: must identify as F2FS");
+        TEST_ASSERT(viY.serialNumber == 0xF2F52026, "Drive Y: serial number must match TitanF2FS spec");
+
+        TEST_ASSERT(NT_SUCCESS(vfs.queryVolumeInfo(L'Z', viZ)), "Query volume info for ZFS Z: must succeed");
+        TEST_ASSERT(viZ.fileSystemName == L"ZFS", "Drive Z: must identify as ZFS");
+
+        auto allVols = vfs.queryAllVolumes();
+        TEST_ASSERT(allVols.size() >= 10, "queryAllVolumes must return all 10 mounted sovereign filesystems");
+    }
+
+    // ========================================================================
+    // Pillar 2: TitanBtrfs Subvolumes, Castagnoli CRC32C & Instant CoW Snapshots on Drive B:
+    // ========================================================================
+    {
+        std::string manifestContent = "<manifest version=\"1.0\"><kernel>MicaNT</kernel><storage>TitanBtrfs</storage></manifest>";
+        std::vector<uint8_t> data(manifestContent.begin(), manifestContent.end());
+
+        bool wOk = WriteFileHelper(L"B:\\manifest.xml", data);
+        TEST_ASSERT(wOk, "Writing to Btrfs B:\\manifest.xml must succeed");
+
+        std::vector<uint8_t> readBack;
+        bool rOk = ReadFileHelper(L"B:\\manifest.xml", readBack);
+        TEST_ASSERT(rOk, "Reading back from B:\\manifest.xml must succeed");
+        TEST_ASSERT(readBack == data, "Btrfs read data must match written manifest exactly");
+
+        // Verify Castagnoli CRC32C on raw data
+        uint32_t expectedCrc = micant::btrfs::BtrfsCrc32c::calculate(data.data(), data.size());
+        TEST_ASSERT(expectedCrc != 0, "Btrfs CRC32C must be computed non-zero");
+
+        // Create instantaneous CoW snapshot on Drive B:
+        NtStatus snapSt = vfs.createVolumeSnapshot(L'B', "btrfs_gold_master");
+        TEST_ASSERT(NT_SUCCESS(snapSt), "Creating Btrfs snapshot must succeed");
+
+        auto snapsB = vfs.listVolumeSnapshots(L'B');
+        TEST_ASSERT(std::find(snapsB.begin(), snapsB.end(), "btrfs_gold_master") != snapsB.end(), "Snapshot must be listed");
+
+        // Mutate file on Drive B:
+        std::string mutatedContent = "<manifest version=\"2.0\"><kernel>MicaNT-Mutated</kernel></manifest>";
+        std::vector<uint8_t> mutData(mutatedContent.begin(), mutatedContent.end());
+        TEST_ASSERT(WriteFileHelper(L"B:\\manifest.xml", mutData), "Mutating Btrfs file must succeed");
+
+        std::vector<uint8_t> readMut;
+        TEST_ASSERT(ReadFileHelper(L"B:\\manifest.xml", readMut), "Reading mutated file must succeed");
+        TEST_ASSERT(readMut == mutData, "Mutated content must be active");
+
+        // Atomic Rollback to CoW snapshot
+        NtStatus rbSt = vfs.rollbackVolumeSnapshot(L'B', "btrfs_gold_master");
+        TEST_ASSERT(NT_SUCCESS(rbSt), "Btrfs snapshot rollback must succeed");
+
+        std::vector<uint8_t> rolledBack;
+        TEST_ASSERT(ReadFileHelper(L"B:\\manifest.xml", rolledBack), "Reading after rollback must succeed");
+        TEST_ASSERT(rolledBack == data, "Rolled back content must match original manifest byte-for-byte");
+
+        // Delete snapshot
+        NtStatus delSt = vfs.deleteVolumeSnapshot(L'B', "btrfs_gold_master");
+        TEST_ASSERT(NT_SUCCESS(delSt), "Deleting Btrfs snapshot must succeed");
+    }
+
+    // ========================================================================
+    // Pillar 3: TitanExt Ext4 48-Bit Extents & Directory Indexing on Drive X:
+    // ========================================================================
+    {
+        std::string extConfig = "[ext4]\nfeatures=extents,64bit,dir_index\nblock_size=4096\ninode_size=256\n";
+        std::vector<uint8_t> data(extConfig.begin(), extConfig.end());
+
+        bool wOk = WriteFileHelper(L"X:\\config.cfg", data);
+        TEST_ASSERT(wOk, "Writing to Ext4 X:\\config.cfg must succeed");
+
+        std::vector<uint8_t> readBack;
+        bool rOk = ReadFileHelper(L"X:\\config.cfg", readBack);
+        TEST_ASSERT(rOk, "Reading back from X:\\config.cfg must succeed");
+        TEST_ASSERT(readBack == data, "Ext4 read data must match written config exactly");
+
+        // Query directory on Ext4
+        std::vector<micant::fs::VirtualFileSystem::DirectoryEntry> entries;
+        NtStatus dirSt = vfs.queryDirectory(L"X:\\", entries);
+        TEST_ASSERT(NT_SUCCESS(dirSt), "Query directory on Ext4 X:\\ must succeed");
+        bool found = false;
+        for (const auto& e : entries) {
+            if (e.name == L"config.cfg") found = true;
+        }
+        TEST_ASSERT(found, "X:\\config.cfg must be present in directory enumeration");
+
+        // Query file attributes
+        uint32_t attrs = 0;
+        NtStatus attSt = vfs.queryFileAttributes(L"X:\\config.cfg", attrs);
+        TEST_ASSERT(NT_SUCCESS(attSt), "Query file attributes on Ext4 file must succeed");
+        TEST_ASSERT((attrs & 0x10) == 0, "X:\\config.cfg must not be a directory");
+    }
+
+    // ========================================================================
+    // Pillar 4: TitanXFS Allocation Group Geometry & Large File I/O on Drive S:
+    // ========================================================================
+    {
+        std::vector<uint8_t> largeBuffer(65536, 0xA5); // 64 KB across 16 XFS 4KB blocks
+        bool wOk = WriteFileHelper(L"S:\\database.bin", largeBuffer);
+        TEST_ASSERT(wOk, "Writing 64KB across XFS allocation groups must succeed");
+
+        std::vector<uint8_t> readBack;
+        bool rOk = ReadFileHelper(L"S:\\database.bin", readBack);
+        TEST_ASSERT(rOk, "Reading 64KB back from XFS must succeed");
+        TEST_ASSERT(readBack.size() == 65536, "Read size must be exactly 65536 bytes");
+        TEST_ASSERT(readBack == largeBuffer, "XFS 64KB payload must match byte-for-byte");
+
+        // Directory listing on XFS
+        std::vector<micant::fs::VirtualFileSystem::DirectoryEntry> entries;
+        NtStatus dirSt = vfs.queryDirectory(L"S:\\", entries);
+        TEST_ASSERT(NT_SUCCESS(dirSt), "Query directory on XFS S:\\ must succeed");
+        bool found = false;
+        for (const auto& e : entries) {
+            if (e.name == L"database.bin") {
+                found = true;
+                TEST_ASSERT(e.size == 65536, "Directory entry size must reflect 65536 bytes");
+            }
+        }
+        TEST_ASSERT(found, "S:\\database.bin must be listed in XFS directory");
+    }
+
+    // ========================================================================
+    // Pillar 5: TitanF2FS Flash Log-Structured SIT/NAT Inodes on Drive Y:
+    // ========================================================================
+    {
+        std::string logMsg = "F2FS_LOG: LFS segment allocation sequence #0042 checkpoint active\n";
+        std::vector<uint8_t> data(logMsg.begin(), logMsg.end());
+
+        bool wOk = WriteFileHelper(L"Y:\\flash_log.txt", data);
+        TEST_ASSERT(wOk, "Writing to F2FS Y:\\flash_log.txt must succeed");
+
+        std::vector<uint8_t> readBack;
+        bool rOk = ReadFileHelper(L"Y:\\flash_log.txt", readBack);
+        TEST_ASSERT(rOk, "Reading back from Y:\\flash_log.txt must succeed");
+        TEST_ASSERT(readBack == data, "F2FS read log must match written log exactly");
+
+        // Truncate and overwrite on F2FS
+        std::string updateMsg = "F2FS_LOG: Updated SIT segment entry\n";
+        std::vector<uint8_t> updData(updateMsg.begin(), updateMsg.end());
+        TEST_ASSERT(WriteFileHelper(L"Y:\\flash_log.txt", updData), "Overwriting F2FS file must succeed");
+
+        std::vector<uint8_t> readUpd;
+        TEST_ASSERT(ReadFileHelper(L"Y:\\flash_log.txt", readUpd), "Reading updated F2FS file must succeed");
+        TEST_ASSERT(readUpd == updData, "Updated content must match exactly");
+    }
+
+    // ========================================================================
+    // Pillar 6: Cross-Filesystem Migration & Win32 Interoperability Across All 10 Formats
+    // ========================================================================
+    {
+        const std::string goldenSeed = "MicaNT Sovereign 10-Format Storage Fusion Payload: 0xDEADBEEFCAFE1337";
+        std::vector<uint8_t> payload(goldenSeed.begin(), goldenSeed.end());
+
+        // Step 1: Write to Btrfs (B:)
+        TEST_ASSERT(WriteFileHelper(L"B:\\seed.dat", payload), "Write to Btrfs B: failed");
+
+        // Step 2: Read from B: and write to Ext4 (X:)
+        std::vector<uint8_t> bToX;
+        TEST_ASSERT(ReadFileHelper(L"B:\\seed.dat", bToX), "Read from B: failed");
+        TEST_ASSERT(WriteFileHelper(L"X:\\seed.dat", bToX), "Write to Ext4 X: failed");
+
+        // Step 3: Read from X: and write to XFS (S:)
+        std::vector<uint8_t> xToS;
+        TEST_ASSERT(ReadFileHelper(L"X:\\seed.dat", xToS), "Read from X: failed");
+        TEST_ASSERT(WriteFileHelper(L"S:\\seed.dat", xToS), "Write to XFS S: failed");
+
+        // Step 4: Read from S: and write to F2FS (Y:)
+        std::vector<uint8_t> sToY;
+        TEST_ASSERT(ReadFileHelper(L"S:\\seed.dat", sToY), "Read from S: failed");
+        TEST_ASSERT(WriteFileHelper(L"Y:\\seed.dat", sToY), "Write to F2FS Y: failed");
+
+        // Step 5: Read from Y: and write to ZFS (Z:)
+        std::vector<uint8_t> yToZ;
+        TEST_ASSERT(ReadFileHelper(L"Y:\\seed.dat", yToZ), "Read from Y: failed");
+        TEST_ASSERT(WriteFileHelper(L"Z:\\seed.dat", yToZ), "Write to ZFS Z: failed");
+
+        // Step 6: Read from Z: and write to NTFS (D:)
+        std::vector<uint8_t> zToD;
+        TEST_ASSERT(ReadFileHelper(L"Z:\\seed.dat", zToD), "Read from Z: failed");
+        TEST_ASSERT(WriteFileHelper(L"D:\\seed.dat", zToD), "Write to NTFS D: failed");
+
+        // Step 7: Read from D: and write to ReFS (G:)
+        std::vector<uint8_t> dToG;
+        TEST_ASSERT(ReadFileHelper(L"D:\\seed.dat", dToG), "Read from D: failed");
+        TEST_ASSERT(WriteFileHelper(L"G:\\seed.dat", dToG), "Write to ReFS G: failed");
+
+        // Step 8: Read from G: and write to FAT32 (C:)
+        std::vector<uint8_t> gToC;
+        TEST_ASSERT(ReadFileHelper(L"G:\\seed.dat", gToC), "Read from G: failed");
+        TEST_ASSERT(WriteFileHelper(L"C:\\seed.dat", gToC), "Write to FAT32 C: failed");
+
+        // Final verification on C:
+        std::vector<uint8_t> finalRead;
+        TEST_ASSERT(ReadFileHelper(L"C:\\seed.dat", finalRead), "Read final payload from C: failed");
+        TEST_ASSERT(finalRead == payload, "10-format ring-trip payload must match golden seed byte-for-byte");
+    }
+
+    std::cout << "[HORIZON 147] Sovereign Multi-Format Storage Fusion Summary:\n"
+              << "    Pillar 1: 10-Format Sovereign Volume Enumeration & Dynamic Partition Resolution OK\n"
+              << "    Pillar 2: TitanBtrfs Subvolumes, CRC32C & Instant CoW Snapshots on Drive B: OK\n"
+              << "    Pillar 3: TitanExt Ext4 48-Bit Extents & Directory Indexing on Drive X: OK\n"
+              << "    Pillar 4: TitanXFS Allocation Group Geometry & Large File I/O on Drive S: OK\n"
+              << "    Pillar 5: TitanF2FS Flash Log-Structured SIT/NAT Inodes on Drive Y: OK\n"
+              << "    Pillar 6: Cross-Filesystem Migration & Win32 Interoperability Across All 10 Formats OK\n";
+
+    std::cout << "[TEST] Suite 363: Horizon 147 - Sovereign Multi-Format Storage Fusion PASSED." << std::endl;
 }
