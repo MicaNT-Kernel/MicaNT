@@ -25,6 +25,8 @@
 #include "micant/km/drivers/security/x509.hpp"
 #include "micant/km/drivers/security/tls13.hpp"
 #include "micant/um/subsystems/net/websocket.hpp"
+#include "micant/km/drivers/net/srv2.hpp"
+#include "micant/um/subsystems/net/net_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -61,6 +63,19 @@ public:
         httpsRule.weight = 1500;
         httpsRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(httpsRule);
+
+        // 3. Register WFP Inbound Rule for SMB 3.1.1 File Sharing (TCP Port 445)
+        wfp::km::WfpKernelFilterRule smbRule{};
+        smbRule.filterId = 15701;
+        smbRule.name = "MicaNT_SMB_Inbound_Permit";
+        smbRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        smbRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        smbRule.protocol = tcpip::IPPROTO_TCP;
+        smbRule.localPortStart = 445;
+        smbRule.localPortEnd = 445;
+        smbRule.weight = 1500;
+        smbRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(smbRule);
     }
 
     void stopHttpsServer() {
@@ -338,6 +353,32 @@ public:
                 << "Evaluated: " << (wfp.getPacketsPermitted() + wfp.getPacketsBlocked()) << " | Permitted: " << wfp.getPacketsPermitted()
                 << " | Blocked: " << wfp.getPacketsBlocked() << "\r\n";
             return oss.str();
+        } else if (cmd == "net" || cmd.starts_with("net ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            if (tokens.size() <= 1) {
+                // If bare "net", also append adapter info for convenience
+                auto& net = tcpip::NetworkStack::get();
+                std::ostringstream oss;
+                oss << "Adapter: Intel I210-AT PCIe Gigabit NIC\r\n"
+                    << "IPv4: " << net.getLocalIp().toString() << " | Subnet: " << net.getSubnetMask().toString() << "\r\n"
+                    << "Gateway: " << net.getGateway().toString() << " | Link: 1000 Mbps Full Duplex\r\n\n";
+                std::string netHelp;
+                netcmd::um::NetCommandExecutor::Instance().execute({}, netHelp);
+                oss << netHelp;
+                return oss.str();
+            }
+            std::span<const std::string_view> subArgs(tokens.data() + 1, tokens.size() - 1);
+            std::string res;
+            netcmd::um::NetCommandExecutor::Instance().execute(subArgs, res);
+            return res;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -346,6 +387,7 @@ public:
                    "  mem      Display physical and virtual memory allocation\r\n"
                    "  storage  List mounted storage volumes and filesystems\r\n"
                    "  net      Display network adapter and IP configuration\r\n"
+                   "  net share/use/session Manage SMB shares, connections, and sessions\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -356,9 +398,16 @@ public:
     }
 
     std::string generateStreamTelemetryJson() const {
-        return "{\"event\":\"telemetry\",\"cpu_percent\":1.4,\"ram_used_mb\":4096,"
-               "\"ram_total_mb\":32768,\"rx_packets\":14820,\"tx_packets\":12950,"
-               "\"wfp_drops\":0,\"uptime_s\":450}\r\n";
+        auto& smbSrv = smb::km::SmbServerEngine::Instance();
+        std::ostringstream ss;
+        ss << "{\"event\":\"telemetry\",\"cpu_percent\":1.4,\"ram_used_mb\":4096,"
+           << "\"ram_total_mb\":32768,\"rx_packets\":14820,\"tx_packets\":12950,"
+           << "\"wfp_drops\":0,\"uptime_s\":450,"
+           << "\"smb_sessions\":" << smbSrv.getActiveSessionsCount() << ","
+           << "\"smb_shares\":" << smbSrv.getShares().size() << ","
+           << "\"smb_bytes_read\":" << smbSrv.getTotalBytesRead() << ","
+           << "\"smb_bytes_written\":" << smbSrv.getTotalBytesWritten() << "}\r\n";
+        return ss.str();
     }
 
 private:

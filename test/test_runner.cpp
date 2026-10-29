@@ -73,6 +73,9 @@
 #include "micant/um/subsystems/net/websocket.hpp"
 #include "micant/um/subsystems/net/winhttp.hpp"
 #include "micant/um/subsystems/net/wscat.hpp"
+#include "micant/km/drivers/net/srv2.hpp"
+#include "micant/um/subsystems/net/mrxsmb.hpp"
+#include "micant/um/subsystems/net/net_cmd.hpp"
 #include "micant/um/subsystems/winuser/shell.hpp"
 #include "micant/km/drivers/security/ppl.hpp"
 #include "micant/km/drivers/security/sysguard.hpp"
@@ -404,6 +407,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite373") {
+        RUN_TEST(Test_Horizon157_Smb311_ServerDriver_ShareEncryption_VfsPipeline_And_NetCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite372") {
         RUN_TEST(Test_Horizon156_WinHttpSubsystem_WebSockets_PushStream_And_WebTerminal);
         return g_FailedTests;
@@ -511,6 +518,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
         RUN_TEST(Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExecutiveConsole);
         RUN_TEST(Test_Horizon156_WinHttpSubsystem_WebSockets_PushStream_And_WebTerminal);
+        RUN_TEST(Test_Horizon157_Smb311_ServerDriver_ShareEncryption_VfsPipeline_And_NetCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1811,6 +1819,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
     RUN_TEST(Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExecutiveConsole);
     RUN_TEST(Test_Horizon156_WinHttpSubsystem_WebSockets_PushStream_And_WebTerminal);
+    RUN_TEST(Test_Horizon157_Smb311_ServerDriver_ShareEncryption_VfsPipeline_And_NetCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
