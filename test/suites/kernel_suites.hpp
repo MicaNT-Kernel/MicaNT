@@ -25060,3 +25060,397 @@ void Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Min
 
     std::cout << "[TEST] Suite 367: Horizon 151 - Intel I210/I219 Gigabit Ethernet Hardware Ring Buffers & Zero-Copy NDIS 6.x Miniport (e1000e.sys / netio.sys) PASSED." << std::endl;
 }
+
+void Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole() {
+    std::cout << "[TEST] Running Suite 368: Horizon 152 - Sovereign TCP/IP Dual-Stack Protocol Engine, Hardware NDIS Binding, AFD Socket Driver (afd.sys), & Bare-Metal Remote Executive Console..." << std::endl;
+    tcpip::NetworkStack::get().resetForTest();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Dynamic NDIS Miniport Binding to Intel I210 Hardware & Zero-Copy NBL Path
+    // ------------------------------------------------------------------------
+    {
+        auto& net = tcpip::NetworkStack::get();
+        ndis::MacAddress i210Mac(0x00, 0x1B, 0x21, 0x99, 0x88, 0x77);
+        auto i210Adapter = std::make_shared<ndis::IntelE1000eAdapter>(
+            L"\\Device\\E1000e0",
+            L"Intel(R) I210 Gigabit Network Connection",
+            i210Mac,
+            pci::PciAddress(2, 0, 0)
+        );
+
+        // 1. Dynamic Binding
+        net.bindAdapter(i210Adapter);
+        TEST_ASSERT(net.getAdapter() == i210Adapter, "NetworkStack must dynamically bind Intel I210 miniport adapter");
+        TEST_ASSERT(net.getMacAddress() == i210Mac, "NetworkStack MAC address must match hardware Intel I210 MAC");
+        TEST_ASSERT(net.isLinkUp(), "Intel I210 hardware link state must be Connected");
+        TEST_ASSERT(net.getLinkSpeedMbps() == 1000, "Intel I210 link speed must report 1000 Mbps Gigabit Ethernet");
+
+        // 2. Configure Dual-Stack IP addresses
+        net.setLocalIp(tcpip::Ipv4Address(147, 135, 1, 229), tcpip::Ipv4Address(255, 255, 255, 0), tcpip::Ipv4Address(147, 135, 1, 1));
+        TEST_ASSERT(net.getLocalIp() == tcpip::Ipv4Address(147, 135, 1, 229), "IPv4 address must match configured bare-metal IP");
+        TEST_ASSERT(net.getGateway() == tcpip::Ipv4Address(147, 135, 1, 1), "Default gateway must be 147.135.1.1");
+
+        // 3. Zero-Copy NDIS 6.x NET_BUFFER_LIST Transmission
+        ndis::NetBufferListPool nblPool(8);
+
+        uint8_t rawEthFrame[64];
+        std::memset(rawEthFrame, 0xAA, sizeof(rawEthFrame));
+        auto* eth = reinterpret_cast<ndis::EthernetHeader*>(rawEthFrame);
+        eth->destMac = ndis::MacAddress::broadcast();
+        eth->srcMac = i210Mac;
+        eth->etherType = tcpip::htons(ndis::ETHERTYPE_IPV4);
+
+        auto nbl = nblPool.allocate(std::span<const uint8_t>(rawEthFrame, sizeof(rawEthFrame)));
+        TEST_ASSERT(nbl != nullptr, "NBL allocation from pool must succeed");
+
+        uint64_t preTxPackets = i210Adapter->getStatistics().txPackets;
+        auto sendStatus = net.sendNetBufferLists(nbl);
+        TEST_ASSERT(NT_SUCCESS(sendStatus), "Zero-copy NBL transmission through Intel I210 miniport must succeed");
+        TEST_ASSERT(i210Adapter->getStatistics().txPackets > preTxPackets, "Adapter txPackets statistic must increment upon NBL send");
+        TEST_ASSERT(i210Adapter->getTxCompleted() >= 1, "At least 1 TX descriptor must have completed DMA transmission");
+
+        // 4. Ingress Frame via receivePacket
+        uint64_t preRxPackets = i210Adapter->getStatistics().rxPackets;
+        i210Adapter->receivePacket(std::span<const uint8_t>(rawEthFrame, sizeof(rawEthFrame)));
+        TEST_ASSERT(i210Adapter->getStatistics().rxPackets > preRxPackets, "Adapter rxPackets statistic must increment upon packet receive");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: 11-State TCP Finite State Machine, RFC 7323 Window Scaling & SACK
+    // ------------------------------------------------------------------------
+    {
+        tcpip::SocketEndpoint ep;
+        ep.id = 42;
+        ep.family = tcpip::AF_INET;
+        ep.type = tcpip::SOCK_STREAM;
+        ep.protocol = tcpip::IPPROTO_TCP;
+
+        // 1. Validate Initial State
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::Closed, "Initial TCP state must be Closed");
+        TEST_ASSERT(std::string(ep.getTcpStateString()) == "CLOSED", "TCP state name must be CLOSED");
+
+        // 2. Test Active Open Transition: Closed -> SynSent -> Established -> FinWait1 -> FinWait2 -> TimeWait -> Closed
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::SynSent), "Transition to SynSent must succeed");
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::SynSent, "TCP state must be SynSent");
+
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::Established), "Transition to Established must succeed");
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::Established, "TCP state must be Established");
+
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::FinWait1), "Transition to FinWait1 must succeed");
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::FinWait1, "TCP state must be FinWait1");
+
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::FinWait2), "Transition to FinWait2 must succeed");
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::FinWait2, "TCP state must be FinWait2");
+
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::TimeWait), "Transition to TimeWait must succeed");
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::TimeWait, "TCP state must be TimeWait");
+
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::Closed), "Transition to Closed from TimeWait must succeed");
+        TEST_ASSERT(ep.tcpState == tcpip::TcpState::Closed, "TCP state must return to Closed");
+
+        // 3. Test Passive Open Transition: Closed -> Listen -> SynReceived -> Established -> CloseWait -> LastAck -> Closed
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::Listen), "Transition to Listen must succeed");
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::SynReceived), "Transition to SynReceived must succeed");
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::Established), "Transition to Established must succeed");
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::CloseWait), "Transition to CloseWait must succeed");
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::LastAck), "Transition to LastAck must succeed");
+        TEST_ASSERT(ep.transitionTo(tcpip::TcpState::Closed), "Transition to Closed from LastAck must succeed");
+
+        // 4. Test Invalid Transition Rejection
+        TEST_ASSERT(!ep.transitionTo(tcpip::TcpState::FinWait2), "Direct transition Closed -> FinWait2 must be rejected by RFC 9293 FSM");
+        TEST_ASSERT(!ep.transitionTo(tcpip::TcpState::CloseWait), "Direct transition Closed -> CloseWait must be rejected by RFC 9293 FSM");
+
+        // 5. RFC 7323 High-Performance Window Scaling
+        ep.windowSize = 32768;
+        ep.setWindowScale(7, 4);
+        TEST_ASSERT(ep.sndWndScale == 7, "sndWndScale must be 7");
+        TEST_ASSERT(ep.rcvWndScale == 4, "rcvWndScale must be 4");
+        TEST_ASSERT(ep.getScaledSendWindow() == (32768u << 7), "Scaled send window must be 32768 * 128 = 4194304 (4 MB)");
+        TEST_ASSERT(ep.getScaledReceiveWindow() == (32768u << 4), "Scaled receive window must be 32768 * 16 = 524288 (512 KB)");
+
+        // 6. RFC 2018 SACK (Selective Acknowledgment)
+        ep.addSackBlock(10000, 11460);
+        ep.addSackBlock(12920, 14380);
+        TEST_ASSERT(ep.getSackBlocks().size() == 2, "Must hold 2 SACK blocks");
+        TEST_ASSERT(ep.getSackBlocks()[0].getLength() == 1460, "First SACK block length must be 1 MSS (1460 bytes)");
+        TEST_ASSERT(ep.getSackBlocks()[1].getLength() == 1460, "Second SACK block length must be 1 MSS (1460 bytes)");
+        ep.clearSackBlocks();
+        TEST_ASSERT(ep.getSackBlocks().empty(), "SACK blocks must be empty after clear");
+
+        // 7. Jacobson / Karels RTT & RTO Estimation (RFC 6298)
+        ep.updateRtt(50);
+        TEST_ASSERT(ep.srttMs == 50, "Initial SRTT must equal sample RTT 50 ms");
+        ep.updateRtt(90);
+        TEST_ASSERT(ep.srttMs > 50, "SRTT must increase toward subsequent sample 90 ms");
+        TEST_ASSERT(ep.rtoMs >= ep.srttMs, "Retransmission timeout (RTO) must be greater than or equal to SRTT");
+        TEST_ASSERT(ep.rtoMs >= 200, "RTO must enforce minimum RFC clamp of 200 ms");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dual-Stack IPv4 & IPv6 Subsystem with Dynamic ARP Aging & SLAAC/NDP
+    // ------------------------------------------------------------------------
+    {
+        auto& net = tcpip::NetworkStack::get();
+
+        // 1. Dynamic ARP Table Management
+        tcpip::Ipv4Address host1(147, 135, 1, 10);
+        tcpip::Ipv4Address host2(147, 135, 1, 20);
+        tcpip::Ipv4Address staticGw(147, 135, 1, 1);
+        ndis::MacAddress mac1(0x00, 0x50, 0x56, 0xAA, 0xBB, 0x01);
+        ndis::MacAddress mac2(0x00, 0x50, 0x56, 0xAA, 0xBB, 0x02);
+        ndis::MacAddress gwMac(0x00, 0x50, 0x56, 0xAA, 0xBB, 0xFE);
+
+        net.addArpEntry(host1, mac1, 100, false);
+        net.addArpEntry(host2, mac2, 250, false);
+        net.addArpEntry(staticGw, gwMac, 0, true);
+
+        ndis::MacAddress resolved;
+        TEST_ASSERT(net.lookupArp(host1, resolved) && resolved == mac1, "host1 ARP lookup must resolve mac1");
+        TEST_ASSERT(net.lookupArp(host2, resolved) && resolved == mac2, "host2 ARP lookup must resolve mac2");
+        TEST_ASSERT(net.lookupArp(staticGw, resolved) && resolved == gwMac, "static gateway ARP lookup must resolve gwMac");
+
+        // 2. Age ARP Table by 120 seconds
+        size_t purged = net.ageArpTable(120);
+        TEST_ASSERT(purged >= 1, "At least host1 must have expired after 120s (TTL 100s)");
+        TEST_ASSERT(net.lookupArp(host2, resolved) && resolved == mac2, "host2 entry must remain active (was 250s, aged to 130s)");
+        TEST_ASSERT(net.lookupArp(staticGw, resolved) && resolved == gwMac, "Static gateway entry must never expire");
+
+        // 3. Gratuitous ARP Broadcast
+        auto garpStatus = net.sendGratuitousArp();
+        TEST_ASSERT(NT_SUCCESS(garpStatus), "sendGratuitousArp must return NT_SUCCESS");
+
+        // 4. IPv6 SLAAC EUI-64 Address Generation
+        ndis::MacAddress sampleMac(0x00, 0x1B, 0x21, 0xAA, 0xBB, 0xCC);
+        auto slaacIp = tcpip::Ipv6Address::generateSlaac(sampleMac);
+        TEST_ASSERT(slaacIp.bytes[0] == 0xFE && slaacIp.bytes[1] == 0x80, "SLAAC address must have link-local prefix fe80::");
+        TEST_ASSERT(slaacIp.bytes[8] == 0x02, "SLAAC Interface ID byte 0 must invert Universal/Local bit (0x00 ^ 0x02 = 0x02)");
+        TEST_ASSERT(slaacIp.bytes[9] == 0x1B && slaacIp.bytes[10] == 0x21, "SLAAC Interface ID must retain MAC bytes 1 and 2");
+        TEST_ASSERT(slaacIp.bytes[11] == 0xFF && slaacIp.bytes[12] == 0xFE, "SLAAC Interface ID must contain 0xFFFE marker in middle");
+        TEST_ASSERT(slaacIp.bytes[13] == 0xAA && slaacIp.bytes[14] == 0xBB && slaacIp.bytes[15] == 0xCC, "SLAAC Interface ID must retain MAC bytes 3, 4, and 5");
+
+        // 5. ICMPv6 Neighbor Discovery Protocol (NDP)
+        tcpip::Ipv6Address neighborIp = tcpip::Ipv6Address::linkLocalMica();
+        net.addNdpEntry(neighborIp, sampleMac, 300, false);
+        ndis::MacAddress ndpResolved;
+        TEST_ASSERT(net.lookupNdp(neighborIp, ndpResolved), "NDP lookup for link-local neighbor must succeed");
+        TEST_ASSERT(ndpResolved == sampleMac, "Resolved NDP MAC must match sample MAC");
+
+        auto nsStatus = net.sendNeighborSolicitation(neighborIp);
+        TEST_ASSERT(NT_SUCCESS(nsStatus), "sendNeighborSolicitation must succeed");
+        auto naStatus = net.sendNeighborAdvertisement(neighborIp);
+        TEST_ASSERT(NT_SUCCESS(naStatus), "sendNeighborAdvertisement must succeed");
+
+        // Age NDP Table
+        size_t ndpPurged = net.ageNdpTable(350);
+        TEST_ASSERT(ndpPurged >= 1, "NDP table aging must prune expired entry");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Ancillary Function Driver (afd.sys) Socket IOCTLs & Poll Readiness Events
+    // ------------------------------------------------------------------------
+    {
+        micant::km::afdwsk::InitializeAfdWskRioExports();
+        auto& scm = scm::ServiceControlManager::get();
+        auto afdRecord = scm.getServiceRecord(L"afd");
+        TEST_ASSERT(afdRecord != nullptr, "afd.sys service record must exist in SCM");
+        TEST_ASSERT(afdRecord->serviceType == scm::SERVICE_KERNEL_DRIVER, "afd.sys must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(afdRecord->startType == scm::SERVICE_SYSTEM_START, "afd.sys must be SERVICE_SYSTEM_START");
+        TEST_ASSERT(afdRecord->binaryPath == L"C:\\Windows\\System32\\drivers\\afd.sys", "afd.sys binaryPath must be canonical System32 driver path");
+
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("afd.sys") != nullptr, "VersionDatabase must register afd.sys");
+
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("afd.sys", "AfdCreateEndpoint") != nullptr, "afd.sys must export AfdCreateEndpoint");
+        TEST_ASSERT(ldr.getExport("afd.sys", "AfdFastIoDeviceControl") != nullptr, "afd.sys must export AfdFastIoDeviceControl");
+        TEST_ASSERT(ldr.getExport("afd.sys", "AfdPollEvents") != nullptr, "afd.sys must export AfdPollEvents");
+
+        auto& afdDriver = micant::km::afdwsk::AfdDeviceDriver::get();
+        uint64_t epHandle = afdDriver.createEndpoint(tcpip::AF_INET, tcpip::SOCK_STREAM, tcpip::IPPROTO_TCP);
+        TEST_ASSERT(epHandle >= 0x480, "AfdDeviceDriver must return valid endpoint handle >= 0x480");
+
+        auto bStatus = afdDriver.bindEndpoint(epHandle, 0x7F000001, 8888);
+        TEST_ASSERT(NT_SUCCESS(bStatus), "AfdDeviceDriver::bindEndpoint must succeed");
+
+        auto cStatus = afdDriver.connectEndpoint(epHandle, 0x7F000001, 8888);
+        TEST_ASSERT(NT_SUCCESS(cStatus), "AfdDeviceDriver::connectEndpoint must succeed");
+
+        const char testMsg[] = "MicaNT AFD Zero-Copy Kernel Datagram 2026";
+        size_t bytesSent = 0;
+        auto sStatus = afdDriver.send(epHandle, testMsg, sizeof(testMsg), &bytesSent);
+        TEST_ASSERT(NT_SUCCESS(sStatus), "AfdDeviceDriver::send must succeed");
+        TEST_ASSERT(bytesSent == sizeof(testMsg), "bytesSent must match message length");
+
+        micant::km::afdwsk::AfdPollInfo pInfo{};
+        pInfo.NumberOfHandles = 1;
+        pInfo.TimeoutMs = 100;
+        pInfo.Handles[0].Handle = epHandle;
+        pInfo.Handles[0].PollEvents = micant::km::afdwsk::AFD_POLL_SEND | micant::km::afdwsk::AFD_POLL_CONNECT;
+
+        auto pollStatus = afdDriver.poll(pInfo);
+        TEST_ASSERT(NT_SUCCESS(pollStatus), "AfdDeviceDriver::poll must succeed");
+        TEST_ASSERT((pInfo.Handles[0].ReturnedEvents & micant::km::afdwsk::AFD_POLL_SEND) != 0, "ReturnedEvents must report AFD_POLL_SEND readiness");
+        TEST_ASSERT((pInfo.Handles[0].ReturnedEvents & micant::km::afdwsk::AFD_POLL_CONNECT) != 0, "ReturnedEvents must report AFD_POLL_CONNECT readiness");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Winsock2 Multiplexing (WSAPoll / WSAEventSelect) & Overlapped I/O
+    // ------------------------------------------------------------------------
+    {
+        ws2_32::InitializeWs2_32SubsystemExports();
+
+        ws2_32::WSADATA wsaData{};
+        int startupRes = ws2_32::WSAStartup(0x0202, &wsaData);
+        TEST_ASSERT(startupRes == 0, "WSAStartup must return 0 (Success)");
+
+        ws2_32::SOCKET listenSock = ws2_32::socket(ws2_32::AF_INET, ws2_32::SOCK_STREAM, ws2_32::IPPROTO_TCP);
+        TEST_ASSERT(listenSock != ws2_32::INVALID_SOCKET, "socket() must create valid listen socket");
+
+        ws2_32::sockaddr_in serverAddr{};
+        serverAddr.sin_family = ws2_32::AF_INET;
+        serverAddr.sin_port = ws2_32::htons(12345);
+        serverAddr.sin_addr.S_un.S_addr = ws2_32::htonl(ws2_32::INADDR_LOOPBACK);
+
+        int bRes = ws2_32::bind(listenSock, reinterpret_cast<const ws2_32::sockaddr*>(&serverAddr), sizeof(serverAddr));
+        TEST_ASSERT(bRes == 0, "bind() must succeed");
+
+        int lRes = ws2_32::listen(listenSock, 5);
+        TEST_ASSERT(lRes == 0, "listen() must succeed");
+
+        ws2_32::SOCKET clientSock = ws2_32::socket(ws2_32::AF_INET, ws2_32::SOCK_STREAM, ws2_32::IPPROTO_TCP);
+        TEST_ASSERT(clientSock != ws2_32::INVALID_SOCKET, "socket() must create valid client socket");
+
+        int cRes = ws2_32::connect(clientSock, reinterpret_cast<const ws2_32::sockaddr*>(&serverAddr), sizeof(serverAddr));
+        TEST_ASSERT(cRes == 0, "connect() must succeed");
+
+        // WSAPoll
+        ws2_32::WSAPOLLFD pollFds[2]{};
+        pollFds[0].fd = listenSock;
+        pollFds[0].events = ws2_32::POLLIN;
+        pollFds[1].fd = clientSock;
+        pollFds[1].events = ws2_32::POLLOUT;
+
+        int pollCount = ws2_32::WSAPoll(pollFds, 2, 0);
+        TEST_ASSERT(pollCount >= 1, "WSAPoll must report at least 1 signaled descriptor");
+        TEST_ASSERT((pollFds[1].revents & ws2_32::POLLOUT) != 0, "Client socket must be ready for POLLOUT writing");
+
+        // WSAEventSelect
+        win32::HANDLE hNetEvent = ws2_32::WSACreateEvent();
+        TEST_ASSERT(hNetEvent != nullptr, "WSACreateEvent must return valid event handle");
+
+        int evSelRes = ws2_32::WSAEventSelect(clientSock, hNetEvent, ws2_32::FD_READ | ws2_32::FD_WRITE);
+        TEST_ASSERT(evSelRes == 0, "WSAEventSelect must register event successfully");
+
+        win32::DWORD waitRes = ws2_32::WSAWaitForMultipleEvents(1, &hNetEvent, TRUE, 0, FALSE);
+        TEST_ASSERT(waitRes == 0, "WSAWaitForMultipleEvents must report event signaled (WAIT_OBJECT_0)");
+        ws2_32::WSACloseEvent(hNetEvent);
+
+        // WSAOVERLAPPED
+        win32::HANDLE hOvEvent = ws2_32::WSACreateEvent();
+        TEST_ASSERT(hOvEvent != nullptr, "WSACreateEvent for overlapped I/O must succeed");
+
+        ws2_32::WSAOVERLAPPED ov{};
+        ov.hEvent = hOvEvent;
+
+        char sendBuffer[] = "MicaNT Overlapped TCP Pipeline Stream 2026";
+        ws2_32::WSABUF wsaBuf{};
+        wsaBuf.len = sizeof(sendBuffer);
+        wsaBuf.buf = sendBuffer;
+
+        uint32_t bytesSent = 0;
+        int sendRes = ws2_32::WSASend(clientSock, &wsaBuf, 1, &bytesSent, 0, &ov, nullptr);
+        TEST_ASSERT(sendRes == 0, "WSASend with overlapped struct must succeed");
+        TEST_ASSERT(ov.Internal == 0, "Overlapped Internal field must store STATUS_SUCCESS (0)");
+        TEST_ASSERT(ov.InternalHigh > 0, "Overlapped InternalHigh must store transferred byte count");
+
+        win32::DWORD ovWait = ws2_32::WSAWaitForMultipleEvents(1, &hOvEvent, TRUE, 0, FALSE);
+        TEST_ASSERT(ovWait == 0, "Overlapped event must be automatically signaled upon transfer completion");
+        ws2_32::WSACloseEvent(hOvEvent);
+
+        ws2_32::closesocket(clientSock);
+        ws2_32::closesocket(listenSock);
+        ws2_32::WSACleanup();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Bare-Metal Remote Executive Console (RemoteExecutiveConsole) & Live Telemetry
+    // ------------------------------------------------------------------------
+    {
+        tcpip::InitializeTcpipSubsystem();
+        auto& scm = scm::ServiceControlManager::get();
+        auto tcpipRecord = scm.getServiceRecord(L"tcpip");
+        TEST_ASSERT(tcpipRecord != nullptr, "tcpip.sys service record must exist in SCM");
+        TEST_ASSERT(tcpipRecord->serviceType == scm::SERVICE_KERNEL_DRIVER, "tcpip.sys must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(tcpipRecord->startType == scm::SERVICE_BOOT_START, "tcpip.sys must be SERVICE_BOOT_START");
+        TEST_ASSERT(tcpipRecord->binaryPath == L"C:\\Windows\\System32\\drivers\\tcpip.sys", "tcpip.sys binaryPath must be canonical System32 driver path");
+
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("tcpip.sys") != nullptr, "VersionDatabase must register tcpip.sys");
+
+        auto& console = tcpip::RemoteExecutiveConsole::get();
+
+        std::string helpOut = console.executeCommand("help");
+        TEST_ASSERT(helpOut.find("MicaNT Sovereign Executive Console Commands") != std::string::npos, "help command must list executive command options");
+
+        std::string verOut = console.executeCommand("ver");
+        TEST_ASSERT(verOut.find("MicaNT Sovereign Executive [Version 10.0.26100.5900]") != std::string::npos, "ver command must report kernel version 10.0.26100.5900");
+
+        std::string psOut = console.executeCommand("ps");
+        TEST_ASSERT(psOut.find("System") != std::string::npos && psOut.find("smss.exe") != std::string::npos && psOut.find("csrss.exe") != std::string::npos, "ps command must list executive core processes");
+
+        std::string memOut = console.executeCommand("mem");
+        TEST_ASSERT(memOut.find("Physical RAM: 32768 MB Total") != std::string::npos, "mem command must report 32GB system memory telemetry");
+
+        std::string storageOut = console.executeCommand("storage");
+        TEST_ASSERT(storageOut.find("NVMe SSD 1TB") != std::string::npos && storageOut.find("PCIe 01:00.0") != std::string::npos, "storage command must report NVMe storage controller telemetry");
+
+        std::string netOut = console.executeCommand("net");
+        TEST_ASSERT(netOut.find("Intel(R) I210 Gigabit Network Connection") != std::string::npos, "net command must report Intel I210 miniport details");
+        TEST_ASSERT(netOut.find("1000 Mbps") != std::string::npos, "net command must report 1000 Mbps link speed");
+        TEST_ASSERT(netOut.find("147.135.1.229") != std::string::npos, "net command must report configured bare-metal IPv4 address");
+
+        std::string vitalsOut = console.executeCommand("vitals");
+        TEST_ASSERT(vitalsOut.find("Intel(R) Xeon(R) CPU E3-1270 v6") != std::string::npos, "vitals command must report Xeon E3-1270 v6 CPU vitals");
+        TEST_ASSERT(vitalsOut.find("PASSIVE_LEVEL") != std::string::npos, "vitals command must report PASSIVE_LEVEL execution");
+
+        std::string uptimeOut = console.executeCommand("uptime");
+        TEST_ASSERT(uptimeOut.find("Uptime:") != std::string::npos, "uptime command must report kernel uptime");
+
+        std::string invalidOut = console.executeCommand("foobar");
+        TEST_ASSERT(invalidOut.find("Unknown executive command") != std::string::npos, "Invalid command must output help guidance");
+
+        // Start server on 8080
+        console.startConsoleServer(8080);
+        TEST_ASSERT(console.isRunning(), "RemoteExecutiveConsole server must be running on port 8080");
+        TEST_ASSERT(console.getPort() == 8080, "RemoteExecutiveConsole server port must be 8080");
+
+        int clientSock = tcpip::NetworkStack::get().createSocket(tcpip::AF_INET, tcpip::SOCK_STREAM, tcpip::IPPROTO_TCP);
+        TEST_ASSERT(clientSock > 0, "Client socket creation for console session must succeed");
+        bool connOk = tcpip::NetworkStack::get().connectSocket(clientSock, tcpip::Ipv4Address::loopback(), 8080);
+        TEST_ASSERT(connOk, "Client connection to console server on port 8080 must succeed");
+
+        const char cmdVer[] = "ver\r\n";
+        tcpip::NetworkStack::get().sendSocket(clientSock, cmdVer, sizeof(cmdVer) - 1);
+
+        console.processConnection(clientSock);
+
+        char respBuf[256]{0};
+        int recvd = tcpip::NetworkStack::get().recvSocket(clientSock, respBuf, sizeof(respBuf) - 1);
+        TEST_ASSERT(recvd > 0, "Client must receive console response bytes");
+        TEST_ASSERT(std::string(respBuf).find("MicaNT Sovereign Executive") != std::string::npos, "Client must receive kernel version string from console daemon");
+
+        tcpip::NetworkStack::get().closeSocket(clientSock);
+        console.stopConsoleServer();
+        TEST_ASSERT(!console.isRunning(), "RemoteExecutiveConsole must stop cleanly");
+    }
+
+    std::cout << "[HORIZON 152] Sovereign TCP/IP Dual-Stack Protocol Engine, Hardware NDIS Binding, AFD Driver (afd.sys), & Remote Console Summary:\n"
+              << "    Pillar 1: Dynamic NDIS Miniport Binding to Intel I210 Hardware & Zero-Copy NBL Path OK\n"
+              << "    Pillar 2: 11-State TCP Finite State Machine, RFC 7323 Window Scaling & SACK OK\n"
+              << "    Pillar 3: Dual-Stack IPv4 & IPv6 Subsystem with Dynamic ARP Aging & SLAAC/NDP OK\n"
+              << "    Pillar 4: Ancillary Function Driver (afd.sys) Socket IOCTLs & Poll Readiness Events OK\n"
+              << "    Pillar 5: Winsock2 Multiplexing (WSAPoll / WSAEventSelect) & Overlapped I/O OK\n"
+              << "    Pillar 6: Bare-Metal Remote Executive Console (RemoteExecutiveConsole) & Live Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 368: Horizon 152 - Sovereign TCP/IP Dual-Stack Protocol Engine, Hardware NDIS Binding, AFD Socket Driver (afd.sys), & Bare-Metal Remote Executive Console PASSED." << std::endl;
+}

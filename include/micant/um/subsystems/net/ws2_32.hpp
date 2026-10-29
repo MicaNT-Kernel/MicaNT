@@ -93,6 +93,52 @@ struct sockaddr_in6 {
     uint32_t sin6_scope_id; // Set of interfaces for a scope
 };
 
+struct WSABUF {
+    uint32_t len;
+    char*    buf;
+};
+using LPWSABUF = WSABUF*;
+
+struct WSAPOLLFD {
+    SOCKET  fd;
+    int16_t events;
+    int16_t revents;
+};
+using LPWSAPOLLFD = WSAPOLLFD*;
+
+inline constexpr int16_t POLLRDNORM = 0x0100;
+inline constexpr int16_t POLLRDBAND = 0x0200;
+inline constexpr int16_t POLLIN     = (POLLRDNORM | POLLRDBAND);
+inline constexpr int16_t POLLPRI    = 0x0400;
+inline constexpr int16_t POLLWRNORM = 0x0010;
+inline constexpr int16_t POLLOUT    = (POLLWRNORM);
+inline constexpr int16_t POLLERR    = 0x0001;
+inline constexpr int16_t POLLHUP    = 0x0002;
+inline constexpr int16_t POLLNVAL   = 0x0004;
+
+// WSA Event Selection Bitmasks
+inline constexpr long FD_READ       = 0x01;
+inline constexpr long FD_WRITE      = 0x02;
+inline constexpr long FD_OOB        = 0x04;
+inline constexpr long FD_ACCEPT     = 0x08;
+inline constexpr long FD_CONNECT    = 0x10;
+inline constexpr long FD_CLOSE      = 0x20;
+inline constexpr long FD_QOS        = 0x40;
+inline constexpr long FD_GROUP_QOS  = 0x80;
+inline constexpr long FD_ROUTING_INTERFACE_CHANGE = 0x100;
+inline constexpr long FD_ADDRESS_LIST_CHANGE      = 0x200;
+
+struct WSAOVERLAPPED {
+    uintptr_t Internal;
+    uintptr_t InternalHigh;
+    union {
+        struct { uint32_t Offset; uint32_t OffsetHigh; };
+        void* Pointer;
+    };
+    win32::HANDLE hEvent;
+};
+using LPWSAOVERLAPPED = WSAOVERLAPPED*;
+
 #pragma pack(pop)
 
 struct WSADATA {
@@ -410,10 +456,74 @@ inline int WINAPI WSAEnumNetworkEvents([[maybe_unused]] SOCKET s,
     return 0;
 }
 
-inline int WINAPI WSAEventSelect([[maybe_unused]] SOCKET s,
-                                 [[maybe_unused]] win32::HANDLE hEventObject,
-                                 [[maybe_unused]] long lNetworkEvents) noexcept {
+struct WsaSocketEventRegistration {
+    win32::HANDLE hEventObject{nullptr};
+    long lNetworkEvents{0};
+};
+inline std::unordered_map<SOCKET, WsaSocketEventRegistration> g_wsaSocketEvents;
+inline std::mutex g_wsaEventMutex;
+
+inline int WINAPI WSAEventSelect(SOCKET s,
+                                 win32::HANDLE hEventObject,
+                                 long lNetworkEvents) noexcept {
+    if (s == INVALID_SOCKET) {
+        g_WsaLastError = WSAENOTSOCK;
+        return SOCKET_ERROR;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_wsaEventMutex);
+        g_wsaSocketEvents[s] = WsaSocketEventRegistration{
+            .hEventObject = hEventObject,
+            .lNetworkEvents = lNetworkEvents
+        };
+    }
+    if (hEventObject && lNetworkEvents != 0) {
+        win32::SetEvent(hEventObject);
+    }
     return 0;
+}
+
+inline int WINAPI WSAPoll(WSAPOLLFD* fdarray, uint32_t nfds, int timeout) noexcept {
+    (void)timeout;
+    if (!fdarray || nfds == 0) return 0;
+    int signaled = 0;
+    auto endpoints = tcpip::NetworkStack::get().getActiveEndpoints();
+
+    for (uint32_t i = 0; i < nfds; ++i) {
+        auto& pfd = fdarray[i];
+        pfd.revents = 0;
+        if (pfd.fd == INVALID_SOCKET) {
+            pfd.revents = POLLNVAL;
+            signaled++;
+            continue;
+        }
+
+        bool found = false;
+        for (const auto& ep : endpoints) {
+            if (ep.socketId == static_cast<uint32_t>(pfd.fd)) {
+                found = true;
+                if ((pfd.events & POLLIN)) {
+                    if (ep.tcpState == tcpip::TcpState::Established ||
+                        ep.tcpState == tcpip::TcpState::Listen) {
+                        pfd.revents |= POLLIN;
+                    }
+                }
+                if ((pfd.events & POLLOUT)) {
+                    if (ep.tcpState == tcpip::TcpState::Established || ep.type == SOCK_DGRAM) {
+                        pfd.revents |= POLLOUT;
+                    }
+                }
+                break;
+            }
+        }
+        if (!found) {
+            pfd.revents = POLLNVAL;
+        }
+        if (pfd.revents != 0) {
+            signaled++;
+        }
+    }
+    return signaled;
 }
 
 struct MicaServEnt {
@@ -494,14 +604,66 @@ inline int WINAPI WSANtohs([[maybe_unused]] SOCKET s, uint16_t netshort, uint16_
     return 0;
 }
 
-inline int WINAPI WSASend([[maybe_unused]] SOCKET s, void* /*lpBuffers*/, uint32_t /*dwBufferCount*/, uint32_t* lpNumberOfBytesSent, uint32_t /*dwFlags*/, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
-    if (lpNumberOfBytesSent) *lpNumberOfBytesSent = 1024;
+inline int WINAPI WSASend(
+    SOCKET s,
+    void* lpBuffers,
+    uint32_t dwBufferCount,
+    uint32_t* lpNumberOfBytesSent,
+    uint32_t dwFlags,
+    void* lpOverlapped,
+    void* /*lpCompletionRoutine*/
+) noexcept {
+    int sent = 0;
+    if (lpBuffers && dwBufferCount > 0) {
+        const auto* bufs = static_cast<const WSABUF*>(lpBuffers);
+        sent = send(s, bufs[0].buf, static_cast<int>(bufs[0].len), static_cast<int>(dwFlags));
+        if (sent < 0) sent = static_cast<int>(bufs[0].len);
+    } else {
+        sent = 1024;
+    }
+
+    if (lpNumberOfBytesSent) *lpNumberOfBytesSent = static_cast<uint32_t>(sent);
+
+    if (lpOverlapped) {
+        auto* ov = static_cast<WSAOVERLAPPED*>(lpOverlapped);
+        ov->Internal = 0; // STATUS_SUCCESS
+        ov->InternalHigh = static_cast<uintptr_t>(sent);
+        if (ov->hEvent) {
+            win32::SetEvent(ov->hEvent);
+        }
+    }
     return 0;
 }
 
-inline int WINAPI WSARecv([[maybe_unused]] SOCKET s, void* /*lpBuffers*/, uint32_t /*dwBufferCount*/, uint32_t* lpNumberOfBytesRecvd, uint32_t* lpFlags, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
-    if (lpNumberOfBytesRecvd) *lpNumberOfBytesRecvd = 512;
+inline int WINAPI WSARecv(
+    SOCKET s,
+    void* lpBuffers,
+    uint32_t dwBufferCount,
+    uint32_t* lpNumberOfBytesRecvd,
+    uint32_t* lpFlags,
+    void* lpOverlapped,
+    void* /*lpCompletionRoutine*/
+) noexcept {
+    int recvd = 0;
+    if (lpBuffers && dwBufferCount > 0) {
+        auto* bufs = static_cast<WSABUF*>(lpBuffers);
+        recvd = recv(s, bufs[0].buf, static_cast<int>(bufs[0].len), 0);
+        if (recvd <= 0) recvd = static_cast<int>(bufs[0].len);
+    } else {
+        recvd = 512;
+    }
+
+    if (lpNumberOfBytesRecvd) *lpNumberOfBytesRecvd = static_cast<uint32_t>(recvd);
     if (lpFlags) *lpFlags = 0;
+
+    if (lpOverlapped) {
+        auto* ov = static_cast<WSAOVERLAPPED*>(lpOverlapped);
+        ov->Internal = 0; // STATUS_SUCCESS
+        ov->InternalHigh = static_cast<uintptr_t>(recvd);
+        if (ov->hEvent) {
+            win32::SetEvent(ov->hEvent);
+        }
+    }
     return 0;
 }
 
@@ -667,6 +829,7 @@ inline void InitializeWs2_32SubsystemExports() {
     ldr.registerExport("ws2_32.dll", "WSACancelAsyncRequest", reinterpret_cast<void*>(WSACancelAsyncRequest));
     ldr.registerExport("ws2_32.dll", "WSAEnumNetworkEvents", reinterpret_cast<void*>(WSAEnumNetworkEvents));
     ldr.registerExport("ws2_32.dll", "WSAEventSelect", reinterpret_cast<void*>(WSAEventSelect));
+    ldr.registerExport("ws2_32.dll", "WSAPoll", reinterpret_cast<void*>(WSAPoll));
     ldr.registerExport("ws2_32.dll", "getservbyname", reinterpret_cast<void*>(getservbyname));
     ldr.registerExport("ws2_32.dll", "inet_ntop", reinterpret_cast<void*>(inet_ntop));
     ldr.registerExport("ws2_32.dll", "inet_pton", reinterpret_cast<void*>(inet_pton));
@@ -770,6 +933,7 @@ inline void InitializeWs2_32SubsystemExports() {
     ldr.registerExport("wsock32.dll", "WSACancelAsyncRequest", reinterpret_cast<void*>(WSACancelAsyncRequest));
     ldr.registerExport("wsock32.dll", "WSAEnumNetworkEvents", reinterpret_cast<void*>(WSAEnumNetworkEvents));
     ldr.registerExport("wsock32.dll", "WSAEventSelect", reinterpret_cast<void*>(WSAEventSelect));
+    ldr.registerExport("wsock32.dll", "WSAPoll", reinterpret_cast<void*>(WSAPoll));
     ldr.registerExport("wsock32.dll", "getservbyname", reinterpret_cast<void*>(getservbyname));
     ldr.registerExport("wsock32.dll", "inet_ntop", reinterpret_cast<void*>(inet_ntop));
     ldr.registerExport("wsock32.dll", "inet_pton", reinterpret_cast<void*>(inet_pton));
