@@ -39,6 +39,7 @@ using BCRYPT_ALG_HANDLE  = void*;
 using BCRYPT_KEY_HANDLE  = void*;
 using BCRYPT_HASH_HANDLE = void*;
 
+inline constexpr const wchar_t* BCRYPT_SHA1_ALGORITHM        = L"SHA1";
 inline constexpr const wchar_t* BCRYPT_SHA256_ALGORITHM      = L"SHA256";
 inline constexpr const wchar_t* BCRYPT_SHA384_ALGORITHM      = L"SHA384";
 inline constexpr const wchar_t* BCRYPT_SHA512_ALGORITHM      = L"SHA512";
@@ -71,7 +72,131 @@ inline constexpr NTSTATUS STATUS_INVALID_BUFFER_SIZE           = static_cast<NTS
 inline constexpr NTSTATUS STATUS_INVALID_DEVICE_REQUEST         = static_cast<NTSTATUS>(0xC0000010);
 
 // ============================================================================
-// 1. Clean-Room SHA-256 (FIPS 180-4) Implementation
+// 1. Clean-Room SHA-1 (FIPS 180-1) Implementation
+// ============================================================================
+
+class Sha1 {
+public:
+    static constexpr size_t DIGEST_SIZE = 20;
+    static constexpr size_t BLOCK_SIZE  = 64;
+
+    struct Context {
+        uint32_t state[5]{0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
+        uint64_t count{0};
+        uint8_t buffer[64]{};
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.state[0] = 0x67452301;
+        ctx.state[1] = 0xEFCDAB89;
+        ctx.state[2] = 0x98BADCFE;
+        ctx.state[3] = 0x10325476;
+        ctx.state[4] = 0xC3D2E1F0;
+        ctx.count = 0;
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        size_t index = static_cast<size_t>(ctx.count % BLOCK_SIZE);
+        ctx.count += data.size();
+        size_t partLen = BLOCK_SIZE - index;
+        size_t i = 0;
+
+        if (data.size() >= partLen) {
+            std::memcpy(&ctx.buffer[index], data.data(), partLen);
+            transform(ctx.state, ctx.buffer);
+            for (i = partLen; i + BLOCK_SIZE <= data.size(); i += BLOCK_SIZE) {
+                transform(ctx.state, &data[i]);
+            }
+            index = 0;
+        }
+        if (i < data.size()) {
+            std::memcpy(&ctx.buffer[index], &data[i], data.size() - i);
+        }
+    }
+
+    static void finish(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        uint8_t finalCount[8]{};
+        uint64_t bitCount = ctx.count * 8;
+        for (int i = 0; i < 8; ++i) {
+            finalCount[i] = static_cast<uint8_t>((bitCount >> ((7 - i) * 8)) & 0xFF);
+        }
+
+        size_t index = static_cast<size_t>(ctx.count % BLOCK_SIZE);
+        size_t padLen = (index < 56) ? (56 - index) : (120 - index);
+        static const uint8_t PADDING[64] = { 0x80 };
+        update(ctx, std::span<const uint8_t>(PADDING, padLen));
+        update(ctx, std::span<const uint8_t>(finalCount, 8));
+
+        for (size_t i = 0; i < 5; ++i) {
+            digest[i * 4 + 0] = static_cast<uint8_t>((ctx.state[i] >> 24) & 0xFF);
+            digest[i * 4 + 1] = static_cast<uint8_t>((ctx.state[i] >> 16) & 0xFF);
+            digest[i * 4 + 2] = static_cast<uint8_t>((ctx.state[i] >> 8)  & 0xFF);
+            digest[i * 4 + 3] = static_cast<uint8_t>(ctx.state[i] & 0xFF);
+        }
+    }
+
+    static std::array<uint8_t, DIGEST_SIZE> hash(std::span<const uint8_t> data) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::array<uint8_t, DIGEST_SIZE> digest{};
+        finish(ctx, digest);
+        return digest;
+    }
+
+private:
+    static inline uint32_t rol(uint32_t val, int bits) noexcept {
+        return (val << bits) | (val >> (32 - bits));
+    }
+
+    static void transform(uint32_t state[5], const uint8_t block[64]) noexcept {
+        uint32_t w[80]{};
+        for (int i = 0; i < 16; ++i) {
+            w[i] = (static_cast<uint32_t>(block[i * 4 + 0]) << 24) |
+                   (static_cast<uint32_t>(block[i * 4 + 1]) << 16) |
+                   (static_cast<uint32_t>(block[i * 4 + 2]) << 8)  |
+                   (static_cast<uint32_t>(block[i * 4 + 3]));
+        }
+        for (int i = 16; i < 80; ++i) {
+            w[i] = rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        }
+
+        uint32_t a = state[0], b = state[1], c = state[2], d = state[3], e = state[4];
+
+        for (int i = 0; i < 80; ++i) {
+            uint32_t f = 0, k = 0;
+            if (i < 20) {
+                f = (b & c) | ((~b) & d);
+                k = 0x5A827999;
+            } else if (i < 40) {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1;
+            } else if (i < 60) {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDC;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6;
+            }
+            uint32_t temp = rol(a, 5) + f + e + k + w[i];
+            e = d;
+            d = c;
+            c = rol(b, 30);
+            b = a;
+            a = temp;
+        }
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+    }
+};
+
+// ============================================================================
+// 2. Clean-Room SHA-256 (FIPS 180-4) Implementation
 // ============================================================================
 
 class Sha256 {
@@ -1065,8 +1190,16 @@ public:
             }
             case IOCTL_CNG_HASH_DATA: {
                 if (inBuf.empty()) return STATUS_INVALID_PARAMETER;
-                auto digest = Sha256::hash(inBuf);
-                outBuf.assign(digest.begin(), digest.end());
+                if (inBuf.size() > 1 && inBuf[0] == 0x01) {
+                    auto digest = Sha1::hash(inBuf.subspan(1));
+                    outBuf.assign(digest.begin(), digest.end());
+                } else if (inBuf.size() > 1 && inBuf[0] == 0x03) {
+                    auto digest = Sha384::hash(inBuf.subspan(1));
+                    outBuf.assign(digest.begin(), digest.end());
+                } else {
+                    auto digest = Sha256::hash(inBuf);
+                    outBuf.assign(digest.begin(), digest.end());
+                }
                 hashesComputed_++;
                 return STATUS_SUCCESS;
             }

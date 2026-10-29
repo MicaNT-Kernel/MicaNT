@@ -26656,3 +26656,303 @@ void Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExe
 
     std::cout << "[TEST] Suite 371: Horizon 155 - Sovereign Cryptography Next Generation Kernel Driver (cng.sys), TLS 1.3 Schannel (schannel.dll), X.509 Certificates & HTTPS Executive Console PASSED." << std::endl;
 }
+
+void Test_Horizon156_WinHttpSubsystem_WebSockets_PushStream_And_WebTerminal() {
+    std::cout << "[TEST] Running Suite 372: Horizon 156 - Sovereign WinHTTP Client Subsystem (winhttp.dll), Real-Time WebSockets Engine (RFC 6455 / websocket.dll), Live Telemetry Push Stream & Interactive Web Terminal (wss://)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Sovereign FIPS 180-1 SHA-1 Cryptographic Hash Primitive & KAT Vectors
+    // ------------------------------------------------------------------------
+    {
+        // 1. Empty string KAT: da39a3ee5e6b4b0d3255bfef95601890afd80709
+        auto digestEmpty = km::crypto::Sha1::hash({});
+        static const uint8_t EXPECTED_EMPTY[20] = {
+            0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55,
+            0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09
+        };
+        TEST_ASSERT(std::memcmp(digestEmpty.data(), EXPECTED_EMPTY, 20) == 0,
+                    "SHA-1 empty string digest must match FIPS 180-1 KAT");
+
+        // 2. Fox string KAT: 2fd4e1c67a2d28fced849ee1bb76e7391b93eb12
+        std::string_view fox = "The quick brown fox jumps over the lazy dog";
+        auto digestFox = km::crypto::Sha1::hash(
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(fox.data()), fox.size())
+        );
+        static const uint8_t EXPECTED_FOX[20] = {
+            0x2f, 0xd4, 0xe1, 0xc6, 0x7a, 0x2d, 0x28, 0xfc, 0xed, 0x84,
+            0x9e, 0xe1, 0xbb, 0x76, 0xe7, 0x39, 0x1b, 0x93, 0xeb, 0x12
+        };
+        TEST_ASSERT(std::memcmp(digestFox.data(), EXPECTED_FOX, 20) == 0,
+                    "SHA-1 standard Fox string digest must match FIPS 180-1 KAT");
+
+        // 3. Kernel Driver IOCTL Dispatch with SHA-1 algorithm selector (0x01 prefix)
+        std::vector<uint8_t> ioctlIn;
+        ioctlIn.push_back(0x01); // SHA-1 selector
+        ioctlIn.insert(ioctlIn.end(), fox.begin(), fox.end());
+        std::vector<uint8_t> ioctlOut;
+        NTSTATUS st = km::crypto::CngKernelDriver::get().dispatchIoctl(km::crypto::IOCTL_CNG_HASH_DATA, ioctlIn, ioctlOut);
+        TEST_ASSERT(NT_SUCCESS(st), "cng.sys IOCTL_CNG_HASH_DATA with SHA-1 must return STATUS_SUCCESS");
+        TEST_ASSERT(ioctlOut.size() == 20 && std::memcmp(ioctlOut.data(), EXPECTED_FOX, 20) == 0,
+                    "cng.sys SHA-1 IOCTL hash must match expected digest");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: RFC 6455 WebSocket Handshake Key Negotiation & Base64 Verification
+    // ------------------------------------------------------------------------
+    {
+        // 1. RFC 6455 Section 1.3 Exact Test Vector
+        std::string_view clientKey = "dGhlIHNhbXBsZSBub25jZQ==";
+        std::string acceptKey = um::net::ws::WebSocketHandshake::computeAcceptKey(clientKey);
+        TEST_ASSERT(acceptKey == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+                    "RFC 6455 computeAcceptKey must match exact specification test vector (s3pPLMBiTxaQ9kYGzzhZRbK+xOo=)");
+        TEST_ASSERT(um::net::ws::WebSocketHandshake::verifyAcceptKey(clientKey, acceptKey),
+                    "verifyAcceptKey must return true for valid accept token");
+        TEST_ASSERT(!um::net::ws::WebSocketHandshake::verifyAcceptKey(clientKey, "invalid-accept-token"),
+                    "verifyAcceptKey must reject invalid accept token");
+
+        // 2. Client Key Nonce Generation
+        std::string generatedKey = um::net::ws::WebSocketHandshake::generateClientKey();
+        TEST_ASSERT(generatedKey.size() == 24 && generatedKey.ends_with("=="),
+                    "Generated client WebSocket key must be 24-character Base64 string ending with ==");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: RFC 6455 WebSocket Frame Serialization, Masking & Deserialization Pipeline
+    // ------------------------------------------------------------------------
+    {
+        // 1. Client Masked Text Frame
+        um::net::ws::WebSocketFrame clientFrame;
+        clientFrame.fin = true;
+        clientFrame.opcode = um::net::ws::OPCODE_TEXT;
+        clientFrame.masked = true;
+        clientFrame.maskKey = 0x37FA213D;
+        std::string payloadStr = "Hello, MicaNT WebSockets!";
+        clientFrame.payload.assign(payloadStr.begin(), payloadStr.end());
+
+        auto encodedClient = um::net::ws::WebSocketCodec::encode(clientFrame);
+        TEST_ASSERT(encodedClient.size() == 2 + 4 + payloadStr.size(),
+                    "Encoded client frame wire size must equal header(2) + maskKey(4) + payload");
+
+        um::net::ws::WebSocketFrame decodedClient;
+        size_t consumed = 0;
+        bool decOk = um::net::ws::WebSocketCodec::decode(encodedClient, decodedClient, consumed);
+        TEST_ASSERT(decOk && consumed == encodedClient.size(), "WebSocketCodec must successfully decode client wire frame");
+        TEST_ASSERT(decodedClient.fin && decodedClient.opcode == um::net::ws::OPCODE_TEXT, "Decoded frame must be FIN Text frame");
+        TEST_ASSERT(decodedClient.masked && decodedClient.maskKey == 0x37FA213D, "Decoded frame mask key must match");
+        TEST_ASSERT(decodedClient.asText() == payloadStr, "Unmasked decoded payload text must match original plaintext");
+
+        // 2. Server Unmasked Binary Frame (Extended 126 Length)
+        um::net::ws::WebSocketFrame serverFrame;
+        serverFrame.fin = true;
+        serverFrame.opcode = um::net::ws::OPCODE_BINARY;
+        serverFrame.masked = false;
+        serverFrame.payload.resize(500, 0xAB); // > 125 bytes triggers 16-bit extended length (126)
+
+        auto encodedServer = um::net::ws::WebSocketCodec::encode(serverFrame);
+        TEST_ASSERT(encodedServer.size() == 2 + 2 + 500, "126 extended length wire format must be 4 bytes header + 500 bytes payload");
+        TEST_ASSERT((encodedServer[1] & 0x7F) == 126, "Payload length indicator must be 126");
+
+        um::net::ws::WebSocketFrame decodedServer;
+        decOk = um::net::ws::WebSocketCodec::decode(encodedServer, decodedServer, consumed);
+        TEST_ASSERT(decOk && decodedServer.payload.size() == 500, "Decoded extended frame must have 500 bytes");
+        TEST_ASSERT(decodedServer.payload[0] == 0xAB && decodedServer.payload[499] == 0xAB, "Decoded payload bytes must be intact");
+
+        // 3. Ping / Pong Frames
+        um::net::ws::WebSocketFrame pingFrame;
+        pingFrame.fin = true;
+        pingFrame.opcode = um::net::ws::OPCODE_PING;
+        pingFrame.masked = true;
+        pingFrame.maskKey = 0x11223344;
+        std::string pingData = "ping-probe-123";
+        pingFrame.payload.assign(pingData.begin(), pingData.end());
+
+        auto pingWire = um::net::ws::WebSocketCodec::encode(pingFrame);
+        um::net::ws::WebSocketFrame decodedPing;
+        decOk = um::net::ws::WebSocketCodec::decode(pingWire, decodedPing, consumed);
+        TEST_ASSERT(decOk && decodedPing.opcode == um::net::ws::OPCODE_PING, "Decoded opcode must be Ping (0x9)");
+        TEST_ASSERT(decodedPing.asText() == pingData, "Ping payload must match");
+
+        // 4. Close Frame with Status Code and Reason
+        um::net::ws::WebSocketSession session(true);
+        auto closeWire = session.createCloseFrame(um::net::ws::CLOSE_NORMAL_CLOSURE, "Shutdown requested");
+        um::net::ws::WebSocketFrame decodedClose;
+        decOk = um::net::ws::WebSocketCodec::decode(closeWire, decodedClose, consumed);
+        TEST_ASSERT(decOk && decodedClose.opcode == um::net::ws::OPCODE_CLOSE, "Decoded opcode must be Close (0x8)");
+        TEST_ASSERT(decodedClose.getCloseCode() == 1000, "Close code must be 1000 (Normal Closure)");
+        TEST_ASSERT(decodedClose.getCloseReason() == "Shutdown requested", "Close reason string must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Sovereign WinHTTP Client Subsystem (winhttp.dll) & TLS 1.3 Transport Pipeline
+    // ------------------------------------------------------------------------
+    {
+        winhttp::WinHttpHandleTable::get().resetForTest();
+
+        // 1. WinHttpOpen (Session)
+        winhttp::HINTERNET hSession = winhttp::WinHttpOpen(
+            L"MicaNT-WinHTTP-Client/1.0",
+            winhttp::WINHTTP_ACCESS_TYPE_NO_PROXY,
+            nullptr, nullptr, 0
+        );
+        TEST_ASSERT(hSession != nullptr, "WinHttpOpen must return valid session handle");
+
+        // 2. WinHttpConnect (Connection)
+        winhttp::HINTERNET hConnect = winhttp::WinHttpConnect(
+            hSession,
+            L"147.135.1.229",
+            443, 0
+        );
+        TEST_ASSERT(hConnect != nullptr, "WinHttpConnect must return valid connection handle");
+
+        // 3. WinHttpOpenRequest (Request with WINHTTP_FLAG_SECURE)
+        winhttp::HINTERNET hRequest = winhttp::WinHttpOpenRequest(
+            hConnect,
+            L"GET",
+            L"/api/v1/vitals",
+            L"HTTP/1.1",
+            nullptr, nullptr,
+            winhttp::WINHTTP_FLAG_SECURE
+        );
+        TEST_ASSERT(hRequest != nullptr, "WinHttpOpenRequest must return valid request handle");
+
+        // 4. WinHttpSendRequest (TLS 1.3 Handshake & HTTP Request Dispatch)
+        winhttp::BOOL sendOk = winhttp::WinHttpSendRequest(
+            hRequest, nullptr, 0, nullptr, 0, 0, 0
+        );
+        TEST_ASSERT(sendOk == 1, "WinHttpSendRequest must successfully execute TLS 1.3 request");
+
+        // 5. WinHttpReceiveResponse
+        winhttp::BOOL recvOk = winhttp::WinHttpReceiveResponse(hRequest, nullptr);
+        TEST_ASSERT(recvOk == 1, "WinHttpReceiveResponse must succeed");
+
+        // 6. WinHttpQueryHeaders (Status Code)
+        winhttp::DWORD statusCode = 0;
+        winhttp::DWORD statusLen = sizeof(winhttp::DWORD);
+        winhttp::BOOL qStatusOk = winhttp::WinHttpQueryHeaders(
+            hRequest,
+            winhttp::WINHTTP_QUERY_STATUS_CODE | winhttp::WINHTTP_QUERY_FLAG_NUMBER,
+            nullptr, &statusCode, &statusLen, nullptr
+        );
+        TEST_ASSERT(qStatusOk == 1 && statusCode == 200, "WinHttpQueryHeaders must return HTTP 200 status code");
+
+        // 7. WinHttpQueryDataAvailable & WinHttpReadData
+        winhttp::DWORD bytesAvail = 0;
+        winhttp::WinHttpQueryDataAvailable(hRequest, &bytesAvail);
+        TEST_ASSERT(bytesAvail > 0, "WinHttpQueryDataAvailable must report > 0 unread response bytes");
+
+        std::vector<char> buffer(bytesAvail + 1, 0);
+        winhttp::DWORD bytesRead = 0;
+        winhttp::BOOL readOk = winhttp::WinHttpReadData(hRequest, buffer.data(), bytesAvail, &bytesRead);
+        TEST_ASSERT(readOk == 1 && bytesRead == bytesAvail, "WinHttpReadData must read all available response bytes");
+
+        std::string bodyStr(buffer.data(), bytesRead);
+        TEST_ASSERT(bodyStr.find("MicaNT 10.0.26100.5900") != std::string::npos,
+                    "WinHTTP response body must contain operating system version string");
+        TEST_ASSERT(bodyStr.find("Intel Xeon E3-1270 v6") != std::string::npos,
+                    "WinHTTP response body must report Supermicro platform silicon");
+
+        // 8. WinHttpCloseHandle
+        winhttp::WinHttpCloseHandle(hRequest);
+        winhttp::WinHttpCloseHandle(hConnect);
+        winhttp::WinHttpCloseHandle(hSession);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Real-Time WebSockets Engine (wss://), Live Telemetry Push Stream & Interactive Web Terminal
+    // ------------------------------------------------------------------------
+    {
+        um::net::ws::WsCatClient wscat;
+
+        // 1. Interactive Remote Web Terminal (wss://localhost/api/v1/terminal)
+        std::vector<std::string> commands = { "ver", "vitals", "ps", "mem", "storage", "net", "wfp" };
+        auto termSession = wscat.runInteractiveSession("wss://localhost:443/api/v1/terminal", commands, true);
+
+        TEST_ASSERT(termSession.connected, "wscat must successfully connect and upgrade to wss://.../terminal");
+        TEST_ASSERT(termSession.httpStatusCode == 101, "HTTP upgrade response must be 101 Switching Protocols");
+        TEST_ASSERT(!termSession.serverAcceptKey.empty(), "Server Sec-WebSocket-Accept token must be valid");
+        TEST_ASSERT(termSession.pongReceived, "Server must respond to WebSocket Ping with Pong frame");
+        TEST_ASSERT(termSession.receivedMessages.size() == commands.size(),
+                    "Terminal session must receive response frame for each issued command");
+
+        // Verify command execution responses
+        TEST_ASSERT(termSession.receivedMessages[0].find("Version 10.0.26100.5900") != std::string::npos,
+                    "Terminal 'ver' command must output MicaNT build version");
+        TEST_ASSERT(termSession.receivedMessages[1].find("Intel Xeon E3-1270 v6") != std::string::npos,
+                    "Terminal 'vitals' command must output CPU vitals");
+        TEST_ASSERT(termSession.receivedMessages[2].find("smss.exe") != std::string::npos,
+                    "Terminal 'ps' command must output active process list");
+        TEST_ASSERT(termSession.receivedMessages[3].find("32,768 MB Total") != std::string::npos,
+                    "Terminal 'mem' command must output memory stats");
+        TEST_ASSERT(termSession.receivedMessages[4].find("NVMe SSD 1TB") != std::string::npos,
+                    "Terminal 'storage' command must output NVMe storage volume status");
+        TEST_ASSERT(termSession.receivedMessages[5].find("Intel I210-AT") != std::string::npos,
+                    "Terminal 'net' command must output NIC details");
+        TEST_ASSERT(termSession.receivedMessages[6].find("WFP Engine: Active") != std::string::npos,
+                    "Terminal 'wfp' command must output firewall filter rules and packet stats");
+        TEST_ASSERT(termSession.closedCleanly, "WebSocket session must terminate with clean Close frame");
+
+        // 2. Real-Time Push Telemetry Stream (wss://localhost/api/v1/stream)
+        std::vector<std::string> streamReq = { "telemetry_poll" };
+        auto streamSession = wscat.runInteractiveSession("wss://localhost:443/api/v1/stream", streamReq, false);
+        TEST_ASSERT(streamSession.connected, "wscat must successfully connect to wss://.../stream");
+        TEST_ASSERT(!streamSession.receivedMessages.empty(), "Stream session must receive telemetry push event frame");
+        TEST_ASSERT(streamSession.receivedMessages[0].find("\"event\":\"telemetry\"") != std::string::npos,
+                    "Stream frame must contain telemetry JSON event");
+        TEST_ASSERT(streamSession.receivedMessages[0].find("\"cpu_percent\":") != std::string::npos,
+                    "Stream frame must contain live CPU percent");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Subsystem Driver Registration, SCM Services & C ABI Verification
+    // ------------------------------------------------------------------------
+    {
+        // 1. Initialize Subsystems
+        winhttp::InitializeWinHttpSubsystemExports();
+        um::net::ws::InitializeWebSocketSubsystem();
+        um::net::ws::InitializeWsCatSubsystem();
+
+        // 2. SCM Registration Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto winhttpRecord = scm.getServiceRecord(L"winhttp");
+        TEST_ASSERT(winhttpRecord != nullptr, "winhttp service must be registered in SCM");
+        TEST_ASSERT(winhttpRecord->serviceType == scm::SERVICE_WIN32_SHARE_PROCESS,
+                    "winhttp must be SERVICE_WIN32_SHARE_PROCESS");
+
+        auto wsRecord = scm.getServiceRecord(L"websocket");
+        TEST_ASSERT(wsRecord != nullptr, "websocket service must be registered in SCM");
+        TEST_ASSERT(wsRecord->serviceType == scm::SERVICE_WIN32_SHARE_PROCESS,
+                    "websocket must be SERVICE_WIN32_SHARE_PROCESS");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("winhttp.dll") != nullptr, "winhttp.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("websocket.dll") != nullptr, "websocket.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("wscat.exe") != nullptr, "wscat.exe must be registered in VersionDatabase");
+
+        // 4. JanusLDR Dynamic Export Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpOpen") != nullptr, "winhttp.dll!WinHttpOpen must be exported");
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpConnect") != nullptr, "winhttp.dll!WinHttpConnect must be exported");
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpOpenRequest") != nullptr, "winhttp.dll!WinHttpOpenRequest must be exported");
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpSendRequest") != nullptr, "winhttp.dll!WinHttpSendRequest must be exported");
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpReceiveResponse") != nullptr, "winhttp.dll!WinHttpReceiveResponse must be exported");
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpReadData") != nullptr, "winhttp.dll!WinHttpReadData must be exported");
+        TEST_ASSERT(ldr.getExport("winhttp.dll", "WinHttpCloseHandle") != nullptr, "winhttp.dll!WinHttpCloseHandle must be exported");
+
+        TEST_ASSERT(ldr.getExport("websocket.dll", "WebSocketCreateClientHandle") != nullptr, "websocket.dll!WebSocketCreateClientHandle must be exported");
+        TEST_ASSERT(ldr.getExport("websocket.dll", "WebSocketBeginClientHandshake") != nullptr, "websocket.dll!WebSocketBeginClientHandshake must be exported");
+        TEST_ASSERT(ldr.getExport("websocket.dll", "WebSocketEndClientHandshake") != nullptr, "websocket.dll!WebSocketEndClientHandshake must be exported");
+        TEST_ASSERT(ldr.getExport("websocket.dll", "WebSocketSend") != nullptr, "websocket.dll!WebSocketSend must be exported");
+        TEST_ASSERT(ldr.getExport("websocket.dll", "WebSocketDeleteHandle") != nullptr, "websocket.dll!WebSocketDeleteHandle must be exported");
+    }
+
+    std::cout << "[HORIZON 156] Sovereign WinHTTP Subsystem (winhttp.dll), WebSockets Engine (websocket.dll), Live Telemetry Push Stream & Interactive Web Terminal Summary:\n"
+              << "    Pillar 1: Sovereign FIPS 180-1 SHA-1 Cryptographic Hash Primitive & KAT Vectors OK\n"
+              << "    Pillar 2: RFC 6455 WebSocket Handshake Key Negotiation & Base64 Verification OK\n"
+              << "    Pillar 3: RFC 6455 WebSocket Frame Serialization, Masking & Deserialization Pipeline OK\n"
+              << "    Pillar 4: Sovereign WinHTTP Client Subsystem (winhttp.dll) & TLS 1.3 Transport Pipeline OK\n"
+              << "    Pillar 5: Real-Time WebSockets Engine (wss://), Live Telemetry Push Stream & Interactive Web Terminal OK\n"
+              << "    Pillar 6: Subsystem Driver Registration, SCM Services & C ABI Verification OK\n";
+
+    std::cout << "[TEST] Suite 372: Horizon 156 - Sovereign WinHTTP Subsystem (winhttp.dll), WebSockets Engine (websocket.dll), Live Telemetry Push Stream & Interactive Web Terminal PASSED." << std::endl;
+}
