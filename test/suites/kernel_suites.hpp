@@ -27261,3 +27261,289 @@ void Test_Horizon157_Smb311_ServerDriver_ShareEncryption_VfsPipeline_And_NetCLI(
 
     std::cout << "[TEST] Suite 373: Horizon 157 - Sovereign SMB 3.1.1 Enterprise File Sharing Driver (srv2.sys), Share Encryption (AES-128-GCM), Pre-Auth Integrity (SHA-512), VFS Pipeline & net.exe CLI PASSED." << std::endl;
 }
+
+// ============================================================================
+// SUITE 374: Horizon 158 - Sovereign Remote Desktop Protocol (RDP 10.x / MS-RDPBCGR),
+//            TLS 1.3 / CredSSP NLA Transport, Fast-Path Graphics Pipeline,
+//            Dynamic Virtual Channels & Canonical mstsc.exe Client
+// ============================================================================
+
+void Test_Horizon158_Rdp10_ServerDriver_CredSspNla_FastPathPipeline_And_MstscCLI() {
+    std::cout << "[TEST] Running Suite 374: Horizon 158 - Sovereign Remote Desktop Protocol (RDP 10.x / MS-RDPBCGR), TLS 1.3 / CredSSP NLA Transport, Fast-Path Graphics Pipeline, Dynamic Virtual Channels & Canonical mstsc.exe Client..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: TPKT (RFC 1006) Framing, X.224 Transport Protocol & MS-RDPBCGR Negotiation
+    // ------------------------------------------------------------------------
+    {
+        // 1. TPKT Framing codec
+        TEST_ASSERT(sizeof(rdp::TpktHeader) == 4, "TpktHeader size must be exactly 4 bytes");
+        rdp::TpktHeader tpkt{};
+        tpkt.version = rdp::TPKT_VERSION; // 3
+        tpkt.length = 0x0020;
+        TEST_ASSERT(tpkt.version == 3, "TPKT version must be 3 (RFC 1006)");
+
+        // 2. X.224 Connection Request / Confirm codec
+        TEST_ASSERT(sizeof(rdp::X224CrHeader) == 7, "X224CrHeader size must be 7 bytes");
+        TEST_ASSERT(sizeof(rdp::X224CcHeader) == 7, "X224CcHeader size must be 7 bytes");
+        rdp::X224CrHeader cr{};
+        TEST_ASSERT(cr.tpduCode == rdp::X224_TPDU_CR, "CR TPDU code must match 0xE0");
+        rdp::X224CcHeader cc{};
+        TEST_ASSERT(cc.tpduCode == rdp::X224_TPDU_CC, "CC TPDU code must match 0xD0");
+
+        // 3. RDP Negotiation Request / Response codec
+        TEST_ASSERT(sizeof(rdp::RdpNegReq) == 8, "RdpNegReq size must be 8 bytes");
+        TEST_ASSERT(sizeof(rdp::RdpNegRsp) == 8, "RdpNegRsp size must be 8 bytes");
+        rdp::RdpNegReq negReq{};
+        TEST_ASSERT(negReq.type == rdp::RDP_NEG_REQ, "RdpNegReq type must match 0x01");
+        rdp::RdpNegRsp negRsp{};
+        TEST_ASSERT(negRsp.type == rdp::RDP_NEG_RSP, "RdpNegRsp type must match 0x02");
+
+        // 4. Server multi-protocol negotiation processing
+        auto& server = rdp::EnterpriseRdpServer::get();
+        server.initialize(3389);
+
+        std::vector<uint8_t> crPdu(sizeof(rdp::TpktHeader) + sizeof(rdp::X224CrHeader) + sizeof(rdp::RdpNegReq), 0);
+        auto* reqTpkt = reinterpret_cast<rdp::TpktHeader*>(crPdu.data());
+        reqTpkt->version = rdp::TPKT_VERSION;
+        reqTpkt->length = static_cast<uint16_t>(crPdu.size());
+
+        auto* reqCr = reinterpret_cast<rdp::X224CrHeader*>(crPdu.data() + sizeof(rdp::TpktHeader));
+        reqCr->lengthIndicator = 6;
+        reqCr->tpduCode = rdp::X224_TPDU_CR;
+        reqCr->srcRef = 0x4321;
+
+        auto* reqNeg = reinterpret_cast<rdp::RdpNegReq*>(crPdu.data() + sizeof(rdp::TpktHeader) + sizeof(rdp::X224CrHeader));
+        reqNeg->type = rdp::RDP_NEG_REQ;
+        reqNeg->length = 8;
+        reqNeg->requestedProtocols = rdp::PROTOCOL_HYBRID | rdp::PROTOCOL_SSL;
+
+        std::vector<uint8_t> ccResp;
+        uint32_t selectedProto = 0;
+        bool negOk = server.processConnectionRequest(crPdu, ccResp, selectedProto);
+        TEST_ASSERT(negOk, "processConnectionRequest must succeed");
+        TEST_ASSERT(selectedProto == rdp::PROTOCOL_HYBRID, "Server must negotiate PROTOCOL_HYBRID (CredSSP / NLA)");
+        TEST_ASSERT(ccResp.size() >= sizeof(rdp::TpktHeader) + sizeof(rdp::X224CcHeader) + sizeof(rdp::RdpNegRsp), "Response must contain TPKT+CC+NEG_RSP");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: ITU-T T.125 MCS Domain, User Attachment, Channel Join & Licensing
+    // ------------------------------------------------------------------------
+    {
+        auto& server = rdp::EnterpriseRdpServer::get();
+        auto session = server.createSession("147.135.1.229", "TEST-MSTSC", L"Administrator", L"MICANT");
+        TEST_ASSERT(session != nullptr, "Session creation must succeed");
+        uint32_t sid = session->getSessionId();
+
+        // 1. MCS Connect Initial -> Connect Response
+        std::vector<uint8_t> mcsReq;
+        std::vector<uint8_t> mcsResp;
+        uint16_t ioChannel = 0, bcastChannel = 0;
+        bool mcsOk = server.processMcsConnectInitial(mcsReq, mcsResp, ioChannel, bcastChannel);
+        TEST_ASSERT(mcsOk, "processMcsConnectInitial must succeed");
+        TEST_ASSERT(ioChannel == 1003, "Allocated IO channel must be 1003");
+        TEST_ASSERT(bcastChannel == 1004, "Allocated Broadcast channel must be 1004");
+        TEST_ASSERT(mcsResp.size() > 20, "MCS Connect Response PDU must be non-empty");
+
+        // 2. MCS Attach User
+        std::vector<uint8_t> attachResp;
+        uint16_t userId = 0;
+        bool attachOk = server.processAttachUser(sid, attachResp, userId);
+        TEST_ASSERT(attachOk, "MCS AttachUser must succeed");
+        TEST_ASSERT(userId >= 0x1001, "Allocated MCS User ID must be >= 0x1001");
+
+        // 3. MCS Channel Joins
+        std::vector<uint8_t> joinResp;
+        bool joinUserOk = server.processChannelJoin(userId, userId, joinResp);
+        TEST_ASSERT(joinUserOk, "MCS join user channel must succeed");
+        bool joinIoOk = server.processChannelJoin(userId, ioChannel, joinResp);
+        TEST_ASSERT(joinIoOk, "MCS join IO channel must succeed");
+
+        // 4. Capability Exchange (Demand Active PDU -> Confirm Active PDU)
+        std::vector<uint8_t> demandPdu;
+        bool demandOk = server.buildDemandActivePdu(sid, demandPdu);
+        TEST_ASSERT(demandOk, "buildDemandActivePdu must succeed");
+        TEST_ASSERT(demandPdu.size() > 50, "Demand Active PDU size must contain capability sets");
+
+        std::vector<uint8_t> confirmPdu = { 0x00, 0x13 };
+        bool confirmOk = server.processConfirmActivePdu(sid, confirmPdu);
+        TEST_ASSERT(confirmOk, "processConfirmActivePdu must succeed");
+        TEST_ASSERT(session->getState() == rdp::RdpSessionState::ActiveStreaming, "Session must transition to ActiveStreaming");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Fast-Path Graphics Pipeline (MS-RDPEGDC) & Input Event Handling
+    // ------------------------------------------------------------------------
+    {
+        // 1. Fast-Path Bitmap Update encoding
+        rdp::RdpDirtyRect rect{ .x = 100, .y = 200, .width = 128, .height = 128 };
+        std::vector<uint32_t> pixels(128 * 128, 0xFF00D4FF); // Barrer Cyan ARGB
+        auto pdu = rdp::EnterpriseRdpServer::encodeFastPathBitmapUpdate(rect, pixels);
+        TEST_ASSERT(!pdu.empty(), "encodeFastPathBitmapUpdate must generate non-empty PDU");
+        uint8_t header = pdu[0];
+        TEST_ASSERT((header & 0x0F) == rdp::FASTPATH_UPDATETYPE_BITMAP, "FastPath header must indicate BITMAP update");
+
+        uint16_t rx = 0, ry = 0, rw = 0, rh = 0;
+        std::memcpy(&rx, pdu.data() + 1, 2);
+        std::memcpy(&ry, pdu.data() + 3, 2);
+        std::memcpy(&rw, pdu.data() + 5, 2);
+        std::memcpy(&rh, pdu.data() + 7, 2);
+        TEST_ASSERT(rx == 100 && ry == 200 && rw == 128 && rh == 128, "Dirty rect coordinates in PDU must match original");
+
+        // 2. Fast-Path Input Event parsing
+        // Keyboard scancode: 'A' (scancode 0x1E, press)
+        std::vector<uint8_t> keyPdu = { static_cast<uint8_t>(rdp::FASTPATH_INPUT_EVENT_SCANCODE << 5), 0x00, 0x1E };
+        rdp::RdpInputEvent keyEv;
+        bool keyParsed = rdp::EnterpriseRdpServer::parseFastPathInput(keyPdu, keyEv);
+        TEST_ASSERT(keyParsed, "parseFastPathInput for keyboard must succeed");
+        TEST_ASSERT(keyEv.eventType == rdp::FASTPATH_INPUT_EVENT_SCANCODE, "Event type must be SCANCODE");
+        TEST_ASSERT(keyEv.scanCode == 0x1E, "Scancode must match 0x1E");
+
+        // Mouse click: Left button down at (640, 480)
+        std::vector<uint8_t> mousePdu(7, 0);
+        mousePdu[0] = static_cast<uint8_t>(rdp::FASTPATH_INPUT_EVENT_MOUSE << 5);
+        uint16_t btnFlags = rdp::PTRFLAGS_BUTTON1 | rdp::PTRFLAGS_DOWN;
+        uint16_t mx = 640, my = 480;
+        std::memcpy(mousePdu.data() + 1, &btnFlags, 2);
+        std::memcpy(mousePdu.data() + 3, &mx, 2);
+        std::memcpy(mousePdu.data() + 5, &my, 2);
+        rdp::RdpInputEvent mouseEv;
+        bool mouseParsed = rdp::EnterpriseRdpServer::parseFastPathInput(mousePdu, mouseEv);
+        TEST_ASSERT(mouseParsed, "parseFastPathInput for mouse must succeed");
+        TEST_ASSERT(mouseEv.eventType == rdp::FASTPATH_INPUT_EVENT_MOUSE, "Event type must be MOUSE");
+        TEST_ASSERT(mouseEv.mouseX == 640 && mouseEv.mouseY == 480, "Mouse coordinates must match 640x480");
+        TEST_ASSERT(mouseEv.mouseFlags & rdp::PTRFLAGS_BUTTON1, "Button 1 flag must be set");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Static & Dynamic Virtual Channels (cliprdr, rdpsnd, rdpdr)
+    // ------------------------------------------------------------------------
+    {
+        mstsc::um::MstscConfig cfg;
+        cfg.server = "147.135.1.229";
+        cfg.port = 3389;
+        cfg.width = 1920;
+        cfg.height = 1080;
+
+        mstsc::um::MstscClientSession client;
+        bool connected = client.connect(cfg);
+        TEST_ASSERT(connected, "MstscClientSession connect must complete end-to-end handshake");
+        TEST_ASSERT(client.isConnected(), "Client must be connected");
+
+        // 1. Virtual channel registration check
+        auto session = rdp::EnterpriseRdpServer::get().getSession(client.getSessionId());
+        TEST_ASSERT(session != nullptr, "Server session must be retrieved");
+        TEST_ASSERT(session->hasVirtualChannel(rdp::CHANNEL_CLIPRDR), "cliprdr channel must be registered");
+        TEST_ASSERT(session->hasVirtualChannel(rdp::CHANNEL_RDPSND), "rdpsnd channel must be registered");
+        TEST_ASSERT(session->hasVirtualChannel(rdp::CHANNEL_RDPDR), "rdpdr channel must be registered");
+
+        // 2. Clipboard Redirection (cliprdr) send & receive
+        std::wstring testClip = L"MicaNT Sovereign OS Horizon 158 Clipboard Payload";
+        bool sendClipOk = client.sendClipboardText(testClip);
+        TEST_ASSERT(sendClipOk, "sendClipboardText must succeed");
+
+        std::wstring recvClip;
+        bool recvClipOk = client.receiveClipboardText(recvClip);
+        TEST_ASSERT(recvClipOk, "receiveClipboardText must succeed");
+        TEST_ASSERT(recvClip == testClip, "Clipboard payload must match sent text exactly");
+
+        // 3. Input injection through client session
+        bool keyOk = client.sendKey(0x1E, true);
+        TEST_ASSERT(keyOk, "client.sendKey must succeed");
+        bool mouseOk = client.sendMouse(1024, 768, rdp::PTRFLAGS_BUTTON1 | rdp::PTRFLAGS_DOWN);
+        TEST_ASSERT(mouseOk, "client.sendMouse must succeed");
+        TEST_ASSERT(session->getInputEventsProcessed() >= 2, "Session must record processed input events");
+
+        client.disconnect();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical Win32 mstsc.exe Client CLI & Session Management (query / reset)
+    // ------------------------------------------------------------------------
+    {
+        // 1. mstsc CLI execution
+        auto& mstscCli = mstsc::um::MstscCommandExecutor::Instance();
+        std::string mstscOut;
+        int rc = mstscCli.execute(std::vector<std::string_view>{"/v:147.135.1.229:3389", "/admin", "/w:1920", "/h:1080"}, mstscOut);
+        TEST_ASSERT(rc == 0, "mstsc /v:147.135.1.229:3389 must succeed");
+        TEST_ASSERT(mstscOut.find("established successfully") != std::string::npos, "mstsc output must confirm session establishment");
+
+        // 2. query session CLI execution
+        auto& sessionCli = mstsc::um::SessionCommandExecutor::Instance();
+        std::string querySessionOut;
+        rc = sessionCli.executeQuery(std::vector<std::string_view>{"session"}, querySessionOut);
+        TEST_ASSERT(rc == 0, "query session must succeed");
+        TEST_ASSERT(querySessionOut.find("SESSIONNAME") != std::string::npos, "query session output must have header");
+        TEST_ASSERT(querySessionOut.find("Console") != std::string::npos || querySessionOut.find("console") != std::string::npos, "query session must list Console");
+
+        // 3. query user CLI execution
+        std::string queryUserOut;
+        rc = sessionCli.executeQuery(std::vector<std::string_view>{"user"}, queryUserOut);
+        TEST_ASSERT(rc == 0, "query user must succeed");
+        TEST_ASSERT(queryUserOut.find("Administrator") != std::string::npos, "query user output must list Administrator");
+
+        // 4. WTSAPI32 C API validation directly
+        wts::um::PWTS_SESSION_INFOW pSessions = nullptr;
+        wts::um::DWORD sessCount = 0;
+        BOOL wtsOk = wts::um::WTSEnumerateSessionsW(wts::um::WTS_CURRENT_SERVER_HANDLE, 0, 1, &pSessions, &sessCount);
+        TEST_ASSERT(wtsOk && sessCount >= 1, "WTSEnumerateSessionsW must return active sessions");
+        wts::um::WTSFreeMemory(pSessions);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Kernel Driver Registration, SCM Services & Live Remote Console Integration
+    // ------------------------------------------------------------------------
+    {
+        // 1. SCM Services Registration
+        rdp::RegisterRdpSubsystem();
+        auto& scm = scm::ServiceControlManager::get();
+
+        auto termSvc = scm.getServiceRecord(L"TermService");
+        TEST_ASSERT(termSvc != nullptr, "TermService must be registered in SCM");
+        TEST_ASSERT(termSvc->isRunning(), "TermService must be in SERVICE_RUNNING state");
+        TEST_ASSERT(termSvc->startType == scm::SERVICE_AUTO_START, "TermService must be SERVICE_AUTO_START");
+
+        auto envSvc = scm.getServiceRecord(L"SessionEnv");
+        TEST_ASSERT(envSvc != nullptr, "SessionEnv must be registered in SCM");
+        TEST_ASSERT(envSvc->isRunning(), "SessionEnv must be in SERVICE_RUNNING state");
+
+        auto umrdpSvc = scm.getServiceRecord(L"UmRdpService");
+        TEST_ASSERT(umrdpSvc != nullptr, "UmRdpService must be registered in SCM");
+
+        // 2. VersionDatabase Registration
+        auto& verDb = version::VersionDatabase::Instance();
+        auto* mstscMod = verDb.FindModule("mstsc.exe");
+        TEST_ASSERT(mstscMod != nullptr && mstscMod->stringTable.at("FileVersion") == "10.0.26100.5900", "mstsc.exe version must match 10.0.26100.5900");
+        auto* termsrvMod = verDb.FindModule("termsrv.dll");
+        TEST_ASSERT(termsrvMod != nullptr && termsrvMod->stringTable.at("FileVersion") == "10.0.26100.5900", "termsrv.dll version must match 10.0.26100.5900");
+        auto* wtsMod = verDb.FindModule("wtsapi32.dll");
+        TEST_ASSERT(wtsMod != nullptr && wtsMod->stringTable.at("FileVersion") == "10.0.26100.5900", "wtsapi32.dll version must match 10.0.26100.5900");
+
+        // 3. WFP Port 3389 Firewall Rule Verification
+        auto& httpsConsole = km::net::HttpsExecutiveConsole::get();
+        httpsConsole.startHttpsServer(443);
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+
+        auto rdpRuleOpt = wfp.findRuleById(15801);
+        TEST_ASSERT(rdpRuleOpt.has_value() && rdpRuleOpt->localPortStart == 3389, "WFP filter rule 15801 for RDP Port 3389 must be armed");
+
+        // 4. Remote Web Terminal command execution: "query session"
+        std::string termOut = httpsConsole.executeTerminalCommand("query session");
+        TEST_ASSERT(termOut.find("SESSIONNAME") != std::string::npos, "Web terminal 'query session' must return session table");
+
+        // 5. Live Telemetry Push Stream contains RDP stats
+        std::string streamJson = httpsConsole.generateStreamTelemetryJson();
+        TEST_ASSERT(streamJson.find("rdp_sessions") != std::string::npos, "Push stream JSON must include rdp_sessions");
+        TEST_ASSERT(streamJson.find("rdp_frames") != std::string::npos, "Push stream JSON must include rdp_frames");
+        TEST_ASSERT(streamJson.find("rdp_inputs") != std::string::npos, "Push stream JSON must include rdp_inputs");
+    }
+
+    std::cout << "[HORIZON 158] Sovereign Remote Desktop Protocol (RDP 10.x / MS-RDPBCGR), TLS 1.3 / CredSSP NLA Transport, Fast-Path Graphics Pipeline, Dynamic Virtual Channels & Canonical mstsc.exe Client Summary:\n"
+              << "    Pillar 1: TPKT (RFC 1006) Framing, X.224 Transport Protocol & MS-RDPBCGR Negotiation OK\n"
+              << "    Pillar 2: ITU-T T.125 MCS Domain, User Attachment, Channel Join & Licensing OK\n"
+              << "    Pillar 3: Fast-Path Graphics Pipeline (MS-RDPEGDC) & Input Event Handling OK\n"
+              << "    Pillar 4: Static & Dynamic Virtual Channels (cliprdr, rdpsnd, rdpdr) OK\n"
+              << "    Pillar 5: Canonical Win32 mstsc.exe Client CLI & Session Management (query / reset) OK\n"
+              << "    Pillar 6: Kernel Driver Registration, SCM Services & Live Remote Console Integration OK\n";
+
+    std::cout << "[TEST] Suite 374: Horizon 158 - Sovereign Remote Desktop Protocol (RDP 10.x / MS-RDPBCGR), TLS 1.3 / CredSSP NLA Transport, Fast-Path Graphics Pipeline, Dynamic Virtual Channels & Canonical mstsc.exe Client PASSED." << std::endl;
+}

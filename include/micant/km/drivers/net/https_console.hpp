@@ -27,6 +27,8 @@
 #include "micant/um/subsystems/net/websocket.hpp"
 #include "micant/km/drivers/net/srv2.hpp"
 #include "micant/um/subsystems/net/net_cmd.hpp"
+#include "micant/um/servers/rdp.hpp"
+#include "micant/um/subsystems/net/mstsc.hpp"
 
 namespace micant::km::net {
 
@@ -76,6 +78,19 @@ public:
         smbRule.weight = 1500;
         smbRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(smbRule);
+
+        // 4. Register WFP Inbound Rule for Remote Desktop Protocol (TCP Port 3389)
+        wfp::km::WfpKernelFilterRule rdpRule{};
+        rdpRule.filterId = 15801;
+        rdpRule.name = "MicaNT_RDP_Inbound_Permit";
+        rdpRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        rdpRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rdpRule.protocol = tcpip::IPPROTO_TCP;
+        rdpRule.localPortStart = 3389;
+        rdpRule.localPortEnd = 3389;
+        rdpRule.weight = 1500;
+        rdpRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(rdpRule);
     }
 
     void stopHttpsServer() {
@@ -379,6 +394,57 @@ public:
             std::string res;
             netcmd::um::NetCommandExecutor::Instance().execute(subArgs, res);
             return res;
+        } else if (cmd == "mstsc" || cmd.starts_with("mstsc ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            std::span<const std::string_view> subArgs;
+            if (tokens.size() > 1) {
+                subArgs = std::span<const std::string_view>(tokens.data() + 1, tokens.size() - 1);
+            }
+            std::string res;
+            mstsc::um::MstscCommandExecutor::Instance().execute(subArgs, res);
+            return res;
+        } else if (cmd == "query" || cmd.starts_with("query ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            std::span<const std::string_view> subArgs;
+            if (tokens.size() > 1) {
+                subArgs = std::span<const std::string_view>(tokens.data() + 1, tokens.size() - 1);
+            }
+            std::string res;
+            mstsc::um::SessionCommandExecutor::Instance().executeQuery(subArgs, res);
+            return res;
+        } else if (cmd == "reset" || cmd.starts_with("reset ") || cmd.starts_with("rwinsta ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            std::span<const std::string_view> subArgs;
+            if (tokens.size() > 1) {
+                subArgs = std::span<const std::string_view>(tokens.data() + 1, tokens.size() - 1);
+            }
+            std::string res;
+            mstsc::um::SessionCommandExecutor::Instance().executeReset(subArgs, res);
+            return res;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -388,6 +454,9 @@ public:
                    "  storage  List mounted storage volumes and filesystems\r\n"
                    "  net      Display network adapter and IP configuration\r\n"
                    "  net share/use/session Manage SMB shares, connections, and sessions\r\n"
+                   "  query session/user    Display active RDP / terminal sessions\r\n"
+                   "  reset session <id>    Disconnect or logoff terminal session\r\n"
+                   "  mstsc [/v:host]       Remote Desktop Connection client\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -399,6 +468,7 @@ public:
 
     std::string generateStreamTelemetryJson() const {
         auto& smbSrv = smb::km::SmbServerEngine::Instance();
+        auto& rdpSrv = rdp::EnterpriseRdpServer::get();
         std::ostringstream ss;
         ss << "{\"event\":\"telemetry\",\"cpu_percent\":1.4,\"ram_used_mb\":4096,"
            << "\"ram_total_mb\":32768,\"rx_packets\":14820,\"tx_packets\":12950,"
@@ -406,7 +476,10 @@ public:
            << "\"smb_sessions\":" << smbSrv.getActiveSessionsCount() << ","
            << "\"smb_shares\":" << smbSrv.getShares().size() << ","
            << "\"smb_bytes_read\":" << smbSrv.getTotalBytesRead() << ","
-           << "\"smb_bytes_written\":" << smbSrv.getTotalBytesWritten() << "}\r\n";
+           << "\"smb_bytes_written\":" << smbSrv.getTotalBytesWritten() << ","
+           << "\"rdp_sessions\":" << rdpSrv.getAllSessions().size() << ","
+           << "\"rdp_frames\":" << rdpSrv.getTotalFrames() << ","
+           << "\"rdp_inputs\":" << rdpSrv.getTotalInputs() << "}\r\n";
         return ss.str();
     }
 

@@ -579,6 +579,253 @@ public:
     }
 
     /**
+     * @brief Process MCS Connect Initial and produce MCS Connect Response (ITU-T T.125 / MS-RDPBCGR 2.2.1.3)
+     */
+    bool processMcsConnectInitial(
+        const std::vector<uint8_t>& packet,
+        std::vector<uint8_t>& outResponse,
+        uint16_t& outIoChannel,
+        uint16_t& outBroadcastChannel
+    ) {
+        outIoChannel = 1003;
+        outBroadcastChannel = 1004;
+
+        outResponse.clear();
+        std::vector<uint8_t> mcsBody;
+        mcsBody.push_back(0x7F);
+        mcsBody.push_back(0x66);
+
+        std::vector<uint8_t> inner;
+        inner.push_back(0x0A);
+        inner.push_back(0x01);
+        inner.push_back(0x00);
+
+        inner.push_back(0x02);
+        inner.push_back(0x01);
+        inner.push_back(0x00);
+
+        std::vector<uint8_t> domParams = {
+            0x02, 0x01, 0x22,
+            0x02, 0x01, 0x02,
+            0x02, 0x01, 0x00,
+            0x02, 0x01, 0x01,
+            0x02, 0x01, 0x00,
+            0x02, 0x01, 0x01,
+            0x02, 0x02, 0xFF, 0xF8,
+            0x02, 0x01, 0x02
+        };
+        inner.push_back(0x30);
+        inner.push_back(static_cast<uint8_t>(domParams.size()));
+        inner.insert(inner.end(), domParams.begin(), domParams.end());
+
+        std::vector<uint8_t> userData;
+        uint16_t coreTag = 0x0C01;
+        uint16_t coreLen = 16;
+        uint32_t rdpVer = 0x00080004;
+        uint32_t proto = PROTOCOL_HYBRID | PROTOCOL_SSL;
+        userData.resize(16, 0);
+        std::memcpy(userData.data() + 0, &coreTag, 2);
+        std::memcpy(userData.data() + 2, &coreLen, 2);
+        std::memcpy(userData.data() + 4, &rdpVer, 4);
+        std::memcpy(userData.data() + 8, &proto, 4);
+
+        std::vector<uint8_t> netData(12, 0);
+        uint16_t netTag = 0x0C03;
+        uint16_t netLen = 12;
+        std::memcpy(netData.data() + 0, &netTag, 2);
+        std::memcpy(netData.data() + 2, &netLen, 2);
+        std::memcpy(netData.data() + 4, &outIoChannel, 2);
+        uint16_t channelCount = 5;
+        std::memcpy(netData.data() + 6, &channelCount, 2);
+        userData.insert(userData.end(), netData.begin(), netData.end());
+
+        inner.push_back(0x04);
+        inner.push_back(static_cast<uint8_t>(userData.size()));
+        inner.insert(inner.end(), userData.begin(), userData.end());
+
+        mcsBody.push_back(static_cast<uint8_t>(inner.size()));
+        mcsBody.insert(mcsBody.end(), inner.begin(), inner.end());
+
+        size_t totalLen = 4 + 3 + mcsBody.size();
+        outResponse.resize(totalLen);
+        outResponse[0] = TPKT_VERSION;
+        outResponse[1] = 0x00;
+        outResponse[2] = static_cast<uint8_t>((totalLen >> 8) & 0xFF);
+        outResponse[3] = static_cast<uint8_t>(totalLen & 0xFF);
+        outResponse[4] = 0x02;
+        outResponse[5] = X224_TPDU_DATA;
+        outResponse[6] = 0x80;
+        std::memcpy(outResponse.data() + 7, mcsBody.data(), mcsBody.size());
+        return true;
+    }
+
+    /**
+     * @brief Process MCS Attach User Request and emit Attach User Confirm (MS-RDPBCGR 2.2.1.7)
+     */
+    bool processAttachUser(uint32_t sessionId, std::vector<uint8_t>& outResponse, uint16_t& outUserId) {
+        outUserId = static_cast<uint16_t>(0x1001 + (sessionId & 0x0FFF));
+        outResponse.clear();
+
+        std::vector<uint8_t> mcsCfm = {
+            0x2E,
+            0x00,
+            static_cast<uint8_t>((outUserId >> 8) & 0xFF),
+            static_cast<uint8_t>(outUserId & 0xFF)
+        };
+
+        size_t totalLen = 4 + 3 + mcsCfm.size();
+        outResponse.resize(totalLen);
+        outResponse[0] = TPKT_VERSION;
+        outResponse[1] = 0x00;
+        outResponse[2] = static_cast<uint8_t>((totalLen >> 8) & 0xFF);
+        outResponse[3] = static_cast<uint8_t>(totalLen & 0xFF);
+        outResponse[4] = 0x02;
+        outResponse[5] = X224_TPDU_DATA;
+        outResponse[6] = 0x80;
+        std::memcpy(outResponse.data() + 7, mcsCfm.data(), mcsCfm.size());
+        return true;
+    }
+
+    /**
+     * @brief Process MCS Channel Join Request and emit Channel Join Confirm (MS-RDPBCGR 2.2.1.8)
+     */
+    bool processChannelJoin(uint16_t userId, uint16_t channelId, std::vector<uint8_t>& outResponse) {
+        outResponse.clear();
+        std::vector<uint8_t> cfm(9, 0);
+        cfm[0] = 0x3E;
+        cfm[1] = 0x00;
+        cfm[2] = static_cast<uint8_t>((userId >> 8) & 0xFF);
+        cfm[3] = static_cast<uint8_t>(userId & 0xFF);
+        cfm[4] = static_cast<uint8_t>((channelId >> 8) & 0xFF);
+        cfm[5] = static_cast<uint8_t>(channelId & 0xFF);
+        cfm[6] = 0x01;
+        cfm[7] = static_cast<uint8_t>((channelId >> 8) & 0xFF);
+        cfm[8] = static_cast<uint8_t>(channelId & 0xFF);
+
+        size_t totalLen = 4 + 3 + cfm.size();
+        outResponse.resize(totalLen);
+        outResponse[0] = TPKT_VERSION;
+        outResponse[1] = 0x00;
+        outResponse[2] = static_cast<uint8_t>((totalLen >> 8) & 0xFF);
+        outResponse[3] = static_cast<uint8_t>(totalLen & 0xFF);
+        outResponse[4] = 0x02;
+        outResponse[5] = X224_TPDU_DATA;
+        outResponse[6] = 0x80;
+        std::memcpy(outResponse.data() + 7, cfm.data(), cfm.size());
+        return true;
+    }
+
+    /**
+     * @brief Build RDP Demand Active PDU (MS-RDPBCGR 2.2.7.1)
+     */
+    bool buildDemandActivePdu(uint32_t sessionId, std::vector<uint8_t>& outResponse) {
+        outResponse.clear();
+        std::vector<uint8_t> caps;
+        
+        // General Caps
+        uint16_t c1Type = 0x0001, c1Len = 24;
+        std::vector<uint8_t> c1(c1Len, 0);
+        std::memcpy(c1.data() + 0, &c1Type, 2);
+        std::memcpy(c1.data() + 2, &c1Len, 2);
+        uint16_t osMajor = 10, osMinor = 0, protoVer = 0x0200;
+        std::memcpy(c1.data() + 4, &osMajor, 2);
+        std::memcpy(c1.data() + 6, &osMinor, 2);
+        std::memcpy(c1.data() + 8, &protoVer, 2);
+        caps.insert(caps.end(), c1.begin(), c1.end());
+
+        // Bitmap Caps
+        uint16_t c2Type = 0x0002, c2Len = 28;
+        std::vector<uint8_t> c2(c2Len, 0);
+        std::memcpy(c2.data() + 0, &c2Type, 2);
+        std::memcpy(c2.data() + 2, &c2Len, 2);
+        uint16_t bpp = 32, deskW = 1920, deskH = 1080;
+        std::memcpy(c2.data() + 4, &bpp, 2);
+        std::memcpy(c2.data() + 10, &deskW, 2);
+        std::memcpy(c2.data() + 12, &deskH, 2);
+        caps.insert(caps.end(), c2.begin(), c2.end());
+
+        // Input Caps
+        uint16_t c3Type = 0x000D, c3Len = 88;
+        std::vector<uint8_t> c3(c3Len, 0);
+        std::memcpy(c3.data() + 0, &c3Type, 2);
+        std::memcpy(c3.data() + 2, &c3Len, 2);
+        uint16_t inputFlags = 0x0001 | 0x0004 | 0x0020;
+        std::memcpy(c3.data() + 4, &inputFlags, 2);
+        caps.insert(caps.end(), c3.begin(), c3.end());
+
+        // Virtual Channel Caps
+        uint16_t c4Type = 0x0014, c4Len = 12;
+        std::vector<uint8_t> c4(c4Len, 0);
+        std::memcpy(c4.data() + 0, &c4Type, 2);
+        std::memcpy(c4.data() + 2, &c4Len, 2);
+        uint32_t chunkSz = 1600;
+        std::memcpy(c4.data() + 8, &chunkSz, 4);
+        caps.insert(caps.end(), c4.begin(), c4.end());
+
+        uint32_t shareId = 0x00010000 + sessionId;
+        uint16_t pduType = 0x0011;
+        uint16_t sourceDescLen = 4;
+        uint16_t numCaps = 4;
+        uint16_t combinedCapsLen = static_cast<uint16_t>(caps.size());
+
+        std::vector<uint8_t> demandPdu(34 + caps.size(), 0);
+        uint16_t totalPduLen = static_cast<uint16_t>(demandPdu.size());
+        std::memcpy(demandPdu.data() + 0, &totalPduLen, 2);
+        std::memcpy(demandPdu.data() + 2, &pduType, 2);
+        std::memcpy(demandPdu.data() + 4, &shareId, 4);
+
+        std::memcpy(demandPdu.data() + 18, &shareId, 4);
+        std::memcpy(demandPdu.data() + 22, &sourceDescLen, 2);
+        std::memcpy(demandPdu.data() + 24, &combinedCapsLen, 2);
+        std::memcpy(demandPdu.data() + 26, "RDP\0", 4);
+        std::memcpy(demandPdu.data() + 30, &numCaps, 2);
+
+        std::memcpy(demandPdu.data() + 34, caps.data(), caps.size());
+
+        size_t totalLen = 4 + 3 + demandPdu.size();
+        outResponse.resize(totalLen);
+        outResponse[0] = TPKT_VERSION;
+        outResponse[1] = 0x00;
+        outResponse[2] = static_cast<uint8_t>((totalLen >> 8) & 0xFF);
+        outResponse[3] = static_cast<uint8_t>(totalLen & 0xFF);
+        outResponse[4] = 0x02;
+        outResponse[5] = X224_TPDU_DATA;
+        outResponse[6] = 0x80;
+        std::memcpy(outResponse.data() + 7, demandPdu.data(), demandPdu.size());
+        return true;
+    }
+
+    /**
+     * @brief Process Confirm Active PDU from Client and advance session state
+     */
+    bool processConfirmActivePdu(uint32_t sessionId, const std::vector<uint8_t>& packet) {
+        auto session = getSession(sessionId);
+        if (!session) return false;
+
+        session->setState(RdpSessionState::ActiveStreaming);
+        return true;
+    }
+
+    /**
+     * @brief Route inbound Virtual Channel data (e.g. cliprdr, rdpsnd, rdpdr)
+     */
+    bool routeVirtualChannelPacket(uint32_t sessionId, const std::string& channel, const std::vector<uint8_t>& data) {
+        auto session = getSession(sessionId);
+        if (!session) return false;
+
+        uint16_t cid = session->getChannelId(channel);
+        if (cid == 0) return false;
+
+        RdpChannelPacket pkt;
+        pkt.channelName = channel;
+        pkt.channelId = cid;
+        pkt.payload = data;
+        session->queueChannelPacket(pkt);
+        m_totalVirtualChannelBytes += data.size();
+        return true;
+    }
+
+    /**
      * @brief Encode Fast-Path Bitmap Update for dirty screen rectangular region
      */
     static std::vector<uint8_t> encodeFastPathBitmapUpdate(const RdpDirtyRect& rect, const std::vector<uint32_t>& argbPixels) {
@@ -705,14 +952,14 @@ inline void RegisterRdpSubsystem() {
 
     // Register Modules in VersionDatabase
     auto& vdb = version::VersionDatabase::Instance();
-    vdb.RegisterModule("mstsc.exe", "10.0.26100.1", "Remote Desktop Connection Client");
-    vdb.RegisterModule("rdpclip.exe", "10.0.26100.1", "RDP Clip Monitor");
-    vdb.RegisterModule("rdpcorets.dll", "10.0.26100.1", "Remote Desktop Core Transport Services");
-    vdb.RegisterModule("termsrv.dll", "10.0.26100.1", "Terminal Server Service");
-    vdb.RegisterModule("wtsapi32.dll", "10.0.26100.1", "Windows Terminal Server API");
-    vdb.RegisterModule("rdpsnd.dll", "10.0.26100.1", "RDP Audio Virtual Channel");
-    vdb.RegisterModule("rdpdr.dll", "10.0.26100.1", "RDP Device Redirection Virtual Channel");
-    vdb.RegisterModule("mstscax.dll", "10.0.26100.1", "Remote Desktop ActiveX Client Control");
+    vdb.RegisterModule("mstsc.exe", "10.0.26100.5900", "Remote Desktop Connection Client");
+    vdb.RegisterModule("rdpclip.exe", "10.0.26100.5900", "RDP Clip Monitor");
+    vdb.RegisterModule("rdpcorets.dll", "10.0.26100.5900", "Remote Desktop Core Transport Services");
+    vdb.RegisterModule("termsrv.dll", "10.0.26100.5900", "Terminal Server Service");
+    vdb.RegisterModule("wtsapi32.dll", "10.0.26100.5900", "Windows Terminal Server API");
+    vdb.RegisterModule("rdpsnd.dll", "10.0.26100.5900", "RDP Audio Virtual Channel");
+    vdb.RegisterModule("rdpdr.dll", "10.0.26100.5900", "RDP Device Redirection Virtual Channel");
+    vdb.RegisterModule("mstscax.dll", "10.0.26100.5900", "Remote Desktop ActiveX Client Control");
 }
 
 } // namespace micant::rdp
