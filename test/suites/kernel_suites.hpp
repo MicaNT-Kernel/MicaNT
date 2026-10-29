@@ -24360,3 +24360,336 @@ void Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging() {
 
     std::cout << "[TEST] Suite 365: Horizon 149 - Copy-on-Write Memory Management, Section Objects & Working Set Aging Engine PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 366: Horizon 150 - NVMe 1.4/2.0 Native Submission/Completion Queue Pair Storage Driver (nvme.sys) & High-Performance Block I/O Engine
+// ============================================================================
+void Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO() {
+    std::cout << "[TEST] Running Suite 366: Horizon 150 - NVMe 1.4/2.0 Native Submission/Completion Queue Pair Storage Driver (nvme.sys) & Block I/O Engine...\n" << std::flush;
+
+    auto ctrl = std::make_shared<micant::nvme::NvmeController>(micant::nvme::NvmeVersion::Version_2_0);
+    auto dma = std::make_shared<micant::nvme::PrpDmaEngine>();
+    auto& blockDriver = micant::nvme::NvmeBlockDriver::Instance();
+
+    ctrl->resetForTesting();
+    blockDriver.resetForTesting();
+    blockDriver.initialize(ctrl, dma);
+
+    // ========================================================================
+    // Pillar 1: Multi-Queue Per-CPU Queue Pairs & Doorbell Stride Configuration
+    // ========================================================================
+    {
+        // 1. Configure Doorbell Stride (DSTRD = 1: 8 bytes per doorbell register)
+        ctrl->setDoorbellStride(1);
+        TEST_ASSERT(ctrl->getDoorbellStride() == 1, "Doorbell stride must reflect 1 (8 bytes)");
+        TEST_ASSERT(ctrl->getDoorbellOffset(0, false) == 0x1000, "Admin SQ Doorbell offset must be 0x1000");
+        TEST_ASSERT(ctrl->getDoorbellOffset(0, true) == 0x1008, "Admin CQ Doorbell offset must be 0x1008 (8-byte stride)");
+        TEST_ASSERT(ctrl->getDoorbellOffset(1, false) == 0x1010, "IO Queue 1 SQ Doorbell offset must be 0x1010");
+
+        // 2. Initialize 8 Per-CPU Core Queue Pairs for Lock-Free SMP Storage
+        ctrl->createPerCpuQueuePairs(8, 256);
+        for (uint32_t cpu = 0; cpu < 8; ++cpu) {
+            auto* qp = ctrl->getPerCpuQueuePair(cpu);
+            TEST_ASSERT(qp != nullptr, "Per-CPU queue pair must exist for each logical core");
+            TEST_ASSERT(qp->qid == static_cast<uint16_t>(cpu + 1), "QID must match core index + 1");
+            TEST_ASSERT(qp->sqSize == 256 && qp->cqSize == 256, "Queue size must be 256 entries");
+            TEST_ASSERT(qp->cqPhase == true, "Completion queue phase must start inverted to true");
+            TEST_ASSERT(ctrl->getQueueIdForCpu(cpu) == qp->qid, "getQueueIdForCpu must return matching QID");
+        }
+
+        // Test stride calculation back to 0 (standard 4 bytes)
+        ctrl->setDoorbellStride(0);
+        TEST_ASSERT(ctrl->getDoorbellOffset(1, false) == 0x1008, "IO Queue 1 SQ Doorbell with 4-byte stride must be 0x1008");
+    }
+
+    // ========================================================================
+    // Pillar 2: Scatter-Gather List (SGL) Zero-Copy Direct DMA Engine
+    // ========================================================================
+    {
+        // Prepare 16 KB (4 pages) test buffer
+        std::vector<uint8_t> hostWritePayload(16384);
+        for (size_t i = 0; i < hostWritePayload.size(); ++i) {
+            hostWritePayload[i] = static_cast<uint8_t>((i * 7 + 0x5A) & 0xFF);
+        }
+
+        // Build SGL Chain
+        std::vector<micant::nvme::NvmeSglDescriptor> sglDescs;
+        dma->buildSglChain(hostWritePayload.data(), hostWritePayload.size(), sglDescs);
+        TEST_ASSERT(sglDescs.size() == 4, "16KB buffer must generate exactly 4 SGL descriptors (4KB pages)");
+        for (const auto& desc : sglDescs) {
+            TEST_ASSERT(desc.getType() == micant::nvme::NVME_SGL_DESCRIPTOR_TYPE_DATA_BLOCK, "Descriptor type must be Data Block (0x0)");
+            TEST_ASSERT(desc.getSubType() == micant::nvme::NVME_SGL_SUBTYPE_ADDRESS, "Descriptor subtype must be Address (0x0)");
+            TEST_ASSERT(desc.length == 4096, "Each SGL descriptor must represent 4096 bytes");
+            TEST_ASSERT(desc.address != 0, "Physical address in SGL descriptor must be non-zero");
+        }
+
+        // Execute SGL Write Command (32 sectors of 512B = 16384 bytes at LBA 500)
+        micant::nvme::NvmeSqe writeSqe{};
+        writeSqe.opcode = micant::nvme::NVME_NVM_WRITE;
+        writeSqe.flags = 0x40; // PSDT = 01b (SGL)
+        writeSqe.commandId = 0x2001;
+        writeSqe.nsid = 1;
+        writeSqe.cdw10 = 500; // SLBA lower
+        writeSqe.cdw11 = 0;   // SLBA upper
+        writeSqe.cdw12 = 31;  // NLB (31 + 1 = 32 blocks)
+
+        auto writeCqe = ctrl->executeIoCommandWithSgl(writeSqe, sglDescs, *dma);
+        TEST_ASSERT(writeCqe.getStatusCode() == micant::nvme::NVME_SC_SUCCESS, "SGL Write command must succeed");
+
+        // Read back data via SGL Read Command into a clean destination
+        std::vector<micant::nvme::NvmeSglDescriptor> readSglDescs;
+        dma->buildSglChain(nullptr, hostWritePayload.size(), readSglDescs);
+
+        micant::nvme::NvmeSqe readSqe{};
+        readSqe.opcode = micant::nvme::NVME_NVM_READ;
+        readSqe.flags = 0x40; // PSDT = 01b (SGL)
+        readSqe.commandId = 0x2002;
+        readSqe.nsid = 1;
+        readSqe.cdw10 = 500;
+        readSqe.cdw11 = 0;
+        readSqe.cdw12 = 31;
+
+        auto readCqe = ctrl->executeIoCommandWithSgl(readSqe, readSglDescs, *dma);
+        TEST_ASSERT(readCqe.getStatusCode() == micant::nvme::NVME_SC_SUCCESS, "SGL Read command must succeed");
+
+        std::vector<uint8_t> hostReadBuffer(16384, 0);
+        dma->readSglMemory(readSglDescs, hostReadBuffer.data(), hostReadBuffer.size());
+        TEST_ASSERT(std::memcmp(hostWritePayload.data(), hostReadBuffer.data(), 16384) == 0, "SGL read memory must match written payload identically");
+    }
+
+    // ========================================================================
+    // Pillar 3: End-to-End Data Protection (T10 DIF/DIX Type 1)
+    // ========================================================================
+    {
+        auto ns = ctrl->getNamespace(1);
+        TEST_ASSERT(ns != nullptr, "Primary namespace must exist");
+
+        // Enable Type 1 Protection Information (16-bit CRC guard + 16-bit App Tag + 32-bit Ref Tag)
+        ns->enableProtectionInformation(1);
+        TEST_ASSERT(ns->isProtectionEnabled() == true, "Protection Information must be enabled");
+        TEST_ASSERT(ns->getProtectionType() == 1, "Protection type must be 1");
+
+        // Prepare 4 blocks (2048 bytes) of payload
+        std::vector<uint8_t> blockPayload(2048);
+        for (size_t i = 0; i < blockPayload.size(); ++i) {
+            blockPayload[i] = static_cast<uint8_t>((i * 13 + 0x33) & 0xFF);
+        }
+
+        // Generate valid Protection Information array for LBA 1000..1003
+        std::vector<micant::nvme::NvmeProtectionInformation> validPi(4);
+        for (uint32_t i = 0; i < 4; ++i) {
+            uint64_t targetLba = 1000 + i;
+            validPi[i].guardTag = micant::nvme::ComputeT10Crc16(blockPayload.data() + (i * 512), 512);
+            validPi[i].applicationTag = 0xCAFE;
+            validPi[i].referenceTag = static_cast<uint32_t>(targetLba & 0xFFFFFFFF);
+        }
+
+        // Write blocks with valid PI
+        uint16_t stPiWrite = ns->writeBlocksWithPi(1000, 4, blockPayload.data(), validPi.data());
+        TEST_ASSERT(stPiWrite == micant::nvme::NVME_SC_SUCCESS, "Writing blocks with valid T10 PI must succeed");
+
+        // Read blocks with PI verification
+        std::vector<uint8_t> readBlockBuffer(2048, 0);
+        std::vector<micant::nvme::NvmeProtectionInformation> readPi(4);
+        uint16_t stPiRead = ns->readBlocksWithPi(1000, 4, readBlockBuffer.data(), readPi.data());
+        TEST_ASSERT(stPiRead == micant::nvme::NVME_SC_SUCCESS, "Reading blocks with valid T10 PI must succeed");
+        TEST_ASSERT(std::memcmp(blockPayload.data(), readBlockBuffer.data(), 2048) == 0, "Read block buffer must match written data");
+        TEST_ASSERT(readPi[0].guardTag == validPi[0].guardTag, "Read guard tag must match calculated CRC");
+
+        // Negative Test 1: Corrupted Guard Tag (CRC mismatch)
+        auto corruptedGuardPi = validPi;
+        corruptedGuardPi[2].guardTag ^= 0xFFFF; // Corrupt CRC
+        uint16_t stBadGuard = ns->writeBlocksWithPi(1000, 4, blockPayload.data(), corruptedGuardPi.data());
+        TEST_ASSERT(stBadGuard == micant::nvme::NVME_SC_GUARD_CHECK_ERROR, "Corrupted guard tag must return NVME_SC_GUARD_CHECK_ERROR (0x0280)");
+
+        // Negative Test 2: Mismatched Reference Tag (LBA mismatch in Type 1)
+        auto corruptedRefPi = validPi;
+        corruptedRefPi[1].referenceTag = 0xDEADBEEF; // Wrong LBA
+        uint16_t stBadRef = ns->writeBlocksWithPi(1000, 4, blockPayload.data(), corruptedRefPi.data());
+        TEST_ASSERT(stBadRef == micant::nvme::NVME_SC_REF_TAG_CHECK_ERROR, "Mismatched reference tag must return NVME_SC_REF_TAG_CHECK_ERROR (0x0282)");
+
+        ns->disableProtectionInformation();
+        TEST_ASSERT(ns->isProtectionEnabled() == false, "Protection Information must be disabled cleanly");
+    }
+
+    // ========================================================================
+    // Pillar 4: NVMe 2.0 Command Set Architecture & Zoned Namespaces (ZNS)
+    // ========================================================================
+    {
+        auto ns2 = ctrl->getNamespace(2);
+        TEST_ASSERT(ns2 != nullptr, "Namespace 2 must exist");
+
+        // Enable ZNS with 16 zones (each 512 blocks = 2MB per zone at 4KB block size)
+        ns2->enableZns(16, 512);
+        TEST_ASSERT(ns2->isZnsEnabled() == true, "ZNS must be enabled on Namespace 2");
+        TEST_ASSERT(ns2->getZoneCount() == 16, "Zone count must be 16");
+
+        // 1. Initial State: All zones Empty
+        std::vector<micant::nvme::NvmeZoneDescriptor> zoneReport;
+        uint16_t stReport = ns2->zoneManagementReceive(0, zoneReport);
+        TEST_ASSERT(stReport == micant::nvme::NVME_SC_SUCCESS, "Zone Management Receive must succeed");
+        TEST_ASSERT(zoneReport.size() == 16, "Zone report must contain 16 zones");
+        TEST_ASSERT(zoneReport[0].zoneState == micant::nvme::NVME_ZONE_STATE_EMPTY, "Initial zone state must be Empty (0x01)");
+        TEST_ASSERT(zoneReport[0].writePointer == 0, "Initial write pointer must be 0");
+
+        // 2. Open Zone 0 explicitly via Zone Management Send
+        micant::nvme::NvmeSqe openSqe{};
+        openSqe.opcode = micant::nvme::NVME_ZNS_ZONE_MANAGEMENT_SEND;
+        openSqe.commandId = 0x3001;
+        openSqe.nsid = 2;
+        openSqe.cdw10 = micant::nvme::NVME_ZNS_ACTION_OPEN; // Action = Open
+        openSqe.cdw11 = 0; // SLBA = 0
+        auto openCqe = ctrl->executeIoCommand(openSqe);
+        TEST_ASSERT(openCqe.getStatusCode() == micant::nvme::NVME_SC_SUCCESS, "Zone Open command must succeed");
+
+        ns2->zoneManagementReceive(0, zoneReport);
+        TEST_ASSERT(zoneReport[0].zoneState == micant::nvme::NVME_ZONE_STATE_EXP_OPEN, "Zone 0 state must transition to Explicitly Opened (0x03)");
+
+        // 3. Append data to Zone 0 via Zone Append (8 blocks = 32KB)
+        std::vector<uint8_t> znsData(8 * 4096, 0xEE);
+        micant::nvme::NvmeSqe appendSqe{};
+        appendSqe.opcode = micant::nvme::NVME_ZNS_ZONE_APPEND;
+        appendSqe.commandId = 0x3002;
+        appendSqe.nsid = 2;
+        appendSqe.cdw10 = 0; // ZSLBA = 0
+        appendSqe.cdw11 = 0;
+        appendSqe.cdw12 = 7; // NLB = 8 blocks
+        auto appendCqe = ctrl->executeIoCommand(appendSqe, znsData.data(), znsData.size());
+        TEST_ASSERT(appendCqe.getStatusCode() == micant::nvme::NVME_SC_SUCCESS, "Zone Append command must succeed");
+        TEST_ASSERT(appendCqe.commandSpecific == 0, "Allocated start LBA in Zone Append must be 0");
+
+        // Verify write pointer updated
+        ns2->zoneManagementReceive(0, zoneReport);
+        TEST_ASSERT(zoneReport[0].writePointer == 8, "Zone 0 write pointer must advance to 8");
+
+        // 4. Reset Zone 0 back to Empty
+        micant::nvme::NvmeSqe resetSqe{};
+        resetSqe.opcode = micant::nvme::NVME_ZNS_ZONE_MANAGEMENT_SEND;
+        resetSqe.commandId = 0x3003;
+        resetSqe.nsid = 2;
+        resetSqe.cdw10 = micant::nvme::NVME_ZNS_ACTION_RESET;
+        resetSqe.cdw11 = 0;
+        auto resetCqe = ctrl->executeIoCommand(resetSqe);
+        TEST_ASSERT(resetCqe.getStatusCode() == micant::nvme::NVME_SC_SUCCESS, "Zone Reset command must succeed");
+
+        ns2->zoneManagementReceive(0, zoneReport);
+        TEST_ASSERT(zoneReport[0].zoneState == micant::nvme::NVME_ZONE_STATE_EMPTY, "Zone state must return to Empty");
+        TEST_ASSERT(zoneReport[0].writePointer == 0, "Zone write pointer must rewind to 0");
+    }
+
+    // ========================================================================
+    // Pillar 5: Asynchronous Event Request (AER) & SMART Health Alarms
+    // ========================================================================
+    {
+        // Submit 2 AER requests from host
+        ctrl->submitAer(0x4001);
+        ctrl->submitAer(0x4002);
+        TEST_ASSERT(ctrl->getPendingAerCount() == 2, "Pending AER count must be 2");
+
+        // Trigger Temperature Exceeded Alarm (> 75 C)
+        bool triggered1 = ctrl->triggerSmartAlert(
+            micant::nvme::NVME_AER_SMART_TEMP_EXCEEDED,
+            0x01,
+            micant::nvme::NVME_LOG_PAGE_SMART_HEALTH
+        );
+        TEST_ASSERT(triggered1 == true, "Triggering temperature alert must pop pending AER");
+        TEST_ASSERT(ctrl->getPendingAerCount() == 1, "Pending AER count must decrement to 1");
+
+        // Trigger Available Spare Below Threshold Alarm
+        bool triggered2 = ctrl->triggerSmartAlert(
+            micant::nvme::NVME_AER_SMART_SPARE_BELOW_THRESH,
+            0x02,
+            micant::nvme::NVME_LOG_PAGE_SMART_HEALTH
+        );
+        TEST_ASSERT(triggered2 == true, "Triggering spare capacity alert must pop second AER");
+        TEST_ASSERT(ctrl->getPendingAerCount() == 0, "Pending AER count must now be 0");
+
+        // Third trigger with empty queue returns false
+        bool triggered3 = ctrl->triggerSmartAlert(micant::nvme::NVME_AER_SMART_READ_ONLY, 0x03);
+        TEST_ASSERT(triggered3 == false, "Alert without pending AER must return false without hanging");
+
+        auto telemetry = ctrl->getTelemetry();
+        TEST_ASSERT(telemetry.aerEventsFired == 2, "Telemetry must record 2 AER events fired");
+    }
+
+    // ========================================================================
+    // Pillar 6: Native NT Class Driver (nvme.sys) & High-Throughput Batch I/O
+    // ========================================================================
+    {
+        TEST_ASSERT(blockDriver.isInitialized() == true, "NvmeBlockDriver must be initialized");
+        TEST_ASSERT(blockDriver.getControllerDeviceName() == L"\\Device\\NvmeController0", "Controller device name must be \\Device\\NvmeController0");
+        TEST_ASSERT(blockDriver.getDiskDeviceName() == L"\\Device\\Harddisk0\\DR0", "Disk device name must be \\Device\\Harddisk0\\DR0");
+        TEST_ASSERT(blockDriver.getDosDeviceSymlink() == L"\\\\.\\PhysicalDrive0", "DOS symlink must be \\\\.\\PhysicalDrive0");
+
+        // 1. Storage Query Property IOCTL (IOCTL_STORAGE_QUERY_PROPERTY)
+        micant::nvme::STORAGE_PROPERTY_QUERY query{};
+        query.PropertyId = micant::nvme::StorageDeviceProperty;
+        query.QueryType = micant::nvme::PropertyStandardQuery;
+
+        std::vector<uint8_t> outDescBuffer(256, 0);
+        size_t bytesReturned = 0;
+        micant::NtStatus stIoctl = blockDriver.dispatchDeviceControl(
+            micant::nvme::IOCTL_STORAGE_QUERY_PROPERTY_CODE,
+            &query,
+            sizeof(query),
+            outDescBuffer.data(),
+            outDescBuffer.size(),
+            bytesReturned
+        );
+        TEST_ASSERT(NT_SUCCESS(stIoctl), "IOCTL_STORAGE_QUERY_PROPERTY must succeed");
+        TEST_ASSERT(bytesReturned >= sizeof(micant::nvme::STORAGE_DEVICE_DESCRIPTOR), "Bytes returned must exceed descriptor size");
+
+        auto* desc = reinterpret_cast<micant::nvme::STORAGE_DEVICE_DESCRIPTOR*>(outDescBuffer.data());
+        TEST_ASSERT(desc->BusType == micant::nvme::BusTypeNvme, "BusType must report BusTypeNvme (17)");
+        TEST_ASSERT(desc->CommandQueueing == 1, "CommandQueueing must be enabled for NVMe");
+        const char* vendorStr = reinterpret_cast<const char*>(outDescBuffer.data()) + desc->VendorIdOffset;
+        TEST_ASSERT(std::strcmp(vendorStr, "MicaNT") == 0, "Vendor ID string must match MicaNT");
+
+        // 2. Storage Device Number IOCTL
+        micant::storage::STORAGE_DEVICE_NUMBER sdn{};
+        stIoctl = blockDriver.dispatchDeviceControl(
+            0x002D1080, // IOCTL_STORAGE_GET_DEVICE_NUMBER
+            nullptr,
+            0,
+            &sdn,
+            sizeof(sdn),
+            bytesReturned
+        );
+        TEST_ASSERT(NT_SUCCESS(stIoctl), "IOCTL_STORAGE_GET_DEVICE_NUMBER must succeed");
+        TEST_ASSERT(sdn.DeviceNumber == 0 && sdn.PartitionNumber == 0, "Device number must be 0");
+
+        // 3. Parallel Batch I/O Execution across Per-CPU Queues
+        // Submit 64 parallel block requests across 8 CPU cores
+        std::vector<uint8_t> batchPayload(512, 0x77);
+        std::vector<micant::nvme::BatchIoRequest> requests(64);
+        for (size_t i = 0; i < requests.size(); ++i) {
+            requests[i].opcode = micant::nvme::NVME_NVM_WRITE;
+            requests[i].nsid = 1;
+            requests[i].slba = 2000 + i;
+            requests[i].nlb = 1;
+            requests[i].buffer = batchPayload.data();
+        }
+
+        // Dispatch 8 requests per CPU core
+        for (uint32_t core = 0; core < 8; ++core) {
+            std::vector<micant::nvme::BatchIoRequest> coreSlice(requests.begin() + (core * 8), requests.begin() + ((core + 1) * 8));
+            blockDriver.submitBatchIo(core, coreSlice);
+            for (const auto& r : coreSlice) {
+                TEST_ASSERT(NT_SUCCESS(r.status), "Each batch request in core queue must succeed");
+            }
+        }
+
+        TEST_ASSERT(blockDriver.getTotalWrites() >= 64, "Total writes in block driver must be at least 64");
+        TEST_ASSERT(blockDriver.getTotalBytesWritten() >= 64 * 512, "Total bytes written must reflect 64 sectors");
+    }
+
+    std::cout << "[HORIZON 150] NVMe 1.4/2.0 Native Storage Driver (nvme.sys) Summary:\n"
+              << "    Pillar 1: Multi-Queue Per-CPU Queue Pairs & Doorbell Stride Configuration OK\n"
+              << "    Pillar 2: Scatter-Gather List (SGL) Zero-Copy Direct DMA Engine OK\n"
+              << "    Pillar 3: End-to-End Data Protection (T10 DIF/DIX Type 1) OK\n"
+              << "    Pillar 4: NVMe 2.0 Command Set Architecture & Zoned Namespaces (ZNS) OK\n"
+              << "    Pillar 5: Asynchronous Event Request (AER) & SMART Health Alarms OK\n"
+              << "    Pillar 6: Native NT Class Driver (nvme.sys) & High-Throughput Batch I/O OK\n";
+
+    std::cout << "[TEST] Suite 366: Horizon 150 - NVMe 1.4/2.0 Native Submission/Completion Queue Pair Storage Driver (nvme.sys) & Block I/O Engine PASSED." << std::endl;
+}

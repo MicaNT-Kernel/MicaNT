@@ -4332,6 +4332,16 @@
   - Integrates canonical System Service Descriptor Table (SSDT) system service numbers: `SSN_NT_CREATE_SECTION` (`0x004A`), `SSN_NT_MAP_VIEW_OF_SECTION` (`0x0028`), `SSN_NT_UNMAP_VIEW_OF_SECTION` (`0x002A`), and `SSN_NT_EMPTY_WORKING_SET` (`0x008F`).
   - Tested and verified: 365 unit test suites passing with 100% green.
 
+- [x] **Horizon 150 (`Suite 366`): NVMe 1.4/2.0 Native Submission/Completion Queue Pair Storage Driver (`nvme.sys`) & High-Performance Block I/O Engine (`include/micant/km/drivers/storage/nvme.hpp`)**:
+  - Implements multi-queue per-CPU Submission/Completion Queue Pair (SQ/CQ) architecture across logical CPU cores (`createPerCpuQueuePairs`), providing dedicated lock-free queues per processor with configurable Doorbell Register Strides (`CAP.DSTRD`, 4B and 8B strides).
+  - Implements NVMe 1.4/2.0 Scatter-Gather List (SGL) Zero-Copy Direct DMA Engine (`NvmeSglDescriptor`, `buildSglChain`, `readSglMemory`, `writeSglMemory`, `executeIoCommandWithSgl`), bypassing PRP list allocation overhead for DirectStorage payloads.
+  - Implements End-to-End Data Protection (T10 DIF/DIX Type 1): 8-byte Protection Information (PI) with 16-bit CRC guard tags (`ComputeT10Crc16`), application tags, and 32-bit reference tags seeded by logical block addresses, rejecting corrupt data with `NVME_SC_GUARD_CHECK_ERROR` (`0x0280`) and `NVME_SC_REF_TAG_CHECK_ERROR` (`0x0282`).
+  - Implements NVMe 2.0 Command Set Architecture & Zoned Namespaces (ZNS): sequential write zones, Zone Management Send (`NVME_ZNS_ZONE_MANAGEMENT_SEND`), Zone Management Receive (`NVME_ZNS_ZONE_MANAGEMENT_RECEIVE`), and lock-free atomic `NVME_ZNS_ZONE_APPEND`.
+  - Implements Asynchronous Event Request (AER) Queue and SMART health alarm notification system: triggers asynchronous completions on critical temperature and spare capacity threshold alerts, posting MSI-X interrupts.
+  - Implements Windows NT Class Driver (`nvme.sys` / `NvmeBlockDriver`): creates `\Device\NvmeController0` and `\Device\Harddisk0\DR0` linked to `\\.\PhysicalDrive0`, handles `IOCTL_STORAGE_QUERY_PROPERTY` (`BusTypeNvme = 17`), `IOCTL_STORAGE_GET_DEVICE_NUMBER`, `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`, and executes parallel batch I/O across SMP CPU queues.
+  - Tested and verified: 366 unit test suites passing with 100% green.
+
+
 
 
 

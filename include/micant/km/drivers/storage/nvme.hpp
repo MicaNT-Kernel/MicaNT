@@ -165,6 +165,75 @@ inline constexpr uint16_t NVME_SC_LBA_OUT_OF_RANGE          = 0x0080;
 inline constexpr uint16_t NVME_SC_CAPACITY_EXCEEDED         = 0x0081;
 inline constexpr uint16_t NVME_SC_NAMESPACE_NOT_READY       = 0x0082;
 
+// NVMe 1.4/2.0 SGL (Scatter-Gather List) Descriptors & Flags
+inline constexpr uint8_t NVME_SGL_DESCRIPTOR_TYPE_DATA_BLOCK = 0x00;
+inline constexpr uint8_t NVME_SGL_DESCRIPTOR_TYPE_BIT_BUCKET = 0x01;
+inline constexpr uint8_t NVME_SGL_DESCRIPTOR_TYPE_SEGMENT    = 0x02;
+inline constexpr uint8_t NVME_SGL_DESCRIPTOR_TYPE_LAST_SEG   = 0x03;
+inline constexpr uint8_t NVME_SGL_SUBTYPE_ADDRESS            = 0x00;
+inline constexpr uint8_t NVME_SGL_SUBTYPE_OFFSET             = 0x01;
+
+// NVMe 2.0 Command Set Identifier (CSI)
+inline constexpr uint8_t NVME_CSI_NVM                        = 0x00;
+inline constexpr uint8_t NVME_CSI_KV                         = 0x01;
+inline constexpr uint8_t NVME_CSI_ZNS                        = 0x02;
+
+// NVMe 2.0 ZNS (Zoned Namespaces) Opcodes & Actions
+inline constexpr uint8_t NVME_ZNS_ZONE_MANAGEMENT_SEND       = 0x79;
+inline constexpr uint8_t NVME_ZNS_ZONE_MANAGEMENT_RECEIVE    = 0x7A;
+inline constexpr uint8_t NVME_ZNS_ZONE_APPEND                = 0x7D;
+
+inline constexpr uint8_t NVME_ZNS_ACTION_CLOSE               = 0x01;
+inline constexpr uint8_t NVME_ZNS_ACTION_FINISH              = 0x02;
+inline constexpr uint8_t NVME_ZNS_ACTION_OPEN                = 0x03;
+inline constexpr uint8_t NVME_ZNS_ACTION_RESET               = 0x04;
+
+inline constexpr uint8_t NVME_ZONE_STATE_EMPTY               = 0x01;
+inline constexpr uint8_t NVME_ZONE_STATE_IMP_OPEN            = 0x02;
+inline constexpr uint8_t NVME_ZONE_STATE_EXP_OPEN            = 0x03;
+inline constexpr uint8_t NVME_ZONE_STATE_CLOSED              = 0x04;
+inline constexpr uint8_t NVME_ZONE_STATE_READONLY            = 0x0D;
+inline constexpr uint8_t NVME_ZONE_STATE_FULL                = 0x0E;
+inline constexpr uint8_t NVME_ZONE_STATE_OFFLINE             = 0x0F;
+
+// End-to-End Data Protection (T10 DIF/DIX) Status Codes
+inline constexpr uint16_t NVME_SC_GUARD_CHECK_ERROR          = 0x0280;
+inline constexpr uint16_t NVME_SC_APP_TAG_CHECK_ERROR        = 0x0281;
+inline constexpr uint16_t NVME_SC_REF_TAG_CHECK_ERROR        = 0x0282;
+
+// Asynchronous Event Request (AER) Constants
+inline constexpr uint8_t NVME_AER_TYPE_ERROR                 = 0x00;
+inline constexpr uint8_t NVME_AER_TYPE_SMART                 = 0x01;
+inline constexpr uint8_t NVME_AER_TYPE_NOTICE                = 0x02;
+inline constexpr uint8_t NVME_AER_SMART_TEMP_EXCEEDED        = 0x01;
+inline constexpr uint8_t NVME_AER_SMART_SPARE_BELOW_THRESH   = 0x02;
+inline constexpr uint8_t NVME_AER_SMART_RELIABILITY_DEGRADED = 0x03;
+inline constexpr uint8_t NVME_AER_SMART_READ_ONLY            = 0x04;
+
+// Standard Windows NT Storage IOCTL Codes (BusTypeNvme)
+inline constexpr uint32_t IOCTL_STORAGE_QUERY_PROPERTY_CODE =
+    driver::CTL_CODE(0x0000002D, 0x0500, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x002D1400
+inline constexpr uint32_t IOCTL_STORAGE_MANAGE_DATA_SET_ATTRIBUTES_CODE =
+    driver::CTL_CODE(0x0000002D, 0x0501, driver::METHOD_BUFFERED, driver::FILE_WRITE_ACCESS); // 0x002D5404
+
+// Clean-Room T10 DIF CRC-16 Calculation
+inline uint16_t ComputeT10Crc16(const void* data, size_t length) {
+    if (!data || length == 0) return 0;
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    uint16_t crc = 0x0000;
+    for (size_t i = 0; i < length; ++i) {
+        crc ^= static_cast<uint16_t>(p[i]) << 8;
+        for (int b = 0; b < 8; ++b) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x8BB7;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
 // ============================================================================
 // 2. NVMe Structures (SQE, CQE, Identify, SMART)
 // ============================================================================
@@ -208,6 +277,107 @@ struct NvmeCqe {
     void setStatusCode(uint16_t sc) {
         status = (status & 0x01) | ((sc & 0x7FFF) << 1);
     }
+};
+
+// 16-byte Scatter-Gather List (SGL) Descriptor
+struct NvmeSglDescriptor {
+    uint64_t address{0};
+    uint32_t length{0};
+    uint8_t  reserved[3]{0};
+    uint8_t  sglIdentifier{0}; // bits 7:4 = type, bits 3:0 = sub-type
+
+    uint8_t getType() const noexcept { return (sglIdentifier >> 4) & 0x0F; }
+    uint8_t getSubType() const noexcept { return sglIdentifier & 0x0F; }
+    void setType(uint8_t type, uint8_t subtype = 0) noexcept {
+        sglIdentifier = static_cast<uint8_t>(((type & 0x0F) << 4) | (subtype & 0x0F));
+    }
+};
+
+// 8-byte T10 Protection Information (DIF/DIX)
+struct NvmeProtectionInformation {
+    uint16_t guardTag{0};      // CRC-16 T10 DIF
+    uint16_t applicationTag{0};
+    uint32_t referenceTag{0};  // Seeded by lower 32-bits of LBA in Type 1
+};
+
+// 64-byte ZNS Zone Descriptor
+struct NvmeZoneDescriptor {
+    uint8_t  zoneType{0x02}; // Sequential Write Required
+    uint8_t  zoneState{NVME_ZONE_STATE_EMPTY};
+    uint8_t  zoneAttributes{0};
+    uint8_t  reserved[5]{0};
+    uint64_t zoneCapacity{512};
+    uint64_t zoneStartLba{0};
+    uint64_t writePointer{0};
+    uint8_t  reserved2[32]{0};
+};
+
+enum STORAGE_BUS_TYPE : uint32_t {
+    BusTypeUnknown = 0x00,
+    BusTypeScsi    = 0x01,
+    BusTypeAtapi   = 0x02,
+    BusTypeAta     = 0x03,
+    BusType1394    = 0x04,
+    BusTypeSsa     = 0x05,
+    BusTypeFibre   = 0x06,
+    BusTypeUsb     = 0x07,
+    BusTypeRAID    = 0x08,
+    BusTypeiScsi   = 0x09,
+    BusTypeSas     = 0x0A,
+    BusTypeSata    = 0x0B,
+    BusTypeSd      = 0x0C,
+    BusTypeMmc     = 0x0D,
+    BusTypeVirtual = 0x0E,
+    BusTypeFileBackedVirtual = 0x0F,
+    BusTypeSpaces  = 0x10,
+    BusTypeNvme    = 0x11, // 17 (0x11)
+    BusTypeScm     = 0x12,
+    BusTypeUfs     = 0x13,
+    BusTypeMax     = 0x14
+};
+
+enum STORAGE_PROPERTY_ID : uint32_t {
+    StorageDeviceProperty = 0,
+    StorageAdapterProperty = 1,
+    StorageDeviceIdProperty = 2,
+    StorageDeviceUniqueIdProperty = 3,
+    StorageDeviceWriteCacheProperty = 4,
+    StorageMiniportProperty = 5,
+    StorageAccessAlignmentProperty = 6,
+    StorageDeviceSeekPenaltyProperty = 7,
+    StorageDeviceTrimProperty = 8,
+    StorageDeviceWriteAggregationProperty = 9,
+    StorageDeviceDeviceTelemetryProperty = 10,
+    StorageDeviceLBPOptionsProperty = 11
+};
+
+enum STORAGE_QUERY_TYPE : uint32_t {
+    PropertyStandardQuery = 0,
+    PropertyExistsQuery = 1,
+    PropertyMaskQuery = 2,
+    PropertyQueryMaxDefined = 3
+};
+
+struct STORAGE_PROPERTY_QUERY {
+    STORAGE_PROPERTY_ID PropertyId{StorageDeviceProperty};
+    STORAGE_QUERY_TYPE  QueryType{PropertyStandardQuery};
+    uint8_t             AdditionalParameters[1]{0};
+};
+
+struct STORAGE_DEVICE_DESCRIPTOR {
+    uint32_t Version{sizeof(STORAGE_DEVICE_DESCRIPTOR)};
+    uint32_t Size{sizeof(STORAGE_DEVICE_DESCRIPTOR)};
+    uint8_t  DeviceType{0};
+    uint8_t  DeviceTypeModifier{0};
+    uint8_t  RemovableMedia{0};
+    uint8_t  CommandQueueing{1};
+    uint32_t VendorIdOffset{0};
+    uint32_t ProductIdOffset{0};
+    uint32_t ProductRevisionOffset{0};
+    uint32_t SerialNumberOffset{0};
+    STORAGE_BUS_TYPE BusType{BusTypeNvme};
+    uint32_t RawPropertiesLength{0};
+    uint8_t  RawDeviceProperties[1]{0};
 };
 
 // LBA Format Descriptor (16 entries in Identify Namespace)
@@ -390,6 +560,13 @@ class NvmeNamespace : public storage::IBlockDevice {
     std::wstring m_name;
     std::vector<uint8_t> m_flashStorage;
     std::unordered_set<uint64_t> m_trimmedBlocks;
+    bool m_piEnabled{false};
+    uint8_t m_piType{1}; // Type 1: Guard + App + Ref
+    std::unordered_map<uint64_t, NvmeProtectionInformation> m_protectionMap;
+    bool m_isZns{false};
+    uint32_t m_zoneCount{16};
+    uint64_t m_zoneSize{512};
+    std::vector<NvmeZoneDescriptor> m_zones;
     mutable std::recursive_mutex m_mutex;
 
 public:
@@ -486,6 +663,177 @@ public:
         m_blockSize = newBlockSize;
         std::fill(m_flashStorage.begin(), m_flashStorage.end(), 0);
         m_trimmedBlocks.clear();
+        m_protectionMap.clear();
+    }
+
+    void enableProtectionInformation(uint8_t type = 1) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_piEnabled = true;
+        m_piType = type;
+    }
+
+    void disableProtectionInformation() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_piEnabled = false;
+        m_protectionMap.clear();
+    }
+
+    bool isProtectionEnabled() const noexcept { return m_piEnabled; }
+    uint8_t getProtectionType() const noexcept { return m_piType; }
+
+    uint16_t writeBlocksWithPi(uint64_t lba, uint32_t count, const void* buffer, const NvmeProtectionInformation* piArray) {
+        if (!buffer || count == 0 || !piArray) return NVME_SC_INVALID_FIELD;
+        if (lba + count > m_totalBlocks) return NVME_SC_LBA_OUT_OF_RANGE;
+
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        const uint8_t* pBuf = static_cast<const uint8_t*>(buffer);
+
+        for (uint32_t i = 0; i < count; ++i) {
+            uint64_t currLba = lba + i;
+            const auto& pi = piArray[i];
+
+            // 1. Guard Tag verification (CRC-16)
+            uint16_t calcCrc = ComputeT10Crc16(pBuf + (i * m_blockSize), m_blockSize);
+            if (pi.guardTag != 0 && pi.guardTag != calcCrc) {
+                return NVME_SC_GUARD_CHECK_ERROR;
+            }
+
+            // 2. Reference Tag verification (Type 1 checks against lower 32 bits of LBA)
+            if (m_piType == 1 && pi.referenceTag != 0) {
+                uint32_t expRef = static_cast<uint32_t>(currLba & 0xFFFFFFFF);
+                if (pi.referenceTag != expRef) {
+                    return NVME_SC_REF_TAG_CHECK_ERROR;
+                }
+            }
+
+            m_protectionMap[currLba] = pi;
+        }
+
+        return (writeBlocks(lba, count, buffer) == NtStatus::Success) ? NVME_SC_SUCCESS : NVME_SC_INTERNAL_DEVICE_ERROR;
+    }
+
+    uint16_t readBlocksWithPi(uint64_t lba, uint32_t count, void* buffer, NvmeProtectionInformation* piArray) {
+        if (!buffer || count == 0) return NVME_SC_INVALID_FIELD;
+        if (lba + count > m_totalBlocks) return NVME_SC_LBA_OUT_OF_RANGE;
+
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        NtStatus st = readBlocks(lba, count, buffer);
+        if (st != NtStatus::Success) return NVME_SC_INTERNAL_DEVICE_ERROR;
+
+        uint8_t* pBuf = static_cast<uint8_t*>(buffer);
+        for (uint32_t i = 0; i < count; ++i) {
+            uint64_t currLba = lba + i;
+            auto it = m_protectionMap.find(currLba);
+            NvmeProtectionInformation pi{};
+            if (it != m_protectionMap.end()) {
+                pi = it->second;
+            } else {
+                pi.guardTag = ComputeT10Crc16(pBuf + (i * m_blockSize), m_blockSize);
+                pi.referenceTag = static_cast<uint32_t>(currLba & 0xFFFFFFFF);
+                pi.applicationTag = 0x5EED;
+            }
+
+            uint16_t calcCrc = ComputeT10Crc16(pBuf + (i * m_blockSize), m_blockSize);
+            if (pi.guardTag != 0 && pi.guardTag != calcCrc) {
+                return NVME_SC_GUARD_CHECK_ERROR;
+            }
+            if (m_piType == 1 && pi.referenceTag != 0 && pi.referenceTag != static_cast<uint32_t>(currLba & 0xFFFFFFFF)) {
+                return NVME_SC_REF_TAG_CHECK_ERROR;
+            }
+
+            if (piArray) {
+                piArray[i] = pi;
+            }
+        }
+        return NVME_SC_SUCCESS;
+    }
+
+    void enableZns(uint32_t numZones = 16, uint64_t zoneCapacity = 512) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_isZns = true;
+        m_zoneCount = numZones;
+        m_zoneSize = zoneCapacity;
+        m_zones.clear();
+        m_zones.resize(numZones);
+        for (uint32_t i = 0; i < numZones; ++i) {
+            m_zones[i].zoneType = 0x02; // Sequential Write Required
+            m_zones[i].zoneState = NVME_ZONE_STATE_EMPTY;
+            m_zones[i].zoneAttributes = 0;
+            m_zones[i].zoneCapacity = zoneCapacity;
+            m_zones[i].zoneStartLba = i * zoneCapacity;
+            m_zones[i].writePointer = m_zones[i].zoneStartLba;
+        }
+    }
+
+    bool isZnsEnabled() const noexcept { return m_isZns; }
+    uint32_t getZoneCount() const noexcept { return m_zoneCount; }
+    uint64_t getZoneSize() const noexcept { return m_zoneSize; }
+
+    uint16_t zoneManagementSend(uint8_t action, uint64_t slba) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (!m_isZns || m_zones.empty()) return NVME_SC_INVALID_FIELD;
+        uint32_t zoneIdx = static_cast<uint32_t>(slba / m_zoneSize);
+        if (zoneIdx >= m_zones.size()) return NVME_SC_LBA_OUT_OF_RANGE;
+        auto& z = m_zones[zoneIdx];
+
+        switch (action) {
+            case NVME_ZNS_ACTION_OPEN:
+                z.zoneState = NVME_ZONE_STATE_EXP_OPEN;
+                break;
+            case NVME_ZNS_ACTION_CLOSE:
+                z.zoneState = NVME_ZONE_STATE_CLOSED;
+                break;
+            case NVME_ZNS_ACTION_FINISH:
+                z.zoneState = NVME_ZONE_STATE_FULL;
+                z.writePointer = z.zoneStartLba + z.zoneCapacity;
+                break;
+            case NVME_ZNS_ACTION_RESET:
+                z.zoneState = NVME_ZONE_STATE_EMPTY;
+                z.writePointer = z.zoneStartLba;
+                writeZeroes(z.zoneStartLba, static_cast<uint32_t>(z.zoneCapacity));
+                break;
+            default:
+                return NVME_SC_INVALID_FIELD;
+        }
+        return NVME_SC_SUCCESS;
+    }
+
+    uint16_t zoneManagementReceive(uint64_t slba, std::vector<NvmeZoneDescriptor>& outDescs) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (!m_isZns || m_zones.empty()) return NVME_SC_INVALID_FIELD;
+        uint32_t startIdx = static_cast<uint32_t>(slba / m_zoneSize);
+        outDescs.clear();
+        for (size_t i = startIdx; i < m_zones.size(); ++i) {
+            outDescs.push_back(m_zones[i]);
+        }
+        return NVME_SC_SUCCESS;
+    }
+
+    uint16_t zoneAppend(uint64_t zslba, uint16_t nlb, const void* buffer, uint64_t& outAllocatedLba) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (!m_isZns || m_zones.empty()) return NVME_SC_INVALID_FIELD;
+        uint32_t zoneIdx = static_cast<uint32_t>(zslba / m_zoneSize);
+        if (zoneIdx >= m_zones.size()) return NVME_SC_LBA_OUT_OF_RANGE;
+        auto& z = m_zones[zoneIdx];
+
+        if (z.zoneState == NVME_ZONE_STATE_FULL || z.zoneState == NVME_ZONE_STATE_READONLY) {
+            return NVME_SC_CAPACITY_EXCEEDED;
+        }
+        if (z.writePointer + nlb > z.zoneStartLba + z.zoneCapacity) {
+            return NVME_SC_CAPACITY_EXCEEDED;
+        }
+
+        outAllocatedLba = z.writePointer;
+        NtStatus st = writeBlocks(outAllocatedLba, nlb, buffer);
+        if (st != NtStatus::Success) return NVME_SC_DATA_TRANSFER_ERROR;
+
+        z.writePointer += nlb;
+        if (z.writePointer >= z.zoneStartLba + z.zoneCapacity) {
+            z.zoneState = NVME_ZONE_STATE_FULL;
+        } else {
+            z.zoneState = NVME_ZONE_STATE_IMP_OPEN;
+        }
+        return NVME_SC_SUCCESS;
     }
 };
 
@@ -805,7 +1153,55 @@ public:
             copied += chunk;
         }
     }
+
+    void buildSglChain(
+        const void* hostData,
+        size_t length,
+        std::vector<NvmeSglDescriptor>& outSgl
+    ) {
+        outSgl.clear();
+        if (length == 0) return;
+        const uint8_t* pData = static_cast<const uint8_t*>(hostData);
+        size_t offset = 0;
+        while (offset < length) {
+            size_t chunk = std::min<size_t>(length - offset, PAGE_SIZE);
+            uint64_t physAddr = allocatePhysicalPage();
+            if (pData) {
+                writePhysicalMemory(physAddr, pData + offset, chunk);
+            }
+            NvmeSglDescriptor desc{};
+            desc.address = physAddr;
+            desc.length = static_cast<uint32_t>(chunk);
+            desc.setType(NVME_SGL_DESCRIPTOR_TYPE_DATA_BLOCK, NVME_SGL_SUBTYPE_ADDRESS);
+            outSgl.push_back(desc);
+            offset += chunk;
+        }
+    }
+
+    void readSglMemory(const std::vector<NvmeSglDescriptor>& sgl, void* dst, size_t length) const {
+        uint8_t* pDst = static_cast<uint8_t*>(dst);
+        size_t transferred = 0;
+        for (const auto& desc : sgl) {
+            if (transferred >= length) break;
+            size_t chunk = std::min<size_t>(length - transferred, desc.length);
+            readPhysicalMemory(desc.address, pDst + transferred, chunk);
+            transferred += chunk;
+        }
+    }
+
+    void writeSglMemory(const std::vector<NvmeSglDescriptor>& sgl, const void* src, size_t length) {
+        const uint8_t* pSrc = static_cast<const uint8_t*>(src);
+        size_t transferred = 0;
+        for (const auto& desc : sgl) {
+            if (transferred >= length) break;
+            size_t chunk = std::min<size_t>(length - transferred, desc.length);
+            writePhysicalMemory(desc.address, pSrc + transferred, chunk);
+            transferred += chunk;
+        }
+    }
 };
+
+using SglDmaEngine = PrpDmaEngine;
 
 // ============================================================================
 // 4. NVMe Controller Core Engine
@@ -822,19 +1218,11 @@ struct NVME_TELEMETRY {
     uint64_t msixInterruptsGenerated{0};
     uint64_t fatalErrorsInjected{0};
     uint64_t recoveriesCompleted{0};
+    uint64_t aerEventsFired{0};
 };
 
 class NvmeController {
-    NvmeVersion m_version{NvmeVersion::Version_2_0};
-    uint64_t m_cap{0};
-    uint32_t m_cc{0};
-    uint32_t m_csts{0};
-    uint32_t m_aqa{0};
-    uint64_t m_asq{0};
-    uint64_t m_acq{0};
-    uint32_t m_intms{0};
-    uint32_t m_intmc{0};
-
+public:
     // Queue pair mappings
     struct QueuePair {
         uint16_t qid{0};
@@ -852,9 +1240,23 @@ class NvmeController {
         uint64_t msixCount{0};
     };
 
+private:
+    NvmeVersion m_version{NvmeVersion::Version_2_0};
+    uint64_t m_cap{0};
+    uint32_t m_cc{0};
+    uint32_t m_csts{0};
+    uint32_t m_aqa{0};
+    uint64_t m_asq{0};
+    uint64_t m_acq{0};
+    uint32_t m_intms{0};
+    uint32_t m_intmc{0};
+    uint8_t  m_dstrd{0}; // Doorbell stride (0 = 4 bytes, 1 = 8 bytes)
+
     QueuePair m_adminQueue;
     std::unordered_map<uint16_t, QueuePair> m_ioQueues;
+    std::unordered_map<uint32_t, uint16_t> m_cpuToQueueId;
     std::map<uint32_t, std::shared_ptr<NvmeNamespace>> m_namespaces;
+    std::queue<uint16_t> m_pendingAers;
 
     NvmeIdentifyController m_identCtrl{};
     NvmeSmartLog m_smartLog{};
@@ -956,8 +1358,9 @@ public:
             default:
                 if (offset >= NVME_REG_DBS) {
                     m_telemetry.doorbellWrites++;
-                    uint32_t dbIdx = (offset - NVME_REG_DBS) / 4;
-                    uint16_t qid = dbIdx / 2;
+                    uint32_t stride = 4 << m_dstrd;
+                    uint32_t dbIdx = (offset - NVME_REG_DBS) / stride;
+                    uint16_t qid = static_cast<uint16_t>(dbIdx / 2);
                     bool isCq = (dbIdx % 2) == 1;
                     if (qid == 0) {
                         if (!isCq) {
@@ -1097,6 +1500,10 @@ public:
                 }
                 break;
             }
+            case NVME_ADMIN_ASYNC_EVENT: {
+                m_pendingAers.push(sqe.commandId);
+                break;
+            }
             default:
                 break;
         }
@@ -1167,6 +1574,32 @@ public:
                 // Volatile cache flush
                 break;
             }
+            case NVME_ZNS_ZONE_MANAGEMENT_SEND: {
+                uint8_t action = sqe.cdw10 & 0xFF;
+                uint64_t slba = (static_cast<uint64_t>(sqe.cdw11) << 32) | sqe.cdw10;
+                uint16_t sc = ns->zoneManagementSend(action, slba);
+                cqe.setStatusCode(sc);
+                break;
+            }
+            case NVME_ZNS_ZONE_MANAGEMENT_RECEIVE: {
+                uint64_t slba = (static_cast<uint64_t>(sqe.cdw11) << 32) | sqe.cdw10;
+                std::vector<NvmeZoneDescriptor> descs;
+                uint16_t sc = ns->zoneManagementReceive(slba, descs);
+                cqe.setStatusCode(sc);
+                if (dataBuffer && bufferLength >= descs.size() * sizeof(NvmeZoneDescriptor)) {
+                    std::memcpy(dataBuffer, descs.data(), descs.size() * sizeof(NvmeZoneDescriptor));
+                }
+                break;
+            }
+            case NVME_ZNS_ZONE_APPEND: {
+                uint64_t zslba = (static_cast<uint64_t>(sqe.cdw11) << 32) | sqe.cdw10;
+                uint16_t nlb = (sqe.cdw12 & 0xFFFF) + 1;
+                uint64_t allocatedLba = 0;
+                uint16_t sc = ns->zoneAppend(zslba, nlb, dataBuffer, allocatedLba);
+                cqe.setStatusCode(sc);
+                cqe.commandSpecific = static_cast<uint32_t>(allocatedLba & 0xFFFFFFFF);
+                break;
+            }
             default:
                 cqe.setStatusCode(NVME_SC_INVALID_OPCODE);
                 break;
@@ -1217,6 +1650,148 @@ public:
         }
 
         return cqe;
+    }
+
+    NvmeCqe executeIoCommandWithSgl(const NvmeSqe& sqe, const std::vector<NvmeSglDescriptor>& sglDescs, PrpDmaEngine& dma) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        NvmeCqe cqe{};
+        cqe.commandId = sqe.commandId;
+        cqe.setPhase(true);
+        cqe.setStatusCode(NVME_SC_SUCCESS);
+
+        if (m_csts & NVME_CSTS_CFS) {
+            cqe.setStatusCode(NVME_SC_INTERNAL_DEVICE_ERROR);
+            return cqe;
+        }
+
+        auto it = m_namespaces.find(sqe.nsid);
+        if (it == m_namespaces.end()) {
+            cqe.setStatusCode(NVME_SC_INVALID_FIELD);
+            return cqe;
+        }
+        auto ns = it->second;
+
+        uint64_t slba = (static_cast<uint64_t>(sqe.cdw11) << 32) | sqe.cdw10;
+        uint16_t nlb = (sqe.cdw12 & 0xFFFF) + 1;
+        size_t byteLength = static_cast<size_t>(nlb) * ns->getBlockSize();
+
+        if (sqe.opcode == NVME_NVM_WRITE) {
+            std::vector<uint8_t> tmp(byteLength);
+            dma.readSglMemory(sglDescs, tmp.data(), byteLength);
+            NtStatus st = ns->writeBlocks(slba, nlb, tmp.data());
+            if (!NT_SUCCESS(st)) cqe.setStatusCode(NVME_SC_LBA_OUT_OF_RANGE);
+            m_telemetry.ioCommandsExecuted++;
+            m_telemetry.dmaBytesTransferred += byteLength;
+            m_smartLog.hostWriteCommands[0]++;
+            m_smartLog.dataUnitsWritten[0] += byteLength / 512;
+        } else if (sqe.opcode == NVME_NVM_READ) {
+            std::vector<uint8_t> tmp(byteLength);
+            NtStatus st = ns->readBlocks(slba, nlb, tmp.data());
+            if (!NT_SUCCESS(st)) cqe.setStatusCode(NVME_SC_LBA_OUT_OF_RANGE);
+            dma.writeSglMemory(sglDescs, tmp.data(), byteLength);
+            m_telemetry.ioCommandsExecuted++;
+            m_telemetry.dmaBytesTransferred += byteLength;
+            m_smartLog.hostReadCommands[0]++;
+            m_smartLog.dataUnitsRead[0] += byteLength / 512;
+        } else {
+            cqe.setStatusCode(NVME_SC_INVALID_OPCODE);
+        }
+        return cqe;
+    }
+
+    uint8_t getDoorbellStride() const noexcept { return m_dstrd; }
+    void setDoorbellStride(uint8_t dstrd) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_dstrd = dstrd & 0x0F;
+        m_cap = (m_cap & ~0x0000000F00000000ULL) | (static_cast<uint64_t>(m_dstrd) << 32);
+    }
+
+    uint32_t getDoorbellOffset(uint16_t qid, bool isCq) const {
+        uint32_t stride = 4 << m_dstrd;
+        return NVME_REG_DBS + ((2 * qid) + (isCq ? 1 : 0)) * stride;
+    }
+
+    void createPerCpuQueuePairs(uint32_t numCpus, uint16_t qsize = 256) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_cpuToQueueId.clear();
+        for (uint32_t cpu = 0; cpu < numCpus; ++cpu) {
+            uint16_t qid = static_cast<uint16_t>(cpu + 1);
+            auto& qp = m_ioQueues[qid];
+            qp.qid = qid;
+            qp.sqSize = qsize;
+            qp.cqSize = qsize;
+            qp.sqBase = 0x20000000ULL + (static_cast<uint64_t>(qid) * 0x10000);
+            qp.cqBase = 0x30000000ULL + (static_cast<uint64_t>(qid) * 0x10000);
+            qp.sqTail = 0;
+            qp.sqHead = 0;
+            qp.cqHead = 0;
+            qp.cqTail = 0;
+            qp.cqPhase = true;
+            qp.msixCount = 0;
+            qp.sqRing.assign(qsize, NvmeSqe{});
+            qp.cqRing.assign(qsize, NvmeCqe{});
+            m_cpuToQueueId[cpu] = qid;
+        }
+    }
+
+    QueuePair* getPerCpuQueuePair(uint32_t cpuIndex) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_cpuToQueueId.find(cpuIndex);
+        if (it != m_cpuToQueueId.end()) {
+            auto qIt = m_ioQueues.find(it->second);
+            if (qIt != m_ioQueues.end()) return &qIt->second;
+        }
+        return nullptr;
+    }
+
+    uint16_t getQueueIdForCpu(uint32_t cpuIndex) const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_cpuToQueueId.find(cpuIndex);
+        return (it != m_cpuToQueueId.end()) ? it->second : 0;
+    }
+
+    QueuePair* getQueuePair(uint16_t qid) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (qid == 0) return &m_adminQueue;
+        auto it = m_ioQueues.find(qid);
+        if (it != m_ioQueues.end()) return &it->second;
+        return nullptr;
+    }
+
+    void submitAer(uint16_t commandId) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_pendingAers.push(commandId);
+    }
+
+    bool triggerSmartAlert(uint8_t alertType, uint8_t info, uint8_t logPage = NVME_LOG_PAGE_SMART_HEALTH) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (m_pendingAers.empty()) return false;
+
+        uint16_t cid = m_pendingAers.front();
+        m_pendingAers.pop();
+
+        NvmeCqe cqe{};
+        cqe.commandId = cid;
+        cqe.sqId = 0;
+        cqe.commandSpecific = (static_cast<uint32_t>(logPage) << 16) |
+                              (static_cast<uint32_t>(info) << 8) |
+                              alertType;
+        cqe.setPhase(m_adminQueue.cqPhase);
+        cqe.setStatusCode(NVME_SC_SUCCESS);
+
+        m_adminQueue.cqRing[m_adminQueue.cqTail] = cqe;
+        m_adminQueue.cqTail = (m_adminQueue.cqTail + 1) % m_adminQueue.cqSize;
+        if (m_adminQueue.cqTail == 0) m_adminQueue.cqPhase = !m_adminQueue.cqPhase;
+
+        m_adminQueue.msixCount++;
+        m_telemetry.msixInterruptsGenerated++;
+        m_telemetry.aerEventsFired++;
+        return true;
+    }
+
+    size_t getPendingAerCount() const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        return m_pendingAers.size();
     }
 
     NTSTATUS createIoQueuePair(uint16_t qid, uint16_t sqSize, uint16_t cqSize, uint64_t sqBase, uint64_t cqBase) {
@@ -1787,6 +2362,215 @@ public:
 };
 
 // ============================================================================
+// 7.5. Native Windows NT NVMe Class Driver (nvme.sys)
+// ============================================================================
+
+struct BatchIoRequest {
+    uint8_t  opcode{NVME_NVM_READ};
+    uint32_t nsid{1};
+    uint64_t slba{0};
+    uint16_t nlb{1};
+    void*    buffer{nullptr};
+    NtStatus status{NtStatus::Success};
+};
+
+class NvmeBlockDriver {
+    std::shared_ptr<NvmeController> m_controller;
+    std::shared_ptr<PrpDmaEngine>   m_dma;
+    std::atomic<bool>               m_initialized{false};
+    std::wstring                    m_controllerName{L"\\Device\\NvmeController0"};
+    std::wstring                    m_diskName{L"\\Device\\Harddisk0\\DR0"};
+    std::wstring                    m_symlink{L"\\\\.\\PhysicalDrive0"};
+
+    std::atomic<uint64_t> m_totalReads{0};
+    std::atomic<uint64_t> m_totalWrites{0};
+    std::atomic<uint64_t> m_totalBytesRead{0};
+    std::atomic<uint64_t> m_totalBytesWritten{0};
+    std::atomic<uint64_t> m_totalIoctls{0};
+
+    NvmeBlockDriver() = default;
+
+public:
+    static NvmeBlockDriver& Instance() {
+        static NvmeBlockDriver s_instance;
+        return s_instance;
+    }
+
+    void initialize(std::shared_ptr<NvmeController> ctrl = nullptr, std::shared_ptr<PrpDmaEngine> dma = nullptr) {
+        if (ctrl) m_controller = ctrl;
+        else m_controller = std::make_shared<NvmeController>(NvmeVersion::Version_2_0);
+
+        if (dma) m_dma = dma;
+        else m_dma = std::make_shared<PrpDmaEngine>();
+
+        // Pre-create 8 per-CPU core queue pairs for SMP affinity
+        m_controller->createPerCpuQueuePairs(8, 256);
+
+        m_initialized.store(true);
+    }
+
+    bool isInitialized() const noexcept { return m_initialized.load(); }
+
+    std::shared_ptr<NvmeController> getController() const { return m_controller; }
+    std::shared_ptr<PrpDmaEngine> getDma() const { return m_dma; }
+
+    const std::wstring& getControllerDeviceName() const noexcept { return m_controllerName; }
+    const std::wstring& getDiskDeviceName() const noexcept { return m_diskName; }
+    const std::wstring& getDosDeviceSymlink() const noexcept { return m_symlink; }
+
+    NtStatus dispatchRead(uint32_t nsid, uint64_t lba, uint32_t count, void* buffer) {
+        if (!m_controller) return NtStatus::DeviceNotReady;
+        auto ns = m_controller->getNamespace(nsid);
+        if (!ns) return NtStatus::NoSuchDevice;
+
+        NtStatus st = ns->readBlocks(lba, count, buffer);
+        if (NT_SUCCESS(st)) {
+            m_totalReads++;
+            m_totalBytesRead += static_cast<uint64_t>(count) * ns->getBlockSize();
+        }
+        return st;
+    }
+
+    NtStatus dispatchWrite(uint32_t nsid, uint64_t lba, uint32_t count, const void* buffer) {
+        if (!m_controller) return NtStatus::DeviceNotReady;
+        auto ns = m_controller->getNamespace(nsid);
+        if (!ns) return NtStatus::NoSuchDevice;
+
+        NtStatus st = ns->writeBlocks(lba, count, buffer);
+        if (NT_SUCCESS(st)) {
+            m_totalWrites++;
+            m_totalBytesWritten += static_cast<uint64_t>(count) * ns->getBlockSize();
+        }
+        return st;
+    }
+
+    NtStatus dispatchDeviceControl(
+        uint32_t ioControlCode,
+        const void* inBuffer,
+        size_t inBufferSize,
+        void* outBuffer,
+        size_t outBufferSize,
+        size_t& bytesReturned
+    ) {
+        bytesReturned = 0;
+        if (!m_controller) return NtStatus::DeviceNotReady;
+        m_totalIoctls++;
+
+        switch (ioControlCode) {
+            case IOCTL_STORAGE_QUERY_PROPERTY_CODE: {
+                if (!outBuffer || outBufferSize < sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+                    return NtStatus::BufferTooSmall;
+                }
+                auto* desc = reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(outBuffer);
+                desc->Version = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+                desc->Size = static_cast<uint32_t>(std::min<size_t>(outBufferSize, sizeof(STORAGE_DEVICE_DESCRIPTOR) + 128));
+                desc->DeviceType = 0; // Direct Access Block Device
+                desc->DeviceTypeModifier = 0;
+                desc->RemovableMedia = 0;
+                desc->CommandQueueing = 1;
+                desc->BusType = BusTypeNvme;
+                desc->RawPropertiesLength = 0;
+
+                if (outBufferSize >= sizeof(STORAGE_DEVICE_DESCRIPTOR) + 64) {
+                    char* rawStr = reinterpret_cast<char*>(desc) + sizeof(STORAGE_DEVICE_DESCRIPTOR);
+                    desc->VendorIdOffset = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+                    std::strcpy(rawStr, "MicaNT");
+                    desc->ProductIdOffset = desc->VendorIdOffset + 8;
+                    std::strcpy(rawStr + 8, "Enterprise NVMe SSD PCIe 4.0 4TB");
+                    desc->ProductRevisionOffset = desc->ProductIdOffset + 36;
+                    std::strcpy(rawStr + 44, "2.0d");
+                    desc->SerialNumberOffset = desc->ProductRevisionOffset + 6;
+                    std::strcpy(rawStr + 50, "MICA-NVME-0001");
+                }
+                bytesReturned = desc->Size;
+                return NtStatus::Success;
+            }
+
+            case 0x002D1080: /* IOCTL_STORAGE_GET_DEVICE_NUMBER */ {
+                if (!outBuffer || outBufferSize < sizeof(storage::STORAGE_DEVICE_NUMBER)) {
+                    return NtStatus::BufferTooSmall;
+                }
+                auto* sdn = reinterpret_cast<storage::STORAGE_DEVICE_NUMBER*>(outBuffer);
+                sdn->DeviceType = storage::IOCTL_DISK_BASE;
+                sdn->DeviceNumber = 0;
+                sdn->PartitionNumber = 0;
+                bytesReturned = sizeof(storage::STORAGE_DEVICE_NUMBER);
+                return NtStatus::Success;
+            }
+
+            case 0x000700A0: /* IOCTL_DISK_GET_DRIVE_GEOMETRY_EX */ {
+                if (!outBuffer || outBufferSize < sizeof(storage::DISK_GEOMETRY_EX)) {
+                    return NtStatus::BufferTooSmall;
+                }
+                auto ns = m_controller->getNamespace(1);
+                if (!ns) return NtStatus::NoSuchDevice;
+
+                auto* geomEx = reinterpret_cast<storage::DISK_GEOMETRY_EX*>(outBuffer);
+                geomEx->Geometry = ns->getGeometry();
+                geomEx->DiskSize.quadPart = static_cast<int64_t>(ns->getTotalBytes());
+                bytesReturned = sizeof(storage::DISK_GEOMETRY_EX);
+                return NtStatus::Success;
+            }
+
+            case IOCTL_STORAGE_MANAGE_DATA_SET_ATTRIBUTES_CODE: {
+                auto ns = m_controller->getNamespace(1);
+                if (!ns) return NtStatus::NoSuchDevice;
+                ns->trimBlocks(0, 100);
+                bytesReturned = 0;
+                return NtStatus::Success;
+            }
+
+            default:
+                return NtStatus::NotImplemented;
+        }
+    }
+
+    void submitBatchIo(uint32_t cpuCore, std::vector<BatchIoRequest>& requests) {
+        if (!m_controller) return;
+        auto* qp = m_controller->getPerCpuQueuePair(cpuCore);
+        if (!qp) return;
+
+        for (auto& req : requests) {
+            auto ns = m_controller->getNamespace(req.nsid);
+            if (!ns) {
+                req.status = NtStatus::NoSuchDevice;
+                continue;
+            }
+
+            if (req.opcode == NVME_NVM_WRITE) {
+                req.status = ns->writeBlocks(req.slba, req.nlb, req.buffer);
+                if (NT_SUCCESS(req.status)) {
+                    m_totalWrites++;
+                    m_totalBytesWritten += static_cast<uint64_t>(req.nlb) * ns->getBlockSize();
+                }
+            } else if (req.opcode == NVME_NVM_READ) {
+                req.status = ns->readBlocks(req.slba, req.nlb, req.buffer);
+                if (NT_SUCCESS(req.status)) {
+                    m_totalReads++;
+                    m_totalBytesRead += static_cast<uint64_t>(req.nlb) * ns->getBlockSize();
+                }
+            }
+            qp->msixCount++;
+        }
+    }
+
+    uint64_t getTotalReads() const noexcept { return m_totalReads.load(); }
+    uint64_t getTotalWrites() const noexcept { return m_totalWrites.load(); }
+    uint64_t getTotalBytesRead() const noexcept { return m_totalBytesRead.load(); }
+    uint64_t getTotalBytesWritten() const noexcept { return m_totalBytesWritten.load(); }
+    uint64_t getTotalIoctls() const noexcept { return m_totalIoctls.load(); }
+
+    void resetForTesting() {
+        m_totalReads.store(0);
+        m_totalWrites.store(0);
+        m_totalBytesRead.store(0);
+        m_totalBytesWritten.store(0);
+        m_totalIoctls.store(0);
+        if (m_controller) m_controller->resetForTesting();
+    }
+};
+
+// ============================================================================
 // 8. Unified Sovereign Flash Storage Manager (TitanFlash)
 // ============================================================================
 
@@ -2029,7 +2813,22 @@ inline void InitializeNvmeSubsystem() {
     ufsSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
     scm::ServiceControlManager::get().registerServiceRecord(ufsSvc);
 
+    auto nvmeBlockSvc = std::make_shared<scm::ServiceRecord>();
+    nvmeBlockSvc->serviceName = L"nvme";
+    nvmeBlockSvc->displayName = L"MicaNT NVM Express Storage Subsystem Driver";
+    nvmeBlockSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
+    nvmeBlockSvc->startType = scm::SERVICE_BOOT_START;
+    nvmeBlockSvc->errorControl = scm::SERVICE_ERROR_CRITICAL;
+    nvmeBlockSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\nvme.sys";
+    nvmeBlockSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
+    scm::ServiceControlManager::get().registerServiceRecord(nvmeBlockSvc);
+
     // 4. Register Version Database Information
+    version::VersionDatabase::Instance().RegisterModule(
+        "nvme.sys",
+        "10.0.22621.1",
+        "MicaNT Sovereign NVM Express Class Driver"
+    );
     version::VersionDatabase::Instance().RegisterModule(
         "stornvme.sys",
         "10.0.22621.1",
@@ -2067,4 +2866,10 @@ namespace micant {
     using nvme::STORPORT_TELEMETRY;
     using nvme::StorPortQueryTelemetry;
     using nvme::StorPortResetTelemetry;
+    using nvme::NvmeBlockDriver;
+    using nvme::NvmeSglDescriptor;
+    using nvme::NvmeProtectionInformation;
+    using nvme::NvmeZoneDescriptor;
+    using nvme::STORAGE_DEVICE_DESCRIPTOR;
+    using nvme::STORAGE_BUS_TYPE;
 }
