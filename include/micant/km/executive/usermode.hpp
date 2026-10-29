@@ -179,13 +179,37 @@ inline constexpr uint32_t MM_PAGE_GUARD             = 0x100;
 inline constexpr uint32_t MM_PAGE_NOCACHE           = 0x200;
 inline constexpr uint32_t MM_PAGE_WRITECOMBINE      = 0x400;
 
+// Canonical Section Allocation Attributes (Win32 / NT)
+inline constexpr uint32_t MM_SEC_FILE           = 0x00800000;
+inline constexpr uint32_t MM_SEC_IMAGE          = 0x01000000;
+inline constexpr uint32_t MM_SEC_RESERVE        = 0x04000000;
+inline constexpr uint32_t MM_SEC_COMMIT         = 0x08000000;
+inline constexpr uint32_t MM_SEC_NOCACHE        = 0x10000000;
+inline constexpr uint32_t MM_SEC_WRITECOMBINE   = 0x40000000;
+
 struct VadEntry64 {
     uint64_t startVa{0};
     uint64_t endVa{0};
     uint32_t protection{0};
     bool     committed{false};
     bool     isGuard{false};
+    bool     isCopyOnWrite{false};
+    bool     isStandby{false};
+    bool     isModified{false};
+    uint64_t sectionHandle{0};
+    uint64_t sectionOffset{0};
     char     name[32]{};
+};
+
+struct UserSectionDescriptor64 {
+    uint64_t handle{0};
+    size_t   size{0};
+    uint32_t allocationAttributes{0};
+    uint32_t pageProtection{0};
+    std::array<uint8_t, 65536> backingData{};
+    size_t   backingDataSize{0};
+    char     name[64]{};
+    uint32_t referenceCount{0};
 };
 
 enum class UserProcessState : uint32_t {
@@ -231,7 +255,24 @@ struct UserProcessContext64 {
     uint64_t         stackGuardFaultsResolved{0};
     uint64_t         accessViolationsTrapped{0};
 
-    bool addVad(uint64_t startVa, uint64_t endVa, uint32_t protection, bool committed, bool isGuard, const char* vadName) noexcept {
+    // Horizon 149: Copy-on-Write, Section Views & Working Set Metrics
+    uint64_t         copyOnWriteFaultsResolved{0};
+    uint64_t         softPageFaultsResolved{0};
+    uint64_t         hardPageFaultsResolved{0};
+    size_t           workingSetSize{0};     // Current physical resident pages in bytes
+    size_t           peakWorkingSetSize{0}; // Peak resident working set size in bytes
+
+    bool addVad(
+        uint64_t startVa,
+        uint64_t endVa,
+        uint32_t protection,
+        bool committed,
+        bool isGuard,
+        const char* vadName,
+        bool isCopyOnWrite = false,
+        uint64_t sectionHandle = 0,
+        uint64_t sectionOffset = 0
+    ) noexcept {
         if (vadCount >= MAX_VADS || startVa >= endVa) return false;
         VadEntry64& v = vads[vadCount++];
         v.startVa = startVa;
@@ -239,11 +280,23 @@ struct UserProcessContext64 {
         v.protection = protection;
         v.committed = committed;
         v.isGuard = isGuard;
+        v.isCopyOnWrite = isCopyOnWrite;
+        v.isStandby = false;
+        v.isModified = false;
+        v.sectionHandle = sectionHandle;
+        v.sectionOffset = sectionOffset;
         size_t i = 0;
         for (; i + 1 < sizeof(v.name) && vadName && vadName[i] != '\0'; ++i) {
             v.name[i] = vadName[i];
         }
         v.name[i] = '\0';
+
+        if (committed) {
+            workingSetSize += (endVa - startVa);
+            if (workingSetSize > peakWorkingSetSize) {
+                peakWorkingSetSize = workingSetSize;
+            }
+        }
         return true;
     }
 
@@ -302,6 +355,10 @@ inline constexpr uint32_t SSN_NT_WRITE_FILE               = 0x0025; // Console /
 inline constexpr uint32_t SSN_NT_ALLOCATE_VIRTUAL_MEMORY  = 0x0055; // Userland Heap / Stack expansion
 inline constexpr uint32_t SSN_NT_CLOSE                    = 0x001E; // Handle close
 inline constexpr uint32_t SSN_NT_YIELD_EXECUTION          = 0x0046; // Cooperative CPU yield
+inline constexpr uint32_t SSN_NT_CREATE_SECTION           = 0x004A; // ZwCreateSection
+inline constexpr uint32_t SSN_NT_MAP_VIEW_OF_SECTION      = 0x0028; // ZwMapViewOfSection
+inline constexpr uint32_t SSN_NT_UNMAP_VIEW_OF_SECTION    = 0x002A; // ZwUnmapViewOfSection
+inline constexpr uint32_t SSN_NT_EMPTY_WORKING_SET        = 0x008F; // ZwEmptyWorkingSet
 inline constexpr uint32_t SSN_NT_GDI_GET_VIDEO_INFO       = 0x0080; // Query screen dimensions & framebuffer format
 inline constexpr uint32_t SSN_NT_GDI_PRESENT_SURFACE      = 0x0081; // Scanline burst blit to physical VRAM
 
@@ -326,6 +383,10 @@ public:
         addEntry(SSN_NT_ALLOCATE_VIRTUAL_MEMORY, "NtAllocateVirtualMemory", 6);
         addEntry(SSN_NT_CLOSE, "NtClose", 1);
         addEntry(SSN_NT_YIELD_EXECUTION, "NtYieldExecution", 0);
+        addEntry(SSN_NT_CREATE_SECTION, "NtCreateSection", 7);
+        addEntry(SSN_NT_MAP_VIEW_OF_SECTION, "NtMapViewOfSection", 10);
+        addEntry(SSN_NT_UNMAP_VIEW_OF_SECTION, "NtUnmapViewOfSection", 2);
+        addEntry(SSN_NT_EMPTY_WORKING_SET, "NtEmptyWorkingSet", 1);
         addEntry(SSN_NT_GDI_GET_VIDEO_INFO, "NtGdiGetVideoInfo", 1);
         addEntry(SSN_NT_GDI_PRESENT_SURFACE, "NtGdiPresentSurface", 1);
     }
@@ -380,6 +441,19 @@ private:
     uint64_t  m_totalStackGuardResolutions{0};
     uint64_t  m_totalAccessViolations{0};
 
+    // Horizon 149: Sovereign User-Mode Section Objects & Working Set Telemetry
+    static constexpr size_t MAX_USER_SECTIONS = 32;
+    std::array<UserSectionDescriptor64, MAX_USER_SECTIONS> m_userSections{};
+    size_t    m_userSectionCount{0};
+    uint64_t  m_nextSectionHandle{0x1000};
+    uint64_t  m_totalSectionsCreated{0};
+    uint64_t  m_totalSectionViewsMapped{0};
+    uint64_t  m_totalSectionViewsUnmapped{0};
+    uint64_t  m_totalCopyOnWriteFaults{0};
+    uint64_t  m_totalSoftPageFaults{0};
+    uint64_t  m_totalHardPageFaults{0};
+    uint64_t  m_totalWorkingSetTrims{0};
+
 public:
     static UserProcessManager64& get() noexcept {
         static UserProcessManager64 s_instance;
@@ -403,6 +477,17 @@ public:
         m_totalDemandPagesCommitted = 0;
         m_totalStackGuardResolutions = 0;
         m_totalAccessViolations = 0;
+
+        m_userSections.fill(UserSectionDescriptor64{});
+        m_userSectionCount = 0;
+        m_nextSectionHandle = 0x1000;
+        m_totalSectionsCreated = 0;
+        m_totalSectionViewsMapped = 0;
+        m_totalSectionViewsUnmapped = 0;
+        m_totalCopyOnWriteFaults = 0;
+        m_totalSoftPageFaults = 0;
+        m_totalHardPageFaults = 0;
+        m_totalWorkingSetTrims = 0;
 
         if (populateSystem) {
             // Core NT Executive Processes
@@ -605,6 +690,40 @@ public:
                 return micant::NtStatus::Success;
             }
 
+            case SSN_NT_CREATE_SECTION: {
+                if (arg1 != 0) {
+                    uint64_t handle = 0;
+                    size_t maxSz = (arg4 > 0) ? static_cast<size_t>(arg4) : 0x10000;
+                    micant::NtStatus st = createSection(handle, maxSz, MM_SEC_COMMIT, MM_PAGE_READWRITE, "UserSection");
+                    if (NT_SUCCESS(st)) {
+                        *reinterpret_cast<uint64_t*>(arg1) = handle;
+                    }
+                    return st;
+                }
+                return micant::NtStatus::InvalidParameter;
+            }
+
+            case SSN_NT_MAP_VIEW_OF_SECTION: {
+                if (arg1 != 0 && arg3 != 0) {
+                    uint64_t baseVa = *reinterpret_cast<uint64_t*>(arg3);
+                    size_t viewSz = (arg4 != 0) ? *reinterpret_cast<size_t*>(arg4) : 0x10000;
+                    micant::NtStatus st = mapViewOfSection(arg1, m_activePid, baseVa, 0, 0, viewSz, MM_PAGE_READWRITE, "MappedView");
+                    if (NT_SUCCESS(st)) {
+                        *reinterpret_cast<uint64_t*>(arg3) = baseVa;
+                    }
+                    return st;
+                }
+                return micant::NtStatus::InvalidParameter;
+            }
+
+            case SSN_NT_UNMAP_VIEW_OF_SECTION: {
+                return unmapViewOfSection(m_activePid, arg2);
+            }
+
+            case SSN_NT_EMPTY_WORKING_SET: {
+                return trimProcessWorkingSet(m_activePid);
+            }
+
             case SSN_NT_GDI_GET_VIDEO_INFO: {
                 // arg1: pointer to UserVideoInfo64
                 if (arg1 == 0) return micant::NtStatus::InvalidParameter;
@@ -677,9 +796,9 @@ public:
     [[nodiscard]] uint64_t getTotalProcessesTerminated() const noexcept { return m_totalProcessesTerminated; }
 
     /**
-     * @brief Horizon 148: Hardware Interrupt / Exception #PF (Vector 14) Page Fault Engine.
-     * Evaluates VAD tree, resolves demand paging, handles guard page stack expansion,
-     * or raises STATUS_ACCESS_VIOLATION on illegal access.
+     * @brief Horizon 148 & 149: Hardware Interrupt / Exception #PF (Vector 14) Page Fault Engine.
+     * Evaluates VAD tree, resolves Copy-on-Write (CoW), soft page faults (Standby list),
+     * demand paging, guard page stack expansion, or raises STATUS_ACCESS_VIOLATION.
      */
     micant::NtStatus resolvePageFault(uint32_t pid, uint64_t faultVa, uint32_t errorCode) noexcept {
         m_totalPageFaults++;
@@ -699,6 +818,35 @@ public:
         }
 
         bool isWrite = (errorCode & 0x02) != 0;
+
+        // Horizon 149: Copy-on-Write Resolution (MM_PAGE_WRITECOPY / MM_PAGE_EXECUTE_WRITECOPY)
+        if (vad->isCopyOnWrite) {
+            if (isWrite) {
+                vad->isCopyOnWrite = false;
+                vad->protection = (vad->protection == MM_PAGE_EXECUTE_WRITECOPY) 
+                    ? MM_PAGE_EXECUTE_READWRITE 
+                    : MM_PAGE_READWRITE;
+                vad->isModified = true;
+                proc->copyOnWriteFaultsResolved++;
+                m_totalCopyOnWriteFaults++;
+                return micant::NtStatus::Success;
+            }
+            // Read access to CoW is permitted without splitting
+            return micant::NtStatus::Success;
+        }
+
+        // Horizon 149: Soft Page Fault Resolution (Standby List restoration)
+        if (vad->isStandby) {
+            vad->isStandby = false;
+            size_t pageBytes = (vad->endVa > vad->startVa) ? (vad->endVa - vad->startVa) : 0x1000;
+            proc->workingSetSize += pageBytes;
+            if (proc->workingSetSize > proc->peakWorkingSetSize) {
+                proc->peakWorkingSetSize = proc->workingSetSize;
+            }
+            proc->softPageFaultsResolved++;
+            m_totalSoftPageFaults++;
+            return micant::NtStatus::Success;
+        }
 
         // Check write permission violation on read-only / execute-only memory
         if (isWrite && !(vad->protection & (MM_PAGE_READWRITE | MM_PAGE_EXECUTE_READWRITE))) {
@@ -732,6 +880,159 @@ public:
         return micant::NtStatus::Success;
     }
 
+    micant::NtStatus createSection(
+        uint64_t& outHandle,
+        size_t maximumSize,
+        uint32_t allocationAttributes,
+        uint32_t pageProtection,
+        const char* sectionName = nullptr
+    ) noexcept {
+        if (maximumSize == 0) return micant::NtStatus::InvalidParameter;
+        if (m_userSectionCount >= MAX_USER_SECTIONS) return micant::NtStatus::InsufficientResources;
+
+        UserSectionDescriptor64& sec = m_userSections[m_userSectionCount++];
+        outHandle = m_nextSectionHandle;
+        m_nextSectionHandle += 4;
+
+        sec.handle = outHandle;
+        sec.size = maximumSize;
+        sec.allocationAttributes = allocationAttributes;
+        sec.pageProtection = pageProtection;
+        sec.backingDataSize = std::min(maximumSize, sec.backingData.size());
+        sec.backingData.fill(0);
+        sec.referenceCount = 1;
+
+        if (sectionName) {
+            size_t i = 0;
+            for (; i + 1 < sizeof(sec.name) && sectionName[i] != '\0'; ++i) {
+                sec.name[i] = sectionName[i];
+            }
+            sec.name[i] = '\0';
+        }
+
+        m_totalSectionsCreated++;
+        return micant::NtStatus::Success;
+    }
+
+    [[nodiscard]] UserSectionDescriptor64* findSection(uint64_t handle) noexcept {
+        for (size_t i = 0; i < m_userSectionCount; ++i) {
+            if (m_userSections[i].handle == handle) {
+                return &m_userSections[i];
+            }
+        }
+        return nullptr;
+    }
+
+    micant::NtStatus mapViewOfSection(
+        uint64_t sectionHandle,
+        uint32_t pid,
+        uint64_t& baseAddress,
+        size_t commitSize,
+        uint64_t sectionOffset,
+        size_t viewSize,
+        uint32_t win32Protect,
+        const char* viewName = nullptr
+    ) noexcept {
+        UserSectionDescriptor64* sec = findSection(sectionHandle);
+        if (!sec) return micant::NtStatus::InvalidHandle;
+
+        UserProcessContext64* proc = findProcess(pid);
+        if (!proc) return micant::NtStatus::ProcessIsTerminating;
+
+        if (viewSize == 0 || (sectionOffset + viewSize) > sec->size) {
+            viewSize = (sec->size > sectionOffset) ? (sec->size - sectionOffset) : 0x1000;
+        }
+
+        if (baseAddress == 0) {
+            baseAddress = 0x00007FF640000000ULL + static_cast<uint64_t>(pid) * 0x10000000ULL + static_cast<uint64_t>(proc->vadCount) * 0x100000ULL;
+        }
+
+        uint32_t effectiveProtect = (win32Protect != 0) ? win32Protect : sec->pageProtection;
+        bool isCow = (effectiveProtect == MM_PAGE_WRITECOPY || effectiveProtect == MM_PAGE_EXECUTE_WRITECOPY);
+
+        bool added = proc->addVad(
+            baseAddress,
+            baseAddress + viewSize,
+            effectiveProtect,
+            true,  // committed
+            false, // isGuard
+            viewName ? viewName : (sec->name[0] ? sec->name : "SectionView"),
+            isCow,
+            sectionHandle,
+            sectionOffset
+        );
+
+        if (!added) return micant::NtStatus::InsufficientResources;
+
+        sec->referenceCount++;
+        m_totalSectionViewsMapped++;
+        return micant::NtStatus::Success;
+    }
+
+    micant::NtStatus unmapViewOfSection(uint32_t pid, uint64_t baseAddress) noexcept {
+        UserProcessContext64* proc = findProcess(pid);
+        if (!proc) return micant::NtStatus::ProcessIsTerminating;
+
+        for (size_t i = 0; i < proc->vadCount; ++i) {
+            if (proc->vads[i].startVa == baseAddress) {
+                uint64_t secHandle = proc->vads[i].sectionHandle;
+                size_t regionSize = proc->vads[i].endVa - proc->vads[i].startVa;
+                if (proc->workingSetSize >= regionSize) {
+                    proc->workingSetSize -= regionSize;
+                } else {
+                    proc->workingSetSize = 0;
+                }
+
+                // Shift remaining VADs
+                for (size_t j = i; j + 1 < proc->vadCount; ++j) {
+                    proc->vads[j] = proc->vads[j + 1];
+                }
+                proc->vadCount--;
+
+                if (secHandle != 0) {
+                    auto* sec = findSection(secHandle);
+                    if (sec && sec->referenceCount > 0) {
+                        sec->referenceCount--;
+                    }
+                }
+
+                m_totalSectionViewsUnmapped++;
+                return micant::NtStatus::Success;
+            }
+        }
+        return micant::NtStatus::NotFound;
+    }
+
+    micant::NtStatus trimProcessWorkingSet(uint32_t pid) noexcept {
+        UserProcessContext64* proc = findProcess(pid);
+        if (!proc) return micant::NtStatus::ProcessIsTerminating;
+
+        size_t pagesTrimmed = 0;
+        for (size_t i = 0; i < proc->vadCount; ++i) {
+            if (proc->vads[i].committed && !proc->vads[i].isGuard && !proc->vads[i].isStandby) {
+                proc->vads[i].isStandby = true;
+                pagesTrimmed += (proc->vads[i].endVa - proc->vads[i].startVa);
+            }
+        }
+
+        if (proc->workingSetSize >= pagesTrimmed) {
+            proc->workingSetSize -= pagesTrimmed;
+        } else {
+            proc->workingSetSize = 0;
+        }
+
+        m_totalWorkingSetTrims++;
+        return micant::NtStatus::Success;
+    }
+
+    [[nodiscard]] size_t getUserSectionCount() const noexcept { return m_userSectionCount; }
+    [[nodiscard]] uint64_t getTotalSectionsCreated() const noexcept { return m_totalSectionsCreated; }
+    [[nodiscard]] uint64_t getTotalSectionViewsMapped() const noexcept { return m_totalSectionViewsMapped; }
+    [[nodiscard]] uint64_t getTotalSectionViewsUnmapped() const noexcept { return m_totalSectionViewsUnmapped; }
+    [[nodiscard]] uint64_t getTotalCopyOnWriteFaults() const noexcept { return m_totalCopyOnWriteFaults; }
+    [[nodiscard]] uint64_t getTotalSoftPageFaults() const noexcept { return m_totalSoftPageFaults; }
+    [[nodiscard]] uint64_t getTotalHardPageFaults() const noexcept { return m_totalHardPageFaults; }
+    [[nodiscard]] uint64_t getTotalWorkingSetTrims() const noexcept { return m_totalWorkingSetTrims; }
     [[nodiscard]] uint64_t getTotalPageFaults() const noexcept { return m_totalPageFaults; }
     [[nodiscard]] uint64_t getTotalDemandPagesCommitted() const noexcept { return m_totalDemandPagesCommitted; }
     [[nodiscard]] uint64_t getTotalStackGuardResolutions() const noexcept { return m_totalStackGuardResolutions; }

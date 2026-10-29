@@ -4324,5 +4324,14 @@
   - Implements Hardware Exception #PF (Vector 14) Page Fault Engine (`resolvePageFault()`): handles demand paging commit on uncommitted heap memory, dynamic stack expansion downwards by 4KB upon guard page hit, and strict `STATUS_ACCESS_VIOLATION` (`0xC0000005`) generation on unmapped address or write access to read-only memory.
   - Tested and verified: 364 suites passing with 100% green.
 
+- [x] **Horizon 149 (`Suite 365`): Copy-on-Write Memory Management, Section Objects & Working Set Aging Engine (`include/micant/km/executive/usermode.hpp`)**:
+  - Implements NT Section Objects (`UserSectionDescriptor64`) backed by shared physical memory allocations with `ZwCreateSection` (`createSection`), handle lookup (`findSection`), multi-process view mapping (`ZwMapViewOfSection` / `mapViewOfSection`), and view unmapping (`ZwUnmapViewOfSection` / `unmapViewOfSection`).
+  - Implements hardware Copy-on-Write (CoW) page fault engine: pages mapped with `MM_PAGE_WRITECOPY` are kept hardware write-protected; upon user-mode write `#PF` (Vector 14 error `0x06`), the kernel allocates a private physical memory frame, duplicates the shared content, transitions the VAD to private `MM_PAGE_READWRITE`, and increments `copyOnWriteFaultsResolved`.
+  - Implements Working Set aging engine: `trimProcessWorkingSet` (`ZwEmptyWorkingSet`) trims resident working sets by transitioning committed pages to the Standby list (`isStandby = true`), reducing `workingSetSize` to zero while maintaining `peakWorkingSetSize` telemetry.
+  - Implements Soft Page Fault resolution: on-demand `#PF` access to a Standby page restores it directly into the active working set without pagefile or disk I/O, updating `softPageFaultsResolved`.
+  - Integrates canonical System Service Descriptor Table (SSDT) system service numbers: `SSN_NT_CREATE_SECTION` (`0x004A`), `SSN_NT_MAP_VIEW_OF_SECTION` (`0x0028`), `SSN_NT_UNMAP_VIEW_OF_SECTION` (`0x002A`), and `SSN_NT_EMPTY_WORKING_SET` (`0x008F`).
+  - Tested and verified: 365 unit test suites passing with 100% green.
+
+
 
 

@@ -24140,3 +24140,223 @@ void Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Pagin
 
     std::cout << "[TEST] Suite 364: Horizon 148 - Preemptive Multi-Queue Hardware Scheduler, Per-Process CR3 Isolation & Demand Page Fault Engine PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 365: Horizon 149 - Copy-on-Write Memory Management, Section Objects & Working Set Aging Engine
+// ============================================================================
+void Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging() {
+    std::cout << "[TEST] Running Suite 365: Horizon 149 - Copy-on-Write Memory Management, Section Objects & Working Set Aging Engine...\n" << std::flush;
+
+    auto& pm = micant::um::UserProcessManager64::get();
+    auto& sched = micant::um::UserThreadScheduler64::get();
+
+    pm.reset(true);
+    sched.reset(true);
+
+    // ========================================================================
+    // Pillar 1: Section Object Creation (ZwCreateSection / createSection)
+    // ========================================================================
+    uint64_t secHandle = 0;
+    {
+        micant::NtStatus st = pm.createSection(
+            secHandle,
+            0x10000, // 64 KB
+            micant::um::MM_SEC_COMMIT,
+            micant::um::MM_PAGE_READWRITE,
+            "\\BaseNamedObjects\\SharedMemoryBlock"
+        );
+
+        TEST_ASSERT(NT_SUCCESS(st), "createSection must succeed for 64KB shared memory section");
+        TEST_ASSERT(secHandle != 0, "Created section handle must be non-zero");
+        TEST_ASSERT(pm.getUserSectionCount() == 1, "User section count must be 1");
+        TEST_ASSERT(pm.getTotalSectionsCreated() == 1, "Total sections created counter must be 1");
+
+        auto* sec = pm.findSection(secHandle);
+        TEST_ASSERT(sec != nullptr, "findSection must locate created section by handle");
+        TEST_ASSERT(sec->size == 0x10000, "Section size must reflect 64 KB");
+        TEST_ASSERT(sec->allocationAttributes == micant::um::MM_SEC_COMMIT, "Allocation attributes must be MM_SEC_COMMIT");
+        TEST_ASSERT(sec->pageProtection == micant::um::MM_PAGE_READWRITE, "Section protection must be PAGE_READWRITE");
+
+        // Write test data into section backing memory
+        const char testPayload[] = "MicaNT Section Shared Payload 0x5ECAFE";
+        std::memcpy(sec->backingData.data(), testPayload, sizeof(testPayload));
+    }
+
+    // ========================================================================
+    // Pillar 2: Section View Mapping Across Multiple Processes (ZwMapViewOfSection)
+    // ========================================================================
+    uint64_t clientABaseVa = 0;
+    uint64_t clientBBaseVa = 0;
+    {
+        auto* procA = pm.createProcess("clientA.exe", 1024, 4, 0x7FF700000000ULL, 0x20000, 0x7FFFFFFF0000ULL, 0x10000, 0x7FFDF0000000ULL, 0x7FFDE0000000ULL);
+        auto* procB = pm.createProcess("clientB.exe", 1028, 4, 0x7FF710000000ULL, 0x20000, 0x7FFFFFFF0000ULL, 0x10000, 0x7FFDF1000000ULL, 0x7FFDE1000000ULL);
+        TEST_ASSERT(procA != nullptr && procB != nullptr, "Client processes A and B must be spawned");
+
+        size_t initialWsA = procA->workingSetSize;
+        size_t initialWsB = procB->workingSetSize;
+
+        // Map view into Client A
+        micant::NtStatus stA = pm.mapViewOfSection(
+            secHandle,
+            1024,
+            clientABaseVa,
+            0,
+            0,
+            0x10000,
+            micant::um::MM_PAGE_READWRITE,
+            "SharedViewA"
+        );
+        TEST_ASSERT(NT_SUCCESS(stA), "Mapping section view into Client A must succeed");
+        TEST_ASSERT(clientABaseVa != 0, "Client A mapped base VA must be populated");
+        TEST_ASSERT(procA->findVad(clientABaseVa) != nullptr, "Client A VAD must contain mapped section view");
+        TEST_ASSERT(procA->workingSetSize == initialWsA + 0x10000, "Client A working set size must expand by 64KB");
+
+        // Map view into Client B
+        micant::NtStatus stB = pm.mapViewOfSection(
+            secHandle,
+            1028,
+            clientBBaseVa,
+            0,
+            0,
+            0x10000,
+            micant::um::MM_PAGE_READWRITE,
+            "SharedViewB"
+        );
+        TEST_ASSERT(NT_SUCCESS(stB), "Mapping section view into Client B must succeed");
+        TEST_ASSERT(clientBBaseVa != 0, "Client B mapped base VA must be populated");
+        TEST_ASSERT(procB->findVad(clientBBaseVa) != nullptr, "Client B VAD must contain mapped section view");
+        TEST_ASSERT(procB->workingSetSize == initialWsB + 0x10000, "Client B working set size must expand by 64KB");
+
+        TEST_ASSERT(pm.getTotalSectionViewsMapped() == 2, "Total section views mapped must be 2");
+
+        auto* sec = pm.findSection(secHandle);
+        TEST_ASSERT(sec->referenceCount >= 3, "Section reference count must track both mapped views");
+    }
+
+    // ========================================================================
+    // Pillar 3: Copy-on-Write (PAGE_WRITECOPY) Fault & Page Splitting
+    // ========================================================================
+    uint64_t clientCBaseVa = 0;
+    {
+        auto* procC = pm.createProcess("clientC.exe", 1032, 4, 0x7FF720000000ULL, 0x20000, 0x7FFFFFFF0000ULL, 0x10000, 0x7FFDF2000000ULL, 0x7FFDE2000000ULL);
+        TEST_ASSERT(procC != nullptr, "Client process C must be spawned");
+
+        // Map section view into Client C with Copy-on-Write protection (PAGE_WRITECOPY)
+        micant::NtStatus stC = pm.mapViewOfSection(
+            secHandle,
+            1032,
+            clientCBaseVa,
+            0,
+            0,
+            0x10000,
+            micant::um::MM_PAGE_WRITECOPY,
+            "CoWViewC"
+        );
+        TEST_ASSERT(NT_SUCCESS(stC), "Mapping CoW view into Client C must succeed");
+        auto* vadCow = procC->findVad(clientCBaseVa);
+        TEST_ASSERT(vadCow != nullptr, "CoW VAD must exist in Client C");
+        TEST_ASSERT(vadCow->isCopyOnWrite == true, "VAD must have isCopyOnWrite flag set");
+        TEST_ASSERT(vadCow->protection == micant::um::MM_PAGE_WRITECOPY, "VAD protection must be MM_PAGE_WRITECOPY");
+
+        // Step A: User Read Access does NOT trigger CoW page split
+        micant::NtStatus stRead = pm.resolvePageFault(1032, clientCBaseVa, 0x04 /* User Read */);
+        TEST_ASSERT(NT_SUCCESS(stRead), "Read access to CoW page must succeed");
+        TEST_ASSERT(vadCow->isCopyOnWrite == true, "CoW flag must remain true after read");
+        TEST_ASSERT(procC->copyOnWriteFaultsResolved == 0, "No CoW faults resolved on read");
+        TEST_ASSERT(pm.getTotalCopyOnWriteFaults() == 0, "Global CoW fault counter must remain 0");
+
+        // Step B: User Write Access triggers #PF (Vector 14) and CoW Page Splitting!
+        uint64_t prevFaults = pm.getTotalPageFaults();
+        micant::NtStatus stWrite = pm.resolvePageFault(1032, clientCBaseVa, 0x06 /* User Write */);
+        TEST_ASSERT(NT_SUCCESS(stWrite), "Write access to CoW page must be caught and resolved");
+        TEST_ASSERT(vadCow->isCopyOnWrite == false, "VAD must transition isCopyOnWrite to false after split");
+        TEST_ASSERT(vadCow->protection == micant::um::MM_PAGE_READWRITE, "VAD protection must become PAGE_READWRITE");
+        TEST_ASSERT(vadCow->isModified == true, "VAD must be marked modified/dirty");
+        TEST_ASSERT(procC->copyOnWriteFaultsResolved == 1, "Process CoW faults resolved must increment to 1");
+        TEST_ASSERT(pm.getTotalCopyOnWriteFaults() == 1, "Global CoW faults resolved must increment to 1");
+        TEST_ASSERT(pm.getTotalPageFaults() == prevFaults + 1, "Total page faults must increment");
+
+        // Step C: Subsequent writes execute without re-triggering CoW split
+        micant::NtStatus stWriteSubsequent = pm.resolvePageFault(1032, clientCBaseVa, 0x06 /* User Write */);
+        TEST_ASSERT(NT_SUCCESS(stWriteSubsequent), "Subsequent write to private page must succeed immediately");
+        TEST_ASSERT(procC->copyOnWriteFaultsResolved == 1, "CoW resolution count must not increment again");
+        TEST_ASSERT(pm.getTotalCopyOnWriteFaults() == 1, "Global CoW count must remain 1");
+    }
+
+    // ========================================================================
+    // Pillar 4: Working Set Trimming (ZwEmptyWorkingSet / trimProcessWorkingSet)
+    // ========================================================================
+    {
+        auto* procA = pm.findProcess(1024);
+        TEST_ASSERT(procA != nullptr, "Client A must exist");
+        size_t wsBeforeTrim = procA->workingSetSize;
+        size_t peakWsBeforeTrim = procA->peakWorkingSetSize;
+        TEST_ASSERT(wsBeforeTrim > 0, "Client A must have a non-zero resident working set");
+
+        // Execute working set trim (all committed non-guard pages age to Standby List)
+        micant::NtStatus stTrim = pm.trimProcessWorkingSet(1024);
+        TEST_ASSERT(NT_SUCCESS(stTrim), "trimProcessWorkingSet must succeed");
+        TEST_ASSERT(procA->workingSetSize == 0, "Working set size must drop to 0 after trim");
+        TEST_ASSERT(procA->peakWorkingSetSize == peakWsBeforeTrim, "Peak working set size must be preserved across trims");
+        TEST_ASSERT(pm.getTotalWorkingSetTrims() == 1, "Global working set trims counter must be 1");
+
+        // Verify VADs are marked standby
+        auto* vadViewA = procA->findVad(clientABaseVa);
+        TEST_ASSERT(vadViewA != nullptr && vadViewA->isStandby == true, "Mapped view VAD must be marked standby");
+    }
+
+    // ========================================================================
+    // Pillar 5: Soft Page Fault Resolution (Standby List to Active Working Set)
+    // ========================================================================
+    {
+        auto* procA = pm.findProcess(1024);
+        TEST_ASSERT(procA != nullptr, "Client A must exist");
+        TEST_ASSERT(procA->workingSetSize == 0, "Client A working set is 0 before soft fault");
+
+        // Access a trimmed page: #PF triggers Soft Fault resolution without disk I/O!
+        uint64_t prevSoftFaults = pm.getTotalSoftPageFaults();
+        micant::NtStatus stSoft = pm.resolvePageFault(1024, clientABaseVa, 0x04 /* User Read */);
+        TEST_ASSERT(NT_SUCCESS(stSoft), "Soft page fault resolution must succeed");
+
+        auto* vadViewA = procA->findVad(clientABaseVa);
+        TEST_ASSERT(vadViewA != nullptr && vadViewA->isStandby == false, "VAD must transition back to active (isStandby = false)");
+        TEST_ASSERT(procA->workingSetSize > 0, "Working set size must increase upon soft fault");
+        TEST_ASSERT(procA->softPageFaultsResolved == 1, "Process softPageFaultsResolved must increment to 1");
+        TEST_ASSERT(pm.getTotalSoftPageFaults() == prevSoftFaults + 1, "Global soft page faults must increment");
+    }
+
+    // ========================================================================
+    // Pillar 6: Section View Unmapping (ZwUnmapViewOfSection) & Cleanup
+    // ========================================================================
+    {
+        auto* procA = pm.findProcess(1024);
+        TEST_ASSERT(procA != nullptr, "Client A must exist");
+        TEST_ASSERT(procA->findVad(clientABaseVa) != nullptr, "VAD must exist prior to unmapping");
+
+        // Unmap view from Client A
+        micant::NtStatus stUnmap = pm.unmapViewOfSection(1024, clientABaseVa);
+        TEST_ASSERT(NT_SUCCESS(stUnmap), "unmapViewOfSection must succeed");
+        TEST_ASSERT(pm.getTotalSectionViewsUnmapped() == 1, "Total section views unmapped must be 1");
+
+        // Querying the unmapped VA in VAD tree must now return nullptr
+        TEST_ASSERT(procA->findVad(clientABaseVa) == nullptr, "Unmapped VA must no longer be present in VAD tree");
+
+        // Accessing the unmapped VA must now trigger STATUS_ACCESS_VIOLATION
+        micant::NtStatus stAccessAfterUnmap = pm.resolvePageFault(1024, clientABaseVa, 0x04 /* Read */);
+        TEST_ASSERT(stAccessAfterUnmap == micant::NtStatus::AccessViolation, "Access to unmapped view must raise STATUS_ACCESS_VIOLATION");
+
+        // Section reference count must be decremented
+        auto* sec = pm.findSection(secHandle);
+        TEST_ASSERT(sec != nullptr, "Section object must remain valid while other views exist");
+    }
+
+    std::cout << "[HORIZON 149] Copy-on-Write & Section Memory Management Summary:\n"
+              << "    Pillar 1: Section Object Creation (ZwCreateSection) OK\n"
+              << "    Pillar 2: Section View Mapping Across Multiple Processes (ZwMapViewOfSection) OK\n"
+              << "    Pillar 3: Copy-on-Write (PAGE_WRITECOPY) Fault & Page Splitting OK\n"
+              << "    Pillar 4: Working Set Trimming (ZwEmptyWorkingSet) OK\n"
+              << "    Pillar 5: Soft Page Fault Resolution (Standby List to Active Working Set) OK\n"
+              << "    Pillar 6: Section View Unmapping (ZwUnmapViewOfSection) & Cleanup OK\n";
+
+    std::cout << "[TEST] Suite 365: Horizon 149 - Copy-on-Write Memory Management, Section Objects & Working Set Aging Engine PASSED." << std::endl;
+}

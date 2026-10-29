@@ -391,6 +391,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite365") {
+        RUN_TEST(Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite364") {
         RUN_TEST(Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Paging);
         return g_FailedTests;
@@ -458,6 +462,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon146_Storage_Snapshot_Orchestration_And_ReFS_ZFS_VSS_Parity);
         RUN_TEST(Test_Horizon147_Sovereign_MultiFormat_Storage_Fusion_TitanBtrfs_Ext_Xfs_F2fs_Parity);
         RUN_TEST(Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Paging);
+        RUN_TEST(Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1750,6 +1755,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon146_Storage_Snapshot_Orchestration_And_ReFS_ZFS_VSS_Parity);
     RUN_TEST(Test_Horizon147_Sovereign_MultiFormat_Storage_Fusion_TitanBtrfs_Ext_Xfs_F2fs_Parity);
     RUN_TEST(Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Paging);
+    RUN_TEST(Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
