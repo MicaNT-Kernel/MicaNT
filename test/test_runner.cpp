@@ -60,6 +60,10 @@
 #include "micant/um/subsystems/winbase/advapi32.hpp"
 #include "micant/um/subsystems/winuser/user32.hpp"
 #include "micant/um/subsystems/net/ws2_32.hpp"
+#include "micant/um/subsystems/net/iphlpapi.hpp"
+#include "micant/um/subsystems/net/dnsapi.hpp"
+#include "micant/um/subsystems/net/dhcp.hpp"
+#include "micant/um/subsystems/net/netdiag.hpp"
 #include "micant/um/subsystems/winuser/shell.hpp"
 #include "micant/km/drivers/security/ppl.hpp"
 #include "micant/km/drivers/security/sysguard.hpp"
@@ -391,6 +395,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite369") {
+        RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite368") {
         RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
         return g_FailedTests;
@@ -478,6 +486,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO);
         RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
         RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
+        RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1774,6 +1783,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO);
     RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
     RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
+    RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

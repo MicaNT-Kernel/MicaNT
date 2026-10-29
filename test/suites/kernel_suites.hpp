@@ -25454,3 +25454,526 @@ void Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole()
 
     std::cout << "[TEST] Suite 368: Horizon 152 - Sovereign TCP/IP Dual-Stack Protocol Engine, Hardware NDIS Binding, AFD Socket Driver (afd.sys), & Bare-Metal Remote Executive Console PASSED." << std::endl;
 }
+
+void Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI() {
+    std::cout << "[TEST] Running Suite 369: Horizon 153 - Sovereign IP Helper Subsystem (iphlpapi.dll), DHCP DORA Client Engine, DNS Resolver (dnsapi.dll) & Canonical Network Diagnostics CLI (ipconfig/ping/netsh)..." << std::endl;
+
+    // Subsystem Export & Service Registrations
+    iphlpapi::InitializeIpHlpApiSubsystemExports();
+    dnsapi::InitializeDnsApiSubsystemExports();
+    dhcp::InitializeDhcpClientSubsystem();
+
+    // Reset singletons for deterministic suite execution
+    tcpip::NetworkStack::get().resetForTest();
+    dnsapi::DnsResolverEngine::get().resetForTest();
+    dhcp::DhcpClientEngine::get().resetForTest();
+
+    // Bind Bare-Metal Intel I210 Hardware Adapter to NetworkStack
+    ndis::MacAddress i210Mac(0x00, 0x1B, 0x21, 0x99, 0x88, 0x77);
+    auto i210Adapter = std::make_shared<ndis::IntelE1000eAdapter>(
+        L"\\Device\\E1000e0",
+        L"Intel(R) I210 Gigabit Network Connection",
+        i210Mac,
+        pci::PciAddress(2, 0, 0)
+    );
+    tcpip::NetworkStack::get().bindAdapter(i210Adapter);
+    tcpip::NetworkStack::get().setLocalIp(
+        tcpip::Ipv4Address(147, 135, 1, 229),
+        tcpip::Ipv4Address(255, 255, 255, 0),
+        tcpip::Ipv4Address(147, 135, 1, 1)
+    );
+    tcpip::NetworkStack::get().setDnsServer(tcpip::Ipv4Address(147, 135, 1, 1));
+
+    // Seed ARP entry for Default Gateway (147.135.1.1 -> 00:00:0C:07:AC:01)
+    ndis::MacAddress gwMac(0x00, 0x00, 0x0C, 0x07, 0xAC, 0x01);
+    tcpip::NetworkStack::get().addArpEntry(tcpip::Ipv4Address(147, 135, 1, 1), gwMac, 300, true);
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Full IP Helper Architecture (iphlpapi.dll)
+    // ------------------------------------------------------------------------
+    {
+        // 1. GetAdaptersAddresses sizing probe
+        uint32_t addrSize = 0;
+        uint32_t ret = iphlpapi::GetAdaptersAddresses(0, 0, nullptr, nullptr, &addrSize);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetAdaptersAddresses with null buffer must return ERROR_BUFFER_OVERFLOW");
+        TEST_ASSERT(addrSize >= 1024, "GetAdaptersAddresses required buffer size must be at least 1024 bytes");
+
+        // 2. Full GetAdaptersAddresses call
+        std::vector<uint8_t> addrBuf(addrSize, 0);
+        ret = iphlpapi::GetAdaptersAddresses(0, 0, nullptr, addrBuf.data(), &addrSize);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetAdaptersAddresses with allocated buffer must return ERROR_SUCCESS");
+
+        auto* pAddr = reinterpret_cast<iphlpapi::IP_ADAPTER_ADDRESSES_LH*>(addrBuf.data());
+        TEST_ASSERT(pAddr->IfIndex == 1, "Primary adapter IfIndex must be 1");
+        TEST_ASSERT(pAddr->OperStatus == iphlpapi::IfOperStatusUp, "Adapter OperStatus must be IfOperStatusUp");
+        TEST_ASSERT(pAddr->Mtu == 1500, "Adapter MTU must be 1500 bytes");
+        TEST_ASSERT(pAddr->PhysicalAddressLength == 6, "Physical address length must be 6 (MAC)");
+        TEST_ASSERT(std::memcmp(pAddr->PhysicalAddress, i210Mac.bytes, 6) == 0, "PhysicalAddress must match Intel I210 hardware MAC");
+        TEST_ASSERT(pAddr->TransmitLinkSpeed == 1000000000ULL, "TransmitLinkSpeed must report 1 Gbps");
+        TEST_ASSERT(pAddr->ReceiveLinkSpeed == 1000000000ULL, "ReceiveLinkSpeed must report 1 Gbps");
+        TEST_ASSERT(pAddr->FriendlyName && std::wstring(pAddr->FriendlyName) == L"Ethernet 0", "FriendlyName must be 'Ethernet 0'");
+        TEST_ASSERT(pAddr->Description && std::wstring(pAddr->Description) == L"Intel(R) I210 Gigabit Network Connection", "Description must report Intel I210");
+        TEST_ASSERT(pAddr->DnsSuffix && std::wstring(pAddr->DnsSuffix) == L"micant.internal", "DnsSuffix must report micant.internal");
+
+        // Validate Unicast IP structure
+        TEST_ASSERT(pAddr->FirstUnicastAddress != nullptr, "FirstUnicastAddress must not be null");
+        auto* uAddr = pAddr->FirstUnicastAddress;
+        TEST_ASSERT(uAddr->OnLinkPrefixLength == 24, "Unicast OnLinkPrefixLength must be 24");
+        TEST_ASSERT(uAddr->Address.lpSockaddr != nullptr, "Unicast lpSockaddr must not be null");
+        auto* sIn = reinterpret_cast<const uint8_t*>(uAddr->Address.lpSockaddr);
+        uint16_t fam = *reinterpret_cast<const uint16_t*>(sIn);
+        TEST_ASSERT(fam == 2, "Unicast address family must be AF_INET (2)");
+        uint32_t uIp = *reinterpret_cast<const uint32_t*>(sIn + 4);
+        TEST_ASSERT(uIp == tcpip::Ipv4Address(147, 135, 1, 229).addr, "Unicast IPv4 address must match 147.135.1.229");
+
+        // Validate DNS Server Address structure
+        TEST_ASSERT(pAddr->FirstDnsServerAddress != nullptr, "FirstDnsServerAddress must not be null");
+        auto* dnsAddr = pAddr->FirstDnsServerAddress;
+        TEST_ASSERT(dnsAddr->Address.lpSockaddr != nullptr, "DNS server lpSockaddr must not be null");
+        auto* sDns = reinterpret_cast<const uint8_t*>(dnsAddr->Address.lpSockaddr);
+        uint32_t dIp = *reinterpret_cast<const uint32_t*>(sDns + 4);
+        TEST_ASSERT(dIp == tcpip::Ipv4Address(147, 135, 1, 1).addr, "DNS Server IPv4 address must match 147.135.1.1");
+
+        // 3. GetAdaptersInfo
+        uint32_t infoSize = 0;
+        ret = iphlpapi::GetAdaptersInfo(nullptr, &infoSize);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetAdaptersInfo with null buffer must return ERROR_BUFFER_OVERFLOW");
+        TEST_ASSERT(infoSize >= sizeof(iphlpapi::IP_ADAPTER_INFO), "GetAdaptersInfo required buffer size check");
+
+        std::vector<uint8_t> infoBuf(infoSize, 0);
+        auto* pInfo = reinterpret_cast<iphlpapi::IP_ADAPTER_INFO*>(infoBuf.data());
+        ret = iphlpapi::GetAdaptersInfo(pInfo, &infoSize);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetAdaptersInfo must return ERROR_SUCCESS");
+        TEST_ASSERT(std::string(pInfo->ipAddressList.ipAddress.str) == "147.135.1.229", "IP address string must be 147.135.1.229");
+        TEST_ASSERT(std::string(pInfo->ipAddressList.ipMask.str) == "255.255.255.0", "Subnet mask string must be 255.255.255.0");
+        TEST_ASSERT(std::string(pInfo->gatewayList.ipAddress.str) == "147.135.1.1", "Gateway string must be 147.135.1.1");
+        TEST_ASSERT(std::memcmp(pInfo->address, i210Mac.bytes, 6) == 0, "MAC address in adapter info must match hardware MAC");
+
+        // 4. GetNetworkParams
+        uint32_t paramSize = 0;
+        ret = iphlpapi::GetNetworkParams(nullptr, &paramSize);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetNetworkParams sizing query must return ERROR_BUFFER_OVERFLOW");
+        std::vector<uint8_t> paramBuf(paramSize, 0);
+        auto* pFixed = reinterpret_cast<iphlpapi::FIXED_INFO*>(paramBuf.data());
+        ret = iphlpapi::GetNetworkParams(pFixed, &paramSize);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetNetworkParams must return ERROR_SUCCESS");
+        TEST_ASSERT(std::string(pFixed->hostName) == "MicaNT-Server", "Host name must be MicaNT-Server");
+        TEST_ASSERT(std::string(pFixed->domainName) == "micant.internal", "Domain name must be micant.internal");
+        TEST_ASSERT(std::string(pFixed->dnsServerList.ipAddress.str) == "147.135.1.1", "Primary DNS server must be 147.135.1.1");
+        TEST_ASSERT(pFixed->nodeType == 1, "Node type must be 1 (Broadcast)");
+
+        // 5. Interface LUID conversions
+        iphlpapi::NET_LUID luid{0};
+        uint32_t luidRes = iphlpapi::ConvertInterfaceNameToLuidW(L"Ethernet 0", &luid);
+        TEST_ASSERT(luidRes == iphlpapi::ERROR_SUCCESS, "ConvertInterfaceNameToLuidW must succeed");
+        TEST_ASSERT(luid.Value != 0, "LUID value must be non-zero");
+
+        uint32_t ifIdx = 0;
+        luidRes = iphlpapi::ConvertInterfaceLuidToIndex(&luid, &ifIdx);
+        TEST_ASSERT(luidRes == iphlpapi::ERROR_SUCCESS && ifIdx == 1, "ConvertInterfaceLuidToIndex must return interface index 1");
+
+        wchar_t alias[64]{0};
+        auto nStatus = iphlpapi::ConvertInterfaceLuidToAlias(&luid, alias, sizeof(alias)/sizeof(wchar_t));
+        TEST_ASSERT(nStatus == 0, "ConvertInterfaceLuidToAlias must succeed");
+        TEST_ASSERT(std::wstring(alias) == L"Ethernet 0", "Interface alias must match 'Ethernet 0'");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: MIB Routing, ARP & Transport Table Inspection
+    // ------------------------------------------------------------------------
+    {
+        // 1. GetIpForwardTable (Routing Table)
+        uint32_t fwdSize = 0;
+        uint32_t ret = iphlpapi::GetIpForwardTable(nullptr, &fwdSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetIpForwardTable sizing probe must return ERROR_BUFFER_OVERFLOW");
+        TEST_ASSERT(fwdSize >= sizeof(iphlpapi::MIB_IPFORWARDTABLE), "GetIpForwardTable required size check");
+
+        iphlpapi::MIB_IPFORWARDTABLE fwdTable;
+        ret = iphlpapi::GetIpForwardTable(&fwdTable, &fwdSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetIpForwardTable must return ERROR_SUCCESS");
+        TEST_ASSERT(fwdTable.dwNumEntries == 3, "Forward table must have 3 canonical routes (default gw, local subnet, loopback)");
+
+        // Verify Default Gateway route
+        TEST_ASSERT(fwdTable.table[0].dwForwardDest == 0, "Default route destination must be 0.0.0.0");
+        TEST_ASSERT(fwdTable.table[0].dwForwardMask == 0, "Default route mask must be 0.0.0.0");
+        TEST_ASSERT(fwdTable.table[0].dwForwardNextHop == tcpip::Ipv4Address(147, 135, 1, 1).addr, "Default route next hop must be 147.135.1.1");
+        TEST_ASSERT(fwdTable.table[0].dwForwardType == iphlpapi::MIB_IPROUTE_TYPE_INDIRECT, "Default route type must be INDIRECT");
+        TEST_ASSERT(fwdTable.table[0].dwForwardMetric1 == 10, "Default route metric must be 10");
+
+        // Verify Local Subnet route
+        uint32_t expectedSubnet = tcpip::Ipv4Address(147, 135, 1, 229).addr & tcpip::Ipv4Address(255, 255, 255, 0).addr;
+        TEST_ASSERT(fwdTable.table[1].dwForwardDest == expectedSubnet, "Local subnet route dest must match 147.135.1.0");
+        TEST_ASSERT(fwdTable.table[1].dwForwardType == iphlpapi::MIB_IPROUTE_TYPE_DIRECT, "Local subnet route type must be DIRECT");
+
+        // 2. GetIpNetTable (ARP Cache)
+        uint32_t netSize = 0;
+        ret = iphlpapi::GetIpNetTable(nullptr, &netSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetIpNetTable sizing probe must return ERROR_BUFFER_OVERFLOW");
+
+        iphlpapi::MIB_IPNETTABLE netTable;
+        ret = iphlpapi::GetIpNetTable(&netTable, &netSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetIpNetTable must return ERROR_SUCCESS");
+        TEST_ASSERT(netTable.dwNumEntries >= 1, "ARP table must contain at least 1 entry (default gateway)");
+        TEST_ASSERT(netTable.table[0].dwAddr == tcpip::Ipv4Address(147, 135, 1, 1).addr, "ARP entry IP must match 147.135.1.1");
+        TEST_ASSERT(std::memcmp(netTable.table[0].bPhysAddr, gwMac.bytes, 6) == 0, "ARP entry MAC must match gateway hardware MAC");
+        TEST_ASSERT(netTable.table[0].dwType == iphlpapi::MIB_IPNET_TYPE_DYNAMIC, "ARP entry type must be DYNAMIC");
+
+        // 3. GetTcpTable2 (TCP Transport Endpoints)
+        int listenSock = tcpip::NetworkStack::get().createSocket(tcpip::AF_INET, tcpip::SOCK_STREAM, tcpip::IPPROTO_TCP);
+        TEST_ASSERT(listenSock > 0, "TCP socket creation must succeed");
+        tcpip::NetworkStack::get().bindSocket(listenSock, tcpip::Ipv4Address(147, 135, 1, 229), 9090);
+        tcpip::NetworkStack::get().listenSocket(listenSock, 5);
+
+        uint32_t tcpSize = 0;
+        ret = iphlpapi::GetTcpTable2(nullptr, &tcpSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetTcpTable2 sizing probe must return ERROR_BUFFER_OVERFLOW");
+
+        iphlpapi::MIB_TCPTABLE2 tcpTable;
+        ret = iphlpapi::GetTcpTable2(&tcpTable, &tcpSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetTcpTable2 must return ERROR_SUCCESS");
+        TEST_ASSERT(tcpTable.dwNumEntries >= 1, "TCP table must have at least 1 active endpoint");
+
+        bool foundPort9090 = false;
+        for (uint32_t i = 0; i < tcpTable.dwNumEntries; ++i) {
+            if (tcpip::ntohs(static_cast<uint16_t>(tcpTable.table[i].dwLocalPort)) == 9090) {
+                foundPort9090 = true;
+                TEST_ASSERT(tcpTable.table[i].dwState == iphlpapi::MIB_TCP_STATE_LISTEN, "TCP port 9090 must be in LISTEN state");
+                TEST_ASSERT(tcpTable.table[i].dwOwningPid == 4, "TCP port 9090 owning PID must be 4 (System)");
+                break;
+            }
+        }
+        TEST_ASSERT(foundPort9090, "GetTcpTable2 must reflect active port 9090 endpoint");
+        tcpip::NetworkStack::get().closeSocket(listenSock);
+
+        // 4. GetUdpTable (UDP Transport Endpoints)
+        uint32_t udpSize = 0;
+        ret = iphlpapi::GetUdpTable(nullptr, &udpSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_BUFFER_OVERFLOW, "GetUdpTable sizing probe must return ERROR_BUFFER_OVERFLOW");
+
+        iphlpapi::MIB_UDPTABLE udpTable;
+        ret = iphlpapi::GetUdpTable(&udpTable, &udpSize, 0);
+        TEST_ASSERT(ret == iphlpapi::ERROR_SUCCESS, "GetUdpTable must return ERROR_SUCCESS");
+        TEST_ASSERT(udpTable.dwNumEntries >= 2, "UDP table must contain at least DHCP port 68 and DNS port 5353");
+        TEST_ASSERT(tcpip::ntohs(static_cast<uint16_t>(udpTable.table[0].dwLocalPort)) == 68, "UDP table entry 0 must be DHCP client port 68");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: RFC 2131 Dynamic DHCP Client Engine (dhcp.hpp)
+    // ------------------------------------------------------------------------
+    {
+        auto& dhcpCli = dhcp::DhcpClientEngine::get();
+        dhcpCli.resetForTest();
+        TEST_ASSERT(dhcpCli.getState() == dhcp::DhcpState::Init, "DHCP initial state must be Init");
+        TEST_ASSERT(!dhcpCli.isDhcpEnabled(), "DHCP must initially be disabled before DORA");
+
+        // 1. Build & Parse DHCPDISCOVER packet
+        uint32_t testXid = 0x77AABB11;
+        auto discoverPkt = dhcpCli.buildDiscover(testXid, i210Mac);
+        TEST_ASSERT(discoverPkt.size() >= 244, "DHCPDISCOVER packet size must be at least 244 bytes (RFC 2131)");
+
+        dhcp::ParsedDhcpMessage parsedDisc;
+        bool parseOk = dhcpCli.parseMessage(discoverPkt, parsedDisc);
+        TEST_ASSERT(parseOk, "DHCPDISCOVER packet parsing must succeed");
+        TEST_ASSERT(parsedDisc.op == 1, "DHCPDISCOVER op must be BOOTREQUEST (1)");
+        TEST_ASSERT(parsedDisc.xid == testXid, "DHCPDISCOVER transaction ID must match");
+        TEST_ASSERT(parsedDisc.messageType == 1, "DHCPDISCOVER message type option must be DHCPDISCOVER (1)");
+        TEST_ASSERT(parsedDisc.clientMac == i210Mac, "DHCPDISCOVER client MAC must match i210 hardware MAC");
+
+        // 2. Build & Parse DHCPREQUEST packet
+        tcpip::Ipv4Address offeredIp(147, 135, 1, 188);
+        tcpip::Ipv4Address dhcpServerIp(147, 135, 1, 254);
+        auto requestPkt = dhcpCli.buildRequest(testXid, i210Mac, offeredIp, dhcpServerIp);
+        dhcp::ParsedDhcpMessage parsedReq;
+        parseOk = dhcpCli.parseMessage(requestPkt, parsedReq);
+        TEST_ASSERT(parseOk, "DHCPREQUEST packet parsing must succeed");
+        TEST_ASSERT(parsedReq.messageType == 3, "DHCPREQUEST message type option must be DHCPREQUEST (3)");
+        TEST_ASSERT(parsedReq.requestedIp == offeredIp, "DHCPREQUEST requested IP must match offered IP");
+        TEST_ASSERT(parsedReq.serverIdentifier == dhcpServerIp, "DHCPREQUEST server ID must match DHCP server IP");
+
+        // 3. Handle DHCPOFFER and transition to Requesting
+        dhcp::ParsedDhcpMessage simOffer;
+        simOffer.op = 2; // BOOTREPLY
+        simOffer.xid = testXid;
+        simOffer.yiaddr = offeredIp;
+        simOffer.serverIdentifier = dhcpServerIp;
+        simOffer.subnetMask = tcpip::Ipv4Address(255, 255, 255, 0);
+        simOffer.router = tcpip::Ipv4Address(147, 135, 1, 1);
+        simOffer.dnsServer = tcpip::Ipv4Address(8, 8, 8, 8);
+        simOffer.leaseTimeSeconds = 43200; // 12 hours
+        simOffer.messageType = 2; // DHCPOFFER
+
+        std::vector<uint8_t> autoReq;
+        bool offerHandled = dhcpCli.handleOffer(simOffer, autoReq);
+        TEST_ASSERT(offerHandled, "handleOffer must succeed and generate DHCPREQUEST");
+        TEST_ASSERT(dhcpCli.getState() == dhcp::DhcpState::Requesting, "State must transition to Requesting");
+        TEST_ASSERT(autoReq.size() >= 244, "Auto-generated DHCPREQUEST size check");
+
+        // 4. Handle DHCPACK and transition to Bound
+        dhcp::ParsedDhcpMessage simAck = simOffer;
+        simAck.messageType = 5; // DHCPACK
+        bool ackHandled = dhcpCli.handleAck(simAck);
+        TEST_ASSERT(ackHandled, "handleAck must succeed");
+        TEST_ASSERT(dhcpCli.getState() == dhcp::DhcpState::Bound, "State must transition to Bound");
+        TEST_ASSERT(dhcpCli.getAssignedIp() == offeredIp, "DHCP assigned IP must match 147.135.1.188");
+        TEST_ASSERT(dhcpCli.getLeaseDuration() == 43200, "DHCP lease duration must be 43200 seconds");
+        TEST_ASSERT(dhcpCli.isDhcpEnabled(), "DHCP must be marked enabled");
+
+        // 5. Test Full Simulated DORA Flow
+        bool doraOk = dhcpCli.performSimulatedDora(
+            tcpip::Ipv4Address(147, 135, 1, 200),
+            tcpip::Ipv4Address(255, 255, 255, 0),
+            tcpip::Ipv4Address(147, 135, 1, 1),
+            tcpip::Ipv4Address(1, 1, 1, 1),
+            86400
+        );
+        TEST_ASSERT(doraOk, "performSimulatedDora must succeed");
+        TEST_ASSERT(dhcpCli.getState() == dhcp::DhcpState::Bound, "performSimulatedDora must result in Bound state");
+        TEST_ASSERT(tcpip::NetworkStack::get().getLocalIp() == tcpip::Ipv4Address(147, 135, 1, 200), "NetworkStack local IP must be updated by DHCP DORA");
+        TEST_ASSERT(tcpip::NetworkStack::get().getDnsServer() == tcpip::Ipv4Address(1, 1, 1, 1), "NetworkStack DNS server must be updated by DHCP DORA");
+
+        // 6. Release Lease
+        dhcpCli.releaseLease();
+        TEST_ASSERT(dhcpCli.getState() == dhcp::DhcpState::Init, "releaseLease must return state to Init");
+        TEST_ASSERT(dhcpCli.getAssignedIp().isZero(), "Assigned IP must be zeroed after release");
+        TEST_ASSERT(tcpip::NetworkStack::get().getLocalIp().isZero(), "NetworkStack IP must be 0.0.0.0 after DHCP release");
+
+        // Restore bare-metal IP for remaining pillars
+        tcpip::NetworkStack::get().setLocalIp(
+            tcpip::Ipv4Address(147, 135, 1, 229),
+            tcpip::Ipv4Address(255, 255, 255, 0),
+            tcpip::Ipv4Address(147, 135, 1, 1)
+        );
+        tcpip::NetworkStack::get().setDnsServer(tcpip::Ipv4Address(147, 135, 1, 1));
+        dhcpCli.performSimulatedDora(
+            tcpip::Ipv4Address(147, 135, 1, 229),
+            tcpip::Ipv4Address(255, 255, 255, 0),
+            tcpip::Ipv4Address(147, 135, 1, 1),
+            tcpip::Ipv4Address(147, 135, 1, 1),
+            86400
+        );
+
+        // Verify SCM registration for dhcpcsvc
+        auto& scm = scm::ServiceControlManager::get();
+        auto dhcpSvc = scm.getServiceRecord(L"dhcpcsvc");
+        TEST_ASSERT(dhcpSvc != nullptr, "dhcpcsvc service must be registered in SCM");
+        TEST_ASSERT(dhcpSvc->startType == scm::SERVICE_AUTO_START, "dhcpcsvc must be SERVICE_AUTO_START");
+        TEST_ASSERT(dhcpSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "dhcpcsvc must be in SERVICE_RUNNING state");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: RFC 1035 Dynamic DNS Client Resolver Engine (dnsapi.hpp)
+    // ------------------------------------------------------------------------
+    {
+        auto& dnsCli = dnsapi::DnsResolverEngine::get();
+        dnsCli.resetForTest();
+
+        // 1. QNAME label wire encoding & decoding
+        auto encodedName = dnsapi::EncodeDnsName("gateway.local");
+        std::vector<uint8_t> expectedName = {7, 'g', 'a', 't', 'e', 'w', 'a', 'y', 5, 'l', 'o', 'c', 'a', 'l', 0};
+        TEST_ASSERT(encodedName == expectedName, "EncodeDnsName must produce RFC 1035 length-prefixed label sequence");
+
+        size_t decOffset = 0;
+        std::string decodedName = dnsapi::DecodeDnsName(encodedName, decOffset);
+        TEST_ASSERT(decodedName == "gateway.local", "DecodeDnsName must decode label sequence back to FQDN");
+        TEST_ASSERT(decOffset == encodedName.size(), "DecodeDnsName offset must advance to end of name");
+
+        // 2. DNS Query Packet Construction
+        uint16_t queryXid = 0x4321;
+        auto qPacket = dnsCli.buildQueryPacket(queryXid, "supermicro.micant.internal", dnsapi::DNS_TYPE_A);
+        TEST_ASSERT(qPacket.size() >= sizeof(dnsapi::DnsHeader) + 4, "DNS query packet must contain header and question section");
+        const auto* qHdr = reinterpret_cast<const dnsapi::DnsHeader*>(qPacket.data());
+        TEST_ASSERT(tcpip::ntohs(qHdr->id) == queryXid, "DNS query ID must match requested XID");
+        TEST_ASSERT(tcpip::ntohs(qHdr->qdcount) == 1, "DNS query question count must be 1");
+        TEST_ASSERT((tcpip::ntohs(qHdr->flags) & 0x0100) != 0, "Recursion Desired (RD) bit must be set in flags");
+
+        // 3. Static & Local Resolution
+        tcpip::Ipv4Address resIp;
+        bool resOk = dnsCli.resolveA("localhost", resIp);
+        TEST_ASSERT(resOk && resIp == tcpip::Ipv4Address::loopback(), "resolveA(localhost) must resolve to 127.0.0.1");
+
+        resOk = dnsCli.resolveA("gateway.local", resIp);
+        TEST_ASSERT(resOk && resIp == tcpip::Ipv4Address(147, 135, 1, 1), "resolveA(gateway.local) must resolve to 147.135.1.1");
+
+        resOk = dnsCli.resolveA("supermicro.micant.internal", resIp);
+        TEST_ASSERT(resOk && resIp == tcpip::Ipv4Address(147, 135, 1, 229), "resolveA(supermicro.micant.internal) must resolve to 147.135.1.229");
+
+        tcpip::Ipv6Address resIp6;
+        bool res6Ok = dnsCli.resolveAaaa("localhost", resIp6);
+        TEST_ASSERT(res6Ok && resIp6 == tcpip::Ipv6Address::loopback(), "resolveAaaa(localhost) must resolve to ::1");
+
+        // 4. Win32 C ABI Exports: DnsQuery_A & DnsQuery_W
+        dnsapi::DNS_RECORDW* pRecA = nullptr;
+        uint32_t qRes = dnsapi::DnsQuery_A("supermicro.micant.internal", dnsapi::DNS_TYPE_A, 0, nullptr, &pRecA, nullptr);
+        TEST_ASSERT(qRes == iphlpapi::ERROR_SUCCESS, "DnsQuery_A must return ERROR_SUCCESS for existing hostname");
+        TEST_ASSERT(pRecA != nullptr, "DnsQuery_A result pointer must not be null");
+        TEST_ASSERT(pRecA->wType == dnsapi::DNS_TYPE_A, "DnsQuery_A record type must be DNS_TYPE_A");
+        TEST_ASSERT(pRecA->Data.A.IpAddress == tcpip::Ipv4Address(147, 135, 1, 229).addr, "DnsQuery_A resolved IP must match 147.135.1.229");
+        dnsapi::DnsRecordListFree(pRecA, 0);
+
+        dnsapi::DNS_RECORDW* pRecW = nullptr;
+        qRes = dnsapi::DnsQuery_W(L"gateway.local", dnsapi::DNS_TYPE_A, 0, nullptr, &pRecW, nullptr);
+        TEST_ASSERT(qRes == iphlpapi::ERROR_SUCCESS, "DnsQuery_W must return ERROR_SUCCESS for L'gateway.local'");
+        TEST_ASSERT(pRecW != nullptr, "DnsQuery_W result pointer must not be null");
+        TEST_ASSERT(pRecW->Data.A.IpAddress == tcpip::Ipv4Address(147, 135, 1, 1).addr, "DnsQuery_W resolved IP must match 147.135.1.1");
+        dnsapi::DnsRecordListFree(pRecW, 0);
+
+        // Negative query
+        dnsapi::DNS_RECORDW* pRecFail = nullptr;
+        qRes = dnsapi::DnsQuery_A("nonexistent.unresolved.domain", dnsapi::DNS_TYPE_A, 0, nullptr, &pRecFail, nullptr);
+        TEST_ASSERT(qRes == dnsapi::DNS_ERROR_RCODE_NAME_ERROR, "DnsQuery_A on unknown host must return DNS_ERROR_RCODE_NAME_ERROR (9003)");
+        TEST_ASSERT(pRecFail == nullptr, "pRecFail must remain null on name error");
+
+        // 5. Dynamic cache insertion & DnsFlushResolverCache
+        uint8_t fakeIp[4] = {192, 168, 50, 10};
+        dnsCli.addCacheEntry("test.dynamic.host", dnsapi::DNS_TYPE_A, fakeIp, 300, false);
+        resOk = dnsCli.resolveA("test.dynamic.host", resIp);
+        TEST_ASSERT(resOk && resIp == tcpip::Ipv4Address(192, 168, 50, 10), "resolveA on added cache entry must succeed");
+
+        uint32_t flushCount = dnsapi::DnsFlushResolverCache();
+        TEST_ASSERT(flushCount >= 1, "DnsFlushResolverCache must flush at least 1 non-static entry");
+        resOk = dnsCli.resolveA("test.dynamic.host", resIp);
+        TEST_ASSERT(!resOk, "Flushed dynamic host must no longer resolve");
+
+        // Static entries must survive flush
+        resOk = dnsCli.resolveA("gateway.local", resIp);
+        TEST_ASSERT(resOk, "Static seed entries must remain intact across cache flushes");
+
+        // Verify SCM registration for dnscache
+        auto& scm = scm::ServiceControlManager::get();
+        auto dnsSvc = scm.getServiceRecord(L"dnscache");
+        TEST_ASSERT(dnsSvc != nullptr, "dnscache service must be registered in SCM");
+        TEST_ASSERT(dnsSvc->startType == scm::SERVICE_AUTO_START, "dnscache must be SERVICE_AUTO_START");
+        TEST_ASSERT(dnsSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "dnscache must be in SERVICE_RUNNING state");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: ICMP Echo Engine & Ping Utility (iphlpapi.hpp, netdiag.hpp)
+    // ------------------------------------------------------------------------
+    {
+        // 1. ICMP Win32 Echo API (IcmpCreateFile, IcmpSendEcho, IcmpCloseHandle)
+        void* hIcmp = iphlpapi::IcmpCreateFile();
+        TEST_ASSERT(hIcmp != nullptr && hIcmp != win32::INVALID_HANDLE_VALUE, "IcmpCreateFile must return valid handle");
+
+        const char sendData[] = "MicaNT Echo Payload Test";
+        constexpr uint32_t replySize = sizeof(iphlpapi::ICMP_ECHO_REPLY) + sizeof(sendData);
+        uint8_t replyBuf[replySize]{0};
+
+        uint32_t destIp = tcpip::Ipv4Address(147, 135, 1, 1).addr;
+        uint32_t replies = iphlpapi::IcmpSendEcho(
+            hIcmp,
+            destIp,
+            sendData,
+            static_cast<uint16_t>(sizeof(sendData)),
+            nullptr,
+            replyBuf,
+            replySize,
+            1000
+        );
+        TEST_ASSERT(replies == 1, "IcmpSendEcho to default gateway must return 1 echo reply");
+
+        auto* pReply = reinterpret_cast<iphlpapi::ICMP_ECHO_REPLY*>(replyBuf);
+        TEST_ASSERT(pReply->Status == iphlpapi::IP_SUCCESS, "ICMP reply status must be IP_SUCCESS");
+        TEST_ASSERT(pReply->Address == destIp, "ICMP reply address must match destination IP");
+        TEST_ASSERT(pReply->DataSize == sizeof(sendData), "ICMP reply data size must match request size");
+        TEST_ASSERT(pReply->Options.Ttl == 64, "ICMP reply TTL must be 64");
+        TEST_ASSERT(pReply->Data != nullptr && std::memcmp(pReply->Data, sendData, sizeof(sendData)) == 0, "Echo reply payload must match sent data");
+
+        auto closeOk = iphlpapi::IcmpCloseHandle(hIcmp);
+        TEST_ASSERT(closeOk != 0, "IcmpCloseHandle must succeed");
+
+        // 2. PingCommand CLI Execution
+        // Ping Loopback
+        std::string pingLoop = netdiag::PingCommand::execute("127.0.0.1", 4);
+        TEST_ASSERT(pingLoop.find("Pinging 127.0.0.1") != std::string::npos, "ping loopback must print banner");
+        TEST_ASSERT(pingLoop.find("Reply from 127.0.0.1: bytes=32") != std::string::npos, "ping loopback must print reply lines");
+        TEST_ASSERT(pingLoop.find("Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)") != std::string::npos, "ping loopback must report 0% packet loss");
+
+        // Ping Hostname via DNS
+        std::string pingHost = netdiag::PingCommand::execute("gateway.local", 2);
+        TEST_ASSERT(pingHost.find("Pinging gateway.local [147.135.1.1]") != std::string::npos, "ping hostname must resolve and display target IP");
+        TEST_ASSERT(pingHost.find("Reply from 147.135.1.1:") != std::string::npos, "ping hostname must print replies from 147.135.1.1");
+        TEST_ASSERT(pingHost.find("Lost = 0 (0% loss)") != std::string::npos, "ping hostname must report 0% packet loss");
+
+        // Ping Non-existent Host
+        std::string pingFail = netdiag::PingCommand::execute("nonexistent.invalid.host");
+        TEST_ASSERT(pingFail.find("Ping request could not find host") != std::string::npos, "ping invalid host must report failure guidance");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Canonical Network Diagnostics CLI (netdiag.hpp) & SCM Registration
+    // ------------------------------------------------------------------------
+    {
+        // 1. ipconfig (basic)
+        std::string ipBasic = netdiag::IpConfigCommand::execute("");
+        TEST_ASSERT(ipBasic.find("Ethernet adapter Ethernet 0:") != std::string::npos, "ipconfig must display Ethernet 0 adapter");
+        TEST_ASSERT(ipBasic.find("147.135.1.229") != std::string::npos, "ipconfig must display local IPv4 address");
+        TEST_ASSERT(ipBasic.find("255.255.255.0") != std::string::npos, "ipconfig must display subnet mask");
+        TEST_ASSERT(ipBasic.find("147.135.1.1") != std::string::npos, "ipconfig must display default gateway");
+
+        // 2. ipconfig /all
+        std::string ipAll = netdiag::IpConfigCommand::execute("/all");
+        TEST_ASSERT(ipAll.find("Host Name . . . . . . . . . . . . : MicaNT-Server") != std::string::npos, "ipconfig /all must display host name");
+        TEST_ASSERT(ipAll.find("Primary Dns Suffix  . . . . . . . : micant.internal") != std::string::npos, "ipconfig /all must display DNS suffix");
+        TEST_ASSERT(ipAll.find("Physical Address. . . . . . . . . :") != std::string::npos, "ipconfig /all must display MAC address");
+        TEST_ASSERT(ipAll.find("DHCP Enabled. . . . . . . . . . . : Yes") != std::string::npos, "ipconfig /all must report DHCP enabled");
+        TEST_ASSERT(ipAll.find("DHCP Server . . . . . . . . . . . : 147.135.1.1") != std::string::npos, "ipconfig /all must report DHCP server");
+        TEST_ASSERT(ipAll.find("DNS Servers . . . . . . . . . . . : 147.135.1.1") != std::string::npos, "ipconfig /all must report DNS server");
+
+        // 3. ipconfig /displaydns
+        std::string ipDns = netdiag::IpConfigCommand::execute("/displaydns");
+        TEST_ASSERT(ipDns.find("Record Name") != std::string::npos, "ipconfig /displaydns must output record table");
+        TEST_ASSERT(ipDns.find("gateway.local") != std::string::npos || ipDns.find("localhost") != std::string::npos, "displaydns must show cached records");
+
+        // 4. ipconfig /flushdns
+        std::string ipFlush = netdiag::IpConfigCommand::execute("/flushdns");
+        TEST_ASSERT(ipFlush.find("Successfully flushed the DNS Resolver Cache") != std::string::npos, "ipconfig /flushdns must report cache flush success");
+
+        // 5. ipconfig /release and /renew
+        std::string ipRel = netdiag::IpConfigCommand::execute("/release");
+        TEST_ASSERT(ipRel.find("0.0.0.0") != std::string::npos, "ipconfig /release must zero out adapter IP");
+
+        std::string ipRenew = netdiag::IpConfigCommand::execute("/renew");
+        TEST_ASSERT(ipRenew.find("147.135.1.229") != std::string::npos, "ipconfig /renew must restore adapter IP via DHCP DORA");
+
+        // 6. netsh interface ipv4 show addresses
+        std::string netshAddr = netdiag::NetshCommand::execute("interface ipv4 show addresses");
+        TEST_ASSERT(netshAddr.find("Configuration for interface \"Ethernet 0\"") != std::string::npos, "netsh show addresses must header interface");
+        TEST_ASSERT(netshAddr.find("147.135.1.229") != std::string::npos, "netsh must show IP address");
+        TEST_ASSERT(netshAddr.find("Default Gateway:                      147.135.1.1") != std::string::npos, "netsh must show default gateway");
+
+        // 7. netsh interface show interface
+        std::string netshIf = netdiag::NetshCommand::execute("interface show interface");
+        TEST_ASSERT(netshIf.find("Ethernet 0") != std::string::npos, "netsh show interface must list Ethernet 0");
+        TEST_ASSERT(netshIf.find("Connected") != std::string::npos, "netsh show interface must show Connected state");
+        TEST_ASSERT(netshIf.find("Dedicated") != std::string::npos, "netsh show interface must show Dedicated type");
+
+        // 8. DynamicLoader & VersionDatabase Exports Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("iphlpapi.dll", "GetAdaptersAddresses") != nullptr, "iphlpapi.dll!GetAdaptersAddresses must be exported");
+        TEST_ASSERT(ldr.getExport("iphlpapi.dll", "GetIpForwardTable") != nullptr, "iphlpapi.dll!GetIpForwardTable must be exported");
+        TEST_ASSERT(ldr.getExport("iphlpapi.dll", "GetIpNetTable") != nullptr, "iphlpapi.dll!GetIpNetTable must be exported");
+        TEST_ASSERT(ldr.getExport("iphlpapi.dll", "GetTcpTable2") != nullptr, "iphlpapi.dll!GetTcpTable2 must be exported");
+        TEST_ASSERT(ldr.getExport("iphlpapi.dll", "GetUdpTable") != nullptr, "iphlpapi.dll!GetUdpTable must be exported");
+        TEST_ASSERT(ldr.getExport("iphlpapi.dll", "IcmpSendEcho") != nullptr, "iphlpapi.dll!IcmpSendEcho must be exported");
+        TEST_ASSERT(ldr.getExport("dnsapi.dll", "DnsQuery_W") != nullptr, "dnsapi.dll!DnsQuery_W must be exported");
+        TEST_ASSERT(ldr.getExport("dnsapi.dll", "DnsFlushResolverCache") != nullptr, "dnsapi.dll!DnsFlushResolverCache must be exported");
+        TEST_ASSERT(ldr.getExport("icmp.dll", "IcmpSendEcho") != nullptr, "icmp.dll!IcmpSendEcho must be exported");
+
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("iphlpapi.dll") != nullptr, "iphlpapi.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("dnsapi.dll") != nullptr, "dnsapi.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("dhcpcsvc.dll") != nullptr, "dhcpcsvc.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("icmp.dll") != nullptr, "icmp.dll must be registered in VersionDatabase");
+    }
+
+    std::cout << "[HORIZON 153] Sovereign IP Helper Subsystem (iphlpapi.dll), DHCP DORA Client Engine, DNS Resolver (dnsapi.dll) & Canonical Network Diagnostics CLI (ipconfig/ping/netsh) Summary:\n"
+              << "    Pillar 1: Full IP Helper Architecture (GetAdaptersAddresses, GetAdaptersInfo, GetNetworkParams) OK\n"
+              << "    Pillar 2: MIB Routing, ARP & Transport Table Inspection (GetIpForwardTable, GetIpNetTable, GetTcpTable2, GetUdpTable) OK\n"
+              << "    Pillar 3: RFC 2131 Dynamic DHCP Client Engine (Discover, Offer, Request, Ack, DORA, dhcpcsvc) OK\n"
+              << "    Pillar 4: RFC 1035 Dynamic DNS Client Resolver Engine (Wire format, TTL cache, DnsQuery_W/A, dnscache) OK\n"
+              << "    Pillar 5: ICMP Echo Engine (IcmpSendEcho) & Ping Utility (ping.exe RTT statistics) OK\n"
+              << "    Pillar 6: Canonical Network Diagnostics CLI (ipconfig /all /release /renew, netsh) & SCM Registration OK\n";
+
+    std::cout << "[TEST] Suite 369: Horizon 153 - Sovereign IP Helper Subsystem (iphlpapi.dll), DHCP DORA Client Engine, DNS Resolver (dnsapi.dll) & Canonical Network Diagnostics CLI PASSED." << std::endl;
+}
+

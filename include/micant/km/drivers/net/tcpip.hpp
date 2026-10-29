@@ -761,6 +761,11 @@ public:
         localIpv6_ = ip6;
     }
 
+    void setDnsServer(Ipv4Address dns) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        dnsServer_ = dns;
+    }
+
     /**
      * @brief Zero-Copy Transmit of NDIS 6.x NET_BUFFER_LIST packet chains.
      */
@@ -1356,6 +1361,10 @@ public:
         uint16_t remotePort{0};
         TcpState tcpState{TcpState::Closed};
     };
+
+    [[nodiscard]] std::vector<EndpointInfo> getEndpoints() {
+        return getActiveEndpoints();
+    }
 
     [[nodiscard]] std::vector<EndpointInfo> getActiveEndpoints() {
         std::lock_guard<std::mutex> lock(socketMutex_);

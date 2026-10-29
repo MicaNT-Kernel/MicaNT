@@ -31,6 +31,8 @@ constexpr uint16_t DHCPV6_SERVER_PORT = 547;
 constexpr uint16_t DHCPV6_CLIENT_PORT = 546;
 
 // DHCPv4 Message Types (Option 53 / RFC 2132 Section 9.6)
+#ifndef MICANT_DHCP_MSG_TYPES_DEFINED
+#define MICANT_DHCP_MSG_TYPES_DEFINED
 constexpr uint8_t DHCPDISCOVER = 1;
 constexpr uint8_t DHCPOFFER    = 2;
 constexpr uint8_t DHCPREQUEST  = 3;
@@ -39,6 +41,7 @@ constexpr uint8_t DHCPACK      = 5;
 constexpr uint8_t DHCPNAK      = 6;
 constexpr uint8_t DHCPRELEASE  = 7;
 constexpr uint8_t DHCPINFORM   = 8;
+#endif
 
 // DHCPv6 Message Types (RFC 8415 Section 7.3)
 constexpr uint8_t DHCPV6_SOLICIT      = 1;
