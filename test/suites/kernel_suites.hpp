@@ -26381,3 +26381,278 @@ void Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_Mps
 
     std::cout << "[TEST] Suite 370: Horizon 154 - Sovereign Windows Filtering Platform Kernel Engine (fwpkclnt.sys), Callout Inspection, Stateful Conntrack & Defender Firewall (mpsdrv.sys) PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Horizon 155: Sovereign Cryptography Next Generation (CNG / cng.sys / bcrypt.dll),
+// TLS 1.3 Schannel Security Support Provider (schannel.dll / secur32.dll),
+// X.509 Certificate Store (crypt32.dll) & HTTPS Executive Console (Suite 371)
+// ============================================================================
+
+void Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExecutiveConsole() {
+    std::cout << "[TEST] Running Suite 371: Horizon 155 - Sovereign Cryptography Next Generation Kernel Driver (cng.sys), TLS 1.3 Schannel (schannel.dll), X.509 Certificates & HTTPS Executive Console..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Sovereign Cryptography Next Generation (cng.sys) & Primitives
+    // ------------------------------------------------------------------------
+    {
+        // 1. SHA-256 (FIPS 180-4)
+        std::string sample = "MicaNT Sovereign Microkernel FIPS 140-3 Cryptography";
+        auto h256 = km::crypto::Sha256::hash(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(sample.data()), sample.size()));
+        TEST_ASSERT(h256.size() == 32, "SHA-256 must produce 32-byte digest");
+
+        // 2. SHA-384 (FIPS 180-4)
+        auto h384 = km::crypto::Sha384::hash(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(sample.data()), sample.size()));
+        TEST_ASSERT(h384.size() == 48, "SHA-384 must produce 48-byte digest");
+
+        // 3. HMAC-SHA256 (RFC 2104)
+        uint8_t hmacKey[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+        auto mac = km::crypto::HmacSha256::compute(
+            std::span<const uint8_t>(hmacKey, 32),
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(sample.data()), sample.size())
+        );
+        TEST_ASSERT(mac.size() == 32, "HMAC-SHA256 must produce 32-byte MAC");
+
+        // 4. HKDF (RFC 5869)
+        auto prk = km::crypto::HkdfSha256::extract(hmacKey, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(sample.data()), sample.size()));
+        TEST_ASSERT(prk.size() == 32, "HKDF-Extract must produce 32-byte PRK");
+        auto okm = km::crypto::HkdfSha256::expand(prk, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>("info"), 4), 64);
+        TEST_ASSERT(okm.size() == 64, "HKDF-Expand must produce requested 64-byte key");
+
+        // 5. AES-256-GCM Authenticated Encryption & Decryption (NIST SP 800-38D)
+        uint8_t aesKey[32] = {0x42};
+        uint8_t nonce[12] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B};
+        uint8_t aad[8] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11};
+        std::vector<uint8_t> plaintext = {'T', 'o', 'p', 'S', 'e', 'c', 'r', 'e', 't', 'M', 'i', 'c', 'a', 'N', 'T'};
+
+        std::vector<uint8_t> ciphertext;
+        std::array<uint8_t, 16> tag{};
+        bool encOk = km::crypto::AesGcm::encrypt(aesKey, nonce, aad, plaintext, ciphertext, tag);
+        TEST_ASSERT(encOk, "AES-256-GCM encryption must succeed");
+        TEST_ASSERT(ciphertext.size() == plaintext.size(), "Ciphertext length must match plaintext length");
+
+        std::vector<uint8_t> decrypted;
+        bool decOk = km::crypto::AesGcm::decrypt(aesKey, nonce, aad, ciphertext, tag, decrypted);
+        TEST_ASSERT(decOk, "AES-256-GCM decryption must succeed");
+        TEST_ASSERT(decrypted == plaintext, "Decrypted data must match original plaintext");
+
+        // Tamper test: Alter tag bit and verify instant rejection
+        tag[0] ^= 0xFF;
+        std::vector<uint8_t> tamperDecrypted;
+        bool tamperOk = km::crypto::AesGcm::decrypt(aesKey, nonce, aad, ciphertext, tag, tamperDecrypted);
+        TEST_ASSERT(!tamperOk, "Tampered authentication tag must be rejected by AES-GCM");
+
+        // 6. X25519 (RFC 7748) Scalar Multiplication on Curve25519
+        uint8_t alicePriv[32] = {0x77}, alicePub[32] = {0};
+        uint8_t bobPriv[32]   = {0x88}, bobPub[32]   = {0};
+        km::crypto::X25519::generatePublicKey(alicePub, alicePriv);
+        km::crypto::X25519::generatePublicKey(bobPub, bobPriv);
+
+        uint8_t aliceSecret[32] = {0}, bobSecret[32] = {0};
+        km::crypto::X25519::scalarMult(aliceSecret, alicePriv, bobPub);
+        km::crypto::X25519::scalarMult(bobSecret, bobPriv, alicePub);
+        TEST_ASSERT(std::memcmp(aliceSecret, bobSecret, 32) == 0, "Alice and Bob must compute identical X25519 shared secret");
+
+        // 7. CngKernelDriver IOCTL Dispatch
+        auto& cngDrv = km::crypto::CngKernelDriver::get();
+        cngDrv.resetForTest();
+
+        std::vector<uint8_t> out;
+        NTSTATUS s1 = cngDrv.dispatchIoctl(km::crypto::IOCTL_CNG_OPEN_ALGORITHM_PROVIDER, std::span<const uint8_t>(aesKey, 32), out);
+        TEST_ASSERT(s1 == STATUS_SUCCESS, "IOCTL_CNG_OPEN_ALGORITHM_PROVIDER must succeed");
+
+        NTSTATUS s2 = cngDrv.dispatchIoctl(km::crypto::IOCTL_CNG_HASH_DATA, plaintext, out);
+        TEST_ASSERT(s2 == STATUS_SUCCESS && out.size() == 32, "IOCTL_CNG_HASH_DATA must return 32-byte hash");
+
+        NTSTATUS s3 = cngDrv.dispatchIoctl(km::crypto::IOCTL_CNG_GEN_RANDOM, {}, out);
+        TEST_ASSERT(s3 == STATUS_SUCCESS && out.size() == 32, "IOCTL_CNG_GEN_RANDOM must generate random bytes");
+
+        auto telem = cngDrv.getTelemetry();
+        TEST_ASSERT(telem.totalIoctls >= 3, "Total CNG IOCTLs must be >= 3");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Sovereign X.509 Certificate Architecture & Machine Identity (crypt32.dll)
+    // ------------------------------------------------------------------------
+    {
+        // 1. Generate Self-Signed Machine Identity Certificate
+        auto machineCert = km::crypto::MachineCertificateGenerator::generateSelfSignedMachineCert(
+            "MicaNT-Server-147.135.1.229", "147.135.1.229"
+        );
+        TEST_ASSERT(machineCert.subjectCommonName == "MicaNT-Server-147.135.1.229", "Subject CN must match host name");
+        TEST_ASSERT(machineCert.matchesHost("147.135.1.229"), "Cert must match host IP 147.135.1.229");
+        TEST_ASSERT(machineCert.matchesHost("localhost"), "Cert must match localhost SAN");
+        TEST_ASSERT(!machineCert.rawDer.empty() && machineCert.rawDer[0] == 0x30, "Cert DER must begin with ASN.1 Sequence (0x30)");
+
+        // 2. Certificate Store Operations
+        auto& certReg = km::crypto::SovereignCertStoreRegistry::get();
+        certReg.resetForTest();
+
+        TEST_ASSERT(certReg.getStoreCount("MY") >= 1, "MY store must contain machine certificate");
+        TEST_ASSERT(certReg.getStoreCount("ROOT") >= 1, "ROOT store must contain trusted root certificate");
+
+        auto foundOpt = certReg.findCertificateByHost("147.135.1.229");
+        TEST_ASSERT(foundOpt.has_value(), "Machine certificate must be resolvable by IP address in store");
+        TEST_ASSERT(certReg.verifyCertificateChain(*foundOpt), "Self-signed machine certificate chain must verify as trusted");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Sovereign TLS 1.3 Protocol Engine & Key Schedule (RFC 8446 / schannel.dll)
+    // ------------------------------------------------------------------------
+    {
+        km::crypto::tls13::Tls13ClientSession client;
+        km::crypto::tls13::Tls13ServerSession server;
+
+        // 1. Client creates ClientHello
+        auto clientHello = client.generateClientHello("147.135.1.229");
+        TEST_ASSERT(!clientHello.empty(), "ClientHello packet must not be empty");
+
+        // 2. Server processes ClientHello and emits ServerHello
+        std::vector<uint8_t> serverHandshake;
+        bool serverOk = server.processClientHello(clientHello, serverHandshake);
+        TEST_ASSERT(serverOk, "Server must successfully process ClientHello and generate ServerHello");
+        TEST_ASSERT(!serverHandshake.empty(), "ServerHandshake must contain wire bytes");
+
+        // 3. Client processes ServerHandshake
+        bool clientOk = client.processServerHandshake(serverHandshake);
+        TEST_ASSERT(clientOk, "Client must successfully verify ServerHandshake and complete handshake");
+        TEST_ASSERT(client.isEstablished() && server.isEstablished(), "Both Client and Server sessions must be in Established state");
+
+        // 4. Bi-directional Encrypted Application Data Exchange
+        std::string clientReq = "GET /api/v1/vitals HTTP/1.1\r\nHost: 147.135.1.229\r\n\r\n";
+        auto encReq = client.encryptAppData(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(clientReq.data()), clientReq.size()));
+        TEST_ASSERT(!encReq.empty(), "Client encrypted application data record must not be empty");
+
+        std::vector<uint8_t> plainReq;
+        bool decReqOk = server.decryptAppData(encReq, plainReq);
+        TEST_ASSERT(decReqOk, "Server must successfully decrypt client application data");
+        std::string reqStr(reinterpret_cast<const char*>(plainReq.data()), plainReq.size());
+        TEST_ASSERT(reqStr == clientReq, "Decrypted client request must match original plaintext");
+
+        std::string serverResp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"OK\"}";
+        auto encResp = server.encryptAppData(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(serverResp.data()), serverResp.size()));
+        TEST_ASSERT(!encResp.empty(), "Server encrypted application data record must not be empty");
+
+        std::vector<uint8_t> plainResp;
+        bool decRespOk = client.decryptAppData(encResp, plainResp);
+        TEST_ASSERT(decRespOk, "Client must successfully decrypt server application data");
+        std::string respStr(reinterpret_cast<const char*>(plainResp.data()), plainResp.size());
+        TEST_ASSERT(respStr == serverResp, "Decrypted server response must match original plaintext");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Bare-Metal HTTPS Secure Remote Executive Console (Port 443 / 8443)
+    // ------------------------------------------------------------------------
+    {
+        auto& console = km::net::HttpsExecutiveConsole::get();
+        console.resetForTest();
+        console.startHttpsServer(443);
+
+        TEST_ASSERT(console.isRunning(), "HttpsExecutiveConsole must be active and running");
+        TEST_ASSERT(console.getPort() == 443, "HttpsExecutiveConsole must bind to port 443");
+
+        // Verify WFP rule #15501 was dynamically armed
+        auto wfpRule = wfp::km::WfpKernelFilterEngine::get().findRuleById(15501);
+        TEST_ASSERT(wfpRule.has_value(), "WFP Rule #15501 must be armed to permit HTTPS inbound traffic");
+
+        // 1. Dashboard Endpoint (GET /)
+        std::string dashResp = console.dispatchHttpRequest("GET / HTTP/1.1\r\nHost: 147.135.1.229\r\n\r\n");
+        TEST_ASSERT(dashResp.find("200 OK") != std::string::npos, "Dashboard must return HTTP 200 OK");
+        TEST_ASSERT(dashResp.find("MicaNT Sovereign Executive Console") != std::string::npos, "Dashboard HTML must contain console branding");
+        TEST_ASSERT(dashResp.find("Intel Xeon E3-1270 v6") != std::string::npos, "Dashboard HTML must reflect target silicon");
+
+        // 2. Vitals Endpoint (GET /api/v1/vitals)
+        std::string vitalsResp = console.dispatchHttpRequest("GET /api/v1/vitals HTTP/1.1\r\nHost: 147.135.1.229\r\n\r\n");
+        TEST_ASSERT(vitalsResp.find("200 OK") != std::string::npos, "Vitals API must return HTTP 200 OK");
+        TEST_ASSERT(vitalsResp.find("\"cpu\":\"Intel Xeon E3-1270 v6 @ 3.80GHz\"") != std::string::npos, "Vitals JSON must contain CPU model");
+        TEST_ASSERT(vitalsResp.find("\"tls_version\":\"TLS 1.3\"") != std::string::npos, "Vitals JSON must report TLS 1.3 protocol");
+
+        // 3. Network Endpoint (GET /api/v1/network)
+        std::string netResp = console.dispatchHttpRequest("GET /api/v1/network HTTP/1.1\r\nHost: 147.135.1.229\r\n\r\n");
+        TEST_ASSERT(netResp.find("200 OK") != std::string::npos, "Network API must return HTTP 200 OK");
+        TEST_ASSERT(netResp.find("Intel I210") != std::string::npos, "Network JSON must report Intel I210 adapter");
+
+        // 4. Executive Command Dispatch (POST /api/v1/exec)
+        std::string execResp = console.dispatchHttpRequest("POST /api/v1/exec HTTP/1.1\r\nContent-Length: 6\r\n\r\ncmd=ps");
+        TEST_ASSERT(execResp.find("200 OK") != std::string::npos, "Exec API must return HTTP 200 OK");
+        TEST_ASSERT(execResp.find("smss.exe") != std::string::npos, "Exec API must return running processes");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical HTTPS Client Tool (curl.exe / Invoke-WebRequest)
+    // ------------------------------------------------------------------------
+    {
+        // 1. URL Parsing
+        auto u = um::net::CurlClient::parseUrl("https://147.135.1.229:8443/api/v1/vitals");
+        TEST_ASSERT(u.scheme == "https", "URL scheme must be https");
+        TEST_ASSERT(u.host == "147.135.1.229", "URL host must match 147.135.1.229");
+        TEST_ASSERT(u.port == 8443, "URL port must match 8443");
+        TEST_ASSERT(u.path == "/api/v1/vitals", "URL path must match /api/v1/vitals");
+
+        // 2. High-Level HTTPS Execution over TLS 1.3
+        auto curlResp = um::net::CurlClient::execute("https://147.135.1.229/api/v1/vitals", "GET", "", true);
+        if (curlResp.statusCode != 200) {
+            std::cout << "  [Curl Debug] status: " << curlResp.statusCode << " text: " << curlResp.statusText << std::endl;
+        }
+        TEST_ASSERT(curlResp.statusCode == 200, "curl.exe GET /api/v1/vitals must return 200 OK");
+        TEST_ASSERT(curlResp.tlsVerified, "TLS Certificate chain must verify successfully");
+        TEST_ASSERT(curlResp.negotiatedCipher == "TLS_AES_128_GCM_SHA256", "Negotiated cipher must be TLS_AES_128_GCM_SHA256");
+        TEST_ASSERT(curlResp.body.find("MicaNT 10.0.26100.5900") != std::string::npos, "Response body must contain OS version");
+
+        // 3. Command Line Interface Helper
+        std::string cliNetwork = um::net::CurlClient::runCommandLine("curl https://147.135.1.229/api/v1/network -k");
+        TEST_ASSERT(cliNetwork.find("\"status\":\"OK\"") != std::string::npos, "curl CLI must return OK status for network API");
+
+        std::string cliExec = um::net::CurlClient::runCommandLine("curl -X POST -d cmd=storage https://147.135.1.229/api/v1/exec -k");
+        TEST_ASSERT(cliExec.find("NVMe SSD 1TB") != std::string::npos, "curl CLI POST exec must return storage controller vitals");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Kernel Integration, SCM Drivers & Version Database Registration
+    // ------------------------------------------------------------------------
+    {
+        // 1. Initialize Subsystems
+        km::crypto::InitializeCngKernelDriver();
+        km::crypto::InitializeCrypt32Subsystem();
+        km::crypto::tls13::InitializeSchannelSubsystem();
+        um::net::InitializeCurlSubsystem();
+
+        // 2. SCM Service Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto cngRecord = scm.getServiceRecord(L"cng");
+        TEST_ASSERT(cngRecord != nullptr, "cng must be registered in SCM");
+        TEST_ASSERT(cngRecord->serviceType == scm::SERVICE_KERNEL_DRIVER, "cng must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(cngRecord->startType == scm::SERVICE_BOOT_START, "cng must be SERVICE_BOOT_START");
+
+        auto cryptRecord = scm.getServiceRecord(L"CryptSvc");
+        TEST_ASSERT(cryptRecord != nullptr, "CryptSvc must be registered in SCM");
+        TEST_ASSERT(cryptRecord->startType == scm::SERVICE_AUTO_START, "CryptSvc must be SERVICE_AUTO_START");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("cng.sys") != nullptr, "cng.sys must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("bcrypt.dll") != nullptr, "bcrypt.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("crypt32.dll") != nullptr, "crypt32.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("schannel.dll") != nullptr, "schannel.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("secur32.dll") != nullptr, "secur32.dll must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("curl.exe") != nullptr, "curl.exe must be registered in VersionDatabase");
+
+        // 4. Dynamic Loader Export Verification for cng.sys
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptGenRandom") != nullptr, "cng.sys!BCryptGenRandom must be exported");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptCreateHash") != nullptr, "cng.sys!BCryptCreateHash must be exported");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptHashData") != nullptr, "cng.sys!BCryptHashData must be exported");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptFinishHash") != nullptr, "cng.sys!BCryptFinishHash must be exported");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptDestroyHash") != nullptr, "cng.sys!BCryptDestroyHash must be exported");
+    }
+
+    std::cout << "[HORIZON 155] Sovereign Cryptography Next Generation (cng.sys), TLS 1.3 Schannel (schannel.dll), X.509 Certificates & HTTPS Executive Console Summary:\n"
+              << "    Pillar 1: Sovereign Cryptography Next Generation (cng.sys) & FIPS Primitives OK\n"
+              << "    Pillar 2: Sovereign X.509 Certificate Architecture & Machine Identity OK\n"
+              << "    Pillar 3: Sovereign TLS 1.3 Protocol Engine & Key Schedule (RFC 8446) OK\n"
+              << "    Pillar 4: Bare-Metal HTTPS Secure Remote Executive Console (Port 443) OK\n"
+              << "    Pillar 5: Canonical HTTPS Client Tool (curl.exe / Invoke-WebRequest) OK\n"
+              << "    Pillar 6: Kernel Integration, SCM Drivers & Version Database Registration OK\n";
+
+    std::cout << "[TEST] Suite 371: Horizon 155 - Sovereign Cryptography Next Generation Kernel Driver (cng.sys), TLS 1.3 Schannel (schannel.dll), X.509 Certificates & HTTPS Executive Console PASSED." << std::endl;
+}

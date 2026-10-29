@@ -689,6 +689,14 @@ public:
         return false;
     }
 
+    std::optional<WfpKernelFilterRule> findRuleById(uint64_t id) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& r : rules_) {
+            if (r.filterId == id) return r;
+        }
+        return std::nullopt;
+    }
+
     /**
      * @brief Core classification dispatch hook executed on every IP packet.
      * @return true to PERMIT packet, false to BLOCK / silently drop.

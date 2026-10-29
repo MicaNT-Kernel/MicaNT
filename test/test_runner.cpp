@@ -65,6 +65,11 @@
 #include "micant/um/subsystems/net/dhcp.hpp"
 #include "micant/um/subsystems/net/netdiag.hpp"
 #include "micant/km/drivers/net/wfp.hpp"
+#include "micant/km/drivers/security/cng.hpp"
+#include "micant/km/drivers/security/x509.hpp"
+#include "micant/km/drivers/security/tls13.hpp"
+#include "micant/km/drivers/net/https_console.hpp"
+#include "micant/um/subsystems/net/curl.hpp"
 #include "micant/um/subsystems/winuser/shell.hpp"
 #include "micant/km/drivers/security/ppl.hpp"
 #include "micant/km/drivers/security/sysguard.hpp"
@@ -396,6 +401,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite371") {
+        RUN_TEST(Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExecutiveConsole);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite370") {
         RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
         return g_FailedTests;
@@ -493,6 +502,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
         RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
         RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
+        RUN_TEST(Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExecutiveConsole);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1791,6 +1801,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
     RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
     RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
+    RUN_TEST(Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExecutiveConsole);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
