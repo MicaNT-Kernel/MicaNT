@@ -24693,3 +24693,370 @@ void Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO() {
 
     std::cout << "[TEST] Suite 366: Horizon 150 - NVMe 1.4/2.0 Native Submission/Completion Queue Pair Storage Driver (nvme.sys) & Block I/O Engine PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 367: Horizon 151 - Modern Network Driver Tier: Intel I210/I219 Gigabit
+// Ethernet Hardware Ring Buffers & Zero-Copy NDIS 6.x Miniport (e1000e.sys / netio.sys)
+// ============================================================================
+
+void Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport() {
+    std::cout << "[TEST] Running Suite 367: Horizon 151 - Intel I210/I219 Gigabit Ethernet Hardware Ring Buffers & Zero-Copy NDIS 6.x Miniport (e1000e.sys / netio.sys)...\n" << std::flush;
+
+    // Helper: generate valid Ethernet IPv4 TCP frame
+    auto createTcpFrame = [](const ndis::MacAddress& srcMac, const ndis::MacAddress& dstMac,
+                             uint32_t srcIp, uint32_t dstIp, uint16_t srcPort, uint16_t dstPort,
+                             size_t payloadSize) -> std::vector<uint8_t> {
+        size_t totalLen = ndis::ETH_HLEN + 20 + 20 + payloadSize;
+        std::vector<uint8_t> frame(totalLen, 0);
+
+        // Ethernet Header
+        std::memcpy(frame.data(), dstMac.bytes, ndis::ETH_ALEN);
+        std::memcpy(frame.data() + 6, srcMac.bytes, ndis::ETH_ALEN);
+        frame[12] = static_cast<uint8_t>(ndis::ETHERTYPE_IPV4 >> 8);
+        frame[13] = static_cast<uint8_t>(ndis::ETHERTYPE_IPV4 & 0xFF);
+
+        // IPv4 Header (20 bytes)
+        size_t ipOffset = ndis::ETH_HLEN;
+        frame[ipOffset + 0] = 0x45; // Version 4, IHL 5
+        frame[ipOffset + 1] = 0x00;
+        uint16_t ipTotalLen = static_cast<uint16_t>(20 + 20 + payloadSize);
+        frame[ipOffset + 2] = static_cast<uint8_t>(ipTotalLen >> 8);
+        frame[ipOffset + 3] = static_cast<uint8_t>(ipTotalLen & 0xFF);
+        frame[ipOffset + 4] = 0x12;
+        frame[ipOffset + 5] = 0x34;
+        frame[ipOffset + 6] = 0x40; // Don't fragment
+        frame[ipOffset + 7] = 0x00;
+        frame[ipOffset + 8] = 64;   // TTL
+        frame[ipOffset + 9] = 6;    // TCP protocol
+        frame[ipOffset + 12] = static_cast<uint8_t>(srcIp >> 24);
+        frame[ipOffset + 13] = static_cast<uint8_t>((srcIp >> 16) & 0xFF);
+        frame[ipOffset + 14] = static_cast<uint8_t>((srcIp >> 8) & 0xFF);
+        frame[ipOffset + 15] = static_cast<uint8_t>(srcIp & 0xFF);
+        frame[ipOffset + 16] = static_cast<uint8_t>(dstIp >> 24);
+        frame[ipOffset + 17] = static_cast<uint8_t>((dstIp >> 16) & 0xFF);
+        frame[ipOffset + 18] = static_cast<uint8_t>((dstIp >> 8) & 0xFF);
+        frame[ipOffset + 19] = static_cast<uint8_t>(dstIp & 0xFF);
+
+        // TCP Header (20 bytes)
+        size_t tcpOffset = ipOffset + 20;
+        frame[tcpOffset + 0] = static_cast<uint8_t>(srcPort >> 8);
+        frame[tcpOffset + 1] = static_cast<uint8_t>(srcPort & 0xFF);
+        frame[tcpOffset + 2] = static_cast<uint8_t>(dstPort >> 8);
+        frame[tcpOffset + 3] = static_cast<uint8_t>(dstPort & 0xFF);
+        frame[tcpOffset + 12] = 0x50; // Data offset 5 dwords (20 bytes)
+        frame[tcpOffset + 13] = 0x18; // PSH, ACK flags
+
+        // Payload
+        for (size_t i = 0; i < payloadSize; ++i) {
+            frame[tcpOffset + 20 + i] = static_cast<uint8_t>((i + 1) & 0xFF);
+        }
+
+        // IP Checksum
+        uint16_t csum = ndis::calculateIpChecksum(frame.data() + ipOffset, 20);
+        frame[ipOffset + 10] = static_cast<uint8_t>(csum >> 8);
+        frame[ipOffset + 11] = static_cast<uint8_t>(csum & 0xFF);
+
+        return frame;
+    };
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Intel I210/I219 Hardware Register Layout & MAC Address Config
+    // ------------------------------------------------------------------------
+    {
+        ndis::MacAddress i210Mac(0x00, 0x1B, 0x21, 0x7A, 0x8B, 0x9C);
+        pci::PciAddress i210Pci(2, 0, 0); // PCIe 02:00.0 on Supermicro X11SSH-F
+        ndis::IntelI210NdisMiniport adapter(L"\\Device\\E1000e0", L"Intel(R) I210 Gigabit Network Connection", i210Mac, i210Pci);
+
+        TEST_ASSERT(adapter.getAdapterName() == L"\\Device\\E1000e0", "Adapter device path must match NT namespace");
+        TEST_ASSERT(adapter.getFriendlyName() == L"Intel(R) I210 Gigabit Network Connection", "Friendly name must identify Intel I210 silicon");
+        TEST_ASSERT(adapter.getSpeedBps() == 1'000'000'000ULL, "Default link speed must be 1 Gbps Gigabit Ethernet");
+        TEST_ASSERT(adapter.getLinkState() == ndis::MediaConnectState::Connected, "Adapter must initialize in Connected link state");
+        TEST_ASSERT(adapter.getPciAddress().bus == 2 && adapter.getPciAddress().device == 0 && adapter.getPciAddress().function == 0,
+                    "PCI address must reflect 02:00.0 physical server location");
+
+        // Verify MMIO Registers
+        TEST_ASSERT(adapter.readMmio32(ndis::IntelE1000eAdapter::REG_STATUS) == 0x8000000A, "STATUS register must indicate Full Duplex, 1000Mbps, Link Up");
+        TEST_ASSERT(adapter.readMmio32(ndis::IntelE1000eAdapter::REG_RCTL) == 0x04008002, "RCTL must have RCTL_EN, RCTL_BAM, and RCTL_SECRC enabled");
+        TEST_ASSERT(adapter.readMmio32(ndis::IntelE1000eAdapter::REG_TCTL) == 0x000400FA, "TCTL must have TCTL_EN and TCTL_PSP enabled");
+        TEST_ASSERT(adapter.readMmio32(ndis::IntelE1000eAdapter::REG_RDBAL) == 0x40000000, "RDBAL must point to physical RX DMA base address");
+        TEST_ASSERT(adapter.readMmio32(ndis::IntelE1000eAdapter::REG_TDBAL) == 0x50000000, "TDBAL must point to physical TX DMA base address");
+
+        // Verify MAC Address registers
+        uint32_t ral = adapter.readMmio32(ndis::IntelE1000eAdapter::REG_RAL0);
+        uint32_t rah = adapter.readMmio32(ndis::IntelE1000eAdapter::REG_RAH0);
+        TEST_ASSERT((rah & (1u << 31)) != 0, "RAH0 must have Address Valid (AV) bit 31 set");
+        TEST_ASSERT((ral & 0xFF) == 0x00 && ((ral >> 8) & 0xFF) == 0x1B, "RAL0 must store low MAC bytes 0 and 1");
+
+        // Verify Device Reset
+        adapter.writeMmio32(ndis::IntelE1000eAdapter::REG_CTRL, 0x04000000); // Master Device Reset
+        TEST_ASSERT(adapter.getResetCount() == 1, "Reset count must be 1 after device reset");
+        TEST_ASSERT(adapter.getRxHead() == 0 && adapter.getTxHead() == 0, "Ring heads must be cleared after reset");
+        TEST_ASSERT(adapter.getLinkState() == ndis::MediaConnectState::Connected, "Link must be restored to connected after reset");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Hardware RX/TX DMA Ring Buffer Descriptors & Doorbell Ringing
+    // ------------------------------------------------------------------------
+    {
+        ndis::MacAddress mac(0x00, 0x1B, 0x21, 0x11, 0x22, 0x33);
+        ndis::IntelE1000eAdapter adapter(L"\\Device\\E1000e0", L"Intel(R) I210 Gigabit Network Connection", mac);
+
+        TEST_ASSERT(adapter.getRingSize() == 64, "Ring size must be exactly 64 descriptors");
+        TEST_ASSERT(sizeof(ndis::I210RxDesc) == 16, "I210RxDesc must be exactly 16 bytes packed");
+        TEST_ASSERT(sizeof(ndis::I210TxDesc) == 16, "I210TxDesc must be exactly 16 bytes packed");
+
+        // Verify pre-allocated RX DMA buffers
+        const auto& rxRing = adapter.getRxRing();
+        TEST_ASSERT(rxRing[0].buffer_addr == 0x40000000ULL, "RX buffer 0 address must match base DMA mapping");
+        TEST_ASSERT(rxRing[1].buffer_addr == 0x40000800ULL, "RX buffer 1 address must be offset by 2048 bytes");
+
+        // Transmit packet through ring
+        auto pkt = createTcpFrame(mac, ndis::MacAddress(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF),
+                                  0xC0A80164, 0xC0A80101, 8080, 80, 256);
+        auto txStat = adapter.sendPacket(pkt);
+        TEST_ASSERT(NT_SUCCESS(txStat), "sendPacket must succeed");
+        TEST_ASSERT(adapter.getTxTail() == 1, "TX tail pointer must advance to index 1");
+        TEST_ASSERT(adapter.getTxHead() == 1, "TX head pointer must advance to index 1 after DMA completion");
+
+        const auto& txDesc = adapter.getTxDesc(0);
+        TEST_ASSERT(txDesc.length == pkt.size(), "Descriptor length must match packet size");
+        TEST_ASSERT((txDesc.cmd & (ndis::I210_TXD_CMD_EOP | ndis::I210_TXD_CMD_IFCS | ndis::I210_TXD_CMD_RS)) != 0,
+                    "Descriptor command must include EOP, IFCS, and RS flags");
+        TEST_ASSERT((txDesc.status & ndis::I210_TXD_STAT_DD) != 0, "Descriptor status must include Descriptor Done (DD)");
+        TEST_ASSERT(adapter.getTxCompleted() == 1, "Completed TX descriptor counter must be 1");
+
+        // Test direct doorbell MMIO writes
+        adapter.writeMmio32(ndis::IntelE1000eAdapter::REG_TDT, 8);
+        TEST_ASSERT(adapter.getTxTail() == 8, "Direct write to REG_TDT must update txTail to 8");
+        adapter.writeMmio32(ndis::IntelE1000eAdapter::LEGACY_REG_RDT, 12);
+        TEST_ASSERT(adapter.getRxTail() == 12, "Direct write to LEGACY_REG_RDT must update rxTail to 12");
+        adapter.resetHardware();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Zero-Copy NDIS 6.x NET_BUFFER_LIST (NBL) Transmit & Receive Path
+    // ------------------------------------------------------------------------
+    {
+        ndis::MacAddress mac(0x00, 0x1B, 0x21, 0x22, 0x33, 0x44);
+        ndis::IntelE1000eAdapter adapter(L"\\Device\\E1000e0", L"Intel(R) I210 Gigabit Network Connection", mac);
+        ndis::NetBufferListPool pool(32);
+
+        auto pkt = createTcpFrame(mac, ndis::MacAddress(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF),
+                                  0x0A000001, 0x0A000002, 5000, 80, 128);
+
+        // Single NBL Transmit
+        auto nbl1 = pool.allocate(pkt);
+        TEST_ASSERT(nbl1 != nullptr, "NBL allocation from pool must succeed");
+        auto nblStat = adapter.sendNetBufferLists(nbl1);
+        TEST_ASSERT(NT_SUCCESS(nblStat), "sendNetBufferLists must succeed");
+        TEST_ASSERT(nbl1->status == ndis::NDIS_STATUS_SUCCESS, "NBL status must be marked NDIS_STATUS_SUCCESS");
+        TEST_ASSERT(adapter.getStatistics().txPackets == 1, "txPackets statistic must be 1");
+        pool.free(nbl1);
+
+        // Chained NBL Transmit (3 packets linked)
+        auto nblA = pool.allocate(pkt);
+        auto nblB = pool.allocate(pkt);
+        auto nblC = pool.allocate(pkt);
+        nblA->next = nblB;
+        nblB->next = nblC;
+
+        auto chainStat = adapter.sendNetBufferLists(nblA);
+        TEST_ASSERT(NT_SUCCESS(chainStat), "Chained sendNetBufferLists must succeed");
+        TEST_ASSERT(nblA->status == ndis::NDIS_STATUS_SUCCESS, "nblA status must be success");
+        TEST_ASSERT(nblB->status == ndis::NDIS_STATUS_SUCCESS, "nblB status must be success");
+        TEST_ASSERT(nblC->status == ndis::NDIS_STATUS_SUCCESS, "nblC status must be success");
+        TEST_ASSERT(adapter.getStatistics().txPackets == 4, "Total transmitted packets must equal 4");
+
+        pool.free(nblA);
+        pool.free(nblB);
+        pool.free(nblC);
+
+        // Receive Packet Inspection & Callback
+        bool rxInvoked = false;
+        size_t rxBytesSeen = 0;
+        adapter.registerReceiveHandler([&](std::span<const uint8_t> frame) {
+            rxInvoked = true;
+            rxBytesSeen = frame.size();
+        });
+
+        adapter.receivePacket(pkt);
+        TEST_ASSERT(rxInvoked, "Receive callback must be executed on packet ingress");
+        TEST_ASSERT(rxBytesSeen == pkt.size(), "Received packet byte count must match injected frame");
+        TEST_ASSERT(adapter.getStatistics().rxPackets == 1, "rxPackets statistic must be 1");
+
+        // Indicate Receive NBL
+        auto rxNbl = pool.allocate(pkt);
+        adapter.indicateReceiveNetBufferList(rxNbl);
+        TEST_ASSERT(rxNbl->status == ndis::NDIS_STATUS_SUCCESS, "Indicated NBL status must be NDIS_STATUS_SUCCESS");
+        TEST_ASSERT(adapter.getStatistics().rxPackets == 2, "rxPackets must increment after indicateReceiveNetBufferList");
+        pool.free(rxNbl);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Hardware Checksum Offload Engine (IPv4, TCP, UDP)
+    // ------------------------------------------------------------------------
+    {
+        ndis::MacAddress mac(0x00, 0x1B, 0x21, 0x44, 0x55, 0x66);
+        ndis::IntelE1000eAdapter adapter(L"\\Device\\E1000e0", L"Intel(R) I210 Gigabit Network Connection", mac);
+
+        const auto& offloads = adapter.getOffloadCapabilities();
+        TEST_ASSERT(offloads.checksum.txIpv4Header, "Hardware IPv4 header transmit checksum offload must be enabled");
+        TEST_ASSERT(offloads.checksum.rxIpv4Header, "Hardware IPv4 header receive checksum offload must be enabled");
+        TEST_ASSERT(offloads.checksum.txTcpIpv4, "Hardware TCP IPv4 transmit checksum offload must be enabled");
+        TEST_ASSERT(offloads.checksum.rxTcpIpv4, "Hardware TCP IPv4 receive checksum offload must be enabled");
+
+        auto txCsumPre = adapter.getStatistics().csumOffloadTx;
+        auto rxCsumPre = adapter.getStatistics().csumOffloadRx;
+
+        auto pkt = createTcpFrame(mac, ndis::MacAddress(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF),
+                                  0xC0A80001, 0xC0A80002, 1234, 5678, 128);
+
+        // Transmit packet with checksum offload
+        TEST_ASSERT(NT_SUCCESS(adapter.sendPacket(pkt)), "TX checksum packet transmit must succeed");
+        TEST_ASSERT(adapter.getStatistics().csumOffloadTx > txCsumPre, "csumOffloadTx statistic must increment");
+        const auto& txDesc = adapter.getTxDesc(0);
+        TEST_ASSERT((txDesc.cmd & ndis::I210_TXD_CMD_IC) != 0, "Descriptor command must have Insert Checksum (IC) set");
+        TEST_ASSERT(txDesc.css == ndis::ETH_HLEN, "Checksum start offset (css) must point to IP header");
+        TEST_ASSERT(txDesc.cso == ndis::ETH_HLEN + 10, "Checksum offset (cso) must point to IP checksum field");
+
+        // Ingress packet with hardware checksum verification
+        adapter.receivePacket(pkt);
+        TEST_ASSERT(adapter.getStatistics().csumOffloadRx > rxCsumPre, "csumOffloadRx statistic must increment");
+        const auto& rxDesc = adapter.getRxDesc(0);
+        TEST_ASSERT((rxDesc.status & ndis::I210_RXD_STAT_IPCS) != 0, "RX descriptor status must report IP Checksum Calculated (IPCS)");
+        TEST_ASSERT((rxDesc.status & ndis::I210_RXD_STAT_TCPCS) != 0, "RX descriptor status must report TCP Checksum Calculated (TCPCS)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Large Send Offload v2 (LSOv2 / TSO) & Receive Side Scaling (RSS)
+    // ------------------------------------------------------------------------
+    {
+        ndis::MacAddress mac(0x00, 0x1B, 0x21, 0x66, 0x77, 0x88);
+        ndis::IntelE1000eAdapter adapter(L"\\Device\\E1000e0", L"Intel(R) I210 Gigabit Network Connection", mac);
+
+        auto& offloads = adapter.getOffloadCapabilities();
+        offloads.lsoV2.enabled = true;
+        offloads.lsoV2.maxOffloadSize = 65536;
+
+        auto lsoPre = adapter.getStatistics().lsoPackets;
+
+        // Create a 4096-byte super packet (greater than MTU 1500)
+        auto jumboPkt = createTcpFrame(mac, ndis::MacAddress(0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF),
+                                       0x0A0A0001, 0x0A0A0002, 443, 55000, 4042);
+        TEST_ASSERT(jumboPkt.size() > (adapter.getMtu() + ndis::ETH_HLEN), "Jumbo packet must exceed MTU + Ethernet header");
+
+        auto lsoStat = adapter.sendPacket(jumboPkt);
+        TEST_ASSERT(NT_SUCCESS(lsoStat), "sendPacket with LSOv2 segmentation must succeed");
+        TEST_ASSERT(adapter.getStatistics().lsoPackets > lsoPre, "lsoPackets statistic must increment by segment count");
+        TEST_ASSERT(adapter.getTxCompleted() >= 3, "At least 3 MTU segments must have completed DMA transmission");
+
+        // Verify segment descriptor command has TSE / DEXT
+        const auto& segDesc = adapter.getTxDesc(0);
+        TEST_ASSERT((segDesc.cmd & ndis::I210_TXD_CMD_DEXT) != 0, "LSO segment descriptor must have DEXT / TSE flag set");
+        TEST_ASSERT(segDesc.special == (adapter.getMtu() - 40), "LSO descriptor special field must store MSS (MTU - 40)");
+
+        // Receive Side Scaling (RSS) Toeplitz Verification
+        auto& rss = adapter.getRssParameters();
+        TEST_ASSERT(rss.enabled, "RSS must be enabled by default");
+        TEST_ASSERT(rss.numCpuQueues == 4, "Default RSS CPU queue count must be 4");
+
+        // Ingress 16 packets with different TCP 4-tuples to test hash distribution
+        for (uint32_t i = 1; i <= 16; ++i) {
+            auto flowFrame = createTcpFrame(ndis::MacAddress(0x00, 0x11, 0x22, 0x33, 0x44, static_cast<uint8_t>(i)),
+                                            mac,
+                                            0xC0A80100 | i, 0xC0A801FE,
+                                            static_cast<uint16_t>(20000 + i), 80, 64);
+            adapter.receivePacket(flowFrame);
+        }
+
+        uint64_t totalRssIngress = 0;
+        size_t activeCores = 0;
+        for (size_t c = 0; c < 4; ++c) {
+            if (rss.perCorePacketCount[c] > 0) activeCores++;
+            totalRssIngress += rss.perCorePacketCount[c];
+        }
+
+        TEST_ASSERT(totalRssIngress >= 16, "All 16 incoming flows must be accounted for in RSS per-core counters");
+        TEST_ASSERT(activeCores >= 2, "Toeplitz hash must distribute flows across multiple CPU cores");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: SCM Registration (e1000e.sys / netio.sys) & OID Statistics
+    // ------------------------------------------------------------------------
+    {
+        ndis::InitializeNdisSubsystem();
+
+        // 1. Verify SCM Driver Registrations
+        auto& scm = scm::ServiceControlManager::get();
+        auto e1000Record = scm.getServiceRecord(L"e1000e");
+        TEST_ASSERT(e1000Record != nullptr, "e1000e.sys service record must exist in SCM");
+        TEST_ASSERT(e1000Record->startType == scm::SERVICE_BOOT_START, "e1000e must be SERVICE_BOOT_START");
+        TEST_ASSERT(e1000Record->serviceType == scm::SERVICE_KERNEL_DRIVER, "e1000e must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(e1000Record->binaryPath == L"C:\\Windows\\System32\\drivers\\e1000e.sys", "e1000e binaryPath must be canonical System32 driver path");
+
+        auto netioRecord = scm.getServiceRecord(L"netio");
+        TEST_ASSERT(netioRecord != nullptr, "netio.sys service record must exist in SCM");
+        TEST_ASSERT(netioRecord->startType == scm::SERVICE_BOOT_START, "netio must be SERVICE_BOOT_START");
+        TEST_ASSERT(netioRecord->serviceType == scm::SERVICE_KERNEL_DRIVER, "netio must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(netioRecord->binaryPath == L"C:\\Windows\\System32\\drivers\\netio.sys", "netio binaryPath must be canonical System32 driver path");
+
+        // 2. Verify Version Database Module Information
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("e1000e.sys") != nullptr, "Version database must register e1000e.sys");
+        TEST_ASSERT(verDb.GetModuleInfo("netio.sys") != nullptr, "Version database must register netio.sys");
+
+        // 3. Verify JanusLDR Dynamic Loader Exports
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("e1000e.sys", "E1000eInitializeMiniport") != nullptr, "e1000e.sys must export E1000eInitializeMiniport");
+        TEST_ASSERT(ldr.getExport("e1000e.sys", "E1000eSendNetBufferLists") != nullptr, "e1000e.sys must export E1000eSendNetBufferLists");
+        TEST_ASSERT(ldr.getExport("e1000e.sys", "E1000eReturnNetBufferLists") != nullptr, "e1000e.sys must export E1000eReturnNetBufferLists");
+        TEST_ASSERT(ldr.getExport("e1000e.sys", "E1000eOidRequest") != nullptr, "e1000e.sys must export E1000eOidRequest");
+        TEST_ASSERT(ldr.getExport("netio.sys", "NetioRegisterClient") != nullptr, "netio.sys must export NetioRegisterClient");
+        TEST_ASSERT(ldr.getExport("netio.sys", "NetioDeregisterClient") != nullptr, "netio.sys must export NetioDeregisterClient");
+
+        // 4. Test OID Query Interface
+        ndis::MacAddress mac(0x00, 0x1B, 0x21, 0x99, 0x88, 0x77);
+        ndis::IntelE1000eAdapter adapter(L"\\Device\\E1000e0", L"Intel(R) I210 Gigabit Network Connection", mac);
+
+        uint32_t speed100bps = 0;
+        size_t written = 0, needed = 0;
+        auto qSpeed = adapter.queryInformation(ndis::OID_GEN_LINK_SPEED, &speed100bps, sizeof(speed100bps), &written, &needed);
+        TEST_ASSERT(NT_SUCCESS(qSpeed), "OID_GEN_LINK_SPEED query must succeed");
+        TEST_ASSERT(speed100bps == 10'000'000, "OID_GEN_LINK_SPEED must report 10,000,000 units (1 Gbps)");
+
+        uint8_t macQuery[ndis::ETH_ALEN]{0};
+        auto qMac = adapter.queryInformation(ndis::OID_802_3_CURRENT_ADDRESS, macQuery, sizeof(macQuery), &written, &needed);
+        TEST_ASSERT(NT_SUCCESS(qMac), "OID_802_3_CURRENT_ADDRESS query must succeed");
+        TEST_ASSERT(std::memcmp(macQuery, mac.bytes, ndis::ETH_ALEN) == 0, "Queried MAC address must match hardware MAC");
+
+        uint32_t maxFrame = 0;
+        auto qMtu = adapter.queryInformation(ndis::OID_GEN_MAXIMUM_FRAME_SIZE, &maxFrame, sizeof(maxFrame), &written, &needed);
+        TEST_ASSERT(NT_SUCCESS(qMtu), "OID_GEN_MAXIMUM_FRAME_SIZE query must succeed");
+        TEST_ASSERT(maxFrame == 1500, "Maximum frame size must be default MTU 1500");
+
+        // 5. Test OID Set Interface
+        uint32_t promisc = ndis::NDIS_PACKET_TYPE_PROMISCUOUS;
+        size_t read = 0;
+        auto setFilter = adapter.setInformation(ndis::OID_GEN_CURRENT_PACKET_FILTER, &promisc, sizeof(promisc), &read, &needed);
+        TEST_ASSERT(NT_SUCCESS(setFilter), "OID_GEN_CURRENT_PACKET_FILTER set must succeed");
+
+        uint8_t newMac[ndis::ETH_ALEN] = {0x00, 0x1B, 0x21, 0xAA, 0xBB, 0xCC};
+        auto setMac = adapter.setInformation(ndis::OID_802_3_CURRENT_ADDRESS, newMac, sizeof(newMac), &read, &needed);
+        TEST_ASSERT(NT_SUCCESS(setMac), "OID_802_3_CURRENT_ADDRESS set must succeed");
+        TEST_ASSERT(adapter.getMacAddress().bytes[5] == 0xCC, "Updated MAC address byte 5 must be 0xCC");
+
+        // 6. Static Assertion of Driver Alias
+        static_assert(std::is_same_v<ndis::IntelI210NdisMiniport, ndis::IntelE1000eAdapter>, "IntelI210NdisMiniport must alias IntelE1000eAdapter in ndis namespace");
+        static_assert(std::is_same_v<micant::IntelI210NdisMiniport, micant::IntelE1000eAdapter>, "IntelI210NdisMiniport must alias IntelE1000eAdapter in micant namespace");
+    }
+
+    std::cout << "[HORIZON 151] Intel I210/I219 Gigabit Ethernet & NDIS 6.x Miniport (e1000e.sys / netio.sys) Summary:\n"
+              << "    Pillar 1: Intel I210/I219 Hardware Register Layout & MAC Address Config OK\n"
+              << "    Pillar 2: Hardware RX/TX DMA Ring Buffer Descriptors & Doorbell Ringing OK\n"
+              << "    Pillar 3: Zero-Copy NDIS 6.x NET_BUFFER_LIST (NBL) Transmit & Receive Path OK\n"
+              << "    Pillar 4: Hardware Checksum Offload Engine (IPv4, TCP, UDP) OK\n"
+              << "    Pillar 5: Large Send Offload v2 (LSOv2 / TSO) & Receive Side Scaling (RSS) OK\n"
+              << "    Pillar 6: SCM Registration (e1000e.sys / netio.sys) & OID Statistics OK\n";
+
+    std::cout << "[TEST] Suite 367: Horizon 151 - Intel I210/I219 Gigabit Ethernet Hardware Ring Buffers & Zero-Copy NDIS 6.x Miniport (e1000e.sys / netio.sys) PASSED." << std::endl;
+}

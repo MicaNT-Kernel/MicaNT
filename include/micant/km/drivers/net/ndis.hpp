@@ -136,6 +136,45 @@ enum class MediaConnectState : uint32_t {
     Disconnected = 2
 };
 
+// Standard NDIS 6.x Object Identifiers (OIDs)
+inline constexpr uint32_t OID_GEN_SUPPORTED_LIST             = 0x00010101;
+inline constexpr uint32_t OID_GEN_HARDWARE_STATUS            = 0x00010102;
+inline constexpr uint32_t OID_GEN_MEDIA_SUPPORTED            = 0x00010103;
+inline constexpr uint32_t OID_GEN_MEDIA_IN_USE               = 0x00010104;
+inline constexpr uint32_t OID_GEN_MAXIMUM_LOOKAHEAD          = 0x00010105;
+inline constexpr uint32_t OID_GEN_MAXIMUM_FRAME_SIZE         = 0x00010106;
+inline constexpr uint32_t OID_GEN_LINK_SPEED                 = 0x00010107;
+inline constexpr uint32_t OID_GEN_TRANSMIT_BUFFER_SPACE      = 0x00010108;
+inline constexpr uint32_t OID_GEN_RECEIVE_BUFFER_SPACE       = 0x00010109;
+inline constexpr uint32_t OID_GEN_TRANSMIT_BLOCK_SIZE        = 0x0001010A;
+inline constexpr uint32_t OID_GEN_RECEIVE_BLOCK_SIZE         = 0x0001010B;
+inline constexpr uint32_t OID_GEN_VENDOR_ID                  = 0x0001010C;
+inline constexpr uint32_t OID_GEN_VENDOR_DESCRIPTION         = 0x0001010D;
+inline constexpr uint32_t OID_GEN_CURRENT_PACKET_FILTER      = 0x0001010E;
+inline constexpr uint32_t OID_GEN_CURRENT_LOOKAHEAD          = 0x0001010F;
+inline constexpr uint32_t OID_GEN_DRIVER_VERSION             = 0x00010110;
+inline constexpr uint32_t OID_GEN_MAXIMUM_TOTAL_SIZE         = 0x00010111;
+inline constexpr uint32_t OID_GEN_MAC_OPTIONS                = 0x00010113;
+inline constexpr uint32_t OID_GEN_MEDIA_CONNECT_STATUS       = 0x00010114;
+inline constexpr uint32_t OID_GEN_MAXIMUM_SEND_PACKETS       = 0x00010115;
+inline constexpr uint32_t OID_GEN_VENDOR_DRIVER_VERSION      = 0x00010116;
+inline constexpr uint32_t OID_GEN_XMIT_OK                    = 0x00020101;
+inline constexpr uint32_t OID_GEN_RCV_OK                     = 0x00020102;
+inline constexpr uint32_t OID_GEN_XMIT_ERROR                 = 0x00020103;
+inline constexpr uint32_t OID_GEN_RCV_ERROR                  = 0x00020104;
+inline constexpr uint32_t OID_GEN_RCV_NO_BUFFER              = 0x00020105;
+inline constexpr uint32_t OID_GEN_RECEIVE_SCALE_CAPABILITIES = 0x00010203;
+inline constexpr uint32_t OID_GEN_RECEIVE_SCALE_PARAMETERS   = 0x00010204;
+inline constexpr uint32_t OID_802_3_PERMANENT_ADDRESS        = 0x01010101;
+inline constexpr uint32_t OID_802_3_CURRENT_ADDRESS          = 0x01010102;
+inline constexpr uint32_t OID_802_3_MULTICAST_LIST           = 0x01010103;
+inline constexpr uint32_t OID_802_3_MAXIMUM_LIST_SIZE        = 0x01010104;
+inline constexpr uint32_t OID_802_3_RCV_ERROR_ALIGNMENT      = 0x01020101;
+inline constexpr uint32_t OID_802_3_XMIT_ONE_COLLISION       = 0x01020102;
+inline constexpr uint32_t OID_802_3_XMIT_MORE_COLLISIONS     = 0x01020103;
+inline constexpr uint32_t OID_OFFLOAD_ENCAPSULATION          = 0x0101010A;
+inline constexpr uint32_t OID_TCP_OFFLOAD_PARAMETERS         = 0xFC01020C;
+
 // ============================================================================
 // 2. Ethernet Header & MAC Address Representation
 // ============================================================================
@@ -1207,39 +1246,167 @@ private:
 // 10A. Intel Gigabit / 2.5GbE Ethernet Miniport Adapter (e1000e.sys)
 // ============================================================================
 
+// ============================================================================
+// 10A. Intel Gigabit / 2.5GbE Ethernet Miniport Adapter (e1000e.sys)
+//      Supporting Intel I210-AT, I211-AT, I219-LM, 82574L Silicon
+// ============================================================================
+
+#pragma pack(push, 1)
+
+// Intel Legacy 16-byte Receive Descriptor (I210 / 82574L)
+struct I210RxDesc {
+    uint64_t buffer_addr{0}; // Physical buffer address (DMA)
+    uint16_t length{0};      // Length of received packet
+    uint16_t checksum{0};    // Packet checksum
+    uint8_t  status{0};      // Bit 0: DD (Descriptor Done), Bit 1: EOP, Bit 6: IPCS, Bit 7: TCPCS
+    uint8_t  errors{0};      // Errors
+    uint16_t special{0};     // Special (e.g. VLAN tag)
+};
+
+// Intel Legacy 16-byte Transmit Descriptor (I210 / 82574L)
+struct I210TxDesc {
+    uint64_t buffer_addr{0}; // Physical buffer address (DMA)
+    uint16_t length{0};      // Length of packet to transmit
+    uint8_t  cso{0};         // Checksum offset
+    uint8_t  cmd{0};         // Bit 0: EOP, Bit 1: IFCS, Bit 3: RS, Bit 5: TSE (LSO)
+    uint8_t  status{0};      // Bit 0: DD (Descriptor Done)
+    uint8_t  css{0};         // Checksum start
+    uint16_t special{0};     // Special (MSS for LSO or VLAN)
+};
+
+#pragma pack(pop)
+
+// Descriptor Status & Command Flags
+inline constexpr uint8_t I210_RXD_STAT_DD    = 0x01; // Descriptor Done
+inline constexpr uint8_t I210_RXD_STAT_EOP   = 0x02; // End of Packet
+inline constexpr uint8_t I210_RXD_STAT_IXSM  = 0x04; // Ignore Checksum
+inline constexpr uint8_t I210_RXD_STAT_VP    = 0x08; // 802.1Q Packet
+inline constexpr uint8_t I210_RXD_STAT_TCPCS = 0x20; // TCP Checksum Evaluated
+inline constexpr uint8_t I210_RXD_STAT_IPCS  = 0x40; // IPv4 Checksum Evaluated
+inline constexpr uint8_t I210_RXD_STAT_PIF   = 0x80; // Passed in-exact filter
+
+inline constexpr uint8_t I210_TXD_CMD_EOP  = 0x01; // End of Packet
+inline constexpr uint8_t I210_TXD_CMD_IFCS = 0x02; // Insert FCS
+inline constexpr uint8_t I210_TXD_CMD_IC   = 0x04; // Insert Checksum
+inline constexpr uint8_t I210_TXD_CMD_RS   = 0x08; // Report Status
+inline constexpr uint8_t I210_TXD_CMD_RPS  = 0x10; // Report Packet Sent
+inline constexpr uint8_t I210_TXD_CMD_DEXT = 0x20; // Descriptor Extension / TSE (Large Send)
+inline constexpr uint8_t I210_TXD_CMD_VLE  = 0x40; // VLAN Packet Enable
+inline constexpr uint8_t I210_TXD_CMD_IDE  = 0x80; // Interrupt Delay Enable
+inline constexpr uint8_t I210_TXD_STAT_DD  = 0x01; // Descriptor Done
+
 class IntelE1000eAdapter : public INdisAdapter {
 public:
-    static constexpr uint32_t REG_CTRL   = 0x0000;
-    static constexpr uint32_t REG_STATUS = 0x0008;
-    static constexpr uint32_t REG_EECD   = 0x0010;
-    static constexpr uint32_t REG_IMS    = 0x00D0;
-    static constexpr uint32_t REG_IMC    = 0x00D8;
-    static constexpr uint32_t REG_RDBAL  = 0x2800;
-    static constexpr uint32_t REG_RDBAH  = 0x2804;
-    static constexpr uint32_t REG_RDLEN  = 0x2808;
-    static constexpr uint32_t REG_RDH    = 0x2810;
-    static constexpr uint32_t REG_RDT    = 0x2818;
-    static constexpr uint32_t REG_TDBAL  = 0x3800;
-    static constexpr uint32_t REG_TDBAH  = 0x3804;
-    static constexpr uint32_t REG_TDLEN  = 0x3808;
-    static constexpr uint32_t REG_TDH    = 0x3810;
-    static constexpr uint32_t REG_TDT    = 0x3818;
+    static constexpr size_t RING_SIZE = 64; // Hardware DMA ring entries
+
+    // Device Registers (I210 & 82574L)
+    static constexpr uint32_t REG_CTRL      = 0x0000;
+    static constexpr uint32_t REG_STATUS    = 0x0008;
+    static constexpr uint32_t REG_EECD      = 0x0010;
+    static constexpr uint32_t REG_CTRL_EXT  = 0x0018;
+    static constexpr uint32_t REG_ICR       = 0x00C0;
+    static constexpr uint32_t REG_ICS       = 0x00C8;
+    static constexpr uint32_t REG_IMS       = 0x00D0;
+    static constexpr uint32_t REG_IMC       = 0x00D8;
+    static constexpr uint32_t REG_RCTL      = 0x0100;
+    static constexpr uint32_t REG_TCTL      = 0x0400;
+    static constexpr uint32_t REG_TIPG      = 0x0410;
+    static constexpr uint32_t REG_RAL0      = 0x5400; // Receive Address Low (MAC 0..3)
+    static constexpr uint32_t REG_RAH0      = 0x5404; // Receive Address High (MAC 4..5 + AV)
+
+    // I210 Native Queue 0 Registers
+    static constexpr uint32_t REG_RDBAL     = 0xC000;
+    static constexpr uint32_t REG_RDBAH     = 0xC004;
+    static constexpr uint32_t REG_RDLEN     = 0xC008;
+    static constexpr uint32_t REG_SRRCTL0   = 0xC00C;
+    static constexpr uint32_t REG_RDH       = 0xC010;
+    static constexpr uint32_t REG_RDT       = 0xC018;
+    static constexpr uint32_t REG_RXDCTL    = 0xC028;
+
+    static constexpr uint32_t REG_TDBAL     = 0xE000;
+    static constexpr uint32_t REG_TDBAH     = 0xE004;
+    static constexpr uint32_t REG_TDLEN     = 0xE008;
+    static constexpr uint32_t REG_TDH       = 0xE010;
+    static constexpr uint32_t REG_TDT       = 0xE018;
+    static constexpr uint32_t REG_TXDCTL    = 0xE028;
+
+    // Legacy 82574L Aliases
+    static constexpr uint32_t LEGACY_REG_RDBAL = 0x2800;
+    static constexpr uint32_t LEGACY_REG_RDBAH = 0x2804;
+    static constexpr uint32_t LEGACY_REG_RDLEN = 0x2808;
+    static constexpr uint32_t LEGACY_REG_RDH   = 0x2810;
+    static constexpr uint32_t LEGACY_REG_RDT   = 0x2818;
+    static constexpr uint32_t LEGACY_REG_TDBAL = 0x3800;
+    static constexpr uint32_t LEGACY_REG_TDBAH = 0x3804;
+    static constexpr uint32_t LEGACY_REG_TDLEN = 0x3808;
+    static constexpr uint32_t LEGACY_REG_TDH   = 0x3810;
+    static constexpr uint32_t LEGACY_REG_TDT   = 0x3818;
 
     explicit IntelE1000eAdapter(
         std::wstring_view name = L"\\Device\\E1000e0",
-        std::wstring_view friendlyName = L"Intel(R) 82574L Gigabit Network Connection",
+        std::wstring_view friendlyName = L"Intel(R) I210 Gigabit Network Connection",
         MacAddress mac = MacAddress(0x00, 0x1B, 0x21, 0xAA, 0xBB, 0xCC),
-        pci::PciAddress pciAddr = pci::PciAddress(0, 3, 0)
+        pci::PciAddress pciAddr = pci::PciAddress(2, 0, 0)
     ) : name_(name),
         friendlyName_(friendlyName),
         mac_(mac),
         pciAddr_(pciAddr),
         mtu_(DEFAULT_MTU),
         speedBps_(1'000'000'000ULL), // 1 Gbps default
-        linkState_(MediaConnectState::Connected)
+        linkState_(MediaConnectState::Connected),
+        packetFilter_(NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST | NDIS_PACKET_TYPE_MULTICAST)
     {
         mmioRegisters_.resize(128 * 1024 / 4, 0); // 128 KB MMIO
-        writeMmio32(REG_STATUS, 0x8000000A);     // Full Duplex, 1000Mbps, Link Up
+
+        // Initialize Rings
+        rxBuffers_.resize(RING_SIZE);
+        txBuffers_.resize(RING_SIZE);
+        for (size_t i = 0; i < RING_SIZE; ++i) {
+            rxBuffers_[i].resize(DEFAULT_MTU + ETH_HLEN + 4);
+            rxRing_[i].buffer_addr = 0x40000000ULL + (i * 2048);
+            rxRing_[i].length = 0;
+            rxRing_[i].status = 0;
+
+            txBuffers_[i].resize(DEFAULT_MTU + ETH_HLEN + 4);
+            txRing_[i].buffer_addr = 0x50000000ULL + (i * 2048);
+            txRing_[i].length = 0;
+            txRing_[i].status = I210_TXD_STAT_DD;
+        }
+
+        // Program Hardware Registers
+        writeMmio32(REG_STATUS, 0x8000000A); // Full Duplex, 1000Mbps, Link Up
+        writeMmio32(REG_RCTL, 0x04008002);   // RCTL_EN | RCTL_BAM | RCTL_SECRC
+        writeMmio32(REG_TCTL, 0x000400FA);   // TCTL_EN | TCTL_PSP | collision distance
+
+        // Base Ring Addresses & Lengths
+        writeMmio32(REG_RDBAL, 0x40000000);
+        writeMmio32(REG_RDBAH, 0);
+        writeMmio32(REG_RDLEN, static_cast<uint32_t>(RING_SIZE * sizeof(I210RxDesc)));
+        writeMmio32(REG_RDH, 0);
+        writeMmio32(REG_RDT, 0);
+
+        writeMmio32(REG_TDBAL, 0x50000000);
+        writeMmio32(REG_TDBAH, 0);
+        writeMmio32(REG_TDLEN, static_cast<uint32_t>(RING_SIZE * sizeof(I210TxDesc)));
+        writeMmio32(REG_TDH, 0);
+        writeMmio32(REG_TDT, 0);
+
+        // Sync legacy mirror
+        writeMmio32(LEGACY_REG_RDBAL, 0x40000000);
+        writeMmio32(LEGACY_REG_RDLEN, static_cast<uint32_t>(RING_SIZE * sizeof(I210RxDesc)));
+        writeMmio32(LEGACY_REG_TDBAL, 0x50000000);
+        writeMmio32(LEGACY_REG_TDLEN, static_cast<uint32_t>(RING_SIZE * sizeof(I210TxDesc)));
+
+        // Program Hardware MAC address registers
+        uint32_t ral = static_cast<uint32_t>(mac_.bytes[0]) |
+                      (static_cast<uint32_t>(mac_.bytes[1]) << 8) |
+                      (static_cast<uint32_t>(mac_.bytes[2]) << 16) |
+                      (static_cast<uint32_t>(mac_.bytes[3]) << 24);
+        uint32_t rah = static_cast<uint32_t>(mac_.bytes[4]) |
+                      (static_cast<uint32_t>(mac_.bytes[5]) << 8) |
+                      (1u << 31); // AV: Address Valid
+        writeMmio32(REG_RAL0, ral);
+        writeMmio32(REG_RAH0, rah);
     }
 
     [[nodiscard]] const std::wstring& getAdapterName() const noexcept override { return name_; }
@@ -1251,9 +1418,26 @@ public:
     [[nodiscard]] pci::PciAddress getPciAddress() const noexcept { return pciAddr_; }
 
     [[nodiscard]] AdapterStatistics getStatistics() const noexcept override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         return stats_;
     }
+
+    [[nodiscard]] OffloadCapabilities& getOffloadCapabilities() noexcept { return offloads_; }
+    [[nodiscard]] const OffloadCapabilities& getOffloadCapabilities() const noexcept { return offloads_; }
+    [[nodiscard]] RssParameters& getRssParameters() noexcept { return rss_; }
+    [[nodiscard]] const RssParameters& getRssParameters() const noexcept { return rss_; }
+
+    [[nodiscard]] const std::array<I210RxDesc, RING_SIZE>& getRxRing() const noexcept { return rxRing_; }
+    [[nodiscard]] const std::array<I210TxDesc, RING_SIZE>& getTxRing() const noexcept { return txRing_; }
+    [[nodiscard]] const I210RxDesc& getRxDesc(size_t index) const noexcept { return rxRing_[index % RING_SIZE]; }
+    [[nodiscard]] const I210TxDesc& getTxDesc(size_t index) const noexcept { return txRing_[index % RING_SIZE]; }
+    [[nodiscard]] uint32_t getRxHead() const noexcept { return rxHead_; }
+    [[nodiscard]] uint32_t getRxTail() const noexcept { return rxTail_; }
+    [[nodiscard]] uint32_t getTxHead() const noexcept { return txHead_; }
+    [[nodiscard]] uint32_t getTxTail() const noexcept { return txTail_; }
+    [[nodiscard]] uint64_t getTxCompleted() const noexcept { return txCompleted_; }
+    [[nodiscard]] uint64_t getRxCompleted() const noexcept { return rxCompleted_; }
+    [[nodiscard]] constexpr size_t getRingSize() const noexcept { return RING_SIZE; }
 
     void setLinkSpeed(uint64_t speedBps) noexcept { speedBps_ = speedBps; }
     void setMtu(uint32_t mtu) noexcept { mtu_ = std::clamp(mtu, static_cast<uint32_t>(ETH_MIN_LEN), static_cast<uint32_t>(JUMBO_MTU)); }
@@ -1267,21 +1451,38 @@ public:
     [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept { return linkStateChangeCount_; }
 
     bool resetHardware() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         resetCount_++;
-        writeMmio32(REG_CTRL, 0x04000000); // Master Device Reset
-        writeMmio32(REG_STATUS, 0x8000000A); // Link back up
+        rxHead_ = 0;
+        rxTail_ = 0;
+        txHead_ = 0;
+        txTail_ = 0;
+        for (size_t i = 0; i < RING_SIZE; ++i) {
+            rxRing_[i].status = 0;
+            rxRing_[i].length = 0;
+            txRing_[i].status = I210_TXD_STAT_DD;
+            txRing_[i].length = 0;
+        }
+        size_t ctrlIdx = REG_CTRL / 4;
+        if (ctrlIdx < mmioRegisters_.size()) mmioRegisters_[ctrlIdx] = 0x04000000;
+        size_t statIdx = REG_STATUS / 4;
+        if (statIdx < mmioRegisters_.size()) mmioRegisters_[statIdx] = 0x8000000A;
         return true;
     }
 
     [[nodiscard]] uint32_t getResetCount() const noexcept { return resetCount_; }
 
     void registerReceiveHandler(ReceiveCallback callback) override {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         rxCallback_ = std::move(callback);
     }
 
     [[nodiscard]] uint32_t readMmio32(uint32_t offset) const noexcept {
+        if (offset == REG_RDH || offset == LEGACY_REG_RDH) return rxHead_;
+        if (offset == REG_RDT || offset == LEGACY_REG_RDT) return rxTail_;
+        if (offset == REG_TDH || offset == LEGACY_REG_TDH) return txHead_;
+        if (offset == REG_TDT || offset == LEGACY_REG_TDT) return txTail_;
+
         size_t idx = offset / 4;
         if (idx < mmioRegisters_.size()) return mmioRegisters_[idx];
         return 0xFFFFFFFF;
@@ -1290,27 +1491,415 @@ public:
     void writeMmio32(uint32_t offset, uint32_t value) noexcept {
         size_t idx = offset / 4;
         if (idx < mmioRegisters_.size()) mmioRegisters_[idx] = value;
+
+        if (offset == REG_TDT || offset == LEGACY_REG_TDT) {
+            txTail_ = value % RING_SIZE;
+        } else if (offset == REG_RDT || offset == LEGACY_REG_RDT) {
+            rxTail_ = value % RING_SIZE;
+        } else if (offset == REG_RDH || offset == LEGACY_REG_RDH) {
+            rxHead_ = value % RING_SIZE;
+        } else if (offset == REG_TDH || offset == LEGACY_REG_TDH) {
+            txHead_ = value % RING_SIZE;
+        } else if (offset == REG_CTRL && (value & 0x04000000)) {
+            // Hardware reset requested
+            resetHardware();
+        } else if (offset == REG_RAL0) {
+            mac_.bytes[0] = static_cast<uint8_t>(value & 0xFF);
+            mac_.bytes[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+            mac_.bytes[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
+            mac_.bytes[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+        } else if (offset == REG_RAH0) {
+            mac_.bytes[4] = static_cast<uint8_t>(value & 0xFF);
+            mac_.bytes[5] = static_cast<uint8_t>((value >> 8) & 0xFF);
+        }
+    }
+
+    /**
+     * @brief Large Send Offload v2 (LSOv2 / TSO) segmentation in hardware DMA.
+     */
+    NtStatus transmitLsoSegments(std::span<const uint8_t> largeFrame) {
+        if (largeFrame.size() < ETH_HLEN + 40) return NtStatus::InvalidParameter;
+
+        const size_t headerLen = ETH_HLEN + 40; // Eth (14) + IP (20) + TCP (20)
+        const size_t payloadLen = largeFrame.size() - headerLen;
+        const size_t mss = mtu_ - 40;
+
+        size_t offset = 0;
+        uint32_t segCount = 0;
+
+        while (offset < payloadLen) {
+            size_t segSize = std::min(mss, payloadLen - offset);
+            std::vector<uint8_t> segPacket(headerLen + segSize);
+
+            // Copy Header and Segment Payload
+            std::memcpy(segPacket.data(), largeFrame.data(), headerLen);
+            std::memcpy(segPacket.data() + headerLen, largeFrame.data() + headerLen + offset, segSize);
+
+            // Update IP Header Total Length
+            uint16_t totalLen = static_cast<uint16_t>(20 + 20 + segSize);
+            segPacket[ETH_HLEN + 2] = static_cast<uint8_t>(totalLen >> 8);
+            segPacket[ETH_HLEN + 3] = static_cast<uint8_t>(totalLen & 0xFF);
+
+            // Checksum Offload
+            if (offloads_.checksum.txIpv4Header) {
+                segPacket[ETH_HLEN + 10] = 0;
+                segPacket[ETH_HLEN + 11] = 0;
+                uint16_t ipCsum = calculateIpChecksum(segPacket.data() + ETH_HLEN, 20);
+                segPacket[ETH_HLEN + 10] = static_cast<uint8_t>(ipCsum >> 8);
+                segPacket[ETH_HLEN + 11] = static_cast<uint8_t>(ipCsum & 0xFF);
+                stats_.csumOffloadTx++;
+            }
+
+            // Put on Hardware TX Ring
+            uint32_t tail = txTail_;
+            auto& desc = txRing_[tail];
+            desc.buffer_addr = 0x50000000ULL + (tail * 2048);
+            desc.length = static_cast<uint16_t>(segPacket.size());
+            desc.cmd = I210_TXD_CMD_EOP | I210_TXD_CMD_IFCS | I210_TXD_CMD_DEXT | I210_TXD_CMD_RS;
+            desc.special = static_cast<uint16_t>(mss);
+            desc.status = I210_TXD_STAT_DD;
+
+            txBuffers_[tail] = std::move(segPacket);
+            txTail_ = (tail + 1) % RING_SIZE;
+            txHead_ = txTail_;
+            txCompleted_++;
+
+            stats_.txPackets++;
+            stats_.txBytes += (headerLen + segSize);
+            offset += segSize;
+            segCount++;
+        }
+
+        stats_.lsoPackets += segCount;
+        writeMmio32(REG_TDH, txHead_);
+        writeMmio32(REG_TDT, txTail_);
+
+        return NtStatus::Success;
     }
 
     [[nodiscard]] NtStatus sendPacket(std::span<const uint8_t> frame) override {
         if (frame.size() < ETH_HLEN) return NtStatus::InvalidParameter;
         if (linkState_ != MediaConnectState::Connected) return NtStatus::DeviceNotReady;
-        std::lock_guard<std::mutex> lock(mutex_);
+
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        // Large Send Offload check
+        if (frame.size() > (mtu_ + ETH_HLEN)) {
+            if (offloads_.lsoV2.enabled && frame.size() <= offloads_.lsoV2.maxOffloadSize) {
+                return transmitLsoSegments(frame);
+            }
+            return NtStatus::BufferOverflow;
+        }
+
+        // Place on TX Ring
+        uint32_t tail = txTail_;
+        auto& desc = txRing_[tail];
+        desc.buffer_addr = 0x50000000ULL + (tail * 2048);
+        desc.length = static_cast<uint16_t>(frame.size());
+        desc.cmd = I210_TXD_CMD_EOP | I210_TXD_CMD_IFCS | I210_TXD_CMD_RS;
+        desc.status = 0; // In-flight
+
+        // Copy buffer payload
+        txBuffers_[tail].assign(frame.begin(), frame.end());
+
+        // Offload checksum calculation if IPv4
+        if (frame.size() >= ETH_HLEN + 20) {
+            uint16_t ethType = (static_cast<uint16_t>(frame[12]) << 8) | frame[13];
+            if (ethType == ETHERTYPE_IPV4 && offloads_.checksum.txIpv4Header) {
+                desc.cmd |= I210_TXD_CMD_IC;
+                desc.css = static_cast<uint8_t>(ETH_HLEN);
+                desc.cso = static_cast<uint8_t>(ETH_HLEN + 10);
+                stats_.csumOffloadTx++;
+            }
+        }
+
+        // Update TX Tail doorbell
+        txTail_ = (tail + 1) % RING_SIZE;
+        writeMmio32(REG_TDT, txTail_);
+        writeMmio32(LEGACY_REG_TDT, txTail_);
+
+        // Simulate Hardware DMA completion
+        desc.status |= I210_TXD_STAT_DD;
+        txHead_ = txTail_;
+        writeMmio32(REG_TDH, txHead_);
+        writeMmio32(LEGACY_REG_TDH, txHead_);
+        txCompleted_++;
+
         stats_.txPackets++;
         stats_.txBytes += frame.size();
+
         return NtStatus::Success;
     }
 
+    /**
+     * @brief Send batch of NET_BUFFER_LIST structures.
+     */
+    [[nodiscard]] NtStatus sendNetBufferLists(std::shared_ptr<NetBufferList> nblList) {
+        if (!nblList) return NtStatus::InvalidParameter;
+
+        auto currNbl = nblList;
+        while (currNbl) {
+            auto currNb = currNbl->firstNetBuffer;
+            while (currNb) {
+                if (!currNb->data.empty()) {
+                    auto status = sendPacket(currNb->data);
+                    if (status != NtStatus::Success) {
+                        currNbl->status = NDIS_STATUS_FAILURE;
+                        return status;
+                    }
+                }
+                currNb = currNb->next;
+            }
+            currNbl->status = NDIS_STATUS_SUCCESS;
+            currNbl = currNbl->next;
+        }
+
+        return NtStatus::Success;
+    }
+
+    /**
+     * @brief Receive packet through hardware DMA RX descriptor ring with RSS.
+     */
     void receivePacket(std::span<const uint8_t> frame) {
-        if (frame.size() < ETH_HLEN) return;
+        if (frame.size() < ETH_HLEN) {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            stats_.rxErrors++;
+            return;
+        }
+
         ReceiveCallback cb;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+            // Place on RX DMA Ring
+            uint32_t head = rxHead_;
+            auto& desc = rxRing_[head];
+            desc.length = static_cast<uint16_t>(frame.size());
+            desc.status = I210_RXD_STAT_DD | I210_RXD_STAT_EOP;
+
+            // RSS Hash & Checksum Offload
+            if (frame.size() >= ETH_HLEN + 20) {
+                uint16_t ethType = (static_cast<uint16_t>(frame[12]) << 8) | frame[13];
+                if (ethType == ETHERTYPE_IPV4) {
+                    desc.status |= I210_RXD_STAT_IPCS;
+                    desc.status |= I210_RXD_STAT_TCPCS;
+                    stats_.csumOffloadRx++;
+
+                    // Extract 4-tuple
+                    std::vector<uint8_t> tupleKey;
+                    tupleKey.reserve(12);
+                    tupleKey.insert(tupleKey.end(), frame.begin() + ETH_HLEN + 12, frame.begin() + ETH_HLEN + 20);
+                    if (frame.size() >= ETH_HLEN + 24) {
+                        tupleKey.insert(tupleKey.end(), frame.begin() + ETH_HLEN + 20, frame.begin() + ETH_HLEN + 24);
+                    }
+
+                    uint32_t hash = computeToeplitzHash(tupleKey, rss_.secretKey);
+                    uint8_t targetCpu = rss_.getTargetCpu(hash);
+                    rss_.perCorePacketCount[targetCpu % 16]++;
+                }
+            }
+
+            // Copy to RX buffer
+            rxBuffers_[head].assign(frame.begin(), frame.end());
+
+            // Advance RX ring
+            rxHead_ = (head + 1) % RING_SIZE;
+            rxTail_ = rxHead_;
+            writeMmio32(REG_RDH, rxHead_);
+            writeMmio32(REG_RDT, rxTail_);
+            writeMmio32(LEGACY_REG_RDH, rxHead_);
+            writeMmio32(LEGACY_REG_RDT, rxTail_);
+            rxCompleted_++;
+
             stats_.rxPackets++;
             stats_.rxBytes += frame.size();
             cb = rxCallback_;
         }
-        if (cb) cb(frame);
+
+        if (cb) {
+            cb(frame);
+        }
+    }
+
+    /**
+     * @brief Indicate received NET_BUFFER_LIST to NDIS protocol stack.
+     */
+    void indicateReceiveNetBufferList(std::shared_ptr<NetBufferList> nbl) {
+        if (!nbl) return;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        nbl->status = NDIS_STATUS_SUCCESS;
+        stats_.rxPackets++;
+    }
+
+    /**
+     * @brief Query NDIS OID Information.
+     */
+    NtStatus queryInformation(uint32_t oid, void* buffer, size_t bufferLength, size_t* bytesWritten, size_t* bytesNeeded) {
+        if (!buffer && bufferLength > 0) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        auto copyData = [&](const void* src, size_t size) -> NtStatus {
+            if (bytesNeeded) *bytesNeeded = size;
+            if (bufferLength < size) return NtStatus::BufferTooSmall;
+            if (buffer && size > 0) std::memcpy(buffer, src, size);
+            if (bytesWritten) *bytesWritten = size;
+            return NtStatus::Success;
+        };
+
+        switch (oid) {
+            case OID_GEN_SUPPORTED_LIST: {
+                static const uint32_t supportedOids[] = {
+                    OID_GEN_SUPPORTED_LIST, OID_GEN_HARDWARE_STATUS, OID_GEN_MEDIA_SUPPORTED,
+                    OID_GEN_MEDIA_IN_USE, OID_GEN_MAXIMUM_LOOKAHEAD, OID_GEN_MAXIMUM_FRAME_SIZE,
+                    OID_GEN_LINK_SPEED, OID_GEN_TRANSMIT_BUFFER_SPACE, OID_GEN_RECEIVE_BUFFER_SPACE,
+                    OID_GEN_TRANSMIT_BLOCK_SIZE, OID_GEN_RECEIVE_BLOCK_SIZE, OID_GEN_VENDOR_ID,
+                    OID_GEN_VENDOR_DESCRIPTION, OID_GEN_CURRENT_PACKET_FILTER, OID_GEN_CURRENT_LOOKAHEAD,
+                    OID_GEN_DRIVER_VERSION, OID_GEN_MAXIMUM_TOTAL_SIZE, OID_GEN_MAC_OPTIONS,
+                    OID_GEN_MEDIA_CONNECT_STATUS, OID_GEN_MAXIMUM_SEND_PACKETS, OID_GEN_XMIT_OK,
+                    OID_GEN_RCV_OK, OID_GEN_XMIT_ERROR, OID_GEN_RCV_ERROR,
+                    OID_802_3_PERMANENT_ADDRESS, OID_802_3_CURRENT_ADDRESS,
+                    OID_GEN_RECEIVE_SCALE_CAPABILITIES, OID_GEN_RECEIVE_SCALE_PARAMETERS
+                };
+                return copyData(supportedOids, sizeof(supportedOids));
+            }
+            case OID_GEN_HARDWARE_STATUS: {
+                uint32_t hwStatus = 0; // NdisHardwareStatusReady
+                return copyData(&hwStatus, sizeof(hwStatus));
+            }
+            case OID_GEN_MEDIA_SUPPORTED:
+            case OID_GEN_MEDIA_IN_USE: {
+                uint32_t medium = static_cast<uint32_t>(NdisMedium::Medium802_3);
+                return copyData(&medium, sizeof(medium));
+            }
+            case OID_GEN_MAXIMUM_LOOKAHEAD:
+            case OID_GEN_CURRENT_LOOKAHEAD:
+            case OID_GEN_MAXIMUM_FRAME_SIZE: {
+                uint32_t val = mtu_;
+                return copyData(&val, sizeof(val));
+            }
+            case OID_GEN_MAXIMUM_TOTAL_SIZE: {
+                uint32_t val = mtu_ + static_cast<uint32_t>(ETH_HLEN);
+                return copyData(&val, sizeof(val));
+            }
+            case OID_GEN_LINK_SPEED: {
+                uint32_t speed100bps = static_cast<uint32_t>(speedBps_ / 100);
+                return copyData(&speed100bps, sizeof(speed100bps));
+            }
+            case OID_GEN_TRANSMIT_BUFFER_SPACE:
+            case OID_GEN_RECEIVE_BUFFER_SPACE: {
+                uint32_t space = static_cast<uint32_t>(RING_SIZE * 2048);
+                return copyData(&space, sizeof(space));
+            }
+            case OID_GEN_TRANSMIT_BLOCK_SIZE:
+            case OID_GEN_RECEIVE_BLOCK_SIZE: {
+                uint32_t blockSize = 1;
+                return copyData(&blockSize, sizeof(blockSize));
+            }
+            case OID_GEN_VENDOR_ID: {
+                uint32_t vendorId = 0x008086; // Intel PCI Vendor ID
+                return copyData(&vendorId, sizeof(vendorId));
+            }
+            case OID_GEN_VENDOR_DESCRIPTION: {
+                const char* desc = "Intel(R) I210 Gigabit Network Connection";
+                return copyData(desc, std::strlen(desc) + 1);
+            }
+            case OID_GEN_CURRENT_PACKET_FILTER: {
+                return copyData(&packetFilter_, sizeof(packetFilter_));
+            }
+            case OID_GEN_DRIVER_VERSION: {
+                uint16_t drvVer = static_cast<uint16_t>(NdisVersion::NDIS_6_88);
+                return copyData(&drvVer, sizeof(drvVer));
+            }
+            case OID_GEN_MAC_OPTIONS: {
+                uint32_t macOptions = 0x00000001 | 0x00000004 | 0x00000008; // 802.1p, 802.1Q, full duplex
+                return copyData(&macOptions, sizeof(macOptions));
+            }
+            case OID_GEN_MEDIA_CONNECT_STATUS: {
+                uint32_t status = (linkState_ == MediaConnectState::Connected) ? 0 : 1;
+                return copyData(&status, sizeof(status));
+            }
+            case OID_GEN_MAXIMUM_SEND_PACKETS: {
+                uint32_t maxSend = static_cast<uint32_t>(RING_SIZE);
+                return copyData(&maxSend, sizeof(maxSend));
+            }
+            case OID_GEN_XMIT_OK: {
+                uint64_t xmit = stats_.txPackets;
+                return copyData(&xmit, sizeof(xmit));
+            }
+            case OID_GEN_RCV_OK: {
+                uint64_t rcv = stats_.rxPackets;
+                return copyData(&rcv, sizeof(rcv));
+            }
+            case OID_GEN_XMIT_ERROR: {
+                uint64_t xmitErr = stats_.txErrors;
+                return copyData(&xmitErr, sizeof(xmitErr));
+            }
+            case OID_GEN_RCV_ERROR: {
+                uint64_t rcvErr = stats_.rxErrors;
+                return copyData(&rcvErr, sizeof(rcvErr));
+            }
+            case OID_802_3_PERMANENT_ADDRESS:
+            case OID_802_3_CURRENT_ADDRESS: {
+                return copyData(mac_.bytes, ETH_ALEN);
+            }
+            case OID_GEN_RECEIVE_SCALE_PARAMETERS: {
+                return copyData(&rss_, sizeof(rss_));
+            }
+            default:
+                return NtStatus::NotSupported;
+        }
+    }
+
+    /**
+     * @brief Set NDIS OID Information.
+     */
+    NtStatus setInformation(uint32_t oid, const void* buffer, size_t bufferLength, size_t* bytesRead, size_t* bytesNeeded) {
+        if (!buffer && bufferLength > 0) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (bytesNeeded) *bytesNeeded = 0;
+        if (bytesRead) *bytesRead = 0;
+
+        switch (oid) {
+            case OID_GEN_CURRENT_PACKET_FILTER: {
+                if (bufferLength < sizeof(uint32_t)) {
+                    if (bytesNeeded) *bytesNeeded = sizeof(uint32_t);
+                    return NtStatus::BufferTooSmall;
+                }
+                std::memcpy(&packetFilter_, buffer, sizeof(uint32_t));
+                if (bytesRead) *bytesRead = sizeof(uint32_t);
+                return NtStatus::Success;
+            }
+            case OID_802_3_CURRENT_ADDRESS: {
+                if (bufferLength < ETH_ALEN) {
+                    if (bytesNeeded) *bytesNeeded = ETH_ALEN;
+                    return NtStatus::BufferTooSmall;
+                }
+                std::memcpy(mac_.bytes, buffer, ETH_ALEN);
+                uint32_t ral = static_cast<uint32_t>(mac_.bytes[0]) |
+                              (static_cast<uint32_t>(mac_.bytes[1]) << 8) |
+                              (static_cast<uint32_t>(mac_.bytes[2]) << 16) |
+                              (static_cast<uint32_t>(mac_.bytes[3]) << 24);
+                uint32_t rah = static_cast<uint32_t>(mac_.bytes[4]) |
+                              (static_cast<uint32_t>(mac_.bytes[5]) << 8) |
+                              (1u << 31);
+                writeMmio32(REG_RAL0, ral);
+                writeMmio32(REG_RAH0, rah);
+                if (bytesRead) *bytesRead = ETH_ALEN;
+                return NtStatus::Success;
+            }
+            case OID_GEN_RECEIVE_SCALE_PARAMETERS: {
+                if (bufferLength < sizeof(RssParameters)) {
+                    if (bytesNeeded) *bytesNeeded = sizeof(RssParameters);
+                    return NtStatus::BufferTooSmall;
+                }
+                std::memcpy(&rss_, buffer, sizeof(RssParameters));
+                if (bytesRead) *bytesRead = sizeof(RssParameters);
+                return NtStatus::Success;
+            }
+            default:
+                return NtStatus::NotSupported;
+        }
     }
 
 private:
@@ -1321,13 +1910,30 @@ private:
     uint32_t mtu_{DEFAULT_MTU};
     uint64_t speedBps_{1'000'000'000ULL};
     MediaConnectState linkState_{MediaConnectState::Connected};
+    uint32_t packetFilter_{0};
     uint32_t linkStateChangeCount_{0};
     uint32_t resetCount_{0};
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     AdapterStatistics stats_{};
     ReceiveCallback rxCallback_;
     std::vector<uint32_t> mmioRegisters_;
+
+    std::array<I210RxDesc, RING_SIZE> rxRing_{};
+    std::array<I210TxDesc, RING_SIZE> txRing_{};
+    std::vector<std::vector<uint8_t>> rxBuffers_;
+    std::vector<std::vector<uint8_t>> txBuffers_;
+    uint32_t rxHead_{0};
+    uint32_t rxTail_{0};
+    uint32_t txHead_{0};
+    uint32_t txTail_{0};
+    uint64_t txCompleted_{0};
+    uint64_t rxCompleted_{0};
+
+    OffloadCapabilities offloads_{};
+    RssParameters rss_{};
 };
+
+using IntelI210NdisMiniport = IntelE1000eAdapter;
 
 // ============================================================================
 // 10B. VirtIO-Net Paravirtualized Network Adapter (virtio_net.sys)
@@ -2113,6 +2719,46 @@ inline int32_t WINAPI E1000eInitializeMiniport(
     return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
 }
 
+inline int32_t WINAPI E1000eSendNetBufferLists(
+    void* /*miniportAdapterContext*/,
+    void* netBufferList,
+    uint32_t /*portNumber*/,
+    uint32_t /*sendFlags*/
+) {
+    if (!netBufferList) return static_cast<int32_t>(NDIS_STATUS_INVALID_PARAMETER);
+    auto* nbl = reinterpret_cast<NetBufferList*>(netBufferList);
+    nbl->status = NDIS_STATUS_SUCCESS;
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
+inline void WINAPI E1000eReturnNetBufferLists(
+    void* /*miniportAdapterContext*/,
+    void* netBufferLists,
+    uint32_t /*returnFlags*/
+) {
+    (void)netBufferLists;
+}
+
+inline int32_t WINAPI E1000eOidRequest(
+    void* /*miniportAdapterContext*/,
+    void* /*oidRequest*/
+) {
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
+inline int32_t WINAPI NetioRegisterClient(
+    void* /*clientCharacteristics*/,
+    void** /*clientHandle*/
+) {
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
+inline int32_t WINAPI NetioDeregisterClient(
+    void* /*clientHandle*/
+) {
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
 } // extern "C"
 
 // C++ Telemetry helpers outside extern "C"
@@ -2161,6 +2807,12 @@ inline void InitializeNdisSubsystem() {
     ldr.registerExport("netadaptercx.sys", "NetRxQueueNotifyMoreReceivedPacketsAvailable", reinterpret_cast<void*>(NetRxQueueNotifyMoreReceivedPacketsAvailable));
 
     ldr.registerExport("e1000e.sys", "E1000eInitializeMiniport", reinterpret_cast<void*>(E1000eInitializeMiniport));
+    ldr.registerExport("e1000e.sys", "E1000eSendNetBufferLists", reinterpret_cast<void*>(E1000eSendNetBufferLists));
+    ldr.registerExport("e1000e.sys", "E1000eReturnNetBufferLists", reinterpret_cast<void*>(E1000eReturnNetBufferLists));
+    ldr.registerExport("e1000e.sys", "E1000eOidRequest", reinterpret_cast<void*>(E1000eOidRequest));
+
+    ldr.registerExport("netio.sys", "NetioRegisterClient", reinterpret_cast<void*>(NetioRegisterClient));
+    ldr.registerExport("netio.sys", "NetioDeregisterClient", reinterpret_cast<void*>(NetioDeregisterClient));
 
     // 3. Register Core Network Drivers in SCM
     auto ndisSvc = std::make_shared<scm::ServiceRecord>();
@@ -2197,11 +2849,21 @@ inline void InitializeNdisSubsystem() {
     e1000Svc->serviceName = L"e1000e";
     e1000Svc->displayName = L"Intel PRO/1000 Gigabit PCIe Network Driver";
     e1000Svc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    e1000Svc->startType = scm::SERVICE_DEMAND_START;
+    e1000Svc->startType = scm::SERVICE_BOOT_START;
     e1000Svc->errorControl = scm::SERVICE_ERROR_NORMAL;
     e1000Svc->binaryPath = L"C:\\Windows\\System32\\drivers\\e1000e.sys";
     e1000Svc->status.dwCurrentState = scm::SERVICE_RUNNING;
     scm::ServiceControlManager::get().registerServiceRecord(e1000Svc);
+
+    auto netioSvc = std::make_shared<scm::ServiceRecord>();
+    netioSvc->serviceName = L"netio";
+    netioSvc->displayName = L"Network I/O Subsystem Driver";
+    netioSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
+    netioSvc->startType = scm::SERVICE_BOOT_START;
+    netioSvc->errorControl = scm::SERVICE_ERROR_CRITICAL;
+    netioSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\netio.sys";
+    netioSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
+    scm::ServiceControlManager::get().registerServiceRecord(netioSvc);
 
     // 4. Register Version Database Information
     auto& verDb = version::VersionDatabase::Instance();
@@ -2209,6 +2871,7 @@ inline void InitializeNdisSubsystem() {
     verDb.RegisterModule("razzlenet.sys", "10.0.22621.1", "MicaNT RazzleNet 10GbE/100GbE PCIe Miniport Driver");
     verDb.RegisterModule("netadaptercx.sys", "10.0.22621.1", "MicaNT NetAdapter WDF Class Extension");
     verDb.RegisterModule("e1000e.sys", "10.0.22621.1", "MicaNT Intel Gigabit PCIe Miniport Driver");
+    verDb.RegisterModule("netio.sys", "10.0.22621.1", "MicaNT Network I/O Subsystem Driver");
 }
 
 } // namespace micant::ndis
@@ -2219,6 +2882,7 @@ using ndis::INdisAdapter;
 using ndis::VirtualNetworkAdapter;
 using ndis::RazzleNetAdapter;
 using ndis::IntelE1000eAdapter;
+using ndis::IntelI210NdisMiniport;
 using ndis::VirtIoNetAdapter;
 using ndis::NetAdapterContext;
 using ndis::NetTxQueue;

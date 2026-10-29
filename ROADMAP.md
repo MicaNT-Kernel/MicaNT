@@ -4341,6 +4341,16 @@
   - Implements Windows NT Class Driver (`nvme.sys` / `NvmeBlockDriver`): creates `\Device\NvmeController0` and `\Device\Harddisk0\DR0` linked to `\\.\PhysicalDrive0`, handles `IOCTL_STORAGE_QUERY_PROPERTY` (`BusTypeNvme = 17`), `IOCTL_STORAGE_GET_DEVICE_NUMBER`, `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`, and executes parallel batch I/O across SMP CPU queues.
   - Tested and verified: 366 unit test suites passing with 100% green.
 
+- [x] **Horizon 151 (`Suite 367`): Modern Network Driver Tier: Intel I210/I219 Gigabit Ethernet Hardware Ring Buffers & Zero-Copy NDIS 6.x Miniport (`e1000e.sys` / `netio.sys`) (`include/micant/km/drivers/net/ndis.hpp`)**:
+  - Implements clean-room Intel I210-AT (`0x8086:0x1533`), I211-AT (`0x8086:0x1539`), I219-LM (`0x8086:0x15B7`), and 82574L PCIe bus-master DMA miniport driver (`IntelE1000eAdapter` / `IntelI210NdisMiniport`), mapped to physical PCIe `02:00.0` on Supermicro X11SSH-F server silicon.
+  - Hardware MMIO Register Engine: full support for `REG_CTRL`, `REG_STATUS` (`0x8000000A` Link Up, 1000Mbps Full Duplex), `REG_RCTL`, `REG_TCTL`, `REG_RAL0`/`REG_RAH0` hardware MAC programming with Address Valid (`AV`) latch, and non-blocking device resets (`CTRL_RST`).
+  - Circular DMA Ring Descriptors: 64-descriptor circular hardware rings with 16-byte `I210RxDesc` and `I210TxDesc` descriptors, supporting base offsets (`REG_RDBAL`/`REG_RDLEN`/`REG_RDH`/`REG_RDT` at `0xC000` / `REG_TDBAL`/`REG_TDLEN`/`REG_TDH`/`REG_TDT` at `0xE000`) and legacy 82574L mirror offsets (`0x2800`/`0x3800`).
+  - Zero-Copy NDIS 6.x `NET_BUFFER_LIST` (NBL) Pipeline: high-throughput `sendNetBufferLists` and `indicateReceiveNetBufferList` for batch and chained network packet transmission and reception without buffer copies.
+  - Hardware Checksum Offload Engine: wire-speed IPv4 header checksum computation, TCP/UDP TX checksum injection (`I210_TXD_CMD_IC`, `cso`, `css`), and RX checksum verification (`I210_RXD_STAT_IPCS` / `I210_RXD_STAT_TCPCS`), tracked in adapter telemetry.
+  - Large Send Offload v2 (LSOv2 / TSO) & Receive Side Scaling (RSS): hardware TCP segmentation of super-packets up to 64KB (`I210_TXD_CMD_DEXT`), 40-byte Microsoft Toeplitz Hash computation across IPv4 4-tuples, and 128-entry indirection table routing across SMP CPU cores.
+  - Windows NT Driver Registration: registers `e1000e.sys` (Intel PRO/1000 Gigabit PCIe Network Driver) and `netio.sys` (Network I/O Subsystem Driver) in `scm::ServiceControlManager` as `SERVICE_BOOT_START` kernel drivers, registers `version::VersionDatabase` metadata, and implements standard NDIS OID query/set dispatch (`OID_GEN_LINK_SPEED`, `OID_802_3_CURRENT_ADDRESS`, `OID_GEN_CURRENT_PACKET_FILTER`, etc.).
+  - Tested and verified: 367 unit test suites passing with 100% green.
+
 
 
 

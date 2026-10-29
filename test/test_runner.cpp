@@ -391,6 +391,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite367") {
+        RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite366") {
         RUN_TEST(Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO);
         return g_FailedTests;
@@ -468,6 +472,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Paging);
         RUN_TEST(Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging);
         RUN_TEST(Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO);
+        RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1762,6 +1767,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Paging);
     RUN_TEST(Test_Horizon149_CopyOnWrite_SectionObjects_And_WorkingSetAging);
     RUN_TEST(Test_Horizon150_NvmeNativeStorageDriver_And_HighPerformanceBlockIO);
+    RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

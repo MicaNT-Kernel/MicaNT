@@ -17,6 +17,9 @@
 #include <cstddef>
 #include <span>
 #include <cstring>
+#if defined(_MSC_VER)
+#include <immintrin.h>
+#endif
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 
@@ -24,15 +27,24 @@ namespace micant::km::i210_baremetal {
 
 // --- Port I/O Primitives ---
 static inline void outl(uint16_t port, uint32_t val) noexcept {
-#if defined(__x86_64__)
+#if defined(_MSC_VER)
+    (void)port; (void)val;
+#elif defined(__x86_64__) || defined(__i386__)
     __asm__ __volatile__("outl %0, %1" : : "a"(val), "Nd"(port));
+#else
+    (void)port; (void)val;
 #endif
 }
 
 static inline uint32_t inl(uint16_t port) noexcept {
     uint32_t ret = 0;
-#if defined(__x86_64__)
+#if defined(_MSC_VER)
+    (void)port;
+    return 0xFFFFFFFF;
+#elif defined(__x86_64__) || defined(__i386__)
     __asm__ __volatile__("inl %1, %0" : "=a"(ret) : "Nd"(port));
+#else
+    (void)port;
 #endif
     return ret;
 }
@@ -748,7 +760,9 @@ public:
         if (!m_initialized) return;
 
         while ((s_rxRing[m_rxTail].status & 1) != 0) {
-#if defined(__x86_64__)
+#if defined(_MSC_VER)
+            _mm_lfence();
+#elif defined(__x86_64__)
             __asm__ __volatile__("lfence" ::: "memory");
 #endif
             volatile I210RxDesc* desc = &s_rxRing[m_rxTail];
@@ -761,7 +775,9 @@ public:
 
             // Re-arm descriptor
             desc->status = 0;
-#if defined(__x86_64__)
+#if defined(_MSC_VER)
+            _mm_mfence();
+#elif defined(__x86_64__)
             __asm__ __volatile__("mfence" ::: "memory");
 #endif
             uint32_t prevTail = m_rxTail;
