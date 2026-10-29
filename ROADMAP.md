@@ -4315,4 +4315,14 @@
   - Implements `KeUpdateSystemTime()`: updates monotonic tick count and 100ns timestamp units, decrements thread quantum budgets (30ms quantum), and triggers preemption upon quantum expiration.
   - Tested and verified: 341 suites passing with zero failures.
 
+- [x] **Horizon 148 (`Suite 364`): Preemptive Multi-Queue Hardware Scheduler, Per-Process CR3 Isolation & Demand Page Fault Engine (`include/micant/km/executive/usermode.hpp`)**:
+  - Implements per-process hardware CR3 `directoryTableBase` physical address space isolation, with lower 128 TB user slots (PML4 slot 0) private to each process (`U/S = 1`, `R/W = 1`, `P = 1`), and high-half kernel slots (496, 510, 511) mirrored with Supervisor privilege (`U/S = 0`).
+  - Implements Virtual Address Descriptors (`VadEntry64`) tracking memory ranges, protection flags (`MM_PAGE_EXECUTE_READ`, `MM_PAGE_READWRITE`, `MM_PAGE_GUARD`), commitment state, and guard page identification.
+  - Implements canonical Windows NT 32-queue priority thread scheduler (Priority levels 0..31: Real-time 24..31, Normal 16, Low 8, Idle 0) with `selectNextThread()`.
+  - Implements hardware timer quantum decay and preemptive context switching via `tickQuantum()` with automatic quantum replenishment and priority rotation.
+  - Implements hardware CR3 page directory swapping during cross-process thread context transitions with `m_totalAddressSpaceSwitches` telemetry.
+  - Implements Hardware Exception #PF (Vector 14) Page Fault Engine (`resolvePageFault()`): handles demand paging commit on uncommitted heap memory, dynamic stack expansion downwards by 4KB upon guard page hit, and strict `STATUS_ACCESS_VIOLATION` (`0xC0000005`) generation on unmapped address or write access to read-only memory.
+  - Tested and verified: 364 suites passing with 100% green.
+
+
 

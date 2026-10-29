@@ -166,6 +166,28 @@ struct Teb64 {
 // 2. User-Mode Process Context & Lifecycle State
 // ============================================================================
 
+// Canonical Virtual Memory Protection Constants (Win32 / NT)
+inline constexpr uint32_t MM_PAGE_NOACCESS          = 0x01;
+inline constexpr uint32_t MM_PAGE_READONLY          = 0x02;
+inline constexpr uint32_t MM_PAGE_READWRITE         = 0x04;
+inline constexpr uint32_t MM_PAGE_WRITECOPY         = 0x08;
+inline constexpr uint32_t MM_PAGE_EXECUTE           = 0x10;
+inline constexpr uint32_t MM_PAGE_EXECUTE_READ      = 0x20;
+inline constexpr uint32_t MM_PAGE_EXECUTE_READWRITE = 0x40;
+inline constexpr uint32_t MM_PAGE_EXECUTE_WRITECOPY = 0x80;
+inline constexpr uint32_t MM_PAGE_GUARD             = 0x100;
+inline constexpr uint32_t MM_PAGE_NOCACHE           = 0x200;
+inline constexpr uint32_t MM_PAGE_WRITECOMBINE      = 0x400;
+
+struct VadEntry64 {
+    uint64_t startVa{0};
+    uint64_t endVa{0};
+    uint32_t protection{0};
+    bool     committed{false};
+    bool     isGuard{false};
+    char     name[32]{};
+};
+
 enum class UserProcessState : uint32_t {
     Ready,
     Running,
@@ -195,6 +217,53 @@ struct UserProcessContext64 {
     uint64_t         verifiedUserCs{0};
     bool             pebVerifiedByR3{false};
     bool             tebVerifiedByR3{false};
+
+    // Horizon 148: Per-Process CR3 Hardware Isolation & Virtual Address Descriptors (VAD)
+    uint64_t         directoryTableBase{0}; // Physical CR3 PML4 base
+    std::array<uint64_t, 512> pml4{};      // PML4 Page Directory entries
+    static constexpr size_t MAX_VADS = 32;
+    std::array<VadEntry64, MAX_VADS> vads{};
+    size_t           vadCount{0};
+
+    // Telemetry & Diagnostics
+    uint64_t         pageFaultCount{0};
+    uint64_t         demandPagesCommitted{0};
+    uint64_t         stackGuardFaultsResolved{0};
+    uint64_t         accessViolationsTrapped{0};
+
+    bool addVad(uint64_t startVa, uint64_t endVa, uint32_t protection, bool committed, bool isGuard, const char* vadName) noexcept {
+        if (vadCount >= MAX_VADS || startVa >= endVa) return false;
+        VadEntry64& v = vads[vadCount++];
+        v.startVa = startVa;
+        v.endVa = endVa;
+        v.protection = protection;
+        v.committed = committed;
+        v.isGuard = isGuard;
+        size_t i = 0;
+        for (; i + 1 < sizeof(v.name) && vadName && vadName[i] != '\0'; ++i) {
+            v.name[i] = vadName[i];
+        }
+        v.name[i] = '\0';
+        return true;
+    }
+
+    [[nodiscard]] VadEntry64* findVad(uint64_t va) noexcept {
+        for (size_t i = 0; i < vadCount; ++i) {
+            if (va >= vads[i].startVa && va < vads[i].endVa) {
+                return &vads[i];
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const VadEntry64* findVad(uint64_t va) const noexcept {
+        for (size_t i = 0; i < vadCount; ++i) {
+            if (va >= vads[i].startVa && va < vads[i].endVa) {
+                return &vads[i];
+            }
+        }
+        return nullptr;
+    }
 };
 
 // ----------------------------------------------------------------------------
@@ -306,6 +375,10 @@ private:
     bootvid::BootVideoDriver* m_videoDriver{nullptr};
     uint64_t  m_totalFramesPresented{0};
     uint64_t  m_totalPixelsBlitted{0};
+    uint64_t  m_totalPageFaults{0};
+    uint64_t  m_totalDemandPagesCommitted{0};
+    uint64_t  m_totalStackGuardResolutions{0};
+    uint64_t  m_totalAccessViolations{0};
 
 public:
     static UserProcessManager64& get() noexcept {
@@ -326,6 +399,10 @@ public:
         m_totalProcessesTerminated = 0;
         m_totalFramesPresented = 0;
         m_totalPixelsBlitted = 0;
+        m_totalPageFaults = 0;
+        m_totalDemandPagesCommitted = 0;
+        m_totalStackGuardResolutions = 0;
+        m_totalAccessViolations = 0;
 
         if (populateSystem) {
             // Core NT Executive Processes
@@ -385,6 +462,40 @@ public:
         proc.teb.uniqueThreadId = pid + 1;
         proc.teb.processEnvironmentBlock = pebVa; // Canonical GS:[0x60] PEB pointer
         proc.teb.lastErrorValue = 0;
+
+        // 3. Horizon 148: Hardware CR3 Page Directory & Address Space Initialization
+        proc.directoryTableBase = 0x100000ULL + static_cast<uint64_t>(pid) * 0x1000ULL;
+        proc.pml4.fill(0);
+
+        // Mirror Canonical NT High-Half Kernel PML4 entries with Supervisor bit (U/S = 0)
+        // High-half kernel entry (Slot 496: 0xFFFFF80000000000)
+        proc.pml4[496] = 0x0000000000102003ULL; // P=1, R/W=1, U/S=0 (Supervisor)
+        // High-half HAL entry (Slot 510: 0xFFFFFF0000000000)
+        proc.pml4[510] = 0x0000000000104003ULL; // P=1, R/W=1, U/S=0 (Supervisor)
+        // High-half legacy entry (Slot 511: 0xFFFFFF8000000000)
+        proc.pml4[511] = 0x0000000000106003ULL; // P=1, R/W=1, U/S=0 (Supervisor)
+
+        // Lower-half user space PML4 entry (Slot 0: 0x0000000000000000 - 0x0000007FFFFFFFFF)
+        // User-mode accessible (U/S = 1, R/W = 1, P = 1)
+        proc.pml4[0] = (0x0000000000200007ULL + static_cast<uint64_t>(pid) * 0x1000ULL);
+
+        // Register Default Process Virtual Address Descriptors (VAD)
+        if (codeVa != 0 && codeSize > 0) {
+            proc.addVad(codeVa, codeVa + codeSize, MM_PAGE_EXECUTE_READ, true, false, ".text");
+        }
+        if (stackTopVa != 0 && stackSize > 0x1000) {
+            uint64_t stackBottom = stackTopVa - stackSize;
+            proc.addVad(stackBottom, stackBottom + 0x1000, MM_PAGE_GUARD | MM_PAGE_READWRITE, false, true, "StackGuard");
+            proc.addVad(stackBottom + 0x1000, stackTopVa, MM_PAGE_READWRITE, true, false, "UserStack");
+        } else if (stackTopVa != 0 && stackSize > 0) {
+            proc.addVad(stackTopVa - stackSize, stackTopVa, MM_PAGE_READWRITE, true, false, "UserStack");
+        }
+        if (pebVa != 0) {
+            proc.addVad(pebVa, pebVa + 0x1000, MM_PAGE_READWRITE, true, false, "PEB");
+        }
+        if (tebVa != 0) {
+            proc.addVad(tebVa, tebVa + 0x1000, MM_PAGE_READWRITE, true, false, "TEB");
+        }
 
         m_totalProcessesSpawned++;
         return &proc;
@@ -564,6 +675,67 @@ public:
     [[nodiscard]] uint64_t getTotalSyscallsDispatched() const noexcept { return m_totalSyscallsDispatched; }
     [[nodiscard]] uint64_t getTotalProcessesSpawned() const noexcept { return m_totalProcessesSpawned; }
     [[nodiscard]] uint64_t getTotalProcessesTerminated() const noexcept { return m_totalProcessesTerminated; }
+
+    /**
+     * @brief Horizon 148: Hardware Interrupt / Exception #PF (Vector 14) Page Fault Engine.
+     * Evaluates VAD tree, resolves demand paging, handles guard page stack expansion,
+     * or raises STATUS_ACCESS_VIOLATION on illegal access.
+     */
+    micant::NtStatus resolvePageFault(uint32_t pid, uint64_t faultVa, uint32_t errorCode) noexcept {
+        m_totalPageFaults++;
+        UserProcessContext64* proc = findProcess(pid);
+        if (!proc) {
+            m_totalAccessViolations++;
+            return micant::NtStatus::AccessViolation;
+        }
+
+        proc->pageFaultCount++;
+        VadEntry64* vad = proc->findVad(faultVa);
+        if (!vad) {
+            // Unmapped memory address space
+            proc->accessViolationsTrapped++;
+            m_totalAccessViolations++;
+            return micant::NtStatus::AccessViolation;
+        }
+
+        bool isWrite = (errorCode & 0x02) != 0;
+
+        // Check write permission violation on read-only / execute-only memory
+        if (isWrite && !(vad->protection & (MM_PAGE_READWRITE | MM_PAGE_EXECUTE_READWRITE))) {
+            proc->accessViolationsTrapped++;
+            m_totalAccessViolations++;
+            return micant::NtStatus::AccessViolation;
+        }
+
+        // Check if hitting Guard Page (Stack Expansion)
+        if (vad->isGuard) {
+            vad->isGuard = false;
+            vad->committed = true;
+            vad->protection = MM_PAGE_READWRITE;
+            // Expand stack downwards if address space allows
+            if (vad->startVa >= 0x1000) {
+                proc->addVad(vad->startVa - 0x1000, vad->startVa, MM_PAGE_GUARD | MM_PAGE_READWRITE, false, true, "StackGuard");
+            }
+            proc->stackGuardFaultsResolved++;
+            m_totalStackGuardResolutions++;
+            return micant::NtStatus::Success;
+        }
+
+        // Demand Paging (Uncommitted heap or data page fault)
+        if (!vad->committed) {
+            vad->committed = true;
+            proc->demandPagesCommitted++;
+            m_totalDemandPagesCommitted++;
+            return micant::NtStatus::Success;
+        }
+
+        return micant::NtStatus::Success;
+    }
+
+    [[nodiscard]] uint64_t getTotalPageFaults() const noexcept { return m_totalPageFaults; }
+    [[nodiscard]] uint64_t getTotalDemandPagesCommitted() const noexcept { return m_totalDemandPagesCommitted; }
+    [[nodiscard]] uint64_t getTotalStackGuardResolutions() const noexcept { return m_totalStackGuardResolutions; }
+    [[nodiscard]] uint64_t getTotalAccessViolations() const noexcept { return m_totalAccessViolations; }
 };
 
 // ============================================================================
@@ -660,6 +832,9 @@ private:
     uint32_t m_activeTid{0};
     uint64_t m_totalContextSwitches{0};
     uint64_t m_totalYields{0};
+    uint64_t m_totalQuantumPreemptions{0};
+    uint64_t m_totalAddressSpaceSwitches{0};
+    uint64_t m_activeCr3{0x104000ULL}; // Initial System CR3
 
     UserThreadScheduler64() = default;
 
@@ -674,6 +849,9 @@ public:
         m_activeTid = populateSystem ? 4 : 0;
         m_totalContextSwitches = 0;
         m_totalYields = 0;
+        m_totalQuantumPreemptions = 0;
+        m_totalAddressSpaceSwitches = 0;
+        m_activeCr3 = populateSystem ? 0x104000ULL : 0;
         for (size_t i = 0; i < MAX_USER_THREADS; ++i) {
             m_threads[i] = UserThreadContext64{};
         }
@@ -729,6 +907,10 @@ public:
         if (m_activeTid == 0) {
             m_activeTid = tid;
             t.state = UserThreadState::Running;
+            auto* proc = UserProcessManager64::get().findProcess(parentPid);
+            if (proc && proc->directoryTableBase != 0) {
+                m_activeCr3 = proc->directoryTableBase;
+            }
         }
 
         return true;
@@ -750,9 +932,64 @@ public:
     [[nodiscard]] uint32_t getActiveTid() const noexcept { return m_activeTid; }
     [[nodiscard]] uint64_t getTotalContextSwitches() const noexcept { return m_totalContextSwitches; }
     [[nodiscard]] uint64_t getTotalYields() const noexcept { return m_totalYields; }
+    [[nodiscard]] uint64_t getTotalQuantumPreemptions() const noexcept { return m_totalQuantumPreemptions; }
+    [[nodiscard]] uint64_t getTotalAddressSpaceSwitches() const noexcept { return m_totalAddressSpaceSwitches; }
+    [[nodiscard]] uint64_t getActiveCr3() const noexcept { return m_activeCr3; }
 
     /**
-     * @brief Switch execution context to target thread.
+     * @brief Horizon 148: Canonical NT 32-Queue Priority Thread Selection (0-31).
+     * Searches from highest priority (31 Real-Time) down to 0 (Idle).
+     */
+    [[nodiscard]] uint32_t selectNextThread() noexcept {
+        for (int prio = 31; prio >= 0; --prio) {
+            size_t startIdx = 0;
+            for (size_t i = 0; i < m_threadCount; ++i) {
+                if (m_threads[i].tid == m_activeTid) {
+                    startIdx = (i + 1) % m_threadCount;
+                    break;
+                }
+            }
+
+            for (size_t step = 0; step < m_threadCount; ++step) {
+                size_t idx = (startIdx + step) % m_threadCount;
+                if (m_threads[idx].priority == static_cast<uint8_t>(prio) &&
+                    (m_threads[idx].state == UserThreadState::Ready ||
+                     m_threads[idx].state == UserThreadState::Yielded)) {
+                    return m_threads[idx].tid;
+                }
+            }
+        }
+        return m_activeTid;
+    }
+
+    /**
+     * @brief Horizon 148: Hardware Timer Preemption & Quantum Decay Engine.
+     * Decrements remaining quantum; upon exhaustion, invokes selectNextThread()
+     * and performs a preemptive context switch.
+     */
+    void tickQuantum(uint8_t elapsedTicks = 1) noexcept {
+        UserThreadContext64* current = findThread(m_activeTid);
+        if (!current || current->state != UserThreadState::Running) return;
+
+        if (current->quantumRemaining > elapsedTicks) {
+            current->quantumRemaining -= elapsedTicks;
+        } else {
+            // Quantum exhaustion -> Hardware Preemption
+            m_totalQuantumPreemptions++;
+            current->quantumRemaining = current->quantum;
+            current->state = UserThreadState::Ready;
+
+            uint32_t nextTid = selectNextThread();
+            if (nextTid != m_activeTid) {
+                switchContext(nextTid);
+            } else {
+                current->state = UserThreadState::Running;
+            }
+        }
+    }
+
+    /**
+     * @brief Switch execution context to target thread and swap CR3 address space if parent PID changes.
      */
     bool switchContext(uint32_t targetTid) noexcept {
         if (targetTid == m_activeTid) return true;
@@ -766,6 +1003,15 @@ public:
 
         if (current && current->state == UserThreadState::Running) {
             current->state = UserThreadState::Ready;
+        }
+
+        // Horizon 148: Hardware CR3 Page Directory Switching across different address spaces
+        if (!current || current->parentPid != target->parentPid) {
+            auto* targetProc = UserProcessManager64::get().findProcess(target->parentPid);
+            if (targetProc && targetProc->directoryTableBase != 0) {
+                m_activeCr3 = targetProc->directoryTableBase;
+                m_totalAddressSpaceSwitches++;
+            }
         }
 
         target->state = UserThreadState::Running;
@@ -789,25 +1035,12 @@ public:
             current->state = UserThreadState::Yielded;
         }
 
-        // Find next ready/yielded thread round-robin
-        size_t startIdx = 0;
-        for (size_t i = 0; i < m_threadCount; ++i) {
-            if (m_threads[i].tid == m_activeTid) {
-                startIdx = (i + 1) % m_threadCount;
-                break;
-            }
+        uint32_t nextTid = selectNextThread();
+        if (nextTid != m_activeTid) {
+            switchContext(nextTid);
+            return nextTid;
         }
 
-        for (size_t step = 0; step < m_threadCount; ++step) {
-            size_t idx = (startIdx + step) % m_threadCount;
-            if (m_threads[idx].state == UserThreadState::Ready ||
-                m_threads[idx].state == UserThreadState::Yielded) {
-                switchContext(m_threads[idx].tid);
-                return m_threads[idx].tid;
-            }
-        }
-
-        // If no other thread ready, keep current running
         if (current && current->state != UserThreadState::Terminated) {
             current->state = UserThreadState::Running;
         }
@@ -824,13 +1057,10 @@ public:
         current->state = UserThreadState::Terminated;
         current->exitStatus = exitStatus;
 
-        // Switch to next available ready thread
-        for (size_t i = 0; i < m_threadCount; ++i) {
-            if (m_threads[i].state == UserThreadState::Ready ||
-                m_threads[i].state == UserThreadState::Yielded) {
-                switchContext(m_threads[i].tid);
-                return true;
-            }
+        uint32_t nextTid = selectNextThread();
+        if (nextTid != m_activeTid && nextTid != 0) {
+            switchContext(nextTid);
+            return true;
         }
 
         m_activeTid = 0;

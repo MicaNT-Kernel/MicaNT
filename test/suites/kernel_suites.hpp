@@ -23899,3 +23899,244 @@ inline void Test_Horizon147_Sovereign_MultiFormat_Storage_Fusion_TitanBtrfs_Ext_
 
     std::cout << "[TEST] Suite 363: Horizon 147 - Sovereign Multi-Format Storage Fusion PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 364: Horizon 148 - Preemptive Multi-Queue Hardware Scheduler, Per-Process CR3 Isolation & Demand Page Fault Engine
+// ============================================================================
+void Test_Horizon148_Preemptive_Scheduler_Process_CR3_Isolation_And_Demand_Paging() {
+    std::cout << "[TEST] Running Suite 364: Horizon 148 - Preemptive Multi-Queue Hardware Scheduler, Per-Process CR3 Isolation & Demand Page Fault Engine...\n" << std::flush;
+
+    auto& pm = micant::um::UserProcessManager64::get();
+    auto& sched = micant::um::UserThreadScheduler64::get();
+
+    pm.reset(true);
+    sched.reset(true);
+
+    // ========================================================================
+    // Pillar 1: Per-Process Hardware CR3 & PML4 Page Directory Isolation
+    // ========================================================================
+    {
+        auto* proc1 = pm.createProcess("cmd.exe", 1024, 4, 0x00007FF700000000ULL, 0x20000, 0x00007FFFFFFF0000ULL, 0x10000, 0x00007FFDF0000000ULL, 0x00007FFDE0000000ULL);
+        auto* proc2 = pm.createProcess("powershell.exe", 1028, 4, 0x00007FF710000000ULL, 0x40000, 0x00007FFFFFFF0000ULL, 0x10000, 0x00007FFDF1000000ULL, 0x00007FFDE1000000ULL);
+
+        TEST_ASSERT(proc1 != nullptr, "PID 1024 (cmd.exe) creation must succeed");
+        TEST_ASSERT(proc2 != nullptr, "PID 1028 (powershell.exe) creation must succeed");
+
+        // Distinct physical CR3 DirectoryTableBase for each user process
+        TEST_ASSERT(proc1->directoryTableBase != 0, "PID 1024 must have a non-zero CR3 base");
+        TEST_ASSERT(proc2->directoryTableBase != 0, "PID 1028 must have a non-zero CR3 base");
+        TEST_ASSERT(proc1->directoryTableBase != proc2->directoryTableBase, "Each process must have an isolated, distinct CR3 base");
+        TEST_ASSERT(proc1->directoryTableBase == (0x100000ULL + 1024ULL * 0x1000ULL), "CR3 physical base formula matches PID mapping");
+
+        // Shared Canonical High-Half Kernel PML4 entries with Supervisor bit (U/S = 0)
+        TEST_ASSERT(proc1->pml4[496] == 0x0000000000102003ULL, "Slot 496 (High-Half Kernel) must match canonical supervisor entry");
+        TEST_ASSERT(proc1->pml4[510] == 0x0000000000104003ULL, "Slot 510 (High-Half HAL) must match canonical supervisor entry");
+        TEST_ASSERT(proc1->pml4[511] == 0x0000000000106003ULL, "Slot 511 (High-Half Legacy) must match canonical supervisor entry");
+        TEST_ASSERT(proc2->pml4[496] == proc1->pml4[496], "High-half kernel PML4 entries must be shared across address spaces");
+
+        // Private Lower-Half User PML4 entries with User bit (U/S = 1, bit 2 = 1)
+        TEST_ASSERT((proc1->pml4[0] & 0x04) != 0, "Slot 0 (Userland) must have User/Supervisor bit set to 1 (Ring 3 accessible)");
+        TEST_ASSERT((proc2->pml4[0] & 0x04) != 0, "Slot 0 (Userland) must have User/Supervisor bit set to 1 (Ring 3 accessible)");
+        TEST_ASSERT(proc1->pml4[0] != proc2->pml4[0], "User-space slot 0 page tables must be strictly private and non-identical");
+    }
+
+    // ========================================================================
+    // Pillar 2: Virtual Address Descriptors (VAD) Registration & Range Queries
+    // ========================================================================
+    {
+        auto* proc1 = pm.findProcess(1024);
+        TEST_ASSERT(proc1 != nullptr, "PID 1024 must exist in process table");
+        TEST_ASSERT(proc1->vadCount >= 4, "PID 1024 must have at least 4 default VAD entries (.text, stack, guard, peb/teb)");
+
+        // Validate .text VAD
+        auto* vadText = proc1->findVad(0x00007FF700001000ULL);
+        TEST_ASSERT(vadText != nullptr, "VA inside .text range must be found in VAD tree");
+        TEST_ASSERT(vadText->protection == micant::um::MM_PAGE_EXECUTE_READ, ".text VAD must be PAGE_EXECUTE_READ");
+        TEST_ASSERT(vadText->committed == true, ".text VAD must be committed");
+        TEST_ASSERT(vadText->isGuard == false, ".text VAD must not be a guard page");
+
+        // Validate UserStack VAD
+        auto* vadStack = proc1->findVad(0x00007FFFFFFE8000ULL);
+        TEST_ASSERT(vadStack != nullptr, "VA inside UserStack must be found in VAD tree");
+        TEST_ASSERT(vadStack->protection == micant::um::MM_PAGE_READWRITE, "UserStack VAD must be PAGE_READWRITE");
+        TEST_ASSERT(vadStack->committed == true, "UserStack VAD must be committed");
+
+        // Validate StackGuard VAD
+        auto* vadGuard = proc1->findVad(0x00007FFFFFFE0500ULL);
+        TEST_ASSERT(vadGuard != nullptr, "VA inside StackGuard must be found in VAD tree");
+        TEST_ASSERT(vadGuard->isGuard == true, "StackGuard VAD must have isGuard = true");
+        TEST_ASSERT((vadGuard->protection & micant::um::MM_PAGE_GUARD) != 0, "StackGuard VAD must have MM_PAGE_GUARD set");
+
+        // Validate unallocated memory range query
+        auto* vadInvalid = proc1->findVad(0x00000000DEAD0000ULL);
+        TEST_ASSERT(vadInvalid == nullptr, "Unallocated VA must return nullptr from findVad");
+    }
+
+    // ========================================================================
+    // Pillar 3: Canonical NT 32-Queue Priority Thread Selection (0-31)
+    // ========================================================================
+    {
+        sched.reset(false); // Clean scheduler state
+
+        // Spawn threads with varying priority levels
+        // Windows Priority Classes: Idle=0, Below Normal=8, Normal=16, High=24, Real-Time=31
+        bool t1 = sched.createThread(101, 1024, 8,  0x7FF700001000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE0000000ULL, "LowPrioWorker");
+        bool t2 = sched.createThread(102, 1024, 16, 0x7FF700002000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE0000000ULL, "NormalWorker");
+        bool t3 = sched.createThread(103, 1028, 24, 0x7FF710001000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE1000000ULL, "HighPrioWorker");
+        bool t4 = sched.createThread(104, 1028, 31, 0x7FF710002000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE1000000ULL, "RealTimeWorker");
+
+        TEST_ASSERT(t1 && t2 && t3 && t4, "All 4 multi-priority threads must be created");
+
+        // The scheduler must select the highest priority thread: Priority 31 (TID 104)
+        uint32_t selected = sched.selectNextThread();
+        TEST_ASSERT(selected == 104, "Scheduler must select highest priority thread (TID 104, Priority 31)");
+
+        // Switch to TID 104
+        sched.switchContext(104);
+        TEST_ASSERT(sched.getActiveTid() == 104, "Active TID must be 104");
+
+        // Terminating TID 104 must preemptively schedule next highest priority thread: TID 103 (Priority 24)
+        sched.terminateCurrentThread(micant::NtStatus::Success);
+        TEST_ASSERT(sched.getActiveTid() == 103, "Scheduler must automatically switch to TID 103 (Priority 24)");
+
+        // Terminating TID 103 must schedule TID 102 (Priority 16)
+        sched.terminateCurrentThread(micant::NtStatus::Success);
+        TEST_ASSERT(sched.getActiveTid() == 102, "Scheduler must automatically switch to TID 102 (Priority 16)");
+
+        // Terminating TID 102 must schedule TID 101 (Priority 8)
+        sched.terminateCurrentThread(micant::NtStatus::Success);
+        TEST_ASSERT(sched.getActiveTid() == 101, "Scheduler must automatically switch to TID 101 (Priority 8)");
+    }
+
+    // ========================================================================
+    // Pillar 4: Hardware Timer Quantum Decay & Preemptive Multitasking
+    // ========================================================================
+    {
+        sched.reset(false);
+
+        // Two competing threads with identical priority 16 and quantum 6
+        sched.createThread(201, 1024, 16, 0x7FF700001000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE0000000ULL, "ThreadAlpha");
+        sched.createThread(202, 1024, 16, 0x7FF700002000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE0000000ULL, "ThreadBeta");
+
+        // ThreadAlpha starts running
+        sched.switchContext(201);
+        TEST_ASSERT(sched.getActiveTid() == 201, "Initial active thread must be 201");
+        auto* tAlpha = sched.findThread(201);
+        TEST_ASSERT(tAlpha->quantumRemaining == 6, "Initial quantum remaining must be 6");
+
+        // Elapse 2 ticks: quantum decays from 6 to 4, no preemption
+        sched.tickQuantum(2);
+        TEST_ASSERT(tAlpha->quantumRemaining == 4, "Quantum remaining must decrease to 4 after 2 ticks");
+        TEST_ASSERT(sched.getActiveTid() == 201, "Thread 201 must remain active while quantum > 0");
+        TEST_ASSERT(sched.getTotalQuantumPreemptions() == 0, "No preemption yet");
+
+        // Elapse 4 more ticks: quantum reaches 0 -> quantum exhaustion and preemption!
+        sched.tickQuantum(4);
+        TEST_ASSERT(sched.getTotalQuantumPreemptions() == 1, "Quantum exhaustion must increment totalQuantumPreemptions to 1");
+        TEST_ASSERT(sched.getActiveTid() == 202, "Scheduler must preemptively switch context to ThreadBeta (TID 202)");
+        TEST_ASSERT(tAlpha->quantumRemaining == 6, "Preempted thread quantum must be replenished to 6");
+
+        // ThreadBeta now running, elapse full quantum 6 ticks
+        auto* tBeta = sched.findThread(202);
+        TEST_ASSERT(tBeta->quantumRemaining == 6, "ThreadBeta initial quantum must be 6");
+        sched.tickQuantum(6);
+        TEST_ASSERT(sched.getTotalQuantumPreemptions() == 2, "ThreadBeta preemption must increment totalQuantumPreemptions to 2");
+        TEST_ASSERT(sched.getActiveTid() == 201, "Scheduler must preemptively switch context back to ThreadAlpha (TID 201)");
+    }
+
+    // ========================================================================
+    // Pillar 5: Hardware CR3 Page Directory Swapping Across Address Spaces
+    // ========================================================================
+    {
+        sched.reset(false);
+
+        // Threads belonging to different processes (PID 1024 vs PID 1028)
+        sched.createThread(301, 1024, 16, 0x7FF700001000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE0000000ULL, "CmdThread");
+        sched.createThread(302, 1028, 16, 0x7FF710001000ULL, 0x7FFFFFFF0000ULL, 0x7FFDE1000000ULL, "PsThread");
+
+        auto* procCmd = pm.findProcess(1024);
+        auto* procPs = pm.findProcess(1028);
+        TEST_ASSERT(procCmd && procPs, "Processes 1024 and 1028 must exist");
+
+        // Switch to TID 301 (PID 1024)
+        sched.switchContext(301);
+        TEST_ASSERT(sched.getActiveTid() == 301, "Active thread must be 301");
+        TEST_ASSERT(sched.getActiveCr3() == procCmd->directoryTableBase, "Active CR3 must match PID 1024 directoryTableBase");
+
+        uint64_t prevSwitches = sched.getTotalAddressSpaceSwitches();
+
+        // Switch to TID 302 (PID 1028): Address space transition!
+        sched.switchContext(302);
+        TEST_ASSERT(sched.getActiveTid() == 302, "Active thread must be 302");
+        TEST_ASSERT(sched.getActiveCr3() == procPs->directoryTableBase, "Active CR3 must swap to PID 1028 directoryTableBase");
+        TEST_ASSERT(sched.getTotalAddressSpaceSwitches() == prevSwitches + 1, "Address space switches counter must increment");
+
+        // Switch back to TID 301: Address space transition back!
+        sched.switchContext(301);
+        TEST_ASSERT(sched.getActiveCr3() == procCmd->directoryTableBase, "Active CR3 must swap back to PID 1024 directoryTableBase");
+        TEST_ASSERT(sched.getTotalAddressSpaceSwitches() == prevSwitches + 2, "Address space switches counter must increment again");
+    }
+
+    // ========================================================================
+    // Pillar 6: Hardware Interrupt / Exception #PF (Vector 14) Page Fault Engine
+    // ========================================================================
+    {
+        auto* proc1 = pm.findProcess(1024);
+        TEST_ASSERT(proc1 != nullptr, "PID 1024 must exist");
+
+        // Case A: Unmapped address access -> STATUS_ACCESS_VIOLATION (0xC0000005)
+        micant::NtStatus stUnmapped = pm.resolvePageFault(1024, 0x00000000BAADF00DULL, 0x04 /* User Read */);
+        TEST_ASSERT(stUnmapped == micant::NtStatus::AccessViolation, "Access to unmapped address must raise STATUS_ACCESS_VIOLATION");
+        TEST_ASSERT(proc1->accessViolationsTrapped >= 1, "Access violations trapped counter must increment");
+
+        // Case B: Write access to read-only code section (.text) -> STATUS_ACCESS_VIOLATION
+        micant::NtStatus stWriteRo = pm.resolvePageFault(1024, 0x00007FF700001000ULL, 0x06 /* User Write */);
+        TEST_ASSERT(stWriteRo == micant::NtStatus::AccessViolation, "Write to read-only .text section must raise STATUS_ACCESS_VIOLATION");
+        TEST_ASSERT(proc1->accessViolationsTrapped >= 2, "Access violations trapped counter must be 2");
+
+        // Case C: Demand Paging resolution on uncommitted memory
+        // Allocate 64KB demand-paged heap buffer
+        proc1->addVad(0x0000018000000000ULL, 0x0000018000010000ULL, micant::um::MM_PAGE_READWRITE, false, false, "DemandHeap");
+        auto* vadHeap = proc1->findVad(0x0000018000004000ULL);
+        TEST_ASSERT(vadHeap != nullptr && vadHeap->committed == false, "Heap VAD must initially be uncommitted");
+
+        uint64_t prevDemandCommits = proc1->demandPagesCommitted;
+        micant::NtStatus stDemand = pm.resolvePageFault(1024, 0x0000018000004000ULL, 0x06 /* User Write */);
+        TEST_ASSERT(NT_SUCCESS(stDemand), "Demand page fault resolution must succeed");
+        TEST_ASSERT(vadHeap->committed == true, "Demand page fault must transition VAD to committed");
+        TEST_ASSERT(proc1->demandPagesCommitted == prevDemandCommits + 1, "demandPagesCommitted counter must increment");
+
+        // Case D: Stack Guard Page fault -> Automatic Stack Expansion
+        auto* vadGuard = proc1->findVad(0x00007FFFFFFE0500ULL);
+        TEST_ASSERT(vadGuard != nullptr && vadGuard->isGuard == true, "Stack guard VAD must exist before fault");
+        uint64_t originalGuardStart = vadGuard->startVa;
+
+        uint64_t prevGuardResolutions = proc1->stackGuardFaultsResolved;
+        micant::NtStatus stGuard = pm.resolvePageFault(1024, 0x00007FFFFFFE0500ULL, 0x06 /* User Write */);
+        TEST_ASSERT(NT_SUCCESS(stGuard), "Guard page fault must expand stack successfully");
+        TEST_ASSERT(vadGuard->isGuard == false, "Faulted guard page must be converted to regular committed stack");
+        TEST_ASSERT(vadGuard->committed == true, "Old guard page must now be committed");
+        TEST_ASSERT(proc1->stackGuardFaultsResolved == prevGuardResolutions + 1, "stackGuardFaultsResolved must increment");
+
+        // Verify new guard page created 4KB below the previous guard page
+        auto* newGuard = proc1->findVad(originalGuardStart - 0x1000);
+        TEST_ASSERT(newGuard != nullptr && newGuard->isGuard == true, "New guard page must be created 4KB downwards");
+        TEST_ASSERT(newGuard->startVa == originalGuardStart - 0x1000, "New guard start VA must be original - 4KB");
+
+        // Telemetry Consistency
+        TEST_ASSERT(pm.getTotalPageFaults() >= 4, "Total page faults across executive must be >= 4");
+        TEST_ASSERT(pm.getTotalDemandPagesCommitted() >= 1, "Total demand pages committed must be >= 1");
+        TEST_ASSERT(pm.getTotalStackGuardResolutions() >= 1, "Total stack guard resolutions must be >= 1");
+        TEST_ASSERT(pm.getTotalAccessViolations() >= 2, "Total access violations trapped must be >= 2");
+    }
+
+    std::cout << "[HORIZON 148] Preemptive Multi-Queue Scheduler & CR3 Isolation Summary:\n"
+              << "    Pillar 1: Per-Process Hardware CR3 & PML4 Page Directory Isolation OK\n"
+              << "    Pillar 2: Virtual Address Descriptors (VAD) Registration & Range Queries OK\n"
+              << "    Pillar 3: Canonical NT 32-Queue Priority Thread Selection (0-31) OK\n"
+              << "    Pillar 4: Hardware Timer Quantum Decay & Preemptive Multitasking OK\n"
+              << "    Pillar 5: Hardware CR3 Page Directory Swapping Across Address Spaces OK\n"
+              << "    Pillar 6: Hardware Interrupt / Exception #PF (Vector 14) Page Fault Engine OK\n";
+
+    std::cout << "[TEST] Suite 364: Horizon 148 - Preemptive Multi-Queue Hardware Scheduler, Per-Process CR3 Isolation & Demand Page Fault Engine PASSED." << std::endl;
+}
