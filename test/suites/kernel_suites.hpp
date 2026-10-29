@@ -25977,3 +25977,407 @@ void Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI()
     std::cout << "[TEST] Suite 369: Horizon 153 - Sovereign IP Helper Subsystem (iphlpapi.dll), DHCP DORA Client Engine, DNS Resolver (dnsapi.dll) & Canonical Network Diagnostics CLI PASSED." << std::endl;
 }
 
+
+// ============================================================================
+// Suite 370: Horizon 154 - Sovereign Windows Filtering Platform Kernel Engine
+//            (fwpkclnt.sys), Dynamic Callout Inspection Architecture, Stateful
+//            Packet Inspection (SPI) Connection Tracker & Defender Firewall Core
+//            (mpsdrv.sys / bfe.sys)
+// ============================================================================
+
+void Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall() {
+    std::cout << "[TEST] Running Suite 370: Horizon 154 - Sovereign Windows Filtering Platform Kernel Engine (fwpkclnt.sys), Callout Inspection, Stateful Conntrack & Defender Firewall (mpsdrv.sys)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Kernel WFP Driver Architecture (fwpkclnt.sys) & Callout ABI
+    // ------------------------------------------------------------------------
+    {
+        wfp::km::InitializeWfpKernelDriver();
+        auto& calloutReg = wfp::km::WfpCalloutRegistry::get();
+        calloutReg.resetForTest();
+
+        static uint32_t s_customClassifyCount = 0;
+        static uint32_t s_customBlockedPort = 9999;
+        wfp::km::FWPS_CALLOUT0 customCallout{};
+        customCallout.calloutKey = {0x11223344, 0x5566, 0x7788, {0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00}};
+        customCallout.classifyFn = [](
+            const wfp::km::FWPS_INCOMING_VALUES0* inFixedValues,
+            const wfp::km::FWPS_INCOMING_METADATA_VALUES0* /*inMetaValues*/,
+            void* /*layerData*/,
+            const void* /*classifyContext*/,
+            const wfp::FWPM_FILTER0* /*filter*/,
+            uint64_t /*flowContext*/,
+            wfp::km::FWPS_CLASSIFY_OUT0* classifyOut
+        ) {
+            s_customClassifyCount++;
+            if (inFixedValues && inFixedValues->localPort == s_customBlockedPort) {
+                classifyOut->actionType = wfp::FWP_ACTION_BLOCK;
+            } else if (classifyOut) {
+                classifyOut->actionType = wfp::FWP_ACTION_PERMIT;
+            }
+        };
+        customCallout.notifyFn = [](wfp::km::FWPS_CALLOUT_NOTIFY_TYPE /*notifyType*/, const wfp::GUID* /*filterKey*/, wfp::FWPM_FILTER0* /*filter*/) -> uint32_t {
+            return wfp::ERROR_SUCCESS;
+        };
+        customCallout.flowDeleteFn = [](uint16_t /*layerId*/, uint32_t /*calloutId*/, uint64_t /*flowContext*/) {};
+
+        uint32_t calloutId = 0;
+        uint32_t regRes = wfp::km::FwpsCalloutRegister0(nullptr, &customCallout, &calloutId);
+        TEST_ASSERT(regRes == wfp::ERROR_SUCCESS, "FwpsCalloutRegister0 must return ERROR_SUCCESS");
+        TEST_ASSERT(calloutId >= 1000, "calloutId must be allocated >= 1000");
+        TEST_ASSERT(calloutReg.getCallout(calloutId) != nullptr, "getCallout must find registered callout");
+
+        // Flow context association
+        uint64_t testFlowId = 0xABCD1234;
+        uint64_t testContext = 0xCAFE5678;
+        uint32_t assocRes = wfp::km::FwpsFlowAssociateContext0(testFlowId, wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4, calloutId, testContext);
+        TEST_ASSERT(assocRes == wfp::ERROR_SUCCESS, "FwpsFlowAssociateContext0 must return ERROR_SUCCESS");
+        TEST_ASSERT(calloutReg.getFlowContext(testFlowId) == testContext, "getFlowContext must return associated context");
+
+        uint32_t remRes = wfp::km::FwpsFlowRemoveContext0(testFlowId, wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4, calloutId);
+        TEST_ASSERT(remRes == wfp::ERROR_SUCCESS, "FwpsFlowRemoveContext0 must return ERROR_SUCCESS");
+        TEST_ASSERT(calloutReg.getFlowContext(testFlowId) == 0, "getFlowContext must be 0 after removal");
+
+        // Unregister callout
+        uint32_t unregRes = wfp::km::FwpsCalloutUnregisterById0(calloutId);
+        TEST_ASSERT(unregRes == wfp::ERROR_SUCCESS, "FwpsCalloutUnregisterById0 must return ERROR_SUCCESS");
+        TEST_ASSERT(calloutReg.getCallout(calloutId) == nullptr, "callout must be null after unregister");
+
+        // Re-register callout for subsequent pillar tests
+        regRes = wfp::km::FwpsCalloutRegister0(nullptr, &customCallout, &calloutId);
+        TEST_ASSERT(regRes == wfp::ERROR_SUCCESS, "Re-registration of callout must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: 5-Tuple Match Classification & Action Hierarchy
+    // ------------------------------------------------------------------------
+    {
+        auto& filterEngine = wfp::km::WfpKernelFilterEngine::get();
+        filterEngine.resetForTest();
+
+        // Add Rule: Block inbound TCP port 4444 (Trojan backdoor)
+        wfp::km::WfpKernelFilterRule rBlock4444{};
+        rBlock4444.name = "Block-Inbound-TCP-4444";
+        rBlock4444.direction = wfp::FWP_DIRECTION_INBOUND;
+        rBlock4444.protocol = tcpip::IPPROTO_TCP;
+        rBlock4444.localPortStart = 4444;
+        rBlock4444.action = wfp::FWP_ACTION_BLOCK;
+        rBlock4444.weight = 8000;
+        uint64_t id4444 = filterEngine.addRule(rBlock4444);
+        TEST_ASSERT(id4444 >= 2000, "addRule must return valid filter ID");
+
+        // Add Rule: Block inbound subnet 198.51.100.0/24
+        wfp::km::WfpKernelFilterRule rBlockSubnet{};
+        rBlockSubnet.name = "Block-Inbound-Malicious-Subnet";
+        rBlockSubnet.direction = wfp::FWP_DIRECTION_INBOUND;
+        rBlockSubnet.remoteIp = tcpip::Ipv4Address(198, 51, 100, 0);
+        rBlockSubnet.remoteMask = tcpip::Ipv4Address(255, 255, 255, 0);
+        rBlockSubnet.action = wfp::FWP_ACTION_BLOCK;
+        rBlockSubnet.weight = 9000;
+        filterEngine.addRule(rBlockSubnet);
+
+        // Add Rule: Callout inspection for port 9999
+        wfp::km::WfpKernelFilterRule rCalloutRule{};
+        rCalloutRule.name = "Inspect-Inbound-Callout-9999";
+        rCalloutRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rCalloutRule.protocol = tcpip::IPPROTO_TCP;
+        rCalloutRule.localPortStart = 9999;
+        rCalloutRule.calloutId = 1001; // Newly re-registered ID
+        rCalloutRule.weight = 8500;
+        filterEngine.addRule(rCalloutRule);
+
+        // Test 1: Inbound packet to port 4444 -> BLOCK
+        tcpip::TcpHeader tcpPkt4444{};
+        tcpPkt4444.setSrcPort(34567);
+        tcpPkt4444.setDstPort(4444);
+        tcpPkt4444.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto tcpSpan4444 = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpPkt4444), sizeof(tcpPkt4444));
+        bool pass4444 = filterEngine.classifyPacket(true, tcpip::Ipv4Address(10, 0, 0, 5), tcpip::Ipv4Address(147, 135, 1, 229), tcpip::IPPROTO_TCP, tcpSpan4444);
+        TEST_ASSERT(!pass4444, "Inbound packet to port 4444 must be blocked by rule");
+
+        // Test 2: Inbound packet from blocked subnet 198.51.100.42 -> BLOCK
+        tcpip::TcpHeader tcpPktSubnet{};
+        tcpPktSubnet.setSrcPort(50000);
+        tcpPktSubnet.setDstPort(8080); // Even to an allowed port!
+        tcpPktSubnet.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto tcpSpanSubnet = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpPktSubnet), sizeof(tcpPktSubnet));
+        bool passSubnet = filterEngine.classifyPacket(true, tcpip::Ipv4Address(198, 51, 100, 42), tcpip::Ipv4Address(147, 135, 1, 229), tcpip::IPPROTO_TCP, tcpSpanSubnet);
+        TEST_ASSERT(!passSubnet, "Inbound packet from blacklisted subnet must be blocked");
+
+        // Test 3: Inbound packet to port 8080 (Remote Executive Console) -> PERMIT
+        tcpip::TcpHeader tcpPkt8080{};
+        tcpPkt8080.setSrcPort(51234);
+        tcpPkt8080.setDstPort(8080);
+        tcpPkt8080.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto tcpSpan8080 = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpPkt8080), sizeof(tcpPkt8080));
+        bool pass8080 = filterEngine.classifyPacket(true, tcpip::Ipv4Address(147, 135, 1, 10), tcpip::Ipv4Address(147, 135, 1, 229), tcpip::IPPROTO_TCP, tcpSpan8080);
+        TEST_ASSERT(pass8080, "Inbound packet to port 8080 must be permitted by pre-seeded console rule");
+
+        // Test 4: Inbound packet to callout port 9999 -> Callout classifies as BLOCK
+        tcpip::TcpHeader tcpPkt9999{};
+        tcpPkt9999.setSrcPort(52000);
+        tcpPkt9999.setDstPort(9999);
+        tcpPkt9999.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto tcpSpan9999 = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpPkt9999), sizeof(tcpPkt9999));
+        bool pass9999 = filterEngine.classifyPacket(true, tcpip::Ipv4Address(10, 0, 0, 20), tcpip::Ipv4Address(147, 135, 1, 229), tcpip::IPPROTO_TCP, tcpSpan9999);
+        TEST_ASSERT(!pass9999, "Callout rule on port 9999 must trigger block");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Stateful Packet Inspection (SPI) & Conntrack Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& conntrack = wfp::km::WfpConntrackEngine::get();
+        conntrack.resetForTest();
+        auto& filterEngine = wfp::km::WfpKernelFilterEngine::get();
+
+        // 1. Attack Signature: SYN + FIN
+        TEST_ASSERT(wfp::km::WfpConntrackEngine::isAnomalousTcpFlags(tcpip::TCP_FLAG_SYN | tcpip::TCP_FLAG_FIN), "SYN+FIN must be detected as anomalous");
+
+        // 2. Attack Signature: NULL scan
+        TEST_ASSERT(wfp::km::WfpConntrackEngine::isAnomalousTcpFlags(0), "NULL scan must be detected as anomalous");
+
+        // 3. Attack Signature: XMAS scan (FIN+PSH+URG)
+        TEST_ASSERT(wfp::km::WfpConntrackEngine::isAnomalousTcpFlags(tcpip::TCP_FLAG_FIN | tcpip::TCP_FLAG_PSH | tcpip::TCP_FLAG_URG), "XMAS scan must be detected as anomalous");
+
+        // 4. Test Attack Packet Dropped
+        bool isEst = false;
+        bool procAnom = conntrack.processPacket(
+            true, tcpip::Ipv4Address(10, 0, 0, 1), tcpip::Ipv4Address(147, 135, 1, 229),
+            tcpip::IPPROTO_TCP, 12345, 80, tcpip::TCP_FLAG_SYN | tcpip::TCP_FLAG_FIN, 20, isEst
+        );
+        TEST_ASSERT(!procAnom, "Anomalous packet must fail conntrack processing");
+        TEST_ASSERT(conntrack.getAnomalousDropCount() == 1, "Anomalous drop counter must increment");
+
+        // 5. Normal Stateful TCP Handshake & Return Traffic Flow
+        // Step A: Outbound SYN to 93.184.216.34:80 (example.com)
+        tcpip::Ipv4Address srvIp(93, 184, 216, 34);
+        tcpip::Ipv4Address myIp(147, 135, 1, 229);
+        uint16_t cliPort = 49200;
+        uint16_t srvPort = 80;
+
+        bool procSyn = conntrack.processPacket(false, myIp, srvIp, tcpip::IPPROTO_TCP, cliPort, srvPort, tcpip::TCP_FLAG_SYN, 40, isEst);
+        TEST_ASSERT(procSyn, "Outbound SYN must establish conntrack record");
+        TEST_ASSERT(conntrack.getActiveFlowCount() == 1, "Conntrack table must have 1 active flow");
+
+        // Step B: Inbound SYN-ACK from server
+        bool procSynAck = conntrack.processPacket(true, srvIp, myIp, tcpip::IPPROTO_TCP, srvPort, cliPort, tcpip::TCP_FLAG_SYN | tcpip::TCP_FLAG_ACK, 40, isEst);
+        TEST_ASSERT(procSynAck, "Inbound SYN-ACK must match pending flow");
+        TEST_ASSERT(isEst, "SYN-ACK must be recognized as part of active flow");
+
+        // Step C: Outbound ACK completing handshake
+        bool procAck = conntrack.processPacket(false, myIp, srvIp, tcpip::IPPROTO_TCP, cliPort, srvPort, tcpip::TCP_FLAG_ACK, 32, isEst);
+        TEST_ASSERT(procAck && isEst, "Outbound ACK must transition flow to Established");
+
+        // Step D: Inbound Data Packet (HTTP 200 OK)
+        tcpip::TcpHeader tcpDataHdr{};
+        tcpDataHdr.setSrcPort(srvPort);
+        tcpDataHdr.setDstPort(cliPort);
+        tcpDataHdr.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_ACK | tcpip::TCP_FLAG_PSH);
+        auto dataSpan = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpDataHdr), sizeof(tcpDataHdr));
+        bool passInboundData = filterEngine.classifyPacket(true, srvIp, myIp, tcpip::IPPROTO_TCP, dataSpan);
+        TEST_ASSERT(passInboundData, "Inbound return traffic for established flow must be PERMITTED by stateful inspection");
+
+        // Step E: Inbound Unsolicited Packet from stranger (not in conntrack) to unopen port -> MUST BLOCK
+        tcpip::TcpHeader tcpUnsolicited{};
+        tcpUnsolicited.setSrcPort(44444);
+        tcpUnsolicited.setDstPort(33333);
+        tcpUnsolicited.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto unsolSpan = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpUnsolicited), sizeof(tcpUnsolicited));
+        bool passUnsol = filterEngine.classifyPacket(true, tcpip::Ipv4Address(5, 5, 5, 5), myIp, tcpip::IPPROTO_TCP, unsolSpan);
+        TEST_ASSERT(!passUnsol, "Unsolicited inbound packet to closed port must be BLOCKED");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Sovereign Network Stealth & Threat Mitigation Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& threat = wfp::km::WfpThreatMitigationEngine::get();
+        threat.resetForTest();
+        auto& filterEngine = wfp::km::WfpKernelFilterEngine::get();
+        tcpip::Ipv4Address myIp(147, 135, 1, 229);
+
+        // 1. Stealth Drop Counter
+        uint64_t stealthBefore = threat.getStealthDropCount();
+        tcpip::TcpHeader tcpProbe{};
+        tcpProbe.setSrcPort(40000);
+        tcpProbe.setDstPort(1337); // Closed port
+        tcpProbe.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto probeSpan = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpProbe), sizeof(tcpProbe));
+        (void)filterEngine.classifyPacket(true, tcpip::Ipv4Address(123, 123, 123, 123), myIp, tcpip::IPPROTO_TCP, probeSpan);
+        TEST_ASSERT(threat.getStealthDropCount() > stealthBefore, "Stealth drop counter must increment on blocked inbound probe");
+
+        // 2. Vertical Port Scan Detection & Dynamic Blacklisting
+        tcpip::Ipv4Address attackerIp(203, 0, 113, 99);
+        TEST_ASSERT(!threat.isBlacklisted(attackerIp), "Attacker IP must initially not be blacklisted");
+
+        // Attacker hits 5 distinct ports
+        threat.recordPortProbe(attackerIp, 21);
+        threat.recordPortProbe(attackerIp, 22);
+        threat.recordPortProbe(attackerIp, 23);
+        threat.recordPortProbe(attackerIp, 80);
+        threat.recordPortProbe(attackerIp, 443);
+
+        TEST_ASSERT(threat.getPortScansDetected() >= 1, "Port scan detector must detect vertical scan >= 5 ports");
+        TEST_ASSERT(threat.isBlacklisted(attackerIp), "Attacker IP must be dynamically blacklisted");
+
+        // Classified packet from blacklisted attacker must be immediately blocked
+        bool passAttacker = filterEngine.classifyPacket(true, attackerIp, myIp, tcpip::IPPROTO_TCP, probeSpan);
+        TEST_ASSERT(!passAttacker, "Packet from blacklisted attacker must be blocked");
+
+        // 3. SYN Flood Mitigation
+        TEST_ASSERT(!threat.isSynFloodActive(), "SYN flood mitigation must initially be inactive");
+        for (int i = 0; i < 550; ++i) {
+            threat.recordSynPacket(false);
+        }
+        TEST_ASSERT(threat.isSynFloodActive(), "SYN flood mitigation must activate when half-open SYNs exceed watermark");
+        for (int i = 0; i < 300; ++i) {
+            threat.recordSynPacket(true);
+        }
+        TEST_ASSERT(!threat.isSynFloodActive(), "SYN flood mitigation must deactivate when half-open SYNs return to normal");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Windows Defender Firewall Core Driver (mpsdrv.sys) & Profiles
+    // ------------------------------------------------------------------------
+    {
+        auto& mpsDrv = wfp::km::MpsFirewallDriver::get();
+        mpsDrv.resetForTest();
+
+        // 1. Verify Profiles
+        TEST_ASSERT(mpsDrv.isProfileEnabled(wfp::FW_PROFILE_TYPE_DOMAIN), "Domain profile must be enabled by default");
+        TEST_ASSERT(mpsDrv.isProfileEnabled(wfp::FW_PROFILE_TYPE_PRIVATE), "Private profile must be enabled by default");
+        TEST_ASSERT(mpsDrv.isProfileEnabled(wfp::FW_PROFILE_TYPE_PUBLIC), "Public profile must be enabled by default");
+
+        // 2. IOCTL Dispatch: IOCTL_MPS_GET_PROFILE
+        uint32_t profBits = 0;
+        size_t returned = 0;
+        NtStatus ioRes = mpsDrv.dispatchDeviceControl(
+            wfp::km::IOCTL_MPS_GET_PROFILE, nullptr, 0, &profBits, sizeof(profBits), returned
+        );
+        TEST_ASSERT(ioRes == NtStatus::Success, "IOCTL_MPS_GET_PROFILE must return Success");
+        TEST_ASSERT(returned == sizeof(uint32_t), "returned bytes must match uint32_t");
+        TEST_ASSERT(profBits == (wfp::FW_PROFILE_TYPE_DOMAIN | wfp::FW_PROFILE_TYPE_PRIVATE | wfp::FW_PROFILE_TYPE_PUBLIC), "Profile bits must have all profiles enabled");
+
+        // 3. IOCTL Dispatch: IOCTL_MPS_SET_PROFILE (Toggle Public Off)
+        uint32_t newProf = wfp::FW_PROFILE_TYPE_DOMAIN | wfp::FW_PROFILE_TYPE_PRIVATE;
+        ioRes = mpsDrv.dispatchDeviceControl(
+            wfp::km::IOCTL_MPS_SET_PROFILE, &newProf, sizeof(newProf), nullptr, 0, returned
+        );
+        TEST_ASSERT(ioRes == NtStatus::Success, "IOCTL_MPS_SET_PROFILE must succeed");
+        TEST_ASSERT(!mpsDrv.isProfileEnabled(wfp::FW_PROFILE_TYPE_PUBLIC), "Public profile must now be disabled");
+        TEST_ASSERT(mpsDrv.isProfileEnabled(wfp::FW_PROFILE_TYPE_PRIVATE), "Private profile must remain enabled");
+
+        // Trigger classifications to generate live firewall statistics
+        auto& filterEngine = wfp::km::WfpKernelFilterEngine::get();
+        tcpip::TcpHeader tcpAllow{};
+        tcpAllow.setSrcPort(45000);
+        tcpAllow.setDstPort(8080); // Allowed by preseeded rule
+        tcpAllow.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto allowSpan = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpAllow), sizeof(tcpAllow));
+        (void)filterEngine.classifyPacket(true, tcpip::Ipv4Address(10, 0, 0, 1), tcpip::Ipv4Address(147, 135, 1, 229), tcpip::IPPROTO_TCP, allowSpan);
+
+        tcpip::TcpHeader tcpDrop{};
+        tcpDrop.setSrcPort(45001);
+        tcpDrop.setDstPort(7777); // Closed port -> default block & stealth drop
+        tcpDrop.setFlags(sizeof(tcpip::TcpHeader), tcpip::TCP_FLAG_SYN);
+        auto dropSpan = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&tcpDrop), sizeof(tcpDrop));
+        (void)filterEngine.classifyPacket(true, tcpip::Ipv4Address(10, 0, 0, 2), tcpip::Ipv4Address(147, 135, 1, 229), tcpip::IPPROTO_TCP, dropSpan);
+
+        // 4. IOCTL Dispatch: IOCTL_MPS_GET_STATISTICS
+        wfp::km::MpsFirewallStats stats{};
+        ioRes = mpsDrv.dispatchDeviceControl(
+            wfp::km::IOCTL_MPS_GET_STATISTICS, nullptr, 0, &stats, sizeof(stats), returned
+        );
+        TEST_ASSERT(ioRes == NtStatus::Success, "IOCTL_MPS_GET_STATISTICS must succeed");
+        TEST_ASSERT(returned == sizeof(wfp::km::MpsFirewallStats), "returned bytes must match MpsFirewallStats");
+        TEST_ASSERT(stats.totalClassified > 0, "totalClassified must be > 0");
+        TEST_ASSERT(stats.packetsPermitted > 0, "packetsPermitted must be > 0");
+        TEST_ASSERT(stats.packetsBlocked > 0, "packetsBlocked must be > 0");
+        TEST_ASSERT(stats.stealthDrops > 0, "stealthDrops must be > 0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Kernel TCP/IP Stack Hooking, SCM Services & Driver Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& netStack = tcpip::NetworkStack::get();
+        netStack.resetForTest();
+        netStack.initialize();
+
+        // Re-hook WFP into NetworkStack
+        wfp::km::InitializeWfpKernelDriver();
+        auto& filterEngine = wfp::km::WfpKernelFilterEngine::get();
+        filterEngine.resetForTest();
+
+        // Outbound packet to arbitrary destination: allowed by default outbound permit
+        ndis::MacAddress dummyMac(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        uint8_t pingPayload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        NtStatus sendRes = netStack.sendIpv4Packet(
+            dummyMac, tcpip::Ipv4Address(8, 8, 8, 8), tcpip::IPPROTO_ICMP,
+            std::span<const uint8_t>(pingPayload, sizeof(pingPayload))
+        );
+        TEST_ASSERT(sendRes == NtStatus::Success, "Outbound ICMP packet through NetworkStack must be permitted");
+
+        // Dynamically add rule to block outbound UDP port 6667 (IRC)
+        wfp::km::WfpKernelFilterRule rBlockIrc{};
+        rBlockIrc.name = "Block-Outbound-IRC";
+        rBlockIrc.direction = wfp::FWP_DIRECTION_OUTBOUND;
+        rBlockIrc.protocol = tcpip::IPPROTO_UDP;
+        rBlockIrc.remotePortStart = 6667;
+        rBlockIrc.action = wfp::FWP_ACTION_BLOCK;
+        rBlockIrc.weight = 9999;
+        filterEngine.addRule(rBlockIrc);
+
+        // Send UDP packet to port 6667: should be blocked by NetworkStack filter hook!
+        tcpip::UdpHeader udpHdr{};
+        udpHdr.setSrcPort(50000);
+        udpHdr.setDstPort(6667);
+        udpHdr.setLength(sizeof(tcpip::UdpHeader));
+        auto udpSpan = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&udpHdr), sizeof(udpHdr));
+        NtStatus blockRes = netStack.sendIpv4Packet(dummyMac, tcpip::Ipv4Address(1, 2, 3, 4), tcpip::IPPROTO_UDP, udpSpan);
+        TEST_ASSERT(blockRes == NtStatus::AccessDenied, "NetworkStack sendIpv4Packet must return AccessDenied when blocked by WFP");
+
+        // 2. Dynamic Loader Export Verification for fwpkclnt.sys
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("fwpkclnt.sys", "FwpsCalloutRegister0") != nullptr, "fwpkclnt.sys!FwpsCalloutRegister0 must be exported");
+        TEST_ASSERT(ldr.getExport("fwpkclnt.sys", "FwpsCalloutUnregisterById0") != nullptr, "fwpkclnt.sys!FwpsCalloutUnregisterById0 must be exported");
+        TEST_ASSERT(ldr.getExport("fwpkclnt.sys", "FwpsFlowAssociateContext0") != nullptr, "fwpkclnt.sys!FwpsFlowAssociateContext0 must be exported");
+        TEST_ASSERT(ldr.getExport("fwpkclnt.sys", "FwpsFlowRemoveContext0") != nullptr, "fwpkclnt.sys!FwpsFlowRemoveContext0 must be exported");
+
+        // 3. SCM Service & Driver Registration
+        auto& scm = scm::ServiceControlManager::get();
+        auto fwpkclntRecord = scm.getServiceRecord(L"fwpkclnt");
+        TEST_ASSERT(fwpkclntRecord != nullptr, "fwpkclnt must be registered in SCM");
+        TEST_ASSERT(fwpkclntRecord->serviceType == scm::SERVICE_KERNEL_DRIVER, "fwpkclnt must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(fwpkclntRecord->startType == scm::SERVICE_BOOT_START, "fwpkclnt must be SERVICE_BOOT_START");
+
+        auto mpsdrvRecord = scm.getServiceRecord(L"mpsdrv");
+        TEST_ASSERT(mpsdrvRecord != nullptr, "mpsdrv must be registered in SCM");
+        TEST_ASSERT(mpsdrvRecord->serviceType == scm::SERVICE_KERNEL_DRIVER, "mpsdrv must be SERVICE_KERNEL_DRIVER");
+
+        auto bfeRecord = scm.getServiceRecord(L"bfe");
+        TEST_ASSERT(bfeRecord != nullptr, "bfe must be registered in SCM");
+        TEST_ASSERT(bfeRecord->startType == scm::SERVICE_AUTO_START, "bfe must be SERVICE_AUTO_START");
+
+        auto mpssvcRecord = scm.getServiceRecord(L"mpssvc");
+        TEST_ASSERT(mpssvcRecord != nullptr, "mpssvc must be registered in SCM");
+        TEST_ASSERT(mpssvcRecord->startType == scm::SERVICE_AUTO_START, "mpssvc must be SERVICE_AUTO_START");
+
+        // 4. VersionDatabase Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("fwpkclnt.sys") != nullptr, "fwpkclnt.sys must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("mpsdrv.sys") != nullptr, "mpsdrv.sys must be registered in VersionDatabase");
+        TEST_ASSERT(verDb.GetModuleInfo("bfe.dll") != nullptr, "bfe.dll must be registered in VersionDatabase");
+    }
+
+    std::cout << "[HORIZON 154] Sovereign Windows Filtering Platform Kernel Driver (fwpkclnt.sys), Callout Inspection, Stateful Conntrack & Defender Firewall (mpsdrv.sys) Summary:\n"
+              << "    Pillar 1: Kernel WFP Driver Architecture (fwpkclnt.sys) & Callout ABI OK\n"
+              << "    Pillar 2: 5-Tuple Match Classification & Action Hierarchy OK\n"
+              << "    Pillar 3: Stateful Packet Inspection (SPI) & Conntrack Engine OK\n"
+              << "    Pillar 4: Sovereign Network Stealth & Threat Mitigation Engine OK\n"
+              << "    Pillar 5: Windows Defender Firewall Core Driver (mpsdrv.sys) & Profiles OK\n"
+              << "    Pillar 6: Kernel TCP/IP Stack Hooking, SCM Services & Driver Registration OK\n";
+
+    std::cout << "[TEST] Suite 370: Horizon 154 - Sovereign Windows Filtering Platform Kernel Engine (fwpkclnt.sys), Callout Inspection, Stateful Conntrack & Defender Firewall (mpsdrv.sys) PASSED." << std::endl;
+}

@@ -30,6 +30,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <functional>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -649,6 +650,12 @@ public:
         return instance;
     }
 
+    using PacketFilterCallback = std::function<bool(bool inbound, Ipv4Address srcIp, Ipv4Address dstIp, uint8_t proto, std::span<const uint8_t> transportData)>;
+    void setPacketFilterCallback(PacketFilterCallback cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        packetFilterCallback_ = std::move(cb);
+    }
+
     void resetForTest() {
         std::lock_guard<std::mutex> lock(mutex_);
         std::lock_guard<std::mutex> sockLock(socketMutex_);
@@ -665,6 +672,7 @@ public:
         sockets_.clear();
         nextSocketId_ = 100;
         nextDynamicPort_ = 49152;
+        packetFilterCallback_ = nullptr;
     }
 
     void initialize(std::shared_ptr<ndis::INdisAdapter> adapter = nullptr) {
@@ -995,6 +1003,12 @@ public:
         ip->srcIp = localIp_;
         ip->dstIp = dstIp;
         ip->checksum = calculateInternetChecksum(ip, sizeof(Ipv4Header));
+
+        if (packetFilterCallback_) {
+            if (!packetFilterCallback_(false, localIp_, dstIp, protocol, payload)) {
+                return NtStatus::AccessDenied;
+            }
+        }
 
         std::memcpy(ipBuf.data() + sizeof(Ipv4Header), payload.data(), payload.size());
 
@@ -1467,6 +1481,12 @@ private:
         if (payload.size() < ihl) return;
         std::span<const uint8_t> ipData = payload.subspan(ihl);
 
+        if (packetFilterCallback_) {
+            if (!packetFilterCallback_(true, ip->srcIp, ip->dstIp, ip->protocol, ipData)) {
+                return;
+            }
+        }
+
         if (ip->protocol == IPPROTO_ICMP) {
             handleIcmp(ip->srcIp, ipData);
         } else if (ip->protocol == IPPROTO_UDP) {
@@ -1566,6 +1586,7 @@ private:
     uint16_t packetIdCounter_{100};
     int nextSocketId_{1};
     uint16_t nextDynamicPort_{49152};
+    PacketFilterCallback packetFilterCallback_{nullptr};
 };
 
 /**

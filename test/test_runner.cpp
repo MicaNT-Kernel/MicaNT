@@ -64,6 +64,7 @@
 #include "micant/um/subsystems/net/dnsapi.hpp"
 #include "micant/um/subsystems/net/dhcp.hpp"
 #include "micant/um/subsystems/net/netdiag.hpp"
+#include "micant/km/drivers/net/wfp.hpp"
 #include "micant/um/subsystems/winuser/shell.hpp"
 #include "micant/km/drivers/security/ppl.hpp"
 #include "micant/km/drivers/security/sysguard.hpp"
@@ -395,6 +396,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite370") {
+        RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite369") {
         RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
         return g_FailedTests;
@@ -487,6 +492,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
         RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
         RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
+        RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1784,6 +1790,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon151_IntelI210_GigabitEthernet_HardwareRingBuffers_And_NDIS6_Miniport);
     RUN_TEST(Test_Horizon152_TcpIpDualStack_AfdSocketDriver_And_RemoteExecutiveConsole);
     RUN_TEST(Test_Horizon153_IpHlpApi_DhcpClient_DnsResolver_And_NetworkDiagnosticsCLI);
+    RUN_TEST(Test_Horizon154_WfpKernelDriver_CalloutInspection_StatefulConntrack_And_MpsFirewall);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
