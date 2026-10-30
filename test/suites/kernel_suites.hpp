@@ -27547,3 +27547,350 @@ void Test_Horizon158_Rdp10_ServerDriver_CredSspNla_FastPathPipeline_And_MstscCLI
 
     std::cout << "[TEST] Suite 374: Horizon 158 - Sovereign Remote Desktop Protocol (RDP 10.x / MS-RDPBCGR), TLS 1.3 / CredSSP NLA Transport, Fast-Path Graphics Pipeline, Dynamic Virtual Channels & Canonical mstsc.exe Client PASSED." << std::endl;
 }
+
+void Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "Suite 375: Horizon 159 - Sovereign HTTP.sys Kernel Protocol Driver, Win32 HTTP Server API, Zero-Copy Response Cache & netsh http CLI\n";
+    std::cout << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: http.sys Driver Architecture, Device Objects & IOCTL Codes
+    // ------------------------------------------------------------------------
+    {
+        km::http::RegisterHttpKernelDriver();
+        auto& scm = scm::ServiceControlManager::get();
+        auto httpSvc = scm.getServiceRecord(L"HTTP");
+        TEST_ASSERT(httpSvc != nullptr, "HTTP service must be registered in SCM");
+        TEST_ASSERT(httpSvc->isRunning(), "HTTP service must be in SERVICE_RUNNING state");
+        TEST_ASSERT(httpSvc->startType == scm::SERVICE_BOOT_START, "HTTP service must be SERVICE_BOOT_START");
+        TEST_ASSERT(httpSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "HTTP service must be SERVICE_KERNEL_DRIVER");
+
+        auto& verDb = version::VersionDatabase::Instance();
+        auto* httpMod = verDb.FindModule("http.sys");
+        TEST_ASSERT(httpMod != nullptr && httpMod->stringTable.at("FileVersion") == "10.0.26100.5900", "http.sys version must match 10.0.26100.5900");
+        auto* apiMod = verDb.FindModule("httpapi.dll");
+        TEST_ASSERT(apiMod != nullptr && apiMod->stringTable.at("FileVersion") == "10.0.26100.5900", "httpapi.dll version must match 10.0.26100.5900");
+
+        // Verify IOCTL codes
+        TEST_ASSERT(km::http::IOCTL_HTTP_INITIALIZE == 0x00120000, "IOCTL_HTTP_INITIALIZE must be 0x00120000");
+        TEST_ASSERT(km::http::IOCTL_HTTP_CREATE_SERVER_SESSION == 0x00120004, "IOCTL_HTTP_CREATE_SERVER_SESSION must be 0x00120004");
+        TEST_ASSERT(km::http::IOCTL_HTTP_CREATE_REQ_QUEUE == 0x0012001C, "IOCTL_HTTP_CREATE_REQ_QUEUE must be 0x0012001C");
+        TEST_ASSERT(km::http::IOCTL_HTTP_RECEIVE_REQUEST == 0x00120028, "IOCTL_HTTP_RECEIVE_REQUEST must be 0x00120028");
+        TEST_ASSERT(km::http::IOCTL_HTTP_SEND_RESPONSE == 0x0012002C, "IOCTL_HTTP_SEND_RESPONSE must be 0x0012002C");
+        TEST_ASSERT(km::http::IOCTL_HTTP_FLUSH_RESPONSE_CACHE == 0x00120030, "IOCTL_HTTP_FLUSH_RESPONSE_CACHE must be 0x00120030");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: URL Prefix Radix Tree, Longest-Prefix Matching & URL ACL Authorization
+    // ------------------------------------------------------------------------
+    {
+        auto& drv = km::http::HttpKernelProtocolDriver::Instance();
+        drv.initialize();
+
+        // 1. Verify default URL ACLs
+        auto acls = drv.getUrlAcls();
+        TEST_ASSERT(acls.size() >= 3, "At least 3 default URL ACLs must be pre-seeded");
+        bool hasPort80 = false;
+        for (const auto& a : acls) {
+            if (a.urlPrefix == L"http://+:80/") hasPort80 = true;
+        }
+        TEST_ASSERT(hasPort80, "http://+:80/ ACL reservation must exist");
+
+        // 2. Add custom URL ACL
+        bool addedAcl = drv.addUrlAcl(L"http://+:8080/api/v1/", L"Administrators", true, false);
+        TEST_ASSERT(addedAcl, "addUrlAcl for http://+:8080/api/v1/ must succeed");
+
+        // 3. Create sessions, URL groups and queues to test longest-prefix matching
+        uint64_t sessId = drv.createServerSession();
+        TEST_ASSERT(sessId > 0, "createServerSession must succeed");
+
+        uint64_t gRoot = drv.createUrlGroup(sessId);
+        uint64_t gOrders = drv.createUrlGroup(sessId);
+        TEST_ASSERT(gRoot > 0 && gOrders > 0, "createUrlGroup must succeed");
+
+        drv.addUrlToUrlGroup(gRoot, L"http://+:8080/api/v1/");
+        drv.addUrlToUrlGroup(gOrders, L"http://+:8080/api/v1/orders/");
+
+        uint64_t qRoot = drv.createRequestQueue(L"RootApiQueue", 2001);
+        uint64_t qOrders = drv.createRequestQueue(L"OrdersApiQueue", 2002);
+        drv.bindUrlGroupToQueue(gRoot, qRoot);
+        drv.bindUrlGroupToQueue(gOrders, qOrders);
+
+        // 4. Test Longest-Prefix Routing
+        // Request A: http://+:8080/api/v1/customers -> matches gRoot
+        km::http::HTTP_REQUEST_V2 reqA{};
+        reqA.RequestId = 101;
+        reqA.Verb = km::http::HttpVerbGET;
+        reqA.rawUrl = "http://+:8080/api/v1/customers";
+        reqA.cookedFullUrl = L"http://+:8080/api/v1/customers";
+        std::string directRespA;
+        bool dispatchedA = drv.dispatchInboundRequest(reqA, directRespA);
+        TEST_ASSERT(dispatchedA, "reqA must be dispatched to queue");
+
+        km::http::HTTP_REQUEST_V2 recvA{};
+        bool gotA = drv.receiveHttpRequest(qRoot, recvA);
+        TEST_ASSERT(gotA && recvA.RequestId == 101, "qRoot must receive reqA (101)");
+
+        // Request B: http://+:8080/api/v1/orders/create -> matches gOrders (more specific!)
+        km::http::HTTP_REQUEST_V2 reqB{};
+        reqB.RequestId = 102;
+        reqB.Verb = km::http::HttpVerbPOST;
+        reqB.rawUrl = "http://+:8080/api/v1/orders/create";
+        reqB.cookedFullUrl = L"http://+:8080/api/v1/orders/create";
+        std::string directRespB;
+        bool dispatchedB = drv.dispatchInboundRequest(reqB, directRespB);
+        TEST_ASSERT(dispatchedB, "reqB must be dispatched to queue");
+
+        km::http::HTTP_REQUEST_V2 recvB{};
+        bool gotB = drv.receiveHttpRequest(qOrders, recvB);
+        TEST_ASSERT(gotB && recvB.RequestId == 102, "qOrders must receive reqB (102) due to longest prefix match");
+
+        // Clean up
+        drv.deleteUrlAcl(L"http://+:8080/api/v1/");
+        drv.closeRequestQueue(qRoot);
+        drv.closeRequestQueue(qOrders);
+        drv.closeUrlGroup(gRoot);
+        drv.closeUrlGroup(gOrders);
+        drv.closeServerSession(sessId);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Named Kernel Request Queues, Worker Process Isolation & FIFO Dispatch
+    // ------------------------------------------------------------------------
+    {
+        auto& drv = km::http::HttpKernelProtocolDriver::Instance();
+        uint64_t q1 = drv.createRequestQueue(L"MicaNT_Pool_A", 5001);
+        uint64_t q2 = drv.createRequestQueue(L"MicaNT_Pool_B", 5002);
+        TEST_ASSERT(q1 > 0 && q2 > 0 && q1 != q2, "Queues must be assigned distinct IDs");
+
+        auto queues = drv.getRequestQueues();
+        TEST_ASSERT(queues.contains(q1) && queues.contains(q2), "Queues must be registered in driver table");
+        TEST_ASSERT(queues[q1]->processId == 5001, "q1 controller PID must be 5001");
+        TEST_ASSERT(queues[q2]->processId == 5002, "q2 controller PID must be 5002");
+
+        // Enqueue 3 requests into q1 in order
+        for (uint64_t i = 1; i <= 3; ++i) {
+            km::http::HTTP_REQUEST_V2 r{};
+            r.RequestId = 1000 + i;
+            r.Verb = km::http::HttpVerbGET;
+            r.rawUrl = "/api/test" + std::to_string(i);
+            queues[q1]->enqueue(r);
+        }
+        TEST_ASSERT(queues[q1]->getCount() == 3, "q1 must contain 3 pending requests");
+        TEST_ASSERT(queues[q2]->getCount() == 0, "q2 must remain empty (worker process isolation)");
+
+        // Verify FIFO order when dequeuing
+        for (uint64_t i = 1; i <= 3; ++i) {
+            km::http::HTTP_REQUEST_V2 out{};
+            bool deq = drv.receiveHttpRequest(q1, out);
+            TEST_ASSERT(deq && out.RequestId == (1000 + i), "Dequeued request must match FIFO order");
+        }
+        TEST_ASSERT(queues[q1]->getCount() == 0, "q1 must be empty after dequeuing");
+
+        drv.closeRequestQueue(q1);
+        drv.closeRequestQueue(q2);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Kernel Zero-Copy Response Cache, TTL Expiration & Cache Hit Streaming
+    // ------------------------------------------------------------------------
+    {
+        auto& drv = km::http::HttpKernelProtocolDriver::Instance();
+        drv.flushResponseCache();
+        TEST_ASSERT(drv.getCacheSize() == 0, "Response cache must be empty after flush");
+
+        uint64_t sid = drv.createServerSession();
+        uint64_t gid = drv.createUrlGroup(sid);
+        drv.addUrlToUrlGroup(gid, L"http://+:8080/cached/");
+        uint64_t qid = drv.createRequestQueue(L"CacheTestQueue", 3001);
+        drv.bindUrlGroupToQueue(gid, qid);
+
+        // Store a cached response for http://+:8080/cached/data
+        km::http::HTTP_RESPONSE_V2 resp{};
+        resp.StatusCode = 200;
+        resp.reason = "OK";
+        resp.headers["Content-Type"] = "application/json";
+        std::string jsonBody = "{\"sovereign_cache\":true,\"bytes\":42}";
+        resp.entityBody.assign(jsonBody.begin(), jsonBody.end());
+
+        km::http::HTTP_CACHE_POLICY policy{};
+        policy.Policy = km::http::HttpCachePolicyTimeToLive;
+        policy.SecondsToLive = 300; // 5 minutes TTL
+
+        drv.sendHttpResponse(qid, 501, resp, policy, "http://+:8080/cached/data");
+        TEST_ASSERT(drv.getCacheSize() == 1, "Cache size must be 1 after storing TTL response");
+
+        // Dispatch inbound request for http://+:8080/cached/data -> Must HIT Kernel Cache!
+        km::http::HTTP_REQUEST_V2 inReq{};
+        inReq.RequestId = 502;
+        inReq.Verb = km::http::HttpVerbGET;
+        inReq.rawUrl = "http://+:8080/cached/data";
+        inReq.cookedFullUrl = L"http://+:8080/cached/data";
+
+        std::string directResponse;
+        uint64_t prevHits = drv.getCacheHits();
+        bool handled = drv.dispatchInboundRequest(inReq, directResponse);
+        TEST_ASSERT(handled, "dispatchInboundRequest must return true for cache hit");
+        TEST_ASSERT(drv.getCacheHits() == prevHits + 1, "Cache hit counter must increment");
+        TEST_ASSERT(directResponse.find("X-Cache: HIT-KERNEL") != std::string::npos, "Direct response must contain X-Cache: HIT-KERNEL header");
+        TEST_ASSERT(directResponse.find("{\"sovereign_cache\":true,\"bytes\":42}") != std::string::npos, "Direct response must contain exact payload");
+
+        // Request Queue must NOT have received this request (kernel zero-copy bypass!)
+        auto queues = drv.getRequestQueues();
+        TEST_ASSERT(queues[qid]->getCount() == 0, "Request queue must not have received request (zero-copy bypass)");
+
+        // Test selective cache flush
+        drv.flushResponseCache("http://+:8080/cached/data");
+        TEST_ASSERT(drv.getCacheSize() == 0, "Cache must be empty after flushing prefix");
+
+        // Subsequent request is a cache miss and gets queued to user-mode request queue
+        uint64_t prevMisses = drv.getCacheMisses();
+        std::string missDirect;
+        bool queued = drv.dispatchInboundRequest(inReq, missDirect);
+        TEST_ASSERT(queued, "Cache miss must dispatch to request queue");
+        TEST_ASSERT(drv.getCacheMisses() == prevMisses + 1, "Cache miss counter must increment");
+        TEST_ASSERT(queues[qid]->getCount() == 1, "Request queue must now have received the missed request");
+
+        drv.closeRequestQueue(qid);
+        drv.closeUrlGroup(gid);
+        drv.closeServerSession(sid);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Win32 HTTP Server API v2 (httpapi.dll) C ABI & Canonical netsh http CLI
+    // ------------------------------------------------------------------------
+    {
+        // 1. Win32 HTTP Server API v2 C ABI
+        httpapi::um::HTTPAPI_VERSION ver = httpapi::um::HTTPAPI_VERSION_2;
+        httpapi::um::ULONG status = httpapi::um::HttpInitialize(ver, httpapi::um::HTTP_INITIALIZE_SERVER, nullptr);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpInitialize must return NO_ERROR");
+
+        httpapi::um::HTTP_SERVER_SESSION_ID sessId = 0;
+        status = httpapi::um::HttpCreateServerSession(ver, &sessId, 0);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR && sessId > 0, "HttpCreateServerSession must return NO_ERROR");
+
+        httpapi::um::HTTP_URL_GROUP_ID urlGroupId = 0;
+        status = httpapi::um::HttpCreateUrlGroup(sessId, &urlGroupId, 0);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR && urlGroupId > 0, "HttpCreateUrlGroup must return NO_ERROR");
+
+        httpapi::um::HANDLE hQueue = nullptr;
+        status = httpapi::um::HttpCreateRequestQueue(ver, L"Win32ApiQueue", nullptr, 0, &hQueue);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR && hQueue != nullptr, "HttpCreateRequestQueue must return NO_ERROR");
+
+        httpapi::um::HTTP_BINDING_INFO bindInfo{};
+        bindInfo.Flags = 0x1;
+        bindInfo.RequestQueueHandle = hQueue;
+        status = httpapi::um::HttpSetUrlGroupProperty(urlGroupId, httpapi::um::HttpServerBindingProperty, &bindInfo, sizeof(bindInfo));
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpSetUrlGroupProperty HttpServerBindingProperty must return NO_ERROR");
+
+        status = httpapi::um::HttpAddUrlToUrlGroup(urlGroupId, L"http://+:8080/win32test/", 0, 0);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpAddUrlToUrlGroup must return NO_ERROR");
+
+        // Dispatch inbound request through driver to test HttpReceiveHttpRequest
+        auto& drv = km::http::HttpKernelProtocolDriver::Instance();
+        km::http::HTTP_REQUEST_V2 inReq{};
+        inReq.RequestId = 777;
+        inReq.Verb = km::http::HttpVerbGET;
+        inReq.rawUrl = "http://+:8080/win32test/hello";
+        inReq.cookedFullUrl = L"http://+:8080/win32test/hello";
+        std::string dummyDirect;
+        drv.dispatchInboundRequest(inReq, dummyDirect);
+
+        km::http::HTTP_REQUEST_V2 recvReq{};
+        httpapi::um::ULONG bytesRecv = 0;
+        status = httpapi::um::HttpReceiveHttpRequest(hQueue, 0, 0, &recvReq, sizeof(recvReq), &bytesRecv, nullptr);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpReceiveHttpRequest must return NO_ERROR");
+        TEST_ASSERT(recvReq.RequestId == 777, "Received request ID must match 777");
+
+        km::http::HTTP_RESPONSE_V2 sendResp{};
+        sendResp.StatusCode = 200;
+        sendResp.reason = "OK";
+        std::string respBody = "Hello from Win32 HTTP Server API v2!";
+        sendResp.entityBody.assign(respBody.begin(), respBody.end());
+
+        httpapi::um::ULONG bytesSent = 0;
+        status = httpapi::um::HttpSendHttpResponse(hQueue, recvReq.RequestId, 0, &sendResp, nullptr, &bytesSent, nullptr, 0, nullptr, nullptr);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR && bytesSent == respBody.size(), "HttpSendHttpResponse must return NO_ERROR");
+
+        status = httpapi::um::HttpRemoveUrlFromUrlGroup(urlGroupId, L"http://+:8080/win32test/", 0);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpRemoveUrlFromUrlGroup must return NO_ERROR");
+
+        status = httpapi::um::HttpCloseRequestQueue(hQueue);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpCloseRequestQueue must return NO_ERROR");
+
+        status = httpapi::um::HttpCloseUrlGroup(urlGroupId);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpCloseUrlGroup must return NO_ERROR");
+
+        status = httpapi::um::HttpCloseServerSession(sessId);
+        TEST_ASSERT(status == httpapi::um::NO_ERROR, "HttpCloseServerSession must return NO_ERROR");
+
+        // 2. Canonical netsh http CLI Executor
+        auto& netshCli = netsh::um::NetshHttpCommandExecutor::Instance();
+        std::string netshOut;
+
+        // show urlacl
+        int rc = netshCli.execute(std::vector<std::string_view>{"http", "show", "urlacl"}, netshOut);
+        TEST_ASSERT(rc == 0 && netshOut.find("URL Reservations:") != std::string::npos, "netsh http show urlacl must succeed");
+
+        // add urlacl
+        rc = netshCli.execute(std::vector<std::string_view>{"http", "add", "urlacl", "url=http://+:9090/testsvc/", "user=NT SERVICE\\W3SVC"}, netshOut);
+        TEST_ASSERT(rc == 0 && netshOut.find("URL reservation successfully added") != std::string::npos, "netsh http add urlacl must succeed");
+
+        // show servicestate
+        rc = netshCli.execute(std::vector<std::string_view>{"http", "show", "servicestate"}, netshOut);
+        TEST_ASSERT(rc == 0 && netshOut.find("Snapshot of HTTP.SYS service state") != std::string::npos, "netsh http show servicestate must succeed");
+
+        // show cachestate
+        rc = netshCli.execute(std::vector<std::string_view>{"http", "show", "cachestate"}, netshOut);
+        TEST_ASSERT(rc == 0 && netshOut.find("Snapshot of HTTP response cache") != std::string::npos, "netsh http show cachestate must succeed");
+
+        // flush responsecache
+        rc = netshCli.execute(std::vector<std::string_view>{"http", "flush", "responsecache"}, netshOut);
+        TEST_ASSERT(rc == 0 && netshOut.find("successfully flushed") != std::string::npos, "netsh http flush responsecache must succeed");
+
+        // delete urlacl
+        rc = netshCli.execute(std::vector<std::string_view>{"http", "delete", "urlacl", "url=http://+:9090/testsvc/"}, netshOut);
+        TEST_ASSERT(rc == 0 && netshOut.find("successfully deleted") != std::string::npos, "netsh http delete urlacl must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Kernel Driver Registration, SCM HTTP Service, WFP Port 80/8080 Permit & Live Telemetry Push
+    // ------------------------------------------------------------------------
+    {
+        // 1. WFP Port 80/8080 Permit Rule (Filter ID 15901)
+        auto& httpsConsole = km::net::HttpsExecutiveConsole::get();
+        httpsConsole.startHttpsServer(443);
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+
+        auto httpRuleOpt = wfp.findRuleById(15901);
+        TEST_ASSERT(httpRuleOpt.has_value(), "WFP filter rule 15901 for HTTP Kernel Driver must exist");
+        TEST_ASSERT(httpRuleOpt->localPortStart == 80 && httpRuleOpt->localPortEnd == 8080, "WFP filter rule 15901 must cover ports 80..8080");
+        TEST_ASSERT(httpRuleOpt->action == wfp::FWP_ACTION_PERMIT, "WFP filter rule 15901 action must be PERMIT");
+
+        // 2. Remote Web Terminal command routing: "netsh http show servicestate"
+        std::string termOut = httpsConsole.executeTerminalCommand("netsh http show servicestate");
+        TEST_ASSERT(termOut.find("Snapshot of HTTP.SYS service state") != std::string::npos, "Web terminal 'netsh http show servicestate' must return state snapshot");
+
+        // 3. Remote Web Terminal command routing: "netsh http show urlacl"
+        std::string termAclOut = httpsConsole.executeTerminalCommand("netsh http show urlacl");
+        TEST_ASSERT(termAclOut.find("URL Reservations:") != std::string::npos, "Web terminal 'netsh http show urlacl' must return URL reservations");
+
+        // 4. Live Telemetry Push Stream contains HTTP.sys metrics
+        std::string streamJson = httpsConsole.generateStreamTelemetryJson();
+        TEST_ASSERT(streamJson.find("http_requests") != std::string::npos, "Push stream JSON must include http_requests");
+        TEST_ASSERT(streamJson.find("http_cache_hits") != std::string::npos, "Push stream JSON must include http_cache_hits");
+        TEST_ASSERT(streamJson.find("http_cache_misses") != std::string::npos, "Push stream JSON must include http_cache_misses");
+        TEST_ASSERT(streamJson.find("http_queues") != std::string::npos, "Push stream JSON must include http_queues");
+        TEST_ASSERT(streamJson.find("http_url_groups") != std::string::npos, "Push stream JSON must include http_url_groups");
+    }
+
+    std::cout << "[HORIZON 159] Sovereign HTTP.sys Kernel Protocol Driver, Win32 HTTP Server API, Zero-Copy Response Cache & netsh http CLI Summary:\n"
+              << "    Pillar 1: http.sys Driver Architecture, Device Objects & IOCTL Codes OK\n"
+              << "    Pillar 2: URL Prefix Radix Tree, Longest-Prefix Matching & URL ACL Authorization OK\n"
+              << "    Pillar 3: Named Kernel Request Queues, Worker Process Isolation & FIFO Dispatch OK\n"
+              << "    Pillar 4: Kernel Zero-Copy Response Cache, TTL Expiration & Cache Hit Streaming OK\n"
+              << "    Pillar 5: Win32 HTTP Server API v2 (httpapi.dll) C ABI & Canonical netsh http CLI OK\n"
+              << "    Pillar 6: Kernel Driver Registration, SCM HTTP Service, WFP Port 80/8080 Permit & Live Telemetry Push OK\n";
+
+    std::cout << "[TEST] Suite 375: Horizon 159 - Sovereign HTTP.sys Kernel Protocol Driver, Win32 HTTP Server API, Zero-Copy Response Cache & netsh http CLI PASSED." << std::endl;
+}

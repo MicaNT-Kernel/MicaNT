@@ -29,6 +29,8 @@
 #include "micant/um/subsystems/net/net_cmd.hpp"
 #include "micant/um/servers/rdp.hpp"
 #include "micant/um/subsystems/net/mstsc.hpp"
+#include "micant/km/drivers/net/http.hpp"
+#include "micant/um/subsystems/net/netsh_http.hpp"
 
 namespace micant::km::net {
 
@@ -91,6 +93,19 @@ public:
         rdpRule.weight = 1500;
         rdpRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(rdpRule);
+
+        // 5. Register WFP Inbound Rule for Kernel HTTP.sys Protocol Driver (TCP Port 80/8080)
+        wfp::km::WfpKernelFilterRule httpRule{};
+        httpRule.filterId = 15901;
+        httpRule.name = "MicaNT_HTTP_Kernel_Permit";
+        httpRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        httpRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        httpRule.protocol = tcpip::IPPROTO_TCP;
+        httpRule.localPortStart = 80;
+        httpRule.localPortEnd = 8080;
+        httpRule.weight = 1500;
+        httpRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(httpRule);
     }
 
     void stopHttpsServer() {
@@ -445,6 +460,23 @@ public:
             std::string res;
             mstsc::um::SessionCommandExecutor::Instance().executeReset(subArgs, res);
             return res;
+        } else if (cmd == "netsh" || cmd.starts_with("netsh ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            std::span<const std::string_view> subArgs;
+            if (tokens.size() > 1) {
+                subArgs = std::span<const std::string_view>(tokens.data() + 1, tokens.size() - 1);
+            }
+            std::string res;
+            netsh::um::NetshHttpCommandExecutor::Instance().execute(subArgs, res);
+            return res;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -457,6 +489,7 @@ public:
                    "  query session/user    Display active RDP / terminal sessions\r\n"
                    "  reset session <id>    Disconnect or logoff terminal session\r\n"
                    "  mstsc [/v:host]       Remote Desktop Connection client\r\n"
+                   "  netsh http show ...   Manage HTTP.sys URL ACLs, request queues and cache\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -469,6 +502,7 @@ public:
     std::string generateStreamTelemetryJson() const {
         auto& smbSrv = smb::km::SmbServerEngine::Instance();
         auto& rdpSrv = rdp::EnterpriseRdpServer::get();
+        auto& httpDrv = km::http::HttpKernelProtocolDriver::Instance();
         std::ostringstream ss;
         ss << "{\"event\":\"telemetry\",\"cpu_percent\":1.4,\"ram_used_mb\":4096,"
            << "\"ram_total_mb\":32768,\"rx_packets\":14820,\"tx_packets\":12950,"
@@ -479,7 +513,12 @@ public:
            << "\"smb_bytes_written\":" << smbSrv.getTotalBytesWritten() << ","
            << "\"rdp_sessions\":" << rdpSrv.getAllSessions().size() << ","
            << "\"rdp_frames\":" << rdpSrv.getTotalFrames() << ","
-           << "\"rdp_inputs\":" << rdpSrv.getTotalInputs() << "}\r\n";
+           << "\"rdp_inputs\":" << rdpSrv.getTotalInputs() << ","
+           << "\"http_requests\":" << httpDrv.getTotalRequests() << ","
+           << "\"http_cache_hits\":" << httpDrv.getCacheHits() << ","
+           << "\"http_cache_misses\":" << httpDrv.getCacheMisses() << ","
+           << "\"http_queues\":" << httpDrv.getActiveQueuesCount() << ","
+           << "\"http_url_groups\":" << httpDrv.getActiveUrlGroupsCount() << "}\r\n";
         return ss.str();
     }
 
