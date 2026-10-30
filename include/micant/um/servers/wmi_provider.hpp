@@ -217,6 +217,7 @@ private:
             os.set("FreePhysicalMemory", "25165824");
             os.set("NumberOfProcesses", "42");
             os.set("Status", "OK");
+            os.set("ProductType", "2"); // Domain Controller
             os.set("Manufacturer", "Barrer Software");
             list.push_back(os);
         } else if (_stricmp(className.c_str(), "Win32_ComputerSystem") == 0) {
@@ -236,7 +237,7 @@ private:
             static const std::wstring s_knownSvcs[] = {
                 L"WinRM", L"CertSvc", L"DHCPServer", L"DNS", L"NTDS", L"Kdc",
                 L"HTTP", L"W3SVC", L"TermService", L"LanmanServer", L"LanmanWorkstation",
-                L"RpcSs", L"EventLog", L"PlugPlay"
+                L"RpcSs", L"EventLog", L"PlugPlay", L"Gpsvc"
             };
             auto& scm = micant::scm::ServiceControlManager::get();
             for (const auto& name : s_knownSvcs) {

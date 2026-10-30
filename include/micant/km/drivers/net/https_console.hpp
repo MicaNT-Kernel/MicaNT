@@ -43,6 +43,8 @@
 #include "micant/um/subsystems/security/certutil.hpp"
 #include "micant/um/servers/wmi_provider.hpp"
 #include "micant/um/subsystems/net/winrm_tools.hpp"
+#include "micant/um/servers/gpo_sysvol.hpp"
+#include "micant/um/subsystems/mgmt/gp_tools.hpp"
 
 namespace micant::km::net {
 
@@ -156,6 +158,19 @@ public:
         winrmRule.localPortEnd = 5986;
         winrmRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(winrmRule);
+
+        // 9. Register WFP Inbound Rule for Active Directory Group Policy (SYSVOL TCP 445 / LDAP 389 / Kerberos 88 / RPC 135)
+        wfp::km::WfpKernelFilterRule gpRule{};
+        gpRule.filterId = 16601;
+        gpRule.name = "MicaNT_GroupPolicy_Inbound_Permit";
+        gpRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        gpRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        gpRule.protocol = tcpip::IPPROTO_TCP;
+        gpRule.localPortStart = 88;
+        gpRule.localPortEnd = 445;
+        gpRule.weight = 1500;
+        gpRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(gpRule);
     }
 
     void stopHttpsServer() {
@@ -592,6 +607,16 @@ public:
             std::string outStr, errStr;
             micant::wmi::ExecuteWmicString(std::string(cmd), outStr, errStr);
             return !outStr.empty() ? outStr : errStr;
+        } else if (cmd == "gpupdate" || cmd.starts_with("gpupdate ") || cmd.starts_with("gpupdate/") || cmd.starts_with("gpupdate-")) {
+            std::string outStr, errStr;
+            int32_t ec = 0;
+            micant::gp_tools::ExecuteGpupdateString(std::string(cmd), outStr, errStr, ec);
+            return !outStr.empty() ? outStr : errStr;
+        } else if (cmd == "gpresult" || cmd.starts_with("gpresult ") || cmd.starts_with("gpresult/") || cmd.starts_with("gpresult-")) {
+            std::string outStr, errStr;
+            int32_t ec = 0;
+            micant::gp_tools::ExecuteGpresultString(std::string(cmd), outStr, errStr, ec);
+            return !outStr.empty() ? outStr : errStr;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -611,6 +636,8 @@ public:
                    "  dsquery <type> ...    Query Active Directory objects\r\n"
                    "  dcdiag [/s:dc] ...    Run Domain Controller health diagnostics\r\n"
                    "  netsh dhcp show ...   Manage DHCP Server scopes, leases, reservations and status\r\n"
+                   "  gpupdate [/target:..] Manage Group Policy refresh and registry convergence\r\n"
+                   "  gpresult /r /v        Display Resultant Set of Policy (RSOP) diagnostic report\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -675,7 +702,11 @@ public:
            << "\"winrm_total_commands\":" << winrm::EnterpriseWinRmServer::instance().getStatistics().totalCommandsExecuted << ","
            << "\"winrm_bytes_transferred\":" << (winrm::EnterpriseWinRmServer::instance().getStatistics().totalBytesReceived + winrm::EnterpriseWinRmServer::instance().getStatistics().totalBytesSent) << ","
            << "\"wmi_queries_served\":" << wmi::WmiRepository::get().getQueryCount() << ","
-           << "\"winrm_listeners_count\":" << winrm::EnterpriseWinRmServer::instance().getListeners().size() << "}\r\n";
+           << "\"winrm_listeners_count\":" << winrm::EnterpriseWinRmServer::instance().getListeners().size() << ","
+           << "\"gpo_applied_count\":" << micant::gp::GroupPolicySubsystem::instance().getPoliciesApplied() << ","
+           << "\"gpo_refreshes_completed\":" << micant::gp::GroupPolicySubsystem::instance().getRefreshesCompleted() << ","
+           << "\"gpo_last_refresh_us\":" << micant::gp::GroupPolicySubsystem::instance().getLastMachineReport().refreshTimestampUs << ","
+           << "\"gpo_cse_invocations\":" << micant::gp::GroupPolicySubsystem::instance().getCseInvocations() << "}\r\n";
         return ss.str();
     }
 

@@ -29997,3 +29997,355 @@ void Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI() {
 
     std::cout << "[TEST] Suite 381: Horizon 165 - Sovereign Windows Remote Management (WinRM 2.0 / MS-PSRP / WMI) PASSED." << std::endl;
 }
+
+
+void Test_Horizon166_ActiveDirectoryGroupPolicy_Sysvol_And_GpToolsCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 382: Horizon 166 - Sovereign Active Directory Group Policy (AD GPO / MS-GPOL),\n"
+              << "SYSVOL File Distribution (\\\\micant.local\\SYSVOL), Registry Policy Codec (MS-GPREG),\n"
+              << "Security Policy Engine (MS-GPSB), WMI Filter Integration & gpupdate/gpresult CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: AD GPO Architecture, SCM Service & VersionDatabase Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& gp = gp::GroupPolicySubsystem::instance();
+        gp.resetForTest();
+
+        // 1. SCM Service (Gpsvc)
+        auto& scm = scm::ServiceControlManager::get();
+        auto rec = scm.getServiceRecord(L"Gpsvc");
+        TEST_ASSERT(rec != nullptr, "Gpsvc must be registered in ServiceControlManager");
+        TEST_ASSERT(rec->serviceType == scm::SERVICE_WIN32_SHARE_PROCESS, "Gpsvc must be SERVICE_WIN32_SHARE_PROCESS");
+        TEST_ASSERT(rec->startType == scm::SERVICE_AUTO_START, "Gpsvc must be SERVICE_AUTO_START");
+        TEST_ASSERT(rec->status.dwCurrentState == scm::SERVICE_RUNNING, "Gpsvc must be in running state");
+
+        // 2. VersionDatabase PE Registration
+        auto& vdb = version::VersionDatabase::Instance();
+        const auto* modGpsvc = vdb.FindModule("gpsvc.dll");
+        const auto* modGpup = vdb.FindModule("gpupdate.exe");
+        const auto* modGpres = vdb.FindModule("gpresult.exe");
+        const auto* modGprep = vdb.FindModule("gpreport.exe");
+        const auto* modGpedit = vdb.FindModule("gpedit.dll");
+        const auto* modUserenv = vdb.FindModule("userenv.dll");
+        const auto* modAppmgmt = vdb.FindModule("appmgmts.dll");
+        const auto* modGpmc = vdb.FindModule("gpmc.msc");
+
+        TEST_ASSERT(modGpsvc != nullptr, "gpsvc.dll in VersionDatabase");
+        TEST_ASSERT(modGpup != nullptr, "gpupdate.exe in VersionDatabase");
+        TEST_ASSERT(modGpres != nullptr, "gpresult.exe in VersionDatabase");
+        TEST_ASSERT(modGprep != nullptr, "gpreport.exe in VersionDatabase");
+        TEST_ASSERT(modGpedit != nullptr, "gpedit.dll in VersionDatabase");
+        TEST_ASSERT(modUserenv != nullptr, "userenv.dll in VersionDatabase");
+        TEST_ASSERT(modAppmgmt != nullptr, "appmgmts.dll in VersionDatabase");
+        TEST_ASSERT(modGpmc != nullptr, "gpmc.msc in VersionDatabase");
+
+        // 3. Win32 C ABI Parity Exports
+        uint32_t retComp = gp::MicaProcessGroupPolicyCompleted(nullptr, 0);
+        TEST_ASSERT(retComp == 0, "MicaProcessGroupPolicyCompleted returns 0");
+
+        uint32_t retRef = gp::MicaRefreshPolicy(1);
+        TEST_ASSERT(retRef == 1, "MicaRefreshPolicy returns TRUE");
+
+        uint32_t retRefEx = gp::MicaRefreshPolicyEx(1, 0x1);
+        TEST_ASSERT(retRefEx == 1, "MicaRefreshPolicyEx returns TRUE");
+
+        gp::GPO_LINK_NODE* pGpoList = nullptr;
+        uint32_t retGetList = gp::MicaGetGPOListW(nullptr, L"DC01", nullptr, nullptr, 0, &pGpoList);
+        TEST_ASSERT(retGetList == 0 && pGpoList != nullptr, "MicaGetGPOListW returns GPO list");
+        uint32_t retFree = gp::MicaFreeGPOListW(pGpoList);
+        TEST_ASSERT(retFree == 1, "MicaFreeGPOListW returns TRUE");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Enterprise SYSVOL Distribution Engine (\\micant.local\SYSVOL) & GPT.INI
+    // ------------------------------------------------------------------------
+    {
+        auto& sysvol = gp::EnterpriseSysvolServer::instance();
+        sysvol.resetForTest();
+
+        TEST_ASSERT(sysvol.getGpoCount() >= 4, "SYSVOL must contain at least 4 default GPOs");
+
+        // 1. Verify Default Domain Policy in SYSVOL
+        gp::SysvolGpoDirectory defDomainDir;
+        bool foundDom = sysvol.getSysvolGpo("{31B2F340-016D-11D2-945F-00C04FB984F9}", &defDomainDir);
+        TEST_ASSERT(foundDom, "Default Domain Policy found in SYSVOL");
+        TEST_ASSERT(defDomainDir.displayName == "Default Domain Policy", "Default Domain Policy display name matches");
+
+        // 2. GPT.INI Serialization & Deserialization
+        gp::GptIni ini;
+        ini.displayName = "Enterprise Security Baseline";
+        ini.setVersions(4, 2);
+        std::string iniStr = ini.serialize();
+        TEST_ASSERT(iniStr.find("[General]") != std::string::npos, "GPT.INI has [General] section");
+        TEST_ASSERT(iniStr.find("Version=262146") != std::string::npos, "GPT.INI version encoded (4 << 16 | 2 = 262146)");
+
+        gp::GptIni parsedIni;
+        bool parseIniOk = parsedIni.deserialize(iniStr);
+        TEST_ASSERT(parseIniOk, "GPT.INI deserialize succeeded");
+        TEST_ASSERT(parsedIni.getMachineVersion() == 4, "Parsed machine version is 4");
+        TEST_ASSERT(parsedIni.getUserVersion() == 2, "Parsed user version is 2");
+        TEST_ASSERT(parsedIni.displayName == "Enterprise Security Baseline", "Parsed displayName matches");
+
+        // 3. UNC Path and SMB 3.1.1 Share Publication
+        std::string uncPath = sysvol.getSysvolPath("{31B2F340-016D-11D2-945F-00C04FB984F9}", true);
+        TEST_ASSERT(uncPath == "\\\\micant.local\\SYSVOL\\micant.local\\Policies\\{31B2F340-016D-11D2-945F-00C04FB984F9}",
+                    "SYSVOL UNC path must match sovereign domain");
+
+        auto& smbSrv = smb::km::SmbServerEngine::Instance();
+        auto shares = smbSrv.getShares();
+        bool hasSysvol = false;
+        bool hasNetlogon = false;
+        for (const auto& sh : shares) {
+            if (sh.name == L"SYSVOL") hasSysvol = true;
+            if (sh.name == L"NETLOGON") hasNetlogon = true;
+        }
+        TEST_ASSERT(hasSysvol, "SYSVOL share published on SMB 3.1.1");
+        TEST_ASSERT(hasNetlogon, "NETLOGON share published on SMB 3.1.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: MS-GPREG Registry Policy Codec (registry.pol) & ConfigurationManager Convergence
+    // ------------------------------------------------------------------------
+    {
+        gp::RegistryPol pol;
+        gp::PolicySetting s1;
+        s1.keyPath = "Software\\Policies\\Microsoft\\Windows\\System";
+        s1.valueName = "EnableSmartScreen";
+        s1.type = gp::PolicyValueType::Dword;
+        s1.dwordValue = 1;
+        pol.settings.push_back(s1);
+
+        gp::PolicySetting s2;
+        s2.keyPath = "Software\\Policies\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+        s2.valueName = "LegalNoticeCaption";
+        s2.type = gp::PolicyValueType::String;
+        s2.stringValue = "MicaNT Sovereign Executive Notice";
+        pol.settings.push_back(s2);
+
+        gp::PolicySetting s3;
+        s3.keyPath = "Software\\Policies\\Microsoft\\Windows\\Personalization";
+        s3.valueName = "LockScreenImage";
+        s3.type = gp::PolicyValueType::ExpandString;
+        s3.stringValue = "%SystemRoot%\\web\\screen\\img105.jpg";
+        pol.settings.push_back(s3);
+
+        // Serialize
+        auto bytes = pol.serialize();
+        TEST_ASSERT(bytes.size() >= 32, "Serialized registry.pol has valid length");
+        uint32_t magic = 0;
+        std::memcpy(&magic, bytes.data(), 4);
+        TEST_ASSERT(magic == gp::RegistryPol::POL_MAGIC, "POL_MAGIC is 0x67655250 (PReg)");
+
+        // Deserialize
+        gp::RegistryPol parsed;
+        bool desOk = parsed.deserialize(bytes.data(), bytes.size());
+        TEST_ASSERT(desOk, "registry.pol deserialized successfully");
+        TEST_ASSERT(parsed.settings.size() == 3, "registry.pol contains 3 settings");
+        TEST_ASSERT(parsed.settings[0].valueName == "EnableSmartScreen" && parsed.settings[0].dwordValue == 1,
+                    "DWORD setting roundtripped");
+        TEST_ASSERT(parsed.settings[1].valueName == "LegalNoticeCaption" && parsed.settings[1].stringValue == "MicaNT Sovereign Executive Notice",
+                    "String setting roundtripped");
+        TEST_ASSERT(parsed.settings[2].valueName == "LockScreenImage" && parsed.settings[2].stringValue == "%SystemRoot%\\web\\screen\\img105.jpg",
+                    "ExpandString setting roundtripped");
+
+        // Test Convergence into ConfigurationManager
+        auto& cm = cm::ConfigurationManager::get();
+        auto sw = cm.resolvePath(L"\\Registry\\Machine\\SOFTWARE");
+        TEST_ASSERT(sw != nullptr, "SOFTWARE key resolved");
+        auto polKey = sw->createSubkey(L"Policies");
+        TEST_ASSERT(polKey != nullptr, "Policies subkey created");
+        polKey->setValueDword(L"EnableSmartScreen", 1);
+        polKey->setValueString(L"LegalNoticeCaption", L"MicaNT Sovereign Executive Notice");
+
+        const auto* kvDw = polKey->getValue(L"EnableSmartScreen");
+        TEST_ASSERT(kvDw != nullptr && kvDw->type == cm::RegType::Dword, "EnableSmartScreen found as Dword");
+        uint32_t outDw = *reinterpret_cast<const uint32_t*>(kvDw->data.data());
+        TEST_ASSERT(outDw == 1, "EnableSmartScreen is 1");
+
+        const auto* kvStr = polKey->getValue(L"LegalNoticeCaption");
+        TEST_ASSERT(kvStr != nullptr && kvStr->type == cm::RegType::Sz, "LegalNoticeCaption found as Sz");
+        std::wstring outStr(reinterpret_cast<const wchar_t*>(kvStr->data.data()), kvStr->data.size() / sizeof(wchar_t));
+        TEST_ASSERT(outStr == L"MicaNT Sovereign Executive Notice", "LegalNoticeCaption matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: MS-GPSB Security Policy Template Engine (GptTmpl.inf) & CSEs
+    // ------------------------------------------------------------------------
+    {
+        gp::GptTmplInf sec;
+        sec.systemAccess["MinimumPasswordLength"] = "14";
+        sec.systemAccess["PasswordComplexity"] = "1";
+        sec.systemAccess["PasswordHistorySize"] = "24";
+        sec.systemAccess["MaximumPasswordAge"] = "30";
+        sec.systemAccess["LockoutBadCount"] = "3";
+        sec.systemAccess["LockoutDuration"] = "30";
+
+        sec.kerberosPolicy["MaxTicketAge"] = "10";
+        sec.kerberosPolicy["MaxRenewAge"] = "7";
+        sec.kerberosPolicy["MaxClockSkew"] = "5";
+
+        sec.eventAudit["AuditLogonEvents"] = "3";
+        sec.eventAudit["AuditAccountManage"] = "3";
+
+        sec.privilegeRights["SeNetworkLogonRight"] = "*S-1-5-11,*S-1-5-32-544";
+
+        sec.registryValues["MACHINE\\Software\\Policies\\Microsoft\\Windows\\System\\DisableCMD"] = "4,0";
+
+        // Serialize
+        std::string infData = sec.serialize();
+        TEST_ASSERT(infData.find("[Unicode]\r\nUnicode=yes") != std::string::npos, "GptTmpl.inf has Unicode header");
+        TEST_ASSERT(infData.find("[System Access]") != std::string::npos, "GptTmpl.inf has System Access");
+        TEST_ASSERT(infData.find("MinimumPasswordLength = 14") != std::string::npos, "MinimumPasswordLength serialized");
+        TEST_ASSERT(infData.find("[Kerberos Policy]") != std::string::npos, "GptTmpl.inf has Kerberos Policy");
+        TEST_ASSERT(infData.find("[Event Audit]") != std::string::npos, "GptTmpl.inf has Event Audit");
+        TEST_ASSERT(infData.find("[Privilege Rights]") != std::string::npos, "GptTmpl.inf has Privilege Rights");
+        TEST_ASSERT(infData.find("[Registry Values]") != std::string::npos, "GptTmpl.inf has Registry Values");
+
+        // Deserialize
+        gp::GptTmplInf parsedSec;
+        bool parseSecOk = parsedSec.deserialize(infData);
+        TEST_ASSERT(parseSecOk, "GptTmpl.inf deserialize succeeded");
+        TEST_ASSERT(parsedSec.systemAccess["MinimumPasswordLength"] == "14", "Parsed MinimumPasswordLength is 14");
+        TEST_ASSERT(parsedSec.systemAccess["LockoutBadCount"] == "3", "Parsed LockoutBadCount is 3");
+        TEST_ASSERT(parsedSec.kerberosPolicy["MaxTicketAge"] == "10", "Parsed MaxTicketAge is 10");
+        TEST_ASSERT(parsedSec.privilegeRights["SeNetworkLogonRight"] == "*S-1-5-11,*S-1-5-32-544", "Parsed SeNetworkLogonRight matches");
+
+        // Verify CSE Invocations
+        auto& gpSub = gp::GroupPolicySubsystem::instance();
+        uint64_t beforeCse = gpSub.getCseInvocations();
+        gpSub.processGroupPolicy("DC01", true, "OU=Domain Controllers,DC=micant,DC=local", false);
+        uint64_t afterCse = gpSub.getCseInvocations();
+        TEST_ASSERT(afterCse > beforeCse, "CSE invocations incremented after policy processing");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Sovereign WMI Filtering (WQL) & LSDOU Precedence Resolution (RSOP)
+    // ------------------------------------------------------------------------
+    {
+        auto& gp = gp::GroupPolicySubsystem::instance();
+
+        // 1. Test WMI Filter evaluation with sovereign WmiRepository
+        gp::WmiFilter wfWinVer;
+        wfWinVer.filterId = "{FILTER-WIN10-26100-000000000001}";
+        wfWinVer.name = "Windows 26100 Filter";
+        wfWinVer.query = "SELECT * FROM Win32_OperatingSystem WHERE Version LIKE '10.0.26100%'";
+        TEST_ASSERT(wfWinVer.evaluate({}), "WMI filter for Version 10.0.26100% must evaluate to true on DC01");
+
+        // Filter requiring Workstation (ProductType = "1")
+        gp::WmiFilter wfWorkstationOnly;
+        wfWorkstationOnly.filterId = "{FILTER-WORKSTATION-ONLY-000000002}";
+        wfWorkstationOnly.name = "Workstation ProductType Only";
+        wfWorkstationOnly.query = "SELECT * FROM Win32_OperatingSystem WHERE ProductType = '1'";
+        // Since DC01 is a Domain Controller (ProductType = "2"), this query will return 0 rows
+        TEST_ASSERT(!wfWorkstationOnly.evaluate({}), "WMI filter for ProductType='1' must evaluate to false on DC01");
+
+        // Attach Workstation-only filter to a test GPO
+        gp::GroupPolicyObject wsOnlyGpo;
+        wsOnlyGpo.gpoId = "{WS-ONLY-0000-0000-0000-000000000001}";
+        wsOnlyGpo.displayName = "Workstation Client Tuning GPO";
+        wsOnlyGpo.wmiFilterId = wfWorkstationOnly.filterId;
+        gp.createGpo(wsOnlyGpo);
+        gp.registerWmiFilter(wfWorkstationOnly);
+        gp.linkGpo(gp::SomType::Domain, "DC=micant,DC=local", wsOnlyGpo.gpoId, false, true);
+
+        auto repFilter = gp.processGroupPolicy("DC01", true, "OU=Domain Controllers,DC=micant,DC=local", false);
+        bool sawWmiFilterFail = false;
+        for (const auto& [gId, reason] : repFilter.filteredGpoReasons) {
+            if (gId == wsOnlyGpo.gpoId && reason == gp::FilterVerdict::WmiFilterFailed) {
+                sawWmiFilterFail = true;
+            }
+        }
+        TEST_ASSERT(sawWmiFilterFail, "GPO with unfulfilled WMI filter was filtered out with WmiFilterFailed");
+
+        // 2. Test Enforced (NoOverride) GPO Precedence
+        // High Security Zero-Trust Enforced Policy has LegalNoticeText = "MANDATORY ROOT NOTICE: ZERO OVERRIDE"
+        auto repEnf = gp.processGroupPolicy("DC01", true, "OU=Domain Controllers,DC=micant,DC=local", false);
+        auto itNotice = repEnf.resolvedSettings.find("Software\\Policies\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\LegalNoticeText");
+        TEST_ASSERT(itNotice != repEnf.resolvedSettings.end(), "LegalNoticeText setting resolved");
+        TEST_ASSERT(itNotice->second.stringValue == "MANDATORY ROOT NOTICE: ZERO OVERRIDE",
+                    "Enforced Root GPO takes precedence");
+        TEST_ASSERT(itNotice->second.enforced, "Resolved setting marked as enforced");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Canonical gpupdate.exe & gpresult.exe CLI, Web Terminal & Push Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Test gpupdate CLI
+        std::string upOut, upErr;
+        int32_t upEc = 0;
+        gp_tools::ExecuteGpupdateString("gpupdate /force", upOut, upErr, upEc);
+        TEST_ASSERT(upEc == 0, "gpupdate /force completed with exit code 0");
+        TEST_ASSERT(upOut.find("Updating policy...") != std::string::npos, "gpupdate header found");
+        TEST_ASSERT(upOut.find("Computer Policy update has completed successfully.") != std::string::npos,
+                    "Computer policy update success message");
+        TEST_ASSERT(upOut.find("User Policy update has completed successfully.") != std::string::npos,
+                    "User policy update success message");
+
+        // gpupdate /target:computer
+        std::string upCompOut, upCompErr;
+        gp_tools::ExecuteGpupdateString("gpupdate /target:computer", upCompOut, upCompErr, upEc);
+        TEST_ASSERT(upCompOut.find("Computer Policy update has completed successfully.") != std::string::npos,
+                    "Target computer update succeeded");
+        TEST_ASSERT(upCompOut.find("User Policy update") == std::string::npos,
+                    "Target computer skipped user policy");
+
+        // 2. Test gpresult CLI (/r and /v)
+        std::string resOut, resErr;
+        int32_t resEc = 0;
+        gp_tools::ExecuteGpresultString("gpresult /r", resOut, resErr, resEc);
+        TEST_ASSERT(resEc == 0, "gpresult /r completed with exit code 0");
+        TEST_ASSERT(resOut.find("Group Policy Result tool") != std::string::npos, "gpresult tool banner found");
+        TEST_ASSERT(resOut.find("DC01") != std::string::npos, "gpresult target machine DC01 found");
+        TEST_ASSERT(resOut.find("micant.local") != std::string::npos, "gpresult domain micant.local found");
+        TEST_ASSERT(resOut.find("Applied Group Policy Objects") != std::string::npos, "Applied GPOs section found");
+        TEST_ASSERT(resOut.find("Default Domain Policy") != std::string::npos, "Default Domain Policy listed");
+        TEST_ASSERT(resOut.find("Domain Controllers") != std::string::npos, "Security groups section found");
+
+        std::string resVerboseOut, resVerboseErr;
+        gp_tools::ExecuteGpresultString("gpresult /v", resVerboseOut, resVerboseErr, resEc);
+        TEST_ASSERT(resVerboseOut.find("Resultant Set of Policies (Registry Settings)") != std::string::npos,
+                    "Verbose RSOP contains registry settings");
+
+        // 3. Remote Web Terminal Integration
+        auto& console = km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) {
+            console.startHttpsServer(443);
+        }
+
+        std::string termUp = console.executeTerminalCommand("gpupdate /force");
+        TEST_ASSERT(termUp.find("Computer Policy update has completed successfully.") != std::string::npos,
+                    "Terminal executed gpupdate /force");
+
+        std::string termRes = console.executeTerminalCommand("gpresult /r");
+        TEST_ASSERT(termRes.find("Applied Group Policy Objects") != std::string::npos,
+                    "Terminal executed gpresult /r");
+
+        // 4. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"gpo_applied_count\":") != std::string::npos, "Telemetry gpo_applied_count match");
+        TEST_ASSERT(teleJson.find("\"gpo_refreshes_completed\":") != std::string::npos, "Telemetry gpo_refreshes_completed match");
+        TEST_ASSERT(teleJson.find("\"gpo_last_refresh_us\":") != std::string::npos, "Telemetry gpo_last_refresh_us match");
+        TEST_ASSERT(teleJson.find("\"gpo_cse_invocations\":") != std::string::npos, "Telemetry gpo_cse_invocations match");
+
+        // 5. WFP Rule #16601 (MicaNT_GroupPolicy_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(16601);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #16601 for Group Policy must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_TCP, "GP rule protocol must be TCP");
+        TEST_ASSERT(ruleOpt->localPortStart == 88 && ruleOpt->localPortEnd == 445, "GP rule port range 88-445");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "GP rule action must be PERMIT");
+    }
+
+    std::cout << "[HORIZON 166] Sovereign Active Directory Group Policy (AD GPO / MS-GPOL) Summary:\n"
+              << "    Pillar 1: AD GPO Architecture, SCM Service & VersionDatabase Registration OK\n"
+              << "    Pillar 2: Enterprise SYSVOL Distribution Engine (\\\\micant.local\\SYSVOL) & GPT.INI Codec OK\n"
+              << "    Pillar 3: MS-GPREG Registry Policy Codec (registry.pol) & ConfigurationManager Convergence OK\n"
+              << "    Pillar 4: MS-GPSB Security Policy Template Engine (GptTmpl.inf) & CSEs OK\n"
+              << "    Pillar 5: Sovereign WMI Filtering (WQL) & LSDOU Precedence Resolution (RSOP) OK\n"
+              << "    Pillar 6: Canonical gpupdate.exe & gpresult.exe CLI, Remote Web Terminal & Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 382: Horizon 166 - Sovereign Active Directory Group Policy (AD GPO / SYSVOL / CLI) PASSED." << std::endl;
+}

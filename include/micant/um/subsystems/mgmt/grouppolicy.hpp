@@ -18,6 +18,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/scm.hpp"
+#include "micant/um/servers/wmi_provider.hpp"
 
 namespace micant::gp {
 
@@ -243,7 +244,26 @@ struct WmiFilter {
     bool evaluate(const std::map<std::string, std::string>& machineFacts) const {
         if (query.empty()) return true;
 
-        // Simple evaluation engine for Win32_OperatingSystem / Win32_ComputerSystem facts
+        // 1. Try evaluation using sovereign WmiRepository if available
+        try {
+            std::string cls;
+            size_t fromPos = query.find("FROM ");
+            if (fromPos == std::string::npos) fromPos = query.find("from ");
+            if (fromPos != std::string::npos) {
+                std::string rem = query.substr(fromPos + 5);
+                while (!rem.empty() && rem.front() == ' ') rem.erase(0, 1);
+                size_t sp = rem.find_first_of(" \t\r\n");
+                cls = (sp != std::string::npos) ? rem.substr(0, sp) : rem;
+            }
+            if (_stricmp(cls.c_str(), "Win32_OperatingSystem") == 0 ||
+                _stricmp(cls.c_str(), "Win32_ComputerSystem") == 0 ||
+                _stricmp(cls.c_str(), "Win32_Service") == 0) {
+                auto results = micant::wmi::WmiRepository::get().query(query);
+                return !results.empty();
+            }
+        } catch (...) {}
+
+        // 2. Fallback to machineFacts for simulated/custom environments
         if (query.find("Version LIKE '10.0.26100%'") != std::string::npos) {
             auto it = machineFacts.find("OSVersion");
             if (it != machineFacts.end() && it->second.find("10.0.26100") == 0) return true;
@@ -265,8 +285,7 @@ struct WmiFilter {
             return false;
         }
 
-        // Default: If syntax parsed without negation, assume match
-        return true;
+        return false;
     }
 };
 
@@ -429,9 +448,32 @@ public:
         return s_inst;
     }
 
+    void resetForTest() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_gpos.clear();
+        m_wmiFilters.clear();
+        m_cses.clear();
+        m_machineFacts.clear();
+        m_siteSoms.clear();
+        m_domainSoms.clear();
+        m_ouSoms.clear();
+        m_initialized = false;
+        m_refreshesCompleted = 0;
+        m_policiesApplied = 0;
+        m_wmiEvaluations = 0;
+        m_cseInvocations = 0;
+        m_lastMachineReport = GroupPolicyReport{};
+        m_lastUserReport = GroupPolicyReport{};
+        initializeDefaultsLocked();
+    }
+
     void initializeDefaults() {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_initialized) return;
+        initializeDefaultsLocked();
+    }
+
+    void initializeDefaultsLocked() {
 
         // Register default machine facts for WMI evaluation
         m_machineFacts["OSVersion"] = "10.0.26100.1";
@@ -551,6 +593,47 @@ public:
         wsOu.links.push_back({wsBaselineGpo.gpoId, false, true, 1});
         m_ouSoms[wsOu.distinguishedName] = wsOu;
 
+        // Initialize Sovereign Domain SOM (micant.local) & Default Domain Policy
+        ScopeOfManagement sovereignDomainSom;
+        sovereignDomainSom.type = SomType::Domain;
+        sovereignDomainSom.name = "micant.local";
+        sovereignDomainSom.distinguishedName = "DC=micant,DC=local";
+        sovereignDomainSom.blockInheritance = false;
+        sovereignDomainSom.links.push_back({defDomainGpo.gpoId, false, true, 1});
+
+        // Create High Security Zero-Trust Enforced Policy
+        GroupPolicyObject zeroTrustEnforcedGpo;
+        zeroTrustEnforcedGpo.gpoId = "{C1D2E3F4-5A6B-7C8D-9E0F-1A2B3C4D5E6F}";
+        zeroTrustEnforcedGpo.displayName = "High Security Zero-Trust Enforced Policy";
+        zeroTrustEnforcedGpo.fileSysPath = "\\\\micant.local\\sysvol\\micant.local\\Policies\\{C1D2E3F4-5A6B-7C8D-9E0F-1A2B3C4D5E6F}";
+        PolicySetting sEnfNotice;
+        sEnfNotice.keyPath = "Software\\Policies\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+        sEnfNotice.valueName = "LegalNoticeText";
+        sEnfNotice.type = PolicyValueType::String;
+        sEnfNotice.stringValue = "MANDATORY ROOT NOTICE: ZERO OVERRIDE";
+        zeroTrustEnforcedGpo.machinePolicy.settings.push_back(sEnfNotice);
+        m_gpos[zeroTrustEnforcedGpo.gpoId] = zeroTrustEnforcedGpo;
+        sovereignDomainSom.links.push_back({zeroTrustEnforcedGpo.gpoId, true, true, 2}); // Enforced!
+        m_domainSoms[sovereignDomainSom.distinguishedName] = sovereignDomainSom;
+
+        // Initialize Domain Controllers OU SOM for micant.local
+        ScopeOfManagement dcOu;
+        dcOu.type = SomType::OrganizationalUnit;
+        dcOu.name = "Domain Controllers";
+        dcOu.distinguishedName = "OU=Domain Controllers,DC=micant,DC=local";
+        dcOu.blockInheritance = false;
+        dcOu.links.push_back({defDcGpo.gpoId, false, true, 1});
+        m_ouSoms[dcOu.distinguishedName] = dcOu;
+
+        // Initialize Workstations OU SOM for micant.local
+        ScopeOfManagement wsOuLocal;
+        wsOuLocal.type = SomType::OrganizationalUnit;
+        wsOuLocal.name = "Workstations";
+        wsOuLocal.distinguishedName = "OU=Workstations,DC=micant,DC=local";
+        wsOuLocal.blockInheritance = false;
+        wsOuLocal.links.push_back({wsBaselineGpo.gpoId, false, true, 1});
+        m_ouSoms[wsOuLocal.distinguishedName] = wsOuLocal;
+
         // Register Standard WMI Filters
         WmiFilter wfWin11;
         wfWin11.filterId = "{F1111111-2222-3333-4444-555555555555}";
@@ -595,6 +678,9 @@ public:
         db.RegisterModule("gpreport.exe", "10.0.26100.1", "Group Policy Results Diagnostic Utility");
         db.RegisterModule("gpedit.dll", "10.0.26100.1", "Group Policy Group Policy Editor Snap-in");
         db.RegisterModule("userenv.dll", "10.0.26100.1", "Userenv Group Policy Engine");
+        db.RegisterModule("gpresult.exe", "10.0.26100.1", "Group Policy Results Information Tool");
+        db.RegisterModule("appmgmts.dll", "10.0.26100.1", "Software Installation Group Policy Extension");
+        db.RegisterModule("gpmc.msc", "10.0.26100.1", "Group Policy Management Console");
     }
 
     uint32_t getBackgroundRefreshIntervalMin() const { return m_backgroundRefreshIntervalMin; }
@@ -722,7 +808,9 @@ public:
 
         // 3. Domain GPOs
         bool blockDomainInheritance = false;
-        auto itDomain = m_domainSoms.find("DC=micant,DC=internal");
+        std::string domainDn = (targetOuDn.find("DC=micant,DC=internal") != std::string::npos) ?
+                               "DC=micant,DC=internal" : "DC=micant,DC=local";
+        auto itDomain = m_domainSoms.find(domainDn);
         if (itDomain != m_domainSoms.end()) {
             for (const auto& l : itDomain->second.links) {
                 if (l.enabled) candidates.push_back({l.gpoId, SomType::Domain, l.enforced, l.order});
