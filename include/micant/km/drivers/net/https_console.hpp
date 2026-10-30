@@ -33,6 +33,8 @@
 #include "micant/um/subsystems/net/netsh_http.hpp"
 #include "micant/um/servers/iis_was.hpp"
 #include "micant/um/subsystems/net/appcmd.hpp"
+#include "micant/um/servers/dns_server.hpp"
+#include "micant/um/subsystems/net/dnscmd.hpp"
 
 namespace micant::km::net {
 
@@ -496,6 +498,23 @@ public:
             std::string res;
             iis::appcmd::um::AppCmdCommandExecutor::Instance().execute(subArgs, res);
             return res;
+        } else if (cmd == "dnscmd" || cmd.starts_with("dnscmd ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            std::span<const std::string_view> subArgs;
+            if (tokens.size() > 1) {
+                subArgs = std::span<const std::string_view>(tokens.data() + 1, tokens.size() - 1);
+            }
+            std::string res;
+            dns::dnscmd::um::DnsCmdCommandExecutor::Instance().execute(subArgs, res);
+            return res;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -510,6 +529,7 @@ public:
                    "  mstsc [/v:host]       Remote Desktop Connection client\r\n"
                    "  netsh http show ...   Manage HTTP.sys URL ACLs, request queues and cache\r\n"
                    "  appcmd list ...       Manage IIS 10 websites, app pools, workers and config\r\n"
+                   "  dnscmd /...           Manage DNS Server authoritative zones and records\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -524,6 +544,7 @@ public:
         auto& rdpSrv = rdp::EnterpriseRdpServer::get();
         auto& httpDrv = km::http::HttpKernelProtocolDriver::Instance();
         auto& was = iis::um::WindowsProcessActivationService::Instance();
+        auto& dnsEng = dns::server::um::DnsServerEngine::Instance();
         std::ostringstream ss;
         ss << "{\"event\":\"telemetry\",\"cpu_percent\":1.4,\"ram_used_mb\":4096,"
            << "\"ram_total_mb\":32768,\"rx_packets\":14820,\"tx_packets\":12950,"
@@ -543,7 +564,11 @@ public:
            << "\"iis_sites\":" << was.getAllSites().size() << ","
            << "\"iis_apppools\":" << was.getAllAppPools().size() << ","
            << "\"iis_workers\":" << was.getWorkers().size() << ","
-           << "\"iis_requests_served\":" << was.getTotalRequestsServed() << "}\r\n";
+           << "\"iis_requests_served\":" << was.getTotalRequestsServed() << ","
+           << "\"dns_queries\":" << dnsEng.getTotalQueries() << ","
+           << "\"dns_zones\":" << dnsEng.getAllZones().size() << ","
+           << "\"dns_cache_hits\":" << dnsEng.getCacheHits() << ","
+           << "\"dns_cache_misses\":" << dnsEng.getCacheMisses() << "}\r\n";
         return ss.str();
     }
 

@@ -28259,3 +28259,366 @@ void Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI() {
 
     std::cout << "[TEST] Suite 376: Horizon 160 - Sovereign IIS 10.x Core Subsystem, WAS Process Model, w3wp.exe Worker Engine & Canonical appcmd.exe CLI PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 377: Horizon 161 - Sovereign Domain Name System (DNS) Server Subsystem
+// (dns.exe / dnsserver.dll), Authoritative & Recursive Caching DNS Service,
+// Dynamic DNS Updates (RFC 2136), DNSSEC Validation (RFC 4033-4035), Zone
+// Transfer (AXFR/IXFR RFC 5936/1995) & Canonical dnscmd.exe CLI Utility
+// ============================================================================
+
+void Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI() {
+    using namespace micant::dns::server::um;
+    using namespace micant::dns::dnscmd::um;
+    using namespace micant::tcpip;
+
+    std::cout << "[TEST] Suite 377: Starting Horizon 161 Sovereign DNS Server Subsystem & dnscmd.exe CLI Validation..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DNS Server Architecture, Protocol Engine & SCM Service Registration
+    // ------------------------------------------------------------------------
+    {
+        // 1. Initialize and register DNS Subsystem
+        RegisterDnsSubsystem();
+
+        auto& engine = DnsServerEngine::Instance();
+        TEST_ASSERT(engine.initialize(), "DnsServerEngine initialize must return true");
+
+        // 2. Verify Service Control Manager (SCM) Registration for "DNS"
+        auto& scm = scm::ServiceControlManager::get();
+        auto dnsRec = scm.getServiceRecord(L"DNS");
+        TEST_ASSERT(dnsRec != nullptr, "SCM must contain registered 'DNS' service");
+        TEST_ASSERT(dnsRec->displayName == L"DNS Server", "Display name must be 'DNS Server'");
+        TEST_ASSERT(dnsRec->binaryPath == L"C:\\Windows\\System32\\dns.exe", "Binary path must be dns.exe");
+        TEST_ASSERT(dnsRec->status.dwCurrentState == scm::SERVICE_RUNNING, "DNS service state must be SERVICE_RUNNING");
+        TEST_ASSERT(dnsRec->svchostGroup == "DNSGroup", "DNS svchostGroup must be DNSGroup");
+
+        // 3. Verify VersionDatabase module entries
+        auto& vdb = version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.GetModuleInfo("dns.exe") != nullptr, "VersionDatabase must contain dns.exe");
+        TEST_ASSERT(vdb.GetModuleInfo("dnsserver.dll") != nullptr, "VersionDatabase must contain dnsserver.dll");
+        TEST_ASSERT(vdb.GetModuleInfo("dnscmd.exe") != nullptr, "VersionDatabase must contain dnscmd.exe");
+        TEST_ASSERT(vdb.GetModuleInfo("dns.exe")->stringTable.at("FileVersion") == "10.0.26100.1", "dns.exe version must match 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Authoritative Forward & Reverse Lookup Zones & Active Directory SRV Locators
+    // ------------------------------------------------------------------------
+    {
+        auto& engine = DnsServerEngine::Instance();
+
+        // 1. Verify Sovereign Enterprise Forward Zone: "micant.local"
+        auto fwdZone = engine.getZone("micant.local");
+        TEST_ASSERT(fwdZone != nullptr, "micant.local forward zone must exist");
+        TEST_ASSERT(fwdZone->zoneType == ZoneType::Primary, "micant.local must be a Primary zone");
+        TEST_ASSERT(!fwdZone->isReverse, "micant.local must not be a reverse zone");
+        TEST_ASSERT(fwdZone->soa.mname == "ns1.micant.local", "SOA primary master must be ns1.micant.local");
+        TEST_ASSERT(fwdZone->soa.rname == "hostmaster.micant.local", "SOA responsible person must be hostmaster.micant.local");
+
+        // Check Host A records in micant.local
+        auto dcRecords = fwdZone->findRecords("dc1.micant.local", TYPE_A);
+        TEST_ASSERT(!dcRecords.empty(), "dc1.micant.local A record must exist");
+        TEST_ASSERT(dcRecords[0].dataText == "147.135.1.229", "dc1.micant.local IP must match target server 147.135.1.229");
+
+        auto apexRecords = fwdZone->findRecords("micant.local", TYPE_A);
+        TEST_ASSERT(!apexRecords.empty(), "Zone apex micant.local A record must exist");
+        TEST_ASSERT(apexRecords[0].dataText == "147.135.1.229", "Apex IP must match target server 147.135.1.229");
+
+        // 2. Verify Active Directory Domain Controller Locator SRV Records
+        auto ldapSrv = fwdZone->findRecords("_ldap._tcp.dc._msdcs.micant.local", TYPE_SRV);
+        TEST_ASSERT(!ldapSrv.empty(), "AD LDAP SRV record (_ldap._tcp.dc._msdcs.micant.local) must exist");
+        TEST_ASSERT(ldapSrv[0].srvData.has_value(), "SRV structured data must be populated");
+        TEST_ASSERT(ldapSrv[0].srvData->port == 389, "LDAP SRV port must be 389");
+        TEST_ASSERT(ldapSrv[0].srvData->target == "dc1.micant.local", "LDAP SRV target must point to dc1.micant.local");
+
+        auto krbSrv = fwdZone->findRecords("_kerberos._tcp.dc._msdcs.micant.local", TYPE_SRV);
+        TEST_ASSERT(!krbSrv.empty(), "Kerberos KDC SRV record (_kerberos._tcp.dc._msdcs.micant.local) must exist");
+        TEST_ASSERT(krbSrv[0].srvData.has_value(), "Kerberos SRV structured data must be populated");
+        TEST_ASSERT(krbSrv[0].srvData->port == 88, "Kerberos KDC SRV port must be 88");
+        TEST_ASSERT(krbSrv[0].srvData->target == "dc1.micant.local", "Kerberos SRV target must point to dc1.micant.local");
+
+        // 3. Verify Sovereign Reverse Lookup Zone: "1.135.147.in-addr.arpa"
+        auto revZone = engine.getZone("1.135.147.in-addr.arpa");
+        TEST_ASSERT(revZone != nullptr, "1.135.147.in-addr.arpa reverse zone must exist");
+        TEST_ASSERT(revZone->isReverse, "Zone must be identified as reverse lookup zone");
+        auto ptrRecords = revZone->findRecords("229.1.135.147.in-addr.arpa", TYPE_PTR);
+        TEST_ASSERT(!ptrRecords.empty(), "PTR record for 229.1.135.147.in-addr.arpa must exist");
+        TEST_ASSERT(ptrRecords[0].dataText == "dc1.micant.local", "PTR target must resolve to dc1.micant.local");
+
+        // 4. Wire Packet Codec: Authoritative Query Evaluation (RFC 1035)
+        std::vector<uint8_t> queryPacket;
+        DnsHeaderWire qHdr{};
+        qHdr.id = tcpip::htons(0x2026);
+        qHdr.flags = tcpip::htons(0x0100); // Standard Query, RD=1
+        qHdr.qdcount = tcpip::htons(1);
+        const auto* pHdr = reinterpret_cast<const uint8_t*>(&qHdr);
+        queryPacket.insert(queryPacket.end(), pHdr, pHdr + sizeof(DnsHeaderWire));
+        AppendDomainName(queryPacket, "dc1.micant.local");
+        queryPacket.push_back(0x00); queryPacket.push_back(static_cast<uint8_t>(TYPE_A)); // QTYPE=A
+        queryPacket.push_back(0x00); queryPacket.push_back(static_cast<uint8_t>(CLASS_IN)); // QCLASS=IN
+
+        std::vector<uint8_t> respPacket;
+        bool qRes = engine.processQueryPacket(queryPacket, respPacket);
+        TEST_ASSERT(qRes, "processQueryPacket must successfully process authoritative query");
+        TEST_ASSERT(respPacket.size() >= sizeof(DnsHeaderWire), "Response packet must contain at least DNS header");
+
+        const auto* rHdr = reinterpret_cast<const DnsHeaderWire*>(respPacket.data());
+        uint16_t rFlags = tcpip::ntohs(rHdr->flags);
+        TEST_ASSERT((rFlags & 0x8000) != 0, "Response flag QR must be 1 (Response)");
+        TEST_ASSERT((rFlags & 0x0400) != 0, "Authoritative Answer flag AA must be 1 for micant.local zone");
+        TEST_ASSERT((rFlags & 0x000F) == RCODE_NOERROR, "Response code RCODE must be NOERROR (0)");
+        TEST_ASSERT(tcpip::ntohs(rHdr->ancount) >= 1, "Answer count must be >= 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Recursive Caching Resolver, Negative Caching (RFC 2308 NXDOMAIN) & Root Hints
+    // ------------------------------------------------------------------------
+    {
+        auto& engine = DnsServerEngine::Instance();
+        auto& cache = engine.getCache();
+        cache.clear();
+        TEST_ASSERT(cache.size() == 0, "Cache must be empty after clear");
+
+        uint64_t initialMisses = engine.getCacheMisses();
+        uint64_t initialHits = engine.getCacheHits();
+
+        // 1. Recursive Resolution via Root Hints: "a.root-servers.net"
+        std::vector<uint8_t> rootQuery;
+        DnsHeaderWire qHdr{};
+        qHdr.id = tcpip::htons(0x3030);
+        qHdr.flags = tcpip::htons(0x0100); // RD=1
+        qHdr.qdcount = tcpip::htons(1);
+        const auto* pHdr = reinterpret_cast<const uint8_t*>(&qHdr);
+        rootQuery.insert(rootQuery.end(), pHdr, pHdr + sizeof(DnsHeaderWire));
+        AppendDomainName(rootQuery, "a.root-servers.net");
+        rootQuery.push_back(0x00); rootQuery.push_back(static_cast<uint8_t>(TYPE_A));
+        rootQuery.push_back(0x00); rootQuery.push_back(static_cast<uint8_t>(CLASS_IN));
+
+        std::vector<uint8_t> resp1;
+        bool ok1 = engine.processQueryPacket(rootQuery, resp1);
+        TEST_ASSERT(ok1, "First query for root hint must succeed");
+        TEST_ASSERT(engine.getCacheMisses() > initialMisses, "First query must record a cache miss");
+        TEST_ASSERT(cache.size() >= 1, "Cache must now store the resolved root hint");
+
+        // 2. Second Query for "a.root-servers.net" -> Cache Hit
+        std::vector<uint8_t> resp2;
+        bool ok2 = engine.processQueryPacket(rootQuery, resp2);
+        TEST_ASSERT(ok2, "Second query for root hint must succeed from cache");
+        TEST_ASSERT(engine.getCacheHits() > initialHits, "Second query must record a cache hit");
+
+        // 3. Negative Caching (RFC 2308 NXDOMAIN): "nonexistent.example.org"
+        std::vector<uint8_t> negQuery;
+        qHdr.id = tcpip::htons(0x4040);
+        negQuery.insert(negQuery.end(), pHdr, pHdr + sizeof(DnsHeaderWire));
+        AppendDomainName(negQuery, "nonexistent.example.org");
+        negQuery.push_back(0x00); negQuery.push_back(static_cast<uint8_t>(TYPE_A));
+        negQuery.push_back(0x00); negQuery.push_back(static_cast<uint8_t>(CLASS_IN));
+
+        std::vector<uint8_t> negResp1;
+        bool okNeg1 = engine.processQueryPacket(negQuery, negResp1);
+        TEST_ASSERT(okNeg1, "Negative query processing must return response");
+        const auto* negHdr1 = reinterpret_cast<const DnsHeaderWire*>(negResp1.data());
+        TEST_ASSERT((tcpip::ntohs(negHdr1->flags) & 0x000F) == RCODE_NXDOMAIN, "RCODE must be NXDOMAIN (3)");
+
+        // Verify entry in cache is marked negative
+        auto negCached = cache.get("nonexistent.example.org", TYPE_A);
+        TEST_ASSERT(negCached.has_value(), "Negative cache entry must exist");
+        TEST_ASSERT(negCached->isNegative, "Cache entry must have isNegative flag set to true (RFC 2308)");
+        TEST_ASSERT(negCached->rcode == RCODE_NXDOMAIN, "Cached negative rcode must be NXDOMAIN");
+
+        // Subsequent query returns cached NXDOMAIN
+        std::vector<uint8_t> negResp2;
+        bool okNeg2 = engine.processQueryPacket(negQuery, negResp2);
+        TEST_ASSERT(okNeg2, "Second negative query must be answered from cache");
+        const auto* negHdr2 = reinterpret_cast<const DnsHeaderWire*>(negResp2.data());
+        TEST_ASSERT((tcpip::ntohs(negHdr2->flags) & 0x000F) == RCODE_NXDOMAIN, "Second response must also be NXDOMAIN");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Dynamic DNS Updates (RFC 2136 / Opcode 5) & Zone Transfer (AXFR RFC 5936 / IXFR RFC 1995)
+    // ------------------------------------------------------------------------
+    {
+        auto& engine = DnsServerEngine::Instance();
+        auto zone = engine.getZone("micant.local");
+        TEST_ASSERT(zone != nullptr, "micant.local must exist");
+        uint32_t serialBefore = zone->soa.serial;
+
+        // 1. Dynamic DNS Update: Add host record
+        bool upOk = engine.processDynamicDnsUpdate("micant.local", "workstation42.micant.local", TYPE_A, "147.135.1.42", 300, false);
+        TEST_ASSERT(upOk, "Dynamic DNS update (add A record) must succeed");
+        TEST_ASSERT(zone->soa.serial > serialBefore, "Zone SOA serial must increment on dynamic update");
+
+        auto found = zone->findRecords("workstation42.micant.local", TYPE_A);
+        TEST_ASSERT(!found.empty(), "Dynamically added record must be discoverable in zone");
+        TEST_ASSERT(found[0].dataText == "147.135.1.42", "Data text must match dynamically assigned IP");
+
+        // 2. Dynamic DNS Wire Packet (RFC 2136 / Opcode 5)
+        std::vector<uint8_t> dynPacket;
+        DnsHeaderWire dynHdr{};
+        dynHdr.id = tcpip::htons(0x5050);
+        uint16_t updateFlags = (OPCODE_UPDATE << 11);
+        dynHdr.flags = tcpip::htons(updateFlags);
+        const auto* pDynHdr = reinterpret_cast<const uint8_t*>(&dynHdr);
+        dynPacket.insert(dynPacket.end(), pDynHdr, pDynHdr + sizeof(DnsHeaderWire));
+
+        std::vector<uint8_t> dynResp;
+        bool dynRes = engine.processQueryPacket(dynPacket, dynResp);
+        TEST_ASSERT(dynRes, "processQueryPacket must handle RFC 2136 OPCODE_UPDATE packet");
+        const auto* rDynHdr = reinterpret_cast<const DnsHeaderWire*>(dynResp.data());
+        uint16_t rDynFlags = tcpip::ntohs(rDynHdr->flags);
+        TEST_ASSERT(((rDynFlags >> 11) & 0x0F) == OPCODE_UPDATE, "Response opcode must match OPCODE_UPDATE");
+        TEST_ASSERT((rDynFlags & 0x000F) == RCODE_NOERROR, "Response code must be NOERROR");
+
+        // 3. Dynamic DNS Update: Delete host record
+        bool delOk = engine.processDynamicDnsUpdate("micant.local", "workstation42.micant.local", TYPE_A, "147.135.1.42", 300, true);
+        TEST_ASSERT(delOk, "Dynamic DNS update (delete record) must succeed");
+        auto deleted = zone->findRecords("workstation42.micant.local", TYPE_A);
+        TEST_ASSERT(deleted.empty(), "Deleted record must no longer exist in zone");
+
+        // 4. Zone Transfer (AXFR RFC 5936)
+        std::vector<DnsResourceRecord> axfrStream;
+        bool axfrOk = engine.generateAxfrStream("micant.local", axfrStream);
+        TEST_ASSERT(axfrOk, "generateAxfrStream must succeed for micant.local");
+        TEST_ASSERT(axfrStream.size() >= 5, "AXFR stream must contain initial SOA, records, and terminating SOA");
+        TEST_ASSERT(axfrStream.front().type == TYPE_SOA, "First record in AXFR stream must be SOA (RFC 5936)");
+        TEST_ASSERT(axfrStream.back().type == TYPE_SOA, "Last record in AXFR stream must be terminating SOA (RFC 5936)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: DNSSEC Validation, RRSIG Signature Checking & AD Bit Assertion
+    // ------------------------------------------------------------------------
+    {
+        auto& engine = DnsServerEngine::Instance();
+        auto zone = engine.getZone("micant.local");
+        TEST_ASSERT(zone != nullptr, "micant.local must exist");
+
+        auto dnskeys = zone->findRecords("micant.local", TYPE_DNSKEY);
+        TEST_ASSERT(!dnskeys.empty(), "DNSKEY record must exist in micant.local");
+        TEST_ASSERT(dnskeys[0].dnskeyData.has_value(), "DNSKEY data must be present");
+        TEST_ASSERT(dnskeys[0].dnskeyData->keyTag == 12345, "DNSKEY keyTag must match 12345");
+
+        auto rrsigs = zone->findRecords("micant.local", TYPE_RRSIG);
+        TEST_ASSERT(!rrsigs.empty(), "RRSIG record must exist in micant.local");
+        TEST_ASSERT(rrsigs[0].rrsigData.has_value(), "RRSIG data must be present");
+        TEST_ASSERT(rrsigs[0].rrsigData->keyTag == 12345, "RRSIG keyTag must match 12345");
+        TEST_ASSERT(rrsigs[0].rrsigData->typeCovered == TYPE_A, "RRSIG must cover TYPE_A");
+
+        auto apexA = zone->findRecords("micant.local", TYPE_A);
+        TEST_ASSERT(!apexA.empty(), "Apex A record must exist");
+
+        // Cryptographic validation primitive
+        bool sigValid = engine.validateDnssecRecord(apexA[0], rrsigs[0], dnskeys[0]);
+        TEST_ASSERT(sigValid, "validateDnssecRecord must cryptographically authenticate RRSIG against DNSKEY");
+
+        // Wire Packet Query for micant.local apex A record with DNSSEC validation
+        std::vector<uint8_t> secQuery;
+        DnsHeaderWire qHdr{};
+        qHdr.id = tcpip::htons(0x6060);
+        qHdr.flags = tcpip::htons(0x0100); // RD=1
+        qHdr.qdcount = tcpip::htons(1);
+        const auto* pHdr = reinterpret_cast<const uint8_t*>(&qHdr);
+        secQuery.insert(secQuery.end(), pHdr, pHdr + sizeof(DnsHeaderWire));
+        AppendDomainName(secQuery, "micant.local");
+        secQuery.push_back(0x00); secQuery.push_back(static_cast<uint8_t>(TYPE_A));
+        secQuery.push_back(0x00); secQuery.push_back(static_cast<uint8_t>(CLASS_IN));
+
+        std::vector<uint8_t> secResp;
+        bool secOk = engine.processQueryPacket(secQuery, secResp);
+        TEST_ASSERT(secOk, "DNSSEC query packet processing must succeed");
+        const auto* secHdr = reinterpret_cast<const DnsHeaderWire*>(secResp.data());
+        uint16_t secFlags = tcpip::ntohs(secHdr->flags);
+        TEST_ASSERT((secFlags & 0x0020) != 0, "Authentic Data (AD) bit 0x0020 must be asserted on verified DNSSEC answer (RFC 4035)");
+        TEST_ASSERT(tcpip::ntohs(secHdr->ancount) >= 2, "Answer section must contain both target RR and RRSIG");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Canonical dnscmd.exe CLI Utility & Remote Web Terminal Integration
+    // ------------------------------------------------------------------------
+    {
+        auto& dnscmd = DnsCmdCommandExecutor::Instance();
+        std::string out;
+
+        // 1. dnscmd /? (Help)
+        int rc = dnscmd.execute(std::vector<std::string_view>{"/?"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /? must return 0");
+        TEST_ASSERT(out.find("DNS Server Command-Line Administration Tool") != std::string::npos, "Help must contain tool title");
+
+        // 2. dnscmd /enumzones
+        rc = dnscmd.execute(std::vector<std::string_view>{"/enumzones"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /enumzones must return 0");
+        TEST_ASSERT(out.find("micant.local") != std::string::npos, "Enumzones must output micant.local");
+        TEST_ASSERT(out.find("1.135.147.in-addr.arpa") != std::string::npos, "Enumzones must output reverse zone");
+
+        // 3. dnscmd /zoneadd enterprise.corp /primary
+        rc = dnscmd.execute(std::vector<std::string_view>{"/zoneadd", "enterprise.corp", "/primary"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /zoneadd must succeed");
+        TEST_ASSERT(out.find("successfully created zone enterprise.corp") != std::string::npos, "zoneadd confirmation message");
+
+        // 4. dnscmd /recordadd enterprise.corp mail MX 10 mail.enterprise.corp
+        rc = dnscmd.execute(std::vector<std::string_view>{"/recordadd", "enterprise.corp", "mail", "MX", "10", "mail.enterprise.corp"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /recordadd MX must succeed");
+        TEST_ASSERT(out.find("successfully added MX record") != std::string::npos, "recordadd MX confirmation");
+
+        // 5. dnscmd /recordadd enterprise.corp portal A 192.168.1.100
+        rc = dnscmd.execute(std::vector<std::string_view>{"/recordadd", "enterprise.corp", "portal", "A", "192.168.1.100"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /recordadd A must succeed");
+        TEST_ASSERT(out.find("successfully added A record") != std::string::npos, "recordadd A confirmation");
+
+        // 6. dnscmd /enumrecords enterprise.corp portal
+        rc = dnscmd.execute(std::vector<std::string_view>{"/enumrecords", "enterprise.corp", "portal"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /enumrecords must return 0");
+        TEST_ASSERT(out.find("192.168.1.100") != std::string::npos, "enumrecords must list portal A record");
+
+        // 7. dnscmd /recorddelete enterprise.corp portal A
+        rc = dnscmd.execute(std::vector<std::string_view>{"/recorddelete", "enterprise.corp", "portal", "A"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /recorddelete must succeed");
+        TEST_ASSERT(out.find("successfully deleted record") != std::string::npos, "recorddelete confirmation");
+
+        // 8. dnscmd /zonerefresh enterprise.corp
+        rc = dnscmd.execute(std::vector<std::string_view>{"/zonerefresh", "enterprise.corp"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /zonerefresh must succeed");
+        TEST_ASSERT(out.find("successfully refreshed zone") != std::string::npos, "zonerefresh confirmation");
+
+        // 9. dnscmd /clearcache
+        rc = dnscmd.execute(std::vector<std::string_view>{"/clearcache"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /clearcache must succeed");
+        TEST_ASSERT(out.find("cache successfully cleared") != std::string::npos, "clearcache confirmation");
+
+        // 10. dnscmd /info
+        rc = dnscmd.execute(std::vector<std::string_view>{"/info"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /info must succeed");
+        TEST_ASSERT(out.find("10.0.26100.1") != std::string::npos, "dnscmd info must display build version");
+        TEST_ASSERT(out.find("Server Status:  Running") != std::string::npos, "dnscmd info must report Running");
+
+        // 11. dnscmd /zonedelete enterprise.corp
+        rc = dnscmd.execute(std::vector<std::string_view>{"/zonedelete", "enterprise.corp"}, out);
+        TEST_ASSERT(rc == 0, "dnscmd /zonedelete must succeed");
+        TEST_ASSERT(out.find("successfully deleted zone") != std::string::npos, "zonedelete confirmation");
+
+        // 12. Remote Web Terminal & Telemetry Integration
+        auto& console = km::net::HttpsExecutiveConsole::get();
+
+        std::string termZones = console.executeTerminalCommand("dnscmd /enumzones");
+        TEST_ASSERT(termZones.find("micant.local") != std::string::npos, "Remote terminal dnscmd /enumzones must list micant.local");
+
+        std::string termInfo = console.executeTerminalCommand("dnscmd /info");
+        TEST_ASSERT(termInfo.find("Server Status:  Running") != std::string::npos, "Remote terminal dnscmd /info must display running status");
+
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"dns_queries\":") != std::string::npos, "Telemetry push stream must contain dns_queries");
+        TEST_ASSERT(teleJson.find("\"dns_zones\":") != std::string::npos, "Telemetry push stream must contain dns_zones");
+        TEST_ASSERT(teleJson.find("\"dns_cache_hits\":") != std::string::npos, "Telemetry push stream must contain dns_cache_hits");
+        TEST_ASSERT(teleJson.find("\"dns_cache_misses\":") != std::string::npos, "Telemetry push stream must contain dns_cache_misses");
+    }
+
+    std::cout << "[HORIZON 161] Sovereign DNS Server Subsystem (dns.exe / dnsserver.dll) & dnscmd.exe CLI Summary:\n"
+              << "    Pillar 1: DNS Architecture, Protocol Engine & SCM Service Registration OK\n"
+              << "    Pillar 2: Authoritative Forward/Reverse Zones & Active Directory SRV Locators OK\n"
+              << "    Pillar 3: Recursive Caching Resolver, Negative Caching (RFC 2308) & Root Hints OK\n"
+              << "    Pillar 4: Dynamic DNS Updates (RFC 2136) & Zone Transfer (AXFR RFC 5936) OK\n"
+              << "    Pillar 5: DNSSEC Validation, RRSIG Signature Checking & AD Bit Assertion OK\n"
+              << "    Pillar 6: Canonical dnscmd.exe CLI Utility & Remote Web Terminal Integration OK\n";
+
+    std::cout << "[TEST] Suite 377: Horizon 161 - Sovereign DNS Server Subsystem & dnscmd.exe CLI PASSED." << std::endl;
+}
+

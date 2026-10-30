@@ -338,6 +338,8 @@
 #include "micant/um/subsystems/net/netsh_http.hpp"
 #include "micant/um/servers/iis_was.hpp"
 #include "micant/um/subsystems/net/appcmd.hpp"
+#include "micant/um/servers/dns_server.hpp"
+#include "micant/um/subsystems/net/dnscmd.hpp"
 #include "micant/um/subsystems/winuser/input_router.hpp"
 #include "micant/km/hal/boot_event_loop.hpp"
 #include "micant/km/hal/idt.hpp"
@@ -412,6 +414,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite377") {
+        RUN_TEST(Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite376") {
@@ -541,6 +547,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon158_Rdp10_ServerDriver_CredSspNla_FastPathPipeline_And_MstscCLI);
     RUN_TEST(Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI);
     RUN_TEST(Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI);
+    RUN_TEST(Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1845,6 +1852,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon158_Rdp10_ServerDriver_CredSspNla_FastPathPipeline_And_MstscCLI);
     RUN_TEST(Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI);
     RUN_TEST(Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI);
+    RUN_TEST(Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
