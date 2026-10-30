@@ -39,6 +39,8 @@
 #include "micant/um/subsystems/net/ds_tools.hpp"
 #include "micant/um/servers/dhcp_server.hpp"
 #include "micant/um/subsystems/net/netsh_dhcp.hpp"
+#include "micant/um/servers/certsrv.hpp"
+#include "micant/um/subsystems/security/certutil.hpp"
 
 namespace micant::km::net {
 
@@ -127,6 +129,19 @@ public:
         dhcpRule.weight = 1500;
         dhcpRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(dhcpRule);
+
+        // 7. Register WFP Inbound Rule for Active Directory Certificate Services (TCP Port 135 & Port 443)
+        wfp::km::WfpKernelFilterRule certSrvRule{};
+        certSrvRule.filterId = 16401;
+        certSrvRule.name = "MicaNT_CertSrv_Inbound_Permit";
+        certSrvRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        certSrvRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        certSrvRule.protocol = tcpip::IPPROTO_TCP;
+        certSrvRule.localPortStart = 135;
+        certSrvRule.localPortEnd = 443;
+        certSrvRule.weight = 1500;
+        certSrvRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(certSrvRule);
     }
 
     void stopHttpsServer() {
@@ -548,6 +563,8 @@ public:
             std::ostringstream ss;
             ds_tools::ExecuteDcDiag(cmd, ss);
             return ss.str();
+        } else if (cmd == "certutil" || cmd.starts_with("certutil ") || cmd.starts_with("certutil/") || cmd.starts_with("certutil-")) {
+            return micant::certutil::CertutilCommandExecutor::ExecuteString(std::string(cmd));
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -619,7 +636,14 @@ public:
            << "\"dhcp_offers\":" << dhcp::EnterpriseDhcpServer::instance().getTotalOffers() << ","
            << "\"dhcp_requests\":" << dhcp::EnterpriseDhcpServer::instance().getTotalRequests() << ","
            << "\"dhcp_acks\":" << dhcp::EnterpriseDhcpServer::instance().getTotalAcks() << ","
-           << "\"dhcp_authorized\":" << (dhcp::EnterpriseDhcpServer::instance().isServerAuthorized() ? "true" : "false") << "}\r\n";
+           << "\"dhcp_authorized\":" << (dhcp::EnterpriseDhcpServer::instance().isServerAuthorized() ? "true" : "false") << ","
+           << "\"pki_ca_state\":\"" << (certsrv::CertificateServicesEngine::instance().getCaState() == certsrv::CaState::Running ? "Running" : "Stopped") << "\","
+           << "\"pki_certs_issued\":" << certsrv::CertificateServicesEngine::instance().getTotalCertificatesIssued() << ","
+           << "\"pki_certs_revoked\":" << certsrv::CertificateServicesEngine::instance().getTotalCertificatesRevoked() << ","
+           << "\"pki_crl_published\":" << certsrv::CertificateServicesEngine::instance().getTotalCrlPublished() << ","
+           << "\"pki_delta_crl_published\":" << certsrv::CertificateServicesEngine::instance().getTotalDeltaCrlPublished() << ","
+           << "\"pki_ocsp_queries\":" << certsrv::CertificateServicesEngine::instance().getTotalOcspQueries() << ","
+           << "\"pki_pending_requests\":" << certsrv::CertificateServicesEngine::instance().getPendingRequestCount() << "}\r\n";
         return ss.str();
     }
 

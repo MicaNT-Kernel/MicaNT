@@ -16,6 +16,7 @@
 #include <random>
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
+#include "micant/um/servers/ad_ds.hpp"
 
 namespace micant::certsrv {
 
@@ -303,6 +304,32 @@ struct OcspResponse {
 };
 
 // ============================================================================
+// Delta Certificate Revocation List (Delta CRL) Record (RFC 5280 Section 5.2.4)
+// ============================================================================
+struct DeltaCrlRecord {
+    uint32_t                      deltaCrlNumber{1};
+    uint32_t                      baseCrlNumber{1};
+    std::string                   issuerDn;
+    uint64_t                      thisUpdate{0};
+    uint64_t                      nextUpdate{0};
+    std::vector<RevokedCertEntry> revokedEntries;
+    std::string                   cdpUri;
+    std::vector<uint8_t>          rawDeltaCrlDer;
+};
+
+// ============================================================================
+// PKCS#10 Certificate Signing Request (CSR) Parsed Representation (RFC 2986)
+// ============================================================================
+struct CsrParsed {
+    std::string              subjectDn;
+    std::string              requestedTemplate;
+    std::string              publicKeyAlg{"RSA"};
+    uint32_t                 keyBits{2048};
+    std::vector<std::string> requestedSans;
+    bool                     isValid{false};
+};
+
+// ============================================================================
 // CertificateServicesEngine: Core Singleton Engine
 // ============================================================================
 class CertificateServicesEngine {
@@ -310,7 +337,23 @@ private:
     mutable std::mutex m_mutex;
     bool m_initialized{false};
 
-    // CA Properties
+    // CA Contexts & Dual Root CA Management
+    struct CaContext {
+        std::string name;
+        std::string dn;
+        CaType      type{CaType::EnterpriseRootCA};
+        CaState     state{CaState::Running};
+        std::string aiaUri;
+        std::string cdpUri;
+        std::string ocspUri;
+        std::string rootSerialNumber;
+    };
+
+    CaContext m_titanCa{"Titan Enterprise Root CA", "CN=Titan Enterprise Root CA,DC=titan,DC=local", CaType::EnterpriseRootCA, CaState::Running, "http://pki.titan.local/certdata/TitanRootCA.crt", "http://pki.titan.local/certdata/TitanRootCA.crl", "http://ocsp.titan.local/ocsp", "01"};
+    CaContext m_micantCa{"MicaNT Enterprise Root CA", "CN=MicaNT Enterprise Root CA,DC=micant,DC=local", CaType::EnterpriseRootCA, CaState::Running, "http://pki.micant.local/certdata/MicaNTRootCA.crt", "http://pki.micant.local/certdata/MicaNTRootCA.crl", "http://ocsp.micant.local/ocsp", "02"};
+    std::string m_activeCaName{"Titan Enterprise Root CA"};
+
+    // CA Properties (Bound to Active CA)
     std::string m_caName{"Titan Enterprise Root CA"};
     std::string m_caDn{"CN=Titan Enterprise Root CA,DC=titan,DC=local"};
     CaType      m_caType{CaType::EnterpriseRootCA};
@@ -319,6 +362,9 @@ private:
     std::string m_cdpUri{"http://pki.titan.local/certdata/TitanRootCA.crl"};
     std::string m_ocspUri{"http://ocsp.titan.local/ocsp"};
     std::string m_rootSerialNumber{"01"};
+
+    DeltaCrlRecord m_latestDeltaCrl;
+    bool m_adPkiPublished{false};
 
     // Catalogs & Databases
     std::map<std::string, CertificateTemplate>      m_templates;
@@ -335,6 +381,7 @@ private:
     mutable std::atomic<uint64_t> m_totalCertificatesIssued{0};
     mutable std::atomic<uint64_t> m_totalCertificatesRevoked{0};
     mutable std::atomic<uint64_t> m_totalCrlPublished{0};
+    mutable std::atomic<uint64_t> m_totalDeltaCrlPublished{0};
     mutable std::atomic<uint64_t> m_totalOcspQueries{0};
 
 public:
@@ -354,6 +401,7 @@ public:
         seedDefaultTemplates();
         seedRootCaCertificate();
         publishCrlInternal();
+        publishDeltaCrlInternal();
 
         registerScmServices();
         registerVersionDatabase();
@@ -384,6 +432,8 @@ public:
         db.RegisterModule("certcli.dll", "10.0.26100.1", "Certificate Services Client Interface");
         db.RegisterModule("certenroll.dll", "10.0.26100.1", "Certificate Enrollment API");
         db.RegisterModule("certadm.dll", "10.0.26100.1", "Certificate Services Administration Engine");
+        db.RegisterModule("certutil.exe", "10.0.26100.1", "Certificate Services Utility");
+        db.RegisterModule("certocm.dll", "10.0.26100.1", "Certificate Services Setup & OCSP Responder");
     }
 
     void seedDefaultTemplates() {
@@ -499,6 +549,20 @@ public:
         tEa.requiresApproval = true;
         tEa.minKeySizeBits = 2048;
         m_templates[tEa.templateName] = tEa;
+
+        // 9. KdcAuth (Kerberos KDC Authentication)
+        CertificateTemplate tKdc;
+        tKdc.templateName = "KdcAuth";
+        tKdc.displayName = "Kerberos KDC Authentication";
+        tKdc.schemaVersion = 2;
+        tKdc.validityPeriodSeconds = 31536000;
+        tKdc.renewalPeriodSeconds = 5184000;
+        tKdc.keyUsageMask = KU_DIGITAL_SIGNATURE | KU_KEY_ENCIPHERMENT;
+        tKdc.ekus = { OID_KDC_AUTH, OID_SERVER_AUTH, OID_SMARTCARD_LOGON };
+        tKdc.autoEnrollAllowed = true;
+        tKdc.requiresApproval = false;
+        tKdc.minKeySizeBits = 2048;
+        m_templates[tKdc.templateName] = tKdc;
     }
 
     void seedRootCaCertificate() {
@@ -522,8 +586,25 @@ public:
         // Synthetic DER structure
         rootCert.rawDer = buildSyntheticDer(rootCert);
         rootCert.rawPem = buildPemString(rootCert.rawDer);
-
         m_certificates[rootCert.serialNumber] = rootCert;
+
+        // Seed MicaNT Sovereign Enterprise Root CA (Serial "02")
+        CertificateRecord micantRoot;
+        micantRoot.serialNumber = m_micantCa.rootSerialNumber;
+        micantRoot.subjectDn = m_micantCa.dn;
+        micantRoot.issuerDn = m_micantCa.dn;
+        micantRoot.notBefore = now - 3600;
+        micantRoot.notAfter = now + 630720000; // 20 Years
+        micantRoot.templateName = "RootCA";
+        micantRoot.publicKeyAlg = "RSA";
+        micantRoot.publicKeyBits = 4096;
+        micantRoot.subjectKeyIdentifier = ComputeSha1Hex(m_micantCa.dn + "_PUBKEY_ROOT");
+        micantRoot.authorityKeyIdentifier = micantRoot.subjectKeyIdentifier;
+        micantRoot.keyUsage = KU_DIGITAL_SIGNATURE | KU_KEY_CERT_SIGN | KU_CRL_SIGN;
+        micantRoot.isCa = true;
+        micantRoot.rawDer = buildSyntheticDer(micantRoot);
+        micantRoot.rawPem = buildPemString(micantRoot.rawDer);
+        m_certificates[micantRoot.serialNumber] = micantRoot;
     }
 
     std::vector<uint8_t> buildSyntheticDer(const CertificateRecord& cert) {
@@ -880,7 +961,9 @@ public:
         outResponse.producedAt = now;
         outResponse.thisUpdate = now;
         outResponse.nextUpdate = now + 86400; // 24 Hours
-        outResponse.responderId = "CN=Titan OCSP Responder,DC=titan,DC=local";
+        outResponse.responderId = (m_caName.find("MicaNT") != std::string::npos) ?
+            "CN=MicaNT OCSP Responder,DC=micant,DC=local" :
+            "CN=Titan OCSP Responder,DC=titan,DC=local";
 
         auto it = m_certificates.find(serial);
         if (it == m_certificates.end()) {
@@ -961,6 +1044,311 @@ public:
                 return true;
             }
         }
+    }
+
+    // ========================================================================
+    // Delta CRL Management (RFC 5280 Section 5.2.4)
+    // ========================================================================
+    void publishDeltaCrlInternal() {
+        uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+        m_latestDeltaCrl.issuerDn = m_caDn;
+        m_latestDeltaCrl.thisUpdate = now;
+        m_latestDeltaCrl.nextUpdate = now + 86400; // 1 Day
+        m_latestDeltaCrl.baseCrlNumber = m_latestCrl.crlNumber;
+        m_latestDeltaCrl.deltaCrlNumber = m_latestCrl.crlNumber;
+        m_latestDeltaCrl.cdpUri = m_cdpUri;
+        m_latestDeltaCrl.revokedEntries = m_latestCrl.revokedEntries;
+
+        std::vector<uint8_t> deltaDer;
+        deltaDer.push_back(0x30);
+        deltaDer.push_back(0x82);
+        deltaDer.push_back(0x01);
+        deltaDer.push_back(0x00);
+        for (char ch : m_caDn) deltaDer.push_back(static_cast<uint8_t>(ch));
+        deltaDer.push_back(static_cast<uint8_t>(m_latestDeltaCrl.deltaCrlNumber & 0xFF));
+        while (deltaDer.size() < 256) deltaDer.push_back(0x77);
+        m_latestDeltaCrl.rawDeltaCrlDer = deltaDer;
+
+        m_totalDeltaCrlPublished.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    bool publishDeltaCrl() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        publishDeltaCrlInternal();
+        return true;
+    }
+
+    DeltaCrlRecord getLatestDeltaCrl() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_latestDeltaCrl;
+    }
+
+    uint64_t getTotalDeltaCrlPublished() const {
+        return m_totalDeltaCrlPublished.load(std::memory_order_relaxed);
+    }
+
+    // ========================================================================
+    // Active Directory PKI Containers Publication (MS-ADTS / MS-WCCE)
+    // ========================================================================
+    bool publishPkiToActiveDirectory() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto& ad = micant::ad_ds::SovereignActiveDirectoryEngine::get();
+        if (!ad.isInitialized()) {
+            ad.initialize();
+        }
+
+        // Container: Configuration
+        micant::ad_ds::AdObject cfgObj{};
+        cfgObj.distinguishedName = "CN=Configuration,DC=micant,DC=local";
+        cfgObj.name = "Configuration";
+        cfgObj.objectClass = micant::ad_ds::AdObjectClass::Container;
+        ad.addObject(cfgObj);
+
+        // Container: Services
+        micant::ad_ds::AdObject srvObj{};
+        srvObj.distinguishedName = "CN=Services,CN=Configuration,DC=micant,DC=local";
+        srvObj.name = "Services";
+        srvObj.objectClass = micant::ad_ds::AdObjectClass::Container;
+        ad.addObject(srvObj);
+
+        // Container: Public Key Services
+        micant::ad_ds::AdObject pkiObj{};
+        pkiObj.distinguishedName = "CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+        pkiObj.name = "Public Key Services";
+        pkiObj.objectClass = micant::ad_ds::AdObjectClass::Container;
+        ad.addObject(pkiObj);
+
+        // Container: Certification Authorities
+        micant::ad_ds::AdObject caContainer{};
+        caContainer.distinguishedName = "CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+        caContainer.name = "Certification Authorities";
+        caContainer.objectClass = micant::ad_ds::AdObjectClass::Container;
+        ad.addObject(caContainer);
+
+        // CA Object
+        micant::ad_ds::AdObject caEntry{};
+        caEntry.distinguishedName = "CN=MicaNT Enterprise Root CA,CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+        caEntry.name = "MicaNT Enterprise Root CA";
+        caEntry.displayName = "MicaNT Sovereign Enterprise Root CA";
+        caEntry.objectClass = micant::ad_ds::AdObjectClass::Container;
+        caEntry.attributes["cACertificate"] = { "02" };
+        caEntry.attributes["certificateRevocationList"] = { m_micantCa.cdpUri };
+        caEntry.attributes["authorityInfoAccess"] = { m_micantCa.aiaUri };
+        ad.addObject(caEntry);
+
+        // Container: Enrollment Services
+        micant::ad_ds::AdObject enrollObj{};
+        enrollObj.distinguishedName = "CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+        enrollObj.name = "Enrollment Services";
+        enrollObj.objectClass = micant::ad_ds::AdObjectClass::Container;
+        ad.addObject(enrollObj);
+
+        // Enrollment Server Entry
+        micant::ad_ds::AdObject enrollEntry{};
+        enrollEntry.distinguishedName = "CN=MicaNT Enterprise Root CA,CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+        enrollEntry.name = "MicaNT Enterprise Root CA";
+        enrollEntry.displayName = "MicaNT Enterprise Enrollment Service";
+        enrollEntry.objectClass = micant::ad_ds::AdObjectClass::Container;
+        enrollEntry.attributes["dNSHostName"] = { "147.135.1.229", "micant.local" };
+        enrollEntry.attributes["cACertificateDN"] = { m_micantCa.dn };
+        ad.addObject(enrollEntry);
+
+        // Container: Certificate Templates
+        micant::ad_ds::AdObject tmplContainer{};
+        tmplContainer.distinguishedName = "CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+        tmplContainer.name = "Certificate Templates";
+        tmplContainer.objectClass = micant::ad_ds::AdObjectClass::Container;
+        ad.addObject(tmplContainer);
+
+        for (const auto& [name, tmpl] : m_templates) {
+            micant::ad_ds::AdObject tObj{};
+            tObj.distinguishedName = "CN=" + name + ",CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local";
+            tObj.name = name;
+            tObj.displayName = tmpl.displayName;
+            tObj.objectClass = micant::ad_ds::AdObjectClass::Container;
+            tObj.attributes["schemaVersion"] = { std::to_string(tmpl.schemaVersion) };
+            tObj.attributes["validityPeriod"] = { std::to_string(tmpl.validityPeriodSeconds) };
+            ad.addObject(tObj);
+        }
+
+        m_adPkiPublished = true;
+        return true;
+    }
+
+    bool isAdPkiPublished() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_adPkiPublished;
+    }
+
+    // ========================================================================
+    // PKCS#10 CSR Parsing (RFC 2986)
+    // ========================================================================
+    CsrParsed parseCsr(const std::string& csrText) const {
+        CsrParsed parsed;
+        if (csrText.empty()) return parsed;
+
+        if (csrText.find("BEGIN CERTIFICATE REQUEST") != std::string::npos ||
+            csrText.find("BEGIN NEW CERTIFICATE REQUEST") != std::string::npos ||
+            csrText.find("Subject:") != std::string::npos ||
+            csrText.find("CN=") != std::string::npos) {
+
+            parsed.isValid = true;
+            size_t subPos = csrText.find("Subject:");
+            if (subPos != std::string::npos) {
+                size_t lineEnd = csrText.find('\n', subPos);
+                parsed.subjectDn = csrText.substr(subPos + 8, lineEnd - (subPos + 8));
+                size_t first = parsed.subjectDn.find_first_not_of(" \t\r");
+                size_t last = parsed.subjectDn.find_last_not_of(" \t\r");
+                if (first != std::string::npos && last != std::string::npos) {
+                    parsed.subjectDn = parsed.subjectDn.substr(first, last - first + 1);
+                }
+            } else {
+                size_t cnPos = csrText.find("CN=");
+                if (cnPos != std::string::npos) {
+                    size_t lineEnd = csrText.find_first_of("\n\r,", cnPos);
+                    parsed.subjectDn = (lineEnd != std::string::npos) ? csrText.substr(cnPos, lineEnd - cnPos) : csrText.substr(cnPos);
+                }
+            }
+
+            size_t tmplPos = csrText.find("Template:");
+            if (tmplPos != std::string::npos) {
+                size_t lineEnd = csrText.find('\n', tmplPos);
+                parsed.requestedTemplate = csrText.substr(tmplPos + 9, lineEnd - (tmplPos + 9));
+                size_t first = parsed.requestedTemplate.find_first_not_of(" \t\r");
+                size_t last = parsed.requestedTemplate.find_last_not_of(" \t\r");
+                if (first != std::string::npos && last != std::string::npos) {
+                    parsed.requestedTemplate = parsed.requestedTemplate.substr(first, last - first + 1);
+                }
+            } else {
+                parsed.requestedTemplate = "WebServer";
+            }
+
+            if (csrText.find("4096") != std::string::npos) {
+                parsed.keyBits = 4096;
+            } else if (csrText.find("3072") != std::string::npos) {
+                parsed.keyBits = 3072;
+            } else {
+                parsed.keyBits = 2048;
+            }
+        }
+        return parsed;
+    }
+
+    // ========================================================================
+    // PKCS#7 Multi-Certificate Chain Generator (RFC 2315)
+    // ========================================================================
+    std::string generatePkcs7Chain(const std::string& leafSerial) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_certificates.find(leafSerial);
+        if (it == m_certificates.end()) return "";
+
+        const auto& leaf = it->second;
+        CertificateRecord root;
+        auto rootIt = m_certificates.find(m_rootSerialNumber);
+        if (rootIt != m_certificates.end()) {
+            root = rootIt->second;
+        }
+
+        std::vector<uint8_t> bundleDer = leaf.rawDer;
+        bundleDer.insert(bundleDer.end(), root.rawDer.begin(), root.rawDer.end());
+
+        static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string b64Str;
+        for (size_t i = 0; i < bundleDer.size(); ) {
+            uint32_t o1 = (i < bundleDer.size()) ? bundleDer[i++] : 0;
+            uint32_t o2 = (i < bundleDer.size()) ? bundleDer[i++] : 0;
+            uint32_t o3 = (i < bundleDer.size()) ? bundleDer[i++] : 0;
+            uint32_t triple = (o1 << 16) | (o2 << 8) | o3;
+            b64Str.push_back(b64[(triple >> 18) & 0x3F]);
+            b64Str.push_back(b64[(triple >> 12) & 0x3F]);
+            b64Str.push_back(b64[(triple >> 6) & 0x3F]);
+            b64Str.push_back(b64[triple & 0x3F]);
+        }
+
+        std::string p7b = "-----BEGIN PKCS7-----\n";
+        for (size_t p = 0; p < b64Str.size(); p += 64) {
+            p7b += b64Str.substr(p, 64) + "\n";
+        }
+        p7b += "-----END PKCS7-----\n";
+        return p7b;
+    }
+
+    // ========================================================================
+    // Dual CA Context Switching & Reset
+    // ========================================================================
+    bool selectCa(const std::string& name) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (name.find("MicaNT") != std::string::npos || name.find("micant") != std::string::npos) {
+            m_activeCaName = m_micantCa.name;
+            m_caName = m_micantCa.name;
+            m_caDn = m_micantCa.dn;
+            m_caType = m_micantCa.type;
+            m_caState = m_micantCa.state;
+            m_aiaUri = m_micantCa.aiaUri;
+            m_cdpUri = m_micantCa.cdpUri;
+            m_ocspUri = m_micantCa.ocspUri;
+            m_rootSerialNumber = m_micantCa.rootSerialNumber;
+            return true;
+        } else if (name.find("Titan") != std::string::npos || name.find("titan") != std::string::npos) {
+            m_activeCaName = m_titanCa.name;
+            m_caName = m_titanCa.name;
+            m_caDn = m_titanCa.dn;
+            m_caType = m_titanCa.type;
+            m_caState = m_titanCa.state;
+            m_aiaUri = m_titanCa.aiaUri;
+            m_cdpUri = m_titanCa.cdpUri;
+            m_ocspUri = m_titanCa.ocspUri;
+            m_rootSerialNumber = m_titanCa.rootSerialNumber;
+            return true;
+        }
+        return false;
+    }
+
+    std::string getSovereignCaName() const { return m_micantCa.name; }
+    std::string getSovereignCaDn() const { return m_micantCa.dn; }
+    std::string getSovereignRootSerialNumber() const { return m_micantCa.rootSerialNumber; }
+
+    uint32_t getPendingRequestCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint32_t count = 0;
+        for (const auto& [_, req] : m_requests) {
+            if (req.disposition == RequestDisposition::CR_DISP_UNDER_SUBMISSION) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    void resetForTest() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_requests.clear();
+        m_certificates.clear();
+        m_totalRequestsSubmitted.store(0);
+        m_totalCertificatesIssued.store(0);
+        m_totalCertificatesRevoked.store(0);
+        m_totalCrlPublished.store(0);
+        m_totalDeltaCrlPublished.store(0);
+        m_totalOcspQueries.store(0);
+        m_nextRequestId = 1001;
+        m_nextSerialNumber = 0x1000A0B0C0D00001ULL;
+
+        // Reset to Titan default for suite backward compatibility
+        m_activeCaName = m_titanCa.name;
+        m_caName = m_titanCa.name;
+        m_caDn = m_titanCa.dn;
+        m_caType = m_titanCa.type;
+        m_caState = m_titanCa.state;
+        m_aiaUri = m_titanCa.aiaUri;
+        m_cdpUri = m_titanCa.cdpUri;
+        m_ocspUri = m_titanCa.ocspUri;
+        m_rootSerialNumber = m_titanCa.rootSerialNumber;
+
+        seedDefaultTemplates();
+        seedRootCaCertificate();
+        publishCrlInternal();
+        publishDeltaCrlInternal();
     }
 
     // ========================================================================

@@ -29340,3 +29340,342 @@ void Test_Horizon163_DhcpServer_ActiveDirectoryAuth_DnsIntegration_And_NetshDhcp
 
     std::cout << "[TEST] Suite 379: Horizon 163 - Sovereign DHCP Server Subsystem PASSED." << std::endl;
 }
+
+
+void Test_Horizon164_ActiveDirectoryCertificateServices_EnterprisePKI_And_CertutilCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 380: Horizon 164 - Sovereign Active Directory Certificate Services (AD CS),\n"
+              << "Enterprise Public Key Infrastructure (PKI), RFC 5280 X.509 v3 Engine,\n"
+              << "Base & Delta CRLs, RFC 6960 OCSP Responder & Canonical certutil.exe CLI\n"
+              << "========================================================================\n";
+
+    // Ensure AD and PKI services are initialized
+    micant::ad_ds::RegisterActiveDirectorySubsystem();
+    auto& pki = micant::certsrv::CertificateServicesEngine::instance();
+    pki.initialize();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Sovereign AD CS Architecture, Active Directory PKI Containers & SCM Registration
+    // ------------------------------------------------------------------------
+    {
+        // 1. SCM Registration for CertSvc
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto sRec = scm.getServiceRecord(L"CertSvc");
+        TEST_ASSERT(sRec != nullptr, "CertSvc must be registered in SCM");
+        TEST_ASSERT(sRec->serviceName == L"CertSvc", "Service name must be CertSvc");
+        TEST_ASSERT(sRec->displayName == L"Active Directory Certificate Services", "Display name match");
+        TEST_ASSERT(sRec->startType == micant::scm::SERVICE_AUTO_START, "CertSvc startType must be AUTO_START");
+        TEST_ASSERT(sRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "CertSvc state must be RUNNING");
+
+        // 2. VersionDatabase PE Metadata & Exports
+        auto& verDb = micant::version::VersionDatabase::Instance();
+        const auto* modSrv = verDb.FindModule("certsrv.exe");
+        TEST_ASSERT(modSrv != nullptr, "certsrv.exe must be registered in VersionDatabase");
+        TEST_ASSERT(modSrv->stringTable.at("FileVersion") == "10.0.26100.1" ||
+                    modSrv->stringTable.at("FileVersion") == "10.0.26100.5900", "certsrv.exe version check");
+
+        const auto* modCli = verDb.FindModule("certcli.dll");
+        TEST_ASSERT(modCli != nullptr, "certcli.dll must be registered in VersionDatabase");
+
+        const auto* modUtil = verDb.FindModule("certutil.exe");
+        TEST_ASSERT(modUtil != nullptr, "certutil.exe must be registered in VersionDatabase");
+        TEST_ASSERT(modUtil->stringTable.at("FileVersion") == "10.0.26100.1" ||
+                    modUtil->stringTable.at("FileVersion") == "10.0.26100.5900", "certutil.exe version check");
+
+        // 3. Dual Root CA Support & Sovereign MicaNT Enterprise Root CA
+        TEST_ASSERT(pki.getSovereignCaName() == "MicaNT Enterprise Root CA", "Sovereign CA Name match");
+        TEST_ASSERT(pki.getSovereignCaDn() == "CN=MicaNT Enterprise Root CA,DC=micant,DC=local", "Sovereign CA DN match");
+        TEST_ASSERT(pki.getSovereignRootSerialNumber() == "02", "Sovereign Root serial match");
+
+        // Verify Root CA certificates in database
+        micant::certsrv::CertificateRecord titanRoot;
+        TEST_ASSERT(pki.getCertificate("01", titanRoot), "Titan Root CA (01) must exist");
+        TEST_ASSERT(titanRoot.subjectDn == "CN=Titan Enterprise Root CA,DC=titan,DC=local", "Titan root DN match");
+
+        micant::certsrv::CertificateRecord micantRoot;
+        TEST_ASSERT(pki.getCertificate("02", micantRoot), "MicaNT Root CA (02) must exist");
+        TEST_ASSERT(micantRoot.subjectDn == "CN=MicaNT Enterprise Root CA,DC=micant,DC=local", "MicaNT root DN match");
+        TEST_ASSERT(micantRoot.isCa == true, "MicaNT root isCa must be true");
+        TEST_ASSERT(micantRoot.publicKeyBits == 4096, "MicaNT root key size must be 4096 bits");
+
+        // 4. Active Directory PKI Containers Publication (MS-ADTS / MS-WCCE)
+        bool adPubOk = pki.publishPkiToActiveDirectory();
+        TEST_ASSERT(adPubOk == true, "publishPkiToActiveDirectory must succeed");
+        TEST_ASSERT(pki.isAdPkiPublished() == true, "isAdPkiPublished must return true");
+
+        // Validate AD directory objects created
+        auto& ad = micant::ad_ds::SovereignActiveDirectoryEngine::get();
+        auto caObj = ad.getObjectByDn("CN=MicaNT Enterprise Root CA,CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local");
+        TEST_ASSERT(caObj.has_value(), "AD must contain CA object in Certification Authorities container");
+        TEST_ASSERT(caObj->attributes.at("cACertificate").front() == "02", "CA object must reference root serial 02");
+
+        auto enrollObj = ad.getObjectByDn("CN=MicaNT Enterprise Root CA,CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,DC=micant,DC=local");
+        TEST_ASSERT(enrollObj.has_value(), "AD must contain Enrollment Services object");
+        TEST_ASSERT(enrollObj->attributes.at("dNSHostName").front() == "147.135.1.229", "Enrollment service DNS host match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: RFC 5280 X.509 v3 Certificate Life-Cycle & Cryptographic Engine
+    // ------------------------------------------------------------------------
+    {
+        // Select MicaNT Sovereign Root CA
+        pki.selectCa("MicaNT Enterprise Root CA");
+        TEST_ASSERT(pki.getCaName() == "MicaNT Enterprise Root CA", "Active CA must be MicaNT");
+
+        // 1. Issue Domain Controller certificate
+        uint32_t reqIdDc = 0;
+        micant::certsrv::RequestDisposition dispDc = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+        bool subDcOk = pki.submitRequest(
+            "CN=DC01.micant.local,OU=Domain Controllers,DC=micant,DC=local",
+            "DomainController",
+            "MICANT\\DC01$",
+            { "DC01.micant.local", "micant.local" },
+            2048,
+            &reqIdDc,
+            &dispDc
+        );
+        TEST_ASSERT(subDcOk == true, "DomainController certificate request submission must succeed");
+        TEST_ASSERT(dispDc == micant::certsrv::RequestDisposition::CR_DISP_ISSUED, "DomainController cert must be auto-issued");
+
+        micant::certsrv::CertificateRequestRecord reqDc;
+        pki.getRequest(reqIdDc, reqDc);
+        TEST_ASSERT(!reqDc.issuedSerialNumber.empty(), "Issued serial number must be assigned");
+
+        micant::certsrv::CertificateRecord certDc;
+        TEST_ASSERT(pki.getCertificate(reqDc.issuedSerialNumber, certDc), "DomainController certificate must be in store");
+        TEST_ASSERT(certDc.subjectDn.find("DC01.micant.local") != std::string::npos, "Subject match");
+        TEST_ASSERT(certDc.issuerDn == "CN=MicaNT Enterprise Root CA,DC=micant,DC=local", "Issuer must be MicaNT Root CA");
+        TEST_ASSERT((certDc.keyUsage & micant::certsrv::KU_DIGITAL_SIGNATURE) != 0, "Key usage must include digital signature");
+        TEST_ASSERT((certDc.keyUsage & micant::certsrv::KU_KEY_ENCIPHERMENT) != 0, "Key usage must include key encipherment");
+
+        // Verify KDC Auth EKU in DomainController certificate
+        bool hasKdcEku = (std::find(certDc.ekus.begin(), certDc.ekus.end(), micant::certsrv::OID_KDC_AUTH) != certDc.ekus.end());
+        TEST_ASSERT(hasKdcEku == true, "DomainController certificate must contain KDC Auth EKU (1.3.6.1.5.2.3.5)");
+
+        // 2. Issue WebServer certificate with SAN
+        uint32_t reqIdWeb = 0;
+        micant::certsrv::RequestDisposition dispWeb = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+        bool subWebOk = pki.submitRequest(
+            "CN=portal.micant.local,O=Barrer Software",
+            "WebServer",
+            "MICANT\\Administrator",
+            { "portal.micant.local", "admin.micant.local", "147.135.1.229" },
+            2048,
+            &reqIdWeb,
+            &dispWeb
+        );
+        TEST_ASSERT(subWebOk == true, "WebServer request must succeed");
+        TEST_ASSERT(dispWeb == micant::certsrv::RequestDisposition::CR_DISP_ISSUED, "WebServer request auto-issued");
+
+        micant::certsrv::CertificateRequestRecord reqWeb;
+        pki.getRequest(reqIdWeb, reqWeb);
+        micant::certsrv::CertificateRecord certWeb;
+        pki.getCertificate(reqWeb.issuedSerialNumber, certWeb);
+        TEST_ASSERT(certWeb.sanDnsNames.size() == 3, "WebServer certificate must contain 3 SAN entries");
+        TEST_ASSERT(certWeb.rawPem.find("-----BEGIN CERTIFICATE-----") != std::string::npos, "PEM header valid");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: MS-WCCE / MS-CSRA Certificate Enrollment & Template Engine
+    // ------------------------------------------------------------------------
+    {
+        // 1. Pending Approval workflow with CodeSigning template
+        uint32_t reqIdCode = 0;
+        micant::certsrv::RequestDisposition dispCode = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+        bool subCode = pki.submitRequest(
+            "CN=MicaNT Code Signing Authority,O=Barrer Software",
+            "CodeSigning",
+            "MICANT\\DanielElliott",
+            {},
+            3072,
+            &reqIdCode,
+            &dispCode
+        );
+        TEST_ASSERT(subCode == true, "CodeSigning request submission must succeed");
+        TEST_ASSERT(dispCode == micant::certsrv::RequestDisposition::CR_DISP_UNDER_SUBMISSION,
+                    "CodeSigning must require manual administrative approval");
+        TEST_ASSERT(pki.getPendingRequestCount() >= 1, "Pending request count must be at least 1");
+
+        // Approve request
+        std::string approvedSerial;
+        bool appOk = pki.approveRequest(reqIdCode, &approvedSerial);
+        TEST_ASSERT(appOk == true, "approveRequest must succeed");
+        TEST_ASSERT(!approvedSerial.empty(), "Approved serial must be non-empty");
+
+        micant::certsrv::CertificateRecord certCode;
+        TEST_ASSERT(pki.getCertificate(approvedSerial, certCode), "Code signing cert must be retrievable");
+        TEST_ASSERT(certCode.publicKeyBits == 3072, "Code signing key bits must be 3072");
+
+        // 2. PKCS#10 CSR Parsing
+        std::string rawCsr = "-----BEGIN CERTIFICATE REQUEST-----\n"
+                             "Subject: CN=edge-node-01.micant.local,O=MicaNT Infra\n"
+                             "Template: WebServer\n"
+                             "KeyBits: 2048\n"
+                             "-----END CERTIFICATE REQUEST-----\n";
+        auto parsedCsr = pki.parseCsr(rawCsr);
+        TEST_ASSERT(parsedCsr.isValid == true, "CSR must be parsed as valid");
+        TEST_ASSERT(parsedCsr.subjectDn.find("edge-node-01.micant.local") != std::string::npos, "Parsed Subject match");
+        TEST_ASSERT(parsedCsr.requestedTemplate == "WebServer", "Parsed template match");
+        TEST_ASSERT(parsedCsr.keyBits == 2048, "Parsed key bits match");
+
+        // 3. PKCS#7 Multi-Certificate Chain Generation
+        std::string p7b = pki.generatePkcs7Chain(approvedSerial);
+        TEST_ASSERT(!p7b.empty(), "PKCS#7 chain must be generated");
+        TEST_ASSERT(p7b.find("-----BEGIN PKCS7-----") != std::string::npos, "PKCS#7 header match");
+        TEST_ASSERT(p7b.find("-----END PKCS7-----") != std::string::npos, "PKCS#7 footer match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: RFC 5280 CRL Publishing, Delta CRLs & RFC 6960 OCSP Responder
+    // ------------------------------------------------------------------------
+    {
+        // 1. Issue temporary cert for revocation testing
+        uint32_t reqIdTemp = 0;
+        micant::certsrv::RequestDisposition dispTemp = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+        pki.submitRequest("CN=compromised-node.micant.local", "WebServer", "MICANT\\TempUser", {}, 2048, &reqIdTemp, &dispTemp);
+        micant::certsrv::CertificateRequestRecord reqTemp;
+        pki.getRequest(reqIdTemp, reqTemp);
+        std::string revokedSerial = reqTemp.issuedSerialNumber;
+
+        // Revoke certificate
+        bool revOk = pki.revokeCertificate(revokedSerial, micant::certsrv::CRL_REASON_KEY_COMPROMISE);
+        TEST_ASSERT(revOk == true, "revokeCertificate must succeed");
+
+        micant::certsrv::CertificateRecord certRev;
+        pki.getCertificate(revokedSerial, certRev);
+        TEST_ASSERT(certRev.isRevoked == true, "isRevoked flag must be true");
+        TEST_ASSERT(certRev.revocationReason == micant::certsrv::CRL_REASON_KEY_COMPROMISE, "Revocation reason match");
+
+        // 2. Publish Base CRL and Delta CRL
+        pki.publishCrl();
+        auto crl = pki.getLatestCrl();
+        TEST_ASSERT(crl.crlNumber >= 2, "Base CRL number must be >= 2");
+        bool inCrl = false;
+        for (const auto& entry : crl.revokedEntries) {
+            if (entry.serialNumber == revokedSerial) inCrl = true;
+        }
+        TEST_ASSERT(inCrl == true, "Revoked certificate serial must be listed in CRL");
+
+        pki.publishDeltaCrl();
+        auto deltaCrl = pki.getLatestDeltaCrl();
+        TEST_ASSERT(deltaCrl.deltaCrlNumber >= 1, "Delta CRL number must be >= 1");
+        TEST_ASSERT(!deltaCrl.rawDeltaCrlDer.empty(), "Delta CRL DER must not be empty");
+
+        // 3. RFC 6960 OCSP Responder
+        micant::certsrv::OcspResponse ocspRev;
+        pki.processOcspRequest(revokedSerial, ocspRev);
+        TEST_ASSERT(ocspRev.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_REVOKED, "OCSP status must be REVOKED");
+        TEST_ASSERT(ocspRev.revocationReason == micant::certsrv::CRL_REASON_KEY_COMPROMISE, "OCSP revocation reason match");
+        TEST_ASSERT(ocspRev.responderId.find("MicaNT") != std::string::npos, "OCSP responder ID must match active CA");
+
+        // 4. Certificate Chain Validation
+        bool chainValid = false;
+        std::vector<std::string> chainDns;
+        pki.verifyCertificateChain(revokedSerial, &chainValid, &chainDns);
+        TEST_ASSERT(chainValid == false, "Chain validation must fail for revoked certificate");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical certutil.exe Win32 Management CLI Utility
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::certutil;
+
+        // 1. certutil -?
+        std::string outHelp = ExecuteCertutilString("certutil -?");
+        TEST_ASSERT(outHelp.find("Microsoft (R) CertUtil") != std::string::npos, "certutil help header match");
+        TEST_ASSERT(outHelp.find("-catemplates") != std::string::npos, "certutil options listed");
+
+        // 2. certutil -ping
+        std::string outPing = ExecuteCertutilString("certutil -ping");
+        TEST_ASSERT(outPing.find("MicaNT Enterprise Root CA") != std::string::npos, "ping CA match");
+        TEST_ASSERT(outPing.find("alive and responding") != std::string::npos, "ping response match");
+        TEST_ASSERT(outPing.find("completed successfully") != std::string::npos, "ping success match");
+
+        // 3. certutil -catemplates
+        std::string outTmpl = ExecuteCertutilString("certutil -catemplates");
+        TEST_ASSERT(outTmpl.find("DomainController") != std::string::npos, "catemplates lists DomainController");
+        TEST_ASSERT(outTmpl.find("WebServer") != std::string::npos, "catemplates lists WebServer");
+        TEST_ASSERT(outTmpl.find("CodeSigning") != std::string::npos, "catemplates lists CodeSigning");
+
+        // 4. certutil -dump 02
+        std::string outDump = ExecuteCertutilString("certutil -dump 02");
+        TEST_ASSERT(outDump.find("X.509 Certificate") != std::string::npos, "dump header match");
+        TEST_ASSERT(outDump.find("CN=MicaNT Enterprise Root CA") != std::string::npos, "dump DN match");
+        TEST_ASSERT(outDump.find("4096 Bits") != std::string::npos, "dump key size match");
+
+        // 5. certutil -verify 02
+        std::string outVerify = ExecuteCertutilString("certutil -verify 02");
+        TEST_ASSERT(outVerify.find("Certificate Chain Validation: SUCCESS") != std::string::npos, "verify chain success");
+
+        // 6. certutil -ca.cert
+        std::string outCaCert = ExecuteCertutilString("certutil -ca.cert ca_export.crt");
+        TEST_ASSERT(outCaCert.find("Exporting Enterprise Root CA Certificate") != std::string::npos, "ca.cert export banner");
+        TEST_ASSERT(outCaCert.find("-----BEGIN CERTIFICATE-----") != std::string::npos, "ca.cert PEM header");
+
+        // 7. certutil -crl
+        std::string outCrl = ExecuteCertutilString("certutil -crl");
+        TEST_ASSERT(outCrl.find("Publishing Certificate Revocation List") != std::string::npos, "crl publishing banner");
+        TEST_ASSERT(outCrl.find("Delta CRL") != std::string::npos, "crl delta banner");
+
+        // 8. certutil -getreg
+        std::string outReg = ExecuteCertutilString("certutil -getreg ca\\crlperiod");
+        TEST_ASSERT(outReg.find("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\CertSvc") != std::string::npos, "getreg registry key");
+        TEST_ASSERT(outReg.find("CRLPeriod REG_SZ = Weeks") != std::string::npos, "getreg CRLPeriod");
+
+        // 9. certutil -pulse
+        std::string outPulse = ExecuteCertutilString("certutil -pulse");
+        TEST_ASSERT(outPulse.find("Autoenrollment Pulse") != std::string::npos, "pulse banner");
+
+        // 10. certutil -viewdelstore MY
+        std::string outStore = ExecuteCertutilString("certutil -viewdelstore MY");
+        TEST_ASSERT(outStore.find("Inspecting Certificate Store \"MY\"") != std::string::npos, "viewdelstore banner");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: WFP Port Permit, Remote Web Terminal (wss://) & Live Telemetry Stream
+    // ------------------------------------------------------------------------
+    {
+        auto& console = km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) {
+            console.startHttpsServer(443);
+        }
+
+        // 1. WFP Rule #16401 (MicaNT_CertSrv_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(16401);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #16401 for CertSrv must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_TCP, "CertSrv rule protocol must be TCP");
+        TEST_ASSERT(ruleOpt->localPortStart == 135 && ruleOpt->localPortEnd == 443, "CertSrv rule port range match");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "CertSrv rule action must be PERMIT");
+
+        // 2. Remote Web Terminal command dispatch
+        std::string termPing = console.executeTerminalCommand("certutil -ping");
+        TEST_ASSERT(termPing.find("alive and responding") != std::string::npos,
+                    "Remote terminal certutil ping check");
+
+        std::string termTmpl = console.executeTerminalCommand("certutil -catemplates");
+        TEST_ASSERT(termTmpl.find("Published Active Directory Certificate Templates") != std::string::npos,
+                    "Remote terminal certutil catemplates check");
+
+        // 3. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"pki_ca_state\":\"Running\"") != std::string::npos, "Telemetry pki_ca_state match");
+        TEST_ASSERT(teleJson.find("\"pki_certs_issued\":") != std::string::npos, "Telemetry pki_certs_issued match");
+        TEST_ASSERT(teleJson.find("\"pki_certs_revoked\":") != std::string::npos, "Telemetry pki_certs_revoked match");
+        TEST_ASSERT(teleJson.find("\"pki_crl_published\":") != std::string::npos, "Telemetry pki_crl_published match");
+        TEST_ASSERT(teleJson.find("\"pki_delta_crl_published\":") != std::string::npos, "Telemetry pki_delta_crl_published match");
+        TEST_ASSERT(teleJson.find("\"pki_ocsp_queries\":") != std::string::npos, "Telemetry pki_ocsp_queries match");
+    }
+
+    std::cout << "[HORIZON 164] Sovereign Active Directory Certificate Services (AD CS) Subsystem Summary:\n"
+              << "    Pillar 1: AD CS Architecture, Active Directory PKI Containers & SCM Registration OK\n"
+              << "    Pillar 2: RFC 5280 X.509 v3 Certificate Life-Cycle & Cryptographic Engine OK\n"
+              << "    Pillar 3: MS-WCCE / MS-CSRA Certificate Enrollment & Template Engine OK\n"
+              << "    Pillar 4: RFC 5280 Base & Delta CRLs, RFC 6960 OCSP Responder & Chain Validation OK\n"
+              << "    Pillar 5: Canonical certutil.exe CLI Utility & Enterprise Store Management OK\n"
+              << "    Pillar 6: WFP Port 135/443 Permit, Remote Web Terminal & Real-Time Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 380: Horizon 164 - Sovereign Active Directory Certificate Services (AD CS) PASSED." << std::endl;
+}
+
