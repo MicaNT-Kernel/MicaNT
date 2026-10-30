@@ -325,6 +325,8 @@
 #include "micant/um/subsystems/mgmt/wds.hpp"
 #include "micant/um/servers/certsrv.hpp"
 #include "micant/um/subsystems/security/certutil.hpp"
+#include "micant/um/servers/wmi_provider.hpp"
+#include "micant/um/subsystems/net/winrm_tools.hpp"
 #include "micant/um/servers/dns_server.hpp"
 #include "micant/um/servers/dhcp_server.hpp"
 #include "micant/um/subsystems/net/netsh_dhcp.hpp"
@@ -418,8 +420,13 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite381") {
+        RUN_TEST(Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite380") {
         RUN_TEST(Test_Horizon164_ActiveDirectoryCertificateServices_EnterprisePKI_And_CertutilCLI);
+    RUN_TEST(Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite379") {
@@ -1870,6 +1877,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon162_ActiveDirectory_Ldap_KerberosKdc_And_DsToolsCLI);
     RUN_TEST(Test_Horizon163_DhcpServer_ActiveDirectoryAuth_DnsIntegration_And_NetshDhcpCLI);
     RUN_TEST(Test_Horizon164_ActiveDirectoryCertificateServices_EnterprisePKI_And_CertutilCLI);
+    RUN_TEST(Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -41,6 +41,8 @@
 #include "micant/um/subsystems/net/netsh_dhcp.hpp"
 #include "micant/um/servers/certsrv.hpp"
 #include "micant/um/subsystems/security/certutil.hpp"
+#include "micant/um/servers/wmi_provider.hpp"
+#include "micant/um/subsystems/net/winrm_tools.hpp"
 
 namespace micant::km::net {
 
@@ -142,6 +144,18 @@ public:
         certSrvRule.weight = 1500;
         certSrvRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(certSrvRule);
+
+        // 8. Register WFP Inbound Rule for Windows Remote Management (TCP Port 5985 & Port 5986)
+        wfp::km::WfpKernelFilterRule winrmRule{};
+        winrmRule.filterId = 16501;
+        winrmRule.name = "MicaNT_WinRM_Inbound_Permit";
+        winrmRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        winrmRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        winrmRule.protocol = tcpip::IPPROTO_TCP;
+        winrmRule.localPortStart = 5985;
+        winrmRule.localPortEnd = 5986;
+        winrmRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(winrmRule);
     }
 
     void stopHttpsServer() {
@@ -565,6 +579,19 @@ public:
             return ss.str();
         } else if (cmd == "certutil" || cmd.starts_with("certutil ") || cmd.starts_with("certutil/") || cmd.starts_with("certutil-")) {
             return micant::certutil::CertutilCommandExecutor::ExecuteString(std::string(cmd));
+        } else if (cmd == "winrm" || cmd.starts_with("winrm ") || cmd.starts_with("winrm/") || cmd.starts_with("winrm-")) {
+            std::string outStr, errStr;
+            micant::winrm_cli::ExecuteWinrmString(std::string(cmd), outStr, errStr);
+            return !outStr.empty() ? outStr : errStr;
+        } else if (cmd == "winrs" || cmd.starts_with("winrs ") || cmd.starts_with("winrs/") || cmd.starts_with("winrs-")) {
+            std::string outStr, errStr;
+            int32_t ec = 0;
+            micant::winrs::ExecuteWinrsString(std::string(cmd), outStr, errStr, ec);
+            return !outStr.empty() ? outStr : errStr;
+        } else if (cmd == "wmic" || cmd.starts_with("wmic ") || cmd.starts_with("wmic/") || cmd.starts_with("wmic-")) {
+            std::string outStr, errStr;
+            micant::wmi::ExecuteWmicString(std::string(cmd), outStr, errStr);
+            return !outStr.empty() ? outStr : errStr;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -643,7 +670,12 @@ public:
            << "\"pki_crl_published\":" << certsrv::CertificateServicesEngine::instance().getTotalCrlPublished() << ","
            << "\"pki_delta_crl_published\":" << certsrv::CertificateServicesEngine::instance().getTotalDeltaCrlPublished() << ","
            << "\"pki_ocsp_queries\":" << certsrv::CertificateServicesEngine::instance().getTotalOcspQueries() << ","
-           << "\"pki_pending_requests\":" << certsrv::CertificateServicesEngine::instance().getPendingRequestCount() << "}\r\n";
+           << "\"pki_pending_requests\":" << certsrv::CertificateServicesEngine::instance().getPendingRequestCount() << ","
+           << "\"winrm_active_shells\":" << winrm::EnterpriseWinRmServer::instance().getStatistics().activeShells << ","
+           << "\"winrm_total_commands\":" << winrm::EnterpriseWinRmServer::instance().getStatistics().totalCommandsExecuted << ","
+           << "\"winrm_bytes_transferred\":" << (winrm::EnterpriseWinRmServer::instance().getStatistics().totalBytesReceived + winrm::EnterpriseWinRmServer::instance().getStatistics().totalBytesSent) << ","
+           << "\"wmi_queries_served\":" << wmi::WmiRepository::get().getQueryCount() << ","
+           << "\"winrm_listeners_count\":" << winrm::EnterpriseWinRmServer::instance().getListeners().size() << "}\r\n";
         return ss.str();
     }
 

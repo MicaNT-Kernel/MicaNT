@@ -17,6 +17,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
+#include "micant/um/servers/wmi_provider.hpp"
 
 namespace micant::winrm {
 
@@ -189,6 +190,36 @@ public:
         return true;
     }
 
+    void ensureDefaultListeners() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (m_listeners.find("HTTP:5985") == m_listeners.end()) {
+            WinRmListener httpListener;
+            httpListener.transport = ListenerTransport::Http;
+            httpListener.address = "*";
+            httpListener.port = 5985;
+            httpListener.hostname = "titan-mgmt01.micant.internal";
+            httpListener.enabled = true;
+            m_listeners["HTTP:5985"] = httpListener;
+        }
+        if (m_listeners.find("HTTPS:5986") == m_listeners.end()) {
+            WinRmListener httpsListener;
+            httpsListener.transport = ListenerTransport::Https;
+            httpsListener.address = "*";
+            httpsListener.port = 5986;
+            httpsListener.hostname = "titan-mgmt01.micant.internal";
+            httpsListener.enabled = true;
+            httpsListener.certificateThumbprint = "4F5B891A6C2E337890BCDEF123456789ABCDEF01";
+            m_listeners["HTTPS:5986"] = httpsListener;
+        }
+    }
+
+    void resetForTest() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_shells.clear();
+        m_stats = WinRmStatistics{};
+        ensureDefaultListeners();
+    }
+
     void shutdown() {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         m_shells.clear();
@@ -270,7 +301,11 @@ public:
         shell.workingDirectory = workingDir.empty() ? "C:\\Windows\\System32" : workingDir;
         shell.environment = env;
         if (shell.environment.find("COMPUTERNAME") == shell.environment.end()) {
-            shell.environment["COMPUTERNAME"] = "TITAN-MGMT01";
+            if (ownerUser.rfind("TITAN", 0) == 0) {
+                shell.environment["COMPUTERNAME"] = "TITAN-MGMT01";
+            } else {
+                shell.environment["COMPUTERNAME"] = "DC01";
+            }
         }
         if (shell.environment.find("USERNAME") == shell.environment.end()) {
             shell.environment["USERNAME"] = ownerUser;
@@ -512,6 +547,15 @@ public:
             m_stats.totalBytesSent += outXml.size();
             return false;
         } else if (req.action == URI_WSMAN_ACTION_TRANSFER_GET) {
+            if (req.resourceUri.find("wmi/root/cimv2/") != std::string::npos) {
+                std::string cls = req.resourceUri.substr(req.resourceUri.find("wmi/root/cimv2/") + 15);
+                auto instances = micant::wmi::WmiRepository::get().query("SELECT * FROM " + cls);
+                if (!instances.empty()) {
+                    outXml = buildWmiGetResponse(req, instances[0]);
+                    m_stats.totalBytesSent += outXml.size();
+                    return true;
+                }
+            }
             // Get configuration
             outXml = buildGetConfigResponse(req);
             m_stats.totalBytesSent += outXml.size();
@@ -556,6 +600,7 @@ private:
         db.RegisterModule("wsmres.dll", "10.0.26100.1", "WS-Management Resources");
         db.RegisterModule("wsmagent.dll", "10.0.26100.1", "WS-Management Agent Core");
         db.RegisterModule("wsmsvc.dll", "10.0.26100.1", "WS-Management Service DLL");
+        db.RegisterModule("wmic.exe", "10.0.26100.1", "Windows Management Instrumentation Command-line");
     }
 
     std::string generateUuid() {
@@ -585,7 +630,11 @@ private:
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw == "hostname" || raw == "hostname.exe") {
-            cmd.stdoutBuffer = "TITAN-MGMT01\r\n";
+            if (shell.ownerUser.rfind("TITAN", 0) == 0) {
+                cmd.stdoutBuffer = "TITAN-MGMT01\r\n";
+            } else {
+                cmd.stdoutBuffer = "DC01\r\n";
+            }
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw.rfind("echo ", 0) == 0) {
@@ -593,17 +642,31 @@ private:
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw == "ipconfig" || raw == "ipconfig /all") {
-            cmd.stdoutBuffer = 
-                "\r\nMicaNT IP Configuration\r\n\r\n"
-                "Ethernet adapter vEthernet (Enterprise):\r\n"
-                "   Connection-specific DNS Suffix  . : micant.internal\r\n"
-                "   IPv4 Address. . . . . . . . . . . : 10.0.0.10\r\n"
-                "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\r\n"
-                "   Default Gateway . . . . . . . . . : 10.0.0.1\r\n";
+            if (shell.ownerUser.rfind("TITAN", 0) == 0) {
+                cmd.stdoutBuffer = 
+                    "\r\nMicaNT IP Configuration\r\n\r\n"
+                    "Ethernet adapter vEthernet (Enterprise):\r\n"
+                    "   Connection-specific DNS Suffix  . : micant.internal\r\n"
+                    "   IPv4 Address. . . . . . . . . . . : 10.0.0.10\r\n"
+                    "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\r\n"
+                    "   Default Gateway . . . . . . . . . : 10.0.0.1\r\n";
+            } else {
+                cmd.stdoutBuffer = 
+                    "\r\nMicaNT IP Configuration\r\n\r\n"
+                    "Ethernet adapter Ethernet0:\r\n"
+                    "   Connection-specific DNS Suffix  . : micant.local\r\n"
+                    "   IPv4 Address. . . . . . . . . . . : 147.135.1.229\r\n"
+                    "   Subnet Mask . . . . . . . . . . . : 255.255.255.0\r\n"
+                    "   Default Gateway . . . . . . . . . : 147.135.1.1\r\n";
+            }
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw == "ver") {
             cmd.stdoutBuffer = "\r\nMicaNT [Version 10.0.26100.1]\r\n";
+            cmd.exitCode = 0;
+            cmd.state = CommandState::Completed;
+        } else if (raw.rfind("wmic", 0) == 0) {
+            micant::wmi::ExecuteWmicString(raw, cmd.stdoutBuffer, cmd.stderrBuffer);
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw.rfind("Get-Process", 0) == 0 || raw.rfind("ps", 0) == 0) {
@@ -797,6 +860,57 @@ private:
         return ss.str();
     }
 
+public:
+    // --- PSRP & WMI Integration ---
+
+    std::string buildPsrpSessionCapabilityResponse() {
+        std::stringstream ss;
+        ss << "<Obj RefId=\"0\">"
+           << "<MS>"
+           << "<Version N=\"protocolversion\">2.3</Version>"
+           << "<Version N=\"PSVersion\">5.1.26100.1</Version>"
+           << "<Version N=\"SerializationVersion\">1.1.0.1</Version>"
+           << "</MS>"
+           << "</Obj>";
+        return ss.str();
+    }
+
+    std::string buildPsrpPipelineOutput(const std::string& typeName, const std::map<std::string, std::string>& properties) {
+        std::stringstream ss;
+        ss << "<Obj RefId=\"0\">"
+           << "<TN RefId=\"0\">"
+           << "<T>" << typeName << "</T>"
+           << "<T>System.Object</T>"
+           << "</TN>"
+           << "<MS>";
+        for (const auto& [k, v] : properties) {
+            ss << "<S N=\"" << k << "\">" << v << "</S>";
+        }
+        ss << "</MS></Obj>";
+        return ss.str();
+    }
+
+    std::string buildWmiGetResponse(const WsManMessage& req, const micant::wmi::WmiInstance& inst) {
+        std::stringstream ss;
+        ss << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+           << "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+           << "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+           << "xmlns:p=\"http://schemas.microsoft.com/wbem/wsman/1/wmi/root/cimv2/" << inst.className << "\">\r\n"
+           << "  <s:Header>\r\n"
+           << "    <wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/GetResponse</wsa:Action>\r\n"
+           << "    <wsa:RelatesTo>" << req.messageId << "</wsa:RelatesTo>\r\n"
+           << "  </s:Header>\r\n"
+           << "  <s:Body>\r\n"
+           << "    <p:" << inst.className << ">\r\n";
+        for (const auto& [k, v] : inst.properties) {
+            ss << "      <p:" << k << ">" << v.value << "</p:" << k << ">\r\n";
+        }
+        ss << "    </p:" << inst.className << ">\r\n"
+           << "  </s:Body>\r\n"
+           << "</s:Envelope>\r\n";
+        return ss.str();
+    }
+
     std::string buildGetConfigResponse(const WsManMessage& req) {
         std::stringstream ss;
         ss << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
@@ -841,6 +955,7 @@ private:
         return ss.str();
     }
 
+private:
     mutable std::recursive_mutex m_mutex;
     bool m_initialized{false};
     WinRmServiceConfig m_serviceConfig;

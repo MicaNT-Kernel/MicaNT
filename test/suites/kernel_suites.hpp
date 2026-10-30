@@ -29679,3 +29679,321 @@ void Test_Horizon164_ActiveDirectoryCertificateServices_EnterprisePKI_And_Certut
     std::cout << "[TEST] Suite 380: Horizon 164 - Sovereign Active Directory Certificate Services (AD CS) PASSED." << std::endl;
 }
 
+
+// ============================================================================
+// Horizon 165: Sovereign Windows Remote Management (WinRM 2.0 / MS-WSMV),
+// PowerShell Remoting Protocol (MS-PSRP), WMI/CIM Provider Engine,
+// Remote Shell Execution (winrs.exe) & Canonical winrm.cmd CLI
+// ============================================================================
+
+void Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 381: Horizon 165 - Sovereign Windows Remote Management (WinRM 2.0),\n"
+              << "PowerShell Remoting Protocol (MS-PSRP), WMI/CIM Provider Engine,\n"
+              << "Remote Shell Execution (winrs.exe) & Canonical winrm.cmd CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: WinRM 2.0 Service Architecture, SCM & VersionDatabase Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& winrm = micant::winrm::EnterpriseWinRmServer::instance();
+        TEST_ASSERT(winrm.initialize(), "EnterpriseWinRmServer initialization must succeed");
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"WinRM");
+        TEST_ASSERT(svc != nullptr, "WinRM service must be registered in SCM");
+        TEST_ASSERT(svc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WinRM current state RUNNING");
+        TEST_ASSERT(svc->startType == micant::scm::SERVICE_AUTO_START, "WinRM start type AUTO_START");
+        TEST_ASSERT(svc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "WinRM hosted in svchost");
+
+        auto& db = micant::version::VersionDatabase::Instance();
+        TEST_ASSERT(db.FindModule("winrm.cmd") != nullptr, "winrm.cmd registered in VersionDatabase");
+        TEST_ASSERT(db.FindModule("winrs.exe") != nullptr, "winrs.exe registered in VersionDatabase");
+        TEST_ASSERT(db.FindModule("wsmprovhost.exe") != nullptr, "wsmprovhost.exe registered in VersionDatabase");
+        TEST_ASSERT(db.FindModule("wsmagent.dll") != nullptr, "wsmagent.dll registered in VersionDatabase");
+        TEST_ASSERT(db.FindModule("wmic.exe") != nullptr, "wmic.exe registered in VersionDatabase");
+
+        auto listeners = winrm.getListeners();
+        TEST_ASSERT(listeners.size() >= 2, "At least 2 default listeners configured");
+        bool hasHttp = false, hasHttps = false;
+        for (const auto& l : listeners) {
+            if (l.transport == micant::winrm::ListenerTransport::Http && l.port == 5985) hasHttp = true;
+            if (l.transport == micant::winrm::ListenerTransport::Https && l.port == 5986) hasHttps = true;
+        }
+        TEST_ASSERT(hasHttp && hasHttps, "Both HTTP (5985) and HTTPS (5986) listeners active");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: WS-Management Protocol (MS-WSMV) & XML SOAP Wire Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& winrm = micant::winrm::EnterpriseWinRmServer::instance();
+
+        // 1. SOAP Create Shell
+        std::string createSoap =
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+            "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\">\r\n"
+            "  <s:Header>\r\n"
+            "    <wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Create</wsa:Action>\r\n"
+            "    <wsa:MessageID>urn:uuid:11111111-2222-3333-4444-555555555555</wsa:MessageID>\r\n"
+            "    <wsman:ResourceURI>http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd</wsman:ResourceURI>\r\n"
+            "  </s:Header>\r\n"
+            "  <s:Body/>\r\n"
+            "</s:Envelope>";
+        std::string createResp;
+        TEST_ASSERT(winrm.processSoapRequest(createSoap, createResp), "SOAP Create shell request must succeed");
+        TEST_ASSERT(createResp.find("CreateResponse") != std::string::npos, "SOAP CreateResponse tag present");
+
+        size_t idStart = createResp.find("<rsp:ShellId>") + 13;
+        size_t idEnd = createResp.find("</rsp:ShellId>", idStart);
+        std::string shellId = createResp.substr(idStart, idEnd - idStart);
+        TEST_ASSERT(!shellId.empty(), "Parsed shellId from SOAP CreateResponse");
+
+        // 2. SOAP Execute Command
+        std::string cmdSoap =
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+            "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\" "
+            "xmlns:rsp=\"http://schemas.microsoft.com/wbem/wsman/1/windows/shell\">\r\n"
+            "  <s:Header>\r\n"
+            "    <wsa:Action>http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Command</wsa:Action>\r\n"
+            "    <wsa:MessageID>urn:uuid:22222222-3333-4444-5555-666666666666</wsa:MessageID>\r\n"
+            "    <wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" + shellId + "</wsman:Selector></wsman:SelectorSet>\r\n"
+            "  </s:Header>\r\n"
+            "  <s:Body>\r\n"
+            "    <rsp:CommandLine>echo Horizon 165 Sovereign WinRM</rsp:CommandLine>\r\n"
+            "  </s:Body>\r\n"
+            "</s:Envelope>";
+        std::string cmdResp;
+        TEST_ASSERT(winrm.processSoapRequest(cmdSoap, cmdResp), "SOAP Command execution must succeed");
+        TEST_ASSERT(cmdResp.find("CommandResponse") != std::string::npos, "CommandResponse tag present");
+
+        size_t cIdStart = cmdResp.find("<rsp:CommandId>") + 15;
+        size_t cIdEnd = cmdResp.find("</rsp:CommandId>", cIdStart);
+        std::string cmdId = cmdResp.substr(cIdStart, cIdEnd - cIdStart);
+
+        // 3. SOAP Receive Output
+        std::string recvSoap =
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+            "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\" "
+            "xmlns:rsp=\"http://schemas.microsoft.com/wbem/wsman/1/windows/shell\">\r\n"
+            "  <s:Header>\r\n"
+            "    <wsa:Action>http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Receive</wsa:Action>\r\n"
+            "    <wsa:MessageID>urn:uuid:33333333-4444-5555-6666-777777777777</wsa:MessageID>\r\n"
+            "    <wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" + shellId + "</wsman:Selector></wsman:SelectorSet>\r\n"
+            "  </s:Header>\r\n"
+            "  <s:Body>\r\n"
+            "    <rsp:Receive><rsp:CommandId>" + cmdId + "</rsp:CommandId></rsp:Receive>\r\n"
+            "  </s:Body>\r\n"
+            "</s:Envelope>";
+        std::string recvResp;
+        TEST_ASSERT(winrm.processSoapRequest(recvSoap, recvResp), "SOAP Receive output must succeed");
+        TEST_ASSERT(recvResp.find("Horizon 165 Sovereign WinRM") != std::string::npos, "Received stdout stream match");
+
+        // 4. SOAP Delete Shell
+        std::string delSoap =
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+            "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\">\r\n"
+            "  <s:Header>\r\n"
+            "    <wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Delete</wsa:Action>\r\n"
+            "    <wsa:MessageID>urn:uuid:44444444-5555-6666-7777-888888888888</wsa:MessageID>\r\n"
+            "    <wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" + shellId + "</wsman:Selector></wsman:SelectorSet>\r\n"
+            "  </s:Header>\r\n"
+            "  <s:Body/>\r\n"
+            "</s:Envelope>";
+        std::string delResp;
+        TEST_ASSERT(winrm.processSoapRequest(delSoap, delResp), "SOAP Delete shell must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: PowerShell Remoting Protocol (MS-PSRP) & CLIXML Stream Serializer
+    // ------------------------------------------------------------------------
+    {
+        auto& winrm = micant::winrm::EnterpriseWinRmServer::instance();
+        std::string psId;
+        bool okPs = winrm.openShell(micant::winrm::ShellType::PowerShell, "MICANT\\Administrator", "147.135.1.229", "C:\\", {}, psId);
+        TEST_ASSERT(okPs, "Opening PowerShell remote shell must succeed");
+
+        micant::winrm::RemoteShell psShell;
+        TEST_ASSERT(winrm.getShell(psId, psShell), "Get PowerShell shell object");
+        TEST_ASSERT(psShell.isPsrpPoolOpen, "PSRP runspace pool must be marked open");
+
+        // Verify PSRP Session Capability
+        std::string capXml = winrm.buildPsrpSessionCapabilityResponse();
+        TEST_ASSERT(capXml.find("<Version N=\"protocolversion\">2.3</Version>") != std::string::npos, "PSRP protocol version 2.3");
+        TEST_ASSERT(capXml.find("<Version N=\"PSVersion\">5.1.26100.1</Version>") != std::string::npos, "PSVersion 5.1.26100.1");
+
+        // Verify PSRP Object Serialization
+        std::map<std::string, std::string> objProps;
+        objProps["ProcessName"] = "certsrv";
+        objProps["Id"] = "1024";
+        objProps["Handles"] = "256";
+        std::string clixml = winrm.buildPsrpPipelineOutput("System.Diagnostics.Process", objProps);
+        TEST_ASSERT(clixml.find("<T>System.Diagnostics.Process</T>") != std::string::npos, "CLIXML Type match");
+        TEST_ASSERT(clixml.find("<S N=\"ProcessName\">certsrv</S>") != std::string::npos, "CLIXML Property match");
+
+        // Execute Get-Process inside PowerShell shell
+        std::string psCmdId;
+        winrm.executeCommand(psId, "Get-Process", {}, psCmdId);
+        std::string sOut, sErr;
+        int32_t ec = -1;
+        bool fin = false;
+        TEST_ASSERT(winrm.receiveCommandOutput(psId, psCmdId, sOut, sErr, ec, fin), "Receive Get-Process output");
+        TEST_ASSERT(fin && ec == 0, "Get-Process finished with ec 0");
+        TEST_ASSERT(sOut.find("ProcessName") != std::string::npos, "Get-Process returned process table");
+
+        winrm.closeShell(psId);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Sovereign WMI / CIM Provider Hosting Engine & WQL Query Parser (wmic.exe)
+    // ------------------------------------------------------------------------
+    {
+        certsrv::CertificateServicesEngine::instance().initialize();
+        dhcp::EnterpriseDhcpServer::instance().initialize();
+        auto& wmiRepo = micant::wmi::WmiRepository::get();
+
+        // 1. Query Win32_OperatingSystem
+        auto osList = wmiRepo.query("SELECT Caption, Version, CSName FROM Win32_OperatingSystem");
+        TEST_ASSERT(!osList.empty(), "Win32_OperatingSystem query must return instance");
+        TEST_ASSERT(osList[0].get("Caption").find("MicaNT") != std::string::npos, "OS Caption contains MicaNT");
+        TEST_ASSERT(osList[0].get("Version") == "10.0.26100", "OS Version 10.0.26100");
+
+        // 2. Query Win32_ComputerSystem
+        auto csList = wmiRepo.query("SELECT Name, Domain, Manufacturer FROM Win32_ComputerSystem");
+        TEST_ASSERT(!csList.empty(), "Win32_ComputerSystem query must return instance");
+        TEST_ASSERT(csList[0].get("Domain") == "micant.local", "Domain micant.local");
+
+        // 3. Query Win32_Service with WHERE filter
+        auto svcList = wmiRepo.query("SELECT Name, State, StartMode FROM Win32_Service WHERE Name='CertSvc'");
+        TEST_ASSERT(!svcList.empty(), "Win32_Service for CertSvc found");
+        TEST_ASSERT(svcList[0].get("State") == "Running", "CertSvc is Running");
+
+        auto dhcpSvc = wmiRepo.query("SELECT Name, State FROM Win32_Service WHERE Name='DHCPServer'");
+        TEST_ASSERT(!dhcpSvc.empty(), "Win32_Service for DHCPServer found");
+        TEST_ASSERT(dhcpSvc[0].get("State") == "Running", "DHCPServer is Running");
+
+        // 4. Query Win32_NetworkAdapterConfiguration
+        auto nicList = wmiRepo.query("SELECT IPAddress, MACAddress FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled=TRUE");
+        TEST_ASSERT(!nicList.empty(), "Network adapter found");
+        TEST_ASSERT(nicList[0].get("IPAddress") == "147.135.1.229", "IP address 147.135.1.229");
+
+        // 5. Canonical wmic.exe CLI execution
+        std::string wOut, wErr;
+        bool okWmic = micant::wmi::ExecuteWmicString("wmic os get Caption,Version /format:list", wOut, wErr);
+        TEST_ASSERT(okWmic, "wmic os get must succeed");
+        TEST_ASSERT(wOut.find("Caption=MicaNT") != std::string::npos, "wmic os get Caption output");
+
+        std::string sOut2, sErr2;
+        bool okSvc = micant::wmi::ExecuteWmicString("wmic service where \"Name='WinRM'\" get Name,State", sOut2, sErr2);
+        TEST_ASSERT(okSvc, "wmic service where Name='WinRM' must succeed");
+        TEST_ASSERT(sOut2.find("State=Running") != std::string::npos, "wmic service State Running");
+
+        std::string pOut, pErr;
+        bool okProc = micant::wmi::ExecuteWmicString("wmic process list brief", pOut, pErr);
+        TEST_ASSERT(okProc, "wmic process list brief must succeed");
+        TEST_ASSERT(pOut.find("certsrv.exe") != std::string::npos, "wmic process lists certsrv.exe");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical winrs.exe & winrm.cmd CLI Utilities
+    // ------------------------------------------------------------------------
+    {
+        // 1. winrm quickconfig
+        std::string rmOut, rmErr;
+        bool okQc = micant::winrm_cli::ExecuteWinrmString("winrm quickconfig", rmOut, rmErr);
+        TEST_ASSERT(okQc, "winrm quickconfig must succeed");
+        TEST_ASSERT(rmOut.find("WinRM service is already running") != std::string::npos, "quickconfig reports running service");
+        TEST_ASSERT(rmOut.find("Port=5985") != std::string::npos, "quickconfig reports HTTP 5985");
+        TEST_ASSERT(rmOut.find("Port=5986") != std::string::npos, "quickconfig reports HTTPS 5986");
+
+        // 2. winrm get winrm/config
+        std::string cfgOut, cfgErr;
+        bool okCfg = micant::winrm_cli::ExecuteWinrmString("winrm get winrm/config", cfgOut, cfgErr);
+        TEST_ASSERT(okCfg, "winrm get winrm/config must succeed");
+        TEST_ASSERT(cfgOut.find("MaxEnvelopeSizekb = 500") != std::string::npos, "winrm config MaxEnvelopeSizekb match");
+        TEST_ASSERT(cfgOut.find("Kerberos = true") != std::string::npos, "winrm config Kerberos match");
+
+        // 3. winrm enumerate winrm/config/listener
+        std::string enumOut, enumErr;
+        bool okEnum = micant::winrm_cli::ExecuteWinrmString("winrm enumerate winrm/config/listener", enumOut, enumErr);
+        TEST_ASSERT(okEnum, "winrm enumerate listener must succeed");
+        TEST_ASSERT(enumOut.find("Transport = HTTP") != std::string::npos, "listener enum HTTP match");
+        TEST_ASSERT(enumOut.find("Transport = HTTPS") != std::string::npos, "listener enum HTTPS match");
+
+        // 4. winrs remote command execution
+        std::string rsOut, rsErr;
+        int32_t rsEc = -1;
+        bool okRs1 = micant::winrs::ExecuteWinrsString("winrs -r:147.135.1.229 -u:MICANT\\Administrator hostname", rsOut, rsErr, rsEc);
+        TEST_ASSERT(okRs1 && rsEc == 0, "winrs hostname execution must succeed");
+        TEST_ASSERT(rsOut.find("DC01") != std::string::npos, "winrs hostname returned DC01");
+
+        bool okRs2 = micant::winrs::ExecuteWinrsString("winrs -r:147.135.1.229 -u:MICANT\\Administrator whoami", rsOut, rsErr, rsEc);
+        TEST_ASSERT(okRs2 && rsEc == 0, "winrs whoami execution must succeed");
+        TEST_ASSERT(rsOut.find("MICANT\\Administrator") != std::string::npos, "winrs whoami match");
+
+        bool okRs3 = micant::winrs::ExecuteWinrsString("winrs -r:147.135.1.229 -u:MICANT\\Administrator ipconfig", rsOut, rsErr, rsEc);
+        TEST_ASSERT(okRs3 && rsEc == 0, "winrs ipconfig execution must succeed");
+        TEST_ASSERT(rsOut.find("147.135.1.229") != std::string::npos, "winrs ipconfig match");
+
+        // 5. Remote WMI invocation via winrs
+        bool okRs4 = micant::winrs::ExecuteWinrsString("winrs -r:147.135.1.229 -u:MICANT\\Administrator wmic os get Caption", rsOut, rsErr, rsEc);
+        TEST_ASSERT(okRs4 && rsEc == 0, "winrs wmic execution must succeed");
+        TEST_ASSERT(rsOut.find("MicaNT") != std::string::npos, "winrs wmic Caption match");
+
+        // 6. Backward compatibility with Titan shell
+        bool okRsTitan = micant::winrs::ExecuteWinrsString("winrs -r:titan-mgmt01 -u:TITAN\\Administrator hostname", rsOut, rsErr, rsEc);
+        TEST_ASSERT(okRsTitan && rsEc == 0, "winrs Titan hostname execution must succeed");
+        TEST_ASSERT(rsOut.find("TITAN-MGMT01") != std::string::npos, "winrs Titan hostname returned TITAN-MGMT01");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: WFP Port 5985/5986 Permit, Remote Web Terminal & Real-Time Push Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& console = km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) {
+            console.startHttpsServer(443);
+        }
+
+        // 1. WFP Rule #16501 (MicaNT_WinRM_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(16501);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #16501 for WinRM must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_TCP, "WinRM rule protocol must be TCP");
+        TEST_ASSERT(ruleOpt->localPortStart == 5985 && ruleOpt->localPortEnd == 5986, "WinRM rule port range 5985-5986");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "WinRM rule action must be PERMIT");
+
+        // 2. Remote Web Terminal command execution
+        std::string termQc = console.executeTerminalCommand("winrm quickconfig");
+        TEST_ASSERT(termQc.find("WinRM service is already running") != std::string::npos, "Remote terminal winrm qc");
+
+        std::string termRs = console.executeTerminalCommand("winrs -r:147.135.1.229 hostname");
+        TEST_ASSERT(termRs.find("DC01") != std::string::npos, "Remote terminal winrs hostname");
+
+        std::string termWmic = console.executeTerminalCommand("wmic os get Caption");
+        TEST_ASSERT(termWmic.find("MicaNT") != std::string::npos, "Remote terminal wmic os get");
+
+        // 3. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"winrm_active_shells\":") != std::string::npos, "Telemetry winrm_active_shells match");
+        TEST_ASSERT(teleJson.find("\"winrm_total_commands\":") != std::string::npos, "Telemetry winrm_total_commands match");
+        TEST_ASSERT(teleJson.find("\"winrm_bytes_transferred\":") != std::string::npos, "Telemetry winrm_bytes_transferred match");
+        TEST_ASSERT(teleJson.find("\"wmi_queries_served\":") != std::string::npos, "Telemetry wmi_queries_served match");
+        TEST_ASSERT(teleJson.find("\"winrm_listeners_count\":") != std::string::npos, "Telemetry winrm_listeners_count match");
+    }
+
+    std::cout << "[HORIZON 165] Sovereign Windows Remote Management (WinRM 2.0 / MS-WSMV / MS-PSRP) Summary:\n"
+              << "    Pillar 1: WinRM 2.0 Architecture, SCM Service & VersionDatabase Registration OK\n"
+              << "    Pillar 2: WS-Management Protocol (MS-WSMV) & XML SOAP Wire Engine OK\n"
+              << "    Pillar 3: PowerShell Remoting Protocol (MS-PSRP) & CLIXML Stream Serializer OK\n"
+              << "    Pillar 4: Sovereign WMI / CIM Provider Hosting Engine & WQL Query Parser (wmic.exe) OK\n"
+              << "    Pillar 5: Canonical winrs.exe & winrm.cmd CLI Utilities OK\n"
+              << "    Pillar 6: WFP Port 5985/5986 Permit, Remote Web Terminal & Real-Time Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 381: Horizon 165 - Sovereign Windows Remote Management (WinRM 2.0 / MS-PSRP / WMI) PASSED." << std::endl;
+}
