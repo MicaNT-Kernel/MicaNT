@@ -28625,3 +28625,380 @@ void Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI() {
     std::cout << "[TEST] Suite 377: Horizon 161 - Sovereign DNS Server Subsystem & dnscmd.exe CLI PASSED." << std::endl;
 }
 
+
+// ============================================================================
+// Suite 378: Horizon 162 - Sovereign Active Directory Domain Services (AD DS)
+// Core Subsystem, LDAP v3 Server (RFC 4511), Kerberos v5 KDC (RFC 4120),
+// ntds.dit Jet Database, Canonical dsadd / dsquery / dcdiag CLI & Remote Web Terminal
+// ============================================================================
+
+#include "micant/um/servers/ad_ds.hpp"
+#include "micant/um/subsystems/net/ds_tools.hpp"
+
+inline void Test_Horizon162_ActiveDirectory_Ldap_KerberosKdc_And_DsToolsCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 378: Horizon 162 - Sovereign Active Directory Domain Services (AD DS),\n"
+              << "LDAP v3 (RFC 4511), Kerberos v5 KDC (RFC 4120), ntds.dit & Canonical dsadd/dsquery/dcdiag\n"
+              << "========================================================================\n";
+
+    using namespace micant::ad_ds;
+    using namespace micant::ds_tools;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: AD DS Architecture, Database Schema, Containers & SCM Registration
+    // ------------------------------------------------------------------------
+    {
+        RegisterActiveDirectorySubsystem();
+        auto& ad = SovereignActiveDirectoryEngine::get();
+        TEST_ASSERT(ad.isInitialized(), "Active Directory Engine must report initialized");
+        TEST_ASSERT(ad.domainDns() == "micant.local", "Domain DNS name must match micant.local");
+        TEST_ASSERT(ad.domainNetbios() == "MICANT", "Domain NetBIOS name must match MICANT");
+        TEST_ASSERT(ad.domainDn() == "DC=micant,DC=local", "Domain DN must match DC=micant,DC=local");
+        TEST_ASSERT(ad.domainSid() == "S-1-5-21-147-135-1", "Domain SID must match S-1-5-21-147-135-1");
+
+        // SCM Services Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto recNtds = scm.getServiceRecord(L"NTDS");
+        auto recKdc  = scm.getServiceRecord(L"Kdc");
+        TEST_ASSERT(recNtds && recNtds->status.dwCurrentState == scm::SERVICE_RUNNING, "NTDS service must report SERVICE_RUNNING");
+        TEST_ASSERT(recKdc && recKdc->status.dwCurrentState == scm::SERVICE_RUNNING, "Kdc service must report SERVICE_RUNNING");
+
+        // VersionDatabase Registration Verification
+        auto& vdb = version::VersionDatabase::Instance();
+        auto mNtdsa = vdb.FindModule("ntdsa.dll");
+        TEST_ASSERT(mNtdsa != nullptr && mNtdsa->stringTable.at("FileVersion") == "10.0.26100.5900", "ntdsa.dll file version must match 10.0.26100.5900");
+
+        auto mKdc = vdb.FindModule("kdcsvc.dll");
+        TEST_ASSERT(mKdc != nullptr, "kdcsvc.dll must be registered in VersionDatabase");
+
+        auto mDsadd = vdb.FindModule("dsadd.exe");
+        TEST_ASSERT(mDsadd != nullptr, "dsadd.exe must be registered in VersionDatabase");
+
+        auto mDsquery = vdb.FindModule("dsquery.exe");
+        TEST_ASSERT(mDsquery != nullptr, "dsquery.exe must be registered in VersionDatabase");
+
+        auto mDcdiag = vdb.FindModule("dcdiag.exe");
+        TEST_ASSERT(mDcdiag != nullptr, "dcdiag.exe must be registered in VersionDatabase");
+
+        // Verify Default Containers & Objects
+        auto rootObj = ad.getObjectByDn("DC=micant,DC=local");
+        TEST_ASSERT(rootObj.has_value(), "Domain root object must exist");
+        TEST_ASSERT(rootObj->objectClass == AdObjectClass::DomainDNS, "Root object class must be DomainDNS");
+
+        auto ouUsers = ad.getObjectByDn("CN=Users,DC=micant,DC=local");
+        TEST_ASSERT(ouUsers.has_value(), "CN=Users container must exist");
+
+        auto ouComputers = ad.getObjectByDn("CN=Computers,DC=micant,DC=local");
+        TEST_ASSERT(ouComputers.has_value(), "CN=Computers container must exist");
+
+        auto ouDCs = ad.getObjectByDn("OU=Domain Controllers,DC=micant,DC=local");
+        TEST_ASSERT(ouDCs.has_value(), "OU=Domain Controllers container must exist");
+
+        // Verify Pre-seeded Users
+        auto admin = ad.getObjectBySam("Administrator");
+        TEST_ASSERT(admin.has_value(), "Administrator user must exist");
+        TEST_ASSERT(admin->rid == 500, "Administrator RID must be 500");
+        TEST_ASSERT(admin->objectSid == "S-1-5-21-147-135-1-500", "Administrator SID must match");
+        TEST_ASSERT(admin->primaryGroupSid == "S-1-5-21-147-135-1-513", "Administrator primary group must be Domain Users");
+
+        auto krbtgt = ad.getObjectBySam("krbtgt");
+        TEST_ASSERT(krbtgt.has_value(), "krbtgt service account must exist");
+        TEST_ASSERT(krbtgt->rid == 502, "krbtgt RID must be 502");
+
+        auto dc01 = ad.getObjectBySam("DC01$");
+        TEST_ASSERT(dc01.has_value(), "DC01$ computer account must exist");
+        TEST_ASSERT(dc01->userAccountControl & UF_SERVER_TRUST_ACCOUNT, "DC01$ must have UF_SERVER_TRUST_ACCOUNT flag");
+
+        // Verify Pre-seeded Groups
+        auto grpAdmins = ad.getObjectBySam("Domain Admins");
+        TEST_ASSERT(grpAdmins.has_value(), "Domain Admins group must exist");
+        TEST_ASSERT(grpAdmins->rid == 512, "Domain Admins RID must be 512");
+        TEST_ASSERT(grpAdmins->groupType & GROUP_TYPE_SECURITY_ENABLED, "Domain Admins must be security enabled");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Lightweight Directory Access Protocol (LDAP v3 RFC 4511)
+    // ------------------------------------------------------------------------
+    {
+        auto& ad = SovereignActiveDirectoryEngine::get();
+
+        // 1. ASN.1 BER Codec Verification
+        std::vector<uint8_t> berBuf;
+        ber::encodeInteger(berBuf, 42);
+        TEST_ASSERT(berBuf.size() >= 3, "BER integer encoding size");
+        TEST_ASSERT(berBuf[0] == ber::TAG_INTEGER, "BER integer tag");
+
+        berBuf.clear();
+        ber::encodeOctetString(berBuf, "MicaNT Directory");
+        TEST_ASSERT(berBuf[0] == ber::TAG_OCTET_STRING, "BER octet string tag");
+        TEST_ASSERT(berBuf[1] == 16, "BER octet string length");
+
+        // 2. LDAP Bind Operations
+        LdapResultCode bindAnon = ad.executeLdapBind("", "");
+        TEST_ASSERT(bindAnon == LdapResultCode::Success, "Anonymous LDAP bind must succeed");
+
+        LdapResultCode bindAdmin = ad.executeLdapBind("Administrator", "P@ssw0rd2026!");
+        TEST_ASSERT(bindAdmin == LdapResultCode::Success, "Valid Administrator bind must succeed");
+
+        LdapResultCode bindBadPwd = ad.executeLdapBind("Administrator", "WrongPassword!");
+        TEST_ASSERT(bindBadPwd == LdapResultCode::InvalidCredentials, "Invalid password bind must return InvalidCredentials");
+
+        LdapResultCode bindGuest = ad.executeLdapBind("Guest", "");
+        TEST_ASSERT(bindGuest == LdapResultCode::InvalidCredentials, "Disabled Guest bind must return InvalidCredentials");
+
+        LdapResultCode bindNoSuch = ad.executeLdapBind("NonExistentUser", "P@ss!");
+        TEST_ASSERT(bindNoSuch == LdapResultCode::InvalidCredentials, "Non-existent user bind must return InvalidCredentials");
+
+        // 3. LDAP Search Operations
+        SovereignActiveDirectoryEngine::LdapSearchParameters searchParams{};
+        searchParams.baseDn = "DC=micant,DC=local";
+        searchParams.scope = LdapSearchScope::WholeSubtree;
+        searchParams.filter = "(objectClass=user)";
+
+        auto userResults = ad.searchLdap(searchParams);
+        TEST_ASSERT(userResults.size() >= 3, "LDAP search (objectClass=user) must return at least Administrator, Guest, krbtgt");
+
+        // Compound filter (&(objectClass=user)(sAMAccountName=Administrator))
+        searchParams.filter = "(&(objectClass=user)(sAMAccountName=Administrator))";
+        auto adminSearch = ad.searchLdap(searchParams);
+        TEST_ASSERT(adminSearch.size() == 1, "Compound AND search must locate exactly 1 object");
+        TEST_ASSERT(adminSearch[0].samAccountName == "Administrator", "Search result must be Administrator");
+
+        // OR filter (|(sAMAccountName=Administrator)(sAMAccountName=krbtgt))
+        searchParams.filter = "(|(sAMAccountName=Administrator)(sAMAccountName=krbtgt))";
+        auto orSearch = ad.searchLdap(searchParams);
+        TEST_ASSERT(orSearch.size() == 2, "Compound OR search must locate exactly 2 objects");
+
+        // Wildcard search (sAMAccountName=Admin*)
+        searchParams.filter = "(sAMAccountName=Admin*)";
+        auto wildcardSearch = ad.searchLdap(searchParams);
+        TEST_ASSERT(wildcardSearch.size() >= 1, "Wildcard search must locate Administrator");
+
+        // 4. LDAP Add, Modify & Delete Operations
+        AdObject tempUser{};
+        tempUser.distinguishedName = "CN=TempLdapUser,CN=Users,DC=micant,DC=local";
+        tempUser.name = "TempLdapUser";
+        tempUser.objectClass = AdObjectClass::User;
+        tempUser.samAccountName = "TempLdapUser";
+        TEST_ASSERT(ad.addObject(tempUser), "ad.addObject must succeed for new user");
+
+        TEST_ASSERT(ad.modifyObject(tempUser.distinguishedName, "description", "Temporary LDAP User"), "modifyObject description");
+        auto modObj = ad.getObjectByDn(tempUser.distinguishedName);
+        TEST_ASSERT(modObj.has_value() && modObj->description == "Temporary LDAP User", "Modified attribute must persist");
+
+        TEST_ASSERT(ad.deleteObject(tempUser.distinguishedName), "deleteObject must succeed");
+        TEST_ASSERT(!ad.getObjectByDn(tempUser.distinguishedName).has_value(), "Deleted object must not exist");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Kerberos v5 Key Distribution Center (KDC RFC 4120 / kdcsvc.dll)
+    // ------------------------------------------------------------------------
+    {
+        auto& ad = SovereignActiveDirectoryEngine::get();
+
+        // 1. Authentication Service (AS-REQ / AS-REP) -> TGT Issuance
+        KerberosTicket tgt{};
+        bool asSuccess = ad.authenticateAsReq("Administrator", "P@ssw0rd2026!", "MICANT.LOCAL", tgt);
+        TEST_ASSERT(asSuccess, "authenticateAsReq for Administrator must succeed");
+        TEST_ASSERT(tgt.isValid, "TGT must report valid status");
+        TEST_ASSERT(tgt.clientPrincipal == "Administrator", "TGT client principal must match");
+        TEST_ASSERT(tgt.clientRealm == "MICANT.LOCAL", "TGT client realm must match");
+        TEST_ASSERT(tgt.servicePrincipal == "krbtgt/MICANT.LOCAL", "TGT service principal must be krbtgt");
+        TEST_ASSERT(tgt.flags & KDC_TKT_FLAG_FORWARDABLE, "TGT must have FORWARDABLE flag");
+        TEST_ASSERT(tgt.flags & KDC_TKT_FLAG_INITIAL, "TGT must have INITIAL flag");
+        TEST_ASSERT(tgt.encType == KerberosEncryptionType::Aes256CtsHmacSha1_96, "TGT encType must be AES-256-CTS");
+        TEST_ASSERT(tgt.sessionKey.size() == 32, "TGT session key must be 32 bytes (256-bit)");
+
+        // Privilege Attribute Certificate (PAC) Verification
+        TEST_ASSERT(tgt.pac.userId == 500, "PAC user ID must be 500");
+        TEST_ASSERT(tgt.pac.userSid == "S-1-5-21-147-135-1-500", "PAC user SID must match");
+        TEST_ASSERT(std::find(tgt.pac.groupRids.begin(), tgt.pac.groupRids.end(), 512) != tgt.pac.groupRids.end(),
+                    "PAC group RIDs must contain Domain Admins (512)");
+        TEST_ASSERT(!tgt.pac.serverSignature.empty(), "PAC must contain server signature");
+        TEST_ASSERT(!tgt.pac.kdcSignature.empty(), "PAC must contain KDC signature");
+
+        // Negative AS-REQ: Bad password
+        KerberosTicket badTgt{};
+        bool badAs = ad.authenticateAsReq("Administrator", "WrongPassword!", "MICANT.LOCAL", badTgt);
+        TEST_ASSERT(!badAs, "authenticateAsReq with invalid password must fail");
+        TEST_ASSERT(!badTgt.isValid, "Failed AS-REQ must not return valid ticket");
+
+        // 2. Ticket-Granting Service (TGS-REQ / TGS-REP) -> Service Tickets
+        KerberosTicket tgsLdap{};
+        bool tgsSuccess = ad.grantServiceTicketTgs(tgt, "ldap/dc01.micant.local", tgsLdap);
+        TEST_ASSERT(tgsSuccess, "grantServiceTicketTgs for ldap must succeed");
+        TEST_ASSERT(tgsLdap.isValid, "LDAP service ticket must be valid");
+        TEST_ASSERT(tgsLdap.servicePrincipal == "ldap/dc01.micant.local", "Service principal must be ldap/dc01");
+        TEST_ASSERT(tgsLdap.pac.userId == 500, "Forwarded PAC must preserve user ID 500");
+
+        KerberosTicket tgsCifs{};
+        bool tgsCifsSuccess = ad.grantServiceTicketTgs(tgt, "cifs/dc01.micant.local", tgsCifs);
+        TEST_ASSERT(tgsCifsSuccess, "grantServiceTicketTgs for cifs must succeed");
+        TEST_ASSERT(tgsCifs.servicePrincipal == "cifs/dc01.micant.local", "Service principal must be cifs/dc01");
+
+        KerberosTicket tgsHttp{};
+        bool tgsHttpSuccess = ad.grantServiceTicketTgs(tgt, "HTTP/dc01.micant.local", tgsHttp);
+        TEST_ASSERT(tgsHttpSuccess, "grantServiceTicketTgs for HTTP must succeed");
+        TEST_ASSERT(tgsHttp.servicePrincipal == "HTTP/dc01.micant.local", "Service principal must be HTTP/dc01");
+
+        // Negative TGS-REQ: Unrecognized service
+        KerberosTicket tgsBogus{};
+        bool tgsBogusSuccess = ad.grantServiceTicketTgs(tgt, "bogus_svc/server99", tgsBogus);
+        TEST_ASSERT(!tgsBogusSuccess, "TGS-REQ for unrecognized service must fail");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Canonical Win32 `dsadd.exe` CLI Utility
+    // ------------------------------------------------------------------------
+    {
+        auto& ad = SovereignActiveDirectoryEngine::get();
+        std::ostringstream out;
+
+        // 1. dsadd user
+        out.str("");
+        int rc = ExecuteDsAdd("dsadd user \"CN=David Clark,CN=Users,DC=micant,DC=local\" -pwd \"Secr3tP@ss!\" -samid dclark -upn dclark@micant.local -display \"David Clark\" -desc \"Lead Architect\"", out);
+        TEST_ASSERT(rc == 0, "dsadd user must return exit code 0");
+        TEST_ASSERT(out.str().find("dsadd succeeded") != std::string::npos, "dsadd user confirmation output");
+
+        auto dclark = ad.getObjectBySam("dclark");
+        TEST_ASSERT(dclark.has_value(), "Created user must be queryable by sAMAccountName");
+        TEST_ASSERT(dclark->displayName == "David Clark", "User displayName must match");
+        TEST_ASSERT(dclark->userPrincipalName == "dclark@micant.local", "User UPN must match");
+        TEST_ASSERT(dclark->rid >= 1000, "Allocated user RID must be >= 1000");
+
+        // 2. dsadd computer
+        out.str("");
+        rc = ExecuteDsAdd("dsadd computer \"CN=WS-ENG-042,CN=Computers,DC=micant,DC=local\" -samid WS-ENG-042$ -desc \"Engineering CAD Workstation\"", out);
+        TEST_ASSERT(rc == 0, "dsadd computer must return exit code 0");
+        TEST_ASSERT(out.str().find("dsadd succeeded") != std::string::npos, "dsadd computer confirmation output");
+
+        auto wsComp = ad.getObjectBySam("WS-ENG-042$");
+        TEST_ASSERT(wsComp.has_value(), "Created computer must exist");
+        TEST_ASSERT(wsComp->userAccountControl & UF_WORKSTATION_TRUST_ACCOUNT, "Computer must have workstation trust flag");
+
+        // 3. dsadd group
+        out.str("");
+        rc = ExecuteDsAdd("dsadd group \"CN=CloudArchitects,CN=Users,DC=micant,DC=local\" -secgrp yes -scope g -samid CloudArchitects -desc \"Enterprise Cloud Architects\"", out);
+        TEST_ASSERT(rc == 0, "dsadd group must return exit code 0");
+        TEST_ASSERT(out.str().find("dsadd succeeded") != std::string::npos, "dsadd group confirmation output");
+
+        auto grp = ad.getObjectBySam("CloudArchitects");
+        TEST_ASSERT(grp.has_value(), "Created group must exist");
+        TEST_ASSERT(grp->groupType & GROUP_TYPE_SECURITY_ENABLED, "Group must be security enabled");
+
+        // 4. dsadd ou
+        out.str("");
+        rc = ExecuteDsAdd("dsadd ou \"OU=Infrastructure,DC=micant,DC=local\" -desc \"Core Infrastructure OU\"", out);
+        TEST_ASSERT(rc == 0, "dsadd ou must return exit code 0");
+        TEST_ASSERT(out.str().find("dsadd succeeded") != std::string::npos, "dsadd ou confirmation output");
+
+        auto ouObj = ad.getObjectByDn("OU=Infrastructure,DC=micant,DC=local");
+        TEST_ASSERT(ouObj.has_value(), "Created OU must exist");
+        TEST_ASSERT(ouObj->objectClass == AdObjectClass::OrganizationalUnit, "OU object class");
+
+        // 5. Duplicate creation rejection
+        out.str("");
+        rc = ExecuteDsAdd("dsadd user \"CN=David Clark,CN=Users,DC=micant,DC=local\"", out);
+        TEST_ASSERT(rc != 0, "Duplicate dsadd user must fail");
+        TEST_ASSERT(out.str().find("already exists") != std::string::npos, "Rejection message for duplicate object");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical Win32 `dsquery.exe` CLI & `dcdiag.exe` Health Assessment
+    // ------------------------------------------------------------------------
+    {
+        std::ostringstream out;
+
+        // 1. dsquery user
+        out.str("");
+        int rc = ExecuteDsQuery("dsquery user -samid dclark", out);
+        TEST_ASSERT(rc == 0, "dsquery user must return exit code 0");
+        TEST_ASSERT(out.str().find("CN=David Clark,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery user output match");
+
+        // 2. dsquery computer
+        out.str("");
+        rc = ExecuteDsQuery("dsquery computer -samid WS-ENG-042$", out);
+        TEST_ASSERT(rc == 0, "dsquery computer must return exit code 0");
+        TEST_ASSERT(out.str().find("CN=WS-ENG-042,CN=Computers,DC=micant,DC=local") != std::string::npos, "dsquery computer output match");
+
+        // 3. dsquery group
+        out.str("");
+        rc = ExecuteDsQuery("dsquery group -samid CloudArchitects", out);
+        TEST_ASSERT(rc == 0, "dsquery group must return exit code 0");
+        TEST_ASSERT(out.str().find("CN=CloudArchitects,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery group output match");
+
+        // 4. dsquery ou
+        out.str("");
+        rc = ExecuteDsQuery("dsquery ou", out);
+        TEST_ASSERT(rc == 0, "dsquery ou must return exit code 0");
+        TEST_ASSERT(out.str().find("OU=Domain Controllers,DC=micant,DC=local") != std::string::npos, "dsquery ou must list Domain Controllers");
+        TEST_ASSERT(out.str().find("OU=Infrastructure,DC=micant,DC=local") != std::string::npos, "dsquery ou must list Infrastructure");
+
+        // 5. dsquery * with LDAP filter
+        out.str("");
+        rc = ExecuteDsQuery("dsquery * -filter \"(sAMAccountName=Administrator)\"", out);
+        TEST_ASSERT(rc == 0, "dsquery * must return exit code 0");
+        TEST_ASSERT(out.str().find("CN=Administrator,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery * custom filter match");
+
+        // 6. dcdiag /s:DC01 /v
+        out.str("");
+        rc = ExecuteDcDiag("dcdiag /s:DC01 /v", out);
+        TEST_ASSERT(rc == 0, "dcdiag must return exit code 0");
+        std::string diagOutput = out.str();
+        TEST_ASSERT(diagOutput.find("Home Server = DC01") != std::string::npos, "dcdiag Home Server identification");
+        TEST_ASSERT(diagOutput.find("Connected to Directory Server dc01.micant.local") != std::string::npos, "dcdiag DC connection");
+        TEST_ASSERT(diagOutput.find("Identified AD DS Forest = micant.local") != std::string::npos, "dcdiag forest identification");
+        TEST_ASSERT(diagOutput.find("DC01 passed test Connectivity") != std::string::npos, "Connectivity test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test Advertising") != std::string::npos, "Advertising test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test DNS") != std::string::npos, "DNS test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test NCSecDesc") != std::string::npos, "NCSecDesc test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test NetLogons") != std::string::npos, "NetLogons test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test Replications") != std::string::npos, "Replications test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test RidManager") != std::string::npos, "RidManager test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test Services") != std::string::npos, "Services test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed test SystemLog") != std::string::npos, "SystemLog test passed");
+        TEST_ASSERT(diagOutput.find("DC01 passed all primary diagnostic tests") != std::string::npos, "dcdiag final verdict");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Remote Web Terminal & Live Telemetry Push Integration
+    // ------------------------------------------------------------------------
+    {
+        auto& console = km::net::HttpsExecutiveConsole::get();
+
+        // 1. Remote Web Terminal command execution
+        std::string termQuery = console.executeTerminalCommand("dsquery user -samid dclark");
+        TEST_ASSERT(termQuery.find("CN=David Clark,CN=Users,DC=micant,DC=local") != std::string::npos,
+                    "Remote terminal dsquery user must locate David Clark");
+
+        std::string termDcdiag = console.executeTerminalCommand("dcdiag");
+        TEST_ASSERT(termDcdiag.find("DC01 passed all primary diagnostic tests") != std::string::npos,
+                    "Remote terminal dcdiag must verify DC health");
+
+        // 2. Real-time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"ad_users\":") != std::string::npos, "Telemetry must include ad_users");
+        TEST_ASSERT(teleJson.find("\"ad_computers\":") != std::string::npos, "Telemetry must include ad_computers");
+        TEST_ASSERT(teleJson.find("\"ad_groups\":") != std::string::npos, "Telemetry must include ad_groups");
+        TEST_ASSERT(teleJson.find("\"ad_ldap_searches\":") != std::string::npos, "Telemetry must include ad_ldap_searches");
+        TEST_ASSERT(teleJson.find("\"ad_tickets_issued\":") != std::string::npos, "Telemetry must include ad_tickets_issued");
+        TEST_ASSERT(teleJson.find("\"ad_domain\":\"micant.local\"") != std::string::npos, "Telemetry must include ad_domain");
+        TEST_ASSERT(teleJson.find("\"ad_pdc\":\"dc01.micant.local\"") != std::string::npos, "Telemetry must include ad_pdc");
+
+        auto adTele = SovereignActiveDirectoryEngine::get().telemetry();
+        TEST_ASSERT(adTele.activeUsers >= 4, "Active Directory must report at least 4 active users");
+        TEST_ASSERT(adTele.activeComputers >= 2, "Active Directory must report at least 2 active computers");
+        TEST_ASSERT(adTele.activeGroups >= 8, "Active Directory must report at least 8 active groups");
+        TEST_ASSERT(adTele.totalTicketsIssued >= 4, "Kerberos KDC must report at least 4 issued tickets");
+    }
+
+    std::cout << "[HORIZON 162] Sovereign Active Directory Domain Services (AD DS) Subsystem Summary:\n"
+              << "    Pillar 1: AD DS Architecture, Database Schema, Containers & SCM Registration OK\n"
+              << "    Pillar 2: Lightweight Directory Access Protocol (LDAP v3 RFC 4511) & BER Codec OK\n"
+              << "    Pillar 3: Kerberos v5 KDC (RFC 4120), AS-REQ/AS-REP, TGT with PAC & TGS-REQ/TGS-REP OK\n"
+              << "    Pillar 4: Canonical Win32 dsadd.exe CLI Utility (User, Computer, Group, OU) OK\n"
+              << "    Pillar 5: Canonical Win32 dsquery.exe CLI & dcdiag.exe Health Assessment OK\n"
+              << "    Pillar 6: Remote Web Terminal (wss://) & Real-Time Push Telemetry Stream OK\n";
+
+    std::cout << "[TEST] Suite 378: Horizon 162 - Sovereign Active Directory Domain Services (AD DS) Subsystem PASSED." << std::endl;
+}

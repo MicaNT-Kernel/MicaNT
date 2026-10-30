@@ -35,6 +35,8 @@
 #include "micant/um/subsystems/net/appcmd.hpp"
 #include "micant/um/servers/dns_server.hpp"
 #include "micant/um/subsystems/net/dnscmd.hpp"
+#include "micant/um/servers/ad_ds.hpp"
+#include "micant/um/subsystems/net/ds_tools.hpp"
 
 namespace micant::km::net {
 
@@ -515,6 +517,18 @@ public:
             std::string res;
             dns::dnscmd::um::DnsCmdCommandExecutor::Instance().execute(subArgs, res);
             return res;
+        } else if (cmd == "dsadd" || cmd.starts_with("dsadd ")) {
+            std::ostringstream ss;
+            ds_tools::ExecuteDsAdd(cmd, ss);
+            return ss.str();
+        } else if (cmd == "dsquery" || cmd.starts_with("dsquery ")) {
+            std::ostringstream ss;
+            ds_tools::ExecuteDsQuery(cmd, ss);
+            return ss.str();
+        } else if (cmd == "dcdiag" || cmd.starts_with("dcdiag ") || cmd.starts_with("dcdiag/")) {
+            std::ostringstream ss;
+            ds_tools::ExecuteDcDiag(cmd, ss);
+            return ss.str();
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -530,6 +544,9 @@ public:
                    "  netsh http show ...   Manage HTTP.sys URL ACLs, request queues and cache\r\n"
                    "  appcmd list ...       Manage IIS 10 websites, app pools, workers and config\r\n"
                    "  dnscmd /...           Manage DNS Server authoritative zones and records\r\n"
+                   "  dsadd <type> <dn> ... Add Active Directory user, computer, group, or OU\r\n"
+                   "  dsquery <type> ...    Query Active Directory objects\r\n"
+                   "  dcdiag [/s:dc] ...    Run Domain Controller health diagnostics\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -568,7 +585,14 @@ public:
            << "\"dns_queries\":" << dnsEng.getTotalQueries() << ","
            << "\"dns_zones\":" << dnsEng.getAllZones().size() << ","
            << "\"dns_cache_hits\":" << dnsEng.getCacheHits() << ","
-           << "\"dns_cache_misses\":" << dnsEng.getCacheMisses() << "}\r\n";
+           << "\"dns_cache_misses\":" << dnsEng.getCacheMisses() << ","
+           << "\"ad_users\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().activeUsers << ","
+           << "\"ad_computers\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().activeComputers << ","
+           << "\"ad_groups\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().activeGroups << ","
+           << "\"ad_ldap_searches\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().totalLdapSearches << ","
+           << "\"ad_tickets_issued\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().totalTicketsIssued << ","
+           << "\"ad_domain\":\"" << ad_ds::SovereignActiveDirectoryEngine::get().domainDns() << "\","
+           << "\"ad_pdc\":\"" << ad_ds::SovereignActiveDirectoryEngine::get().dcFqdn() << "\"}\r\n";
         return ss.str();
     }
 

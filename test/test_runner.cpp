@@ -416,8 +416,13 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite378") {
+        RUN_TEST(Test_Horizon162_ActiveDirectory_Ldap_KerberosKdc_And_DsToolsCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite377") {
         RUN_TEST(Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI);
+        RUN_TEST(Test_Horizon162_ActiveDirectory_Ldap_KerberosKdc_And_DsToolsCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite376") {
@@ -1853,6 +1858,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI);
     RUN_TEST(Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI);
     RUN_TEST(Test_Horizon161_DnsServer_AuthoritativeZones_DynamicDns_And_DnsCmdCLI);
+    RUN_TEST(Test_Horizon162_ActiveDirectory_Ldap_KerberosKdc_And_DsToolsCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
