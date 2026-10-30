@@ -48,8 +48,8 @@ using LPCWSTR  = win32::LPCWSTR;
 using LPCSTR   = win32::LPCSTR;
 using LPARAM   = win32::LPARAM;
 
-inline constexpr BOOL TRUE  = win32::TRUE;
-inline constexpr BOOL FALSE = win32::FALSE;
+using micant::TRUE;
+using micant::FALSE;
 
 inline constexpr COLORREF RGB(uint8_t r, uint8_t g, uint8_t b) noexcept {
     return static_cast<COLORREF>(r | (static_cast<uint16_t>(g) << 8) | (static_cast<uint32_t>(b) << 16));

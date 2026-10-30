@@ -1138,6 +1138,15 @@ public:
                     newEp->tcpState = TcpState::Established;
                     newEp->isBound = true;
 
+                    {
+                        std::lock_guard<std::mutex> lLock(listenEp->socketMutex);
+                        if (!listenEp->rxStream.empty()) {
+                            newEp->rxStream.insert(newEp->rxStream.end(),
+                                                   listenEp->rxStream.begin(),
+                                                   listenEp->rxStream.end());
+                            listenEp->rxStream.clear();
+                        }
+                    }
                     sockets_[newId] = newEp;
                     outRemoteIp = newEp->remoteIp;
                     outRemotePort = newEp->remotePort;
@@ -1229,14 +1238,42 @@ public:
             bool delivered = false;
             {
                 std::lock_guard<std::mutex> globalLock(socketMutex_);
+                // First pass: established peer socket matching peer port
                 for (const auto& [id, target] : sockets_) {
                     if (id != sockId && target->localPort == epRemotePort &&
-                        (target->tcpState == TcpState::Established || target->tcpState == TcpState::Listen)) {
+                        target->tcpState == TcpState::Established &&
+                        (target->remotePort == 0 || target->remotePort == epLocalPort)) {
                         std::lock_guard<std::mutex> tLock(target->socketMutex);
                         const auto* b = static_cast<const uint8_t*>(data);
                         target->rxStream.insert(target->rxStream.end(), b, b + length);
                         delivered = true;
                         break;
+                    }
+                }
+                // Second pass: any established socket on that port
+                if (!delivered) {
+                    for (const auto& [id, target] : sockets_) {
+                        if (id != sockId && target->localPort == epRemotePort &&
+                            target->tcpState == TcpState::Established) {
+                            std::lock_guard<std::mutex> tLock(target->socketMutex);
+                            const auto* b = static_cast<const uint8_t*>(data);
+                            target->rxStream.insert(target->rxStream.end(), b, b + length);
+                            delivered = true;
+                            break;
+                        }
+                    }
+                }
+                // Third pass: listening socket
+                if (!delivered) {
+                    for (const auto& [id, target] : sockets_) {
+                        if (id != sockId && target->localPort == epRemotePort &&
+                            target->tcpState == TcpState::Listen) {
+                            std::lock_guard<std::mutex> tLock(target->socketMutex);
+                            const auto* b = static_cast<const uint8_t*>(data);
+                            target->rxStream.insert(target->rxStream.end(), b, b + length);
+                            delivered = true;
+                            break;
+                        }
                     }
                 }
             }

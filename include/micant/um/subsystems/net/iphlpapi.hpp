@@ -464,6 +464,10 @@ inline uint32_t WINAPI GetAdaptersAddresses(
     std::memcpy(cur, kAdapterGuid, sizeof(kAdapterGuid));
     cur += sizeof(kAdapterGuid);
 
+    uintptr_t curAddr = reinterpret_cast<uintptr_t>(cur);
+    curAddr = (curAddr + alignof(wchar_t) - 1) & ~(alignof(wchar_t) - 1);
+    cur = reinterpret_cast<uint8_t*>(curAddr);
+
     static const wchar_t kFriendly[] = L"Ethernet 0";
     pAddr->FriendlyName = reinterpret_cast<wchar_t*>(cur);
     std::memcpy(cur, kFriendly, sizeof(kFriendly));

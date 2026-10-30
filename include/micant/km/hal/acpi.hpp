@@ -72,9 +72,9 @@ using PVOID = void*;
 
 namespace micant::acpi {
 
-using BOOL = int32_t;
-inline constexpr BOOL TRUE = 1;
-inline constexpr BOOL FALSE = 0;
+using BOOL = micant::BOOL;
+using micant::TRUE;
+using micant::FALSE;
 
 // ============================================================================
 // 1. ACPI 6.5 Table Signatures & Magic Constants

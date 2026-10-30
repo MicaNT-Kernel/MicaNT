@@ -137,8 +137,8 @@ private:
 
 public:
     static PfnDatabase& get() noexcept {
-        static PfnDatabase instance;
-        return instance;
+        static PfnDatabase* instance = new PfnDatabase();
+        return *instance;
     }
 
     PfnDatabase(const PfnDatabase&) = delete;

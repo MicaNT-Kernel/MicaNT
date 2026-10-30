@@ -50,17 +50,7 @@
     #define _TRUNCATE ((size_t)-1)
   #endif
 
-  #ifndef _BOOL_DEFINED
-    #define _BOOL_DEFINED
-    using BOOL = int32_t;
-    using BOOLEAN = uint8_t;
-    #ifndef TRUE
-      inline constexpr BOOL TRUE = 1;
-    #endif
-    #ifndef FALSE
-      inline constexpr BOOL FALSE = 0;
-    #endif
-  #endif
+
 
   inline int strncpy_s(char* dest, size_t destsz, const char* src, size_t count) {
       if (!dest || destsz == 0) return 22; // EINVAL
@@ -513,3 +503,15 @@ struct ProcessBasicInformation {
 };
 
 } // namespace micant
+
+#ifndef _BOOL_DEFINED
+#define _BOOL_DEFINED
+using micant::BOOL;
+using micant::BOOLEAN;
+#ifndef TRUE
+using micant::TRUE;
+#endif
+#ifndef FALSE
+using micant::FALSE;
+#endif
+#endif

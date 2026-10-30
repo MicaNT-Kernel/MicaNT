@@ -216,7 +216,7 @@ struct EfiSimpleTextOutputProtocol {
  */
 struct EfiInputKey {
     uint16_t scanCode{0};
-    wchar_t  unicodeChar{0};
+    char16_t unicodeChar{0};
 };
 
 /**

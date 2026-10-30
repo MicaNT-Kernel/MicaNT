@@ -40,9 +40,9 @@ namespace micant::acl {
 // 1. Windows ACL & Security Descriptor Constants & Types
 // ============================================================================
 
-using BOOL = int32_t;
-inline constexpr BOOL TRUE  = 1;
-inline constexpr BOOL FALSE = 0;
+using BOOL = micant::BOOL;
+using micant::TRUE;
+using micant::FALSE;
 
 inline constexpr uint32_t ERROR_SUCCESS                   = 0;
 inline constexpr uint32_t ERROR_INVALID_PARAMETER         = 87;

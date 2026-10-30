@@ -54,11 +54,11 @@ namespace micant::pci {
 using BOOL = int32_t;
 
 #ifndef TRUE
-inline constexpr BOOL TRUE = 1;
+using micant::TRUE;
 #endif
 
 #ifndef FALSE
-inline constexpr BOOL FALSE = 0;
+using micant::FALSE;
 #endif
 
 // ============================================================================

@@ -55,9 +55,9 @@ inline constexpr HRESULT E_OUTOFMEMORY = static_cast<HRESULT>(0x8007000E);
 #endif
 
 #ifndef BOOL
-using BOOL = int32_t;
-inline constexpr BOOL TRUE  = 1;
-inline constexpr BOOL FALSE = 0;
+using BOOL = micant::BOOL;
+using micant::TRUE;
+using micant::FALSE;
 #endif
 
 struct COORD {

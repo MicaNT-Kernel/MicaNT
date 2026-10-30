@@ -129,13 +129,13 @@ struct DirectoryEntry {
  */
 struct LfnEntry {
     uint8_t  order;                // Sequence number (or'd with 0x40 for last entry)
-    wchar_t  name1[5];             // Chars 1-5
+    char16_t name1[5];             // Chars 1-5
     uint8_t  attr;                 // Always 0x0F
     uint8_t  type;                 // 0
     uint8_t  checksum;             // Checksum of short 8.3 name
-    wchar_t  name2[6];             // Chars 6-11
+    char16_t name2[6];             // Chars 6-11
     uint16_t firstClusterLow;      // Must be 0
-    wchar_t  name3[2];             // Chars 12-13
+    char16_t name3[2];             // Chars 12-13
 };
 
 #pragma pack(pop)
@@ -478,17 +478,22 @@ public:
                 if (de.attr == ATTR_LONG_NAME) {
                     const auto* lfn = reinterpret_cast<const LfnEntry*>(&de);
                     std::wstring chunk;
+                    bool reachedEnd = false;
                     for (int k = 0; k < 5; ++k) {
-                        if (lfn->name1[k] == 0 || lfn->name1[k] == 0xFFFF) break;
-                        chunk.push_back(lfn->name1[k]);
+                        if (lfn->name1[k] == 0 || lfn->name1[k] == 0xFFFF) { reachedEnd = true; break; }
+                        chunk.push_back(static_cast<wchar_t>(lfn->name1[k]));
                     }
-                    for (int k = 0; k < 6; ++k) {
-                        if (lfn->name2[k] == 0 || lfn->name2[k] == 0xFFFF) break;
-                        chunk.push_back(lfn->name2[k]);
+                    if (!reachedEnd) {
+                        for (int k = 0; k < 6; ++k) {
+                            if (lfn->name2[k] == 0 || lfn->name2[k] == 0xFFFF) { reachedEnd = true; break; }
+                            chunk.push_back(static_cast<wchar_t>(lfn->name2[k]));
+                        }
                     }
-                    for (int k = 0; k < 2; ++k) {
-                        if (lfn->name3[k] == 0 || lfn->name3[k] == 0xFFFF) break;
-                        chunk.push_back(lfn->name3[k]);
+                    if (!reachedEnd) {
+                        for (int k = 0; k < 2; ++k) {
+                            if (lfn->name3[k] == 0 || lfn->name3[k] == 0xFFFF) { reachedEnd = true; break; }
+                            chunk.push_back(static_cast<wchar_t>(lfn->name3[k]));
+                        }
                     }
                     currentLfn = chunk + currentLfn;
                     lfnChecksum = lfn->checksum;
@@ -862,13 +867,13 @@ private:
 
                         size_t charOffset = (seq - 1) * 13;
                         for (int k = 0; k < 5; ++k) {
-                            lfn->name1[k] = (charOffset + k < lfnChars) ? fileName[charOffset + k] : ((charOffset + k == lfnChars) ? 0 : 0xFFFF);
+                            lfn->name1[k] = (charOffset + k < lfnChars) ? static_cast<char16_t>(fileName[charOffset + k]) : ((charOffset + k == lfnChars) ? 0 : 0xFFFF);
                         }
                         for (int k = 0; k < 6; ++k) {
-                            lfn->name2[k] = (charOffset + 5 + k < lfnChars) ? fileName[charOffset + 5 + k] : ((charOffset + 5 + k == lfnChars) ? 0 : 0xFFFF);
+                            lfn->name2[k] = (charOffset + 5 + k < lfnChars) ? static_cast<char16_t>(fileName[charOffset + 5 + k]) : ((charOffset + 5 + k == lfnChars) ? 0 : 0xFFFF);
                         }
                         for (int k = 0; k < 2; ++k) {
-                            lfn->name3[k] = (charOffset + 11 + k < lfnChars) ? fileName[charOffset + 11 + k] : ((charOffset + 11 + k == lfnChars) ? 0 : 0xFFFF);
+                            lfn->name3[k] = (charOffset + 11 + k < lfnChars) ? static_cast<char16_t>(fileName[charOffset + 11 + k]) : ((charOffset + 11 + k == lfnChars) ? 0 : 0xFFFF);
                         }
                     }
 

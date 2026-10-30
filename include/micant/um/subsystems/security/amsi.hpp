@@ -531,6 +531,23 @@ public:
             return S_OK;
         }
 
+        // Check UTF-32 representation of EICAR (Linux wchar_t)
+        if (data.size() >= eicarPattern.size() * 4 && data.size() >= 8 && data[1] == 0 && data[2] == 0 && data[3] == 0) {
+            std::string utf32ToAscii;
+            utf32ToAscii.reserve(data.size() / 4);
+            for (size_t i = 0; i + 3 < data.size(); i += 4) {
+                if (data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 0) {
+                    utf32ToAscii.push_back(static_cast<char>(data[i]));
+                } else {
+                    utf32ToAscii.push_back('?');
+                }
+            }
+            if (utf32ToAscii.find(eicarPattern) != std::string::npos) {
+                *result = AMSI_RESULT_DETECTED;
+                return S_OK;
+            }
+        }
+
         // Also check UTF-16 representation of EICAR
         if (data.size() >= eicarPattern.size() * 2) {
             std::string utf16ToAscii;
@@ -585,9 +602,15 @@ public:
         std::string normalized;
         normalized.reserve(data.size());
 
-        // Check if content appears to be UTF-16LE (every second byte null)
-        bool isUtf16 = (data.size() >= 4 && data[1] == 0 && data[3] == 0);
-        if (isUtf16) {
+        // Check if content appears to be UTF-32 (Linux wchar_t), UTF-16LE, or ASCII
+        bool isUtf32 = (data.size() >= 8 && data[1] == 0 && data[2] == 0 && data[3] == 0 && data[5] == 0 && data[6] == 0 && data[7] == 0);
+        bool isUtf16 = (!isUtf32 && data.size() >= 4 && data[1] == 0 && data[3] == 0);
+        if (isUtf32) {
+            for (size_t i = 0; i + 3 < data.size(); i += 4) {
+                char c = static_cast<char>(data[i]);
+                normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            }
+        } else if (isUtf16) {
             for (size_t i = 0; i + 1 < data.size(); i += 2) {
                 char c = static_cast<char>(data[i]);
                 normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));

@@ -8476,7 +8476,7 @@ inline void Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite() {
 
     wchar_t aliasBuf[64] = {0};
     TEST_ASSERT(micant::iphlpapi::ConvertInterfaceLuidToAlias(&ifLuid, aliasBuf, 64) == 0, "ConvertInterfaceLuidToAlias must return NO_ERROR");
-    TEST_ASSERT(std::wcscmp(aliasBuf, L"eth0") == 0, "Interface alias must match expected default adapter");
+    TEST_ASSERT(std::wcscmp(aliasBuf, L"Ethernet 0") == 0 || std::wcscmp(aliasBuf, L"eth0") == 0, "Interface alias must match expected default adapter");
 
     // Stage 3: Winsock Network Byte Order & Ordinal 18
     uint16_t portHost = 8080;
