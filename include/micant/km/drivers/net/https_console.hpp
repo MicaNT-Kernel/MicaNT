@@ -37,6 +37,8 @@
 #include "micant/um/subsystems/net/dnscmd.hpp"
 #include "micant/um/servers/ad_ds.hpp"
 #include "micant/um/subsystems/net/ds_tools.hpp"
+#include "micant/um/servers/dhcp_server.hpp"
+#include "micant/um/subsystems/net/netsh_dhcp.hpp"
 
 namespace micant::km::net {
 
@@ -112,6 +114,19 @@ public:
         httpRule.weight = 1500;
         httpRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(httpRule);
+
+        // 6. Register WFP Inbound Rule for DHCP Server Subsystem (UDP Port 67)
+        wfp::km::WfpKernelFilterRule dhcpRule{};
+        dhcpRule.filterId = 16301;
+        dhcpRule.name = "MicaNT_DHCP_Inbound_Permit";
+        dhcpRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        dhcpRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        dhcpRule.protocol = tcpip::IPPROTO_UDP;
+        dhcpRule.localPortStart = 67;
+        dhcpRule.localPortEnd = 67;
+        dhcpRule.weight = 1500;
+        dhcpRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(dhcpRule);
     }
 
     void stopHttpsServer() {
@@ -466,6 +481,10 @@ public:
             std::string res;
             mstsc::um::SessionCommandExecutor::Instance().executeReset(subArgs, res);
             return res;
+        } else if (cmd == "netsh dhcp" || cmd.starts_with("netsh dhcp ") || cmd == "dhcp" || cmd.starts_with("dhcp ")) {
+            std::string res;
+            netsh::dhcp::um::ExecuteNetshDhcpString(cmd, res);
+            return res;
         } else if (cmd == "netsh" || cmd.starts_with("netsh ")) {
             std::vector<std::string_view> tokens;
             size_t pos = 0;
@@ -547,6 +566,7 @@ public:
                    "  dsadd <type> <dn> ... Add Active Directory user, computer, group, or OU\r\n"
                    "  dsquery <type> ...    Query Active Directory objects\r\n"
                    "  dcdiag [/s:dc] ...    Run Domain Controller health diagnostics\r\n"
+                   "  netsh dhcp show ...   Manage DHCP Server scopes, leases, reservations and status\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -592,7 +612,14 @@ public:
            << "\"ad_ldap_searches\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().totalLdapSearches << ","
            << "\"ad_tickets_issued\":" << ad_ds::SovereignActiveDirectoryEngine::get().telemetry().totalTicketsIssued << ","
            << "\"ad_domain\":\"" << ad_ds::SovereignActiveDirectoryEngine::get().domainDns() << "\","
-           << "\"ad_pdc\":\"" << ad_ds::SovereignActiveDirectoryEngine::get().dcFqdn() << "\"}\r\n";
+           << "\"ad_pdc\":\"" << ad_ds::SovereignActiveDirectoryEngine::get().dcFqdn() << "\","
+           << "\"dhcp_scopes\":" << dhcp::EnterpriseDhcpServer::instance().getScopeCount() << ","
+           << "\"dhcp_active_leases\":" << dhcp::EnterpriseDhcpServer::instance().getTelemetry().totalLeases << ","
+           << "\"dhcp_discovers\":" << dhcp::EnterpriseDhcpServer::instance().getTotalDiscovers() << ","
+           << "\"dhcp_offers\":" << dhcp::EnterpriseDhcpServer::instance().getTotalOffers() << ","
+           << "\"dhcp_requests\":" << dhcp::EnterpriseDhcpServer::instance().getTotalRequests() << ","
+           << "\"dhcp_acks\":" << dhcp::EnterpriseDhcpServer::instance().getTotalAcks() << ","
+           << "\"dhcp_authorized\":" << (dhcp::EnterpriseDhcpServer::instance().isServerAuthorized() ? "true" : "false") << "}\r\n";
         return ss.str();
     }
 

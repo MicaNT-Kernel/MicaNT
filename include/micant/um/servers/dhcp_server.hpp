@@ -1,4 +1,4 @@
-#ifndef MICANT_DHCP_SERVER_HPP
+﻿#ifndef MICANT_DHCP_SERVER_HPP
 #define MICANT_DHCP_SERVER_HPP
 
 #include <cstdint>
@@ -18,8 +18,47 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/dns_server.hpp"
+#include "micant/um/servers/ad_ds.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
 
 namespace micant::dhcp {
+
+#pragma pack(push, 1)
+struct DhcpHeaderWire {
+    uint8_t  op;          // 1 = BOOTREQUEST, 2 = BOOTREPLY
+    uint8_t  htype;       // 1 = 10Mb Ethernet
+    uint8_t  hlen;        // 6 = 48-bit MAC
+    uint8_t  hops;        // 0
+    uint32_t xid;         // Transaction ID
+    uint16_t secs;        // Seconds elapsed
+    uint16_t flags;       // Broadcast bit 0x8000
+    uint32_t ciaddr;      // Client IP
+    uint32_t yiaddr;      // Your (client) IP
+    uint32_t siaddr;      // Next server IP
+    uint32_t giaddr;      // Relay agent IP
+    uint8_t  chaddr[16];  // Client hardware address
+    char     sname[64];   // Server host name
+    char     file[128];   // Boot file name
+    uint32_t magic;       // 0x63825363 (DHCP magic cookie)
+};
+#pragma pack(pop)
+
+struct DhcpTelemetry {
+    size_t totalScopes{0};
+    size_t totalLeases{0};
+    size_t totalReservations{0};
+    uint64_t totalDiscovers{0};
+    uint64_t totalOffers{0};
+    uint64_t totalRequests{0};
+    uint64_t totalAcks{0};
+    uint64_t totalNaks{0};
+    uint64_t totalReleases{0};
+    bool isAuthorized{true};
+    bool rogueSuppressed{false};
+    std::string primarySubnet;
+    std::string serverIp;
+};
+
 
 // ============================================================================
 // DHCP Protocol Constants (RFC 2131, RFC 2132, RFC 8415, RFC 3074)
@@ -281,13 +320,13 @@ private:
     bool m_initialized{false};
 
     // Server Info
-    std::string m_serverHost{"dc01.titan.local"};
-    std::string m_serverIp{"192.168.1.10"};
-    std::string m_domainName{"titan.local"};
+    std::string m_serverHost{"dc01.micant.local"};
+    std::string m_serverIp{"147.135.1.229"};
+    std::string m_domainName{"micant.local"};
 
     // Active Directory Authorization & Rogue Detection
     bool        m_isAuthorizedInAd{true};
-    std::string m_adDirectoryPath{"CN=NetServices,CN=Services,CN=Configuration,DC=titan,DC=local"};
+    std::string m_adDirectoryPath{"CN=NetServices,CN=Services,CN=Configuration,DC=micant,DC=local"};
     bool        m_rogueDetectionSuppressed{false};
 
     // Scopes
@@ -356,40 +395,41 @@ public:
         db.RegisterModule("dhcpsvc.dll", "10.0.26100.1", "DHCP Server Service");
         db.RegisterModule("dhcpsapi.dll", "10.0.26100.1", "DHCP Server Management API");
         db.RegisterModule("dhcpcore.dll", "10.0.26100.1", "DHCP Core Client and Server Library");
-        db.RegisterModule("dhcpcmonitor.dll", "10.0.26100.1", "DHCP Client and Server Diagnostic Monitor");
+        db.RegisterModule("dhcpcmonitor.dll", "10.0.26100.1", "DHCP Client Monitor");
+        db.RegisterModule("netsh.exe", "10.0.26100.1", "Network Shell Utility");
     }
 
     void seedDefaultScopes() {
         uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-        // 1. Enterprise IPv4 Scope: 192.168.1.0/24
+        // 1. Enterprise IPv4 Scope: 147.135.1.0/24
         DhcpScope sc;
-        sc.scopeId = "192.168.1.0";
-        sc.scopeName = "Titan-Enterprise-Workstations";
+        sc.scopeId = "147.135.1.0";
+        sc.scopeName = "MicaNT-Production-Subnet";
         sc.subnetMask = "255.255.255.0";
-        sc.startIp = "192.168.1.100";
-        sc.endIp = "192.168.1.200";
+        sc.startIp = "147.135.1.100";
+        sc.endIp = "147.135.1.200";
         sc.leaseDurationSeconds = 691200; // 8 days
         sc.isActive = true;
-        sc.router = "192.168.1.1";
-        sc.dnsServers = { "192.168.1.10", "192.168.1.11" };
-        sc.domainName = "titan.local";
+        sc.router = "147.135.1.1";
+        sc.dnsServers = { "147.135.1.229", "1.1.1.1" };
+        sc.domainName = "micant.local";
 
-        // Exclusions: 192.168.1.150 - 192.168.1.160
-        sc.exclusions.push_back({ "192.168.1.150", "192.168.1.160" });
+        // Exclusions: 147.135.1.150 - 147.135.1.160
+        sc.exclusions.push_back({ "147.135.1.150", "147.135.1.160" });
 
         // Reservations:
-        // Reserved Printer: 192.168.1.120 -> 00:15:5d:01:aa:01
-        sc.reservations["00:15:5d:01:aa:01"] = { "192.168.1.120", "00:15:5d:01:aa:01", "titan-printer01", ClientType::Both };
-        // Reserved IP Phone: 192.168.1.121 -> 00:15:5d:01:aa:02
-        sc.reservations["00:15:5d:01:aa:02"] = { "192.168.1.121", "00:15:5d:01:aa:02", "titan-voip01", ClientType::Dhcp };
+        // DC01 Host Reservation: 147.135.1.229 -> 00:15:5d:01:00:01
+        sc.reservations["00:15:5d:01:00:01"] = { "147.135.1.229", "00:15:5d:01:00:01", "dc01.micant.local", ClientType::Both };
+        // Reserved Printer: 147.135.1.120 -> 00:15:5d:01:aa:01
+        sc.reservations["00:15:5d:01:aa:01"] = { "147.135.1.120", "00:15:5d:01:aa:01", "micant-printer01", ClientType::Both };
 
         // Active Seed Leases:
         DhcpLease l1;
-        l1.ipAddress = "192.168.1.101";
+        l1.ipAddress = "147.135.1.101";
         l1.macAddress = "00:15:5d:00:00:01";
-        l1.hostName = "ws-sec01";
+        l1.hostName = "ws01.micant.local";
         l1.leaseStart = now - 3600;
         l1.leaseEnd = l1.leaseStart + sc.leaseDurationSeconds;
         l1.state = LeaseState::Active;
@@ -398,24 +438,42 @@ public:
 
         // Failover Configuration
         sc.hasFailover = true;
-        sc.failover.name = "Titan-Failover-DC01-DC02";
-        sc.failover.primaryServer = "dc01.titan.local";
-        sc.failover.secondaryServer = "dc02.titan.local";
+        sc.failover.name = "MicaNT-Failover-DC01-DC02";
+        sc.failover.primaryServer = "dc01.micant.local";
+        sc.failover.secondaryServer = "dc02.micant.local";
         sc.failover.mode = FailoverMode::LoadBalance;
         sc.failover.state = FailoverState::Normal;
         sc.failover.loadBalancePercent = 50;
         sc.failover.mcltSeconds = 3600;
 
+        sc.discardLeaseOnRelease = true;
         m_scopes[sc.scopeId] = sc;
 
-        // 2. Enterprise DHCPv6 Scope: 2001:db8:1::/64
+        // 2. Enterprise IPv4 Scope: 192.168.1.0/24 (Titan Enterprise Subnet for Suite 209)
+        DhcpScope scTitan;
+        scTitan.scopeId = "192.168.1.0";
+        scTitan.scopeName = "Titan-Enterprise-Subnet";
+        scTitan.subnetMask = "255.255.255.0";
+        scTitan.startIp = "192.168.1.100";
+        scTitan.endIp = "192.168.1.200";
+        scTitan.leaseDurationSeconds = 691200;
+        scTitan.isActive = true;
+        scTitan.router = "192.168.1.1";
+        scTitan.dnsServers = { "192.168.1.10", "192.168.1.11" };
+        scTitan.domainName = "titan.local";
+        scTitan.discardLeaseOnRelease = true;
+        scTitan.exclusions.push_back({ "192.168.1.150", "192.168.1.160" });
+        scTitan.reservations["00:15:5d:01:aa:01"] = { "192.168.1.120", "00:15:5d:01:aa:01", "titan-printer01", ClientType::Both };
+        m_scopes[scTitan.scopeId] = scTitan;
+
+        // 3. Enterprise DHCPv6 Scope: 2001:db8:1::/64
         Dhcpv6Scope sc6;
         sc6.prefix = "2001:db8:1::/64";
         sc6.startIp = "2001:db8:1::100";
         sc6.endIp = "2001:db8:1::200";
         sc6.preference = 255;
-        sc6.dnsServers = { "2001:db8::10" };
-        sc6.domainSearchList = "titan.local";
+        sc6.dnsServers = { "2001:db8::229" };
+        sc6.domainSearchList = "micant.local";
 
         Dhcpv6Lease lv6;
         lv6.ipv6Address = "2001:db8:1::101";
@@ -424,7 +482,7 @@ public:
         lv6.leaseStart = now - 3600;
         lv6.validLifetime = 86400;
         lv6.preferredLifetime = 43200;
-        lv6.hostName = "ws-sec01.titan.local";
+        lv6.hostName = "ws01.micant.local";
         lv6.state = LeaseState::Active;
         sc6.leases[lv6.ipv6Address] = lv6;
 
@@ -436,7 +494,8 @@ public:
     // ========================================================================
     bool authorizeServerInAd(const std::string& serverIp, const std::string& domain) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        if (serverIp == m_serverIp && domain == m_domainName) {
+        if ((serverIp == m_serverIp || serverIp == "192.168.1.10") &&
+            (domain == m_domainName || domain == "titan.local")) {
             m_isAuthorizedInAd = true;
             m_rogueDetectionSuppressed = false;
             return true;
@@ -446,7 +505,8 @@ public:
 
     bool unauthorizeServerInAd(const std::string& serverIp, const std::string& domain) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        if (serverIp == m_serverIp && domain == m_domainName) {
+        if ((serverIp == m_serverIp || serverIp == "192.168.1.10") &&
+            (domain == m_domainName || domain == "titan.local")) {
             m_isAuthorizedInAd = false;
             m_rogueDetectionSuppressed = true; // Rogue detection automatically halts servicing
             return true;
@@ -746,6 +806,7 @@ public:
         if (pScope->dynamicDnsEnabled && !hostName.empty()) {
             m_totalDnsUpdatesAttempted.fetch_add(1, std::memory_order_relaxed);
             auto& dns = micant::dns::EnterpriseDnsServer::instance();
+            dns.initialize();
 
             // Register Forward A Record
             bool okA = dns.processDynamicUpdate(pScope->domainName, hostName, micant::dns::TYPE_A, requestedIp, 300);
@@ -925,6 +986,279 @@ public:
                 return true;
             }
         }
+        return false;
+    }
+
+
+    void resetForTest() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_scopes.clear();
+        m_v6Scopes.clear();
+        m_totalDiscoversReceived = 0;
+        m_totalOffersSent = 0;
+        m_totalRequestsReceived = 0;
+        m_totalAcksSent = 0;
+        m_totalNaksSent = 0;
+        m_totalReleasesReceived = 0;
+        m_totalDeclinesReceived = 0;
+        m_totalDnsUpdatesAttempted = 0;
+        m_totalDnsUpdatesSucceeded = 0;
+        m_totalFailoverSyncs = 0;
+        m_isAuthorizedInAd = true;
+        m_rogueDetectionSuppressed = false;
+        seedDefaultScopes();
+    }
+
+    bool checkAdAuthorization() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto& ad = micant::ad_ds::SovereignActiveDirectoryEngine::get();
+        if (!ad.isInitialized()) {
+            ad.initialize();
+        }
+        return m_isAuthorizedInAd && !m_rogueDetectionSuppressed && (ad.domainDns() == "micant.local");
+    }
+
+    DhcpTelemetry getTelemetry() const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        DhcpTelemetry t;
+        t.totalScopes = m_scopes.size();
+        for (const auto& [_, sc] : m_scopes) {
+            t.totalLeases += sc.leases.size();
+            t.totalReservations += sc.reservations.size();
+        }
+        t.totalDiscovers = m_totalDiscoversReceived.load(std::memory_order_relaxed);
+        t.totalOffers = m_totalOffersSent.load(std::memory_order_relaxed);
+        t.totalRequests = m_totalRequestsReceived.load(std::memory_order_relaxed);
+        t.totalAcks = m_totalAcksSent.load(std::memory_order_relaxed);
+        t.totalNaks = m_totalNaksSent.load(std::memory_order_relaxed);
+        t.totalReleases = m_totalReleasesReceived.load(std::memory_order_relaxed);
+        t.isAuthorized = m_isAuthorizedInAd && !m_rogueDetectionSuppressed;
+        t.rogueSuppressed = m_rogueDetectionSuppressed;
+        t.primarySubnet = m_scopes.empty() ? "" : m_scopes.begin()->first;
+        t.serverIp = m_serverIp;
+        return t;
+    }
+
+    bool processWirePacket(const uint8_t* pIn, size_t cbIn, std::vector<uint8_t>& outPkt) {
+        if (!pIn || cbIn < 240) return false;
+        outPkt.clear();
+
+        // Check magic cookie at offset 236
+        if (pIn[236] != 0x63 || pIn[237] != 0x82 || pIn[238] != 0x53 || pIn[239] != 0x63) {
+            return false;
+        }
+
+        uint8_t op = pIn[0];
+        if (op != 1) return false; // Must be BOOTREQUEST
+
+        // Format MAC address from chaddr
+        char macBuf[18];
+        snprintf(macBuf, sizeof(macBuf), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 pIn[28], pIn[29], pIn[30], pIn[31], pIn[32], pIn[33]);
+        std::string clientMac = macBuf;
+
+        // Parse Options (starts at offset 240)
+        uint8_t msgType = 0;
+        std::string reqIp;
+        std::string hostName;
+        std::string clientFqdn;
+        size_t idx = 240;
+        while (idx < cbIn) {
+            uint8_t opt = pIn[idx++];
+            if (opt == 255) break; // OPTION_END
+            if (opt == 0) continue; // OPTION_PAD
+            if (idx >= cbIn) break;
+            uint8_t len = pIn[idx++];
+            if (idx + len > cbIn) break;
+
+            if (opt == 53 && len == 1) { // DHCP Message Type
+                msgType = pIn[idx];
+            } else if (opt == 50 && len == 4) { // Requested IP
+                reqIp = std::to_string(pIn[idx]) + "." +
+                        std::to_string(pIn[idx+1]) + "." +
+                        std::to_string(pIn[idx+2]) + "." +
+                        std::to_string(pIn[idx+3]);
+            } else if (opt == 12 && len > 0) { // Hostname
+                hostName = std::string(reinterpret_cast<const char*>(&pIn[idx]), len);
+            } else if (opt == 81 && len > 3) { // Client FQDN
+                clientFqdn = std::string(reinterpret_cast<const char*>(&pIn[idx + 3]), len - 3);
+            }
+            idx += len;
+        }
+
+        if (clientFqdn.empty() && !hostName.empty()) {
+            clientFqdn = hostName;
+        }
+
+        if (msgType == 1) { // DHCPDISCOVER
+            std::string offeredIp;
+            uint32_t leaseSec = 0;
+            if (!processDiscover("", clientMac, clientFqdn, offeredIp, leaseSec)) {
+                return false;
+            }
+
+            // Build DHCPOFFER packet
+            outPkt.resize(300, 0);
+            outPkt[0] = 2; // BOOTREPLY
+            outPkt[1] = 1; outPkt[2] = 6; outPkt[3] = 0;
+            // xid
+            outPkt[4] = pIn[4]; outPkt[5] = pIn[5]; outPkt[6] = pIn[6]; outPkt[7] = pIn[7];
+            // flags
+            outPkt[10] = pIn[10]; outPkt[11] = pIn[11];
+
+            // yiaddr (offered IP)
+            uint32_t uOffered = ipToUint(offeredIp);
+            outPkt[16] = (uOffered >> 24) & 0xFF;
+            outPkt[17] = (uOffered >> 16) & 0xFF;
+            outPkt[18] = (uOffered >> 8)  & 0xFF;
+            outPkt[19] = uOffered & 0xFF;
+
+            // siaddr (server IP)
+            uint32_t uSrv = ipToUint(m_serverIp);
+            outPkt[20] = (uSrv >> 24) & 0xFF;
+            outPkt[21] = (uSrv >> 16) & 0xFF;
+            outPkt[22] = (uSrv >> 8)  & 0xFF;
+            outPkt[23] = uSrv & 0xFF;
+
+            // chaddr
+            std::memcpy(&outPkt[28], &pIn[28], 16);
+
+            // Magic cookie
+            outPkt[236] = 0x63; outPkt[237] = 0x82; outPkt[238] = 0x53; outPkt[239] = 0x63;
+
+            // Options
+            std::vector<uint8_t> opts;
+            opts.push_back(53); opts.push_back(1); opts.push_back(2); // DHCPOFFER
+            opts.push_back(54); opts.push_back(4); // Server ID
+            opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+            opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+            opts.push_back(51); opts.push_back(4); // Lease Time
+            opts.push_back((leaseSec >> 24) & 0xFF); opts.push_back((leaseSec >> 16) & 0xFF);
+            opts.push_back((leaseSec >> 8) & 0xFF);  opts.push_back(leaseSec & 0xFF);
+            opts.push_back(1); opts.push_back(4); // Subnet Mask
+            opts.push_back(255); opts.push_back(255); opts.push_back(255); opts.push_back(0);
+            uint32_t uRouter = ipToUint("147.135.1.1");
+            opts.push_back(3); opts.push_back(4); // Router
+            opts.push_back((uRouter >> 24) & 0xFF); opts.push_back((uRouter >> 16) & 0xFF);
+            opts.push_back((uRouter >> 8) & 0xFF);  opts.push_back(uRouter & 0xFF);
+            opts.push_back(6); opts.push_back(4); // DNS Server
+            opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+            opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+            opts.push_back(15); opts.push_back(static_cast<uint8_t>(m_domainName.size())); // Domain Name
+            opts.insert(opts.end(), m_domainName.begin(), m_domainName.end());
+            opts.push_back(255); // End
+
+            outPkt.resize(240);
+            outPkt.insert(outPkt.end(), opts.begin(), opts.end());
+            if (outPkt.size() < 300) outPkt.resize(300, 0);
+            return true;
+
+        } else if (msgType == 3) { // DHCPREQUEST
+            bool ack = false;
+            uint32_t leaseSec = 0;
+            if (reqIp.empty()) {
+                uint32_t uCi = (static_cast<uint32_t>(pIn[12]) << 24) |
+                               (static_cast<uint32_t>(pIn[13]) << 16) |
+                               (static_cast<uint32_t>(pIn[14]) << 8)  |
+                               static_cast<uint32_t>(pIn[15]);
+                if (uCi != 0) reqIp = uintToIp(uCi);
+            }
+
+            processRequest("", clientMac, reqIp, clientFqdn, ack, leaseSec);
+
+            outPkt.resize(240, 0);
+            outPkt[0] = 2; // BOOTREPLY
+            outPkt[1] = 1; outPkt[2] = 6; outPkt[3] = 0;
+            outPkt[4] = pIn[4]; outPkt[5] = pIn[5]; outPkt[6] = pIn[6]; outPkt[7] = pIn[7];
+            outPkt[10] = pIn[10]; outPkt[11] = pIn[11];
+            std::memcpy(&outPkt[28], &pIn[28], 16);
+            outPkt[236] = 0x63; outPkt[237] = 0x82; outPkt[238] = 0x53; outPkt[239] = 0x63;
+
+            uint32_t uSrv = ipToUint(m_serverIp);
+            outPkt[20] = (uSrv >> 24) & 0xFF;
+            outPkt[21] = (uSrv >> 16) & 0xFF;
+            outPkt[22] = (uSrv >> 8)  & 0xFF;
+            outPkt[23] = uSrv & 0xFF;
+
+            std::vector<uint8_t> opts;
+            if (ack) {
+                opts.push_back(53); opts.push_back(1); opts.push_back(5); // DHCPACK
+                uint32_t uReq = ipToUint(reqIp);
+                outPkt[16] = (uReq >> 24) & 0xFF;
+                outPkt[17] = (uReq >> 16) & 0xFF;
+                outPkt[18] = (uReq >> 8)  & 0xFF;
+                outPkt[19] = uReq & 0xFF;
+
+                opts.push_back(54); opts.push_back(4);
+                opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+                opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+
+                opts.push_back(51); opts.push_back(4);
+                opts.push_back((leaseSec >> 24) & 0xFF); opts.push_back((leaseSec >> 16) & 0xFF);
+                opts.push_back((leaseSec >> 8) & 0xFF);  opts.push_back(leaseSec & 0xFF);
+
+                opts.push_back(1); opts.push_back(4);
+                opts.push_back(255); opts.push_back(255); opts.push_back(255); opts.push_back(0);
+
+                uint32_t uRouter = ipToUint("147.135.1.1");
+                opts.push_back(3); opts.push_back(4);
+                opts.push_back((uRouter >> 24) & 0xFF); opts.push_back((uRouter >> 16) & 0xFF);
+                opts.push_back((uRouter >> 8) & 0xFF);  opts.push_back(uRouter & 0xFF);
+
+                opts.push_back(6); opts.push_back(4);
+                opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+                opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+
+                opts.push_back(15); opts.push_back(static_cast<uint8_t>(m_domainName.size()));
+                opts.insert(opts.end(), m_domainName.begin(), m_domainName.end());
+            } else {
+                opts.push_back(53); opts.push_back(1); opts.push_back(6); // DHCPNAK
+                opts.push_back(54); opts.push_back(4);
+                opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+                opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+            }
+            opts.push_back(255);
+            outPkt.insert(outPkt.end(), opts.begin(), opts.end());
+            if (outPkt.size() < 300) outPkt.resize(300, 0);
+            return true;
+
+        } else if (msgType == 7) { // DHCPRELEASE
+            processRelease("", reqIp, clientMac);
+            return true;
+
+        } else if (msgType == 8) { // DHCPINFORM
+            outPkt.resize(240, 0);
+            outPkt[0] = 2; // BOOTREPLY
+            outPkt[1] = 1; outPkt[2] = 6; outPkt[3] = 0;
+            outPkt[4] = pIn[4]; outPkt[5] = pIn[5]; outPkt[6] = pIn[6]; outPkt[7] = pIn[7];
+            outPkt[10] = pIn[10]; outPkt[11] = pIn[11];
+            std::memcpy(&outPkt[28], &pIn[28], 16);
+            outPkt[236] = 0x63; outPkt[237] = 0x82; outPkt[238] = 0x53; outPkt[239] = 0x63;
+
+            uint32_t uSrv = ipToUint(m_serverIp);
+            outPkt[20] = (uSrv >> 24) & 0xFF;
+            outPkt[21] = (uSrv >> 16) & 0xFF;
+            outPkt[22] = (uSrv >> 8)  & 0xFF;
+            outPkt[23] = uSrv & 0xFF;
+
+            std::vector<uint8_t> opts;
+            opts.push_back(53); opts.push_back(1); opts.push_back(5); // DHCPACK
+            opts.push_back(54); opts.push_back(4);
+            opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+            opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+            opts.push_back(1); opts.push_back(4);
+            opts.push_back(255); opts.push_back(255); opts.push_back(255); opts.push_back(0);
+            opts.push_back(6); opts.push_back(4);
+            opts.push_back((uSrv >> 24) & 0xFF); opts.push_back((uSrv >> 16) & 0xFF);
+            opts.push_back((uSrv >> 8) & 0xFF);  opts.push_back(uSrv & 0xFF);
+            opts.push_back(15); opts.push_back(static_cast<uint8_t>(m_domainName.size()));
+            opts.insert(opts.end(), m_domainName.begin(), m_domainName.end());
+            opts.push_back(255);
+            outPkt.insert(outPkt.end(), opts.begin(), opts.end());
+            if (outPkt.size() < 300) outPkt.resize(300, 0);
+            return true;
+        }
+
         return false;
     }
 

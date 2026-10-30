@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 /**
  * @file kernel_suites.hpp
@@ -29001,4 +29001,342 @@ inline void Test_Horizon162_ActiveDirectory_Ldap_KerberosKdc_And_DsToolsCLI() {
               << "    Pillar 6: Remote Web Terminal (wss://) & Real-Time Push Telemetry Stream OK\n";
 
     std::cout << "[TEST] Suite 378: Horizon 162 - Sovereign Active Directory Domain Services (AD DS) Subsystem PASSED." << std::endl;
+}
+
+// ============================================================================
+// HORIZON 163 / SUITE 379: Sovereign Dynamic Host Configuration Protocol (DHCP) Server
+// RFC 2131 / RFC 2132 Protocol Engine, Active Directory Authorization (MS-DHCPM),
+// Dynamic DNS Integration (Option 81 FQDN), Failover Clustering & Canonical netsh dhcp CLI
+// ============================================================================
+
+void Test_Horizon163_DhcpServer_ActiveDirectoryAuth_DnsIntegration_And_NetshDhcpCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 379: Horizon 163 - Sovereign DHCP Server (dhcpsvc.dll / tcpsvcs.exe),\n"
+              << "RFC 2131/2132 Protocol Engine, Active Directory Authorization (MS-DHCPM),\n"
+              << "Dynamic DNS Integration (Option 81), Failover Clustering & Canonical netsh dhcp CLI\n"
+              << "========================================================================\n";
+
+    using namespace micant::dhcp;
+    using namespace micant::netsh::dhcp::um;
+
+    micant::ad_ds::RegisterActiveDirectorySubsystem();
+    micant::dns::server::um::RegisterDnsSubsystem();
+    auto& server = EnterpriseDhcpServer::instance();
+    server.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DHCP Server Core Architecture, SCM Service & VersionDatabase
+    // ------------------------------------------------------------------------
+    {
+        // 1. Core Initialization & Default Scope Verification
+        TEST_ASSERT(server.getScopeCount() >= 1, "DHCP server must possess at least 1 active scope");
+        TEST_ASSERT(server.isServerAuthorized(), "DHCP server must initialize in authorized state");
+        TEST_ASSERT(!server.isRogueSuppressed(), "Rogue suppression must be inactive initially");
+
+        auto scopes = server.getAllScopes();
+        TEST_ASSERT(!scopes.empty(), "DHCP server scope list must not be empty");
+        const auto& primary = scopes[0];
+        TEST_ASSERT(primary.scopeId == "147.135.1.0", "Primary scope subnet must match 147.135.1.0");
+        TEST_ASSERT(primary.subnetMask == "255.255.255.0", "Subnet mask must be 255.255.255.0");
+        TEST_ASSERT(primary.startIp == "147.135.1.100", "Start IP must be 147.135.1.100");
+        TEST_ASSERT(primary.endIp == "147.135.1.200", "End IP must be 147.135.1.200");
+        TEST_ASSERT(primary.router == "147.135.1.1", "Router/Gateway must match 147.135.1.1");
+        TEST_ASSERT(primary.domainName == "micant.local", "Domain name must match micant.local");
+        TEST_ASSERT(primary.isActive, "Primary scope must be marked active");
+        TEST_ASSERT(primary.hasFailover, "Scope must have failover configured");
+        TEST_ASSERT(primary.failover.name == "MicaNT-Failover-DC01-DC02", "Failover name match");
+
+        // Verify Reservations & Exclusions
+        TEST_ASSERT(!primary.exclusions.empty(), "Exclusions list must not be empty");
+        TEST_ASSERT(primary.exclusions[0].startIp == "147.135.1.150" && primary.exclusions[0].endIp == "147.135.1.160",
+                    "Exclusion range must cover 147.135.1.150 - 147.135.1.160");
+        TEST_ASSERT(primary.reservations.find("00:15:5d:01:00:01") != primary.reservations.end(),
+                    "DC01 reservation must exist");
+        TEST_ASSERT(primary.reservations.at("00:15:5d:01:00:01").ipAddress == "147.135.1.229",
+                    "DC01 reserved IP must match 147.135.1.229");
+
+        // 2. Service Control Manager (SCM) Registration
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto recDhcp = scm.getServiceRecord(L"DHCPServer");
+        TEST_ASSERT(recDhcp != nullptr, "DHCPServer service must be registered in SCM");
+        TEST_ASSERT(recDhcp->status.dwCurrentState == micant::scm::SERVICE_RUNNING,
+                    "DHCPServer service must be in SERVICE_RUNNING state");
+        TEST_ASSERT(recDhcp->binaryPath == L"C:\\Windows\\System32\\tcpsvcs.exe",
+                    "DHCPServer binaryPath must be tcpsvcs.exe");
+
+        // 3. Version Database Registration
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        auto mTcpsvcs = vdb.FindModule("tcpsvcs.exe");
+        TEST_ASSERT(mTcpsvcs != nullptr && mTcpsvcs->stringTable.at("FileVersion") == "10.0.26100.1",
+                    "tcpsvcs.exe version must match 10.0.26100.1");
+        auto mDhcpsvc = vdb.FindModule("dhcpsvc.dll");
+        TEST_ASSERT(mDhcpsvc != nullptr && mDhcpsvc->stringTable.at("FileVersion") == "10.0.26100.1",
+                    "dhcpsvc.dll version must match 10.0.26100.1");
+        auto mDhcpsapi = vdb.FindModule("dhcpsapi.dll");
+        TEST_ASSERT(mDhcpsapi != nullptr && mDhcpsapi->stringTable.at("FileVersion") == "10.0.26100.1",
+                    "dhcpsapi.dll version must match 10.0.26100.1");
+        auto mDhcpcore = vdb.FindModule("dhcpcore.dll");
+        TEST_ASSERT(mDhcpcore != nullptr && mDhcpcore->stringTable.at("FileVersion") == "10.0.26100.1",
+                    "dhcpcore.dll version must match 10.0.26100.1");
+        auto mNetsh = vdb.FindModule("netsh.exe");
+        TEST_ASSERT(mNetsh != nullptr && mNetsh->stringTable.at("FileVersion") == "10.0.26100.1",
+                    "netsh.exe version must match 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: RFC 2131 4-Way DORA Handshake & Lease Lifecycle Management
+    // ------------------------------------------------------------------------
+    {
+        std::string clientMac = "00:15:5d:02:00:10";
+        std::string offeredIp;
+        uint32_t leaseSec = 0;
+
+        // 1. DHCPDISCOVER
+        bool discOk = server.processDiscover("147.135.1.0", clientMac, "client-node-10", offeredIp, leaseSec);
+        TEST_ASSERT(discOk, "processDiscover must succeed for valid client");
+        TEST_ASSERT(!offeredIp.empty(), "Offered IP must not be empty");
+        TEST_ASSERT(offeredIp == "147.135.1.100" || offeredIp == "147.135.1.102",
+                    "Offered IP must be allocated from unassigned scope pool");
+        TEST_ASSERT(leaseSec == 691200, "Lease duration must match scope configuration (8 days)");
+
+        // 2. DHCPREQUEST
+        bool ackOk = false;
+        uint32_t ackLeaseSec = 0;
+        bool reqOk = server.processRequest("147.135.1.0", clientMac, offeredIp, "client-node-10", ackOk, ackLeaseSec);
+        TEST_ASSERT(reqOk && ackOk, "processRequest must succeed and return DHCPACK");
+        TEST_ASSERT(ackLeaseSec == 691200, "ACK lease duration must match 691200 seconds");
+
+        // 3. Verification of Reservation Allocation
+        std::string resMac = "00:15:5d:01:aa:01"; // Printer reservation
+        std::string printerOfferedIp;
+        uint32_t resLeaseSec = 0;
+        bool resDiscOk = server.processDiscover("147.135.1.0", resMac, "micant-printer01", printerOfferedIp, resLeaseSec);
+        TEST_ASSERT(resDiscOk, "processDiscover for reserved MAC must succeed");
+        TEST_ASSERT(printerOfferedIp == "147.135.1.120", "Reserved MAC must receive exact reserved IP 147.135.1.120");
+
+        // 4. DHCPRELEASE
+        bool relOk = server.processRelease("147.135.1.0", offeredIp, clientMac);
+        TEST_ASSERT(relOk, "processRelease must succeed for active lease");
+        TEST_ASSERT(server.getTotalReleases() >= 1, "Total releases counter must increment");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Active Directory Domain Services Authorization (MS-DHCPM) & Rogue Suppression
+    // ------------------------------------------------------------------------
+    {
+        // 1. Verify Active Directory Binding & Authorization Check
+        TEST_ASSERT(server.checkAdAuthorization(), "Server must be authorized against Active Directory");
+        TEST_ASSERT(server.getAdDirectoryPath() == "CN=NetServices,CN=Services,CN=Configuration,DC=micant,DC=local",
+                    "AD DS NetServices configuration container path match");
+
+        // 2. Simulate AD De-authorization / Rogue Detection Event
+        bool unauthOk = server.unauthorizeServerInAd("147.135.1.229", "micant.local");
+        TEST_ASSERT(unauthOk, "unauthorizeServerInAd must succeed");
+        TEST_ASSERT(!server.isServerAuthorized(), "Server must report unauthorized");
+        TEST_ASSERT(server.isRogueSuppressed(), "Rogue suppression must be triggered");
+
+        // When unauthorized/suppressed, DHCP service must drop DISCOVER and NAK REQUEST
+        std::string testMac = "00:15:5d:03:00:20";
+        std::string dummyOffer;
+        uint32_t dummyLease = 0;
+        bool discBlocked = server.processDiscover("147.135.1.0", testMac, "rogue-test", dummyOffer, dummyLease);
+        TEST_ASSERT(!discBlocked, "processDiscover must be rejected when server is rogue/unauthorized");
+
+        bool ackBlocked = false;
+        uint32_t ackBlockedSec = 0;
+        bool reqBlocked = server.processRequest("147.135.1.0", testMac, "147.135.1.110", "rogue-test", ackBlocked, ackBlockedSec);
+        TEST_ASSERT(!reqBlocked && !ackBlocked, "processRequest must fail and send NAK when rogue/unauthorized");
+
+        // 3. Re-authorize Server in Active Directory
+        bool authOk = server.authorizeServerInAd("147.135.1.229", "micant.local");
+        TEST_ASSERT(authOk, "authorizeServerInAd must restore authorization");
+        TEST_ASSERT(server.isServerAuthorized(), "Server must report authorized again");
+        TEST_ASSERT(!server.isRogueSuppressed(), "Rogue suppression must be cleared");
+
+        // Verify service operational again
+        bool discResumed = server.processDiscover("147.135.1.0", testMac, "rogue-test", dummyOffer, dummyLease);
+        TEST_ASSERT(discResumed, "processDiscover must resume servicing clients after AD re-authorization");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Option 81 Client FQDN & Dynamic DNS (DDNS) Forward/Reverse Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& dns = micant::dns::EnterpriseDnsServer::instance();
+        std::string ddnsMac = "00:15:5d:04:00:30";
+        std::string targetIp = "147.135.1.135";
+        std::string fqdnHost = "ws-finance-01.micant.local";
+
+        bool ack = false;
+        uint32_t leaseDuration = 0;
+        bool reqOk = server.processRequest("147.135.1.0", ddnsMac, targetIp, fqdnHost, ack, leaseDuration);
+        TEST_ASSERT(reqOk && ack, "processRequest with FQDN hostname must succeed");
+
+        auto tele = server.getTelemetry();
+        TEST_ASSERT(tele.totalAcks >= 1, "Telemetry must record ACK sent");
+
+        // Verify forward DNS record in EnterpriseDnsServer
+        auto fwdRecords = dns.queryRecords("ws-finance-01.micant.local", micant::dns::TYPE_A);
+        TEST_ASSERT(!fwdRecords.empty(), "Dynamic DNS forward A record must be resolved by EnterpriseDnsServer");
+        TEST_ASSERT(fwdRecords[0].rdata == targetIp, "Resolved A record IP must match assigned DHCP lease IP");
+
+        // Verify reverse DNS PTR record in in-addr.arpa
+        auto ptrRecords = dns.queryRecords("135.1.135.147.in-addr.arpa", micant::dns::TYPE_PTR);
+        TEST_ASSERT(!ptrRecords.empty(), "Dynamic DNS reverse PTR record must be resolved by EnterpriseDnsServer");
+        TEST_ASSERT(ptrRecords[0].rdata == fqdnHost, "Resolved PTR record must point to client FQDN");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: RFC 2131 Wire Protocol Engine (BOOTREQUEST / BOOTREPLY / Options)
+    // ------------------------------------------------------------------------
+    {
+        // 1. Synthesize RFC 2131 BOOTREQUEST wire packet (DHCPDISCOVER)
+        std::vector<uint8_t> wireIn(300, 0);
+        wireIn[0] = 1; // BOOTREQUEST
+        wireIn[1] = 1; // Ethernet 10Mb
+        wireIn[2] = 6; // Hardware address length 6
+        wireIn[3] = 0; // Hops
+
+        // Transaction ID (xid)
+        wireIn[4] = 0xAA; wireIn[5] = 0xBB; wireIn[6] = 0xCC; wireIn[7] = 0xDD;
+
+        // Flags: 0x8000 (Broadcast)
+        wireIn[10] = 0x80; wireIn[11] = 0x00;
+
+        // Client Hardware Address (chaddr)
+        wireIn[28] = 0x00; wireIn[29] = 0x15; wireIn[30] = 0x5D;
+        wireIn[31] = 0x05; wireIn[32] = 0x00; wireIn[33] = 0x40;
+
+        // Magic Cookie (0x63, 0x82, 0x53, 0x63)
+        wireIn[236] = 0x63; wireIn[237] = 0x82; wireIn[238] = 0x53; wireIn[239] = 0x63;
+
+        // Options:
+        size_t optIdx = 240;
+        // Option 53: DHCP Message Type = DHCPDISCOVER (1)
+        wireIn[optIdx++] = 53; wireIn[optIdx++] = 1; wireIn[optIdx++] = 1;
+        // Option 12: Hostname = "node-wire-40"
+        std::string wireHost = "node-wire-40";
+        wireIn[optIdx++] = 12; wireIn[optIdx++] = static_cast<uint8_t>(wireHost.size());
+        for (char c : wireHost) wireIn[optIdx++] = static_cast<uint8_t>(c);
+        // Option 255: End
+        wireIn[optIdx++] = 255;
+
+        // Process Wire Packet through Server Engine
+        std::vector<uint8_t> wireOut;
+        bool wireOk = server.processWirePacket(wireIn.data(), optIdx, wireOut);
+        TEST_ASSERT(wireOk, "processWirePacket must successfully parse and process BOOTREQUEST");
+        TEST_ASSERT(wireOut.size() >= 240, "Wire reply packet must meet minimum BOOTP length");
+
+        // 2. Validate Wire Reply (DHCPOFFER)
+        TEST_ASSERT(wireOut[0] == 2, "Reply opcode must be 2 (BOOTREPLY)");
+        TEST_ASSERT(wireOut[1] == 1 && wireOut[2] == 6, "Hardware type Ethernet and length 6");
+        TEST_ASSERT(wireOut[4] == 0xAA && wireOut[5] == 0xBB && wireOut[6] == 0xCC && wireOut[7] == 0xDD,
+                    "Transaction ID (xid) must mirror client request");
+
+        // Verify Magic Cookie in Reply
+        TEST_ASSERT(wireOut[236] == 0x63 && wireOut[237] == 0x82 && wireOut[238] == 0x53 && wireOut[239] == 0x63,
+                    "Reply must contain valid RFC 2132 magic cookie");
+
+        // Parse options in reply
+        bool foundOffer = false;
+        bool foundServerId = false;
+        bool foundSubnetMask = false;
+        bool foundRouter = false;
+        size_t rIdx = 240;
+        while (rIdx < wireOut.size()) {
+            uint8_t opt = wireOut[rIdx++];
+            if (opt == 255) break;
+            if (opt == 0) continue;
+            if (rIdx >= wireOut.size()) break;
+            uint8_t len = wireOut[rIdx++];
+            if (rIdx + len > wireOut.size()) break;
+
+            if (opt == 53 && len == 1 && wireOut[rIdx] == 2) {
+                foundOffer = true; // DHCPOFFER
+            } else if (opt == 54 && len == 4) {
+                foundServerId = true;
+            } else if (opt == 1 && len == 4) {
+                foundSubnetMask = true;
+            } else if (opt == 3 && len >= 4) {
+                foundRouter = true;
+            }
+            rIdx += len;
+        }
+        TEST_ASSERT(foundOffer, "Wire response must include Option 53 with value DHCPOFFER (2)");
+        TEST_ASSERT(foundServerId, "Wire response must include Option 54 (Server Identifier)");
+        TEST_ASSERT(foundSubnetMask, "Wire response must include Option 1 (Subnet Mask)");
+        TEST_ASSERT(foundRouter, "Wire response must include Option 3 (Router)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Canonical netsh dhcp CLI & Remote Web Terminal Push Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::string out;
+
+        // 1. netsh dhcp server show scope
+        out.clear();
+        int rc = ExecuteNetshDhcpString("netsh dhcp server show scope", out);
+        TEST_ASSERT(rc == 0, "netsh dhcp server show scope must exit with 0");
+        TEST_ASSERT(out.find("147.135.1.0") != std::string::npos, "Output must contain subnet 147.135.1.0");
+        TEST_ASSERT(out.find("255.255.255.0") != std::string::npos, "Output must contain mask 255.255.255.0");
+        TEST_ASSERT(out.find("Active") != std::string::npos, "Output must show scope Active status");
+
+        // 2. netsh dhcp server show status
+        out.clear();
+        rc = ExecuteNetshDhcpString("netsh dhcp server show status", out);
+        TEST_ASSERT(rc == 0, "netsh dhcp server show status must exit with 0");
+        TEST_ASSERT(out.find("147.135.1.229") != std::string::npos, "Server IP match");
+        TEST_ASSERT(out.find("Authorized in AD") != std::string::npos, "Server AD Authorized match");
+
+        // 3. netsh dhcp server scope 147.135.1.0 show clients
+        out.clear();
+        rc = ExecuteNetshDhcpString("netsh dhcp server scope 147.135.1.0 show clients", out);
+        TEST_ASSERT(rc == 0, "netsh dhcp show clients must exit with 0");
+        TEST_ASSERT(out.find("IP Address") != std::string::npos, "Clients table header match");
+
+        // 4. netsh dhcp server scope 147.135.1.0 show reservedip
+        out.clear();
+        rc = ExecuteNetshDhcpString("netsh dhcp server scope 147.135.1.0 show reservedip", out);
+        TEST_ASSERT(rc == 0, "netsh dhcp show reservedip must exit with 0");
+        TEST_ASSERT(out.find("147.135.1.229") != std::string::npos, "Reserved IP list must contain DC01 IP");
+        TEST_ASSERT(out.find("147.135.1.120") != std::string::npos, "Reserved IP list must contain printer IP");
+
+        // 5. netsh dhcp server dump
+        out.clear();
+        rc = ExecuteNetshDhcpString("netsh dhcp server dump", out);
+        TEST_ASSERT(rc == 0, "netsh dhcp server dump must exit with 0");
+        TEST_ASSERT(out.find("netsh dhcp server add scope") != std::string::npos, "Dump must contain add scope commands");
+        TEST_ASSERT(out.find("add reservedip") != std::string::npos, "Dump must contain add reservedip commands");
+
+        // 6. Remote Web Terminal command dispatch
+        auto& console = km::net::HttpsExecutiveConsole::get();
+        std::string termStatus = console.executeTerminalCommand("netsh dhcp server show status");
+        TEST_ASSERT(termStatus.find("Authorized in AD") != std::string::npos,
+                    "Remote terminal netsh dhcp status check");
+
+        std::string termScope = console.executeTerminalCommand("netsh dhcp server show scope");
+        TEST_ASSERT(termScope.find("147.135.1.0") != std::string::npos,
+                    "Remote terminal netsh dhcp scope check");
+
+        // 7. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"dhcp_scopes\":") != std::string::npos, "Telemetry must contain dhcp_scopes");
+        TEST_ASSERT(teleJson.find("\"dhcp_active_leases\":") != std::string::npos, "Telemetry must contain dhcp_active_leases");
+        TEST_ASSERT(teleJson.find("\"dhcp_discovers\":") != std::string::npos, "Telemetry must contain dhcp_discovers");
+        TEST_ASSERT(teleJson.find("\"dhcp_offers\":") != std::string::npos, "Telemetry must contain dhcp_offers");
+        TEST_ASSERT(teleJson.find("\"dhcp_requests\":") != std::string::npos, "Telemetry must contain dhcp_requests");
+        TEST_ASSERT(teleJson.find("\"dhcp_acks\":") != std::string::npos, "Telemetry must contain dhcp_acks");
+        TEST_ASSERT(teleJson.find("\"dhcp_authorized\":true") != std::string::npos, "Telemetry must confirm dhcp_authorized true");
+    }
+
+    std::cout << "[HORIZON 163] Sovereign Dynamic Host Configuration Protocol (DHCP) Server Subsystem Summary:\n"
+              << "    Pillar 1: DHCP Server Core Architecture, SCM Service & VersionDatabase Registration OK\n"
+              << "    Pillar 2: RFC 2131 4-Way DORA Handshake & Lease Lifecycle Management OK\n"
+              << "    Pillar 3: Active Directory Domain Services Authorization (MS-DHCPM) & Rogue Suppression OK\n"
+              << "    Pillar 4: Option 81 Client FQDN & Dynamic DNS Forward/Reverse Registration OK\n"
+              << "    Pillar 5: RFC 2131 Wire Protocol Engine (BOOTREQUEST / BOOTREPLY / Option Parsing) OK\n"
+              << "    Pillar 6: Canonical netsh dhcp Command-Line Tool & Remote Web Terminal Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 379: Horizon 163 - Sovereign DHCP Server Subsystem PASSED." << std::endl;
 }
