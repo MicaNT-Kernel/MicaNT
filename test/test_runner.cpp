@@ -336,6 +336,8 @@
 #include "micant/km/drivers/net/http.hpp"
 #include "micant/um/subsystems/net/httpapi.hpp"
 #include "micant/um/subsystems/net/netsh_http.hpp"
+#include "micant/um/servers/iis_was.hpp"
+#include "micant/um/subsystems/net/appcmd.hpp"
 #include "micant/um/subsystems/winuser/input_router.hpp"
 #include "micant/km/hal/boot_event_loop.hpp"
 #include "micant/km/hal/idt.hpp"
@@ -410,6 +412,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite376") {
+        RUN_TEST(Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite375") {
@@ -534,6 +540,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon157_Smb311_ServerDriver_ShareEncryption_VfsPipeline_And_NetCLI);
     RUN_TEST(Test_Horizon158_Rdp10_ServerDriver_CredSspNla_FastPathPipeline_And_MstscCLI);
     RUN_TEST(Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI);
+    RUN_TEST(Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1837,6 +1844,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon157_Smb311_ServerDriver_ShareEncryption_VfsPipeline_And_NetCLI);
     RUN_TEST(Test_Horizon158_Rdp10_ServerDriver_CredSspNla_FastPathPipeline_And_MstscCLI);
     RUN_TEST(Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI);
+    RUN_TEST(Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

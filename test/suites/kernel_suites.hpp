@@ -27894,3 +27894,368 @@ void Test_Horizon159_HttpSys_KernelDriver_ResponseCache_And_NetshHttpCLI() {
 
     std::cout << "[TEST] Suite 375: Horizon 159 - Sovereign HTTP.sys Kernel Protocol Driver, Win32 HTTP Server API, Zero-Copy Response Cache & netsh http CLI PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 376: Horizon 160 - Sovereign IIS 10.x Core Subsystem, WAS Process Model,
+//            w3wp.exe Worker Engine & Canonical appcmd.exe CLI
+// ============================================================================
+void Test_Horizon160_IIS10_WAS_ProcessModel_And_AppCmdCLI() {
+    std::cout << "[TEST] Suite 376: Horizon 160 - Sovereign IIS 10.x Core Subsystem, WAS Process Model, w3wp.exe Worker Engine & Canonical appcmd.exe CLI..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: WAS & HTTP.sys Kernel Request Queue Multiplexing
+    // ------------------------------------------------------------------------
+    {
+        iis::um::RegisterIisSubsystem();
+
+        auto& was = iis::um::WindowsProcessActivationService::Instance();
+        auto defPoolOpt = was.getAppPool("DefaultAppPool");
+        TEST_ASSERT(defPoolOpt.has_value(), "DefaultAppPool must be initialized");
+        TEST_ASSERT(defPoolOpt->state == iis::um::AppPoolState::Started, "DefaultAppPool must be Started");
+        TEST_ASSERT(defPoolOpt->pipelineMode == iis::um::PipelineMode::Integrated, "DefaultAppPool must use Integrated pipeline mode");
+        TEST_ASSERT(defPoolOpt->managedRuntimeVersion == "v4.0", "DefaultAppPool runtime must be v4.0");
+        TEST_ASSERT(defPoolOpt->kernelQueueHandle != nullptr, "DefaultAppPool must possess a valid kernel queue handle");
+        TEST_ASSERT(defPoolOpt->kernelQueueId > 0, "DefaultAppPool must bind to a positive kernel queue ID");
+
+        auto defSiteOpt = was.getSite("Default Web Site");
+        TEST_ASSERT(defSiteOpt.has_value(), "Default Web Site must be initialized");
+        TEST_ASSERT(defSiteOpt->id == 1, "Default Web Site ID must be 1");
+        TEST_ASSERT(defSiteOpt->state == iis::um::SiteState::Started, "Default Web Site state must be Started");
+        TEST_ASSERT(defSiteOpt->appPoolName == "DefaultAppPool", "Default Web Site must bind to DefaultAppPool");
+        TEST_ASSERT(defSiteOpt->physicalPath == "C:\\inetpub\\wwwroot", "Default Web Site root must be C:\\inetpub\\wwwroot");
+        TEST_ASSERT(!defSiteOpt->bindings.empty(), "Default Web Site must possess bindings");
+        TEST_ASSERT(defSiteOpt->bindings[0].port == 80, "Default Web Site must bind to port 80");
+        TEST_ASSERT(defSiteOpt->serverSessionId > 0, "Default Web Site must possess valid HTTP Server Session");
+        TEST_ASSERT(defSiteOpt->urlGroupId > 0, "Default Web Site must possess valid HTTP URL Group");
+
+        // Verify SCM services
+        auto& scm = scm::ServiceControlManager::get();
+        auto wasSvc = scm.getServiceRecord(L"WAS");
+        TEST_ASSERT(wasSvc != nullptr, "SCM must contain WAS service");
+        TEST_ASSERT(wasSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "WAS service must be SERVICE_RUNNING");
+
+        auto w3svc = scm.getServiceRecord(L"W3SVC");
+        TEST_ASSERT(w3svc != nullptr, "SCM must contain W3SVC service");
+        TEST_ASSERT(w3svc->status.dwCurrentState == scm::SERVICE_RUNNING, "W3SVC service must be SERVICE_RUNNING");
+
+        auto iisAdmin = scm.getServiceRecord(L"IISADMIN");
+        TEST_ASSERT(iisAdmin != nullptr, "SCM must contain IISADMIN service");
+        TEST_ASSERT(iisAdmin->status.dwCurrentState == scm::SERVICE_RUNNING, "IISADMIN service must be SERVICE_RUNNING");
+
+        // Verify VersionDatabase
+        auto& vdb = version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.GetModuleInfo("w3wp.exe") != nullptr, "w3wp.exe must be registered in VersionDatabase");
+        TEST_ASSERT(vdb.GetModuleInfo("w3core.dll") != nullptr, "w3core.dll must be registered in VersionDatabase");
+        TEST_ASSERT(vdb.GetModuleInfo("was.dll") != nullptr, "was.dll must be registered in VersionDatabase");
+        TEST_ASSERT(vdb.GetModuleInfo("appcmd.exe") != nullptr, "appcmd.exe must be registered in VersionDatabase");
+        TEST_ASSERT(vdb.GetModuleInfo("rewrite.dll") != nullptr, "rewrite.dll must be registered in VersionDatabase");
+        TEST_ASSERT(vdb.GetModuleInfo("aspnetcorev2.dll") != nullptr, "aspnetcorev2.dll must be registered in VersionDatabase");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: w3wp.exe Worker Process Lifecycle, Rapid-Fail Protection & Recycling
+    // ------------------------------------------------------------------------
+    {
+        auto& was = iis::um::WindowsProcessActivationService::Instance();
+
+        // 1. Worker process verification
+        auto workers = was.getWorkers("DefaultAppPool");
+        TEST_ASSERT(!workers.empty(), "DefaultAppPool must have an active worker process");
+        uint32_t initialPid = workers[0]->pid;
+        TEST_ASSERT(initialPid > 0, "Worker PID must be non-zero");
+        TEST_ASSERT(workers[0]->isRunning, "Worker process must be running");
+
+        // 2. AppPool Recycling
+        bool recycled = was.recycleAppPool("DefaultAppPool");
+        TEST_ASSERT(recycled, "recycleAppPool must succeed");
+        auto poolAfter = was.getAppPool("DefaultAppPool");
+        TEST_ASSERT(poolAfter->totalRecycles >= 1, "AppPool totalRecycles count must increment");
+
+        auto newWorkers = was.getWorkers("DefaultAppPool");
+        TEST_ASSERT(newWorkers.size() >= 2, "Workers list must record recycled and replacement workers");
+        bool hasRunning = false;
+        for (const auto& w : newWorkers) {
+            if (w->isRunning && w->pid != initialPid) {
+                hasRunning = true;
+                break;
+            }
+        }
+        TEST_ASSERT(hasRunning, "A new replacement worker process must be running after recycle");
+
+        // 3. Rapid-Fail Protection
+        bool poolCreated = was.createAppPool("CrashTestPool");
+        TEST_ASSERT(poolCreated, "createAppPool CrashTestPool must succeed");
+
+        // Fire 5 crashes in rapid succession
+        for (int i = 0; i < 5; ++i) {
+            was.reportWorkerCrash("CrashTestPool");
+        }
+
+        auto crashPool = was.getAppPool("CrashTestPool");
+        TEST_ASSERT(crashPool.has_value(), "CrashTestPool must exist");
+        TEST_ASSERT(crashPool->disabledByRapidFail, "CrashTestPool must be flagged as disabledByRapidFail");
+        TEST_ASSERT(crashPool->state == iis::um::AppPoolState::Stopped, "CrashTestPool state must be Stopped after rapid-fail trigger");
+
+        auto crashWorkers = was.getWorkers("CrashTestPool");
+        for (const auto& cw : crashWorkers) {
+            TEST_ASSERT(!cw->isRunning, "All workers for disabled pool must be stopped");
+        }
+
+        // Clean up crash pool
+        was.deleteAppPool("CrashTestPool");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: 11-Stage Native HTTP Module Pipeline & Static File Servicing
+    // ------------------------------------------------------------------------
+    {
+        auto& was = iis::um::WindowsProcessActivationService::Instance();
+
+        // 1. Static file setup in VFS
+        std::string htmlContent = "<!DOCTYPE html><html><body><h1>Welcome to MicaNT IIS</h1></body></html>";
+        was.setSiteFile("Default Web Site", "/index.html", htmlContent);
+
+        std::string verifyContent;
+        TEST_ASSERT(was.getSiteFile("Default Web Site", "/index.html", verifyContent), "getSiteFile must find /index.html");
+        TEST_ASSERT(verifyContent == htmlContent, "VFS file content must match");
+
+        // 2. Dispatch request for static file
+        km::http::HTTP_REQUEST_V2 req{};
+        req.RequestId = 1001;
+        req.Verb = km::http::HttpVerbGET;
+        req.rawUrl = "http://+:80/index.html";
+        req.cookedFullUrl = L"http://+:80/index.html";
+
+        std::string directResp;
+        bool dispatched = was.dispatchAndProcess(req, directResp);
+        TEST_ASSERT(dispatched, "dispatchAndProcess for /index.html must succeed");
+
+        // 3. ETag / 304 Not Modified verification
+        uint32_t crc = iis::um::CalculateCrc32(reinterpret_cast<const uint8_t*>(htmlContent.data()), htmlContent.size());
+        std::ostringstream etagSs;
+        etagSs << "W/\"" << std::hex << crc << "-" << htmlContent.size() << "\"";
+        std::string expectedEtag = etagSs.str();
+
+        iis::um::HttpContext ctx304;
+        ctx304.siteName = "Default Web Site";
+        ctx304.appPoolName = "DefaultAppPool";
+        ctx304.request.RequestId = 1002;
+        ctx304.request.Verb = km::http::HttpVerbGET;
+        ctx304.request.rawUrl = "/index.html";
+        ctx304.request.headers["If-None-Match"] = expectedEtag;
+
+        iis::um::StaticFileModule sfm;
+        sfm.processStage(iis::um::PipelineStage::ExecuteRequestHandler, ctx304);
+        TEST_ASSERT(ctx304.response.StatusCode == 304, "StaticFileModule must return 304 Not Modified for matching ETag");
+        TEST_ASSERT(ctx304.response.entityBody.empty(), "304 Not Modified must carry empty entity body");
+
+        // 4. Byte-Range verification (RFC 7233)
+        iis::um::HttpContext ctxRange;
+        ctxRange.siteName = "Default Web Site";
+        ctxRange.appPoolName = "DefaultAppPool";
+        ctxRange.request.RequestId = 1003;
+        ctxRange.request.Verb = km::http::HttpVerbGET;
+        ctxRange.request.rawUrl = "/index.html";
+        ctxRange.request.headers["Range"] = "bytes=0-14";
+
+        sfm.processStage(iis::um::PipelineStage::ExecuteRequestHandler, ctxRange);
+        TEST_ASSERT(ctxRange.response.StatusCode == 206, "StaticFileModule must return 206 Partial Content for Range header");
+        TEST_ASSERT(ctxRange.response.headers["Content-Range"].find("bytes 0-14/") != std::string::npos, "Content-Range header must specify bytes 0-14");
+        TEST_ASSERT(ctxRange.response.entityBody.size() == 15, "Range response entity body length must be 15 bytes");
+
+        // 5. Default document resolution
+        iis::um::HttpContext ctxDefDoc;
+        ctxDefDoc.siteName = "Default Web Site";
+        ctxDefDoc.appPoolName = "DefaultAppPool";
+        ctxDefDoc.request.RequestId = 1004;
+        ctxDefDoc.request.Verb = km::http::HttpVerbGET;
+        ctxDefDoc.request.rawUrl = "/";
+
+        sfm.processStage(iis::um::PipelineStage::ExecuteRequestHandler, ctxDefDoc);
+        TEST_ASSERT(ctxDefDoc.response.StatusCode == 200, "Default document request must return 200 OK");
+        TEST_ASSERT(ctxDefDoc.response.headers["Content-Type"].find("text/html") != std::string::npos, "Default document must have text/html Content-Type");
+
+        // 6. Custom Error Module for 404
+        iis::um::HttpContext ctx404;
+        ctx404.siteName = "Default Web Site";
+        ctx404.appPoolName = "DefaultAppPool";
+        ctx404.request.RequestId = 1005;
+        ctx404.request.rawUrl = "/missing_file.xyz";
+
+        sfm.processStage(iis::um::PipelineStage::ExecuteRequestHandler, ctx404);
+        TEST_ASSERT(ctx404.response.StatusCode == 404, "Missing file must set 404 status");
+
+        iis::um::CustomErrorModule errMod;
+        errMod.processStage(iis::um::PipelineStage::SendResponse, ctx404);
+        std::string errHtml(ctx404.response.entityBody.begin(), ctx404.response.entityBody.end());
+        TEST_ASSERT(errHtml.find("HTTP Error 404.0 - Not Found") != std::string::npos, "CustomErrorModule must render HTTP Error 404.0 branding");
+        TEST_ASSERT(errHtml.find("Microsoft-IIS/10.0") != std::string::npos, "CustomErrorModule must render Microsoft-IIS/10.0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: URL Rewrite 2.1 & ASP.NET Core Kestrel Gateway Reverse Proxy
+    // ------------------------------------------------------------------------
+    {
+        // 1. URL Rewrite Module
+        iis::um::UrlRewriteModule rewriteMod;
+
+        // Inbound Rewrite Rule: ^/blog/entry/([0-9]+)$ -> /post.html?id={R:1}
+        iis::um::RewriteRule rwRule;
+        rwRule.name = "BlogRewrite";
+        rwRule.matchUrlPattern = "^/blog/entry/([0-9]+)$";
+        rwRule.actionType = iis::um::RewriteRule::Rewrite;
+        rwRule.targetUrl = "/post.html?id={R:1}";
+        rewriteMod.addRule(rwRule);
+
+        // Inbound Redirect Rule: ^/legacy/(.*)$ -> /archive/{R:1} (301 Moved Permanently)
+        iis::um::RewriteRule redirRule;
+        redirRule.name = "LegacyRedirect";
+        redirRule.matchUrlPattern = "^/legacy/(.*)$";
+        redirRule.actionType = iis::um::RewriteRule::Redirect;
+        redirRule.redirectStatusCode = 301;
+        redirRule.targetUrl = "/archive/{R:1}";
+        rewriteMod.addRule(redirRule);
+
+        // Test Rewrite Execution
+        iis::um::HttpContext ctxRw;
+        ctxRw.request.rawUrl = "/blog/entry/42";
+        rewriteMod.processStage(iis::um::PipelineStage::BeginRequest, ctxRw);
+        TEST_ASSERT(ctxRw.request.rawUrl == "/post.html?id=42", "UrlRewriteModule must rewrite /blog/entry/42 to /post.html?id=42");
+
+        // Test Redirect Execution
+        iis::um::HttpContext ctxRedir;
+        ctxRedir.request.rawUrl = "/legacy/docs.pdf";
+        rewriteMod.processStage(iis::um::PipelineStage::BeginRequest, ctxRedir);
+        TEST_ASSERT(ctxRedir.responseCompleted, "Redirect rule must complete response");
+        TEST_ASSERT(ctxRedir.response.StatusCode == 301, "Redirect rule must return 301 Moved Permanently");
+        TEST_ASSERT(ctxRedir.response.headers["Location"] == "/archive/docs.pdf", "Location header must be /archive/docs.pdf");
+
+        // 2. ASP.NET Core Reverse Proxy Module (ANCM)
+        iis::um::AspNetCoreReverseProxyModule ancm;
+        ancm.setBackendTarget("/api/", "127.0.0.1:5000");
+
+        iis::um::HttpContext ctxAncm;
+        ctxAncm.request.rawUrl = "/api/v1/metrics";
+        ctxAncm.request.cookedFullUrl = L"http://+:80/api/v1/metrics";
+        ctxAncm.request.headers["Host"] = "app.local";
+
+        ancm.processStage(iis::um::PipelineStage::ExecuteRequestHandler, ctxAncm);
+        TEST_ASSERT(ctxAncm.responseCompleted, "AspNetCoreModuleV2 must handle and complete the response");
+        TEST_ASSERT(ctxAncm.response.headers["Server"] == "Kestrel", "Reverse proxy response Server header must be Kestrel");
+        TEST_ASSERT(ctxAncm.response.headers["X-Powered-By"].find("ASP.NET Core") != std::string::npos, "X-Powered-By must indicate ASP.NET Core");
+        std::string ancmJson(ctxAncm.response.entityBody.begin(), ctxAncm.response.entityBody.end());
+        TEST_ASSERT(ancmJson.find("\"upstream\":\"127.0.0.1:5000\"") != std::string::npos, "JSON payload must report upstream 127.0.0.1:5000");
+
+        // 3. HTTP Compression Module (Gzip RFC 1952)
+        iis::um::HttpCompressionModule compMod;
+        iis::um::HttpContext ctxComp;
+        ctxComp.request.headers["Accept-Encoding"] = "gzip, deflate, br";
+        ctxComp.response.headers["Content-Type"] = "text/html; charset=utf-8";
+        std::string uncompressedText(256, 'A'); // 256 bytes of 'A'
+        ctxComp.response.entityBody.assign(uncompressedText.begin(), uncompressedText.end());
+
+        compMod.processStage(iis::um::PipelineStage::SendResponse, ctxComp);
+        TEST_ASSERT(ctxComp.response.headers["Content-Encoding"] == "gzip", "Content-Encoding must be gzip");
+        TEST_ASSERT(ctxComp.response.headers["Vary"] == "Accept-Encoding", "Vary header must be Accept-Encoding");
+        TEST_ASSERT(ctxComp.response.entityBody.size() >= 10, "Gzip stream must have header and trailer");
+        TEST_ASSERT(ctxComp.response.entityBody[0] == 0x1F && ctxComp.response.entityBody[1] == 0x8B && ctxComp.response.entityBody[2] == 0x08,
+                    "Gzip stream must start with RFC 1952 magic bytes 0x1F, 0x8B, 0x08");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical appcmd.exe Command-Line Management CLI
+    // ------------------------------------------------------------------------
+    {
+        auto& appcmd = iis::appcmd::um::AppCmdCommandExecutor::Instance();
+        std::string out;
+
+        // 1. appcmd list site
+        int rc = appcmd.execute(std::vector<std::string_view>{"list", "site"}, out);
+        TEST_ASSERT(rc == 0, "appcmd list site must return 0");
+        TEST_ASSERT(out.find("SITE \"Default Web Site\"") != std::string::npos, "appcmd list site must output Default Web Site");
+        TEST_ASSERT(out.find("state:Started") != std::string::npos, "Default Web Site state must be Started");
+
+        // 2. appcmd list apppool
+        rc = appcmd.execute(std::vector<std::string_view>{"list", "apppool"}, out);
+        TEST_ASSERT(rc == 0, "appcmd list apppool must return 0");
+        TEST_ASSERT(out.find("APPPOOL \"DefaultAppPool\"") != std::string::npos, "appcmd list apppool must output DefaultAppPool");
+
+        // 3. appcmd list wp
+        rc = appcmd.execute(std::vector<std::string_view>{"list", "wp"}, out);
+        TEST_ASSERT(rc == 0, "appcmd list wp must return 0");
+        TEST_ASSERT(out.find("WP \"") != std::string::npos, "appcmd list wp must list worker processes");
+        TEST_ASSERT(out.find("apppool:DefaultAppPool") != std::string::npos, "Worker process must belong to DefaultAppPool");
+
+        // 4. appcmd add apppool
+        rc = appcmd.execute(std::vector<std::string_view>{"add", "apppool", "/name:EcommercePool", "/managedPipelineMode:Integrated", "/managedRuntimeVersion:v4.0"}, out);
+        TEST_ASSERT(rc == 0, "appcmd add apppool EcommercePool must succeed");
+        TEST_ASSERT(out.find("APPPOOL object \"EcommercePool\" added") != std::string::npos, "appcmd add apppool output confirmation");
+
+        // 5. appcmd add site
+        rc = appcmd.execute(std::vector<std::string_view>{"add", "site", "/name:EcommerceSite", "/id:2", "/bindings:http/*:8088:", "/physicalPath:C:\\inetpub\\ecommerce", "/appPool:EcommercePool"}, out);
+        TEST_ASSERT(rc == 0, "appcmd add site EcommerceSite must succeed");
+        TEST_ASSERT(out.find("SITE object \"EcommerceSite\" added") != std::string::npos, "appcmd add site output confirmation");
+
+        // Verify newly added site exists
+        rc = appcmd.execute(std::vector<std::string_view>{"list", "site", "EcommerceSite"}, out);
+        TEST_ASSERT(rc == 0 && out.find("SITE \"EcommerceSite\"") != std::string::npos, "appcmd list site EcommerceSite must list site");
+
+        // 6. appcmd stop site & start site
+        rc = appcmd.execute(std::vector<std::string_view>{"stop", "site", "EcommerceSite"}, out);
+        TEST_ASSERT(rc == 0 && out.find("\"EcommerceSite\" successfully stopped") != std::string::npos, "appcmd stop site must succeed");
+
+        rc = appcmd.execute(std::vector<std::string_view>{"start", "site", "EcommerceSite"}, out);
+        TEST_ASSERT(rc == 0 && out.find("\"EcommerceSite\" successfully started") != std::string::npos, "appcmd start site must succeed");
+
+        // 7. appcmd recycle apppool
+        rc = appcmd.execute(std::vector<std::string_view>{"recycle", "apppool", "EcommercePool"}, out);
+        TEST_ASSERT(rc == 0 && out.find("\"EcommercePool\" successfully recycled") != std::string::npos, "appcmd recycle apppool must succeed");
+
+        // 8. appcmd list config
+        rc = appcmd.execute(std::vector<std::string_view>{"list", "config", "system.webServer/defaultDocument"}, out);
+        TEST_ASSERT(rc == 0 && out.find("<system.webServer/defaultDocument>") != std::string::npos, "appcmd list config must succeed");
+
+        // 9. appcmd delete site & apppool
+        rc = appcmd.execute(std::vector<std::string_view>{"delete", "site", "EcommerceSite"}, out);
+        TEST_ASSERT(rc == 0 && out.find("SITE object \"EcommerceSite\" deleted") != std::string::npos, "appcmd delete site must succeed");
+
+        rc = appcmd.execute(std::vector<std::string_view>{"delete", "apppool", "EcommercePool"}, out);
+        TEST_ASSERT(rc == 0 && out.find("APPPOOL object \"EcommercePool\" deleted") != std::string::npos, "appcmd delete apppool must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Remote Terminal Integration & Live Telemetry Push Stream
+    // ------------------------------------------------------------------------
+    {
+        auto& console = km::net::HttpsExecutiveConsole::get();
+
+        // 1. Remote web terminal command execution: "appcmd list site"
+        std::string termSite = console.executeTerminalCommand("appcmd list site");
+        TEST_ASSERT(termSite.find("SITE \"Default Web Site\"") != std::string::npos, "Terminal execution of 'appcmd list site' must list Default Web Site");
+
+        // 2. Remote web terminal command execution: "appcmd list apppool"
+        std::string termPool = console.executeTerminalCommand("appcmd list apppool");
+        TEST_ASSERT(termPool.find("APPPOOL \"DefaultAppPool\"") != std::string::npos, "Terminal execution of 'appcmd list apppool' must list DefaultAppPool");
+
+        // 3. Remote web terminal command execution: "appcmd list wp"
+        std::string termWp = console.executeTerminalCommand("appcmd list wp");
+        TEST_ASSERT(termWp.find("WP \"") != std::string::npos, "Terminal execution of 'appcmd list wp' must list worker processes");
+
+        // 4. Live Telemetry Push Stream contains IIS metrics
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"iis_sites\":") != std::string::npos, "Telemetry JSON must contain iis_sites");
+        TEST_ASSERT(teleJson.find("\"iis_apppools\":") != std::string::npos, "Telemetry JSON must contain iis_apppools");
+        TEST_ASSERT(teleJson.find("\"iis_workers\":") != std::string::npos, "Telemetry JSON must contain iis_workers");
+        TEST_ASSERT(teleJson.find("\"iis_requests_served\":") != std::string::npos, "Telemetry JSON must contain iis_requests_served");
+    }
+
+    std::cout << "[HORIZON 160] Sovereign IIS 10.x Core Subsystem, WAS Process Model, w3wp.exe Worker Engine & Canonical appcmd.exe CLI Summary:\n"
+              << "    Pillar 1: WAS & HTTP.sys Kernel Request Queue Multiplexing OK\n"
+              << "    Pillar 2: w3wp.exe Worker Process Lifecycle, Rapid-Fail Protection & Recycling OK\n"
+              << "    Pillar 3: 11-Stage Native HTTP Module Pipeline & Static File Servicing OK\n"
+              << "    Pillar 4: URL Rewrite 2.1 & ASP.NET Core Kestrel Gateway Reverse Proxy OK\n"
+              << "    Pillar 5: Canonical appcmd.exe Command-Line Management CLI OK\n"
+              << "    Pillar 6: Remote Terminal Integration & Live Telemetry Push Stream OK\n";
+
+    std::cout << "[TEST] Suite 376: Horizon 160 - Sovereign IIS 10.x Core Subsystem, WAS Process Model, w3wp.exe Worker Engine & Canonical appcmd.exe CLI PASSED." << std::endl;
+}

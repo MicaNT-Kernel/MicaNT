@@ -31,6 +31,8 @@
 #include "micant/um/subsystems/net/mstsc.hpp"
 #include "micant/km/drivers/net/http.hpp"
 #include "micant/um/subsystems/net/netsh_http.hpp"
+#include "micant/um/servers/iis_was.hpp"
+#include "micant/um/subsystems/net/appcmd.hpp"
 
 namespace micant::km::net {
 
@@ -477,6 +479,23 @@ public:
             std::string res;
             netsh::um::NetshHttpCommandExecutor::Instance().execute(subArgs, res);
             return res;
+        } else if (cmd == "appcmd" || cmd.starts_with("appcmd ")) {
+            std::vector<std::string_view> tokens;
+            size_t pos = 0;
+            while (pos < cmd.size()) {
+                while (pos < cmd.size() && cmd[pos] == ' ') pos++;
+                if (pos >= cmd.size()) break;
+                size_t start = pos;
+                while (pos < cmd.size() && cmd[pos] != ' ') pos++;
+                tokens.push_back(cmd.substr(start, pos - start));
+            }
+            std::span<const std::string_view> subArgs;
+            if (tokens.size() > 1) {
+                subArgs = std::span<const std::string_view>(tokens.data() + 1, tokens.size() - 1);
+            }
+            std::string res;
+            iis::appcmd::um::AppCmdCommandExecutor::Instance().execute(subArgs, res);
+            return res;
         } else if (cmd == "help") {
             return "MicaNT Sovereign Remote Terminal Commands:\r\n"
                    "  ver      Display operating system version and build\r\n"
@@ -490,6 +509,7 @@ public:
                    "  reset session <id>    Disconnect or logoff terminal session\r\n"
                    "  mstsc [/v:host]       Remote Desktop Connection client\r\n"
                    "  netsh http show ...   Manage HTTP.sys URL ACLs, request queues and cache\r\n"
+                   "  appcmd list ...       Manage IIS 10 websites, app pools, workers and config\r\n"
                    "  wfp      Display Windows Filtering Platform statistics\r\n"
                    "  help     Show this command summary\r\n";
         } else if (cmd.empty()) {
@@ -503,6 +523,7 @@ public:
         auto& smbSrv = smb::km::SmbServerEngine::Instance();
         auto& rdpSrv = rdp::EnterpriseRdpServer::get();
         auto& httpDrv = km::http::HttpKernelProtocolDriver::Instance();
+        auto& was = iis::um::WindowsProcessActivationService::Instance();
         std::ostringstream ss;
         ss << "{\"event\":\"telemetry\",\"cpu_percent\":1.4,\"ram_used_mb\":4096,"
            << "\"ram_total_mb\":32768,\"rx_packets\":14820,\"tx_packets\":12950,"
@@ -518,7 +539,11 @@ public:
            << "\"http_cache_hits\":" << httpDrv.getCacheHits() << ","
            << "\"http_cache_misses\":" << httpDrv.getCacheMisses() << ","
            << "\"http_queues\":" << httpDrv.getActiveQueuesCount() << ","
-           << "\"http_url_groups\":" << httpDrv.getActiveUrlGroupsCount() << "}\r\n";
+           << "\"http_url_groups\":" << httpDrv.getActiveUrlGroupsCount() << ","
+           << "\"iis_sites\":" << was.getAllSites().size() << ","
+           << "\"iis_apppools\":" << was.getAllAppPools().size() << ","
+           << "\"iis_workers\":" << was.getWorkers().size() << ","
+           << "\"iis_requests_served\":" << was.getTotalRequestsServed() << "}\r\n";
         return ss.str();
     }
 
