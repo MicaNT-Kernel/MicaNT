@@ -427,6 +427,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite388") {
+        RUN_TEST(Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite387") {
         RUN_TEST(Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI);
         return g_FailedTests;
@@ -1914,6 +1918,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI);
     RUN_TEST(Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI);
     RUN_TEST(Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI);
+    RUN_TEST(Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

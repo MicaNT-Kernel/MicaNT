@@ -56,6 +56,8 @@
 #include "micant/um/servers/clustering.hpp"
 #include "micant/km/drivers/fs/csvfs.hpp"
 #include "micant/um/subsystems/net/cluster_cmd.hpp"
+#include "micant/km/drivers/net/nlb.hpp"
+#include "micant/um/subsystems/net/nlb_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -247,6 +249,19 @@ public:
         clusRule.weight = 1500;
         clusRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(clusRule);
+
+        // 15. Register WFP Inbound Rule for Network Load Balancing (NLB Remote Control 2504 UDP & Heartbeat)
+        wfp::km::WfpKernelFilterRule nlbRule{};
+        nlbRule.filterId = 17201;
+        nlbRule.name = "MicaNT_NLB_Cluster_Inbound_Permit";
+        nlbRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        nlbRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        nlbRule.protocol = tcpip::IPPROTO_UDP;
+        nlbRule.localPortStart = 2504;
+        nlbRule.localPortEnd = 2504;
+        nlbRule.weight = 1500;
+        nlbRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(nlbRule);
     }
 
     void stopHttpsServer() {
@@ -621,6 +636,10 @@ public:
             std::string res;
             cluster_cmd::um::ExecuteClusterString(cmd, res);
             return res;
+        } else if (cmd == "nlb" || cmd.starts_with("nlb ")) {
+            std::string res;
+            nlb_cmd::um::ExecuteNlbString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -842,7 +861,19 @@ public:
            << "\"clus_active_groups\":" << micant::cluster::FailoverClusterSubsystem::get().getAllGroups().size() << ","
            << "\"clus_heartbeats_sent\":" << micant::cluster::FailoverClusterSubsystem::get().getHeartbeatCount() << ","
            << "\"clus_failover_events\":" << micant::cluster::FailoverClusterSubsystem::get().getGroupsMigratedCount() << ","
-           << "\"clus_csv_volumes\":" << micant::csvfs::CsvfsSubsystem::get().getAllVolumes().size() << "}\r\n";
+           << "\"clus_csv_volumes\":" << micant::csvfs::CsvfsSubsystem::get().getAllVolumes().size() << ","
+           << "\"nlb_clusters_active\":1,"
+           << "\"nlb_nodes_converged\":" << [&]() -> uint32_t {
+               uint32_t count = 0;
+               for (const auto& h : micant::nlb::NetworkLoadBalancingSubsystem::get().getAllHosts()) {
+                   if (h.state == micant::nlb::NlbHostState::Converged) count++;
+               }
+               return count;
+           }() << ","
+           << "\"nlb_convergence_state\":\"" << micant::nlb::NlbConvergenceStateToString(micant::nlb::NetworkLoadBalancingSubsystem::get().getConvergenceState()) << "\","
+           << "\"nlb_heartbeats_sent\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getHeartbeatCount() << ","
+           << "\"nlb_packets_filtered\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getPacketsFilteredCount() << ","
+           << "\"nlb_active_connections\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getTotalActiveConnections() << "}\r\n";
         return ss.str();
     }
 

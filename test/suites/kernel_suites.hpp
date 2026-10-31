@@ -32161,3 +32161,364 @@ inline void Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI(
 
     std::cout << "[TEST] Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC) PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB / MS-NLB),
+// Cluster Protocol, Unicast/Multicast Heartbeat Convergence, Port Rules & Canonical nlb.exe CLI
+// ============================================================================
+inline void Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB),\n"
+              << "Heartbeat Convergence, Client Affinity & Canonical nlb.exe / nlbmgr.exe CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::nlb::RegisterNlbSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. NLB Driver (nlb.sys)
+        auto nlbDrv = scm.getServiceRecord(L"NLB");
+        TEST_ASSERT(nlbDrv != nullptr, "NLB driver must be registered in SCM");
+        TEST_ASSERT(nlbDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "NLB driver must be running");
+        TEST_ASSERT(nlbDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "NLB must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(nlbDrv->startType == micant::scm::SERVICE_SYSTEM_START, "NLB start type must be SYSTEM_START");
+        TEST_ASSERT(nlbDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\nlb.sys", "NLB driver binary path parity");
+
+        // 2. NlbSvc Service
+        auto nlbSvc = scm.getServiceRecord(L"NlbSvc");
+        TEST_ASSERT(nlbSvc != nullptr, "NlbSvc service must be registered in SCM");
+        TEST_ASSERT(nlbSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "NlbSvc must be running");
+        TEST_ASSERT(nlbSvc->startType == micant::scm::SERVICE_AUTO_START, "NlbSvc start type must be AUTO_START");
+
+        // 3. VersionDatabase PE Modules Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> expectedModules = {
+            "nlb.exe", "nlbmgr.exe", "nlb.sys", "wlbs.dll", "wlbsctrl.dll"
+        };
+        for (const auto& mod : expectedModules) {
+            auto* info = vdb.FindModule(mod);
+            TEST_ASSERT(info != nullptr, ("Module " + mod + " must be registered in VersionDatabase").c_str());
+            TEST_ASSERT(info->stringTable.at("FileVersion") == "10.0.26100.1", ("Module " + mod + " version must be 10.0.26100.1").c_str());
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: MS-NLB Heartbeat Protocol & Convergence State Machine
+    // ------------------------------------------------------------------------
+    {
+        auto& nlbSys = micant::nlb::NetworkLoadBalancingSubsystem::get();
+        nlbSys.reset();
+        TEST_ASSERT(nlbSys.isInitialized(), "NLB subsystem must be initialized");
+        TEST_ASSERT(nlbSys.getHostCount() == 3, "Initial NLB cluster must contain 3 hosts");
+
+        auto* h1 = nlbSys.getHost(1);
+        auto* h2 = nlbSys.getHost(2);
+        auto* h3 = nlbSys.getHost(3);
+        TEST_ASSERT(h1 && h2 && h3, "Hosts 1, 2, and 3 must exist");
+        TEST_ASSERT(h1->isDefaultHost, "Host 1 must be designated default host");
+        TEST_ASSERT(h1->state == micant::nlb::NlbHostState::Converged, "Host 1 must be Converged");
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Converged, "Host 2 must be Converged");
+        TEST_ASSERT(h3->state == micant::nlb::NlbHostState::Converged, "Host 3 must be Converged");
+
+        TEST_ASSERT(nlbSys.getConvergenceState() == micant::nlb::NlbConvergenceState::Stable, "Cluster convergence state must be Stable");
+        uint32_t initEpoch = nlbSys.getConvergenceEpoch();
+        TEST_ASSERT(initEpoch >= 1, "Initial convergence epoch must be >= 1");
+
+        // Transmit inter-host heartbeats
+        uint64_t hbBefore = nlbSys.getHeartbeatCount();
+        bool hb1 = nlbSys.sendHeartbeat(1);
+        bool hb2 = nlbSys.sendHeartbeat(2);
+        bool hb3 = nlbSys.sendHeartbeat(3);
+        TEST_ASSERT(hb1 && hb2 && hb3, "Transmitting heartbeats from all 3 hosts must succeed");
+        TEST_ASSERT(nlbSys.getHeartbeatCount() == hbBefore + 3, "Heartbeat counter must increment by 3");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic Inter-Host Fault Detection & Re-Convergence upon Dropout
+    // ------------------------------------------------------------------------
+    {
+        auto& nlbSys = micant::nlb::NetworkLoadBalancingSubsystem::get();
+        nlbSys.reset();
+
+        uint32_t epoch1 = nlbSys.getConvergenceEpoch();
+
+        // Simulate host 3 missing heartbeats (heartbeat timeout)
+        nlbSys.injectHeartbeatTimeout(3);
+        auto* h3 = nlbSys.getHost(3);
+        TEST_ASSERT(h3 != nullptr, "Host 3 must exist");
+        TEST_ASSERT(h3->state == micant::nlb::NlbHostState::Stopped, "Host 3 must transition to Stopped after timeout");
+        TEST_ASSERT(h3->missedHeartbeats > 5, "Host 3 missed heartbeats must exceed threshold");
+        TEST_ASSERT(nlbSys.getConvergenceState() == micant::nlb::NlbConvergenceState::Degraded, "Cluster state must become Degraded");
+        TEST_ASSERT(nlbSys.getConvergenceEpoch() > epoch1, "Convergence epoch must advance upon membership change");
+
+        // Surviving hosts remain Converged
+        auto* h1 = nlbSys.getHost(1);
+        auto* h2 = nlbSys.getHost(2);
+        TEST_ASSERT(h1->state == micant::nlb::NlbHostState::Converged, "Host 1 remains Converged");
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Converged, "Host 2 remains Converged");
+
+        // Host 3 recovers and rejoins the cluster
+        uint32_t epoch2 = nlbSys.getConvergenceEpoch();
+        bool startOk = nlbSys.startHost(3);
+        TEST_ASSERT(startOk, "Starting Host 3 must succeed");
+        TEST_ASSERT(h3->state == micant::nlb::NlbHostState::Converged, "Host 3 must be Converged again");
+        TEST_ASSERT(nlbSys.getConvergenceState() == micant::nlb::NlbConvergenceState::Stable, "Cluster returns to Stable convergence");
+        TEST_ASSERT(nlbSys.getConvergenceEpoch() > epoch2, "Convergence epoch must advance upon host rejoin");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Consistent Hashing Traffic Distribution & Client Affinity
+    // ------------------------------------------------------------------------
+    {
+        auto& nlbSys = micant::nlb::NetworkLoadBalancingSubsystem::get();
+        nlbSys.reset();
+
+        // 1. None Affinity (Client Port included in hash): different client ports can map to different hosts
+        uint32_t clientIp = 0x0A000032; // 10.0.0.50
+        uint32_t hostP1 = 0, hostP2 = 0;
+        nlbSys.filterIncomingPacket(clientIp, 1024, 53, micant::nlb::NlbProtocol::Udp, 1, &hostP1);
+        nlbSys.filterIncomingPacket(clientIp, 45000, 53, micant::nlb::NlbProtocol::Udp, 1, &hostP2);
+        TEST_ASSERT(hostP1 >= 1 && hostP1 <= 3, "Assigned host for port 1024 must be valid");
+        TEST_ASSERT(hostP2 >= 1 && hostP2 <= 3, "Assigned host for port 45000 must be valid");
+
+        // 2. Single IP Affinity: All requests from same client IP MUST map to the SAME host regardless of client port
+        uint32_t singleHost1 = 0, singleHost2 = 0, singleHost3 = 0;
+        nlbSys.filterIncomingPacket(clientIp, 1111, 80, micant::nlb::NlbProtocol::Tcp, 1, &singleHost1);
+        nlbSys.filterIncomingPacket(clientIp, 2222, 80, micant::nlb::NlbProtocol::Tcp, 1, &singleHost2);
+        nlbSys.filterIncomingPacket(clientIp, 3333, 80, micant::nlb::NlbProtocol::Tcp, 1, &singleHost3);
+        TEST_ASSERT(singleHost1 == singleHost2 && singleHost2 == singleHost3,
+                    "Single IP affinity must map all connections from the same client IP to the identical host");
+
+        // 3. Class C /24 Network Affinity: Requests from different IPs in same /24 subnet MUST map to identical host
+        uint32_t netIp1 = 0xC0A8320A; // 192.168.50.10
+        uint32_t netIp2 = 0xC0A8325A; // 192.168.50.90
+        uint32_t netIp3 = 0xC0A832FE; // 192.168.50.254
+
+        // Add a port rule with Network affinity
+        micant::nlb::NlbPortRule rNet{};
+        rNet.ruleName = "VPN-SubnetAffinity";
+        rNet.virtualIp = "All";
+        rNet.startPort = 1194;
+        rNet.endPort = 1194;
+        rNet.protocol = micant::nlb::NlbProtocol::Udp;
+        rNet.filteringMode = micant::nlb::NlbFilteringMode::MultipleHosts;
+        rNet.affinity = micant::nlb::NlbAffinity::Network;
+        rNet.loadWeight = 50;
+        nlbSys.addPortRule(rNet);
+
+        uint32_t netHost1 = 0, netHost2 = 0, netHost3 = 0;
+        nlbSys.filterIncomingPacket(netIp1, 5000, 1194, micant::nlb::NlbProtocol::Udp, 1, &netHost1);
+        nlbSys.filterIncomingPacket(netIp2, 5001, 1194, micant::nlb::NlbProtocol::Udp, 1, &netHost2);
+        nlbSys.filterIncomingPacket(netIp3, 5002, 1194, micant::nlb::NlbProtocol::Udp, 1, &netHost3);
+        TEST_ASSERT(netHost1 == netHost2 && netHost2 == netHost3,
+                    "Class C /24 Network affinity must map all IPs within 192.168.50.0/24 to the identical host");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Port Rules Engine (Multiple Hosts, Single Host Priority, Disabled)
+    // ------------------------------------------------------------------------
+    {
+        auto& nlbSys = micant::nlb::NetworkLoadBalancingSubsystem::get();
+        nlbSys.reset();
+
+        // 1. Multiple Hosts Mode (HTTP 80)
+        uint32_t targetHost = 0;
+        nlbSys.filterIncomingPacket(0x0A000001, 2000, 80, micant::nlb::NlbProtocol::Tcp, 1, &targetHost);
+        TEST_ASSERT(targetHost >= 1 && targetHost <= 3, "Target host must be valid cluster host");
+
+        // Evaluating host == targetHost -> Accept; other hosts -> Drop
+        auto actTarget = nlbSys.filterIncomingPacket(0x0A000001, 2000, 80, micant::nlb::NlbProtocol::Tcp, targetHost);
+        TEST_ASSERT(actTarget == micant::nlb::NlbFilterAction::Accept, "Assigned host must accept packet");
+
+        uint32_t otherHost = (targetHost == 1) ? 2 : 1;
+        auto actOther = nlbSys.filterIncomingPacket(0x0A000001, 2000, 80, micant::nlb::NlbProtocol::Tcp, otherHost);
+        TEST_ASSERT(actOther == micant::nlb::NlbFilterAction::Drop, "Non-assigned host must drop packet");
+
+        // 2. Single Host Mode (RDP 3389, Handling Priority 1)
+        uint32_t rdpTarget = 0;
+        auto actRdp1 = nlbSys.filterIncomingPacket(0x0A000002, 3000, 3389, micant::nlb::NlbProtocol::Tcp, 1, &rdpTarget);
+        TEST_ASSERT(rdpTarget == 1, "Single Host rule with priority 1 must always assign to Host 1");
+        TEST_ASSERT(actRdp1 == micant::nlb::NlbFilterAction::Accept, "Host 1 must accept RDP packet");
+
+        auto actRdp2 = nlbSys.filterIncomingPacket(0x0A000002, 3000, 3389, micant::nlb::NlbProtocol::Tcp, 2);
+        auto actRdp3 = nlbSys.filterIncomingPacket(0x0A000002, 3000, 3389, micant::nlb::NlbProtocol::Tcp, 3);
+        TEST_ASSERT(actRdp2 == micant::nlb::NlbFilterAction::Drop, "Host 2 must drop RDP packet");
+        TEST_ASSERT(actRdp3 == micant::nlb::NlbFilterAction::Drop, "Host 3 must drop RDP packet");
+
+        // 3. Disabled / Fenced Port Rule
+        bool disOk = nlbSys.setPortRuleEnabled(80, false);
+        TEST_ASSERT(disOk, "Disabling port rule 80 must succeed");
+
+        auto actDis1 = nlbSys.filterIncomingPacket(0x0A000003, 4000, 80, micant::nlb::NlbProtocol::Tcp, 1);
+        auto actDis2 = nlbSys.filterIncomingPacket(0x0A000003, 4000, 80, micant::nlb::NlbProtocol::Tcp, 2);
+        auto actDis3 = nlbSys.filterIncomingPacket(0x0A000003, 4000, 80, micant::nlb::NlbProtocol::Tcp, 3);
+        TEST_ASSERT(actDis1 == micant::nlb::NlbFilterAction::Drop &&
+                    actDis2 == micant::nlb::NlbFilterAction::Drop &&
+                    actDis3 == micant::nlb::NlbFilterAction::Drop,
+                    "Disabled port rule must drop traffic on all cluster hosts");
+
+        nlbSys.setPortRuleEnabled(80, true);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Connection State Tracking & Graceful Draining Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        auto& nlbSys = micant::nlb::NetworkLoadBalancingSubsystem::get();
+        nlbSys.reset();
+
+        auto* h2 = nlbSys.getHost(2);
+        TEST_ASSERT(h2 != nullptr, "Host 2 must exist");
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Converged, "Host 2 initially Converged");
+        TEST_ASSERT(h2->activeConnections > 0, "Host 2 has active connections");
+
+        // Initiate Draining on Host 2
+        bool drainOk = nlbSys.drainHost(2);
+        TEST_ASSERT(drainOk, "Draining Host 2 must succeed");
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Draining, "Host 2 state must be Draining");
+
+        // In Draining state, new connections must NEVER be assigned to Host 2
+        for (uint32_t i = 0; i < 50; ++i) {
+            uint32_t chosenHost = 0;
+            nlbSys.filterIncomingPacket(0x0A000100 + i, 1024 + static_cast<uint16_t>(i), 80,
+                                        micant::nlb::NlbProtocol::Tcp, 1, &chosenHost);
+            TEST_ASSERT(chosenHost != 2, "Draining host must never be assigned new incoming connections");
+        }
+
+        // Active connections drain to completion
+        uint32_t remaining = h2->activeConnections;
+        nlbSys.recordConnection(2, -static_cast<int32_t>(remaining));
+        TEST_ASSERT(h2->activeConnections == 0, "Host 2 active connections must reach 0");
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Stopped, "Host 2 must transition to Stopped after drain completes");
+
+        // Resume Host 2
+        nlbSys.startHost(2);
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Converged, "Host 2 returns to Converged upon start");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 nlb.exe Management CLI Utility, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& nlbSys = micant::nlb::NetworkLoadBalancingSubsystem::get();
+        nlbSys.reset();
+
+        std::string out;
+
+        // 1. nlb /help
+        micant::nlb_cmd::um::ExecuteNlbString("nlb /help", out);
+        TEST_ASSERT(out.find("nlb.exe 10.0.26100.1") != std::string::npos, "Help contains nlb.exe version");
+        TEST_ASSERT(out.find("query") != std::string::npos, "Help contains query command");
+        TEST_ASSERT(out.find("drain") != std::string::npos, "Help contains drain command");
+        TEST_ASSERT(out.find("params") != std::string::npos, "Help contains params command");
+
+        // 2. nlb status
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb status", out);
+        TEST_ASSERT(out.find("NLB 10.0.26100.1") != std::string::npos, "Status contains header");
+        TEST_ASSERT(out.find("Converged (Stable)") != std::string::npos, "Status reports Stable convergence");
+        TEST_ASSERT(out.find("3 / 3 Converged") != std::string::npos, "Status reports 3/3 converged hosts");
+
+        // 3. nlb query
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb query", out);
+        TEST_ASSERT(out.find("192.168.1.100") != std::string::npos, "Query reports virtual IP");
+        TEST_ASSERT(out.find("TITAN-NLB-01") != std::string::npos, "Query reports host 1");
+        TEST_ASSERT(out.find("TITAN-NLB-02") != std::string::npos, "Query reports host 2");
+        TEST_ASSERT(out.find("Default Host") != std::string::npos, "Query reports default host");
+
+        // 4. nlb stop & start
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb stop 3", out);
+        TEST_ASSERT(out.find("STOPPED on host 3") != std::string::npos, "Stop host 3 confirmation");
+        auto* h3 = nlbSys.getHost(3);
+        TEST_ASSERT(h3->state == micant::nlb::NlbHostState::Stopped, "Host 3 is Stopped");
+
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb start 3", out);
+        TEST_ASSERT(out.find("STARTED on host 3") != std::string::npos, "Start host 3 confirmation");
+        TEST_ASSERT(h3->state == micant::nlb::NlbHostState::Converged, "Host 3 is Converged");
+
+        // 5. nlb drain & drainstop
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb drain 2", out);
+        TEST_ASSERT(out.find("entered DRAINING state") != std::string::npos, "Drain host 2 confirmation");
+        auto* h2 = nlbSys.getHost(2);
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Draining, "Host 2 is Draining");
+
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb drainstop 2", out);
+        TEST_ASSERT(out.find("successfully drained and STOPPED") != std::string::npos, "Drainstop confirmation");
+        TEST_ASSERT(h2->state == micant::nlb::NlbHostState::Stopped, "Host 2 is Stopped after drainstop");
+        nlbSys.startHost(2);
+
+        // 6. nlb suspend & resume
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb suspend 1", out);
+        TEST_ASSERT(out.find("SUSPENDED on host 1") != std::string::npos, "Suspend host 1 confirmation");
+        auto* h1 = nlbSys.getHost(1);
+        TEST_ASSERT(h1->state == micant::nlb::NlbHostState::Suspended, "Host 1 is Suspended");
+
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb resume 1", out);
+        TEST_ASSERT(out.find("RESUMED on host 1") != std::string::npos, "Resume host 1 confirmation");
+        TEST_ASSERT(h1->state == micant::nlb::NlbHostState::Converged, "Host 1 is Converged");
+
+        // 7. nlb disable & enable port rule
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb disable cluster 443", out);
+        TEST_ASSERT(out.find("DISABLED") != std::string::npos, "Disable port 443 confirmation");
+
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb enable cluster 443", out);
+        TEST_ASSERT(out.find("ENABLED") != std::string::npos, "Enable port 443 confirmation");
+
+        // 8. nlb params
+        out.clear();
+        micant::nlb_cmd::um::ExecuteNlbString("nlb params", out);
+        TEST_ASSERT(out.find("TitanNlbCluster") != std::string::npos, "Params contains cluster name");
+        TEST_ASSERT(out.find("HTTP-WebServices") != std::string::npos, "Params contains HTTP rule");
+        TEST_ASSERT(out.find("HTTPS-SecureWeb") != std::string::npos, "Params contains HTTPS rule");
+        TEST_ASSERT(out.find("DNS-QueryPool") != std::string::npos, "Params contains DNS rule");
+        TEST_ASSERT(out.find("RDP-AdminConsole") != std::string::npos, "Params contains RDP rule");
+
+        // 9. Remote Executive Console & Web Terminal
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termRes = console.executeTerminalCommand("nlb status");
+        TEST_ASSERT(termRes.find("Network Load Balancing Status") != std::string::npos, "Web terminal nlb status match");
+
+        // 10. WFP Inbound Rule #17201 (MicaNT_NLB_Cluster_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto nlbRuleOpt = wfp.findRuleById(17201);
+        TEST_ASSERT(nlbRuleOpt.has_value(), "WFP Rule #17201 for NLB must be registered");
+        TEST_ASSERT(nlbRuleOpt->protocol == tcpip::IPPROTO_UDP, "NLB remote control rule protocol must be UDP");
+        TEST_ASSERT(nlbRuleOpt->localPortStart == 2504 && nlbRuleOpt->localPortEnd == 2504, "NLB port 2504");
+        TEST_ASSERT(nlbRuleOpt->action == wfp::FWP_ACTION_PERMIT, "NLB rule action must be PERMIT");
+
+        // 11. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"nlb_clusters_active\":") != std::string::npos, "Telemetry nlb_clusters_active");
+        TEST_ASSERT(teleJson.find("\"nlb_nodes_converged\":") != std::string::npos, "Telemetry nlb_nodes_converged");
+        TEST_ASSERT(teleJson.find("\"nlb_convergence_state\":") != std::string::npos, "Telemetry nlb_convergence_state");
+        TEST_ASSERT(teleJson.find("\"nlb_heartbeats_sent\":") != std::string::npos, "Telemetry nlb_heartbeats_sent");
+        TEST_ASSERT(teleJson.find("\"nlb_packets_filtered\":") != std::string::npos, "Telemetry nlb_packets_filtered");
+        TEST_ASSERT(teleJson.find("\"nlb_active_connections\":") != std::string::npos, "Telemetry nlb_active_connections");
+    }
+
+    std::cout << "[HORIZON 172] Sovereign Windows Server Network Load Balancing (NLB / MS-NLB) Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: MS-NLB Heartbeat Protocol & Convergence State Machine OK\n"
+              << "    Pillar 3: Dynamic Inter-Host Fault Detection & Re-Convergence upon Dropout OK\n"
+              << "    Pillar 4: Consistent Hashing Traffic Distribution & Client Affinity OK\n"
+              << "    Pillar 5: Port Rules Engine (Multiple Hosts, Single Host Priority, Disabled) OK\n"
+              << "    Pillar 6: Connection State Tracking & Graceful Draining Lifecycle OK\n"
+              << "    Pillar 7: Canonical Win32 nlb.exe Management CLI Utility, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB) PASSED." << std::endl;
+}
