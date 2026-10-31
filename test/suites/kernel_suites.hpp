@@ -32522,3 +32522,371 @@ inline void Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI()
 
     std::cout << "[TEST] Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB) PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Horizon 173 (Suite 389): Sovereign Windows Server Storage Spaces Direct (S2D)
+// Software-Defined Clustered Storage, Clustered Pools (spaceport.sys / s2d.sys),
+// Multi-Tier NVMe Cache & Capacity Tiering, Mirror / Parity Resiliency &
+// Canonical storagespaces.exe / storagediag.exe CLI
+// ============================================================================
+inline void Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpacesCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 389: Horizon 173 - Sovereign Windows Server Storage Spaces Direct (S2D),\n"
+              << "Software-Defined Clustered Storage, NVMe Caching & storagespaces.exe CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::s2d::RegisterStorageSpacesSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. Storage Spaces Port Driver (spaceport.sys)
+        auto spaceportDrv = scm.getServiceRecord(L"Spaceport");
+        TEST_ASSERT(spaceportDrv != nullptr, "Spaceport driver must be registered in SCM");
+        TEST_ASSERT(spaceportDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Spaceport must be running");
+        TEST_ASSERT(spaceportDrv->serviceType == micant::scm::SERVICE_FILE_SYSTEM_DRIVER, "Spaceport must be SERVICE_FILE_SYSTEM_DRIVER");
+        TEST_ASSERT(spaceportDrv->startType == micant::scm::SERVICE_BOOT_START, "Spaceport must be BOOT_START");
+        TEST_ASSERT(spaceportDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\spaceport.sys", "Spaceport binary path parity");
+
+        // 2. Storage Spaces Direct Driver (s2d.sys)
+        auto s2dDrv = scm.getServiceRecord(L"S2D");
+        TEST_ASSERT(s2dDrv != nullptr, "S2D driver must be registered in SCM");
+        TEST_ASSERT(s2dDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "S2D must be running");
+        TEST_ASSERT(s2dDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "S2D must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(s2dDrv->startType == micant::scm::SERVICE_SYSTEM_START, "S2D must be SYSTEM_START");
+        TEST_ASSERT(s2dDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\s2d.sys", "S2D binary path parity");
+
+        // 3. Storage Health Service (StorageHealthSvc)
+        auto healthSvc = scm.getServiceRecord(L"StorageHealthSvc");
+        TEST_ASSERT(healthSvc != nullptr, "StorageHealthSvc must be registered in SCM");
+        TEST_ASSERT(healthSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "StorageHealthSvc must be running");
+        TEST_ASSERT(healthSvc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "StorageHealthSvc must be SERVICE_WIN32_SHARE_PROCESS");
+        TEST_ASSERT(healthSvc->startType == micant::scm::SERVICE_AUTO_START, "StorageHealthSvc must be AUTO_START");
+        TEST_ASSERT(healthSvc->binaryPath == L"C:\\Windows\\System32\\svchost.exe -k netsvcs", "StorageHealthSvc binary path parity");
+
+        // 4. VersionDatabase Module Registrations @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* spInfo = vdb.GetModuleInfo("spaceport.sys");
+        TEST_ASSERT(spInfo != nullptr && spInfo->stringTable.at("FileVersion") == "10.0.26100.1", "spaceport.sys VersionDatabase parity");
+
+        const auto* s2dInfo = vdb.GetModuleInfo("s2d.sys");
+        TEST_ASSERT(s2dInfo != nullptr && s2dInfo->stringTable.at("FileVersion") == "10.0.26100.1", "s2d.sys VersionDatabase parity");
+
+        const auto* ssDll = vdb.GetModuleInfo("storagespaces.dll");
+        TEST_ASSERT(ssDll != nullptr && ssDll->stringTable.at("FileVersion") == "10.0.26100.1", "storagespaces.dll VersionDatabase parity");
+
+        const auto* ssExe = vdb.GetModuleInfo("storagespaces.exe");
+        TEST_ASSERT(ssExe != nullptr && ssExe->stringTable.at("FileVersion") == "10.0.26100.1", "storagespaces.exe VersionDatabase parity");
+
+        const auto* sdExe = vdb.GetModuleInfo("storagediag.exe");
+        TEST_ASSERT(sdExe != nullptr && sdExe->stringTable.at("FileVersion") == "10.0.26100.1", "storagediag.exe VersionDatabase parity");
+
+        const auto* smDll = vdb.GetModuleInfo("StorageManagement.dll");
+        TEST_ASSERT(smDll != nullptr && smDll->stringTable.at("FileVersion") == "10.0.26100.1", "StorageManagement.dll VersionDatabase parity");
+
+        const auto* shDll = vdb.GetModuleInfo("StorageHealth.dll");
+        TEST_ASSERT(shDll != nullptr && shDll->stringTable.at("FileVersion") == "10.0.26100.1", "StorageHealth.dll VersionDatabase parity");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Clustered Storage Pool Aggregation & Fault Domain Architecture
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::s2d::StorageSpacesSubsystem::get();
+        sys.reset();
+
+        // 1. Verify 4 Cluster Nodes organized across 2 Racks
+        auto nodes = sys.getAllNodes();
+        TEST_ASSERT(nodes.size() == 4, "Must have 4 cluster nodes");
+        TEST_ASSERT(nodes[0].nodeId == "NODE-01" && nodes[0].rackId == "Rack-A", "NODE-01 in Rack-A");
+        TEST_ASSERT(nodes[1].nodeId == "NODE-02" && nodes[1].rackId == "Rack-A", "NODE-02 in Rack-A");
+        TEST_ASSERT(nodes[2].nodeId == "NODE-03" && nodes[2].rackId == "Rack-B", "NODE-03 in Rack-B");
+        TEST_ASSERT(nodes[3].nodeId == "NODE-04" && nodes[3].rackId == "Rack-B", "NODE-04 in Rack-B");
+
+        // 2. Verify Storage Pool 1 ("S2D on Cluster01")
+        auto pool = sys.getPool(1);
+        TEST_ASSERT(pool != nullptr, "Default S2D pool must exist");
+        TEST_ASSERT(pool->getName() == "S2D on Cluster01", "Pool friendly name matches S2D canonical cluster name");
+        TEST_ASSERT(pool->getStatus() == micant::s2d::S2dOperationalStatus::OK, "Storage pool operational status OK");
+        TEST_ASSERT(pool->getHealth() == micant::s2d::S2dHealthStatus::Healthy, "Storage pool health status Healthy");
+
+        // 3. Verify 16 Physical Disks aggregated across the 4 nodes (4 per node)
+        auto disks = pool->getAllPhysicalDisks();
+        TEST_ASSERT(disks.size() == 16, "Pool must aggregate 16 physical disks");
+
+        std::unordered_map<std::string, uint32_t> disksPerNode;
+        for (const auto& d : disks) {
+            disksPerNode[d->nodeId]++;
+            TEST_ASSERT(d->totalSizeBytes == 3840ULL * 1024 * 1024 * 1024, "3.84 TB per disk");
+            TEST_ASSERT(d->busType == micant::s2d::S2dBusType::NVMe, "All disks NVMe bus type");
+            TEST_ASSERT(d->mediaType == micant::s2d::S2dMediaType::SSD, "All disks SSD media type");
+        }
+        for (uint32_t n = 1; n <= 4; ++n) {
+            std::string nName = "NODE-0" + std::to_string(n);
+            TEST_ASSERT(disksPerNode[nName] == 4, "Each node must have exactly 4 disks");
+        }
+
+        // 4. Verify Total Raw Pool Capacity = 16 * 3.84 TB = 61.44 TB (65,970,697,666,560 bytes)
+        const uint64_t expectedCapacity = 16ULL * 3840ULL * 1024 * 1024 * 1024;
+        TEST_ASSERT(pool->getTotalCapacityBytes() == expectedCapacity, "Aggregated pool capacity must be 61.44 TB");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Multi-Tier Storage & NVMe Cache Hierarchy
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::s2d::StorageSpacesSubsystem::get();
+        auto& cache = sys.getCacheManager();
+
+        // 1. Verify 8 NVMe Cache Devices auto-bound across 4 nodes (2 per node)
+        TEST_ASSERT(cache.getDeviceCount() == 8, "Must have 8 active NVMe cache devices");
+        const uint64_t expectedCacheBytes = 8ULL * 3840ULL * 1024 * 1024 * 1024; // 30.72 TB
+        TEST_ASSERT(cache.getTotalCapacityBytes() == expectedCacheBytes, "Total NVMe cache size 30.72 TB");
+
+        // 2. Write-Back Caching: Writes accumulate dirty bytes in NVMe cache buffer
+        uint64_t dirtyBefore = cache.getDirtyBytes();
+        cache.recordWrite(64 * 1024 * 1024); // 64 MB write
+        TEST_ASSERT(cache.getDirtyBytes() == dirtyBefore + (64 * 1024 * 1024), "Dirty cache bytes tracked");
+
+        // 3. Destage Operation: Flushes dirty blocks to capacity tier
+        uint64_t destageOpsBefore = cache.getDestageOps();
+        cache.destageDirty();
+        TEST_ASSERT(cache.getDirtyBytes() == 0, "Dirty bytes must be 0 after destage");
+        TEST_ASSERT(cache.getDestageOps() == destageOpsBefore + 1, "Destage operation incremented");
+
+        // 4. Read Cache Hit Accounting & Hit Ratio
+        uint64_t hitsBefore = cache.getHits();
+        for (int i = 0; i < 100; ++i) cache.recordReadHit();
+        TEST_ASSERT(cache.getHits() == hitsBefore + 100, "Cache hits counted");
+        TEST_ASSERT(cache.getHitPercentage() > 95.0, "Cache hit ratio above 95%");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Resiliency Models & Node Fault Domain Separation
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::s2d::StorageSpacesSubsystem::get();
+        auto pool = sys.getPool(1);
+
+        // 1. ThreeWayMirror: ClusterVirtualDisk01 (50 GB)
+        auto vdMirror3 = sys.findVirtualDiskByName("ClusterVirtualDisk01");
+        TEST_ASSERT(vdMirror3 != nullptr, "ClusterVirtualDisk01 must exist");
+        TEST_ASSERT(vdMirror3->getResiliency() == micant::s2d::S2dResiliencyType::ThreeWayMirror, "3-Way Mirror resiliency");
+        TEST_ASSERT(vdMirror3->getSizeBytes() == 50ULL * 1024 * 1024 * 1024, "50 GB virtual size");
+        TEST_ASSERT(vdMirror3->getAllocatedSizeBytes() == 150ULL * 1024 * 1024 * 1024, "150 GB allocated footprint (3x)");
+
+        // Verify Node Fault Domain Separation for every slab in 3-Way Mirror
+        for (const auto& slab : vdMirror3->getSlabs()) {
+            TEST_ASSERT(slab.replicas.size() == 3, "3 replicas per slab");
+            TEST_ASSERT(slab.replicas[0].nodeId != slab.replicas[1].nodeId, "Node 0 != Node 1 separation");
+            TEST_ASSERT(slab.replicas[1].nodeId != slab.replicas[2].nodeId, "Node 1 != Node 2 separation");
+            TEST_ASSERT(slab.replicas[0].nodeId != slab.replicas[2].nodeId, "Node 0 != Node 2 separation");
+        }
+
+        // 2. DualParity (Reed-Solomon 4+2): ArchiveData (100 GB)
+        auto vdParity = sys.findVirtualDiskByName("ArchiveData");
+        TEST_ASSERT(vdParity != nullptr, "ArchiveData must exist");
+        TEST_ASSERT(vdParity->getResiliency() == micant::s2d::S2dResiliencyType::DualParity, "Dual Parity resiliency");
+        TEST_ASSERT(vdParity->getSizeBytes() == 100ULL * 1024 * 1024 * 1024, "100 GB virtual size");
+        TEST_ASSERT(vdParity->getAllocatedSizeBytes() == 150ULL * 1024 * 1024 * 1024, "150 GB allocated footprint (1.5x for 4+2)");
+
+        // 3. TwoWayMirror: Create test volume
+        auto vdMirror2 = pool->createVirtualDisk("Prod_VM_Mirror2", 20ULL * 1024 * 1024 * 1024, micant::s2d::S2dResiliencyType::TwoWayMirror);
+        TEST_ASSERT(vdMirror2 != nullptr, "TwoWayMirror creation succeeds");
+        for (const auto& slab : vdMirror2->getSlabs()) {
+            TEST_ASSERT(slab.replicas.size() == 2, "2 replicas per slab");
+            TEST_ASSERT(slab.replicas[0].nodeId != slab.replicas[1].nodeId, "Node separation in 2-Way Mirror");
+        }
+
+        // 4. Simple (Striped RAID 0)
+        auto vdSimple = pool->createVirtualDisk("TempScratch_Simple", 10ULL * 1024 * 1024 * 1024, micant::s2d::S2dResiliencyType::Simple);
+        TEST_ASSERT(vdSimple != nullptr, "Simple creation succeeds");
+        TEST_ASSERT(vdSimple->getAllocatedSizeBytes() == 10ULL * 1024 * 1024 * 1024, "100% capacity efficiency for Simple");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Block I/O Engine & Resiliency Guarantees
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::s2d::StorageSpacesSubsystem::get();
+        auto vd = sys.findVirtualDiskByName("ClusterVirtualDisk01");
+        TEST_ASSERT(vd != nullptr, "ClusterVirtualDisk01 must exist");
+
+        // 1. Mirrored Write across fault domains
+        const std::string payload = "MicaNT Sovereign Storage Spaces Direct - Clustered NVMe Block I/O Payload v10.0";
+        bool writeOk = vd->writeData(0, payload.data(), payload.size(), &sys.getCacheManager());
+        TEST_ASSERT(writeOk, "Synchronous mirrored write succeeds");
+        TEST_ASSERT(vd->getWritesCompleted() >= 1, "Writes completed counter incremented");
+
+        // 2. Node-Local Read Optimization (Calling from NODE-01)
+        std::vector<char> readBuf(payload.size() + 1, 0);
+        size_t bytesRead = 0;
+        bool readOk = vd->readData(0, readBuf.data(), payload.size(), &bytesRead, "NODE-01", &sys.getCacheManager());
+        TEST_ASSERT(readOk, "Node-local read succeeds");
+        TEST_ASSERT(bytesRead == payload.size(), "Exact payload length read");
+        TEST_ASSERT(std::string_view(readBuf.data(), bytesRead) == payload, "Payload content matches written data");
+
+        // 3. Cross-Node Read (Calling from NODE-04)
+        std::vector<char> remoteBuf(payload.size() + 1, 0);
+        size_t remoteReadLen = 0;
+        bool remoteOk = vd->readData(0, remoteBuf.data(), payload.size(), &remoteReadLen, "NODE-04", &sys.getCacheManager());
+        TEST_ASSERT(remoteOk, "Cross-node read succeeds");
+        TEST_ASSERT(std::string_view(remoteBuf.data(), remoteReadLen) == payload, "Cross-node read content integrity verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Drive Failure Simulation, SMART Predictive Failure, and Auto-Rebuild Resynchronization
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::s2d::StorageSpacesSubsystem::get();
+        auto pool = sys.getPool(1);
+        auto vd = sys.findVirtualDiskByName("ClusterVirtualDisk01");
+        auto& healthSvc = sys.getHealthService();
+
+        // 1. SMART Predictive Failure Detection: Wear Level Threshold
+        auto disk3 = sys.getPhysicalDisk(3);
+        TEST_ASSERT(disk3 != nullptr, "Disk 3 must exist");
+        disk3->wearPercentage = 94; // Above 90% wear threshold
+        disk3->reallocatedSectors = 64; // Above 50 threshold
+
+        bool healthyCheck = healthSvc.evaluateDiskHealth(*disk3);
+        TEST_ASSERT(!healthyCheck, "Predictive failure must flag drive as unhealthy");
+        TEST_ASSERT(disk3->operationalStatus == micant::s2d::S2dOperationalStatus::PredictiveFailure, "Disk status PredictiveFailure");
+        TEST_ASSERT(disk3->usage == micant::s2d::S2dDiskUsage::Retired, "Disk automatically retired from active allocations");
+        TEST_ASSERT(disk3->healthStatus == micant::s2d::S2dHealthStatus::Warning, "Disk health set to Warning");
+
+        // 2. Physical Drive Dropout / Failure
+        bool failOk = sys.failPhysicalDisk(1); // Fail Disk 1 on NODE-01
+        TEST_ASSERT(failOk, "Simulate drive failure succeeds");
+
+        auto disk1 = sys.getPhysicalDisk(1);
+        TEST_ASSERT(disk1->operationalStatus == micant::s2d::S2dOperationalStatus::Degraded, "Disk 1 marked Degraded");
+        TEST_ASSERT(disk1->healthStatus == micant::s2d::S2dHealthStatus::Unhealthy, "Disk 1 marked Unhealthy");
+        TEST_ASSERT(pool->getStatus() == micant::s2d::S2dOperationalStatus::Degraded, "Pool transitions to Degraded");
+        TEST_ASSERT(vd->getStatus() == micant::s2d::S2dOperationalStatus::Degraded, "3-Way Mirror vdisk transitions to Degraded");
+
+        // 3. Degraded Read Still Succeeds via Surviving Mirror Replicas
+        const std::string expectedText = "MicaNT Sovereign Storage Spaces Direct - Clustered NVMe Block I/O Payload v10.0";
+        std::vector<char> degBuf(expectedText.size() + 1, 0);
+        size_t degReadLen = 0;
+        bool degReadOk = vd->readData(0, degBuf.data(), expectedText.size(), &degReadLen, "NODE-01", &sys.getCacheManager());
+        TEST_ASSERT(degReadOk, "Degraded read must succeed via surviving replicas");
+        TEST_ASSERT(std::string_view(degBuf.data(), degReadLen) == expectedText, "Read integrity preserved under drive failure");
+
+        // 4. Online Self-Healing: Slab Rebuild and Resynchronization
+        uint32_t rebuildsBefore = pool->getRebuildsCompleted();
+        bool repairOk = sys.repairVirtualDisk(vd->getId());
+        TEST_ASSERT(repairOk, "Online repair and slab resynchronization succeeds");
+        TEST_ASSERT(pool->getRebuildsCompleted() == rebuildsBefore + 1, "Rebuilds completed count incremented");
+        TEST_ASSERT(vd->getStatus() == micant::s2d::S2dOperationalStatus::OK, "Virtual disk returns to OK");
+        TEST_ASSERT(vd->getHealth() == micant::s2d::S2dHealthStatus::Healthy, "Virtual disk returns to Healthy");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 storagespaces.exe & storagediag.exe CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::string out;
+
+        // 1. storagespaces pool
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces pool", out);
+        TEST_ASSERT(out.find("S2D on Cluster01") != std::string::npos, "storagespaces pool output contains pool name");
+        TEST_ASSERT(out.find("TotalCapacity") != std::string::npos, "storagespaces pool header format");
+
+        // 2. storagespaces disk
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces disk", out);
+        TEST_ASSERT(out.find("NODE-01") != std::string::npos, "storagespaces disk lists NODE-01");
+        TEST_ASSERT(out.find("Intel SSD D7-P5520") != std::string::npos, "storagespaces disk lists Intel NVMe");
+        TEST_ASSERT(out.find("Samsung PM1733") != std::string::npos, "storagespaces disk lists Samsung NVMe");
+
+        // 3. storagespaces vdisk
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces vdisk", out);
+        TEST_ASSERT(out.find("ClusterVirtualDisk01") != std::string::npos, "storagespaces vdisk lists ClusterVirtualDisk01");
+        TEST_ASSERT(out.find("Mirror (3-Way)") != std::string::npos, "storagespaces vdisk lists Mirror (3-Way)");
+        TEST_ASSERT(out.find("ArchiveData") != std::string::npos, "storagespaces vdisk lists ArchiveData");
+
+        // 4. storagespaces vdisk /create
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces vdisk /create:LiveMigrationVolume /size:35 /resiliency:mirror3", out);
+        TEST_ASSERT(out.find("LiveMigrationVolume") != std::string::npos, "Create virtual disk confirmation");
+        TEST_ASSERT(out.find("created successfully") != std::string::npos, "Create virtual disk success message");
+
+        // 5. storagespaces cache
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces cache", out);
+        TEST_ASSERT(out.find("NVMe Cache Hierarchy") != std::string::npos, "storagespaces cache header");
+        TEST_ASSERT(out.find("Total Cache Size") != std::string::npos, "storagespaces cache size");
+        TEST_ASSERT(out.find("Cache Hit Ratio") != std::string::npos, "storagespaces cache hit ratio");
+
+        // 6. storagespaces health
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces health", out);
+        TEST_ASSERT(out.find("Storage Spaces Direct Cluster Health") != std::string::npos, "storagespaces health header");
+        TEST_ASSERT(out.find("Active Storage Pools") != std::string::npos, "storagespaces health pool summary");
+
+        // 7. storagespaces repair
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageSpacesString("storagespaces repair ClusterVirtualDisk01", out);
+        TEST_ASSERT(out.find("Initiating online repair") != std::string::npos, "Repair initiation output");
+        TEST_ASSERT(out.find("completed successfully") != std::string::npos, "Repair completion output");
+
+        // 8. storagediag /report
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageDiagString("storagediag /report", out);
+        TEST_ASSERT(out.find("StorageSpacesDiag.log") != std::string::npos, "Diagnostic log file path match");
+        TEST_ASSERT(out.find("STORAGE SPACES DIRECT DIAGNOSTIC REPORT") != std::string::npos, "Diagnostic report banner");
+
+        // 9. storagediag /trace
+        out.clear();
+        micant::storagespaces_cmd::um::ExecuteStorageDiagString("storagediag /trace", out);
+        TEST_ASSERT(out.find("RDMA Connections") != std::string::npos, "Trace RDMA output");
+        TEST_ASSERT(out.find("Storage Bus Latency") != std::string::npos, "Trace latency output");
+
+        // 10. Remote Executive Console & Web Terminal
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termRes = console.executeTerminalCommand("storagespaces health");
+        TEST_ASSERT(termRes.find("Storage Spaces Direct Cluster Health") != std::string::npos, "Web terminal storagespaces health");
+
+        std::string diagRes = console.executeTerminalCommand("storagediag /report");
+        TEST_ASSERT(diagRes.find("StorageSpacesDiag.log") != std::string::npos, "Web terminal storagediag /report");
+
+        // 11. WFP Inbound Rule #17301 (MicaNT_S2D_StorageBus_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto s2dRuleOpt = wfp.findRuleById(17301);
+        TEST_ASSERT(s2dRuleOpt.has_value(), "WFP Rule #17301 for S2D must be registered");
+        TEST_ASSERT(s2dRuleOpt->protocol == tcpip::IPPROTO_TCP, "S2D Storage Bus protocol must be TCP");
+        TEST_ASSERT(s2dRuleOpt->localPortStart == 5445 && s2dRuleOpt->localPortEnd == 5445, "S2D SMB Direct port 5445");
+        TEST_ASSERT(s2dRuleOpt->action == wfp::FWP_ACTION_PERMIT, "S2D rule action must be PERMIT");
+
+        // 12. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"s2d_pools_active\":") != std::string::npos, "Telemetry s2d_pools_active");
+        TEST_ASSERT(teleJson.find("\"s2d_physical_disks\":") != std::string::npos, "Telemetry s2d_physical_disks");
+        TEST_ASSERT(teleJson.find("\"s2d_total_capacity_bytes\":") != std::string::npos, "Telemetry s2d_total_capacity_bytes");
+        TEST_ASSERT(teleJson.find("\"s2d_allocated_bytes\":") != std::string::npos, "Telemetry s2d_allocated_bytes");
+        TEST_ASSERT(teleJson.find("\"s2d_virtual_disks\":") != std::string::npos, "Telemetry s2d_virtual_disks");
+        TEST_ASSERT(teleJson.find("\"s2d_health_status\":") != std::string::npos, "Telemetry s2d_health_status");
+        TEST_ASSERT(teleJson.find("\"s2d_cache_hit_pct\":") != std::string::npos, "Telemetry s2d_cache_hit_pct");
+        TEST_ASSERT(teleJson.find("\"s2d_rebuild_active\":") != std::string::npos, "Telemetry s2d_rebuild_active");
+    }
+
+    std::cout << "[HORIZON 173] Sovereign Windows Server Storage Spaces Direct (S2D) Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: Clustered Storage Pool Aggregation & Fault Domain Architecture OK\n"
+              << "    Pillar 3: Multi-Tier Storage & NVMe Cache Hierarchy OK\n"
+              << "    Pillar 4: Resiliency Models & Node Fault Domain Separation OK\n"
+              << "    Pillar 5: Block I/O Engine & Resiliency Guarantees OK\n"
+              << "    Pillar 6: Drive Failure Simulation, SMART Predictive Failure, and Auto-Rebuild Resynchronization OK\n"
+              << "    Pillar 7: Canonical Win32 storagespaces.exe & storagediag.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 389: Horizon 173 - Sovereign Windows Server Storage Spaces Direct (S2D) PASSED." << std::endl;
+}
+

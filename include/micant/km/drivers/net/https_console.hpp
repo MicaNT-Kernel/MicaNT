@@ -58,6 +58,8 @@
 #include "micant/um/subsystems/net/cluster_cmd.hpp"
 #include "micant/km/drivers/net/nlb.hpp"
 #include "micant/um/subsystems/net/nlb_cmd.hpp"
+#include "micant/km/drivers/storage/s2d.hpp"
+#include "micant/um/subsystems/mgmt/storagespaces_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -262,6 +264,19 @@ public:
         nlbRule.weight = 1500;
         nlbRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(nlbRule);
+
+        // 16. Register WFP Inbound Rule for Storage Spaces Direct (S2D Storage Bus / RoCE / SMB Direct 5445 TCP)
+        wfp::km::WfpKernelFilterRule s2dRule{};
+        s2dRule.filterId = 17301;
+        s2dRule.name = "MicaNT_S2D_StorageBus_Permit";
+        s2dRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        s2dRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        s2dRule.protocol = tcpip::IPPROTO_TCP;
+        s2dRule.localPortStart = 5445;
+        s2dRule.localPortEnd = 5445;
+        s2dRule.weight = 1500;
+        s2dRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(s2dRule);
     }
 
     void stopHttpsServer() {
@@ -640,6 +655,14 @@ public:
             std::string res;
             nlb_cmd::um::ExecuteNlbString(cmd, res);
             return res;
+        } else if (cmd == "storagespaces" || cmd.starts_with("storagespaces ")) {
+            std::string res;
+            storagespaces_cmd::um::ExecuteStorageSpacesString(cmd, res);
+            return res;
+        } else if (cmd == "storagediag" || cmd.starts_with("storagediag ")) {
+            std::string res;
+            storagespaces_cmd::um::ExecuteStorageDiagString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -873,7 +896,15 @@ public:
            << "\"nlb_convergence_state\":\"" << micant::nlb::NlbConvergenceStateToString(micant::nlb::NetworkLoadBalancingSubsystem::get().getConvergenceState()) << "\","
            << "\"nlb_heartbeats_sent\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getHeartbeatCount() << ","
            << "\"nlb_packets_filtered\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getPacketsFilteredCount() << ","
-           << "\"nlb_active_connections\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getTotalActiveConnections() << "}\r\n";
+           << "\"nlb_active_connections\":" << micant::nlb::NetworkLoadBalancingSubsystem::get().getTotalActiveConnections() << ","
+           << "\"s2d_pools_active\":" << micant::s2d::StorageSpacesSubsystem::get().getPoolCount() << ","
+           << "\"s2d_physical_disks\":" << micant::s2d::StorageSpacesSubsystem::get().getTotalDiskCount() << ","
+           << "\"s2d_total_capacity_bytes\":" << micant::s2d::StorageSpacesSubsystem::get().getTotalCapacityBytes() << ","
+           << "\"s2d_allocated_bytes\":" << micant::s2d::StorageSpacesSubsystem::get().getAllocatedBytes() << ","
+           << "\"s2d_virtual_disks\":" << micant::s2d::StorageSpacesSubsystem::get().getVirtualDiskCount() << ","
+           << "\"s2d_health_status\":\"" << micant::s2d::S2dHealthStatusToString(micant::s2d::StorageSpacesSubsystem::get().getHealthStatus()) << "\","
+           << "\"s2d_cache_hit_pct\":" << std::fixed << std::setprecision(1) << micant::s2d::StorageSpacesSubsystem::get().getCacheHitPercentage() << ","
+           << "\"s2d_rebuild_active\":" << (micant::s2d::StorageSpacesSubsystem::get().isRebuildActive() ? "true" : "false") << "}\r\n";
         return ss.str();
     }
 
