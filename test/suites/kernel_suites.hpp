@@ -31444,3 +31444,321 @@ inline void Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI() {
 
     std::cout << "[TEST] Suite 385: Horizon 169 - Sovereign Distributed File System (DFS / DFS-N & DFS-R) PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP),
+// Windows Update Agent Protocol, SUSDB Database Servicing & Canonical wsusutil.exe / wuauclt.exe CLI
+// ============================================================================
+inline void Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP),\n"
+              << "Windows Update Agent Protocol, SUSDB Database Servicing & Canonical wsusutil.exe CLI\n"
+              << "========================================================================\n";
+
+    auto& engine = micant::wsus::SovereignWsusEngine::instance();
+    engine.initialize();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services, IIS Web Application & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto sWsus = scm.getServiceRecord(L"WsusService");
+        TEST_ASSERT(sWsus != nullptr, "WsusService must be registered in Service Control Manager");
+        TEST_ASSERT(sWsus->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WsusService must be in SERVICE_RUNNING state");
+        TEST_ASSERT(sWsus->startType == micant::scm::SERVICE_AUTO_START, "WsusService must be SERVICE_AUTO_START");
+
+        auto sWua = scm.getServiceRecord(L"wuauserv");
+        TEST_ASSERT(sWua != nullptr, "wuauserv (Windows Update) must be registered in SCM");
+        TEST_ASSERT(sWua->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "wuauserv must be in SERVICE_RUNNING state");
+
+        auto& verDb = micant::version::VersionDatabase::Instance();
+        const char* expectedMods[] = {
+            "wsusservice.exe",
+            "wsusutil.exe",
+            "wuauclt.exe",
+            "susdb.dll",
+            "wuaueng.dll",
+            "wups.dll",
+            "microsoft.updateservices.administration.dll"
+        };
+        for (const char* mod : expectedMods) {
+            auto* info = verDb.FindModule(mod);
+            TEST_ASSERT(info != nullptr, std::string("VersionDatabase must register ") + mod);
+            TEST_ASSERT(info->stringTable.at("FileVersion") == "10.0.26100.1", "Module FileVersion must match 10.0.26100.1");
+        }
+
+        auto& iis = micant::iis::EnterpriseWebServer::instance();
+        micant::iis::ApplicationPool pool;
+        TEST_ASSERT(iis.getAppPool("WsusPool", pool), "IIS WsusPool must exist");
+        TEST_ASSERT(pool.state == micant::iis::AppPoolState::Running, "WsusPool must be running");
+        TEST_ASSERT(engine.getHttpPort() == 8530, "WSUS HTTP port must be 8530");
+        TEST_ASSERT(engine.getHttpsPort() == 8531, "WSUS HTTPS port must be 8531");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: MS-WUSP Client-Server SOAP Protocol Engine (GetConfig, GetCookie, RegisterComputer)
+    // ------------------------------------------------------------------------
+    {
+        // 1. GetConfig
+        std::string cfgReq = "<GetConfig xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService\" />";
+        auto cfgResp = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/GetConfig", cfgReq);
+        TEST_ASSERT(cfgResp.httpStatusCode == 200, "GetConfig must return HTTP 200");
+        TEST_ASSERT(cfgResp.responseXml.find("<ProtocolVersion>1.8</ProtocolVersion>") != std::string::npos, "ProtocolVersion 1.8 match");
+        TEST_ASSERT(cfgResp.responseXml.find("<RevisionId>20261031</RevisionId>") != std::string::npos, "RevisionId match");
+        TEST_ASSERT(cfgResp.responseXml.find("ClientWebService/client.asmx") != std::string::npos, "ClientWebService URL match");
+
+        // 2. GetCookie
+        std::string cookieReq = "<GetCookie xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService\"><computerId>CLIENT-TEST-01</computerId></GetCookie>";
+        auto cookieResp = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/GetCookie", cookieReq);
+        TEST_ASSERT(cookieResp.httpStatusCode == 200, "GetCookie must return HTTP 200");
+        TEST_ASSERT(cookieResp.responseXml.find("<EncryptedData>") != std::string::npos, "Cookie EncryptedData must be returned");
+        TEST_ASSERT(cookieResp.responseXml.find("<Expiration>") != std::string::npos, "Cookie Expiration must be returned");
+
+        // 3. RegisterComputer with GPO Client-Side Targeting
+        std::string regReq = 
+            "<RegisterComputer xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService\">\n"
+            "  <ComputerIdentity><ComputerId>CLIENT-PILOT-01</ComputerId></ComputerIdentity>\n"
+            "  <ComputerAttributes>\n"
+            "    <Fqdn>TITAN-PILOT01.micant.internal</Fqdn>\n"
+            "    <IpAddress>10.0.10.25</IpAddress>\n"
+            "    <OsVersion>10.0.26100.1</OsVersion>\n"
+            "    <Architecture>x64</Architecture>\n"
+            "  </ComputerAttributes>\n"
+            "  <TargetGroupName>Pilot Ring (Fast)</TargetGroupName>\n"
+            "</RegisterComputer>";
+        auto regResp = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/RegisterComputer", regReq);
+        TEST_ASSERT(regResp.httpStatusCode == 200, "RegisterComputer must return HTTP 200");
+        TEST_ASSERT(regResp.responseXml.find("<Success>true</Success>") != std::string::npos, "Registration success flag");
+        TEST_ASSERT(regResp.responseXml.find("<AssignedGroupId>GROUP-PILOT</AssignedGroupId>") != std::string::npos, "Target group mapping to GROUP-PILOT");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Client Delta Synchronization & Applicability Evaluation (SyncUpdates & GetExtendedUpdateInfo)
+    // ------------------------------------------------------------------------
+    {
+        // 1. SyncUpdates
+        std::string syncReq = 
+            "<SyncUpdates xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService\">\n"
+            "  <Cookie>WUSP-TOKEN-CLIENT-PILOT-01</Cookie>\n"
+            "  <SystemSpec><Architecture>x64</Architecture><MinOsVersion>10.0.26100</MinOsVersion></SystemSpec>\n"
+            "</SyncUpdates>";
+        auto syncResp = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/SyncUpdates", syncReq);
+        TEST_ASSERT(syncResp.httpStatusCode == 200, "SyncUpdates must return HTTP 200");
+        TEST_ASSERT(syncResp.responseXml.find("<KBArticle>KB5044284</KBArticle>") != std::string::npos, "Cumulative update KB5044284 must be returned");
+        TEST_ASSERT(syncResp.responseXml.find("<KBArticle>KB2267602</KBArticle>") != std::string::npos, "Definition update KB2267602 must be returned");
+        TEST_ASSERT(syncResp.responseXml.find("<SupersededUpdates>") != std::string::npos, "SupersededUpdates section must be present");
+        TEST_ASSERT(syncResp.responseXml.find("1A09E5B7-50A4-48FE-98D7-564AC7C48D2A") != std::string::npos, "Superseded update KB5043080 must be listed");
+
+        // 2. GetExtendedUpdateInfo
+        std::string extReq = 
+            "<GetExtendedUpdateInfo xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService\">\n"
+            "  <UpdateID>9F818C52-79F8-4D2A-98C0-745BD3BC6E21</UpdateID>\n"
+            "</GetExtendedUpdateInfo>";
+        auto extResp = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/GetExtendedUpdateInfo", extReq);
+        TEST_ASSERT(extResp.httpStatusCode == 200, "GetExtendedUpdateInfo must return HTTP 200");
+        TEST_ASSERT(extResp.responseXml.find("<MsrcSeverity>Critical</MsrcSeverity>") != std::string::npos, "MsrcSeverity Critical match");
+        TEST_ASSERT(extResp.responseXml.find("<CvssScore>9.8</CvssScore>") != std::string::npos, "CvssScore 9.8 match");
+        TEST_ASSERT(extResp.responseXml.find("<CveID>CVE-2026-38411</CveID>") != std::string::npos, "CVE-2026-38411 correlation");
+        TEST_ASSERT(extResp.responseXml.find("<CveID>CVE-2026-21894</CveID>") != std::string::npos, "CVE-2026-21894 correlation");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: WUA Event Reporting Batch & SUSDB Compliance Tracking (ReportEventBatch)
+    // ------------------------------------------------------------------------
+    {
+        // 1. Report DownloadStarted (101) & DownloadSucceeded (102)
+        std::string evtDownload = 
+            "<ReportEventBatch xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ReportingWebService\">\n"
+            "  <Batch>\n"
+            "    <Event>\n"
+            "      <EventId>EVT-01</EventId>\n"
+            "      <ComputerId>CLIENT-0001</ComputerId>\n"
+            "      <UpdateId>9F818C52-79F8-4D2A-98C0-745BD3BC6E21</UpdateId>\n"
+            "      <EventType>102</EventType>\n"
+            "      <HResult>0</HResult>\n"
+            "      <Timestamp>2026-10-31T11:00:00Z</Timestamp>\n"
+            "    </Event>\n"
+            "  </Batch>\n"
+            "</ReportEventBatch>";
+        auto respDl = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ReportingWebService/ReportEventBatch", evtDownload);
+        TEST_ASSERT(respDl.httpStatusCode == 200, "ReportEventBatch download must return HTTP 200");
+
+        micant::wsus::ManagedComputer comp;
+        TEST_ASSERT(engine.getClient("CLIENT-0001", comp), "CLIENT-0001 must exist");
+        TEST_ASSERT(comp.updateStates["9F818C52-79F8-4D2A-98C0-745BD3BC6E21"] == micant::wsus::UpdateInstallationState::Downloaded,
+                    "Client state must transition to Downloaded");
+
+        // 2. Report RebootRequired (105)
+        std::string evtReboot = 
+            "<ReportEventBatch xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ReportingWebService\">\n"
+            "  <Batch>\n"
+            "    <Event>\n"
+            "      <EventId>EVT-02</EventId>\n"
+            "      <ComputerId>CLIENT-0001</ComputerId>\n"
+            "      <UpdateId>9F818C52-79F8-4D2A-98C0-745BD3BC6E21</UpdateId>\n"
+            "      <EventType>105</EventType>\n"
+            "      <HResult>0</HResult>\n"
+            "      <Timestamp>2026-10-31T11:30:00Z</Timestamp>\n"
+            "    </Event>\n"
+            "  </Batch>\n"
+            "</ReportEventBatch>";
+        auto respRb = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ReportingWebService/ReportEventBatch", evtReboot);
+        TEST_ASSERT(respRb.httpStatusCode == 200, "ReportEventBatch reboot must return HTTP 200");
+        TEST_ASSERT(engine.getPendingRebootCount() >= 1, "Pending reboot counter must increment");
+
+        // 3. Report InstallSucceeded (103)
+        std::string evtInstall = 
+            "<ReportEventBatch xmlns=\"http://www.microsoft.com/SoftwareDistribution/Server/ReportingWebService\">\n"
+            "  <Batch>\n"
+            "    <Event>\n"
+            "      <EventId>EVT-03</EventId>\n"
+            "      <ComputerId>CLIENT-0001</ComputerId>\n"
+            "      <UpdateId>9F818C52-79F8-4D2A-98C0-745BD3BC6E21</UpdateId>\n"
+            "      <EventType>103</EventType>\n"
+            "      <HResult>0</HResult>\n"
+            "      <Timestamp>2026-10-31T12:00:00Z</Timestamp>\n"
+            "    </Event>\n"
+            "  </Batch>\n"
+            "</ReportEventBatch>";
+        auto respInst = engine.processSoapRequest("http://www.microsoft.com/SoftwareDistribution/Server/ReportingWebService/ReportEventBatch", evtInstall);
+        TEST_ASSERT(respInst.httpStatusCode == 200, "ReportEventBatch install must return HTTP 200");
+        TEST_ASSERT(engine.getClient("CLIENT-0001", comp), "CLIENT-0001 must exist");
+        TEST_ASSERT(comp.updateStates["9F818C52-79F8-4D2A-98C0-745BD3BC6E21"] == micant::wsus::UpdateInstallationState::Installed,
+                    "Client state must transition to Installed");
+        TEST_ASSERT(comp.pendingReboot == false, "Pending reboot flag must clear on install completion");
+
+        double compRate = engine.calculateComplianceRate();
+        TEST_ASSERT(compRate > 0.0, "Enterprise compliance rate must be positive");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Content Store Servicing, SHA-256 Payload Hash Verification & Orphan Cleanup
+    // ------------------------------------------------------------------------
+    {
+        auto& cm = engine.getContentManager();
+        TEST_ASSERT(cm.getContentRoot() == "C:\\WSUS\\WsusContent", "Content root directory match");
+        TEST_ASSERT(cm.getPayloadCount() >= 2, "Payload store must contain seeded CAB files");
+
+        // Verify SHA-256 digest validation
+        std::string validHash = "8d3e91f0a1c3b5d7e9f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6";
+        TEST_ASSERT(cm.hasPayload(validHash), "Payload store must contain validHash");
+
+        // Content reset & verification
+        auto resetRes = cm.resetContent(engine.getUpdates());
+        TEST_ASSERT(resetRes.verifiedFiles + resetRes.repairedFiles >= 2, "Content store reset must verify or repair catalog files");
+
+        // Cleanup unneeded revisions
+        uint64_t freed = cm.cleanupUnneededRevisions(engine.getUpdates(), engine.getAllApprovals());
+        (void)freed;
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Update Approval Engine, Mandatory Deadlines & Auto-Supersedence Arbitration
+    // ------------------------------------------------------------------------
+    {
+        // Approve with deadline
+        bool appOk = engine.approveUpdate("3C25D94B-11F2-438B-B5C4-E1D879F4B301", "GROUP-SERVERS",
+                                          micant::wsus::UpdateApprovalAction::Install, "SecOpsAdmin",
+                                          1761500000000000ULL, "2026-11-15T00:00:00Z");
+        TEST_ASSERT(appOk, "Update approval with deadline must succeed");
+
+        // Auto-supersedence
+        size_t supersededDeclined = engine.autoSupersedeUpdates();
+        TEST_ASSERT(supersededDeclined >= 1, "autoSupersedeUpdates must decline superseded September cumulative update");
+
+        micant::wsus::UpdateRecord u3;
+        TEST_ASSERT(engine.getUpdate("1A09E5B7-50A4-48FE-98D7-564AC7C48D2A", u3), "Update u3 must exist");
+        TEST_ASSERT(u3.isApproved == false, "Superseded update must be declined / not approved");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical wsusutil.exe & wuauclt.exe CLI Management Utilities, Air-Gap Export/Import & Web Console
+    // ------------------------------------------------------------------------
+    {
+        std::string out;
+
+        // 1. wsusutil checkhealth
+        micant::wsusutil::um::ExecuteWsusutilString("checkhealth", out);
+        TEST_ASSERT(out.find("PASSED") != std::string::npos, "wsusutil checkhealth must pass");
+        TEST_ASSERT(out.find("WsusService") != std::string::npos, "Health check must report WsusService");
+
+        // 2. wsusutil reset
+        out.clear();
+        micant::wsusutil::um::ExecuteWsusutilString("reset", out);
+        TEST_ASSERT(out.find("100% OK") != std::string::npos, "wsusutil reset must report 100% OK integrity");
+
+        // 3. wsusutil listgroup
+        out.clear();
+        micant::wsusutil::um::ExecuteWsusutilString("listgroup", out);
+        TEST_ASSERT(out.find("GROUP-ALL-COMPUTERS") != std::string::npos, "listgroup must list GROUP-ALL-COMPUTERS");
+        TEST_ASSERT(out.find("Production Servers") != std::string::npos, "listgroup must list Production Servers");
+
+        // 4. wsusutil listupdates
+        out.clear();
+        micant::wsusutil::um::ExecuteWsusutilString("listupdates", out);
+        TEST_ASSERT(out.find("KB5044284") != std::string::npos, "listupdates must list KB5044284");
+        TEST_ASSERT(out.find("CVE-2026-38411") != std::string::npos, "listupdates must display correlated CVEs");
+
+        // 5. wsusutil export & import
+        out.clear();
+        micant::wsusutil::um::ExecuteWsusutilString("export C:\\WSUS\\export.xml", out);
+        TEST_ASSERT(out.find("exported to") != std::string::npos, "Metadata export must succeed");
+
+        out.clear();
+        micant::wsusutil::um::ExecuteWsusutilString("import C:\\WSUS\\export.xml", out);
+        TEST_ASSERT(out.find("imported successfully") != std::string::npos, "Metadata import must succeed");
+
+        // 6. wsusutil status
+        out.clear();
+        micant::wsusutil::um::ExecuteWsusutilString("status", out);
+        TEST_ASSERT(out.find("RUNNING (WsusService)") != std::string::npos, "wsusutil status service state");
+        TEST_ASSERT(out.find("Compliance Rate") != std::string::npos, "wsusutil status compliance report");
+
+        // 7. wuauclt client commands
+        out.clear();
+        micant::wuauclt::um::ExecuteWuaucltString("/detectnow", out);
+        TEST_ASSERT(out.find("Initiating immediate update detection") != std::string::npos, "wuauclt /detectnow match");
+
+        out.clear();
+        micant::wuauclt::um::ExecuteWuaucltString("/reportnow", out);
+        TEST_ASSERT(out.find("ReportEventBatch acknowledged") != std::string::npos, "wuauclt /reportnow match");
+
+        out.clear();
+        micant::wuauclt::um::ExecuteWuaucltString("/showsettings", out);
+        TEST_ASSERT(out.find("WUServer:") != std::string::npos, "wuauclt /showsettings match");
+
+        // 8. Remote Executive Console & Push Telemetry Integration
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termRes = console.executeTerminalCommand("wsusutil status");
+        TEST_ASSERT(termRes.find("RUNNING (WsusService)") != std::string::npos, "Web terminal wsusutil status match");
+
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"wsus_total_updates\":") != std::string::npos, "Telemetry wsus_total_updates match");
+        TEST_ASSERT(teleJson.find("\"wsus_approved_updates\":") != std::string::npos, "Telemetry wsus_approved_updates match");
+        TEST_ASSERT(teleJson.find("\"wsus_managed_computers\":") != std::string::npos, "Telemetry wsus_managed_computers match");
+        TEST_ASSERT(teleJson.find("\"wsus_compliance_rate\":") != std::string::npos, "Telemetry wsus_compliance_rate match");
+        TEST_ASSERT(teleJson.find("\"wsus_content_bytes\":") != std::string::npos, "Telemetry wsus_content_bytes match");
+
+        // 9. WFP Rule #17001 (MicaNT_WSUS_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(17001);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #17001 for WSUS must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_TCP, "WSUS rule protocol must be TCP");
+        TEST_ASSERT(ruleOpt->localPortStart == 8530 && ruleOpt->localPortEnd == 8531, "WSUS rule port range 8530-8531");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "WSUS rule action must be PERMIT");
+    }
+
+    std::cout << "[HORIZON 170] Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP) Summary:\n"
+              << "    Pillar 1: SCM Services, IIS Web Application & VersionDatabase Registration OK\n"
+              << "    Pillar 2: MS-WUSP Client-Server SOAP Protocol Engine OK\n"
+              << "    Pillar 3: Client Delta Synchronization & Applicability Evaluation OK\n"
+              << "    Pillar 4: WUA Event Reporting Batch & SUSDB Compliance Tracking OK\n"
+              << "    Pillar 5: Content Store Servicing & SHA-256 Payload Hash Verification OK\n"
+              << "    Pillar 6: Update Approval Engine, Mandatory Deadlines & Auto-Supersedence OK\n"
+              << "    Pillar 7: Canonical wsusutil.exe & wuauclt.exe CLI Management Utilities OK\n";
+
+    std::cout << "[TEST] Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP) PASSED." << std::endl;
+}

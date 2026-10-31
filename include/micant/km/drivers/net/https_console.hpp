@@ -51,6 +51,8 @@
 #include "micant/um/subsystems/net/wdsutil.hpp"
 #include "micant/um/servers/dfs.hpp"
 #include "micant/um/subsystems/net/dfsutil.hpp"
+#include "micant/um/servers/wsus.hpp"
+#include "micant/um/subsystems/net/wsusutil.hpp"
 
 namespace micant::km::net {
 
@@ -216,6 +218,19 @@ public:
         dfsRule.weight = 1500;
         dfsRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(dfsRule);
+
+        // 13. Register WFP Inbound Rule for Windows Server Update Services (WSUS HTTP 8530 & HTTPS 8531)
+        wfp::km::WfpKernelFilterRule wsusRule{};
+        wsusRule.filterId = 17001;
+        wsusRule.name = "MicaNT_WSUS_Inbound_Permit";
+        wsusRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        wsusRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        wsusRule.protocol = tcpip::IPPROTO_TCP;
+        wsusRule.localPortStart = 8530;
+        wsusRule.localPortEnd = 8531;
+        wsusRule.weight = 1500;
+        wsusRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(wsusRule);
     }
 
     void stopHttpsServer() {
@@ -578,6 +593,14 @@ public:
             std::string res;
             dfsutil::um::ExecuteDfsutilString(cmd, res);
             return res;
+        } else if (cmd == "wsusutil" || cmd.starts_with("wsusutil ")) {
+            std::string res;
+            wsusutil::um::ExecuteWsusutilString(cmd, res);
+            return res;
+        } else if (cmd == "wuauclt" || cmd.starts_with("wuauclt ")) {
+            std::string res;
+            wuauclt::um::ExecuteWuaucltString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -781,7 +804,13 @@ public:
            << "\"dfs_referral_latency_us\":" << micant::dfs::SovereignDfsEngine::instance().getLastReferralLatencyUs() << ","
            << "\"dfsr_replicated_folders\":" << micant::dfs::SovereignDfsEngine::instance().getAllReplicationGroups().size() << ","
            << "\"dfsr_bytes_replicated\":" << micant::dfs::SovereignDfsEngine::instance().getTotalBytesReplicated() << ","
-           << "\"dfsr_conflicts_resolved\":" << micant::dfs::SovereignDfsEngine::instance().getTotalConflictsResolved() << "}\r\n";
+           << "\"dfsr_conflicts_resolved\":" << micant::dfs::SovereignDfsEngine::instance().getTotalConflictsResolved() << ","
+           << "\"wsus_total_updates\":" << micant::wsus::SovereignWsusEngine::instance().getUpdates().size() << ","
+           << "\"wsus_approved_updates\":" << micant::wsus::SovereignWsusEngine::instance().getApprovedUpdateCount() << ","
+           << "\"wsus_managed_computers\":" << micant::wsus::SovereignWsusEngine::instance().getAllClients().size() << ","
+           << "\"wsus_compliance_rate\":" << micant::wsus::SovereignWsusEngine::instance().calculateComplianceRate() << ","
+           << "\"wsus_pending_reboots\":" << micant::wsus::SovereignWsusEngine::instance().getPendingRebootCount() << ","
+           << "\"wsus_content_bytes\":" << micant::wsus::SovereignWsusEngine::instance().getTotalBytesStored() << "}\r\n";
         return ss.str();
     }
 
