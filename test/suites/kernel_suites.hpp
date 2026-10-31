@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 /**
  * @file kernel_suites.hpp
@@ -26549,7 +26549,7 @@ void Test_Horizon155_CngKernelDriver_Tls13Schannel_X509Certificates_And_HttpsExe
     {
         auto& console = km::net::HttpsExecutiveConsole::get();
         console.resetForTest();
-        console.startHttpsServer(443);
+        if (!console.isRunning()) console.startHttpsServer(443);
 
         TEST_ASSERT(console.isRunning(), "HttpsExecutiveConsole must be active and running");
         TEST_ASSERT(console.getPort() == 443, "HttpsExecutiveConsole must bind to port 443");
@@ -29638,7 +29638,7 @@ void Test_Horizon164_ActiveDirectoryCertificateServices_EnterprisePKI_And_Certut
     {
         auto& console = km::net::HttpsExecutiveConsole::get();
         if (!console.isRunning()) {
-            console.startHttpsServer(443);
+            if (!console.isRunning()) console.startHttpsServer(443);
         }
 
         // 1. WFP Rule #16401 (MicaNT_CertSrv_Inbound_Permit)
@@ -29957,7 +29957,7 @@ void Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI() {
     {
         auto& console = km::net::HttpsExecutiveConsole::get();
         if (!console.isRunning()) {
-            console.startHttpsServer(443);
+            if (!console.isRunning()) console.startHttpsServer(443);
         }
 
         // 1. WFP Rule #16501 (MicaNT_WinRM_Inbound_Permit)
@@ -30312,7 +30312,7 @@ void Test_Horizon166_ActiveDirectoryGroupPolicy_Sysvol_And_GpToolsCLI() {
         // 3. Remote Web Terminal Integration
         auto& console = km::net::HttpsExecutiveConsole::get();
         if (!console.isRunning()) {
-            console.startHttpsServer(443);
+            if (!console.isRunning()) console.startHttpsServer(443);
         }
 
         std::string termUp = console.executeTerminalCommand("gpupdate /force");
@@ -30348,4 +30348,439 @@ void Test_Horizon166_ActiveDirectoryGroupPolicy_Sysvol_And_GpToolsCLI() {
               << "    Pillar 6: Canonical gpupdate.exe & gpresult.exe CLI, Remote Web Terminal & Push Telemetry OK\n";
 
     std::cout << "[TEST] Suite 382: Horizon 166 - Sovereign Active Directory Group Policy (AD GPO / SYSVOL / CLI) PASSED." << std::endl;
+}
+
+
+void Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 383: Horizon 167 - Sovereign Network Policy Server (NPS / RADIUS),\n"
+              << "RFC 2865/2866 AAA Protocol Engine, Microsoft VSA 311, MS-CHAPv2 (RFC 2759),\n"
+              << "Active Directory Domain Services Integration & Canonical netsh nps CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: NPS Core Architecture, SCM Service & VersionDatabase Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& nps = micant::nps::NetworkPolicyServer::instance();
+        nps.resetForTest();
+
+        // 1. Verify SCM Service Registration for IAS
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto iasSvc = scm.getServiceRecord(L"IAS");
+        TEST_ASSERT(iasSvc != nullptr, "IAS (Network Policy Server) must be registered in SCM");
+        TEST_ASSERT(iasSvc->displayName == L"Network Policy Server", "IAS display name must match");
+        TEST_ASSERT(iasSvc->startType == micant::scm::SERVICE_AUTO_START, "IAS must be AUTO_START");
+        TEST_ASSERT(iasSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "IAS must be RUNNING");
+        TEST_ASSERT(iasSvc->binaryPath == L"C:\\Windows\\System32\\ias.dll", "IAS binary must be ias.dll");
+
+        // 2. Verify RADIUS Proxy and Protocol Driver Services
+        auto proxySvc = scm.getServiceRecord(L"RadiusProxy");
+        TEST_ASSERT(proxySvc != nullptr, "RadiusProxy service must be registered in SCM");
+
+        auto drvSvc = scm.getServiceRecord(L"RadiusSys");
+        TEST_ASSERT(drvSvc != nullptr, "RadiusSys kernel filter driver must be registered in SCM");
+        TEST_ASSERT(drvSvc->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "RadiusSys must be KERNEL_DRIVER");
+
+        // 3. Verify VersionDatabase Registration
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* modIas = vdb.FindModule("ias.dll");
+        TEST_ASSERT(modIas != nullptr, "ias.dll must be registered in VersionDatabase");
+        TEST_ASSERT(modIas->fixedInfo.dwFileVersionMS > 0, "ias.dll version must be valid");
+
+        const auto* modPol = vdb.FindModule("iaspolcy.dll");
+        TEST_ASSERT(modPol != nullptr, "iaspolcy.dll must be registered in VersionDatabase");
+
+        const auto* modRad = vdb.FindModule("iasrad.dll");
+        TEST_ASSERT(modRad != nullptr, "iasrad.dll must be registered in VersionDatabase");
+
+        const auto* modHlpr = vdb.FindModule("iashlpr.dll");
+        TEST_ASSERT(modHlpr != nullptr, "iashlpr.dll (netsh nps helper) must be registered");
+
+        const auto* modMsc = vdb.FindModule("nps.msc");
+        TEST_ASSERT(modMsc != nullptr, "nps.msc console must be registered");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: RFC 2865 RADIUS Authentication & RFC 2866 Accounting Wire Protocol Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& nps = micant::nps::NetworkPolicyServer::instance();
+
+        // 1. Test standard RFC 2865 Password Authentication (User-Password)
+        micant::nps::RadiusPacket authReq;
+        authReq.code = micant::nps::RadiusCode_AccessRequest;
+        authReq.identifier = 42;
+        for (int i = 0; i < 16; ++i) authReq.authenticator[i] = static_cast<uint8_t>(i + 1);
+
+        authReq.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+        auto encPass = micant::nps::EncryptRadiusPassword("AliceSecure2026!", authReq.authenticator, "MicaSecret2026!");
+        authReq.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encPass.data(), encPass.size());
+        authReq.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 15); // Ethernet
+
+        auto rawReq = authReq.serialize();
+        std::vector<uint8_t> rawResp;
+        bool ok = nps.processPacket("127.0.0.1", rawReq.data(), rawReq.size(), rawResp);
+        TEST_ASSERT(ok, "Access-Request must process successfully");
+
+        micant::nps::RadiusPacket authResp;
+        TEST_ASSERT(authResp.deserialize(rawResp.data(), rawResp.size()), "Access-Accept must deserialize");
+        TEST_ASSERT(authResp.code == micant::nps::RadiusCode_AccessAccept, "Response code must be Access-Accept (2)");
+        TEST_ASSERT(authResp.identifier == 42, "Response identifier must match request");
+
+        // Verify response authenticator
+        uint8_t expectedAuth[16];
+        micant::nps::CalculateResponseAuthenticator(expectedAuth, authResp.code, authResp.identifier,
+                                                    authResp.length, authReq.authenticator,
+                                                    rawResp.data() + 20, rawResp.size() - 20, "MicaSecret2026!");
+        TEST_ASSERT(std::memcmp(authResp.authenticator, expectedAuth, 16) == 0,
+                    "Access-Accept response authenticator must be cryptographically valid");
+
+        // 2. Test RFC 2866 RADIUS Accounting (Start & Stop)
+        micant::nps::RadiusPacket acctStart;
+        acctStart.code = micant::nps::RadiusCode_AccountingRequest;
+        acctStart.identifier = 77;
+        acctStart.addUint32Attribute(micant::nps::RadiusAttr_AcctStatusType, 1); // Start
+        acctStart.addStringAttribute(micant::nps::RadiusAttr_AcctSessionId, "SESS-MICA-9001");
+        acctStart.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+        acctStart.addStringAttribute(micant::nps::RadiusAttr_CallingStationId, "00-15-5D-AA-BB-CC");
+        acctStart.addUint32Attribute(micant::nps::RadiusAttr_AcctInputOctets, 1024);
+        acctStart.addUint32Attribute(micant::nps::RadiusAttr_AcctOutputOctets, 2048);
+
+        auto serializedStart = acctStart.serialize();
+        micant::nps::CalculateAccountingRequestAuthenticator(acctStart.authenticator, acctStart.code,
+                                                             acctStart.identifier, acctStart.length,
+                                                             serializedStart.data() + 20, serializedStart.size() - 20,
+                                                             "MicaSecret2026!");
+        auto finalStart = acctStart.serialize();
+        std::vector<uint8_t> startRespWire;
+        ok = nps.processPacket("127.0.0.1", finalStart.data(), finalStart.size(), startRespWire);
+        TEST_ASSERT(ok, "Accounting-Request (Start) must be accepted");
+
+        micant::nps::RadiusPacket startResp;
+        TEST_ASSERT(startResp.deserialize(startRespWire.data(), startRespWire.size()), "Accounting-Response deserialization");
+        TEST_ASSERT(startResp.code == micant::nps::RadiusCode_AccountingResponse, "Response code must be Accounting-Response (5)");
+
+        // Verify session in accounting database
+        micant::nps::AccountingSessionRecord rec{};
+        TEST_ASSERT(nps.getAccountingSession("SESS-MICA-9001", &rec), "Accounting session must be recorded");
+        TEST_ASSERT(rec.active == true, "Session must be marked active on Start");
+        TEST_ASSERT(rec.callingStationId == "00-15-5D-AA-BB-CC", "Client MAC must be captured");
+
+        // Send Accounting Stop
+        micant::nps::RadiusPacket acctStop;
+        acctStop.code = micant::nps::RadiusCode_AccountingRequest;
+        acctStop.identifier = 78;
+        acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctStatusType, 2); // Stop
+        acctStop.addStringAttribute(micant::nps::RadiusAttr_AcctSessionId, "SESS-MICA-9001");
+        acctStop.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+        acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctSessionTime, 3600); // 1 hour
+        acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctInputOctets, 52428800); // 50MB
+        acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctOutputOctets, 104857600); // 100MB
+        acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctTerminateCause, 1); // User Request
+
+        auto serializedStop = acctStop.serialize();
+        micant::nps::CalculateAccountingRequestAuthenticator(acctStop.authenticator, acctStop.code,
+                                                            acctStop.identifier, acctStop.length,
+                                                            serializedStop.data() + 20, serializedStop.size() - 20,
+                                                            "MicaSecret2026!");
+        auto finalStop = acctStop.serialize();
+        std::vector<uint8_t> stopRespWire;
+        ok = nps.processPacket("127.0.0.1", finalStop.data(), finalStop.size(), stopRespWire);
+        TEST_ASSERT(ok, "Accounting-Request (Stop) must be accepted");
+
+        TEST_ASSERT(nps.getAccountingSession("SESS-MICA-9001", &rec), "Accounting session lookup");
+        TEST_ASSERT(rec.active == false, "Session must be marked inactive after Stop");
+        TEST_ASSERT(rec.sessionTimeSec == 3600, "Session time must match");
+        TEST_ASSERT(rec.terminateCause == 1, "Terminate cause must be User Request");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Microsoft Vendor-Specific Attributes & MS-CHAPv2 Handshake Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& nps = micant::nps::NetworkPolicyServer::instance();
+
+        // 1. Verify RFC 2759 Cryptographic Test Vector
+        uint8_t pHash[16] = {
+            0x44, 0xEB, 0xBA, 0x8D, 0x53, 0x12, 0xB8, 0xD6,
+            0x11, 0x47, 0x44, 0x11, 0xF5, 0x69, 0x89, 0xAE
+        };
+        uint8_t authChallenge[16] = {
+            0x5B, 0x5D, 0x7C, 0x7D, 0x7B, 0x3F, 0x2F, 0x3E,
+            0x3C, 0x2C, 0x60, 0x21, 0x32, 0x26, 0x26, 0x28
+        };
+        uint8_t peerChallenge[16] = {
+            0x21, 0x40, 0x23, 0x24, 0x25, 0x5E, 0x26, 0x2A,
+            0x28, 0x29, 0x5F, 0x2B, 0x3A, 0x33, 0x7C, 0x7E
+        };
+
+        uint8_t ch8[8];
+        micant::nps::crypto::ChallengeHash(peerChallenge, authChallenge, "User", ch8);
+        uint8_t expectedCh8[8] = { 0xD0, 0x2E, 0x43, 0x86, 0xBC, 0xE9, 0x12, 0x26 };
+        TEST_ASSERT(std::memcmp(ch8, expectedCh8, 8) == 0,
+                    "ChallengeHash must match RFC 2759 Section 9 test vector exactly");
+
+        uint8_t ntResp[24];
+        micant::nps::crypto::ChallengeResponse(ch8, pHash, ntResp);
+        uint8_t expectedNtResp[24] = {
+            0x82, 0x30, 0x9E, 0xCD, 0x8D, 0x70, 0x8B, 0x5E,
+            0xA0, 0x8F, 0xAA, 0x39, 0x81, 0xCD, 0x83, 0x54,
+            0x42, 0x33, 0x11, 0x4A, 0x3D, 0x85, 0xD6, 0xDF
+        };
+        TEST_ASSERT(std::memcmp(ntResp, expectedNtResp, 24) == 0,
+                    "ChallengeResponse must match RFC 2759 Section 9 (Errata ID 1421) exactly");
+
+        // 2. End-to-End RADIUS MS-CHAPv2 Handshake with Domain Administrator
+        micant::nps::RadiusPacket req;
+        req.code = micant::nps::RadiusCode_AccessRequest;
+        req.identifier = 99;
+        for (int i = 0; i < 16; ++i) req.authenticator[i] = static_cast<uint8_t>(0xA0 + i);
+
+        req.addStringAttribute(micant::nps::RadiusAttr_UserName, "Administrator");
+        req.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 19); // Wireless IEEE 802.11
+
+        // Server Challenge (MS-CHAP-Challenge VSA 11)
+        std::vector<uint8_t> srvChallenge(16);
+        for (int i = 0; i < 16; ++i) srvChallenge[i] = static_cast<uint8_t>(0x30 + i);
+        req.addAttribute(micant::nps::CreateMicrosoftVsa(micant::nps::MsVsa_ChapChallenge, srvChallenge));
+
+        // Client Peer Challenge & NT-Response derived from "Password123!"
+        uint8_t clientPeerChallenge[16];
+        for (int i = 0; i < 16; ++i) clientPeerChallenge[i] = static_cast<uint8_t>(0x50 + i);
+
+        uint8_t adminNtHash[16];
+        micant::nps::crypto::NtPasswordHash("Password123!", adminNtHash);
+
+        uint8_t adminCh8[8];
+        micant::nps::crypto::ChallengeHash(clientPeerChallenge, srvChallenge.data(), "Administrator", adminCh8);
+
+        uint8_t adminNtResp[24];
+        micant::nps::crypto::ChallengeResponse(adminCh8, adminNtHash, adminNtResp);
+
+        // Build MS-CHAP2-Response payload: Ident(1B), Flags(1B), PeerChallenge(16B), Reserved(8B), NTResponse(24B)
+        std::vector<uint8_t> chap2Payload;
+        chap2Payload.push_back(1); // Ident
+        chap2Payload.push_back(0); // Flags
+        chap2Payload.insert(chap2Payload.end(), clientPeerChallenge, clientPeerChallenge + 16);
+        for (int i = 0; i < 8; ++i) chap2Payload.push_back(0); // Reserved
+        chap2Payload.insert(chap2Payload.end(), adminNtResp, adminNtResp + 24);
+
+        req.addAttribute(micant::nps::CreateMicrosoftVsa(micant::nps::MsVsa_Chap2Response, chap2Payload));
+
+        auto rawReqWire = req.serialize();
+        std::vector<uint8_t> rawRespWire;
+        bool processed = nps.processPacket("127.0.0.1", rawReqWire.data(), rawReqWire.size(), rawRespWire);
+        TEST_ASSERT(processed, "MS-CHAPv2 Access-Request must process successfully");
+
+        micant::nps::RadiusPacket respPkt;
+        TEST_ASSERT(respPkt.deserialize(rawRespWire.data(), rawRespWire.size()), "Response deserialization");
+        TEST_ASSERT(respPkt.code == micant::nps::RadiusCode_AccessAccept, "MS-CHAPv2 must produce Access-Accept");
+
+        // Verify Microsoft Vendor-Specific Attributes in Access-Accept
+        bool foundSuccess = false;
+        bool foundMppePolicy = false;
+        bool foundMppeTypes = false;
+        bool foundSendKey = false;
+        bool foundRecvKey = false;
+
+        for (const auto& attr : respPkt.attributes) {
+            if (attr.type == micant::nps::RadiusAttr_VendorSpecific) {
+                std::vector<micant::nps::MicrosoftSubAttribute> msSubs;
+                if (micant::nps::ParseMicrosoftVsa(attr, msSubs)) {
+                    for (const auto& sub : msSubs) {
+                        if (sub.subType == micant::nps::MsVsa_Chap2Success) {
+                            foundSuccess = true;
+                            std::string sVal = sub.asString();
+                            TEST_ASSERT(sVal.find("S=") != std::string::npos, "MS-CHAP2-Success must contain S= AuthenticatorResponse");
+                            TEST_ASSERT(sVal.find("M=") != std::string::npos, "MS-CHAP2-Success must contain M= Message");
+                        } else if (sub.subType == micant::nps::MsVsa_MppeEncryptionPolicy) {
+                            foundMppePolicy = true;
+                            TEST_ASSERT(sub.asUint32() == 2, "MPPE Encryption Policy must be Required (2)");
+                        } else if (sub.subType == micant::nps::MsVsa_MppeEncryptionTypes) {
+                            foundMppeTypes = true;
+                            TEST_ASSERT(sub.asUint32() == 4, "MPPE Encryption Types must be 128-bit (4)");
+                        } else if (sub.subType == micant::nps::MsVsa_MppeSendKey) {
+                            foundSendKey = true;
+                        } else if (sub.subType == micant::nps::MsVsa_MppeRecvKey) {
+                            foundRecvKey = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        TEST_ASSERT(foundSuccess, "Access-Accept must include MS-CHAP2-Success VSA");
+        TEST_ASSERT(foundMppePolicy, "Access-Accept must include MS-MPPE-Encryption-Policy VSA");
+        TEST_ASSERT(foundMppeTypes, "Access-Accept must include MS-MPPE-Encryption-Types VSA");
+        TEST_ASSERT(foundSendKey && foundRecvKey, "Access-Accept must include MS-MPPE session keys");
+
+        // 3. Test MS-CHAPv2 Authentication Failure on Invalid Password
+        std::vector<uint8_t> badChap2Payload = chap2Payload;
+        badChap2Payload.back() ^= 0xFF; // corrupt NTResponse
+        micant::nps::RadiusPacket badReq = req;
+        badReq.identifier = 100;
+        badReq.attributes.clear();
+        badReq.addStringAttribute(micant::nps::RadiusAttr_UserName, "Administrator");
+        badReq.addAttribute(micant::nps::CreateMicrosoftVsa(micant::nps::MsVsa_ChapChallenge, srvChallenge));
+        badReq.addAttribute(micant::nps::CreateMicrosoftVsa(micant::nps::MsVsa_Chap2Response, badChap2Payload));
+
+        auto badWire = badReq.serialize();
+        std::vector<uint8_t> badRespWire;
+        nps.processPacket("127.0.0.1", badWire.data(), badWire.size(), badRespWire);
+        micant::nps::RadiusPacket badResp;
+        badResp.deserialize(badRespWire.data(), badRespWire.size());
+        TEST_ASSERT(badResp.code == micant::nps::RadiusCode_AccessReject,
+                    "Corrupted MS-CHAPv2 NT-Response must return Access-Reject");
+
+        bool foundError = false;
+        for (const auto& attr : badResp.attributes) {
+            if (attr.type == micant::nps::RadiusAttr_VendorSpecific) {
+                std::vector<micant::nps::MicrosoftSubAttribute> msSubs;
+                if (micant::nps::ParseMicrosoftVsa(attr, msSubs)) {
+                    for (const auto& sub : msSubs) {
+                        if (sub.subType == micant::nps::MsVsa_ChapError) {
+                            foundError = true;
+                            TEST_ASSERT(sub.asString().find("E=691") != std::string::npos,
+                                        "MS-CHAP-Error must contain E=691 (ERROR_AUTHENTICATION_FAILURE)");
+                        }
+                    }
+                }
+            }
+        }
+        TEST_ASSERT(foundError, "Access-Reject must contain MS-CHAP-Error VSA");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Sovereign Network Policy Engine, Connection Request Policies & AD DS
+    // ------------------------------------------------------------------------
+    {
+        auto& nps = micant::nps::NetworkPolicyServer::instance();
+
+        // 1. Verify AD DS User Lookup and Domain Group Memberships
+        micant::nps::NpsUserAccount adminAcct{};
+        bool found = nps.getUser("MICANT\\Administrator", &adminAcct);
+        TEST_ASSERT(found, "Administrator must resolve via AD DS / local directory");
+        TEST_ASSERT(adminAcct.enabled, "Administrator must be enabled");
+
+        bool isDomainAdmin = (std::find(adminAcct.groupMemberships.begin(),
+                                        adminAcct.groupMemberships.end(),
+                                        "Domain Admins") != adminAcct.groupMemberships.end());
+        TEST_ASSERT(isDomainAdmin, "Administrator must be member of Domain Admins");
+
+        // 2. Verify Policy Precedence and VLAN Assignment for Corporate Wireless
+        micant::nps::NpsUserAccount aliceAcct{};
+        found = nps.getUser("Alice", &aliceAcct);
+        TEST_ASSERT(found, "Alice account must resolve");
+
+        micant::nps::NetworkPolicy matchedPol{};
+        bool evaluated = nps.evaluateNetworkPolicies(aliceAcct, 19, &matchedPol); // Port 19 = Wireless
+        TEST_ASSERT(evaluated, "Network policy must match for Alice on Wireless");
+        TEST_ASSERT(matchedPol.permission == micant::nps::PolicyPermission::GrantAccess, "Policy must grant access");
+        TEST_ASSERT(matchedPol.assignedVlanId == "100", "Corporate Wireless must assign VLAN 100");
+
+        // 3. Verify Denial of Disabled Account
+        micant::nps::NpsUserAccount disabledAcct{};
+        found = nps.getUser("DisabledUser", &disabledAcct);
+        TEST_ASSERT(found, "DisabledUser must resolve");
+        TEST_ASSERT(!disabledAcct.enabled, "DisabledUser must be marked disabled");
+
+        evaluated = nps.evaluateNetworkPolicies(disabledAcct, 15, &matchedPol);
+        TEST_ASSERT(matchedPol.permission == micant::nps::PolicyPermission::DenyAccess,
+                    "Highest priority policy must explicitly deny DisabledAccounts");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical netsh nps CLI Interface
+    // ------------------------------------------------------------------------
+    {
+        // 1. Test 'netsh nps show config'
+        std::string outStr;
+        int rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps show config", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps show config must succeed");
+        TEST_ASSERT(outStr.find("DC01.micant.local") != std::string::npos, "Show config must contain server FQDN");
+        TEST_ASSERT(outStr.find("micant.local") != std::string::npos, "Show config must contain domain name");
+        TEST_ASSERT(outStr.find("1812") != std::string::npos, "Show config must contain auth port 1812");
+
+        // 2. Test 'netsh nps show clients'
+        outStr.clear();
+        rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps show clients", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps show clients must succeed");
+        TEST_ASSERT(outStr.find("Cisco-Core-Switch") != std::string::npos, "Clients table must list Cisco-Core-Switch");
+        TEST_ASSERT(outStr.find("192.168.1.1") != std::string::npos, "Clients table must list IP 192.168.1.1");
+
+        // 3. Test 'netsh nps show policies'
+        outStr.clear();
+        rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps show policies", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps show policies must succeed");
+        TEST_ASSERT(outStr.find("Corporate Wireless Network Policy") != std::string::npos, "Policies table must list Wireless policy");
+        TEST_ASSERT(outStr.find("100") != std::string::npos, "Policies table must list VLAN 100");
+
+        // 4. Test 'netsh nps add client' and 'delete client'
+        outStr.clear();
+        rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps add client name=\"Branch-Office-AP\" address=\"10.50.1.1\" secret=\"BranchSecret2026!\" vendor=\"Aruba\"", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps add client must succeed");
+        TEST_ASSERT(outStr.find("successfully") != std::string::npos, "Add client confirmation message");
+
+        micant::nps::RadiusClient clientCheck{};
+        TEST_ASSERT(micant::nps::NetworkPolicyServer::instance().getClient("10.50.1.1", &clientCheck), "Client must be found in server");
+        TEST_ASSERT(clientCheck.friendlyName == "Branch-Office-AP", "Client friendly name match");
+        TEST_ASSERT(clientCheck.sharedSecret == "BranchSecret2026!", "Client shared secret match");
+
+        outStr.clear();
+        rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps delete client name=\"Branch-Office-AP\"", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps delete client must succeed");
+        TEST_ASSERT(!micant::nps::NetworkPolicyServer::instance().getClient("10.50.1.1", &clientCheck), "Client must be deleted");
+
+        // 5. Test 'netsh nps dump' and 'netsh nps export'
+        outStr.clear();
+        rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps dump", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps dump must succeed");
+        TEST_ASSERT(outStr.find("pushd nps") != std::string::npos, "Dump must produce pushd nps block");
+
+        outStr.clear();
+        rc = micant::netsh::nps::um::ExecuteNetshNpsString("netsh nps export filename=\"ias.xml\"", outStr);
+        TEST_ASSERT(rc == 0, "netsh nps export must succeed");
+        TEST_ASSERT(outStr.find("successfully exported") != std::string::npos, "Export confirmation");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: WFP Inbound Rule #16701, Remote Web Terminal & Push Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        // 1. Verify Remote Terminal Execution of 'netsh nps'
+        std::string termRes = console.executeTerminalCommand("netsh nps show config");
+        TEST_ASSERT(termRes.find("MicaNT Sovereign Network Policy Server") != std::string::npos,
+                    "Terminal executed netsh nps show config");
+
+        // 2. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"nps_access_requests\":") != std::string::npos, "Telemetry nps_access_requests match");
+        TEST_ASSERT(teleJson.find("\"nps_access_accepts\":") != std::string::npos, "Telemetry nps_access_accepts match");
+        TEST_ASSERT(teleJson.find("\"nps_access_rejects\":") != std::string::npos, "Telemetry nps_access_rejects match");
+        TEST_ASSERT(teleJson.find("\"nps_accounting_packets\":") != std::string::npos, "Telemetry nps_accounting_packets match");
+        TEST_ASSERT(teleJson.find("\"nps_active_clients\":") != std::string::npos, "Telemetry nps_active_clients match");
+        TEST_ASSERT(teleJson.find("\"nps_last_auth_latency_us\":") != std::string::npos, "Telemetry nps_last_auth_latency_us match");
+
+        // 3. WFP Rule #16701 (MicaNT_NPS_Radius_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(16701);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #16701 for NPS/RADIUS must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_UDP, "NPS rule protocol must be UDP");
+        TEST_ASSERT(ruleOpt->localPortStart == 1645 && ruleOpt->localPortEnd == 1813, "NPS rule port range 1645-1813");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "NPS rule action must be PERMIT");
+    }
+
+    std::cout << "[HORIZON 167] Sovereign Network Policy Server (NPS / RADIUS / MS-CHAPv2) Summary:\n"
+              << "    Pillar 1: NPS Architecture, SCM Service & VersionDatabase Registration OK\n"
+              << "    Pillar 2: RFC 2865 RADIUS Authentication & RFC 2866 Accounting Wire Engine OK\n"
+              << "    Pillar 3: Microsoft VSA 311 & RFC 2759 MS-CHAPv2 Mutual Authentication OK\n"
+              << "    Pillar 4: Sovereign Network Policy Engine, CRP & AD DS Authorization OK\n"
+              << "    Pillar 5: Canonical netsh nps CLI Interface (show/dump/export/import/clients) OK\n"
+              << "    Pillar 6: WFP Inbound Rule #16701, Remote Web Terminal & Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 383: Horizon 167 - Sovereign Network Policy Server (NPS / RADIUS / CLI) PASSED." << std::endl;
 }

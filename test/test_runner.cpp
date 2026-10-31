@@ -321,6 +321,7 @@
 #include "micant/um/subsystems/mgmt/grouppolicy.hpp"
 #include "micant/um/servers/remotedesktop.hpp"
 #include "micant/um/servers/nps.hpp"
+#include "micant/um/subsystems/net/netsh_nps.hpp"
 #include "micant/um/servers/wsrm.hpp"
 #include "micant/um/subsystems/mgmt/wds.hpp"
 #include "micant/um/servers/certsrv.hpp"
@@ -420,6 +421,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite383") {
+        RUN_TEST(Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite382") {
@@ -1884,6 +1889,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon164_ActiveDirectoryCertificateServices_EnterprisePKI_And_CertutilCLI);
     RUN_TEST(Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI);
     RUN_TEST(Test_Horizon166_ActiveDirectoryGroupPolicy_Sysvol_And_GpToolsCLI);
+    RUN_TEST(Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -45,6 +45,8 @@
 #include "micant/um/subsystems/net/winrm_tools.hpp"
 #include "micant/um/servers/gpo_sysvol.hpp"
 #include "micant/um/subsystems/mgmt/gp_tools.hpp"
+#include "micant/um/servers/nps.hpp"
+#include "micant/um/subsystems/net/netsh_nps.hpp"
 
 namespace micant::km::net {
 
@@ -171,6 +173,19 @@ public:
         gpRule.weight = 1500;
         gpRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(gpRule);
+
+        // 10. Register WFP Inbound Rule for Network Policy Server (NPS / RADIUS UDP Port 1812/1813/1645/1646)
+        wfp::km::WfpKernelFilterRule npsRule{};
+        npsRule.filterId = 16701;
+        npsRule.name = "MicaNT_NPS_Radius_Inbound_Permit";
+        npsRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        npsRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        npsRule.protocol = tcpip::IPPROTO_UDP;
+        npsRule.localPortStart = 1645;
+        npsRule.localPortEnd = 1813;
+        npsRule.weight = 1500;
+        npsRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(npsRule);
     }
 
     void stopHttpsServer() {
@@ -525,6 +540,10 @@ public:
             std::string res;
             mstsc::um::SessionCommandExecutor::Instance().executeReset(subArgs, res);
             return res;
+        } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
+            std::string res;
+            netsh::nps::um::ExecuteNetshNpsString(cmd, res);
+            return res;
         } else if (cmd == "netsh dhcp" || cmd.starts_with("netsh dhcp ") || cmd == "dhcp" || cmd.starts_with("dhcp ")) {
             std::string res;
             netsh::dhcp::um::ExecuteNetshDhcpString(cmd, res);
@@ -706,7 +725,13 @@ public:
            << "\"gpo_applied_count\":" << micant::gp::GroupPolicySubsystem::instance().getPoliciesApplied() << ","
            << "\"gpo_refreshes_completed\":" << micant::gp::GroupPolicySubsystem::instance().getRefreshesCompleted() << ","
            << "\"gpo_last_refresh_us\":" << micant::gp::GroupPolicySubsystem::instance().getLastMachineReport().refreshTimestampUs << ","
-           << "\"gpo_cse_invocations\":" << micant::gp::GroupPolicySubsystem::instance().getCseInvocations() << "}\r\n";
+           << "\"gpo_cse_invocations\":" << micant::gp::GroupPolicySubsystem::instance().getCseInvocations() << ","
+           << "\"nps_access_requests\":" << micant::nps::NetworkPolicyServer::instance().getTotalAuthRequests() << ","
+           << "\"nps_access_accepts\":" << micant::nps::NetworkPolicyServer::instance().getTotalAuthSuccesses() << ","
+           << "\"nps_access_rejects\":" << micant::nps::NetworkPolicyServer::instance().getTotalAuthRejections() << ","
+           << "\"nps_accounting_packets\":" << micant::nps::NetworkPolicyServer::instance().getTotalAcctRequests() << ","
+           << "\"nps_active_clients\":" << micant::nps::NetworkPolicyServer::instance().getAllClients().size() << ","
+           << "\"nps_last_auth_latency_us\":" << micant::nps::NetworkPolicyServer::instance().getLastAuthLatencyUs() << "}\r\n";
         return ss.str();
     }
 
