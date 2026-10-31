@@ -49,6 +49,8 @@
 #include "micant/um/subsystems/net/netsh_nps.hpp"
 #include "micant/um/servers/wds.hpp"
 #include "micant/um/subsystems/net/wdsutil.hpp"
+#include "micant/um/servers/dfs.hpp"
+#include "micant/um/subsystems/net/dfsutil.hpp"
 
 namespace micant::km::net {
 
@@ -201,6 +203,19 @@ public:
         wdsRule.weight = 1500;
         wdsRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(wdsRule);
+
+        // 12. Register WFP Inbound Rule for Distributed File System (DFS Referrals TCP 445 & DFSR RPC TCP 5722)
+        wfp::km::WfpKernelFilterRule dfsRule{};
+        dfsRule.filterId = 16901;
+        dfsRule.name = "MicaNT_DFS_Inbound_Permit";
+        dfsRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        dfsRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        dfsRule.protocol = tcpip::IPPROTO_TCP;
+        dfsRule.localPortStart = 445;
+        dfsRule.localPortEnd = 5722;
+        dfsRule.weight = 1500;
+        dfsRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(dfsRule);
     }
 
     void stopHttpsServer() {
@@ -559,6 +574,10 @@ public:
             std::string res;
             wdsutil::um::ExecuteWdsutilString(cmd, res);
             return res;
+        } else if (cmd == "dfsutil" || cmd.starts_with("dfsutil ") || cmd == "dfsrdiag" || cmd.starts_with("dfsrdiag ")) {
+            std::string res;
+            dfsutil::um::ExecuteDfsutilString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -756,7 +775,13 @@ public:
            << "\"wds_tftp_bytes_sent\":" << micant::wds::WindowsDeploymentServer::instance().getTotalTftpBytesSent() << ","
            << "\"wds_boot_images\":" << micant::wds::WindowsDeploymentServer::instance().getAllBootImages().size() << ","
            << "\"wds_install_images\":" << micant::wds::WindowsDeploymentServer::instance().getAllInstallImages().size() << ","
-           << "\"wds_active_deployments\":" << micant::wds::WindowsDeploymentServer::instance().getActiveDeployments().size() << "}\r\n";
+           << "\"wds_active_deployments\":" << micant::wds::WindowsDeploymentServer::instance().getActiveDeployments().size() << ","
+           << "\"dfs_namespaces_active\":" << micant::dfs::SovereignDfsEngine::instance().getAllNamespaces().size() << ","
+           << "\"dfs_referral_requests\":" << micant::dfs::SovereignDfsEngine::instance().getTotalReferralRequests() << ","
+           << "\"dfs_referral_latency_us\":" << micant::dfs::SovereignDfsEngine::instance().getLastReferralLatencyUs() << ","
+           << "\"dfsr_replicated_folders\":" << micant::dfs::SovereignDfsEngine::instance().getAllReplicationGroups().size() << ","
+           << "\"dfsr_bytes_replicated\":" << micant::dfs::SovereignDfsEngine::instance().getTotalBytesReplicated() << ","
+           << "\"dfsr_conflicts_resolved\":" << micant::dfs::SovereignDfsEngine::instance().getTotalConflictsResolved() << "}\r\n";
         return ss.str();
     }
 

@@ -324,6 +324,8 @@
 #include "micant/um/subsystems/net/netsh_nps.hpp"
 #include "micant/um/servers/wsrm.hpp"
 #include "micant/um/subsystems/mgmt/wds.hpp"
+#include "micant/um/servers/dfs.hpp"
+#include "micant/um/subsystems/net/dfsutil.hpp"
 #include "micant/um/servers/certsrv.hpp"
 #include "micant/um/subsystems/security/certutil.hpp"
 #include "micant/um/servers/wmi_provider.hpp"
@@ -421,6 +423,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite385") {
+        RUN_TEST(Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite384") {
@@ -1895,6 +1901,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon166_ActiveDirectoryGroupPolicy_Sysvol_And_GpToolsCLI);
     RUN_TEST(Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI);
     RUN_TEST(Test_Horizon168_WindowsDeploymentServices_Tftp_Pxe_And_WdsutilCLI);
+    RUN_TEST(Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

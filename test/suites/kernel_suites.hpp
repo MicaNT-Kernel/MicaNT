@@ -31109,3 +31109,338 @@ void Test_Horizon168_WindowsDeploymentServices_Tftp_Pxe_And_WdsutilCLI() {
 
     std::cout << "[TEST] Suite 384: Horizon 168 - Sovereign Windows Deployment Services (WDS / PXE / CLI) PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 169 (Suite 385): Sovereign Distributed File System (DFS / DFS-N & DFS-R),
+// MS-DFSNM Namespace Referral Engine, MS-FRS2 Multi-Master Replication,
+// Remote Differential Compression (RDC) & Canonical dfsutil.exe CLI
+// ============================================================================
+inline void Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 385: Horizon 169 - Sovereign Distributed File System (DFS / DFS-N & DFS-R),\n"
+              << "MS-DFSNM Namespace Referral Engine, MS-FRS2 Multi-Master Replication,\n"
+              << "Remote Differential Compression (RDC) & Canonical dfsutil.exe CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DFS & DFSR SCM Services & VersionDatabase Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& dfs = micant::dfs::SovereignDfsEngine::instance();
+        dfs.resetForTest();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto sDfs = scm.getServiceRecord(L"Dfs");
+        auto sDfsr = scm.getServiceRecord(L"DFSR");
+
+        TEST_ASSERT(sDfs != nullptr, "Dfs service must be registered in SCM");
+        TEST_ASSERT(sDfs->startType == micant::scm::SERVICE_AUTO_START, "Dfs must be auto-start");
+        TEST_ASSERT(sDfs->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Dfs must be running");
+
+        TEST_ASSERT(sDfsr != nullptr, "DFSR service must be registered in SCM");
+        TEST_ASSERT(sDfsr->startType == micant::scm::SERVICE_AUTO_START, "DFSR must be auto-start");
+        TEST_ASSERT(sDfsr->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "DFSR must be running");
+
+        auto& db = micant::version::VersionDatabase::Instance();
+        const auto* mSvc = db.FindModule("dfssvc.dll");
+        const auto* mDfsr = db.FindModule("dfsr.dll");
+        const auto* mUtil = db.FindModule("dfsutil.exe");
+        const auto* mDiag = db.FindModule("dfsrdiag.exe");
+        const auto* mCli = db.FindModule("dfscli.dll");
+        const auto* mRdc = db.FindModule("rdc.dll");
+
+        TEST_ASSERT(mSvc != nullptr, "dfssvc.dll must exist in VersionDatabase");
+        TEST_ASSERT(mSvc->stringTable.at("FileVersion") == "10.0.26100.1", "dfssvc.dll version match");
+        TEST_ASSERT(mDfsr != nullptr, "dfsr.dll must exist in VersionDatabase");
+        TEST_ASSERT(mUtil != nullptr, "dfsutil.exe must exist in VersionDatabase");
+        TEST_ASSERT(mDiag != nullptr, "dfsrdiag.exe must exist in VersionDatabase");
+        TEST_ASSERT(mCli != nullptr, "dfscli.dll must exist in VersionDatabase");
+        TEST_ASSERT(mRdc != nullptr, "rdc.dll must exist in VersionDatabase");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: MS-DFSNM & MS-DFSC Namespace Referral Engine & Site-Cost Routing
+    // ------------------------------------------------------------------------
+    {
+        auto& dfs = micant::dfs::SovereignDfsEngine::instance();
+
+        // 1. Root Referral Request: \\micant.local\CorpData
+        micant::dfs::DfsReferralRequest reqRoot;
+        reqRoot.requestPath = "\\\\micant.local\\CorpData";
+        reqRoot.clientSite = "Default-First-Site-Name";
+        micant::dfs::DfsReferralResponse respRoot;
+        bool ok = dfs.getReferrals(reqRoot, respRoot);
+        TEST_ASSERT(ok, "Root referral request must succeed");
+        TEST_ASSERT(respRoot.status == 0, "Root referral status must be STATUS_SUCCESS (0)");
+        TEST_ASSERT(respRoot.referrals.size() >= 2, "Root referral must return at least 2 DC targets");
+        TEST_ASSERT(respRoot.referrals[0].serverType == 1, "Referral must indicate Root referral (1)");
+        TEST_ASSERT(respRoot.referrals[0].targetUnc == "\\\\DC01.micant.local\\CorpData", "DC01 in local site must be first target");
+
+        // 2. Link Referral Request from HQ Site: \\micant.local\CorpData\Finance
+        micant::dfs::DfsReferralRequest reqFinHq;
+        reqFinHq.requestPath = "\\\\micant.local\\CorpData\\Finance";
+        reqFinHq.clientSite = "Default-First-Site-Name";
+        micant::dfs::DfsReferralResponse respFinHq;
+        ok = dfs.getReferrals(reqFinHq, respFinHq);
+        TEST_ASSERT(ok, "Link referral request from HQ must succeed");
+        TEST_ASSERT(respFinHq.referrals.size() == 2, "Finance link has 2 targets");
+        TEST_ASSERT(respFinHq.referrals[0].targetUnc == "\\\\FS-HQ-01.micant.local\\FinanceData", "FS-HQ-01 must be first for HQ client");
+        TEST_ASSERT(respFinHq.referrals[1].targetUnc == "\\\\FS-LON-01.micant.local\\FinanceData", "FS-LON-01 must be second for HQ client");
+
+        // 3. Link Referral Request from Branch-London Site
+        micant::dfs::DfsReferralRequest reqFinLon;
+        reqFinLon.requestPath = "\\\\micant.local\\CorpData\\Finance";
+        reqFinLon.clientSite = "Branch-London";
+        micant::dfs::DfsReferralResponse respFinLon;
+        ok = dfs.getReferrals(reqFinLon, respFinLon);
+        TEST_ASSERT(ok, "Link referral request from London must succeed");
+        TEST_ASSERT(respFinLon.referrals[0].targetUnc == "\\\\FS-LON-01.micant.local\\FinanceData", "FS-LON-01 must be first for London client (SiteCost=0)");
+
+        // 4. Referral Cache Hit & Flush
+        size_t initialQueries = dfs.getTotalReferralRequests();
+        size_t initialHits = dfs.getTotalCacheHits();
+        dfs.getReferrals(reqFinHq, respFinHq); // Repeat query to test cache hit
+        TEST_ASSERT(dfs.getTotalReferralRequests() > initialQueries, "Referral requests counter must advance");
+        TEST_ASSERT(dfs.getTotalCacheHits() > initialHits, "Referral cache hit counter must advance");
+        TEST_ASSERT(dfs.getReferralCacheSize() > 0, "Referral cache size must be positive");
+
+        dfs.flushReferralCache();
+        TEST_ASSERT(dfs.getReferralCacheSize() == 0, "Cache flush must empty referral cache");
+
+        // 5. Invalid Link Referral Handling
+        micant::dfs::DfsReferralRequest reqInvalid;
+        reqInvalid.requestPath = "\\\\micant.local\\CorpData\\NonExistentFolder";
+        micant::dfs::DfsReferralResponse respInvalid;
+        ok = dfs.getReferrals(reqInvalid, respInvalid);
+        TEST_ASSERT(!ok || respInvalid.status != 0, "Invalid link referral must fail");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic Namespace Link & Target Mutation API
+    // ------------------------------------------------------------------------
+    {
+        auto& dfs = micant::dfs::SovereignDfsEngine::instance();
+
+        // 1. Add new folder link: \\micant.local\CorpData\Legal
+        micant::dfs::DfsFolderLink linkLegal;
+        linkLegal.linkPath = "Legal";
+        linkLegal.fullDfsPath = "\\\\micant.local\\CorpData\\Legal";
+        linkLegal.description = "Corporate Legal & Compliance Shares";
+        linkLegal.timeToLiveSec = 300;
+
+        micant::dfs::DfsTarget tgtLegal1;
+        tgtLegal1.targetServer = "FS-HQ-01.micant.local";
+        tgtLegal1.targetFolder = "LegalDocs";
+        tgtLegal1.fullUncPath = "\\\\FS-HQ-01.micant.local\\LegalDocs";
+        tgtLegal1.siteName = "Default-First-Site-Name";
+        tgtLegal1.state = micant::dfs::DfsTargetState::Online;
+        linkLegal.targets.push_back(tgtLegal1);
+
+        bool added = dfs.addFolderLink("\\\\micant.local\\CorpData", linkLegal);
+        TEST_ASSERT(added, "Adding Legal folder link must succeed");
+
+        // Verify Legal link resolution
+        micant::dfs::DfsReferralRequest reqLegal;
+        reqLegal.requestPath = "\\\\micant.local\\CorpData\\Legal";
+        reqLegal.clientSite = "Default-First-Site-Name";
+        micant::dfs::DfsReferralResponse respLegal;
+        TEST_ASSERT(dfs.getReferrals(reqLegal, respLegal), "Referral for Legal link must succeed");
+        TEST_ASSERT(respLegal.referrals[0].targetUnc == "\\\\FS-HQ-01.micant.local\\LegalDocs", "Legal target match");
+
+        // 2. Add secondary target to Legal link
+        micant::dfs::DfsTarget tgtLegal2;
+        tgtLegal2.targetServer = "FS-LON-01.micant.local";
+        tgtLegal2.targetFolder = "LegalDocs";
+        tgtLegal2.fullUncPath = "\\\\FS-LON-01.micant.local\\LegalDocs";
+        tgtLegal2.siteName = "Branch-London";
+        tgtLegal2.state = micant::dfs::DfsTargetState::Online;
+
+        bool tgtAdded = dfs.addTargetToLink("\\\\micant.local\\CorpData", "Legal", tgtLegal2);
+        TEST_ASSERT(tgtAdded, "Adding secondary target to Legal link must succeed");
+
+        // 3. Mark primary target Offline & verify failover referral
+        dfs.setTargetState("\\\\micant.local\\CorpData", "Legal", "\\\\FS-HQ-01.micant.local\\LegalDocs", micant::dfs::DfsTargetState::Offline);
+        respLegal.referrals.clear();
+        dfs.getReferrals(reqLegal, respLegal);
+        TEST_ASSERT(respLegal.referrals.size() == 1, "Only online target must be returned");
+        TEST_ASSERT(respLegal.referrals[0].targetUnc == "\\\\FS-LON-01.micant.local\\LegalDocs", "Failover to FS-LON-01 when FS-HQ-01 offline");
+
+        // Clean up Legal link
+        dfs.removeFolderLink("\\\\micant.local\\CorpData", "Legal");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: MS-FRS2 DFS Replication (DFS-R) Multi-Master Engine & Conflict Resolution
+    // ------------------------------------------------------------------------
+    {
+        auto& dfs = micant::dfs::SovereignDfsEngine::instance();
+
+        // 1. Verify Default Replication Group & Files
+        micant::dfs::DfsrReplicationGroup rg;
+        TEST_ASSERT(dfs.getReplicationGroup("RG-Finance-Replication", &rg), "RG-Finance-Replication must exist");
+        TEST_ASSERT(rg.members.size() == 2, "Replication group must have 2 members");
+        TEST_ASSERT(rg.folders.find("FinanceData") != rg.folders.end(), "FinanceData folder must exist");
+
+        // 2. Update File & Advance GVSN
+        bool upOk = dfs.updateFile("RG-Finance-Replication", "FinanceData",
+                                  "{11111111-2222-3333-4444-555555555555}",
+                                  "GeneralLedger_2026.xlsx", 1048600, "abcdef1234567890",
+                                  133500050000000000ULL);
+        TEST_ASSERT(upOk, "Updating file must succeed and advance GVSN");
+
+        // 3. Conflict Resolution: Simultaneous Update from Remote Member
+        // Remote update with older timestamp (Local wins)
+        micant::dfs::DfsrFileRecord olderRemote;
+        olderRemote.relativePath = "GeneralLedger_2026.xlsx";
+        olderRemote.fileSize = 1048590;
+        olderRemote.lastWriteTime = 133500000000000000ULL; // older
+        olderRemote.gvsn = {"{66666666-7777-8888-9999-AAAAAAAAAAAA}", 50};
+        olderRemote.sha256Hash = "deadbeef11223344";
+
+        bool conflictCreated = false;
+        bool remoteWins = dfs.reconcileFileUpdate("RG-Finance-Replication", "FinanceData", olderRemote, conflictCreated);
+        TEST_ASSERT(!remoteWins, "Older remote update must lose to newer local update");
+        TEST_ASSERT(conflictCreated, "Conflict record must be preserved in ConflictAndDeleted");
+
+        // Remote update with newer timestamp (Remote wins)
+        micant::dfs::DfsrFileRecord newerRemote;
+        newerRemote.relativePath = "GeneralLedger_2026.xlsx";
+        newerRemote.fileSize = 1048700;
+        newerRemote.lastWriteTime = 133500099999999999ULL; // newer
+        newerRemote.gvsn = {"{66666666-7777-8888-9999-AAAAAAAAAAAA}", 51};
+        newerRemote.sha256Hash = "beefcafe99887766";
+
+        remoteWins = dfs.reconcileFileUpdate("RG-Finance-Replication", "FinanceData", newerRemote, conflictCreated);
+        TEST_ASSERT(remoteWins, "Newer remote update must win (Last-Writer-Wins)");
+        TEST_ASSERT(conflictCreated, "Conflict record must be created when newer remote overwrites local");
+
+        // Verify conflict records preserved in folder
+        dfs.getReplicationGroup("RG-Finance-Replication", &rg);
+        TEST_ASSERT(rg.folders["FinanceData"].conflicts.size() >= 2, "Conflicts must be stored in ConflictAndDeleted");
+        TEST_ASSERT(dfs.getTotalConflictsResolved() >= 2, "Conflicts resolved counter must advance");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Remote Differential Compression (RDC) Signatures & Delta Engine
+    // ------------------------------------------------------------------------
+    {
+        // Synthesize 64 KB base file and a 64 KB modified file with 1 modified 8KB chunk
+        std::vector<uint8_t> baseData(65536, 0x41);
+        std::vector<uint8_t> modData = baseData;
+        // Mutate block 3 (offsets 24576-32768)
+        std::fill(modData.begin() + 24576, modData.begin() + 32768, 0x5A);
+
+        auto baseSigs = micant::dfs::SovereignDfsEngine::generateRdcSignatures(baseData.data(), baseData.size(), 8192);
+        auto modSigs = micant::dfs::SovereignDfsEngine::generateRdcSignatures(modData.data(), modData.size(), 8192);
+
+        TEST_ASSERT(baseSigs.size() == 8, "64 KB at 8KB chunk size must yield 8 signatures");
+        TEST_ASSERT(modSigs.size() == 8, "Modified file must yield 8 signatures");
+
+        // Chunks 0, 1, 2, 4, 5, 6, 7 match (7 of 8 = 87.5% match)
+        size_t ratio = micant::dfs::SovereignDfsEngine::calculateRdcCompressionRatio(baseSigs, modSigs, baseData.size());
+        TEST_ASSERT(ratio >= 85, "RDC compression ratio must exceed 85% bandwidth reduction");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Canonical dfsutil.exe & dfsrdiag.exe CLI Management Utilities
+    // ------------------------------------------------------------------------
+    {
+        std::string outStr;
+
+        // 1. dfsutil root \\micant.local\CorpData
+        int rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil root \\\\micant.local\\CorpData", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil root must succeed");
+        TEST_ASSERT(outStr.find("CorpData") != std::string::npos, "Root details output contains CorpData");
+        TEST_ASSERT(outStr.find("Domain-based (v2)") != std::string::npos, "Namespace type is Domain-based");
+        TEST_ASSERT(outStr.find("DC01.micant.local") != std::string::npos, "Root targets list DC01");
+
+        // 2. dfsutil link add & remove
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil link add \\\\micant.local\\CorpData\\Marketing \\\\FS-HQ-01.micant.local\\MarketingShare", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil link add must succeed");
+        TEST_ASSERT(outStr.find("Success") != std::string::npos, "Link add success message");
+
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil target add \\\\micant.local\\CorpData\\Marketing \\\\FS-LON-01.micant.local\\MarketingShare", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil target add must succeed");
+
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil link remove \\\\micant.local\\CorpData\\Marketing", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil link remove must succeed");
+
+        // 3. dfsutil cache referral & flush
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil cache referral", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil cache referral must succeed");
+        TEST_ASSERT(outStr.find("Referral Queries") != std::string::npos, "Cache query output format");
+
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil cache flush", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil cache flush must succeed");
+
+        // 4. dfsutil sitecost
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil sitecost Default-First-Site-Name Branch-London", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil sitecost must succeed");
+        TEST_ASSERT(outStr.find("Link Cost: 50") != std::string::npos, "Inter-site cost match");
+
+        // 5. dfsutil dump
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsutil dump", outStr);
+        TEST_ASSERT(rc == 0, "dfsutil dump must succeed");
+        TEST_ASSERT(outStr.find("# MicaNT Distributed File System (DFS)") != std::string::npos, "Dump header match");
+
+        // 6. dfsrdiag backlog
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsrdiag backlog /rgname:RG-Finance-Replication /rfname:FinanceData", outStr);
+        TEST_ASSERT(rc == 0, "dfsrdiag backlog must succeed");
+        TEST_ASSERT(outStr.find("Members Synchronized") != std::string::npos, "Backlog synchronization status");
+
+        // 7. dfsrdiag pollad
+        outStr.clear();
+        rc = micant::dfsutil::um::ExecuteDfsutilString("dfsrdiag pollad", outStr);
+        TEST_ASSERT(rc == 0, "dfsrdiag pollad must succeed");
+        TEST_ASSERT(outStr.find("converged") != std::string::npos, "AD DS topology poll convergence");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: WFP Inbound Rule #16901, Remote Web Console & Live Push Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        // 1. Remote Interactive Web Terminal Execution of 'dfsutil'
+        std::string termRes = console.executeTerminalCommand("dfsutil root \\\\micant.local\\CorpData");
+        TEST_ASSERT(termRes.find("DFS Namespace Details for") != std::string::npos,
+                    "Terminal executed dfsutil root");
+
+        // 2. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"dfs_namespaces_active\":") != std::string::npos, "Telemetry dfs_namespaces_active match");
+        TEST_ASSERT(teleJson.find("\"dfs_referral_requests\":") != std::string::npos, "Telemetry dfs_referral_requests match");
+        TEST_ASSERT(teleJson.find("\"dfs_referral_latency_us\":") != std::string::npos, "Telemetry dfs_referral_latency_us match");
+        TEST_ASSERT(teleJson.find("\"dfsr_replicated_folders\":") != std::string::npos, "Telemetry dfsr_replicated_folders match");
+        TEST_ASSERT(teleJson.find("\"dfsr_bytes_replicated\":") != std::string::npos, "Telemetry dfsr_bytes_replicated match");
+        TEST_ASSERT(teleJson.find("\"dfsr_conflicts_resolved\":") != std::string::npos, "Telemetry dfsr_conflicts_resolved match");
+
+        // 3. WFP Rule #16901 (MicaNT_DFS_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(16901);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #16901 for DFS/DFSR must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_TCP, "DFS rule protocol must be TCP");
+        TEST_ASSERT(ruleOpt->localPortStart == 445 && ruleOpt->localPortEnd == 5722, "DFS rule port range 445-5722");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "DFS rule action must be PERMIT");
+    }
+
+    std::cout << "[HORIZON 169] Sovereign Distributed File System (DFS / DFS-N / DFS-R) Summary:\n"
+              << "    Pillar 1: DFS & DFSR SCM Services & VersionDatabase Registration OK\n"
+              << "    Pillar 2: MS-DFSNM & MS-DFSC Namespace Referral Engine & Site-Cost Routing OK\n"
+              << "    Pillar 3: Dynamic Namespace Link & Target Mutation API OK\n"
+              << "    Pillar 4: MS-FRS2 DFS-R Multi-Master Engine & Conflict Resolution (LWW) OK\n"
+              << "    Pillar 5: Remote Differential Compression (RDC) Signatures & Delta Engine OK\n"
+              << "    Pillar 6: Canonical dfsutil.exe & dfsrdiag.exe Management Utilities OK\n"
+              << "    Pillar 7: WFP Inbound Rule #16901, Remote Web Console & Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 385: Horizon 169 - Sovereign Distributed File System (DFS / DFS-N & DFS-R) PASSED." << std::endl;
+}
