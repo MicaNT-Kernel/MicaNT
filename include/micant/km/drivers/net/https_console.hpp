@@ -47,6 +47,8 @@
 #include "micant/um/subsystems/mgmt/gp_tools.hpp"
 #include "micant/um/servers/nps.hpp"
 #include "micant/um/subsystems/net/netsh_nps.hpp"
+#include "micant/um/servers/wds.hpp"
+#include "micant/um/subsystems/net/wdsutil.hpp"
 
 namespace micant::km::net {
 
@@ -186,6 +188,19 @@ public:
         npsRule.weight = 1500;
         npsRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(npsRule);
+
+        // 11. Register WFP Inbound Rule for Windows Deployment Services (TFTP UDP 69 & PXE UDP 4011)
+        wfp::km::WfpKernelFilterRule wdsRule{};
+        wdsRule.filterId = 16801;
+        wdsRule.name = "MicaNT_WDS_Tftp_Pxe_Inbound_Permit";
+        wdsRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        wdsRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        wdsRule.protocol = tcpip::IPPROTO_UDP;
+        wdsRule.localPortStart = 69;
+        wdsRule.localPortEnd = 4011;
+        wdsRule.weight = 1500;
+        wdsRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(wdsRule);
     }
 
     void stopHttpsServer() {
@@ -540,6 +555,10 @@ public:
             std::string res;
             mstsc::um::SessionCommandExecutor::Instance().executeReset(subArgs, res);
             return res;
+        } else if (cmd == "wdsutil" || cmd.starts_with("wdsutil ")) {
+            std::string res;
+            wdsutil::um::ExecuteWdsutilString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -731,7 +750,13 @@ public:
            << "\"nps_access_rejects\":" << micant::nps::NetworkPolicyServer::instance().getTotalAuthRejections() << ","
            << "\"nps_accounting_packets\":" << micant::nps::NetworkPolicyServer::instance().getTotalAcctRequests() << ","
            << "\"nps_active_clients\":" << micant::nps::NetworkPolicyServer::instance().getAllClients().size() << ","
-           << "\"nps_last_auth_latency_us\":" << micant::nps::NetworkPolicyServer::instance().getLastAuthLatencyUs() << "}\r\n";
+           << "\"nps_last_auth_latency_us\":" << micant::nps::NetworkPolicyServer::instance().getLastAuthLatencyUs() << ","
+           << "\"wds_pxe_requests\":" << micant::wds::WindowsDeploymentServer::instance().getTotalPxeRequests() << ","
+           << "\"wds_tftp_blocks_sent\":" << micant::wds::WindowsDeploymentServer::instance().getTotalTftpBlocksSent() << ","
+           << "\"wds_tftp_bytes_sent\":" << micant::wds::WindowsDeploymentServer::instance().getTotalTftpBytesSent() << ","
+           << "\"wds_boot_images\":" << micant::wds::WindowsDeploymentServer::instance().getAllBootImages().size() << ","
+           << "\"wds_install_images\":" << micant::wds::WindowsDeploymentServer::instance().getAllInstallImages().size() << ","
+           << "\"wds_active_deployments\":" << micant::wds::WindowsDeploymentServer::instance().getActiveDeployments().size() << "}\r\n";
         return ss.str();
     }
 

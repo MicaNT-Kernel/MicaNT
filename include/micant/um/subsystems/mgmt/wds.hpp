@@ -25,17 +25,27 @@ namespace micant::wds {
 // Client Architecture Types (RFC 4578 / DHCP Option 93)
 enum class ClientArchitecture : uint16_t {
     Intelx86PC      = 0,  // Legacy BIOS x86
+    Intelx86Pc      = 0,
     NEC_PC98        = 1,
+    NecPc98         = 1,
     Itanium         = 2,
     DEC_Alpha       = 3,
+    DecAlpha        = 3,
     Arcx86          = 4,
     IntelLeanClient = 5,
+    IntelLean       = 5,
     EFI_IA32        = 6,  // UEFI x86
+    EfiIa32         = 6,
     EFI_x86_64      = 7,  // UEFI x64 (Standard 64-bit PC)
+    EfiBc           = 7,  // RFC 4578 Type 7 EFI Byte Code / x64
     EFI_Xscale      = 8,
+    EfiXscale       = 8,
     EFI_BC          = 9,  // EFI Byte Code (EBC)
+    Efix86_64       = 9,
     EFI_ARM32       = 10, // UEFI ARM32
-    EFI_ARM64       = 11  // UEFI ARM64 / AArch64
+    EfiArm32        = 10,
+    EFI_ARM64       = 11, // UEFI ARM64 / AArch64
+    EfiArm64        = 11
 };
 
 inline const char* ClientArchitectureToString(ClientArchitecture arch) {

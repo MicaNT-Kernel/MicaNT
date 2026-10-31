@@ -30784,3 +30784,328 @@ void Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI() {
 
     std::cout << "[TEST] Suite 383: Horizon 167 - Sovereign Network Policy Server (NPS / RADIUS / CLI) PASSED." << std::endl;
 }
+
+
+void Test_Horizon168_WindowsDeploymentServices_Tftp_Pxe_And_WdsutilCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 384: Horizon 168 - Sovereign Windows Deployment Services (WDS),\n"
+              << "RFC 1350/2347/2348/2349/7440 TFTP Streaming Server, PXE (RFC 4578 / MS-WDSPE),\n"
+              << "UEFI/BIOS Image Catalogs, WIM Boot Engine & Canonical wdsutil.exe CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: WDS SCM Services & VersionDatabase Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& wds = micant::wds::WindowsDeploymentServer::instance();
+        wds.resetForTest();
+
+        // 1. SCM Services (WDSServer, WDSPxe, WDSTftp)
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto srvWds = scm.getServiceRecord(L"WDSServer");
+        TEST_ASSERT(srvWds != nullptr, "WDSServer service must be registered in SCM");
+        TEST_ASSERT(srvWds->displayName == L"Windows Deployment Services", "WDSServer display name match");
+        TEST_ASSERT(srvWds->startType == micant::scm::SERVICE_AUTO_START, "WDSServer must be AUTO_START");
+        TEST_ASSERT(srvWds->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WDSServer must be RUNNING");
+        TEST_ASSERT(srvWds->binaryPath == L"C:\\Windows\\System32\\wdssvc.dll", "WDSServer binary must be wdssvc.dll");
+
+        auto pxeSvc = scm.getServiceRecord(L"WDSPxe");
+        TEST_ASSERT(pxeSvc != nullptr, "WDSPxe service must be registered in SCM");
+        TEST_ASSERT(pxeSvc->displayName == L"Windows Deployment Services PXE Provider", "WDSPxe display name match");
+
+        auto tftpSvc = scm.getServiceRecord(L"WDSTftp");
+        TEST_ASSERT(tftpSvc != nullptr, "WDSTftp service must be registered in SCM");
+        TEST_ASSERT(tftpSvc->displayName == L"Windows Deployment Services TFTP Server", "WDSTftp display name match");
+
+        // 2. VersionDatabase PE Registration
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* modSvc = vdb.FindModule("wdssvc.dll");
+        const auto* modCli = vdb.FindModule("wdsclient.dll");
+        const auto* modImg = vdb.FindModule("wdsimgsrv.dll");
+        const auto* modUtil = vdb.FindModule("wdsutil.exe");
+        const auto* modTftp = vdb.FindModule("tftp.exe");
+        const auto* modPxe = vdb.FindModule("wdspxe.dll");
+        const auto* modTftpDrv = vdb.FindModule("wdstftp.dll");
+        const auto* modNbp = vdb.FindModule("wdsnbp.com");
+        const auto* modSdi = vdb.FindModule("boot.sdi");
+
+        TEST_ASSERT(modSvc != nullptr, "wdssvc.dll in VersionDatabase");
+        TEST_ASSERT(modCli != nullptr, "wdsclient.dll in VersionDatabase");
+        TEST_ASSERT(modImg != nullptr, "wdsimgsrv.dll in VersionDatabase");
+        TEST_ASSERT(modUtil != nullptr, "wdsutil.exe in VersionDatabase");
+        TEST_ASSERT(modTftp != nullptr, "tftp.exe in VersionDatabase");
+        TEST_ASSERT(modPxe != nullptr, "wdspxe.dll in VersionDatabase");
+        TEST_ASSERT(modTftpDrv != nullptr, "wdstftp.dll in VersionDatabase");
+        TEST_ASSERT(modNbp != nullptr, "wdsnbp.com in VersionDatabase");
+        TEST_ASSERT(modSdi != nullptr, "boot.sdi in VersionDatabase");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: RFC 1350 & RFC 2347/2348/2349/7440 TFTP Wire Engine with Blksize/Tsize Negotiation
+    // ------------------------------------------------------------------------
+    {
+        auto& wds = micant::wds::WindowsDeploymentServer::instance();
+
+        // 1. Standard RFC 1350 Read Request (RRQ) for Legacy NBP
+        micant::wds::TftpPacket rrqStd;
+        rrqStd.opcode = micant::wds::TftpOpcode::Rrq;
+        rrqStd.filename = "Boot\\x64\\wdsnbp.com";
+        rrqStd.mode = "octet";
+
+        auto rrqWire = rrqStd.serialize();
+        std::vector<uint8_t> respWire;
+        bool ok = wds.processTftpPacket("147.135.1.150", rrqWire.data(), rrqWire.size(), respWire);
+        TEST_ASSERT(ok, "TFTP RRQ for wdsnbp.com must succeed");
+
+        micant::wds::TftpPacket dataPkt;
+        TEST_ASSERT(dataPkt.deserialize(respWire.data(), respWire.size()), "TFTP response must deserialize");
+        TEST_ASSERT(dataPkt.opcode == micant::wds::TftpOpcode::Data, "Response opcode must be DATA (3)");
+        TEST_ASSERT(dataPkt.blockNumber == 1, "First data block must have block number 1");
+        TEST_ASSERT(dataPkt.data.size() == 512, "Standard block size without options must be 512 bytes");
+
+        // 2. RFC 2347 / 2348 / 2349 Extended Options Negotiation (blksize, tsize, windowsize)
+        micant::wds::TftpPacket rrqOpt;
+        rrqOpt.opcode = micant::wds::TftpOpcode::Rrq;
+        rrqOpt.filename = "Boot\\x64\\bootmgfw.efi";
+        rrqOpt.mode = "octet";
+        rrqOpt.options["blksize"] = "1456";
+        rrqOpt.options["tsize"] = "0";
+        rrqOpt.options["windowsize"] = "4";
+
+        auto optWire = rrqOpt.serialize();
+        respWire.clear();
+        ok = wds.processTftpPacket("147.135.1.150", optWire.data(), optWire.size(), respWire);
+        TEST_ASSERT(ok, "TFTP RRQ with RFC 2347 options must succeed");
+
+        micant::wds::TftpPacket oackPkt;
+        TEST_ASSERT(oackPkt.deserialize(respWire.data(), respWire.size()), "TFTP OACK packet deserialization");
+        TEST_ASSERT(oackPkt.opcode == micant::wds::TftpOpcode::OAck, "Response opcode must be OACK (6)");
+        TEST_ASSERT(oackPkt.options.find("blksize") != oackPkt.options.end(), "OACK must negotiate blksize");
+        TEST_ASSERT(oackPkt.options.at("blksize") == "1456", "Negotiated blksize must be 1456");
+        TEST_ASSERT(oackPkt.options.find("tsize") != oackPkt.options.end(), "OACK must return tsize");
+        TEST_ASSERT(oackPkt.options.at("tsize") == "8192", "tsize must match bootmgfw.efi file size (8192)");
+        TEST_ASSERT(oackPkt.options.find("windowsize") != oackPkt.options.end(), "OACK must acknowledge windowsize");
+        TEST_ASSERT(oackPkt.options.at("windowsize") == "4", "windowsize must match requested value");
+
+        // 3. TFTP Error Handling (File Not Found)
+        micant::wds::TftpPacket rrqMissing;
+        rrqMissing.opcode = micant::wds::TftpOpcode::Rrq;
+        rrqMissing.filename = "Boot\\x64\\nonexistent_kernel.sys";
+        rrqMissing.mode = "octet";
+
+        auto missingWire = rrqMissing.serialize();
+        respWire.clear();
+        ok = wds.processTftpPacket("147.135.1.150", missingWire.data(), missingWire.size(), respWire);
+        TEST_ASSERT(ok, "TFTP packet for missing file must produce error packet");
+
+        micant::wds::TftpPacket errPkt;
+        TEST_ASSERT(errPkt.deserialize(respWire.data(), respWire.size()), "TFTP Error deserialization");
+        TEST_ASSERT(errPkt.opcode == micant::wds::TftpOpcode::Error, "Response opcode must be ERROR (5)");
+        TEST_ASSERT(errPkt.errorCode == micant::wds::TftpErrorCode::FileNotFound, "Error code must be FileNotFound (1)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: PXE (RFC 4578) Client Architecture Detection & Dynamic Bootloader Routing
+    // ------------------------------------------------------------------------
+    {
+        auto& wds = micant::wds::WindowsDeploymentServer::instance();
+
+        // 1. UEFI x64 Client (RFC 4578 Option 93 = 7 / EfiBc)
+        micant::wds::PxeBootRequest reqUefi;
+        reqUefi.clientMac = "00-15-5D-11-22-33";
+        reqUefi.clientIp = "147.135.1.152";
+        reqUefi.arch = micant::wds::ClientArchitecture::EfiBc;
+
+        micant::wds::PxeBootResponse respUefi;
+        bool ok = wds.processPxeRequest(reqUefi, respUefi);
+        TEST_ASSERT(ok && respUefi.accepted, "PXE boot request from UEFI x64 client must be accepted");
+        TEST_ASSERT(respUefi.bootFilename == "Boot\\x64\\bootmgfw.efi", "UEFI x64 client must receive bootmgfw.efi");
+        TEST_ASSERT(respUefi.bootServerFqdn == "DC01.micant.local", "Boot server FQDN must be DC01.micant.local");
+        TEST_ASSERT(!respUefi.vendorOptions.empty(), "Option 43 vendor options must be populated");
+        TEST_ASSERT(respUefi.vendorOptions[0] == 0x06, "PXE Discovery Control suboption present");
+
+        // 2. Legacy BIOS Client (Option 93 = 0 / Intelx86Pc)
+        micant::wds::PxeBootRequest reqBios;
+        reqBios.clientMac = "00-15-5D-44-55-66";
+        reqBios.clientIp = "147.135.1.153";
+        reqBios.arch = micant::wds::ClientArchitecture::Intelx86Pc;
+
+        micant::wds::PxeBootResponse respBios;
+        ok = wds.processPxeRequest(reqBios, respBios);
+        TEST_ASSERT(ok && respBios.accepted, "PXE boot request from BIOS client must be accepted");
+        TEST_ASSERT(respBios.bootFilename == "Boot\\x64\\wdsnbp.com", "Legacy BIOS client must receive wdsnbp.com");
+
+        // 3. Known-Clients-Only Filter
+        wds.setPxeAnswerMode(false); // Answer known pre-staged clients only
+
+        // Unknown Client
+        micant::wds::PxeBootRequest reqUnknown;
+        reqUnknown.clientMac = "00-FF-EE-DD-CC-BB";
+        reqUnknown.clientIp = "147.135.1.199";
+        reqUnknown.arch = micant::wds::ClientArchitecture::EfiBc;
+
+        micant::wds::PxeBootResponse respUnknown;
+        ok = wds.processPxeRequest(reqUnknown, respUnknown);
+        TEST_ASSERT(!ok || !respUnknown.accepted, "Unknown client must be rejected when answer policy is known-only");
+
+        // Known Pre-Staged Client (WS-FINANCE-01)
+        micant::wds::PxeBootRequest reqKnown;
+        reqKnown.clientMac = "00-15-5D-AA-BB-CC";
+        reqKnown.clientIp = "147.135.1.100";
+        reqKnown.arch = micant::wds::ClientArchitecture::EfiBc;
+
+        micant::wds::PxeBootResponse respKnown;
+        ok = wds.processPxeRequest(reqKnown, respKnown);
+        TEST_ASSERT(ok && respKnown.accepted, "Pre-staged client must be accepted in known-only mode");
+
+        wds.setPxeAnswerMode(true); // Restore answer all
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: WDS Image Management, Catalogs & Active Deployments
+    // ------------------------------------------------------------------------
+    {
+        auto& wds = micant::wds::WindowsDeploymentServer::instance();
+
+        // 1. Verify Default Boot Images
+        auto bootImgs = wds.getAllBootImages();
+        TEST_ASSERT(bootImgs.size() >= 2, "WDS must contain at least 2 default boot images");
+
+        bool foundSetupPe = false;
+        for (const auto& bi : bootImgs) {
+            if (bi.imageName == "MicaNT PE x64 (Setup)") {
+                foundSetupPe = true;
+                TEST_ASSERT(bi.architecture == "x64", "Setup PE architecture must be x64");
+                TEST_ASSERT(bi.buildNumber == "10.0.26100.1", "Setup PE build number match");
+                TEST_ASSERT(bi.sizeBytes > 0, "Setup PE sizeBytes must be positive");
+            }
+        }
+        TEST_ASSERT(foundSetupPe, "Default boot image 'MicaNT PE x64 (Setup)' found in catalog");
+
+        // 2. Verify Install Image Groups & WIM Metadata
+        auto groups = wds.getImageGroupNames();
+        TEST_ASSERT(std::find(groups.begin(), groups.end(), "MicaNT-Enterprise") != groups.end(),
+                    "MicaNT-Enterprise group must exist in WDS catalog");
+
+        auto instImgs = wds.getAllInstallImages("MicaNT-Enterprise");
+        TEST_ASSERT(instImgs.size() >= 2, "MicaNT-Enterprise group must contain Enterprise and Datacenter images");
+
+        // 3. Active Deployment Lifecycle Tracking
+        micant::wds::ActiveDeployment dep;
+        dep.clientMac = "00-15-5D-AA-BB-CC";
+        dep.clientIp = "147.135.1.100";
+        dep.computerName = "WS-FINANCE-01";
+        dep.bootImageName = "MicaNT PE x64 (Setup)";
+        dep.installImageName = "MicaNT Enterprise 2026 x64";
+        dep.progressPercent = 0;
+        dep.bytesTransferred = 0;
+        dep.status = "Applying Image";
+        wds.startDeployment(dep);
+
+        auto activeList = wds.getActiveDeployments();
+        TEST_ASSERT(!activeList.empty(), "Active deployment must be registered");
+        TEST_ASSERT(activeList[0].computerName == "WS-FINANCE-01", "Deployment computer name match");
+
+        // Progress update to 50%
+        wds.updateDeploymentProgress("00-15-5D-AA-BB-CC", 50, 2ULL * 1024 * 1024 * 1024);
+        activeList = wds.getActiveDeployments();
+        TEST_ASSERT(activeList[0].progressPercent == 50, "Deployment progress at 50%");
+
+        // Progress complete to 100%
+        wds.updateDeploymentProgress("00-15-5D-AA-BB-CC", 100, 4ULL * 1024 * 1024 * 1024);
+        activeList = wds.getActiveDeployments();
+        TEST_ASSERT(activeList[0].progressPercent == 100, "Deployment progress at 100%");
+        TEST_ASSERT(activeList[0].status == "Completed", "Deployment status must be Completed");
+        TEST_ASSERT(wds.getTotalDeploymentsCompleted() == 1, "Completed deployments counter must be 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Canonical wdsutil.exe Management CLI Interface
+    // ------------------------------------------------------------------------
+    {
+        std::string outStr;
+
+        // 1. wdsutil /get-server
+        int rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /get-server", outStr);
+        TEST_ASSERT(rc == 0, "wdsutil /get-server must succeed");
+        TEST_ASSERT(outStr.find("DC01.micant.local") != std::string::npos, "Output contains server FQDN");
+        TEST_ASSERT(outStr.find("C:\\RemoteInstall") != std::string::npos, "Output contains TFTP Root");
+        TEST_ASSERT(outStr.find("Listening") != std::string::npos, "Output indicates PXE listening state");
+
+        // 2. wdsutil /get-allimages /imagetype:boot
+        outStr.clear();
+        rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /get-allimages /imagetype:boot", outStr);
+        TEST_ASSERT(rc == 0, "wdsutil /get-allimages /imagetype:boot must succeed");
+        TEST_ASSERT(outStr.find("MicaNT PE x64 (Setup)") != std::string::npos, "Lists setup boot image");
+        TEST_ASSERT(outStr.find("x64") != std::string::npos, "Lists architecture");
+
+        // 3. wdsutil /get-allimages /imagetype:install
+        outStr.clear();
+        rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /get-allimages /imagetype:install", outStr);
+        TEST_ASSERT(rc == 0, "wdsutil /get-allimages /imagetype:install must succeed");
+        TEST_ASSERT(outStr.find("MicaNT Enterprise 2026 x64") != std::string::npos, "Lists Enterprise install image");
+        TEST_ASSERT(outStr.find("MicaNT-Enterprise") != std::string::npos, "Lists image group");
+
+        // 4. wdsutil /add-image and /remove-image
+        outStr.clear();
+        rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /add-image /imagefile:\"C:\\Images\\CustomRescue.wim\" /imagetype:boot /name:\"Custom-Rescue-Environment\"", outStr);
+        TEST_ASSERT(rc == 0, "wdsutil /add-image must succeed");
+        TEST_ASSERT(outStr.find("successfully added") != std::string::npos, "Add image confirmation");
+
+        outStr.clear();
+        rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /get-allimages /imagetype:boot", outStr);
+        TEST_ASSERT(outStr.find("Custom-Rescue-Environment") != std::string::npos, "Imported image appears in catalog");
+
+        outStr.clear();
+        rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /remove-image /image:\"Custom-Rescue-Environment\" /imagetype:boot", outStr);
+        TEST_ASSERT(rc == 0, "wdsutil /remove-image must succeed");
+        TEST_ASSERT(outStr.find("successfully removed") != std::string::npos, "Remove image confirmation");
+
+        // 5. wdsutil /dump
+        outStr.clear();
+        rc = micant::wdsutil::um::ExecuteWdsutilString("wdsutil /dump", outStr);
+        TEST_ASSERT(rc == 0, "wdsutil /dump must succeed");
+        TEST_ASSERT(outStr.find("wdsutil /set-server") != std::string::npos, "Dump contains set-server");
+        TEST_ASSERT(outStr.find("wdsutil /add-image") != std::string::npos, "Dump contains add-image");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: WFP Inbound Rule #16801, Remote Web Terminal & Push Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        // 1. Remote Interactive Web Terminal Execution of 'wdsutil /get-server'
+        std::string termRes = console.executeTerminalCommand("wdsutil /get-server");
+        TEST_ASSERT(termRes.find("Windows Deployment Services Server Configuration") != std::string::npos,
+                    "Terminal executed wdsutil /get-server");
+
+        // 2. Real-Time Telemetry Push Stream
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"wds_pxe_requests\":") != std::string::npos, "Telemetry wds_pxe_requests match");
+        TEST_ASSERT(teleJson.find("\"wds_tftp_blocks_sent\":") != std::string::npos, "Telemetry wds_tftp_blocks_sent match");
+        TEST_ASSERT(teleJson.find("\"wds_tftp_bytes_sent\":") != std::string::npos, "Telemetry wds_tftp_bytes_sent match");
+        TEST_ASSERT(teleJson.find("\"wds_boot_images\":") != std::string::npos, "Telemetry wds_boot_images match");
+        TEST_ASSERT(teleJson.find("\"wds_install_images\":") != std::string::npos, "Telemetry wds_install_images match");
+        TEST_ASSERT(teleJson.find("\"wds_active_deployments\":") != std::string::npos, "Telemetry wds_active_deployments match");
+
+        // 3. WFP Rule #16801 (MicaNT_WDS_Tftp_Pxe_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto ruleOpt = wfp.findRuleById(16801);
+        TEST_ASSERT(ruleOpt.has_value(), "WFP Rule #16801 for WDS/TFTP/PXE must be registered");
+        TEST_ASSERT(ruleOpt->protocol == tcpip::IPPROTO_UDP, "WDS rule protocol must be UDP");
+        TEST_ASSERT(ruleOpt->localPortStart == 69 && ruleOpt->localPortEnd == 4011, "WDS rule port range 69-4011");
+        TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "WDS rule action must be PERMIT");
+    }
+
+    std::cout << "[HORIZON 168] Sovereign Windows Deployment Services (WDS / PXE / TFTP / WIM) Summary:\n"
+              << "    Pillar 1: WDS SCM Services & VersionDatabase Registration OK\n"
+              << "    Pillar 2: RFC 1350 & RFC 2347/2348/2349/7440 TFTP Streaming Engine OK\n"
+              << "    Pillar 3: PXE (RFC 4578) Client Architecture Detection & Dynamic Bootloader Routing OK\n"
+              << "    Pillar 4: WDS Image Management, Catalogs & Active Deployments OK\n"
+              << "    Pillar 5: Canonical wdsutil.exe CLI Interface (get/set/add/remove/dump) OK\n"
+              << "    Pillar 6: WFP Inbound Rule #16801, Remote Web Terminal & Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 384: Horizon 168 - Sovereign Windows Deployment Services (WDS / PXE / CLI) PASSED." << std::endl;
+}

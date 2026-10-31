@@ -423,6 +423,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite384") {
+        RUN_TEST(Test_Horizon168_WindowsDeploymentServices_Tftp_Pxe_And_WdsutilCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite383") {
         RUN_TEST(Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI);
         return g_FailedTests;
@@ -1890,6 +1894,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon165_WinRM_PSRP_WmiProvider_And_WinrsCLI);
     RUN_TEST(Test_Horizon166_ActiveDirectoryGroupPolicy_Sysvol_And_GpToolsCLI);
     RUN_TEST(Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI);
+    RUN_TEST(Test_Horizon168_WindowsDeploymentServices_Tftp_Pxe_And_WdsutilCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
