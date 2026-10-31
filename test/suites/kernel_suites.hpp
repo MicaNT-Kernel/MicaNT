@@ -31762,3 +31762,402 @@ inline void Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI()
 
     std::cout << "[TEST] Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP) PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC / MS-CMRP / MS-CRTD),
+// Cluster Service (clussvc.exe), Dynamic Paxos Quorum Consensus, Cluster Shared Volumes (CSV / csvfs.sys) & Canonical cluster.exe CLI
+// ============================================================================
+inline void Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI() {
+    std::cout << "\n========================================================================\n"
+              << "Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC),\n"
+              << "Dynamic Paxos Quorum, Cluster Shared Volumes (CSVFS) & Canonical cluster.exe CLI\n"
+              << "========================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::cluster::RegisterFailoverClusteringSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. ClusSvc
+        auto clusSvc = scm.getServiceRecord(L"ClusSvc");
+        TEST_ASSERT(clusSvc != nullptr, "ClusSvc service must be registered in SCM");
+        TEST_ASSERT(clusSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ClusSvc must be running");
+        TEST_ASSERT(clusSvc->startType == micant::scm::SERVICE_AUTO_START, "ClusSvc start type must be AUTO_START");
+        TEST_ASSERT(clusSvc->binaryPath == L"C:\\Windows\\System32\\clussvc.exe", "ClusSvc binary path parity");
+
+        // 2. ClusNet (clusnet.sys)
+        auto clusNet = scm.getServiceRecord(L"ClusNet");
+        TEST_ASSERT(clusNet != nullptr, "ClusNet driver must be registered in SCM");
+        TEST_ASSERT(clusNet->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ClusNet must be running");
+        TEST_ASSERT(clusNet->binaryPath == L"C:\\Windows\\System32\\drivers\\clusnet.sys", "ClusNet binary path parity");
+
+        // 3. ClusDisk (clusdisk.sys)
+        auto clusDisk = scm.getServiceRecord(L"ClusDisk");
+        TEST_ASSERT(clusDisk != nullptr, "ClusDisk driver must be registered in SCM");
+        TEST_ASSERT(clusDisk->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ClusDisk must be running");
+        TEST_ASSERT(clusDisk->binaryPath == L"C:\\Windows\\System32\\drivers\\clusdisk.sys", "ClusDisk binary path parity");
+
+        // 4. CSVFS (csvfs.sys)
+        auto csvfs = scm.getServiceRecord(L"CSVFS");
+        TEST_ASSERT(csvfs != nullptr, "CSVFS driver must be registered in SCM");
+        TEST_ASSERT(csvfs->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "CSVFS must be running");
+        TEST_ASSERT(csvfs->binaryPath == L"C:\\Windows\\System32\\drivers\\csvfs.sys", "CSVFS binary path parity");
+
+        // 5. VersionDatabase PE Modules Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> expectedModules = {
+            "clussvc.exe", "cluster.exe", "clusapi.dll", "resutils.dll",
+            "clusnet.sys", "clusdisk.sys", "csvfs.sys"
+        };
+        for (const auto& mod : expectedModules) {
+            auto* info = vdb.FindModule(mod);
+            TEST_ASSERT(info != nullptr, ("Module " + mod + " must be registered in VersionDatabase").c_str());
+            TEST_ASSERT(info->stringTable.at("FileVersion") == "10.0.26100.1", ("Module " + mod + " version must be 10.0.26100.1").c_str());
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Multi-Node Paxos Distributed Consensus Protocol & Ballot Negotiation
+    // ------------------------------------------------------------------------
+    {
+        auto& clusSys = micant::cluster::FailoverClusterSubsystem::get();
+        clusSys.reset();
+        TEST_ASSERT(clusSys.isInitialized(), "FailoverClusterSubsystem must be initialized");
+        TEST_ASSERT(clusSys.getNodeCount() == 3, "Initial cluster must contain 3 nodes");
+
+        auto* n1 = clusSys.getNode(1);
+        auto* n2 = clusSys.getNode(2);
+        auto* n3 = clusSys.getNode(3);
+        TEST_ASSERT(n1 && n2 && n3, "Nodes 1, 2, and 3 must exist");
+        TEST_ASSERT(n1->isCoordinator, "Node 1 must be designated coordinator");
+
+        uint32_t initEpoch = clusSys.getEpoch();
+        bool prop1 = clusSys.proposePaxosValue("ClusterIP", "192.168.10.100", 1);
+        TEST_ASSERT(prop1, "Paxos proposal ClusterIP must succeed under quorum");
+        TEST_ASSERT(clusSys.getPaxosValue("ClusterIP") == "192.168.10.100", "Committed ClusterIP value match");
+        TEST_ASSERT(clusSys.getEpoch() > initEpoch, "Epoch must increment on commit");
+
+        bool prop2 = clusSys.proposePaxosValue("AegisSecurityEpoch", "2026-Q4-ENTERPRISE", 2);
+        TEST_ASSERT(prop2, "Paxos proposal AegisSecurityEpoch from Node 2 must succeed");
+        TEST_ASSERT(clusSys.getPaxosValue("AegisSecurityEpoch") == "2026-Q4-ENTERPRISE", "Committed SecurityEpoch value match");
+
+        bool prop3 = clusSys.proposePaxosValue("HeartbeatIntervalMs", "1000", 3);
+        TEST_ASSERT(prop3, "Paxos proposal HeartbeatIntervalMs from Node 3 must succeed");
+        TEST_ASSERT(clusSys.getPaxosValue("HeartbeatIntervalMs") == "1000", "HeartbeatIntervalMs match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic Quorum Witness Models & Last-Man Standing Arbitration
+    // ------------------------------------------------------------------------
+    {
+        auto& clusSys = micant::cluster::FailoverClusterSubsystem::get();
+        clusSys.reset();
+
+        // 1. Node Majority (No witness)
+        clusSys.setWitness(micant::cluster::QuorumWitnessType::None, false);
+        TEST_ASSERT(clusSys.getQuorumVotesTotal() == 3, "Node majority total votes == 3");
+        TEST_ASSERT(clusSys.getQuorumVotesActive() == 3, "Node majority active votes == 3");
+        TEST_ASSERT(clusSys.hasQuorum(), "Quorum holds with 3 nodes");
+
+        // 2. Disk Witness (SCSI-3 PR LUN)
+        clusSys.setQuorumWitness(micant::cluster::QuorumWitnessType::DiskWitness, "ClusterDisk1 (SCSI LUN 0)");
+        TEST_ASSERT(clusSys.getWitnessType() == micant::cluster::QuorumWitnessType::DiskWitness, "Witness type must be DiskWitness");
+        TEST_ASSERT(clusSys.getWitnessPath() == "ClusterDisk1 (SCSI LUN 0)", "Witness path match");
+        TEST_ASSERT(clusSys.getQuorumVotesTotal() == 4, "Total votes with disk witness == 4");
+
+        // 3. Cloud Witness (Azure Blob Storage lease)
+        clusSys.setQuorumWitness(micant::cluster::QuorumWitnessType::CloudWitness, "https://titanclusstorage.blob.core.windows.net/witness");
+        TEST_ASSERT(clusSys.getWitnessType() == micant::cluster::QuorumWitnessType::CloudWitness, "Witness type must be CloudWitness");
+
+        // 4. File Share Witness (SMB 3.1.1 Share)
+        clusSys.setQuorumWitness(micant::cluster::QuorumWitnessType::FileShareWitness, "\\\\fs01\\clusterwitness");
+        TEST_ASSERT(clusSys.getWitnessType() == micant::cluster::QuorumWitnessType::FileShareWitness, "Witness type must be FileShareWitness");
+
+        // 5. Dynamic Quorum & Last-Man Standing Resilience
+        clusSys.setDynamicQuorum(true);
+        TEST_ASSERT(clusSys.isDynamicQuorumEnabled(), "Dynamic quorum must be enabled");
+
+        // Node 3 fails
+        clusSys.injectHeartbeatTimeout(3);
+        auto* n3 = clusSys.getNode(3);
+        TEST_ASSERT(n3->state == micant::cluster::ClusterNodeState::Down, "Node 3 state must be Down");
+        TEST_ASSERT(clusSys.hasQuorum(), "Cluster must retain quorum with 2 nodes + witness");
+
+        // Node 2 fails
+        clusSys.injectHeartbeatTimeout(2);
+        auto* n2 = clusSys.getNode(2);
+        TEST_ASSERT(n2->state == micant::cluster::ClusterNodeState::Down, "Node 2 state must be Down");
+        // Under dynamic quorum, remaining Node 1 (1 vote) + File Share Witness (1 vote) = 2 active votes / 2 total votes -> Quorum preserved!
+        TEST_ASSERT(clusSys.hasQuorum(), "Dynamic quorum preserves quorum down to last-man standing");
+
+        // Propose Paxos value under last-man standing quorum
+        bool lmsProp = clusSys.proposePaxosValue("LastManStandingKey", "SurvivingNode1", 1);
+        TEST_ASSERT(lmsProp, "Paxos consensus must commit even with only 1 node + witness active under dynamic quorum");
+        TEST_ASSERT(clusSys.getPaxosValue("LastManStandingKey") == "SurvivingNode1", "Last-man standing Paxos commit verified");
+
+        // If dynamic quorum is disabled (static quorum) with 2 nodes down:
+        clusSys.setDynamicQuorum(false);
+        TEST_ASSERT(!clusSys.hasQuorum(), "Static quorum must be lost with 2 nodes down (2 <= 4/2)");
+
+        // Restore healthy cluster
+        clusSys.reset();
+        TEST_ASSERT(clusSys.hasQuorum(), "Quorum restored after reset");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Cluster Resource Dependency Trees, Health Checks & Role State Machine
+    // ------------------------------------------------------------------------
+    {
+        auto& clusSys = micant::cluster::FailoverClusterSubsystem::get();
+        clusSys.reset();
+
+        // Add child resource RES-APP-SRV dependent on RES-NAME-01 and RES-DISK-01
+        micant::cluster::ClusterResource appRes{};
+        appRes.resourceId = "RES-APP-SRV";
+        appRes.resourceName = "Application Microservice Engine";
+        appRes.resourceType = "Generic Service";
+        appRes.ownerGroup = "GRP-SQL-HA";
+        appRes.ownerNodeId = 1;
+        appRes.state = micant::cluster::ClusterResourceState::Offline;
+        appRes.dependencies.push_back("RES-NAME-01");
+        appRes.dependencies.push_back("RES-DISK-01");
+        bool crOk = clusSys.createResource(appRes);
+        TEST_ASSERT(crOk, "createResource for RES-APP-SRV must succeed");
+
+        // Dependencies RES-NAME-01 and RES-DISK-01 are Online -> Bringing RES-APP-SRV online must succeed
+        bool onOk = clusSys.setResourceOnline("RES-APP-SRV");
+        TEST_ASSERT(onOk, "Bringing RES-APP-SRV online with satisfied dependencies must succeed");
+        TEST_ASSERT(clusSys.getResourceState("RES-APP-SRV") == micant::cluster::ClusterResourceState::Online, "State must be Online");
+
+        // Take parent dependency RES-NAME-01 offline
+        clusSys.setResourceOffline("RES-NAME-01");
+        TEST_ASSERT(clusSys.getResourceState("RES-NAME-01") == micant::cluster::ClusterResourceState::Offline, "Dependency offline");
+
+        // Offline APP and attempt to bring APP online while dependency is offline -> Must fail
+        clusSys.setResourceOffline("RES-APP-SRV");
+        bool onFail = clusSys.setResourceOnline("RES-APP-SRV");
+        TEST_ASSERT(!onFail, "Bringing RES-APP-SRV online must fail when dependency RES-NAME-01 is offline");
+
+        // Restore dependency online and online APP
+        clusSys.setResourceOnline("RES-NAME-01");
+        bool onRestore = clusSys.setResourceOnline("RES-APP-SRV");
+        TEST_ASSERT(onRestore, "Bringing RES-APP-SRV online must succeed after dependency restored");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Coordinated Automatic Group Failover & Live Migration
+    // ------------------------------------------------------------------------
+    {
+        auto& clusSys = micant::cluster::FailoverClusterSubsystem::get();
+        clusSys.reset();
+
+        auto* grp = clusSys.getGroup("GRP-SQL-HA");
+        TEST_ASSERT(grp != nullptr, "GRP-SQL-HA group must exist");
+        TEST_ASSERT(grp->ownerNodeId == 1, "Initial owner must be Node 1");
+        TEST_ASSERT(grp->state == micant::cluster::ClusterGroupState::Online, "Initial group state must be Online");
+
+        uint32_t initMigrations = clusSys.getGroupsMigratedCount();
+
+        // 1. Simulate failure of coordinator Node 1 -> Automatic Failover
+        clusSys.injectHeartbeatTimeout(1);
+        TEST_ASSERT(grp->ownerNodeId != 1, "GRP-SQL-HA owner must no longer be failed Node 1");
+        TEST_ASSERT(grp->ownerNodeId == 2 || grp->ownerNodeId == 3, "GRP-SQL-HA must migrate to a surviving Up node");
+        TEST_ASSERT(grp->state == micant::cluster::ClusterGroupState::Online, "GRP-SQL-HA state must remain Online after auto failover");
+        TEST_ASSERT(clusSys.getGroupsMigratedCount() > initMigrations, "Migration counter must increment");
+
+        // Verify resource ownership in group was updated
+        auto resList = clusSys.getAllResources();
+        for (const auto& r : resList) {
+            if (r.ownerGroup == "GRP-SQL-HA") {
+                TEST_ASSERT(r.ownerNodeId == grp->ownerNodeId, "Resource owner node must match new group owner");
+                TEST_ASSERT(r.state == micant::cluster::ClusterResourceState::Online, "Resource must be Online on new owner");
+            }
+        }
+
+        // 2. Coordinated Live Migration to Node 3
+        uint32_t prevMigrations = clusSys.getGroupsMigratedCount();
+        bool liveMigrateOk = clusSys.failoverGroup("GRP-SQL-HA", 3);
+        TEST_ASSERT(liveMigrateOk, "Live migration of GRP-SQL-HA to Node 3 must succeed");
+        TEST_ASSERT(grp->ownerNodeId == 3, "Group owner must now be Node 3");
+        TEST_ASSERT(clusSys.getGroupsMigratedCount() == prevMigrations + 1, "Migration count incremented by 1");
+
+        clusSys.reset();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Cluster Shared Volumes (CSVFS v2.0 / csvfs.sys) Direct & Redirected I/O
+    // ------------------------------------------------------------------------
+    {
+        auto& csvSys = micant::csvfs::CsvfsSubsystem::get();
+        csvSys.reset();
+        csvSys.initialize();
+
+        auto vol = csvSys.getVolume("C:\\ClusterStorage\\Volume1");
+        TEST_ASSERT(vol != nullptr, "Volume C:\\ClusterStorage\\Volume1 must exist");
+        TEST_ASSERT(vol->getVolumeState() == micant::csvfs::CsvVolumeState::Online, "Volume state must be Online");
+        TEST_ASSERT(vol->getRedirectState() == micant::csvfs::CsvRedirectState::DirectIo, "Initial state must be DirectIo");
+
+        // 1. Direct Block I/O Write & Read
+        const std::string testFile = "C:\\ClusterStorage\\Volume1\\VirtualHardDisk.vhdx";
+        std::vector<uint8_t> blockData(4096, 0x5A);
+        uint32_t bytesWritten = 0;
+        bool wrOk = vol->directIoWrite(testFile, 0, blockData.data(), static_cast<uint32_t>(blockData.size()), &bytesWritten, 1);
+        TEST_ASSERT(wrOk && bytesWritten == 4096, "directIoWrite to CSV must succeed");
+        TEST_ASSERT(vol->getTotalDirectWrites() >= 1, "Direct write counter must increment");
+
+        std::vector<uint8_t> readBuf(4096, 0);
+        uint32_t bytesRead = 0;
+        bool rdOk = vol->directIoRead(testFile, 0, readBuf.data(), static_cast<uint32_t>(readBuf.size()), &bytesRead, 1);
+        TEST_ASSERT(rdOk && bytesRead == 4096, "directIoRead from CSV must succeed");
+        TEST_ASSERT(vol->getTotalDirectReads() >= 1, "Direct read counter must increment");
+
+        // 2. Storage Path Interruption -> Transition to Network Redirected I/O Path
+        vol->setRedirectState(micant::csvfs::CsvRedirectState::FileRedirected);
+        TEST_ASSERT(vol->getRedirectState() == micant::csvfs::CsvRedirectState::FileRedirected, "Volume redirected state match");
+
+        uint32_t redirWritten = 0;
+        bool rWrOk = vol->directIoWrite(testFile, 4096, blockData.data(), static_cast<uint32_t>(blockData.size()), &redirWritten, 2);
+        TEST_ASSERT(rWrOk && redirWritten == 4096, "Redirected write over cluster network must succeed seamlessly");
+        TEST_ASSERT(vol->getTotalRedirectedOps() >= 1, "Redirected ops counter must increment");
+
+        // 3. Metadata Delegation to Coordinator Node
+        uint32_t metaStatus = 0;
+        bool metaCreate = vol->delegateMetadata(micant::csvfs::CsvMetadataOp::CreateFile,
+                                                "C:\\ClusterStorage\\Volume1\\VM_Config.xml", 2048, &metaStatus, 2);
+        TEST_ASSERT(metaCreate && metaStatus == 0, "Metadata delegation for file creation to coordinator must succeed");
+        TEST_ASSERT(vol->getTotalMetadataDelegations() >= 1, "Metadata delegation counter must increment");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 cluster.exe CLI Management Tool, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& clusSys = micant::cluster::FailoverClusterSubsystem::get();
+        clusSys.reset();
+
+        std::string out;
+
+        // 1. cluster /help
+        micant::cluster_cmd::um::ExecuteClusterString("cluster /help", out);
+        TEST_ASSERT(out.find("cluster.exe 10.0.26100.1") != std::string::npos, "Help banner contains cluster.exe version");
+        TEST_ASSERT(out.find("node") != std::string::npos, "Help contains node object");
+        TEST_ASSERT(out.find("group") != std::string::npos, "Help contains group object");
+        TEST_ASSERT(out.find("res") != std::string::npos, "Help contains res object");
+        TEST_ASSERT(out.find("quorum") != std::string::npos, "Help contains quorum object");
+        TEST_ASSERT(out.find("csv") != std::string::npos, "Help contains csv object");
+
+        // 2. cluster status
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster status", out);
+        TEST_ASSERT(out.find("WSFC 10.0.26100.1") != std::string::npos, "Status contains WSFC header");
+        TEST_ASSERT(out.find("ACHIEVED") != std::string::npos, "Status reports quorum ACHIEVED");
+
+        // 3. cluster node
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster node", out);
+        TEST_ASSERT(out.find("TITAN-CLUS-01") != std::string::npos, "Node listing contains TITAN-CLUS-01");
+        TEST_ASSERT(out.find("TITAN-CLUS-02") != std::string::npos, "Node listing contains TITAN-CLUS-02");
+        TEST_ASSERT(out.find("Coordinator") != std::string::npos, "Node listing indicates Coordinator");
+
+        // 4. cluster node <target> /pause and /resume
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster node TITAN-CLUS-03 /pause", out);
+        TEST_ASSERT(out.find("PAUSED") != std::string::npos, "Pause node confirmation");
+        auto* n3 = clusSys.getNode(3);
+        TEST_ASSERT(n3->state == micant::cluster::ClusterNodeState::Paused, "Node 3 state is Paused");
+
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster node TITAN-CLUS-03 /resume", out);
+        TEST_ASSERT(out.find("RESUMED") != std::string::npos, "Resume node confirmation");
+        TEST_ASSERT(n3->state == micant::cluster::ClusterNodeState::Up, "Node 3 state restored to Up");
+
+        // 5. cluster group & /moveto:<dest>
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster group", out);
+        TEST_ASSERT(out.find("GRP-SQL-HA") != std::string::npos, "Group listing contains GRP-SQL-HA");
+
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster group GRP-SQL-HA /moveto:2", out);
+        TEST_ASSERT(out.find("successfully migrated to Node 2") != std::string::npos, "Migration confirmation");
+        auto* grp = clusSys.getGroup("GRP-SQL-HA");
+        TEST_ASSERT(grp->ownerNodeId == 2, "Group owner migrated to Node 2");
+
+        // 6. cluster res & /offline & /online
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster res", out);
+        TEST_ASSERT(out.find("RES-IP-01") != std::string::npos, "Resource listing contains RES-IP-01");
+        TEST_ASSERT(out.find("RES-NAME-01") != std::string::npos, "Resource listing contains RES-NAME-01");
+
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster res RES-IP-01 /offline", out);
+        TEST_ASSERT(out.find("OFFLINE") != std::string::npos, "Resource offline confirmation");
+
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster res RES-IP-01 /online", out);
+        TEST_ASSERT(out.find("ONLINE") != std::string::npos, "Resource online confirmation");
+
+        // 7. cluster quorum inspection & configuration
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster quorum", out);
+        TEST_ASSERT(out.find("Quorum Model:") != std::string::npos, "Quorum model displayed");
+
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster quorum /set:cloudwitness /path:https://blob.core.windows.net/titan /dynamic:on", out);
+        TEST_ASSERT(out.find("successfully updated") != std::string::npos, "Quorum update confirmation");
+        TEST_ASSERT(clusSys.getWitnessType() == micant::cluster::QuorumWitnessType::CloudWitness, "Witness type set to CloudWitness");
+        TEST_ASSERT(clusSys.isDynamicQuorumEnabled(), "Dynamic quorum enabled via CLI");
+
+        // 8. cluster csv inspection & redirect toggle
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster csv", out);
+        TEST_ASSERT(out.find("C:\\ClusterStorage\\Volume1") != std::string::npos, "CSV volume displayed");
+
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster csv C:\\ClusterStorage\\Volume1 /redirect:fileredirect", out);
+        TEST_ASSERT(out.find("File-Redirected") != std::string::npos, "CSV redirect update confirmation");
+
+        // 9. cluster log /gen
+        out.clear();
+        micant::cluster_cmd::um::ExecuteClusterString("cluster log /gen", out);
+        TEST_ASSERT(out.find("Cluster Diagnostic Report (Cluster.log - 10.0.26100.1)") != std::string::npos, "Diagnostic report header");
+        TEST_ASSERT(out.find("Cluster Node Topology:") != std::string::npos, "Report includes node topology");
+
+        // 10. Remote Executive Console & Push Telemetry Integration
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termRes = console.executeTerminalCommand("cluster status");
+        TEST_ASSERT(termRes.find("WSFC 10.0.26100.1") != std::string::npos, "Web terminal cluster status match");
+
+        // 11. WFP Inbound Rule #17101 (MicaNT_WSFC_Cluster_Inbound_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto clusRuleOpt = wfp.findRuleById(17101);
+        TEST_ASSERT(clusRuleOpt.has_value(), "WFP Rule #17101 must be registered");
+        TEST_ASSERT(clusRuleOpt->protocol == tcpip::IPPROTO_TCP, "Cluster rule protocol must be TCP");
+        TEST_ASSERT(clusRuleOpt->localPortStart == 3343 && clusRuleOpt->localPortEnd == 3343, "Cluster port 3343");
+        TEST_ASSERT(clusRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Cluster action must be PERMIT");
+
+        // 12. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"clus_nodes_online\":") != std::string::npos, "Telemetry clus_nodes_online");
+        TEST_ASSERT(teleJson.find("\"clus_quorum_status\":") != std::string::npos, "Telemetry clus_quorum_status");
+        TEST_ASSERT(teleJson.find("\"clus_active_groups\":") != std::string::npos, "Telemetry clus_active_groups");
+        TEST_ASSERT(teleJson.find("\"clus_heartbeats_sent\":") != std::string::npos, "Telemetry clus_heartbeats_sent");
+        TEST_ASSERT(teleJson.find("\"clus_failover_events\":") != std::string::npos, "Telemetry clus_failover_events");
+        TEST_ASSERT(teleJson.find("\"clus_csv_volumes\":") != std::string::npos, "Telemetry clus_csv_volumes");
+    }
+
+    std::cout << "[HORIZON 171] Sovereign Windows Server Failover Clustering (WSFC / MS-CMRP / MS-CRTD) Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: Multi-Node Paxos Distributed Consensus Protocol & Ballot Negotiation OK\n"
+              << "    Pillar 3: Dynamic Quorum Witness Models & Last-Man Standing Arbitration OK\n"
+              << "    Pillar 4: Cluster Resource Dependency Trees, Health Checks & Role State Machine OK\n"
+              << "    Pillar 5: Coordinated Automatic Group Failover & Live Migration OK\n"
+              << "    Pillar 6: Cluster Shared Volumes (CSVFS v2.0 / csvfs.sys) Direct & Redirected I/O OK\n"
+              << "    Pillar 7: Canonical Win32 cluster.exe CLI Management Tool, WFP & Push Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC) PASSED." << std::endl;
+}

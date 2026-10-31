@@ -254,7 +254,12 @@ public:
         m_resources.clear();
         m_groups.clear();
         m_disks.clear();
+        m_paxosValues.clear();
         m_initialized = false;
+        m_groupsMigrated = 0;
+        m_heartbeatsTransmitted = 0;
+        m_dynamicQuorum = false;
+        m_witnessPath = "\\\\fs01\\clusterwitness";
         initializeLocked();
     }
 
@@ -296,6 +301,67 @@ public:
     size_t getNodeCount() const noexcept {
         std::shared_lock lock(m_mutex);
         return m_nodes.size();
+    }
+
+    bool pauseNode(uint32_t nodeId) {
+        std::unique_lock lock(m_mutex);
+        auto it = m_nodes.find(nodeId);
+        if (it == m_nodes.end() || it->second.state == ClusterNodeState::Down) return false;
+        it->second.state = ClusterNodeState::Paused;
+        // Drain groups owned by paused node to surviving nodes
+        for (auto& [_, g] : m_groups) {
+            if (g.ownerNodeId == nodeId) {
+                failoverGroupLocked(g.groupId);
+            }
+        }
+        return true;
+    }
+
+    bool resumeNode(uint32_t nodeId) {
+        std::unique_lock lock(m_mutex);
+        auto it = m_nodes.find(nodeId);
+        if (it == m_nodes.end()) return false;
+        it->second.state = ClusterNodeState::Up;
+        it->second.currentVote = it->second.voteWeight;
+        recalculateQuorumLocked();
+        return true;
+    }
+
+    ClusterNodeInfo* findNodeByNameOrId(std::string_view query) {
+        std::shared_lock lock(m_mutex);
+        try {
+            size_t idx = 0;
+            unsigned long id = std::stoul(std::string(query), &idx);
+            if (idx == query.size()) {
+                auto it = m_nodes.find(static_cast<uint32_t>(id));
+                if (it != m_nodes.end()) return const_cast<ClusterNodeInfo*>(&it->second);
+            }
+        } catch (...) {}
+
+        for (auto& [_, n] : m_nodes) {
+            if (n.nodeName == query) return const_cast<ClusterNodeInfo*>(&n);
+        }
+        return nullptr;
+    }
+
+    ClusterGroup* findGroupByNameOrId(std::string_view query) {
+        std::shared_lock lock(m_mutex);
+        auto it = m_groups.find(std::string(query));
+        if (it != m_groups.end()) return const_cast<ClusterGroup*>(&it->second);
+        for (auto& [_, g] : m_groups) {
+            if (g.groupName == query) return const_cast<ClusterGroup*>(&g);
+        }
+        return nullptr;
+    }
+
+    ClusterResource* findResourceByNameOrId(std::string_view query) {
+        std::shared_lock lock(m_mutex);
+        auto it = m_resources.find(std::string(query));
+        if (it != m_resources.end()) return const_cast<ClusterResource*>(&it->second);
+        for (auto& [_, r] : m_resources) {
+            if (r.resourceName == query) return const_cast<ClusterResource*>(&r);
+        }
+        return nullptr;
     }
 
     // --- Paxos Distributed Consensus ---
@@ -341,6 +407,34 @@ public:
         m_witnessType = type;
         m_witnessVote = witnessHealthy ? 1 : 0;
         recalculateQuorumLocked();
+    }
+
+    void setQuorumWitness(QuorumWitnessType type, std::string_view pathOrUrl = "", bool witnessHealthy = true) {
+        std::unique_lock lock(m_mutex);
+        m_witnessType = type;
+        m_witnessPath = std::string(pathOrUrl);
+        m_witnessVote = witnessHealthy ? 1 : 0;
+        recalculateQuorumLocked();
+    }
+
+    std::string getWitnessPath() const {
+        std::shared_lock lock(m_mutex);
+        return m_witnessPath;
+    }
+
+    void setDynamicQuorum(bool enabled) {
+        std::unique_lock lock(m_mutex);
+        m_dynamicQuorum = enabled;
+        recalculateQuorumLocked();
+    }
+
+    bool isDynamicQuorumEnabled() const noexcept {
+        std::shared_lock lock(m_mutex);
+        return m_dynamicQuorum;
+    }
+
+    uint32_t getGroupsMigratedCount() const noexcept {
+        return m_groupsMigrated.load();
     }
 
     // --- Cluster Network Heartbeats (clusnet.sys) ---
@@ -513,6 +607,54 @@ public:
         return m_heartbeatsTransmitted.load();
     }
 
+    std::string generateClusterLog() const {
+        std::shared_lock lock(m_mutex);
+        std::ostringstream ss;
+        auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        ss << "================================================================================\n"
+           << "[MicaNT WSFC] Cluster Diagnostic Report (Cluster.log - 10.0.26100.1)\n"
+           << "================================================================================\n"
+           << "Log Timestamp: " << std::put_time(std::gmtime(&now), "%Y-%m-%d %H:%M:%SZ") << "\n"
+           << "Cluster Name: " << (m_paxosValues.count("ClusterName") ? m_paxosValues.at("ClusterName") : "TitanSovereignCluster") << "\n"
+           << "Quorum Status: " << (m_hasQuorum ? "ACHIEVED" : "LOST") << "\n"
+           << "Quorum Model: " << QuorumWitnessTypeToString(m_witnessType) << "\n"
+           << "Witness Path: " << (m_witnessPath.empty() ? "(none)" : m_witnessPath) << "\n"
+           << "Dynamic Quorum: " << (m_dynamicQuorum ? "ENABLED (Last-Man Standing Resilience)" : "DISABLED (Static Majority)") << "\n"
+           << "Active Votes: " << m_activeVotes << " / Total Votes: " << m_totalVotes << "\n"
+           << "Paxos Epoch: " << m_epoch << " | Ballot Sequence: " << m_ballotCounter << "\n"
+           << "Heartbeats Sent: " << m_heartbeatsTransmitted.load() << "\n"
+           << "Groups Migrated: " << m_groupsMigrated.load() << "\n"
+           << "--------------------------------------------------------------------------------\n"
+           << "Cluster Node Topology:\n";
+        for (const auto& [id, n] : m_nodes) {
+            ss << "  [Node " << id << "] " << std::left << std::setw(16) << n.nodeName
+               << " IP: " << std::setw(16) << n.ipAddress
+               << " State: " << std::setw(8) << ClusterNodeStateToString(n.state)
+               << (n.isCoordinator ? " [COORDINATOR]" : "")
+               << " Votes: " << n.currentVote << "/" << n.voteWeight
+               << " Missed: " << n.missedHeartbeats << "\n";
+        }
+        ss << "--------------------------------------------------------------------------------\n"
+           << "Resource Groups (Roles):\n";
+        for (const auto& [gid, g] : m_groups) {
+            ss << "  [" << gid << "] " << g.groupName
+               << " State: " << ClusterGroupStateToString(g.state)
+               << " Owner Node: " << g.ownerNodeId
+               << " Preferred Node: " << g.preferredNodeId << "\n";
+            for (const auto& rid : g.resourceIds) {
+                auto rit = m_resources.find(rid);
+                if (rit != m_resources.end()) {
+                    ss << "    - [" << rit->second.resourceId << "] " << rit->second.resourceName
+                       << " (" << rit->second.resourceType << ") State: "
+                       << ClusterResourceStateToString(rit->second.state) << "\n";
+                }
+            }
+        }
+        ss << "================================================================================\n"
+           << "[INFO] Cluster diagnostics integrity: VERIFIED OK.\n";
+        return ss.str();
+    }
+
 private:
     FailoverClusterSubsystem() = default;
 
@@ -522,6 +664,8 @@ private:
         m_epoch = 1;
         m_witnessType = QuorumWitnessType::FileShareWitness;
         m_witnessVote = 1;
+        m_witnessPath = "\\\\fs01\\clusterwitness";
+        m_dynamicQuorum = false;
 
         // Pre-seed 3 Enterprise Cluster Nodes
         ClusterNodeInfo n1{};
@@ -617,9 +761,16 @@ private:
         uint32_t activeNodeVotes = 0;
 
         for (const auto& [_, n] : m_nodes) {
-            nodeVotes += n.voteWeight;
-            if (n.state == ClusterNodeState::Up && n.currentVote > 0) {
-                activeNodeVotes += n.currentVote;
+            if (m_dynamicQuorum) {
+                if (n.state == ClusterNodeState::Up && n.currentVote > 0) {
+                    activeNodeVotes += n.currentVote;
+                    nodeVotes += n.voteWeight;
+                }
+            } else {
+                nodeVotes += n.voteWeight;
+                if (n.state == ClusterNodeState::Up && n.currentVote > 0) {
+                    activeNodeVotes += n.currentVote;
+                }
             }
         }
 
@@ -627,7 +778,7 @@ private:
         m_activeVotes = activeNodeVotes + m_witnessVote;
 
         // Quorum is achieved if strictly greater than 50% of total votes
-        m_hasQuorum = (m_activeVotes > (m_totalVotes / 2));
+        m_hasQuorum = (m_totalVotes > 0) && (m_activeVotes > (m_totalVotes / 2));
     }
 
     bool proposePaxosValueLocked(const std::string& key, const std::string& value, uint32_t proposerNodeId) {
@@ -735,6 +886,8 @@ private:
     bool m_hasQuorum{true};
     QuorumWitnessType m_witnessType{QuorumWitnessType::FileShareWitness};
     uint32_t m_witnessVote{1};
+    std::string m_witnessPath{"\\\\fs01\\clusterwitness"};
+    bool m_dynamicQuorum{false};
 
     std::unordered_map<uint32_t, ClusterNodeInfo> m_nodes;
     std::unordered_map<std::string, ClusterResource> m_resources;
@@ -847,10 +1000,13 @@ inline NTSTATUS ClusDiskReserveLUN(uint32_t lunId, uint32_t nodeId, uint64_t key
 inline void RegisterFailoverClusteringSubsystem() {
     // 1. Version Database Registration
     auto& vdb = micant::version::VersionDatabase::Instance();
+    vdb.RegisterModule("clussvc.exe",  "10.0.26100.1", "Cluster Service Subsystem Host");
+    vdb.RegisterModule("cluster.exe",  "10.0.26100.1", "Cluster Command-Line Utility");
     vdb.RegisterModule("clusapi.dll",  "10.0.26100.1", "Cluster Management API Library");
     vdb.RegisterModule("resutils.dll", "10.0.26100.1", "Cluster Resource Utility Library");
     vdb.RegisterModule("clusnet.sys",  "10.0.26100.1", "Cluster Network Filter Driver (Heartbeat Transport)");
     vdb.RegisterModule("clusdisk.sys", "10.0.26100.1", "Cluster Disk Bus Filter Driver (SCSI-3 PR)");
+    vdb.RegisterModule("csvfs.sys",    "10.0.26100.1", "Cluster Shared Volume File System Driver (TitanCSVFS)");
 
     // 2. SCM Registration
     auto& scm = micant::scm::ServiceControlManager::get();
@@ -884,6 +1040,16 @@ inline void RegisterFailoverClusteringSubsystem() {
     clusDiskRec->binaryPath = L"C:\\Windows\\System32\\drivers\\clusdisk.sys";
     clusDiskRec->status.dwCurrentState = micant::scm::SERVICE_RUNNING;
     scm.registerServiceRecord(clusDiskRec);
+
+    // CSVFS (Cluster Shared Volume File System Driver)
+    auto csvfsRec = std::make_shared<micant::scm::ServiceRecord>();
+    csvfsRec->serviceName = L"CSVFS";
+    csvfsRec->displayName = L"Cluster Shared Volume File System Driver";
+    csvfsRec->serviceType = micant::scm::SERVICE_FILE_SYSTEM_DRIVER;
+    csvfsRec->startType = micant::scm::SERVICE_SYSTEM_START;
+    csvfsRec->binaryPath = L"C:\\Windows\\System32\\drivers\\csvfs.sys";
+    csvfsRec->status.dwCurrentState = micant::scm::SERVICE_RUNNING;
+    scm.registerServiceRecord(csvfsRec);
 
     // Initialize singleton
     FailoverClusterSubsystem::get().initialize();

@@ -538,6 +538,46 @@ public:
         return list;
     }
 
+    std::vector<std::shared_ptr<CsvVolume>> getAllVolumes() const {
+        return getVolumes();
+    }
+
+    void reset() {
+        std::unique_lock lock(m_mutex);
+        m_volumes.clear();
+        m_nodes.clear();
+        m_initialized = false;
+
+        auto node1 = std::make_shared<ClusterNode>();
+        node1->nodeId = 1;
+        node1->nodeName = "MICA-CLUSTER-01";
+        node1->ipAddress = "10.0.0.1";
+        node1->isCoordinator = true;
+        node1->hasDirectStorageAccess = true;
+        m_nodes[1] = node1;
+
+        auto node2 = std::make_shared<ClusterNode>();
+        node2->nodeId = 2;
+        node2->nodeName = "MICA-CLUSTER-02";
+        node2->ipAddress = "10.0.0.2";
+        node2->isCoordinator = false;
+        node2->hasDirectStorageAccess = true;
+        m_nodes[2] = node2;
+
+        auto node3 = std::make_shared<ClusterNode>();
+        node3->nodeId = 3;
+        node3->nodeName = "MICA-CLUSTER-03";
+        node3->ipAddress = "10.0.0.3";
+        node3->isCoordinator = false;
+        node3->hasDirectStorageAccess = true;
+        m_nodes[3] = node3;
+
+        auto vol1 = std::make_shared<CsvVolume>("C:\\ClusterStorage\\Volume1", "R:", 1, 2097152);
+        m_volumes["C:\\ClusterStorage\\Volume1"] = vol1;
+
+        m_initialized = true;
+    }
+
     size_t getVolumeCount() const {
         std::shared_lock lock(m_mutex);
         return m_volumes.size();

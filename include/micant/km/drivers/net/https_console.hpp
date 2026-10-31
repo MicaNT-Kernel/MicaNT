@@ -53,6 +53,9 @@
 #include "micant/um/subsystems/net/dfsutil.hpp"
 #include "micant/um/servers/wsus.hpp"
 #include "micant/um/subsystems/net/wsusutil.hpp"
+#include "micant/um/servers/clustering.hpp"
+#include "micant/km/drivers/fs/csvfs.hpp"
+#include "micant/um/subsystems/net/cluster_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -231,6 +234,19 @@ public:
         wsusRule.weight = 1500;
         wsusRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(wsusRule);
+
+        // 14. Register WFP Inbound Rule for Windows Server Failover Clustering (WSFC 3343 TCP/UDP)
+        wfp::km::WfpKernelFilterRule clusRule{};
+        clusRule.filterId = 17101;
+        clusRule.name = "MicaNT_WSFC_Cluster_Inbound_Permit";
+        clusRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        clusRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        clusRule.protocol = tcpip::IPPROTO_TCP;
+        clusRule.localPortStart = 3343;
+        clusRule.localPortEnd = 3343;
+        clusRule.weight = 1500;
+        clusRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(clusRule);
     }
 
     void stopHttpsServer() {
@@ -601,6 +617,10 @@ public:
             std::string res;
             wuauclt::um::ExecuteWuaucltString(cmd, res);
             return res;
+        } else if (cmd == "cluster" || cmd.starts_with("cluster ")) {
+            std::string res;
+            cluster_cmd::um::ExecuteClusterString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -810,7 +830,19 @@ public:
            << "\"wsus_managed_computers\":" << micant::wsus::SovereignWsusEngine::instance().getAllClients().size() << ","
            << "\"wsus_compliance_rate\":" << micant::wsus::SovereignWsusEngine::instance().calculateComplianceRate() << ","
            << "\"wsus_pending_reboots\":" << micant::wsus::SovereignWsusEngine::instance().getPendingRebootCount() << ","
-           << "\"wsus_content_bytes\":" << micant::wsus::SovereignWsusEngine::instance().getTotalBytesStored() << "}\r\n";
+           << "\"wsus_content_bytes\":" << micant::wsus::SovereignWsusEngine::instance().getTotalBytesStored() << ","
+           << "\"clus_nodes_online\":" << [&]() -> uint32_t {
+               uint32_t count = 0;
+               for (const auto& n : micant::cluster::FailoverClusterSubsystem::get().getAllNodes()) {
+                   if (n.state == micant::cluster::ClusterNodeState::Up) count++;
+               }
+               return count;
+           }() << ","
+           << "\"clus_quorum_status\":\"" << (micant::cluster::FailoverClusterSubsystem::get().hasQuorum() ? "ACHIEVED" : "LOST") << "\","
+           << "\"clus_active_groups\":" << micant::cluster::FailoverClusterSubsystem::get().getAllGroups().size() << ","
+           << "\"clus_heartbeats_sent\":" << micant::cluster::FailoverClusterSubsystem::get().getHeartbeatCount() << ","
+           << "\"clus_failover_events\":" << micant::cluster::FailoverClusterSubsystem::get().getGroupsMigratedCount() << ","
+           << "\"clus_csv_volumes\":" << micant::csvfs::CsvfsSubsystem::get().getAllVolumes().size() << "}\r\n";
         return ss.str();
     }
 
