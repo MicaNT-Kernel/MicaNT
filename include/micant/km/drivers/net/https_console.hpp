@@ -68,6 +68,8 @@
 #include "micant/um/subsystems/mgmt/branchcache_cmd.hpp"
 #include "micant/um/servers/vmms.hpp"
 #include "micant/um/subsystems/mgmt/hyperv_cmd.hpp"
+#include "micant/um/servers/wsrm.hpp"
+#include "micant/um/subsystems/mgmt/wsrm_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -337,6 +339,19 @@ public:
         hvRule.weight = 1500;
         hvRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(hvRule);
+
+        // 21. Register WFP Inbound Rule for WSRM Quota Management (TCP 5448)
+        wfp::km::WfpKernelFilterRule wsrmRule{};
+        wsrmRule.filterId = 17801;
+        wsrmRule.name = "MicaNT_WSRM_Quota_Permit";
+        wsrmRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        wsrmRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        wsrmRule.protocol = tcpip::IPPROTO_TCP;
+        wsrmRule.localPortStart = 5448;
+        wsrmRule.localPortEnd = 5448;
+        wsrmRule.weight = 1500;
+        wsrmRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(wsrmRule);
     }
 
     void stopHttpsServer() {
@@ -743,6 +758,10 @@ public:
             std::string res;
             hyperv_cmd::um::ExecuteHyperVString(cmd, res);
             return res;
+        } else if (cmd == "wsrm" || cmd.starts_with("wsrm ") || cmd == "wsrmcli" || cmd.starts_with("wsrmcli ")) {
+            std::string res;
+            wsrm_cmd::um::ExecuteWsrmString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1005,7 +1024,11 @@ public:
            << "\"hyperv_vms_total\":" << micant::vmms::VmmsSubsystem::get().getVirtualMachineCount() << ","
            << "\"hyperv_vms_running\":" << micant::vmms::VmmsSubsystem::get().getRunningVirtualMachineCount() << ","
            << "\"hyperv_vhdx_mounted\":" << micant::vmms::VmmsSubsystem::get().getVhdxCount() << ","
-           << "\"hyperv_allocated_ram_mb\":" << micant::vmms::VmmsSubsystem::get().getTotalAllocatedRamMb() << "}\r\n";
+           << "\"hyperv_allocated_ram_mb\":" << micant::vmms::VmmsSubsystem::get().getTotalAllocatedRamMb() << ","
+           << "\"wsrm_policy\":\"" << micant::wsrm::AllocationPolicyTypeToString(micant::wsrm::SystemResourceManager::instance().getAllocationPolicy()) << "\","
+           << "\"wsrm_managed_procs\":" << micant::wsrm::SystemResourceManager::instance().getAllManagedProcesses().size() << ","
+           << "\"wsrm_throttling_events\":" << micant::wsrm::SystemResourceManager::instance().getTotalThrottlingEvents() << ","
+           << "\"wsrm_rebalance_cycles\":" << micant::wsrm::SystemResourceManager::instance().getRebalanceCycles() << "}\r\n";
         return ss.str();
     }
 

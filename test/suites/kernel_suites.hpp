@@ -34241,3 +34241,276 @@ inline void Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_Hype
 
     std::cout << "[TEST] Suite 393: Horizon 177 - Sovereign Windows Server Hyper-V, VMMS & Virtual Switch PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 178 (Suite 394): Sovereign Windows Server System Resource Manager (WSRM)
+// Dynamic Fair Share Scheduling (DFSS), Job Object CPU Rate Control,
+// Process Matching Criteria (PMC), Accounting Engine & wsrmcli.exe CLI
+// ============================================================================
+inline void Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI() {
+    std::cout << "[TEST] Running Suite 394: Horizon 178 - Sovereign Windows Server System Resource Manager (WSRM)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::wsrm::RegisterWsrmSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. WsrmService (Windows System Resource Manager)
+        auto wsrmSvc = scm.getServiceRecord(L"WsrmService");
+        TEST_ASSERT(wsrmSvc != nullptr, "WsrmService registered in SCM");
+        TEST_ASSERT(wsrmSvc->displayName == L"Windows System Resource Manager", "WsrmService display name matches");
+        TEST_ASSERT(wsrmSvc->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "WsrmService serviceType is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(wsrmSvc->startType == micant::scm::SERVICE_AUTO_START, "WsrmService startType is SERVICE_AUTO_START");
+        TEST_ASSERT(wsrmSvc->binaryPath == L"C:\\Windows\\System32\\wsrm.exe", "WsrmService binary path matches wsrm.exe");
+        TEST_ASSERT(wsrmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WsrmService is running");
+
+        // 2. TitanQuota Kernel Driver (Kernel Resource Quota Driver)
+        auto quotaDrv = scm.getServiceRecord(L"TitanQuota");
+        TEST_ASSERT(quotaDrv != nullptr, "TitanQuota driver registered in SCM");
+        TEST_ASSERT(quotaDrv->displayName == L"Titan Kernel Resource Quota Driver", "TitanQuota display name matches");
+        TEST_ASSERT(quotaDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "TitanQuota serviceType is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(quotaDrv->startType == micant::scm::SERVICE_DEMAND_START, "TitanQuota startType is SERVICE_DEMAND_START");
+        TEST_ASSERT(quotaDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\wsrmcore.sys", "TitanQuota binary path matches wsrmcore.sys");
+        TEST_ASSERT(quotaDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TitanQuota is running");
+
+        // 3. VersionDatabase Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* vWsrmExe = vdb.GetModuleInfo("wsrm.exe");
+        TEST_ASSERT(vWsrmExe != nullptr && vWsrmExe->stringTable.at("FileVersion") == "10.0.26100.1", "wsrm.exe registered @ 10.0.26100.1");
+
+        const auto* vWsrmCore = vdb.GetModuleInfo("wsrmcore.dll");
+        TEST_ASSERT(vWsrmCore != nullptr && vWsrmCore->stringTable.at("FileVersion") == "10.0.26100.1", "wsrmcore.dll registered @ 10.0.26100.1");
+
+        const auto* vWsrmMsc = vdb.GetModuleInfo("wsrm.msc");
+        TEST_ASSERT(vWsrmMsc != nullptr && vWsrmMsc->stringTable.at("FileVersion") == "10.0.26100.1", "wsrm.msc registered @ 10.0.26100.1");
+
+        const auto* vWsrmSys = vdb.GetModuleInfo("wsrmcore.sys");
+        TEST_ASSERT(vWsrmSys != nullptr && vWsrmSys->stringTable.at("FileVersion") == "10.0.26100.1", "wsrmcore.sys registered @ 10.0.26100.1");
+
+        const auto* vWsrmCli = vdb.GetModuleInfo("wsrmcli.exe");
+        TEST_ASSERT(vWsrmCli != nullptr && vWsrmCli->stringTable.at("FileVersion") == "10.0.26100.1", "wsrmcli.exe registered @ 10.0.26100.1");
+
+        const auto* vWsrmAdmin = vdb.GetModuleInfo("wsrmadmin.exe");
+        TEST_ASSERT(vWsrmAdmin != nullptr && vWsrmAdmin->stringTable.at("FileVersion") == "10.0.26100.1", "wsrmadmin.exe registered @ 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Process Matching Criteria (PMC) & Custom Weighted Allocation
+    // ------------------------------------------------------------------------
+    {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+        wsrm.reset();
+
+        // Verify default PMC rules
+        TEST_ASSERT(wsrm.getAllCriteria().size() >= 3, "Default PMC rules registered");
+
+        // Add custom criteria
+        micant::wsrm::ProcessMatchingCriteria pmcSpark{};
+        pmcSpark.criteriaName = "Analytics_Engine";
+        pmcSpark.appPattern = "spark-worker.exe";
+        pmcSpark.userOrGroup = "*";
+        pmcSpark.sessionId = -1;
+        pmcSpark.targetCpuPercent = 35;
+        pmcSpark.hardCap = true;
+        pmcSpark.memoryLimitBytes = 8ULL * 1024 * 1024 * 1024;
+        pmcSpark.weight = 7;
+        TEST_ASSERT(wsrm.addMatchingCriteria(pmcSpark), "Add Analytics_Engine criteria succeeds");
+
+        // Set policy to CustomWeighted
+        wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::CustomWeighted);
+        TEST_ASSERT(wsrm.getAllocationPolicy() == micant::wsrm::AllocationPolicyType::CustomWeighted, "Policy set to CustomWeighted");
+
+        // Register processes
+        wsrm.registerProcess(1010, "spark-worker.exe", "DataAnalyst", 1);
+        wsrm.registerProcess(2020, "sqlservr.exe", "NT SERVICE\\MSSQLSERVER", 0);
+        wsrm.registerProcess(3030, "unknown_job.exe", "Guest", 2);
+
+        micant::wsrm::ManagedProcessRecord rec1010{}, rec2020{}, rec3030{};
+        TEST_ASSERT(wsrm.getProcessAccounting(1010, &rec1010), "Get accounting for PID 1010");
+        TEST_ASSERT(rec1010.matchedCriteria == "Analytics_Engine", "PID 1010 matched Analytics_Engine");
+        TEST_ASSERT(rec1010.allocatedCpuPercent == 35.0, "PID 1010 allocated CPU 35%");
+        TEST_ASSERT(rec1010.memoryLimitBytes == 8ULL * 1024 * 1024 * 1024, "PID 1010 memory limit 8 GB");
+
+        TEST_ASSERT(wsrm.getProcessAccounting(2020, &rec2020), "Get accounting for PID 2020");
+        TEST_ASSERT(rec2020.matchedCriteria == "SQLServer_Workload", "PID 2020 matched SQLServer_Workload");
+        TEST_ASSERT(rec2020.allocatedCpuPercent == 40.0, "PID 2020 allocated CPU 40%");
+
+        TEST_ASSERT(wsrm.getProcessAccounting(3030, &rec3030), "Get accounting for PID 3030");
+        TEST_ASSERT(rec3030.matchedCriteria == "Default_Baseline", "PID 3030 matched Default_Baseline");
+        TEST_ASSERT(rec3030.allocatedCpuPercent == 10.0, "PID 3030 allocated baseline 10%");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic Fair Share Scheduling (DFSS) for Terminal Services (Sessions 0/1/2+)
+    // ------------------------------------------------------------------------
+    {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+
+        // Apply DFSS across 4 active user sessions
+        wsrm.applyFairShare(4);
+        TEST_ASSERT(wsrm.getAllocationPolicy() == micant::wsrm::AllocationPolicyType::EqualPerSession, "Policy is EqualPerSession");
+
+        auto procs = wsrm.getAllManagedProcesses();
+        for (const auto& p : procs) {
+            TEST_ASSERT(p.allocatedCpuPercent == 25.0, "Each session process allocated exactly 25.0% CPU");
+            TEST_ASSERT((p.rateControlFlags & micant::wsrm::JOBOBJECT_CPU_RATE_CONTROL_HARD_CAP) != 0, "Hard cap flag enforced");
+        }
+
+        // Re-apply DFSS for 5 sessions (e.g. 5 concurrent RDP users)
+        wsrm.applyFairShare(5);
+        procs = wsrm.getAllManagedProcesses();
+        for (const auto& p : procs) {
+            TEST_ASSERT(p.allocatedCpuPercent == 20.0, "Each session process rebalanced to 20.0% CPU");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Equal Per Process & Equal Per User Policies
+    // ------------------------------------------------------------------------
+    {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+
+        // 1. Equal Per Process (3 processes -> 33.333% each)
+        wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerProcess);
+        auto procs = wsrm.getAllManagedProcesses();
+        TEST_ASSERT(procs.size() == 3, "3 active processes");
+        for (const auto& p : procs) {
+            TEST_ASSERT(p.allocatedCpuPercent > 33.0 && p.allocatedCpuPercent < 34.0, "Equal per process share ~33.33%");
+            TEST_ASSERT(p.matchedCriteria == "Equal_Per_Process", "Matched Equal_Per_Process");
+        }
+
+        // 2. Equal Per User (3 distinct users: DataAnalyst, MSSQLSERVER, Guest -> 33.33% per user)
+        wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerUser);
+        procs = wsrm.getAllManagedProcesses();
+        for (const auto& p : procs) {
+            TEST_ASSERT(p.allocatedCpuPercent > 33.0 && p.allocatedCpuPercent < 34.0, "Equal per user share ~33.33%");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Job Object CPU Rate Control & Throttling Violation Tracking
+    // ------------------------------------------------------------------------
+    {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+
+        // Update process 1010 telemetry with simulated CPU burst and throttling
+        bool updOk = wsrm.updateProcessTelemetry(1010, 50000, 10000, 2ULL * 1024 * 1024 * 1024, 10 * 1024 * 1024, true);
+        TEST_ASSERT(updOk, "Update process telemetry succeeds");
+
+        micant::wsrm::ManagedProcessRecord rec{};
+        TEST_ASSERT(wsrm.getProcessAccounting(1010, &rec), "Query PID 1010 accounting");
+        TEST_ASSERT(rec.userTimeUs == 50000, "User time recorded");
+        TEST_ASSERT(rec.kernelTimeUs == 10000, "Kernel time recorded");
+        TEST_ASSERT(rec.peakWorkingSetBytes == 2ULL * 1024 * 1024 * 1024, "Peak working set recorded");
+        TEST_ASSERT(rec.throttlingEvents == 1, "Throttling event counted");
+
+        TEST_ASSERT(wsrm.getTotalThrottlingEvents() >= 1, "Global throttling event counter incremented");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Tenant Resource Accounting, Historical Database & Process Deregistration
+    // ------------------------------------------------------------------------
+    {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+
+        // Deregister process PID 1010 (process exits)
+        bool deregOk = wsrm.deregisterProcess(1010);
+        TEST_ASSERT(deregOk, "Deregister process 1010 succeeds");
+
+        micant::wsrm::ManagedProcessRecord checkRec{};
+        TEST_ASSERT(!wsrm.getProcessAccounting(1010, &checkRec), "PID 1010 no longer in active table");
+
+        // Query historical accounting for tenant "DataAnalyst"
+        uint64_t cpuTimeUs = 0, peakMemBytes = 0, ioBytes = 0;
+        bool acctFound = wsrm.getTenantAccounting("DataAnalyst", &cpuTimeUs, &peakMemBytes, &ioBytes);
+        TEST_ASSERT(acctFound, "Tenant accounting for DataAnalyst found in historical database");
+        TEST_ASSERT(cpuTimeUs >= 60000, "Cumulative CPU time accounted (60 ms)");
+        TEST_ASSERT(peakMemBytes == 2ULL * 1024 * 1024 * 1024, "Peak memory accounted (2 GB)");
+        TEST_ASSERT(ioBytes == 10 * 1024 * 1024, "I/O bytes accounted (10 MB)");
+
+        // Query full historical log
+        auto history = wsrm.getAccountingHistory();
+        TEST_ASSERT(!history.empty(), "Historical accounting log populated");
+        TEST_ASSERT(history.back().tenantName == "DataAnalyst", "Last log entry matches tenant DataAnalyst");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 wsrmcli.exe CLI, WFP Rule #17801 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+        wsrm.reset();
+
+        // 1. wsrm status
+        std::string statusOut;
+        micant::wsrm_cmd::um::ExecuteWsrmString("wsrm status", statusOut);
+        TEST_ASSERT(statusOut.find("Windows System Resource Manager (WSRM) Subsystem Status:") != std::string::npos, "wsrm status banner");
+        TEST_ASSERT(statusOut.find("ONLINE (wsrm.exe / TitanQuota)") != std::string::npos, "wsrm status online");
+        TEST_ASSERT(statusOut.find("Active Allocation Policy:") != std::string::npos, "wsrm status policy");
+
+        // 2. wsrm policies
+        std::string polOut;
+        micant::wsrm_cmd::um::ExecuteWsrmString("wsrm policies", polOut);
+        TEST_ASSERT(polOut.find("WSRM Process Matching Criteria (PMC)") != std::string::npos, "wsrm policies banner");
+        TEST_ASSERT(polOut.find("SQLServer_Workload") != std::string::npos, "wsrm lists SQLServer_Workload");
+
+        // 3. wsrm setpolicy
+        std::string setOut;
+        micant::wsrm_cmd::um::ExecuteWsrmString("wsrm setpolicy proc", setOut);
+        TEST_ASSERT(setOut.find("Equal_Per_Process") != std::string::npos, "wsrm setpolicy confirmation");
+
+        // 4. wsrm addcriteria
+        std::string addOut;
+        micant::wsrm_cmd::um::ExecuteWsrmString("wsrm addcriteria BigDataApp hadoop*.exe 50 /mem:16384", addOut);
+        TEST_ASSERT(addOut.find("created successfully") != std::string::npos, "wsrm addcriteria confirmation");
+
+        // 5. wsrm dfss
+        std::string dfssOut;
+        micant::wsrm_cmd::um::ExecuteWsrmString("wsrm dfss 2", dfssOut);
+        TEST_ASSERT(dfssOut.find("Target CPU per Session: 50.0%") != std::string::npos, "wsrm dfss confirmation");
+
+        // 6. wsrm dump
+        std::string dumpOut;
+        micant::wsrm_cmd::um::ExecuteWsrmString("wsrm dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("Set-WsrmAllocationPolicy") != std::string::npos, "wsrm dump contains PowerShell");
+
+        // 7. Remote Executive Console & Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStatus = console.executeTerminalCommand("wsrm status");
+        TEST_ASSERT(termStatus.find("Windows System Resource Manager (WSRM) Subsystem Status:") != std::string::npos, "Web terminal wsrm status");
+
+        std::string termPol = console.executeTerminalCommand("wsrm policies");
+        TEST_ASSERT(termPol.find("SQLServer_Workload") != std::string::npos, "Web terminal wsrm policies");
+
+        // 8. WFP Inbound Rule #17801 (MicaNT_WSRM_Quota_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto wsrmRuleOpt = wfp.findRuleById(17801);
+        TEST_ASSERT(wsrmRuleOpt.has_value(), "WFP Rule #17801 for WSRM must be registered");
+        TEST_ASSERT(wsrmRuleOpt->protocol == tcpip::IPPROTO_TCP, "WSRM protocol is TCP");
+        TEST_ASSERT(wsrmRuleOpt->localPortStart == 5448 && wsrmRuleOpt->localPortEnd == 5448, "WSRM port 5448");
+        TEST_ASSERT(wsrmRuleOpt->action == wfp::FWP_ACTION_PERMIT, "WSRM rule action must be PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"wsrm_policy\":") != std::string::npos, "Telemetry wsrm_policy");
+        TEST_ASSERT(teleJson.find("\"wsrm_managed_procs\":") != std::string::npos, "Telemetry wsrm_managed_procs");
+        TEST_ASSERT(teleJson.find("\"wsrm_throttling_events\":") != std::string::npos, "Telemetry wsrm_throttling_events");
+        TEST_ASSERT(teleJson.find("\"wsrm_rebalance_cycles\":") != std::string::npos, "Telemetry wsrm_rebalance_cycles");
+    }
+
+    std::cout << "[HORIZON 178] Sovereign Windows Server System Resource Manager Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: Process Matching Criteria (PMC) & Custom Weighted Allocation OK\n"
+              << "    Pillar 3: Dynamic Fair Share Scheduling (DFSS) for Terminal Services OK\n"
+              << "    Pillar 4: Equal Per Process & Equal Per User Policies OK\n"
+              << "    Pillar 5: Job Object CPU Rate Control & Throttling Violation Tracking OK\n"
+              << "    Pillar 6: Tenant Resource Accounting, Historical Database & Deregistration OK\n"
+              << "    Pillar 7: Canonical Win32 wsrmcli.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 394: Horizon 178 - Sovereign Windows Server System Resource Manager PASSED." << std::endl;
+}

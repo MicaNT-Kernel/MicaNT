@@ -138,8 +138,25 @@ public:
     SystemResourceManager(const SystemResourceManager&) = delete;
     SystemResourceManager& operator=(const SystemResourceManager&) = delete;
 
+    void reset() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_activePolicy = AllocationPolicyType::EqualPerProcess;
+        m_criteria.clear();
+        m_managedProcesses.clear();
+        m_accountingLog.clear();
+        m_totalThrottlingEvents.store(0);
+        m_rebalanceCycles.store(0);
+        m_totalRegisteredProcesses.store(0);
+        m_initialized = false;
+        initializeLocked();
+    }
+
     void initialize() {
         std::lock_guard<std::mutex> lock(m_mutex);
+        initializeLocked();
+    }
+
+    void initializeLocked() {
         if (m_initialized) return;
 
         // Register default built-in Process Matching Criteria
@@ -217,6 +234,8 @@ public:
         db.RegisterModule("wsrmcore.dll", "10.0.26100.1", "System Resource Manager Core Engine");
         db.RegisterModule("wsrm.msc", "10.0.26100.1", "Windows System Resource Manager Management Console");
         db.RegisterModule("wsrmcore.sys", "10.0.26100.1", "Kernel Resource Quota Driver");
+        db.RegisterModule("wsrmcli.exe", "10.0.26100.1", "Windows System Resource Manager Command-Line Tool");
+        db.RegisterModule("wsrmadmin.exe", "10.0.26100.1", "System Resource Manager Administrator Tool");
     }
 
     // ========================================================================
@@ -550,5 +569,9 @@ inline int32_t MicaWsrmGetTenantAccounting(void* pEngine, const char* userOrApp,
 }
 
 } // extern "C"
+
+inline void RegisterWsrmSubsystem() {
+    SystemResourceManager::instance().initialize();
+}
 
 } // namespace micant::wsrm

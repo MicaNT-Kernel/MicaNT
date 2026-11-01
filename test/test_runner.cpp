@@ -329,6 +329,7 @@
 #include "micant/um/servers/nps.hpp"
 #include "micant/um/subsystems/net/netsh_nps.hpp"
 #include "micant/um/servers/wsrm.hpp"
+#include "micant/um/subsystems/mgmt/wsrm_cmd.hpp"
 #include "micant/um/subsystems/mgmt/wds.hpp"
 #include "micant/um/servers/dfs.hpp"
 #include "micant/um/subsystems/net/dfsutil.hpp"
@@ -431,6 +432,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite394") {
+        RUN_TEST(Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite393") {
@@ -1950,6 +1955,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI);
     RUN_TEST(Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
     RUN_TEST(Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
+    RUN_TEST(Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
