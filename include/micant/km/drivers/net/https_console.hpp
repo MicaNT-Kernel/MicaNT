@@ -60,6 +60,8 @@
 #include "micant/um/subsystems/net/nlb_cmd.hpp"
 #include "micant/km/drivers/storage/s2d.hpp"
 #include "micant/um/subsystems/mgmt/storagespaces_cmd.hpp"
+#include "micant/km/drivers/fs/dedup.hpp"
+#include "micant/um/subsystems/mgmt/dedup_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -277,6 +279,19 @@ public:
         s2dRule.weight = 1500;
         s2dRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(s2dRule);
+
+        // 17. Register WFP Inbound Rule for Data Deduplication (MS-DEDUP Remote RPC Port 445 / Dedicated 5446 TCP)
+        wfp::km::WfpKernelFilterRule dedupRule{};
+        dedupRule.filterId = 17401;
+        dedupRule.name = "MicaNT_Dedup_Service_Permit";
+        dedupRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        dedupRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        dedupRule.protocol = tcpip::IPPROTO_TCP;
+        dedupRule.localPortStart = 5446;
+        dedupRule.localPortEnd = 5446;
+        dedupRule.weight = 1500;
+        dedupRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(dedupRule);
     }
 
     void stopHttpsServer() {
@@ -663,6 +678,14 @@ public:
             std::string res;
             storagespaces_cmd::um::ExecuteStorageDiagString(cmd, res);
             return res;
+        } else if (cmd == "ddpeval" || cmd.starts_with("ddpeval ")) {
+            std::string res;
+            dedup_cmd::um::ExecuteDdpEvalString(cmd, res);
+            return res;
+        } else if (cmd == "ddpcli" || cmd.starts_with("ddpcli ")) {
+            std::string res;
+            dedup_cmd::um::ExecuteDdpCliString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -904,7 +927,12 @@ public:
            << "\"s2d_virtual_disks\":" << micant::s2d::StorageSpacesSubsystem::get().getVirtualDiskCount() << ","
            << "\"s2d_health_status\":\"" << micant::s2d::S2dHealthStatusToString(micant::s2d::StorageSpacesSubsystem::get().getHealthStatus()) << "\","
            << "\"s2d_cache_hit_pct\":" << std::fixed << std::setprecision(1) << micant::s2d::StorageSpacesSubsystem::get().getCacheHitPercentage() << ","
-           << "\"s2d_rebuild_active\":" << (micant::s2d::StorageSpacesSubsystem::get().isRebuildActive() ? "true" : "false") << "}\r\n";
+           << "\"s2d_rebuild_active\":" << (micant::s2d::StorageSpacesSubsystem::get().isRebuildActive() ? "true" : "false") << ","
+           << "\"dedup_volumes_active\":" << micant::dedup::DataDeduplicationSubsystem::get().getActiveVolumesCount() << ","
+           << "\"dedup_saved_bytes\":" << micant::dedup::DataDeduplicationSubsystem::get().getTotalSavedBytes() << ","
+           << "\"dedup_savings_pct\":" << std::fixed << std::setprecision(1) << micant::dedup::DataDeduplicationSubsystem::get().getGlobalSavingsPercentage() << ","
+           << "\"dedup_chunks_total\":" << micant::dedup::DataDeduplicationSubsystem::get().getTotalChunksStored() << ","
+           << "\"dedup_jobs_completed\":" << micant::dedup::DataDeduplicationSubsystem::get().getCompletedJobsCount() << "}\r\n";
         return ss.str();
     }
 

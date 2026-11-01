@@ -314,6 +314,8 @@
 #include "micant/km/drivers/fs/wcifs.hpp"
 #include "micant/km/drivers/storage/s2d.hpp"
 #include "micant/um/subsystems/mgmt/storagespaces_cmd.hpp"
+#include "micant/km/drivers/fs/dedup.hpp"
+#include "micant/um/subsystems/mgmt/dedup_cmd.hpp"
 #include "micant/um/servers/branchcache.hpp"
 #include "micant/km/drivers/storage/storage_replica.hpp"
 #include "micant/um/servers/clustering.hpp"
@@ -426,6 +428,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite390") {
+        RUN_TEST(Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite389") {
@@ -1925,6 +1931,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI);
     RUN_TEST(Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI);
     RUN_TEST(Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpacesCLI);
+    RUN_TEST(Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

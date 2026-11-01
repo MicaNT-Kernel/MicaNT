@@ -32890,3 +32890,377 @@ inline void Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpac
     std::cout << "[TEST] Suite 389: Horizon 173 - Sovereign Windows Server Storage Spaces Direct (S2D) PASSED." << std::endl;
 }
 
+
+// ============================================================================
+// Horizon 174 (Suite 390): Sovereign Windows Server Data Deduplication (Dedup / MS-DEDUP)
+// Minifilter Driver (dedup.sys), Content-Defined Chunking (CDC / Rabin rolling hash),
+// SHA-256 Multi-Reference Chunk Store Repository, Reparse Point Stub Stream Architecture
+// (IO_REPARSE_TAG_DEDUP = 0x80000013), Workload Profiles (Default, Hyper-V, Backup),
+// Servicing Jobs (Optimization, GC, Scrubbing, Un-optimization), and ddpeval.exe / ddpcli.exe CLI
+// ============================================================================
+inline void Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli() {
+    std::cout << "[TEST] Running Suite 390: Horizon 174 - Sovereign Windows Server Data Deduplication (Dedup / MS-DEDUP)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::dedup::RegisterDataDeduplicationSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. Minifilter Driver: dedup.sys
+        auto dedupDrv = scm.getServiceRecord(L"Dedup");
+        TEST_ASSERT(dedupDrv != nullptr, "Dedup filter driver service registered");
+        TEST_ASSERT(dedupDrv->displayName == L"Data Deduplication Filter Driver", "Dedup driver display name matches");
+        TEST_ASSERT(dedupDrv->serviceType == micant::scm::SERVICE_FILE_SYSTEM_DRIVER, "Dedup driver serviceType must be SERVICE_FILE_SYSTEM_DRIVER");
+        TEST_ASSERT(dedupDrv->startType == micant::scm::SERVICE_SYSTEM_START, "Dedup driver startType must be SERVICE_SYSTEM_START");
+        TEST_ASSERT(dedupDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\dedup.sys", "Dedup driver binary path matches system32 drivers dedup.sys");
+        TEST_ASSERT(dedupDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Dedup driver is running");
+
+        // 2. User-mode Background Servicing: DedupSvc
+        auto dedupSvc = scm.getServiceRecord(L"DedupSvc");
+        TEST_ASSERT(dedupSvc != nullptr, "DedupSvc service registered");
+        TEST_ASSERT(dedupSvc->displayName == L"Data Deduplication Service", "DedupSvc display name matches");
+        TEST_ASSERT(dedupSvc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "DedupSvc serviceType must be SERVICE_WIN32_SHARE_PROCESS");
+        TEST_ASSERT(dedupSvc->startType == micant::scm::SERVICE_AUTO_START, "DedupSvc startType must be SERVICE_AUTO_START");
+        TEST_ASSERT(dedupSvc->binaryPath == L"C:\\Windows\\System32\\svchost.exe -k netsvcs", "DedupSvc binary path hosted in svchost -k netsvcs");
+        TEST_ASSERT(dedupSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "DedupSvc is running");
+
+        // 3. PE Module VersionDatabase Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* vDedupSys = vdb.GetModuleInfo("dedup.sys");
+        TEST_ASSERT(vDedupSys != nullptr && vDedupSys->stringTable.at("FileVersion") == "10.0.26100.1", "dedup.sys registered @ 10.0.26100.1");
+
+        const auto* vDedupCore = vdb.GetModuleInfo("dedupcore.dll");
+        TEST_ASSERT(vDedupCore != nullptr && vDedupCore->stringTable.at("FileVersion") == "10.0.26100.1", "dedupcore.dll registered @ 10.0.26100.1");
+
+        const auto* vDedupApi = vdb.GetModuleInfo("dedupapi.dll");
+        TEST_ASSERT(vDedupApi != nullptr && vDedupApi->stringTable.at("FileVersion") == "10.0.26100.1", "dedupapi.dll registered @ 10.0.26100.1");
+
+        const auto* vDdpEval = vdb.GetModuleInfo("ddpeval.exe");
+        TEST_ASSERT(vDdpEval != nullptr && vDdpEval->stringTable.at("FileVersion") == "10.0.26100.1", "ddpeval.exe registered @ 10.0.26100.1");
+
+        const auto* vDdpCli = vdb.GetModuleInfo("ddpcli.exe");
+        TEST_ASSERT(vDdpCli != nullptr && vDdpCli->stringTable.at("FileVersion") == "10.0.26100.1", "ddpcli.exe registered @ 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Content-Defined Chunking (CDC) & SHA-256 Cryptographic Fingerprinting
+    // ------------------------------------------------------------------------
+    {
+        // 1. NIST Standard SHA-256 Vector Verification
+        // Test empty string: SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        auto emptyHash = micant::dedup::Sha256Hasher::Compute("", 0);
+        TEST_ASSERT(emptyHash.toHexString() == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "SHA-256 standard NIST empty vector test");
+
+        // Test known string "hello" = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        auto helloHash = micant::dedup::Sha256Hasher::Compute("hello", 5);
+        TEST_ASSERT(helloHash.toHexString() == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "SHA-256 standard NIST hello vector test");
+
+        // 2. Hash Equality and Distinction
+        std::string sampleA = "MicaNT Enterprise Deduplication Block Fingerprint Alpha 123456789";
+        std::string sampleB = "MicaNT Enterprise Deduplication Block Fingerprint Alpha 123456789";
+        std::string sampleC = "MicaNT Enterprise Deduplication Block Fingerprint Beta  987654321";
+
+        auto hashA = micant::dedup::Sha256Hasher::Compute(sampleA.data(), sampleA.size());
+        auto hashB = micant::dedup::Sha256Hasher::Compute(sampleB.data(), sampleB.size());
+        auto hashC = micant::dedup::Sha256Hasher::Compute(sampleC.data(), sampleC.size());
+
+        TEST_ASSERT(hashA == hashB, "Identical content produces identical SHA-256 hash");
+        TEST_ASSERT(!(hashA == hashC), "Distinct content produces distinct SHA-256 hash");
+
+        // 3. Content-Defined Chunking (CDC) Boundary Partitioning
+        // Generate a 256 KB buffer with pseudo-random and structured data
+        std::vector<uint8_t> data(256 * 1024);
+        for (size_t i = 0; i < data.size(); ++i) {
+            data[i] = static_cast<uint8_t>((i * 31 + (i / 1024)) & 0xFF);
+        }
+
+        auto boundaries = micant::dedup::ContentDefinedChunker::Partition(data.data(), data.size());
+        TEST_ASSERT(!boundaries.empty(), "CDC partition produces chunk boundaries");
+
+        // Verify that the chunks completely cover the data range without gaps
+        uint64_t expectedOffset = 0;
+        for (size_t i = 0; i < boundaries.size(); ++i) {
+            const auto& b = boundaries[i];
+            TEST_ASSERT(b.offset == expectedOffset, "Chunk offset continuity");
+            expectedOffset += b.length;
+            if (i + 1 < boundaries.size()) {
+                TEST_ASSERT(b.length >= micant::dedup::DEDUP_MIN_CHUNK_SIZE_BYTES, "CDC chunk satisfies minimum size");
+            }
+            TEST_ASSERT(b.length <= micant::dedup::DEDUP_MAX_CHUNK_SIZE_BYTES, "CDC chunk satisfies maximum size");
+        }
+        TEST_ASSERT(expectedOffset == data.size(), "CDC chunks cover entire 256 KB input buffer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Chunk Store Repository & Multi-Reference Space Reclaiming
+    // ------------------------------------------------------------------------
+    {
+        micant::dedup::ChunkStore store;
+        TEST_ASSERT(store.getChunkCount() == 0, "ChunkStore initially empty");
+        TEST_ASSERT(store.getTotalLogicalBytes() == 0, "Logical bytes initially 0");
+        TEST_ASSERT(store.getStoredPhysicalBytes() == 0, "Physical bytes initially 0");
+
+        // 1. Add first 64 KB chunk
+        std::vector<uint8_t> chunkData1(64 * 1024, 0xAA);
+        micant::dedup::DedupChunkHash hash1{};
+        bool add1 = store.addChunk(chunkData1.data(), chunkData1.size(), hash1);
+        TEST_ASSERT(add1, "Add chunk 1 succeeds");
+        TEST_ASSERT(store.getChunkCount() == 1, "Chunk count is 1");
+        TEST_ASSERT(store.getTotalLogicalBytes() == 64 * 1024, "Total logical size is 64 KB");
+        TEST_ASSERT(store.getDuplicatesAvoided() == 0, "Duplicates avoided initially 0");
+
+        // 2. Add exact duplicate 64 KB chunk
+        micant::dedup::DedupChunkHash hash1_dup{};
+        bool add2 = store.addChunk(chunkData1.data(), chunkData1.size(), hash1_dup);
+        TEST_ASSERT(add2, "Add duplicate chunk succeeds");
+        TEST_ASSERT(hash1 == hash1_dup, "Duplicate chunk has identical hash");
+        TEST_ASSERT(store.getChunkCount() == 1, "Chunk count remains 1 (deduplicated)");
+        TEST_ASSERT(store.getTotalLogicalBytes() == 128 * 1024, "Logical size doubled to 128 KB");
+        TEST_ASSERT(store.getDuplicatesAvoided() == 1, "Duplicates avoided incremented to 1");
+        TEST_ASSERT(store.getSavedBytes() > 0, "Space savings reported");
+        TEST_ASSERT(store.getSavingsPercentage() > 50.0, "Savings percentage exceeds 50% for 2x deduplication");
+
+        const auto* storedChunk = store.getChunk(hash1);
+        TEST_ASSERT(storedChunk != nullptr, "Retrieved stored chunk");
+        TEST_ASSERT(storedChunk->refCount == 2, "Chunk refCount is 2");
+
+        // 3. Release 1 reference
+        store.releaseChunk(hash1);
+        TEST_ASSERT(storedChunk->refCount == 1, "RefCount decreased to 1");
+        uint64_t gc1 = store.collectGarbage();
+        TEST_ASSERT(gc1 == 0, "GC reclaims 0 bytes while refCount > 0");
+        TEST_ASSERT(store.getChunkCount() == 1, "Chunk retained in store");
+
+        // 4. Release final reference & Garbage Collection Reclaiming
+        store.releaseChunk(hash1);
+        TEST_ASSERT(storedChunk->refCount == 0, "RefCount decreased to 0");
+        uint64_t gc2 = store.collectGarbage();
+        TEST_ASSERT(gc2 > 0, "GC reclaims unreferenced physical bytes");
+        TEST_ASSERT(store.getChunkCount() == 0, "Unreferenced chunk purged from store");
+        TEST_ASSERT(store.getStoredPhysicalBytes() == 0, "Stored physical bytes returned to 0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Reparse Point Conversion & Transparent File I/O Interception
+    // ------------------------------------------------------------------------
+    {
+        micant::dedup::DedupVolume vol("T:", micant::dedup::DedupUsageType::Default);
+
+        // 1. Create a 128 KB test file with identifiable repeating patterns
+        std::string originalContent;
+        originalContent.reserve(128 * 1024);
+        while (originalContent.size() < 128 * 1024) {
+            originalContent += "MicaNT Reparse Point Stub Stream Payload Block [OFFSET " + std::to_string(originalContent.size()) + "]\n";
+        }
+        originalContent.resize(128 * 1024);
+
+        const std::string filePath = "T:\\Shares\\Engineering\\SystemSpec.docx";
+        vol.createFile(filePath, originalContent.data(), originalContent.size(), 10);
+
+        const auto* fileBefore = vol.getFile(filePath);
+        TEST_ASSERT(fileBefore != nullptr, "File created in volume");
+        TEST_ASSERT(!fileBefore->isDeduplicated, "File initially not deduplicated");
+        TEST_ASSERT(fileBefore->fileSize == 128 * 1024, "File size 128 KB");
+
+        // 2. Optimize file into Reparse Point Stub
+        bool optOk = vol.optimizeFile(filePath);
+        TEST_ASSERT(optOk, "File optimization into Reparse Point succeeds");
+
+        const auto* fileAfter = vol.getFile(filePath);
+        TEST_ASSERT(fileAfter != nullptr, "File exists after optimization");
+        TEST_ASSERT(fileAfter->isDeduplicated, "File is marked as deduplicated");
+        TEST_ASSERT(fileAfter->rawData.empty(), "Raw data cleared; replaced with reparse point");
+        TEST_ASSERT(fileAfter->reparsePoint.reparseTag == micant::dedup::IO_REPARSE_TAG_DEDUP, "Reparse tag is IO_REPARSE_TAG_DEDUP (0x80000013)");
+        TEST_ASSERT(!fileAfter->reparsePoint.chunks.empty(), "Reparse point contains chunk mapping list");
+        TEST_ASSERT(fileAfter->reparsePoint.originalFileSize == 128 * 1024, "Reparse point preserves original file size");
+
+        // 3. Transparent Minifilter Full Read Interception
+        std::vector<char> readBuffer(128 * 1024, 0);
+        size_t bytesRead = 0;
+        bool readOk = vol.readFile(filePath, 0, readBuffer.data(), readBuffer.size(), &bytesRead);
+        TEST_ASSERT(readOk, "Transparent read through reparse point succeeds");
+        TEST_ASSERT(bytesRead == 128 * 1024, "Exact file length read");
+        TEST_ASSERT(std::memcmp(readBuffer.data(), originalContent.data(), 128 * 1024) == 0, "Reconstituted payload matches original content byte-for-byte");
+
+        // 4. Transparent Partial Slice Read Crossing Chunk Boundaries
+        uint64_t sliceOffset = 45000;
+        size_t sliceLen = 4000;
+        std::vector<char> sliceBuffer(sliceLen, 0);
+        size_t sliceBytesRead = 0;
+        bool sliceReadOk = vol.readFile(filePath, sliceOffset, sliceBuffer.data(), sliceLen, &sliceBytesRead);
+        TEST_ASSERT(sliceReadOk, "Partial slice read succeeds");
+        TEST_ASSERT(sliceBytesRead == sliceLen, "Exact slice length read");
+        TEST_ASSERT(std::memcmp(sliceBuffer.data(), originalContent.data() + sliceOffset, sliceLen) == 0, "Slice read across chunk boundaries matches original data");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Workload Optimization Profiles & Inactivity Age Filtering
+    // ------------------------------------------------------------------------
+    {
+        // 1. Default Profile: Inactivity Age Filtering (3 days)
+        micant::dedup::DedupVolume defaultVol("D:", micant::dedup::DedupUsageType::Default);
+        TEST_ASSERT(defaultVol.getConfig().minimumFileAgeDays == 3, "Default profile minimum age is 3 days");
+
+        std::string mockData(64 * 1024, 'X');
+        defaultVol.createFile("D:\\Data\\Old_Archive.log", mockData.data(), mockData.size(), 7); // 7 days old
+        defaultVol.createFile("D:\\Data\\Active_Work.docx", mockData.data(), mockData.size(), 1); // 1 day old (too young)
+
+        auto defaultJob = defaultVol.runOptimizationJob();
+        TEST_ASSERT(defaultJob.filesProcessed == 1, "Only file older than 3 days processed");
+        TEST_ASSERT(defaultVol.getDeduplicatedFileCount() == 1, "1 file deduplicated");
+
+        const auto* oldFile = defaultVol.getFile("D:\\Data\\Old_Archive.log");
+        const auto* youngFile = defaultVol.getFile("D:\\Data\\Active_Work.docx");
+        TEST_ASSERT(oldFile && oldFile->isDeduplicated, "Old file optimized");
+        TEST_ASSERT(youngFile && !youngFile->isDeduplicated, "Young file skipped by policy");
+
+        // 2. Hyper-V Profile: Immediate Optimization (0 days) & VHD Deduplication
+        micant::dedup::DedupVolume hypervVol("V:", micant::dedup::DedupUsageType::HyperV);
+        TEST_ASSERT(hypervVol.getConfig().minimumFileAgeDays == 0, "HyperV profile minimum age is 0 days");
+
+        std::string baseVhd(128 * 1024, 'V');
+        hypervVol.createFile("V:\\VMs\\VM01.vhdx", baseVhd.data(), baseVhd.size(), 0);
+        hypervVol.createFile("V:\\VMs\\VM02.vhdx", baseVhd.data(), baseVhd.size(), 0);
+        hypervVol.createFile("V:\\VMs\\VM03.vhdx", baseVhd.data(), baseVhd.size(), 0);
+
+        auto hypervJob = hypervVol.runOptimizationJob();
+        TEST_ASSERT(hypervJob.filesProcessed == 3, "All 3 VHDX files processed immediately");
+        TEST_ASSERT(hypervVol.getDeduplicatedFileCount() == 3, "All 3 VHDX files deduplicated");
+        TEST_ASSERT(hypervVol.getChunkStore().getDuplicatesAvoided() >= 2, "Shared VHD base chunks deduplicated");
+        TEST_ASSERT(hypervVol.getChunkStore().getSavingsPercentage() > 60.0, "Hyper-V VHD deduplication savings exceeds 60%");
+
+        // 3. Backup Profile: Immediate Optimization (0 days)
+        micant::dedup::DedupVolume backupVol("B:", micant::dedup::DedupUsageType::Backup);
+        TEST_ASSERT(backupVol.getConfig().minimumFileAgeDays == 0, "Backup profile minimum age is 0 days");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Background Servicing Jobs (Optimization, GC, Scrubbing, Un-optimization)
+    // ------------------------------------------------------------------------
+    {
+        micant::dedup::DedupVolume vol("S:", micant::dedup::DedupUsageType::HyperV);
+
+        std::string fileContent(64 * 1024, 'K');
+        vol.createFile("S:\\Backup\\FullBackup_Monday.bak", fileContent.data(), fileContent.size(), 0);
+        vol.createFile("S:\\Backup\\FullBackup_Tuesday.bak", fileContent.data(), fileContent.size(), 0);
+
+        // 1. Optimization Job
+        auto optJob = vol.runOptimizationJob();
+        TEST_ASSERT(optJob.type == micant::dedup::DedupJobType::Optimization, "Optimization job type");
+        TEST_ASSERT(optJob.status == micant::dedup::DedupJobStatus::Completed, "Optimization job completed");
+        TEST_ASSERT(optJob.filesProcessed == 2, "2 backup files optimized");
+        TEST_ASSERT(optJob.bytesOptimized == 128 * 1024, "128 KB total bytes processed");
+
+        // 2. Scrubbing Job: Cryptographic Chunk Integrity
+        auto scrubJob = vol.runScrubbingJob();
+        TEST_ASSERT(scrubJob.type == micant::dedup::DedupJobType::Scrubbing, "Scrubbing job type");
+        TEST_ASSERT(scrubJob.status == micant::dedup::DedupJobStatus::Completed, "Scrubbing job verified chunk integrity (0 corrupted)");
+
+        // 3. Garbage Collection Job
+        auto gcJob = vol.runGarbageCollectionJob();
+        TEST_ASSERT(gcJob.type == micant::dedup::DedupJobType::GarbageCollection, "Garbage collection job type");
+        TEST_ASSERT(gcJob.status == micant::dedup::DedupJobStatus::Completed, "GC job completed");
+
+        // 4. Un-optimization Job: Re-expanding Deduplicated Files
+        auto unoptJob = vol.runUnoptimizationJob();
+        TEST_ASSERT(unoptJob.type == micant::dedup::DedupJobType::Unoptimization, "Un-optimization job type");
+        TEST_ASSERT(unoptJob.status == micant::dedup::DedupJobStatus::Completed, "Un-optimization job completed");
+        TEST_ASSERT(unoptJob.filesProcessed == 2, "2 files un-optimized");
+
+        const auto* mondayFile = vol.getFile("S:\\Backup\\FullBackup_Monday.bak");
+        TEST_ASSERT(mondayFile != nullptr, "File exists after un-optimization");
+        TEST_ASSERT(!mondayFile->isDeduplicated, "File is no longer deduplicated");
+        TEST_ASSERT(mondayFile->rawData.size() == 64 * 1024, "Raw data reconstituted to full 64 KB");
+        TEST_ASSERT(std::memcmp(mondayFile->rawData.data(), fileContent.data(), 64 * 1024) == 0, "Reconstituted raw data matches original file byte-for-byte");
+
+        // Job history tracking
+        auto history = vol.getJobHistory();
+        TEST_ASSERT(history.size() == 4, "4 servicing jobs recorded in volume history");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 ddpeval.exe & ddpcli.exe CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::dedup::DataDeduplicationSubsystem::get();
+        sys.initialize();
+
+        // 1. ddpeval.exe CLI
+        std::string evalOut;
+        micant::dedup_cmd::um::ExecuteDdpEvalString("ddpeval D:\\Shares\\Docs", evalOut);
+        TEST_ASSERT(evalOut.find("Data Deduplication Evaluation Tool") != std::string::npos, "ddpeval banner present");
+        TEST_ASSERT(evalOut.find("Total files evaluated:") != std::string::npos, "ddpeval files evaluated");
+        TEST_ASSERT(evalOut.find("Space savings:") != std::string::npos, "ddpeval space savings");
+        TEST_ASSERT(evalOut.find("Optimized size:") != std::string::npos, "ddpeval optimized size");
+
+        // 2. ddpcli.exe volume
+        std::string volOut;
+        micant::dedup_cmd::um::ExecuteDdpCliString("ddpcli volume", volOut);
+        TEST_ASSERT(volOut.find("Volume") != std::string::npos, "ddpcli volume header");
+        TEST_ASSERT(volOut.find("D:") != std::string::npos, "ddpcli volume lists D:");
+        TEST_ASSERT(volOut.find("V:") != std::string::npos, "ddpcli volume lists V:");
+        TEST_ASSERT(volOut.find("Default") != std::string::npos, "ddpcli volume lists Default usage type");
+        TEST_ASSERT(volOut.find("HyperV") != std::string::npos, "ddpcli volume lists HyperV usage type");
+
+        // 3. ddpcli.exe status
+        std::string statusOut;
+        micant::dedup_cmd::um::ExecuteDdpCliString("ddpcli status", statusOut);
+        TEST_ASSERT(statusOut.find("Data Deduplication Subsystem Status:") != std::string::npos, "ddpcli status header");
+        TEST_ASSERT(statusOut.find("Service Status:        Running") != std::string::npos, "ddpcli status service running");
+        TEST_ASSERT(statusOut.find("Active Volumes:") != std::string::npos, "ddpcli status active volumes");
+        TEST_ASSERT(statusOut.find("Total Space Saved:") != std::string::npos, "ddpcli status total space saved");
+        TEST_ASSERT(statusOut.find("Global Savings Pct:") != std::string::npos, "ddpcli status savings percentage");
+
+        // 4. ddpcli.exe start job
+        std::string jobStartOut;
+        micant::dedup_cmd::um::ExecuteDdpCliString("ddpcli start D: /job:Scrubbing", jobStartOut);
+        TEST_ASSERT(jobStartOut.find("Starting Scrubbing job on volume D:") != std::string::npos, "ddpcli start job output");
+        TEST_ASSERT(jobStartOut.find("Data Scrubbing completed") != std::string::npos, "ddpcli job completed message");
+
+        // 5. ddpcli.exe job history
+        std::string jobHistoryOut;
+        micant::dedup_cmd::um::ExecuteDdpCliString("ddpcli job", jobHistoryOut);
+        TEST_ASSERT(jobHistoryOut.find("JobId") != std::string::npos, "ddpcli job history table");
+        TEST_ASSERT(jobHistoryOut.find("Optimization") != std::string::npos, "ddpcli job history contains Optimization");
+
+        // 6. Remote Executive Console & Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termEval = console.executeTerminalCommand("ddpeval D:\\");
+        TEST_ASSERT(termEval.find("Data Deduplication Evaluation Tool") != std::string::npos, "Web terminal ddpeval execution");
+
+        std::string termCli = console.executeTerminalCommand("ddpcli status");
+        TEST_ASSERT(termCli.find("Data Deduplication Subsystem Status:") != std::string::npos, "Web terminal ddpcli execution");
+
+        // 7. WFP Inbound Rule #17401 (MicaNT_Dedup_Service_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto dedupRuleOpt = wfp.findRuleById(17401);
+        TEST_ASSERT(dedupRuleOpt.has_value(), "WFP Rule #17401 for Dedup must be registered");
+        TEST_ASSERT(dedupRuleOpt->protocol == tcpip::IPPROTO_TCP, "Dedup protocol must be TCP");
+        TEST_ASSERT(dedupRuleOpt->localPortStart == 5446 && dedupRuleOpt->localPortEnd == 5446, "Dedup RPC port 5446");
+        TEST_ASSERT(dedupRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Dedup rule action must be PERMIT");
+
+        // 8. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"dedup_volumes_active\":") != std::string::npos, "Telemetry dedup_volumes_active");
+        TEST_ASSERT(teleJson.find("\"dedup_saved_bytes\":") != std::string::npos, "Telemetry dedup_saved_bytes");
+        TEST_ASSERT(teleJson.find("\"dedup_savings_pct\":") != std::string::npos, "Telemetry dedup_savings_pct");
+        TEST_ASSERT(teleJson.find("\"dedup_chunks_total\":") != std::string::npos, "Telemetry dedup_chunks_total");
+        TEST_ASSERT(teleJson.find("\"dedup_jobs_completed\":") != std::string::npos, "Telemetry dedup_jobs_completed");
+    }
+
+    std::cout << "[HORIZON 174] Sovereign Windows Server Data Deduplication (Dedup) Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: Content-Defined Chunking (CDC) & SHA-256 Fingerprinting OK\n"
+              << "    Pillar 3: Chunk Store Repository & Multi-Reference Space Reclaiming OK\n"
+              << "    Pillar 4: Reparse Point Conversion & Transparent File I/O Interception OK\n"
+              << "    Pillar 5: Workload Optimization Profiles & Inactivity Age Filtering OK\n"
+              << "    Pillar 6: Background Servicing Jobs (Optimization, GC, Scrubbing, Un-optimization) OK\n"
+              << "    Pillar 7: Canonical Win32 ddpeval.exe & ddpcli.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 390: Horizon 174 - Sovereign Windows Server Data Deduplication (Dedup) PASSED." << std::endl;
+}
