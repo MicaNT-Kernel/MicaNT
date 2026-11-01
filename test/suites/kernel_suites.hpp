@@ -33573,3 +33573,337 @@ inline void Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI() {
 
     std::cout << "[TEST] Suite 391: Horizon 175 - Sovereign Windows Server Storage Replica (SR) PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 176 (Suite 392): Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC
+// PeerDist Architecture (peerdist.dll / bcasvc.dll), IP-HTTPS Tunnel (iphttps.sys),
+// SMB over QUIC Multi-Stream & 0-RTT Migration (smbquic.sys) & branchcache.exe CLI
+// ============================================================================
+inline void Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI() {
+    std::cout << "[TEST] Running Suite 392: Horizon 176 - Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::wan::RegisterWanSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. BranchCache Service: PeerDistSvc
+        auto peerDistSvc = scm.getServiceRecord(L"PeerDistSvc");
+        TEST_ASSERT(peerDistSvc != nullptr, "PeerDistSvc registered in SCM");
+        TEST_ASSERT(peerDistSvc->displayName == L"BranchCache", "PeerDistSvc display name matches");
+        TEST_ASSERT(peerDistSvc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "PeerDistSvc serviceType is SERVICE_WIN32_SHARE_PROCESS");
+        TEST_ASSERT(peerDistSvc->startType == micant::scm::SERVICE_AUTO_START, "PeerDistSvc startType is SERVICE_AUTO_START");
+        TEST_ASSERT(peerDistSvc->binaryPath == L"C:\\Windows\\System32\\svchost.exe -k PeerDist", "PeerDistSvc binary path hosted in svchost -k PeerDist");
+        TEST_ASSERT(peerDistSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "PeerDistSvc is running");
+
+        // 2. DirectAccess IP-HTTPS Transition Driver: iphttps.sys
+        auto ipHttpsDrv = scm.getServiceRecord(L"IpHttps");
+        TEST_ASSERT(ipHttpsDrv != nullptr, "IpHttps driver registered in SCM");
+        TEST_ASSERT(ipHttpsDrv->displayName == L"IP-HTTPS DirectAccess Transition Driver", "IpHttps display name matches");
+        TEST_ASSERT(ipHttpsDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "IpHttps serviceType is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(ipHttpsDrv->startType == micant::scm::SERVICE_BOOT_START, "IpHttps startType is SERVICE_BOOT_START");
+        TEST_ASSERT(ipHttpsDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\iphttps.sys", "IpHttps binary path matches drivers\\iphttps.sys");
+        TEST_ASSERT(ipHttpsDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "IpHttps is running");
+
+        // 3. SMB over QUIC Transport Driver: smbquic.sys
+        auto smbQuicDrv = scm.getServiceRecord(L"SmbQuic");
+        TEST_ASSERT(smbQuicDrv != nullptr, "SmbQuic driver registered in SCM");
+        TEST_ASSERT(smbQuicDrv->displayName == L"SMB over QUIC Transport Driver", "SmbQuic display name matches");
+        TEST_ASSERT(smbQuicDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "SmbQuic serviceType is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(smbQuicDrv->startType == micant::scm::SERVICE_SYSTEM_START, "SmbQuic startType is SERVICE_SYSTEM_START");
+        TEST_ASSERT(smbQuicDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\smbquic.sys", "SmbQuic binary path matches drivers\\smbquic.sys");
+        TEST_ASSERT(smbQuicDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SmbQuic is running");
+
+        // 4. PE Module VersionDatabase Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* vPeerDist = vdb.GetModuleInfo("peerdist.dll");
+        TEST_ASSERT(vPeerDist != nullptr && vPeerDist->stringTable.at("FileVersion") == "10.0.26100.1", "peerdist.dll registered @ 10.0.26100.1");
+
+        const auto* vBcaSvc = vdb.GetModuleInfo("bcasvc.dll");
+        TEST_ASSERT(vBcaSvc != nullptr && vBcaSvc->stringTable.at("FileVersion") == "10.0.26100.1", "bcasvc.dll registered @ 10.0.26100.1");
+
+        const auto* vIpHttps = vdb.GetModuleInfo("iphttps.sys");
+        TEST_ASSERT(vIpHttps != nullptr && vIpHttps->stringTable.at("FileVersion") == "10.0.26100.1", "iphttps.sys registered @ 10.0.26100.1");
+
+        const auto* vSmbQuic = vdb.GetModuleInfo("smbquic.sys");
+        TEST_ASSERT(vSmbQuic != nullptr && vSmbQuic->stringTable.at("FileVersion") == "10.0.26100.1", "smbquic.sys registered @ 10.0.26100.1");
+
+        const auto* vBcExe = vdb.GetModuleInfo("branchcache.exe");
+        TEST_ASSERT(vBcExe != nullptr && vBcExe->stringTable.at("FileVersion") == "10.0.26100.1", "branchcache.exe registered @ 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: PeerDist Content Information Data Structure & SHA-256 Hashing ([MS-PCCD])
+    // ------------------------------------------------------------------------
+    {
+        auto& bc = micant::wan::BranchCacheSubsystem::get();
+        bc.reset();
+        bc.initialize();
+
+        // 1. Publish 128 KB document content
+        std::vector<uint8_t> payload(128 * 1024);
+        for (size_t i = 0; i < payload.size(); ++i) {
+            payload[i] = static_cast<uint8_t>((i * 17 + 0x3C) & 0xFF);
+        }
+
+        const std::string docName = "EngineeringSpecs2026.pdf";
+        auto info = bc.publishContent(docName, payload.data(), payload.size());
+        TEST_ASSERT(info != nullptr, "Publish content succeeds");
+        TEST_ASSERT(info->magic == micant::wan::PEERDIST_CONTENT_MAGIC, "Content info magic is 'PEER' (0x50454552)");
+        TEST_ASSERT(info->version == micant::wan::PEERDIST_VERSION_2_0, "Content info version is 2.0");
+        TEST_ASSERT(info->contentId == docName, "Content ID matches");
+        TEST_ASSERT(info->totalContentLength == 128 * 1024, "Total content length matches 128 KB");
+        TEST_ASSERT(!info->segments.empty(), "Segments created");
+
+        // Verify block division (64 KB per block -> 2 blocks for 128 KB)
+        const auto& seg = info->segments[0];
+        TEST_ASSERT(seg.blocks.size() == 2, "128 KB partitioned into exactly 2 blocks of 64 KB");
+        TEST_ASSERT(seg.blocks[0].length == 64 * 1024, "Block 0 length is 64 KB");
+        TEST_ASSERT(seg.blocks[1].length == 64 * 1024, "Block 1 length is 64 KB");
+
+        // Verify SHA-256 block hash computation
+        auto recomputedHash = micant::wan::BranchCacheSubsystem::computeSha256(payload.data(), 64 * 1024);
+        TEST_ASSERT(seg.blocks[0].hash == recomputedHash, "Block 0 hash matches recomputed SHA-256");
+
+        // 2. Query published content info
+        auto retrievedInfo = bc.getContentInfo(docName);
+        TEST_ASSERT(retrievedInfo != nullptr && retrievedInfo->contentId == docName, "Retrieved content info matches published record");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: BranchCache Distributed Cache Mode (P2P WS-Discovery) & Local Hit
+    // ------------------------------------------------------------------------
+    {
+        auto& bc = micant::wan::BranchCacheSubsystem::get();
+        bc.setMode(micant::wan::BranchCacheMode::Distributed);
+        TEST_ASSERT(bc.getMode() == micant::wan::BranchCacheMode::Distributed, "Distributed mode set");
+
+        auto info = bc.getContentInfo("EngineeringSpecs2026.pdf");
+        TEST_ASSERT(info != nullptr, "EngineeringSpecs2026.pdf exists");
+        const auto& targetHash = info->segments[0].blocks[0].hash;
+
+        // 1. First retrieval: Served by Local BranchCache
+        std::vector<uint8_t> blockData;
+        std::string source;
+        bool get1 = bc.retrieveBlock(targetHash, blockData, &source);
+        TEST_ASSERT(get1, "Retrieve block 0 succeeds");
+        TEST_ASSERT(source == "LocalBranchCache", "Source is LocalBranchCache");
+        TEST_ASSERT(blockData.size() == 64 * 1024, "Block length is 64 KB");
+        TEST_ASSERT(bc.getBytesFromLocalCache() > 0, "Bytes from local cache incremented");
+
+        // 2. Simulate block absence and Subnet Peer Discovery via WS-Discovery
+        bc.flushCache();
+        TEST_ASSERT(bc.getLocalBlockCount() == 0, "Local cache flushed to 0");
+
+        bool get2 = bc.retrieveBlock(targetHash, blockData, &source);
+        TEST_ASSERT(get2, "Retrieve block from peer succeeds");
+        TEST_ASSERT(source.starts_with("PeerDiscovery:"), "Source indicates PeerDiscovery resolution");
+        TEST_ASSERT(bc.getBytesFromPeers() > 0, "Bytes from peers incremented");
+        TEST_ASSERT(bc.getLocalBlockCount() == 1, "Block automatically cached locally after peer fetch");
+
+        // 3. Bandwidth Savings Ratio
+        TEST_ASSERT(bc.getWanSavingsRatio() > 50.0, "WAN bandwidth savings exceeds 50%");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BranchCache Hosted Cache Mode & Centralized Acceleration
+    // ------------------------------------------------------------------------
+    {
+        auto& bc = micant::wan::BranchCacheSubsystem::get();
+        bc.setHostedCacheServer("hostedcache.corp.contoso.com");
+        TEST_ASSERT(bc.getMode() == micant::wan::BranchCacheMode::Hosted, "Mode is Hosted");
+        TEST_ASSERT(bc.getHostedCacheServer() == "hostedcache.corp.contoso.com", "Hosted cache server FQDN configured");
+
+        bc.flushCache();
+
+        std::array<uint8_t, 32> mockHash{};
+        mockHash.fill(0x7E);
+
+        std::vector<uint8_t> blockData;
+        std::string source;
+        bool getOk = bc.retrieveBlock(mockHash, blockData, &source);
+        TEST_ASSERT(getOk, "Retrieve from hosted cache succeeds");
+        TEST_ASSERT(source.find("HostedCacheServer:") != std::string::npos, "Source is HostedCacheServer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: DirectAccess IP-HTTPS Transition Driver & NLA State Machine ([MS-IPHTTPS])
+    // ------------------------------------------------------------------------
+    {
+        auto& da = micant::wan::DirectAccessSubsystem::get();
+        da.reset();
+        da.initialize();
+
+        // 1. Initial State: Connected (IP-HTTPS outside corporate network)
+        TEST_ASSERT(da.getState() == micant::wan::DirectAccessTunnelState::Connected_IPHTTPS, "DirectAccess initially connected via IP-HTTPS");
+        TEST_ASSERT(da.getConfig().gatewayFqdn == "da.corp.contoso.com", "Gateway FQDN matches");
+        TEST_ASSERT(da.getConfig().gatewayPort == 443, "Gateway port is 443 HTTPS");
+
+        // 2. Network Location Awareness (NLA) Hook: Entering Corporate Network
+        da.updateNetworkLocation(nla::NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED);
+        TEST_ASSERT(da.getState() == micant::wan::DirectAccessTunnelState::Dormant_InsideCorp, "DirectAccess transitions to Dormant when inside corporate network");
+
+        // Leaving Corporate Network -> Roaming on Public Wi-Fi
+        da.updateNetworkLocation(nla::NLM_NETWORK_CATEGORY_PUBLIC);
+        TEST_ASSERT(da.getState() == micant::wan::DirectAccessTunnelState::Connected_IPHTTPS, "DirectAccess reactivates IP-HTTPS tunnel outside corporate boundary");
+
+        // 3. Encapsulate raw IPv6 packet inside IP-HTTPS frame
+        const char rawIpv6Packet[] = "IPV6_RAW_PAYLOAD_DIRECTACCESS_CORP_INTRANET_RPC_PACKET_V6";
+        std::vector<uint8_t> encap;
+        bool encapOk = da.encapsulatePacket(rawIpv6Packet, sizeof(rawIpv6Packet), encap);
+        TEST_ASSERT(encapOk, "IPv6 packet encapsulation succeeds");
+        TEST_ASSERT(encap.size() >= 6 + sizeof(rawIpv6Packet), "Encapsulated size accounts for header");
+        TEST_ASSERT(encap[0] == 'I' && encap[1] == 'P' && encap[2] == 'H' && encap[3] == 'T', "IP-HTTPS magic 'IPHT' header");
+        TEST_ASSERT(da.getPacketsEncapsulated() >= 1, "Packets encapsulated counter incremented");
+
+        // 4. Decapsulate IP-HTTPS frame
+        std::vector<uint8_t> decap;
+        bool decapOk = da.decapsulatePacket(encap.data(), encap.size(), decap);
+        TEST_ASSERT(decapOk, "Frame decapsulation succeeds");
+        TEST_ASSERT(decap.size() == sizeof(rawIpv6Packet), "Decapsulated payload size matches original");
+        TEST_ASSERT(std::memcmp(decap.data(), rawIpv6Packet, sizeof(rawIpv6Packet)) == 0, "Decapsulated packet matches original IPv6 payload");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: SMB over QUIC (RFC 9000 / smbquic.sys) Multi-Stream & 0-RTT Migration
+    // ------------------------------------------------------------------------
+    {
+        auto& quic = micant::wan::SmbQuicSubsystem::get();
+        quic.reset();
+        quic.initialize();
+
+        // 1. Create and Connect SMB over QUIC Session
+        auto session = quic.createSession("fs02.corp.contoso.com", 443);
+        TEST_ASSERT(session != nullptr, "QUIC session created");
+        TEST_ASSERT(session->getState() == micant::wan::SmbQuicConnectionState::Idle, "Initial state Idle");
+
+        bool connOk = session->connect(false); // Standard 1-RTT
+        TEST_ASSERT(connOk, "QUIC connect succeeds");
+        TEST_ASSERT(session->getState() == micant::wan::SmbQuicConnectionState::Connected, "State is Connected");
+        TEST_ASSERT(session->getRttMs() > 0, "RTT calculated");
+
+        // 2. Multiplexed Stream I/O
+        const std::string smbData = "SMB2_NEGOTIATE_REQUEST_OVER_QUIC_UDP_443_ZERO_PORT_BLOCKING";
+        bool writeOk = session->writeStream(1, smbData.data(), smbData.size());
+        TEST_ASSERT(writeOk, "Write to QUIC stream 1 succeeds");
+        TEST_ASSERT(session->getBytesTransmitted() >= smbData.size(), "Bytes transmitted accounted");
+
+        // Simulate incoming read on stream 2
+        session->injectReceiveData(2, smbData.data(), smbData.size());
+        std::vector<char> readBuf(smbData.size() + 1, 0);
+        size_t bytesRead = 0;
+        bool readOk = session->readStream(2, readBuf.data(), smbData.size(), &bytesRead);
+        TEST_ASSERT(readOk && bytesRead == smbData.size(), "Read from QUIC stream 2 succeeds");
+        TEST_ASSERT(std::string_view(readBuf.data(), bytesRead) == smbData, "Stream read data matches transmitted SMB2 payload");
+
+        // 3. 0-RTT Session Resumption
+        bool resume0Rtt = session->connect(true);
+        TEST_ASSERT(resume0Rtt, "0-RTT session resumption succeeds");
+        TEST_ASSERT(session->getState() == micant::wan::SmbQuicConnectionState::Resumed_0RTT, "State is Resumed_0RTT");
+        TEST_ASSERT(session->is0RttResumed(), "is0RttResumed flag is true");
+        TEST_ASSERT(session->getRttMs() == 1, "0-RTT round-trip is 1 ms flight");
+
+        // 4. Connection Migration (Wi-Fi 192.168.1.150 -> Cellular 10.42.0.88)
+        std::string origIp = session->getActiveClientIp();
+        bool migOk = session->migrateConnection("10.42.0.88");
+        TEST_ASSERT(migOk, "Connection migration succeeds");
+        TEST_ASSERT(session->isMigrated(), "isMigrated flag is true");
+        TEST_ASSERT(session->getState() == micant::wan::SmbQuicConnectionState::ConnectionMigrated, "State is ConnectionMigrated");
+        TEST_ASSERT(session->getActiveClientIp() == "10.42.0.88", "Client IP updated without session teardown");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 branchcache.exe CLI, WFP Rule #17601 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& bc = micant::wan::BranchCacheSubsystem::get();
+        bc.reset();
+        bc.initialize();
+        auto& da = micant::wan::DirectAccessSubsystem::get();
+        da.reset();
+        da.initialize();
+        auto& quic = micant::wan::SmbQuicSubsystem::get();
+        quic.reset();
+        quic.initialize();
+
+        // 1. branchcache status
+        std::string statusOut;
+        micant::branchcache_cmd::um::ExecuteBranchCacheString("branchcache status", statusOut);
+        TEST_ASSERT(statusOut.find("BranchCache Subsystem Status:") != std::string::npos, "branchcache status banner");
+        TEST_ASSERT(statusOut.find("Operational Mode:") != std::string::npos, "branchcache status operational mode");
+        TEST_ASSERT(statusOut.find("Cached Local Blocks:") != std::string::npos, "branchcache status cached blocks");
+        TEST_ASSERT(statusOut.find("WAN Bandwidth Savings:") != std::string::npos, "branchcache status savings ratio");
+
+        // 2. branchcache peers
+        std::string peersOut;
+        micant::branchcache_cmd::um::ExecuteBranchCacheString("branchcache peers", peersOut);
+        TEST_ASSERT(peersOut.find("PeerId") != std::string::npos, "branchcache peers header");
+        TEST_ASSERT(peersOut.find("PeerNode-Alpha") != std::string::npos, "branchcache lists PeerNode-Alpha");
+        TEST_ASSERT(peersOut.find("192.168.1.101") != std::string::npos, "branchcache lists peer IP 192.168.1.101");
+
+        // 3. branchcache directaccess
+        std::string daOut;
+        micant::branchcache_cmd::um::ExecuteBranchCacheString("branchcache directaccess", daOut);
+        TEST_ASSERT(daOut.find("DirectAccess & IP-HTTPS Transition Tunnel Status:") != std::string::npos, "branchcache directaccess banner");
+        TEST_ASSERT(daOut.find("Tunnel State:") != std::string::npos, "branchcache directaccess tunnel state");
+        TEST_ASSERT(daOut.find("Gateway FQDN:") != std::string::npos, "branchcache directaccess gateway");
+
+        // 4. branchcache quic
+        std::string quicOut;
+        micant::branchcache_cmd::um::ExecuteBranchCacheString("branchcache quic", quicOut);
+        TEST_ASSERT(quicOut.find("SMB over QUIC (RFC 9000) Transport Status:") != std::string::npos, "branchcache quic banner");
+        TEST_ASSERT(quicOut.find("Active Sessions:") != std::string::npos, "branchcache quic sessions count");
+        TEST_ASSERT(quicOut.find("0-RTT") != std::string::npos, "branchcache quic 0-RTT column");
+
+        // 5. branchcache flush
+        std::string flushOut;
+        micant::branchcache_cmd::um::ExecuteBranchCacheString("branchcache flush", flushOut);
+        TEST_ASSERT(flushOut.find("flushed successfully") != std::string::npos, "branchcache flush confirmation");
+
+        // 6. branchcache dump
+        std::string dumpOut;
+        micant::branchcache_cmd::um::ExecuteBranchCacheString("branchcache dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("netsh branchcache set service") != std::string::npos, "branchcache dump script syntax");
+
+        // 7. Remote Executive Console & Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStatus = console.executeTerminalCommand("branchcache status");
+        TEST_ASSERT(termStatus.find("BranchCache Subsystem Status:") != std::string::npos, "Web terminal branchcache status");
+
+        std::string termPeers = console.executeTerminalCommand("branchcache peers");
+        TEST_ASSERT(termPeers.find("PeerNode-Alpha") != std::string::npos, "Web terminal branchcache peers");
+
+        // 8. WFP Inbound Rule #17601 (MicaNT_BranchCache_WAN_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto bcRuleOpt = wfp.findRuleById(17601);
+        TEST_ASSERT(bcRuleOpt.has_value(), "WFP Rule #17601 for BranchCache must be registered");
+        TEST_ASSERT(bcRuleOpt->protocol == tcpip::IPPROTO_UDP, "BranchCache WS-Discovery protocol is UDP");
+        TEST_ASSERT(bcRuleOpt->localPortStart == 3702 && bcRuleOpt->localPortEnd == 3702, "WS-Discovery port 3702");
+        TEST_ASSERT(bcRuleOpt->action == wfp::FWP_ACTION_PERMIT, "BranchCache rule action must be PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"bc_mode\":") != std::string::npos, "Telemetry bc_mode");
+        TEST_ASSERT(teleJson.find("\"bc_wan_savings_ratio\":") != std::string::npos, "Telemetry bc_wan_savings_ratio");
+        TEST_ASSERT(teleJson.find("\"bc_cached_blocks\":") != std::string::npos, "Telemetry bc_cached_blocks");
+        TEST_ASSERT(teleJson.find("\"bc_discovered_peers\":") != std::string::npos, "Telemetry bc_discovered_peers");
+        TEST_ASSERT(teleJson.find("\"da_tunnel_state\":") != std::string::npos, "Telemetry da_tunnel_state");
+        TEST_ASSERT(teleJson.find("\"smb_quic_sessions_active\":") != std::string::npos, "Telemetry smb_quic_sessions_active");
+    }
+
+    std::cout << "[HORIZON 176] Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: PeerDist Content Information & SHA-256 Hashing OK\n"
+              << "    Pillar 3: Distributed Cache Mode (P2P WS-Discovery) & Local Hit OK\n"
+              << "    Pillar 4: Hosted Cache Mode & Centralized Acceleration OK\n"
+              << "    Pillar 5: DirectAccess IP-HTTPS Transition Driver & NLA Hook OK\n"
+              << "    Pillar 6: SMB over QUIC Multi-Stream, 0-RTT & Connection Migration OK\n"
+              << "    Pillar 7: Canonical Win32 branchcache.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 392: Horizon 176 - Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC PASSED." << std::endl;
+}

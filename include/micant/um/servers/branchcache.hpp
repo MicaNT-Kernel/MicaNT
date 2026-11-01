@@ -927,6 +927,7 @@ inline void RegisterWanSubsystem() {
     vdb.RegisterModule("bcasvc.dll",   "10.0.26100.1", "BranchCache Network Service");
     vdb.RegisterModule("iphttps.sys",  "10.0.26100.1", "DirectAccess IP-HTTPS Transition Driver");
     vdb.RegisterModule("smbquic.sys",  "10.0.26100.1", "SMB over QUIC Transport Driver (RFC 9000)");
+    vdb.RegisterModule("branchcache.exe", "10.0.26100.1", "BranchCache Command-Line Management Utility");
 
     // 2. SCM Registration
     auto& scm = micant::scm::ServiceControlManager::get();

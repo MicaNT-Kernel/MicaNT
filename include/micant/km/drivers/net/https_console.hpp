@@ -64,6 +64,8 @@
 #include "micant/um/subsystems/mgmt/dedup_cmd.hpp"
 #include "micant/km/drivers/storage/storage_replica.hpp"
 #include "micant/um/subsystems/mgmt/sr_cmd.hpp"
+#include "micant/um/servers/branchcache.hpp"
+#include "micant/um/subsystems/mgmt/branchcache_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -307,6 +309,19 @@ public:
         srRule.weight = 1500;
         srRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(srRule);
+
+        // 19. Register WFP Inbound Rule for BranchCache Peer Discovery (UDP 3702 & TCP 80/443)
+        wfp::km::WfpKernelFilterRule bcRule{};
+        bcRule.filterId = 17601;
+        bcRule.name = "MicaNT_BranchCache_WAN_Permit";
+        bcRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        bcRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        bcRule.protocol = tcpip::IPPROTO_UDP;
+        bcRule.localPortStart = 3702;
+        bcRule.localPortEnd = 3702;
+        bcRule.weight = 1500;
+        bcRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(bcRule);
     }
 
     void stopHttpsServer() {
@@ -705,6 +720,10 @@ public:
             std::string res;
             sr_cmd::um::ExecuteSrCliString(cmd, res);
             return res;
+        } else if (cmd == "branchcache" || cmd.starts_with("branchcache ")) {
+            std::string res;
+            branchcache_cmd::um::ExecuteBranchCacheString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -957,7 +976,13 @@ public:
            << "\"sr_sync_writes\":" << micant::sr::StorageReplicaSubsystem::get().getTotalSyncWrites() << ","
            << "\"sr_async_writes\":" << micant::sr::StorageReplicaSubsystem::get().getTotalAsyncWrites() << ","
            << "\"sr_dirty_blocks_total\":" << micant::sr::StorageReplicaSubsystem::get().getTotalDirtyBlocks() << ","
-           << "\"sr_avg_latency_us\":" << micant::sr::StorageReplicaSubsystem::get().getAverageLatencyUs() << "}\r\n";
+           << "\"sr_avg_latency_us\":" << micant::sr::StorageReplicaSubsystem::get().getAverageLatencyUs() << ","
+           << "\"bc_mode\":\"" << micant::wan::BranchCacheModeToString(micant::wan::BranchCacheSubsystem::get().getMode()) << "\","
+           << "\"bc_wan_savings_ratio\":" << std::fixed << std::setprecision(1) << micant::wan::BranchCacheSubsystem::get().getWanSavingsRatio() << ","
+           << "\"bc_cached_blocks\":" << micant::wan::BranchCacheSubsystem::get().getLocalBlockCount() << ","
+           << "\"bc_discovered_peers\":" << micant::wan::BranchCacheSubsystem::get().getDiscoveredPeerCount() << ","
+           << "\"da_tunnel_state\":\"" << micant::wan::DirectAccessTunnelStateToString(micant::wan::DirectAccessSubsystem::get().getState()) << "\","
+           << "\"smb_quic_sessions_active\":" << micant::wan::SmbQuicSubsystem::get().getSessionCount() << "}\r\n";
         return ss.str();
     }
 
