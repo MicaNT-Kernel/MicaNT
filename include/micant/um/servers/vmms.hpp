@@ -608,6 +608,42 @@ public:
         return m_disks.size();
     }
 
+    size_t getRunningVirtualMachineCount() const {
+        std::shared_lock lock(m_mutex);
+        size_t count = 0;
+        for (const auto& [_, vm] : m_vms) {
+            if (vm.getState() == VmState::Running) count++;
+        }
+        return count;
+    }
+
+    uint64_t getTotalAllocatedRamMb() const {
+        std::shared_lock lock(m_mutex);
+        uint64_t total = 0;
+        for (const auto& [_, vm] : m_vms) {
+            if (vm.getState() == VmState::Running) {
+                total += vm.getMemory().currentAllocatedMb;
+            }
+        }
+        return total;
+    }
+
+    std::vector<VirtualSwitch> getAllSwitches() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<VirtualSwitch> list;
+        list.reserve(m_switches.size());
+        for (const auto& [_, sw] : m_switches) list.push_back(sw);
+        return list;
+    }
+
+    std::vector<VhdxDisk> getAllVhdx() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<VhdxDisk> list;
+        list.reserve(m_disks.size());
+        for (const auto& [_, disk] : m_disks) list.push_back(disk);
+        return list;
+    }
+
 private:
     VmmsSubsystem() = default;
 
@@ -875,6 +911,9 @@ inline void RegisterVmmsSubsystem() {
     vdb.RegisterModule("vhdsvc.dll",   "10.0.26100.1", "Hyper-V Virtual Hard Disk Management Service");
     vdb.RegisterModule("vmswitch.sys", "10.0.26100.1", "Hyper-V Extensible Virtual Switch Driver");
     vdb.RegisterModule("vid.sys",      "10.0.26100.1", "Hyper-V Virtual Infrastructure Driver");
+    vdb.RegisterModule("hyperv.exe",   "10.0.26100.1", "Hyper-V Management Command-Line Utility");
+    vdb.RegisterModule("vmconnect.exe","10.0.26100.1", "Hyper-V Virtual Machine Connection Utility");
+    vdb.RegisterModule("virtmgmt.msc", "10.0.26100.1", "Hyper-V Manager Microsoft Management Console");
 
     // 2. SCM Registration
     auto& scm = micant::scm::ServiceControlManager::get();

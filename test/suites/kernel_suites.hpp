@@ -33907,3 +33907,337 @@ inline void Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_Br
 
     std::cout << "[TEST] Suite 392: Horizon 176 - Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 177 (Suite 393): Sovereign Windows Server Hyper-V & VMMS Subsystem
+// Virtual Machine Management Service (vmms.exe), Extensible Virtual Switch (vmswitch.sys),
+// VHDX Virtual Hard Disk Engine (vhdsvc.dll), Dynamic Ballooning & hyperv.exe CLI
+// ============================================================================
+inline void Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI() {
+    std::cout << "[TEST] Running Suite 393: Horizon 177 - Sovereign Windows Server Hyper-V, VMMS & Virtual Switch..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::vmms::RegisterVmmsSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. VMMS Service (Virtual Machine Management Service)
+        auto vmmsSvc = scm.getServiceRecord(L"Vmms");
+        TEST_ASSERT(vmmsSvc != nullptr, "Vmms registered in SCM");
+        TEST_ASSERT(vmmsSvc->displayName == L"Hyper-V Virtual Machine Management", "Vmms display name matches");
+        TEST_ASSERT(vmmsSvc->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "Vmms serviceType is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(vmmsSvc->startType == micant::scm::SERVICE_AUTO_START, "Vmms startType is SERVICE_AUTO_START");
+        TEST_ASSERT(vmmsSvc->binaryPath == L"C:\\Windows\\System32\\vmms.exe", "Vmms binary path matches vmms.exe");
+        TEST_ASSERT(vmmsSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Vmms is running");
+
+        // 2. VmSwitch Kernel Driver (Extensible Virtual Switch)
+        auto vmSwitchDrv = scm.getServiceRecord(L"VmSwitch");
+        TEST_ASSERT(vmSwitchDrv != nullptr, "VmSwitch driver registered in SCM");
+        TEST_ASSERT(vmSwitchDrv->displayName == L"Hyper-V Virtual Switch", "VmSwitch display name matches");
+        TEST_ASSERT(vmSwitchDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "VmSwitch serviceType is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(vmSwitchDrv->startType == micant::scm::SERVICE_SYSTEM_START, "VmSwitch startType is SERVICE_SYSTEM_START");
+        TEST_ASSERT(vmSwitchDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\vmswitch.sys", "VmSwitch binary path matches drivers\\vmswitch.sys");
+        TEST_ASSERT(vmSwitchDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VmSwitch is running");
+
+        // 3. VidDriver Kernel Driver (Virtual Infrastructure Driver)
+        auto vidDrv = scm.getServiceRecord(L"VidDriver");
+        TEST_ASSERT(vidDrv != nullptr, "VidDriver registered in SCM");
+        TEST_ASSERT(vidDrv->displayName == L"Hyper-V Virtual Infrastructure Driver", "VidDriver display name matches");
+        TEST_ASSERT(vidDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "VidDriver serviceType is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(vidDrv->startType == micant::scm::SERVICE_SYSTEM_START, "VidDriver startType is SERVICE_SYSTEM_START");
+        TEST_ASSERT(vidDrv->binaryPath == L"C:\\Windows\\System32\\drivers\\vid.sys", "VidDriver binary path matches drivers\\vid.sys");
+        TEST_ASSERT(vidDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VidDriver is running");
+
+        // 4. VersionDatabase Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* vVmms = vdb.GetModuleInfo("vmms.exe");
+        TEST_ASSERT(vVmms != nullptr && vVmms->stringTable.at("FileVersion") == "10.0.26100.1", "vmms.exe registered @ 10.0.26100.1");
+
+        const auto* vVhdSvc = vdb.GetModuleInfo("vhdsvc.dll");
+        TEST_ASSERT(vVhdSvc != nullptr && vVhdSvc->stringTable.at("FileVersion") == "10.0.26100.1", "vhdsvc.dll registered @ 10.0.26100.1");
+
+        const auto* vVmSwitch = vdb.GetModuleInfo("vmswitch.sys");
+        TEST_ASSERT(vVmSwitch != nullptr && vVmSwitch->stringTable.at("FileVersion") == "10.0.26100.1", "vmswitch.sys registered @ 10.0.26100.1");
+
+        const auto* vVid = vdb.GetModuleInfo("vid.sys");
+        TEST_ASSERT(vVid != nullptr && vVid->stringTable.at("FileVersion") == "10.0.26100.1", "vid.sys registered @ 10.0.26100.1");
+
+        const auto* vHvExe = vdb.GetModuleInfo("hyperv.exe");
+        TEST_ASSERT(vHvExe != nullptr && vHvExe->stringTable.at("FileVersion") == "10.0.26100.1", "hyperv.exe registered @ 10.0.26100.1");
+
+        const auto* vVmConnect = vdb.GetModuleInfo("vmconnect.exe");
+        TEST_ASSERT(vVmConnect != nullptr && vVmConnect->stringTable.at("FileVersion") == "10.0.26100.1", "vmconnect.exe registered @ 10.0.26100.1");
+
+        const auto* vVirtMgmt = vdb.GetModuleInfo("virtmgmt.msc");
+        TEST_ASSERT(vVirtMgmt != nullptr && vVirtMgmt->stringTable.at("FileVersion") == "10.0.26100.1", "virtmgmt.msc registered @ 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Virtual Machine Lifecycle State Machine (Off, Starting, Running, Paused, Saved, Stopping)
+    // ------------------------------------------------------------------------
+    {
+        auto& vmms = micant::vmms::VmmsSubsystem::get();
+        vmms.reset();
+
+        micant::vmms::VirtualMachine vm("VM-SUITE393-01", "TITAN-HYPERV-01", 8, 16384);
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Off, "Initial VM state is Off");
+        TEST_ASSERT(vm.getTopology().vCpuCount == 8, "vCPU count is 8");
+        TEST_ASSERT(vm.getTopology().coresPerSocket == 8, "Cores per socket is 8");
+        TEST_ASSERT(vm.getTopology().apicIds.size() == 8, "APIC IDs virtualized");
+
+        // 1. Off -> Running
+        TEST_ASSERT(vm.start(), "VM start transition succeeds");
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Running, "VM state is Running");
+
+        // 2. Running -> Paused
+        TEST_ASSERT(vm.pause(), "VM pause transition succeeds");
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Paused, "VM state is Paused");
+
+        // 3. Paused -> Running (Resume)
+        TEST_ASSERT(vm.resume(), "VM resume transition succeeds");
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Running, "VM state is Running");
+
+        // 4. Running -> Saved
+        TEST_ASSERT(vm.save(), "VM save transition succeeds");
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Saved, "VM state is Saved");
+
+        // 5. Saved -> Running (Resume from Saved)
+        TEST_ASSERT(vm.start(), "VM resume from Saved succeeds");
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Running, "VM state is Running");
+
+        // 6. Running -> Off (Stop)
+        TEST_ASSERT(vm.stop(), "VM stop transition succeeds");
+        TEST_ASSERT(vm.getState() == micant::vmms::VmState::Off, "VM state is Off");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic Memory Allocation & Hyper-V Memory Ballooning
+    // ------------------------------------------------------------------------
+    {
+        micant::vmms::VirtualMachine vm("VM-MEM-TEST", "TITAN-MEM-VM", 4, 16384);
+        TEST_ASSERT(vm.getMemory().startupRamMb == 16384, "Startup RAM is 16384 MB");
+        TEST_ASSERT(vm.getMemory().currentAllocatedMb == 16384, "Initial allocated RAM is 16384 MB");
+        TEST_ASSERT(vm.getMemory().minRamMb == 1024, "Min RAM limit is 1024 MB");
+        TEST_ASSERT(vm.getMemory().maxRamMb == 16384, "Max RAM limit is 16384 MB");
+
+        // Balloon down to 8192 MB
+        bool adjust1 = vm.adjustBalloonMemory(8192);
+        TEST_ASSERT(adjust1, "Dynamic memory balloon down to 8192 MB succeeds");
+        TEST_ASSERT(vm.getMemory().currentAllocatedMb == 8192, "Current allocated is 8192 MB");
+        TEST_ASSERT(vm.getMemory().currentDemandMb == 8192, "Current demand is 8192 MB");
+
+        // Attempt allocation below min limit (512 MB < 1024 MB)
+        bool adjustInvalidMin = vm.adjustBalloonMemory(512);
+        TEST_ASSERT(!adjustInvalidMin, "Ballooning below minRamMb must be rejected");
+
+        // Attempt allocation above max limit (32768 MB > 16384 MB)
+        bool adjustInvalidMax = vm.adjustBalloonMemory(32768);
+        TEST_ASSERT(!adjustInvalidMax, "Ballooning above maxRamMb must be rejected");
+
+        // Balloon up to 12288 MB
+        bool adjust2 = vm.adjustBalloonMemory(12288);
+        TEST_ASSERT(adjust2, "Dynamic memory balloon up to 12288 MB succeeds");
+        TEST_ASSERT(vm.getMemory().currentAllocatedMb == 12288, "Current allocated is 12288 MB");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Hyper-V Extensible Virtual Switch (vmswitch.sys) & 802.1Q VLAN Isolation
+    // ------------------------------------------------------------------------
+    {
+        micant::vmms::VirtualSwitch sw("EnterpriseSwitch", micant::vmms::VSwitchPortType::Internal);
+        TEST_ASSERT(sw.getName() == "EnterpriseSwitch", "Switch name matches");
+        TEST_ASSERT(sw.getType() == micant::vmms::VSwitchPortType::Internal, "Switch type is Internal");
+
+        // Create ports with VLAN tags
+        sw.createPort("PORT-V20-A", "VLAN20-PortA", "00:15:5D:20:00:01", 20);
+        sw.createPort("PORT-V20-B", "VLAN20-PortB", "00:15:5D:20:00:02", 20);
+        sw.createPort("PORT-V30-A", "VLAN30-PortA", "00:15:5D:30:00:01", 30);
+        TEST_ASSERT(sw.getPortCount() == 3, "Switch has 3 ports");
+
+        // 1. Intra-VLAN forwarding (Port A VLAN 20 -> Port B VLAN 20)
+        bool intraOk = sw.forwardFrame("PORT-V20-A", "00:15:5D:20:00:02", 20, 128);
+        TEST_ASSERT(intraOk, "Intra-VLAN 20 frame forwarded successfully");
+        TEST_ASSERT(sw.getTotalFramesSwitched() >= 1, "Frames switched incremented");
+
+        // 2. Cross-VLAN isolation (Port A VLAN 20 -> Port A VLAN 30) -> Dropped
+        bool crossDrop = sw.forwardFrame("PORT-V20-A", "00:15:5D:30:00:01", 20, 128);
+        TEST_ASSERT(!crossDrop, "Cross-VLAN frame dropped by 802.1Q boundary isolation");
+        TEST_ASSERT(sw.getTotalFramesDropped() >= 1, "Frames dropped incremented");
+
+        // 3. Broadcast forwarding within VLAN 20
+        bool bcastOk = sw.forwardFrame("PORT-V20-A", "FF:FF:FF:FF:FF:FF", 20, 128);
+        TEST_ASSERT(bcastOk, "Broadcast forwarded to matching VLAN 20 members");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: VHDX Virtual Hard Disk Container Engine & Differential Fallback (vhdsvc.dll)
+    // ------------------------------------------------------------------------
+    {
+        // 1. Parent Dynamic VHDX
+        micant::vmms::VhdxDisk parentDisk("C:\\VirtualDisks\\GoldenParent.vhdx", 64ULL * 1024 * 1024 * 1024, micant::vmms::VhdxDiskType::Dynamic);
+        TEST_ASSERT(parentDisk.getSignature() == micant::vmms::VHDX_FILE_SIGNATURE, "VHDX signature is 'vhdxfile'");
+        TEST_ASSERT(parentDisk.getBlockSize() == micant::vmms::VHDX_DEFAULT_BLOCK_SIZE, "Block size is 1 MB");
+        TEST_ASSERT(parentDisk.getVirtualSizeBytes() == 64ULL * 1024 * 1024 * 1024, "Virtual capacity is 64 GB");
+
+        const char goldenPayload[] = "GOLDEN_BASE_SYSTEM_DATA_IMAGE_2026";
+        bool wParent = parentDisk.writeBlock(0x100000, goldenPayload, sizeof(goldenPayload));
+        TEST_ASSERT(wParent, "Write to parent VHDX succeeds");
+        TEST_ASSERT(parentDisk.getAllocatedBlocks() >= 1, "Parent has allocated block");
+
+        // 2. Child Differencing VHDX with parent fallback
+        micant::vmms::VhdxDisk childDisk("C:\\VirtualDisks\\ChildVM01.vhdx", 64ULL * 1024 * 1024 * 1024, micant::vmms::VhdxDiskType::Differencing, "C:\\VirtualDisks\\GoldenParent.vhdx");
+        TEST_ASSERT(childDisk.getDiskType() == micant::vmms::VhdxDiskType::Differencing, "Child disk type is Differencing");
+        TEST_ASSERT(childDisk.getParentPath() == "C:\\VirtualDisks\\GoldenParent.vhdx", "Parent path matches");
+
+        const char childPayload[] = "CHILD_VM_DELTA_TRANSACTION_LOG";
+        bool wChild = childDisk.writeBlock(0x200000, childPayload, sizeof(childPayload));
+        TEST_ASSERT(wChild, "Write child delta block succeeds");
+
+        // Read child local delta block
+        char childRead[sizeof(childPayload)]{};
+        bool rChild = childDisk.readBlock(0x200000, childRead, sizeof(childPayload), &parentDisk);
+        TEST_ASSERT(rChild, "Read child delta block succeeds");
+        TEST_ASSERT(std::memcmp(childRead, childPayload, sizeof(childPayload)) == 0, "Child delta block content matches");
+
+        // Read parent block from child (differential fallback)
+        char parentRead[sizeof(goldenPayload)]{};
+        bool rParent = childDisk.readBlock(0x100000, parentRead, sizeof(goldenPayload), &parentDisk);
+        TEST_ASSERT(rParent, "Differential fallback read from parent succeeds");
+        TEST_ASSERT(std::memcmp(parentRead, goldenPayload, sizeof(goldenPayload)) == 0, "Fallback read payload bitwise matches parent golden master");
+
+        // 3. Snapshot Checkpoints
+        std::string cpId;
+        bool cpOk = childDisk.createCheckpoint("PRE_UPGRADE_SNAP", cpId);
+        TEST_ASSERT(cpOk, "Create checkpoint succeeds");
+        TEST_ASSERT(!cpId.empty(), "Checkpoint ID generated");
+        TEST_ASSERT(childDisk.getCheckpointCount() == 1, "Checkpoint count is 1");
+
+        bool rollOk = childDisk.rollbackCheckpoint(cpId);
+        TEST_ASSERT(rollOk, "Rollback checkpoint succeeds");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Hyper-V Live Migration Protocol (Pre-Copy Iterations & Brownout Cutover)
+    // ------------------------------------------------------------------------
+    {
+        auto& vmms = micant::vmms::VmmsSubsystem::get();
+        vmms.reset();
+
+        auto* vmRunning = vmms.getVirtualMachineByName("TITAN-DC01");
+        TEST_ASSERT(vmRunning != nullptr, "TITAN-DC01 pre-seeded VM found");
+        TEST_ASSERT(vmRunning->getState() == micant::vmms::VmState::Running, "TITAN-DC01 is in Running state");
+
+        bool migOk = vmRunning->simulateLiveMigration(3);
+        TEST_ASSERT(migOk, "Live Migration simulation succeeds");
+        TEST_ASSERT(vmRunning->getMigrationPagesCopied() > 0, "Memory pages copied during pre-copy");
+        TEST_ASSERT(vmRunning->getMigrationBrownoutMs() == 12, "Brownout downtime is 12 ms");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 hyperv.exe CLI, WFP Rule #17701 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& vmms = micant::vmms::VmmsSubsystem::get();
+        vmms.reset();
+
+        // 1. hyperv status
+        std::string statusOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv status", statusOut);
+        TEST_ASSERT(statusOut.find("Hyper-V Virtual Machine Management Subsystem Status:") != std::string::npos, "hyperv status banner");
+        TEST_ASSERT(statusOut.find("ACTIVE (TitanHyperCore / AegisVMM)") != std::string::npos, "hyperv status active");
+        TEST_ASSERT(statusOut.find("Total Defined VMs:") != std::string::npos, "hyperv status VM count");
+
+        // 2. hyperv list
+        std::string listOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv list", listOut);
+        TEST_ASSERT(listOut.find("Hyper-V Virtual Machines Inventory") != std::string::npos, "hyperv list banner");
+        TEST_ASSERT(listOut.find("TITAN-DC01") != std::string::npos, "hyperv list TITAN-DC01");
+
+        // 3. hyperv create
+        std::string createOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv create Suite393-VM /vcpu:2 /ram:2048", createOut);
+        TEST_ASSERT(createOut.find("created successfully") != std::string::npos, "hyperv create succeeds");
+
+        // 4. hyperv start
+        std::string startOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv start Suite393-VM", startOut);
+        TEST_ASSERT(startOut.find("started successfully") != std::string::npos, "hyperv start succeeds");
+
+        // 5. hyperv balloon
+        std::string balloonOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv balloon Suite393-VM 3072", balloonOut);
+        TEST_ASSERT(balloonOut.find("ballooning adjusted") != std::string::npos, "hyperv balloon succeeds");
+
+        // 6. hyperv pause & resume & stop
+        std::string pauseOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv pause Suite393-VM", pauseOut);
+        TEST_ASSERT(pauseOut.find("paused successfully") != std::string::npos, "hyperv pause succeeds");
+
+        std::string resumeOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv resume Suite393-VM", resumeOut);
+        TEST_ASSERT(resumeOut.find("resumed successfully") != std::string::npos, "hyperv resume succeeds");
+
+        std::string stopOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv stop Suite393-VM", stopOut);
+        TEST_ASSERT(stopOut.find("stopped successfully") != std::string::npos, "hyperv stop succeeds");
+
+        // 7. hyperv switch
+        std::string switchOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv switch", switchOut);
+        TEST_ASSERT(switchOut.find("Hyper-V Extensible Virtual Switch Topology") != std::string::npos, "hyperv switch banner");
+
+        // 8. hyperv vhdx
+        std::string vhdxOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv vhdx C:\\VirtualDisks\\TitanDC01.vhdx", vhdxOut);
+        TEST_ASSERT(vhdxOut.find("Hyper-V Virtual Hard Disk (VHDX v1.00) Metadata:") != std::string::npos, "hyperv vhdx banner");
+
+        // 9. hyperv migrate
+        std::string migOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv migrate TITAN-DC01 HYPERV-NODE-03.corp.contoso.com", migOut);
+        TEST_ASSERT(migOut.find("Live Migration Completed Successfully") != std::string::npos, "hyperv migrate report");
+
+        // 10. hyperv dump
+        std::string dumpOut;
+        micant::hyperv_cmd::um::ExecuteHyperVString("hyperv dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("New-VMSwitch") != std::string::npos, "hyperv dump contains PowerShell");
+
+        // 11. Remote Executive Console & Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStatus = console.executeTerminalCommand("hyperv status");
+        TEST_ASSERT(termStatus.find("Hyper-V Virtual Machine Management Subsystem Status:") != std::string::npos, "Web terminal hyperv status");
+
+        std::string termList = console.executeTerminalCommand("hyperv list");
+        TEST_ASSERT(termList.find("TITAN-DC01") != std::string::npos, "Web terminal hyperv list");
+
+        // 12. WFP Inbound Rule #17701 (MicaNT_HyperV_VMBus_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto hvRuleOpt = wfp.findRuleById(17701);
+        TEST_ASSERT(hvRuleOpt.has_value(), "WFP Rule #17701 for Hyper-V must be registered");
+        TEST_ASSERT(hvRuleOpt->protocol == tcpip::IPPROTO_TCP, "Hyper-V VMConnect protocol is TCP");
+        TEST_ASSERT(hvRuleOpt->localPortStart == 2179 && hvRuleOpt->localPortEnd == 2179, "VMConnect port 2179");
+        TEST_ASSERT(hvRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Hyper-V rule action must be PERMIT");
+
+        // 13. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"hyperv_vms_total\":") != std::string::npos, "Telemetry hyperv_vms_total");
+        TEST_ASSERT(teleJson.find("\"hyperv_vms_running\":") != std::string::npos, "Telemetry hyperv_vms_running");
+        TEST_ASSERT(teleJson.find("\"hyperv_vhdx_mounted\":") != std::string::npos, "Telemetry hyperv_vhdx_mounted");
+        TEST_ASSERT(teleJson.find("\"hyperv_allocated_ram_mb\":") != std::string::npos, "Telemetry hyperv_allocated_ram_mb");
+    }
+
+    std::cout << "[HORIZON 177] Sovereign Windows Server Hyper-V & VMMS Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: Virtual Machine Lifecycle State Machine (6 states) OK\n"
+              << "    Pillar 3: Dynamic Memory Allocation & Hyper-V Ballooning OK\n"
+              << "    Pillar 4: Extensible Virtual Switch & 802.1Q VLAN Isolation OK\n"
+              << "    Pillar 5: VHDX Virtual Hard Disk Container & Differential Fallback OK\n"
+              << "    Pillar 6: Live Migration Protocol & 12ms Brownout Cutover OK\n"
+              << "    Pillar 7: Canonical Win32 hyperv.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 393: Horizon 177 - Sovereign Windows Server Hyper-V, VMMS & Virtual Switch PASSED." << std::endl;
+}

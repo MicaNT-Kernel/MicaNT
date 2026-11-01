@@ -322,6 +322,7 @@
 #include "micant/um/subsystems/mgmt/sr_cmd.hpp"
 #include "micant/um/servers/clustering.hpp"
 #include "micant/um/servers/vmms.hpp"
+#include "micant/um/subsystems/mgmt/hyperv_cmd.hpp"
 #include "micant/um/servers/activedirectory.hpp"
 #include "micant/um/subsystems/mgmt/grouppolicy.hpp"
 #include "micant/um/servers/remotedesktop.hpp"
@@ -430,6 +431,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite393") {
+        RUN_TEST(Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite392") {
@@ -1944,6 +1949,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli);
     RUN_TEST(Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI);
     RUN_TEST(Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
+    RUN_TEST(Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

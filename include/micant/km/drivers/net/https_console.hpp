@@ -66,6 +66,8 @@
 #include "micant/um/subsystems/mgmt/sr_cmd.hpp"
 #include "micant/um/servers/branchcache.hpp"
 #include "micant/um/subsystems/mgmt/branchcache_cmd.hpp"
+#include "micant/um/servers/vmms.hpp"
+#include "micant/um/subsystems/mgmt/hyperv_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -322,6 +324,19 @@ public:
         bcRule.weight = 1500;
         bcRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(bcRule);
+
+        // 20. Register WFP Inbound Rule for Hyper-V VMConnect & Live Migration (TCP 2179)
+        wfp::km::WfpKernelFilterRule hvRule{};
+        hvRule.filterId = 17701;
+        hvRule.name = "MicaNT_HyperV_VMBus_Permit";
+        hvRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        hvRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        hvRule.protocol = tcpip::IPPROTO_TCP;
+        hvRule.localPortStart = 2179;
+        hvRule.localPortEnd = 2179;
+        hvRule.weight = 1500;
+        hvRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(hvRule);
     }
 
     void stopHttpsServer() {
@@ -724,6 +739,10 @@ public:
             std::string res;
             branchcache_cmd::um::ExecuteBranchCacheString(cmd, res);
             return res;
+        } else if (cmd == "hyperv" || cmd.starts_with("hyperv ") || cmd == "vmms" || cmd.starts_with("vmms ")) {
+            std::string res;
+            hyperv_cmd::um::ExecuteHyperVString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -982,7 +1001,11 @@ public:
            << "\"bc_cached_blocks\":" << micant::wan::BranchCacheSubsystem::get().getLocalBlockCount() << ","
            << "\"bc_discovered_peers\":" << micant::wan::BranchCacheSubsystem::get().getDiscoveredPeerCount() << ","
            << "\"da_tunnel_state\":\"" << micant::wan::DirectAccessTunnelStateToString(micant::wan::DirectAccessSubsystem::get().getState()) << "\","
-           << "\"smb_quic_sessions_active\":" << micant::wan::SmbQuicSubsystem::get().getSessionCount() << "}\r\n";
+           << "\"smb_quic_sessions_active\":" << micant::wan::SmbQuicSubsystem::get().getSessionCount() << ","
+           << "\"hyperv_vms_total\":" << micant::vmms::VmmsSubsystem::get().getVirtualMachineCount() << ","
+           << "\"hyperv_vms_running\":" << micant::vmms::VmmsSubsystem::get().getRunningVirtualMachineCount() << ","
+           << "\"hyperv_vhdx_mounted\":" << micant::vmms::VmmsSubsystem::get().getVhdxCount() << ","
+           << "\"hyperv_allocated_ram_mb\":" << micant::vmms::VmmsSubsystem::get().getTotalAllocatedRamMb() << "}\r\n";
         return ss.str();
     }
 
