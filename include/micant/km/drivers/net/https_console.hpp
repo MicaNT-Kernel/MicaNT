@@ -62,6 +62,8 @@
 #include "micant/um/subsystems/mgmt/storagespaces_cmd.hpp"
 #include "micant/km/drivers/fs/dedup.hpp"
 #include "micant/um/subsystems/mgmt/dedup_cmd.hpp"
+#include "micant/km/drivers/storage/storage_replica.hpp"
+#include "micant/um/subsystems/mgmt/sr_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -292,6 +294,19 @@ public:
         dedupRule.weight = 1500;
         dedupRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(dedupRule);
+
+        // 18. Register WFP Inbound Rule for Storage Replica Log Shipping (TCP Port 5447)
+        wfp::km::WfpKernelFilterRule srRule{};
+        srRule.filterId = 17501;
+        srRule.name = "MicaNT_StorageReplica_LogShipping_Permit";
+        srRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        srRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        srRule.protocol = tcpip::IPPROTO_TCP;
+        srRule.localPortStart = 5447;
+        srRule.localPortEnd = 5447;
+        srRule.weight = 1500;
+        srRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(srRule);
     }
 
     void stopHttpsServer() {
@@ -686,6 +701,10 @@ public:
             std::string res;
             dedup_cmd::um::ExecuteDdpCliString(cmd, res);
             return res;
+        } else if (cmd == "srcli" || cmd.starts_with("srcli ")) {
+            std::string res;
+            sr_cmd::um::ExecuteSrCliString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -932,7 +951,13 @@ public:
            << "\"dedup_saved_bytes\":" << micant::dedup::DataDeduplicationSubsystem::get().getTotalSavedBytes() << ","
            << "\"dedup_savings_pct\":" << std::fixed << std::setprecision(1) << micant::dedup::DataDeduplicationSubsystem::get().getGlobalSavingsPercentage() << ","
            << "\"dedup_chunks_total\":" << micant::dedup::DataDeduplicationSubsystem::get().getTotalChunksStored() << ","
-           << "\"dedup_jobs_completed\":" << micant::dedup::DataDeduplicationSubsystem::get().getCompletedJobsCount() << "}\r\n";
+           << "\"dedup_jobs_completed\":" << micant::dedup::DataDeduplicationSubsystem::get().getCompletedJobsCount() << ","
+           << "\"sr_partnerships_active\":" << micant::sr::StorageReplicaSubsystem::get().getPartnershipCount() << ","
+           << "\"sr_bytes_replicated\":" << micant::sr::StorageReplicaSubsystem::get().getTotalBytesReplicated() << ","
+           << "\"sr_sync_writes\":" << micant::sr::StorageReplicaSubsystem::get().getTotalSyncWrites() << ","
+           << "\"sr_async_writes\":" << micant::sr::StorageReplicaSubsystem::get().getTotalAsyncWrites() << ","
+           << "\"sr_dirty_blocks_total\":" << micant::sr::StorageReplicaSubsystem::get().getTotalDirtyBlocks() << ","
+           << "\"sr_avg_latency_us\":" << micant::sr::StorageReplicaSubsystem::get().getAverageLatencyUs() << "}\r\n";
         return ss.str();
     }
 

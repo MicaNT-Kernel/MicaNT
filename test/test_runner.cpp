@@ -318,6 +318,7 @@
 #include "micant/um/subsystems/mgmt/dedup_cmd.hpp"
 #include "micant/um/servers/branchcache.hpp"
 #include "micant/km/drivers/storage/storage_replica.hpp"
+#include "micant/um/subsystems/mgmt/sr_cmd.hpp"
 #include "micant/um/servers/clustering.hpp"
 #include "micant/um/servers/vmms.hpp"
 #include "micant/um/servers/activedirectory.hpp"
@@ -428,6 +429,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite391") {
+        RUN_TEST(Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite390") {
@@ -1932,6 +1937,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI);
     RUN_TEST(Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpacesCLI);
     RUN_TEST(Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli);
+    RUN_TEST(Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

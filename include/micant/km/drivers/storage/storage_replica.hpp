@@ -587,6 +587,42 @@ public:
         return m_partnerships.size();
     }
 
+    uint64_t getTotalBytesReplicated() const {
+        std::shared_lock lock(m_mutex);
+        uint64_t total = 0;
+        for (const auto& [_, p] : m_partnerships) total += p->getTelemetry().bytesReplicated;
+        return total;
+    }
+
+    uint64_t getTotalSyncWrites() const {
+        std::shared_lock lock(m_mutex);
+        uint64_t total = 0;
+        for (const auto& [_, p] : m_partnerships) total += p->getTelemetry().syncWrites;
+        return total;
+    }
+
+    uint64_t getTotalAsyncWrites() const {
+        std::shared_lock lock(m_mutex);
+        uint64_t total = 0;
+        for (const auto& [_, p] : m_partnerships) total += p->getTelemetry().asyncWrites;
+        return total;
+    }
+
+    uint32_t getTotalDirtyBlocks() const {
+        std::shared_lock lock(m_mutex);
+        uint32_t total = 0;
+        for (const auto& [_, p] : m_partnerships) total += p->getDirtyBlockCount();
+        return total;
+    }
+
+    uint32_t getAverageLatencyUs() const {
+        std::shared_lock lock(m_mutex);
+        if (m_partnerships.empty()) return 0;
+        uint32_t sum = 0;
+        for (const auto& [_, p] : m_partnerships) sum += p->getTelemetry().averageLatencyUs;
+        return sum / static_cast<uint32_t>(m_partnerships.size());
+    }
+
 private:
     StorageReplicaSubsystem() = default;
 
@@ -783,6 +819,7 @@ inline void RegisterStorageReplicaSubsystem() {
     vdb.RegisterModule("storrepl.sys",  "10.0.26100.1", "Storage Replica Volume Replication Driver");
     vdb.RegisterModule("srsys.sys",     "10.0.26100.1", "Storage Replica Log & File System Filter");
     vdb.RegisterModule("srservice.dll", "10.0.26100.1", "Storage Replica Management Service");
+    vdb.RegisterModule("srcli.exe",     "10.0.26100.1", "Storage Replica Command-Line Management Utility");
 
     // 2. SCM Registration
     auto& scm = micant::scm::ServiceControlManager::get();

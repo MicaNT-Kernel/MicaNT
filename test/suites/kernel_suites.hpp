@@ -33264,3 +33264,312 @@ inline void Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli() {
 
     std::cout << "[TEST] Suite 390: Horizon 174 - Sovereign Windows Server Data Deduplication (Dedup) PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 175 (Suite 391): Sovereign Windows Server Storage Replica (SR / MS-SR)
+// Volume Replication Mini-Filter (storrepl.sys / srsys.sys), Write-Ahead Logging (WAL),
+// Synchronous (Zero RPO) & Asynchronous (Low RPO) Engines, Dirty Block Bitmap Tracking,
+// Dynamic Failover & Direction Reversal, and Canonical srcli.exe CLI
+// ============================================================================
+inline void Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI() {
+    std::cout << "[TEST] Running Suite 391: Horizon 175 - Sovereign Windows Server Storage Replica (SR / MS-SR)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: SCM Services & VersionDatabase Registration Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::sr::RegisterStorageReplicaSubsystem();
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+
+        // 1. Kernel Driver: storrepl.sys
+        auto srDriver = scm.getServiceRecord(L"StorageReplica");
+        TEST_ASSERT(srDriver != nullptr, "StorageReplica driver registered in SCM");
+        TEST_ASSERT(srDriver->displayName == L"Storage Replica Volume Filter Driver", "Driver display name matches");
+        TEST_ASSERT(srDriver->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "Driver serviceType must be SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(srDriver->startType == micant::scm::SERVICE_SYSTEM_START, "Driver startType must be SERVICE_SYSTEM_START");
+        TEST_ASSERT(srDriver->binaryPath == L"C:\\Windows\\System32\\drivers\\storrepl.sys", "Driver path matches system32 drivers storrepl.sys");
+        TEST_ASSERT(srDriver->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Driver status is RUNNING");
+
+        // 2. User-mode Management Service: SrSvc
+        auto srSvc = scm.getServiceRecord(L"SrSvc");
+        TEST_ASSERT(srSvc != nullptr, "SrSvc service registered in SCM");
+        TEST_ASSERT(srSvc->displayName == L"Storage Replica Management Service", "SrSvc display name matches");
+        TEST_ASSERT(srSvc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "SrSvc serviceType must be SERVICE_WIN32_SHARE_PROCESS");
+        TEST_ASSERT(srSvc->startType == micant::scm::SERVICE_AUTO_START, "SrSvc startType must be SERVICE_AUTO_START");
+        TEST_ASSERT(srSvc->binaryPath == L"C:\\Windows\\System32\\svchost.exe -k StorageReplica", "SrSvc path hosted in svchost -k StorageReplica");
+        TEST_ASSERT(srSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SrSvc status is RUNNING");
+
+        // 3. PE Module VersionDatabase Parity @ 10.0.26100.1
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* vStorRepl = vdb.GetModuleInfo("storrepl.sys");
+        TEST_ASSERT(vStorRepl != nullptr && vStorRepl->stringTable.at("FileVersion") == "10.0.26100.1", "storrepl.sys registered @ 10.0.26100.1");
+
+        const auto* vSrSys = vdb.GetModuleInfo("srsys.sys");
+        TEST_ASSERT(vSrSys != nullptr && vSrSys->stringTable.at("FileVersion") == "10.0.26100.1", "srsys.sys registered @ 10.0.26100.1");
+
+        const auto* vSrService = vdb.GetModuleInfo("srservice.dll");
+        TEST_ASSERT(vSrService != nullptr && vSrService->stringTable.at("FileVersion") == "10.0.26100.1", "srservice.dll registered @ 10.0.26100.1");
+
+        const auto* vSrCli = vdb.GetModuleInfo("srcli.exe");
+        TEST_ASSERT(vSrCli != nullptr && vSrCli->stringTable.at("FileVersion") == "10.0.26100.1", "srcli.exe registered @ 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Write-Ahead Logging (WAL) Architecture & Staging Log Ring Buffers
+    // ------------------------------------------------------------------------
+    {
+        // 1. Verify CRC32C Checksum Engine
+        const char sampleData[] = "MicaNT Storage Replica Sovereign WAL Block Payload CRC32C Test";
+        uint32_t crc1 = micant::sr::ComputeCrc32c(sampleData, sizeof(sampleData));
+        uint32_t crc2 = micant::sr::ComputeCrc32c(sampleData, sizeof(sampleData));
+        TEST_ASSERT(crc1 == crc2, "CRC32C is deterministic");
+        TEST_ASSERT(crc1 != 0 && crc1 != 0xFFFFFFFF, "CRC32C calculation is valid");
+
+        // 2. Log Record Header Structure Validation
+        micant::sr::SrLogRecordHeader hdr{};
+        hdr.magic = micant::sr::SR_LOG_MAGIC;
+        hdr.headerSize = sizeof(micant::sr::SrLogRecordHeader);
+        hdr.lsn = 101;
+        hdr.epoch = 1;
+        hdr.flags = 0x1; // Synchronous
+        hdr.volumeOffset = 0;
+        hdr.dataLength = sizeof(sampleData);
+        hdr.checksum = crc1;
+
+        TEST_ASSERT(hdr.magic == 0x53524C47, "SR log magic matches 'SRLG'");
+        TEST_ASSERT(hdr.headerSize == sizeof(micant::sr::SrLogRecordHeader), "Log header size matches struct");
+        TEST_ASSERT(hdr.lsn == 101, "Log sequence number matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Synchronous Replication Mode (Zero RPO) & Secondary Write-Lock
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::sr::StorageReplicaSubsystem::get();
+        auto part = sys.getPartnership("SR-PAR-METRO-01");
+        TEST_ASSERT(part != nullptr, "SR-PAR-METRO-01 metro partnership must exist");
+        TEST_ASSERT(part->getMode() == micant::sr::ReplicationMode::Synchronous, "Mode is Synchronous");
+        TEST_ASSERT(part->getRole() == micant::sr::ReplicationRole::Source, "Initial role is Source");
+        TEST_ASSERT(part->getState() == micant::sr::ReplicationState::ContinuouslyReplicating, "State is ContinuouslyReplicating");
+
+        // 1. Write block to Primary (Source)
+        const std::string payload = "MicaNT Zero-RPO Synchronous Clustered Volume Payload v10.0";
+        uint64_t bytesBefore = part->getTelemetry().bytesReplicated;
+        uint64_t syncWritesBefore = part->getTelemetry().syncWrites;
+        uint64_t lsnBefore = part->getCurrentLsn();
+
+        bool writeOk = part->writeBlock(0, payload.data(), payload.size());
+        TEST_ASSERT(writeOk, "Synchronous write on Source succeeds");
+        TEST_ASSERT(part->getCurrentLsn() == lsnBefore + 1, "LSN incremented by 1");
+        TEST_ASSERT(part->getLastFlushedLsn() == part->getCurrentLsn(), "Flushed LSN matches current LSN for synchronous mode");
+        TEST_ASSERT(part->getTelemetry().syncWrites == syncWritesBefore + 1, "Sync write counter incremented");
+        TEST_ASSERT(part->getTelemetry().bytesReplicated == bytesBefore + payload.size(), "Bytes replicated incremented");
+
+        // 2. Verify instant secondary consistency
+        std::vector<char> secBuf(payload.size() + 1, 0);
+        bool readSecOk = part->readBlock(0, secBuf.data(), payload.size(), true); // read from secondary
+        TEST_ASSERT(readSecOk, "Read from secondary succeeds");
+        TEST_ASSERT(std::string_view(secBuf.data(), payload.size()) == payload, "Secondary data matches primary data with zero RPO");
+
+        // 3. Enforce Secondary Write-Lock (Protection against split-brain corruption)
+        // Temporarily inspect secondary role behavior
+        micant::sr::SrPartnershipConfig secCfg{};
+        secCfg.partnershipId = "SR-TEST-SEC-LOCK";
+        secCfg.sourceServer = "SRV1";
+        secCfg.sourceVolume = "D:";
+        secCfg.destinationServer = "SRV2";
+        secCfg.destinationVolume = "E:";
+        secCfg.localRole = micant::sr::ReplicationRole::Destination; // Secondary!
+        micant::sr::StorageReplicaPartnership secPart(secCfg);
+
+        TEST_ASSERT(secPart.isWriteProtected(), "Destination role is write-protected");
+        bool directWriteAttempt = secPart.writeBlock(0, "Illegal write", 13);
+        TEST_ASSERT(!directWriteAttempt, "Direct write to Destination volume must be rejected (STATUS_MEDIA_WRITE_PROTECTED)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Asynchronous Replication Mode (Low RPO) & Staged Log Queueing
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::sr::StorageReplicaSubsystem::get();
+        auto part = sys.getPartnership("SR-PAR-WAN-02");
+        TEST_ASSERT(part != nullptr, "SR-PAR-WAN-02 WAN partnership must exist");
+        TEST_ASSERT(part->getMode() == micant::sr::ReplicationMode::Asynchronous, "Mode is Asynchronous");
+
+        const std::string wanData = "MicaNT Low-RPO Asynchronous Staged WAN Payload v10.0";
+        uint64_t asyncWritesBefore = part->getTelemetry().asyncWrites;
+
+        // 1. Asynchronous Write queues into staging buffer
+        bool writeOk = part->writeBlock(4096, wanData.data(), wanData.size());
+        TEST_ASSERT(writeOk, "Asynchronous write succeeds immediately");
+        TEST_ASSERT(part->getTelemetry().asyncWrites == asyncWritesBefore + 1, "Async write counter incremented");
+        TEST_ASSERT(part->getAsyncQueueDepth() >= 1, "Async staging queue depth reflects pending record");
+
+        // 2. Asynchronous Batch Flush
+        size_t flushed = part->flushAsyncLog();
+        TEST_ASSERT(flushed >= 1, "Async log flush replays records to destination");
+        TEST_ASSERT(part->getAsyncQueueDepth() == 0, "Async staging queue drained to 0");
+
+        // Verify destination received replayed block
+        std::vector<char> wanSecBuf(wanData.size() + 1, 0);
+        bool readOk = part->readBlock(4096, wanSecBuf.data(), wanData.size(), true);
+        TEST_ASSERT(readOk, "Read replayed block from destination succeeds");
+        TEST_ASSERT(std::string_view(wanSecBuf.data(), wanData.size()) == wanData, "Destination data matches replayed payload");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Dirty Block Bitmap Tracking & Delta Resynchronization
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::sr::StorageReplicaSubsystem::get();
+        auto part = sys.getPartnership("SR-PAR-METRO-01");
+
+        // 1. Simulate Network Partition / Drop
+        part->injectNetworkFailure();
+        TEST_ASSERT(part->getState() == micant::sr::ReplicationState::Degraded, "Partnership enters Degraded state upon network dropout");
+
+        // 2. Application writes continue on local primary during partition
+        const std::string offlineData = "Offline write payload while WAN link is severed";
+        uint32_t dirtyBefore = part->getDirtyBlockCount();
+        bool localWriteOk = part->writeBlock(65536, offlineData.data(), offlineData.size());
+        TEST_ASSERT(localWriteOk, "Local write succeeds during network partition");
+        TEST_ASSERT(part->getDirtyBlockCount() > dirtyBefore, "Dirty block tracking bitmap records changed blocks");
+
+        // 3. Network Link Restored
+        part->restoreNetwork();
+        TEST_ASSERT(part->getDirtyBlockCount() > 0, "Dirty blocks retained until delta sync");
+
+        // 4. Delta Resynchronization
+        uint32_t synced = part->performDeltaSync();
+        TEST_ASSERT(synced >= 1, "Delta resync replicates dirty blocks");
+        TEST_ASSERT(part->getDirtyBlockCount() == 0, "Dirty block count drops to 0 after sync");
+        TEST_ASSERT(part->getState() == micant::sr::ReplicationState::ContinuouslyReplicating, "State returns to ContinuouslyReplicating");
+
+        // Verify secondary received delta updates
+        std::vector<char> deltaBuf(offlineData.size() + 1, 0);
+        part->readBlock(65536, deltaBuf.data(), offlineData.size(), true);
+        TEST_ASSERT(std::string_view(deltaBuf.data(), offlineData.size()) == offlineData, "Secondary has recovered dirty extent data");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Dynamic Failover & Direction Reversal
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::sr::StorageReplicaSubsystem::get();
+        auto part = sys.getPartnership("SR-PAR-METRO-01");
+
+        uint32_t epochBefore = part->getEpoch();
+        auto originalRole = part->getRole();
+        std::string origSrcServer = part->getConfig().sourceServer;
+        std::string origDstServer = part->getConfig().destinationServer;
+
+        // 1. Execute Graceful Direction Reversal (Planned Failover)
+        bool revOk = part->reverseDirection(micant::sr::FailoverType::Graceful);
+        TEST_ASSERT(revOk, "Graceful direction reversal succeeds");
+        TEST_ASSERT(part->getEpoch() == epochBefore + 1, "Epoch incremented upon failover");
+        TEST_ASSERT(part->getRole() != originalRole, "Node role inverted");
+        TEST_ASSERT(part->getRole() == micant::sr::ReplicationRole::Destination, "Original Source becomes Destination");
+        TEST_ASSERT(part->getConfig().sourceServer == origDstServer, "Source server updated to former destination");
+        TEST_ASSERT(part->getConfig().destinationServer == origSrcServer, "Destination server updated to former source");
+
+        // 2. Enforce write-lock on demoted primary
+        TEST_ASSERT(part->isWriteProtected(), "Demoted node is now write-protected");
+        bool demotedWrite = part->writeBlock(0, "Invalid write to demoted node", 28);
+        TEST_ASSERT(!demotedWrite, "Demoted node rejects writes");
+
+        // 3. Reverse back to restore original cluster topology
+        bool revBackOk = part->reverseDirection(micant::sr::FailoverType::Graceful);
+        TEST_ASSERT(revBackOk, "Failback direction reversal succeeds");
+        TEST_ASSERT(part->getRole() == micant::sr::ReplicationRole::Source, "Restored to Source role");
+        TEST_ASSERT(!part->isWriteProtected(), "Restored node accepts writes");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 srcli.exe CLI, WFP Rule #17501 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::sr::StorageReplicaSubsystem::get();
+        sys.initialize();
+
+        // 1. srcli partnership
+        std::string partOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli partnership", partOut);
+        TEST_ASSERT(partOut.find("PartnershipId") != std::string::npos, "srcli partnership header present");
+        TEST_ASSERT(partOut.find("SR-PAR-METRO-01") != std::string::npos, "srcli lists SR-PAR-METRO-01");
+        TEST_ASSERT(partOut.find("SR-PAR-WAN-02") != std::string::npos, "srcli lists SR-PAR-WAN-02");
+        TEST_ASSERT(partOut.find("Sync") != std::string::npos, "srcli lists Sync mode");
+        TEST_ASSERT(partOut.find("Async") != std::string::npos, "srcli lists Async mode");
+
+        // 2. srcli log
+        std::string logOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli log SR-PAR-METRO-01", logOut);
+        TEST_ASSERT(logOut.find("Storage Replica WAL & Queue Telemetry") != std::string::npos, "srcli log banner");
+        TEST_ASSERT(logOut.find("Current LSN:") != std::string::npos, "srcli log current LSN");
+        TEST_ASSERT(logOut.find("Last Flushed LSN:") != std::string::npos, "srcli log flushed LSN");
+        TEST_ASSERT(logOut.find("Partnership Epoch:") != std::string::npos, "srcli log epoch");
+
+        // 3. srcli create, suspend, resume, remove
+        std::string createOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli create SR-PAR-TEST-03 /source:X: /dest:Y: /mode:sync", createOut);
+        TEST_ASSERT(createOut.find("created successfully") != std::string::npos, "srcli create confirmation");
+
+        std::string suspendOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli suspend SR-PAR-TEST-03", suspendOut);
+        TEST_ASSERT(suspendOut.find("suspended successfully") != std::string::npos, "srcli suspend confirmation");
+
+        std::string resumeOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli resume SR-PAR-TEST-03", resumeOut);
+        TEST_ASSERT(resumeOut.find("resumed successfully") != std::string::npos, "srcli resume confirmation");
+
+        std::string removeOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli remove SR-PAR-TEST-03", removeOut);
+        TEST_ASSERT(removeOut.find("removed successfully") != std::string::npos, "srcli remove confirmation");
+
+        // 4. srcli status
+        std::string statusOut;
+        micant::sr_cmd::um::ExecuteSrCliString("srcli status", statusOut);
+        TEST_ASSERT(statusOut.find("Storage Replica Subsystem Status:") != std::string::npos, "srcli status banner");
+        TEST_ASSERT(statusOut.find("Running (storrepl.sys & srsys.sys)") != std::string::npos, "srcli status driver running");
+        TEST_ASSERT(statusOut.find("Active Partnerships:") != std::string::npos, "srcli status active partnerships");
+        TEST_ASSERT(statusOut.find("Total Bytes Replicated:") != std::string::npos, "srcli status bytes replicated");
+
+        // 5. Remote Executive Console & Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termPart = console.executeTerminalCommand("srcli partnership");
+        TEST_ASSERT(termPart.find("SR-PAR-METRO-01") != std::string::npos, "Web terminal srcli partnership execution");
+
+        std::string termStat = console.executeTerminalCommand("srcli status");
+        TEST_ASSERT(termStat.find("Storage Replica Subsystem Status:") != std::string::npos, "Web terminal srcli status execution");
+
+        // 6. WFP Inbound Rule #17501 (MicaNT_StorageReplica_LogShipping_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto srRuleOpt = wfp.findRuleById(17501);
+        TEST_ASSERT(srRuleOpt.has_value(), "WFP Rule #17501 for Storage Replica must be registered");
+        TEST_ASSERT(srRuleOpt->protocol == tcpip::IPPROTO_TCP, "Storage Replica protocol must be TCP");
+        TEST_ASSERT(srRuleOpt->localPortStart == 5447 && srRuleOpt->localPortEnd == 5447, "Storage Replica port 5447");
+        TEST_ASSERT(srRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Storage Replica rule action must be PERMIT");
+
+        // 7. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"sr_partnerships_active\":") != std::string::npos, "Telemetry sr_partnerships_active");
+        TEST_ASSERT(teleJson.find("\"sr_bytes_replicated\":") != std::string::npos, "Telemetry sr_bytes_replicated");
+        TEST_ASSERT(teleJson.find("\"sr_sync_writes\":") != std::string::npos, "Telemetry sr_sync_writes");
+        TEST_ASSERT(teleJson.find("\"sr_async_writes\":") != std::string::npos, "Telemetry sr_async_writes");
+        TEST_ASSERT(teleJson.find("\"sr_dirty_blocks_total\":") != std::string::npos, "Telemetry sr_dirty_blocks_total");
+        TEST_ASSERT(teleJson.find("\"sr_avg_latency_us\":") != std::string::npos, "Telemetry sr_avg_latency_us");
+    }
+
+    std::cout << "[HORIZON 175] Sovereign Windows Server Storage Replica (SR) Summary:\n"
+              << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
+              << "    Pillar 2: Write-Ahead Logging (WAL) Architecture & Log Rings OK\n"
+              << "    Pillar 3: Synchronous Mode (Zero RPO) & Secondary Write-Lock OK\n"
+              << "    Pillar 4: Asynchronous Mode (Low RPO) & Staged Log Queueing OK\n"
+              << "    Pillar 5: Dirty Block Bitmap Tracking & Delta Resynchronization OK\n"
+              << "    Pillar 6: Dynamic Failover & Direction Reversal OK\n"
+              << "    Pillar 7: Canonical Win32 srcli.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 391: Horizon 175 - Sovereign Windows Server Storage Replica (SR) PASSED." << std::endl;
+}
