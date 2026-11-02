@@ -37928,3 +37928,196 @@ void Test_Horizon191_ShaderCache_PipelineState_And_DxCacheCLI() {
 
     std::cout << "[TEST] Suite 407: Horizon 191 - Sovereign Graphics Pipeline State & Shader Cache Acceleration PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 408: Horizon 192 - Sovereign High-Throughput Direct Storage & GPU Decompression Subsystem
+// ============================================================================
+void Test_Horizon192_DirectStorage_GpuDecompression_And_DStorageCLI() {
+    std::cout << "\n[TEST] Running Suite 408: Horizon 192 - Sovereign High-Throughput Direct Storage & GPU Decompression Subsystem..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::direct_storage_mgr::RegisterDirectStorageSubsystem();
+
+        // 1. SCM Services Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto drv = scm.getServiceRecord(L"BypassIoDriver");
+        TEST_ASSERT(drv != nullptr, "BypassIoDriver record exists in SCM");
+        TEST_ASSERT(drv->serviceType == scm::SERVICE_KERNEL_DRIVER, "BypassIoDriver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drv->startType == scm::SERVICE_BOOT_START, "BypassIoDriver is SERVICE_BOOT_START");
+        TEST_ASSERT(drv->status.dwCurrentState == scm::SERVICE_RUNNING, "BypassIoDriver is SERVICE_RUNNING");
+
+        auto svc = scm.getServiceRecord(L"DirectStorageSvc");
+        TEST_ASSERT(svc != nullptr, "DirectStorageSvc service record exists in SCM");
+        TEST_ASSERT(svc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "DirectStorageSvc is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svc->startType == scm::SERVICE_AUTO_START, "DirectStorageSvc is SERVICE_AUTO_START");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "DirectStorageSvc is SERVICE_RUNNING");
+
+        // 2. VersionDatabase PE Module Registration (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "bstore.sys", "dstoragesvc.exe", "dstorage.dll", "dstoragecore.dll", "dstoragecli.exe", "gdeflatedrv.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: High-Throughput Storage Queues Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::direct_storage_mgr::DirectStorageSubsystemManager::get();
+        auto queues = mgr.getQueues();
+        TEST_ASSERT(queues.size() >= 3, "At least 3 seeded queues active");
+        TEST_ASSERT(queues[0].queueType == micant::direct_storage_mgr::StorageQueueType::MemoryQueue, "Queue 1 is MemoryQueue");
+        TEST_ASSERT(queues[1].queueType == micant::direct_storage_mgr::StorageQueueType::FileQueue, "Queue 2 is FileQueue");
+        TEST_ASSERT(queues[2].queueType == micant::direct_storage_mgr::StorageQueueType::GpuDecompressionQueue, "Queue 3 is GpuDecompressionQueue");
+        TEST_ASSERT(queues[1].bandwidthMBps == 14850, "File queue bandwidth 14,850 MB/s");
+
+        uint32_t newQid = mgr.createQueue(micant::direct_storage_mgr::StorageQueueType::FileQueue, 1024, "cod.exe");
+        TEST_ASSERT(newQid > 3, "New queue created with incremental ID");
+        TEST_ASSERT(mgr.getQueues().size() >= 4, "Active queue count updated");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: GDeflate Hardware & Compute Shader GPU Decompression
+    // ------------------------------------------------------------------------
+    {
+        std::vector<uint8_t> rawAsset(32768);
+        for (size_t i = 0; i < rawAsset.size(); ++i) {
+            rawAsset[i] = static_cast<uint8_t>((i * 17 + 1) & 0xFF);
+        }
+
+        auto compAsset = micant::direct_storage_mgr::DirectStorageSubsystemManager::compressBlock(rawAsset.data(), 32768);
+        TEST_ASSERT(!compAsset.empty(), "compressBlock produced payload");
+
+        std::vector<uint8_t> outDecomp(32768, 0);
+        bool ok = micant::direct_storage_mgr::DirectStorageSubsystemManager::decompressBlock(
+            compAsset.data(), static_cast<uint32_t>(compAsset.size()), outDecomp.data(), 32768, 32768
+        );
+        TEST_ASSERT(ok, "decompressBlock succeeded");
+        TEST_ASSERT(std::equal(rawAsset.begin(), rawAsset.end(), outDecomp.begin()), "Lossless roundtrip bit-perfect match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NVMe-to-VRAM Streaming Benchmark Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::direct_storage_mgr::DirectStorageSubsystemManager::get();
+        std::string benchOutput;
+        bool bOk = mgr.executeStreamingBenchmark(512, benchOutput);
+        TEST_ASSERT(bOk, "Streaming benchmark completed");
+        TEST_ASSERT(benchOutput.find("NVMe Gen4x4 -> PCIe BAR1 Direct DMA -> GPU VRAM") != std::string::npos, "Direct DMA path verified");
+        TEST_ASSERT(benchOutput.find("14,850 MB/s") != std::string::npos, "Benchmark shows 14,850 MB/s");
+        TEST_ASSERT(benchOutput.find("SATISFIED") != std::string::npos, "Benchmark verdict SATISFIED");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Decompression Mode Negotiation & Fallback
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::direct_storage_mgr::DirectStorageSubsystemManager::get();
+        mgr.setDecompressionMode(false);
+        TEST_ASSERT(!mgr.isGpuDecompressionEnabled(), "Decompression mode set to CPU fallback");
+        TEST_ASSERT(mgr.getVitals().totalCpuCyclesSavedPct == 12, "CPU mode reports 12% cycle savings");
+
+        mgr.setDecompressionMode(true);
+        TEST_ASSERT(mgr.isGpuDecompressionEnabled(), "Decompression mode set to GPU Compute");
+        TEST_ASSERT(mgr.getVitals().totalCpuCyclesSavedPct == 94, "GPU mode reports 94% cycle savings");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports (dstorage.dll & dstoragecore.dll)
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(DStorageGetActiveQueuesCount() >= 3, "C ABI DStorageGetActiveQueuesCount >= 3");
+        TEST_ASSERT(DStorageGetReadThroughputMBps() == 14850, "C ABI DStorageGetReadThroughputMBps == 14850");
+        TEST_ASSERT(DStorageGetGpuDecompressedBytes() > 0, "C ABI DStorageGetGpuDecompressedBytes > 0");
+
+        std::vector<uint8_t> inRaw(4096, 0x5A);
+        auto inComp = micant::direct_storage_mgr::DirectStorageSubsystemManager::compressBlock(inRaw.data(), 4096);
+        std::vector<uint8_t> outRestored(4096, 0);
+
+        int32_t procRes = DStorageProcessIoBlock(2, inComp.data(), static_cast<uint32_t>(inComp.size()), outRestored.data(), 4096);
+        TEST_ASSERT(procRes == 0, "C ABI DStorageProcessIoBlock succeeded");
+        TEST_ASSERT(std::equal(inRaw.begin(), inRaw.end(), outRestored.begin()), "C ABI decompressed buffer matches original");
+
+        DStorageSetGpuMode(1);
+        TEST_ASSERT(micant::direct_storage_mgr::DirectStorageSubsystemManager::get().isGpuDecompressionEnabled(), "C ABI DStorageSetGpuMode succeeded");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (dstorage/dstoragecli), WFP Rule #19201 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI dstorage status
+        std::string out;
+        micant::dstorage_cmd::um::ExecuteDirectStorageString("dstorage status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign High-Throughput Direct Storage Subsystem") != std::string::npos, "CLI dstorage status title");
+        TEST_ASSERT(out.find("14850 MB/s") != std::string::npos, "CLI dstorage status throughput");
+        TEST_ASSERT(out.find("BypassIoDriver") != std::string::npos, "CLI dstorage driver name");
+
+        // 2. Canonical CLI dstorage queues
+        out.clear();
+        micant::dstorage_cmd::um::ExecuteDirectStorageString("dstorage queues", out);
+        TEST_ASSERT(out.find("Memory Staging Queue") != std::string::npos, "CLI dstorage queues memory");
+        TEST_ASSERT(out.find("NVMe Direct File Queue") != std::string::npos, "CLI dstorage queues file");
+        TEST_ASSERT(out.find("GPU Compute Decompression Queue") != std::string::npos, "CLI dstorage queues compute");
+
+        // 3. Canonical CLI dstorage benchmark
+        out.clear();
+        micant::dstorage_cmd::um::ExecuteDirectStorageString("dstorage benchmark 256", out);
+        TEST_ASSERT(out.find("DirectStorage NVMe-to-VRAM Streaming Benchmark") != std::string::npos, "CLI dstorage benchmark");
+
+        // 4. Canonical CLI dstorage set-mode
+        out.clear();
+        micant::dstorage_cmd::um::ExecuteDirectStorageString("dstorage set-mode gpu", out);
+        TEST_ASSERT(out.find("GPU Compute Shader (GDeflate)") != std::string::npos, "CLI dstorage set-mode");
+
+        // 5. Canonical CLI dstorage test-io
+        out.clear();
+        micant::dstorage_cmd::um::ExecuteDirectStorageString("dstorage test-io", out);
+        TEST_ASSERT(out.find("Bit-Perfect Match") != std::string::npos, "CLI dstorage test-io");
+
+        // 6. Canonical CLI dstorage dump
+        out.clear();
+        micant::dstorage_cmd::um::ExecuteDirectStorageString("dstorage dump", out);
+        TEST_ASSERT(out.find("NtfsDisableBypassIO") != std::string::npos, "CLI dstorage dump registry key");
+
+        // 7. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("dstorage status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign High-Throughput Direct Storage Subsystem") != std::string::npos, "Console terminal dstorage status");
+
+        // 8. WFP Inbound Rule #19201 (MicaNT_DirectStorage_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto dstorageRuleOpt = wfp.findRuleById(19201);
+        TEST_ASSERT(dstorageRuleOpt.has_value(), "WFP Rule #19201 for DirectStorage must be registered");
+        TEST_ASSERT(dstorageRuleOpt->protocol == tcpip::IPPROTO_TCP, "DirectStorage protocol is TCP");
+        TEST_ASSERT(dstorageRuleOpt->localPortStart == 5070 && dstorageRuleOpt->localPortEnd == 5070, "Port 5070");
+        TEST_ASSERT(dstorageRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"dstorage_active_queues\":") != std::string::npos, "Telemetry dstorage_active_queues");
+        TEST_ASSERT(teleJson.find("\"dstorage_read_throughput_mb\":") != std::string::npos, "Telemetry dstorage_read_throughput_mb");
+        TEST_ASSERT(teleJson.find("\"dstorage_gpu_decompressed_bytes\":") != std::string::npos, "Telemetry dstorage_gpu_decompressed_bytes");
+        TEST_ASSERT(teleJson.find("\"dstorage_cpu_cycles_saved_pct\":") != std::string::npos, "Telemetry dstorage_cpu_cycles_saved_pct");
+    }
+
+    std::cout << "[HORIZON 192] Sovereign High-Throughput Direct Storage & GPU Decompression Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: High-Throughput Storage Queues Lifecycle OK\n"
+              << "    Pillar 3: GDeflate Hardware & Compute Shader GPU Decompression OK\n"
+              << "    Pillar 4: NVMe-to-VRAM Streaming Benchmark Engine OK\n"
+              << "    Pillar 5: Decompression Mode Negotiation & Fallback OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 dstorage CLI, WFP Rule #19201 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 408: Horizon 192 - Sovereign High-Throughput Direct Storage & GPU Decompression PASSED." << std::endl;
+}

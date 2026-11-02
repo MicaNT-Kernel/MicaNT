@@ -96,6 +96,8 @@
 #include "micant/um/subsystems/mgmt/memcomp_cmd.hpp"
 #include "micant/km/drivers/video/shader_cache.hpp"
 #include "micant/um/subsystems/mgmt/dxcache_cmd.hpp"
+#include "micant/km/drivers/storage/directstorage_subsystem.hpp"
+#include "micant/um/subsystems/mgmt/dstorage_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -547,6 +549,19 @@ public:
         dxCacheRule.weight = 1500;
         dxCacheRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(dxCacheRule);
+
+        // 35. Register WFP Inbound Rule for High-Throughput DirectStorage Telemetry (TCP 5070)
+        wfp::km::WfpKernelFilterRule dstorageRule{};
+        dstorageRule.filterId = 19201;
+        dstorageRule.name = "MicaNT_DirectStorage_Permit";
+        dstorageRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        dstorageRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        dstorageRule.protocol = tcpip::IPPROTO_TCP;
+        dstorageRule.localPortStart = 5070;
+        dstorageRule.localPortEnd = 5070;
+        dstorageRule.weight = 1500;
+        dstorageRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(dstorageRule);
     }
 
     void stopHttpsServer() {
@@ -1012,6 +1027,10 @@ public:
             std::string res;
             dxcache_cmd::um::ExecuteDxCacheString(cmd, res);
             return res;
+        } else if (cmd == "dstorage" || cmd.starts_with("dstorage ") || cmd == "dstoragecli" || cmd.starts_with("dstoragecli ") || cmd == "directstorage" || cmd.starts_with("directstorage ")) {
+            std::string res;
+            dstorage_cmd::um::ExecuteDirectStorageString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1333,7 +1352,11 @@ public:
            << "\"shader_cache_entries\":" << micant::shader_cache::ShaderCacheManager::get().getStats().totalPsosCached << ","
            << "\"shader_cache_hit_pct\":" << static_cast<uint32_t>(micant::shader_cache::ShaderCacheManager::get().getStats().cacheHitRatio * 100.0f) << ","
            << "\"shader_cache_disk_bytes\":" << micant::shader_cache::ShaderCacheManager::get().getStats().totalCacheBytesDisk << ","
-           << "\"shader_cache_stutters_prevented\":" << micant::shader_cache::ShaderCacheManager::get().getStats().stuttersPrevented << "}\r\n";
+           << "\"shader_cache_stutters_prevented\":" << micant::shader_cache::ShaderCacheManager::get().getStats().stuttersPrevented << ","
+           << "\"dstorage_active_queues\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().activeQueuesCount << ","
+           << "\"dstorage_read_throughput_mb\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalReadThroughputMBps << ","
+           << "\"dstorage_gpu_decompressed_bytes\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalGpuDecompressedBytes << ","
+           << "\"dstorage_cpu_cycles_saved_pct\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalCpuCyclesSavedPct << "}\r\n";
         return ss.str();
     }
 
