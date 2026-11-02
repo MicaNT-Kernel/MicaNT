@@ -441,6 +441,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite401") {
+        RUN_TEST(Test_Horizon185_MultipathIO_DSM_Architecture_And_Mpiocli);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite400") {
         RUN_TEST(Test_Horizon184_RemoteDesktopWebAccess_MS_TSWAP_And_RdwebadminCLI);
         return g_FailedTests;
@@ -1993,6 +1997,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon182_RemoteDesktopGateway_MS_TSGU_And_TsgadminCLI);
     RUN_TEST(Test_Horizon183_RemoteDesktopConnectionBroker_MS_RDPBCGR_And_CbadminCLI);
     RUN_TEST(Test_Horizon184_RemoteDesktopWebAccess_MS_TSWAP_And_RdwebadminCLI);
+    RUN_TEST(Test_Horizon185_MultipathIO_DSM_Architecture_And_Mpiocli);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

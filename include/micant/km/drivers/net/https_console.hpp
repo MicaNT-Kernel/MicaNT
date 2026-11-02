@@ -82,6 +82,8 @@
 #include "micant/um/subsystems/mgmt/rdcb_cmd.hpp"
 #include "micant/um/servers/rdwebaccess.hpp"
 #include "micant/um/subsystems/mgmt/rdweb_cmd.hpp"
+#include "micant/km/drivers/storage/mpio.hpp"
+#include "micant/um/subsystems/mgmt/mpio_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -442,6 +444,19 @@ public:
         rdwebRule.weight = 1500;
         rdwebRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(rdwebRule);
+
+        // 28. Register WFP Inbound Rule for Storage Fabric / iSCSI Multipath Control (TCP 3260)
+        wfp::km::WfpKernelFilterRule mpioRule{};
+        mpioRule.filterId = 18501;
+        mpioRule.name = "MicaNT_MPIO_Permit";
+        mpioRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        mpioRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        mpioRule.protocol = tcpip::IPPROTO_TCP;
+        mpioRule.localPortStart = 3260;
+        mpioRule.localPortEnd = 3260;
+        mpioRule.weight = 1500;
+        mpioRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(mpioRule);
     }
 
     void stopHttpsServer() {
@@ -879,6 +894,10 @@ public:
             std::string res;
             rdweb_cmd::um::ExecuteRdwebString(cmd, res);
             return res;
+        } else if (cmd == "mpio" || cmd.starts_with("mpio ") || cmd == "mpiocli" || cmd.starts_with("mpiocli ")) {
+            std::string res;
+            mpio_cmd::um::ExecuteMpioString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1170,7 +1189,13 @@ public:
            << "\"rdweb_published_apps\":" << micant::rdweb::RdWebAccessManager::get().getPublishedResourceCount() << ","
            << "\"rdweb_feed_requests\":" << micant::rdweb::RdWebAccessManager::get().getTotalFeedRequests() << ","
            << "\"rdweb_webclients_active\":" << micant::rdweb::RdWebAccessManager::get().getTotalWebClientLaunches() << ","
-           << "\"rdweb_signed_rdp_issued\":" << micant::rdweb::RdWebAccessManager::get().getTotalSignedRdpFilesIssued() << "}\r\n";
+           << "\"rdweb_signed_rdp_issued\":" << micant::rdweb::RdWebAccessManager::get().getTotalSignedRdpFilesIssued() << ","
+           << "\"mpio_claimed_disks\":" << micant::mpio::MpioManager::get().getDeviceCount() << ","
+           << "\"mpio_total_paths\":" << micant::mpio::MpioManager::get().getVitals().totalPathsCount << ","
+           << "\"mpio_active_paths\":" << micant::mpio::MpioManager::get().getVitals().activePathsCount << ","
+           << "\"mpio_failed_paths\":" << micant::mpio::MpioManager::get().getVitals().failedPathsCount << ","
+           << "\"mpio_io_dispatched\":" << micant::mpio::MpioManager::get().getVitals().totalIosDispatched << ","
+           << "\"mpio_failover_events\":" << micant::mpio::MpioManager::get().getVitals().totalFailoverEvents << "}\r\n";
         return ss.str();
     }
 

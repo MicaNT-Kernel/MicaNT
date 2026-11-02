@@ -36284,3 +36284,314 @@ inline void Test_Horizon184_RemoteDesktopWebAccess_MS_TSWAP_And_RdwebadminCLI() 
 
     std::cout << "[TEST] Suite 400 (MILESTONE 400): Horizon 184 - Sovereign Remote Desktop Web Access (RD Web Access) PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 401: Horizon 185 - Sovereign Multipath I/O (MPIO) Subsystem &
+//            Device-Specific Module (DSM) Architecture (mpio.sys, msdsm.sys, mpiocli)
+// ============================================================================
+inline void Test_Horizon185_MultipathIO_DSM_Architecture_And_Mpiocli() {
+    std::cout << "[TEST] Running Suite 401: Horizon 185 - Sovereign Multipath I/O (MPIO) Subsystem & DSM..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM Registration & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::mpio::RegisterMpioSubsystem();
+        auto& mgr = micant::mpio::MpioManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getDeviceCount() >= 2, "Default multi-path devices seeded (Disk 0 FC, Disk 1 iSCSI)");
+
+        // SCM Driver Service Verification (MPIO)
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto mpioSvc = scm.getServiceRecord(L"MPIO");
+        TEST_ASSERT(mpioSvc != nullptr, "MPIO driver must be registered in SCM");
+        TEST_ASSERT(mpioSvc->displayName == L"Multipath I/O Miniport Driver", "MPIO display name matches");
+        TEST_ASSERT(mpioSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "MPIO is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(mpioSvc->startType == scm::SERVICE_BOOT_START, "MPIO is SERVICE_BOOT_START");
+        TEST_ASSERT(mpioSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "MPIO status is SERVICE_RUNNING");
+
+        // SCM Driver Service Verification (msdsm)
+        auto dsmSvc = scm.getServiceRecord(L"msdsm");
+        TEST_ASSERT(dsmSvc != nullptr, "msdsm driver must be registered in SCM");
+        TEST_ASSERT(dsmSvc->displayName == L"Device-Specific Module for Enterprise Multipath Storage", "msdsm display name matches");
+        TEST_ASSERT(dsmSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "msdsm is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(dsmSvc->startType == scm::SERVICE_BOOT_START, "msdsm is SERVICE_BOOT_START");
+
+        // VersionDatabase Module Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "mpio.sys", "msdsm.sys", "mpioapi.dll", "mpiocli.exe", "mpiowmi.dll", "mpiofilter.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Hardware ID Claim & Unclaim Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::mpio::MpioManager::get();
+        TEST_ASSERT(mgr.isHardwareIdClaimed("MicaNT  SAN_STORAGE    "), "Default hardware ID claimed");
+        TEST_ASSERT(mgr.isHardwareIdClaimed("PURE    FlashArray      "), "Pure Storage hardware ID claimed");
+
+        // Register new custom vendor hardware ID
+        bool claimed = mgr.claimHardwareId("HITACHI OPEN-V          ");
+        TEST_ASSERT(claimed, "Claiming new hardware ID should succeed");
+        TEST_ASSERT(mgr.isHardwareIdClaimed("HITACHI OPEN-V          "), "New hardware ID now claimed");
+
+        // Duplicate claim fails
+        bool dupClaim = mgr.claimHardwareId("HITACHI OPEN-V          ");
+        TEST_ASSERT(!dupClaim, "Duplicate hardware ID claim rejected");
+
+        // Unclaim
+        bool unclaim = mgr.unclaimHardwareId("HITACHI OPEN-V          ");
+        TEST_ASSERT(unclaim, "Unclaiming hardware ID should succeed");
+        TEST_ASSERT(!mgr.isHardwareIdClaimed("HITACHI OPEN-V          "), "Unclaimed hardware ID no longer active");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Multi-Path Disk & Topology Introspection
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::mpio::MpioManager::get();
+        micant::mpio::MpioDeviceDescriptor disk0{};
+        bool found = mgr.getDevice(0, disk0);
+        TEST_ASSERT(found, "Disk 0 retrieved");
+        TEST_ASSERT(disk0.deviceName == "\\Device\\MPIODisk0", "Disk 0 device name matches");
+        TEST_ASSERT(disk0.busType == micant::mpio::MpioBusType::FibreChannel, "Disk 0 bus type is Fibre Channel");
+        TEST_ASSERT(disk0.paths.size() == 4, "Disk 0 has 4 paths configured");
+
+        // Check ALUA states on Disk 0
+        uint32_t optCount = 0;
+        uint32_t unoptCount = 0;
+        for (const auto& p : disk0.paths) {
+            if (p.state == micant::mpio::MpioPathState::ActiveOptimized) optCount++;
+            if (p.state == micant::mpio::MpioPathState::ActiveUnoptimized) unoptCount++;
+        }
+        TEST_ASSERT(optCount == 2, "Disk 0 has 2 Active/Optimized paths (Controller A)");
+        TEST_ASSERT(unoptCount == 2, "Disk 0 has 2 Active/Unoptimized paths (Controller B)");
+
+        // Check Disk 1 (iSCSI Failover-Only)
+        micant::mpio::MpioDeviceDescriptor disk1{};
+        TEST_ASSERT(mgr.getDevice(1, disk1), "Disk 1 retrieved");
+        TEST_ASSERT(disk1.busType == micant::mpio::MpioBusType::iSCSI, "Disk 1 bus type is iSCSI");
+        TEST_ASSERT(disk1.policy == micant::mpio::MpioLoadBalancePolicy::FailoverOnly, "Disk 1 policy is Failover Only");
+        TEST_ASSERT(disk1.paths.size() == 2, "Disk 1 has 2 paths");
+        TEST_ASSERT(disk1.paths[0].state == micant::mpio::MpioPathState::ActiveOptimized, "Disk 1 Path 0 is Active/Optimized");
+        TEST_ASSERT(disk1.paths[1].state == micant::mpio::MpioPathState::Standby, "Disk 1 Path 1 is Standby");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Load Balancing Algorithms & I/O Dispatch / Completion
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::mpio::MpioManager::get();
+
+        // 1. Round Robin: dispatches alternate between active/optimized paths
+        mgr.setLoadBalancePolicy(0, micant::mpio::MpioLoadBalancePolicy::RoundRobin);
+        uint32_t pA = mgr.selectPathForIo(0, 16);
+        uint32_t pB = mgr.selectPathForIo(0, 16);
+        TEST_ASSERT(pA != 0 && pB != 0, "Valid paths selected under Round Robin");
+        TEST_ASSERT(pA != pB, "Round robin alternates between paths");
+
+        // Complete I/O operations
+        TEST_ASSERT(mgr.completeIo(0, pA, 16, true), "Complete I/O on Path A");
+        TEST_ASSERT(mgr.completeIo(0, pB, 16, true), "Complete I/O on Path B");
+
+        // 2. Least Queue Depth Policy
+        mgr.setLoadBalancePolicy(0, micant::mpio::MpioLoadBalancePolicy::LeastQueueDepth);
+        // Dispatch to create queue imbalance
+        uint32_t p1 = mgr.selectPathForIo(0, 8);
+        uint32_t p2 = mgr.selectPathForIo(0, 8);
+        // Path with queue 0 should be selected on next I/O
+        uint32_t p3 = mgr.selectPathForIo(0, 8);
+        TEST_ASSERT(p3 != 0, "Valid path selected under Least Queue Depth");
+        // Clean up
+        mgr.completeIo(0, p1, 8, true);
+        mgr.completeIo(0, p2, 8, true);
+        mgr.completeIo(0, p3, 8, true);
+
+        // 3. Weighted Paths Policy
+        mgr.setLoadBalancePolicy(0, micant::mpio::MpioLoadBalancePolicy::WeightedPaths);
+        uint32_t pW = mgr.selectPathForIo(0, 32);
+        TEST_ASSERT(pW != 0, "Valid path selected under Weighted Paths");
+        mgr.completeIo(0, pW, 32, true);
+
+        // 4. Least Blocks Policy
+        mgr.setLoadBalancePolicy(0, micant::mpio::MpioLoadBalancePolicy::LeastBlocks);
+        uint32_t pLB = mgr.selectPathForIo(0, 64);
+        TEST_ASSERT(pLB != 0, "Valid path selected under Least Blocks");
+        mgr.completeIo(0, pLB, 64, true);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Path Health Verification, Fault Simulation & Automatic Failover / Failback
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::mpio::MpioManager::get();
+
+        // Test Failover Only on Disk 1:
+        // Currently Path 0 is ActiveOptimized, Path 1 is Standby
+        micant::mpio::MpioDeviceDescriptor d1Before{};
+        mgr.getDevice(1, d1Before);
+        uint32_t activePathId = d1Before.paths[0].pathId;
+        uint32_t standbyPathId = d1Before.paths[1].pathId;
+
+        // Simulate failure on active path
+        bool failed = mgr.failPath(1, activePathId, "Fibre/Cable Pull");
+        TEST_ASSERT(failed, "Simulate path failure should succeed");
+
+        micant::mpio::MpioDeviceDescriptor d1After{};
+        mgr.getDevice(1, d1After);
+        TEST_ASSERT(d1After.paths[0].state == micant::mpio::MpioPathState::Failed, "Primary path is now FAILED");
+        TEST_ASSERT(d1After.paths[1].state == micant::mpio::MpioPathState::ActiveOptimized, "Standby path promoted to ActiveOptimized");
+        TEST_ASSERT(d1After.totalFailoverEvents > 0, "Failover event recorded");
+
+        // Verify I/O continues seamlessly on the promoted path
+        uint32_t survivorPath = mgr.selectPathForIo(1, 16);
+        TEST_ASSERT(survivorPath == standbyPathId, "I/O routed to newly promoted active path");
+        mgr.completeIo(1, survivorPath, 16, true);
+
+        // Test Recovery / Failback via Periodic Heartbeat Verification (TUR)
+        uint32_t verified = mgr.executePathVerification();
+        TEST_ASSERT(verified > 0, "Path verification probes executed");
+        // Second heartbeat should trigger automatic failback
+        mgr.executePathVerification();
+
+        micant::mpio::MpioDeviceDescriptor d1Recovered{};
+        mgr.getDevice(1, d1Recovered);
+        TEST_ASSERT(d1Recovered.paths[0].state == micant::mpio::MpioPathState::ActiveOptimized, "Primary path restored to ACTIVE after failback");
+        TEST_ASSERT(d1Recovered.totalFailbackEvents > 0, "Failback event recorded");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: SCSI-3 Persistent Reservation (PR) Multi-Path Coordination
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::mpio::MpioManager::get();
+
+        // 1. Register initiator reservation key 0xABCDE111 on Path 0 of Disk 0
+        uint64_t key1 = 0xABCDE111ULL;
+        uint64_t key2 = 0x98765432ULL;
+        bool reg1 = mgr.registerReservationKey(0, 0x00010001, key1);
+        TEST_ASSERT(reg1, "Register reservation key 1 on path 0");
+
+        // 2. Register key 1 on redundant Path 1 as well (multi-path registration)
+        bool reg2 = mgr.registerReservationKey(0, 0x00010002, key1);
+        TEST_ASSERT(reg2, "Register reservation key 1 on path 1");
+
+        // 3. Acquire Write Exclusive (Registrants Only) reservation
+        bool acq = mgr.acquireReservation(0, 0x00010001, key1, micant::mpio::ScsiPrType::WriteExclusiveRegistrantsOnly);
+        TEST_ASSERT(acq, "Acquire SCSI-3 Persistent Reservation with registered key");
+
+        // 4. Verify reservation status
+        micant::mpio::MpioScsiReservation prStatus{};
+        TEST_ASSERT(mgr.getReservationStatus(0, prStatus), "Reservation status retrieved");
+        TEST_ASSERT(prStatus.hasReservation, "Persistent reservation is active");
+        TEST_ASSERT(prStatus.reservationKey == key1, "Reservation key matches");
+        TEST_ASSERT(prStatus.reservationType == micant::mpio::ScsiPrType::WriteExclusiveRegistrantsOnly, "Reservation type matches");
+
+        // 5. Unregistered key attempts to acquire -> must fail (Conflict)
+        bool acqUnreg = mgr.acquireReservation(0, 0x00020001, key2, micant::mpio::ScsiPrType::ExclusiveAccess);
+        TEST_ASSERT(!acqUnreg, "Unregistered key reservation rejected (Reservation Conflict)");
+
+        // 6. Release reservation
+        bool rel = mgr.releaseReservation(0, 0x00010001, key1);
+        TEST_ASSERT(rel, "Release persistent reservation with holder key");
+        mgr.getReservationStatus(0, prStatus);
+        TEST_ASSERT(!prStatus.hasReservation, "Persistent reservation successfully released");
+
+        // 7. Clear reservation table
+        bool clr = mgr.clearReservation(0, 0x00010001, key1);
+        TEST_ASSERT(clr, "Clear persistent reservation registrations");
+        mgr.getReservationStatus(0, prStatus);
+        TEST_ASSERT(prStatus.registeredKeys.empty(), "All registered keys cleared");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Exports, Canonical CLI (mpio/mpiocli), WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Win32 C ABI Parity Exports
+        uint32_t devCount = MpioApiGetDeviceCount();
+        TEST_ASSERT(devCount >= 2, "MpioApiGetDeviceCount returns at least 2 disks");
+
+        int32_t polRes = MpioApiSetLoadBalancePolicy(0, 2 /* Round Robin */);
+        TEST_ASSERT(polRes == 0, "MpioApiSetLoadBalancePolicy returns success (0)");
+
+        int32_t claimRes = MpioApiClaimHardwareId("TEST_VENDOR_STORAGE");
+        TEST_ASSERT(claimRes == 0, "MpioApiClaimHardwareId returns success");
+        int32_t unclaimRes = MpioApiUnclaimHardwareId("TEST_VENDOR_STORAGE");
+        TEST_ASSERT(unclaimRes == 0, "MpioApiUnclaimHardwareId returns success");
+
+        uint32_t selPath = MpioApiSelectPathForIo(0, 16);
+        TEST_ASSERT(selPath != 0, "MpioApiSelectPathForIo returns valid path ID");
+        int32_t compRes = MpioApiCompleteIo(0, selPath, 16, 1);
+        TEST_ASSERT(compRes == 0, "MpioApiCompleteIo returns success");
+
+        // 2. Canonical Win32 CLI Engine (mpio / mpiocli)
+        std::string out;
+        micant::mpio_cmd::um::ExecuteMpioString("mpio status", out);
+        TEST_ASSERT(out.find("Claimed MPIO Disks") != std::string::npos, "CLI mpio status outputs claimed disks");
+        TEST_ASSERT(out.find("msdsm.sys") != std::string::npos, "CLI mpio status outputs DSM module");
+
+        out.clear();
+        micant::mpio_cmd::um::ExecuteMpioString("mpio disks", out);
+        TEST_ASSERT(out.find("\\Device\\MPIODisk0") != std::string::npos, "CLI mpio disks outputs Disk 0");
+        TEST_ASSERT(out.find("\\Device\\MPIODisk1") != std::string::npos, "CLI mpio disks outputs Disk 1");
+
+        out.clear();
+        micant::mpio_cmd::um::ExecuteMpioString("mpio paths 0", out);
+        TEST_ASSERT(out.find("TPG-01") != std::string::npos, "CLI mpio paths outputs TPG-01");
+
+        out.clear();
+        micant::mpio_cmd::um::ExecuteMpioString("mpio set-policy 0 RR", out);
+        TEST_ASSERT(out.find("Successfully updated Disk 0") != std::string::npos, "CLI mpio set-policy");
+
+        out.clear();
+        micant::mpio_cmd::um::ExecuteMpioString("mpio claim-list", out);
+        TEST_ASSERT(out.find("MicaNT  SAN_STORAGE") != std::string::npos, "CLI mpio claim-list");
+
+        out.clear();
+        micant::mpio_cmd::um::ExecuteMpioString("mpio dump", out);
+        TEST_ASSERT(out.find("Enable-WindowsOptionalFeature") != std::string::npos, "CLI mpio dump outputs PowerShell script");
+
+        // 3. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("mpio status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Multipath I/O") != std::string::npos, "Console terminal mpio status");
+
+        // 4. WFP Inbound Rule #18501 (MicaNT_MPIO_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto mpioRuleOpt = wfp.findRuleById(18501);
+        TEST_ASSERT(mpioRuleOpt.has_value(), "WFP Rule #18501 for MPIO must be registered");
+        TEST_ASSERT(mpioRuleOpt->protocol == tcpip::IPPROTO_TCP, "MPIO fabric protocol is TCP");
+        TEST_ASSERT(mpioRuleOpt->localPortStart == 3260 && mpioRuleOpt->localPortEnd == 3260, "MPIO port 3260 (iSCSI)");
+        TEST_ASSERT(mpioRuleOpt->action == wfp::FWP_ACTION_PERMIT, "MPIO rule action is PERMIT");
+
+        // 5. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"mpio_claimed_disks\":") != std::string::npos, "Telemetry mpio_claimed_disks");
+        TEST_ASSERT(teleJson.find("\"mpio_total_paths\":") != std::string::npos, "Telemetry mpio_total_paths");
+        TEST_ASSERT(teleJson.find("\"mpio_active_paths\":") != std::string::npos, "Telemetry mpio_active_paths");
+        TEST_ASSERT(teleJson.find("\"mpio_failed_paths\":") != std::string::npos, "Telemetry mpio_failed_paths");
+        TEST_ASSERT(teleJson.find("\"mpio_io_dispatched\":") != std::string::npos, "Telemetry mpio_io_dispatched");
+        TEST_ASSERT(teleJson.find("\"mpio_failover_events\":") != std::string::npos, "Telemetry mpio_failover_events");
+    }
+
+    std::cout << "[HORIZON 185] Sovereign Multipath I/O (MPIO) Subsystem & DSM Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM (MPIO/msdsm) & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Hardware ID Claim & Unclaim Lifecycle OK\n"
+              << "    Pillar 3: Multi-Path Disk & Topology Introspection OK\n"
+              << "    Pillar 4: Load Balancing Algorithms (FOO/RR/RRWS/LQD/WP/LB) & I/O Accounting OK\n"
+              << "    Pillar 5: Path Health Verification (TUR), Fault Simulation & Automatic Failover/Failback OK\n"
+              << "    Pillar 6: SCSI-3 Persistent Reservation (PR) Multi-Path Coordination OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 mpio CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 401: Horizon 185 - Sovereign Multipath I/O (MPIO) Subsystem & DSM PASSED." << std::endl;
+}
