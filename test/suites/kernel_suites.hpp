@@ -35504,3 +35504,276 @@ inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
 
     std::cout << "[TEST] Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing (RD Licensing) PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 398: Horizon 182 - Sovereign Windows Server Remote Desktop Gateway Subsystem (RD Gateway),
+//            MS-TSGU, RD CAPs & RAPs & Canonical tsgadmin CLI
+// ============================================================================
+inline void Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI() {
+    std::cout << "[TEST] Running Suite 398: Horizon 182 - Sovereign Windows Server Remote Desktop Gateway (RD Gateway)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::rdgw::RegisterRdGatewaySubsystem();
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(!mgr.getCaps().empty(), "Default RD CAP initialized");
+        TEST_ASSERT(!mgr.getRaps().empty(), "Default RD RAP initialized");
+
+        // SCM Service Verification
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto gwSvc = scm.getServiceRecord(L"TSGateway");
+        TEST_ASSERT(gwSvc != nullptr, "TSGateway must be registered in SCM");
+        TEST_ASSERT(gwSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TSGateway is running");
+        TEST_ASSERT(gwSvc->startType == micant::scm::SERVICE_AUTO_START, "TSGateway is auto start");
+        TEST_ASSERT(gwSvc->binaryPath == L"C:\\Windows\\System32\\tsgateway.exe", "Binary path matches tsgateway.exe");
+
+        // Version Database Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "tsgateway.exe", "tsgadmin.exe", "tsgqec.dll", "aagauth.dll", "aagdcfg.dll", "rdgw.exe"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Gateway Configuration, SSL Certificate Binding & Server Vitals
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        auto srv = mgr.getServerInfo();
+        TEST_ASSERT(srv.serverName == "MICANT-RDGW-01", "Default server name is MICANT-RDGW-01");
+        TEST_ASSERT(srv.fqdn == "gateway.corp.micant.local", "Default FQDN matches");
+        TEST_ASSERT(srv.listeningPort == 443, "Listening port is 443 (HTTPS)");
+        TEST_ASSERT(srv.sslCertificateConfigured, "SSL Certificate is configured");
+        TEST_ASSERT(!srv.certificateThumbprint.empty(), "Certificate thumbprint is valid");
+        TEST_ASSERT(srv.isRunning, "Gateway is active");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Connection Authorization Policies (RD CAPs) & Multi-Factor Matching
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        // 1. Evaluate default CAP (Domain Users with Password)
+        uint32_t matchedCap = 0;
+        auto res1 = mgr.evaluateCap("Domain Users", micant::rdgw::AuthPassword, matchedCap);
+        TEST_ASSERT(res1 == micant::rdgw::PolicyPermitted, "Default CAP permits Domain Users with Password");
+        TEST_ASSERT(matchedCap == 1, "Matched CAP ID 1");
+
+        // 2. Denied Group
+        auto res2 = mgr.evaluateCap("External Contractors", micant::rdgw::AuthPassword, matchedCap);
+        TEST_ASSERT(res2 == micant::rdgw::PolicyDeniedUserGroup, "Denied group not in CAP");
+
+        // 3. Add Custom CAP requiring SmartCard
+        micant::rdgw::ConnectionAuthPolicy smartCap{};
+        smartCap.name = "Exec-SmartCard-CAP";
+        smartCap.allowedUserGroups = {"Executives"};
+        smartCap.allowedAuthMethods = micant::rdgw::AuthSmartCard;
+        smartCap.idleTimeoutMinutes = 30;
+        uint32_t capId = mgr.addCap(smartCap);
+        TEST_ASSERT(capId >= 2, "Custom CAP assigned valid ID");
+
+        // 4. Test SmartCard enforcement
+        auto res3 = mgr.evaluateCap("Executives", micant::rdgw::AuthPassword, matchedCap);
+        TEST_ASSERT(res3 == micant::rdgw::PolicyDeniedAuthMethod, "Password rejected when SmartCard required");
+
+        auto res4 = mgr.evaluateCap("Executives", micant::rdgw::AuthSmartCard, matchedCap);
+        TEST_ASSERT(res4 == micant::rdgw::PolicyPermitted, "SmartCard permitted for Executives");
+        TEST_ASSERT(matchedCap == capId, "Matched custom CAP ID");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Resource Authorization Policies (RD RAPs) & Wildcard Matching
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        // 1. Evaluate default RAP with wildcard domain matching
+        uint32_t matchedRap = 0;
+        auto res1 = mgr.evaluateRap("Domain Users", "RDSH-01.corp.micant.local", 3389, matchedRap);
+        TEST_ASSERT(res1 == micant::rdgw::PolicyPermitted, "RAP permits target under *.corp.micant.local");
+        TEST_ASSERT(matchedRap == 1, "Matched default RAP ID 1");
+
+        // 2. Evaluate IP subnet wildcard matching
+        auto res2 = mgr.evaluateRap("Domain Users", "10.0.0.45", 3389, matchedRap);
+        TEST_ASSERT(res2 == micant::rdgw::PolicyPermitted, "RAP permits IP matching 10.0.0.*");
+
+        // 3. Denied Target Resource (external)
+        auto res3 = mgr.evaluateRap("Domain Users", "unauthorized.external.com", 3389, matchedRap);
+        TEST_ASSERT(res3 == micant::rdgw::PolicyDeniedTargetResource, "Denied unauthorized external resource");
+
+        // 4. Denied Port
+        auto res4 = mgr.evaluateRap("Domain Users", "RDSH-01.corp.micant.local", 22, matchedRap);
+        TEST_ASSERT(res4 == micant::rdgw::PolicyDeniedPort, "Denied non-RDP port 22");
+
+        // 5. Add Custom RAP with specific host and custom port
+        micant::rdgw::ResourceAuthPolicy dbRap{};
+        dbRap.name = "Custom-DB-RAP";
+        dbRap.allowedUserGroups = {"Database Admins"};
+        dbRap.allowedResources = {"SQL-PROD-01"};
+        dbRap.allowedPorts = {13389};
+        uint32_t dbRapId = mgr.addRap(dbRap);
+        TEST_ASSERT(dbRapId >= 2, "Custom RAP added");
+
+        auto res5 = mgr.evaluateRap("Database Admins", "SQL-PROD-01", 13389, matchedRap);
+        TEST_ASSERT(res5 == micant::rdgw::PolicyPermitted, "Custom RAP allows target and custom port");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: HTTPS Encapsulated RDP Tunnel Lifecycle (Connect, Forward, Disconnect)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        // 1. Create Tunnel
+        uint64_t tunnelId = 0;
+        auto res = mgr.createTunnel("198.51.100.25", "alice", "Domain Users",
+                                    micant::rdgw::AuthPassword, "RDSH-01.corp.micant.local", 3389, tunnelId);
+        TEST_ASSERT(res == micant::rdgw::PolicyPermitted, "Tunnel creation permitted");
+        TEST_ASSERT(tunnelId >= 10001, "Valid tunnel ID generated");
+        TEST_ASSERT(mgr.getActiveTunnelCount() == 1, "Active tunnel count is 1");
+
+        // 2. Data Forwarding / Accounting
+        TEST_ASSERT(mgr.transferData(tunnelId, 4096, 16384), "Data transfer succeeded");
+        TEST_ASSERT(mgr.getTotalBytesTransferred() == 20480, "Total bytes transferred is 20480");
+
+        micant::rdgw::GatewayTunnel t;
+        TEST_ASSERT(mgr.findTunnel(tunnelId, t), "Found tunnel by ID");
+        TEST_ASSERT(t.bytesIn == 4096, "Bytes in matches");
+        TEST_ASSERT(t.bytesOut == 16384, "Bytes out matches");
+        TEST_ASSERT(t.state == micant::rdgw::TunnelConnected, "Tunnel is Connected");
+
+        // 3. Disconnect Tunnel
+        TEST_ASSERT(mgr.closeTunnel(tunnelId), "Tunnel close succeeded");
+        TEST_ASSERT(mgr.getActiveTunnelCount() == 0, "Active tunnel count returned to 0");
+        TEST_ASSERT(mgr.findTunnel(tunnelId, t) && t.state == micant::rdgw::TunnelDisconnected, "Tunnel state is Disconnected");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: High-Concurrency Tunnel Aggregation & Teardown
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        std::vector<uint64_t> activeTunnels;
+        for (int i = 0; i < 10; ++i) {
+            uint64_t tid = 0;
+            std::string user = "user_" + std::to_string(i);
+            std::string ip = "192.168.1." + std::to_string(100 + i);
+            auto res = mgr.createTunnel(ip, user, "Domain Users",
+                                        micant::rdgw::AuthPassword, "RDSH-01.corp.micant.local", 3389, tid);
+            TEST_ASSERT(res == micant::rdgw::PolicyPermitted, "Batch tunnel created");
+            activeTunnels.push_back(tid);
+        }
+
+        TEST_ASSERT(mgr.getActiveTunnelCount() == 10, "10 active tunnels tracked");
+
+        // Close half the tunnels
+        for (int i = 0; i < 5; ++i) {
+            mgr.closeTunnel(activeTunnels[i]);
+        }
+        TEST_ASSERT(mgr.getActiveTunnelCount() == 5, "5 active tunnels remaining after partial teardown");
+
+        // Verify metrics
+        TEST_ASSERT(mgr.getTotalCapEvaluations() >= 10, "CAP evaluations recorded");
+        TEST_ASSERT(mgr.getTotalRapEvaluations() >= 10, "RAP evaluations recorded");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 tsgadmin CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdgw::RdGatewayManager::get();
+        mgr.reset();
+
+        // 1. Win32 C ABI Exports
+        uint64_t abiTunnelId = 0;
+        int32_t crRes = micant::rdgw::TSGCreateTunnel(
+            L"10.1.2.3", L"bob", L"Domain Users", L"RDSH-02.corp.micant.local", 3389, &abiTunnelId);
+        TEST_ASSERT(crRes == 0 && abiTunnelId >= 10001, "TSGCreateTunnel succeeded via C ABI");
+
+        int32_t clRes = micant::rdgw::TSGCloseTunnel(abiTunnelId);
+        TEST_ASSERT(clRes == 0, "TSGCloseTunnel succeeded via C ABI");
+
+        // 2. Canonical Win32 tsgadmin / rdgw CLI
+        std::string statOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("tsgadmin status", statOut);
+        TEST_ASSERT(statOut.find("TSGateway (Running)") != std::string::npos, "tsgadmin status shows TSGateway");
+        TEST_ASSERT(statOut.find("gateway.corp.micant.local") != std::string::npos, "tsgadmin status shows FQDN");
+
+        std::string capOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("tsgadmin cap list", capOut);
+        TEST_ASSERT(capOut.find("Default-DomainUsers-CAP") != std::string::npos, "tsgadmin cap list shows default CAP");
+
+        std::string capAddOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("tsgadmin cap add Test-CAP Developers", capAddOut);
+        TEST_ASSERT(capAddOut.find("SUCCESS: Created RD Connection Authorization Policy") != std::string::npos, "tsgadmin cap add succeeded");
+
+        std::string rapOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("tsgadmin rap list", rapOut);
+        TEST_ASSERT(rapOut.find("Default-RdshFarm-RAP") != std::string::npos, "tsgadmin rap list shows default RAP");
+
+        std::string rapAddOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("tsgadmin rap add Dev-RAP Developers *.dev.micant.local 3389", rapAddOut);
+        TEST_ASSERT(rapAddOut.find("SUCCESS: Created RD Resource Authorization Policy") != std::string::npos, "tsgadmin rap add succeeded");
+
+        std::string tunOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("rdgw tunnel list", tunOut);
+        TEST_ASSERT(tunOut.find("TUNNELID") != std::string::npos, "rdgw tunnel list table header");
+
+        std::string dumpOut;
+        micant::rdgw_cmd::um::ExecuteRdgwString("tsgadmin dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("TSGateway") != std::string::npos, "tsgadmin dump contains service config");
+
+        // 3. Remote Executive Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStat = console.executeTerminalCommand("tsgadmin status");
+        TEST_ASSERT(termStat.find("Remote Desktop Gateway Subsystem Status:") != std::string::npos, "Web terminal tsgadmin status");
+
+        std::string termCap = console.executeTerminalCommand("rdgw cap list");
+        TEST_ASSERT(termCap.find("CAPID") != std::string::npos, "Web terminal rdgw cap list");
+
+        // 4. WFP Inbound Rule #18201 (MicaNT_RDGateway_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto rdgwRuleOpt = wfp.findRuleById(18201);
+        TEST_ASSERT(rdgwRuleOpt.has_value(), "WFP Rule #18201 for RD Gateway must be registered");
+        TEST_ASSERT(rdgwRuleOpt->protocol == tcpip::IPPROTO_TCP, "RD Gateway protocol is TCP");
+        TEST_ASSERT(rdgwRuleOpt->localPortStart == 443 && rdgwRuleOpt->localPortEnd == 443, "Port 443");
+        TEST_ASSERT(rdgwRuleOpt->action == wfp::FWP_ACTION_PERMIT, "RD Gateway rule action must be PERMIT");
+
+        // 5. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"rdgw_active_connections\":") != std::string::npos, "Telemetry rdgw_active_connections");
+        TEST_ASSERT(teleJson.find("\"rdgw_active_tunnels\":") != std::string::npos, "Telemetry rdgw_active_tunnels");
+        TEST_ASSERT(teleJson.find("\"rdgw_cap_evaluations\":") != std::string::npos, "Telemetry rdgw_cap_evaluations");
+        TEST_ASSERT(teleJson.find("\"rdgw_rap_evaluations\":") != std::string::npos, "Telemetry rdgw_rap_evaluations");
+    }
+
+    std::cout << "[HORIZON 182] Sovereign Windows Server Remote Desktop Gateway (RD Gateway) Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Gateway Configuration, SSL Certificate Binding & Server Vitals OK\n"
+              << "    Pillar 3: Connection Authorization Policies (RD CAPs) & Multi-Factor Matching OK\n"
+              << "    Pillar 4: Resource Authorization Policies (RD RAPs) & Wildcard Matching OK\n"
+              << "    Pillar 5: HTTPS Encapsulated RDP Tunnel Lifecycle (Connect, Forward, Disconnect) OK\n"
+              << "    Pillar 6: High-Concurrency Tunnel Aggregation & Teardown OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 tsgadmin CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 398: Horizon 182 - Sovereign Windows Server Remote Desktop Gateway (RD Gateway) PASSED." << std::endl;
+}

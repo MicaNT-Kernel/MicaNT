@@ -314,6 +314,8 @@
 #include "micant/um/subsystems/mgmt/rdsh_cmd.hpp"
 #include "micant/um/servers/rdlicensing.hpp"
 #include "micant/um/subsystems/mgmt/rdlic_cmd.hpp"
+#include "micant/um/servers/rdgateway.hpp"
+#include "micant/um/subsystems/mgmt/rdgw_cmd.hpp"
 #include "micant/km/drivers/fs/refs.hpp"
 #include "micant/km/drivers/fs/csvfs.hpp"
 #include "micant/km/drivers/fs/wcifs.hpp"
@@ -437,6 +439,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite398") {
+        RUN_TEST(Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite397") {
@@ -1976,6 +1982,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI);
     RUN_TEST(Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI);
     RUN_TEST(Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI);
+    RUN_TEST(Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

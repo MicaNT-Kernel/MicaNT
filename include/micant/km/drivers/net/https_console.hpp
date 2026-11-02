@@ -76,6 +76,8 @@
 #include "micant/um/subsystems/mgmt/rdsh_cmd.hpp"
 #include "micant/um/servers/rdlicensing.hpp"
 #include "micant/um/subsystems/mgmt/rdlic_cmd.hpp"
+#include "micant/um/servers/rdgateway.hpp"
+#include "micant/um/subsystems/mgmt/rdgw_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -397,6 +399,19 @@ public:
         rdlicRule.weight = 1500;
         rdlicRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(rdlicRule);
+
+        // 25. Register WFP Inbound Rule for RD Gateway (TCP 443)
+        wfp::km::WfpKernelFilterRule rdgwRule{};
+        rdgwRule.filterId = 18201;
+        rdgwRule.name = "MicaNT_RDGateway_Permit";
+        rdgwRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        rdgwRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rdgwRule.protocol = tcpip::IPPROTO_TCP;
+        rdgwRule.localPortStart = 443;
+        rdgwRule.localPortEnd = 443;
+        rdgwRule.weight = 1500;
+        rdgwRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(rdgwRule);
     }
 
     void stopHttpsServer() {
@@ -822,6 +837,10 @@ public:
             std::string res;
             rdlic_cmd::um::ExecuteRdlicString(cmd, res);
             return res;
+        } else if (cmd == "tsgadmin" || cmd.starts_with("tsgadmin ") || cmd == "rdgw" || cmd.starts_with("rdgw ")) {
+            std::string res;
+            rdgw_cmd::um::ExecuteRdgwString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1100,7 +1119,11 @@ public:
            << "\"rdlic_installed_cals\":" << micant::rdlic::RdLicensingManager::get().getInstalledCalCount() << ","
            << "\"rdlic_issued_cals\":" << micant::rdlic::RdLicensingManager::get().getIssuedCalCount() << ","
            << "\"rdlic_temp_cals\":" << micant::rdlic::RdLicensingManager::get().getTempCalCount() << ","
-           << "\"rdlic_revoked_cals\":" << micant::rdlic::RdLicensingManager::get().getRevokedCalCount() << "}\r\n";
+           << "\"rdlic_revoked_cals\":" << micant::rdlic::RdLicensingManager::get().getRevokedCalCount() << ","
+           << "\"rdgw_active_connections\":" << micant::rdgw::RdGatewayManager::get().getActiveConnectionCount() << ","
+           << "\"rdgw_active_tunnels\":" << micant::rdgw::RdGatewayManager::get().getActiveTunnelCount() << ","
+           << "\"rdgw_cap_evaluations\":" << micant::rdgw::RdGatewayManager::get().getTotalCapEvaluations() << ","
+           << "\"rdgw_rap_evaluations\":" << micant::rdgw::RdGatewayManager::get().getTotalRapEvaluations() << "}\r\n";
         return ss.str();
     }
 
