@@ -104,6 +104,8 @@
 #include "micant/um/subsystems/mgmt/spatial_cmd.hpp"
 #include "micant/km/drivers/net/game_qos.hpp"
 #include "micant/um/subsystems/mgmt/netpace_cmd.hpp"
+#include "micant/km/drivers/compute/coresched.hpp"
+#include "micant/um/subsystems/mgmt/coresched_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -607,6 +609,19 @@ public:
         qosRule.weight = 1500;
         qosRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(qosRule);
+
+        // 39. Register WFP Inbound Rule for CPU Core Scheduling & Topology Telemetry (UDP 5090)
+        wfp::km::WfpKernelFilterRule schedRule{};
+        schedRule.filterId = 19601;
+        schedRule.name = "MicaNT_CoreSched_Permit";
+        schedRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        schedRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        schedRule.protocol = tcpip::IPPROTO_UDP;
+        schedRule.localPortStart = 5090;
+        schedRule.localPortEnd = 5090;
+        schedRule.weight = 1500;
+        schedRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(schedRule);
     }
 
     void stopHttpsServer() {
@@ -1084,6 +1099,8 @@ public:
             return spatial_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "netpace" || cmd.starts_with("netpace ") || cmd == "netpacecli" || cmd.starts_with("netpacecli ") || cmd == "gameqos" || cmd.starts_with("gameqos ")) {
             return netpace_cmd::um::ExecuteCommand(cmd);
+        } else if (cmd == "coresched" || cmd.starts_with("coresched ") || cmd == "coreschedcli" || cmd.starts_with("coreschedcli ") || cmd == "sched" || cmd.starts_with("sched ")) {
+            return coresched_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1421,7 +1438,11 @@ public:
            << "\"gameqos_active_flows\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetActiveFlowCount() << ","
            << "\"gameqos_paced_packets\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetPacedPacketsCount() << ","
            << "\"gameqos_sojourn_delay_us\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetAverageSojournDelayUs() << ","
-           << "\"gameqos_jitter_reduction_pct\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetJitterReductionPct() << "}\r\n";
+           << "\"gameqos_jitter_reduction_pct\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetJitterReductionPct() << ","
+           << "\"coresched_active_p_cores\":" << micant::core_sched::CoreTopologyManager::Instance().GetPCoreCount() << ","
+           << "\"coresched_active_e_cores\":" << micant::core_sched::CoreTopologyManager::Instance().GetECoreCount() << ","
+           << "\"coresched_pinned_threads\":" << micant::core_sched::CoreTopologyManager::Instance().GetPinnedThreadCount() << ","
+           << "\"coresched_stutters_prevented\":" << micant::core_sched::CoreTopologyManager::Instance().GetTotalMigrationsPrevented() << "}\r\n";
         return ss.str();
     }
 

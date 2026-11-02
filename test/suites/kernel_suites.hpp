@@ -38756,4 +38756,181 @@ void Test_Horizon195_GamingNetworkQos_UdpPacketPacing_And_NetPaceCLI() {
     std::cout << "[TEST] Suite 411: Horizon 195 - Sovereign Gaming Network QoS & UDP Packet Pacing PASSED." << std::endl;
 }
 
+// ============================================================================
+// SUITE 412: Horizon 196 - Sovereign Heterogeneous CPU Core Pacing & Gaming Scheduler Subsystem
+// ============================================================================
+
+void Test_Horizon196_HeterogeneousCoreScheduling_VCachePacing_And_CoreSchedCLI() {
+    std::cout << "\n[TEST] Running Suite 412: Horizon 196 - Sovereign Heterogeneous CPU Core Pacing Subsystem...\n";
+
+    auto& mgr = micant::core_sched::CoreTopologyManager::Instance();
+    mgr.Initialize();
+
+    // 1. Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    {
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.FindModule("coresched.sys") != nullptr, "coresched.sys must be registered");
+        TEST_ASSERT(vdb.FindModule("schedbroker.exe") != nullptr, "schedbroker.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("coresched.dll") != nullptr, "coresched.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("topologycache.dll") != nullptr, "topologycache.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("coreschedcli.exe") != nullptr, "coreschedcli.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("vcachepacer.sys") != nullptr, "vcachepacer.sys must be registered");
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto drvRec = scm.getServiceRecord(L"CoreSchedDriver");
+        TEST_ASSERT(drvRec != nullptr, "CoreSchedDriver must be registered in SCM");
+        TEST_ASSERT(drvRec->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "Driver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drvRec->startType == micant::scm::SERVICE_BOOT_START, "Driver is SERVICE_BOOT_START");
+        TEST_ASSERT(drvRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Driver is SERVICE_RUNNING");
+
+        auto svcRec = scm.getServiceRecord(L"SchedBroker");
+        TEST_ASSERT(svcRec != nullptr, "SchedBroker must be registered in SCM");
+        TEST_ASSERT(svcRec->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "Service is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svcRec->startType == micant::scm::SERVICE_AUTO_START, "Service is SERVICE_AUTO_START");
+        TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Service is SERVICE_RUNNING");
+    }
+
+    // 2. Pillar 2: Heterogeneous Core Topology Discovery & Cache Hierarchy
+    {
+        TEST_ASSERT(mgr.GetTotalCoreCount() == 16, "16 total logical cores in heterogeneous topology");
+        TEST_ASSERT(mgr.GetPCoreCount() == 8, "8 Performance / 3D V-Cache Cores");
+        TEST_ASSERT(mgr.GetECoreCount() == 8, "8 Efficient Cores");
+        TEST_ASSERT(mgr.GetVCacheCoreCount() == 4, "4 3D V-Cache Enhanced Cores on CCD 0");
+
+        auto cores = mgr.GetCores();
+        TEST_ASSERT(cores.size() == 16, "Core descriptor vector has 16 entries");
+
+        // Verify Core 0 (V-Cache)
+        TEST_ASSERT(cores[0].maxBoostFreqMhz == 5700, "Core 0 boost frequency is 5700 MHz");
+        TEST_ASSERT(cores[0].l3CacheMb == 96, "Core 0 has 96MB 3D V-Cache");
+        TEST_ASSERT(cores[0].type == micant::core_sched::CoreType::VCache3DCore, "Core 0 is VCache3DCore");
+
+        // Verify Core 8 (E-Core)
+        TEST_ASSERT(cores[8].maxBoostFreqMhz == 4400, "Core 8 boost frequency is 4400 MHz");
+        TEST_ASSERT(cores[8].l3CacheMb == 32, "Core 8 has 32MB standard L3");
+        TEST_ASSERT(cores[8].type == micant::core_sched::CoreType::EfficientCore, "Core 8 is EfficientCore");
+    }
+
+    // 3. Pillar 3: Automated Game Thread Classification & Core Pinning
+    {
+        TEST_ASSERT(mgr.GetPinnedThreadCount() >= 3, "At least 3 game threads pre-registered");
+
+        bool foundRenderThread = false;
+        bool foundWorkerThread = false;
+        for (const auto& th : mgr.GetThreads()) {
+            if (th.role == micant::core_sched::ThreadRole::MainRenderLoop) {
+                foundRenderThread = true;
+                TEST_ASSERT(th.assignedCoreId == 0, "Main Render Loop pinned to Core 0");
+                TEST_ASSERT(th.targetCoreType == micant::core_sched::CoreType::VCache3DCore, "Main Render Loop targeted to 3D V-Cache");
+                TEST_ASSERT(th.affinityLocked == true, "Affinity locked to eliminate OS migrations");
+            }
+            if (th.role == micant::core_sched::ThreadRole::WorkerTaskGraph) {
+                foundWorkerThread = true;
+                TEST_ASSERT(th.assignedCoreId >= 8, "Worker thread offloaded to E-Core cluster (>= 8)");
+                TEST_ASSERT(th.targetCoreType == micant::core_sched::CoreType::EfficientCore, "Worker thread targeted to E-Cores");
+            }
+        }
+        TEST_ASSERT(foundRenderThread && foundWorkerThread, "Both Render and Worker threads correctly classified");
+        TEST_ASSERT(mgr.GetTotalMigrationsPrevented() > 8000, "Total thread migrations saved > 8000");
+
+        // Test dynamic pinning
+        bool pinOk = mgr.PinThread(5000, 5001, "Custom Game Physics", micant::core_sched::ThreadRole::WorkerTaskGraph,
+                                   micant::core_sched::CoreType::EfficientCore);
+        TEST_ASSERT(pinOk, "Pinning new physics thread must succeed");
+        TEST_ASSERT(mgr.GetPinnedThreadCount() >= 4, "Pinned thread count incremented");
+    }
+
+    // 4. Pillar 4: Dynamic SMT Sibling Logical Core Parking
+    {
+        mgr.SetSmtParking(true);
+        TEST_ASSERT(mgr.IsSmtParkingEnabled() == true, "SMT parking is enabled");
+        auto cores = mgr.GetCores();
+        TEST_ASSERT(cores[1].isParked == true, "Sibling core 1 is parked to prevent private cache pollution");
+
+        mgr.SetSmtParking(false);
+        TEST_ASSERT(mgr.IsSmtParkingEnabled() == false, "SMT parking is disabled");
+        cores = mgr.GetCores();
+        TEST_ASSERT(cores[1].isParked == false, "Sibling core 1 unparked");
+
+        // Re-enable for nominal gaming state
+        mgr.SetSmtParking(true);
+    }
+
+    // 5. Pillar 5: Win32 C ABI Exports
+    {
+        TEST_ASSERT(CoreSchedInitialize() == STATUS_SUCCESS, "CoreSchedInitialize export");
+        TEST_ASSERT(CoreSchedGetPCoreCount() == 8, "CoreSchedGetPCoreCount export");
+        TEST_ASSERT(CoreSchedGetECoreCount() == 8, "CoreSchedGetECoreCount export");
+        TEST_ASSERT(CoreSchedGetVCacheCoreCount() == 4, "CoreSchedGetVCacheCoreCount export");
+        TEST_ASSERT(CoreSchedGetPinnedThreadCount() >= 4, "CoreSchedGetPinnedThreadCount export");
+        TEST_ASSERT(CoreSchedGetMigrationsPreventedCount() > 8000, "CoreSchedGetMigrationsPreventedCount export");
+
+        NTSTATUS stPin = CoreSchedPinThread(6000, 6001, 2); // 2 = VCache
+        TEST_ASSERT(stPin == STATUS_SUCCESS, "CoreSchedPinThread export");
+
+        NTSTATUS stPark = CoreSchedSetSmtParking(true);
+        TEST_ASSERT(stPark == STATUS_SUCCESS, "CoreSchedSetSmtParking export");
+    }
+
+    // 6. Pillar 6: Canonical Win32 coresched CLI, WFP Rule #19601 & Telemetry
+    {
+        std::string out;
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched status");
+        TEST_ASSERT(out.find("MicaNT Sovereign Heterogeneous CPU Core Pacing") != std::string::npos, "CLI coresched status banner");
+        TEST_ASSERT(out.find("ACTIVE / ONLINE") != std::string::npos, "CLI coresched status active");
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched topology");
+        TEST_ASSERT(out.find("3D V-Cache Enhanced Core") != std::string::npos, "CLI coresched topology vcache");
+        TEST_ASSERT(out.find("5700") != std::string::npos, "CLI coresched topology frequency");
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched threads");
+        TEST_ASSERT(out.find("Call of Duty: Main Render Loop") != std::string::npos, "CLI coresched threads cod");
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched pin 7000 7001 vcache");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI coresched pin");
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched park on");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI coresched park");
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched benchmark");
+        TEST_ASSERT(out.find("Performance Verdict:      PASSED") != std::string::npos, "CLI coresched benchmark");
+
+        out = micant::coresched_cmd::um::ExecuteCommand("coresched dump");
+        TEST_ASSERT(out.find("CoreSchedDriver") != std::string::npos, "CLI coresched dump driver");
+
+        // Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("coresched status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Heterogeneous CPU Core Pacing") != std::string::npos, "Console terminal coresched status");
+
+        // WFP Inbound Rule #19601 (MicaNT_CoreSched_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto schedRuleOpt = wfp.findRuleById(19601);
+        TEST_ASSERT(schedRuleOpt.has_value(), "WFP Rule #19601 for CoreSched must be registered");
+        TEST_ASSERT(schedRuleOpt->protocol == tcpip::IPPROTO_UDP, "CoreSched protocol is UDP");
+        TEST_ASSERT(schedRuleOpt->localPortStart == 5090 && schedRuleOpt->localPortEnd == 5090, "Port 5090");
+        TEST_ASSERT(schedRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"coresched_active_p_cores\":") != std::string::npos, "Telemetry coresched_active_p_cores");
+        TEST_ASSERT(teleJson.find("\"coresched_active_e_cores\":") != std::string::npos, "Telemetry coresched_active_e_cores");
+        TEST_ASSERT(teleJson.find("\"coresched_pinned_threads\":") != std::string::npos, "Telemetry coresched_pinned_threads");
+        TEST_ASSERT(teleJson.find("\"coresched_stutters_prevented\":") != std::string::npos, "Telemetry coresched_stutters_prevented");
+    }
+
+    std::cout << "[HORIZON 196] Sovereign Heterogeneous CPU Core Pacing Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Heterogeneous Core Topology Discovery & Cache Hierarchy OK\n"
+              << "    Pillar 3: Automated Game Thread Classification & Core Pinning OK\n"
+              << "    Pillar 4: Dynamic SMT Sibling Logical Core Parking OK\n"
+              << "    Pillar 5: Win32 C ABI Exports OK\n"
+              << "    Pillar 6: Canonical Win32 coresched CLI, WFP Rule #19601 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 412: Horizon 196 - Sovereign Heterogeneous CPU Core Pacing PASSED." << std::endl;
+}
+
+
 
