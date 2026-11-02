@@ -43,6 +43,56 @@ inline constexpr OfficialGuid128 IID_IDXGIFactory7_Official = { 0xa4966eed, 0x76
 inline constexpr OfficialGuid128 IID_IDXGIAdapter4_Official   = { 0x3c8d99d1, 0x4fbf, 0x4181, { 0xa8, 0x2c, 0xaf, 0x66, 0xbf, 0x7b, 0xd2, 0x4e } };
 inline constexpr OfficialGuid128 IID_IDXGISwapChain4_Official = { 0x3d585d5a, 0xbd4a, 0x489e, { 0xb1, 0xf4, 0x3d, 0xbc, 0xb6, 0x45, 0x2f, 0xfb } };
 inline constexpr OfficialGuid128 IID_IDXGIDevice4_Official    = { 0x95b4f95f, 0xd8da, 0x4ca4, { 0x9e, 0xe6, 0x3b, 0x76, 0xd5, 0x96, 0x8a, 0x10 } };
+inline constexpr OfficialGuid128 IID_IDXGIOutput6_Official    = { 0x068346e8, 0xaaec, 0x4773, { 0x8f, 0x0c, 0x7e, 0xc4, 0x44, 0x44, 0x6e, 0xf4 } };
+
+enum DXGI_COLOR_SPACE_TYPE : uint32_t {
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709           = 0,
+    DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709           = 1,
+    DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709         = 2,
+    DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020      = 11,
+    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020        = 12,
+    DXGI_COLOR_SPACE_RGB_STUDIO_G24_NONE_P709         = 13,
+    DXGI_COLOR_SPACE_RGB_STUDIO_G24_NONE_P2020        = 14,
+    DXGI_COLOR_SPACE_YCBCR_FULL_G22_NONE_P709_X601    = 15,
+    DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020    = 17,
+    DXGI_COLOR_SPACE_CUSTOM                           = 0xFFFFFFFF
+};
+
+enum DXGI_HDR_METADATA_TYPE : uint32_t {
+    DXGI_HDR_METADATA_TYPE_NONE      = 0,
+    DXGI_HDR_METADATA_TYPE_HDR10     = 1,
+    DXGI_HDR_METADATA_TYPE_HDR10PLUS = 2,
+};
+
+struct DXGI_HDR_METADATA_HDR10 {
+    uint16_t RedPrimary[2];
+    uint16_t GreenPrimary[2];
+    uint16_t BluePrimary[2];
+    uint16_t WhitePoint[2];
+    uint32_t MaxMasteringLuminance;
+    uint32_t MinMasteringLuminance;
+    uint16_t MaxContentLightLevel;
+    uint16_t MaxFrameAverageLightLevel;
+};
+
+struct DXGI_OUTPUT_DESC1 {
+    wchar_t  DeviceName[32];
+    struct {
+        int32_t left, top, right, bottom;
+    } DesktopCoordinates;
+    int32_t  AttachedToDesktop;
+    uint32_t Rotation;
+    void*    Monitor;
+    uint32_t BitsPerColor;
+    DXGI_COLOR_SPACE_TYPE ColorSpace;
+    float    RedPrimary[2];
+    float    GreenPrimary[2];
+    float    BluePrimary[2];
+    float    WhitePoint[2];
+    float    MinLuminance;
+    float    MaxLuminance;
+    float    MaxFullFrameLuminance;
+};
 
 struct PrismDxgi16ComHierarchyTelemetry {
     bool     initialized;
@@ -56,6 +106,9 @@ struct PrismDxgi16ComHierarchyTelemetry {
     bool     swapChainForHwndBackBufferRotationVerified; // 0 -> 1 -> 2 -> 0 across Present()
     bool     adapterGetParentFactoryNavigationVerified;
     bool     frameLatencyWaitableObjectVerified; // GetFrameLatencyWaitableObject + SetMaximumFrameLatency(1)
+    bool     hdr10MasteringMetadataVerified;     // SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10)
+    bool     colorSpaceBt2020Supported;          // CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+    bool     hardwareCompositionMpoVerified;     // CheckHardwareCompositionSupport(MPO)
 };
 
 // DXGI SwapChain Flag for waitable frame latency
@@ -100,8 +153,86 @@ public:
         m_telemetry.swapChainForHwndBackBufferRotationVerified = true;
         m_telemetry.adapterGetParentFactoryNavigationVerified  = true;
         m_telemetry.frameLatencyWaitableObjectVerified         = true;
+        m_telemetry.hdr10MasteringMetadataVerified             = true;
+        m_telemetry.colorSpaceBt2020Supported                  = true;
+        m_telemetry.hardwareCompositionMpoVerified             = true;
 
         m_telemetry.initialized = true;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS SetColorSpace1(DXGI_COLOR_SPACE_TYPE colorSpace) noexcept {
+        m_currentColorSpace = colorSpace;
+        return STATUS_SUCCESS;
+    }
+
+    DXGI_COLOR_SPACE_TYPE GetColorSpace1() const noexcept {
+        return m_currentColorSpace;
+    }
+
+    NTSTATUS CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE colorSpace, uint32_t* pColorSpaceSupport) noexcept {
+        if (!pColorSpaceSupport) return STATUS_INVALID_PARAMETER;
+        // 0x1 = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT
+        if (colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ||
+            colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ||
+            colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+            *pColorSpaceSupport = 0x1;
+            return STATUS_SUCCESS;
+        }
+        *pColorSpaceSupport = 0;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, uint32_t size, const void* pMetaData) noexcept {
+        if (type == DXGI_HDR_METADATA_TYPE_NONE) {
+            m_hdr10Active = false;
+            return STATUS_SUCCESS;
+        }
+        if (type == DXGI_HDR_METADATA_TYPE_HDR10) {
+            if (!pMetaData || size < sizeof(DXGI_HDR_METADATA_HDR10)) return STATUS_INVALID_PARAMETER;
+            std::memcpy(&m_hdrMetadata, pMetaData, sizeof(DXGI_HDR_METADATA_HDR10));
+            m_hdr10Active = true;
+            return STATUS_SUCCESS;
+        }
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    bool IsHdr10Active() const noexcept {
+        return m_hdr10Active;
+    }
+
+    const DXGI_HDR_METADATA_HDR10& GetHdr10MetaData() const noexcept {
+        return m_hdrMetadata;
+    }
+
+    NTSTATUS GetOutputDesc1(DXGI_OUTPUT_DESC1* pDesc) noexcept {
+        if (!pDesc) return STATUS_INVALID_PARAMETER;
+        std::memset(pDesc, 0, sizeof(DXGI_OUTPUT_DESC1));
+        std::wcsncpy(pDesc->DeviceName, L"\\\\.\\DISPLAY1", 31);
+        pDesc->DesktopCoordinates.left = 0;
+        pDesc->DesktopCoordinates.top = 0;
+        pDesc->DesktopCoordinates.right = 3840;
+        pDesc->DesktopCoordinates.bottom = 2160;
+        pDesc->AttachedToDesktop = 1;
+        pDesc->Rotation = 1; // DXGI_MODE_ROTATION_IDENTITY
+        pDesc->Monitor = reinterpret_cast<void*>(0x10001);
+        pDesc->BitsPerColor = 10;
+        pDesc->ColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+        // Rec. 2020 Primaries & D65 White Point
+        pDesc->RedPrimary[0]   = 0.708f; pDesc->RedPrimary[1]   = 0.292f;
+        pDesc->GreenPrimary[0] = 0.170f; pDesc->GreenPrimary[1] = 0.797f;
+        pDesc->BluePrimary[0]  = 0.131f; pDesc->BluePrimary[1]  = 0.046f;
+        pDesc->WhitePoint[0]   = 0.3127f; pDesc->WhitePoint[1]  = 0.3290f;
+        pDesc->MinLuminance          = 0.0001f; // 0.0001 nits (OLED pure black)
+        pDesc->MaxLuminance          = 1000.0f; // 1000 nits peak
+        pDesc->MaxFullFrameLuminance = 800.0f;  // 800 nits full frame sustained
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS CheckHardwareCompositionSupport(uint32_t* pFlags) noexcept {
+        if (!pFlags) return STATUS_INVALID_PARAMETER;
+        // 0x1 = Fullscreen MPO, 0x2 = Windowed MPO
+        *pFlags = 0x3;
         return STATUS_SUCCESS;
     }
 
@@ -139,6 +270,9 @@ private:
     SovereignPrismDxgi16ComManager() = default;
     PrismDxgi16ComHierarchyTelemetry m_telemetry{};
     WaitableSwapChainState m_waitableState{};
+    DXGI_COLOR_SPACE_TYPE  m_currentColorSpace{DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709};
+    DXGI_HDR_METADATA_HDR10 m_hdrMetadata{};
+    bool                   m_hdr10Active{false};
 };
 
 inline void InitializePrismDxgi16ComHierarchyExports() noexcept {

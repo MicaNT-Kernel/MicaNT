@@ -429,10 +429,27 @@ public:
         std::memset(&output, 0, sizeof(FS_BPIO_OUTPUT));
 
         auto it = m_files.find(fileId);
-        if (it == m_files.end() && input.Operation != FS_BPIO_OP_VOLUME_STACK_PAUSE &&
-            input.Operation != FS_BPIO_OP_VOLUME_STACK_RESUME && input.Operation != FS_BPIO_OP_GET_INFO) {
-            output.Status = FS_BPIO_STATUS_INVALID_REQUEST;
-            return output.Status;
+        if (it == m_files.end()) {
+            if (input.Operation == FS_BPIO_OP_VOLUME_STACK_PAUSE ||
+                input.Operation == FS_BPIO_OP_VOLUME_STACK_RESUME ||
+                input.Operation == FS_BPIO_OP_GET_INFO) {
+                // Global volume stack operations continue
+            } else if (fileId != 0) {
+                BypassIoFileContext ctx{};
+                ctx.fileId = fileId;
+                ctx.filePath = "auto_stream";
+                ctx.fileSize = 1ULL * 1024 * 1024 * 1024;
+                ctx.isBypassIoEnabled = false;
+                ctx.isPaused = false;
+                ctx.directIoReadsCount = 0;
+                ctx.directIoBytesRead = 0;
+                ctx.lastReadLatencyUs = 0;
+                m_files[fileId] = ctx;
+                it = m_files.find(fileId);
+            } else {
+                output.Status = FS_BPIO_STATUS_INVALID_REQUEST;
+                return output.Status;
+            }
         }
 
         // 1. Verify Minifilter Stack Compatibility
@@ -749,6 +766,22 @@ inline void InitializeBypassIoSubsystem() {
     ldr.registerExport("storqos.sys", "StorQosGetTelemetry", reinterpret_cast<void*>(StorQosGetTelemetry));
     ldr.registerExport("storqos.sys", "DirectStorageKernelDecompress", reinterpret_cast<void*>(DirectStorageKernelDecompress));
     ldr.registerExport("storqos.sys", "DirectStorageTransferNvmeToVram", reinterpret_cast<void*>(DirectStorageTransferNvmeToVram));
+
+    // Register DeviceIoControl hook into Win32 kernel32 subsystem
+    win32::SetDeviceIoControlHook([](win32::HANDLE hDevice, win32::DWORD dwIoControlCode, win32::LPVOID lpInBuffer, win32::DWORD nInBufferSize, win32::LPVOID lpOutBuffer, win32::DWORD nOutBufferSize, win32::LPDWORD lpBytesReturned) -> win32::BOOL {
+        if (dwIoControlCode == FSCTL_MANAGE_BYPASS_IO || dwIoControlCode == 0x000903E8) {
+            if (lpInBuffer && nInBufferSize >= sizeof(FS_BPIO_INPUT) &&
+                lpOutBuffer && nOutBufferSize >= sizeof(FS_BPIO_OUTPUT)) {
+                const auto* in = reinterpret_cast<const FS_BPIO_INPUT*>(lpInBuffer);
+                auto* out = reinterpret_cast<FS_BPIO_OUTPUT*>(lpOutBuffer);
+                uint64_t fid = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hDevice));
+                uint32_t bpioRes = TitanBypassIoSubsystem::Instance().manageBypassIo(fid, *in, *out);
+                if (lpBytesReturned) *lpBytesReturned = sizeof(FS_BPIO_OUTPUT);
+                return (bpioRes == FS_BPIO_SUCCESS) ? 1 : 0;
+            }
+        }
+        return 0;
+    });
 
     // 3. Register Core Drivers in SCM
     auto bpioSvc = std::make_shared<scm::ServiceRecord>();

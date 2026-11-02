@@ -25,6 +25,7 @@
 // ============================================================================
 
 #pragma once
+#include "micant/um/native/ntdll.hpp"
 #include "micant/um/subsystems/graphics/prism3d12.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
@@ -80,6 +81,22 @@ inline constexpr GUID IID_IDStorageFactory_Const = {
     0x69e61445, 0xb621, 0x47ce, { 0x80, 0x1b, 0xc1, 0xf4, 0xc4, 0x0f, 0x41, 0xac }
 };
 
+inline constexpr GUID IID_IDStorageFactory_Official = {
+    0xc5710279, 0x7146, 0x4ec5, { 0x92, 0xe2, 0x29, 0x61, 0xab, 0x1d, 0x42, 0xe4 }
+};
+
+inline constexpr GUID IID_IDStorageCompressionCodec_Const = {
+    0x8240409a, 0x82b4, 0x4896, { 0x80, 0x01, 0x93, 0x06, 0x24, 0xee, 0x08, 0x6e }
+};
+
+inline constexpr GUID IID_IDStorageQueue1_Const = {
+    0xdd4b4e13, 0x1f0e, 0x4386, { 0xb8, 0x3d, 0x76, 0x3e, 0xb6, 0x84, 0x7c, 0xc1 }
+};
+
+inline constexpr GUID IID_IDStorageQueue2_Const = {
+    0xb3283296, 0x5a18, 0x4775, { 0xa8, 0xeb, 0x30, 0x07, 0x61, 0x9c, 0x42, 0x50 }
+};
+
 // ============================================================================
 // 2. Constants, Enums & Typedefs
 // ============================================================================
@@ -112,6 +129,12 @@ enum DSTORAGE_COMPRESSION_FORMAT : uint8_t {
     DSTORAGE_COMPRESSION_FORMAT_GDEFLATE = 1,
     DSTORAGE_COMPRESSION_FORMAT_ZLIB     = 2,
     DSTORAGE_CUSTOM_COMPRESSION_0        = 0x80,
+};
+
+enum DSTORAGE_COMPRESSION_LEVEL : int32_t {
+    DSTORAGE_COMPRESSION_LEVEL_FASTEST    = -1,
+    DSTORAGE_COMPRESSION_LEVEL_DEFAULT    = 0,
+    DSTORAGE_COMPRESSION_LEVEL_BEST_RATIO = 1,
 };
 
 enum DSTORAGE_DEBUG : uint32_t {
@@ -464,6 +487,36 @@ public:
     virtual DSTORAGE_QUEUE_DESC GetDesc() = 0;
 };
 
+class IDStorageQueue1 : public IDStorageQueue {
+public:
+    virtual void EnqueueSetEvent(void* hevent) = 0;
+};
+
+class IDStorageQueue2 : public IDStorageQueue1 {
+public:
+    virtual DSTORAGE_COMPRESSION_FORMAT GetCompressionFormat() = 0;
+};
+
+class IDStorageCompressionCodec : public IUnknown {
+public:
+    virtual size_t CompressBufferBound(size_t uncompressedDataSize) = 0;
+    virtual int32_t CompressBuffer(
+        const void* uncompressedData,
+        size_t uncompressedDataSize,
+        DSTORAGE_COMPRESSION_LEVEL compressionLevel,
+        void* compressedBuffer,
+        size_t compressedBufferSize,
+        size_t* compressedDataSize
+    ) = 0;
+    virtual int32_t DecompressBuffer(
+        const void* compressedData,
+        size_t compressedDataSize,
+        void* uncompressedBuffer,
+        size_t uncompressedBufferSize,
+        size_t* uncompressedDataSize
+    ) = 0;
+};
+
 class IDStorageFactory : public IUnknown {
 public:
     virtual int32_t CreateQueue(const DSTORAGE_QUEUE_DESC* desc, const GUID& riid, void** ppv) = 0;
@@ -667,19 +720,20 @@ public:
     }
 };
 
-class CStorageQueueImpl : public IDStorageQueue {
+class CStorageQueueImpl : public IDStorageQueue2 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     DSTORAGE_QUEUE_DESC m_desc{};
     std::mutex m_mutex;
 
     struct EnqueuedItem {
-        enum Type { Request, Status, Signal } type;
+        enum Type { Request, Status, Signal, Event } type;
         DSTORAGE_REQUEST request{};
         IDStorageStatusArray* statusArray{ nullptr };
         uint32_t statusIndex{ 0 };
         ID3D12Fence* fence{ nullptr };
         uint64_t fenceValue{ 0 };
+        void* eventHandle{ nullptr };
         bool cancelled{ false };
     };
 
@@ -697,8 +751,10 @@ public:
     int32_t QueryInterface(const GUID& riid, void** ppv) override {
         if (!ppv) return -2147467261;
         if (std::memcmp(&riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
-            std::memcmp(&riid, &IID_IDStorageQueue_Const, sizeof(GUID)) == 0) {
-            *ppv = static_cast<IDStorageQueue*>(this);
+            std::memcmp(&riid, &IID_IDStorageQueue_Const, sizeof(GUID)) == 0 ||
+            std::memcmp(&riid, &IID_IDStorageQueue1_Const, sizeof(GUID)) == 0 ||
+            std::memcmp(&riid, &IID_IDStorageQueue2_Const, sizeof(GUID)) == 0) {
+            *ppv = static_cast<IDStorageQueue2*>(this);
             AddRef();
             return 0;
         }
@@ -745,6 +801,19 @@ public:
         item.fenceValue = value;
         fence->AddRef();
         m_items.push_back(item);
+    }
+
+    void EnqueueSetEvent(void* hevent) override {
+        if (!hevent) return;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        EnqueuedItem item{};
+        item.type = EnqueuedItem::Event;
+        item.eventHandle = hevent;
+        m_items.push_back(item);
+    }
+
+    DSTORAGE_COMPRESSION_FORMAT GetCompressionFormat() override {
+        return DSTORAGE_COMPRESSION_FORMAT_GDEFLATE;
     }
 
     void CancelRequestsWithTag(uint64_t mask, uint64_t value) override {
@@ -861,6 +930,10 @@ public:
                     item.fence->Signal(item.fenceValue);
                     item.fence->Release();
                 }
+            } else if (item.type == EnqueuedItem::Event) {
+                if (item.eventHandle) {
+                    ntdll::NtSetEvent(reinterpret_cast<Handle>(item.eventHandle), nullptr);
+                }
             }
         }
     }
@@ -904,7 +977,8 @@ public:
     int32_t QueryInterface(const GUID& riid, void** ppv) override {
         if (!ppv) return -2147467261;
         if (std::memcmp(&riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
-            std::memcmp(&riid, &IID_IDStorageFactory_Const, sizeof(GUID)) == 0) {
+            std::memcmp(&riid, &IID_IDStorageFactory_Const, sizeof(GUID)) == 0 ||
+            std::memcmp(&riid, &IID_IDStorageFactory_Official, sizeof(GUID)) == 0) {
             *ppv = static_cast<IDStorageFactory*>(this);
             AddRef();
             return 0;
@@ -982,6 +1056,102 @@ public:
     CStorageCustomDecompressionQueueImpl* GetCustomQueue() { return m_customQueue.get(); }
 };
 
+class CStorageCompressionCodecImpl : public IDStorageCompressionCodec {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    DSTORAGE_COMPRESSION_FORMAT m_format{ DSTORAGE_COMPRESSION_FORMAT_GDEFLATE };
+    uint32_t m_numThreads{ 4 };
+
+public:
+    CStorageCompressionCodecImpl(DSTORAGE_COMPRESSION_FORMAT format, uint32_t numThreads)
+        : m_format(format), m_numThreads(numThreads ? numThreads : 1) {
+        (void)m_numThreads;
+    }
+
+    int32_t QueryInterface(const GUID& riid, void** ppv) override {
+        if (!ppv) return -2147467261;
+        if (std::memcmp(&riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
+            std::memcmp(&riid, &IID_IDStorageCompressionCodec_Const, sizeof(GUID)) == 0) {
+            *ppv = static_cast<IDStorageCompressionCodec*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262;
+    }
+
+    uint32_t AddRef() override {
+        return m_refCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    uint32_t Release() override {
+        uint32_t count = m_refCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (count == 0) delete this;
+        return count;
+    }
+
+    size_t CompressBufferBound(size_t uncompressedDataSize) override {
+        return sizeof(codec::GDeflateHeader) + uncompressedDataSize + 1024;
+    }
+
+    int32_t CompressBuffer(
+        const void* uncompressedData,
+        size_t uncompressedDataSize,
+        DSTORAGE_COMPRESSION_LEVEL /*compressionLevel*/,
+        void* compressedBuffer,
+        size_t compressedBufferSize,
+        size_t* compressedDataSize
+    ) override {
+        if (!uncompressedData || !compressedBuffer || !compressedDataSize) return -2147467261;
+        std::vector<uint8_t> compressed;
+        if (m_format == DSTORAGE_COMPRESSION_FORMAT_GDEFLATE) {
+            compressed = codec::CompressGDeflate(static_cast<const uint8_t*>(uncompressedData), static_cast<uint32_t>(uncompressedDataSize));
+        } else if (m_format == DSTORAGE_COMPRESSION_FORMAT_ZLIB) {
+            compressed = codec::CompressZlib(static_cast<const uint8_t*>(uncompressedData), static_cast<uint32_t>(uncompressedDataSize));
+        } else {
+            return -2147024809;
+        }
+        if (compressed.size() > compressedBufferSize) return -2147024774;
+        std::memcpy(compressedBuffer, compressed.data(), compressed.size());
+        *compressedDataSize = compressed.size();
+        return 0;
+    }
+
+    int32_t DecompressBuffer(
+        const void* compressedData,
+        size_t compressedDataSize,
+        void* uncompressedBuffer,
+        size_t uncompressedBufferSize,
+        size_t* uncompressedDataSize
+    ) override {
+        if (!compressedData || !uncompressedBuffer || !uncompressedDataSize) return -2147467261;
+        bool ok = false;
+        if (m_format == DSTORAGE_COMPRESSION_FORMAT_GDEFLATE) {
+            ok = codec::DecompressGDeflate(static_cast<const uint8_t*>(compressedData), static_cast<uint32_t>(compressedDataSize),
+                                           static_cast<uint8_t*>(uncompressedBuffer), static_cast<uint32_t>(uncompressedBufferSize));
+        } else if (m_format == DSTORAGE_COMPRESSION_FORMAT_ZLIB) {
+            ok = codec::DecompressZlib(static_cast<const uint8_t*>(compressedData), static_cast<uint32_t>(compressedDataSize),
+                                       static_cast<uint8_t*>(uncompressedBuffer), static_cast<uint32_t>(uncompressedBufferSize));
+        }
+        if (!ok) return -2147467259;
+        *uncompressedDataSize = uncompressedBufferSize;
+        return 0;
+    }
+};
+
+inline int32_t __stdcall DStorageCreateCompressionCodec(
+    DSTORAGE_COMPRESSION_FORMAT format,
+    uint32_t numThreads,
+    const GUID& riid,
+    void** ppv
+) {
+    if (!ppv) return -2147467261;
+    auto* codecObj = new CStorageCompressionCodecImpl(format, numThreads);
+    int32_t hr = codecObj->QueryInterface(riid, ppv);
+    codecObj->Release();
+    return hr;
+}
+
 // ============================================================================
 // 7. Dynamic API Exports & Module Registration
 // ============================================================================
@@ -1004,7 +1174,9 @@ inline void InitializeDirectStorageExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("dstorage.dll", "DStorageGetFactory", reinterpret_cast<void*>(DStorageGetFactory));
     ldr.registerExport("dstorage.dll", "DStorageSetConfiguration", reinterpret_cast<void*>(DStorageSetConfiguration));
+    ldr.registerExport("dstorage.dll", "DStorageCreateCompressionCodec", reinterpret_cast<void*>(DStorageCreateCompressionCodec));
     ldr.registerExport("dstoragecore.dll", "DStorageGetFactory", reinterpret_cast<void*>(DStorageGetFactory));
+    ldr.registerExport("dstoragecore.dll", "DStorageCreateCompressionCodec", reinterpret_cast<void*>(DStorageCreateCompressionCodec));
 
     // Register modules in VersionDatabase
     version::VersionDatabase::Instance().RegisterModule(

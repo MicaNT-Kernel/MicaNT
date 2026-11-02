@@ -3547,6 +3547,12 @@ inline DWORD GetLogicalDriveStringsW(DWORD nBufferLength, LPWSTR lpBuffer) noexc
     return totalChars - 1;
 }
 
+using DeviceIoControlHook_t = BOOL (*)(HANDLE hDevice, DWORD dwIoControlCode, LPVOID lpInBuffer, DWORD nInBufferSize, LPVOID lpOutBuffer, DWORD nOutBufferSize, LPDWORD lpBytesReturned);
+inline DeviceIoControlHook_t g_DeviceIoControlHook = nullptr;
+inline void SetDeviceIoControlHook(DeviceIoControlHook_t hook) noexcept {
+    g_DeviceIoControlHook = hook;
+}
+
 inline BOOL DeviceIoControl(
     HANDLE hDevice,
     DWORD dwIoControlCode,
@@ -3558,6 +3564,10 @@ inline BOOL DeviceIoControl(
     LPOVERLAPPED /*lpOverlapped*/
 ) noexcept {
     if (lpBytesReturned) *lpBytesReturned = 0;
+
+    if (g_DeviceIoControlHook && g_DeviceIoControlHook(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned)) {
+        return TRUE;
+    }
     IoStatusBlock iosb{};
     NtStatus status = sys::NtDeviceIoControlFile(
         reinterpret_cast<Handle>(hDevice),
@@ -4791,20 +4801,295 @@ inline DWORD GetTempPath2A(DWORD nBufferLength, LPSTR lpBuffer) noexcept {
     return GetTempPathA(nBufferLength, lpBuffer);
 }
 
-// Job Objects
-inline HANDLE CreateJobObjectW(void* /*lpJobAttributes*/, const wchar_t* /*lpName*/) noexcept {
-    return reinterpret_cast<HANDLE>(0x7101);
+// ============================================================================
+// Win32 Job Object Types and Classes
+// ============================================================================
+
+enum JOBOBJECTINFOCLASS {
+    JobObjectBasicAccountingInformation = 1,
+    JobObjectBasicLimitInformation      = 2,
+    JobObjectBasicProcessIdList         = 3,
+    JobObjectBasicUIRestrictions        = 4,
+    JobObjectSecurityLimitInformation   = 5,
+    JobObjectEndOfJobTimeInformation    = 6,
+    JobObjectAssociateCompletionPortInformation = 7,
+    JobObjectBasicAndIoAccountingInformation    = 8,
+    JobObjectExtendedLimitInformation   = 9,
+    JobObjectJobSetInformation          = 10,
+    JobObjectGroupInformation           = 11,
+    JobObjectNotificationLimitInformation = 12,
+    JobObjectLimitViolationInformation  = 13,
+    JobObjectGroupInformationEx         = 14,
+    JobObjectCpuRateControlInformation  = 15,
+};
+
+inline constexpr DWORD JOB_OBJECT_LIMIT_WORKINGSET                 = 0x00000001;
+inline constexpr DWORD JOB_OBJECT_LIMIT_PROCESS_TIME               = 0x00000002;
+inline constexpr DWORD JOB_OBJECT_LIMIT_JOB_TIME                   = 0x00000004;
+inline constexpr DWORD JOB_OBJECT_LIMIT_ACTIVE_PROCESS             = 0x00000008;
+inline constexpr DWORD JOB_OBJECT_LIMIT_AFFINITY                   = 0x00000010;
+inline constexpr DWORD JOB_OBJECT_LIMIT_PRIORITY_CLASS             = 0x00000020;
+inline constexpr DWORD JOB_OBJECT_LIMIT_PRESERVE_JOB_TIME          = 0x00000040;
+inline constexpr DWORD JOB_OBJECT_LIMIT_SCHEDULING_CLASS           = 0x00000080;
+inline constexpr DWORD JOB_OBJECT_LIMIT_PROCESS_MEMORY             = 0x00000100;
+inline constexpr DWORD JOB_OBJECT_LIMIT_JOB_MEMORY                 = 0x00000200;
+inline constexpr DWORD JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400;
+inline constexpr DWORD JOB_OBJECT_LIMIT_BREAKAWAY_OK               = 0x00000800;
+inline constexpr DWORD JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK        = 0x00001000;
+inline constexpr DWORD JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE          = 0x00002000;
+
+inline constexpr DWORD JOB_OBJECT_CPU_RATE_CONTROL_ENABLE       = 0x00000001;
+inline constexpr DWORD JOB_OBJECT_CPU_RATE_CONTROL_WEIGHT_BASED = 0x00000002;
+inline constexpr DWORD JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP     = 0x00000004;
+inline constexpr DWORD JOB_OBJECT_CPU_RATE_CONTROL_NOTIFY       = 0x00000008;
+
+#pragma pack(push, 8)
+struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+    LARGE_INTEGER PerProcessUserTimeLimit;
+    LARGE_INTEGER PerJobUserTimeLimit;
+    DWORD         LimitFlags;
+    SIZE_T        MinimumWorkingSetSize;
+    SIZE_T        MaximumWorkingSetSize;
+    DWORD         ActiveProcessLimit;
+    uintptr_t     Affinity;
+    DWORD         PriorityClass;
+    DWORD         SchedulingClass;
+};
+
+struct IO_COUNTERS {
+    uint64_t ReadOperationCount;
+    uint64_t WriteOperationCount;
+    uint64_t OtherOperationCount;
+    uint64_t ReadTransferCount;
+    uint64_t WriteTransferCount;
+    uint64_t OtherTransferCount;
+};
+
+struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+    JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+    IO_COUNTERS                       IoInfo;
+    SIZE_T                            ProcessMemoryLimit;
+    SIZE_T                            JobMemoryLimit;
+    SIZE_T                            PeakProcessMemoryUsed;
+    SIZE_T                            PeakJobMemoryUsed;
+};
+
+struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
+    LARGE_INTEGER TotalUserTime;
+    LARGE_INTEGER TotalKernelTime;
+    LARGE_INTEGER ThisPeriodTotalUserTime;
+    LARGE_INTEGER ThisPeriodTotalKernelTime;
+    DWORD         TotalPageFaultCount;
+    DWORD         TotalProcesses;
+    DWORD         ActiveProcesses;
+    DWORD         TotalTerminatedProcesses;
+};
+
+struct JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
+    DWORD ControlFlags;
+    union {
+        DWORD CpuRate;
+        DWORD Weight;
+        struct {
+            uint16_t MinRate;
+            uint16_t MaxRate;
+        };
+    };
+};
+#pragma pack(pop)
+
+struct JobObjectInternal {
+    std::wstring name;
+    HANDLE primaryHandle{nullptr};
+    std::vector<DWORD> assignedProcessIds;
+    std::mutex mtx;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION extendedLimits{};
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+    JOBOBJECT_CPU_RATE_CONTROL_INFORMATION cpuRate{};
+    bool isTerminated{false};
+};
+
+class JobObjectManager {
+public:
+    static JobObjectManager& get() noexcept {
+        static JobObjectManager instance;
+        return instance;
+    }
+
+    HANDLE createJob(const wchar_t* lpName) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint64_t id = m_nextId++;
+        auto job = std::make_shared<JobObjectInternal>();
+        HANDLE handle = reinterpret_cast<HANDLE>(id);
+        job->primaryHandle = handle;
+        if (lpName) {
+            job->name = lpName;
+            m_namedJobs[lpName] = job;
+        }
+        m_jobs[handle] = job;
+        return handle;
+    }
+
+    HANDLE openJob(const wchar_t* lpName) {
+        if (!lpName) return nullptr;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_namedJobs.find(lpName);
+        if (it != m_namedJobs.end()) {
+            return it->second->primaryHandle;
+        }
+        return nullptr;
+    }
+
+    std::shared_ptr<JobObjectInternal> getJob(HANDLE hJob) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_jobs.find(hJob);
+        if (it != m_jobs.end()) return it->second;
+        return nullptr;
+    }
+
+    void closeJobHandle(HANDLE hJob) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_jobs.erase(hJob);
+    }
+
+private:
+    std::mutex m_mutex;
+    uint64_t m_nextId{0x7101};
+    std::unordered_map<HANDLE, std::shared_ptr<JobObjectInternal>> m_jobs;
+    std::unordered_map<std::wstring, std::shared_ptr<JobObjectInternal>> m_namedJobs;
+};
+
+inline HANDLE WINAPI CreateJobObjectW(void* /*lpJobAttributes*/, const wchar_t* lpName) noexcept {
+    return JobObjectManager::get().createJob(lpName);
 }
 
-inline HANDLE OpenJobObjectW(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, const wchar_t* /*lpName*/) noexcept {
-    return reinterpret_cast<HANDLE>(0x7101);
+inline HANDLE WINAPI OpenJobObjectW(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, const wchar_t* lpName) noexcept {
+    return JobObjectManager::get().openJob(lpName);
 }
 
-inline BOOL AssignProcessToJobObject(HANDLE /*hJob*/, HANDLE /*hProcess*/) noexcept {
+inline BOOL WINAPI AssignProcessToJobObject(HANDLE hJob, HANDLE hProcess) noexcept {
+    auto job = JobObjectManager::get().getJob(hJob);
+    if (!job) return FALSE;
+    DWORD pid = 0;
+    if (hProcess == GetCurrentProcess() || hProcess == nullptr) {
+        pid = GetCurrentProcessId();
+    } else {
+        pid = static_cast<DWORD>(reinterpret_cast<uintptr_t>(hProcess));
+    }
+    std::lock_guard<std::mutex> lock(job->mtx);
+    job->assignedProcessIds.push_back(pid);
+    job->accounting.TotalProcesses++;
+    job->accounting.ActiveProcesses++;
     return TRUE;
 }
 
-inline BOOL SetInformationJobObject(HANDLE /*hJob*/, int /*JobObjectInformationClass*/, void* /*lpJobObjectInformation*/, DWORD /*cbJobObjectInformationLength*/) noexcept {
+inline BOOL WINAPI SetInformationJobObject(
+    HANDLE hJob,
+    int JobObjectInformationClass,
+    void* lpJobObjectInformation,
+    DWORD cbJobObjectInformationLength
+) noexcept {
+    auto job = JobObjectManager::get().getJob(hJob);
+    if (!job) return FALSE;
+    if (!lpJobObjectInformation) return TRUE;
+
+    std::lock_guard<std::mutex> lock(job->mtx);
+    switch (JobObjectInformationClass) {
+        case JobObjectBasicLimitInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_BASIC_LIMIT_INFORMATION)) return FALSE;
+            std::memcpy(&job->extendedLimits.BasicLimitInformation, lpJobObjectInformation, sizeof(JOBOBJECT_BASIC_LIMIT_INFORMATION));
+            return TRUE;
+        }
+        case JobObjectExtendedLimitInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)) return FALSE;
+            std::memcpy(&job->extendedLimits, lpJobObjectInformation, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+            return TRUE;
+        }
+        case JobObjectCpuRateControlInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION)) return FALSE;
+            std::memcpy(&job->cpuRate, lpJobObjectInformation, sizeof(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION));
+            return TRUE;
+        }
+        default:
+            return TRUE;
+    }
+}
+
+inline BOOL WINAPI QueryInformationJobObject(
+    HANDLE hJob,
+    int JobObjectInformationClass,
+    void* lpJobObjectInformation,
+    DWORD cbJobObjectInformationLength,
+    DWORD* lpReturnLength
+) noexcept {
+    if (!lpJobObjectInformation) return FALSE;
+    auto job = JobObjectManager::get().getJob(hJob);
+    if (!job) return FALSE;
+
+    std::lock_guard<std::mutex> lock(job->mtx);
+    DWORD bytesWritten = 0;
+    switch (JobObjectInformationClass) {
+        case JobObjectBasicAccountingInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)) return FALSE;
+            std::memcpy(lpJobObjectInformation, &job->accounting, sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+            bytesWritten = sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION);
+            break;
+        }
+        case JobObjectBasicLimitInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_BASIC_LIMIT_INFORMATION)) return FALSE;
+            std::memcpy(lpJobObjectInformation, &job->extendedLimits.BasicLimitInformation, sizeof(JOBOBJECT_BASIC_LIMIT_INFORMATION));
+            bytesWritten = sizeof(JOBOBJECT_BASIC_LIMIT_INFORMATION);
+            break;
+        }
+        case JobObjectExtendedLimitInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)) return FALSE;
+            std::memcpy(lpJobObjectInformation, &job->extendedLimits, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+            bytesWritten = sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION);
+            break;
+        }
+        case JobObjectCpuRateControlInformation: {
+            if (cbJobObjectInformationLength < sizeof(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION)) return FALSE;
+            std::memcpy(lpJobObjectInformation, &job->cpuRate, sizeof(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION));
+            bytesWritten = sizeof(JOBOBJECT_CPU_RATE_CONTROL_INFORMATION);
+            break;
+        }
+        default:
+            return FALSE;
+    }
+    if (lpReturnLength) *lpReturnLength = bytesWritten;
+    return TRUE;
+}
+
+inline BOOL WINAPI TerminateJobObject(HANDLE hJob, UINT /*uExitCode*/) noexcept {
+    auto job = JobObjectManager::get().getJob(hJob);
+    if (!job) return FALSE;
+    std::lock_guard<std::mutex> lock(job->mtx);
+    job->isTerminated = true;
+    job->accounting.TotalTerminatedProcesses += job->accounting.ActiveProcesses;
+    job->accounting.ActiveProcesses = 0;
+    return TRUE;
+}
+
+inline BOOL WINAPI IsProcessInJob(HANDLE hProcess, HANDLE hJob, BOOL* Result) noexcept {
+    if (!Result) return FALSE;
+    *Result = FALSE;
+    auto job = JobObjectManager::get().getJob(hJob);
+    if (!job) return FALSE;
+
+    DWORD pid = 0;
+    if (hProcess == GetCurrentProcess()) {
+        pid = GetCurrentProcessId();
+    } else {
+        pid = static_cast<DWORD>(reinterpret_cast<uintptr_t>(hProcess));
+    }
+
+    std::lock_guard<std::mutex> lock(job->mtx);
+    for (DWORD p : job->assignedProcessIds) {
+        if (p == pid) {
+            *Result = TRUE;
+            return TRUE;
+        }
+    }
     return TRUE;
 }
 
@@ -6990,6 +7275,15 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "OpenJobObjectW", reinterpret_cast<void*>(OpenJobObjectW));
     ldr.registerExport("kernel32.dll", "AssignProcessToJobObject", reinterpret_cast<void*>(AssignProcessToJobObject));
     ldr.registerExport("kernel32.dll", "SetInformationJobObject", reinterpret_cast<void*>(SetInformationJobObject));
+    ldr.registerExport("kernel32.dll", "QueryInformationJobObject", reinterpret_cast<void*>(QueryInformationJobObject));
+    ldr.registerExport("kernel32.dll", "TerminateJobObject", reinterpret_cast<void*>(TerminateJobObject));
+    ldr.registerExport("kernel32.dll", "IsProcessInJob", reinterpret_cast<void*>(IsProcessInJob));
+    ldr.registerExport("api-ms-win-core-job-l1-1-0.dll", "CreateJobObjectW", reinterpret_cast<void*>(CreateJobObjectW));
+    ldr.registerExport("api-ms-win-core-job-l1-1-0.dll", "AssignProcessToJobObject", reinterpret_cast<void*>(AssignProcessToJobObject));
+    ldr.registerExport("api-ms-win-core-job-l1-1-0.dll", "SetInformationJobObject", reinterpret_cast<void*>(SetInformationJobObject));
+    ldr.registerExport("api-ms-win-core-job-l1-1-0.dll", "QueryInformationJobObject", reinterpret_cast<void*>(QueryInformationJobObject));
+    ldr.registerExport("api-ms-win-core-job-l1-1-0.dll", "TerminateJobObject", reinterpret_cast<void*>(TerminateJobObject));
+    ldr.registerExport("api-ms-win-core-job-l1-1-0.dll", "IsProcessInJob", reinterpret_cast<void*>(IsProcessInJob));
     ldr.registerExport("kernel32.dll", "OpenFileMappingA", reinterpret_cast<void*>(OpenFileMappingA));
     ldr.registerExport("kernel32.dll", "VirtualLock", reinterpret_cast<void*>(VirtualLock));
     ldr.registerExport("kernel32.dll", "FlushInstructionCache", reinterpret_cast<void*>(FlushInstructionCache));

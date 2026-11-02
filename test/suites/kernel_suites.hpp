@@ -39860,3 +39860,309 @@ inline void Test_Horizon200_DirectX12AgilitySDK_VirtualAlloc2_And_ThreadpoolTask
 
 
 
+
+// ============================================================================
+// Suite 417: Horizon 201 - DirectStorage 1.2 BypassIO, DXGI 1.6 HDR10, Low-Latency WASAPI Audio & Win32 Job Objects
+// ============================================================================
+inline void Test_Horizon201_DirectStorageBypassIO_DxgiHdr10_And_WasapiAudio_Suite() {
+    using namespace micant::win32;
+    std::cout << "[TEST] Running Suite 417: Horizon 201 - DirectStorage 1.2, BypassIO, DXGI 1.6 HDR10, WASAPI & Job Objects...\n";
+
+    // 1. Pillar 1: DirectStorage 1.2 Architecture & Compression Codec
+    {
+        using namespace micant::directstorage;
+        InitializeDirectStorageExports();
+
+        IDStorageFactory* pFactory = nullptr;
+        int32_t hr = DStorageGetFactory(IID_IDStorageFactory_Official, reinterpret_cast<void**>(&pFactory));
+        TEST_ASSERT(hr == 0 && pFactory != nullptr, "DStorageGetFactory with IID_IDStorageFactory_Official succeeds");
+
+        pFactory->SetDebugFlags(DSTORAGE_DEBUG_SHOW_ERRORS);
+        pFactory->SetStagingBufferSize(64 * 1024 * 1024);
+
+        // Test GDeflate Compression Codec
+        IDStorageCompressionCodec* pCodec = nullptr;
+        hr = DStorageCreateCompressionCodec(DSTORAGE_COMPRESSION_FORMAT_GDEFLATE, 4, IID_IDStorageCompressionCodec_Const, reinterpret_cast<void**>(&pCodec));
+        TEST_ASSERT(hr == 0 && pCodec != nullptr, "DStorageCreateCompressionCodec creates valid GDeflate codec");
+
+        std::vector<uint8_t> originalData(64 * 1024);
+        for (size_t i = 0; i < originalData.size(); ++i) {
+            originalData[i] = static_cast<uint8_t>((i % 256) ^ (i / 1024));
+        }
+
+        size_t bound = pCodec->CompressBufferBound(originalData.size());
+        TEST_ASSERT(bound >= originalData.size(), "CompressBufferBound returns sufficient container capacity");
+
+        std::vector<uint8_t> compressedData(bound);
+        size_t compressedSize = 0;
+        hr = pCodec->CompressBuffer(originalData.data(), originalData.size(), DSTORAGE_COMPRESSION_LEVEL_DEFAULT,
+                                    compressedData.data(), compressedData.size(), &compressedSize);
+        TEST_ASSERT(hr == 0 && compressedSize > 0 && compressedSize < originalData.size(),
+                    "CompressBuffer compresses buffer with high GDeflate ratio");
+
+        std::vector<uint8_t> decompressedData(originalData.size());
+        size_t decompressedSize = 0;
+        hr = pCodec->DecompressBuffer(compressedData.data(), compressedSize,
+                                      decompressedData.data(), decompressedData.size(), &decompressedSize);
+        TEST_ASSERT(hr == 0 && decompressedSize == originalData.size(), "DecompressBuffer decompresses full asset size");
+        TEST_ASSERT(std::memcmp(originalData.data(), decompressedData.data(), originalData.size()) == 0,
+                    "Decompressed data matches original uncompressed buffer byte-for-byte");
+
+        pCodec->Release();
+
+        // Test Queue with EnqueueSetEvent and GetCompressionFormat
+        DSTORAGE_QUEUE_DESC qDesc{};
+        qDesc.SourceType = DSTORAGE_REQUEST_SOURCE_MEMORY;
+        qDesc.Capacity = 128;
+        qDesc.Priority = DSTORAGE_PRIORITY_HIGH;
+        qDesc.Name = "MicaNT_GameStreaming_Queue";
+
+        IDStorageQueue2* pQueue = nullptr;
+        hr = pFactory->CreateQueue(&qDesc, IID_IDStorageQueue2_Const, reinterpret_cast<void**>(&pQueue));
+        TEST_ASSERT(hr == 0 && pQueue != nullptr, "CreateQueue creates IDStorageQueue2 instance");
+        TEST_ASSERT(pQueue->GetCompressionFormat() == DSTORAGE_COMPRESSION_FORMAT_GDEFLATE, "Queue reports GDeflate format");
+
+        HANDLE hDoneEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        TEST_ASSERT(hDoneEvent != nullptr, "CreateEventW creates completion event");
+        pQueue->EnqueueSetEvent(hDoneEvent);
+        pQueue->Submit();
+
+        TEST_ASSERT(WaitForSingleObject(hDoneEvent, 100) == WAIT_OBJECT_0, "DirectStorage EnqueueSetEvent signals upon queue submission completion");
+        CloseHandle(hDoneEvent);
+        pQueue->Close();
+        pQueue->Release();
+        pFactory->Release();
+    }
+
+    // 2. Pillar 2: NT Kernel BypassIO Driver Architecture (FSCTL_MANAGE_BYPASS_IO)
+    {
+        using namespace micant::bypassio;
+        InitializeBypassIoSubsystem();
+        HANDLE hFakeFile = reinterpret_cast<HANDLE>(0x991001);
+
+        // Query BypassIO volume and file capabilities via standard DeviceIoControl
+        FS_BPIO_INPUT inQuery{ FS_BPIO_OP_QUERY, FS_BPIO_INFL_NONE, 0, 0 };
+        FS_BPIO_OUTPUT outQuery{};
+        DWORD bytesReturned = 0;
+        BOOL bRes = DeviceIoControl(hFakeFile, FSCTL_MANAGE_BYPASS_IO, &inQuery, sizeof(inQuery),
+                                    &outQuery, sizeof(outQuery), &bytesReturned, nullptr);
+        TEST_ASSERT(bRes == TRUE && outQuery.Status == FS_BPIO_SUCCESS,
+                    "FSCTL_MANAGE_BYPASS_IO (FS_BPIO_OP_QUERY) succeeds with FS_BPIO_SUCCESS");
+
+        // Enable BypassIO for NVMe Direct-to-VRAM DMA
+        FS_BPIO_INPUT inEnable{ FS_BPIO_OP_ENABLE, FS_BPIO_INFL_DMA_VRAM_TARGET, 0, 0 };
+        FS_BPIO_OUTPUT outEnable{};
+        bRes = DeviceIoControl(hFakeFile, FSCTL_MANAGE_BYPASS_IO, &inEnable, sizeof(inEnable),
+                               &outEnable, sizeof(outEnable), &bytesReturned, nullptr);
+        TEST_ASSERT(bRes == TRUE && outEnable.Status == FS_BPIO_SUCCESS,
+                    "FSCTL_MANAGE_BYPASS_IO (FS_BPIO_OP_ENABLE) activates fast-path DMA streaming");
+        TEST_ASSERT((outEnable.OutFlags & FS_BPIO_OUTFL_VOLUME_STACK_BYPASS) != 0,
+                    "BypassIO output flags confirm volume filter stack bypass");
+
+        auto info = TitanBypassIoSubsystem::Instance().getVolumeBypassIoInfo();
+        TEST_ASSERT(info.VolumeStackSupported == 1 && info.StorageStackSupported == 1,
+                    "BypassIO volume and NVMe storage driver stacks are active");
+    }
+
+    // 3. Pillar 3: DXGI 1.6+ Full HDR / Color Space & Primary Chromaticities
+    {
+        using namespace micant::um::prism_dxgi16;
+        InitializePrismDxgi16ComHierarchyExports();
+        auto& dxgiMgr = SovereignPrismDxgi16ComManager::get();
+
+        // Color Space Support (BT.2020 HDR10)
+        uint32_t colorSupport = 0;
+        NTSTATUS st = dxgiMgr.CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, &colorSupport);
+        TEST_ASSERT(st == STATUS_SUCCESS && colorSupport == 0x1,
+                    "CheckColorSpaceSupport reports support for DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020");
+
+        st = dxgiMgr.SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+        TEST_ASSERT(st == STATUS_SUCCESS && dxgiMgr.GetColorSpace1() == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+                    "SetColorSpace1 sets active swap chain color space to HDR10 BT.2020");
+
+        // Set HDR10 Mastering Metadata
+        DXGI_HDR_METADATA_HDR10 hdrMeta{};
+        hdrMeta.RedPrimary[0]   = 35400; // 0.708 * 50000
+        hdrMeta.RedPrimary[1]   = 14600; // 0.292 * 50000
+        hdrMeta.GreenPrimary[0] = 8500;  // 0.170 * 50000
+        hdrMeta.GreenPrimary[1] = 39850; // 0.797 * 50000
+        hdrMeta.BluePrimary[0]  = 6550;  // 0.131 * 50000
+        hdrMeta.BluePrimary[1]  = 2300;  // 0.046 * 50000
+        hdrMeta.WhitePoint[0]   = 15635; // 0.3127 * 50000
+        hdrMeta.WhitePoint[1]   = 16450; // 0.3290 * 50000
+        hdrMeta.MaxMasteringLuminance = 10000000; // 1000 nits (in 1/10000 nit)
+        hdrMeta.MinMasteringLuminance = 1;        // 0.0001 nit
+        hdrMeta.MaxContentLightLevel = 1000;      // 1000 nits MaxCLL
+        hdrMeta.MaxFrameAverageLightLevel = 400;  // 400 nits MaxFALL
+
+        st = dxgiMgr.SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(hdrMeta), &hdrMeta);
+        TEST_ASSERT(st == STATUS_SUCCESS && dxgiMgr.IsHdr10Active() == true,
+                    "SetHDRMetaData successfully applies HDR10 mastering parameters to display pipeline");
+
+        // Inspect Output Desc1
+        DXGI_OUTPUT_DESC1 outDesc{};
+        st = dxgiMgr.GetOutputDesc1(&outDesc);
+        TEST_ASSERT(st == STATUS_SUCCESS, "GetOutputDesc1 succeeds");
+        TEST_ASSERT(outDesc.BitsPerColor == 10 && outDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+                    "Output is 10-bit deep color HDR10 display");
+        TEST_ASSERT(outDesc.MaxLuminance == 1000.0f && outDesc.MinLuminance == 0.0001f,
+                    "Peak display luminance matches 1000 nits HDR specification");
+
+        uint32_t compFlags = 0;
+        st = dxgiMgr.CheckHardwareCompositionSupport(&compFlags);
+        TEST_ASSERT(st == STATUS_SUCCESS && (compFlags & 0x3) == 0x3,
+                    "CheckHardwareCompositionSupport confirms Multi-Plane Overlay (MPO) hardware direct flip");
+    }
+
+    // 4. Pillar 4: Low-Latency WASAPI Audio Engine (IAudioClient3)
+    {
+        using namespace micant::wasapi;
+        InitializeWASAPISubsystem();
+
+        IMMDeviceEnumerator* pEnum = nullptr;
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            CLSID_MMDeviceEnumerator,
+            nullptr,
+            ole32::CLSCTX_INPROC_SERVER,
+            IID_IMMDeviceEnumerator,
+            reinterpret_cast<void**>(&pEnum)
+        );
+        TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "CoCreateInstance creates IMMDeviceEnumerator");
+
+        IMMDevice* pDevice = nullptr;
+        hr = pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDevice);
+        TEST_ASSERT(hr == ole32::S_OK && pDevice != nullptr, "GetDefaultAudioEndpoint returns default render endpoint");
+
+        IAudioClient3* pClient3 = nullptr;
+        hr = pDevice->Activate(IID_IAudioClient3, 0, nullptr, reinterpret_cast<void**>(&pClient3));
+        TEST_ASSERT(hr == ole32::S_OK && pClient3 != nullptr, "Activate activates IAudioClient3 interface");
+
+        audio::WAVEFORMATEX fmt{};
+        fmt.wFormatTag = 1; // PCM
+        fmt.nChannels = 2;
+        fmt.nSamplesPerSec = 48000;
+        fmt.wBitsPerSample = 16;
+        fmt.nBlockAlign = 4;
+        fmt.nAvgBytesPerSec = 48000 * 4;
+
+        uint32_t defPeriod = 0, fundPeriod = 0, minPeriod = 0, maxPeriod = 0;
+        hr = pClient3->GetSharedModeEnginePeriod(&fmt, &defPeriod, &fundPeriod, &minPeriod, &maxPeriod);
+        TEST_ASSERT(hr == ole32::S_OK, "GetSharedModeEnginePeriod succeeds");
+        TEST_ASSERT(minPeriod == 144, "Minimum shared engine period is 144 frames (3ms at 48kHz for competitive anti-lag audio)");
+        TEST_ASSERT(fundPeriod == 48, "Fundamental period is 48 frames (1ms DSP tick)");
+
+        hr = pClient3->InitializeSharedAudioStream(0, minPeriod, &fmt, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK, "InitializeSharedAudioStream initializes low-latency 3ms audio stream");
+
+        IAudioRenderClient* pRender = nullptr;
+        hr = pClient3->GetService(IID_IAudioRenderClient, reinterpret_cast<void**>(&pRender));
+        TEST_ASSERT(hr == ole32::S_OK && pRender != nullptr, "GetService provides IAudioRenderClient");
+
+        uint8_t* pBuf = nullptr;
+        hr = pRender->GetBuffer(144, &pBuf);
+        TEST_ASSERT(hr == ole32::S_OK && pBuf != nullptr, "IAudioRenderClient::GetBuffer acquires audio buffer memory");
+        hr = pRender->ReleaseBuffer(144, 0);
+        TEST_ASSERT(hr == ole32::S_OK, "IAudioRenderClient::ReleaseBuffer commits audio frames to hardware buffer");
+
+        IAudioClock* pClock = nullptr;
+        hr = pClient3->GetService(IID_IAudioClock, reinterpret_cast<void**>(&pClock));
+        TEST_ASSERT(hr == ole32::S_OK && pClock != nullptr, "GetService provides IAudioClock");
+        uint64_t freq = 0;
+        pClock->GetFrequency(&freq);
+        TEST_ASSERT(freq == 48000, "IAudioClock frequency matches 48kHz audio sampling rate");
+
+        pClock->Release();
+        pRender->Release();
+        pClient3->Release();
+        pDevice->Release();
+        pEnum->Release();
+    }
+
+    // 5. Pillar 5: Authentic Win32 Job Objects Architecture
+    {
+        HANDLE hJob = CreateJobObjectW(nullptr, L"MicaNT_GameProcess_Job");
+        TEST_ASSERT(hJob != nullptr, "CreateJobObjectW creates authentic named Job Object");
+
+        HANDLE hOpened = OpenJobObjectW(0x1F001F, FALSE, L"MicaNT_GameProcess_Job");
+        TEST_ASSERT(hOpened != nullptr, "OpenJobObjectW successfully opens existing named Job Object");
+
+        TEST_ASSERT(AssignProcessToJobObject(hJob, GetCurrentProcess()) == TRUE,
+                    "AssignProcessToJobObject assigns current game process to job");
+
+        BOOL bInJob = FALSE;
+        TEST_ASSERT(IsProcessInJob(GetCurrentProcess(), hJob, &bInJob) == TRUE && bInJob == TRUE,
+                    "IsProcessInJob verifies process membership in job");
+
+        // Set Extended Limit Information (Memory limits & Kill on Job Close)
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION extLimits{};
+        extLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        extLimits.ProcessMemoryLimit = 8ULL * 1024 * 1024 * 1024; // 8 GB limit
+        TEST_ASSERT(SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &extLimits, sizeof(extLimits)) == TRUE,
+                    "SetInformationJobObject configures 8GB process memory limit and auto-kill on close");
+
+        // Set CPU Rate Control Information (90% hard cap for game background shader compilation)
+        JOBOBJECT_CPU_RATE_CONTROL_INFORMATION cpuLimits{};
+        cpuLimits.ControlFlags = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+        cpuLimits.CpuRate = 9000; // 90.00%
+        TEST_ASSERT(SetInformationJobObject(hJob, JobObjectCpuRateControlInformation, &cpuLimits, sizeof(cpuLimits)) == TRUE,
+                    "SetInformationJobObject configures 90% CPU hard cap for worker processes");
+
+        // Query information back
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION qExt{};
+        DWORD retLen = 0;
+        TEST_ASSERT(QueryInformationJobObject(hJob, JobObjectExtendedLimitInformation, &qExt, sizeof(qExt), &retLen) == TRUE,
+                    "QueryInformationJobObject queries JobObjectExtendedLimitInformation");
+        TEST_ASSERT(qExt.ProcessMemoryLimit == 8ULL * 1024 * 1024 * 1024,
+                    "Queried process memory limit matches configured 8GB");
+
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION qAcct{};
+        TEST_ASSERT(QueryInformationJobObject(hJob, JobObjectBasicAccountingInformation, &qAcct, sizeof(qAcct), &retLen) == TRUE,
+                    "QueryInformationJobObject queries JobObjectBasicAccountingInformation");
+        TEST_ASSERT(qAcct.ActiveProcesses == 1, "Job accounting reflects 1 active game process");
+
+        CloseHandle(hOpened);
+        CloseHandle(hJob);
+    }
+
+    // 6. Pillar 6: Native PE / DynamicLoader Export Resolution Verification
+    {
+        InitializeWin32SubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        // dstorage.dll & dstoragecore.dll exports
+        TEST_ASSERT(ldr.getExport("dstorage.dll", "DStorageGetFactory") != nullptr, "dstorage.dll exports DStorageGetFactory");
+        TEST_ASSERT(ldr.getExport("dstorage.dll", "DStorageSetConfiguration") != nullptr, "dstorage.dll exports DStorageSetConfiguration");
+        TEST_ASSERT(ldr.getExport("dstorage.dll", "DStorageCreateCompressionCodec") != nullptr, "dstorage.dll exports DStorageCreateCompressionCodec");
+        TEST_ASSERT(ldr.getExport("dstoragecore.dll", "DStorageGetFactory") != nullptr, "dstoragecore.dll exports DStorageGetFactory");
+        TEST_ASSERT(ldr.getExport("dstoragecore.dll", "DStorageCreateCompressionCodec") != nullptr, "dstoragecore.dll exports DStorageCreateCompressionCodec");
+
+        // mmdevapi.dll exports
+        TEST_ASSERT(ldr.getExport("mmdevapi.dll", "DllGetClassObject") != nullptr, "mmdevapi.dll exports DllGetClassObject");
+        TEST_ASSERT(ldr.getExport("mmdevapi.dll", "DllCanUnloadNow") != nullptr, "mmdevapi.dll exports DllCanUnloadNow");
+
+        // kernel32.dll & api-ms-win-core-job Job Object exports
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateJobObjectW") != nullptr, "kernel32.dll exports CreateJobObjectW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "OpenJobObjectW") != nullptr, "kernel32.dll exports OpenJobObjectW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "AssignProcessToJobObject") != nullptr, "kernel32.dll exports AssignProcessToJobObject");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetInformationJobObject") != nullptr, "kernel32.dll exports SetInformationJobObject");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryInformationJobObject") != nullptr, "kernel32.dll exports QueryInformationJobObject");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "TerminateJobObject") != nullptr, "kernel32.dll exports TerminateJobObject");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "IsProcessInJob") != nullptr, "kernel32.dll exports IsProcessInJob");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "DeviceIoControl") != nullptr, "kernel32.dll exports DeviceIoControl");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-job-l1-1-0.dll", "CreateJobObjectW") != nullptr, "api-ms-win-core-job-l1-1-0.dll exports CreateJobObjectW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-job-l1-1-0.dll", "AssignProcessToJobObject") != nullptr, "api-ms-win-core-job-l1-1-0.dll exports AssignProcessToJobObject");
+
+        std::cout << "[VERDICT] DirectStorage 1.2 BypassIO, DXGI 1.6 HDR10, Low-Latency WASAPI & Job Objects\n"
+                  << "          operate 100% natively on MicaNT kernel and Win32 executive without satellite DLLs!\n";
+    }
+
+    std::cout << "[HORIZON 201] DirectStorage BypassIO, DXGI 1.6 HDR10 & WASAPI Audio Summary:\n"
+              << "    Pillar 1: DirectStorage 1.2 Architecture & Compression Codec (DStorageCreateCompressionCodec) OK\n"
+              << "    Pillar 2: NT Kernel BypassIO Driver Architecture (FSCTL_MANAGE_BYPASS_IO) OK\n"
+              << "    Pillar 3: DXGI 1.6+ Full HDR / Color Space & Primary Chromaticities (SetHDRMetaData) OK\n"
+              << "    Pillar 4: Low-Latency WASAPI Audio Engine (IAudioClient3 3ms Shared Stream) OK\n"
+              << "    Pillar 5: Authentic Win32 Job Objects Architecture (CreateJobObjectW / SetInformationJobObject) OK\n"
+              << "    Pillar 6: Native PE / DynamicLoader Export Resolution for dstorage, mmdevapi, kernel32 OK\n";
+
+    std::cout << "[TEST] Suite 417: Horizon 201 - DirectStorage BypassIO, DXGI 1.6 HDR10 & WASAPI Audio PASSED." << std::endl;
+}
