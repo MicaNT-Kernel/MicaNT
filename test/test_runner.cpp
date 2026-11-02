@@ -303,6 +303,8 @@
 #include "micant/km/drivers/video/vrr.hpp"
 #include "micant/km/drivers/audio/spatial_audio_subsystem.hpp"
 #include "micant/um/subsystems/mgmt/spatial_cmd.hpp"
+#include "micant/km/drivers/net/game_qos.hpp"
+#include "micant/um/subsystems/mgmt/netpace_cmd.hpp"
 #include "micant/km/drivers/input/sensorscx.hpp"
 #include "micant/km/drivers/net/mbbcx.hpp"
 #include "micant/um/subsystems/media/pmp.hpp"
@@ -441,6 +443,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite411") {
+        RUN_TEST(Test_Horizon195_GamingNetworkQos_UdpPacketPacing_And_NetPaceCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite410") {
@@ -2045,6 +2051,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon192_DirectStorage_GpuDecompression_And_DStorageCLI);
     RUN_TEST(Test_Horizon193_VariableRefreshRate_AdaptiveSync_And_VrrCLI);
     RUN_TEST(Test_Horizon194_SpatialAudio_LowLatencyHeadset_And_SpatialCLI);
+    RUN_TEST(Test_Horizon195_GamingNetworkQos_UdpPacketPacing_And_NetPaceCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

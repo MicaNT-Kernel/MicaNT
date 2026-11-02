@@ -38580,3 +38580,180 @@ void Test_Horizon194_SpatialAudio_LowLatencyHeadset_And_SpatialCLI() {
     std::cout << "[TEST] Suite 410: Horizon 194 - Sovereign 3D Spatial Audio & Low-Latency Headset PASSED." << std::endl;
 }
 
+// ============================================================================
+// SUITE 411: Horizon 195 - Sovereign Gaming Network QoS & UDP Packet Pacing Subsystem
+// ============================================================================
+
+void Test_Horizon195_GamingNetworkQos_UdpPacketPacing_And_NetPaceCLI() {
+    std::cout << "\n[TEST] Running Suite 411: Horizon 195 - Sovereign Gaming Network QoS & UDP Packet Pacing Subsystem...\n";
+
+    auto& mgr = micant::game_qos::GameQosSubsystemManager::Instance();
+    mgr.Initialize();
+
+    // 1. Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    {
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.FindModule("gameqos.sys") != nullptr, "gameqos.sys must be registered");
+        TEST_ASSERT(vdb.FindModule("netpacer.exe") != nullptr, "netpacer.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("netpacing.dll") != nullptr, "netpacing.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("lagcomp.dll") != nullptr, "lagcomp.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("netpacecli.exe") != nullptr, "netpacecli.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("gameflow.sys") != nullptr, "gameflow.sys must be registered");
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto drvRec = scm.getServiceRecord(L"GameQosDriver");
+        TEST_ASSERT(drvRec != nullptr, "GameQosDriver must be registered in SCM");
+        TEST_ASSERT(drvRec->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "Driver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drvRec->startType == micant::scm::SERVICE_BOOT_START, "Driver is SERVICE_BOOT_START");
+        TEST_ASSERT(drvRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Driver is SERVICE_RUNNING");
+
+        auto svcRec = scm.getServiceRecord(L"NetPacingBroker");
+        TEST_ASSERT(svcRec != nullptr, "NetPacingBroker must be registered in SCM");
+        TEST_ASSERT(svcRec->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "Service is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svcRec->startType == micant::scm::SERVICE_AUTO_START, "Service is SERVICE_AUTO_START");
+        TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Service is SERVICE_RUNNING");
+    }
+
+    // 2. Pillar 2: Prioritized Flow Classification & DSCP Tagging
+    {
+        TEST_ASSERT(mgr.GetActiveFlowCount() >= 3, "At least 3 initial game network flows");
+
+        bool foundCod = false;
+        for (const auto& fl : mgr.GetFlows()) {
+            if (fl.destinationPort == 3074) {
+                foundCod = true;
+                TEST_ASSERT(fl.protocol == micant::game_qos::FlowProtocol::UDP, "COD netcode is UDP");
+                TEST_ASSERT(fl.priority == micant::game_qos::GameFlowPriority::CriticalServerTick, "COD priority is CriticalServerTick");
+                TEST_ASSERT(fl.dscpTag == micant::game_qos::DSCP_EXPEDITED_FORWARDING, "COD DSCP is Expedited Forwarding (EF 46)");
+                TEST_ASSERT(fl.targetTickRateHz == 60, "COD target tick rate is 60Hz");
+            }
+        }
+        TEST_ASSERT(foundCod, "Found Call of Duty 3074 UDP game flow");
+
+        // Register custom flow
+        bool regOk = mgr.RegisterFlow(10, "Apex Legends Netcode", 37015,
+                                      micant::game_qos::FlowProtocol::UDP,
+                                      micant::game_qos::GameFlowPriority::CriticalServerTick,
+                                      46, 120);
+        TEST_ASSERT(regOk, "Register custom 120Hz game flow must succeed");
+        TEST_ASSERT(mgr.GetActiveFlowCount() >= 4, "Flow count incremented");
+    }
+
+    // 3. Pillar 3: FQ-CoDel Active Queue Management (AQM) & Bufferbloat Suppression
+    {
+        auto& aqm = mgr.GetAqm();
+        TEST_ASSERT(aqm.IsEnabled(), "FQ-CoDel is enabled by default");
+        TEST_ASSERT(aqm.GetTargetDelayUs() == 2000, "Target sojourn delay is 2000 us (2ms)");
+        TEST_ASSERT(aqm.GetIntervalMs() == 50, "Control interval is 50 ms");
+
+        // Enqueue and Dequeue test across multiple buckets
+        uint64_t now = 5000000;
+        bool enq1 = aqm.EnqueuePacket(1, 1200, now, micant::game_qos::DSCP_EXPEDITED_FORWARDING);
+        bool enq2 = aqm.EnqueuePacket(2, 800, now + 10, micant::game_qos::DSCP_EXPEDITED_FORWARDING);
+        bool enq3 = aqm.EnqueuePacket(10, 1450, now + 20, micant::game_qos::DSCP_EXPEDITED_FORWARDING); // PMTU clamp test
+
+        TEST_ASSERT(enq1 && enq2 && enq3, "All packets successfully enqueued into FQ-CoDel buckets");
+
+        micant::game_qos::QueuedPacket deqPkt{};
+        uint32_t sojournDelay = 0;
+        bool deqOk = aqm.DequeuePacket(now + 400, deqPkt, sojournDelay);
+        TEST_ASSERT(deqOk, "Packet successfully dequeued via DRR scheduling");
+        TEST_ASSERT(sojournDelay <= 2000, "Queue sojourn delay is well within the 2.0ms CoDel target");
+        TEST_ASSERT(deqPkt.payloadBytes <= micant::game_qos::PMTU_CLAMP_PAYLOAD_BYTES, "PMTU payload clamp enforced (<= 1350 bytes)");
+
+        aqm.Reset();
+    }
+
+    // 4. Pillar 4: Sub-Microsecond UDP Packet Pacing & Benchmark
+    {
+        uint32_t delayUs = 0;
+        uint64_t initialCount = mgr.GetPacedPacketsCount();
+
+        for (int i = 0; i < 50; ++i) {
+            bool ok = mgr.PacePacket(1, 1200, delayUs);
+            TEST_ASSERT(ok, "PacePacket invocation must succeed");
+            TEST_ASSERT(delayUs > 0 && delayUs < 5000, "Pacing delay is microsecond-scale (< 5 ms)");
+        }
+
+        TEST_ASSERT(mgr.GetPacedPacketsCount() == initialCount + 50, "Paced packets counter properly tracks all transmissions");
+        TEST_ASSERT(mgr.GetAverageSojournDelayUs() < 2000, "Average queue sojourn delay remains sub-2ms");
+        TEST_ASSERT(mgr.GetJitterReductionPct() >= 80, "Jitter reduction factor is at least 80%");
+    }
+
+    // 5. Pillar 5: Win32 C ABI Exports
+    {
+        TEST_ASSERT(GameQosInitialize() == STATUS_SUCCESS, "GameQosInitialize export");
+        TEST_ASSERT(GameQosGetActiveFlowCount() >= 4, "GameQosGetActiveFlowCount export");
+        TEST_ASSERT(GameQosGetPacedPacketsCount() > 0, "GameQosGetPacedPacketsCount export");
+        TEST_ASSERT(GameQosGetAverageSojournDelayUs() < 2000, "GameQosGetAverageSojournDelayUs export");
+        TEST_ASSERT(GameQosGetJitterReductionPct() >= 80, "GameQosGetJitterReductionPct export");
+
+        NTSTATUS stReg = GameQosRegisterFlow(99, 4444, 17, 46);
+        TEST_ASSERT(stReg == STATUS_SUCCESS, "GameQosRegisterFlow export");
+
+        uint32_t delay = 0;
+        NTSTATUS stPace = GameQosPacePacket(99, 1000, &delay);
+        TEST_ASSERT(stPace == STATUS_SUCCESS && delay > 0, "GameQosPacePacket export");
+
+        NTSTATUS stCfg = GameQosConfigureFqCodel(true, 1500, 40);
+        TEST_ASSERT(stCfg == STATUS_SUCCESS, "GameQosConfigureFqCodel export");
+    }
+
+    // 6. Pillar 6: Canonical Win32 netpace CLI, WFP Rule #19501 & Telemetry
+    {
+        std::string out;
+
+        out = micant::netpace_cmd::um::ExecuteCommand("netpace status");
+        TEST_ASSERT(out.find("MicaNT Sovereign Gaming Network QoS") != std::string::npos, "CLI netpace status banner");
+        TEST_ASSERT(out.find("ACTIVE / ONLINE") != std::string::npos, "CLI netpace status active");
+
+        out = micant::netpace_cmd::um::ExecuteCommand("netpace flows");
+        TEST_ASSERT(out.find("Call of Duty") != std::string::npos, "CLI netpace flows cod");
+        TEST_ASSERT(out.find("3074") != std::string::npos, "CLI netpace flows port");
+
+        out = micant::netpace_cmd::um::ExecuteCommand("netpace prioritize 80 4000 udp 46");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI netpace prioritize");
+
+        out = micant::netpace_cmd::um::ExecuteCommand("netpace fqcodel on 2 50");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI netpace fqcodel");
+
+        out = micant::netpace_cmd::um::ExecuteCommand("netpace benchmark 30");
+        TEST_ASSERT(out.find("Bufferbloat Status:       PASSED") != std::string::npos, "CLI netpace benchmark");
+
+        out = micant::netpace_cmd::um::ExecuteCommand("netpace dump");
+        TEST_ASSERT(out.find("GameQosDriver") != std::string::npos, "CLI netpace dump driver");
+
+        // Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("netpace status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Gaming Network QoS") != std::string::npos, "Console terminal netpace status");
+
+        // WFP Inbound Rule #19501 (MicaNT_GameQos_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto qosRuleOpt = wfp.findRuleById(19501);
+        TEST_ASSERT(qosRuleOpt.has_value(), "WFP Rule #19501 for GameQos must be registered");
+        TEST_ASSERT(qosRuleOpt->protocol == tcpip::IPPROTO_UDP, "GameQos protocol is UDP");
+        TEST_ASSERT(qosRuleOpt->localPortStart == 3074 && qosRuleOpt->localPortEnd == 5085, "Port range 3074-5085");
+        TEST_ASSERT(qosRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"gameqos_active_flows\":") != std::string::npos, "Telemetry gameqos_active_flows");
+        TEST_ASSERT(teleJson.find("\"gameqos_paced_packets\":") != std::string::npos, "Telemetry gameqos_paced_packets");
+        TEST_ASSERT(teleJson.find("\"gameqos_sojourn_delay_us\":") != std::string::npos, "Telemetry gameqos_sojourn_delay_us");
+        TEST_ASSERT(teleJson.find("\"gameqos_jitter_reduction_pct\":") != std::string::npos, "Telemetry gameqos_jitter_reduction_pct");
+    }
+
+    std::cout << "[HORIZON 195] Sovereign Gaming Network QoS & UDP Packet Pacing Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Prioritized Flow Classification & DSCP Tagging OK\n"
+              << "    Pillar 3: FQ-CoDel Active Queue Management (AQM) & Bufferbloat Suppression OK\n"
+              << "    Pillar 4: Sub-Microsecond UDP Packet Pacing & Benchmark OK\n"
+              << "    Pillar 5: Win32 C ABI Exports OK\n"
+              << "    Pillar 6: Canonical Win32 netpace CLI, WFP Rule #19501 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 411: Horizon 195 - Sovereign Gaming Network QoS & UDP Packet Pacing PASSED." << std::endl;
+}
+
+

@@ -102,6 +102,8 @@
 #include "micant/um/subsystems/mgmt/vrr_cmd.hpp"
 #include "micant/km/drivers/audio/spatial_audio_subsystem.hpp"
 #include "micant/um/subsystems/mgmt/spatial_cmd.hpp"
+#include "micant/km/drivers/net/game_qos.hpp"
+#include "micant/um/subsystems/mgmt/netpace_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -592,6 +594,19 @@ public:
         spatialRule.weight = 1500;
         spatialRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(spatialRule);
+
+        // 38. Register WFP Inbound Rule for Gaming Network QoS & UDP Packet Pacing (UDP 3074/5085)
+        wfp::km::WfpKernelFilterRule qosRule{};
+        qosRule.filterId = 19501;
+        qosRule.name = "MicaNT_GameQos_Permit";
+        qosRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        qosRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        qosRule.protocol = tcpip::IPPROTO_UDP;
+        qosRule.localPortStart = 3074;
+        qosRule.localPortEnd = 5085;
+        qosRule.weight = 1500;
+        qosRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(qosRule);
     }
 
     void stopHttpsServer() {
@@ -1067,6 +1082,8 @@ public:
             return res;
         } else if (cmd == "spatial" || cmd.starts_with("spatial ") || cmd == "spatialcli" || cmd.starts_with("spatialcli ") || cmd == "spatialaudio" || cmd.starts_with("spatialaudio ")) {
             return spatial_cmd::um::ExecuteCommand(cmd);
+        } else if (cmd == "netpace" || cmd.starts_with("netpace ") || cmd == "netpacecli" || cmd.starts_with("netpacecli ") || cmd == "gameqos" || cmd.starts_with("gameqos ")) {
+            return netpace_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1400,7 +1417,11 @@ public:
            << "\"spatial_active_endpoints\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetEndpointCount() << ","
            << "\"spatial_active_emitters\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetActiveEmitterCount() << ","
            << "\"spatial_dsp_latency_us\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetDspLatencyMicroseconds() << ","
-           << "\"spatial_processed_frames\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetProcessedFramesCount() << "}\r\n";
+           << "\"spatial_processed_frames\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetProcessedFramesCount() << ","
+           << "\"gameqos_active_flows\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetActiveFlowCount() << ","
+           << "\"gameqos_paced_packets\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetPacedPacketsCount() << ","
+           << "\"gameqos_sojourn_delay_us\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetAverageSojournDelayUs() << ","
+           << "\"gameqos_jitter_reduction_pct\":" << micant::game_qos::GameQosSubsystemManager::Instance().GetJitterReductionPct() << "}\r\n";
         return ss.str();
     }
 
