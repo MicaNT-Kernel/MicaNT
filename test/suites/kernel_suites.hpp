@@ -37537,3 +37537,198 @@ inline void Test_Horizon189_GpuScheduling_MultiplaneOverlay_And_GpuSchedCLI() {
 
     std::cout << "[TEST] Suite 405: Horizon 189 - Sovereign Hardware GPU Scheduling & MPO PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 406: Horizon 190 - Sovereign Virtual Memory Compression & Store Manager Subsystem
+// ============================================================================
+
+inline void Test_Horizon190_MemoryCompression_StoreManager_And_MemCompCLI() {
+    std::cout << "\n[TEST] Running Suite 406: Horizon 190 - Sovereign Memory Compression & Store Manager...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::memcomp::RegisterMemCompressionSubsystem();
+
+        // 1. SCM Services Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto drv = scm.getServiceRecord(L"MemCompression");
+        TEST_ASSERT(drv != nullptr, "MemCompression driver record exists in SCM");
+        TEST_ASSERT(drv->serviceType == scm::SERVICE_KERNEL_DRIVER, "MemCompression is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drv->startType == scm::SERVICE_BOOT_START, "MemCompression is SERVICE_BOOT_START");
+        TEST_ASSERT(drv->status.dwCurrentState == scm::SERVICE_RUNNING, "MemCompression is SERVICE_RUNNING");
+
+        auto svc = scm.getServiceRecord(L"SysMain");
+        TEST_ASSERT(svc != nullptr, "SysMain service record exists in SCM");
+        TEST_ASSERT(svc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "SysMain is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "SysMain is SERVICE_RUNNING");
+
+        // 2. VersionDatabase PE Module Registration (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "memcompression.sys", "sysmain.exe", "storemanager.dll", "compressapi.dll", "memcompcli.exe", "smstore.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: In-RAM Compressed Page Store & Multi-Partition Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::memcomp::MemoryCompressionManager::get();
+        TEST_ASSERT(mgr.isCompressionEnabled(), "Memory compression enabled by default");
+
+        auto parts = mgr.getPartitions();
+        TEST_ASSERT(parts.size() == 3, "3 default in-memory store partitions active");
+        TEST_ASSERT(parts[0].partitionName == "System Kernel Store", "Partition 0 is System Kernel Store");
+        TEST_ASSERT(parts[1].partitionName == "Gaming Working Set Store", "Partition 1 is Gaming Store");
+        TEST_ASSERT(parts[1].totalPagesStored >= 32, "Seeded pages present in Gaming Store");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Page Compression & Dynamic Ratio Accounting
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::memcomp::MemoryCompressionManager::get();
+        std::vector<uint8_t> testPage(4096);
+        for (size_t i = 0; i < testPage.size(); ++i) {
+            testPage[i] = static_cast<uint8_t>(i & 0xFF);
+        }
+
+        uint64_t key = mgr.compressPage(6000, 0x00007FF730000000ULL, testPage.data(), static_cast<uint32_t>(testPage.size()), 1);
+        TEST_ASSERT(key > 0, "Page compressed successfully with valid store key");
+
+        auto vitals = mgr.getVitals();
+        TEST_ASSERT(vitals.totalSavedBytes > 0, "Total saved bytes > 0");
+        TEST_ASSERT(vitals.globalSavingsRatio >= 2.0f, "Compression ratio is >= 2.0:1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Soft Page Fault Decompression & Sub-Microsecond Timing
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::memcomp::MemoryCompressionManager::get();
+        std::vector<uint8_t> rawPage(4096);
+        for (size_t i = 0; i < rawPage.size(); ++i) {
+            rawPage[i] = static_cast<uint8_t>((i * 13 + 7) & 0xFF);
+        }
+
+        uint64_t key = mgr.compressPage(7000, 0x00007FF740000000ULL, rawPage.data(), static_cast<uint32_t>(rawPage.size()), 1);
+        TEST_ASSERT(key > 0, "Test page compressed");
+
+        std::vector<uint8_t> decompPage(4096, 0);
+        uint32_t decompSize = 0;
+        bool dOk = mgr.decompressPage(key, decompPage.data(), static_cast<uint32_t>(decompPage.size()), &decompSize);
+        TEST_ASSERT(dOk, "Decompress page succeeds");
+        TEST_ASSERT(decompSize == 4096, "Decompressed size is 4096 bytes");
+        TEST_ASSERT(std::equal(rawPage.begin(), rawPage.end(), decompPage.begin()), "Decompressed content is bit-perfect match");
+        TEST_ASSERT(mgr.getVitals().softPageFaultsDecompressed > 0, "Soft page faults counter incremented");
+        TEST_ASSERT(mgr.getVitals().averageDecompressLatencyNs < 2000, "Decompression latency < 2 microseconds");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Working Set Trimming & Inactive Page Relocation
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::memcomp::MemoryCompressionManager::get();
+        uint64_t beforeCount = mgr.getVitals().totalPagesCompressed;
+
+        uint32_t trimmed = mgr.trimProcessWorkingSet(5400, 16);
+        TEST_ASSERT(trimmed == 16, "Trimmed and compressed 16 pages");
+        TEST_ASSERT(mgr.getVitals().totalPagesCompressed == beforeCount + 16, "Total compressed pages updated");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports (storemanager.dll & compressapi.dll)
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(MemCompressionIsActive() == 1, "C ABI MemCompressionIsActive returns 1");
+        TEST_ASSERT(MemCompressionGetSavedBytes() > 0, "C ABI MemCompressionGetSavedBytes > 0");
+        TEST_ASSERT(MemCompressionGetRatioFloat() >= 2.0f, "C ABI MemCompressionGetRatioFloat >= 2.0");
+
+        std::vector<uint8_t> inBuf(1024, 0xAB);
+        std::vector<uint8_t> outBuf(1024, 0);
+        uint32_t cSize = 0;
+        int32_t cRes = MemCompressionCompressBlock(inBuf.data(), 1024, outBuf.data(), 1024, &cSize);
+        TEST_ASSERT(cRes == 0, "C ABI MemCompressionCompressBlock succeeds");
+        TEST_ASSERT(cSize < 1024, "Compressed size smaller than original");
+
+        std::vector<uint8_t> restoredBuf(1024, 0);
+        int32_t dRes = MemCompressionDecompressBlock(outBuf.data(), cSize, restoredBuf.data(), 1024, 1024);
+        TEST_ASSERT(dRes == 0, "C ABI MemCompressionDecompressBlock succeeds");
+        TEST_ASSERT(std::equal(inBuf.begin(), inBuf.end(), restoredBuf.begin()), "C ABI decompressed buffer matches original");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (memcomp/memcompcli), WFP Rule #19001 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI memcomp status
+        std::string out;
+        micant::memcomp_cmd::um::ExecuteMemCompString("memcomp status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Virtual Memory Compression") != std::string::npos, "CLI memcomp status title");
+        TEST_ASSERT(out.find("In-RAM Store") != std::string::npos, "CLI memcomp status in-ram store");
+
+        // 2. Canonical CLI memcomp list
+        out.clear();
+        micant::memcomp_cmd::um::ExecuteMemCompString("memcomp list", out);
+        TEST_ASSERT(out.find("System Kernel Store") != std::string::npos, "CLI memcomp list kernel store");
+        TEST_ASSERT(out.find("Gaming Working Set Store") != std::string::npos, "CLI memcomp list gaming store");
+
+        // 3. Canonical CLI memcomp compress
+        out.clear();
+        micant::memcomp_cmd::um::ExecuteMemCompString("memcomp compress 5400 8", out);
+        TEST_ASSERT(out.find("Successfully compressed 8 working set pages") != std::string::npos, "CLI memcomp compress");
+
+        // 4. Canonical CLI memcomp test-page
+        out.clear();
+        micant::memcomp_cmd::um::ExecuteMemCompString("memcomp test-page", out);
+        TEST_ASSERT(out.find("Bit-Perfect Match") != std::string::npos, "CLI memcomp test-page roundtrip");
+
+        // 5. Canonical CLI memcomp set-state
+        out.clear();
+        micant::memcomp_cmd::um::ExecuteMemCompString("memcomp set-state enable", out);
+        TEST_ASSERT(out.find("ENABLED") != std::string::npos, "CLI memcomp set-state");
+
+        // 6. Canonical CLI memcomp dump
+        out.clear();
+        micant::memcomp_cmd::um::ExecuteMemCompString("memcomp dump", out);
+        TEST_ASSERT(out.find("Enable-MMAgent") != std::string::npos, "CLI memcomp dump PowerShell command");
+
+        // 7. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("memcomp status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Virtual Memory Compression") != std::string::npos, "Console terminal memcomp status");
+
+        // 8. WFP Inbound Rule #19001 (MicaNT_MemCompression_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto memcompRuleOpt = wfp.findRuleById(19001);
+        TEST_ASSERT(memcompRuleOpt.has_value(), "WFP Rule #19001 for MemCompression must be registered");
+        TEST_ASSERT(memcompRuleOpt->protocol == tcpip::IPPROTO_TCP, "MemCompression protocol is TCP");
+        TEST_ASSERT(memcompRuleOpt->localPortStart == 5060 && memcompRuleOpt->localPortEnd == 5060, "Port 5060");
+        TEST_ASSERT(memcompRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"memcomp_saved_bytes\":") != std::string::npos, "Telemetry memcomp_saved_bytes");
+        TEST_ASSERT(teleJson.find("\"memcomp_ratio_pct\":") != std::string::npos, "Telemetry memcomp_ratio_pct");
+        TEST_ASSERT(teleJson.find("\"memcomp_compressed_pages\":") != std::string::npos, "Telemetry memcomp_compressed_pages");
+        TEST_ASSERT(teleJson.find("\"memcomp_decompress_faults\":") != std::string::npos, "Telemetry memcomp_decompress_faults");
+    }
+
+    std::cout << "[HORIZON 190] Sovereign Virtual Memory Compression & Store Manager Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: In-RAM Compressed Page Store & Multi-Partition Lifecycle OK\n"
+              << "    Pillar 3: Page Compression & Dynamic Ratio Accounting OK\n"
+              << "    Pillar 4: Soft Page Fault Decompression & Sub-Microsecond Timing OK\n"
+              << "    Pillar 5: Working Set Trimming & Inactive Page Relocation OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 memcomp CLI, WFP Rule #19001 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 406: Horizon 190 - Sovereign Virtual Memory Compression & Store Manager PASSED." << std::endl;
+}

@@ -441,6 +441,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite406") {
+        RUN_TEST(Test_Horizon190_MemoryCompression_StoreManager_And_MemCompCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite405") {
         RUN_TEST(Test_Horizon189_GpuScheduling_MultiplaneOverlay_And_GpuSchedCLI);
         return g_FailedTests;
@@ -2018,6 +2022,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon187_KernelAntiCheat_ProcessProtection_And_Accli);
     RUN_TEST(Test_Horizon188_GamingInput_RawInput_And_GameInputCLI);
     RUN_TEST(Test_Horizon189_GpuScheduling_MultiplaneOverlay_And_GpuSchedCLI);
+    RUN_TEST(Test_Horizon190_MemoryCompression_StoreManager_And_MemCompCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

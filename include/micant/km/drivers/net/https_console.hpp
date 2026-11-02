@@ -92,6 +92,8 @@
 #include "micant/um/subsystems/mgmt/gameinput_cmd.hpp"
 #include "micant/km/drivers/video/hardware_flip_queue.hpp"
 #include "micant/um/subsystems/mgmt/gpusched_cmd.hpp"
+#include "micant/km/drivers/compute/memcompression.hpp"
+#include "micant/um/subsystems/mgmt/memcomp_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -517,6 +519,19 @@ public:
         gpuRule.weight = 1500;
         gpuRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(gpuRule);
+
+        // 33. Register WFP Inbound Rule for Virtual Memory Compression Telemetry (TCP 5060)
+        wfp::km::WfpKernelFilterRule memcompRule{};
+        memcompRule.filterId = 19001;
+        memcompRule.name = "MicaNT_MemCompression_Permit";
+        memcompRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        memcompRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        memcompRule.protocol = tcpip::IPPROTO_TCP;
+        memcompRule.localPortStart = 5060;
+        memcompRule.localPortEnd = 5060;
+        memcompRule.weight = 1500;
+        memcompRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(memcompRule);
     }
 
     void stopHttpsServer() {
@@ -974,6 +989,10 @@ public:
             std::string res;
             gpusched_cmd::um::ExecuteGpuSchedulerString(cmd, res);
             return res;
+        } else if (cmd == "memcomp" || cmd.starts_with("memcomp ") || cmd == "memcompcli" || cmd.starts_with("memcompcli ") || cmd == "mmstore" || cmd.starts_with("mmstore ")) {
+            std::string res;
+            memcomp_cmd::um::ExecuteMemCompString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1287,7 +1306,11 @@ public:
            << "\"gpu_hags_enabled\":" << (micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().hagsEnabled ? 1 : 0) << ","
            << "\"gpu_mpo_planes_active\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().mpoPlanesActive << ","
            << "\"gpu_avg_frame_latency_us\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().averageFrameLatencyUs << ","
-           << "\"gpu_total_direct_flips\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().totalDirectFlips << "}\r\n";
+           << "\"gpu_total_direct_flips\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().totalDirectFlips << ","
+           << "\"memcomp_saved_bytes\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().totalSavedBytes << ","
+           << "\"memcomp_ratio_pct\":" << static_cast<uint32_t>(micant::memcomp::MemoryCompressionManager::get().getVitals().globalSavingsRatio * 100.0f) << ","
+           << "\"memcomp_compressed_pages\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().totalPagesCompressed << ","
+           << "\"memcomp_decompress_faults\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().softPageFaultsDecompressed << "}\r\n";
         return ss.str();
     }
 
