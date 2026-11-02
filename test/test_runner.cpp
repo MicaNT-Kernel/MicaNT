@@ -309,6 +309,7 @@
 #include "micant/km/drivers/security/vsm.hpp"
 #include "micant/km/drivers/security/hotpatch.hpp"
 #include "micant/um/servers/hyperv.hpp"
+#include "micant/um/subsystems/mgmt/hyperv_hypercall_cmd.hpp"
 #include "micant/km/drivers/fs/refs.hpp"
 #include "micant/km/drivers/fs/csvfs.hpp"
 #include "micant/km/drivers/fs/wcifs.hpp"
@@ -432,6 +433,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite395") {
+        RUN_TEST(Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite394") {
@@ -1956,6 +1961,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
     RUN_TEST(Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
     RUN_TEST(Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI);
+    RUN_TEST(Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

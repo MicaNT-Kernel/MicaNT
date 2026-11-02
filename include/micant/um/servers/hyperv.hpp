@@ -365,6 +365,69 @@ public:
         m_initialized = true;
     }
 
+    void reset() {
+        std::unique_lock lock(m_mutex);
+        m_initialized = false;
+        m_partitions.clear();
+        m_hypercallPageGpa = 0x0000000040001000ULL;
+        m_hypercallPageEnabled = true;
+
+        m_refTsc.tscSequence = 1;
+        m_refTsc.tscScale = 0x100000000ULL;
+        m_refTsc.tscOffset = 0;
+
+        // Pre-create Root / Host Partition (Partition 0)
+        auto rootPart = std::make_shared<GuestPartition>(0, "MicaNT-Root-Partition", 16384);
+        rootPart->enableNestedVirtualization(true);
+        rootPart->createVirtualProcessor(0);
+        rootPart->createVirtualProcessor(1);
+        m_partitions[0] = rootPart;
+
+        // Pre-create Nested VM Guest (Partition 1: L1 Hypervisor / WSA / WSL2)
+        auto l1Part = std::make_shared<GuestPartition>(1, "L1-HyperV-Guest-WSL2", 8192);
+        l1Part->enableNestedVirtualization(true);
+        auto l1Vp0 = l1Part->createVirtualProcessor(0);
+        auto l1Vp1 = l1Part->createVirtualProcessor(1);
+        m_partitions[1] = l1Part;
+
+        m_totalHypercalls.store(0);
+        m_fastHypercalls.store(0);
+        m_nestedVmExits.store(0);
+        m_evmcsFlushes.store(0);
+
+        m_initialized = true;
+    }
+
+    void setHypercallPageGpa(uint64_t gpa) {
+        std::unique_lock lock(m_mutex);
+        m_hypercallPageGpa = gpa;
+    }
+
+    void setHypercallPageEnabled(bool en) {
+        std::unique_lock lock(m_mutex);
+        m_hypercallPageEnabled = en;
+    }
+
+    void setReferenceTsc(uint32_t seq, uint64_t scale, int64_t offset) {
+        std::unique_lock lock(m_mutex);
+        m_refTsc.tscSequence = seq;
+        m_refTsc.tscScale = scale;
+        m_refTsc.tscOffset = offset;
+    }
+
+    bool removePartition(uint32_t partitionId) {
+        std::unique_lock lock(m_mutex);
+        return m_partitions.erase(partitionId) > 0;
+    }
+
+    std::shared_ptr<GuestPartition> getPartitionByName(const std::string& name) const {
+        std::shared_lock lock(m_mutex);
+        for (const auto& [id, p] : m_partitions) {
+            if (p && p->getName() == name) return p;
+        }
+        return nullptr;
+    }
+
     bool isInitialized() const {
         std::shared_lock lock(m_mutex);
         return m_initialized;
@@ -562,6 +625,8 @@ inline void RegisterHypervSubsystem() {
     auto& vdb = micant::version::VersionDatabase::Instance();
     vdb.RegisterModule("hvix64.sys", "10.0.26100.1", "Hyper-V Hypervisor Core Driver (TitanHypervisor)");
     vdb.RegisterModule("winhvr.sys", "10.0.26100.1", "Hyper-V Virtualization Platform Runtime (AegisNestedVM)");
+    vdb.RegisterModule("hvc.exe", "10.0.26100.1", "Hyper-V Hypervisor Configuration & Diagnostics Tool");
+    vdb.RegisterModule("hvconfig.exe", "10.0.26100.1", "Hyper-V Nested Virtualization & Hypercall Console");
 
     // 2. SCM Registration
     auto& scm = micant::scm::ServiceControlManager::get();

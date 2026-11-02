@@ -70,6 +70,8 @@
 #include "micant/um/subsystems/mgmt/hyperv_cmd.hpp"
 #include "micant/um/servers/wsrm.hpp"
 #include "micant/um/subsystems/mgmt/wsrm_cmd.hpp"
+#include "micant/um/servers/hyperv.hpp"
+#include "micant/um/subsystems/mgmt/hyperv_hypercall_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -352,6 +354,19 @@ public:
         wsrmRule.weight = 1500;
         wsrmRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(wsrmRule);
+
+        // 22. Register WFP Inbound Rule for Hyper-V Hypercall & Diagnostics (TCP 17901)
+        wfp::km::WfpKernelFilterRule hvcRule{};
+        hvcRule.filterId = 17901;
+        hvcRule.name = "MicaNT_HyperV_Hypercall_Permit";
+        hvcRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        hvcRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        hvcRule.protocol = tcpip::IPPROTO_TCP;
+        hvcRule.localPortStart = 17901;
+        hvcRule.localPortEnd = 17901;
+        hvcRule.weight = 1500;
+        hvcRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(hvcRule);
     }
 
     void stopHttpsServer() {
@@ -762,6 +777,10 @@ public:
             std::string res;
             wsrm_cmd::um::ExecuteWsrmString(cmd, res);
             return res;
+        } else if (cmd == "hvc" || cmd.starts_with("hvc ") || cmd == "hvconfig" || cmd.starts_with("hvconfig ")) {
+            std::string res;
+            hvc_cmd::um::ExecuteHvcString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1028,7 +1047,11 @@ public:
            << "\"wsrm_policy\":\"" << micant::wsrm::AllocationPolicyTypeToString(micant::wsrm::SystemResourceManager::instance().getAllocationPolicy()) << "\","
            << "\"wsrm_managed_procs\":" << micant::wsrm::SystemResourceManager::instance().getAllManagedProcesses().size() << ","
            << "\"wsrm_throttling_events\":" << micant::wsrm::SystemResourceManager::instance().getTotalThrottlingEvents() << ","
-           << "\"wsrm_rebalance_cycles\":" << micant::wsrm::SystemResourceManager::instance().getRebalanceCycles() << "}\r\n";
+           << "\"wsrm_rebalance_cycles\":" << micant::wsrm::SystemResourceManager::instance().getRebalanceCycles() << ","
+           << "\"hyperv_hypercalls\":" << micant::hyperv::HypervSubsystem::get().getTotalHypercalls() << ","
+           << "\"hyperv_fast_calls\":" << micant::hyperv::HypervSubsystem::get().getFastHypercalls() << ","
+           << "\"hyperv_nested_exits\":" << micant::hyperv::HypervSubsystem::get().getNestedVmExits() << ","
+           << "\"hyperv_evmcs_flushes\":" << micant::hyperv::HypervSubsystem::get().getEvmcsFlushes() << "}\r\n";
         return ss.str();
     }
 

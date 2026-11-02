@@ -34514,3 +34514,316 @@ inline void Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_Wsrm
 
     std::cout << "[TEST] Suite 394: Horizon 178 - Sovereign Windows Server System Resource Manager PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall &
+//            Nested Hardware Virtualization Subsystem (TitanHypervisor / AegisNestedVM)
+// ============================================================================
+inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI() {
+    std::cout << "[TEST] Running Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization Subsystem..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, Reset & VersionDatabase Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+        hv.reset();
+        micant::hyperv::RegisterHypervSubsystem();
+
+        TEST_ASSERT(hv.isInitialized(), "HypervSubsystem is initialized");
+        TEST_ASSERT(hv.isHypercallPageEnabled(), "Hypercall page is enabled by default");
+        TEST_ASSERT(hv.getHypercallPageGpa() == 0x0000000040001000ULL, "Default Hypercall GPA matches 0x40001000");
+
+        // Version Database Verification
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        const auto* hvixInfo = vdb.GetModuleInfo("hvix64.sys");
+        TEST_ASSERT(hvixInfo != nullptr && hvixInfo->stringTable.at("FileVersion") == "10.0.26100.1", "hvix64.sys registered @ 10.0.26100.1");
+
+        const auto* hvrInfo = vdb.GetModuleInfo("winhvr.sys");
+        TEST_ASSERT(hvrInfo != nullptr && hvrInfo->stringTable.at("FileVersion") == "10.0.26100.1", "winhvr.sys registered @ 10.0.26100.1");
+
+        const auto* hvcInfo = vdb.GetModuleInfo("hvc.exe");
+        TEST_ASSERT(hvcInfo != nullptr && hvcInfo->stringTable.at("FileVersion") == "10.0.26100.1", "hvc.exe registered @ 10.0.26100.1");
+
+        const auto* hvcfgInfo = vdb.GetModuleInfo("hvconfig.exe");
+        TEST_ASSERT(hvcfgInfo != nullptr && hvcfgInfo->stringTable.at("FileVersion") == "10.0.26100.1", "hvconfig.exe registered @ 10.0.26100.1");
+
+        // SCM Service Verification
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"HypervService");
+        TEST_ASSERT(svc != nullptr, "HypervService is registered in SCM");
+        TEST_ASSERT(svc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "HypervService is win32 share process");
+        TEST_ASSERT(svc->startType == micant::scm::SERVICE_AUTO_START, "HypervService is auto start");
+        TEST_ASSERT(svc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "HypervService is running");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Reference TSC Page & Invariant Timekeeping
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+        const auto& tsc = hv.getReferenceTsc();
+
+        TEST_ASSERT(tsc.tscSequence == 1, "Initial TSC sequence is 1");
+        TEST_ASSERT(tsc.tscScale == 0x100000000ULL, "Initial TSC scale is 1.0 (0x100000000 in 32.32 fixed-point)");
+        TEST_ASSERT(tsc.tscOffset == 0, "Initial TSC offset is 0");
+
+        // Calibrate Reference TSC with simulated hardware clock drift correction
+        hv.setReferenceTsc(2, 0x100001000ULL, -125000);
+        const auto& calibratedTsc = hv.getReferenceTsc();
+        TEST_ASSERT(calibratedTsc.tscSequence == 2, "Updated TSC sequence is 2");
+        TEST_ASSERT(calibratedTsc.tscScale == 0x100001000ULL, "Updated TSC scale matches calibrated frequency");
+        TEST_ASSERT(calibratedTsc.tscOffset == -125000, "Updated TSC offset matches drift correction");
+
+        // Restore default for downstream tests
+        hv.setReferenceTsc(1, 0x100000000ULL, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: TLFS Hypercall Dispatch Engine & Calling Conventions
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+        hv.reset();
+
+        // 1. Fast Register Hypercalls (RCX/RDX)
+        uint16_t stPostMsg = hv.invokeHypercall(micant::hyperv::HvCallPostMessage, true, 0x12345678);
+        TEST_ASSERT(stPostMsg == micant::hyperv::HV_STATUS_SUCCESS, "HvCallPostMessage fast hypercall succeeds");
+
+        uint16_t stSigEvt = hv.invokeHypercall(micant::hyperv::HvCallSignalEvent, true, 0xABCDEF00);
+        TEST_ASSERT(stSigEvt == micant::hyperv::HV_STATUS_SUCCESS, "HvCallSignalEvent fast hypercall succeeds");
+
+        uint16_t stFlushVA = hv.invokeHypercall(micant::hyperv::HvCallFlushVirtualAddressSpace, true, 0);
+        TEST_ASSERT(stFlushVA == micant::hyperv::HV_STATUS_SUCCESS, "HvCallFlushVirtualAddressSpace fast hypercall succeeds");
+
+        // 2. Standard Memory-Buffered Hypercalls with GPA Validation & Translation
+        uint64_t translatedGpa = 0;
+        uint16_t stTrans = hv.invokeHypercall(micant::hyperv::HvCallTranslateVirtualAddress, false, 0x7FFF00001000ULL, &translatedGpa);
+        TEST_ASSERT(stTrans == micant::hyperv::HV_STATUS_SUCCESS, "HvCallTranslateVirtualAddress succeeds");
+        TEST_ASSERT(translatedGpa == (0x7FFF00001000ULL + 0x1000), "GPA page offset correctly translated");
+
+        uint64_t regOut = 0;
+        uint16_t stReg = hv.invokeHypercall(micant::hyperv::HvCallGetVirtualProcessorRegisters, false, 0xAAAAAAAAULL, &regOut);
+        TEST_ASSERT(stReg == micant::hyperv::HV_STATUS_SUCCESS, "HvCallGetVirtualProcessorRegisters succeeds");
+        TEST_ASSERT(regOut == (0xAAAAAAAAULL ^ 0x55555555), "Register query returns expected transformed value");
+
+        // 3. Invalid Hypercall Code Handling
+        uint16_t stInvalid = hv.invokeHypercall(0x9999, true, 0);
+        TEST_ASSERT(stInvalid == micant::hyperv::HV_STATUS_INVALID_HYPERCALL_CODE, "Unknown hypercall code returns HV_STATUS_INVALID_HYPERCALL_CODE");
+
+        // 4. Telemetry Verification
+        TEST_ASSERT(hv.getTotalHypercalls() >= 6, "Total hypercalls counted");
+        TEST_ASSERT(hv.getFastHypercalls() >= 4, "Fast hypercalls counted");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Enlightened VMCS (eVMCS) Protocol & Clean Fields
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+        hv.reset();
+
+        auto l1Part = hv.getPartition(1);
+        TEST_ASSERT(l1Part != nullptr, "Pre-seeded L1 partition (WSL2/WSA) exists");
+
+        auto vp0 = l1Part->getVirtualProcessor(0);
+        TEST_ASSERT(vp0 != nullptr, "VirtualProcessor 0 exists on L1 partition");
+
+        auto& evmcs = vp0->getEnlightenedVmcs();
+        TEST_ASSERT(evmcs.revisionId == micant::hyperv::HV_VMX_ENLIGHTENED_VMCS_VERSION, "eVMCS revision is 1");
+        TEST_ASSERT(evmcs.cleanFieldsMask == 0, "Initial clean fields mask is 0");
+
+        // Set clean fields mask: mark processor controls and execution controls clean
+        evmcs.cleanFieldsMask = micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC |
+                               micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_EXEC;
+        TEST_ASSERT((evmcs.cleanFieldsMask & micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC) != 0, "CONTROL_PROC clean bit set");
+
+        // Sync eVMCS with dirty mask (clearing clean bits for modified fields)
+        bool syncOk = hv.syncEnlightenedVmcs(1, 0, micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC);
+        TEST_ASSERT(syncOk, "eVMCS sync succeeds");
+        TEST_ASSERT((evmcs.cleanFieldsMask & micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC) == 0, "CONTROL_PROC clean bit invalidated after sync");
+        TEST_ASSERT((evmcs.cleanFieldsMask & micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_EXEC) != 0, "CONTROL_EXEC clean bit preserved");
+        TEST_ASSERT(hv.getEvmcsFlushes() >= 1, "Subsystem eVMCS flushes counter incremented");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Nested Virtualization (L0 Host -> L1 Hypervisor -> L2 Nested Guest)
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+
+        // Create Partition 2 for nested container workload (e.g. Docker inside WSL2)
+        auto l2Part = hv.createPartition(2, "L2-Nested-Docker-Host", 4096);
+        TEST_ASSERT(l2Part != nullptr, "Create Partition 2 succeeds");
+        TEST_ASSERT(l2Part->getId() == 2, "Partition ID is 2");
+        TEST_ASSERT(l2Part->getName() == "L2-Nested-Docker-Host", "Partition name matches");
+        TEST_ASSERT(l2Part->getMemoryMb() == 4096, "Partition memory is 4096 MB");
+
+        // Enable nested hardware virtualization
+        l2Part->enableNestedVirtualization(true);
+        TEST_ASSERT(l2Part->isNestedEnabled(), "Nested virtualization is enabled on Partition 2");
+
+        // Create Virtual Processors for nested guest
+        auto vp0 = l2Part->createVirtualProcessor(0);
+        auto vp1 = l2Part->createVirtualProcessor(1);
+        TEST_ASSERT(vp0 != nullptr && vp1 != nullptr, "Created 2 Virtual Processors");
+        TEST_ASSERT(l2Part->getVpCount() == 2, "Partition 2 has 2 VPs");
+
+        // Verify VPAP GPA alignment
+        TEST_ASSERT(vp0->getVpap().enlightenedVmcsGpa == 0x10000000ULL, "VP0 eVMCS GPA is 0x10000000");
+        TEST_ASSERT(vp1->getVpap().enlightenedVmcsGpa == 0x10001000ULL, "VP1 eVMCS GPA is 0x10001000");
+
+        // Verify execution levels
+        TEST_ASSERT(vp0->getExecutionLevel() == 1, "Initial execution level is L1");
+        TEST_ASSERT(!vp0->isNestedActive(), "Nested active is initially false");
+
+        // Transition to L2 nested guest execution
+        vp0->setExecutionLevel(2);
+        TEST_ASSERT(vp0->getExecutionLevel() == 2, "Transitioned to L2 execution");
+        TEST_ASSERT(vp0->isNestedActive(), "Nested active is now true for L2 execution");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Reflective VM-Exit Interception & Injection Routing
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+
+        auto l2Part = hv.getPartition(2);
+        TEST_ASSERT(l2Part != nullptr, "Partition 2 retrieved");
+        auto vp0 = l2Part->getVirtualProcessor(0);
+        TEST_ASSERT(vp0 != nullptr, "VP0 retrieved");
+
+        // Ensure VP is in L2 nested state
+        vp0->setExecutionLevel(2);
+        TEST_ASSERT(vp0->isNestedActive(), "VP0 is in L2 nested state");
+
+        // 1. Inject CPUID intercept (exit reason 10)
+        bool injCpuid = hv.injectNestedVmExit(2, 0, micant::hyperv::NestedExitReason::Cpuid, 0x100);
+        TEST_ASSERT(injCpuid, "Inject CPUID nested VM-Exit succeeds");
+        TEST_ASSERT(vp0->getExecutionLevel() == 1, "Execution level reflectively transitioned back to L1");
+        TEST_ASSERT(!vp0->isNestedActive(), "Nested active is false after VM-Exit to L1");
+        TEST_ASSERT(vp0->getEnlightenedVmcs().exitReason == static_cast<uint32_t>(micant::hyperv::NestedExitReason::Cpuid), "eVMCS exitReason is CPUID");
+        TEST_ASSERT(vp0->getEnlightenedVmcs().exitQualification == 0x100, "eVMCS exitQualification recorded");
+        TEST_ASSERT(vp0->getNestedVmExits() == 1, "VP0 nested VM-Exit counter is 1");
+
+        // 2. Transition back to L2 and inject VMCALL (exit reason 18)
+        vp0->setExecutionLevel(2);
+        bool injVmcall = hv.injectNestedVmExit(2, 0, micant::hyperv::NestedExitReason::Vmcall, 0x200);
+        TEST_ASSERT(injVmcall, "Inject VMCALL nested VM-Exit succeeds");
+        TEST_ASSERT(vp0->getExecutionLevel() == 1, "Transitioned back to L1");
+        TEST_ASSERT(vp0->getEnlightenedVmcs().exitReason == static_cast<uint32_t>(micant::hyperv::NestedExitReason::Vmcall), "eVMCS exitReason is VMCALL");
+        TEST_ASSERT(vp0->getNestedVmExits() == 2, "VP0 nested VM-Exit counter is 2");
+
+        // 3. Transition back to L2 and inject EPT Violation (exit reason 48)
+        vp0->setExecutionLevel(2);
+        bool injEpt = hv.injectNestedVmExit(2, 0, micant::hyperv::NestedExitReason::EptViolation, 0x000000010000ULL);
+        TEST_ASSERT(injEpt, "Inject EPT Violation nested VM-Exit succeeds");
+        TEST_ASSERT(vp0->getExecutionLevel() == 1, "Transitioned back to L1");
+        TEST_ASSERT(vp0->getEnlightenedVmcs().exitReason == static_cast<uint32_t>(micant::hyperv::NestedExitReason::EptViolation), "eVMCS exitReason is EPT Violation");
+        TEST_ASSERT(vp0->getNestedVmExits() == 3, "VP0 nested VM-Exit counter is 3");
+        TEST_ASSERT(hv.getNestedVmExits() >= 3, "Subsystem nested VM-Exits counter tracked");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 hvc.exe CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& hv = micant::hyperv::HypervSubsystem::get();
+        hv.reset();
+
+        // 1. Win32 C ABI Parity Exports
+        NTSTATUS stInit = micant::hyperv::HvrInitializeSubsystem();
+        TEST_ASSERT(stInit == micant::STATUS_SUCCESS, "HvrInitializeSubsystem returns STATUS_SUCCESS");
+
+        NTSTATUS stCreatePart = micant::hyperv::HvrCreateGuestPartition(3, "Win32ABI-TestPartition", 2048);
+        TEST_ASSERT(stCreatePart == micant::STATUS_SUCCESS, "HvrCreateGuestPartition returns STATUS_SUCCESS");
+
+        uint32_t hasNested = 0, hasEvmcs = 0, hasRefTsc = 0;
+        NTSTATUS stEnlight = micant::hyperv::HvrQueryEnlightenments(&hasNested, &hasEvmcs, &hasRefTsc);
+        TEST_ASSERT(stEnlight == micant::STATUS_SUCCESS, "HvrQueryEnlightenments returns STATUS_SUCCESS");
+        TEST_ASSERT(hasNested == 1 && hasEvmcs == 1 && hasRefTsc == 1, "All hypervisor enlightenments active");
+
+        // 2. Canonical Win32 hvc.exe CLI commands
+        // 2a. hvc status
+        std::string statusOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc status", statusOut);
+        TEST_ASSERT(statusOut.find("Hyper-V Hypervisor Subsystem Status:") != std::string::npos, "hvc status banner");
+        TEST_ASSERT(statusOut.find("ACTIVE (TitanHypervisor / AegisNestedVM)") != std::string::npos, "hvc status active");
+        TEST_ASSERT(statusOut.find("0x0000000040001000") != std::string::npos, "hvc status hypercall page GPA");
+
+        // 2b. hvc partitions
+        std::string partOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc partitions", partOut);
+        TEST_ASSERT(partOut.find("MicaNT-Root-Partition") != std::string::npos, "hvc partitions lists Root partition");
+        TEST_ASSERT(partOut.find("L1-HyperV-Guest-WSL2") != std::string::npos, "hvc partitions lists L1 partition");
+
+        // 2c. hvc partition show 1
+        std::string showOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc partition show 1", showOut);
+        TEST_ASSERT(showOut.find("Partition Details for ID 1") != std::string::npos, "hvc partition show banner");
+        TEST_ASSERT(showOut.find("eVMCS Revision:          1") != std::string::npos, "hvc partition show eVMCS revision");
+
+        // 2d. hvc nested enable 1
+        std::string nestedOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc nested enable 1", nestedOut);
+        TEST_ASSERT(nestedOut.find("SUCCESS: Nested hardware virtualization ENABLED") != std::string::npos, "hvc nested enable confirmation");
+
+        // 2e. hvc call
+        std::string callOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc call 0x005C --fast", callOut);
+        TEST_ASSERT(callOut.find("HV_STATUS_SUCCESS") != std::string::npos, "hvc call 0x005C returns success");
+
+        // 2f. hvc evmcs sync
+        std::string evmcsOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc evmcs sync 1 0 0x01", evmcsOut);
+        TEST_ASSERT(evmcsOut.find("SUCCESS: Synchronized eVMCS") != std::string::npos, "hvc evmcs sync confirmation");
+
+        // 2g. hvc inject-exit
+        std::string exitOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc inject-exit 1 0 cpuid 0x100", exitOut);
+        TEST_ASSERT(exitOut.find("SUCCESS: Injected reflective nested VM-Exit") != std::string::npos, "hvc inject-exit confirmation");
+
+        // 2h. hvc dump
+        std::string dumpOut;
+        micant::hvc_cmd::um::ExecuteHvcString("hvc dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("Set-VMProcessor -VMName") != std::string::npos, "hvc dump contains PowerShell commands");
+
+        // 3. Remote Executive Console & Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStatus = console.executeTerminalCommand("hvc status");
+        TEST_ASSERT(termStatus.find("Hyper-V Hypervisor Subsystem Status:") != std::string::npos, "Web terminal hvc status");
+
+        std::string termParts = console.executeTerminalCommand("hvc partitions");
+        TEST_ASSERT(termParts.find("MicaNT-Root-Partition") != std::string::npos, "Web terminal hvc partitions");
+
+        // 4. WFP Inbound Rule #17901 (MicaNT_HyperV_Hypercall_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto hvcRuleOpt = wfp.findRuleById(17901);
+        TEST_ASSERT(hvcRuleOpt.has_value(), "WFP Rule #17901 for Hyper-V Hypercall must be registered");
+        TEST_ASSERT(hvcRuleOpt->protocol == tcpip::IPPROTO_TCP, "Hypercall diagnostics protocol is TCP");
+        TEST_ASSERT(hvcRuleOpt->localPortStart == 17901 && hvcRuleOpt->localPortEnd == 17901, "Port 17901");
+        TEST_ASSERT(hvcRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Hypercall rule action must be PERMIT");
+
+        // 5. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"hyperv_hypercalls\":") != std::string::npos, "Telemetry hyperv_hypercalls");
+        TEST_ASSERT(teleJson.find("\"hyperv_fast_calls\":") != std::string::npos, "Telemetry hyperv_fast_calls");
+        TEST_ASSERT(teleJson.find("\"hyperv_nested_exits\":") != std::string::npos, "Telemetry hyperv_nested_exits");
+        TEST_ASSERT(teleJson.find("\"hyperv_evmcs_flushes\":") != std::string::npos, "Telemetry hyperv_evmcs_flushes");
+    }
+
+    std::cout << "[HORIZON 179] Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Reference TSC Page & Invariant Timekeeping OK\n"
+              << "    Pillar 3: TLFS Hypercall Dispatch Engine & Calling Conventions OK\n"
+              << "    Pillar 4: Enlightened VMCS (eVMCS) Protocol & Clean Fields OK\n"
+              << "    Pillar 5: Nested Virtualization (L0 Host -> L1 Hypervisor -> L2 Nested Guest) OK\n"
+              << "    Pillar 6: Reflective VM-Exit Interception & Injection Routing OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 hvc.exe CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization PASSED." << std::endl;
+}
