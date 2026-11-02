@@ -37103,3 +37103,230 @@ inline void Test_Horizon187_KernelAntiCheat_ProcessProtection_And_Accli() {
 
     std::cout << "[TEST] Suite 403: Horizon 187 - Sovereign Kernel Anti-Cheat & Process Protection PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 404: Horizon 188 - Sovereign Windows Gaming Input & High-Polling Raw Input Subsystem
+// ============================================================================
+
+inline void Test_Horizon188_GamingInput_RawInput_And_GameInputCLI() {
+    std::cout << "\n[TEST] Running Suite 404: Horizon 188 - Sovereign Gaming Input & High-Polling Raw Input...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::gameinput::RegisterGameInputSubsystem();
+
+        // 1. SCM Services Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"GameInputSvc");
+        TEST_ASSERT(svc != nullptr, "GameInputSvc service record must exist in SCM");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "GameInputSvc status is SERVICE_RUNNING");
+        TEST_ASSERT(svc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "GameInputSvc type is SERVICE_WIN32_OWN_PROCESS");
+
+        auto drv = scm.getServiceRecord(L"rawinput");
+        TEST_ASSERT(drv != nullptr, "rawinput driver record must exist in SCM");
+        TEST_ASSERT(drv->serviceType == scm::SERVICE_KERNEL_DRIVER, "rawinput type is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drv->startType == scm::SERVICE_BOOT_START, "rawinput is SERVICE_BOOT_START");
+
+        // 2. VersionDatabase PE Module Registration (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "gameinput.dll", "gameinputsvc.exe", "xinput1_4.dll", "rawinput.sys", "gamepadcli.exe", "dinput8.dll"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Gaming Input Device Registration, Enumeration & State Management
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gameinput::GameInputManager::get();
+        auto devs = mgr.getAllDevices();
+        TEST_ASSERT(devs.size() >= 2, "Default devices initialized (Pad0 + Esports Mouse)");
+
+        // Register flight stick
+        bool r = mgr.registerDevice(3, micant::gameinput::GameInputDeviceKind::FlightStick,
+                                    "Thrustmaster HOTAS Warthog", "HID\\VID_044F&PID_0402", 500, 1);
+        TEST_ASSERT(r, "Register Flight Stick");
+
+        micant::gameinput::GameInputDeviceInfo dev3{};
+        TEST_ASSERT(mgr.getDevice(3, dev3), "Get device 3");
+        TEST_ASSERT(dev3.kind == micant::gameinput::GameInputDeviceKind::FlightStick, "Device 3 is FlightStick");
+        TEST_ASSERT(dev3.pollingRateHz == 500, "Device 3 polling rate 500Hz");
+
+        bool u = mgr.unregisterDevice(3);
+        TEST_ASSERT(u, "Unregister device 3");
+        TEST_ASSERT(!mgr.getDevice(3, dev3), "Device 3 no longer present");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Gamepad State Polling, Thumbstick & Trigger Normalization
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gameinput::GameInputManager::get();
+
+        micant::gameinput::GameInputGamepadState st{};
+        st.buttons = micant::gameinput::GamepadButtons::A |
+                     micant::gameinput::GamepadButtons::RightShoulder |
+                     micant::gameinput::GamepadButtons::DPadUp;
+        st.leftTrigger = 0.85f;
+        st.rightTrigger = 0.99f;
+        st.leftThumbstickX = 0.25f;
+        st.leftThumbstickY = -0.75f;
+        st.rightThumbstickX = -0.40f;
+        st.rightThumbstickY = 0.60f;
+
+        bool ok = mgr.updateGamepadState(1, st);
+        TEST_ASSERT(ok, "Update gamepad 1 state");
+
+        micant::gameinput::GameInputGamepadState polled{};
+        TEST_ASSERT(mgr.pollGamepad(1, polled), "Poll gamepad 1");
+        TEST_ASSERT((polled.buttons & micant::gameinput::GamepadButtons::A) != 0, "Button A pressed");
+        TEST_ASSERT((polled.buttons & micant::gameinput::GamepadButtons::RightShoulder) != 0, "Right Shoulder pressed");
+        TEST_ASSERT(std::abs(polled.leftTrigger - 0.85f) < 0.001f, "Left trigger accurate");
+        TEST_ASSERT(std::abs(polled.leftThumbstickY - (-0.75f)) < 0.001f, "Left stick Y accurate");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Dual-Motor Rumble & High-Definition Impulse Triggers
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gameinput::GameInputManager::get();
+
+        micant::gameinput::GameInputHapticFeedback h{};
+        h.leftMotor = 0.65f;
+        h.rightMotor = 0.90f;
+        h.leftTriggerImpulse = 0.40f;
+        h.rightTriggerImpulse = 0.80f;
+
+        bool hOk = mgr.setHaptics(1, h);
+        TEST_ASSERT(hOk, "Set haptics on device 1");
+
+        micant::gameinput::GameInputDeviceInfo dev1{};
+        TEST_ASSERT(mgr.getDevice(1, dev1), "Get device 1 info");
+        TEST_ASSERT(std::abs(dev1.currentHaptics.leftMotor - 0.65f) < 0.001f, "Left motor matches");
+        TEST_ASSERT(std::abs(dev1.currentHaptics.rightTriggerImpulse - 0.80f) < 0.001f, "Right impulse matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: 8000Hz Sub-Millisecond Raw Input Reporting
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gameinput::GameInputManager::get();
+
+        bool rawOk = mgr.dispatchRawInputReport(2, 45, -28, 0x01);
+        TEST_ASSERT(rawOk, "Dispatch raw input report to 8000Hz mouse");
+
+        micant::gameinput::GameInputDeviceInfo mouseDev{};
+        TEST_ASSERT(mgr.getDevice(2, mouseDev), "Get mouse dev");
+        TEST_ASSERT(mouseDev.lastMouseReport.deltaX == 45, "deltaX matches");
+        TEST_ASSERT(mouseDev.lastMouseReport.deltaY == -28, "deltaY matches");
+        TEST_ASSERT(mouseDev.lastMouseReport.buttonFlags == 0x01, "buttonFlags match");
+        TEST_ASSERT(mouseDev.lastMouseReport.timestampUs > 0, "timestamp is populated");
+
+        auto v = mgr.getVitals();
+        TEST_ASSERT(v.highestPollingRateHz == 8000, "Highest polling rate is 8000Hz");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports (GameInput & XInput 1.4)
+    // ------------------------------------------------------------------------
+    {
+        uint32_t devCount = GameInputGetConnectedDevicesCount();
+        TEST_ASSERT(devCount >= 2, "C ABI connected devices count >= 2");
+
+        uint32_t btns = 0;
+        float lt = 0.0f, rt = 0.0f;
+        float sticks[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        int32_t pollRes = GameInputPollGamepad(1, &btns, &lt, &rt, sticks);
+        TEST_ASSERT(pollRes == 0, "C ABI GameInputPollGamepad succeeded");
+        TEST_ASSERT((btns & micant::gameinput::GamepadButtons::A) != 0, "C ABI button A preserved");
+
+        int32_t hapRes = GameInputSetHapticFeedback(1, 0.5f, 0.5f, 0.2f, 0.2f);
+        TEST_ASSERT(hapRes == 0, "C ABI GameInputSetHapticFeedback succeeded");
+
+        uint32_t xiBtns = 0;
+        float xiLx = 0.0f, xiLy = 0.0f;
+        int32_t xiGet = XInputGetState(0, &xiBtns, &xiLx, &xiLy);
+        TEST_ASSERT(xiGet == 0, "XInputGetState slot 0 succeeded");
+
+        int32_t xiSet = XInputSetState(0, 0.35f, 0.75f);
+        TEST_ASSERT(xiSet == 0, "XInputSetState slot 0 succeeded");
+
+        int32_t xiOob = XInputGetState(4, &xiBtns, &xiLx, &xiLy);
+        TEST_ASSERT(xiOob != 0, "XInputGetState slot 4 out of bounds rejected");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (gameinput/gamepadcli), WFP Rule #18801 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI gameinput status
+        std::string out;
+        micant::gameinput_cmd::um::ExecuteGameInputString("gameinput status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Gaming Input") != std::string::npos, "CLI gameinput status title");
+        TEST_ASSERT(out.find("8000 Hz") != std::string::npos, "CLI gameinput status 8000Hz peak");
+
+        // 2. Canonical CLI gameinput list
+        out.clear();
+        micant::gameinput_cmd::um::ExecuteGameInputString("gameinput list", out);
+        TEST_ASSERT(out.find("Xbox Wireless Controller") != std::string::npos, "CLI gameinput list Pad");
+        TEST_ASSERT(out.find("MicaNT 8K Esports Optical Gaming Mouse") != std::string::npos, "CLI gameinput list Mouse");
+
+        // 3. Canonical CLI gameinput poll 0
+        out.clear();
+        micant::gameinput_cmd::um::ExecuteGameInputString("gameinput poll 0", out);
+        TEST_ASSERT(out.find("Controller Slot 0 Polling Snapshot") != std::string::npos, "CLI gameinput poll 0");
+
+        // 4. Canonical CLI gameinput rumble 0
+        out.clear();
+        micant::gameinput_cmd::um::ExecuteGameInputString("gameinput rumble 0 0.8 0.4", out);
+        TEST_ASSERT(out.find("applied haptic vibration") != std::string::npos, "CLI gameinput rumble 0");
+
+        // 5. Canonical CLI gameinput test-rawinput
+        out.clear();
+        micant::gameinput_cmd::um::ExecuteGameInputString("gameinput test-rawinput 20 -15 1", out);
+        TEST_ASSERT(out.find("< 0.125 ms") != std::string::npos, "CLI gameinput test-rawinput latency");
+
+        // 6. Canonical CLI gameinput dump
+        out.clear();
+        micant::gameinput_cmd::um::ExecuteGameInputString("gameinput dump", out);
+        TEST_ASSERT(out.find("MaxPollingFrequencyHz") != std::string::npos, "CLI gameinput dump registry key");
+
+        // 7. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("gameinput status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Gaming Input") != std::string::npos, "Console terminal gameinput status");
+
+        // 8. WFP Inbound Rule #18801 (MicaNT_GameInput_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto giRuleOpt = wfp.findRuleById(18801);
+        TEST_ASSERT(giRuleOpt.has_value(), "WFP Rule #18801 for GameInput must be registered");
+        TEST_ASSERT(giRuleOpt->protocol == tcpip::IPPROTO_UDP, "GameInput protocol is UDP");
+        TEST_ASSERT(giRuleOpt->localPortStart == 5050 && giRuleOpt->localPortEnd == 5050, "Port 5050");
+        TEST_ASSERT(giRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"gameinput_connected_devices\":") != std::string::npos, "Telemetry gameinput_connected_devices");
+        TEST_ASSERT(teleJson.find("\"gameinput_active_gamepads\":") != std::string::npos, "Telemetry gameinput_active_gamepads");
+        TEST_ASSERT(teleJson.find("\"gameinput_peak_polling_hz\":") != std::string::npos, "Telemetry gameinput_peak_polling_hz");
+        TEST_ASSERT(teleJson.find("\"gameinput_reports_processed\":") != std::string::npos, "Telemetry gameinput_reports_processed");
+    }
+
+    std::cout << "[HORIZON 188] Sovereign Gaming Input & High-Polling Raw Input Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Gaming Input Device Registration, Enumeration & State Management OK\n"
+              << "    Pillar 3: Gamepad State Polling, Thumbstick & Trigger Normalization OK\n"
+              << "    Pillar 4: Dual-Motor Rumble & High-Definition Impulse Triggers OK\n"
+              << "    Pillar 5: 8000Hz Sub-Millisecond Raw Input Reporting OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 gameinput CLI, WFP Rule #18801 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 404: Horizon 188 - Sovereign Gaming Input & High-Polling Raw Input PASSED." << std::endl;
+}

@@ -88,6 +88,8 @@
 #include "micant/um/subsystems/mgmt/msra_cmd.hpp"
 #include "micant/km/drivers/security/anticheat.hpp"
 #include "micant/um/subsystems/mgmt/anticheat_cmd.hpp"
+#include "micant/km/drivers/input/gameinput.hpp"
+#include "micant/um/subsystems/mgmt/gameinput_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -487,6 +489,19 @@ public:
         acRule.weight = 1500;
         acRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(acRule);
+
+        // 31. Register WFP Inbound Rule for Low Latency Gaming Input Telemetry & Polling (UDP 5050)
+        wfp::km::WfpKernelFilterRule giRule{};
+        giRule.filterId = 18801;
+        giRule.name = "MicaNT_GameInput_Permit";
+        giRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        giRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        giRule.protocol = tcpip::IPPROTO_UDP;
+        giRule.localPortStart = 5050;
+        giRule.localPortEnd = 5050;
+        giRule.weight = 1500;
+        giRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(giRule);
     }
 
     void stopHttpsServer() {
@@ -936,6 +951,10 @@ public:
             std::string res;
             anticheat_cmd::um::ExecuteAntiCheatString(cmd, res);
             return res;
+        } else if (cmd == "gameinput" || cmd.starts_with("gameinput ") || cmd == "gamepadcli" || cmd.starts_with("gamepadcli ")) {
+            std::string res;
+            gameinput_cmd::um::ExecuteGameInputString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1241,7 +1260,11 @@ public:
            << "\"ac_protected_processes\":" << micant::anticheat::AntiCheatManager::get().getVitals().protectedProcessesCount << ","
            << "\"ac_blocked_handle_attempts\":" << micant::anticheat::AntiCheatManager::get().getVitals().totalHandleAccessBitsStripped << ","
            << "\"ac_blocked_injections\":" << micant::anticheat::AntiCheatManager::get().getVitals().totalUnauthorizedImagesBlocked << ","
-           << "\"ac_active_callbacks\":" << (micant::anticheat::AntiCheatManager::get().getVitals().obCallbacksActive ? 1 : 0) << "}\r\n";
+           << "\"ac_active_callbacks\":" << (micant::anticheat::AntiCheatManager::get().getVitals().obCallbacksActive ? 1 : 0) << ","
+           << "\"gameinput_connected_devices\":" << micant::gameinput::GameInputManager::get().getVitals().connectedDevicesCount << ","
+           << "\"gameinput_active_gamepads\":" << micant::gameinput::GameInputManager::get().getVitals().activeGamepadsCount << ","
+           << "\"gameinput_peak_polling_hz\":" << micant::gameinput::GameInputManager::get().getVitals().highestPollingRateHz << ","
+           << "\"gameinput_reports_processed\":" << micant::gameinput::GameInputManager::get().getVitals().totalInputReportsProcessed << "}\r\n";
         return ss.str();
     }
 
