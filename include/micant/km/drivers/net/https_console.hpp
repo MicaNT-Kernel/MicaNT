@@ -100,6 +100,8 @@
 #include "micant/um/subsystems/mgmt/dstorage_cmd.hpp"
 #include "micant/km/drivers/video/vrr.hpp"
 #include "micant/um/subsystems/mgmt/vrr_cmd.hpp"
+#include "micant/km/drivers/audio/spatial_audio_subsystem.hpp"
+#include "micant/um/subsystems/mgmt/spatial_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -577,6 +579,19 @@ public:
         vrrRule.weight = 1500;
         vrrRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(vrrRule);
+
+        // 37. Register WFP Inbound Rule for 3D Spatial Audio & Low-Latency Headset Telemetry (UDP 5080)
+        wfp::km::WfpKernelFilterRule spatialRule{};
+        spatialRule.filterId = 19401;
+        spatialRule.name = "MicaNT_SpatialAudio_Permit";
+        spatialRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        spatialRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        spatialRule.protocol = tcpip::IPPROTO_UDP;
+        spatialRule.localPortStart = 5080;
+        spatialRule.localPortEnd = 5080;
+        spatialRule.weight = 1500;
+        spatialRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(spatialRule);
     }
 
     void stopHttpsServer() {
@@ -1050,6 +1065,8 @@ public:
             std::string res;
             vrr_cmd::um::ExecuteVrrString(cmd, res);
             return res;
+        } else if (cmd == "spatial" || cmd.starts_with("spatial ") || cmd == "spatialcli" || cmd.starts_with("spatialcli ") || cmd == "spatialaudio" || cmd.starts_with("spatialaudio ")) {
+            return spatial_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1379,7 +1396,11 @@ public:
            << "\"vrr_active_displays\":" << micant::vrr::VrrSubsystem::get().getVitals().activeDisplaysCount << ","
            << "\"vrr_current_refresh_hz\":" << static_cast<uint32_t>(micant::vrr::VrrSubsystem::get().getVitals().currentRefreshHz) << ","
            << "\"vrr_total_paced_frames\":" << micant::vrr::VrrSubsystem::get().getVitals().totalPacedFrames << ","
-           << "\"vrr_lfc_events_count\":" << micant::vrr::VrrSubsystem::get().getVitals().totalLfcEvents << "}\r\n";
+           << "\"vrr_lfc_events_count\":" << micant::vrr::VrrSubsystem::get().getVitals().totalLfcEvents << ","
+           << "\"spatial_active_endpoints\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetEndpointCount() << ","
+           << "\"spatial_active_emitters\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetActiveEmitterCount() << ","
+           << "\"spatial_dsp_latency_us\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetDspLatencyMicroseconds() << ","
+           << "\"spatial_processed_frames\":" << micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance().GetProcessedFramesCount() << "}\r\n";
         return ss.str();
     }
 

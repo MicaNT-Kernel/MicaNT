@@ -38314,3 +38314,269 @@ void Test_Horizon193_VariableRefreshRate_AdaptiveSync_And_VrrCLI() {
 
     std::cout << "[TEST] Suite 409: Horizon 193 - Sovereign Variable Refresh Rate & Dynamic Display Pacing PASSED." << std::endl;
 }
+
+// ============================================================================
+// SUITE 410: Horizon 194 - Sovereign 3D Spatial Audio & Low-Latency Headset Endpoint Subsystem
+// ============================================================================
+
+void Test_Horizon194_SpatialAudio_LowLatencyHeadset_And_SpatialCLI() {
+    std::cout << "\n[TEST] Running Suite 410: Horizon 194 - Sovereign 3D Spatial Audio & Low-Latency Headset Subsystem...\n";
+
+    auto& mgr = micant::spatial_subsystem::SpatialAudioSubsystemManager::Instance();
+    mgr.Initialize();
+
+    // 1. Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    {
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.FindModule("spatialaudio.sys") != nullptr, "spatialaudio.sys must be registered");
+        TEST_ASSERT(vdb.FindModule("audiodspbroker.exe") != nullptr, "audiodspbroker.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("spatialaudio.dll") != nullptr, "spatialaudio.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("headsetendpoint.dll") != nullptr, "headsetendpoint.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("spatialcli.exe") != nullptr, "spatialcli.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("hrtfengine.sys") != nullptr, "hrtfengine.sys must be registered");
+
+        // Legacy compatibility
+        TEST_ASSERT(vdb.FindModule("spatialaudioclient.dll") != nullptr, "spatialaudioclient.dll legacy registered");
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto drvRec = scm.getServiceRecord(L"SpatialAudioDriver");
+        TEST_ASSERT(drvRec != nullptr, "SpatialAudioDriver must be registered in SCM");
+        TEST_ASSERT(drvRec->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "Driver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drvRec->startType == micant::scm::SERVICE_BOOT_START, "Driver is SERVICE_BOOT_START");
+        TEST_ASSERT(drvRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Driver is SERVICE_RUNNING");
+
+        auto svcRec = scm.getServiceRecord(L"AudioDspBroker");
+        TEST_ASSERT(svcRec != nullptr, "AudioDspBroker must be registered in SCM");
+        TEST_ASSERT(svcRec->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "Service is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svcRec->startType == micant::scm::SERVICE_AUTO_START, "Service is SERVICE_AUTO_START");
+        TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Service is SERVICE_RUNNING");
+
+        auto legacySvc = scm.getServiceRecord(L"SpatialAudioService");
+        TEST_ASSERT(legacySvc != nullptr, "SpatialAudioService legacy must be registered");
+    }
+
+    // 2. Pillar 2: Audio Endpoint Management & Sub-3ms DSP Latency
+    {
+        auto endpoints = mgr.GetEndpoints();
+        TEST_ASSERT(endpoints.size() >= 3, "At least 3 audio endpoints registered");
+
+        bool foundHeadset = false;
+        for (const auto& ep : endpoints) {
+            if (ep.type == micant::spatial_subsystem::EndpointType::WirelessHeadset) {
+                foundHeadset = true;
+                TEST_ASSERT(ep.sampleRateHz == 48000, "Headset sample rate is 48kHz");
+                TEST_ASSERT(ep.bitDepth == 24, "Headset bit depth is 24-bit");
+                TEST_ASSERT(ep.bufferFrameSize == 128, "Headset buffer size is 128 frames (sub-3ms)");
+                TEST_ASSERT(ep.exclusiveMode == true, "Headset exclusive mode enabled");
+                TEST_ASSERT(ep.spatialAudioEnabled == true, "Spatial audio enabled on headset");
+            }
+        }
+        TEST_ASSERT(foundHeadset, "Found low-latency wireless gaming headset endpoint");
+
+        uint32_t latencyUs = mgr.GetDspLatencyMicroseconds();
+        TEST_ASSERT(latencyUs <= 3000, "DSP audio latency must be sub-3ms (3000 us)");
+        TEST_ASSERT(latencyUs == 2666, "128 frames at 48kHz gives exactly 2666 microseconds latency");
+    }
+
+    // 3. Pillar 3: Woodworth HRTF & Binaural Acoustic Convolution
+    {
+        float gL{0.0f}, gR{0.0f}, dL{0.0f}, dR{0.0f}, az{0.0f}, el{0.0f}, dop{1.0f};
+
+        // Case A: Straight ahead (0, 5, 0)
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {0.0f, 5.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, 100.0f,
+            gL, gR, dL, dR, az, el, dop
+        );
+        TEST_ASSERT(std::abs(az) < 1e-4f, "Straight ahead azimuth is 0 radians");
+        TEST_ASSERT(std::abs(gL - gR) < 1e-4f, "Straight ahead left and right ear gains are equal");
+        TEST_ASSERT(dL == 0.0f && dR == 0.0f, "Straight ahead ITD delays are zero");
+
+        // Case B: Direct Right (5, 0, 0)
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {5.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, 100.0f,
+            gL, gR, dL, dR, az, el, dop
+        );
+        TEST_ASSERT(az > 1.50f && az < 1.60f, "Direct right azimuth is approx pi/2 (~1.57 rad)");
+        TEST_ASSERT(dR == 0.0f, "Right ear receives sound first (0 delay)");
+        TEST_ASSERT(dL > 0.000600f && dL < 0.000700f, "Left ear receives Woodworth ITD delay (~656 us)");
+        TEST_ASSERT(gR > gL, "Right ear gain is louder than left ear due to head shadowing");
+        TEST_ASSERT((gL / gR) < 0.40f, "Contralateral ear is significantly attenuated (>8dB head shadow)");
+
+        // Case C: Direct Left (-5, 0, 0)
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {-5.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, 100.0f,
+            gL, gR, dL, dR, az, el, dop
+        );
+        TEST_ASSERT(az < -1.50f && az > -1.60f, "Direct left azimuth is approx -pi/2");
+        TEST_ASSERT(dL == 0.0f, "Left ear receives sound first (0 delay)");
+        TEST_ASSERT(dR > 0.000600f && dR < 0.000700f, "Right ear receives Woodworth ITD delay (~656 us)");
+        TEST_ASSERT(gL > gR, "Left ear gain is louder than right ear due to head shadowing");
+    }
+
+    // 4. Pillar 4: Dynamic Distance Attenuation & Doppler Velocity
+    {
+        float gNearL{0.0f}, gNearR{0.0f}, dL{0.0f}, dR{0.0f}, az{0.0f}, el{0.0f}, dop{1.0f};
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, 100.0f,
+            gNearL, gNearR, dL, dR, az, el, dop
+        );
+
+        float gFarL{0.0f}, gFarR{0.0f};
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {0.0f, 20.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 1.0f, 100.0f,
+            gFarL, gFarR, dL, dR, az, el, dop
+        );
+        TEST_ASSERT(gNearL > gFarL * 5.0f, "Near emitter is dramatically louder than distant emitter");
+
+        // Doppler pitch shift
+        float dopApproaching{1.0f};
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {0.0f, 50.0f, 0.0f}, {0.0f, -80.0f, 0.0f}, 1.0f, 100.0f,
+            gNearL, gNearR, dL, dR, az, el, dopApproaching
+        );
+        TEST_ASSERT(dopApproaching > 1.15f, "Approaching projectile has positive Doppler pitch shift factor");
+
+        float dopReceding{1.0f};
+        micant::spatial_subsystem::WoodworthHrtfEngine::ComputeBinauralPacing(
+            {0.0f, 50.0f, 0.0f}, {0.0f, 80.0f, 0.0f}, 1.0f, 100.0f,
+            gNearL, gNearR, dL, dR, az, el, dopReceding
+        );
+        TEST_ASSERT(dopReceding < 0.85f, "Receding projectile has negative Doppler pitch shift factor");
+    }
+
+    // 5. Pillar 5: Lockless Audio Ring Buffer & WASAPI Exclusive Stream
+    {
+        micant::spatial_subsystem::LocklessAudioRingBuffer ring(512);
+
+        std::vector<float> inL(128);
+        std::vector<float> inR(128);
+        for (size_t i = 0; i < 128; ++i) {
+            inL[i] = std::sin(static_cast<float>(i) * 0.1f);
+            inR[i] = std::cos(static_cast<float>(i) * 0.1f);
+        }
+
+        bool writeOk = ring.WriteFrames(inL.data(), inR.data(), 128);
+        TEST_ASSERT(writeOk, "Lockless ring buffer write 128 frames must succeed");
+        TEST_ASSERT(ring.GetAvailableToRead() == 128, "128 frames available to read");
+
+        std::vector<float> outL(128, 0.0f);
+        std::vector<float> outR(128, 0.0f);
+        bool readOk = ring.ReadFrames(outL.data(), outR.data(), 128);
+        TEST_ASSERT(readOk, "Lockless ring buffer read 128 frames must succeed");
+        TEST_ASSERT(ring.GetUnderruns() == 0, "Zero buffer underruns during nominal streaming");
+
+        for (size_t i = 0; i < 128; ++i) {
+            TEST_ASSERT(std::abs(outL[i] - inL[i]) < 1e-6f, "Left channel bit-perfect preservation");
+            TEST_ASSERT(std::abs(outR[i] - inR[i]) < 1e-6f, "Right channel bit-perfect preservation");
+        }
+    }
+
+    // 6. Pillar 6: Voice Chat Dynamic Ducking Engine
+    {
+        mgr.SetDucking(true, -6.0f);
+        mgr.SetVoiceActivity(false);
+
+        float normalGain = mgr.GetDuckingEngine().ProcessBlockGain();
+        TEST_ASSERT(normalGain > 0.95f, "Voice inactive gain is close to 1.0 (0 dB)");
+
+        mgr.SetVoiceActivity(true);
+        float duckedGain = normalGain;
+        for (int i = 0; i < 20; ++i) {
+            duckedGain = mgr.GetDuckingEngine().ProcessBlockGain();
+        }
+        TEST_ASSERT(duckedGain < 0.60f, "Voice active dynamically ducks game audio toward -6 dB (0.501)");
+
+        mgr.SetVoiceActivity(false);
+        float recoveredGain = duckedGain;
+        for (int i = 0; i < 50; ++i) {
+            recoveredGain = mgr.GetDuckingEngine().ProcessBlockGain();
+        }
+        TEST_ASSERT(recoveredGain > 0.90f, "Voice idle smoothly recovers game audio volume");
+    }
+
+    // 7. Pillar 7: Win32 C ABI Exports
+    {
+        TEST_ASSERT(SpatialAudioInitialize() == STATUS_SUCCESS, "SpatialAudioInitialize export");
+        TEST_ASSERT(SpatialAudioGetEndpointCount() >= 3, "SpatialAudioGetEndpointCount export");
+        TEST_ASSERT(SpatialAudioGetActiveEmitterCount() >= 3, "SpatialAudioGetActiveEmitterCount export");
+        TEST_ASSERT(SpatialAudioGetDspLatencyMicroseconds() <= 3000, "SpatialAudioGetDspLatencyMicroseconds export");
+
+        NTSTATUS stAdd = SpatialAudioAddEmitter(501, 10.0f, 15.0f, 0.0f);
+        TEST_ASSERT(stAdd == STATUS_SUCCESS, "SpatialAudioAddEmitter export");
+
+        NTSTATUS stUpd = SpatialAudioUpdateEmitter(501, 12.0f, 18.0f, 2.0f);
+        TEST_ASSERT(stUpd == STATUS_SUCCESS, "SpatialAudioUpdateEmitter export");
+
+        std::vector<float> mono(64, 0.5f);
+        std::vector<float> left(64, 0.0f);
+        std::vector<float> right(64, 0.0f);
+        NTSTATUS stHrtf = SpatialAudioDspProcessHrtf(mono.data(), left.data(), right.data(), 64, 5.0f, 5.0f, 0.0f);
+        TEST_ASSERT(stHrtf == STATUS_SUCCESS, "SpatialAudioDspProcessHrtf export");
+        TEST_ASSERT(left[10] != 0.0f && right[10] != 0.0f, "HRTF output buffers populated");
+
+        TEST_ASSERT(SpatialAudioSetDucking(true, -6.0f) == STATUS_SUCCESS, "SpatialAudioSetDucking export");
+        TEST_ASSERT(SpatialAudioGetProcessedFrames() >= 64, "SpatialAudioGetProcessedFrames export");
+    }
+
+    // 8. Pillar 8: Canonical Win32 spatial CLI, WFP Rule #19401 & Telemetry
+    {
+        std::string out;
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial status");
+        TEST_ASSERT(out.find("MicaNT Sovereign 3D Spatial Audio") != std::string::npos, "CLI spatial status banner");
+        TEST_ASSERT(out.find("ACTIVE / ONLINE") != std::string::npos, "CLI spatial status active");
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial list");
+        TEST_ASSERT(out.find("Wireless Gaming Headset") != std::string::npos, "CLI spatial list headset");
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial emitter list");
+        TEST_ASSERT(out.find("Active Emitters") != std::string::npos, "CLI spatial emitter list");
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial set-hrtf woodworth");
+        TEST_ASSERT(out.find("Woodworth Spherical Head") != std::string::npos, "CLI spatial set-hrtf");
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial ducking on -6");
+        TEST_ASSERT(out.find("ENABLED") != std::string::npos, "CLI spatial ducking on");
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial test-3d");
+        TEST_ASSERT(out.find("CONTINUOUS 3D BINAURAL SWEEP") != std::string::npos ||
+                    out.find("Continuous 3D binaural sweep") != std::string::npos, "CLI spatial test-3d");
+
+        out = micant::spatial_cmd::um::ExecuteCommand("spatial dump");
+        TEST_ASSERT(out.find("SpatialAudioDriver") != std::string::npos, "CLI spatial dump driver");
+
+        // Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("spatial status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign 3D Spatial Audio") != std::string::npos, "Console terminal spatial status");
+
+        // WFP Inbound Rule #19401 (MicaNT_SpatialAudio_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto spatialRuleOpt = wfp.findRuleById(19401);
+        TEST_ASSERT(spatialRuleOpt.has_value(), "WFP Rule #19401 for SpatialAudio must be registered");
+        TEST_ASSERT(spatialRuleOpt->protocol == tcpip::IPPROTO_UDP, "SpatialAudio protocol is UDP");
+        TEST_ASSERT(spatialRuleOpt->localPortStart == 5080 && spatialRuleOpt->localPortEnd == 5080, "Port 5080");
+        TEST_ASSERT(spatialRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"spatial_active_endpoints\":") != std::string::npos, "Telemetry spatial_active_endpoints");
+        TEST_ASSERT(teleJson.find("\"spatial_active_emitters\":") != std::string::npos, "Telemetry spatial_active_emitters");
+        TEST_ASSERT(teleJson.find("\"spatial_dsp_latency_us\":") != std::string::npos, "Telemetry spatial_dsp_latency_us");
+        TEST_ASSERT(teleJson.find("\"spatial_processed_frames\":") != std::string::npos, "Telemetry spatial_processed_frames");
+    }
+
+    std::cout << "[HORIZON 194] Sovereign 3D Spatial Audio & Low-Latency Headset Endpoint Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Audio Endpoint Management & Sub-3ms DSP Latency OK\n"
+              << "    Pillar 3: Woodworth HRTF & Binaural Acoustic Convolution OK\n"
+              << "    Pillar 4: Dynamic Distance Attenuation & Doppler Velocity OK\n"
+              << "    Pillar 5: Lockless Audio Ring Buffer & WASAPI Exclusive Stream OK\n"
+              << "    Pillar 6: Voice Chat Dynamic Ducking Engine OK\n"
+              << "    Pillar 7: Win32 C ABI Exports OK\n"
+              << "    Pillar 8: Canonical Win32 spatial CLI, WFP Rule #19401 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 410: Horizon 194 - Sovereign 3D Spatial Audio & Low-Latency Headset PASSED." << std::endl;
+}
+

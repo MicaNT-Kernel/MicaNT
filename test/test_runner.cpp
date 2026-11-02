@@ -301,6 +301,8 @@
 #include "micant/km/drivers/input/hpd.hpp"
 #include "micant/km/drivers/input/cameracx.hpp"
 #include "micant/km/drivers/video/vrr.hpp"
+#include "micant/km/drivers/audio/spatial_audio_subsystem.hpp"
+#include "micant/um/subsystems/mgmt/spatial_cmd.hpp"
 #include "micant/km/drivers/input/sensorscx.hpp"
 #include "micant/km/drivers/net/mbbcx.hpp"
 #include "micant/um/subsystems/media/pmp.hpp"
@@ -439,6 +441,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite410") {
+        RUN_TEST(Test_Horizon194_SpatialAudio_LowLatencyHeadset_And_SpatialCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite409") {
@@ -2038,6 +2044,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon191_ShaderCache_PipelineState_And_DxCacheCLI);
     RUN_TEST(Test_Horizon192_DirectStorage_GpuDecompression_And_DStorageCLI);
     RUN_TEST(Test_Horizon193_VariableRefreshRate_AdaptiveSync_And_VrrCLI);
+    RUN_TEST(Test_Horizon194_SpatialAudio_LowLatencyHeadset_And_SpatialCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
