@@ -83,8 +83,8 @@ inline int ExecuteHvc(std::span<std::string_view> args, std::string& output) {
     hv.initialize();
 
     if (args.empty() || args[0] == "help" || args[0] == "/?" || args[0] == "-h" || args[0] == "--help") {
-        out << "Microsoft Windows Hyper-V Hypercall & Nested Virtualization CLI (hvc.exe)\n"
-            << "Copyright (C) Microsoft Corporation / Sovereign Clean-Room MicaNT.\n\n"
+        out << "MicaNT Hyper-V Hypercall & Nested Virtualization CLI (hvc.exe) [Windows Server Compatible]\n"
+            << "Copyright (C) 2026 MicaNT Authors. Windows, Windows Server, and Hyper-V are trademarks of Microsoft Corporation.\n\n"
             << "Usage: hvc <command> [parameters...]\n\n"
             << "Commands:\n"
             << "  status | query               Display hypervisor status, hypercall page GPA & telemetry\n"

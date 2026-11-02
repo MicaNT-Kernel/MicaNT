@@ -106,8 +106,8 @@ inline int ExecuteDdpEval(int argc, const char* argv[], std::ostream& out) {
         vol = sys.getVolume("D:");
     }
 
-    out << "Data Deduplication Evaluation Tool\n"
-        << "Copyright (c) Microsoft Corporation. All rights reserved.\n\n"
+    out << "MicaNT Data Deduplication Evaluation Tool [Windows Server Compatible]\n"
+        << "Copyright (C) 2026 MicaNT Authors. Windows and Windows Server are trademarks of Microsoft Corporation.\n\n"
         << "Evaluated folder: " << targetPath << "\n";
 
     if (vol) {

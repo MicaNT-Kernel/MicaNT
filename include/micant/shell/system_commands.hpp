@@ -1370,7 +1370,7 @@
 
                 out << "\nBITSADMIN version 3.0 [ 10.0.22621.1 ]\n"
                     << "BITS administration utility.\n"
-                    << "(C) Copyright Microsoft Corp.\n\n";
+                    << "(C) Copyright 2026 MicaNT Authors. Windows and BITS are trademarks of Microsoft Corp.\n\n";
 
                 bits::IEnumBackgroundCopyJobs* pEnum = nullptr;
                 pMgr->EnumJobs(0, &pEnum);
@@ -1799,7 +1799,7 @@
                 // list shadows
                 if (target == "shadows" || target == "shadow") {
                     out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
-                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+                        << "(C) Copyright 2026 MicaNT Authors. Windows and VSS are trademarks of Microsoft Corp.\n\n";
 
                     std::wstring volFilter;
                     for (size_t i = 3; i < tokens.size(); ++i) {
@@ -1851,7 +1851,7 @@
                 // list writers
                 if (target == "writers" || target == "writer") {
                     out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
-                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+                        << "(C) Copyright 2026 MicaNT Authors. Windows and VSS are trademarks of Microsoft Corp.\n\n";
 
                     auto writers = vss::VssCoordinator::Instance().GetWriters();
                     for (const auto& w : writers) {
@@ -1881,7 +1881,7 @@
                 // list providers
                 if (target == "providers" || target == "provider") {
                     out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
-                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+                        << "(C) Copyright 2026 MicaNT Authors. Windows and VSS are trademarks of Microsoft Corp.\n\n";
 
                     auto provs = vss::VssCoordinator::Instance().GetProviders();
                     for (const auto& p : provs) {
@@ -1907,7 +1907,7 @@
                 // list shadowstorage
                 if (target == "shadowstorage" || target == "storage") {
                     out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
-                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+                        << "(C) Copyright 2026 MicaNT Authors. Windows and VSS are trademarks of Microsoft Corp.\n\n";
 
                     auto diffs = vss::VssCoordinator::Instance().GetDiffAreas();
                     for (const auto& d : diffs) {
@@ -1971,7 +1971,7 @@
                         std::string sDev(rec.DeviceObject.begin(), rec.DeviceObject.end());
 
                         out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
-                            << "(C) Copyright 2001-2013 Microsoft Corp.\n\n"
+                            << "(C) Copyright 2026 MicaNT Authors. Windows and VSS are trademarks of Microsoft Corp.\n\n"
                             << "Successfully created shadow copy for '" << vol << "'\n"
                             << "   Shadow Copy ID: " << std::string(wsSnap.begin(), wsSnap.end()) << "\n"
                             << "   Shadow Copy Volume Name: " << sDev << "\n\n";

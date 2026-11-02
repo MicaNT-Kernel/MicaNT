@@ -79,8 +79,8 @@ inline int ExecuteHyperV(std::span<std::string_view> args, std::string& output) 
     vmms.initialize();
 
     if (args.empty()) {
-        out << "Microsoft Windows [Version 10.0.26100.1]\n"
-            << "Hyper-V Virtual Machine Management Utility (hyperv.exe / vmms.exe)\n\n"
+        out << "MicaNT Hyper-V Virtual Machine Management Utility (hyperv.exe / vmms.exe) [Windows Server Compatible]\n"
+            << "Copyright (C) 2026 MicaNT Authors. Windows and Hyper-V are trademarks of Microsoft Corporation.\n\n"
             << "Usage: hyperv <command> [arguments]\n\n"
             << "Commands:\n"
             << "  status                          Display Hyper-V subsystem health & resource vitals\n"

@@ -102,8 +102,8 @@ inline int ExecuteRdlic(std::span<std::string_view> args, std::string& output) {
     auto& mgr = micant::rdlic::RdLicensingManager::get();
 
     if (args.empty() || args[0] == "help" || args[0] == "/?" || args[0] == "-h" || args[0] == "--help") {
-        out << "Microsoft Windows Remote Desktop Licensing (RD Licensing) Subsystem CLI\n"
-            << "Copyright (C) Microsoft Corporation / Sovereign Clean-Room MicaNT.\n\n"
+        out << "MicaNT Remote Desktop Licensing (RD Licensing) Subsystem CLI [Windows Server Compatible]\n"
+            << "Copyright (C) 2026 MicaNT Authors. Windows and Windows Server are trademarks of Microsoft Corporation.\n\n"
             << "Available Utilities:\n"
             << "  licmgr status / rdlic status                  Introspect license server status & CAL totals\n"
             << "  licmgr pack list                              Tabular inventory of installed CAL key packs\n"

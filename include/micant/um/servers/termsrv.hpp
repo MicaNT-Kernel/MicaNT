@@ -11,6 +11,10 @@
  * 
  * Strict clean-room implementation referencing Microsoft's MIT-licensed win32metadata.
  * Zero proprietary, leaked, or decompiled code.
+ *
+ * Trademark Notice: Windows, Windows Server, and Remote Desktop are trademarks
+ * or registered trademarks of Microsoft Corporation in the United States and other
+ * countries. Referenced solely for interoperability and compatibility purposes.
  */
 
 #include <cstdint>

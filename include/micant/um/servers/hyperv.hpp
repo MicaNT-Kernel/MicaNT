@@ -12,6 +12,11 @@
 //   - Supreme Court of the United States: Google LLC v. Oracle America, Inc.
 //     (141 S. Ct. 1183, 2021) - API interoperability doctrine
 //
+// Trademark Notice:
+//   Windows, Windows Server, and Hyper-V are registered trademarks of Microsoft
+//   Corporation in the United States and other countries. Referenced solely for
+//   interoperability and compatibility purposes under 17 U.S.C. § 1201(f).
+//
 // Subsystem Overview:
 //   TitanHypervisor / AegisNestedVM implements clean-room Windows Hyper-V
 //   Hypercall interfaces, Partition Lifecycle Management, and Nested Virtualization
