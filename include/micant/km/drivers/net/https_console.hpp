@@ -74,6 +74,8 @@
 #include "micant/um/subsystems/mgmt/hyperv_hypercall_cmd.hpp"
 #include "micant/um/servers/termsrv.hpp"
 #include "micant/um/subsystems/mgmt/rdsh_cmd.hpp"
+#include "micant/um/servers/rdlicensing.hpp"
+#include "micant/um/subsystems/mgmt/rdlic_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -382,6 +384,19 @@ public:
         rdshRule.weight = 1500;
         rdshRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(rdshRule);
+
+        // 24. Register WFP Inbound Rule for RD Licensing (TCP 135)
+        wfp::km::WfpKernelFilterRule rdlicRule{};
+        rdlicRule.filterId = 18101;
+        rdlicRule.name = "MicaNT_RDLicensing_Permit";
+        rdlicRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        rdlicRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rdlicRule.protocol = tcpip::IPPROTO_TCP;
+        rdlicRule.localPortStart = 135;
+        rdlicRule.localPortEnd = 135;
+        rdlicRule.weight = 1500;
+        rdlicRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(rdlicRule);
     }
 
     void stopHttpsServer() {
@@ -803,6 +818,10 @@ public:
             std::string res;
             rdsh_cmd::um::ExecuteRdshString(cmd, res);
             return res;
+        } else if (cmd == "licmgr" || cmd.starts_with("licmgr ") || cmd == "rdlic" || cmd.starts_with("rdlic ")) {
+            std::string res;
+            rdlic_cmd::um::ExecuteRdlicString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1077,7 +1096,11 @@ public:
            << "\"rdsh_sessions_active\":" << micant::termsrv::TerminalServicesManager::get().getActiveSessionCount() << ","
            << "\"rdsh_sessions_disconnected\":" << micant::termsrv::TerminalServicesManager::get().getDisconnectedSessionCount() << ","
            << "\"rdsh_dvc_channels_open\":" << micant::termsrv::TerminalServicesManager::get().getOpenChannelCount() << ","
-           << "\"rdsh_redirected_drives\":" << micant::termsrv::TerminalServicesManager::get().getRedirectedDriveCount() << "}\r\n";
+           << "\"rdsh_redirected_drives\":" << micant::termsrv::TerminalServicesManager::get().getRedirectedDriveCount() << ","
+           << "\"rdlic_installed_cals\":" << micant::rdlic::RdLicensingManager::get().getInstalledCalCount() << ","
+           << "\"rdlic_issued_cals\":" << micant::rdlic::RdLicensingManager::get().getIssuedCalCount() << ","
+           << "\"rdlic_temp_cals\":" << micant::rdlic::RdLicensingManager::get().getTempCalCount() << ","
+           << "\"rdlic_revoked_cals\":" << micant::rdlic::RdLicensingManager::get().getRevokedCalCount() << "}\r\n";
         return ss.str();
     }
 

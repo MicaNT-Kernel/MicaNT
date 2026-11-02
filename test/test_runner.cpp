@@ -312,6 +312,8 @@
 #include "micant/um/subsystems/mgmt/hyperv_hypercall_cmd.hpp"
 #include "micant/um/servers/termsrv.hpp"
 #include "micant/um/subsystems/mgmt/rdsh_cmd.hpp"
+#include "micant/um/servers/rdlicensing.hpp"
+#include "micant/um/subsystems/mgmt/rdlic_cmd.hpp"
 #include "micant/km/drivers/fs/refs.hpp"
 #include "micant/km/drivers/fs/csvfs.hpp"
 #include "micant/km/drivers/fs/wcifs.hpp"
@@ -435,6 +437,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite397") {
+        RUN_TEST(Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite396") {
@@ -1969,6 +1975,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI);
     RUN_TEST(Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI);
     RUN_TEST(Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI);
+    RUN_TEST(Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -35145,3 +35145,362 @@ inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() 
 
     std::cout << "[TEST] Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH) PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing Subsystem (RD Licensing),
+//            MS-RDPELE, CAL Key Packs & Canonical licmgr CLI
+// ============================================================================
+inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
+    std::cout << "[TEST] Running Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing (RD Licensing)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::rdlic::RegisterRdLicensingSubsystem();
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getKeyPacks().size() == 2, "Default key packs initialized (Per-Device & Per-User)");
+
+        // SCM Service Verification
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto licSvc = scm.getServiceRecord(L"TermServLicensing");
+        TEST_ASSERT(licSvc != nullptr, "TermServLicensing must be registered in SCM");
+        TEST_ASSERT(licSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TermServLicensing is running");
+        TEST_ASSERT(licSvc->startType == micant::scm::SERVICE_AUTO_START, "TermServLicensing is auto start");
+        TEST_ASSERT(licSvc->binaryPath == L"C:\\Windows\\System32\\lserver.exe", "Binary path matches lserver.exe");
+
+        // Version Database Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "lserver.exe", "licmgr.exe", "tlsapi.dll", "tls236.dll", "mstlsapi.dll", "rdlic.exe"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Licensing Architecture, Configuration & Discovery Scopes
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        auto srv = mgr.getServerInfo();
+        TEST_ASSERT(srv.serverName == "MICANT-LIC-01", "Default server name is MICANT-LIC-01");
+        TEST_ASSERT(srv.activationStatus == micant::rdlic::ServerActivated, "Default server is activated");
+        TEST_ASSERT(mgr.getLicensingMode() == micant::rdlic::LicModePerDevice, "Default mode is Per-Device");
+        TEST_ASSERT(mgr.getDiscoveryScope() == micant::rdlic::LicScopeDomain, "Default scope is Domain");
+
+        // Test Discovery in Domain and Forest
+        auto domainServers = mgr.discoverLicenseServers(micant::rdlic::LicScopeDomain);
+        TEST_ASSERT(!domainServers.empty(), "Discovered license servers in Domain");
+
+        // Register Forest-wide server
+        micant::rdlic::LicenseServerInfo forestSrv{};
+        forestSrv.serverName = "MICANT-ROOT-LIC";
+        forestSrv.serverFqdn = "rootlic.corp.micant.local";
+        forestSrv.scope = micant::rdlic::LicScopeEnterprise;
+        forestSrv.activationStatus = micant::rdlic::ServerActivated;
+        mgr.registerDiscoveredServer(forestSrv);
+
+        auto forestServers = mgr.discoverLicenseServers(micant::rdlic::LicScopeEnterprise);
+        TEST_ASSERT(forestServers.size() >= 2, "Discovered forest-wide license server");
+
+        // Configure mode
+        mgr.setLicensingMode(micant::rdlic::LicModePerUser);
+        TEST_ASSERT(mgr.getLicensingMode() == micant::rdlic::LicModePerUser, "Mode switched to Per-User");
+        mgr.setLicensingMode(micant::rdlic::LicModePerDevice);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: CAL Key Pack Provisioning, Inventory & Capacity Accounting
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        // Check defaults: 50 Per-Device, 100 Per-User = 150 total
+        TEST_ASSERT(mgr.getInstalledCalCount() == 150, "Initial installed CALs count is 150");
+        TEST_ASSERT(mgr.getAvailableCalCount() == 150, "Initial available CALs count is 150");
+        TEST_ASSERT(mgr.getIssuedCalCount() == 0, "Initial issued CALs count is 0");
+
+        // Provision New CAL Key Pack (25 Per-Device CALs)
+        micant::rdlic::LicenseKeyPack pack3{};
+        pack3.productName = "Windows Server 2025 Remote Desktop Services";
+        pack3.keyPackType = micant::rdlic::KeyPackPerDevice;
+        pack3.totalLicenses = 25;
+        uint32_t packId = mgr.installKeyPack(pack3);
+        TEST_ASSERT(packId >= 3, "New key pack assigned valid pack ID");
+
+        TEST_ASSERT(mgr.getInstalledCalCount() == 175, "Installed CAL count updated to 175");
+        TEST_ASSERT(mgr.getAvailableCalCount() == 175, "Available CAL count updated to 175");
+
+        micant::rdlic::LicenseKeyPack fetched{};
+        TEST_ASSERT(mgr.getKeyPack(packId, fetched), "Fetched key pack by ID");
+        TEST_ASSERT(fetched.totalLicenses == 25, "Fetched key pack total matches");
+        TEST_ASSERT(fetched.availableLicenses == 25, "Fetched key pack available matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: MS-RDPELE License Issuance, Hardware ID Hashing & Idempotence
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        // 1. Hardware ID Hashing
+        std::string rawHwid = "PCI\\VEN_10DE&DEV_1B80&SUBSYS_33661462";
+        std::string hashedHwid = micant::rdlic::RdLicensingManager::computeHardwareIdHash(rawHwid);
+        TEST_ASSERT(hashedHwid.starts_with("HWID-"), "Computed HWID starts with HWID- prefix");
+        TEST_ASSERT(hashedHwid.length() >= 24, "Computed HWID has canonical format");
+
+        // 2. Issue Per-Device CAL
+        micant::rdlic::LicenseRequest req{};
+        req.hwid = hashedHwid;
+        req.machineName = "WS-FINANCE-01";
+        req.userName = "alice";
+        req.domainName = "CORP";
+        req.requestedType = micant::rdlic::KeyPackPerDevice;
+
+        micant::rdlic::IssuedLicense lic1{};
+        int res1 = mgr.requestLicense(req, lic1);
+        TEST_ASSERT(res1 == 0, "License request succeeded");
+        TEST_ASSERT(lic1.status == micant::rdlic::LicenseActive, "Issued license status is Active");
+        TEST_ASSERT(lic1.licenseType == micant::rdlic::KeyPackPerDevice, "Issued license is Per-Device");
+        TEST_ASSERT(lic1.clientHardwareId == hashedHwid, "Client HWID matches");
+        TEST_ASSERT(lic1.licenseToken.starts_with("MS-RDPELE-TOK-"), "License token format valid");
+        TEST_ASSERT(mgr.getIssuedCalCount() == 1, "Issued CAL count is 1");
+        TEST_ASSERT(mgr.getAvailableCalCount() == 149, "Available CAL count is 149");
+
+        // 3. Idempotent Issuance (Re-request from same HWID returns existing CAL)
+        micant::rdlic::IssuedLicense lic2{};
+        int res2 = mgr.requestLicense(req, lic2);
+        TEST_ASSERT(res2 == 0, "Idempotent re-request succeeded");
+        TEST_ASSERT(lic2.licenseId == lic1.licenseId, "Returned same license ID");
+        TEST_ASSERT(lic2.licenseToken == lic1.licenseToken, "Returned same token");
+        TEST_ASSERT(mgr.getIssuedCalCount() == 1, "Issued CAL count unchanged (no double billing)");
+
+        // 4. Token Verification
+        TEST_ASSERT(mgr.verifyLicenseToken(lic1.licenseToken, hashedHwid), "Token verification passed with valid HWID");
+        TEST_ASSERT(!mgr.verifyLicenseToken(lic1.licenseToken, "HWID-0000-1111-2222-3333"), "Token verification rejected invalid HWID");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Temporary License Lifecycle, 90-Day Token & Grace Period Tracking
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        // Deplete all Per-Device packs to test temporary fallback
+        auto packs = mgr.getKeyPacks();
+        for (const auto& p : packs) {
+            mgr.removeKeyPack(p.packId);
+        }
+        TEST_ASSERT(mgr.getKeyPacks().empty(), "All packs cleared for temporary test");
+
+        // Install 1 Per-Device license pack with only 1 license
+        micant::rdlic::LicenseKeyPack singlePack{};
+        singlePack.productName = "Windows Server 2025 RDS";
+        singlePack.keyPackType = micant::rdlic::KeyPackPerDevice;
+        singlePack.totalLicenses = 1;
+        mgr.installKeyPack(singlePack);
+
+        // First device consumes the single permanent CAL
+        micant::rdlic::LicenseRequest req1{};
+        req1.hwid = "HWID-1111-2222-3333-4444";
+        req1.machineName = "WS-01";
+        req1.userName = "user1";
+        req1.requestedType = micant::rdlic::KeyPackPerDevice;
+
+        micant::rdlic::IssuedLicense lic1{};
+        int res1 = mgr.requestLicense(req1, lic1);
+        TEST_ASSERT(res1 == 0 && lic1.status == micant::rdlic::LicenseActive, "First device granted permanent CAL");
+        TEST_ASSERT(mgr.getAvailableCalCount() == 0, "Available CAL count reached 0");
+
+        // Second device requests Per-Device CAL: None available -> Temporary CAL issued
+        micant::rdlic::LicenseRequest req2{};
+        req2.hwid = "HWID-5555-6666-7777-8888";
+        req2.machineName = "WS-02";
+        req2.userName = "user2";
+        req2.requestedType = micant::rdlic::KeyPackPerDevice;
+
+        micant::rdlic::IssuedLicense tempLic{};
+        int res2 = mgr.requestLicense(req2, tempLic);
+        TEST_ASSERT(res2 == 0, "Second request succeeded");
+        TEST_ASSERT(tempLic.status == micant::rdlic::LicenseTemporary, "Temporary CAL issued");
+        TEST_ASSERT(tempLic.licenseType == micant::rdlic::KeyPackTemporary, "License type is Temporary");
+        TEST_ASSERT(tempLic.packId == 0, "Temporary CAL has packId 0");
+        TEST_ASSERT(mgr.getTempCalCount() == 1, "Temporary CAL counter is 1");
+
+        // Grace Period Status verification
+        auto gp = mgr.getGracePeriodStatus();
+        TEST_ASSERT(gp.totalGraceDays == 120, "Grace period total is 120 days");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: CAL Revocation, Upgrade from Temporary to Permanent & Reissuance
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        // 1. Issue permanent CAL
+        micant::rdlic::LicenseRequest req1{};
+        req1.hwid = "HWID-AAAA-BBBB-CCCC-DDDD";
+        req1.machineName = "WS-DEV-01";
+        req1.userName = "devuser";
+        req1.requestedType = micant::rdlic::KeyPackPerDevice;
+
+        micant::rdlic::IssuedLicense permLic{};
+        mgr.requestLicense(req1, permLic);
+        uint32_t permId = permLic.licenseId;
+        TEST_ASSERT(mgr.getIssuedCalCount() == 1, "1 permanent CAL issued");
+
+        // 2. Revoke permanent CAL
+        TEST_ASSERT(mgr.revokeLicense(permId, micant::rdlic::RevokeReasonComputerDecommissioned), "Revocation succeeded");
+        TEST_ASSERT(mgr.getRevokedCalCount() == 1, "Revoked count is 1");
+        TEST_ASSERT(mgr.getIssuedCalCount() == 0, "Issued count returned to 0");
+
+        micant::rdlic::IssuedLicense revokedLic{};
+        TEST_ASSERT(mgr.findLicenseById(permId, revokedLic), "Found revoked license");
+        TEST_ASSERT(revokedLic.status == micant::rdlic::LicenseRevoked, "Status is Revoked");
+        TEST_ASSERT(revokedLic.revokeReason == micant::rdlic::RevokeReasonComputerDecommissioned, "Reason matches");
+
+        // 3. Issue Temporary CAL & Upgrade
+        // Clear packs and set 0 available
+        auto packs = mgr.getKeyPacks();
+        for (const auto& p : packs) mgr.removeKeyPack(p.packId);
+
+        micant::rdlic::LicenseRequest reqTemp{};
+        reqTemp.hwid = "HWID-EEEE-FFFF-0000-1111";
+        reqTemp.machineName = "WS-TEMP-01";
+        reqTemp.userName = "tempuser";
+        reqTemp.requestedType = micant::rdlic::KeyPackPerDevice;
+
+        micant::rdlic::IssuedLicense tempLic{};
+        mgr.requestLicense(reqTemp, tempLic);
+        TEST_ASSERT(tempLic.status == micant::rdlic::LicenseTemporary, "Temporary license created");
+
+        // Cannot upgrade yet (no packs)
+        TEST_ASSERT(!mgr.upgradeTemporaryLicense(tempLic.licenseId), "Upgrade fails when no packs available");
+
+        // Add key pack
+        micant::rdlic::LicenseKeyPack newPack{};
+        newPack.totalLicenses = 10;
+        newPack.keyPackType = micant::rdlic::KeyPackPerDevice;
+        mgr.installKeyPack(newPack);
+
+        // Upgrade now succeeds
+        TEST_ASSERT(mgr.upgradeTemporaryLicense(tempLic.licenseId), "Upgrade succeeds after key pack installed");
+        micant::rdlic::IssuedLicense upgraded{};
+        TEST_ASSERT(mgr.findLicenseById(tempLic.licenseId, upgraded), "Found upgraded license");
+        TEST_ASSERT(upgraded.status == micant::rdlic::LicenseActive, "Upgraded license is now Active");
+        TEST_ASSERT(upgraded.licenseType == micant::rdlic::KeyPackPerDevice, "Upgraded license is Per-Device");
+
+        // 4. Reissue for hardware replacement
+        std::string newHwid = "HWID-9999-8888-7777-6666";
+        TEST_ASSERT(mgr.reissueLicense(upgraded.licenseId, newHwid), "Reissue succeeded");
+        micant::rdlic::IssuedLicense reissued{};
+        TEST_ASSERT(mgr.findLicenseById(upgraded.licenseId, reissued), "Found reissued license");
+        TEST_ASSERT(reissued.clientHardwareId == newHwid, "Reissued license has updated HWID");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 licmgr CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdlic::RdLicensingManager::get();
+        mgr.reset();
+
+        // 1. Win32 C ABI Exports
+        void* hServer = nullptr;
+        int32_t connRes = micant::rdlic::TLSConnectToLsServer(L"localhost", &hServer);
+        TEST_ASSERT(connRes == 0 && hServer != nullptr, "TLSConnectToLsServer succeeded");
+
+        uint32_t outLicId = 0;
+        int32_t reqRes = micant::rdlic::TLSRequestNewLicense(hServer, L"HWID-TEST-1234", L"WS-TEST", L"tester", &outLicId);
+        TEST_ASSERT(reqRes == 0 && outLicId >= 1000, "TLSRequestNewLicense returned valid license ID");
+
+        uint8_t challengeBuf[32]{};
+        int32_t chalRes = micant::rdlic::TLSIssuePlatformChallenge(hServer, outLicId, challengeBuf, sizeof(challengeBuf));
+        TEST_ASSERT(chalRes == 0, "TLSIssuePlatformChallenge succeeded");
+
+        int32_t revRes = micant::rdlic::TLSRevokeLicense(hServer, outLicId);
+        TEST_ASSERT(revRes == 0, "TLSRevokeLicense succeeded");
+
+        int32_t discRes = micant::rdlic::TLSDisconnectFromServer(hServer);
+        TEST_ASSERT(discRes == 0, "TLSDisconnectFromServer succeeded");
+
+        // 2. Canonical Win32 licmgr / rdlic CLI
+        std::string statOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("licmgr status", statOut);
+        TEST_ASSERT(statOut.find("TermServLicensing (Running)") != std::string::npos, "licmgr status shows TermServLicensing");
+        TEST_ASSERT(statOut.find("MICANT-LIC-01") != std::string::npos, "licmgr status shows server name");
+
+        std::string packOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("licmgr pack list", packOut);
+        TEST_ASSERT(packOut.find("KP-2026-DEV-001") != std::string::npos, "licmgr pack list shows default dev pack");
+
+        std::string addOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("licmgr pack add perdevice 30 \"MicaNT 2026 RDS Pack\"", addOut);
+        TEST_ASSERT(addOut.find("SUCCESS: Installed CAL Key Pack") != std::string::npos, "licmgr pack add succeeded");
+
+        std::string issueOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("licmgr issue HWID-CLI-01 WS-CLI admin perdevice", issueOut);
+        TEST_ASSERT(issueOut.find("SUCCESS: Issued Active CAL") != std::string::npos, "licmgr issue succeeded");
+
+        std::string licOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("rdlic list", licOut);
+        TEST_ASSERT(licOut.find("HWID-CLI-01") != std::string::npos, "rdlic list contains issued client");
+
+        std::string discOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("licmgr discover domain", discOut);
+        TEST_ASSERT(discOut.find("MICANT-LIC-01") != std::string::npos, "licmgr discover lists server");
+
+        std::string dumpOut;
+        micant::rdlic_cmd::um::ExecuteRdlicString("licmgr dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("TermServLicensing") != std::string::npos, "licmgr dump contains SCM config");
+
+        // 3. Remote Executive Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStat = console.executeTerminalCommand("licmgr status");
+        TEST_ASSERT(termStat.find("Remote Desktop Licensing Subsystem Status:") != std::string::npos, "Web terminal licmgr status");
+
+        std::string termPacks = console.executeTerminalCommand("rdlic pack list");
+        TEST_ASSERT(termPacks.find("PACKID") != std::string::npos, "Web terminal rdlic pack list");
+
+        // 4. WFP Inbound Rule #18101 (MicaNT_RDLicensing_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto rdlicRuleOpt = wfp.findRuleById(18101);
+        TEST_ASSERT(rdlicRuleOpt.has_value(), "WFP Rule #18101 for RD Licensing must be registered");
+        TEST_ASSERT(rdlicRuleOpt->protocol == tcpip::IPPROTO_TCP, "RD Licensing protocol is TCP");
+        TEST_ASSERT(rdlicRuleOpt->localPortStart == 135 && rdlicRuleOpt->localPortEnd == 135, "Port 135");
+        TEST_ASSERT(rdlicRuleOpt->action == wfp::FWP_ACTION_PERMIT, "RD Licensing rule action must be PERMIT");
+
+        // 5. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"rdlic_installed_cals\":") != std::string::npos, "Telemetry rdlic_installed_cals");
+        TEST_ASSERT(teleJson.find("\"rdlic_issued_cals\":") != std::string::npos, "Telemetry rdlic_issued_cals");
+        TEST_ASSERT(teleJson.find("\"rdlic_temp_cals\":") != std::string::npos, "Telemetry rdlic_temp_cals");
+        TEST_ASSERT(teleJson.find("\"rdlic_revoked_cals\":") != std::string::npos, "Telemetry rdlic_revoked_cals");
+    }
+
+    std::cout << "[HORIZON 181] Sovereign Windows Server Remote Desktop Licensing (RD Licensing) Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Licensing Architecture, Configuration & Discovery Scopes OK\n"
+              << "    Pillar 3: CAL Key Pack Provisioning, Inventory & Capacity Accounting OK\n"
+              << "    Pillar 4: MS-RDPELE License Issuance, Hardware ID Hashing & Idempotence OK\n"
+              << "    Pillar 5: Temporary License Lifecycle, 90-Day Token & Grace Period Tracking OK\n"
+              << "    Pillar 6: CAL Revocation, Upgrade from Temporary to Permanent & Reissuance OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 licmgr CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing (RD Licensing) PASSED." << std::endl;
+}
