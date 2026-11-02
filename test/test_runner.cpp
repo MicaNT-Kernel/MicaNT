@@ -51,6 +51,7 @@
 #include "micant/um/servers/csrss.hpp"
 #include "micant/um/servers/conhost.hpp"
 #include "micant/um/subsystems/winbase/kernel32.hpp"
+#include "micant/um/subsystems/winbase/powrprof.hpp"
 #include "micant/um/native/wow64.hpp"
 #include "micant/km/hal/cpu.hpp"
 #include "micant/km/executive/usermode.hpp"
@@ -449,6 +450,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite415") {
+        RUN_TEST(Test_Horizon199_NativeWindowsNtKernel_GamingConformance_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite414") {
@@ -2073,6 +2078,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon196_HeterogeneousCoreScheduling_VCachePacing_And_CoreSchedCLI);
     RUN_TEST(Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI);
     RUN_TEST(Test_Horizon198_SystemPower_ThermalMitigation_And_GamePowerCLI);
+    RUN_TEST(Test_Horizon199_NativeWindowsNtKernel_GamingConformance_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

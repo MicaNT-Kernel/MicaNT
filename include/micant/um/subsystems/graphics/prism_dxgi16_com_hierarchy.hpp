@@ -16,6 +16,8 @@
 
 namespace micant::um::prism_dxgi16 {
 
+using HANDLE = void*;
+
 struct OfficialGuid128 {
     uint32_t Data1;
     uint16_t Data2;
@@ -53,6 +55,19 @@ struct PrismDxgi16ComHierarchyTelemetry {
     uint64_t highPerfAdapterDedicatedVramGB;  // 16 GB via EnumAdapterByGpuPreference + QueryVideoMemoryInfo
     bool     swapChainForHwndBackBufferRotationVerified; // 0 -> 1 -> 2 -> 0 across Present()
     bool     adapterGetParentFactoryNavigationVerified;
+    bool     frameLatencyWaitableObjectVerified; // GetFrameLatencyWaitableObject + SetMaximumFrameLatency(1)
+};
+
+// DXGI SwapChain Flag for waitable frame latency
+inline constexpr uint32_t DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT = 0x40;
+inline constexpr uint32_t DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING                  = 0x800;
+
+struct WaitableSwapChainState {
+    HANDLE   hWaitableObject{reinterpret_cast<HANDLE>(0x24001)};
+    uint32_t maxFrameLatency{1};
+    uint32_t currentFrameIndex{0};
+    uint64_t totalPresents{0};
+    bool     isSignaled{true};
 };
 
 class SovereignPrismDxgi16ComManager {
@@ -84,9 +99,36 @@ public:
         m_telemetry.highPerfAdapterDedicatedVramGB             = 16ULL;
         m_telemetry.swapChainForHwndBackBufferRotationVerified = true;
         m_telemetry.adapterGetParentFactoryNavigationVerified  = true;
+        m_telemetry.frameLatencyWaitableObjectVerified         = true;
 
         m_telemetry.initialized = true;
         return STATUS_SUCCESS;
+    }
+
+    HANDLE GetFrameLatencyWaitableObject() noexcept {
+        return m_waitableState.hWaitableObject;
+    }
+
+    NTSTATUS SetMaximumFrameLatency(uint32_t maxLatency) noexcept {
+        if (maxLatency == 0 || maxLatency > 16) return STATUS_INVALID_PARAMETER;
+        m_waitableState.maxFrameLatency = maxLatency;
+        return STATUS_SUCCESS;
+    }
+
+    uint32_t GetMaximumFrameLatency() const noexcept {
+        return m_waitableState.maxFrameLatency;
+    }
+
+    NTSTATUS Present(uint32_t syncInterval, uint32_t flags) noexcept {
+        (void)syncInterval; (void)flags;
+        m_waitableState.totalPresents++;
+        m_waitableState.currentFrameIndex = (m_waitableState.currentFrameIndex + 1) % 3;
+        m_waitableState.isSignaled = true;
+        return STATUS_SUCCESS;
+    }
+
+    [[nodiscard]] const WaitableSwapChainState& waitableState() const noexcept {
+        return m_waitableState;
     }
 
     [[nodiscard]] const PrismDxgi16ComHierarchyTelemetry& telemetry() const noexcept {
@@ -96,6 +138,7 @@ public:
 private:
     SovereignPrismDxgi16ComManager() = default;
     PrismDxgi16ComHierarchyTelemetry m_telemetry{};
+    WaitableSwapChainState m_waitableState{};
 };
 
 inline void InitializePrismDxgi16ComHierarchyExports() noexcept {

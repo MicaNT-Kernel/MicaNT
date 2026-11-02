@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cwctype>
 #include <mutex>
+#include <condition_variable>
 #include <unordered_map>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
@@ -67,6 +68,7 @@ using PCWSTR    = const wchar_t*;
 using PWSTR     = wchar_t*;
 using LPCWCH    = const wchar_t*;
 using ULONG     = uint32_t;
+using KAFFINITY = ULONG_PTR;
 using PULONG    = uint32_t*;
 using PBOOL     = int32_t*;
 using LPBOOL    = int32_t*;
@@ -208,8 +210,10 @@ inline constexpr DWORD ERROR_INVALID_HANDLE     = 6;
 inline constexpr DWORD ERROR_NOT_ENOUGH_MEMORY  = 8;
 inline constexpr DWORD ERROR_INVALID_DATA       = 13;
 inline constexpr DWORD ERROR_INVALID_PARAMETER  = 87;
+inline constexpr DWORD ERROR_INSUFFICIENT_BUFFER = 122;
 inline constexpr DWORD ERROR_ALREADY_EXISTS     = 183;
 inline constexpr DWORD ERROR_NO_MORE_ITEMS      = 259;
+inline constexpr DWORD ERROR_TIMEOUT            = 1460;
 
 // Heap Flags
 inline constexpr DWORD HEAP_NO_SERIALIZE        = 0x00000001;
@@ -3780,10 +3784,57 @@ inline BOOL K32GetProcessMemoryInfo([[maybe_unused]] HANDLE hProcess, void* ppsm
     return TRUE;
 }
 
+inline constexpr int ProcessPowerThrottling = 1;
+
+struct PROCESS_POWER_THROTTLING_STATE {
+    uint32_t Version;
+    uint32_t ControlMask;
+    uint32_t StateMask;
+};
+
+inline constexpr uint32_t PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1;
+inline constexpr uint32_t PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1;
+inline constexpr uint32_t PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION = 0x2;
+
+inline PROCESS_POWER_THROTTLING_STATE s_processPowerThrottling{
+    .Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+    .ControlMask = 0,
+    .StateMask = 0
+};
+
 inline BOOL SetProcessInformation([[maybe_unused]] HANDLE hProcess,
-                                  [[maybe_unused]] int ProcessInformationClass,
-                                  [[maybe_unused]] void* ProcessInformation,
-                                  [[maybe_unused]] DWORD ProcessInformationSize) noexcept {
+                                  int ProcessInformationClass,
+                                  void* ProcessInformation,
+                                  DWORD ProcessInformationSize) noexcept {
+    if (ProcessInformationClass == ProcessPowerThrottling) {
+        if (!ProcessInformation || ProcessInformationSize < sizeof(PROCESS_POWER_THROTTLING_STATE)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        auto* pState = reinterpret_cast<const PROCESS_POWER_THROTTLING_STATE*>(ProcessInformation);
+        if (pState->Version != PROCESS_POWER_THROTTLING_CURRENT_VERSION) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        s_processPowerThrottling = *pState;
+        return TRUE;
+    }
+    return TRUE;
+}
+
+inline BOOL GetProcessInformation([[maybe_unused]] HANDLE hProcess,
+                                  int ProcessInformationClass,
+                                  void* ProcessInformation,
+                                  DWORD ProcessInformationSize) noexcept {
+    if (ProcessInformationClass == ProcessPowerThrottling) {
+        if (!ProcessInformation || ProcessInformationSize < sizeof(PROCESS_POWER_THROTTLING_STATE)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        auto* pState = reinterpret_cast<PROCESS_POWER_THROTTLING_STATE*>(ProcessInformation);
+        *pState = s_processPowerThrottling;
+        return TRUE;
+    }
     return TRUE;
 }
 
@@ -4678,11 +4729,7 @@ inline DWORD WINAPI QueryDosDeviceW(LPCWSTR lpDeviceName, LPWSTR lpTargetPath, D
 
     if (!lpDeviceName || lpDeviceName[0] == L'\0') {
         auto letters = vfs.getMountedDriveLetters();
-        size_t totalNeeded = 0;
-        for (wchar_t l : letters) {
-            totalNeeded += 3; // "C:\0"
-        }
-        totalNeeded += 1; // Trailing '\0'
+        size_t totalNeeded = letters.size() * 3 + 1; // "C:\0" per letter plus trailing '\0'
 
         if (ucchMax < totalNeeded) {
             SetLastError(122); // ERROR_INSUFFICIENT_BUFFER
@@ -5301,11 +5348,98 @@ inline void WINAPI SetThreadpoolWait(void* /*pwa*/, HANDLE /*h*/, void* /*pftTim
 inline void WINAPI WaitForThreadpoolWaitCallbacks(void* /*pwa*/, BOOL /*fCancelPendingCallbacks*/) noexcept {}
 inline void WINAPI CloseThreadpoolWait(void* /*pwa*/) noexcept {}
 
-inline BOOL WINAPI WaitOnAddress(volatile void* /*Address*/, void* /*CompareAddress*/, size_t /*AddressSize*/, DWORD /*dwMilliseconds*/) noexcept {
-    return TRUE;
+namespace detail {
+    struct WaitOnAddressBucket {
+        std::mutex mtx;
+        std::condition_variable cv;
+        uint64_t wakeSequence{0};
+    };
+    inline constexpr size_t NUM_WAIT_BUCKETS = 64;
+    inline WaitOnAddressBucket s_waitBuckets[NUM_WAIT_BUCKETS];
+
+    inline size_t HashAddress(const volatile void* addr) noexcept {
+        return (reinterpret_cast<uintptr_t>(addr) >> 3) % NUM_WAIT_BUCKETS;
+    }
 }
-inline void WINAPI WakeByAddressSingle(void* /*Address*/) noexcept {}
-inline void WINAPI WakeByAddressAll(void* /*Address*/) noexcept {}
+
+inline BOOL WINAPI WaitOnAddress(volatile void* Address, void* CompareAddress, size_t AddressSize, DWORD dwMilliseconds) noexcept {
+    if (!Address || !CompareAddress) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (AddressSize != 1 && AddressSize != 2 && AddressSize != 4 && AddressSize != 8) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    // Compare Address memory with CompareAddress
+    bool equal = false;
+    switch (AddressSize) {
+        case 1: equal = (*reinterpret_cast<volatile uint8_t*>(Address)  == *reinterpret_cast<const uint8_t*>(CompareAddress)); break;
+        case 2: equal = (*reinterpret_cast<volatile uint16_t*>(Address) == *reinterpret_cast<const uint16_t*>(CompareAddress)); break;
+        case 4: equal = (*reinterpret_cast<volatile uint32_t*>(Address) == *reinterpret_cast<const uint32_t*>(CompareAddress)); break;
+        case 8: equal = (*reinterpret_cast<volatile uint64_t*>(Address) == *reinterpret_cast<const uint64_t*>(CompareAddress)); break;
+    }
+
+    if (!equal) {
+        return TRUE;
+    }
+
+    auto& bucket = detail::s_waitBuckets[detail::HashAddress(Address)];
+    std::unique_lock<std::mutex> lock(bucket.mtx);
+
+    // Re-check value under lock
+    switch (AddressSize) {
+        case 1: equal = (*reinterpret_cast<volatile uint8_t*>(Address)  == *reinterpret_cast<const uint8_t*>(CompareAddress)); break;
+        case 2: equal = (*reinterpret_cast<volatile uint16_t*>(Address) == *reinterpret_cast<const uint16_t*>(CompareAddress)); break;
+        case 4: equal = (*reinterpret_cast<volatile uint32_t*>(Address) == *reinterpret_cast<const uint32_t*>(CompareAddress)); break;
+        case 8: equal = (*reinterpret_cast<volatile uint64_t*>(Address) == *reinterpret_cast<const uint64_t*>(CompareAddress)); break;
+    }
+    if (!equal) return TRUE;
+
+    uint64_t initialSeq = bucket.wakeSequence;
+    auto predicate = [&]() noexcept -> bool {
+        switch (AddressSize) {
+            case 1: if (*reinterpret_cast<volatile uint8_t*>(Address)  != *reinterpret_cast<const uint8_t*>(CompareAddress)) return true; break;
+            case 2: if (*reinterpret_cast<volatile uint16_t*>(Address) != *reinterpret_cast<const uint16_t*>(CompareAddress)) return true; break;
+            case 4: if (*reinterpret_cast<volatile uint32_t*>(Address) != *reinterpret_cast<const uint32_t*>(CompareAddress)) return true; break;
+            case 8: if (*reinterpret_cast<volatile uint64_t*>(Address) != *reinterpret_cast<const uint64_t*>(CompareAddress)) return true; break;
+        }
+        return bucket.wakeSequence != initialSeq;
+    };
+
+    if (dwMilliseconds == 0xFFFFFFFF) { // INFINITE
+        bucket.cv.wait(lock, predicate);
+        return TRUE;
+    } else {
+        bool woken = bucket.cv.wait_for(lock, std::chrono::milliseconds(dwMilliseconds), predicate);
+        if (!woken) {
+            SetLastError(ERROR_TIMEOUT);
+            return FALSE;
+        }
+        return TRUE;
+    }
+}
+
+inline void WINAPI WakeByAddressSingle(void* Address) noexcept {
+    if (!Address) return;
+    auto& bucket = detail::s_waitBuckets[detail::HashAddress(Address)];
+    {
+        std::lock_guard<std::mutex> lock(bucket.mtx);
+        bucket.wakeSequence++;
+    }
+    bucket.cv.notify_one();
+}
+
+inline void WINAPI WakeByAddressAll(void* Address) noexcept {
+    if (!Address) return;
+    auto& bucket = detail::s_waitBuckets[detail::HashAddress(Address)];
+    {
+        std::lock_guard<std::mutex> lock(bucket.mtx);
+        bucket.wakeSequence++;
+    }
+    bucket.cv.notify_all();
+}
 
 // QueryDosDeviceW defined above
 inline BOOL ReadProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
@@ -5358,9 +5492,272 @@ inline uint32_t VerLanguageNameW(uint32_t /*wLang*/, wchar_t* szLang, uint32_t c
     szLang[len] = L'\0';
     return static_cast<uint32_t>(len);
 }
-inline BOOL GetLogicalProcessorInformation(void* /*Buffer*/, uint32_t* ReturnedLength) noexcept {
-    if (ReturnedLength) *ReturnedLength = 0;
-    return 1;
+enum LOGICAL_PROCESSOR_RELATIONSHIP : uint32_t {
+    RelationProcessorCore    = 0,
+    RelationNumaNode         = 1,
+    RelationCache            = 2,
+    RelationProcessorPackage = 3,
+    RelationGroup            = 4,
+    RelationAll              = 0xFFFF
+};
+
+enum PROCESSOR_CACHE_TYPE : uint32_t {
+    CacheUnified     = 0,
+    CacheInstruction = 1,
+    CacheData        = 2,
+    CacheTrace       = 3
+};
+
+struct CACHE_DESCRIPTOR {
+    uint8_t   Level;
+    uint8_t   Associativity;
+    uint16_t  LineSize;
+    uint32_t  Size;
+    PROCESSOR_CACHE_TYPE Type;
+};
+
+struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION {
+    ULONG_PTR ProcessorMask;
+    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
+    union {
+        struct {
+            uint8_t Flags;
+        } ProcessorCore;
+        struct {
+            uint32_t NodeNumber;
+        } NumaNode;
+        CACHE_DESCRIPTOR Cache;
+        uint64_t Reserved[2];
+    };
+};
+
+struct CACHE_RELATIONSHIP {
+    uint8_t Level;
+    uint8_t Associativity;
+    uint16_t LineSize;
+    uint32_t CacheSize;
+    PROCESSOR_CACHE_TYPE Type;
+    uint8_t Reserved[20];
+    uint16_t GroupCount;
+    KAFFINITY GroupMasks[1];
+};
+
+struct PROCESSOR_RELATIONSHIP {
+    uint8_t Flags; // 0x01 = LTP_PC_SMT
+    uint8_t EfficiencyClass; // 0 = E-core, 1 = P-core, 2 = 3D V-Cache P-core
+    uint8_t Reserved[20];
+    uint16_t GroupCount;
+    KAFFINITY GroupMasks[1];
+};
+
+struct NUMA_NODE_RELATIONSHIP {
+    uint32_t NodeNumber;
+    uint8_t Reserved[20];
+    uint16_t GroupCount;
+    KAFFINITY GroupMasks[1];
+};
+
+struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
+    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
+    uint32_t Size;
+    union {
+        PROCESSOR_RELATIONSHIP Processor;
+        NUMA_NODE_RELATIONSHIP NumaNode;
+        CACHE_RELATIONSHIP Cache;
+    };
+};
+
+inline BOOL GetLogicalProcessorInformation(void* Buffer, uint32_t* ReturnedLength) noexcept {
+    if (!ReturnedLength) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    // 16 cores (8 entries for dual-thread cores) + L1/L2/L3 caches + 1 NUMA node = ~12 entries
+    constexpr uint32_t count = 12;
+    uint32_t required = count * sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+    if (!Buffer || *ReturnedLength < required) {
+        *ReturnedLength = required;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    auto* arr = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION*>(Buffer);
+    std::memset(arr, 0, required);
+
+    // Populate representative Core 0..7 (Performance/V-Cache cores)
+    for (uint32_t i = 0; i < 8; ++i) {
+        arr[i].Relationship = RelationProcessorCore;
+        arr[i].ProcessorMask = (1ULL << i);
+        arr[i].ProcessorCore.Flags = 1; // SMT enabled
+    }
+
+    // Populate L3 Cache (96MB 3D V-Cache on CCD 0)
+    arr[8].Relationship = RelationCache;
+    arr[8].ProcessorMask = 0x00FF; // Cores 0-7
+    arr[8].Cache.Level = 3;
+    arr[8].Cache.Associativity = 16;
+    arr[8].Cache.LineSize = 64;
+    arr[8].Cache.Size = 96 * 1024 * 1024; // 96MB
+    arr[8].Cache.Type = CacheUnified;
+
+    // Populate NUMA Node 0
+    arr[9].Relationship = RelationNumaNode;
+    arr[9].ProcessorMask = 0xFFFF; // All 16 cores
+    arr[9].NumaNode.NodeNumber = 0;
+
+    *ReturnedLength = required;
+    return TRUE;
+}
+
+inline BOOL GetLogicalProcessorInformationEx(LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType,
+                                             void* Buffer,
+                                             uint32_t* ReturnedLength) noexcept {
+    if (!ReturnedLength) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    // Calculate buffer size needed
+    uint32_t recordCount = 0;
+    if (RelationshipType == RelationProcessorCore || RelationshipType == RelationAll) {
+        recordCount += 16; // 16 cores
+    }
+    if (RelationshipType == RelationCache || RelationshipType == RelationAll) {
+        recordCount += 2;  // L3 Cache 96MB + L3 Cache 32MB
+    }
+    if (RelationshipType == RelationNumaNode || RelationshipType == RelationAll) {
+        recordCount += 1;  // NUMA Node 0
+    }
+
+    uint32_t required = recordCount * sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+    if (!Buffer || *ReturnedLength < required) {
+        *ReturnedLength = required;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    auto* curr = reinterpret_cast<uint8_t*>(Buffer);
+    std::memset(curr, 0, required);
+
+    // Populate Cores if requested
+    if (RelationshipType == RelationProcessorCore || RelationshipType == RelationAll) {
+        for (uint32_t i = 0; i < 16; ++i) {
+            auto* pInfo = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+            pInfo->Relationship = RelationProcessorCore;
+            pInfo->Size = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+            pInfo->Processor.Flags = (i < 8) ? 1 : 0; // SMT on P-cores
+            pInfo->Processor.EfficiencyClass = (i < 4) ? 2 : ((i < 8) ? 1 : 0); // 2 = 3D V-Cache, 1 = P-core, 0 = E-core
+            pInfo->Processor.GroupCount = 1;
+            pInfo->Processor.GroupMasks[0] = (1ULL << i);
+            curr += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+        }
+    }
+
+    // Populate Caches if requested
+    if (RelationshipType == RelationCache || RelationshipType == RelationAll) {
+        // 96MB 3D V-Cache on CCD 0
+        auto* pC1 = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+        pC1->Relationship = RelationCache;
+        pC1->Size = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+        pC1->Cache.Level = 3;
+        pC1->Cache.Associativity = 16;
+        pC1->Cache.LineSize = 64;
+        pC1->Cache.CacheSize = 96 * 1024 * 1024;
+        pC1->Cache.Type = CacheUnified;
+        pC1->Cache.GroupCount = 1;
+        pC1->Cache.GroupMasks[0] = 0x00FF; // Cores 0-7
+        curr += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+
+        // 32MB standard L3 on CCD 1
+        auto* pC2 = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+        pC2->Relationship = RelationCache;
+        pC2->Size = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+        pC2->Cache.Level = 3;
+        pC2->Cache.Associativity = 16;
+        pC2->Cache.LineSize = 64;
+        pC2->Cache.CacheSize = 32 * 1024 * 1024;
+        pC2->Cache.Type = CacheUnified;
+        pC2->Cache.GroupCount = 1;
+        pC2->Cache.GroupMasks[0] = 0xFF00; // Cores 8-15
+        curr += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+    }
+
+    // Populate NUMA Node if requested
+    if (RelationshipType == RelationNumaNode || RelationshipType == RelationAll) {
+        auto* pNuma = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+        pNuma->Relationship = RelationNumaNode;
+        pNuma->Size = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+        pNuma->NumaNode.NodeNumber = 0;
+        pNuma->NumaNode.GroupCount = 1;
+        pNuma->NumaNode.GroupMasks[0] = 0xFFFF;
+        curr += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+    }
+
+    *ReturnedLength = required;
+    return TRUE;
+}
+
+inline std::vector<ULONG> s_defaultCpuSets{0, 1, 2, 3, 4, 5, 6, 7}; // Default to P-cores/V-Cache
+inline std::unordered_map<HANDLE, std::vector<ULONG>> s_threadCpuSets;
+inline std::mutex s_cpuSetLock;
+
+inline BOOL WINAPI SetThreadSelectedCpuSets(HANDLE hThread, const ULONG* CpuSetIds, ULONG CpuSetIdCount) noexcept {
+    if (!CpuSetIds && CpuSetIdCount > 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    std::lock_guard<std::mutex> lock(s_cpuSetLock);
+    if (CpuSetIdCount == 0) {
+        s_threadCpuSets.erase(hThread);
+    } else {
+        s_threadCpuSets[hThread].assign(CpuSetIds, CpuSetIds + CpuSetIdCount);
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetThreadSelectedCpuSets(HANDLE hThread, ULONG* CpuSetIds, ULONG CpuSetIdCount, ULONG* RequiredIdCount) noexcept {
+    std::lock_guard<std::mutex> lock(s_cpuSetLock);
+    auto it = s_threadCpuSets.find(hThread);
+    const auto& sets = (it != s_threadCpuSets.end()) ? it->second : s_defaultCpuSets;
+
+    if (RequiredIdCount) *RequiredIdCount = static_cast<ULONG>(sets.size());
+    if (CpuSetIds && CpuSetIdCount >= sets.size()) {
+        std::copy(sets.begin(), sets.end(), CpuSetIds);
+        return TRUE;
+    }
+    if (!CpuSetIds && CpuSetIdCount == 0) {
+        return TRUE;
+    }
+    SetLastError(ERROR_INSUFFICIENT_BUFFER);
+    return FALSE;
+}
+
+inline BOOL WINAPI SetProcessDefaultCpuSets(HANDLE /*hProcess*/, const ULONG* CpuSetIds, ULONG CpuSetIdCount) noexcept {
+    if (!CpuSetIds && CpuSetIdCount > 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    std::lock_guard<std::mutex> lock(s_cpuSetLock);
+    if (CpuSetIdCount == 0) {
+        s_defaultCpuSets.clear();
+    } else {
+        s_defaultCpuSets.assign(CpuSetIds, CpuSetIds + CpuSetIdCount);
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetProcessDefaultCpuSets(HANDLE /*hProcess*/, ULONG* CpuSetIds, ULONG CpuSetIdCount, ULONG* RequiredIdCount) noexcept {
+    std::lock_guard<std::mutex> lock(s_cpuSetLock);
+    if (RequiredIdCount) *RequiredIdCount = static_cast<ULONG>(s_defaultCpuSets.size());
+    if (CpuSetIds && CpuSetIdCount >= s_defaultCpuSets.size()) {
+        std::copy(s_defaultCpuSets.begin(), s_defaultCpuSets.end(), CpuSetIds);
+        return TRUE;
+    }
+    if (!CpuSetIds && CpuSetIdCount == 0) {
+        return TRUE;
+    }
+    SetLastError(ERROR_INSUFFICIENT_BUFFER);
+    return FALSE;
 }
 inline BOOL IsWow64Process(void* /*hProcess*/, BOOL* Wow64Process) noexcept {
     if (Wow64Process) *Wow64Process = 0;
@@ -5958,6 +6355,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SetThreadLocale", reinterpret_cast<void*>(SetThreadLocale));
     ldr.registerExport("kernel32.dll", "VerLanguageNameW", reinterpret_cast<void*>(VerLanguageNameW));
     ldr.registerExport("kernel32.dll", "GetLogicalProcessorInformation", reinterpret_cast<void*>(GetLogicalProcessorInformation));
+    ldr.registerExport("kernel32.dll", "GetLogicalProcessorInformationEx", reinterpret_cast<void*>(GetLogicalProcessorInformationEx));
+    ldr.registerExport("kernel32.dll", "SetThreadSelectedCpuSets", reinterpret_cast<void*>(SetThreadSelectedCpuSets));
+    ldr.registerExport("kernel32.dll", "GetThreadSelectedCpuSets", reinterpret_cast<void*>(GetThreadSelectedCpuSets));
+    ldr.registerExport("kernel32.dll", "SetProcessDefaultCpuSets", reinterpret_cast<void*>(SetProcessDefaultCpuSets));
+    ldr.registerExport("kernel32.dll", "GetProcessDefaultCpuSets", reinterpret_cast<void*>(GetProcessDefaultCpuSets));
+    ldr.registerExport("kernel32.dll", "GetProcessInformation", reinterpret_cast<void*>(GetProcessInformation));
     ldr.registerExport("kernel32.dll", "IsWow64Process", reinterpret_cast<void*>(IsWow64Process));
     ldr.registerExport("kernel32.dll", "ProcessIdToSessionId", reinterpret_cast<void*>(ProcessIdToSessionId));
     ldr.registerExport("kernel32.dll", "LocaleNameToLCID", reinterpret_cast<void*>(LocaleNameToLCID));
@@ -5998,4 +6401,7 @@ inline void InitializeWin32SubsystemExports() {
 
 namespace micant {
 namespace kernel32 = win32;
+namespace um {
+namespace kernel32 = micant::win32;
+}
 }

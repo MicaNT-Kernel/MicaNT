@@ -144,6 +144,67 @@ struct D3DKMT_WAITFORVERTICALBLANKEVENT {
 };
 
 // ============================================================================
+// 1b. WDDM 2.x/3.x Monitored Synchronization Object Structures
+// ============================================================================
+
+enum D3DDDI_SYNCHRONIZATION_OBJECT_TYPE : uint32_t {
+    D3DDDI_SYNCHRONIZATION_MUTEX = 1,
+    D3DDDI_SEMAPHORE             = 2,
+    D3DDDI_FENCE                 = 3,
+    D3DDDI_CPU_NOTIFICATION     = 4,
+    D3DDDI_MONITORED_FENCE       = 5,
+    D3DDDI_PERIODIC_MONITORED_FENCE = 6
+};
+using D3DDDI_SYNCHRONIZATIONOBJECT_TYPE = D3DDDI_SYNCHRONIZATION_OBJECT_TYPE;
+
+struct D3DDDI_SYNCHRONIZATIONOBJECTINFO2 {
+    D3DDDI_SYNCHRONIZATION_OBJECT_TYPE Type;
+    uint32_t Flags;
+    union {
+        struct {
+            uint64_t InitialFenceValue;
+        } Fence;
+        struct {
+            uint64_t InitialFenceValue;
+            void* pFenceValueCpuVirtualAddress;
+            uint64_t FenceValueGpuVirtualAddress;
+            uint32_t EngineAffinity;
+        } MonitoredFence;
+        struct {
+            uint64_t Reserved[8];
+        } Reserved;
+    };
+    D3DKMT_HANDLE SharedHandle;
+};
+
+struct D3DKMT_CREATESYNCHRONIZATIONOBJECT2 {
+    D3DKMT_HANDLE hDevice;
+    D3DKMT_HANDLE Reserved;
+    D3DDDI_SYNCHRONIZATIONOBJECTINFO2 Info;
+    D3DKMT_HANDLE hSyncObject;
+};
+
+struct D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU {
+    D3DKMT_HANDLE hDevice;
+    uint32_t ObjectCount;
+    const D3DKMT_HANDLE* ObjectHandleArray;
+    const uint64_t* FenceValueArray;
+    uint32_t Flags;
+};
+
+struct D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU {
+    D3DKMT_HANDLE hDevice;
+    uint32_t ObjectCount;
+    const D3DKMT_HANDLE* ObjectHandleArray;
+    const uint64_t* FenceValueArray;
+    uint32_t Flags;
+};
+
+struct D3DKMT_DESTROYSYNCHRONIZATIONOBJECT {
+    D3DKMT_HANDLE hSyncObject;
+};
+
+// ============================================================================
 // 2. Kernel-Mode Subsystem Engine
 // ============================================================================
 
@@ -183,6 +244,20 @@ private:
     std::atomic<uint64_t> m_totalVBlankWaits{ 0 };
     std::atomic<size_t>   m_activeAllocationsCount{ 0 };
     std::atomic<size_t>   m_activeAllocatedBytes{ 0 };
+
+    struct KernelSyncObject {
+        D3DKMT_HANDLE Handle{0};
+        D3DKMT_HANDLE DeviceHandle{0};
+        D3DDDI_SYNCHRONIZATION_OBJECT_TYPE Type{D3DDDI_MONITORED_FENCE};
+        uint64_t CurrentFenceValue{0};
+        uint64_t FenceBackingStore{0};
+        uint64_t* pCpuVirtualAddress{nullptr};
+        uint64_t GpuVirtualAddress{0};
+    };
+    std::unordered_map<D3DKMT_HANDLE, KernelSyncObject> m_syncObjects;
+    std::atomic<uint64_t> m_totalSyncObjectsCreated{ 0 };
+    std::atomic<uint64_t> m_totalFenceSignals{ 0 };
+    std::atomic<uint64_t> m_totalFenceWaits{ 0 };
 
     D3DKMT_HANDLE GenerateHandle() {
         return m_nextHandle++;
@@ -351,12 +426,104 @@ public:
         return NtStatus::Success; // VBlank synced
     }
 
+    NtStatus CreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2* pData) {
+        if (!pData) return NtStatus::InvalidParameter;
+        std::lock_guard<std::mutex> lock(m_lock);
+
+        D3DKMT_HANDLE hSync = GenerateHandle();
+        KernelSyncObject syncObj{};
+        syncObj.Handle = hSync;
+        syncObj.DeviceHandle = pData->hDevice;
+        syncObj.Type = pData->Info.Type;
+
+        if (pData->Info.Type == D3DDDI_MONITORED_FENCE) {
+            syncObj.CurrentFenceValue = pData->Info.MonitoredFence.InitialFenceValue;
+            syncObj.FenceBackingStore = syncObj.CurrentFenceValue;
+            syncObj.pCpuVirtualAddress = &syncObj.FenceBackingStore;
+            syncObj.GpuVirtualAddress = 0x00007FF800000000ULL + (hSync * 0x1000ULL);
+
+            pData->Info.MonitoredFence.pFenceValueCpuVirtualAddress = syncObj.pCpuVirtualAddress;
+            pData->Info.MonitoredFence.FenceValueGpuVirtualAddress = syncObj.GpuVirtualAddress;
+        } else if (pData->Info.Type == D3DDDI_FENCE) {
+            syncObj.CurrentFenceValue = pData->Info.Fence.InitialFenceValue;
+        }
+
+        m_syncObjects[hSync] = syncObj;
+        pData->hSyncObject = hSync;
+        m_totalSyncObjectsCreated++;
+        return NtStatus::Success;
+    }
+
+    NtStatus WaitForSynchronizationObjectFromCpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU* pData) {
+        if (!pData || pData->ObjectCount == 0 || !pData->ObjectHandleArray || !pData->FenceValueArray) {
+            return NtStatus::InvalidParameter;
+        }
+        std::lock_guard<std::mutex> lock(m_lock);
+
+        bool allMet = true;
+        bool anyMet = false;
+
+        for (uint32_t i = 0; i < pData->ObjectCount; ++i) {
+            D3DKMT_HANDLE h = pData->ObjectHandleArray[i];
+            auto it = m_syncObjects.find(h);
+            if (it == m_syncObjects.end()) return NtStatus::InvalidHandle;
+
+            bool met = (it->second.CurrentFenceValue >= pData->FenceValueArray[i]);
+            if (met) anyMet = true;
+            else allMet = false;
+        }
+
+        m_totalFenceWaits++;
+
+        bool waitAny = (pData->Flags & 1) != 0;
+        if (waitAny ? anyMet : allMet) {
+            return NtStatus::Success;
+        }
+
+        return NtStatus::Timeout;
+    }
+
+    NtStatus SignalSynchronizationObjectFromCpu(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU* pData) {
+        if (!pData || pData->ObjectCount == 0 || !pData->ObjectHandleArray || !pData->FenceValueArray) {
+            return NtStatus::InvalidParameter;
+        }
+        std::lock_guard<std::mutex> lock(m_lock);
+
+        for (uint32_t i = 0; i < pData->ObjectCount; ++i) {
+            D3DKMT_HANDLE h = pData->ObjectHandleArray[i];
+            auto it = m_syncObjects.find(h);
+            if (it == m_syncObjects.end()) return NtStatus::InvalidHandle;
+
+            it->second.CurrentFenceValue = pData->FenceValueArray[i];
+            if (it->second.pCpuVirtualAddress) {
+                *it->second.pCpuVirtualAddress = pData->FenceValueArray[i];
+            }
+        }
+        m_totalFenceSignals++;
+        return NtStatus::Success;
+    }
+
+    NtStatus DestroySynchronizationObject(const D3DKMT_DESTROYSYNCHRONIZATIONOBJECT* pData) {
+        if (!pData || pData->hSyncObject == 0) return NtStatus::InvalidParameter;
+        std::lock_guard<std::mutex> lock(m_lock);
+
+        auto it = m_syncObjects.find(pData->hSyncObject);
+        if (it == m_syncObjects.end()) return NtStatus::InvalidHandle;
+
+        m_syncObjects.erase(it);
+        return NtStatus::Success;
+    }
+
     // Telemetry
     uint64_t GetTotalSubmissions() const { return m_totalSubmissions.load(); }
     uint64_t GetTotalPresents() const { return m_totalPresents.load(); }
     uint64_t GetTotalVBlankWaits() const { return m_totalVBlankWaits.load(); }
     size_t GetActiveAllocationsCount() const { return m_activeAllocationsCount.load(); }
     size_t GetActiveAllocatedBytes() const { return m_activeAllocatedBytes.load(); }
+    uint64_t GetTotalSyncObjectsCreated() const { return m_totalSyncObjectsCreated.load(); }
+    uint64_t GetTotalFenceSignals() const { return m_totalFenceSignals.load(); }
+    uint64_t GetTotalFenceWaits() const { return m_totalFenceWaits.load(); }
+    size_t GetActiveSyncObjectsCount() const { return m_syncObjects.size(); }
 };
 
 // ============================================================================
@@ -405,6 +572,38 @@ inline NtStatus NtGdiDdD3DKMTPresent(const D3DKMT_PRESENT* pData) {
 
 inline NtStatus NtGdiDdD3DKMTWaitForVerticalBlankEvent(const D3DKMT_WAITFORVERTICALBLANKEVENT* pData) {
     return DxgkrnlSubsystem::GetInstance().WaitForVerticalBlankEvent(pData);
+}
+
+inline NtStatus NtGdiDdD3DKMTCreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2* pData) {
+    return DxgkrnlSubsystem::GetInstance().CreateSynchronizationObject2(pData);
+}
+
+inline NtStatus NtGdiDdD3DKMTWaitForSynchronizationObjectFromCpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU* pData) {
+    return DxgkrnlSubsystem::GetInstance().WaitForSynchronizationObjectFromCpu(pData);
+}
+
+inline NtStatus NtGdiDdD3DKMTSignalSynchronizationObjectFromCpu(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU* pData) {
+    return DxgkrnlSubsystem::GetInstance().SignalSynchronizationObjectFromCpu(pData);
+}
+
+inline NtStatus NtGdiDdD3DKMTDestroySynchronizationObject(const D3DKMT_DESTROYSYNCHRONIZATIONOBJECT* pData) {
+    return DxgkrnlSubsystem::GetInstance().DestroySynchronizationObject(pData);
+}
+
+inline NtStatus D3DKMTCreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2* pData) {
+    return NtGdiDdD3DKMTCreateSynchronizationObject2(pData);
+}
+
+inline NtStatus D3DKMTWaitForSynchronizationObjectFromCpu(const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU* pData) {
+    return NtGdiDdD3DKMTWaitForSynchronizationObjectFromCpu(pData);
+}
+
+inline NtStatus D3DKMTSignalSynchronizationObjectFromCpu(const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU* pData) {
+    return NtGdiDdD3DKMTSignalSynchronizationObjectFromCpu(pData);
+}
+
+inline NtStatus D3DKMTDestroySynchronizationObject(const D3DKMT_DESTROYSYNCHRONIZATIONOBJECT* pData) {
+    return NtGdiDdD3DKMTDestroySynchronizationObject(pData);
 }
 
 } // namespace micant::dxgkrnl
