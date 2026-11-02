@@ -38121,3 +38121,196 @@ void Test_Horizon192_DirectStorage_GpuDecompression_And_DStorageCLI() {
 
     std::cout << "[TEST] Suite 408: Horizon 192 - Sovereign High-Throughput Direct Storage & GPU Decompression PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 409: Horizon 193 - Sovereign Variable Refresh Rate & Dynamic Display Pacing Subsystem
+// ============================================================================
+void Test_Horizon193_VariableRefreshRate_AdaptiveSync_And_VrrCLI() {
+    std::cout << "\n[TEST] Running Suite 409: Horizon 193 - Sovereign Variable Refresh Rate & Dynamic Display Pacing Subsystem..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::vrr::RegisterVrrSubsystem();
+
+        // 1. SCM Services Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto drv = scm.getServiceRecord(L"DisplaySyncDriver");
+        TEST_ASSERT(drv != nullptr, "DisplaySyncDriver record exists in SCM");
+        TEST_ASSERT(drv->serviceType == scm::SERVICE_KERNEL_DRIVER, "DisplaySyncDriver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drv->startType == scm::SERVICE_BOOT_START, "DisplaySyncDriver is SERVICE_BOOT_START");
+        TEST_ASSERT(drv->status.dwCurrentState == scm::SERVICE_RUNNING, "DisplaySyncDriver is SERVICE_RUNNING");
+
+        auto svc = scm.getServiceRecord(L"DisplaySyncBroker");
+        TEST_ASSERT(svc != nullptr, "DisplaySyncBroker service record exists in SCM");
+        TEST_ASSERT(svc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "DisplaySyncBroker is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svc->startType == scm::SERVICE_AUTO_START, "DisplaySyncBroker is SERVICE_AUTO_START");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "DisplaySyncBroker is SERVICE_RUNNING");
+
+        // 2. VersionDatabase PE Module Registration (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "displaysync.sys", "syncbroker.exe", "dxgksync.dll", "vrrcontrol.dll", "vrrcli.exe", "adaptivesync.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Display Endpoint Management & Native Resolution Matrix
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::vrr::VrrSubsystem::get();
+        auto disp1 = sys.getDisplay(1);
+        TEST_ASSERT(disp1 != nullptr, "Primary Sovereign display exists");
+        TEST_ASSERT(disp1->getWidth() == 3840 && disp1->getHeight() == 2160, "Primary display is 4K (3840x2160)");
+        TEST_ASSERT(disp1->getVrrCaps().vrrSupported, "VRR supported on primary display");
+
+        uint32_t d2Id = sys.registerDisplay(L"Titan 240Hz Esports OLED Monitor", 2560, 1440);
+        TEST_ASSERT(d2Id >= 2, "Secondary display registered with ID >= 2");
+        auto d2 = sys.getDisplay(d2Id);
+        TEST_ASSERT(d2 != nullptr, "Secondary display retrievable");
+        TEST_ASSERT(d2->getWidth() == 2560 && d2->getHeight() == 1440, "Secondary display is 1440p (2560x1440)");
+
+        auto displays = sys.getAllDisplays();
+        TEST_ASSERT(displays.size() >= 2, "getAllDisplays returns all registered endpoints");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Variable Refresh Rate (VRR) Adaptive-Sync Boundary Pacing
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::vrr::VrrSubsystem::get();
+        micant::vrr::DisplayPacingInfo pInfo{};
+        // Test frame rendered at 6944 us (~144 Hz) within 48Hz-240Hz VRR window
+        bool paced = sys.paceFrame(1, 6944, pInfo);
+        TEST_ASSERT(paced, "paceFrame succeeded for 144Hz frame");
+        TEST_ASSERT(pInfo.calculatedVBlankUs == 6944, "VBlank duration equals render time");
+        TEST_ASSERT(!pInfo.frameDoubled, "No frame doubling within VRR boundary");
+        TEST_ASSERT(pInfo.effectiveRefreshHz > 143.0f && pInfo.effectiveRefreshHz < 145.0f, "Effective refresh rate ~144 Hz");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Low Framerate Compensation (LFC) Frame Doubling
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::vrr::VrrSubsystem::get();
+        uint64_t beforeLfc = sys.getTotalLfcEvents();
+        micant::vrr::DisplayPacingInfo pInfo{};
+        // Test frame rendered at 30,000 us (~33.3 Hz, below the 48 Hz VRR floor)
+        bool paced = sys.paceFrame(1, 30000, pInfo);
+        TEST_ASSERT(paced, "paceFrame succeeded for low FPS frame");
+        TEST_ASSERT(pInfo.frameDoubled, "LFC frame doubling activated below 48 Hz");
+        TEST_ASSERT(pInfo.calculatedVBlankUs == 15000, "VBlank duration halved for frame doubling");
+        TEST_ASSERT(sys.getTotalLfcEvents() > beforeLfc, "LFC events counter incremented");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Auto HDR Highlight Expansion & Gamut Conversion
+    // ------------------------------------------------------------------------
+    {
+        auto& sys = micant::vrr::VrrSubsystem::get();
+        auto disp1 = sys.getDisplay(1);
+        auto hdrCaps = disp1->getHdrCaps();
+        hdrCaps.autoHdrEnabled = true;
+        hdrCaps.paperWhiteNits = 200.0f;
+        hdrCaps.maxPeakLuminanceNits = 1000.0f;
+        disp1->setHdrCaps(hdrCaps);
+
+        float outR = 0.0f, outG = 0.0f, outB = 0.0f;
+        bool cOk = sys.convertSdrToHdr(1, 0.8f, 0.8f, 0.8f, outR, outG, outB);
+        TEST_ASSERT(cOk, "convertSdrToHdr succeeded");
+        TEST_ASSERT(outR > 1.0f && outG > 1.0f && outB > 1.0f, "HDR highlight expansion boosted values above SDR white");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports (dxgksync.dll & vrrcontrol.dll)
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(micant::vrr::DisplaySyncGetActiveDisplaysCount() >= 2, "C ABI DisplaySyncGetActiveDisplaysCount >= 2");
+        TEST_ASSERT(micant::vrr::DisplaySyncGetCurrentRefreshHz(1) >= 48.0f, "C ABI DisplaySyncGetCurrentRefreshHz >= 48 Hz");
+        TEST_ASSERT(micant::vrr::DisplaySyncGetTotalPacedFrames() > 0, "C ABI DisplaySyncGetTotalPacedFrames > 0");
+        TEST_ASSERT(micant::vrr::DisplaySyncGetLfcEventsCount() > 0, "C ABI DisplaySyncGetLfcEventsCount > 0");
+
+        int32_t setVrrRes = micant::vrr::DisplaySyncSetVrrState(1, 1);
+        TEST_ASSERT(setVrrRes == 0, "C ABI DisplaySyncSetVrrState succeeded");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (vrr/vrrcli), WFP Rule #19301 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI vrr status
+        std::string out;
+        micant::vrr_cmd::um::ExecuteVrrString("vrr status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Adaptive Display Sync") != std::string::npos, "CLI vrr status title");
+        TEST_ASSERT(out.find("DisplaySyncDriver") != std::string::npos, "CLI vrr status driver");
+        TEST_ASSERT(out.find("DisplaySyncBroker") != std::string::npos, "CLI vrr status broker");
+
+        // 2. Canonical CLI vrr list
+        out.clear();
+        micant::vrr_cmd::um::ExecuteVrrString("vrr list", out);
+        TEST_ASSERT(out.find("3840x2160") != std::string::npos, "CLI vrr list 4K resolution");
+        TEST_ASSERT(out.find("48-240Hz") != std::string::npos, "CLI vrr list VRR range");
+
+        // 3. Canonical CLI vrr set-rate
+        out.clear();
+        micant::vrr_cmd::um::ExecuteVrrString("vrr set-rate 1 144", out);
+        TEST_ASSERT(out.find("144.0 Hz") != std::string::npos, "CLI vrr set-rate");
+
+        // 4. Canonical CLI vrr set-vrr
+        out.clear();
+        micant::vrr_cmd::um::ExecuteVrrString("vrr set-vrr 1 enable", out);
+        TEST_ASSERT(out.find("ENABLED") != std::string::npos, "CLI vrr set-vrr");
+
+        // 5. Canonical CLI vrr pace
+        out.clear();
+        micant::vrr_cmd::um::ExecuteVrrString("vrr pace 1 6944", out);
+        TEST_ASSERT(out.find("Paced VBlank Period") != std::string::npos, "CLI vrr pace");
+
+        // 6. Canonical CLI vrr autohdr
+        out.clear();
+        micant::vrr_cmd::um::ExecuteVrrString("vrr autohdr 1 enable 220 1200", out);
+        TEST_ASSERT(out.find("220 nits reference white") != std::string::npos, "CLI vrr autohdr");
+
+        // 7. Canonical CLI vrr dump
+        out.clear();
+        micant::vrr_cmd::um::ExecuteVrrString("vrr dump", out);
+        TEST_ASSERT(out.find("DisplaySyncBroker") != std::string::npos, "CLI vrr dump script");
+
+        // 8. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("vrr status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Adaptive Display Sync") != std::string::npos, "Console terminal vrr status");
+
+        // 9. WFP Inbound Rule #19301 (MicaNT_DisplaySync_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto vrrRuleOpt = wfp.findRuleById(19301);
+        TEST_ASSERT(vrrRuleOpt.has_value(), "WFP Rule #19301 for DisplaySync must be registered");
+        TEST_ASSERT(vrrRuleOpt->protocol == tcpip::IPPROTO_UDP, "DisplaySync protocol is UDP");
+        TEST_ASSERT(vrrRuleOpt->localPortStart == 5075 && vrrRuleOpt->localPortEnd == 5075, "Port 5075");
+        TEST_ASSERT(vrrRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 10. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"vrr_active_displays\":") != std::string::npos, "Telemetry vrr_active_displays");
+        TEST_ASSERT(teleJson.find("\"vrr_current_refresh_hz\":") != std::string::npos, "Telemetry vrr_current_refresh_hz");
+        TEST_ASSERT(teleJson.find("\"vrr_total_paced_frames\":") != std::string::npos, "Telemetry vrr_total_paced_frames");
+        TEST_ASSERT(teleJson.find("\"vrr_lfc_events_count\":") != std::string::npos, "Telemetry vrr_lfc_events_count");
+    }
+
+    std::cout << "[HORIZON 193] Sovereign Variable Refresh Rate & Dynamic Display Pacing Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Display Endpoint Management & Native Resolution Matrix OK\n"
+              << "    Pillar 3: Variable Refresh Rate (VRR) Adaptive-Sync Boundary Pacing OK\n"
+              << "    Pillar 4: Low Framerate Compensation (LFC) Frame Doubling OK\n"
+              << "    Pillar 5: Auto HDR Highlight Expansion & Gamut Conversion OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 vrr CLI, WFP Rule #19301 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 409: Horizon 193 - Sovereign Variable Refresh Rate & Dynamic Display Pacing PASSED." << std::endl;
+}

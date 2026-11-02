@@ -98,6 +98,8 @@
 #include "micant/um/subsystems/mgmt/dxcache_cmd.hpp"
 #include "micant/km/drivers/storage/directstorage_subsystem.hpp"
 #include "micant/um/subsystems/mgmt/dstorage_cmd.hpp"
+#include "micant/km/drivers/video/vrr.hpp"
+#include "micant/um/subsystems/mgmt/vrr_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -562,6 +564,19 @@ public:
         dstorageRule.weight = 1500;
         dstorageRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(dstorageRule);
+
+        // 36. Register WFP Inbound Rule for Display Synchronization & VRR Telemetry (UDP 5075)
+        wfp::km::WfpKernelFilterRule vrrRule{};
+        vrrRule.filterId = 19301;
+        vrrRule.name = "MicaNT_DisplaySync_Permit";
+        vrrRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        vrrRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        vrrRule.protocol = tcpip::IPPROTO_UDP;
+        vrrRule.localPortStart = 5075;
+        vrrRule.localPortEnd = 5075;
+        vrrRule.weight = 1500;
+        vrrRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(vrrRule);
     }
 
     void stopHttpsServer() {
@@ -1031,6 +1046,10 @@ public:
             std::string res;
             dstorage_cmd::um::ExecuteDirectStorageString(cmd, res);
             return res;
+        } else if (cmd == "vrr" || cmd.starts_with("vrr ") || cmd == "vrrcli" || cmd.starts_with("vrrcli ") || cmd == "displaysync" || cmd.starts_with("displaysync ")) {
+            std::string res;
+            vrr_cmd::um::ExecuteVrrString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1356,7 +1375,11 @@ public:
            << "\"dstorage_active_queues\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().activeQueuesCount << ","
            << "\"dstorage_read_throughput_mb\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalReadThroughputMBps << ","
            << "\"dstorage_gpu_decompressed_bytes\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalGpuDecompressedBytes << ","
-           << "\"dstorage_cpu_cycles_saved_pct\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalCpuCyclesSavedPct << "}\r\n";
+           << "\"dstorage_cpu_cycles_saved_pct\":" << micant::direct_storage_mgr::DirectStorageSubsystemManager::get().getVitals().totalCpuCyclesSavedPct << ","
+           << "\"vrr_active_displays\":" << micant::vrr::VrrSubsystem::get().getVitals().activeDisplaysCount << ","
+           << "\"vrr_current_refresh_hz\":" << static_cast<uint32_t>(micant::vrr::VrrSubsystem::get().getVitals().currentRefreshHz) << ","
+           << "\"vrr_total_paced_frames\":" << micant::vrr::VrrSubsystem::get().getVitals().totalPacedFrames << ","
+           << "\"vrr_lfc_events_count\":" << micant::vrr::VrrSubsystem::get().getVitals().totalLfcEvents << "}\r\n";
         return ss.str();
     }
 

@@ -441,6 +441,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite409") {
+        RUN_TEST(Test_Horizon193_VariableRefreshRate_AdaptiveSync_And_VrrCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite408") {
         RUN_TEST(Test_Horizon192_DirectStorage_GpuDecompression_And_DStorageCLI);
         return g_FailedTests;
@@ -2033,6 +2037,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon190_MemoryCompression_StoreManager_And_MemCompCLI);
     RUN_TEST(Test_Horizon191_ShaderCache_PipelineState_And_DxCacheCLI);
     RUN_TEST(Test_Horizon192_DirectStorage_GpuDecompression_And_DStorageCLI);
+    RUN_TEST(Test_Horizon193_VariableRefreshRate_AdaptiveSync_And_VrrCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
