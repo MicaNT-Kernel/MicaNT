@@ -84,6 +84,8 @@
 #include "micant/um/subsystems/mgmt/rdweb_cmd.hpp"
 #include "micant/km/drivers/storage/mpio.hpp"
 #include "micant/um/subsystems/mgmt/mpio_cmd.hpp"
+#include "micant/um/servers/remote_assistance.hpp"
+#include "micant/um/subsystems/mgmt/msra_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -457,6 +459,19 @@ public:
         mpioRule.weight = 1500;
         mpioRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(mpioRule);
+
+        // 29. Register WFP Inbound Rule for Remote Assistance & Shadowing (TCP 49152)
+        wfp::km::WfpKernelFilterRule msraRule{};
+        msraRule.filterId = 18601;
+        msraRule.name = "MicaNT_MSRA_Permit";
+        msraRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        msraRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        msraRule.protocol = tcpip::IPPROTO_TCP;
+        msraRule.localPortStart = 49152;
+        msraRule.localPortEnd = 49152;
+        msraRule.weight = 1500;
+        msraRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(msraRule);
     }
 
     void stopHttpsServer() {
@@ -898,6 +913,10 @@ public:
             std::string res;
             mpio_cmd::um::ExecuteMpioString(cmd, res);
             return res;
+        } else if (cmd == "msra" || cmd.starts_with("msra ") || cmd == "racli" || cmd.starts_with("racli ")) {
+            std::string res;
+            msra_cmd::um::ExecuteMsraString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1195,7 +1214,11 @@ public:
            << "\"mpio_active_paths\":" << micant::mpio::MpioManager::get().getVitals().activePathsCount << ","
            << "\"mpio_failed_paths\":" << micant::mpio::MpioManager::get().getVitals().failedPathsCount << ","
            << "\"mpio_io_dispatched\":" << micant::mpio::MpioManager::get().getVitals().totalIosDispatched << ","
-           << "\"mpio_failover_events\":" << micant::mpio::MpioManager::get().getVitals().totalFailoverEvents << "}\r\n";
+           << "\"mpio_failover_events\":" << micant::mpio::MpioManager::get().getVitals().totalFailoverEvents << ","
+           << "\"msra_active_invitations\":" << micant::ra::RemoteAssistanceManager::get().getVitals().activeInvitationsCount << ","
+           << "\"msra_active_sessions\":" << micant::ra::RemoteAssistanceManager::get().getVitals().activeSessionsCount << ","
+           << "\"msra_shadow_sessions\":" << micant::ra::RemoteAssistanceManager::get().getVitals().activeShadowSessionsCount << ","
+           << "\"msra_control_delegations\":" << micant::ra::RemoteAssistanceManager::get().getVitals().totalControlDelegations << "}\r\n";
         return ss.str();
     }
 

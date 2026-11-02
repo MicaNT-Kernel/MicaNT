@@ -36595,3 +36595,275 @@ inline void Test_Horizon185_MultipathIO_DSM_Architecture_And_Mpiocli() {
 
     std::cout << "[TEST] Suite 401: Horizon 185 - Sovereign Multipath I/O (MPIO) Subsystem & DSM PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 402: Horizon 186 - Sovereign Remote Assistance & Session Shadowing
+//            Subsystem (MS-RA / MS-RDPBCGR Shadow / msra.exe / racli.exe)
+// ============================================================================
+inline void Test_Horizon186_RemoteAssistance_SessionShadowing_And_MsraCLI() {
+    std::cout << "[TEST] Running Suite 402: Horizon 186 - Sovereign Remote Assistance & Session Shadowing..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM Registration & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::ra::RegisterRemoteAssistanceSubsystem();
+        auto& mgr = micant::ra::RemoteAssistanceManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getVitals().activeSessionsCount >= 1, "Default seeded active assistance session present");
+
+        // SCM Service Verification (RemoteAssistance)
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto raSvc = scm.getServiceRecord(L"RemoteAssistance");
+        TEST_ASSERT(raSvc != nullptr, "RemoteAssistance service must be registered in SCM");
+        TEST_ASSERT(raSvc->displayName == L"Remote Assistance and Session Shadowing Service", "Display name matches");
+        TEST_ASSERT(raSvc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "Service type is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(raSvc->startType == scm::SERVICE_AUTO_START, "Start type is SERVICE_AUTO_START");
+        TEST_ASSERT(raSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "Service status is SERVICE_RUNNING");
+
+        // VersionDatabase Module Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "msra.exe", "raserver.dll", "racli.exe", "rashadow.dll", "raapi.dll", "rafilter.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Incident Ticket Generation, Provisioning & XML Syntax (.msrcincident)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::ra::RemoteAssistanceManager::get();
+
+        std::string ticketXml = mgr.createInvitation(
+            2, "BobUser", "192.168.1.50", 49152, 120, "SecretPass123"
+        );
+
+        TEST_ASSERT(!ticketXml.empty(), "Ticket XML generated");
+        TEST_ASSERT(ticketXml.find("<UPLOADINFO TYPE=\"Escalated\"") != std::string::npos, "Valid XML header");
+        TEST_ASSERT(ticketXml.find("USERNAME=\"BobUser\"") != std::string::npos, "Contains target username");
+        TEST_ASSERT(ticketXml.find("HOST=\"192.168.1.50\"") != std::string::npos, "Contains host IP");
+        TEST_ASSERT(ticketXml.find("PORT=\"49152\"") != std::string::npos, "Contains dynamic assistance port");
+        TEST_ASSERT(ticketXml.find("ENCRYPTED=\"1\"") != std::string::npos, "Encrypted ticket marked");
+
+        // Parse ticket XML back
+        micant::ra::RemoteAssistanceTicket parsed{};
+        bool ok = mgr.parseInvitationXml(ticketXml, parsed);
+        TEST_ASSERT(ok, "Parse ticket XML");
+        TEST_ASSERT(parsed.targetUsername == "BobUser", "Parsed username matches");
+        TEST_ASSERT(parsed.hostAddress == "192.168.1.50", "Parsed host matches");
+        TEST_ASSERT(parsed.hostPort == 49152, "Parsed port matches");
+        TEST_ASSERT(parsed.isEncrypted, "Parsed encryption matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Remote Assistance Ticket Connection Handshake & Authentication
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::ra::RemoteAssistanceManager::get();
+
+        std::string xml = mgr.createInvitation(
+            3, "AliceUser", "10.10.1.10", 3389, 30, "AliceKey456"
+        );
+        micant::ra::RemoteAssistanceTicket t{};
+        mgr.parseInvitationXml(xml, t);
+
+        // 1. Attempt connection with wrong password -> must fail
+        uint32_t asstSessId = 0;
+        bool badAuth = mgr.connectWithTicket(t.ticketId, "ITSupport", "WrongPassword", asstSessId);
+        TEST_ASSERT(!badAuth, "Connection with invalid password rejected");
+
+        // 2. Attempt connection with correct password -> succeeds
+        bool goodAuth = mgr.connectWithTicket(t.ticketId, "ITSupport", "AliceKey456", asstSessId);
+        TEST_ASSERT(goodAuth, "Connection with valid password accepted");
+        TEST_ASSERT(asstSessId != 0, "Valid assistant session ID allocated");
+
+        // 3. Inspect connected session
+        micant::ra::RemoteAssistanceSession sess{};
+        TEST_ASSERT(mgr.getSession(asstSessId, sess), "Session retrieved");
+        TEST_ASSERT(sess.state == micant::ra::AssistanceSessionState::Connected, "Session in Connected state");
+        TEST_ASSERT(sess.targetUsername == "AliceUser", "Target user matches");
+        TEST_ASSERT(!sess.hasInteractiveControl, "Initially connected in View-Only mode");
+
+        // 4. Replay attempt with already used ticket -> must fail
+        uint32_t replaySessId = 0;
+        bool replay = mgr.connectWithTicket(t.ticketId, "Hacker", "AliceKey456", replaySessId);
+        TEST_ASSERT(!replay, "Ticket reuse / replay attack rejected");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Session Shadowing Engine & Shadow Modes
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::ra::RemoteAssistanceManager::get();
+
+        // 1. Initiate Shadow: View Only with Consent
+        uint32_t viewSessId = 0;
+        bool vOk = mgr.initiateShadowSession(
+            10, "AuditorUser", micant::ra::ShadowMode::ViewOnlyWithConsent, true, viewSessId
+        );
+        TEST_ASSERT(vOk, "Initiate ViewOnly shadow session");
+        micant::ra::RemoteAssistanceSession sView{};
+        mgr.getSession(viewSessId, sView);
+        TEST_ASSERT(!sView.hasInteractiveControl, "View-only shadow has no interactive control");
+        TEST_ASSERT(sView.consentStatus == micant::ra::ConsentStatus::Accepted, "Consent accepted");
+
+        // 2. Initiate Shadow: Full Control with Consent
+        uint32_t ctrlSessId = 0;
+        bool cOk = mgr.initiateShadowSession(
+            11, "HelpDeskAdmin", micant::ra::ShadowMode::ControlWithConsent, true, ctrlSessId
+        );
+        TEST_ASSERT(cOk, "Initiate ControlWithConsent shadow session");
+        micant::ra::RemoteAssistanceSession sCtrl{};
+        mgr.getSession(ctrlSessId, sCtrl);
+        TEST_ASSERT(sCtrl.hasInteractiveControl, "Full control shadow has interactive control");
+        TEST_ASSERT(sCtrl.state == micant::ra::AssistanceSessionState::InControl, "Session state is InControl");
+
+        // 3. Initiate Shadow: Disabled mode must be rejected
+        uint32_t disSessId = 0;
+        bool dOk = mgr.initiateShadowSession(
+            12, "UnauthorizedUser", micant::ra::ShadowMode::Disabled, true, disSessId
+        );
+        TEST_ASSERT(!dOk, "Disabled shadow mode rejected");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Interactive Control Delegation & User Reclaim Arbitration
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::ra::RemoteAssistanceManager::get();
+
+        // Create view-only connected session
+        uint32_t testSess = 0;
+        mgr.initiateShadowSession(
+            20, "Tier1Tech", micant::ra::ShadowMode::ViewOnlyWithConsent, true, testSess
+        );
+
+        // Assistant requests interactive control
+        bool reqOk = mgr.requestInteractiveControl(testSess);
+        TEST_ASSERT(reqOk, "Request interactive control");
+
+        micant::ra::RemoteAssistanceSession s{};
+        mgr.getSession(testSess, s);
+        TEST_ASSERT(s.consentStatus == micant::ra::ConsentStatus::Pending, "Consent prompt is pending");
+
+        // User accepts control delegation
+        bool grantOk = mgr.respondConsent(testSess, true);
+        TEST_ASSERT(grantOk, "User grants interactive control");
+        mgr.getSession(testSess, s);
+        TEST_ASSERT(s.hasInteractiveControl, "Interactive control active");
+        TEST_ASSERT(s.state == micant::ra::AssistanceSessionState::InControl, "Session transitioned to InControl");
+
+        // Emergency User Reclaim: target user touches mouse/keyboard or presses escape
+        bool revokeOk = mgr.revokeInteractiveControl(testSess);
+        TEST_ASSERT(revokeOk, "Target user instantly revokes remote control");
+        mgr.getSession(testSess, s);
+        TEST_ASSERT(!s.hasInteractiveControl, "Interactive control cleared");
+        TEST_ASSERT(s.state == micant::ra::AssistanceSessionState::Connected, "Assistant downgraded to Connected (View Only)");
+
+        // Terminate session
+        bool termOk = mgr.terminateSession(testSess);
+        TEST_ASSERT(termOk, "Terminate assistance session");
+        TEST_ASSERT(!mgr.getSession(testSess, s), "Terminated session removed from active inventory");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports
+    // ------------------------------------------------------------------------
+    {
+        uint32_t activeCount = RemoteAssistanceGetActiveSessionsCount();
+        TEST_ASSERT(activeCount >= 1, "RemoteAssistanceGetActiveSessionsCount returns active sessions");
+
+        // Create invitation via C ABI
+        char xmlBuf[2048] = {0};
+        int32_t invRes = RemoteAssistanceCreateInvitation(
+            5, "CAbiUser", "10.0.0.50", 3389, 60, "AbiPass", xmlBuf, sizeof(xmlBuf)
+        );
+        TEST_ASSERT(invRes == 0, "RemoteAssistanceCreateInvitation succeeds");
+        TEST_ASSERT(std::string(xmlBuf).find("CAbiUser") != std::string::npos, "XML contains user");
+
+        // Initiate shadow via C ABI
+        uint32_t asstId = 0;
+        int32_t shRes = RemoteAssistanceInitiateShadow(
+            5, "CAbiOperator", 1 /* ControlWithConsent */, 1 /* autoConsent */, &asstId
+        );
+        TEST_ASSERT(shRes == 0, "RemoteAssistanceInitiateShadow succeeds");
+        TEST_ASSERT(asstId != 0, "Assistant session ID populated");
+
+        // Revoke control via C ABI
+        int32_t revRes = RemoteAssistanceRevokeControl(asstId);
+        TEST_ASSERT(revRes == 0, "RemoteAssistanceRevokeControl succeeds");
+
+        // Terminate via C ABI
+        int32_t termRes = RemoteAssistanceTerminateSession(asstId);
+        TEST_ASSERT(termRes == 0, "RemoteAssistanceTerminateSession succeeds");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (msra/racli), WFP Rule #18601 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI msra status
+        std::string out;
+        micant::msra_cmd::um::ExecuteMsraString("msra status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Remote Assistance") != std::string::npos, "CLI msra status outputs title");
+        TEST_ASSERT(out.find("RemoteAssistance") != std::string::npos, "CLI msra status outputs SCM service");
+
+        // 2. Canonical CLI msra invite
+        out.clear();
+        micant::msra_cmd::um::ExecuteMsraString("msra invite 1 TestUser Pass123 60 10.0.0.99 3389", out);
+        TEST_ASSERT(out.find("<UPLOADINFO") != std::string::npos, "CLI msra invite emits XML ticket");
+
+        // 3. Canonical CLI msra shadow
+        out.clear();
+        micant::msra_cmd::um::ExecuteMsraString("msra shadow 1 control", out);
+        TEST_ASSERT(out.find("Shadow session initiated") != std::string::npos, "CLI msra shadow");
+
+        // 4. Canonical CLI msra sessions
+        out.clear();
+        micant::msra_cmd::um::ExecuteMsraString("msra sessions", out);
+        TEST_ASSERT(out.find("Asst ID") != std::string::npos, "CLI msra sessions header");
+
+        // 5. Canonical CLI msra dump
+        out.clear();
+        micant::msra_cmd::um::ExecuteMsraString("msra dump", out);
+        TEST_ASSERT(out.find("fAllowToGetHelp") != std::string::npos, "CLI msra dump outputs PowerShell script");
+
+        // 6. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("msra status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Remote Assistance") != std::string::npos, "Console terminal msra status");
+
+        // 7. WFP Inbound Rule #18601 (MicaNT_MSRA_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto msraRuleOpt = wfp.findRuleById(18601);
+        TEST_ASSERT(msraRuleOpt.has_value(), "WFP Rule #18601 for Remote Assistance must be registered");
+        TEST_ASSERT(msraRuleOpt->protocol == tcpip::IPPROTO_TCP, "Remote Assistance protocol is TCP");
+        TEST_ASSERT(msraRuleOpt->localPortStart == 49152 && msraRuleOpt->localPortEnd == 49152, "Port 49152");
+        TEST_ASSERT(msraRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 8. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"msra_active_invitations\":") != std::string::npos, "Telemetry msra_active_invitations");
+        TEST_ASSERT(teleJson.find("\"msra_active_sessions\":") != std::string::npos, "Telemetry msra_active_sessions");
+        TEST_ASSERT(teleJson.find("\"msra_shadow_sessions\":") != std::string::npos, "Telemetry msra_shadow_sessions");
+        TEST_ASSERT(teleJson.find("\"msra_control_delegations\":") != std::string::npos, "Telemetry msra_control_delegations");
+    }
+
+    std::cout << "[HORIZON 186] Sovereign Remote Assistance & Session Shadowing Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Incident Ticket Generation & XML Syntax (.msrcincident) OK\n"
+              << "    Pillar 3: Ticket Connection Handshake & Authentication OK\n"
+              << "    Pillar 4: Session Shadowing Engine & Shadow Modes OK\n"
+              << "    Pillar 5: Interactive Control Delegation & User Reclaim Arbitration OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 msra CLI, WFP Rule #18601 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 402: Horizon 186 - Sovereign Remote Assistance & Session Shadowing PASSED." << std::endl;
+}
