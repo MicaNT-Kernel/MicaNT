@@ -2564,7 +2564,7 @@
         auto& wsus = micant::wsus::EnterpriseWsusServer::instance();
 
         if (tokens.size() > 1 && tokens[1] == "status") {
-            out << "Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS)\n"
+            out << "Enterprise Update Distribution Services (WSUS 10.0 / SUSDB / TitanWSUS)\n"
                 << "--------------------------------------------------------------------------------\n"
                 << "  Service State:            Running (WsusService)\n"
                 << "  Database:                 SUSDB (Windows Internal Database / SQL LocalDB)\n"
@@ -2655,7 +2655,7 @@
             return;
         }
 
-        out << "MicaNT Windows Server Update Services (WSUS 10.0 / SUSDB / wsusutil)\n"
+        out << "MicaNT Enterprise Update Distribution Services (WSUS 10.0 / SUSDB / wsusutil)\n"
             << "--------------------------------------------------------------------------------\n"
             << "Usage:\n"
             << "  wsus status                             Display WSUS server health and telemetry\n"

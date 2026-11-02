@@ -78,6 +78,8 @@
 #include "micant/um/subsystems/mgmt/rdlic_cmd.hpp"
 #include "micant/um/servers/rdgateway.hpp"
 #include "micant/um/subsystems/mgmt/rdgw_cmd.hpp"
+#include "micant/um/servers/rdcb.hpp"
+#include "micant/um/subsystems/mgmt/rdcb_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -412,6 +414,19 @@ public:
         rdgwRule.weight = 1500;
         rdgwRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(rdgwRule);
+
+        // 26. Register WFP Inbound Rule for RD Connection Broker (TCP 5504)
+        wfp::km::WfpKernelFilterRule rdcbRule{};
+        rdcbRule.filterId = 18301;
+        rdcbRule.name = "MicaNT_RDCB_Permit";
+        rdcbRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        rdcbRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rdcbRule.protocol = tcpip::IPPROTO_TCP;
+        rdcbRule.localPortStart = 5504;
+        rdcbRule.localPortEnd = 5504;
+        rdcbRule.weight = 1500;
+        rdcbRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(rdcbRule);
     }
 
     void stopHttpsServer() {
@@ -841,6 +856,10 @@ public:
             std::string res;
             rdgw_cmd::um::ExecuteRdgwString(cmd, res);
             return res;
+        } else if (cmd == "cbadmin" || cmd.starts_with("cbadmin ") || cmd == "rdcb" || cmd.starts_with("rdcb ")) {
+            std::string res;
+            rdcb_cmd::um::ExecuteRdcbString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1123,7 +1142,12 @@ public:
            << "\"rdgw_active_connections\":" << micant::rdgw::RdGatewayManager::get().getActiveConnectionCount() << ","
            << "\"rdgw_active_tunnels\":" << micant::rdgw::RdGatewayManager::get().getActiveTunnelCount() << ","
            << "\"rdgw_cap_evaluations\":" << micant::rdgw::RdGatewayManager::get().getTotalCapEvaluations() << ","
-           << "\"rdgw_rap_evaluations\":" << micant::rdgw::RdGatewayManager::get().getTotalRapEvaluations() << "}\r\n";
+           << "\"rdgw_rap_evaluations\":" << micant::rdgw::RdGatewayManager::get().getTotalRapEvaluations() << ","
+           << "\"rdcb_farms_active\":" << micant::rdcb::RdConnectionBrokerManager::get().getActiveFarmsCount() << ","
+           << "\"rdcb_hosts_registered\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalRegisteredHosts() << ","
+           << "\"rdcb_sessions_indexed\":" << micant::rdcb::RdConnectionBrokerManager::get().getIndexedSessionsCount() << ","
+           << "\"rdcb_reconnect_routes\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalReconnectsRouted() << ","
+           << "\"rdcb_redirects_issued\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalRedirectsIssued() << "}\r\n";
         return ss.str();
     }
 

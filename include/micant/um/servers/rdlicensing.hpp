@@ -106,7 +106,7 @@ enum RevokeReason : uint32_t {
 struct LicenseKeyPack {
     uint32_t    packId = 0;
     std::string keyPackId;            // e.g. "KP-2026-DEV-001"
-    std::string productName;          // e.g. "Windows Server 2025 Remote Desktop Services"
+    std::string productName;          // e.g. "Remote Desktop Services"
     uint32_t    productVersion = 0x000A0000; // 10.0
     KeyPackType keyPackType = KeyPackPerDevice;
     uint32_t    totalLicenses = 0;
@@ -690,11 +690,11 @@ private:
         nextPackId_ = 1;
         nextLicenseId_ = 1000;
 
-        // Provision Default Key Pack 1: Windows Server 2025 RDS Per-Device (50 CALs)
+        // Provision Default Key Pack 1: RDS Per-Device (50 CALs)
         LicenseKeyPack pack1{};
         pack1.packId = nextPackId_++;
         pack1.keyPackId = "KP-2026-DEV-001";
-        pack1.productName = "Windows Server 2025 Remote Desktop Services";
+        pack1.productName = "Remote Desktop Services";
         pack1.productVersion = 0x000A0000;
         pack1.keyPackType = KeyPackPerDevice;
         pack1.totalLicenses = 50;
@@ -705,11 +705,11 @@ private:
         pack1.expirationTimestamp = 0;
         keyPacks_.push_back(pack1);
 
-        // Provision Default Key Pack 2: Windows Server 2025 RDS Per-User (100 CALs)
+        // Provision Default Key Pack 2: RDS Per-User (100 CALs)
         LicenseKeyPack pack2{};
         pack2.packId = nextPackId_++;
         pack2.keyPackId = "KP-2026-USR-002";
-        pack2.productName = "Windows Server 2025 Remote Desktop Services";
+        pack2.productName = "Remote Desktop Services";
         pack2.productVersion = 0x000A0000;
         pack2.keyPackType = KeyPackPerUser;
         pack2.totalLicenses = 100;

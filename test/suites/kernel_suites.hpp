@@ -31446,12 +31446,12 @@ inline void Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI() {
 }
 
 // ============================================================================
-// Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP),
+// Suite 386: Horizon 170 - Sovereign Enterprise Update Distribution Services (WSUS 10.0 / MS-WUSP),
 // Windows Update Agent Protocol, SUSDB Database Servicing & Canonical wsusutil.exe / wuauclt.exe CLI
 // ============================================================================
-inline void Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI() {
+inline void Test_Horizon170_EnterpriseUpdateDistribution_MSWUSP_And_WsusutilCLI() {
     std::cout << "\n========================================================================\n"
-              << "Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP),\n"
+              << "Suite 386: Horizon 170 - Sovereign Enterprise Update Distribution Services (WSUS 10.0 / MS-WUSP),\n"
               << "Windows Update Agent Protocol, SUSDB Database Servicing & Canonical wsusutil.exe CLI\n"
               << "========================================================================\n";
 
@@ -31751,7 +31751,7 @@ inline void Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI()
         TEST_ASSERT(ruleOpt->action == wfp::FWP_ACTION_PERMIT, "WSUS rule action must be PERMIT");
     }
 
-    std::cout << "[HORIZON 170] Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP) Summary:\n"
+    std::cout << "[HORIZON 170] Sovereign Enterprise Update Distribution Services (WSUS 10.0 / MS-WUSP) Summary:\n"
               << "    Pillar 1: SCM Services, IIS Web Application & VersionDatabase Registration OK\n"
               << "    Pillar 2: MS-WUSP Client-Server SOAP Protocol Engine OK\n"
               << "    Pillar 3: Client Delta Synchronization & Applicability Evaluation OK\n"
@@ -31760,16 +31760,16 @@ inline void Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI()
               << "    Pillar 6: Update Approval Engine, Mandatory Deadlines & Auto-Supersedence OK\n"
               << "    Pillar 7: Canonical wsusutil.exe & wuauclt.exe CLI Management Utilities OK\n";
 
-    std::cout << "[TEST] Suite 386: Horizon 170 - Sovereign Windows Server Update Services (WSUS 10.0 / MS-WUSP) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 386: Horizon 170 - Sovereign Enterprise Update Distribution Services (WSUS 10.0 / MS-WUSP) PASSED." << std::endl;
 }
 
 // ============================================================================
-// Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC / MS-CMRP / MS-CRTD),
+// Suite 387: Horizon 171 - Sovereign Failover Clustering Subsystem (WSFC / MS-CMRP / MS-CRTD),
 // Cluster Service (clussvc.exe), Dynamic Paxos Quorum Consensus, Cluster Shared Volumes (CSV / csvfs.sys) & Canonical cluster.exe CLI
 // ============================================================================
-inline void Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI() {
+inline void Test_Horizon171_FailoverClustering_WSFC_And_ClusterCLI() {
     std::cout << "\n========================================================================\n"
-              << "Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC),\n"
+              << "Suite 387: Horizon 171 - Sovereign Failover Clustering Subsystem (WSFC),\n"
               << "Dynamic Paxos Quorum, Cluster Shared Volumes (CSVFS) & Canonical cluster.exe CLI\n"
               << "========================================================================\n";
 
@@ -32150,7 +32150,7 @@ inline void Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI(
         TEST_ASSERT(teleJson.find("\"clus_csv_volumes\":") != std::string::npos, "Telemetry clus_csv_volumes");
     }
 
-    std::cout << "[HORIZON 171] Sovereign Windows Server Failover Clustering (WSFC / MS-CMRP / MS-CRTD) Summary:\n"
+    std::cout << "[HORIZON 171] Sovereign Failover Clustering Subsystem (WSFC / MS-CMRP / MS-CRTD) Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: Multi-Node Paxos Distributed Consensus Protocol & Ballot Negotiation OK\n"
               << "    Pillar 3: Dynamic Quorum Witness Models & Last-Man Standing Arbitration OK\n"
@@ -32159,16 +32159,16 @@ inline void Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI(
               << "    Pillar 6: Cluster Shared Volumes (CSVFS v2.0 / csvfs.sys) Direct & Redirected I/O OK\n"
               << "    Pillar 7: Canonical Win32 cluster.exe CLI Management Tool, WFP & Push Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 387: Horizon 171 - Sovereign Windows Server Failover Clustering (WSFC) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 387: Horizon 171 - Sovereign Failover Clustering Subsystem (WSFC) PASSED." << std::endl;
 }
 
 // ============================================================================
-// Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB / MS-NLB),
+// Suite 388: Horizon 172 - Sovereign Network Load Balancing Subsystem (NLB / MS-NLB),
 // Cluster Protocol, Unicast/Multicast Heartbeat Convergence, Port Rules & Canonical nlb.exe CLI
 // ============================================================================
-inline void Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI() {
+inline void Test_Horizon172_NetworkLoadBalancing_MSNLB_And_NlbCLI() {
     std::cout << "\n========================================================================\n"
-              << "Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB),\n"
+              << "Suite 388: Horizon 172 - Sovereign Network Load Balancing Subsystem (NLB),\n"
               << "Heartbeat Convergence, Client Affinity & Canonical nlb.exe / nlbmgr.exe CLI\n"
               << "========================================================================\n";
 
@@ -32511,7 +32511,7 @@ inline void Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI()
         TEST_ASSERT(teleJson.find("\"nlb_active_connections\":") != std::string::npos, "Telemetry nlb_active_connections");
     }
 
-    std::cout << "[HORIZON 172] Sovereign Windows Server Network Load Balancing (NLB / MS-NLB) Summary:\n"
+    std::cout << "[HORIZON 172] Sovereign Network Load Balancing Subsystem (NLB / MS-NLB) Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: MS-NLB Heartbeat Protocol & Convergence State Machine OK\n"
               << "    Pillar 3: Dynamic Inter-Host Fault Detection & Re-Convergence upon Dropout OK\n"
@@ -32520,19 +32520,19 @@ inline void Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI()
               << "    Pillar 6: Connection State Tracking & Graceful Draining Lifecycle OK\n"
               << "    Pillar 7: Canonical Win32 nlb.exe Management CLI Utility, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 388: Horizon 172 - Sovereign Windows Server Network Load Balancing (NLB) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 388: Horizon 172 - Sovereign Network Load Balancing Subsystem (NLB) PASSED." << std::endl;
 }
 
 
 // ============================================================================
-// Horizon 173 (Suite 389): Sovereign Windows Server Storage Spaces Direct (S2D)
+// Horizon 173 (Suite 389): Sovereign Clustered Storage Spaces Direct (S2D)
 // Software-Defined Clustered Storage, Clustered Pools (spaceport.sys / s2d.sys),
 // Multi-Tier NVMe Cache & Capacity Tiering, Mirror / Parity Resiliency &
 // Canonical storagespaces.exe / storagediag.exe CLI
 // ============================================================================
-inline void Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpacesCLI() {
+inline void Test_Horizon173_StorageSpacesDirect_S2D_And_StorageSpacesCLI() {
     std::cout << "\n========================================================================\n"
-              << "Suite 389: Horizon 173 - Sovereign Windows Server Storage Spaces Direct (S2D),\n"
+              << "Suite 389: Horizon 173 - Sovereign Clustered Storage Spaces Direct (S2D),\n"
               << "Software-Defined Clustered Storage, NVMe Caching & storagespaces.exe CLI\n"
               << "========================================================================\n";
 
@@ -32878,7 +32878,7 @@ inline void Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpac
         TEST_ASSERT(teleJson.find("\"s2d_rebuild_active\":") != std::string::npos, "Telemetry s2d_rebuild_active");
     }
 
-    std::cout << "[HORIZON 173] Sovereign Windows Server Storage Spaces Direct (S2D) Summary:\n"
+    std::cout << "[HORIZON 173] Sovereign Clustered Storage Spaces Direct (S2D) Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: Clustered Storage Pool Aggregation & Fault Domain Architecture OK\n"
               << "    Pillar 3: Multi-Tier Storage & NVMe Cache Hierarchy OK\n"
@@ -32887,19 +32887,19 @@ inline void Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpac
               << "    Pillar 6: Drive Failure Simulation, SMART Predictive Failure, and Auto-Rebuild Resynchronization OK\n"
               << "    Pillar 7: Canonical Win32 storagespaces.exe & storagediag.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 389: Horizon 173 - Sovereign Windows Server Storage Spaces Direct (S2D) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 389: Horizon 173 - Sovereign Clustered Storage Spaces Direct (S2D) PASSED." << std::endl;
 }
 
 
 // ============================================================================
-// Horizon 174 (Suite 390): Sovereign Windows Server Data Deduplication (Dedup / MS-DEDUP)
+// Horizon 174 (Suite 390): Sovereign Data Deduplication Subsystem (Dedup / MS-DEDUP)
 // Minifilter Driver (dedup.sys), Content-Defined Chunking (CDC / Rabin rolling hash),
 // SHA-256 Multi-Reference Chunk Store Repository, Reparse Point Stub Stream Architecture
 // (IO_REPARSE_TAG_DEDUP = 0x80000013), Workload Profiles (Default, Hyper-V, Backup),
 // Servicing Jobs (Optimization, GC, Scrubbing, Un-optimization), and ddpeval.exe / ddpcli.exe CLI
 // ============================================================================
-inline void Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli() {
-    std::cout << "[TEST] Running Suite 390: Horizon 174 - Sovereign Windows Server Data Deduplication (Dedup / MS-DEDUP)..." << std::endl;
+inline void Test_Horizon174_DataDeduplication_Dedup_And_DdpCli() {
+    std::cout << "[TEST] Running Suite 390: Horizon 174 - Sovereign Data Deduplication Subsystem (Dedup / MS-DEDUP)..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: SCM Services & VersionDatabase Registration Parity
@@ -33253,7 +33253,7 @@ inline void Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli() {
         TEST_ASSERT(teleJson.find("\"dedup_jobs_completed\":") != std::string::npos, "Telemetry dedup_jobs_completed");
     }
 
-    std::cout << "[HORIZON 174] Sovereign Windows Server Data Deduplication (Dedup) Summary:\n"
+    std::cout << "[HORIZON 174] Sovereign Data Deduplication Subsystem (Dedup) Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: Content-Defined Chunking (CDC) & SHA-256 Fingerprinting OK\n"
               << "    Pillar 3: Chunk Store Repository & Multi-Reference Space Reclaiming OK\n"
@@ -33262,17 +33262,17 @@ inline void Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli() {
               << "    Pillar 6: Background Servicing Jobs (Optimization, GC, Scrubbing, Un-optimization) OK\n"
               << "    Pillar 7: Canonical Win32 ddpeval.exe & ddpcli.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 390: Horizon 174 - Sovereign Windows Server Data Deduplication (Dedup) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 390: Horizon 174 - Sovereign Data Deduplication Subsystem (Dedup) PASSED." << std::endl;
 }
 
 // ============================================================================
-// Horizon 175 (Suite 391): Sovereign Windows Server Storage Replica (SR / MS-SR)
+// Horizon 175 (Suite 391): Sovereign Volume Storage Replication Subsystem (SR / MS-SR)
 // Volume Replication Mini-Filter (storrepl.sys / srsys.sys), Write-Ahead Logging (WAL),
 // Synchronous (Zero RPO) & Asynchronous (Low RPO) Engines, Dirty Block Bitmap Tracking,
 // Dynamic Failover & Direction Reversal, and Canonical srcli.exe CLI
 // ============================================================================
-inline void Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI() {
-    std::cout << "[TEST] Running Suite 391: Horizon 175 - Sovereign Windows Server Storage Replica (SR / MS-SR)..." << std::endl;
+inline void Test_Horizon175_StorageReplica_SR_And_SrCLI() {
+    std::cout << "[TEST] Running Suite 391: Horizon 175 - Sovereign Volume Storage Replication Subsystem (SR / MS-SR)..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: SCM Services & VersionDatabase Registration Parity
@@ -33562,7 +33562,7 @@ inline void Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI() {
         TEST_ASSERT(teleJson.find("\"sr_avg_latency_us\":") != std::string::npos, "Telemetry sr_avg_latency_us");
     }
 
-    std::cout << "[HORIZON 175] Sovereign Windows Server Storage Replica (SR) Summary:\n"
+    std::cout << "[HORIZON 175] Sovereign Volume Storage Replication Subsystem (SR) Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: Write-Ahead Logging (WAL) Architecture & Log Rings OK\n"
               << "    Pillar 3: Synchronous Mode (Zero RPO) & Secondary Write-Lock OK\n"
@@ -33571,16 +33571,16 @@ inline void Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI() {
               << "    Pillar 6: Dynamic Failover & Direction Reversal OK\n"
               << "    Pillar 7: Canonical Win32 srcli.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 391: Horizon 175 - Sovereign Windows Server Storage Replica (SR) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 391: Horizon 175 - Sovereign Volume Storage Replication Subsystem (SR) PASSED." << std::endl;
 }
 
 // ============================================================================
-// Horizon 176 (Suite 392): Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC
+// Horizon 176 (Suite 392): Sovereign Branch Caching, Remote Direct Access & SMB over QUIC
 // PeerDist Architecture (peerdist.dll / bcasvc.dll), IP-HTTPS Tunnel (iphttps.sys),
 // SMB over QUIC Multi-Stream & 0-RTT Migration (smbquic.sys) & branchcache.exe CLI
 // ============================================================================
-inline void Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI() {
-    std::cout << "[TEST] Running Suite 392: Horizon 176 - Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC..." << std::endl;
+inline void Test_Horizon176_BranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI() {
+    std::cout << "[TEST] Running Suite 392: Horizon 176 - Sovereign Branch Caching, Remote Direct Access & SMB over QUIC..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: SCM Services & VersionDatabase Registration Parity
@@ -33896,7 +33896,7 @@ inline void Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_Br
         TEST_ASSERT(teleJson.find("\"smb_quic_sessions_active\":") != std::string::npos, "Telemetry smb_quic_sessions_active");
     }
 
-    std::cout << "[HORIZON 176] Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC Summary:\n"
+    std::cout << "[HORIZON 176] Sovereign Branch Caching, Remote Direct Access & SMB over QUIC Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: PeerDist Content Information & SHA-256 Hashing OK\n"
               << "    Pillar 3: Distributed Cache Mode (P2P WS-Discovery) & Local Hit OK\n"
@@ -33905,16 +33905,16 @@ inline void Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_Br
               << "    Pillar 6: SMB over QUIC Multi-Stream, 0-RTT & Connection Migration OK\n"
               << "    Pillar 7: Canonical Win32 branchcache.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 392: Horizon 176 - Sovereign Windows Server BranchCache, DirectAccess & SMB over QUIC PASSED." << std::endl;
+    std::cout << "[TEST] Suite 392: Horizon 176 - Sovereign Branch Caching, Remote Direct Access & SMB over QUIC PASSED." << std::endl;
 }
 
 // ============================================================================
-// Horizon 177 (Suite 393): Sovereign Windows Server Hyper-V & VMMS Subsystem
+// Horizon 177 (Suite 393): Sovereign Hypervisor & Virtual Machine Management Subsystem (VMMS)
 // Virtual Machine Management Service (vmms.exe), Extensible Virtual Switch (vmswitch.sys),
 // VHDX Virtual Hard Disk Engine (vhdsvc.dll), Dynamic Ballooning & hyperv.exe CLI
 // ============================================================================
-inline void Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI() {
-    std::cout << "[TEST] Running Suite 393: Horizon 177 - Sovereign Windows Server Hyper-V, VMMS & Virtual Switch..." << std::endl;
+inline void Test_Horizon177_Hypervisor_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI() {
+    std::cout << "[TEST] Running Suite 393: Horizon 177 - Sovereign Hypervisor, VMMS & Virtual Switch..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: SCM Services & VersionDatabase Registration Parity
@@ -34230,7 +34230,7 @@ inline void Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_Hype
         TEST_ASSERT(teleJson.find("\"hyperv_allocated_ram_mb\":") != std::string::npos, "Telemetry hyperv_allocated_ram_mb");
     }
 
-    std::cout << "[HORIZON 177] Sovereign Windows Server Hyper-V & VMMS Summary:\n"
+    std::cout << "[HORIZON 177] Sovereign Hypervisor & VMMS Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: Virtual Machine Lifecycle State Machine (6 states) OK\n"
               << "    Pillar 3: Dynamic Memory Allocation & Hyper-V Ballooning OK\n"
@@ -34239,16 +34239,16 @@ inline void Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_Hype
               << "    Pillar 6: Live Migration Protocol & 12ms Brownout Cutover OK\n"
               << "    Pillar 7: Canonical Win32 hyperv.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 393: Horizon 177 - Sovereign Windows Server Hyper-V, VMMS & Virtual Switch PASSED." << std::endl;
+    std::cout << "[TEST] Suite 393: Horizon 177 - Sovereign Hypervisor, VMMS & Virtual Switch PASSED." << std::endl;
 }
 
 // ============================================================================
-// Horizon 178 (Suite 394): Sovereign Windows Server System Resource Manager (WSRM)
+// Horizon 178 (Suite 394): Sovereign System Resource Manager Subsystem (WSRM)
 // Dynamic Fair Share Scheduling (DFSS), Job Object CPU Rate Control,
 // Process Matching Criteria (PMC), Accounting Engine & wsrmcli.exe CLI
 // ============================================================================
-inline void Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI() {
-    std::cout << "[TEST] Running Suite 394: Horizon 178 - Sovereign Windows Server System Resource Manager (WSRM)..." << std::endl;
+inline void Test_Horizon178_SystemResourceManager_FairShare_DFSS_JobObjects_And_WsrmCLI() {
+    std::cout << "[TEST] Running Suite 394: Horizon 178 - Sovereign System Resource Manager Subsystem (WSRM)..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: SCM Services & VersionDatabase Registration Parity
@@ -34503,7 +34503,7 @@ inline void Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_Wsrm
         TEST_ASSERT(teleJson.find("\"wsrm_rebalance_cycles\":") != std::string::npos, "Telemetry wsrm_rebalance_cycles");
     }
 
-    std::cout << "[HORIZON 178] Sovereign Windows Server System Resource Manager Summary:\n"
+    std::cout << "[HORIZON 178] Sovereign System Resource Manager Subsystem Summary:\n"
               << "    Pillar 1: SCM Services & VersionDatabase Registration Parity OK\n"
               << "    Pillar 2: Process Matching Criteria (PMC) & Custom Weighted Allocation OK\n"
               << "    Pillar 3: Dynamic Fair Share Scheduling (DFSS) for Terminal Services OK\n"
@@ -34512,7 +34512,7 @@ inline void Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_Wsrm
               << "    Pillar 6: Tenant Resource Accounting, Historical Database & Deregistration OK\n"
               << "    Pillar 7: Canonical Win32 wsrmcli.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 394: Horizon 178 - Sovereign Windows Server System Resource Manager PASSED." << std::endl;
+    std::cout << "[TEST] Suite 394: Horizon 178 - Sovereign System Resource Manager Subsystem PASSED." << std::endl;
 }
 
 
@@ -34520,8 +34520,8 @@ inline void Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_Wsrm
 // Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall &
 //            Nested Hardware Virtualization Subsystem (TitanHypervisor / AegisNestedVM)
 // ============================================================================
-inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI() {
-    std::cout << "[TEST] Running Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization Subsystem..." << std::endl;
+inline void Test_Horizon179_Hypercall_Nested_Virtualization_And_HvcCLI() {
+    std::cout << "[TEST] Running Suite 395: Horizon 179 - Sovereign Hypercall Interface & Nested Virtualization Subsystem..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: Subsystem Initialization, Reset & VersionDatabase Registration
@@ -34816,7 +34816,7 @@ inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_
         TEST_ASSERT(teleJson.find("\"hyperv_evmcs_flushes\":") != std::string::npos, "Telemetry hyperv_evmcs_flushes");
     }
 
-    std::cout << "[HORIZON 179] Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization Summary:\n"
+    std::cout << "[HORIZON 179] Sovereign Hypercall Interface & Nested Virtualization Subsystem Summary:\n"
               << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
               << "    Pillar 2: Reference TSC Page & Invariant Timekeeping OK\n"
               << "    Pillar 3: TLFS Hypercall Dispatch Engine & Calling Conventions OK\n"
@@ -34825,7 +34825,7 @@ inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_
               << "    Pillar 6: Reflective VM-Exit Interception & Injection Routing OK\n"
               << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 hvc.exe CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization PASSED." << std::endl;
+    std::cout << "[TEST] Suite 395: Horizon 179 - Sovereign Hypercall Interface & Nested Virtualization Subsystem PASSED." << std::endl;
 }
 
 
@@ -34833,7 +34833,7 @@ inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_
 // Suite 396: Horizon 180 - Sovereign Remote Desktop Session Host (RDSH),
 //            Multi-Session Architecture, Dynamic Virtual Channels & Canonical qwinsta CLI
 // ============================================================================
-inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() {
+inline void Test_Horizon180_RemoteDesktopSessionHost_MultiSession_DVC_And_QwinstaCLI() {
     std::cout << "[TEST] Running Suite 396: Horizon 180 - Sovereign Remote Desktop Session Host (RDSH)..." << std::endl;
 
     // ------------------------------------------------------------------------
@@ -35151,7 +35151,7 @@ inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() 
 // Suite 397: Horizon 181 - Sovereign Remote Desktop Licensing Subsystem (RD Licensing),
 //            MS-RDPELE, CAL Key Packs & Canonical licmgr CLI
 // ============================================================================
-inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
+inline void Test_Horizon181_RemoteDesktopLicensing_MS_RDPELE_And_LicmgrCLI() {
     std::cout << "[TEST] Running Suite 397: Horizon 181 - Sovereign Remote Desktop Licensing (RD Licensing)..." << std::endl;
 
     // ------------------------------------------------------------------------
@@ -35231,7 +35231,7 @@ inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
 
         // Provision New CAL Key Pack (25 Per-Device CALs)
         micant::rdlic::LicenseKeyPack pack3{};
-        pack3.productName = "Windows Server 2025 Remote Desktop Services";
+        pack3.productName = "Remote Desktop Services";
         pack3.keyPackType = micant::rdlic::KeyPackPerDevice;
         pack3.totalLicenses = 25;
         uint32_t packId = mgr.installKeyPack(pack3);
@@ -35306,7 +35306,7 @@ inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
 
         // Install 1 Per-Device license pack with only 1 license
         micant::rdlic::LicenseKeyPack singlePack{};
-        singlePack.productName = "Windows Server 2025 RDS";
+        singlePack.productName = "Remote Desktop Services";
         singlePack.keyPackType = micant::rdlic::KeyPackPerDevice;
         singlePack.totalLicenses = 1;
         mgr.installKeyPack(singlePack);
@@ -35510,7 +35510,7 @@ inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
 // Suite 398: Horizon 182 - Sovereign Remote Desktop Gateway Subsystem (RD Gateway),
 //            MS-TSGU, RD CAPs & RAPs & Canonical tsgadmin CLI
 // ============================================================================
-inline void Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI() {
+inline void Test_Horizon182_RemoteDesktopGateway_MS_TSGU_And_TsgadminCLI() {
     std::cout << "[TEST] Running Suite 398: Horizon 182 - Sovereign Remote Desktop Gateway (RD Gateway)..." << std::endl;
 
     // ------------------------------------------------------------------------
@@ -35776,4 +35776,299 @@ inline void Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI() {
               << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 tsgadmin CLI, WFP & Telemetry OK\n";
 
     std::cout << "[TEST] Suite 398: Horizon 182 - Sovereign Remote Desktop Gateway (RD Gateway) PASSED." << std::endl;
+}
+
+
+// ============================================================================
+// Suite 399: Horizon 183 - Sovereign Remote Desktop Connection Broker Subsystem
+//            (RD Connection Broker / MS-RDPBCGR Redirection / cbadmin CLI)
+// ============================================================================
+inline void Test_Horizon183_RemoteDesktopConnectionBroker_MS_RDPBCGR_And_CbadminCLI() {
+    std::cout << "[TEST] Running Suite 399: Horizon 183 - Sovereign Remote Desktop Connection Broker (RD Connection Broker)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::rdcb::RegisterRdcbSubsystem();
+        auto& mgr = micant::rdcb::RdConnectionBrokerManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getActiveFarmsCount() >= 2, "Default collections initialized (QuickSessionCollection & Engineering-Apps)");
+        TEST_ASSERT(mgr.getTotalRegisteredHosts() >= 3, "Default RDSH hosts provisioned");
+
+        // SCM Service Verification
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto cbSvc = scm.getServiceRecord(L"Tssdis");
+        TEST_ASSERT(cbSvc != nullptr, "Tssdis must be registered in SCM");
+        TEST_ASSERT(cbSvc->displayName == L"Remote Desktop Connection Broker", "Tssdis display name matches");
+        TEST_ASSERT(cbSvc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "Tssdis service type is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(cbSvc->startType == scm::SERVICE_AUTO_START, "Tssdis start type is SERVICE_AUTO_START");
+        TEST_ASSERT(cbSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "Tssdis is in SERVICE_RUNNING state");
+        TEST_ASSERT(cbSvc->binaryPath == L"C:\\Windows\\System32\\tssdis.exe", "Tssdis binary path matches");
+
+        // VersionDatabase Module Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "tssdis.exe", "tssdis.dll", "rdcbapi.dll", "cbadmin.exe", "rdpbroker.dll", "rdcb.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+
+        // DynamicLoader Export Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("tssdis.dll", "RDCBOpenConnectionBroker") != nullptr, "Export RDCBOpenConnectionBroker in tssdis.dll");
+        TEST_ASSERT(ldr.getExport("tssdis.dll", "RDCBResolveTarget") != nullptr, "Export RDCBResolveTarget in tssdis.dll");
+        TEST_ASSERT(ldr.getExport("tssdis.dll", "RDCBReportSessionState") != nullptr, "Export RDCBReportSessionState in tssdis.dll");
+        TEST_ASSERT(ldr.getExport("tssdis.dll", "RDCBSetServerDrain") != nullptr, "Export RDCBSetServerDrain in tssdis.dll");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Collection Management & Host Topology Configuration
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdcb::RdConnectionBrokerManager::get();
+
+        // Provision New Collection: VDI-Pooled-Desktops
+        micant::rdcb::CollectionRecord vdiColl{};
+        vdiColl.collectionName = "VDI-Pooled-Desktops";
+        vdiColl.description = "Virtual Desktop Infrastructure Pooled Desktops";
+        vdiColl.type = micant::rdcb::CollectionPooledDesktop;
+        vdiColl.balancingModel = micant::rdcb::ModelRoundRobin;
+        vdiColl.allowedUserGroups = {"Domain Users", "VDI Users"};
+        vdiColl.enableUpd = true;
+        vdiColl.updStoragePath = "\\\\storage.micant.internal\\VdiProfiles$";
+        vdiColl.updMaxSizeGb = 30;
+
+        bool created = mgr.createCollection(vdiColl);
+        TEST_ASSERT(created, "Created VDI collection");
+        TEST_ASSERT(mgr.getActiveFarmsCount() >= 3, "Collections count updated");
+
+        // Add 2 RDSH / VDI Hosts
+        micant::rdcb::RdshServerRecord vdiHost1{};
+        vdiHost1.serverFqdn = "vdi-host01.corp.micant.internal";
+        vdiHost1.ipAddress = "192.168.1.121";
+        vdiHost1.port = 3389;
+        vdiHost1.relativeWeight = 100;
+        vdiHost1.maxSessions = 20;
+        vdiHost1.drainMode = micant::rdcb::DrainModeDisabled;
+        vdiHost1.isOnline = true;
+        TEST_ASSERT(mgr.addServerToCollection("VDI-Pooled-Desktops", vdiHost1), "Added vdiHost1");
+
+        micant::rdcb::RdshServerRecord vdiHost2{};
+        vdiHost2.serverFqdn = "vdi-host02.corp.micant.internal";
+        vdiHost2.ipAddress = "192.168.1.122";
+        vdiHost2.port = 3389;
+        vdiHost2.relativeWeight = 100;
+        vdiHost2.maxSessions = 20;
+        vdiHost2.drainMode = micant::rdcb::DrainModeDisabled;
+        vdiHost2.isOnline = true;
+        TEST_ASSERT(mgr.addServerToCollection("VDI-Pooled-Desktops", vdiHost2), "Added vdiHost2");
+
+        micant::rdcb::CollectionRecord fetched{};
+        TEST_ASSERT(mgr.getCollection("VDI-Pooled-Desktops", fetched), "Fetched VDI collection");
+        TEST_ASSERT(fetched.memberServers.size() == 2, "VDI collection has 2 member hosts");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic Load Balancing Models (Least Sessions, Round Robin, Resource Weighted)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdcb::RdConnectionBrokerManager::get();
+
+        // 1. ModelLeastSessions (QuickSessionCollection)
+        mgr.updateServerVitals("QuickSessionCollection", "rdsh01.corp.micant.internal", 5, 10, 20480);
+        mgr.updateServerVitals("QuickSessionCollection", "rdsh02.corp.micant.internal", 1, 10, 20480);
+
+        auto targetLS = mgr.resolveConnectionTarget("alice", "MICANT", "QuickSessionCollection");
+        TEST_ASSERT(targetLS.isSuccess, "LeastSessions resolution succeeded");
+        TEST_ASSERT(!targetLS.isReconnection, "New session created");
+        TEST_ASSERT(targetLS.targetFqdn == "rdsh02.corp.micant.internal", "LeastSessions chose host with fewest active sessions (host2)");
+
+        // 2. ModelRoundRobin (VDI-Pooled-Desktops)
+        auto targetRR1 = mgr.resolveConnectionTarget("bob", "MICANT", "VDI-Pooled-Desktops");
+        auto targetRR2 = mgr.resolveConnectionTarget("charlie", "MICANT", "VDI-Pooled-Desktops");
+        TEST_ASSERT(targetRR1.isSuccess && targetRR2.isSuccess, "RoundRobin resolutions succeeded");
+        TEST_ASSERT(targetRR1.targetFqdn != targetRR2.targetFqdn, "RoundRobin alternated hosts across requests");
+
+        // 3. ModelResourceWeighted (Engineering-Apps)
+        micant::rdcb::RdshServerRecord eng2{};
+        eng2.serverFqdn = "rdsh-eng02.corp.micant.internal";
+        eng2.ipAddress = "192.168.1.111";
+        eng2.port = 3389;
+        eng2.relativeWeight = 100;
+        eng2.maxSessions = 25;
+        eng2.drainMode = micant::rdcb::DrainModeDisabled;
+        eng2.isOnline = true;
+        mgr.addServerToCollection("Engineering-Apps", eng2);
+
+        // Host eng1: high CPU (90%), low free RAM (4 GB)
+        // Host eng2: low CPU (10%), high free RAM (48 GB)
+        mgr.updateServerVitals("Engineering-Apps", "rdsh-eng01.corp.micant.internal", 0, 90, 4096);
+        mgr.updateServerVitals("Engineering-Apps", "rdsh-eng02.corp.micant.internal", 0, 10, 49152);
+
+        auto targetRW = mgr.resolveConnectionTarget("david", "MICANT", "Engineering-Apps");
+        TEST_ASSERT(targetRW.isSuccess, "ResourceWeighted resolution succeeded");
+        TEST_ASSERT(targetRW.targetFqdn == "rdsh-eng02.corp.micant.internal", "ResourceWeighted chose host with lowest CPU and highest free RAM");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Reconnection Routing for Disconnected Sessions
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdcb::RdConnectionBrokerManager::get();
+
+        // 1. User "delliott" initiates session on RDSH-01
+        uint32_t userSessionId = mgr.registerSession(
+            "delliott", "MICANT", "QuickSessionCollection",
+            "rdsh01.corp.micant.internal", "192.168.1.101", 3389,
+            micant::rdcb::StateActive, "WORKSTATION-X", "10.0.0.88"
+        );
+        TEST_ASSERT(userSessionId >= 2000, "Valid session ID registered");
+
+        // 2. User disconnects
+        bool stateUpdated = mgr.updateSessionState(userSessionId, micant::rdcb::StateDisconnected);
+        TEST_ASSERT(stateUpdated, "Session transitioned to Disconnected");
+
+        // 3. User reconnects to collection
+        uint64_t prevReconnects = mgr.getTotalReconnectsRouted();
+        auto reconTarget = mgr.resolveConnectionTarget("delliott", "MICANT", "QuickSessionCollection");
+
+        TEST_ASSERT(reconTarget.isSuccess, "Reconnect resolution succeeded");
+        TEST_ASSERT(reconTarget.isReconnection, "Flagged as reconnection");
+        TEST_ASSERT(reconTarget.targetFqdn == "rdsh01.corp.micant.internal", "Target is original host where disconnected session exists");
+        TEST_ASSERT(reconTarget.targetIp == "192.168.1.101", "Target IP matches original host");
+        TEST_ASSERT(reconTarget.sessionId == userSessionId, "Target session ID matches original disconnected session");
+        TEST_ASSERT(mgr.getTotalReconnectsRouted() == prevReconnects + 1, "Reconnects routed metric incremented");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: MS-RDPBCGR Server Redirection PDU & Routing Token Encoding
+    // ------------------------------------------------------------------------
+    {
+        std::string token = micant::rdcb::FormatMstsRoutingToken("192.168.1.101", 3389);
+        TEST_ASSERT(token.starts_with("Cookie: msts="), "MSTS routing token header");
+        TEST_ASSERT(token.find(".3389.") != std::string::npos, "Routing token encodes port");
+        TEST_ASSERT(token.ends_with("\r\n"), "Routing token CRLF termination");
+
+        // Build binary Redirection PDU
+        uint32_t flags = micant::rdcb::TARGET_NET_ADDRESS | micant::rdcb::LOAD_BALANCE_INFO | micant::rdcb::REDIRECTED_SESSIONID | micant::rdcb::REDIRECT_USERNAME;
+        auto pdu = micant::rdcb::BuildServerRedirectionPdu(flags, 2048, "192.168.1.101", token, "admin");
+
+        TEST_ASSERT(pdu.size() > 20, "Server Redirection PDU has non-trivial size");
+        TEST_ASSERT(pdu[0] == 0x03, "TPKT version 3");
+        TEST_ASSERT(pdu[4] == 0x02 && pdu[5] == 0xF0 && pdu[6] == 0x80, "X.224 Data TPDU (0x02, 0xF0, 0x80)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Host Maintenance Drain Mode & High-Concurrency Failover
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdcb::RdConnectionBrokerManager::get();
+
+        // Put RDSH-01 into drain mode
+        bool drainOk = mgr.setServerDrainMode("QuickSessionCollection", "rdsh01.corp.micant.internal", micant::rdcb::DrainModeEnabled);
+        TEST_ASSERT(drainOk, "RDSH-01 put into drain mode");
+
+        // New session must not go to RDSH-01
+        auto targetDrained = mgr.resolveConnectionTarget("frank", "MICANT", "QuickSessionCollection");
+        TEST_ASSERT(targetDrained.isSuccess, "New session request succeeded");
+        TEST_ASSERT(targetDrained.targetFqdn != "rdsh01.corp.micant.internal", "New session bypassed drained host");
+
+        // Existing disconnected session on RDSH-01 can still reconnect
+        auto reconOnDrain = mgr.resolveConnectionTarget("delliott", "MICANT", "QuickSessionCollection");
+        TEST_ASSERT(reconOnDrain.isSuccess, "Reconnect to drained host succeeded");
+        TEST_ASSERT(reconOnDrain.isReconnection, "Identified as reconnection");
+        TEST_ASSERT(reconOnDrain.targetFqdn == "rdsh01.corp.micant.internal", "Reconnection safely routed to drained host");
+
+        // Put RDSH-01 back to normal
+        mgr.setServerDrainMode("QuickSessionCollection", "rdsh01.corp.micant.internal", micant::rdcb::DrainModeDisabled);
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 cbadmin CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Win32 C ABI Parity Exports
+        void* pBroker = nullptr;
+        TEST_ASSERT(micant::rdcb::RDCBOpenConnectionBroker(&pBroker) == 0, "RDCBOpenConnectionBroker export succeeded");
+        TEST_ASSERT(pBroker != nullptr, "Valid broker pointer returned");
+
+        char outIp[64] = {0};
+        uint16_t outPort = 0;
+        uint32_t outSessionId = 0;
+        uint8_t outIsRecon = 0;
+        int32_t resolveRet = micant::rdcb::RDCBResolveTarget("grace", "MICANT", "QuickSessionCollection", outIp, sizeof(outIp), &outPort, &outSessionId, &outIsRecon);
+        TEST_ASSERT(resolveRet == 0, "RDCBResolveTarget C ABI succeeded");
+        TEST_ASSERT(std::strlen(outIp) > 0, "Target IP resolved");
+        TEST_ASSERT(outPort == 3389, "Target port 3389");
+
+        TEST_ASSERT(micant::rdcb::RDCBCloseConnectionBroker(pBroker) == 0, "RDCBCloseConnectionBroker succeeded");
+
+        // 2. Canonical Win32 cbadmin CLI Utilities
+        std::string statusOut;
+        micant::rdcb_cmd::um::ExecuteRdcbString("cbadmin status", statusOut);
+        TEST_ASSERT(statusOut.find("Tssdis (Remote Desktop Connection Broker)") != std::string::npos, "cbadmin status displays broker service name");
+        TEST_ASSERT(statusOut.find("Active Collections:") != std::string::npos, "cbadmin status displays collections count");
+
+        std::string collOut;
+        micant::rdcb_cmd::um::ExecuteRdcbString("cbadmin collections", collOut);
+        TEST_ASSERT(collOut.find("QuickSessionCollection") != std::string::npos, "cbadmin collections lists QuickSessionCollection");
+
+        std::string hostsOut;
+        micant::rdcb_cmd::um::ExecuteRdcbString("cbadmin hosts", hostsOut);
+        TEST_ASSERT(hostsOut.find("rdsh01.corp.micant.internal") != std::string::npos, "cbadmin hosts lists rdsh01");
+
+        std::string sessOut;
+        micant::rdcb_cmd::um::ExecuteRdcbString("cbadmin sessions", sessOut);
+        TEST_ASSERT(sessOut.find("delliott") != std::string::npos, "cbadmin sessions lists indexed user session");
+
+        std::string testOut;
+        micant::rdcb_cmd::um::ExecuteRdcbString("cbadmin redirect-test henry QuickSessionCollection", testOut);
+        TEST_ASSERT(testOut.find("Connection Redirection Resolution Successful") != std::string::npos, "cbadmin redirect-test succeeded");
+        TEST_ASSERT(testOut.find("MS-RDPBCGR Token:") != std::string::npos, "cbadmin redirect-test generated token");
+
+        std::string dumpOut;
+        micant::rdcb_cmd::um::ExecuteRdcbString("cbadmin dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("New-RDSessionCollection") != std::string::npos, "cbadmin dump contains PowerShell config");
+
+        // 3. Remote Executive Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStat = console.executeTerminalCommand("cbadmin status");
+        TEST_ASSERT(termStat.find("Remote Desktop Connection Broker Subsystem") != std::string::npos, "Web terminal cbadmin status");
+
+        std::string termColl = console.executeTerminalCommand("rdcb collections");
+        TEST_ASSERT(termColl.find("COLLECTION NAME") != std::string::npos, "Web terminal rdcb collections");
+
+        // 4. WFP Inbound Rule #18301 (MicaNT_RDCB_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto rdcbRuleOpt = wfp.findRuleById(18301);
+        TEST_ASSERT(rdcbRuleOpt.has_value(), "WFP Rule #18301 for RD Connection Broker must be registered");
+        TEST_ASSERT(rdcbRuleOpt->protocol == tcpip::IPPROTO_TCP, "RD Connection Broker protocol is TCP");
+        TEST_ASSERT(rdcbRuleOpt->localPortStart == 5504 && rdcbRuleOpt->localPortEnd == 5504, "Port 5504");
+        TEST_ASSERT(rdcbRuleOpt->action == wfp::FWP_ACTION_PERMIT, "RD Connection Broker rule action must be PERMIT");
+
+        // 5. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"rdcb_farms_active\":") != std::string::npos, "Telemetry rdcb_farms_active");
+        TEST_ASSERT(teleJson.find("\"rdcb_hosts_registered\":") != std::string::npos, "Telemetry rdcb_hosts_registered");
+        TEST_ASSERT(teleJson.find("\"rdcb_sessions_indexed\":") != std::string::npos, "Telemetry rdcb_sessions_indexed");
+        TEST_ASSERT(teleJson.find("\"rdcb_reconnect_routes\":") != std::string::npos, "Telemetry rdcb_reconnect_routes");
+        TEST_ASSERT(teleJson.find("\"rdcb_redirects_issued\":") != std::string::npos, "Telemetry rdcb_redirects_issued");
+    }
+
+    std::cout << "[HORIZON 183] Sovereign Remote Desktop Connection Broker (RD Connection Broker) Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Collection Management & Host Topology Configuration OK\n"
+              << "    Pillar 3: Dynamic Load Balancing Models (Least Sessions, Round Robin, Resource Weighted) OK\n"
+              << "    Pillar 4: Reconnection Routing for Disconnected Sessions OK\n"
+              << "    Pillar 5: MS-RDPBCGR Server Redirection PDU & Routing Token Encoding OK\n"
+              << "    Pillar 6: Host Maintenance Drain Mode & High-Concurrency Failover OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 cbadmin CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 399: Horizon 183 - Sovereign Remote Desktop Connection Broker (RD Connection Broker) PASSED." << std::endl;
 }

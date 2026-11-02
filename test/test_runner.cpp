@@ -441,56 +441,60 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite399") {
+        RUN_TEST(Test_Horizon183_RemoteDesktopConnectionBroker_MS_RDPBCGR_And_CbadminCLI);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite398") {
-        RUN_TEST(Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI);
+        RUN_TEST(Test_Horizon182_RemoteDesktopGateway_MS_TSGU_And_TsgadminCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite397") {
-        RUN_TEST(Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI);
+        RUN_TEST(Test_Horizon181_RemoteDesktopLicensing_MS_RDPELE_And_LicmgrCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite396") {
-        RUN_TEST(Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI);
+        RUN_TEST(Test_Horizon180_RemoteDesktopSessionHost_MultiSession_DVC_And_QwinstaCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite395") {
-        RUN_TEST(Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI);
+        RUN_TEST(Test_Horizon179_Hypercall_Nested_Virtualization_And_HvcCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite394") {
-        RUN_TEST(Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI);
+        RUN_TEST(Test_Horizon178_SystemResourceManager_FairShare_DFSS_JobObjects_And_WsrmCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite393") {
-        RUN_TEST(Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
+        RUN_TEST(Test_Horizon177_Hypervisor_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite392") {
-        RUN_TEST(Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
+        RUN_TEST(Test_Horizon176_BranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite391") {
-        RUN_TEST(Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI);
+        RUN_TEST(Test_Horizon175_StorageReplica_SR_And_SrCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite390") {
-        RUN_TEST(Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli);
+        RUN_TEST(Test_Horizon174_DataDeduplication_Dedup_And_DdpCli);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite389") {
-        RUN_TEST(Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpacesCLI);
+        RUN_TEST(Test_Horizon173_StorageSpacesDirect_S2D_And_StorageSpacesCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite388") {
-        RUN_TEST(Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI);
+        RUN_TEST(Test_Horizon172_NetworkLoadBalancing_MSNLB_And_NlbCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite387") {
-        RUN_TEST(Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI);
+        RUN_TEST(Test_Horizon171_FailoverClustering_WSFC_And_ClusterCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite386") {
-        RUN_TEST(Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI);
+        RUN_TEST(Test_Horizon170_EnterpriseUpdateDistribution_MSWUSP_And_WsusutilCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite385") {
@@ -1970,19 +1974,20 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon167_NetworkPolicyServer_Radius_MsChapv2_And_NetshNpsCLI);
     RUN_TEST(Test_Horizon168_WindowsDeploymentServices_Tftp_Pxe_And_WdsutilCLI);
     RUN_TEST(Test_Horizon169_DistributedFileSystem_DFS_DFSR_And_DfsutilCLI);
-    RUN_TEST(Test_Horizon170_WindowsServerUpdateServices_MSWUSP_And_WsusutilCLI);
-    RUN_TEST(Test_Horizon171_WindowsServerFailoverClustering_WSFC_And_ClusterCLI);
-    RUN_TEST(Test_Horizon172_WindowsServerNetworkLoadBalancing_MSNLB_And_NlbCLI);
-    RUN_TEST(Test_Horizon173_WindowsServerStorageSpacesDirect_S2D_And_StorageSpacesCLI);
-    RUN_TEST(Test_Horizon174_WindowsServerDataDeduplication_Dedup_And_DdpCli);
-    RUN_TEST(Test_Horizon175_WindowsServerStorageReplica_SR_And_SrCLI);
-    RUN_TEST(Test_Horizon176_WindowsServerBranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
-    RUN_TEST(Test_Horizon177_WindowsServerHyperV_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
-    RUN_TEST(Test_Horizon178_WindowsServerWSRM_FairShare_DFSS_JobObjects_And_WsrmCLI);
-    RUN_TEST(Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_And_HvcCLI);
-    RUN_TEST(Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI);
-    RUN_TEST(Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI);
-    RUN_TEST(Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI);
+    RUN_TEST(Test_Horizon170_EnterpriseUpdateDistribution_MSWUSP_And_WsusutilCLI);
+    RUN_TEST(Test_Horizon171_FailoverClustering_WSFC_And_ClusterCLI);
+    RUN_TEST(Test_Horizon172_NetworkLoadBalancing_MSNLB_And_NlbCLI);
+    RUN_TEST(Test_Horizon173_StorageSpacesDirect_S2D_And_StorageSpacesCLI);
+    RUN_TEST(Test_Horizon174_DataDeduplication_Dedup_And_DdpCli);
+    RUN_TEST(Test_Horizon175_StorageReplica_SR_And_SrCLI);
+    RUN_TEST(Test_Horizon176_BranchCache_DirectAccess_SmbQuic_And_BranchCacheCLI);
+    RUN_TEST(Test_Horizon177_Hypervisor_VMMS_VirtualSwitch_Vhdx_And_HyperVCLI);
+    RUN_TEST(Test_Horizon178_SystemResourceManager_FairShare_DFSS_JobObjects_And_WsrmCLI);
+    RUN_TEST(Test_Horizon179_Hypercall_Nested_Virtualization_And_HvcCLI);
+    RUN_TEST(Test_Horizon180_RemoteDesktopSessionHost_MultiSession_DVC_And_QwinstaCLI);
+    RUN_TEST(Test_Horizon181_RemoteDesktopLicensing_MS_RDPELE_And_LicmgrCLI);
+    RUN_TEST(Test_Horizon182_RemoteDesktopGateway_MS_TSGU_And_TsgadminCLI);
+    RUN_TEST(Test_Horizon183_RemoteDesktopConnectionBroker_MS_RDPBCGR_And_CbadminCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
