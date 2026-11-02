@@ -12,6 +12,7 @@
 [![Arch: x86__64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-orange.svg)]()
 [![Build: CMake](https://img.shields.io/badge/Build-CMake%203.25%2B-green.svg)]()
 [![Taxonomy: Sovereign Names](https://img.shields.io/badge/Taxonomy-Sovereign%20Subsystems-9C27B0.svg)](docs/SOVEREIGN_TAXONOMY.md)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/ssfdre38-hue/badge.svg)](https://hub.xerj.org/contributors/ssfdre38-hue)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Project-FF5E5B.svg?logo=kofi&logoColor=white)](https://ko-fi.com/ssfdre38)
 
 ---
