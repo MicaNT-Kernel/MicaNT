@@ -29,6 +29,8 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
+#include "micant/shared/ntstatus.hpp"
 
 namespace micant::termsrv {
 
@@ -172,6 +174,31 @@ struct X224_CC_PACKET {
 // 2. TerminalServicesManager: Sovereign Multi-Session Architecture
 // ============================================================================
 
+enum class AppExecutionMode {
+    Execute,
+    Install
+};
+
+inline const char* AppExecutionModeToString(AppExecutionMode m) {
+    switch (m) {
+        case AppExecutionMode::Install: return "Install";
+        case AppExecutionMode::Execute: return "Execute";
+        default:                        return "Execute";
+    }
+}
+
+struct VirtualChannel {
+    std::string name;
+    bool isOpen{true};
+    uint64_t bytesTransferred{0};
+};
+
+struct RedirectedDrive {
+    char driveLetter{'Z'};
+    std::string clientPath{"\\\\tsclient\\c"};
+    uint64_t capacityBytes{100ULL * 1024 * 1024 * 1024};
+};
+
 struct TerminalSession {
     uint32_t sessionId{0};
     std::wstring winStationName{L"Console"};
@@ -188,6 +215,11 @@ struct TerminalSession {
     uint64_t idleTime{0};
     uint64_t incomingBytes{1048576};
     uint64_t outgoingBytes{4194304};
+    bool isShadowed{false};
+    bool shadowControl{false};
+    std::string clipboardText{};
+    std::vector<VirtualChannel> channels;
+    std::vector<RedirectedDrive> drives;
 };
 
 class TerminalServicesManager {
@@ -203,7 +235,135 @@ public:
     void resetToDefault() {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_sessions.clear();
+        m_execMode = AppExecutionMode::Execute;
         seedDefaultSessions();
+    }
+
+    void reset() {
+        resetToDefault();
+    }
+
+    AppExecutionMode getExecutionMode() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_execMode;
+    }
+
+    void setExecutionMode(AppExecutionMode mode) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_execMode = mode;
+    }
+
+    bool reconnectSession(uint32_t sessionId) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& s : m_sessions) {
+            if (s.sessionId == sessionId) {
+                s.state = WTSActive;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool startShadow(uint32_t sessionId, bool controlMode) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& s : m_sessions) {
+            if (s.sessionId == sessionId) {
+                s.isShadowed = true;
+                s.shadowControl = controlMode;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool stopShadow(uint32_t sessionId) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& s : m_sessions) {
+            if (s.sessionId == sessionId) {
+                s.isShadowed = false;
+                s.shadowControl = false;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool setClipboard(uint32_t sessionId, const std::string& text) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& s : m_sessions) {
+            if (s.sessionId == sessionId) {
+                s.clipboardText = text;
+                for (auto& ch : s.channels) {
+                    if (ch.name == "cliprdr") ch.bytesTransferred += text.size();
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool getClipboard(uint32_t sessionId, std::string& outText) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& s : m_sessions) {
+            if (s.sessionId == sessionId) {
+                outText = s.clipboardText;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool addRedirectedDrive(uint32_t sessionId, char letter, const std::string& path) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& s : m_sessions) {
+            if (s.sessionId == sessionId) {
+                RedirectedDrive drv{letter, path, 100ULL * 1024 * 1024 * 1024};
+                s.drives.push_back(drv);
+                for (auto& ch : s.channels) {
+                    if (ch.name == "rdpdr") ch.bytesTransferred += 512;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    size_t getActiveSessionCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t count = 0;
+        for (const auto& s : m_sessions) {
+            if (s.state == WTSActive) count++;
+        }
+        return count;
+    }
+
+    size_t getDisconnectedSessionCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t count = 0;
+        for (const auto& s : m_sessions) {
+            if (s.state == WTSDisconnected) count++;
+        }
+        return count;
+    }
+
+    size_t getOpenChannelCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t count = 0;
+        for (const auto& s : m_sessions) {
+            for (const auto& ch : s.channels) {
+                if (ch.isOpen) count++;
+            }
+        }
+        return count;
+    }
+
+    size_t getRedirectedDriveCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t count = 0;
+        for (const auto& s : m_sessions) {
+            count += s.drives.size();
+        }
+        return count;
     }
 
     std::vector<TerminalSession> getSessions() const {
@@ -277,6 +437,11 @@ public:
         rdp.idleTime = 0;
         rdp.incomingBytes = 262144;
         rdp.outgoingBytes = 1048576;
+        rdp.channels.push_back({"cliprdr", true, 1024});
+        rdp.channels.push_back({"rdpdr", true, 2048});
+        rdp.channels.push_back({"rdpsnd", true, 4096});
+        rdp.channels.push_back({"rdpinput", true, 1024});
+        rdp.drives.push_back({'Y', "\\\\tsclient\\share", 50ULL * 1024 * 1024 * 1024});
 
         m_sessions.push_back(rdp);
         return newId;
@@ -315,6 +480,12 @@ private:
             s1.protocolType = WTS_PROTOCOL_TYPE_CONSOLE;
             s1.display = { 1920, 1080, 16 };
             s1.ipAddress = "127.0.0.1";
+            s1.channels.push_back({"cliprdr", true, 4096});
+            s1.channels.push_back({"rdpdr", true, 8192});
+            s1.channels.push_back({"rdpsnd", true, 16384});
+            s1.channels.push_back({"rdpinput", true, 2048});
+            s1.drives.push_back({'Z', "\\\\tsclient\\c", 100ULL * 1024 * 1024 * 1024});
+            s1.clipboardText = "SOVEREIGN_MICANT_CLIPBOARD_SYNC";
             m_sessions.push_back(s1);
         }
 
@@ -335,6 +506,7 @@ private:
     }
 
     mutable std::mutex m_mutex;
+    AppExecutionMode m_execMode{AppExecutionMode::Execute};
     std::vector<TerminalSession> m_sessions;
 };
 
@@ -670,6 +842,28 @@ inline void InitializeTerminalServicesSubsystemExports() {
     envRecord->status.dwProcessId = scm::SvcHostManager::get().getOrCreateGroupProcess("netsvcs");
     scm::SvcHostManager::get().assignService("netsvcs", envRecord->serviceName);
     scm.registerServiceRecord(envRecord);
+}
+
+inline void RegisterTerminalServicesSubsystem() {
+    // 1. SCM Services Initialization
+    InitializeTerminalServicesSubsystemExports();
+
+    // 2. Version Database PE Module Registration
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    vdb.RegisterModule("termsrv.dll", "10.0.26100.1", "Remote Desktop Services Service Engine");
+    vdb.RegisterModule("wtsapi32.dll", "10.0.26100.1", "Windows Remote Desktop Session Host API");
+    vdb.RegisterModule("rdpclip.exe", "10.0.26100.1", "RDP Clipboard Redirection Monitor");
+    vdb.RegisterModule("rdpdr.sys", "10.0.26100.1", "Remote Desktop Device Redirector Driver");
+    vdb.RegisterModule("rdpinput.sys", "10.0.26100.1", "Remote Desktop Input Bus Miniport Driver");
+    vdb.RegisterModule("qwinsta.exe", "10.0.26100.1", "Query Remote Desktop Sessions Tool");
+    vdb.RegisterModule("rwinsta.exe", "10.0.26100.1", "Reset Remote Desktop Sessions Tool");
+    vdb.RegisterModule("tscon.exe", "10.0.26100.1", "Attach Remote Desktop Session Tool");
+    vdb.RegisterModule("tsdiscon.exe", "10.0.26100.1", "Disconnect Remote Desktop Session Tool");
+    vdb.RegisterModule("chgusr.exe", "10.0.26100.1", "Change Terminal Server Application Execution Mode Tool");
+    vdb.RegisterModule("shadow.exe", "10.0.26100.1", "Remote Desktop Session Shadowing Tool");
+
+    // 3. Subsystem Singleton Default State
+    TerminalServicesManager::get().resetToDefault();
 }
 
 } // namespace micant::termsrv

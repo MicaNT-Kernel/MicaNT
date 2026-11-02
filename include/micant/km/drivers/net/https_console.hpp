@@ -72,6 +72,8 @@
 #include "micant/um/subsystems/mgmt/wsrm_cmd.hpp"
 #include "micant/um/servers/hyperv.hpp"
 #include "micant/um/subsystems/mgmt/hyperv_hypercall_cmd.hpp"
+#include "micant/um/servers/termsrv.hpp"
+#include "micant/um/subsystems/mgmt/rdsh_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -367,6 +369,19 @@ public:
         hvcRule.weight = 1500;
         hvcRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(hvcRule);
+
+        // 23. Register WFP Inbound Rule for RDSH Listener (TCP 3389)
+        wfp::km::WfpKernelFilterRule rdshRule{};
+        rdshRule.filterId = 18001;
+        rdshRule.name = "MicaNT_RDSH_Listener_Permit";
+        rdshRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        rdshRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rdshRule.protocol = tcpip::IPPROTO_TCP;
+        rdshRule.localPortStart = 3389;
+        rdshRule.localPortEnd = 3389;
+        rdshRule.weight = 1500;
+        rdshRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(rdshRule);
     }
 
     void stopHttpsServer() {
@@ -781,6 +796,13 @@ public:
             std::string res;
             hvc_cmd::um::ExecuteHvcString(cmd, res);
             return res;
+        } else if (cmd == "qwinsta" || cmd.starts_with("qwinsta ") || cmd == "rwinsta" || cmd.starts_with("rwinsta ") ||
+                   cmd == "tscon" || cmd.starts_with("tscon ") || cmd == "tsdiscon" || cmd.starts_with("tsdiscon ") ||
+                   cmd == "chgusr" || cmd.starts_with("chgusr ") || cmd == "shadow" || cmd.starts_with("shadow ") ||
+                   cmd == "rdsh" || cmd.starts_with("rdsh ")) {
+            std::string res;
+            rdsh_cmd::um::ExecuteRdshString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1051,7 +1073,11 @@ public:
            << "\"hyperv_hypercalls\":" << micant::hyperv::HypervSubsystem::get().getTotalHypercalls() << ","
            << "\"hyperv_fast_calls\":" << micant::hyperv::HypervSubsystem::get().getFastHypercalls() << ","
            << "\"hyperv_nested_exits\":" << micant::hyperv::HypervSubsystem::get().getNestedVmExits() << ","
-           << "\"hyperv_evmcs_flushes\":" << micant::hyperv::HypervSubsystem::get().getEvmcsFlushes() << "}\r\n";
+           << "\"hyperv_evmcs_flushes\":" << micant::hyperv::HypervSubsystem::get().getEvmcsFlushes() << ","
+           << "\"rdsh_sessions_active\":" << micant::termsrv::TerminalServicesManager::get().getActiveSessionCount() << ","
+           << "\"rdsh_sessions_disconnected\":" << micant::termsrv::TerminalServicesManager::get().getDisconnectedSessionCount() << ","
+           << "\"rdsh_dvc_channels_open\":" << micant::termsrv::TerminalServicesManager::get().getOpenChannelCount() << ","
+           << "\"rdsh_redirected_drives\":" << micant::termsrv::TerminalServicesManager::get().getRedirectedDriveCount() << "}\r\n";
         return ss.str();
     }
 

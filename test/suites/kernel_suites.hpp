@@ -34827,3 +34827,321 @@ inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_
 
     std::cout << "[TEST] Suite 395: Horizon 179 - Sovereign Windows Server Hyper-V Hypercall & Nested Virtualization PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH),
+//            Multi-Session Architecture, Dynamic Virtual Channels & Canonical qwinsta CLI
+// ============================================================================
+inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() {
+    std::cout << "[TEST] Running Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::termsrv::RegisterTerminalServicesSubsystem();
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getSessions().size() >= 3, "At least 3 default sessions initialized (0, 1, 65536)");
+
+        // SCM Services Verification
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto termSvc = scm.getServiceRecord(L"TermService");
+        TEST_ASSERT(termSvc != nullptr, "TermService must be registered in SCM");
+        TEST_ASSERT(termSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TermService is running");
+        TEST_ASSERT(termSvc->startType == micant::scm::SERVICE_AUTO_START, "TermService is auto start");
+
+        auto envSvc = scm.getServiceRecord(L"SessionEnv");
+        TEST_ASSERT(envSvc != nullptr, "SessionEnv must be registered in SCM");
+        TEST_ASSERT(envSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SessionEnv is running");
+
+        // Version Database Verification (11 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "termsrv.dll", "wtsapi32.dll", "rdpclip.exe", "rdpdr.sys", "rdpinput.sys",
+            "qwinsta.exe", "rwinsta.exe", "tscon.exe", "tsdiscon.exe", "chgusr.exe", "shadow.exe"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Multi-Session Namespace Isolation (Session 0 Services vs Session 1 Console vs Session 2+ Remote)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+        mgr.reset();
+
+        // 1. Session 0: Non-interactive Services Isolation
+        micant::termsrv::TerminalSession s0;
+        TEST_ASSERT(mgr.getSession(0, s0), "Session 0 found");
+        TEST_ASSERT(s0.winStationName == L"Services", "Session 0 is Services");
+        TEST_ASSERT(s0.userName == L"SYSTEM", "Session 0 user is SYSTEM");
+        TEST_ASSERT(s0.domainName == L"NT AUTHORITY", "Session 0 domain is NT AUTHORITY");
+        TEST_ASSERT(s0.protocolType == micant::termsrv::WTS_PROTOCOL_TYPE_CONSOLE, "Session 0 is Console protocol");
+
+        // 2. Session 1: Interactive Local Console Desktop
+        micant::termsrv::TerminalSession s1;
+        TEST_ASSERT(mgr.getSession(1, s1), "Session 1 found");
+        TEST_ASSERT(s1.winStationName == L"Console", "Session 1 is Console");
+        TEST_ASSERT(s1.userName == L"Administrator", "Session 1 user is Administrator");
+        TEST_ASSERT(s1.state == micant::termsrv::WTSActive, "Session 1 state is Active");
+
+        // 3. Session 65536: RDP Listener
+        micant::termsrv::TerminalSession sListen;
+        TEST_ASSERT(mgr.getSession(65536, sListen), "Session 65536 found");
+        TEST_ASSERT(sListen.state == micant::termsrv::WTSListen, "Session 65536 state is Listen");
+        TEST_ASSERT(sListen.protocolType == micant::termsrv::WTS_PROTOCOL_TYPE_RDP, "Session 65536 is RDP protocol");
+
+        // 4. Provision new interactive RDP user session (Session 2)
+        uint32_t s2Id = mgr.createRdpSession(L"DataAnalyst", L"CONTOSO", L"REMOTE-DESK-01", 2560, 1440);
+        TEST_ASSERT(s2Id == 2, "New RDP session ID is 2");
+
+        micant::termsrv::TerminalSession s2;
+        TEST_ASSERT(mgr.getSession(2, s2), "Session 2 retrieved");
+        TEST_ASSERT(s2.userName == L"DataAnalyst", "Session 2 user is DataAnalyst");
+        TEST_ASSERT(s2.domainName == L"CONTOSO", "Session 2 domain is CONTOSO");
+        TEST_ASSERT(s2.state == micant::termsrv::WTSActive, "Session 2 is Active");
+        TEST_ASSERT(s2.protocolType == micant::termsrv::WTS_PROTOCOL_TYPE_RDP, "Session 2 protocol is RDP");
+        TEST_ASSERT(s2.display.HorizontalResolution == 2560 && s2.display.VerticalResolution == 1440, "Session 2 2560x1440 resolution");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Remote Desktop Session Lifecycle State Machine (Active -> Disconnected -> Reconnected -> Reset/Down)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+
+        // 1. Active -> Disconnected
+        bool disOk = mgr.disconnectSession(2);
+        TEST_ASSERT(disOk, "Disconnect Session 2 succeeds");
+
+        micant::termsrv::TerminalSession s2;
+        TEST_ASSERT(mgr.getSession(2, s2), "Session 2 found");
+        TEST_ASSERT(s2.state == micant::termsrv::WTSDisconnected, "Session 2 state is Disconnected");
+        TEST_ASSERT(mgr.getDisconnectedSessionCount() == 1, "1 disconnected session tracked");
+
+        // 2. Disconnected -> Reconnected (Active)
+        bool recOk = mgr.reconnectSession(2);
+        TEST_ASSERT(recOk, "Reconnect Session 2 succeeds");
+        TEST_ASSERT(mgr.getSession(2, s2), "Session 2 found");
+        TEST_ASSERT(s2.state == micant::termsrv::WTSActive, "Session 2 state is Active");
+        TEST_ASSERT(mgr.getDisconnectedSessionCount() == 0, "0 disconnected sessions tracked");
+
+        // 3. Active -> Reset/Down (Logoff)
+        bool logOk = mgr.logoffSession(2);
+        TEST_ASSERT(logOk, "Logoff Session 2 succeeds");
+        TEST_ASSERT(mgr.getSession(2, s2), "Session 2 found");
+        TEST_ASSERT(s2.state == micant::termsrv::WTSDown, "Session 2 state is Down");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Dynamic Virtual Channels (DVC) Architecture & Clipboard Redirection (rdpclip)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+
+        micant::termsrv::TerminalSession s1;
+        TEST_ASSERT(mgr.getSession(1, s1), "Session 1 retrieved");
+        TEST_ASSERT(s1.channels.size() >= 4, "Session 1 has 4 default DVC channels");
+
+        bool foundClip = false, foundDr = false, foundSnd = false, foundInput = false;
+        for (const auto& ch : s1.channels) {
+            if (ch.name == "cliprdr") foundClip = true;
+            if (ch.name == "rdpdr") foundDr = true;
+            if (ch.name == "rdpsnd") foundSnd = true;
+            if (ch.name == "rdpinput") foundInput = true;
+        }
+        TEST_ASSERT(foundClip && foundDr && foundSnd && foundInput, "All 4 core DVC channels present (cliprdr, rdpdr, rdpsnd, rdpinput)");
+
+        // Clipboard synchronization test (rdpclip)
+        const std::string clipPayload = "MICANT_RDSH_SECURE_CLIPBOARD_DATA_2026";
+        bool setClip = mgr.setClipboard(1, clipPayload);
+        TEST_ASSERT(setClip, "Set clipboard in Session 1 succeeds");
+
+        std::string clipQuery;
+        bool getClip = mgr.getClipboard(1, clipQuery);
+        TEST_ASSERT(getClip && clipQuery == clipPayload, "Clipboard text bitwise retrieved");
+
+        TEST_ASSERT(mgr.getSession(1, s1), "Re-read Session 1");
+        for (const auto& ch : s1.channels) {
+            if (ch.name == "cliprdr") {
+                TEST_ASSERT(ch.bytesTransferred >= clipPayload.size(), "cliprdr channel accounted transferred bytes");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Device & Client Drive Redirection (rdpdr.sys / \tsclient mapping)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+
+        micant::termsrv::TerminalSession s1;
+        TEST_ASSERT(mgr.getSession(1, s1), "Session 1 found");
+        TEST_ASSERT(!s1.drives.empty(), "Default redirected drive present");
+        TEST_ASSERT(s1.drives[0].driveLetter == 'Z', "Default drive letter is Z:");
+        TEST_ASSERT(s1.drives[0].clientPath == "\\\\tsclient\\c", "Default drive path is \\tsclient\\c");
+
+        // Add additional mapped drive (e.g. Y: -> \\tsclient\data)
+        bool addDrv = mgr.addRedirectedDrive(1, 'Y', "\\\\tsclient\\data");
+        TEST_ASSERT(addDrv, "Add redirected drive Y: succeeds");
+
+        TEST_ASSERT(mgr.getSession(1, s1), "Re-read Session 1");
+        TEST_ASSERT(s1.drives.size() == 2, "Session 1 has 2 redirected drives");
+        TEST_ASSERT(s1.drives[1].driveLetter == 'Y', "Drive Y: registered");
+        TEST_ASSERT(mgr.getRedirectedDriveCount() >= 2, "Global redirected drive count tracked");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Application Execution Modes (chgusr) & Remote Session Shadowing (shadow.exe)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+
+        // 1. Application Execution Mode (chgusr /install vs /execute)
+        TEST_ASSERT(mgr.getExecutionMode() == micant::termsrv::AppExecutionMode::Execute, "Default mode is Execute");
+
+        mgr.setExecutionMode(micant::termsrv::AppExecutionMode::Install);
+        TEST_ASSERT(mgr.getExecutionMode() == micant::termsrv::AppExecutionMode::Install, "Execution mode switched to Install");
+
+        mgr.setExecutionMode(micant::termsrv::AppExecutionMode::Execute);
+        TEST_ASSERT(mgr.getExecutionMode() == micant::termsrv::AppExecutionMode::Execute, "Execution mode restored to Execute");
+
+        // 2. Remote Session Shadowing (shadow.exe)
+        bool startSh = mgr.startShadow(1, true); // Control mode
+        TEST_ASSERT(startSh, "Start interactive shadow on Session 1 succeeds");
+
+        micant::termsrv::TerminalSession s1;
+        TEST_ASSERT(mgr.getSession(1, s1), "Session 1 found");
+        TEST_ASSERT(s1.isShadowed, "Session 1 isShadowed is true");
+        TEST_ASSERT(s1.shadowControl, "Session 1 shadowControl is true");
+
+        bool stopSh = mgr.stopShadow(1);
+        TEST_ASSERT(stopSh, "Stop shadow succeeds");
+        TEST_ASSERT(mgr.getSession(1, s1), "Session 1 found");
+        TEST_ASSERT(!s1.isShadowed, "Session 1 is no longer shadowed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Exports, Canonical Win32 CLIs, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::termsrv::TerminalServicesManager::get();
+        mgr.reset();
+
+        // 1. Win32 C ABI Exports (wtsapi32.dll)
+        micant::termsrv::PWTS_SESSION_INFOW pSessions = nullptr;
+        uint32_t sessionCount = 0;
+        int32_t enumRes = micant::termsrv::WTSEnumerateSessionsW(0, 0, 1, &pSessions, &sessionCount);
+        TEST_ASSERT(enumRes == 1, "WTSEnumerateSessionsW succeeds");
+        TEST_ASSERT(sessionCount >= 3, "Enumerated at least 3 sessions");
+        TEST_ASSERT(pSessions != nullptr, "Session array allocated");
+
+        for (uint32_t i = 0; i < sessionCount; ++i) {
+            if (pSessions[i].SessionId == 1) {
+                TEST_ASSERT(std::wcscmp(pSessions[i].pWinStationName, L"Console") == 0, "Session 1 name is Console");
+                TEST_ASSERT(pSessions[i].State == micant::termsrv::WTSActive, "Session 1 state is WTSActive");
+            }
+            micant::termsrv::WTSFreeMemory(pSessions[i].pWinStationName);
+        }
+        micant::termsrv::WTSFreeMemory(pSessions);
+
+        // Query session username
+        wchar_t* pUserBuf = nullptr;
+        uint32_t userBytes = 0;
+        int32_t qRes = micant::termsrv::WTSQuerySessionInformationW(0, 1, micant::termsrv::WTSUserName, &pUserBuf, &userBytes);
+        TEST_ASSERT(qRes == 1, "WTSQuerySessionInformationW succeeds for WTSUserName");
+        TEST_ASSERT(pUserBuf != nullptr && std::wcscmp(pUserBuf, L"Administrator") == 0, "Queried user is Administrator");
+        micant::termsrv::WTSFreeMemory(pUserBuf);
+
+        // 2. Canonical Win32 CLIs
+        // 2a. qwinsta
+        std::string qOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("qwinsta", qOut);
+        TEST_ASSERT(qOut.find("SESSIONNAME") != std::string::npos, "qwinsta header present");
+        TEST_ASSERT(qOut.find("Console") != std::string::npos, "qwinsta lists Console");
+        TEST_ASSERT(qOut.find("Services") != std::string::npos, "qwinsta lists Services");
+        TEST_ASSERT(qOut.find("RDP-Tcp") != std::string::npos, "qwinsta lists RDP-Tcp");
+
+        // 2b. chgusr
+        std::string chgOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("chgusr /install", chgOut);
+        TEST_ASSERT(chgOut.find("Application execution mode is set to Install") != std::string::npos, "chgusr /install output");
+
+        micant::rdsh_cmd::um::ExecuteRdshString("chgusr /query", chgOut);
+        TEST_ASSERT(chgOut.find("Install") != std::string::npos, "chgusr /query confirms Install mode");
+
+        micant::rdsh_cmd::um::ExecuteRdshString("chgusr /execute", chgOut);
+        TEST_ASSERT(chgOut.find("Application execution mode is set to Execute") != std::string::npos, "chgusr /execute restored");
+
+        // 2c. tsdiscon & tscon
+        std::string disOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("tsdiscon 1", disOut);
+        TEST_ASSERT(disOut.find("SUCCESS: Session ID 1 disconnected") != std::string::npos, "tsdiscon confirmation");
+
+        std::string conOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("tscon 1", conOut);
+        TEST_ASSERT(conOut.find("SUCCESS: Session ID 1 reconnected") != std::string::npos, "tscon confirmation");
+
+        // 2d. shadow
+        std::string shOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("shadow 1 /control", shOut);
+        TEST_ASSERT(shOut.find("SUCCESS: Shadowing session ID 1") != std::string::npos, "shadow confirmation");
+
+        // 2e. rdsh status & channels
+        std::string statOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("rdsh status", statOut);
+        TEST_ASSERT(statOut.find("Remote Desktop Session Host (RDSH) Subsystem Status:") != std::string::npos, "rdsh status banner");
+        TEST_ASSERT(statOut.find("TermService") != std::string::npos, "rdsh status TermService");
+
+        std::string chanOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("rdsh channels 1", chanOut);
+        TEST_ASSERT(chanOut.find("cliprdr") != std::string::npos, "rdsh channels lists cliprdr");
+
+        // 2f. rdsh dump
+        std::string dumpOut;
+        micant::rdsh_cmd::um::ExecuteRdshString("rdsh dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("TermService") != std::string::npos, "rdsh dump contains TermService config");
+
+        // 3. Remote Executive Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termQwinsta = console.executeTerminalCommand("qwinsta");
+        TEST_ASSERT(termQwinsta.find("SESSIONNAME") != std::string::npos, "Web terminal qwinsta");
+
+        std::string termStat = console.executeTerminalCommand("rdsh status");
+        TEST_ASSERT(termStat.find("Remote Desktop Session Host (RDSH) Subsystem Status:") != std::string::npos, "Web terminal rdsh status");
+
+        // 4. WFP Inbound Rule #18001 (MicaNT_RDSH_Listener_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto rdshRuleOpt = wfp.findRuleById(18001);
+        TEST_ASSERT(rdshRuleOpt.has_value(), "WFP Rule #18001 for RDSH must be registered");
+        TEST_ASSERT(rdshRuleOpt->protocol == tcpip::IPPROTO_TCP, "RDSH protocol is TCP");
+        TEST_ASSERT(rdshRuleOpt->localPortStart == 3389 && rdshRuleOpt->localPortEnd == 3389, "Port 3389");
+        TEST_ASSERT(rdshRuleOpt->action == wfp::FWP_ACTION_PERMIT, "RDSH rule action must be PERMIT");
+
+        // 5. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"rdsh_sessions_active\":") != std::string::npos, "Telemetry rdsh_sessions_active");
+        TEST_ASSERT(teleJson.find("\"rdsh_sessions_disconnected\":") != std::string::npos, "Telemetry rdsh_sessions_disconnected");
+        TEST_ASSERT(teleJson.find("\"rdsh_dvc_channels_open\":") != std::string::npos, "Telemetry rdsh_dvc_channels_open");
+        TEST_ASSERT(teleJson.find("\"rdsh_redirected_drives\":") != std::string::npos, "Telemetry rdsh_redirected_drives");
+    }
+
+    std::cout << "[HORIZON 180] Sovereign Windows Server Remote Desktop Session Host (RDSH) Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Multi-Session Namespace Isolation (Sessions 0/1/2+) OK\n"
+              << "    Pillar 3: Remote Desktop Session Lifecycle State Machine OK\n"
+              << "    Pillar 4: Dynamic Virtual Channels (DVC) & Clipboard Redirection OK\n"
+              << "    Pillar 5: Device & Client Drive Redirection (rdpdr.sys) OK\n"
+              << "    Pillar 6: Application Execution Modes & Session Shadowing OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 qwinsta CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH) PASSED." << std::endl;
+}
