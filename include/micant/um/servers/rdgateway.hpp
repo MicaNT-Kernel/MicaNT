@@ -2,7 +2,7 @@
 
 /**
  * @file rdgateway.hpp
- * @brief Clean-room Windows Server Remote Desktop Gateway Subsystem (RD Gateway / MS-TSGU).
+ * @brief Clean-room Remote Desktop Gateway Subsystem (RD Gateway / MS-TSGU).
  *
  * Implements the Win32 Remote Desktop Gateway Server Protocol (MS-TSGU) architecture,
  * Remote Desktop Gateway service (tsgateway.exe, TSGateway),

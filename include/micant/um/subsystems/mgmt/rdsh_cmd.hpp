@@ -4,7 +4,7 @@
  * @file rdsh_cmd.hpp
  * @brief Canonical Win32 qwinsta.exe / rwinsta.exe / tscon.exe / tsdiscon.exe / chgusr.exe / shadow.exe CLI Management Utilities for RDSH.
  *
- * Clean-room implementation of the Microsoft Windows Server Remote Desktop Session Host (RDSH)
+ * Clean-room implementation of Remote Desktop Session Host (RDSH)
  * & Terminal Services Multi-Session CLI under 17 U.S.C. § 1201(f) &
  * Google LLC v. Oracle America, Inc. (141 S. Ct. 1183, 2021).
  *

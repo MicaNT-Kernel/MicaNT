@@ -4,7 +4,7 @@
  * @file rdlic_cmd.hpp
  * @brief Canonical Win32 licmgr.exe / rdlic.exe CLI Management Utilities for RD Licensing.
  *
- * Clean-room implementation of Microsoft Windows Server Remote Desktop Licensing (RD Licensing)
+ * Clean-room implementation of Remote Desktop Licensing (RD Licensing)
  * CLI management tools under 17 U.S.C. § 1201(f) & Google LLC v. Oracle America, Inc.
  * (141 S. Ct. 1183, 2021).
  *

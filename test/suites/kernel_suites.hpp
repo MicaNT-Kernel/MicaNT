@@ -34830,11 +34830,11 @@ inline void Test_Horizon179_WindowsServerHyperV_Hypercall_Nested_Virtualization_
 
 
 // ============================================================================
-// Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH),
+// Suite 396: Horizon 180 - Sovereign Remote Desktop Session Host (RDSH),
 //            Multi-Session Architecture, Dynamic Virtual Channels & Canonical qwinsta CLI
 // ============================================================================
 inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() {
-    std::cout << "[TEST] Running Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH)..." << std::endl;
+    std::cout << "[TEST] Running Suite 396: Horizon 180 - Sovereign Remote Desktop Session Host (RDSH)..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
@@ -35134,7 +35134,7 @@ inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() 
         TEST_ASSERT(teleJson.find("\"rdsh_redirected_drives\":") != std::string::npos, "Telemetry rdsh_redirected_drives");
     }
 
-    std::cout << "[HORIZON 180] Sovereign Windows Server Remote Desktop Session Host (RDSH) Summary:\n"
+    std::cout << "[HORIZON 180] Sovereign Remote Desktop Session Host (RDSH) Summary:\n"
               << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
               << "    Pillar 2: Multi-Session Namespace Isolation (Sessions 0/1/2+) OK\n"
               << "    Pillar 3: Remote Desktop Session Lifecycle State Machine OK\n"
@@ -35143,16 +35143,16 @@ inline void Test_Horizon180_WindowsServerRDSH_MultiSession_DVC_And_QwinstaCLI() 
               << "    Pillar 6: Application Execution Modes & Session Shadowing OK\n"
               << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 qwinsta CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 396: Horizon 180 - Sovereign Windows Server Remote Desktop Session Host (RDSH) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 396: Horizon 180 - Sovereign Remote Desktop Session Host (RDSH) PASSED." << std::endl;
 }
 
 
 // ============================================================================
-// Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing Subsystem (RD Licensing),
+// Suite 397: Horizon 181 - Sovereign Remote Desktop Licensing Subsystem (RD Licensing),
 //            MS-RDPELE, CAL Key Packs & Canonical licmgr CLI
 // ============================================================================
 inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
-    std::cout << "[TEST] Running Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing (RD Licensing)..." << std::endl;
+    std::cout << "[TEST] Running Suite 397: Horizon 181 - Sovereign Remote Desktop Licensing (RD Licensing)..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
@@ -35493,7 +35493,7 @@ inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
         TEST_ASSERT(teleJson.find("\"rdlic_revoked_cals\":") != std::string::npos, "Telemetry rdlic_revoked_cals");
     }
 
-    std::cout << "[HORIZON 181] Sovereign Windows Server Remote Desktop Licensing (RD Licensing) Summary:\n"
+    std::cout << "[HORIZON 181] Sovereign Remote Desktop Licensing (RD Licensing) Summary:\n"
               << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
               << "    Pillar 2: Licensing Architecture, Configuration & Discovery Scopes OK\n"
               << "    Pillar 3: CAL Key Pack Provisioning, Inventory & Capacity Accounting OK\n"
@@ -35502,16 +35502,16 @@ inline void Test_Horizon181_WindowsServerRDLicensing_MS_RDPELE_And_LicmgrCLI() {
               << "    Pillar 6: CAL Revocation, Upgrade from Temporary to Permanent & Reissuance OK\n"
               << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 licmgr CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 397: Horizon 181 - Sovereign Windows Server Remote Desktop Licensing (RD Licensing) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 397: Horizon 181 - Sovereign Remote Desktop Licensing (RD Licensing) PASSED." << std::endl;
 }
 
 
 // ============================================================================
-// Suite 398: Horizon 182 - Sovereign Windows Server Remote Desktop Gateway Subsystem (RD Gateway),
+// Suite 398: Horizon 182 - Sovereign Remote Desktop Gateway Subsystem (RD Gateway),
 //            MS-TSGU, RD CAPs & RAPs & Canonical tsgadmin CLI
 // ============================================================================
 inline void Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI() {
-    std::cout << "[TEST] Running Suite 398: Horizon 182 - Sovereign Windows Server Remote Desktop Gateway (RD Gateway)..." << std::endl;
+    std::cout << "[TEST] Running Suite 398: Horizon 182 - Sovereign Remote Desktop Gateway (RD Gateway)..." << std::endl;
 
     // ------------------------------------------------------------------------
     // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
@@ -35766,7 +35766,7 @@ inline void Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI() {
         TEST_ASSERT(teleJson.find("\"rdgw_rap_evaluations\":") != std::string::npos, "Telemetry rdgw_rap_evaluations");
     }
 
-    std::cout << "[HORIZON 182] Sovereign Windows Server Remote Desktop Gateway (RD Gateway) Summary:\n"
+    std::cout << "[HORIZON 182] Sovereign Remote Desktop Gateway (RD Gateway) Summary:\n"
               << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
               << "    Pillar 2: Gateway Configuration, SSL Certificate Binding & Server Vitals OK\n"
               << "    Pillar 3: Connection Authorization Policies (RD CAPs) & Multi-Factor Matching OK\n"
@@ -35775,5 +35775,5 @@ inline void Test_Horizon182_WindowsServerRDGateway_MS_TSGU_And_TsgadminCLI() {
               << "    Pillar 6: High-Concurrency Tunnel Aggregation & Teardown OK\n"
               << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 tsgadmin CLI, WFP & Telemetry OK\n";
 
-    std::cout << "[TEST] Suite 398: Horizon 182 - Sovereign Windows Server Remote Desktop Gateway (RD Gateway) PASSED." << std::endl;
+    std::cout << "[TEST] Suite 398: Horizon 182 - Sovereign Remote Desktop Gateway (RD Gateway) PASSED." << std::endl;
 }

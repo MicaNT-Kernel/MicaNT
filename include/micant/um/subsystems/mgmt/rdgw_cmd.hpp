@@ -4,7 +4,7 @@
  * @file rdgw_cmd.hpp
  * @brief Canonical Win32 tsgadmin.exe / rdgw.exe CLI Management Utilities for RD Gateway.
  *
- * Clean-room implementation of Microsoft Windows Server Remote Desktop Gateway (RD Gateway)
+ * Clean-room implementation of Remote Desktop Gateway (RD Gateway)
  * CLI management tools under 17 U.S.C. § 1201(f) & Google LLC v. Oracle America, Inc.
  * (141 S. Ct. 1183, 2021).
  *

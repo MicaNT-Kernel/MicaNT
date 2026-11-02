@@ -2,7 +2,7 @@
 
 /**
  * @file rdlicensing.hpp
- * @brief Clean-room Windows Server Remote Desktop Licensing Subsystem (MS-RDPELE).
+ * @brief Clean-room Remote Desktop Licensing Subsystem (MS-RDPELE).
  *
  * Implements the Win32 Remote Desktop Protocol: Licensing Extension (MS-RDPELE)
  * architecture, Terminal Server Licensing service (lserver.exe, TermServLicensing),
