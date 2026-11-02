@@ -106,6 +106,8 @@
 #include "micant/um/subsystems/mgmt/netpace_cmd.hpp"
 #include "micant/km/drivers/compute/coresched.hpp"
 #include "micant/um/subsystems/mgmt/coresched_cmd.hpp"
+#include "micant/km/drivers/video/resolution_pacer.hpp"
+#include "micant/um/subsystems/mgmt/respace_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -622,6 +624,19 @@ public:
         schedRule.weight = 1500;
         schedRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(schedRule);
+
+        // 40. Register WFP Inbound Rule for Frame Rate Stabilization & Super-Resolution Telemetry (UDP 5095)
+        wfp::km::WfpKernelFilterRule respaceRule{};
+        respaceRule.filterId = 19701;
+        respaceRule.name = "MicaNT_ResolutionPacer_Permit";
+        respaceRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        respaceRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        respaceRule.protocol = tcpip::IPPROTO_UDP;
+        respaceRule.localPortStart = 5095;
+        respaceRule.localPortEnd = 5095;
+        respaceRule.weight = 1500;
+        respaceRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(respaceRule);
     }
 
     void stopHttpsServer() {
@@ -1101,6 +1116,8 @@ public:
             return netpace_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "coresched" || cmd.starts_with("coresched ") || cmd == "coreschedcli" || cmd.starts_with("coreschedcli ") || cmd == "sched" || cmd.starts_with("sched ")) {
             return coresched_cmd::um::ExecuteCommand(cmd);
+        } else if (cmd == "respace" || cmd.starts_with("respace ") || cmd == "respacecli" || cmd.starts_with("respacecli ") || cmd == "antilag" || cmd.starts_with("antilag ")) {
+            return respace_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1442,7 +1459,11 @@ public:
            << "\"coresched_active_p_cores\":" << micant::core_sched::CoreTopologyManager::Instance().GetPCoreCount() << ","
            << "\"coresched_active_e_cores\":" << micant::core_sched::CoreTopologyManager::Instance().GetECoreCount() << ","
            << "\"coresched_pinned_threads\":" << micant::core_sched::CoreTopologyManager::Instance().GetPinnedThreadCount() << ","
-           << "\"coresched_stutters_prevented\":" << micant::core_sched::CoreTopologyManager::Instance().GetTotalMigrationsPrevented() << "}\r\n";
+           << "\"coresched_stutters_prevented\":" << micant::core_sched::CoreTopologyManager::Instance().GetTotalMigrationsPrevented() << ","
+           << "\"respace_current_scale_pct\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetCurrentRenderScalePct() << ","
+           << "\"respace_target_fps\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetTargetFps() << ","
+           << "\"respace_antilag_latency_ms\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetAntiLagLatencyMs() << ","
+           << "\"respace_drs_events_count\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetDrsEventsCount() << "}\r\n";
         return ss.str();
     }
 

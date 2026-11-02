@@ -38932,5 +38932,178 @@ void Test_Horizon196_HeterogeneousCoreScheduling_VCachePacing_And_CoreSchedCLI()
     std::cout << "[TEST] Suite 412: Horizon 196 - Sovereign Heterogeneous CPU Core Pacing PASSED." << std::endl;
 }
 
+// ============================================================================
+// SUITE 413: Horizon 197 - Sovereign Frame Rate Stabilization & Super-Resolution Upscaling Subsystem
+// ============================================================================
+
+void Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI() {
+    std::cout << "\n[TEST] Running Suite 413: Horizon 197 - Sovereign Frame Rate Stabilization & Super-Resolution Subsystem...\n";
+
+    auto& mgr = micant::res_pacer::ResolutionPacerManager::Instance();
+    mgr.Initialize();
+
+    // 1. Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    {
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.FindModule("respace.sys") != nullptr, "respace.sys must be registered");
+        TEST_ASSERT(vdb.FindModule("upscalebroker.exe") != nullptr, "upscalebroker.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("respace.dll") != nullptr, "respace.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("superres.dll") != nullptr, "superres.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("respacecli.exe") != nullptr, "respacecli.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("antilag.sys") != nullptr, "antilag.sys must be registered");
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto drvRec = scm.getServiceRecord(L"ResolutionPacerDriver");
+        TEST_ASSERT(drvRec != nullptr, "ResolutionPacerDriver must be registered in SCM");
+        TEST_ASSERT(drvRec->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "Driver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drvRec->startType == micant::scm::SERVICE_BOOT_START, "Driver is SERVICE_BOOT_START");
+        TEST_ASSERT(drvRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Driver is SERVICE_RUNNING");
+
+        auto svcRec = scm.getServiceRecord(L"UpscaleBroker");
+        TEST_ASSERT(svcRec != nullptr, "UpscaleBroker must be registered in SCM");
+        TEST_ASSERT(svcRec->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "Service is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svcRec->startType == micant::scm::SERVICE_AUTO_START, "Service is SERVICE_AUTO_START");
+        TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Service is SERVICE_RUNNING");
+    }
+
+    // 2. Pillar 2: Dynamic Resolution Scaling (DRS) Frame-Time Control Loop
+    {
+        mgr.ConfigureDrs(144, 50, 100);
+        auto cfg = mgr.GetConfig();
+        TEST_ASSERT(cfg.targetFps == 144, "Target FPS configured to 144");
+        TEST_ASSERT(cfg.minRenderScalePct == 50, "Min render scale is 50%");
+        TEST_ASSERT(cfg.maxRenderScalePct == 100, "Max render scale is 100%");
+        TEST_ASSERT(cfg.currentRenderScalePct == 100, "Initial render scale is 100%");
+
+        // Heavy render spike (e.g. 10.5 ms render execution on 6.94 ms budget)
+        uint32_t scale = 100;
+        bool ok = mgr.ProcessFrame(10.5f, scale);
+        TEST_ASSERT(ok == true, "ProcessFrame must succeed");
+        TEST_ASSERT(scale < 100, "Render scale dropped under heavy frame load");
+        TEST_ASSERT(scale >= 50, "Render scale must respect min boundary (50%)");
+
+        // Several heavy frames pushing toward lower scale
+        for (int i = 0; i < 5; ++i) {
+            mgr.ProcessFrame(11.0f, scale);
+        }
+        TEST_ASSERT(scale <= 80, "Render scale aggressively throttled to stabilize framerate");
+
+        // Light render load (e.g. 4.0 ms render execution)
+        uint32_t prevScale = scale;
+        mgr.ProcessFrame(4.0f, scale);
+        TEST_ASSERT(scale > prevScale, "Render scale smoothly restored when frame time is under budget");
+    }
+
+    // 3. Pillar 3: Super-Resolution Reconstruction Filters & Modes
+    {
+        mgr.SetUpscaleMode(micant::res_pacer::UpscaleMode::ContrastAdaptiveSharpening);
+        TEST_ASSERT(mgr.GetConfig().upscaleMode == micant::res_pacer::UpscaleMode::ContrastAdaptiveSharpening, "CAS mode active");
+
+        mgr.SetUpscaleMode(micant::res_pacer::UpscaleMode::TemporalSuperResolution);
+        TEST_ASSERT(mgr.GetConfig().upscaleMode == micant::res_pacer::UpscaleMode::TemporalSuperResolution, "TSR mode active");
+
+        mgr.SetUpscaleMode(micant::res_pacer::UpscaleMode::BicubicLanczos);
+        TEST_ASSERT(mgr.GetConfig().upscaleMode == micant::res_pacer::UpscaleMode::BicubicLanczos, "Bicubic Lanczos mode active");
+
+        // Reset to CAS
+        mgr.SetUpscaleMode(micant::res_pacer::UpscaleMode::ContrastAdaptiveSharpening);
+    }
+
+    // 4. Pillar 4: Driver-Level Anti-Lag CPU-to-GPU Work Submission Synchronization
+    {
+        mgr.SetAntiLag(true, 1);
+        auto met = mgr.GetMetrics();
+        TEST_ASSERT(met.antiLagEnabled == true, "Anti-Lag enabled");
+        TEST_ASSERT(met.maxPreRenderedFrames == 1, "Pre-rendered queue clamped to 1 frame");
+        TEST_ASSERT(met.clickToPhotonLatencyMs < 15.0f, "Click-to-photon latency low (< 15 ms)");
+
+        // Disable Anti-Lag to observe latency degradation
+        mgr.SetAntiLag(false, 3);
+        met = mgr.GetMetrics();
+        TEST_ASSERT(met.antiLagEnabled == false, "Anti-Lag disabled");
+        TEST_ASSERT(met.clickToPhotonLatencyMs > 25.0f, "Latency degraded to unthrottled level (> 25 ms)");
+
+        // Re-enable Anti-Lag
+        mgr.SetAntiLag(true, 1);
+        met = mgr.GetMetrics();
+        TEST_ASSERT(met.antiLagEnabled == true, "Anti-Lag re-enabled");
+        TEST_ASSERT(met.clickToPhotonLatencyMs == 11.4f, "Competitive low latency restored to 11.4 ms");
+    }
+
+    // 5. Pillar 5: Win32 C ABI Exports
+    {
+        TEST_ASSERT(ResolutionPacerInitialize() == STATUS_SUCCESS, "ResolutionPacerInitialize export");
+        TEST_ASSERT(ResolutionPacerGetTargetFps() == 144, "ResolutionPacerGetTargetFps export");
+        TEST_ASSERT(ResolutionPacerGetAntiLagLatencyMs() == 11.4f, "ResolutionPacerGetAntiLagLatencyMs export");
+        TEST_ASSERT(ResolutionPacerGetDrsEventsCount() > 0, "ResolutionPacerGetDrsEventsCount export");
+
+        NTSTATUS stDrs = ResolutionPacerConfigureDrs(144, 50, 100);
+        TEST_ASSERT(stDrs == STATUS_SUCCESS, "ResolutionPacerConfigureDrs export");
+
+        uint32_t scaleOut = 0;
+        NTSTATUS stFrame = ResolutionPacerProcessFrame(6.0f, &scaleOut);
+        TEST_ASSERT(stFrame == STATUS_SUCCESS, "ResolutionPacerProcessFrame export");
+        TEST_ASSERT(scaleOut >= 50 && scaleOut <= 100, "Frame scaling output in valid range");
+
+        NTSTATUS stLag = ResolutionPacerSetAntiLag(true, 1);
+        TEST_ASSERT(stLag == STATUS_SUCCESS, "ResolutionPacerSetAntiLag export");
+    }
+
+    // 6. Pillar 6: Canonical Win32 respace CLI, WFP Rule #19701 & Telemetry
+    {
+        std::string out;
+
+        out = micant::respace_cmd::um::ExecuteCommand("respace status");
+        TEST_ASSERT(out.find("MicaNT Sovereign Frame Rate Stabilization") != std::string::npos, "CLI respace status banner");
+        TEST_ASSERT(out.find("ACTIVE / ONLINE") != std::string::npos, "CLI respace status active");
+
+        out = micant::respace_cmd::um::ExecuteCommand("respace config 144 50 100");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI respace config");
+
+        out = micant::respace_cmd::um::ExecuteCommand("respace antilag on 1");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI respace antilag");
+
+        out = micant::respace_cmd::um::ExecuteCommand("respace upscale-mode cas");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI respace upscale-mode");
+
+        out = micant::respace_cmd::um::ExecuteCommand("respace benchmark 30");
+        TEST_ASSERT(out.find("Performance Verdict:") != std::string::npos && out.find("PASSED") != std::string::npos, "CLI respace benchmark");
+
+        out = micant::respace_cmd::um::ExecuteCommand("respace dump");
+        TEST_ASSERT(out.find("ResolutionPacerDriver") != std::string::npos, "CLI respace dump driver");
+
+        // Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("respace status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Frame Rate Stabilization") != std::string::npos, "Console terminal respace status");
+
+        // WFP Inbound Rule #19701 (MicaNT_ResolutionPacer_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto respaceRuleOpt = wfp.findRuleById(19701);
+        TEST_ASSERT(respaceRuleOpt.has_value(), "WFP Rule #19701 for ResolutionPacer must be registered");
+        TEST_ASSERT(respaceRuleOpt->protocol == tcpip::IPPROTO_UDP, "ResolutionPacer protocol is UDP");
+        TEST_ASSERT(respaceRuleOpt->localPortStart == 5095 && respaceRuleOpt->localPortEnd == 5095, "Port 5095");
+        TEST_ASSERT(respaceRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"respace_current_scale_pct\":") != std::string::npos, "Telemetry respace_current_scale_pct");
+        TEST_ASSERT(teleJson.find("\"respace_target_fps\":") != std::string::npos, "Telemetry respace_target_fps");
+        TEST_ASSERT(teleJson.find("\"respace_antilag_latency_ms\":") != std::string::npos, "Telemetry respace_antilag_latency_ms");
+        TEST_ASSERT(teleJson.find("\"respace_drs_events_count\":") != std::string::npos, "Telemetry respace_drs_events_count");
+    }
+
+    std::cout << "[HORIZON 197] Sovereign Frame Rate Stabilization & Super-Resolution Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Dynamic Resolution Scaling (DRS) Frame-Time Control Loop OK\n"
+              << "    Pillar 3: Super-Resolution Reconstruction Filters & Modes OK\n"
+              << "    Pillar 4: Driver-Level Anti-Lag CPU-to-GPU Work Submission Synchronization OK\n"
+              << "    Pillar 5: Win32 C ABI Exports OK\n"
+              << "    Pillar 6: Canonical Win32 respace CLI, WFP Rule #19701 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 413: Horizon 197 - Sovereign Frame Rate Stabilization & Super-Resolution PASSED." << std::endl;
+}
+
 
 

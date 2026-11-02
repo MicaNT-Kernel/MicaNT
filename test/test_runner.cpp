@@ -307,6 +307,8 @@
 #include "micant/um/subsystems/mgmt/netpace_cmd.hpp"
 #include "micant/km/drivers/compute/coresched.hpp"
 #include "micant/um/subsystems/mgmt/coresched_cmd.hpp"
+#include "micant/km/drivers/video/resolution_pacer.hpp"
+#include "micant/um/subsystems/mgmt/respace_cmd.hpp"
 #include "micant/km/drivers/input/sensorscx.hpp"
 #include "micant/km/drivers/net/mbbcx.hpp"
 #include "micant/um/subsystems/media/pmp.hpp"
@@ -445,6 +447,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite413") {
+        RUN_TEST(Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite412") {
@@ -2059,6 +2065,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon194_SpatialAudio_LowLatencyHeadset_And_SpatialCLI);
     RUN_TEST(Test_Horizon195_GamingNetworkQos_UdpPacketPacing_And_NetPaceCLI);
     RUN_TEST(Test_Horizon196_HeterogeneousCoreScheduling_VCachePacing_And_CoreSchedCLI);
+    RUN_TEST(Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
