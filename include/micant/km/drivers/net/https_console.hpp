@@ -86,6 +86,8 @@
 #include "micant/um/subsystems/mgmt/mpio_cmd.hpp"
 #include "micant/um/servers/remote_assistance.hpp"
 #include "micant/um/subsystems/mgmt/msra_cmd.hpp"
+#include "micant/km/drivers/security/anticheat.hpp"
+#include "micant/um/subsystems/mgmt/anticheat_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -472,6 +474,19 @@ public:
         msraRule.weight = 1500;
         msraRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(msraRule);
+
+        // 30. Register WFP Inbound Rule for Gaming / Anti-Cheat Telemetry (TCP/UDP 3074)
+        wfp::km::WfpKernelFilterRule acRule{};
+        acRule.filterId = 18701;
+        acRule.name = "MicaNT_AntiCheat_Permit";
+        acRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        acRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        acRule.protocol = tcpip::IPPROTO_TCP;
+        acRule.localPortStart = 3074;
+        acRule.localPortEnd = 3074;
+        acRule.weight = 1500;
+        acRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(acRule);
     }
 
     void stopHttpsServer() {
@@ -917,6 +932,10 @@ public:
             std::string res;
             msra_cmd::um::ExecuteMsraString(cmd, res);
             return res;
+        } else if (cmd == "anticheat" || cmd.starts_with("anticheat ") || cmd == "accli" || cmd.starts_with("accli ")) {
+            std::string res;
+            anticheat_cmd::um::ExecuteAntiCheatString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1218,7 +1237,11 @@ public:
            << "\"msra_active_invitations\":" << micant::ra::RemoteAssistanceManager::get().getVitals().activeInvitationsCount << ","
            << "\"msra_active_sessions\":" << micant::ra::RemoteAssistanceManager::get().getVitals().activeSessionsCount << ","
            << "\"msra_shadow_sessions\":" << micant::ra::RemoteAssistanceManager::get().getVitals().activeShadowSessionsCount << ","
-           << "\"msra_control_delegations\":" << micant::ra::RemoteAssistanceManager::get().getVitals().totalControlDelegations << "}\r\n";
+           << "\"msra_control_delegations\":" << micant::ra::RemoteAssistanceManager::get().getVitals().totalControlDelegations << ","
+           << "\"ac_protected_processes\":" << micant::anticheat::AntiCheatManager::get().getVitals().protectedProcessesCount << ","
+           << "\"ac_blocked_handle_attempts\":" << micant::anticheat::AntiCheatManager::get().getVitals().totalHandleAccessBitsStripped << ","
+           << "\"ac_blocked_injections\":" << micant::anticheat::AntiCheatManager::get().getVitals().totalUnauthorizedImagesBlocked << ","
+           << "\"ac_active_callbacks\":" << (micant::anticheat::AntiCheatManager::get().getVitals().obCallbacksActive ? 1 : 0) << "}\r\n";
         return ss.str();
     }
 

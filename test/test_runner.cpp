@@ -441,6 +441,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite403") {
+        RUN_TEST(Test_Horizon187_KernelAntiCheat_ProcessProtection_And_Accli);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite402") {
         RUN_TEST(Test_Horizon186_RemoteAssistance_SessionShadowing_And_MsraCLI);
         return g_FailedTests;
@@ -2003,6 +2007,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon184_RemoteDesktopWebAccess_MS_TSWAP_And_RdwebadminCLI);
     RUN_TEST(Test_Horizon185_MultipathIO_DSM_Architecture_And_Mpiocli);
     RUN_TEST(Test_Horizon186_RemoteAssistance_SessionShadowing_And_MsraCLI);
+    RUN_TEST(Test_Horizon187_KernelAntiCheat_ProcessProtection_And_Accli);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

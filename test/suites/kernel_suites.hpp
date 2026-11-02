@@ -36867,3 +36867,239 @@ inline void Test_Horizon186_RemoteAssistance_SessionShadowing_And_MsraCLI() {
 
     std::cout << "[TEST] Suite 402: Horizon 186 - Sovereign Remote Assistance & Session Shadowing PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 403: Horizon 187 - Sovereign Kernel Anti-Cheat & Process Protection
+//            Subsystem (ObRegisterCallbacks / Handle Stripping / accli.exe)
+// ============================================================================
+inline void Test_Horizon187_KernelAntiCheat_ProcessProtection_And_Accli() {
+    std::cout << "[TEST] Running Suite 403: Horizon 187 - Sovereign Kernel Anti-Cheat & Process Protection..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM Registration & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::anticheat::RegisterAntiCheatSubsystem();
+        auto& mgr = micant::anticheat::AntiCheatManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getVitals().protectedProcessesCount >= 1, "Default protected game process seeded (cod.exe)");
+
+        // SCM Service Verification (AntiCheat)
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto acSvc = scm.getServiceRecord(L"AntiCheat");
+        TEST_ASSERT(acSvc != nullptr, "AntiCheat driver must be registered in SCM");
+        TEST_ASSERT(acSvc->displayName == L"Kernel Anti-Cheat and Memory Protection Filter Driver", "Display name matches");
+        TEST_ASSERT(acSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "Service type is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(acSvc->startType == scm::SERVICE_SYSTEM_START, "Start type is SERVICE_SYSTEM_START");
+        TEST_ASSERT(acSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "Service status is SERVICE_RUNNING");
+
+        // VersionDatabase Module Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "anticheat.sys", "accore.dll", "accli.exe", "acfilter.sys", "acapi.dll", "achook.dll"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Process Protection Table Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::anticheat::AntiCheatManager::get();
+
+        TEST_ASSERT(mgr.isProcessProtected(5400), "PID 5400 (cod.exe) is protected");
+
+        // Protect a new game instance (e.g. valorant.exe PID 6100)
+        bool pOk = mgr.protectProcess(6100, "game.exe", "C:\\Games\\game.exe", micant::anticheat::ProcessProtectionLevel::GamePpl);
+        TEST_ASSERT(pOk, "Protect new process PID 6100");
+        TEST_ASSERT(mgr.isProcessProtected(6100), "PID 6100 is now protected");
+
+        micant::anticheat::ProtectedProcessEntry entry{};
+        TEST_ASSERT(mgr.getProtectedProcess(6100, entry), "Retrieve protected process entry");
+        TEST_ASSERT(entry.processName == "game.exe", "Process name matches");
+        TEST_ASSERT(entry.level == micant::anticheat::ProcessProtectionLevel::GamePpl, "Level matches");
+
+        // Unprotect
+        bool uOk = mgr.unprotectProcess(6100);
+        TEST_ASSERT(uOk, "Unprotect process PID 6100");
+        TEST_ASSERT(!mgr.isProcessProtected(6100), "PID 6100 is no longer protected");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: ObRegisterCallbacks Handle Filtering & Access Mask Stripping
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::anticheat::AntiCheatManager::get();
+
+        // 1. External unauthorized cheat process (PID 9999) attempts full memory read/write on protected game (PID 5400)
+        uint32_t untrustedPid = 9999;
+        uint32_t gamePid = 5400;
+        uint32_t requestedAccess = micant::anticheat::PROCESS_VM_READ |
+                                   micant::anticheat::PROCESS_VM_WRITE |
+                                   micant::anticheat::PROCESS_VM_OPERATION |
+                                   micant::anticheat::PROCESS_CREATE_THREAD |
+                                   micant::anticheat::PROCESS_TERMINATE;
+
+        uint32_t grantedAccess = mgr.filterProcessHandleCreation(untrustedPid, gamePid, requestedAccess);
+
+        TEST_ASSERT((grantedAccess & micant::anticheat::PROCESS_VM_READ) == 0, "PROCESS_VM_READ stripped");
+        TEST_ASSERT((grantedAccess & micant::anticheat::PROCESS_VM_WRITE) == 0, "PROCESS_VM_WRITE stripped");
+        TEST_ASSERT((grantedAccess & micant::anticheat::PROCESS_CREATE_THREAD) == 0, "PROCESS_CREATE_THREAD stripped");
+        TEST_ASSERT((grantedAccess & micant::anticheat::PROCESS_QUERY_LIMITED_INFORMATION) != 0, "PROCESS_QUERY_LIMITED_INFORMATION preserved");
+
+        // 2. Self-access by game process to itself must NOT be stripped
+        uint32_t selfGranted = mgr.filterProcessHandleCreation(gamePid, gamePid, requestedAccess);
+        TEST_ASSERT(selfGranted == requestedAccess, "Self process access preserved without alteration");
+
+        // 3. System process (PID 4) access must NOT be stripped
+        uint32_t systemGranted = mgr.filterProcessHandleCreation(4, gamePid, requestedAccess);
+        TEST_ASSERT(systemGranted == requestedAccess, "System kernel access preserved");
+
+        // 4. Thread handle filtering: strip suspend/resume and context manipulation
+        uint32_t threadDesired = micant::anticheat::THREAD_SET_CONTEXT |
+                                 micant::anticheat::THREAD_SUSPEND_RESUME |
+                                 micant::anticheat::THREAD_TERMINATE;
+        uint32_t threadGranted = mgr.filterThreadHandleCreation(untrustedPid, gamePid, threadDesired);
+        TEST_ASSERT((threadGranted & micant::anticheat::THREAD_SET_CONTEXT) == 0, "THREAD_SET_CONTEXT stripped");
+        TEST_ASSERT((threadGranted & micant::anticheat::THREAD_SUSPEND_RESUME) == 0, "THREAD_SUSPEND_RESUME stripped");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Cross-Process Remote Thread Blocking (CreateRemoteThread)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::anticheat::AntiCheatManager::get();
+
+        // 1. External cheat process (PID 8888) attempts to inject remote thread into game (PID 5400)
+        bool remoteThreadAllowed = mgr.validateThreadCreation(8888, 5400);
+        TEST_ASSERT(!remoteThreadAllowed, "Cross-process remote thread injection must be BLOCKED");
+
+        // 2. Game creating thread in its own process must be allowed
+        bool internalThreadAllowed = mgr.validateThreadCreation(5400, 5400);
+        TEST_ASSERT(internalThreadAllowed, "Internal thread creation in game process must be ALLOWED");
+
+        // 3. System creating thread must be allowed
+        bool systemThreadAllowed = mgr.validateThreadCreation(4, 5400);
+        TEST_ASSERT(systemThreadAllowed, "System kernel thread creation must be ALLOWED");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: DLL Load Image Notification & Overlay Whitelist
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::anticheat::AntiCheatManager::get();
+
+        // 1. Approved overlay (Steam Overlay) -> Allowed
+        bool steamOverlay = mgr.validateImageLoad(5400, "C:\\Steam\\GameOverlayRenderer64.dll", false);
+        TEST_ASSERT(steamOverlay, "Steam overlay DLL is whitelisted and ALLOWED");
+
+        // 2. Approved overlay (Discord) -> Allowed
+        bool discordOverlay = mgr.validateImageLoad(5400, "DiscordHook64.dll", false);
+        TEST_ASSERT(discordOverlay, "Discord overlay DLL is whitelisted and ALLOWED");
+
+        // 3. Trusted digitally signed DLL -> Allowed
+        bool signedDll = mgr.validateImageLoad(5400, "C:\\Windows\\System32\\d3d12.dll", true);
+        TEST_ASSERT(signedDll, "Digitally signed DirectX DLL is ALLOWED");
+
+        // 4. Unsigned unknown cheat hook DLL -> BLOCKED
+        bool cheatDll = mgr.validateImageLoad(5400, "C:\\Cheats\\AimbotHook64.dll", false);
+        TEST_ASSERT(!cheatDll, "Unsigned cheat hook DLL must be BLOCKED");
+
+        // Add custom overlay
+        mgr.addWhitelistedOverlay("CustomAppHud.dll");
+        TEST_ASSERT(mgr.isOverlayWhitelisted("CustomAppHud.dll"), "Custom overlay whitelisted");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports
+    // ------------------------------------------------------------------------
+    {
+        uint32_t count = AntiCheatGetProtectedProcessesCount();
+        TEST_ASSERT(count >= 1, "AntiCheatGetProtectedProcessesCount returns protected processes");
+
+        int32_t protRes = AntiCheatProtectProcess(7777, "TestGame.exe");
+        TEST_ASSERT(protRes == 0, "AntiCheatProtectProcess succeeds via C ABI");
+
+        uint32_t masked = AntiCheatFilterHandleAccess(9999, 7777, micant::anticheat::PROCESS_VM_READ | micant::anticheat::PROCESS_VM_WRITE);
+        TEST_ASSERT((masked & micant::anticheat::PROCESS_VM_READ) == 0, "Handle access filtered via C ABI");
+
+        int32_t threadVal = AntiCheatValidateThreadCreation(9999, 7777);
+        TEST_ASSERT(threadVal != 0, "Remote thread injection rejected via C ABI (-1)");
+
+        int32_t unprotRes = AntiCheatUnprotectProcess(7777);
+        TEST_ASSERT(unprotRes == 0, "AntiCheatUnprotectProcess succeeds via C ABI");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (anticheat/accli), WFP Rule #18701 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI anticheat status
+        std::string out;
+        micant::anticheat_cmd::um::ExecuteAntiCheatString("anticheat status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Kernel Anti-Cheat") != std::string::npos, "CLI anticheat status outputs title");
+        TEST_ASSERT(out.find("Altitude 328000") != std::string::npos, "CLI anticheat status outputs altitude");
+
+        // 2. Canonical CLI anticheat protect
+        out.clear();
+        micant::anticheat_cmd::um::ExecuteAntiCheatString("anticheat protect 8000 ApexLegends.exe", out);
+        TEST_ASSERT(out.find("registered for active kernel anti-cheat protection") != std::string::npos, "CLI anticheat protect");
+
+        // 3. Canonical CLI anticheat test-tamper
+        out.clear();
+        micant::anticheat_cmd::um::ExecuteAntiCheatString("anticheat test-tamper 8000", out);
+        TEST_ASSERT(out.find("Dangerous access bits stripped") != std::string::npos, "CLI anticheat test-tamper");
+
+        // 4. Canonical CLI anticheat test-inject
+        out.clear();
+        micant::anticheat_cmd::um::ExecuteAntiCheatString("anticheat test-inject 8000 BadHook.dll unsigned", out);
+        TEST_ASSERT(out.find("BLOCKED") != std::string::npos, "CLI anticheat test-inject blocks unsigned hook");
+
+        // 5. Canonical CLI anticheat list
+        out.clear();
+        micant::anticheat_cmd::um::ExecuteAntiCheatString("anticheat list", out);
+        TEST_ASSERT(out.find("ApexLegends.exe") != std::string::npos, "CLI anticheat list outputs protected process");
+
+        // 6. Canonical CLI anticheat dump
+        out.clear();
+        micant::anticheat_cmd::um::ExecuteAntiCheatString("anticheat dump", out);
+        TEST_ASSERT(out.find("Set-ProcessMitigation") != std::string::npos, "CLI anticheat dump outputs PowerShell script");
+
+        // 7. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("anticheat status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Kernel Anti-Cheat") != std::string::npos, "Console terminal anticheat status");
+
+        // 8. WFP Inbound Rule #18701 (MicaNT_AntiCheat_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto acRuleOpt = wfp.findRuleById(18701);
+        TEST_ASSERT(acRuleOpt.has_value(), "WFP Rule #18701 for AntiCheat must be registered");
+        TEST_ASSERT(acRuleOpt->protocol == tcpip::IPPROTO_TCP, "AntiCheat protocol is TCP");
+        TEST_ASSERT(acRuleOpt->localPortStart == 3074 && acRuleOpt->localPortEnd == 3074, "Port 3074");
+        TEST_ASSERT(acRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"ac_protected_processes\":") != std::string::npos, "Telemetry ac_protected_processes");
+        TEST_ASSERT(teleJson.find("\"ac_blocked_handle_attempts\":") != std::string::npos, "Telemetry ac_blocked_handle_attempts");
+        TEST_ASSERT(teleJson.find("\"ac_blocked_injections\":") != std::string::npos, "Telemetry ac_blocked_injections");
+        TEST_ASSERT(teleJson.find("\"ac_active_callbacks\":") != std::string::npos, "Telemetry ac_active_callbacks");
+    }
+
+    std::cout << "[HORIZON 187] Sovereign Kernel Anti-Cheat & Process Protection Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Process Protection Table Lifecycle OK\n"
+              << "    Pillar 3: ObRegisterCallbacks Handle Filtering & Access Mask Stripping OK\n"
+              << "    Pillar 4: Cross-Process Remote Thread Blocking OK\n"
+              << "    Pillar 5: DLL Load Image Notification & Overlay Whitelist OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 anticheat CLI, WFP Rule #18701 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 403: Horizon 187 - Sovereign Kernel Anti-Cheat & Process Protection PASSED." << std::endl;
+}
