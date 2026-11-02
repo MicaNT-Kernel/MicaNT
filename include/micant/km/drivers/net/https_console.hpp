@@ -108,6 +108,8 @@
 #include "micant/um/subsystems/mgmt/coresched_cmd.hpp"
 #include "micant/km/drivers/video/resolution_pacer.hpp"
 #include "micant/um/subsystems/mgmt/respace_cmd.hpp"
+#include "micant/km/drivers/compute/game_power.hpp"
+#include "micant/um/subsystems/mgmt/gamepwr_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -637,6 +639,19 @@ public:
         respaceRule.weight = 1500;
         respaceRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(respaceRule);
+
+        // 41. Register WFP Inbound Rule for Gaming Power & Thermal Telemetry (UDP 5100)
+        wfp::km::WfpKernelFilterRule pwrRule{};
+        pwrRule.filterId = 19801;
+        pwrRule.name = "MicaNT_GamePower_Permit";
+        pwrRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        pwrRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        pwrRule.protocol = tcpip::IPPROTO_UDP;
+        pwrRule.localPortStart = 5100;
+        pwrRule.localPortEnd = 5100;
+        pwrRule.weight = 1500;
+        pwrRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(pwrRule);
     }
 
     void stopHttpsServer() {
@@ -1118,6 +1133,8 @@ public:
             return coresched_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "respace" || cmd.starts_with("respace ") || cmd == "respacecli" || cmd.starts_with("respacecli ") || cmd == "antilag" || cmd.starts_with("antilag ")) {
             return respace_cmd::um::ExecuteCommand(cmd);
+        } else if (cmd == "gamepwr" || cmd.starts_with("gamepwr ") || cmd == "gamepwrcli" || cmd.starts_with("gamepwrcli ") || cmd == "pwr" || cmd.starts_with("pwr ")) {
+            return gamepwr_cmd::um::ExecuteCommand(cmd);
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1463,7 +1480,11 @@ public:
            << "\"respace_current_scale_pct\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetCurrentRenderScalePct() << ","
            << "\"respace_target_fps\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetTargetFps() << ","
            << "\"respace_antilag_latency_ms\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetAntiLagLatencyMs() << ","
-           << "\"respace_drs_events_count\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetDrsEventsCount() << "}\r\n";
+           << "\"respace_drs_events_count\":" << micant::res_pacer::ResolutionPacerManager::Instance().GetDrsEventsCount() << ","
+           << "\"gamepwr_profile_mode\":" << micant::game_power::GamePowerSubsystemManager::Instance().GetProfileModeInt() << ","
+           << "\"gamepwr_cpu_clock_mhz\":" << micant::game_power::GamePowerSubsystemManager::Instance().GetCpuClockMhz() << ","
+           << "\"gamepwr_gpu_power_watts\":" << micant::game_power::GamePowerSubsystemManager::Instance().GetGpuPowerWatts() << ","
+           << "\"gamepwr_thermal_headroom_celsius\":" << micant::game_power::GamePowerSubsystemManager::Instance().GetThermalHeadroomCelsius() << "}\r\n";
         return ss.str();
     }
 

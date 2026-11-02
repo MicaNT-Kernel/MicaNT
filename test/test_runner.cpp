@@ -309,6 +309,8 @@
 #include "micant/um/subsystems/mgmt/coresched_cmd.hpp"
 #include "micant/km/drivers/video/resolution_pacer.hpp"
 #include "micant/um/subsystems/mgmt/respace_cmd.hpp"
+#include "micant/km/drivers/compute/game_power.hpp"
+#include "micant/um/subsystems/mgmt/gamepwr_cmd.hpp"
 #include "micant/km/drivers/input/sensorscx.hpp"
 #include "micant/km/drivers/net/mbbcx.hpp"
 #include "micant/um/subsystems/media/pmp.hpp"
@@ -447,6 +449,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite414") {
+        RUN_TEST(Test_Horizon198_SystemPower_ThermalMitigation_And_GamePowerCLI);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite413") {
@@ -2066,6 +2072,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon195_GamingNetworkQos_UdpPacketPacing_And_NetPaceCLI);
     RUN_TEST(Test_Horizon196_HeterogeneousCoreScheduling_VCachePacing_And_CoreSchedCLI);
     RUN_TEST(Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI);
+    RUN_TEST(Test_Horizon198_SystemPower_ThermalMitigation_And_GamePowerCLI);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -39105,5 +39105,170 @@ void Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI() {
     std::cout << "[TEST] Suite 413: Horizon 197 - Sovereign Frame Rate Stabilization & Super-Resolution PASSED." << std::endl;
 }
 
+// ============================================================================
+// SUITE 414: Horizon 198 - Sovereign System Power & Thermal Throttling Mitigation Subsystem
+// ============================================================================
+
+void Test_Horizon198_SystemPower_ThermalMitigation_And_GamePowerCLI() {
+    std::cout << "\n[TEST] Running Suite 414: Horizon 198 - Sovereign System Power & Thermal Mitigation Subsystem...\n";
+
+    auto& mgr = micant::game_power::GamePowerSubsystemManager::Instance();
+    mgr.Initialize();
+
+    // 1. Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    {
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        TEST_ASSERT(vdb.FindModule("gamepwr.sys") != nullptr, "gamepwr.sys must be registered");
+        TEST_ASSERT(vdb.FindModule("gamepwrbroker.exe") != nullptr, "gamepwrbroker.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("gamepwr.dll") != nullptr, "gamepwr.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("thermwatch.dll") != nullptr, "thermwatch.dll must be registered");
+        TEST_ASSERT(vdb.FindModule("gamepwrcli.exe") != nullptr, "gamepwrcli.exe must be registered");
+        TEST_ASSERT(vdb.FindModule("cpugovernor.sys") != nullptr, "cpugovernor.sys must be registered");
+
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto drvRec = scm.getServiceRecord(L"GamePowerDriver");
+        TEST_ASSERT(drvRec != nullptr, "GamePowerDriver must be registered in SCM");
+        TEST_ASSERT(drvRec->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "Driver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drvRec->startType == micant::scm::SERVICE_BOOT_START, "Driver is SERVICE_BOOT_START");
+        TEST_ASSERT(drvRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Driver is SERVICE_RUNNING");
+
+        auto svcRec = scm.getServiceRecord(L"GamePowerBroker");
+        TEST_ASSERT(svcRec != nullptr, "GamePowerBroker must be registered in SCM");
+        TEST_ASSERT(svcRec->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "Service is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svcRec->startType == micant::scm::SERVICE_AUTO_START, "Service is SERVICE_AUTO_START");
+        TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Service is SERVICE_RUNNING");
+    }
+
+    // 2. Pillar 2: Sovereign Gaming Power Profile & Frequency Clamping
+    {
+        mgr.SetProfileMode(micant::game_power::PowerProfileMode::ExtremeGaming);
+        auto cfg = mgr.GetConfig();
+        auto vit = mgr.GetVitals();
+
+        TEST_ASSERT(cfg.profileMode == micant::game_power::PowerProfileMode::ExtremeGaming, "Extreme Gaming mode active");
+        TEST_ASSERT(cfg.energyPerformancePreference == 0, "EPP is 0 (100% max performance)");
+        TEST_ASSERT(cfg.minCpuFreqPct == 100, "Min CPU frequency locked to 100%");
+        TEST_ASSERT(cfg.maxCpuFreqPct == 100, "Max CPU frequency 100%");
+        TEST_ASSERT(cfg.gpuVramClockLocked == true, "GPU VRAM clock locked to P0");
+        TEST_ASSERT(vit.currentCpuClockMhz == 5700, "CPU boost clock locked at 5700 MHz");
+        TEST_ASSERT(vit.currentGpuClockMhz == 2650, "GPU boost clock locked at 2650 MHz");
+
+        // Test mode transition to Balanced
+        mgr.SetProfileMode(micant::game_power::PowerProfileMode::Balanced);
+        cfg = mgr.GetConfig();
+        vit = mgr.GetVitals();
+        TEST_ASSERT(cfg.profileMode == micant::game_power::PowerProfileMode::Balanced, "Balanced mode active");
+        TEST_ASSERT(cfg.energyPerformancePreference == 50, "Balanced EPP is 50%");
+        TEST_ASSERT(vit.currentCpuClockMhz == 3800, "CPU clock dynamically downscaled");
+
+        // Restore ExtremeGaming
+        mgr.SetProfileMode(micant::game_power::PowerProfileMode::ExtremeGaming);
+    }
+
+    // 3. Pillar 3: Zero-Latency C-State Sleep Policy Enforcement
+    {
+        mgr.SetCStatePolicy(micant::game_power::CStatePolicy::C0_ActiveOnly);
+        TEST_ASSERT(mgr.GetConfig().cStatePolicy == micant::game_power::CStatePolicy::C0_ActiveOnly, "C0 Active Only enforced");
+
+        mgr.SetCStatePolicy(micant::game_power::CStatePolicy::C1_HaltOnly);
+        TEST_ASSERT(mgr.GetConfig().cStatePolicy == micant::game_power::CStatePolicy::C1_HaltOnly, "C1 Halt Only enforced");
+
+        mgr.SetCStatePolicy(micant::game_power::CStatePolicy::DeepSleepAllowed);
+        TEST_ASSERT(mgr.GetConfig().cStatePolicy == micant::game_power::CStatePolicy::DeepSleepAllowed, "Deep Sleep Allowed");
+
+        // Restore C0
+        mgr.SetCStatePolicy(micant::game_power::CStatePolicy::C0_ActiveOnly);
+    }
+
+    // 4. Pillar 4: Proactive Thermal Headroom Pacing & Throttling Suppression
+    {
+        uint64_t prevThrottles = mgr.GetThrottleEventsSuppressed();
+        mgr.UpdateThermalTelemetry(75.0f, 68.0f);
+        auto vit = mgr.GetVitals();
+        TEST_ASSERT(vit.cpuTemperatureCelsius == 75.0f, "CPU temperature updated");
+        TEST_ASSERT(vit.gpuTemperatureCelsius == 68.0f, "GPU temperature updated");
+        TEST_ASSERT(vit.thermalHeadroomCelsius == 15.0f, "Thermal headroom calculated (90C TJMax - 75C)");
+        TEST_ASSERT(vit.throttleEventsSuppressed > prevThrottles, "Throttling event suppression incremented");
+        TEST_ASSERT(vit.thermalThrottlingActive == false, "Thermal throttling inactive under normal high load");
+    }
+
+    // 5. Pillar 5: Win32 C ABI Exports
+    {
+        TEST_ASSERT(GamePowerInitialize() == STATUS_SUCCESS, "GamePowerInitialize export");
+        TEST_ASSERT(GamePowerGetProfileMode() == 0, "GamePowerGetProfileMode export");
+        TEST_ASSERT(GamePowerGetCpuClockMhz() == 5700, "GamePowerGetCpuClockMhz export");
+        TEST_ASSERT(GamePowerGetGpuPowerWatts() > 300.0f, "GamePowerGetGpuPowerWatts export");
+        TEST_ASSERT(GamePowerGetThermalHeadroomCelsius() > 0.0f, "GamePowerGetThermalHeadroomCelsius export");
+        TEST_ASSERT(GamePowerGetThrottlesSuppressedCount() > 0, "GamePowerGetThrottlesSuppressedCount export");
+
+        NTSTATUS stMode = GamePowerSetProfileMode(0);
+        TEST_ASSERT(stMode == STATUS_SUCCESS, "GamePowerSetProfileMode export");
+
+        NTSTATUS stEpp = GamePowerSetEpp(0);
+        TEST_ASSERT(stEpp == STATUS_SUCCESS, "GamePowerSetEpp export");
+
+        NTSTATUS stC = GamePowerSetCStatePolicy(0);
+        TEST_ASSERT(stC == STATUS_SUCCESS, "GamePowerSetCStatePolicy export");
+    }
+
+    // 6. Pillar 6: Canonical Win32 gamepwr CLI, WFP Rule #19801 & Telemetry
+    {
+        std::string out;
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr status");
+        TEST_ASSERT(out.find("MicaNT Sovereign Gaming Power & Thermal Throttling Mitigation") != std::string::npos, "CLI gamepwr status banner");
+        TEST_ASSERT(out.find("ACTIVE / ONLINE") != std::string::npos, "CLI gamepwr status active");
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr profile extreme");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI gamepwr profile");
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr epp 0");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI gamepwr epp");
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr cstates c0");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI gamepwr cstates");
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr gputarget 350");
+        TEST_ASSERT(out.find("[SUCCESS]") != std::string::npos, "CLI gamepwr gputarget");
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr benchmark");
+        TEST_ASSERT(out.find("Performance Verdict:") != std::string::npos && out.find("PASSED") != std::string::npos, "CLI gamepwr benchmark");
+
+        out = micant::gamepwr_cmd::um::ExecuteCommand("gamepwr dump");
+        TEST_ASSERT(out.find("GamePowerDriver") != std::string::npos, "CLI gamepwr dump driver");
+
+        // Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("gamepwr status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Gaming Power") != std::string::npos, "Console terminal gamepwr status");
+
+        // WFP Inbound Rule #19801 (MicaNT_GamePower_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto pwrRuleOpt = wfp.findRuleById(19801);
+        TEST_ASSERT(pwrRuleOpt.has_value(), "WFP Rule #19801 for GamePower must be registered");
+        TEST_ASSERT(pwrRuleOpt->protocol == tcpip::IPPROTO_UDP, "GamePower protocol is UDP");
+        TEST_ASSERT(pwrRuleOpt->localPortStart == 5100 && pwrRuleOpt->localPortEnd == 5100, "Port 5100");
+        TEST_ASSERT(pwrRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"gamepwr_profile_mode\":") != std::string::npos, "Telemetry gamepwr_profile_mode");
+        TEST_ASSERT(teleJson.find("\"gamepwr_cpu_clock_mhz\":") != std::string::npos, "Telemetry gamepwr_cpu_clock_mhz");
+        TEST_ASSERT(teleJson.find("\"gamepwr_gpu_power_watts\":") != std::string::npos, "Telemetry gamepwr_gpu_power_watts");
+        TEST_ASSERT(teleJson.find("\"gamepwr_thermal_headroom_celsius\":") != std::string::npos, "Telemetry gamepwr_thermal_headroom_celsius");
+    }
+
+    std::cout << "[HORIZON 198] Sovereign System Power & Thermal Mitigation Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Sovereign Gaming Power Profile & Frequency Clamping OK\n"
+              << "    Pillar 3: Zero-Latency C-State Sleep Policy Enforcement OK\n"
+              << "    Pillar 4: Proactive Thermal Headroom Pacing & Throttling Suppression OK\n"
+              << "    Pillar 5: Win32 C ABI Exports OK\n"
+              << "    Pillar 6: Canonical Win32 gamepwr CLI, WFP Rule #19801 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 414: Horizon 198 - Sovereign System Power & Thermal Mitigation PASSED." << std::endl;
+}
+
 
 
