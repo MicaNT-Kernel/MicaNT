@@ -37732,3 +37732,199 @@ inline void Test_Horizon190_MemoryCompression_StoreManager_And_MemCompCLI() {
 
     std::cout << "[TEST] Suite 406: Horizon 190 - Sovereign Virtual Memory Compression & Store Manager PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 407: Horizon 191 - Sovereign Graphics Pipeline State & Shader Cache Acceleration Subsystem
+// ============================================================================
+void Test_Horizon191_ShaderCache_PipelineState_And_DxCacheCLI() {
+    std::cout << "\n[TEST] Running Suite 407: Horizon 191 - Sovereign Graphics Pipeline State & Shader Cache Acceleration Subsystem..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::shader_cache::RegisterShaderCacheSubsystem();
+
+        // 1. SCM Services Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto drv = scm.getServiceRecord(L"ShaderCacheDriver");
+        TEST_ASSERT(drv != nullptr, "ShaderCacheDriver record exists in SCM");
+        TEST_ASSERT(drv->serviceType == scm::SERVICE_KERNEL_DRIVER, "ShaderCacheDriver is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drv->startType == scm::SERVICE_BOOT_START, "ShaderCacheDriver is SERVICE_BOOT_START");
+        TEST_ASSERT(drv->status.dwCurrentState == scm::SERVICE_RUNNING, "ShaderCacheDriver is SERVICE_RUNNING");
+
+        auto svc = scm.getServiceRecord(L"ShaderBroker");
+        TEST_ASSERT(svc != nullptr, "ShaderBroker service record exists in SCM");
+        TEST_ASSERT(svc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "ShaderBroker is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svc->startType == scm::SERVICE_AUTO_START, "ShaderBroker is SERVICE_AUTO_START");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "ShaderBroker is SERVICE_RUNNING");
+
+        // 2. VersionDatabase PE Module Registration (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "dxilcache.sys", "shaderbroker.exe", "dxcache.dll", "pipelinelib.dll", "dxcachecli.exe", "dxgshadercache.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Seed PSOs & Hash Indexing for Call of Duty (cod.exe)
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::shader_cache::ShaderCacheManager::get();
+        auto stats = mgr.getStats();
+        TEST_ASSERT(stats.totalPsosCached >= 3, "At least 3 seed PSOs cached");
+        TEST_ASSERT(stats.totalCacheHits >= 1420, "Total cache hits seeded");
+        TEST_ASSERT(stats.stuttersPrevented >= 1420, "Stutters prevented seeded");
+        TEST_ASSERT(stats.cacheHitRatio > 0.95f, "Cache hit ratio > 95%");
+
+        auto psos = mgr.getAllPsos();
+        TEST_ASSERT(psos.size() >= 3, "getAllPsos returns indexed records");
+        TEST_ASSERT(psos[0].psoHash < psos[1].psoHash, "PSOs sorted ascending by 64-bit hash");
+        TEST_ASSERT(psos[0].applicationName == "cod.exe", "PSO belongs to cod.exe");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Store & Zero-Stutter Retrieval of Custom Pipeline State Objects
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::shader_cache::ShaderCacheManager::get();
+        uint64_t testPsoHash = 0xBEEFCAFE00000001ULL;
+        uint64_t testRootSig = 0x9988776655443322ULL;
+        std::vector<uint8_t> testBytecode(8192);
+        for (size_t i = 0; i < testBytecode.size(); ++i) {
+            testBytecode[i] = static_cast<uint8_t>((i * 7 + 3) & 0xFF);
+        }
+
+        bool stored = mgr.storePipelineState(
+            testPsoHash, testRootSig,
+            static_cast<uint32_t>(micant::shader_cache::ShaderStage::Compute),
+            testBytecode.data(), static_cast<uint32_t>(testBytecode.size()),
+            "cod.exe", 14000
+        );
+        TEST_ASSERT(stored, "storePipelineState succeeded");
+
+        std::vector<uint8_t> retrievedBytecode(8192, 0);
+        uint32_t outSize = 0;
+        bool retrieved = mgr.retrievePipelineState(
+            testPsoHash, retrievedBytecode.data(), static_cast<uint32_t>(retrievedBytecode.size()), &outSize
+        );
+        TEST_ASSERT(retrieved, "retrievePipelineState succeeded");
+        TEST_ASSERT(outSize == 8192, "Retrieved bytecode size matches original 8192 bytes");
+        TEST_ASSERT(std::equal(testBytecode.begin(), testBytecode.end(), retrievedBytecode.begin()), "Bytecode roundtrip bit-perfect match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Background Shader Pre-Warming Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::shader_cache::ShaderCacheManager::get();
+        uint64_t beforePrewarm = mgr.getStats().totalPrewarmedPsos;
+        uint32_t warmed = mgr.prewarmApplicationShaders("cod.exe");
+        TEST_ASSERT(warmed >= 3, "Pre-warmed at least 3 cod.exe PSOs");
+        TEST_ASSERT(mgr.getStats().totalPrewarmedPsos == beforePrewarm + warmed, "Total pre-warmed counter updated");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Cache Invalidation, Clear & Quota Management
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::shader_cache::ShaderCacheManager::get();
+        mgr.clearCache();
+        TEST_ASSERT(mgr.getStats().totalPsosCached == 0, "clearCache clears all PSOs");
+
+        mgr.reset();
+        TEST_ASSERT(mgr.getStats().totalPsosCached == 3, "reset re-seeds 3 canonical PSOs");
+        TEST_ASSERT(mgr.getStats().maxCacheQuotaBytes == 4294967296ULL, "Default 4 GB cache quota");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports (dxcache.dll & pipelinelib.dll)
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(ShaderCacheGetTotalEntries() >= 3, "C ABI ShaderCacheGetTotalEntries returns >= 3");
+        TEST_ASSERT(ShaderCacheGetHitPercentage() > 90.0f, "C ABI ShaderCacheGetHitPercentage > 90%");
+
+        std::vector<uint8_t> cAbiCode(2048, 0x42);
+        int32_t storeRes = ShaderCacheStorePso(0xFEEDFACE12345678ULL, 0xABCDEF01ULL, 0x01, cAbiCode.data(), 2048, "Game.exe");
+        TEST_ASSERT(storeRes == 0, "C ABI ShaderCacheStorePso succeeds");
+
+        std::vector<uint8_t> outCode(2048, 0);
+        uint32_t outSize = 0;
+        int32_t lookupRes = ShaderCacheLookupPso(0xFEEDFACE12345678ULL, outCode.data(), 2048, &outSize);
+        TEST_ASSERT(lookupRes == 0, "C ABI ShaderCacheLookupPso succeeds");
+        TEST_ASSERT(outSize == 2048, "C ABI lookup retrieved exact size");
+        TEST_ASSERT(std::equal(cAbiCode.begin(), cAbiCode.end(), outCode.begin()), "C ABI lookup bytecode matches original");
+
+        uint32_t pwCount = ShaderCachePrewarm("Game.exe");
+        TEST_ASSERT(pwCount >= 1, "C ABI ShaderCachePrewarm warmed at least 1 PSO");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (dxcache/dxcachecli), WFP Rule #19101 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI dxcache status
+        std::string out;
+        micant::dxcache_cmd::um::ExecuteDxCacheString("dxcache status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Graphics Pipeline State & Shader Cache") != std::string::npos, "CLI dxcache status title");
+        TEST_ASSERT(out.find("Zero-Stutter Lookup") != std::string::npos, "CLI dxcache status hit rate");
+        TEST_ASSERT(out.find("ShaderCacheDriver") != std::string::npos, "CLI dxcache driver name");
+
+        // 2. Canonical CLI dxcache list
+        out.clear();
+        micant::dxcache_cmd::um::ExecuteDxCacheString("dxcache list", out);
+        TEST_ASSERT(out.find("PSO Hash") != std::string::npos, "CLI dxcache list table header");
+        TEST_ASSERT(out.find("cod.exe") != std::string::npos, "CLI dxcache list cod.exe");
+
+        // 3. Canonical CLI dxcache prewarm
+        out.clear();
+        micant::dxcache_cmd::um::ExecuteDxCacheString("dxcache prewarm cod.exe", out);
+        TEST_ASSERT(out.find("Pre-warmed") != std::string::npos, "CLI dxcache prewarm");
+
+        // 4. Canonical CLI dxcache test-pso
+        out.clear();
+        micant::dxcache_cmd::um::ExecuteDxCacheString("dxcache test-pso", out);
+        TEST_ASSERT(out.find("Test PSO Storage & Zero-Stutter Lookup Successful") != std::string::npos, "CLI dxcache test-pso");
+
+        // 5. Canonical CLI dxcache dump
+        out.clear();
+        micant::dxcache_cmd::um::ExecuteDxCacheString("dxcache dump", out);
+        TEST_ASSERT(out.find("ShaderCacheMaxDiskSizeMB") != std::string::npos, "CLI dxcache dump registry value");
+
+        // 6. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("dxcache status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Graphics Pipeline State & Shader Cache") != std::string::npos, "Console terminal dxcache status");
+
+        // 7. WFP Inbound Rule #19101 (MicaNT_ShaderCache_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto dxCacheRuleOpt = wfp.findRuleById(19101);
+        TEST_ASSERT(dxCacheRuleOpt.has_value(), "WFP Rule #19101 for ShaderCache must be registered");
+        TEST_ASSERT(dxCacheRuleOpt->protocol == tcpip::IPPROTO_UDP, "ShaderCache protocol is UDP");
+        TEST_ASSERT(dxCacheRuleOpt->localPortStart == 5065 && dxCacheRuleOpt->localPortEnd == 5065, "Port 5065");
+        TEST_ASSERT(dxCacheRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 8. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"shader_cache_entries\":") != std::string::npos, "Telemetry shader_cache_entries");
+        TEST_ASSERT(teleJson.find("\"shader_cache_hit_pct\":") != std::string::npos, "Telemetry shader_cache_hit_pct");
+        TEST_ASSERT(teleJson.find("\"shader_cache_disk_bytes\":") != std::string::npos, "Telemetry shader_cache_disk_bytes");
+        TEST_ASSERT(teleJson.find("\"shader_cache_stutters_prevented\":") != std::string::npos, "Telemetry shader_cache_stutters_prevented");
+    }
+
+    std::cout << "[HORIZON 191] Sovereign Graphics Pipeline State & Shader Cache Acceleration Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Seed PSOs & Hash Indexing for Call of Duty (cod.exe) OK\n"
+              << "    Pillar 3: Store & Zero-Stutter Retrieval of Custom Pipeline State Objects OK\n"
+              << "    Pillar 4: Background Shader Pre-Warming Engine OK\n"
+              << "    Pillar 5: Cache Invalidation, Clear & Quota Management OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 dxcache CLI, WFP Rule #19101 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 407: Horizon 191 - Sovereign Graphics Pipeline State & Shader Cache Acceleration PASSED." << std::endl;
+}

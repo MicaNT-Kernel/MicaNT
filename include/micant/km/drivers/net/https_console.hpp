@@ -94,6 +94,8 @@
 #include "micant/um/subsystems/mgmt/gpusched_cmd.hpp"
 #include "micant/km/drivers/compute/memcompression.hpp"
 #include "micant/um/subsystems/mgmt/memcomp_cmd.hpp"
+#include "micant/km/drivers/video/shader_cache.hpp"
+#include "micant/um/subsystems/mgmt/dxcache_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -532,6 +534,19 @@ public:
         memcompRule.weight = 1500;
         memcompRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(memcompRule);
+
+        // 34. Register WFP Inbound Rule for Shader Cache & PSO Acceleration Telemetry (UDP 5065)
+        wfp::km::WfpKernelFilterRule dxCacheRule{};
+        dxCacheRule.filterId = 19101;
+        dxCacheRule.name = "MicaNT_ShaderCache_Permit";
+        dxCacheRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        dxCacheRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        dxCacheRule.protocol = tcpip::IPPROTO_UDP;
+        dxCacheRule.localPortStart = 5065;
+        dxCacheRule.localPortEnd = 5065;
+        dxCacheRule.weight = 1500;
+        dxCacheRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(dxCacheRule);
     }
 
     void stopHttpsServer() {
@@ -993,6 +1008,10 @@ public:
             std::string res;
             memcomp_cmd::um::ExecuteMemCompString(cmd, res);
             return res;
+        } else if (cmd == "dxcache" || cmd.starts_with("dxcache ") || cmd == "dxcachecli" || cmd.starts_with("dxcachecli ") || cmd == "shadercache" || cmd.starts_with("shadercache ")) {
+            std::string res;
+            dxcache_cmd::um::ExecuteDxCacheString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1310,7 +1329,11 @@ public:
            << "\"memcomp_saved_bytes\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().totalSavedBytes << ","
            << "\"memcomp_ratio_pct\":" << static_cast<uint32_t>(micant::memcomp::MemoryCompressionManager::get().getVitals().globalSavingsRatio * 100.0f) << ","
            << "\"memcomp_compressed_pages\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().totalPagesCompressed << ","
-           << "\"memcomp_decompress_faults\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().softPageFaultsDecompressed << "}\r\n";
+           << "\"memcomp_decompress_faults\":" << micant::memcomp::MemoryCompressionManager::get().getVitals().softPageFaultsDecompressed << ","
+           << "\"shader_cache_entries\":" << micant::shader_cache::ShaderCacheManager::get().getStats().totalPsosCached << ","
+           << "\"shader_cache_hit_pct\":" << static_cast<uint32_t>(micant::shader_cache::ShaderCacheManager::get().getStats().cacheHitRatio * 100.0f) << ","
+           << "\"shader_cache_disk_bytes\":" << micant::shader_cache::ShaderCacheManager::get().getStats().totalCacheBytesDisk << ","
+           << "\"shader_cache_stutters_prevented\":" << micant::shader_cache::ShaderCacheManager::get().getStats().stuttersPrevented << "}\r\n";
         return ss.str();
     }
 
