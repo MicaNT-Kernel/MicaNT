@@ -80,6 +80,8 @@
 #include "micant/um/subsystems/mgmt/rdgw_cmd.hpp"
 #include "micant/um/servers/rdcb.hpp"
 #include "micant/um/subsystems/mgmt/rdcb_cmd.hpp"
+#include "micant/um/servers/rdwebaccess.hpp"
+#include "micant/um/subsystems/mgmt/rdweb_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -427,6 +429,19 @@ public:
         rdcbRule.weight = 1500;
         rdcbRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(rdcbRule);
+
+        // 27. Register WFP Inbound Rule for RD Web Access (TCP 443 / 80)
+        wfp::km::WfpKernelFilterRule rdwebRule{};
+        rdwebRule.filterId = 18401;
+        rdwebRule.name = "MicaNT_RDWeb_Permit";
+        rdwebRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        rdwebRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        rdwebRule.protocol = tcpip::IPPROTO_TCP;
+        rdwebRule.localPortStart = 443;
+        rdwebRule.localPortEnd = 443;
+        rdwebRule.weight = 1500;
+        rdwebRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(rdwebRule);
     }
 
     void stopHttpsServer() {
@@ -860,6 +875,10 @@ public:
             std::string res;
             rdcb_cmd::um::ExecuteRdcbString(cmd, res);
             return res;
+        } else if (cmd == "rdwebadmin" || cmd.starts_with("rdwebadmin ") || cmd == "rdweb" || cmd.starts_with("rdweb ")) {
+            std::string res;
+            rdweb_cmd::um::ExecuteRdwebString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1147,7 +1166,11 @@ public:
            << "\"rdcb_hosts_registered\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalRegisteredHosts() << ","
            << "\"rdcb_sessions_indexed\":" << micant::rdcb::RdConnectionBrokerManager::get().getIndexedSessionsCount() << ","
            << "\"rdcb_reconnect_routes\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalReconnectsRouted() << ","
-           << "\"rdcb_redirects_issued\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalRedirectsIssued() << "}\r\n";
+           << "\"rdcb_redirects_issued\":" << micant::rdcb::RdConnectionBrokerManager::get().getTotalRedirectsIssued() << ","
+           << "\"rdweb_published_apps\":" << micant::rdweb::RdWebAccessManager::get().getPublishedResourceCount() << ","
+           << "\"rdweb_feed_requests\":" << micant::rdweb::RdWebAccessManager::get().getTotalFeedRequests() << ","
+           << "\"rdweb_webclients_active\":" << micant::rdweb::RdWebAccessManager::get().getTotalWebClientLaunches() << ","
+           << "\"rdweb_signed_rdp_issued\":" << micant::rdweb::RdWebAccessManager::get().getTotalSignedRdpFilesIssued() << "}\r\n";
         return ss.str();
     }
 

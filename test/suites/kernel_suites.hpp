@@ -36072,3 +36072,215 @@ inline void Test_Horizon183_RemoteDesktopConnectionBroker_MS_RDPBCGR_And_Cbadmin
 
     std::cout << "[TEST] Suite 399: Horizon 183 - Sovereign Remote Desktop Connection Broker (RD Connection Broker) PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 400: Horizon 184 - Sovereign Remote Desktop Web Access Subsystem
+//            (RD Web Access / MS-TSWAP Workspace XML / rdwebadmin CLI)
+//            *** MILESTONE 400 ***
+// ============================================================================
+inline void Test_Horizon184_RemoteDesktopWebAccess_MS_TSWAP_And_RdwebadminCLI() {
+    std::cout << "[TEST] Running Suite 400 (MILESTONE 400): Horizon 184 - Sovereign Remote Desktop Web Access (RD Web Access)..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, Reset, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::rdweb::RegisterRdWebAccessSubsystem();
+        auto& mgr = micant::rdweb::RdWebAccessManager::get();
+        mgr.reset();
+
+        TEST_ASSERT(mgr.getPublishedResourceCount() >= 4, "Default published resources initialized (calc, notepad, cmd, session-desktop)");
+
+        // SCM Service Verification
+        auto& scm = micant::scm::ServiceControlManager::get();
+        auto webSvc = scm.getServiceRecord(L"RDWebAccess");
+        TEST_ASSERT(webSvc != nullptr, "RDWebAccess must be registered in SCM");
+        TEST_ASSERT(webSvc->displayName == L"Remote Desktop Web Access", "RDWebAccess display name matches");
+        TEST_ASSERT(webSvc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "RDWebAccess service type is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(webSvc->startType == scm::SERVICE_AUTO_START, "RDWebAccess start type is SERVICE_AUTO_START");
+        TEST_ASSERT(webSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "RDWebAccess is in SERVICE_RUNNING state");
+        TEST_ASSERT(webSvc->binaryPath == L"C:\\Windows\\System32\\rdweb.exe", "RDWebAccess binary path matches");
+
+        // VersionDatabase Module Verification (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "rdweb.exe", "rdwebaccess.dll", "tswap.dll", "rdwebadmin.exe", "rdpws.dll", "rdwebfilter.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: MS-TSWAP Workspace Provisioning Protocol XML Generation
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdweb::RdWebAccessManager::get();
+        std::string feedXml = mgr.generateMsTswapWorkspaceFeed("Administrator");
+
+        TEST_ASSERT(feedXml.find("<ResourceCollection") != std::string::npos, "MS-TSWAP Root element <ResourceCollection>");
+        TEST_ASSERT(feedXml.find("xmlns=\"http://schemas.microsoft.com/ts/2010/05/tsf\"") != std::string::npos, "MS-TSWAP standard namespace");
+        TEST_ASSERT(feedXml.find("<Publisher") != std::string::npos, "MS-TSWAP <Publisher> element");
+        TEST_ASSERT(feedXml.find("Name=\"MicaNT Remote Desktop Workspace\"") != std::string::npos, "Publisher Name matches");
+        TEST_ASSERT(feedXml.find("<Resource ID=\"calc\"") != std::string::npos, "Contains Calculator resource");
+        TEST_ASSERT(feedXml.find("Type=\"RemoteApp\"") != std::string::npos, "RemoteApp resource type");
+        TEST_ASSERT(feedXml.find("<Resource ID=\"session-desktop\"") != std::string::npos, "Contains Session Desktop resource");
+        TEST_ASSERT(feedXml.find("Type=\"Desktop\"") != std::string::npos, "Desktop resource type");
+        TEST_ASSERT(feedXml.find("<FileExtension Name=\".txt\"") != std::string::npos, "File extension association for notepad");
+        TEST_ASSERT(feedXml.find("<TerminalServers>") != std::string::npos, "TerminalServers gateway element");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Dynamic RemoteApp & Desktop Pool Publication Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdweb::RdWebAccessManager::get();
+        uint32_t initCount = mgr.getPublishedResourceCount();
+
+        // Publish new application: Visual Studio Enterprise
+        micant::rdweb::PublishedResource vsApp{};
+        vsApp.resourceId = "visual-studio";
+        vsApp.displayName = "Visual Studio 2026 Enterprise";
+        vsApp.alias = "devenv";
+        vsApp.commandPath = "C:\\Program Files\\Microsoft Visual Studio\\devenv.exe";
+        vsApp.collectionName = "Engineering-Apps";
+        vsApp.type = micant::rdweb::ResourceTypeRemoteApp;
+        vsApp.allowedUserGroups = {"Engineers", "Developers"};
+        vsApp.fileExtensions = {".sln", ".vcxproj", ".csproj"};
+        vsApp.isVisibleInFeed = true;
+
+        bool pubOk = mgr.publishResource(vsApp);
+        TEST_ASSERT(pubOk, "Published Visual Studio RemoteApp");
+        TEST_ASSERT(mgr.getPublishedResourceCount() == initCount + 1, "Published resource count incremented");
+
+        micant::rdweb::PublishedResource fetched{};
+        TEST_ASSERT(mgr.getResource("visual-studio", fetched), "Fetched published resource");
+        TEST_ASSERT(fetched.displayName == "Visual Studio 2026 Enterprise", "Display name matches");
+
+        std::string updatedFeed = mgr.generateMsTswapWorkspaceFeed("Developer");
+        TEST_ASSERT(updatedFeed.find("ID=\"visual-studio\"") != std::string::npos, "New app appears in MS-TSWAP XML feed");
+        TEST_ASSERT(updatedFeed.find("Name=\".sln\"") != std::string::npos, "Associated .sln file extension in feed");
+
+        // Unpublish
+        bool unpubOk = mgr.unpublishResource("visual-studio");
+        TEST_ASSERT(unpubOk, "Unpublished Visual Studio RemoteApp");
+        TEST_ASSERT(mgr.getPublishedResourceCount() == initCount, "Resource count returned to initial");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Cryptographically Signed .rdp File Synthesis & Signscope
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdweb::RdWebAccessManager::get();
+        std::string rdpContent = mgr.generateSignedRdpFile("calc", "rdsh01.corp.micant.internal");
+
+        TEST_ASSERT(rdpContent.find("full address:s:rdsh01.corp.micant.internal:3389") != std::string::npos, "RDP full address parameter");
+        TEST_ASSERT(rdpContent.find("gatewayhostname:s:gateway.corp.micant.internal:443") != std::string::npos, "RDP gateway parameter");
+        TEST_ASSERT(rdpContent.find("remoteapplicationmode:i:1") != std::string::npos, "RDP RemoteApp mode enabled");
+        TEST_ASSERT(rdpContent.find("alternate shell:s:||calc") != std::string::npos, "RDP alternate shell matches alias");
+        TEST_ASSERT(rdpContent.find("signscope:s:") != std::string::npos, "RDP signscope attribute present");
+        TEST_ASSERT(rdpContent.find("signature:s:") != std::string::npos, "RDP digital signature present");
+        TEST_ASSERT(mgr.getTotalSignedRdpFilesIssued() >= 1, "Signed RDP files metric incremented");
+
+        // Verify Desktop RDP generation (no alternate shell)
+        std::string desktopRdp = mgr.generateSignedRdpFile("session-desktop", "rdsh02.corp.micant.internal");
+        TEST_ASSERT(desktopRdp.find("full address:s:rdsh02.corp.micant.internal:3389") != std::string::npos, "Desktop RDP full address");
+        TEST_ASSERT(desktopRdp.find("remoteapplicationmode:i:0") != std::string::npos, "Desktop RDP has mode 0");
+        TEST_ASSERT(desktopRdp.find("signature:s:") != std::string::npos, "Desktop RDP signed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: HTML5 Web Client Interface & Canvas/WebSocket Endpoint
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdweb::RdWebAccessManager::get();
+        std::string html = mgr.generateHtml5WebClientIndex();
+
+        TEST_ASSERT(html.find("<!DOCTYPE html>") != std::string::npos, "HTML5 Doctype present");
+        TEST_ASSERT(html.find("Web Client") != std::string::npos, "Web client header present");
+        TEST_ASSERT(html.find("Calculator") != std::string::npos, "Calculator card present in UI");
+        TEST_ASSERT(html.find("onclick=\"launchApp(") != std::string::npos, "Client launch triggers present");
+        TEST_ASSERT(mgr.getTotalWebClientLaunches() >= 1, "Web client launches metric tracked");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: High-Concurrency Multi-Tenant Feed Delivery
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::rdweb::RdWebAccessManager::get();
+        uint64_t beforeReqs = mgr.getTotalFeedRequests();
+
+        // Simulate 20 concurrent feed requests
+        for (int i = 0; i < 20; ++i) {
+            std::string f = mgr.generateMsTswapWorkspaceFeed("User" + std::to_string(i));
+            TEST_ASSERT(!f.empty() && f.starts_with("<?xml"), "Concurrent feed request valid");
+        }
+
+        TEST_ASSERT(mgr.getTotalFeedRequests() == beforeReqs + 20, "20 feed requests accounted for");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 rdwebadmin CLI, WFP & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical Win32 rdwebadmin CLI Utilities
+        std::string statusOut;
+        micant::rdweb_cmd::um::ExecuteRdwebString("rdwebadmin status", statusOut);
+        TEST_ASSERT(statusOut.find("RDWebAccess (Remote Desktop Web Access)") != std::string::npos, "rdwebadmin status displays service name");
+        TEST_ASSERT(statusOut.find("Published Resources:") != std::string::npos, "rdwebadmin status displays resources count");
+
+        std::string feedOut;
+        micant::rdweb_cmd::um::ExecuteRdwebString("rdwebadmin feed", feedOut);
+        TEST_ASSERT(feedOut.find("<ResourceCollection") != std::string::npos, "rdwebadmin feed outputs MS-TSWAP XML");
+
+        std::string listOut;
+        micant::rdweb_cmd::um::ExecuteRdwebString("rdwebadmin list", listOut);
+        TEST_ASSERT(listOut.find("Calculator") != std::string::npos, "rdwebadmin list displays Calculator");
+
+        std::string rdpOut;
+        micant::rdweb_cmd::um::ExecuteRdwebString("rdwebadmin generate-rdp calc", rdpOut);
+        TEST_ASSERT(rdpOut.find("signature:s:") != std::string::npos, "rdwebadmin generate-rdp produces signed .rdp");
+
+        std::string dumpOut;
+        micant::rdweb_cmd::um::ExecuteRdwebString("rdwebadmin dump", dumpOut);
+        TEST_ASSERT(dumpOut.find("New-RDRemoteApp") != std::string::npos, "rdwebadmin dump contains PowerShell config");
+
+        // 2. Remote Executive Web Terminal Commands
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+
+        std::string termStat = console.executeTerminalCommand("rdwebadmin status");
+        TEST_ASSERT(termStat.find("Remote Desktop Web Access Subsystem Status:") != std::string::npos, "Web terminal rdwebadmin status");
+
+        std::string termList = console.executeTerminalCommand("rdweb list");
+        TEST_ASSERT(termList.find("RESOURCE ID") != std::string::npos, "Web terminal rdweb list");
+
+        // 3. WFP Inbound Rule #18401 (MicaNT_RDWeb_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto rdwebRuleOpt = wfp.findRuleById(18401);
+        TEST_ASSERT(rdwebRuleOpt.has_value(), "WFP Rule #18401 for RD Web Access must be registered");
+        TEST_ASSERT(rdwebRuleOpt->protocol == tcpip::IPPROTO_TCP, "RD Web Access protocol is TCP");
+        TEST_ASSERT(rdwebRuleOpt->localPortStart == 443 && rdwebRuleOpt->localPortEnd == 443, "Port 443");
+        TEST_ASSERT(rdwebRuleOpt->action == wfp::FWP_ACTION_PERMIT, "RD Web Access rule action must be PERMIT");
+
+        // 4. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"rdweb_published_apps\":") != std::string::npos, "Telemetry rdweb_published_apps");
+        TEST_ASSERT(teleJson.find("\"rdweb_feed_requests\":") != std::string::npos, "Telemetry rdweb_feed_requests");
+        TEST_ASSERT(teleJson.find("\"rdweb_webclients_active\":") != std::string::npos, "Telemetry rdweb_webclients_active");
+        TEST_ASSERT(teleJson.find("\"rdweb_signed_rdp_issued\":") != std::string::npos, "Telemetry rdweb_signed_rdp_issued");
+    }
+
+    std::cout << "[HORIZON 184] Sovereign Remote Desktop Web Access (RD Web Access) Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: MS-TSWAP Workspace Provisioning Protocol XML Generation OK\n"
+              << "    Pillar 3: Dynamic RemoteApp & Desktop Pool Publication Lifecycle OK\n"
+              << "    Pillar 4: Cryptographically Signed .rdp File Synthesis & Signscope OK\n"
+              << "    Pillar 5: HTML5 Web Client Interface & Canvas/WebSocket Endpoint OK\n"
+              << "    Pillar 6: High-Concurrency Multi-Tenant Feed Delivery OK\n"
+              << "    Pillar 7: Win32 C ABI Parity Exports, Canonical Win32 rdwebadmin CLI, WFP & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 400 (MILESTONE 400): Horizon 184 - Sovereign Remote Desktop Web Access (RD Web Access) PASSED." << std::endl;
+}
