@@ -21,6 +21,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <unordered_map>
+#include <deque>
+#include <vector>
+#include <functional>
+#include <atomic>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/native/ntdll.hpp"
@@ -96,10 +100,54 @@ union INIT_ONCE {
 using LPINIT_ONCE = INIT_ONCE*;
 using PINIT_ONCE_FN = BOOL (*)(LPINIT_ONCE, void*, void**);
 
-using PTP_WORK = void*;
-using PTP_WORK_CALLBACK = void (*)(void*, void*, void*);
-using PTP_CALLBACK_ENVIRON = void*;
-using PTP_CALLBACK_INSTANCE = void*;
+struct FILETIME;
+
+struct TP_POOL;
+using PTP_POOL = TP_POOL*;
+
+struct TP_CLEANUP_GROUP;
+using PTP_CLEANUP_GROUP = TP_CLEANUP_GROUP*;
+
+struct TP_CALLBACK_INSTANCE;
+using PTP_CALLBACK_INSTANCE = TP_CALLBACK_INSTANCE*;
+
+struct TP_WORK;
+using PTP_WORK = TP_WORK*;
+
+struct TP_TIMER;
+using PTP_TIMER = TP_TIMER*;
+
+struct TP_WAIT;
+using PTP_WAIT = TP_WAIT*;
+
+using TP_WAIT_RESULT = ULONG;
+
+using PTP_WORK_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+using PTP_TIMER_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_TIMER Timer);
+using PTP_WAIT_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WAIT Wait, TP_WAIT_RESULT WaitResult);
+using PTP_CLEANUP_GROUP_CANCEL_CALLBACK = void (WINAPI *)(PVOID ObjectContext, PVOID CleanupContext);
+
+struct TP_CALLBACK_ENVIRON_V3 {
+    ULONG Version;
+    PTP_POOL Pool;
+    PTP_CLEANUP_GROUP CleanupGroup;
+    PTP_CLEANUP_GROUP_CANCEL_CALLBACK CleanupGroupCancelCallback;
+    PVOID RaceDll;
+    void* ActivationContext;
+    PVOID FinalizationCallback;
+    union {
+        DWORD Flags;
+        struct {
+            DWORD LongFunction : 1;
+            DWORD Persistent : 1;
+            DWORD Private : 30;
+        } s;
+    } u;
+    ULONG CallbackPriority;
+    ULONG Size;
+};
+using TP_CALLBACK_ENVIRON = TP_CALLBACK_ENVIRON_V3;
+using PTP_CALLBACK_ENVIRON = TP_CALLBACK_ENVIRON*;
 
 struct PROCESSENTRY32W {
     DWORD dwSize{sizeof(PROCESSENTRY32W)};
@@ -420,6 +468,55 @@ inline HLOCAL LocalFree(HLOCAL hMem) noexcept {
     return nullptr;
 }
 
+// Extended Virtual Allocation Parameters & Placeholder Flags
+inline constexpr DWORD MEM_REPLACE_PLACEHOLDER  = 0x00004000;
+inline constexpr DWORD MEM_RESERVE_PLACEHOLDER  = 0x00040000;
+inline constexpr DWORD MEM_PRESERVE_PLACEHOLDER = 0x00000002;
+
+enum MEM_EXTENDED_PARAMETER_TYPE {
+    MemExtendedParameterInvalidType = 0,
+    MemExtendedParameterAddressRequirements = 1,
+    MemExtendedParameterNumaNode = 2,
+    MemExtendedParameterPartitionHandle = 3,
+    MemExtendedParameterUserPhysicalHandle = 4,
+    MemExtendedParameterAttributeFlags = 5,
+    MemExtendedParameterImageMachine = 6,
+    MemExtendedParameterMax = 7
+};
+
+struct MEM_ADDRESS_REQUIREMENTS {
+    PVOID  LowestStartingAddress{nullptr};
+    PVOID  HighestEndingAddress{nullptr};
+    SIZE_T Alignment{0};
+};
+using PMEM_ADDRESS_REQUIREMENTS = MEM_ADDRESS_REQUIREMENTS*;
+
+struct MEM_EXTENDED_PARAMETER {
+    struct {
+        uint64_t Type : 8;
+        uint64_t Reserved : 56;
+    };
+    union {
+        uint64_t ULong64;
+        PVOID    Pointer;
+        SIZE_T   Size;
+        HANDLE   Handle;
+        ULONG    ULong;
+    };
+};
+using PMEM_EXTENDED_PARAMETER = MEM_EXTENDED_PARAMETER*;
+
+namespace detail {
+    struct PlaceholderEntry {
+        uintptr_t baseAddress{0};
+        size_t size{0};
+        bool isPlaceholder{true};
+        std::unordered_map<uintptr_t, size_t> committedSlices;
+    };
+    inline std::mutex s_placeholderMutex;
+    inline std::unordered_map<uintptr_t, PlaceholderEntry> s_placeholders;
+}
+
 /**
  * @brief Reserves, commits, or changes the state of a region of pages in virtual memory.
  */
@@ -451,6 +548,173 @@ inline BOOL VirtualFree(LPVOID lpAddress, SIZE_T dwSize, DWORD dwFreeType) noexc
         dwFreeType
     );
     return NT_SUCCESS(status) ? TRUE : FALSE;
+}
+
+/**
+ * @brief Reserves, commits, or changes the state of a region of pages within the virtual address space of a specified process with extended parameters (Win10 build 17093+ / Server 2019+).
+ */
+inline PVOID WINAPI VirtualAlloc2(
+    HANDLE Process,
+    PVOID BaseAddress,
+    SIZE_T Size,
+    DWORD AllocationType,
+    DWORD PageProtection,
+    MEM_EXTENDED_PARAMETER* ExtendedParameters,
+    ULONG ParameterCount
+) noexcept {
+    (void)Process;
+    uintptr_t targetBase = reinterpret_cast<uintptr_t>(BaseAddress);
+    SIZE_T targetSize = Size;
+
+    if (ExtendedParameters && ParameterCount > 0) {
+        for (ULONG i = 0; i < ParameterCount; ++i) {
+            if (ExtendedParameters[i].Type == MemExtendedParameterAddressRequirements) {
+                auto* req = reinterpret_cast<MEM_ADDRESS_REQUIREMENTS*>(ExtendedParameters[i].Pointer);
+                if (req && req->Alignment > 0 && targetBase == 0) {
+                    size_t align = req->Alignment;
+                    targetSize = (targetSize + align - 1) & ~(align - 1);
+                }
+            }
+        }
+    }
+
+    if (AllocationType & MEM_RESERVE_PLACEHOLDER) {
+        LPVOID res = VirtualAlloc(reinterpret_cast<LPVOID>(targetBase), targetSize, MEM_RESERVE, PageProtection);
+        if (res) {
+            std::lock_guard<std::mutex> lock(detail::s_placeholderMutex);
+            detail::PlaceholderEntry pe{};
+            pe.baseAddress = reinterpret_cast<uintptr_t>(res);
+            pe.size = targetSize;
+            pe.isPlaceholder = true;
+            detail::s_placeholders[pe.baseAddress] = std::move(pe);
+        }
+        return res;
+    }
+
+    if (AllocationType & MEM_REPLACE_PLACEHOLDER) {
+        std::lock_guard<std::mutex> lock(detail::s_placeholderMutex);
+        for (auto& [bAddr, pe] : detail::s_placeholders) {
+            if (targetBase >= pe.baseAddress && (targetBase + targetSize) <= (pe.baseAddress + pe.size)) {
+                pe.committedSlices[targetBase] = targetSize;
+                break;
+            }
+        }
+        DWORD pureAlloc = AllocationType & ~MEM_REPLACE_PLACEHOLDER;
+        if (pureAlloc == 0) pureAlloc = MEM_COMMIT;
+        return VirtualAlloc(reinterpret_cast<LPVOID>(targetBase), targetSize, pureAlloc, PageProtection);
+    }
+
+    return VirtualAlloc(reinterpret_cast<LPVOID>(targetBase), targetSize, AllocationType, PageProtection);
+}
+
+/**
+ * @brief Reserves, commits, or changes the state of a region of pages within the virtual address space of a process with app container restrictions.
+ */
+inline PVOID WINAPI VirtualAlloc2FromApp(
+    HANDLE Process,
+    PVOID BaseAddress,
+    SIZE_T Size,
+    DWORD AllocationType,
+    DWORD PageProtection,
+    MEM_EXTENDED_PARAMETER* ExtendedParameters,
+    ULONG ParameterCount
+) noexcept {
+    if (PageProtection == PAGE_EXECUTE_READWRITE) {
+        return nullptr;
+    }
+    return VirtualAlloc2(Process, BaseAddress, Size, AllocationType, PageProtection, ExtendedParameters, ParameterCount);
+}
+
+/**
+ * @brief Reserves, commits, or changes the state of a region of memory within the virtual address space of a specified process.
+ */
+inline LPVOID WINAPI VirtualAllocEx(
+    HANDLE hProcess,
+    LPVOID lpAddress,
+    SIZE_T dwSize,
+    DWORD flAllocationType,
+    DWORD flProtect
+) noexcept {
+    return VirtualAlloc2(hProcess, lpAddress, dwSize, flAllocationType, flProtect, nullptr, 0);
+}
+
+/**
+ * @brief Releases, decommits, or releases and decommits a region of memory within the virtual address space of a specified process.
+ */
+inline BOOL WINAPI VirtualFreeEx(
+    HANDLE hProcess,
+    LPVOID lpAddress,
+    SIZE_T dwSize,
+    DWORD dwFreeType
+) noexcept {
+    (void)hProcess;
+    uintptr_t target = reinterpret_cast<uintptr_t>(lpAddress);
+    if (dwFreeType & MEM_PRESERVE_PLACEHOLDER) {
+        std::lock_guard<std::mutex> lock(detail::s_placeholderMutex);
+        for (auto& [bAddr, pe] : detail::s_placeholders) {
+            auto it = pe.committedSlices.find(target);
+            if (it != pe.committedSlices.end()) {
+                pe.committedSlices.erase(it);
+                break;
+            }
+        }
+        return VirtualFree(lpAddress, dwSize, MEM_DECOMMIT);
+    }
+
+    if (dwFreeType == MEM_RELEASE) {
+        std::lock_guard<std::mutex> lock(detail::s_placeholderMutex);
+        detail::s_placeholders.erase(target);
+    }
+
+    return VirtualFree(lpAddress, dwSize, dwFreeType);
+}
+
+/**
+ * @brief Locks the specified region of the process's virtual address space into physical memory (working set).
+ */
+inline BOOL WINAPI VirtualLock(LPVOID lpAddress, SIZE_T dwSize) noexcept {
+    if (!lpAddress || dwSize == 0) return FALSE;
+    return TRUE;
+}
+
+/**
+ * @brief Unlocks a specified range of pages in the virtual address space of a process.
+ */
+inline BOOL WINAPI VirtualUnlock(LPVOID lpAddress, SIZE_T dwSize) noexcept {
+    if (!lpAddress || dwSize == 0) return FALSE;
+    return TRUE;
+}
+
+/**
+ * @brief Retrieves the minimum and maximum working set sizes for the specified process.
+ */
+inline BOOL WINAPI GetProcessWorkingSetSizeEx(
+    HANDLE hProcess,
+    SIZE_T* lpMinimumWorkingSetSize,
+    SIZE_T* lpMaximumWorkingSetSize,
+    DWORD* lpFlags
+) noexcept {
+    (void)hProcess;
+    if (lpMinimumWorkingSetSize) *lpMinimumWorkingSetSize = 50 * 4096;
+    if (lpMaximumWorkingSetSize) *lpMaximumWorkingSetSize = 345 * 4096;
+    if (lpFlags) *lpFlags = 0;
+    return TRUE;
+}
+
+/**
+ * @brief Sets the minimum and maximum working set sizes for the specified process.
+ */
+inline BOOL WINAPI SetProcessWorkingSetSizeEx(
+    HANDLE hProcess,
+    SIZE_T dwMinimumWorkingSetSize,
+    SIZE_T dwMaximumWorkingSetSize,
+    DWORD dwFlags
+) noexcept {
+    (void)hProcess;
+    (void)dwMinimumWorkingSetSize;
+    (void)dwMaximumWorkingSetSize;
+    (void)dwFlags;
+    return TRUE;
 }
 
 // ============================================================================
@@ -2190,6 +2454,26 @@ inline BOOL UnmapViewOfFile(LPCVOID lpBaseAddress) noexcept {
     return NT_SUCCESS(status) ? TRUE : FALSE;
 }
 
+/**
+ * @brief Maps a view of a file mapping into the address space of a specified process with NUMA node preference.
+ */
+inline PVOID WINAPI MapViewOfFileNuma2(
+    HANDLE FileMappingHandle,
+    HANDLE ProcessHandle,
+    uint64_t Offset,
+    PVOID BaseAddress,
+    SIZE_T ViewSize,
+    ULONG AllocationType,
+    ULONG PageProtection,
+    ULONG PreferredNode
+) noexcept {
+    (void)ProcessHandle;
+    (void)AllocationType;
+    (void)PreferredNode;
+    (void)BaseAddress;
+    return MapViewOfFile(FileMappingHandle, PageProtection, static_cast<DWORD>(Offset >> 32), static_cast<DWORD>(Offset & 0xFFFFFFFF), ViewSize);
+}
+
 
 // ============================================================================
 // 16. Process & Thread Operations
@@ -3529,14 +3813,528 @@ inline BOOL InitOnceExecuteOnce(LPINIT_ONCE InitOnce, PINIT_ONCE_FN InitFn, PVOI
     return TRUE;
 }
 
-// Threadpool Work APIs
-inline PTP_WORK CreateThreadpoolWork(PTP_WORK_CALLBACK /*pfnwk*/, PVOID /*pv*/, PTP_CALLBACK_ENVIRON /*pcbe*/) noexcept {
-    static uint64_t dummyWork = 0x1234;
-    return reinterpret_cast<PTP_WORK>(&dummyWork);
+// ============================================================================
+// Windows NT Native Threadpool Execution Subsystem
+// ============================================================================
+
+struct TP_CALLBACK_INSTANCE {
+    PVOID Reserved{nullptr};
+};
+
+struct TP_POOL {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::condition_variable drainCv;
+    std::vector<std::thread> workers;
+    std::deque<std::function<void()>> workQueue;
+    DWORD minThreads{2};
+    DWORD maxThreads{8};
+    std::atomic<bool> shutdown{false};
+
+    TP_POOL() {
+        startWorkers(minThreads);
+    }
+    ~TP_POOL() {
+        shutdownPool();
+    }
+    void startWorkers(DWORD count) {
+        if (count == 0) count = 1;
+        for (DWORD i = 0; i < count; ++i) {
+            workers.emplace_back([this]() {
+                workerLoop();
+            });
+        }
+    }
+    void workerLoop() {
+        while (!shutdown.load(std::memory_order_relaxed)) {
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lock(mtx);
+                cv.wait(lock, [this]() {
+                    return shutdown.load(std::memory_order_relaxed) || !workQueue.empty();
+                });
+                if (shutdown.load(std::memory_order_relaxed) && workQueue.empty()) return;
+                if (!workQueue.empty()) {
+                    task = std::move(workQueue.front());
+                    workQueue.pop_front();
+                }
+            }
+            if (task) {
+                task();
+                drainCv.notify_all();
+            }
+        }
+    }
+    void enqueue(std::function<void()> task) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            workQueue.push_back(std::move(task));
+        }
+        cv.notify_one();
+    }
+    void shutdownPool() {
+        bool expected = false;
+        if (shutdown.compare_exchange_strong(expected, true)) {
+            cv.notify_all();
+            for (auto& t : workers) {
+                if (t.joinable()) t.join();
+            }
+            workers.clear();
+        }
+    }
+};
+
+namespace detail {
+    struct DefaultThreadPoolHolder {
+        std::unique_ptr<TP_POOL> pool;
+        std::mutex mtx;
+
+        TP_POOL* get() {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!pool) {
+                pool = std::make_unique<TP_POOL>();
+            }
+            return pool.get();
+        }
+    };
+    inline DefaultThreadPoolHolder s_defaultPool;
 }
-inline void SubmitThreadpoolWork(PTP_WORK /*pwk*/) noexcept {}
-inline void CloseThreadpoolWork(PTP_WORK /*pwk*/) noexcept {}
-inline void FreeLibraryWhenCallbackReturns(PTP_CALLBACK_INSTANCE /*pci*/, HMODULE /*mod*/) noexcept {}
+
+inline PTP_POOL WINAPI CreateThreadpool(PVOID /*reserved*/) noexcept {
+    return new TP_POOL();
+}
+
+inline void WINAPI SetThreadpoolThreadMaximum(PTP_POOL ptpp, DWORD cthrdMost) noexcept {
+    if (ptpp) ptpp->maxThreads = cthrdMost;
+}
+
+inline BOOL WINAPI SetThreadpoolThreadMinimum(PTP_POOL ptpp, DWORD cthrdMic) noexcept {
+    if (!ptpp) return FALSE;
+    ptpp->minThreads = cthrdMic;
+    return TRUE;
+}
+
+inline void WINAPI CloseThreadpool(PTP_POOL ptpp) noexcept {
+    if (ptpp) {
+        ptpp->shutdownPool();
+        delete ptpp;
+    }
+}
+
+// Threadpool Work APIs
+struct TP_WORK {
+    PTP_WORK_CALLBACK callback{nullptr};
+    PVOID context{nullptr};
+    PTP_POOL pool{nullptr};
+    std::atomic<int32_t> pendingCount{0};
+    std::mutex completionMtx;
+    std::condition_variable completionCv;
+    std::atomic<bool> cancelled{false};
+};
+
+inline PTP_WORK WINAPI CreateThreadpoolWork(PTP_WORK_CALLBACK pfnwk, PVOID pv, PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (!pfnwk) return nullptr;
+    auto* work = new TP_WORK();
+    work->callback = pfnwk;
+    work->context = pv;
+    if (pcbe && pcbe->Pool) {
+        work->pool = pcbe->Pool;
+    } else {
+        work->pool = detail::s_defaultPool.get();
+    }
+    return work;
+}
+
+inline void WINAPI SubmitThreadpoolWork(PTP_WORK pwk) noexcept {
+    if (!pwk || !pwk->pool) return;
+    pwk->pendingCount.fetch_add(1, std::memory_order_relaxed);
+    pwk->pool->enqueue([pwk]() {
+        if (!pwk->cancelled.load(std::memory_order_relaxed)) {
+            TP_CALLBACK_INSTANCE inst{};
+            pwk->callback(&inst, pwk->context, pwk);
+        }
+        int32_t rem = pwk->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (rem <= 0) {
+            std::lock_guard<std::mutex> lock(pwk->completionMtx);
+            pwk->completionCv.notify_all();
+        }
+    });
+}
+
+inline void WINAPI WaitForThreadpoolWorkCallbacks(PTP_WORK pwk, BOOL fCancelPendingCallbacks) noexcept {
+    if (!pwk) return;
+    if (fCancelPendingCallbacks) {
+        pwk->cancelled.store(true, std::memory_order_release);
+    }
+    std::unique_lock<std::mutex> lock(pwk->completionMtx);
+    pwk->completionCv.wait(lock, [pwk]() {
+        return pwk->pendingCount.load(std::memory_order_acquire) <= 0;
+    });
+    if (fCancelPendingCallbacks) {
+        pwk->cancelled.store(false, std::memory_order_release);
+    }
+}
+
+inline void WINAPI CloseThreadpoolWork(PTP_WORK pwk) noexcept {
+    if (!pwk) return;
+    WaitForThreadpoolWorkCallbacks(pwk, TRUE);
+    delete pwk;
+}
+
+inline void WINAPI FreeLibraryWhenCallbackReturns(PTP_CALLBACK_INSTANCE /*pci*/, HMODULE /*mod*/) noexcept {}
+
+// Threadpool Timer APIs
+struct TP_TIMER {
+    PTP_TIMER_CALLBACK callback{nullptr};
+    PVOID context{nullptr};
+    PTP_POOL pool{nullptr};
+    std::atomic<bool> isSet{false};
+    std::atomic<bool> cancelled{false};
+    std::atomic<int32_t> pendingCount{0};
+    std::mutex completionMtx;
+    std::condition_variable completionCv;
+    std::unique_ptr<std::thread> timerThread;
+    std::mutex timerMtx;
+    std::condition_variable timerCv;
+    bool stopThread{false};
+    std::chrono::steady_clock::time_point dueTimePoint;
+    DWORD periodMs{0};
+};
+
+inline PTP_TIMER WINAPI CreateThreadpoolTimer(PTP_TIMER_CALLBACK pfnti, PVOID pv, PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (!pfnti) return nullptr;
+    auto* timer = new TP_TIMER();
+    timer->callback = pfnti;
+    timer->context = pv;
+    if (pcbe && pcbe->Pool) {
+        timer->pool = pcbe->Pool;
+    } else {
+        timer->pool = detail::s_defaultPool.get();
+    }
+    return timer;
+}
+
+inline void WINAPI SetThreadpoolTimer(PTP_TIMER pti, const FILETIME* pftDueTime, DWORD msPeriod, DWORD /*msWindowLength*/) noexcept {
+    if (!pti) return;
+    {
+        std::lock_guard<std::mutex> lock(pti->timerMtx);
+        if (!pftDueTime) {
+            pti->isSet.store(false, std::memory_order_release);
+            pti->timerCv.notify_all();
+            return;
+        }
+
+        pti->periodMs = msPeriod;
+        auto* ft = reinterpret_cast<const uint32_t*>(pftDueTime);
+        int64_t due64 = static_cast<int64_t>((static_cast<uint64_t>(ft[1]) << 32) | ft[0]);
+
+        // Immediate one-shot dispatch optimization
+        if (due64 <= 0 && msPeriod == 0) {
+            pti->isSet.store(true, std::memory_order_release);
+            pti->cancelled.store(false, std::memory_order_release);
+            pti->pendingCount.fetch_add(1, std::memory_order_relaxed);
+            pti->pool->enqueue([pti]() {
+                if (!pti->cancelled.load(std::memory_order_relaxed)) {
+                    TP_CALLBACK_INSTANCE inst{};
+                    pti->callback(&inst, pti->context, pti);
+                }
+                pti->isSet.store(false, std::memory_order_release);
+                int32_t rem = pti->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+                if (rem <= 0) {
+                    std::lock_guard<std::mutex> lk(pti->completionMtx);
+                    pti->completionCv.notify_all();
+                }
+            });
+            return;
+        }
+
+        int64_t delayMs = 0;
+        if (due64 < 0) {
+            delayMs = (-due64) / 10000;
+        } else if (due64 == 0) {
+            delayMs = 0;
+        } else {
+            delayMs = 10;
+        }
+        pti->dueTimePoint = std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+        pti->isSet.store(true, std::memory_order_release);
+        pti->cancelled.store(false, std::memory_order_release);
+
+        if (!pti->timerThread) {
+            pti->timerThread = std::make_unique<std::thread>([pti]() {
+                while (true) {
+                    std::unique_lock<std::mutex> lock(pti->timerMtx);
+                    pti->timerCv.wait(lock, [pti]() {
+                        return pti->stopThread || pti->isSet.load(std::memory_order_relaxed);
+                    });
+                    if (pti->stopThread) return;
+
+                    pti->timerCv.wait_until(lock, pti->dueTimePoint, [pti]() {
+                        return pti->stopThread || !pti->isSet.load(std::memory_order_relaxed);
+                    });
+                    if (pti->stopThread) return;
+                    if (!pti->isSet.load(std::memory_order_relaxed)) continue;
+
+                    if (std::chrono::steady_clock::now() >= pti->dueTimePoint) {
+                        pti->pendingCount.fetch_add(1, std::memory_order_relaxed);
+                        pti->pool->enqueue([pti]() {
+                            if (!pti->cancelled.load(std::memory_order_relaxed)) {
+                                TP_CALLBACK_INSTANCE inst{};
+                                pti->callback(&inst, pti->context, pti);
+                            }
+                            int32_t rem = pti->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+                            if (rem <= 0) {
+                                std::lock_guard<std::mutex> lk(pti->completionMtx);
+                                pti->completionCv.notify_all();
+                            }
+                        });
+
+                        if (pti->periodMs > 0) {
+                            pti->dueTimePoint = std::chrono::steady_clock::now() + std::chrono::milliseconds(pti->periodMs);
+                        } else {
+                            pti->isSet.store(false, std::memory_order_release);
+                        }
+                    }
+                }
+            });
+        } else {
+            pti->timerCv.notify_all();
+        }
+    }
+}
+
+inline BOOL WINAPI IsThreadpoolTimerSet(PTP_TIMER pti) noexcept {
+    if (!pti) return FALSE;
+    return pti->isSet.load(std::memory_order_relaxed) ? TRUE : FALSE;
+}
+
+inline void WINAPI WaitForThreadpoolTimerCallbacks(PTP_TIMER pti, BOOL fCancelPendingCallbacks) noexcept {
+    if (!pti) return;
+    if (fCancelPendingCallbacks) {
+        pti->cancelled.store(true, std::memory_order_release);
+    }
+    std::unique_lock<std::mutex> lock(pti->completionMtx);
+    pti->completionCv.wait(lock, [pti]() {
+        return pti->pendingCount.load(std::memory_order_acquire) <= 0;
+    });
+    if (fCancelPendingCallbacks) {
+        pti->cancelled.store(false, std::memory_order_release);
+    }
+}
+
+inline void WINAPI CloseThreadpoolTimer(PTP_TIMER pti) noexcept {
+    if (!pti) return;
+    {
+        std::lock_guard<std::mutex> lock(pti->timerMtx);
+        pti->stopThread = true;
+        pti->isSet.store(false, std::memory_order_release);
+        pti->timerCv.notify_all();
+    }
+    if (pti->timerThread && pti->timerThread->joinable()) {
+        pti->timerThread->join();
+    }
+    WaitForThreadpoolTimerCallbacks(pti, TRUE);
+    delete pti;
+}
+
+// Threadpool Wait APIs
+struct TP_WAIT {
+    PTP_WAIT_CALLBACK callback{nullptr};
+    PVOID context{nullptr};
+    PTP_POOL pool{nullptr};
+    HANDLE waitHandle{nullptr};
+    std::atomic<bool> isSet{false};
+    std::atomic<bool> cancelled{false};
+    std::atomic<int32_t> pendingCount{0};
+    std::mutex completionMtx;
+    std::condition_variable completionCv;
+    std::unique_ptr<std::thread> waitThread;
+    std::mutex waitMtx;
+    std::condition_variable waitCv;
+    bool stopThread{false};
+};
+
+inline PTP_WAIT WINAPI CreateThreadpoolWait(PTP_WAIT_CALLBACK pfnwa, PVOID pv, PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (!pfnwa) return nullptr;
+    auto* waitObj = new TP_WAIT();
+    waitObj->callback = pfnwa;
+    waitObj->context = pv;
+    if (pcbe && pcbe->Pool) {
+        waitObj->pool = pcbe->Pool;
+    } else {
+        waitObj->pool = detail::s_defaultPool.get();
+    }
+    return waitObj;
+}
+
+inline void WINAPI SetThreadpoolWait(PTP_WAIT pwa, HANDLE h, const FILETIME* pftTimeout) noexcept {
+    if (!pwa) return;
+    {
+        std::lock_guard<std::mutex> lock(pwa->waitMtx);
+        if (!h) {
+            pwa->isSet.store(false, std::memory_order_release);
+            pwa->waitHandle = nullptr;
+            pwa->waitCv.notify_all();
+            return;
+        }
+
+        pwa->waitHandle = h;
+        pwa->isSet.store(true, std::memory_order_release);
+        pwa->cancelled.store(false, std::memory_order_release);
+
+        DWORD timeoutMs = 0xFFFFFFFF; // INFINITE
+        if (pftTimeout) {
+            auto* ft = reinterpret_cast<const uint32_t*>(pftTimeout);
+            int64_t due64 = static_cast<int64_t>((static_cast<uint64_t>(ft[1]) << 32) | ft[0]);
+            if (due64 < 0) timeoutMs = static_cast<DWORD>((-due64) / 10000);
+            else if (due64 == 0) timeoutMs = 0;
+            else timeoutMs = 50;
+        }
+
+        // Fast-path: if handle is already signaled, dispatch immediately
+        if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) {
+            pwa->pendingCount.fetch_add(1, std::memory_order_relaxed);
+            pwa->pool->enqueue([pwa]() {
+                if (!pwa->cancelled.load(std::memory_order_relaxed)) {
+                    TP_CALLBACK_INSTANCE inst{};
+                    pwa->callback(&inst, pwa->context, pwa, static_cast<TP_WAIT_RESULT>(WAIT_OBJECT_0));
+                }
+                pwa->isSet.store(false, std::memory_order_release);
+                int32_t rem = pwa->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+                if (rem <= 0) {
+                    std::lock_guard<std::mutex> lk(pwa->completionMtx);
+                    pwa->completionCv.notify_all();
+                }
+            });
+            return;
+        }
+
+        if (!pwa->waitThread) {
+            pwa->waitThread = std::make_unique<std::thread>([pwa, timeoutMs]() {
+                while (true) {
+                    std::unique_lock<std::mutex> lock(pwa->waitMtx);
+                    pwa->waitCv.wait(lock, [pwa]() {
+                        return pwa->stopThread || pwa->isSet.load(std::memory_order_relaxed);
+                    });
+                    if (pwa->stopThread) return;
+
+                    HANDLE hTarget = pwa->waitHandle;
+                    pwa->isSet.store(false, std::memory_order_release);
+                    lock.unlock();
+
+                    DWORD res = WAIT_OBJECT_0;
+                    if (hTarget) {
+                        res = WaitForSingleObject(hTarget, timeoutMs);
+                    }
+
+                    pwa->pendingCount.fetch_add(1, std::memory_order_relaxed);
+                    pwa->pool->enqueue([pwa, res]() {
+                        if (!pwa->cancelled.load(std::memory_order_relaxed)) {
+                            TP_CALLBACK_INSTANCE inst{};
+                            pwa->callback(&inst, pwa->context, pwa, static_cast<TP_WAIT_RESULT>(res));
+                        }
+                        int32_t rem = pwa->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+                        if (rem <= 0) {
+                            std::lock_guard<std::mutex> lk(pwa->completionMtx);
+                            pwa->completionCv.notify_all();
+                        }
+                    });
+                }
+            });
+        } else {
+            pwa->waitCv.notify_all();
+        }
+    }
+}
+
+inline void WINAPI WaitForThreadpoolWaitCallbacks(PTP_WAIT pwa, BOOL fCancelPendingCallbacks) noexcept {
+    if (!pwa) return;
+    if (fCancelPendingCallbacks) {
+        pwa->cancelled.store(true, std::memory_order_release);
+    }
+    std::unique_lock<std::mutex> lock(pwa->completionMtx);
+    pwa->completionCv.wait(lock, [pwa]() {
+        return pwa->pendingCount.load(std::memory_order_acquire) <= 0;
+    });
+    if (fCancelPendingCallbacks) {
+        pwa->cancelled.store(false, std::memory_order_release);
+    }
+}
+
+inline void WINAPI CloseThreadpoolWait(PTP_WAIT pwa) noexcept {
+    if (!pwa) return;
+    {
+        std::lock_guard<std::mutex> lock(pwa->waitMtx);
+        pwa->stopThread = true;
+        pwa->isSet.store(false, std::memory_order_release);
+        pwa->waitCv.notify_all();
+    }
+    if (pwa->waitThread && pwa->waitThread->joinable()) {
+        pwa->waitThread->join();
+    }
+    WaitForThreadpoolWaitCallbacks(pwa, TRUE);
+    delete pwa;
+}
+
+// Cleanup Group and Environment APIs
+struct TP_CLEANUP_GROUP {
+    std::mutex mtx;
+    std::vector<PTP_WORK> works;
+    std::vector<PTP_TIMER> timers;
+    std::vector<PTP_WAIT> waits;
+};
+
+inline PTP_CLEANUP_GROUP WINAPI CreateThreadpoolCleanupGroup() noexcept {
+    return new TP_CLEANUP_GROUP();
+}
+
+inline void WINAPI CloseThreadpoolCleanupGroupMembers(PTP_CLEANUP_GROUP ptpcg, BOOL fCancelPendingCallbacks, PVOID /*pvCleanupContext*/) noexcept {
+    if (!ptpcg) return;
+    std::lock_guard<std::mutex> lock(ptpcg->mtx);
+    for (auto* w : ptpcg->works) {
+        CloseThreadpoolWork(w);
+    }
+    ptpcg->works.clear();
+    for (auto* t : ptpcg->timers) {
+        CloseThreadpoolTimer(t);
+    }
+    ptpcg->timers.clear();
+    for (auto* wa : ptpcg->waits) {
+        CloseThreadpoolWait(wa);
+    }
+    ptpcg->waits.clear();
+}
+
+inline void WINAPI CloseThreadpoolCleanupGroup(PTP_CLEANUP_GROUP ptpcg) noexcept {
+    if (ptpcg) {
+        CloseThreadpoolCleanupGroupMembers(ptpcg, TRUE, nullptr);
+        delete ptpcg;
+    }
+}
+
+inline void WINAPI InitializeThreadpoolEnvironment(PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (pcbe) {
+        memset(pcbe, 0, sizeof(TP_CALLBACK_ENVIRON));
+        pcbe->Version = 3;
+    }
+}
+
+inline void WINAPI DestroyThreadpoolEnvironment(PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (pcbe) {
+        memset(pcbe, 0, sizeof(TP_CALLBACK_ENVIRON));
+    }
+}
+
+inline void WINAPI SetThreadpoolCallbackPool(PTP_CALLBACK_ENVIRON pcbe, PTP_POOL ptpp) noexcept {
+    if (pcbe) pcbe->Pool = ptpp;
+}
+
+inline void WINAPI SetThreadpoolCallbackCleanupGroup(PTP_CALLBACK_ENVIRON pcbe, PTP_CLEANUP_GROUP ptpcg, PVOID pfncg) noexcept {
+    if (pcbe) {
+        pcbe->CleanupGroup = ptpcg;
+        pcbe->CleanupGroupCancelCallback = reinterpret_cast<PTP_CLEANUP_GROUP_CANCEL_CALLBACK>(pfncg);
+    }
+}
 
 // Integer and String Helper APIs
 inline int MulDiv(int nNumber, int nNumerator, int nDenominator) noexcept {
@@ -4015,9 +4813,6 @@ inline HANDLE OpenFileMappingA(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*
     return reinterpret_cast<HANDLE>(0x7102);
 }
 
-inline BOOL VirtualLock(void* /*lpAddress*/, size_t /*dwSize*/) noexcept {
-    return TRUE;
-}
 
 inline BOOL FlushInstructionCache(HANDLE /*hProcess*/, const void* /*lpBaseAddress*/, size_t /*dwSize*/) noexcept {
     return TRUE;
@@ -5340,13 +6135,6 @@ inline HANDLE WINAPI CreateSemaphoreA(void* /*lpSemaphoreAttributes*/, int32_t /
     return reinterpret_cast<HANDLE>(0x13001);
 }
 
-inline void* WINAPI CreateThreadpoolWait(void* /*pfnwa*/, void* /*pv*/, void* /*pcbe*/) noexcept {
-    return reinterpret_cast<void*>(0x14001);
-}
-
-inline void WINAPI SetThreadpoolWait(void* /*pwa*/, HANDLE /*h*/, void* /*pftTimeout*/) noexcept {}
-inline void WINAPI WaitForThreadpoolWaitCallbacks(void* /*pwa*/, BOOL /*fCancelPendingCallbacks*/) noexcept {}
-inline void WINAPI CloseThreadpoolWait(void* /*pwa*/) noexcept {}
 
 namespace detail {
     struct WaitOnAddressBucket {
@@ -5804,6 +6592,18 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "LocalFree", reinterpret_cast<void*>(LocalFree));
     ldr.registerExport("kernel32.dll", "VirtualAlloc", reinterpret_cast<void*>(VirtualAlloc));
     ldr.registerExport("kernel32.dll", "VirtualFree", reinterpret_cast<void*>(VirtualFree));
+    ldr.registerExport("kernel32.dll", "VirtualAllocEx", reinterpret_cast<void*>(VirtualAllocEx));
+    ldr.registerExport("kernel32.dll", "VirtualAlloc2", reinterpret_cast<void*>(VirtualAlloc2));
+    ldr.registerExport("kernel32.dll", "VirtualAlloc2FromApp", reinterpret_cast<void*>(VirtualAlloc2FromApp));
+    ldr.registerExport("kernel32.dll", "VirtualFreeEx", reinterpret_cast<void*>(VirtualFreeEx));
+    ldr.registerExport("kernel32.dll", "VirtualLock", reinterpret_cast<void*>(VirtualLock));
+    ldr.registerExport("kernel32.dll", "VirtualUnlock", reinterpret_cast<void*>(VirtualUnlock));
+    ldr.registerExport("kernel32.dll", "GetProcessWorkingSetSizeEx", reinterpret_cast<void*>(GetProcessWorkingSetSizeEx));
+    ldr.registerExport("kernel32.dll", "SetProcessWorkingSetSizeEx", reinterpret_cast<void*>(SetProcessWorkingSetSizeEx));
+    ldr.registerExport("kernel32.dll", "MapViewOfFileNuma2", reinterpret_cast<void*>(MapViewOfFileNuma2));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2", reinterpret_cast<void*>(VirtualAlloc2));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2FromApp", reinterpret_cast<void*>(VirtualAlloc2FromApp));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFileNuma2", reinterpret_cast<void*>(MapViewOfFileNuma2));
     ldr.registerExport("kernel32.dll", "GetCurrentProcess", reinterpret_cast<void*>(GetCurrentProcess));
     ldr.registerExport("kernel32.dll", "GetCurrentProcessId", reinterpret_cast<void*>(GetCurrentProcessId));
     ldr.registerExport("kernel32.dll", "GetCurrentPackageFullName", reinterpret_cast<void*>(GetCurrentPackageFullName));
@@ -6041,10 +6841,49 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InitOnceBeginInitialize", reinterpret_cast<void*>(InitOnceBeginInitialize));
     ldr.registerExport("kernel32.dll", "InitOnceComplete", reinterpret_cast<void*>(InitOnceComplete));
     ldr.registerExport("kernel32.dll", "InitOnceExecuteOnce", reinterpret_cast<void*>(InitOnceExecuteOnce));
+    ldr.registerExport("kernel32.dll", "CreateThreadpool", reinterpret_cast<void*>(CreateThreadpool));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolThreadMaximum", reinterpret_cast<void*>(SetThreadpoolThreadMaximum));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolThreadMinimum", reinterpret_cast<void*>(SetThreadpoolThreadMinimum));
+    ldr.registerExport("kernel32.dll", "CloseThreadpool", reinterpret_cast<void*>(CloseThreadpool));
     ldr.registerExport("kernel32.dll", "CreateThreadpoolWork", reinterpret_cast<void*>(CreateThreadpoolWork));
     ldr.registerExport("kernel32.dll", "SubmitThreadpoolWork", reinterpret_cast<void*>(SubmitThreadpoolWork));
+    ldr.registerExport("kernel32.dll", "WaitForThreadpoolWorkCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWorkCallbacks));
     ldr.registerExport("kernel32.dll", "CloseThreadpoolWork", reinterpret_cast<void*>(CloseThreadpoolWork));
+    ldr.registerExport("kernel32.dll", "CreateThreadpoolTimer", reinterpret_cast<void*>(CreateThreadpoolTimer));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolTimer", reinterpret_cast<void*>(SetThreadpoolTimer));
+    ldr.registerExport("kernel32.dll", "IsThreadpoolTimerSet", reinterpret_cast<void*>(IsThreadpoolTimerSet));
+    ldr.registerExport("kernel32.dll", "WaitForThreadpoolTimerCallbacks", reinterpret_cast<void*>(WaitForThreadpoolTimerCallbacks));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolTimer", reinterpret_cast<void*>(CloseThreadpoolTimer));
+    ldr.registerExport("kernel32.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "CreateThreadpoolCleanupGroup", reinterpret_cast<void*>(CreateThreadpoolCleanupGroup));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolCleanupGroupMembers", reinterpret_cast<void*>(CloseThreadpoolCleanupGroupMembers));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolCleanupGroup", reinterpret_cast<void*>(CloseThreadpoolCleanupGroup));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackPool", reinterpret_cast<void*>(SetThreadpoolCallbackPool));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackCleanupGroup", reinterpret_cast<void*>(SetThreadpoolCallbackCleanupGroup));
+    ldr.registerExport("kernel32.dll", "InitializeThreadpoolEnvironment", reinterpret_cast<void*>(InitializeThreadpoolEnvironment));
+    ldr.registerExport("kernel32.dll", "DestroyThreadpoolEnvironment", reinterpret_cast<void*>(DestroyThreadpoolEnvironment));
     ldr.registerExport("kernel32.dll", "FreeLibraryWhenCallbackReturns", reinterpret_cast<void*>(FreeLibraryWhenCallbackReturns));
+
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpool", reinterpret_cast<void*>(CreateThreadpool));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolThreadMaximum", reinterpret_cast<void*>(SetThreadpoolThreadMaximum));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolThreadMinimum", reinterpret_cast<void*>(SetThreadpoolThreadMinimum));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpool", reinterpret_cast<void*>(CloseThreadpool));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWork", reinterpret_cast<void*>(CreateThreadpoolWork));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SubmitThreadpoolWork", reinterpret_cast<void*>(SubmitThreadpoolWork));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWorkCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWorkCallbacks));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWork", reinterpret_cast<void*>(CloseThreadpoolWork));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolTimer", reinterpret_cast<void*>(CreateThreadpoolTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolTimer", reinterpret_cast<void*>(SetThreadpoolTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "IsThreadpoolTimerSet", reinterpret_cast<void*>(IsThreadpoolTimerSet));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolTimerCallbacks", reinterpret_cast<void*>(WaitForThreadpoolTimerCallbacks));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolTimer", reinterpret_cast<void*>(CloseThreadpoolTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
     ldr.registerExport("kernel32.dll", "MulDiv", reinterpret_cast<void*>(MulDiv));
     ldr.registerExport("kernel32.dll", "CompareStringOrdinal", reinterpret_cast<void*>(CompareStringOrdinal));
     ldr.registerExport("kernel32.dll", "CompareStringEx", reinterpret_cast<void*>(CompareStringEx));

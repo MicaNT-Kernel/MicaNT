@@ -452,6 +452,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite416") {
+        RUN_TEST(Test_Horizon200_DirectX12AgilitySDK_VirtualAlloc2_And_ThreadpoolTaskGraph_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite415") {
         RUN_TEST(Test_Horizon199_NativeWindowsNtKernel_GamingConformance_Suite);
         return g_FailedTests;
@@ -2079,6 +2083,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon197_DynamicResolutionScaling_AntiLag_And_RespaceCLI);
     RUN_TEST(Test_Horizon198_SystemPower_ThermalMitigation_And_GamePowerCLI);
     RUN_TEST(Test_Horizon199_NativeWindowsNtKernel_GamingConformance_Suite);
+    RUN_TEST(Test_Horizon200_DirectX12AgilitySDK_VirtualAlloc2_And_ThreadpoolTaskGraph_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

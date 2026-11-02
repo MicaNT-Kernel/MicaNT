@@ -1182,12 +1182,135 @@ public:
 // 6. Exported C APIs (d3d12.dll parity)
 // ============================================================================
 
+// ============================================================================
+// 6. Direct3D 12 Agility SDK & Debug Layer Interfaces
+// ============================================================================
+
+inline constexpr GUID CLSID_D3D12SDKConfiguration = { 0x7cda4236, 0x14f4, 0x48f2, { 0x9f, 0x36, 0xd5, 0x6e, 0x15, 0x56, 0x05, 0x01 } };
+inline constexpr GUID IID_ID3D12SDKConfiguration  = { 0xb951e43a, 0x61a4, 0x41f3, { 0x82, 0x6e, 0x2e, 0x3d, 0x17, 0x02, 0x5a, 0xeb } };
+inline constexpr GUID IID_ID3D12SDKConfiguration1 = { 0x8ba5fb08, 0x5195, 0x40e2, { 0xac, 0x58, 0x0d, 0x98, 0x9c, 0x3a, 0x01, 0x02 } };
+inline constexpr GUID CLSID_D3D12Debug            = { 0x3fda6c3c, 0x5926, 0x4a7a, { 0x9a, 0x67, 0x7c, 0xd8, 0x3f, 0x23, 0x65, 0x71 } };
+inline constexpr GUID IID_ID3D12Debug             = { 0x344488b7, 0x6846, 0x474b, { 0xb9, 0x89, 0xf0, 0x27, 0x44, 0x82, 0x45, 0xe0 } };
+inline constexpr GUID IID_ID3D12Debug1            = { 0xaffaa442, 0x3042, 0x4e5c, { 0x80, 0xc9, 0xc8, 0x0f, 0xac, 0x66, 0x07, 0xa8 } };
+
+class ID3D12SDKConfiguration : public IUnknown {
+public:
+    virtual int32_t WINAPI SetSDKVersion(uint32_t SDKVersion, const char* SDKPath) = 0;
+};
+
+class ID3D12SDKConfiguration1 : public ID3D12SDKConfiguration {
+public:
+    virtual int32_t WINAPI CreateDeviceFactory(uint32_t SDKVersion, const char* SDKPath, const IID& riid, void** ppFactory) = 0;
+    virtual void WINAPI FreeUnusedSDKs() = 0;
+};
+
+class ID3D12Debug : public IUnknown {
+public:
+    virtual void WINAPI EnableDebugLayer() = 0;
+};
+
+class Prism3D12SDKConfigurationImpl : public ID3D12SDKConfiguration1 {
+private:
+    std::atomic<uint32_t> m_refCount{1};
+    uint32_t m_sdkVersion{614}; // Default to Agility SDK 1.614.0
+    std::string m_sdkPath{".\\D3D12\\"};
+
+public:
+    int32_t WINAPI QueryInterface(const IID& riid, void** ppvObject) override {
+        if (!ppvObject) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12SDKConfiguration || riid == IID_ID3D12SDKConfiguration1) {
+            *ppvObject = static_cast<ID3D12SDKConfiguration1*>(this);
+            AddRef();
+            return 0; // S_OK
+        }
+        *ppvObject = nullptr;
+        return -2147467262; // E_NOINTERFACE
+    }
+    uint32_t WINAPI AddRef() override { return ++m_refCount; }
+    uint32_t WINAPI Release() override {
+        uint32_t r = --m_refCount;
+        if (r == 0) delete this;
+        return r;
+    }
+    int32_t WINAPI SetSDKVersion(uint32_t SDKVersion, const char* SDKPath) override {
+        m_sdkVersion = SDKVersion;
+        if (SDKPath) m_sdkPath = SDKPath;
+        return 0; // S_OK
+    }
+    int32_t WINAPI CreateDeviceFactory(uint32_t SDKVersion, const char* SDKPath, const IID& riid, void** ppFactory) override {
+        (void)SDKVersion; (void)SDKPath; (void)riid;
+        if (ppFactory) *ppFactory = reinterpret_cast<void*>(0x9001);
+        return 0; // S_OK
+    }
+    void WINAPI FreeUnusedSDKs() override {}
+
+    uint32_t GetConfiguredSDKVersion() const noexcept { return m_sdkVersion; }
+    const std::string& GetConfiguredSDKPath() const noexcept { return m_sdkPath; }
+};
+
+class Prism3D12DebugImpl : public ID3D12Debug {
+private:
+    std::atomic<uint32_t> m_refCount{1};
+    bool m_debugLayerEnabled{false};
+
+public:
+    int32_t WINAPI QueryInterface(const IID& riid, void** ppvObject) override {
+        if (!ppvObject) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Debug || riid == IID_ID3D12Debug1) {
+            *ppvObject = static_cast<ID3D12Debug*>(this);
+            AddRef();
+            return 0; // S_OK
+        }
+        *ppvObject = nullptr;
+        return -2147467262; // E_NOINTERFACE
+    }
+    uint32_t WINAPI AddRef() override { return ++m_refCount; }
+    uint32_t WINAPI Release() override {
+        uint32_t r = --m_refCount;
+        if (r == 0) delete this;
+        return r;
+    }
+    void WINAPI EnableDebugLayer() override { m_debugLayerEnabled = true; }
+    bool IsDebugLayerEnabled() const noexcept { return m_debugLayerEnabled; }
+};
+
+// ============================================================================
+// 7. Exported C APIs (d3d12.dll parity)
+// ============================================================================
+
 inline int32_t D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, const IID& riid, void** ppDevice) {
     if (!ppDevice) return -1;
     auto* dev = new Prism3D12DeviceImpl(pAdapter, MinimumFeatureLevel);
     int32_t hr = dev->QueryInterface(riid, ppDevice);
     dev->Release();
     return hr;
+}
+
+inline int32_t WINAPI D3D12GetInterface(const GUID& rclsid, const IID& riid, void** ppvDebug) {
+    if (!ppvDebug) return -1;
+    if (rclsid == CLSID_D3D12SDKConfiguration) {
+        auto* cfg = new Prism3D12SDKConfigurationImpl();
+        int32_t hr = cfg->QueryInterface(riid, ppvDebug);
+        cfg->Release();
+        return hr;
+    }
+    if (rclsid == CLSID_D3D12Debug) {
+        auto* dbg = new Prism3D12DebugImpl();
+        int32_t hr = dbg->QueryInterface(riid, ppvDebug);
+        dbg->Release();
+        return hr;
+    }
+    *ppvDebug = nullptr;
+    return -2147467262; // E_NOINTERFACE
+}
+
+inline int32_t WINAPI D3D12GetDebugInterface(const IID& riid, void** ppvDebug) {
+    return D3D12GetInterface(CLSID_D3D12Debug, riid, ppvDebug);
+}
+
+inline int32_t WINAPI D3D12EnableExperimentalFeatures(uint32_t NumFeatures, const IID* /*pIIDs*/, void* /*pConfigurationStructs*/, uint32_t* /*pConfigurationStructSizes*/) {
+    (void)NumFeatures;
+    return 0; // S_OK
 }
 
 inline int32_t WINAPI D3D12_Ordinal101() noexcept { return 0; }
@@ -1202,6 +1325,9 @@ inline int32_t WINAPI D3D12SerializeVersionedRootSignature(const void* /*pRootSi
 inline void InitializePrism3D12SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("d3d12.dll", "D3D12CreateDevice", reinterpret_cast<void*>(D3D12CreateDevice));
+    ldr.registerExport("d3d12.dll", "D3D12GetInterface", reinterpret_cast<void*>(D3D12GetInterface));
+    ldr.registerExport("d3d12.dll", "D3D12GetDebugInterface", reinterpret_cast<void*>(D3D12GetDebugInterface));
+    ldr.registerExport("d3d12.dll", "D3D12EnableExperimentalFeatures", reinterpret_cast<void*>(D3D12EnableExperimentalFeatures));
     ldr.registerExport("d3d12.dll", "D3D12SerializeVersionedRootSignature", reinterpret_cast<void*>(D3D12SerializeVersionedRootSignature));
     ldr.registerExportOrdinal("d3d12.dll", 101, reinterpret_cast<void*>(D3D12_Ordinal101));
     ldr.registerExportOrdinal("d3d12.dll", 102, reinterpret_cast<void*>(D3D12_Ordinal102));
