@@ -37330,3 +37330,210 @@ inline void Test_Horizon188_GamingInput_RawInput_And_GameInputCLI() {
 
     std::cout << "[TEST] Suite 404: Horizon 188 - Sovereign Gaming Input & High-Polling Raw Input PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 405: Horizon 189 - Sovereign Hardware GPU Scheduling, Multiplane Overlay & Low-Latency Flip Queue
+// ============================================================================
+
+inline void Test_Horizon189_GpuScheduling_MultiplaneOverlay_And_GpuSchedCLI() {
+    std::cout << "\n[TEST] Running Suite 405: Horizon 189 - Sovereign Hardware GPU Scheduling & MPO...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    {
+        micant::gpu_scheduling::RegisterGpuSchedulerSubsystem();
+
+        // 1. SCM Records Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto drv = scm.getServiceRecord(L"GpuScheduler");
+        TEST_ASSERT(drv != nullptr, "GpuScheduler driver record exists in SCM");
+        TEST_ASSERT(drv->serviceType == scm::SERVICE_KERNEL_DRIVER, "GpuScheduler is SERVICE_KERNEL_DRIVER");
+        TEST_ASSERT(drv->startType == scm::SERVICE_BOOT_START, "GpuScheduler is SERVICE_BOOT_START");
+        TEST_ASSERT(drv->status.dwCurrentState == scm::SERVICE_RUNNING, "GpuScheduler is SERVICE_RUNNING");
+
+        auto svc = scm.getServiceRecord(L"DisplayFlipBroker");
+        TEST_ASSERT(svc != nullptr, "DisplayFlipBroker service record exists in SCM");
+        TEST_ASSERT(svc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "DisplayFlipBroker is SERVICE_WIN32_OWN_PROCESS");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "DisplayFlipBroker is SERVICE_RUNNING");
+
+        // 2. VersionDatabase PE Modules (6 modules)
+        auto& vdb = micant::version::VersionDatabase::Instance();
+        std::vector<std::string> modules = {
+            "gpusched.sys", "flipbroker.exe", "dxgpresentation.dll", "latencyapi.dll", "gpuschedcli.exe", "wddmflip.sys"
+        };
+        for (const auto& mod : modules) {
+            const auto* info = vdb.GetModuleInfo(mod);
+            TEST_ASSERT(info != nullptr && info->stringTable.at("FileVersion") == "10.0.26100.1", mod + " registered @ 10.0.26100.1");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Hardware-Accelerated GPU Scheduling (HAGS) State Machine
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gpu_scheduling::GpuSchedulerManager::get();
+        TEST_ASSERT(mgr.isHagsEnabled(), "HAGS is enabled by default");
+
+        mgr.setHagsEnabled(false);
+        TEST_ASSERT(!mgr.isHagsEnabled(), "HAGS disabled");
+
+        mgr.setHagsEnabled(true);
+        TEST_ASSERT(mgr.isHagsEnabled(), "HAGS re-enabled");
+
+        auto vitals = mgr.getVitals();
+        TEST_ASSERT(vitals.activeHardwareQueues == 4, "4 hardware execution queues active");
+        TEST_ASSERT(vitals.refreshRateHz == 240, "240 Hz refresh rate");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Multiplane Overlay (MPO) Scanout Plane Configuration
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gpu_scheduling::GpuSchedulerManager::get();
+        auto planes = mgr.getMpoPlanes();
+        TEST_ASSERT(planes.size() == 3, "3 MPO hardware planes active");
+        TEST_ASSERT(planes[0].planeIndex == 0 && planes[0].hdrEnabled, "Plane 0 is HDR Game plane");
+        TEST_ASSERT(planes[1].planeIndex == 1, "Plane 1 is HUD Overlay plane");
+        TEST_ASSERT(planes[2].planeIndex == 2 && planes[2].width == 64, "Plane 2 is Cursor plane");
+
+        // Reconfigure Plane 0
+        bool cOk = mgr.configureMpoPlane(0, true, 3840, 2160, "cod.exe (4K Ultra)");
+        TEST_ASSERT(cOk, "Configure Plane 0 to 4K resolution");
+        auto updatedPlanes = mgr.getMpoPlanes();
+        TEST_ASSERT(updatedPlanes[0].width == 3840 && updatedPlanes[0].height == 2160, "Plane 0 updated to 3840x2160");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: DirectFlip & Zero-Copy Presentation Pipeline
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gpu_scheduling::GpuSchedulerManager::get();
+        mgr.setPresentationMode(micant::gpu_scheduling::PresentationMode::DirectFlip);
+        TEST_ASSERT(mgr.getPresentationMode() == micant::gpu_scheduling::PresentationMode::DirectFlip, "Mode is DirectFlip");
+
+        uint64_t beforeFrames = mgr.getVitals().totalFramesPresented;
+        uint64_t beforeFlips = mgr.getVitals().totalDirectFlips;
+
+        bool pOk = mgr.submitPresent(1, micant::gpu_scheduling::PresentationMode::DirectFlip, 0);
+        TEST_ASSERT(pOk, "Submit DirectFlip present");
+        TEST_ASSERT(mgr.getVitals().totalFramesPresented == beforeFrames + 1, "totalFramesPresented incremented");
+        TEST_ASSERT(mgr.getVitals().totalDirectFlips == beforeFlips + 1, "totalDirectFlips incremented");
+
+        // Submit Composed
+        mgr.submitPresent(1, micant::gpu_scheduling::PresentationMode::ComposedDwm, 1);
+        TEST_ASSERT(mgr.getVitals().totalFramesPresented == beforeFrames + 2, "totalFramesPresented incremented again");
+        TEST_ASSERT(mgr.getVitals().totalDirectFlips == beforeFlips + 1, "totalDirectFlips not incremented on Composed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Low-Latency Frame Pacing & Reflex Marker Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = micant::gpu_scheduling::GpuSchedulerManager::get();
+        micant::gpu_scheduling::LatencyMarkerReport rep{};
+        rep.frameNumber = 2050;
+        rep.simulationStartUs = 2000000;
+        rep.simulationEndUs = 2001500;
+        rep.renderSubmitStartUs = 2001700;
+        rep.renderSubmitEndUs = 2003800;
+        rep.presentStartUs = 2004000;
+        rep.presentCompleteUs = 2007800;
+        rep.totalSystemLatencyUs = 7800; // 7.8 ms
+
+        mgr.recordLatencyMarkers(rep);
+        auto retrieved = mgr.getLatestLatencyReport();
+        TEST_ASSERT(retrieved.frameNumber == 2050, "Frame number matches 2050");
+        TEST_ASSERT(retrieved.totalSystemLatencyUs == 7800, "Latency matches 7800 us");
+        TEST_ASSERT(mgr.getVitals().averageFrameLatencyUs == 7800, "Average latency updated to 7800 us");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 6: Win32 C ABI Exports (dxgpresentation.dll & latencyapi.dll)
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(GpuSchedulerIsHagsEnabled() == 1, "C ABI GpuSchedulerIsHagsEnabled returns 1");
+        GpuSchedulerSetHagsEnabled(0);
+        TEST_ASSERT(GpuSchedulerIsHagsEnabled() == 0, "C ABI GpuSchedulerSetHagsEnabled sets 0");
+        GpuSchedulerSetHagsEnabled(1);
+        TEST_ASSERT(GpuSchedulerIsHagsEnabled() == 1, "C ABI GpuSchedulerSetHagsEnabled sets 1");
+
+        TEST_ASSERT(GpuSchedulerGetAverageLatencyUs() == 7800, "C ABI GpuSchedulerGetAverageLatencyUs matches");
+        int32_t presRes = GpuSchedulerSubmitPresent(5, 1, 0);
+        TEST_ASSERT(presRes == 0, "C ABI GpuSchedulerSubmitPresent returns 0");
+
+        int32_t latRes = GpuSchedulerRecordLatencyMarker(2060, 3000000, 3002000, 3008200);
+        TEST_ASSERT(latRes == 0, "C ABI GpuSchedulerRecordLatencyMarker returns 0");
+        TEST_ASSERT(GpuSchedulerGetAverageLatencyUs() == 8200, "Latency updated via C ABI to 8200 us");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 7: Canonical Win32 CLI (gpusched/gpuschedcli), WFP Rule #18901 & Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. Canonical CLI gpusched status
+        std::string out;
+        micant::gpusched_cmd::um::ExecuteGpuSchedulerString("gpusched status", out);
+        TEST_ASSERT(out.find("MicaNT Sovereign Hardware GPU Scheduling") != std::string::npos, "CLI gpusched status title");
+        TEST_ASSERT(out.find("240 Hz") != std::string::npos, "CLI gpusched status refresh rate");
+
+        // 2. Canonical CLI gpusched list-planes
+        out.clear();
+        micant::gpusched_cmd::um::ExecuteGpuSchedulerString("gpusched list-planes", out);
+        TEST_ASSERT(out.find("cod.exe") != std::string::npos, "CLI gpusched list-planes game surface");
+        TEST_ASSERT(out.find("Hardware Mouse Cursor") != std::string::npos, "CLI gpusched list-planes cursor surface");
+
+        // 3. Canonical CLI gpusched latency
+        out.clear();
+        micant::gpusched_cmd::um::ExecuteGpuSchedulerString("gpusched latency", out);
+        TEST_ASSERT(out.find("Reflex Low-Latency Frame Pacing Analysis") != std::string::npos, "CLI gpusched latency title");
+        TEST_ASSERT(out.find("Esports Competitive Rating") != std::string::npos, "CLI gpusched latency rating");
+
+        // 4. Canonical CLI gpusched set-hags
+        out.clear();
+        micant::gpusched_cmd::um::ExecuteGpuSchedulerString("gpusched set-hags enable", out);
+        TEST_ASSERT(out.find("HAGS") != std::string::npos && out.find("ENABLED") != std::string::npos, "CLI gpusched set-hags");
+
+        // 5. Canonical CLI gpusched test-flip
+        out.clear();
+        micant::gpusched_cmd::um::ExecuteGpuSchedulerString("gpusched test-flip 1 direct", out);
+        TEST_ASSERT(out.find("Direct Hardware Flip, Zero Blit") != std::string::npos, "CLI gpusched test-flip");
+
+        // 6. Canonical CLI gpusched dump
+        out.clear();
+        micant::gpusched_cmd::um::ExecuteGpuSchedulerString("gpusched dump", out);
+        TEST_ASSERT(out.find("HwSchMode") != std::string::npos, "CLI gpusched dump registry key");
+
+        // 7. Remote Console Dispatch Verification
+        auto& console = micant::km::net::HttpsExecutiveConsole::get();
+        if (!console.isRunning()) console.startHttpsServer(443);
+        std::string termOut = console.executeTerminalCommand("gpusched status");
+        TEST_ASSERT(termOut.find("MicaNT Sovereign Hardware GPU Scheduling") != std::string::npos, "Console terminal gpusched status");
+
+        // 8. WFP Inbound Rule #18901 (MicaNT_GpuScheduling_Permit)
+        auto& wfp = wfp::km::WfpKernelFilterEngine::get();
+        auto gpuRuleOpt = wfp.findRuleById(18901);
+        TEST_ASSERT(gpuRuleOpt.has_value(), "WFP Rule #18901 for GpuScheduling must be registered");
+        TEST_ASSERT(gpuRuleOpt->protocol == tcpip::IPPROTO_UDP, "GpuScheduling protocol is UDP");
+        TEST_ASSERT(gpuRuleOpt->localPortStart == 5055 && gpuRuleOpt->localPortEnd == 5055, "Port 5055");
+        TEST_ASSERT(gpuRuleOpt->action == wfp::FWP_ACTION_PERMIT, "Rule action is PERMIT");
+
+        // 9. HTTPS Console Live WebSockets Push Telemetry
+        std::string teleJson = console.generateStreamTelemetryJson();
+        TEST_ASSERT(teleJson.find("\"gpu_hags_enabled\":") != std::string::npos, "Telemetry gpu_hags_enabled");
+        TEST_ASSERT(teleJson.find("\"gpu_mpo_planes_active\":") != std::string::npos, "Telemetry gpu_mpo_planes_active");
+        TEST_ASSERT(teleJson.find("\"gpu_avg_frame_latency_us\":") != std::string::npos, "Telemetry gpu_avg_frame_latency_us");
+        TEST_ASSERT(teleJson.find("\"gpu_total_direct_flips\":") != std::string::npos, "Telemetry gpu_total_direct_flips");
+    }
+
+    std::cout << "[HORIZON 189] Sovereign Hardware GPU Scheduling & MPO Summary:\n"
+              << "    Pillar 1: Subsystem Initialization, SCM & VersionDatabase Parity OK\n"
+              << "    Pillar 2: Hardware-Accelerated GPU Scheduling (HAGS) State Machine OK\n"
+              << "    Pillar 3: Multiplane Overlay (MPO) Scanout Plane Configuration OK\n"
+              << "    Pillar 4: DirectFlip & Zero-Copy Presentation Pipeline OK\n"
+              << "    Pillar 5: Low-Latency Frame Pacing & Reflex Marker Engine OK\n"
+              << "    Pillar 6: Win32 C ABI Exports OK\n"
+              << "    Pillar 7: Canonical Win32 gpusched CLI, WFP Rule #18901 & Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 405: Horizon 189 - Sovereign Hardware GPU Scheduling & MPO PASSED." << std::endl;
+}

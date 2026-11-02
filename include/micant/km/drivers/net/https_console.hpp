@@ -90,6 +90,8 @@
 #include "micant/um/subsystems/mgmt/anticheat_cmd.hpp"
 #include "micant/km/drivers/input/gameinput.hpp"
 #include "micant/um/subsystems/mgmt/gameinput_cmd.hpp"
+#include "micant/km/drivers/video/hardware_flip_queue.hpp"
+#include "micant/um/subsystems/mgmt/gpusched_cmd.hpp"
 
 namespace micant::km::net {
 
@@ -502,6 +504,19 @@ public:
         giRule.weight = 1500;
         giRule.action = wfp::FWP_ACTION_PERMIT;
         wfpEngine.addRule(giRule);
+
+        // 32. Register WFP Inbound Rule for Hardware GPU Scheduling & Telemetry (UDP 5055)
+        wfp::km::WfpKernelFilterRule gpuRule{};
+        gpuRule.filterId = 18901;
+        gpuRule.name = "MicaNT_GpuScheduling_Permit";
+        gpuRule.layerId = wfp::km::FWPS_LAYER_INBOUND_TRANSPORT_V4;
+        gpuRule.direction = wfp::FWP_DIRECTION_INBOUND;
+        gpuRule.protocol = tcpip::IPPROTO_UDP;
+        gpuRule.localPortStart = 5055;
+        gpuRule.localPortEnd = 5055;
+        gpuRule.weight = 1500;
+        gpuRule.action = wfp::FWP_ACTION_PERMIT;
+        wfpEngine.addRule(gpuRule);
     }
 
     void stopHttpsServer() {
@@ -955,6 +970,10 @@ public:
             std::string res;
             gameinput_cmd::um::ExecuteGameInputString(cmd, res);
             return res;
+        } else if (cmd == "gpusched" || cmd.starts_with("gpusched ") || cmd == "gpuschedcli" || cmd.starts_with("gpuschedcli ") || cmd == "flipqueue" || cmd.starts_with("flipqueue ")) {
+            std::string res;
+            gpusched_cmd::um::ExecuteGpuSchedulerString(cmd, res);
+            return res;
         } else if (cmd == "netsh nps" || cmd.starts_with("netsh nps ") || cmd == "nps" || cmd.starts_with("nps ")) {
             std::string res;
             netsh::nps::um::ExecuteNetshNpsString(cmd, res);
@@ -1264,7 +1283,11 @@ public:
            << "\"gameinput_connected_devices\":" << micant::gameinput::GameInputManager::get().getVitals().connectedDevicesCount << ","
            << "\"gameinput_active_gamepads\":" << micant::gameinput::GameInputManager::get().getVitals().activeGamepadsCount << ","
            << "\"gameinput_peak_polling_hz\":" << micant::gameinput::GameInputManager::get().getVitals().highestPollingRateHz << ","
-           << "\"gameinput_reports_processed\":" << micant::gameinput::GameInputManager::get().getVitals().totalInputReportsProcessed << "}\r\n";
+           << "\"gameinput_reports_processed\":" << micant::gameinput::GameInputManager::get().getVitals().totalInputReportsProcessed << ","
+           << "\"gpu_hags_enabled\":" << (micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().hagsEnabled ? 1 : 0) << ","
+           << "\"gpu_mpo_planes_active\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().mpoPlanesActive << ","
+           << "\"gpu_avg_frame_latency_us\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().averageFrameLatencyUs << ","
+           << "\"gpu_total_direct_flips\":" << micant::gpu_scheduling::GpuSchedulerManager::get().getVitals().totalDirectFlips << "}\r\n";
         return ss.str();
     }
 
