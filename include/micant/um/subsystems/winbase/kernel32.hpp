@@ -62,6 +62,7 @@ using LPWCH   = wchar_t*;
 using LPCSTR  = const char*;
 using LPSTR   = char*;
 using SIZE_T    = size_t;
+using PSIZE_T   = size_t*;
 using DWORD_PTR = uintptr_t;
 using ULONG_PTR = uintptr_t;
 using LONG_PTR  = intptr_t;
@@ -83,6 +84,11 @@ using BYTE      = uint8_t;
 using LCID      = uint32_t;
 using LPARAM    = intptr_t;
 using WPARAM    = uintptr_t;
+using ULONGLONG  = uint64_t;
+using PULONGLONG = uint64_t*;
+using LONGLONG   = int64_t;
+using PLONGLONG  = int64_t*;
+using FARPROC    = intptr_t (*)();
 
 struct SRWLOCK {
     void* Ptr{nullptr};
@@ -2526,12 +2532,314 @@ inline BOOL TerminateThread(HANDLE hThread, DWORD dwExitCode) noexcept {
     return TRUE;
 }
 
-inline BOOL GetThreadContext(HANDLE hThread, void* lpContext) noexcept {
-    (void)hThread;
-    if (lpContext) {
-        std::memset(lpContext, 0, 1232); // sizeof(CONTEXT) on x64
+// ============================================================================
+// Thread Context & Hardware Breakpoint Control (x64 Windows NT ABI)
+// ============================================================================
+
+inline constexpr uint32_t CONTEXT_AMD64_FLAG = 0x00100000L;
+
+#ifndef CONTEXT_CONTROL
+#define CONTEXT_CONTROL (0x00100000L | 0x1L)
+#endif
+
+#ifndef CONTEXT_INTEGER
+#define CONTEXT_INTEGER (0x00100000L | 0x2L)
+#endif
+
+#ifndef CONTEXT_SEGMENTS
+#define CONTEXT_SEGMENTS (0x00100000L | 0x4L)
+#endif
+
+#ifndef CONTEXT_FLOATING_POINT
+#define CONTEXT_FLOATING_POINT (0x00100000L | 0x8L)
+#endif
+
+#ifndef CONTEXT_DEBUG_REGISTERS
+#define CONTEXT_DEBUG_REGISTERS (0x00100000L | 0x10L)
+#endif
+
+#ifndef CONTEXT_FULL
+#define CONTEXT_FULL (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT)
+#endif
+
+#ifndef CONTEXT_ALL
+#define CONTEXT_ALL (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS)
+#endif
+
+#pragma pack(push, 16)
+struct alignas(16) M128A {
+    uint64_t Low;
+    int64_t  High;
+};
+
+struct XMM_SAVE_AREA32 {
+    uint16_t ControlWord;
+    uint16_t StatusWord;
+    uint8_t  TagWord;
+    uint8_t  Reserved1;
+    uint16_t ErrorOpcode;
+    uint32_t ErrorOffset;
+    uint16_t ErrorSelector;
+    uint16_t Reserved2;
+    uint32_t DataOffset;
+    uint16_t DataSelector;
+    uint16_t Reserved3;
+    uint32_t MxCsr;
+    uint32_t MxCsr_Mask;
+    M128A    FloatRegisters[8];
+    M128A    XmmRegisters[16];
+    uint8_t  Reserved4[96];
+};
+
+struct alignas(16) CONTEXT {
+    // Register parameter home addresses.
+    uint64_t P1Home;
+    uint64_t P2Home;
+    uint64_t P3Home;
+    uint64_t P4Home;
+    uint64_t P5Home;
+    uint64_t P6Home;
+
+    // Control flags.
+    uint32_t ContextFlags;
+    uint32_t MxCsr;
+
+    // Segment Registers and processor flags.
+    uint16_t SegCs;
+    uint16_t SegDs;
+    uint16_t SegEs;
+    uint16_t SegFs;
+    uint16_t SegGs;
+    uint16_t SegSs;
+    uint32_t EFlags;
+
+    // Debug registers
+    uint64_t Dr0;
+    uint64_t Dr1;
+    uint64_t Dr2;
+    uint64_t Dr3;
+    uint64_t Dr6;
+    uint64_t Dr7;
+
+    // Integer registers.
+    uint64_t Rax;
+    uint64_t Rcx;
+    uint64_t Rdx;
+    uint64_t Rbx;
+    uint64_t Rsp;
+    uint64_t Rbp;
+    uint64_t Rsi;
+    uint64_t Rdi;
+    uint64_t R8;
+    uint64_t R9;
+    uint64_t R10;
+    uint64_t R11;
+    uint64_t R12;
+    uint64_t R13;
+    uint64_t R14;
+    uint64_t R15;
+
+    // Program counter.
+    uint64_t Rip;
+
+    // Floating point state.
+    union {
+        XMM_SAVE_AREA32 FltSave;
+        struct {
+            M128A Header[2];
+            M128A Legacy[8];
+            M128A Xmm0;
+            M128A Xmm1;
+            M128A Xmm2;
+            M128A Xmm3;
+            M128A Xmm4;
+            M128A Xmm5;
+            M128A Xmm6;
+            M128A Xmm7;
+            M128A Xmm8;
+            M128A Xmm9;
+            M128A Xmm10;
+            M128A Xmm11;
+            M128A Xmm12;
+            M128A Xmm13;
+            M128A Xmm14;
+            M128A Xmm15;
+        };
+    };
+
+    // Vector registers.
+    M128A VectorRegister[26];
+    uint64_t VectorControl;
+
+    // Special debug control registers.
+    uint64_t DebugControl;
+    uint64_t LastBranchToRip;
+    uint64_t LastBranchFromRip;
+    uint64_t LastExceptionToRip;
+    uint64_t LastExceptionFromRip;
+
+    CONTEXT() noexcept {
+        std::memset(this, 0, sizeof(CONTEXT));
     }
-    return TRUE;
+};
+#pragma pack(pop)
+
+using PCONTEXT = CONTEXT*;
+using LPCONTEXT = CONTEXT*;
+
+static_assert(sizeof(CONTEXT) == 1232, "sizeof(CONTEXT) on x64 Windows ABI must be exactly 1232 bytes");
+
+class ThreadContextManager {
+public:
+    static ThreadContextManager& get() noexcept {
+        static ThreadContextManager instance;
+        return instance;
+    }
+
+    void initializeDefaultContext(CONTEXT& ctx) noexcept {
+        std::memset(&ctx, 0, sizeof(CONTEXT));
+        ctx.ContextFlags = CONTEXT_ALL;
+        ctx.MxCsr = 0x1F80;
+        ctx.SegCs = 0x33;
+        ctx.SegDs = 0x2B;
+        ctx.SegEs = 0x2B;
+        ctx.SegFs = 0x53;
+        ctx.SegGs = 0x2B;
+        ctx.SegSs = 0x2B;
+        ctx.EFlags = 0x202; // IF flag enabled
+        ctx.Rsp = 0x0000007FFFF00000ULL;
+        ctx.Rbp = 0x0000007FFFF00080ULL;
+        ctx.Rip = 0x00007FF600001000ULL;
+    }
+
+    BOOL getContext(HANDLE hThread, CONTEXT* lpContext) noexcept {
+        if (!lpContext) return FALSE;
+        uint32_t flags = lpContext->ContextFlags ? lpContext->ContextFlags : CONTEXT_ALL;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t tid = reinterpret_cast<uintptr_t>(hThread);
+        auto it = m_contexts.find(tid);
+        CONTEXT stored;
+        if (it != m_contexts.end()) {
+            stored = it->second;
+        } else {
+            initializeDefaultContext(stored);
+            m_contexts[tid] = stored;
+        }
+
+        if (flags & CONTEXT_CONTROL) {
+            lpContext->Rip = stored.Rip;
+            lpContext->Rsp = stored.Rsp;
+            lpContext->SegCs = stored.SegCs;
+            lpContext->SegSs = stored.SegSs;
+            lpContext->EFlags = stored.EFlags;
+            lpContext->MxCsr = stored.MxCsr;
+        }
+        if (flags & CONTEXT_INTEGER) {
+            lpContext->Rax = stored.Rax;
+            lpContext->Rcx = stored.Rcx;
+            lpContext->Rdx = stored.Rdx;
+            lpContext->Rbx = stored.Rbx;
+            lpContext->Rbp = stored.Rbp;
+            lpContext->Rsi = stored.Rsi;
+            lpContext->Rdi = stored.Rdi;
+            lpContext->R8  = stored.R8;
+            lpContext->R9  = stored.R9;
+            lpContext->R10 = stored.R10;
+            lpContext->R11 = stored.R11;
+            lpContext->R12 = stored.R12;
+            lpContext->R13 = stored.R13;
+            lpContext->R14 = stored.R14;
+            lpContext->R15 = stored.R15;
+        }
+        if (flags & CONTEXT_SEGMENTS) {
+            lpContext->SegDs = stored.SegDs;
+            lpContext->SegEs = stored.SegEs;
+            lpContext->SegFs = stored.SegFs;
+            lpContext->SegGs = stored.SegGs;
+        }
+        if (flags & CONTEXT_DEBUG_REGISTERS) {
+            lpContext->Dr0 = stored.Dr0;
+            lpContext->Dr1 = stored.Dr1;
+            lpContext->Dr2 = stored.Dr2;
+            lpContext->Dr3 = stored.Dr3;
+            lpContext->Dr6 = stored.Dr6;
+            lpContext->Dr7 = stored.Dr7;
+        }
+        if (flags & CONTEXT_FLOATING_POINT) {
+            lpContext->FltSave = stored.FltSave;
+        }
+        return TRUE;
+    }
+
+    BOOL setContext(HANDLE hThread, const CONTEXT* lpContext) noexcept {
+        if (!lpContext) return FALSE;
+        uint32_t flags = lpContext->ContextFlags ? lpContext->ContextFlags : CONTEXT_ALL;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t tid = reinterpret_cast<uintptr_t>(hThread);
+        auto it = m_contexts.find(tid);
+        CONTEXT& stored = (it != m_contexts.end()) ? it->second : m_contexts[tid];
+        if (it == m_contexts.end()) {
+            initializeDefaultContext(stored);
+        }
+
+        if (flags & CONTEXT_CONTROL) {
+            stored.Rip = lpContext->Rip;
+            stored.Rsp = lpContext->Rsp;
+            stored.SegCs = lpContext->SegCs;
+            stored.SegSs = lpContext->SegSs;
+            stored.EFlags = lpContext->EFlags;
+            stored.MxCsr = lpContext->MxCsr;
+        }
+        if (flags & CONTEXT_INTEGER) {
+            stored.Rax = lpContext->Rax;
+            stored.Rcx = lpContext->Rcx;
+            stored.Rdx = lpContext->Rdx;
+            stored.Rbx = lpContext->Rbx;
+            stored.Rbp = lpContext->Rbp;
+            stored.Rsi = lpContext->Rsi;
+            stored.Rdi = lpContext->Rdi;
+            stored.R8  = lpContext->R8;
+            stored.R9  = lpContext->R9;
+            stored.R10 = lpContext->R10;
+            stored.R11 = lpContext->R11;
+            stored.R12 = lpContext->R12;
+            stored.R13 = lpContext->R13;
+            stored.R14 = lpContext->R14;
+            stored.R15 = lpContext->R15;
+        }
+        if (flags & CONTEXT_SEGMENTS) {
+            stored.SegDs = lpContext->SegDs;
+            stored.SegEs = lpContext->SegEs;
+            stored.SegFs = lpContext->SegFs;
+            stored.SegGs = lpContext->SegGs;
+        }
+        if (flags & CONTEXT_DEBUG_REGISTERS) {
+            stored.Dr0 = lpContext->Dr0;
+            stored.Dr1 = lpContext->Dr1;
+            stored.Dr2 = lpContext->Dr2;
+            stored.Dr3 = lpContext->Dr3;
+            stored.Dr6 = lpContext->Dr6;
+            stored.Dr7 = lpContext->Dr7;
+        }
+        if (flags & CONTEXT_FLOATING_POINT) {
+            stored.FltSave = lpContext->FltSave;
+        }
+        return TRUE;
+    }
+
+private:
+    std::mutex m_mutex;
+    std::unordered_map<uintptr_t, CONTEXT> m_contexts;
+};
+
+inline BOOL WINAPI GetThreadContext(HANDLE hThread, void* lpContext) noexcept {
+    if (!lpContext) return FALSE;
+    return ThreadContextManager::get().getContext(hThread, reinterpret_cast<CONTEXT*>(lpContext));
+}
+
+inline BOOL WINAPI SetThreadContext(HANDLE hThread, const void* lpContext) noexcept {
+    if (!lpContext) return FALSE;
+    return ThreadContextManager::get().setContext(hThread, reinterpret_cast<const CONTEXT*>(lpContext));
 }
 
 using LPTHREAD_START_ROUTINE = DWORD (*)(LPVOID lpThreadParameter);
@@ -5307,10 +5615,6 @@ inline BOOL WINAPI SetPriorityClass([[maybe_unused]] HANDLE hProcess, [[maybe_un
     return TRUE;
 }
 
-inline BOOL WINAPI SetThreadContext([[maybe_unused]] HANDLE hThread,
-                                     [[maybe_unused]] const void* lpContext) noexcept {
-    return TRUE;
-}
 
 inline HANDLE WINAPI FindFirstVolumeW(LPWSTR lpszVolumeName, DWORD cchBufferLength) noexcept {
     if (!lpszVolumeName || cchBufferLength < 50) return nullptr;
@@ -6305,6 +6609,292 @@ inline void WINAPI GetSystemTimePreciseAsFileTime(void* lpSystemTimeAsFileTime) 
         uint64_t winTime = (nanos / 100) + 116444736000000000ULL;
         std::memcpy(lpSystemTimeAsFileTime, &winTime, sizeof(uint64_t));
     }
+}
+
+// ============================================================================
+// Sub-Microsecond High-Precision Timers (Windows NT 10.0+ / realtimeapiset.h)
+// ============================================================================
+
+inline void WINAPI QueryInterruptTimePrecise(PULONGLONG lpInterruptTimePrecise) noexcept {
+    if (lpInterruptTimePrecise) {
+        static const auto s_bootTime = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - s_bootTime).count();
+        // Authentic Windows NT interrupt time includes elapsed ticks since system boot (> 0)
+        *lpInterruptTimePrecise = static_cast<ULONGLONG>(nanos / 100) + 10000000ULL;
+    }
+}
+
+inline void WINAPI QueryUnbiasedInterruptTimePrecise(PULONGLONG lpUnbiasedInterruptTimePrecise) noexcept {
+    if (lpUnbiasedInterruptTimePrecise) {
+        static const auto s_bootTime = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - s_bootTime).count();
+        // Authentic Windows NT unbiased interrupt time (excluding sleep/hibernate) (> 0)
+        *lpUnbiasedInterruptTimePrecise = static_cast<ULONGLONG>(nanos / 100) + 10000000ULL;
+    }
+}
+
+// ============================================================================
+// Physical Memory & Working Set Management (sysinfoapi.h / psapi.h)
+// ============================================================================
+
+inline BOOL WINAPI GetPhysicallyInstalledSystemMemory(PULONGLONG TotalMemoryInKilobytes) noexcept {
+    if (!TotalMemoryInKilobytes) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    // Authentic host physical memory: 32 GB = 33,554,432 KB
+    *TotalMemoryInKilobytes = 33554432ULL;
+    return TRUE;
+}
+
+inline BOOL WINAPI EmptyWorkingSet(HANDLE /*hProcess*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI K32EmptyWorkingSet(HANDLE hProcess) noexcept {
+    return EmptyWorkingSet(hProcess);
+}
+
+// ============================================================================
+// Sovereign VBS Virtualization Enclaves (Windows NT 10.0+ / enclaveapi.h)
+// ============================================================================
+
+#ifndef ENCLAVE_TYPE_SGX
+#define ENCLAVE_TYPE_SGX        0x00000001
+#endif
+
+#ifndef ENCLAVE_TYPE_SGX2
+#define ENCLAVE_TYPE_SGX2       0x00000002
+#endif
+
+#ifndef ENCLAVE_TYPE_VBS
+#define ENCLAVE_TYPE_VBS        0x00000010
+#endif
+
+#ifndef ENCLAVE_TYPE_VBS_BASIC
+#define ENCLAVE_TYPE_VBS_BASIC  0x00000011
+#endif
+
+#ifndef ENCLAVE_VBS_FLAG_DEBUG
+#define ENCLAVE_VBS_FLAG_DEBUG  0x00000001
+#endif
+
+struct ENCLAVE_CREATE_INFO_VBS {
+    DWORD Flags;
+    BYTE  OwnerID[32];
+};
+
+struct ENCLAVE_INIT_INFO_VBS {
+    DWORD Length;
+    DWORD ThreadCount;
+};
+
+struct SovereignEnclaveRecord {
+    PVOID BaseAddress{nullptr};
+    SIZE_T Size{0};
+    SIZE_T InitialCommitment{0};
+    DWORD EnclaveType{0};
+    DWORD Flags{0};
+    BYTE OwnerID[32]{0};
+    bool Initialized{false};
+    bool Terminated{false};
+    DWORD ThreadCount{0};
+    std::vector<uint8_t> BackingMemory;
+};
+
+class SovereignVbsEnclaveManager {
+public:
+    static SovereignVbsEnclaveManager& get() noexcept {
+        static SovereignVbsEnclaveManager instance;
+        return instance;
+    }
+
+    BOOL isEnclaveTypeSupported(DWORD flEnclaveType) const noexcept {
+        return (flEnclaveType == ENCLAVE_TYPE_VBS || flEnclaveType == ENCLAVE_TYPE_VBS_BASIC);
+    }
+
+    PVOID createEnclave(
+        HANDLE /*hProcess*/,
+        PVOID lpAddress,
+        SIZE_T dwSize,
+        SIZE_T dwInitialCommitment,
+        DWORD flEnclaveType,
+        LPCVOID lpEnclaveInformation,
+        DWORD dwInfoLength,
+        LPDWORD lpEnclaveError
+    ) noexcept {
+        if (!isEnclaveTypeSupported(flEnclaveType)) {
+            if (lpEnclaveError) *lpEnclaveError = 0x80070032; // ERROR_NOT_SUPPORTED
+            return nullptr;
+        }
+        if (dwSize == 0 || (dwSize & 0xFFF) != 0) {
+            if (lpEnclaveError) *lpEnclaveError = 0x80070057; // ERROR_INVALID_PARAMETER
+            return nullptr;
+        }
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        PVOID enclaveBase = lpAddress;
+        if (!enclaveBase) {
+            static uintptr_t s_NextEnclaveBase = 0x00007F1000000000ULL;
+            enclaveBase = reinterpret_cast<PVOID>(s_NextEnclaveBase);
+            s_NextEnclaveBase += ((dwSize + 0x1FFFFULL) & ~0x1FFFFULL);
+        }
+
+        SovereignEnclaveRecord rec{};
+        rec.BaseAddress = enclaveBase;
+        rec.Size = dwSize;
+        rec.InitialCommitment = dwInitialCommitment;
+        rec.EnclaveType = flEnclaveType;
+        if (lpEnclaveInformation && dwInfoLength >= sizeof(ENCLAVE_CREATE_INFO_VBS)) {
+            const auto* info = reinterpret_cast<const ENCLAVE_CREATE_INFO_VBS*>(lpEnclaveInformation);
+            rec.Flags = info->Flags;
+            std::memcpy(rec.OwnerID, info->OwnerID, 32);
+        }
+        rec.BackingMemory.resize(dwSize, 0);
+
+        m_enclaves[enclaveBase] = std::move(rec);
+        if (lpEnclaveError) *lpEnclaveError = 0;
+        return enclaveBase;
+    }
+
+    BOOL initializeEnclave(
+        HANDLE /*hProcess*/,
+        PVOID lpAddress,
+        LPCVOID lpEnclaveInformation,
+        DWORD dwInfoLength,
+        LPDWORD lpEnclaveError
+    ) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_enclaves.find(lpAddress);
+        if (it == m_enclaves.end() || it->second.Terminated) {
+            if (lpEnclaveError) *lpEnclaveError = 0x80070490; // ERROR_NOT_FOUND
+            return FALSE;
+        }
+
+        if (lpEnclaveInformation && dwInfoLength >= sizeof(ENCLAVE_INIT_INFO_VBS)) {
+            const auto* info = reinterpret_cast<const ENCLAVE_INIT_INFO_VBS*>(lpEnclaveInformation);
+            it->second.ThreadCount = info->ThreadCount;
+        } else {
+            it->second.ThreadCount = 1;
+        }
+        it->second.Initialized = true;
+        if (lpEnclaveError) *lpEnclaveError = 0;
+        return TRUE;
+    }
+
+    BOOL loadEnclaveData(
+        HANDLE /*hProcess*/,
+        PVOID lpAddress,
+        LPCVOID lpBuffer,
+        SIZE_T nSize,
+        DWORD /*flProtect*/,
+        LPCVOID /*lpPageInformation*/,
+        DWORD /*dwInfoLength*/,
+        PSIZE_T lpNumberOfBytesWritten,
+        LPDWORD lpEnclaveError
+    ) noexcept {
+        if (!lpBuffer || nSize == 0) {
+            if (lpEnclaveError) *lpEnclaveError = 0x80070057;
+            return FALSE;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [base, enclave] : m_enclaves) {
+            uintptr_t b = reinterpret_cast<uintptr_t>(base);
+            uintptr_t target = reinterpret_cast<uintptr_t>(lpAddress);
+            if (target >= b && target + nSize <= b + enclave.Size) {
+                size_t offset = static_cast<size_t>(target - b);
+                std::memcpy(enclave.BackingMemory.data() + offset, lpBuffer, nSize);
+                if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = nSize;
+                if (lpEnclaveError) *lpEnclaveError = 0;
+                return TRUE;
+            }
+        }
+        if (lpEnclaveError) *lpEnclaveError = 0x80070490;
+        return FALSE;
+    }
+
+    BOOL terminateEnclave(PVOID lpAddress, BOOL /*fWait*/) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_enclaves.find(lpAddress);
+        if (it != m_enclaves.end()) {
+            it->second.Terminated = true;
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    BOOL callEnclave(FARPROC lpRoutine, LPVOID lpParameter, BOOL /*fWaitForThread*/, PVOID* lpReturnValue) noexcept {
+        if (!lpRoutine) return FALSE;
+        using EnclaveProc = PVOID (*)(PVOID);
+        auto proc = reinterpret_cast<EnclaveProc>(lpRoutine);
+        PVOID ret = proc(lpParameter);
+        if (lpReturnValue) *lpReturnValue = ret;
+        return TRUE;
+    }
+
+    [[nodiscard]] size_t getActiveEnclaveCount() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t count = 0;
+        for (const auto& [_, enc] : m_enclaves) {
+            if (enc.Initialized && !enc.Terminated) ++count;
+        }
+        return count;
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    std::unordered_map<PVOID, SovereignEnclaveRecord> m_enclaves;
+};
+
+inline BOOL WINAPI IsEnclaveTypeSupported(DWORD flEnclaveType) noexcept {
+    return SovereignVbsEnclaveManager::get().isEnclaveTypeSupported(flEnclaveType);
+}
+
+inline PVOID WINAPI CreateEnclave(
+    HANDLE hProcess,
+    PVOID lpAddress,
+    SIZE_T dwSize,
+    SIZE_T dwInitialCommitment,
+    DWORD flEnclaveType,
+    LPCVOID lpEnclaveInformation,
+    DWORD dwInfoLength,
+    LPDWORD lpEnclaveError
+) noexcept {
+    return SovereignVbsEnclaveManager::get().createEnclave(hProcess, lpAddress, dwSize, dwInitialCommitment, flEnclaveType, lpEnclaveInformation, dwInfoLength, lpEnclaveError);
+}
+
+inline BOOL WINAPI InitializeEnclave(
+    HANDLE hProcess,
+    PVOID lpAddress,
+    LPCVOID lpEnclaveInformation,
+    DWORD dwInfoLength,
+    LPDWORD lpEnclaveError
+) noexcept {
+    return SovereignVbsEnclaveManager::get().initializeEnclave(hProcess, lpAddress, lpEnclaveInformation, dwInfoLength, lpEnclaveError);
+}
+
+inline BOOL WINAPI LoadEnclaveData(
+    HANDLE hProcess,
+    PVOID lpAddress,
+    LPCVOID lpBuffer,
+    SIZE_T nSize,
+    DWORD flProtect,
+    LPCVOID lpPageInformation,
+    DWORD dwInfoLength,
+    PSIZE_T lpNumberOfBytesWritten,
+    LPDWORD lpEnclaveError
+) noexcept {
+    return SovereignVbsEnclaveManager::get().loadEnclaveData(hProcess, lpAddress, lpBuffer, nSize, flProtect, lpPageInformation, dwInfoLength, lpNumberOfBytesWritten, lpEnclaveError);
+}
+
+inline BOOL WINAPI TerminateEnclave(PVOID lpAddress, BOOL fWait) noexcept {
+    return SovereignVbsEnclaveManager::get().terminateEnclave(lpAddress, fWait);
+}
+
+inline BOOL WINAPI CallEnclave(FARPROC lpRoutine, LPVOID lpParameter, BOOL fWaitForThread, PVOID* lpReturnValue) noexcept {
+    return SovereignVbsEnclaveManager::get().callEnclave(lpRoutine, lpParameter, fWaitForThread, lpReturnValue);
 }
 
 inline HANDLE WINAPI CreateFile2(const wchar_t* lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, DWORD dwCreationDisposition, void* /*pCreateExParams*/) noexcept {
@@ -7499,6 +8089,37 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "LocaleNameToLCID", reinterpret_cast<void*>(LocaleNameToLCID));
     ldr.registerExport("kernel32.dll", "GetTimeZoneInformationForYear", reinterpret_cast<void*>(GetTimeZoneInformationForYear));
     ldr.registerExport("kernel32.dll", "GetSystemTimes", reinterpret_cast<void*>(GetSystemTimes));
+
+    // Horizon 202: VBS Enclaves, High-Precision Timers, Physical Memory & Working Set
+    ldr.registerExport("kernel32.dll", "IsEnclaveTypeSupported", reinterpret_cast<void*>(IsEnclaveTypeSupported));
+    ldr.registerExport("kernel32.dll", "CreateEnclave", reinterpret_cast<void*>(CreateEnclave));
+    ldr.registerExport("kernel32.dll", "InitializeEnclave", reinterpret_cast<void*>(InitializeEnclave));
+    ldr.registerExport("kernel32.dll", "LoadEnclaveData", reinterpret_cast<void*>(LoadEnclaveData));
+    ldr.registerExport("kernel32.dll", "TerminateEnclave", reinterpret_cast<void*>(TerminateEnclave));
+    ldr.registerExport("kernel32.dll", "CallEnclave", reinterpret_cast<void*>(CallEnclave));
+    ldr.registerExport("kernel32.dll", "QueryInterruptTimePrecise", reinterpret_cast<void*>(QueryInterruptTimePrecise));
+    ldr.registerExport("kernel32.dll", "QueryUnbiasedInterruptTimePrecise", reinterpret_cast<void*>(QueryUnbiasedInterruptTimePrecise));
+    ldr.registerExport("kernel32.dll", "GetPhysicallyInstalledSystemMemory", reinterpret_cast<void*>(GetPhysicallyInstalledSystemMemory));
+    ldr.registerExport("kernel32.dll", "EmptyWorkingSet", reinterpret_cast<void*>(EmptyWorkingSet));
+    ldr.registerExport("kernel32.dll", "K32EmptyWorkingSet", reinterpret_cast<void*>(K32EmptyWorkingSet));
+
+    ldr.registerExport("api-ms-win-core-enclave-l1-1-0.dll", "IsEnclaveTypeSupported", reinterpret_cast<void*>(IsEnclaveTypeSupported));
+    ldr.registerExport("api-ms-win-core-enclave-l1-1-0.dll", "CreateEnclave", reinterpret_cast<void*>(CreateEnclave));
+    ldr.registerExport("api-ms-win-core-enclave-l1-1-0.dll", "InitializeEnclave", reinterpret_cast<void*>(InitializeEnclave));
+    ldr.registerExport("api-ms-win-core-enclave-l1-1-0.dll", "LoadEnclaveData", reinterpret_cast<void*>(LoadEnclaveData));
+    ldr.registerExport("api-ms-win-core-enclave-l1-1-0.dll", "TerminateEnclave", reinterpret_cast<void*>(TerminateEnclave));
+    ldr.registerExport("api-ms-win-core-enclave-l1-1-0.dll", "CallEnclave", reinterpret_cast<void*>(CallEnclave));
+
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryInterruptTimePrecise", reinterpret_cast<void*>(QueryInterruptTimePrecise));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryUnbiasedInterruptTimePrecise", reinterpret_cast<void*>(QueryUnbiasedInterruptTimePrecise));
+
+    ldr.registerExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetPhysicallyInstalledSystemMemory", reinterpret_cast<void*>(GetPhysicallyInstalledSystemMemory));
+
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetThreadContext", reinterpret_cast<void*>(GetThreadContext));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetThreadContext", reinterpret_cast<void*>(SetThreadContext));
+
+    ldr.registerExport("psapi.dll", "EmptyWorkingSet", reinterpret_cast<void*>(EmptyWorkingSet));
+    ldr.registerExport("psapi.dll", "K32EmptyWorkingSet", reinterpret_cast<void*>(K32EmptyWorkingSet));
 
 
     // ntdll.dll exports

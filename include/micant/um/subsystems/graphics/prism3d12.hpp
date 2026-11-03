@@ -335,6 +335,7 @@ class ID3D12PipelineState;
 class ID3D12DescriptorHeap;
 class ID3D12CommandList;
 class ID3D12GraphicsCommandList;
+class ID3D12GraphicsCommandList10;
 class ID3D12CommandQueue;
 class ID3D12Device;
 
@@ -409,6 +410,81 @@ public:
     virtual void SetPipelineState(ID3D12PipelineState* pPipelineState) = 0;
     virtual void DrawInstanced(uint32_t VertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation) = 0;
     virtual void DrawIndexedInstanced(uint32_t IndexCountPerInstance, uint32_t InstanceCount, uint32_t StartIndexLocation, int32_t BaseVertexLocation, uint32_t StartInstanceLocation) = 0;
+};
+
+// ============================================================================
+// DirectX 12 Agility SDK: Work Graphs & Command List 10
+// ============================================================================
+
+enum D3D12_PROGRAM_TYPE {
+    D3D12_PROGRAM_TYPE_GENERIC_PIPELINE = 1,
+    D3D12_PROGRAM_TYPE_RAYTRACING_PIPELINE = 2,
+    D3D12_PROGRAM_TYPE_WORK_GRAPH = 3
+};
+
+enum D3D12_SET_WORK_GRAPH_FLAGS {
+    D3D12_SET_WORK_GRAPH_FLAG_NONE = 0,
+    D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE = 1
+};
+
+struct D3D12_GPU_VIRTUAL_ADDRESS_RANGE {
+    uint64_t StartAddress{0};
+    uint64_t SizeInBytes{0};
+};
+
+struct D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE {
+    uint64_t StartAddress{0};
+    uint64_t SizeInBytes{0};
+    uint64_t StrideInBytes{0};
+};
+
+struct D3D12_SET_WORK_GRAPH_DESC {
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE ProgramIdentifier{};
+    D3D12_SET_WORK_GRAPH_FLAGS Flags{D3D12_SET_WORK_GRAPH_FLAG_NONE};
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE BackingMemory{};
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE NodeLocalRootArgumentsTable{};
+};
+
+struct D3D12_SET_PROGRAM_DESC {
+    D3D12_PROGRAM_TYPE Type{D3D12_PROGRAM_TYPE_WORK_GRAPH};
+    union {
+        D3D12_SET_WORK_GRAPH_DESC WorkGraph;
+    };
+};
+
+enum D3D12_DISPATCH_MODE {
+    D3D12_DISPATCH_MODE_NODE_CPU_INPUT = 0,
+    D3D12_DISPATCH_MODE_NODE_GPU_INPUT = 1
+};
+
+struct D3D12_NODE_CPU_INPUT {
+    uint32_t EntrypointIndex{0};
+    uint32_t NumRecords{0};
+    const void* pRecords{nullptr};
+    uint64_t RecordStrideInBytes{0};
+};
+
+struct D3D12_DISPATCH_GRAPH_DESC {
+    D3D12_DISPATCH_MODE Mode{D3D12_DISPATCH_MODE_NODE_CPU_INPUT};
+    union {
+        D3D12_NODE_CPU_INPUT NodeCPUInput;
+        D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE NodeGPUInput;
+    };
+};
+
+enum D3D12_WORK_GRAPHS_TIER {
+    D3D12_WORK_GRAPHS_TIER_NOT_SUPPORTED = 0,
+    D3D12_WORK_GRAPHS_TIER_1_0 = 10,
+    D3D12_WORK_GRAPHS_TIER_1_1 = 11
+};
+
+static constexpr IID IID_ID3D12GraphicsCommandList10 = 
+    { 0x217d12bc, 0x1f72, 0x4f72, { 0x87, 0x05, 0x76, 0x8a, 0x48, 0x49, 0x89, 0xb8 } };
+
+class ID3D12GraphicsCommandList10 : public ID3D12GraphicsCommandList {
+public:
+    virtual void SetProgram(const D3D12_SET_PROGRAM_DESC* pDesc) = 0;
+    virtual void DispatchGraph(const D3D12_DISPATCH_GRAPH_DESC* pDesc) = 0;
 };
 
 class ID3D12CommandQueue : public ID3D12DeviceChild {
@@ -775,7 +851,7 @@ public:
 };
 
 // Command List implementation
-class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList {
+class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList10 {
 public:
     enum class CommandType {
         TransitionBarrier,
@@ -819,6 +895,9 @@ private:
     D3D12_COMMAND_LIST_TYPE m_type{ D3D12_COMMAND_LIST_TYPE_DIRECT };
     bool m_isOpen{ true };
     std::vector<Command> m_commands;
+    bool m_hasProgram{ false };
+    D3D12_SET_PROGRAM_DESC m_currentProgram{};
+    std::vector<D3D12_DISPATCH_GRAPH_DESC> m_dispatchedGraphs;
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -827,8 +906,9 @@ public:
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
-            riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList) {
-            *ppv = static_cast<ID3D12GraphicsCommandList*>(this);
+            riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
+            riid == IID_ID3D12GraphicsCommandList10) {
+            *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
             return 0;
         }
@@ -864,12 +944,16 @@ public:
     int32_t Reset(ID3D12CommandAllocator* pAllocator, ID3D12PipelineState*) override {
         m_pAllocator = pAllocator;
         m_commands.clear();
+        m_dispatchedGraphs.clear();
+        m_hasProgram = false;
         m_isOpen = true;
         return 0;
     }
 
     void ClearState(ID3D12PipelineState*) override {
         m_commands.clear();
+        m_dispatchedGraphs.clear();
+        m_hasProgram = false;
     }
 
     void ResourceBarrier(uint32_t NumBarriers, const D3D12_RESOURCE_BARRIER* pBarriers) override {
@@ -985,6 +1069,22 @@ public:
         m_commands.push_back(cmd);
     }
 
+    void SetProgram(const D3D12_SET_PROGRAM_DESC* pDesc) override {
+        if (!m_isOpen || !pDesc) return;
+        m_currentProgram = *pDesc;
+        m_hasProgram = true;
+    }
+
+    void DispatchGraph(const D3D12_DISPATCH_GRAPH_DESC* pDesc) override {
+        if (!m_isOpen || !pDesc) return;
+        m_dispatchedGraphs.push_back(*pDesc);
+    }
+
+    [[nodiscard]] bool HasProgram() const noexcept { return m_hasProgram; }
+    [[nodiscard]] const D3D12_SET_PROGRAM_DESC& GetCurrentProgram() const noexcept { return m_currentProgram; }
+    [[nodiscard]] size_t GetDispatchedGraphCount() const noexcept { return m_dispatchedGraphs.size(); }
+    [[nodiscard]] const std::vector<D3D12_DISPATCH_GRAPH_DESC>& GetDispatchedGraphs() const noexcept { return m_dispatchedGraphs; }
+
     const std::vector<Command>& GetRecordedCommands() const { return m_commands; }
     bool IsOpen() const { return m_isOpen; }
 };
@@ -1081,7 +1181,7 @@ private:
     D3D_FEATURE_LEVEL m_featureLevel{ D3D_FEATURE_LEVEL_12_0 };
 
 public:
-    Prism3D12DeviceImpl(IUnknown* pAdapter, D3D_FEATURE_LEVEL fl)
+    Prism3D12DeviceImpl(IUnknown* pAdapter = nullptr, D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_12_0)
         : m_pAdapter(pAdapter), m_featureLevel(fl) {
         if (m_pAdapter) m_pAdapter->AddRef();
     }
