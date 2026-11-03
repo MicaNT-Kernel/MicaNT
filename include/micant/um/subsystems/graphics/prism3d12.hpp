@@ -643,6 +643,8 @@ public:
 // DirectX 12 Feature Options 5, 7, 12, 13, 14 & 15
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS5  = 21;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS7  = 23;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS8  = 24;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS9  = 25;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS12 = 28;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS13 = 29;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS14 = 30;
@@ -680,6 +682,24 @@ enum D3D12_MESH_SHADER_TIER {
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS7 {
     D3D12_SAMPLER_FEEDBACK_TIER SamplerFeedbackTier{D3D12_SAMPLER_FEEDBACK_TIER_1_0};
     D3D12_MESH_SHADER_TIER      MeshShaderTier{D3D12_MESH_SHADER_TIER_1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS8 {
+    BOOL UnalignedBlockTexturesSupported{1};
+};
+
+enum D3D12_WAVE_MMA_TIER {
+    D3D12_WAVE_MMA_TIER_NOT_SUPPORTED = 0,
+    D3D12_WAVE_MMA_TIER_1_0           = 10
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS9 {
+    BOOL MeshShaderPipelineStatsSupported{1};
+    BOOL MeshShaderSupportsFullRangeRenderTargetArrayIndex{1};
+    BOOL AtomicInt64OnTypedResourceSupported{0};
+    BOOL AtomicInt64OnGroupSharedSupported{0};
+    BOOL DerivativesInMeshAndAmplificationShadersSupported{1};
+    D3D12_WAVE_MMA_TIER WaveMMATier{D3D12_WAVE_MMA_TIER_1_0};
 };
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS12 {
@@ -1563,6 +1583,23 @@ public:
             if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS7)) return -1;
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS7*>(pFeatureSupportData);
             pData->SamplerFeedbackTier = D3D12_SAMPLER_FEEDBACK_TIER_1_0;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS8) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS8)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS8*>(pFeatureSupportData);
+            pData->UnalignedBlockTexturesSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS9) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS9)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS9*>(pFeatureSupportData);
+            pData->MeshShaderPipelineStatsSupported = TRUE;
+            pData->MeshShaderSupportsFullRangeRenderTargetArrayIndex = TRUE;
+            pData->AtomicInt64OnTypedResourceSupported = FALSE;
+            pData->AtomicInt64OnGroupSharedSupported = FALSE;
+            pData->DerivativesInMeshAndAmplificationShadersSupported = TRUE;
+            pData->WaveMMATier = D3D12_WAVE_MMA_TIER_1_0;
             return 0;
         }
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS12) {

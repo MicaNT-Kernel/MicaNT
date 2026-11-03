@@ -235,6 +235,7 @@
 #include "micant/um/subsystems/mgmt/pdh.hpp"
 #include "micant/km/executive/etw.hpp"
 #include "micant/um/subsystems/security/acl.hpp"
+#include "micant/um/subsystems/media/avrt.hpp"
 #include "micant/um/subsystems/net/netapi32.hpp"
 #include "micant/um/servers/ldap.hpp"
 #include "micant/um/servers/termsrv.hpp"
@@ -450,6 +451,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite423") {
+        RUN_TEST(Test_Horizon207_Veh_Options89_Mmcss_And_SystemInterruptInfo_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite422") {
@@ -2114,6 +2119,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon204_RawInput_ThreadPacing_SamplerFeedback_And_BcryptCng_Suite);
     RUN_TEST(Test_Horizon205_SecurityTokens_MeshShaders_Topology_And_FileInfo_Suite);
     RUN_TEST(Test_Horizon206_SecurityDescriptors_Raytracing_MemoryProtection_And_PerformanceInfo_Suite);
+    RUN_TEST(Test_Horizon207_Veh_Options89_Mmcss_And_SystemInterruptInfo_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

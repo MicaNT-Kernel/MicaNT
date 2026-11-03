@@ -5,13 +5,218 @@
 #include <string_view>
 #include <span>
 #include <cwchar>
+#include <mutex>
+#include <vector>
 #include "micant/shared/ntdef.hpp"
+#include "micant/shared/context.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/core/dispatcher.hpp"
 #include "micant/km/executive/heap.hpp"
 #include "micant/um/native/ldr.hpp"
 
 namespace micant::ntdll {
+
+// ============================================================================
+// Vectored Exception & Continue Handling (VEH / VCH)
+// ============================================================================
+
+using micant::CONTEXT;
+using micant::PCONTEXT;
+using micant::LPCONTEXT;
+
+#ifndef EXCEPTION_MAXIMUM_PARAMETERS
+#define EXCEPTION_MAXIMUM_PARAMETERS 15
+#endif
+
+#ifndef EXCEPTION_CONTINUE_SEARCH
+#define EXCEPTION_CONTINUE_SEARCH 0
+#endif
+
+#ifndef EXCEPTION_CONTINUE_EXECUTION
+#define EXCEPTION_CONTINUE_EXECUTION (-1)
+#endif
+
+inline constexpr uint32_t EXCEPTION_ACCESS_VIOLATION = 0xC0000005;
+inline constexpr uint32_t EXCEPTION_BREAKPOINT = 0x80000003;
+inline constexpr uint32_t EXCEPTION_SINGLE_STEP = 0x80000004;
+inline constexpr uint32_t EXCEPTION_GUARD_PAGE = 0x80000001;
+inline constexpr uint32_t EXCEPTION_ILLEGAL_INSTRUCTION = 0xC000001D;
+inline constexpr uint32_t EXCEPTION_DATATYPE_MISALIGNMENT = 0x80000002;
+
+struct EXCEPTION_RECORD {
+    uint32_t ExceptionCode{0};
+    uint32_t ExceptionFlags{0};
+    struct EXCEPTION_RECORD* ExceptionRecord{nullptr};
+    void* ExceptionAddress{nullptr};
+    uint32_t NumberParameters{0};
+    uintptr_t ExceptionInformation[EXCEPTION_MAXIMUM_PARAMETERS]{0};
+};
+using PEXCEPTION_RECORD = EXCEPTION_RECORD*;
+
+struct EXCEPTION_POINTERS {
+    PEXCEPTION_RECORD ExceptionRecord{nullptr};
+    PCONTEXT          ContextRecord{nullptr};
+};
+using PEXCEPTION_POINTERS = EXCEPTION_POINTERS*;
+
+using PVECTORED_EXCEPTION_HANDLER = int32_t (WINAPI *)(PEXCEPTION_POINTERS ExceptionInfo);
+
+class VectoredHandlerManager {
+public:
+    static VectoredHandlerManager& get() noexcept {
+        static VectoredHandlerManager instance;
+        return instance;
+    }
+
+    struct HandlerEntry {
+        uintptr_t id;
+        PVECTORED_EXCEPTION_HANDLER handler;
+    };
+
+    void* addExceptionHandler(uint32_t First, PVECTORED_EXCEPTION_HANDLER Handler) noexcept {
+        if (!Handler) return nullptr;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t id = ++m_nextId;
+        HandlerEntry entry{ id, Handler };
+        if (First) {
+            m_exceptionHandlers.insert(m_exceptionHandlers.begin(), entry);
+        } else {
+            m_exceptionHandlers.push_back(entry);
+        }
+        return reinterpret_cast<void*>(id);
+    }
+
+    uint32_t removeExceptionHandler(void* Handle) noexcept {
+        if (!Handle) return 0;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t id = reinterpret_cast<uintptr_t>(Handle);
+        for (auto it = m_exceptionHandlers.begin(); it != m_exceptionHandlers.end(); ++it) {
+            if (it->id == id) {
+                m_exceptionHandlers.erase(it);
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    void* addContinueHandler(uint32_t First, PVECTORED_EXCEPTION_HANDLER Handler) noexcept {
+        if (!Handler) return nullptr;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t id = ++m_nextId;
+        HandlerEntry entry{ id, Handler };
+        if (First) {
+            m_continueHandlers.insert(m_continueHandlers.begin(), entry);
+        } else {
+            m_continueHandlers.push_back(entry);
+        }
+        return reinterpret_cast<void*>(id);
+    }
+
+    uint32_t removeContinueHandler(void* Handle) noexcept {
+        if (!Handle) return 0;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t id = reinterpret_cast<uintptr_t>(Handle);
+        for (auto it = m_continueHandlers.begin(); it != m_continueHandlers.end(); ++it) {
+            if (it->id == id) {
+                m_continueHandlers.erase(it);
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    int32_t dispatchException(PEXCEPTION_POINTERS ExceptionInfo) noexcept {
+        if (!ExceptionInfo) return EXCEPTION_CONTINUE_SEARCH;
+        std::vector<PVECTORED_EXCEPTION_HANDLER> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            snapshot.reserve(m_exceptionHandlers.size());
+            for (const auto& entry : m_exceptionHandlers) {
+                snapshot.push_back(entry.handler);
+            }
+        }
+        for (auto handler : snapshot) {
+            int32_t result = handler(ExceptionInfo);
+            if (result == EXCEPTION_CONTINUE_EXECUTION) {
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    int32_t dispatchContinue(PEXCEPTION_POINTERS ExceptionInfo) noexcept {
+        if (!ExceptionInfo) return EXCEPTION_CONTINUE_SEARCH;
+        std::vector<PVECTORED_EXCEPTION_HANDLER> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            snapshot.reserve(m_continueHandlers.size());
+            for (const auto& entry : m_continueHandlers) {
+                snapshot.push_back(entry.handler);
+            }
+        }
+        for (auto handler : snapshot) {
+            int32_t result = handler(ExceptionInfo);
+            if (result == EXCEPTION_CONTINUE_EXECUTION) {
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    size_t getExceptionHandlerCount() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_exceptionHandlers.size();
+    }
+
+    size_t getContinueHandlerCount() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_continueHandlers.size();
+    }
+
+    void clear() noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_exceptionHandlers.clear();
+        m_continueHandlers.clear();
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    uintptr_t m_nextId{0x2000};
+    std::vector<HandlerEntry> m_exceptionHandlers;
+    std::vector<HandlerEntry> m_continueHandlers;
+};
+
+inline void* WINAPI RtlAddVectoredExceptionHandler(uint32_t First, PVECTORED_EXCEPTION_HANDLER Handler) noexcept {
+    return VectoredHandlerManager::get().addExceptionHandler(First, Handler);
+}
+
+inline uint32_t WINAPI RtlRemoveVectoredExceptionHandler(void* Handle) noexcept {
+    return VectoredHandlerManager::get().removeExceptionHandler(Handle);
+}
+
+inline void* WINAPI RtlAddVectoredContinueHandler(uint32_t First, PVECTORED_EXCEPTION_HANDLER Handler) noexcept {
+    return VectoredHandlerManager::get().addContinueHandler(First, Handler);
+}
+
+inline uint32_t WINAPI RtlRemoveVectoredContinueHandler(void* Handle) noexcept {
+    return VectoredHandlerManager::get().removeContinueHandler(Handle);
+}
+
+inline int32_t WINAPI RtlDispatchVectoredException(PEXCEPTION_POINTERS ExceptionInfo) noexcept {
+    return VectoredHandlerManager::get().dispatchException(ExceptionInfo);
+}
+
+inline int32_t WINAPI RtlDispatchVectoredContinueHandler(PEXCEPTION_POINTERS ExceptionInfo) noexcept {
+    return VectoredHandlerManager::get().dispatchContinue(ExceptionInfo);
+}
+
+inline size_t RtlGetVectoredExceptionHandlerCount() noexcept {
+    return VectoredHandlerManager::get().getExceptionHandlerCount();
+}
+
+inline size_t RtlGetVectoredContinueHandlerCount() noexcept {
+    return VectoredHandlerManager::get().getContinueHandlerCount();
+}
 
 // Re-export Heap API into ntdll namespace
 using heap::RtlCreateHeap;
@@ -1499,6 +1704,25 @@ struct SYSTEM_PROCESS_INFORMATION {
     LargeInteger OtherTransferCount{};
 };
 
+struct SYSTEM_TIMEOFDAY_INFORMATION {
+    LargeInteger BootTime{};
+    LargeInteger CurrentTime{};
+    LargeInteger TimeZoneBias{};
+    uint32_t TimeZoneId{0};
+    uint32_t Reserved{0};
+    uint64_t BootTimeBias{0};
+    uint64_t SleepTimeBias{0};
+};
+
+struct SYSTEM_INTERRUPT_INFORMATION {
+    uint32_t ContextSwitches{0};
+    uint32_t DpcCount{0};
+    uint32_t DpcRate{0};
+    uint32_t TimeIncrement{156250};
+    uint32_t DpcBypassCount{0};
+    uint32_t ApcBypassCount{0};
+};
+
 inline NtStatus WINAPI NtQuerySystemInformation_Export(
     uint32_t SystemInformationClass,
     void* SystemInformation,
@@ -1525,6 +1749,42 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->ActiveProcessorsAffinityMask = 0xFFFF; // 16 cores
             pInfo->NumberOfProcessors = 16;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BASIC_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 3: { // SystemTimeOfDayInformation
+            if (SystemInformationLength < sizeof(SYSTEM_TIMEOFDAY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_TIMEOFDAY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pTod = reinterpret_cast<SYSTEM_TIMEOFDAY_INFORMATION*>(SystemInformation);
+            std::memset(pTod, 0, sizeof(SYSTEM_TIMEOFDAY_INFORMATION));
+            pTod->BootTime.quadPart = 133500000000000000LL;
+            pTod->CurrentTime.quadPart = 133500005000000000LL;
+            pTod->TimeZoneBias.quadPart = 0;
+            pTod->TimeZoneId = 1;
+            pTod->Reserved = 0;
+            pTod->BootTimeBias = 0;
+            pTod->SleepTimeBias = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_TIMEOFDAY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 23: { // SystemInterruptInformation
+            constexpr uint32_t kNumProcessors = 16;
+            constexpr uint32_t kTotalSize = kNumProcessors * sizeof(SYSTEM_INTERRUPT_INFORMATION);
+            if (SystemInformationLength < kTotalSize) {
+                if (ReturnLength) *ReturnLength = kTotalSize;
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInt = reinterpret_cast<SYSTEM_INTERRUPT_INFORMATION*>(SystemInformation);
+            for (uint32_t i = 0; i < kNumProcessors; ++i) {
+                pInt[i].ContextSwitches = 50000 + i * 250;
+                pInt[i].DpcCount = 12000 + i * 100;
+                pInt[i].DpcRate = 120;
+                pInt[i].TimeIncrement = 156250;
+                pInt[i].DpcBypassCount = 0;
+                pInt[i].ApcBypassCount = 0;
+            }
+            if (ReturnLength) *ReturnLength = kTotalSize;
             return NtStatus::Success;
         }
         case 2: { // SystemPerformanceInformation
@@ -2595,6 +2855,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtWriteVirtualMemory", reinterpret_cast<void*>(NtWriteVirtualMemory));
 
     // RTL
+    ldr.registerExport("ntdll.dll", "RtlAddVectoredExceptionHandler", reinterpret_cast<void*>(RtlAddVectoredExceptionHandler));
+    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredExceptionHandler", reinterpret_cast<void*>(RtlRemoveVectoredExceptionHandler));
+    ldr.registerExport("ntdll.dll", "RtlAddVectoredContinueHandler", reinterpret_cast<void*>(RtlAddVectoredContinueHandler));
+    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredContinueHandler", reinterpret_cast<void*>(RtlRemoveVectoredContinueHandler));
     ldr.registerExport("ntdll.dll", "RtlAbsoluteToSelfRelativeSD", reinterpret_cast<void*>(RtlAbsoluteToSelfRelativeSD));
     ldr.registerExport("ntdll.dll", "RtlAcquireSRWLockShared", reinterpret_cast<void*>(RtlAcquireSRWLockShared));
     ldr.registerExport("ntdll.dll", "RtlReleaseSRWLockShared", reinterpret_cast<void*>(RtlReleaseSRWLockShared));

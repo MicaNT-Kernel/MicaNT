@@ -2568,126 +2568,18 @@ inline constexpr uint32_t CONTEXT_AMD64_FLAG = 0x00100000L;
 #define CONTEXT_ALL (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS)
 #endif
 
-#pragma pack(push, 16)
-struct alignas(16) M128A {
-    uint64_t Low;
-    int64_t  High;
-};
+using micant::M128A;
+using micant::XMM_SAVE_AREA32;
+using micant::CONTEXT;
+using micant::PCONTEXT;
+using micant::LPCONTEXT;
 
-struct XMM_SAVE_AREA32 {
-    uint16_t ControlWord;
-    uint16_t StatusWord;
-    uint8_t  TagWord;
-    uint8_t  Reserved1;
-    uint16_t ErrorOpcode;
-    uint32_t ErrorOffset;
-    uint16_t ErrorSelector;
-    uint16_t Reserved2;
-    uint32_t DataOffset;
-    uint16_t DataSelector;
-    uint16_t Reserved3;
-    uint32_t MxCsr;
-    uint32_t MxCsr_Mask;
-    M128A    FloatRegisters[8];
-    M128A    XmmRegisters[16];
-    uint8_t  Reserved4[96];
-};
-
-struct alignas(16) CONTEXT {
-    // Register parameter home addresses.
-    uint64_t P1Home;
-    uint64_t P2Home;
-    uint64_t P3Home;
-    uint64_t P4Home;
-    uint64_t P5Home;
-    uint64_t P6Home;
-
-    // Control flags.
-    uint32_t ContextFlags;
-    uint32_t MxCsr;
-
-    // Segment Registers and processor flags.
-    uint16_t SegCs;
-    uint16_t SegDs;
-    uint16_t SegEs;
-    uint16_t SegFs;
-    uint16_t SegGs;
-    uint16_t SegSs;
-    uint32_t EFlags;
-
-    // Debug registers
-    uint64_t Dr0;
-    uint64_t Dr1;
-    uint64_t Dr2;
-    uint64_t Dr3;
-    uint64_t Dr6;
-    uint64_t Dr7;
-
-    // Integer registers.
-    uint64_t Rax;
-    uint64_t Rcx;
-    uint64_t Rdx;
-    uint64_t Rbx;
-    uint64_t Rsp;
-    uint64_t Rbp;
-    uint64_t Rsi;
-    uint64_t Rdi;
-    uint64_t R8;
-    uint64_t R9;
-    uint64_t R10;
-    uint64_t R11;
-    uint64_t R12;
-    uint64_t R13;
-    uint64_t R14;
-    uint64_t R15;
-
-    // Program counter.
-    uint64_t Rip;
-
-    // Floating point state.
-    union {
-        XMM_SAVE_AREA32 FltSave;
-        struct {
-            M128A Header[2];
-            M128A Legacy[8];
-            M128A Xmm0;
-            M128A Xmm1;
-            M128A Xmm2;
-            M128A Xmm3;
-            M128A Xmm4;
-            M128A Xmm5;
-            M128A Xmm6;
-            M128A Xmm7;
-            M128A Xmm8;
-            M128A Xmm9;
-            M128A Xmm10;
-            M128A Xmm11;
-            M128A Xmm12;
-            M128A Xmm13;
-            M128A Xmm14;
-            M128A Xmm15;
-        };
-    };
-
-    // Vector registers.
-    M128A VectorRegister[26];
-    uint64_t VectorControl;
-
-    // Special debug control registers.
-    uint64_t DebugControl;
-    uint64_t LastBranchToRip;
-    uint64_t LastBranchFromRip;
-    uint64_t LastExceptionToRip;
-    uint64_t LastExceptionFromRip;
-
-    CONTEXT() noexcept {
-        std::memset(this, 0, sizeof(CONTEXT));
-    }
-};
-#pragma pack(pop)
-
-using PCONTEXT = CONTEXT*;
-using LPCONTEXT = CONTEXT*;
+using PVECTORED_EXCEPTION_HANDLER = ntdll::PVECTORED_EXCEPTION_HANDLER;
+using EXCEPTION_RECORD = ntdll::EXCEPTION_RECORD;
+using PEXCEPTION_RECORD = ntdll::PEXCEPTION_RECORD;
+using EXCEPTION_POINTERS = ntdll::EXCEPTION_POINTERS;
+using PEXCEPTION_POINTERS = ntdll::PEXCEPTION_POINTERS;
+using LPEXCEPTION_POINTERS = ntdll::PEXCEPTION_POINTERS;
 
 static_assert(sizeof(CONTEXT) == 1232, "sizeof(CONTEXT) on x64 Windows ABI must be exactly 1232 bytes");
 
@@ -5419,8 +5311,12 @@ inline BOOL UnmapViewOfFileEx(LPCVOID lpBaseAddress, [[maybe_unused]] DWORD Unma
     return UnmapViewOfFile(lpBaseAddress);
 }
 
-inline ULONG RemoveVectoredExceptionHandler([[maybe_unused]] void* Handle) noexcept {
-    return 1;
+inline ULONG WINAPI RemoveVectoredExceptionHandler(void* Handle) noexcept {
+    return ntdll::RtlRemoveVectoredExceptionHandler(Handle);
+}
+
+inline ULONG WINAPI RemoveVectoredContinueHandler(void* Handle) noexcept {
+    return ntdll::RtlRemoveVectoredContinueHandler(Handle);
 }
 
 inline BOOL ReadDirectoryChangesW(HANDLE, LPVOID, DWORD, BOOL, DWORD, LPDWORD lpBytesReturned, LPOVERLAPPED, void*) noexcept {
@@ -6291,8 +6187,12 @@ inline DWORD WINAPI SetThreadExecutionState(DWORD esFlags) noexcept {
 
 inline void WINAPI DebugBreak() noexcept {}
 
-inline void* WINAPI AddVectoredExceptionHandler([[maybe_unused]] ULONG First, [[maybe_unused]] void* Handler) noexcept {
-    return reinterpret_cast<void*>(0x1000);
+inline void* WINAPI AddVectoredExceptionHandler(ULONG First, PVECTORED_EXCEPTION_HANDLER Handler) noexcept {
+    return ntdll::RtlAddVectoredExceptionHandler(First, Handler);
+}
+
+inline void* WINAPI AddVectoredContinueHandler(ULONG First, PVECTORED_EXCEPTION_HANDLER Handler) noexcept {
+    return ntdll::RtlAddVectoredContinueHandler(First, Handler);
 }
 
 inline DWORD WINAPI GetPrivateProfileIntW([[maybe_unused]] LPCWSTR lpAppName, [[maybe_unused]] LPCWSTR lpKeyName, int nDefault, [[maybe_unused]] LPCWSTR lpFileName) noexcept {
@@ -8570,6 +8470,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "UnmapViewOfFileEx", reinterpret_cast<void*>(UnmapViewOfFileEx));
     ldr.registerExport("kernel32.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
+    ldr.registerExport("kernel32.dll", "RemoveVectoredContinueHandler", reinterpret_cast<void*>(RemoveVectoredContinueHandler));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredContinueHandler", reinterpret_cast<void*>(RemoveVectoredContinueHandler));
     ldr.registerExport("kernel32.dll", "GetWindowsDirectoryW", reinterpret_cast<void*>(GetWindowsDirectoryW));
     ldr.registerExport("kernel32.dll", "GetDriveTypeW", reinterpret_cast<void*>(GetDriveTypeW));
     ldr.registerExport("kernel32.dll", "GetVolumeInformationW", reinterpret_cast<void*>(GetVolumeInformationW));
@@ -8636,6 +8538,9 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SetThreadExecutionState", reinterpret_cast<void*>(SetThreadExecutionState));
     ldr.registerExport("kernel32.dll", "DebugBreak", reinterpret_cast<void*>(DebugBreak));
     ldr.registerExport("kernel32.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
+    ldr.registerExport("kernel32.dll", "AddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
     ldr.registerExport("kernel32.dll", "GetPrivateProfileIntW", reinterpret_cast<void*>(GetPrivateProfileIntW));
     ldr.registerExport("kernel32.dll", "HeapQueryInformation", reinterpret_cast<void*>(HeapQueryInformation));
     ldr.registerExport("kernel32.dll", "Beep", reinterpret_cast<void*>(Beep));
@@ -8904,6 +8809,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQueryDirectoryFile", reinterpret_cast<void*>(ntdll::NtQueryDirectoryFile));
     ldr.registerExport("ntdll.dll", "NtQueryPerformanceCounter", reinterpret_cast<void*>(ntdll::NtQueryPerformanceCounter));
     ldr.registerExport("ntdll.dll", "NtYieldExecution", reinterpret_cast<void*>(ntdll::NtYieldExecution));
+    ldr.registerExport("ntdll.dll", "RtlAddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
+    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
+    ldr.registerExport("ntdll.dll", "RtlAddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
+    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredContinueHandler", reinterpret_cast<void*>(RemoveVectoredContinueHandler));
     ldr.registerExport("ntdll.dll", "NtQueryInformationProcess", reinterpret_cast<void*>(ntdll::NtQueryInformationProcess));
     ldr.registerExport("ntdll.dll", "NtCreateNamedPipeFile", reinterpret_cast<void*>(ntdll::NtCreateNamedPipeFile));
     ldr.registerExport("ntdll.dll", "NtCreateMailslotFile", reinterpret_cast<void*>(ntdll::NtCreateMailslotFile));
