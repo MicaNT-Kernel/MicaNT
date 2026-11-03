@@ -78,6 +78,7 @@ using PULONG    = uint32_t*;
 using PBOOL     = int32_t*;
 using LPBOOL    = int32_t*;
 using PVOID     = void*;
+using VOID      = void;
 using WORD      = uint16_t;
 using LPWORD    = uint16_t*;
 using BYTE      = uint8_t;
@@ -2953,36 +2954,270 @@ inline void GetSystemTimeAsFileTime(FILETIME* lpTime) noexcept {
 
 inline void InitializeSListHead(void* /*ListHead*/) noexcept {}
 
-inline std::unordered_map<uint32_t, void*> g_FlsSlots;
-inline std::mutex g_FlsMutex;
-inline uint32_t g_NextFls = 1;
+// ============================================================================
+// Win32 Fibers & Fiber Local Storage (FLS) (Windows NT / winbase.h)
+// ============================================================================
 
-inline uint32_t FlsAlloc(void* /*lpCallback*/) noexcept {
-    std::lock_guard<std::mutex> lock(g_FlsMutex);
-    uint32_t idx = g_NextFls++;
-    g_FlsSlots[idx] = nullptr;
-    return idx;
-}
+using LPFIBER_START_ROUTINE = void(WINAPI*)(LPVOID lpFiberParameter);
+using PFLS_CALLBACK_FUNCTION = void(WINAPI*)(PVOID lpFlsData);
 
-inline void* FlsGetValue(uint32_t dwFlsIndex) noexcept {
-    std::lock_guard<std::mutex> lock(g_FlsMutex);
-    auto it = g_FlsSlots.find(dwFlsIndex);
-    if (it != g_FlsSlots.end()) {
-        return it->second;
+inline constexpr DWORD FLS_OUT_OF_INDEXES = 0xFFFFFFFF;
+inline constexpr DWORD FIBER_FLAG_FLOAT_SWITCH = 0x1;
+
+struct FIBER_RECORD {
+    LPVOID lpParameter{nullptr};
+    LPFIBER_START_ROUTINE lpStartAddress{nullptr};
+    size_t stackCommitSize{0};
+    size_t stackReserveSize{0};
+    DWORD flags{0};
+    bool isThread{false};
+    bool deleted{false};
+    std::unordered_map<DWORD, PVOID> flsData;
+};
+
+class SovereignFiberManager {
+private:
+    std::mutex m_mutex;
+    std::unordered_map<LPVOID, FIBER_RECORD> m_fibers;
+    std::unordered_map<DWORD, PFLS_CALLBACK_FUNCTION> m_flsCallbacks;
+    std::vector<bool> m_flsAllocated;
+    uintptr_t m_nextFiberId{0x10000};
+    inline static thread_local LPVOID t_currentFiber{nullptr};
+    inline static thread_local LPVOID t_primaryFiber{nullptr};
+
+public:
+    static SovereignFiberManager& get() noexcept {
+        static SovereignFiberManager instance;
+        return instance;
     }
-    return nullptr;
+
+    SovereignFiberManager() : m_flsAllocated(128, false) {}
+
+    LPVOID convertThreadToFiber(LPVOID lpParameter, DWORD dwFlags) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (t_currentFiber != nullptr) {
+            SetLastError(ERROR_ALREADY_EXISTS);
+            return nullptr;
+        }
+        LPVOID fiberId = reinterpret_cast<LPVOID>(m_nextFiberId += 0x1000);
+        FIBER_RECORD rec{};
+        rec.lpParameter = lpParameter;
+        rec.flags = dwFlags;
+        rec.isThread = true;
+        m_fibers[fiberId] = rec;
+        t_currentFiber = fiberId;
+        t_primaryFiber = fiberId;
+        return fiberId;
+    }
+
+    BOOL convertFiberToThread() noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        LPVOID target = t_currentFiber ? t_currentFiber : t_primaryFiber;
+        if (target == nullptr) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        auto it = m_fibers.find(target);
+        if (it != m_fibers.end() && it->second.isThread) {
+            m_fibers.erase(it);
+            t_currentFiber = nullptr;
+            t_primaryFiber = nullptr;
+            return TRUE;
+        }
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    LPVOID createFiber(SIZE_T dwStackCommitSize, SIZE_T dwStackReserveSize, DWORD dwFlags, LPFIBER_START_ROUTINE lpStartAddress, LPVOID lpParameter) noexcept {
+        if (!lpStartAddress) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        LPVOID fiberId = reinterpret_cast<LPVOID>(m_nextFiberId += 0x1000);
+        FIBER_RECORD rec{};
+        rec.lpParameter = lpParameter;
+        rec.lpStartAddress = lpStartAddress;
+        rec.stackCommitSize = dwStackCommitSize ? dwStackCommitSize : 64 * 1024;
+        rec.stackReserveSize = dwStackReserveSize ? dwStackReserveSize : 1024 * 1024;
+        rec.flags = dwFlags;
+        rec.isThread = false;
+        m_fibers[fiberId] = rec;
+        return fiberId;
+    }
+
+    void deleteFiber(LPVOID lpFiber) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_fibers.find(lpFiber);
+        if (it != m_fibers.end()) {
+            for (const auto& [idx, data] : it->second.flsData) {
+                if (data) {
+                    auto cbIt = m_flsCallbacks.find(idx);
+                    if (cbIt != m_flsCallbacks.end() && cbIt->second) {
+                        cbIt->second(data);
+                    }
+                }
+            }
+            if (t_currentFiber == lpFiber) {
+                t_currentFiber = t_primaryFiber;
+            }
+            m_fibers.erase(it);
+        }
+    }
+
+    void switchToFiber(LPVOID lpFiber) noexcept {
+        LPFIBER_START_ROUTINE startRoutine = nullptr;
+        LPVOID param = nullptr;
+        LPVOID prevFiber = t_currentFiber;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            auto it = m_fibers.find(lpFiber);
+            if (it == m_fibers.end() || it->second.deleted) {
+                return;
+            }
+            t_currentFiber = lpFiber;
+            if (!it->second.isThread && it->second.lpStartAddress) {
+                startRoutine = it->second.lpStartAddress;
+                param = it->second.lpParameter;
+            }
+        }
+        if (startRoutine) {
+            startRoutine(param);
+            t_currentFiber = prevFiber;
+        }
+    }
+
+    [[nodiscard]] BOOL isThreadAFiber() const noexcept {
+        return (t_currentFiber != nullptr || t_primaryFiber != nullptr) ? TRUE : FALSE;
+    }
+
+    [[nodiscard]] LPVOID getCurrentFiber() const noexcept {
+        return t_currentFiber ? t_currentFiber : t_primaryFiber;
+    }
+
+    DWORD flsAlloc(PFLS_CALLBACK_FUNCTION lpCallback) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (DWORD i = 0; i < static_cast<DWORD>(m_flsAllocated.size()); ++i) {
+            if (!m_flsAllocated[i]) {
+                m_flsAllocated[i] = true;
+                if (lpCallback) {
+                    m_flsCallbacks[i] = lpCallback;
+                }
+                return i;
+            }
+        }
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FLS_OUT_OF_INDEXES;
+    }
+
+    BOOL flsFree(DWORD dwFlsIndex) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (dwFlsIndex >= m_flsAllocated.size() || !m_flsAllocated[dwFlsIndex]) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        m_flsAllocated[dwFlsIndex] = false;
+        m_flsCallbacks.erase(dwFlsIndex);
+        for (auto& [id, fiber] : m_fibers) {
+            fiber.flsData.erase(dwFlsIndex);
+        }
+        return TRUE;
+    }
+
+    PVOID flsGetValue(DWORD dwFlsIndex) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (dwFlsIndex >= m_flsAllocated.size() || !m_flsAllocated[dwFlsIndex]) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return nullptr;
+        }
+        LPVOID fiber = t_currentFiber;
+        if (!fiber) {
+            static std::unordered_map<DWORD, PVOID> s_threadFallbackFls;
+            auto it = s_threadFallbackFls.find(dwFlsIndex);
+            return it != s_threadFallbackFls.end() ? it->second : nullptr;
+        }
+        auto it = m_fibers.find(fiber);
+        if (it != m_fibers.end()) {
+            auto dIt = it->second.flsData.find(dwFlsIndex);
+            if (dIt != it->second.flsData.end()) {
+                return dIt->second;
+            }
+        }
+        return nullptr;
+    }
+
+    BOOL flsSetValue(DWORD dwFlsIndex, PVOID lpFlsData) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (dwFlsIndex >= m_flsAllocated.size() || !m_flsAllocated[dwFlsIndex]) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        LPVOID fiber = t_currentFiber;
+        if (!fiber) {
+            static std::unordered_map<DWORD, PVOID> s_threadFallbackFls;
+            s_threadFallbackFls[dwFlsIndex] = lpFlsData;
+            return TRUE;
+        }
+        auto it = m_fibers.find(fiber);
+        if (it != m_fibers.end()) {
+            it->second.flsData[dwFlsIndex] = lpFlsData;
+            return TRUE;
+        }
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+};
+
+inline DWORD WINAPI FlsAlloc(PFLS_CALLBACK_FUNCTION lpCallback) noexcept {
+    return SovereignFiberManager::get().flsAlloc(lpCallback);
 }
 
-inline BOOL FlsSetValue(uint32_t dwFlsIndex, void* lpFlsData) noexcept {
-    std::lock_guard<std::mutex> lock(g_FlsMutex);
-    g_FlsSlots[dwFlsIndex] = lpFlsData;
-    return TRUE;
+inline PVOID WINAPI FlsGetValue(DWORD dwFlsIndex) noexcept {
+    return SovereignFiberManager::get().flsGetValue(dwFlsIndex);
 }
 
-inline BOOL FlsFree(uint32_t dwFlsIndex) noexcept {
-    std::lock_guard<std::mutex> lock(g_FlsMutex);
-    g_FlsSlots.erase(dwFlsIndex);
-    return TRUE;
+inline BOOL WINAPI FlsSetValue(DWORD dwFlsIndex, PVOID lpFlsData) noexcept {
+    return SovereignFiberManager::get().flsSetValue(dwFlsIndex, lpFlsData);
+}
+
+inline BOOL WINAPI FlsFree(DWORD dwFlsIndex) noexcept {
+    return SovereignFiberManager::get().flsFree(dwFlsIndex);
+}
+
+inline LPVOID WINAPI ConvertThreadToFiberEx(LPVOID lpParameter, DWORD dwFlags) noexcept {
+    return SovereignFiberManager::get().convertThreadToFiber(lpParameter, dwFlags);
+}
+
+inline LPVOID WINAPI ConvertThreadToFiber(LPVOID lpParameter) noexcept {
+    return ConvertThreadToFiberEx(lpParameter, 0);
+}
+
+inline BOOL WINAPI ConvertFiberToThread() noexcept {
+    return SovereignFiberManager::get().convertFiberToThread();
+}
+
+inline LPVOID WINAPI CreateFiberEx(SIZE_T dwStackCommitSize, SIZE_T dwStackReserveSize, DWORD dwFlags, LPFIBER_START_ROUTINE lpStartAddress, LPVOID lpParameter) noexcept {
+    return SovereignFiberManager::get().createFiber(dwStackCommitSize, dwStackReserveSize, dwFlags, lpStartAddress, lpParameter);
+}
+
+inline LPVOID WINAPI CreateFiber(SIZE_T dwStackSize, LPFIBER_START_ROUTINE lpStartAddress, LPVOID lpParameter) noexcept {
+    return CreateFiberEx(dwStackSize, dwStackSize, 0, lpStartAddress, lpParameter);
+}
+
+inline void WINAPI DeleteFiber(LPVOID lpFiber) noexcept {
+    SovereignFiberManager::get().deleteFiber(lpFiber);
+}
+
+inline void WINAPI SwitchToFiber(LPVOID lpFiber) noexcept {
+    SovereignFiberManager::get().switchToFiber(lpFiber);
+}
+
+inline BOOL WINAPI IsThreadAFiber() noexcept {
+    return SovereignFiberManager::get().isThreadAFiber();
+}
+
+inline LPVOID WINAPI GetCurrentFiber() noexcept {
+    return SovereignFiberManager::get().getCurrentFiber();
 }
 
 inline thread_local void* g_TlsSlots[64]{};
@@ -6543,18 +6778,239 @@ inline BOOL WINAPI PostQueuedCompletionStatus(HANDLE /*CompletionPort*/, DWORD /
     return TRUE;
 }
 
-inline void* WINAPI CreateFiberEx(size_t /*dwStackCommitSize*/, size_t /*dwStackReserveSize*/, DWORD /*dwFlags*/, void* /*lpStartAddress*/, void* /*lpParameter*/) noexcept {
-    return reinterpret_cast<void*>(0x1F001);
+// ============================================================================
+// Process Mitigation Policies (Windows NT 10.0+ / processthreadsapi.h)
+// ============================================================================
+
+enum PROCESS_MITIGATION_POLICY {
+    ProcessDEPPolicy = 0,
+    ProcessASLRPolicy = 1,
+    ProcessDynamicCodePolicy = 2,
+    ProcessStrictHandleCheckPolicy = 3,
+    ProcessSystemCallDisablePolicy = 4,
+    ProcessMitigationOptionsMask = 5,
+    ProcessExtensionPointDisablePolicy = 6,
+    ProcessControlFlowGuardPolicy = 7,
+    ProcessSignaturePolicy = 8,
+    ProcessFontDisablePolicy = 9,
+    ProcessImageLoadPolicy = 10,
+    ProcessSystemCallFilterPolicy = 11,
+    ProcessPayloadRestrictionPolicy = 12,
+    ProcessChildProcessPolicy = 13,
+    ProcessSideChannelIsolationPolicy = 14,
+    ProcessUserShadowStackPolicy = 15,
+    ProcessRedirectionTrustPolicy = 16,
+    ProcessUserPointerAuthPolicy = 17,
+    ProcessSEHOPPolicy = 18,
+    MaxProcessMitigationPolicy
+};
+
+struct PROCESS_MITIGATION_DEP_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD Enable : 1;
+            DWORD DisableAtlThunkEmulation : 1;
+            DWORD ReservedFlags : 30;
+        };
+    };
+    BOOLEAN Permanent;
+};
+
+struct PROCESS_MITIGATION_ASLR_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD EnableBottomUpRandomization : 1;
+            DWORD EnableForceRelocateImages : 1;
+            DWORD EnableHighEntropy : 1;
+            DWORD DisallowStrippedImages : 1;
+            DWORD ReservedFlags : 28;
+        };
+    };
+};
+
+struct PROCESS_MITIGATION_DYNAMIC_CODE_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD ProhibitDynamicCode : 1;
+            DWORD AllowThreadOptOut : 1;
+            DWORD AllowRemoteDowngrade : 1;
+            DWORD AuditProhibitDynamicCode : 1;
+            DWORD ReservedFlags : 28;
+        };
+    };
+};
+
+struct PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD RaiseExceptionOnInvalidHandleReference : 1;
+            DWORD HandleExceptionsPermanentlyEnabled : 1;
+            DWORD ReservedFlags : 30;
+        };
+    };
+};
+
+struct PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD DisallowWin32kSystemCalls : 1;
+            DWORD AuditDisallowWin32kSystemCalls : 1;
+            DWORD ReservedFlags : 30;
+        };
+    };
+};
+
+struct PROCESS_MITIGATION_IMAGE_LOAD_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD NoRemoteImages : 1;
+            DWORD NoLowMandatoryLabelImages : 1;
+            DWORD PreferSystem32Images : 1;
+            DWORD AuditNoRemoteImages : 1;
+            DWORD AuditNoLowMandatoryLabelImages : 1;
+            DWORD ReservedFlags : 27;
+        };
+    };
+};
+
+struct PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD EnableUserShadowStack : 1;
+            DWORD AuditUserShadowStack : 1;
+            DWORD SetContextIpValidation : 1;
+            DWORD AuditSetContextIpValidation : 1;
+            DWORD EnableUserShadowStackStrictMode : 1;
+            DWORD BlockIfLegacyBijectionNeeded : 1;
+            DWORD BlockIfLegacyBijectionNeededAudit : 1;
+            DWORD ReservedFlags : 25;
+        };
+    };
+};
+
+class SovereignProcessMitigationManager {
+private:
+    std::mutex m_mutex;
+    struct MitigationState {
+        PROCESS_MITIGATION_DEP_POLICY dep{};
+        PROCESS_MITIGATION_ASLR_POLICY aslr{};
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamicCode{};
+        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strictHandle{};
+        PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY syscallDisable{};
+        PROCESS_MITIGATION_IMAGE_LOAD_POLICY imageLoad{};
+        PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY userShadowStack{};
+    };
+    MitigationState m_state{};
+
+public:
+    static SovereignProcessMitigationManager& get() noexcept {
+        static SovereignProcessMitigationManager instance;
+        return instance;
+    }
+
+    SovereignProcessMitigationManager() {
+        m_state.dep.Enable = 1;
+        m_state.dep.Permanent = 1;
+        m_state.aslr.EnableBottomUpRandomization = 1;
+        m_state.aslr.EnableHighEntropy = 1;
+    }
+
+    BOOL setPolicy(PROCESS_MITIGATION_POLICY policy, PVOID lpBuffer, SIZE_T dwLength) noexcept {
+        if (!lpBuffer || dwLength == 0) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        switch (policy) {
+            case ProcessDEPPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_DEP_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.dep = *reinterpret_cast<const PROCESS_MITIGATION_DEP_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessASLRPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_ASLR_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.aslr = *reinterpret_cast<const PROCESS_MITIGATION_ASLR_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessDynamicCodePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_DYNAMIC_CODE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.dynamicCode = *reinterpret_cast<const PROCESS_MITIGATION_DYNAMIC_CODE_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessStrictHandleCheckPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.strictHandle = *reinterpret_cast<const PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessSystemCallDisablePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.syscallDisable = *reinterpret_cast<const PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessImageLoadPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_IMAGE_LOAD_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.imageLoad = *reinterpret_cast<const PROCESS_MITIGATION_IMAGE_LOAD_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessUserShadowStackPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.userShadowStack = *reinterpret_cast<const PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY*>(lpBuffer);
+                return TRUE;
+            default:
+                return TRUE;
+        }
+    }
+
+    BOOL getPolicy(HANDLE /*hProcess*/, PROCESS_MITIGATION_POLICY policy, PVOID lpBuffer, SIZE_T dwLength) noexcept {
+        if (!lpBuffer || dwLength == 0) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        switch (policy) {
+            case ProcessDEPPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_DEP_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_DEP_POLICY*>(lpBuffer) = m_state.dep;
+                return TRUE;
+            case ProcessASLRPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_ASLR_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_ASLR_POLICY*>(lpBuffer) = m_state.aslr;
+                return TRUE;
+            case ProcessDynamicCodePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_DYNAMIC_CODE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_DYNAMIC_CODE_POLICY*>(lpBuffer) = m_state.dynamicCode;
+                return TRUE;
+            case ProcessStrictHandleCheckPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY*>(lpBuffer) = m_state.strictHandle;
+                return TRUE;
+            case ProcessSystemCallDisablePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY*>(lpBuffer) = m_state.syscallDisable;
+                return TRUE;
+            case ProcessImageLoadPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_IMAGE_LOAD_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_IMAGE_LOAD_POLICY*>(lpBuffer) = m_state.imageLoad;
+                return TRUE;
+            case ProcessUserShadowStackPolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY*>(lpBuffer) = m_state.userShadowStack;
+                return TRUE;
+            default:
+                std::memset(lpBuffer, 0, dwLength);
+                return TRUE;
+        }
+    }
+};
+
+inline BOOL WINAPI SetProcessMitigationPolicy(PROCESS_MITIGATION_POLICY MitigationPolicy, PVOID lpBuffer, SIZE_T dwLength) noexcept {
+    return SovereignProcessMitigationManager::get().setPolicy(MitigationPolicy, lpBuffer, dwLength);
 }
 
-inline void WINAPI SwitchToFiber(void* /*lpFiber*/) noexcept {}
-inline void WINAPI DeleteFiber(void* /*lpFiber*/) noexcept {}
-
-inline void* WINAPI ConvertThreadToFiberEx(void* /*lpParameter*/, DWORD /*dwFlags*/) noexcept {
-    return reinterpret_cast<void*>(0x1F002);
+inline BOOL WINAPI GetProcessMitigationPolicy(HANDLE hProcess, PROCESS_MITIGATION_POLICY MitigationPolicy, PVOID lpBuffer, SIZE_T dwLength) noexcept {
+    return SovereignProcessMitigationManager::get().getPolicy(hProcess, MitigationPolicy, lpBuffer, dwLength);
 }
-
-inline BOOL WINAPI ConvertFiberToThread() noexcept { return TRUE; }
 
 inline BOOL WINAPI LockFileEx(HANDLE /*hFile*/, DWORD /*dwFlags*/, DWORD /*dwReserved*/, DWORD /*nNumberOfBytesToLockLow*/, DWORD /*nNumberOfBytesToLockHigh*/, void* /*lpOverlapped*/) noexcept {
     return TRUE;
@@ -8121,6 +8577,38 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("psapi.dll", "EmptyWorkingSet", reinterpret_cast<void*>(EmptyWorkingSet));
     ldr.registerExport("psapi.dll", "K32EmptyWorkingSet", reinterpret_cast<void*>(K32EmptyWorkingSet));
 
+    // Horizon 203: Fibers, FLS, Process Mitigation Policies
+    ldr.registerExport("kernel32.dll", "ConvertThreadToFiber", reinterpret_cast<void*>(ConvertThreadToFiber));
+    ldr.registerExport("kernel32.dll", "ConvertThreadToFiberEx", reinterpret_cast<void*>(ConvertThreadToFiberEx));
+    ldr.registerExport("kernel32.dll", "ConvertFiberToThread", reinterpret_cast<void*>(ConvertFiberToThread));
+    ldr.registerExport("kernel32.dll", "CreateFiber", reinterpret_cast<void*>(CreateFiber));
+    ldr.registerExport("kernel32.dll", "CreateFiberEx", reinterpret_cast<void*>(CreateFiberEx));
+    ldr.registerExport("kernel32.dll", "DeleteFiber", reinterpret_cast<void*>(DeleteFiber));
+    ldr.registerExport("kernel32.dll", "SwitchToFiber", reinterpret_cast<void*>(SwitchToFiber));
+    ldr.registerExport("kernel32.dll", "IsThreadAFiber", reinterpret_cast<void*>(IsThreadAFiber));
+    ldr.registerExport("kernel32.dll", "GetCurrentFiber", reinterpret_cast<void*>(GetCurrentFiber));
+    ldr.registerExport("kernel32.dll", "FlsAlloc", reinterpret_cast<void*>(FlsAlloc));
+    ldr.registerExport("kernel32.dll", "FlsFree", reinterpret_cast<void*>(FlsFree));
+    ldr.registerExport("kernel32.dll", "FlsGetValue", reinterpret_cast<void*>(FlsGetValue));
+    ldr.registerExport("kernel32.dll", "FlsSetValue", reinterpret_cast<void*>(FlsSetValue));
+    ldr.registerExport("kernel32.dll", "SetProcessMitigationPolicy", reinterpret_cast<void*>(SetProcessMitigationPolicy));
+    ldr.registerExport("kernel32.dll", "GetProcessMitigationPolicy", reinterpret_cast<void*>(GetProcessMitigationPolicy));
+
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "FlsAlloc", reinterpret_cast<void*>(FlsAlloc));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "FlsFree", reinterpret_cast<void*>(FlsFree));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "FlsGetValue", reinterpret_cast<void*>(FlsGetValue));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "FlsSetValue", reinterpret_cast<void*>(FlsSetValue));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "ConvertThreadToFiber", reinterpret_cast<void*>(ConvertThreadToFiber));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "ConvertThreadToFiberEx", reinterpret_cast<void*>(ConvertThreadToFiberEx));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "ConvertFiberToThread", reinterpret_cast<void*>(ConvertFiberToThread));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "CreateFiber", reinterpret_cast<void*>(CreateFiber));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "CreateFiberEx", reinterpret_cast<void*>(CreateFiberEx));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "DeleteFiber", reinterpret_cast<void*>(DeleteFiber));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "SwitchToFiber", reinterpret_cast<void*>(SwitchToFiber));
+    ldr.registerExport("api-ms-win-core-fibers-l1-1-1.dll", "IsThreadAFiber", reinterpret_cast<void*>(IsThreadAFiber));
+
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetProcessMitigationPolicy", reinterpret_cast<void*>(SetProcessMitigationPolicy));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetProcessMitigationPolicy", reinterpret_cast<void*>(GetProcessMitigationPolicy));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

@@ -495,6 +495,35 @@ public:
     virtual D3D12_COMMAND_QUEUE_DESC GetDesc() = 0;
 };
 
+// DirectX 12 Feature Options 13, 14 & 15
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS13 = 29;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS14 = 30;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS15 = 31;
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS13 {
+    BOOL UnrestrictedBufferTextureCopyPitchSupported{0};
+    BOOL UnrestrictedVertexElementAlignmentSupported{0};
+    BOOL InvertedViewportHeightFlipsYSupported{0};
+    BOOL InvertedViewportDepthFlipsZSupported{0};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS14 {
+    BOOL AdvancedTextureOpsSupported{0};
+    BOOL WriteableMSAATexturesSupported{0};
+    BOOL IndependentFrontAndBackStencilRefMaskSupported{0};
+};
+
+enum D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORT {
+    D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_NONE = 0,
+    D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_STANDARD = 1,
+    D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_ALL = 2
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS15 {
+    BOOL TriangleFanSupported{0};
+    D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORT DynamicIndexBufferStripCut{D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_NONE};
+};
+
 class ID3D12Device : public ID3D12Object {
 public:
     virtual int32_t CreateCommandQueue(const D3D12_COMMAND_QUEUE_DESC* pDesc, const IID& riid, void** ppCommandQueue) = 0;
@@ -507,6 +536,7 @@ public:
     virtual int32_t CreateRootSignature(uint32_t nodeMask, const void* pBlobWithRootSignature, size_t blobLengthInBytes, const IID& riid, void** ppvRootSignature) = 0;
     virtual void CreateRenderTargetView(ID3D12Resource* pResource, const D3D12_RENDER_TARGET_VIEW_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
     virtual void CreateDepthStencilView(ID3D12Resource* pResource, const D3D12_DEPTH_STENCIL_VIEW_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+    virtual int32_t CheckFeatureSupport(uint32_t Feature, void* pFeatureSupportData, uint32_t FeatureSupportDataSize) = 0;
 };
 
 // ============================================================================
@@ -1275,6 +1305,35 @@ public:
         auto* heap = reinterpret_cast<Prism3D12DescriptorHeapImpl*>(DestDescriptor.ptr);
         DXGI_FORMAT fmt = pDesc ? pDesc->Format : (pResource ? pResource->GetDesc().Format : DXGI_FORMAT_D32_FLOAT);
         heap->SetDSV(0, pResource, fmt);
+    }
+
+    int32_t CheckFeatureSupport(uint32_t Feature, void* pFeatureSupportData, uint32_t FeatureSupportDataSize) override {
+        if (!pFeatureSupportData) return -1;
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS13) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS13)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS13*>(pFeatureSupportData);
+            pData->UnrestrictedBufferTextureCopyPitchSupported = TRUE;
+            pData->UnrestrictedVertexElementAlignmentSupported = TRUE;
+            pData->InvertedViewportHeightFlipsYSupported = TRUE;
+            pData->InvertedViewportDepthFlipsZSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS14) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS14)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS14*>(pFeatureSupportData);
+            pData->AdvancedTextureOpsSupported = TRUE;
+            pData->WriteableMSAATexturesSupported = TRUE;
+            pData->IndependentFrontAndBackStencilRefMaskSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS15) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS15)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS15*>(pFeatureSupportData);
+            pData->TriangleFanSupported = TRUE;
+            pData->DynamicIndexBufferStripCut = D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_ALL;
+            return 0;
+        }
+        return 0;
     }
 };
 

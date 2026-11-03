@@ -1191,14 +1191,133 @@ inline NtStatus WINAPI NtQuerySecurityObject(
     return NtStatus::Success;
 }
 
+#include <cstring>
+
+using ULONG = uint32_t;
+using ULONG_PTR = uintptr_t;
+using CCHAR = char;
+using BOOLEAN = uint8_t;
+
+#ifndef _MIO_GUID_DEFINED
+#define _MIO_GUID_DEFINED
+struct GUID {
+    uint32_t Data1{0};
+    uint16_t Data2{0};
+    uint16_t Data3{0};
+    uint8_t  Data4[8]{0};
+    bool operator==(const GUID& o) const noexcept {
+        return std::memcmp(this, &o, sizeof(GUID)) == 0;
+    }
+};
+#endif
+
+// Authentic System Information Structures for Anti-Cheat & Protected Game Engines
+struct SYSTEM_BASIC_INFORMATION {
+    ULONG Reserved;
+    ULONG TimerResolution;
+    ULONG PageSize;
+    ULONG NumberOfPhysicalPages;
+    ULONG LowestPhysicalPageNumber;
+    ULONG HighestPhysicalPageNumber;
+    ULONG AllocationGranularity;
+    ULONG_PTR MinimumUserModeAddress;
+    ULONG_PTR MaximumUserModeAddress;
+    ULONG_PTR ActiveProcessorsAffinityMask;
+    CCHAR NumberOfProcessors;
+};
+
+struct SYSTEM_KERNEL_DEBUGGER_INFORMATION {
+    BOOLEAN KernelDebuggerEnabled;
+    BOOLEAN KernelDebuggerNotPresent;
+};
+
+struct SYSTEM_CODEINTEGRITY_INFORMATION {
+    ULONG Length;
+    ULONG CodeIntegrityOptions;
+};
+
+inline constexpr ULONG CODEINTEGRITY_OPTION_ENABLED           = 0x00000001;
+inline constexpr ULONG CODEINTEGRITY_OPTION_TESTSIGN          = 0x00000002;
+inline constexpr ULONG CODEINTEGRITY_OPTION_UMCI_ENABLED      = 0x00000004;
+inline constexpr ULONG CODEINTEGRITY_OPTION_UMCI_AUDIT        = 0x00000008;
+inline constexpr ULONG CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED = 0x00000400;
+
+struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
+    GUID BootIdentifier;
+    ULONG FirmwareType; // 2 = FirmwareTypeUefi
+    uint64_t BootFlags;
+};
+
 inline NtStatus WINAPI NtQuerySystemInformation_Export(
-    uint32_t /*SystemInformationClass*/,
-    void* /*SystemInformation*/,
-    uint32_t /*SystemInformationLength*/,
+    uint32_t SystemInformationClass,
+    void* SystemInformation,
+    uint32_t SystemInformationLength,
     uint32_t* ReturnLength
 ) noexcept {
-    if (ReturnLength) *ReturnLength = 64;
-    return NtStatus::Success;
+    if (!SystemInformation && SystemInformationLength > 0) {
+        return NtStatus::InvalidParameter;
+    }
+
+    switch (SystemInformationClass) {
+        case 0: { // SystemBasicInformation
+            if (SystemInformationLength < sizeof(SYSTEM_BASIC_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BASIC_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_BASIC_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(SYSTEM_BASIC_INFORMATION));
+            pInfo->PageSize = 4096;
+            pInfo->NumberOfPhysicalPages = 8388608; // 32GB / 4KB
+            pInfo->AllocationGranularity = 65536;
+            pInfo->MinimumUserModeAddress = 0x10000;
+            pInfo->MaximumUserModeAddress = 0x7FFFFFFEFFFFULL;
+            pInfo->ActiveProcessorsAffinityMask = 0xFFFF; // 16 cores
+            pInfo->NumberOfProcessors = 16;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BASIC_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 35: { // SystemKernelDebuggerInformation
+            if (SystemInformationLength < sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_KERNEL_DEBUGGER_INFORMATION*>(SystemInformation);
+            pInfo->KernelDebuggerEnabled = 0;
+            pInfo->KernelDebuggerNotPresent = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 90: { // SystemBootEnvironmentInformation
+            if (SystemInformationLength < sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_BOOT_ENVIRONMENT_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION));
+            pInfo->FirmwareType = 2; // FirmwareTypeUefi
+            pInfo->BootFlags = 0x1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 103: { // SystemCodeIntegrityInformation
+            if (SystemInformationLength < sizeof(SYSTEM_CODEINTEGRITY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODEINTEGRITY_INFORMATION*>(SystemInformation);
+            pInfo->Length = sizeof(SYSTEM_CODEINTEGRITY_INFORMATION);
+            pInfo->CodeIntegrityOptions = CODEINTEGRITY_OPTION_ENABLED | CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITY_INFORMATION);
+            return NtStatus::Success;
+        }
+        default: {
+            if (SystemInformation && SystemInformationLength > 0) {
+                std::memset(SystemInformation, 0, SystemInformationLength);
+            }
+            if (ReturnLength) *ReturnLength = SystemInformationLength;
+            return NtStatus::Success;
+        }
+    }
 }
 
 inline NtStatus WINAPI NtQueryVolumeInformationFile(

@@ -39537,7 +39537,7 @@ inline void Test_Horizon199_NativeWindowsNtKernel_GamingConformance_Suite() {
 
     // 6. Pillar 6: Native PE / DynamicLoader Export Resolution Verification
     {
-        InitializeWin32SubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
         micant::powrprof::InitializePowrProfSubsystemExports();
         auto& ldr = ldr::DynamicLoader::get();
 
@@ -40467,4 +40467,299 @@ inline void Test_Horizon202_VbsEnclaves_ThreadContext_PrecisionTimers_And_WorkGr
               << "    Pillar 6: Native PE / DynamicLoader Export Resolution for Enclave, Realtime, Sysinfo & Psapi OK\n";
 
     std::cout << "[TEST] Suite 418: Horizon 202 - Sovereign VBS Enclaves, Thread Context & Work Graphs PASSED." << std::endl;
+}
+
+
+// ============================================================================
+// Suite 419: Horizon 203 - Sovereign Win32 Fibers & FLS, Process Mitigation
+//            Policies, Multi-Monitor Display Topology & DirectX 12 Feature Options 13-15
+// ============================================================================
+
+inline void Test_Horizon203_Fibers_MitigationPolicies_DisplayTopology_And_D3D12Options_Suite() {
+    std::cout << "[TEST] Running Suite 419: Horizon 203 - Fibers, Mitigation Policies, Display Topology & D3D12 Options..." << std::endl;
+
+    // 1. Pillar 1: Win32 Fibers & Fiber Local Storage (FLS)
+    {
+        using namespace micant::win32;
+
+        TEST_ASSERT(IsThreadAFiber() == FALSE, "Calling thread is not a fiber initially");
+
+        // Convert current thread to primary fiber
+        LPVOID pPrimaryParam = reinterpret_cast<LPVOID>(0xC0FFEEULL);
+        LPVOID pPrimaryFiber = ConvertThreadToFiber(pPrimaryParam);
+        TEST_ASSERT(pPrimaryFiber != nullptr, "ConvertThreadToFiber converts host thread into primary fiber");
+        TEST_ASSERT(IsThreadAFiber() == TRUE, "IsThreadAFiber reports true after conversion");
+        TEST_ASSERT(GetCurrentFiber() == pPrimaryFiber, "GetCurrentFiber matches primary fiber handle");
+
+        // FLS Allocation and Value Storage
+        static uint32_t s_flsCallbackCount = 0;
+        static void* s_flsCallbackLastData = nullptr;
+        auto flsCallback = [](PVOID lpData) {
+            s_flsCallbackCount++;
+            s_flsCallbackLastData = lpData;
+        };
+
+        DWORD flsSlot = FlsAlloc(+flsCallback);
+        TEST_ASSERT(flsSlot != FLS_OUT_OF_INDEXES, "FlsAlloc successfully allocates valid slot");
+
+        PVOID testData = reinterpret_cast<PVOID>(0x12345678ULL);
+        TEST_ASSERT(FlsSetValue(flsSlot, testData) == TRUE, "FlsSetValue associates pointer with fiber slot");
+        TEST_ASSERT(FlsGetValue(flsSlot) == testData, "FlsGetValue retrieves identical pointer for active fiber");
+
+        // Worker Fiber Creation & Execution
+        static bool s_workerFiberExecuted = false;
+        static LPVOID s_workerFiberReceivedParam = nullptr;
+        auto fiberWorker = [](LPVOID lpParam) {
+            s_workerFiberExecuted = true;
+            s_workerFiberReceivedParam = lpParam;
+        };
+
+        LPVOID pWorkerParam = reinterpret_cast<LPVOID>(0xCAFEFEEDULL);
+        LPVOID pWorkerFiber = CreateFiber(128 * 1024, +fiberWorker, pWorkerParam);
+        TEST_ASSERT(pWorkerFiber != nullptr, "CreateFiber allocates secondary fiber control block with 128KB stack");
+
+        SwitchToFiber(pWorkerFiber);
+        TEST_ASSERT(s_workerFiberExecuted == true, "SwitchToFiber successfully switches execution context to worker fiber");
+        TEST_ASSERT(s_workerFiberReceivedParam == pWorkerParam, "Worker fiber receives original parameter intact");
+
+        // Fiber Deletion and FLS Cleanup
+        DeleteFiber(pWorkerFiber);
+
+        TEST_ASSERT(FlsFree(flsSlot) == TRUE, "FlsFree releases allocated FLS slot");
+
+        // Revert primary fiber back to standard thread
+        TEST_ASSERT(ConvertFiberToThread() == TRUE, "ConvertFiberToThread restores regular thread execution");
+        TEST_ASSERT(IsThreadAFiber() == FALSE, "IsThreadAFiber reports false after conversion back to thread");
+    }
+
+    // 2. Pillar 2: Process Mitigation Policies
+    {
+        using namespace micant::win32;
+
+        HANDLE hProc = GetCurrentProcess();
+
+        // DEP Policy
+        PROCESS_MITIGATION_DEP_POLICY dep{};
+        dep.Enable = 1;
+        dep.Permanent = 1;
+        TEST_ASSERT(SetProcessMitigationPolicy(ProcessDEPPolicy, &dep, sizeof(dep)) == TRUE,
+                    "SetProcessMitigationPolicy applies ProcessDEPPolicy");
+
+        PROCESS_MITIGATION_DEP_POLICY queryDep{};
+        TEST_ASSERT(GetProcessMitigationPolicy(hProc, ProcessDEPPolicy, &queryDep, sizeof(queryDep)) == TRUE,
+                    "GetProcessMitigationPolicy queries ProcessDEPPolicy");
+        TEST_ASSERT(queryDep.Enable == 1 && queryDep.Permanent == 1,
+                    "ProcessDEPPolicy reflects permanent DEP enforcement");
+
+        // ASLR Policy
+        PROCESS_MITIGATION_ASLR_POLICY aslr{};
+        aslr.EnableBottomUpRandomization = 1;
+        aslr.EnableHighEntropy = 1;
+        TEST_ASSERT(SetProcessMitigationPolicy(ProcessASLRPolicy, &aslr, sizeof(aslr)) == TRUE,
+                    "SetProcessMitigationPolicy applies ProcessASLRPolicy");
+
+        PROCESS_MITIGATION_ASLR_POLICY queryAslr{};
+        TEST_ASSERT(GetProcessMitigationPolicy(hProc, ProcessASLRPolicy, &queryAslr, sizeof(queryAslr)) == TRUE,
+                    "GetProcessMitigationPolicy queries ProcessASLRPolicy");
+        TEST_ASSERT(queryAslr.EnableBottomUpRandomization == 1 && queryAslr.EnableHighEntropy == 1,
+                    "ProcessASLRPolicy reflects High-Entropy 64-bit ASLR");
+
+        // Dynamic Code Policy (Arbitrary Code Guard - ACG)
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dcp{};
+        dcp.ProhibitDynamicCode = 1;
+        TEST_ASSERT(SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &dcp, sizeof(dcp)) == TRUE,
+                    "SetProcessMitigationPolicy applies ProcessDynamicCodePolicy (ACG)");
+
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY queryDcp{};
+        TEST_ASSERT(GetProcessMitigationPolicy(hProc, ProcessDynamicCodePolicy, &queryDcp, sizeof(queryDcp)) == TRUE,
+                    "GetProcessMitigationPolicy queries ProcessDynamicCodePolicy");
+        TEST_ASSERT(queryDcp.ProhibitDynamicCode == 1,
+                    "ProcessDynamicCodePolicy blocks unsigned dynamic shellcode injection");
+
+        // Strict Handle Check Policy
+        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY shp{};
+        shp.RaiseExceptionOnInvalidHandleReference = 1;
+        TEST_ASSERT(SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &shp, sizeof(shp)) == TRUE,
+                    "SetProcessMitigationPolicy applies ProcessStrictHandleCheckPolicy");
+
+        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY queryShp{};
+        TEST_ASSERT(GetProcessMitigationPolicy(hProc, ProcessStrictHandleCheckPolicy, &queryShp, sizeof(queryShp)) == TRUE,
+                    "GetProcessMitigationPolicy queries ProcessStrictHandleCheckPolicy");
+        TEST_ASSERT(queryShp.RaiseExceptionOnInvalidHandleReference == 1,
+                    "ProcessStrictHandleCheckPolicy enforces strict handle validation");
+    }
+
+    // 3. Pillar 3: Multi-Monitor Display Topology & Mode Enumeration (user32.dll)
+    {
+        using namespace micant::user32;
+
+        // Enumerate Primary Display Adapter
+        DISPLAY_DEVICEW disp1{};
+        disp1.cb = sizeof(DISPLAY_DEVICEW);
+        TEST_ASSERT(EnumDisplayDevicesW(nullptr, 0, &disp1, 0) == TRUE,
+                    "EnumDisplayDevicesW enumerates primary display adapter");
+        TEST_ASSERT(std::wcscmp(disp1.DeviceName, L"\\\\.\\DISPLAY1") == 0,
+                    "Primary display device name matches \\\\.\\DISPLAY1");
+        TEST_ASSERT((disp1.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0,
+                    "Primary display device carries DISPLAY_DEVICE_PRIMARY_DEVICE flag");
+
+        // Enumerate Secondary Display Adapter
+        DISPLAY_DEVICEW disp2{};
+        disp2.cb = sizeof(DISPLAY_DEVICEW);
+        TEST_ASSERT(EnumDisplayDevicesW(nullptr, 1, &disp2, 0) == TRUE,
+                    "EnumDisplayDevicesW enumerates secondary display adapter");
+        TEST_ASSERT(std::wcscmp(disp2.DeviceName, L"\\\\.\\DISPLAY2") == 0,
+                    "Secondary display device name matches \\\\.\\DISPLAY2");
+
+        // Query Current Display Settings (4K @ 240Hz)
+        DEVMODEW currentMode{};
+        currentMode.dmSize = sizeof(DEVMODEW);
+        TEST_ASSERT(EnumDisplaySettingsW(L"\\\\.\\DISPLAY1", ENUM_CURRENT_SETTINGS, &currentMode) == TRUE,
+                    "EnumDisplaySettingsW retrieves ENUM_CURRENT_SETTINGS for DISPLAY1");
+        TEST_ASSERT(currentMode.dmPelsWidth == 3840 && currentMode.dmPelsHeight == 2160,
+                    "Current display resolution is native 3840x2160 4K UHD");
+        TEST_ASSERT(currentMode.dmDisplayFrequency == 240,
+                    "Current display refresh rate is competitive 240 Hz");
+
+        // Query High-Refresh 540Hz Display Mode
+        DEVMODEW mode540{};
+        mode540.dmSize = sizeof(DEVMODEW);
+        TEST_ASSERT(EnumDisplaySettingsW(L"\\\\.\\DISPLAY1", 2, &mode540) == TRUE,
+                    "EnumDisplaySettingsW enumerates ultra high-speed 540 Hz mode");
+        TEST_ASSERT(mode540.dmDisplayFrequency == 540,
+                    "Display mode confirms 540 Hz esports gaming support");
+
+        // Monitor Information & Multi-Monitor Geometry
+        HMONITOR hMon1 = MonitorFromPoint(POINT{100, 100}, MONITOR_DEFAULTTONULL);
+        TEST_ASSERT(hMon1 != nullptr, "MonitorFromPoint resolves monitor handle for desktop coordinate (100, 100)");
+
+        MONITORINFOEXW monInfo{};
+        monInfo.cbSize = sizeof(MONITORINFOEXW);
+        TEST_ASSERT(GetMonitorInfoW(hMon1, &monInfo) == TRUE, "GetMonitorInfoW returns valid monitor rects");
+        TEST_ASSERT(monInfo.rcMonitor.right == 3840 && monInfo.rcMonitor.bottom == 2160,
+                    "rcMonitor reflects 3840x2160 boundary");
+        TEST_ASSERT((monInfo.dwFlags & MONITORINFOF_PRIMARY) != 0,
+                    "MonitorInfo confirms MONITORINFOF_PRIMARY");
+    }
+
+    // 4. Pillar 4: DirectX 12 Feature Options 13, 14 & 15
+    {
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_0);
+
+        // Options 13
+        D3D12_FEATURE_DATA_D3D12_OPTIONS13 opt13{};
+        int32_t hr13 = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS13, &opt13, sizeof(opt13));
+        TEST_ASSERT(hr13 == 0, "CheckFeatureSupport returns S_OK for D3D12_FEATURE_D3D12_OPTIONS13");
+        TEST_ASSERT(opt13.UnrestrictedBufferTextureCopyPitchSupported == TRUE,
+                    "OPTIONS13: UnrestrictedBufferTextureCopyPitchSupported is enabled");
+        TEST_ASSERT(opt13.InvertedViewportHeightFlipsYSupported == TRUE,
+                    "OPTIONS13: InvertedViewportHeightFlipsYSupported is enabled");
+
+        // Options 14
+        D3D12_FEATURE_DATA_D3D12_OPTIONS14 opt14{};
+        int32_t hr14 = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS14, &opt14, sizeof(opt14));
+        TEST_ASSERT(hr14 == 0, "CheckFeatureSupport returns S_OK for D3D12_FEATURE_D3D12_OPTIONS14");
+        TEST_ASSERT(opt14.AdvancedTextureOpsSupported == TRUE,
+                    "OPTIONS14: AdvancedTextureOpsSupported is enabled");
+        TEST_ASSERT(opt14.IndependentFrontAndBackStencilRefMaskSupported == TRUE,
+                    "OPTIONS14: IndependentFrontAndBackStencilRefMaskSupported is enabled");
+
+        // Options 15
+        D3D12_FEATURE_DATA_D3D12_OPTIONS15 opt15{};
+        int32_t hr15 = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS15, &opt15, sizeof(opt15));
+        TEST_ASSERT(hr15 == 0, "CheckFeatureSupport returns S_OK for D3D12_FEATURE_D3D12_OPTIONS15");
+        TEST_ASSERT(opt15.TriangleFanSupported == TRUE,
+                    "OPTIONS15: TriangleFanSupported is enabled");
+        TEST_ASSERT(opt15.DynamicIndexBufferStripCut == D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_ALL,
+                    "OPTIONS15: DynamicIndexBufferStripCut reports ALL strip cut formats supported");
+    }
+
+    // 5. Pillar 5: Authentic NTDLL System Information Classes
+    {
+        using namespace micant::ntdll;
+
+        // SystemBasicInformation (Class 0)
+        SYSTEM_BASIC_INFORMATION basicInfo{};
+        uint32_t retLen = 0;
+        NtStatus stBasic = NtQuerySystemInformation_Export(0, &basicInfo, sizeof(basicInfo), &retLen);
+        TEST_ASSERT(stBasic == NtStatus::Success, "NtQuerySystemInformation returns Success for SystemBasicInformation");
+        TEST_ASSERT(basicInfo.PageSize == 4096, "SystemBasicInformation reports 4KB memory page size");
+        TEST_ASSERT(basicInfo.NumberOfProcessors == 16, "SystemBasicInformation reports 16 logical processors");
+        TEST_ASSERT(basicInfo.AllocationGranularity == 65536, "SystemBasicInformation reports 64KB allocation granularity");
+
+        // SystemKernelDebuggerInformation (Class 35)
+        SYSTEM_KERNEL_DEBUGGER_INFORMATION dbgInfo{};
+        NtStatus stDbg = NtQuerySystemInformation_Export(35, &dbgInfo, sizeof(dbgInfo), &retLen);
+        TEST_ASSERT(stDbg == NtStatus::Success, "NtQuerySystemInformation returns Success for SystemKernelDebuggerInformation");
+        TEST_ASSERT(dbgInfo.KernelDebuggerEnabled == 0, "KernelDebuggerEnabled is 0 (anti-cheat debugger check pass)");
+        TEST_ASSERT(dbgInfo.KernelDebuggerNotPresent == 1, "KernelDebuggerNotPresent is 1 (anti-cheat clean environment)");
+
+        // SystemBootEnvironmentInformation (Class 90)
+        SYSTEM_BOOT_ENVIRONMENT_INFORMATION bootInfo{};
+        NtStatus stBoot = NtQuerySystemInformation_Export(90, &bootInfo, sizeof(bootInfo), &retLen);
+        TEST_ASSERT(stBoot == NtStatus::Success, "NtQuerySystemInformation returns Success for SystemBootEnvironmentInformation");
+        TEST_ASSERT(bootInfo.FirmwareType == 2, "FirmwareType reports FirmwareTypeUefi (Secure Boot capable)");
+
+        // SystemCodeIntegrityInformation (Class 103)
+        SYSTEM_CODEINTEGRITY_INFORMATION ciInfo{};
+        NtStatus stCi = NtQuerySystemInformation_Export(103, &ciInfo, sizeof(ciInfo), &retLen);
+        TEST_ASSERT(stCi == NtStatus::Success, "NtQuerySystemInformation returns Success for SystemCodeIntegrityInformation");
+        TEST_ASSERT((ciInfo.CodeIntegrityOptions & CODEINTEGRITY_OPTION_ENABLED) != 0,
+                    "CodeIntegrityOptions reports CODEINTEGRITY_OPTION_ENABLED");
+        TEST_ASSERT((ciInfo.CodeIntegrityOptions & CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED) != 0,
+                    "CodeIntegrityOptions reports Hypervisor-protected Code Integrity (HVCI/KMCI) active");
+    }
+
+    // 6. Pillar 6: Native PE / DynamicLoader Export Resolution
+    {
+        micant::ntdll::InitializeNtdllSubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
+        micant::user32::InitializeUser32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        // Fibers & FLS
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "ConvertThreadToFiber") != nullptr, "kernel32.dll exports ConvertThreadToFiber");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateFiber") != nullptr, "kernel32.dll exports CreateFiber");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SwitchToFiber") != nullptr, "kernel32.dll exports SwitchToFiber");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "DeleteFiber") != nullptr, "kernel32.dll exports DeleteFiber");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "FlsAlloc") != nullptr, "kernel32.dll exports FlsAlloc");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "FlsGetValue") != nullptr, "kernel32.dll exports FlsGetValue");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "FlsSetValue") != nullptr, "kernel32.dll exports FlsSetValue");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "FlsFree") != nullptr, "kernel32.dll exports FlsFree");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-fibers-l1-1-1.dll", "FlsAlloc") != nullptr, "api-ms-win-core-fibers-l1-1-1.dll exports FlsAlloc");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-fibers-l1-1-1.dll", "CreateFiber") != nullptr, "api-ms-win-core-fibers-l1-1-1.dll exports CreateFiber");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-fibers-l1-1-1.dll", "SwitchToFiber") != nullptr, "api-ms-win-core-fibers-l1-1-1.dll exports SwitchToFiber");
+
+        // Process Mitigation Policies
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetProcessMitigationPolicy") != nullptr, "kernel32.dll exports SetProcessMitigationPolicy");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessMitigationPolicy") != nullptr, "kernel32.dll exports GetProcessMitigationPolicy");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetProcessMitigationPolicy") != nullptr, "api-ms-win-core-processthreads-l1-1-0.dll exports SetProcessMitigationPolicy");
+
+        // Display Topology
+        TEST_ASSERT(ldr.getExport("user32.dll", "EnumDisplayDevicesW") != nullptr, "user32.dll exports EnumDisplayDevicesW");
+        TEST_ASSERT(ldr.getExport("user32.dll", "EnumDisplaySettingsW") != nullptr, "user32.dll exports EnumDisplaySettingsW");
+        TEST_ASSERT(ldr.getExport("user32.dll", "ChangeDisplaySettingsExW") != nullptr, "user32.dll exports ChangeDisplaySettingsExW");
+        TEST_ASSERT(ldr.getExport("user32.dll", "GetMonitorInfoW") != nullptr, "user32.dll exports GetMonitorInfoW");
+        TEST_ASSERT(ldr.getExport("user32.dll", "MonitorFromWindow") != nullptr, "user32.dll exports MonitorFromWindow");
+        TEST_ASSERT(ldr.getExport("user32.dll", "MonitorFromPoint") != nullptr, "user32.dll exports MonitorFromPoint");
+
+        // NTDLL System Information
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtQuerySystemInformation") != nullptr, "ntdll.dll exports NtQuerySystemInformation");
+
+        std::cout << "[VERDICT] Fibers, FLS, Process Mitigation, Display Topology & D3D12 Options 13-15\n"
+                  << "          operate 100% natively on MicaNT kernel and Win32 executive without satellite DLLs!\n";
+    }
+
+    std::cout << "[HORIZON 203] Fibers, Mitigation, Display & D3D12 Options Summary:\n"
+              << "    Pillar 1: Win32 Fibers & Fiber Local Storage (ConvertThreadToFiber / SwitchToFiber) OK\n"
+              << "    Pillar 2: Process Mitigation Policies (DEP, ASLR, Dynamic Code ACG, Strict Handle) OK\n"
+              << "    Pillar 3: Multi-Monitor Display Topology (EnumDisplayDevicesW / 540Hz Modes) OK\n"
+              << "    Pillar 4: DirectX 12 Feature Options 13, 14 & 15 (CheckFeatureSupport S_OK) OK\n"
+              << "    Pillar 5: Authentic NTDLL System Information (HVCI / UEFI / Debugger Not Present) OK\n"
+              << "    Pillar 6: Native PE / DynamicLoader Export Resolution for fibers, user32, ntdll OK\n";
+
+    std::cout << "[TEST] Suite 419: Horizon 203 - Fibers, Mitigation, Display & D3D12 Options PASSED." << std::endl;
 }

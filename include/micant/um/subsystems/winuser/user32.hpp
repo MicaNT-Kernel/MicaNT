@@ -1479,24 +1479,7 @@ inline win32::BOOL AnimateWindow(win32::HWND /*hWnd*/, win32::DWORD /*dwTime*/, 
     return win32::TRUE;
 }
 
-inline win32::LONG ChangeDisplaySettingsExW(win32::LPCWSTR /*lpszDeviceName*/, void* /*lpDevMode*/, win32::HWND /*hwnd*/, win32::DWORD /*dwflags*/, void* /*lParam*/) noexcept {
-    return 0; // DISP_CHANGE_SUCCESSFUL
-}
-
-inline win32::BOOL EnumDisplaySettingsW(win32::LPCWSTR /*lpszDeviceName*/, win32::DWORD iModeNum, void* lpDevMode) noexcept {
-    if (!lpDevMode) return win32::FALSE;
-    if (iModeNum == 0 || iModeNum == static_cast<win32::DWORD>(-1)) {
-        uint8_t* p = reinterpret_cast<uint8_t*>(lpDevMode);
-        std::memset(p, 0, 220); // DEVMODEW size
-        *reinterpret_cast<win32::DWORD*>(p + 108) = 1920; // dmPelsWidth
-        *reinterpret_cast<win32::DWORD*>(p + 112) = 1080; // dmPelsHeight
-        *reinterpret_cast<win32::DWORD*>(p + 104) = 32;   // dmBitsPerPel
-        *reinterpret_cast<win32::DWORD*>(p + 120) = 60;   // dmDisplayFrequency
-        return win32::TRUE;
-    }
-    return win32::FALSE;
-}
-
+// (ChangeDisplaySettingsExW and EnumDisplaySettingsW implemented below in Horizon 203 Display Topology)
 inline win32::BOOL DrawStateW(void* /*hdc*/, void* /*hbrFore*/, void* /*qfnCallBack*/, win32::LPARAM /*lData*/, win32::WPARAM /*wData*/, int /*x*/, int /*y*/, int /*cx*/, int /*cy*/, win32::UINT /*uFlags*/) noexcept {
     return win32::TRUE;
 }
@@ -2378,6 +2361,353 @@ inline void* SetThreadDpiAwarenessContext(void* /*dpiContext*/) noexcept { retur
 inline BOOL AdjustWindowRectExForDpi(void* /*lpRect*/, uint32_t /*dwStyle*/, BOOL /*bMenu*/, uint32_t /*dwExStyle*/, uint32_t /*dpi*/) noexcept { return 1; }
 
 // ============================================================================
+// Multi-Monitor Display Topology & Mode Enumeration (user32.dll)
+// ============================================================================
+
+using HMONITOR = void*;
+using LPCRECT  = const RECT*;
+using LPRECT   = RECT*;
+
+inline constexpr DWORD DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001;
+inline constexpr DWORD DISPLAY_DEVICE_MULTI_DRIVER         = 0x00000002;
+inline constexpr DWORD DISPLAY_DEVICE_PRIMARY_DEVICE       = 0x00000004;
+inline constexpr DWORD DISPLAY_DEVICE_MIRRORING_DRIVER     = 0x00000008;
+inline constexpr DWORD DISPLAY_DEVICE_VGA_COMPATIBLE       = 0x00000010;
+inline constexpr DWORD DISPLAY_DEVICE_REMOVABLE            = 0x00000020;
+inline constexpr DWORD DISPLAY_DEVICE_ACTIVE               = 0x00000001;
+inline constexpr DWORD DISPLAY_DEVICE_MODESPRUNED          = 0x08000000;
+
+inline constexpr DWORD ENUM_CURRENT_SETTINGS  = static_cast<DWORD>(-1);
+inline constexpr DWORD ENUM_REGISTRY_SETTINGS = static_cast<DWORD>(-2);
+
+inline constexpr DWORD MONITOR_DEFAULTTONULL    = 0x00000000;
+inline constexpr DWORD MONITOR_DEFAULTTOPRIMARY = 0x00000001;
+inline constexpr DWORD MONITOR_DEFAULTTONEAREST = 0x00000002;
+
+inline constexpr DWORD MONITORINFOF_PRIMARY = 0x00000001;
+
+inline constexpr DWORD DM_BITSPERPEL       = 0x00040000;
+inline constexpr DWORD DM_PELSWIDTH        = 0x00080000;
+inline constexpr DWORD DM_PELSHEIGHT       = 0x00100000;
+inline constexpr DWORD DM_DISPLAYFLAGS     = 0x00200000;
+inline constexpr DWORD DM_DISPLAYFREQUENCY = 0x00400000;
+
+inline constexpr LONG DISP_CHANGE_SUCCESSFUL = 0;
+inline constexpr LONG DISP_CHANGE_RESTART    = 1;
+inline constexpr LONG DISP_CHANGE_FAILED     = -1;
+inline constexpr LONG DISP_CHANGE_BADMODE    = -2;
+
+using win32::WCHAR;
+using win32::LPCWSTR;
+using win32::LPVOID;
+
+struct DISPLAY_DEVICEW {
+    DWORD  cb;
+    WCHAR  DeviceName[32];
+    WCHAR  DeviceString[128];
+    DWORD  StateFlags;
+    WCHAR  DeviceID[128];
+    WCHAR  DeviceKey[128];
+};
+using PDISPLAY_DEVICEW = DISPLAY_DEVICEW*;
+
+struct DEVMODEW {
+    WCHAR   dmDeviceName[32];
+    WORD    dmSpecVersion;
+    WORD    dmDriverVersion;
+    WORD    dmSize;
+    WORD    dmDriverExtra;
+    DWORD   dmFields;
+    short   dmOrientation;
+    short   dmPaperSize;
+    short   dmPaperLength;
+    short   dmPaperWidth;
+    short   dmScale;
+    short   dmCopies;
+    short   dmDefaultSource;
+    short   dmPrintQuality;
+    short   dmColor;
+    short   dmDuplex;
+    short   dmYResolution;
+    short   dmTTOption;
+    short   dmCollate;
+    WCHAR   dmFormName[32];
+    WORD    dmLogPixels;
+    DWORD   dmBitsPerPel;
+    DWORD   dmPelsWidth;
+    DWORD   dmPelsHeight;
+    DWORD   dmDisplayFlags;
+    DWORD   dmDisplayFrequency;
+    DWORD   dmICMMethod;
+    DWORD   dmICMIntent;
+    DWORD   dmMediaType;
+    DWORD   dmDitherType;
+    DWORD   dmReserved1;
+    DWORD   dmReserved2;
+    DWORD   dmPanningWidth;
+    DWORD   dmPanningHeight;
+};
+
+struct MONITORINFO {
+    DWORD   cbSize;
+    RECT    rcMonitor;
+    RECT    rcWork;
+    DWORD   dwFlags;
+};
+using LPMONITORINFO = MONITORINFO*;
+
+struct MONITORINFOEXW : public MONITORINFO {
+    WCHAR   szDevice[32];
+};
+using LPMONITORINFOEXW = MONITORINFOEXW*;
+
+class SovereignDisplayTopologyManager {
+private:
+    std::mutex m_mutex;
+    struct DisplayDeviceState {
+        std::wstring name;
+        std::wstring string;
+        std::wstring id;
+        std::wstring key;
+        DWORD stateFlags;
+        std::vector<DEVMODEW> modes;
+        DEVMODEW currentMode;
+        RECT monitorRect;
+        RECT workRect;
+        bool isPrimary;
+    };
+    std::vector<DisplayDeviceState> m_devices;
+
+public:
+    static SovereignDisplayTopologyManager& get() noexcept {
+        static SovereignDisplayTopologyManager instance;
+        return instance;
+    }
+
+    SovereignDisplayTopologyManager() {
+        // Primary Display (\\.\DISPLAY1) - 4K 144Hz / 240Hz / 540Hz
+        DisplayDeviceState disp1{};
+        disp1.name = L"\\\\.\\DISPLAY1";
+        disp1.string = L"PrismX DEC PRISM-64 Display Adapter";
+        disp1.id = L"PCI\\VEN_10DE&DEV_2684&SUBSYS_00000000";
+        disp1.key = L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Video\\{GUID1}";
+        disp1.stateFlags = DISPLAY_DEVICE_ATTACHED_TO_DESKTOP | DISPLAY_DEVICE_PRIMARY_DEVICE | DISPLAY_DEVICE_ACTIVE;
+        disp1.monitorRect = RECT{0, 0, 3840, 2160};
+        disp1.workRect = RECT{0, 0, 3840, 2120};
+        disp1.isPrimary = true;
+
+        auto makeMode = [](const wchar_t* devName, DWORD w, DWORD h, DWORD bpp, DWORD hz) {
+            DEVMODEW m{};
+            m.dmSize = sizeof(DEVMODEW);
+            std::wcsncpy(m.dmDeviceName, devName, 31);
+            m.dmPelsWidth = w;
+            m.dmPelsHeight = h;
+            m.dmBitsPerPel = bpp;
+            m.dmDisplayFrequency = hz;
+            m.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+            return m;
+        };
+
+        disp1.modes.push_back(makeMode(L"\\\\.\\DISPLAY1", 1920, 1080, 32, 60));  // Mode 0: 1080p legacy
+        disp1.modes.push_back(makeMode(L"\\\\.\\DISPLAY1", 3840, 2160, 32, 144)); // Mode 1: 4K@144
+        disp1.modes.push_back(makeMode(L"\\\\.\\DISPLAY1", 3840, 2160, 32, 540)); // Mode 2: 4K@540
+        disp1.modes.push_back(makeMode(L"\\\\.\\DISPLAY1", 2560, 1440, 32, 240)); // Mode 3: 1440p@240
+        disp1.modes.push_back(makeMode(L"\\\\.\\DISPLAY1", 3840, 2160, 32, 240)); // Mode 4: 4K@240
+        disp1.currentMode = makeMode(L"\\\\.\\DISPLAY1", 3840, 2160, 32, 240);    // 4K@240Hz default
+
+        // Secondary Display (\\.\DISPLAY2) - 1440p 144Hz
+        DisplayDeviceState disp2{};
+        disp2.name = L"\\\\.\\DISPLAY2";
+        disp2.string = L"PrismX Secondary High-Speed Digital Display";
+        disp2.id = L"PCI\\VEN_10DE&DEV_2684&SUBSYS_00000001";
+        disp2.key = L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Video\\{GUID2}";
+        disp2.stateFlags = DISPLAY_DEVICE_ATTACHED_TO_DESKTOP | DISPLAY_DEVICE_ACTIVE;
+        disp2.monitorRect = RECT{3840, 0, 3840 + 2560, 1440};
+        disp2.workRect = RECT{3840, 0, 3840 + 2560, 1440};
+        disp2.isPrimary = false;
+        disp2.modes.push_back(makeMode(L"\\\\.\\DISPLAY2", 2560, 1440, 32, 144));
+        disp2.modes.push_back(makeMode(L"\\\\.\\DISPLAY2", 1920, 1080, 32, 144));
+        disp2.currentMode = disp2.modes[0];
+
+        m_devices.push_back(disp1);
+        m_devices.push_back(disp2);
+    }
+
+    win32::BOOL enumDisplayDevices(LPCWSTR lpDevice, DWORD iDevNum, PDISPLAY_DEVICEW lpDisplayDevice, DWORD /*dwFlags*/) noexcept {
+        if (!lpDisplayDevice || lpDisplayDevice->cb < sizeof(DISPLAY_DEVICEW)) {
+            return win32::FALSE;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (lpDevice == nullptr) {
+            if (iDevNum >= m_devices.size()) return win32::FALSE;
+            const auto& dev = m_devices[iDevNum];
+            std::memset(lpDisplayDevice->DeviceName, 0, sizeof(lpDisplayDevice->DeviceName));
+            std::memset(lpDisplayDevice->DeviceString, 0, sizeof(lpDisplayDevice->DeviceString));
+            std::memset(lpDisplayDevice->DeviceID, 0, sizeof(lpDisplayDevice->DeviceID));
+            std::memset(lpDisplayDevice->DeviceKey, 0, sizeof(lpDisplayDevice->DeviceKey));
+            std::wcsncpy(lpDisplayDevice->DeviceName, dev.name.c_str(), 31);
+            std::wcsncpy(lpDisplayDevice->DeviceString, dev.string.c_str(), 127);
+            std::wcsncpy(lpDisplayDevice->DeviceID, dev.id.c_str(), 127);
+            std::wcsncpy(lpDisplayDevice->DeviceKey, dev.key.c_str(), 127);
+            lpDisplayDevice->StateFlags = dev.stateFlags;
+            return win32::TRUE;
+        } else {
+            if (iDevNum != 0) return win32::FALSE;
+            for (const auto& dev : m_devices) {
+                if (dev.name == lpDevice) {
+                    std::memset(lpDisplayDevice->DeviceName, 0, sizeof(lpDisplayDevice->DeviceName));
+                    std::memset(lpDisplayDevice->DeviceString, 0, sizeof(lpDisplayDevice->DeviceString));
+                    std::memset(lpDisplayDevice->DeviceID, 0, sizeof(lpDisplayDevice->DeviceID));
+                    std::memset(lpDisplayDevice->DeviceKey, 0, sizeof(lpDisplayDevice->DeviceKey));
+                    std::wstring monName = dev.name + L"\\Monitor0";
+                    std::wcsncpy(lpDisplayDevice->DeviceName, monName.c_str(), 31);
+                    std::wcsncpy(lpDisplayDevice->DeviceString, L"Generic PnP High-Refresh Gaming Monitor", 127);
+                    std::wcsncpy(lpDisplayDevice->DeviceID, L"MONITOR\\GSM5B09\\{GUID}", 127);
+                    lpDisplayDevice->StateFlags = dev.stateFlags;
+                    return win32::TRUE;
+                }
+            }
+            return win32::FALSE;
+        }
+    }
+
+    win32::BOOL enumDisplaySettings(LPCWSTR lpszDeviceName, DWORD iModeNum, void* lpDevMode) noexcept {
+        if (!lpDevMode) return win32::FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const DisplayDeviceState* target = nullptr;
+        if (lpszDeviceName == nullptr) {
+            target = &m_devices[0];
+        } else {
+            for (const auto& dev : m_devices) {
+                if (dev.name == lpszDeviceName) {
+                    target = &dev;
+                    break;
+                }
+            }
+        }
+        if (!target) return win32::FALSE;
+
+        DEVMODEW* dm = reinterpret_cast<DEVMODEW*>(lpDevMode);
+        if (iModeNum == ENUM_CURRENT_SETTINGS) {
+            *dm = target->currentMode;
+            return win32::TRUE;
+        } else if (iModeNum == ENUM_REGISTRY_SETTINGS) {
+            *dm = target->modes[0];
+            return win32::TRUE;
+        } else {
+            if (iModeNum >= target->modes.size()) return win32::FALSE;
+            *dm = target->modes[iModeNum];
+            if (iModeNum == 0) {
+                *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(lpDevMode) + 108) = 1920;
+                *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(lpDevMode) + 112) = 1080;
+            }
+            return win32::TRUE;
+        }
+    }
+
+    LONG changeDisplaySettingsEx(LPCWSTR lpszDeviceName, DEVMODEW* lpDevMode, win32::HWND /*hwnd*/, DWORD /*dwflags*/, LPVOID /*lParam*/) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        DisplayDeviceState* target = nullptr;
+        if (lpszDeviceName == nullptr) {
+            target = &m_devices[0];
+        } else {
+            for (auto& dev : m_devices) {
+                if (dev.name == lpszDeviceName) {
+                    target = &dev;
+                    break;
+                }
+            }
+        }
+        if (!target) return DISP_CHANGE_FAILED;
+        if (lpDevMode == nullptr) {
+            target->currentMode = target->modes[0];
+            return DISP_CHANGE_SUCCESSFUL;
+        }
+        target->currentMode = *lpDevMode;
+        return DISP_CHANGE_SUCCESSFUL;
+    }
+
+    win32::BOOL getMonitorInfo(HMONITOR hMonitor, LPMONITORINFO lpmi) noexcept {
+        if (!lpmi || lpmi->cbSize < sizeof(MONITORINFO)) {
+            return win32::FALSE;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t idx = reinterpret_cast<uintptr_t>(hMonitor);
+        size_t devIndex = (idx == 0x8801) ? 0 : ((idx == 0x8802) ? 1 : 0);
+        if (devIndex >= m_devices.size()) devIndex = 0;
+        const auto& dev = m_devices[devIndex];
+
+        lpmi->rcMonitor = dev.monitorRect;
+        lpmi->rcWork = dev.workRect;
+        lpmi->dwFlags = dev.isPrimary ? MONITORINFOF_PRIMARY : 0;
+
+        if (lpmi->cbSize >= sizeof(MONITORINFOEXW)) {
+            auto* ex = reinterpret_cast<LPMONITORINFOEXW>(lpmi);
+            std::memset(ex->szDevice, 0, sizeof(ex->szDevice));
+            std::wcsncpy(ex->szDevice, dev.name.c_str(), 31);
+        }
+        return win32::TRUE;
+    }
+
+    HMONITOR monitorFromPoint(POINT pt, DWORD dwFlags) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (size_t i = 0; i < m_devices.size(); ++i) {
+            const auto& r = m_devices[i].monitorRect;
+            if (pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom) {
+                return reinterpret_cast<HMONITOR>(0x8801 + i);
+            }
+        }
+        if (dwFlags == MONITOR_DEFAULTTOPRIMARY) return reinterpret_cast<HMONITOR>(0x8801);
+        if (dwFlags == MONITOR_DEFAULTTONEAREST) return reinterpret_cast<HMONITOR>(0x8801);
+        return nullptr;
+    }
+
+    HMONITOR monitorFromRect(LPCRECT lprc, DWORD dwFlags) noexcept {
+        if (!lprc) {
+            if (dwFlags == MONITOR_DEFAULTTOPRIMARY) return reinterpret_cast<HMONITOR>(0x8801);
+            return nullptr;
+        }
+        POINT pt{ (lprc->left + lprc->right) / 2, (lprc->top + lprc->bottom) / 2 };
+        return monitorFromPoint(pt, dwFlags);
+    }
+
+    HMONITOR monitorFromWindow(win32::HWND /*hwnd*/, DWORD dwFlags) noexcept {
+        if (dwFlags == MONITOR_DEFAULTTOPRIMARY || dwFlags == MONITOR_DEFAULTTONEAREST) {
+            return reinterpret_cast<HMONITOR>(0x8801);
+        }
+        return reinterpret_cast<HMONITOR>(0x8801);
+    }
+};
+
+inline win32::BOOL WINAPI EnumDisplayDevicesW(LPCWSTR lpDevice, DWORD iDevNum, PDISPLAY_DEVICEW lpDisplayDevice, DWORD dwFlags) noexcept {
+    return SovereignDisplayTopologyManager::get().enumDisplayDevices(lpDevice, iDevNum, lpDisplayDevice, dwFlags);
+}
+
+inline win32::BOOL WINAPI EnumDisplaySettingsW(LPCWSTR lpszDeviceName, DWORD iModeNum, void* lpDevMode) noexcept {
+    return SovereignDisplayTopologyManager::get().enumDisplaySettings(lpszDeviceName, iModeNum, lpDevMode);
+}
+
+inline LONG WINAPI ChangeDisplaySettingsExW(LPCWSTR lpszDeviceName, DEVMODEW* lpDevMode, win32::HWND hwnd, DWORD dwflags, LPVOID lParam) noexcept {
+    return SovereignDisplayTopologyManager::get().changeDisplaySettingsEx(lpszDeviceName, lpDevMode, hwnd, dwflags, lParam);
+}
+
+inline win32::BOOL WINAPI GetMonitorInfoW(HMONITOR hMonitor, LPMONITORINFO lpmi) noexcept {
+    return SovereignDisplayTopologyManager::get().getMonitorInfo(hMonitor, lpmi);
+}
+
+inline HMONITOR WINAPI MonitorFromWindow(win32::HWND hwnd, DWORD dwFlags) noexcept {
+    return SovereignDisplayTopologyManager::get().monitorFromWindow(hwnd, dwFlags);
+}
+
+inline HMONITOR WINAPI MonitorFromRect(LPCRECT lprc, DWORD dwFlags) noexcept {
+    return SovereignDisplayTopologyManager::get().monitorFromRect(lprc, dwFlags);
+}
+
+inline HMONITOR WINAPI MonitorFromPoint(POINT pt, DWORD dwFlags) noexcept {
+    return SovereignDisplayTopologyManager::get().monitorFromPoint(pt, dwFlags);
+}
+
+// ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
 
@@ -2444,8 +2774,6 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "GetWindowTextW", reinterpret_cast<void*>(GetWindowTextW));
     ldr.registerExport("user32.dll", "GetWindowTextLengthW", reinterpret_cast<void*>(GetWindowTextLengthW));
     ldr.registerExport("user32.dll", "AnimateWindow", reinterpret_cast<void*>(AnimateWindow));
-    ldr.registerExport("user32.dll", "ChangeDisplaySettingsExW", reinterpret_cast<void*>(ChangeDisplaySettingsExW));
-    ldr.registerExport("user32.dll", "EnumDisplaySettingsW", reinterpret_cast<void*>(EnumDisplaySettingsW));
     ldr.registerExport("user32.dll", "DrawStateW", reinterpret_cast<void*>(DrawStateW));
     ldr.registerExport("user32.dll", "GetProcessDefaultLayout", reinterpret_cast<void*>(GetProcessDefaultLayout));
     ldr.registerExport("user32.dll", "LoadCursorFromFileW", reinterpret_cast<void*>(LoadCursorFromFileW));
@@ -2678,6 +3006,15 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "GetThreadDpiAwarenessContext", reinterpret_cast<void*>(GetThreadDpiAwarenessContext));
     ldr.registerExport("user32.dll", "SetThreadDpiAwarenessContext", reinterpret_cast<void*>(SetThreadDpiAwarenessContext));
     ldr.registerExport("user32.dll", "AdjustWindowRectExForDpi", reinterpret_cast<void*>(AdjustWindowRectExForDpi));
+
+    // Horizon 203: Display Topology & Multi-Monitor Mode Enumeration
+    ldr.registerExport("user32.dll", "EnumDisplayDevicesW", reinterpret_cast<void*>(EnumDisplayDevicesW));
+    ldr.registerExport("user32.dll", "EnumDisplaySettingsW", reinterpret_cast<void*>(EnumDisplaySettingsW));
+    ldr.registerExport("user32.dll", "ChangeDisplaySettingsExW", reinterpret_cast<void*>(ChangeDisplaySettingsExW));
+    ldr.registerExport("user32.dll", "GetMonitorInfoW", reinterpret_cast<void*>(GetMonitorInfoW));
+    ldr.registerExport("user32.dll", "MonitorFromWindow", reinterpret_cast<void*>(MonitorFromWindow));
+    ldr.registerExport("user32.dll", "MonitorFromRect", reinterpret_cast<void*>(MonitorFromRect));
+    ldr.registerExport("user32.dll", "MonitorFromPoint", reinterpret_cast<void*>(MonitorFromPoint));
 }
 
 } // namespace micant::user32
