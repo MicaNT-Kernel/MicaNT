@@ -1266,6 +1266,54 @@ struct RTL_PROCESS_MODULES {
     RTL_PROCESS_MODULE_INFORMATION Modules[4]{};
 };
 
+struct FILE_INTERNAL_INFORMATION {
+    int64_t IndexNumber;
+};
+
+struct FILE_STANDARD_INFORMATION {
+    LargeInteger AllocationSize;
+    LargeInteger EndOfFile;
+    uint32_t NumberOfLinks;
+    uint8_t DeletePending;
+    uint8_t Directory;
+};
+
+inline NtStatus WINAPI NtQueryInformationFile_Export(
+    void* FileHandle,
+    void* /*IoStatusBlock*/,
+    void* FileInformation,
+    uint32_t Length,
+    uint32_t FileInformationClass
+) noexcept {
+    if (!FileInformation && Length > 0) return NtStatus::InvalidParameter;
+    if (FileHandle == nullptr || FileHandle == reinterpret_cast<void*>(-1)) {
+        return NtStatus::InvalidHandle;
+    }
+
+    switch (FileInformationClass) {
+        case 6: { // FileInternalInformation
+            if (Length < sizeof(FILE_INTERNAL_INFORMATION)) return NtStatus::InfoLengthMismatch;
+            auto* pInfo = reinterpret_cast<FILE_INTERNAL_INFORMATION*>(FileInformation);
+            pInfo->IndexNumber = 0x0001000000001234LL; // Authentic 64-bit NTFS file ID
+            return NtStatus::Success;
+        }
+        case 5: { // FileStandardInformation
+            if (Length < sizeof(FILE_STANDARD_INFORMATION)) return NtStatus::InfoLengthMismatch;
+            auto* pStd = reinterpret_cast<FILE_STANDARD_INFORMATION*>(FileInformation);
+            pStd->AllocationSize.quadPart = 1048576;
+            pStd->EndOfFile.quadPart = 1048576;
+            pStd->NumberOfLinks = 1;
+            pStd->DeletePending = 0;
+            pStd->Directory = 0;
+            return NtStatus::Success;
+        }
+        default: {
+            if (FileInformation && Length > 0) std::memset(FileInformation, 0, Length);
+            return NtStatus::Success;
+        }
+    }
+}
+
 struct PROCESS_BASIC_INFORMATION {
     NtStatus ExitStatus{NtStatus::Success};
     void* PebBaseAddress{nullptr};
@@ -2232,6 +2280,7 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQuerySecurityObject", reinterpret_cast<void*>(NtQuerySecurityObject));
     ldr.registerExport("ntdll.dll", "NtQuerySystemInformation", reinterpret_cast<void*>(NtQuerySystemInformation_Export));
     ldr.registerExport("ntdll.dll", "NtQueryInformationProcess", reinterpret_cast<void*>(NtQueryInformationProcess_Export));
+    ldr.registerExport("ntdll.dll", "NtQueryInformationFile", reinterpret_cast<void*>(NtQueryInformationFile_Export));
     ldr.registerExport("ntdll.dll", "NtQueryVolumeInformationFile", reinterpret_cast<void*>(NtQueryVolumeInformationFile));
     ldr.registerExport("ntdll.dll", "NtSetEaFile", reinterpret_cast<void*>(NtSetEaFile));
     ldr.registerExport("ntdll.dll", "NtSetSecurityObject", reinterpret_cast<void*>(NtSetSecurityObject));

@@ -394,6 +394,256 @@ inline win32::BOOL CryptDecrypt(
     return win32::TRUE;
 }
 
+// Token Information Classes & Structures
+using LUID = Luid;
+using PLUID = LUID*;
+
+inline constexpr uint32_t SE_PRIVILEGE_ENABLED_BY_DEFAULT = 0x00000001;
+inline constexpr uint32_t SE_PRIVILEGE_ENABLED            = 0x00000002;
+inline constexpr uint32_t SE_PRIVILEGE_REMOVED            = 0x00000004;
+inline constexpr uint32_t SE_PRIVILEGE_USED_FOR_ACCESS    = 0x80000000;
+
+inline constexpr const wchar_t* SE_DEBUG_NAME             = L"SeDebugPrivilege";
+inline constexpr const wchar_t* SE_INC_BASE_PRIORITY_NAME = L"SeIncreaseBasePriorityPrivilege";
+inline constexpr const wchar_t* SE_SECURITY_NAME          = L"SeSecurityPrivilege";
+inline constexpr const wchar_t* SE_SHUTDOWN_NAME          = L"SeShutdownPrivilege";
+inline constexpr const wchar_t* SE_SYSTEMTIME_NAME        = L"SeSystemtimePrivilege";
+
+inline constexpr uint32_t SECURITY_MANDATORY_UNTRUSTED_RID         = 0x00000000;
+inline constexpr uint32_t SECURITY_MANDATORY_LOW_RID               = 0x00001000;
+inline constexpr uint32_t SECURITY_MANDATORY_MEDIUM_RID            = 0x00002000;
+inline constexpr uint32_t SECURITY_MANDATORY_HIGH_RID              = 0x00003000;
+inline constexpr uint32_t SECURITY_MANDATORY_SYSTEM_RID            = 0x00004000;
+inline constexpr uint32_t SECURITY_MANDATORY_PROTECTED_PROCESS_RID = 0x00005000;
+
+struct LUID_AND_ATTRIBUTES {
+    LUID Luid;
+    uint32_t Attributes;
+};
+using PLUID_AND_ATTRIBUTES = LUID_AND_ATTRIBUTES*;
+
+struct TOKEN_PRIVILEGES {
+    uint32_t PrivilegeCount;
+    LUID_AND_ATTRIBUTES Privileges[32];
+};
+using PTOKEN_PRIVILEGES = TOKEN_PRIVILEGES*;
+
+enum TOKEN_INFORMATION_CLASS {
+    TokenUser = 1,
+    TokenGroups = 2,
+    TokenPrivileges = 3,
+    TokenOwner = 4,
+    TokenPrimaryGroup = 5,
+    TokenDefaultDacl = 6,
+    TokenSource = 7,
+    TokenType = 8,
+    TokenImpersonationLevel = 9,
+    TokenStatistics = 10,
+    TokenRestrictedSids = 11,
+    TokenSessionId = 12,
+    TokenGroupsAndPrivileges = 13,
+    TokenSessionReference = 14,
+    TokenSandBoxInert = 15,
+    TokenAuditPolicy = 16,
+    TokenOrigin = 17,
+    TokenElevationType = 18,
+    TokenLinkedToken = 19,
+    TokenElevation = 20,
+    TokenHasRestrictions = 21,
+    TokenAccessInformation = 22,
+    TokenVirtualizationAllowed = 23,
+    TokenVirtualizationEnabled = 24,
+    TokenMandatoryLabel = 25
+};
+
+enum TOKEN_ELEVATION_TYPE {
+    TokenElevationTypeDefault = 1,
+    TokenElevationTypeFull    = 2,
+    TokenElevationTypeLimited = 3
+};
+
+struct TOKEN_ELEVATION {
+    uint32_t TokenIsElevated;
+};
+using PTOKEN_ELEVATION = TOKEN_ELEVATION*;
+
+struct SID_AND_ATTRIBUTES {
+    void* Sid;
+    uint32_t Attributes;
+};
+using PSID_AND_ATTRIBUTES = SID_AND_ATTRIBUTES*;
+
+struct TOKEN_MANDATORY_LABEL {
+    SID_AND_ATTRIBUTES Label;
+};
+using PTOKEN_MANDATORY_LABEL = TOKEN_MANDATORY_LABEL*;
+
+struct TOKEN_USER {
+    SID_AND_ATTRIBUTES User;
+};
+using PTOKEN_USER = TOKEN_USER*;
+
+struct TOKEN_GROUPS {
+    uint32_t GroupCount;
+    SID_AND_ATTRIBUTES Groups[16];
+};
+using PTOKEN_GROUPS = TOKEN_GROUPS*;
+
+class SovereignSecurityTokenManager {
+private:
+    std::mutex m_mutex;
+    TOKEN_ELEVATION_TYPE m_elevationType{ TokenElevationTypeFull };
+    uint32_t m_isElevated{ 1 };
+    [[maybe_unused]] uint32_t m_integrityRid{ SECURITY_MANDATORY_HIGH_RID };
+    std::unordered_map<uint32_t, uint32_t> m_privileges;
+
+    uint8_t m_integritySid[12]{ 1, 1, 0, 0, 0, 0, 0, 16, 0x00, 0x30, 0x00, 0x00 };
+    uint8_t m_userSid[28]{ 1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 0x37, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF4, 0x01, 0x00, 0x00 };
+    uint8_t m_adminGroupSid[16]{ 1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x20, 0x02, 0x00, 0x00 };
+
+public:
+    static SovereignSecurityTokenManager& get() noexcept {
+        static SovereignSecurityTokenManager s_inst;
+        return s_inst;
+    }
+
+    SovereignSecurityTokenManager() {
+        m_privileges[14] = SE_PRIVILEGE_ENABLED; // SeIncreaseBasePriorityPrivilege
+        m_privileges[20] = SE_PRIVILEGE_ENABLED; // SeDebugPrivilege
+        m_privileges[8]  = SE_PRIVILEGE_ENABLED; // SeSecurityPrivilege
+        m_privileges[19] = SE_PRIVILEGE_ENABLED; // SeShutdownPrivilege
+        m_privileges[23] = SE_PRIVILEGE_ENABLED | SE_PRIVILEGE_ENABLED_BY_DEFAULT; // SeChangeNotifyPrivilege
+    }
+
+    win32::BOOL adjustPrivileges(
+        win32::BOOL disableAll,
+        const TOKEN_PRIVILEGES* newState,
+        uint32_t bufferLength,
+        TOKEN_PRIVILEGES* previousState,
+        uint32_t* returnLength
+    ) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (disableAll) {
+            for (auto& [k, v] : m_privileges) {
+                v &= ~SE_PRIVILEGE_ENABLED;
+            }
+            return win32::TRUE;
+        }
+
+        if (!newState) return win32::TRUE;
+
+        if (previousState && bufferLength >= sizeof(TOKEN_PRIVILEGES)) {
+            previousState->PrivilegeCount = 0;
+            for (uint32_t i = 0; i < newState->PrivilegeCount && i < 32; ++i) {
+                uint32_t luid = newState->Privileges[i].Luid.lowPart;
+                auto it = m_privileges.find(luid);
+                previousState->Privileges[i].Luid = newState->Privileges[i].Luid;
+                previousState->Privileges[i].Attributes = (it != m_privileges.end()) ? it->second : 0;
+                previousState->PrivilegeCount++;
+            }
+            if (returnLength) *returnLength = sizeof(TOKEN_PRIVILEGES);
+        }
+
+        for (uint32_t i = 0; i < newState->PrivilegeCount; ++i) {
+            uint32_t luid = newState->Privileges[i].Luid.lowPart;
+            m_privileges[luid] = newState->Privileges[i].Attributes;
+        }
+
+        return win32::TRUE;
+    }
+
+    win32::BOOL getTokenInformation(
+        uint32_t infoClass,
+        void* tokenInfo,
+        uint32_t infoLength,
+        uint32_t* returnLength
+    ) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        switch (infoClass) {
+            case TokenElevationType: { // 18
+                if (returnLength) *returnLength = sizeof(TOKEN_ELEVATION_TYPE);
+                if (!tokenInfo || infoLength < sizeof(TOKEN_ELEVATION_TYPE)) {
+                    win32::SetLastError(122); // ERROR_INSUFFICIENT_BUFFER
+                    return win32::FALSE;
+                }
+                *reinterpret_cast<TOKEN_ELEVATION_TYPE*>(tokenInfo) = m_elevationType;
+                return win32::TRUE;
+            }
+            case TokenElevation: { // 20
+                if (returnLength) *returnLength = sizeof(TOKEN_ELEVATION);
+                if (!tokenInfo || infoLength < sizeof(TOKEN_ELEVATION)) {
+                    win32::SetLastError(122);
+                    return win32::FALSE;
+                }
+                auto* pe = reinterpret_cast<TOKEN_ELEVATION*>(tokenInfo);
+                pe->TokenIsElevated = m_isElevated;
+                return win32::TRUE;
+            }
+            case TokenMandatoryLabel: { // 25
+                uint32_t needed = sizeof(TOKEN_MANDATORY_LABEL) + sizeof(m_integritySid);
+                if (returnLength) *returnLength = needed;
+                if (!tokenInfo || infoLength < sizeof(TOKEN_MANDATORY_LABEL)) {
+                    win32::SetLastError(122);
+                    return win32::FALSE;
+                }
+                auto* pml = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(tokenInfo);
+                pml->Label.Sid = m_integritySid;
+                pml->Label.Attributes = 0x00000020; // SE_GROUP_INTEGRITY
+                return win32::TRUE;
+            }
+            case TokenPrivileges: { // 3
+                uint32_t count = static_cast<uint32_t>(m_privileges.size());
+                uint32_t needed = sizeof(uint32_t) + count * sizeof(LUID_AND_ATTRIBUTES);
+                if (returnLength) *returnLength = needed;
+                if (!tokenInfo || infoLength < sizeof(uint32_t)) {
+                    win32::SetLastError(122);
+                    return win32::FALSE;
+                }
+                auto* tp = reinterpret_cast<TOKEN_PRIVILEGES*>(tokenInfo);
+                tp->PrivilegeCount = 0;
+                uint32_t maxEntries = (infoLength >= sizeof(uint32_t)) ? (infoLength - sizeof(uint32_t)) / sizeof(LUID_AND_ATTRIBUTES) : 0;
+                for (const auto& [luidVal, attrs] : m_privileges) {
+                    if (tp->PrivilegeCount < maxEntries) {
+                        tp->Privileges[tp->PrivilegeCount].Luid.lowPart = luidVal;
+                        tp->Privileges[tp->PrivilegeCount].Luid.highPart = 0;
+                        tp->Privileges[tp->PrivilegeCount].Attributes = attrs;
+                        tp->PrivilegeCount++;
+                    }
+                }
+                return win32::TRUE;
+            }
+            case TokenUser: { // 1
+                if (returnLength) *returnLength = sizeof(TOKEN_USER) + sizeof(m_userSid);
+                if (!tokenInfo || infoLength < sizeof(TOKEN_USER)) {
+                    win32::SetLastError(122);
+                    return win32::FALSE;
+                }
+                auto* tu = reinterpret_cast<TOKEN_USER*>(tokenInfo);
+                tu->User.Sid = m_userSid;
+                tu->User.Attributes = 0;
+                return win32::TRUE;
+            }
+            case TokenGroups: { // 2
+                if (returnLength) *returnLength = sizeof(TOKEN_GROUPS);
+                if (!tokenInfo || infoLength < sizeof(TOKEN_GROUPS)) {
+                    win32::SetLastError(122);
+                    return win32::FALSE;
+                }
+                auto* tg = reinterpret_cast<TOKEN_GROUPS*>(tokenInfo);
+                tg->GroupCount = 1;
+                tg->Groups[0].Sid = m_adminGroupSid;
+                tg->Groups[0].Attributes = 0x00000007; // SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED
+                return win32::TRUE;
+            }
+            default: {
+                if (returnLength) *returnLength = 64;
+                if (tokenInfo && infoLength > 0) std::memset(tokenInfo, 0, infoLength);
+                return win32::TRUE;
+            }
+        }
+    }
+};
+
 inline win32::BOOL OpenProcessToken(
     win32::HANDLE /*ProcessHandle*/,
     uint32_t /*DesiredAccess*/,
@@ -405,13 +655,14 @@ inline win32::BOOL OpenProcessToken(
 
 inline win32::BOOL GetTokenInformation(
     win32::HANDLE /*TokenHandle*/,
-    uint32_t /*TokenInformationClass*/,
-    void* /*TokenInformation*/,
-    uint32_t /*TokenInformationLength*/,
+    uint32_t TokenInformationClass,
+    void* TokenInformation,
+    uint32_t TokenInformationLength,
     uint32_t* ReturnLength
 ) noexcept {
-    if (ReturnLength) *ReturnLength = 64;
-    return win32::TRUE;
+    return SovereignSecurityTokenManager::get().getTokenInformation(
+        TokenInformationClass, TokenInformation, TokenInformationLength, ReturnLength
+    );
 }
 
 // ============================================================================
@@ -537,6 +788,7 @@ inline win32::BOOL LookupPrivilegeValueW(
         {L"SeTakeOwnershipPrivilege", 9},
         {L"SeLoadDriverPrivilege", 10},
         {L"SeSystemtimePrivilege", 12},
+        {L"SeIncreaseBasePriorityPrivilege", 14},
         {L"SeBackupPrivilege", 17},
         {L"SeRestorePrivilege", 18},
         {L"SeShutdownPrivilege", 19},
@@ -578,6 +830,7 @@ inline win32::BOOL LookupPrivilegeNameW(
         {9, L"SeTakeOwnershipPrivilege"},
         {10, L"SeLoadDriverPrivilege"},
         {12, L"SeSystemtimePrivilege"},
+        {14, L"SeIncreaseBasePriorityPrivilege"},
         {17, L"SeBackupPrivilege"},
         {18, L"SeRestorePrivilege"},
         {19, L"SeShutdownPrivilege"},
@@ -602,13 +855,19 @@ inline win32::BOOL LookupPrivilegeNameW(
 
 inline win32::BOOL AdjustTokenPrivileges(
     win32::HANDLE /*TokenHandle*/,
-    win32::BOOL /*DisableAllPrivileges*/,
-    void* /*NewState*/,
-    uint32_t /*BufferLength*/,
-    void* /*PreviousState*/,
-    uint32_t* /*ReturnLength*/
+    win32::BOOL DisableAllPrivileges,
+    void* NewState,
+    uint32_t BufferLength,
+    void* PreviousState,
+    uint32_t* ReturnLength
 ) noexcept {
-    return win32::TRUE;
+    return SovereignSecurityTokenManager::get().adjustPrivileges(
+        DisableAllPrivileges,
+        reinterpret_cast<const TOKEN_PRIVILEGES*>(NewState),
+        BufferLength,
+        reinterpret_cast<TOKEN_PRIVILEGES*>(PreviousState),
+        ReturnLength
+    );
 }
 
 inline win32::BOOL GetFileSecurityW(
@@ -1981,6 +2240,10 @@ inline void InitializeAdvapi32SubsystemExports() {
     // Graduate Security and Crypto APIs
     ldr.registerExport("advapi32.dll", "CreateWellKnownSid", reinterpret_cast<void*>(CreateWellKnownSid));
     ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "CreateWellKnownSid", reinterpret_cast<void*>(CreateWellKnownSid));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "OpenProcessToken", reinterpret_cast<void*>(OpenProcessToken));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetTokenInformation", reinterpret_cast<void*>(GetTokenInformation));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AdjustTokenPrivileges", reinterpret_cast<void*>(AdjustTokenPrivileges));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "LookupPrivilegeValueW", reinterpret_cast<void*>(LookupPrivilegeValueW));
     ldr.registerExport("advapi32.dll", "AllocateLocallyUniqueId", reinterpret_cast<void*>(AllocateLocallyUniqueId));
     ldr.registerExport("advapi32.dll", "CredReadW", reinterpret_cast<void*>(CredReadW));
     ldr.registerExport("advapi32.dll", "CredFree", reinterpret_cast<void*>(CredFree));

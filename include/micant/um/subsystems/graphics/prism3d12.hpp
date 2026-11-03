@@ -589,10 +589,18 @@ struct D3D12_BARRIER_GROUP {
     };
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList6 = 
+    { 0xc3827890, 0xe548, 0x4cf6, { 0xbf, 0x5a, 0x4f, 0x97, 0x22, 0x3d, 0x1d, 0x28 } };
+
+class ID3D12GraphicsCommandList6 : public ID3D12GraphicsCommandList {
+public:
+    virtual void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList7 = 
     { 0xb0415a52, 0x8383, 0x4776, { 0x8b, 0x51, 0x73, 0x8d, 0x64, 0xdb, 0x8a, 0x91 } };
 
-class ID3D12GraphicsCommandList7 : public ID3D12GraphicsCommandList {
+class ID3D12GraphicsCommandList7 : public ID3D12GraphicsCommandList6 {
 public:
     virtual void Barrier(uint32_t NumBarrierGroups, const D3D12_BARRIER_GROUP* pBarrierGroups) = 0;
 };
@@ -627,8 +635,14 @@ enum D3D12_SAMPLER_FEEDBACK_TIER {
     D3D12_SAMPLER_FEEDBACK_TIER_1_0           = 100
 };
 
+enum D3D12_MESH_SHADER_TIER {
+    D3D12_MESH_SHADER_TIER_NOT_SUPPORTED = 0,
+    D3D12_MESH_SHADER_TIER_1             = 10
+};
+
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS7 {
     D3D12_SAMPLER_FEEDBACK_TIER SamplerFeedbackTier{D3D12_SAMPLER_FEEDBACK_TIER_1_0};
+    D3D12_MESH_SHADER_TIER      MeshShaderTier{D3D12_MESH_SHADER_TIER_1};
 };
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS12 {
@@ -1077,6 +1091,7 @@ private:
     D3D12_SET_PROGRAM_DESC m_currentProgram{};
     std::vector<D3D12_DISPATCH_GRAPH_DESC> m_dispatchedGraphs;
     uint32_t m_recordedEnhancedBarriersCount{ 0 };
+    uint32_t m_dispatchedMeshCount{ 0 };
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -1086,7 +1101,7 @@ public:
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
-            riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
+            riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
             return 0;
@@ -1258,6 +1273,14 @@ public:
         if (!m_isOpen || !pDesc) return;
         m_dispatchedGraphs.push_back(*pDesc);
     }
+
+    void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) override {
+        if (!m_isOpen) return;
+        (void)ThreadGroupCountX; (void)ThreadGroupCountY; (void)ThreadGroupCountZ;
+        m_dispatchedMeshCount++;
+    }
+
+    [[nodiscard]] uint32_t GetDispatchedMeshCount() const noexcept { return m_dispatchedMeshCount; }
 
     void Barrier(uint32_t NumBarrierGroups, const D3D12_BARRIER_GROUP* pBarrierGroups) override {
         if (!m_isOpen || !pBarrierGroups) return;

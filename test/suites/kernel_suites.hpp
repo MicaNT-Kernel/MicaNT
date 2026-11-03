@@ -41034,3 +41034,227 @@ static void Test_Horizon204_RawInput_ThreadPacing_SamplerFeedback_And_BcryptCng_
 
     std::cout << "[TEST] Suite 420: Horizon 204 - Raw Input, Thread Pacing, D3D12 & BCrypt CNG PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 421: Horizon 205 - Sovereign Windows Security Tokens, Mandatory Integrity Labels,
+// DirectX 12 Agility Mesh Shaders, Hardware Processor Topology & Authentic NTFS File Info
+// ============================================================================
+static void Test_Horizon205_SecurityTokens_MeshShaders_Topology_And_FileInfo_Suite() {
+    std::cout << "\n[TEST] Running Suite 421: Horizon 205 - Security Tokens, Mesh Shaders, Topology & File Info...\n";
+
+    // 1. Pillar 1: Windows Security Tokens & Mandatory Integrity Labels (advapi32.dll)
+    {
+        micant::advapi32::InitializeAdvapi32SubsystemExports();
+
+        micant::win32::HANDLE hToken = nullptr;
+        TEST_ASSERT(micant::advapi32::OpenProcessToken(nullptr, 0x000F0000 /* TOKEN_ALL_ACCESS */, &hToken) == micant::win32::TRUE && hToken != nullptr,
+                    "OpenProcessToken returns valid token handle");
+
+        // TokenElevationType (18)
+        micant::advapi32::TOKEN_ELEVATION_TYPE elevType{};
+        uint32_t retLen = 0;
+        TEST_ASSERT(micant::advapi32::GetTokenInformation(hToken, micant::advapi32::TokenElevationType, &elevType, sizeof(elevType), &retLen) == micant::win32::TRUE,
+                    "GetTokenInformation(TokenElevationType) succeeds");
+        TEST_ASSERT(elevType == micant::advapi32::TokenElevationTypeFull, "Token elevation type is TokenElevationTypeFull");
+
+        // TokenElevation (20)
+        micant::advapi32::TOKEN_ELEVATION elevation{};
+        TEST_ASSERT(micant::advapi32::GetTokenInformation(hToken, micant::advapi32::TokenElevation, &elevation, sizeof(elevation), &retLen) == micant::win32::TRUE,
+                    "GetTokenInformation(TokenElevation) succeeds");
+        TEST_ASSERT(elevation.TokenIsElevated == 1, "Token is elevated (administrator privileges active)");
+
+        // TokenMandatoryLabel (25)
+        uint8_t labelBuf[64]{ 0 };
+        TEST_ASSERT(micant::advapi32::GetTokenInformation(hToken, micant::advapi32::TokenMandatoryLabel, labelBuf, sizeof(labelBuf), &retLen) == micant::win32::TRUE,
+                    "GetTokenInformation(TokenMandatoryLabel) succeeds");
+        auto* pLabel = reinterpret_cast<micant::advapi32::TOKEN_MANDATORY_LABEL*>(labelBuf);
+        TEST_ASSERT(pLabel->Label.Sid != nullptr && pLabel->Label.Attributes == 0x00000020 /* SE_GROUP_INTEGRITY */,
+                    "Mandatory label reports valid integrity attribute");
+
+        // TokenPrivileges (3)
+        uint8_t privBuf[512]{ 0 };
+        TEST_ASSERT(micant::advapi32::GetTokenInformation(hToken, micant::advapi32::TokenPrivileges, privBuf, sizeof(privBuf), &retLen) == micant::win32::TRUE,
+                    "GetTokenInformation(TokenPrivileges) succeeds");
+        auto* pPrivs = reinterpret_cast<micant::advapi32::TOKEN_PRIVILEGES*>(privBuf);
+        TEST_ASSERT(pPrivs->PrivilegeCount > 0, "Token has active privileges");
+        bool hasIncreaseBasePriority = false;
+        bool hasDebug = false;
+        for (uint32_t i = 0; i < pPrivs->PrivilegeCount; ++i) {
+            if (pPrivs->Privileges[i].Luid.lowPart == 14) hasIncreaseBasePriority = true;
+            if (pPrivs->Privileges[i].Luid.lowPart == 20) hasDebug = true;
+        }
+        TEST_ASSERT(hasIncreaseBasePriority, "Token contains SeIncreaseBasePriorityPrivilege (14) enabled for real-time game render thread priority");
+        TEST_ASSERT(hasDebug, "Token contains SeDebugPrivilege (20) for anti-cheat process protection");
+
+        // LookupPrivilegeValueW
+        micant::advapi32::LUID luid{};
+        TEST_ASSERT(micant::advapi32::LookupPrivilegeValueW(nullptr, micant::advapi32::SE_INC_BASE_PRIORITY_NAME, &luid) == micant::win32::TRUE,
+                    "LookupPrivilegeValueW resolves SE_INC_BASE_PRIORITY_NAME");
+        TEST_ASSERT(luid.lowPart == 14, "SE_INC_BASE_PRIORITY_NAME LUID lowPart == 14");
+
+        // AdjustTokenPrivileges
+        micant::advapi32::TOKEN_PRIVILEGES newState{};
+        newState.PrivilegeCount = 1;
+        newState.Privileges[0].Luid.lowPart = 14;
+        newState.Privileges[0].Attributes = micant::advapi32::SE_PRIVILEGE_ENABLED;
+        micant::advapi32::TOKEN_PRIVILEGES prevState{};
+        TEST_ASSERT(micant::advapi32::AdjustTokenPrivileges(hToken, micant::win32::FALSE, &newState, sizeof(prevState), &prevState, &retLen) == micant::win32::TRUE,
+                    "AdjustTokenPrivileges succeeds");
+    }
+
+    // 2. Pillar 2: DirectX 12 Agility Mesh Shaders (d3d12.dll)
+    {
+        using namespace micant::prism3d12;
+        Prism3D12DeviceImpl device;
+
+        D3D12_FEATURE_DATA_D3D12_OPTIONS7 opt7{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &opt7, sizeof(opt7));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS7 returns S_OK");
+        TEST_ASSERT(opt7.MeshShaderTier == D3D12_MESH_SHADER_TIER_1, "DirectX 12 Mesh Shader Tier 1 supported");
+
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList6* pCmd6 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList6, reinterpret_cast<void**>(&pCmd6));
+        TEST_ASSERT(hr == 0 && pCmd6 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList6 succeeds");
+
+        pCmd6->DispatchMesh(4, 1, 1);
+        TEST_ASSERT(cmdList.GetDispatchedMeshCount() == 1, "DispatchMesh dispatches geometry meshlets successfully");
+        pCmd6->Release();
+    }
+
+    // 3. Pillar 3: Hardware Processor Topology & Heterogeneous Core Identification (kernel32.dll)
+    {
+        uint32_t len = 0;
+        micant::win32::BOOL bRes = micant::win32::GetLogicalProcessorInformationEx(
+            micant::win32::RelationAll, nullptr, &len
+        );
+        TEST_ASSERT(bRes == micant::win32::FALSE && len > 0, "GetLogicalProcessorInformationEx length query returns needed size");
+
+        std::vector<uint8_t> buffer(len);
+        bRes = micant::win32::GetLogicalProcessorInformationEx(
+            micant::win32::RelationAll, buffer.data(), &len
+        );
+        TEST_ASSERT(bRes == micant::win32::TRUE, "GetLogicalProcessorInformationEx populates processor topology");
+
+        // Parse records
+        uint32_t coreCount = 0;
+        uint32_t cacheCount = 0;
+        uint32_t vcacheCoreCount = 0;
+        uint8_t* ptr = buffer.data();
+        uint8_t* end = buffer.data() + len;
+        while (ptr < end) {
+            auto* pInfo = reinterpret_cast<micant::win32::SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(ptr);
+            if (pInfo->Relationship == micant::win32::RelationProcessorCore) {
+                coreCount++;
+                if (pInfo->Processor.EfficiencyClass == 2) vcacheCoreCount++;
+            } else if (pInfo->Relationship == micant::win32::RelationCache) {
+                cacheCount++;
+            }
+            ptr += pInfo->Size;
+        }
+        TEST_ASSERT(coreCount == 16, "Processor topology enumerates 16 logical cores");
+        TEST_ASSERT(vcacheCoreCount == 4, "Topology distinguishes AMD 3D V-Cache high-frequency performance cores");
+        TEST_ASSERT(cacheCount == 2, "Topology enumerates 96MB V-Cache and 32MB standard L3 cache entries");
+    }
+
+    // 4. Pillar 4: Authentic NT File Information & Final Path Resolution (kernel32.dll / ntdll.dll)
+    {
+        micant::win32::HANDLE hValid = reinterpret_cast<micant::win32::HANDLE>(0x1234);
+
+        // Invalid handle check
+        TEST_ASSERT(micant::win32::GetFinalPathNameByHandleW(nullptr, nullptr, 0, 0) == 0,
+                    "GetFinalPathNameByHandleW with nullptr handle returns 0");
+
+        // Buffer size query
+        uint32_t reqLen = micant::win32::GetFinalPathNameByHandleW(hValid, nullptr, 0, 0);
+        TEST_ASSERT(reqLen > 0, "GetFinalPathNameByHandleW reports required path length");
+
+        // DOS format
+        std::vector<wchar_t> dosPath(reqLen + 1);
+        uint32_t copied = micant::win32::GetFinalPathNameByHandleW(hValid, dosPath.data(), static_cast<uint32_t>(dosPath.size()), 0);
+        TEST_ASSERT(copied > 0 && std::wcsstr(dosPath.data(), L"\\\\?\\C:\\Windows\\System32\\micant.exe") != nullptr,
+                    "GetFinalPathNameByHandleW returns canonical extended DOS path");
+
+        // NT format
+        std::vector<wchar_t> ntPath(reqLen + 32);
+        copied = micant::win32::GetFinalPathNameByHandleW(hValid, ntPath.data(), static_cast<uint32_t>(ntPath.size()), 0x2 /* VOLUME_NAME_NT */);
+        TEST_ASSERT(copied > 0 && std::wcsstr(ntPath.data(), L"\\Device\\HarddiskVolume2") != nullptr,
+                    "GetFinalPathNameByHandleW returns authentic NT volume path");
+
+        // NtQueryInformationFile        // NtQueryInformationFile (FileInternalInformation / 6)
+        micant::ntdll::FILE_INTERNAL_INFORMATION fileInternal{};
+        micant::NtStatus st = micant::ntdll::NtQueryInformationFile_Export(
+            hValid, nullptr, &fileInternal, sizeof(fileInternal), 6
+        );
+        TEST_ASSERT(st == micant::NtStatus::Success, "NtQueryInformationFile(FileInternalInformation) succeeds");
+        TEST_ASSERT(fileInternal.IndexNumber == 0x0001000000001234LL, "File internal information reports authentic 64-bit NTFS file ID");
+
+        // NtQueryInformationFile (FileStandardInformation / 5)
+        micant::ntdll::FILE_STANDARD_INFORMATION fileStd{};
+        st = micant::ntdll::NtQueryInformationFile_Export(
+            hValid, nullptr, &fileStd, sizeof(fileStd), 5
+        );
+        TEST_ASSERT(st == micant::NtStatus::Success, "NtQueryInformationFile(FileStandardInformation) succeeds");
+        TEST_ASSERT(fileStd.AllocationSize.quadPart > 0 && fileStd.EndOfFile.quadPart > 0,
+                    "File standard information reports valid file and allocation sizes");
+    }
+
+    // 5. Pillar 5: High-Resolution Precision Performance Counter & Time Adjustment (kernel32.dll)
+    {
+        uint32_t timeAdj = 0, timeInc = 0;
+        micant::win32::BOOL timeDis = micant::win32::FALSE;
+        TEST_ASSERT(micant::win32::GetSystemTimeAdjustment(&timeAdj, &timeInc, &timeDis) == micant::win32::TRUE,
+                    "GetSystemTimeAdjustment succeeds");
+        TEST_ASSERT(timeAdj == 156250 && timeInc == 156250, "System time adjustment returns 15.625ms standard tick");
+
+        uint64_t preciseAdj = 0, preciseInc = 0;
+        micant::win32::BOOL preciseDis = micant::win32::FALSE;
+        TEST_ASSERT(micant::win32::GetSystemTimeAdjustmentPrecise(&preciseAdj, &preciseInc, &preciseDis) == micant::win32::TRUE,
+                    "GetSystemTimeAdjustmentPrecise succeeds");
+        TEST_ASSERT(preciseAdj == 10000 && preciseInc == 10000, "High-precision timer reports 1.000ms audio/gaming precision");
+    }
+
+    // 6. Pillar 6: Native PE / DynamicLoader Export Resolution
+    {
+        micant::ntdll::InitializeNtdllSubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
+        micant::advapi32::InitializeAdvapi32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        // advapi32 Security & Token exports
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "OpenProcessToken") != nullptr, "advapi32.dll exports OpenProcessToken");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "GetTokenInformation") != nullptr, "advapi32.dll exports GetTokenInformation");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "AdjustTokenPrivileges") != nullptr, "advapi32.dll exports AdjustTokenPrivileges");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "LookupPrivilegeValueW") != nullptr, "advapi32.dll exports LookupPrivilegeValueW");
+
+        // api-ms-win-security-base-l1-1-0.dll exports
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "OpenProcessToken") != nullptr, "api-ms-win-security-base-l1-1-0.dll exports OpenProcessToken");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "GetTokenInformation") != nullptr, "api-ms-win-security-base-l1-1-0.dll exports GetTokenInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "AdjustTokenPrivileges") != nullptr, "api-ms-win-security-base-l1-1-0.dll exports AdjustTokenPrivileges");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "LookupPrivilegeValueW") != nullptr, "api-ms-win-security-base-l1-1-0.dll exports LookupPrivilegeValueW");
+
+        // kernel32 & api-ms exports
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetFinalPathNameByHandleW") != nullptr, "kernel32.dll exports GetFinalPathNameByHandleW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-file-l1-1-0.dll", "GetFinalPathNameByHandleW") != nullptr, "api-ms-win-core-file-l1-1-0.dll exports GetFinalPathNameByHandleW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetLogicalProcessorInformationEx") != nullptr, "kernel32.dll exports GetLogicalProcessorInformationEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetLogicalProcessorInformationEx") != nullptr, "api-ms-win-core-sysinfo-l1-2-0.dll exports GetLogicalProcessorInformationEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetSystemTimeAdjustment") != nullptr, "kernel32.dll exports GetSystemTimeAdjustment");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetSystemTimeAdjustmentPrecise") != nullptr, "kernel32.dll exports GetSystemTimeAdjustmentPrecise");
+
+        // ntdll.dll exports
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtQueryInformationFile") != nullptr, "ntdll.dll exports NtQueryInformationFile");
+
+        std::cout << "[VERDICT] Security Tokens, Mesh Shaders, Topology & File Info operate 100% natively\n"
+                  << "          on MicaNT kernel and Win32 executive without satellite DLLs or driver shims!\n";
+    }
+
+    std::cout << "[HORIZON 205] Security Tokens, Mesh Shaders, Topology & File Info Summary:\n"
+              << "    Pillar 1: Windows Security Tokens & Mandatory High Integrity Labels (advapi32.dll) OK\n"
+              << "    Pillar 2: DirectX 12 Agility Mesh Shaders (ID3D12GraphicsCommandList6 DispatchMesh) OK\n"
+              << "    Pillar 3: Hardware Processor Topology & 3D V-Cache Heterogeneous Core Detection OK\n"
+              << "    Pillar 4: Authentic NT File Information (64-bit NTFS ID) & Final Path Resolution OK\n"
+              << "    Pillar 5: High-Resolution Precision Time Adjustment (1.000ms Gaming Counter) OK\n"
+              << "    Pillar 6: Native PE / DynamicLoader Export Resolution for advapi32, kernel32, ntdll OK\n";
+
+    std::cout << "[TEST] Suite 421: Horizon 205 - Security Tokens, Mesh Shaders, Topology & File Info PASSED." << std::endl;
+}

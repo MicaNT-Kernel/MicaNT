@@ -4484,17 +4484,56 @@ inline DWORD GetLongPathNameW(LPCWSTR lpszShortPath, LPWSTR lpszLongPath, DWORD 
 }
 
 inline DWORD GetFinalPathNameByHandleW(
-    HANDLE /*hFile*/,
+    HANDLE hFile,
     LPWSTR lpszFilePath,
     DWORD cchFilePath,
-    DWORD /*dwFlags*/
+    DWORD dwFlags
 ) noexcept {
-    const wchar_t p[] = L"\\\\?\\C:\\Windows\\System32\\micant.exe";
-    constexpr DWORD len = 34;
-    if (cchFilePath <= len) return len + 1;
+    if (!hFile || hFile == reinterpret_cast<HANDLE>(-1)) {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    const wchar_t* p = (dwFlags & 0x2 /* VOLUME_NAME_NT */)
+        ? L"\\Device\\HarddiskVolume2\\Windows\\System32\\micant.exe"
+        : L"\\\\?\\C:\\Windows\\System32\\micant.exe";
+    DWORD len = static_cast<DWORD>(std::wcslen(p));
+    if (cchFilePath <= len) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return len + 1;
+    }
     if (!lpszFilePath) return 0;
     std::wmemcpy(lpszFilePath, p, len + 1);
     return len;
+}
+
+inline BOOL GetSystemTimeAdjustment(
+    uint32_t* lpTimeAdjustment,
+    uint32_t* lpTimeIncrement,
+    BOOL* lpTimeAdjustmentDisabled
+) noexcept {
+    if (!lpTimeAdjustment || !lpTimeIncrement || !lpTimeAdjustmentDisabled) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *lpTimeAdjustment = 156250; // 15.625 ms in 100ns units
+    *lpTimeIncrement = 156250;
+    *lpTimeAdjustmentDisabled = TRUE;
+    return TRUE;
+}
+
+inline BOOL GetSystemTimeAdjustmentPrecise(
+    uint64_t* lpTimeAdjustment,
+    uint64_t* lpTimeIncrement,
+    BOOL* lpTimeAdjustmentDisabled
+) noexcept {
+    if (!lpTimeAdjustment || !lpTimeIncrement || !lpTimeAdjustmentDisabled) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *lpTimeAdjustment = 10000; // 1.000 ms in 100ns units
+    *lpTimeIncrement = 10000;
+    *lpTimeAdjustmentDisabled = TRUE;
+    return TRUE;
 }
 
 inline BOOL ReleaseMutex(HANDLE /*hMutex*/) noexcept {
@@ -8322,6 +8361,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SizeofResource", reinterpret_cast<void*>(SizeofResource));
     ldr.registerExport("kernel32.dll", "GetLongPathNameW", reinterpret_cast<void*>(GetLongPathNameW));
     ldr.registerExport("kernel32.dll", "GetFinalPathNameByHandleW", reinterpret_cast<void*>(GetFinalPathNameByHandleW));
+    ldr.registerExport("api-ms-win-core-file-l1-1-0.dll", "GetFinalPathNameByHandleW", reinterpret_cast<void*>(GetFinalPathNameByHandleW));
+    ldr.registerExport("kernel32.dll", "GetSystemTimeAdjustment", reinterpret_cast<void*>(GetSystemTimeAdjustment));
+    ldr.registerExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetSystemTimeAdjustment", reinterpret_cast<void*>(GetSystemTimeAdjustment));
+    ldr.registerExport("kernel32.dll", "GetSystemTimeAdjustmentPrecise", reinterpret_cast<void*>(GetSystemTimeAdjustmentPrecise));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "GetSystemTimeAdjustmentPrecise", reinterpret_cast<void*>(GetSystemTimeAdjustmentPrecise));
+    ldr.registerExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetLogicalProcessorInformationEx", reinterpret_cast<void*>(GetLogicalProcessorInformationEx));
     ldr.registerExport("kernel32.dll", "ReleaseMutex", reinterpret_cast<void*>(ReleaseMutex));
     ldr.registerExport("kernel32.dll", "OpenProcess", reinterpret_cast<void*>(OpenProcess));
     ldr.registerExport("kernel32.dll", "GetApplicationRestartSettings", reinterpret_cast<void*>(GetApplicationRestartSettings));
