@@ -171,6 +171,31 @@ struct PROCESSENTRY32W {
 };
 using LPPROCESSENTRY32W = PROCESSENTRY32W*;
 
+struct THREADENTRY32 {
+    DWORD dwSize{sizeof(THREADENTRY32)};
+    DWORD cntUsage{0};
+    DWORD th32ThreadID{0};
+    DWORD th32OwnerProcessID{0};
+    LONG  tpBasePri{8};
+    LONG  tpDeltaPri{0};
+    DWORD dwFlags{0};
+};
+using LPTHREADENTRY32 = THREADENTRY32*;
+
+struct MODULEENTRY32W {
+    DWORD   dwSize{sizeof(MODULEENTRY32W)};
+    DWORD   th32ModuleID{1};
+    DWORD   th32ProcessID{0};
+    DWORD   GlblcntUsage{0xFFFF};
+    DWORD   ProccntUsage{0xFFFF};
+    BYTE*   modBaseAddr{nullptr};
+    DWORD   modBaseSize{0};
+    HMODULE hModule{nullptr};
+    wchar_t szModule[256]{};
+    wchar_t szExePath[260]{};
+};
+using LPMODULEENTRY32W = MODULEENTRY32W*;
+
 using PAPCFUNC = void (*)(ULONG_PTR);
 using LOCALE_ENUMPROCW = BOOL (*)(LPWSTR);
 
@@ -1087,8 +1112,11 @@ inline BOOL WriteFile(
 /**
  * @brief Closes an open object handle.
  */
+inline bool CloseToolhelpSnapshot(HANDLE hObject) noexcept;
+
 inline BOOL CloseHandle(HANDLE hObject) noexcept {
     if (hObject == nullptr || hObject == INVALID_HANDLE_VALUE) return FALSE;
+    if (CloseToolhelpSnapshot(hObject)) return TRUE;
     NtStatus status = ntdll::NtClose(reinterpret_cast<Handle>(hObject));
     return NT_SUCCESS(status) ? TRUE : FALSE;
 }
@@ -3506,6 +3534,14 @@ inline int32_t UnhandledExceptionFilter(void* /*ExceptionInfo*/) noexcept {
     return 1; // EXCEPTION_EXECUTE_HANDLER
 }
 
+inline constexpr uint32_t CP_ACP        = 0;
+inline constexpr uint32_t CP_OEMCP      = 1;
+inline constexpr uint32_t CP_MACCP      = 2;
+inline constexpr uint32_t CP_THREAD_ACP = 3;
+inline constexpr uint32_t CP_SYMBOL     = 42;
+inline constexpr uint32_t CP_UTF7       = 65000;
+inline constexpr uint32_t CP_UTF8       = 65001;
+
 inline int MultiByteToWideChar(
     uint32_t /*CodePage*/,
     uint32_t /*dwFlags*/,
@@ -5106,22 +5142,511 @@ inline BOOL GetFileInformationByHandleEx(HANDLE /*hFile*/, int /*FileInformation
 
 inline BOOL AreFileApisANSI() noexcept { return TRUE; }
 
-inline HANDLE CreateToolhelp32Snapshot(DWORD /*dwFlags*/, DWORD /*th32ProcessID*/) noexcept {
-    static uint64_t dummySnapshot = 0x5555;
-    return reinterpret_cast<HANDLE>(&dummySnapshot);
+// ============================================================================
+// Toolhelp32 Snapshot Architecture (kernel32.dll & api-ms-win-core-toolhelp)
+// ============================================================================
+
+inline constexpr DWORD TH32CS_SNAPHEAPLIST = 0x00000001;
+inline constexpr DWORD TH32CS_SNAPPROCESS  = 0x00000002;
+inline constexpr DWORD TH32CS_SNAPTHREAD   = 0x00000004;
+inline constexpr DWORD TH32CS_SNAPMODULE   = 0x00000008;
+inline constexpr DWORD TH32CS_SNAPMODULE32 = 0x00000010;
+inline constexpr DWORD TH32CS_SNAPALL      = (TH32CS_SNAPHEAPLIST | TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD | TH32CS_SNAPMODULE);
+inline constexpr DWORD TH32CS_INHERIT      = 0x80000000;
+
+struct MODULEENTRY32 {
+    DWORD   dwSize{sizeof(MODULEENTRY32)};
+    DWORD   th32ModuleID{1};
+    DWORD   th32ProcessID{0};
+    DWORD   GlblcntUsage{0xFFFF};
+    DWORD   ProccntUsage{0xFFFF};
+    BYTE*   modBaseAddr{nullptr};
+    DWORD   modBaseSize{0};
+    HMODULE hModule{nullptr};
+    char    szModule[256]{};
+    char    szExePath[260]{};
+};
+using LPMODULEENTRY32 = MODULEENTRY32*;
+
+struct PROCESSENTRY32 {
+    DWORD     dwSize{sizeof(PROCESSENTRY32)};
+    DWORD     cntUsage{0};
+    DWORD     th32ProcessID{0};
+    ULONG_PTR th32DefaultHeapID{0};
+    DWORD     th32ModuleID{0};
+    DWORD     cntThreads{1};
+    DWORD     th32ParentProcessID{0};
+    LONG      pcPriClassBase{8};
+    DWORD     dwFlags{0};
+    char      szExeFile[260]{};
+};
+using LPPROCESSENTRY32 = PROCESSENTRY32*;
+
+struct ToolhelpSnapshot {
+    DWORD flags{0};
+    DWORD processId{0};
+    std::vector<PROCESSENTRY32W> processes;
+    size_t processIndex{0};
+    std::vector<MODULEENTRY32W> modules;
+    size_t moduleIndex{0};
+    std::vector<THREADENTRY32> threads;
+    size_t threadIndex{0};
+};
+
+class ToolhelpSnapshotManager {
+public:
+    static ToolhelpSnapshotManager& get() {
+        static ToolhelpSnapshotManager instance;
+        return instance;
+    }
+
+    HANDLE createSnapshot(DWORD dwFlags, DWORD th32ProcessID) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto snapshot = std::make_shared<ToolhelpSnapshot>();
+        snapshot->flags = dwFlags;
+        snapshot->processId = th32ProcessID;
+
+        // Process enumeration
+        if (dwFlags & TH32CS_SNAPPROCESS) {
+            PROCESSENTRY32W pe{};
+            pe.dwSize = sizeof(PROCESSENTRY32W);
+
+            // 0: [System Process]
+            pe.th32ProcessID = 0;
+            pe.cntThreads = 1;
+            pe.th32ParentProcessID = 0;
+            pe.pcPriClassBase = 0;
+            std::wcsncpy(pe.szExeFile, L"[System Process]", 259);
+            snapshot->processes.push_back(pe);
+
+            // 4: System
+            pe.th32ProcessID = 4;
+            pe.cntThreads = 256;
+            pe.th32ParentProcessID = 0;
+            pe.pcPriClassBase = 8;
+            std::wcsncpy(pe.szExeFile, L"System", 259);
+            snapshot->processes.push_back(pe);
+
+            // 360: smss.exe
+            pe.th32ProcessID = 360;
+            pe.cntThreads = 4;
+            pe.th32ParentProcessID = 4;
+            pe.pcPriClassBase = 11;
+            std::wcsncpy(pe.szExeFile, L"smss.exe", 259);
+            snapshot->processes.push_back(pe);
+
+            // 520: csrss.exe
+            pe.th32ProcessID = 520;
+            pe.cntThreads = 16;
+            pe.th32ParentProcessID = 360;
+            pe.pcPriClassBase = 13;
+            std::wcsncpy(pe.szExeFile, L"csrss.exe", 259);
+            snapshot->processes.push_back(pe);
+
+            // 680: services.exe
+            pe.th32ProcessID = 680;
+            pe.cntThreads = 16;
+            pe.th32ParentProcessID = 520;
+            pe.pcPriClassBase = 9;
+            std::wcsncpy(pe.szExeFile, L"services.exe", 259);
+            snapshot->processes.push_back(pe);
+
+            // 720: lsass.exe
+            pe.th32ProcessID = 720;
+            pe.cntThreads = 8;
+            pe.th32ParentProcessID = 520;
+            pe.pcPriClassBase = 9;
+            std::wcsncpy(pe.szExeFile, L"lsass.exe", 259);
+            snapshot->processes.push_back(pe);
+
+            // 940: svchost.exe
+            pe.th32ProcessID = 940;
+            pe.cntThreads = 32;
+            pe.th32ParentProcessID = 680;
+            pe.pcPriClassBase = 8;
+            std::wcsncpy(pe.szExeFile, L"svchost.exe", 259);
+            snapshot->processes.push_back(pe);
+
+            // 1000: micant_app.exe
+            pe.th32ProcessID = 1000;
+            pe.cntThreads = 8;
+            pe.th32ParentProcessID = 940;
+            pe.pcPriClassBase = 8;
+            std::wcsncpy(pe.szExeFile, L"micant_app.exe", 259);
+            snapshot->processes.push_back(pe);
+
+            // 2400: explorer.exe
+            pe.th32ProcessID = 2400;
+            pe.cntThreads = 24;
+            pe.th32ParentProcessID = 940;
+            pe.pcPriClassBase = 8;
+            std::wcsncpy(pe.szExeFile, L"explorer.exe", 259);
+            snapshot->processes.push_back(pe);
+        }
+
+        // Module enumeration
+        if (dwFlags & (TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32)) {
+            MODULEENTRY32W me{};
+            me.dwSize = sizeof(MODULEENTRY32W);
+            DWORD pid = (th32ProcessID == 0) ? 1000 : th32ProcessID;
+
+            // Module 1: Main App Image
+            me.th32ModuleID = 1;
+            me.th32ProcessID = pid;
+            me.modBaseAddr = reinterpret_cast<BYTE*>(0x140000000ULL);
+            me.modBaseSize = 0x200000;
+            me.hModule = reinterpret_cast<HMODULE>(0x140000000ULL);
+            std::wcsncpy(me.szModule, L"micant_app.exe", 255);
+            std::wcsncpy(me.szExePath, L"C:\\Windows\\System32\\micant_app.exe", 259);
+            snapshot->modules.push_back(me);
+
+            // Module 2: ntdll.dll
+            me.th32ModuleID = 2;
+            me.modBaseAddr = reinterpret_cast<BYTE*>(0x7FFDF0000000ULL);
+            me.modBaseSize = 0x1E0000;
+            me.hModule = reinterpret_cast<HMODULE>(0x7FFDF0000000ULL);
+            std::wcsncpy(me.szModule, L"ntdll.dll", 255);
+            std::wcsncpy(me.szExePath, L"C:\\Windows\\System32\\ntdll.dll", 259);
+            snapshot->modules.push_back(me);
+
+            // Module 3: kernel32.dll
+            me.th32ModuleID = 3;
+            me.modBaseAddr = reinterpret_cast<BYTE*>(0x7FFDE0000000ULL);
+            me.modBaseSize = 0x120000;
+            me.hModule = reinterpret_cast<HMODULE>(0x7FFDE0000000ULL);
+            std::wcsncpy(me.szModule, L"kernel32.dll", 255);
+            std::wcsncpy(me.szExePath, L"C:\\Windows\\System32\\kernel32.dll", 259);
+            snapshot->modules.push_back(me);
+
+            // Module 4: kernelbase.dll
+            me.th32ModuleID = 4;
+            me.modBaseAddr = reinterpret_cast<BYTE*>(0x7FFDE8000000ULL);
+            me.modBaseSize = 0x240000;
+            me.hModule = reinterpret_cast<HMODULE>(0x7FFDE8000000ULL);
+            std::wcsncpy(me.szModule, L"kernelbase.dll", 255);
+            std::wcsncpy(me.szExePath, L"C:\\Windows\\System32\\kernelbase.dll", 259);
+            snapshot->modules.push_back(me);
+
+            // Module 5: d3d12.dll
+            me.th32ModuleID = 5;
+            me.modBaseAddr = reinterpret_cast<BYTE*>(0x7FFDD0000000ULL);
+            me.modBaseSize = 0x380000;
+            me.hModule = reinterpret_cast<HMODULE>(0x7FFDD0000000ULL);
+            std::wcsncpy(me.szModule, L"d3d12.dll", 255);
+            std::wcsncpy(me.szExePath, L"C:\\Windows\\System32\\d3d12.dll", 259);
+            snapshot->modules.push_back(me);
+
+            // Module 6: dxgi.dll
+            me.th32ModuleID = 6;
+            me.modBaseAddr = reinterpret_cast<BYTE*>(0x7FFDD8000000ULL);
+            me.modBaseSize = 0x140000;
+            me.hModule = reinterpret_cast<HMODULE>(0x7FFDD8000000ULL);
+            std::wcsncpy(me.szModule, L"dxgi.dll", 255);
+            std::wcsncpy(me.szExePath, L"C:\\Windows\\System32\\dxgi.dll", 259);
+            snapshot->modules.push_back(me);
+        }
+
+        // Thread enumeration
+        if (dwFlags & TH32CS_SNAPTHREAD) {
+            THREADENTRY32 te{};
+            te.dwSize = sizeof(THREADENTRY32);
+            DWORD pid = (th32ProcessID == 0) ? 1000 : th32ProcessID;
+
+            te.cntUsage = 0;
+            te.th32OwnerProcessID = pid;
+            te.tpBasePri = 8;
+            te.tpDeltaPri = 0;
+            te.dwFlags = 0;
+
+            te.th32ThreadID = 1001;
+            snapshot->threads.push_back(te);
+
+            te.th32ThreadID = 1002;
+            te.tpBasePri = 9;
+            snapshot->threads.push_back(te);
+
+            te.th32ThreadID = 1003;
+            te.tpBasePri = 8;
+            snapshot->threads.push_back(te);
+
+            te.th32ThreadID = 1004;
+            te.tpBasePri = 10;
+            snapshot->threads.push_back(te);
+        }
+
+        uint64_t handleVal = m_nextHandle++;
+        HANDLE h = reinterpret_cast<HANDLE>(handleVal);
+        m_snapshots[h] = snapshot;
+        return h;
+    }
+
+    std::shared_ptr<ToolhelpSnapshot> getSnapshot(HANDLE h) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_snapshots.find(h);
+        if (it != m_snapshots.end()) return it->second;
+        return nullptr;
+    }
+
+    bool isSnapshot(HANDLE h) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_snapshots.find(h) != m_snapshots.end();
+    }
+
+    bool closeSnapshot(HANDLE h) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_snapshots.erase(h) > 0;
+    }
+
+private:
+    std::mutex m_mutex;
+    uint64_t m_nextHandle{0x55000000ULL};
+    std::unordered_map<HANDLE, std::shared_ptr<ToolhelpSnapshot>> m_snapshots;
+};
+
+inline bool CloseToolhelpSnapshot(HANDLE hObject) noexcept {
+    return ToolhelpSnapshotManager::get().closeSnapshot(hObject);
 }
 
-inline BOOL Process32FirstW(HANDLE /*hSnapshot*/, LPPROCESSENTRY32W lppe) noexcept {
-    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32W)) return FALSE;
-    lppe->th32ProcessID = 1000;
-    lppe->cntThreads = 1;
-    lppe->th32ParentProcessID = 0;
-    wcscpy(lppe->szExeFile, L"notepad++.exe");
+inline HANDLE CreateToolhelp32Snapshot(DWORD dwFlags, DWORD th32ProcessID) noexcept {
+    return ToolhelpSnapshotManager::get().createSnapshot(dwFlags, th32ProcessID);
+}
+
+inline BOOL Process32FirstW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) noexcept {
+    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32W)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (hSnapshot == nullptr) {
+        lppe->cntUsage = 1;
+        lppe->th32ProcessID = 1000;
+        lppe->th32DefaultHeapID = 0;
+        lppe->th32ModuleID = 1;
+        lppe->cntThreads = 4;
+        lppe->th32ParentProcessID = 500;
+        lppe->pcPriClassBase = 8;
+        lppe->dwFlags = 0;
+        std::wcsncpy(lppe->szExeFile, L"micant_app.exe", 259);
+        return TRUE;
+    }
+    auto snap = ToolhelpSnapshotManager::get().getSnapshot(hSnapshot);
+    if (!snap) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+    if (snap->processes.empty()) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    snap->processIndex = 0;
+    *lppe = snap->processes[snap->processIndex++];
     return TRUE;
 }
 
-inline BOOL Process32NextW(HANDLE /*hSnapshot*/, LPPROCESSENTRY32W /*lppe*/) noexcept {
-    return FALSE;
+inline BOOL Process32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) noexcept {
+    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32W)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (hSnapshot == nullptr) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    auto snap = ToolhelpSnapshotManager::get().getSnapshot(hSnapshot);
+    if (!snap) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+    if (snap->processIndex >= snap->processes.size()) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    *lppe = snap->processes[snap->processIndex++];
+    return TRUE;
+}
+
+inline BOOL Process32First(HANDLE hSnapshot, LPPROCESSENTRY32 lppe) noexcept {
+    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    PROCESSENTRY32W peW{};
+    peW.dwSize = sizeof(PROCESSENTRY32W);
+    if (!Process32FirstW(hSnapshot, &peW)) return FALSE;
+    lppe->cntUsage = peW.cntUsage;
+    lppe->th32ProcessID = peW.th32ProcessID;
+    lppe->th32DefaultHeapID = peW.th32DefaultHeapID;
+    lppe->th32ModuleID = peW.th32ModuleID;
+    lppe->cntThreads = peW.cntThreads;
+    lppe->th32ParentProcessID = peW.th32ParentProcessID;
+    lppe->pcPriClassBase = peW.pcPriClassBase;
+    lppe->dwFlags = peW.dwFlags;
+    int len = WideCharToMultiByte(CP_ACP, 0, peW.szExeFile, -1, lppe->szExeFile, sizeof(lppe->szExeFile), nullptr, nullptr);
+    if (len <= 0) lppe->szExeFile[0] = '\0';
+    return TRUE;
+}
+
+inline BOOL Process32Next(HANDLE hSnapshot, LPPROCESSENTRY32 lppe) noexcept {
+    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    PROCESSENTRY32W peW{};
+    peW.dwSize = sizeof(PROCESSENTRY32W);
+    if (!Process32NextW(hSnapshot, &peW)) return FALSE;
+    lppe->cntUsage = peW.cntUsage;
+    lppe->th32ProcessID = peW.th32ProcessID;
+    lppe->th32DefaultHeapID = peW.th32DefaultHeapID;
+    lppe->th32ModuleID = peW.th32ModuleID;
+    lppe->cntThreads = peW.cntThreads;
+    lppe->th32ParentProcessID = peW.th32ParentProcessID;
+    lppe->pcPriClassBase = peW.pcPriClassBase;
+    lppe->dwFlags = peW.dwFlags;
+    int len = WideCharToMultiByte(CP_ACP, 0, peW.szExeFile, -1, lppe->szExeFile, sizeof(lppe->szExeFile), nullptr, nullptr);
+    if (len <= 0) lppe->szExeFile[0] = '\0';
+    return TRUE;
+}
+
+inline BOOL WINAPI Module32FirstW(HANDLE hSnapshot, LPMODULEENTRY32W lpme) noexcept {
+    if (!lpme || lpme->dwSize < sizeof(MODULEENTRY32W)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (hSnapshot == nullptr) {
+        lpme->th32ModuleID = 1;
+        lpme->th32ProcessID = 1000;
+        lpme->GlblcntUsage = 0xFFFF;
+        lpme->ProccntUsage = 0xFFFF;
+        lpme->modBaseAddr = reinterpret_cast<BYTE*>(0x140000000ULL);
+        lpme->modBaseSize = 0x200000;
+        lpme->hModule = reinterpret_cast<HMODULE>(0x140000000ULL);
+        std::wcsncpy(lpme->szModule, L"micant_app.exe", 255);
+        std::wcsncpy(lpme->szExePath, L"C:\\Windows\\System32\\micant_app.exe", 259);
+        return TRUE;
+    }
+    auto snap = ToolhelpSnapshotManager::get().getSnapshot(hSnapshot);
+    if (!snap) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+    if (snap->modules.empty()) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    snap->moduleIndex = 0;
+    *lpme = snap->modules[snap->moduleIndex++];
+    return TRUE;
+}
+
+inline BOOL WINAPI Module32NextW(HANDLE hSnapshot, LPMODULEENTRY32W lpme) noexcept {
+    if (!lpme || lpme->dwSize < sizeof(MODULEENTRY32W)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (hSnapshot == nullptr) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    auto snap = ToolhelpSnapshotManager::get().getSnapshot(hSnapshot);
+    if (!snap) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+    if (snap->moduleIndex >= snap->modules.size()) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    *lpme = snap->modules[snap->moduleIndex++];
+    return TRUE;
+}
+
+inline BOOL Module32First(HANDLE hSnapshot, MODULEENTRY32* lpme) noexcept {
+    if (!lpme || lpme->dwSize < sizeof(MODULEENTRY32)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    MODULEENTRY32W meW{};
+    meW.dwSize = sizeof(MODULEENTRY32W);
+    if (!Module32FirstW(hSnapshot, &meW)) return FALSE;
+    lpme->th32ModuleID = meW.th32ModuleID;
+    lpme->th32ProcessID = meW.th32ProcessID;
+    lpme->GlblcntUsage = meW.GlblcntUsage;
+    lpme->ProccntUsage = meW.ProccntUsage;
+    lpme->modBaseAddr = meW.modBaseAddr;
+    lpme->modBaseSize = meW.modBaseSize;
+    lpme->hModule = meW.hModule;
+    WideCharToMultiByte(CP_ACP, 0, meW.szModule, -1, lpme->szModule, sizeof(lpme->szModule), nullptr, nullptr);
+    WideCharToMultiByte(CP_ACP, 0, meW.szExePath, -1, lpme->szExePath, sizeof(lpme->szExePath), nullptr, nullptr);
+    return TRUE;
+}
+
+inline BOOL Module32Next(HANDLE hSnapshot, MODULEENTRY32* lpme) noexcept {
+    if (!lpme || lpme->dwSize < sizeof(MODULEENTRY32)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    MODULEENTRY32W meW{};
+    meW.dwSize = sizeof(MODULEENTRY32W);
+    if (!Module32NextW(hSnapshot, &meW)) return FALSE;
+    lpme->th32ModuleID = meW.th32ModuleID;
+    lpme->th32ProcessID = meW.th32ProcessID;
+    lpme->GlblcntUsage = meW.GlblcntUsage;
+    lpme->ProccntUsage = meW.ProccntUsage;
+    lpme->modBaseAddr = meW.modBaseAddr;
+    lpme->modBaseSize = meW.modBaseSize;
+    lpme->hModule = meW.hModule;
+    WideCharToMultiByte(CP_ACP, 0, meW.szModule, -1, lpme->szModule, sizeof(lpme->szModule), nullptr, nullptr);
+    WideCharToMultiByte(CP_ACP, 0, meW.szExePath, -1, lpme->szExePath, sizeof(lpme->szExePath), nullptr, nullptr);
+    return TRUE;
+}
+
+inline BOOL WINAPI Thread32First(HANDLE hSnapshot, LPTHREADENTRY32 lpte) noexcept {
+    if (!lpte || lpte->dwSize < sizeof(THREADENTRY32)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (hSnapshot == nullptr) {
+        lpte->cntUsage = 0;
+        lpte->th32ThreadID = 1001;
+        lpte->th32OwnerProcessID = 1000;
+        lpte->tpBasePri = 8;
+        lpte->tpDeltaPri = 0;
+        lpte->dwFlags = 0;
+        return TRUE;
+    }
+    auto snap = ToolhelpSnapshotManager::get().getSnapshot(hSnapshot);
+    if (!snap) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+    if (snap->threads.empty()) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    snap->threadIndex = 0;
+    *lpte = snap->threads[snap->threadIndex++];
+    return TRUE;
+}
+
+inline BOOL WINAPI Thread32Next(HANDLE hSnapshot, LPTHREADENTRY32 lpte) noexcept {
+    if (!lpte || lpte->dwSize < sizeof(THREADENTRY32)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (hSnapshot == nullptr) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    auto snap = ToolhelpSnapshotManager::get().getSnapshot(hSnapshot);
+    if (!snap) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+    if (snap->threadIndex >= snap->threads.size()) {
+        SetLastError(18); // ERROR_NO_MORE_FILES
+        return FALSE;
+    }
+    *lpte = snap->threads[snap->threadIndex++];
+    return TRUE;
 }
 
 inline BOOL GetFileAttributesExA(LPCSTR lpFileName, int fInfoLevelId, LPVOID lpFileInformation) noexcept {
@@ -5132,64 +5657,6 @@ inline BOOL GetFileAttributesExA(LPCSTR lpFileName, int fInfoLevelId, LPVOID lpF
     std::string s(lpFileName);
     std::wstring w(s.begin(), s.end());
     return GetFileAttributesExW(w.c_str(), fInfoLevelId, lpFileInformation);
-}
-
-struct MODULEENTRY32 {
-    DWORD   dwSize;
-    DWORD   th32ModuleID;
-    DWORD   th32ProcessID;
-    DWORD   GlblcntUsage;
-    DWORD   ProccntUsage;
-    BYTE*   modBaseAddr;
-    DWORD   modBaseSize;
-    HMODULE hModule;
-    char    szModule[256];
-    char    szExePath[260];
-};
-
-inline BOOL Module32First([[maybe_unused]] HANDLE hSnapshot, MODULEENTRY32* lpme) noexcept {
-    if (!lpme || lpme->dwSize < sizeof(MODULEENTRY32)) return FALSE;
-    lpme->th32ModuleID = 1;
-    lpme->th32ProcessID = 1000;
-    lpme->modBaseAddr = reinterpret_cast<BYTE*>(0x140000000ULL);
-    lpme->modBaseSize = 0x1000000;
-    lpme->hModule = reinterpret_cast<HMODULE>(0x140000000ULL);
-    std::strcpy(lpme->szModule, "micant_app.exe");
-    std::strcpy(lpme->szExePath, "C:\\Windows\\System32\\micant_app.exe");
-    return TRUE;
-}
-
-inline BOOL Module32Next([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] MODULEENTRY32* lpme) noexcept {
-    return FALSE;
-}
-
-struct PROCESSENTRY32 {
-    DWORD   dwSize;
-    DWORD   cntUsage;
-    DWORD   th32ProcessID;
-    ULONG_PTR th32DefaultHeapID;
-    DWORD   th32ModuleID;
-    DWORD   cntThreads;
-    DWORD   th32ParentProcessID;
-    LONG    pcPriClassBase;
-    DWORD   dwFlags;
-    char    szExeFile[260];
-};
-
-inline BOOL Process32First([[maybe_unused]] HANDLE hSnapshot, PROCESSENTRY32* lppe) noexcept {
-    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32)) return FALSE;
-    lppe->cntUsage = 1;
-    lppe->th32ProcessID = 1000;
-    lppe->cntThreads = 4;
-    lppe->th32ParentProcessID = 500;
-    lppe->pcPriClassBase = 8;
-    lppe->dwFlags = 0;
-    std::strcpy(lppe->szExeFile, "micant_app.exe");
-    return TRUE;
-}
-
-inline BOOL Process32Next([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] PROCESSENTRY32* lppe) noexcept {
-    return FALSE;
 }
 
 inline HANDLE CreateJobObjectA([[maybe_unused]] void* lpJobAttributes, [[maybe_unused]] LPCSTR lpName) noexcept {
@@ -6112,54 +6579,6 @@ inline BOOL WINAPI IsDBCSLeadByte([[maybe_unused]] uint8_t TestChar) noexcept {
     return FALSE; // Pure Unicode / single-byte ASCII baseline
 }
 
-inline BOOL WINAPI Thread32First([[maybe_unused]] HANDLE hSnapshot, void* lpte) noexcept {
-    if (!lpte) return FALSE;
-    struct THREADENTRY32 {
-        uint32_t dwSize;
-        uint32_t cntUsage;
-        uint32_t th32ThreadID;
-        uint32_t th32OwnerProcessID;
-        int32_t  tpBasePri;
-        int32_t  tpDeltaPri;
-        uint32_t dwFlags;
-    };
-    auto* te = reinterpret_cast<THREADENTRY32*>(lpte);
-    te->th32ThreadID = 1001;
-    te->th32OwnerProcessID = 500;
-    return TRUE;
-}
-
-inline BOOL WINAPI Thread32Next([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] void* lpte) noexcept {
-    return FALSE; // End of enumeration
-}
-
-inline BOOL WINAPI Module32FirstW([[maybe_unused]] HANDLE hSnapshot, void* lpme) noexcept {
-    if (!lpme) return FALSE;
-    struct MODULEENTRY32W {
-        uint32_t dwSize;
-        uint32_t th32ModuleID;
-        uint32_t th32ProcessID;
-        uint32_t GlblcntUsage;
-        uint32_t ProccntUsage;
-        uint8_t* modBaseAddr;
-        uint32_t modBaseSize;
-        void*    hModule;
-        wchar_t  szModule[256];
-        wchar_t  szExePath[260];
-    };
-    auto* me = reinterpret_cast<MODULEENTRY32W*>(lpme);
-    me->th32ModuleID = 1;
-    me->th32ProcessID = 500;
-    me->modBaseAddr = reinterpret_cast<uint8_t*>(0x140000000);
-    me->modBaseSize = 0x200000;
-    std::wcsncpy(me->szModule, L"SumatraPDF-64.exe", 255);
-    std::wcsncpy(me->szExePath, L"D:\\MicaNT_Apps\\Tier1\\SumatraPDF\\SumatraPDF-3.6.1-64.exe", 259);
-    return TRUE;
-}
-
-inline BOOL WINAPI Module32NextW([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] void* lpme) noexcept {
-    return FALSE;
-}
 
 inline BOOL WINAPI AttachConsole([[maybe_unused]] DWORD dwProcessId) noexcept {
     return TRUE;
@@ -8405,6 +8824,19 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CreateToolhelp32Snapshot", reinterpret_cast<void*>(CreateToolhelp32Snapshot));
     ldr.registerExport("kernel32.dll", "Process32FirstW", reinterpret_cast<void*>(Process32FirstW));
     ldr.registerExport("kernel32.dll", "Process32NextW", reinterpret_cast<void*>(Process32NextW));
+
+    // api-ms-win-core-toolhelp-l1-1-0.dll
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "CreateToolhelp32Snapshot", reinterpret_cast<void*>(CreateToolhelp32Snapshot));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32FirstW", reinterpret_cast<void*>(Process32FirstW));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32NextW", reinterpret_cast<void*>(Process32NextW));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32First", reinterpret_cast<void*>(Process32First));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32Next", reinterpret_cast<void*>(Process32Next));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32FirstW", reinterpret_cast<void*>(Module32FirstW));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32NextW", reinterpret_cast<void*>(Module32NextW));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32First", reinterpret_cast<void*>(Module32First));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32Next", reinterpret_cast<void*>(Module32Next));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Thread32First", reinterpret_cast<void*>(Thread32First));
+    ldr.registerExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Thread32Next", reinterpret_cast<void*>(Thread32Next));
     ldr.registerExport("kernel32.dll", "ReadDirectoryChangesW", reinterpret_cast<void*>(ReadDirectoryChangesW));
     ldr.registerExport("kernel32.dll", "SleepEx", reinterpret_cast<void*>(SleepEx));
     ldr.registerExport("kernel32.dll", "WaitForSingleObjectEx", reinterpret_cast<void*>(WaitForSingleObjectEx));

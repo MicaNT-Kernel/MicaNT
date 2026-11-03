@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite424") {
+        RUN_TEST(Test_Horizon208_Minidump_Options1011_Toolhelp32_And_ProcessorPerfInfo_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite423") {
         RUN_TEST(Test_Horizon207_Veh_Options89_Mmcss_And_SystemInterruptInfo_Suite);
         return g_FailedTests;
@@ -2120,6 +2124,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon205_SecurityTokens_MeshShaders_Topology_And_FileInfo_Suite);
     RUN_TEST(Test_Horizon206_SecurityDescriptors_Raytracing_MemoryProtection_And_PerformanceInfo_Suite);
     RUN_TEST(Test_Horizon207_Veh_Options89_Mmcss_And_SystemInterruptInfo_Suite);
+    RUN_TEST(Test_Horizon208_Minidump_Options1011_Toolhelp32_And_ProcessorPerfInfo_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

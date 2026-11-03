@@ -1714,6 +1714,27 @@ struct SYSTEM_TIMEOFDAY_INFORMATION {
     uint64_t SleepTimeBias{0};
 };
 
+struct SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION {
+    LargeInteger IdleTime;
+    LargeInteger KernelTime;
+    LargeInteger UserTime;
+    LargeInteger DpcTime;
+    LargeInteger InterruptTime;
+    uint32_t     InterruptCount{0};
+};
+
+struct SYSTEM_LOOKASIDE_INFORMATION {
+    uint16_t CurrentDepth{0};
+    uint16_t MaximumDepth{0};
+    uint32_t TotalAllocates{0};
+    uint32_t AllocateMisses{0};
+    uint32_t TotalFrees{0};
+    uint32_t FreeMisses{0};
+    uint32_t Type{0};
+    uint32_t Tag{0};
+    uint32_t Size{0};
+};
+
 struct SYSTEM_INTERRUPT_INFORMATION {
     uint32_t ContextSwitches{0};
     uint32_t DpcCount{0};
@@ -1766,6 +1787,47 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pTod->BootTimeBias = 0;
             pTod->SleepTimeBias = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_TIMEOFDAY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 8: { // SystemProcessorPerformanceInformation
+            constexpr uint32_t kNumProcessors = 16;
+            constexpr uint32_t kTotalSize = kNumProcessors * sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION);
+            if (SystemInformationLength < kTotalSize) {
+                if (ReturnLength) *ReturnLength = kTotalSize;
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pPerf = reinterpret_cast<SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION*>(SystemInformation);
+            for (uint32_t i = 0; i < kNumProcessors; ++i) {
+                pPerf[i].IdleTime.quadPart = 10000000000LL + i * 50000000LL;
+                pPerf[i].KernelTime.quadPart = 2500000000LL + i * 20000000LL;
+                pPerf[i].UserTime.quadPart = 1500000000LL + i * 15000000LL;
+                pPerf[i].DpcTime.quadPart = 100000000LL + i * 2000000LL;
+                pPerf[i].InterruptTime.quadPart = 50000000LL + i * 1000000LL;
+                pPerf[i].InterruptCount = 100000 + i * 1000;
+            }
+            if (ReturnLength) *ReturnLength = kTotalSize;
+            return NtStatus::Success;
+        }
+        case 45: { // SystemLookasideInformation
+            constexpr uint32_t kEntries = 4;
+            constexpr uint32_t kTotalSize = kEntries * sizeof(SYSTEM_LOOKASIDE_INFORMATION);
+            if (SystemInformationLength < kTotalSize) {
+                if (ReturnLength) *ReturnLength = kTotalSize;
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pLook = reinterpret_cast<SYSTEM_LOOKASIDE_INFORMATION*>(SystemInformation);
+            for (uint32_t i = 0; i < kEntries; ++i) {
+                pLook[i].CurrentDepth = 16;
+                pLook[i].MaximumDepth = 64;
+                pLook[i].TotalAllocates = 50000 + i * 1000;
+                pLook[i].AllocateMisses = 200 + i * 10;
+                pLook[i].TotalFrees = 49800 + i * 1000;
+                pLook[i].FreeMisses = 150 + i * 5;
+                pLook[i].Type = 0;
+                pLook[i].Tag = 0x4D696361; // 'Mica'
+                pLook[i].Size = 64 * (i + 1);
+            }
+            if (ReturnLength) *ReturnLength = kTotalSize;
             return NtStatus::Success;
         }
         case 23: { // SystemInterruptInformation

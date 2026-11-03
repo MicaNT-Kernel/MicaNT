@@ -645,6 +645,8 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS5  = 21;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS7  = 23;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS8  = 24;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS9  = 25;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS10 = 26;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS11 = 27;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS12 = 28;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS13 = 29;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS14 = 30;
@@ -700,6 +702,18 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS9 {
     BOOL AtomicInt64OnGroupSharedSupported{0};
     BOOL DerivativesInMeshAndAmplificationShadersSupported{1};
     D3D12_WAVE_MMA_TIER WaveMMATier{D3D12_WAVE_MMA_TIER_1_0};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS10 {
+    BOOL VariableRateShadingSumCombinerSupported{1};
+    BOOL MeshShaderPerPrimitiveShadingRateSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS11 {
+    BOOL AtomicInt64OnDescriptorHeapResourceSupported{1};
+    D3D12_WORK_GRAPHS_TIER WorkGraphsTier{D3D12_WORK_GRAPHS_TIER_1_0};
+    BOOL RelaxedFormatCastingSupported{1};
+    BOOL EnhancedBarriersSupported{1};
 };
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS12 {
@@ -1600,6 +1614,22 @@ public:
             pData->AtomicInt64OnGroupSharedSupported = FALSE;
             pData->DerivativesInMeshAndAmplificationShadersSupported = TRUE;
             pData->WaveMMATier = D3D12_WAVE_MMA_TIER_1_0;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS10) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS10)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS10*>(pFeatureSupportData);
+            pData->VariableRateShadingSumCombinerSupported = TRUE;
+            pData->MeshShaderPerPrimitiveShadingRateSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS11) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS11)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS11*>(pFeatureSupportData);
+            pData->AtomicInt64OnDescriptorHeapResourceSupported = TRUE;
+            pData->WorkGraphsTier = D3D12_WORK_GRAPHS_TIER_1_0;
+            pData->RelaxedFormatCastingSupported = TRUE;
+            pData->EnhancedBarriersSupported = TRUE;
             return 0;
         }
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS12) {

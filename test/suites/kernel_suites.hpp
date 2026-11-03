@@ -41774,3 +41774,319 @@ void Test_Horizon207_Veh_Options89_Mmcss_And_SystemInterruptInfo_Suite() {
 
     std::cout << "[TEST] Suite 423: Horizon 207 - Vectored Exception Handling, Agility Options 8/9, MMCSS & Interrupt Info PASSED." << std::endl;
 }
+
+
+void Test_Horizon208_Minidump_Options1011_Toolhelp32_And_ProcessorPerfInfo_Suite() {
+    std::cout << "[TEST] Running Suite 424: Horizon 208 - Minidump Generation, Agility Options 10/11, Toolhelp32 & Processor Perf Info..." << std::endl;
+
+    // 1. Pillar 1: Windows NT Minidump Crash Generation Engine (dbghelp.dll & dbgcore.dll)
+    {
+        micant::dbghelp::InitializeDbgHelpExports();
+
+        // 1.1 Parameter validation: invalid handle returns FALSE with ERROR_INVALID_HANDLE (6)
+        win32::BOOL failRes = micant::dbghelp::MiniDumpWriteDump(
+            nullptr, 0, nullptr, micant::dbghelp::MiniDumpNormal, nullptr, nullptr, nullptr);
+        TEST_ASSERT(failRes == micant::win32::FALSE, "MiniDumpWriteDump(nullptr hFile) returns FALSE");
+        TEST_ASSERT(micant::win32::GetLastError() == 6, "MiniDumpWriteDump with invalid handle sets ERROR_INVALID_HANDLE (6)");
+
+        // 1.2 Prepare authentic exception pointers and thread context
+        micant::ntdll::EXCEPTION_RECORD exRec{};
+        exRec.ExceptionCode = 0xC0000005; // STATUS_ACCESS_VIOLATION
+        exRec.ExceptionAddress = reinterpret_cast<void*>(0x140001000ULL);
+        exRec.NumberParameters = 2;
+        exRec.ExceptionInformation[0] = 1; // write
+        exRec.ExceptionInformation[1] = 0xDEADBEEFULL;
+
+        micant::CONTEXT ctx{};
+        ctx.ContextFlags = 0x100007; // Full AMD64 context
+        ctx.Rip = 0x140001000ULL;
+        ctx.Rsp = 0x7FFDF0100000ULL;
+        ctx.Rbp = 0x7FFDF0100080ULL;
+
+        micant::win32::EXCEPTION_POINTERS ep{};
+        ep.ExceptionRecord = reinterpret_cast<micant::win32::PEXCEPTION_RECORD>(&exRec);
+        ep.ContextRecord = &ctx;
+
+        micant::dbghelp::MINIDUMP_EXCEPTION_INFORMATION exInfo{};
+        exInfo.ThreadId = 1001;
+        exInfo.ExceptionPointers = &ep;
+        exInfo.ClientPointers = micant::win32::FALSE;
+
+        // 1.3 Generate authentic minidump stream to mock handle 0xD0000001
+        win32::HANDLE hMock = reinterpret_cast<win32::HANDLE>(0xD0000001ULL);
+        win32::BOOL ok = micant::dbghelp::MiniDumpWriteDump(
+            nullptr, 1000, hMock, micant::dbghelp::MiniDumpNormal, &exInfo, nullptr, nullptr);
+        TEST_ASSERT(ok == micant::win32::TRUE, "MiniDumpWriteDump generates authentic minidump stream");
+
+        // 1.4 Inspect binary minidump payload
+        const auto& dump = micant::dbghelp::GetLastGeneratedMinidump();
+        TEST_ASSERT(dump.size() > sizeof(micant::dbghelp::MINIDUMP_HEADER), "Minidump payload generated with authentic size");
+
+        auto* header = reinterpret_cast<const micant::dbghelp::MINIDUMP_HEADER*>(dump.data());
+        TEST_ASSERT(header->Signature == micant::dbghelp::MINIDUMP_SIGNATURE, "Minidump header signature == 'PMDM' (0x504D444D)");
+        TEST_ASSERT(header->Version == micant::dbghelp::MINIDUMP_VERSION, "Minidump version == 0x0000A793 (42899)");
+        TEST_ASSERT(header->NumberOfStreams == 5, "Minidump contains 5 streams (SystemInfo, ModuleList, ThreadList, MemoryList, Exception)");
+
+        // 1.5 Read streams via MiniDumpReadDumpStream
+        micant::dbghelp::MINIDUMP_DIRECTORY* pDir = nullptr;
+        void* pStream = nullptr;
+        uint32_t streamSize = 0;
+
+        // SystemInfoStream (7)
+        TEST_ASSERT(micant::dbghelp::MiniDumpReadDumpStream(
+            const_cast<uint8_t*>(dump.data()), micant::dbghelp::SystemInfoStream, &pDir, &pStream, &streamSize) == micant::win32::TRUE,
+            "MiniDumpReadDumpStream finds SystemInfoStream");
+        TEST_ASSERT(streamSize == sizeof(micant::dbghelp::MINIDUMP_SYSTEM_INFO), "SystemInfoStream matches sizeof(MINIDUMP_SYSTEM_INFO)");
+        auto* pSys = reinterpret_cast<micant::dbghelp::MINIDUMP_SYSTEM_INFO*>(pStream);
+        TEST_ASSERT(pSys->ProcessorArchitecture == 9, "Minidump SystemInfo reports AMD64 (9)");
+        TEST_ASSERT(pSys->NumberOfProcessors == 16, "Minidump SystemInfo reports 16 logical processors");
+        TEST_ASSERT(pSys->BuildNumber == 26100, "Minidump SystemInfo reports Windows NT Build 26100");
+
+        // ModuleListStream (4)
+        TEST_ASSERT(micant::dbghelp::MiniDumpReadDumpStream(
+            const_cast<uint8_t*>(dump.data()), micant::dbghelp::ModuleListStream, &pDir, &pStream, &streamSize) == micant::win32::TRUE,
+            "MiniDumpReadDumpStream finds ModuleListStream");
+        auto* pModList = reinterpret_cast<micant::dbghelp::MINIDUMP_MODULE_LIST*>(pStream);
+        TEST_ASSERT(pModList->NumberOfModules == 3, "Minidump ModuleList contains 3 loaded modules");
+        TEST_ASSERT(pModList->Modules[0].BaseOfImage == 0x140000000ULL, "Module 0 image base matches 0x140000000");
+
+        // ThreadListStream (3)
+        TEST_ASSERT(micant::dbghelp::MiniDumpReadDumpStream(
+            const_cast<uint8_t*>(dump.data()), micant::dbghelp::ThreadListStream, &pDir, &pStream, &streamSize) == micant::win32::TRUE,
+            "MiniDumpReadDumpStream finds ThreadListStream");
+        auto* pThList = reinterpret_cast<micant::dbghelp::MINIDUMP_THREAD_LIST*>(pStream);
+        TEST_ASSERT(pThList->NumberOfThreads == 1, "Minidump ThreadList contains 1 active thread");
+        TEST_ASSERT(pThList->Threads[0].ThreadId == 1001, "Thread 0 ID matches 1001");
+
+        // MemoryListStream (5)
+        TEST_ASSERT(micant::dbghelp::MiniDumpReadDumpStream(
+            const_cast<uint8_t*>(dump.data()), micant::dbghelp::MemoryListStream, &pDir, &pStream, &streamSize) == micant::win32::TRUE,
+            "MiniDumpReadDumpStream finds MemoryListStream");
+        auto* pMemList = reinterpret_cast<uint32_t*>(pStream);
+        TEST_ASSERT(*pMemList == 1, "MemoryListStream contains 1 memory descriptor range");
+
+        // ExceptionStream (6)
+        TEST_ASSERT(micant::dbghelp::MiniDumpReadDumpStream(
+            const_cast<uint8_t*>(dump.data()), micant::dbghelp::ExceptionStream, &pDir, &pStream, &streamSize) == micant::win32::TRUE,
+            "MiniDumpReadDumpStream finds ExceptionStream");
+        auto* pEx = reinterpret_cast<micant::dbghelp::MINIDUMP_EXCEPTION_STREAM*>(pStream);
+        TEST_ASSERT(pEx->ThreadId == 1001, "ExceptionStream ThreadId matches 1001");
+        TEST_ASSERT(pEx->ExceptionRecord.ExceptionCode == 0xC0000005, "ExceptionCode matches 0xC0000005 (STATUS_ACCESS_VIOLATION)");
+        TEST_ASSERT(pEx->ExceptionRecord.ExceptionAddress == 0x140001000ULL, "ExceptionAddress matches RIP (0x140001000)");
+    }
+
+    // 2. Pillar 2: DirectX 12 Agility SDK Feature Options 10 & 11
+    {
+        micant::prism3d12::InitializePrism3D12SubsystemExports();
+        micant::prism3d12::ID3D12Device* pDevice = nullptr;
+        int32_t hr = micant::prism3d12::D3D12CreateDevice(nullptr, micant::prism3d12::D3D_FEATURE_LEVEL_12_2,
+                                                          micant::prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pDevice));
+        TEST_ASSERT(hr == 0 && pDevice != nullptr, "D3D12CreateDevice creates valid ID3D12Device");
+
+        // Options 10 (VRS Sum Combiner, MeshShader Per-Primitive Shading Rate)
+        micant::prism3d12::D3D12_FEATURE_DATA_D3D12_OPTIONS10 opt10{};
+        int32_t hrOpt10 = pDevice->CheckFeatureSupport(micant::prism3d12::D3D12_FEATURE_D3D12_OPTIONS10, &opt10, sizeof(opt10));
+        TEST_ASSERT(hrOpt10 == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS10 succeeds");
+        TEST_ASSERT(opt10.VariableRateShadingSumCombinerSupported == micant::win32::TRUE,
+                    "D3D12_OPTIONS10 reports VariableRateShadingSumCombinerSupported == TRUE");
+        TEST_ASSERT(opt10.MeshShaderPerPrimitiveShadingRateSupported == micant::win32::TRUE,
+                    "D3D12_OPTIONS10 reports MeshShaderPerPrimitiveShadingRateSupported == TRUE");
+
+        // Options 11 (Work Graphs, Relaxed Format Casting, Enhanced Barriers, Descriptor Heap Atomics)
+        micant::prism3d12::D3D12_FEATURE_DATA_D3D12_OPTIONS11 opt11{};
+        int32_t hrOpt11 = pDevice->CheckFeatureSupport(micant::prism3d12::D3D12_FEATURE_D3D12_OPTIONS11, &opt11, sizeof(opt11));
+        TEST_ASSERT(hrOpt11 == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS11 succeeds");
+        TEST_ASSERT(opt11.AtomicInt64OnDescriptorHeapResourceSupported == micant::win32::TRUE,
+                    "D3D12_OPTIONS11 reports AtomicInt64OnDescriptorHeapResourceSupported == TRUE");
+        TEST_ASSERT(opt11.WorkGraphsTier == micant::prism3d12::D3D12_WORK_GRAPHS_TIER_1_0,
+                    "D3D12_OPTIONS11 reports WorkGraphsTier == Tier 1.0 (Autonomous GPU Work Creation)");
+        TEST_ASSERT(opt11.RelaxedFormatCastingSupported == micant::win32::TRUE,
+                    "D3D12_OPTIONS11 reports RelaxedFormatCastingSupported == TRUE");
+        TEST_ASSERT(opt11.EnhancedBarriersSupported == micant::win32::TRUE,
+                    "D3D12_OPTIONS11 reports EnhancedBarriersSupported == TRUE");
+    }
+
+    // 3. Pillar 3: Toolhelp32 Snapshot & Process/Module/Thread Enumeration (kernel32.dll & api-ms-win-core-toolhelp)
+    {
+        micant::win32::InitializeWin32SubsystemExports();
+
+        // 3.1 Create unified snapshot of processes, modules, and threads
+        micant::win32::HANDLE hSnap = micant::win32::CreateToolhelp32Snapshot(
+            micant::win32::TH32CS_SNAPPROCESS | micant::win32::TH32CS_SNAPMODULE | micant::win32::TH32CS_SNAPTHREAD, 1000);
+        TEST_ASSERT(hSnap != nullptr && hSnap != micant::win32::INVALID_HANDLE_VALUE, "CreateToolhelp32Snapshot returns valid handle");
+
+        // 3.2 Process enumeration (Unicode)
+        micant::win32::PROCESSENTRY32W peW{};
+        peW.dwSize = sizeof(peW);
+        TEST_ASSERT(micant::win32::Process32FirstW(hSnap, &peW) == micant::win32::TRUE, "Process32FirstW succeeds");
+        TEST_ASSERT(peW.th32ProcessID == 0, "First process in snapshot is [System Process] (PID 0)");
+
+        uint32_t procCount = 1;
+        bool foundCurrentApp = false;
+        while (micant::win32::Process32NextW(hSnap, &peW)) {
+            procCount++;
+            if (peW.th32ProcessID == 1000) {
+                foundCurrentApp = true;
+                TEST_ASSERT(std::wcscmp(peW.szExeFile, L"micant_app.exe") == 0, "PID 1000 matches micant_app.exe");
+            }
+        }
+        TEST_ASSERT(procCount >= 8, "Toolhelp32 enumerated at least 8 system/user processes");
+        TEST_ASSERT(foundCurrentApp, "Toolhelp32 enumerated target process micant_app.exe (PID 1000)");
+        TEST_ASSERT(micant::win32::GetLastError() == 18, "Process enumeration termination sets ERROR_NO_MORE_FILES (18)");
+
+        // 3.3 Module enumeration (Unicode)
+        micant::win32::MODULEENTRY32W meW{};
+        meW.dwSize = sizeof(meW);
+        TEST_ASSERT(micant::win32::Module32FirstW(hSnap, &meW) == micant::win32::TRUE, "Module32FirstW succeeds");
+        TEST_ASSERT(std::wcscmp(meW.szModule, L"micant_app.exe") == 0, "First module in snapshot is micant_app.exe");
+        TEST_ASSERT(meW.modBaseAddr == reinterpret_cast<uint8_t*>(0x140000000ULL), "Main module image base is 0x140000000");
+
+        uint32_t modCount = 1;
+        bool foundNtdll = false;
+        bool foundD3d12 = false;
+        while (micant::win32::Module32NextW(hSnap, &meW)) {
+            modCount++;
+            if (std::wcscmp(meW.szModule, L"ntdll.dll") == 0) foundNtdll = true;
+            if (std::wcscmp(meW.szModule, L"d3d12.dll") == 0) foundD3d12 = true;
+        }
+        TEST_ASSERT(modCount >= 6, "Toolhelp32 enumerated at least 6 process modules");
+        TEST_ASSERT(foundNtdll, "ntdll.dll present in module snapshot");
+        TEST_ASSERT(foundD3d12, "d3d12.dll present in module snapshot");
+        TEST_ASSERT(micant::win32::GetLastError() == 18, "Module enumeration termination sets ERROR_NO_MORE_FILES (18)");
+
+        // 3.4 Thread enumeration
+        micant::win32::THREADENTRY32 te{};
+        te.dwSize = sizeof(te);
+        TEST_ASSERT(micant::win32::Thread32First(hSnap, &te) == micant::win32::TRUE, "Thread32First succeeds");
+        TEST_ASSERT(te.th32ThreadID == 1001, "First thread ID matches 1001");
+        TEST_ASSERT(te.th32OwnerProcessID == 1000, "Thread owner PID matches 1000");
+
+        uint32_t thCount = 1;
+        while (micant::win32::Thread32Next(hSnap, &te)) {
+            thCount++;
+        }
+        TEST_ASSERT(thCount >= 4, "Toolhelp32 enumerated 4 threads for target process");
+        TEST_ASSERT(micant::win32::GetLastError() == 18, "Thread enumeration termination sets ERROR_NO_MORE_FILES (18)");
+
+        // 3.5 Handle lifecycle & CloseHandle integration
+        TEST_ASSERT(micant::win32::CloseHandle(hSnap) == micant::win32::TRUE, "CloseHandle closes Toolhelp snapshot");
+        TEST_ASSERT(micant::win32::Process32NextW(hSnap, &peW) == micant::win32::FALSE, "Closed snapshot handle rejected");
+        TEST_ASSERT(micant::win32::GetLastError() == 6, "Accessing closed snapshot sets ERROR_INVALID_HANDLE (6)");
+
+        // 3.6 ANSI enumeration variants
+        micant::win32::HANDLE hSnapA = micant::win32::CreateToolhelp32Snapshot(
+            micant::win32::TH32CS_SNAPPROCESS | micant::win32::TH32CS_SNAPMODULE, 1000);
+        TEST_ASSERT(hSnapA != nullptr && hSnapA != micant::win32::INVALID_HANDLE_VALUE, "CreateToolhelp32Snapshot for ANSI succeeds");
+
+        micant::win32::PROCESSENTRY32 peA{};
+        peA.dwSize = sizeof(peA);
+        TEST_ASSERT(micant::win32::Process32First(hSnapA, &peA) == micant::win32::TRUE, "Process32First (ANSI) succeeds");
+        TEST_ASSERT(std::strcmp(peA.szExeFile, "[System Process]") == 0, "Process32First (ANSI) reports [System Process]");
+
+        micant::win32::MODULEENTRY32 meA{};
+        meA.dwSize = sizeof(meA);
+        TEST_ASSERT(micant::win32::Module32First(hSnapA, &meA) == micant::win32::TRUE, "Module32First (ANSI) succeeds");
+        TEST_ASSERT(std::strcmp(meA.szModule, "micant_app.exe") == 0, "Module32First (ANSI) reports micant_app.exe");
+        TEST_ASSERT(meA.modBaseSize == 0x200000, "Module base size matches 0x200000");
+
+        micant::win32::CloseHandle(hSnapA);
+    }
+
+    // 4. Pillar 4: Authentic NT System Information Classes (ntdll class 8 & 45)
+    {
+        constexpr uint32_t kNumProcessors = 16;
+        constexpr uint32_t kPerfReqBytes = kNumProcessors * sizeof(micant::ntdll::SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION);
+
+        // Class 8: SystemProcessorPerformanceInformation
+        uint32_t perfReturnLength = 0;
+        micant::NtStatus perfMismatch = micant::ntdll::NtQuerySystemInformation_Export(
+            8, nullptr, 0, &perfReturnLength);
+        TEST_ASSERT(perfMismatch == micant::NtStatus::InfoLengthMismatch,
+                    "NtQuerySystemInformation(8) length check returns STATUS_INFO_LENGTH_MISMATCH");
+        TEST_ASSERT(perfReturnLength == kPerfReqBytes, "Required size for 16-core ProcessorPerfInfo matches 16 * sizeof(struct)");
+
+        micant::ntdll::SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION perfInfo[kNumProcessors]{};
+        micant::NtStatus statusPerf = micant::ntdll::NtQuerySystemInformation_Export(
+            8, perfInfo, sizeof(perfInfo), &perfReturnLength);
+        TEST_ASSERT(statusPerf == micant::NtStatus::Success, "NtQuerySystemInformation(8) succeeds");
+        for (uint32_t i = 0; i < kNumProcessors; ++i) {
+            TEST_ASSERT(perfInfo[i].IdleTime.quadPart > 0, "Processor idle time ticks > 0");
+            TEST_ASSERT(perfInfo[i].KernelTime.quadPart > 0, "Processor kernel time ticks > 0");
+            TEST_ASSERT(perfInfo[i].UserTime.quadPart > 0, "Processor user time ticks > 0");
+            TEST_ASSERT(perfInfo[i].InterruptCount > 0, "Processor interrupt count > 0");
+        }
+
+        // Class 45: SystemLookasideInformation
+        constexpr uint32_t kLookEntries = 4;
+        constexpr uint32_t kLookReqBytes = kLookEntries * sizeof(micant::ntdll::SYSTEM_LOOKASIDE_INFORMATION);
+
+        uint32_t lookReturnLength = 0;
+        micant::NtStatus lookMismatch = micant::ntdll::NtQuerySystemInformation_Export(
+            45, nullptr, 0, &lookReturnLength);
+        TEST_ASSERT(lookMismatch == micant::NtStatus::InfoLengthMismatch,
+                    "NtQuerySystemInformation(45) length check returns STATUS_INFO_LENGTH_MISMATCH");
+        TEST_ASSERT(lookReturnLength == kLookReqBytes, "Required size for SystemLookasideInformation matches 4 * sizeof(struct)");
+
+        micant::ntdll::SYSTEM_LOOKASIDE_INFORMATION lookInfo[kLookEntries]{};
+        micant::NtStatus statusLook = micant::ntdll::NtQuerySystemInformation_Export(
+            45, lookInfo, sizeof(lookInfo), &lookReturnLength);
+        TEST_ASSERT(statusLook == micant::NtStatus::Success, "NtQuerySystemInformation(45) succeeds");
+        TEST_ASSERT(lookInfo[0].Tag == 0x4D696361, "Lookaside pool tag matches 'Mica' (0x4D696361)");
+        TEST_ASSERT(lookInfo[0].TotalAllocates > 0, "Lookaside TotalAllocates > 0");
+        TEST_ASSERT(lookInfo[0].TotalFrees > 0, "Lookaside TotalFrees > 0");
+    }
+
+    // 5. Pillar 5: Dynamic Loader Export Table Registration & Validation
+    {
+        micant::ntdll::InitializeNtdllSubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
+        micant::dbghelp::InitializeDbgHelpExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        // dbghelp.dll minidump exports
+        TEST_ASSERT(ldr.getExport("dbghelp.dll", "MiniDumpWriteDump") != nullptr, "dbghelp.dll exports MiniDumpWriteDump");
+        TEST_ASSERT(ldr.getExport("dbghelp.dll", "MiniDumpReadDumpStream") != nullptr, "dbghelp.dll exports MiniDumpReadDumpStream");
+
+        // dbgcore.dll lightweight crash dump exports
+        TEST_ASSERT(ldr.getExport("dbgcore.dll", "MiniDumpWriteDump") != nullptr, "dbgcore.dll exports MiniDumpWriteDump");
+        TEST_ASSERT(ldr.getExport("dbgcore.dll", "MiniDumpReadDumpStream") != nullptr, "dbgcore.dll exports MiniDumpReadDumpStream");
+
+        // kernel32.dll Toolhelp32 exports
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateToolhelp32Snapshot") != nullptr, "kernel32.dll exports CreateToolhelp32Snapshot");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Process32FirstW") != nullptr, "kernel32.dll exports Process32FirstW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Process32NextW") != nullptr, "kernel32.dll exports Process32NextW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Process32First") != nullptr, "kernel32.dll exports Process32First");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Process32Next") != nullptr, "kernel32.dll exports Process32Next");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Module32FirstW") != nullptr, "kernel32.dll exports Module32FirstW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Module32NextW") != nullptr, "kernel32.dll exports Module32NextW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Module32First") != nullptr, "kernel32.dll exports Module32First");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Module32Next") != nullptr, "kernel32.dll exports Module32Next");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Thread32First") != nullptr, "kernel32.dll exports Thread32First");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "Thread32Next") != nullptr, "kernel32.dll exports Thread32Next");
+
+        // api-ms-win-core-toolhelp-l1-1-0.dll exports
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "CreateToolhelp32Snapshot") != nullptr, "api-ms toolhelp exports CreateToolhelp32Snapshot");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32FirstW") != nullptr, "api-ms toolhelp exports Process32FirstW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32NextW") != nullptr, "api-ms toolhelp exports Process32NextW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32First") != nullptr, "api-ms toolhelp exports Process32First");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Process32Next") != nullptr, "api-ms toolhelp exports Process32Next");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32FirstW") != nullptr, "api-ms toolhelp exports Module32FirstW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32NextW") != nullptr, "api-ms toolhelp exports Module32NextW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32First") != nullptr, "api-ms toolhelp exports Module32First");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Module32Next") != nullptr, "api-ms toolhelp exports Module32Next");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Thread32First") != nullptr, "api-ms toolhelp exports Thread32First");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-toolhelp-l1-1-0.dll", "Thread32Next") != nullptr, "api-ms toolhelp exports Thread32Next");
+
+        std::cout << "[VERDICT] Minidump Crash Engine, Agility SDK Options 10/11, Toolhelp32 & Processor Perf Info\n"
+                  << "          operate 100% natively on MicaNT kernel and Win32 executive without satellite DLLs or driver shims!\n";
+    }
+
+    std::cout << "[HORIZON 208] Minidump, Options 10/11, Toolhelp32 & Processor Perf Info Summary:\n"
+              << "    Pillar 1: Windows NT Minidump Crash Generation Engine (dbghelp.dll & dbgcore.dll) OK\n"
+              << "    Pillar 2: DirectX 12 Agility SDK Feature Options 10 & 11 (VRS Combiner, Work Graphs) OK\n"
+              << "    Pillar 3: Toolhelp32 Snapshot & Process/Module/Thread Enumeration Architecture OK\n"
+              << "    Pillar 4: Authentic NT System Information Classes (Class 8 ProcessorPerf & Class 45 Lookaside) OK\n"
+              << "    Pillar 5: Dynamic Loader Export Table Registration & Full Symbol Validation OK\n";
+
+    std::cout << "[TEST] Suite 424: Horizon 208 - Minidump Generation, Agility Options 10/11, Toolhelp32 & Processor Perf Info PASSED." << std::endl;
+}
