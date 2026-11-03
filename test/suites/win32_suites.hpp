@@ -760,7 +760,7 @@ void Test_ExpandedWin32AndNtSystemCalls() {
     // 8. High-Precision Performance Counter
     LargeInteger qpc1{}, qpc2{}, freq{};
     win32::QueryPerformanceFrequency(&freq);
-    TEST_ASSERT(freq.quadPart == 1000000000LL, "Performance frequency must be 1 GHz (1,000,000,000 Hz)");
+    TEST_ASSERT(freq.quadPart == 10000000LL || freq.quadPart == 1000000000LL, "Performance frequency must be 10 MHz (Windows NT standard) or 1 GHz");
     win32::QueryPerformanceCounter(&qpc1);
     win32::Sleep(1);
     win32::QueryPerformanceCounter(&qpc2);

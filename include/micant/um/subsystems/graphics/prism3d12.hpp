@@ -651,6 +651,11 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS12 = 28;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS13 = 29;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS14 = 30;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS15 = 31;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS16 = 32;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS17 = 33;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS18 = 34;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS19 = 35;
+
 
 enum D3D12_RENDER_PASS_TIER {
     D3D12_RENDER_PASS_TIER_0 = 0,
@@ -745,6 +750,28 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS15 {
     BOOL TriangleFanSupported{0};
     D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORT DynamicIndexBufferStripCut{D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_NONE};
 };
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS16 {
+    BOOL DynamicDepthBiasSupported{1};
+    BOOL GPUUploadHeapSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS17 {
+    BOOL ManualWriteTrackingResourceSupported{1};
+    BOOL InvertedDepthRangesSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS18 {
+    D3D12_RENDER_PASS_TIER RenderPassesTier{D3D12_RENDER_PASS_TIER_1};
+    BOOL AdvancedBlendOpsSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS19 {
+    BOOL MipLevelOffsetsSupported{1};
+    BOOL HalfFloatPrecisionSupported{1};
+};
+
+
 
 class ID3D12Device : public ID3D12Object {
 public:
@@ -1664,6 +1691,35 @@ public:
             pData->DynamicIndexBufferStripCut = D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_ALL;
             return 0;
         }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS16) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS16)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS16*>(pFeatureSupportData);
+            pData->DynamicDepthBiasSupported = TRUE;
+            pData->GPUUploadHeapSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS17) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS17)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS17*>(pFeatureSupportData);
+            pData->ManualWriteTrackingResourceSupported = TRUE;
+            pData->InvertedDepthRangesSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS18) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS18)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS18*>(pFeatureSupportData);
+            pData->RenderPassesTier = D3D12_RENDER_PASS_TIER_1;
+            pData->AdvancedBlendOpsSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS19) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS19)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS19*>(pFeatureSupportData);
+            pData->MipLevelOffsetsSupported = TRUE;
+            pData->HalfFloatPrecisionSupported = TRUE;
+            return 0;
+        }
+
         return 0;
     }
 };

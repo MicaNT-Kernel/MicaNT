@@ -91,6 +91,10 @@ using PULONGLONG = uint64_t*;
 using LONGLONG   = int64_t;
 using PLONGLONG  = int64_t*;
 using FARPROC    = intptr_t (*)();
+using PHANDLE   = void**;
+using BOOLEAN   = uint8_t;
+using LPTHREAD_START_ROUTINE = DWORD (WINAPI *)(LPVOID);
+using WAITORTIRCALLBACK = void (WINAPI *)(PVOID, BOOLEAN);
 
 struct SRWLOCK {
     void* Ptr{nullptr};
@@ -134,6 +138,7 @@ using PTP_WORK_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID 
 using PTP_TIMER_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_TIMER Timer);
 using PTP_WAIT_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WAIT Wait, TP_WAIT_RESULT WaitResult);
 using PTP_CLEANUP_GROUP_CANCEL_CALLBACK = void (WINAPI *)(PVOID ObjectContext, PVOID CleanupContext);
+using PTP_SIMPLE_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context);
 
 struct TP_CALLBACK_ENVIRON_V3 {
     ULONG Version;
@@ -1113,10 +1118,12 @@ inline BOOL WriteFile(
  * @brief Closes an open object handle.
  */
 inline bool CloseToolhelpSnapshot(HANDLE hObject) noexcept;
+inline bool CloseTimerQueueHandle(HANDLE hObject) noexcept;
 
 inline BOOL CloseHandle(HANDLE hObject) noexcept {
     if (hObject == nullptr || hObject == INVALID_HANDLE_VALUE) return FALSE;
     if (CloseToolhelpSnapshot(hObject)) return TRUE;
+    if (CloseTimerQueueHandle(hObject)) return TRUE;
     NtStatus status = ntdll::NtClose(reinterpret_cast<Handle>(hObject));
     return NT_SUCCESS(status) ? TRUE : FALSE;
 }
@@ -2328,14 +2335,16 @@ inline BOOL FindClose(HANDLE hFindFile) noexcept {
 
 inline BOOL QueryPerformanceCounter(LargeInteger* lpPerformanceCount) noexcept {
     if (!lpPerformanceCount) return FALSE;
-    ntdll::NtQueryPerformanceCounter(lpPerformanceCount, nullptr);
+    static const auto s_qpcBoot = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - s_qpcBoot).count();
+    lpPerformanceCount->quadPart = static_cast<int64_t>(nanos / 100) + 10000000LL;
     return TRUE;
 }
 
 inline BOOL QueryPerformanceFrequency(LargeInteger* lpFrequency) noexcept {
     if (!lpFrequency) return FALSE;
-    LargeInteger count{};
-    ntdll::NtQueryPerformanceCounter(&count, lpFrequency);
+    lpFrequency->quadPart = 10000000LL;
     return TRUE;
 }
 
@@ -5040,6 +5049,404 @@ inline void WINAPI SetThreadpoolCallbackCleanupGroup(PTP_CALLBACK_ENVIRON pcbe, 
 }
 
 // Integer and String Helper APIs
+
+// ============================================================================
+// Legacy Threadpool & Timer Queue Architecture (Horizon 209)
+// ============================================================================
+
+inline BOOL WINAPI TrySubmitThreadpoolCallback(
+    PTP_SIMPLE_CALLBACK pfns,
+    PVOID pv,
+    PTP_CALLBACK_ENVIRON pcbe
+) noexcept {
+    if (!pfns) return FALSE;
+    TP_POOL* pool = (pcbe && pcbe->Pool) ? pcbe->Pool : detail::s_defaultPool.get();
+    if (!pool) return FALSE;
+    pool->enqueue([pfns, pv]() {
+        TP_CALLBACK_INSTANCE inst{};
+        pfns(&inst, pv);
+    });
+    return TRUE;
+}
+
+inline constexpr ULONG WT_EXECUTEDEFAULT            = 0x00000000;
+inline constexpr ULONG WT_EXECUTEINIOTHREAD         = 0x00000001;
+inline constexpr ULONG WT_EXECUTEINPERSISTENTTHREAD = 0x00000080;
+inline constexpr ULONG WT_EXECUTELONGFUNCTION        = 0x00000010;
+inline constexpr ULONG WT_EXECUTEINTIMERTHREAD       = 0x00000020;
+inline constexpr ULONG WT_EXECUTEONLYONCE           = 0x00000008;
+
+inline BOOL WINAPI QueueUserWorkItem(
+    LPTHREAD_START_ROUTINE Function,
+    PVOID Context,
+    ULONG Flags
+) noexcept {
+    if (!Function) return FALSE;
+    (void)Flags;
+    TP_POOL* pool = detail::s_defaultPool.get();
+    if (!pool) return FALSE;
+    pool->enqueue([Function, Context]() {
+        Function(Context);
+    });
+    return TRUE;
+}
+
+struct SovereignTimerQueueTimer {
+    WAITORTIRCALLBACK callback{nullptr};
+    PVOID context{nullptr};
+    uint32_t dueTimeMs{0};
+    uint32_t periodMs{0};
+    ULONG flags{0};
+    std::atomic<bool> active{true};
+    std::thread worker;
+    std::mutex mtx;
+    std::condition_variable cv;
+};
+
+struct SovereignTimerQueue {
+    std::mutex mtx;
+    std::vector<std::shared_ptr<SovereignTimerQueueTimer>> timers;
+    std::atomic<bool> destroyed{false};
+};
+
+class SovereignTimerQueueManager {
+private:
+    std::mutex m_mtx;
+    std::unordered_map<HANDLE, std::shared_ptr<SovereignTimerQueue>> m_queues;
+    std::unordered_map<HANDLE, std::shared_ptr<SovereignTimerQueueTimer>> m_timers;
+    uint64_t m_nextHandle{ 0x54510001ULL }; // 'TQ' 0001
+
+public:
+    static SovereignTimerQueueManager& get() noexcept {
+        static SovereignTimerQueueManager instance;
+        return instance;
+    }
+
+    bool hasQueue(HANDLE h) noexcept {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        return m_queues.find(h) != m_queues.end();
+    }
+
+    bool hasTimer(HANDLE h) noexcept {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        return m_timers.find(h) != m_timers.end();
+    }
+
+    HANDLE createQueue() noexcept {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        auto q = std::make_shared<SovereignTimerQueue>();
+        HANDLE h = reinterpret_cast<HANDLE>(m_nextHandle++);
+        m_queues[h] = q;
+        return h;
+    }
+
+    BOOL deleteQueue(HANDLE hQueue, HANDLE hCompletionEvent) noexcept {
+        std::shared_ptr<SovereignTimerQueue> q;
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            auto it = m_queues.find(hQueue);
+            if (it == m_queues.end()) return FALSE;
+            q = it->second;
+            m_queues.erase(it);
+        }
+        if (q) {
+            q->destroyed.store(true);
+            std::lock_guard<std::mutex> lock(q->mtx);
+            for (auto& t : q->timers) {
+                t->active.store(false);
+                t->cv.notify_all();
+                if (t->worker.joinable()) {
+                    if (t->worker.get_id() == std::this_thread::get_id()) t->worker.detach();
+                    else t->worker.join();
+                }
+            }
+            q->timers.clear();
+        }
+        if (hCompletionEvent && hCompletionEvent != INVALID_HANDLE_VALUE) {
+            SetEvent(hCompletionEvent);
+        }
+        return TRUE;
+    }
+
+    BOOL createTimer(PHANDLE phNewTimer, HANDLE hQueue, WAITORTIRCALLBACK Callback, PVOID Parameter, DWORD DueTime, DWORD Period, ULONG Flags) noexcept {
+        if (!phNewTimer || !Callback) return FALSE;
+        auto timer = std::make_shared<SovereignTimerQueueTimer>();
+        timer->callback = Callback;
+        timer->context = Parameter;
+        timer->dueTimeMs = DueTime;
+        timer->periodMs = Period;
+        timer->flags = Flags;
+        timer->active.store(true);
+
+        HANDLE hTimer = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            hTimer = reinterpret_cast<HANDLE>(m_nextHandle++);
+            m_timers[hTimer] = timer;
+            if (hQueue) {
+                auto qIt = m_queues.find(hQueue);
+                if (qIt != m_queues.end()) {
+                    std::lock_guard<std::mutex> qLock(qIt->second->mtx);
+                    qIt->second->timers.push_back(timer);
+                }
+            }
+        }
+
+        timer->worker = std::thread([timer]() {
+            std::unique_lock<std::mutex> lock(timer->mtx);
+            if (timer->dueTimeMs > 0) {
+                timer->cv.wait_for(lock, std::chrono::milliseconds(timer->dueTimeMs), [&]() {
+                    return !timer->active.load();
+                });
+            }
+            if (!timer->active.load()) return;
+
+            lock.unlock();
+            timer->callback(timer->context, 1);
+            lock.lock();
+
+            if (timer->periodMs > 0 && !(timer->flags & WT_EXECUTEONLYONCE)) {
+                while (timer->active.load()) {
+                    timer->cv.wait_for(lock, std::chrono::milliseconds(timer->periodMs), [&]() {
+                        return !timer->active.load();
+                    });
+                    if (!timer->active.load()) break;
+                    lock.unlock();
+                    timer->callback(timer->context, 1);
+                    lock.lock();
+                }
+            }
+        });
+
+        *phNewTimer = hTimer;
+        return TRUE;
+    }
+
+    BOOL changeTimer(HANDLE hQueue, HANDLE hTimer, DWORD DueTime, DWORD Period) noexcept {
+        (void)hQueue;
+        std::shared_ptr<SovereignTimerQueueTimer> timer;
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            auto it = m_timers.find(hTimer);
+            if (it == m_timers.end()) return FALSE;
+            timer = it->second;
+        }
+        std::lock_guard<std::mutex> lock(timer->mtx);
+        timer->dueTimeMs = DueTime;
+        timer->periodMs = Period;
+        timer->cv.notify_all();
+        return TRUE;
+    }
+
+    BOOL deleteTimer(HANDLE hQueue, HANDLE hTimer, HANDLE hCompletionEvent) noexcept {
+        (void)hQueue;
+        std::shared_ptr<SovereignTimerQueueTimer> timer;
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            auto it = m_timers.find(hTimer);
+            if (it == m_timers.end()) return FALSE;
+            timer = it->second;
+            m_timers.erase(it);
+        }
+        if (timer) {
+            timer->active.store(false);
+            timer->cv.notify_all();
+            if (timer->worker.joinable()) {
+                if (timer->worker.get_id() == std::this_thread::get_id()) {
+                    timer->worker.detach();
+                } else {
+                    timer->worker.join();
+                }
+            }
+        }
+        if (hCompletionEvent && hCompletionEvent != INVALID_HANDLE_VALUE) {
+            SetEvent(hCompletionEvent);
+        }
+        return TRUE;
+    }
+};
+
+inline HANDLE WINAPI CreateTimerQueue() noexcept {
+    return SovereignTimerQueueManager::get().createQueue();
+}
+
+inline BOOL WINAPI DeleteTimerQueue(HANDLE TimerQueue) noexcept {
+    return SovereignTimerQueueManager::get().deleteQueue(TimerQueue, nullptr);
+}
+
+inline BOOL WINAPI DeleteTimerQueueEx(HANDLE TimerQueue, HANDLE CompletionEvent) noexcept {
+    return SovereignTimerQueueManager::get().deleteQueue(TimerQueue, CompletionEvent);
+}
+
+inline BOOL WINAPI CreateTimerQueueTimer(
+    PHANDLE phNewTimer,
+    HANDLE TimerQueue,
+    WAITORTIRCALLBACK Callback,
+    PVOID Parameter,
+    DWORD DueTime,
+    DWORD Period,
+    ULONG Flags
+) noexcept {
+    return SovereignTimerQueueManager::get().createTimer(phNewTimer, TimerQueue, Callback, Parameter, DueTime, Period, Flags);
+}
+
+inline BOOL WINAPI ChangeTimerQueueTimer(
+    HANDLE TimerQueue,
+    HANDLE Timer,
+    ULONG DueTime,
+    ULONG Period
+) noexcept {
+    return SovereignTimerQueueManager::get().changeTimer(TimerQueue, Timer, DueTime, Period);
+}
+
+inline BOOL WINAPI DeleteTimerQueueTimer(
+    HANDLE TimerQueue,
+    HANDLE Timer,
+    HANDLE CompletionEvent
+) noexcept {
+    return SovereignTimerQueueManager::get().deleteTimer(TimerQueue, Timer, CompletionEvent);
+}
+
+struct SovereignRegisteredWait {
+    HANDLE hObject{nullptr};
+    WAITORTIRCALLBACK callback{nullptr};
+    PVOID context{nullptr};
+    ULONG timeoutMs{0};
+    ULONG flags{0};
+    std::atomic<bool> active{true};
+    std::thread worker;
+    std::mutex mtx;
+    std::condition_variable cv;
+};
+
+class SovereignWaitManager {
+private:
+    std::mutex m_mtx;
+    std::unordered_map<HANDLE, std::shared_ptr<SovereignRegisteredWait>> m_waits;
+    uint64_t m_nextHandle{ 0x57410001ULL }; // 'WA' 0001
+
+public:
+    static SovereignWaitManager& get() noexcept {
+        static SovereignWaitManager instance;
+        return instance;
+    }
+
+    bool hasWait(HANDLE h) noexcept {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        return m_waits.find(h) != m_waits.end();
+    }
+
+    BOOL registerWait(
+        PHANDLE phNewWaitObject,
+        HANDLE hObject,
+        WAITORTIRCALLBACK Callback,
+        PVOID Context,
+        ULONG dwMilliseconds,
+        ULONG dwFlags
+    ) noexcept {
+        if (!phNewWaitObject || !hObject || !Callback) return FALSE;
+        auto rw = std::make_shared<SovereignRegisteredWait>();
+        rw->hObject = hObject;
+        rw->callback = Callback;
+        rw->context = Context;
+        rw->timeoutMs = dwMilliseconds;
+        rw->flags = dwFlags;
+        rw->active.store(true);
+
+        HANDLE hWait = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            hWait = reinterpret_cast<HANDLE>(m_nextHandle++);
+            m_waits[hWait] = rw;
+        }
+
+        rw->worker = std::thread([rw]() {
+            const DWORD stepMs = 10;
+            DWORD elapsed = 0;
+            DWORD waitRes = WAIT_TIMEOUT;
+            while (rw->active.load()) {
+                DWORD slice = (rw->timeoutMs == 0xFFFFFFFF) ? stepMs : std::min(stepMs, rw->timeoutMs - elapsed);
+                waitRes = WaitForSingleObject(rw->hObject, slice);
+                if (waitRes == WAIT_OBJECT_0) {
+                    break;
+                }
+                if (rw->timeoutMs != 0xFFFFFFFF) {
+                    elapsed += slice;
+                    if (elapsed >= rw->timeoutMs) {
+                        waitRes = WAIT_TIMEOUT;
+                        break;
+                    }
+                }
+            }
+            if (rw->active.load()) {
+                BOOLEAN timedOut = (waitRes == WAIT_TIMEOUT) ? 1 : 0;
+                rw->callback(rw->context, timedOut);
+            }
+        });
+
+        *phNewWaitObject = hWait;
+        return TRUE;
+    }
+
+    BOOL unregisterWait(HANDLE hWaitObject, HANDLE hCompletionEvent) noexcept {
+        std::shared_ptr<SovereignRegisteredWait> rw;
+        {
+            std::lock_guard<std::mutex> lock(m_mtx);
+            auto it = m_waits.find(hWaitObject);
+            if (it == m_waits.end()) return FALSE;
+            rw = it->second;
+            m_waits.erase(it);
+        }
+        if (rw) {
+            rw->active.store(false);
+            if (rw->worker.joinable()) {
+                if (rw->worker.get_id() == std::this_thread::get_id()) {
+                    rw->worker.detach();
+                } else {
+                    rw->worker.join();
+                }
+            }
+        }
+        if (hCompletionEvent && hCompletionEvent != INVALID_HANDLE_VALUE) {
+            SetEvent(hCompletionEvent);
+        }
+        return TRUE;
+    }
+};
+
+inline BOOL WINAPI RegisterWaitForSingleObject(
+    PHANDLE phNewWaitObject,
+    HANDLE hObject,
+    WAITORTIRCALLBACK Callback,
+    PVOID Context,
+    ULONG dwMilliseconds,
+    ULONG dwFlags
+) noexcept {
+    return SovereignWaitManager::get().registerWait(phNewWaitObject, hObject, Callback, Context, dwMilliseconds, dwFlags);
+}
+
+inline BOOL WINAPI UnregisterWait(HANDLE WaitHandle) noexcept {
+    return SovereignWaitManager::get().unregisterWait(WaitHandle, nullptr);
+}
+
+inline BOOL WINAPI UnregisterWaitEx(HANDLE WaitHandle, HANDLE CompletionEvent) noexcept {
+    return SovereignWaitManager::get().unregisterWait(WaitHandle, CompletionEvent);
+}
+
+inline bool CloseTimerQueueHandle(HANDLE hObject) noexcept {
+    if (!hObject) return false;
+    if (SovereignTimerQueueManager::get().hasTimer(hObject)) {
+        return SovereignTimerQueueManager::get().deleteTimer(nullptr, hObject, nullptr) != 0;
+    }
+    if (SovereignTimerQueueManager::get().hasQueue(hObject)) {
+        return SovereignTimerQueueManager::get().deleteQueue(hObject, nullptr) != 0;
+    }
+    if (SovereignWaitManager::get().hasWait(hObject)) {
+        return SovereignWaitManager::get().unregisterWait(hObject, nullptr) != 0;
+    }
+    return false;
+}
+
 inline int MulDiv(int nNumber, int nNumerator, int nDenominator) noexcept {
     if (nDenominator == 0) return -1;
     int64_t res = (static_cast<int64_t>(nNumber) * static_cast<int64_t>(nNumerator)) / nDenominator;
@@ -7627,6 +8034,16 @@ inline void WINAPI QueryUnbiasedInterruptTimePrecise(PULONGLONG lpUnbiasedInterr
     }
 }
 
+inline void WINAPI QueryInterruptTime(PULONGLONG lpInterruptTime) noexcept {
+    QueryInterruptTimePrecise(lpInterruptTime);
+}
+
+inline BOOL WINAPI QueryUnbiasedInterruptTime(PULONGLONG lpUnbiasedInterruptTime) noexcept {
+    if (!lpUnbiasedInterruptTime) return FALSE;
+    QueryUnbiasedInterruptTimePrecise(lpUnbiasedInterruptTime);
+    return TRUE;
+}
+
 // ============================================================================
 // Physical Memory & Working Set Management (sysinfoapi.h / psapi.h)
 // ============================================================================
@@ -9276,6 +9693,43 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "QueryProcessCycleTime", reinterpret_cast<void*>(QueryProcessCycleTime));
     ldr.registerExport("kernel32.dll", "QueryThreadCycleTime", reinterpret_cast<void*>(QueryThreadCycleTime));
     ldr.registerExport("kernel32.dll", "QueryIdleProcessorCycleTime", reinterpret_cast<void*>(QueryIdleProcessorCycleTime));
+
+    // Horizon 209: Legacy Threadpool, Timer Queue & High-Precision Timing Architecture
+    ldr.registerExport("kernel32.dll", "QueueUserWorkItem", reinterpret_cast<void*>(QueueUserWorkItem));
+    ldr.registerExport("kernel32.dll", "CreateTimerQueue", reinterpret_cast<void*>(CreateTimerQueue));
+    ldr.registerExport("kernel32.dll", "CreateTimerQueueTimer", reinterpret_cast<void*>(CreateTimerQueueTimer));
+    ldr.registerExport("kernel32.dll", "ChangeTimerQueueTimer", reinterpret_cast<void*>(ChangeTimerQueueTimer));
+    ldr.registerExport("kernel32.dll", "DeleteTimerQueueTimer", reinterpret_cast<void*>(DeleteTimerQueueTimer));
+    ldr.registerExport("kernel32.dll", "DeleteTimerQueueEx", reinterpret_cast<void*>(DeleteTimerQueueEx));
+    ldr.registerExport("kernel32.dll", "DeleteTimerQueue", reinterpret_cast<void*>(DeleteTimerQueue));
+    ldr.registerExport("kernel32.dll", "RegisterWaitForSingleObject", reinterpret_cast<void*>(RegisterWaitForSingleObject));
+    ldr.registerExport("kernel32.dll", "UnregisterWait", reinterpret_cast<void*>(UnregisterWait));
+    ldr.registerExport("kernel32.dll", "UnregisterWaitEx", reinterpret_cast<void*>(UnregisterWaitEx));
+    ldr.registerExport("kernel32.dll", "TrySubmitThreadpoolCallback", reinterpret_cast<void*>(TrySubmitThreadpoolCallback));
+    ldr.registerExport("kernel32.dll", "QueryInterruptTime", reinterpret_cast<void*>(QueryInterruptTime));
+    ldr.registerExport("kernel32.dll", "QueryUnbiasedInterruptTime", reinterpret_cast<void*>(QueryUnbiasedInterruptTime));
+
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "QueueUserWorkItem", reinterpret_cast<void*>(QueueUserWorkItem));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "CreateTimerQueue", reinterpret_cast<void*>(CreateTimerQueue));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "CreateTimerQueueTimer", reinterpret_cast<void*>(CreateTimerQueueTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "ChangeTimerQueueTimer", reinterpret_cast<void*>(ChangeTimerQueueTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "DeleteTimerQueueTimer", reinterpret_cast<void*>(DeleteTimerQueueTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "DeleteTimerQueueEx", reinterpret_cast<void*>(DeleteTimerQueueEx));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "RegisterWaitForSingleObject", reinterpret_cast<void*>(RegisterWaitForSingleObject));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "UnregisterWait", reinterpret_cast<void*>(UnregisterWait));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "UnregisterWaitEx", reinterpret_cast<void*>(UnregisterWaitEx));
+
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "TrySubmitThreadpoolCallback", reinterpret_cast<void*>(TrySubmitThreadpoolCallback));
+
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-0.dll", "QueryInterruptTime", reinterpret_cast<void*>(QueryInterruptTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-0.dll", "QueryUnbiasedInterruptTime", reinterpret_cast<void*>(QueryUnbiasedInterruptTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryInterruptTime", reinterpret_cast<void*>(QueryInterruptTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryUnbiasedInterruptTime", reinterpret_cast<void*>(QueryUnbiasedInterruptTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryPerformanceCounter", reinterpret_cast<void*>(QueryPerformanceCounter));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryPerformanceFrequency", reinterpret_cast<void*>(QueryPerformanceFrequency));
+
+    ldr.registerExport("api-ms-win-core-profile-l1-1-0.dll", "QueryPerformanceCounter", reinterpret_cast<void*>(QueryPerformanceCounter));
+    ldr.registerExport("api-ms-win-core-profile-l1-1-0.dll", "QueryPerformanceFrequency", reinterpret_cast<void*>(QueryPerformanceFrequency));
 }
 
 

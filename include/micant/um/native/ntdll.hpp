@@ -1735,6 +1735,38 @@ struct SYSTEM_LOOKASIDE_INFORMATION {
     uint32_t Size{0};
 };
 
+struct SYSTEM_HANDLE_TABLE_ENTRY_INFO {
+    uint16_t UniqueProcessId{0};
+    uint16_t CreatorBackTraceIndex{0};
+    uint8_t  ObjectTypeIndex{0};
+    uint8_t  HandleAttributes{0};
+    uint16_t HandleValue{0};
+    void*    Object{nullptr};
+    uint32_t GrantedAccess{0};
+};
+
+struct SYSTEM_HANDLE_INFORMATION {
+    uint32_t NumberOfHandles{0};
+    SYSTEM_HANDLE_TABLE_ENTRY_INFO Handles[1];
+};
+
+struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX {
+    void*    Object{nullptr};
+    uint64_t UniqueProcessId{0};
+    uint64_t HandleValue{0};
+    uint32_t GrantedAccess{0};
+    uint16_t CreatorBackTraceIndex{0};
+    uint16_t ObjectTypeIndex{0};
+    uint32_t HandleAttributes{0};
+    uint32_t Reserved{0};
+};
+
+struct SYSTEM_HANDLE_INFORMATION_EX {
+    uint64_t NumberOfHandles{0};
+    uint64_t Reserved{0};
+    SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX Handles[1];
+};
+
 struct SYSTEM_INTERRUPT_INFORMATION {
     uint32_t ContextSwitches{0};
     uint32_t DpcCount{0};
@@ -1966,6 +1998,57 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->FirmwareType = 2; // FirmwareTypeUefi
             pInfo->BootFlags = 0x1;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 16: { // SystemHandleInformation
+            constexpr uint32_t kNumHandles = 8;
+            constexpr uint32_t kTotalSize = sizeof(uint32_t) + kNumHandles * sizeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO);
+            if (SystemInformationLength < kTotalSize) {
+                if (ReturnLength) *ReturnLength = kTotalSize;
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_HANDLE_INFORMATION*>(SystemInformation);
+            pInfo->NumberOfHandles = kNumHandles;
+
+            // Handles for PID 4 (System)
+            pInfo->Handles[0] = { 4, 0, 19, 0, 0x0004, reinterpret_cast<void*>(0xFFFF800000100000ULL), 0x001F0003 }; // Event
+            pInfo->Handles[1] = { 4, 0, 41, 0, 0x0008, reinterpret_cast<void*>(0xFFFF800000101000ULL), 0x000F001F }; // Section
+            pInfo->Handles[2] = { 4, 0, 8,  0, 0x000C, reinterpret_cast<void*>(0xFFFF800000102000ULL), 0x00100000 }; // Thread
+            pInfo->Handles[3] = { 4, 0, 37, 0, 0x0010, reinterpret_cast<void*>(0xFFFF800000103000ULL), 0x001F01FF }; // File
+
+            // Handles for PID 1337 (micant.exe)
+            pInfo->Handles[4] = { 1337, 0, 7,  0, 0x0040, reinterpret_cast<void*>(0xFFFF800000200000ULL), 0x00101000 }; // Process (self)
+            pInfo->Handles[5] = { 1337, 0, 8,  0, 0x0044, reinterpret_cast<void*>(0xFFFF800000201000ULL), 0x001FFFFF }; // Thread
+            pInfo->Handles[6] = { 1337, 0, 19, 0, 0x0048, reinterpret_cast<void*>(0xFFFF800000202000ULL), 0x001F0003 }; // Event
+            pInfo->Handles[7] = { 1337, 0, 41, 0, 0x004C, reinterpret_cast<void*>(0xFFFF800000203000ULL), 0x000F001F }; // Section
+
+            if (ReturnLength) *ReturnLength = kTotalSize;
+            return NtStatus::Success;
+        }
+        case 64: { // SystemExtendedHandleInformation
+            constexpr uint32_t kNumHandles = 8;
+            constexpr uint32_t kTotalSize = sizeof(uint64_t) * 2 + kNumHandles * sizeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX);
+            if (SystemInformationLength < kTotalSize) {
+                if (ReturnLength) *ReturnLength = kTotalSize;
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_HANDLE_INFORMATION_EX*>(SystemInformation);
+            pInfo->NumberOfHandles = kNumHandles;
+            pInfo->Reserved = 0;
+
+            // Handles for PID 4 (System)
+            pInfo->Handles[0] = { reinterpret_cast<void*>(0xFFFF800000100000ULL), 4, 0x0004, 0x001F0003, 0, 19, 0, 0 }; // Event
+            pInfo->Handles[1] = { reinterpret_cast<void*>(0xFFFF800000101000ULL), 4, 0x0008, 0x000F001F, 0, 41, 0, 0 }; // Section
+            pInfo->Handles[2] = { reinterpret_cast<void*>(0xFFFF800000102000ULL), 4, 0x000C, 0x00100000, 0, 8,  0, 0 }; // Thread
+            pInfo->Handles[3] = { reinterpret_cast<void*>(0xFFFF800000103000ULL), 4, 0x0010, 0x001F01FF, 0, 37, 0, 0 }; // File
+
+            // Handles for PID 1337 (micant.exe)
+            pInfo->Handles[4] = { reinterpret_cast<void*>(0xFFFF800000200000ULL), 1337, 0x0040, 0x00101000, 0, 7,  0, 0 }; // Process (self)
+            pInfo->Handles[5] = { reinterpret_cast<void*>(0xFFFF800000201000ULL), 1337, 0x0044, 0x001FFFFF, 0, 8,  0, 0 }; // Thread
+            pInfo->Handles[6] = { reinterpret_cast<void*>(0xFFFF800000202000ULL), 1337, 0x0048, 0x001F0003, 0, 19, 0, 0 }; // Event
+            pInfo->Handles[7] = { reinterpret_cast<void*>(0xFFFF800000203000ULL), 1337, 0x004C, 0x000F001F, 0, 41, 0, 0 }; // Section
+
+            if (ReturnLength) *ReturnLength = kTotalSize;
             return NtStatus::Success;
         }
         case 103: { // SystemCodeIntegrityInformation
