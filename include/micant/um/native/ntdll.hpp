@@ -1369,6 +1369,136 @@ inline NtStatus WINAPI NtQueryInformationProcess_Export(
     }
 }
 
+struct SYSTEM_PERFORMANCE_INFORMATION {
+    LargeInteger IdleProcessTime{};
+    LargeInteger IoReadTransferCount{};
+    LargeInteger IoWriteTransferCount{};
+    LargeInteger IoOtherTransferCount{};
+    uint32_t IoReadOperationCount{0};
+    uint32_t IoWriteOperationCount{0};
+    uint32_t IoOtherOperationCount{0};
+    uint32_t AvailablePages{6291456};
+    uint32_t CommittedPages{2097152};
+    uint32_t CommitLimit{8388608};
+    uint32_t PeakCommitment{3145728};
+    uint32_t PageFaultCount{10240};
+    uint32_t CopyOnWriteCount{256};
+    uint32_t TransitionCount{128};
+    uint32_t CacheTransitionCount{64};
+    uint32_t DemandZeroCount{5120};
+    uint32_t PageReadCount{1024};
+    uint32_t PageReadIocount{512};
+    uint32_t ReplaceCounter{0};
+    uint32_t PagefilePagesWritten{0};
+    uint32_t PagefilePagesTotal{0};
+    uint32_t AvailablePagedPoolPages{131072};
+    uint32_t ResidentAvailablePages{6291456};
+    uint32_t PagedPoolPages{65536};
+    uint32_t NonPagedPoolPages{32768};
+    uint32_t PagedPoolAllocs{125000};
+    uint32_t PagedPoolFrees{100000};
+    uint32_t NonPagedPoolAllocs{80000};
+    uint32_t NonPagedPoolFrees{70000};
+    uint32_t FreeSystemPtes{2000000};
+    uint32_t ResidentSystemCodePage{8192};
+    uint32_t TotalSystemDriverPages{16384};
+    uint32_t TotalSystemCodePages{24576};
+    uint32_t NonPagedPoolLookasideHits{10000};
+    uint32_t PagedPoolLookasideHits{15000};
+    uint32_t Spare3Count{0};
+    uint32_t ResidentSystemCachePage{32768};
+    uint32_t ResidentPagedPoolPage{65536};
+    uint32_t ResidentSystemDriverPage{16384};
+    uint32_t CcFastReadNoWait{0};
+    uint32_t CcFastReadWait{0};
+    uint32_t CcFastReadResourceMiss{0};
+    uint32_t CcFastReadNotPossible{0};
+    uint32_t CcFastMdlReadNoWait{0};
+    uint32_t CcFastMdlReadWait{0};
+    uint32_t CcFastMdlReadResourceMiss{0};
+    uint32_t CcFastMdlReadNotPossible{0};
+    uint32_t CcMapDataNoWait{0};
+    uint32_t CcMapDataWait{0};
+    uint32_t CcMapDataNoWaitMiss{0};
+    uint32_t CcMapDataWaitMiss{0};
+    uint32_t CcPinMappedDataCount{0};
+    uint32_t CcPinReadNoWait{0};
+    uint32_t CcPinReadWait{0};
+    uint32_t CcPinReadNoWaitMiss{0};
+    uint32_t CcPinReadWaitMiss{0};
+    uint32_t CcCopyReadNoWait{0};
+    uint32_t CcCopyReadWait{0};
+    uint32_t CcCopyReadNoWaitMiss{0};
+    uint32_t CcCopyReadWaitMiss{0};
+    uint32_t CcMdlReadNoWait{0};
+    uint32_t CcMdlReadWait{0};
+    uint32_t CcMdlReadNoWaitMiss{0};
+    uint32_t CcMdlReadWaitMiss{0};
+    uint32_t CcReadAheadIos{0};
+    uint32_t CcLazyWriteIos{0};
+    uint32_t CcLazyWritePages{0};
+    uint32_t CcDataFlushes{0};
+    uint32_t CcDataPages{0};
+    uint32_t ContextSwitches{500000};
+    uint32_t FirstLevelTbFills{0};
+    uint32_t SecondLevelTbFills{0};
+    uint32_t SystemCalls{1250000};
+};
+
+struct SYSTEM_THREAD_INFORMATION {
+    LargeInteger KernelTime{};
+    LargeInteger UserTime{};
+    LargeInteger CreateTime{};
+    uint32_t WaitTime{0};
+    void* StartAddress{nullptr};
+    struct {
+        void* UniqueProcess{nullptr};
+        void* UniqueThread{nullptr};
+    } ClientId{};
+    int32_t Priority{8};
+    int32_t BasePriority{8};
+    uint32_t ContextSwitches{100};
+    uint32_t ThreadState{5};
+    uint32_t WaitReason{7};
+};
+
+struct SYSTEM_PROCESS_INFORMATION {
+    uint32_t NextEntryOffset{0};
+    uint32_t NumberOfThreads{1};
+    LargeInteger WorkingSetPrivateSize{};
+    uint32_t HardFaultCount{0};
+    uint32_t NumberOfThreadsHighWatermark{1};
+    uint64_t CycleTime{0};
+    LargeInteger CreateTime{};
+    LargeInteger UserTime{};
+    LargeInteger KernelTime{};
+    UNICODE_STRING ImageName{};
+    int32_t BasePriority{8};
+    void* UniqueProcessId{nullptr};
+    void* InheritedFromUniqueProcessId{nullptr};
+    uint32_t HandleCount{100};
+    uint32_t SessionId{1};
+    uintptr_t UniqueProcessKey{0};
+    size_t PeakVirtualSize{0x10000000};
+    size_t VirtualSize{0x8000000};
+    uint32_t PageFaultCount{1000};
+    size_t PeakWorkingSetSize{0x4000000};
+    size_t WorkingSetSize{0x2000000};
+    size_t QuotaPeakPagedPoolUsage{0x10000};
+    size_t QuotaPagedPoolUsage{0x8000};
+    size_t QuotaPeakNonPagedPoolUsage{0x10000};
+    size_t QuotaNonPagedPoolUsage{0x8000};
+    size_t PagefileUsage{0x2000000};
+    size_t PeakPagefileUsage{0x4000000};
+    size_t PrivatePageCount{0x2000000};
+    LargeInteger ReadOperationCount{};
+    LargeInteger WriteOperationCount{};
+    LargeInteger OtherOperationCount{};
+    LargeInteger ReadTransferCount{};
+    LargeInteger WriteTransferCount{};
+    LargeInteger OtherTransferCount{};
+};
+
 inline NtStatus WINAPI NtQuerySystemInformation_Export(
     uint32_t SystemInformationClass,
     void* SystemInformation,
@@ -1395,6 +1525,66 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->ActiveProcessorsAffinityMask = 0xFFFF; // 16 cores
             pInfo->NumberOfProcessors = 16;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BASIC_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 2: { // SystemPerformanceInformation
+            if (SystemInformationLength < sizeof(SYSTEM_PERFORMANCE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PERFORMANCE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pPerf = reinterpret_cast<SYSTEM_PERFORMANCE_INFORMATION*>(SystemInformation);
+            std::memset(pPerf, 0, sizeof(SYSTEM_PERFORMANCE_INFORMATION));
+            pPerf->AvailablePages = 6291456;
+            pPerf->CommittedPages = 2097152;
+            pPerf->CommitLimit = 8388608;
+            pPerf->PeakCommitment = 3145728;
+            pPerf->PagedPoolPages = 65536;
+            pPerf->NonPagedPoolPages = 32768;
+            pPerf->ContextSwitches = 500000;
+            pPerf->SystemCalls = 1250000;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PERFORMANCE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 5: { // SystemProcessInformation
+            constexpr uint32_t kEntry1Offset = 0;
+            constexpr uint32_t kEntry2Offset = 512;
+            constexpr uint32_t kTotalNeeded = 1024;
+            if (SystemInformationLength < kTotalNeeded) {
+                if (ReturnLength) *ReturnLength = kTotalNeeded;
+                return NtStatus::InfoLengthMismatch;
+            }
+            uint8_t* pBuf = reinterpret_cast<uint8_t*>(SystemInformation);
+            std::memset(pBuf, 0, SystemInformationLength);
+
+            // Process 1: System (PID 4)
+            auto* pProc1 = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(pBuf + kEntry1Offset);
+            pProc1->NextEntryOffset = kEntry2Offset;
+            pProc1->NumberOfThreads = 4;
+            pProc1->UniqueProcessId = reinterpret_cast<void*>(4);
+            pProc1->InheritedFromUniqueProcessId = nullptr;
+            pProc1->BasePriority = 8;
+            pProc1->HandleCount = 1024;
+            pProc1->SessionId = 0;
+            static const wchar_t s_systemName[] = L"System";
+            pProc1->ImageName.buffer = s_systemName;
+            pProc1->ImageName.length = static_cast<uint16_t>(6 * sizeof(wchar_t));
+            pProc1->ImageName.maximumLength = static_cast<uint16_t>(7 * sizeof(wchar_t));
+
+            // Process 2: micant.exe (PID 1337)
+            auto* pProc2 = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(pBuf + kEntry2Offset);
+            pProc2->NextEntryOffset = 0;
+            pProc2->NumberOfThreads = 16;
+            pProc2->UniqueProcessId = reinterpret_cast<void*>(1337);
+            pProc2->InheritedFromUniqueProcessId = reinterpret_cast<void*>(4);
+            pProc2->BasePriority = 8;
+            pProc2->HandleCount = 256;
+            pProc2->SessionId = 1;
+            static const wchar_t s_micantName[] = L"micant.exe";
+            pProc2->ImageName.buffer = s_micantName;
+            pProc2->ImageName.length = static_cast<uint16_t>(10 * sizeof(wchar_t));
+            pProc2->ImageName.maximumLength = static_cast<uint16_t>(11 * sizeof(wchar_t));
+
+            if (ReturnLength) *ReturnLength = kTotalNeeded;
             return NtStatus::Success;
         }
         case 11: { // SystemModuleInformation

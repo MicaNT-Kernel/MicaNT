@@ -3738,6 +3738,10 @@ inline BOOL VirtualProtect(LPVOID /*lpAddress*/, SIZE_T /*dwSize*/, DWORD /*flNe
     return TRUE;
 }
 
+inline BOOL VirtualProtectEx(HANDLE /*hProcess*/, LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, DWORD* lpflOldProtect) noexcept {
+    return VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect);
+}
+
 struct MEMORY_BASIC_INFORMATION {
     LPVOID BaseAddress;
     LPVOID AllocationBase;
@@ -7770,9 +7774,57 @@ inline void WINAPI WakeByAddressAll(void* Address) noexcept {
 }
 
 // QueryDosDeviceW defined above
-inline BOOL ReadProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL ReadProcessMemory(HANDLE /*hProcess*/, LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead) noexcept {
+    if (!lpBaseAddress || !lpBuffer || nSize == 0) {
+        if (lpNumberOfBytesRead) *lpNumberOfBytesRead = 0;
+        return FALSE;
+    }
+    std::memcpy(lpBuffer, lpBaseAddress, nSize);
+    if (lpNumberOfBytesRead) *lpNumberOfBytesRead = nSize;
+    return TRUE;
+}
 inline void* GetCPInfoExW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
-inline BOOL WriteProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL WriteProcessMemory(HANDLE /*hProcess*/, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten) noexcept {
+    if (!lpBaseAddress || !lpBuffer || nSize == 0) {
+        if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = 0;
+        return FALSE;
+    }
+    std::memcpy(lpBaseAddress, lpBuffer, nSize);
+    if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = nSize;
+    return TRUE;
+}
+
+inline BOOL QueryProcessCycleTime(HANDLE /*ProcessHandle*/, uint64_t* CycleTime) noexcept {
+    if (!CycleTime) return FALSE;
+    LargeInteger qpc{};
+    QueryPerformanceCounter(&qpc);
+    *CycleTime = static_cast<uint64_t>(qpc.quadPart) * 4200000000ULL / 10000000ULL;
+    return TRUE;
+}
+
+inline BOOL QueryThreadCycleTime(HANDLE /*ThreadHandle*/, uint64_t* CycleTime) noexcept {
+    if (!CycleTime) return FALSE;
+    LargeInteger qpc{};
+    QueryPerformanceCounter(&qpc);
+    *CycleTime = (static_cast<uint64_t>(qpc.quadPart) * 4200000000ULL / 10000000ULL) / 8;
+    return TRUE;
+}
+
+inline BOOL QueryIdleProcessorCycleTime(uint32_t* BufferLength, uint64_t* ProcessorIdleCycleTime) noexcept {
+    if (!BufferLength) return FALSE;
+    uint32_t required = 16 * sizeof(uint64_t);
+    if (*BufferLength < required) {
+        *BufferLength = required;
+        return FALSE;
+    }
+    if (ProcessorIdleCycleTime) {
+        for (int i = 0; i < 16; ++i) {
+            ProcessorIdleCycleTime[i] = 1000000000ULL * (i + 1);
+        }
+    }
+    *BufferLength = required;
+    return TRUE;
+}
 inline BOOL TryEnterCriticalSection(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
 inline BOOL HeapDestroy(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* GetDiskFreeSpaceA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
@@ -8144,6 +8196,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2", reinterpret_cast<void*>(VirtualAlloc2));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2FromApp", reinterpret_cast<void*>(VirtualAlloc2FromApp));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFileNuma2", reinterpret_cast<void*>(MapViewOfFileNuma2));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualQueryEx", reinterpret_cast<void*>(VirtualQueryEx));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualProtectEx", reinterpret_cast<void*>(VirtualProtectEx));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "ReadProcessMemory", reinterpret_cast<void*>(ReadProcessMemory));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "WriteProcessMemory", reinterpret_cast<void*>(WriteProcessMemory));
     ldr.registerExport("kernel32.dll", "GetCurrentProcess", reinterpret_cast<void*>(GetCurrentProcess));
     ldr.registerExport("kernel32.dll", "GetCurrentProcessId", reinterpret_cast<void*>(GetCurrentProcessId));
     ldr.registerExport("kernel32.dll", "GetCurrentPackageFullName", reinterpret_cast<void*>(GetCurrentPackageFullName));
@@ -8872,6 +8928,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadIdealProcessorEx", reinterpret_cast<void*>(GetThreadIdealProcessorEx));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadInformation", reinterpret_cast<void*>(SetThreadInformation));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "QueryProcessCycleTime", reinterpret_cast<void*>(QueryProcessCycleTime));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "QueryThreadCycleTime", reinterpret_cast<void*>(QueryThreadCycleTime));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "QueryIdleProcessorCycleTime", reinterpret_cast<void*>(QueryIdleProcessorCycleTime));
+    ldr.registerExport("kernel32.dll", "VirtualProtectEx", reinterpret_cast<void*>(VirtualProtectEx));
+    ldr.registerExport("kernel32.dll", "QueryProcessCycleTime", reinterpret_cast<void*>(QueryProcessCycleTime));
+    ldr.registerExport("kernel32.dll", "QueryThreadCycleTime", reinterpret_cast<void*>(QueryThreadCycleTime));
+    ldr.registerExport("kernel32.dll", "QueryIdleProcessorCycleTime", reinterpret_cast<void*>(QueryIdleProcessorCycleTime));
 }
 
 

@@ -237,6 +237,23 @@ inline BOOL __stdcall EqualSid(PSID pSid1, PSID pSid2) {
     return TRUE;
 }
 
+inline BOOL __stdcall CopySid(uint32_t nDestinationSidLength, PSID pDestinationSid, PSID pSourceSid) {
+    if (!IsValidSid(pSourceSid) || !pDestinationSid) return FALSE;
+    uint32_t len = GetLengthSid(pSourceSid);
+    if (nDestinationSidLength < len) return FALSE;
+    std::memcpy(pDestinationSid, pSourceSid, len);
+    return TRUE;
+}
+
+inline BOOL __stdcall EqualPrefixSid(PSID pSid1, PSID pSid2) {
+    if (!IsValidSid(pSid1) || !IsValidSid(pSid2)) return FALSE;
+    const auto* s1 = static_cast<const SID*>(pSid1);
+    const auto* s2 = static_cast<const SID*>(pSid2);
+    if (s1->Revision != s2->Revision) return FALSE;
+    if (s1->SubAuthorityCount != s2->SubAuthorityCount) return FALSE;
+    return std::memcmp(s1->IdentifierAuthority.Value, s2->IdentifierAuthority.Value, sizeof(SID_IDENTIFIER_AUTHORITY)) == 0;
+}
+
 inline BOOL __stdcall AllocateAndInitializeSid(
     const SID_IDENTIFIER_AUTHORITY* pIdentifierAuthority,
     uint8_t nSubAuthorityCount,
@@ -989,70 +1006,112 @@ private:
 
 inline void InitializeAclSubsystemExports() {
     static bool initialized = false;
-    if (initialized) return;
-    initialized = true;
+    if (!initialized) {
+        initialized = true;
 
-    auto& ldr = ldr::DynamicLoader::get();
+        auto& ldr = ldr::DynamicLoader::get();
 
-    // 1. advapi32.dll Security Descriptor & ACL exports
-    ldr.registerExport("advapi32.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
-    ldr.registerExport("advapi32.dll", "IsValidSecurityDescriptor", reinterpret_cast<void*>(IsValidSecurityDescriptor));
-    ldr.registerExport("advapi32.dll", "GetSecurityDescriptorLength", reinterpret_cast<void*>(GetSecurityDescriptorLength));
-    ldr.registerExport("advapi32.dll", "GetSecurityDescriptorControl", reinterpret_cast<void*>(GetSecurityDescriptorControl));
-    ldr.registerExport("advapi32.dll", "SetSecurityDescriptorControl", reinterpret_cast<void*>(SetSecurityDescriptorControl));
-    ldr.registerExport("advapi32.dll", "GetSecurityDescriptorDacl", reinterpret_cast<void*>(GetSecurityDescriptorDacl));
-    ldr.registerExport("advapi32.dll", "SetSecurityDescriptorDacl", reinterpret_cast<void*>(SetSecurityDescriptorDacl));
-    ldr.registerExport("advapi32.dll", "GetSecurityDescriptorOwner", reinterpret_cast<void*>(GetSecurityDescriptorOwner));
-    ldr.registerExport("advapi32.dll", "SetSecurityDescriptorOwner", reinterpret_cast<void*>(SetSecurityDescriptorOwner));
-    ldr.registerExport("advapi32.dll", "GetSecurityDescriptorGroup", reinterpret_cast<void*>(GetSecurityDescriptorGroup));
-    ldr.registerExport("advapi32.dll", "SetSecurityDescriptorGroup", reinterpret_cast<void*>(SetSecurityDescriptorGroup));
-    ldr.registerExport("advapi32.dll", "MakeSelfRelativeSD", reinterpret_cast<void*>(MakeSelfRelativeSD));
-    ldr.registerExport("advapi32.dll", "MakeAbsoluteSD", reinterpret_cast<void*>(MakeAbsoluteSD));
+        // 1. advapi32.dll Security Descriptor & ACL exports
+        ldr.registerExport("advapi32.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
+        ldr.registerExport("advapi32.dll", "IsValidSecurityDescriptor", reinterpret_cast<void*>(IsValidSecurityDescriptor));
+        ldr.registerExport("advapi32.dll", "GetSecurityDescriptorLength", reinterpret_cast<void*>(GetSecurityDescriptorLength));
+        ldr.registerExport("advapi32.dll", "GetSecurityDescriptorControl", reinterpret_cast<void*>(GetSecurityDescriptorControl));
+        ldr.registerExport("advapi32.dll", "SetSecurityDescriptorControl", reinterpret_cast<void*>(SetSecurityDescriptorControl));
+        ldr.registerExport("advapi32.dll", "GetSecurityDescriptorDacl", reinterpret_cast<void*>(GetSecurityDescriptorDacl));
+        ldr.registerExport("advapi32.dll", "SetSecurityDescriptorDacl", reinterpret_cast<void*>(SetSecurityDescriptorDacl));
+        ldr.registerExport("advapi32.dll", "GetSecurityDescriptorOwner", reinterpret_cast<void*>(GetSecurityDescriptorOwner));
+        ldr.registerExport("advapi32.dll", "SetSecurityDescriptorOwner", reinterpret_cast<void*>(SetSecurityDescriptorOwner));
+        ldr.registerExport("advapi32.dll", "GetSecurityDescriptorGroup", reinterpret_cast<void*>(GetSecurityDescriptorGroup));
+        ldr.registerExport("advapi32.dll", "SetSecurityDescriptorGroup", reinterpret_cast<void*>(SetSecurityDescriptorGroup));
+        ldr.registerExport("advapi32.dll", "MakeSelfRelativeSD", reinterpret_cast<void*>(MakeSelfRelativeSD));
+        ldr.registerExport("advapi32.dll", "MakeAbsoluteSD", reinterpret_cast<void*>(MakeAbsoluteSD));
 
-    ldr.registerExport("advapi32.dll", "InitializeAcl", reinterpret_cast<void*>(InitializeAcl));
-    ldr.registerExport("advapi32.dll", "IsValidAcl", reinterpret_cast<void*>(IsValidAcl));
-    ldr.registerExport("advapi32.dll", "AddAccessAllowedAce", reinterpret_cast<void*>(AddAccessAllowedAce));
-    ldr.registerExport("advapi32.dll", "AddAccessAllowedAceEx", reinterpret_cast<void*>(AddAccessAllowedAceEx));
-    ldr.registerExport("advapi32.dll", "AddAccessDeniedAce", reinterpret_cast<void*>(AddAccessDeniedAce));
-    ldr.registerExport("advapi32.dll", "AddAuditAccessAce", reinterpret_cast<void*>(AddAuditAccessAce));
-    ldr.registerExport("advapi32.dll", "GetAce", reinterpret_cast<void*>(GetAce));
-    ldr.registerExport("advapi32.dll", "DeleteAce", reinterpret_cast<void*>(DeleteAce));
+        ldr.registerExport("advapi32.dll", "InitializeAcl", reinterpret_cast<void*>(InitializeAcl));
+        ldr.registerExport("advapi32.dll", "IsValidAcl", reinterpret_cast<void*>(IsValidAcl));
+        ldr.registerExport("advapi32.dll", "AddAccessAllowedAce", reinterpret_cast<void*>(AddAccessAllowedAce));
+        ldr.registerExport("advapi32.dll", "AddAccessAllowedAceEx", reinterpret_cast<void*>(AddAccessAllowedAceEx));
+        ldr.registerExport("advapi32.dll", "AddAccessDeniedAce", reinterpret_cast<void*>(AddAccessDeniedAce));
+        ldr.registerExport("advapi32.dll", "AddAuditAccessAce", reinterpret_cast<void*>(AddAuditAccessAce));
+        ldr.registerExport("advapi32.dll", "GetAce", reinterpret_cast<void*>(GetAce));
+        ldr.registerExport("advapi32.dll", "DeleteAce", reinterpret_cast<void*>(DeleteAce));
 
-    ldr.registerExport("advapi32.dll", "AllocateAndInitializeSid", reinterpret_cast<void*>(AllocateAndInitializeSid));
-    ldr.registerExport("advapi32.dll", "FreeSid", reinterpret_cast<void*>(FreeSid));
-    ldr.registerExport("advapi32.dll", "EqualSid", reinterpret_cast<void*>(EqualSid));
-    ldr.registerExport("advapi32.dll", "IsValidSid", reinterpret_cast<void*>(IsValidSid));
-    ldr.registerExport("advapi32.dll", "GetLengthSid", reinterpret_cast<void*>(GetLengthSid));
-    ldr.registerExport("advapi32.dll", "GetSidIdentifierAuthority", reinterpret_cast<void*>(GetSidIdentifierAuthority));
-    ldr.registerExport("advapi32.dll", "GetSidSubAuthority", reinterpret_cast<void*>(GetSidSubAuthority));
-    ldr.registerExport("advapi32.dll", "GetSidSubAuthorityCount", reinterpret_cast<void*>(GetSidSubAuthorityCount));
-    ldr.registerExport("advapi32.dll", "ConvertSidToStringSidW", reinterpret_cast<void*>(ConvertSidToStringSidW));
-    ldr.registerExport("advapi32.dll", "ConvertSidToStringSidA", reinterpret_cast<void*>(ConvertSidToStringSidA));
-    ldr.registerExport("advapi32.dll", "ConvertStringSidToSidW", reinterpret_cast<void*>(ConvertStringSidToSidW));
-    ldr.registerExport("advapi32.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
+        ldr.registerExport("advapi32.dll", "AllocateAndInitializeSid", reinterpret_cast<void*>(AllocateAndInitializeSid));
+        ldr.registerExport("advapi32.dll", "FreeSid", reinterpret_cast<void*>(FreeSid));
+        ldr.registerExport("advapi32.dll", "EqualSid", reinterpret_cast<void*>(EqualSid));
+        ldr.registerExport("advapi32.dll", "IsValidSid", reinterpret_cast<void*>(IsValidSid));
+        ldr.registerExport("advapi32.dll", "GetLengthSid", reinterpret_cast<void*>(GetLengthSid));
+        ldr.registerExport("advapi32.dll", "GetSidIdentifierAuthority", reinterpret_cast<void*>(GetSidIdentifierAuthority));
+        ldr.registerExport("advapi32.dll", "GetSidSubAuthority", reinterpret_cast<void*>(GetSidSubAuthority));
+        ldr.registerExport("advapi32.dll", "GetSidSubAuthorityCount", reinterpret_cast<void*>(GetSidSubAuthorityCount));
+        ldr.registerExport("advapi32.dll", "ConvertSidToStringSidW", reinterpret_cast<void*>(ConvertSidToStringSidW));
+        ldr.registerExport("advapi32.dll", "ConvertSidToStringSidA", reinterpret_cast<void*>(ConvertSidToStringSidA));
+        ldr.registerExport("advapi32.dll", "ConvertStringSidToSidW", reinterpret_cast<void*>(ConvertStringSidToSidW));
+        ldr.registerExport("advapi32.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
 
-    // 2. secur32.dll & sspicli.dll aliases
-    ldr.registerExport("secur32.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
-    ldr.registerExport("secur32.dll", "IsValidSecurityDescriptor", reinterpret_cast<void*>(IsValidSecurityDescriptor));
-    ldr.registerExport("secur32.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
-    ldr.registerExport("sspicli.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
-    ldr.registerExport("sspicli.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
+        ldr.registerExport("advapi32.dll", "CopySid", reinterpret_cast<void*>(CopySid));
+        ldr.registerExport("advapi32.dll", "EqualPrefixSid", reinterpret_cast<void*>(EqualPrefixSid));
+
+        // api-ms-win-security-base-l1-1-0.dll Security Descriptor & ACL exports
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "IsValidSecurityDescriptor", reinterpret_cast<void*>(IsValidSecurityDescriptor));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSecurityDescriptorLength", reinterpret_cast<void*>(GetSecurityDescriptorLength));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSecurityDescriptorControl", reinterpret_cast<void*>(GetSecurityDescriptorControl));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "SetSecurityDescriptorControl", reinterpret_cast<void*>(SetSecurityDescriptorControl));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSecurityDescriptorDacl", reinterpret_cast<void*>(GetSecurityDescriptorDacl));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "SetSecurityDescriptorDacl", reinterpret_cast<void*>(SetSecurityDescriptorDacl));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSecurityDescriptorOwner", reinterpret_cast<void*>(GetSecurityDescriptorOwner));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "SetSecurityDescriptorOwner", reinterpret_cast<void*>(SetSecurityDescriptorOwner));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSecurityDescriptorGroup", reinterpret_cast<void*>(GetSecurityDescriptorGroup));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "SetSecurityDescriptorGroup", reinterpret_cast<void*>(SetSecurityDescriptorGroup));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "MakeSelfRelativeSD", reinterpret_cast<void*>(MakeSelfRelativeSD));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "MakeAbsoluteSD", reinterpret_cast<void*>(MakeAbsoluteSD));
+
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "InitializeAcl", reinterpret_cast<void*>(InitializeAcl));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "IsValidAcl", reinterpret_cast<void*>(IsValidAcl));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AddAccessAllowedAce", reinterpret_cast<void*>(AddAccessAllowedAce));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AddAccessAllowedAceEx", reinterpret_cast<void*>(AddAccessAllowedAceEx));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AddAccessDeniedAce", reinterpret_cast<void*>(AddAccessDeniedAce));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AddAuditAccessAce", reinterpret_cast<void*>(AddAuditAccessAce));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetAce", reinterpret_cast<void*>(GetAce));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "DeleteAce", reinterpret_cast<void*>(DeleteAce));
+
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AllocateAndInitializeSid", reinterpret_cast<void*>(AllocateAndInitializeSid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "FreeSid", reinterpret_cast<void*>(FreeSid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "EqualSid", reinterpret_cast<void*>(EqualSid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "CopySid", reinterpret_cast<void*>(CopySid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "EqualPrefixSid", reinterpret_cast<void*>(EqualPrefixSid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "IsValidSid", reinterpret_cast<void*>(IsValidSid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetLengthSid", reinterpret_cast<void*>(GetLengthSid));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSidIdentifierAuthority", reinterpret_cast<void*>(GetSidIdentifierAuthority));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSidSubAuthority", reinterpret_cast<void*>(GetSidSubAuthority));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetSidSubAuthorityCount", reinterpret_cast<void*>(GetSidSubAuthorityCount));
+        ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
+
+        // 2. secur32.dll & sspicli.dll aliases
+        ldr.registerExport("secur32.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
+        ldr.registerExport("secur32.dll", "IsValidSecurityDescriptor", reinterpret_cast<void*>(IsValidSecurityDescriptor));
+        ldr.registerExport("secur32.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
+        ldr.registerExport("sspicli.dll", "InitializeSecurityDescriptor", reinterpret_cast<void*>(InitializeSecurityDescriptor));
+        ldr.registerExport("sspicli.dll", "AccessCheck", reinterpret_cast<void*>(AccessCheck));
+    }
 
     // 3. SCM Service: EventSystem ("COM+ Event System")
     auto& scm = scm::ServiceControlManager::get();
-    auto eventSysRecord = std::make_shared<scm::ServiceRecord>();
-    eventSysRecord->serviceName = L"EventSystem";
-    eventSysRecord->displayName = L"COM+ Event System";
-    eventSysRecord->serviceType = scm::SERVICE_WIN32_SHARE_PROCESS;
-    eventSysRecord->startType = scm::SERVICE_AUTO_START;
-    eventSysRecord->errorControl = scm::SERVICE_ERROR_NORMAL;
-    eventSysRecord->svchostGroup = "LocalService";
-    eventSysRecord->binaryPath = L"C:\\Windows\\System32\\svchost.exe -k LocalService -p";
-    eventSysRecord->status.dwServiceType = eventSysRecord->serviceType;
-    eventSysRecord->status.dwCurrentState = scm::SERVICE_RUNNING;
-    eventSysRecord->status.dwProcessId = scm::SvcHostManager::get().getOrCreateGroupProcess("LocalService");
-    scm::SvcHostManager::get().assignService("LocalService", eventSysRecord->serviceName);
-    scm.registerServiceRecord(eventSysRecord);
+    if (!scm.getServiceRecord(L"EventSystem")) {
+        auto eventSysRecord = std::make_shared<scm::ServiceRecord>();
+        eventSysRecord->serviceName = L"EventSystem";
+        eventSysRecord->displayName = L"COM+ Event System";
+        eventSysRecord->serviceType = scm::SERVICE_WIN32_SHARE_PROCESS;
+        eventSysRecord->startType = scm::SERVICE_AUTO_START;
+        eventSysRecord->errorControl = scm::SERVICE_ERROR_NORMAL;
+        eventSysRecord->svchostGroup = "LocalService";
+        eventSysRecord->binaryPath = L"C:\\Windows\\System32\\svchost.exe -k LocalService -p";
+        eventSysRecord->status.dwServiceType = eventSysRecord->serviceType;
+        eventSysRecord->status.dwCurrentState = scm::SERVICE_RUNNING;
+        eventSysRecord->status.dwProcessId = scm::SvcHostManager::get().getOrCreateGroupProcess("LocalService");
+        scm::SvcHostManager::get().assignService("LocalService", eventSysRecord->serviceName);
+        scm.registerServiceRecord(eventSysRecord);
+    }
 }
 
 } // namespace micant::acl

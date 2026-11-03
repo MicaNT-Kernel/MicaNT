@@ -589,10 +589,28 @@ struct D3D12_BARRIER_GROUP {
     };
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList4 = 
+    { 0x87e0e368, 0xe32b, 0x4d0b, { 0xbe, 0x4b, 0x4b, 0x78, 0xb8, 0x63, 0x00, 0xaf } };
+
+struct D3D12_DISPATCH_RAYS_DESC {
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE RayGenerationShaderRecord{};
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE MissShaderTable{};
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE HitGroupTable{};
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE CallableShaderTable{};
+    uint32_t Width{0};
+    uint32_t Height{0};
+    uint32_t Depth{0};
+};
+
+class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList {
+public:
+    virtual void DispatchRays(const D3D12_DISPATCH_RAYS_DESC* pDesc) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList6 = 
     { 0xc3827890, 0xe548, 0x4cf6, { 0xbf, 0x5a, 0x4f, 0x97, 0x22, 0x3d, 0x1d, 0x28 } };
 
-class ID3D12GraphicsCommandList6 : public ID3D12GraphicsCommandList {
+class ID3D12GraphicsCommandList6 : public ID3D12GraphicsCommandList4 {
 public:
     virtual void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) = 0;
 };
@@ -622,12 +640,31 @@ public:
     virtual D3D12_COMMAND_QUEUE_DESC GetDesc() = 0;
 };
 
-// DirectX 12 Feature Options 7, 12, 13, 14 & 15
+// DirectX 12 Feature Options 5, 7, 12, 13, 14 & 15
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS5  = 21;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS7  = 23;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS12 = 28;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS13 = 29;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS14 = 30;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS15 = 31;
+
+enum D3D12_RENDER_PASS_TIER {
+    D3D12_RENDER_PASS_TIER_0 = 0,
+    D3D12_RENDER_PASS_TIER_1 = 1,
+    D3D12_RENDER_PASS_TIER_2 = 2
+};
+
+enum D3D12_RAYTRACING_TIER {
+    D3D12_RAYTRACING_TIER_NOT_SUPPORTED = 0,
+    D3D12_RAYTRACING_TIER_1_0           = 10,
+    D3D12_RAYTRACING_TIER_1_1           = 11
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS5 {
+    BOOL                   SRVOnlyTiledResourceTier3{0};
+    D3D12_RENDER_PASS_TIER RenderPassesTier{D3D12_RENDER_PASS_TIER_0};
+    D3D12_RAYTRACING_TIER  RaytracingTier{D3D12_RAYTRACING_TIER_1_1};
+};
 
 enum D3D12_SAMPLER_FEEDBACK_TIER {
     D3D12_SAMPLER_FEEDBACK_TIER_NOT_SUPPORTED = 0,
@@ -1092,6 +1129,8 @@ private:
     std::vector<D3D12_DISPATCH_GRAPH_DESC> m_dispatchedGraphs;
     uint32_t m_recordedEnhancedBarriersCount{ 0 };
     uint32_t m_dispatchedMeshCount{ 0 };
+    uint32_t m_dispatchedRaysCount{ 0 };
+    D3D12_DISPATCH_RAYS_DESC m_lastDispatchRaysDesc{};
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -1101,6 +1140,7 @@ public:
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
+            riid == IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -1139,6 +1179,8 @@ public:
         m_pAllocator = pAllocator;
         m_commands.clear();
         m_dispatchedGraphs.clear();
+        m_dispatchedMeshCount = 0;
+        m_dispatchedRaysCount = 0;
         m_hasProgram = false;
         m_isOpen = true;
         return 0;
@@ -1273,6 +1315,17 @@ public:
         if (!m_isOpen || !pDesc) return;
         m_dispatchedGraphs.push_back(*pDesc);
     }
+
+    void DispatchRays(const D3D12_DISPATCH_RAYS_DESC* pDesc) override {
+        if (!m_isOpen) return;
+        m_dispatchedRaysCount++;
+        if (pDesc) {
+            m_lastDispatchRaysDesc = *pDesc;
+        }
+    }
+
+    [[nodiscard]] uint32_t GetDispatchedRaysCount() const noexcept { return m_dispatchedRaysCount; }
+    [[nodiscard]] const D3D12_DISPATCH_RAYS_DESC& GetLastDispatchRaysDesc() const noexcept { return m_lastDispatchRaysDesc; }
 
     void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) override {
         if (!m_isOpen) return;
@@ -1498,6 +1551,14 @@ public:
 
     int32_t CheckFeatureSupport(uint32_t Feature, void* pFeatureSupportData, uint32_t FeatureSupportDataSize) override {
         if (!pFeatureSupportData) return -1;
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS5) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS5)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS5*>(pFeatureSupportData);
+            pData->SRVOnlyTiledResourceTier3 = FALSE;
+            pData->RenderPassesTier = D3D12_RENDER_PASS_TIER_0;
+            pData->RaytracingTier = D3D12_RAYTRACING_TIER_1_1;
+            return 0;
+        }
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS7) {
             if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS7)) return -1;
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS7*>(pFeatureSupportData);
