@@ -478,10 +478,129 @@ enum D3D12_WORK_GRAPHS_TIER {
     D3D12_WORK_GRAPHS_TIER_1_1 = 11
 };
 
+// Enhanced Barriers Enums & Structs
+enum D3D12_BARRIER_LAYOUT {
+    D3D12_BARRIER_LAYOUT_UNDEFINED               = 0,
+    D3D12_BARRIER_LAYOUT_COMMON                  = 1,
+    D3D12_BARRIER_LAYOUT_PRESENT                 = 2,
+    D3D12_BARRIER_LAYOUT_GENERIC_READ            = 3,
+    D3D12_BARRIER_LAYOUT_RENDER_TARGET           = 4,
+    D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS        = 5,
+    D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE     = 6,
+    D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_READ      = 7,
+    D3D12_BARRIER_LAYOUT_SHADER_RESOURCE         = 8,
+    D3D12_BARRIER_LAYOUT_COPY_SOURCE             = 9,
+    D3D12_BARRIER_LAYOUT_COPY_DEST               = 10,
+    D3D12_BARRIER_LAYOUT_RESOLVE_SOURCE          = 11,
+    D3D12_BARRIER_LAYOUT_RESOLVE_DEST            = 12,
+    D3D12_BARRIER_LAYOUT_SHADING_RATE_SOURCE     = 13,
+    D3D12_BARRIER_LAYOUT_DIRECT_INDEXING         = 20
+};
+
+enum D3D12_BARRIER_SYNC {
+    D3D12_BARRIER_SYNC_NONE                       = 0,
+    D3D12_BARRIER_SYNC_ALL                        = 0x1,
+    D3D12_BARRIER_SYNC_DRAW                       = 0x2,
+    D3D12_BARRIER_SYNC_INDEX_INPUT                = 0x4,
+    D3D12_BARRIER_SYNC_VERTEX_SHADING             = 0x8,
+    D3D12_BARRIER_SYNC_PIXEL_SHADING              = 0x10,
+    D3D12_BARRIER_SYNC_DEPTH_STENCIL              = 0x20,
+    D3D12_BARRIER_SYNC_RENDER_TARGET              = 0x40,
+    D3D12_BARRIER_SYNC_COMPUTE_SHADING            = 0x80,
+    D3D12_BARRIER_SYNC_RAYTRACING                 = 0x100,
+    D3D12_BARRIER_SYNC_COPY                       = 0x200,
+    D3D12_BARRIER_SYNC_RESOLVE                    = 0x400,
+    D3D12_BARRIER_SYNC_EXECUTE_INDIRECT           = 0x800,
+    D3D12_BARRIER_SYNC_ALL_SHADING                = 0x1000,
+    D3D12_BARRIER_SYNC_NON_PIXEL_SHADING          = 0x2000,
+    D3D12_BARRIER_SYNC_SPLIT                      = 0x80000000
+};
+
+enum D3D12_BARRIER_ACCESS {
+    D3D12_BARRIER_ACCESS_COMMON                  = 0,
+    D3D12_BARRIER_ACCESS_VERTEX_BUFFER           = 0x1,
+    D3D12_BARRIER_ACCESS_CONSTANT_BUFFER         = 0x2,
+    D3D12_BARRIER_ACCESS_INDEX_BUFFER            = 0x4,
+    D3D12_BARRIER_ACCESS_RENDER_TARGET           = 0x8,
+    D3D12_BARRIER_ACCESS_UNORDERED_ACCESS        = 0x10,
+    D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE     = 0x20,
+    D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ      = 0x40,
+    D3D12_BARRIER_ACCESS_SHADER_RESOURCE         = 0x80,
+    D3D12_BARRIER_ACCESS_STREAM_OUTPUT           = 0x100,
+    D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT       = 0x200,
+    D3D12_BARRIER_ACCESS_COPY_DEST               = 0x400,
+    D3D12_BARRIER_ACCESS_COPY_SOURCE             = 0x800,
+    D3D12_BARRIER_ACCESS_RESOLVE_DEST            = 0x1000,
+    D3D12_BARRIER_ACCESS_RESOLVE_SOURCE          = 0x2000,
+    D3D12_BARRIER_ACCESS_NO_ACCESS               = 0x80000000
+};
+
+enum D3D12_BARRIER_TYPE {
+    D3D12_BARRIER_TYPE_GLOBAL  = 0,
+    D3D12_BARRIER_TYPE_TEXTURE = 1,
+    D3D12_BARRIER_TYPE_BUFFER  = 2
+};
+
+struct D3D12_GLOBAL_BARRIER {
+    uint32_t SyncBefore{0};
+    uint32_t SyncAfter{0};
+    uint32_t AccessBefore{0};
+    uint32_t AccessAfter{0};
+};
+
+struct D3D12_BUFFER_BARRIER {
+    uint32_t SyncBefore{0};
+    uint32_t SyncAfter{0};
+    uint32_t AccessBefore{0};
+    uint32_t AccessAfter{0};
+    ID3D12Resource* pResource{nullptr};
+    uint64_t Offset{0};
+    uint64_t Size{0xFFFFFFFFFFFFFFFFULL};
+};
+
+struct D3D12_BARRIER_SUBRESOURCE_RANGE {
+    uint32_t IndexOrFirstMipLevel{0};
+    uint32_t NumMipLevels{1};
+    uint32_t FirstArraySlice{0};
+    uint32_t NumArraySlices{1};
+    uint32_t FirstPlane{0};
+    uint32_t NumPlanes{1};
+};
+
+struct D3D12_TEXTURE_BARRIER {
+    uint32_t SyncBefore{0};
+    uint32_t SyncAfter{0};
+    uint32_t AccessBefore{0};
+    uint32_t AccessAfter{0};
+    D3D12_BARRIER_LAYOUT LayoutBefore{D3D12_BARRIER_LAYOUT_UNDEFINED};
+    D3D12_BARRIER_LAYOUT LayoutAfter{D3D12_BARRIER_LAYOUT_UNDEFINED};
+    ID3D12Resource* pResource{nullptr};
+    D3D12_BARRIER_SUBRESOURCE_RANGE Subresources{};
+    uint32_t Flags{0};
+};
+
+struct D3D12_BARRIER_GROUP {
+    D3D12_BARRIER_TYPE Type{D3D12_BARRIER_TYPE_GLOBAL};
+    uint32_t NumBarriers{0};
+    union {
+        const D3D12_GLOBAL_BARRIER*  pGlobalBarriers;
+        const D3D12_TEXTURE_BARRIER* pTextureBarriers;
+        const D3D12_BUFFER_BARRIER*  pBufferBarriers;
+    };
+};
+
+static constexpr IID IID_ID3D12GraphicsCommandList7 = 
+    { 0xb0415a52, 0x8383, 0x4776, { 0x8b, 0x51, 0x73, 0x8d, 0x64, 0xdb, 0x8a, 0x91 } };
+
+class ID3D12GraphicsCommandList7 : public ID3D12GraphicsCommandList {
+public:
+    virtual void Barrier(uint32_t NumBarrierGroups, const D3D12_BARRIER_GROUP* pBarrierGroups) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList10 = 
     { 0x217d12bc, 0x1f72, 0x4f72, { 0x87, 0x05, 0x76, 0x8a, 0x48, 0x49, 0x89, 0xb8 } };
 
-class ID3D12GraphicsCommandList10 : public ID3D12GraphicsCommandList {
+class ID3D12GraphicsCommandList10 : public ID3D12GraphicsCommandList7 {
 public:
     virtual void SetProgram(const D3D12_SET_PROGRAM_DESC* pDesc) = 0;
     virtual void DispatchGraph(const D3D12_DISPATCH_GRAPH_DESC* pDesc) = 0;
@@ -495,10 +614,28 @@ public:
     virtual D3D12_COMMAND_QUEUE_DESC GetDesc() = 0;
 };
 
-// DirectX 12 Feature Options 13, 14 & 15
+// DirectX 12 Feature Options 7, 12, 13, 14 & 15
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS7  = 23;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS12 = 28;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS13 = 29;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS14 = 30;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS15 = 31;
+
+enum D3D12_SAMPLER_FEEDBACK_TIER {
+    D3D12_SAMPLER_FEEDBACK_TIER_NOT_SUPPORTED = 0,
+    D3D12_SAMPLER_FEEDBACK_TIER_09_0          = 90,
+    D3D12_SAMPLER_FEEDBACK_TIER_1_0           = 100
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS7 {
+    D3D12_SAMPLER_FEEDBACK_TIER SamplerFeedbackTier{D3D12_SAMPLER_FEEDBACK_TIER_1_0};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS12 {
+    BOOL MSPrimitivesPipelineStatisticIncludesCulledPrimitives{0};
+    BOOL EnhancedBarriersSupported{1};
+    BOOL RelaxedFormatCastingSupported{1};
+};
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS13 {
     BOOL UnrestrictedBufferTextureCopyPitchSupported{0};
@@ -537,6 +674,17 @@ public:
     virtual void CreateRenderTargetView(ID3D12Resource* pResource, const D3D12_RENDER_TARGET_VIEW_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
     virtual void CreateDepthStencilView(ID3D12Resource* pResource, const D3D12_DEPTH_STENCIL_VIEW_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
     virtual int32_t CheckFeatureSupport(uint32_t Feature, void* pFeatureSupportData, uint32_t FeatureSupportDataSize) = 0;
+};
+
+static constexpr IID IID_ID3D12Device8 = 
+    { 0x9218e66e, 0x19b4, 0x4ec2, { 0xa7, 0x76, 0xb2, 0xd4, 0x44, 0x53, 0x4f, 0x16 } };
+
+class ID3D12Device8 : public ID3D12Device {
+public:
+    virtual void CreateSamplerFeedbackUnorderedAccessView(
+        ID3D12Resource* pTargetedResource,
+        ID3D12Resource* pFeedbackMinMipMap,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
 };
 
 // ============================================================================
@@ -928,6 +1076,7 @@ private:
     bool m_hasProgram{ false };
     D3D12_SET_PROGRAM_DESC m_currentProgram{};
     std::vector<D3D12_DISPATCH_GRAPH_DESC> m_dispatchedGraphs;
+    uint32_t m_recordedEnhancedBarriersCount{ 0 };
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -937,7 +1086,7 @@ public:
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
-            riid == IID_ID3D12GraphicsCommandList10) {
+            riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
             return 0;
@@ -1110,6 +1259,12 @@ public:
         m_dispatchedGraphs.push_back(*pDesc);
     }
 
+    void Barrier(uint32_t NumBarrierGroups, const D3D12_BARRIER_GROUP* pBarrierGroups) override {
+        if (!m_isOpen || !pBarrierGroups) return;
+        m_recordedEnhancedBarriersCount += NumBarrierGroups;
+    }
+
+    [[nodiscard]] uint32_t GetRecordedEnhancedBarriersCount() const noexcept { return m_recordedEnhancedBarriersCount; }
     [[nodiscard]] bool HasProgram() const noexcept { return m_hasProgram; }
     [[nodiscard]] const D3D12_SET_PROGRAM_DESC& GetCurrentProgram() const noexcept { return m_currentProgram; }
     [[nodiscard]] size_t GetDispatchedGraphCount() const noexcept { return m_dispatchedGraphs.size(); }
@@ -1204,11 +1359,12 @@ public:
 };
 
 // D3D12 Device Implementation
-class Prism3D12DeviceImpl : public ID3D12Device {
+class Prism3D12DeviceImpl : public ID3D12Device8 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
     D3D_FEATURE_LEVEL m_featureLevel{ D3D_FEATURE_LEVEL_12_0 };
+    uint32_t m_samplerFeedbackViewsCreated{ 0 };
 
 public:
     Prism3D12DeviceImpl(IUnknown* pAdapter = nullptr, D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_12_0)
@@ -1224,8 +1380,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device) {
-            *ppv = static_cast<ID3D12Device*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device8) {
+            *ppv = static_cast<ID3D12Device8*>(this);
             AddRef();
             return 0;
         }
@@ -1307,8 +1463,32 @@ public:
         heap->SetDSV(0, pResource, fmt);
     }
 
+    void CreateSamplerFeedbackUnorderedAccessView(
+        ID3D12Resource* /*pTargetedResource*/,
+        ID3D12Resource* /*pFeedbackMinMipMap*/,
+        D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/
+    ) override {
+        m_samplerFeedbackViewsCreated++;
+    }
+
+    [[nodiscard]] uint32_t GetSamplerFeedbackViewsCreated() const noexcept { return m_samplerFeedbackViewsCreated; }
+
     int32_t CheckFeatureSupport(uint32_t Feature, void* pFeatureSupportData, uint32_t FeatureSupportDataSize) override {
         if (!pFeatureSupportData) return -1;
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS7) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS7)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS7*>(pFeatureSupportData);
+            pData->SamplerFeedbackTier = D3D12_SAMPLER_FEEDBACK_TIER_1_0;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS12) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS12)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS12*>(pFeatureSupportData);
+            pData->MSPrimitivesPipelineStatisticIncludesCulledPrimitives = FALSE;
+            pData->EnhancedBarriersSupported = TRUE;
+            pData->RelaxedFormatCastingSupported = TRUE;
+            return 0;
+        }
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS13) {
             if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS13)) return -1;
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS13*>(pFeatureSupportData);

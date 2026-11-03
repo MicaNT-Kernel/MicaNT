@@ -64,6 +64,7 @@ using LPSTR   = char*;
 using SIZE_T    = size_t;
 using PSIZE_T   = size_t*;
 using DWORD_PTR = uintptr_t;
+using PDWORD_PTR = DWORD_PTR*;
 using ULONG_PTR = uintptr_t;
 using LONG_PTR  = intptr_t;
 using LONG      = int32_t;
@@ -2865,9 +2866,197 @@ inline HANDLE OpenThread(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwThr
     return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(0x2000 + dwThreadId));
 }
 
-inline DWORD_PTR SetThreadAffinityMask(HANDLE hThread, DWORD_PTR dwThreadAffinityMask) noexcept {
-    (void)hThread;
-    return dwThreadAffinityMask ? dwThreadAffinityMask : 1;
+struct PROCESSOR_NUMBER {
+    WORD Group{0};
+    BYTE Number{0};
+    BYTE Reserved{0};
+};
+using PPROCESSOR_NUMBER = PROCESSOR_NUMBER*;
+
+inline constexpr uint32_t THREAD_POWER_THROTTLING_CURRENT_VERSION = 1;
+inline constexpr uint32_t THREAD_POWER_THROTTLING_EXECUTION_SPEED = 0x1;
+
+struct THREAD_POWER_THROTTLING_STATE {
+    ULONG Version{THREAD_POWER_THROTTLING_CURRENT_VERSION};
+    ULONG ControlMask{0};
+    ULONG StateMask{0};
+};
+
+enum THREAD_INFORMATION_CLASS {
+    ThreadMemoryPriority = 0,
+    ThreadAbsoluteCpuPriority = 1,
+    ThreadDynamicCodePolicy = 2,
+    ThreadPowerThrottling = 3,
+    ThreadInformationClassMax = 4
+};
+
+class SovereignThreadPacingManager {
+private:
+    std::mutex m_mutex;
+    DWORD_PTR m_processAffinityMask{0xFFFF};
+    BOOL m_processPriorityBoostDisabled{FALSE};
+
+    struct ThreadPacingRecord {
+        DWORD_PTR affinityMask{0xFFFF};
+        BOOL priorityBoostDisabled{FALSE};
+        PROCESSOR_NUMBER idealProcessor{0, 0, 0};
+        THREAD_POWER_THROTTLING_STATE powerThrottling{1, 1, 0};
+        ULONG absoluteCpuPriority{0};
+    };
+    std::unordered_map<HANDLE, ThreadPacingRecord> m_threads;
+
+public:
+    static SovereignThreadPacingManager& get() noexcept {
+        static SovereignThreadPacingManager instance;
+        return instance;
+    }
+
+    DWORD_PTR setThreadAffinityMask(HANDLE hThread, DWORD_PTR dwThreadAffinityMask) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto& rec = m_threads[hThread];
+        DWORD_PTR prev = rec.affinityMask;
+        rec.affinityMask = dwThreadAffinityMask ? dwThreadAffinityMask : 0xFFFF;
+        return prev ? prev : 0xFFFF;
+    }
+
+    BOOL getProcessAffinityMask(HANDLE /*hProcess*/, PDWORD_PTR lpProcessAffinityMask, PDWORD_PTR lpSystemAffinityMask) noexcept {
+        if (!lpProcessAffinityMask || !lpSystemAffinityMask) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        *lpProcessAffinityMask = m_processAffinityMask;
+        *lpSystemAffinityMask = 0xFFFF; // 16 logical cores
+        return TRUE;
+    }
+
+    BOOL setProcessAffinityMask(HANDLE /*hProcess*/, DWORD_PTR dwProcessAffinityMask) noexcept {
+        if (!dwProcessAffinityMask) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_processAffinityMask = dwProcessAffinityMask;
+        return TRUE;
+    }
+
+    BOOL setThreadPriorityBoost(HANDLE hThread, BOOL bDisablePriorityBoost) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_threads[hThread].priorityBoostDisabled = bDisablePriorityBoost;
+        return TRUE;
+    }
+
+    BOOL getThreadPriorityBoost(HANDLE hThread, PBOOL pDisablePriorityBoost) noexcept {
+        if (!pDisablePriorityBoost) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        *pDisablePriorityBoost = m_threads[hThread].priorityBoostDisabled;
+        return TRUE;
+    }
+
+    BOOL setProcessPriorityBoost(HANDLE /*hProcess*/, BOOL bDisablePriorityBoost) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_processPriorityBoostDisabled = bDisablePriorityBoost;
+        return TRUE;
+    }
+
+    BOOL getProcessPriorityBoost(HANDLE /*hProcess*/, PBOOL pDisablePriorityBoost) noexcept {
+        if (!pDisablePriorityBoost) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        *pDisablePriorityBoost = m_processPriorityBoostDisabled;
+        return TRUE;
+    }
+
+    BOOL setThreadIdealProcessorEx(HANDLE hThread, PPROCESSOR_NUMBER lpIdealProcessor, PPROCESSOR_NUMBER lpPreviousIdealProcessor) noexcept {
+        if (!lpIdealProcessor) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto& rec = m_threads[hThread];
+        if (lpPreviousIdealProcessor) {
+            *lpPreviousIdealProcessor = rec.idealProcessor;
+        }
+        rec.idealProcessor = *lpIdealProcessor;
+        return TRUE;
+    }
+
+    BOOL getThreadIdealProcessorEx(HANDLE hThread, PPROCESSOR_NUMBER lpIdealProcessor) noexcept {
+        if (!lpIdealProcessor) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        *lpIdealProcessor = m_threads[hThread].idealProcessor;
+        return TRUE;
+    }
+
+    BOOL setThreadInformation(HANDLE hThread, int32_t threadInfoClass, void* pData, DWORD size) noexcept {
+        if (!pData || size == 0) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto& rec = m_threads[hThread];
+        if (threadInfoClass == ThreadPowerThrottling || threadInfoClass == 3) {
+            if (size >= sizeof(THREAD_POWER_THROTTLING_STATE)) {
+                rec.powerThrottling = *reinterpret_cast<const THREAD_POWER_THROTTLING_STATE*>(pData);
+                return TRUE;
+            }
+        } else if (threadInfoClass == ThreadAbsoluteCpuPriority || threadInfoClass == 1) {
+            if (size >= sizeof(ULONG)) {
+                rec.absoluteCpuPriority = *reinterpret_cast<const ULONG*>(pData);
+                return TRUE;
+            }
+        }
+        return TRUE;
+    }
+
+    BOOL getThreadInformation(HANDLE hThread, int32_t threadInfoClass, void* pData, DWORD size) noexcept {
+        if (!pData || size == 0) return FALSE;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto& rec = m_threads[hThread];
+        if (threadInfoClass == ThreadPowerThrottling || threadInfoClass == 3) {
+            if (size >= sizeof(THREAD_POWER_THROTTLING_STATE)) {
+                *reinterpret_cast<THREAD_POWER_THROTTLING_STATE*>(pData) = rec.powerThrottling;
+                return TRUE;
+            }
+        } else if (threadInfoClass == ThreadAbsoluteCpuPriority || threadInfoClass == 1) {
+            if (size >= sizeof(ULONG)) {
+                *reinterpret_cast<ULONG*>(pData) = rec.absoluteCpuPriority;
+                return TRUE;
+            }
+        }
+        return TRUE;
+    }
+};
+
+inline DWORD_PTR WINAPI SetThreadAffinityMask(HANDLE hThread, DWORD_PTR dwThreadAffinityMask) noexcept {
+    return SovereignThreadPacingManager::get().setThreadAffinityMask(hThread, dwThreadAffinityMask);
+}
+
+inline BOOL WINAPI GetProcessAffinityMask(HANDLE hProcess, PDWORD_PTR lpProcessAffinityMask, PDWORD_PTR lpSystemAffinityMask) noexcept {
+    return SovereignThreadPacingManager::get().getProcessAffinityMask(hProcess, lpProcessAffinityMask, lpSystemAffinityMask);
+}
+
+inline BOOL WINAPI SetProcessAffinityMask(HANDLE hProcess, DWORD_PTR dwProcessAffinityMask) noexcept {
+    return SovereignThreadPacingManager::get().setProcessAffinityMask(hProcess, dwProcessAffinityMask);
+}
+
+inline BOOL WINAPI SetThreadPriorityBoost(HANDLE hThread, BOOL bDisablePriorityBoost) noexcept {
+    return SovereignThreadPacingManager::get().setThreadPriorityBoost(hThread, bDisablePriorityBoost);
+}
+
+inline BOOL WINAPI GetThreadPriorityBoost(HANDLE hThread, PBOOL pDisablePriorityBoost) noexcept {
+    return SovereignThreadPacingManager::get().getThreadPriorityBoost(hThread, pDisablePriorityBoost);
+}
+
+inline BOOL WINAPI SetProcessPriorityBoost(HANDLE hProcess, BOOL bDisablePriorityBoost) noexcept {
+    return SovereignThreadPacingManager::get().setProcessPriorityBoost(hProcess, bDisablePriorityBoost);
+}
+
+inline BOOL WINAPI GetProcessPriorityBoost(HANDLE hProcess, PBOOL pDisablePriorityBoost) noexcept {
+    return SovereignThreadPacingManager::get().getProcessPriorityBoost(hProcess, pDisablePriorityBoost);
+}
+
+inline BOOL WINAPI SetThreadIdealProcessorEx(HANDLE hThread, PPROCESSOR_NUMBER lpIdealProcessor, PPROCESSOR_NUMBER lpPreviousIdealProcessor) noexcept {
+    return SovereignThreadPacingManager::get().setThreadIdealProcessorEx(hThread, lpIdealProcessor, lpPreviousIdealProcessor);
+}
+
+inline BOOL WINAPI GetThreadIdealProcessorEx(HANDLE hThread, PPROCESSOR_NUMBER lpIdealProcessor) noexcept {
+    return SovereignThreadPacingManager::get().getThreadIdealProcessorEx(hThread, lpIdealProcessor);
+}
+
+inline BOOL WINAPI SetThreadInformation(HANDLE hThread, int32_t ThreadInformationClass, void* ThreadInformation, DWORD ThreadInformationSize) noexcept {
+    return SovereignThreadPacingManager::get().setThreadInformation(hThread, ThreadInformationClass, ThreadInformation, ThreadInformationSize);
+}
+
+inline BOOL WINAPI GetThreadInformation(HANDLE hThread, int32_t ThreadInformationClass, void* ThreadInformation, DWORD ThreadInformationSize) noexcept {
+    return SovereignThreadPacingManager::get().getThreadInformation(hThread, ThreadInformationClass, ThreadInformation, ThreadInformationSize);
 }
 
 inline DWORD GetVersion() noexcept {
@@ -3760,16 +3949,6 @@ inline BOOL GetProcessTimes(
     if (lpExitTime) *lpExitTime = ftZero;
     if (lpKernelTime) { lpKernelTime->dwLowDateTime = 100000; lpKernelTime->dwHighDateTime = 0; }
     if (lpUserTime) { lpUserTime->dwLowDateTime = 200000; lpUserTime->dwHighDateTime = 0; }
-    return TRUE;
-}
-
-inline BOOL SetProcessAffinityMask(HANDLE /*hProcess*/, DWORD_PTR /*dwProcessAffinityMask*/) noexcept {
-    return TRUE;
-}
-
-inline BOOL GetProcessAffinityMask(HANDLE /*hProcess*/, PDWORD_PTR lpProcessAffinityMask, PDWORD_PTR lpSystemAffinityMask) noexcept {
-    if (lpProcessAffinityMask) *lpProcessAffinityMask = 0xFF;
-    if (lpSystemAffinityMask) *lpSystemAffinityMask = 0xFF;
     return TRUE;
 }
 
@@ -5841,11 +6020,6 @@ inline BOOL WINAPI IsBadStringPtrA([[maybe_unused]] LPCSTR lpsz, [[maybe_unused]
     return FALSE; // Sovereign memory is valid
 }
 
-inline BOOL WINAPI SetProcessPriorityBoost([[maybe_unused]] HANDLE hProcess,
-                                            [[maybe_unused]] BOOL bDisablePriorityBoost) noexcept {
-    return TRUE;
-}
-
 inline BOOL WINAPI SetPriorityClass([[maybe_unused]] HANDLE hProcess, [[maybe_unused]] DWORD dwPriorityClass) noexcept {
     return TRUE;
 }
@@ -7386,10 +7560,6 @@ inline BOOL WINAPI GetComputerNameExW(int32_t /*NameType*/, wchar_t* lpBuffer, D
     return TRUE;
 }
 
-inline BOOL WINAPI SetThreadInformation(HANDLE /*hThread*/, int32_t /*ThreadInformationClass*/, void* /*ThreadInformation*/, DWORD /*ThreadInformationSize*/) noexcept {
-    return TRUE;
-}
-
 inline HRESULT WINAPI SetThreadDescription(HANDLE /*hThread*/, const wchar_t* /*lpThreadDescription*/) noexcept {
     return 0; // S_OK
 }
@@ -8636,6 +8806,27 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQueryInformationProcess", reinterpret_cast<void*>(ntdll::NtQueryInformationProcess));
     ldr.registerExport("ntdll.dll", "NtCreateNamedPipeFile", reinterpret_cast<void*>(ntdll::NtCreateNamedPipeFile));
     ldr.registerExport("ntdll.dll", "NtCreateMailslotFile", reinterpret_cast<void*>(ntdll::NtCreateMailslotFile));
+
+    // Horizon 204: Thread Affinity, Priority Boost & Ideal Processor Pacing
+    ldr.registerExport("kernel32.dll", "SetThreadPriorityBoost", reinterpret_cast<void*>(SetThreadPriorityBoost));
+    ldr.registerExport("kernel32.dll", "GetThreadPriorityBoost", reinterpret_cast<void*>(GetThreadPriorityBoost));
+    ldr.registerExport("kernel32.dll", "SetProcessPriorityBoost", reinterpret_cast<void*>(SetProcessPriorityBoost));
+    ldr.registerExport("kernel32.dll", "GetProcessPriorityBoost", reinterpret_cast<void*>(GetProcessPriorityBoost));
+    ldr.registerExport("kernel32.dll", "SetThreadIdealProcessorEx", reinterpret_cast<void*>(SetThreadIdealProcessorEx));
+    ldr.registerExport("kernel32.dll", "GetThreadIdealProcessorEx", reinterpret_cast<void*>(GetThreadIdealProcessorEx));
+    ldr.registerExport("kernel32.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
+
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadAffinityMask", reinterpret_cast<void*>(SetThreadAffinityMask));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetProcessAffinityMask", reinterpret_cast<void*>(GetProcessAffinityMask));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetProcessAffinityMask", reinterpret_cast<void*>(SetProcessAffinityMask));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadPriorityBoost", reinterpret_cast<void*>(SetThreadPriorityBoost));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadPriorityBoost", reinterpret_cast<void*>(GetThreadPriorityBoost));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetProcessPriorityBoost", reinterpret_cast<void*>(SetProcessPriorityBoost));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetProcessPriorityBoost", reinterpret_cast<void*>(GetProcessPriorityBoost));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadIdealProcessorEx", reinterpret_cast<void*>(SetThreadIdealProcessorEx));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadIdealProcessorEx", reinterpret_cast<void*>(GetThreadIdealProcessorEx));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadInformation", reinterpret_cast<void*>(SetThreadInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
 }
 
 

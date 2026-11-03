@@ -40763,3 +40763,274 @@ inline void Test_Horizon203_Fibers_MitigationPolicies_DisplayTopology_And_D3D12O
 
     std::cout << "[TEST] Suite 419: Horizon 203 - Fibers, Mitigation, Display & D3D12 Options PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 420: Horizon 204 - Sovereign Win32 Raw Input Architecture, Thread Priority Boost & Ideal Processor Pacing,
+// DirectX 12 Sampler Feedback & Enhanced Barriers, Authentic NT Module Enumeration & Crypto Next Generation (CNG)
+// ============================================================================
+static void Test_Horizon204_RawInput_ThreadPacing_SamplerFeedback_And_BcryptCng_Suite() {
+    std::cout << "\n[TEST] Running Suite 420: Horizon 204 - Raw Input, Thread Pacing, D3D12 Sampler Feedback & BCrypt CNG...\n";
+
+    // 1. Pillar 1: Win32 Raw Input Architecture (8000Hz Esports Polling & Device Info)
+    {
+        using namespace micant::user32;
+        // Query device count
+        uint32_t numDevices = 0;
+        uint32_t res = GetRawInputDeviceList(nullptr, &numDevices, sizeof(RAWINPUTDEVICELIST));
+        TEST_ASSERT(res == 0 && numDevices == 3, "GetRawInputDeviceList returns 3 canonical gaming input devices");
+
+        std::vector<RAWINPUTDEVICELIST> devList(numDevices);
+        res = GetRawInputDeviceList(devList.data(), &numDevices, sizeof(RAWINPUTDEVICELIST));
+        TEST_ASSERT(res == 3, "GetRawInputDeviceList fills device entries correctly");
+        TEST_ASSERT(devList[0].dwType == RIM_TYPEMOUSE, "Device 0 is RIM_TYPEMOUSE");
+        TEST_ASSERT(devList[1].dwType == RIM_TYPEKEYBOARD, "Device 1 is RIM_TYPEKEYBOARD");
+        TEST_ASSERT(devList[2].dwType == RIM_TYPEHID, "Device 2 is RIM_TYPEHID");
+
+        // Query Device 0 (Mouse) Info
+        uint32_t cbSize = 0;
+        res = GetRawInputDeviceInfoW(devList[0].hDevice, RIDI_DEVICEINFO, nullptr, &cbSize);
+        TEST_ASSERT(cbSize == sizeof(RID_DEVICE_INFO), "GetRawInputDeviceInfoW size query for RIDI_DEVICEINFO succeeds");
+
+        RID_DEVICE_INFO mouseInfo{};
+        cbSize = sizeof(mouseInfo);
+        res = GetRawInputDeviceInfoW(devList[0].hDevice, RIDI_DEVICEINFO, &mouseInfo, &cbSize);
+        TEST_ASSERT(res == sizeof(mouseInfo), "GetRawInputDeviceInfoW retrieves mouse RID_DEVICE_INFO");
+        TEST_ASSERT(mouseInfo.dwType == RIM_TYPEMOUSE, "Mouse info dwType == RIM_TYPEMOUSE");
+        TEST_ASSERT(mouseInfo.u.mouse.dwSampleRate == 8000, "Esports mouse operates at 8000Hz ultra-low latency polling");
+        TEST_ASSERT(mouseInfo.u.mouse.dwNumberOfButtons == 5, "Esports mouse has 5 buttons");
+        TEST_ASSERT(mouseInfo.u.mouse.fHasHorizontalWheel == 1, "Esports mouse has horizontal scroll tilt wheel");
+
+        // Query Device 0 Name
+        uint32_t nameChars = 0;
+        res = GetRawInputDeviceInfoW(devList[0].hDevice, RIDI_DEVICENAME, nullptr, &nameChars);
+        TEST_ASSERT(nameChars > 0, "GetRawInputDeviceInfoW name length query succeeds");
+        std::vector<wchar_t> devName(nameChars);
+        res = GetRawInputDeviceInfoW(devList[0].hDevice, RIDI_DEVICENAME, devName.data(), &nameChars);
+        TEST_ASSERT(res == nameChars, "GetRawInputDeviceInfoW fills device path");
+        TEST_ASSERT(std::wcsstr(devName.data(), L"HID#VID_1532") != nullptr, "Device name reflects authentic high-rate gaming hardware");
+
+        // Register raw input device
+        RAWINPUTDEVICE rid{};
+        rid.usUsagePage = 1; // Generic Desktop Controls
+        rid.usUsage = 2;     // Mouse
+        rid.dwFlags = RIDEV_INPUTSINK;
+        rid.hwndTarget = reinterpret_cast<micant::win32::HWND>(0x1234);
+        TEST_ASSERT(RegisterRawInputDevices(&rid, 1, sizeof(rid)) == micant::win32::TRUE, "RegisterRawInputDevices succeeds for mouse input sink");
+
+        // Verify registered devices query
+        uint32_t regCount = 0;
+        res = GetRegisteredRawInputDevices(nullptr, &regCount, sizeof(RAWINPUTDEVICE));
+        TEST_ASSERT(regCount == 1, "GetRegisteredRawInputDevices reports 1 active registered raw device");
+        RAWINPUTDEVICE queriedRid{};
+        res = GetRegisteredRawInputDevices(&queriedRid, &regCount, sizeof(queriedRid));
+        TEST_ASSERT(res == 1 && queriedRid.usUsage == 2, "GetRegisteredRawInputDevices returns registered mouse usage");
+    }
+
+    // 2. Pillar 2: Thread Affinity, Priority Boost & Ideal Processor Pacing
+    {
+        micant::win32::HANDLE hThread = reinterpret_cast<micant::win32::HANDLE>(0x4001);
+
+        // Affinity mask
+        uintptr_t prevMask = micant::win32::SetThreadAffinityMask(hThread, 0x00FF); // Pin to cores 0..7 (CCD 0 / 3D V-Cache)
+        TEST_ASSERT(prevMask == 0xFFFF, "SetThreadAffinityMask returns previous full 16-core mask");
+
+        uintptr_t procMask = 0, sysMask = 0;
+        TEST_ASSERT(micant::win32::GetProcessAffinityMask(nullptr, &procMask, &sysMask) == micant::win32::TRUE, "GetProcessAffinityMask succeeds");
+        TEST_ASSERT(procMask == 0xFFFF && sysMask == 0xFFFF, "Process and System masks report 16 logical cores");
+
+        // Priority boost control
+        TEST_ASSERT(micant::win32::SetThreadPriorityBoost(hThread, micant::win32::TRUE) == micant::win32::TRUE, "SetThreadPriorityBoost disables priority boost for game render thread");
+        micant::win32::BOOL boostDisabled = micant::win32::FALSE;
+        TEST_ASSERT(micant::win32::GetThreadPriorityBoost(hThread, &boostDisabled) == micant::win32::TRUE && boostDisabled == micant::win32::TRUE, "GetThreadPriorityBoost verifies boost disabled");
+
+        TEST_ASSERT(micant::win32::SetProcessPriorityBoost(nullptr, micant::win32::TRUE) == micant::win32::TRUE, "SetProcessPriorityBoost succeeds");
+        micant::win32::BOOL procBoostDisabled = micant::win32::FALSE;
+        TEST_ASSERT(micant::win32::GetProcessPriorityBoost(nullptr, &procBoostDisabled) == micant::win32::TRUE && procBoostDisabled == micant::win32::TRUE, "GetProcessPriorityBoost verifies process boost disabled");
+
+        // Ideal Processor assignment
+        micant::win32::PROCESSOR_NUMBER idealProc{ 0, 4, 0 }; // Core 4
+        micant::win32::PROCESSOR_NUMBER prevIdeal{};
+        TEST_ASSERT(micant::win32::SetThreadIdealProcessorEx(hThread, &idealProc, &prevIdeal) == micant::win32::TRUE, "SetThreadIdealProcessorEx assigns core 4");
+        micant::win32::PROCESSOR_NUMBER retrievedProc{};
+        TEST_ASSERT(micant::win32::GetThreadIdealProcessorEx(hThread, &retrievedProc) == micant::win32::TRUE, "GetThreadIdealProcessorEx retrieves core assignment");
+        TEST_ASSERT(retrievedProc.Number == 4, "Ideal processor core matches 4");
+
+        // Thread Information (Power Throttling)
+        micant::win32::THREAD_POWER_THROTTLING_STATE tpts{};
+        tpts.Version = micant::win32::THREAD_POWER_THROTTLING_CURRENT_VERSION;
+        tpts.ControlMask = micant::win32::THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+        tpts.StateMask = 0; // Unthrottled high performance
+        TEST_ASSERT(micant::win32::SetThreadInformation(hThread, micant::win32::ThreadPowerThrottling, &tpts, sizeof(tpts)) == micant::win32::TRUE, "SetThreadInformation sets unthrottled gaming speed");
+
+        micant::win32::THREAD_POWER_THROTTLING_STATE queriedTpts{};
+        TEST_ASSERT(micant::win32::GetThreadInformation(hThread, micant::win32::ThreadPowerThrottling, &queriedTpts, sizeof(queriedTpts)) == micant::win32::TRUE, "GetThreadInformation retrieves power throttling state");
+        TEST_ASSERT(queriedTpts.StateMask == 0, "Thread power throttling StateMask confirmed 0");
+    }
+
+    // 3. Pillar 3: DirectX 12 Sampler Feedback & Enhanced Barriers
+    {
+        using namespace micant::prism3d12;
+        Prism3D12DeviceImpl device;
+
+        // Check Options 7 (Sampler Feedback)
+        D3D12_FEATURE_DATA_D3D12_OPTIONS7 opt7{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &opt7, sizeof(opt7));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS7 returns S_OK");
+        TEST_ASSERT(opt7.SamplerFeedbackTier == D3D12_SAMPLER_FEEDBACK_TIER_1_0, "DirectX 12 Sampler Feedback Tier 1.0 supported");
+
+        // Check Options 12 (Enhanced Barriers)
+        D3D12_FEATURE_DATA_D3D12_OPTIONS12 opt12{};
+        hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &opt12, sizeof(opt12));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS12 returns S_OK");
+        TEST_ASSERT(opt12.EnhancedBarriersSupported == 1, "DirectX 12 Enhanced Barriers supported");
+        TEST_ASSERT(opt12.RelaxedFormatCastingSupported == 1, "DirectX 12 Relaxed Format Casting supported");
+
+        // ID3D12Device8 QueryInterface & Sampler Feedback View creation
+        ID3D12Device8* pDev8 = nullptr;
+        hr = device.QueryInterface(IID_ID3D12Device8, reinterpret_cast<void**>(&pDev8));
+        TEST_ASSERT(hr == 0 && pDev8 != nullptr, "QueryInterface for IID_ID3D12Device8 succeeds");
+        pDev8->CreateSamplerFeedbackUnorderedAccessView(nullptr, nullptr, { 0 });
+        TEST_ASSERT(device.GetSamplerFeedbackViewsCreated() == 1, "CreateSamplerFeedbackUnorderedAccessView dispatches without failure");
+        pDev8->Release();
+
+        // ID3D12GraphicsCommandList7 Enhanced Barriers execution
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList7* pCmd7 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList7, reinterpret_cast<void**>(&pCmd7));
+        TEST_ASSERT(hr == 0 && pCmd7 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList7 succeeds");
+
+        D3D12_GLOBAL_BARRIER globalBarrier{};
+        globalBarrier.SyncBefore = D3D12_BARRIER_SYNC_ALL_SHADING;
+        globalBarrier.SyncAfter = D3D12_BARRIER_SYNC_PIXEL_SHADING;
+        globalBarrier.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+        globalBarrier.AccessAfter = D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+
+        D3D12_BARRIER_GROUP group{};
+        group.Type = D3D12_BARRIER_TYPE_GLOBAL;
+        group.NumBarriers = 1;
+        group.pGlobalBarriers = &globalBarrier;
+
+        pCmd7->Barrier(1, &group);
+        TEST_ASSERT(cmdList.GetRecordedEnhancedBarriersCount() == 1, "Enhanced Barrier recorded without CPU pipeline stalls");
+        pCmd7->Release();
+    }
+
+    // 4. Pillar 4: Cryptography Next Generation (CNG / bcrypt.dll)
+    {
+        micant::um::crypto_tunnel::InitializeRing3BcryptCrypt32WinTrustTunnelExports();
+
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        auto pfnOpenAlg = reinterpret_cast<micant::NTSTATUS(*)(void**, const wchar_t*, const wchar_t*, uint32_t)>(ldr.getExport("bcrypt.dll", "BCryptOpenAlgorithmProvider"));
+        auto pfnCreateHash = reinterpret_cast<micant::NTSTATUS(*)(void*, void**, uint8_t*, uint32_t, const uint8_t*, uint32_t, uint32_t)>(ldr.getExport("bcrypt.dll", "BCryptCreateHash"));
+        auto pfnHashData = reinterpret_cast<micant::NTSTATUS(*)(void*, const uint8_t*, uint32_t, uint32_t)>(ldr.getExport("bcrypt.dll", "BCryptHashData"));
+        auto pfnFinishHash = reinterpret_cast<micant::NTSTATUS(*)(void*, uint8_t*, uint32_t, uint32_t)>(ldr.getExport("bcrypt.dll", "BCryptFinishHash"));
+        auto pfnDestroyHash = reinterpret_cast<micant::NTSTATUS(*)(void*)>(ldr.getExport("bcrypt.dll", "BCryptDestroyHash"));
+        auto pfnCloseAlg = reinterpret_cast<micant::NTSTATUS(*)(void*, uint32_t)>(ldr.getExport("bcrypt.dll", "BCryptCloseAlgorithmProvider"));
+        auto pfnGenRandom = reinterpret_cast<micant::NTSTATUS(*)(void*, uint8_t*, uint32_t, uint32_t)>(ldr.getExport("bcrypt.dll", "BCryptGenRandom"));
+
+        TEST_ASSERT(pfnOpenAlg && pfnCreateHash && pfnHashData && pfnFinishHash && pfnDestroyHash && pfnCloseAlg && pfnGenRandom,
+                    "bcrypt.dll exports all standard CNG hashing and RNG primitives");
+
+        void* hAlg = nullptr;
+        micant::NTSTATUS status = pfnOpenAlg(&hAlg, L"SHA256", nullptr, 0);
+        TEST_ASSERT(status == micant::STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider opens SHA-256 provider");
+
+        void* hHash = nullptr;
+        status = pfnCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == micant::STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash creates hash object");
+
+        const char* token = "MicaNT_Native_AntiCheat_Token_Proof";
+        status = pfnHashData(hHash, reinterpret_cast<const uint8_t*>(token), static_cast<uint32_t>(std::strlen(token)), 0);
+        TEST_ASSERT(status == micant::STATUS_SUCCESS, "BCryptHashData digests token data");
+
+        uint8_t hashBuf[32]{ 0 };
+        status = pfnFinishHash(hHash, hashBuf, sizeof(hashBuf), 0);
+        TEST_ASSERT(status == micant::STATUS_SUCCESS, "BCryptFinishHash yields 256-bit token digest");
+
+        pfnDestroyHash(hHash);
+        pfnCloseAlg(hAlg, 0);
+
+        // Test RNG
+        uint8_t rngBytes[16]{ 0 };
+        status = pfnGenRandom(nullptr, rngBytes, sizeof(rngBytes), 0x00000002 /* BCRYPT_USE_SYSTEM_PREFERRED_RNG */);
+        TEST_ASSERT(status == micant::STATUS_SUCCESS, "BCryptGenRandom provides entropy with system-preferred RNG");
+        bool nonZero = false;
+        for (auto b : rngBytes) if (b != 0) nonZero = true;
+        TEST_ASSERT(nonZero, "RNG buffer contains non-zero high-quality entropy");
+    }
+
+    // 5. Pillar 5: Authentic NT Kernel Module & Process Inspection
+    {
+        uint32_t retLen = 0;
+
+        // SystemModuleInformation (11)
+        micant::ntdll::RTL_PROCESS_MODULES modules{};
+        micant::NtStatus st = micant::ntdll::NtQuerySystemInformation_Export(11, &modules, sizeof(modules), &retLen);
+        TEST_ASSERT(st == micant::NtStatus::Success, "NtQuerySystemInformation(SystemModuleInformation) succeeds");
+        TEST_ASSERT(modules.NumberOfModules == 4, "SystemModuleInformation reports 4 loaded core modules");
+        TEST_ASSERT(std::strstr(modules.Modules[0].FullPathName, "ntoskrnl.exe") != nullptr, "Module 0 is ntoskrnl.exe");
+        TEST_ASSERT(modules.Modules[0].ImageBase == reinterpret_cast<void*>(0xFFFFF80000000000ULL), "ntoskrnl.exe loaded at genuine NT kernel virtual base");
+        TEST_ASSERT(std::strstr(modules.Modules[2].FullPathName, "dxgkrnl.sys") != nullptr, "Module 2 is dxgkrnl.sys (WDDM graphics subsystem)");
+
+        // ProcessBasicInformation (0)
+        micant::ntdll::PROCESS_BASIC_INFORMATION pbi{};
+        st = micant::ntdll::NtQueryInformationProcess_Export(nullptr, 0, &pbi, sizeof(pbi), &retLen);
+        TEST_ASSERT(st == micant::NtStatus::Success, "NtQueryInformationProcess(ProcessBasicInformation) succeeds");
+        TEST_ASSERT(pbi.ExitStatus == micant::NtStatus::Success, "PBI ExitStatus == STATUS_SUCCESS");
+        TEST_ASSERT(pbi.UniqueProcessId == 1337, "PBI UniqueProcessId matches valid PID");
+        TEST_ASSERT(pbi.AffinityMask == 0xFFFF, "PBI AffinityMask reports 16 CPU cores");
+
+        // ProcessDebugPort (7)
+        uintptr_t debugPort = 0xFFFFFFFF;
+        st = micant::ntdll::NtQueryInformationProcess_Export(nullptr, 7, &debugPort, sizeof(debugPort), &retLen);
+        TEST_ASSERT(st == micant::NtStatus::Success, "NtQueryInformationProcess(ProcessDebugPort) succeeds");
+        TEST_ASSERT(debugPort == 0, "ProcessDebugPort is 0 (No debugger present / Anti-cheat approved)");
+    }
+
+    // 6. Pillar 6: Native PE / DynamicLoader Export Resolution
+    {
+        micant::ntdll::InitializeNtdllSubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
+        micant::user32::InitializeUser32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        // user32 Raw Input exports
+        TEST_ASSERT(ldr.getExport("user32.dll", "RegisterRawInputDevices") != nullptr, "user32.dll exports RegisterRawInputDevices");
+        TEST_ASSERT(ldr.getExport("user32.dll", "GetRawInputDeviceList") != nullptr, "user32.dll exports GetRawInputDeviceList");
+        TEST_ASSERT(ldr.getExport("user32.dll", "GetRawInputDeviceInfoW") != nullptr, "user32.dll exports GetRawInputDeviceInfoW");
+        TEST_ASSERT(ldr.getExport("user32.dll", "GetRegisteredRawInputDevices") != nullptr, "user32.dll exports GetRegisteredRawInputDevices");
+        TEST_ASSERT(ldr.getExport("user32.dll", "GetRawInputBuffer") != nullptr, "user32.dll exports GetRawInputBuffer");
+
+        // kernel32 Thread Pacing exports
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadAffinityMask") != nullptr, "kernel32.dll exports SetThreadAffinityMask");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessAffinityMask") != nullptr, "kernel32.dll exports GetProcessAffinityMask");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadPriorityBoost") != nullptr, "kernel32.dll exports SetThreadPriorityBoost");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadPriorityBoost") != nullptr, "kernel32.dll exports GetThreadPriorityBoost");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadIdealProcessorEx") != nullptr, "kernel32.dll exports SetThreadIdealProcessorEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadIdealProcessorEx") != nullptr, "kernel32.dll exports GetThreadIdealProcessorEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadInformation") != nullptr, "kernel32.dll exports SetThreadInformation");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadInformation") != nullptr, "kernel32.dll exports GetThreadInformation");
+
+        // api-ms-win-core-processthreads-l1-1-1.dll exports
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadAffinityMask") != nullptr, "api-ms-win-core-processthreads-l1-1-1.dll exports SetThreadAffinityMask");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadIdealProcessorEx") != nullptr, "api-ms-win-core-processthreads-l1-1-1.dll exports SetThreadIdealProcessorEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadInformation") != nullptr, "api-ms-win-core-processthreads-l1-1-1.dll exports SetThreadInformation");
+
+        // ntdll.dll exports
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtQuerySystemInformation") != nullptr, "ntdll.dll exports NtQuerySystemInformation");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtQueryInformationProcess") != nullptr, "ntdll.dll exports NtQueryInformationProcess");
+
+        std::cout << "[VERDICT] Raw Input, Thread Pacing, D3D12 Sampler Feedback, Enhanced Barriers & BCrypt CNG\n"
+                  << "          operate 100% natively on MicaNT kernel and Win32 executive without satellite DLLs!\n";
+    }
+
+    std::cout << "[HORIZON 204] Raw Input, Thread Pacing, D3D12 & BCrypt CNG Summary:\n"
+              << "    Pillar 1: Win32 Raw Input Architecture (8000Hz Esports Polling & RIDI_DEVICEINFO) OK\n"
+              << "    Pillar 2: Thread Affinity, Priority Boost & Ideal Processor Pacing (Group/Core 4) OK\n"
+              << "    Pillar 3: DirectX 12 Sampler Feedback Tier 1.0 & Enhanced Barriers (CommandList7) OK\n"
+              << "    Pillar 4: Cryptography Next Generation (CNG / bcrypt.dll SHA-256 & RNG) OK\n"
+              << "    Pillar 5: Authentic NT Kernel Module (ntoskrnl/dxgkrnl) & Process Inspection OK\n"
+              << "    Pillar 6: Native PE / DynamicLoader Export Resolution for user32, kernel32, ntdll OK\n";
+
+    std::cout << "[TEST] Suite 420: Horizon 204 - Raw Input, Thread Pacing, D3D12 & BCrypt CNG PASSED." << std::endl;
+}

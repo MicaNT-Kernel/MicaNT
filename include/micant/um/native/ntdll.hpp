@@ -1248,6 +1248,79 @@ struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     uint64_t BootFlags;
 };
 
+struct RTL_PROCESS_MODULE_INFORMATION {
+    void* Section{nullptr};
+    void* MappedBase{nullptr};
+    void* ImageBase{nullptr};
+    uint32_t ImageSize{0};
+    uint32_t Flags{0};
+    uint16_t LoadOrderIndex{0};
+    uint16_t InitOrderIndex{0};
+    uint16_t LoadCount{1};
+    uint16_t OffsetToFileName{0};
+    char FullPathName[256]{0};
+};
+
+struct RTL_PROCESS_MODULES {
+    uint32_t NumberOfModules{4};
+    RTL_PROCESS_MODULE_INFORMATION Modules[4]{};
+};
+
+struct PROCESS_BASIC_INFORMATION {
+    NtStatus ExitStatus{NtStatus::Success};
+    void* PebBaseAddress{nullptr};
+    uintptr_t AffinityMask{0xFFFF};
+    int32_t BasePriority{8};
+    uintptr_t UniqueProcessId{1337};
+    uintptr_t InheritedFromUniqueProcessId{4};
+};
+
+inline NtStatus WINAPI NtQueryInformationProcess_Export(
+    void* /*ProcessHandle*/,
+    uint32_t ProcessInformationClass,
+    void* ProcessInformation,
+    uint32_t ProcessInformationLength,
+    uint32_t* ReturnLength
+) noexcept {
+    if (!ProcessInformation && ProcessInformationLength > 0) {
+        return NtStatus::InvalidParameter;
+    }
+
+    switch (ProcessInformationClass) {
+        case 0: { // ProcessBasicInformation
+            if (ProcessInformationLength < sizeof(PROCESS_BASIC_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(PROCESS_BASIC_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<PROCESS_BASIC_INFORMATION*>(ProcessInformation);
+            pInfo->ExitStatus = NtStatus::Success;
+            pInfo->PebBaseAddress = reinterpret_cast<void*>(0x00007FF6FFFF0000ULL);
+            pInfo->AffinityMask = 0xFFFF; // 16 cores
+            pInfo->BasePriority = 8;      // NORMAL_PRIORITY_CLASS
+            pInfo->UniqueProcessId = 1337;
+            pInfo->InheritedFromUniqueProcessId = 4; // System PID
+            if (ReturnLength) *ReturnLength = sizeof(PROCESS_BASIC_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 7: { // ProcessDebugPort
+            if (ProcessInformationLength < sizeof(uintptr_t)) {
+                if (ReturnLength) *ReturnLength = sizeof(uintptr_t);
+                return NtStatus::InfoLengthMismatch;
+            }
+            *reinterpret_cast<uintptr_t*>(ProcessInformation) = 0; // No debugger
+            if (ReturnLength) *ReturnLength = sizeof(uintptr_t);
+            return NtStatus::Success;
+        }
+        default: {
+            if (ProcessInformation && ProcessInformationLength > 0) {
+                std::memset(ProcessInformation, 0, ProcessInformationLength);
+            }
+            if (ReturnLength) *ReturnLength = ProcessInformationLength;
+            return NtStatus::Success;
+        }
+    }
+}
+
 inline NtStatus WINAPI NtQuerySystemInformation_Export(
     uint32_t SystemInformationClass,
     void* SystemInformation,
@@ -1274,6 +1347,42 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->ActiveProcessorsAffinityMask = 0xFFFF; // 16 cores
             pInfo->NumberOfProcessors = 16;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BASIC_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 11: { // SystemModuleInformation
+            if (SystemInformationLength < sizeof(RTL_PROCESS_MODULES)) {
+                if (ReturnLength) *ReturnLength = sizeof(RTL_PROCESS_MODULES);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pMods = reinterpret_cast<RTL_PROCESS_MODULES*>(SystemInformation);
+            std::memset(pMods, 0, sizeof(RTL_PROCESS_MODULES));
+            pMods->NumberOfModules = 4;
+
+            // Module 0: ntoskrnl.exe
+            pMods->Modules[0].ImageBase = reinterpret_cast<void*>(0xFFFFF80000000000ULL);
+            pMods->Modules[0].ImageSize = 0x01000000;
+            pMods->Modules[0].OffsetToFileName = 22;
+            std::strncpy(pMods->Modules[0].FullPathName, "\\SystemRoot\\system32\\ntoskrnl.exe", sizeof(pMods->Modules[0].FullPathName) - 1);
+
+            // Module 1: hal.dll
+            pMods->Modules[1].ImageBase = reinterpret_cast<void*>(0xFFFFF80001000000ULL);
+            pMods->Modules[1].ImageSize = 0x00100000;
+            pMods->Modules[1].OffsetToFileName = 22;
+            std::strncpy(pMods->Modules[1].FullPathName, "\\SystemRoot\\system32\\hal.dll", sizeof(pMods->Modules[1].FullPathName) - 1);
+
+            // Module 2: dxgkrnl.sys
+            pMods->Modules[2].ImageBase = reinterpret_cast<void*>(0xFFFFF80001100000ULL);
+            pMods->Modules[2].ImageSize = 0x00400000;
+            pMods->Modules[2].OffsetToFileName = 30;
+            std::strncpy(pMods->Modules[2].FullPathName, "\\SystemRoot\\system32\\drivers\\dxgkrnl.sys", sizeof(pMods->Modules[2].FullPathName) - 1);
+
+            // Module 3: fltmgr.sys
+            pMods->Modules[3].ImageBase = reinterpret_cast<void*>(0xFFFFF80001500000ULL);
+            pMods->Modules[3].ImageSize = 0x00080000;
+            pMods->Modules[3].OffsetToFileName = 30;
+            std::strncpy(pMods->Modules[3].FullPathName, "\\SystemRoot\\system32\\drivers\\fltmgr.sys", sizeof(pMods->Modules[3].FullPathName) - 1);
+
+            if (ReturnLength) *ReturnLength = sizeof(RTL_PROCESS_MODULES);
             return NtStatus::Success;
         }
         case 35: { // SystemKernelDebuggerInformation
@@ -2122,6 +2231,7 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQueryObject", reinterpret_cast<void*>(NtQueryObject));
     ldr.registerExport("ntdll.dll", "NtQuerySecurityObject", reinterpret_cast<void*>(NtQuerySecurityObject));
     ldr.registerExport("ntdll.dll", "NtQuerySystemInformation", reinterpret_cast<void*>(NtQuerySystemInformation_Export));
+    ldr.registerExport("ntdll.dll", "NtQueryInformationProcess", reinterpret_cast<void*>(NtQueryInformationProcess_Export));
     ldr.registerExport("ntdll.dll", "NtQueryVolumeInformationFile", reinterpret_cast<void*>(NtQueryVolumeInformationFile));
     ldr.registerExport("ntdll.dll", "NtSetEaFile", reinterpret_cast<void*>(NtSetEaFile));
     ldr.registerExport("ntdll.dll", "NtSetSecurityObject", reinterpret_cast<void*>(NtSetSecurityObject));

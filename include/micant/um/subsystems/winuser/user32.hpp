@@ -33,6 +33,7 @@ namespace micant::user32 {
 // ============================================================================
 
 using UINT    = uint32_t;
+using PUINT   = uint32_t*;
 using WPARAM  = uintptr_t;
 using LPARAM  = intptr_t;
 using LRESULT = intptr_t;
@@ -268,6 +269,15 @@ inline constexpr uint16_t RI_MOUSE_MIDDLE_BUTTON_DOWN = 0x0010;
 inline constexpr uint16_t RI_MOUSE_MIDDLE_BUTTON_UP   = 0x0020;
 inline constexpr uint16_t RI_MOUSE_WHEEL              = 0x0400;
 
+inline constexpr uint32_t RIDI_PREPARSEDDATA = 0x20000005U;
+inline constexpr uint32_t RIDI_DEVICENAME     = 0x20000007U;
+inline constexpr uint32_t RIDI_DEVICEINFO     = 0x2000000BU;
+
+inline constexpr uint32_t RIDEV_REMOVE        = 0x00000001U;
+inline constexpr uint32_t RIDEV_NOLEGACY      = 0x00000030U;
+inline constexpr uint32_t RIDEV_CAPTUREMOUSE  = 0x00000200U;
+inline constexpr uint32_t RIDEV_DEVNOTIFY     = 0x00002000U;
+
 struct RAWINPUTHEADER {
     uint32_t dwType{0};
     uint32_t dwSize{0};
@@ -294,13 +304,22 @@ struct RAWKEYBOARD {
     uint32_t ExtraInformation{0};
 };
 
+struct RAWHID {
+    uint32_t dwSizeHid{0};
+    uint32_t dwCount{0};
+    uint8_t  bRawData[1]{0};
+};
+
 struct RAWINPUT {
     RAWINPUTHEADER header{};
     union {
         RAWMOUSE    mouse;
         RAWKEYBOARD keyboard;
+        RAWHID      hid;
     } data{};
 };
+using PRAWINPUT  = RAWINPUT*;
+using LPRAWINPUT = RAWINPUT*;
 
 struct RAWINPUTDEVICE {
     uint16_t    usUsagePage{0};
@@ -308,6 +327,49 @@ struct RAWINPUTDEVICE {
     uint32_t    dwFlags{0};
     win32::HWND hwndTarget{nullptr};
 };
+using PCRAWINPUTDEVICE = const RAWINPUTDEVICE*;
+using PRAWINPUTDEVICE  = RAWINPUTDEVICE*;
+
+struct RAWINPUTDEVICELIST {
+    win32::HANDLE hDevice{nullptr};
+    uint32_t      dwType{0};
+};
+using PRAWINPUTDEVICELIST = RAWINPUTDEVICELIST*;
+
+struct RID_DEVICE_INFO_MOUSE {
+    uint32_t dwId{0};
+    uint32_t dwNumberOfButtons{0};
+    uint32_t dwSampleRate{0};
+    win32::BOOL fHasHorizontalWheel{0};
+};
+
+struct RID_DEVICE_INFO_KEYBOARD {
+    uint32_t dwType{0};
+    uint32_t dwSubType{0};
+    uint32_t dwKeyboardMode{0};
+    uint32_t dwNumberOfFunctionKeys{0};
+    uint32_t dwNumberOfIndicators{0};
+    uint32_t dwNumberOfKeysTotal{0};
+};
+
+struct RID_DEVICE_INFO_HID {
+    uint32_t dwVendorId{0};
+    uint32_t dwProductId{0};
+    uint32_t dwVersionNumber{0};
+    uint16_t usUsagePage{0};
+    uint16_t usUsage{0};
+};
+
+struct RID_DEVICE_INFO {
+    uint32_t cbSize{sizeof(RID_DEVICE_INFO)};
+    uint32_t dwType{0};
+    union {
+        RID_DEVICE_INFO_MOUSE    mouse;
+        RID_DEVICE_INFO_KEYBOARD keyboard;
+        RID_DEVICE_INFO_HID      hid;
+    } u{};
+};
+using PRID_DEVICE_INFO = RID_DEVICE_INFO*;
 
 // ============================================================================
 // 3. Window Object & Backbuffer Compositor Surface
@@ -845,6 +907,128 @@ public:
         return static_cast<UINT>(-1);
     }
 
+    UINT getRawInputDeviceList(PRAWINPUTDEVICELIST pRawInputDeviceList, PUINT puiNumDevices, UINT cbSize) {
+        if (!puiNumDevices) return static_cast<UINT>(-1);
+        if (pRawInputDeviceList && cbSize < sizeof(RAWINPUTDEVICELIST)) return static_cast<UINT>(-1);
+
+        constexpr UINT kDevCount = 3;
+        if (!pRawInputDeviceList) {
+            *puiNumDevices = kDevCount;
+            return 0;
+        }
+
+        if (*puiNumDevices < kDevCount) {
+            *puiNumDevices = kDevCount;
+            return static_cast<UINT>(-1);
+        }
+
+        pRawInputDeviceList[0] = { reinterpret_cast<win32::HANDLE>(0x000000000000B001ULL), RIM_TYPEMOUSE };
+        pRawInputDeviceList[1] = { reinterpret_cast<win32::HANDLE>(0x000000000000B002ULL), RIM_TYPEKEYBOARD };
+        pRawInputDeviceList[2] = { reinterpret_cast<win32::HANDLE>(0x000000000000B003ULL), RIM_TYPEHID };
+        *puiNumDevices = kDevCount;
+        return kDevCount;
+    }
+
+    UINT getRawInputDeviceInfoW(win32::HANDLE hDevice, UINT uiCommand, void* pData, PUINT pcbSize) {
+        if (!pcbSize) return static_cast<UINT>(-1);
+
+        uintptr_t devId = reinterpret_cast<uintptr_t>(hDevice);
+        if (uiCommand == RIDI_DEVICENAME) {
+            const wchar_t* name = L"\\\\?\\HID#VID_1532&PID_0078&MI_00#7&2b781e8&0&0000#{378de44c-5643-11d1-acf9-00a0c9a06748}";
+            if (devId == 0x000000000000B002ULL) {
+                name = L"\\\\?\\HID#VID_046D&PID_C332&MI_00#7&1a941f1&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}";
+            } else if (devId == 0x000000000000B003ULL) {
+                name = L"\\\\?\\HID#VID_045E&PID_028E&IG_00#7&3c829e1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+            }
+            UINT reqChars = static_cast<UINT>(std::wcslen(name) + 1);
+            if (!pData || *pcbSize < reqChars) {
+                *pcbSize = reqChars;
+                return static_cast<UINT>(-1);
+            }
+            std::wmemcpy(reinterpret_cast<wchar_t*>(pData), name, reqChars);
+            return reqChars;
+        }
+
+        if (uiCommand == RIDI_DEVICEINFO) {
+            UINT reqBytes = sizeof(RID_DEVICE_INFO);
+            if (!pData || *pcbSize < reqBytes) {
+                *pcbSize = reqBytes;
+                return static_cast<UINT>(-1);
+            }
+            RID_DEVICE_INFO* pInfo = reinterpret_cast<RID_DEVICE_INFO*>(pData);
+            std::memset(pInfo, 0, sizeof(RID_DEVICE_INFO));
+            pInfo->cbSize = sizeof(RID_DEVICE_INFO);
+            if (devId == 0x000000000000B001ULL) {
+                pInfo->dwType = RIM_TYPEMOUSE;
+                pInfo->u.mouse.dwId = 1;
+                pInfo->u.mouse.dwNumberOfButtons = 5;
+                pInfo->u.mouse.dwSampleRate = 8000;
+                pInfo->u.mouse.fHasHorizontalWheel = 1;
+            } else if (devId == 0x000000000000B002ULL) {
+                pInfo->dwType = RIM_TYPEKEYBOARD;
+                pInfo->u.keyboard.dwType = 81;
+                pInfo->u.keyboard.dwSubType = 0;
+                pInfo->u.keyboard.dwKeyboardMode = 1;
+                pInfo->u.keyboard.dwNumberOfFunctionKeys = 12;
+                pInfo->u.keyboard.dwNumberOfIndicators = 3;
+                pInfo->u.keyboard.dwNumberOfKeysTotal = 104;
+            } else {
+                pInfo->dwType = RIM_TYPEHID;
+                pInfo->u.hid.dwVendorId = 0x045E;
+                pInfo->u.hid.dwProductId = 0x028E;
+                pInfo->u.hid.dwVersionNumber = 0x0114;
+                pInfo->u.hid.usUsagePage = 1;
+                pInfo->u.hid.usUsage = 5; // Gamepad
+            }
+            return reqBytes;
+        }
+
+        return static_cast<UINT>(-1);
+    }
+
+    UINT getRegisteredRawInputDevices(PRAWINPUTDEVICE pRawInputDevices, PUINT puiNumDevices, UINT cbSize) {
+        if (!puiNumDevices) return static_cast<UINT>(-1);
+        if (pRawInputDevices && cbSize < sizeof(RAWINPUTDEVICE)) return static_cast<UINT>(-1);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        UINT count = static_cast<UINT>(registeredRawDevices_.size());
+        if (!pRawInputDevices) {
+            *puiNumDevices = count;
+            return 0;
+        }
+
+        if (*puiNumDevices < count) {
+            *puiNumDevices = count;
+            return static_cast<UINT>(-1);
+        }
+
+        for (UINT i = 0; i < count; ++i) {
+            pRawInputDevices[i] = registeredRawDevices_[i];
+        }
+        *puiNumDevices = count;
+        return count;
+    }
+
+    UINT getRawInputBuffer(PRAWINPUT pData, PUINT pcbSize, UINT cbSizeHeader) {
+        if (!pcbSize || cbSizeHeader < sizeof(RAWINPUTHEADER)) return static_cast<UINT>(-1);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        UINT availableBytes = static_cast<UINT>(rawInputBuffer_.size() * sizeof(RAWINPUT));
+        if (!pData || *pcbSize < availableBytes) {
+            *pcbSize = availableBytes;
+            return 0;
+        }
+
+        UINT count = 0;
+        RAWINPUT* outPtr = pData;
+        for (const auto& [_, ri] : rawInputBuffer_) {
+            *outPtr++ = ri;
+            count++;
+        }
+        rawInputBuffer_.clear();
+        return count;
+    }
+
     HRAWINPUT injectRawMouse(win32::HWND hWnd, int32_t dx, int32_t dy, uint16_t buttonFlags) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         HRAWINPUT handle = reinterpret_cast<HRAWINPUT>(nextRawHandle_++);
@@ -1365,6 +1549,22 @@ inline win32::BOOL RegisterRawInputDevices(const RAWINPUTDEVICE* pRawInputDevice
 
 inline UINT GetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, void* pData, UINT* pcbSize, UINT cbSizeHeader) noexcept {
     return WindowManager::get().getRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
+}
+
+inline UINT GetRawInputDeviceList(PRAWINPUTDEVICELIST pRawInputDeviceList, PUINT puiNumDevices, UINT cbSize) noexcept {
+    return WindowManager::get().getRawInputDeviceList(pRawInputDeviceList, puiNumDevices, cbSize);
+}
+
+inline UINT GetRawInputDeviceInfoW(win32::HANDLE hDevice, UINT uiCommand, void* pData, PUINT pcbSize) noexcept {
+    return WindowManager::get().getRawInputDeviceInfoW(hDevice, uiCommand, pData, pcbSize);
+}
+
+inline UINT GetRegisteredRawInputDevices(PRAWINPUTDEVICE pRawInputDevices, PUINT puiNumDevices, UINT cbSize) noexcept {
+    return WindowManager::get().getRegisteredRawInputDevices(pRawInputDevices, puiNumDevices, cbSize);
+}
+
+inline UINT GetRawInputBuffer(PRAWINPUT pData, PUINT pcbSize, UINT cbSizeHeader) noexcept {
+    return WindowManager::get().getRawInputBuffer(pData, pcbSize, cbSizeHeader);
 }
 
 // ----------------------------------------------------------------------------
@@ -2756,6 +2956,10 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "EndPaint", reinterpret_cast<void*>(EndPaint));
     ldr.registerExport("user32.dll", "RegisterRawInputDevices", reinterpret_cast<void*>(RegisterRawInputDevices));
     ldr.registerExport("user32.dll", "GetRawInputData", reinterpret_cast<void*>(GetRawInputData));
+    ldr.registerExport("user32.dll", "GetRawInputDeviceList", reinterpret_cast<void*>(GetRawInputDeviceList));
+    ldr.registerExport("user32.dll", "GetRawInputDeviceInfoW", reinterpret_cast<void*>(GetRawInputDeviceInfoW));
+    ldr.registerExport("user32.dll", "GetRegisteredRawInputDevices", reinterpret_cast<void*>(GetRegisteredRawInputDevices));
+    ldr.registerExport("user32.dll", "GetRawInputBuffer", reinterpret_cast<void*>(GetRawInputBuffer));
     ldr.registerExport("user32.dll", "MsgWaitForMultipleObjects", reinterpret_cast<void*>(MsgWaitForMultipleObjects));
     ldr.registerExport("user32.dll", "LockWorkStation", reinterpret_cast<void*>(LockWorkStation));
     ldr.registerExport("user32.dll", "OpenDesktopW", reinterpret_cast<void*>(OpenDesktopW));
