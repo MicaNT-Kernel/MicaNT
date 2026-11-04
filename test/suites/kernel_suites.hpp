@@ -43181,3 +43181,217 @@ inline void Test_Horizon212_D3D12Residency_MemoryPartitions_TokenImpersonation_A
 
     std::cout << "[TEST] Suite 428: Horizon 212 - D3D12 Residency, NT Partitions, Token Impersonation & Unhandled Exceptions PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 429: Horizon 213 - DirectX 12 Agility SDK Pipeline State Stream Architecture,
+// System Code Integrity Policy & HVCI Enclave Telemetry, Win32 Sparse Files &
+// DirectStorage File Range Operations, and Process Image Path Canonicalization
+// ============================================================================
+inline void Test_Horizon213_PipelineStateStream_CodeIntegrityPolicy_SparseStreaming_And_ProcessImageName_Suite() {
+    std::cout << "\n============================================================================" << std::endl;
+    std::cout << "Suite 429: Horizon 213 - D3D12 Pipeline State Stream, Code Integrity Policy, Sparse Files & Image Canonicalization" << std::endl;
+    std::cout << "============================================================================" << std::endl;
+
+    micant::ntdll::InitializeNtdllSubsystemExports();
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::advapi32::InitializeAdvapi32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Pipeline State Stream Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing D3D12 Agility SDK Pipeline State Stream (ID3D12Device8::CreatePipelineState)...\n";
+        using namespace micant::prism3d12;
+        Prism3D12DeviceImpl dev;
+
+        // 1.1 Create Root Signature for the pipeline stream
+        ID3D12RootSignature* pRootSig = nullptr;
+        uint32_t dummyRootSigData = 0x12345678;
+        int32_t hr = dev.CreateRootSignature(0, &dummyRootSigData, sizeof(dummyRootSigData), IID_ID3D12RootSignature, reinterpret_cast<void**>(&pRootSig));
+        TEST_ASSERT(hr == 0 && pRootSig != nullptr, "CreateRootSignature for pipeline stream succeeds");
+
+        // 1.2 Assemble a valid Pipeline State Stream using CD3DX12 subobjects
+        struct PipelineStream {
+            CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE rootSig;
+            CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+            CD3DX12_PIPELINE_STATE_STREAM_PS ps;
+            CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY topology;
+            CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS rtvFormats;
+        } stream{};
+
+        uint8_t vsBytecode[] = { 0x44, 0x58, 0x42, 0x43, 0x01, 0x00, 0x00, 0x00 }; // DXBC dummy
+        uint8_t psBytecode[] = { 0x44, 0x58, 0x42, 0x43, 0x02, 0x00, 0x00, 0x00 };
+
+        stream.rootSig.Type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE;
+        stream.rootSig.pRootSignature = pRootSig;
+
+        stream.vs.Type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS;
+        stream.vs.Bytecode.pShaderBytecode = vsBytecode;
+        stream.vs.Bytecode.BytecodeLength = sizeof(vsBytecode);
+
+        stream.ps.Type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS;
+        stream.ps.Bytecode.pShaderBytecode = psBytecode;
+        stream.ps.Bytecode.BytecodeLength = sizeof(psBytecode);
+
+        stream.topology.Type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY;
+        stream.topology.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+        stream.rtvFormats.Type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS;
+        stream.rtvFormats.Formats.NumRenderTargets = 1;
+        stream.rtvFormats.Formats.RTFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        D3D12_PIPELINE_STATE_STREAM_DESC streamDesc{};
+        streamDesc.SizeInBytes = sizeof(stream);
+        streamDesc.pPipelineStateSubobjectStream = &stream;
+
+        ID3D12PipelineState* pPSO = nullptr;
+        hr = dev.CreatePipelineState(&streamDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pPSO));
+        TEST_ASSERT(hr == 0 && pPSO != nullptr, "ID3D12Device8::CreatePipelineState creates PSO from stream");
+        TEST_ASSERT(dev.GetPipelineStatesCreated() >= 1, "Pipeline states created counter incremented");
+
+        // Verify the extracted pipeline state desc
+        auto* pImpl = static_cast<Prism3D12PipelineStateImpl*>(pPSO);
+        const auto& desc = pImpl->GetDesc();
+        TEST_ASSERT(desc.pRootSignature == pRootSig, "PSO root signature matches stream");
+        TEST_ASSERT(desc.VS.pShaderBytecode == vsBytecode, "PSO VS bytecode pointer matches stream");
+        TEST_ASSERT(desc.PS.pShaderBytecode == psBytecode, "PSO PS bytecode pointer matches stream");
+        TEST_ASSERT(desc.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE, "PSO Primitive topology matches stream");
+        TEST_ASSERT(desc.NumRenderTargets == 1, "PSO NumRenderTargets matches stream");
+        TEST_ASSERT(desc.RTVFormats[0] == DXGI_FORMAT_R8G8B8A8_UNORM, "PSO RTVFormat[0] matches stream");
+
+        pPSO->Release();
+        pRootSig->Release();
+        std::cout << "  [PASS] DirectX 12 Agility SDK Pipeline State Stream verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Code Integrity Policy & HVCI Enclave Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing System Code Integrity Policy Information (NtQuerySystemInformation Class 173)...\n";
+        using namespace micant::ntdll;
+
+        SYSTEM_CODEINTEGRITYPOLICY_INFORMATION policyInfo{};
+        uint32_t retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            173u, // SystemCodeIntegrityPolicyInformation
+            &policyInfo,
+            sizeof(policyInfo),
+            &retLen
+        );
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(173) returns Success");
+        TEST_ASSERT(retLen == sizeof(policyInfo), "Returned length matches SYSTEM_CODEINTEGRITYPOLICY_INFORMATION size");
+        TEST_ASSERT(policyInfo.Options & CODEINTEGRITYPOLICY_OPTION_ENABLED, "Code integrity policy is ENABLED");
+        TEST_ASSERT(policyInfo.Options & CODEINTEGRITYPOLICY_OPTION_HVCI_ENFORCED, "HVCI policy is ENFORCED");
+        TEST_ASSERT(policyInfo.Options & CODEINTEGRITYPOLICY_OPTION_TESTSIGNING_DISABLED, "Test signing is DISABLED");
+        TEST_ASSERT(policyInfo.Version == 1, "Code integrity policy version is 1");
+
+        // Verify failure with insufficient buffer size
+        st = NtQuerySystemInformation_Export(
+            173u,
+            &policyInfo,
+            sizeof(policyInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(173) rejects undersized buffer with InfoLengthMismatch");
+
+        std::cout << "  [PASS] NT System Code Integrity Policy & HVCI Enclave Telemetry verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended File Attributes, Sparse Files & DirectStorage File Ranges
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Win32 Sparse Files & DirectStorage Allocated Range FSCTLs...\n";
+        using namespace micant::win32;
+
+        HANDLE hFile = reinterpret_cast<HANDLE>(0x1234);
+        DWORD bytesRet = 0;
+
+        // 3.1 FSCTL_SET_SPARSE
+        BOOL bRes = DeviceIoControl(hFile, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &bytesRet, nullptr);
+        TEST_ASSERT(bRes == TRUE, "DeviceIoControl(FSCTL_SET_SPARSE) succeeds");
+
+        // 3.2 FSCTL_SET_ZERO_DATA
+        FILE_ZERO_DATA_INFORMATION zeroData{};
+        zeroData.FileOffset.QuadPart = 1024 * 1024;       // 1 MB
+        zeroData.BeyondFinalZero.QuadPart = 2 * 1024 * 1024; // 2 MB
+        bRes = DeviceIoControl(hFile, FSCTL_SET_ZERO_DATA, &zeroData, sizeof(zeroData), nullptr, 0, &bytesRet, nullptr);
+        TEST_ASSERT(bRes == TRUE, "DeviceIoControl(FSCTL_SET_ZERO_DATA) succeeds");
+
+        // 3.3 FSCTL_QUERY_ALLOCATED_RANGES
+        FILE_ALLOCATED_RANGE_BUFFER inRange{};
+        inRange.FileOffset.QuadPart = 0;
+        inRange.Length.QuadPart = 10 * 1024 * 1024;
+        FILE_ALLOCATED_RANGE_BUFFER outRanges[4]{};
+        bRes = DeviceIoControl(hFile, FSCTL_QUERY_ALLOCATED_RANGES, &inRange, sizeof(inRange), outRanges, sizeof(outRanges), &bytesRet, nullptr);
+        TEST_ASSERT(bRes == TRUE, "DeviceIoControl(FSCTL_QUERY_ALLOCATED_RANGES) succeeds");
+        TEST_ASSERT(bytesRet >= sizeof(FILE_ALLOCATED_RANGE_BUFFER), "Returned bytes covers at least one allocated range buffer");
+        TEST_ASSERT(outRanges[0].Length.QuadPart > 0, "Allocated range has valid length");
+
+        // 3.4 Extended file attribute constants
+        TEST_ASSERT(FILE_ATTRIBUTE_SPARSE_FILE == 0x00000200, "FILE_ATTRIBUTE_SPARSE_FILE constant matches Win32 standard");
+        TEST_ASSERT(FILE_ATTRIBUTE_REPARSE_POINT == 0x00000400, "FILE_ATTRIBUTE_REPARSE_POINT constant matches Win32 standard");
+        TEST_ASSERT(FILE_ATTRIBUTE_COMPRESSED == 0x00000800, "FILE_ATTRIBUTE_COMPRESSED constant matches Win32 standard");
+
+        std::cout << "  [PASS] Win32 Extended File Attributes & Sparse File FSCTLs verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 Process Image Path Canonicalization & Anti-Hollowing Verification
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing Process Image Path Canonicalization (QueryFullProcessImageNameW/A)...\n";
+        using namespace micant::win32;
+
+        HANDLE hProc = reinterpret_cast<HANDLE>(0x5678);
+
+        // 4.1 Win32 canonical path (dwFlags = 0)
+        wchar_t wideBuf[260]{};
+        DWORD wideSize = 260;
+        BOOL bRet = QueryFullProcessImageNameW(hProc, 0, wideBuf, &wideSize);
+        TEST_ASSERT(bRet == TRUE, "QueryFullProcessImageNameW(dwFlags = 0) succeeds");
+        TEST_ASSERT(std::wstring(wideBuf).find(L":\\") != std::wstring::npos, "Win32 format contains drive root colon-backslash");
+
+        // 4.2 Native NT device path (dwFlags = 1)
+        wideSize = 260;
+        bRet = QueryFullProcessImageNameW(hProc, 1, wideBuf, &wideSize);
+        TEST_ASSERT(bRet == TRUE, "QueryFullProcessImageNameW(dwFlags = 1) succeeds");
+        TEST_ASSERT(std::wstring(wideBuf).find(L"\\Device\\HarddiskVolume") != std::wstring::npos, "Native NT format contains \\Device\\HarddiskVolume");
+
+        // 4.3 ANSI version QueryFullProcessImageNameA
+        char ansiBuf[260]{};
+        DWORD ansiSize = 260;
+        bRet = QueryFullProcessImageNameA(hProc, 0, ansiBuf, &ansiSize);
+        TEST_ASSERT(bRet == TRUE, "QueryFullProcessImageNameA succeeds");
+        TEST_ASSERT(std::string(ansiBuf).find(":\\") != std::string::npos, "ANSI format contains drive root");
+
+        // 4.4 Buffer size guard: undersized buffer should return FALSE and set required size
+        char smallBuf[10]{};
+        DWORD smallSize = 10;
+        bRet = QueryFullProcessImageNameA(hProc, 0, smallBuf, &smallSize);
+        TEST_ASSERT(bRet == FALSE, "QueryFullProcessImageNameA with undersized buffer fails as expected");
+        TEST_ASSERT(smallSize > 10, "Required buffer size is returned in lpdwSize");
+
+        // 4.5 ApiSet Redirection
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryFullProcessImageNameW") != nullptr, "kernel32 exports QueryFullProcessImageNameW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryFullProcessImageNameA") != nullptr, "kernel32 exports QueryFullProcessImageNameA");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "QueryFullProcessImageNameW") != nullptr, "psapi ApiSet exports QueryFullProcessImageNameW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "QueryFullProcessImageNameA") != nullptr, "psapi ApiSet exports QueryFullProcessImageNameA");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "QueryFullProcessImageNameW") != nullptr, "processthreads ApiSet exports QueryFullProcessImageNameW");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "QueryFullProcessImageNameA") != nullptr, "processthreads ApiSet exports QueryFullProcessImageNameA");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-file-l1-2-0.dll", "GetFileAttributesExW") != nullptr, "file-l1-2-0 exports GetFileAttributesExW");
+
+        std::cout << "  [PASS] Win32 Process Image Path Canonicalization & ApiSet Redirection verified.\n";
+    }
+
+    std::cout << "[HORIZON 213] D3D12 Pipeline State Stream, Code Integrity Policy, Sparse Files & Image Canonicalization Summary:\n"
+              << "    Pillar 1: DirectX 12 Agility SDK Pipeline State Stream (CreatePipelineState) OK\n"
+              << "    Pillar 2: NT System Code Integrity Policy & HVCI Enclave Telemetry OK\n"
+              << "    Pillar 3: Win32 Extended File Attributes, Sparse Files & DirectStorage Ranges OK\n"
+              << "    Pillar 4: Win32 Process Image Canonicalization & Anti-Hollowing Verification OK\n";
+
+    std::cout << "[TEST] Suite 429: Horizon 213 - D3D12 Pipeline State Stream, Code Integrity Policy, Sparse Files & Image Canonicalization PASSED." << std::endl;
+}

@@ -1447,6 +1447,18 @@ inline constexpr ULONG CODEINTEGRITY_OPTION_UMCI_ENABLED      = 0x00000004;
 inline constexpr ULONG CODEINTEGRITY_OPTION_UMCI_AUDIT        = 0x00000008;
 inline constexpr ULONG CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED = 0x00000400;
 
+struct SYSTEM_CODEINTEGRITYPOLICY_INFORMATION {
+    ULONG Options;
+    ULONG HwId[4];
+    ULONG Version;
+    ULONG Reserved;
+};
+
+inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_ENABLED                = 0x00000001;
+inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_HVCI_ENFORCED          = 0x00000002;
+inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_TESTSIGNING_DISABLED   = 0x00000004;
+inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_DEBUGGING_DISABLED     = 0x00000008;
+
 struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     GUID BootIdentifier;
     ULONG FirmwareType; // 2 = FirmwareTypeUefi
@@ -2170,6 +2182,25 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->Reserved[0] = 0;
             pInfo->Reserved[1] = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 173: { // SystemCodeIntegrityPolicyInformation
+            if (SystemInformationLength < sizeof(SYSTEM_CODEINTEGRITYPOLICY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITYPOLICY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODEINTEGRITYPOLICY_INFORMATION*>(SystemInformation);
+            pInfo->Options = CODEINTEGRITYPOLICY_OPTION_ENABLED | 
+                             CODEINTEGRITYPOLICY_OPTION_HVCI_ENFORCED | 
+                             CODEINTEGRITYPOLICY_OPTION_TESTSIGNING_DISABLED |
+                             CODEINTEGRITYPOLICY_OPTION_DEBUGGING_DISABLED;
+            pInfo->HwId[0] = 0x4D494341; // 'MICA'
+            pInfo->HwId[1] = 0x4E543031; // 'NT01'
+            pInfo->HwId[2] = 0;
+            pInfo->HwId[3] = 0;
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITYPOLICY_INFORMATION);
             return NtStatus::Success;
         }
         default: {

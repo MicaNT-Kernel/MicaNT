@@ -274,16 +274,37 @@ struct D3D12_ROOT_SIGNATURE_DESC {
     uint32_t Flags;
 };
 
+struct D3D12_SHADER_BYTECODE {
+    const void* pShaderBytecode{ nullptr };
+    size_t BytecodeLength{ 0 };
+};
+
+enum D3D12_PRIMITIVE_TOPOLOGY_TYPE {
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED = 0,
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT     = 1,
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE      = 2,
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE  = 3,
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH     = 4
+};
+
 struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-    void* pRootSignature;
-    D3D11_RASTERIZER_DESC RasterizerState;
-    D3D11_BLEND_DESC BlendState;
-    D3D11_DEPTH_STENCIL_DESC DepthStencilState;
-    DXGI_FORMAT RTVFormats[8];
-    uint32_t NumRenderTargets;
-    DXGI_FORMAT DSVFormat;
-    DXGI_SAMPLE_DESC SampleDesc;
-    uint32_t NodeMask;
+    void* pRootSignature{ nullptr };
+    D3D12_SHADER_BYTECODE VS{};
+    D3D12_SHADER_BYTECODE PS{};
+    D3D12_SHADER_BYTECODE DS{};
+    D3D12_SHADER_BYTECODE HS{};
+    D3D12_SHADER_BYTECODE GS{};
+    D3D11_RASTERIZER_DESC RasterizerState{};
+    D3D11_BLEND_DESC BlendState{};
+    D3D11_DEPTH_STENCIL_DESC DepthStencilState{};
+    uint32_t SampleMask{ 0xFFFFFFFF };
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE PrimitiveTopologyType{ D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED };
+    uint32_t NumRenderTargets{ 0 };
+    DXGI_FORMAT RTVFormats[8]{};
+    DXGI_FORMAT DSVFormat{ DXGI_FORMAT_UNKNOWN };
+    DXGI_SAMPLE_DESC SampleDesc{};
+    uint32_t NodeMask{ 0 };
+    uint32_t Flags{ 0 };
 };
 
 // ============================================================================
@@ -874,6 +895,68 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS23 {
 
 
 
+enum D3D12_PIPELINE_STATE_SUBOBJECT_TYPE : uint32_t {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE        = 0,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS                    = 1,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS                    = 2,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS                    = 3,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS                    = 4,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS                    = 5,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT         = 6,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND                 = 7,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK           = 8,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER            = 9,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL         = 10,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT          = 11,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE    = 12,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY    = 13,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS = 14,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT  = 15,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC           = 16,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK             = 17,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO            = 18,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS                 = 19,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1        = 20,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING       = 21,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS                    = 22,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS                    = 23,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2        = 24,
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MAX_VALID             = 25
+};
+
+struct D3D12_PIPELINE_STATE_STREAM_DESC {
+    size_t SizeInBytes{0};
+    void*  pPipelineStateSubobjectStream{nullptr};
+};
+
+struct CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type{ D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE };
+    ID3D12RootSignature* pRootSignature{ nullptr };
+};
+
+struct CD3DX12_PIPELINE_STATE_STREAM_VS {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type{ D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS };
+    D3D12_SHADER_BYTECODE Bytecode{};
+};
+
+struct CD3DX12_PIPELINE_STATE_STREAM_PS {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type{ D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS };
+    D3D12_SHADER_BYTECODE Bytecode{};
+};
+
+struct CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type{ D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY };
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE PrimitiveTopologyType{ D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED };
+};
+
+struct CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS {
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type{ D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS };
+    struct {
+        uint32_t NumRenderTargets{0};
+        DXGI_FORMAT RTFormats[8]{};
+    } Formats{};
+};
+
 enum D3D12_RESIDENCY_PRIORITY : uint32_t {
     D3D12_RESIDENCY_PRIORITY_MINIMUM = 0x28000000,
     D3D12_RESIDENCY_PRIORITY_LOW     = 0x50000000,
@@ -917,6 +1000,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
     virtual int32_t OpenExistingHeapFromAddress(const void* /*pAddress*/, const IID& /*riid*/, void** /*ppvHeap*/) { return 0; }
     virtual int32_t OpenExistingHeapFromFileMapping(void* /*hFileMapping*/, const IID& /*riid*/, void** /*ppvHeap*/) { return 0; }
+    virtual int32_t CreatePipelineState(const D3D12_PIPELINE_STATE_STREAM_DESC* /*pDesc*/, const IID& /*riid*/, void** /*ppPipelineState*/) { return 0; }
 };
 
 // ============================================================================
@@ -1673,6 +1757,62 @@ public:
     int32_t CreateGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc, const IID&, void** ppPipelineState) override {
         if (!pDesc || !ppPipelineState) return -1;
         *ppPipelineState = new Prism3D12PipelineStateImpl(this, *pDesc);
+        m_pipelineStatesCreated++;
+        return 0;
+    }
+
+    uint32_t m_pipelineStatesCreated{ 0 };
+    [[nodiscard]] uint32_t GetPipelineStatesCreated() const noexcept { return m_pipelineStatesCreated; }
+
+    int32_t CreatePipelineState(const D3D12_PIPELINE_STATE_STREAM_DESC* pDesc, const IID&, void** ppPipelineState) override {
+        if (!pDesc || !pDesc->pPipelineStateSubobjectStream || pDesc->SizeInBytes == 0 || !ppPipelineState) return -1;
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC gpsDesc{};
+        const uint8_t* pCur = reinterpret_cast<const uint8_t*>(pDesc->pPipelineStateSubobjectStream);
+        const uint8_t* pEnd = pCur + pDesc->SizeInBytes;
+
+        while (pCur + sizeof(uint32_t) <= pEnd) {
+            uint32_t subType = *reinterpret_cast<const uint32_t*>(pCur);
+            switch (subType) {
+                case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE: {
+                    auto* obj = reinterpret_cast<const CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE*>(pCur);
+                    gpsDesc.pRootSignature = obj->pRootSignature;
+                    pCur += sizeof(CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE);
+                    break;
+                }
+                case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS: {
+                    auto* obj = reinterpret_cast<const CD3DX12_PIPELINE_STATE_STREAM_VS*>(pCur);
+                    gpsDesc.VS = obj->Bytecode;
+                    pCur += sizeof(CD3DX12_PIPELINE_STATE_STREAM_VS);
+                    break;
+                }
+                case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS: {
+                    auto* obj = reinterpret_cast<const CD3DX12_PIPELINE_STATE_STREAM_PS*>(pCur);
+                    gpsDesc.PS = obj->Bytecode;
+                    pCur += sizeof(CD3DX12_PIPELINE_STATE_STREAM_PS);
+                    break;
+                }
+                case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY: {
+                    auto* obj = reinterpret_cast<const CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY*>(pCur);
+                    gpsDesc.PrimitiveTopologyType = obj->PrimitiveTopologyType;
+                    pCur += sizeof(CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY);
+                    break;
+                }
+                case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS: {
+                    auto* obj = reinterpret_cast<const CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS*>(pCur);
+                    gpsDesc.NumRenderTargets = obj->Formats.NumRenderTargets;
+                    for (uint32_t i = 0; i < 8; ++i) gpsDesc.RTVFormats[i] = obj->Formats.RTFormats[i];
+                    pCur += sizeof(CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS);
+                    break;
+                }
+                default: {
+                    pCur += sizeof(void*) * 2;
+                    break;
+                }
+            }
+        }
+
+        *ppPipelineState = new Prism3D12PipelineStateImpl(this, gpsDesc);
+        m_pipelineStatesCreated++;
         return 0;
     }
 

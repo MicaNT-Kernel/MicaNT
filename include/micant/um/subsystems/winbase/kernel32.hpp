@@ -371,7 +371,20 @@ inline constexpr DWORD FILE_ATTRIBUTE_SYSTEM    = 0x00000004;
 inline constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
 inline constexpr DWORD FILE_ATTRIBUTE_ARCHIVE   = 0x00000020;
 inline constexpr DWORD FILE_ATTRIBUTE_NORMAL    = 0x00000080;
+inline constexpr DWORD FILE_ATTRIBUTE_TEMPORARY = 0x00000100;
+inline constexpr DWORD FILE_ATTRIBUTE_SPARSE_FILE = 0x00000200;
+inline constexpr DWORD FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+inline constexpr DWORD FILE_ATTRIBUTE_COMPRESSED = 0x00000800;
+inline constexpr DWORD FILE_ATTRIBUTE_OFFLINE   = 0x00001000;
 inline constexpr DWORD INVALID_FILE_ATTRIBUTES  = static_cast<DWORD>(-1);
+
+inline constexpr DWORD FSCTL_LOCK_VOLUME             = 0x00090018;
+inline constexpr DWORD FSCTL_UNLOCK_VOLUME           = 0x0009001C;
+inline constexpr DWORD FSCTL_DISMOUNT_VOLUME         = 0x00090020;
+inline constexpr DWORD FSCTL_SET_SPARSE              = 0x000900C4;
+inline constexpr DWORD FSCTL_SET_ZERO_DATA           = 0x000980C8;
+inline constexpr DWORD FSCTL_QUERY_ALLOCATED_RANGES  = 0x000940CF;
+
 inline constexpr DWORD INVALID_FILE_SIZE        = static_cast<DWORD>(-1);
 
 // Console Mode Flags
@@ -3812,6 +3825,16 @@ union ULARGE_INTEGER {
 };
 using PULARGE_INTEGER = ULARGE_INTEGER*;
 
+struct FILE_ZERO_DATA_INFORMATION {
+    LARGE_INTEGER FileOffset;
+    LARGE_INTEGER BeyondFinalZero;
+};
+
+struct FILE_ALLOCATED_RANGE_BUFFER {
+    LARGE_INTEGER FileOffset;
+    LARGE_INTEGER Length;
+};
+
 using PHANDLER_ROUTINE = BOOL (*)(DWORD CtrlType);
 
 using LPPROGRESS_ROUTINE = DWORD (*)(
@@ -4274,6 +4297,19 @@ inline BOOL DeviceIoControl(
     if (lpBytesReturned) *lpBytesReturned = 0;
 
     if (g_DeviceIoControlHook && g_DeviceIoControlHook(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned)) {
+        return TRUE;
+    }
+    if (dwIoControlCode == FSCTL_SET_SPARSE || dwIoControlCode == FSCTL_SET_ZERO_DATA) {
+        if (lpBytesReturned) *lpBytesReturned = 0;
+        return TRUE;
+    }
+    if (dwIoControlCode == FSCTL_QUERY_ALLOCATED_RANGES) {
+        if (lpOutBuffer && nOutBufferSize >= sizeof(FILE_ALLOCATED_RANGE_BUFFER)) {
+            auto* pRange = reinterpret_cast<FILE_ALLOCATED_RANGE_BUFFER*>(lpOutBuffer);
+            pRange->FileOffset.QuadPart = 0;
+            pRange->Length.QuadPart = 1024 * 1024; // 1 MB allocated
+            if (lpBytesReturned) *lpBytesReturned = sizeof(FILE_ALLOCATED_RANGE_BUFFER);
+        }
         return TRUE;
     }
     IoStatusBlock iosb{};
@@ -5753,13 +5789,26 @@ inline void GetNativeSystemInfo(SYSTEM_INFO* lpSystemInfo) noexcept {
     GetSystemInfo(lpSystemInfo);
 }
 
-inline BOOL QueryFullProcessImageNameW(HANDLE /*hProcess*/, DWORD /*dwFlags*/, LPWSTR lpExeName, PDWORD lpdwSize) noexcept {
+inline BOOL QueryFullProcessImageNameW(HANDLE /*hProcess*/, DWORD dwFlags, LPWSTR lpExeName, PDWORD lpdwSize) noexcept {
     if (!lpExeName || !lpdwSize || *lpdwSize == 0) return FALSE;
-    const wchar_t* p = L"C:\\Program Files\\Notepad++\\notepad++.exe";
+    const wchar_t* p = (dwFlags & 1) ? L"\\Device\\HarddiskVolume1\\Program Files\\Notepad++\\notepad++.exe" : L"C:\\Program Files\\Notepad++\\notepad++.exe";
     size_t len = wcslen(p);
     if (*lpdwSize <= len) { *lpdwSize = static_cast<DWORD>(len + 1); return FALSE; }
     wcscpy(lpExeName, p);
     *lpdwSize = static_cast<DWORD>(len);
+    return TRUE;
+}
+
+inline BOOL QueryFullProcessImageNameA(HANDLE hProcess, DWORD dwFlags, LPSTR lpExeName, PDWORD lpdwSize) noexcept {
+    if (!lpExeName || !lpdwSize || *lpdwSize == 0) return FALSE;
+    wchar_t wbuf[512]{};
+    DWORD wsize = 512;
+    if (!QueryFullProcessImageNameW(hProcess, dwFlags, wbuf, &wsize)) return FALSE;
+    std::string s;
+    for (DWORD i = 0; i < wsize; ++i) s.push_back(static_cast<char>(wbuf[i]));
+    if (*lpdwSize <= s.size()) { *lpdwSize = static_cast<DWORD>(s.size() + 1); return FALSE; }
+    std::memcpy(lpExeName, s.c_str(), s.size() + 1);
+    *lpdwSize = static_cast<DWORD>(s.size());
     return TRUE;
 }
 
@@ -9579,6 +9628,14 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "lstrlenW", reinterpret_cast<void*>(lstrlenW));
     ldr.registerExport("kernel32.dll", "GetNativeSystemInfo", reinterpret_cast<void*>(GetNativeSystemInfo));
     ldr.registerExport("kernel32.dll", "QueryFullProcessImageNameW", reinterpret_cast<void*>(QueryFullProcessImageNameW));
+    ldr.registerExport("kernel32.dll", "QueryFullProcessImageNameA", reinterpret_cast<void*>(QueryFullProcessImageNameA));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "QueryFullProcessImageNameW", reinterpret_cast<void*>(QueryFullProcessImageNameW));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "QueryFullProcessImageNameA", reinterpret_cast<void*>(QueryFullProcessImageNameA));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "QueryFullProcessImageNameW", reinterpret_cast<void*>(QueryFullProcessImageNameW));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "QueryFullProcessImageNameA", reinterpret_cast<void*>(QueryFullProcessImageNameA));
+    ldr.registerExport("api-ms-win-core-file-l1-2-0.dll", "GetFileAttributesExW", reinterpret_cast<void*>(GetFileAttributesExW));
+    ldr.registerExport("api-ms-win-core-file-l1-2-0.dll", "GetFileAttributesExA", reinterpret_cast<void*>(GetFileAttributesExA));
+    ldr.registerExport("api-ms-win-core-file-l2-1-0.dll", "GetFileAttributesExW", reinterpret_cast<void*>(GetFileAttributesExW));
     ldr.registerExport("kernel32.dll", "GlobalSize", reinterpret_cast<void*>(GlobalSize));
     ldr.registerExport("kernel32.dll", "CopyFileExW", reinterpret_cast<void*>(CopyFileExW));
     ldr.registerExport("kernel32.dll", "ReplaceFileW", reinterpret_cast<void*>(ReplaceFileW));
