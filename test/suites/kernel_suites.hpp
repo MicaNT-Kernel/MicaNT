@@ -43821,7 +43821,7 @@ inline void Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerE
     // Pillar 1: DirectX 12 Agility SDK Placed Resources & Resource Allocation Info
     // ------------------------------------------------------------------------
     {
-        std::cout << "  [Pillar 1] Testing DirectX 12 Placed Resources & Resource Allocation Info...\n";
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 Placed Resources & Resource Allocation Info...\n";
         using namespace micant::prism3d12;
 
         Prism3D12DeviceImpl device;
@@ -43897,7 +43897,7 @@ inline void Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerE
         pPlacedRes->Release();
         pHeap->Release();
 
-        std::cout << "  [PASS] DirectX 12 Placed Resources & Resource Allocation Info verified.\n";
+        std::cout << "  [PASS] PrismX 3D12 Placed Resources & Resource Allocation Info verified.\n";
     }
 
     // ------------------------------------------------------------------------
@@ -44039,7 +44039,7 @@ inline void Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerE
     }
 
     std::cout << "[HORIZON 216] Placed Resources, Processor Idle Cycles, Threadpool TimerEx & Working Set Watch Summary:\n"
-              << "    Pillar 1: DirectX 12 Placed Resources & Resource Allocation Info OK\n"
+              << "    Pillar 1: PrismX 3D12 Placed Resources & Resource Allocation Info OK\n"
               << "    Pillar 2: NT System Processor Idle Cycle Time Telemetry OK\n"
               << "    Pillar 3: Win32 Extended Threadpool Timers & Wait Coalescing OK\n"
               << "    Pillar 4: Win32 Process Working Set Watch & Image File Names OK\n";
@@ -44048,7 +44048,7 @@ inline void Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerE
 }
 
 // ============================================================================
-// Suite 433: Horizon 217 - D3D12 Render Passes, System Exception Info & Cycle Times,
+// Suite 433: Horizon 217 - PrismX Render Passes, System Exception Info & Cycle Times,
 //                          Large Pages / Prefetch / MapViewOfFile3, and PSAPI EnumProcessModulesEx
 // ============================================================================
 inline void Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnumEx_Suite() {
@@ -44062,7 +44062,7 @@ inline void Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnum
     // Pillar 1: DirectX 12 Agility SDK Render Passes Architecture
     // ------------------------------------------------------------------------
     {
-        std::cout << "  [Pillar 1] Testing DirectX 12 Render Passes (BeginRenderPass / EndRenderPass)...\n";
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 Render Passes (BeginRenderPass / EndRenderPass)...\n";
         using namespace micant::prism3d12;
 
         ID3D12Device* pDev = nullptr;
@@ -44118,7 +44118,7 @@ inline void Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnum
         pAlloc->Release();
         pDev->Release();
 
-        std::cout << "  [PASS] DirectX 12 Render Passes (BeginRenderPass / EndRenderPass) verified.\n";
+        std::cout << "  [PASS] PrismX 3D12 Render Passes (BeginRenderPass / EndRenderPass) verified.\n";
     }
 
     // ------------------------------------------------------------------------
@@ -44265,7 +44265,7 @@ inline void Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnum
     }
 
     std::cout << "[HORIZON 217] Render Passes, Exception Info, Large Pages & ModuleEnumEx Summary:\n"
-              << "    Pillar 1: DirectX 12 Render Passes (BeginRenderPass / EndRenderPass) OK\n"
+              << "    Pillar 1: PrismX 3D12 Render Passes (BeginRenderPass / EndRenderPass) OK\n"
               << "    Pillar 2: NT System Exception Information & Total Cycle Time Telemetry OK\n"
               << "    Pillar 3: Win32 Memory Prefetch, Large Pages & MapViewOfFile3 OK\n"
               << "    Pillar 4: Win32 PSAPI Module Enumeration & Module Information OK\n";
