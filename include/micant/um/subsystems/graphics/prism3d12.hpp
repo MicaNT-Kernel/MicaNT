@@ -135,7 +135,12 @@ enum D3D12_HEAP_FLAGS : uint32_t {
     D3D12_HEAP_FLAG_ALLOW_WRITE_WATCH            = 0x200,
     D3D12_HEAP_FLAG_ALLOW_SHADER_ATOMICS         = 0x400,
     D3D12_HEAP_FLAG_CREATE_NOT_RESIDENT          = 0x800,
-    D3D12_HEAP_FLAG_CREATE_NOT_ZEROED            = 0x1000
+    D3D12_HEAP_FLAG_CREATE_NOT_ZEROED            = 0x1000,
+    D3D12_HEAP_FLAG_ALLOW_DISPLAY                = 0x8,
+    D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER         = 0x20,
+    D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS           = 0xc0,
+    D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES = 0x44,
+    D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES    = 0x84
 };
 
 enum D3D12_RESOURCE_DIMENSION : uint32_t {
@@ -405,6 +410,17 @@ struct D3D12_META_COMMAND_DESC {
     D3D12_GRAPHICS_STATES ExecutionDirtyState{ D3D12_GRAPHICS_STATE_NONE };
 };
 
+struct D3D12_RESOURCE_ALLOCATION_INFO {
+    uint64_t SizeInBytes{ 0 };
+    uint64_t Alignment{ 0 };
+};
+
+struct D3D12_RESOURCE_ALLOCATION_INFO1 {
+    uint64_t Offset{ 0 };
+    uint64_t Alignment{ 0 };
+    uint64_t SizeInBytes{ 0 };
+};
+
 // ============================================================================
 // 3. COM Interface GUIDs
 // ============================================================================
@@ -451,6 +467,9 @@ static constexpr IID IID_ID3D12CommandSignature =
 static constexpr IID IID_ID3D12MetaCommand = 
     { 0xdbb84c27, 0x36ce, 0x4fc9, { 0xb8, 0x01, 0xf0, 0x48, 0xc4, 0x6a, 0xc5, 0x70 } };
 
+static constexpr IID IID_ID3D12Heap = 
+    { 0x6b3ba88d, 0x4f52, 0x45e6, { 0x83, 0x23, 0xa5, 0xef, 0x46, 0x00, 0xd4, 0xce } };
+
 static constexpr IID IID_ID3D12Device = 
     { 0x189819f1, 0x1db6, 0x4b57, { 0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7 } };
 
@@ -469,6 +488,7 @@ class ID3D12GraphicsCommandList10;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
 class ID3D12MetaCommand;
+class ID3D12Heap;
 class ID3D12Device;
 
 // ============================================================================
@@ -513,9 +533,11 @@ public:
 
 class Prism3D12HeapImpl : public ID3D12Heap {
 private:
-    std::atomic<uint32_t> m_refCount{1};
-    const void* m_pAddress{nullptr};
+    std::atomic<uint32_t> m_refCount{ 1 };
+    ID3D12Device* m_pDevice{ nullptr };
+    const void* m_pAddress{ nullptr };
     D3D12_HEAP_DESC m_desc{};
+    std::vector<uint8_t> m_storage;
 
 public:
     explicit Prism3D12HeapImpl(const void* pAddr, uint64_t size = 64 * 1024 * 1024ULL)
@@ -524,11 +546,24 @@ public:
         m_desc.Alignment = 64 * 1024;
     }
 
-    int32_t QueryInterface(const IID&, void** ppv) override {
+    Prism3D12HeapImpl(ID3D12Device* pDev, const D3D12_HEAP_DESC& desc)
+        : m_pDevice(pDev), m_desc(desc) {
+        if (m_desc.SizeInBytes > 0) {
+            m_storage.resize(static_cast<size_t>(m_desc.SizeInBytes), 0);
+            m_pAddress = m_storage.data();
+        }
+    }
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        *ppv = this;
-        AddRef();
-        return 0;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
+            riid == IID_ID3D12Pageable || riid == IID_ID3D12Heap) {
+            *ppv = static_cast<ID3D12Heap*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262;
     }
     uint32_t AddRef() override { return ++m_refCount; }
     uint32_t Release() override {
@@ -541,7 +576,8 @@ public:
     int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
     int32_t SetName(const wchar_t*) override { return 0; }
     int32_t GetDevice(const IID&, void** ppDevice) override {
-        if (ppDevice) *ppDevice = nullptr;
+        if (!ppDevice) return -1;
+        *ppDevice = m_pDevice;
         return 0;
     }
     D3D12_HEAP_DESC GetDesc() override { return m_desc; }
@@ -1139,6 +1175,41 @@ public:
         size_t /*CreationParametersDataSizeInBytes*/,
         const IID& /*riid*/,
         void** /*ppMetaCommand*/) { return 0; }
+    virtual D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo(
+        uint32_t /*visibleMask*/,
+        uint32_t numResourceDescs,
+        const D3D12_RESOURCE_DESC* pResourceDescs) {
+        D3D12_RESOURCE_ALLOCATION_INFO info{};
+        if (!pResourceDescs || numResourceDescs == 0) return info;
+        for (uint32_t i = 0; i < numResourceDescs; ++i) {
+            uint64_t itemSize = 0;
+            uint64_t align = 64 * 1024;
+            if (pResourceDescs[i].Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
+                itemSize = pResourceDescs[i].Width;
+            } else if (pResourceDescs[i].Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D) {
+                itemSize = pResourceDescs[i].Width * pResourceDescs[i].Height * 4;
+                if (pResourceDescs[i].SampleDesc.Count > 1) {
+                    align = 4 * 1024 * 1024;
+                }
+            }
+            uint64_t alignedItem = (itemSize + align - 1) & ~(align - 1);
+            info.SizeInBytes += alignedItem;
+            if (align > info.Alignment) info.Alignment = align;
+        }
+        return info;
+    }
+    virtual int32_t CreateHeap(
+        const D3D12_HEAP_DESC* /*pDesc*/,
+        const IID& /*riid*/,
+        void** /*ppvHeap*/) { return 0; }
+    virtual int32_t CreatePlacedResource(
+        ID3D12Heap* /*pHeap*/,
+        uint64_t /*HeapOffset*/,
+        const D3D12_RESOURCE_DESC* /*pDesc*/,
+        D3D12_RESOURCE_STATES /*InitialState*/,
+        const void* /*pOptimizedClearValue*/,
+        const IID& /*riid*/,
+        void** /*ppvResource*/) { return 0; }
 };
 
 static constexpr IID IID_ID3D12Device8 = 
@@ -1270,10 +1341,13 @@ private:
     D3D12_RESOURCE_STATES m_currentState;
     std::vector<uint8_t> m_memory;
     uint64_t m_gpuVirtualAddress{ 0 };
+    ID3D12Heap* m_pHeap{ nullptr };
+    uint64_t m_heapOffset{ 0 };
 
 public:
-    Prism3D12ResourceImpl(ID3D12Device* pDev, const D3D12_RESOURCE_DESC& desc, D3D12_RESOURCE_STATES state)
-        : m_pDevice(pDev), m_desc(desc), m_currentState(state) {
+    Prism3D12ResourceImpl(ID3D12Device* pDev, const D3D12_RESOURCE_DESC& desc, D3D12_RESOURCE_STATES state, ID3D12Heap* pHeap = nullptr, uint64_t heapOffset = 0)
+        : m_pDevice(pDev), m_desc(desc), m_currentState(state), m_pHeap(pHeap), m_heapOffset(heapOffset) {
+        if (m_pHeap) m_pHeap->AddRef();
         size_t allocSize = 0;
         if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
             allocSize = static_cast<size_t>(desc.Width);
@@ -1285,6 +1359,13 @@ public:
             m_gpuVirtualAddress = reinterpret_cast<uint64_t>(m_memory.data());
         }
     }
+
+    ~Prism3D12ResourceImpl() {
+        if (m_pHeap) m_pHeap->Release();
+    }
+
+    [[nodiscard]] ID3D12Heap* GetHeap() const noexcept { return m_pHeap; }
+    [[nodiscard]] uint64_t GetHeapOffset() const noexcept { return m_heapOffset; }
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
@@ -2017,6 +2098,8 @@ private:
     D3D_FEATURE_LEVEL m_featureLevel{ D3D_FEATURE_LEVEL_12_0 };
     uint32_t m_samplerFeedbackViewsCreated{ 0 };
     uint32_t m_metaCommandsCreated{ 0 };
+    uint32_t m_heapsCreated{ 0 };
+    uint32_t m_placedResourcesCreated{ 0 };
 
 public:
     Prism3D12DeviceImpl(IUnknown* pAdapter = nullptr, D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_12_0)
@@ -2077,6 +2160,61 @@ public:
     [[nodiscard]] uint32_t GetPipelineStatesCreated() const noexcept { return m_pipelineStatesCreated; }
     [[nodiscard]] uint32_t GetCommandSignaturesCreated() const noexcept { return m_commandSignaturesCreated; }
     [[nodiscard]] uint32_t GetMetaCommandsCreated() const noexcept { return m_metaCommandsCreated; }
+    [[nodiscard]] uint32_t GetHeapsCreated() const noexcept { return m_heapsCreated; }
+    [[nodiscard]] uint32_t GetPlacedResourcesCreated() const noexcept { return m_placedResourcesCreated; }
+
+    D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo(
+        uint32_t visibleMask,
+        uint32_t numResourceDescs,
+        const D3D12_RESOURCE_DESC* pResourceDescs) override {
+        (void)visibleMask;
+        D3D12_RESOURCE_ALLOCATION_INFO info{};
+        if (!pResourceDescs || numResourceDescs == 0) return info;
+        for (uint32_t i = 0; i < numResourceDescs; ++i) {
+            uint64_t itemSize = 0;
+            uint64_t align = 64 * 1024;
+            if (pResourceDescs[i].Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
+                itemSize = pResourceDescs[i].Width;
+            } else if (pResourceDescs[i].Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D) {
+                itemSize = pResourceDescs[i].Width * pResourceDescs[i].Height * 4;
+                if (pResourceDescs[i].SampleDesc.Count > 1) {
+                    align = 4 * 1024 * 1024;
+                }
+            }
+            uint64_t alignedItem = (itemSize + align - 1) & ~(align - 1);
+            info.SizeInBytes += alignedItem;
+            if (align > info.Alignment) info.Alignment = align;
+        }
+        return info;
+    }
+
+    int32_t CreateHeap(
+        const D3D12_HEAP_DESC* pDesc,
+        const IID& riid,
+        void** ppvHeap) override {
+        if (!pDesc || !ppvHeap) return -1;
+        auto* heap = new Prism3D12HeapImpl(this, *pDesc);
+        int32_t hr = heap->QueryInterface(riid, ppvHeap);
+        heap->Release();
+        if (hr == 0) m_heapsCreated++;
+        return hr;
+    }
+
+    int32_t CreatePlacedResource(
+        ID3D12Heap* pHeap,
+        uint64_t HeapOffset,
+        const D3D12_RESOURCE_DESC* pDesc,
+        D3D12_RESOURCE_STATES InitialState,
+        const void* /*pOptimizedClearValue*/,
+        const IID& riid,
+        void** ppvResource) override {
+        if (!pHeap || !pDesc || !ppvResource) return -1;
+        auto* res = new Prism3D12ResourceImpl(this, *pDesc, InitialState, pHeap, HeapOffset);
+        int32_t hr = res->QueryInterface(riid, ppvResource);
+        res->Release();
+        if (hr == 0) m_placedResourcesCreated++;
+        return hr;
+    }
 
     int32_t EnumerateMetaCommands(uint32_t* pNumMetaCommands, D3D12_META_COMMAND_DESC* pDescs) override {
         if (!pNumMetaCommands) return -1;

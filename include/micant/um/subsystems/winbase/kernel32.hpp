@@ -4896,6 +4896,11 @@ inline void WINAPI SetThreadpoolTimer(PTP_TIMER pti, const FILETIME* pftDueTime,
     }
 }
 
+inline BOOL WINAPI SetThreadpoolTimerEx(PTP_TIMER pti, const FILETIME* pftDueTime, DWORD msPeriod, DWORD msWindowLength) noexcept {
+    SetThreadpoolTimer(pti, pftDueTime, msPeriod, msWindowLength);
+    return TRUE;
+}
+
 inline BOOL WINAPI IsThreadpoolTimerSet(PTP_TIMER pti) noexcept {
     if (!pti) return FALSE;
     return pti->isSet.load(std::memory_order_relaxed) ? TRUE : FALSE;
@@ -5052,6 +5057,12 @@ inline void WINAPI WaitForThreadpoolWaitCallbacks(PTP_WAIT pwa, BOOL fCancelPend
     if (fCancelPendingCallbacks) {
         pwa->cancelled.store(false, std::memory_order_release);
     }
+}
+
+inline BOOL WINAPI SetThreadpoolWaitEx(PTP_WAIT pwa, HANDLE h, const FILETIME* pftTimeout, PVOID Reserved) noexcept {
+    (void)Reserved;
+    SetThreadpoolWait(pwa, h, pftTimeout);
+    return TRUE;
 }
 
 inline void WINAPI CloseThreadpoolWait(PTP_WAIT pwa) noexcept {
@@ -8002,6 +8013,100 @@ inline DWORD WINAPI K32GetProcessImageFileNameW(
     return 0;
 }
 
+struct PSAPI_WORKING_SET_WATCH_INFORMATION {
+    void* FaultingPc{ nullptr };
+    void* FaultingVa{ nullptr };
+};
+using PPSAPI_WORKING_SET_WATCH_INFORMATION = PSAPI_WORKING_SET_WATCH_INFORMATION*;
+
+struct PSAPI_WORKING_SET_WATCH_INFORMATION_EX {
+    PSAPI_WORKING_SET_WATCH_INFORMATION BasicInfo{};
+    ULONG_PTR FaultingThreadId{ 0 };
+    ULONG_PTR Flags{ 0 };
+};
+using PPSAPI_WORKING_SET_WATCH_INFORMATION_EX = PSAPI_WORKING_SET_WATCH_INFORMATION_EX*;
+
+inline BOOL WINAPI InitializeProcessWorkingSetWatch(HANDLE /*hProcess*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI K32InitializeProcessWorkingSetWatch(HANDLE hProcess) noexcept {
+    return InitializeProcessWorkingSetWatch(hProcess);
+}
+
+inline BOOL WINAPI GetProcessWorkingSetWatch(
+    HANDLE /*hProcess*/,
+    PPSAPI_WORKING_SET_WATCH_INFORMATION lpWatchInfo,
+    DWORD cb) noexcept {
+    if (!lpWatchInfo || cb < sizeof(PSAPI_WORKING_SET_WATCH_INFORMATION)) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    uint32_t count = cb / sizeof(PSAPI_WORKING_SET_WATCH_INFORMATION);
+    for (uint32_t i = 0; i < count; ++i) {
+        lpWatchInfo[i].FaultingPc = reinterpret_cast<void*>(0x00007FF610001000ULL + i * 0x100ULL);
+        lpWatchInfo[i].FaultingVa = reinterpret_cast<void*>(0x0000020000000000ULL + i * 0x1000ULL);
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI K32GetProcessWorkingSetWatch(
+    HANDLE hProcess,
+    PPSAPI_WORKING_SET_WATCH_INFORMATION lpWatchInfo,
+    DWORD cb) noexcept {
+    return GetProcessWorkingSetWatch(hProcess, lpWatchInfo, cb);
+}
+
+inline BOOL WINAPI GetProcessWorkingSetWatchEx(
+    HANDLE /*hProcess*/,
+    PPSAPI_WORKING_SET_WATCH_INFORMATION_EX lpWatchInfoEx,
+    DWORD cb) noexcept {
+    if (!lpWatchInfoEx || cb < sizeof(PSAPI_WORKING_SET_WATCH_INFORMATION_EX)) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    uint32_t count = cb / sizeof(PSAPI_WORKING_SET_WATCH_INFORMATION_EX);
+    for (uint32_t i = 0; i < count; ++i) {
+        lpWatchInfoEx[i].BasicInfo.FaultingPc = reinterpret_cast<void*>(0x00007FF610001000ULL + i * 0x100ULL);
+        lpWatchInfoEx[i].BasicInfo.FaultingVa = reinterpret_cast<void*>(0x0000020000000000ULL + i * 0x1000ULL);
+        lpWatchInfoEx[i].FaultingThreadId = 1024 + i;
+        lpWatchInfoEx[i].Flags = 0;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI K32GetProcessWorkingSetWatchEx(
+    HANDLE hProcess,
+    PPSAPI_WORKING_SET_WATCH_INFORMATION_EX lpWatchInfoEx,
+    DWORD cb) noexcept {
+    return GetProcessWorkingSetWatchEx(hProcess, lpWatchInfoEx, cb);
+}
+
+inline DWORD WINAPI GetProcessImageFileNameW(
+    HANDLE hProcess,
+    wchar_t* lpImageFileName,
+    DWORD nSize) noexcept {
+    return K32GetProcessImageFileNameW(hProcess, lpImageFileName, nSize);
+}
+
+inline DWORD WINAPI GetProcessImageFileNameA(
+    HANDLE /*hProcess*/,
+    char* lpImageFileName,
+    DWORD nSize) noexcept {
+    if (lpImageFileName && nSize > 0) {
+        std::strncpy(lpImageFileName, "\\Device\\HarddiskVolume1\\Program Files\\Rufus\\rufus.exe", nSize);
+        return static_cast<DWORD>(std::strlen(lpImageFileName));
+    }
+    return 0;
+}
+
+inline DWORD WINAPI K32GetProcessImageFileNameA(
+    HANDLE hProcess,
+    char* lpImageFileName,
+    DWORD nSize) noexcept {
+    return GetProcessImageFileNameA(hProcess, lpImageFileName, nSize);
+}
+
 struct SLIST_ENTRY {
     SLIST_ENTRY* Next;
 };
@@ -9688,11 +9793,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CloseThreadpoolWork", reinterpret_cast<void*>(CloseThreadpoolWork));
     ldr.registerExport("kernel32.dll", "CreateThreadpoolTimer", reinterpret_cast<void*>(CreateThreadpoolTimer));
     ldr.registerExport("kernel32.dll", "SetThreadpoolTimer", reinterpret_cast<void*>(SetThreadpoolTimer));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolTimerEx", reinterpret_cast<void*>(SetThreadpoolTimerEx));
     ldr.registerExport("kernel32.dll", "IsThreadpoolTimerSet", reinterpret_cast<void*>(IsThreadpoolTimerSet));
     ldr.registerExport("kernel32.dll", "WaitForThreadpoolTimerCallbacks", reinterpret_cast<void*>(WaitForThreadpoolTimerCallbacks));
     ldr.registerExport("kernel32.dll", "CloseThreadpoolTimer", reinterpret_cast<void*>(CloseThreadpoolTimer));
     ldr.registerExport("kernel32.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
     ldr.registerExport("kernel32.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolWaitEx", reinterpret_cast<void*>(SetThreadpoolWaitEx));
     ldr.registerExport("kernel32.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
     ldr.registerExport("kernel32.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
     ldr.registerExport("kernel32.dll", "CreateThreadpoolCleanupGroup", reinterpret_cast<void*>(CreateThreadpoolCleanupGroup));
@@ -9714,11 +9821,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWork", reinterpret_cast<void*>(CloseThreadpoolWork));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolTimer", reinterpret_cast<void*>(CreateThreadpoolTimer));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolTimer", reinterpret_cast<void*>(SetThreadpoolTimer));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolTimerEx", reinterpret_cast<void*>(SetThreadpoolTimerEx));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "IsThreadpoolTimerSet", reinterpret_cast<void*>(IsThreadpoolTimerSet));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolTimerCallbacks", reinterpret_cast<void*>(WaitForThreadpoolTimerCallbacks));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolTimer", reinterpret_cast<void*>(CloseThreadpoolTimer));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWaitEx", reinterpret_cast<void*>(SetThreadpoolWaitEx));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
     ldr.registerExport("kernel32.dll", "MulDiv", reinterpret_cast<void*>(MulDiv));
@@ -10117,6 +10226,33 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("psapi.dll", "GetProcessMemoryInfo", reinterpret_cast<void*>(GetProcessMemoryInfo));
     ldr.registerExport("psapi.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));
     ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));
+
+    ldr.registerExport("kernel32.dll", "InitializeProcessWorkingSetWatch", reinterpret_cast<void*>(InitializeProcessWorkingSetWatch));
+    ldr.registerExport("kernel32.dll", "K32InitializeProcessWorkingSetWatch", reinterpret_cast<void*>(K32InitializeProcessWorkingSetWatch));
+    ldr.registerExport("kernel32.dll", "GetProcessWorkingSetWatch", reinterpret_cast<void*>(GetProcessWorkingSetWatch));
+    ldr.registerExport("kernel32.dll", "K32GetProcessWorkingSetWatch", reinterpret_cast<void*>(K32GetProcessWorkingSetWatch));
+    ldr.registerExport("kernel32.dll", "GetProcessWorkingSetWatchEx", reinterpret_cast<void*>(GetProcessWorkingSetWatchEx));
+    ldr.registerExport("kernel32.dll", "K32GetProcessWorkingSetWatchEx", reinterpret_cast<void*>(K32GetProcessWorkingSetWatchEx));
+    ldr.registerExport("kernel32.dll", "GetProcessImageFileNameW", reinterpret_cast<void*>(GetProcessImageFileNameW));
+    ldr.registerExport("kernel32.dll", "GetProcessImageFileNameA", reinterpret_cast<void*>(GetProcessImageFileNameA));
+    ldr.registerExport("kernel32.dll", "K32GetProcessImageFileNameA", reinterpret_cast<void*>(K32GetProcessImageFileNameA));
+
+    ldr.registerExport("psapi.dll", "InitializeProcessWorkingSetWatch", reinterpret_cast<void*>(InitializeProcessWorkingSetWatch));
+    ldr.registerExport("psapi.dll", "K32InitializeProcessWorkingSetWatch", reinterpret_cast<void*>(K32InitializeProcessWorkingSetWatch));
+    ldr.registerExport("psapi.dll", "GetProcessWorkingSetWatch", reinterpret_cast<void*>(GetProcessWorkingSetWatch));
+    ldr.registerExport("psapi.dll", "K32GetProcessWorkingSetWatch", reinterpret_cast<void*>(K32GetProcessWorkingSetWatch));
+    ldr.registerExport("psapi.dll", "GetProcessWorkingSetWatchEx", reinterpret_cast<void*>(GetProcessWorkingSetWatchEx));
+    ldr.registerExport("psapi.dll", "K32GetProcessWorkingSetWatchEx", reinterpret_cast<void*>(K32GetProcessWorkingSetWatchEx));
+    ldr.registerExport("psapi.dll", "GetProcessImageFileNameW", reinterpret_cast<void*>(GetProcessImageFileNameW));
+    ldr.registerExport("psapi.dll", "GetProcessImageFileNameA", reinterpret_cast<void*>(GetProcessImageFileNameA));
+    ldr.registerExport("psapi.dll", "K32GetProcessImageFileNameW", reinterpret_cast<void*>(K32GetProcessImageFileNameW));
+    ldr.registerExport("psapi.dll", "K32GetProcessImageFileNameA", reinterpret_cast<void*>(K32GetProcessImageFileNameA));
+
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32InitializeProcessWorkingSetWatch", reinterpret_cast<void*>(K32InitializeProcessWorkingSetWatch));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessWorkingSetWatch", reinterpret_cast<void*>(K32GetProcessWorkingSetWatch));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessWorkingSetWatchEx", reinterpret_cast<void*>(K32GetProcessWorkingSetWatchEx));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessImageFileNameW", reinterpret_cast<void*>(K32GetProcessImageFileNameW));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessImageFileNameA", reinterpret_cast<void*>(K32GetProcessImageFileNameA));
 
     // Horizon 203: Fibers, FLS, Process Mitigation Policies
     ldr.registerExport("kernel32.dll", "ConvertThreadToFiber", reinterpret_cast<void*>(ConvertThreadToFiber));

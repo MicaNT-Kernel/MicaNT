@@ -2218,6 +2218,20 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_INFORMATION);
             return NtStatus::Success;
         }
+        case 42: { // SystemProcessorIdleCycleTimeInformation
+            constexpr uint32_t processorCount = 16;
+            size_t requiredLength = sizeof(uint64_t) * processorCount;
+            if (SystemInformationLength < requiredLength) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pCycles = reinterpret_cast<uint64_t*>(SystemInformation);
+            for (uint32_t i = 0; i < processorCount; ++i) {
+                pCycles[i] = 24500000000ULL + (static_cast<uint64_t>(i) * 1250000ULL);
+            }
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+            return NtStatus::Success;
+        }
         case 102: { // SystemDynamicTimeZoneInformation
             if (SystemInformationLength < sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION)) {
                 if (ReturnLength) *ReturnLength = sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION);

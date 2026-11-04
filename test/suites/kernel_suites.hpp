@@ -43804,3 +43804,245 @@ inline void Test_Horizon215_MetaCommands_TpmHardwareRoots_UnbiasedInterruptTime_
 
     std::cout << "[TEST] Suite 431: Horizon 215 - Meta-Commands, TPM 2.0 Roots, Unbiased Interrupt Time & Process Memory Counters Ex2 PASSED." << std::endl;
 }
+
+// ============================================================================
+// HORIZON 216: DirectX 12 Placed Resources & Resource Allocation Info,
+//              NT Processor Idle Cycles, Threadpool Extended Timers &
+//              Win32 Process Working Set Watch
+// ============================================================================
+
+inline void Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerEx_And_WorkingSetWatch_Suite() {
+    std::cout << "[TEST] Running Suite 432: Horizon 216 - Placed Resources, Processor Idle Cycles, Threadpool TimerEx & Working Set Watch..." << std::endl;
+
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Placed Resources & Resource Allocation Info
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing DirectX 12 Placed Resources & Resource Allocation Info...\n";
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1.1 Test GetResourceAllocationInfo for buffer (standard 64KB alignment)
+        D3D12_RESOURCE_DESC bufferDesc{};
+        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Width = 1000;
+        bufferDesc.Height = 1;
+        bufferDesc.DepthOrArraySize = 1;
+        bufferDesc.MipLevels = 1;
+        bufferDesc.SampleDesc.Count = 1;
+        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        D3D12_RESOURCE_ALLOCATION_INFO allocInfo = device.GetResourceAllocationInfo(0, 1, &bufferDesc);
+        TEST_ASSERT(allocInfo.Alignment == 64 * 1024, "Buffer allocation alignment is 64KB");
+        TEST_ASSERT(allocInfo.SizeInBytes == 64 * 1024, "Buffer allocation size rounds up to 64KB");
+
+        // 1.2 Test GetResourceAllocationInfo for MSAA texture (4MB alignment)
+        D3D12_RESOURCE_DESC msaaDesc{};
+        msaaDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        msaaDesc.Width = 1920;
+        msaaDesc.Height = 1080;
+        msaaDesc.DepthOrArraySize = 1;
+        msaaDesc.MipLevels = 1;
+        msaaDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        msaaDesc.SampleDesc.Count = 4; // 4x MSAA
+        msaaDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+        allocInfo = device.GetResourceAllocationInfo(0, 1, &msaaDesc);
+        TEST_ASSERT(allocInfo.Alignment == 4 * 1024 * 1024, "4x MSAA texture alignment is 4MB");
+        TEST_ASSERT(allocInfo.SizeInBytes >= 1920 * 1080 * 4, "MSAA texture size meets minimum requirement");
+
+        // 1.3 Create custom heap (64MB)
+        D3D12_HEAP_DESC heapDesc{};
+        heapDesc.SizeInBytes = 64 * 1024 * 1024ULL;
+        heapDesc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heapDesc.Alignment = 64 * 1024;
+        heapDesc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+
+        ID3D12Heap* pHeap = nullptr;
+        int32_t hr = device.CreateHeap(&heapDesc, IID_ID3D12Heap, reinterpret_cast<void**>(&pHeap));
+        TEST_ASSERT(hr == 0 && pHeap != nullptr, "CreateHeap succeeds");
+        TEST_ASSERT(device.GetHeapsCreated() == 1, "Device tracks created heap count");
+
+        D3D12_HEAP_DESC queriedDesc = pHeap->GetDesc();
+        TEST_ASSERT(queriedDesc.SizeInBytes == 64 * 1024 * 1024ULL, "Queried heap size matches");
+        TEST_ASSERT(queriedDesc.Flags == D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, "Queried heap flags match");
+
+        // 1.4 Create placed resource inside the heap
+        ID3D12Resource* pPlacedRes = nullptr;
+        hr = device.CreatePlacedResource(
+            pHeap,
+            0,
+            &bufferDesc,
+            D3D12_RESOURCE_STATE_COMMON,
+            nullptr,
+            IID_ID3D12Resource,
+            reinterpret_cast<void**>(&pPlacedRes)
+        );
+        TEST_ASSERT(hr == 0 && pPlacedRes != nullptr, "CreatePlacedResource succeeds");
+        TEST_ASSERT(device.GetPlacedResourcesCreated() == 1, "Device tracks created placed resource count");
+
+        auto* resImpl = static_cast<Prism3D12ResourceImpl*>(pPlacedRes);
+        TEST_ASSERT(resImpl->GetHeap() == pHeap, "Placed resource references owning heap");
+        TEST_ASSERT(resImpl->GetHeapOffset() == 0, "Placed resource offset is 0");
+
+        void* mappedPtr = nullptr;
+        hr = pPlacedRes->Map(0, nullptr, &mappedPtr);
+        TEST_ASSERT(hr == 0 && mappedPtr != nullptr, "Placed resource memory is mappable");
+        pPlacedRes->Unmap(0, nullptr);
+
+        pPlacedRes->Release();
+        pHeap->Release();
+
+        std::cout << "  [PASS] DirectX 12 Placed Resources & Resource Allocation Info verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Processor Idle Cycle Time Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemProcessorIdleCycleTimeInformation (Class 42)...\n";
+        using namespace micant::ntdll;
+
+        uint64_t idleCycles[16]{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            42u, // SystemProcessorIdleCycleTimeInformation
+            idleCycles,
+            sizeof(idleCycles),
+            &retLen
+        );
+
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(Class 42) succeeds");
+        TEST_ASSERT(retLen == sizeof(idleCycles), "Return length matches 16 cores * sizeof(uint64_t)");
+        TEST_ASSERT(idleCycles[0] >= 24500000000ULL, "Core 0 idle cycle count exceeds 24.5 billion cycles");
+        TEST_ASSERT(idleCycles[15] > idleCycles[0], "Core 15 idle cycle count exhibits realistic core variance");
+
+        // Verify undersized buffer handling
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(42u, idleCycles, sizeof(idleCycles) - 1, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Undersized buffer returns InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(idleCycles), "Return length reports required size");
+
+        std::cout << "  [PASS] Windows NT System Processor Idle Cycle Time Telemetry verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Threadpool Timers & Wait Coalescing
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing SetThreadpoolTimerEx & SetThreadpoolWaitEx...\n";
+        using namespace micant::win32;
+
+        static std::atomic<uint32_t> s_timerFired{ 0 };
+        auto timerCb = [](PTP_CALLBACK_INSTANCE, PVOID, PTP_TIMER) {
+            s_timerFired.fetch_add(1, std::memory_order_relaxed);
+        };
+
+        PTP_TIMER pti = CreateThreadpoolTimer(+timerCb, nullptr, nullptr);
+        TEST_ASSERT(pti != nullptr, "CreateThreadpoolTimer succeeds");
+
+        FILETIME ftDue{};
+        uint64_t relTime = static_cast<uint64_t>(-10000LL);
+        std::memcpy(&ftDue, &relTime, sizeof(uint64_t));
+
+        BOOL ok = SetThreadpoolTimerEx(pti, &ftDue, 0, 50);
+        TEST_ASSERT(ok == TRUE, "SetThreadpoolTimerEx succeeds with coalesce delay");
+
+        WaitForThreadpoolTimerCallbacks(pti, FALSE);
+        TEST_ASSERT(s_timerFired.load(std::memory_order_relaxed) >= 1, "Threadpool timer callback dispatched");
+        CloseThreadpoolTimer(pti);
+
+        // Test SetThreadpoolWaitEx
+        static std::atomic<uint32_t> s_waitFired{ 0 };
+        auto waitCb = [](PTP_CALLBACK_INSTANCE, PVOID, PTP_WAIT, TP_WAIT_RESULT) {
+            s_waitFired.fetch_add(1, std::memory_order_relaxed);
+        };
+
+        PTP_WAIT pwa = CreateThreadpoolWait(+waitCb, nullptr, nullptr);
+        TEST_ASSERT(pwa != nullptr, "CreateThreadpoolWait succeeds");
+
+        HANDLE hEv = CreateEventW(nullptr, TRUE, TRUE, nullptr); // Signaled
+        ok = SetThreadpoolWaitEx(pwa, hEv, nullptr, nullptr);
+        TEST_ASSERT(ok == TRUE, "SetThreadpoolWaitEx succeeds on signaled event");
+
+        WaitForThreadpoolWaitCallbacks(pwa, FALSE);
+        TEST_ASSERT(s_waitFired.load(std::memory_order_relaxed) >= 1, "Threadpool wait callback dispatched");
+        CloseThreadpoolWait(pwa);
+        CloseHandle(hEv);
+
+        // Verify ApiSet exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolTimerEx") != nullptr, "kernel32 exports SetThreadpoolTimerEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolWaitEx") != nullptr, "kernel32 exports SetThreadpoolWaitEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolTimerEx") != nullptr, "threadpool-l1-2-0 exports SetThreadpoolTimerEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWaitEx") != nullptr, "threadpool-l1-2-0 exports SetThreadpoolWaitEx");
+
+        std::cout << "  [PASS] Win32 Extended Threadpool Timers & Wait Coalescing verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 Process Working Set Watch & Page Fault Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing Process Working Set Watch & Image File Names...\n";
+        using namespace micant::win32;
+
+        HANDLE hDummy = reinterpret_cast<HANDLE>(0x5678);
+
+        // 4.1 Initialize Working Set Watch
+        BOOL ok = InitializeProcessWorkingSetWatch(hDummy);
+        TEST_ASSERT(ok == TRUE, "InitializeProcessWorkingSetWatch succeeds");
+        ok = K32InitializeProcessWorkingSetWatch(hDummy);
+        TEST_ASSERT(ok == TRUE, "K32InitializeProcessWorkingSetWatch succeeds");
+
+        // 4.2 Query Working Set Watch Basic
+        PSAPI_WORKING_SET_WATCH_INFORMATION watchInfo[4]{};
+        ok = GetProcessWorkingSetWatch(hDummy, watchInfo, sizeof(watchInfo));
+        TEST_ASSERT(ok == TRUE, "GetProcessWorkingSetWatch succeeds");
+        TEST_ASSERT(watchInfo[0].FaultingPc != nullptr, "FaultingPc populated");
+        TEST_ASSERT(watchInfo[0].FaultingVa != nullptr, "FaultingVa populated");
+
+        // 4.3 Query Working Set Watch Ex
+        PSAPI_WORKING_SET_WATCH_INFORMATION_EX watchInfoEx[4]{};
+        ok = GetProcessWorkingSetWatchEx(hDummy, watchInfoEx, sizeof(watchInfoEx));
+        TEST_ASSERT(ok == TRUE, "GetProcessWorkingSetWatchEx succeeds");
+        TEST_ASSERT(watchInfoEx[0].BasicInfo.FaultingPc != nullptr, "Ex FaultingPc populated");
+        TEST_ASSERT(watchInfoEx[0].FaultingThreadId == 1024, "Ex FaultingThreadId matches 1024");
+
+        // 4.4 Process Image File Names
+        wchar_t imgPathW[260]{};
+        DWORD lenW = GetProcessImageFileNameW(hDummy, imgPathW, 260);
+        TEST_ASSERT(lenW > 0, "GetProcessImageFileNameW returns non-zero length");
+        TEST_ASSERT(std::wcsstr(imgPathW, L"\\Device\\HarddiskVolume1\\") != nullptr, "Image name starts with NT device path");
+
+        char imgPathA[260]{};
+        DWORD lenA = GetProcessImageFileNameA(hDummy, imgPathA, 260);
+        TEST_ASSERT(lenA > 0, "GetProcessImageFileNameA returns non-zero length");
+        TEST_ASSERT(std::strstr(imgPathA, "\\Device\\HarddiskVolume1\\") != nullptr, "ANSI Image name matches NT device path");
+
+        // 4.5 ApiSet exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessWorkingSetWatch") != nullptr, "kernel32 exports GetProcessWorkingSetWatch");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessWorkingSetWatchEx") != nullptr, "kernel32 exports GetProcessWorkingSetWatchEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessImageFileNameW") != nullptr, "kernel32 exports GetProcessImageFileNameW");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessImageFileNameA") != nullptr, "kernel32 exports GetProcessImageFileNameA");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "GetProcessWorkingSetWatch") != nullptr, "psapi exports GetProcessWorkingSetWatch");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "GetProcessWorkingSetWatchEx") != nullptr, "psapi exports GetProcessWorkingSetWatchEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessWorkingSetWatch") != nullptr, "core-psapi exports K32GetProcessWorkingSetWatch");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessWorkingSetWatchEx") != nullptr, "core-psapi exports K32GetProcessWorkingSetWatchEx");
+
+        std::cout << "  [PASS] Win32 Process Working Set Watch & Image File Names verified.\n";
+    }
+
+    std::cout << "[HORIZON 216] Placed Resources, Processor Idle Cycles, Threadpool TimerEx & Working Set Watch Summary:\n"
+              << "    Pillar 1: DirectX 12 Placed Resources & Resource Allocation Info OK\n"
+              << "    Pillar 2: NT System Processor Idle Cycle Time Telemetry OK\n"
+              << "    Pillar 3: Win32 Extended Threadpool Timers & Wait Coalescing OK\n"
+              << "    Pillar 4: Win32 Process Working Set Watch & Image File Names OK\n";
+
+    std::cout << "[TEST] Suite 432: Horizon 216 - Placed Resources, Processor Idle Cycles, Threadpool TimerEx & Working Set Watch PASSED." << std::endl;
+}
