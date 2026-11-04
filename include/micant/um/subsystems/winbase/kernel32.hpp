@@ -2845,6 +2845,8 @@ private:
         PROCESSOR_NUMBER idealProcessor{0, 0, 0};
         THREAD_POWER_THROTTLING_STATE powerThrottling{1, 1, 0};
         ULONG absoluteCpuPriority{0};
+        ULONG memoryPriority{5};
+        DWORD dynamicCodePolicy{0};
     };
     std::unordered_map<HANDLE, ThreadPacingRecord> m_threads;
 
@@ -2925,14 +2927,24 @@ public:
         if (!pData || size == 0) return FALSE;
         std::lock_guard<std::mutex> lock(m_mutex);
         auto& rec = m_threads[hThread];
-        if (threadInfoClass == ThreadPowerThrottling || threadInfoClass == 3) {
-            if (size >= sizeof(THREAD_POWER_THROTTLING_STATE)) {
-                rec.powerThrottling = *reinterpret_cast<const THREAD_POWER_THROTTLING_STATE*>(pData);
+        if (threadInfoClass == ThreadMemoryPriority || threadInfoClass == 0) {
+            if (size >= sizeof(uint32_t)) {
+                rec.memoryPriority = *reinterpret_cast<const uint32_t*>(pData);
                 return TRUE;
             }
         } else if (threadInfoClass == ThreadAbsoluteCpuPriority || threadInfoClass == 1) {
             if (size >= sizeof(ULONG)) {
                 rec.absoluteCpuPriority = *reinterpret_cast<const ULONG*>(pData);
+                return TRUE;
+            }
+        } else if (threadInfoClass == ThreadDynamicCodePolicy || threadInfoClass == 2) {
+            if (size >= sizeof(DWORD)) {
+                rec.dynamicCodePolicy = *reinterpret_cast<const DWORD*>(pData);
+                return TRUE;
+            }
+        } else if (threadInfoClass == ThreadPowerThrottling || threadInfoClass == 3) {
+            if (size >= sizeof(THREAD_POWER_THROTTLING_STATE)) {
+                rec.powerThrottling = *reinterpret_cast<const THREAD_POWER_THROTTLING_STATE*>(pData);
                 return TRUE;
             }
         }
@@ -2943,14 +2955,24 @@ public:
         if (!pData || size == 0) return FALSE;
         std::lock_guard<std::mutex> lock(m_mutex);
         const auto& rec = m_threads[hThread];
-        if (threadInfoClass == ThreadPowerThrottling || threadInfoClass == 3) {
-            if (size >= sizeof(THREAD_POWER_THROTTLING_STATE)) {
-                *reinterpret_cast<THREAD_POWER_THROTTLING_STATE*>(pData) = rec.powerThrottling;
+        if (threadInfoClass == ThreadMemoryPriority || threadInfoClass == 0) {
+            if (size >= sizeof(uint32_t)) {
+                *reinterpret_cast<uint32_t*>(pData) = rec.memoryPriority;
                 return TRUE;
             }
         } else if (threadInfoClass == ThreadAbsoluteCpuPriority || threadInfoClass == 1) {
             if (size >= sizeof(ULONG)) {
                 *reinterpret_cast<ULONG*>(pData) = rec.absoluteCpuPriority;
+                return TRUE;
+            }
+        } else if (threadInfoClass == ThreadDynamicCodePolicy || threadInfoClass == 2) {
+            if (size >= sizeof(DWORD)) {
+                *reinterpret_cast<DWORD*>(pData) = rec.dynamicCodePolicy;
+                return TRUE;
+            }
+        } else if (threadInfoClass == ThreadPowerThrottling || threadInfoClass == 3) {
+            if (size >= sizeof(THREAD_POWER_THROTTLING_STATE)) {
+                *reinterpret_cast<THREAD_POWER_THROTTLING_STATE*>(pData) = rec.powerThrottling;
                 return TRUE;
             }
         }
@@ -6341,7 +6363,46 @@ inline BOOL K32GetProcessMemoryInfo([[maybe_unused]] HANDLE hProcess, void* ppsm
     return TRUE;
 }
 
-inline constexpr int ProcessPowerThrottling = 1;
+enum PROCESS_INFORMATION_CLASS {
+    ProcessMemoryPriority = 0,
+    ProcessPowerThrottling = 1,
+    ProcessProtectionLevelInfo = 7,
+    ProcessLeapSecondInfo = 8,
+    ProcessMachineTypeInfo = 9
+};
+
+struct MEMORY_PRIORITY_INFORMATION {
+    ULONG MemoryPriority;
+};
+
+inline constexpr ULONG MEMORY_PRIORITY_LOWEST       = 0;
+inline constexpr ULONG MEMORY_PRIORITY_VERY_LOW     = 1;
+inline constexpr ULONG MEMORY_PRIORITY_LOW          = 2;
+inline constexpr ULONG MEMORY_PRIORITY_MEDIUM       = 3;
+inline constexpr ULONG MEMORY_PRIORITY_BELOW_NORMAL = 4;
+inline constexpr ULONG MEMORY_PRIORITY_NORMAL       = 5;
+
+struct PROCESS_PROTECTION_LEVEL_INFORMATION {
+    DWORD ProtectionLevel;
+};
+
+inline constexpr DWORD PROTECTION_LEVEL_NONE                  = 0x00000000;
+inline constexpr DWORD PROTECTION_LEVEL_WINTCB_LIGHT          = 0x00000001;
+inline constexpr DWORD PROTECTION_LEVEL_WINDOWS               = 0x00000002;
+inline constexpr DWORD PROTECTION_LEVEL_WINDOWS_LIGHT         = 0x00000003;
+inline constexpr DWORD PROTECTION_LEVEL_ANTIMALWARE_LIGHT     = 0x00000004;
+inline constexpr DWORD PROTECTION_LEVEL_LSA_LIGHT             = 0x00000005;
+
+struct PROCESS_MACHINE_INFORMATION {
+    uint16_t ProcessMachine;
+    uint16_t Res0;
+    DWORD MachineAttributes;
+};
+
+inline constexpr uint16_t IMAGE_FILE_MACHINE_AMD64 = 0x8664;
+inline constexpr uint16_t IMAGE_FILE_MACHINE_ARM64 = 0xAA64;
+
+inline constexpr DWORD THREAD_DYNAMIC_CODE_POLICY_PROHIBIT = 1;
 
 struct PROCESS_POWER_THROTTLING_STATE {
     uint32_t Version;
@@ -6359,12 +6420,28 @@ inline PROCESS_POWER_THROTTLING_STATE s_processPowerThrottling{
     .StateMask = 0
 };
 
+inline MEMORY_PRIORITY_INFORMATION s_processMemoryPriority{ MEMORY_PRIORITY_NORMAL };
+inline PROCESS_PROTECTION_LEVEL_INFORMATION s_processProtectionLevel{ PROTECTION_LEVEL_NONE };
+inline PROCESS_MACHINE_INFORMATION s_processMachineInfo{ IMAGE_FILE_MACHINE_AMD64, 0, 0 };
+
 inline BOOL SetProcessInformation([[maybe_unused]] HANDLE hProcess,
                                   int ProcessInformationClass,
                                   void* ProcessInformation,
                                   DWORD ProcessInformationSize) noexcept {
-    if (ProcessInformationClass == ProcessPowerThrottling) {
-        if (!ProcessInformation || ProcessInformationSize < sizeof(PROCESS_POWER_THROTTLING_STATE)) {
+    if (!ProcessInformation) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (ProcessInformationClass == ProcessMemoryPriority || ProcessInformationClass == 0) {
+        if (ProcessInformationSize < sizeof(MEMORY_PRIORITY_INFORMATION)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        s_processMemoryPriority = *reinterpret_cast<const MEMORY_PRIORITY_INFORMATION*>(ProcessInformation);
+        return TRUE;
+    }
+    if (ProcessInformationClass == ProcessPowerThrottling || ProcessInformationClass == 1) {
+        if (ProcessInformationSize < sizeof(PROCESS_POWER_THROTTLING_STATE)) {
             SetLastError(ERROR_INVALID_PARAMETER);
             return FALSE;
         }
@@ -6376,6 +6453,22 @@ inline BOOL SetProcessInformation([[maybe_unused]] HANDLE hProcess,
         s_processPowerThrottling = *pState;
         return TRUE;
     }
+    if (ProcessInformationClass == ProcessProtectionLevelInfo || ProcessInformationClass == 7) {
+        if (ProcessInformationSize < sizeof(PROCESS_PROTECTION_LEVEL_INFORMATION)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        s_processProtectionLevel = *reinterpret_cast<const PROCESS_PROTECTION_LEVEL_INFORMATION*>(ProcessInformation);
+        return TRUE;
+    }
+    if (ProcessInformationClass == ProcessMachineTypeInfo || ProcessInformationClass == 9) {
+        if (ProcessInformationSize < sizeof(PROCESS_MACHINE_INFORMATION)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        s_processMachineInfo = *reinterpret_cast<const PROCESS_MACHINE_INFORMATION*>(ProcessInformation);
+        return TRUE;
+    }
     return TRUE;
 }
 
@@ -6383,13 +6476,40 @@ inline BOOL GetProcessInformation([[maybe_unused]] HANDLE hProcess,
                                   int ProcessInformationClass,
                                   void* ProcessInformation,
                                   DWORD ProcessInformationSize) noexcept {
-    if (ProcessInformationClass == ProcessPowerThrottling) {
-        if (!ProcessInformation || ProcessInformationSize < sizeof(PROCESS_POWER_THROTTLING_STATE)) {
+    if (!ProcessInformation) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (ProcessInformationClass == ProcessMemoryPriority || ProcessInformationClass == 0) {
+        if (ProcessInformationSize < sizeof(MEMORY_PRIORITY_INFORMATION)) {
             SetLastError(ERROR_INVALID_PARAMETER);
             return FALSE;
         }
-        auto* pState = reinterpret_cast<PROCESS_POWER_THROTTLING_STATE*>(ProcessInformation);
-        *pState = s_processPowerThrottling;
+        *reinterpret_cast<MEMORY_PRIORITY_INFORMATION*>(ProcessInformation) = s_processMemoryPriority;
+        return TRUE;
+    }
+    if (ProcessInformationClass == ProcessPowerThrottling || ProcessInformationClass == 1) {
+        if (ProcessInformationSize < sizeof(PROCESS_POWER_THROTTLING_STATE)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        *reinterpret_cast<PROCESS_POWER_THROTTLING_STATE*>(ProcessInformation) = s_processPowerThrottling;
+        return TRUE;
+    }
+    if (ProcessInformationClass == ProcessProtectionLevelInfo || ProcessInformationClass == 7) {
+        if (ProcessInformationSize < sizeof(PROCESS_PROTECTION_LEVEL_INFORMATION)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        *reinterpret_cast<PROCESS_PROTECTION_LEVEL_INFORMATION*>(ProcessInformation) = s_processProtectionLevel;
+        return TRUE;
+    }
+    if (ProcessInformationClass == ProcessMachineTypeInfo || ProcessInformationClass == 9) {
+        if (ProcessInformationSize < sizeof(PROCESS_MACHINE_INFORMATION)) {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        *reinterpret_cast<PROCESS_MACHINE_INFORMATION*>(ProcessInformation) = s_processMachineInfo;
         return TRUE;
     }
     return TRUE;
@@ -9987,6 +10107,16 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("winmm.dll", "timeBeginPeriod", reinterpret_cast<void*>(timeBeginPeriod));
     ldr.registerExport("winmm.dll", "timeEndPeriod", reinterpret_cast<void*>(timeEndPeriod));
     ldr.registerExport("winmm.dll", "timeGetDevCaps", reinterpret_cast<void*>(timeGetDevCaps));
+
+    // Horizon 211: Process & Thread Information ApiSets
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetProcessInformation", reinterpret_cast<void*>(GetProcessInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-2.dll", "SetProcessInformation", reinterpret_cast<void*>(SetProcessInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-2.dll", "GetProcessInformation", reinterpret_cast<void*>(GetProcessInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-2.dll", "SetThreadInformation", reinterpret_cast<void*>(SetThreadInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-2.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "SetProcessWorkingSetSizeEx", reinterpret_cast<void*>(SetProcessWorkingSetSizeEx));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "GetProcessWorkingSetSizeEx", reinterpret_cast<void*>(GetProcessWorkingSetSizeEx));
 }
 
 

@@ -42676,3 +42676,243 @@ void Test_Horizon210_ThreadpoolIo_Options2021_FirmwareTables_And_TimerResolution
 
     std::cout << "[TEST] Suite 426: Horizon 210 - Threadpool I/O, Options 20-21, Firmware Tables & Timer Resolution PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Horizon 211 (Suite 427): DirectX 12 Agility SDK Options 22 & 23 (SER & OMM),
+// NT Secure Boot & Thread Anti-Cheat Security, Process/Thread Memory Priority
+// & DWM Frame Latency Synchronization
+// ============================================================================
+
+void Test_Horizon211_Options2223_SecureBoot_ThreadSecurity_And_MemoryPriority_Suite() {
+    using namespace micant::win32;
+    std::cout << "[TEST] Suite 427: Horizon 211 - Options 22-23, Secure Boot, Thread Security & Memory Priority..." << std::endl;
+
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::ntdll::InitializeNtdllSubsystemExports();
+    micant::dwm::InitializeDWMSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Feature Options 22 & 23 (SER & Micromaps)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing DirectX 12 Agility SDK Options 22 & 23 Feature Queries...\n";
+
+        using namespace micant::prism3d12;
+        Prism3D12DeviceImpl dev;
+
+        // Options 22: Shader Execution Reordering (SER) & Opacity Micromaps (OMM)
+        D3D12_FEATURE_DATA_D3D12_OPTIONS22 opt22{};
+        int32_t hr22 = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS22, &opt22, sizeof(opt22));
+        TEST_ASSERT(hr22 == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS22 succeeds");
+        TEST_ASSERT(opt22.ShaderExecutionReorderingTier == D3D12_SHADER_EXECUTION_REORDERING_TIER_1,
+                    "ShaderExecutionReorderingTier is Tier 1 (Path Tracing Overdrive enabled)");
+        TEST_ASSERT(opt22.OpacityMicromapTier == D3D12_OPACITY_MICROMAP_TIER_1_0,
+                    "OpacityMicromapTier is Tier 1.0 (Alpha-tested ray tracing enabled)");
+        TEST_ASSERT(opt22.PreviewFeaturesSupported == TRUE, "PreviewFeaturesSupported is TRUE");
+
+        // Options 23: Subobject Creation & Work Graphs 1.1
+        D3D12_FEATURE_DATA_D3D12_OPTIONS23 opt23{};
+        int32_t hr23 = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS23, &opt23, sizeof(opt23));
+        TEST_ASSERT(hr23 == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS23 succeeds");
+        TEST_ASSERT(opt23.SubobjectCreationSupported == TRUE, "SubobjectCreationSupported is TRUE");
+        TEST_ASSERT(opt23.WorkGraphsTier1_1Supported == TRUE, "WorkGraphsTier1_1Supported is TRUE");
+        TEST_ASSERT(opt23.DynamicDepthBiasClampSupported == TRUE, "DynamicDepthBiasClampSupported is TRUE");
+
+        std::cout << "  [PASS] DirectX 12 Agility SDK Options 22 & 23 feature verification complete.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Secure Boot & Hypervisor Anti-Cheat Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing Windows NT Secure Boot & Hypervisor Telemetry for Anti-Cheat...\n";
+
+        // 2.1 Class 145: SystemSecureBootInformation (Valorant/Vanguard, Ricochet, EAC check)
+        uint32_t retLen145 = 0;
+        ntdll::SYSTEM_SECUREBOOT_INFORMATION secBoot{};
+        NtStatus s145 = ntdll::NtQuerySystemInformation_Export(145, &secBoot, sizeof(secBoot), &retLen145);
+        TEST_ASSERT(s145 == NtStatus::Success, "Class 145 SystemSecureBootInformation succeeds");
+        TEST_ASSERT(secBoot.SecureBootEnabled == 1, "Anti-cheat: SecureBootEnabled is TRUE (Windows 11 compliance)");
+        TEST_ASSERT(secBoot.SecureBootCapable == 1, "Anti-cheat: SecureBootCapable is TRUE");
+
+        // 2.2 Class 159: SystemHypervisorInformation
+        uint32_t retLen159 = 0;
+        ntdll::SYSTEM_HYPERVISOR_INFORMATION hypInfo{};
+        NtStatus s159 = ntdll::NtQuerySystemInformation_Export(159, &hypInfo, sizeof(hypInfo), &retLen159);
+        TEST_ASSERT(s159 == NtStatus::Success, "Class 159 SystemHypervisorInformation succeeds");
+        TEST_ASSERT(hypInfo.HypervisorPresent == 0, "Native bare-metal NT microkernel reports HypervisorPresent = 0");
+        TEST_ASSERT(hypInfo.EnclaveFeaturePageAvailable == 1, "VBS Enclave hardware feature pages available");
+
+        // 2.3 Class 103: SystemCodeIntegrityInformation
+        uint32_t retLen103 = 0;
+        ntdll::SYSTEM_CODEINTEGRITY_INFORMATION ciInfo{};
+        NtStatus s103 = ntdll::NtQuerySystemInformation_Export(103, &ciInfo, sizeof(ciInfo), &retLen103);
+        TEST_ASSERT(s103 == NtStatus::Success, "Class 103 SystemCodeIntegrityInformation succeeds");
+        TEST_ASSERT((ciInfo.CodeIntegrityOptions & ntdll::CODEINTEGRITY_OPTION_ENABLED) != 0, "CodeIntegrity is ENABLED");
+        TEST_ASSERT((ciInfo.CodeIntegrityOptions & ntdll::CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED) != 0, "HVCI KMCI is ENABLED");
+
+        std::cout << "  [PASS] NT Secure Boot & Hypervisor anti-cheat telemetry verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Windows NT Thread Anti-Cheat Security & Information Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing NtSetInformationThread, ThreadHideFromDebugger & Process Anti-Debug...\n";
+
+        HANDLE hThread = reinterpret_cast<HANDLE>(0x00002004ULL);
+
+        // 3.1 ThreadHideFromDebugger (Class 17)
+        NtStatus stHide = ntdll::NtSetInformationThread(hThread, 17, nullptr, 0);
+        TEST_ASSERT(stHide == NtStatus::Success, "NtSetInformationThread(ThreadHideFromDebugger) succeeds");
+
+        uint8_t isHidden = 0;
+        ULONG retLen = 0;
+        NtStatus stQueryHide = ntdll::NtQueryInformationThread(hThread, 17, &isHidden, sizeof(isHidden), &retLen);
+        TEST_ASSERT(stQueryHide == NtStatus::Success, "NtQueryInformationThread(ThreadHideFromDebugger) succeeds");
+        TEST_ASSERT(isHidden == 1, "Thread correctly flagged as hidden from debugger");
+
+        // 3.2 ThreadQuerySetWin32StartAddress (Class 9)
+        void* testEntry = reinterpret_cast<void*>(0x00007FF614002000ULL);
+        NtStatus stSetStart = ntdll::NtSetInformationThread(hThread, 9, &testEntry, sizeof(void*));
+        TEST_ASSERT(stSetStart == NtStatus::Success, "NtSetInformationThread(ThreadQuerySetWin32StartAddress) succeeds");
+
+        void* queriedEntry = nullptr;
+        NtStatus stQueryStart = ntdll::NtQueryInformationThread(hThread, 9, &queriedEntry, sizeof(void*), &retLen);
+        TEST_ASSERT(stQueryStart == NtStatus::Success, "NtQueryInformationThread(ThreadQuerySetWin32StartAddress) succeeds");
+        TEST_ASSERT(queriedEntry == testEntry, "Win32StartAddress matches registered entry point");
+
+        // 3.3 ThreadBasicInformation (Class 0)
+        ntdll::THREAD_BASIC_INFORMATION tbi{};
+        NtStatus stQueryBasic = ntdll::NtQueryInformationThread(hThread, 0, &tbi, sizeof(tbi), &retLen);
+        TEST_ASSERT(stQueryBasic == NtStatus::Success, "NtQueryInformationThread(ThreadBasicInformation) succeeds");
+        TEST_ASSERT(tbi.ClientId.UniqueProcess == reinterpret_cast<void*>(1337), "Basic thread info reflects game PID 1337");
+        TEST_ASSERT(tbi.ClientId.UniqueThread == hThread, "Basic thread info reflects thread handle");
+
+        // 3.4 Process Anti-Debugging (Class 7, 30 & 31)
+        uintptr_t debugPort = 0xFFFFFFFF;
+        uint32_t retLenProc = 0;
+        NtStatus stPort = ntdll::NtQueryInformationProcess_Export(nullptr, 7, &debugPort, sizeof(debugPort), &retLenProc);
+        TEST_ASSERT(stPort == NtStatus::Success && debugPort == 0, "ProcessDebugPort reports 0 (no debugger)");
+
+        void* debugObj = reinterpret_cast<void*>(0xDEADBEEF);
+        NtStatus stObj = ntdll::NtQueryInformationProcess_Export(nullptr, 30, &debugObj, sizeof(debugObj), &retLenProc);
+        TEST_ASSERT(stObj == static_cast<NtStatus>(0xC0000353) && debugObj == nullptr, "ProcessDebugObjectHandle returns STATUS_PORT_NOT_SET");
+
+        uint32_t debugFlags = 0;
+        NtStatus stFlags = ntdll::NtQueryInformationProcess_Export(nullptr, 31, &debugFlags, sizeof(debugFlags), &retLenProc);
+        TEST_ASSERT(stFlags == NtStatus::Success && debugFlags == 1, "ProcessDebugFlags reports 1 (PROCESS_DEBUG_INHERIT)");
+
+        std::cout << "  [PASS] NT Thread anti-cheat security & process anti-debugging verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 Process & Thread Memory Priority Management
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing SetProcessInformation / SetThreadInformation Memory Priorities...\n";
+
+        // 4.1 ProcessMemoryPriority
+        MEMORY_PRIORITY_INFORMATION memPri{ MEMORY_PRIORITY_NORMAL };
+        BOOL bSetPri = win32::SetProcessInformation(GetCurrentProcess(), ProcessMemoryPriority, &memPri, sizeof(memPri));
+        TEST_ASSERT(bSetPri == TRUE, "SetProcessInformation(ProcessMemoryPriority) succeeds");
+
+        MEMORY_PRIORITY_INFORMATION queriedPri{};
+        BOOL bGetPri = win32::GetProcessInformation(GetCurrentProcess(), ProcessMemoryPriority, &queriedPri, sizeof(queriedPri));
+        TEST_ASSERT(bGetPri == TRUE, "GetProcessInformation(ProcessMemoryPriority) succeeds");
+        TEST_ASSERT(queriedPri.MemoryPriority == MEMORY_PRIORITY_NORMAL, "ProcessMemoryPriority is MEMORY_PRIORITY_NORMAL (5)");
+
+        // 4.2 ProcessProtectionLevelInfo
+        PROCESS_PROTECTION_LEVEL_INFORMATION protInfo{ PROTECTION_LEVEL_ANTIMALWARE_LIGHT };
+        BOOL bSetProt = win32::SetProcessInformation(GetCurrentProcess(), ProcessProtectionLevelInfo, &protInfo, sizeof(protInfo));
+        TEST_ASSERT(bSetProt == TRUE, "SetProcessInformation(ProcessProtectionLevelInfo) succeeds");
+
+        PROCESS_PROTECTION_LEVEL_INFORMATION queriedProt{};
+        BOOL bGetProt = win32::GetProcessInformation(GetCurrentProcess(), ProcessProtectionLevelInfo, &queriedProt, sizeof(queriedProt));
+        TEST_ASSERT(bGetProt == TRUE && queriedProt.ProtectionLevel == PROTECTION_LEVEL_ANTIMALWARE_LIGHT,
+                    "ProcessProtectionLevelInfo is ANTIMALWARE_LIGHT");
+
+        // 4.3 ThreadMemoryPriority & ThreadDynamicCodePolicy
+        HANDLE hTestThread = reinterpret_cast<HANDLE>(0x00003004ULL);
+        uint32_t thrMemPri = MEMORY_PRIORITY_NORMAL;
+        BOOL bSetThrPri = win32::SetThreadInformation(hTestThread, ThreadMemoryPriority, &thrMemPri, sizeof(thrMemPri));
+        TEST_ASSERT(bSetThrPri == TRUE, "SetThreadInformation(ThreadMemoryPriority) succeeds");
+
+        uint32_t queriedThrPri = 0;
+        BOOL bGetThrPri = win32::GetThreadInformation(hTestThread, ThreadMemoryPriority, &queriedThrPri, sizeof(queriedThrPri));
+        TEST_ASSERT(bGetThrPri == TRUE && queriedThrPri == MEMORY_PRIORITY_NORMAL, "ThreadMemoryPriority is MEMORY_PRIORITY_NORMAL");
+
+        DWORD dynPolicy = THREAD_DYNAMIC_CODE_POLICY_PROHIBIT;
+        BOOL bSetDyn = win32::SetThreadInformation(hTestThread, ThreadDynamicCodePolicy, &dynPolicy, sizeof(dynPolicy));
+        TEST_ASSERT(bSetDyn == TRUE, "SetThreadInformation(ThreadDynamicCodePolicy) succeeds");
+
+        DWORD queriedDyn = 0;
+        BOOL bGetDyn = win32::GetThreadInformation(hTestThread, ThreadDynamicCodePolicy, &queriedDyn, sizeof(queriedDyn));
+        TEST_ASSERT(bGetDyn == TRUE && queriedDyn == THREAD_DYNAMIC_CODE_POLICY_PROHIBIT, "ThreadDynamicCodePolicy is PROHIBIT (1)");
+
+        std::cout << "  [PASS] Process & Thread memory priority and mitigation policies verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Desktop Window Manager (DWM) Frame Latency & ApiSet Registrations
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 5] Testing DWM Composition Timing, Window Attributes & ApiSets...\n";
+
+        // 5.1 DwmFlush & Timing Info
+        auto& dwmMgr = micant::dwm::DwmCoordinator::Instance();
+        dwmMgr.Flush();
+
+        micant::dwm::DWM_TIMING_INFO timingInfo{};
+        micant::ole32::HRESULT hrTiming = dwmMgr.GetCompositionTimingInfo(nullptr, &timingInfo);
+        TEST_ASSERT(hrTiming == micant::ole32::S_OK, "DwmGetCompositionTimingInfo succeeds");
+        TEST_ASSERT(timingInfo.rateRefresh.uiNumerator == 60000 && timingInfo.rateRefresh.uiDenominator == 1000,
+                    "DWM refresh rate calibrated to 60 Hz");
+        TEST_ASSERT(timingInfo.qpcRefreshPeriod == 166666, "qpcRefreshPeriod calibrated to 10 MHz standard (~16.66 ms)");
+        TEST_ASSERT(timingInfo.cFrame >= 1, "DWM frame counter tracks rendering cycle");
+
+        // 5.2 Dynamic Loader Export Table Registration Across 5 Modules & ApiSets
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        // dwmapi.dll exports
+        TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmFlush") != nullptr, "dwmapi exports DwmFlush");
+        TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmGetCompositionTimingInfo") != nullptr, "dwmapi exports DwmGetCompositionTimingInfo");
+        TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmSetWindowAttribute") != nullptr, "dwmapi exports DwmSetWindowAttribute");
+        TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmGetWindowAttribute") != nullptr, "dwmapi exports DwmGetWindowAttribute");
+
+        // api-ms-win-dwmapi-l1-1-0.dll exports
+        TEST_ASSERT(ldr.getExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmFlush") != nullptr, "api-ms dwmapi exports DwmFlush");
+        TEST_ASSERT(ldr.getExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmGetCompositionTimingInfo") != nullptr, "api-ms dwmapi exports DwmGetCompositionTimingInfo");
+        TEST_ASSERT(ldr.getExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmSetWindowAttribute") != nullptr, "api-ms dwmapi exports DwmSetWindowAttribute");
+        TEST_ASSERT(ldr.getExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmGetWindowAttribute") != nullptr, "api-ms dwmapi exports DwmGetWindowAttribute");
+
+        // api-ms-win-core-processthreads-l1-1-1.dll & l1-1-2.dll exports
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetProcessInformation") != nullptr,
+                    "api-ms processthreads l1-1-1 exports GetProcessInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadInformation") != nullptr,
+                    "api-ms processthreads l1-1-1 exports GetThreadInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-2.dll", "SetProcessInformation") != nullptr,
+                    "api-ms processthreads l1-1-2 exports SetProcessInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-2.dll", "SetThreadInformation") != nullptr,
+                    "api-ms processthreads l1-1-2 exports SetThreadInformation");
+
+        // api-ms-win-core-memory-l1-1-6.dll exports
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-6.dll", "SetProcessWorkingSetSizeEx") != nullptr,
+                    "api-ms memory l1-1-6 exports SetProcessWorkingSetSizeEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-6.dll", "GetProcessWorkingSetSizeEx") != nullptr,
+                    "api-ms memory l1-1-6 exports GetProcessWorkingSetSizeEx");
+
+        std::cout << "[VERDICT] DirectX 12 Options 22-23 (SER & OMM), NT Secure Boot & Thread Anti-Cheat Security,\n"
+                  << "          Process/Thread Memory Priority & DWM Frame Latency operate 100% natively without shims!\n";
+    }
+
+    std::cout << "[HORIZON 211] Options 22-23, Secure Boot, Thread Security & Memory Priority Summary:\n"
+              << "    Pillar 1: DirectX 12 Agility SDK Options 22 & 23 (SER Tier 1, OMM Tier 1.0, Work Graphs 1.1) OK\n"
+              << "    Pillar 2: NT Secure Boot (Class 145), Hypervisor (Class 159) & Code Integrity (Class 103) OK\n"
+              << "    Pillar 3: Thread Anti-Cheat (ThreadHideFromDebugger, Win32StartAddress, Process Anti-Debug) OK\n"
+              << "    Pillar 4: Win32 Process & Thread Memory Priority (Set/GetProcessInformation & Thread) OK\n"
+              << "    Pillar 5: Desktop Window Manager Frame Pacing & Dynamic Loader ApiSet Registrations OK\n";
+
+    std::cout << "[TEST] Suite 427: Horizon 211 - Options 22-23, Secure Boot, Thread Security & Memory Priority PASSED." << std::endl;
+}

@@ -695,6 +695,15 @@ inline void InitializeDWMSubsystemExports() {
     ldr.registerExport("dwmapi.dll", "DwmModifyPreviousDxFrameDuration", reinterpret_cast<void*>(&DwmModifyPreviousDxFrameDuration));
     ldr.registerExport("dwmapi.dll", "DwmSetPresentParameters", reinterpret_cast<void*>(&DwmSetPresentParameters));
     ldr.registerExport("dwmapi.dll", "DwmDefWindowProc", reinterpret_cast<void*>(DwmDefWindowProc));
+
+    // ApiSet: api-ms-win-dwmapi-l1-1-0.dll
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmIsCompositionEnabled", reinterpret_cast<void*>(&DwmIsCompositionEnabled));
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmSetWindowAttribute", reinterpret_cast<void*>(&DwmSetWindowAttribute));
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmGetWindowAttribute", reinterpret_cast<void*>(&DwmGetWindowAttribute));
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmFlush", reinterpret_cast<void*>(&DwmFlush));
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmGetCompositionTimingInfo", reinterpret_cast<void*>(&DwmGetCompositionTimingInfo));
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmExtendFrameIntoClientArea", reinterpret_cast<void*>(&DwmExtendFrameIntoClientArea));
+    ldr.registerExport("api-ms-win-dwmapi-l1-1-0.dll", "DwmGetColorizationColor", reinterpret_cast<void*>(&DwmGetColorizationColor));
 }
 
 } // namespace micant::dwm

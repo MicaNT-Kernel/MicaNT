@@ -198,7 +198,7 @@ public:
             if (itUsr != exportRegistry_.end()) return itUsr->second;
         }
         // 7. Desktop Window Manager & Compositing
-        else if (modLower.starts_with("ext-ms-win-dwmapi-") || modLower == "dwmapi.dll" || modLower == "dwmapi") {
+        else if (modLower.starts_with("ext-ms-win-dwmapi-") || modLower.starts_with("api-ms-win-dwmapi-") || modLower == "dwmapi.dll" || modLower == "dwmapi") {
             auto itDwm = exportRegistry_.find(normalizeKey("dwmapi.dll", functionName));
             if (itDwm != exportRegistry_.end()) return itDwm->second;
         }

@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite427") {
+        RUN_TEST(Test_Horizon211_Options2223_SecureBoot_ThreadSecurity_And_MemoryPriority_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite426") {
         RUN_TEST(Test_Horizon210_ThreadpoolIo_Options2021_FirmwareTables_And_TimerResolution_Suite);
         return g_FailedTests;
@@ -2135,6 +2139,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon208_Minidump_Options1011_Toolhelp32_And_ProcessorPerfInfo_Suite);
     RUN_TEST(Test_Horizon209_ThreadpoolLegacy_Options1617_QPCTSC_And_ExtendedHandleInfo_Suite);
     RUN_TEST(Test_Horizon210_ThreadpoolIo_Options2021_FirmwareTables_And_TimerResolution_Suite);
+    RUN_TEST(Test_Horizon211_Options2223_SecureBoot_ThreadSecurity_And_MemoryPriority_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

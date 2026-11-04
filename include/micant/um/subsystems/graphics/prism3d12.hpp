@@ -657,6 +657,8 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS18 = 34;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS19 = 35;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS20 = 36;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS21 = 37;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS22 = 38;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS23 = 39;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -793,6 +795,28 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS21 {
     D3D12_WORK_GRAPHS_TIER      WorkGraphsTier{D3D12_WORK_GRAPHS_TIER_1_0};
     D3D12_EXECUTE_INDIRECT_TIER ExecuteIndirectTier{D3D12_EXECUTE_INDIRECT_TIER_1_1};
     BOOL                        SampleCmpSimilarShaderInstructionsSupported{1};
+};
+
+enum D3D12_SHADER_EXECUTION_REORDERING_TIER {
+    D3D12_SHADER_EXECUTION_REORDERING_TIER_NOT_SUPPORTED = 0,
+    D3D12_SHADER_EXECUTION_REORDERING_TIER_1             = 1
+};
+
+enum D3D12_OPACITY_MICROMAP_TIER {
+    D3D12_OPACITY_MICROMAP_TIER_NOT_SUPPORTED = 0,
+    D3D12_OPACITY_MICROMAP_TIER_1_0           = 1
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS22 {
+    D3D12_SHADER_EXECUTION_REORDERING_TIER ShaderExecutionReorderingTier{D3D12_SHADER_EXECUTION_REORDERING_TIER_1};
+    D3D12_OPACITY_MICROMAP_TIER            OpacityMicromapTier{D3D12_OPACITY_MICROMAP_TIER_1_0};
+    BOOL                                   PreviewFeaturesSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS23 {
+    BOOL SubobjectCreationSupported{1};
+    BOOL WorkGraphsTier1_1Supported{1};
+    BOOL DynamicDepthBiasClampSupported{1};
 };
 
 
@@ -1756,6 +1780,22 @@ public:
             pData->WorkGraphsTier = D3D12_WORK_GRAPHS_TIER_1_0;
             pData->ExecuteIndirectTier = D3D12_EXECUTE_INDIRECT_TIER_1_1;
             pData->SampleCmpSimilarShaderInstructionsSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS22) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS22)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS22*>(pFeatureSupportData);
+            pData->ShaderExecutionReorderingTier = D3D12_SHADER_EXECUTION_REORDERING_TIER_1;
+            pData->OpacityMicromapTier = D3D12_OPACITY_MICROMAP_TIER_1_0;
+            pData->PreviewFeaturesSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS23) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS23)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS23*>(pFeatureSupportData);
+            pData->SubobjectCreationSupported = TRUE;
+            pData->WorkGraphsTier1_1Supported = TRUE;
+            pData->DynamicDepthBiasClampSupported = TRUE;
             return 0;
         }
 

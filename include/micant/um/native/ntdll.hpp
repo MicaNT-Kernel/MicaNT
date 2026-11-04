@@ -1572,6 +1572,24 @@ inline NtStatus WINAPI NtQueryInformationProcess_Export(
             if (ReturnLength) *ReturnLength = sizeof(uintptr_t);
             return NtStatus::Success;
         }
+        case 30: { // ProcessDebugObjectHandle
+            if (ProcessInformationLength < sizeof(void*)) {
+                if (ReturnLength) *ReturnLength = sizeof(void*);
+                return NtStatus::InfoLengthMismatch;
+            }
+            *reinterpret_cast<void**>(ProcessInformation) = nullptr;
+            if (ReturnLength) *ReturnLength = sizeof(void*);
+            return static_cast<NtStatus>(0xC0000353); // STATUS_PORT_NOT_SET
+        }
+        case 31: { // ProcessDebugFlags
+            if (ProcessInformationLength < sizeof(uint32_t)) {
+                if (ReturnLength) *ReturnLength = sizeof(uint32_t);
+                return NtStatus::InfoLengthMismatch;
+            }
+            *reinterpret_cast<uint32_t*>(ProcessInformation) = 1; // 1 = PROCESS_DEBUG_INHERIT (No debugger attached)
+            if (ReturnLength) *ReturnLength = sizeof(uint32_t);
+            return NtStatus::Success;
+        }
         default: {
             if (ProcessInformation && ProcessInformationLength > 0) {
                 std::memset(ProcessInformation, 0, ProcessInformationLength);
@@ -1782,6 +1800,17 @@ struct SYSTEM_INTERRUPT_INFORMATION {
     uint32_t TimeIncrement{156250};
     uint32_t DpcBypassCount{0};
     uint32_t ApcBypassCount{0};
+};
+
+struct SYSTEM_SECUREBOOT_INFORMATION {
+    uint8_t SecureBootEnabled{1};
+    uint8_t SecureBootCapable{1};
+};
+
+struct SYSTEM_HYPERVISOR_INFORMATION {
+    uint8_t HypervisorPresent{0};
+    uint8_t EnclaveFeaturePageAvailable{1};
+    uint8_t Reserved[2]{0, 0};
 };
 
 inline NtStatus WINAPI NtQuerySystemInformation_Export(
@@ -2119,6 +2148,30 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITY_INFORMATION);
             return NtStatus::Success;
         }
+        case 145: { // SystemSecureBootInformation
+            if (SystemInformationLength < sizeof(SYSTEM_SECUREBOOT_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECUREBOOT_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_SECUREBOOT_INFORMATION*>(SystemInformation);
+            pInfo->SecureBootEnabled = 1;
+            pInfo->SecureBootCapable = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECUREBOOT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 159: { // SystemHypervisorInformation
+            if (SystemInformationLength < sizeof(SYSTEM_HYPERVISOR_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_HYPERVISOR_INFORMATION*>(SystemInformation);
+            pInfo->HypervisorPresent = 0;
+            pInfo->EnclaveFeaturePageAvailable = 1;
+            pInfo->Reserved[0] = 0;
+            pInfo->Reserved[1] = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -2431,9 +2484,75 @@ inline NtStatus WINAPI NtQueryInformationJobObject(HANDLE /*JobHandle*/, uint32_
     return NtStatus::Success;
 }
 
-inline NtStatus WINAPI NtQueryInformationThread(HANDLE /*ThreadHandle*/, uint32_t /*ThreadInformationClass*/, void* /*ThreadInformation*/, ULONG /*ThreadInformationLength*/, ULONG* ReturnLength) noexcept {
-    if (ReturnLength) *ReturnLength = 32;
-    return NtStatus::Success;
+struct CLIENT_ID {
+    void* UniqueProcess;
+    void* UniqueThread;
+};
+
+struct THREAD_BASIC_INFORMATION {
+    NtStatus  ExitStatus;
+    void*     TebBaseAddress;
+    CLIENT_ID ClientId;
+    uintptr_t AffinityMask;
+    int32_t   Priority;
+    int32_t   BasePriority;
+};
+
+inline std::unordered_map<HANDLE, bool> s_hiddenThreads;
+inline std::mutex s_hiddenThreadsMutex;
+inline std::unordered_map<HANDLE, void*> s_threadStartAddresses;
+
+inline NtStatus WINAPI NtQueryInformationThread(HANDLE ThreadHandle, uint32_t ThreadInformationClass, void* ThreadInformation, ULONG ThreadInformationLength, ULONG* ReturnLength) noexcept {
+    if (!ThreadInformation && ThreadInformationLength > 0) return NtStatus::InvalidParameter;
+
+    switch (ThreadInformationClass) {
+        case 0: { // ThreadBasicInformation
+            if (ThreadInformationLength < sizeof(THREAD_BASIC_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(THREAD_BASIC_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<THREAD_BASIC_INFORMATION*>(ThreadInformation);
+            pInfo->ExitStatus = NtStatus::Success;
+            pInfo->TebBaseAddress = reinterpret_cast<void*>(0x00007FF6FFFFE000ULL);
+            pInfo->ClientId.UniqueProcess = reinterpret_cast<HANDLE>(1337);
+            pInfo->ClientId.UniqueThread = ThreadHandle ? ThreadHandle : reinterpret_cast<HANDLE>(0x1004);
+            pInfo->AffinityMask = 0xFFFF;
+            pInfo->Priority = 8;
+            pInfo->BasePriority = 8;
+            if (ReturnLength) *ReturnLength = sizeof(THREAD_BASIC_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 9: { // ThreadQuerySetWin32StartAddress
+            if (ThreadInformationLength < sizeof(void*)) {
+                if (ReturnLength) *ReturnLength = sizeof(void*);
+                return NtStatus::InfoLengthMismatch;
+            }
+            std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
+            auto it = s_threadStartAddresses.find(ThreadHandle);
+            void* startAddr = (it != s_threadStartAddresses.end()) ? it->second : reinterpret_cast<void*>(0x00007FF610001000ULL);
+            *reinterpret_cast<void**>(ThreadInformation) = startAddr;
+            if (ReturnLength) *ReturnLength = sizeof(void*);
+            return NtStatus::Success;
+        }
+        case 17: { // ThreadHideFromDebugger
+            if (ThreadInformationLength < sizeof(uint8_t)) {
+                if (ReturnLength) *ReturnLength = sizeof(uint8_t);
+                return NtStatus::InfoLengthMismatch;
+            }
+            std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
+            bool isHidden = s_hiddenThreads[ThreadHandle];
+            *reinterpret_cast<uint8_t*>(ThreadInformation) = isHidden ? 1 : 0;
+            if (ReturnLength) *ReturnLength = sizeof(uint8_t);
+            return NtStatus::Success;
+        }
+        default: {
+            if (ThreadInformation && ThreadInformationLength > 0) {
+                std::memset(ThreadInformation, 0, ThreadInformationLength);
+            }
+            if (ReturnLength) *ReturnLength = ThreadInformationLength;
+            return NtStatus::Success;
+        }
+    }
 }
 
 inline NtStatus WINAPI NtQueryInformationToken(HANDLE /*TokenHandle*/, uint32_t /*TokenInformationClass*/, void* /*TokenInformation*/, ULONG /*TokenInformationLength*/, ULONG* ReturnLength) noexcept {
@@ -2585,7 +2704,25 @@ inline NtStatus WINAPI NtSetInformationDebugObject(HANDLE /*DebugObjectHandle*/,
 
 inline NtStatus WINAPI NtSetInformationObject(HANDLE /*Handle*/, uint32_t /*ObjectInformationClass*/, void* /*ObjectInformation*/, ULONG /*ObjectInformationLength*/) noexcept { return NtStatus::Success; }
 inline NtStatus WINAPI NtSetInformationProcess(HANDLE /*ProcessHandle*/, uint32_t /*ProcessInformationClass*/, void* /*ProcessInformation*/, ULONG /*ProcessInformationLength*/) noexcept { return NtStatus::Success; }
-inline NtStatus WINAPI NtSetInformationThread(HANDLE /*ThreadHandle*/, uint32_t /*ThreadInformationClass*/, void* /*ThreadInformation*/, ULONG /*ThreadInformationLength*/) noexcept { return NtStatus::Success; }
+inline NtStatus WINAPI NtSetInformationThread(HANDLE ThreadHandle, uint32_t ThreadInformationClass, void* ThreadInformation, ULONG ThreadInformationLength) noexcept {
+    switch (ThreadInformationClass) {
+        case 17: { // ThreadHideFromDebugger
+            std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
+            s_hiddenThreads[ThreadHandle] = true;
+            return NtStatus::Success;
+        }
+        case 9: { // ThreadQuerySetWin32StartAddress
+            if (ThreadInformation && ThreadInformationLength >= sizeof(void*)) {
+                std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
+                s_threadStartAddresses[ThreadHandle] = *reinterpret_cast<void**>(ThreadInformation);
+                return NtStatus::Success;
+            }
+            return NtStatus::InvalidParameter;
+        }
+        default:
+            return NtStatus::Success;
+    }
+}
 inline NtStatus WINAPI NtSetInformationToken(HANDLE /*TokenHandle*/, uint32_t /*TokenInformationClass*/, void* /*TokenInformation*/, ULONG /*TokenInformationLength*/) noexcept { return NtStatus::Success; }
 inline NtStatus WINAPI NtSetLowEventPair(HANDLE /*EventPairHandle*/) noexcept { return NtStatus::Success; }
 inline NtStatus WINAPI NtSetSystemEnvironmentValueEx(void* /*VariableName*/, void* /*VendorGuid*/, void* /*Value*/, ULONG /*ValueLength*/, ULONG /*Attributes*/) noexcept { return NtStatus::Success; }
