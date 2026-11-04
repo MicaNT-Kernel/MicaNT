@@ -132,6 +132,20 @@ using PTP_TIMER = TP_TIMER*;
 struct TP_WAIT;
 using PTP_WAIT = TP_WAIT*;
 
+struct TP_IO;
+using PTP_IO = TP_IO*;
+using PTP_IO_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PVOID Overlapped, ULONG IoResult, ULONG_PTR NumberOfBytesTransferred, PTP_IO Io);
+
+using MMRESULT = UINT;
+inline constexpr MMRESULT TIMERR_NOERROR = 0;
+inline constexpr MMRESULT TIMERR_NOCANDO = 97;
+
+struct TIMECAPS {
+    UINT wPeriodMin;
+    UINT wPeriodMax;
+};
+using LPTIMECAPS = TIMECAPS*;
+
 using TP_WAIT_RESULT = ULONG;
 
 using PTP_WORK_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
@@ -5447,6 +5461,210 @@ inline bool CloseTimerQueueHandle(HANDLE hObject) noexcept {
     return false;
 }
 
+// ============================================================================
+// Horizon 210: Threadpool I/O Architecture
+// ============================================================================
+
+struct TP_IO {
+    HANDLE FileHandle{nullptr};
+    PTP_IO_CALLBACK Callback{nullptr};
+    PVOID Context{nullptr};
+    PTP_CALLBACK_ENVIRON CallbackEnviron{nullptr};
+    std::atomic<bool> Active{true};
+    std::atomic<uint32_t> PendingIoCount{0};
+    std::mutex Mtx;
+    std::condition_variable Cv;
+};
+
+inline PTP_IO WINAPI CreateThreadpoolIo(
+    HANDLE fl,
+    PTP_IO_CALLBACK pfnio,
+    PVOID pv,
+    PTP_CALLBACK_ENVIRON pcbe
+) noexcept {
+    if (!fl || fl == INVALID_HANDLE_VALUE || !pfnio) return nullptr;
+    auto* tpIo = new (std::nothrow) TP_IO();
+    if (!tpIo) return nullptr;
+    tpIo->FileHandle = fl;
+    tpIo->Callback = pfnio;
+    tpIo->Context = pv;
+    tpIo->CallbackEnviron = pcbe;
+    return tpIo;
+}
+
+inline VOID WINAPI StartThreadpoolIo(PTP_IO pio) noexcept {
+    if (!pio) return;
+    pio->PendingIoCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline VOID WINAPI CancelThreadpoolIo(PTP_IO pio) noexcept {
+    if (!pio) return;
+    uint32_t cur = pio->PendingIoCount.load(std::memory_order_relaxed);
+    while (cur > 0 && !pio->PendingIoCount.compare_exchange_weak(cur, cur - 1, std::memory_order_relaxed)) {}
+    pio->Cv.notify_all();
+}
+
+inline VOID WINAPI WaitForThreadpoolIoCallbacks(PTP_IO pio, BOOL fCancelPendingCallbacks) noexcept {
+    if (!pio) return;
+    if (fCancelPendingCallbacks) {
+        pio->PendingIoCount.store(0, std::memory_order_relaxed);
+        pio->Cv.notify_all();
+    } else {
+        std::unique_lock<std::mutex> lock(pio->Mtx);
+        pio->Cv.wait(lock, [pio]() { return pio->PendingIoCount.load(std::memory_order_relaxed) == 0; });
+    }
+}
+
+inline VOID WINAPI CloseThreadpoolIo(PTP_IO pio) noexcept {
+    if (!pio) return;
+    pio->Active.store(false, std::memory_order_relaxed);
+    WaitForThreadpoolIoCallbacks(pio, TRUE);
+    delete pio;
+}
+
+// ============================================================================
+// Horizon 210: SMBIOS / ACPI System Firmware Table Architecture
+// ============================================================================
+
+#pragma pack(push, 1)
+struct RawSMBIOSData {
+    BYTE  Used20CallingMethod;
+    BYTE  SMBIOSMajorVersion;
+    BYTE  SMBIOSMinorVersion;
+    BYTE  DmiRevision;
+    DWORD Length;
+    BYTE  SMBIOSTableData[1];
+};
+#pragma pack(pop)
+
+inline UINT WINAPI EnumSystemFirmwareTables(
+    DWORD FirmwareTableProviderSignature,
+    PVOID pFirmwareTableEnumBuffer,
+    DWORD BufferSize
+) noexcept {
+    std::vector<DWORD> tables;
+    if (FirmwareTableProviderSignature == 0x52534D42) { // 'RSMB'
+        tables.push_back(0x00000000);
+    } else if (FirmwareTableProviderSignature == 0x41435049) { // 'ACPI'
+        tables.push_back(0x43495041); // 'APIC'
+        tables.push_back(0x50434146); // 'FACP'
+        tables.push_back(0x54455048); // 'HPET'
+        tables.push_back(0x54445353); // 'SSDT'
+        tables.push_back(0x54445344); // 'DSDT'
+    } else if (FirmwareTableProviderSignature == 0x4649524D) { // 'FIRM'
+        tables.push_back(0x00000000);
+    } else {
+        SetLastError(87);
+        return 0;
+    }
+
+    DWORD needed = static_cast<DWORD>(tables.size() * sizeof(DWORD));
+    if (!pFirmwareTableEnumBuffer || BufferSize < needed) {
+        return needed;
+    }
+
+    std::memcpy(pFirmwareTableEnumBuffer, tables.data(), needed);
+    return needed;
+}
+
+inline UINT WINAPI GetSystemFirmwareTable(
+    DWORD FirmwareTableProviderSignature,
+    DWORD FirmwareTableID,
+    PVOID pFirmwareTableBuffer,
+    DWORD BufferSize
+) noexcept {
+    if (FirmwareTableProviderSignature == 0x52534D42) { // 'RSMB'
+        static const uint8_t s_smbiosTable[] = {
+            0x00, 0x03, 0x05, 0x35, 0x48, 0x00, 0x00, 0x00,
+            0x00, 0x1A, 0x01, 0x00, 0x01, 0x02, 0x00, 0xE8,
+            0x03, 0x09, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x05, 0xFF, 0xFF,
+            'M', 'i', 'c', 'a', 'N', 'T', ' ', 'B', 'I', 'O', 'S', 0x00,
+            '2', '.', '5', '.', '0', 0x00,
+            '1', '1', '/', '0', '3', '/', '2', '0', '2', '6', 0x00,
+            0x00,
+            0x01, 0x1B, 0x02, 0x00, 0x01, 0x02, 0x03, 0x04,
+            0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x66,
+            0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+            0x03, 0x01, 0x00,
+            'M', 'i', 'c', 'a', 'N', 'T', ' ', 'C', 'o', 'r', 'p', 'o', 'r', 'a', 't', 'i', 'o', 'n', 0x00,
+            'M', 'i', 'c', 'a', 'N', 'T', ' ', 'W', 'o', 'r', 'k', 's', 't', 'a', 't', 'i', 'o', 'n', 0x00,
+            '1', '.', '0', 0x00,
+            'S', 'N', '-', 'M', 'I', 'C', 'A', 'N', 'T', '-', '7', '7', '7', '7', 0x00,
+            0x00
+        };
+        DWORD needed = static_cast<DWORD>(sizeof(s_smbiosTable));
+        if (!pFirmwareTableBuffer || BufferSize < needed) {
+            return needed;
+        }
+        std::memcpy(pFirmwareTableBuffer, s_smbiosTable, needed);
+        return needed;
+    } else if (FirmwareTableProviderSignature == 0x41435049) { // 'ACPI'
+        struct AcpiHeader {
+            DWORD Signature;
+            DWORD Length;
+            BYTE  Revision;
+            BYTE  Checksum;
+            char  OemId[6];
+            char  OemTableId[8];
+            DWORD OemRevision;
+            DWORD CreatorId;
+            DWORD CreatorRevision;
+        };
+        AcpiHeader hdr{};
+        hdr.Signature = FirmwareTableID;
+        hdr.Length = sizeof(AcpiHeader);
+        hdr.Revision = 2;
+        hdr.Checksum = 0;
+        std::memcpy(hdr.OemId, "MICANT", 6);
+        std::memcpy(hdr.OemTableId, "MICANT01", 8);
+        hdr.OemRevision = 1;
+        hdr.CreatorId = 0x544E434D;
+        hdr.CreatorRevision = 1;
+
+        DWORD needed = sizeof(AcpiHeader);
+        if (!pFirmwareTableBuffer || BufferSize < needed) {
+            return needed;
+        }
+        std::memcpy(pFirmwareTableBuffer, &hdr, needed);
+        return needed;
+    }
+
+    SetLastError(87);
+    return 0;
+}
+
+// ============================================================================
+// Horizon 210: High-Resolution Multimedia Timers
+// ============================================================================
+
+inline std::atomic<UINT> s_CurrentTimerPeriod{ 1 };
+
+inline MMRESULT WINAPI timeGetDevCaps(LPTIMECAPS ptc, UINT cbtc) noexcept {
+    if (!ptc || cbtc < sizeof(TIMECAPS)) return TIMERR_NOCANDO;
+    ptc->wPeriodMin = 1;
+    ptc->wPeriodMax = 1000000;
+    return TIMERR_NOERROR;
+}
+
+inline MMRESULT WINAPI timeBeginPeriod(UINT uPeriod) noexcept {
+    if (uPeriod < 1 || uPeriod > 1000000) return TIMERR_NOCANDO;
+    s_CurrentTimerPeriod.store(uPeriod, std::memory_order_relaxed);
+    return TIMERR_NOERROR;
+}
+
+inline MMRESULT WINAPI timeEndPeriod(UINT uPeriod) noexcept {
+    if (uPeriod < 1 || uPeriod > 1000000) return TIMERR_NOCANDO;
+    s_CurrentTimerPeriod.store(1, std::memory_order_relaxed);
+    return TIMERR_NOERROR;
+}
+
+inline DWORD WINAPI timeGetTime() noexcept {
+    static const auto s_timeBoot = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    return static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(now - s_timeBoot).count());
+}
+
 inline int MulDiv(int nNumber, int nNumerator, int nDenominator) noexcept {
     if (nDenominator == 0) return -1;
     int64_t res = (static_cast<int64_t>(nNumber) * static_cast<int64_t>(nNumerator)) / nDenominator;
@@ -9730,6 +9948,45 @@ inline void InitializeWin32SubsystemExports() {
 
     ldr.registerExport("api-ms-win-core-profile-l1-1-0.dll", "QueryPerformanceCounter", reinterpret_cast<void*>(QueryPerformanceCounter));
     ldr.registerExport("api-ms-win-core-profile-l1-1-0.dll", "QueryPerformanceFrequency", reinterpret_cast<void*>(QueryPerformanceFrequency));
+
+    // Horizon 210: Threadpool I/O, Firmware Tables & Multimedia Timers
+    ldr.registerExport("kernel32.dll", "CreateThreadpoolIo", reinterpret_cast<void*>(CreateThreadpoolIo));
+    ldr.registerExport("kernel32.dll", "StartThreadpoolIo", reinterpret_cast<void*>(StartThreadpoolIo));
+    ldr.registerExport("kernel32.dll", "CancelThreadpoolIo", reinterpret_cast<void*>(CancelThreadpoolIo));
+    ldr.registerExport("kernel32.dll", "WaitForThreadpoolIoCallbacks", reinterpret_cast<void*>(WaitForThreadpoolIoCallbacks));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolIo", reinterpret_cast<void*>(CloseThreadpoolIo));
+
+    ldr.registerExport("api-ms-win-core-threadpool-io-l1-1-0.dll", "CreateThreadpoolIo", reinterpret_cast<void*>(CreateThreadpoolIo));
+    ldr.registerExport("api-ms-win-core-threadpool-io-l1-1-0.dll", "StartThreadpoolIo", reinterpret_cast<void*>(StartThreadpoolIo));
+    ldr.registerExport("api-ms-win-core-threadpool-io-l1-1-0.dll", "CancelThreadpoolIo", reinterpret_cast<void*>(CancelThreadpoolIo));
+    ldr.registerExport("api-ms-win-core-threadpool-io-l1-1-0.dll", "WaitForThreadpoolIoCallbacks", reinterpret_cast<void*>(WaitForThreadpoolIoCallbacks));
+    ldr.registerExport("api-ms-win-core-threadpool-io-l1-1-0.dll", "CloseThreadpoolIo", reinterpret_cast<void*>(CloseThreadpoolIo));
+
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolIo", reinterpret_cast<void*>(CreateThreadpoolIo));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "StartThreadpoolIo", reinterpret_cast<void*>(StartThreadpoolIo));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CancelThreadpoolIo", reinterpret_cast<void*>(CancelThreadpoolIo));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolIoCallbacks", reinterpret_cast<void*>(WaitForThreadpoolIoCallbacks));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolIo", reinterpret_cast<void*>(CloseThreadpoolIo));
+
+    ldr.registerExport("kernel32.dll", "GetSystemFirmwareTable", reinterpret_cast<void*>(GetSystemFirmwareTable));
+    ldr.registerExport("kernel32.dll", "EnumSystemFirmwareTables", reinterpret_cast<void*>(EnumSystemFirmwareTables));
+    ldr.registerExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetSystemFirmwareTable", reinterpret_cast<void*>(GetSystemFirmwareTable));
+    ldr.registerExport("api-ms-win-core-sysinfo-l1-2-0.dll", "EnumSystemFirmwareTables", reinterpret_cast<void*>(EnumSystemFirmwareTables));
+
+    ldr.registerExport("kernel32.dll", "timeGetTime", reinterpret_cast<void*>(timeGetTime));
+    ldr.registerExport("kernel32.dll", "timeBeginPeriod", reinterpret_cast<void*>(timeBeginPeriod));
+    ldr.registerExport("kernel32.dll", "timeEndPeriod", reinterpret_cast<void*>(timeEndPeriod));
+    ldr.registerExport("kernel32.dll", "timeGetDevCaps", reinterpret_cast<void*>(timeGetDevCaps));
+
+    ldr.registerExport("api-ms-win-mm-time-l1-1-0.dll", "timeGetTime", reinterpret_cast<void*>(timeGetTime));
+    ldr.registerExport("api-ms-win-mm-time-l1-1-0.dll", "timeBeginPeriod", reinterpret_cast<void*>(timeBeginPeriod));
+    ldr.registerExport("api-ms-win-mm-time-l1-1-0.dll", "timeEndPeriod", reinterpret_cast<void*>(timeEndPeriod));
+    ldr.registerExport("api-ms-win-mm-time-l1-1-0.dll", "timeGetDevCaps", reinterpret_cast<void*>(timeGetDevCaps));
+
+    ldr.registerExport("winmm.dll", "timeGetTime", reinterpret_cast<void*>(timeGetTime));
+    ldr.registerExport("winmm.dll", "timeBeginPeriod", reinterpret_cast<void*>(timeBeginPeriod));
+    ldr.registerExport("winmm.dll", "timeEndPeriod", reinterpret_cast<void*>(timeEndPeriod));
+    ldr.registerExport("winmm.dll", "timeGetDevCaps", reinterpret_cast<void*>(timeGetDevCaps));
 }
 
 

@@ -655,6 +655,19 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS16 = 32;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS17 = 33;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS18 = 34;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS19 = 35;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS20 = 36;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS21 = 37;
+
+enum D3D12_SAMPLE_LOCATIONS_TIER {
+    D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
+    D3D12_SAMPLE_LOCATIONS_TIER_1             = 1,
+    D3D12_SAMPLE_LOCATIONS_TIER_2             = 2
+};
+
+enum D3D12_EXECUTE_INDIRECT_TIER {
+    D3D12_EXECUTE_INDIRECT_TIER_1_0 = 10,
+    D3D12_EXECUTE_INDIRECT_TIER_1_1 = 11
+};
 
 
 enum D3D12_RENDER_PASS_TIER {
@@ -769,6 +782,17 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS18 {
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS19 {
     BOOL MipLevelOffsetsSupported{1};
     BOOL HalfFloatPrecisionSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS20 {
+    BOOL                        ProgrammableSamplePositionsTier{1};
+    D3D12_SAMPLE_LOCATIONS_TIER SampleLocationsTier{D3D12_SAMPLE_LOCATIONS_TIER_2};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS21 {
+    D3D12_WORK_GRAPHS_TIER      WorkGraphsTier{D3D12_WORK_GRAPHS_TIER_1_0};
+    D3D12_EXECUTE_INDIRECT_TIER ExecuteIndirectTier{D3D12_EXECUTE_INDIRECT_TIER_1_1};
+    BOOL                        SampleCmpSimilarShaderInstructionsSupported{1};
 };
 
 
@@ -1717,6 +1741,21 @@ public:
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS19*>(pFeatureSupportData);
             pData->MipLevelOffsetsSupported = TRUE;
             pData->HalfFloatPrecisionSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS20) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS20)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS20*>(pFeatureSupportData);
+            pData->ProgrammableSamplePositionsTier = TRUE;
+            pData->SampleLocationsTier = D3D12_SAMPLE_LOCATIONS_TIER_2;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS21) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS21)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS21*>(pFeatureSupportData);
+            pData->WorkGraphsTier = D3D12_WORK_GRAPHS_TIER_1_0;
+            pData->ExecuteIndirectTier = D3D12_EXECUTE_INDIRECT_TIER_1_1;
+            pData->SampleCmpSimilarShaderInstructionsSupported = TRUE;
             return 0;
         }
 

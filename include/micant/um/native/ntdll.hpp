@@ -1453,6 +1453,14 @@ struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     uint64_t BootFlags;
 };
 
+struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
+    ULONG ProviderSignature;
+    ULONG Action;
+    ULONG TableID;
+    ULONG TableBufferLength;
+    uint8_t TableBuffer[1];
+};
+
 struct RTL_PROCESS_MODULE_INFORMATION {
     void* Section{nullptr};
     void* MappedBase{nullptr};
@@ -2051,6 +2059,55 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = kTotalSize;
             return NtStatus::Success;
         }
+        case 76: { // SystemFirmwareTableInformation
+            if (SystemInformationLength < 16) {
+                if (ReturnLength) *ReturnLength = 16;
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pFw = reinterpret_cast<SYSTEM_FIRMWARE_TABLE_INFORMATION*>(SystemInformation);
+            if (pFw->Action == 0) { // Enumerate
+                if (pFw->ProviderSignature == 0x52534D42) { // 'RSMB'
+                    constexpr uint32_t needed = 4;
+                    if (pFw->TableBufferLength < needed) {
+                        pFw->TableBufferLength = needed;
+                        if (ReturnLength) *ReturnLength = 16 + needed;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    *reinterpret_cast<ULONG*>(pFw->TableBuffer) = 0;
+                    pFw->TableBufferLength = needed;
+                } else if (pFw->ProviderSignature == 0x41435049) { // 'ACPI'
+                    const uint32_t acpiTables[] = { 0x43495041, 0x50434146, 0x54455048, 0x54445353, 0x54445344 };
+                    constexpr uint32_t needed = sizeof(acpiTables);
+                    if (pFw->TableBufferLength < needed) {
+                        pFw->TableBufferLength = needed;
+                        if (ReturnLength) *ReturnLength = 16 + needed;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    std::memcpy(pFw->TableBuffer, acpiTables, needed);
+                    pFw->TableBufferLength = needed;
+                }
+            } else if (pFw->Action == 1) { // Get
+                if (pFw->ProviderSignature == 0x52534D42) { // 'RSMB'
+                    static const uint8_t s_smbiosRaw[] = {
+                        0x00, 0x03, 0x05, 0x35, 0x48, 0x00, 0x00, 0x00,
+                        0x00, 0x1A, 0x01, 0x00, 0x01, 0x02, 0x00, 0xE8,
+                        0x03, 0x09, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x05, 0xFF, 0xFF,
+                        'M', 'i', 'c', 'a', 'N', 'T', 0x00, 0x00
+                    };
+                    uint32_t needed = static_cast<uint32_t>(sizeof(s_smbiosRaw));
+                    if (pFw->TableBufferLength < needed) {
+                        pFw->TableBufferLength = needed;
+                        if (ReturnLength) *ReturnLength = 16 + needed;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    std::memcpy(pFw->TableBuffer, s_smbiosRaw, needed);
+                    pFw->TableBufferLength = needed;
+                }
+            }
+            if (ReturnLength) *ReturnLength = 16 + pFw->TableBufferLength;
+            return NtStatus::Success;
+        }
         case 103: { // SystemCodeIntegrityInformation
             if (SystemInformationLength < sizeof(SYSTEM_CODEINTEGRITY_INFORMATION)) {
                 if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITY_INFORMATION);
@@ -2439,10 +2496,25 @@ inline NtStatus WINAPI NtQueryTimer(HANDLE /*TimerHandle*/, uint32_t /*TimerInfo
     return NtStatus::Success;
 }
 
+inline std::atomic<ULONG> s_NtTimerResolution{ 10000 }; // 1.0 ms default
+
+inline NtStatus WINAPI NtSetTimerResolution(ULONG DesiredResolution, BOOLEAN SetResolution, ULONG* CurrentResolution) noexcept {
+    if (SetResolution) {
+        ULONG res = std::clamp(DesiredResolution, 5000U, 156250U);
+        s_NtTimerResolution.store(res, std::memory_order_relaxed);
+    } else {
+        s_NtTimerResolution.store(156250U, std::memory_order_relaxed);
+    }
+    if (CurrentResolution) {
+        *CurrentResolution = s_NtTimerResolution.load(std::memory_order_relaxed);
+    }
+    return NtStatus::Success;
+}
+
 inline NtStatus WINAPI NtQueryTimerResolution(ULONG* MaximumTime, ULONG* MinimumTime, ULONG* CurrentTime) noexcept {
     if (MaximumTime) *MaximumTime = 156250;
     if (MinimumTime) *MinimumTime = 5000;
-    if (CurrentTime) *CurrentTime = 10000;
+    if (CurrentTime) *CurrentTime = s_NtTimerResolution.load(std::memory_order_relaxed);
     return NtStatus::Success;
 }
 
@@ -2953,6 +3025,7 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQuerySystemTime", reinterpret_cast<void*>(NtQuerySystemTime));
     ldr.registerExport("ntdll.dll", "NtQueryTimer", reinterpret_cast<void*>(NtQueryTimer));
     ldr.registerExport("ntdll.dll", "NtQueryTimerResolution", reinterpret_cast<void*>(NtQueryTimerResolution));
+    ldr.registerExport("ntdll.dll", "NtSetTimerResolution", reinterpret_cast<void*>(NtSetTimerResolution));
     ldr.registerExport("ntdll.dll", "NtQueryValueKey", reinterpret_cast<void*>(NtQueryValueKey_Export));
     ldr.registerExport("ntdll.dll", "NtQueryVirtualMemory", reinterpret_cast<void*>(NtQueryVirtualMemory));
     ldr.registerExport("ntdll.dll", "NtQueueApcThread", reinterpret_cast<void*>(NtQueueApcThread));
