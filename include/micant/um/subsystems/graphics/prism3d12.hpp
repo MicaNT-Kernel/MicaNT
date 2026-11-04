@@ -350,6 +350,11 @@ enum D3D12_PRIMITIVE_TOPOLOGY_TYPE {
     D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH     = 4
 };
 
+struct D3D12_CACHED_PIPELINE_STATE {
+    const void* pCachedBlob{ nullptr };
+    size_t CachedBlobSizeInBytes{ 0 };
+};
+
 struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
     void* pRootSignature{ nullptr };
     D3D12_SHADER_BYTECODE VS{};
@@ -367,6 +372,15 @@ struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
     DXGI_FORMAT DSVFormat{ DXGI_FORMAT_UNKNOWN };
     DXGI_SAMPLE_DESC SampleDesc{};
     uint32_t NodeMask{ 0 };
+    D3D12_CACHED_PIPELINE_STATE CachedPSO{};
+    uint32_t Flags{ 0 };
+};
+
+struct D3D12_COMPUTE_PIPELINE_STATE_DESC {
+    void* pRootSignature{ nullptr };
+    D3D12_SHADER_BYTECODE CS{};
+    uint32_t NodeMask{ 0 };
+    D3D12_CACHED_PIPELINE_STATE CachedPSO{};
     uint32_t Flags{ 0 };
 };
 
@@ -1349,12 +1363,49 @@ public:
         const void* /*pOptimizedClearValue*/,
         const IID& /*riidResource*/,
         void** /*ppvResource*/) { return 0; }
+    virtual int32_t CreatePipelineLibrary(
+        const void* /*pLibraryBlob*/,
+        size_t /*BlobLength*/,
+        const IID& /*riid*/,
+        void** /*ppPipelineLibrary*/) { return 0; }
+};
+
+static constexpr IID IID_ID3D12Device1 = 
+    { 0x77cca7ba, 0x7186, 0x4b27, { 0xba, 0xfa, 0x0f, 0xe4, 0x03, 0xe4, 0x7b, 0x05 } };
+
+static constexpr IID IID_ID3D12PipelineLibrary = 
+    { 0xc642c32a, 0x32ce, 0x4256, { 0xa4, 0xed, 0x31, 0x18, 0xcb, 0x57, 0xc6, 0x00 } };
+
+static constexpr IID IID_ID3D12PipelineLibrary1 = 
+    { 0x80eabac4, 0x2637, 0x4537, { 0xb1, 0x7a, 0x24, 0x29, 0xa7, 0x32, 0x64, 0x01 } };
+
+class ID3D12PipelineLibrary : public ID3D12DeviceChild {
+public:
+    virtual int32_t StorePipeline(const wchar_t* pName, ID3D12PipelineState* pPipeline) = 0;
+    virtual int32_t LoadGraphicsPipeline(const wchar_t* pName, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc, const IID& riid, void** ppPipelineState) = 0;
+    virtual int32_t LoadComputePipeline(const wchar_t* pName, const D3D12_COMPUTE_PIPELINE_STATE_DESC* pDesc, const IID& riid, void** ppPipelineState) = 0;
+    virtual size_t GetSerializedSize() = 0;
+    virtual int32_t Serialize(void* pData, size_t DataSizeInBytes) = 0;
+};
+
+class ID3D12PipelineLibrary1 : public ID3D12PipelineLibrary {
+public:
+    virtual int32_t LoadPipeline(const wchar_t* pName, const D3D12_PIPELINE_STATE_STREAM_DESC* pDesc, const IID& riid, void** ppPipelineState) = 0;
+};
+
+class ID3D12Device1 : public ID3D12Device {
+public:
+    virtual int32_t CreatePipelineLibrary(
+        const void* pLibraryBlob,
+        size_t BlobLength,
+        const IID& riid,
+        void** ppPipelineLibrary) = 0;
 };
 
 static constexpr IID IID_ID3D12Device8 = 
     { 0x9218e66e, 0x19b4, 0x4ec2, { 0xa7, 0x76, 0xb2, 0xd4, 0x44, 0x53, 0x4f, 0x16 } };
 
-class ID3D12Device8 : public ID3D12Device {
+class ID3D12Device8 : public ID3D12Device1 {
 public:
     virtual void CreateSamplerFeedbackUnorderedAccessView(
         ID3D12Resource* pTargetedResource,
@@ -2460,6 +2511,166 @@ public:
     [[nodiscard]] uint32_t GetStoreCount() const noexcept { return m_storeCount; }
 };
 
+
+class Prism3D12PipelineLibraryImpl : public ID3D12PipelineLibrary1 {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    ID3D12Device* m_pDevice{ nullptr };
+    mutable std::mutex m_mutex;
+    std::unordered_map<std::wstring, ID3D12PipelineState*> m_pipelines;
+
+public:
+    Prism3D12PipelineLibraryImpl(ID3D12Device* pDevice, const void* pBlob, size_t blobLen)
+        : m_pDevice(pDevice) {
+        if (m_pDevice) m_pDevice->AddRef();
+        if (pBlob && blobLen >= 12) {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(pBlob);
+            if (std::memcmp(p, "PRISMPL1", 8) == 0) {
+                uint32_t count = 0;
+                std::memcpy(&count, p + 8, sizeof(count));
+                size_t offset = 12;
+                for (uint32_t i = 0; i < count && offset + 4 <= blobLen; ++i) {
+                    uint32_t nameLen = 0;
+                    std::memcpy(&nameLen, p + offset, 4);
+                    offset += 4;
+                    if (offset + nameLen * sizeof(wchar_t) <= blobLen) {
+                        std::wstring name(reinterpret_cast<const wchar_t*>(p + offset), nameLen);
+                        offset += nameLen * sizeof(wchar_t);
+                        ID3D12PipelineState* pso = nullptr;
+                        D3D12_GRAPHICS_PIPELINE_STATE_DESC dummyDesc{};
+                        if (m_pDevice) {
+                            (void)m_pDevice->CreateGraphicsPipelineState(&dummyDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pso));
+                            if (pso) {
+                                m_pipelines[name] = pso;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ~Prism3D12PipelineLibraryImpl() override {
+        for (auto& [k, v] : m_pipelines) {
+            if (v) v->Release();
+        }
+        if (m_pDevice) {
+            m_pDevice->Release();
+        }
+    }
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
+        if (!ppv) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
+            riid == IID_ID3D12PipelineLibrary || riid == IID_ID3D12PipelineLibrary1) {
+            *ppv = static_cast<ID3D12PipelineLibrary1*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262;
+    }
+
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t*) override { return 0; }
+
+    int32_t GetDevice(const IID& riid, void** ppvDevice) override {
+        if (!m_pDevice || !ppvDevice) return -1;
+        return m_pDevice->QueryInterface(riid, ppvDevice);
+    }
+
+    int32_t StorePipeline(const wchar_t* pName, ID3D12PipelineState* pPipeline) override {
+        if (!pName || !pPipeline) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::wstring key(pName);
+        if (m_pipelines.find(key) != m_pipelines.end()) {
+            return -2147024809; // E_INVALIDARG: Name already exists in library
+        }
+        pPipeline->AddRef();
+        m_pipelines[key] = pPipeline;
+        return 0;
+    }
+
+    int32_t LoadGraphicsPipeline(const wchar_t* pName, [[maybe_unused]] const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc, const IID& riid, void** ppPipelineState) override {
+        if (!pName || !ppPipelineState) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pipelines.find(std::wstring(pName));
+        if (it != m_pipelines.end() && it->second) {
+            return it->second->QueryInterface(riid, ppPipelineState);
+        }
+        *ppPipelineState = nullptr;
+        return -2147024809; // E_INVALIDARG
+    }
+
+    int32_t LoadComputePipeline(const wchar_t* pName, [[maybe_unused]] const D3D12_COMPUTE_PIPELINE_STATE_DESC* pDesc, const IID& riid, void** ppPipelineState) override {
+        if (!pName || !ppPipelineState) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pipelines.find(std::wstring(pName));
+        if (it != m_pipelines.end() && it->second) {
+            return it->second->QueryInterface(riid, ppPipelineState);
+        }
+        *ppPipelineState = nullptr;
+        return -2147024809; // E_INVALIDARG
+    }
+
+    int32_t LoadPipeline(const wchar_t* pName, [[maybe_unused]] const D3D12_PIPELINE_STATE_STREAM_DESC* pDesc, const IID& riid, void** ppPipelineState) override {
+        if (!pName || !ppPipelineState) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pipelines.find(std::wstring(pName));
+        if (it != m_pipelines.end() && it->second) {
+            return it->second->QueryInterface(riid, ppPipelineState);
+        }
+        *ppPipelineState = nullptr;
+        return -2147024809; // E_INVALIDARG
+    }
+
+    size_t GetSerializedSize() override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t total = 12; // Magic 'PRISMPL1' (8 bytes) + Count (4 bytes)
+        for (const auto& [k, v] : m_pipelines) {
+            total += 4 + k.size() * sizeof(wchar_t);
+        }
+        return total;
+    }
+
+    int32_t Serialize(void* pData, size_t DataSizeInBytes) override {
+        if (!pData) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t required = 12;
+        for (const auto& [k, v] : m_pipelines) {
+            required += 4 + k.size() * sizeof(wchar_t);
+        }
+        if (DataSizeInBytes < required) return -2147024882; // E_OUTOFMEMORY / insufficient buffer
+        uint8_t* p = reinterpret_cast<uint8_t*>(pData);
+        std::memcpy(p, "PRISMPL1", 8);
+        uint32_t count = static_cast<uint32_t>(m_pipelines.size());
+        std::memcpy(p + 8, &count, sizeof(count));
+        size_t offset = 12;
+        for (const auto& [k, v] : m_pipelines) {
+            uint32_t nameLen = static_cast<uint32_t>(k.size());
+            std::memcpy(p + offset, &nameLen, sizeof(nameLen));
+            offset += sizeof(nameLen);
+            std::memcpy(p + offset, k.data(), nameLen * sizeof(wchar_t));
+            offset += nameLen * sizeof(wchar_t);
+        }
+        return 0;
+    }
+
+    [[nodiscard]] uint32_t GetPipelineCount() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return static_cast<uint32_t>(m_pipelines.size());
+    }
+};
+
 // D3D12 Device Implementation
 class Prism3D12DeviceImpl : public ID3D12Device10 {
 private:
@@ -2470,6 +2681,7 @@ private:
     uint32_t m_metaCommandsCreated{ 0 };
     uint32_t m_heapsCreated{ 0 };
     uint32_t m_placedResourcesCreated{ 0 };
+    uint32_t m_pipelineLibrariesCreated{ 0 };
 
 public:
     Prism3D12DeviceImpl(IUnknown* pAdapter = nullptr, D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_12_0)
@@ -2485,7 +2697,7 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
             *ppv = static_cast<ID3D12Device10*>(this);
             AddRef();
             return 0;
@@ -2532,6 +2744,7 @@ public:
     [[nodiscard]] uint32_t GetMetaCommandsCreated() const noexcept { return m_metaCommandsCreated; }
     [[nodiscard]] uint32_t GetHeapsCreated() const noexcept { return m_heapsCreated; }
     [[nodiscard]] uint32_t GetPlacedResourcesCreated() const noexcept { return m_placedResourcesCreated; }
+    [[nodiscard]] uint32_t GetPipelineLibrariesCreated() const noexcept { return m_pipelineLibrariesCreated; }
 
     D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo(
         uint32_t visibleMask,
@@ -2600,6 +2813,19 @@ public:
             break;
         }
         return props;
+    }
+
+    int32_t CreatePipelineLibrary(
+        const void* pLibraryBlob,
+        size_t BlobLength,
+        const IID& riid,
+        void** ppPipelineLibrary) override {
+        if (!ppPipelineLibrary) return -1;
+        auto* lib = new Prism3D12PipelineLibraryImpl(this, pLibraryBlob, BlobLength);
+        int32_t hr = lib->QueryInterface(riid, ppPipelineLibrary);
+        lib->Release();
+        if (hr == 0) m_pipelineLibrariesCreated++;
+        return hr;
     }
 
     int32_t CreateReservedResource(

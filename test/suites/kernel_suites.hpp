@@ -44778,3 +44778,300 @@ inline void Test_Horizon219_CustomHeaps_LogicalProcessorEx_AffinityUpdates_And_W
 
     std::cout << "[TEST] Suite 435: Horizon 219 - Custom Heaps & Device10, NT Logical Processor Ex, Affinity Updates & Wintrust Crypto PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 436: Horizon 220 - Pipeline Library & Cached Blobs, NT System CPU Set Information (Class 104), Win32 Mitigation Policies & Secret Agreement
+// ============================================================================
+static void Test_Horizon220_PipelineLibrary_CpuSetInfo_MitigationPolicy_And_SecretAgreement_Suite() {
+    std::cout << "\n===============================================================================\n"
+              << "[TEST SUITE 436] Horizon 220: Pipeline Library, CPU Set Info, Mitigation Policies & Secret Agreement\n"
+              << "===============================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Pipeline Library & Cached Blobs
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 Pipeline Library & Cached Blobs...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_2, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice creates ID3D12Device");
+
+        ID3D12Device1* pDev1 = nullptr;
+        hr = pDev->QueryInterface(IID_ID3D12Device1, reinterpret_cast<void**>(&pDev1));
+        TEST_ASSERT(hr == 0 && pDev1 != nullptr, "QueryInterface returns ID3D12Device1");
+
+        // 1.1 Create empty pipeline library
+        ID3D12PipelineLibrary1* pPipeLib = nullptr;
+        hr = pDev1->CreatePipelineLibrary(nullptr, 0, IID_ID3D12PipelineLibrary1, reinterpret_cast<void**>(&pPipeLib));
+        TEST_ASSERT(hr == 0 && pPipeLib != nullptr, "CreatePipelineLibrary creates empty ID3D12PipelineLibrary1");
+
+        size_t emptySz = pPipeLib->GetSerializedSize();
+        TEST_ASSERT(emptySz >= 12, "Empty pipeline library serialized size >= 12 bytes header");
+
+        // 1.2 Store pipelines
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC dummyGfxDesc{};
+        ID3D12PipelineState* pRealGfxPso = nullptr;
+        hr = pDev->CreateGraphicsPipelineState(&dummyGfxDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pRealGfxPso));
+        TEST_ASSERT(hr == 0 && pRealGfxPso != nullptr, "CreateGraphicsPipelineState creates graphics PSO");
+
+        ID3D12PipelineState* pRealComputePso = nullptr;
+        hr = pDev->CreateGraphicsPipelineState(&dummyGfxDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pRealComputePso));
+        TEST_ASSERT(hr == 0 && pRealComputePso != nullptr, "CreateGraphicsPipelineState creates compute PSO");
+
+        hr = pPipeLib->StorePipeline(L"Cyberpunk2077_RTXDI_ShaderPSO", pRealGfxPso);
+        TEST_ASSERT(hr == 0, "StorePipeline stores graphics PSO successfully");
+
+        // Duplicate name should fail with E_INVALIDARG
+        hr = pPipeLib->StorePipeline(L"Cyberpunk2077_RTXDI_ShaderPSO", pRealGfxPso);
+        TEST_ASSERT(hr != 0, "StorePipeline fails when duplicate pipeline name is added");
+
+        hr = pPipeLib->StorePipeline(L"ApexLegends_ComputeDispatchPSO", pRealComputePso);
+        TEST_ASSERT(hr == 0, "StorePipeline stores compute PSO successfully");
+
+        pRealGfxPso->Release();
+        pRealComputePso->Release();
+
+        // 1.3 Serialize pipeline library
+        size_t fullSz = pPipeLib->GetSerializedSize();
+        TEST_ASSERT(fullSz > emptySz, "Serialized size increases after storing pipelines");
+
+        std::vector<uint8_t> blob(fullSz, 0);
+        hr = pPipeLib->Serialize(blob.data(), fullSz);
+        TEST_ASSERT(hr == 0, "Serialize succeeds into allocated buffer");
+        TEST_ASSERT(std::memcmp(blob.data(), "PRISMPL1", 8) == 0, "Serialized blob begins with magic PRISMPL1 signature");
+
+        // 1.4 Deserialization & Loading
+        ID3D12PipelineLibrary1* pLoadedLib = nullptr;
+        hr = pDev1->CreatePipelineLibrary(blob.data(), blob.size(), IID_ID3D12PipelineLibrary1, reinterpret_cast<void**>(&pLoadedLib));
+        TEST_ASSERT(hr == 0 && pLoadedLib != nullptr, "CreatePipelineLibrary reconstructs pipeline library from cached blob");
+
+        ID3D12PipelineState* pLoadedPso = nullptr;
+        hr = pLoadedLib->LoadGraphicsPipeline(L"Cyberpunk2077_RTXDI_ShaderPSO", &dummyGfxDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pLoadedPso));
+        TEST_ASSERT(hr == 0 && pLoadedPso != nullptr, "LoadGraphicsPipeline loads cached graphics PSO");
+        pLoadedPso->Release();
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC dummyCompDesc{};
+        hr = pLoadedLib->LoadComputePipeline(L"ApexLegends_ComputeDispatchPSO", &dummyCompDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pLoadedPso));
+        TEST_ASSERT(hr == 0 && pLoadedPso != nullptr, "LoadComputePipeline loads cached compute PSO");
+        pLoadedPso->Release();
+
+        // Non-existent PSO should fail
+        hr = pLoadedLib->LoadGraphicsPipeline(L"NonExistentShaderPSO", &dummyGfxDesc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&pLoadedPso));
+        TEST_ASSERT(hr != 0, "LoadGraphicsPipeline returns failure on unknown pipeline name");
+
+        pLoadedLib->Release();
+        pPipeLib->Release();
+        pDev1->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 Pipeline Library & Cached Blobs verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT System CPU Set Information (Class 104)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemCpuSetInformation (Class 104)...\n";
+        using namespace micant::ntdll;
+
+        ULONG returnLen = 0;
+        // 2.1 Null buffer query -> returns InfoLengthMismatch and calculates length
+        micant::NtStatus st = NtQuerySystemInformation_Export(104, nullptr, 0, &returnLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(104) returns InfoLengthMismatch on null buffer");
+        TEST_ASSERT(returnLen == 16 * sizeof(SYSTEM_CPU_SET_INFORMATION), "ReturnLength equals 16 CPU Set records");
+
+        // 2.2 Allocate buffer and query
+        std::vector<uint8_t> buffer(returnLen, 0);
+        st = NtQuerySystemInformation_Export(104, buffer.data(), static_cast<ULONG>(buffer.size()), &returnLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(104) succeeds with allocated buffer");
+
+        auto* pCpuSets = reinterpret_cast<SYSTEM_CPU_SET_INFORMATION*>(buffer.data());
+        for (uint32_t i = 0; i < 16; ++i) {
+            TEST_ASSERT(pCpuSets[i].Size == sizeof(SYSTEM_CPU_SET_INFORMATION), "CPU set entry size matches sizeof(SYSTEM_CPU_SET_INFORMATION)");
+            TEST_ASSERT(pCpuSets[i].Type == CpuSetInformation, "CPU set entry type is CpuSetInformation");
+            TEST_ASSERT(pCpuSets[i].CpuSet.Id == 256 + i, "CPU set ID matches expected ID");
+            TEST_ASSERT(pCpuSets[i].CpuSet.Group == 0, "CPU set group is 0");
+            TEST_ASSERT(pCpuSets[i].CpuSet.LogicalProcessorIndex == static_cast<uint8_t>(i), "Logical processor index matches");
+
+            if (i < 4) {
+                TEST_ASSERT(pCpuSets[i].CpuSet.EfficiencyClass == 2, "Cores 0-3 report EfficiencyClass 2 (3D V-Cache P-core)");
+                TEST_ASSERT(pCpuSets[i].CpuSet.LastLevelCacheIndex == 0, "Cores 0-3 report L3 cache index 0");
+                TEST_ASSERT(pCpuSets[i].CpuSet.NumaNodeIndex == 0, "Cores 0-3 report NUMA node 0");
+            } else if (i < 8) {
+                TEST_ASSERT(pCpuSets[i].CpuSet.EfficiencyClass == 1, "Cores 4-7 report EfficiencyClass 1 (Standard P-core)");
+                TEST_ASSERT(pCpuSets[i].CpuSet.LastLevelCacheIndex == 0, "Cores 4-7 report L3 cache index 0");
+                TEST_ASSERT(pCpuSets[i].CpuSet.NumaNodeIndex == 0, "Cores 4-7 report NUMA node 0");
+            } else {
+                TEST_ASSERT(pCpuSets[i].CpuSet.EfficiencyClass == 0, "Cores 8-15 report EfficiencyClass 0 (E-core)");
+                TEST_ASSERT(pCpuSets[i].CpuSet.LastLevelCacheIndex == 1, "Cores 8-15 report L3 cache index 1");
+                TEST_ASSERT(pCpuSets[i].CpuSet.NumaNodeIndex == 1, "Cores 8-15 report NUMA node 1");
+            }
+        }
+
+        std::cout << "  [PASS] SystemCpuSetInformation (Class 104) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Mitigation Policies & GetSystemCpuSetInformation
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Win32 Mitigation Policies & GetSystemCpuSetInformation...\n";
+        using namespace micant::win32;
+        InitializeWin32SubsystemExports();
+
+        // 3.1 GetSystemCpuSetInformation probe with zero buffer
+        ULONG neededLen = 0;
+        BOOL bRes = GetSystemCpuSetInformation(nullptr, 0, &neededLen, GetCurrentProcess(), 0);
+        TEST_ASSERT(bRes == FALSE, "GetSystemCpuSetInformation fails with buffer size 0");
+        TEST_ASSERT(GetLastError() == ERROR_INSUFFICIENT_BUFFER, "GetLastError returns ERROR_INSUFFICIENT_BUFFER");
+        TEST_ASSERT(neededLen == 16 * sizeof(SYSTEM_CPU_SET_INFORMATION), "GetSystemCpuSetInformation returns 16 records length");
+
+        std::vector<uint8_t> cpuSetBuf(neededLen, 0);
+        bRes = GetSystemCpuSetInformation(reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(cpuSetBuf.data()), neededLen, &neededLen, GetCurrentProcess(), 0);
+        TEST_ASSERT(bRes == TRUE, "GetSystemCpuSetInformation succeeds with allocated buffer");
+
+        // 3.2 Process Dynamic Code Policy
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynPol{};
+        dynPol.ProhibitDynamicCode = 1;
+        dynPol.AllowThreadOptOut = 1;
+        bRes = SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &dynPol, sizeof(dynPol));
+        TEST_ASSERT(bRes == TRUE, "SetProcessMitigationPolicy sets ProcessDynamicCodePolicy");
+
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY readDynPol{};
+        bRes = GetProcessMitigationPolicy(GetCurrentProcess(), ProcessDynamicCodePolicy, &readDynPol, sizeof(readDynPol));
+        TEST_ASSERT(bRes == TRUE, "GetProcessMitigationPolicy retrieves ProcessDynamicCodePolicy");
+        TEST_ASSERT(readDynPol.ProhibitDynamicCode == 1 && readDynPol.AllowThreadOptOut == 1, "Dynamic code policy flags preserved");
+
+        // 3.3 Process Binary Signature Policy
+        PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY sigPol{};
+        sigPol.MicrosoftSignedOnly = 1;
+        sigPol.MitigationOptIn = 1;
+        bRes = SetProcessMitigationPolicy(ProcessSignaturePolicy, &sigPol, sizeof(sigPol));
+        TEST_ASSERT(bRes == TRUE, "SetProcessMitigationPolicy sets ProcessSignaturePolicy");
+
+        PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY readSigPol{};
+        bRes = GetProcessMitigationPolicy(GetCurrentProcess(), ProcessSignaturePolicy, &readSigPol, sizeof(readSigPol));
+        TEST_ASSERT(bRes == TRUE, "GetProcessMitigationPolicy retrieves ProcessSignaturePolicy");
+        TEST_ASSERT(readSigPol.MicrosoftSignedOnly == 1 && readSigPol.MitigationOptIn == 1, "Signature policy flags preserved");
+
+        // 3.4 Process Font Disable Policy
+        PROCESS_MITIGATION_FONT_DISABLE_POLICY fontPol{};
+        fontPol.DisableNonSystemFonts = 1;
+        bRes = SetProcessMitigationPolicy(ProcessFontDisablePolicy, &fontPol, sizeof(fontPol));
+        TEST_ASSERT(bRes == TRUE, "SetProcessMitigationPolicy sets ProcessFontDisablePolicy");
+
+        PROCESS_MITIGATION_FONT_DISABLE_POLICY readFontPol{};
+        bRes = GetProcessMitigationPolicy(GetCurrentProcess(), ProcessFontDisablePolicy, &readFontPol, sizeof(readFontPol));
+        TEST_ASSERT(bRes == TRUE, "GetProcessMitigationPolicy retrieves ProcessFontDisablePolicy");
+        TEST_ASSERT(readFontPol.DisableNonSystemFonts == 1, "Font disable policy flags preserved");
+
+        // 3.5 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetSystemCpuSetInformation") != nullptr, "kernel32.dll exports GetSystemCpuSetInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetSystemCpuSetInformation") != nullptr, "api-ms-win-core-processthreads-l1-1-3.dll exports GetSystemCpuSetInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-6.dll", "GetSystemCpuSetInformation") != nullptr, "api-ms-win-core-processthreads-l1-1-6.dll exports GetSystemCpuSetInformation");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetProcessMitigationPolicy") != nullptr, "kernel32.dll exports SetProcessMitigationPolicy");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessMitigationPolicy") != nullptr, "kernel32.dll exports GetProcessMitigationPolicy");
+
+        std::cout << "  [PASS] Win32 Mitigation Policies & GetSystemCpuSetInformation verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt Key Import/Export & Secret Agreement
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing BCrypt Key Import/Export & Secret Agreement...\n";
+        using namespace micant::km::crypto;
+        InitializeCngKernelDriver();
+
+        // 4.1 Import Alice & Bob Key Material
+        uint8_t aliceKeyData[32]{};
+        uint8_t bobKeyData[32]{};
+        for (uint32_t i = 0; i < 32; ++i) {
+            aliceKeyData[i] = static_cast<uint8_t>(0xA0 + i);
+            bobKeyData[i] = static_cast<uint8_t>(0xB0 + i);
+        }
+
+        BCRYPT_KEY_HANDLE hAliceKey = nullptr;
+        BCRYPT_KEY_HANDLE hBobKey = nullptr;
+
+        NTSTATUS st = BCryptImportKey(nullptr, nullptr, nullptr, &hAliceKey, nullptr, 0, aliceKeyData, sizeof(aliceKeyData), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAliceKey != nullptr, "BCryptImportKey imports Alice key");
+
+        st = BCryptImportKey(nullptr, nullptr, nullptr, &hBobKey, nullptr, 0, bobKeyData, sizeof(bobKeyData), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hBobKey != nullptr, "BCryptImportKey imports Bob key");
+
+        // 4.2 Test BCryptExportKey
+        uint32_t exportLen = 0;
+        st = BCryptExportKey(hAliceKey, nullptr, nullptr, nullptr, 0, &exportLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && exportLen == 32, "BCryptExportKey calculates exported key length (32 bytes)");
+
+        std::vector<uint8_t> exportedAlice(exportLen, 0);
+        st = BCryptExportKey(hAliceKey, nullptr, nullptr, exportedAlice.data(), exportLen, &exportLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptExportKey exports Alice key material");
+        TEST_ASSERT(std::memcmp(exportedAlice.data(), aliceKeyData, 32) == 0, "Exported Alice key matches original bytes");
+
+        // 4.3 Test BCryptSecretAgreement
+        BCRYPT_SECRET_HANDLE hAliceSecret = nullptr;
+        st = BCryptSecretAgreement(hAliceKey, hBobKey, &hAliceSecret, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAliceSecret != nullptr, "BCryptSecretAgreement creates shared secret context (Alice side)");
+
+        BCRYPT_SECRET_HANDLE hBobSecret = nullptr;
+        st = BCryptSecretAgreement(hBobKey, hAliceKey, &hBobSecret, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hBobSecret != nullptr, "BCryptSecretAgreement creates shared secret context (Bob side)");
+
+        // 4.4 Test BCryptDeriveKey (Raw Secret, Hash, HMAC)
+        uint8_t aliceDerivedRaw[32]{};
+        uint32_t derivedLen = 0;
+        st = BCryptDeriveKey(hAliceSecret, BCRYPT_KDF_RAW_SECRET, nullptr, aliceDerivedRaw, 32, &derivedLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && derivedLen == 32, "BCryptDeriveKey derives raw secret");
+
+        uint8_t bobDerivedRaw[32]{};
+        st = BCryptDeriveKey(hBobSecret, BCRYPT_KDF_RAW_SECRET, nullptr, bobDerivedRaw, 32, &derivedLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDeriveKey derives raw secret on Bob side");
+
+        uint8_t aliceDerivedHash[32]{};
+        st = BCryptDeriveKey(hAliceSecret, BCRYPT_KDF_HASH, nullptr, aliceDerivedHash, 32, &derivedLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && derivedLen == 32, "BCryptDeriveKey derives SHA-256 hashed secret");
+
+        uint8_t bobDerivedHash[32]{};
+        st = BCryptDeriveKey(hBobSecret, BCRYPT_KDF_HASH, nullptr, bobDerivedHash, 32, &derivedLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDeriveKey derives SHA-256 hashed secret on Bob side");
+
+        TEST_ASSERT(std::memcmp(aliceDerivedHash, bobDerivedHash, 32) == 0, "Alice and Bob derive identical SHA-256 keys from agreed secret");
+
+        // Cleanup
+        st = BCryptDestroySecret(hAliceSecret);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDestroySecret destroys Alice secret");
+        st = BCryptDestroySecret(hBobSecret);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDestroySecret destroys Bob secret");
+
+        st = BCryptDestroyKey(hAliceKey);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDestroyKey destroys Alice key");
+        st = BCryptDestroyKey(hBobKey);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDestroyKey destroys Bob key");
+
+        // 4.5 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptSecretAgreement") != nullptr, "cng.sys exports BCryptSecretAgreement");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptDestroySecret") != nullptr, "cng.sys exports BCryptDestroySecret");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptDeriveKey") != nullptr, "cng.sys exports BCryptDeriveKey");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptExportKey") != nullptr, "cng.sys exports BCryptExportKey");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptImportKey") != nullptr, "cng.sys exports BCryptImportKey");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptSecretAgreement") != nullptr, "bcrypt.dll exports BCryptSecretAgreement");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDestroySecret") != nullptr, "bcrypt.dll exports BCryptDestroySecret");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDeriveKey") != nullptr, "bcrypt.dll exports BCryptDeriveKey");
+
+        std::cout << "  [PASS] BCrypt Key Import/Export & Secret Agreement verified.\n";
+    }
+
+    std::cout << "[HORIZON 220] Pipeline Library, CPU Set Info, Mitigation Policies & Secret Agreement Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Pipeline Library & Cached Blobs OK\n"
+              << "    Pillar 2: NT System CPU Set Information (Class 104) OK\n"
+              << "    Pillar 3: Win32 Mitigation Policies & GetSystemCpuSetInformation OK\n"
+              << "    Pillar 4: BCrypt Key Import/Export & Secret Agreement OK\n";
+
+    std::cout << "[TEST] Suite 436: Horizon 220 - Pipeline Library, CPU Set Info, Mitigation Policies & Secret Agreement PASSED." << std::endl;
+}

@@ -502,7 +502,28 @@ struct ProcessBasicInformation {
     Handle inheritedFromUniqueProcessId{0};
 };
 
+#ifndef BCRYPTBUFFER_DEFINED
+#define BCRYPTBUFFER_DEFINED
+struct BCryptBuffer {
+    uint32_t cbBuffer;
+    uint32_t BufferType;
+    void*    pvBuffer;
+};
+
+struct BCryptBufferDesc {
+    uint32_t ulVersion;
+    uint32_t cBuffers;
+    BCryptBuffer* pBuffers;
+};
+#endif
+
 } // namespace micant
+
+#ifndef BCRYPTBUFFER_DEFINED_GLOBAL
+#define BCRYPTBUFFER_DEFINED_GLOBAL
+using micant::BCryptBuffer;
+using micant::BCryptBufferDesc;
+#endif
 
 #ifndef _BOOL_DEFINED
 #define _BOOL_DEFINED

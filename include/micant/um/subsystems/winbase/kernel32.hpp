@@ -8549,6 +8549,31 @@ struct PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY {
     };
 };
 
+struct PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD MicrosoftSignedOnly : 1;
+            DWORD StoreSignedOnly : 1;
+            DWORD MitigationOptIn : 1;
+            DWORD AuditMicrosoftSignedOnly : 1;
+            DWORD AuditStoreSignedOnly : 1;
+            DWORD ReservedFlags : 27;
+        };
+    };
+};
+
+struct PROCESS_MITIGATION_FONT_DISABLE_POLICY {
+    union {
+        DWORD Flags;
+        struct {
+            DWORD DisableNonSystemFonts : 1;
+            DWORD AuditNonSystemFontLoading : 1;
+            DWORD ReservedFlags : 30;
+        };
+    };
+};
+
 class SovereignProcessMitigationManager {
 private:
     std::mutex m_mutex;
@@ -8560,6 +8585,8 @@ private:
         PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY syscallDisable{};
         PROCESS_MITIGATION_IMAGE_LOAD_POLICY imageLoad{};
         PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY userShadowStack{};
+        PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY signature{};
+        PROCESS_MITIGATION_FONT_DISABLE_POLICY fontDisable{};
     };
     MitigationState m_state{};
 
@@ -8611,6 +8638,14 @@ public:
                 if (dwLength < sizeof(PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
                 m_state.userShadowStack = *reinterpret_cast<const PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY*>(lpBuffer);
                 return TRUE;
+            case ProcessSignaturePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.signature = *reinterpret_cast<const PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY*>(lpBuffer);
+                return TRUE;
+            case ProcessFontDisablePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_FONT_DISABLE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                m_state.fontDisable = *reinterpret_cast<const PROCESS_MITIGATION_FONT_DISABLE_POLICY*>(lpBuffer);
+                return TRUE;
             default:
                 return TRUE;
         }
@@ -8650,6 +8685,14 @@ public:
             case ProcessUserShadowStackPolicy:
                 if (dwLength < sizeof(PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
                 *reinterpret_cast<PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY*>(lpBuffer) = m_state.userShadowStack;
+                return TRUE;
+            case ProcessSignaturePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY*>(lpBuffer) = m_state.signature;
+                return TRUE;
+            case ProcessFontDisablePolicy:
+                if (dwLength < sizeof(PROCESS_MITIGATION_FONT_DISABLE_POLICY)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+                *reinterpret_cast<PROCESS_MITIGATION_FONT_DISABLE_POLICY*>(lpBuffer) = m_state.fontDisable;
                 return TRUE;
             default:
                 std::memset(lpBuffer, 0, dwLength);
@@ -9559,6 +9602,39 @@ inline BOOL WINAPI GetProcessDefaultCpuSets(HANDLE /*hProcess*/, ULONG* CpuSetId
     return FALSE;
 }
 
+using ntdll::SYSTEM_CPU_SET_INFORMATION;
+using ntdll::PSYSTEM_CPU_SET_INFORMATION;
+
+inline BOOL WINAPI GetSystemCpuSetInformation(
+    PSYSTEM_CPU_SET_INFORMATION Information,
+    ULONG BufferLength,
+    ULONG* ReturnedLength,
+    HANDLE /*Process*/,
+    ULONG /*Flags*/) noexcept
+{
+    ULONG retLen = 0;
+    NtStatus status = ntdll::NtQuerySystemInformation_Export(
+        104, // SystemCpuSetInformation
+        Information,
+        BufferLength,
+        &retLen);
+
+    if (ReturnedLength) {
+        *ReturnedLength = retLen;
+    }
+
+    if (status != NtStatus::Success) {
+        if (status == NtStatus::InfoLengthMismatch) {
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        } else {
+            SetLastError(ERROR_INVALID_PARAMETER);
+        }
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 #ifndef PROCESS_AFFINITY_ENABLE_AUTO_UPDATE
 #define PROCESS_AFFINITY_ENABLE_AUTO_UPDATE 0x00000001
 #endif
@@ -10355,6 +10431,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "VerLanguageNameW", reinterpret_cast<void*>(VerLanguageNameW));
     ldr.registerExport("kernel32.dll", "GetLogicalProcessorInformation", reinterpret_cast<void*>(GetLogicalProcessorInformation));
     ldr.registerExport("kernel32.dll", "GetLogicalProcessorInformationEx", reinterpret_cast<void*>(GetLogicalProcessorInformationEx));
+    ldr.registerExport("kernel32.dll", "GetSystemCpuSetInformation", reinterpret_cast<void*>(GetSystemCpuSetInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetSystemCpuSetInformation", reinterpret_cast<void*>(GetSystemCpuSetInformation));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-6.dll", "GetSystemCpuSetInformation", reinterpret_cast<void*>(GetSystemCpuSetInformation));
+    ldr.registerExport("kernel32.dll", "SetProcessMitigationPolicy", reinterpret_cast<void*>(SetProcessMitigationPolicy));
+    ldr.registerExport("kernel32.dll", "GetProcessMitigationPolicy", reinterpret_cast<void*>(GetProcessMitigationPolicy));
     ldr.registerExport("kernel32.dll", "SetThreadSelectedCpuSets", reinterpret_cast<void*>(SetThreadSelectedCpuSets));
     ldr.registerExport("kernel32.dll", "GetThreadSelectedCpuSets", reinterpret_cast<void*>(GetThreadSelectedCpuSets));
     ldr.registerExport("kernel32.dll", "SetProcessDefaultCpuSets", reinterpret_cast<void*>(SetProcessDefaultCpuSets));

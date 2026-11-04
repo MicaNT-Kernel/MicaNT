@@ -28,6 +28,17 @@ using BCRYPT_HANDLE      = void*;
 using BCRYPT_ALG_HANDLE  = void*;
 using BCRYPT_KEY_HANDLE  = void*;
 using BCRYPT_HASH_HANDLE = void*;
+using BCRYPT_SECRET_HANDLE = void*;
+
+using micant::BCryptBuffer;
+using micant::BCryptBufferDesc;
+
+#ifndef BCRYPT_KDF_RAW_SECRET
+inline constexpr const wchar_t* BCRYPT_KDF_RAW_SECRET = L"TRUNCATE";
+inline constexpr const wchar_t* BCRYPT_KDF_HASH       = L"HASH";
+inline constexpr const wchar_t* BCRYPT_KDF_HMAC       = L"HMAC";
+inline constexpr const wchar_t* BCRYPT_KDF_TLS_PRF    = L"TLS_PRF";
+#endif
 using NCRYPT_HANDLE      = void*;
 using NCRYPT_PROV_HANDLE = void*;
 using NCRYPT_KEY_HANDLE  = void*;
@@ -1519,6 +1530,30 @@ public:
         return keys_.erase(handle) > 0;
     }
 
+    // Secret Object Management
+    struct CngSecretObject {
+        std::vector<uint8_t> secretValue;
+        explicit CngSecretObject(std::vector<uint8_t> val) : secretValue(std::move(val)) {}
+    };
+
+    BCRYPT_SECRET_HANDLE registerSecret(std::shared_ptr<CngSecretObject> secret) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        void* handle = reinterpret_cast<void*>(nextHandle_++);
+        secrets_[handle] = std::move(secret);
+        return handle;
+    }
+
+    std::shared_ptr<CngSecretObject> getSecret(BCRYPT_SECRET_HANDLE handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = secrets_.find(handle);
+        return (it != secrets_.end()) ? it->second : nullptr;
+    }
+
+    bool releaseSecret(BCRYPT_SECRET_HANDLE handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return secrets_.erase(handle) > 0;
+    }
+
     // Hash Object Management
     BCRYPT_HASH_HANDLE registerHash(std::shared_ptr<CngHashObject> hash) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1576,6 +1611,7 @@ private:
     uintptr_t nextHandle_{0x1000};
     std::unordered_map<void*, std::shared_ptr<CngAlgorithmProvider>> providers_;
     std::unordered_map<void*, std::shared_ptr<CngKeyObject>> keys_;
+    std::unordered_map<void*, std::shared_ptr<CngSecretObject>> secrets_;
     std::unordered_map<void*, std::shared_ptr<CngHashObject>> hashes_;
     std::unordered_map<void*, std::shared_ptr<CngStorageProvider>> storageProviders_;
     std::unordered_map<void*, std::shared_ptr<PersistedKey>> persistedKeys_;
@@ -1978,6 +2014,81 @@ inline NTSTATUS BCryptImportKey(
     return BCryptGenerateSymmetricKey(hAlgorithm, phKey, pbKeyObject, cbKeyObject, pbInput, cbInput, dwFlags);
 }
 
+inline NTSTATUS BCryptSecretAgreement(
+    BCRYPT_KEY_HANDLE hPrivKey,
+    BCRYPT_KEY_HANDLE hPubKey,
+    BCRYPT_SECRET_HANDLE* phAgreedSecret,
+    [[maybe_unused]] uint32_t dwFlags
+) {
+    if (!hPrivKey || !hPubKey || !phAgreedSecret) return STATUS_INVALID_PARAMETER;
+    auto privKey = CipherKspEngine::get().getKey(hPrivKey);
+    auto pubKey = CipherKspEngine::get().getKey(hPubKey);
+    if (!privKey || !pubKey) return STATUS_INVALID_HANDLE;
+
+    const auto& s1 = privKey->secret;
+    const auto& s2 = pubKey->secret;
+    std::vector<uint8_t> combined;
+    if (s1 < s2) {
+        combined.insert(combined.end(), s1.begin(), s1.end());
+        combined.insert(combined.end(), s2.begin(), s2.end());
+    } else {
+        combined.insert(combined.end(), s2.begin(), s2.end());
+        combined.insert(combined.end(), s1.begin(), s1.end());
+    }
+    auto h = Sha256::hash(combined);
+    std::vector<uint8_t> secretVal(h.begin(), h.end());
+
+    auto secObj = std::make_shared<CipherKspEngine::CngSecretObject>(secretVal);
+    *phAgreedSecret = CipherKspEngine::get().registerSecret(secObj);
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS BCryptDestroySecret(BCRYPT_SECRET_HANDLE hSecret) {
+    if (!hSecret) return STATUS_INVALID_HANDLE;
+    return CipherKspEngine::get().releaseSecret(hSecret) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
+}
+
+inline NTSTATUS BCryptDeriveKey(
+    BCRYPT_SECRET_HANDLE hSharedSecret,
+    const wchar_t* pwszKDF,
+    [[maybe_unused]] BCryptBufferDesc* pParameterList,
+    uint8_t* pbDerivedKey,
+    uint32_t cbDerivedKey,
+    uint32_t* pcbResult,
+    [[maybe_unused]] uint32_t dwFlags
+) {
+    if (!hSharedSecret || !pcbResult) return STATUS_INVALID_PARAMETER;
+    auto secObj = CipherKspEngine::get().getSecret(hSharedSecret);
+    if (!secObj) return STATUS_INVALID_HANDLE;
+
+    *pcbResult = cbDerivedKey;
+    if (!pbDerivedKey) return STATUS_SUCCESS;
+
+    const auto& sec = secObj->secretValue;
+    if (pwszKDF == nullptr || std::wcscmp(pwszKDF, BCRYPT_KDF_RAW_SECRET) == 0) {
+        size_t copyLen = std::min(static_cast<size_t>(cbDerivedKey), sec.size());
+        std::memcpy(pbDerivedKey, sec.data(), copyLen);
+        if (cbDerivedKey > copyLen) {
+            std::memset(pbDerivedKey + copyLen, 0, cbDerivedKey - copyLen);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (std::wcscmp(pwszKDF, BCRYPT_KDF_HASH) == 0) {
+        auto h = Sha256::hash(sec);
+        size_t copyLen = std::min(static_cast<size_t>(cbDerivedKey), h.size());
+        std::memcpy(pbDerivedKey, h.data(), copyLen);
+        if (cbDerivedKey > copyLen) {
+            std::memset(pbDerivedKey + copyLen, 0, cbDerivedKey - copyLen);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    size_t copyLen = std::min(static_cast<size_t>(cbDerivedKey), sec.size());
+    std::memcpy(pbDerivedKey, sec.data(), copyLen);
+    return STATUS_SUCCESS;
+}
+
 inline NTSTATUS BCryptDestroyKey(BCRYPT_KEY_HANDLE hKey) {
     if (!hKey) return STATUS_INVALID_HANDLE;
     return CipherKspEngine::get().releaseKey(hKey) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
@@ -2231,6 +2342,9 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("bcrypt.dll", "BCryptImportKey", reinterpret_cast<void*>(BCryptImportKey));
     ldr.registerExport("bcrypt.dll", "BCryptFreeBuffer", reinterpret_cast<void*>(BCryptFreeBuffer));
     ldr.registerExport("bcrypt.dll", "BCryptEnumContextFunctions", reinterpret_cast<void*>(BCryptEnumContextFunctions));
+    ldr.registerExport("bcrypt.dll", "BCryptSecretAgreement", reinterpret_cast<void*>(BCryptSecretAgreement));
+    ldr.registerExport("bcrypt.dll", "BCryptDestroySecret", reinterpret_cast<void*>(BCryptDestroySecret));
+    ldr.registerExport("bcrypt.dll", "BCryptDeriveKey", reinterpret_cast<void*>(BCryptDeriveKey));
 
     // ncrypt.dll exports
     ldr.registerExport("ncrypt.dll", "NCryptOpenStorageProvider", reinterpret_cast<void*>(NCryptOpenStorageProvider));

@@ -1595,6 +1595,39 @@ struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
         CACHE_RELATIONSHIP Cache;
     };
 };
+
+enum CPU_SET_INFORMATION_TYPE {
+    CpuSetInformation
+};
+
+struct SYSTEM_CPU_SET_INFORMATION {
+    uint32_t Size;
+    CPU_SET_INFORMATION_TYPE Type;
+    union {
+        struct {
+            uint32_t Id;
+            uint16_t Group;
+            uint8_t  LogicalProcessorIndex;
+            uint8_t  CoreIndex;
+            uint8_t  LastLevelCacheIndex;
+            uint8_t  NumaNodeIndex;
+            uint8_t  EfficiencyClass;
+            union {
+                uint8_t AllFlags;
+                struct {
+                    uint8_t Parked : 1;
+                    uint8_t Allocated : 1;
+                    uint8_t AllocatedToTargetProcess : 1;
+                    uint8_t RealTime : 1;
+                    uint8_t ReservedFlags : 4;
+                };
+            };
+            uint32_t Reserved;
+            uint64_t AllocationTag;
+        } CpuSet;
+    };
+};
+using PSYSTEM_CPU_SET_INFORMATION = SYSTEM_CPU_SET_INFORMATION*;
 #endif
 
 struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
@@ -2449,6 +2482,33 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pMap[1].NodeNumber = 1;
             pMap[1].Reserved = 0;
             pMap[1].ProcessorMask = 0x000000000000FF00ULL;
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+            return NtStatus::Success;
+        }
+        case 104: { // SystemCpuSetInformation
+            constexpr uint32_t cpuCount = 16;
+            constexpr uint32_t entrySize = sizeof(SYSTEM_CPU_SET_INFORMATION);
+            constexpr size_t requiredLength = cpuCount * entrySize;
+            if (SystemInformationLength < requiredLength || !SystemInformation) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_SET_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, requiredLength);
+            for (uint32_t i = 0; i < cpuCount; ++i) {
+                pInfo[i].Size = entrySize;
+                pInfo[i].Type = CpuSetInformation;
+                pInfo[i].CpuSet.Id = 256 + i;
+                pInfo[i].CpuSet.Group = 0;
+                pInfo[i].CpuSet.LogicalProcessorIndex = static_cast<uint8_t>(i);
+                pInfo[i].CpuSet.CoreIndex = static_cast<uint8_t>(i);
+                pInfo[i].CpuSet.LastLevelCacheIndex = (i < 8) ? 0 : 1;
+                pInfo[i].CpuSet.NumaNodeIndex = (i < 8) ? 0 : 1;
+                pInfo[i].CpuSet.EfficiencyClass = (i < 4) ? 2 : ((i < 8) ? 1 : 0);
+                pInfo[i].CpuSet.AllFlags = 0;
+                pInfo[i].CpuSet.Reserved = 0;
+                pInfo[i].CpuSet.AllocationTag = 0;
+            }
             if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
             return NtStatus::Success;
         }
