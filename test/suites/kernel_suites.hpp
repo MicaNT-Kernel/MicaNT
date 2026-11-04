@@ -44272,3 +44272,223 @@ inline void Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnum
 
     std::cout << "[TEST] Suite 433: Horizon 217 - Render Passes, Exception Info, Large Pages & ModuleEnumEx PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// Suite 434: Horizon 218 - PrismX Shader Cache Sessions, NUMA Topology,
+//                          Extended Placeholder Allocation & WER Diagnostics
+// ============================================================================
+inline void Test_Horizon218_ShaderCacheSessions_NumaTopology_PlaceholderAlloc_And_WerDiagnostics_Suite() {
+    std::cout << "[TEST] Running Suite 434: Horizon 218 - Shader Cache Sessions, NUMA Topology, Placeholder Alloc & WER Diagnostics...\n";
+
+    // Ensure loader export tables are initialized for isolated test runner execution
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+    micant::wer::InitializeWERSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Shader Cache Sessions (ID3D12Device9 / ID3D12ShaderCacheSession)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 Shader Cache Sessions (CreateShaderCacheSession)...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_2, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice succeeds for Feature Level 12.2");
+
+        ID3D12Device9* pDev9 = nullptr;
+        hr = pDev->QueryInterface(IID_ID3D12Device9, reinterpret_cast<void**>(&pDev9));
+        TEST_ASSERT(hr == 0 && pDev9 != nullptr, "QueryInterface for ID3D12Device9 succeeds");
+
+        // Construct Session Description
+        D3D12_SHADER_CACHE_SESSION_DESC desc{};
+        desc.Identifier = { 0x12345678, 0x1234, 0x5678, { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 } };
+        desc.Mode = D3D12_SHADER_CACHE_MODE_MEMORY;
+        desc.Flags = D3D12_SHADER_CACHE_FLAG_DRIVER_MANAGED;
+        desc.MaximumInMemoryCacheSizeBytes = 1024 * 1024;
+        desc.MaximumInMemoryCacheEntries = 128;
+        desc.MaximumValueFileSizeBytes = 0;
+
+        ID3D12ShaderCacheSession* pSession = nullptr;
+        hr = pDev9->CreateShaderCacheSession(&desc, IID_ID3D12ShaderCacheSession, reinterpret_cast<void**>(&pSession));
+        TEST_ASSERT(hr == 0 && pSession != nullptr, "CreateShaderCacheSession succeeds on PrismX 3D12 Device");
+
+        // Validate GetDesc
+        auto returnedDesc = pSession->GetDesc();
+        TEST_ASSERT(returnedDesc.Mode == D3D12_SHADER_CACHE_MODE_MEMORY, "Session Mode matches memory-resident cache");
+        TEST_ASSERT(returnedDesc.Flags == D3D12_SHADER_CACHE_FLAG_DRIVER_MANAGED, "Session Flags indicate driver management");
+        TEST_ASSERT(returnedDesc.MaximumInMemoryCacheEntries == 128, "Max entries matches descriptor");
+
+        // Store Compiled Shader PSO Bytecode
+        const char shaderKey[] = "PrismX_RasterPSO_Hash_0xDEADBEEF";
+        const uint8_t shaderBytecode[] = { 0x44, 0x58, 0x42, 0x43, 0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+        hr = pSession->StoreValue(shaderKey, static_cast<uint32_t>(sizeof(shaderKey)), shaderBytecode, static_cast<uint32_t>(sizeof(shaderBytecode)));
+        TEST_ASSERT(hr == 0, "StoreValue caches shader PSO bytecode successfully");
+
+        // Query Stored Value Size
+        uint32_t queriedSize = 0;
+        hr = pSession->FindValue(shaderKey, static_cast<uint32_t>(sizeof(shaderKey)), nullptr, &queriedSize);
+        TEST_ASSERT(hr == 0 && queriedSize == sizeof(shaderBytecode), "FindValue accurately queries cached bytecode size");
+
+        // Retrieve Stored Value
+        std::vector<uint8_t> retrieved(queriedSize);
+        hr = pSession->FindValue(shaderKey, static_cast<uint32_t>(sizeof(shaderKey)), retrieved.data(), &queriedSize);
+        TEST_ASSERT(hr == 0, "FindValue fetches cached bytecode buffer");
+        TEST_ASSERT(std::memcmp(retrieved.data(), shaderBytecode, sizeof(shaderBytecode)) == 0, "Cached bytecode matches original PSO blob bit-for-bit");
+
+        // Test Non-Existent Key
+        const char nonExistentKey[] = "NonExistent_Key";
+        uint32_t missingSize = 0;
+        hr = pSession->FindValue(nonExistentKey, static_cast<uint32_t>(sizeof(nonExistentKey)), nullptr, &missingSize);
+        TEST_ASSERT(hr != 0, "FindValue fails gracefully on non-existent cache key");
+
+        // SetDeleteOnDestroy and cleanup
+        pSession->SetDeleteOnDestroy();
+        pSession->Release();
+        pDev9->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 Shader Cache Sessions verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT System NUMA Topology & Distance Telemetry (Classes 86 & 87)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing System NUMA Processor Maps & Latency Distances (Classes 86 & 87)...\n";
+
+        using namespace micant::ntdll;
+
+        // 2.1 SystemNumaProcessorMap (Class 86)
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(86, nullptr, 0, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(86) reports length mismatch for null buffer");
+        TEST_ASSERT(retLen >= sizeof(SYSTEM_NUMA_NODE_PROCESSOR_MAP) * 2, "Reported required length covers dual NUMA nodes");
+
+        SYSTEM_NUMA_NODE_PROCESSOR_MAP numaMap[2]{};
+        status = NtQuerySystemInformation_Export(86, numaMap, sizeof(numaMap), &retLen);
+        TEST_ASSERT(NT_SUCCESS(status), "NtQuerySystemInformation(SystemNumaProcessorMap) succeeds");
+        TEST_ASSERT(numaMap[0].NodeNumber == 0, "NUMA Node 0 index matches");
+        TEST_ASSERT(numaMap[0].ProcessorMask == 0x00FFULL, "NUMA Node 0 processor mask is 0x00FF (Cores 0-7)");
+        TEST_ASSERT(numaMap[1].NodeNumber == 1, "NUMA Node 1 index matches");
+        TEST_ASSERT(numaMap[1].ProcessorMask == 0xFF00ULL, "NUMA Node 1 processor mask is 0xFF00 (Cores 8-15)");
+
+        // 2.2 SystemNumaDistanceInformation (Class 87)
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(87, nullptr, 0, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(87) reports length mismatch for null buffer");
+        TEST_ASSERT(retLen >= sizeof(SYSTEM_NUMA_DISTANCE_INFORMATION) * 4, "Reported required length covers all node combinations");
+
+        SYSTEM_NUMA_DISTANCE_INFORMATION distances[4]{};
+        status = NtQuerySystemInformation_Export(87, distances, sizeof(distances), &retLen);
+        TEST_ASSERT(NT_SUCCESS(status), "NtQuerySystemInformation(SystemNumaDistanceInformation) succeeds");
+        TEST_ASSERT(distances[0].NodeFrom == 0 && distances[0].NodeTo == 0 && distances[0].Distance == 10, "Node 0->0 local distance is 10");
+        TEST_ASSERT(distances[1].NodeFrom == 0 && distances[1].NodeTo == 1 && distances[1].Distance == 20, "Node 0->1 interconnect distance is 20");
+        TEST_ASSERT(distances[2].NodeFrom == 1 && distances[2].NodeTo == 0 && distances[2].Distance == 20, "Node 1->0 interconnect distance is 20");
+        TEST_ASSERT(distances[3].NodeFrom == 1 && distances[3].NodeTo == 1 && distances[3].Distance == 10, "Node 1->1 local distance is 10");
+
+        std::cout << "  [PASS] System NUMA Processor Maps & Latency Distances verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Placeholder Memory Management (VirtualAlloc2 / VirtualFree2)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing VirtualAlloc2 and VirtualFree2 Placeholder Management...\n";
+        using namespace micant::win32;
+
+        constexpr SIZE_T regionSize = 2 * 1024 * 1024; // 2 MB placeholder
+        PVOID pPlaceholder = VirtualAlloc2(nullptr, nullptr, regionSize, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
+        TEST_ASSERT(pPlaceholder != nullptr, "VirtualAlloc2 reserves 2MB placeholder region");
+
+        // Commit a 64KB slice using MEM_REPLACE_PLACEHOLDER
+        constexpr SIZE_T sliceSize = 64 * 1024;
+        PVOID pSlice = VirtualAlloc2(nullptr, pPlaceholder, sliceSize, MEM_COMMIT | MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0);
+        TEST_ASSERT(pSlice == pPlaceholder, "VirtualAlloc2 replaces placeholder slice at base address");
+
+        // Decommit and restore placeholder reservation with MEM_PRESERVE_PLACEHOLDER
+        BOOL freeOk = VirtualFree2(nullptr, pSlice, sliceSize, MEM_PRESERVE_PLACEHOLDER, nullptr, 0);
+        TEST_ASSERT(freeOk == TRUE, "VirtualFree2 with MEM_PRESERVE_PLACEHOLDER decommits slice");
+
+        // Coalesce placeholders with MEM_COALESCE_PLACEHOLDERS
+        freeOk = VirtualFree2(nullptr, pPlaceholder, regionSize, MEM_COALESCE_PLACEHOLDERS, nullptr, 0);
+        TEST_ASSERT(freeOk == TRUE, "VirtualFree2 with MEM_COALESCE_PLACEHOLDERS merges region");
+
+        // Final release of the entire region
+        freeOk = VirtualFree2(nullptr, pPlaceholder, 0, MEM_RELEASE, nullptr, 0);
+        TEST_ASSERT(freeOk == TRUE, "VirtualFree2 with MEM_RELEASE frees region");
+
+        // Verify ApiSet and DLL exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "VirtualFree2") != nullptr, "kernel32 exports VirtualFree2");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "VirtualFree2FromApp") != nullptr, "kernel32 exports VirtualFree2FromApp");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualFree2") != nullptr, "core-memory-l1-1-6 exports VirtualFree2");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualFree2FromApp") != nullptr, "core-memory-l1-1-6 exports VirtualFree2FromApp");
+
+        std::cout << "  [PASS] Extended Placeholder Memory Management verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Windows Error Reporting (WER) Diagnostics Registration
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing WER Custom Metadata & Diagnostic Registration...\n";
+        using namespace micant::wer;
+
+        // 4.1 Register Custom Metadata
+        ole32::HRESULT hr = WerRegisterCustomMetadata(L"GameTitle", L"Cyberpunk2077");
+        TEST_ASSERT(hr == ole32::S_OK, "WerRegisterCustomMetadata registers GameTitle");
+
+        hr = WerRegisterCustomMetadata(L"EngineBuild", L"REDengine4_v2.1");
+        TEST_ASSERT(hr == ole32::S_OK, "WerRegisterCustomMetadata registers EngineBuild");
+
+        hr = WerRegisterCustomMetadata(L"AntiCheat", L"BattlEyeSovereign");
+        TEST_ASSERT(hr == ole32::S_OK, "WerRegisterCustomMetadata registers AntiCheat");
+
+        const auto& customMeta = WerCoordinator::Instance().GetCustomMetadata();
+        TEST_ASSERT(customMeta.size() >= 3, "WerCoordinator stores all registered custom metadata");
+        TEST_ASSERT(customMeta.at(L"GameTitle") == L"Cyberpunk2077", "GameTitle value matches");
+        TEST_ASSERT(customMeta.at(L"EngineBuild") == L"REDengine4_v2.1", "EngineBuild value matches");
+        TEST_ASSERT(customMeta.at(L"AntiCheat") == L"BattlEyeSovereign", "AntiCheat value matches");
+
+        // 4.2 Unregister Custom Metadata
+        hr = WerUnregisterCustomMetadata(L"AntiCheat");
+        TEST_ASSERT(hr == ole32::S_OK, "WerUnregisterCustomMetadata unregisters AntiCheat");
+        TEST_ASSERT(customMeta.find(L"AntiCheat") == customMeta.end(), "AntiCheat removed from metadata table");
+        TEST_ASSERT(customMeta.find(L"GameTitle") != customMeta.end(), "GameTitle remains intact in metadata table");
+
+        // Attempt unregistering non-existent key
+        hr = WerUnregisterCustomMetadata(L"NonExistentKey");
+        TEST_ASSERT(hr == static_cast<ole32::HRESULT>(0x80070002), "WerUnregisterCustomMetadata returns file not found (0x80070002) for missing key");
+
+        // 4.3 Memory Block & File Registration
+        uint64_t crashBuffer = 0xFEEDFACECAFEBEEFULL;
+        hr = WerRegisterMemoryBlock(&crashBuffer, sizeof(crashBuffer));
+        TEST_ASSERT(hr == ole32::S_OK, "WerRegisterMemoryBlock registers memory block");
+
+        hr = WerUnregisterMemoryBlock(&crashBuffer);
+        TEST_ASSERT(hr == ole32::S_OK, "WerUnregisterMemoryBlock unregisters memory block");
+
+        // 4.4 Dynamic Loader Exports Verification (wer.dll & kernel32.dll)
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("wer.dll", "WerRegisterCustomMetadata") != nullptr, "wer.dll exports WerRegisterCustomMetadata");
+        TEST_ASSERT(ldr.getExport("wer.dll", "WerUnregisterCustomMetadata") != nullptr, "wer.dll exports WerUnregisterCustomMetadata");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WerRegisterCustomMetadata") != nullptr, "kernel32.dll exports WerRegisterCustomMetadata");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WerUnregisterCustomMetadata") != nullptr, "kernel32.dll exports WerUnregisterCustomMetadata");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WerRegisterFile") != nullptr, "kernel32.dll exports WerRegisterFile");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WerUnregisterFile") != nullptr, "kernel32.dll exports WerUnregisterFile");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WerRegisterMemoryBlock") != nullptr, "kernel32.dll exports WerRegisterMemoryBlock");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WerUnregisterMemoryBlock") != nullptr, "kernel32.dll exports WerUnregisterMemoryBlock");
+
+        std::cout << "  [PASS] WER Custom Metadata & Diagnostic Registration verified.\n";
+    }
+
+    std::cout << "[HORIZON 218] Shader Cache Sessions, NUMA Topology, Placeholder Alloc & WER Diagnostics Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Shader Cache Sessions (CreateShaderCacheSession / StoreValue / FindValue) OK\n"
+              << "    Pillar 2: NT System NUMA Processor Maps & Latency Distances (Classes 86 & 87) OK\n"
+              << "    Pillar 3: Win32 Extended Placeholder Memory Management (VirtualAlloc2 / VirtualFree2) OK\n"
+              << "    Pillar 4: Windows Error Reporting (WER) Diagnostics Registration & Exports OK\n";
+
+    std::cout << "[TEST] Suite 434: Horizon 218 - Shader Cache Sessions, NUMA Topology, Placeholder Alloc & WER Diagnostics PASSED." << std::endl;
+}

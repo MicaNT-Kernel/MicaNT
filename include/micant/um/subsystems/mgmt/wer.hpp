@@ -740,6 +740,30 @@ public:
         return 0x80070057;
     }
 
+    std::map<std::wstring, std::wstring> m_customMetadata;
+
+    ole32::HRESULT RegisterCustomMetadata(const wchar_t* key, const wchar_t* value) {
+        if (!key || !value) return 0x80070057; // E_INVALIDARG
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_customMetadata[key] = value;
+        return ole32::S_OK;
+    }
+
+    ole32::HRESULT UnregisterCustomMetadata(const wchar_t* key) {
+        if (!key) return 0x80070057;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_customMetadata.find(key);
+        if (it != m_customMetadata.end()) {
+            m_customMetadata.erase(it);
+            return ole32::S_OK;
+        }
+        return 0x80070002;
+    }
+
+    const std::map<std::wstring, std::wstring>& GetCustomMetadata() const {
+        return m_customMetadata;
+    }
+
     // Exclusion list
     ole32::HRESULT AddExcludedApp(const wchar_t* pwzExeName, int32_t /*bAllUsers*/) {
         if (!pwzExeName) return 0x80070057;
@@ -935,6 +959,14 @@ extern "C" inline ole32::HRESULT __stdcall WerUnregisterRuntimeExceptionModule(
     return WerCoordinator::Instance().UnregisterRuntimeExceptionModule(pwszOutOfProcessCallbackDll, pContext);
 }
 
+extern "C" inline ole32::HRESULT __stdcall WerRegisterCustomMetadata(const wchar_t* key, const wchar_t* value) {
+    return WerCoordinator::Instance().RegisterCustomMetadata(key, value);
+}
+
+extern "C" inline ole32::HRESULT __stdcall WerUnregisterCustomMetadata(const wchar_t* key) {
+    return WerCoordinator::Instance().UnregisterCustomMetadata(key);
+}
+
 extern "C" inline ole32::HRESULT __stdcall WerAddExcludedApplication(const wchar_t* pwzExeName, int32_t bAllUsers) {
     return WerCoordinator::Instance().AddExcludedApp(pwzExeName, bAllUsers);
 }
@@ -1038,6 +1070,8 @@ inline void InitializeWERSubsystemExports() {
     ldr.registerExport("wer.dll", "WerReportCloseHandle", reinterpret_cast<void*>(&WerReportCloseHandle));
     ldr.registerExport("wer.dll", "WerRegisterFile", reinterpret_cast<void*>(&WerRegisterFile));
     ldr.registerExport("wer.dll", "WerUnregisterFile", reinterpret_cast<void*>(&WerUnregisterFile));
+    ldr.registerExport("wer.dll", "WerRegisterCustomMetadata", reinterpret_cast<void*>(&WerRegisterCustomMetadata));
+    ldr.registerExport("wer.dll", "WerUnregisterCustomMetadata", reinterpret_cast<void*>(&WerUnregisterCustomMetadata));
     ldr.registerExport("wer.dll", "WerRegisterMemoryBlock", reinterpret_cast<void*>(&WerRegisterMemoryBlock));
     ldr.registerExport("wer.dll", "WerUnregisterMemoryBlock", reinterpret_cast<void*>(&WerUnregisterMemoryBlock));
     ldr.registerExport("wer.dll", "WerRegisterRuntimeExceptionModule", reinterpret_cast<void*>(&WerRegisterRuntimeExceptionModule));
@@ -1052,6 +1086,16 @@ inline void InitializeWERSubsystemExports() {
     ldr.registerExport("faultrep.dll", "ReportFault", reinterpret_cast<void*>(&ReportFault));
     ldr.registerExport("faultrep.dll", "AddERExcludedApplicationA", reinterpret_cast<void*>(&AddERExcludedApplicationA));
     ldr.registerExport("faultrep.dll", "AddERExcludedApplicationW", reinterpret_cast<void*>(&AddERExcludedApplicationW));
+
+    // Register kernel32.dll exports for WER
+    ldr.registerExport("kernel32.dll", "WerRegisterFile", reinterpret_cast<void*>(&WerRegisterFile));
+    ldr.registerExport("kernel32.dll", "WerUnregisterFile", reinterpret_cast<void*>(&WerUnregisterFile));
+    ldr.registerExport("kernel32.dll", "WerRegisterCustomMetadata", reinterpret_cast<void*>(&WerRegisterCustomMetadata));
+    ldr.registerExport("kernel32.dll", "WerUnregisterCustomMetadata", reinterpret_cast<void*>(&WerUnregisterCustomMetadata));
+    ldr.registerExport("kernel32.dll", "WerRegisterMemoryBlock", reinterpret_cast<void*>(&WerRegisterMemoryBlock));
+    ldr.registerExport("kernel32.dll", "WerUnregisterMemoryBlock", reinterpret_cast<void*>(&WerUnregisterMemoryBlock));
+    ldr.registerExport("kernel32.dll", "WerRegisterRuntimeExceptionModule", reinterpret_cast<void*>(&WerRegisterRuntimeExceptionModule));
+    ldr.registerExport("kernel32.dll", "WerUnregisterRuntimeExceptionModule", reinterpret_cast<void*>(&WerUnregisterRuntimeExceptionModule));
 }
 
 } // namespace micant::wer

@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <map>
 #include <memory>
 #include <atomic>
 #include <chrono>
@@ -1316,6 +1317,48 @@ public:
     virtual int32_t CreatePipelineState(const D3D12_PIPELINE_STATE_STREAM_DESC* /*pDesc*/, const IID& /*riid*/, void** /*ppPipelineState*/) { return 0; }
 };
 
+enum D3D12_SHADER_CACHE_MODE {
+    D3D12_SHADER_CACHE_MODE_MEMORY = 0,
+    D3D12_SHADER_CACHE_MODE_DISK   = 1
+};
+
+enum D3D12_SHADER_CACHE_FLAGS : uint32_t {
+    D3D12_SHADER_CACHE_FLAG_NONE           = 0,
+    D3D12_SHADER_CACHE_FLAG_DRIVER_MANAGED = 1
+};
+
+struct D3D12_SHADER_CACHE_SESSION_DESC {
+    GUID Identifier;
+    D3D12_SHADER_CACHE_MODE Mode;
+    D3D12_SHADER_CACHE_FLAGS Flags;
+    uint32_t MaximumInMemoryCacheSizeBytes;
+    uint32_t MaximumInMemoryCacheEntries;
+    uint32_t MaximumValueFileSizeBytes;
+};
+
+static constexpr IID IID_ID3D12ShaderCacheSession = 
+    { 0x2804f332, 0xd0e2, 0x40aa, { 0xac, 0x2b, 0x8f, 0x72, 0x6b, 0x03, 0x34, 0x99 } };
+
+class ID3D12ShaderCacheSession : public ID3D12DeviceChild {
+public:
+    virtual int32_t FindValue(const void* pKey, uint32_t KeySize, void* pValue, uint32_t* pValueSize) = 0;
+    virtual int32_t StoreValue(const void* pKey, uint32_t KeySize, const void* pValue, uint32_t ValueSize) = 0;
+    virtual void SetDeleteOnDestroy() = 0;
+    virtual D3D12_SHADER_CACHE_SESSION_DESC GetDesc() = 0;
+};
+
+static constexpr IID IID_ID3D12Device9 = 
+    { 0x56314f85, 0xef42, 0x4858, { 0xb9, 0x93, 0x76, 0x3d, 0x5a, 0x33, 0x22, 0x18 } };
+
+class ID3D12Device9 : public ID3D12Device8 {
+public:
+    virtual int32_t CreateShaderCacheSession(
+        const D3D12_SHADER_CACHE_SESSION_DESC* pDesc,
+        const IID& riid,
+        void** ppvSession) = 0;
+    virtual int32_t ShaderCacheControl(uint32_t /*Kinds*/, uint32_t /*Control*/) { return 0; }
+};
+
 // ============================================================================
 // 5. Concrete Implementation Classes
 // ============================================================================
@@ -2223,8 +2266,95 @@ public:
     uint64_t GetLastExecutedCommandsCount() const { return m_lastExecutedCommandsCount; }
 };
 
+class Prism3D12ShaderCacheSessionImpl : public ID3D12ShaderCacheSession {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    ID3D12Device* m_pDevice{ nullptr };
+    D3D12_SHADER_CACHE_SESSION_DESC m_desc{};
+    std::mutex m_mutex;
+    std::map<std::vector<uint8_t>, std::vector<uint8_t>> m_cache;
+    bool m_deleteOnDestroy{ false };
+    uint32_t m_findCount{ 0 };
+    uint32_t m_storeCount{ 0 };
+
+public:
+    Prism3D12ShaderCacheSessionImpl(ID3D12Device* pDev, const D3D12_SHADER_CACHE_SESSION_DESC& desc)
+        : m_pDevice(pDev), m_desc(desc) {}
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
+        if (!ppv) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild || riid == IID_ID3D12ShaderCacheSession) {
+            *ppv = static_cast<ID3D12ShaderCacheSession*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262;
+    }
+
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t*) override { return 0; }
+
+    int32_t GetDevice(const IID&, void** ppDevice) override {
+        if (!ppDevice) return -1;
+        *ppDevice = m_pDevice;
+        return 0;
+    }
+
+    int32_t FindValue(const void* pKey, uint32_t KeySize, void* pValue, uint32_t* pValueSize) override {
+        if (!pKey || KeySize == 0 || !pValueSize) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_findCount++;
+        std::vector<uint8_t> k(reinterpret_cast<const uint8_t*>(pKey), reinterpret_cast<const uint8_t*>(pKey) + KeySize);
+        auto it = m_cache.find(k);
+        if (it == m_cache.end()) return 1; // S_FALSE (not found)
+        if (!pValue) {
+            *pValueSize = static_cast<uint32_t>(it->second.size());
+            return 0;
+        }
+        if (*pValueSize < it->second.size()) {
+            *pValueSize = static_cast<uint32_t>(it->second.size());
+            return -1;
+        }
+        std::memcpy(pValue, it->second.data(), it->second.size());
+        *pValueSize = static_cast<uint32_t>(it->second.size());
+        return 0;
+    }
+
+    int32_t StoreValue(const void* pKey, uint32_t KeySize, const void* pValue, uint32_t ValueSize) override {
+        if (!pKey || KeySize == 0 || !pValue || ValueSize == 0) return -1;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_storeCount++;
+        std::vector<uint8_t> k(reinterpret_cast<const uint8_t*>(pKey), reinterpret_cast<const uint8_t*>(pKey) + KeySize);
+        std::vector<uint8_t> v(reinterpret_cast<const uint8_t*>(pValue), reinterpret_cast<const uint8_t*>(pValue) + ValueSize);
+        m_cache[k] = std::move(v);
+        return 0;
+    }
+
+    void SetDeleteOnDestroy() override {
+        m_deleteOnDestroy = true;
+    }
+
+    D3D12_SHADER_CACHE_SESSION_DESC GetDesc() override {
+        return m_desc;
+    }
+
+    [[nodiscard]] uint32_t GetEntryCount() const noexcept { return static_cast<uint32_t>(m_cache.size()); }
+    [[nodiscard]] uint32_t GetFindCount() const noexcept { return m_findCount; }
+    [[nodiscard]] uint32_t GetStoreCount() const noexcept { return m_storeCount; }
+};
+
 // D3D12 Device Implementation
-class Prism3D12DeviceImpl : public ID3D12Device8 {
+class Prism3D12DeviceImpl : public ID3D12Device9 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -2248,8 +2378,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device8) {
-            *ppv = static_cast<ID3D12Device8*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9) {
+            *ppv = static_cast<ID3D12Device9*>(this);
             AddRef();
             return 0;
         }
@@ -2527,6 +2657,18 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/
     ) override {
         m_samplerFeedbackViewsCreated++;
+    }
+
+    int32_t CreateShaderCacheSession(
+        const D3D12_SHADER_CACHE_SESSION_DESC* pDesc,
+        const IID& riid,
+        void** ppvSession
+    ) override {
+        if (!pDesc || !ppvSession) return -1;
+        auto* pSession = new Prism3D12ShaderCacheSessionImpl(this, *pDesc);
+        int32_t hr = pSession->QueryInterface(riid, ppvSession);
+        pSession->Release();
+        return hr;
     }
 
     std::unordered_set<ID3D12Pageable*> m_residentObjects;

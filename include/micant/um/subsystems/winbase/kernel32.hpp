@@ -534,6 +534,7 @@ inline HLOCAL LocalFree(HLOCAL hMem) noexcept {
 }
 
 // Extended Virtual Allocation Parameters & Placeholder Flags
+inline constexpr DWORD MEM_COALESCE_PLACEHOLDERS = 0x00000001;
 inline constexpr DWORD MEM_REPLACE_PLACEHOLDER  = 0x00004000;
 inline constexpr DWORD MEM_RESERVE_PLACEHOLDER  = 0x00040000;
 inline constexpr DWORD MEM_PRESERVE_PLACEHOLDER = 0x00000002;
@@ -726,12 +727,47 @@ inline BOOL WINAPI VirtualFreeEx(
         return VirtualFree(lpAddress, dwSize, MEM_DECOMMIT);
     }
 
+    if (dwFreeType & MEM_COALESCE_PLACEHOLDERS) {
+        std::lock_guard<std::mutex> lock(detail::s_placeholderMutex);
+        detail::PlaceholderEntry pe{};
+        pe.baseAddress = target;
+        pe.size = dwSize;
+        pe.isPlaceholder = true;
+        detail::s_placeholders[target] = std::move(pe);
+        return TRUE;
+    }
+
     if (dwFreeType == MEM_RELEASE) {
         std::lock_guard<std::mutex> lock(detail::s_placeholderMutex);
         detail::s_placeholders.erase(target);
     }
 
     return VirtualFree(lpAddress, dwSize, dwFreeType);
+}
+
+/**
+ * @brief Releases, decommits, or releases and decommits a region of pages within the virtual address space with extended parameters.
+ */
+inline BOOL WINAPI VirtualFree2(
+    HANDLE Process,
+    PVOID BaseAddress,
+    SIZE_T RegionSize,
+    DWORD FreeType,
+    [[maybe_unused]] MEM_EXTENDED_PARAMETER* ExtendedParameters,
+    [[maybe_unused]] ULONG ParameterCount
+) noexcept {
+    return VirtualFreeEx(Process, BaseAddress, RegionSize, FreeType);
+}
+
+inline BOOL WINAPI VirtualFree2FromApp(
+    HANDLE Process,
+    PVOID BaseAddress,
+    SIZE_T RegionSize,
+    DWORD FreeType,
+    [[maybe_unused]] MEM_EXTENDED_PARAMETER* ExtendedParameters,
+    [[maybe_unused]] ULONG ParameterCount
+) noexcept {
+    return VirtualFree2(Process, BaseAddress, RegionSize, FreeType, ExtendedParameters, ParameterCount);
 }
 
 /**
@@ -9616,6 +9652,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "VirtualAlloc2", reinterpret_cast<void*>(VirtualAlloc2));
     ldr.registerExport("kernel32.dll", "VirtualAlloc2FromApp", reinterpret_cast<void*>(VirtualAlloc2FromApp));
     ldr.registerExport("kernel32.dll", "VirtualFreeEx", reinterpret_cast<void*>(VirtualFreeEx));
+    ldr.registerExport("kernel32.dll", "VirtualFree2", reinterpret_cast<void*>(VirtualFree2));
+    ldr.registerExport("kernel32.dll", "VirtualFree2FromApp", reinterpret_cast<void*>(VirtualFree2FromApp));
     ldr.registerExport("kernel32.dll", "VirtualLock", reinterpret_cast<void*>(VirtualLock));
     ldr.registerExport("kernel32.dll", "VirtualUnlock", reinterpret_cast<void*>(VirtualUnlock));
     ldr.registerExport("kernel32.dll", "GetProcessWorkingSetSizeEx", reinterpret_cast<void*>(GetProcessWorkingSetSizeEx));
@@ -9626,6 +9664,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetLargePageMinimum", reinterpret_cast<void*>(GetLargePageMinimum));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2", reinterpret_cast<void*>(VirtualAlloc2));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2FromApp", reinterpret_cast<void*>(VirtualAlloc2FromApp));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualFree2", reinterpret_cast<void*>(VirtualFree2));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualFree2FromApp", reinterpret_cast<void*>(VirtualFree2FromApp));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFileNuma2", reinterpret_cast<void*>(MapViewOfFileNuma2));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFile3", reinterpret_cast<void*>(MapViewOfFile3));
     ldr.registerExport("api-ms-win-core-memory-l1-1-2.dll", "PrefetchVirtualMemory", reinterpret_cast<void*>(PrefetchVirtualMemory));

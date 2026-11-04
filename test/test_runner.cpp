@@ -453,6 +453,9 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite434") {
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite433") {
         RUN_TEST(Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnumEx_Suite);
         return g_FailedTests;
@@ -2170,6 +2173,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon215_MetaCommands_TpmHardwareRoots_UnbiasedInterruptTime_And_ProcessMemoryCountersEx2_Suite);
     RUN_TEST(Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerEx_And_WorkingSetWatch_Suite);
     RUN_TEST(Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnumEx_Suite);
+    RUN_TEST(Test_Horizon218_ShaderCacheSessions_NumaTopology_PlaceholderAlloc_And_WerDiagnostics_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

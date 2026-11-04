@@ -1504,6 +1504,18 @@ struct SYSTEM_PROCESSOR_CYCLE_TIME_INFORMATION {
     uint64_t CycleTime;
 };
 
+struct SYSTEM_NUMA_NODE_PROCESSOR_MAP {
+    uint32_t NodeNumber;
+    uint32_t Reserved;
+    uint64_t ProcessorMask;
+};
+
+struct SYSTEM_NUMA_DISTANCE_INFORMATION {
+    uint32_t NodeFrom;
+    uint32_t NodeTo;
+    uint32_t Distance;
+};
+
 struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     GUID BootIdentifier;
     ULONG FirmwareType; // 2 = FirmwareTypeUefi
@@ -2267,6 +2279,38 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             for (uint32_t i = 0; i < processorCount; ++i) {
                 pCycles[i].CycleTime = 28800000000ULL + (static_cast<uint64_t>(i) * 1500000ULL);
             }
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+            return NtStatus::Success;
+        }
+        case 86: { // SystemNumaProcessorMap
+            constexpr uint32_t nodeCount = 2;
+            size_t requiredLength = sizeof(SYSTEM_NUMA_NODE_PROCESSOR_MAP) * nodeCount;
+            if (SystemInformationLength < requiredLength) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pMap = reinterpret_cast<SYSTEM_NUMA_NODE_PROCESSOR_MAP*>(SystemInformation);
+            pMap[0].NodeNumber = 0;
+            pMap[0].Reserved = 0;
+            pMap[0].ProcessorMask = 0x00000000000000FFULL;
+            pMap[1].NodeNumber = 1;
+            pMap[1].Reserved = 0;
+            pMap[1].ProcessorMask = 0x000000000000FF00ULL;
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+            return NtStatus::Success;
+        }
+        case 87: { // SystemNumaDistanceInformation
+            constexpr uint32_t distanceCount = 4;
+            size_t requiredLength = sizeof(SYSTEM_NUMA_DISTANCE_INFORMATION) * distanceCount;
+            if (SystemInformationLength < requiredLength) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pDist = reinterpret_cast<SYSTEM_NUMA_DISTANCE_INFORMATION*>(SystemInformation);
+            pDist[0] = { 0, 0, 10 };
+            pDist[1] = { 0, 1, 20 };
+            pDist[2] = { 1, 0, 20 };
+            pDist[3] = { 1, 1, 10 };
             if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
             return NtStatus::Success;
         }
