@@ -3571,11 +3571,20 @@ inline BOOL IsDebuggerPresent() noexcept {
     return FALSE;
 }
 
-inline void* SetUnhandledExceptionFilter(void* /*lpTopLevelExceptionFilter*/) noexcept {
-    return nullptr;
+typedef int32_t (WINAPI *PTOP_LEVEL_EXCEPTION_FILTER)(EXCEPTION_POINTERS* ExceptionInfo);
+typedef PTOP_LEVEL_EXCEPTION_FILTER LPTOP_LEVEL_EXCEPTION_FILTER;
+
+inline std::atomic<PTOP_LEVEL_EXCEPTION_FILTER> g_topLevelExceptionFilter{nullptr};
+
+inline LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter) noexcept {
+    return g_topLevelExceptionFilter.exchange(lpTopLevelExceptionFilter);
 }
 
-inline int32_t UnhandledExceptionFilter(void* /*ExceptionInfo*/) noexcept {
+inline int32_t WINAPI UnhandledExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) noexcept {
+    auto filter = g_topLevelExceptionFilter.load();
+    if (filter) {
+        return filter(ExceptionInfo);
+    }
     return 1; // EXCEPTION_EXECUTE_HANDLER
 }
 
@@ -9728,6 +9737,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "AddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-0.dll", "SetUnhandledExceptionFilter", reinterpret_cast<void*>(SetUnhandledExceptionFilter));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-0.dll", "UnhandledExceptionFilter", reinterpret_cast<void*>(UnhandledExceptionFilter));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "SetUnhandledExceptionFilter", reinterpret_cast<void*>(SetUnhandledExceptionFilter));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "UnhandledExceptionFilter", reinterpret_cast<void*>(UnhandledExceptionFilter));
     ldr.registerExport("kernel32.dll", "GetPrivateProfileIntW", reinterpret_cast<void*>(GetPrivateProfileIntW));
     ldr.registerExport("kernel32.dll", "HeapQueryInformation", reinterpret_cast<void*>(HeapQueryInformation));
     ldr.registerExport("kernel32.dll", "Beep", reinterpret_cast<void*>(Beep));

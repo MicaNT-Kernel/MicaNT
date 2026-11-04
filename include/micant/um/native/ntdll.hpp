@@ -2329,6 +2329,61 @@ inline NtStatus WINAPI NtCreateJobObject(HANDLE* JobHandle, uint32_t /*DesiredAc
     return NtStatus::Success;
 }
 
+enum MEMORY_PARTITION_INFORMATION_CLASS {
+    MemoryPartitionInfo = 0,
+    MemoryPartitionDedicatedMemoryInfo = 1,
+    MemoryPartitionServerInfo = 2
+};
+
+struct MEMORY_PARTITION_CONFIGURATION_INFORMATION {
+    ULONG Flags;
+    ULONG TotalNumberOfPages;
+    ULONG ResidentAvailablePages;
+    ULONG TotalCommitLimitPages;
+    ULONG CommittedPages;
+    ULONG SharedCommitPages;
+};
+
+inline NtStatus WINAPI NtCreatePartition(HANDLE* PartitionHandle, uint32_t /*DesiredAccess*/, void* /*ObjectAttributes*/, ULONG /*PreferredNode*/) noexcept {
+    if (!PartitionHandle) return NtStatus::InvalidParameter;
+    *PartitionHandle = reinterpret_cast<HANDLE>(0x9040);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtOpenPartition(HANDLE* PartitionHandle, uint32_t /*DesiredAccess*/, void* /*ObjectAttributes*/) noexcept {
+    if (!PartitionHandle) return NtStatus::InvalidParameter;
+    *PartitionHandle = reinterpret_cast<HANDLE>(0x9041);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtManagePartition(
+    HANDLE /*TargetHandle*/,
+    HANDLE /*SourceHandle*/,
+    MEMORY_PARTITION_INFORMATION_CLASS PartitionInformationClass,
+    void* PartitionInformation,
+    ULONG PartitionInformationLength
+) noexcept {
+    if (!PartitionInformation) return NtStatus::InvalidParameter;
+    if (PartitionInformationClass == MemoryPartitionInfo) {
+        if (PartitionInformationLength < sizeof(MEMORY_PARTITION_CONFIGURATION_INFORMATION)) {
+            return NtStatus::InfoLengthMismatch;
+        }
+        auto* pInfo = reinterpret_cast<MEMORY_PARTITION_CONFIGURATION_INFORMATION*>(PartitionInformation);
+        pInfo->Flags = 0;
+        pInfo->TotalNumberOfPages = 8388608;     // 32 GB at 4KB pages
+        pInfo->ResidentAvailablePages = 6291456; // 24 GB available
+        pInfo->TotalCommitLimitPages = 8388608;
+        pInfo->CommittedPages = 2097152;         // 8 GB committed
+        pInfo->SharedCommitPages = 524288;       // 2 GB shared
+        return NtStatus::Success;
+    }
+    return NtStatus::Success;
+}
+
+inline NtStatus ZwCreatePartition(HANDLE* p, uint32_t a, void* o, ULONG n) { return NtCreatePartition(p, a, o, n); }
+inline NtStatus ZwOpenPartition(HANDLE* p, uint32_t a, void* o) { return NtOpenPartition(p, a, o); }
+inline NtStatus ZwManagePartition(HANDLE t, HANDLE s, MEMORY_PARTITION_INFORMATION_CLASS c, void* i, ULONG l) { return NtManagePartition(t, s, c, i, l); }
+
 inline NtStatus WINAPI NtCreateKey(HANDLE* KeyHandle, uint32_t /*DesiredAccess*/, void* /*ObjectAttributes*/, ULONG /*TitleIndex*/, void* /*Class*/, ULONG /*CreateOptions*/, ULONG* Disposition) noexcept {
     if (KeyHandle) *KeyHandle = reinterpret_cast<HANDLE>(0x9007);
     if (Disposition) *Disposition = 1; // REG_CREATED_NEW_KEY
@@ -3109,6 +3164,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtCreateEvent", reinterpret_cast<void*>(NtCreateEvent_Export));
     ldr.registerExport("ntdll.dll", "NtCreateIoCompletion", reinterpret_cast<void*>(NtCreateIoCompletion_Export));
     ldr.registerExport("ntdll.dll", "NtCreateJobObject", reinterpret_cast<void*>(NtCreateJobObject));
+    ldr.registerExport("ntdll.dll", "NtCreatePartition", reinterpret_cast<void*>(NtCreatePartition));
+    ldr.registerExport("ntdll.dll", "NtOpenPartition", reinterpret_cast<void*>(NtOpenPartition));
+    ldr.registerExport("ntdll.dll", "NtManagePartition", reinterpret_cast<void*>(NtManagePartition));
+    ldr.registerExport("ntdll.dll", "ZwCreatePartition", reinterpret_cast<void*>(NtCreatePartition));
+    ldr.registerExport("ntdll.dll", "ZwOpenPartition", reinterpret_cast<void*>(NtOpenPartition));
+    ldr.registerExport("ntdll.dll", "ZwManagePartition", reinterpret_cast<void*>(NtManagePartition));
     ldr.registerExport("ntdll.dll", "NtCreateKey", reinterpret_cast<void*>(NtCreateKey));
     ldr.registerExport("ntdll.dll", "NtCreateKeyedEvent", reinterpret_cast<void*>(NtCreateKeyedEvent));
     ldr.registerExport("ntdll.dll", "NtCreateMutant", reinterpret_cast<void*>(NtCreateMutant_Export));

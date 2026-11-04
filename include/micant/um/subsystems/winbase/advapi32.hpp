@@ -1636,6 +1636,18 @@ inline win32::BOOL CredDeleteW([[maybe_unused]] LPCWSTR TargetName,
     return win32::TRUE;
 }
 
+enum SECURITY_IMPERSONATION_LEVEL {
+    SecurityAnonymous = 0,
+    SecurityIdentification = 1,
+    SecurityImpersonation = 2,
+    SecurityDelegation = 3
+};
+
+enum TOKEN_TYPE {
+    TokenPrimary = 1,
+    TokenImpersonation = 2
+};
+
 inline win32::BOOL DuplicateTokenEx(win32::HANDLE hExistingToken,
                                     [[maybe_unused]] win32::DWORD dwDesiredAccess,
                                     [[maybe_unused]] void* lpTokenAttributes,
@@ -2244,6 +2256,11 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "GetTokenInformation", reinterpret_cast<void*>(GetTokenInformation));
     ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "AdjustTokenPrivileges", reinterpret_cast<void*>(AdjustTokenPrivileges));
     ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "LookupPrivilegeValueW", reinterpret_cast<void*>(LookupPrivilegeValueW));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "DuplicateToken", reinterpret_cast<void*>(DuplicateToken));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "DuplicateTokenEx", reinterpret_cast<void*>(DuplicateTokenEx));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "ImpersonateLoggedOnUser", reinterpret_cast<void*>(ImpersonateLoggedOnUser));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "RevertToSelf", reinterpret_cast<void*>(RevertToSelf));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "CheckTokenMembership", reinterpret_cast<void*>(CheckTokenMembership));
     ldr.registerExport("advapi32.dll", "AllocateLocallyUniqueId", reinterpret_cast<void*>(AllocateLocallyUniqueId));
     ldr.registerExport("advapi32.dll", "CredReadW", reinterpret_cast<void*>(CredReadW));
     ldr.registerExport("advapi32.dll", "CredFree", reinterpret_cast<void*>(CredFree));

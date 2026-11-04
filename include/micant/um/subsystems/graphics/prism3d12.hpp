@@ -33,6 +33,8 @@
 #include <cstring>
 #include <algorithm>
 #include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace micant::prism3d12 {
 
@@ -358,7 +360,58 @@ public:
 
 class ID3D12RootSignature : public ID3D12DeviceChild {};
 
-class ID3D12Resource : public ID3D12DeviceChild {
+class ID3D12Pageable : public ID3D12DeviceChild {};
+
+struct D3D12_HEAP_DESC {
+    uint64_t SizeInBytes{0};
+    D3D12_HEAP_PROPERTIES Properties{};
+    uint64_t Alignment{0};
+    uint32_t Flags{0};
+};
+
+class ID3D12Heap : public ID3D12Pageable {
+public:
+    virtual D3D12_HEAP_DESC GetDesc() = 0;
+};
+
+class Prism3D12HeapImpl : public ID3D12Heap {
+private:
+    std::atomic<uint32_t> m_refCount{1};
+    const void* m_pAddress{nullptr};
+    D3D12_HEAP_DESC m_desc{};
+
+public:
+    explicit Prism3D12HeapImpl(const void* pAddr, uint64_t size = 64 * 1024 * 1024ULL)
+        : m_pAddress(pAddr) {
+        m_desc.SizeInBytes = size;
+        m_desc.Alignment = 64 * 1024;
+    }
+
+    int32_t QueryInterface(const IID&, void** ppv) override {
+        if (!ppv) return -1;
+        *ppv = this;
+        AddRef();
+        return 0;
+    }
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t*) override { return 0; }
+    int32_t GetDevice(const IID&, void** ppDevice) override {
+        if (ppDevice) *ppDevice = nullptr;
+        return 0;
+    }
+    D3D12_HEAP_DESC GetDesc() override { return m_desc; }
+    const void* GetAddress() const noexcept { return m_pAddress; }
+};
+
+class ID3D12Resource : public ID3D12Pageable {
 public:
     virtual int32_t Map(uint32_t Subresource, const void* pReadRange, void** ppData) = 0;
     virtual void Unmap(uint32_t Subresource, const void* pWrittenRange) = 0;
@@ -821,6 +874,19 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS23 {
 
 
 
+enum D3D12_RESIDENCY_PRIORITY : uint32_t {
+    D3D12_RESIDENCY_PRIORITY_MINIMUM = 0x28000000,
+    D3D12_RESIDENCY_PRIORITY_LOW     = 0x50000000,
+    D3D12_RESIDENCY_PRIORITY_NORMAL  = 0x78000000,
+    D3D12_RESIDENCY_PRIORITY_HIGH    = 0xa0000000,
+    D3D12_RESIDENCY_PRIORITY_MAXIMUM = 0xc8000000
+};
+
+enum D3D12_RESIDENCY_FLAGS : uint32_t {
+    D3D12_RESIDENCY_FLAG_NONE              = 0,
+    D3D12_RESIDENCY_FLAG_DENY_OVERBUDGET   = 0x1
+};
+
 class ID3D12Device : public ID3D12Object {
 public:
     virtual int32_t CreateCommandQueue(const D3D12_COMMAND_QUEUE_DESC* pDesc, const IID& riid, void** ppCommandQueue) = 0;
@@ -834,6 +900,10 @@ public:
     virtual void CreateRenderTargetView(ID3D12Resource* pResource, const D3D12_RENDER_TARGET_VIEW_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
     virtual void CreateDepthStencilView(ID3D12Resource* pResource, const D3D12_DEPTH_STENCIL_VIEW_DESC* pDesc, D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
     virtual int32_t CheckFeatureSupport(uint32_t Feature, void* pFeatureSupportData, uint32_t FeatureSupportDataSize) = 0;
+    virtual int32_t MakeResident(uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/) { return 0; }
+    virtual int32_t Evict(uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/) { return 0; }
+    virtual int32_t EnqueueMakeResident(D3D12_RESIDENCY_FLAGS /*Flags*/, uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/, ID3D12Fence* /*pFenceToSignal*/, uint64_t /*FenceValueToSignal*/) { return 0; }
+    virtual int32_t SetResidencyPriority(uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/, const D3D12_RESIDENCY_PRIORITY* /*pPriorities*/) { return 0; }
 };
 
 static constexpr IID IID_ID3D12Device8 = 
@@ -845,6 +915,8 @@ public:
         ID3D12Resource* pTargetedResource,
         ID3D12Resource* pFeedbackMinMipMap,
         D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+    virtual int32_t OpenExistingHeapFromAddress(const void* /*pAddress*/, const IID& /*riid*/, void** /*ppvHeap*/) { return 0; }
+    virtual int32_t OpenExistingHeapFromFileMapping(void* /*hFileMapping*/, const IID& /*riid*/, void** /*ppvHeap*/) { return 0; }
 };
 
 // ============================================================================
@@ -1654,6 +1726,68 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/
     ) override {
         m_samplerFeedbackViewsCreated++;
+    }
+
+    std::unordered_set<ID3D12Pageable*> m_residentObjects;
+    std::unordered_map<ID3D12Pageable*, D3D12_RESIDENCY_PRIORITY> m_residencyPriorities;
+
+    int32_t MakeResident(uint32_t NumObjects, ID3D12Pageable* const* ppObjects) override {
+        if (!ppObjects && NumObjects > 0) return -1;
+        for (uint32_t i = 0; i < NumObjects; ++i) {
+            if (ppObjects[i]) {
+                m_residentObjects.insert(ppObjects[i]);
+            }
+        }
+        return 0;
+    }
+
+    int32_t Evict(uint32_t NumObjects, ID3D12Pageable* const* ppObjects) override {
+        if (!ppObjects && NumObjects > 0) return -1;
+        for (uint32_t i = 0; i < NumObjects; ++i) {
+            if (ppObjects[i]) {
+                m_residentObjects.erase(ppObjects[i]);
+            }
+        }
+        return 0;
+    }
+
+    int32_t EnqueueMakeResident(D3D12_RESIDENCY_FLAGS /*Flags*/, uint32_t NumObjects, ID3D12Pageable* const* ppObjects, ID3D12Fence* pFenceToSignal, uint64_t FenceValueToSignal) override {
+        MakeResident(NumObjects, ppObjects);
+        if (pFenceToSignal) {
+            pFenceToSignal->Signal(FenceValueToSignal);
+        }
+        return 0;
+    }
+
+    int32_t SetResidencyPriority(uint32_t NumObjects, ID3D12Pageable* const* ppObjects, const D3D12_RESIDENCY_PRIORITY* pPriorities) override {
+        if (!ppObjects || !pPriorities) return -1;
+        for (uint32_t i = 0; i < NumObjects; ++i) {
+            if (ppObjects[i]) {
+                m_residencyPriorities[ppObjects[i]] = pPriorities[i];
+            }
+        }
+        return 0;
+    }
+
+    int32_t OpenExistingHeapFromAddress(const void* pAddress, const IID&, void** ppvHeap) override {
+        if (!pAddress || !ppvHeap) return -1;
+        *ppvHeap = new Prism3D12HeapImpl(pAddress);
+        return 0;
+    }
+
+    int32_t OpenExistingHeapFromFileMapping(void* hFileMapping, const IID&, void** ppvHeap) override {
+        if (!hFileMapping || !ppvHeap) return -1;
+        *ppvHeap = new Prism3D12HeapImpl(reinterpret_cast<const void*>(0x00007FF620000000ULL));
+        return 0;
+    }
+
+    bool IsResident(ID3D12Pageable* pObj) const noexcept {
+        return m_residentObjects.find(pObj) != m_residentObjects.end();
+    }
+
+    D3D12_RESIDENCY_PRIORITY GetResidencyPriority(ID3D12Pageable* pObj) const noexcept {
+        auto it = m_residencyPriorities.find(pObj);
+        return (it != m_residencyPriorities.end()) ? it->second : D3D12_RESIDENCY_PRIORITY_NORMAL;
     }
 
     [[nodiscard]] uint32_t GetSamplerFeedbackViewsCreated() const noexcept { return m_samplerFeedbackViewsCreated; }

@@ -42916,3 +42916,268 @@ void Test_Horizon211_Options2223_SecureBoot_ThreadSecurity_And_MemoryPriority_Su
 
     std::cout << "[TEST] Suite 427: Horizon 211 - Options 22-23, Secure Boot, Thread Security & Memory Priority PASSED." << std::endl;
 }
+
+// ============================================================================
+
+// ============================================================================
+// Suite 428: Horizon 212 - DirectX 12 Agility SDK GPU Virtual Address Range &
+// Residency, NT Memory Partition Objects, Win32 Token Impersonation, and
+// Win32 Unhandled Exception Filter Chaining
+// ============================================================================
+inline void Test_Horizon212_D3D12Residency_MemoryPartitions_TokenImpersonation_And_UnhandledExceptionFilter_Suite() {
+    std::cout << "\n============================================================================" << std::endl;
+    std::cout << "Suite 428: Horizon 212 - D3D12 Residency, NT Memory Partitions, Token Impersonation & Unhandled Exceptions" << std::endl;
+    std::cout << "============================================================================" << std::endl;
+
+    micant::ntdll::InitializeNtdllSubsystemExports();
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::advapi32::InitializeAdvapi32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Residency Architecture & Heaps
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing D3D12 Resource Residency, Heap Creation & Fence Paging...\n";
+
+        using namespace micant::prism3d12;
+        Prism3D12DeviceImpl dev;
+
+        // 1.1 Create committed resource and test ID3D12Pageable inheritance
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC resDesc{};
+        resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        resDesc.Width = 1920;
+        resDesc.Height = 1080;
+        resDesc.DepthOrArraySize = 1;
+        resDesc.MipLevels = 1;
+        resDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        resDesc.SampleDesc.Count = 1;
+        resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+        void* pResVoid = nullptr;
+        int32_t hrRes = dev.CreateCommittedResource(&heapProps, 0, &resDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID{}, &pResVoid);
+        TEST_ASSERT(hrRes == 0 && pResVoid != nullptr, "CreateCommittedResource succeeds");
+
+        ID3D12Resource* pResource = reinterpret_cast<ID3D12Resource*>(pResVoid);
+        ID3D12Pageable* pPageableRes = static_cast<ID3D12Pageable*>(pResource);
+        TEST_ASSERT(pPageableRes != nullptr, "ID3D12Resource inherits from ID3D12Pageable");
+
+        // 1.2 OpenExistingHeapFromAddress and verify ID3D12Heap & ID3D12Pageable
+        void* pHeapVoid = nullptr;
+        const void* mockGpuVa = reinterpret_cast<const void*>(0x00007FF610000000ULL);
+        int32_t hrHeap = dev.OpenExistingHeapFromAddress(mockGpuVa, IID{}, &pHeapVoid);
+        TEST_ASSERT(hrHeap == 0 && pHeapVoid != nullptr, "OpenExistingHeapFromAddress succeeds");
+
+        ID3D12Heap* pHeap = reinterpret_cast<ID3D12Heap*>(pHeapVoid);
+        ID3D12Pageable* pPageableHeap = static_cast<ID3D12Pageable*>(pHeap);
+        TEST_ASSERT(pPageableHeap != nullptr, "ID3D12Heap inherits from ID3D12Pageable");
+        TEST_ASSERT(pHeap->GetDesc().SizeInBytes == 64 * 1024 * 1024ULL, "Default heap size is 64 MB");
+
+        // 1.3 MakeResident
+        ID3D12Pageable* pageables[] = { pPageableRes, pPageableHeap };
+        int32_t hrResident = dev.MakeResident(2, pageables);
+        TEST_ASSERT(hrResident == 0, "MakeResident succeeds for 2 pageable objects");
+        TEST_ASSERT(dev.IsResident(pPageableRes), "Resource is resident in GPU VRAM");
+        TEST_ASSERT(dev.IsResident(pPageableHeap), "Heap is resident in GPU VRAM");
+
+        // 1.4 SetResidencyPriority
+        D3D12_RESIDENCY_PRIORITY priorities[] = {
+            D3D12_RESIDENCY_PRIORITY_HIGH,
+            D3D12_RESIDENCY_PRIORITY_MAXIMUM
+        };
+        int32_t hrPri = dev.SetResidencyPriority(2, pageables, priorities);
+        TEST_ASSERT(hrPri == 0, "SetResidencyPriority succeeds");
+        TEST_ASSERT(dev.GetResidencyPriority(pPageableRes) == D3D12_RESIDENCY_PRIORITY_HIGH, "Resource priority is HIGH");
+        TEST_ASSERT(dev.GetResidencyPriority(pPageableHeap) == D3D12_RESIDENCY_PRIORITY_MAXIMUM, "Heap priority is MAXIMUM");
+
+        // 1.5 EnqueueMakeResident with Fence signaling
+        void* pFenceVoid = nullptr;
+        int32_t hrFence = dev.CreateFence(0, D3D12_FENCE_FLAG_NONE, IID{}, &pFenceVoid);
+        TEST_ASSERT(hrFence == 0 && pFenceVoid != nullptr, "CreateFence succeeds");
+        ID3D12Fence* pFence = reinterpret_cast<ID3D12Fence*>(pFenceVoid);
+
+        int32_t hrEnqueue = dev.EnqueueMakeResident(D3D12_RESIDENCY_FLAG_NONE, 2, pageables, pFence, 42);
+        TEST_ASSERT(hrEnqueue == 0, "EnqueueMakeResident succeeds");
+        TEST_ASSERT(pFence->GetCompletedValue() == 42, "Fence signaled to 42 after residency enqueue");
+
+        // 1.6 Evict
+        int32_t hrEvict = dev.Evict(2, pageables);
+        TEST_ASSERT(hrEvict == 0, "Evict succeeds");
+        TEST_ASSERT(!dev.IsResident(pPageableRes), "Resource is evicted from GPU VRAM");
+        TEST_ASSERT(!dev.IsResident(pPageableHeap), "Heap is evicted from GPU VRAM");
+
+        // 1.7 OpenExistingHeapFromFileMapping
+        void* pMappingHeapVoid = nullptr;
+        int32_t hrMapHeap = dev.OpenExistingHeapFromFileMapping(reinterpret_cast<void*>(0x8888), IID{}, &pMappingHeapVoid);
+        TEST_ASSERT(hrMapHeap == 0 && pMappingHeapVoid != nullptr, "OpenExistingHeapFromFileMapping succeeds");
+
+        pResource->Release();
+        pHeap->Release();
+        pFence->Release();
+        reinterpret_cast<ID3D12Heap*>(pMappingHeapVoid)->Release();
+
+        std::cout << "  [PASS] DirectX 12 Agility SDK GPU Virtual Address Range & Residency complete.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT Partition Objects & Physical Memory Isolation
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing NT Partition Objects (NtCreatePartition, NtOpenPartition, NtManagePartition)...\n";
+
+        ntdll::HANDLE hPartition = nullptr;
+        NtStatus stCreate = ntdll::NtCreatePartition(&hPartition, 0x1F0003, nullptr, 0);
+        TEST_ASSERT(stCreate == NtStatus::Success && hPartition != nullptr, "NtCreatePartition succeeds");
+
+        ntdll::HANDLE hOpenPartition = nullptr;
+        NtStatus stOpen = ntdll::NtOpenPartition(&hOpenPartition, 0x1F0003, nullptr);
+        TEST_ASSERT(stOpen == NtStatus::Success && hOpenPartition != nullptr, "NtOpenPartition succeeds");
+
+        ntdll::MEMORY_PARTITION_CONFIGURATION_INFORMATION partInfo{};
+        NtStatus stManage = ntdll::NtManagePartition(
+            hPartition,
+            nullptr,
+            ntdll::MemoryPartitionInfo,
+            &partInfo,
+            sizeof(partInfo)
+        );
+        TEST_ASSERT(stManage == NtStatus::Success, "NtManagePartition(MemoryPartitionInfo) succeeds");
+        TEST_ASSERT(partInfo.TotalNumberOfPages == 8388608, "TotalNumberOfPages is 32 GB (8388608 * 4KB)");
+        TEST_ASSERT(partInfo.ResidentAvailablePages == 6291456, "ResidentAvailablePages is 24 GB");
+        TEST_ASSERT(partInfo.CommittedPages == 2097152, "CommittedPages is 8 GB");
+        TEST_ASSERT(partInfo.SharedCommitPages == 524288, "SharedCommitPages is 2 GB");
+
+        // Zw aliases verification
+        ntdll::HANDLE hZwPartition = nullptr;
+        NtStatus stZwCreate = ntdll::ZwCreatePartition(&hZwPartition, 0x1F0003, nullptr, 0);
+        TEST_ASSERT(stZwCreate == NtStatus::Success && hZwPartition != nullptr, "ZwCreatePartition alias succeeds");
+
+        // Verify ntdll export registrations
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtCreatePartition") != nullptr, "ntdll.dll exports NtCreatePartition");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtOpenPartition") != nullptr, "ntdll.dll exports NtOpenPartition");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "NtManagePartition") != nullptr, "ntdll.dll exports NtManagePartition");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "ZwCreatePartition") != nullptr, "ntdll.dll exports ZwCreatePartition");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "ZwOpenPartition") != nullptr, "ntdll.dll exports ZwOpenPartition");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "ZwManagePartition") != nullptr, "ntdll.dll exports ZwManagePartition");
+
+        std::cout << "  [PASS] NT Partition Objects & Physical Memory Isolation verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Token Duplication, Impersonation & Elevation
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Win32 Token Duplication, Impersonation & Anti-Cheat Elevation...\n";
+
+        using namespace micant::advapi32;
+
+        // 3.1 DuplicateToken
+        void* hDupToken = nullptr;
+        win32::BOOL bDup = DuplicateToken(reinterpret_cast<void*>(0x4001), SecurityImpersonation, &hDupToken);
+        TEST_ASSERT(bDup == TRUE && hDupToken != nullptr, "DuplicateToken succeeds");
+
+        // 3.2 DuplicateTokenEx
+        win32::HANDLE hExisting = reinterpret_cast<win32::HANDLE>(0x00040010ULL);
+        win32::HANDLE hNewToken = nullptr;
+        win32::BOOL bDupEx = DuplicateTokenEx(
+            hExisting,
+            0x000F01FF,
+            nullptr,
+            SecurityImpersonation,
+            TokenImpersonation,
+            &hNewToken
+        );
+        TEST_ASSERT(bDupEx == TRUE && hNewToken == hExisting, "DuplicateTokenEx succeeds with matching impersonation token");
+
+        // 3.3 ImpersonateLoggedOnUser & RevertToSelf
+        win32::BOOL bImp = ImpersonateLoggedOnUser(hNewToken);
+        TEST_ASSERT(bImp == TRUE, "ImpersonateLoggedOnUser succeeds");
+
+        win32::BOOL bRev = RevertToSelf();
+        TEST_ASSERT(bRev == TRUE, "RevertToSelf succeeds");
+
+        // 3.4 CheckTokenMembership (Administrator check)
+        win32::BOOL isMember = FALSE;
+        win32::BOOL bCheck = CheckTokenMembership(nullptr, nullptr, &isMember);
+        TEST_ASSERT(bCheck == TRUE && isMember == TRUE, "CheckTokenMembership reports administrator rights");
+
+        // 3.5 api-ms-win-security-base-l1-1-0.dll ApiSet verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "DuplicateToken") != nullptr,
+                    "api-ms-win-security-base-l1-1-0.dll exports DuplicateToken");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "DuplicateTokenEx") != nullptr,
+                    "api-ms-win-security-base-l1-1-0.dll exports DuplicateTokenEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "ImpersonateLoggedOnUser") != nullptr,
+                    "api-ms-win-security-base-l1-1-0.dll exports ImpersonateLoggedOnUser");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "RevertToSelf") != nullptr,
+                    "api-ms-win-security-base-l1-1-0.dll exports RevertToSelf");
+        TEST_ASSERT(ldr.getExport("api-ms-win-security-base-l1-1-0.dll", "CheckTokenMembership") != nullptr,
+                    "api-ms-win-security-base-l1-1-0.dll exports CheckTokenMembership");
+
+        std::cout << "  [PASS] Win32 Token Duplication, Impersonation & Elevation verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 Exception Handling & Crash Reporting Filter Chains
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing UnhandledExceptionFilter Chaining & Error Handling ApiSets...\n";
+
+        static int s_filter1Calls = 0;
+        static int s_filter2Calls = 0;
+
+        auto filter1 = [](micant::win32::EXCEPTION_POINTERS*) -> int32_t {
+            s_filter1Calls++;
+            return 1; // EXCEPTION_EXECUTE_HANDLER
+        };
+
+        auto filter2 = [](micant::win32::EXCEPTION_POINTERS*) -> int32_t {
+            s_filter2Calls++;
+            return 0; // EXCEPTION_CONTINUE_SEARCH
+        };
+
+        // Save initial filter (if set previously) and start clean
+        auto savedOriginal = micant::win32::SetUnhandledExceptionFilter(nullptr);
+
+        // 4.1 Register filter 1
+        auto prev1 = micant::win32::SetUnhandledExceptionFilter(+filter1);
+        TEST_ASSERT(prev1 == nullptr, "Initial SetUnhandledExceptionFilter returns nullptr");
+
+        // 4.2 Register filter 2, verifying filter 1 was returned (chaining!)
+        auto prev2 = micant::win32::SetUnhandledExceptionFilter(+filter2);
+        TEST_ASSERT(prev2 == +filter1, "Second SetUnhandledExceptionFilter returns previous filter1");
+
+        // 4.3 Invoke UnhandledExceptionFilter
+        int32_t res = micant::win32::UnhandledExceptionFilter(nullptr);
+        TEST_ASSERT(s_filter2Calls == 1, "Filter 2 was invoked by UnhandledExceptionFilter");
+        TEST_ASSERT(res == 0, "UnhandledExceptionFilter returned result from active filter 2");
+        (void)s_filter1Calls;
+
+        // 4.4 Restore original
+        micant::win32::SetUnhandledExceptionFilter(savedOriginal);
+
+        // 4.5 ApiSet verification for errorhandling
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-0.dll", "SetUnhandledExceptionFilter") != nullptr,
+                    "api-ms-win-core-errorhandling-l1-1-0.dll exports SetUnhandledExceptionFilter");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-0.dll", "UnhandledExceptionFilter") != nullptr,
+                    "api-ms-win-core-errorhandling-l1-1-0.dll exports UnhandledExceptionFilter");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "SetUnhandledExceptionFilter") != nullptr,
+                    "api-ms-win-core-errorhandling-l1-1-1.dll exports SetUnhandledExceptionFilter");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "UnhandledExceptionFilter") != nullptr,
+                    "api-ms-win-core-errorhandling-l1-1-1.dll exports UnhandledExceptionFilter");
+
+        std::cout << "  [PASS] Win32 Exception Handling & Crash Reporting Filter Chains verified.\n";
+    }
+
+    std::cout << "[HORIZON 212] D3D12 Residency, NT Partitions, Token Impersonation & Unhandled Exceptions Summary:\n"
+              << "    Pillar 1: DirectX 12 Agility SDK GPU VA Range & Residency Architecture OK\n"
+              << "    Pillar 2: NT Partition Objects (Create, Open, Manage, MemoryPartitionInfo) OK\n"
+              << "    Pillar 3: Win32 Token Duplication, Impersonation & Anti-Cheat Elevation OK\n"
+              << "    Pillar 4: Win32 Unhandled Exception Filter Chaining & ErrorHandling ApiSets OK\n";
+
+    std::cout << "[TEST] Suite 428: Horizon 212 - D3D12 Residency, NT Partitions, Token Impersonation & Unhandled Exceptions PASSED." << std::endl;
+}
