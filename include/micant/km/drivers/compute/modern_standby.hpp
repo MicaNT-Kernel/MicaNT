@@ -718,6 +718,15 @@ struct SYSTEM_POWER_CAPABILITIES {
     BOOLEAN DiskSpinDown;
 };
 
+struct PROCESSOR_POWER_INFORMATION {
+    ULONG Number;
+    ULONG MaxMhz;
+    ULONG CurrentMhz;
+    ULONG MhzLimit;
+    ULONG MaxIdleState;
+    ULONG CurrentIdleState;
+};
+
 inline NTSTATUS WINAPI CallNtPowerInformation(
     POWER_INFORMATION_LEVEL InformationLevel,
     PVOID InputBuffer,
@@ -747,6 +756,24 @@ inline NTSTATUS WINAPI CallNtPowerInformation(
         caps->HiberFilePresent = static_cast<BOOLEAN>(1);
         caps->Hiberboot = static_cast<BOOLEAN>(1);
         caps->WakeAlarmPresent = static_cast<BOOLEAN>(1);
+        return STATUS_SUCCESS;
+    }
+
+    if (InformationLevel == ProcessorInformation) {
+        if (!OutputBuffer || OutputBufferLength < sizeof(PROCESSOR_POWER_INFORMATION)) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        size_t count = OutputBufferLength / sizeof(PROCESSOR_POWER_INFORMATION);
+        if (count > 16) count = 16;
+        auto* pProcs = reinterpret_cast<PROCESSOR_POWER_INFORMATION*>(OutputBuffer);
+        for (size_t i = 0; i < count; ++i) {
+            pProcs[i].Number = static_cast<ULONG>(i);
+            pProcs[i].MaxMhz = 5400;     // 5.4 GHz Turbo Boost
+            pProcs[i].CurrentMhz = 5400; // Unthrottled bare-metal performance
+            pProcs[i].MhzLimit = 5400;
+            pProcs[i].MaxIdleState = 2;
+            pProcs[i].CurrentIdleState = 0;
+        }
         return STATUS_SUCCESS;
     }
 
@@ -827,6 +854,10 @@ inline void InitializeModernStandbySubsystem() {
 
     // DynamicLoader C ABI registrations
     ldr::DynamicLoader::get().registerExport("powrprof.dll", "CallNtPowerInformation",
+        reinterpret_cast<void*>(CallNtPowerInformation));
+    ldr::DynamicLoader::get().registerExport("api-ms-win-power-base-l1-1-0.dll", "CallNtPowerInformation",
+        reinterpret_cast<void*>(CallNtPowerInformation));
+    ldr::DynamicLoader::get().registerExport("kernel32.dll", "CallNtPowerInformation",
         reinterpret_cast<void*>(CallNtPowerInformation));
     ldr::DynamicLoader::get().registerExport("pep.sys", "PepRegisterDevice",
         reinterpret_cast<void*>(PepRegisterDevice));

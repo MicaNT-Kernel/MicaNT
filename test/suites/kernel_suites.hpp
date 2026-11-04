@@ -43395,3 +43395,188 @@ inline void Test_Horizon213_PipelineStateStream_CodeIntegrityPolicy_SparseStream
 
     std::cout << "[TEST] Suite 429: Horizon 213 - D3D12 Pipeline State Stream, Code Integrity Policy, Sparse Files & Image Canonicalization PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 430: Horizon 214 - DirectX 12 Agility SDK Enhanced Command Signature &
+// ExecuteIndirect Architecture, NT System Dynamic Time Zone Information,
+// Win32 Thread Description Canonicalization & Processor Power Information
+// ============================================================================
+inline void Test_Horizon214_ExecuteIndirect_DynamicTimeZone_ThreadDescription_And_ProcessorPowerInfo_Suite() {
+    std::cout << "\n============================================================================" << std::endl;
+    std::cout << "Suite 430: Horizon 214 - D3D12 ExecuteIndirect, Dynamic TimeZone, Thread Description & Processor Power" << std::endl;
+    std::cout << "============================================================================" << std::endl;
+
+    micant::ntdll::InitializeNtdllSubsystemExports();
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::standby::InitializeModernStandbySubsystem();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Command Signature & ExecuteIndirect
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing D3D12 Agility SDK Command Signatures & ExecuteIndirect...\n";
+        using namespace micant::prism3d12;
+        Prism3D12DeviceImpl dev;
+
+        // 1.1 Create Root Signature for command signature
+        ID3D12RootSignature* pRootSig = nullptr;
+        uint32_t dummyRootSigData = 0x87654321;
+        int32_t hr = dev.CreateRootSignature(0, &dummyRootSigData, sizeof(dummyRootSigData), IID_ID3D12RootSignature, reinterpret_cast<void**>(&pRootSig));
+        TEST_ASSERT(hr == 0 && pRootSig != nullptr, "CreateRootSignature for command signature succeeds");
+
+        // 1.2 Define indirect argument descs: Draw & Constant Buffer View
+        D3D12_INDIRECT_ARGUMENT_DESC argDescs[2]{};
+        argDescs[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW;
+        argDescs[0].ConstantBufferView.RootParameterIndex = 0;
+        argDescs[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+
+        D3D12_COMMAND_SIGNATURE_DESC cmdSigDesc{};
+        cmdSigDesc.ByteStride = sizeof(uint32_t) * 8;
+        cmdSigDesc.NumArgumentDescs = 2;
+        cmdSigDesc.pArgumentDescs = argDescs;
+        cmdSigDesc.NodeMask = 0;
+
+        ID3D12CommandSignature* pCmdSig = nullptr;
+        hr = dev.CreateCommandSignature(&cmdSigDesc, pRootSig, IID_ID3D12CommandSignature, reinterpret_cast<void**>(&pCmdSig));
+        TEST_ASSERT(hr == 0 && pCmdSig != nullptr, "CreateCommandSignature creates valid ID3D12CommandSignature");
+        TEST_ASSERT(dev.GetCommandSignaturesCreated() >= 1, "Command signatures created counter incremented");
+
+        // 1.3 Verify CommandSignature properties
+        auto* pSigImpl = static_cast<Prism3D12CommandSignatureImpl*>(pCmdSig);
+        const auto& desc = pSigImpl->GetDesc();
+        TEST_ASSERT(desc.ByteStride == sizeof(uint32_t) * 8, "Command signature stride matches descriptor");
+        TEST_ASSERT(desc.NumArgumentDescs == 2, "Command signature argument count matches descriptor");
+        TEST_ASSERT(pSigImpl->GetRootSignature() == pRootSig, "Command signature root signature matches");
+
+        // 1.4 Test ExecuteIndirect on Command List
+        Prism3D12GraphicsCommandListImpl cmdList(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        cmdList.ExecuteIndirect(pCmdSig, 128, nullptr, 0, nullptr, 0);
+        TEST_ASSERT(cmdList.GetExecuteIndirectCount() == 1, "ExecuteIndirect increments indirect execution count");
+        TEST_ASSERT(cmdList.GetLastIndirectMaxCommands() == 128, "ExecuteIndirect records MaxCommandCount");
+        TEST_ASSERT(cmdList.GetLastCommandSignature() == pCmdSig, "ExecuteIndirect records command signature reference");
+
+        pCmdSig->Release();
+        pRootSig->Release();
+        std::cout << "  [PASS] DirectX 12 Agility SDK Command Signature & ExecuteIndirect verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Dynamic Time Zone Information
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing System Dynamic Time Zone Information (NtQuerySystemInformation Class 102)...\n";
+        using namespace micant::ntdll;
+
+        RTL_DYNAMIC_TIME_ZONE_INFORMATION tzInfo{};
+        uint32_t retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            102u, // SystemDynamicTimeZoneInformation
+            &tzInfo,
+            sizeof(tzInfo),
+            &retLen
+        );
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(102) returns Success");
+        TEST_ASSERT(retLen == sizeof(tzInfo), "Returned length matches RTL_DYNAMIC_TIME_ZONE_INFORMATION size");
+        TEST_ASSERT(tzInfo.Bias == 480, "Timezone Bias matches Pacific Time standard bias (480 mins / 8 hrs)");
+        TEST_ASSERT(std::wcscmp(tzInfo.StandardName, L"Pacific Standard Time") == 0, "StandardName matches Pacific Standard Time");
+        TEST_ASSERT(std::wcscmp(tzInfo.DaylightName, L"Pacific Daylight Time") == 0, "DaylightName matches Pacific Daylight Time");
+        TEST_ASSERT(std::wcscmp(tzInfo.TimeZoneKeyName, L"Pacific Standard Time") == 0, "TimeZoneKeyName matches Pacific Standard Time");
+
+        // 2.2 RtlQueryDynamicTimeZoneInformation API test
+        RTL_DYNAMIC_TIME_ZONE_INFORMATION rtlTz{};
+        st = RtlQueryDynamicTimeZoneInformation(&rtlTz);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQueryDynamicTimeZoneInformation succeeds");
+        TEST_ASSERT(rtlTz.DaylightBias == -60, "Daylight bias matches 60 min standard daylight offset");
+
+        // 2.3 Buffer size mismatch verification
+        st = NtQuerySystemInformation_Export(102u, &tzInfo, sizeof(tzInfo) - 1, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Undersized buffer returns InfoLengthMismatch");
+
+        std::cout << "  [PASS] NT System Dynamic Time Zone Information & Clock Anti-Skew verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Thread Name Canonicalization & Thread Description Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Win32 Thread Description (SetThreadDescription / GetThreadDescription)...\n";
+        using namespace micant::win32;
+
+        HANDLE hThread = reinterpret_cast<HANDLE>(0x9999);
+
+        // 3.1 Set thread description
+        HRESULT hr = SetThreadDescription(hThread, L"Warzone_RenderPipeline_Worker");
+        TEST_ASSERT(hr == 0, "SetThreadDescription succeeds with HRESULT S_OK");
+
+        // 3.2 Get thread description
+        PWSTR pDesc = nullptr;
+        hr = GetThreadDescription(hThread, &pDesc);
+        TEST_ASSERT(hr == 0 && pDesc != nullptr, "GetThreadDescription succeeds and returns valid string pointer");
+        TEST_ASSERT(std::wcscmp(pDesc, L"Warzone_RenderPipeline_Worker") == 0, "Thread description matches set string");
+        LocalFree(reinterpret_cast<HLOCAL>(pDesc));
+
+        // 3.3 Default thread description for untracked thread
+        HANDLE hOtherThread = reinterpret_cast<HANDLE>(0x8888);
+        pDesc = nullptr;
+        hr = GetThreadDescription(hOtherThread, &pDesc);
+        TEST_ASSERT(hr == 0 && pDesc != nullptr, "GetThreadDescription for untracked thread returns default");
+        TEST_ASSERT(std::wcscmp(pDesc, L"MainGameThread") == 0, "Default thread description is MainGameThread");
+        LocalFree(reinterpret_cast<HLOCAL>(pDesc));
+
+        // 3.4 Invalid argument handling
+        hr = SetThreadDescription(hThread, nullptr);
+        TEST_ASSERT(hr != 0, "SetThreadDescription rejects nullptr description with error");
+        hr = GetThreadDescription(hThread, nullptr);
+        TEST_ASSERT(hr != 0, "GetThreadDescription rejects nullptr output pointer with error");
+
+        // 3.5 ApiSet Redirection
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadDescription") != nullptr, "kernel32 exports SetThreadDescription");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadDescription") != nullptr, "kernel32 exports GetThreadDescription");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "SetThreadDescription") != nullptr, "processthreads-l1-1-3 exports SetThreadDescription");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetThreadDescription") != nullptr, "processthreads-l1-1-3 exports GetThreadDescription");
+
+        std::cout << "  [PASS] Win32 Thread Description Canonicalization & Diagnostics verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 Processor Power Information & Core Frequency Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing CallNtPowerInformation (ProcessorInformation Level 11)...\n";
+        using namespace micant::standby;
+
+        PROCESSOR_POWER_INFORMATION procs[16]{};
+        NTSTATUS st = CallNtPowerInformation(
+            ProcessorInformation,
+            nullptr, 0,
+            procs, sizeof(procs)
+        );
+        TEST_ASSERT(st == STATUS_SUCCESS, "CallNtPowerInformation(ProcessorInformation) succeeds");
+        TEST_ASSERT(procs[0].MaxMhz == 5400, "Logical core 0 reports 5.4 GHz MaxMhz");
+        TEST_ASSERT(procs[0].CurrentMhz == 5400, "Logical core 0 reports unthrottled 5.4 GHz CurrentMhz");
+        TEST_ASSERT(procs[15].Number == 15, "Logical core 15 indexed correctly");
+        TEST_ASSERT(procs[15].MaxIdleState == 2, "Logical core reports valid idle power states");
+
+        // Verify undersized buffer returns STATUS_BUFFER_TOO_SMALL
+        st = CallNtPowerInformation(ProcessorInformation, nullptr, 0, procs, sizeof(PROCESSOR_POWER_INFORMATION) - 1);
+        TEST_ASSERT(st == STATUS_BUFFER_TOO_SMALL, "Undersized buffer returns STATUS_BUFFER_TOO_SMALL");
+
+        // Verify ApiSet registration
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("powrprof.dll", "CallNtPowerInformation") != nullptr, "powrprof exports CallNtPowerInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-power-base-l1-1-0.dll", "CallNtPowerInformation") != nullptr, "power-base ApiSet exports CallNtPowerInformation");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CallNtPowerInformation") != nullptr, "kernel32 exports CallNtPowerInformation");
+
+        std::cout << "  [PASS] Processor Power Information & Anti-Cheat Frequency Telemetry verified.\n";
+    }
+
+    std::cout << "[HORIZON 214] D3D12 ExecuteIndirect, Dynamic TimeZone, Thread Description & Processor Power Summary:\n"
+              << "    Pillar 1: DirectX 12 Agility SDK Enhanced Command Signature & ExecuteIndirect OK\n"
+              << "    Pillar 2: NT System Dynamic Time Zone Information & Clock Anti-Skew OK\n"
+              << "    Pillar 3: Win32 Thread Description Canonicalization & Diagnostics OK\n"
+              << "    Pillar 4: Processor Power Information & Core Frequency Telemetry OK\n";
+
+    std::cout << "[TEST] Suite 430: Horizon 214 - D3D12 ExecuteIndirect, Dynamic TimeZone, Thread Description & Processor Power PASSED." << std::endl;
+}

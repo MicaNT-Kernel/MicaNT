@@ -1454,6 +1454,29 @@ struct SYSTEM_CODEINTEGRITYPOLICY_INFORMATION {
     ULONG Reserved;
 };
 
+struct RTL_SYSTEMTIME {
+    uint16_t wYear;
+    uint16_t wMonth;
+    uint16_t wDayOfWeek;
+    uint16_t wDay;
+    uint16_t wHour;
+    uint16_t wMinute;
+    uint16_t wSecond;
+    uint16_t wMilliseconds;
+};
+
+struct RTL_DYNAMIC_TIME_ZONE_INFORMATION {
+    int32_t Bias;
+    wchar_t StandardName[32];
+    RTL_SYSTEMTIME StandardDate;
+    int32_t StandardBias;
+    wchar_t DaylightName[32];
+    RTL_SYSTEMTIME DaylightDate;
+    int32_t DaylightBias;
+    wchar_t TimeZoneKeyName[128];
+    uint8_t DynamicDaylightTimeDisabled;
+};
+
 inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_ENABLED                = 0x00000001;
 inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_HVCI_ENFORCED          = 0x00000002;
 inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_TESTSIGNING_DISABLED   = 0x00000004;
@@ -2184,6 +2207,26 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_INFORMATION);
             return NtStatus::Success;
         }
+        case 102: { // SystemDynamicTimeZoneInformation
+            if (SystemInformationLength < sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pTz = reinterpret_cast<RTL_DYNAMIC_TIME_ZONE_INFORMATION*>(SystemInformation);
+            std::memset(pTz, 0, sizeof(*pTz));
+            pTz->Bias = 480; // Pacific Time (UTC -8 hours)
+            const wchar_t stdName[] = L"Pacific Standard Time";
+            std::memcpy(pTz->StandardName, stdName, sizeof(stdName));
+            pTz->StandardBias = 0;
+            const wchar_t dltName[] = L"Pacific Daylight Time";
+            std::memcpy(pTz->DaylightName, dltName, sizeof(dltName));
+            pTz->DaylightBias = -60;
+            const wchar_t keyName[] = L"Pacific Standard Time";
+            std::memcpy(pTz->TimeZoneKeyName, keyName, sizeof(keyName));
+            pTz->DynamicDaylightTimeDisabled = 0;
+            if (ReturnLength) *ReturnLength = sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION);
+            return NtStatus::Success;
+        }
         case 173: { // SystemCodeIntegrityPolicyInformation
             if (SystemInformationLength < sizeof(SYSTEM_CODEINTEGRITYPOLICY_INFORMATION)) {
                 if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITYPOLICY_INFORMATION);
@@ -2211,6 +2254,12 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             return NtStatus::Success;
         }
     }
+}
+
+inline NtStatus WINAPI RtlQueryDynamicTimeZoneInformation(RTL_DYNAMIC_TIME_ZONE_INFORMATION* TimeZoneInformation) noexcept {
+    if (!TimeZoneInformation) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(102, TimeZoneInformation, sizeof(*TimeZoneInformation), &retLen);
 }
 
 inline NtStatus WINAPI NtQueryVolumeInformationFile(
@@ -3252,6 +3301,7 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQuerySystemEnvironmentValueEx", reinterpret_cast<void*>(NtQuerySystemEnvironmentValueEx));
     ldr.registerExport("ntdll.dll", "NtQuerySystemInformationEx", reinterpret_cast<void*>(NtQuerySystemInformationEx));
     ldr.registerExport("ntdll.dll", "NtQuerySystemTime", reinterpret_cast<void*>(NtQuerySystemTime));
+    ldr.registerExport("ntdll.dll", "RtlQueryDynamicTimeZoneInformation", reinterpret_cast<void*>(RtlQueryDynamicTimeZoneInformation));
     ldr.registerExport("ntdll.dll", "NtQueryTimer", reinterpret_cast<void*>(NtQueryTimer));
     ldr.registerExport("ntdll.dll", "NtQueryTimerResolution", reinterpret_cast<void*>(NtQueryTimerResolution));
     ldr.registerExport("ntdll.dll", "NtSetTimerResolution", reinterpret_cast<void*>(NtSetTimerResolution));

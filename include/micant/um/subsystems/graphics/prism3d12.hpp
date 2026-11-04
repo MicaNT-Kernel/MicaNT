@@ -274,6 +274,50 @@ struct D3D12_ROOT_SIGNATURE_DESC {
     uint32_t Flags;
 };
 
+enum D3D12_INDIRECT_ARGUMENT_TYPE {
+    D3D12_INDIRECT_ARGUMENT_TYPE_DRAW                   = 0,
+    D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED           = 1,
+    D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH               = 2,
+    D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW     = 3,
+    D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW      = 4,
+    D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT               = 5,
+    D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW   = 6,
+    D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW   = 7,
+    D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW  = 8,
+    D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH          = 9,
+    D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS          = 10
+};
+
+struct D3D12_INDIRECT_ARGUMENT_DESC {
+    D3D12_INDIRECT_ARGUMENT_TYPE Type{ D3D12_INDIRECT_ARGUMENT_TYPE_DRAW };
+    union {
+        struct {
+            uint32_t Slot;
+        } VertexBuffer;
+        struct {
+            uint32_t RootParameterIndex;
+            uint32_t DestOffsetIn32BitValues;
+            uint32_t Num32BitValuesToSet;
+        } Constant;
+        struct {
+            uint32_t RootParameterIndex;
+        } ConstantBufferView;
+        struct {
+            uint32_t RootParameterIndex;
+        } ShaderResourceView;
+        struct {
+            uint32_t RootParameterIndex;
+        } UnorderedAccessView;
+    };
+};
+
+struct D3D12_COMMAND_SIGNATURE_DESC {
+    uint32_t ByteStride{ 0 };
+    uint32_t NumArgumentDescs{ 0 };
+    const D3D12_INDIRECT_ARGUMENT_DESC* pArgumentDescs{ nullptr };
+    uint32_t NodeMask{ 0 };
+};
+
 struct D3D12_SHADER_BYTECODE {
     const void* pShaderBytecode{ nullptr };
     size_t BytecodeLength{ 0 };
@@ -317,6 +361,9 @@ static constexpr IID IID_ID3D12Object =
 static constexpr IID IID_ID3D12DeviceChild = 
     { 0x905db44e, 0xbb35, 0x4455, { 0xb1, 0x0b, 0xac, 0x13, 0x27, 0xf4, 0x73, 0xa0 } };
 
+static constexpr IID IID_ID3D12Pageable = 
+    { 0x63ee58fb, 0x1268, 0x4835, { 0x86, 0xda, 0xf0, 0x08, 0xce, 0x62, 0xf0, 0xd6 } };
+
 static constexpr IID IID_ID3D12RootSignature = 
     { 0xc54a6b66, 0x72df, 0x4ee8, { 0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14 } };
 
@@ -344,6 +391,9 @@ static constexpr IID IID_ID3D12GraphicsCommandList =
 static constexpr IID IID_ID3D12CommandQueue = 
     { 0x0ec870a6, 0x5d7e, 0x4c22, { 0x8c, 0xfc, 0x5b, 0xaa, 0xe0, 0x76, 0x16, 0xed } };
 
+static constexpr IID IID_ID3D12CommandSignature = 
+    { 0xc36a4777, 0xb798, 0x4eb5, { 0x8f, 0x50, 0x0f, 0x44, 0xcd, 0x78, 0x87, 0x03 } };
+
 static constexpr IID IID_ID3D12Device = 
     { 0x189819f1, 0x1db6, 0x4b57, { 0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7 } };
 
@@ -360,6 +410,7 @@ class ID3D12CommandList;
 class ID3D12GraphicsCommandList;
 class ID3D12GraphicsCommandList10;
 class ID3D12CommandQueue;
+class ID3D12CommandSignature;
 class ID3D12Device;
 
 // ============================================================================
@@ -382,6 +433,8 @@ public:
 class ID3D12RootSignature : public ID3D12DeviceChild {};
 
 class ID3D12Pageable : public ID3D12DeviceChild {};
+
+class ID3D12CommandSignature : public ID3D12Pageable {};
 
 struct D3D12_HEAP_DESC {
     uint64_t SizeInBytes{0};
@@ -484,6 +537,13 @@ public:
     virtual void SetPipelineState(ID3D12PipelineState* pPipelineState) = 0;
     virtual void DrawInstanced(uint32_t VertexCountPerInstance, uint32_t InstanceCount, uint32_t StartVertexLocation, uint32_t StartInstanceLocation) = 0;
     virtual void DrawIndexedInstanced(uint32_t IndexCountPerInstance, uint32_t InstanceCount, uint32_t StartIndexLocation, int32_t BaseVertexLocation, uint32_t StartInstanceLocation) = 0;
+    virtual void ExecuteIndirect(
+        ID3D12CommandSignature* /*pCommandSignature*/,
+        uint32_t /*MaxCommandCount*/,
+        ID3D12Resource* /*pArgumentBuffer*/,
+        uint64_t /*ArgumentBufferOffset*/,
+        ID3D12Resource* /*pCountBuffer*/,
+        uint64_t /*CountBufferOffset*/) {}
 };
 
 // ============================================================================
@@ -987,6 +1047,11 @@ public:
     virtual int32_t Evict(uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/) { return 0; }
     virtual int32_t EnqueueMakeResident(D3D12_RESIDENCY_FLAGS /*Flags*/, uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/, ID3D12Fence* /*pFenceToSignal*/, uint64_t /*FenceValueToSignal*/) { return 0; }
     virtual int32_t SetResidencyPriority(uint32_t /*NumObjects*/, ID3D12Pageable* const* /*ppObjects*/, const D3D12_RESIDENCY_PRIORITY* /*pPriorities*/) { return 0; }
+    virtual int32_t CreateCommandSignature(
+        const D3D12_COMMAND_SIGNATURE_DESC* /*pDesc*/,
+        ID3D12RootSignature* /*pRootSignature*/,
+        const IID& /*riid*/,
+        void** /*ppvCommandSignature*/) { return 0; }
 };
 
 static constexpr IID IID_ID3D12Device8 = 
@@ -1344,6 +1409,55 @@ public:
     const D3D12_GRAPHICS_PIPELINE_STATE_DESC& GetDesc() const { return m_desc; }
 };
 
+class Prism3D12CommandSignatureImpl : public ID3D12CommandSignature {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    ID3D12Device* m_pDevice{ nullptr };
+    D3D12_COMMAND_SIGNATURE_DESC m_desc{};
+    ID3D12RootSignature* m_pRootSignature{ nullptr };
+
+public:
+    Prism3D12CommandSignatureImpl(ID3D12Device* pDev, const D3D12_COMMAND_SIGNATURE_DESC& desc, ID3D12RootSignature* pRootSig)
+        : m_pDevice(pDev), m_desc(desc), m_pRootSignature(pRootSig) {
+        if (m_pRootSignature) m_pRootSignature->AddRef();
+    }
+
+    ~Prism3D12CommandSignatureImpl() {
+        if (m_pRootSignature) m_pRootSignature->Release();
+    }
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
+        if (!ppv) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
+            riid == IID_ID3D12Pageable || riid == IID_ID3D12CommandSignature) {
+            *ppv = static_cast<ID3D12CommandSignature*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262;
+    }
+
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t*) override { return 0; }
+    int32_t GetDevice(const IID& riid, void** ppDevice) override {
+        if (!ppDevice || !m_pDevice) return -1;
+        return m_pDevice->QueryInterface(riid, ppDevice);
+    }
+
+    [[nodiscard]] const D3D12_COMMAND_SIGNATURE_DESC& GetDesc() const noexcept { return m_desc; }
+    [[nodiscard]] ID3D12RootSignature* GetRootSignature() const noexcept { return m_pRootSignature; }
+};
+
 // Command List implementation
 class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList10 {
 public:
@@ -1396,6 +1510,9 @@ private:
     uint32_t m_dispatchedMeshCount{ 0 };
     uint32_t m_dispatchedRaysCount{ 0 };
     D3D12_DISPATCH_RAYS_DESC m_lastDispatchRaysDesc{};
+    uint32_t m_executeIndirectCount{ 0 };
+    uint32_t m_lastIndirectMaxCommands{ 0 };
+    ID3D12CommandSignature* m_pLastCommandSignature{ nullptr };
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -1592,6 +1709,22 @@ public:
     [[nodiscard]] uint32_t GetDispatchedRaysCount() const noexcept { return m_dispatchedRaysCount; }
     [[nodiscard]] const D3D12_DISPATCH_RAYS_DESC& GetLastDispatchRaysDesc() const noexcept { return m_lastDispatchRaysDesc; }
 
+    void ExecuteIndirect(
+        ID3D12CommandSignature* pCommandSignature,
+        uint32_t MaxCommandCount,
+        ID3D12Resource* /*pArgumentBuffer*/,
+        uint64_t /*ArgumentBufferOffset*/,
+        ID3D12Resource* /*pCountBuffer*/,
+        uint64_t /*CountBufferOffset*/) override {
+        m_executeIndirectCount++;
+        m_lastIndirectMaxCommands = MaxCommandCount;
+        m_pLastCommandSignature = pCommandSignature;
+    }
+
+    [[nodiscard]] uint32_t GetExecuteIndirectCount() const noexcept { return m_executeIndirectCount; }
+    [[nodiscard]] uint32_t GetLastIndirectMaxCommands() const noexcept { return m_lastIndirectMaxCommands; }
+    [[nodiscard]] ID3D12CommandSignature* GetLastCommandSignature() const noexcept { return m_pLastCommandSignature; }
+
     void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) override {
         if (!m_isOpen) return;
         (void)ThreadGroupCountX; (void)ThreadGroupCountY; (void)ThreadGroupCountZ;
@@ -1762,7 +1895,20 @@ public:
     }
 
     uint32_t m_pipelineStatesCreated{ 0 };
+    uint32_t m_commandSignaturesCreated{ 0 };
     [[nodiscard]] uint32_t GetPipelineStatesCreated() const noexcept { return m_pipelineStatesCreated; }
+    [[nodiscard]] uint32_t GetCommandSignaturesCreated() const noexcept { return m_commandSignaturesCreated; }
+
+    int32_t CreateCommandSignature(
+        const D3D12_COMMAND_SIGNATURE_DESC* pDesc,
+        ID3D12RootSignature* pRootSignature,
+        const IID&,
+        void** ppvCommandSignature) override {
+        if (!pDesc || !ppvCommandSignature) return -1;
+        *ppvCommandSignature = new Prism3D12CommandSignatureImpl(this, *pDesc, pRootSignature);
+        m_commandSignaturesCreated++;
+        return 0;
+    }
 
     int32_t CreatePipelineState(const D3D12_PIPELINE_STATE_STREAM_DESC* pDesc, const IID&, void** ppPipelineState) override {
         if (!pDesc || !pDesc->pPipelineStateSubobjectStream || pDesc->SizeInBytes == 0 || !ppPipelineState) return -1;

@@ -8735,7 +8735,33 @@ inline BOOL WINAPI GetComputerNameExW(int32_t /*NameType*/, wchar_t* lpBuffer, D
     return TRUE;
 }
 
-inline HRESULT WINAPI SetThreadDescription(HANDLE /*hThread*/, const wchar_t* /*lpThreadDescription*/) noexcept {
+inline std::mutex g_threadDescMutex;
+inline std::unordered_map<uint64_t, std::wstring> g_threadDescriptions;
+
+inline HRESULT WINAPI SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescription) noexcept {
+    if (!lpThreadDescription) return static_cast<HRESULT>(0x80070057); // E_INVALIDARG
+    uint64_t tid = reinterpret_cast<uint64_t>(hThread);
+    std::lock_guard<std::mutex> lock(g_threadDescMutex);
+    g_threadDescriptions[tid] = lpThreadDescription;
+    return 0; // S_OK
+}
+
+inline HRESULT WINAPI GetThreadDescription(HANDLE hThread, PWSTR* ppszThreadDescription) noexcept {
+    if (!ppszThreadDescription) return static_cast<HRESULT>(0x80070057); // E_INVALIDARG
+    uint64_t tid = reinterpret_cast<uint64_t>(hThread);
+    std::wstring desc = L"MainGameThread";
+    {
+        std::lock_guard<std::mutex> lock(g_threadDescMutex);
+        auto it = g_threadDescriptions.find(tid);
+        if (it != g_threadDescriptions.end()) {
+            desc = it->second;
+        }
+    }
+    size_t charCount = desc.size() + 1;
+    auto* pBuf = static_cast<wchar_t*>(LocalAlloc(0x0040 /* LPTR */, charCount * sizeof(wchar_t)));
+    if (!pBuf) return static_cast<HRESULT>(0x8007000E); // E_OUTOFMEMORY
+    std::memcpy(pBuf, desc.c_str(), charCount * sizeof(wchar_t));
+    *ppszThreadDescription = pBuf;
     return 0; // S_OK
 }
 
@@ -10082,6 +10108,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SetThreadIdealProcessorEx", reinterpret_cast<void*>(SetThreadIdealProcessorEx));
     ldr.registerExport("kernel32.dll", "GetThreadIdealProcessorEx", reinterpret_cast<void*>(GetThreadIdealProcessorEx));
     ldr.registerExport("kernel32.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
+    ldr.registerExport("kernel32.dll", "SetThreadDescription", reinterpret_cast<void*>(SetThreadDescription));
+    ldr.registerExport("kernel32.dll", "GetThreadDescription", reinterpret_cast<void*>(GetThreadDescription));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-3.dll", "SetThreadDescription", reinterpret_cast<void*>(SetThreadDescription));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetThreadDescription", reinterpret_cast<void*>(GetThreadDescription));
 
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadAffinityMask", reinterpret_cast<void*>(SetThreadAffinityMask));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetProcessAffinityMask", reinterpret_cast<void*>(GetProcessAffinityMask));
