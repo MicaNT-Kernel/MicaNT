@@ -43580,3 +43580,227 @@ inline void Test_Horizon214_ExecuteIndirect_DynamicTimeZone_ThreadDescription_An
 
     std::cout << "[TEST] Suite 430: Horizon 214 - D3D12 ExecuteIndirect, Dynamic TimeZone, Thread Description & Processor Power PASSED." << std::endl;
 }
+
+// ============================================================================
+// HORIZON 215: DirectX 12 Meta-Commands, TPM 2.0 Security Roots,
+//              Unbiased Interrupt Time & Extended Process Memory Counters
+// ============================================================================
+
+inline void Test_Horizon215_MetaCommands_TpmHardwareRoots_UnbiasedInterruptTime_And_ProcessMemoryCountersEx2_Suite() {
+    std::cout << "[TEST] Running Suite 431: Horizon 215 - Meta-Commands, TPM 2.0 Hardware Roots, Unbiased Interrupt Time & Process Memory Counters Ex2..." << std::endl;
+
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Meta-Commands & Neural Super-Resolution Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing DirectX 12 Meta-Commands & DirectSR Architecture...\n";
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1.1 Query meta command count and enumeration
+        uint32_t numMetaCommands = 0;
+        int32_t hr = device.EnumerateMetaCommands(&numMetaCommands, nullptr);
+        TEST_ASSERT(hr == 0, "EnumerateMetaCommands returns count successfully");
+        TEST_ASSERT(numMetaCommands >= 1, "At least 1 meta-command registered (DirectSR)");
+
+        std::vector<D3D12_META_COMMAND_DESC> descs(numMetaCommands);
+        hr = device.EnumerateMetaCommands(&numMetaCommands, descs.data());
+        TEST_ASSERT(hr == 0, "EnumerateMetaCommands populates descriptions");
+        TEST_ASSERT(descs[0].Name != nullptr && std::wcscmp(descs[0].Name, L"DirectSR_NeuralUpscaling") == 0, "DirectSR neural upscaling meta-command enumerated");
+        TEST_ASSERT(descs[0].ExecutionDirtyState == D3D12_GRAPHICS_STATE_COMPUTE_ROOT_SIGNATURE, "DirectSR dirty state includes compute root signature");
+
+        // 1.2 Query meta-command parameters
+        uint32_t paramCount = 0;
+        uint32_t totalStructSize = 0;
+        hr = device.EnumerateMetaCommandParameters(descs[0].Id, D3D12_META_COMMAND_PARAMETER_STAGE_EXECUTION, &totalStructSize, &paramCount, nullptr);
+        TEST_ASSERT(hr == 0, "EnumerateMetaCommandParameters returns parameter count");
+        TEST_ASSERT(paramCount == 2, "DirectSR execution stage has 2 parameters (Input/Output)");
+        TEST_ASSERT(totalStructSize == 64, "Total parameter structure size is 64 bytes");
+
+        std::vector<D3D12_META_COMMAND_PARAMETER_DESC> paramDescs(paramCount);
+        hr = device.EnumerateMetaCommandParameters(descs[0].Id, D3D12_META_COMMAND_PARAMETER_STAGE_EXECUTION, &totalStructSize, &paramCount, paramDescs.data());
+        TEST_ASSERT(hr == 0, "EnumerateMetaCommandParameters populates parameter descriptors");
+        TEST_ASSERT(std::wcscmp(paramDescs[0].Name, L"InputTexture") == 0, "First parameter is InputTexture");
+        TEST_ASSERT(paramDescs[0].Type == D3D12_META_COMMAND_PARAMETER_TYPE_RESOURCE, "Input parameter is Resource");
+        TEST_ASSERT((paramDescs[0].Flags & D3D12_META_COMMAND_PARAMETER_FLAG_INPUT) != 0, "Input flag set");
+        TEST_ASSERT(std::wcscmp(paramDescs[1].Name, L"OutputTexture") == 0, "Second parameter is OutputTexture");
+        TEST_ASSERT((paramDescs[1].Flags & D3D12_META_COMMAND_PARAMETER_FLAG_OUTPUT) != 0, "Output flag set");
+
+        // 1.3 Create Meta-Command
+        struct DirectSRCreationParams {
+            uint32_t inputWidth{ 1920 };
+            uint32_t inputHeight{ 1080 };
+            uint32_t outputWidth{ 3840 };
+            uint32_t outputHeight{ 2160 };
+            float sharpness{ 0.85f };
+        } creationData;
+
+        void* pMetaCmdVoid = nullptr;
+        hr = device.CreateMetaCommand(descs[0].Id, 0, &creationData, sizeof(creationData), IID_ID3D12MetaCommand, &pMetaCmdVoid);
+        TEST_ASSERT(hr == 0 && pMetaCmdVoid != nullptr, "CreateMetaCommand succeeds for DirectSR");
+        TEST_ASSERT(device.GetMetaCommandsCreated() == 1, "Device tracks created meta command count");
+
+        auto* pMetaCmd = static_cast<ID3D12MetaCommand*>(pMetaCmdVoid);
+        uint64_t scratchSize = pMetaCmd->GetRequiredParameterResourceSize(D3D12_META_COMMAND_PARAMETER_STAGE_EXECUTION, 0);
+        TEST_ASSERT(scratchSize > 0, "Meta-command reports scratch buffer size requirement");
+
+        // 1.4 Command List recording of Initialize and Execute
+        Prism3D12CommandAllocatorImpl alloc(&device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        uint32_t initData = 0x12345678;
+        cmdList.InitializeMetaCommand(pMetaCmd, &initData, sizeof(initData));
+        TEST_ASSERT(cmdList.GetMetaCommandInitCount() == 1, "InitializeMetaCommand recorded");
+        TEST_ASSERT(cmdList.GetLastMetaCommand() == pMetaCmd, "Last meta command pointer matches");
+        TEST_ASSERT(cmdList.GetLastMetaCommandInitData().size() == sizeof(initData), "Init data size captured");
+
+        struct DirectSRExecParams {
+            float jitterX{ 0.25f };
+            float jitterY{ -0.25f };
+            float exposure{ 1.0f };
+        } execData;
+        cmdList.ExecuteMetaCommand(pMetaCmd, &execData, sizeof(execData));
+        TEST_ASSERT(cmdList.GetMetaCommandExecCount() == 1, "ExecuteMetaCommand recorded");
+        TEST_ASSERT(cmdList.GetLastMetaCommandExecData().size() == sizeof(execData), "Exec data size captured");
+
+        pMetaCmd->Release();
+        std::cout << "  [PASS] DirectX 12 Agility SDK Meta-Commands & Neural Super-Resolution Architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System TPM 2.0 Hardware Security Roots & Platform Cryptography Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemTpmInformation (Class 142)...\n";
+        using namespace micant::ntdll;
+
+        SYSTEM_TPM_INFORMATION tpmInfo{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            142u, // SystemTpmInformation
+            &tpmInfo,
+            sizeof(tpmInfo),
+            &retLen
+        );
+
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(SystemTpmInformation) succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_TPM_INFORMATION), "Return length matches sizeof(SYSTEM_TPM_INFORMATION)");
+        TEST_ASSERT((tpmInfo.Flags & TPM_FLAG_ENABLED) != 0, "TPM_FLAG_ENABLED is set");
+        TEST_ASSERT((tpmInfo.Flags & TPM_FLAG_ACTIVATED) != 0, "TPM_FLAG_ACTIVATED is set");
+        TEST_ASSERT((tpmInfo.Flags & TPM_FLAG_OWNED) != 0, "TPM_FLAG_OWNED is set");
+        TEST_ASSERT((tpmInfo.Flags & TPM_FLAG_SPEC_VERSION_2_0) != 0, "TPM_FLAG_SPEC_VERSION_2_0 is set");
+        TEST_ASSERT((tpmInfo.Flags & TPM_FLAG_READY) != 0, "TPM_FLAG_READY is set");
+        TEST_ASSERT(tpmInfo.TpmId == 0x54504D32, "TPM ID reports 'TPM2' hardware root");
+
+        // Verify undersized buffer handling
+        SYSTEM_TPM_INFORMATION smallBuf{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(142u, &smallBuf, sizeof(smallBuf) - 1, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Undersized buffer returns InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_TPM_INFORMATION), "Return length reports required size");
+
+        std::cout << "  [PASS] System TPM 2.0 Hardware Security Roots & Anti-Cheat Telemetry verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 High-Resolution Performance Counter & Unbiased Interrupt Time
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing QueryUnbiasedInterruptTimePrecise & QueryInterruptTimePrecise...\n";
+        using namespace micant::win32;
+
+        ULONGLONG interruptTime1 = 0;
+        ULONGLONG interruptTime2 = 0;
+        QueryInterruptTimePrecise(&interruptTime1);
+        TEST_ASSERT(interruptTime1 > 0, "QueryInterruptTimePrecise returns non-zero timestamp");
+
+        ULONGLONG unbiasedTime1 = 0;
+        ULONGLONG unbiasedTime2 = 0;
+        QueryUnbiasedInterruptTimePrecise(&unbiasedTime1);
+        TEST_ASSERT(unbiasedTime1 > 0, "QueryUnbiasedInterruptTimePrecise returns non-zero unbiased timestamp");
+
+        ULONGLONG legacyUnbiased = 0;
+        BOOL bRes = QueryUnbiasedInterruptTime(&legacyUnbiased);
+        TEST_ASSERT(bRes == TRUE && legacyUnbiased > 0, "QueryUnbiasedInterruptTime succeeds");
+
+        // Verify monotonic progression
+        QueryInterruptTimePrecise(&interruptTime2);
+        TEST_ASSERT(interruptTime2 >= interruptTime1, "QueryInterruptTimePrecise monotonically increases");
+        QueryUnbiasedInterruptTimePrecise(&unbiasedTime2);
+        TEST_ASSERT(unbiasedTime2 >= unbiasedTime1, "QueryUnbiasedInterruptTimePrecise monotonically increases");
+
+        // Verify ApiSet exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryInterruptTimePrecise") != nullptr, "kernel32 exports QueryInterruptTimePrecise");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryUnbiasedInterruptTimePrecise") != nullptr, "kernel32 exports QueryUnbiasedInterruptTimePrecise");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryInterruptTimePrecise") != nullptr, "realtime-l1-1-1 exports QueryInterruptTimePrecise");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryUnbiasedInterruptTimePrecise") != nullptr, "realtime-l1-1-1 exports QueryUnbiasedInterruptTimePrecise");
+
+        std::cout << "  [PASS] Win32 High-Resolution Unbiased Interrupt Time verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 Extended Process Memory Working Set Information & Private Working Set Accounting
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing PROCESS_MEMORY_COUNTERS_EX2 and GetProcessMemoryInfo...\n";
+        using namespace micant::win32;
+
+        // 4.1 Base PROCESS_MEMORY_COUNTERS
+        PROCESS_MEMORY_COUNTERS pmc{};
+        BOOL ok = GetProcessMemoryInfo(reinterpret_cast<HANDLE>(0x1234), &pmc, sizeof(pmc));
+        TEST_ASSERT(ok == TRUE, "GetProcessMemoryInfo succeeds with base PROCESS_MEMORY_COUNTERS");
+        TEST_ASSERT(pmc.cb == sizeof(pmc), "cb populated correctly");
+        TEST_ASSERT(pmc.WorkingSetSize == 96 * 1024 * 1024ULL, "WorkingSetSize reports 96 MB");
+        TEST_ASSERT(pmc.PeakWorkingSetSize == 128 * 1024 * 1024ULL, "PeakWorkingSetSize reports 128 MB");
+        TEST_ASSERT(pmc.PagefileUsage == 64 * 1024 * 1024ULL, "PagefileUsage reports 64 MB");
+
+        // 4.2 Extended PROCESS_MEMORY_COUNTERS_EX
+        PROCESS_MEMORY_COUNTERS_EX pmcEx{};
+        ok = GetProcessMemoryInfo(reinterpret_cast<HANDLE>(0x1234), reinterpret_cast<PPROCESS_MEMORY_COUNTERS>(&pmcEx), sizeof(pmcEx));
+        TEST_ASSERT(ok == TRUE, "GetProcessMemoryInfo succeeds with PROCESS_MEMORY_COUNTERS_EX");
+        TEST_ASSERT(pmcEx.PrivateUsage == 64 * 1024 * 1024ULL, "PrivateUsage reports 64 MB");
+
+        // 4.3 Extended-2 PROCESS_MEMORY_COUNTERS_EX2
+        PROCESS_MEMORY_COUNTERS_EX2 pmcEx2{};
+        ok = GetProcessMemoryInfo(reinterpret_cast<HANDLE>(0x1234), reinterpret_cast<PPROCESS_MEMORY_COUNTERS>(&pmcEx2), sizeof(pmcEx2));
+        TEST_ASSERT(ok == TRUE, "GetProcessMemoryInfo succeeds with PROCESS_MEMORY_COUNTERS_EX2");
+        TEST_ASSERT(pmcEx2.PrivateWorkingSetSize == 64 * 1024 * 1024ULL, "PrivateWorkingSetSize reports 64 MB");
+        TEST_ASSERT(pmcEx2.SharedCommitUsage == 16 * 1024 * 1024ULL, "SharedCommitUsage reports 16 MB");
+
+        // 4.4 K32 alias parity
+        PROCESS_MEMORY_COUNTERS_EX2 k32PmcEx2{};
+        ok = K32GetProcessMemoryInfo(reinterpret_cast<HANDLE>(0x1234), reinterpret_cast<PPROCESS_MEMORY_COUNTERS>(&k32PmcEx2), sizeof(k32PmcEx2));
+        TEST_ASSERT(ok == TRUE, "K32GetProcessMemoryInfo succeeds with PROCESS_MEMORY_COUNTERS_EX2");
+        TEST_ASSERT(k32PmcEx2.PrivateWorkingSetSize == 64 * 1024 * 1024ULL, "K32 PrivateWorkingSetSize matches");
+        TEST_ASSERT(k32PmcEx2.SharedCommitUsage == 16 * 1024 * 1024ULL, "K32 SharedCommitUsage matches");
+
+        // 4.5 Invalid argument handling
+        ok = GetProcessMemoryInfo(nullptr, nullptr, sizeof(pmc));
+        TEST_ASSERT(ok == FALSE, "GetProcessMemoryInfo rejects nullptr pointer");
+        ok = GetProcessMemoryInfo(nullptr, &pmc, sizeof(pmc) - 1);
+        TEST_ASSERT(ok == FALSE, "GetProcessMemoryInfo rejects undersized buffer");
+
+        // 4.6 ApiSet exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessMemoryInfo") != nullptr, "kernel32 exports GetProcessMemoryInfo");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "K32GetProcessMemoryInfo") != nullptr, "kernel32 exports K32GetProcessMemoryInfo");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "GetProcessMemoryInfo") != nullptr, "psapi exports GetProcessMemoryInfo");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "K32GetProcessMemoryInfo") != nullptr, "psapi exports K32GetProcessMemoryInfo");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessMemoryInfo") != nullptr, "core-psapi-l1-1-0 exports K32GetProcessMemoryInfo");
+
+        std::cout << "  [PASS] Win32 Extended Process Memory Working Set Information & Accounting verified.\n";
+    }
+
+    std::cout << "[HORIZON 215] Meta-Commands, TPM 2.0 Roots, Unbiased Interrupt Time & Process Memory Counters Ex2 Summary:\n"
+              << "    Pillar 1: DirectX 12 Agility SDK Meta-Commands & DirectSR Architecture OK\n"
+              << "    Pillar 2: NT System TPM 2.0 Hardware Security Roots & Platform Telemetry OK\n"
+              << "    Pillar 3: Win32 High-Resolution Unbiased Interrupt Time Calibration OK\n"
+              << "    Pillar 4: Win32 Extended Process Memory Counters Ex2 & Private Working Set OK\n";
+
+    std::cout << "[TEST] Suite 431: Horizon 215 - Meta-Commands, TPM 2.0 Roots, Unbiased Interrupt Time & Process Memory Counters Ex2 PASSED." << std::endl;
+}

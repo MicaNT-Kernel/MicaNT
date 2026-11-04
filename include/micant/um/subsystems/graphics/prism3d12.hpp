@@ -351,6 +351,60 @@ struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
     uint32_t Flags{ 0 };
 };
 
+enum D3D12_META_COMMAND_PARAMETER_TYPE {
+    D3D12_META_COMMAND_PARAMETER_TYPE_FLOAT = 0,
+    D3D12_META_COMMAND_PARAMETER_TYPE_UINT64 = 1,
+    D3D12_META_COMMAND_PARAMETER_TYPE_GPU_VIRTUAL_ADDRESS = 2,
+    D3D12_META_COMMAND_PARAMETER_TYPE_RESOURCE = 3
+};
+
+enum D3D12_META_COMMAND_PARAMETER_FLAGS {
+    D3D12_META_COMMAND_PARAMETER_FLAG_INPUT = 0x1,
+    D3D12_META_COMMAND_PARAMETER_FLAG_OUTPUT = 0x2
+};
+
+enum D3D12_META_COMMAND_PARAMETER_STAGE {
+    D3D12_META_COMMAND_PARAMETER_STAGE_CREATION = 0,
+    D3D12_META_COMMAND_PARAMETER_STAGE_INITIALIZATION = 1,
+    D3D12_META_COMMAND_PARAMETER_STAGE_EXECUTION = 2
+};
+
+enum D3D12_GRAPHICS_STATES : uint32_t {
+    D3D12_GRAPHICS_STATE_NONE = 0,
+    D3D12_GRAPHICS_STATE_IA_VERTEX_BUFFERS = (1 << 0),
+    D3D12_GRAPHICS_STATE_IA_INDEX_BUFFER = (1 << 1),
+    D3D12_GRAPHICS_STATE_IA_PRIMITIVE_TOPOLOGY = (1 << 2),
+    D3D12_GRAPHICS_STATE_DESCRIPTOR_HEAPS = (1 << 3),
+    D3D12_GRAPHICS_STATE_GRAPHICS_ROOT_SIGNATURE = (1 << 4),
+    D3D12_GRAPHICS_STATE_COMPUTE_ROOT_SIGNATURE = (1 << 5),
+    D3D12_GRAPHICS_STATE_RS_VIEWPORTS = (1 << 6),
+    D3D12_GRAPHICS_STATE_RS_SCISSOR_RECTS = (1 << 7),
+    D3D12_GRAPHICS_STATE_PREDICATION = (1 << 8),
+    D3D12_GRAPHICS_STATE_OM_RENDER_TARGETS = (1 << 9),
+    D3D12_GRAPHICS_STATE_OM_STENCIL_REF = (1 << 10),
+    D3D12_GRAPHICS_STATE_OM_BLEND_FACTOR = (1 << 11),
+    D3D12_GRAPHICS_STATE_PIPELINE_STATE = (1 << 12),
+    D3D12_GRAPHICS_STATE_SO_TARGETS = (1 << 13),
+    D3D12_GRAPHICS_STATE_OM_DEPTH_BOUNDS = (1 << 14),
+    D3D12_GRAPHICS_STATE_SAMPLE_POSITIONS = (1 << 15),
+    D3D12_GRAPHICS_STATE_VIEW_INSTANCE_MASK = (1 << 16)
+};
+
+struct D3D12_META_COMMAND_PARAMETER_DESC {
+    const wchar_t* Name{ nullptr };
+    D3D12_META_COMMAND_PARAMETER_TYPE Type{ D3D12_META_COMMAND_PARAMETER_TYPE_FLOAT };
+    D3D12_META_COMMAND_PARAMETER_FLAGS Flags{ D3D12_META_COMMAND_PARAMETER_FLAG_INPUT };
+    D3D12_RESOURCE_STATES RequiredResourceState{ D3D12_RESOURCE_STATE_COMMON };
+    uint32_t StructureOffsetInBytes{ 0 };
+};
+
+struct D3D12_META_COMMAND_DESC {
+    GUID Id{};
+    const wchar_t* Name{ nullptr };
+    D3D12_GRAPHICS_STATES InitializationDirtyState{ D3D12_GRAPHICS_STATE_NONE };
+    D3D12_GRAPHICS_STATES ExecutionDirtyState{ D3D12_GRAPHICS_STATE_NONE };
+};
+
 // ============================================================================
 // 3. COM Interface GUIDs
 // ============================================================================
@@ -394,6 +448,9 @@ static constexpr IID IID_ID3D12CommandQueue =
 static constexpr IID IID_ID3D12CommandSignature = 
     { 0xc36a4777, 0xb798, 0x4eb5, { 0x8f, 0x50, 0x0f, 0x44, 0xcd, 0x78, 0x87, 0x03 } };
 
+static constexpr IID IID_ID3D12MetaCommand = 
+    { 0xdbb84c27, 0x36ce, 0x4fc9, { 0xb8, 0x01, 0xf0, 0x48, 0xc4, 0x6a, 0xc5, 0x70 } };
+
 static constexpr IID IID_ID3D12Device = 
     { 0x189819f1, 0x1db6, 0x4b57, { 0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7 } };
 
@@ -411,6 +468,7 @@ class ID3D12GraphicsCommandList;
 class ID3D12GraphicsCommandList10;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
+class ID3D12MetaCommand;
 class ID3D12Device;
 
 // ============================================================================
@@ -435,6 +493,11 @@ class ID3D12RootSignature : public ID3D12DeviceChild {};
 class ID3D12Pageable : public ID3D12DeviceChild {};
 
 class ID3D12CommandSignature : public ID3D12Pageable {};
+
+class ID3D12MetaCommand : public ID3D12Pageable {
+public:
+    virtual uint64_t GetRequiredParameterResourceSize(D3D12_META_COMMAND_PARAMETER_STAGE Stage, uint32_t ParameterIndex) = 0;
+};
 
 struct D3D12_HEAP_DESC {
     uint64_t SizeInBytes{0};
@@ -544,6 +607,14 @@ public:
         uint64_t /*ArgumentBufferOffset*/,
         ID3D12Resource* /*pCountBuffer*/,
         uint64_t /*CountBufferOffset*/) {}
+    virtual void InitializeMetaCommand(
+        ID3D12MetaCommand* /*pMetaCommand*/,
+        const void* /*pInitializationParametersData*/,
+        size_t /*InitializationParametersDataSizeInBytes*/) {}
+    virtual void ExecuteMetaCommand(
+        ID3D12MetaCommand* /*pMetaCommand*/,
+        const void* /*pExecutionParametersData*/,
+        size_t /*ExecutionParametersDataSizeInBytes*/) {}
 };
 
 // ============================================================================
@@ -1052,6 +1123,22 @@ public:
         ID3D12RootSignature* /*pRootSignature*/,
         const IID& /*riid*/,
         void** /*ppvCommandSignature*/) { return 0; }
+    virtual int32_t EnumerateMetaCommands(
+        uint32_t* /*pNumMetaCommands*/,
+        D3D12_META_COMMAND_DESC* /*pDescs*/) { return 0; }
+    virtual int32_t EnumerateMetaCommandParameters(
+        const GUID& /*CommandId*/,
+        D3D12_META_COMMAND_PARAMETER_STAGE /*Stage*/,
+        uint32_t* /*pTotalStructureSizeInBytes*/,
+        uint32_t* /*pParameterCount*/,
+        D3D12_META_COMMAND_PARAMETER_DESC* /*pParameterDescs*/) { return 0; }
+    virtual int32_t CreateMetaCommand(
+        const GUID& /*CommandId*/,
+        uint32_t /*NodeMask*/,
+        const void* /*pCreationParametersData*/,
+        size_t /*CreationParametersDataSizeInBytes*/,
+        const IID& /*riid*/,
+        void** /*ppMetaCommand*/) { return 0; }
 };
 
 static constexpr IID IID_ID3D12Device8 = 
@@ -1458,6 +1545,65 @@ public:
     [[nodiscard]] ID3D12RootSignature* GetRootSignature() const noexcept { return m_pRootSignature; }
 };
 
+class Prism3D12MetaCommandImpl : public ID3D12MetaCommand {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    ID3D12Device* m_pDevice{ nullptr };
+    GUID m_commandId{};
+    uint32_t m_nodeMask{ 0 };
+    std::vector<uint8_t> m_creationParams;
+    std::wstring m_name;
+
+public:
+    Prism3D12MetaCommandImpl(ID3D12Device* pDev, const GUID& id, uint32_t nodeMask, const void* pCreationData, size_t dataSize, const wchar_t* name = L"DirectSR_NeuralUpscaling")
+        : m_pDevice(pDev), m_commandId(id), m_nodeMask(nodeMask), m_name(name ? name : L"") {
+        if (pCreationData && dataSize > 0) {
+            const auto* ptr = reinterpret_cast<const uint8_t*>(pCreationData);
+            m_creationParams.assign(ptr, ptr + dataSize);
+        }
+    }
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
+        if (!ppv) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
+            riid == IID_ID3D12Pageable || riid == IID_ID3D12MetaCommand) {
+            *ppv = static_cast<ID3D12MetaCommand*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262;
+    }
+
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t* Name) override {
+        if (Name) m_name = Name;
+        return 0;
+    }
+    int32_t GetDevice(const IID& riid, void** ppDevice) override {
+        if (!ppDevice || !m_pDevice) return -1;
+        return m_pDevice->QueryInterface(riid, ppDevice);
+    }
+
+    uint64_t GetRequiredParameterResourceSize(D3D12_META_COMMAND_PARAMETER_STAGE /*Stage*/, uint32_t /*ParameterIndex*/) override {
+        return 1024 * 1024; // 1 MB scratch buffer
+    }
+
+    [[nodiscard]] const GUID& GetCommandId() const noexcept { return m_commandId; }
+    [[nodiscard]] uint32_t GetNodeMask() const noexcept { return m_nodeMask; }
+    [[nodiscard]] const std::wstring& GetCommandName() const noexcept { return m_name; }
+    [[nodiscard]] const std::vector<uint8_t>& GetCreationParams() const noexcept { return m_creationParams; }
+};
+
 // Command List implementation
 class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList10 {
 public:
@@ -1513,6 +1659,11 @@ private:
     uint32_t m_executeIndirectCount{ 0 };
     uint32_t m_lastIndirectMaxCommands{ 0 };
     ID3D12CommandSignature* m_pLastCommandSignature{ nullptr };
+    uint32_t m_metaCommandInitCount{ 0 };
+    uint32_t m_metaCommandExecCount{ 0 };
+    ID3D12MetaCommand* m_pLastMetaCommand{ nullptr };
+    std::vector<uint8_t> m_lastMetaCommandInitData;
+    std::vector<uint8_t> m_lastMetaCommandExecData;
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -1725,6 +1876,32 @@ public:
     [[nodiscard]] uint32_t GetLastIndirectMaxCommands() const noexcept { return m_lastIndirectMaxCommands; }
     [[nodiscard]] ID3D12CommandSignature* GetLastCommandSignature() const noexcept { return m_pLastCommandSignature; }
 
+    void InitializeMetaCommand(ID3D12MetaCommand* pMetaCommand, const void* pInitializationParametersData, size_t InitializationParametersDataSizeInBytes) override {
+        m_metaCommandInitCount++;
+        m_pLastMetaCommand = pMetaCommand;
+        m_lastMetaCommandInitData.clear();
+        if (pInitializationParametersData && InitializationParametersDataSizeInBytes > 0) {
+            auto* p = reinterpret_cast<const uint8_t*>(pInitializationParametersData);
+            m_lastMetaCommandInitData.assign(p, p + InitializationParametersDataSizeInBytes);
+        }
+    }
+
+    void ExecuteMetaCommand(ID3D12MetaCommand* pMetaCommand, const void* pExecutionParametersData, size_t ExecutionParametersDataSizeInBytes) override {
+        m_metaCommandExecCount++;
+        m_pLastMetaCommand = pMetaCommand;
+        m_lastMetaCommandExecData.clear();
+        if (pExecutionParametersData && ExecutionParametersDataSizeInBytes > 0) {
+            auto* p = reinterpret_cast<const uint8_t*>(pExecutionParametersData);
+            m_lastMetaCommandExecData.assign(p, p + ExecutionParametersDataSizeInBytes);
+        }
+    }
+
+    [[nodiscard]] uint32_t GetMetaCommandInitCount() const noexcept { return m_metaCommandInitCount; }
+    [[nodiscard]] uint32_t GetMetaCommandExecCount() const noexcept { return m_metaCommandExecCount; }
+    [[nodiscard]] ID3D12MetaCommand* GetLastMetaCommand() const noexcept { return m_pLastMetaCommand; }
+    [[nodiscard]] const std::vector<uint8_t>& GetLastMetaCommandInitData() const noexcept { return m_lastMetaCommandInitData; }
+    [[nodiscard]] const std::vector<uint8_t>& GetLastMetaCommandExecData() const noexcept { return m_lastMetaCommandExecData; }
+
     void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) override {
         if (!m_isOpen) return;
         (void)ThreadGroupCountX; (void)ThreadGroupCountY; (void)ThreadGroupCountZ;
@@ -1839,6 +2016,7 @@ private:
     IUnknown* m_pAdapter{ nullptr };
     D3D_FEATURE_LEVEL m_featureLevel{ D3D_FEATURE_LEVEL_12_0 };
     uint32_t m_samplerFeedbackViewsCreated{ 0 };
+    uint32_t m_metaCommandsCreated{ 0 };
 
 public:
     Prism3D12DeviceImpl(IUnknown* pAdapter = nullptr, D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_12_0)
@@ -1898,6 +2076,72 @@ public:
     uint32_t m_commandSignaturesCreated{ 0 };
     [[nodiscard]] uint32_t GetPipelineStatesCreated() const noexcept { return m_pipelineStatesCreated; }
     [[nodiscard]] uint32_t GetCommandSignaturesCreated() const noexcept { return m_commandSignaturesCreated; }
+    [[nodiscard]] uint32_t GetMetaCommandsCreated() const noexcept { return m_metaCommandsCreated; }
+
+    int32_t EnumerateMetaCommands(uint32_t* pNumMetaCommands, D3D12_META_COMMAND_DESC* pDescs) override {
+        if (!pNumMetaCommands) return -1;
+        if (!pDescs) {
+            *pNumMetaCommands = 1;
+            return 0;
+        }
+        if (*pNumMetaCommands >= 1) {
+            static constexpr GUID DirectSRGuid = { 0xa2b3c4d5, 0x1111, 0x2222, { 0x33, 0x33, 0x44, 0x44, 0x55, 0x55, 0x66, 0x66 } };
+            pDescs[0].Id = DirectSRGuid;
+            pDescs[0].Name = L"DirectSR_NeuralUpscaling";
+            pDescs[0].InitializationDirtyState = D3D12_GRAPHICS_STATE_NONE;
+            pDescs[0].ExecutionDirtyState = D3D12_GRAPHICS_STATE_COMPUTE_ROOT_SIGNATURE;
+            *pNumMetaCommands = 1;
+            return 0;
+        }
+        return -1;
+    }
+
+    int32_t EnumerateMetaCommandParameters(
+        const GUID& /*CommandId*/,
+        D3D12_META_COMMAND_PARAMETER_STAGE /*Stage*/,
+        uint32_t* pTotalStructureSizeInBytes,
+        uint32_t* pParameterCount,
+        D3D12_META_COMMAND_PARAMETER_DESC* pParameterDescs) override {
+        if (pTotalStructureSizeInBytes) *pTotalStructureSizeInBytes = 64;
+        if (!pParameterCount) return -1;
+        if (!pParameterDescs) {
+            *pParameterCount = 2;
+            return 0;
+        }
+        if (*pParameterCount >= 2) {
+            pParameterDescs[0].Name = L"InputTexture";
+            pParameterDescs[0].Type = D3D12_META_COMMAND_PARAMETER_TYPE_RESOURCE;
+            pParameterDescs[0].Flags = D3D12_META_COMMAND_PARAMETER_FLAG_INPUT;
+            pParameterDescs[0].RequiredResourceState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            pParameterDescs[0].StructureOffsetInBytes = 0;
+
+            pParameterDescs[1].Name = L"OutputTexture";
+            pParameterDescs[1].Type = D3D12_META_COMMAND_PARAMETER_TYPE_RESOURCE;
+            pParameterDescs[1].Flags = D3D12_META_COMMAND_PARAMETER_FLAG_OUTPUT;
+            pParameterDescs[1].RequiredResourceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            pParameterDescs[1].StructureOffsetInBytes = 8;
+            *pParameterCount = 2;
+            return 0;
+        }
+        return -1;
+    }
+
+    int32_t CreateMetaCommand(
+        const GUID& CommandId,
+        uint32_t NodeMask,
+        const void* pCreationParametersData,
+        size_t CreationParametersDataSizeInBytes,
+        const IID& riid,
+        void** ppMetaCommand) override {
+        if (!ppMetaCommand) return -1;
+        auto* metaCmd = new Prism3D12MetaCommandImpl(this, CommandId, NodeMask, pCreationParametersData, CreationParametersDataSizeInBytes, L"DirectSR_NeuralUpscaling");
+        int32_t hr = metaCmd->QueryInterface(riid, ppMetaCommand);
+        metaCmd->Release();
+        if (hr == 0) {
+            m_metaCommandsCreated++;
+        }
+        return hr;
+    }
 
     int32_t CreateCommandSignature(
         const D3D12_COMMAND_SIGNATURE_DESC* pDesc,

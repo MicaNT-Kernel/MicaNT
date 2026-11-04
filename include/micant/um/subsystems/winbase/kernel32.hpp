@@ -6411,14 +6411,91 @@ inline DWORD K32GetModuleFileNameExA([[maybe_unused]] HANDLE hProcess, [[maybe_u
     return static_cast<DWORD>(len);
 }
 
-inline BOOL K32GetProcessMemoryInfo([[maybe_unused]] HANDLE hProcess, void* ppsmemCounters, DWORD cb) noexcept {
-    if (!ppsmemCounters || cb < 72) return FALSE;
+struct PROCESS_MEMORY_COUNTERS {
+    DWORD cb;
+    DWORD PageFaultCount;
+    SIZE_T PeakWorkingSetSize;
+    SIZE_T WorkingSetSize;
+    SIZE_T QuotaPeakPagedPoolUsage;
+    SIZE_T QuotaPagedPoolUsage;
+    SIZE_T QuotaPeakNonPagedPoolUsage;
+    SIZE_T QuotaNonPagedPoolUsage;
+    SIZE_T PagefileUsage;
+    SIZE_T PeakPagefileUsage;
+};
+using PPROCESS_MEMORY_COUNTERS = PROCESS_MEMORY_COUNTERS*;
+
+struct PROCESS_MEMORY_COUNTERS_EX {
+    DWORD cb;
+    DWORD PageFaultCount;
+    SIZE_T PeakWorkingSetSize;
+    SIZE_T WorkingSetSize;
+    SIZE_T QuotaPeakPagedPoolUsage;
+    SIZE_T QuotaPagedPoolUsage;
+    SIZE_T QuotaPeakNonPagedPoolUsage;
+    SIZE_T QuotaNonPagedPoolUsage;
+    SIZE_T PagefileUsage;
+    SIZE_T PeakPagefileUsage;
+    SIZE_T PrivateUsage;
+};
+using PPROCESS_MEMORY_COUNTERS_EX = PROCESS_MEMORY_COUNTERS_EX*;
+
+struct PROCESS_MEMORY_COUNTERS_EX2 {
+    DWORD cb;
+    DWORD PageFaultCount;
+    SIZE_T PeakWorkingSetSize;
+    SIZE_T WorkingSetSize;
+    SIZE_T QuotaPeakPagedPoolUsage;
+    SIZE_T QuotaPagedPoolUsage;
+    SIZE_T QuotaPeakNonPagedPoolUsage;
+    SIZE_T QuotaNonPagedPoolUsage;
+    SIZE_T PagefileUsage;
+    SIZE_T PeakPagefileUsage;
+    SIZE_T PrivateUsage;
+    SIZE_T PrivateWorkingSetSize;
+    uint64_t SharedCommitUsage;
+};
+using PPROCESS_MEMORY_COUNTERS_EX2 = PROCESS_MEMORY_COUNTERS_EX2*;
+
+inline BOOL WINAPI GetProcessMemoryInfo(
+    HANDLE /*Process*/,
+    PPROCESS_MEMORY_COUNTERS ppsmemCounters,
+    DWORD cb) noexcept {
+    if (!ppsmemCounters || cb < sizeof(PROCESS_MEMORY_COUNTERS)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
     std::memset(ppsmemCounters, 0, cb);
-    auto* p = reinterpret_cast<uint64_t*>(ppsmemCounters);
-    p[0] = cb;
-    p[2] = 64 * 1024 * 1024ULL; // PeakWorkingSetSize (64MB)
-    p[3] = 32 * 1024 * 1024ULL; // WorkingSetSize (32MB)
+    ppsmemCounters->cb = cb;
+    ppsmemCounters->PageFaultCount = 1200;
+    ppsmemCounters->PeakWorkingSetSize = 128 * 1024 * 1024ULL;      // 128 MB
+    ppsmemCounters->WorkingSetSize = 96 * 1024 * 1024ULL;           // 96 MB
+    ppsmemCounters->QuotaPeakPagedPoolUsage = 2 * 1024 * 1024ULL;   // 2 MB
+    ppsmemCounters->QuotaPagedPoolUsage = 1 * 1024 * 1024ULL;       // 1 MB
+    ppsmemCounters->QuotaPeakNonPagedPoolUsage = 512 * 1024ULL;     // 512 KB
+    ppsmemCounters->QuotaNonPagedPoolUsage = 256 * 1024ULL;         // 256 KB
+    ppsmemCounters->PagefileUsage = 64 * 1024 * 1024ULL;            // 64 MB
+    ppsmemCounters->PeakPagefileUsage = 80 * 1024 * 1024ULL;        // 80 MB
+
+    if (cb >= sizeof(PROCESS_MEMORY_COUNTERS_EX)) {
+        auto* ex = reinterpret_cast<PROCESS_MEMORY_COUNTERS_EX*>(ppsmemCounters);
+        ex->PrivateUsage = 64 * 1024 * 1024ULL;                     // 64 MB
+    }
+
+    if (cb >= sizeof(PROCESS_MEMORY_COUNTERS_EX2)) {
+        auto* ex2 = reinterpret_cast<PROCESS_MEMORY_COUNTERS_EX2*>(ppsmemCounters);
+        ex2->PrivateWorkingSetSize = 64 * 1024 * 1024ULL;           // 64 MB
+        ex2->SharedCommitUsage = 16 * 1024 * 1024ULL;               // 16 MB
+    }
+
     return TRUE;
+}
+
+inline BOOL WINAPI K32GetProcessMemoryInfo(
+    HANDLE Process,
+    PPROCESS_MEMORY_COUNTERS ppsmemCounters,
+    DWORD cb) noexcept {
+    return GetProcessMemoryInfo(Process, ppsmemCounters, cb);
 }
 
 enum PROCESS_INFORMATION_CLASS {
@@ -10033,8 +10110,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetThreadContext", reinterpret_cast<void*>(GetThreadContext));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetThreadContext", reinterpret_cast<void*>(SetThreadContext));
 
+    ldr.registerExport("kernel32.dll", "GetProcessMemoryInfo", reinterpret_cast<void*>(GetProcessMemoryInfo));
+    ldr.registerExport("kernel32.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));
     ldr.registerExport("psapi.dll", "EmptyWorkingSet", reinterpret_cast<void*>(EmptyWorkingSet));
     ldr.registerExport("psapi.dll", "K32EmptyWorkingSet", reinterpret_cast<void*>(K32EmptyWorkingSet));
+    ldr.registerExport("psapi.dll", "GetProcessMemoryInfo", reinterpret_cast<void*>(GetProcessMemoryInfo));
+    ldr.registerExport("psapi.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));
 
     // Horizon 203: Fibers, FLS, Process Mitigation Policies
     ldr.registerExport("kernel32.dll", "ConvertThreadToFiber", reinterpret_cast<void*>(ConvertThreadToFiber));

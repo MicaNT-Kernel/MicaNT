@@ -1454,6 +1454,17 @@ struct SYSTEM_CODEINTEGRITYPOLICY_INFORMATION {
     ULONG Reserved;
 };
 
+inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
+inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
+inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
+inline constexpr ULONG TPM_FLAG_SPEC_VERSION_2_0  = 0x00000008;
+inline constexpr ULONG TPM_FLAG_READY             = 0x00000010;
+
+struct SYSTEM_TPM_INFORMATION {
+    ULONG Flags;
+    ULONG TpmId;
+};
+
 struct RTL_SYSTEMTIME {
     uint16_t wYear;
     uint16_t wMonth;
@@ -2225,6 +2236,21 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             std::memcpy(pTz->TimeZoneKeyName, keyName, sizeof(keyName));
             pTz->DynamicDaylightTimeDisabled = 0;
             if (ReturnLength) *ReturnLength = sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 142: { // SystemTpmInformation
+            if (SystemInformationLength < sizeof(SYSTEM_TPM_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_TPM_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_TPM_INFORMATION*>(SystemInformation);
+            pInfo->Flags = TPM_FLAG_ENABLED |
+                           TPM_FLAG_ACTIVATED |
+                           TPM_FLAG_OWNED |
+                           TPM_FLAG_SPEC_VERSION_2_0 |
+                           TPM_FLAG_READY;
+            pInfo->TpmId = 0x54504D32; // 'TPM2'
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_TPM_INFORMATION);
             return NtStatus::Success;
         }
         case 173: { // SystemCodeIntegrityPolicyInformation
