@@ -212,10 +212,23 @@ struct D3D12_RESOURCE_BARRIER {
     };
 };
 
+enum D3D12_CPU_PAGE_PROPERTY : uint32_t {
+    D3D12_CPU_PAGE_PROPERTY_UNKNOWN        = 0,
+    D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE  = 1,
+    D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE  = 2,
+    D3D12_CPU_PAGE_PROPERTY_WRITE_BACK     = 3
+};
+
+enum D3D12_MEMORY_POOL : uint32_t {
+    D3D12_MEMORY_POOL_UNKNOWN = 0,
+    D3D12_MEMORY_POOL_L0      = 1,
+    D3D12_MEMORY_POOL_L1      = 2
+};
+
 struct D3D12_HEAP_PROPERTIES {
     D3D12_HEAP_TYPE Type;
-    uint32_t CPUPageProperty;
-    uint32_t MemoryPoolPreference;
+    D3D12_CPU_PAGE_PROPERTY CPUPageProperty;
+    D3D12_MEMORY_POOL MemoryPoolPreference;
     uint32_t CreationNodeMask;
     uint32_t VisibleNodeMask;
 };
@@ -1301,6 +1314,41 @@ public:
         const void* /*pOptimizedClearValue*/,
         const IID& /*riid*/,
         void** /*ppvResource*/) { return 0; }
+    virtual D3D12_HEAP_PROPERTIES GetCustomHeapProperties(uint32_t nodeMask, D3D12_HEAP_TYPE heapType) {
+        D3D12_HEAP_PROPERTIES props{};
+        props.CreationNodeMask = (nodeMask != 0) ? nodeMask : 1;
+        props.VisibleNodeMask = (nodeMask != 0) ? nodeMask : 1;
+        switch (heapType) {
+        case D3D12_HEAP_TYPE_DEFAULT:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_L1;
+            break;
+        case D3D12_HEAP_TYPE_UPLOAD:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+            break;
+        case D3D12_HEAP_TYPE_READBACK:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+            break;
+        case D3D12_HEAP_TYPE_CUSTOM:
+        default:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+            break;
+        }
+        return props;
+    }
+    virtual int32_t CreateReservedResource(
+        const D3D12_RESOURCE_DESC* /*pDesc*/,
+        D3D12_RESOURCE_STATES /*InitialState*/,
+        const void* /*pOptimizedClearValue*/,
+        const IID& /*riidResource*/,
+        void** /*ppvResource*/) { return 0; }
 };
 
 static constexpr IID IID_ID3D12Device8 = 
@@ -1357,6 +1405,65 @@ public:
         const IID& riid,
         void** ppvSession) = 0;
     virtual int32_t ShaderCacheControl(uint32_t /*Kinds*/, uint32_t /*Control*/) { return 0; }
+};
+
+struct D3D12_MIP_REGION {
+    uint32_t Width{0};
+    uint32_t Height{0};
+    uint32_t Depth{0};
+};
+
+struct D3D12_RESOURCE_DESC1 {
+    D3D12_RESOURCE_DIMENSION Dimension{D3D12_RESOURCE_DIMENSION_UNKNOWN};
+    uint64_t Alignment{0};
+    uint64_t Width{0};
+    uint32_t Height{0};
+    uint16_t DepthOrArraySize{0};
+    uint16_t MipLevels{0};
+    DXGI_FORMAT Format{DXGI_FORMAT_UNKNOWN};
+    DXGI_SAMPLE_DESC SampleDesc{1, 0};
+    D3D12_TEXTURE_LAYOUT Layout{D3D12_TEXTURE_LAYOUT_UNKNOWN};
+    D3D12_RESOURCE_FLAGS Flags{D3D12_RESOURCE_FLAG_NONE};
+    D3D12_MIP_REGION SamplerFeedbackMipRegion{};
+};
+
+static constexpr IID IID_ID3D12Device10 = 
+    { 0x5a230ea4, 0x1116, 0x485a, { 0x81, 0x3d, 0x6e, 0x98, 0x3a, 0x76, 0x86, 0x8b } };
+
+class ID3D12Device10 : public ID3D12Device9 {
+public:
+    virtual int32_t CreateCommittedResource3(
+        const D3D12_HEAP_PROPERTIES* pHeapProperties,
+        uint32_t HeapFlags,
+        const D3D12_RESOURCE_DESC1* pDesc,
+        D3D12_BARRIER_LAYOUT InitialLayout,
+        const void* pOptimizedClearValue,
+        void* pProtectedSession,
+        uint32_t NumCastableFormats,
+        const DXGI_FORMAT* pCastableFormats,
+        const IID& riidResource,
+        void** ppvResource) = 0;
+
+    virtual int32_t CreatePlacedResource2(
+        ID3D12Heap* pHeap,
+        uint64_t HeapOffset,
+        const D3D12_RESOURCE_DESC1* pDesc,
+        D3D12_BARRIER_LAYOUT InitialLayout,
+        const void* pOptimizedClearValue,
+        uint32_t NumCastableFormats,
+        const DXGI_FORMAT* pCastableFormats,
+        const IID& riidResource,
+        void** ppvResource) = 0;
+
+    virtual int32_t CreateReservedResource2(
+        const D3D12_RESOURCE_DESC1* pDesc,
+        D3D12_BARRIER_LAYOUT InitialLayout,
+        const void* pOptimizedClearValue,
+        void* pProtectedSession,
+        uint32_t NumCastableFormats,
+        const DXGI_FORMAT* pCastableFormats,
+        const IID& riidResource,
+        void** ppvResource) = 0;
 };
 
 // ============================================================================
@@ -2354,7 +2461,7 @@ public:
 };
 
 // D3D12 Device Implementation
-class Prism3D12DeviceImpl : public ID3D12Device9 {
+class Prism3D12DeviceImpl : public ID3D12Device10 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -2378,8 +2485,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9) {
-            *ppv = static_cast<ID3D12Device9*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
+            *ppv = static_cast<ID3D12Device10*>(this);
             AddRef();
             return 0;
         }
@@ -2463,6 +2570,51 @@ public:
         return hr;
     }
 
+    D3D12_HEAP_PROPERTIES GetCustomHeapProperties(
+        uint32_t nodeMask,
+        D3D12_HEAP_TYPE heapType) override {
+        D3D12_HEAP_PROPERTIES props{};
+        props.CreationNodeMask = (nodeMask != 0) ? nodeMask : 1;
+        props.VisibleNodeMask = (nodeMask != 0) ? nodeMask : 1;
+        switch (heapType) {
+        case D3D12_HEAP_TYPE_DEFAULT:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_L1;
+            break;
+        case D3D12_HEAP_TYPE_UPLOAD:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+            break;
+        case D3D12_HEAP_TYPE_READBACK:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+            break;
+        case D3D12_HEAP_TYPE_CUSTOM:
+        default:
+            props.Type = D3D12_HEAP_TYPE_CUSTOM;
+            props.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+            props.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+            break;
+        }
+        return props;
+    }
+
+    int32_t CreateReservedResource(
+        const D3D12_RESOURCE_DESC* pDesc,
+        D3D12_RESOURCE_STATES InitialState,
+        const void* /*pOptimizedClearValue*/,
+        const IID& riidResource,
+        void** ppvResource) override {
+        if (!pDesc || !ppvResource) return -1;
+        auto* res = new Prism3D12ResourceImpl(this, *pDesc, InitialState);
+        int32_t hr = res->QueryInterface(riidResource, ppvResource);
+        res->Release();
+        return hr;
+    }
+
     int32_t CreatePlacedResource(
         ID3D12Heap* pHeap,
         uint64_t HeapOffset,
@@ -2477,6 +2629,81 @@ public:
         res->Release();
         if (hr == 0) m_placedResourcesCreated++;
         return hr;
+    }
+
+    int32_t CreatePlacedResource2(
+        ID3D12Heap* pHeap,
+        uint64_t HeapOffset,
+        const D3D12_RESOURCE_DESC1* pDesc,
+        D3D12_BARRIER_LAYOUT /*InitialLayout*/,
+        const void* pOptimizedClearValue,
+        uint32_t /*NumCastableFormats*/,
+        const DXGI_FORMAT* /*pCastableFormats*/,
+        const IID& riidResource,
+        void** ppvResource) override {
+        if (!pHeap || !pDesc || !ppvResource) return -1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = pDesc->Dimension;
+        desc.Alignment = pDesc->Alignment;
+        desc.Width = pDesc->Width;
+        desc.Height = pDesc->Height;
+        desc.DepthOrArraySize = pDesc->DepthOrArraySize;
+        desc.MipLevels = pDesc->MipLevels;
+        desc.Format = pDesc->Format;
+        desc.SampleDesc = pDesc->SampleDesc;
+        desc.Layout = pDesc->Layout;
+        desc.Flags = pDesc->Flags;
+        return CreatePlacedResource(pHeap, HeapOffset, &desc, D3D12_RESOURCE_STATE_COMMON, pOptimizedClearValue, riidResource, ppvResource);
+    }
+
+    int32_t CreateCommittedResource3(
+        const D3D12_HEAP_PROPERTIES* pHeapProperties,
+        uint32_t HeapFlags,
+        const D3D12_RESOURCE_DESC1* pDesc,
+        D3D12_BARRIER_LAYOUT /*InitialLayout*/,
+        const void* pOptimizedClearValue,
+        void* /*pProtectedSession*/,
+        uint32_t /*NumCastableFormats*/,
+        const DXGI_FORMAT* /*pCastableFormats*/,
+        const IID& riidResource,
+        void** ppvResource) override {
+        if (!pHeapProperties || !pDesc || !ppvResource) return -1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = pDesc->Dimension;
+        desc.Alignment = pDesc->Alignment;
+        desc.Width = pDesc->Width;
+        desc.Height = pDesc->Height;
+        desc.DepthOrArraySize = pDesc->DepthOrArraySize;
+        desc.MipLevels = pDesc->MipLevels;
+        desc.Format = pDesc->Format;
+        desc.SampleDesc = pDesc->SampleDesc;
+        desc.Layout = pDesc->Layout;
+        desc.Flags = pDesc->Flags;
+        return CreateCommittedResource(pHeapProperties, HeapFlags, &desc, D3D12_RESOURCE_STATE_COMMON, pOptimizedClearValue, riidResource, ppvResource);
+    }
+
+    int32_t CreateReservedResource2(
+        const D3D12_RESOURCE_DESC1* pDesc,
+        D3D12_BARRIER_LAYOUT /*InitialLayout*/,
+        const void* pOptimizedClearValue,
+        void* /*pProtectedSession*/,
+        uint32_t /*NumCastableFormats*/,
+        const DXGI_FORMAT* /*pCastableFormats*/,
+        const IID& riidResource,
+        void** ppvResource) override {
+        if (!pDesc || !ppvResource) return -1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = pDesc->Dimension;
+        desc.Alignment = pDesc->Alignment;
+        desc.Width = pDesc->Width;
+        desc.Height = pDesc->Height;
+        desc.DepthOrArraySize = pDesc->DepthOrArraySize;
+        desc.MipLevels = pDesc->MipLevels;
+        desc.Format = pDesc->Format;
+        desc.SampleDesc = pDesc->SampleDesc;
+        desc.Layout = pDesc->Layout;
+        desc.Flags = pDesc->Flags;
+        return CreateReservedResource(&desc, D3D12_RESOURCE_STATE_COMMON, pOptimizedClearValue, riidResource, ppvResource);
     }
 
     int32_t EnumerateMetaCommands(uint32_t* pNumMetaCommands, D3D12_META_COMMAND_DESC* pDescs) override {

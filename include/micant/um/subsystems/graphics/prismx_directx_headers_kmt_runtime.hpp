@@ -81,7 +81,10 @@ public:
         );
 
         micant::prism3d12::D3D12_HEAP_PROPERTIES heapProps{
-            micant::prism3d12::D3D12_HEAP_TYPE_DEFAULT, 0, 0, 1, 1
+            micant::prism3d12::D3D12_HEAP_TYPE_DEFAULT,
+            micant::prism3d12::D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            micant::prism3d12::D3D12_MEMORY_POOL_UNKNOWN,
+            1, 1
         };
         micant::prism3d12::D3D12_RESOURCE_DESC rtDesc{};
         rtDesc.Dimension        = micant::prism3d12::D3D12_RESOURCE_DIMENSION_TEXTURE2D;

@@ -1519,6 +1519,19 @@ inline NTSTATUS WINAPI BCryptDestroyHash(BCRYPT_HASH_HANDLE hHash) noexcept {
     return STATUS_SUCCESS;
 }
 
+inline NTSTATUS WINAPI BCryptDuplicateHash(
+    BCRYPT_HASH_HANDLE hHash,
+    BCRYPT_HASH_HANDLE* phNewHash,
+    [[maybe_unused]] uint8_t* pbHashObject,
+    [[maybe_unused]] uint32_t cbHashObject,
+    [[maybe_unused]] uint32_t dwFlags) noexcept {
+    if (!hHash || !phNewHash) return STATUS_INVALID_PARAMETER;
+    auto* src = reinterpret_cast<Sha256::Context*>(hHash);
+    auto* dup = new Sha256::Context(*src);
+    *phNewHash = reinterpret_cast<BCRYPT_HASH_HANDLE>(dup);
+    return STATUS_SUCCESS;
+}
+
 // ============================================================================
 // 10. SCM Driver & Module Registration for cng.sys
 // ============================================================================
@@ -1559,6 +1572,7 @@ inline void InitializeCngKernelDriver() {
     ldr.registerExport("cng.sys", "BCryptHashData", reinterpret_cast<void*>(BCryptHashData));
     ldr.registerExport("cng.sys", "BCryptFinishHash", reinterpret_cast<void*>(BCryptFinishHash));
     ldr.registerExport("cng.sys", "BCryptDestroyHash", reinterpret_cast<void*>(BCryptDestroyHash));
+    ldr.registerExport("cng.sys", "BCryptDuplicateHash", reinterpret_cast<void*>(BCryptDuplicateHash));
 }
 
 } // namespace micant::km::crypto

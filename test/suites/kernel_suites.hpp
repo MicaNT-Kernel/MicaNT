@@ -44492,3 +44492,289 @@ inline void Test_Horizon218_ShaderCacheSessions_NumaTopology_PlaceholderAlloc_An
 
     std::cout << "[TEST] Suite 434: Horizon 218 - Shader Cache Sessions, NUMA Topology, Placeholder Alloc & WER Diagnostics PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 435: Horizon 219 - PrismX 3D12 Custom Heaps & Device10, NT Logical Processor Information Ex, Win32 Affinity Updates & Wintrust Crypto
+// ============================================================================
+inline void Test_Horizon219_CustomHeaps_LogicalProcessorEx_AffinityUpdates_And_WintrustCrypto_Suite() {
+    std::cout << "[TEST] Running Suite 435: Horizon 219 - Custom Heaps & Device10, NT Logical Processor Ex, Affinity Updates & Wintrust Crypto...\n";
+
+    // Ensure loader export tables are initialized for isolated test runner execution
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+    micant::wintrust::InitializeWinTrustSubsystemExports();
+    micant::km::crypto::InitializeCngKernelDriver();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Custom Heaps, GetCustomHeapProperties & ID3D12Device10
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 Custom Heaps, Properties & ID3D12Device10...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_2, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice succeeds for Feature Level 12.2");
+
+        // 1.1 Test GetCustomHeapProperties
+        D3D12_HEAP_PROPERTIES defProps = pDev->GetCustomHeapProperties(1, D3D12_HEAP_TYPE_DEFAULT);
+        TEST_ASSERT(defProps.Type == D3D12_HEAP_TYPE_CUSTOM, "DEFAULT heap maps to CUSTOM type in GetCustomHeapProperties");
+        TEST_ASSERT(defProps.MemoryPoolPreference == D3D12_MEMORY_POOL_L1, "DEFAULT heap resides in L1 (VRAM)");
+        TEST_ASSERT(defProps.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE, "DEFAULT heap CPU page property is NOT_AVAILABLE");
+
+        D3D12_HEAP_PROPERTIES upProps = pDev->GetCustomHeapProperties(1, D3D12_HEAP_TYPE_UPLOAD);
+        TEST_ASSERT(upProps.Type == D3D12_HEAP_TYPE_CUSTOM, "UPLOAD heap maps to CUSTOM type");
+        TEST_ASSERT(upProps.MemoryPoolPreference == D3D12_MEMORY_POOL_L0, "UPLOAD heap resides in L0 (System RAM)");
+        TEST_ASSERT(upProps.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE, "UPLOAD heap CPU page property is WRITE_COMBINE");
+
+        D3D12_HEAP_PROPERTIES rbProps = pDev->GetCustomHeapProperties(1, D3D12_HEAP_TYPE_READBACK);
+        TEST_ASSERT(rbProps.Type == D3D12_HEAP_TYPE_CUSTOM, "READBACK heap maps to CUSTOM type");
+        TEST_ASSERT(rbProps.MemoryPoolPreference == D3D12_MEMORY_POOL_L0, "READBACK heap resides in L0 (System RAM)");
+        TEST_ASSERT(rbProps.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_BACK, "READBACK heap CPU page property is WRITE_BACK");
+
+        // 1.2 Test ID3D12Device10 Interface & Enhanced Resource Allocation
+        ID3D12Device10* pDev10 = nullptr;
+        hr = pDev->QueryInterface(IID_ID3D12Device10, reinterpret_cast<void**>(&pDev10));
+        TEST_ASSERT(hr == 0 && pDev10 != nullptr, "QueryInterface for ID3D12Device10 succeeds");
+
+        // Create Custom Heap
+        D3D12_HEAP_DESC heapDesc{};
+        heapDesc.SizeInBytes = 16 * 1024 * 1024; // 16 MB
+        heapDesc.Properties = upProps;
+        heapDesc.Alignment = 64 * 1024;
+        heapDesc.Flags = 0;
+
+        ID3D12Heap* pHeap = nullptr;
+        hr = pDev10->CreateHeap(&heapDesc, IID_ID3D12Heap, reinterpret_cast<void**>(&pHeap));
+        TEST_ASSERT(hr == 0 && pHeap != nullptr, "CreateHeap creates custom 16MB upload heap");
+        TEST_ASSERT(pHeap->GetDesc().SizeInBytes == 16 * 1024 * 1024, "Heap size matches 16MB");
+
+        // Create Placed Resource via CreatePlacedResource2 (ID3D12Device10)
+        D3D12_RESOURCE_DESC1 resDesc1{};
+        resDesc1.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        resDesc1.Alignment = 64 * 1024;
+        resDesc1.Width = 1024 * 1024; // 1 MB buffer
+        resDesc1.Height = 1;
+        resDesc1.DepthOrArraySize = 1;
+        resDesc1.MipLevels = 1;
+        resDesc1.Format = DXGI_FORMAT_UNKNOWN;
+        resDesc1.SampleDesc = { 1, 0 };
+        resDesc1.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        resDesc1.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        ID3D12Resource* pPlacedRes = nullptr;
+        hr = pDev10->CreatePlacedResource2(
+            pHeap,
+            0,
+            &resDesc1,
+            D3D12_BARRIER_LAYOUT_COMMON,
+            nullptr,
+            0,
+            nullptr,
+            IID_ID3D12Resource,
+            reinterpret_cast<void**>(&pPlacedRes)
+        );
+        TEST_ASSERT(hr == 0 && pPlacedRes != nullptr, "CreatePlacedResource2 succeeds with D3D12_RESOURCE_DESC1");
+        TEST_ASSERT(pPlacedRes->GetDesc().Width == 1024 * 1024, "Placed resource dimension verified");
+
+        // Create Committed Resource via CreateCommittedResource3 (ID3D12Device10)
+        ID3D12Resource* pCommittedRes = nullptr;
+        hr = pDev10->CreateCommittedResource3(
+            &defProps,
+            0,
+            &resDesc1,
+            D3D12_BARRIER_LAYOUT_COMMON,
+            nullptr,
+            nullptr,
+            0,
+            nullptr,
+            IID_ID3D12Resource,
+            reinterpret_cast<void**>(&pCommittedRes)
+        );
+        TEST_ASSERT(hr == 0 && pCommittedRes != nullptr, "CreateCommittedResource3 succeeds with D3D12_RESOURCE_DESC1");
+
+        pCommittedRes->Release();
+        pPlacedRes->Release();
+        pHeap->Release();
+        pDev10->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 Custom Heaps, Properties & ID3D12Device10 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT System Logical Processor Information Extension (Class 73)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemLogicalProcessorInformationEx (Class 73)...\n";
+        using namespace micant::ntdll;
+
+        ULONG returnLen = 0;
+        // 2.1 Null buffer query -> returns InfoLengthMismatch and computes required size
+        micant::NtStatus st = NtQuerySystemInformation_Export(73, nullptr, 0, &returnLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(73) returns InfoLengthMismatch on null buffer");
+        TEST_ASSERT(returnLen == 20 * sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX), "ReturnLength equals 20 records (16 cores + 2 caches + 2 NUMA)");
+
+        // 2.2 Allocate buffer and query
+        std::vector<uint8_t> buffer(returnLen, 0);
+        st = NtQuerySystemInformation_Export(73, buffer.data(), static_cast<ULONG>(buffer.size()), &returnLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(73) succeeds with allocated buffer");
+
+        // Parse records
+        uint32_t coreCount = 0;
+        uint32_t cacheCount = 0;
+        uint32_t numaCount = 0;
+
+        uint8_t* pCur = buffer.data();
+        uint8_t* pEnd = buffer.data() + returnLen;
+        while (pCur < pEnd) {
+            auto* pInfo = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(pCur);
+            if (pInfo->Relationship == RelationProcessorCore) {
+                coreCount++;
+                if (coreCount <= 4) {
+                    TEST_ASSERT(pInfo->Processor.EfficiencyClass == 2, "Cores 0-3 report EfficiencyClass 2 (3D V-Cache P-core)");
+                }
+            } else if (pInfo->Relationship == RelationCache) {
+                cacheCount++;
+                if (cacheCount == 1) {
+                    TEST_ASSERT(pInfo->Cache.CacheSize == 96 * 1024 * 1024, "First L3 cache is 96MB 3D V-Cache");
+                    TEST_ASSERT(pInfo->Cache.GroupMasks[0] == 0x00FF, "First L3 cache affinity mask covers cores 0-7");
+                } else if (cacheCount == 2) {
+                    TEST_ASSERT(pInfo->Cache.CacheSize == 32 * 1024 * 1024, "Second L3 cache is 32MB standard L3");
+                    TEST_ASSERT(pInfo->Cache.GroupMasks[0] == 0xFF00, "Second L3 cache affinity mask covers cores 8-15");
+                }
+            } else if (pInfo->Relationship == RelationNumaNode) {
+                numaCount++;
+            }
+            pCur += pInfo->Size;
+        }
+
+        TEST_ASSERT(coreCount == 16, "16 logical processor cores reported");
+        TEST_ASSERT(cacheCount == 2, "2 L3 cache records reported");
+        TEST_ASSERT(numaCount == 2, "2 NUMA nodes reported");
+
+        std::cout << "  [PASS] SystemLogicalProcessorInformationEx (Class 73) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Affinity Updates & Group CPU Set Masks
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Win32 Affinity Updates & Group CPU Set Masks...\n";
+        using namespace micant::win32;
+
+        // 3.1 Test Process Affinity Update Mode
+        DWORD mode = 0xFFFFFFFF;
+        BOOL bRes = QueryProcessAffinityUpdateMode(GetCurrentProcess(), &mode);
+        TEST_ASSERT(bRes == TRUE && mode == 0, "Initial affinity update mode is 0");
+
+        bRes = SetProcessAffinityUpdateMode(GetCurrentProcess(), PROCESS_AFFINITY_ENABLE_AUTO_UPDATE);
+        TEST_ASSERT(bRes == TRUE, "SetProcessAffinityUpdateMode enables auto update");
+
+        bRes = QueryProcessAffinityUpdateMode(GetCurrentProcess(), &mode);
+        TEST_ASSERT(bRes == TRUE && mode == PROCESS_AFFINITY_ENABLE_AUTO_UPDATE, "QueryProcessAffinityUpdateMode returns PROCESS_AFFINITY_ENABLE_AUTO_UPDATE");
+
+        // 3.2 Test Process & Thread CPU Set Masks
+        GROUP_AFFINITY groupAffinity[4]{};
+        USHORT reqCount = 0;
+        bRes = GetProcessDefaultCpuSetMasks(GetCurrentProcess(), groupAffinity, 4, &reqCount);
+        TEST_ASSERT(bRes == TRUE, "GetProcessDefaultCpuSetMasks succeeds");
+        TEST_ASSERT(reqCount == 1, "RequiredMaskCount is 1");
+        TEST_ASSERT(groupAffinity[0].Group == 0, "GroupAffinity Group is 0");
+        TEST_ASSERT(groupAffinity[0].Mask == 0xFFFF, "GroupAffinity Mask covers all 16 cores (0xFFFF)");
+
+        GROUP_AFFINITY threadAffinity[4]{};
+        USHORT threadReqCount = 0;
+        bRes = GetThreadSelectedCpuSetMasks(GetCurrentThread(), threadAffinity, 4, &threadReqCount);
+        TEST_ASSERT(bRes == TRUE, "GetThreadSelectedCpuSetMasks succeeds");
+        TEST_ASSERT(threadReqCount == 1, "Thread RequiredMaskCount is 1");
+        TEST_ASSERT(threadAffinity[0].Mask == 0xFFFF, "Thread Mask covers 0xFFFF");
+
+        // 3.3 Set Process & Thread CPU Set Masks
+        bRes = SetProcessDefaultCpuSetMasks(GetCurrentProcess(), groupAffinity, 1);
+        TEST_ASSERT(bRes == TRUE, "SetProcessDefaultCpuSetMasks sets mask");
+
+        bRes = SetThreadSelectedCpuSetMasks(GetCurrentThread(), threadAffinity, 1);
+        TEST_ASSERT(bRes == TRUE, "SetThreadSelectedCpuSetMasks sets mask");
+
+        // 3.4 Dynamic Loader Exports Verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetProcessAffinityUpdateMode") != nullptr, "kernel32.dll exports SetProcessAffinityUpdateMode");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryProcessAffinityUpdateMode") != nullptr, "kernel32.dll exports QueryProcessAffinityUpdateMode");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetProcessDefaultCpuSetMasks") != nullptr, "kernel32.dll exports SetProcessDefaultCpuSetMasks");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessDefaultCpuSetMasks") != nullptr, "kernel32.dll exports GetProcessDefaultCpuSetMasks");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadSelectedCpuSetMasks") != nullptr, "kernel32.dll exports SetThreadSelectedCpuSetMasks");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadSelectedCpuSetMasks") != nullptr, "kernel32.dll exports GetThreadSelectedCpuSetMasks");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-6.dll", "SetProcessDefaultCpuSetMasks") != nullptr, "api-ms-win-core-processthreads-l1-1-6.dll exports SetProcessDefaultCpuSetMasks");
+
+        std::cout << "  [PASS] Win32 Affinity Updates & Group CPU Set Masks verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Windows Security Catalog & Cryptographic Hash Duplication
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing Wintrust Catalog & Cryptographic Hash Duplication...\n";
+        using namespace micant::wintrust;
+
+        // 4.1 Test CryptCATAdminAcquireContext2 & CryptCATAdminCalcHashFromFileHandle2
+        HCATADMIN hCatAdmin = nullptr;
+        win32::BOOL bRes = CryptCATAdminAcquireContext2(&hCatAdmin, nullptr, L"SHA256", nullptr, 0);
+        TEST_ASSERT(bRes == win32::TRUE && hCatAdmin != nullptr, "CryptCATAdminAcquireContext2 acquires catalog context");
+
+        uint32_t hashLen = 0;
+        bRes = CryptCATAdminCalcHashFromFileHandle2(hCatAdmin, nullptr, &hashLen, nullptr, 0);
+        TEST_ASSERT(bRes == win32::TRUE && hashLen == 32, "CryptCATAdminCalcHashFromFileHandle2 returns 32-byte hash length");
+
+        std::vector<uint8_t> catHash(hashLen, 0);
+        bRes = CryptCATAdminCalcHashFromFileHandle2(hCatAdmin, nullptr, &hashLen, catHash.data(), 0);
+        TEST_ASSERT(bRes == win32::TRUE, "CryptCATAdminCalcHashFromFileHandle2 calculates catalog hash");
+
+        bRes = CryptCATAdminReleaseContext(hCatAdmin, 0);
+        TEST_ASSERT(bRes == win32::TRUE, "CryptCATAdminReleaseContext releases catalog context");
+
+        // 4.2 Test BCryptDuplicateHash in CNG Driver
+        using namespace micant::km::crypto;
+        BCRYPT_HASH_HANDLE hHash = nullptr;
+        NTSTATUS st = BCryptCreateHash(nullptr, &hHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash creates SHA-256 hash context");
+
+        uint8_t testPayload[] = "MicaNT Sovereign AntiCheat CleanRoom Interop Verification Vector";
+        st = BCryptHashData(hHash, testPayload, sizeof(testPayload), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData hashes input payload");
+
+        BCRYPT_HASH_HANDLE hDupHash = nullptr;
+        st = BCryptDuplicateHash(hHash, &hDupHash, nullptr, 0, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hDupHash != nullptr, "BCryptDuplicateHash duplicates hash context");
+
+        uint8_t digestOrig[32]{};
+        uint8_t digestDup[32]{};
+        st = BCryptFinishHash(hHash, digestOrig, sizeof(digestOrig), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash finishes original hash");
+
+        st = BCryptFinishHash(hDupHash, digestDup, sizeof(digestDup), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash finishes duplicate hash");
+
+        TEST_ASSERT(std::memcmp(digestOrig, digestDup, 32) == 0, "Original and duplicated hash contexts produce identical digests");
+
+        BCryptDestroyHash(hHash);
+        BCryptDestroyHash(hDupHash);
+
+        // 4.3 Loader Exports Verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("wintrust.dll", "CryptCATAdminAcquireContext2") != nullptr, "wintrust.dll exports CryptCATAdminAcquireContext2");
+        TEST_ASSERT(ldr.getExport("wintrust.dll", "CryptCATAdminCalcHashFromFileHandle2") != nullptr, "wintrust.dll exports CryptCATAdminCalcHashFromFileHandle2");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptDuplicateHash") != nullptr, "cng.sys exports BCryptDuplicateHash");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDuplicateHash") != nullptr, "bcrypt.dll exports BCryptDuplicateHash");
+
+        std::cout << "  [PASS] Wintrust Catalog & Cryptographic Hash Duplication verified.\n";
+    }
+
+    std::cout << "[HORIZON 219] Custom Heaps & Device10, NT Logical Processor Ex, Affinity Updates & Wintrust Crypto Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Custom Heaps, Properties & ID3D12Device10 OK\n"
+              << "    Pillar 2: NT System Logical Processor Information Extension (Class 73) OK\n"
+              << "    Pillar 3: Win32 Affinity Updates & Group CPU Set Masks OK\n"
+              << "    Pillar 4: Wintrust Catalog & Cryptographic Hash Duplication OK\n";
+
+    std::cout << "[TEST] Suite 435: Horizon 219 - Custom Heaps & Device10, NT Logical Processor Ex, Affinity Updates & Wintrust Crypto PASSED." << std::endl;
+}

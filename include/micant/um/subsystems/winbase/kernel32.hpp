@@ -76,6 +76,15 @@ using LPCWCH    = const wchar_t*;
 using ULONG     = uint32_t;
 using KAFFINITY = ULONG_PTR;
 using PULONG    = uint32_t*;
+using USHORT    = uint16_t;
+using PUSHORT   = uint16_t*;
+
+struct GROUP_AFFINITY {
+    KAFFINITY Mask{0};
+    uint16_t Group{0};
+    uint16_t Reserved[3]{0};
+};
+using PGROUP_AFFINITY = GROUP_AFFINITY*;
 using PBOOL     = int32_t*;
 using LPBOOL    = int32_t*;
 using PVOID     = void*;
@@ -9336,80 +9345,26 @@ inline uint32_t VerLanguageNameW(uint32_t /*wLang*/, wchar_t* szLang, uint32_t c
     szLang[len] = L'\0';
     return static_cast<uint32_t>(len);
 }
-enum LOGICAL_PROCESSOR_RELATIONSHIP : uint32_t {
-    RelationProcessorCore    = 0,
-    RelationNumaNode         = 1,
-    RelationCache            = 2,
-    RelationProcessorPackage = 3,
-    RelationGroup            = 4,
-    RelationAll              = 0xFFFF
-};
+using ntdll::LOGICAL_PROCESSOR_RELATIONSHIP;
+using ntdll::RelationProcessorCore;
+using ntdll::RelationNumaNode;
+using ntdll::RelationCache;
+using ntdll::RelationProcessorPackage;
+using ntdll::RelationGroup;
+using ntdll::RelationAll;
 
-enum PROCESSOR_CACHE_TYPE : uint32_t {
-    CacheUnified     = 0,
-    CacheInstruction = 1,
-    CacheData        = 2,
-    CacheTrace       = 3
-};
+using ntdll::PROCESSOR_CACHE_TYPE;
+using ntdll::CacheUnified;
+using ntdll::CacheInstruction;
+using ntdll::CacheData;
+using ntdll::CacheTrace;
 
-struct CACHE_DESCRIPTOR {
-    uint8_t   Level;
-    uint8_t   Associativity;
-    uint16_t  LineSize;
-    uint32_t  Size;
-    PROCESSOR_CACHE_TYPE Type;
-};
-
-struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION {
-    ULONG_PTR ProcessorMask;
-    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
-    union {
-        struct {
-            uint8_t Flags;
-        } ProcessorCore;
-        struct {
-            uint32_t NodeNumber;
-        } NumaNode;
-        CACHE_DESCRIPTOR Cache;
-        uint64_t Reserved[2];
-    };
-};
-
-struct CACHE_RELATIONSHIP {
-    uint8_t Level;
-    uint8_t Associativity;
-    uint16_t LineSize;
-    uint32_t CacheSize;
-    PROCESSOR_CACHE_TYPE Type;
-    uint8_t Reserved[20];
-    uint16_t GroupCount;
-    KAFFINITY GroupMasks[1];
-};
-
-struct PROCESSOR_RELATIONSHIP {
-    uint8_t Flags; // 0x01 = LTP_PC_SMT
-    uint8_t EfficiencyClass; // 0 = E-core, 1 = P-core, 2 = 3D V-Cache P-core
-    uint8_t Reserved[20];
-    uint16_t GroupCount;
-    KAFFINITY GroupMasks[1];
-};
-
-struct NUMA_NODE_RELATIONSHIP {
-    uint32_t NodeNumber;
-    uint8_t Reserved[20];
-    uint16_t GroupCount;
-    KAFFINITY GroupMasks[1];
-};
-
-struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
-    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
-    uint32_t Size;
-    union {
-        PROCESSOR_RELATIONSHIP Processor;
-        NUMA_NODE_RELATIONSHIP NumaNode;
-        CACHE_RELATIONSHIP Cache;
-    };
-};
+using ntdll::CACHE_DESCRIPTOR;
+using ntdll::SYSTEM_LOGICAL_PROCESSOR_INFORMATION;
+using ntdll::CACHE_RELATIONSHIP;
+using ntdll::PROCESSOR_RELATIONSHIP;
+using ntdll::NUMA_NODE_RELATIONSHIP;
+using ntdll::SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX;
 
 inline BOOL GetLogicalProcessorInformation(void* Buffer, uint32_t* ReturnedLength) noexcept {
     if (!ReturnedLength) {
@@ -9602,6 +9557,78 @@ inline BOOL WINAPI GetProcessDefaultCpuSets(HANDLE /*hProcess*/, ULONG* CpuSetId
     }
     SetLastError(ERROR_INSUFFICIENT_BUFFER);
     return FALSE;
+}
+
+#ifndef PROCESS_AFFINITY_ENABLE_AUTO_UPDATE
+#define PROCESS_AFFINITY_ENABLE_AUTO_UPDATE 0x00000001
+#endif
+
+inline DWORD s_processAffinityUpdateMode = 0;
+
+inline BOOL WINAPI SetProcessAffinityUpdateMode(HANDLE /*hProcess*/, DWORD dwFlags) noexcept {
+    if (dwFlags & ~PROCESS_AFFINITY_ENABLE_AUTO_UPDATE) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    s_processAffinityUpdateMode = dwFlags;
+    return TRUE;
+}
+
+inline BOOL WINAPI QueryProcessAffinityUpdateMode(HANDLE /*hProcess*/, LPDWORD lpdwFlags) noexcept {
+    if (!lpdwFlags) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *lpdwFlags = s_processAffinityUpdateMode;
+    return TRUE;
+}
+
+inline BOOL WINAPI SetProcessDefaultCpuSetMasks(HANDLE /*hProcess*/, PGROUP_AFFINITY CpuSetMasks, USHORT CpuSetMaskCount) noexcept {
+    if (!CpuSetMasks && CpuSetMaskCount > 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetProcessDefaultCpuSetMasks(HANDLE /*hProcess*/, PGROUP_AFFINITY CpuSetMasks, USHORT CpuSetMaskCount, PUSHORT RequiredMaskCount) noexcept {
+    if (!RequiredMaskCount) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *RequiredMaskCount = 1;
+    if (!CpuSetMasks || CpuSetMaskCount < 1) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    CpuSetMasks[0].Group = 0;
+    CpuSetMasks[0].Mask = 0xFFFF;
+    CpuSetMasks[0].Reserved[0] = CpuSetMasks[0].Reserved[1] = CpuSetMasks[0].Reserved[2] = 0;
+    return TRUE;
+}
+
+inline BOOL WINAPI SetThreadSelectedCpuSetMasks(HANDLE /*hThread*/, PGROUP_AFFINITY CpuSetMasks, USHORT CpuSetMaskCount) noexcept {
+    if (!CpuSetMasks && CpuSetMaskCount > 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetThreadSelectedCpuSetMasks(HANDLE /*hThread*/, PGROUP_AFFINITY CpuSetMasks, USHORT CpuSetMaskCount, PUSHORT RequiredMaskCount) noexcept {
+    if (!RequiredMaskCount) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *RequiredMaskCount = 1;
+    if (!CpuSetMasks || CpuSetMaskCount < 1) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    CpuSetMasks[0].Group = 0;
+    CpuSetMasks[0].Mask = 0xFFFF;
+    CpuSetMasks[0].Reserved[0] = CpuSetMasks[0].Reserved[1] = CpuSetMasks[0].Reserved[2] = 0;
+    return TRUE;
 }
 inline BOOL IsWow64Process(void* /*hProcess*/, BOOL* Wow64Process) noexcept {
     if (Wow64Process) *Wow64Process = 0;
@@ -10583,6 +10610,21 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-2.dll", "GetThreadInformation", reinterpret_cast<void*>(GetThreadInformation));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "SetProcessWorkingSetSizeEx", reinterpret_cast<void*>(SetProcessWorkingSetSizeEx));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "GetProcessWorkingSetSizeEx", reinterpret_cast<void*>(GetProcessWorkingSetSizeEx));
+
+    // Horizon 219: Affinity Update Mode & Group CPU Set Masks
+    ldr.registerExport("kernel32.dll", "SetProcessAffinityUpdateMode", reinterpret_cast<void*>(SetProcessAffinityUpdateMode));
+    ldr.registerExport("kernel32.dll", "QueryProcessAffinityUpdateMode", reinterpret_cast<void*>(QueryProcessAffinityUpdateMode));
+    ldr.registerExport("kernel32.dll", "SetProcessDefaultCpuSetMasks", reinterpret_cast<void*>(SetProcessDefaultCpuSetMasks));
+    ldr.registerExport("kernel32.dll", "GetProcessDefaultCpuSetMasks", reinterpret_cast<void*>(GetProcessDefaultCpuSetMasks));
+    ldr.registerExport("kernel32.dll", "SetThreadSelectedCpuSetMasks", reinterpret_cast<void*>(SetThreadSelectedCpuSetMasks));
+    ldr.registerExport("kernel32.dll", "GetThreadSelectedCpuSetMasks", reinterpret_cast<void*>(GetThreadSelectedCpuSetMasks));
+
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetProcessAffinityUpdateMode", reinterpret_cast<void*>(SetProcessAffinityUpdateMode));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "QueryProcessAffinityUpdateMode", reinterpret_cast<void*>(QueryProcessAffinityUpdateMode));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-6.dll", "SetProcessDefaultCpuSetMasks", reinterpret_cast<void*>(SetProcessDefaultCpuSetMasks));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-6.dll", "GetProcessDefaultCpuSetMasks", reinterpret_cast<void*>(GetProcessDefaultCpuSetMasks));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-6.dll", "SetThreadSelectedCpuSetMasks", reinterpret_cast<void*>(SetThreadSelectedCpuSetMasks));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-6.dll", "GetThreadSelectedCpuSetMasks", reinterpret_cast<void*>(GetThreadSelectedCpuSetMasks));
 }
 
 

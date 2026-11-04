@@ -453,7 +453,12 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite435") {
+        RUN_TEST(Test_Horizon219_CustomHeaps_LogicalProcessorEx_AffinityUpdates_And_WintrustCrypto_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite434") {
+        RUN_TEST(Test_Horizon218_ShaderCacheSessions_NumaTopology_PlaceholderAlloc_And_WerDiagnostics_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite433") {
@@ -2174,6 +2179,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerEx_And_WorkingSetWatch_Suite);
     RUN_TEST(Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnumEx_Suite);
     RUN_TEST(Test_Horizon218_ShaderCacheSessions_NumaTopology_PlaceholderAlloc_And_WerDiagnostics_Suite);
+    RUN_TEST(Test_Horizon219_CustomHeaps_LogicalProcessorEx_AffinityUpdates_And_WintrustCrypto_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

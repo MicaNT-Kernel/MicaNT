@@ -1516,6 +1516,87 @@ struct SYSTEM_NUMA_DISTANCE_INFORMATION {
     uint32_t Distance;
 };
 
+#ifndef _MICANT_LOGICAL_PROC_DEFINED
+#define _MICANT_LOGICAL_PROC_DEFINED
+using KAFFINITY = uint64_t;
+using ULONG_PTR = uintptr_t;
+
+enum LOGICAL_PROCESSOR_RELATIONSHIP : uint32_t {
+    RelationProcessorCore    = 0,
+    RelationNumaNode         = 1,
+    RelationCache            = 2,
+    RelationProcessorPackage = 3,
+    RelationGroup            = 4,
+    RelationAll              = 0xFFFF
+};
+
+enum PROCESSOR_CACHE_TYPE : uint32_t {
+    CacheUnified     = 0,
+    CacheInstruction = 1,
+    CacheData        = 2,
+    CacheTrace       = 3
+};
+
+struct CACHE_DESCRIPTOR {
+    uint8_t   Level;
+    uint8_t   Associativity;
+    uint16_t  LineSize;
+    uint32_t  Size;
+    PROCESSOR_CACHE_TYPE Type;
+};
+
+struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION {
+    ULONG_PTR ProcessorMask;
+    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
+    union {
+        struct {
+            uint8_t Flags;
+        } ProcessorCore;
+        struct {
+            uint32_t NodeNumber;
+        } NumaNode;
+        CACHE_DESCRIPTOR Cache;
+        uint64_t Reserved[2];
+    };
+};
+
+struct CACHE_RELATIONSHIP {
+    uint8_t Level;
+    uint8_t Associativity;
+    uint16_t LineSize;
+    uint32_t CacheSize;
+    PROCESSOR_CACHE_TYPE Type;
+    uint8_t Reserved[20];
+    uint16_t GroupCount;
+    KAFFINITY GroupMasks[1];
+};
+
+struct PROCESSOR_RELATIONSHIP {
+    uint8_t Flags; // 0x01 = LTP_PC_SMT
+    uint8_t EfficiencyClass; // 0 = E-core, 1 = P-core, 2 = 3D V-Cache P-core
+    uint8_t Reserved[20];
+    uint16_t GroupCount;
+    KAFFINITY GroupMasks[1];
+};
+
+struct NUMA_NODE_RELATIONSHIP {
+    uint32_t NodeNumber;
+    uint8_t Reserved[20];
+    uint16_t GroupCount;
+    KAFFINITY GroupMasks[1];
+};
+
+struct SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
+    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
+    uint32_t Size;
+    union {
+        PROCESSOR_RELATIONSHIP Processor;
+        NUMA_NODE_RELATIONSHIP NumaNode;
+        CACHE_RELATIONSHIP Cache;
+    };
+};
+#endif
+
 struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     GUID BootIdentifier;
     ULONG FirmwareType; // 2 = FirmwareTypeUefi
@@ -2279,6 +2360,78 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             for (uint32_t i = 0; i < processorCount; ++i) {
                 pCycles[i].CycleTime = 28800000000ULL + (static_cast<uint64_t>(i) * 1500000ULL);
             }
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+            return NtStatus::Success;
+        }
+        case 73: { // SystemLogicalProcessorInformationEx
+            constexpr uint32_t entryCount = 20; // 16 cores + 2 caches + 2 numa nodes
+            constexpr uint32_t entrySize = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+            constexpr size_t requiredLength = entryCount * entrySize;
+            if (SystemInformationLength < requiredLength || !SystemInformation) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* curr = reinterpret_cast<uint8_t*>(SystemInformation);
+            std::memset(curr, 0, requiredLength);
+
+            // 16 Cores (Cores 0-15)
+            for (uint32_t i = 0; i < 16; ++i) {
+                auto* pRec = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+                pRec->Relationship = RelationProcessorCore;
+                pRec->Size = entrySize;
+                pRec->Processor.Flags = (i < 8) ? 1 : 0; // SMT on P-cores
+                pRec->Processor.EfficiencyClass = (i < 4) ? 2 : ((i < 8) ? 1 : 0); // 2 = 3D V-Cache P-core, 1 = P-core, 0 = E-core
+                pRec->Processor.GroupCount = 1;
+                pRec->Processor.GroupMasks[0] = (1ULL << i);
+                curr += entrySize;
+            }
+
+            // 2 L3 Caches (CCD 0: 96MB 3D V-Cache, CCD 1: 32MB standard L3)
+            {
+                auto* pC1 = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+                pC1->Relationship = RelationCache;
+                pC1->Size = entrySize;
+                pC1->Cache.Level = 3;
+                pC1->Cache.Associativity = 16;
+                pC1->Cache.LineSize = 64;
+                pC1->Cache.CacheSize = 96 * 1024 * 1024;
+                pC1->Cache.Type = CacheUnified;
+                pC1->Cache.GroupCount = 1;
+                pC1->Cache.GroupMasks[0] = 0x00FF; // Cores 0-7
+                curr += entrySize;
+
+                auto* pC2 = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+                pC2->Relationship = RelationCache;
+                pC2->Size = entrySize;
+                pC2->Cache.Level = 3;
+                pC2->Cache.Associativity = 16;
+                pC2->Cache.LineSize = 64;
+                pC2->Cache.CacheSize = 32 * 1024 * 1024;
+                pC2->Cache.Type = CacheUnified;
+                pC2->Cache.GroupCount = 1;
+                pC2->Cache.GroupMasks[0] = 0xFF00; // Cores 8-15
+                curr += entrySize;
+            }
+
+            // 2 NUMA Nodes (Node 0 & Node 1)
+            {
+                auto* pN0 = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+                pN0->Relationship = RelationNumaNode;
+                pN0->Size = entrySize;
+                pN0->NumaNode.NodeNumber = 0;
+                pN0->NumaNode.GroupCount = 1;
+                pN0->NumaNode.GroupMasks[0] = 0x00FF;
+                curr += entrySize;
+
+                auto* pN1 = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(curr);
+                pN1->Relationship = RelationNumaNode;
+                pN1->Size = entrySize;
+                pN1->NumaNode.NodeNumber = 1;
+                pN1->NumaNode.GroupCount = 1;
+                pN1->NumaNode.GroupMasks[0] = 0xFF00;
+                curr += entrySize;
+            }
+
             if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
             return NtStatus::Success;
         }

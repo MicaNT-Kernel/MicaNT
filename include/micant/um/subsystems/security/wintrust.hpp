@@ -1075,6 +1075,48 @@ inline win32::BOOL CryptCATAdminReleaseContext(
     return win32::TRUE;
 }
 
+inline win32::BOOL CryptCATAdminAcquireContext2(
+    HCATADMIN* phCatAdmin,
+    const GUID* /*pgSubsystem*/,
+    const wchar_t* /*pwszHashAlgorithm*/,
+    void* /*pStrongHashPolicy*/,
+    [[maybe_unused]] uint32_t dwFlags
+) {
+    if (!phCatAdmin) {
+        win32::SetLastError(micant::crypt32::ERROR_INVALID_PARAMETER);
+        return win32::FALSE;
+    }
+    *phCatAdmin = reinterpret_cast<HCATADMIN>(0xCA7A0002);
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptCATAdminCalcHashFromFileHandle2(
+    HCATADMIN hCatAdmin,
+    void* hFile,
+    uint32_t* pcbHash,
+    uint8_t* pbHash,
+    [[maybe_unused]] uint32_t dwFlags
+) {
+    if (!hCatAdmin || !pcbHash) {
+        win32::SetLastError(micant::crypt32::ERROR_INVALID_PARAMETER);
+        return win32::FALSE;
+    }
+    uint32_t req = 32; // SHA-256
+    if (!pbHash || *pcbHash < req) {
+        *pcbHash = req;
+        return win32::TRUE;
+    }
+    if (hFile) {
+        auto* dataPtr = reinterpret_cast<const uint8_t*>(hFile);
+        auto hash = crypto::Sha256::hash(std::span<const uint8_t>(dataPtr, 64));
+        std::memcpy(pbHash, hash.data(), 32);
+    } else {
+        std::memset(pbHash, 0x5A, 32);
+    }
+    *pcbHash = req;
+    return win32::TRUE;
+}
+
 inline win32::BOOL CryptCATAdminCalcHashFromFileHandle(
     void* hFile,
     uint32_t* pcbHash,
@@ -1239,6 +1281,8 @@ inline void InitializeWinTrustSubsystemExports() {
     // mscat32.dll / wintrust.dll catalog exports
     ldr.registerExport("wintrust.dll", "CryptCATAdminAcquireContext", reinterpret_cast<void*>(CryptCATAdminAcquireContext));
     ldr.registerExport("wintrust.dll", "CryptCATAdminReleaseContext", reinterpret_cast<void*>(CryptCATAdminReleaseContext));
+    ldr.registerExport("wintrust.dll", "CryptCATAdminAcquireContext2", reinterpret_cast<void*>(CryptCATAdminAcquireContext2));
+    ldr.registerExport("wintrust.dll", "CryptCATAdminCalcHashFromFileHandle2", reinterpret_cast<void*>(CryptCATAdminCalcHashFromFileHandle2));
     ldr.registerExport("wintrust.dll", "CryptCATAdminCalcHashFromFileHandle", reinterpret_cast<void*>(CryptCATAdminCalcHashFromFileHandle));
     ldr.registerExport("wintrust.dll", "CryptCATAdminEnumCatalogFromHash", reinterpret_cast<void*>(CryptCATAdminEnumCatalogFromHash));
     ldr.registerExport("wintrust.dll", "CryptCATAdminReleaseCatalogContext", reinterpret_cast<void*>(CryptCATAdminReleaseCatalogContext));
