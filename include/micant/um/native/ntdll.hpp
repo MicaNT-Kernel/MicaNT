@@ -1493,6 +1493,17 @@ inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_HVCI_ENFORCED          = 0x000
 inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_TESTSIGNING_DISABLED   = 0x00000004;
 inline constexpr ULONG CODEINTEGRITYPOLICY_OPTION_DEBUGGING_DISABLED     = 0x00000008;
 
+struct SYSTEM_EXCEPTION_INFORMATION {
+    ULONG AlignmentFixupCount;
+    ULONG ExceptionDispatchCount;
+    ULONG FloatingEmulationCount;
+    ULONG ByteWordEmulationCount;
+};
+
+struct SYSTEM_PROCESSOR_CYCLE_TIME_INFORMATION {
+    uint64_t CycleTime;
+};
+
 struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     GUID BootIdentifier;
     ULONG FirmwareType; // 2 = FirmwareTypeUefi
@@ -2228,6 +2239,33 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             auto* pCycles = reinterpret_cast<uint64_t*>(SystemInformation);
             for (uint32_t i = 0; i < processorCount; ++i) {
                 pCycles[i] = 24500000000ULL + (static_cast<uint64_t>(i) * 1250000ULL);
+            }
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+            return NtStatus::Success;
+        }
+        case 33: { // SystemExceptionInformation
+            if (SystemInformationLength < sizeof(SYSTEM_EXCEPTION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_EXCEPTION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pEx = reinterpret_cast<SYSTEM_EXCEPTION_INFORMATION*>(SystemInformation);
+            pEx->AlignmentFixupCount = 0;
+            pEx->ExceptionDispatchCount = 142;
+            pEx->FloatingEmulationCount = 0;
+            pEx->ByteWordEmulationCount = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_EXCEPTION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 108: { // SystemProcessorCycleTimeInformation
+            constexpr uint32_t processorCount = 16;
+            size_t requiredLength = sizeof(SYSTEM_PROCESSOR_CYCLE_TIME_INFORMATION) * processorCount;
+            if (SystemInformationLength < requiredLength) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pCycles = reinterpret_cast<SYSTEM_PROCESSOR_CYCLE_TIME_INFORMATION*>(SystemInformation);
+            for (uint32_t i = 0; i < processorCount; ++i) {
+                pCycles[i].CycleTime = 28800000000ULL + (static_cast<uint64_t>(i) * 1500000ULL);
             }
             if (ReturnLength) *ReturnLength = static_cast<ULONG>(requiredLength);
             return NtStatus::Success;

@@ -44046,3 +44046,229 @@ inline void Test_Horizon216_PlacedResources_ProcessorIdleCycles_ThreadpoolTimerE
 
     std::cout << "[TEST] Suite 432: Horizon 216 - Placed Resources, Processor Idle Cycles, Threadpool TimerEx & Working Set Watch PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 433: Horizon 217 - D3D12 Render Passes, System Exception Info & Cycle Times,
+//                          Large Pages / Prefetch / MapViewOfFile3, and PSAPI EnumProcessModulesEx
+// ============================================================================
+inline void Test_Horizon217_RenderPasses_ExceptionInfo_LargePages_And_ModuleEnumEx_Suite() {
+    std::cout << "[TEST] Running Suite 433: Horizon 217 - Render Passes, Exception Info, Large Pages & ModuleEnumEx...\n";
+
+    // Ensure loader export tables are initialized for isolated test runner execution
+    micant::win32::InitializeWin32SubsystemExports();
+    micant::prism3d12::InitializePrism3D12SubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: DirectX 12 Agility SDK Render Passes Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing DirectX 12 Render Passes (BeginRenderPass / EndRenderPass)...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_2, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice succeeds for Feature Level 12.2");
+
+        ID3D12CommandAllocator* pAlloc = nullptr;
+        hr = pDev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAlloc));
+        TEST_ASSERT(hr == 0 && pAlloc != nullptr, "CreateCommandAllocator succeeds");
+
+        ID3D12GraphicsCommandList* pCmdList = nullptr;
+        hr = pDev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pAlloc, nullptr, IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&pCmdList));
+        TEST_ASSERT(hr == 0 && pCmdList != nullptr, "CreateCommandList succeeds");
+
+        ID3D12GraphicsCommandList4* pCmdList4 = nullptr;
+        hr = pCmdList->QueryInterface(IID_ID3D12GraphicsCommandList4, reinterpret_cast<void**>(&pCmdList4));
+        TEST_ASSERT(hr == 0 && pCmdList4 != nullptr, "QueryInterface for ID3D12GraphicsCommandList4 succeeds");
+
+        // Construct Render Target & Depth Stencil Descriptors
+        D3D12_RENDER_PASS_RENDER_TARGET_DESC rtvDesc{};
+        rtvDesc.cpuDescriptor = D3D12_CPU_DESCRIPTOR_HANDLE{ 0x1000 };
+        rtvDesc.BeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+        rtvDesc.BeginningAccess.Clear.ClearValue.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        rtvDesc.BeginningAccess.Clear.ClearValue.Color[0] = 0.2f;
+        rtvDesc.BeginningAccess.Clear.ClearValue.Color[1] = 0.4f;
+        rtvDesc.BeginningAccess.Clear.ClearValue.Color[2] = 0.8f;
+        rtvDesc.BeginningAccess.Clear.ClearValue.Color[3] = 1.0f;
+        rtvDesc.EndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
+
+        D3D12_RENDER_PASS_DEPTH_STENCIL_DESC dsvDesc{};
+        dsvDesc.cpuDescriptor = D3D12_CPU_DESCRIPTOR_HANDLE{ 0x2000 };
+        dsvDesc.DepthBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+        dsvDesc.DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth = 1.0f;
+        dsvDesc.DepthBeginningAccess.Clear.ClearValue.DepthStencil.Stencil = 0;
+        dsvDesc.DepthEndingAccess.Type = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE;
+
+        // BeginRenderPass
+        pCmdList4->BeginRenderPass(1, &rtvDesc, &dsvDesc, D3D12_RENDER_PASS_FLAG_ALLOW_UAV_WRITES);
+
+        auto* pImpl = static_cast<Prism3D12GraphicsCommandListImpl*>(pCmdList);
+        TEST_ASSERT(pImpl->IsInRenderPass() == true, "CommandList is in Render Pass state");
+        TEST_ASSERT(pImpl->GetActiveRenderPassNumTargets() == 1, "Render pass active target count matches 1");
+        TEST_ASSERT(pImpl->GetActiveRenderPassFlags() == D3D12_RENDER_PASS_FLAG_ALLOW_UAV_WRITES, "Render pass flags preserved");
+        TEST_ASSERT(pImpl->HasActiveDepthStencil() == true, "Render pass depth stencil active");
+
+        // EndRenderPass
+        pCmdList4->EndRenderPass();
+        TEST_ASSERT(pImpl->IsInRenderPass() == false, "CommandList exited Render Pass state");
+        TEST_ASSERT(pImpl->GetRenderPassTotalCount() == 1, "Render pass execution count tracked");
+
+        pCmdList4->Release();
+        pCmdList->Release();
+        pAlloc->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] DirectX 12 Render Passes (BeginRenderPass / EndRenderPass) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Exception Information & Total Processor Cycle Times
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemExceptionInformation (Class 33) & SystemProcessorCycleTimeInformation (Class 108)...\n";
+        using namespace micant::ntdll;
+
+        // 2.1 SystemExceptionInformation (Class 33)
+        SYSTEM_EXCEPTION_INFORMATION exInfo{};
+        ULONG retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(33, &exInfo, sizeof(exInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation Class 33 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_EXCEPTION_INFORMATION), "Return length matches SYSTEM_EXCEPTION_INFORMATION size");
+        TEST_ASSERT(exInfo.AlignmentFixupCount == 0, "AlignmentFixupCount is 0");
+        TEST_ASSERT(exInfo.ExceptionDispatchCount == 142, "ExceptionDispatchCount is 142");
+        TEST_ASSERT(exInfo.FloatingEmulationCount == 0, "FloatingEmulationCount is 0");
+
+        // 2.2 SystemProcessorCycleTimeInformation (Class 108)
+        SYSTEM_PROCESSOR_CYCLE_TIME_INFORMATION cycleTimes[16]{};
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(108, cycleTimes, sizeof(cycleTimes), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation Class 108 succeeds");
+        TEST_ASSERT(retLen == sizeof(cycleTimes), "Return length matches 16 cores cycle times");
+
+        // 2.3 Verify Anti-Cheat Telemetry: Total Cycles > Idle Cycles
+        uint64_t idleCycles[16]{};
+        st = NtQuerySystemInformation_Export(42, idleCycles, sizeof(idleCycles), nullptr);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation Class 42 succeeds");
+
+        for (uint32_t i = 0; i < 16; ++i) {
+            TEST_ASSERT(cycleTimes[i].CycleTime > idleCycles[i], "Total CPU cycles exceed idle cycles on all cores");
+            TEST_ASSERT(cycleTimes[i].CycleTime > 28000000000ULL, "Total CPU cycles match calibrated hardware clock");
+        }
+
+        std::cout << "  [PASS] Windows NT System Exception Information & Total Cycle Time Telemetry verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Memory Mapping Prefetch, Large Page Minimum & MapViewOfFile3
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing PrefetchVirtualMemory, GetLargePageMinimum & MapViewOfFile3...\n";
+        using namespace micant::win32;
+
+        // 3.1 GetLargePageMinimum
+        SIZE_T largePageSize = GetLargePageMinimum();
+        TEST_ASSERT(largePageSize == 2097152, "GetLargePageMinimum returns 2 MB standard page size");
+
+        // 3.2 PrefetchVirtualMemory
+        HANDLE hProcess = GetCurrentProcess();
+        WIN32_MEMORY_RANGE_ENTRY ranges[2]{};
+        ranges[0].VirtualAddress = reinterpret_cast<PVOID>(0x140000000ULL);
+        ranges[0].NumberOfBytes = 65536;
+        ranges[1].VirtualAddress = reinterpret_cast<PVOID>(0x140010000ULL);
+        ranges[1].NumberOfBytes = 65536;
+
+        BOOL ok = PrefetchVirtualMemory(hProcess, 2, ranges, 0);
+        TEST_ASSERT(ok == TRUE, "PrefetchVirtualMemory succeeds on valid virtual memory ranges");
+
+        // Invalid parameters check
+        ok = PrefetchVirtualMemory(hProcess, 0, nullptr, 0);
+        TEST_ASSERT(ok == FALSE, "PrefetchVirtualMemory fails on null ranges");
+        TEST_ASSERT(GetLastError() == ERROR_INVALID_PARAMETER, "GetLastError returns ERROR_INVALID_PARAMETER");
+
+        // 3.3 MapViewOfFile3
+        HANDLE hMap = CreateFileMappingW(nullptr, nullptr, 0x04 /*PAGE_READWRITE*/, 0, 65536, nullptr);
+        TEST_ASSERT(hMap != nullptr, "CreateFileMappingW succeeds");
+
+        PVOID pView = MapViewOfFile3(hMap, hProcess, nullptr, 0, 65536, 0, 0x04 /*PAGE_READWRITE*/, nullptr, 0);
+        TEST_ASSERT(pView != nullptr, "MapViewOfFile3 successfully maps file view");
+
+        ok = UnmapViewOfFileEx(pView, 0);
+        TEST_ASSERT(ok == TRUE, "UnmapViewOfFileEx successfully unmaps view");
+        CloseHandle(hMap);
+
+        // 3.4 ApiSet exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetLargePageMinimum") != nullptr, "kernel32 exports GetLargePageMinimum");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "PrefetchVirtualMemory") != nullptr, "kernel32 exports PrefetchVirtualMemory");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "MapViewOfFile3") != nullptr, "kernel32 exports MapViewOfFile3");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-2.dll", "GetLargePageMinimum") != nullptr, "core-memory-l1-1-2 exports GetLargePageMinimum");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-2.dll", "PrefetchVirtualMemory") != nullptr, "core-memory-l1-1-2 exports PrefetchVirtualMemory");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFile3") != nullptr, "core-memory-l1-1-6 exports MapViewOfFile3");
+
+        std::cout << "  [PASS] Win32 Memory Prefetch, Large Pages & MapViewOfFile3 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Win32 PSAPI Process Modules Inspection (EnumProcessModulesEx & GetModuleInformation)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing EnumProcessModulesEx & GetModuleInformation...\n";
+        using namespace micant::win32;
+
+        HANDLE hProcess = GetCurrentProcess();
+
+        // 4.1 EnumProcessModules & EnumProcessModulesEx
+        HMODULE hMods[8]{};
+        DWORD cbNeeded = 0;
+        BOOL ok = EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded);
+        TEST_ASSERT(ok == TRUE, "EnumProcessModules succeeds");
+        TEST_ASSERT(cbNeeded >= sizeof(HMODULE), "cbNeeded reports required buffer size");
+
+        ok = EnumProcessModulesEx(hProcess, hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL);
+        TEST_ASSERT(ok == TRUE, "EnumProcessModulesEx succeeds with LIST_MODULES_ALL");
+        TEST_ASSERT(cbNeeded == sizeof(HMODULE) * 4, "cbNeeded reports 4 modules");
+        TEST_ASSERT(hMods[0] == reinterpret_cast<HMODULE>(0x140000000ULL), "Module 0 is main executable image base");
+        TEST_ASSERT(hMods[1] == reinterpret_cast<HMODULE>(0x7FF800000000ULL), "Module 1 is ntdll.dll");
+        TEST_ASSERT(hMods[2] == reinterpret_cast<HMODULE>(0x7FF800100000ULL), "Module 2 is kernel32.dll");
+        TEST_ASSERT(hMods[3] == reinterpret_cast<HMODULE>(0x7FF800200000ULL), "Module 3 is d3d12.dll");
+
+        ok = K32EnumProcessModulesEx(hProcess, hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_64BIT);
+        TEST_ASSERT(ok == TRUE, "K32EnumProcessModulesEx succeeds with LIST_MODULES_64BIT");
+
+        // 4.2 GetModuleInformation & K32GetModuleInformation
+        MODULEINFO modInfo{};
+        ok = GetModuleInformation(hProcess, hMods[0], &modInfo, sizeof(modInfo));
+        TEST_ASSERT(ok == TRUE, "GetModuleInformation succeeds");
+        TEST_ASSERT(modInfo.lpBaseOfDll == reinterpret_cast<LPVOID>(0x140000000ULL), "lpBaseOfDll matches main image base");
+        TEST_ASSERT(modInfo.SizeOfImage == 0x200000, "SizeOfImage is 2 MB");
+        TEST_ASSERT(modInfo.EntryPoint == reinterpret_cast<LPVOID>(0x140001000ULL), "EntryPoint matches base + 0x1000");
+
+        MODULEINFO k32ModInfo{};
+        ok = K32GetModuleInformation(hProcess, hMods[1], &k32ModInfo, sizeof(k32ModInfo));
+        TEST_ASSERT(ok == TRUE, "K32GetModuleInformation succeeds on ntdll.dll");
+        TEST_ASSERT(k32ModInfo.lpBaseOfDll == reinterpret_cast<LPVOID>(0x7FF800000000ULL), "lpBaseOfDll matches ntdll base");
+
+        // 4.3 ApiSet and DLL exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "EnumProcessModules") != nullptr, "kernel32 exports EnumProcessModules");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "EnumProcessModulesEx") != nullptr, "kernel32 exports EnumProcessModulesEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "K32EnumProcessModulesEx") != nullptr, "kernel32 exports K32EnumProcessModulesEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetModuleInformation") != nullptr, "kernel32 exports GetModuleInformation");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "K32GetModuleInformation") != nullptr, "kernel32 exports K32GetModuleInformation");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "EnumProcessModules") != nullptr, "psapi exports EnumProcessModules");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "EnumProcessModulesEx") != nullptr, "psapi exports EnumProcessModulesEx");
+        TEST_ASSERT(ldr.getExport("psapi.dll", "GetModuleInformation") != nullptr, "psapi exports GetModuleInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "EnumProcessModulesEx") != nullptr, "core-psapi exports EnumProcessModulesEx");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetModuleInformation") != nullptr, "core-psapi exports K32GetModuleInformation");
+
+        std::cout << "  [PASS] Win32 PSAPI Module Enumeration & Module Information verified.\n";
+    }
+
+    std::cout << "[HORIZON 217] Render Passes, Exception Info, Large Pages & ModuleEnumEx Summary:\n"
+              << "    Pillar 1: DirectX 12 Render Passes (BeginRenderPass / EndRenderPass) OK\n"
+              << "    Pillar 2: NT System Exception Information & Total Cycle Time Telemetry OK\n"
+              << "    Pillar 3: Win32 Memory Prefetch, Large Pages & MapViewOfFile3 OK\n"
+              << "    Pillar 4: Win32 PSAPI Module Enumeration & Module Information OK\n";
+
+    std::cout << "[TEST] Suite 433: Horizon 217 - Render Passes, Exception Info, Large Pages & ModuleEnumEx PASSED." << std::endl;
+}

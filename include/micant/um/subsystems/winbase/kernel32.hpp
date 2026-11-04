@@ -2546,6 +2546,39 @@ inline PVOID WINAPI MapViewOfFileNuma2(
     return MapViewOfFile(FileMappingHandle, PageProtection, static_cast<DWORD>(Offset >> 32), static_cast<DWORD>(Offset & 0xFFFFFFFF), ViewSize);
 }
 
+struct WIN32_MEMORY_RANGE_ENTRY {
+    PVOID  VirtualAddress;
+    SIZE_T NumberOfBytes;
+};
+typedef WIN32_MEMORY_RANGE_ENTRY* PWIN32_MEMORY_RANGE_ENTRY;
+
+inline BOOL WINAPI PrefetchVirtualMemory(
+    [[maybe_unused]] HANDLE hProcess,
+    ULONG_PTR NumberOfEntries,
+    PWIN32_MEMORY_RANGE_ENTRY pVirtualAddresses,
+    [[maybe_unused]] ULONG Flags
+) noexcept {
+    if (!pVirtualAddresses || NumberOfEntries == 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline PVOID WINAPI MapViewOfFile3(
+    HANDLE FileMapping,
+    [[maybe_unused]] HANDLE Process,
+    [[maybe_unused]] PVOID BaseAddress,
+    uint64_t Offset,
+    SIZE_T ViewSize,
+    [[maybe_unused]] ULONG AllocationType,
+    ULONG PageProtection,
+    [[maybe_unused]] MEM_EXTENDED_PARAMETER* ExtendedParameters,
+    [[maybe_unused]] ULONG ParameterCount
+) noexcept {
+    return MapViewOfFile(FileMapping, PageProtection, static_cast<DWORD>(Offset >> 32), static_cast<DWORD>(Offset & 0xFFFFFFFF), ViewSize);
+}
+
 
 // ============================================================================
 // 16. Process & Thread Operations
@@ -6396,12 +6429,67 @@ inline BOOL GetComputerNameA(LPSTR lpBuffer, LPDWORD nSize) noexcept {
     return TRUE;
 }
 
+#define LIST_MODULES_DEFAULT 0x0
+#define LIST_MODULES_32BIT   0x01
+#define LIST_MODULES_64BIT   0x02
+#define LIST_MODULES_ALL     0x03
+
 inline BOOL K32EnumProcessModules([[maybe_unused]] HANDLE hProcess, void* lphModule, DWORD cb, LPDWORD lpcbNeeded) noexcept {
     if (lpcbNeeded) *lpcbNeeded = sizeof(HMODULE);
     if (lphModule && cb >= sizeof(HMODULE)) {
         *reinterpret_cast<HMODULE*>(lphModule) = reinterpret_cast<HMODULE>(0x140000000ULL);
     }
     return TRUE;
+}
+
+inline BOOL EnumProcessModules(HANDLE hProcess, void* lphModule, DWORD cb, LPDWORD lpcbNeeded) noexcept {
+    return K32EnumProcessModules(hProcess, lphModule, cb, lpcbNeeded);
+}
+
+inline BOOL K32EnumProcessModulesEx([[maybe_unused]] HANDLE hProcess, void* lphModule, DWORD cb, LPDWORD lpcbNeeded, [[maybe_unused]] DWORD dwFilterFlag) noexcept {
+    constexpr uint32_t kModuleCount = 4;
+    if (lpcbNeeded) *lpcbNeeded = sizeof(HMODULE) * kModuleCount;
+    if (lphModule && cb >= sizeof(HMODULE)) {
+        auto* pMods = reinterpret_cast<HMODULE*>(lphModule);
+        uint32_t maxWrite = static_cast<uint32_t>(cb / sizeof(HMODULE));
+        HMODULE mods[kModuleCount] = {
+            reinterpret_cast<HMODULE>(0x140000000ULL),
+            reinterpret_cast<HMODULE>(0x7FF800000000ULL),
+            reinterpret_cast<HMODULE>(0x7FF800100000ULL),
+            reinterpret_cast<HMODULE>(0x7FF800200000ULL)
+        };
+        uint32_t count = std::min<uint32_t>(kModuleCount, maxWrite);
+        for (uint32_t i = 0; i < count; ++i) {
+            pMods[i] = mods[i];
+        }
+    }
+    return TRUE;
+}
+
+inline BOOL EnumProcessModulesEx(HANDLE hProcess, void* lphModule, DWORD cb, LPDWORD lpcbNeeded, DWORD dwFilterFlag) noexcept {
+    return K32EnumProcessModulesEx(hProcess, lphModule, cb, lpcbNeeded, dwFilterFlag);
+}
+
+struct MODULEINFO {
+    LPVOID lpBaseOfDll{nullptr};
+    DWORD  SizeOfImage{0};
+    LPVOID EntryPoint{nullptr};
+};
+typedef MODULEINFO* LPMODULEINFO;
+
+inline BOOL K32GetModuleInformation([[maybe_unused]] HANDLE hProcess, HMODULE hModule, LPMODULEINFO lpmodinfo, DWORD cb) noexcept {
+    if (!lpmodinfo || cb < sizeof(MODULEINFO)) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    lpmodinfo->lpBaseOfDll = reinterpret_cast<LPVOID>(hModule ? hModule : reinterpret_cast<HMODULE>(0x140000000ULL));
+    lpmodinfo->SizeOfImage = 0x200000;
+    lpmodinfo->EntryPoint = reinterpret_cast<LPVOID>(reinterpret_cast<uintptr_t>(lpmodinfo->lpBaseOfDll) + 0x1000);
+    return TRUE;
+}
+
+inline BOOL GetModuleInformation(HANDLE hProcess, HMODULE hModule, LPMODULEINFO lpmodinfo, DWORD cb) noexcept {
+    return K32GetModuleInformation(hProcess, hModule, lpmodinfo, cb);
 }
 
 inline DWORD K32GetMappedFileNameW([[maybe_unused]] HANDLE hProcess, [[maybe_unused]] LPVOID lpv, LPWSTR lpFilename, DWORD nSize) noexcept {
@@ -9533,9 +9621,16 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetProcessWorkingSetSizeEx", reinterpret_cast<void*>(GetProcessWorkingSetSizeEx));
     ldr.registerExport("kernel32.dll", "SetProcessWorkingSetSizeEx", reinterpret_cast<void*>(SetProcessWorkingSetSizeEx));
     ldr.registerExport("kernel32.dll", "MapViewOfFileNuma2", reinterpret_cast<void*>(MapViewOfFileNuma2));
+    ldr.registerExport("kernel32.dll", "MapViewOfFile3", reinterpret_cast<void*>(MapViewOfFile3));
+    ldr.registerExport("kernel32.dll", "PrefetchVirtualMemory", reinterpret_cast<void*>(PrefetchVirtualMemory));
+    ldr.registerExport("kernel32.dll", "GetLargePageMinimum", reinterpret_cast<void*>(GetLargePageMinimum));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2", reinterpret_cast<void*>(VirtualAlloc2));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualAlloc2FromApp", reinterpret_cast<void*>(VirtualAlloc2FromApp));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFileNuma2", reinterpret_cast<void*>(MapViewOfFileNuma2));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "MapViewOfFile3", reinterpret_cast<void*>(MapViewOfFile3));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-2.dll", "PrefetchVirtualMemory", reinterpret_cast<void*>(PrefetchVirtualMemory));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-2.dll", "GetLargePageMinimum", reinterpret_cast<void*>(GetLargePageMinimum));
+    ldr.registerExport("api-ms-win-core-memory-l1-1-0.dll", "GetLargePageMinimum", reinterpret_cast<void*>(GetLargePageMinimum));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualQueryEx", reinterpret_cast<void*>(VirtualQueryEx));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "VirtualProtectEx", reinterpret_cast<void*>(VirtualProtectEx));
     ldr.registerExport("api-ms-win-core-memory-l1-1-6.dll", "ReadProcessMemory", reinterpret_cast<void*>(ReadProcessMemory));
@@ -9923,6 +10018,19 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetComputerNameA", reinterpret_cast<void*>(GetComputerNameA));
     ldr.registerExport("kernel32.dll", "GetFileAttributesExA", reinterpret_cast<void*>(GetFileAttributesExA));
     ldr.registerExport("kernel32.dll", "K32EnumProcessModules", reinterpret_cast<void*>(K32EnumProcessModules));
+    ldr.registerExport("kernel32.dll", "EnumProcessModules", reinterpret_cast<void*>(EnumProcessModules));
+    ldr.registerExport("kernel32.dll", "K32EnumProcessModulesEx", reinterpret_cast<void*>(K32EnumProcessModulesEx));
+    ldr.registerExport("kernel32.dll", "EnumProcessModulesEx", reinterpret_cast<void*>(EnumProcessModulesEx));
+    ldr.registerExport("kernel32.dll", "K32GetModuleInformation", reinterpret_cast<void*>(K32GetModuleInformation));
+    ldr.registerExport("kernel32.dll", "GetModuleInformation", reinterpret_cast<void*>(GetModuleInformation));
+    ldr.registerExport("psapi.dll", "EnumProcessModules", reinterpret_cast<void*>(EnumProcessModules));
+    ldr.registerExport("psapi.dll", "EnumProcessModulesEx", reinterpret_cast<void*>(EnumProcessModulesEx));
+    ldr.registerExport("psapi.dll", "GetModuleInformation", reinterpret_cast<void*>(GetModuleInformation));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32EnumProcessModules", reinterpret_cast<void*>(K32EnumProcessModules));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "EnumProcessModules", reinterpret_cast<void*>(EnumProcessModules));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32EnumProcessModulesEx", reinterpret_cast<void*>(K32EnumProcessModulesEx));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "EnumProcessModulesEx", reinterpret_cast<void*>(EnumProcessModulesEx));
+    ldr.registerExport("api-ms-win-core-psapi-l1-1-0.dll", "K32GetModuleInformation", reinterpret_cast<void*>(K32GetModuleInformation));
     ldr.registerExport("kernel32.dll", "K32GetMappedFileNameW", reinterpret_cast<void*>(K32GetMappedFileNameW));
     ldr.registerExport("kernel32.dll", "K32GetModuleFileNameExA", reinterpret_cast<void*>(K32GetModuleFileNameExA));
     ldr.registerExport("kernel32.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));

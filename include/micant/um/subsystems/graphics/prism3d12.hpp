@@ -830,6 +830,90 @@ struct D3D12_BARRIER_GROUP {
     };
 };
 
+struct D3D12_DEPTH_STENCIL_VALUE {
+    float Depth{1.0f};
+    uint8_t Stencil{0};
+};
+
+struct D3D12_CLEAR_VALUE {
+    DXGI_FORMAT Format{DXGI_FORMAT_UNKNOWN};
+    union {
+        float Color[4];
+        D3D12_DEPTH_STENCIL_VALUE DepthStencil;
+    };
+};
+
+enum D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE {
+    D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD   = 0,
+    D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_PRESERVE  = 1,
+    D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR     = 2,
+    D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS = 3
+};
+
+enum D3D12_RENDER_PASS_ENDING_ACCESS_TYPE {
+    D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD   = 0,
+    D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_PRESERVE  = 1,
+    D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE   = 2,
+    D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS = 3
+};
+
+enum D3D12_RENDER_PASS_FLAGS : uint32_t {
+    D3D12_RENDER_PASS_FLAG_NONE             = 0,
+    D3D12_RENDER_PASS_FLAG_ALLOW_UAV_WRITES = 1,
+    D3D12_RENDER_PASS_FLAG_SUSPENDING_PASS  = 2,
+    D3D12_RENDER_PASS_FLAG_RESUMING_PASS    = 4
+};
+
+struct D3D12_RENDER_PASS_BEGINNING_ACCESS_CLEAR_PARAMETERS {
+    D3D12_CLEAR_VALUE ClearValue;
+};
+
+struct D3D12_RENDER_PASS_BEGINNING_ACCESS {
+    D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE Type{D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_DISCARD};
+    union {
+        D3D12_RENDER_PASS_BEGINNING_ACCESS_CLEAR_PARAMETERS Clear;
+    };
+};
+
+struct D3D12_RENDER_PASS_ENDING_ACCESS_RESOLVE_SUBRESOURCE_PARAMETERS {
+    uint32_t SrcSubresource{0};
+    uint32_t DstSubresource{0};
+    uint32_t DstX{0};
+    uint32_t DstY{0};
+    D3D12_RECT SrcRect{};
+};
+
+struct D3D12_RENDER_PASS_ENDING_ACCESS_RESOLVE_PARAMETERS {
+    ID3D12Resource* pSrcResource{nullptr};
+    ID3D12Resource* pDstResource{nullptr};
+    uint32_t SubresourceCount{0};
+    const D3D12_RENDER_PASS_ENDING_ACCESS_RESOLVE_SUBRESOURCE_PARAMETERS* pSubresourceParameters{nullptr};
+    DXGI_FORMAT Format{DXGI_FORMAT_UNKNOWN};
+    uint32_t ResolveMode{0};
+    BOOL PreserveResolveSource{FALSE};
+};
+
+struct D3D12_RENDER_PASS_ENDING_ACCESS {
+    D3D12_RENDER_PASS_ENDING_ACCESS_TYPE Type{D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_DISCARD};
+    union {
+        D3D12_RENDER_PASS_ENDING_ACCESS_RESOLVE_PARAMETERS Resolve;
+    };
+};
+
+struct D3D12_RENDER_PASS_RENDER_TARGET_DESC {
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuDescriptor{};
+    D3D12_RENDER_PASS_BEGINNING_ACCESS BeginningAccess{};
+    D3D12_RENDER_PASS_ENDING_ACCESS EndingAccess{};
+};
+
+struct D3D12_RENDER_PASS_DEPTH_STENCIL_DESC {
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuDescriptor{};
+    D3D12_RENDER_PASS_BEGINNING_ACCESS DepthBeginningAccess{};
+    D3D12_RENDER_PASS_BEGINNING_ACCESS StencilBeginningAccess{};
+    D3D12_RENDER_PASS_ENDING_ACCESS DepthEndingAccess{};
+    D3D12_RENDER_PASS_ENDING_ACCESS StencilEndingAccess{};
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList4 = 
     { 0x87e0e368, 0xe32b, 0x4d0b, { 0xbe, 0x4b, 0x4b, 0x78, 0xb8, 0x63, 0x00, 0xaf } };
 
@@ -846,6 +930,12 @@ struct D3D12_DISPATCH_RAYS_DESC {
 class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList {
 public:
     virtual void DispatchRays(const D3D12_DISPATCH_RAYS_DESC* pDesc) = 0;
+    virtual void BeginRenderPass(
+        uint32_t NumRenderTargets,
+        const D3D12_RENDER_PASS_RENDER_TARGET_DESC* pRenderTargets,
+        const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* pDepthStencil,
+        D3D12_RENDER_PASS_FLAGS Flags) = 0;
+    virtual void EndRenderPass() = 0;
 };
 
 static constexpr IID IID_ID3D12GraphicsCommandList6 = 
@@ -1997,6 +2087,49 @@ public:
     }
 
     [[nodiscard]] uint32_t GetRecordedEnhancedBarriersCount() const noexcept { return m_recordedEnhancedBarriersCount; }
+
+    bool m_inRenderPass{ false };
+    uint32_t m_renderPassNumTargets{ 0 };
+    D3D12_RENDER_PASS_FLAGS m_renderPassFlags{ D3D12_RENDER_PASS_FLAG_NONE };
+    uint32_t m_renderPassTotalCount{ 0 };
+    std::vector<D3D12_RENDER_PASS_RENDER_TARGET_DESC> m_activeRenderTargets;
+    bool m_hasDepthStencil{ false };
+    D3D12_RENDER_PASS_DEPTH_STENCIL_DESC m_activeDepthStencil{};
+
+    void BeginRenderPass(
+        uint32_t NumRenderTargets,
+        const D3D12_RENDER_PASS_RENDER_TARGET_DESC* pRenderTargets,
+        const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* pDepthStencil,
+        D3D12_RENDER_PASS_FLAGS Flags) override {
+        if (!m_isOpen) return;
+        m_inRenderPass = true;
+        m_renderPassNumTargets = NumRenderTargets;
+        m_renderPassFlags = Flags;
+        m_renderPassTotalCount++;
+        m_activeRenderTargets.clear();
+        if (pRenderTargets && NumRenderTargets > 0) {
+            for (uint32_t i = 0; i < NumRenderTargets; ++i) {
+                m_activeRenderTargets.push_back(pRenderTargets[i]);
+            }
+        }
+        if (pDepthStencil) {
+            m_hasDepthStencil = true;
+            m_activeDepthStencil = *pDepthStencil;
+        } else {
+            m_hasDepthStencil = false;
+        }
+    }
+
+    void EndRenderPass() override {
+        if (!m_isOpen) return;
+        m_inRenderPass = false;
+    }
+
+    [[nodiscard]] bool IsInRenderPass() const noexcept { return m_inRenderPass; }
+    [[nodiscard]] uint32_t GetRenderPassTotalCount() const noexcept { return m_renderPassTotalCount; }
+    [[nodiscard]] uint32_t GetActiveRenderPassNumTargets() const noexcept { return m_renderPassNumTargets; }
+    [[nodiscard]] D3D12_RENDER_PASS_FLAGS GetActiveRenderPassFlags() const noexcept { return m_renderPassFlags; }
+    [[nodiscard]] bool HasActiveDepthStencil() const noexcept { return m_hasDepthStencil; }
     [[nodiscard]] bool HasProgram() const noexcept { return m_hasProgram; }
     [[nodiscard]] const D3D12_SET_PROGRAM_DESC& GetCurrentProgram() const noexcept { return m_currentProgram; }
     [[nodiscard]] size_t GetDispatchedGraphCount() const noexcept { return m_dispatchedGraphs.size(); }
