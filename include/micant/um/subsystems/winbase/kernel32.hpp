@@ -4772,11 +4772,22 @@ public:
         std::atomic<uint32_t> wakeCount{0};
     };
 
+    struct BarrierControlBlock {
+        std::mutex mutex;
+        std::condition_variable cv;
+        int32_t totalThreads{0};
+        int32_t spinCount{0};
+        int32_t count{0};
+        uint64_t phase{0};
+        bool deleted{false};
+    };
+
 private:
     std::mutex m_tableMutex;
     std::unordered_map<void*, std::shared_ptr<SrwControlBlock>> m_srwMap;
     std::unordered_map<void*, std::shared_ptr<CvControlBlock>> m_cvMap;
     std::unordered_map<void*, std::shared_ptr<WaitAddressControlBlock>> m_waitAddressMap;
+    std::unordered_map<void*, std::shared_ptr<BarrierControlBlock>> m_barrierMap;
     std::atomic<uint64_t> m_totalExclusiveAcquires{0};
     std::atomic<uint64_t> m_totalSharedAcquires{0};
     std::atomic<uint64_t> m_totalReleases{0};
@@ -4786,6 +4797,8 @@ private:
     std::atomic<uint64_t> m_totalWaitAddressWaits{0};
     std::atomic<uint64_t> m_totalWaitAddressWakes{0};
     std::atomic<uint64_t> m_totalWaitAddressTimeouts{0};
+    std::atomic<uint64_t> m_totalBarrierEnters{0};
+    std::atomic<uint64_t> m_totalBarrierElections{0};
 
 public:
     static SovereignSyncManager& get() noexcept {
@@ -4859,6 +4872,74 @@ public:
     void recordWaitAddressWait() noexcept { m_totalWaitAddressWaits.fetch_add(1); }
     void recordWaitAddressWake() noexcept { m_totalWaitAddressWakes.fetch_add(1); }
     void recordWaitAddressTimeout() noexcept { m_totalWaitAddressTimeouts.fetch_add(1); }
+
+    bool initBarrier(void* key, int32_t totalThreads, int32_t spinCount) {
+        if (!key || totalThreads <= 0) return false;
+        std::lock_guard<std::mutex> lock(m_tableMutex);
+        auto cb = std::make_shared<BarrierControlBlock>();
+        cb->totalThreads = totalThreads;
+        cb->spinCount = (spinCount < 0) ? 2000 : spinCount;
+        cb->count = 0;
+        cb->phase = 0;
+        cb->deleted = false;
+        m_barrierMap[key] = cb;
+        return true;
+    }
+
+    bool enterBarrier(void* key, [[maybe_unused]] uint32_t flags, bool& outElected) {
+        outElected = false;
+        if (!key) return false;
+        std::shared_ptr<BarrierControlBlock> cb;
+        {
+            std::lock_guard<std::mutex> lock(m_tableMutex);
+            auto it = m_barrierMap.find(key);
+            if (it == m_barrierMap.end()) return false;
+            cb = it->second;
+        }
+
+        std::unique_lock<std::mutex> lock(cb->mutex);
+        if (cb->deleted || cb->totalThreads <= 0) return false;
+
+        uint64_t curPhase = cb->phase;
+        cb->count++;
+
+        if (cb->count == cb->totalThreads) {
+            cb->count = 0;
+            cb->phase++;
+            m_totalBarrierEnters.fetch_add(1);
+            m_totalBarrierElections.fetch_add(1);
+            outElected = true;
+            cb->cv.notify_all();
+            return true;
+        } else {
+            cb->cv.wait(lock, [&]() { return cb->deleted || cb->phase != curPhase; });
+            if (cb->deleted) return false;
+            m_totalBarrierEnters.fetch_add(1);
+            outElected = false;
+            return true;
+        }
+    }
+
+    bool deleteBarrier(void* key) {
+        if (!key) return false;
+        std::shared_ptr<BarrierControlBlock> cb;
+        {
+            std::lock_guard<std::mutex> lock(m_tableMutex);
+            auto it = m_barrierMap.find(key);
+            if (it == m_barrierMap.end()) return false;
+            cb = it->second;
+            m_barrierMap.erase(it);
+        }
+        if (cb) {
+            std::lock_guard<std::mutex> lock(cb->mutex);
+            cb->deleted = true;
+            cb->cv.notify_all();
+        }
+        return true;
+    }
+
+    uint64_t getTotalBarrierEnters() const noexcept { return m_totalBarrierEnters.load(); }
+    uint64_t getTotalBarrierElections() const noexcept { return m_totalBarrierElections.load(); }
 };
 
 struct SrwSharedLockWrapper {
@@ -9845,6 +9926,77 @@ inline void WINAPI WakeByAddressAll(void* Address) noexcept {
     block->cv.notify_all();
 }
 
+// ============================================================================
+// Win32 Synchronization Barrier APIs
+// ============================================================================
+#ifndef SYNCHRONIZATION_BARRIER_DEFINED
+#define SYNCHRONIZATION_BARRIER_DEFINED
+struct RTL_BARRIER {
+    DWORD Reserved1;
+    DWORD Reserved2;
+    ULONG_PTR Reserved3[2];
+    DWORD Reserved4;
+    DWORD Reserved5;
+};
+
+using SYNCHRONIZATION_BARRIER = RTL_BARRIER;
+using PSYNCHRONIZATION_BARRIER = RTL_BARRIER*;
+using LPSYNCHRONIZATION_BARRIER = RTL_BARRIER*;
+
+inline constexpr DWORD SYNCHRONIZATION_BARRIER_FLAGS_SPIN_ONLY  = 0x01;
+inline constexpr DWORD SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY = 0x02;
+inline constexpr DWORD SYNCHRONIZATION_BARRIER_FLAGS_NO_DELETE   = 0x04;
+#endif
+
+inline BOOL WINAPI InitializeSynchronizationBarrier(
+    LPSYNCHRONIZATION_BARRIER lpBarrier,
+    LONG lTotalThreads,
+    LONG lSpinCount
+) noexcept {
+    if (!lpBarrier || lTotalThreads <= 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    std::memset(lpBarrier, 0, sizeof(*lpBarrier));
+    lpBarrier->Reserved1 = 0xBA441E4; // Barrier signature
+    lpBarrier->Reserved2 = static_cast<DWORD>(lTotalThreads);
+    if (!SovereignSyncManager::get().initBarrier(lpBarrier, lTotalThreads, lSpinCount)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI EnterSynchronizationBarrier(
+    LPSYNCHRONIZATION_BARRIER lpBarrier,
+    DWORD dwFlags
+) noexcept {
+    if (!lpBarrier) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    bool elected = false;
+    if (!SovereignSyncManager::get().enterBarrier(lpBarrier, dwFlags, elected)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return elected ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI DeleteSynchronizationBarrier(
+    LPSYNCHRONIZATION_BARRIER lpBarrier
+) noexcept {
+    if (!lpBarrier) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!SovereignSyncManager::get().deleteBarrier(lpBarrier)) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return TRUE;
+}
+
 // QueryDosDeviceW defined above
 inline BOOL ReadProcessMemory(HANDLE /*hProcess*/, LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead) noexcept {
     if (!lpBaseAddress || !lpBuffer || nSize == 0) {
@@ -10619,6 +10771,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
+    ldr.registerExport("kernel32.dll", "InitializeSynchronizationBarrier", reinterpret_cast<void*>(InitializeSynchronizationBarrier));
+    ldr.registerExport("kernel32.dll", "EnterSynchronizationBarrier", reinterpret_cast<void*>(EnterSynchronizationBarrier));
+    ldr.registerExport("kernel32.dll", "DeleteSynchronizationBarrier", reinterpret_cast<void*>(DeleteSynchronizationBarrier));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "InitializeSynchronizationBarrier", reinterpret_cast<void*>(InitializeSynchronizationBarrier));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "EnterSynchronizationBarrier", reinterpret_cast<void*>(EnterSynchronizationBarrier));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "DeleteSynchronizationBarrier", reinterpret_cast<void*>(DeleteSynchronizationBarrier));
     ldr.registerExport("kernel32.dll", "InitOnceBeginInitialize", reinterpret_cast<void*>(InitOnceBeginInitialize));
     ldr.registerExport("kernel32.dll", "InitOnceComplete", reinterpret_cast<void*>(InitOnceComplete));
     ldr.registerExport("kernel32.dll", "InitOnceExecuteOnce", reinterpret_cast<void*>(InitOnceExecuteOnce));
@@ -10991,6 +11149,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
+    ldr.registerExport("kernel32.dll", "InitializeSynchronizationBarrier", reinterpret_cast<void*>(InitializeSynchronizationBarrier));
+    ldr.registerExport("kernel32.dll", "EnterSynchronizationBarrier", reinterpret_cast<void*>(EnterSynchronizationBarrier));
+    ldr.registerExport("kernel32.dll", "DeleteSynchronizationBarrier", reinterpret_cast<void*>(DeleteSynchronizationBarrier));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "InitializeSynchronizationBarrier", reinterpret_cast<void*>(InitializeSynchronizationBarrier));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "EnterSynchronizationBarrier", reinterpret_cast<void*>(EnterSynchronizationBarrier));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "DeleteSynchronizationBarrier", reinterpret_cast<void*>(DeleteSynchronizationBarrier));
     ldr.registerExport("kernel32.dll", "GetEnabledXStateFeatures", reinterpret_cast<void*>(GetEnabledXStateFeatures));
     ldr.registerExport("kernel32.dll", "GetNumberFormatEx", reinterpret_cast<void*>(GetNumberFormatEx));
     ldr.registerExport("kernel32.dll", "SetConsoleCP", reinterpret_cast<void*>(SetConsoleCP));

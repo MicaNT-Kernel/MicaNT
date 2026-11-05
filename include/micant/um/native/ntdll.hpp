@@ -1454,6 +1454,16 @@ struct SYSTEM_CODEINTEGRITYPOLICY_INFORMATION {
     ULONG Reserved;
 };
 
+// Class 197: SystemHypervisorSharedPageInformation
+struct SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION {
+    void* HypervisorSharedUserVa;
+};
+
+// Class 202: SystemDmaGuardPolicyInformation
+struct SYSTEM_DMA_GUARD_POLICY_INFORMATION {
+    BOOLEAN DmaGuardPolicyEnabled;
+};
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -2821,6 +2831,26 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->Version = 1;
             pInfo->Reserved = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODEINTEGRITYPOLICY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 197: { // SystemHypervisorSharedPageInformation
+            if (SystemInformationLength < sizeof(SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION*>(SystemInformation);
+            pInfo->HypervisorSharedUserVa = reinterpret_cast<void*>(0x7FFE1000ULL);
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 202: { // SystemDmaGuardPolicyInformation
+            if (SystemInformationLength < sizeof(SYSTEM_DMA_GUARD_POLICY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DMA_GUARD_POLICY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_DMA_GUARD_POLICY_INFORMATION*>(SystemInformation);
+            pInfo->DmaGuardPolicyEnabled = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DMA_GUARD_POLICY_INFORMATION);
             return NtStatus::Success;
         }
         default: {

@@ -47702,3 +47702,240 @@ inline void Test_Horizon228_CommandList4Options1819_CfgVslProtection_WaitOnAddre
 
     std::cout << "[TEST] Suite 444: Horizon 228 - CommandList4/Options 18-19, CFG/VSL, WaitOnAddress & HMAC-SHA384/512 PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 445: Horizon 229 - PrismX 3D12 CommandList5 / Options 20 VRS,
+//                         NT System DMA Guard (Class 202) & Hypervisor Shared Page (Class 197),
+//                         Win32 Synchronization Barrier (Initialize / Enter / Delete), and
+//                         BCrypt NIST SP 800-108 Counter Mode KDF Engine
+// ============================================================================
+inline void Test_Horizon229_CommandList5Options20_DmaGuardHypervisor_SyncBarrier_And_Sp800108Kdf_Suite() {
+    std::cout << "\n============================================================================\n";
+    std::cout << "[TEST] Suite 445: Horizon 229 - CommandList5/Options 20, DMA Guard/Hypervisor, SyncBarrier & SP 800-108 KDF\n";
+    std::cout << "============================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList5 & Options 20 Architecture
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS20
+        D3D12_FEATURE_DATA_D3D12_OPTIONS20 opts20{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS20, &opts20, sizeof(opts20));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport accepts D3D12_FEATURE_D3D12_OPTIONS20");
+        TEST_ASSERT(opts20.ProgrammableSamplePositionsTier == TRUE, "Options 20 ProgrammableSamplePositionsTier is TRUE");
+        TEST_ASSERT(opts20.SampleLocationsTier == D3D12_SAMPLE_LOCATIONS_TIER_2, "Options 20 SampleLocationsTier is Tier 2");
+
+        // 2. ID3D12GraphicsCommandList5 QueryInterface & VRS Methods
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+
+        ID3D12GraphicsCommandList5* pCmdList5 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList5, reinterpret_cast<void**>(&pCmdList5));
+        TEST_ASSERT(hr == 0 && pCmdList5 != nullptr, "QueryInterface succeeds for IID_ID3D12GraphicsCommandList5");
+
+        ID3D12GraphicsCommandList5* pOfficial5 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList5, reinterpret_cast<void**>(&pOfficial5));
+        TEST_ASSERT(hr == 0 && pOfficial5 != nullptr, "QueryInterface succeeds for OFFICIAL_IID_ID3D12GraphicsCommandList5");
+        pOfficial5->Release();
+
+        // 3. Test RSSetShadingRate
+        D3D12_SHADING_RATE_COMBINER combiners[2] = { D3D12_SHADING_RATE_COMBINER_MAX, D3D12_SHADING_RATE_COMBINER_SUM };
+        pCmdList5->RSSetShadingRate(D3D12_SHADING_RATE_2X2, combiners);
+        TEST_ASSERT(cmdList.GetShadingRate() == D3D12_SHADING_RATE_2X2, "RSSetShadingRate sets base shading rate to 2x2");
+        TEST_ASSERT(cmdList.GetShadingRateCombiners()[0] == D3D12_SHADING_RATE_COMBINER_MAX, "Combiner 0 is MAX");
+        TEST_ASSERT(cmdList.GetShadingRateCombiners()[1] == D3D12_SHADING_RATE_COMBINER_SUM, "Combiner 1 is SUM");
+        TEST_ASSERT(cmdList.GetShadingRateSetCount() == 1, "Shading rate set count is 1");
+
+        // 4. Test RSSetShadingRateImage
+        auto* mockImage = reinterpret_cast<ID3D12Resource*>(0xDEADBEEFULL);
+        pCmdList5->RSSetShadingRateImage(mockImage);
+        TEST_ASSERT(cmdList.GetShadingRateImage() == mockImage, "RSSetShadingRateImage sets image pointer");
+        TEST_ASSERT(cmdList.GetShadingRateImageSetCount() == 1, "Shading rate image set count is 1");
+
+        // 5. Test Reset clears VRS state
+        cmdList.Reset(nullptr, nullptr);
+        TEST_ASSERT(cmdList.GetShadingRate() == D3D12_SHADING_RATE_1X1, "Reset restores shading rate to 1x1");
+        TEST_ASSERT(cmdList.GetShadingRateImage() == nullptr, "Reset clears shading rate image");
+        TEST_ASSERT(cmdList.GetShadingRateSetCount() == 0, "Reset clears shading rate call count");
+        TEST_ASSERT(cmdList.GetShadingRateImageSetCount() == 0, "Reset clears shading rate image call count");
+
+        pCmdList5->Release();
+        std::cout << "  [PASS] PrismX 3D12 ID3D12GraphicsCommandList5 & Options 20 VRS architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT System DMA Guard Policy (Class 202) & Hypervisor Shared Page (Class 197)
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::ntdll;
+        // 1. SystemHypervisorSharedPageInformation (Class 197)
+        SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION hypInfo{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(197, &hypInfo, sizeof(hypInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(197) returns Success");
+        TEST_ASSERT(hypInfo.HypervisorSharedUserVa == reinterpret_cast<void*>(0x7FFE1000ULL), "HypervisorSharedUserVa is mapped to 0x7FFE1000");
+        TEST_ASSERT(retLen == sizeof(hypInfo), "Return length matches SYSTEM_HYPERVISOR_SHARED_PAGE_INFORMATION");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(197, &hypInfo, sizeof(hypInfo) - 1, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(197) returns InfoLengthMismatch on undersized buffer");
+        TEST_ASSERT(retLen == sizeof(hypInfo), "Return length reports required size on mismatch");
+
+        // 2. SystemDmaGuardPolicyInformation (Class 202)
+        SYSTEM_DMA_GUARD_POLICY_INFORMATION dmaInfo{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(202, &dmaInfo, sizeof(dmaInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(202) returns Success");
+        TEST_ASSERT(dmaInfo.DmaGuardPolicyEnabled == 1, "DmaGuardPolicyEnabled is 1 (Kernel DMA protection active)");
+        TEST_ASSERT(retLen == sizeof(dmaInfo), "Return length matches SYSTEM_DMA_GUARD_POLICY_INFORMATION");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(202, &dmaInfo, 0, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(202) returns InfoLengthMismatch on 0 length");
+        TEST_ASSERT(retLen == sizeof(dmaInfo), "Return length reports required size on 0 length");
+
+        std::cout << "  [PASS] NT System DMA Guard (Class 202) & Hypervisor Shared Page (Class 197) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Synchronization Barrier (Initialize / Enter / Delete)
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::win32;
+
+        SYNCHRONIZATION_BARRIER barrier{};
+
+        // 1. Invalid parameter handling
+        BOOL bInit = InitializeSynchronizationBarrier(nullptr, 4, 1000);
+        TEST_ASSERT(bInit == FALSE, "InitializeSynchronizationBarrier fails on null pointer");
+        bInit = InitializeSynchronizationBarrier(&barrier, 0, 1000);
+        TEST_ASSERT(bInit == FALSE, "InitializeSynchronizationBarrier fails on 0 threads");
+
+        // 2. Initialize valid barrier for 4 threads
+        bInit = InitializeSynchronizationBarrier(&barrier, 4, 2000);
+        TEST_ASSERT(bInit == TRUE, "InitializeSynchronizationBarrier succeeds for 4 threads");
+
+        // 3. Multi-threaded test across 3 barrier phases
+        constexpr int NUM_THREADS = 4;
+        constexpr int NUM_ROUNDS = 3;
+        std::atomic<int> electedCounts[NUM_ROUNDS]{};
+        std::atomic<int> completedCounts[NUM_ROUNDS]{};
+        std::vector<std::thread> threads;
+
+        for (int t = 0; t < NUM_THREADS; ++t) {
+            threads.emplace_back([&barrier, &electedCounts, &completedCounts]() {
+                for (int r = 0; r < NUM_ROUNDS; ++r) {
+                    BOOL elected = EnterSynchronizationBarrier(&barrier, 0);
+                    if (elected) {
+                        electedCounts[r].fetch_add(1);
+                    }
+                    completedCounts[r].fetch_add(1);
+                }
+            });
+        }
+
+        for (auto& th : threads) {
+            th.join();
+        }
+
+        for (int r = 0; r < NUM_ROUNDS; ++r) {
+            TEST_ASSERT(completedCounts[r].load() == NUM_THREADS, "All threads passed round barrier");
+            TEST_ASSERT(electedCounts[r].load() == 1, "Exactly one thread elected per barrier cycle");
+        }
+
+        TEST_ASSERT(SovereignSyncManager::get().getTotalBarrierEnters() >= NUM_THREADS * NUM_ROUNDS, "Barrier enters recorded in sync manager");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalBarrierElections() >= NUM_ROUNDS, "Barrier elections recorded in sync manager");
+
+        // 4. Delete synchronization barrier
+        BOOL bDel = DeleteSynchronizationBarrier(&barrier);
+        TEST_ASSERT(bDel == TRUE, "DeleteSynchronizationBarrier succeeds");
+
+        // Re-entering deleted barrier should fail
+        BOOL bEnterDeleted = EnterSynchronizationBarrier(&barrier, 0);
+        TEST_ASSERT(bEnterDeleted == FALSE, "EnterSynchronizationBarrier returns FALSE on deleted barrier");
+
+        std::cout << "  [PASS] Win32 Extended Synchronization Barrier (Initialize / Enter / Delete) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt NIST SP 800-108 Counter Mode KDF Engine
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        // 1. Direct Sp800108KdfCtr::deriveKey verification
+        const std::vector<uint8_t> masterKey = {
+            0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+            0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+            0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+            0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+        };
+        const std::string labelStr = "PrismX-KDF-Label";
+        const std::string contextStr = "MicaNT-Sovereign-Context";
+        std::vector<uint8_t> label(labelStr.begin(), labelStr.end());
+        std::vector<uint8_t> context(contextStr.begin(), contextStr.end());
+
+        // Derive 32 bytes (single PRF block)
+        auto derived32 = Sp800108KdfCtr::deriveKey(masterKey, label, context, 32);
+        TEST_ASSERT(derived32.size() == 32, "deriveKey derives exactly 32 bytes");
+
+        // Derive 64 bytes (two PRF blocks to verify counter incrementation)
+        auto derived64 = Sp800108KdfCtr::deriveKey(masterKey, label, context, 64);
+        TEST_ASSERT(derived64.size() == 64, "deriveKey derives exactly 64 bytes across multi-blocks");
+        // Ensure block 2 is non-zero and distinct
+        bool allZero = true;
+        for (size_t i = 32; i < 64; ++i) {
+            if (derived64[i] != 0) { allZero = false; break; }
+        }
+        TEST_ASSERT(!allZero, "Second KDF block is populated");
+
+        // 2. BCrypt API Integration: BCRYPT_SP800108_CTR_HMAC_ALGORITHM provider
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SP800108_CTR_HMAC_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SP800_108_CTR_HMAC");
+
+        BCRYPT_KEY_HANDLE hKey = nullptr;
+        st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey succeeds for SP 800-108 key");
+
+        // Prepare BCryptBufferDesc parameter list with KDF_LABEL and KDF_CONTEXT
+        BCryptBuffer buffers[2]{};
+        buffers[0].BufferType = KDF_LABEL;
+        buffers[0].cbBuffer = static_cast<uint32_t>(label.size());
+        buffers[0].pvBuffer = label.data();
+
+        buffers[1].BufferType = KDF_CONTEXT;
+        buffers[1].cbBuffer = static_cast<uint32_t>(context.size());
+        buffers[1].pvBuffer = context.data();
+
+        BCryptBufferDesc paramList{};
+        paramList.ulVersion = 1;
+        paramList.cBuffers = 2;
+        paramList.pBuffers = buffers;
+
+        uint8_t bcryptDerived[32]{};
+        ULONG resultLen = 0;
+        st = BCryptKeyDerivation(hKey, &paramList, bcryptDerived, sizeof(bcryptDerived), &resultLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptKeyDerivation succeeds with SP 800-108 parameters");
+        TEST_ASSERT(resultLen == 32, "Derived length is 32 bytes");
+        TEST_ASSERT(std::memcmp(bcryptDerived, derived32.data(), 32) == 0, "BCryptKeyDerivation produces bit-exact match with Sp800108KdfCtr");
+
+        // Clean up
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        std::cout << "  [PASS] BCrypt NIST SP 800-108 Counter Mode KDF Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 229] CommandList5/Options 20, DMA Guard/Hypervisor, SyncBarrier & SP 800-108 KDF Summary:\n"
+              << "    Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList5 & Options 20 (RSSetShadingRate, RSSetShadingRateImage, SampleLocationsTier2) OK\n"
+              << "    Pillar 2: NT System DMA Guard Policy (Class 202) & Hypervisor Shared Page (Class 197) OK\n"
+              << "    Pillar 3: Win32 Extended Synchronization Barrier (Initialize / Enter / Delete multi-thread election) OK\n"
+              << "    Pillar 4: BCrypt NIST SP 800-108 Counter Mode KDF (Multi-block HMAC-SHA256, KDF_LABEL, KDF_CONTEXT) OK\n";
+
+    std::cout << "[TEST] Suite 445: Horizon 229 - CommandList5/Options 20, DMA Guard/Hypervisor, SyncBarrier & SP 800-108 KDF PASSED." << std::endl;
+}

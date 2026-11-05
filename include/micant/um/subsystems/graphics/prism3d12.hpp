@@ -522,6 +522,9 @@ class ID3D12GraphicsCommandList;
 class ID3D12GraphicsCommandList1;
 class ID3D12GraphicsCommandList2;
 class ID3D12GraphicsCommandList3;
+class ID3D12GraphicsCommandList4;
+class ID3D12GraphicsCommandList5;
+class ID3D12GraphicsCommandList6;
 class ID3D12GraphicsCommandList10;
 class ID3D12ProtectedResourceSession;
 class ID3D12CommandQueue;
@@ -1106,10 +1109,40 @@ public:
     virtual void SetPipelineState1(ID3D12StateObject* pStateObject) = 0;
 };
 
+enum D3D12_SHADING_RATE : uint32_t {
+    D3D12_SHADING_RATE_1X1 = 0,
+    D3D12_SHADING_RATE_1X2 = 0x1,
+    D3D12_SHADING_RATE_2X1 = 0x4,
+    D3D12_SHADING_RATE_2X2 = 0x5,
+    D3D12_SHADING_RATE_2X4 = 0x6,
+    D3D12_SHADING_RATE_4X2 = 0x9,
+    D3D12_SHADING_RATE_4X4 = 0xa
+};
+
+enum D3D12_SHADING_RATE_COMBINER : uint32_t {
+    D3D12_SHADING_RATE_COMBINER_PASSTHROUGH = 0,
+    D3D12_SHADING_RATE_COMBINER_OVERRIDE    = 1,
+    D3D12_SHADING_RATE_COMBINER_MIN         = 2,
+    D3D12_SHADING_RATE_COMBINER_MAX         = 3,
+    D3D12_SHADING_RATE_COMBINER_SUM         = 4
+};
+
+static constexpr IID IID_ID3D12GraphicsCommandList5 = 
+    { 0x55050853, 0x2717, 0x41c5, { 0xbb, 0x92, 0x60, 0xac, 0xac, 0x86, 0x83, 0x65 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList5 = IID_ID3D12GraphicsCommandList5;
+
+class ID3D12GraphicsCommandList5 : public ID3D12GraphicsCommandList4 {
+public:
+    virtual void RSSetShadingRate(
+        D3D12_SHADING_RATE baseShadingRate,
+        const D3D12_SHADING_RATE_COMBINER* combiners) = 0;
+    virtual void RSSetShadingRateImage(ID3D12Resource* shadingRateImage) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList6 = 
     { 0xc3827890, 0xe548, 0x4cf6, { 0xbf, 0x5a, 0x4f, 0x97, 0x22, 0x3d, 0x1d, 0x28 } };
 
-class ID3D12GraphicsCommandList6 : public ID3D12GraphicsCommandList4 {
+class ID3D12GraphicsCommandList6 : public ID3D12GraphicsCommandList5 {
 public:
     virtual void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) = 0;
 };
@@ -2387,6 +2420,11 @@ private:
     ID3D12MetaCommand* m_pLastMetaCommand{ nullptr };
     std::vector<uint8_t> m_lastMetaCommandInitData;
     std::vector<uint8_t> m_lastMetaCommandExecData;
+    D3D12_SHADING_RATE m_shadingRate{ D3D12_SHADING_RATE_1X1 };
+    D3D12_SHADING_RATE_COMBINER m_shadingRateCombiners[2]{ D3D12_SHADING_RATE_COMBINER_PASSTHROUGH, D3D12_SHADING_RATE_COMBINER_PASSTHROUGH };
+    ID3D12Resource* m_pShadingRateImage{ nullptr };
+    uint32_t m_shadingRateSetCount{ 0 };
+    uint32_t m_shadingRateImageSetCount{ 0 };
 
 public:
     Prism3D12GraphicsCommandListImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* pAlloc)
@@ -2399,6 +2437,7 @@ public:
             riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList2 ||
             riid == IID_ID3D12GraphicsCommandList3 || riid == IID_ID3D12GraphicsCommandList4 ||
             riid == OFFICIAL_IID_ID3D12GraphicsCommandList4 ||
+            riid == IID_ID3D12GraphicsCommandList5 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList5 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -2444,6 +2483,12 @@ public:
         m_pActiveRaytracingStateObject = nullptr;
         m_hasProgram = false;
         m_pProtectedSession = nullptr;
+        m_shadingRate = D3D12_SHADING_RATE_1X1;
+        m_shadingRateCombiners[0] = D3D12_SHADING_RATE_COMBINER_PASSTHROUGH;
+        m_shadingRateCombiners[1] = D3D12_SHADING_RATE_COMBINER_PASSTHROUGH;
+        m_pShadingRateImage = nullptr;
+        m_shadingRateSetCount = 0;
+        m_shadingRateImageSetCount = 0;
         m_isOpen = true;
         return 0;
     }
@@ -2705,6 +2750,28 @@ public:
     void SetViewInstanceMask(uint32_t Mask) override {
         m_viewInstanceMask = Mask;
     }
+
+    void RSSetShadingRate(D3D12_SHADING_RATE baseShadingRate, const D3D12_SHADING_RATE_COMBINER* combiners) override {
+        if (!m_isOpen) return;
+        m_shadingRate = baseShadingRate;
+        if (combiners) {
+            m_shadingRateCombiners[0] = combiners[0];
+            m_shadingRateCombiners[1] = combiners[1];
+        }
+        m_shadingRateSetCount++;
+    }
+
+    void RSSetShadingRateImage(ID3D12Resource* shadingRateImage) override {
+        if (!m_isOpen) return;
+        m_pShadingRateImage = shadingRateImage;
+        m_shadingRateImageSetCount++;
+    }
+
+    [[nodiscard]] D3D12_SHADING_RATE GetShadingRate() const noexcept { return m_shadingRate; }
+    [[nodiscard]] const D3D12_SHADING_RATE_COMBINER* GetShadingRateCombiners() const noexcept { return m_shadingRateCombiners; }
+    [[nodiscard]] ID3D12Resource* GetShadingRateImage() const noexcept { return m_pShadingRateImage; }
+    [[nodiscard]] uint32_t GetShadingRateSetCount() const noexcept { return m_shadingRateSetCount; }
+    [[nodiscard]] uint32_t GetShadingRateImageSetCount() const noexcept { return m_shadingRateImageSetCount; }
 
     [[nodiscard]] uint32_t GetViewInstanceMask() const noexcept { return m_viewInstanceMask; }
 
