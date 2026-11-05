@@ -517,6 +517,7 @@ class ID3D12DescriptorHeap;
 class ID3D12CommandList;
 class ID3D12GraphicsCommandList;
 class ID3D12GraphicsCommandList1;
+class ID3D12GraphicsCommandList2;
 class ID3D12GraphicsCommandList10;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
@@ -700,6 +701,8 @@ enum D3D12_SET_WORK_GRAPH_FLAGS {
     D3D12_SET_WORK_GRAPH_FLAG_NONE = 0,
     D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE = 1
 };
+
+using D3D12_GPU_VIRTUAL_ADDRESS = uint64_t;
 
 struct D3D12_GPU_VIRTUAL_ADDRESS_RANGE {
     uint64_t StartAddress{0};
@@ -974,6 +977,28 @@ public:
     virtual void SetViewInstanceMask(uint32_t Mask) = 0;
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList2 = 
+    { 0x383ee830, 0x6768, 0x4d56, { 0x96, 0x37, 0x7a, 0xb1, 0x25, 0xf7, 0x70, 0x57 } };
+
+struct D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+    D3D12_GPU_VIRTUAL_ADDRESS Dest{0};
+    uint32_t Value{0};
+};
+
+enum D3D12_WRITEBUFFERIMMEDIATE_MODE : uint32_t {
+    D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT = 0,
+    D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN = 1,
+    D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT = 2
+};
+
+class ID3D12GraphicsCommandList2 : public ID3D12GraphicsCommandList1 {
+public:
+    virtual void WriteBufferImmediate(
+        uint32_t Count,
+        const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER* pParams,
+        const D3D12_WRITEBUFFERIMMEDIATE_MODE* pModes) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList4 = 
     { 0x87e0e368, 0xe32b, 0x4d0b, { 0xbe, 0x4b, 0x4b, 0x78, 0xb8, 0x63, 0x00, 0xaf } };
 
@@ -987,7 +1012,7 @@ struct D3D12_DISPATCH_RAYS_DESC {
     uint32_t Depth{0};
 };
 
-class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList1 {
+class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList2 {
 public:
     virtual void DispatchRays(const D3D12_DISPATCH_RAYS_DESC* pDesc) = 0;
     virtual void BeginRenderPass(
@@ -2246,7 +2271,7 @@ public:
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
-            riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList4 ||
+            riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList2 || riid == IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -2516,6 +2541,34 @@ public:
     }
 
     [[nodiscard]] uint32_t GetViewInstanceMask() const noexcept { return m_viewInstanceMask; }
+
+    struct WriteBufferImmediateRecord {
+        D3D12_GPU_VIRTUAL_ADDRESS Dest{0};
+        uint32_t Value{0};
+        D3D12_WRITEBUFFERIMMEDIATE_MODE Mode{D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT};
+    };
+    uint32_t m_writeBufferImmediateCount{ 0 };
+    std::vector<WriteBufferImmediateRecord> m_recordedWriteBufferImmediates;
+
+    void WriteBufferImmediate(
+        uint32_t Count,
+        const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER* pParams,
+        const D3D12_WRITEBUFFERIMMEDIATE_MODE* pModes) override {
+        if (!m_isOpen) return;
+        m_writeBufferImmediateCount += Count;
+        if (pParams && Count > 0) {
+            for (uint32_t i = 0; i < Count; ++i) {
+                WriteBufferImmediateRecord rec{};
+                rec.Dest = pParams[i].Dest;
+                rec.Value = pParams[i].Value;
+                rec.Mode = pModes ? pModes[i] : D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT;
+                m_recordedWriteBufferImmediates.push_back(rec);
+            }
+        }
+    }
+
+    [[nodiscard]] uint32_t GetWriteBufferImmediateCount() const noexcept { return m_writeBufferImmediateCount; }
+    [[nodiscard]] const std::vector<WriteBufferImmediateRecord>& GetRecordedWriteBufferImmediates() const noexcept { return m_recordedWriteBufferImmediates; }
 
     bool m_inRenderPass{ false };
     uint32_t m_renderPassNumTargets{ 0 };

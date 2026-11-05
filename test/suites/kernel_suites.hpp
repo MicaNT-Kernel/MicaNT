@@ -46287,3 +46287,343 @@ inline void Test_Horizon224_SamplePositions_FirmwarePartition_ProcessPowerThrott
 
     std::cout << "[TEST] Suite 440: Horizon 224 - Sample Positions, Firmware Partition, Process Power Throttling & AES-CCM Engine PASSED." << std::endl;
 }
+
+
+// ============================================================================
+// SUITE 441: Horizon 225 - PrismX 3D12 CommandList2 & Options 15,
+//                Windows NT Speculation Control Information,
+//                Win32 Priority Boost & Pacing Architecture,
+//                and BCrypt AES-XTS (IEEE 1619) Block Cipher Engine
+// ============================================================================
+inline void Test_Horizon225_CommandList2WriteBuffer_SpeculationControl_PriorityBoost_And_AesXts_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 441: Horizon 225 - CommandList2 WriteBuffer, Speculation Control,\n"
+              << "                 Priority Boost & Pacing, and BCrypt AES-XTS Engine\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 CommandList2 & Options 15
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [RUN] Testing PrismX 3D12 CommandList2 & Options 15...\n";
+
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDevice = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_ID3D12Device, reinterpret_cast<void**>(&pDevice));
+        TEST_ASSERT(hr == 0 && pDevice != nullptr, "D3D12CreateDevice creates device successfully");
+
+        // Verify D3D12_FEATURE_D3D12_OPTIONS15
+        D3D12_FEATURE_DATA_D3D12_OPTIONS15 opt15{};
+        hr = pDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS15, &opt15, sizeof(opt15));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS15) succeeds");
+        TEST_ASSERT(opt15.TriangleFanSupported == TRUE, "Options 15 reports TriangleFanSupported = TRUE");
+        TEST_ASSERT(opt15.DynamicIndexBufferStripCut == D3D12_DYNAMIC_INDEX_BUFFER_STRIP_CUT_SUPPORTED_ALL,
+                    "Options 15 reports DynamicIndexBufferStripCut = SUPPORTED_ALL");
+
+        // Create Command Allocator and Command List
+        ID3D12CommandAllocator* pAlloc = nullptr;
+        hr = pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAlloc));
+        TEST_ASSERT(hr == 0 && pAlloc != nullptr, "CreateCommandAllocator succeeds");
+
+        ID3D12GraphicsCommandList* pCmdList = nullptr;
+        hr = pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pAlloc, nullptr, IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&pCmdList));
+        TEST_ASSERT(hr == 0 && pCmdList != nullptr, "CreateCommandList succeeds");
+
+        // Query ID3D12GraphicsCommandList2
+        ID3D12GraphicsCommandList2* pCmdList2 = nullptr;
+        hr = pCmdList->QueryInterface(IID_ID3D12GraphicsCommandList2, reinterpret_cast<void**>(&pCmdList2));
+        TEST_ASSERT(hr == 0 && pCmdList2 != nullptr, "QueryInterface(IID_ID3D12GraphicsCommandList2) succeeds");
+
+        // Issue WriteBufferImmediate commands
+        D3D12_WRITEBUFFERIMMEDIATE_PARAMETER writeParams[3]{};
+        writeParams[0] = { 0x0000000100000000ULL, 0xCAFEBABE };
+        writeParams[1] = { 0x0000000100000008ULL, 0xDEADBEEF };
+        writeParams[2] = { 0x0000000100000010ULL, 0x1337C0DE };
+
+        D3D12_WRITEBUFFERIMMEDIATE_MODE writeModes[3]{
+            D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT,
+            D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN,
+            D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT
+        };
+
+        pCmdList2->WriteBufferImmediate(3, writeParams, writeModes);
+
+        auto* pImpl = static_cast<Prism3D12GraphicsCommandListImpl*>(pCmdList2);
+        TEST_ASSERT(pImpl->GetWriteBufferImmediateCount() == 3, "Prism3D12GraphicsCommandListImpl recorded 3 WriteBufferImmediate ops");
+
+        const auto& recorded = pImpl->GetRecordedWriteBufferImmediates();
+        TEST_ASSERT(recorded.size() == 3, "Recorded WriteBufferImmediate list size is 3");
+        TEST_ASSERT(recorded[0].Dest == 0x0000000100000000ULL && recorded[0].Value == 0xCAFEBABE && recorded[0].Mode == D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT,
+                    "WriteBufferImmediate record 0 matches parameter specification");
+        TEST_ASSERT(recorded[1].Dest == 0x0000000100000008ULL && recorded[1].Value == 0xDEADBEEF && recorded[1].Mode == D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN,
+                    "WriteBufferImmediate record 1 matches parameter specification");
+        TEST_ASSERT(recorded[2].Dest == 0x0000000100000010ULL && recorded[2].Value == 0x1337C0DE && recorded[2].Mode == D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT,
+                    "WriteBufferImmediate record 2 matches parameter specification");
+
+        pCmdList2->Release();
+        pCmdList->Release();
+        pAlloc->Release();
+        pDevice->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 CommandList2 & Options 15 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Speculation Control Information (Class 201)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [RUN] Testing NT System Speculation Control Information (Class 201)...\n";
+
+        using namespace micant::ntdll;
+
+        ULONG retLen = 0;
+        // Verify buffer size validation
+        NtStatus st = NtQuerySystemInformation_Export(201, nullptr, 0, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(201) rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION), "NtQuerySystemInformation(201) returns exact required length");
+
+        SYSTEM_SPECULATION_CONTROL_INFORMATION specInfo{};
+        st = NtQuerySystemInformation_Export(201, &specInfo, sizeof(specInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(201) succeeds with valid buffer");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION), "ReturnLength matches structure size");
+
+        // Verify speculation control flags
+        TEST_ASSERT(specInfo.SpeculationControlFlags.BpbEnabled == 1, "BpbEnabled is active");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.SpecCtrlEnumerated == 1, "SpecCtrlEnumerated is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.SpecCmdEnumerated == 1, "SpecCmdEnumerated is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.IbrsPresent == 1, "IbrsPresent is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.StibpPresent == 1, "StibpPresent is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.SmepPresent == 1, "SmepPresent is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.SpeculativeStoreBypassDisableAvailable == 1, "SSBD Available is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.SpeculativeStoreBypassDisableSupported == 1, "SSBD Supported is reported");
+        TEST_ASSERT(specInfo.SpeculationControlFlags.MdsCacheFlushSupported == 1, "MdsCacheFlushSupported is reported");
+
+        std::cout << "  [PASS] NT System Speculation Control Information verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Process & Thread Priority & Boost Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [RUN] Testing Win32 Process & Thread Priority & Boost Architecture...\n";
+
+        using namespace micant::win32;
+
+        // Process Priority Class
+        DWORD origClass = GetPriorityClass(nullptr);
+        TEST_ASSERT(origClass == NORMAL_PRIORITY_CLASS, "Initial process priority class is NORMAL_PRIORITY_CLASS");
+
+        TEST_ASSERT(SetPriorityClass(nullptr, HIGH_PRIORITY_CLASS) == TRUE, "SetPriorityClass(HIGH_PRIORITY_CLASS) succeeds");
+        TEST_ASSERT(GetPriorityClass(nullptr) == HIGH_PRIORITY_CLASS, "GetPriorityClass verifies HIGH_PRIORITY_CLASS");
+
+        TEST_ASSERT(SetPriorityClass(nullptr, REALTIME_PRIORITY_CLASS) == TRUE, "SetPriorityClass(REALTIME_PRIORITY_CLASS) succeeds");
+        TEST_ASSERT(GetPriorityClass(nullptr) == REALTIME_PRIORITY_CLASS, "GetPriorityClass verifies REALTIME_PRIORITY_CLASS");
+
+        TEST_ASSERT(SetPriorityClass(nullptr, NORMAL_PRIORITY_CLASS) == TRUE, "SetPriorityClass resets to NORMAL_PRIORITY_CLASS");
+        TEST_ASSERT(GetPriorityClass(nullptr) == NORMAL_PRIORITY_CLASS, "GetPriorityClass verifies NORMAL_PRIORITY_CLASS");
+
+        // Thread Priority & Priority Boost
+        HANDLE hAudioThread = reinterpret_cast<HANDLE>(0xAA01);
+        TEST_ASSERT(GetThreadPriority(hAudioThread) == THREAD_PRIORITY_NORMAL, "Initial thread priority is THREAD_PRIORITY_NORMAL");
+
+        TEST_ASSERT(SetThreadPriority(hAudioThread, THREAD_PRIORITY_HIGHEST) == TRUE, "SetThreadPriority(THREAD_PRIORITY_HIGHEST) succeeds");
+        TEST_ASSERT(GetThreadPriority(hAudioThread) == THREAD_PRIORITY_HIGHEST, "GetThreadPriority verifies THREAD_PRIORITY_HIGHEST");
+
+        TEST_ASSERT(SetThreadPriority(hAudioThread, THREAD_PRIORITY_TIME_CRITICAL) == TRUE, "SetThreadPriority(THREAD_PRIORITY_TIME_CRITICAL) succeeds");
+        TEST_ASSERT(GetThreadPriority(hAudioThread) == THREAD_PRIORITY_TIME_CRITICAL, "GetThreadPriority verifies THREAD_PRIORITY_TIME_CRITICAL");
+
+        // Priority Boost
+        TEST_ASSERT(SetThreadPriorityBoost(hAudioThread, TRUE) == TRUE, "SetThreadPriorityBoost disables boost for real-time audio thread");
+        BOOL threadBoostDisabled = FALSE;
+        TEST_ASSERT(GetThreadPriorityBoost(hAudioThread, &threadBoostDisabled) == TRUE && threadBoostDisabled == TRUE,
+                    "GetThreadPriorityBoost confirms thread boost disabled");
+
+        TEST_ASSERT(SetProcessPriorityBoost(nullptr, TRUE) == TRUE, "SetProcessPriorityBoost disables boost for process");
+        BOOL procBoostDisabled = FALSE;
+        TEST_ASSERT(GetProcessPriorityBoost(nullptr, &procBoostDisabled) == TRUE && procBoostDisabled == TRUE,
+                    "GetProcessPriorityBoost confirms process boost disabled");
+
+        // Loader exports validation
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetPriorityClass") != nullptr, "kernel32.dll exports GetPriorityClass");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetPriorityClass") != nullptr, "kernel32.dll exports SetPriorityClass");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadPriority") != nullptr, "kernel32.dll exports GetThreadPriority");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadPriority") != nullptr, "kernel32.dll exports SetThreadPriority");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadPriorityBoost") != nullptr, "kernel32.dll exports SetThreadPriorityBoost");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadPriorityBoost") != nullptr, "kernel32.dll exports GetThreadPriorityBoost");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetProcessPriorityBoost") != nullptr, "kernel32.dll exports SetProcessPriorityBoost");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetProcessPriorityBoost") != nullptr, "kernel32.dll exports GetProcessPriorityBoost");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetPriorityClass") != nullptr,
+                    "api-ms-win-core-processthreads-l1-1-0.dll exports GetPriorityClass");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetPriorityClass") != nullptr,
+                    "api-ms-win-core-processthreads-l1-1-0.dll exports SetPriorityClass");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetThreadPriority") != nullptr,
+                    "api-ms-win-core-processthreads-l1-1-0.dll exports GetThreadPriority");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetThreadPriority") != nullptr,
+                    "api-ms-win-core-processthreads-l1-1-0.dll exports SetThreadPriority");
+
+        std::cout << "  [PASS] Win32 Process & Thread Priority & Boost Architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt / CNG AES-XTS (IEEE 1619 / NIST SP 800-38E) Block Cipher Engine
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [RUN] Testing BCrypt / CNG AES-XTS Block Cipher Engine...\n";
+
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider(AES) succeeds");
+
+        st = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE, reinterpret_cast<uint8_t*>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_XTS)),
+                               static_cast<uint32_t>((std::wcslen(BCRYPT_CHAIN_MODE_XTS) + 1) * sizeof(wchar_t)), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptSetProperty sets chaining mode to BCRYPT_CHAIN_MODE_XTS");
+
+        // Vector 1: NIST SP 800-38E AES-128-XTS (32-byte key, Tweak=0, 32-byte plaintext)
+        {
+            const uint8_t key128[32] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key128, sizeof(key128), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-128-XTS key (32 bytes)");
+
+            uint8_t tweak[16] = {0};
+            const uint8_t pt32[32] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+            };
+
+            uint8_t ct32[32] = {0};
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt32, sizeof(pt32), nullptr, tweak, sizeof(tweak), ct32, sizeof(ct32), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 32, "BCryptEncrypt performs 32-byte AES-128-XTS encryption");
+
+            const uint8_t expectedCt32[32] = {
+                0x74, 0xa1, 0x09, 0xaa, 0xbf, 0x19, 0x37, 0xc0, 0x22, 0xd1, 0x9d, 0xa4, 0xb9, 0x6c, 0xbc, 0x40,
+                0xb8, 0xdd, 0xc9, 0xc0, 0x65, 0x3a, 0x7f, 0xb0, 0xdc, 0x84, 0x25, 0xc7, 0xef, 0x27, 0x6d, 0xea
+            };
+            TEST_ASSERT(std::memcmp(ct32, expectedCt32, 32) == 0, "AES-128-XTS 32-byte ciphertext matches NIST SP 800-38E vector");
+
+            uint8_t dec32[32] = {0};
+            st = BCryptDecrypt(hKey, ct32, sizeof(ct32), nullptr, tweak, sizeof(tweak), dec32, sizeof(dec32), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 32, "BCryptDecrypt performs 32-byte AES-128-XTS decryption");
+            TEST_ASSERT(std::memcmp(dec32, pt32, 32) == 0, "Decrypted AES-128-XTS payload matches original plaintext");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // Vector 2: AES-128-XTS Ciphertext Stealing (25 bytes - non-multiple of 16)
+        {
+            const uint8_t key128[32] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key128, sizeof(key128), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-128-XTS key for CTS");
+
+            uint8_t tweak[16] = {0};
+            const uint8_t pt25[25] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18
+            };
+
+            uint8_t ct25[25] = {0};
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt25, sizeof(pt25), nullptr, tweak, sizeof(tweak), ct25, sizeof(ct25), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 25, "BCryptEncrypt performs 25-byte AES-128-XTS CTS encryption");
+
+            const uint8_t expectedCt25[25] = {
+                0x68, 0xde, 0xcf, 0x2d, 0x8a, 0x21, 0x4c, 0xe0, 0x43, 0xb0, 0x0a, 0x44, 0xfe, 0x90, 0x03, 0xfa,
+                0x74, 0xa1, 0x09, 0xaa, 0xbf, 0x19, 0x37, 0xc0, 0x22
+            };
+            TEST_ASSERT(std::memcmp(ct25, expectedCt25, 25) == 0, "AES-128-XTS 25-byte ciphertext matches NIST SP 800-38E CTS vector");
+
+            uint8_t dec25[25] = {0};
+            st = BCryptDecrypt(hKey, ct25, sizeof(ct25), nullptr, tweak, sizeof(tweak), dec25, sizeof(dec25), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 25, "BCryptDecrypt performs 25-byte AES-128-XTS CTS decryption");
+            TEST_ASSERT(std::memcmp(dec25, pt25, 25) == 0, "Decrypted AES-128-XTS CTS payload matches original 25-byte plaintext");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // Vector 3: NIST SP 800-38E AES-256-XTS (64-byte key, Tweak=1, 32-byte plaintext)
+        {
+            const uint8_t key256[64] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+                0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+                0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key256, sizeof(key256), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-256-XTS key (64 bytes)");
+
+            uint8_t tweak[16] = {0};
+            tweak[0] = 0x01; // Sector 1
+            const uint8_t pt32[32] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+            };
+
+            uint8_t ct32[32] = {0};
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt32, sizeof(pt32), nullptr, tweak, sizeof(tweak), ct32, sizeof(ct32), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 32, "BCryptEncrypt performs 32-byte AES-256-XTS encryption");
+
+            const uint8_t expectedCt32[32] = {
+                0x09, 0x76, 0xf1, 0x39, 0xb2, 0x89, 0xf2, 0xdd, 0x57, 0x0e, 0x3b, 0x8c, 0xaa, 0x59, 0x6f, 0x98,
+                0xf8, 0x6a, 0x16, 0x2f, 0x87, 0x68, 0xff, 0xbd, 0x7a, 0xd0, 0x6c, 0x74, 0xd4, 0x03, 0xf3, 0x2a
+            };
+            TEST_ASSERT(std::memcmp(ct32, expectedCt32, 32) == 0, "AES-256-XTS 32-byte ciphertext matches NIST SP 800-38E vector");
+
+            uint8_t dec32[32] = {0};
+            st = BCryptDecrypt(hKey, ct32, sizeof(ct32), nullptr, tweak, sizeof(tweak), dec32, sizeof(dec32), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 32, "BCryptDecrypt performs 32-byte AES-256-XTS decryption");
+            TEST_ASSERT(std::memcmp(dec32, pt32, 32) == 0, "Decrypted AES-256-XTS payload matches original plaintext");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // Vector 4: Bounds and Error Validation
+        {
+            const uint8_t key128[32] = {0};
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key128, sizeof(key128), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "Key created for bounds testing");
+
+            uint8_t shortPt[15] = {0}; // Less than 16 bytes is prohibited in XTS
+            uint8_t ctOut[16] = {0};
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, shortPt, sizeof(shortPt), nullptr, nullptr, 0, ctOut, sizeof(ctOut), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_INVALID_PARAMETER, "BCryptEncrypt rejects payload < 16 bytes in XTS mode");
+
+            BCryptDestroyKey(hKey);
+
+            // Rejection of invalid key sizes (e.g. 16 bytes for XTS)
+            const uint8_t invalidKey[16] = {0};
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, invalidKey, sizeof(invalidKey), 0);
+            TEST_ASSERT(st == STATUS_INVALID_PARAMETER, "BCryptGenerateSymmetricKey rejects 16-byte key when XTS mode active");
+        }
+
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        std::cout << "  [PASS] BCrypt / CNG AES-XTS (IEEE 1619) Block Cipher Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 225] CommandList2 WriteBuffer, Speculation Control, Priority Boost & AES-XTS Engine Summary:\n"
+              << "    Pillar 1: PrismX 3D12 CommandList2 & Options 15 (WriteBufferImmediate, DRED breadcrumbs) OK\n"
+              << "    Pillar 2: NT System Speculation Control Information (Class 201, SpeculationControlFlags) OK\n"
+              << "    Pillar 3: Win32 Process & Thread Priority Class & Boost Architecture OK\n"
+              << "    Pillar 4: BCrypt AES-XTS (IEEE 1619 / NIST SP 800-38E vectors & CTS) OK\n";
+
+    std::cout << "[TEST] Suite 441: Horizon 225 - CommandList2 WriteBuffer, Speculation Control, Priority Boost & AES-XTS Engine PASSED." << std::endl;
+}

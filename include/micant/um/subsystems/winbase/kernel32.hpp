@@ -2931,10 +2931,12 @@ private:
     std::mutex m_mutex;
     DWORD_PTR m_processAffinityMask{0xFFFF};
     BOOL m_processPriorityBoostDisabled{FALSE};
+    DWORD m_processPriorityClass{0x00000020}; // NORMAL_PRIORITY_CLASS
 
     struct ThreadPacingRecord {
         DWORD_PTR affinityMask{0xFFFF};
         BOOL priorityBoostDisabled{FALSE};
+        int priority{0}; // THREAD_PRIORITY_NORMAL
         PROCESSOR_NUMBER idealProcessor{0, 0, 0};
         THREAD_POWER_THROTTLING_STATE powerThrottling{1, 1, 0};
         ULONG absoluteCpuPriority{0};
@@ -2996,6 +2998,32 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         *pDisablePriorityBoost = m_processPriorityBoostDisabled;
         return TRUE;
+    }
+
+    BOOL setThreadPriority(HANDLE hThread, int nPriority) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_threads[hThread].priority = nPriority;
+        return TRUE;
+    }
+
+    int getThreadPriority(HANDLE hThread) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_threads.find(hThread);
+        if (it != m_threads.end()) {
+            return it->second.priority;
+        }
+        return 0; // THREAD_PRIORITY_NORMAL
+    }
+
+    BOOL setPriorityClass(HANDLE /*hProcess*/, DWORD dwPriorityClass) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_processPriorityClass = dwPriorityClass;
+        return TRUE;
+    }
+
+    DWORD getPriorityClass(HANDLE /*hProcess*/) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_processPriorityClass;
     }
 
     BOOL setThreadIdealProcessorEx(HANDLE hThread, PPROCESSOR_NUMBER lpIdealProcessor, PPROCESSOR_NUMBER lpPreviousIdealProcessor) noexcept {
@@ -3099,6 +3127,41 @@ inline BOOL WINAPI SetProcessPriorityBoost(HANDLE hProcess, BOOL bDisablePriorit
 
 inline BOOL WINAPI GetProcessPriorityBoost(HANDLE hProcess, PBOOL pDisablePriorityBoost) noexcept {
     return SovereignThreadPacingManager::get().getProcessPriorityBoost(hProcess, pDisablePriorityBoost);
+}
+
+// Process Priority Classes
+inline constexpr DWORD IDLE_PRIORITY_CLASS         = 0x00000040;
+inline constexpr DWORD BELOW_NORMAL_PRIORITY_CLASS = 0x00004000;
+inline constexpr DWORD NORMAL_PRIORITY_CLASS       = 0x00000020;
+inline constexpr DWORD ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000;
+inline constexpr DWORD HIGH_PRIORITY_CLASS         = 0x00000080;
+inline constexpr DWORD REALTIME_PRIORITY_CLASS     = 0x00000100;
+
+// Thread Priority Levels
+inline constexpr int THREAD_PRIORITY_IDLE          = -15;
+inline constexpr int THREAD_PRIORITY_LOWEST        = -2;
+inline constexpr int THREAD_PRIORITY_BELOW_NORMAL  = -1;
+inline constexpr int THREAD_PRIORITY_NORMAL        = 0;
+inline constexpr int THREAD_PRIORITY_ABOVE_NORMAL  = 1;
+inline constexpr int THREAD_PRIORITY_HIGHEST       = 2;
+inline constexpr int THREAD_PRIORITY_TIME_CRITICAL = 15;
+inline constexpr int THREAD_MODE_BACKGROUND_BEGIN  = 0x00010000;
+inline constexpr int THREAD_MODE_BACKGROUND_END    = 0x00020000;
+
+inline int WINAPI GetThreadPriority(HANDLE hThread) noexcept {
+    return SovereignThreadPacingManager::get().getThreadPriority(hThread);
+}
+
+inline BOOL WINAPI SetThreadPriority(HANDLE hThread, int nPriority) noexcept {
+    return SovereignThreadPacingManager::get().setThreadPriority(hThread, nPriority);
+}
+
+inline DWORD WINAPI GetPriorityClass(HANDLE hProcess) noexcept {
+    return SovereignThreadPacingManager::get().getPriorityClass(hProcess);
+}
+
+inline BOOL WINAPI SetPriorityClass(HANDLE hProcess, DWORD dwPriorityClass) noexcept {
+    return SovereignThreadPacingManager::get().setPriorityClass(hProcess, dwPriorityClass);
 }
 
 inline BOOL WINAPI SetThreadIdealProcessorEx(HANDLE hThread, PPROCESSOR_NUMBER lpIdealProcessor, PPROCESSOR_NUMBER lpPreviousIdealProcessor) noexcept {
@@ -7452,9 +7515,7 @@ inline BOOL WINAPI IsBadStringPtrA([[maybe_unused]] LPCSTR lpsz, [[maybe_unused]
     return FALSE; // Sovereign memory is valid
 }
 
-inline BOOL WINAPI SetPriorityClass([[maybe_unused]] HANDLE hProcess, [[maybe_unused]] DWORD dwPriorityClass) noexcept {
-    return TRUE;
-}
+// SetPriorityClass is implemented above in SovereignThreadPacingManager
 
 
 inline HANDLE WINAPI FindFirstVolumeW(LPWSTR lpszVolumeName, DWORD cchBufferLength) noexcept {
@@ -9385,8 +9446,7 @@ inline BOOL GlobalFindAtomW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* 
 inline BOOL WritePrivateProfileStringW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* FindNextFileA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
 inline BOOL GlobalDeleteAtom(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
-inline void* GetThreadPriority(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
-inline BOOL SetThreadPriority(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+// GetThreadPriority and SetThreadPriority are implemented above in SovereignThreadPacingManager
 inline BOOL SearchPathW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline BOOL VerifyVersionInfoW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
 inline BOOL HeapCreate(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
@@ -10250,6 +10310,9 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetDriveTypeW", reinterpret_cast<void*>(GetDriveTypeW));
     ldr.registerExport("kernel32.dll", "GetVolumeInformationW", reinterpret_cast<void*>(GetVolumeInformationW));
     ldr.registerExport("kernel32.dll", "SetPriorityClass", reinterpret_cast<void*>(SetPriorityClass));
+    ldr.registerExport("kernel32.dll", "GetPriorityClass", reinterpret_cast<void*>(GetPriorityClass));
+    ldr.registerExport("kernel32.dll", "SetThreadPriority", reinterpret_cast<void*>(SetThreadPriority));
+    ldr.registerExport("kernel32.dll", "GetThreadPriority", reinterpret_cast<void*>(GetThreadPriority));
     ldr.registerExport("kernel32.dll", "GetSystemDefaultLangID", reinterpret_cast<void*>(GetSystemDefaultLangID));
     ldr.registerExport("kernel32.dll", "GetUserDefaultLangID", reinterpret_cast<void*>(GetUserDefaultLangID));
     ldr.registerExport("kernel32.dll", "GetCompressedFileSizeW", reinterpret_cast<void*>(GetCompressedFileSizeW));
@@ -10661,6 +10724,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetProcessAffinityMask", reinterpret_cast<void*>(SetProcessAffinityMask));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadPriorityBoost", reinterpret_cast<void*>(SetThreadPriorityBoost));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetThreadPriorityBoost", reinterpret_cast<void*>(GetThreadPriorityBoost));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetPriorityClass", reinterpret_cast<void*>(SetPriorityClass));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetPriorityClass", reinterpret_cast<void*>(GetPriorityClass));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "SetThreadPriority", reinterpret_cast<void*>(SetThreadPriority));
+    ldr.registerExport("api-ms-win-core-processthreads-l1-1-0.dll", "GetThreadPriority", reinterpret_cast<void*>(GetThreadPriority));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetProcessPriorityBoost", reinterpret_cast<void*>(SetProcessPriorityBoost));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "GetProcessPriorityBoost", reinterpret_cast<void*>(GetProcessPriorityBoost));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-1.dll", "SetThreadIdealProcessorEx", reinterpret_cast<void*>(SetThreadIdealProcessorEx));

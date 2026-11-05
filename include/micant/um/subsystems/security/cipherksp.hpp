@@ -67,6 +67,7 @@ inline constexpr const wchar_t* BCRYPT_KEY_DATA_BLOB           = L"KeyDataBlob";
 inline constexpr const wchar_t* BCRYPT_OPAQUE_KEY_BLOB         = L"OpaqueKeyBlob";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_GCM          = L"ChainingModeGCM";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_CCM          = L"ChainingModeCCM";
+inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_XTS          = L"ChainingModeXTS";
 inline constexpr const wchar_t* BCRYPT_AUTH_TAG_LENGTH         = L"AuthTagLength";
 
 // Standard CNG Authenticated Mode Structs & Flags
@@ -1559,6 +1560,164 @@ public:
         return res;
     }
 
+    static void xtsMulAlpha(const uint8_t in[16], uint8_t out[16]) noexcept {
+        uint8_t carry = 0;
+        for (int i = 0; i < 16; ++i) {
+            uint8_t next_carry = (in[i] >> 7) & 1;
+            out[i] = static_cast<uint8_t>((in[i] << 1) | carry);
+            carry = next_carry;
+        }
+        if (carry) {
+            out[0] ^= 0x87;
+        }
+    }
+
+    static std::vector<uint8_t> encryptXts(
+        const Aes& aes1,
+        const Aes& aes2,
+        std::span<const uint8_t> plaintext,
+        std::span<const uint8_t> tweak
+    ) {
+        size_t totalBytes = plaintext.size();
+        if (totalBytes < 16) return {};
+
+        uint8_t t[16];
+        uint8_t tweakBlock[16] = {0};
+        if (!tweak.empty()) {
+            std::memcpy(tweakBlock, tweak.data(), std::min<size_t>(tweak.size(), 16));
+        }
+        aes2.encryptBlock(tweakBlock, t);
+
+        std::vector<uint8_t> ciphertext(totalBytes);
+        size_t m = totalBytes / 16;
+        size_t b = totalBytes % 16;
+
+        if (b == 0) {
+            for (size_t i = 0; i < m; ++i) {
+                uint8_t pp[16];
+                for (int k = 0; k < 16; ++k) pp[k] = plaintext[i * 16 + k] ^ t[k];
+                uint8_t cc[16];
+                aes1.encryptBlock(pp, cc);
+                for (int k = 0; k < 16; ++k) ciphertext[i * 16 + k] = cc[k] ^ t[k];
+                if (i + 1 < m) {
+                    uint8_t nextT[16];
+                    xtsMulAlpha(t, nextT);
+                    std::memcpy(t, nextT, 16);
+                }
+            }
+        } else {
+            for (size_t i = 0; i + 1 < m; ++i) {
+                uint8_t pp[16];
+                for (int k = 0; k < 16; ++k) pp[k] = plaintext[i * 16 + k] ^ t[k];
+                uint8_t cc[16];
+                aes1.encryptBlock(pp, cc);
+                for (int k = 0; k < 16; ++k) ciphertext[i * 16 + k] = cc[k] ^ t[k];
+                uint8_t nextT[16];
+                xtsMulAlpha(t, nextT);
+                std::memcpy(t, nextT, 16);
+            }
+
+            uint8_t tm_prev[16];
+            std::memcpy(tm_prev, t, 16);
+
+            uint8_t pp_m1[16];
+            for (int k = 0; k < 16; ++k) pp_m1[k] = plaintext[(m - 1) * 16 + k] ^ tm_prev[k];
+            uint8_t cc[16];
+            aes1.encryptBlock(pp_m1, cc);
+            for (int k = 0; k < 16; ++k) cc[k] ^= tm_prev[k];
+
+            for (size_t k = 0; k < b; ++k) {
+                ciphertext[m * 16 + k] = cc[k];
+            }
+
+            uint8_t tm[16];
+            xtsMulAlpha(tm_prev, tm);
+
+            uint8_t pp[16];
+            for (size_t k = 0; k < b; ++k) pp[k] = plaintext[m * 16 + k];
+            for (size_t k = b; k < 16; ++k) pp[k] = cc[k];
+
+            uint8_t pp_xor[16];
+            for (int k = 0; k < 16; ++k) pp_xor[k] = pp[k] ^ tm[k];
+            uint8_t cc_m1[16];
+            aes1.encryptBlock(pp_xor, cc_m1);
+            for (int k = 0; k < 16; ++k) ciphertext[(m - 1) * 16 + k] = cc_m1[k] ^ tm[k];
+        }
+        return ciphertext;
+    }
+
+    static std::vector<uint8_t> decryptXts(
+        const Aes& aes1,
+        const Aes& aes2,
+        std::span<const uint8_t> ciphertext,
+        std::span<const uint8_t> tweak
+    ) {
+        size_t totalBytes = ciphertext.size();
+        if (totalBytes < 16) return {};
+
+        uint8_t t[16];
+        uint8_t tweakBlock[16] = {0};
+        if (!tweak.empty()) {
+            std::memcpy(tweakBlock, tweak.data(), std::min<size_t>(tweak.size(), 16));
+        }
+        aes2.encryptBlock(tweakBlock, t);
+
+        std::vector<uint8_t> plaintext(totalBytes);
+        size_t m = totalBytes / 16;
+        size_t b = totalBytes % 16;
+
+        if (b == 0) {
+            for (size_t i = 0; i < m; ++i) {
+                uint8_t cc[16];
+                for (int k = 0; k < 16; ++k) cc[k] = ciphertext[i * 16 + k] ^ t[k];
+                uint8_t pp[16];
+                aes1.decryptBlock(cc, pp);
+                for (int k = 0; k < 16; ++k) plaintext[i * 16 + k] = pp[k] ^ t[k];
+                if (i + 1 < m) {
+                    uint8_t nextT[16];
+                    xtsMulAlpha(t, nextT);
+                    std::memcpy(t, nextT, 16);
+                }
+            }
+        } else {
+            for (size_t i = 0; i + 1 < m; ++i) {
+                uint8_t cc[16];
+                for (int k = 0; k < 16; ++k) cc[k] = ciphertext[i * 16 + k] ^ t[k];
+                uint8_t pp[16];
+                aes1.decryptBlock(cc, pp);
+                for (int k = 0; k < 16; ++k) plaintext[i * 16 + k] = pp[k] ^ t[k];
+                uint8_t nextT[16];
+                xtsMulAlpha(t, nextT);
+                std::memcpy(t, nextT, 16);
+            }
+
+            uint8_t tm_prev[16];
+            std::memcpy(tm_prev, t, 16);
+
+            uint8_t tm[16];
+            xtsMulAlpha(tm_prev, tm);
+
+            uint8_t cc_m1[16];
+            for (int k = 0; k < 16; ++k) cc_m1[k] = ciphertext[(m - 1) * 16 + k] ^ tm[k];
+            uint8_t pp[16];
+            aes1.decryptBlock(cc_m1, pp);
+            for (int k = 0; k < 16; ++k) pp[k] ^= tm[k];
+
+            for (size_t k = 0; k < b; ++k) plaintext[m * 16 + k] = pp[k];
+
+            uint8_t cc[16];
+            for (size_t k = 0; k < b; ++k) cc[k] = ciphertext[m * 16 + k];
+            for (size_t k = b; k < 16; ++k) cc[k] = pp[k];
+
+            uint8_t cc_xor[16];
+            for (int k = 0; k < 16; ++k) cc_xor[k] = cc[k] ^ tm_prev[k];
+            uint8_t pp_m1[16];
+            aes1.decryptBlock(cc_xor, pp_m1);
+            for (int k = 0; k < 16; ++k) plaintext[(m - 1) * 16 + k] = pp_m1[k] ^ tm_prev[k];
+        }
+        return plaintext;
+    }
+
 private:
     size_t nk_{4};
     size_t nr_{10};
@@ -1831,13 +1990,20 @@ public:
     std::vector<uint8_t> secret;
     std::wstring chainingMode{BCRYPT_CHAIN_MODE_CBC};
     std::unique_ptr<Aes> aesEngine;
+    std::unique_ptr<Aes> aesEngine2;
 
     CngKeyObject(CryptoAlgorithm alg, std::span<const uint8_t> keySecret, std::wstring_view mode)
         : algorithm(alg),
           secret(keySecret.begin(), keySecret.end()),
           chainingMode(mode) {
         if (algorithm == CryptoAlgorithm::Aes) {
-            aesEngine = std::make_unique<Aes>(secret);
+            if (chainingMode == BCRYPT_CHAIN_MODE_XTS) {
+                size_t half = secret.size() / 2;
+                aesEngine = std::make_unique<Aes>(std::span<const uint8_t>(secret.data(), half));
+                aesEngine2 = std::make_unique<Aes>(std::span<const uint8_t>(secret.data() + half, half));
+            } else {
+                aesEngine = std::make_unique<Aes>(secret);
+            }
         }
     }
 };
@@ -2195,6 +2361,18 @@ inline NTSTATUS BCryptSetProperty(
     if (keyObj) {
         if (std::wstring_view(pszProperty) == BCRYPT_CHAINING_MODE) {
             keyObj->chainingMode = reinterpret_cast<const wchar_t*>(pbInput);
+            if (keyObj->algorithm == CryptoAlgorithm::Aes) {
+                if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_XTS) {
+                    if (keyObj->secret.size() == 32 || keyObj->secret.size() == 64) {
+                        size_t half = keyObj->secret.size() / 2;
+                        keyObj->aesEngine = std::make_unique<Aes>(std::span<const uint8_t>(keyObj->secret.data(), half));
+                        keyObj->aesEngine2 = std::make_unique<Aes>(std::span<const uint8_t>(keyObj->secret.data() + half, half));
+                    }
+                } else {
+                    keyObj->aesEngine = std::make_unique<Aes>(keyObj->secret);
+                    keyObj->aesEngine2.reset();
+                }
+            }
             return STATUS_SUCCESS;
         }
     }
@@ -2220,8 +2398,14 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
         return STATUS_NOT_SUPPORTED;
     }
 
-    if (cbSecret != 16 && cbSecret != 24 && cbSecret != 32) {
-        return STATUS_INVALID_PARAMETER;
+    if (prov->chainingMode == BCRYPT_CHAIN_MODE_XTS) {
+        if (cbSecret != 32 && cbSecret != 64) {
+            return STATUS_INVALID_PARAMETER;
+        }
+    } else {
+        if (cbSecret != 16 && cbSecret != 24 && cbSecret != 32) {
+            return STATUS_INVALID_PARAMETER;
+        }
     }
 
     auto keyObj = std::make_shared<CngKeyObject>(
@@ -2288,6 +2472,28 @@ inline NTSTATUS BCryptEncrypt(
         if (!result.ciphertext.empty() && pbOutput) {
             std::memcpy(pbOutput, result.ciphertext.data(), result.ciphertext.size());
         }
+        return STATUS_SUCCESS;
+    }
+
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_XTS) {
+        if (!keyObj->aesEngine2 || cbInput < 16) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        *pcbResult = cbInput;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < cbInput) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        auto ct = Aes::encryptXts(
+            *keyObj->aesEngine,
+            *keyObj->aesEngine2,
+            std::span<const uint8_t>(pbInput, cbInput),
+            std::span<const uint8_t>(pbIV, cbIV)
+        );
+        if (ct.empty()) return STATUS_INVALID_PARAMETER;
+        std::memcpy(pbOutput, ct.data(), ct.size());
         return STATUS_SUCCESS;
     }
 
@@ -2377,6 +2583,28 @@ inline NTSTATUS BCryptDecrypt(
     auto keyObj = CipherKspEngine::get().getKey(hKey);
     if (!keyObj || !keyObj->aesEngine) {
         return STATUS_INVALID_HANDLE;
+    }
+
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_XTS) {
+        if (!keyObj->aesEngine2 || cbInput < 16) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        *pcbResult = cbInput;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < cbInput) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        auto pt = Aes::decryptXts(
+            *keyObj->aesEngine,
+            *keyObj->aesEngine2,
+            std::span<const uint8_t>(pbInput, cbInput),
+            std::span<const uint8_t>(pbIV, cbIV)
+        );
+        if (pt.empty()) return STATUS_INVALID_PARAMETER;
+        std::memcpy(pbOutput, pt.data(), pt.size());
+        return STATUS_SUCCESS;
     }
 
     if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_GCM) {

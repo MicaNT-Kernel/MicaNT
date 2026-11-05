@@ -1660,6 +1660,31 @@ struct SYSTEM_FIRMWARE_PARTITION_INFORMATION {
 };
 using PSYSTEM_FIRMWARE_PARTITION_INFORMATION = SYSTEM_FIRMWARE_PARTITION_INFORMATION*;
 
+struct SYSTEM_SPECULATION_CONTROL_INFORMATION {
+    union {
+        ULONG Flags;
+        struct {
+            ULONG BpbEnabled : 1;
+            ULONG BpbDisabledSystemPolicy : 1;
+            ULONG BpbDisabledNoHardwareSupport : 1;
+            ULONG SpecCtrlEnumerated : 1;
+            ULONG SpecCmdEnumerated : 1;
+            ULONG IbrsPresent : 1;
+            ULONG StibpPresent : 1;
+            ULONG SmepPresent : 1;
+            ULONG SpeculativeStoreBypassDisableAvailable : 1;
+            ULONG SpeculativeStoreBypassDisableSupported : 1;
+            ULONG SpeculativeStoreBypassDisabledSystemPolicy : 1;
+            ULONG SpeculativeStoreBypassDisabledNoHardwareSupport : 1;
+            ULONG BranchLapDisabledSystemPolicy : 1;
+            ULONG BranchLapDisabledNoHardwareSupport : 1;
+            ULONG MdsCacheFlushSupported : 1;
+            ULONG Reserved : 17;
+        };
+    } SpeculationControlFlags;
+};
+using PSYSTEM_SPECULATION_CONTROL_INFORMATION = SYSTEM_SPECULATION_CONTROL_INFORMATION*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2302,6 +2327,25 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pPart->SectorSizeInBytes = 512;
             pPart->Reserved = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 201: { // SystemSpeculationControlInformation
+            if (SystemInformationLength < sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pSpec = reinterpret_cast<SYSTEM_SPECULATION_CONTROL_INFORMATION*>(SystemInformation);
+            pSpec->SpeculationControlFlags.Flags = 0;
+            pSpec->SpeculationControlFlags.BpbEnabled = 1;
+            pSpec->SpeculationControlFlags.SpecCtrlEnumerated = 1;
+            pSpec->SpeculationControlFlags.SpecCmdEnumerated = 1;
+            pSpec->SpeculationControlFlags.IbrsPresent = 1;
+            pSpec->SpeculationControlFlags.StibpPresent = 1;
+            pSpec->SpeculationControlFlags.SmepPresent = 1;
+            pSpec->SpeculationControlFlags.SpeculativeStoreBypassDisableAvailable = 1;
+            pSpec->SpeculationControlFlags.SpeculativeStoreBypassDisableSupported = 1;
+            pSpec->SpeculationControlFlags.MdsCacheFlushSupported = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION);
             return NtStatus::Success;
         }
         case 16: { // SystemHandleInformation
