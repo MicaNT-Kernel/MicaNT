@@ -46901,3 +46901,393 @@ inline void Test_Horizon226_CommandList3Options16_VaShadow_AsyncIoCompletion_And
 
     std::cout << "[TEST] Suite 442: Horizon 226 - CommandList3/Options 16, KVA Shadow, Async I/O Completion & AES Key Wrap PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 443: Horizon 227 — PrismX D3D12 Options 17 & Manual Write Tracking,
+//                         NT Isolated User Mode (VBS / Trustlets Class 165),
+//                         Win32 SRW Locks & Condition Variables Engine,
+//                         BCrypt AES-CMAC (NIST SP 800-38B / RFC 4493) MAC Engine
+// ============================================================================
+inline void Test_Horizon227_Options17ManualWrite_IsolatedUserMode_SrwConditionVariables_And_AesCmac_Suite() {
+    std::cout << "\n============================================================================\n";
+    std::cout << "[TEST] Suite 443: Horizon 227 - Options 17/Manual Write, IUM/VBS, SRW/CV & AES-CMAC\n";
+    std::cout << "============================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Options 17 & Manual Write Tracking Architecture
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS17
+        D3D12_FEATURE_DATA_D3D12_OPTIONS17 opts17{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS17, &opts17, sizeof(opts17));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS17 succeeds");
+        TEST_ASSERT(opts17.NonNormalizedCoordinateSamplersSupported == TRUE, "NonNormalizedCoordinateSamplersSupported is reported as TRUE");
+        TEST_ASSERT(opts17.ManualWriteTrackingResourceSupported == TRUE, "ManualWriteTrackingResourceSupported is reported as TRUE");
+        TEST_ASSERT(opts17.InvertedDepthRangesSupported == TRUE, "InvertedDepthRangesSupported is reported as TRUE");
+
+        // 2. Buffer size validation on CheckFeatureSupport
+        D3D12_FEATURE_DATA_D3D12_OPTIONS17 smallBuffer{};
+        hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS17, &smallBuffer, sizeof(smallBuffer) - 1);
+        TEST_ASSERT(hr != 0, "CheckFeatureSupport rejects undersized buffer for Options 17");
+
+        // 3. ID3D12ManualWriteTrackingResource QueryInterface and Tracking
+        D3D12_RESOURCE_DESC resDesc{};
+        resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        resDesc.Width = 4096;
+        resDesc.Height = 1;
+        resDesc.DepthOrArraySize = 1;
+        resDesc.MipLevels = 1;
+
+        Prism3D12ResourceImpl resource(&device, resDesc, D3D12_RESOURCE_STATE_COMMON);
+
+        ID3D12ManualWriteTrackingResource* pTracking = nullptr;
+        hr = resource.QueryInterface(IID_ID3D12ManualWriteTrackingResource, reinterpret_cast<void**>(&pTracking));
+        TEST_ASSERT(hr == 0 && pTracking != nullptr, "QueryInterface for IID_ID3D12ManualWriteTrackingResource succeeds on Prism3D12ResourceImpl");
+
+        // Track a specific range
+        D3D12_RANGE writeRange{ 256, 1024 };
+        pTracking->TrackWrite(0, &writeRange);
+
+        auto writes = resource.GetTrackedWrites();
+        TEST_ASSERT(writes.size() == 1, "Tracked write count is 1");
+        TEST_ASSERT(writes[0].Subresource == 0, "Subresource is 0");
+        TEST_ASSERT(writes[0].WrittenRange.Begin == 256 && writes[0].WrittenRange.End == 1024, "Tracked range matches passed range [256, 1024]");
+
+        // Track with nullptr (entire resource)
+        pTracking->TrackWrite(1, nullptr);
+        writes = resource.GetTrackedWrites();
+        TEST_ASSERT(writes.size() == 2, "Tracked write count is 2");
+        TEST_ASSERT(writes[1].Subresource == 1, "Subresource is 1");
+        TEST_ASSERT(writes[1].WrittenRange.Begin == 0 && writes[1].WrittenRange.End == 4096, "Tracked range with nullptr spans full resource [0, 4096]");
+
+        // Clear tracked writes
+        resource.ClearTrackedWrites();
+        TEST_ASSERT(resource.GetTrackedWrites().empty(), "ClearTrackedWrites clears recorded write intervals");
+
+        pTracking->Release();
+        std::cout << "  [PASS] PrismX 3D12 Options 17 & Manual Write Tracking Architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Isolated User Mode / VBS Information (Class 165)
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant;
+        using namespace micant::ntdll;
+
+        // 1. Buffer size validation
+        SYSTEM_ISOLATED_USER_MODE_INFORMATION iumInfo{};
+        ULONG retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(165, &iumInfo, sizeof(iumInfo) - 1, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 165 returns InfoLengthMismatch on undersized buffer");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION), "Class 165 returns exact required size in ReturnLength");
+
+        // 2. Query authentic Isolated User Mode (VBS / Trustlet) Telemetry
+        st = NtQuerySystemInformation_Export(165, &iumInfo, sizeof(iumInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 165 succeeds with adequate buffer");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION), "ReturnLength matches structure size");
+        TEST_ASSERT(iumInfo.SecureKernelRunning == 1, "SecureKernelRunning flag is 1 (VBS hypervisor active)");
+        TEST_ASSERT(iumInfo.HvciEnabled == 1, "HvciEnabled flag is 1 (Hypervisor-enforced Code Integrity active)");
+        TEST_ASSERT(iumInfo.HvciStrictMode == 1, "HvciStrictMode flag is 1");
+        TEST_ASSERT(iumInfo.DebugEnabled == 0, "DebugEnabled flag is 0 (production secure world)");
+        TEST_ASSERT(iumInfo.FirmwarePageProtection == 1, "FirmwarePageProtection is 1");
+        TEST_ASSERT(iumInfo.EncryptionKeyAvailable == 1, "EncryptionKeyAvailable is 1 (Secure VBS keys present)");
+        TEST_ASSERT(iumInfo.TrustletRunning == 1, "TrustletRunning flag is 1 (Isolated User Mode container active)");
+        TEST_ASSERT(iumInfo.HvciOptions == 1, "HvciOptions flag is 1");
+
+        std::cout << "  [PASS] Windows NT System Isolated User Mode (IUM / VBS Class 165) Telemetry verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Synchronization & Slim Read/Write (SRW) Condition Variables
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::win32;
+
+        SovereignSyncManager::get().reset();
+
+        SRWLOCK srw = SRWLOCK_INIT;
+        InitializeSRWLock(&srw);
+
+        // 1. Exclusive acquire and release
+        AcquireSRWLockExclusive(&srw);
+        TEST_ASSERT(SovereignSyncManager::get().getTotalExclusiveAcquires() == 1, "Exclusive lock acquire recorded in SovereignSyncManager");
+        ReleaseSRWLockExclusive(&srw);
+        TEST_ASSERT(SovereignSyncManager::get().getTotalReleases() == 1, "Release recorded in SovereignSyncManager");
+
+        // 2. TryAcquireSRWLockExclusive
+        BOOL tryOk = TryAcquireSRWLockExclusive(&srw);
+        TEST_ASSERT(tryOk == TRUE, "TryAcquireSRWLockExclusive succeeds on unlocked SRW");
+        ReleaseSRWLockExclusive(&srw);
+
+        // 3. Shared acquire and release (multiple readers)
+        AcquireSRWLockShared(&srw);
+        AcquireSRWLockShared(&srw);
+        TEST_ASSERT(SovereignSyncManager::get().getTotalSharedAcquires() == 2, "Multiple shared acquires succeed concurrently");
+        ReleaseSRWLockShared(&srw);
+        ReleaseSRWLockShared(&srw);
+
+        // 4. TryAcquireSRWLockShared
+        tryOk = TryAcquireSRWLockShared(&srw);
+        TEST_ASSERT(tryOk == TRUE, "TryAcquireSRWLockShared succeeds on unlocked SRW");
+        ReleaseSRWLockShared(&srw);
+
+        // 5. Condition Variable Timed Wait Timeout
+        CONDITION_VARIABLE cv = CONDITION_VARIABLE_INIT;
+        InitializeConditionVariable(&cv);
+
+        AcquireSRWLockExclusive(&srw);
+        BOOL woke = SleepConditionVariableSRW(&cv, &srw, 20, 0); // 20 ms timeout
+        ReleaseSRWLockExclusive(&srw);
+        TEST_ASSERT(woke == FALSE, "SleepConditionVariableSRW returns FALSE upon timeout");
+        TEST_ASSERT(GetLastError() == 1460, "GetLastError is ERROR_TIMEOUT (1460)");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalTimeouts() >= 1, "Timeout recorded in SovereignSyncManager");
+
+        // 6. Multi-threaded Producer / Consumer with WakeConditionVariable
+        std::atomic<bool> workerStarted{false};
+        std::atomic<bool> conditionMet{false};
+        std::atomic<bool> workerCompleted{false};
+
+        std::thread worker([&]() {
+            AcquireSRWLockExclusive(&srw);
+            workerStarted = true;
+            while (!conditionMet) {
+                SleepConditionVariableSRW(&cv, &srw, 0xFFFFFFFF, 0); // Infinite wait
+            }
+            workerCompleted = true;
+            ReleaseSRWLockExclusive(&srw);
+        });
+
+        while (!workerStarted) {
+            std::this_thread::yield();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        AcquireSRWLockExclusive(&srw);
+        conditionMet = true;
+        WakeConditionVariable(&cv);
+        ReleaseSRWLockExclusive(&srw);
+
+        worker.join();
+        TEST_ASSERT(workerCompleted == true, "Worker woke successfully from SleepConditionVariableSRW and completed");
+
+        // 7. Multi-threaded Shared Readers with WakeAllConditionVariable
+        std::atomic<int> sharedSleepers{0};
+        std::atomic<bool> wakeAllTriggered{false};
+        std::atomic<int> sharedCompleted{0};
+
+        constexpr int NUM_READERS = 3;
+        std::vector<std::thread> readers;
+        for (int i = 0; i < NUM_READERS; ++i) {
+            readers.emplace_back([&]() {
+                AcquireSRWLockShared(&srw);
+                sharedSleepers++;
+                while (!wakeAllTriggered) {
+                    SleepConditionVariableSRW(&cv, &srw, 0xFFFFFFFF, CONDITION_VARIABLE_LOCKMODE_SHARED);
+                }
+                sharedCompleted++;
+                ReleaseSRWLockShared(&srw);
+            });
+        }
+
+        while (sharedSleepers.load() < NUM_READERS) {
+            std::this_thread::yield();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        wakeAllTriggered = true;
+        WakeAllConditionVariable(&cv);
+
+        for (auto& t : readers) {
+            t.join();
+        }
+        TEST_ASSERT(sharedCompleted == NUM_READERS, "All 3 shared readers woke successfully from WakeAllConditionVariable");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalSleeps() >= 5, "Total CV sleeps accurately tracked");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalWakes() >= 2, "Total CV wakes accurately tracked");
+
+        std::cout << "  [PASS] Win32 Extended Synchronization & SRW Condition Variables Engine verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt / CNG AES-CMAC (NIST SP 800-38B / RFC 4493) MAC Engine
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        // 1. Open AES-CMAC algorithm provider
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_CMAC_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider opens AES-CMAC provider");
+
+        // Query Hash Digest Length (must be 16 bytes for AES-CMAC)
+        uint32_t hashLen = 0;
+        uint32_t resBytes = 0;
+        st = BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &resBytes, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hashLen == 16, "BCryptGetProperty returns 16 bytes for AES-CMAC hash length");
+
+        // 2. RFC 4493 Official Test Vectors
+        // Key: 2b7e1516 28aed2a6 abf71588 09cf4f3c
+        const uint8_t rfcKey[16] = {
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+            0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c
+        };
+
+        const uint8_t rfcMsg64[64] = {
+            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
+            0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+            0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c,
+            0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+            0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11,
+            0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+            0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17,
+            0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10
+        };
+
+        // Example 1: len = 0 (empty message)
+        // Expected Tag: bb1d6929 e9593728 7fa37d12 9b756746
+        const uint8_t expectedTag0[16] = {
+            0xbb, 0x1d, 0x69, 0x29, 0xe9, 0x59, 0x37, 0x28,
+            0x7f, 0xa3, 0x7d, 0x12, 0x9b, 0x75, 0x67, 0x46
+        };
+        {
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlg, &hHash, nullptr, 0, const_cast<uint8_t*>(rfcKey), sizeof(rfcKey), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash creates AES-CMAC hash object with secret key");
+
+            uint8_t tag0[16] = {0};
+            st = BCryptFinishHash(hHash, tag0, sizeof(tag0), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds on 0-byte message");
+            TEST_ASSERT(std::memcmp(tag0, expectedTag0, 16) == 0, "AES-CMAC Example 1 (len=0) matches RFC 4493 exactly");
+            BCryptDestroyHash(hHash);
+        }
+
+        // Example 2: len = 16
+        // Expected Tag: 070a16b4 6b4d4144 f79bdd9d d04a287c
+        const uint8_t expectedTag16[16] = {
+            0x07, 0x0a, 0x16, 0xb4, 0x6b, 0x4d, 0x41, 0x44,
+            0xf7, 0x9b, 0xdd, 0x9d, 0xd0, 0x4a, 0x28, 0x7c
+        };
+        {
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlg, &hHash, nullptr, 0, const_cast<uint8_t*>(rfcKey), sizeof(rfcKey), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptCreateHash succeeds for Example 2");
+
+            st = BCryptHashData(hHash, rfcMsg64, 16, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData streams 16-byte message");
+
+            uint8_t tag16[16] = {0};
+            st = BCryptFinishHash(hHash, tag16, sizeof(tag16), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds for Example 2");
+            TEST_ASSERT(std::memcmp(tag16, expectedTag16, 16) == 0, "AES-CMAC Example 2 (len=16) matches RFC 4493 exactly");
+            BCryptDestroyHash(hHash);
+        }
+
+        // Example 3: len = 40 (streamed in 3 distinct chunks: 10, 15, 15 bytes)
+        // Expected Tag: dfa66747 de9ae630 30ca3261 1497c827
+        const uint8_t expectedTag40[16] = {
+            0xdf, 0xa6, 0x67, 0x47, 0xde, 0x9a, 0xe6, 0x30,
+            0x30, 0xca, 0x32, 0x61, 0x14, 0x97, 0xc8, 0x27
+        };
+        {
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlg, &hHash, nullptr, 0, const_cast<uint8_t*>(rfcKey), sizeof(rfcKey), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptCreateHash succeeds for Example 3");
+
+            st = BCryptHashData(hHash, rfcMsg64, 10, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData streams chunk 1 (10 bytes)");
+            st = BCryptHashData(hHash, rfcMsg64 + 10, 15, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData streams chunk 2 (15 bytes)");
+            st = BCryptHashData(hHash, rfcMsg64 + 25, 15, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData streams chunk 3 (15 bytes)");
+
+            uint8_t tag40[16] = {0};
+            st = BCryptFinishHash(hHash, tag40, sizeof(tag40), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds for Example 3");
+            TEST_ASSERT(std::memcmp(tag40, expectedTag40, 16) == 0, "AES-CMAC Example 3 (len=40 streamed) matches RFC 4493 exactly");
+            BCryptDestroyHash(hHash);
+        }
+
+        // Example 4: len = 64 (streamed in chunks of 32, 32 bytes)
+        // Expected Tag: 51f0bebf 7e3b9d92 fc497417 79363cfe
+        const uint8_t expectedTag64[16] = {
+            0x51, 0xf0, 0xbe, 0xbf, 0x7e, 0x3b, 0x9d, 0x92,
+            0xfc, 0x49, 0x74, 0x17, 0x79, 0x36, 0x3c, 0xfe
+        };
+        {
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlg, &hHash, nullptr, 0, const_cast<uint8_t*>(rfcKey), sizeof(rfcKey), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptCreateHash succeeds for Example 4");
+
+            st = BCryptHashData(hHash, rfcMsg64, 32, 0);
+            st = BCryptHashData(hHash, rfcMsg64 + 32, 32, 0);
+
+            uint8_t tag64[16] = {0};
+            st = BCryptFinishHash(hHash, tag64, sizeof(tag64), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds for Example 4");
+            TEST_ASSERT(std::memcmp(tag64, expectedTag64, 16) == 0, "AES-CMAC Example 4 (len=64 streamed) matches RFC 4493 exactly");
+            BCryptDestroyHash(hHash);
+        }
+
+        // 3. Direct Helper API (BCryptAesCmac)
+        {
+            uint8_t directTag[16] = {0};
+            st = BCryptAesCmac(rfcKey, rfcMsg64, directTag);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptAesCmac direct helper returns STATUS_SUCCESS");
+            TEST_ASSERT(std::memcmp(directTag, expectedTag64, 16) == 0, "BCryptAesCmac direct output matches RFC 4493 Example 4");
+        }
+
+        // 4. Authenticated Verification via BCryptDecrypt with BCRYPT_CHAIN_MODE_CMAC
+        {
+            BCRYPT_ALG_HANDLE hAes = nullptr;
+            st = BCryptOpenAlgorithmProvider(&hAes, BCRYPT_AES_ALGORITHM, nullptr, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptOpenAlgorithmProvider opens AES provider");
+
+            st = BCryptSetProperty(hAes, BCRYPT_CHAINING_MODE, reinterpret_cast<const uint8_t*>(BCRYPT_CHAIN_MODE_CMAC), sizeof(BCRYPT_CHAIN_MODE_CMAC), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptSetProperty accepts BCRYPT_CHAIN_MODE_CMAC");
+
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAes, &hKey, nullptr, 0, rfcKey, sizeof(rfcKey), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-CMAC key");
+
+            // Compute tag via BCryptEncrypt
+            uint8_t tagEnc[16] = {0};
+            uint32_t tagLen = 0;
+            st = BCryptEncrypt(hKey, const_cast<uint8_t*>(rfcMsg64), sizeof(rfcMsg64), nullptr, nullptr, 0, tagEnc, sizeof(tagEnc), &tagLen, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && tagLen == 16, "BCryptEncrypt computes CMAC tag");
+            TEST_ASSERT(std::memcmp(tagEnc, expectedTag64, 16) == 0, "Tag computed via BCryptEncrypt matches RFC 4493 vector");
+
+            // Verify valid tag via BCryptDecrypt
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+            authInfo.cbSize = sizeof(authInfo);
+            authInfo.pbTag = tagEnc;
+            authInfo.cbTag = sizeof(tagEnc);
+
+            st = BCryptDecrypt(hKey, const_cast<uint8_t*>(rfcMsg64), sizeof(rfcMsg64), &authInfo, nullptr, 0, nullptr, 0, &tagLen, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDecrypt with valid tag succeeds (STATUS_SUCCESS)");
+
+            // Tamper tag: alter 1 bit -> authentication failure!
+            tagEnc[0] ^= 0x80;
+            st = BCryptDecrypt(hKey, const_cast<uint8_t*>(rfcMsg64), sizeof(rfcMsg64), &authInfo, nullptr, 0, nullptr, 0, &tagLen, 0);
+            TEST_ASSERT(st == STATUS_AUTH_TAG_MISMATCH, "BCryptDecrypt with tampered tag fails with STATUS_AUTH_TAG_MISMATCH");
+
+            BCryptDestroyKey(hKey);
+            BCryptCloseAlgorithmProvider(hAes, 0);
+        }
+
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        std::cout << "  [PASS] BCrypt / CNG AES-CMAC (NIST SP 800-38B / RFC 4493) MAC Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 227] Options 17/Manual Write, IUM/VBS, SRW/CV & AES-CMAC Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Options 17 & ID3D12ManualWriteTrackingResource (TrackWrite, non-normalized samplers) OK\n"
+              << "    Pillar 2: NT System Isolated User Mode / VBS (Class 165, SecureKernel, HVCI strict, Trustlets) OK\n"
+              << "    Pillar 3: Win32 Extended Synchronization & SRW Condition Variables (SovereignSyncManager, shared/exclusive, timeouts, wake all) OK\n"
+              << "    Pillar 4: BCrypt AES-CMAC (NIST SP 800-38B / RFC 4493 vectors 1..4, streaming, tamper verification) OK\n";
+
+    std::cout << "[TEST] Suite 443: Horizon 227 - Options 17/Manual Write, IUM/VBS, SRW/CV & AES-CMAC PASSED." << std::endl;
+}

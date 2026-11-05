@@ -1703,6 +1703,21 @@ struct SYSTEM_KERNEL_VA_SHADOW_INFORMATION {
 };
 using PSYSTEM_KERNEL_VA_SHADOW_INFORMATION = SYSTEM_KERNEL_VA_SHADOW_INFORMATION*;
 
+struct SYSTEM_ISOLATED_USER_MODE_INFORMATION {
+    BOOLEAN SecureKernelRunning : 1;
+    BOOLEAN HvciEnabled : 1;
+    BOOLEAN HvciStrictMode : 1;
+    BOOLEAN DebugEnabled : 1;
+    BOOLEAN FirmwarePageProtection : 1;
+    BOOLEAN EncryptionKeyAvailable : 1;
+    BOOLEAN SpareFlags : 2;
+    BOOLEAN TrustletRunning : 1;
+    BOOLEAN HvciOptions : 7;
+    uint8_t Spare0[6];
+    uint64_t Spare1;
+};
+using PSYSTEM_ISOLATED_USER_MODE_INFORMATION = SYSTEM_ISOLATED_USER_MODE_INFORMATION*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2345,6 +2360,25 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pPart->SectorSizeInBytes = 512;
             pPart->Reserved = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 165: { // SystemIsolatedUserModeInformation
+            if (SystemInformationLength < sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pIum = reinterpret_cast<SYSTEM_ISOLATED_USER_MODE_INFORMATION*>(SystemInformation);
+            std::memset(pIum, 0, sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION));
+            pIum->SecureKernelRunning = 1;
+            pIum->HvciEnabled = 1;
+            pIum->HvciStrictMode = 1;
+            pIum->DebugEnabled = 0;
+            pIum->FirmwarePageProtection = 1;
+            pIum->EncryptionKeyAvailable = 1;
+            pIum->SpareFlags = 0;
+            pIum->TrustletRunning = 1;
+            pIum->HvciOptions = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION);
             return NtStatus::Success;
         }
         case 196: { // SystemKernelVaShadowInformation

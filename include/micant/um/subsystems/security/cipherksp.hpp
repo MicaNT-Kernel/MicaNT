@@ -70,8 +70,10 @@ inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_CCM          = L"ChainingModeC
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_XTS          = L"ChainingModeXTS";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_KW           = L"ChainingModeKW";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_KWP          = L"ChainingModeKWP";
+inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_CMAC         = L"ChainingModeCMAC";
 inline constexpr const wchar_t* BCRYPT_KEY_WRAP_ALGORITHM      = L"AES-KW";
 inline constexpr const wchar_t* BCRYPT_KWP_ALGORITHM           = L"AES-KWP";
+inline constexpr const wchar_t* BCRYPT_AES_CMAC_ALGORITHM      = L"AES-CMAC";
 inline constexpr const wchar_t* BCRYPT_AUTH_TAG_LENGTH         = L"AuthTagLength";
 
 // Standard CNG Authenticated Mode Structs & Flags
@@ -1960,6 +1962,89 @@ public:
         return plaintext;
     }
 
+    // RFC 4493 / NIST SP 800-38B AES-CMAC
+    void generateCmacSubkeys(std::array<uint8_t, 16>& k1, std::array<uint8_t, 16>& k2) const {
+        std::array<uint8_t, 16> zeroBlock{};
+        std::array<uint8_t, 16> L{};
+        encryptBlock(zeroBlock.data(), L.data());
+
+        uint8_t msbL = (L[0] & 0x80) != 0;
+        for (size_t i = 0; i < 15; ++i) {
+            k1[i] = static_cast<uint8_t>((L[i] << 1) | ((L[i + 1] & 0x80) ? 1 : 0));
+        }
+        k1[15] = static_cast<uint8_t>(L[15] << 1);
+        if (msbL) k1[15] ^= 0x87;
+
+        uint8_t msbK1 = (k1[0] & 0x80) != 0;
+        for (size_t i = 0; i < 15; ++i) {
+            k2[i] = static_cast<uint8_t>((k1[i] << 1) | ((k1[i + 1] & 0x80) ? 1 : 0));
+        }
+        k2[15] = static_cast<uint8_t>(k1[15] << 1);
+        if (msbK1) k2[15] ^= 0x87;
+    }
+
+    std::array<uint8_t, 16> cmac(std::span<const uint8_t> message) const {
+        std::array<uint8_t, 16> k1{};
+        std::array<uint8_t, 16> k2{};
+        generateCmacSubkeys(k1, k2);
+
+        size_t len = message.size();
+        size_t n = (len + 15) / 16;
+        bool isComplete = (len > 0) && (len % 16 == 0);
+        if (len == 0) {
+            n = 1;
+            isComplete = false;
+        }
+
+        std::array<uint8_t, 16> M_last{};
+        if (isComplete) {
+            const uint8_t* pLast = message.data() + (n - 1) * 16;
+            for (size_t i = 0; i < 16; ++i) {
+                M_last[i] = pLast[i] ^ k1[i];
+            }
+        } else {
+            size_t rem = len % 16;
+            const uint8_t* pLast = len > 0 ? (message.data() + (n - 1) * 16) : nullptr;
+            for (size_t i = 0; i < rem; ++i) {
+                M_last[i] = pLast[i];
+            }
+            M_last[rem] = 0x80;
+            for (size_t i = rem + 1; i < 16; ++i) {
+                M_last[i] = 0x00;
+            }
+            for (size_t i = 0; i < 16; ++i) {
+                M_last[i] ^= k2[i];
+            }
+        }
+
+        std::array<uint8_t, 16> X{};
+        std::array<uint8_t, 16> Y{};
+        for (size_t i = 0; i < n - 1; ++i) {
+            const uint8_t* pBlock = message.data() + i * 16;
+            for (size_t j = 0; j < 16; ++j) {
+                Y[j] = X[j] ^ pBlock[j];
+            }
+            encryptBlock(Y.data(), X.data());
+        }
+
+        for (size_t j = 0; j < 16; ++j) {
+            Y[j] = X[j] ^ M_last[j];
+        }
+        std::array<uint8_t, 16> T{};
+        encryptBlock(Y.data(), T.data());
+        return T;
+    }
+
+    bool cmacVerify(std::span<const uint8_t> message, std::span<const uint8_t> tag) const {
+        if (tag.size() != 16) return false;
+        auto expected = cmac(message);
+        uint8_t diff = 0;
+        for (size_t i = 0; i < 16; ++i) {
+            diff |= (expected[i] ^ tag[i]);
+        }
+        return diff == 0;
+    }
+
 private:
     size_t nk_{4};
     size_t nr_{10};
@@ -2194,6 +2279,7 @@ enum class CryptoAlgorithm {
     Aes,
     Rng,
     HmacSha256,
+    AesCmac,
     Unknown
 };
 
@@ -2206,6 +2292,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_AES_ALGORITHM)                           return CryptoAlgorithm::Aes;
     if (algId == BCRYPT_RNG_ALGORITHM)                           return CryptoAlgorithm::Rng;
     if (algId == BCRYPT_HMAC_SHA256_ALGORITHM)                  return CryptoAlgorithm::HmacSha256;
+    if (algId == BCRYPT_AES_CMAC_ALGORITHM || algId == L"AES-CMAC") return CryptoAlgorithm::AesCmac;
     return CryptoAlgorithm::Unknown;
 }
 
@@ -2259,7 +2346,40 @@ public:
     Sha1::Context sha1Ctx{};
     Md5::Context md5Ctx{};
     HmacSha256::Context hmacSha256Ctx{};
+
+    struct AesCmacContext {
+        std::unique_ptr<Aes> aes;
+        std::array<uint8_t, 16> k1{};
+        std::array<uint8_t, 16> k2{};
+        std::array<uint8_t, 16> X{};
+        std::vector<uint8_t> buffer;
+        size_t totalBytes{0};
+    };
+    std::unique_ptr<AesCmacContext> aesCmacCtx;
+
     bool isFinished{false};
+
+    CngHashObject(const CngHashObject& other)
+        : algorithm(other.algorithm),
+          sha256Ctx(other.sha256Ctx),
+          sha384Ctx(other.sha384Ctx),
+          sha512Ctx(other.sha512Ctx),
+          sha1Ctx(other.sha1Ctx),
+          md5Ctx(other.md5Ctx),
+          hmacSha256Ctx(other.hmacSha256Ctx),
+          isFinished(other.isFinished) {
+        if (other.aesCmacCtx) {
+            aesCmacCtx = std::make_unique<AesCmacContext>();
+            if (other.aesCmacCtx->aes) {
+                aesCmacCtx->aes = std::make_unique<Aes>(*other.aesCmacCtx->aes);
+            }
+            aesCmacCtx->k1 = other.aesCmacCtx->k1;
+            aesCmacCtx->k2 = other.aesCmacCtx->k2;
+            aesCmacCtx->X = other.aesCmacCtx->X;
+            aesCmacCtx->buffer = other.aesCmacCtx->buffer;
+            aesCmacCtx->totalBytes = other.aesCmacCtx->totalBytes;
+        }
+    }
 
     CngHashObject(CryptoAlgorithm alg, std::span<const uint8_t> key = {})
         : algorithm(alg) {
@@ -2275,6 +2395,13 @@ public:
             Md5::init(md5Ctx);
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             HmacSha256::init(hmacSha256Ctx, key);
+        } else if (algorithm == CryptoAlgorithm::AesCmac) {
+            aesCmacCtx = std::make_unique<AesCmacContext>();
+            if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
+                aesCmacCtx->aes = std::make_unique<Aes>(key);
+                aesCmacCtx->aes->generateCmacSubkeys(aesCmacCtx->k1, aesCmacCtx->k2);
+            }
+            aesCmacCtx->X.fill(0);
         }
     }
 
@@ -2292,6 +2419,25 @@ public:
             Md5::update(md5Ctx, data);
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             HmacSha256::update(hmacSha256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
+            if (data.empty()) return;
+            aesCmacCtx->totalBytes += data.size();
+            size_t offset = 0;
+            while (aesCmacCtx->buffer.size() + (data.size() - offset) > 16) {
+                size_t needed = 16 - aesCmacCtx->buffer.size();
+                aesCmacCtx->buffer.insert(aesCmacCtx->buffer.end(), data.begin() + offset, data.begin() + offset + needed);
+                offset += needed;
+
+                std::array<uint8_t, 16> Y{};
+                for (size_t j = 0; j < 16; ++j) {
+                    Y[j] = aesCmacCtx->X[j] ^ aesCmacCtx->buffer[j];
+                }
+                aesCmacCtx->aes->encryptBlock(Y.data(), aesCmacCtx->X.data());
+                aesCmacCtx->buffer.clear();
+            }
+            if (offset < data.size()) {
+                aesCmacCtx->buffer.insert(aesCmacCtx->buffer.end(), data.begin() + offset, data.end());
+            }
         }
     }
 
@@ -2321,6 +2467,32 @@ public:
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             std::vector<uint8_t> out(32);
             HmacSha256::final(hmacSha256Ctx, std::span<uint8_t, 32>(out.data(), 32));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
+            std::array<uint8_t, 16> M_last{};
+            if (aesCmacCtx->totalBytes > 0 && aesCmacCtx->buffer.size() == 16) {
+                for (size_t i = 0; i < 16; ++i) {
+                    M_last[i] = aesCmacCtx->buffer[i] ^ aesCmacCtx->k1[i];
+                }
+            } else {
+                size_t rem = aesCmacCtx->buffer.size();
+                for (size_t i = 0; i < rem; ++i) {
+                    M_last[i] = aesCmacCtx->buffer[i];
+                }
+                M_last[rem] = 0x80;
+                for (size_t i = rem + 1; i < 16; ++i) {
+                    M_last[i] = 0x00;
+                }
+                for (size_t i = 0; i < 16; ++i) {
+                    M_last[i] ^= aesCmacCtx->k2[i];
+                }
+            }
+            std::array<uint8_t, 16> Y{};
+            for (size_t j = 0; j < 16; ++j) {
+                Y[j] = aesCmacCtx->X[j] ^ M_last[j];
+            }
+            std::vector<uint8_t> out(16);
+            aesCmacCtx->aes->encryptBlock(Y.data(), out.data());
             return out;
         }
         return {};
@@ -2542,7 +2714,7 @@ inline NTSTATUS BCryptGetProperty(
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = 32;
-            if (prov->algorithm == CryptoAlgorithm::Md5) len = 16;
+            if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384) len = 48;
@@ -2554,7 +2726,7 @@ inline NTSTATUS BCryptGetProperty(
             *pcbResult = sizeof(uint32_t);
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
-            uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes) ? 16 :
+            uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
                            ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512) ? 128 : 64);
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
@@ -2717,6 +2889,22 @@ inline NTSTATUS BCryptEncrypt(
         return STATUS_SUCCESS;
     }
 
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_CMAC) {
+        *pcbResult = 16;
+        if (pPaddingInfo) {
+            auto* authInfo = reinterpret_cast<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO*>(pPaddingInfo);
+            if (authInfo && authInfo->pbTag && authInfo->cbTag >= 16) {
+                auto tag = keyObj->aesEngine->cmac(std::span<const uint8_t>(pbInput, cbInput));
+                std::memcpy(authInfo->pbTag, tag.data(), 16);
+            }
+        }
+        if (!pbOutput) return STATUS_SUCCESS;
+        if (cbOutput < 16) return STATUS_BUFFER_TOO_SMALL;
+        auto tag = keyObj->aesEngine->cmac(std::span<const uint8_t>(pbInput, cbInput));
+        std::memcpy(pbOutput, tag.data(), 16);
+        return STATUS_SUCCESS;
+    }
+
     if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_XTS) {
         if (!keyObj->aesEngine2 || cbInput < 16) {
             return STATUS_INVALID_PARAMETER;
@@ -2868,6 +3056,22 @@ inline NTSTATUS BCryptDecrypt(
     auto keyObj = CipherKspEngine::get().getKey(hKey);
     if (!keyObj || !keyObj->aesEngine) {
         return STATUS_INVALID_HANDLE;
+    }
+
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_CMAC) {
+        if (pPaddingInfo) {
+            auto* authInfo = reinterpret_cast<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO*>(pPaddingInfo);
+            if (authInfo && authInfo->pbTag && authInfo->cbTag >= 16) {
+                bool ok = keyObj->aesEngine->cmacVerify(std::span<const uint8_t>(pbInput, cbInput), std::span<const uint8_t>(authInfo->pbTag, 16));
+                return ok ? STATUS_SUCCESS : STATUS_AUTH_TAG_MISMATCH;
+            }
+        }
+        *pcbResult = 16;
+        if (!pbOutput) return STATUS_SUCCESS;
+        if (cbOutput < 16) return STATUS_BUFFER_TOO_SMALL;
+        auto tag = keyObj->aesEngine->cmac(std::span<const uint8_t>(pbInput, cbInput));
+        std::memcpy(pbOutput, tag.data(), 16);
+        return STATUS_SUCCESS;
     }
 
     if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_XTS) {
@@ -3088,6 +3292,19 @@ inline NTSTATUS BCryptKeyUnwrap(
     if (!pbOutput) return STATUS_SUCCESS;
     if (cbOutput < pt.size()) return STATUS_BUFFER_TOO_SMALL;
     std::memcpy(pbOutput, pt.data(), pt.size());
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS BCryptAesCmac(
+    std::span<const uint8_t> key,
+    std::span<const uint8_t> input,
+    std::span<uint8_t> tag
+) {
+    if (key.size() != 16 && key.size() != 24 && key.size() != 32) return STATUS_INVALID_PARAMETER;
+    if (tag.size() < 16) return STATUS_BUFFER_TOO_SMALL;
+    Aes aes(key);
+    auto t = aes.cmac(input);
+    std::memcpy(tag.data(), t.data(), 16);
     return STATUS_SUCCESS;
 }
 
@@ -3594,8 +3811,10 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("bcrypt.dll", "BCryptKeyDerivation", reinterpret_cast<void*>(BCryptKeyDerivation));
     ldr.registerExport("bcrypt.dll", "BCryptKeyWrap", reinterpret_cast<void*>(BCryptKeyWrap));
     ldr.registerExport("bcrypt.dll", "BCryptKeyUnwrap", reinterpret_cast<void*>(BCryptKeyUnwrap));
+    ldr.registerExport("bcrypt.dll", "BCryptAesCmac", reinterpret_cast<void*>(BCryptAesCmac));
     ldr.registerExport("cng.sys", "BCryptKeyWrap", reinterpret_cast<void*>(BCryptKeyWrap));
     ldr.registerExport("cng.sys", "BCryptKeyUnwrap", reinterpret_cast<void*>(BCryptKeyUnwrap));
+    ldr.registerExport("cng.sys", "BCryptAesCmac", reinterpret_cast<void*>(BCryptAesCmac));
 
     // ncrypt.dll exports
     ldr.registerExport("ncrypt.dll", "NCryptOpenStorageProvider", reinterpret_cast<void*>(NCryptOpenStorageProvider));

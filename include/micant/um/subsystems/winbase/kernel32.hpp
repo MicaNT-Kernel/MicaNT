@@ -19,7 +19,9 @@
 #include <cstdlib>
 #include <cwctype>
 #include <mutex>
+#include <shared_mutex>
 #include <condition_variable>
+#include <memory>
 #include <unordered_map>
 #include <deque>
 #include <vector>
@@ -116,6 +118,10 @@ struct CONDITION_VARIABLE {
     void* Ptr{nullptr};
 };
 using PCONDITION_VARIABLE = CONDITION_VARIABLE*;
+
+#define SRWLOCK_INIT {nullptr}
+#define CONDITION_VARIABLE_INIT {nullptr}
+#define CONDITION_VARIABLE_LOCKMODE_SHARED 0x00000001
 
 union INIT_ONCE {
     void* Ptr{nullptr};
@@ -4739,20 +4745,267 @@ inline HRESULT RegisterApplicationRestart(PCWSTR /*pwzCommandLine*/, DWORD /*dwF
     return 0; // S_OK
 }
 
+// ============================================================================
+// Sovereign Synchronization Manager (SRW Locks & Condition Variables)
+// ============================================================================
+
+class SovereignSyncManager {
+public:
+    struct SrwControlBlock {
+        std::shared_mutex mutex;
+        std::atomic<uint32_t> exclusiveHolders{0};
+        std::atomic<uint32_t> sharedHolders{0};
+    };
+
+    struct CvControlBlock {
+        std::condition_variable_any cv;
+        std::atomic<uint64_t> generation{0};
+        std::atomic<uint32_t> sleepCount{0};
+        std::atomic<uint32_t> wakeCount{0};
+    };
+
+private:
+    std::mutex m_tableMutex;
+    std::unordered_map<void*, std::shared_ptr<SrwControlBlock>> m_srwMap;
+    std::unordered_map<void*, std::shared_ptr<CvControlBlock>> m_cvMap;
+    std::atomic<uint64_t> m_totalExclusiveAcquires{0};
+    std::atomic<uint64_t> m_totalSharedAcquires{0};
+    std::atomic<uint64_t> m_totalReleases{0};
+    std::atomic<uint64_t> m_totalSleeps{0};
+    std::atomic<uint64_t> m_totalWakes{0};
+    std::atomic<uint64_t> m_totalTimeouts{0};
+
+public:
+    static SovereignSyncManager& get() noexcept {
+        static SovereignSyncManager s_instance;
+        return s_instance;
+    }
+
+    std::shared_ptr<SrwControlBlock> getSrw(void* key) {
+        if (!key) return nullptr;
+        std::lock_guard<std::mutex> lock(m_tableMutex);
+        auto it = m_srwMap.find(key);
+        if (it != m_srwMap.end()) return it->second;
+        auto cb = std::make_shared<SrwControlBlock>();
+        m_srwMap[key] = cb;
+        return cb;
+    }
+
+    std::shared_ptr<CvControlBlock> getCv(void* key) {
+        if (!key) return nullptr;
+        std::lock_guard<std::mutex> lock(m_tableMutex);
+        auto it = m_cvMap.find(key);
+        if (it != m_cvMap.end()) return it->second;
+        auto cb = std::make_shared<CvControlBlock>();
+        m_cvMap[key] = cb;
+        return cb;
+    }
+
+    void reset() {
+        std::lock_guard<std::mutex> lock(m_tableMutex);
+        m_srwMap.clear();
+        m_cvMap.clear();
+        m_totalExclusiveAcquires = 0;
+        m_totalSharedAcquires = 0;
+        m_totalReleases = 0;
+        m_totalSleeps = 0;
+        m_totalWakes = 0;
+        m_totalTimeouts = 0;
+    }
+
+    uint64_t getTotalExclusiveAcquires() const noexcept { return m_totalExclusiveAcquires.load(); }
+    uint64_t getTotalSharedAcquires() const noexcept { return m_totalSharedAcquires.load(); }
+    uint64_t getTotalReleases() const noexcept { return m_totalReleases.load(); }
+    uint64_t getTotalSleeps() const noexcept { return m_totalSleeps.load(); }
+    uint64_t getTotalWakes() const noexcept { return m_totalWakes.load(); }
+    uint64_t getTotalTimeouts() const noexcept { return m_totalTimeouts.load(); }
+
+    void recordExclusiveAcquire() noexcept { m_totalExclusiveAcquires.fetch_add(1); }
+    void recordSharedAcquire() noexcept { m_totalSharedAcquires.fetch_add(1); }
+    void recordRelease() noexcept { m_totalReleases.fetch_add(1); }
+    void recordSleep() noexcept { m_totalSleeps.fetch_add(1); }
+    void recordWake() noexcept { m_totalWakes.fetch_add(1); }
+    void recordTimeout() noexcept { m_totalTimeouts.fetch_add(1); }
+};
+
+struct SrwSharedLockWrapper {
+    std::shared_mutex& m;
+    void lock() { m.lock_shared(); }
+    void unlock() { m.unlock_shared(); }
+};
+
+struct SrwExclusiveLockWrapper {
+    std::shared_mutex& m;
+    void lock() { m.lock(); }
+    void unlock() { m.unlock(); }
+};
+
 // Slim Reader/Writer (SRW) Locks
-inline void AcquireSRWLockExclusive(PSRWLOCK /*SRWLock*/) noexcept {}
-inline void ReleaseSRWLockExclusive(PSRWLOCK /*SRWLock*/) noexcept {}
-inline BOOL TryAcquireSRWLockExclusive(PSRWLOCK /*SRWLock*/) noexcept { return TRUE; }
-inline void AcquireSRWLockShared(PSRWLOCK /*SRWLock*/) noexcept {}
-inline void ReleaseSRWLockShared(PSRWLOCK /*SRWLock*/) noexcept {}
-inline BOOL TryAcquireSRWLockShared(PSRWLOCK /*SRWLock*/) noexcept { return TRUE; }
-inline void InitializeSRWLock(PSRWLOCK SRWLock) noexcept { if (SRWLock) SRWLock->Ptr = nullptr; }
+inline void AcquireSRWLockExclusive(PSRWLOCK SRWLock) noexcept {
+    if (!SRWLock) return;
+    auto cb = SovereignSyncManager::get().getSrw(SRWLock);
+    if (!cb) return;
+    cb->mutex.lock();
+    cb->exclusiveHolders.fetch_add(1);
+    SovereignSyncManager::get().recordExclusiveAcquire();
+}
+
+inline void ReleaseSRWLockExclusive(PSRWLOCK SRWLock) noexcept {
+    if (!SRWLock) return;
+    auto cb = SovereignSyncManager::get().getSrw(SRWLock);
+    if (!cb) return;
+    cb->exclusiveHolders.fetch_sub(1);
+    cb->mutex.unlock();
+    SovereignSyncManager::get().recordRelease();
+}
+
+inline BOOL TryAcquireSRWLockExclusive(PSRWLOCK SRWLock) noexcept {
+    if (!SRWLock) return FALSE;
+    auto cb = SovereignSyncManager::get().getSrw(SRWLock);
+    if (!cb) return FALSE;
+    if (cb->mutex.try_lock()) {
+        cb->exclusiveHolders.fetch_add(1);
+        SovereignSyncManager::get().recordExclusiveAcquire();
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline void AcquireSRWLockShared(PSRWLOCK SRWLock) noexcept {
+    if (!SRWLock) return;
+    auto cb = SovereignSyncManager::get().getSrw(SRWLock);
+    if (!cb) return;
+    cb->mutex.lock_shared();
+    cb->sharedHolders.fetch_add(1);
+    SovereignSyncManager::get().recordSharedAcquire();
+}
+
+inline void ReleaseSRWLockShared(PSRWLOCK SRWLock) noexcept {
+    if (!SRWLock) return;
+    auto cb = SovereignSyncManager::get().getSrw(SRWLock);
+    if (!cb) return;
+    cb->sharedHolders.fetch_sub(1);
+    cb->mutex.unlock_shared();
+    SovereignSyncManager::get().recordRelease();
+}
+
+inline BOOL TryAcquireSRWLockShared(PSRWLOCK SRWLock) noexcept {
+    if (!SRWLock) return FALSE;
+    auto cb = SovereignSyncManager::get().getSrw(SRWLock);
+    if (!cb) return FALSE;
+    if (cb->mutex.try_lock_shared()) {
+        cb->sharedHolders.fetch_add(1);
+        SovereignSyncManager::get().recordSharedAcquire();
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline void InitializeSRWLock(PSRWLOCK SRWLock) noexcept {
+    if (SRWLock) SRWLock->Ptr = nullptr;
+}
 
 // Condition Variables
-inline BOOL SleepConditionVariableSRW(PCONDITION_VARIABLE /*ConditionVariable*/, PSRWLOCK /*SRWLock*/, DWORD /*dwMilliseconds*/, ULONG /*Flags*/) noexcept { return TRUE; }
-inline void WakeConditionVariable(PCONDITION_VARIABLE /*ConditionVariable*/) noexcept {}
-inline void WakeAllConditionVariable(PCONDITION_VARIABLE /*ConditionVariable*/) noexcept {}
-inline void InitializeConditionVariable(PCONDITION_VARIABLE ConditionVariable) noexcept { if (ConditionVariable) ConditionVariable->Ptr = nullptr; }
+inline void InitializeConditionVariable(PCONDITION_VARIABLE ConditionVariable) noexcept {
+    if (ConditionVariable) ConditionVariable->Ptr = nullptr;
+}
+
+inline BOOL SleepConditionVariableSRW(
+    PCONDITION_VARIABLE ConditionVariable,
+    PSRWLOCK SRWLock,
+    DWORD dwMilliseconds,
+    ULONG Flags
+) noexcept {
+    if (!ConditionVariable || !SRWLock) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    auto srw = SovereignSyncManager::get().getSrw(SRWLock);
+    auto cv = SovereignSyncManager::get().getCv(ConditionVariable);
+    if (!srw || !cv) return FALSE;
+
+    SovereignSyncManager::get().recordSleep();
+    cv->sleepCount.fetch_add(1);
+
+    bool isShared = (Flags & CONDITION_VARIABLE_LOCKMODE_SHARED) != 0;
+    bool success = true;
+    uint64_t curGen = cv->generation.load();
+
+    if (isShared) {
+        srw->sharedHolders.fetch_sub(1);
+        SrwSharedLockWrapper wrapper{srw->mutex};
+        if (dwMilliseconds == 0xFFFFFFFF) {
+            while (cv->generation.load() == curGen) {
+                cv->cv.wait(wrapper);
+            }
+        } else {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(dwMilliseconds);
+            while (cv->generation.load() == curGen) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) {
+                    success = false;
+                    break;
+                }
+                cv->cv.wait_until(wrapper, deadline);
+                if (std::chrono::steady_clock::now() >= deadline && cv->generation.load() == curGen) {
+                    success = false;
+                    break;
+                }
+            }
+        }
+        srw->sharedHolders.fetch_add(1);
+    } else {
+        srw->exclusiveHolders.fetch_sub(1);
+        SrwExclusiveLockWrapper wrapper{srw->mutex};
+        if (dwMilliseconds == 0xFFFFFFFF) {
+            while (cv->generation.load() == curGen) {
+                cv->cv.wait(wrapper);
+            }
+        } else {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(dwMilliseconds);
+            while (cv->generation.load() == curGen) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) {
+                    success = false;
+                    break;
+                }
+                cv->cv.wait_until(wrapper, deadline);
+                if (std::chrono::steady_clock::now() >= deadline && cv->generation.load() == curGen) {
+                    success = false;
+                    break;
+                }
+            }
+        }
+        srw->exclusiveHolders.fetch_add(1);
+    }
+
+    if (!success) {
+        SovereignSyncManager::get().recordTimeout();
+        SetLastError(1460); // ERROR_TIMEOUT
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline void WakeConditionVariable(PCONDITION_VARIABLE ConditionVariable) noexcept {
+    if (!ConditionVariable) return;
+    auto cv = SovereignSyncManager::get().getCv(ConditionVariable);
+    if (!cv) return;
+    cv->wakeCount.fetch_add(1);
+    cv->generation.fetch_add(1);
+    SovereignSyncManager::get().recordWake();
+    cv->cv.notify_one();
+}
+
+inline void WakeAllConditionVariable(PCONDITION_VARIABLE ConditionVariable) noexcept {
+    if (!ConditionVariable) return;
+    auto cv = SovereignSyncManager::get().getCv(ConditionVariable);
+    if (!cv) return;
+    cv->wakeCount.fetch_add(1);
+    cv->generation.fetch_add(1);
+    SovereignSyncManager::get().recordWake();
+    cv->cv.notify_all();
+}
 
 // One-Time Initialization
 inline BOOL InitOnceBeginInitialize(LPINIT_ONCE /*lpInitOnce*/, DWORD /*dwFlags*/, PBOOL fPending, LPVOID* /*lpContext*/) noexcept {

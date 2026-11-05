@@ -472,6 +472,9 @@ static constexpr IID IID_ID3D12RootSignature =
 static constexpr IID IID_ID3D12Resource = 
     { 0x696442be, 0xa72e, 0x4059, { 0xbc, 0x79, 0x5b, 0x5c, 0x98, 0x04, 0x0f, 0xad } };
 
+static constexpr IID IID_ID3D12ManualWriteTrackingResource = 
+    { 0x86ca3b85, 0x49ad, 0x4b6e, { 0xae, 0xd5, 0xed, 0xdb, 0x18, 0x54, 0x0f, 0x41 } };
+
 static constexpr IID IID_ID3D12CommandAllocator = 
     { 0x6102dee4, 0xaf59, 0x4b09, { 0xb9, 0x99, 0xb4, 0x4d, 0x73, 0xf0, 0x9b, 0x24 } };
 
@@ -626,6 +629,16 @@ public:
     virtual void Unmap(uint32_t Subresource, const void* pWrittenRange) = 0;
     virtual D3D12_RESOURCE_DESC GetDesc() = 0;
     virtual uint64_t GetGPUVirtualAddress() = 0;
+};
+
+struct D3D12_RANGE {
+    size_t Begin{0};
+    size_t End{0};
+};
+
+class ID3D12ManualWriteTrackingResource : public IUnknown {
+public:
+    virtual void TrackWrite(uint32_t Subresource, const D3D12_RANGE* pWrittenRange) = 0;
 };
 
 class ID3D12CommandAllocator : public ID3D12DeviceChild {
@@ -1210,6 +1223,7 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS16 {
 };
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS17 {
+    BOOL NonNormalizedCoordinateSamplersSupported{1};
     BOOL ManualWriteTrackingResourceSupported{1};
     BOOL InvertedDepthRangesSupported{1};
 };
@@ -1872,7 +1886,13 @@ public:
     uint32_t GetResetCount() const { return m_resetCount; }
 };
 
-class Prism3D12ResourceImpl : public ID3D12Resource {
+class Prism3D12ResourceImpl : public ID3D12Resource, public ID3D12ManualWriteTrackingResource {
+public:
+    struct TrackedWriteRecord {
+        uint32_t Subresource{0};
+        D3D12_RANGE WrittenRange{0, 0};
+    };
+
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     ID3D12Device* m_pDevice{ nullptr };
@@ -1882,6 +1902,7 @@ private:
     uint64_t m_gpuVirtualAddress{ 0 };
     ID3D12Heap* m_pHeap{ nullptr };
     uint64_t m_heapOffset{ 0 };
+    std::vector<TrackedWriteRecord> m_trackedWrites;
 
 public:
     Prism3D12ResourceImpl(ID3D12Device* pDev, const D3D12_RESOURCE_DESC& desc, D3D12_RESOURCE_STATES state, ID3D12Heap* pHeap = nullptr, uint64_t heapOffset = 0)
@@ -1913,6 +1934,11 @@ public:
             AddRef();
             return 0;
         }
+        if (riid == IID_ID3D12ManualWriteTrackingResource) {
+            *ppv = static_cast<ID3D12ManualWriteTrackingResource*>(this);
+            AddRef();
+            return 0;
+        }
         *ppv = nullptr;
         return -2147467262;
     }
@@ -1922,6 +1948,24 @@ public:
         uint32_t c = --m_refCount;
         if (c == 0) delete this;
         return c;
+    }
+
+    void TrackWrite(uint32_t Subresource, const D3D12_RANGE* pWrittenRange) override {
+        TrackedWriteRecord rec{};
+        rec.Subresource = Subresource;
+        if (pWrittenRange) {
+            rec.WrittenRange = *pWrittenRange;
+        } else {
+            rec.WrittenRange = {0, m_memory.size()};
+        }
+        m_trackedWrites.push_back(rec);
+    }
+
+    const std::vector<TrackedWriteRecord>& GetTrackedWrites() const noexcept {
+        return m_trackedWrites;
+    }
+    void ClearTrackedWrites() noexcept {
+        m_trackedWrites.clear();
     }
 
     int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
@@ -3785,6 +3829,7 @@ public:
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS17) {
             if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS17)) return -1;
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS17*>(pFeatureSupportData);
+            pData->NonNormalizedCoordinateSamplersSupported = TRUE;
             pData->ManualWriteTrackingResourceSupported = TRUE;
             pData->InvertedDepthRangesSupported = TRUE;
             return 0;
