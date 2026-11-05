@@ -516,6 +516,7 @@ class ID3D12PipelineState;
 class ID3D12DescriptorHeap;
 class ID3D12CommandList;
 class ID3D12GraphicsCommandList;
+class ID3D12GraphicsCommandList1;
 class ID3D12GraphicsCommandList10;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
@@ -946,6 +947,33 @@ struct D3D12_RENDER_PASS_DEPTH_STENCIL_DESC {
     D3D12_RENDER_PASS_ENDING_ACCESS StencilEndingAccess{};
 };
 
+struct D3D12_SAMPLE_POSITION {
+    int8_t X{0};
+    int8_t Y{0};
+};
+
+static constexpr IID IID_ID3D12GraphicsCommandList1 = 
+    { 0x55050855, 0x96e3, 0x4508, { 0x86, 0x36, 0xfb, 0xdb, 0x1d, 0x82, 0x4e, 0x6d } };
+
+class ID3D12GraphicsCommandList1 : public ID3D12GraphicsCommandList {
+public:
+    virtual void SetSamplePositions(
+        uint32_t NumSamplesPerPixel,
+        uint32_t NumPixels,
+        D3D12_SAMPLE_POSITION* pSamplePositions) = 0;
+    virtual void ResolveSubresourceRegion(
+        ID3D12Resource* pDstResource,
+        uint32_t DstSubresource,
+        uint32_t DstX,
+        uint32_t DstY,
+        ID3D12Resource* pSrcResource,
+        uint32_t SrcSubresource,
+        D3D12_RECT* pSrcRect,
+        DXGI_FORMAT Format,
+        uint32_t ResolveMode) = 0;
+    virtual void SetViewInstanceMask(uint32_t Mask) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList4 = 
     { 0x87e0e368, 0xe32b, 0x4d0b, { 0xbe, 0x4b, 0x4b, 0x78, 0xb8, 0x63, 0x00, 0xaf } };
 
@@ -959,7 +987,7 @@ struct D3D12_DISPATCH_RAYS_DESC {
     uint32_t Depth{0};
 };
 
-class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList {
+class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList1 {
 public:
     virtual void DispatchRays(const D3D12_DISPATCH_RAYS_DESC* pDesc) = 0;
     virtual void BeginRenderPass(
@@ -2218,7 +2246,7 @@ public:
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
-            riid == IID_ID3D12GraphicsCommandList4 ||
+            riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -2461,6 +2489,33 @@ public:
     }
 
     [[nodiscard]] uint32_t GetRecordedEnhancedBarriersCount() const noexcept { return m_recordedEnhancedBarriersCount; }
+
+    uint32_t m_samplePositionsCount{0};
+    std::vector<D3D12_SAMPLE_POSITION> m_samplePositions;
+    uint32_t m_viewInstanceMask{0};
+
+    void SetSamplePositions(uint32_t NumSamplesPerPixel, uint32_t NumPixels, D3D12_SAMPLE_POSITION* pSamplePositions) override {
+        if (!m_isOpen) return;
+        m_samplePositionsCount = NumSamplesPerPixel * NumPixels;
+        m_samplePositions.clear();
+        if (pSamplePositions && m_samplePositionsCount > 0) {
+            m_samplePositions.assign(pSamplePositions, pSamplePositions + m_samplePositionsCount);
+        }
+    }
+
+    [[nodiscard]] uint32_t GetSamplePositionsCount() const noexcept { return m_samplePositionsCount; }
+    [[nodiscard]] const std::vector<D3D12_SAMPLE_POSITION>& GetSamplePositions() const noexcept { return m_samplePositions; }
+
+    void ResolveSubresourceRegion(
+        ID3D12Resource*, uint32_t, uint32_t, uint32_t,
+        ID3D12Resource*, uint32_t, D3D12_RECT*,
+        DXGI_FORMAT, uint32_t) override {}
+
+    void SetViewInstanceMask(uint32_t Mask) override {
+        m_viewInstanceMask = Mask;
+    }
+
+    [[nodiscard]] uint32_t GetViewInstanceMask() const noexcept { return m_viewInstanceMask; }
 
     bool m_inRenderPass{ false };
     uint32_t m_renderPassNumTargets{ 0 };

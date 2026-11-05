@@ -1649,6 +1649,17 @@ struct SYSTEM_BOOT_METADATA_INFORMATION {
 };
 using PSYSTEM_BOOT_METADATA_INFORMATION = SYSTEM_BOOT_METADATA_INFORMATION*;
 
+struct SYSTEM_FIRMWARE_PARTITION_INFORMATION {
+    GUID PartitionGuid{0};
+    uint32_t PartitionNumber{0};
+    uint32_t PartitionFlags{0};
+    uint64_t StartingLba{0};
+    uint64_t SectorCount{0};
+    uint32_t SectorSizeInBytes{0};
+    uint32_t Reserved{0};
+};
+using PSYSTEM_FIRMWARE_PARTITION_INFORMATION = SYSTEM_FIRMWARE_PARTITION_INFORMATION*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2275,6 +2286,22 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             std::memcpy(pMeta->Data, &payload, sizeof(payload));
 
             if (ReturnLength) *ReturnLength = kTotalRequired;
+            return NtStatus::Success;
+        }
+        case 151: { // SystemFirmwarePartitionInformation
+            if (SystemInformationLength < sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pPart = reinterpret_cast<SYSTEM_FIRMWARE_PARTITION_INFORMATION*>(SystemInformation);
+            pPart->PartitionGuid = { 0xC12A7328, 0xF81F, 0x11D2, { 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B } }; // EFI System Partition GUID
+            pPart->PartitionNumber = 1;
+            pPart->PartitionFlags = 0x00000003; // Boot | System ESP
+            pPart->StartingLba = 2048;          // Standard 1MB alignment
+            pPart->SectorCount = 524288;        // 256 MB ESP
+            pPart->SectorSizeInBytes = 512;
+            pPart->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION);
             return NtStatus::Success;
         }
         case 16: { // SystemHandleInformation

@@ -66,6 +66,7 @@ inline constexpr const wchar_t* BCRYPT_KEY_LENGTH              = L"KeyLength";
 inline constexpr const wchar_t* BCRYPT_KEY_DATA_BLOB           = L"KeyDataBlob";
 inline constexpr const wchar_t* BCRYPT_OPAQUE_KEY_BLOB         = L"OpaqueKeyBlob";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_GCM          = L"ChainingModeGCM";
+inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_CCM          = L"ChainingModeCCM";
 inline constexpr const wchar_t* BCRYPT_AUTH_TAG_LENGTH         = L"AuthTagLength";
 
 // Standard CNG Authenticated Mode Structs & Flags
@@ -1346,6 +1347,218 @@ public:
         return res;
     }
 
+    struct CcmResult {
+        bool success{false};
+        std::vector<uint8_t> ciphertext;
+        std::array<uint8_t, 16> tag{0};
+    };
+
+    struct CcmDecryptResult {
+        bool success{false};
+        std::vector<uint8_t> plaintext;
+    };
+
+    CcmResult encryptCcm(
+        std::span<const uint8_t> plaintext,
+        std::span<const uint8_t> nonce,
+        std::span<const uint8_t> aad,
+        size_t tagLen = 16
+    ) const {
+        CcmResult res;
+        if (nonce.size() < 7 || nonce.size() > 13) return res;
+        if (tagLen < 4 || tagLen > 16 || (tagLen % 2 != 0)) return res;
+
+        uint8_t q = static_cast<uint8_t>(15 - nonce.size());
+        uint64_t maxP = (q >= 8) ? UINT64_MAX : ((1ULL << (8 * q)) - 1);
+        if (plaintext.size() > maxP) return res;
+
+        // Step 1: Format B0
+        uint8_t b0[16] = {0};
+        uint8_t flags = 0;
+        if (!aad.empty()) flags |= 0x40;
+        flags |= static_cast<uint8_t>(((tagLen - 2) / 2) << 3);
+        flags |= static_cast<uint8_t>(q - 1);
+        b0[0] = flags;
+        std::memcpy(&b0[1], nonce.data(), nonce.size());
+        uint64_t pLen = plaintext.size();
+        for (uint8_t i = 0; i < q; ++i) {
+            b0[15 - i] = static_cast<uint8_t>((pLen >> (i * 8)) & 0xFF);
+        }
+
+        // Step 2: CBC-MAC
+        uint8_t y[16] = {0};
+        encryptBlock(b0, y);
+
+        if (!aad.empty()) {
+            std::vector<uint8_t> formattedAad;
+            size_t a = aad.size();
+            if (a < 65280) {
+                formattedAad.push_back(static_cast<uint8_t>((a >> 8) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>(a & 0xFF));
+            } else {
+                formattedAad.push_back(0xFF);
+                formattedAad.push_back(0xFE);
+                formattedAad.push_back(static_cast<uint8_t>((a >> 24) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>((a >> 16) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>((a >> 8) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>(a & 0xFF));
+            }
+            formattedAad.insert(formattedAad.end(), aad.begin(), aad.end());
+            while (formattedAad.size() % 16 != 0) formattedAad.push_back(0);
+
+            for (size_t offset = 0; offset < formattedAad.size(); offset += 16) {
+                for (size_t k = 0; k < 16; ++k) y[k] ^= formattedAad[offset + k];
+                uint8_t nextY[16];
+                encryptBlock(y, nextY);
+                std::memcpy(y, nextY, 16);
+            }
+        }
+
+        if (!plaintext.empty()) {
+            for (size_t offset = 0; offset < plaintext.size(); offset += 16) {
+                size_t chunk = std::min<size_t>(16, plaintext.size() - offset);
+                for (size_t k = 0; k < chunk; ++k) y[k] ^= plaintext[offset + k];
+                uint8_t nextY[16];
+                encryptBlock(y, nextY);
+                std::memcpy(y, nextY, 16);
+            }
+        }
+
+        // Step 3: CTR encryption
+        uint8_t ctr0[16] = {0};
+        ctr0[0] = static_cast<uint8_t>(q - 1);
+        std::memcpy(&ctr0[1], nonce.data(), nonce.size());
+
+        uint8_t s0[16];
+        encryptBlock(ctr0, s0);
+        for (size_t k = 0; k < tagLen; ++k) {
+            res.tag[k] = y[k] ^ s0[k];
+        }
+
+        res.ciphertext.resize(plaintext.size());
+        uint8_t ctrBlock[16];
+        std::memcpy(ctrBlock, ctr0, 16);
+        uint64_t counter = 0;
+        for (size_t offset = 0; offset < plaintext.size(); offset += 16) {
+            counter++;
+            for (uint8_t i = 0; i < q; ++i) {
+                ctrBlock[15 - i] = static_cast<uint8_t>((counter >> (i * 8)) & 0xFF);
+            }
+            uint8_t sj[16];
+            encryptBlock(ctrBlock, sj);
+            size_t chunk = std::min<size_t>(16, plaintext.size() - offset);
+            for (size_t k = 0; k < chunk; ++k) {
+                res.ciphertext[offset + k] = plaintext[offset + k] ^ sj[k];
+            }
+        }
+
+        res.success = true;
+        return res;
+    }
+
+    CcmDecryptResult decryptCcm(
+        std::span<const uint8_t> ciphertext,
+        std::span<const uint8_t> nonce,
+        std::span<const uint8_t> aad,
+        std::span<const uint8_t> tag
+    ) const {
+        CcmDecryptResult res;
+        if (nonce.size() < 7 || nonce.size() > 13) return res;
+        size_t tagLen = tag.size();
+        if (tagLen < 4 || tagLen > 16 || (tagLen % 2 != 0)) return res;
+
+        uint8_t q = static_cast<uint8_t>(15 - nonce.size());
+
+        std::vector<uint8_t> candidatePt(ciphertext.size());
+        uint8_t ctr0[16] = {0};
+        ctr0[0] = static_cast<uint8_t>(q - 1);
+        std::memcpy(&ctr0[1], nonce.data(), nonce.size());
+
+        uint8_t ctrBlock[16];
+        std::memcpy(ctrBlock, ctr0, 16);
+        uint64_t counter = 0;
+        for (size_t offset = 0; offset < ciphertext.size(); offset += 16) {
+            counter++;
+            for (uint8_t i = 0; i < q; ++i) {
+                ctrBlock[15 - i] = static_cast<uint8_t>((counter >> (i * 8)) & 0xFF);
+            }
+            uint8_t sj[16];
+            encryptBlock(ctrBlock, sj);
+            size_t chunk = std::min<size_t>(16, ciphertext.size() - offset);
+            for (size_t k = 0; k < chunk; ++k) {
+                candidatePt[offset + k] = ciphertext[offset + k] ^ sj[k];
+            }
+        }
+
+        // Compute CBC-MAC
+        uint8_t b0[16] = {0};
+        uint8_t flags = 0;
+        if (!aad.empty()) flags |= 0x40;
+        flags |= static_cast<uint8_t>(((tagLen - 2) / 2) << 3);
+        flags |= static_cast<uint8_t>(q - 1);
+        b0[0] = flags;
+        std::memcpy(&b0[1], nonce.data(), nonce.size());
+        uint64_t pLen = candidatePt.size();
+        for (uint8_t i = 0; i < q; ++i) {
+            b0[15 - i] = static_cast<uint8_t>((pLen >> (i * 8)) & 0xFF);
+        }
+
+        uint8_t y[16] = {0};
+        encryptBlock(b0, y);
+
+        if (!aad.empty()) {
+            std::vector<uint8_t> formattedAad;
+            size_t a = aad.size();
+            if (a < 65280) {
+                formattedAad.push_back(static_cast<uint8_t>((a >> 8) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>(a & 0xFF));
+            } else {
+                formattedAad.push_back(0xFF);
+                formattedAad.push_back(0xFE);
+                formattedAad.push_back(static_cast<uint8_t>((a >> 24) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>((a >> 16) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>((a >> 8) & 0xFF));
+                formattedAad.push_back(static_cast<uint8_t>(a & 0xFF));
+            }
+            formattedAad.insert(formattedAad.end(), aad.begin(), aad.end());
+            while (formattedAad.size() % 16 != 0) formattedAad.push_back(0);
+
+            for (size_t offset = 0; offset < formattedAad.size(); offset += 16) {
+                for (size_t k = 0; k < 16; ++k) y[k] ^= formattedAad[offset + k];
+                uint8_t nextY[16];
+                encryptBlock(y, nextY);
+                std::memcpy(y, nextY, 16);
+            }
+        }
+
+        if (!candidatePt.empty()) {
+            for (size_t offset = 0; offset < candidatePt.size(); offset += 16) {
+                size_t chunk = std::min<size_t>(16, candidatePt.size() - offset);
+                for (size_t k = 0; k < chunk; ++k) y[k] ^= candidatePt[offset + k];
+                uint8_t nextY[16];
+                encryptBlock(y, nextY);
+                std::memcpy(y, nextY, 16);
+            }
+        }
+
+        uint8_t s0[16];
+        encryptBlock(ctr0, s0);
+        uint8_t expectedTag[16];
+        for (size_t k = 0; k < tagLen; ++k) {
+            expectedTag[k] = y[k] ^ s0[k];
+        }
+
+        uint8_t diff = 0;
+        for (size_t k = 0; k < tagLen; ++k) {
+            diff |= (expectedTag[k] ^ tag[k]);
+        }
+        if (diff != 0) return res;
+
+        res.plaintext = std::move(candidatePt);
+        res.success = true;
+        return res;
+    }
+
 private:
     size_t nk_{4};
     size_t nr_{10};
@@ -2078,6 +2291,40 @@ inline NTSTATUS BCryptEncrypt(
         return STATUS_SUCCESS;
     }
 
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_CCM) {
+        if (!pPaddingInfo) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        auto* authInfo = reinterpret_cast<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO*>(pPaddingInfo);
+        if (!authInfo->pbNonce || authInfo->cbNonce < 7 || authInfo->cbNonce > 13 || !authInfo->pbTag || authInfo->cbTag < 4) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        std::span<const uint8_t> nonce(authInfo->pbNonce, authInfo->cbNonce);
+        std::span<const uint8_t> aad{};
+        if (authInfo->pbAuthData && authInfo->cbAuthData > 0) {
+            aad = std::span<const uint8_t>(authInfo->pbAuthData, authInfo->cbAuthData);
+        }
+        std::span<const uint8_t> pt(pbInput, cbInput);
+        auto result = keyObj->aesEngine->encryptCcm(pt, nonce, aad, authInfo->cbTag);
+        if (!result.success) {
+            return STATUS_UNSUCCESSFUL;
+        }
+        *pcbResult = static_cast<uint32_t>(result.ciphertext.size());
+        if (authInfo->pbTag) {
+            std::memcpy(authInfo->pbTag, result.tag.data(), authInfo->cbTag);
+        }
+        if (cbInput > 0 && !pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < result.ciphertext.size()) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        if (!result.ciphertext.empty() && pbOutput) {
+            std::memcpy(pbOutput, result.ciphertext.data(), result.ciphertext.size());
+        }
+        return STATUS_SUCCESS;
+    }
+
     bool usePadding = (dwFlags & BCRYPT_BLOCK_PADDING) != 0;
     Aes::Mode mode = Aes::Mode::CBC;
     if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_ECB) {
@@ -2148,6 +2395,38 @@ inline NTSTATUS BCryptDecrypt(
         std::span<const uint8_t> ct(pbInput, cbInput);
         std::span<const uint8_t> expectedTag(authInfo->pbTag, authInfo->cbTag);
         auto result = keyObj->aesEngine->decryptGcm(ct, nonce, aad, expectedTag);
+        if (!result.success) {
+            return STATUS_AUTH_TAG_MISMATCH;
+        }
+        *pcbResult = static_cast<uint32_t>(result.plaintext.size());
+        if (cbInput > 0 && !pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < result.plaintext.size()) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        if (!result.plaintext.empty() && pbOutput) {
+            std::memcpy(pbOutput, result.plaintext.data(), result.plaintext.size());
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_CCM) {
+        if (!pPaddingInfo) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        auto* authInfo = reinterpret_cast<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO*>(pPaddingInfo);
+        if (!authInfo->pbNonce || authInfo->cbNonce < 7 || authInfo->cbNonce > 13 || !authInfo->pbTag || authInfo->cbTag < 4) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        std::span<const uint8_t> nonce(authInfo->pbNonce, authInfo->cbNonce);
+        std::span<const uint8_t> aad{};
+        if (authInfo->pbAuthData && authInfo->cbAuthData > 0) {
+            aad = std::span<const uint8_t>(authInfo->pbAuthData, authInfo->cbAuthData);
+        }
+        std::span<const uint8_t> ct(pbInput, cbInput);
+        std::span<const uint8_t> expectedTag(authInfo->pbTag, authInfo->cbTag);
+        auto result = keyObj->aesEngine->decryptCcm(ct, nonce, aad, expectedTag);
         if (!result.success) {
             return STATUS_AUTH_TAG_MISMATCH;
         }

@@ -45998,3 +45998,292 @@ inline void Test_Horizon223_EnhancedBarriers_BootMetadata_ThreadPowerThrottling_
 
     std::cout << "[TEST] Suite 439: Horizon 223 - Enhanced Barriers, Boot Metadata, Thread Power Throttling & AES-GCM Engine PASSED." << std::endl;
 }
+
+// ============================================================================
+// Test Suite 440: Horizon 224 - Sample Positions, Firmware Partition Information,
+//                Process Power Throttling & AES-CCM Authenticated Engine
+// ============================================================================
+inline void Test_Horizon224_SamplePositions_FirmwarePartition_ProcessPowerThrottling_And_AesCcm_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 440: Horizon 224 - Sample Positions, Firmware Partition,\n"
+              << "                 Process Power Throttling & AES-CCM Authenticated Engine\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Sample Positions & Options 14
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [1/4] Verifying PrismX 3D12 Sample Positions & Options 14...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_1, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "Prism3D12CreateDevice creates sovereign device");
+
+        // Verify Options 14
+        D3D12_FEATURE_DATA_D3D12_OPTIONS14 opts14{};
+        hr = pDev->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS14, &opts14, sizeof(opts14));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS14 succeeds");
+        TEST_ASSERT(opts14.AdvancedTextureOpsSupported == TRUE, "AdvancedTextureOpsSupported is TRUE");
+        TEST_ASSERT(opts14.WriteableMSAATexturesSupported == TRUE, "WriteableMSAATexturesSupported is TRUE");
+        TEST_ASSERT(opts14.IndependentFrontAndBackStencilRefMaskSupported == TRUE, "IndependentFrontAndBackStencilRefMaskSupported is TRUE");
+
+        // Create Command Allocator and Command List
+        ID3D12CommandAllocator* pAlloc = nullptr;
+        hr = pDev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAlloc));
+        TEST_ASSERT(hr == 0 && pAlloc != nullptr, "CreateCommandAllocator succeeds");
+
+        ID3D12GraphicsCommandList* pList = nullptr;
+        hr = pDev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pAlloc, nullptr, IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&pList));
+        TEST_ASSERT(hr == 0 && pList != nullptr, "CreateCommandList succeeds");
+
+        // QueryInterface for ID3D12GraphicsCommandList1
+        ID3D12GraphicsCommandList1* pList1 = nullptr;
+        hr = pList->QueryInterface(IID_ID3D12GraphicsCommandList1, reinterpret_cast<void**>(&pList1));
+        TEST_ASSERT(hr == 0 && pList1 != nullptr, "QueryInterface for ID3D12GraphicsCommandList1 succeeds");
+
+        // Set custom 4x MSAA sample positions
+        D3D12_SAMPLE_POSITION samplePositions[4] = {
+            { -2, -6 }, // Standard rotated grid sample 0
+            {  6, -2 }, // Sample 1
+            { -6,  2 }, // Sample 2
+            {  2,  6 }  // Sample 3
+        };
+        pList1->SetSamplePositions(4, 1, samplePositions);
+
+        auto* pImpl = static_cast<Prism3D12GraphicsCommandListImpl*>(pList1);
+        TEST_ASSERT(pImpl->GetSamplePositionsCount() == 4, "Sample positions count equals 4");
+        const auto& retrievedPositions = pImpl->GetSamplePositions();
+        TEST_ASSERT(retrievedPositions.size() == 4, "Recorded sample positions size equals 4");
+        TEST_ASSERT(retrievedPositions[0].X == -2 && retrievedPositions[0].Y == -6, "Sample 0 coordinates verified");
+        TEST_ASSERT(retrievedPositions[1].X == 6 && retrievedPositions[1].Y == -2, "Sample 1 coordinates verified");
+        TEST_ASSERT(retrievedPositions[2].X == -6 && retrievedPositions[2].Y == 2, "Sample 2 coordinates verified");
+        TEST_ASSERT(retrievedPositions[3].X == 2 && retrievedPositions[3].Y == 6, "Sample 3 coordinates verified");
+
+        // View instance mask
+        pList1->SetViewInstanceMask(0x0F);
+        TEST_ASSERT(pImpl->GetViewInstanceMask() == 0x0F, "View instance mask set to 0x0F");
+
+        pList1->Release();
+        pList->Release();
+        pAlloc->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 Sample Positions & Options 14 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Firmware Partition Information (Class 151)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [2/4] Verifying Windows NT System Firmware Partition Information (Class 151)...\n";
+        using namespace micant::ntdll;
+
+        ULONG retLen = 0;
+        // Sizing query check
+        NtStatus st = NtQuerySystemInformation_Export(151, nullptr, 0, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Query with null buffer returns STATUS_INFO_LENGTH_MISMATCH");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION), "Returned length matches SYSTEM_FIRMWARE_PARTITION_INFORMATION");
+
+        SYSTEM_FIRMWARE_PARTITION_INFORMATION partInfo{};
+        st = NtQuerySystemInformation_Export(151, &partInfo, sizeof(partInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Query with valid buffer returns STATUS_SUCCESS");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION), "Returned length matches expected size");
+
+        // Validate EFI System Partition (ESP) GUID
+        micant::ntdll::GUID expectedEspGuid = { 0xC12A7328, 0xF81F, 0x11D2, { 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B } };
+        TEST_ASSERT(std::memcmp(&partInfo.PartitionGuid, &expectedEspGuid, sizeof(micant::ntdll::GUID)) == 0, "ESP Partition GUID matches UEFI standard");
+        TEST_ASSERT(partInfo.PartitionNumber == 1, "ESP is Partition 1");
+        TEST_ASSERT((partInfo.PartitionFlags & 0x03) == 0x03, "ESP has Boot and System flags enabled");
+        TEST_ASSERT(partInfo.StartingLba == 2048, "Starting LBA is 2048 (1MB offset)");
+        TEST_ASSERT(partInfo.SectorCount == 524288, "Sector count is 524288 (256 MB volume)");
+        TEST_ASSERT(partInfo.SectorSizeInBytes == 512, "Sector size is 512 bytes");
+
+        std::cout << "  [PASS] Windows NT System Firmware Partition Information verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Process Power Throttling & Default CPU Sets
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [3/4] Verifying Win32 Process Power Throttling & Default CPU Sets...\n";
+        using namespace micant::win32;
+
+        // 3.1 Process Power Throttling
+        PROCESS_POWER_THROTTLING_STATE throttleState{};
+        throttleState.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+        throttleState.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+        throttleState.StateMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+
+        BOOL ok = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &throttleState, sizeof(throttleState));
+        TEST_ASSERT(ok == TRUE, "SetProcessInformation with ProcessPowerThrottling succeeds");
+
+        PROCESS_POWER_THROTTLING_STATE queriedThrottle{};
+        ok = GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &queriedThrottle, sizeof(queriedThrottle));
+        TEST_ASSERT(ok == TRUE, "GetProcessInformation with ProcessPowerThrottling succeeds");
+        TEST_ASSERT(queriedThrottle.ControlMask == PROCESS_POWER_THROTTLING_EXECUTION_SPEED, "ControlMask matches set value");
+        TEST_ASSERT(queriedThrottle.StateMask == PROCESS_POWER_THROTTLING_EXECUTION_SPEED, "StateMask matches set value");
+
+        // 3.2 Process Default CPU Sets
+        ULONG targetCpuSets[4] = { 0, 1, 2, 3 };
+        ok = SetProcessDefaultCpuSets(GetCurrentProcess(), targetCpuSets, 4);
+        TEST_ASSERT(ok == TRUE, "SetProcessDefaultCpuSets configures 4 default cores");
+
+        ULONG retrievedCpuSets[8] = { 0 };
+        ULONG reqCount = 0;
+        ok = GetProcessDefaultCpuSets(GetCurrentProcess(), retrievedCpuSets, 8, &reqCount);
+        TEST_ASSERT(ok == TRUE, "GetProcessDefaultCpuSets succeeds");
+        TEST_ASSERT(reqCount == 4, "Required CPU set count equals 4");
+        TEST_ASSERT(retrievedCpuSets[0] == 0 && retrievedCpuSets[1] == 1 && retrievedCpuSets[2] == 2 && retrievedCpuSets[3] == 3, "Retrieved CPU set IDs match target");
+
+        std::cout << "  [PASS] Win32 Process Power Throttling & Default CPU Sets verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt / CNG AES-CCM Authenticated Encryption Engine (NIST SP 800-38C)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [4/4] Verifying BCrypt / CNG AES-CCM Authenticated Engine (NIST SP 800-38C)...\n";
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider opens AES algorithm");
+
+        // Configure ChainingModeCCM
+        st = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE, reinterpret_cast<uint8_t*>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CCM)), sizeof(BCRYPT_CHAIN_MODE_CCM), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptSetProperty sets ChainingModeCCM");
+
+        // 4.1 Vector 1: Key=128b, Nonce=12B, AAD=8B, Plaintext=16B, Tag=16B
+        {
+            const uint8_t key1[16] = {
+                0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key1, sizeof(key1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-CCM key");
+
+            uint8_t nonce1[12] = {
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b
+            };
+            uint8_t aad1[8] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
+            };
+            const uint8_t pt1[16] = {
+                0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f
+            };
+
+            uint8_t ct1[16] = {0};
+            uint8_t tag1[16] = {0};
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+            authInfo.cbSize = sizeof(authInfo);
+            authInfo.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+            authInfo.pbNonce = nonce1;
+            authInfo.cbNonce = sizeof(nonce1);
+            authInfo.pbAuthData = aad1;
+            authInfo.cbAuthData = sizeof(aad1);
+            authInfo.pbTag = tag1;
+            authInfo.cbTag = sizeof(tag1);
+
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt1, sizeof(pt1), &authInfo, nullptr, 0, ct1, sizeof(ct1), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptEncrypt encrypts 16-byte CCM payload");
+
+            const uint8_t expectedCt1[16] = {
+                0xe3, 0xb2, 0x01, 0xa9, 0xf5, 0xb7, 0x1a, 0x7a, 0x9b, 0x1c, 0xea, 0xec, 0xcd, 0x97, 0xe7, 0x0b
+            };
+            const uint8_t expectedTag1[16] = {
+                0x7c, 0x9c, 0xf9, 0xfe, 0xdb, 0xe0, 0x2b, 0xfe, 0x1b, 0xe1, 0x59, 0xbf, 0x5b, 0x7d, 0x0a, 0x3e
+            };
+            TEST_ASSERT(std::memcmp(ct1, expectedCt1, 16) == 0, "AES-CCM Vector 1 ciphertext matches reference");
+            TEST_ASSERT(std::memcmp(tag1, expectedTag1, 16) == 0, "AES-CCM Vector 1 tag matches reference");
+
+            // Successful decryption
+            uint8_t decrypted[16] = {0};
+            st = BCryptDecrypt(hKey, ct1, sizeof(ct1), &authInfo, nullptr, 0, decrypted, sizeof(decrypted), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptDecrypt decrypts authentic CCM ciphertext");
+            TEST_ASSERT(std::memcmp(decrypted, pt1, 16) == 0, "Decrypted plaintext matches original payload");
+
+            // 4.2 Anti-tamper verification
+            // Tamper ciphertext
+            uint8_t tamperedCt[16];
+            std::memcpy(tamperedCt, ct1, 16);
+            tamperedCt[5] ^= 0x55;
+            uint8_t dummy[16];
+            st = BCryptDecrypt(hKey, tamperedCt, sizeof(tamperedCt), &authInfo, nullptr, 0, dummy, sizeof(dummy), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_AUTH_TAG_MISMATCH, "Tampered ciphertext triggers STATUS_AUTH_TAG_MISMATCH");
+
+            // Tamper tag
+            uint8_t tamperedTag[16];
+            std::memcpy(tamperedTag, tag1, 16);
+            tamperedTag[3] ^= 0xAA;
+            authInfo.pbTag = tamperedTag;
+            st = BCryptDecrypt(hKey, ct1, sizeof(ct1), &authInfo, nullptr, 0, dummy, sizeof(dummy), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_AUTH_TAG_MISMATCH, "Tampered tag triggers STATUS_AUTH_TAG_MISMATCH");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // 4.3 Vector 2: Empty AAD with 32-Byte Plaintext
+        {
+            const uint8_t key1[16] = {
+                0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key1, sizeof(key1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES key for Vector 2");
+
+            uint8_t nonce1[12] = {
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b
+            };
+            const uint8_t pt2[32] = {
+                0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+                0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51
+            };
+
+            uint8_t ct2[32] = {0};
+            uint8_t tag2[16] = {0};
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+            authInfo.cbSize = sizeof(authInfo);
+            authInfo.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+            authInfo.pbNonce = nonce1;
+            authInfo.cbNonce = sizeof(nonce1);
+            authInfo.pbTag = tag2;
+            authInfo.cbTag = sizeof(tag2);
+
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt2, sizeof(pt2), &authInfo, nullptr, 0, ct2, sizeof(ct2), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 32, "BCryptEncrypt encrypts 32-byte payload with empty AAD");
+
+            const uint8_t expectedCt2[32] = {
+                0xa8, 0x52, 0x9d, 0x68, 0xff, 0xd2, 0xa3, 0xcb, 0x5a, 0x08, 0xbe, 0xd6, 0x92, 0x29, 0xde, 0x0e,
+                0xff, 0x6a, 0x12, 0xbd, 0x8e, 0x74, 0x10, 0x0e, 0xf2, 0x95, 0x84, 0x43, 0x6f, 0x68, 0xbc, 0x8d
+            };
+            const uint8_t expectedTag2[16] = {
+                0x5f, 0x82, 0xa3, 0x68, 0x36, 0x20, 0x79, 0x95, 0x1b, 0xfd, 0xe4, 0x56, 0x46, 0x22, 0x0d, 0x1c
+            };
+            TEST_ASSERT(std::memcmp(ct2, expectedCt2, 32) == 0, "AES-CCM Vector 2 ciphertext matches reference");
+            TEST_ASSERT(std::memcmp(tag2, expectedTag2, 16) == 0, "AES-CCM Vector 2 tag matches reference");
+
+            uint8_t dec2[32] = {0};
+            st = BCryptDecrypt(hKey, ct2, sizeof(ct2), &authInfo, nullptr, 0, dec2, sizeof(dec2), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 32, "BCryptDecrypt decrypts authentic Vector 2 payload");
+            TEST_ASSERT(std::memcmp(dec2, pt2, 32) == 0, "Decrypted Vector 2 payload matches original");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        std::cout << "  [PASS] BCrypt / CNG AES-CCM Authenticated Encryption Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 224] Sample Positions, Firmware Partition, Process Power Throttling & AES-CCM Engine Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Sample Positions & Options 14 (CommandList1, 4x MSAA Grid) OK\n"
+              << "    Pillar 2: NT System Firmware Partition Information (Class 151, ESP GUID, LBA 2048) OK\n"
+              << "    Pillar 3: Win32 Process Power Throttling & Default CPU Sets OK\n"
+              << "    Pillar 4: BCrypt AES-CCM Authenticated Encryption Engine (NIST SP 800-38C vectors) OK\n";
+
+    std::cout << "[TEST] Suite 440: Horizon 224 - Sample Positions, Firmware Partition, Process Power Throttling & AES-CCM Engine PASSED." << std::endl;
+}
