@@ -46627,3 +46627,277 @@ inline void Test_Horizon225_CommandList2WriteBuffer_SpeculationControl_PriorityB
 
     std::cout << "[TEST] Suite 441: Horizon 225 - CommandList2 WriteBuffer, Speculation Control, Priority Boost & AES-XTS Engine PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 226 (Suite 442): PrismX 3D12 CommandList3 & Options 16, Windows NT
+// System Kernel VA Shadow (KPTI/Meltdown) & Code Integrity, Win32 Extended
+// Asynchronous I/O Completion & Pacing Architecture, and BCrypt AES Key Wrap
+// (RFC 3394 / RFC 5649 / NIST SP 800-38F) Cryptographic Engine
+// ============================================================================
+
+inline void Test_Horizon226_CommandList3Options16_VaShadow_AsyncIoCompletion_And_AesKeyWrap_Suite() {
+    std::cout << "\n[TEST] Running Suite 442: Horizon 226 - CommandList3/Options 16, KVA Shadow, Async I/O Completion & AES Key Wrap Suite...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList3 & Options 16
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+        Prism3D12CommandAllocatorImpl alloc(&device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        // Verify ID3D12GraphicsCommandList3 QueryInterface
+        void* pvCmd3 = nullptr;
+        int32_t qiRes = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList3, &pvCmd3);
+        TEST_ASSERT(qiRes == 0 && pvCmd3 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList3 must succeed");
+        auto* pCmd3 = static_cast<ID3D12GraphicsCommandList3*>(pvCmd3);
+
+        // Test SetProtectedResourceSession
+        auto* dummySession = reinterpret_cast<ID3D12ProtectedResourceSession*>(0xDEADBEEF);
+        pCmd3->SetProtectedResourceSession(dummySession);
+        TEST_ASSERT(cmdList.GetProtectedResourceSession() == dummySession, "SetProtectedResourceSession correctly configures session pointer");
+
+        // Verify Reset clears session
+        cmdList.Reset(&alloc, nullptr);
+        TEST_ASSERT(cmdList.GetProtectedResourceSession() == nullptr, "Reset clears active protected resource session");
+
+        // Verify Options 16 feature support
+        D3D12_FEATURE_DATA_D3D12_OPTIONS16 opts16{};
+        int32_t supRes = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &opts16, sizeof(opts16));
+        TEST_ASSERT(supRes == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS16 must succeed");
+        TEST_ASSERT(opts16.DynamicDepthBiasSupported == TRUE, "Options 16 reports DynamicDepthBiasSupported == TRUE");
+        TEST_ASSERT(opts16.GPUUploadHeapSupported == TRUE, "Options 16 reports GPUUploadHeapSupported == TRUE (Resizable BAR)");
+
+        pCmd3->Release();
+        std::cout << "  [PASS] PrismX 3D12 CommandList3 & Options 16 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Kernel VA Shadow & Code Integrity Info
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::ntdll;
+
+        // 1. SystemKernelVaShadowInformation (Class 196)
+        SYSTEM_KERNEL_VA_SHADOW_INFORMATION vaShadow{};
+        ULONG retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(196, &vaShadow, sizeof(vaShadow), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation class 196 (SystemKernelVaShadowInformation) must succeed");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_KERNEL_VA_SHADOW_INFORMATION), "Returned length matches SYSTEM_KERNEL_VA_SHADOW_INFORMATION");
+        TEST_ASSERT(vaShadow.KvaShadowEnabled == 1, "KvaShadowEnabled must be active for Meltdown / KPTI mitigation");
+        TEST_ASSERT(vaShadow.KvaShadowUserGlobal == 1, "KvaShadowUserGlobal must be enabled");
+        TEST_ASSERT(vaShadow.KvaShadowPcid == 1, "KvaShadowPcid must report hardware PCID acceleration");
+        TEST_ASSERT(vaShadow.KvaShadowInvpcid == 1, "KvaShadowInvpcid must report hardware INVPCID support");
+        TEST_ASSERT(vaShadow.KvaShadowRequired == 1 && vaShadow.KvaShadowRequiredAvailable == 1, "KvaShadowRequired flags must be set");
+        TEST_ASSERT(vaShadow.L1DataCacheFlushSupported == 1, "L1DataCacheFlushSupported must be active for L1TF mitigation");
+        TEST_ASSERT(vaShadow.L1TerminalFaultMitigationPresent == 1, "L1TerminalFaultMitigationPresent must report Foreshadow defense");
+
+        // Length mismatch validation
+        st = NtQuerySystemInformation_Export(196, &vaShadow, sizeof(vaShadow) - 1, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Query with undersized buffer must return STATUS_INFO_LENGTH_MISMATCH");
+
+        // 2. SystemCodeIntegrityInformation (Class 103)
+        SYSTEM_CODEINTEGRITY_INFORMATION ciInfo{};
+        st = NtQuerySystemInformation_Export(103, &ciInfo, sizeof(ciInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation class 103 (SystemCodeIntegrityInformation) must succeed");
+        TEST_ASSERT(ciInfo.Length == sizeof(SYSTEM_CODEINTEGRITY_INFORMATION), "Length field correctly populated");
+        TEST_ASSERT((ciInfo.CodeIntegrityOptions & CODEINTEGRITY_OPTION_ENABLED) != 0, "CodeIntegrityOptions reports CODEINTEGRITY_OPTION_ENABLED");
+        TEST_ASSERT((ciInfo.CodeIntegrityOptions & CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED) != 0, "CodeIntegrityOptions reports CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED");
+
+        std::cout << "  [PASS] Windows NT System Kernel VA Shadow (Class 196) & Code Integrity verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Asynchronous I/O Completion & Pacing
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::win32;
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetFileCompletionNotificationModes") != nullptr, "SetFileCompletionNotificationModes exported in kernel32.dll");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetQueuedCompletionStatusEx") != nullptr, "GetQueuedCompletionStatusEx exported in kernel32.dll");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetOverlappedResultEx") != nullptr, "GetOverlappedResultEx exported in kernel32.dll");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CancelIoEx") != nullptr, "CancelIoEx exported in kernel32.dll");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-io-l1-1-1.dll", "SetFileCompletionNotificationModes") != nullptr, "SetFileCompletionNotificationModes exported in api-ms-win-core-io-l1-1-1.dll");
+
+        HANDLE hTestFile = reinterpret_cast<HANDLE>(0xFEEDCAFE);
+
+        // 1. Test SetFileCompletionNotificationModes
+        BOOL modeRes = SetFileCompletionNotificationModes(hTestFile, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE);
+        TEST_ASSERT(modeRes == TRUE, "SetFileCompletionNotificationModes succeeds");
+        uint8_t modes = micant::win32::SovereignAsyncIoManager::get().GetNotificationModes(hTestFile);
+        TEST_ASSERT(modes == (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE), "Notification modes stored correctly in SovereignAsyncIoManager");
+
+        // 2. Test Completion Port Batch Queueing & Dequeueing (GetQueuedCompletionStatusEx)
+        HANDLE hPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
+        TEST_ASSERT(hPort != nullptr, "CreateIoCompletionPort creates sovereign completion port");
+
+        OVERLAPPED ov1{}, ov2{}, ov3{};
+        PostQueuedCompletionStatus(hPort, 128, 0x1111, &ov1);
+        PostQueuedCompletionStatus(hPort, 256, 0x2222, &ov2);
+        PostQueuedCompletionStatus(hPort, 512, 0x3333, &ov3);
+
+        OVERLAPPED_ENTRY entries[4]{};
+        ULONG removed = 0;
+        BOOL exRes = GetQueuedCompletionStatusEx(hPort, entries, 4, &removed, 0, FALSE);
+        TEST_ASSERT(exRes == TRUE && removed == 3, "GetQueuedCompletionStatusEx dequeues all 3 queued items in batch");
+        TEST_ASSERT(entries[0].dwNumberOfBytesTransferred == 128 && entries[0].lpCompletionKey == 0x1111, "Entry 0 transferred bytes and completion key match");
+        TEST_ASSERT(entries[1].dwNumberOfBytesTransferred == 256 && entries[1].lpCompletionKey == 0x2222, "Entry 1 transferred bytes and completion key match");
+        TEST_ASSERT(entries[2].dwNumberOfBytesTransferred == 512 && entries[2].lpCompletionKey == 0x3333, "Entry 2 transferred bytes and completion key match");
+
+        // 3. Test GetOverlappedResult & GetOverlappedResultEx
+        OVERLAPPED pendingOv{};
+        pendingOv.Internal = 0x00000103L; // STATUS_PENDING
+        pendingOv.InternalHigh = 2048;
+
+        DWORD bytesTransferred = 0;
+        BOOL nonWaitRes = GetOverlappedResultEx(hTestFile, &pendingOv, &bytesTransferred, 0, FALSE);
+        TEST_ASSERT(nonWaitRes == FALSE, "GetOverlappedResultEx returns FALSE when I/O incomplete and timeout is 0");
+        TEST_ASSERT(GetLastError() == 996, "GetLastError returns ERROR_IO_INCOMPLETE (996)");
+
+        BOOL waitRes = GetOverlappedResultEx(hTestFile, &pendingOv, &bytesTransferred, 100, FALSE);
+        TEST_ASSERT(waitRes == TRUE, "GetOverlappedResultEx returns TRUE with timeout > 0");
+        TEST_ASSERT(bytesTransferred == 2048, "Bytes transferred correctly reported from InternalHigh");
+
+        // 4. Test CancelIoEx
+        OVERLAPPED cancelOv{};
+        cancelOv.Internal = 0x00000103L; // STATUS_PENDING
+        BOOL cancelRes = CancelIoEx(hTestFile, &cancelOv);
+        TEST_ASSERT(cancelRes == TRUE, "CancelIoEx succeeds for pending overlapped operation");
+        TEST_ASSERT(cancelOv.Internal == 0xC0000120L, "Internal status updated to STATUS_CANCELLED (0xC0000120)");
+        TEST_ASSERT(GetLastError() == 995, "GetLastError returns ERROR_OPERATION_ABORTED (995)");
+
+        BOOL cancelNonPending = CancelIoEx(hTestFile, &cancelOv);
+        TEST_ASSERT(cancelNonPending == FALSE, "CancelIoEx on non-pending overlapped returns FALSE");
+        TEST_ASSERT(GetLastError() == 1168, "GetLastError returns ERROR_NOT_FOUND (1168)");
+
+        std::cout << "  [PASS] Win32 Extended Asynchronous I/O Completion & Pacing Architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt AES Key Wrap (RFC 3394 / RFC 5649 / NIST SP 800-38F)
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider opens AES provider");
+
+        // Set chaining mode to BCRYPT_CHAIN_MODE_KW
+        st = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE, reinterpret_cast<const uint8_t*>(BCRYPT_CHAIN_MODE_KW), sizeof(BCRYPT_CHAIN_MODE_KW), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptSetProperty accepts BCRYPT_CHAIN_MODE_KW");
+
+        // 1. RFC 3394 / NIST SP 800-38F AES-128 Key Wrap Test Vector (Section 4.1)
+        {
+            const uint8_t kek128[16] = {
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+            };
+            const uint8_t pt128[16] = {
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff
+            };
+            const uint8_t expectedCt24[24] = {
+                0x1f, 0xa6, 0x8b, 0x0a, 0x81, 0x12, 0xb4, 0x47, 0xae, 0xf3, 0x4b, 0xd8, 0xfb, 0x5a, 0x7b, 0x82,
+                0x9d, 0x3e, 0x86, 0x23, 0x71, 0xd2, 0xcf, 0xe5
+            };
+
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, kek128, sizeof(kek128), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-128 KEK");
+
+            // Wrap via BCryptEncrypt
+            uint8_t ct[24] = {0};
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt128, sizeof(pt128), nullptr, nullptr, 0, ct, sizeof(ct), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 24, "BCryptEncrypt performs 24-byte AES-128 Key Wrap");
+            TEST_ASSERT(std::memcmp(ct, expectedCt24, 24) == 0, "AES-128 KW ciphertext matches RFC 3394 test vector exactly");
+
+            // Unwrap via BCryptDecrypt
+            uint8_t dec[16] = {0};
+            st = BCryptDecrypt(hKey, ct, sizeof(ct), nullptr, nullptr, 0, dec, sizeof(dec), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptDecrypt performs 16-byte AES-128 Key Unwrap");
+            TEST_ASSERT(std::memcmp(dec, pt128, 16) == 0, "Unwrapped key matches original plaintext key");
+
+            // Wrap via direct BCryptKeyWrap API
+            uint8_t directCt[24] = {0};
+            st = BCryptKeyWrap(hKey, pt128, sizeof(pt128), directCt, sizeof(directCt), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 24, "BCryptKeyWrap API wraps key directly");
+            TEST_ASSERT(std::memcmp(directCt, expectedCt24, 24) == 0, "Direct BCryptKeyWrap matches RFC 3394 vector");
+
+            // Unwrap via direct BCryptKeyUnwrap API
+            uint8_t directDec[16] = {0};
+            st = BCryptKeyUnwrap(hKey, directCt, sizeof(directCt), directDec, sizeof(directDec), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptKeyUnwrap API unwraps key directly");
+            TEST_ASSERT(std::memcmp(directDec, pt128, 16) == 0, "Direct BCryptKeyUnwrap matches plaintext");
+
+            // Tamper test: Alter 1 bit of ciphertext -> authentication must fail!
+            directCt[5] ^= 0x01;
+            st = BCryptKeyUnwrap(hKey, directCt, sizeof(directCt), directDec, sizeof(directDec), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_AUTH_TAG_MISMATCH, "Corrupted ciphertext in BCryptKeyUnwrap rejected with STATUS_AUTH_TAG_MISMATCH");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // 2. RFC 5649 AES Key Wrap with Padding (KWP)
+        {
+            // 24-byte AES-192 KEK
+            const uint8_t kek192[24] = {
+                0x58, 0x40, 0xdf, 0x6e, 0x29, 0xb0, 0x2a, 0xf1, 0xab, 0x49, 0x3b, 0x70, 0x5b, 0xf1, 0x6e, 0xa1,
+                0xae, 0x83, 0x38, 0xf4, 0xdc, 0xc1, 0x76, 0xa8
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, kek192, sizeof(kek192), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-192 KEK for KWP");
+
+            // 8-byte plaintext
+            const uint8_t pt8[8] = { 0xc3, 0x7b, 0x7e, 0x64, 0x92, 0x58, 0x43, 0x40 };
+            const uint8_t expectedCt16[16] = {
+                0xe9, 0x9a, 0x71, 0x51, 0x77, 0xdc, 0x7d, 0x98, 0xd1, 0x5b, 0x4b, 0x8d, 0xb7, 0x47, 0x6d, 0x5a
+            };
+
+            uint8_t ct16[16] = {0};
+            uint32_t bytesWritten = 0;
+            st = BCryptKeyWrap(hKey, pt8, sizeof(pt8), ct16, sizeof(ct16), &bytesWritten, BCRYPT_BLOCK_PADDING);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptKeyWrap with BCRYPT_BLOCK_PADDING wraps 8-byte key");
+            TEST_ASSERT(std::memcmp(ct16, expectedCt16, 16) == 0, "AES-192 KWP 8-byte ciphertext matches RFC 5649 test vector exactly");
+
+            uint8_t dec8[8] = {0};
+            st = BCryptKeyUnwrap(hKey, ct16, sizeof(ct16), dec8, sizeof(dec8), &bytesWritten, BCRYPT_BLOCK_PADDING);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 8, "BCryptKeyUnwrap recovers 8-byte padded key");
+            TEST_ASSERT(std::memcmp(dec8, pt8, 8) == 0, "Decrypted 8-byte key matches plaintext");
+
+            // 7-byte plaintext ('ForPasi')
+            const uint8_t pt7[7] = { 0x46, 0x6f, 0x72, 0x50, 0x61, 0x73, 0x69 };
+            const uint8_t expectedCt7[16] = {
+                0xaf, 0xbe, 0xb0, 0xf0, 0x7d, 0xfb, 0xf5, 0x41, 0x92, 0x00, 0xf2, 0xcc, 0xb5, 0x0b, 0xb2, 0x4f
+            };
+
+            uint8_t ct7[16] = {0};
+            st = BCryptKeyWrap(hKey, pt7, sizeof(pt7), ct7, sizeof(ct7), &bytesWritten, BCRYPT_BLOCK_PADDING);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptKeyWrap with BCRYPT_BLOCK_PADDING wraps 7-byte key");
+            TEST_ASSERT(std::memcmp(ct7, expectedCt7, 16) == 0, "AES-192 KWP 7-byte ciphertext matches RFC 5649 test vector exactly");
+
+            uint8_t dec7[7] = {0};
+            st = BCryptKeyUnwrap(hKey, ct7, sizeof(ct7), dec7, sizeof(dec7), &bytesWritten, BCRYPT_BLOCK_PADDING);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 7, "BCryptKeyUnwrap recovers 7-byte padded key");
+            TEST_ASSERT(std::memcmp(dec7, pt7, 7) == 0, "Decrypted 7-byte key matches plaintext");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        std::cout << "  [PASS] BCrypt / CNG AES Key Wrap (RFC 3394 / RFC 5649) Cryptographic Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 226] CommandList3/Options 16, KVA Shadow, Async I/O Completion & AES Key Wrap Summary:\n"
+              << "    Pillar 1: PrismX 3D12 CommandList3 & Options 16 (ProtectedResourceSession, DynamicDepthBias, ReBAR) OK\n"
+              << "    Pillar 2: NT System Kernel VA Shadow (Class 196, KPTI/Meltdown & L1TF) & Code Integrity OK\n"
+              << "    Pillar 3: Win32 Extended Asynchronous I/O Completion & Pacing (SetFileCompletionNotificationModes, GetQueuedCompletionStatusEx, GetOverlappedResultEx, CancelIoEx) OK\n"
+              << "    Pillar 4: BCrypt AES Key Wrap (RFC 3394 / RFC 5649 / NIST SP 800-38F vectors & tamper verification) OK\n";
+
+    std::cout << "[TEST] Suite 442: Horizon 226 - CommandList3/Options 16, KVA Shadow, Async I/O Completion & AES Key Wrap PASSED." << std::endl;
+}

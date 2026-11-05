@@ -518,7 +518,9 @@ class ID3D12CommandList;
 class ID3D12GraphicsCommandList;
 class ID3D12GraphicsCommandList1;
 class ID3D12GraphicsCommandList2;
+class ID3D12GraphicsCommandList3;
 class ID3D12GraphicsCommandList10;
+class ID3D12ProtectedResourceSession;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
 class ID3D12MetaCommand;
@@ -999,6 +1001,26 @@ public:
         const D3D12_WRITEBUFFERIMMEDIATE_MODE* pModes) = 0;
 };
 
+static constexpr IID IID_ID3D12ProtectedResourceSession = 
+    { 0xc4c7362a, 0xef2c, 0x4a00, { 0xbe, 0x77, 0x4d, 0xbe, 0x77, 0x9d, 0xac, 0x32 } };
+
+class ID3D12ProtectedSession : public ID3D12DeviceChild {
+public:
+    virtual int32_t GetSessionStatus() = 0;
+};
+
+class ID3D12ProtectedResourceSession : public ID3D12ProtectedSession {
+public:
+};
+
+static constexpr IID IID_ID3D12GraphicsCommandList3 = 
+    { 0x618a15eb, 0x321e, 0x4c5e, { 0x80, 0x15, 0xe4, 0x60, 0xf7, 0x72, 0x1d, 0xcd } };
+
+class ID3D12GraphicsCommandList3 : public ID3D12GraphicsCommandList2 {
+public:
+    virtual void SetProtectedResourceSession(ID3D12ProtectedResourceSession* pProtectedResourceSession) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList4 = 
     { 0x87e0e368, 0xe32b, 0x4d0b, { 0xbe, 0x4b, 0x4b, 0x78, 0xb8, 0x63, 0x00, 0xaf } };
 
@@ -1012,7 +1034,7 @@ struct D3D12_DISPATCH_RAYS_DESC {
     uint32_t Depth{0};
 };
 
-class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList2 {
+class ID3D12GraphicsCommandList4 : public ID3D12GraphicsCommandList3 {
 public:
     virtual void DispatchRays(const D3D12_DISPATCH_RAYS_DESC* pDesc) = 0;
     virtual void BeginRenderPass(
@@ -2271,7 +2293,8 @@ public:
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild ||
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
-            riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList2 || riid == IID_ID3D12GraphicsCommandList4 ||
+            riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList2 ||
+            riid == IID_ID3D12GraphicsCommandList3 || riid == IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -2313,6 +2336,7 @@ public:
         m_dispatchedMeshCount = 0;
         m_dispatchedRaysCount = 0;
         m_hasProgram = false;
+        m_pProtectedSession = nullptr;
         m_isOpen = true;
         return 0;
     }
@@ -2321,6 +2345,7 @@ public:
         m_commands.clear();
         m_dispatchedGraphs.clear();
         m_hasProgram = false;
+        m_pProtectedSession = nullptr;
     }
 
     void ResourceBarrier(uint32_t NumBarriers, const D3D12_RESOURCE_BARRIER* pBarriers) override {
@@ -2569,6 +2594,16 @@ public:
 
     [[nodiscard]] uint32_t GetWriteBufferImmediateCount() const noexcept { return m_writeBufferImmediateCount; }
     [[nodiscard]] const std::vector<WriteBufferImmediateRecord>& GetRecordedWriteBufferImmediates() const noexcept { return m_recordedWriteBufferImmediates; }
+
+    ID3D12ProtectedResourceSession* m_pProtectedSession{ nullptr };
+
+    void SetProtectedResourceSession(ID3D12ProtectedResourceSession* pProtectedResourceSession) override {
+        m_pProtectedSession = pProtectedResourceSession;
+    }
+
+    [[nodiscard]] ID3D12ProtectedResourceSession* GetProtectedResourceSession() const noexcept {
+        return m_pProtectedSession;
+    }
 
     bool m_inRenderPass{ false };
     uint32_t m_renderPassNumTargets{ 0 };

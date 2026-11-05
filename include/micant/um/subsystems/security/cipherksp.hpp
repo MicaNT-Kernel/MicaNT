@@ -68,6 +68,10 @@ inline constexpr const wchar_t* BCRYPT_OPAQUE_KEY_BLOB         = L"OpaqueKeyBlob
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_GCM          = L"ChainingModeGCM";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_CCM          = L"ChainingModeCCM";
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_XTS          = L"ChainingModeXTS";
+inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_KW           = L"ChainingModeKW";
+inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_KWP          = L"ChainingModeKWP";
+inline constexpr const wchar_t* BCRYPT_KEY_WRAP_ALGORITHM      = L"AES-KW";
+inline constexpr const wchar_t* BCRYPT_KWP_ALGORITHM           = L"AES-KWP";
 inline constexpr const wchar_t* BCRYPT_AUTH_TAG_LENGTH         = L"AuthTagLength";
 
 // Standard CNG Authenticated Mode Structs & Flags
@@ -1718,6 +1722,244 @@ public:
         return plaintext;
     }
 
+    // RFC 3394 AES Key Wrap (KW)
+    // Plaintext length must be >= 16 bytes and a multiple of 8 bytes.
+    // Ciphertext length will be plaintext.size() + 8.
+    std::vector<uint8_t> keyWrap(
+        std::span<const uint8_t> plaintext,
+        uint64_t initialIv = 0xA6A6A6A6A6A6A6A6ULL
+    ) const {
+        size_t nBytes = plaintext.size();
+        if (nBytes < 16 || (nBytes % 8) != 0) return {};
+        size_t n = nBytes / 8; // Number of 64-bit blocks
+
+        uint8_t A[8];
+        uint64_t ivTmp = initialIv;
+        for (int k = 7; k >= 0; --k) {
+            A[k] = static_cast<uint8_t>(ivTmp & 0xFF);
+            ivTmp >>= 8;
+        }
+
+        std::vector<std::array<uint8_t, 8>> R(n + 1);
+        for (size_t i = 1; i <= n; ++i) {
+            std::memcpy(R[i].data(), plaintext.data() + (i - 1) * 8, 8);
+        }
+
+        for (size_t j = 0; j <= 5; ++j) {
+            for (size_t i = 1; i <= n; ++i) {
+                uint64_t t = (n * j) + i;
+                uint8_t B_in[16];
+                std::memcpy(B_in, A, 8);
+                std::memcpy(B_in + 8, R[i].data(), 8);
+
+                uint8_t B_out[16];
+                encryptBlock(B_in, B_out);
+
+                std::memcpy(A, B_out, 8);
+                uint64_t A_val = 0;
+                for (int k = 0; k < 8; ++k) {
+                    A_val = (A_val << 8) | A[k];
+                }
+                A_val ^= t;
+                for (int k = 7; k >= 0; --k) {
+                    A[k] = static_cast<uint8_t>(A_val & 0xFF);
+                    A_val >>= 8;
+                }
+
+                std::memcpy(R[i].data(), B_out + 8, 8);
+            }
+        }
+
+        std::vector<uint8_t> ciphertext((n + 1) * 8);
+        std::memcpy(ciphertext.data(), A, 8);
+        for (size_t i = 1; i <= n; ++i) {
+            std::memcpy(ciphertext.data() + i * 8, R[i].data(), 8);
+        }
+        return ciphertext;
+    }
+
+    // RFC 3394 AES Key Unwrap (KW)
+    // Ciphertext length must be >= 24 bytes and a multiple of 8 bytes.
+    // Plaintext length will be ciphertext.size() - 8.
+    // Returns empty vector if integrity check fails.
+    std::vector<uint8_t> keyUnwrap(
+        std::span<const uint8_t> ciphertext,
+        uint64_t expectedIv = 0xA6A6A6A6A6A6A6A6ULL
+    ) const {
+        size_t cBytes = ciphertext.size();
+        if (cBytes < 24 || (cBytes % 8) != 0) return {};
+        size_t n = (cBytes / 8) - 1; // Number of 64-bit plaintext blocks
+
+        uint8_t A[8];
+        std::memcpy(A, ciphertext.data(), 8);
+
+        std::vector<std::array<uint8_t, 8>> R(n + 1);
+        for (size_t i = 1; i <= n; ++i) {
+            std::memcpy(R[i].data(), ciphertext.data() + i * 8, 8);
+        }
+
+        for (int j = 5; j >= 0; --j) {
+            for (size_t i = n; i >= 1; --i) {
+                uint64_t t = (n * j) + i;
+
+                uint64_t A_val = 0;
+                for (int k = 0; k < 8; ++k) {
+                    A_val = (A_val << 8) | A[k];
+                }
+                A_val ^= t;
+                for (int k = 7; k >= 0; --k) {
+                    A[k] = static_cast<uint8_t>(A_val & 0xFF);
+                    A_val >>= 8;
+                }
+
+                uint8_t B_in[16];
+                std::memcpy(B_in, A, 8);
+                std::memcpy(B_in + 8, R[i].data(), 8);
+
+                uint8_t B_out[16];
+                decryptBlock(B_in, B_out);
+
+                std::memcpy(A, B_out, 8);
+                std::memcpy(R[i].data(), B_out + 8, 8);
+            }
+        }
+
+        uint8_t exp[8];
+        uint64_t expTmp = expectedIv;
+        for (int k = 7; k >= 0; --k) {
+            exp[k] = static_cast<uint8_t>(expTmp & 0xFF);
+            expTmp >>= 8;
+        }
+
+        if (std::memcmp(A, exp, 8) != 0) {
+            return {}; // Integrity check failed
+        }
+
+        std::vector<uint8_t> plaintext(n * 8);
+        for (size_t i = 1; i <= n; ++i) {
+            std::memcpy(plaintext.data() + (i - 1) * 8, R[i].data(), 8);
+        }
+        return plaintext;
+    }
+
+    // RFC 5649 AES Key Wrap with Padding (KWP)
+    // Supports arbitrary plaintext length m >= 1.
+    std::vector<uint8_t> keyWrapWithPadding(std::span<const uint8_t> plaintext) const {
+        size_t m = plaintext.size();
+        if (m == 0) return {};
+
+        size_t padLen = (8 - (m % 8)) % 8;
+        size_t totalPadded = m + padLen;
+        std::vector<uint8_t> padded(totalPadded, 0);
+        std::memcpy(padded.data(), plaintext.data(), m);
+
+        uint64_t A0 = 0xA65959A600000000ULL | (static_cast<uint64_t>(m) & 0xFFFFFFFFULL);
+
+        if (totalPadded == 8) {
+            // Single semi-block
+            uint8_t B_in[16];
+            uint64_t a0Tmp = A0;
+            for (int k = 7; k >= 0; --k) {
+                B_in[k] = static_cast<uint8_t>(a0Tmp & 0xFF);
+                a0Tmp >>= 8;
+            }
+            std::memcpy(B_in + 8, padded.data(), 8);
+            std::vector<uint8_t> ciphertext(16);
+            encryptBlock(B_in, ciphertext.data());
+            return ciphertext;
+        }
+
+        // Multiple semi-blocks: standard KW with A0
+        return keyWrap(padded, A0);
+    }
+
+    // RFC 5649 AES Key Unwrap with Padding (KWP)
+    std::vector<uint8_t> keyUnwrapWithPadding(std::span<const uint8_t> ciphertext) const {
+        size_t cBytes = ciphertext.size();
+        if (cBytes < 16 || (cBytes % 8) != 0) return {};
+
+        if (cBytes == 16) {
+            uint8_t B_out[16];
+            decryptBlock(ciphertext.data(), B_out);
+            uint32_t magic = (static_cast<uint32_t>(B_out[0]) << 24) |
+                             (static_cast<uint32_t>(B_out[1]) << 16) |
+                             (static_cast<uint32_t>(B_out[2]) << 8)  |
+                             static_cast<uint32_t>(B_out[3]);
+            if (magic != 0xA65959A6) return {};
+            uint32_t m = (static_cast<uint32_t>(B_out[4]) << 24) |
+                         (static_cast<uint32_t>(B_out[5]) << 16) |
+                         (static_cast<uint32_t>(B_out[6]) << 8)  |
+                         static_cast<uint32_t>(B_out[7]);
+            if (m < 1 || m > 8) return {};
+            for (size_t k = 8 + m; k < 16; ++k) {
+                if (B_out[k] != 0) return {};
+            }
+            std::vector<uint8_t> plaintext(m);
+            std::memcpy(plaintext.data(), B_out + 8, m);
+            return plaintext;
+        }
+
+        // Multiple semi-blocks
+        size_t n = (cBytes / 8) - 1;
+        uint8_t A[8];
+        std::memcpy(A, ciphertext.data(), 8);
+
+        std::vector<std::array<uint8_t, 8>> R(n + 1);
+        for (size_t i = 1; i <= n; ++i) {
+            std::memcpy(R[i].data(), ciphertext.data() + i * 8, 8);
+        }
+
+        for (int j = 5; j >= 0; --j) {
+            for (size_t i = n; i >= 1; --i) {
+                uint64_t t = (n * j) + i;
+
+                uint64_t A_val = 0;
+                for (int k = 0; k < 8; ++k) {
+                    A_val = (A_val << 8) | A[k];
+                }
+                A_val ^= t;
+                for (int k = 7; k >= 0; --k) {
+                    A[k] = static_cast<uint8_t>(A_val & 0xFF);
+                    A_val >>= 8;
+                }
+
+                uint8_t B_in[16];
+                std::memcpy(B_in, A, 8);
+                std::memcpy(B_in + 8, R[i].data(), 8);
+
+                uint8_t B_out[16];
+                decryptBlock(B_in, B_out);
+
+                std::memcpy(A, B_out, 8);
+                std::memcpy(R[i].data(), B_out + 8, 8);
+            }
+        }
+
+        uint32_t magic = (static_cast<uint32_t>(A[0]) << 24) |
+                         (static_cast<uint32_t>(A[1]) << 16) |
+                         (static_cast<uint32_t>(A[2]) << 8)  |
+                         static_cast<uint32_t>(A[3]);
+        if (magic != 0xA65959A6) return {};
+        uint32_t m = (static_cast<uint32_t>(A[4]) << 24) |
+                     (static_cast<uint32_t>(A[5]) << 16) |
+                     (static_cast<uint32_t>(A[6]) << 8)  |
+                     static_cast<uint32_t>(A[7]);
+        if (m < (n * 8 - 7) || m > (n * 8)) return {};
+
+        std::vector<uint8_t> fullPadded(n * 8);
+        for (size_t i = 1; i <= n; ++i) {
+            std::memcpy(fullPadded.data() + (i - 1) * 8, R[i].data(), 8);
+        }
+
+        for (size_t k = m; k < n * 8; ++k) {
+            if (fullPadded[k] != 0) return {};
+        }
+
+        std::vector<uint8_t> plaintext(m);
+        std::memcpy(plaintext.data(), fullPadded.data(), m);
+        return plaintext;
+    }
+
 private:
     size_t nk_{4};
     size_t nr_{10};
@@ -2341,7 +2583,7 @@ inline NTSTATUS BCryptGetProperty(
 inline NTSTATUS BCryptSetProperty(
     BCRYPT_HANDLE hObject,
     const wchar_t* pszProperty,
-    uint8_t* pbInput,
+    const uint8_t* pbInput,
     [[maybe_unused]] uint32_t cbInput,
     [[maybe_unused]] uint32_t dwFlags
 ) {
@@ -2531,6 +2773,49 @@ inline NTSTATUS BCryptEncrypt(
         return STATUS_SUCCESS;
     }
 
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_KW) {
+        if (cbInput < 16 || (cbInput % 8) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        uint32_t expectedLen = cbInput + 8;
+        *pcbResult = expectedLen;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < expectedLen) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        uint64_t iv = 0xA6A6A6A6A6A6A6A6ULL;
+        if (pbIV && cbIV == 8) {
+            iv = 0;
+            for (int k = 0; k < 8; ++k) iv = (iv << 8) | pbIV[k];
+        }
+        auto ct = keyObj->aesEngine->keyWrap(std::span<const uint8_t>(pbInput, cbInput), iv);
+        if (ct.empty()) return STATUS_INVALID_PARAMETER;
+        std::memcpy(pbOutput, ct.data(), ct.size());
+        return STATUS_SUCCESS;
+    }
+
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_KWP) {
+        if (cbInput == 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        size_t padLen = (8 - (cbInput % 8)) % 8;
+        size_t totalPadded = cbInput + padLen;
+        uint32_t expectedLen = (totalPadded == 8) ? 16 : static_cast<uint32_t>(totalPadded + 8);
+        *pcbResult = expectedLen;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < expectedLen) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        auto ct = keyObj->aesEngine->keyWrapWithPadding(std::span<const uint8_t>(pbInput, cbInput));
+        if (ct.empty()) return STATUS_INVALID_PARAMETER;
+        std::memcpy(pbOutput, ct.data(), ct.size());
+        return STATUS_SUCCESS;
+    }
+
     bool usePadding = (dwFlags & BCRYPT_BLOCK_PADDING) != 0;
     Aes::Mode mode = Aes::Mode::CBC;
     if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_ECB) {
@@ -2671,6 +2956,46 @@ inline NTSTATUS BCryptDecrypt(
         return STATUS_SUCCESS;
     }
 
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_KW) {
+        if (cbInput < 24 || (cbInput % 8) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        uint32_t expectedLen = cbInput - 8;
+        *pcbResult = expectedLen;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < expectedLen) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        uint64_t iv = 0xA6A6A6A6A6A6A6A6ULL;
+        if (pbIV && cbIV == 8) {
+            iv = 0;
+            for (int k = 0; k < 8; ++k) iv = (iv << 8) | pbIV[k];
+        }
+        auto pt = keyObj->aesEngine->keyUnwrap(std::span<const uint8_t>(pbInput, cbInput), iv);
+        if (pt.empty()) return STATUS_AUTH_TAG_MISMATCH;
+        std::memcpy(pbOutput, pt.data(), pt.size());
+        return STATUS_SUCCESS;
+    }
+
+    if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_KWP) {
+        if (cbInput < 16 || (cbInput % 8) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        auto pt = keyObj->aesEngine->keyUnwrapWithPadding(std::span<const uint8_t>(pbInput, cbInput));
+        if (pt.empty()) return STATUS_AUTH_TAG_MISMATCH;
+        *pcbResult = static_cast<uint32_t>(pt.size());
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < pt.size()) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        std::memcpy(pbOutput, pt.data(), pt.size());
+        return STATUS_SUCCESS;
+    }
+
     bool usePadding = (dwFlags & BCRYPT_BLOCK_PADDING) != 0;
     Aes::Mode mode = Aes::Mode::CBC;
     if (keyObj->chainingMode == BCRYPT_CHAIN_MODE_ECB) {
@@ -2707,6 +3032,62 @@ inline NTSTATUS BCryptDecrypt(
     }
 
     std::memcpy(pbOutput, plaintext.data(), plaintext.size());
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS BCryptKeyWrap(
+    BCRYPT_KEY_HANDLE hKey,
+    const uint8_t* pbInput,
+    uint32_t cbInput,
+    uint8_t* pbOutput,
+    uint32_t cbOutput,
+    uint32_t* pcbResult,
+    uint32_t dwFlags
+) {
+    if (!hKey || !pbInput || !pcbResult) return STATUS_INVALID_PARAMETER;
+    auto keyObj = CipherKspEngine::get().getKey(hKey);
+    if (!keyObj || !keyObj->aesEngine) return STATUS_INVALID_HANDLE;
+
+    std::vector<uint8_t> ct;
+    if (dwFlags & BCRYPT_BLOCK_PADDING) {
+        ct = keyObj->aesEngine->keyWrapWithPadding(std::span<const uint8_t>(pbInput, cbInput));
+    } else {
+        if (cbInput < 16 || (cbInput % 8) != 0) return STATUS_INVALID_PARAMETER;
+        ct = keyObj->aesEngine->keyWrap(std::span<const uint8_t>(pbInput, cbInput));
+    }
+    if (ct.empty()) return STATUS_INVALID_PARAMETER;
+    *pcbResult = static_cast<uint32_t>(ct.size());
+    if (!pbOutput) return STATUS_SUCCESS;
+    if (cbOutput < ct.size()) return STATUS_BUFFER_TOO_SMALL;
+    std::memcpy(pbOutput, ct.data(), ct.size());
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS BCryptKeyUnwrap(
+    BCRYPT_KEY_HANDLE hKey,
+    const uint8_t* pbInput,
+    uint32_t cbInput,
+    uint8_t* pbOutput,
+    uint32_t cbOutput,
+    uint32_t* pcbResult,
+    uint32_t dwFlags
+) {
+    if (!hKey || !pbInput || !pcbResult) return STATUS_INVALID_PARAMETER;
+    auto keyObj = CipherKspEngine::get().getKey(hKey);
+    if (!keyObj || !keyObj->aesEngine) return STATUS_INVALID_HANDLE;
+
+    std::vector<uint8_t> pt;
+    if (dwFlags & BCRYPT_BLOCK_PADDING) {
+        pt = keyObj->aesEngine->keyUnwrapWithPadding(std::span<const uint8_t>(pbInput, cbInput));
+    } else {
+        if (cbInput < 24 || (cbInput % 8) != 0) return STATUS_INVALID_PARAMETER;
+        pt = keyObj->aesEngine->keyUnwrap(std::span<const uint8_t>(pbInput, cbInput));
+    }
+    if (pt.empty()) return STATUS_AUTH_TAG_MISMATCH;
+    *pcbResult = static_cast<uint32_t>(pt.size());
+    if (!pbOutput) return STATUS_SUCCESS;
+    if (cbOutput < pt.size()) return STATUS_BUFFER_TOO_SMALL;
+    std::memcpy(pbOutput, pt.data(), pt.size());
     return STATUS_SUCCESS;
 }
 
@@ -3211,6 +3592,10 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("bcrypt.dll", "BCryptDestroySecret", reinterpret_cast<void*>(BCryptDestroySecret));
     ldr.registerExport("bcrypt.dll", "BCryptDeriveKey", reinterpret_cast<void*>(BCryptDeriveKey));
     ldr.registerExport("bcrypt.dll", "BCryptKeyDerivation", reinterpret_cast<void*>(BCryptKeyDerivation));
+    ldr.registerExport("bcrypt.dll", "BCryptKeyWrap", reinterpret_cast<void*>(BCryptKeyWrap));
+    ldr.registerExport("bcrypt.dll", "BCryptKeyUnwrap", reinterpret_cast<void*>(BCryptKeyUnwrap));
+    ldr.registerExport("cng.sys", "BCryptKeyWrap", reinterpret_cast<void*>(BCryptKeyWrap));
+    ldr.registerExport("cng.sys", "BCryptKeyUnwrap", reinterpret_cast<void*>(BCryptKeyUnwrap));
 
     // ncrypt.dll exports
     ldr.registerExport("ncrypt.dll", "NCryptOpenStorageProvider", reinterpret_cast<void*>(NCryptOpenStorageProvider));

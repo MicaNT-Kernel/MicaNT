@@ -1685,6 +1685,24 @@ struct SYSTEM_SPECULATION_CONTROL_INFORMATION {
 };
 using PSYSTEM_SPECULATION_CONTROL_INFORMATION = SYSTEM_SPECULATION_CONTROL_INFORMATION*;
 
+struct SYSTEM_KERNEL_VA_SHADOW_INFORMATION {
+    union {
+        ULONG KvaShadowFlags;
+        struct {
+            ULONG KvaShadowEnabled : 1;
+            ULONG KvaShadowUserGlobal : 1;
+            ULONG KvaShadowPcid : 1;
+            ULONG KvaShadowInvpcid : 1;
+            ULONG KvaShadowRequired : 1;
+            ULONG KvaShadowRequiredAvailable : 1;
+            ULONG L1DataCacheFlushSupported : 1;
+            ULONG L1TerminalFaultMitigationPresent : 1;
+            ULONG Reserved : 24;
+        };
+    };
+};
+using PSYSTEM_KERNEL_VA_SHADOW_INFORMATION = SYSTEM_KERNEL_VA_SHADOW_INFORMATION*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2327,6 +2345,24 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pPart->SectorSizeInBytes = 512;
             pPart->Reserved = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_PARTITION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 196: { // SystemKernelVaShadowInformation
+            if (SystemInformationLength < sizeof(SYSTEM_KERNEL_VA_SHADOW_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_VA_SHADOW_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pVa = reinterpret_cast<SYSTEM_KERNEL_VA_SHADOW_INFORMATION*>(SystemInformation);
+            pVa->KvaShadowFlags = 0;
+            pVa->KvaShadowEnabled = 1;
+            pVa->KvaShadowUserGlobal = 1;
+            pVa->KvaShadowPcid = 1;
+            pVa->KvaShadowInvpcid = 1;
+            pVa->KvaShadowRequired = 1;
+            pVa->KvaShadowRequiredAvailable = 1;
+            pVa->L1DataCacheFlushSupported = 1;
+            pVa->L1TerminalFaultMitigationPresent = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_VA_SHADOW_INFORMATION);
             return NtStatus::Success;
         }
         case 201: { // SystemSpeculationControlInformation

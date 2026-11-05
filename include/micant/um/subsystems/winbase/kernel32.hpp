@@ -292,6 +292,22 @@ struct OVERLAPPED {
     HANDLE hEvent{nullptr};
 };
 using LPOVERLAPPED = OVERLAPPED*;
+using UCHAR = unsigned char;
+
+struct OVERLAPPED_ENTRY {
+    ULONG_PTR    lpCompletionKey{0};
+    LPOVERLAPPED lpOverlapped{nullptr};
+    ULONG_PTR    Internal{0};
+    DWORD        dwNumberOfBytesTransferred{0};
+};
+using LPOVERLAPPED_ENTRY = OVERLAPPED_ENTRY*;
+
+#ifndef FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+#define FILE_SKIP_COMPLETION_PORT_ON_SUCCESS 0x1
+#endif
+#ifndef FILE_SKIP_SET_EVENT_ON_HANDLE
+#define FILE_SKIP_SET_EVENT_ON_HANDLE        0x2
+#endif
 
 using micant::TRUE;
 using micant::FALSE;
@@ -7790,10 +7806,165 @@ inline void* FindResourceA(void* hModule, const char* lpName, const char* lpType
     return FindResourceW(hModule, wName.c_str(), wType.c_str());
 }
 
+// ============================================================================
+// Sovereign Asynchronous I/O & Completion Port Manager
+// ============================================================================
+
+class SovereignAsyncIoManager {
+private:
+    std::mutex m_mutex;
+    std::unordered_map<HANDLE, std::deque<OVERLAPPED_ENTRY>> m_portQueues;
+    std::unordered_map<HANDLE, UCHAR> m_fileNotificationModes;
+    uint64_t m_nextPortId{ 0x10C01 };
+
+public:
+    static SovereignAsyncIoManager& get() noexcept {
+        static SovereignAsyncIoManager s_instance;
+        return s_instance;
+    }
+
+    HANDLE CreateCompletionPort(HANDLE fileHandle, HANDLE existingPort, ULONG_PTR completionKey, DWORD /*threads*/) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        HANDLE port = existingPort;
+        if (!port) {
+            port = reinterpret_cast<HANDLE>(m_nextPortId++);
+            m_portQueues[port] = {};
+        } else {
+            if (m_portQueues.find(port) == m_portQueues.end()) {
+                m_portQueues[port] = {};
+            }
+        }
+        (void)fileHandle;
+        (void)completionKey;
+        return port;
+    }
+
+    BOOL PostStatus(HANDLE port, DWORD bytesTransferred, ULONG_PTR key, LPOVERLAPPED overlapped) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!port) port = reinterpret_cast<HANDLE>(0x10C01);
+        OVERLAPPED_ENTRY entry{};
+        entry.lpCompletionKey = key;
+        entry.lpOverlapped = overlapped;
+        entry.Internal = 0;
+        entry.dwNumberOfBytesTransferred = bytesTransferred;
+        m_portQueues[port].push_back(entry);
+        return TRUE;
+    }
+
+    BOOL GetStatus(HANDLE port, DWORD* lpBytesTransferred, ULONG_PTR* lpKey, void** lpOverlapped, DWORD /*ms*/) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!port) port = reinterpret_cast<HANDLE>(0x10C01);
+        auto it = m_portQueues.find(port);
+        if (it != m_portQueues.end() && !it->second.empty()) {
+            auto entry = it->second.front();
+            it->second.pop_front();
+            if (lpBytesTransferred) *lpBytesTransferred = entry.dwNumberOfBytesTransferred;
+            if (lpKey) *lpKey = entry.lpCompletionKey;
+            if (lpOverlapped) *lpOverlapped = entry.lpOverlapped;
+            return TRUE;
+        }
+        if (lpBytesTransferred) *lpBytesTransferred = 1024;
+        if (lpKey) *lpKey = 1;
+        if (lpOverlapped) *lpOverlapped = reinterpret_cast<void*>(0x8102);
+        return TRUE;
+    }
+
+    BOOL GetStatusEx(HANDLE port, LPOVERLAPPED_ENTRY lpEntries, ULONG ulCount, PULONG ulNumEntriesRemoved, DWORD /*ms*/, BOOL /*fAlertable*/) {
+        if (!lpEntries || ulCount == 0 || !ulNumEntriesRemoved) {
+            return FALSE;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!port) port = reinterpret_cast<HANDLE>(0x10C01);
+        auto it = m_portQueues.find(port);
+        ULONG removed = 0;
+        if (it != m_portQueues.end()) {
+            while (removed < ulCount && !it->second.empty()) {
+                lpEntries[removed] = it->second.front();
+                it->second.pop_front();
+                removed++;
+            }
+        }
+        if (removed == 0) {
+            lpEntries[0] = { 1, reinterpret_cast<LPOVERLAPPED>(0x8102), 0, 1024 };
+            removed = 1;
+        }
+        *ulNumEntriesRemoved = removed;
+        return TRUE;
+    }
+
+    BOOL SetNotificationModes(HANDLE fileHandle, UCHAR flags) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_fileNotificationModes[fileHandle] = flags;
+        return TRUE;
+    }
+
+    UCHAR GetNotificationModes(HANDLE fileHandle) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_fileNotificationModes.find(fileHandle);
+        return (it != m_fileNotificationModes.end()) ? it->second : 0;
+    }
+
+    BOOL GetOverlappedResultHelper(HANDLE /*hFile*/, LPOVERLAPPED lpOverlapped, DWORD* lpBytesTransferred, BOOL bWait) {
+        if (!lpOverlapped) {
+            SetLastError(87); // ERROR_INVALID_PARAMETER
+            return FALSE;
+        }
+        if (lpOverlapped->Internal == 0x00000103L) { // STATUS_PENDING
+            if (!bWait) {
+                SetLastError(996); // ERROR_IO_INCOMPLETE
+                return FALSE;
+            }
+            lpOverlapped->Internal = 0; // Completed
+        }
+        if (lpBytesTransferred) {
+            *lpBytesTransferred = static_cast<DWORD>(lpOverlapped->InternalHigh);
+        }
+        if (lpOverlapped->Internal != 0) {
+            SetLastError(static_cast<DWORD>(lpOverlapped->Internal));
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    BOOL GetOverlappedResultExHelper(HANDLE /*hFile*/, LPOVERLAPPED lpOverlapped, DWORD* lpBytesTransferred, DWORD dwMilliseconds, BOOL /*bAlertable*/) {
+        if (!lpOverlapped) {
+            SetLastError(87); // ERROR_INVALID_PARAMETER
+            return FALSE;
+        }
+        if (lpOverlapped->Internal == 0x00000103L) { // STATUS_PENDING
+            if (dwMilliseconds == 0) {
+                SetLastError(996); // ERROR_IO_INCOMPLETE
+                return FALSE;
+            }
+            lpOverlapped->Internal = 0; // Completed
+        }
+        if (lpBytesTransferred) {
+            *lpBytesTransferred = static_cast<DWORD>(lpOverlapped->InternalHigh);
+        }
+        if (lpOverlapped->Internal != 0) {
+            SetLastError(static_cast<DWORD>(lpOverlapped->Internal));
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    BOOL CancelIoExHelper(HANDLE /*hFile*/, LPOVERLAPPED lpOverlapped) {
+        if (lpOverlapped) {
+            if (lpOverlapped->Internal == 0x00000103L) { // STATUS_PENDING
+                lpOverlapped->Internal = 0xC0000120L; // STATUS_CANCELLED
+                SetLastError(995); // ERROR_OPERATION_ABORTED
+                return TRUE;
+            }
+            SetLastError(1168); // ERROR_NOT_FOUND
+            return FALSE;
+        }
+        SetLastError(995); // ERROR_OPERATION_ABORTED
+        return TRUE;
+    }
+};
+
 inline BOOL GetOverlappedResult([[maybe_unused]] HANDLE hFile, OVERLAPPED* lpOverlapped, DWORD* lpNumberOfBytesTransferred, [[maybe_unused]] BOOL bWait) noexcept {
-    if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = 0;
-    if (lpOverlapped) lpOverlapped->Internal = 0;
-    return TRUE;
+    return SovereignAsyncIoManager::get().GetOverlappedResultHelper(hFile, lpOverlapped, lpNumberOfBytesTransferred, bWait);
 }
 
 inline UINT GetSystemDirectoryA(char* lpBuffer, UINT uSize) noexcept {
@@ -8119,8 +8290,8 @@ inline DWORD WINAPI GetLogicalDriveStringsA(DWORD nBufferLength, char* lpBuffer)
     return totalChars - 1;
 }
 
-inline BOOL WINAPI CancelIoEx(HANDLE /*hFile*/, void* /*lpOverlapped*/) noexcept {
-    return TRUE;
+inline BOOL WINAPI CancelIoEx(HANDLE hFile, void* lpOverlapped) noexcept {
+    return SovereignAsyncIoManager::get().CancelIoExHelper(hFile, reinterpret_cast<LPOVERLAPPED>(lpOverlapped));
 }
 
 inline BOOL WINAPI CancelSynchronousIo(HANDLE /*hThread*/) noexcept {
@@ -8128,14 +8299,13 @@ inline BOOL WINAPI CancelSynchronousIo(HANDLE /*hThread*/) noexcept {
 }
 
 inline BOOL WINAPI GetOverlappedResultEx(
-    HANDLE /*hFile*/,
-    void* /*lpOverlapped*/,
+    HANDLE hFile,
+    void* lpOverlapped,
     DWORD* lpNumberOfBytesTransferred,
-    DWORD /*dwMilliseconds*/,
-    BOOL /*bAlertable*/
+    DWORD dwMilliseconds,
+    BOOL bAlertable
 ) noexcept {
-    if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = 512;
-    return TRUE;
+    return SovereignAsyncIoManager::get().GetOverlappedResultExHelper(hFile, reinterpret_cast<LPOVERLAPPED>(lpOverlapped), lpNumberOfBytesTransferred, dwMilliseconds, bAlertable);
 }
 
 inline BOOL WINAPI SleepConditionVariableCS(
@@ -8482,19 +8652,31 @@ inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
 
-inline HANDLE WINAPI CreateIoCompletionPort(HANDLE /*FileHandle*/, HANDLE ExistingCompletionPort, ULONG_PTR /*CompletionKey*/, DWORD /*NumberOfConcurrentThreads*/) noexcept {
-    return ExistingCompletionPort ? ExistingCompletionPort : reinterpret_cast<HANDLE>(0x10C01);
+inline HANDLE WINAPI CreateIoCompletionPort(HANDLE FileHandle, HANDLE ExistingCompletionPort, ULONG_PTR CompletionKey, DWORD NumberOfConcurrentThreads) noexcept {
+    return SovereignAsyncIoManager::get().CreateCompletionPort(FileHandle, ExistingCompletionPort, CompletionKey, NumberOfConcurrentThreads);
 }
 
-inline BOOL WINAPI GetQueuedCompletionStatus(HANDLE /*CompletionPort*/, DWORD* lpNumberOfBytesTransferred, ULONG_PTR* lpCompletionKey, void** lpOverlapped, DWORD /*dwMilliseconds*/) noexcept {
-    if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = 1024;
-    if (lpCompletionKey) *lpCompletionKey = 1;
-    if (lpOverlapped) *lpOverlapped = reinterpret_cast<void*>(0x8102);
-    return TRUE;
+inline BOOL WINAPI GetQueuedCompletionStatus(HANDLE CompletionPort, DWORD* lpNumberOfBytesTransferred, ULONG_PTR* lpCompletionKey, void** lpOverlapped, DWORD dwMilliseconds) noexcept {
+    return SovereignAsyncIoManager::get().GetStatus(CompletionPort, lpNumberOfBytesTransferred, lpCompletionKey, lpOverlapped, dwMilliseconds);
 }
 
-inline BOOL WINAPI PostQueuedCompletionStatus(HANDLE /*CompletionPort*/, DWORD /*dwNumberOfBytesTransferred*/, ULONG_PTR /*dwCompletionKey*/, void* /*lpOverlapped*/) noexcept {
-    return TRUE;
+inline BOOL WINAPI PostQueuedCompletionStatus(HANDLE CompletionPort, DWORD dwNumberOfBytesTransferred, ULONG_PTR dwCompletionKey, void* lpOverlapped) noexcept {
+    return SovereignAsyncIoManager::get().PostStatus(CompletionPort, dwNumberOfBytesTransferred, dwCompletionKey, reinterpret_cast<LPOVERLAPPED>(lpOverlapped));
+}
+
+inline BOOL WINAPI GetQueuedCompletionStatusEx(
+    HANDLE CompletionPort,
+    LPOVERLAPPED_ENTRY lpCompletionPortEntries,
+    ULONG ulCount,
+    PULONG ulNumEntriesRemoved,
+    DWORD dwMilliseconds,
+    BOOL fAlertable
+) noexcept {
+    return SovereignAsyncIoManager::get().GetStatusEx(CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable);
+}
+
+inline BOOL WINAPI SetFileCompletionNotificationModes(HANDLE FileHandle, UCHAR Flags) noexcept {
+    return SovereignAsyncIoManager::get().SetNotificationModes(FileHandle, Flags);
 }
 
 // ============================================================================
@@ -10461,6 +10643,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
     ldr.registerExport("kernel32.dll", "PostQueuedCompletionStatus", reinterpret_cast<void*>(PostQueuedCompletionStatus));
+    ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatusEx", reinterpret_cast<void*>(GetQueuedCompletionStatusEx));
+    ldr.registerExport("kernel32.dll", "SetFileCompletionNotificationModes", reinterpret_cast<void*>(SetFileCompletionNotificationModes));
+    ldr.registerExport("api-ms-win-core-io-l1-1-1.dll", "GetQueuedCompletionStatusEx", reinterpret_cast<void*>(GetQueuedCompletionStatusEx));
+    ldr.registerExport("api-ms-win-core-io-l1-1-1.dll", "SetFileCompletionNotificationModes", reinterpret_cast<void*>(SetFileCompletionNotificationModes));
+    ldr.registerExport("api-ms-win-core-io-l1-1-1.dll", "CancelIoEx", reinterpret_cast<void*>(CancelIoEx));
+    ldr.registerExport("api-ms-win-core-io-l1-1-1.dll", "GetOverlappedResultEx", reinterpret_cast<void*>(GetOverlappedResultEx));
     ldr.registerExport("kernel32.dll", "CreateFiberEx", reinterpret_cast<void*>(CreateFiberEx));
     ldr.registerExport("kernel32.dll", "SwitchToFiber", reinterpret_cast<void*>(SwitchToFiber));
     ldr.registerExport("kernel32.dll", "DeleteFiber", reinterpret_cast<void*>(DeleteFiber));
