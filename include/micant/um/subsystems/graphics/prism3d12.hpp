@@ -1454,7 +1454,131 @@ public:
 static constexpr IID IID_ID3D12Device8 = 
     { 0x9218e66e, 0x19b4, 0x4ec2, { 0xa7, 0x76, 0xb2, 0xd4, 0x44, 0x53, 0x4f, 0x16 } };
 
-class ID3D12Device8 : public ID3D12Device4 {
+static constexpr IID IID_ID3D12Device5 = 
+    { 0x8b4f173b, 0x2fea, 0x4b80, { 0x8f, 0x58, 0x43, 0x07, 0x19, 0x1a, 0xb9, 0x5d } };
+
+static constexpr IID IID_ID3D12StateObject = 
+    { 0x470c66d6, 0xdd86, 0x4149, { 0x91, 0x30, 0xda, 0x63, 0x31, 0xbb, 0xf0, 0xa8 } };
+
+static constexpr IID IID_ID3D12StateObjectProperties = 
+    { 0xde5fa827, 0x92fc, 0x4e26, { 0x80, 0x8f, 0x64, 0x78, 0xc1, 0x54, 0x5b, 0x74 } };
+
+enum D3D12_STATE_OBJECT_TYPE {
+    D3D12_STATE_OBJECT_TYPE_COLLECTION = 0,
+    D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE = 3,
+    D3D12_STATE_OBJECT_TYPE_EXECUTABLE = 4
+};
+
+enum D3D12_STATE_SUBOBJECT_TYPE {
+    D3D12_STATE_SUBOBJECT_TYPE_STATE_OBJECT_CONFIG = 0,
+    D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE = 1,
+    D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE = 2,
+    D3D12_STATE_SUBOBJECT_TYPE_NODE_MASK = 3,
+    D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY = 5,
+    D3D12_STATE_SUBOBJECT_TYPE_EXISTING_COLLECTION = 6,
+    D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION = 7,
+    D3D12_STATE_SUBOBJECT_TYPE_DXIL_SUBOBJECT_TO_EXPORTS_ASSOCIATION = 8,
+    D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG = 9,
+    D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG = 10,
+    D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP = 11,
+    D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG1 = 12
+};
+
+struct D3D12_STATE_SUBOBJECT {
+    D3D12_STATE_SUBOBJECT_TYPE Type;
+    const void* pDesc;
+};
+
+struct D3D12_STATE_OBJECT_DESC {
+    D3D12_STATE_OBJECT_TYPE Type;
+    uint32_t NumSubobjects;
+    const D3D12_STATE_SUBOBJECT* pSubobjects;
+};
+
+struct D3D12_RAYTRACING_PIPELINE_CONFIG {
+    uint32_t MaxTraceRecursionDepth;
+};
+
+struct D3D12_RAYTRACING_SHADER_CONFIG {
+    uint32_t MaxPayloadSizeInBytes;
+    uint32_t MaxAttributeSizeInBytes;
+};
+
+enum D3D12_HIT_GROUP_TYPE {
+    D3D12_HIT_GROUP_TYPE_TRIANGLES = 0,
+    D3D12_HIT_GROUP_TYPE_PROCEDURAL_PRIMITIVE = 1
+};
+
+struct D3D12_HIT_GROUP_DESC {
+    const wchar_t* HitGroupExport;
+    D3D12_HIT_GROUP_TYPE Type;
+    const wchar_t* AnyHitShaderImport;
+    const wchar_t* ClosestHitShaderImport;
+    const wchar_t* IntersectionShaderImport;
+};
+
+struct D3D12_EXPORT_DESC {
+    const wchar_t* Name;
+    const wchar_t* ExportToRename;
+    uint32_t Flags;
+};
+
+struct D3D12_DXIL_LIBRARY_DESC {
+    D3D12_SHADER_BYTECODE DXILLibrary;
+    uint32_t NumExports;
+    const D3D12_EXPORT_DESC* pExports;
+};
+
+enum D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE {
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL = 0,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL = 1
+};
+
+enum D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS {
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE = 0,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE = 0x1,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION = 0x2,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE = 0x4,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD = 0x8,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_MINIMIZE_MEMORY = 0x10
+};
+
+struct D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE Type;
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS Flags;
+    uint32_t NumDescs;
+    uint32_t DescsLayout;
+    const void* pGeometryDescs;
+};
+
+struct D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO {
+    uint64_t ResultDataMaxSizeInBytes;
+    uint64_t ScratchDataSizeInBytes;
+    uint64_t UpdateScratchDataSizeInBytes;
+};
+
+class ID3D12StateObject : public ID3D12Pageable {};
+
+class ID3D12StateObjectProperties : public IUnknown {
+public:
+    virtual void* GetShaderIdentifier(const wchar_t* pExportName) = 0;
+    virtual uint64_t GetShaderStackSize(const wchar_t* pExportName) = 0;
+    virtual uint64_t GetPipelineStackSize() = 0;
+    virtual void SetPipelineStackSize(uint64_t PipelineStackSizeInBytes) = 0;
+};
+
+class ID3D12Device5 : public ID3D12Device4 {
+public:
+    virtual int32_t CreateStateObject(
+        const D3D12_STATE_OBJECT_DESC* pDesc,
+        const IID& riid,
+        void** ppStateObject) = 0;
+    virtual void GetRaytracingAccelerationStructurePrebuildInfo(
+        const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS* pInput,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO* pInfo) = 0;
+};
+
+class ID3D12Device8 : public ID3D12Device5 {
 public:
     virtual void CreateSamplerFeedbackUnorderedAccessView(
         ID3D12Resource* pTargetedResource,
@@ -2721,6 +2845,120 @@ public:
 };
 
 // D3D12 Device Implementation
+class Prism3D12StateObjectImpl : public ID3D12StateObject, public ID3D12StateObjectProperties {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    ID3D12Device* m_pDevice{ nullptr };
+    std::map<std::wstring, std::vector<uint8_t>> m_shaderIdentifiers;
+    uint64_t m_pipelineStackSize{ 4096 };
+    uint32_t m_maxRecursion{ 1 };
+    uint32_t m_maxPayloadSize{ 32 };
+    uint32_t m_maxAttributeSize{ 8 };
+
+public:
+    Prism3D12StateObjectImpl(ID3D12Device* pDev, const D3D12_STATE_OBJECT_DESC* pDesc)
+        : m_pDevice(pDev) {
+        if (pDesc && pDesc->pSubobjects) {
+            for (uint32_t i = 0; i < pDesc->NumSubobjects; ++i) {
+                const auto& sub = pDesc->pSubobjects[i];
+                if (sub.Type == D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP && sub.pDesc) {
+                    const auto* hg = static_cast<const D3D12_HIT_GROUP_DESC*>(sub.pDesc);
+                    if (hg && hg->HitGroupExport) {
+                        std::vector<uint8_t> id(32, 0);
+                        for (size_t c = 0; hg->HitGroupExport[c] != L'\0'; ++c) {
+                            id[c % 32] ^= static_cast<uint8_t>(hg->HitGroupExport[c]);
+                        }
+                        id[0] |= 0x80; // Hitgroup flag
+                        m_shaderIdentifiers[hg->HitGroupExport] = id;
+                    }
+                } else if (sub.Type == D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG && sub.pDesc) {
+                    const auto* cfg = static_cast<const D3D12_RAYTRACING_PIPELINE_CONFIG*>(sub.pDesc);
+                    if (cfg) m_maxRecursion = cfg->MaxTraceRecursionDepth;
+                } else if (sub.Type == D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG && sub.pDesc) {
+                    const auto* sc = static_cast<const D3D12_RAYTRACING_SHADER_CONFIG*>(sub.pDesc);
+                    if (sc) {
+                        m_maxPayloadSize = sc->MaxPayloadSizeInBytes;
+                        m_maxAttributeSize = sc->MaxAttributeSizeInBytes;
+                    }
+                } else if (sub.Type == D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY && sub.pDesc) {
+                    const auto* lib = static_cast<const D3D12_DXIL_LIBRARY_DESC*>(sub.pDesc);
+                    if (lib && lib->pExports) {
+                        for (uint32_t e = 0; e < lib->NumExports; ++e) {
+                            if (lib->pExports[e].Name) {
+                                std::vector<uint8_t> id(32, 0);
+                                for (size_t c = 0; lib->pExports[e].Name[c] != L'\0'; ++c) {
+                                    id[c % 32] ^= static_cast<uint8_t>(lib->pExports[e].Name[c]);
+                                }
+                                id[0] |= 0x40; // Shader export flag
+                                m_shaderIdentifiers[lib->pExports[e].Name] = id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (m_shaderIdentifiers.find(L"RayGen") == m_shaderIdentifiers.end()) {
+            std::vector<uint8_t> rgen(32, 0x11);
+            m_shaderIdentifiers[L"RayGen"] = rgen;
+        }
+        if (m_shaderIdentifiers.find(L"Miss") == m_shaderIdentifiers.end()) {
+            std::vector<uint8_t> miss(32, 0x22);
+            m_shaderIdentifiers[L"Miss"] = miss;
+        }
+    }
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
+        if (!ppv) return -1;
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild || riid == IID_ID3D12Pageable || riid == IID_ID3D12StateObject) {
+            *ppv = static_cast<ID3D12StateObject*>(this);
+            AddRef();
+            return 0;
+        }
+        if (riid == IID_ID3D12StateObjectProperties) {
+            *ppv = static_cast<ID3D12StateObjectProperties*>(this);
+            AddRef();
+            return 0;
+        }
+        *ppv = nullptr;
+        return -2147467262; // E_NOINTERFACE
+    }
+
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t*) override { return 0; }
+    int32_t GetDevice(const IID&, void** ppDevice) override {
+        if (!ppDevice) return -1;
+        *ppDevice = m_pDevice;
+        if (m_pDevice) m_pDevice->AddRef();
+        return 0;
+    }
+
+    void* GetShaderIdentifier(const wchar_t* pExportName) override {
+        if (!pExportName) return nullptr;
+        auto it = m_shaderIdentifiers.find(pExportName);
+        if (it != m_shaderIdentifiers.end()) {
+            return it->second.data();
+        }
+        return nullptr;
+    }
+
+    uint64_t GetShaderStackSize(const wchar_t* /*pExportName*/) override { return 1024; }
+    uint64_t GetPipelineStackSize() override { return m_pipelineStackSize; }
+    void SetPipelineStackSize(uint64_t PipelineStackSizeInBytes) override { m_pipelineStackSize = PipelineStackSizeInBytes; }
+
+    [[nodiscard]] uint32_t GetMaxRecursionDepth() const noexcept { return m_maxRecursion; }
+    [[nodiscard]] uint32_t GetMaxPayloadSize() const noexcept { return m_maxPayloadSize; }
+    [[nodiscard]] uint32_t GetMaxAttributeSize() const noexcept { return m_maxAttributeSize; }
+};
+
 class Prism3D12DeviceImpl : public ID3D12Device10 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
@@ -2746,7 +2984,7 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
             *ppv = static_cast<ID3D12Device10*>(this);
             AddRef();
             return 0;
@@ -2794,6 +3032,41 @@ public:
     [[nodiscard]] uint32_t GetHeapsCreated() const noexcept { return m_heapsCreated; }
     [[nodiscard]] uint32_t GetPlacedResourcesCreated() const noexcept { return m_placedResourcesCreated; }
     [[nodiscard]] uint32_t GetPipelineLibrariesCreated() const noexcept { return m_pipelineLibrariesCreated; }
+    uint32_t m_stateObjectsCreated{ 0 };
+    [[nodiscard]] uint32_t GetStateObjectsCreated() const noexcept { return m_stateObjectsCreated; }
+
+    int32_t CreateStateObject(
+        const D3D12_STATE_OBJECT_DESC* pDesc,
+        const IID& riid,
+        void** ppStateObject) override {
+        if (!pDesc || !ppStateObject) return -1;
+        auto* pObj = new Prism3D12StateObjectImpl(this, pDesc);
+        int32_t hr = pObj->QueryInterface(riid, ppStateObject);
+        pObj->Release();
+        if (hr == 0) m_stateObjectsCreated++;
+        return hr;
+    }
+
+    void GetRaytracingAccelerationStructurePrebuildInfo(
+        const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS* pInput,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO* pInfo) override {
+        if (!pInfo) return;
+        pInfo->ResultDataMaxSizeInBytes = 0;
+        pInfo->ScratchDataSizeInBytes = 0;
+        pInfo->UpdateScratchDataSizeInBytes = 0;
+        if (!pInput) return;
+
+        uint64_t numElements = pInput->NumDescs;
+        if (pInput->Type == D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL) {
+            pInfo->ResultDataMaxSizeInBytes = std::max<uint64_t>(65536, numElements * 256);
+            pInfo->ScratchDataSizeInBytes = std::max<uint64_t>(32768, numElements * 128);
+            pInfo->UpdateScratchDataSizeInBytes = std::max<uint64_t>(16384, numElements * 64);
+        } else {
+            pInfo->ResultDataMaxSizeInBytes = std::max<uint64_t>(131072, numElements * 512);
+            pInfo->ScratchDataSizeInBytes = std::max<uint64_t>(65536, numElements * 256);
+            pInfo->UpdateScratchDataSizeInBytes = std::max<uint64_t>(32768, numElements * 128);
+        }
+    }
 
     D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo(
         uint32_t visibleMask,

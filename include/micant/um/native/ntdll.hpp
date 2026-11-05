@@ -1636,6 +1636,13 @@ struct SYSTEM_BOOT_ENVIRONMENT_INFORMATION {
     uint64_t BootFlags;
 };
 
+struct SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX {
+    uint8_t DebuggerAllowed{1};
+    uint8_t DebuggerEnabled{0};
+    uint8_t DebuggerPresent{0};
+};
+using PSYSTEM_KERNEL_DEBUGGER_INFORMATION_EX = SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2219,6 +2226,19 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->FirmwareType = 2; // FirmwareTypeUefi
             pInfo->BootFlags = 0x7;  // SecureBoot (0x1) | MeasuredBoot (0x2) | ElamDriversLoaded (0x4)
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 149: { // SystemKernelDebuggerInformationEx
+            if (SystemInformationLength < sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX));
+            pInfo->DebuggerAllowed = 1;
+            pInfo->DebuggerEnabled = 0;
+            pInfo->DebuggerPresent = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX);
             return NtStatus::Success;
         }
         case 16: { // SystemHandleInformation
@@ -2972,6 +2992,7 @@ struct THREAD_BASIC_INFORMATION {
 inline std::unordered_map<HANDLE, bool> s_hiddenThreads;
 inline std::mutex s_hiddenThreadsMutex;
 inline std::unordered_map<HANDLE, void*> s_threadStartAddresses;
+inline std::unordered_map<HANDLE, std::wstring> s_ntThreadDescriptions;
 
 inline NtStatus WINAPI NtQueryInformationThread(HANDLE ThreadHandle, uint32_t ThreadInformationClass, void* ThreadInformation, ULONG ThreadInformationLength, ULONG* ReturnLength) noexcept {
     if (!ThreadInformation && ThreadInformationLength > 0) return NtStatus::InvalidParameter;
@@ -3014,6 +3035,26 @@ inline NtStatus WINAPI NtQueryInformationThread(HANDLE ThreadHandle, uint32_t Th
             bool isHidden = s_hiddenThreads[ThreadHandle];
             *reinterpret_cast<uint8_t*>(ThreadInformation) = isHidden ? 1 : 0;
             if (ReturnLength) *ReturnLength = sizeof(uint8_t);
+            return NtStatus::Success;
+        }
+        case 38: { // ThreadNameInformation / ThreadDescription
+            std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
+            auto it = s_ntThreadDescriptions.find(ThreadHandle);
+            std::wstring desc = (it != s_ntThreadDescriptions.end()) ? it->second : L"MainGameThread";
+            size_t strBytes = desc.size() * sizeof(wchar_t);
+            size_t totalBytes = sizeof(UNICODE_STRING) + strBytes + sizeof(wchar_t);
+            if (ThreadInformationLength < totalBytes) {
+                if (ReturnLength) *ReturnLength = static_cast<ULONG>(totalBytes);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pUni = reinterpret_cast<UNICODE_STRING*>(ThreadInformation);
+            auto* pBuf = reinterpret_cast<wchar_t*>(reinterpret_cast<uint8_t*>(ThreadInformation) + sizeof(UNICODE_STRING));
+            std::memcpy(pBuf, desc.c_str(), strBytes);
+            pBuf[desc.size()] = L'\0';
+            pUni->length = static_cast<uint16_t>(strBytes);
+            pUni->maximumLength = static_cast<uint16_t>(strBytes + sizeof(wchar_t));
+            pUni->buffer = pBuf;
+            if (ReturnLength) *ReturnLength = static_cast<ULONG>(totalBytes);
             return NtStatus::Success;
         }
         default: {
@@ -3187,6 +3228,17 @@ inline NtStatus WINAPI NtSetInformationThread(HANDLE ThreadHandle, uint32_t Thre
                 std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
                 s_threadStartAddresses[ThreadHandle] = *reinterpret_cast<void**>(ThreadInformation);
                 return NtStatus::Success;
+            }
+            return NtStatus::InvalidParameter;
+        }
+        case 38: { // ThreadNameInformation / ThreadDescription
+            if (ThreadInformation && ThreadInformationLength >= sizeof(UNICODE_STRING)) {
+                auto* pStr = reinterpret_cast<UNICODE_STRING*>(ThreadInformation);
+                if (pStr->buffer && pStr->length > 0) {
+                    std::lock_guard<std::mutex> lock(s_hiddenThreadsMutex);
+                    s_ntThreadDescriptions[ThreadHandle] = std::wstring(pStr->buffer, pStr->length / sizeof(wchar_t));
+                    return NtStatus::Success;
+                }
             }
             return NtStatus::InvalidParameter;
         }

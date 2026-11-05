@@ -45353,3 +45353,264 @@ static void Test_Horizon221_ResourceAllocationInfo1_BootEnvInfo_ThreadCycleTime_
 
     std::cout << "[TEST] Suite 437: Horizon 221 - Resource Allocation Info 1, Boot Environment Info, Thread Cycle Time & Key Derivation PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 222: Raytracing Pipeline, Kernel Debugger Info Ex, Thread Description & SHA-512 FIPS 180-4 Engine
+// ============================================================================
+inline void Test_Horizon222_RaytracingPipeline_KernelDebuggerInfoEx_ThreadDescription_And_Sha512Engine_Suite() {
+    std::cout << "[TEST] Suite 438: Horizon 222 - Raytracing Pipeline, Kernel Debugger Info Ex, Thread Description & SHA-512 FIPS 180-4 Engine..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 DXR Raytracing Pipeline (ID3D12Device5, State Objects, Prebuild Info)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 DXR Raytracing Pipeline...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_2, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice creates ID3D12Device");
+
+        ID3D12Device5* pDev5 = nullptr;
+        hr = pDev->QueryInterface(IID_ID3D12Device5, reinterpret_cast<void**>(&pDev5));
+        TEST_ASSERT(hr == 0 && pDev5 != nullptr, "QueryInterface returns ID3D12Device5");
+
+        // 1.1 Acceleration Structure Prebuild Info
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS asInputs{};
+        asInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+        asInputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+        asInputs.NumDescs = 1;
+
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo{};
+        pDev5->GetRaytracingAccelerationStructurePrebuildInfo(&asInputs, &prebuildInfo);
+
+        TEST_ASSERT(prebuildInfo.ResultDataMaxSizeInBytes > 0, "ResultDataMaxSizeInBytes is non-zero");
+        TEST_ASSERT(prebuildInfo.ScratchDataSizeInBytes > 0, "ScratchDataSizeInBytes is non-zero");
+        TEST_ASSERT(prebuildInfo.UpdateScratchDataSizeInBytes <= prebuildInfo.ScratchDataSizeInBytes, "UpdateScratchDataSize is valid");
+
+        // 1.2 Raytracing State Object Creation
+        D3D12_DXIL_LIBRARY_DESC dxilLib{};
+        D3D12_EXPORT_DESC exports[1]{};
+        exports[0].Name = L"PrimaryRayGen";
+        dxilLib.NumExports = 1;
+        dxilLib.pExports = exports;
+
+        D3D12_RAYTRACING_SHADER_CONFIG shaderConfig{ 64, 32 };
+        D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig{ 2 };
+
+        D3D12_STATE_SUBOBJECT subobjects[3]{};
+        subobjects[0].Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+        subobjects[0].pDesc = &dxilLib;
+
+        subobjects[1].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
+        subobjects[1].pDesc = &shaderConfig;
+
+        subobjects[2].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+        subobjects[2].pDesc = &pipelineConfig;
+
+        D3D12_STATE_OBJECT_DESC stateObjDesc{};
+        stateObjDesc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+        stateObjDesc.NumSubobjects = 3;
+        stateObjDesc.pSubobjects = subobjects;
+
+        ID3D12StateObject* pStateObj = nullptr;
+        hr = pDev5->CreateStateObject(&stateObjDesc, IID_ID3D12StateObject, reinterpret_cast<void**>(&pStateObj));
+        TEST_ASSERT(hr == 0 && pStateObj != nullptr, "CreateStateObject creates ID3D12StateObject");
+
+        // 1.3 State Object Properties & Shader Identifiers
+        ID3D12StateObjectProperties* pStateProps = nullptr;
+        hr = pStateObj->QueryInterface(IID_ID3D12StateObjectProperties, reinterpret_cast<void**>(&pStateProps));
+        TEST_ASSERT(hr == 0 && pStateProps != nullptr, "QueryInterface returns ID3D12StateObjectProperties");
+
+        void* pRayGenId = pStateProps->GetShaderIdentifier(L"PrimaryRayGen");
+        TEST_ASSERT(pRayGenId != nullptr, "GetShaderIdentifier finds PrimaryRayGen");
+
+        void* pDefaultRayGenId = pStateProps->GetShaderIdentifier(L"RayGen");
+        TEST_ASSERT(pDefaultRayGenId != nullptr, "GetShaderIdentifier finds default RayGen");
+
+        void* pNonExistent = pStateProps->GetShaderIdentifier(L"NonExistentShader");
+        TEST_ASSERT(pNonExistent == nullptr, "GetShaderIdentifier returns nullptr for unknown shader");
+
+        TEST_ASSERT(pStateProps->GetShaderStackSize(L"PrimaryRayGen") > 0, "GetShaderStackSize returns valid stack size");
+        TEST_ASSERT(pStateProps->GetPipelineStackSize() > 0, "GetPipelineStackSize returns valid pipeline stack size");
+
+        pStateProps->Release();
+        pStateObj->Release();
+        pDev5->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 DXR Raytracing Pipeline verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Kernel Debugger Information Ex (Class 149)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemKernelDebuggerInformationEx (Class 149)...\n";
+        using namespace micant::ntdll;
+
+        // 2.1 Buffer probe with size 0
+        ULONG retLen = 0;
+        micant::NtStatus st = NtQuerySystemInformation_Export(149, nullptr, 0, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(149) returns InfoLengthMismatch on zero buffer");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX), "Returned length equals sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX)");
+
+        // 2.2 Buffer population
+        SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX dbgEx{};
+        st = NtQuerySystemInformation_Export(149, &dbgEx, sizeof(dbgEx), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(149) succeeds with allocated buffer");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX), "retLen matches exact struct size");
+        TEST_ASSERT(dbgEx.DebuggerAllowed == 1, "DebuggerAllowed is set (1)");
+        TEST_ASSERT(dbgEx.DebuggerEnabled == 0, "DebuggerEnabled is clear (0)");
+        TEST_ASSERT(dbgEx.DebuggerPresent == 0, "DebuggerPresent is clear (0)");
+
+        std::cout << "  [PASS] SystemKernelDebuggerInformationEx (Class 149) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Thread Description (SetThreadDescription / GetThreadDescription)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Win32 Thread Description & Thread Information Class 38...\n";
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        HANDLE hDummyThread = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(0x7001));
+
+        // 3.1 SetThreadDescription
+        HRESULT hr = SetThreadDescription(hDummyThread, L"MicaNT_PhysicsWorker");
+        TEST_ASSERT(hr == 0, "SetThreadDescription sets thread description");
+
+        // 3.2 GetThreadDescription
+        PWSTR threadDesc = nullptr;
+        hr = GetThreadDescription(hDummyThread, &threadDesc);
+        TEST_ASSERT(hr == 0 && threadDesc != nullptr, "GetThreadDescription retrieves thread description");
+        TEST_ASSERT(std::wcscmp(threadDesc, L"MicaNT_PhysicsWorker") == 0, "Thread description string matches expected value");
+        LocalFree(threadDesc);
+
+        // 3.3 Update Thread Description
+        hr = SetThreadDescription(hDummyThread, L"MicaNT_RenderDispatch");
+        TEST_ASSERT(hr == 0, "SetThreadDescription updates thread description");
+
+        threadDesc = nullptr;
+        hr = GetThreadDescription(hDummyThread, &threadDesc);
+        TEST_ASSERT(hr == 0 && threadDesc != nullptr, "GetThreadDescription retrieves updated description");
+        TEST_ASSERT(std::wcscmp(threadDesc, L"MicaNT_RenderDispatch") == 0, "Updated thread description matches");
+        LocalFree(threadDesc);
+
+        // 3.4 NT Thread Information Class 38 Direct Introspection
+        ULONG retLen = 0;
+        micant::ntdll::NtQueryInformationThread(hDummyThread, 38, nullptr, 0, &retLen);
+        TEST_ASSERT(retLen > 0, "NtQueryInformationThread(38) returns required buffer length");
+
+        // 3.5 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadDescription") != nullptr, "kernel32.dll exports SetThreadDescription");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadDescription") != nullptr, "kernel32.dll exports GetThreadDescription");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "SetThreadDescription") != nullptr, "api-ms-win-core-processthreads-l1-1-3.dll exports SetThreadDescription");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetThreadDescription") != nullptr, "api-ms-win-core-processthreads-l1-1-3.dll exports GetThreadDescription");
+
+        std::cout << "  [PASS] Win32 Thread Description & Thread Information Class 38 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt SHA-384 & SHA-512 FIPS 180-4 Engine
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing BCrypt SHA-384 & SHA-512 FIPS 180-4 Engine...\n";
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        // 4.1 SHA-512 Algorithm Provider & Properties
+        BCRYPT_ALG_HANDLE hAlg512 = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg512, BCRYPT_SHA512_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg512 != nullptr, "BCryptOpenAlgorithmProvider opens SHA-512");
+
+        uint32_t hashLen = 0;
+        uint32_t cbResult = 0;
+        st = BCryptGetProperty(hAlg512, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hashLen == 64, "BCRYPT_HASH_LENGTH reports 64 bytes for SHA-512");
+
+        uint32_t blockLen = 0;
+        st = BCryptGetProperty(hAlg512, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && blockLen == 128, "BCRYPT_BLOCK_LENGTH reports 128 bytes for SHA-512");
+
+        // 4.2 SHA-512 NIST Test Vector: "abc"
+        BCRYPT_HASH_HANDLE hHash512 = nullptr;
+        st = BCryptCreateHash(hAlg512, &hHash512, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hHash512 != nullptr, "BCryptCreateHash creates SHA-512 hash object");
+
+        const char msgAbc[] = "abc";
+        st = BCryptHashData(hHash512, reinterpret_cast<const uint8_t*>(msgAbc), static_cast<uint32_t>(sizeof(msgAbc) - 1), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData hashes msgAbc");
+
+        uint8_t digest512[64]{};
+        st = BCryptFinishHash(hHash512, digest512, sizeof(digest512), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash finishes SHA-512 digest");
+
+        const uint8_t expectedSha512[64] = {
+            0xdd, 0xaf, 0x35, 0xa1, 0x93, 0x61, 0x7a, 0xba, 0xcc, 0x41, 0x73, 0x49, 0xae, 0x20, 0x41, 0x31,
+            0x12, 0xe6, 0xfa, 0x4e, 0x89, 0xa9, 0x7e, 0xa2, 0x0a, 0x9e, 0xee, 0xe6, 0x4b, 0x55, 0xd3, 0x9a,
+            0x21, 0x92, 0x99, 0x2a, 0x27, 0x4f, 0xc1, 0xa8, 0x36, 0xba, 0x3c, 0x23, 0xa3, 0xfe, 0xeb, 0xbd,
+            0x45, 0x4d, 0x44, 0x23, 0x64, 0x3c, 0xe8, 0x0e, 0x2a, 0x9a, 0xc9, 0x4f, 0xa5, 0x4c, 0xa4, 0x9f
+        };
+        TEST_ASSERT(std::memcmp(digest512, expectedSha512, 64) == 0, "SHA-512 matches NIST standard vector for 'abc'");
+
+        BCryptDestroyHash(hHash512);
+        BCryptCloseAlgorithmProvider(hAlg512, 0);
+
+        // 4.3 SHA-384 Algorithm Provider & Properties
+        BCRYPT_ALG_HANDLE hAlg384 = nullptr;
+        st = BCryptOpenAlgorithmProvider(&hAlg384, BCRYPT_SHA384_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg384 != nullptr, "BCryptOpenAlgorithmProvider opens SHA-384");
+
+        hashLen = 0;
+        st = BCryptGetProperty(hAlg384, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hashLen == 48, "BCRYPT_HASH_LENGTH reports 48 bytes for SHA-384");
+
+        blockLen = 0;
+        st = BCryptGetProperty(hAlg384, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && blockLen == 128, "BCRYPT_BLOCK_LENGTH reports 128 bytes for SHA-384");
+
+        // 4.4 SHA-384 NIST Test Vector: "abc"
+        BCRYPT_HASH_HANDLE hHash384 = nullptr;
+        st = BCryptCreateHash(hAlg384, &hHash384, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hHash384 != nullptr, "BCryptCreateHash creates SHA-384 hash object");
+
+        st = BCryptHashData(hHash384, reinterpret_cast<const uint8_t*>(msgAbc), static_cast<uint32_t>(sizeof(msgAbc) - 1), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData hashes msgAbc");
+
+        uint8_t digest384[48]{};
+        st = BCryptFinishHash(hHash384, digest384, sizeof(digest384), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash finishes SHA-384 digest");
+
+        const uint8_t expectedSha384[48] = {
+            0xcb, 0x00, 0x75, 0x3f, 0x45, 0xa3, 0x5e, 0x8b, 0xb5, 0xa0, 0x3d, 0x69, 0x9a, 0xc6, 0x50, 0x07,
+            0x27, 0x2c, 0x32, 0xab, 0x0e, 0xde, 0xd1, 0x63, 0x1a, 0x8b, 0x60, 0x5a, 0x43, 0xff, 0x5b, 0xed,
+            0x80, 0x86, 0x07, 0x2b, 0xa1, 0xe7, 0xcc, 0x23, 0x58, 0xba, 0xec, 0xa1, 0x34, 0xc8, 0x25, 0xa7
+        };
+        TEST_ASSERT(std::memcmp(digest384, expectedSha384, 48) == 0, "SHA-384 matches NIST standard vector for 'abc'");
+
+        BCryptDestroyHash(hHash384);
+        BCryptCloseAlgorithmProvider(hAlg384, 0);
+
+        // 4.5 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptOpenAlgorithmProvider") != nullptr, "bcrypt.dll exports BCryptOpenAlgorithmProvider");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptCreateHash") != nullptr, "bcrypt.dll exports BCryptCreateHash");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptHashData") != nullptr, "bcrypt.dll exports BCryptHashData");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptFinishHash") != nullptr, "bcrypt.dll exports BCryptFinishHash");
+
+        std::cout << "  [PASS] BCrypt SHA-384 & SHA-512 FIPS 180-4 Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 222] Raytracing Pipeline, Kernel Debugger Info Ex, Thread Description & SHA-512 Engine Summary:\n"
+              << "    Pillar 1: PrismX 3D12 DXR Raytracing Pipeline (Device5, State Objects, Prebuild) OK\n"
+              << "    Pillar 2: NT System Kernel Debugger Information Ex (Class 149) OK\n"
+              << "    Pillar 3: Win32 Thread Description & Thread Information Class 38 OK\n"
+              << "    Pillar 4: BCrypt SHA-384 & SHA-512 FIPS 180-4 Engine (NIST 'abc' vectors) OK\n";
+
+    std::cout << "[TEST] Suite 438: Horizon 222 - Raytracing Pipeline, Kernel Debugger Info Ex, Thread Description & SHA-512 FIPS 180-4 Engine PASSED." << std::endl;
+}

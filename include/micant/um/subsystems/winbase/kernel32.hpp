@@ -9105,6 +9105,12 @@ inline HRESULT WINAPI SetThreadDescription(HANDLE hThread, PCWSTR lpThreadDescri
     uint64_t tid = reinterpret_cast<uint64_t>(hThread);
     std::lock_guard<std::mutex> lock(g_threadDescMutex);
     g_threadDescriptions[tid] = lpThreadDescription;
+    size_t descLen = std::wcslen(lpThreadDescription);
+    micant::UNICODE_STRING uniStr;
+    uniStr.length = static_cast<uint16_t>(descLen * sizeof(wchar_t));
+    uniStr.maximumLength = static_cast<uint16_t>((descLen + 1) * sizeof(wchar_t));
+    uniStr.buffer = lpThreadDescription;
+    micant::ntdll::NtSetInformationThread(hThread, 38, &uniStr, sizeof(uniStr));
     return 0; // S_OK
 }
 
@@ -9112,6 +9118,14 @@ inline HRESULT WINAPI GetThreadDescription(HANDLE hThread, PWSTR* ppszThreadDesc
     if (!ppszThreadDescription) return static_cast<HRESULT>(0x80070057); // E_INVALIDARG
     uint64_t tid = reinterpret_cast<uint64_t>(hThread);
     std::wstring desc = L"MainGameThread";
+    uint8_t ntBuf[512]{};
+    ULONG retLen = 0;
+    if (micant::ntdll::NtQueryInformationThread(hThread, 38, ntBuf, sizeof(ntBuf), &retLen) == micant::NtStatus::Success) {
+        auto* pUni = reinterpret_cast<micant::UNICODE_STRING*>(ntBuf);
+        if (pUni->buffer && pUni->length > 0) {
+            desc.assign(pUni->buffer, pUni->length / sizeof(wchar_t));
+        }
+    }
     {
         std::lock_guard<std::mutex> lock(g_threadDescMutex);
         auto it = g_threadDescriptions.find(tid);
