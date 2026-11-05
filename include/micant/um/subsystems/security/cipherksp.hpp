@@ -60,6 +60,8 @@ inline constexpr const wchar_t* BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM = L"SP80
 inline constexpr const wchar_t* BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM = L"SP800_108_PIPELINE_HMAC";
 inline constexpr const wchar_t* BCRYPT_SP80056A_CONCAT_ALGORITHM        = L"SP800_56A_CONCAT";
 inline constexpr const wchar_t* BCRYPT_HKDF_ALGORITHM                   = L"HKDF";
+inline constexpr const wchar_t* BCRYPT_SHA3_256_ALGORITHM               = L"SHA3-256";
+inline constexpr const wchar_t* BCRYPT_SHA3_512_ALGORITHM               = L"SHA3-512";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -835,6 +837,186 @@ public:
         uint8_t fullDigest[64];
         Sha512::final(ctx, std::span<uint8_t, 64>(fullDigest, 64));
         std::memcpy(digest.data(), fullDigest, DIGEST_SIZE);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+};
+
+// ============================================================================
+// Clean-Room SHA-3 (FIPS 202 Keccak-p[1600, 24]) Engine
+// ============================================================================
+
+class KeccakCore {
+public:
+    static inline uint64_t rotl64(uint64_t x, uint32_t n) noexcept {
+        return (x << n) | (x >> (64 - n));
+    }
+
+    static void permute(uint64_t st[25]) noexcept {
+        static constexpr uint64_t RC[24] = {
+            0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
+            0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
+            0x8000000080008081ULL, 0x8000000000008009ULL, 0x000000000000008aULL,
+            0x0000000000000088ULL, 0x0000000080008009ULL, 0x000000008000000aULL,
+            0x000000008000808bULL, 0x800000000000008bULL, 0x8000000000008089ULL,
+            0x8000000000008003ULL, 0x8000000000008002ULL, 0x8000000000000080ULL,
+            0x000000000000800aULL, 0x800000008000000aULL, 0x8000000080008081ULL,
+            0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL
+        };
+
+        static constexpr uint32_t ROTC[24] = {
+            1,  3,  6, 10, 15, 21, 28, 36, 45, 55,  2, 14,
+            27, 41, 56,  8, 25, 43, 62, 18, 39, 61, 20, 44
+        };
+
+        static constexpr uint32_t PILN[24] = {
+            10,  7, 11, 17, 18,  3,  5, 16,  8, 21, 24,  4,
+            15, 23, 19, 13, 12,  2, 20, 14, 22,  9,  6,  1
+        };
+
+        for (int round = 0; round < 24; ++round) {
+            // Theta step
+            uint64_t bc[5];
+            for (int i = 0; i < 5; ++i) {
+                bc[i] = st[i] ^ st[i + 5] ^ st[i + 10] ^ st[i + 15] ^ st[i + 20];
+            }
+            for (int i = 0; i < 5; ++i) {
+                uint64_t t = bc[(i + 4) % 5] ^ rotl64(bc[(i + 1) % 5], 1);
+                for (int j = 0; j < 25; j += 5) {
+                    st[j + i] ^= t;
+                }
+            }
+
+            // Rho and Pi steps
+            uint64_t t = st[1];
+            for (int i = 0; i < 24; ++i) {
+                uint32_t j = PILN[i];
+                bc[0] = st[j];
+                st[j] = rotl64(t, ROTC[i]);
+                t = bc[0];
+            }
+
+            // Chi step
+            for (int j = 0; j < 25; j += 5) {
+                for (int i = 0; i < 5; ++i) {
+                    bc[i] = st[j + i];
+                }
+                for (int i = 0; i < 5; ++i) {
+                    st[j + i] ^= (~bc[(i + 1) % 5]) & bc[(i + 2) % 5];
+                }
+            }
+
+            // Iota step
+            st[0] ^= RC[round];
+        }
+    }
+};
+
+class Sha3_256 {
+public:
+    static constexpr size_t DIGEST_SIZE = 32;
+    static constexpr size_t RATE        = 136; // (1600 - 512) / 8 = 136 bytes
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{0};
+    };
+
+    static void init(Context& ctx) noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        ctx.buffer[ctx.buf_pos++] = 0x06;
+        while (ctx.buf_pos < RATE) {
+            ctx.buffer[ctx.buf_pos++] = 0x00;
+        }
+        ctx.buffer[RATE - 1] |= 0x80;
+
+        for (size_t i = 0; i < RATE; ++i) {
+            reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+        }
+        KeccakCore::permute(ctx.state);
+
+        std::memcpy(digest.data(), ctx.state, DIGEST_SIZE);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+};
+
+class Sha3_512 {
+public:
+    static constexpr size_t DIGEST_SIZE = 64;
+    static constexpr size_t RATE        = 72; // (1600 - 1024) / 8 = 72 bytes
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{0};
+    };
+
+    static void init(Context& ctx) noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        ctx.buffer[ctx.buf_pos++] = 0x06;
+        while (ctx.buf_pos < RATE) {
+            ctx.buffer[ctx.buf_pos++] = 0x00;
+        }
+        ctx.buffer[RATE - 1] |= 0x80;
+
+        for (size_t i = 0; i < RATE; ++i) {
+            reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+        }
+        KeccakCore::permute(ctx.state);
+
+        std::memcpy(digest.data(), ctx.state, DIGEST_SIZE);
     }
 
     static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
@@ -2731,6 +2913,8 @@ enum class CryptoAlgorithm {
     Sp800108PipelineHmac,
     Sp80056AConcat,
     Hkdf,
+    Sha3_256,
+    Sha3_512,
     Unknown
 };
 
@@ -2738,6 +2922,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_SHA256_ALGORITHM || algId == L"SHA-256") return CryptoAlgorithm::Sha256;
     if (algId == BCRYPT_SHA384_ALGORITHM || algId == L"SHA-384") return CryptoAlgorithm::Sha384;
     if (algId == BCRYPT_SHA512_ALGORITHM || algId == L"SHA-512") return CryptoAlgorithm::Sha512;
+    if (algId == BCRYPT_SHA3_256_ALGORITHM || algId == L"SHA3-256" || algId == L"sha3-256") return CryptoAlgorithm::Sha3_256;
+    if (algId == BCRYPT_SHA3_512_ALGORITHM || algId == L"SHA3-512" || algId == L"sha3-512") return CryptoAlgorithm::Sha3_512;
     if (algId == BCRYPT_SHA1_ALGORITHM   || algId == L"SHA-1")   return CryptoAlgorithm::Sha1;
     if (algId == BCRYPT_MD5_ALGORITHM    || algId == L"md5")     return CryptoAlgorithm::Md5;
     if (algId == BCRYPT_AES_ALGORITHM)                           return CryptoAlgorithm::Aes;
@@ -2812,6 +2998,8 @@ public:
     HmacSha256::Context hmacSha256Ctx{};
     HmacSha384::Context hmacSha384Ctx{};
     HmacSha512::Context hmacSha512Ctx{};
+    Sha3_256::Context sha3_256Ctx{};
+    Sha3_512::Context sha3_512Ctx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -2835,6 +3023,8 @@ public:
           hmacSha256Ctx(other.hmacSha256Ctx),
           hmacSha384Ctx(other.hmacSha384Ctx),
           hmacSha512Ctx(other.hmacSha512Ctx),
+          sha3_256Ctx(other.sha3_256Ctx),
+          sha3_512Ctx(other.sha3_512Ctx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -2867,6 +3057,10 @@ public:
             HmacSha384::init(hmacSha384Ctx, key);
         } else if (algorithm == CryptoAlgorithm::HmacSha512) {
             HmacSha512::init(hmacSha512Ctx, key);
+        } else if (algorithm == CryptoAlgorithm::Sha3_256) {
+            Sha3_256::init(sha3_256Ctx);
+        } else if (algorithm == CryptoAlgorithm::Sha3_512) {
+            Sha3_512::init(sha3_512Ctx);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -2895,6 +3089,10 @@ public:
             HmacSha384::update(hmacSha384Ctx, data);
         } else if (algorithm == CryptoAlgorithm::HmacSha512) {
             HmacSha512::update(hmacSha512Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Sha3_256) {
+            Sha3_256::update(sha3_256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Sha3_512) {
+            Sha3_512::update(sha3_512Ctx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -2951,6 +3149,14 @@ public:
         } else if (algorithm == CryptoAlgorithm::HmacSha512) {
             std::vector<uint8_t> out(64);
             HmacSha512::final(hmacSha512Ctx, std::span<uint8_t, 64>(out.data(), 64));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Sha3_256) {
+            std::vector<uint8_t> out(32);
+            Sha3_256::final(sha3_256Ctx, std::span<uint8_t, 32>(out.data(), 32));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Sha3_512) {
+            std::vector<uint8_t> out(64);
+            Sha3_512::final(sha3_512Ctx, std::span<uint8_t, 64>(out.data(), 64));
             return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
@@ -3200,9 +3406,9 @@ inline NTSTATUS BCryptGetProperty(
             uint32_t len = 32;
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384) len = 48;
-            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512) len = 64;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -3211,8 +3417,10 @@ inline NTSTATUS BCryptGetProperty(
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_256) ? 136 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_512) ? 72 :
                            ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512 ||
-                             prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64);
+                             prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64)));
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }

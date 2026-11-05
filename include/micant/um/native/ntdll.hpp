@@ -1569,6 +1569,20 @@ struct SYSTEM_NUMA_PROXIMITY_INFORMATION {
 };
 using PSYSTEM_NUMA_PROXIMITY_INFORMATION = SYSTEM_NUMA_PROXIMITY_INFORMATION*;
 
+// Class 219: SystemDefragInformation
+struct SYSTEM_DEFRAG_INFORMATION {
+    ULONG Flags;
+    ULONG DefragPass;
+};
+using PSYSTEM_DEFRAG_INFORMATION = SYSTEM_DEFRAG_INFORMATION*;
+
+// Class 220: SystemVirtualizationInformation
+struct SYSTEM_VIRTUALIZATION_INFORMATION {
+    ULONG VirtualizationFlags;
+    ULONG HypervisorVendorId;
+};
+using PSYSTEM_VIRTUALIZATION_INFORMATION = SYSTEM_VIRTUALIZATION_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3081,6 +3095,28 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->NodeNumber = 0;
             pInfo->ProximityId = 0x10;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 219: { // SystemDefragInformation (Class 219)
+            if (SystemInformationLength < sizeof(SYSTEM_DEFRAG_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DEFRAG_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_DEFRAG_INFORMATION*>(SystemInformation);
+            pInfo->Flags = 0x00000001; // Defrag online / SSD TRIM active
+            pInfo->DefragPass = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DEFRAG_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 220: { // SystemVirtualizationInformation (Class 220)
+            if (SystemInformationLength < sizeof(SYSTEM_VIRTUALIZATION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_VIRTUALIZATION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_VIRTUALIZATION_INFORMATION*>(SystemInformation);
+            pInfo->VirtualizationFlags = 0x00000003; // HypervisorPresent | SvmCapable
+            pInfo->HypervisorVendorId = 0x4143494D;   // 'MICA'
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_VIRTUALIZATION_INFORMATION);
             return NtStatus::Success;
         }
         default: {

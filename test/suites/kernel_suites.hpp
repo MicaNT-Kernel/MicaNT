@@ -48971,3 +48971,302 @@ inline void Test_Horizon233_CommandList10Options24_CodeIntegrityPolicyNuma_Threa
 
     std::cout << "[TEST] Suite 449: Horizon 233 - CommandList10/Options 24, CodeIntegrityPolicy/NumaProximity, Threadpool Wait & RFC 5869 HKDF-SHA256 PASSED." << std::endl;
 }
+
+inline void Test_Horizon234_Device11Options25_SystemInfo219220_ThreadpoolCleanupGroup_And_Sha3_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 450: Horizon 234 - Direct3D 12 ID3D12Device11 & Options 25, SystemInfo 219/220, Threadpool Cleanup Groups & FIPS 202 SHA-3\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device11 & Options 25 (Increased 1D Dispatch)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device11, CreateSampler2 & Options 25...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS25
+        D3D12_FEATURE_DATA_D3D12_OPTIONS25 opt25{};
+        int32_t hr = device.CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS25,
+            &opt25,
+            sizeof(opt25)
+        );
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS25 succeeds");
+        TEST_ASSERT(opt25.Max1DDispatchSize == 1073741824u, "Max1DDispatchSize returns 1G dispatches");
+        TEST_ASSERT(opt25.Max1DDispatchMeshSize == 4194303u, "Max1DDispatchMeshSize returns 4M dispatches");
+        TEST_ASSERT(opt25.WaveMatrixSupported == TRUE, "WaveMatrixSupported is TRUE");
+        TEST_ASSERT(opt25.CooperativeVectorsSupported == TRUE, "CooperativeVectorsSupported is TRUE");
+
+        // 2. QueryInterface for ID3D12Device11
+        ID3D12Device11* pDev11 = nullptr;
+        hr = device.QueryInterface(IID_ID3D12Device11, reinterpret_cast<void**>(&pDev11));
+        TEST_ASSERT(hr == 0 && pDev11 != nullptr, "QueryInterface for IID_ID3D12Device11 succeeds");
+
+        ID3D12Device11* pDev11_official = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device11, reinterpret_cast<void**>(&pDev11_official));
+        TEST_ASSERT(hr == 0 && pDev11_official != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device11 succeeds");
+        pDev11_official->Release();
+
+        // 3. QueryInterface for ID3D12Device12
+        ID3D12Device11* pDev12 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device12, reinterpret_cast<void**>(&pDev12));
+        TEST_ASSERT(hr == 0 && pDev12 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device12 succeeds");
+        pDev12->Release();
+
+        // 4. CreateSampler2 with extended D3D12_SAMPLER_DESC2
+        D3D12_SAMPLER_DESC2 sDesc{};
+        sDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        sDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sDesc.MipLODBias = 0.0f;
+        sDesc.MaxAnisotropy = 1;
+        sDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+        sDesc.UintBorderColor[0] = 255;
+        sDesc.UintBorderColor[1] = 0;
+        sDesc.UintBorderColor[2] = 128;
+        sDesc.UintBorderColor[3] = 255;
+        sDesc.MinLOD = 0.0f;
+        sDesc.MaxLOD = 16.0f;
+        sDesc.Flags = D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE destDesc{ 0x2000 };
+        pDev11->CreateSampler2(&sDesc, destDesc);
+
+        pDev11->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 219 (Defrag) & 220 (Virtualization)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 219 & 220...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 219: SystemDefragInformation
+        ULONG retLen = 0;
+        SYSTEM_DEFRAG_INFORMATION defragInfo{};
+        NtStatus status = NtQuerySystemInformation_Export(
+            219,
+            &defragInfo,
+            sizeof(defragInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 219 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_DEFRAG_INFORMATION), "Class 219 returns sizeof(SYSTEM_DEFRAG_INFORMATION)");
+        TEST_ASSERT(defragInfo.Flags == 0x00000001, "Class 219 Flags indicate defrag/TRIM active");
+        TEST_ASSERT(defragInfo.DefragPass == 1, "Class 219 DefragPass is 1");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            219,
+            &defragInfo,
+            sizeof(defragInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 219 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_DEFRAG_INFORMATION), "Class 219 returns required length on mismatch");
+
+        // 2. Class 220: SystemVirtualizationInformation
+        SYSTEM_VIRTUALIZATION_INFORMATION virtInfo{};
+        status = NtQuerySystemInformation_Export(
+            220,
+            &virtInfo,
+            sizeof(virtInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 220 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_VIRTUALIZATION_INFORMATION), "Class 220 returns sizeof(SYSTEM_VIRTUALIZATION_INFORMATION)");
+        TEST_ASSERT(virtInfo.VirtualizationFlags == 0x00000003, "Class 220 VirtualizationFlags == 3");
+        TEST_ASSERT(virtInfo.HypervisorVendorId == 0x4143494D, "Class 220 HypervisorVendorId is 'MICA'");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            220,
+            &virtInfo,
+            sizeof(virtInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 220 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_VIRTUALIZATION_INFORMATION), "Class 220 returns required length on mismatch");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Thread Pool Cleanup Groups
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Win32 Extended Thread Pool Cleanup Groups...\n";
+
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        // 1. Create and manage cleanup group
+        PTP_CLEANUP_GROUP pGroup = CreateThreadpoolCleanupGroup();
+        TEST_ASSERT(pGroup != nullptr, "CreateThreadpoolCleanupGroup succeeds");
+
+        TP_CALLBACK_ENVIRON cbe{};
+        InitializeThreadpoolEnvironment(&cbe);
+        SetThreadpoolCallbackCleanupGroup(&cbe, pGroup, nullptr);
+        TEST_ASSERT(cbe.CleanupGroup == pGroup, "SetThreadpoolCallbackCleanupGroup sets environment cleanup group");
+
+        // Create a work item associated with the cleanup group
+        static std::atomic<uint32_t> s_cleanupWorkExecCount{0};
+        auto pfnWork = [](PTP_CALLBACK_INSTANCE, PVOID Context, PTP_WORK) {
+            auto* pCounter = reinterpret_cast<std::atomic<uint32_t>*>(Context);
+            if (pCounter) pCounter->fetch_add(1);
+        };
+        PTP_WORK pWork = CreateThreadpoolWork(pfnWork, &s_cleanupWorkExecCount, &cbe);
+        TEST_ASSERT(pWork != nullptr, "CreateThreadpoolWork associated with cleanup group succeeds");
+
+        // Close all members of cleanup group
+        CloseThreadpoolCleanupGroupMembers(pGroup, FALSE, nullptr);
+        TEST_ASSERT(pGroup->works.empty(), "CloseThreadpoolCleanupGroupMembers clears associated works");
+
+        CloseThreadpoolCleanupGroup(pGroup);
+        DestroyThreadpoolEnvironment(&cbe);
+
+        // 2. Export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateThreadpoolCleanupGroup") != nullptr, "kernel32 exports CreateThreadpoolCleanupGroup");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CloseThreadpoolCleanupGroupMembers") != nullptr, "kernel32 exports CloseThreadpoolCleanupGroupMembers");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CloseThreadpoolCleanupGroup") != nullptr, "kernel32 exports CloseThreadpoolCleanupGroup");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolCleanupGroup") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CreateThreadpoolCleanupGroup");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolCleanupGroupMembers") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CloseThreadpoolCleanupGroupMembers");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolCleanupGroup") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CloseThreadpoolCleanupGroup");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt FIPS 202 SHA-3 (SHA3-256 & SHA3-512)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] BCrypt FIPS 202 SHA-3 Hash Engine (SHA3-256 & SHA3-512)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        // 1. Direct algorithmic tests with NIST canonical vectors
+        // SHA3-256("")
+        const uint8_t expectedSha3_256_empty[32] = {
+            0xa7, 0xff, 0xc6, 0xf8, 0xbf, 0x1e, 0xd7, 0x66,
+            0x51, 0xc1, 0x47, 0x56, 0xa0, 0x61, 0xd6, 0x62,
+            0xf5, 0x80, 0xff, 0x4d, 0xe4, 0x3b, 0x49, 0xfa,
+            0x82, 0xd8, 0x0a, 0x4b, 0x80, 0xf8, 0x43, 0x4a
+        };
+
+        // SHA3-256("abc")
+        const uint8_t expectedSha3_256_abc[32] = {
+            0x3a, 0x98, 0x5d, 0xa7, 0x4f, 0xe2, 0x25, 0xb2,
+            0x04, 0x5c, 0x17, 0x2d, 0x6b, 0xd3, 0x90, 0xbd,
+            0x85, 0x5f, 0x08, 0x6e, 0x3e, 0x9d, 0x52, 0x5b,
+            0x46, 0xbf, 0xe2, 0x45, 0x11, 0x43, 0x15, 0x32
+        };
+
+        auto hashEmpty = Sha3_256::hash(std::span<const uint8_t>{});
+        TEST_ASSERT(hashEmpty.size() == 32, "Sha3_256::hash returns 32 bytes");
+        TEST_ASSERT(std::memcmp(hashEmpty.data(), expectedSha3_256_empty, 32) == 0,
+                    "Sha3_256(\"\") matches NIST canonical vector bit-exact");
+
+        const uint8_t msgAbc[] = { 'a', 'b', 'c' };
+        auto hashAbc = Sha3_256::hash(std::span<const uint8_t>(msgAbc, 3));
+        TEST_ASSERT(hashAbc.size() == 32, "Sha3_256::hash(\"abc\") returns 32 bytes");
+        TEST_ASSERT(std::memcmp(hashAbc.data(), expectedSha3_256_abc, 32) == 0,
+                    "Sha3_256(\"abc\") matches NIST canonical vector bit-exact");
+
+        // 2. BCrypt API integration for SHA3-256
+        BCRYPT_ALG_HANDLE hAlg256 = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg256, BCRYPT_SHA3_256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for SHA3-256");
+
+        uint32_t hashLen = 0, cbResult = 0;
+        status = BCryptGetProperty(hAlg256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty returns 32-byte hash length for SHA3-256");
+
+        uint32_t blockLen = 0;
+        status = BCryptGetProperty(hAlg256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && blockLen == 136, "BCryptGetProperty returns 136-byte block length for SHA3-256");
+
+        BCRYPT_HASH_HANDLE hHash = nullptr;
+        status = BCryptCreateHash(hAlg256, &hHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash succeeds for SHA3-256");
+
+        status = BCryptHashData(hHash, const_cast<uint8_t*>(msgAbc), 3, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptHashData succeeds for SHA3-256");
+
+        uint8_t apiDigest[32]{};
+        status = BCryptFinishHash(hHash, apiDigest, sizeof(apiDigest), 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptFinishHash succeeds for SHA3-256");
+        TEST_ASSERT(std::memcmp(apiDigest, expectedSha3_256_abc, 32) == 0,
+                    "BCrypt API SHA3-256 output matches NIST test vector bit-exact");
+
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg256, 0);
+
+        // 3. BCrypt API integration for SHA3-512
+        BCRYPT_ALG_HANDLE hAlg512 = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlg512, BCRYPT_SHA3_512_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg512 != nullptr, "BCryptOpenAlgorithmProvider succeeds for SHA3-512");
+
+        status = BCryptGetProperty(hAlg512, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hashLen == 64, "BCryptGetProperty returns 64-byte hash length for SHA3-512");
+
+        status = BCryptGetProperty(hAlg512, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && blockLen == 72, "BCryptGetProperty returns 72-byte block length for SHA3-512");
+
+        // Direct SHA3-512 test vectors
+        const uint8_t expectedSha3_512_empty[64] = {
+            0xa6, 0x9f, 0x73, 0xcc, 0xa2, 0x3a, 0x9a, 0xc5, 0xc8, 0xb5, 0x67, 0xdc, 0x18, 0x5a, 0x75, 0x6e,
+            0x97, 0xc9, 0x82, 0x16, 0x4f, 0xe2, 0x58, 0x59, 0xe0, 0xd1, 0xdc, 0xc1, 0x47, 0x5c, 0x80, 0xa6,
+            0x15, 0xb2, 0x12, 0x3a, 0xf1, 0xf5, 0xf9, 0x4c, 0x11, 0xe3, 0xe9, 0x40, 0x2c, 0x3a, 0xc5, 0x58,
+            0xf5, 0x00, 0x19, 0x9d, 0x95, 0xb6, 0xd3, 0xe3, 0x01, 0x75, 0x85, 0x86, 0x28, 0x1d, 0xcd, 0x26
+        };
+
+        const uint8_t expectedSha3_512_abc[64] = {
+            0xb7, 0x51, 0x85, 0x0b, 0x1a, 0x57, 0x16, 0x8a, 0x56, 0x93, 0xcd, 0x92, 0x4b, 0x6b, 0x09, 0x6e,
+            0x08, 0xf6, 0x21, 0x82, 0x74, 0x44, 0xf7, 0x0d, 0x88, 0x4f, 0x5d, 0x02, 0x40, 0xd2, 0x71, 0x2e,
+            0x10, 0xe1, 0x16, 0xe9, 0x19, 0x2a, 0xf3, 0xc9, 0x1a, 0x7e, 0xc5, 0x76, 0x47, 0xe3, 0x93, 0x40,
+            0x57, 0x34, 0x0b, 0x4c, 0xf4, 0x08, 0xd5, 0xa5, 0x65, 0x92, 0xf8, 0x27, 0x4e, 0xec, 0x53, 0xf0
+        };
+
+        auto hashEmpty512 = Sha3_512::hash(std::span<const uint8_t>{});
+        TEST_ASSERT(hashEmpty512.size() == 64, "Sha3_512::hash returns 64 bytes");
+        TEST_ASSERT(std::memcmp(hashEmpty512.data(), expectedSha3_512_empty, 64) == 0,
+                    "Sha3_512(\"\") matches NIST canonical vector bit-exact");
+
+        auto hashAbc512 = Sha3_512::hash(std::span<const uint8_t>(msgAbc, 3));
+        TEST_ASSERT(hashAbc512.size() == 64, "Sha3_512::hash(\"abc\") returns 64 bytes");
+        TEST_ASSERT(std::memcmp(hashAbc512.data(), expectedSha3_512_abc, 64) == 0,
+                    "Sha3_512(\"abc\") matches NIST canonical vector bit-exact");
+
+        // BCrypt API test for SHA3-512
+        BCRYPT_HASH_HANDLE hHash512 = nullptr;
+        status = BCryptCreateHash(hAlg512, &hHash512, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hHash512 != nullptr, "BCryptCreateHash succeeds for SHA3-512");
+
+        status = BCryptHashData(hHash512, const_cast<uint8_t*>(msgAbc), 3, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptHashData succeeds for SHA3-512");
+
+        uint8_t apiDigest512[64]{};
+        status = BCryptFinishHash(hHash512, apiDigest512, sizeof(apiDigest512), 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptFinishHash succeeds for SHA3-512");
+        TEST_ASSERT(std::memcmp(apiDigest512, expectedSha3_512_abc, 64) == 0,
+                    "BCrypt API SHA3-512 output matches NIST test vector bit-exact");
+
+        BCryptDestroyHash(hHash512);
+        BCryptCloseAlgorithmProvider(hAlg512, 0);
+    }
+
+    std::cout << "  Horizon 234 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device11, CreateSampler2 & Options 25 OK\n"
+              << "    Pillar 2: NT Native Classes 219 (SystemDefrag) & 220 (SystemVirtualization) OK\n"
+              << "    Pillar 3: Win32 Extended Thread Pool Cleanup Groups & Dynamic Exports OK\n"
+              << "    Pillar 4: BCrypt FIPS 202 SHA-3 Engine (SHA3-256 & SHA3-512) OK\n";
+
+    std::cout << "[TEST] Suite 450: Horizon 234 - Direct3D 12 ID3D12Device11 & Options 25, SystemInfo 219/220, Threadpool Cleanup Groups & FIPS 202 SHA-3 PASSED." << std::endl;
+}

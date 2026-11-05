@@ -10892,6 +10892,9 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "QueryThreadpoolStackInformation", reinterpret_cast<void*>(QueryThreadpoolStackInformation));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPool", reinterpret_cast<void*>(SetThreadpoolCallbackPool));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackCleanupGroup", reinterpret_cast<void*>(SetThreadpoolCallbackCleanupGroup));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolCleanupGroup", reinterpret_cast<void*>(CreateThreadpoolCleanupGroup));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolCleanupGroupMembers", reinterpret_cast<void*>(CloseThreadpoolCleanupGroupMembers));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolCleanupGroup", reinterpret_cast<void*>(CloseThreadpoolCleanupGroup));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPriority", reinterpret_cast<void*>(SetThreadpoolCallbackPriority));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackRunsLong", reinterpret_cast<void*>(SetThreadpoolCallbackRunsLong));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPersistent", reinterpret_cast<void*>(SetThreadpoolCallbackPersistent));
