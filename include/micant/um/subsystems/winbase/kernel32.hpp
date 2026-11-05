@@ -5141,6 +5141,12 @@ struct TP_CALLBACK_INSTANCE {
     PVOID Reserved{nullptr};
 };
 
+struct TP_POOL_STACK_INFORMATION {
+    SIZE_T StackReserve;
+    SIZE_T StackCommit;
+};
+using PTP_POOL_STACK_INFORMATION = TP_POOL_STACK_INFORMATION*;
+
 struct TP_POOL {
     std::mutex mtx;
     std::condition_variable cv;
@@ -5150,6 +5156,7 @@ struct TP_POOL {
     DWORD minThreads{2};
     DWORD maxThreads{8};
     std::atomic<bool> shutdown{false};
+    TP_POOL_STACK_INFORMATION stackInfo{ 1024 * 1024, 4096 };
 
     TP_POOL() {
         startWorkers(minThreads);
@@ -5239,6 +5246,24 @@ inline void WINAPI CloseThreadpool(PTP_POOL ptpp) noexcept {
         ptpp->shutdownPool();
         delete ptpp;
     }
+}
+
+inline BOOL WINAPI SetThreadpoolStackInformation(PTP_POOL ptpp, PTP_POOL_STACK_INFORMATION ptpsi) noexcept {
+    if (!ptpp || !ptpsi) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    ptpp->stackInfo = *ptpsi;
+    return TRUE;
+}
+
+inline BOOL WINAPI QueryThreadpoolStackInformation(PTP_POOL ptpp, PTP_POOL_STACK_INFORMATION ptpsi) noexcept {
+    if (!ptpp || !ptpsi) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *ptpsi = ptpp->stackInfo;
+    return TRUE;
 }
 
 // Threadpool Work APIs
@@ -10794,6 +10819,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SetThreadpoolThreadMaximum", reinterpret_cast<void*>(SetThreadpoolThreadMaximum));
     ldr.registerExport("kernel32.dll", "SetThreadpoolThreadMinimum", reinterpret_cast<void*>(SetThreadpoolThreadMinimum));
     ldr.registerExport("kernel32.dll", "CloseThreadpool", reinterpret_cast<void*>(CloseThreadpool));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolStackInformation", reinterpret_cast<void*>(SetThreadpoolStackInformation));
+    ldr.registerExport("kernel32.dll", "QueryThreadpoolStackInformation", reinterpret_cast<void*>(QueryThreadpoolStackInformation));
     ldr.registerExport("kernel32.dll", "CreateThreadpoolWork", reinterpret_cast<void*>(CreateThreadpoolWork));
     ldr.registerExport("kernel32.dll", "SubmitThreadpoolWork", reinterpret_cast<void*>(SubmitThreadpoolWork));
     ldr.registerExport("kernel32.dll", "WaitForThreadpoolWorkCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWorkCallbacks));
@@ -10822,6 +10849,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolThreadMaximum", reinterpret_cast<void*>(SetThreadpoolThreadMaximum));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolThreadMinimum", reinterpret_cast<void*>(SetThreadpoolThreadMinimum));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpool", reinterpret_cast<void*>(CloseThreadpool));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolStackInformation", reinterpret_cast<void*>(SetThreadpoolStackInformation));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "QueryThreadpoolStackInformation", reinterpret_cast<void*>(QueryThreadpoolStackInformation));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWork", reinterpret_cast<void*>(CreateThreadpoolWork));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SubmitThreadpoolWork", reinterpret_cast<void*>(SubmitThreadpoolWork));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWorkCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWorkCallbacks));

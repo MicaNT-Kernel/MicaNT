@@ -1503,6 +1503,37 @@ struct SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION {
 };
 using PSYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION = SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION*;
 
+// Class 213: SystemSecureSpeculationControlInformation
+struct SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION {
+    union {
+        ULONG Flags;
+        struct {
+            ULONG KvaShadowSupported : 1;
+            ULONG KvaShadowEnabled : 1;
+            ULONG KvaShadowUserGlobal : 1;
+            ULONG KvaShadowPcid : 1;
+            ULONG KvaShadowInvpcid : 1;
+            ULONG KvaShadowRequired : 1;
+            ULONG KvaShadowRequiredAvailable : 1;
+            ULONG IbrsPresent : 1;
+            ULONG IbrsEnabled : 1;
+            ULONG IbrsUserEnabled : 1;
+            ULONG RetpolinePresent : 1;
+            ULONG RetpolineEnabled : 1;
+            ULONG Reserved : 20;
+        };
+    };
+};
+using PSYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION = SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION*;
+
+// Class 214: SystemSpacesBootInformation
+struct SYSTEM_SPACES_BOOT_INFORMATION {
+    ULONG BootFlags;
+    ULONG SpacesFlags;
+    ULONG Reserved[2];
+};
+using PSYSTEM_SPACES_BOOT_INFORMATION = SYSTEM_SPACES_BOOT_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -2929,6 +2960,41 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pUcode->MinimumRequiredRevision = 0x000000B0;
             pUcode->CpuVendor = 1; // GenuineIntel
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 213: { // SystemSecureSpeculationControlInformation
+            if (SystemInformationLength < sizeof(SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pSecSpec = reinterpret_cast<SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION*>(SystemInformation);
+            pSecSpec->Flags = 0;
+            pSecSpec->KvaShadowSupported = 1;
+            pSecSpec->KvaShadowEnabled = 1;
+            pSecSpec->KvaShadowUserGlobal = 0;
+            pSecSpec->KvaShadowPcid = 1;
+            pSecSpec->KvaShadowInvpcid = 1;
+            pSecSpec->KvaShadowRequired = 1;
+            pSecSpec->KvaShadowRequiredAvailable = 1;
+            pSecSpec->IbrsPresent = 1;
+            pSecSpec->IbrsEnabled = 1;
+            pSecSpec->IbrsUserEnabled = 1;
+            pSecSpec->RetpolinePresent = 1;
+            pSecSpec->RetpolineEnabled = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 214: { // SystemSpacesBootInformation
+            if (SystemInformationLength < sizeof(SYSTEM_SPACES_BOOT_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPACES_BOOT_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pSpaces = reinterpret_cast<SYSTEM_SPACES_BOOT_INFORMATION*>(SystemInformation);
+            pSpaces->BootFlags = 0x00000001; // SPACES_BOOT_FLAG_ENABLED
+            pSpaces->SpacesFlags = 0x00000003; // SPACES_FLAG_TIERED_STORAGE | SPACES_FLAG_RESILIENT
+            pSpaces->Reserved[0] = 0;
+            pSpaces->Reserved[1] = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPACES_BOOT_INFORMATION);
             return NtStatus::Success;
         }
         default: {

@@ -48189,3 +48189,241 @@ inline void Test_Horizon230_CommandList6Options21_SpeculationExMicrocode_Threadp
 
     std::cout << "[TEST] Suite 446: Horizon 230 - CommandList6/Options 21, Speculation Ex / Microcode, Threadpool I/O & SP 800-108 Feedback KDF PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 231: Suite 447 - CommandList7/Options 22, Secure Speculation & Spaces
+// Boot Information, Threadpool Stack Info, and SP 800-108 Pipeline Mode KDF
+// ============================================================================
+
+inline void Test_Horizon231_CommandList7Options22_SecureSpeculationSpaces_ThreadpoolStack_And_Sp800108PipelineKdf_Suite() {
+    std::cout << "\n[TEST] Suite 447: Horizon 231 - CommandList7/Options 22, Secure Speculation/Spaces, Threadpool Stack & SP 800-108 Pipeline KDF...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList7 & Options 22
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] PrismX 3D12 ID3D12GraphicsCommandList7 & Options 22...\n";
+
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        // Verify D3D12_FEATURE_DATA_D3D12_OPTIONS22
+        D3D12_FEATURE_DATA_D3D12_OPTIONS22 opt22{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS22, &opt22, sizeof(opt22));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS22) succeeds");
+        TEST_ASSERT(opt22.ShaderExecutionReorderingTier == D3D12_SHADER_EXECUTION_REORDERING_TIER_1, "ShaderExecutionReorderingTier is Tier 1");
+        TEST_ASSERT(opt22.OpacityMicromapTier == D3D12_OPACITY_MICROMAP_TIER_1_0, "OpacityMicromapTier is Tier 1.0");
+        TEST_ASSERT(opt22.PreviewFeaturesSupported == TRUE, "PreviewFeaturesSupported is true");
+
+        // Create Command List
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+
+        // QueryInterface for ID3D12GraphicsCommandList7 via OFFICIAL_IID_ID3D12GraphicsCommandList7
+        ID3D12GraphicsCommandList7* cl7 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList7, reinterpret_cast<void**>(&cl7));
+        TEST_ASSERT(hr == 0 && cl7 != nullptr, "QueryInterface with OFFICIAL_IID_ID3D12GraphicsCommandList7 succeeds");
+        cl7->Release();
+        cl7 = nullptr;
+
+        // QueryInterface for ID3D12GraphicsCommandList7 via IID_ID3D12GraphicsCommandList7
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList7, reinterpret_cast<void**>(&cl7));
+        TEST_ASSERT(hr == 0 && cl7 != nullptr, "QueryInterface with IID_ID3D12GraphicsCommandList7 succeeds");
+
+        // Submit Enhanced Barrier
+        TEST_ASSERT(cmdList.GetRecordedEnhancedBarriersCount() == 0, "Initial barrier count is 0");
+        D3D12_GLOBAL_BARRIER gb{};
+        gb.SyncBefore = D3D12_BARRIER_SYNC_ALL_SHADING;
+        gb.SyncAfter  = D3D12_BARRIER_SYNC_DRAW;
+        gb.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+        gb.AccessAfter  = D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+
+        D3D12_BARRIER_GROUP group{};
+        group.Type = D3D12_BARRIER_TYPE_GLOBAL;
+        group.NumBarriers = 1;
+        group.pGlobalBarriers = &gb;
+
+        cl7->Barrier(1, &group);
+        TEST_ASSERT(cmdList.GetRecordedEnhancedBarriersCount() == 1, "Recorded barrier count is 1 after Barrier()");
+
+        cl7->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 213 (Secure Speculation) & 214 (Spaces Boot)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 213 (Secure Speculation) & 214 (Spaces Boot)...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 213: SystemSecureSpeculationControlInformation
+        SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION secSpec{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            213,
+            &secSpec,
+            sizeof(secSpec),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(213) succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SECURE_SPECULATION_CONTROL_INFORMATION), "ReturnLength matches class 213 size");
+        TEST_ASSERT(secSpec.KvaShadowSupported == 1, "KvaShadowSupported is 1");
+        TEST_ASSERT(secSpec.KvaShadowEnabled == 1, "KvaShadowEnabled is 1");
+        TEST_ASSERT(secSpec.KvaShadowPcid == 1, "KvaShadowPcid is 1");
+        TEST_ASSERT(secSpec.KvaShadowInvpcid == 1, "KvaShadowInvpcid is 1");
+        TEST_ASSERT(secSpec.IbrsPresent == 1, "IbrsPresent is 1");
+        TEST_ASSERT(secSpec.IbrsEnabled == 1, "IbrsEnabled is 1");
+        TEST_ASSERT(secSpec.RetpolinePresent == 1, "RetpolinePresent is 1");
+        TEST_ASSERT(secSpec.RetpolineEnabled == 1, "RetpolineEnabled is 1");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            213,
+            &secSpec,
+            sizeof(secSpec) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(213) returns InfoLengthMismatch on small buffer");
+
+        // 2. Class 214: SystemSpacesBootInformation
+        SYSTEM_SPACES_BOOT_INFORMATION spaces{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(
+            214,
+            &spaces,
+            sizeof(spaces),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(214) succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SPACES_BOOT_INFORMATION), "ReturnLength matches class 214 size");
+        TEST_ASSERT(spaces.BootFlags == 0x00000001, "BootFlags has SPACES_BOOT_FLAG_ENABLED");
+        TEST_ASSERT(spaces.SpacesFlags == 0x00000003, "SpacesFlags has expected resilient storage flags");
+
+        status = NtQuerySystemInformation_Export(
+            214,
+            &spaces,
+            sizeof(spaces) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(214) returns InfoLengthMismatch on small buffer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Thread Pool Stack Information Management
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Win32 Thread Pool Stack Information Management...\n";
+
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        PTP_POOL pool = CreateThreadpool(nullptr);
+        TEST_ASSERT(pool != nullptr, "CreateThreadpool succeeds");
+
+        // Query default stack info
+        TP_POOL_STACK_INFORMATION stackInfo{};
+        BOOL ok = QueryThreadpoolStackInformation(pool, &stackInfo);
+        TEST_ASSERT(ok == TRUE, "QueryThreadpoolStackInformation succeeds");
+        TEST_ASSERT(stackInfo.StackReserve == 1024 * 1024, "Default StackReserve is 1MB");
+        TEST_ASSERT(stackInfo.StackCommit == 4096, "Default StackCommit is 4KB");
+
+        // Update stack info
+        TP_POOL_STACK_INFORMATION newStackInfo{ 2 * 1024 * 1024, 64 * 1024 };
+        ok = SetThreadpoolStackInformation(pool, &newStackInfo);
+        TEST_ASSERT(ok == TRUE, "SetThreadpoolStackInformation succeeds");
+
+        TP_POOL_STACK_INFORMATION queriedInfo{};
+        ok = QueryThreadpoolStackInformation(pool, &queriedInfo);
+        TEST_ASSERT(ok == TRUE, "QueryThreadpoolStackInformation succeeds after update");
+        TEST_ASSERT(queriedInfo.StackReserve == 2 * 1024 * 1024, "Updated StackReserve is 2MB");
+        TEST_ASSERT(queriedInfo.StackCommit == 64 * 1024, "Updated StackCommit is 64KB");
+
+        // Parameter validation
+        ok = SetThreadpoolStackInformation(nullptr, &newStackInfo);
+        TEST_ASSERT(ok == FALSE, "SetThreadpoolStackInformation fails with nullptr pool");
+        ok = QueryThreadpoolStackInformation(pool, nullptr);
+        TEST_ASSERT(ok == FALSE, "QueryThreadpoolStackInformation fails with nullptr ptpsi");
+
+        CloseThreadpool(pool);
+
+        // Verify exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolStackInformation") != nullptr, "kernel32 exports SetThreadpoolStackInformation");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryThreadpoolStackInformation") != nullptr, "kernel32 exports QueryThreadpoolStackInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolStackInformation") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetThreadpoolStackInformation");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "QueryThreadpoolStackInformation") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports QueryThreadpoolStackInformation");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-108 Pipeline Mode KDF (BCrypt SP800_108_PIPELINE_HMAC)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-108 Pipeline Mode KDF (BCrypt SP800_108_PIPELINE_HMAC)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        // 1. Direct algorithmic test of Sp800108KdfPipeline
+        std::vector<uint8_t> key = { 'M', 'i', 'c', 'a', 'N', 'T', 'P', 'i', 'p', 'e', 'l', 'i', 'n', 'e', 'K', 'e', 'y' };
+        std::vector<uint8_t> label = { 'A', 'p', 'p', 'L', 'a', 'b', 'e', 'l' };
+        std::vector<uint8_t> context = { 'S', 'e', 's', 's', 'i', 'o', 'n', '1', '2', '3' };
+
+        // Single-block derivation (32 bytes)
+        auto derived32 = Sp800108KdfPipeline::deriveKey(key, label, context, 32);
+        TEST_ASSERT(derived32.size() == 32, "deriveKey produces 32 bytes");
+
+        // Multi-block derivation (64 bytes)
+        auto derived64 = Sp800108KdfPipeline::deriveKey(key, label, context, 64);
+        TEST_ASSERT(derived64.size() == 64, "deriveKey produces 64 bytes");
+        // Pipeline mode generates distinct subsequent blocks (block 1 != block 2)
+        bool blocksDistinct = (std::memcmp(derived64.data(), derived64.data() + 32, 32) != 0);
+        TEST_ASSERT(blocksDistinct, "Pipeline derivation generates distinct multi-block output");
+        auto derived64_again = Sp800108KdfPipeline::deriveKey(key, label, context, 64);
+        TEST_ASSERT(derived64 == derived64_again, "Pipeline derivation is deterministic");
+
+        // 2. BCrypt API integration
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SP 800-108 Pipeline algorithm");
+
+        BCRYPT_KEY_HANDLE hKey = nullptr;
+        status = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key.data(), static_cast<ULONG>(key.size()), 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey succeeds for SP 800-108 Pipeline key");
+
+        // Construct BCryptBufferDesc with KDF_LABEL and KDF_CONTEXT
+        BCryptBuffer buffers[2]{};
+        buffers[0].BufferType = KDF_LABEL;
+        buffers[0].cbBuffer = static_cast<ULONG>(label.size());
+        buffers[0].pvBuffer = label.data();
+
+        buffers[1].BufferType = KDF_CONTEXT;
+        buffers[1].cbBuffer = static_cast<ULONG>(context.size());
+        buffers[1].pvBuffer = context.data();
+
+        BCryptBufferDesc desc{};
+        desc.ulVersion = 1;
+        desc.cBuffers = 2;
+        desc.pBuffers = buffers;
+
+        uint8_t derivedApi[64]{};
+        ULONG cbResult = 0;
+        status = BCryptKeyDerivation(hKey, &desc, derivedApi, sizeof(derivedApi), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptKeyDerivation succeeds for Pipeline KDF");
+        TEST_ASSERT(cbResult == sizeof(derivedApi), "BCryptKeyDerivation returned 64 bytes");
+        TEST_ASSERT(std::memcmp(derivedApi, derived64.data(), 64) == 0, "BCryptKeyDerivation output matches Sp800108KdfPipeline exactly");
+
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+
+    std::cout << "  Horizon 231 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12GraphicsCommandList7 & Options 22 (OFFICIAL_IID, Barrier) OK\n"
+              << "    Pillar 2: NT Native Classes 213 (Secure Speculation Control) & 214 (Spaces Boot Info) OK\n"
+              << "    Pillar 3: Win32 Thread Pool Stack Information (Set/QueryThreadpoolStackInformation) OK\n"
+              << "    Pillar 4: BCrypt NIST SP 800-108 Pipeline Mode KDF (Multi-block HMAC-SHA256, KDF_LABEL, KDF_CONTEXT) OK\n";
+
+    std::cout << "[TEST] Suite 447: Horizon 231 - CommandList7/Options 22, Secure Speculation/Spaces, Threadpool Stack & SP 800-108 Pipeline KDF PASSED." << std::endl;
+}

@@ -1153,6 +1153,9 @@ public:
 static constexpr IID IID_ID3D12GraphicsCommandList7 = 
     { 0xb0415a52, 0x8383, 0x4776, { 0x8b, 0x51, 0x73, 0x8d, 0x64, 0xdb, 0x8a, 0x91 } };
 
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList7 = 
+    { 0xdd171223, 0x8b61, 0x4769, { 0x90, 0xe3, 0x16, 0x0c, 0xfb, 0x90, 0x21, 0x80 } };
+
 class ID3D12GraphicsCommandList7 : public ID3D12GraphicsCommandList6 {
 public:
     virtual void Barrier(uint32_t NumBarrierGroups, const D3D12_BARRIER_GROUP* pBarrierGroups) = 0;
@@ -2442,7 +2445,8 @@ public:
             riid == OFFICIAL_IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList5 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList5 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList6 ||
-            riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
+            riid == IID_ID3D12GraphicsCommandList7 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList7 ||
+            riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
             return 0;

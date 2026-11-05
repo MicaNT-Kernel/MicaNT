@@ -57,6 +57,7 @@ inline constexpr const wchar_t* BCRYPT_HMAC_SHA512_ALGORITHM   = L"HMAC-SHA512";
 inline constexpr const wchar_t* BCRYPT_RSA_ALGORITHM           = L"RSA";
 inline constexpr const wchar_t* BCRYPT_SP800108_CTR_HMAC_ALGORITHM = L"SP800_108_CTR_HMAC";
 inline constexpr const wchar_t* BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM = L"SP800_108_FEEDBACK_HMAC";
+inline constexpr const wchar_t* BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM = L"SP800_108_PIPELINE_HMAC";
 
 #ifndef KDF_LABEL
 inline constexpr uint32_t KDF_LABEL   = 9;
@@ -2502,6 +2503,73 @@ public:
     }
 };
 
+class Sp800108KdfPipeline {
+public:
+    static std::vector<uint8_t> deriveKey(
+        std::span<const uint8_t> key,
+        std::span<const uint8_t> label,
+        std::span<const uint8_t> context,
+        uint32_t derivedKeyByteLength
+    ) {
+        if (derivedKeyByteLength == 0) return {};
+        uint32_t L = derivedKeyByteLength * 8; // Bit length
+        constexpr uint32_t h = 32; // HMAC-SHA256 output length
+        uint32_t n = (derivedKeyByteLength + h - 1) / h;
+        std::vector<uint8_t> derived;
+        derived.reserve(n * h);
+
+        // A(0) = Label || 0x00 || Context || [L]_2
+        std::vector<uint8_t> aPrev;
+        aPrev.reserve(label.size() + 1 + context.size() + 4);
+        aPrev.insert(aPrev.end(), label.begin(), label.end());
+        aPrev.push_back(0x00);
+        aPrev.insert(aPrev.end(), context.begin(), context.end());
+        aPrev.push_back(static_cast<uint8_t>((L >> 24) & 0xFF));
+        aPrev.push_back(static_cast<uint8_t>((L >> 16) & 0xFF));
+        aPrev.push_back(static_cast<uint8_t>((L >> 8) & 0xFF));
+        aPrev.push_back(static_cast<uint8_t>(L & 0xFF));
+
+        for (uint32_t i = 1; i <= n; ++i) {
+            // A(i) = HMAC(Key, A(i-1))
+            std::vector<uint8_t> aCur = HmacSha256::compute(key, aPrev);
+
+            // K(i) = HMAC(Key, A(i) || [i]_2 || Label || 0x00 || Context || [L]_2)
+            std::vector<uint8_t> kiMsg;
+            kiMsg.reserve(aCur.size() + 4 + label.size() + 1 + context.size() + 4);
+            kiMsg.insert(kiMsg.end(), aCur.begin(), aCur.end());
+
+            // [i]_2: 32-bit big-endian counter
+            kiMsg.push_back(static_cast<uint8_t>((i >> 24) & 0xFF));
+            kiMsg.push_back(static_cast<uint8_t>((i >> 16) & 0xFF));
+            kiMsg.push_back(static_cast<uint8_t>((i >> 8) & 0xFF));
+            kiMsg.push_back(static_cast<uint8_t>(i & 0xFF));
+
+            // Label
+            kiMsg.insert(kiMsg.end(), label.begin(), label.end());
+
+            // 0x00 separator
+            kiMsg.push_back(0x00);
+
+            // Context
+            kiMsg.insert(kiMsg.end(), context.begin(), context.end());
+
+            // [L]_2: 32-bit big-endian length in bits
+            kiMsg.push_back(static_cast<uint8_t>((L >> 24) & 0xFF));
+            kiMsg.push_back(static_cast<uint8_t>((L >> 16) & 0xFF));
+            kiMsg.push_back(static_cast<uint8_t>((L >> 8) & 0xFF));
+            kiMsg.push_back(static_cast<uint8_t>(L & 0xFF));
+
+            auto ki = HmacSha256::compute(key, kiMsg);
+            derived.insert(derived.end(), ki.begin(), ki.end());
+
+            aPrev = std::move(aCur);
+        }
+
+        derived.resize(derivedKeyByteLength);
+        return derived;
+    }
+};
+
 // ============================================================================
 // 7. CNG Provider Objects & Key Storage Provider (KSP) Hierarchy
 // ============================================================================
@@ -2520,6 +2588,7 @@ enum class CryptoAlgorithm {
     AesCmac,
     Sp800108CtrHmac,
     Sp800108FeedbackHmac,
+    Sp800108PipelineHmac,
     Unknown
 };
 
@@ -2537,6 +2606,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_AES_CMAC_ALGORITHM || algId == L"AES-CMAC") return CryptoAlgorithm::AesCmac;
     if (algId == BCRYPT_SP800108_CTR_HMAC_ALGORITHM || algId == L"SP800-108-CTR-HMAC" || algId == L"SP800_108_CTR_HMAC") return CryptoAlgorithm::Sp800108CtrHmac;
     if (algId == BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM || algId == L"SP800-108-FEEDBACK-HMAC" || algId == L"SP800_108_FEEDBACK_HMAC") return CryptoAlgorithm::Sp800108FeedbackHmac;
+    if (algId == BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM || algId == L"SP800-108-PIPELINE-HMAC" || algId == L"SP800_108_PIPELINE_HMAC") return CryptoAlgorithm::Sp800108PipelineHmac;
     return CryptoAlgorithm::Unknown;
 }
 
@@ -3081,12 +3151,14 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
     auto prov = CipherKspEngine::get().getProvider(hAlgorithm);
     if (!prov || (prov->algorithm != CryptoAlgorithm::Aes &&
                   prov->algorithm != CryptoAlgorithm::Sp800108CtrHmac &&
-                  prov->algorithm != CryptoAlgorithm::Sp800108FeedbackHmac)) {
+                  prov->algorithm != CryptoAlgorithm::Sp800108FeedbackHmac &&
+                  prov->algorithm != CryptoAlgorithm::Sp800108PipelineHmac)) {
         return STATUS_NOT_SUPPORTED;
     }
 
     if (prov->algorithm == CryptoAlgorithm::Sp800108CtrHmac ||
-        prov->algorithm == CryptoAlgorithm::Sp800108FeedbackHmac) {
+        prov->algorithm == CryptoAlgorithm::Sp800108FeedbackHmac ||
+        prov->algorithm == CryptoAlgorithm::Sp800108PipelineHmac) {
         auto keyObj = std::make_shared<CngKeyObject>(
             prov->algorithm,
             std::span<const uint8_t>(pbSecret, cbSecret),
@@ -3836,6 +3908,13 @@ inline NTSTATUS BCryptKeyDerivation(
                 }
             }
         }
+    }
+
+    if (key->algorithm == CryptoAlgorithm::Sp800108PipelineHmac) {
+        auto derived = Sp800108KdfPipeline::deriveKey(key->secret, label, context, cbDerivedKey);
+        std::memcpy(pbDerivedKey, derived.data(), derived.size());
+        if (pcbResult) *pcbResult = static_cast<ULONG>(derived.size());
+        return STATUS_SUCCESS;
     }
 
     if (key->algorithm == CryptoAlgorithm::Sp800108FeedbackHmac) {
