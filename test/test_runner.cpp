@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite439") {
+        RUN_TEST(Test_Horizon223_EnhancedBarriers_BootMetadata_ThreadPowerThrottling_And_AesGcm_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite438") {
         RUN_TEST(Test_Horizon222_RaytracingPipeline_KernelDebuggerInfoEx_ThreadDescription_And_Sha512Engine_Suite);
         return g_FailedTests;
@@ -2195,6 +2199,8 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon220_PipelineLibrary_CpuSetInfo_MitigationPolicy_And_SecretAgreement_Suite);
     RUN_TEST(Test_Horizon221_ResourceAllocationInfo1_BootEnvInfo_ThreadCycleTime_And_KeyDerivation_Suite);
     RUN_TEST(Test_Horizon222_RaytracingPipeline_KernelDebuggerInfoEx_ThreadDescription_And_Sha512Engine_Suite);
+
+    RUN_TEST(Test_Horizon223_EnhancedBarriers_BootMetadata_ThreadPowerThrottling_And_AesGcm_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

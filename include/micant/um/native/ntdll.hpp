@@ -1643,6 +1643,12 @@ struct SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX {
 };
 using PSYSTEM_KERNEL_DEBUGGER_INFORMATION_EX = SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX*;
 
+struct SYSTEM_BOOT_METADATA_INFORMATION {
+    uint32_t Size{0};
+    uint8_t Data[1]{0};
+};
+using PSYSTEM_BOOT_METADATA_INFORMATION = SYSTEM_BOOT_METADATA_INFORMATION*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2239,6 +2245,36 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->DebuggerEnabled = 0;
             pInfo->DebuggerPresent = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_KERNEL_DEBUGGER_INFORMATION_EX);
+            return NtStatus::Success;
+        }
+        case 150: { // SystemBootMetadataInformation
+            struct SovereignBootMetadataPayload {
+                uint32_t Version{1};
+                uint32_t Signature{0x4D494341}; // 'MICA'
+                uint32_t BootFlags{0x00000007};  // EFI, SecureBoot, TPM-measured
+                uint32_t Reserved{0};
+                uint64_t BootTimestamp{133500000000000000ULL};
+            };
+            constexpr uint32_t kPayloadSize = sizeof(SovereignBootMetadataPayload);
+            constexpr uint32_t kTotalRequired = sizeof(uint32_t) + kPayloadSize;
+
+            if (SystemInformationLength < sizeof(uint32_t)) {
+                if (ReturnLength) *ReturnLength = kTotalRequired;
+                return NtStatus::InfoLengthMismatch;
+            }
+
+            auto* pMeta = reinterpret_cast<SYSTEM_BOOT_METADATA_INFORMATION*>(SystemInformation);
+            pMeta->Size = kTotalRequired;
+
+            if (SystemInformationLength < kTotalRequired) {
+                if (ReturnLength) *ReturnLength = kTotalRequired;
+                return NtStatus::InfoLengthMismatch;
+            }
+
+            SovereignBootMetadataPayload payload;
+            std::memcpy(pMeta->Data, &payload, sizeof(payload));
+
+            if (ReturnLength) *ReturnLength = kTotalRequired;
             return NtStatus::Success;
         }
         case 16: { // SystemHandleInformation

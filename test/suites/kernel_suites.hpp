@@ -45614,3 +45614,387 @@ inline void Test_Horizon222_RaytracingPipeline_KernelDebuggerInfoEx_ThreadDescri
 
     std::cout << "[TEST] Suite 438: Horizon 222 - Raytracing Pipeline, Kernel Debugger Info Ex, Thread Description & SHA-512 FIPS 180-4 Engine PASSED." << std::endl;
 }
+
+// ============================================================================
+// HORIZON 223 - UNIT TEST SUITE 439:
+// PrismX 3D12 Enhanced Barriers (CommandList7, Global/Buffer/Texture Groups),
+// Windows NT System Boot Metadata Information (Class 150),
+// Win32 Extended Processor Topology & Thread Power Throttle API, and
+// BCrypt / CNG AES-GCM Authenticated Encryption Engine (NIST SP 800-38D).
+// ============================================================================
+inline void Test_Horizon223_EnhancedBarriers_BootMetadata_ThreadPowerThrottling_And_AesGcm_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 439: Horizon 223 - Enhanced Barriers, Boot Metadata,\n";
+    std::cout << "                 Thread Power Throttling & AES-GCM Authenticated Engine\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Enhanced Barriers & Options 12/13
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [1/4] Verifying PrismX 3D12 Enhanced Barriers & Options 12/13...\n";
+
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice succeeds for Prism3D12 device");
+
+        // 1.1 Verify Options 12 Feature Support
+        D3D12_FEATURE_DATA_D3D12_OPTIONS12 opt12{};
+        hr = pDev->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &opt12, sizeof(opt12));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport succeeds for D3D12_FEATURE_D3D12_OPTIONS12");
+        TEST_ASSERT(opt12.EnhancedBarriersSupported == TRUE, "D3D12_FEATURE_D3D12_OPTIONS12 reports EnhancedBarriersSupported == TRUE");
+        TEST_ASSERT(opt12.RelaxedFormatCastingSupported == TRUE, "D3D12_FEATURE_D3D12_OPTIONS12 reports RelaxedFormatCastingSupported == TRUE");
+        TEST_ASSERT(opt12.MSPrimitivesPipelineStatisticIncludesCulledPrimitives == FALSE, "MSPrimitivesPipelineStatisticIncludesCulledPrimitives == FALSE");
+
+        // 1.2 Verify Options 13 Feature Support
+        D3D12_FEATURE_DATA_D3D12_OPTIONS13 opt13{};
+        hr = pDev->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS13, &opt13, sizeof(opt13));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport succeeds for D3D12_FEATURE_D3D12_OPTIONS13");
+        TEST_ASSERT(opt13.UnrestrictedBufferTextureCopyPitchSupported == TRUE, "UnrestrictedBufferTextureCopyPitchSupported == TRUE");
+        TEST_ASSERT(opt13.UnrestrictedVertexElementAlignmentSupported == TRUE, "UnrestrictedVertexElementAlignmentSupported == TRUE");
+        TEST_ASSERT(opt13.InvertedViewportHeightFlipsYSupported == TRUE, "InvertedViewportHeightFlipsYSupported == TRUE");
+        TEST_ASSERT(opt13.InvertedViewportDepthFlipsZSupported == TRUE, "InvertedViewportDepthFlipsZSupported == TRUE");
+
+        // 1.3 Create Command Allocator and Command List
+        ID3D12CommandAllocator* pAlloc = nullptr;
+        hr = pDev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAlloc));
+        TEST_ASSERT(hr == 0 && pAlloc != nullptr, "CreateCommandAllocator succeeds");
+
+        ID3D12GraphicsCommandList* pList = nullptr;
+        hr = pDev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pAlloc, nullptr, IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&pList));
+        TEST_ASSERT(hr == 0 && pList != nullptr, "CreateCommandList succeeds");
+
+        // 1.4 QueryInterface for ID3D12GraphicsCommandList7
+        ID3D12GraphicsCommandList7* pList7 = nullptr;
+        hr = pList->QueryInterface(IID_ID3D12GraphicsCommandList7, reinterpret_cast<void**>(&pList7));
+        TEST_ASSERT(hr == 0 && pList7 != nullptr, "QueryInterface for ID3D12GraphicsCommandList7 succeeds");
+
+        // 1.5 Construct Enhanced Barrier Groups (Global, Buffer, Texture)
+        D3D12_GLOBAL_BARRIER globalBarrier{};
+        globalBarrier.SyncBefore = D3D12_BARRIER_SYNC_ALL;
+        globalBarrier.SyncAfter = D3D12_BARRIER_SYNC_DRAW;
+        globalBarrier.AccessBefore = D3D12_BARRIER_ACCESS_COMMON;
+        globalBarrier.AccessAfter = D3D12_BARRIER_ACCESS_RENDER_TARGET;
+
+        D3D12_BARRIER_GROUP groupGlobal{};
+        groupGlobal.Type = D3D12_BARRIER_TYPE_GLOBAL;
+        groupGlobal.NumBarriers = 1;
+        groupGlobal.pGlobalBarriers = &globalBarrier;
+
+        D3D12_BUFFER_BARRIER bufferBarrier{};
+        bufferBarrier.SyncBefore = D3D12_BARRIER_SYNC_COPY;
+        bufferBarrier.SyncAfter = D3D12_BARRIER_SYNC_VERTEX_SHADING;
+        bufferBarrier.AccessBefore = D3D12_BARRIER_ACCESS_COPY_DEST;
+        bufferBarrier.AccessAfter = D3D12_BARRIER_ACCESS_VERTEX_BUFFER;
+        bufferBarrier.Offset = 0;
+        bufferBarrier.Size = 8192;
+
+        D3D12_BARRIER_GROUP groupBuffer{};
+        groupBuffer.Type = D3D12_BARRIER_TYPE_BUFFER;
+        groupBuffer.NumBarriers = 1;
+        groupBuffer.pBufferBarriers = &bufferBarrier;
+
+        D3D12_TEXTURE_BARRIER textureBarrier{};
+        textureBarrier.SyncBefore = D3D12_BARRIER_SYNC_RENDER_TARGET;
+        textureBarrier.SyncAfter = D3D12_BARRIER_SYNC_PIXEL_SHADING;
+        textureBarrier.AccessBefore = D3D12_BARRIER_ACCESS_RENDER_TARGET;
+        textureBarrier.AccessAfter = D3D12_BARRIER_ACCESS_SHADER_RESOURCE;
+        textureBarrier.LayoutBefore = D3D12_BARRIER_LAYOUT_RENDER_TARGET;
+        textureBarrier.LayoutAfter = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE;
+
+        D3D12_BARRIER_GROUP groupTexture{};
+        groupTexture.Type = D3D12_BARRIER_TYPE_TEXTURE;
+        groupTexture.NumBarriers = 1;
+        groupTexture.pTextureBarriers = &textureBarrier;
+
+        D3D12_BARRIER_GROUP barrierGroups[3] = { groupGlobal, groupBuffer, groupTexture };
+        pList7->Barrier(3, barrierGroups);
+
+        auto* pImpl = static_cast<Prism3D12GraphicsCommandListImpl*>(pList7);
+        TEST_ASSERT(pImpl->GetRecordedEnhancedBarriersCount() == 3, "CommandList records 3 enhanced barrier groups");
+
+        pList7->Release();
+        pList->Release();
+        pAlloc->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 Enhanced Barriers & Options 12/13 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Boot Metadata Information (Class 150)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [2/4] Verifying Windows NT System Boot Metadata Information (Class 150)...\n";
+
+        using namespace micant::ntdll;
+
+        ULONG returnLength = 0;
+
+        // 2.1 Length mismatch test (querying with too small buffer)
+        uint8_t smallBuf[sizeof(uint32_t) - 1]{};
+        NtStatus st = NtQuerySystemInformation_Export(150, smallBuf, sizeof(smallBuf), &returnLength);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(150) rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength > sizeof(uint32_t), "NtQuerySystemInformation(150) returns required size in ReturnLength");
+
+        // 2.2 Querying with full buffer
+        uint8_t metaBuffer[128]{};
+        returnLength = 0;
+        st = NtQuerySystemInformation_Export(150, metaBuffer, sizeof(metaBuffer), &returnLength);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(150) succeeds with full buffer");
+        TEST_ASSERT(returnLength >= sizeof(uint32_t) + 24, "ReturnLength reports complete boot metadata struct size");
+
+        auto* pMeta = reinterpret_cast<const SYSTEM_BOOT_METADATA_INFORMATION*>(metaBuffer);
+        TEST_ASSERT(pMeta->Size == returnLength, "SYSTEM_BOOT_METADATA_INFORMATION Size matches ReturnLength");
+
+        // Verify payload fields: Signature at offset 4 of Data must be 'MICA' (0x4D494341)
+        uint32_t sig = *reinterpret_cast<const uint32_t*>(pMeta->Data + 4);
+        TEST_ASSERT(sig == 0x4D494341, "Boot metadata signature matches sovereign 'MICA' (0x4D494341)");
+
+        uint32_t bootFlags = *reinterpret_cast<const uint32_t*>(pMeta->Data + 8);
+        TEST_ASSERT((bootFlags & 0x07) == 0x07, "Boot flags indicate EFI | SecureBoot | MeasuredBoot");
+
+        std::cout << "  [PASS] Windows NT System Boot Metadata Information verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Processor Topology & Thread Power Throttle API
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [3/4] Verifying Win32 Thread Power Throttling & Ideal Processor Topology...\n";
+
+        using namespace micant::win32;
+
+        HANDLE hThread = OpenThread(0, FALSE, 7777);
+        TEST_ASSERT(hThread != nullptr, "OpenThread returns valid thread handle");
+
+        // 3.1 Thread Power Throttling (Speed unthrottling for high-performance gaming)
+        THREAD_POWER_THROTTLING_STATE tpts{};
+        tpts.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+        tpts.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+        tpts.StateMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+
+        BOOL ok = SetThreadInformation(hThread, ThreadPowerThrottling, &tpts, sizeof(tpts));
+        TEST_ASSERT(ok == TRUE, "SetThreadInformation(ThreadPowerThrottling) succeeds");
+
+        THREAD_POWER_THROTTLING_STATE queriedTpts{};
+        ok = GetThreadInformation(hThread, ThreadPowerThrottling, &queriedTpts, sizeof(queriedTpts));
+        TEST_ASSERT(ok == TRUE, "GetThreadInformation(ThreadPowerThrottling) succeeds");
+        TEST_ASSERT(queriedTpts.ControlMask == THREAD_POWER_THROTTLING_EXECUTION_SPEED, "ControlMask preserved accurately");
+        TEST_ASSERT(queriedTpts.StateMask == THREAD_POWER_THROTTLING_EXECUTION_SPEED, "StateMask preserved accurately");
+
+        // 3.2 Thread Ideal Processor Topology
+        PROCESSOR_NUMBER idealProc{0, 6, 0};
+        PROCESSOR_NUMBER prevProc{};
+        ok = SetThreadIdealProcessorEx(hThread, &idealProc, &prevProc);
+        TEST_ASSERT(ok == TRUE, "SetThreadIdealProcessorEx succeeds");
+
+        PROCESSOR_NUMBER queriedProc{};
+        ok = GetThreadIdealProcessorEx(hThread, &queriedProc);
+        TEST_ASSERT(ok == TRUE, "GetThreadIdealProcessorEx succeeds");
+        TEST_ASSERT(queriedProc.Group == 0 && queriedProc.Number == 6, "GetThreadIdealProcessorEx returns processor 6 in group 0");
+
+        // 3.3 Dynamic Code Policy
+        DWORD dynCodePolicy = 1;
+        ok = SetThreadInformation(hThread, ThreadDynamicCodePolicy, &dynCodePolicy, sizeof(dynCodePolicy));
+        TEST_ASSERT(ok == TRUE, "SetThreadInformation(ThreadDynamicCodePolicy) succeeds");
+
+        DWORD queriedDyn = 0;
+        ok = GetThreadInformation(hThread, ThreadDynamicCodePolicy, &queriedDyn, sizeof(queriedDyn));
+        TEST_ASSERT(ok == TRUE && queriedDyn == 1, "GetThreadInformation returns updated DynamicCodePolicy");
+
+        std::cout << "  [PASS] Win32 Thread Power Throttling & Topology verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt / CNG AES-GCM Authenticated Encryption Engine (NIST SP 800-38D)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [4/4] Verifying BCrypt / CNG AES-GCM Authenticated Engine (NIST SP 800-38D)...\n";
+
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        // 4.1 Open AES Algorithm Provider & Configure GCM Chaining Mode
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider opens AES");
+
+        st = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE, const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(BCRYPT_CHAIN_MODE_GCM)), sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptSetProperty sets BCRYPT_CHAIN_MODE_GCM");
+
+        // Query Auth Tag Length range (12 to 16 bytes)
+        BCRYPT_AUTH_TAG_LENGTHS_STRUCT tagLengths{};
+        uint32_t cbResult = 0;
+        st = BCryptGetProperty(hAlg, BCRYPT_AUTH_TAG_LENGTH, reinterpret_cast<uint8_t*>(&tagLengths), sizeof(tagLengths), &cbResult, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && tagLengths.dwMinLength == 12 && tagLengths.dwMaxLength == 16, "BCryptGetProperty returns AuthTagLength 12-16");
+
+        // 4.2 NIST SP 800-38D Test Case 1: Empty Plaintext & AAD (AES-128)
+        {
+            const uint8_t key128[16] = {0};
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key128, sizeof(key128), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-128 key");
+
+            uint8_t nonce[12] = {0};
+            uint8_t tag[16] = {0};
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+            authInfo.cbSize = sizeof(authInfo);
+            authInfo.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+            authInfo.pbNonce = nonce;
+            authInfo.cbNonce = sizeof(nonce);
+            authInfo.pbTag = tag;
+            authInfo.cbTag = sizeof(tag);
+
+            uint8_t dummyIn = 0;
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, &dummyIn, 0, &authInfo, nullptr, 0, nullptr, 0, &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptEncrypt succeeds on empty plaintext");
+            TEST_ASSERT(bytesWritten == 0, "Zero ciphertext bytes produced");
+
+            const uint8_t expectedTag1[16] = {
+                0x58, 0xe2, 0xfc, 0xce, 0xfa, 0x7e, 0x30, 0x61, 0x36, 0x7f, 0x1d, 0x57, 0xa4, 0xe7, 0x45, 0x5a
+            };
+            TEST_ASSERT(std::memcmp(tag, expectedTag1, 16) == 0, "AES-GCM Test Case 1 tag matches NIST SP 800-38D standard vector");
+
+            // Decrypt & verify tag
+            st = BCryptDecrypt(hKey, &dummyIn, 0, &authInfo, nullptr, 0, nullptr, 0, &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDecrypt validates authentic empty message");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // 4.3 NIST SP 800-38D Test Case 2: 16-Byte Plaintext (AES-128)
+        {
+            const uint8_t key128[16] = {0};
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key128, sizeof(key128), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES-128 key");
+
+            uint8_t pt[16] = {0};
+            uint8_t ct[16] = {0};
+            uint8_t nonce[12] = {0};
+            uint8_t tag[16] = {0};
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+            authInfo.cbSize = sizeof(authInfo);
+            authInfo.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+            authInfo.pbNonce = nonce;
+            authInfo.cbNonce = sizeof(nonce);
+            authInfo.pbTag = tag;
+            authInfo.cbTag = sizeof(tag);
+
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt, sizeof(pt), &authInfo, nullptr, 0, ct, sizeof(ct), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptEncrypt encrypts 16 bytes");
+
+            const uint8_t expectedCt2[16] = {
+                0x03, 0x88, 0xda, 0xce, 0x60, 0xb6, 0xa3, 0x92, 0xf3, 0x28, 0xc2, 0xb9, 0x71, 0xb2, 0xfe, 0x78
+            };
+            const uint8_t expectedTag2[16] = {
+                0xab, 0x6e, 0x47, 0xd4, 0x2c, 0xec, 0x13, 0xbd, 0xf5, 0x3a, 0x67, 0xb2, 0x12, 0x57, 0xbd, 0xdf
+            };
+            TEST_ASSERT(std::memcmp(ct, expectedCt2, 16) == 0, "AES-GCM Test Case 2 ciphertext matches NIST SP 800-38D");
+            TEST_ASSERT(std::memcmp(tag, expectedTag2, 16) == 0, "AES-GCM Test Case 2 tag matches NIST SP 800-38D");
+
+            uint8_t decrypted[16] = {0};
+            st = BCryptDecrypt(hKey, ct, sizeof(ct), &authInfo, nullptr, 0, decrypted, sizeof(decrypted), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 16, "BCryptDecrypt decrypts authentic ciphertext");
+            TEST_ASSERT(std::memcmp(decrypted, pt, 16) == 0, "Decrypted plaintext matches original zeros");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        // 4.4 NIST SP 800-38D Test Case 4: 64-Byte Plaintext with 20-Byte AAD
+        {
+            const uint8_t key4[16] = {
+                0xfe, 0x99, 0x41, 0xa0, 0x9a, 0xdc, 0x90, 0xb8, 0xf1, 0x84, 0x3d, 0x24, 0x65, 0xd1, 0x44, 0xf6
+            };
+            BCRYPT_KEY_HANDLE hKey = nullptr;
+            st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key4, sizeof(key4), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey creates AES key for TC4");
+
+            uint8_t iv4[12] = {
+                0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce, 0xdb, 0xad, 0xde, 0xca, 0xf8, 0x88
+            };
+            uint8_t aad4[20] = {
+                0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef,
+                0xab, 0xad, 0xda, 0xd2
+            };
+            const uint8_t pt4[64] = {
+                0xd9, 0x31, 0x32, 0x25, 0xf8, 0x84, 0x06, 0xe5, 0xa5, 0x59, 0x09, 0xc5, 0xaf, 0xf5, 0x26, 0x9a,
+                0x86, 0xa7, 0xa9, 0x53, 0x15, 0x34, 0xf7, 0xda, 0x2e, 0x4c, 0x30, 0x3d, 0x8a, 0x31, 0x8a, 0x72,
+                0x1c, 0x3c, 0x0c, 0x95, 0x95, 0x68, 0x09, 0x53, 0x2f, 0xcf, 0x0e, 0x24, 0x49, 0xa6, 0xb5, 0x25,
+                0xb1, 0x6a, 0xed, 0xf5, 0xaa, 0x0d, 0xe6, 0x57, 0xba, 0x63, 0x7b, 0x39, 0x1a, 0xaf, 0xd2, 0x55
+            };
+
+            uint8_t ct4[64] = {0};
+            uint8_t tag4[16] = {0};
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo{};
+            authInfo.cbSize = sizeof(authInfo);
+            authInfo.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+            authInfo.pbNonce = iv4;
+            authInfo.cbNonce = sizeof(iv4);
+            authInfo.pbAuthData = aad4;
+            authInfo.cbAuthData = sizeof(aad4);
+            authInfo.pbTag = tag4;
+            authInfo.cbTag = sizeof(tag4);
+
+            uint32_t bytesWritten = 0;
+            st = BCryptEncrypt(hKey, pt4, sizeof(pt4), &authInfo, nullptr, 0, ct4, sizeof(ct4), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 64, "BCryptEncrypt encrypts 64 bytes with AAD");
+
+            const uint8_t expectedCt4[64] = {
+                0x8b, 0xc4, 0xad, 0x34, 0x94, 0x5d, 0x1c, 0x15, 0x98, 0x37, 0x22, 0x48, 0xac, 0xa5, 0x4d, 0xf6,
+                0xc5, 0x4d, 0x0d, 0x8b, 0x3a, 0x31, 0xa1, 0x57, 0x89, 0xac, 0x4c, 0x84, 0x58, 0xcd, 0x4d, 0x6e,
+                0x05, 0x13, 0x61, 0xe4, 0xcd, 0xd1, 0x7d, 0xb1, 0xba, 0xab, 0x4e, 0xf8, 0x24, 0xe2, 0x9b, 0x02,
+                0xcf, 0x45, 0xb7, 0xaf, 0x87, 0xb7, 0x98, 0x6e, 0x82, 0x06, 0x99, 0xc3, 0xd2, 0xf4, 0xdb, 0x9b
+            };
+            const uint8_t expectedTag4[16] = {
+                0x98, 0x97, 0x54, 0xd2, 0x9e, 0x34, 0xc1, 0xc3, 0x72, 0xb7, 0x17, 0xcd, 0x43, 0x74, 0x4a, 0xc2
+            };
+            TEST_ASSERT(std::memcmp(ct4, expectedCt4, 64) == 0, "AES-GCM Test Case 4 ciphertext matches NIST SP 800-38D");
+            TEST_ASSERT(std::memcmp(tag4, expectedTag4, 16) == 0, "AES-GCM Test Case 4 tag matches NIST SP 800-38D");
+
+            // Successful authentic decryption
+            uint8_t decrypted4[64] = {0};
+            st = BCryptDecrypt(hKey, ct4, sizeof(ct4), &authInfo, nullptr, 0, decrypted4, sizeof(decrypted4), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && bytesWritten == 64, "BCryptDecrypt decrypts authentic ciphertext with AAD");
+            TEST_ASSERT(std::memcmp(decrypted4, pt4, 64) == 0, "Decrypted message matches original plaintext");
+
+            // 4.5 Anti-Tamper Security Verification
+            // Tamper with 1 bit in ciphertext:
+            uint8_t tamperedCt[64];
+            std::memcpy(tamperedCt, ct4, 64);
+            tamperedCt[10] ^= 0x01; // flip 1 bit
+
+            uint8_t tamperedDec[64] = {0};
+            st = BCryptDecrypt(hKey, tamperedCt, sizeof(tamperedCt), &authInfo, nullptr, 0, tamperedDec, sizeof(tamperedDec), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_AUTH_TAG_MISMATCH, "Tampered ciphertext triggers STATUS_AUTH_TAG_MISMATCH (0xC000A002)");
+
+            // Tamper with 1 bit in auth tag:
+            uint8_t tamperedTag[16];
+            std::memcpy(tamperedTag, tag4, 16);
+            tamperedTag[7] ^= 0x80; // flip 1 bit
+
+            authInfo.pbTag = tamperedTag;
+            st = BCryptDecrypt(hKey, ct4, sizeof(ct4), &authInfo, nullptr, 0, tamperedDec, sizeof(tamperedDec), &bytesWritten, 0);
+            TEST_ASSERT(st == STATUS_AUTH_TAG_MISMATCH, "Tampered auth tag triggers STATUS_AUTH_TAG_MISMATCH (0xC000A002)");
+
+            BCryptDestroyKey(hKey);
+        }
+
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        std::cout << "  [PASS] BCrypt / CNG AES-GCM Authenticated Encryption Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 223] Enhanced Barriers, Boot Metadata, Thread Power Throttling & AES-GCM Engine Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Enhanced Barriers (Global/Buffer/Texture Groups, Options 12/13) OK\n"
+              << "    Pillar 2: NT System Boot Metadata Information (Class 150) OK\n"
+              << "    Pillar 3: Win32 Extended Processor Topology & Thread Power Throttle API OK\n"
+              << "    Pillar 4: BCrypt AES-GCM Authenticated Encryption Engine (NIST SP 800-38D vectors) OK\n";
+
+    std::cout << "[TEST] Suite 439: Horizon 223 - Enhanced Barriers, Boot Metadata, Thread Power Throttling & AES-GCM Engine PASSED." << std::endl;
+}
