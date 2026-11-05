@@ -152,6 +152,7 @@ using PTP_WAIT = TP_WAIT*;
 struct TP_IO;
 using PTP_IO = TP_IO*;
 using PTP_IO_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PVOID Overlapped, ULONG IoResult, ULONG_PTR NumberOfBytesTransferred, PTP_IO Io);
+using PTP_WIN32_IO_CALLBACK = PTP_IO_CALLBACK;
 
 using MMRESULT = UINT;
 inline constexpr MMRESULT TIMERR_NOERROR = 0;
@@ -6124,6 +6125,15 @@ inline VOID WINAPI CloseThreadpoolIo(PTP_IO pio) noexcept {
     pio->Active.store(false, std::memory_order_relaxed);
     WaitForThreadpoolIoCallbacks(pio, TRUE);
     delete pio;
+}
+
+inline void TriggerThreadpoolIoCompletion(PTP_IO pio, PVOID Overlapped, ULONG IoResult, ULONG_PTR NumberOfBytesTransferred) noexcept {
+    if (!pio || !pio->Active.load(std::memory_order_relaxed) || !pio->Callback) return;
+    TP_CALLBACK_INSTANCE inst{};
+    pio->Callback(&inst, pio->Context, Overlapped, IoResult, NumberOfBytesTransferred, pio);
+    uint32_t cur = pio->PendingIoCount.load(std::memory_order_relaxed);
+    while (cur > 0 && !pio->PendingIoCount.compare_exchange_weak(cur, cur - 1, std::memory_order_relaxed)) {}
+    pio->Cv.notify_all();
 }
 
 // ============================================================================

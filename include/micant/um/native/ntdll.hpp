@@ -1464,6 +1464,45 @@ struct SYSTEM_DMA_GUARD_POLICY_INFORMATION {
     BOOLEAN DmaGuardPolicyEnabled;
 };
 
+// Class 206: SystemSpeculationControlInformationEx
+struct SYSTEM_SPECULATION_CONTROL_INFORMATION_EX {
+    union {
+        ULONG Flags;
+        struct {
+            ULONG BpbEnabled : 1;
+            ULONG IbrsPresent : 1;
+            ULONG StibpPresent : 1;
+            ULONG SmepPresent : 1;
+            ULONG SpeculativeStoreBypassDisableAvailable : 1;
+            ULONG SpeculativeStoreBypassDisableSupported : 1;
+            ULONG IntelRsbFlushAvailable : 1;
+            ULONG BhbClearAvailable : 1;
+            ULONG BranchHistoryBarrierSupported : 1;
+            ULONG Reserved : 23;
+        };
+    } SpeculationControlFlagsEx;
+    union {
+        ULONG Flags2;
+        struct {
+            ULONG SbdrFlushAvailable : 1;
+            ULONG FbsdpClearAvailable : 1;
+            ULONG PsdpClearAvailable : 1;
+            ULONG FbssClearAvailable : 1;
+            ULONG Reserved : 28;
+        };
+    } SpeculationControlFlagsEx2;
+};
+using PSYSTEM_SPECULATION_CONTROL_INFORMATION_EX = SYSTEM_SPECULATION_CONTROL_INFORMATION_EX*;
+
+// Class 208: SystemProcessorMicrocodeUpdateInformation
+struct SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION {
+    ULONG MicrocodeUpdateStatus; // 0 = STATUS_SUCCESS
+    ULONG CurrentRevision;       // e.g. 0x000000F4
+    ULONG MinimumRequiredRevision; // e.g. 0x000000B0
+    ULONG CpuVendor;             // 1 = GenuineIntel, 2 = AuthenticAMD
+};
+using PSYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION = SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -2851,6 +2890,45 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             auto* pInfo = reinterpret_cast<SYSTEM_DMA_GUARD_POLICY_INFORMATION*>(SystemInformation);
             pInfo->DmaGuardPolicyEnabled = 1;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DMA_GUARD_POLICY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 206: { // SystemSpeculationControlInformationEx
+            if (SystemInformationLength < sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION_EX)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION_EX);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pSpecEx = reinterpret_cast<SYSTEM_SPECULATION_CONTROL_INFORMATION_EX*>(SystemInformation);
+            pSpecEx->SpeculationControlFlagsEx.Flags = 0;
+            pSpecEx->SpeculationControlFlagsEx.BpbEnabled = 1;
+            pSpecEx->SpeculationControlFlagsEx.IbrsPresent = 1;
+            pSpecEx->SpeculationControlFlagsEx.StibpPresent = 1;
+            pSpecEx->SpeculationControlFlagsEx.SmepPresent = 1;
+            pSpecEx->SpeculationControlFlagsEx.SpeculativeStoreBypassDisableAvailable = 1;
+            pSpecEx->SpeculationControlFlagsEx.SpeculativeStoreBypassDisableSupported = 1;
+            pSpecEx->SpeculationControlFlagsEx.IntelRsbFlushAvailable = 1;
+            pSpecEx->SpeculationControlFlagsEx.BhbClearAvailable = 1;
+            pSpecEx->SpeculationControlFlagsEx.BranchHistoryBarrierSupported = 1;
+
+            pSpecEx->SpeculationControlFlagsEx2.Flags2 = 0;
+            pSpecEx->SpeculationControlFlagsEx2.SbdrFlushAvailable = 1;
+            pSpecEx->SpeculationControlFlagsEx2.FbsdpClearAvailable = 1;
+            pSpecEx->SpeculationControlFlagsEx2.PsdpClearAvailable = 1;
+            pSpecEx->SpeculationControlFlagsEx2.FbssClearAvailable = 1;
+
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION_EX);
+            return NtStatus::Success;
+        }
+        case 208: { // SystemProcessorMicrocodeUpdateInformation
+            if (SystemInformationLength < sizeof(SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pUcode = reinterpret_cast<SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION*>(SystemInformation);
+            pUcode->MicrocodeUpdateStatus = 0; // STATUS_SUCCESS
+            pUcode->CurrentRevision = 0x000000F4;
+            pUcode->MinimumRequiredRevision = 0x000000B0;
+            pUcode->CpuVendor = 1; // GenuineIntel
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION);
             return NtStatus::Success;
         }
         default: {

@@ -1142,6 +1142,9 @@ public:
 static constexpr IID IID_ID3D12GraphicsCommandList6 = 
     { 0xc3827890, 0xe548, 0x4cf6, { 0xbf, 0x5a, 0x4f, 0x97, 0x22, 0x3d, 0x1d, 0x28 } };
 
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList6 = 
+    { 0xc3827890, 0xe548, 0x4da2, { 0x89, 0xb6, 0xac, 0x3f, 0x4a, 0xd1, 0xba, 0x61 } };
+
 class ID3D12GraphicsCommandList6 : public ID3D12GraphicsCommandList5 {
 public:
     virtual void DispatchMesh(uint32_t ThreadGroupCountX, uint32_t ThreadGroupCountY, uint32_t ThreadGroupCountZ) = 0;
@@ -2438,7 +2441,8 @@ public:
             riid == IID_ID3D12GraphicsCommandList3 || riid == IID_ID3D12GraphicsCommandList4 ||
             riid == OFFICIAL_IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList5 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList5 ||
-            riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
+            riid == IID_ID3D12GraphicsCommandList6 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList6 ||
+            riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
             return 0;

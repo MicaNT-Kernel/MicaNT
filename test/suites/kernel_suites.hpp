@@ -47939,3 +47939,253 @@ inline void Test_Horizon229_CommandList5Options20_DmaGuardHypervisor_SyncBarrier
 
     std::cout << "[TEST] Suite 445: Horizon 229 - CommandList5/Options 20, DMA Guard/Hypervisor, SyncBarrier & SP 800-108 KDF PASSED." << std::endl;
 }
+
+// ============================================================================
+// Horizon 230: Suite 446 - CommandList6/Options 21, Speculation Control Ex &
+// Processor Microcode Update, Threadpool I/O Completion, and SP 800-108 Feedback KDF
+// ============================================================================
+
+inline void Test_Horizon230_CommandList6Options21_SpeculationExMicrocode_ThreadpoolIo_And_Sp800108FeedbackKdf_Suite() {
+    std::cout << "\n[TEST] Suite 446: Horizon 230 - CommandList6/Options 21, Speculation Ex / Microcode, Threadpool I/O & SP 800-108 Feedback KDF...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList6 & Options 21
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] PrismX 3D12 ID3D12GraphicsCommandList6 & Options 21...\n";
+
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        // Verify D3D12_FEATURE_DATA_D3D12_OPTIONS21
+        D3D12_FEATURE_DATA_D3D12_OPTIONS21 opt21{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21, &opt21, sizeof(opt21));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS21) succeeds");
+        TEST_ASSERT(opt21.WorkGraphsTier == D3D12_WORK_GRAPHS_TIER_1_0, "WorkGraphsTier is Tier 1.0");
+        TEST_ASSERT(opt21.ExecuteIndirectTier == D3D12_EXECUTE_INDIRECT_TIER_1_1, "ExecuteIndirectTier is Tier 1.1");
+        TEST_ASSERT(opt21.SampleCmpSimilarShaderInstructionsSupported == TRUE, "SampleCmpSimilarShaderInstructionsSupported is true");
+
+        // Create Command List
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+
+        // QueryInterface for ID3D12GraphicsCommandList6 via OFFICIAL_IID_ID3D12GraphicsCommandList6
+        ID3D12GraphicsCommandList6* cl6 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList6, reinterpret_cast<void**>(&cl6));
+        TEST_ASSERT(hr == 0 && cl6 != nullptr, "QueryInterface with OFFICIAL_IID_ID3D12GraphicsCommandList6 succeeds");
+        cl6->Release();
+        cl6 = nullptr;
+
+        // QueryInterface for ID3D12GraphicsCommandList6 via IID_ID3D12GraphicsCommandList6
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList6, reinterpret_cast<void**>(&cl6));
+        TEST_ASSERT(hr == 0 && cl6 != nullptr, "QueryInterface with IID_ID3D12GraphicsCommandList6 succeeds");
+
+        // Test DispatchMesh
+        uint32_t initMeshCount = cmdList.GetDispatchedMeshCount();
+        cl6->DispatchMesh(8, 4, 2);
+        TEST_ASSERT(cmdList.GetDispatchedMeshCount() == initMeshCount + 1, "DispatchMesh increments mesh dispatch counter");
+
+        cl6->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 ID3D12GraphicsCommandList6 and Options 21 verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT System Speculation Control Information Ex (Class 206) & Processor Microcode Update (Class 208)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] Windows NT System Speculation Control Ex & Processor Microcode Update Information...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. SystemSpeculationControlInformationEx (Class 206)
+        SYSTEM_SPECULATION_CONTROL_INFORMATION_EX specEx{};
+        uint32_t retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(206, &specEx, sizeof(specEx), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation for Class 206 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SPECULATION_CONTROL_INFORMATION_EX), "Class 206 returns exact structure size");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.BpbEnabled == 1, "BpbEnabled is reported as 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.IbrsPresent == 1, "IbrsPresent is reported as 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.StibpPresent == 1, "StibpPresent is reported as 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.SmepPresent == 1, "SmepPresent is reported as 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.SpeculativeStoreBypassDisableAvailable == 1, "SpeculativeStoreBypassDisableAvailable is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.SpeculativeStoreBypassDisableSupported == 1, "SpeculativeStoreBypassDisableSupported is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.IntelRsbFlushAvailable == 1, "IntelRsbFlushAvailable is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.BhbClearAvailable == 1, "BhbClearAvailable is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx.BranchHistoryBarrierSupported == 1, "BranchHistoryBarrierSupported is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx2.SbdrFlushAvailable == 1, "SbdrFlushAvailable is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx2.FbsdpClearAvailable == 1, "FbsdpClearAvailable is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx2.PsdpClearAvailable == 1, "PsdpClearAvailable is 1");
+        TEST_ASSERT(specEx.SpeculationControlFlagsEx2.FbssClearAvailable == 1, "FbssClearAvailable is 1");
+
+        // Undersized buffer check for Class 206
+        st = NtQuerySystemInformation_Export(206, &specEx, sizeof(specEx) - 1, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 206 rejects undersized buffer with InfoLengthMismatch");
+
+        // 2. SystemProcessorMicrocodeUpdateInformation (Class 208)
+        SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION microcode{};
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(208, &microcode, sizeof(microcode), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation for Class 208 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_PROCESSOR_MICROCODE_UPDATE_INFORMATION), "Class 208 returns exact structure size");
+        TEST_ASSERT(microcode.MicrocodeUpdateStatus == 0, "MicrocodeUpdateStatus is STATUS_SUCCESS (0)");
+        TEST_ASSERT(microcode.CurrentRevision == 0x000000F4, "CurrentRevision matches microcode level (0xF4)");
+        TEST_ASSERT(microcode.MinimumRequiredRevision == 0x000000B0, "MinimumRequiredRevision matches baseline (0xB0)");
+        TEST_ASSERT(microcode.CpuVendor == 1, "CpuVendor identifies Intel x86_64 CPU");
+
+        // Undersized buffer check for Class 208
+        st = NtQuerySystemInformation_Export(208, &microcode, sizeof(microcode) - 1, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 208 rejects undersized buffer with InfoLengthMismatch");
+
+        std::cout << "  [PASS] Windows NT Speculation Control Ex & Processor Microcode Update Information verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Thread Pool I/O Completion Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Win32 Extended Thread Pool I/O Completion Architecture...\n";
+
+        using namespace micant::win32;
+        InitializeWin32SubsystemExports();
+
+        static std::atomic<uint32_t> s_tpIoCalls{0};
+        static std::atomic<ULONG_PTR> s_tpIoBytes{0};
+        static std::atomic<ULONG> s_tpIoResult{0xFFFFFFFF};
+        static PVOID s_tpIoOverlapped{nullptr};
+
+        s_tpIoCalls.store(0);
+        s_tpIoBytes.store(0);
+        s_tpIoResult.store(0xFFFFFFFF);
+        s_tpIoOverlapped = nullptr;
+
+        auto ioCallback = [](PTP_CALLBACK_INSTANCE, PVOID Context, PVOID Overlapped, ULONG IoResult, ULONG_PTR Bytes, PTP_IO) {
+            auto* counter = reinterpret_cast<std::atomic<uint32_t>*>(Context);
+            if (counter) counter->fetch_add(1, std::memory_order_relaxed);
+            s_tpIoBytes.store(Bytes, std::memory_order_relaxed);
+            s_tpIoResult.store(IoResult, std::memory_order_relaxed);
+            s_tpIoOverlapped = Overlapped;
+        };
+
+        win32::HANDLE dummyFile = reinterpret_cast<win32::HANDLE>(0xFEEDFACEULL);
+        PTP_IO pio = win32::CreateThreadpoolIo(dummyFile, ioCallback, &s_tpIoCalls, nullptr);
+        TEST_ASSERT(pio != nullptr, "CreateThreadpoolIo creates valid PTP_IO handle");
+        TEST_ASSERT(pio->FileHandle == dummyFile, "PTP_IO preserves associated file handle");
+        TEST_ASSERT(pio->Active.load() == true, "PTP_IO initialized in active state");
+
+        // 1. Start and Cancel I/O
+        win32::StartThreadpoolIo(pio);
+        TEST_ASSERT(pio->PendingIoCount.load() == 1, "StartThreadpoolIo tracks 1 pending I/O");
+        win32::CancelThreadpoolIo(pio);
+        TEST_ASSERT(pio->PendingIoCount.load() == 0, "CancelThreadpoolIo decrements pending I/O count");
+
+        // 2. Start I/O and Trigger Asynchronous Completion
+        win32::StartThreadpoolIo(pio);
+        TEST_ASSERT(pio->PendingIoCount.load() == 1, "StartThreadpoolIo tracks pending I/O for dispatch");
+        int dummyOverlapped = 42;
+        win32::TriggerThreadpoolIoCompletion(pio, &dummyOverlapped, 0, 8192);
+
+        TEST_ASSERT(s_tpIoCalls.load() == 1, "TriggerThreadpoolIoCompletion invokes callback");
+        TEST_ASSERT(s_tpIoBytes.load() == 8192, "Callback receives transferred byte count of 8192");
+        TEST_ASSERT(s_tpIoResult.load() == 0, "Callback receives SUCCESS (0) IoResult");
+        TEST_ASSERT(s_tpIoOverlapped == &dummyOverlapped, "Callback receives correct Overlapped pointer");
+        TEST_ASSERT(pio->PendingIoCount.load() == 0, "Pending I/O count decremented back to 0");
+
+        // 3. Wait and Close
+        win32::WaitForThreadpoolIoCallbacks(pio, FALSE);
+        win32::CloseThreadpoolIo(pio);
+
+        // 4. Verify loader exports across subsystems
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateThreadpoolIo") != nullptr, "kernel32 exports CreateThreadpoolIo");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "StartThreadpoolIo") != nullptr, "kernel32 exports StartThreadpoolIo");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CancelThreadpoolIo") != nullptr, "kernel32 exports CancelThreadpoolIo");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WaitForThreadpoolIoCallbacks") != nullptr, "kernel32 exports WaitForThreadpoolIoCallbacks");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CloseThreadpoolIo") != nullptr, "kernel32 exports CloseThreadpoolIo");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-io-l1-1-0.dll", "CreateThreadpoolIo") != nullptr, "api-ms threadpool-io exports CreateThreadpoolIo");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolIo") != nullptr, "api-ms threadpool-l1-2-0 exports CreateThreadpoolIo");
+
+        std::cout << "  [PASS] Win32 Extended Thread Pool I/O Completion Architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt NIST SP 800-108 Feedback Mode KDF Engine
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] BCrypt NIST SP 800-108 Feedback Mode KDF Engine...\n";
+
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        std::vector<uint8_t> masterKey(32, 0x5A);
+        std::vector<uint8_t> label{'F', 'E', 'E', 'D', 'B', 'A', 'C', 'K', '_', 'K', 'E', 'Y'};
+        std::vector<uint8_t> context{'M', 'I', 'C', 'A', 'N', 'T', '_', 'H', 'O', 'R', 'I', 'Z', 'O', 'N', '2', '3', '0'};
+        std::vector<uint8_t> iv(16, 0xEE);
+
+        // 1. Direct derivation: 32 bytes (single PRF block)
+        auto derived32 = Sp800108KdfFeedback::deriveKey(masterKey, label, context, iv, 32);
+        TEST_ASSERT(derived32.size() == 32, "deriveKey derives exactly 32 bytes");
+
+        // Multi-block derivation: 64 bytes (two PRF feedback blocks)
+        auto derived64 = Sp800108KdfFeedback::deriveKey(masterKey, label, context, iv, 64);
+        TEST_ASSERT(derived64.size() == 64, "deriveKey derives multi-block 64 bytes");
+        bool hasDistinctSecondBlock = false;
+        for (size_t i = 32; i < 64; ++i) {
+            if (derived64[i] != 0 && derived64[i] != derived64[i - 32]) {
+                hasDistinctSecondBlock = true;
+                break;
+            }
+        }
+        TEST_ASSERT(hasDistinctSecondBlock, "Multi-block feedback expansion generates distinct cryptographic blocks");
+
+        // 2. BCrypt API Integration: BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM provider
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SP800108_FEEDBACK_HMAC");
+
+        BCRYPT_KEY_HANDLE hKey = nullptr;
+        st = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey succeeds for SP 800-108 Feedback key");
+
+        // Prepare BCryptBufferDesc parameter list with KDF_LABEL, KDF_CONTEXT, and KDF_IV
+        BCryptBuffer buffers[3]{};
+        buffers[0].BufferType = KDF_LABEL;
+        buffers[0].cbBuffer = static_cast<uint32_t>(label.size());
+        buffers[0].pvBuffer = label.data();
+
+        buffers[1].BufferType = KDF_CONTEXT;
+        buffers[1].cbBuffer = static_cast<uint32_t>(context.size());
+        buffers[1].pvBuffer = context.data();
+
+        buffers[2].BufferType = KDF_IV;
+        buffers[2].cbBuffer = static_cast<uint32_t>(iv.size());
+        buffers[2].pvBuffer = iv.data();
+
+        BCryptBufferDesc paramList{};
+        paramList.ulVersion = 1;
+        paramList.cBuffers = 3;
+        paramList.pBuffers = buffers;
+
+        uint8_t bcryptDerived[32]{};
+        ULONG resultLen = 0;
+        st = BCryptKeyDerivation(hKey, &paramList, bcryptDerived, sizeof(bcryptDerived), &resultLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptKeyDerivation succeeds with SP 800-108 Feedback parameters");
+        TEST_ASSERT(resultLen == 32, "Derived length is 32 bytes");
+        TEST_ASSERT(std::memcmp(bcryptDerived, derived32.data(), 32) == 0, "BCryptKeyDerivation produces bit-exact match with Sp800108KdfFeedback");
+
+        // Clean up
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        std::cout << "  [PASS] BCrypt NIST SP 800-108 Feedback Mode KDF Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 230] CommandList6/Options 21, Speculation Ex / Microcode, Threadpool I/O & SP 800-108 Feedback KDF Summary:\n"
+              << "    Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList6 & Options 21 (DispatchMesh, WorkGraphsTier1, ExecuteIndirectTier11) OK\n"
+              << "    Pillar 2: NT System Speculation Control Information Ex (Class 206) & Processor Microcode Update (Class 208) OK\n"
+              << "    Pillar 3: Win32 Extended Thread Pool I/O Completion Architecture (Start/Trigger/Cancel/Wait/Close) OK\n"
+              << "    Pillar 4: BCrypt NIST SP 800-108 Feedback Mode KDF (Multi-block HMAC-SHA256, KDF_LABEL, KDF_CONTEXT, KDF_IV) OK\n";
+
+    std::cout << "[TEST] Suite 446: Horizon 230 - CommandList6/Options 21, Speculation Ex / Microcode, Threadpool I/O & SP 800-108 Feedback KDF PASSED." << std::endl;
+}

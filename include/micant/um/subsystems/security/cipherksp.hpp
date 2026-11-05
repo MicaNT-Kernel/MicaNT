@@ -56,12 +56,16 @@ inline constexpr const wchar_t* BCRYPT_HMAC_SHA384_ALGORITHM   = L"HMAC-SHA384";
 inline constexpr const wchar_t* BCRYPT_HMAC_SHA512_ALGORITHM   = L"HMAC-SHA512";
 inline constexpr const wchar_t* BCRYPT_RSA_ALGORITHM           = L"RSA";
 inline constexpr const wchar_t* BCRYPT_SP800108_CTR_HMAC_ALGORITHM = L"SP800_108_CTR_HMAC";
+inline constexpr const wchar_t* BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM = L"SP800_108_FEEDBACK_HMAC";
 
 #ifndef KDF_LABEL
 inline constexpr uint32_t KDF_LABEL   = 9;
 #endif
 #ifndef KDF_CONTEXT
 inline constexpr uint32_t KDF_CONTEXT = 11;
+#endif
+#ifndef KDF_IV
+inline constexpr uint32_t KDF_IV      = 12;
 #endif
 
 // Standard CNG Chaining Modes & Properties
@@ -2439,6 +2443,66 @@ public:
 };
 
 // ============================================================================
+// NIST SP 800-108 Feedback Mode KDF over HMAC-SHA256
+// K(0) = IV (or empty)
+// K(i) = HMAC(Key, K(i-1) || [i]_2 || Label || 0x00 || Context || [L]_2)
+// ============================================================================
+class Sp800108KdfFeedback {
+public:
+    static std::vector<uint8_t> deriveKey(
+        std::span<const uint8_t> key,
+        std::span<const uint8_t> label,
+        std::span<const uint8_t> context,
+        std::span<const uint8_t> iv,
+        uint32_t derivedKeyByteLength
+    ) {
+        if (derivedKeyByteLength == 0) return {};
+        uint32_t L = derivedKeyByteLength * 8; // Bit length
+        constexpr uint32_t h = 32; // HMAC-SHA256 output length
+        uint32_t n = (derivedKeyByteLength + h - 1) / h;
+        std::vector<uint8_t> derived;
+        derived.reserve(n * h);
+
+        std::vector<uint8_t> kPrev(iv.begin(), iv.end());
+
+        for (uint32_t i = 1; i <= n; ++i) {
+            std::vector<uint8_t> msg;
+            msg.reserve(kPrev.size() + 4 + label.size() + 1 + context.size() + 4);
+
+            // K(i-1) feedback
+            msg.insert(msg.end(), kPrev.begin(), kPrev.end());
+
+            // [i]_2: 32-bit big-endian counter
+            msg.push_back(static_cast<uint8_t>((i >> 24) & 0xFF));
+            msg.push_back(static_cast<uint8_t>((i >> 16) & 0xFF));
+            msg.push_back(static_cast<uint8_t>((i >> 8) & 0xFF));
+            msg.push_back(static_cast<uint8_t>(i & 0xFF));
+
+            // Label
+            msg.insert(msg.end(), label.begin(), label.end());
+
+            // 0x00 separator
+            msg.push_back(0x00);
+
+            // Context
+            msg.insert(msg.end(), context.begin(), context.end());
+
+            // [L]_2: 32-bit big-endian length in bits
+            msg.push_back(static_cast<uint8_t>((L >> 24) & 0xFF));
+            msg.push_back(static_cast<uint8_t>((L >> 16) & 0xFF));
+            msg.push_back(static_cast<uint8_t>((L >> 8) & 0xFF));
+            msg.push_back(static_cast<uint8_t>(L & 0xFF));
+
+            kPrev = HmacSha256::compute(key, msg);
+            derived.insert(derived.end(), kPrev.begin(), kPrev.end());
+        }
+
+        derived.resize(derivedKeyByteLength);
+        return derived;
+    }
+};
+
+// ============================================================================
 // 7. CNG Provider Objects & Key Storage Provider (KSP) Hierarchy
 // ============================================================================
 
@@ -2455,6 +2519,7 @@ enum class CryptoAlgorithm {
     HmacSha512,
     AesCmac,
     Sp800108CtrHmac,
+    Sp800108FeedbackHmac,
     Unknown
 };
 
@@ -2471,6 +2536,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_HMAC_SHA512_ALGORITHM || algId == L"HMAC-SHA512") return CryptoAlgorithm::HmacSha512;
     if (algId == BCRYPT_AES_CMAC_ALGORITHM || algId == L"AES-CMAC") return CryptoAlgorithm::AesCmac;
     if (algId == BCRYPT_SP800108_CTR_HMAC_ALGORITHM || algId == L"SP800-108-CTR-HMAC" || algId == L"SP800_108_CTR_HMAC") return CryptoAlgorithm::Sp800108CtrHmac;
+    if (algId == BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM || algId == L"SP800-108-FEEDBACK-HMAC" || algId == L"SP800_108_FEEDBACK_HMAC") return CryptoAlgorithm::Sp800108FeedbackHmac;
     return CryptoAlgorithm::Unknown;
 }
 
@@ -3013,13 +3079,16 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
     }
 
     auto prov = CipherKspEngine::get().getProvider(hAlgorithm);
-    if (!prov || (prov->algorithm != CryptoAlgorithm::Aes && prov->algorithm != CryptoAlgorithm::Sp800108CtrHmac)) {
+    if (!prov || (prov->algorithm != CryptoAlgorithm::Aes &&
+                  prov->algorithm != CryptoAlgorithm::Sp800108CtrHmac &&
+                  prov->algorithm != CryptoAlgorithm::Sp800108FeedbackHmac)) {
         return STATUS_NOT_SUPPORTED;
     }
 
-    if (prov->algorithm == CryptoAlgorithm::Sp800108CtrHmac) {
+    if (prov->algorithm == CryptoAlgorithm::Sp800108CtrHmac ||
+        prov->algorithm == CryptoAlgorithm::Sp800108FeedbackHmac) {
         auto keyObj = std::make_shared<CngKeyObject>(
-            CryptoAlgorithm::Sp800108CtrHmac,
+            prov->algorithm,
             std::span<const uint8_t>(pbSecret, cbSecret),
             L""
         );
@@ -3748,6 +3817,7 @@ inline NTSTATUS BCryptKeyDerivation(
 
     std::vector<uint8_t> label;
     std::vector<uint8_t> context;
+    std::vector<uint8_t> iv;
     std::vector<uint8_t> saltOrContext;
 
     if (pParameterList && pParameterList->pBuffers) {
@@ -3759,11 +3829,20 @@ inline NTSTATUS BCryptKeyDerivation(
                     label.assign(p, p + buf.cbBuffer);
                 } else if (buf.BufferType == KDF_CONTEXT) {
                     context.assign(p, p + buf.cbBuffer);
+                } else if (buf.BufferType == KDF_IV) {
+                    iv.assign(p, p + buf.cbBuffer);
                 } else {
                     saltOrContext.insert(saltOrContext.end(), p, p + buf.cbBuffer);
                 }
             }
         }
+    }
+
+    if (key->algorithm == CryptoAlgorithm::Sp800108FeedbackHmac) {
+        auto derived = Sp800108KdfFeedback::deriveKey(key->secret, label, context, iv, cbDerivedKey);
+        std::memcpy(pbDerivedKey, derived.data(), derived.size());
+        if (pcbResult) *pcbResult = static_cast<ULONG>(derived.size());
+        return STATUS_SUCCESS;
     }
 
     if (key->algorithm == CryptoAlgorithm::Sp800108CtrHmac || !label.empty() || !context.empty()) {
