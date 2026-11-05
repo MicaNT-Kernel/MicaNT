@@ -1037,6 +1037,33 @@ public:
 static constexpr IID IID_ID3D12GraphicsCommandList4 = 
     { 0x87e0e368, 0xe32b, 0x4d0b, { 0xbe, 0x4b, 0x4b, 0x78, 0xb8, 0x63, 0x00, 0xaf } };
 
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList4 = 
+    { 0x8754318e, 0xd3a9, 0x4541, { 0x98, 0xcf, 0x64, 0x5b, 0x50, 0xdc, 0x48, 0x74 } };
+
+enum D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE : uint32_t {
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE = 0,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT = 1,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_VISUALIZATION_DECODE_FOR_TOOLS = 2,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_SERIALIZE = 3,
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE = 4
+};
+
+struct D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+    uint64_t DestAccelerationStructureData{0};
+    uint64_t SourceAccelerationStructureData{0};
+    uint64_t ScratchAccelerationStructureData{0};
+    uint32_t InputsType{0};
+    uint32_t InputsFlags{0};
+    uint32_t NumDescs{0};
+};
+
+struct D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC {
+    uint64_t DestBuffer{0};
+    uint32_t InfoType{0};
+};
+
+class ID3D12StateObject;
+
 struct D3D12_DISPATCH_RAYS_DESC {
     D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE RayGenerationShaderRecord{};
     D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE MissShaderTable{};
@@ -1056,6 +1083,27 @@ public:
         const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC* pDepthStencil,
         D3D12_RENDER_PASS_FLAGS Flags) = 0;
     virtual void EndRenderPass() = 0;
+    virtual void InitializeMetaCommand(
+        ID3D12MetaCommand* pMetaCommand,
+        const void* pInitializationParametersData,
+        size_t InitializationParametersDataSizeInBytes) = 0;
+    virtual void ExecuteMetaCommand(
+        ID3D12MetaCommand* pMetaCommand,
+        const void* pExecutionParametersData,
+        size_t ExecutionParametersDataSizeInBytes) = 0;
+    virtual void BuildRaytracingAccelerationStructure(
+        const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC* pDesc,
+        uint32_t NumPostbuildInfoDescs,
+        const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC* pPostbuildInfoDescs) = 0;
+    virtual void EmitRaytracingAccelerationStructurePostbuildInfo(
+        const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC* pDesc,
+        uint32_t NumSourceAccelerationStructures,
+        const uint64_t* pSourceAccelerationStructureData) = 0;
+    virtual void CopyRaytracingAccelerationStructure(
+        uint64_t DestAccelerationStructureData,
+        uint64_t SourceAccelerationStructureData,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE Mode) = 0;
+    virtual void SetPipelineState1(ID3D12StateObject* pStateObject) = 0;
 };
 
 static constexpr IID IID_ID3D12GraphicsCommandList6 = 
@@ -1231,11 +1279,22 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS17 {
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS18 {
     D3D12_RENDER_PASS_TIER RenderPassesTier{D3D12_RENDER_PASS_TIER_1};
     BOOL AdvancedBlendOpsSupported{1};
+    BOOL RenderPassesValid{1};
 };
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS19 {
     BOOL MipLevelOffsetsSupported{1};
     BOOL HalfFloatPrecisionSupported{1};
+    BOOL MismatchingOutputDimensionsSupported{1};
+    uint32_t SupportedSampleCountsWithNoOutputs{1};
+    BOOL PointSamplingAddressesNeverRoundUp{1};
+    BOOL RasterizerDesc2Supported{1};
+    BOOL NarrowQuadrilateralLinesSupported{1};
+    BOOL AnisoFilterWithPointMipSupported{1};
+    uint32_t MaxSamplerDescriptorHeapSize{2048};
+    uint32_t MaxSamplerDescriptorHeapSizeWithStaticSamplers{2048};
+    uint32_t MaxViewDescriptorHeapSize{1000000};
+    BOOL ComputeOnlyCustomHeapSupported{1};
 };
 
 struct D3D12_FEATURE_DATA_D3D12_OPTIONS20 {
@@ -2339,6 +2398,7 @@ public:
             riid == IID_ID3D12CommandList || riid == IID_ID3D12GraphicsCommandList ||
             riid == IID_ID3D12GraphicsCommandList1 || riid == IID_ID3D12GraphicsCommandList2 ||
             riid == IID_ID3D12GraphicsCommandList3 || riid == IID_ID3D12GraphicsCommandList4 ||
+            riid == OFFICIAL_IID_ID3D12GraphicsCommandList4 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == IID_ID3D12GraphicsCommandList7 || riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -2379,6 +2439,9 @@ public:
         m_dispatchedGraphs.clear();
         m_dispatchedMeshCount = 0;
         m_dispatchedRaysCount = 0;
+        m_buildRaytracingASCount = 0;
+        m_copyRaytracingASCount = 0;
+        m_pActiveRaytracingStateObject = nullptr;
         m_hasProgram = false;
         m_pProtectedSession = nullptr;
         m_isOpen = true;
@@ -2526,6 +2589,40 @@ public:
 
     [[nodiscard]] uint32_t GetDispatchedRaysCount() const noexcept { return m_dispatchedRaysCount; }
     [[nodiscard]] const D3D12_DISPATCH_RAYS_DESC& GetLastDispatchRaysDesc() const noexcept { return m_lastDispatchRaysDesc; }
+
+    uint32_t m_buildRaytracingASCount{ 0 };
+    uint32_t m_copyRaytracingASCount{ 0 };
+    ID3D12StateObject* m_pActiveRaytracingStateObject{ nullptr };
+
+    void BuildRaytracingAccelerationStructure(
+        const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC* /*pDesc*/,
+        uint32_t /*NumPostbuildInfoDescs*/,
+        const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC* /*pPostbuildInfoDescs*/) override {
+        if (!m_isOpen) return;
+        m_buildRaytracingASCount++;
+    }
+
+    void EmitRaytracingAccelerationStructurePostbuildInfo(
+        const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC* /*pDesc*/,
+        uint32_t /*NumSourceAccelerationStructures*/,
+        const uint64_t* /*pSourceAccelerationStructureData*/) override {}
+
+    void CopyRaytracingAccelerationStructure(
+        uint64_t /*DestAccelerationStructureData*/,
+        uint64_t /*SourceAccelerationStructureData*/,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE /*Mode*/) override {
+        if (!m_isOpen) return;
+        m_copyRaytracingASCount++;
+    }
+
+    void SetPipelineState1(ID3D12StateObject* pStateObject) override {
+        if (!m_isOpen) return;
+        m_pActiveRaytracingStateObject = pStateObject;
+    }
+
+    [[nodiscard]] uint32_t GetBuildRaytracingASCount() const noexcept { return m_buildRaytracingASCount; }
+    [[nodiscard]] uint32_t GetCopyRaytracingASCount() const noexcept { return m_copyRaytracingASCount; }
+    [[nodiscard]] ID3D12StateObject* GetActiveRaytracingStateObject() const noexcept { return m_pActiveRaytracingStateObject; }
 
     void ExecuteIndirect(
         ID3D12CommandSignature* pCommandSignature,
@@ -3839,6 +3936,7 @@ public:
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS18*>(pFeatureSupportData);
             pData->RenderPassesTier = D3D12_RENDER_PASS_TIER_1;
             pData->AdvancedBlendOpsSupported = TRUE;
+            pData->RenderPassesValid = TRUE;
             return 0;
         }
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS19) {
@@ -3846,6 +3944,16 @@ public:
             auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS19*>(pFeatureSupportData);
             pData->MipLevelOffsetsSupported = TRUE;
             pData->HalfFloatPrecisionSupported = TRUE;
+            pData->MismatchingOutputDimensionsSupported = TRUE;
+            pData->SupportedSampleCountsWithNoOutputs = 1;
+            pData->PointSamplingAddressesNeverRoundUp = TRUE;
+            pData->RasterizerDesc2Supported = TRUE;
+            pData->NarrowQuadrilateralLinesSupported = TRUE;
+            pData->AnisoFilterWithPointMipSupported = TRUE;
+            pData->MaxSamplerDescriptorHeapSize = 2048;
+            pData->MaxSamplerDescriptorHeapSizeWithStaticSamplers = 2048;
+            pData->MaxViewDescriptorHeapSize = 1000000;
+            pData->ComputeOnlyCustomHeapSupported = TRUE;
             return 0;
         }
         if (Feature == D3D12_FEATURE_D3D12_OPTIONS20) {

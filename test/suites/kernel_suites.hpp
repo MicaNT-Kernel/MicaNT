@@ -47291,3 +47291,414 @@ inline void Test_Horizon227_Options17ManualWrite_IsolatedUserMode_SrwConditionVa
 
     std::cout << "[TEST] Suite 443: Horizon 227 - Options 17/Manual Write, IUM/VBS, SRW/CV & AES-CMAC PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 444: Horizon 228 - PrismX 3D12 CommandList4 / Options 18 & 19,
+//                         NT Control Flow Guard (CFG) & VSL Protection,
+//                         Win32 WaitOnAddress Futex Synchronization, and
+//                         BCrypt HMAC-SHA384 & HMAC-SHA512 (RFC 4231) Engine
+// ============================================================================
+inline void Test_Horizon228_CommandList4Options1819_CfgVslProtection_WaitOnAddress_And_HmacSha384Sha512_Suite() {
+    std::cout << "\n============================================================================\n";
+    std::cout << "[TEST] Suite 444: Horizon 228 - CommandList4/Options 18-19, CFG/VSL, WaitOnAddress & HMAC-SHA384/512\n";
+    std::cout << "============================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList4 & Options 18/19 Architecture
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS18
+        D3D12_FEATURE_DATA_D3D12_OPTIONS18 opts18{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS18, &opts18, sizeof(opts18));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport accepts D3D12_FEATURE_D3D12_OPTIONS18");
+        TEST_ASSERT(opts18.RenderPassesValid == TRUE, "Options 18 RenderPassesValid is TRUE");
+        TEST_ASSERT(opts18.RenderPassesTier == D3D12_RENDER_PASS_TIER_1, "Options 18 RenderPassesTier is Tier 1");
+        TEST_ASSERT(opts18.AdvancedBlendOpsSupported == TRUE, "Options 18 AdvancedBlendOpsSupported is TRUE");
+
+        // 2. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS19
+        D3D12_FEATURE_DATA_D3D12_OPTIONS19 opts19{};
+        hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS19, &opts19, sizeof(opts19));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport accepts D3D12_FEATURE_D3D12_OPTIONS19");
+        TEST_ASSERT(opts19.MismatchingOutputDimensionsSupported == TRUE, "Options 19 MismatchingOutputDimensionsSupported is TRUE");
+        TEST_ASSERT(opts19.RasterizerDesc2Supported == TRUE, "Options 19 RasterizerDesc2Supported is TRUE");
+        TEST_ASSERT(opts19.PointSamplingAddressesNeverRoundUp == TRUE, "Options 19 PointSamplingAddressesNeverRoundUp is TRUE");
+        TEST_ASSERT(opts19.ComputeOnlyCustomHeapSupported == TRUE, "Options 19 ComputeOnlyCustomHeapSupported is TRUE");
+        TEST_ASSERT(opts19.MipLevelOffsetsSupported == TRUE, "Options 19 MipLevelOffsetsSupported is TRUE");
+
+        // 3. ID3D12GraphicsCommandList4 & Raytracing AS Build/Copy
+        auto pCmdList = std::make_unique<Prism3D12GraphicsCommandListImpl>(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList4* pCl4 = nullptr;
+
+        hr = pCmdList->QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList4, reinterpret_cast<void**>(&pCl4));
+        TEST_ASSERT(hr == 0 && pCl4 != nullptr, "CommandList supports OFFICIAL_IID_ID3D12GraphicsCommandList4");
+
+        // Build Raytracing Acceleration Structure
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc{};
+        buildDesc.DestAccelerationStructureData = 0x10000000;
+        buildDesc.SourceAccelerationStructureData = 0;
+        buildDesc.ScratchAccelerationStructureData = 0x20000000;
+        pCl4->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+        TEST_ASSERT(pCmdList->GetBuildRaytracingASCount() == 1, "BuildRaytracingAccelerationStructure increments build count");
+
+        // Copy Raytracing Acceleration Structure
+        pCl4->CopyRaytracingAccelerationStructure(0x30000000, 0x10000000, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+        TEST_ASSERT(pCmdList->GetCopyRaytracingASCount() == 1, "CopyRaytracingAccelerationStructure increments copy count");
+
+        // SetPipelineState1
+        ID3D12StateObject* dummyStateObj = reinterpret_cast<ID3D12StateObject*>(0xDEADBEEF);
+        pCl4->SetPipelineState1(dummyStateObj);
+        TEST_ASSERT(pCmdList->GetActiveRaytracingStateObject() == dummyStateObj, "SetPipelineState1 binds active raytracing state object");
+
+        // Reset list and verify state clears
+        pCmdList->Reset(nullptr, nullptr);
+        TEST_ASSERT(pCmdList->GetBuildRaytracingASCount() == 0, "Reset clears raytracing build AS count");
+        TEST_ASSERT(pCmdList->GetCopyRaytracingASCount() == 0, "Reset clears raytracing copy AS count");
+        TEST_ASSERT(pCmdList->GetActiveRaytracingStateObject() == nullptr, "Reset clears active state object");
+
+        pCl4->Release();
+        std::cout << "  [PASS] PrismX 3D12 ID3D12GraphicsCommandList4 & Options 18/19 Architecture verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Control Flow Guard (CFG) & VSL Protection
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::ntdll;
+
+        // 1. SystemVslProtectionInformation (Class 169)
+        {
+            uint32_t retLen = 0;
+            NtStatus st = NtQuerySystemInformation_Export(169, nullptr, 0, &retLen);
+            TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(169) with 0 length returns InfoLengthMismatch");
+            TEST_ASSERT(retLen == sizeof(SYSTEM_VSL_PROTECTION_INFORMATION), "ReturnLength correctly set to sizeof(SYSTEM_VSL_PROTECTION_INFORMATION)");
+
+            SYSTEM_VSL_PROTECTION_INFORMATION vsl{};
+            st = NtQuerySystemInformation_Export(169, &vsl, sizeof(vsl), &retLen);
+            TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(169) returns Success");
+            TEST_ASSERT(vsl.VslProtectionEnabled == 1, "VslProtectionEnabled is 1");
+            TEST_ASSERT(vsl.VslHardwareEnforced == 1, "VslHardwareEnforced is 1");
+            TEST_ASSERT(vsl.VslHypervisorEnforced == 1, "VslHypervisorEnforced is 1");
+        }
+
+        // 2. SystemControlFlowGuardInformation (Class 181)
+        {
+            uint32_t retLen = 0;
+            NtStatus st = NtQuerySystemInformation_Export(181, nullptr, 0, &retLen);
+            TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(181) with 0 length returns InfoLengthMismatch");
+            TEST_ASSERT(retLen == sizeof(SYSTEM_CONTROL_FLOW_GUARD_INFORMATION), "ReturnLength correctly set to sizeof(SYSTEM_CONTROL_FLOW_GUARD_INFORMATION)");
+
+            SYSTEM_CONTROL_FLOW_GUARD_INFORMATION cfg{};
+            st = NtQuerySystemInformation_Export(181, &cfg, sizeof(cfg), &retLen);
+            TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(181) returns Success");
+            TEST_ASSERT(cfg.ControlFlowGuardEnabled == 1, "ControlFlowGuardEnabled is 1");
+            TEST_ASSERT(cfg.ControlFlowGuardExportSuppressionEnabled == 1, "ControlFlowGuardExportSuppressionEnabled is 1");
+            TEST_ASSERT(cfg.ControlFlowGuardStrict == 1, "ControlFlowGuardStrict is 1");
+        }
+
+        std::cout << "  [PASS] Windows NT Control Flow Guard (Class 181) & VSL Protection (Class 169) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Modern Futex Synchronization (WaitOnAddress / WakeByAddress)
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::win32;
+
+        SovereignSyncManager::get().reset();
+
+        // 1. Parameter Validation
+        uint32_t val32 = 100;
+        uint32_t comp32 = 100;
+
+        SetLastError(0);
+        BOOL bRes = WaitOnAddress(nullptr, &comp32, 4, 10);
+        TEST_ASSERT(bRes == FALSE && GetLastError() == ERROR_INVALID_PARAMETER, "WaitOnAddress with null address fails with ERROR_INVALID_PARAMETER");
+
+        SetLastError(0);
+        bRes = WaitOnAddress(&val32, nullptr, 4, 10);
+        TEST_ASSERT(bRes == FALSE && GetLastError() == ERROR_INVALID_PARAMETER, "WaitOnAddress with null compare address fails with ERROR_INVALID_PARAMETER");
+
+        SetLastError(0);
+        bRes = WaitOnAddress(&val32, &comp32, 3, 10); // 3 bytes is invalid
+        TEST_ASSERT(bRes == FALSE && GetLastError() == ERROR_INVALID_PARAMETER, "WaitOnAddress with non-{1,2,4,8} size fails with ERROR_INVALID_PARAMETER");
+
+        // 2. Fast check: Value already differs -> immediate TRUE return without waiting
+        uint32_t diffVal = 42;
+        uint32_t diffComp = 99;
+        bRes = WaitOnAddress(&diffVal, &diffComp, sizeof(diffVal), 1000);
+        TEST_ASSERT(bRes == TRUE, "WaitOnAddress returns TRUE immediately if values already differ");
+
+        // 3. Timeout behavior
+        SetLastError(0);
+        auto t0 = std::chrono::steady_clock::now();
+        bRes = WaitOnAddress(&val32, &comp32, sizeof(val32), 20);
+        auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        TEST_ASSERT(bRes == FALSE, "WaitOnAddress returns FALSE upon timeout");
+        TEST_ASSERT(GetLastError() == 1460, "GetLastError is ERROR_TIMEOUT (1460)");
+        TEST_ASSERT(dur >= 15, "Timeout duration respected");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalWaitAddressWaits() >= 1, "Wait recorded in telemetry");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalWaitAddressTimeouts() >= 1, "Timeout recorded in telemetry");
+
+        // 4. Multi-threaded WakeByAddressSingle
+        alignas(8) volatile uint64_t futexVar = 0x1122334455667788ULL;
+        uint64_t futexComp = 0x1122334455667788ULL;
+        std::atomic<bool> workerCompleted{false};
+
+        std::thread worker([&]() {
+            BOOL waitRes = WaitOnAddress(&futexVar, &futexComp, sizeof(uint64_t), 0xFFFFFFFF);
+            if (waitRes == TRUE) {
+                workerCompleted = true;
+            }
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        futexVar = 0xAABBCCDDEEFF0011ULL;
+        WakeByAddressSingle(const_cast<uint64_t*>(&futexVar));
+
+        worker.join();
+        TEST_ASSERT(workerCompleted.load() == true, "Worker woke successfully via WakeByAddressSingle");
+
+        // 5. Multi-threaded WakeByAddressAll
+        constexpr int NUM_WAITERS = 4;
+        alignas(4) volatile uint32_t broadcastVar = 500;
+        uint32_t broadcastComp = 500;
+        std::atomic<int> wokenCount{0};
+
+        std::vector<std::thread> waiters;
+        waiters.reserve(NUM_WAITERS);
+
+        for (int i = 0; i < NUM_WAITERS; ++i) {
+            waiters.emplace_back([&]() {
+                BOOL waitRes = WaitOnAddress(&broadcastVar, &broadcastComp, sizeof(uint32_t), 0xFFFFFFFF);
+                if (waitRes == TRUE) {
+                    wokenCount.fetch_add(1);
+                }
+            });
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        broadcastVar = 999;
+        WakeByAddressAll(const_cast<uint32_t*>(&broadcastVar));
+
+        for (auto& w : waiters) {
+            w.join();
+        }
+        TEST_ASSERT(wokenCount.load() == NUM_WAITERS, "All 4 waiters woke successfully via WakeByAddressAll");
+        TEST_ASSERT(SovereignSyncManager::get().getTotalWaitAddressWakes() >= 2, "WakeByAddress single and all recorded in telemetry");
+
+        std::cout << "  [PASS] Win32 Extended Modern Futex Synchronization (WaitOnAddress / WakeByAddress) verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt / CNG HMAC-SHA384 & HMAC-SHA512 (RFC 4231) Engine
+    // ------------------------------------------------------------------------
+    {
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        // 1. Open HMAC-SHA384 and HMAC-SHA512 algorithm providers
+        BCRYPT_ALG_HANDLE hAlg384 = nullptr;
+        NTSTATUS st = BCryptOpenAlgorithmProvider(&hAlg384, BCRYPT_HMAC_SHA384_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg384 != nullptr, "BCryptOpenAlgorithmProvider opens HMAC-SHA384 provider");
+
+        uint32_t hashLen384 = 0;
+        uint32_t resBytes = 0;
+        st = BCryptGetProperty(hAlg384, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen384), sizeof(hashLen384), &resBytes, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hashLen384 == 48, "BCryptGetProperty returns 48 bytes for HMAC-SHA384 hash length");
+
+        uint32_t blockLen384 = 0;
+        st = BCryptGetProperty(hAlg384, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen384), sizeof(blockLen384), &resBytes, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && blockLen384 == 128, "BCryptGetProperty returns 128 bytes for HMAC-SHA384 block length");
+
+        BCRYPT_ALG_HANDLE hAlg512 = nullptr;
+        st = BCryptOpenAlgorithmProvider(&hAlg512, BCRYPT_HMAC_SHA512_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hAlg512 != nullptr, "BCryptOpenAlgorithmProvider opens HMAC-SHA512 provider");
+
+        uint32_t hashLen512 = 0;
+        st = BCryptGetProperty(hAlg512, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen512), sizeof(hashLen512), &resBytes, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hashLen512 == 64, "BCryptGetProperty returns 64 bytes for HMAC-SHA512 hash length");
+
+        uint32_t blockLen512 = 0;
+        st = BCryptGetProperty(hAlg512, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen512), sizeof(blockLen512), &resBytes, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && blockLen512 == 128, "BCryptGetProperty returns 128 bytes for HMAC-SHA512 block length");
+
+        // 2. RFC 4231 Official Test Vectors
+        // Test Case 1: Key = 20 bytes of 0x0b, Data = "Hi There" (8 bytes)
+        const uint8_t keyCase1[20] = {
+            0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+            0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+        };
+        const uint8_t dataCase1[8] = { 'H', 'i', ' ', 'T', 'h', 'e', 'r', 'e' };
+
+        // Expected Case 1 HMAC-SHA384
+        const uint8_t expSha384_Case1[48] = {
+            0xaf, 0xd0, 0x39, 0x44, 0xd8, 0x48, 0x95, 0x62,
+            0x6b, 0x08, 0x25, 0xf4, 0xab, 0x46, 0x90, 0x7f,
+            0x15, 0xf9, 0xda, 0xdb, 0xe4, 0x10, 0x1e, 0xc6,
+            0x82, 0xaa, 0x03, 0x4c, 0x7c, 0xeb, 0xc5, 0x9c,
+            0xfa, 0xea, 0x9e, 0xa9, 0x07, 0x6e, 0xde, 0x7f,
+            0x4a, 0xf1, 0x52, 0xe8, 0xb2, 0xfa, 0x9c, 0xb6
+        };
+
+        // Expected Case 1 HMAC-SHA512
+        const uint8_t expSha512_Case1[64] = {
+            0x87, 0xaa, 0x7c, 0xde, 0xa5, 0xef, 0x61, 0x9d,
+            0x4f, 0xf0, 0xb4, 0x24, 0x1a, 0x1d, 0x6c, 0xb0,
+            0x23, 0x79, 0xf4, 0xe2, 0xce, 0x4e, 0xc2, 0x78,
+            0x7a, 0xd0, 0xb3, 0x05, 0x45, 0xe1, 0x7c, 0xde,
+            0xda, 0xa8, 0x33, 0xb7, 0xd6, 0xb8, 0xa7, 0x02,
+            0x03, 0x8b, 0x27, 0x4e, 0xae, 0xa3, 0xf4, 0xe4,
+            0xbe, 0x9d, 0x91, 0x4e, 0xeb, 0x61, 0xf1, 0x70,
+            0x2e, 0x69, 0x6c, 0x20, 0x3a, 0x12, 0x68, 0x54
+        };
+
+        // Run Test Case 1 with HMAC-SHA384
+        {
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlg384, &hHash, nullptr, 0, const_cast<uint8_t*>(keyCase1), sizeof(keyCase1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash creates HMAC-SHA384 hash");
+
+            st = BCryptHashData(hHash, dataCase1, sizeof(dataCase1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData accepts data");
+
+            // Test BCryptDuplicateHash
+            BCRYPT_HASH_HANDLE hDup = nullptr;
+            st = BCryptDuplicateHash(hHash, &hDup, nullptr, 0, 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hDup != nullptr, "BCryptDuplicateHash duplicates HMAC-SHA384 state");
+
+            uint8_t out384[48] = {0};
+            st = BCryptFinishHash(hHash, out384, sizeof(out384), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds");
+            TEST_ASSERT(std::memcmp(out384, expSha384_Case1, 48) == 0, "HMAC-SHA384 Test Case 1 matches RFC 4231 exactly");
+
+            uint8_t dupOut384[48] = {0};
+            st = BCryptFinishHash(hDup, dupOut384, sizeof(dupOut384), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "Duplicate hash finish succeeds");
+            TEST_ASSERT(std::memcmp(dupOut384, expSha384_Case1, 48) == 0, "Duplicated hash produces bit-exact identical digest");
+
+            BCryptDestroyHash(hHash);
+            BCryptDestroyHash(hDup);
+        }
+
+        // Run Test Case 1 with HMAC-SHA512
+        {
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlg512, &hHash, nullptr, 0, const_cast<uint8_t*>(keyCase1), sizeof(keyCase1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash creates HMAC-SHA512 hash");
+
+            st = BCryptHashData(hHash, dataCase1, sizeof(dataCase1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptHashData accepts data");
+
+            uint8_t out512[64] = {0};
+            st = BCryptFinishHash(hHash, out512, sizeof(out512), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds");
+            TEST_ASSERT(std::memcmp(out512, expSha512_Case1, 64) == 0, "HMAC-SHA512 Test Case 1 matches RFC 4231 exactly");
+
+            BCryptDestroyHash(hHash);
+        }
+
+        // Test Case 2: Key = "Jefe" (4 bytes), Data = "what do ya want for nothing?" (28 bytes)
+        const uint8_t keyCase2[4] = { 'J', 'e', 'f', 'e' };
+        const uint8_t dataCase2[28] = {
+            'w', 'h', 'a', 't', ' ', 'd', 'o', ' ', 'y', 'a', ' ',
+            'w', 'a', 'n', 't', ' ', 'f', 'o', 'r', ' ', 'n', 'o',
+            't', 'h', 'i', 'n', 'g', '?'
+        };
+
+        const uint8_t expSha384_Case2[48] = {
+            0xaf, 0x45, 0xd2, 0xe3, 0x76, 0x48, 0x40, 0x31,
+            0x61, 0x7f, 0x78, 0xd2, 0xb5, 0x8a, 0x6b, 0x1b,
+            0x9c, 0x7e, 0xf4, 0x64, 0xf5, 0xa0, 0x1b, 0x47,
+            0xe4, 0x2e, 0xc3, 0x73, 0x63, 0x22, 0x44, 0x5e,
+            0x8e, 0x22, 0x40, 0xca, 0x5e, 0x69, 0xe2, 0xc7,
+            0x8b, 0x32, 0x39, 0xec, 0xfa, 0xb2, 0x16, 0x49
+        };
+
+        const uint8_t expSha512_Case2[64] = {
+            0x16, 0x4b, 0x7a, 0x7b, 0xfc, 0xf8, 0x19, 0xe2,
+            0xe3, 0x95, 0xfb, 0xe7, 0x3b, 0x56, 0xe0, 0xa3,
+            0x87, 0xbd, 0x64, 0x22, 0x2e, 0x83, 0x1f, 0xd6,
+            0x10, 0x27, 0x0c, 0xd7, 0xea, 0x25, 0x05, 0x54,
+            0x97, 0x58, 0xbf, 0x75, 0xc0, 0x5a, 0x99, 0x4a,
+            0x6d, 0x03, 0x4f, 0x65, 0xf8, 0xf0, 0xe6, 0xfd,
+            0xca, 0xea, 0xb1, 0xa3, 0x4d, 0x4a, 0x6b, 0x4b,
+            0x63, 0x6e, 0x07, 0x0a, 0x38, 0xbc, 0xe7, 0x37
+        };
+
+        {
+            auto out384 = HmacSha384::compute(keyCase2, dataCase2);
+            TEST_ASSERT(std::memcmp(out384.data(), expSha384_Case2, 48) == 0, "HmacSha384 Test Case 2 matches RFC 4231 exactly");
+
+            auto out512 = HmacSha512::compute(keyCase2, dataCase2);
+            TEST_ASSERT(std::memcmp(out512.data(), expSha512_Case2, 64) == 0, "HmacSha512 Test Case 2 matches RFC 4231 exactly");
+        }
+
+        // Test Case 3: Key = 20 bytes of 0xaa, Data = 50 bytes of 0xdd
+        const std::vector<uint8_t> keyCase3(20, 0xaa);
+        const std::vector<uint8_t> dataCase3(50, 0xdd);
+
+        const uint8_t expSha384_Case3[48] = {
+            0x88, 0x06, 0x26, 0x08, 0xd3, 0xe6, 0xad, 0x8a,
+            0x0a, 0xa2, 0xac, 0xe0, 0x14, 0xc8, 0xa8, 0x6f,
+            0x0a, 0xa6, 0x35, 0xd9, 0x47, 0xac, 0x9f, 0xeb,
+            0xe8, 0x3e, 0xf4, 0xe5, 0x59, 0x66, 0x14, 0x4b,
+            0x2a, 0x5a, 0xb3, 0x9d, 0xc1, 0x38, 0x14, 0xb9,
+            0x4e, 0x3a, 0xb6, 0xe1, 0x01, 0xa3, 0x4f, 0x27
+        };
+
+        const uint8_t expSha512_Case3[64] = {
+            0xfa, 0x73, 0xb0, 0x08, 0x9d, 0x56, 0xa2, 0x84,
+            0xef, 0xb0, 0xf0, 0x75, 0x6c, 0x89, 0x0b, 0xe9,
+            0xb1, 0xb5, 0xdb, 0xdd, 0x8e, 0xe8, 0x1a, 0x36,
+            0x55, 0xf8, 0x3e, 0x33, 0xb2, 0x27, 0x9d, 0x39,
+            0xbf, 0x3e, 0x84, 0x82, 0x79, 0xa7, 0x22, 0xc8,
+            0x06, 0xb4, 0x85, 0xa4, 0x7e, 0x67, 0xc8, 0x07,
+            0xb9, 0x46, 0xa3, 0x37, 0xbe, 0xe8, 0x94, 0x26,
+            0x74, 0x27, 0x88, 0x59, 0xe1, 0x32, 0x92, 0xfb
+        };
+
+        {
+            auto out384 = HmacSha384::compute(keyCase3, dataCase3);
+            TEST_ASSERT(std::memcmp(out384.data(), expSha384_Case3, 48) == 0, "HmacSha384 Test Case 3 matches RFC 4231 exactly");
+
+            auto out512 = HmacSha512::compute(keyCase3, dataCase3);
+            TEST_ASSERT(std::memcmp(out512.data(), expSha512_Case3, 64) == 0, "HmacSha512 Test Case 3 matches RFC 4231 exactly");
+        }
+
+        // Test BCRYPT_ALG_HANDLE_HMAC_FLAG on SHA384 / SHA512
+        {
+            BCRYPT_ALG_HANDLE hAlgFlag384 = nullptr;
+            st = BCryptOpenAlgorithmProvider(&hAlgFlag384, BCRYPT_SHA384_ALGORITHM, nullptr, BCRYPT_ALG_HANDLE_HMAC_FLAG);
+            TEST_ASSERT(st == STATUS_SUCCESS && hAlgFlag384 != nullptr, "BCryptOpenAlgorithmProvider with BCRYPT_ALG_HANDLE_HMAC_FLAG for SHA-384 succeeds");
+
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            st = BCryptCreateHash(hAlgFlag384, &hHash, nullptr, 0, const_cast<uint8_t*>(keyCase1), sizeof(keyCase1), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash creates hash from flagged provider");
+
+            st = BCryptHashData(hHash, dataCase1, sizeof(dataCase1), 0);
+            uint8_t out[48] = {0};
+            st = BCryptFinishHash(hHash, out, sizeof(out), 0);
+            TEST_ASSERT(st == STATUS_SUCCESS, "BCryptFinishHash succeeds on flagged provider");
+            TEST_ASSERT(std::memcmp(out, expSha384_Case1, 48) == 0, "Flagged SHA-384 provider computes exact RFC 4231 Test Case 1");
+
+            BCryptDestroyHash(hHash);
+            BCryptCloseAlgorithmProvider(hAlgFlag384, 0);
+        }
+
+        BCryptCloseAlgorithmProvider(hAlg384, 0);
+        BCryptCloseAlgorithmProvider(hAlg512, 0);
+        std::cout << "  [PASS] BCrypt / CNG HMAC-SHA384 & HMAC-SHA512 (RFC 4231) Engine verified.\n";
+    }
+
+    std::cout << "[HORIZON 228] CommandList4/Options 18-19, CFG/VSL, WaitOnAddress & HMAC-SHA384/512 Summary:\n"
+              << "    Pillar 1: PrismX 3D12 ID3D12GraphicsCommandList4 & Options 18/19 (AS Build/Copy, StateObject, RenderPassesValid, MismatchingDims) OK\n"
+              << "    Pillar 2: NT System Control Flow Guard (Class 181) & VSL Protection (Class 169) OK\n"
+              << "    Pillar 3: Win32 Extended Synchronization (WaitOnAddress / WakeByAddressSingle / WakeByAddressAll futex) OK\n"
+              << "    Pillar 4: BCrypt HMAC-SHA384 & HMAC-SHA512 (RFC 4231 Test Cases 1..3, streaming, duplication, HMAC flag) OK\n";
+
+    std::cout << "[TEST] Suite 444: Horizon 228 - CommandList4/Options 18-19, CFG/VSL, WaitOnAddress & HMAC-SHA384/512 PASSED." << std::endl;
+}

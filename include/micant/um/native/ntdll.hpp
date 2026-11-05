@@ -1718,6 +1718,23 @@ struct SYSTEM_ISOLATED_USER_MODE_INFORMATION {
 };
 using PSYSTEM_ISOLATED_USER_MODE_INFORMATION = SYSTEM_ISOLATED_USER_MODE_INFORMATION*;
 
+struct SYSTEM_VSL_PROTECTION_INFORMATION {
+    BOOLEAN VslProtectionEnabled : 1;
+    BOOLEAN VslHardwareEnforced : 1;
+    BOOLEAN VslHypervisorEnforced : 1;
+    BOOLEAN Spare0 : 5;
+    uint8_t Spare1[3];
+};
+using PSYSTEM_VSL_PROTECTION_INFORMATION = SYSTEM_VSL_PROTECTION_INFORMATION*;
+
+struct SYSTEM_CONTROL_FLOW_GUARD_INFORMATION {
+    ULONG ControlFlowGuardEnabled : 1;
+    ULONG ControlFlowGuardExportSuppressionEnabled : 1;
+    ULONG ControlFlowGuardStrict : 1;
+    ULONG Reserved : 29;
+};
+using PSYSTEM_CONTROL_FLOW_GUARD_INFORMATION = SYSTEM_CONTROL_FLOW_GUARD_INFORMATION*;
+
 struct SYSTEM_FIRMWARE_TABLE_INFORMATION {
     ULONG ProviderSignature;
     ULONG Action;
@@ -2379,6 +2396,33 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pIum->TrustletRunning = 1;
             pIum->HvciOptions = 1;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ISOLATED_USER_MODE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 169: { // SystemVslProtectionInformation
+            if (SystemInformationLength < sizeof(SYSTEM_VSL_PROTECTION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_VSL_PROTECTION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pVsl = reinterpret_cast<SYSTEM_VSL_PROTECTION_INFORMATION*>(SystemInformation);
+            std::memset(pVsl, 0, sizeof(SYSTEM_VSL_PROTECTION_INFORMATION));
+            pVsl->VslProtectionEnabled = 1;
+            pVsl->VslHardwareEnforced = 1;
+            pVsl->VslHypervisorEnforced = 1;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_VSL_PROTECTION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 181: { // SystemControlFlowGuardInformation
+            if (SystemInformationLength < sizeof(SYSTEM_CONTROL_FLOW_GUARD_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CONTROL_FLOW_GUARD_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pCfg = reinterpret_cast<SYSTEM_CONTROL_FLOW_GUARD_INFORMATION*>(SystemInformation);
+            std::memset(pCfg, 0, sizeof(SYSTEM_CONTROL_FLOW_GUARD_INFORMATION));
+            pCfg->ControlFlowGuardEnabled = 1;
+            pCfg->ControlFlowGuardExportSuppressionEnabled = 1;
+            pCfg->ControlFlowGuardStrict = 1;
+            pCfg->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CONTROL_FLOW_GUARD_INFORMATION);
             return NtStatus::Success;
         }
         case 196: { // SystemKernelVaShadowInformation

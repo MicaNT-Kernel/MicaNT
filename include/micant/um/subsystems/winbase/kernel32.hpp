@@ -4764,16 +4764,28 @@ public:
         std::atomic<uint32_t> wakeCount{0};
     };
 
+    struct WaitAddressControlBlock {
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::atomic<uint64_t> generation{0};
+        std::atomic<uint32_t> waitCount{0};
+        std::atomic<uint32_t> wakeCount{0};
+    };
+
 private:
     std::mutex m_tableMutex;
     std::unordered_map<void*, std::shared_ptr<SrwControlBlock>> m_srwMap;
     std::unordered_map<void*, std::shared_ptr<CvControlBlock>> m_cvMap;
+    std::unordered_map<void*, std::shared_ptr<WaitAddressControlBlock>> m_waitAddressMap;
     std::atomic<uint64_t> m_totalExclusiveAcquires{0};
     std::atomic<uint64_t> m_totalSharedAcquires{0};
     std::atomic<uint64_t> m_totalReleases{0};
     std::atomic<uint64_t> m_totalSleeps{0};
     std::atomic<uint64_t> m_totalWakes{0};
     std::atomic<uint64_t> m_totalTimeouts{0};
+    std::atomic<uint64_t> m_totalWaitAddressWaits{0};
+    std::atomic<uint64_t> m_totalWaitAddressWakes{0};
+    std::atomic<uint64_t> m_totalWaitAddressTimeouts{0};
 
 public:
     static SovereignSyncManager& get() noexcept {
@@ -4801,16 +4813,31 @@ public:
         return cb;
     }
 
+    std::shared_ptr<WaitAddressControlBlock> getWaitAddress(volatile const void* address) {
+        if (!address) return nullptr;
+        void* key = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(address));
+        std::lock_guard<std::mutex> lock(m_tableMutex);
+        auto it = m_waitAddressMap.find(key);
+        if (it != m_waitAddressMap.end()) return it->second;
+        auto cb = std::make_shared<WaitAddressControlBlock>();
+        m_waitAddressMap[key] = cb;
+        return cb;
+    }
+
     void reset() {
         std::lock_guard<std::mutex> lock(m_tableMutex);
         m_srwMap.clear();
         m_cvMap.clear();
+        m_waitAddressMap.clear();
         m_totalExclusiveAcquires = 0;
         m_totalSharedAcquires = 0;
         m_totalReleases = 0;
         m_totalSleeps = 0;
         m_totalWakes = 0;
         m_totalTimeouts = 0;
+        m_totalWaitAddressWaits = 0;
+        m_totalWaitAddressWakes = 0;
+        m_totalWaitAddressTimeouts = 0;
     }
 
     uint64_t getTotalExclusiveAcquires() const noexcept { return m_totalExclusiveAcquires.load(); }
@@ -4819,6 +4846,9 @@ public:
     uint64_t getTotalSleeps() const noexcept { return m_totalSleeps.load(); }
     uint64_t getTotalWakes() const noexcept { return m_totalWakes.load(); }
     uint64_t getTotalTimeouts() const noexcept { return m_totalTimeouts.load(); }
+    uint64_t getTotalWaitAddressWaits() const noexcept { return m_totalWaitAddressWaits.load(); }
+    uint64_t getTotalWaitAddressWakes() const noexcept { return m_totalWaitAddressWakes.load(); }
+    uint64_t getTotalWaitAddressTimeouts() const noexcept { return m_totalWaitAddressTimeouts.load(); }
 
     void recordExclusiveAcquire() noexcept { m_totalExclusiveAcquires.fetch_add(1); }
     void recordSharedAcquire() noexcept { m_totalSharedAcquires.fetch_add(1); }
@@ -4826,6 +4856,9 @@ public:
     void recordSleep() noexcept { m_totalSleeps.fetch_add(1); }
     void recordWake() noexcept { m_totalWakes.fetch_add(1); }
     void recordTimeout() noexcept { m_totalTimeouts.fetch_add(1); }
+    void recordWaitAddressWait() noexcept { m_totalWaitAddressWaits.fetch_add(1); }
+    void recordWaitAddressWake() noexcept { m_totalWaitAddressWakes.fetch_add(1); }
+    void recordWaitAddressTimeout() noexcept { m_totalWaitAddressTimeouts.fetch_add(1); }
 };
 
 struct SrwSharedLockWrapper {
@@ -9734,73 +9767,82 @@ inline BOOL WINAPI WaitOnAddress(volatile void* Address, void* CompareAddress, s
         return FALSE;
     }
 
-    // Compare Address memory with CompareAddress
-    bool equal = false;
-    switch (AddressSize) {
-        case 1: equal = (*reinterpret_cast<volatile uint8_t*>(Address)  == *reinterpret_cast<const uint8_t*>(CompareAddress)); break;
-        case 2: equal = (*reinterpret_cast<volatile uint16_t*>(Address) == *reinterpret_cast<const uint16_t*>(CompareAddress)); break;
-        case 4: equal = (*reinterpret_cast<volatile uint32_t*>(Address) == *reinterpret_cast<const uint32_t*>(CompareAddress)); break;
-        case 8: equal = (*reinterpret_cast<volatile uint64_t*>(Address) == *reinterpret_cast<const uint64_t*>(CompareAddress)); break;
-    }
-
-    if (!equal) {
+    // Compare Address memory with CompareAddress: if already differing, return TRUE immediately
+    if (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) != 0) {
         return TRUE;
     }
 
-    auto& bucket = detail::s_waitBuckets[detail::HashAddress(Address)];
-    std::unique_lock<std::mutex> lock(bucket.mtx);
+    auto block = SovereignSyncManager::get().getWaitAddress(Address);
+    if (!block) return FALSE;
 
-    // Re-check value under lock
-    switch (AddressSize) {
-        case 1: equal = (*reinterpret_cast<volatile uint8_t*>(Address)  == *reinterpret_cast<const uint8_t*>(CompareAddress)); break;
-        case 2: equal = (*reinterpret_cast<volatile uint16_t*>(Address) == *reinterpret_cast<const uint16_t*>(CompareAddress)); break;
-        case 4: equal = (*reinterpret_cast<volatile uint32_t*>(Address) == *reinterpret_cast<const uint32_t*>(CompareAddress)); break;
-        case 8: equal = (*reinterpret_cast<volatile uint64_t*>(Address) == *reinterpret_cast<const uint64_t*>(CompareAddress)); break;
+    SovereignSyncManager::get().recordWaitAddressWait();
+    block->waitCount.fetch_add(1);
+
+    std::unique_lock<std::mutex> lock(block->mutex);
+    if (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) != 0) {
+        return TRUE;
     }
-    if (!equal) return TRUE;
 
-    uint64_t initialSeq = bucket.wakeSequence;
-    auto predicate = [&]() noexcept -> bool {
-        switch (AddressSize) {
-            case 1: if (*reinterpret_cast<volatile uint8_t*>(Address)  != *reinterpret_cast<const uint8_t*>(CompareAddress)) return true; break;
-            case 2: if (*reinterpret_cast<volatile uint16_t*>(Address) != *reinterpret_cast<const uint16_t*>(CompareAddress)) return true; break;
-            case 4: if (*reinterpret_cast<volatile uint32_t*>(Address) != *reinterpret_cast<const uint32_t*>(CompareAddress)) return true; break;
-            case 8: if (*reinterpret_cast<volatile uint64_t*>(Address) != *reinterpret_cast<const uint64_t*>(CompareAddress)) return true; break;
-        }
-        return bucket.wakeSequence != initialSeq;
-    };
+    uint64_t curGen = block->generation.load();
+    bool success = true;
 
     if (dwMilliseconds == 0xFFFFFFFF) { // INFINITE
-        bucket.cv.wait(lock, predicate);
-        return TRUE;
-    } else {
-        bool woken = bucket.cv.wait_for(lock, std::chrono::milliseconds(dwMilliseconds), predicate);
-        if (!woken) {
-            SetLastError(ERROR_TIMEOUT);
-            return FALSE;
+        while (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) == 0 &&
+               block->generation.load() == curGen) {
+            block->cv.wait(lock);
         }
-        return TRUE;
+    } else {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(dwMilliseconds);
+        while (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) == 0 &&
+               block->generation.load() == curGen) {
+            auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                if (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) != 0) {
+                    return TRUE;
+                }
+                success = false;
+                break;
+            }
+            block->cv.wait_until(lock, deadline);
+            if (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) != 0) {
+                return TRUE;
+            }
+            if (std::chrono::steady_clock::now() >= deadline && block->generation.load() == curGen) {
+                success = false;
+                break;
+            }
+        }
     }
+
+    if (!success) {
+        if (std::memcmp(const_cast<const void*>(Address), CompareAddress, AddressSize) != 0) {
+            return TRUE;
+        }
+        SovereignSyncManager::get().recordWaitAddressTimeout();
+        SetLastError(1460); // ERROR_TIMEOUT
+        return FALSE;
+    }
+    return TRUE;
 }
 
 inline void WINAPI WakeByAddressSingle(void* Address) noexcept {
     if (!Address) return;
-    auto& bucket = detail::s_waitBuckets[detail::HashAddress(Address)];
-    {
-        std::lock_guard<std::mutex> lock(bucket.mtx);
-        bucket.wakeSequence++;
-    }
-    bucket.cv.notify_one();
+    auto block = SovereignSyncManager::get().getWaitAddress(Address);
+    if (!block) return;
+    block->wakeCount.fetch_add(1);
+    block->generation.fetch_add(1);
+    SovereignSyncManager::get().recordWaitAddressWake();
+    block->cv.notify_one();
 }
 
 inline void WINAPI WakeByAddressAll(void* Address) noexcept {
     if (!Address) return;
-    auto& bucket = detail::s_waitBuckets[detail::HashAddress(Address)];
-    {
-        std::lock_guard<std::mutex> lock(bucket.mtx);
-        bucket.wakeSequence++;
-    }
-    bucket.cv.notify_all();
+    auto block = SovereignSyncManager::get().getWaitAddress(Address);
+    if (!block) return;
+    block->wakeCount.fetch_add(1);
+    block->generation.fetch_add(1);
+    SovereignSyncManager::get().recordWaitAddressWake();
+    block->cv.notify_all();
 }
 
 // QueryDosDeviceW defined above
@@ -10571,6 +10613,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "WakeConditionVariable", reinterpret_cast<void*>(WakeConditionVariable));
     ldr.registerExport("kernel32.dll", "WakeAllConditionVariable", reinterpret_cast<void*>(WakeAllConditionVariable));
     ldr.registerExport("kernel32.dll", "InitializeConditionVariable", reinterpret_cast<void*>(InitializeConditionVariable));
+    ldr.registerExport("kernel32.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
+    ldr.registerExport("kernel32.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
+    ldr.registerExport("kernel32.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
     ldr.registerExport("kernel32.dll", "InitOnceBeginInitialize", reinterpret_cast<void*>(InitOnceBeginInitialize));
     ldr.registerExport("kernel32.dll", "InitOnceComplete", reinterpret_cast<void*>(InitOnceComplete));
     ldr.registerExport("kernel32.dll", "InitOnceExecuteOnce", reinterpret_cast<void*>(InitOnceExecuteOnce));

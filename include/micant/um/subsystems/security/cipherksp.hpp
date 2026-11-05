@@ -52,6 +52,8 @@ inline constexpr const wchar_t* BCRYPT_MD5_ALGORITHM           = L"MD5";
 inline constexpr const wchar_t* BCRYPT_AES_ALGORITHM           = L"AES";
 inline constexpr const wchar_t* BCRYPT_RNG_ALGORITHM           = L"RNG";
 inline constexpr const wchar_t* BCRYPT_HMAC_SHA256_ALGORITHM   = L"HMAC-SHA256";
+inline constexpr const wchar_t* BCRYPT_HMAC_SHA384_ALGORITHM   = L"HMAC-SHA384";
+inline constexpr const wchar_t* BCRYPT_HMAC_SHA512_ALGORITHM   = L"HMAC-SHA512";
 inline constexpr const wchar_t* BCRYPT_RSA_ALGORITHM           = L"RSA";
 
 // Standard CNG Chaining Modes & Properties
@@ -860,6 +862,116 @@ public:
         update(ctx, data);
         std::vector<uint8_t> out(DIGEST_SIZE);
         final(ctx, std::span<uint8_t, 32>(out.data(), 32));
+        return out;
+    }
+};
+
+class HmacSha384 {
+public:
+    static constexpr size_t DIGEST_SIZE = 48;
+    static constexpr size_t BLOCK_SIZE  = 128;
+
+    struct Context {
+        Sha384::Context inner;
+        Sha384::Context outer;
+    };
+
+    static void init(Context& ctx, std::span<const uint8_t> key) noexcept {
+        uint8_t k[BLOCK_SIZE] = {0};
+        if (key.size() > BLOCK_SIZE) {
+            auto keyHash = Sha384::hash(key);
+            std::memcpy(k, keyHash.data(), keyHash.size());
+        } else {
+            std::memcpy(k, key.data(), key.size());
+        }
+
+        uint8_t ipad[BLOCK_SIZE];
+        uint8_t opad[BLOCK_SIZE];
+        for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+            ipad[i] = k[i] ^ 0x36;
+            opad[i] = k[i] ^ 0x5c;
+        }
+
+        Sha384::init(ctx.inner);
+        Sha384::update(ctx.inner, std::span<const uint8_t>(ipad, BLOCK_SIZE));
+
+        Sha384::init(ctx.outer);
+        Sha384::update(ctx.outer, std::span<const uint8_t>(opad, BLOCK_SIZE));
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        Sha384::update(ctx.inner, data);
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, 48> digest) noexcept {
+        uint8_t innerHash[48];
+        Sha384::final(ctx.inner, std::span<uint8_t, 48>(innerHash, 48));
+
+        Sha384::update(ctx.outer, std::span<const uint8_t>(innerHash, 48));
+        Sha384::final(ctx.outer, digest);
+    }
+
+    static std::vector<uint8_t> compute(std::span<const uint8_t> key, std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx, key);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, 48>(out.data(), 48));
+        return out;
+    }
+};
+
+class HmacSha512 {
+public:
+    static constexpr size_t DIGEST_SIZE = 64;
+    static constexpr size_t BLOCK_SIZE  = 128;
+
+    struct Context {
+        Sha512::Context inner;
+        Sha512::Context outer;
+    };
+
+    static void init(Context& ctx, std::span<const uint8_t> key) noexcept {
+        uint8_t k[BLOCK_SIZE] = {0};
+        if (key.size() > BLOCK_SIZE) {
+            auto keyHash = Sha512::hash(key);
+            std::memcpy(k, keyHash.data(), keyHash.size());
+        } else {
+            std::memcpy(k, key.data(), key.size());
+        }
+
+        uint8_t ipad[BLOCK_SIZE];
+        uint8_t opad[BLOCK_SIZE];
+        for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+            ipad[i] = k[i] ^ 0x36;
+            opad[i] = k[i] ^ 0x5c;
+        }
+
+        Sha512::init(ctx.inner);
+        Sha512::update(ctx.inner, std::span<const uint8_t>(ipad, BLOCK_SIZE));
+
+        Sha512::init(ctx.outer);
+        Sha512::update(ctx.outer, std::span<const uint8_t>(opad, BLOCK_SIZE));
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        Sha512::update(ctx.inner, data);
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, 64> digest) noexcept {
+        uint8_t innerHash[64];
+        Sha512::final(ctx.inner, std::span<uint8_t, 64>(innerHash, 64));
+
+        Sha512::update(ctx.outer, std::span<const uint8_t>(innerHash, 64));
+        Sha512::final(ctx.outer, digest);
+    }
+
+    static std::vector<uint8_t> compute(std::span<const uint8_t> key, std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx, key);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, 64>(out.data(), 64));
         return out;
     }
 };
@@ -2279,6 +2391,8 @@ enum class CryptoAlgorithm {
     Aes,
     Rng,
     HmacSha256,
+    HmacSha384,
+    HmacSha512,
     AesCmac,
     Unknown
 };
@@ -2292,6 +2406,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_AES_ALGORITHM)                           return CryptoAlgorithm::Aes;
     if (algId == BCRYPT_RNG_ALGORITHM)                           return CryptoAlgorithm::Rng;
     if (algId == BCRYPT_HMAC_SHA256_ALGORITHM)                  return CryptoAlgorithm::HmacSha256;
+    if (algId == BCRYPT_HMAC_SHA384_ALGORITHM || algId == L"HMAC-SHA384") return CryptoAlgorithm::HmacSha384;
+    if (algId == BCRYPT_HMAC_SHA512_ALGORITHM || algId == L"HMAC-SHA512") return CryptoAlgorithm::HmacSha512;
     if (algId == BCRYPT_AES_CMAC_ALGORITHM || algId == L"AES-CMAC") return CryptoAlgorithm::AesCmac;
     return CryptoAlgorithm::Unknown;
 }
@@ -2307,8 +2423,14 @@ public:
         : algorithmId(id),
           algorithm(parseAlgorithm(id)),
           isHmac((flags & BCRYPT_ALG_HANDLE_HMAC_FLAG) != 0) {
-        if (isHmac && algorithm == CryptoAlgorithm::Sha256) {
-            algorithm = CryptoAlgorithm::HmacSha256;
+        if (isHmac) {
+            if (algorithm == CryptoAlgorithm::Sha256) {
+                algorithm = CryptoAlgorithm::HmacSha256;
+            } else if (algorithm == CryptoAlgorithm::Sha384) {
+                algorithm = CryptoAlgorithm::HmacSha384;
+            } else if (algorithm == CryptoAlgorithm::Sha512) {
+                algorithm = CryptoAlgorithm::HmacSha512;
+            }
         }
     }
 };
@@ -2346,6 +2468,8 @@ public:
     Sha1::Context sha1Ctx{};
     Md5::Context md5Ctx{};
     HmacSha256::Context hmacSha256Ctx{};
+    HmacSha384::Context hmacSha384Ctx{};
+    HmacSha512::Context hmacSha512Ctx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -2367,6 +2491,8 @@ public:
           sha1Ctx(other.sha1Ctx),
           md5Ctx(other.md5Ctx),
           hmacSha256Ctx(other.hmacSha256Ctx),
+          hmacSha384Ctx(other.hmacSha384Ctx),
+          hmacSha512Ctx(other.hmacSha512Ctx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -2395,6 +2521,10 @@ public:
             Md5::init(md5Ctx);
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             HmacSha256::init(hmacSha256Ctx, key);
+        } else if (algorithm == CryptoAlgorithm::HmacSha384) {
+            HmacSha384::init(hmacSha384Ctx, key);
+        } else if (algorithm == CryptoAlgorithm::HmacSha512) {
+            HmacSha512::init(hmacSha512Ctx, key);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -2419,6 +2549,10 @@ public:
             Md5::update(md5Ctx, data);
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             HmacSha256::update(hmacSha256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::HmacSha384) {
+            HmacSha384::update(hmacSha384Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::HmacSha512) {
+            HmacSha512::update(hmacSha512Ctx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -2467,6 +2601,14 @@ public:
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             std::vector<uint8_t> out(32);
             HmacSha256::final(hmacSha256Ctx, std::span<uint8_t, 32>(out.data(), 32));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::HmacSha384) {
+            std::vector<uint8_t> out(48);
+            HmacSha384::final(hmacSha384Ctx, std::span<uint8_t, 48>(out.data(), 48));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::HmacSha512) {
+            std::vector<uint8_t> out(64);
+            HmacSha512::final(hmacSha512Ctx, std::span<uint8_t, 64>(out.data(), 64));
             return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
@@ -2717,8 +2859,8 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256) len = 32;
-            else if (prov->algorithm == CryptoAlgorithm::Sha384) len = 48;
-            else if (prov->algorithm == CryptoAlgorithm::Sha512) len = 64;
+            else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384) len = 48;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -2727,7 +2869,8 @@ inline NTSTATUS BCryptGetProperty(
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
-                           ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512) ? 128 : 64);
+                           ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512 ||
+                             prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64);
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
