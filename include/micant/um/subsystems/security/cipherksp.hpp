@@ -58,6 +58,23 @@ inline constexpr const wchar_t* BCRYPT_RSA_ALGORITHM           = L"RSA";
 inline constexpr const wchar_t* BCRYPT_SP800108_CTR_HMAC_ALGORITHM = L"SP800_108_CTR_HMAC";
 inline constexpr const wchar_t* BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM = L"SP800_108_FEEDBACK_HMAC";
 inline constexpr const wchar_t* BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM = L"SP800_108_PIPELINE_HMAC";
+inline constexpr const wchar_t* BCRYPT_SP80056A_CONCAT_ALGORITHM        = L"SP800_56A_CONCAT";
+
+#ifndef KDF_ALGORITHMID
+inline constexpr uint32_t KDF_ALGORITHMID  = 8;
+#endif
+#ifndef KDF_PARTYUINFO
+inline constexpr uint32_t KDF_PARTYUINFO   = 9;
+#endif
+#ifndef KDF_PARTYVINFO
+inline constexpr uint32_t KDF_PARTYVINFO   = 10;
+#endif
+#ifndef KDF_SUPPPUBINFO
+inline constexpr uint32_t KDF_SUPPPUBINFO  = 11;
+#endif
+#ifndef KDF_SUPPPRIVINFO
+inline constexpr uint32_t KDF_SUPPPRIVINFO = 12;
+#endif
 
 #ifndef KDF_LABEL
 inline constexpr uint32_t KDF_LABEL   = 9;
@@ -2571,6 +2588,62 @@ public:
 };
 
 // ============================================================================
+// NIST SP 800-56A / SP 800-56C Single-Step Concatenation KDF over SHA-256
+// K(i) = Hash([i]_2 || Z || OtherInfo)
+// OtherInfo = AlgorithmID || PartyUInfo || PartyVInfo || SuppPubInfo || SuppPrivInfo
+// ============================================================================
+class Sp80056AConcatKdf {
+public:
+    static std::vector<uint8_t> deriveKey(
+        std::span<const uint8_t> z,
+        std::span<const uint8_t> algorithmId,
+        std::span<const uint8_t> partyUInfo,
+        std::span<const uint8_t> partyVInfo,
+        std::span<const uint8_t> suppPubInfo,
+        std::span<const uint8_t> suppPrivInfo,
+        uint32_t derivedKeyByteLength
+    ) {
+        if (derivedKeyByteLength == 0) return {};
+        constexpr uint32_t h = 32; // SHA-256 output length
+        uint32_t n = (derivedKeyByteLength + h - 1) / h;
+        std::vector<uint8_t> derived;
+        derived.reserve(n * h);
+
+        std::vector<uint8_t> otherInfo;
+        otherInfo.reserve(algorithmId.size() + partyUInfo.size() + partyVInfo.size() +
+                          suppPubInfo.size() + suppPrivInfo.size());
+        otherInfo.insert(otherInfo.end(), algorithmId.begin(), algorithmId.end());
+        otherInfo.insert(otherInfo.end(), partyUInfo.begin(), partyUInfo.end());
+        otherInfo.insert(otherInfo.end(), partyVInfo.begin(), partyVInfo.end());
+        otherInfo.insert(otherInfo.end(), suppPubInfo.begin(), suppPubInfo.end());
+        otherInfo.insert(otherInfo.end(), suppPrivInfo.begin(), suppPrivInfo.end());
+
+        for (uint32_t i = 1; i <= n; ++i) {
+            std::vector<uint8_t> msg;
+            msg.reserve(4 + z.size() + otherInfo.size());
+
+            // [i]_2: 32-bit big-endian counter starting at 1
+            msg.push_back(static_cast<uint8_t>((i >> 24) & 0xFF));
+            msg.push_back(static_cast<uint8_t>((i >> 16) & 0xFF));
+            msg.push_back(static_cast<uint8_t>((i >> 8) & 0xFF));
+            msg.push_back(static_cast<uint8_t>(i & 0xFF));
+
+            // Shared secret Z
+            msg.insert(msg.end(), z.begin(), z.end());
+
+            // OtherInfo
+            msg.insert(msg.end(), otherInfo.begin(), otherInfo.end());
+
+            auto ki = Sha256::hash(msg);
+            derived.insert(derived.end(), ki.begin(), ki.end());
+        }
+
+        derived.resize(derivedKeyByteLength);
+        return derived;
+    }
+};
+
+// ============================================================================
 // 7. CNG Provider Objects & Key Storage Provider (KSP) Hierarchy
 // ============================================================================
 
@@ -2589,6 +2662,7 @@ enum class CryptoAlgorithm {
     Sp800108CtrHmac,
     Sp800108FeedbackHmac,
     Sp800108PipelineHmac,
+    Sp80056AConcat,
     Unknown
 };
 
@@ -2607,6 +2681,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_SP800108_CTR_HMAC_ALGORITHM || algId == L"SP800-108-CTR-HMAC" || algId == L"SP800_108_CTR_HMAC") return CryptoAlgorithm::Sp800108CtrHmac;
     if (algId == BCRYPT_SP800108_FEEDBACK_HMAC_ALGORITHM || algId == L"SP800-108-FEEDBACK-HMAC" || algId == L"SP800_108_FEEDBACK_HMAC") return CryptoAlgorithm::Sp800108FeedbackHmac;
     if (algId == BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM || algId == L"SP800-108-PIPELINE-HMAC" || algId == L"SP800_108_PIPELINE_HMAC") return CryptoAlgorithm::Sp800108PipelineHmac;
+    if (algId == BCRYPT_SP80056A_CONCAT_ALGORITHM || algId == L"SP800-56A-CONCAT" || algId == L"SP800_56A_CONCAT") return CryptoAlgorithm::Sp80056AConcat;
     return CryptoAlgorithm::Unknown;
 }
 
@@ -3152,13 +3227,15 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
     if (!prov || (prov->algorithm != CryptoAlgorithm::Aes &&
                   prov->algorithm != CryptoAlgorithm::Sp800108CtrHmac &&
                   prov->algorithm != CryptoAlgorithm::Sp800108FeedbackHmac &&
-                  prov->algorithm != CryptoAlgorithm::Sp800108PipelineHmac)) {
+                  prov->algorithm != CryptoAlgorithm::Sp800108PipelineHmac &&
+                  prov->algorithm != CryptoAlgorithm::Sp80056AConcat)) {
         return STATUS_NOT_SUPPORTED;
     }
 
     if (prov->algorithm == CryptoAlgorithm::Sp800108CtrHmac ||
         prov->algorithm == CryptoAlgorithm::Sp800108FeedbackHmac ||
-        prov->algorithm == CryptoAlgorithm::Sp800108PipelineHmac) {
+        prov->algorithm == CryptoAlgorithm::Sp800108PipelineHmac ||
+        prov->algorithm == CryptoAlgorithm::Sp80056AConcat) {
         auto keyObj = std::make_shared<CngKeyObject>(
             prov->algorithm,
             std::span<const uint8_t>(pbSecret, cbSecret),
@@ -3891,13 +3968,31 @@ inline NTSTATUS BCryptKeyDerivation(
     std::vector<uint8_t> context;
     std::vector<uint8_t> iv;
     std::vector<uint8_t> saltOrContext;
+    std::vector<uint8_t> algorithmId;
+    std::vector<uint8_t> partyUInfo;
+    std::vector<uint8_t> partyVInfo;
+    std::vector<uint8_t> suppPubInfo;
+    std::vector<uint8_t> suppPrivInfo;
 
     if (pParameterList && pParameterList->pBuffers) {
         for (ULONG i = 0; i < pParameterList->cBuffers; ++i) {
             const auto& buf = pParameterList->pBuffers[i];
             if (buf.pvBuffer && buf.cbBuffer > 0) {
                 const auto* p = reinterpret_cast<const uint8_t*>(buf.pvBuffer);
-                if (buf.BufferType == KDF_LABEL) {
+                if (buf.BufferType == KDF_ALGORITHMID) {
+                    algorithmId.assign(p, p + buf.cbBuffer);
+                } else if (buf.BufferType == KDF_PARTYUINFO) {
+                    partyUInfo.assign(p, p + buf.cbBuffer);
+                    label.assign(p, p + buf.cbBuffer);
+                } else if (buf.BufferType == KDF_PARTYVINFO) {
+                    partyVInfo.assign(p, p + buf.cbBuffer);
+                } else if (buf.BufferType == KDF_SUPPPUBINFO) {
+                    suppPubInfo.assign(p, p + buf.cbBuffer);
+                    context.assign(p, p + buf.cbBuffer);
+                } else if (buf.BufferType == KDF_SUPPPRIVINFO) {
+                    suppPrivInfo.assign(p, p + buf.cbBuffer);
+                    iv.assign(p, p + buf.cbBuffer);
+                } else if (buf.BufferType == KDF_LABEL) {
                     label.assign(p, p + buf.cbBuffer);
                 } else if (buf.BufferType == KDF_CONTEXT) {
                     context.assign(p, p + buf.cbBuffer);
@@ -3908,6 +4003,15 @@ inline NTSTATUS BCryptKeyDerivation(
                 }
             }
         }
+    }
+
+    if (key->algorithm == CryptoAlgorithm::Sp80056AConcat) {
+        auto derived = Sp80056AConcatKdf::deriveKey(
+            key->secret, algorithmId, partyUInfo, partyVInfo, suppPubInfo, suppPrivInfo, cbDerivedKey
+        );
+        std::memcpy(pbDerivedKey, derived.data(), derived.size());
+        if (pcbResult) *pcbResult = static_cast<ULONG>(derived.size());
+        return STATUS_SUCCESS;
     }
 
     if (key->algorithm == CryptoAlgorithm::Sp800108PipelineHmac) {

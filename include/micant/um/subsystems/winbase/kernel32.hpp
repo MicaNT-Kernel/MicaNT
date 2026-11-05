@@ -172,6 +172,13 @@ using PTP_WAIT_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID 
 using PTP_CLEANUP_GROUP_CANCEL_CALLBACK = void (WINAPI *)(PVOID ObjectContext, PVOID CleanupContext);
 using PTP_SIMPLE_CALLBACK = void (WINAPI *)(PTP_CALLBACK_INSTANCE Instance, PVOID Context);
 
+enum TP_CALLBACK_PRIORITY {
+    TP_CALLBACK_PRIORITY_HIGH    = 0,
+    TP_CALLBACK_PRIORITY_NORMAL  = 1,
+    TP_CALLBACK_PRIORITY_LOW     = 2,
+    TP_CALLBACK_PRIORITY_INVALID = 3
+};
+
 struct TP_CALLBACK_ENVIRON_V3 {
     ULONG Version;
     PTP_POOL Pool;
@@ -5692,6 +5699,30 @@ inline void WINAPI SetThreadpoolCallbackCleanupGroup(PTP_CALLBACK_ENVIRON pcbe, 
     }
 }
 
+inline void WINAPI SetThreadpoolCallbackPriority(PTP_CALLBACK_ENVIRON pcbe, TP_CALLBACK_PRIORITY Priority) noexcept {
+    if (pcbe) {
+        pcbe->CallbackPriority = static_cast<ULONG>(Priority);
+    }
+}
+
+inline void WINAPI SetThreadpoolCallbackRunsLong(PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (pcbe) {
+        pcbe->u.s.LongFunction = 1;
+    }
+}
+
+inline void WINAPI SetThreadpoolCallbackPersistent(PTP_CALLBACK_ENVIRON pcbe) noexcept {
+    if (pcbe) {
+        pcbe->u.s.Persistent = 1;
+    }
+}
+
+inline void WINAPI SetThreadpoolCallbackLibrary(PTP_CALLBACK_ENVIRON pcbe, PVOID mod) noexcept {
+    if (pcbe) {
+        pcbe->RaceDll = mod;
+    }
+}
+
 // Integer and String Helper APIs
 
 // ============================================================================
@@ -10841,6 +10872,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CloseThreadpoolCleanupGroup", reinterpret_cast<void*>(CloseThreadpoolCleanupGroup));
     ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackPool", reinterpret_cast<void*>(SetThreadpoolCallbackPool));
     ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackCleanupGroup", reinterpret_cast<void*>(SetThreadpoolCallbackCleanupGroup));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackPriority", reinterpret_cast<void*>(SetThreadpoolCallbackPriority));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackRunsLong", reinterpret_cast<void*>(SetThreadpoolCallbackRunsLong));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackPersistent", reinterpret_cast<void*>(SetThreadpoolCallbackPersistent));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolCallbackLibrary", reinterpret_cast<void*>(SetThreadpoolCallbackLibrary));
     ldr.registerExport("kernel32.dll", "InitializeThreadpoolEnvironment", reinterpret_cast<void*>(InitializeThreadpoolEnvironment));
     ldr.registerExport("kernel32.dll", "DestroyThreadpoolEnvironment", reinterpret_cast<void*>(DestroyThreadpoolEnvironment));
     ldr.registerExport("kernel32.dll", "FreeLibraryWhenCallbackReturns", reinterpret_cast<void*>(FreeLibraryWhenCallbackReturns));
@@ -10851,6 +10886,14 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpool", reinterpret_cast<void*>(CloseThreadpool));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolStackInformation", reinterpret_cast<void*>(SetThreadpoolStackInformation));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "QueryThreadpoolStackInformation", reinterpret_cast<void*>(QueryThreadpoolStackInformation));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPool", reinterpret_cast<void*>(SetThreadpoolCallbackPool));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackCleanupGroup", reinterpret_cast<void*>(SetThreadpoolCallbackCleanupGroup));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPriority", reinterpret_cast<void*>(SetThreadpoolCallbackPriority));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackRunsLong", reinterpret_cast<void*>(SetThreadpoolCallbackRunsLong));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPersistent", reinterpret_cast<void*>(SetThreadpoolCallbackPersistent));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackLibrary", reinterpret_cast<void*>(SetThreadpoolCallbackLibrary));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "InitializeThreadpoolEnvironment", reinterpret_cast<void*>(InitializeThreadpoolEnvironment));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "DestroyThreadpoolEnvironment", reinterpret_cast<void*>(DestroyThreadpoolEnvironment));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWork", reinterpret_cast<void*>(CreateThreadpoolWork));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SubmitThreadpoolWork", reinterpret_cast<void*>(SubmitThreadpoolWork));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWorkCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWorkCallbacks));

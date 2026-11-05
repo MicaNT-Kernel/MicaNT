@@ -1161,10 +1161,35 @@ public:
     virtual void Barrier(uint32_t NumBarrierGroups, const D3D12_BARRIER_GROUP* pBarrierGroups) = 0;
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList8 = 
+    { 0xee936ef9, 0x599d, 0x4d28, { 0x93, 0x8e, 0x23, 0xc4, 0xad, 0x05, 0xce, 0x51 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList8 = IID_ID3D12GraphicsCommandList8;
+
+class ID3D12GraphicsCommandList8 : public ID3D12GraphicsCommandList7 {
+public:
+    virtual void OMSetFrontAndBackStencilRef(uint32_t FrontStencilRef, uint32_t BackStencilRef) = 0;
+};
+
+enum D3D12_INDEX_BUFFER_STRIP_CUT_VALUE : uint32_t {
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED   = 0,
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF     = 1,
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF = 2
+};
+
+static constexpr IID IID_ID3D12GraphicsCommandList9 = 
+    { 0x34ed2808, 0xffe6, 0x4c2b, { 0xb1, 0x1a, 0xca, 0xbd, 0x2b, 0x0c, 0x59, 0xe1 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList9 = IID_ID3D12GraphicsCommandList9;
+
+class ID3D12GraphicsCommandList9 : public ID3D12GraphicsCommandList8 {
+public:
+    virtual void RSSetDepthBias(float DepthBias, float DepthBiasClamp, float SlopeScaledDepthBias) = 0;
+    virtual void IASetIndexBufferStripCutValue(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE IBStripCutValue) = 0;
+};
+
 static constexpr IID IID_ID3D12GraphicsCommandList10 = 
     { 0x217d12bc, 0x1f72, 0x4f72, { 0x87, 0x05, 0x76, 0x8a, 0x48, 0x49, 0x89, 0xb8 } };
 
-class ID3D12GraphicsCommandList10 : public ID3D12GraphicsCommandList7 {
+class ID3D12GraphicsCommandList10 : public ID3D12GraphicsCommandList9 {
 public:
     virtual void SetProgram(const D3D12_SET_PROGRAM_DESC* pDesc) = 0;
     virtual void DispatchGraph(const D3D12_DISPATCH_GRAPH_DESC* pDesc) = 0;
@@ -1367,6 +1392,7 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS23 {
     BOOL SubobjectCreationSupported{1};
     BOOL WorkGraphsTier1_1Supported{1};
     BOOL DynamicDepthBiasClampSupported{1};
+    BOOL DynamicIndexBufferStripCutSupported{1};
 };
 
 
@@ -2446,6 +2472,8 @@ public:
             riid == IID_ID3D12GraphicsCommandList5 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList5 ||
             riid == IID_ID3D12GraphicsCommandList6 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList6 ||
             riid == IID_ID3D12GraphicsCommandList7 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList7 ||
+            riid == IID_ID3D12GraphicsCommandList8 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList8 ||
+            riid == IID_ID3D12GraphicsCommandList9 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList9 ||
             riid == IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
@@ -2867,6 +2895,38 @@ public:
     [[nodiscard]] const D3D12_SET_PROGRAM_DESC& GetCurrentProgram() const noexcept { return m_currentProgram; }
     [[nodiscard]] size_t GetDispatchedGraphCount() const noexcept { return m_dispatchedGraphs.size(); }
     [[nodiscard]] const std::vector<D3D12_DISPATCH_GRAPH_DESC>& GetDispatchedGraphs() const noexcept { return m_dispatchedGraphs; }
+
+    uint32_t m_frontStencilRef{0};
+    uint32_t m_backStencilRef{0};
+    float m_depthBias{0.0f};
+    float m_depthBiasClamp{0.0f};
+    float m_slopeScaledDepthBias{0.0f};
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE m_ibStripCutValue{D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED};
+
+    void OMSetFrontAndBackStencilRef(uint32_t FrontStencilRef, uint32_t BackStencilRef) override {
+        if (!m_isOpen) return;
+        m_frontStencilRef = FrontStencilRef;
+        m_backStencilRef = BackStencilRef;
+    }
+
+    void RSSetDepthBias(float DepthBias, float DepthBiasClamp, float SlopeScaledDepthBias) override {
+        if (!m_isOpen) return;
+        m_depthBias = DepthBias;
+        m_depthBiasClamp = DepthBiasClamp;
+        m_slopeScaledDepthBias = SlopeScaledDepthBias;
+    }
+
+    void IASetIndexBufferStripCutValue(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE IBStripCutValue) override {
+        if (!m_isOpen) return;
+        m_ibStripCutValue = IBStripCutValue;
+    }
+
+    [[nodiscard]] uint32_t GetFrontStencilRef() const noexcept { return m_frontStencilRef; }
+    [[nodiscard]] uint32_t GetBackStencilRef() const noexcept { return m_backStencilRef; }
+    [[nodiscard]] float GetDepthBias() const noexcept { return m_depthBias; }
+    [[nodiscard]] float GetDepthBiasClamp() const noexcept { return m_depthBiasClamp; }
+    [[nodiscard]] float GetSlopeScaledDepthBias() const noexcept { return m_slopeScaledDepthBias; }
+    [[nodiscard]] D3D12_INDEX_BUFFER_STRIP_CUT_VALUE GetIndexBufferStripCutValue() const noexcept { return m_ibStripCutValue; }
 
     const std::vector<Command>& GetRecordedCommands() const { return m_commands; }
     bool IsOpen() const { return m_isOpen; }
@@ -4060,6 +4120,7 @@ public:
             pData->SubobjectCreationSupported = TRUE;
             pData->WorkGraphsTier1_1Supported = TRUE;
             pData->DynamicDepthBiasClampSupported = TRUE;
+            pData->DynamicIndexBufferStripCutSupported = TRUE;
             return 0;
         }
 

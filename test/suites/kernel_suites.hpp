@@ -48427,3 +48427,271 @@ inline void Test_Horizon231_CommandList7Options22_SecureSpeculationSpaces_Thread
 
     std::cout << "[TEST] Suite 447: Horizon 231 - CommandList7/Options 22, Secure Speculation/Spaces, Threadpool Stack & SP 800-108 Pipeline KDF PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 448: Horizon 232 - Direct3D 12 ID3D12GraphicsCommandList8 & CommandList9,
+//            Options 23, NT System Firmware RAM Disk (Class 215) & WHEA IPMI (Class 216),
+//            Win32 Thread Pool Priority & Environment Attributes, and
+//            BCrypt NIST SP 800-56A Concatenation KDF Engine
+// ============================================================================
+inline void Test_Horizon232_CommandList8Options23_RamdiskIpmi_ThreadpoolPriority_And_Sp80056AConcatKdf_Suite() {
+    std::cout << "\n[TEST] Suite 448: Horizon 232 - CommandList8-9/Options 23, RAMDisk/WHEA IPMI, Threadpool Priority & SP 800-56A Concat KDF...\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12GraphicsCommandList8 & CommandList9, Options 23
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] PrismX 3D12 ID3D12GraphicsCommandList8-9 & Options 23...\n";
+
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        D3D12_FEATURE_DATA_D3D12_OPTIONS23 opt23{};
+        int32_t hr = device.CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS23,
+            &opt23,
+            sizeof(opt23)
+        );
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for OPTIONS23 succeeds");
+        TEST_ASSERT(opt23.DynamicDepthBiasClampSupported == TRUE, "DynamicDepthBiasClampSupported is TRUE");
+        TEST_ASSERT(opt23.DynamicIndexBufferStripCutSupported == TRUE, "DynamicIndexBufferStripCutSupported is TRUE");
+        TEST_ASSERT(opt23.SubobjectCreationSupported == TRUE, "SubobjectCreationSupported is TRUE");
+        TEST_ASSERT(opt23.WorkGraphsTier1_1Supported == TRUE, "WorkGraphsTier1_1Supported is TRUE");
+
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+
+        ID3D12GraphicsCommandList8* pCmd8 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList8, reinterpret_cast<void**>(&pCmd8));
+        TEST_ASSERT(hr == 0 && pCmd8 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList8 succeeds");
+
+        ID3D12GraphicsCommandList8* pOfficial8 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList8, reinterpret_cast<void**>(&pOfficial8));
+        TEST_ASSERT(hr == 0 && pOfficial8 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList8 succeeds");
+
+        ID3D12GraphicsCommandList9* pCmd9 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList9, reinterpret_cast<void**>(&pCmd9));
+        TEST_ASSERT(hr == 0 && pCmd9 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList9 succeeds");
+
+        ID3D12GraphicsCommandList9* pOfficial9 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList9, reinterpret_cast<void**>(&pOfficial9));
+        TEST_ASSERT(hr == 0 && pOfficial9 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList9 succeeds");
+
+        // Test OMSetFrontAndBackStencilRef
+        pCmd8->OMSetFrontAndBackStencilRef(0x55, 0xAA);
+        TEST_ASSERT(cmdList.GetFrontStencilRef() == 0x55, "Front stencil ref is 0x55");
+        TEST_ASSERT(cmdList.GetBackStencilRef() == 0xAA, "Back stencil ref is 0xAA");
+
+        // Test RSSetDepthBias
+        pCmd9->RSSetDepthBias(2.5f, 0.5f, 1.25f);
+        TEST_ASSERT(std::abs(cmdList.GetDepthBias() - 2.5f) < 1e-4f, "DepthBias is 2.5");
+        TEST_ASSERT(std::abs(cmdList.GetDepthBiasClamp() - 0.5f) < 1e-4f, "DepthBiasClamp is 0.5");
+        TEST_ASSERT(std::abs(cmdList.GetSlopeScaledDepthBias() - 1.25f) < 1e-4f, "SlopeScaledDepthBias is 1.25");
+
+        // Test IASetIndexBufferStripCutValue
+        pCmd9->IASetIndexBufferStripCutValue(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF);
+        TEST_ASSERT(cmdList.GetIndexBufferStripCutValue() == D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF,
+                    "Index buffer strip cut value is 0xFFFFFFFF");
+
+        pCmd8->Release();
+        pOfficial8->Release();
+        pCmd9->Release();
+        pOfficial9->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 215 (Firmware RAMDisk) & 216 (WHEA IPMI)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 215 (Firmware RAMDisk) & 216 (WHEA IPMI)...\n";
+
+        using namespace micant::ntdll;
+
+        // Class 215: SystemFwRamdiskInformation
+        SYSTEM_FIRMWARE_RAMDISK_INFORMATION ramdisk{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            215,
+            &ramdisk,
+            sizeof(ramdisk),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(215) succeeds");
+        TEST_ASSERT(retLen == sizeof(ramdisk), "ReturnLength matches sizeof(SYSTEM_FIRMWARE_RAMDISK_INFORMATION)");
+        TEST_ASSERT(ramdisk.Version == 1, "Version is 1");
+        TEST_ASSERT(ramdisk.BlockSize == 4096, "BlockSize is 4096");
+        TEST_ASSERT(ramdisk.BaseAddress == 0x100000000ULL, "BaseAddress is 4GB physical base");
+        TEST_ASSERT(ramdisk.Size == 0x40000000ULL, "Size is 1GB RAM disk");
+
+        status = NtQuerySystemInformation_Export(
+            215,
+            &ramdisk,
+            sizeof(ramdisk) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(215) returns InfoLengthMismatch on small buffer");
+
+        // Class 216: SystemWheaIpmiHardwareInformation
+        SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION whea{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(
+            216,
+            &whea,
+            sizeof(whea),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(216) succeeds");
+        TEST_ASSERT(retLen == sizeof(whea), "ReturnLength matches sizeof(SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION)");
+        TEST_ASSERT(whea.Version == 1, "Version is 1");
+        TEST_ASSERT(whea.IpmiInterfaceType == 1, "IpmiInterfaceType is KCS (1)");
+        TEST_ASSERT(whea.RecordId == 0x5748454153454C01ULL, "RecordId matches WHEASEL record ID");
+        TEST_ASSERT(whea.EventType == 0x02, "EventType is 0x02 (Hardware/Memory Error)");
+        TEST_ASSERT(whea.DataLength == 16, "DataLength is 16 bytes");
+        TEST_ASSERT(whea.Data[0] == 0xAA, "Data payload matches expected telemetry pattern");
+
+        status = NtQuerySystemInformation_Export(
+            216,
+            &whea,
+            sizeof(whea) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(216) returns InfoLengthMismatch on small buffer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Thread Pool Environment & Priorities
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Win32 Extended Thread Pool Environment & Priorities...\n";
+
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        TP_CALLBACK_ENVIRON cbe{};
+        InitializeThreadpoolEnvironment(&cbe);
+        TEST_ASSERT(cbe.Version == 3, "InitializeThreadpoolEnvironment sets Version to 3");
+
+        SetThreadpoolCallbackPriority(&cbe, TP_CALLBACK_PRIORITY_HIGH);
+        TEST_ASSERT(cbe.CallbackPriority == TP_CALLBACK_PRIORITY_HIGH, "SetThreadpoolCallbackPriority sets HIGH priority");
+
+        SetThreadpoolCallbackPriority(&cbe, TP_CALLBACK_PRIORITY_LOW);
+        TEST_ASSERT(cbe.CallbackPriority == TP_CALLBACK_PRIORITY_LOW, "SetThreadpoolCallbackPriority sets LOW priority");
+
+        SetThreadpoolCallbackRunsLong(&cbe);
+        TEST_ASSERT(cbe.u.s.LongFunction == 1, "SetThreadpoolCallbackRunsLong sets LongFunction flag");
+
+        SetThreadpoolCallbackPersistent(&cbe);
+        TEST_ASSERT(cbe.u.s.Persistent == 1, "SetThreadpoolCallbackPersistent sets Persistent flag");
+
+        void* mockMod = reinterpret_cast<void*>(0xBAADF00D);
+        SetThreadpoolCallbackLibrary(&cbe, mockMod);
+        TEST_ASSERT(cbe.RaceDll == mockMod, "SetThreadpoolCallbackLibrary sets RaceDll");
+
+        // Verify exports in dynamic loader
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolCallbackPriority") != nullptr, "kernel32 exports SetThreadpoolCallbackPriority");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolCallbackRunsLong") != nullptr, "kernel32 exports SetThreadpoolCallbackRunsLong");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolCallbackPersistent") != nullptr, "kernel32 exports SetThreadpoolCallbackPersistent");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolCallbackLibrary") != nullptr, "kernel32 exports SetThreadpoolCallbackLibrary");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPriority") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetThreadpoolCallbackPriority");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackRunsLong") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetThreadpoolCallbackRunsLong");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackPersistent") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetThreadpoolCallbackPersistent");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolCallbackLibrary") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetThreadpoolCallbackLibrary");
+
+        DestroyThreadpoolEnvironment(&cbe);
+        TEST_ASSERT(cbe.Version == 0, "DestroyThreadpoolEnvironment zeroes structure");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt NIST SP 800-56A Concatenation KDF (SP800_56A_CONCAT)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] BCrypt NIST SP 800-56A Concatenation KDF (SP800_56A_CONCAT)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        // 1. Direct algorithmic test of Sp80056AConcatKdf
+        std::vector<uint8_t> z = { 'M', 'i', 'c', 'a', 'N', 'T', 'S', 'h', 'a', 'r', 'e', 'd', 'S', 'e', 'c', 'r', 'e', 't' };
+        std::vector<uint8_t> algId = { 'A', 'E', 'S', '-', '2', '5', '6' };
+        std::vector<uint8_t> partyU = { 'A', 'l', 'i', 'c', 'e' };
+        std::vector<uint8_t> partyV = { 'B', 'o', 'b' };
+        std::vector<uint8_t> suppPub = { '2', '0', '2', '6' };
+        std::vector<uint8_t> suppPriv = { 'K', 'e', 'y', '1' };
+
+        // 32-byte single-block derivation
+        auto derived32 = Sp80056AConcatKdf::deriveKey(z, algId, partyU, partyV, suppPub, suppPriv, 32);
+        TEST_ASSERT(derived32.size() == 32, "deriveKey produces 32 bytes");
+
+        // 64-byte multi-block derivation
+        auto derived64 = Sp80056AConcatKdf::deriveKey(z, algId, partyU, partyV, suppPub, suppPriv, 64);
+        TEST_ASSERT(derived64.size() == 64, "deriveKey produces 64 bytes");
+
+        // SP 800-56A Concat derives blocks with counter 1, 2, ...
+        // Therefore, block 1 of derived64 matches derived32!
+        TEST_ASSERT(std::memcmp(derived32.data(), derived64.data(), 32) == 0,
+                    "SP 800-56A Concat block 1 matches single-block derivation");
+        TEST_ASSERT(std::memcmp(derived64.data(), derived64.data() + 32, 32) != 0,
+                    "SP 800-56A Concat produces distinct successive blocks");
+
+        auto derived64_again = Sp80056AConcatKdf::deriveKey(z, algId, partyU, partyV, suppPub, suppPriv, 64);
+        TEST_ASSERT(derived64 == derived64_again, "deriveKey is deterministic");
+
+        // 2. BCrypt API integration
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SP80056A_CONCAT_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SP 800-56A Concat");
+
+        BCRYPT_KEY_HANDLE hKey = nullptr;
+        status = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, z.data(), static_cast<ULONG>(z.size()), 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey succeeds for SP 800-56A Concat key");
+
+        BCryptBuffer buffers[5]{};
+        buffers[0].BufferType = KDF_ALGORITHMID;
+        buffers[0].cbBuffer = static_cast<ULONG>(algId.size());
+        buffers[0].pvBuffer = algId.data();
+
+        buffers[1].BufferType = KDF_PARTYUINFO;
+        buffers[1].cbBuffer = static_cast<ULONG>(partyU.size());
+        buffers[1].pvBuffer = partyU.data();
+
+        buffers[2].BufferType = KDF_PARTYVINFO;
+        buffers[2].cbBuffer = static_cast<ULONG>(partyV.size());
+        buffers[2].pvBuffer = partyV.data();
+
+        buffers[3].BufferType = KDF_SUPPPUBINFO;
+        buffers[3].cbBuffer = static_cast<ULONG>(suppPub.size());
+        buffers[3].pvBuffer = suppPub.data();
+
+        buffers[4].BufferType = KDF_SUPPPRIVINFO;
+        buffers[4].cbBuffer = static_cast<ULONG>(suppPriv.size());
+        buffers[4].pvBuffer = suppPriv.data();
+
+        BCryptBufferDesc desc{};
+        desc.ulVersion = 1;
+        desc.cBuffers = 5;
+        desc.pBuffers = buffers;
+
+        uint8_t derivedApi[64]{};
+        ULONG cbResult = 0;
+        status = BCryptKeyDerivation(hKey, &desc, derivedApi, sizeof(derivedApi), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptKeyDerivation succeeds for SP 800-56A Concat");
+        TEST_ASSERT(cbResult == sizeof(derivedApi), "BCryptKeyDerivation returned 64 bytes");
+        TEST_ASSERT(std::memcmp(derivedApi, derived64.data(), 64) == 0,
+                    "BCryptKeyDerivation output matches Sp80056AConcatKdf bit-exact");
+
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+
+    std::cout << "  Horizon 232 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12GraphicsCommandList8-9 & Options 23 (StencilRef, DepthBias, StripCut) OK\n"
+              << "    Pillar 2: NT Native Classes 215 (Firmware RAMDisk) & 216 (WHEA IPMI Hardware Info) OK\n"
+              << "    Pillar 3: Win32 Thread Pool Priority & Environment Attributes OK\n"
+              << "    Pillar 4: BCrypt NIST SP 800-56A Concatenation KDF (Single-Step SHA-256 KDF) OK\n";
+
+    std::cout << "[TEST] Suite 448: Horizon 232 - CommandList8-9/Options 23, RAMDisk/WHEA IPMI, Threadpool Priority & SP 800-56A Concat KDF PASSED." << std::endl;
+}

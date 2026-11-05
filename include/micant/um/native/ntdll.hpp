@@ -1534,6 +1534,26 @@ struct SYSTEM_SPACES_BOOT_INFORMATION {
 };
 using PSYSTEM_SPACES_BOOT_INFORMATION = SYSTEM_SPACES_BOOT_INFORMATION*;
 
+// Class 215: SystemFwRamdiskInformation
+struct SYSTEM_FIRMWARE_RAMDISK_INFORMATION {
+    ULONG Version;
+    ULONG BlockSize;
+    uint64_t BaseAddress;
+    uint64_t Size;
+};
+using PSYSTEM_FIRMWARE_RAMDISK_INFORMATION = SYSTEM_FIRMWARE_RAMDISK_INFORMATION*;
+
+// Class 216: SystemWheaIpmiHardwareInformation
+struct SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION {
+    ULONG Version;
+    ULONG IpmiInterfaceType;
+    uint64_t RecordId;
+    ULONG EventType;
+    ULONG DataLength;
+    uint8_t Data[16];
+};
+using PSYSTEM_WHEA_IPMI_HARDWARE_INFORMATION = SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -2995,6 +3015,34 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pSpaces->Reserved[0] = 0;
             pSpaces->Reserved[1] = 0;
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SPACES_BOOT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 215: { // SystemFwRamdiskInformation
+            if (SystemInformationLength < sizeof(SYSTEM_FIRMWARE_RAMDISK_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_RAMDISK_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pRamdisk = reinterpret_cast<SYSTEM_FIRMWARE_RAMDISK_INFORMATION*>(SystemInformation);
+            pRamdisk->Version = 1;
+            pRamdisk->BlockSize = 4096;
+            pRamdisk->BaseAddress = 0x100000000ULL; // 4GB physical base
+            pRamdisk->Size = 0x40000000ULL;        // 1GB RAM disk
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_RAMDISK_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 216: { // SystemWheaIpmiHardwareInformation
+            if (SystemInformationLength < sizeof(SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pWhea = reinterpret_cast<SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION*>(SystemInformation);
+            pWhea->Version = 1;
+            pWhea->IpmiInterfaceType = 1; // KCS (Keyboard Controller Style)
+            pWhea->RecordId = 0x5748454153454C01ULL; // "WHEASEL\1"
+            pWhea->EventType = 0x02; // Memory / Hardware diagnostic
+            pWhea->DataLength = 16;
+            std::memset(pWhea->Data, 0xAA, 16);
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION);
             return NtStatus::Success;
         }
         default: {
