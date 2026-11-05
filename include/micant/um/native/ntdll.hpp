@@ -1554,6 +1554,21 @@ struct SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION {
 };
 using PSYSTEM_WHEA_IPMI_HARDWARE_INFORMATION = SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION*;
 
+// Class 217: SystemCodeIntegrityPolicyInformation
+struct SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION {
+    ULONG Options;
+    uint32_t HwIdCount;
+    uint64_t PolicyFlags;
+};
+using PSYSTEM_CODE_INTEGRITY_POLICY_INFORMATION = SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION*;
+
+// Class 218: SystemNumaProximityInformation
+struct SYSTEM_NUMA_PROXIMITY_INFORMATION {
+    ULONG NodeNumber;
+    ULONG ProximityId;
+};
+using PSYSTEM_NUMA_PROXIMITY_INFORMATION = SYSTEM_NUMA_PROXIMITY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3043,6 +3058,29 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pWhea->DataLength = 16;
             std::memset(pWhea->Data, 0xAA, 16);
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_WHEA_IPMI_HARDWARE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 217: { // SystemCodeIntegrityPolicyInformation (Class 217)
+            if (SystemInformationLength < sizeof(SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION*>(SystemInformation);
+            pInfo->Options = 0x00000001;
+            pInfo->HwIdCount = 1;
+            pInfo->PolicyFlags = 0x0000000000000001ULL;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 218: { // SystemNumaProximityInformation (Class 218)
+            if (SystemInformationLength < sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_NUMA_PROXIMITY_INFORMATION*>(SystemInformation);
+            pInfo->NodeNumber = 0;
+            pInfo->ProximityId = 0x10;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION);
             return NtStatus::Success;
         }
         default: {

@@ -1188,6 +1188,7 @@ public:
 
 static constexpr IID IID_ID3D12GraphicsCommandList10 = 
     { 0x217d12bc, 0x1f72, 0x4f72, { 0x87, 0x05, 0x76, 0x8a, 0x48, 0x49, 0x89, 0xb8 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList10 = IID_ID3D12GraphicsCommandList10;
 
 class ID3D12GraphicsCommandList10 : public ID3D12GraphicsCommandList9 {
 public:
@@ -1222,6 +1223,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS20 = 36;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS21 = 37;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS22 = 38;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS23 = 39;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS24 = 40;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -1393,6 +1395,12 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS23 {
     BOOL WorkGraphsTier1_1Supported{1};
     BOOL DynamicDepthBiasClampSupported{1};
     BOOL DynamicIndexBufferStripCutSupported{1};
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS24 {
+    uint32_t WorkGraphsTier{11};
+    BOOL GenericProgramsSupported{1};
+    BOOL SubobjectCreationSupported{1};
 };
 
 
@@ -2474,7 +2482,7 @@ public:
             riid == IID_ID3D12GraphicsCommandList7 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList7 ||
             riid == IID_ID3D12GraphicsCommandList8 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList8 ||
             riid == IID_ID3D12GraphicsCommandList9 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList9 ||
-            riid == IID_ID3D12GraphicsCommandList10) {
+            riid == IID_ID3D12GraphicsCommandList10 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
             AddRef();
             return 0;
@@ -4121,6 +4129,14 @@ public:
             pData->WorkGraphsTier1_1Supported = TRUE;
             pData->DynamicDepthBiasClampSupported = TRUE;
             pData->DynamicIndexBufferStripCutSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS24) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS24)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS24*>(pFeatureSupportData);
+            pData->WorkGraphsTier = 11;
+            pData->GenericProgramsSupported = TRUE;
+            pData->SubobjectCreationSupported = TRUE;
             return 0;
         }
 

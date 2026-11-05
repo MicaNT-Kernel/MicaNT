@@ -5624,6 +5624,10 @@ inline BOOL WINAPI SetThreadpoolWaitEx(PTP_WAIT pwa, HANDLE h, const FILETIME* p
     return TRUE;
 }
 
+inline void WINAPI CancelThreadpoolWait(PTP_WAIT pwa) noexcept {
+    SetThreadpoolWait(pwa, nullptr, nullptr);
+}
+
 inline void WINAPI CloseThreadpoolWait(PTP_WAIT pwa) noexcept {
     if (!pwa) return;
     {
@@ -10907,6 +10911,7 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWaitEx", reinterpret_cast<void*>(SetThreadpoolWaitEx));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CancelThreadpoolWait", reinterpret_cast<void*>(CancelThreadpoolWait));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
     ldr.registerExport("kernel32.dll", "MulDiv", reinterpret_cast<void*>(MulDiv));
@@ -11223,6 +11228,7 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CreateSemaphoreA", reinterpret_cast<void*>(CreateSemaphoreA));
     ldr.registerExport("kernel32.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
     ldr.registerExport("kernel32.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "CancelThreadpoolWait", reinterpret_cast<void*>(CancelThreadpoolWait));
     ldr.registerExport("kernel32.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
     ldr.registerExport("kernel32.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
     ldr.registerExport("kernel32.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));

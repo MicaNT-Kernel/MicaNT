@@ -48695,3 +48695,279 @@ inline void Test_Horizon232_CommandList8Options23_RamdiskIpmi_ThreadpoolPriority
 
     std::cout << "[TEST] Suite 448: Horizon 232 - CommandList8-9/Options 23, RAMDisk/WHEA IPMI, Threadpool Priority & SP 800-56A Concat KDF PASSED." << std::endl;
 }
+
+inline void Test_Horizon233_CommandList10Options24_CodeIntegrityPolicyNuma_ThreadpoolWait_And_HkdfSha256_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 449: Horizon 233 - CommandList10/Options 24, CodeIntegrityPolicy/NumaProximity, Threadpool Wait & RFC 5869 HKDF-SHA256\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12GraphicsCommandList10 & Options 24 (Work Graphs Tier 1.1)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12GraphicsCommandList10 & Options 24 (Work Graphs 1.1)...\n";
+
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS24
+        D3D12_FEATURE_DATA_D3D12_OPTIONS24 opt24{};
+        int32_t hr = device.CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS24,
+            &opt24,
+            sizeof(opt24)
+        );
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport succeeds for D3D12_FEATURE_D3D12_OPTIONS24");
+        TEST_ASSERT(opt24.WorkGraphsTier == 11, "Options24 reports WorkGraphsTier 1.1 (11)");
+        TEST_ASSERT(opt24.GenericProgramsSupported == TRUE, "Options24 reports GenericProgramsSupported == TRUE");
+        TEST_ASSERT(opt24.SubobjectCreationSupported == TRUE, "Options24 reports SubobjectCreationSupported == TRUE");
+
+        // 2. ID3D12GraphicsCommandList10 Interface & QueryInterface
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+
+        ID3D12GraphicsCommandList10* pList10 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList10, reinterpret_cast<void**>(&pList10));
+        TEST_ASSERT(hr == 0 && pList10 != nullptr, "QueryInterface succeeds for OFFICIAL_IID_ID3D12GraphicsCommandList10");
+
+        // 3. SetProgram execution & state verification
+        D3D12_SET_PROGRAM_DESC progDesc{};
+        progDesc.Type = D3D12_PROGRAM_TYPE_GENERIC_PIPELINE;
+        progDesc.WorkGraph.ProgramIdentifier.StartAddress = 0x12345678ULL;
+        progDesc.WorkGraph.ProgramIdentifier.SizeInBytes = 4096ULL;
+
+        pList10->SetProgram(&progDesc);
+        TEST_ASSERT(cmdList.HasProgram(), "CommandList reports active program after SetProgram");
+        TEST_ASSERT(cmdList.GetCurrentProgram().Type == D3D12_PROGRAM_TYPE_GENERIC_PIPELINE, "Program type matches D3D12_PROGRAM_TYPE_GENERIC_PIPELINE");
+        TEST_ASSERT(cmdList.GetCurrentProgram().WorkGraph.ProgramIdentifier.StartAddress == 0x12345678ULL, "Program identifier matches");
+
+        // 4. DispatchGraph execution & verification
+        D3D12_DISPATCH_GRAPH_DESC graphDesc{};
+        graphDesc.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
+        graphDesc.NodeCPUInput.EntrypointIndex = 3;
+        graphDesc.NodeCPUInput.NumRecords = 128;
+        graphDesc.NodeCPUInput.RecordStrideInBytes = 64;
+
+        pList10->DispatchGraph(&graphDesc);
+        TEST_ASSERT(cmdList.GetDispatchedGraphCount() == 1, "CommandList records 1 dispatched graph");
+        TEST_ASSERT(cmdList.GetDispatchedGraphs()[0].Mode == D3D12_DISPATCH_MODE_NODE_CPU_INPUT, "Dispatched graph mode matches");
+        TEST_ASSERT(cmdList.GetDispatchedGraphs()[0].NodeCPUInput.EntrypointIndex == 3, "Dispatched graph entrypoint matches");
+        TEST_ASSERT(cmdList.GetDispatchedGraphs()[0].NodeCPUInput.NumRecords == 128, "Dispatched graph num records matches");
+
+        pList10->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 217 (SystemCodeIntegrityPolicyInformation) & 218 (SystemNumaProximityInformation)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 217 (CodeIntegrity Policy) & 218 (NUMA Proximity)...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 217: SystemCodeIntegrityPolicyInformation
+        SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION ciPolicy{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            217,
+            &ciPolicy,
+            sizeof(ciPolicy),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation succeeds for Class 217 (SystemCodeIntegrityPolicyInformation)");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION), "Return length matches sizeof(SYSTEM_CODE_INTEGRITY_POLICY_INFORMATION)");
+        TEST_ASSERT(ciPolicy.Options == 0x00000001, "Code integrity options flag set");
+        TEST_ASSERT(ciPolicy.HwIdCount == 1, "Hardware ID count matches 1");
+        TEST_ASSERT(ciPolicy.PolicyFlags == 0x0000000000000001ULL, "Policy flags match");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            217,
+            &ciPolicy,
+            sizeof(ciPolicy) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 217 enforces buffer length check");
+
+        // 2. Class 218: SystemNumaProximityInformation
+        SYSTEM_NUMA_PROXIMITY_INFORMATION numaProx{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(
+            218,
+            &numaProx,
+            sizeof(numaProx),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation succeeds for Class 218 (SystemNumaProximityInformation)");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION), "Return length matches sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION)");
+        TEST_ASSERT(numaProx.NodeNumber == 0, "NUMA node number is 0");
+        TEST_ASSERT(numaProx.ProximityId == 0x10, "NUMA proximity ID is 0x10");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            218,
+            &numaProx,
+            sizeof(numaProx) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 218 enforces buffer length check");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Thread Pool Waiting & Environment Cleanup
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Win32 Extended Thread Pool Waiting & Environment Cleanup...\n";
+
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        // 1. Wait Object lifecycle with SetThreadpoolWait & CancelThreadpoolWait
+        static std::atomic<uint32_t> s_waitCallbackTriggerCount{0};
+        auto pfnWait = [](PTP_CALLBACK_INSTANCE, PVOID Context, PTP_WAIT, TP_WAIT_RESULT) {
+            auto* pCounter = reinterpret_cast<std::atomic<uint32_t>*>(Context);
+            if (pCounter) pCounter->fetch_add(1);
+        };
+
+        PTP_WAIT pWait = CreateThreadpoolWait(pfnWait, &s_waitCallbackTriggerCount, nullptr);
+        TEST_ASSERT(pWait != nullptr, "CreateThreadpoolWait succeeds");
+
+        // Create signaled event and test fast path dispatch
+        HANDLE hEvent = CreateEventW(nullptr, TRUE, TRUE, nullptr);
+        TEST_ASSERT(hEvent != nullptr, "CreateEventW succeeds");
+
+        SetThreadpoolWait(pWait, hEvent, nullptr);
+        WaitForThreadpoolWaitCallbacks(pWait, FALSE);
+        TEST_ASSERT(s_waitCallbackTriggerCount.load() >= 1, "Signaled event triggers threadpool wait callback");
+
+        // Cancel wait via CancelThreadpoolWait
+        CancelThreadpoolWait(pWait);
+        TEST_ASSERT(!pWait->isSet.load(), "CancelThreadpoolWait resets isSet state");
+        TEST_ASSERT(pWait->waitHandle == nullptr, "CancelThreadpoolWait clears waitHandle");
+
+        CloseThreadpoolWait(pWait);
+        CloseHandle(hEvent);
+
+        // 2. Threadpool Environment Initialization & Destruction
+        TP_CALLBACK_ENVIRON cbe{};
+        InitializeThreadpoolEnvironment(&cbe);
+        TEST_ASSERT(cbe.Version == 3, "InitializeThreadpoolEnvironment initializes Version 3");
+
+        DestroyThreadpoolEnvironment(&cbe);
+        TEST_ASSERT(cbe.Version == 0, "DestroyThreadpoolEnvironment zeroes structure");
+
+        // 3. Dynamic loader export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateThreadpoolWait") != nullptr, "kernel32 exports CreateThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadpoolWait") != nullptr, "kernel32 exports SetThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CancelThreadpoolWait") != nullptr, "kernel32 exports CancelThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WaitForThreadpoolWaitCallbacks") != nullptr, "kernel32 exports WaitForThreadpoolWaitCallbacks");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CloseThreadpoolWait") != nullptr, "kernel32 exports CloseThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "DestroyThreadpoolEnvironment") != nullptr, "kernel32 exports DestroyThreadpoolEnvironment");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpoolWait") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CreateThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolWait") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CancelThreadpoolWait") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CancelThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWaitCallbacks") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports WaitForThreadpoolWaitCallbacks");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWait") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CloseThreadpoolWait");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "DestroyThreadpoolEnvironment") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports DestroyThreadpoolEnvironment");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt RFC 5869 HMAC-based Extract-and-Expand Key Derivation (HKDF-SHA256)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] BCrypt RFC 5869 HKDF-SHA256 Key Derivation Function (HKDF)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        // 1. Direct algorithmic test using RFC 5869 Test Case 1
+        // IKM  = 0x0b repeated 22 times
+        // salt = 0x00, 0x01, ..., 0x0c (13 bytes)
+        // info = 0xf0, 0xf1, ..., 0xf9 (10 bytes)
+        // L    = 42 octets
+        const std::vector<uint8_t> ikm(22, 0x0b);
+        std::vector<uint8_t> salt(13);
+        for (uint8_t i = 0; i < 13; ++i) salt[i] = i;
+        std::vector<uint8_t> info(10);
+        for (uint8_t i = 0; i < 10; ++i) info[i] = static_cast<uint8_t>(0xf0 + i);
+
+        // Expected PRK (RFC 5869 Test Case 1)
+        const uint8_t expectedPrk[32] = {
+            0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf,
+            0x0d, 0xdc, 0x3f, 0x0d, 0xc4, 0x7b, 0xba, 0x63,
+            0x90, 0xb6, 0xc7, 0x3b, 0xb5, 0x0f, 0x9c, 0x31,
+            0x22, 0xec, 0x84, 0x4a, 0xd7, 0xc2, 0xb3, 0xe5
+        };
+
+        // Expected OKM (RFC 5869 Test Case 1)
+        const uint8_t expectedOkm[42] = {
+            0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a,
+            0x90, 0x43, 0x4f, 0x64, 0xd0, 0x36, 0x2f, 0x2a,
+            0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c,
+            0x5d, 0xb0, 0x2d, 0x56, 0xec, 0xc4, 0xc5, 0xbf,
+            0x34, 0x00, 0x72, 0x08, 0xd5, 0xb8, 0x87, 0x18,
+            0x58, 0x65
+        };
+
+        // Step 1: Extract verification
+        auto prk = HkdfSha256::extract(salt, ikm);
+        TEST_ASSERT(prk.size() == 32, "HkdfSha256::extract returns 32-byte PRK");
+        TEST_ASSERT(std::memcmp(prk.data(), expectedPrk, 32) == 0, "HKDF-SHA256 PRK matches RFC 5869 Test Case 1");
+
+        // Step 2: Expand verification
+        auto okm = HkdfSha256::expand(prk, info, 42);
+        TEST_ASSERT(okm.size() == 42, "HkdfSha256::expand returns 42-byte OKM");
+        TEST_ASSERT(std::memcmp(okm.data(), expectedOkm, 42) == 0, "HKDF-SHA256 OKM matches RFC 5869 Test Case 1");
+
+        // Step 3: Full deriveKey verification
+        auto derivedDirect = HkdfSha256::deriveKey(ikm, salt, info, 42);
+        TEST_ASSERT(derivedDirect.size() == 42, "HkdfSha256::deriveKey returns 42 bytes");
+        TEST_ASSERT(std::memcmp(derivedDirect.data(), expectedOkm, 42) == 0, "HkdfSha256::deriveKey matches RFC 5869 Test Case 1 bit-exact");
+
+        // 2. BCrypt API integration
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_HKDF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for BCRYPT_HKDF_ALGORITHM");
+
+        BCRYPT_KEY_HANDLE hKey = nullptr;
+        status = BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, ikm.data(), static_cast<ULONG>(ikm.size()), 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey succeeds for HKDF key");
+
+        BCryptBuffer buffers[2]{};
+        buffers[0].BufferType = KDF_HKDF_SALT;
+        buffers[0].cbBuffer = static_cast<ULONG>(salt.size());
+        buffers[0].pvBuffer = salt.data();
+
+        buffers[1].BufferType = KDF_HKDF_INFO;
+        buffers[1].cbBuffer = static_cast<ULONG>(info.size());
+        buffers[1].pvBuffer = info.data();
+
+        BCryptBufferDesc desc{};
+        desc.ulVersion = 1;
+        desc.cBuffers = 2;
+        desc.pBuffers = buffers;
+
+        uint8_t derivedApi[42]{};
+        ULONG cbResult = 0;
+        status = BCryptKeyDerivation(hKey, &desc, derivedApi, sizeof(derivedApi), &cbResult, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptKeyDerivation succeeds for HKDF");
+        TEST_ASSERT(cbResult == sizeof(derivedApi), "BCryptKeyDerivation returned 42 bytes");
+        TEST_ASSERT(std::memcmp(derivedApi, expectedOkm, 42) == 0,
+                    "BCryptKeyDerivation output matches RFC 5869 Test Case 1 bit-exact");
+
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+
+    std::cout << "  Horizon 233 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12GraphicsCommandList10 & Options 24 (Work Graphs Tier 1.1) OK\n"
+              << "    Pillar 2: NT Native Classes 217 (CodeIntegrity Policy) & 218 (NUMA Proximity) OK\n"
+              << "    Pillar 3: Win32 Extended Thread Pool Waiting & Environment Cleanup OK\n"
+              << "    Pillar 4: BCrypt RFC 5869 HMAC-based Extract-and-Expand KDF (HKDF-SHA256) OK\n";
+
+    std::cout << "[TEST] Suite 449: Horizon 233 - CommandList10/Options 24, CodeIntegrityPolicy/NumaProximity, Threadpool Wait & RFC 5869 HKDF-SHA256 PASSED." << std::endl;
+}
