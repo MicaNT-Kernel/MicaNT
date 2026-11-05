@@ -62,6 +62,10 @@ enum D3D12_COMMAND_QUEUE_FLAGS : uint32_t {
     D3D12_COMMAND_QUEUE_FLAG_NONE = 0
 };
 
+enum D3D12_COMMAND_LIST_FLAGS : uint32_t {
+    D3D12_COMMAND_LIST_FLAG_NONE = 0
+};
+
 enum D3D12_COMMAND_QUEUE_PRIORITY : int32_t {
     D3D12_COMMAND_QUEUE_PRIORITY_NORMAL          = 0,
     D3D12_COMMAND_QUEUE_PRIORITY_HIGH            = 100,
@@ -1316,6 +1320,8 @@ public:
         }
         return info;
     }
+
+
     virtual int32_t CreateHeap(
         const D3D12_HEAP_DESC* /*pDesc*/,
         const IID& /*riid*/,
@@ -1402,10 +1408,53 @@ public:
         void** ppPipelineLibrary) = 0;
 };
 
+static constexpr IID IID_ID3D12Device4 = 
+    { 0x70e617dd, 0xf9ae, 0x443c, { 0xb2, 0x11, 0x07, 0xca, 0xbe, 0x79, 0x77, 0xd1 } };
+
+class ID3D12Device4 : public ID3D12Device1 {
+public:
+    virtual int32_t CreateCommandList1(
+        uint32_t nodeMask,
+        D3D12_COMMAND_LIST_TYPE type,
+        D3D12_COMMAND_LIST_FLAGS flags,
+        const IID& riid,
+        void** ppCommandList) { (void)nodeMask; (void)type; (void)flags; (void)riid; (void)ppCommandList; return 0; }
+    virtual int32_t CreateProtectedResourceSession(
+        const void* pDesc,
+        const IID& riid,
+        void** ppSession) { (void)pDesc; (void)riid; (void)ppSession; return 0; }
+    virtual int32_t CreateCommittedResource1(
+        const D3D12_HEAP_PROPERTIES* pHeapProperties,
+        uint32_t HeapFlags,
+        const D3D12_RESOURCE_DESC* pDesc,
+        D3D12_RESOURCE_STATES InitialResourceState,
+        const void* pOptimizedClearValue,
+        const void* pProtectedSession,
+        const IID& riidResource,
+        void** ppvResource) { (void)pHeapProperties; (void)HeapFlags; (void)pDesc; (void)InitialResourceState; (void)pOptimizedClearValue; (void)pProtectedSession; (void)riidResource; (void)ppvResource; return 0; }
+    virtual int32_t CreateHeap1(
+        const D3D12_HEAP_DESC* pDesc,
+        const void* pProtectedSession,
+        const IID& riid,
+        void** ppvHeap) { (void)pDesc; (void)pProtectedSession; (void)riid; (void)ppvHeap; return 0; }
+    virtual int32_t CreateReservedResource1(
+        const D3D12_RESOURCE_DESC* pDesc,
+        D3D12_RESOURCE_STATES InitialState,
+        const void* pOptimizedClearValue,
+        const void* pProtectedSession,
+        const IID& riid,
+        void** ppvResource) { (void)pDesc; (void)InitialState; (void)pOptimizedClearValue; (void)pProtectedSession; (void)riid; (void)ppvResource; return 0; }
+    virtual D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo1(
+        uint32_t visibleMask,
+        uint32_t numResourceDescs,
+        const D3D12_RESOURCE_DESC* pResourceDescs,
+        D3D12_RESOURCE_ALLOCATION_INFO1* pResourceAllocationInfo1) = 0;
+};
+
 static constexpr IID IID_ID3D12Device8 = 
     { 0x9218e66e, 0x19b4, 0x4ec2, { 0xa7, 0x76, 0xb2, 0xd4, 0x44, 0x53, 0x4f, 0x16 } };
 
-class ID3D12Device8 : public ID3D12Device1 {
+class ID3D12Device8 : public ID3D12Device4 {
 public:
     virtual void CreateSamplerFeedbackUnorderedAccessView(
         ID3D12Resource* pTargetedResource,
@@ -2697,7 +2746,7 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10) {
             *ppv = static_cast<ID3D12Device10*>(this);
             AddRef();
             return 0;
@@ -2768,6 +2817,47 @@ public:
             info.SizeInBytes += alignedItem;
             if (align > info.Alignment) info.Alignment = align;
         }
+        return info;
+    }
+
+    D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo1(
+        uint32_t visibleMask,
+        uint32_t numResourceDescs,
+        const D3D12_RESOURCE_DESC* pResourceDescs,
+        D3D12_RESOURCE_ALLOCATION_INFO1* pResourceAllocationInfo1) override {
+        (void)visibleMask;
+        D3D12_RESOURCE_ALLOCATION_INFO info{};
+        if (!pResourceDescs || numResourceDescs == 0) return info;
+
+        uint64_t currentOffset = 0;
+        uint64_t maxAlign = 64 * 1024;
+
+        for (uint32_t i = 0; i < numResourceDescs; ++i) {
+            uint64_t itemSize = 0;
+            uint64_t align = 64 * 1024;
+            if (pResourceDescs[i].Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
+                itemSize = pResourceDescs[i].Width;
+            } else if (pResourceDescs[i].Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D) {
+                itemSize = pResourceDescs[i].Width * pResourceDescs[i].Height * 4;
+                if (pResourceDescs[i].SampleDesc.Count > 1 || pResourceDescs[i].Alignment == 4 * 1024 * 1024) {
+                    align = 4 * 1024 * 1024;
+                }
+            }
+            uint64_t alignedItem = (itemSize + align - 1) & ~(align - 1);
+            currentOffset = (currentOffset + align - 1) & ~(align - 1);
+
+            if (pResourceAllocationInfo1) {
+                pResourceAllocationInfo1[i].Offset = currentOffset;
+                pResourceAllocationInfo1[i].Alignment = align;
+                pResourceAllocationInfo1[i].SizeInBytes = alignedItem;
+            }
+
+            currentOffset += alignedItem;
+            if (align > maxAlign) maxAlign = align;
+        }
+
+        info.Alignment = maxAlign;
+        info.SizeInBytes = currentOffset;
         return info;
     }
 

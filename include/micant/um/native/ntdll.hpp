@@ -2215,8 +2215,9 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             }
             auto* pInfo = reinterpret_cast<SYSTEM_BOOT_ENVIRONMENT_INFORMATION*>(SystemInformation);
             std::memset(pInfo, 0, sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION));
+            pInfo->BootIdentifier = { 0x5a18a93e, 0x8264, 0x47cb, { 0x98, 0x3d, 0x6e, 0x98, 0x3a, 0x76, 0x86, 0x8b } };
             pInfo->FirmwareType = 2; // FirmwareTypeUefi
-            pInfo->BootFlags = 0x1;
+            pInfo->BootFlags = 0x7;  // SecureBoot (0x1) | MeasuredBoot (0x2) | ElamDriversLoaded (0x4)
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION);
             return NtStatus::Success;
         }

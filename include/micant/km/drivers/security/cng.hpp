@@ -1697,6 +1697,87 @@ inline NTSTATUS WINAPI BCryptDeriveKey(
     return STATUS_SUCCESS;
 }
 
+inline NTSTATUS WINAPI BCryptDeriveKeyPBKDF2(
+    [[maybe_unused]] BCRYPT_ALG_HANDLE hPrf,
+    const uint8_t* pbPassword,
+    uint32_t cbPassword,
+    const uint8_t* pbSalt,
+    uint32_t cbSalt,
+    uint64_t cIterations,
+    uint8_t* pbDerivedKey,
+    uint32_t cbDerivedKey,
+    [[maybe_unused]] uint32_t dwFlags
+) noexcept {
+    if (!pbPassword || !pbSalt || !pbDerivedKey || cbDerivedKey == 0 || cIterations == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::span<const uint8_t> keySpan(pbPassword, cbPassword);
+    uint32_t blocksNeeded = (cbDerivedKey + 31) / 32;
+    uint32_t written = 0;
+
+    for (uint32_t block = 1; block <= blocksNeeded; ++block) {
+        std::vector<uint8_t> saltBlock(pbSalt, pbSalt + cbSalt);
+        saltBlock.push_back(static_cast<uint8_t>((block >> 24) & 0xFF));
+        saltBlock.push_back(static_cast<uint8_t>((block >> 16) & 0xFF));
+        saltBlock.push_back(static_cast<uint8_t>((block >> 8) & 0xFF));
+        saltBlock.push_back(static_cast<uint8_t>(block & 0xFF));
+
+        auto uPrev = HmacSha256::compute(keySpan, saltBlock);
+        std::array<uint8_t, 32> uSum = uPrev;
+
+        for (uint64_t iter = 1; iter < cIterations; ++iter) {
+            uPrev = HmacSha256::compute(keySpan, uPrev);
+            for (size_t i = 0; i < 32; ++i) {
+                uSum[i] ^= uPrev[i];
+            }
+        }
+
+        uint32_t toCopy = std::min<uint32_t>(32, cbDerivedKey - written);
+        std::memcpy(pbDerivedKey + written, uSum.data(), toCopy);
+        written += toCopy;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS WINAPI BCryptKeyDerivation(
+    BCRYPT_KEY_HANDLE hKey,
+    BCryptBufferDesc* pParameterList,
+    uint8_t* pbDerivedKey,
+    ULONG cbDerivedKey,
+    ULONG* pcbResult,
+    [[maybe_unused]] ULONG dwFlags
+) noexcept {
+    if (!hKey || !pbDerivedKey || cbDerivedKey == 0) return STATUS_INVALID_PARAMETER;
+    std::lock_guard<std::mutex> lock(s_cngKeyLock);
+    auto it = s_cngKeys.find(hKey);
+    if (it == s_cngKeys.end()) return STATUS_INVALID_HANDLE;
+
+    std::vector<uint8_t> saltOrContext;
+    if (pParameterList && pParameterList->pBuffers) {
+        for (ULONG i = 0; i < pParameterList->cBuffers; ++i) {
+            if (pParameterList->pBuffers[i].pvBuffer && pParameterList->pBuffers[i].cbBuffer > 0) {
+                const auto* p = reinterpret_cast<const uint8_t*>(pParameterList->pBuffers[i].pvBuffer);
+                saltOrContext.insert(saltOrContext.end(), p, p + pParameterList->pBuffers[i].cbBuffer);
+            }
+        }
+    }
+    if (saltOrContext.empty()) {
+        saltOrContext.push_back(0x01);
+    }
+
+    std::span<const uint8_t> keySpan(it->second->secret.data(), it->second->secret.size());
+    auto hash = HmacSha256::compute(keySpan, saltOrContext);
+
+    uint32_t copyLen = std::min<uint32_t>(cbDerivedKey, 32);
+    std::memcpy(pbDerivedKey, hash.data(), copyLen);
+    if (cbDerivedKey > copyLen) {
+        std::memset(pbDerivedKey + copyLen, 0, cbDerivedKey - copyLen);
+    }
+    if (pcbResult) *pcbResult = copyLen;
+    return STATUS_SUCCESS;
+}
+
 // ============================================================================
 // 10. SCM Driver & Module Registration for cng.sys
 // ============================================================================
@@ -1744,10 +1825,14 @@ inline void InitializeCngKernelDriver() {
     ldr.registerExport("cng.sys", "BCryptSecretAgreement", reinterpret_cast<void*>(BCryptSecretAgreement));
     ldr.registerExport("cng.sys", "BCryptDestroySecret", reinterpret_cast<void*>(BCryptDestroySecret));
     ldr.registerExport("cng.sys", "BCryptDeriveKey", reinterpret_cast<void*>(BCryptDeriveKey));
+    ldr.registerExport("cng.sys", "BCryptDeriveKeyPBKDF2", reinterpret_cast<void*>(BCryptDeriveKeyPBKDF2));
+    ldr.registerExport("cng.sys", "BCryptKeyDerivation", reinterpret_cast<void*>(BCryptKeyDerivation));
 
     ldr.registerExport("bcrypt.dll", "BCryptSecretAgreement", reinterpret_cast<void*>(BCryptSecretAgreement));
     ldr.registerExport("bcrypt.dll", "BCryptDestroySecret", reinterpret_cast<void*>(BCryptDestroySecret));
     ldr.registerExport("bcrypt.dll", "BCryptDeriveKey", reinterpret_cast<void*>(BCryptDeriveKey));
+    ldr.registerExport("bcrypt.dll", "BCryptDeriveKeyPBKDF2", reinterpret_cast<void*>(BCryptDeriveKeyPBKDF2));
+    ldr.registerExport("bcrypt.dll", "BCryptKeyDerivation", reinterpret_cast<void*>(BCryptKeyDerivation));
 }
 
 } // namespace micant::km::crypto

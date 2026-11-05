@@ -2089,6 +2089,39 @@ inline NTSTATUS BCryptDeriveKey(
     return STATUS_SUCCESS;
 }
 
+inline NTSTATUS BCryptKeyDerivation(
+    BCRYPT_KEY_HANDLE hKey,
+    BCryptBufferDesc* pParameterList,
+    uint8_t* pbDerivedKey,
+    ULONG cbDerivedKey,
+    ULONG* pcbResult,
+    [[maybe_unused]] ULONG dwFlags
+) {
+    if (!hKey || !pbDerivedKey || cbDerivedKey == 0) return STATUS_INVALID_PARAMETER;
+    auto key = CipherKspEngine::get().getKey(hKey);
+    if (!key) return STATUS_INVALID_HANDLE;
+
+    std::vector<uint8_t> saltOrContext;
+    if (pParameterList && pParameterList->pBuffers) {
+        for (ULONG i = 0; i < pParameterList->cBuffers; ++i) {
+            if (pParameterList->pBuffers[i].pvBuffer && pParameterList->pBuffers[i].cbBuffer > 0) {
+                const auto* p = reinterpret_cast<const uint8_t*>(pParameterList->pBuffers[i].pvBuffer);
+                saltOrContext.insert(saltOrContext.end(), p, p + pParameterList->pBuffers[i].cbBuffer);
+            }
+        }
+    }
+    if (saltOrContext.empty()) saltOrContext.push_back(0x01);
+
+    auto hash = HmacSha256::compute(key->secret, saltOrContext);
+    uint32_t copyLen = std::min<uint32_t>(cbDerivedKey, 32);
+    std::memcpy(pbDerivedKey, hash.data(), copyLen);
+    if (cbDerivedKey > copyLen) {
+        std::memset(pbDerivedKey + copyLen, 0, cbDerivedKey - copyLen);
+    }
+    if (pcbResult) *pcbResult = copyLen;
+    return STATUS_SUCCESS;
+}
+
 inline NTSTATUS BCryptDestroyKey(BCRYPT_KEY_HANDLE hKey) {
     if (!hKey) return STATUS_INVALID_HANDLE;
     return CipherKspEngine::get().releaseKey(hKey) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
@@ -2345,6 +2378,7 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("bcrypt.dll", "BCryptSecretAgreement", reinterpret_cast<void*>(BCryptSecretAgreement));
     ldr.registerExport("bcrypt.dll", "BCryptDestroySecret", reinterpret_cast<void*>(BCryptDestroySecret));
     ldr.registerExport("bcrypt.dll", "BCryptDeriveKey", reinterpret_cast<void*>(BCryptDeriveKey));
+    ldr.registerExport("bcrypt.dll", "BCryptKeyDerivation", reinterpret_cast<void*>(BCryptKeyDerivation));
 
     // ncrypt.dll exports
     ldr.registerExport("ncrypt.dll", "NCryptOpenStorageProvider", reinterpret_cast<void*>(NCryptOpenStorageProvider));

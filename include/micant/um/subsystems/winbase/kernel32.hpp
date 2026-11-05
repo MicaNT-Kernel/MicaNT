@@ -97,6 +97,8 @@ using LPARAM    = intptr_t;
 using WPARAM    = uintptr_t;
 using ULONGLONG  = uint64_t;
 using PULONGLONG = uint64_t*;
+using ULONG64    = uint64_t;
+using PULONG64   = uint64_t*;
 using LONGLONG   = int64_t;
 using PLONGLONG  = int64_t*;
 using FARPROC    = intptr_t (*)();
@@ -7506,14 +7508,16 @@ inline BOOL WINAPI ReadConsoleOutputCharacterA([[maybe_unused]] HANDLE hConsoleO
     return TRUE;
 }
 
-inline BOOL WINAPI GetThreadGroupAffinity([[maybe_unused]] HANDLE hThread, void* GroupAffinity) noexcept {
-    if (!GroupAffinity) return FALSE;
-    struct GROUP_AFFINITY_MOCK {
-        uint64_t Mask{0x0F}; // 4 cores
-        uint16_t Group{0};
-        uint16_t Reserved[3]{0};
-    };
-    *reinterpret_cast<GROUP_AFFINITY_MOCK*>(GroupAffinity) = GROUP_AFFINITY_MOCK{};
+inline BOOL WINAPI GetThreadGroupAffinity([[maybe_unused]] HANDLE hThread, PGROUP_AFFINITY GroupAffinity) noexcept {
+    if (!GroupAffinity) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    GroupAffinity->Group = 0;
+    GroupAffinity->Mask = 0xFFFF;
+    GroupAffinity->Reserved[0] = 0;
+    GroupAffinity->Reserved[1] = 0;
+    GroupAffinity->Reserved[2] = 0;
     return TRUE;
 }
 
@@ -9310,19 +9314,27 @@ inline BOOL WriteProcessMemory(HANDLE /*hProcess*/, LPVOID lpBaseAddress, LPCVOI
     return TRUE;
 }
 
-inline BOOL QueryProcessCycleTime(HANDLE /*ProcessHandle*/, uint64_t* CycleTime) noexcept {
-    if (!CycleTime) return FALSE;
+inline BOOL WINAPI QueryProcessCycleTime(HANDLE /*ProcessHandle*/, PULONG64 CycleTime) noexcept {
+    if (!CycleTime) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    static std::atomic<uint64_t> s_procOffset{5000000ULL};
     LargeInteger qpc{};
     QueryPerformanceCounter(&qpc);
-    *CycleTime = static_cast<uint64_t>(qpc.quadPart) * 4200000000ULL / 10000000ULL;
+    *CycleTime = (static_cast<uint64_t>(qpc.quadPart) * 4200000000ULL / 10000000ULL) + s_procOffset.fetch_add(100000ULL);
     return TRUE;
 }
 
-inline BOOL QueryThreadCycleTime(HANDLE /*ThreadHandle*/, uint64_t* CycleTime) noexcept {
-    if (!CycleTime) return FALSE;
+inline BOOL WINAPI QueryThreadCycleTime(HANDLE /*ThreadHandle*/, PULONG64 CycleTime) noexcept {
+    if (!CycleTime) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    static std::atomic<uint64_t> s_cycleOffset{1000000ULL};
     LargeInteger qpc{};
     QueryPerformanceCounter(&qpc);
-    *CycleTime = (static_cast<uint64_t>(qpc.quadPart) * 4200000000ULL / 10000000ULL) / 8;
+    *CycleTime = (static_cast<uint64_t>(qpc.quadPart) * 4200000000ULL / 10000000ULL) / 8 + s_cycleOffset.fetch_add(50000ULL);
     return TRUE;
 }
 
@@ -9632,6 +9644,38 @@ inline BOOL WINAPI GetSystemCpuSetInformation(
         return FALSE;
     }
 
+    return TRUE;
+}
+
+enum FIRMWARE_TYPE {
+    FirmwareTypeUnknown = 0,
+    FirmwareTypeBios = 1,
+    FirmwareTypeUefi = 2,
+    FirmwareTypeMax = 3
+};
+
+inline BOOL WINAPI GetFirmwareType(FIRMWARE_TYPE* pFirmwareType) noexcept {
+    if (!pFirmwareType) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *pFirmwareType = FirmwareTypeUefi;
+    return TRUE;
+}
+
+
+inline BOOL WINAPI SetThreadGroupAffinity(HANDLE /*hThread*/, const GROUP_AFFINITY* GroupAffinity, PGROUP_AFFINITY PreviousGroupAffinity) noexcept {
+    if (!GroupAffinity) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (PreviousGroupAffinity) {
+        PreviousGroupAffinity->Group = 0;
+        PreviousGroupAffinity->Mask = 0xFFFF;
+        PreviousGroupAffinity->Reserved[0] = 0;
+        PreviousGroupAffinity->Reserved[1] = 0;
+        PreviousGroupAffinity->Reserved[2] = 0;
+    }
     return TRUE;
 }
 
@@ -10434,6 +10478,17 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetSystemCpuSetInformation", reinterpret_cast<void*>(GetSystemCpuSetInformation));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetSystemCpuSetInformation", reinterpret_cast<void*>(GetSystemCpuSetInformation));
     ldr.registerExport("api-ms-win-core-processthreads-l1-1-6.dll", "GetSystemCpuSetInformation", reinterpret_cast<void*>(GetSystemCpuSetInformation));
+    ldr.registerExport("kernel32.dll", "GetFirmwareType", reinterpret_cast<void*>(GetFirmwareType));
+    ldr.registerExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetFirmwareType", reinterpret_cast<void*>(GetFirmwareType));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-0.dll", "QueryThreadCycleTime", reinterpret_cast<void*>(QueryThreadCycleTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-0.dll", "QueryProcessCycleTime", reinterpret_cast<void*>(QueryProcessCycleTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryThreadCycleTime", reinterpret_cast<void*>(QueryThreadCycleTime));
+    ldr.registerExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryProcessCycleTime", reinterpret_cast<void*>(QueryProcessCycleTime));
+    ldr.registerExport("kernel32.dll", "SetThreadGroupAffinity", reinterpret_cast<void*>(SetThreadGroupAffinity));
+    ldr.registerExport("api-ms-win-core-processtopology-l1-1-0.dll", "GetThreadGroupAffinity", reinterpret_cast<void*>(GetThreadGroupAffinity));
+    ldr.registerExport("api-ms-win-core-processtopology-l1-1-0.dll", "SetThreadGroupAffinity", reinterpret_cast<void*>(SetThreadGroupAffinity));
+    ldr.registerExport("api-ms-win-core-processtopology-l1-2-0.dll", "GetThreadGroupAffinity", reinterpret_cast<void*>(GetThreadGroupAffinity));
+    ldr.registerExport("api-ms-win-core-processtopology-l1-2-0.dll", "SetThreadGroupAffinity", reinterpret_cast<void*>(SetThreadGroupAffinity));
     ldr.registerExport("kernel32.dll", "SetProcessMitigationPolicy", reinterpret_cast<void*>(SetProcessMitigationPolicy));
     ldr.registerExport("kernel32.dll", "GetProcessMitigationPolicy", reinterpret_cast<void*>(GetProcessMitigationPolicy));
     ldr.registerExport("kernel32.dll", "SetThreadSelectedCpuSets", reinterpret_cast<void*>(SetThreadSelectedCpuSets));

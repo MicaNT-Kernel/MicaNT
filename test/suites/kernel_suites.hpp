@@ -45075,3 +45075,281 @@ static void Test_Horizon220_PipelineLibrary_CpuSetInfo_MitigationPolicy_And_Secr
 
     std::cout << "[TEST] Suite 436: Horizon 220 - Pipeline Library, CPU Set Info, Mitigation Policies & Secret Agreement PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 437: Horizon 221 - Resource Allocation Info 1, Boot Environment Info, Thread Cycle Time & Key Derivation
+// ============================================================================
+static void Test_Horizon221_ResourceAllocationInfo1_BootEnvInfo_ThreadCycleTime_And_KeyDerivation_Suite() {
+    std::cout << "\n===============================================================================\n"
+              << "[TEST SUITE 437] Horizon 221: Resource Allocation Info 1, Boot Environment Info, Thread Cycle Time & Key Derivation\n"
+              << "===============================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: PrismX 3D12 Resource Allocation Info 1 & Sub-Allocation Alignment
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 1] Testing PrismX 3D12 Resource Allocation Info 1 & Sub-Allocation Alignment...\n";
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pDev = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_2, IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+        TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice creates ID3D12Device");
+
+        ID3D12Device4* pDev4 = nullptr;
+        hr = pDev->QueryInterface(IID_ID3D12Device4, reinterpret_cast<void**>(&pDev4));
+        TEST_ASSERT(hr == 0 && pDev4 != nullptr, "QueryInterface returns ID3D12Device4");
+
+        // 1.1 Set up 3 distinct resource descriptions
+        D3D12_RESOURCE_DESC descs[3]{};
+        // Resource 0: 128KB Vertex Buffer
+        descs[0].Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        descs[0].Alignment = 64 * 1024;
+        descs[0].Width = 128 * 1024;
+        descs[0].Height = 1;
+        descs[0].DepthOrArraySize = 1;
+        descs[0].MipLevels = 1;
+        descs[0].SampleDesc.Count = 1;
+        descs[0].Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        // Resource 1: 1024x1024 RGBA8 Texture2D (4MB, 64KB aligned)
+        descs[1].Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        descs[1].Alignment = 64 * 1024;
+        descs[1].Width = 1024;
+        descs[1].Height = 1024;
+        descs[1].DepthOrArraySize = 1;
+        descs[1].MipLevels = 1;
+        descs[1].SampleDesc.Count = 1;
+        descs[1].Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+        // Resource 2: 512x512 RGBA8 MSAA 4x Texture2D (requires 4MB alignment)
+        descs[2].Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        descs[2].Alignment = 4 * 1024 * 1024;
+        descs[2].Width = 512;
+        descs[2].Height = 512;
+        descs[2].DepthOrArraySize = 1;
+        descs[2].MipLevels = 1;
+        descs[2].SampleDesc.Count = 4;
+        descs[2].Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+        D3D12_RESOURCE_ALLOCATION_INFO1 allocInfos[3]{};
+        D3D12_RESOURCE_ALLOCATION_INFO totalAlloc = pDev4->GetResourceAllocationInfo1(0, 3, descs, allocInfos);
+
+        // 1.2 Validate per-resource sub-allocation offset & size
+        TEST_ASSERT(allocInfos[0].Offset == 0, "Resource 0 begins at heap offset 0");
+        TEST_ASSERT(allocInfos[0].Alignment == 64 * 1024, "Resource 0 alignment is 64KB");
+        TEST_ASSERT(allocInfos[0].SizeInBytes == 128 * 1024, "Resource 0 size is 128KB");
+
+        TEST_ASSERT(allocInfos[1].Offset == 128 * 1024, "Resource 1 begins at 128KB offset (64KB aligned)");
+        TEST_ASSERT(allocInfos[1].Alignment == 64 * 1024, "Resource 1 alignment is 64KB");
+        TEST_ASSERT(allocInfos[1].SizeInBytes == 4 * 1024 * 1024, "Resource 1 size is 4MB");
+
+        // Resource 2 requires 4MB alignment
+        TEST_ASSERT(allocInfos[2].Offset % (4 * 1024 * 1024) == 0, "Resource 2 offset is aligned to 4MB boundary");
+        TEST_ASSERT(allocInfos[2].Alignment == 4 * 1024 * 1024, "Resource 2 alignment is 4MB");
+
+        TEST_ASSERT(totalAlloc.Alignment == 4 * 1024 * 1024, "Total heap allocation alignment reflects max alignment (4MB)");
+        TEST_ASSERT(totalAlloc.SizeInBytes >= allocInfos[2].Offset + allocInfos[2].SizeInBytes, "Total heap size encompasses all suballocated resources");
+
+        pDev4->Release();
+        pDev->Release();
+
+        std::cout << "  [PASS] PrismX 3D12 Resource Allocation Info 1 & Sub-Allocation Alignment verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Windows NT System Boot Environment Information (Class 90) & Win32 GetFirmwareType
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 2] Testing SystemBootEnvironmentInformation (Class 90) & GetFirmwareType...\n";
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        // 2.1 NtQuerySystemInformation(90) probe with zero buffer
+        ULONG retLen = 0;
+        micant::NtStatus st = NtQuerySystemInformation_Export(90, nullptr, 0, &retLen);
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(90) returns InfoLengthMismatch on zero buffer");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION), "Returned length equals sizeof(SYSTEM_BOOT_ENVIRONMENT_INFORMATION)");
+
+        // 2.2 Query boot environment information
+        std::vector<uint8_t> bootBuf(retLen, 0);
+        st = NtQuerySystemInformation_Export(90, bootBuf.data(), static_cast<ULONG>(bootBuf.size()), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(90) succeeds with allocated buffer");
+
+        auto* pBootInfo = reinterpret_cast<SYSTEM_BOOT_ENVIRONMENT_INFORMATION*>(bootBuf.data());
+        TEST_ASSERT(pBootInfo->FirmwareType == 2, "FirmwareType reports FirmwareTypeUefi (2)");
+        TEST_ASSERT((pBootInfo->BootFlags & 0x01) != 0, "BootFlags reports SecureBoot enabled (bit 0)");
+        TEST_ASSERT((pBootInfo->BootFlags & 0x02) != 0, "BootFlags reports MeasuredBoot enabled (bit 1)");
+        TEST_ASSERT((pBootInfo->BootFlags & 0x04) != 0, "BootFlags reports ELAM drivers loaded (bit 2)");
+
+        // 2.3 Win32 GetFirmwareType
+        FIRMWARE_TYPE fwType = FirmwareTypeUnknown;
+        BOOL bRes = GetFirmwareType(&fwType);
+        TEST_ASSERT(bRes == TRUE && fwType == FirmwareTypeUefi, "GetFirmwareType reports FirmwareTypeUefi");
+
+        // 2.4 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetFirmwareType") != nullptr, "kernel32.dll exports GetFirmwareType");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-sysinfo-l1-2-0.dll", "GetFirmwareType") != nullptr, "api-ms-win-core-sysinfo-l1-2-0.dll exports GetFirmwareType");
+
+        std::cout << "  [PASS] SystemBootEnvironmentInformation (Class 90) & GetFirmwareType verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Thread Cycle Time & Thread Group Affinity Introspection
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 3] Testing Thread Cycle Time & Thread Group Affinity...\n";
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        // 3.1 QueryThreadCycleTime
+        ULONG64 cycles1 = 0;
+        BOOL bRes = QueryThreadCycleTime(GetCurrentThread(), &cycles1);
+        TEST_ASSERT(bRes == TRUE && cycles1 > 0, "QueryThreadCycleTime succeeds with non-zero cycle count");
+
+        ULONG64 cycles2 = 0;
+        bRes = QueryThreadCycleTime(GetCurrentThread(), &cycles2);
+        TEST_ASSERT(bRes == TRUE && cycles2 > cycles1, "QueryThreadCycleTime monotonically advances");
+
+        // 3.2 QueryProcessCycleTime
+        ULONG64 procCycles = 0;
+        bRes = QueryProcessCycleTime(GetCurrentProcess(), &procCycles);
+        TEST_ASSERT(bRes == TRUE && procCycles > 0, "QueryProcessCycleTime succeeds with non-zero cycle count");
+
+        // 3.3 GetThreadGroupAffinity & SetThreadGroupAffinity
+        GROUP_AFFINITY grpAff{};
+        bRes = GetThreadGroupAffinity(GetCurrentThread(), &grpAff);
+        TEST_ASSERT(bRes == TRUE, "GetThreadGroupAffinity retrieves active group affinity");
+        TEST_ASSERT(grpAff.Group == 0, "Thread affinity is assigned to Processor Group 0");
+        TEST_ASSERT(grpAff.Mask == 0xFFFF, "Thread affinity mask covers all 16 cores");
+
+        GROUP_AFFINITY newGrp{};
+        newGrp.Group = 0;
+        newGrp.Mask = 0x00FF; // P-cores only
+        GROUP_AFFINITY prevGrp{};
+        bRes = SetThreadGroupAffinity(GetCurrentThread(), &newGrp, &prevGrp);
+        TEST_ASSERT(bRes == TRUE, "SetThreadGroupAffinity updates group affinity");
+        TEST_ASSERT(prevGrp.Mask == 0xFFFF, "Previous group affinity mask preserved");
+
+        // 3.4 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryThreadCycleTime") != nullptr, "kernel32.dll exports QueryThreadCycleTime");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryProcessCycleTime") != nullptr, "kernel32.dll exports QueryProcessCycleTime");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-realtime-l1-1-0.dll", "QueryThreadCycleTime") != nullptr, "api-ms-win-core-realtime-l1-1-0.dll exports QueryThreadCycleTime");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-realtime-l1-1-1.dll", "QueryThreadCycleTime") != nullptr, "api-ms-win-core-realtime-l1-1-1.dll exports QueryThreadCycleTime");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetThreadGroupAffinity") != nullptr, "kernel32.dll exports GetThreadGroupAffinity");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetThreadGroupAffinity") != nullptr, "kernel32.dll exports SetThreadGroupAffinity");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processtopology-l1-1-0.dll", "GetThreadGroupAffinity") != nullptr, "api-ms-win-core-processtopology-l1-1-0.dll exports GetThreadGroupAffinity");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-processtopology-l1-2-0.dll", "GetThreadGroupAffinity") != nullptr, "api-ms-win-core-processtopology-l1-2-0.dll exports GetThreadGroupAffinity");
+
+        std::cout << "  [PASS] Thread Cycle Time & Thread Group Affinity verified.\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt PBKDF2 Key Derivation & HKDF HMAC-SHA256
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [Pillar 4] Testing BCrypt PBKDF2 Key Derivation & HKDF HMAC-SHA256...\n";
+        using namespace micant::km::crypto;
+
+        InitializeCngKernelDriver();
+
+        // 4.1 BCryptDeriveKeyPBKDF2 deterministic test
+        const char password[] = "MicaNT_Master_Key_Password";
+        const char salt[] = "MicaNT_Crypto_Salt_2026";
+        uint8_t derivedKey1[32]{};
+        uint8_t derivedKey2[32]{};
+
+        NTSTATUS st = BCryptDeriveKeyPBKDF2(
+            nullptr,
+            reinterpret_cast<const uint8_t*>(password),
+            sizeof(password) - 1,
+            reinterpret_cast<const uint8_t*>(salt),
+            sizeof(salt) - 1,
+            100, // 100 iterations
+            derivedKey1,
+            sizeof(derivedKey1),
+            0
+        );
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDeriveKeyPBKDF2 derives key successfully");
+
+        st = BCryptDeriveKeyPBKDF2(
+            nullptr,
+            reinterpret_cast<const uint8_t*>(password),
+            sizeof(password) - 1,
+            reinterpret_cast<const uint8_t*>(salt),
+            sizeof(salt) - 1,
+            100,
+            derivedKey2,
+            sizeof(derivedKey2),
+            0
+        );
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDeriveKeyPBKDF2 re-derives key successfully");
+        TEST_ASSERT(std::memcmp(derivedKey1, derivedKey2, 32) == 0, "PBKDF2 key derivation is 100% deterministic and reproducible");
+
+        // Verify different password derives different key
+        const char diffPass[] = "MicaNT_Different_Password";
+        uint8_t derivedKeyDiff[32]{};
+        st = BCryptDeriveKeyPBKDF2(
+            nullptr,
+            reinterpret_cast<const uint8_t*>(diffPass),
+            sizeof(diffPass) - 1,
+            reinterpret_cast<const uint8_t*>(salt),
+            sizeof(salt) - 1,
+            100,
+            derivedKeyDiff,
+            sizeof(derivedKeyDiff),
+            0
+        );
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDeriveKeyPBKDF2 succeeds with distinct password");
+        TEST_ASSERT(std::memcmp(derivedKey1, derivedKeyDiff, 32) != 0, "Distinct password produces distinct derived key");
+
+        // 4.2 BCryptKeyDerivation test
+        uint8_t masterKeyBytes[32]{};
+        for (uint32_t i = 0; i < 32; ++i) masterKeyBytes[i] = static_cast<uint8_t>(0xC0 + i);
+
+        BCRYPT_KEY_HANDLE hMasterKey = nullptr;
+        st = BCryptImportKey(nullptr, nullptr, nullptr, &hMasterKey, nullptr, 0, masterKeyBytes, sizeof(masterKeyBytes), 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && hMasterKey != nullptr, "BCryptImportKey imports master key");
+
+        const char kdfContext[] = "Warzone_AntiCheat_Telemetry_Channel_Key";
+        BCryptBuffer paramBuf{
+            .cbBuffer = static_cast<ULONG>(sizeof(kdfContext) - 1),
+            .BufferType = 1,
+            .pvBuffer = const_cast<char*>(kdfContext)
+        };
+        BCryptBufferDesc paramDesc{
+            .ulVersion = 0,
+            .cBuffers = 1,
+            .pBuffers = &paramBuf
+        };
+
+        uint8_t hkdfKey[32]{};
+        ULONG resultLen = 0;
+        st = BCryptKeyDerivation(hMasterKey, &paramDesc, hkdfKey, sizeof(hkdfKey), &resultLen, 0);
+        TEST_ASSERT(st == STATUS_SUCCESS && resultLen == 32, "BCryptKeyDerivation derives context-bound cryptographic key");
+
+        st = BCryptDestroyKey(hMasterKey);
+        TEST_ASSERT(st == STATUS_SUCCESS, "BCryptDestroyKey destroys master key");
+
+        // 4.3 Loader Exports
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptDeriveKeyPBKDF2") != nullptr, "cng.sys exports BCryptDeriveKeyPBKDF2");
+        TEST_ASSERT(ldr.getExport("cng.sys", "BCryptKeyDerivation") != nullptr, "cng.sys exports BCryptKeyDerivation");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDeriveKeyPBKDF2") != nullptr, "bcrypt.dll exports BCryptDeriveKeyPBKDF2");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptKeyDerivation") != nullptr, "bcrypt.dll exports BCryptKeyDerivation");
+
+        std::cout << "  [PASS] BCrypt PBKDF2 Key Derivation & HKDF HMAC-SHA256 verified.\n";
+    }
+
+    std::cout << "[HORIZON 221] Resource Allocation Info 1, Boot Environment Info, Thread Cycle Time & Key Derivation Summary:\n"
+              << "    Pillar 1: PrismX 3D12 Resource Allocation Info 1 & Sub-Allocation Alignment OK\n"
+              << "    Pillar 2: NT System Boot Environment Info (Class 90) & GetFirmwareType OK\n"
+              << "    Pillar 3: Win32 Thread Cycle Time & Thread Group Affinity OK\n"
+              << "    Pillar 4: BCrypt PBKDF2 Key Derivation & HKDF HMAC-SHA256 OK\n";
+
+    std::cout << "[TEST] Suite 437: Horizon 221 - Resource Allocation Info 1, Boot Environment Info, Thread Cycle Time & Key Derivation PASSED." << std::endl;
+}
