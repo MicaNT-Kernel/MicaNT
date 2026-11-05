@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite451") {
+        RUN_TEST(Test_Horizon235_Device12to14_ShadowStackBuildVersion_CallbackReturns_And_Sha3Family_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite450") {
         RUN_TEST(Test_Horizon234_Device11Options25_SystemInfo219220_ThreadpoolCleanupGroup_And_Sha3_Suite);
         return g_FailedTests;
@@ -2256,6 +2260,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon232_CommandList8Options23_RamdiskIpmi_ThreadpoolPriority_And_Sp80056AConcatKdf_Suite);
     RUN_TEST(Test_Horizon233_CommandList10Options24_CodeIntegrityPolicyNuma_ThreadpoolWait_And_HkdfSha256_Suite);
     RUN_TEST(Test_Horizon234_Device11Options25_SystemInfo219220_ThreadpoolCleanupGroup_And_Sha3_Suite);
+    RUN_TEST(Test_Horizon235_Device12to14_ShadowStackBuildVersion_CallbackReturns_And_Sha3Family_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

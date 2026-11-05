@@ -49270,3 +49270,390 @@ inline void Test_Horizon234_Device11Options25_SystemInfo219220_ThreadpoolCleanup
 
     std::cout << "[TEST] Suite 450: Horizon 234 - Direct3D 12 ID3D12Device11 & Options 25, SystemInfo 219/220, Threadpool Cleanup Groups & FIPS 202 SHA-3 PASSED." << std::endl;
 }
+
+inline void Test_Horizon235_Device12to14_ShadowStackBuildVersion_CallbackReturns_And_Sha3Family_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 451: Horizon 235 - Direct3D 12 ID3D12Device12-14 & TryCreate, SystemInfo 221/222, Threadpool Callback Returns & Complete SHA-3/SHAKE\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device12, 13, 14 & Fail-Safe TryCreate Methods
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device12-14 & TryCreate Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. QueryInterface for ID3D12Device12 & GetResourceAllocationInfo3
+        ID3D12Device12* pDev12 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device12, reinterpret_cast<void**>(&pDev12));
+        TEST_ASSERT(hr == 0 && pDev12 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device12 succeeds");
+
+        D3D12_RESOURCE_DESC1 resDesc{};
+        resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        resDesc.Width = 1920;
+        resDesc.Height = 1080;
+        resDesc.DepthOrArraySize = 1;
+        resDesc.MipLevels = 1;
+        resDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        resDesc.SampleDesc.Count = 1;
+        resDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+        D3D12_RESOURCE_ALLOCATION_INFO1 allocInfo{};
+        D3D12_RESOURCE_ALLOCATION_INFO info = pDev12->GetResourceAllocationInfo3(0, 1, &resDesc, nullptr, nullptr, &allocInfo);
+        TEST_ASSERT(info.SizeInBytes > 0, "GetResourceAllocationInfo3 calculates positive byte size");
+        TEST_ASSERT(allocInfo.SizeInBytes == info.SizeInBytes, "D3D12_RESOURCE_ALLOCATION_INFO1 matches allocation size");
+        pDev12->Release();
+
+        // 2. QueryInterface for ID3D12Device13 & OpenExistingHeapFromAddress1
+        ID3D12Device13* pDev13 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device13, reinterpret_cast<void**>(&pDev13));
+        TEST_ASSERT(hr == 0 && pDev13 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device13 succeeds");
+
+        void* pDummyAddress = reinterpret_cast<void*>(0x00007FF700000000ULL);
+        ID3D12Heap* pHeap = nullptr;
+        hr = pDev13->OpenExistingHeapFromAddress1(pDummyAddress, 65536ULL, IID_ID3D12Heap, reinterpret_cast<void**>(&pHeap));
+        TEST_ASSERT(hr == 0 && pHeap != nullptr, "OpenExistingHeapFromAddress1 succeeds");
+        pHeap->Release();
+        pDev13->Release();
+
+        // 3. QueryInterface for ID3D12Device14 & TryCreate Methods
+        ID3D12Device14* pDev14 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device14, reinterpret_cast<void**>(&pDev14));
+        TEST_ASSERT(hr == 0 && pDev14 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device14 succeeds");
+
+        ID3D12Device14* pDev14Alt = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device14Alt, reinterpret_cast<void**>(&pDev14Alt));
+        TEST_ASSERT(hr == 0 && pDev14Alt != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device14Alt succeeds");
+        pDev14Alt->Release();
+
+        D3D12_CPU_DESCRIPTOR_HANDLE destDesc{ 0x3000 };
+        hr = pDev14->TryCreateShaderResourceView(nullptr, nullptr, destDesc);
+        TEST_ASSERT(hr == 0, "TryCreateShaderResourceView returns S_OK (0)");
+
+        hr = pDev14->TryCreateUnorderedAccessView(nullptr, nullptr, nullptr, destDesc);
+        TEST_ASSERT(hr == 0, "TryCreateUnorderedAccessView returns S_OK (0)");
+
+        hr = pDev14->TryCreateConstantBufferView(nullptr, destDesc);
+        TEST_ASSERT(hr == 0, "TryCreateConstantBufferView returns S_OK (0)");
+
+        D3D12_SAMPLER_DESC2 sDesc{};
+        sDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        hr = pDev14->TryCreateSampler2(&sDesc, destDesc);
+        TEST_ASSERT(hr == 0, "TryCreateSampler2 returns S_OK (0)");
+
+        pDev14->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 221 (Shadow Stack) & 222 (Build Version)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 221 & 222...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 221: SystemShadowStackInformation
+        ULONG retLen = 0;
+        SYSTEM_SHADOW_STACK_INFORMATION shadowInfo{};
+        NtStatus status = NtQuerySystemInformation_Export(
+            221,
+            &shadowInfo,
+            sizeof(shadowInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 221 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SHADOW_STACK_INFORMATION), "Class 221 returns sizeof(SYSTEM_SHADOW_STACK_INFORMATION)");
+        TEST_ASSERT(shadowInfo.CetCapable == 1, "Class 221 CetCapable is 1");
+        TEST_ASSERT(shadowInfo.UserCetAllowed == 1, "Class 221 UserCetAllowed is 1");
+        TEST_ASSERT(shadowInfo.KernelCetEnabled == 1, "Class 221 KernelCetEnabled is 1");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            221,
+            &shadowInfo,
+            sizeof(shadowInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 221 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SHADOW_STACK_INFORMATION), "Class 221 returns required length on mismatch");
+
+        // 2. Class 222: SystemBuildVersionInformation
+        SYSTEM_BUILD_VERSION_INFORMATION buildInfo{};
+        status = NtQuerySystemInformation_Export(
+            222,
+            &buildInfo,
+            sizeof(buildInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 222 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_BUILD_VERSION_INFORMATION), "Class 222 returns sizeof(SYSTEM_BUILD_VERSION_INFORMATION)");
+        TEST_ASSERT(buildInfo.OsMajorVersion == 10, "Class 222 OsMajorVersion is 10");
+        TEST_ASSERT(buildInfo.NtBuildNumber == 26100, "Class 222 NtBuildNumber is 26100");
+        TEST_ASSERT(buildInfo.NtBuildQfe == 1742, "Class 222 NtBuildQfe is 1742");
+        TEST_ASSERT(std::strcmp(reinterpret_cast<const char*>(buildInfo.NtBuildArch), "amd64") == 0, "Class 222 NtBuildArch is amd64");
+        TEST_ASSERT(buildInfo.Flags == 0x00000001, "Class 222 Flags has IsTopLevel set");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            222,
+            &buildInfo,
+            sizeof(buildInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 222 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_BUILD_VERSION_INFORMATION), "Class 222 returns required length on mismatch");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 Extended Thread Pool Callback Synchronization
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Win32 Extended Thread Pool Callback Synchronization...\n";
+
+        using namespace micant::win32;
+
+        InitializeWin32SubsystemExports();
+
+        // 1. Instance synchronization actions
+        TP_CALLBACK_INSTANCE inst{};
+        CRITICAL_SECTION cs{};
+        InitializeCriticalSection(&cs);
+
+        HANDLE hMutex = CreateMutexW(nullptr, FALSE, nullptr);
+        HANDLE hSem = CreateSemaphoreW(nullptr, 0, 10, nullptr);
+        HANDLE hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+
+        LeaveCriticalSectionWhenCallbackReturns(&inst, &cs);
+        ReleaseMutexWhenCallbackReturns(&inst, hMutex);
+        ReleaseSemaphoreWhenCallbackReturns(&inst, hSem, 2);
+        SetEventWhenCallbackReturns(&inst, hEvent);
+        DisassociateCurrentThreadFromCallback(&inst);
+
+        TEST_ASSERT(inst.Disassociated == true, "DisassociateCurrentThreadFromCallback marks instance disassociated");
+        TEST_ASSERT(CallbackMayRunLong(&inst) == TRUE, "CallbackMayRunLong returns TRUE");
+
+        // Execute cleanup
+        inst.runCleanup();
+        TEST_ASSERT(WaitForSingleObject(hEvent, 0) == WAIT_OBJECT_0, "SetEventWhenCallbackReturns signaled event");
+        TEST_ASSERT(inst.SemaphoresToRelease.empty(), "ReleaseSemaphoreWhenCallbackReturns processed pending semaphores");
+        TEST_ASSERT(inst.EventsToSet.empty(), "SetEventWhenCallbackReturns processed pending events");
+        TEST_ASSERT(inst.MutexesToRelease.empty(), "ReleaseMutexWhenCallbackReturns processed pending mutexes");
+        TEST_ASSERT(inst.CriticalSectionsToLeave.empty(), "LeaveCriticalSectionWhenCallbackReturns processed critical sections");
+
+        CloseHandle(hEvent);
+        CloseHandle(hSem);
+        CloseHandle(hMutex);
+        DeleteCriticalSection(&cs);
+
+        // 2. BindIoCompletionCallback
+        auto dummyCallback = [](DWORD, DWORD, LPOVERLAPPED) {};
+        HANDLE dummyHandle = reinterpret_cast<HANDLE>(0x1234);
+        BOOL bBound = BindIoCompletionCallback(dummyHandle, dummyCallback, 0);
+        TEST_ASSERT(bBound == TRUE, "BindIoCompletionCallback succeeds for valid parameters");
+
+        // 3. Export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "LeaveCriticalSectionWhenCallbackReturns") != nullptr, "kernel32 exports LeaveCriticalSectionWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "ReleaseMutexWhenCallbackReturns") != nullptr, "kernel32 exports ReleaseMutexWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "ReleaseSemaphoreWhenCallbackReturns") != nullptr, "kernel32 exports ReleaseSemaphoreWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "SetEventWhenCallbackReturns") != nullptr, "kernel32 exports SetEventWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "DisassociateCurrentThreadFromCallback") != nullptr, "kernel32 exports DisassociateCurrentThreadFromCallback");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CallbackMayRunLong") != nullptr, "kernel32 exports CallbackMayRunLong");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "BindIoCompletionCallback") != nullptr, "kernel32 exports BindIoCompletionCallback");
+
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "LeaveCriticalSectionWhenCallbackReturns") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports LeaveCriticalSectionWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "ReleaseMutexWhenCallbackReturns") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports ReleaseMutexWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "ReleaseSemaphoreWhenCallbackReturns") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports ReleaseSemaphoreWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetEventWhenCallbackReturns") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports SetEventWhenCallbackReturns");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "DisassociateCurrentThreadFromCallback") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports DisassociateCurrentThreadFromCallback");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-l1-2-0.dll", "CallbackMayRunLong") != nullptr, "api-ms-win-core-threadpool-l1-2-0 exports CallbackMayRunLong");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "BindIoCompletionCallback") != nullptr, "api-ms-win-core-threadpool-legacy-l1-1-0 exports BindIoCompletionCallback");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Complete FIPS 202 SHA-3 Family (SHA3-384, SHA3-224) & SHAKE (128, 256)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] Complete FIPS 202 SHA-3 Family (SHA3-384, SHA3-224) & SHAKE...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        const uint8_t msgAbc[] = { 'a', 'b', 'c' };
+
+        // 1. SHA3-224 Canonical Vectors
+        const uint8_t expectedSha3_224_empty[28] = {
+            0x6b, 0x4e, 0x03, 0x42, 0x36, 0x67, 0xdb, 0xb7,
+            0x3b, 0x6e, 0x15, 0x45, 0x4f, 0x0e, 0xb1, 0xab,
+            0xd4, 0x59, 0x7f, 0x9a, 0x1b, 0x07, 0x8e, 0x3f,
+            0x5b, 0x5a, 0x6b, 0xc7
+        };
+        const uint8_t expectedSha3_224_abc[28] = {
+            0xe6, 0x42, 0x82, 0x4c, 0x3f, 0x8c, 0xf2, 0x4a,
+            0xd0, 0x92, 0x34, 0xee, 0x7d, 0x3c, 0x76, 0x6f,
+            0xc9, 0xa3, 0xa5, 0x16, 0x8d, 0x0c, 0x94, 0xad,
+            0x73, 0xb4, 0x6f, 0xdf
+        };
+
+        auto hashEmpty224 = Sha3_224::hash(std::span<const uint8_t>{});
+        TEST_ASSERT(hashEmpty224.size() == 28, "Sha3_224::hash returns 28 bytes");
+        TEST_ASSERT(std::memcmp(hashEmpty224.data(), expectedSha3_224_empty, 28) == 0,
+                    "Sha3_224(\"\") matches NIST canonical vector bit-exact");
+
+        auto hashAbc224 = Sha3_224::hash(std::span<const uint8_t>(msgAbc, 3));
+        TEST_ASSERT(hashAbc224.size() == 28, "Sha3_224::hash(\"abc\") returns 28 bytes");
+        TEST_ASSERT(std::memcmp(hashAbc224.data(), expectedSha3_224_abc, 28) == 0,
+                    "Sha3_224(\"abc\") matches NIST canonical vector bit-exact");
+
+        // 2. SHA3-384 Canonical Vectors
+        const uint8_t expectedSha3_384_empty[48] = {
+            0x0c, 0x63, 0xa7, 0x5b, 0x84, 0x5e, 0x4f, 0x7d, 0x01, 0x10, 0x7d, 0x85, 0x2e, 0x4c, 0x24, 0x85,
+            0xc5, 0x1a, 0x50, 0xaa, 0xaa, 0x94, 0xfc, 0x61, 0x99, 0x5e, 0x71, 0xbb, 0xee, 0x98, 0x3a, 0x2a,
+            0xc3, 0x71, 0x38, 0x31, 0x26, 0x4a, 0xdb, 0x47, 0xfb, 0x6b, 0xd1, 0xe0, 0x58, 0xd5, 0xf0, 0x04
+        };
+        const uint8_t expectedSha3_384_abc[48] = {
+            0xec, 0x01, 0x49, 0x82, 0x88, 0x51, 0x6f, 0xc9, 0x26, 0x45, 0x9f, 0x58, 0xe2, 0xc6, 0xad, 0x8d,
+            0xf9, 0xb4, 0x73, 0xcb, 0x0f, 0xc0, 0x8c, 0x25, 0x96, 0xda, 0x7c, 0xf0, 0xe4, 0x9b, 0xe4, 0xb2,
+            0x98, 0xd8, 0x8c, 0xea, 0x92, 0x7a, 0xc7, 0xf5, 0x39, 0xf1, 0xed, 0xf2, 0x28, 0x37, 0x6d, 0x25
+        };
+
+        auto hashEmpty384 = Sha3_384::hash(std::span<const uint8_t>{});
+        TEST_ASSERT(hashEmpty384.size() == 48, "Sha3_384::hash returns 48 bytes");
+        TEST_ASSERT(std::memcmp(hashEmpty384.data(), expectedSha3_384_empty, 48) == 0,
+                    "Sha3_384(\"\") matches NIST canonical vector bit-exact");
+
+        auto hashAbc384 = Sha3_384::hash(std::span<const uint8_t>(msgAbc, 3));
+        TEST_ASSERT(hashAbc384.size() == 48, "Sha3_384::hash(\"abc\") returns 48 bytes");
+        TEST_ASSERT(std::memcmp(hashAbc384.data(), expectedSha3_384_abc, 48) == 0,
+                    "Sha3_384(\"abc\") matches NIST canonical vector bit-exact");
+
+        // 3. SHAKE128 Canonical Vectors (32 bytes)
+        const uint8_t expectedShake128_empty[32] = {
+            0x7f, 0x9c, 0x2b, 0xa4, 0xe8, 0x8f, 0x82, 0x7d,
+            0x61, 0x60, 0x45, 0x50, 0x76, 0x05, 0x85, 0x3e,
+            0xd7, 0x3b, 0x80, 0x93, 0xf6, 0xef, 0xbc, 0x88,
+            0xeb, 0x1a, 0x6e, 0xac, 0xfa, 0x66, 0xef, 0x26
+        };
+        const uint8_t expectedShake128_abc[32] = {
+            0x58, 0x81, 0x09, 0x2d, 0xd8, 0x18, 0xbf, 0x5c,
+            0xf8, 0xa3, 0xdd, 0xb7, 0x93, 0xfb, 0xcb, 0xa7,
+            0x40, 0x97, 0xd5, 0xc5, 0x26, 0xa6, 0xd3, 0x5f,
+            0x97, 0xb8, 0x33, 0x51, 0x94, 0x0f, 0x2c, 0xc8
+        };
+
+        auto shake128Empty = Shake128::hash(std::span<const uint8_t>{}, 32);
+        TEST_ASSERT(shake128Empty.size() == 32, "Shake128::hash returns 32 bytes");
+        TEST_ASSERT(std::memcmp(shake128Empty.data(), expectedShake128_empty, 32) == 0,
+                    "Shake128(\"\") matches NIST canonical vector bit-exact");
+
+        auto shake128Abc = Shake128::hash(std::span<const uint8_t>(msgAbc, 3), 32);
+        TEST_ASSERT(shake128Abc.size() == 32, "Shake128::hash(\"abc\") returns 32 bytes");
+        TEST_ASSERT(std::memcmp(shake128Abc.data(), expectedShake128_abc, 32) == 0,
+                    "Shake128(\"abc\") matches NIST canonical vector bit-exact");
+
+        // 4. SHAKE256 Canonical Vectors (64 bytes)
+        const uint8_t expectedShake256_empty[64] = {
+            0x46, 0xb9, 0xdd, 0x2b, 0x0b, 0xa8, 0x8d, 0x13, 0x23, 0x3b, 0x3f, 0xeb, 0x74, 0x3e, 0xeb, 0x24,
+            0x3f, 0xcd, 0x52, 0xea, 0x62, 0xb8, 0x1b, 0x82, 0xb5, 0x0c, 0x27, 0x64, 0x6e, 0xd5, 0x76, 0x2f,
+            0xd7, 0x5d, 0xc4, 0xdd, 0xd8, 0xc0, 0xf2, 0x00, 0xcb, 0x05, 0x01, 0x9d, 0x67, 0xb5, 0x92, 0xf6,
+            0xfc, 0x82, 0x1c, 0x49, 0x47, 0x9a, 0xb4, 0x86, 0x40, 0x29, 0x2e, 0xac, 0xb3, 0xb7, 0xc4, 0xbe
+        };
+        const uint8_t expectedShake256_abc[64] = {
+            0x48, 0x33, 0x66, 0x60, 0x13, 0x60, 0xa8, 0x77, 0x1c, 0x68, 0x63, 0x08, 0x0c, 0xc4, 0x11, 0x4d,
+            0x8d, 0xb4, 0x45, 0x30, 0xf8, 0xf1, 0xe1, 0xee, 0x4f, 0x94, 0xea, 0x37, 0xe7, 0x8b, 0x57, 0x39,
+            0xd5, 0xa1, 0x5b, 0xef, 0x18, 0x6a, 0x53, 0x86, 0xc7, 0x57, 0x44, 0xc0, 0x52, 0x7e, 0x1f, 0xaa,
+            0x9f, 0x87, 0x26, 0xe4, 0x62, 0xa1, 0x2a, 0x4f, 0xeb, 0x06, 0xbd, 0x88, 0x01, 0xe7, 0x51, 0xe4
+        };
+
+        auto shake256Empty = Shake256::hash(std::span<const uint8_t>{}, 64);
+        TEST_ASSERT(shake256Empty.size() == 64, "Shake256::hash returns 64 bytes");
+        TEST_ASSERT(std::memcmp(shake256Empty.data(), expectedShake256_empty, 64) == 0,
+                    "Shake256(\"\") matches NIST canonical vector bit-exact");
+
+        auto shake256Abc = Shake256::hash(std::span<const uint8_t>(msgAbc, 3), 64);
+        TEST_ASSERT(shake256Abc.size() == 64, "Shake256::hash(\"abc\") returns 64 bytes");
+        TEST_ASSERT(std::memcmp(shake256Abc.data(), expectedShake256_abc, 64) == 0,
+                    "Shake256(\"abc\") matches NIST canonical vector bit-exact");
+
+        // 5. BCrypt API Integration across all algorithms
+        BCRYPT_ALG_HANDLE hAlg = nullptr;
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+
+        // SHA3-224 via BCrypt API
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA3_224_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SHA3-224");
+        BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 28, "BCrypt SHA3-224 hash length is 28");
+        BCryptGetProperty(hAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 144, "BCrypt SHA3-224 block length is 144");
+
+        BCRYPT_HASH_HANDLE hHash = nullptr;
+        BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash, const_cast<uint8_t*>(msgAbc), 3, 0);
+        uint8_t d224[28]{};
+        BCryptFinishHash(hHash, d224, sizeof(d224), 0);
+        TEST_ASSERT(std::memcmp(d224, expectedSha3_224_abc, 28) == 0, "BCrypt API SHA3-224 matches NIST vector");
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        // SHA3-384 via BCrypt API
+        status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA3_384_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SHA3-384");
+        BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 48, "BCrypt SHA3-384 hash length is 48");
+        BCryptGetProperty(hAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 104, "BCrypt SHA3-384 block length is 104");
+
+        BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash, const_cast<uint8_t*>(msgAbc), 3, 0);
+        uint8_t d384[48]{};
+        BCryptFinishHash(hHash, d384, sizeof(d384), 0);
+        TEST_ASSERT(std::memcmp(d384, expectedSha3_384_abc, 48) == 0, "BCrypt API SHA3-384 matches NIST vector");
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        // SHAKE128 via BCrypt API
+        status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHAKE128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SHAKE128");
+        BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt SHAKE128 default hash length is 32");
+        BCryptGetProperty(hAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt SHAKE128 block length is 168");
+
+        BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash, const_cast<uint8_t*>(msgAbc), 3, 0);
+        uint8_t dShake128[32]{};
+        BCryptFinishHash(hHash, dShake128, sizeof(dShake128), 0);
+        TEST_ASSERT(std::memcmp(dShake128, expectedShake128_abc, 32) == 0, "BCrypt API SHAKE128 matches NIST vector");
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+
+        // SHAKE256 via BCrypt API
+        status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHAKE256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAlg != nullptr, "BCryptOpenAlgorithmProvider succeeds for SHAKE256");
+        BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt SHAKE256 default hash length is 64");
+        BCryptGetProperty(hAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt SHAKE256 block length is 136");
+
+        BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash, const_cast<uint8_t*>(msgAbc), 3, 0);
+        uint8_t dShake256[64]{};
+        BCryptFinishHash(hHash, dShake256, sizeof(dShake256), 0);
+        TEST_ASSERT(std::memcmp(dShake256, expectedShake256_abc, 64) == 0, "BCrypt API SHAKE256 matches NIST vector");
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+
+    std::cout << "  Horizon 235 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device12-14 & TryCreate Architecture OK\n"
+              << "    Pillar 2: NT Native Classes 221 (SystemShadowStack) & 222 (SystemBuildVersion) OK\n"
+              << "    Pillar 3: Win32 Extended Thread Pool Callback Synchronization & I/O Binding OK\n"
+              << "    Pillar 4: Complete FIPS 202 SHA-3 Family (SHA3-384, SHA3-224) & SHAKE (128, 256) OK\n";
+
+    std::cout << "[TEST] Suite 451: Horizon 235 - Direct3D 12 ID3D12Device12-14 & TryCreate, SystemInfo 221/222, Threadpool Callback Returns & Complete SHA-3/SHAKE PASSED." << std::endl;
+}

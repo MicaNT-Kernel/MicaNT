@@ -1583,6 +1583,45 @@ struct SYSTEM_VIRTUALIZATION_INFORMATION {
 };
 using PSYSTEM_VIRTUALIZATION_INFORMATION = SYSTEM_VIRTUALIZATION_INFORMATION*;
 
+// Class 221: SystemShadowStackInformation
+struct SYSTEM_SHADOW_STACK_INFORMATION {
+    union {
+        ULONG Flags;
+        struct {
+            ULONG CetCapable : 1;
+            ULONG UserCetAllowed : 1;
+            ULONG KernelCetEnabled : 1;
+            ULONG KernelCetAuditModeEnabled : 1;
+            ULONG Reserved : 28;
+        };
+    };
+};
+using PSYSTEM_SHADOW_STACK_INFORMATION = SYSTEM_SHADOW_STACK_INFORMATION*;
+
+// Class 222: SystemBuildVersionInformation
+struct SYSTEM_BUILD_VERSION_INFORMATION {
+    ULONG LayerNumber;
+    ULONG LayerCount;
+    ULONG OsMajorVersion;
+    ULONG OsMinorVersion;
+    ULONG NtBuildNumber;
+    ULONG NtBuildQfe;
+    unsigned char LayerName[128];
+    unsigned char NtBuildBranch[128];
+    unsigned char NtBuildLab[128];
+    unsigned char NtBuildStamp[128];
+    unsigned char NtBuildArch[64];
+    union {
+        ULONG Flags;
+        struct {
+            ULONG IsTopLevel : 1;
+            ULONG IsEmbedded : 1;
+            ULONG Reserved : 30;
+        };
+    };
+};
+using PSYSTEM_BUILD_VERSION_INFORMATION = SYSTEM_BUILD_VERSION_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3117,6 +3156,38 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             pInfo->VirtualizationFlags = 0x00000003; // HypervisorPresent | SvmCapable
             pInfo->HypervisorVendorId = 0x4143494D;   // 'MICA'
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_VIRTUALIZATION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 221: { // SystemShadowStackInformation (Class 221)
+            if (SystemInformationLength < sizeof(SYSTEM_SHADOW_STACK_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SHADOW_STACK_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_SHADOW_STACK_INFORMATION*>(SystemInformation);
+            pInfo->Flags = 0x00000007; // CetCapable | UserCetAllowed | KernelCetEnabled
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SHADOW_STACK_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 222: { // SystemBuildVersionInformation (Class 222)
+            if (SystemInformationLength < sizeof(SYSTEM_BUILD_VERSION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BUILD_VERSION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_BUILD_VERSION_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->LayerNumber = 1;
+            pInfo->LayerCount = 1;
+            pInfo->OsMajorVersion = 10;
+            pInfo->OsMinorVersion = 0;
+            pInfo->NtBuildNumber = 26100;
+            pInfo->NtBuildQfe = 1742;
+            std::strncpy(reinterpret_cast<char*>(pInfo->LayerName), "BaseOS", sizeof(pInfo->LayerName) - 1);
+            std::strncpy(reinterpret_cast<char*>(pInfo->NtBuildBranch), "ge_release", sizeof(pInfo->NtBuildBranch) - 1);
+            std::strncpy(reinterpret_cast<char*>(pInfo->NtBuildLab), "26100.1.amd64fre.ge_release.240331-1435", sizeof(pInfo->NtBuildLab) - 1);
+            std::strncpy(reinterpret_cast<char*>(pInfo->NtBuildStamp), "240331-1435", sizeof(pInfo->NtBuildStamp) - 1);
+            std::strncpy(reinterpret_cast<char*>(pInfo->NtBuildArch), "amd64", sizeof(pInfo->NtBuildArch) - 1);
+            pInfo->Flags = 0x00000001; // IsTopLevel
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BUILD_VERSION_INFORMATION);
             return NtStatus::Success;
         }
         default: {

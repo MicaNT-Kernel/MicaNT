@@ -61,7 +61,11 @@ inline constexpr const wchar_t* BCRYPT_SP800108_PIPELINE_HMAC_ALGORITHM = L"SP80
 inline constexpr const wchar_t* BCRYPT_SP80056A_CONCAT_ALGORITHM        = L"SP800_56A_CONCAT";
 inline constexpr const wchar_t* BCRYPT_HKDF_ALGORITHM                   = L"HKDF";
 inline constexpr const wchar_t* BCRYPT_SHA3_256_ALGORITHM               = L"SHA3-256";
+inline constexpr const wchar_t* BCRYPT_SHA3_384_ALGORITHM               = L"SHA3-384";
 inline constexpr const wchar_t* BCRYPT_SHA3_512_ALGORITHM               = L"SHA3-512";
+inline constexpr const wchar_t* BCRYPT_SHA3_224_ALGORITHM               = L"SHA3-224";
+inline constexpr const wchar_t* BCRYPT_SHAKE128_ALGORITHM                = L"SHAKE128";
+inline constexpr const wchar_t* BCRYPT_SHAKE256_ALGORITHM                = L"SHAKE256";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -1025,6 +1029,262 @@ public:
         update(ctx, data);
         std::vector<uint8_t> out(DIGEST_SIZE);
         final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+};
+
+class Sha3_384 {
+public:
+    static constexpr size_t DIGEST_SIZE = 48;
+    static constexpr size_t RATE        = 104; // (1600 - 768) / 8 = 104 bytes
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{0};
+    };
+
+    static void init(Context& ctx) noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        ctx.buffer[ctx.buf_pos++] = 0x06;
+        while (ctx.buf_pos < RATE) {
+            ctx.buffer[ctx.buf_pos++] = 0x00;
+        }
+        ctx.buffer[RATE - 1] |= 0x80;
+
+        for (size_t i = 0; i < RATE; ++i) {
+            reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+        }
+        KeccakCore::permute(ctx.state);
+
+        std::memcpy(digest.data(), ctx.state, DIGEST_SIZE);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+};
+
+class Sha3_224 {
+public:
+    static constexpr size_t DIGEST_SIZE = 28;
+    static constexpr size_t RATE        = 144; // (1600 - 448) / 8 = 144 bytes
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{0};
+    };
+
+    static void init(Context& ctx) noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        ctx.buffer[ctx.buf_pos++] = 0x06;
+        while (ctx.buf_pos < RATE) {
+            ctx.buffer[ctx.buf_pos++] = 0x00;
+        }
+        ctx.buffer[RATE - 1] |= 0x80;
+
+        for (size_t i = 0; i < RATE; ++i) {
+            reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+        }
+        KeccakCore::permute(ctx.state);
+
+        std::memcpy(digest.data(), ctx.state, DIGEST_SIZE);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+};
+
+class Shake128 {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE                = 168; // (1600 - 256) / 8 = 168 bytes
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{0};
+        bool     squeezed{false};
+        size_t   squeeze_pos{0};
+    };
+
+    static void init(Context& ctx) noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+        ctx.squeezed = false;
+        ctx.squeeze_pos = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void squeeze(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.squeezed) {
+            ctx.buffer[ctx.buf_pos++] = 0x1F; // SHAKE domain separation
+            while (ctx.buf_pos < RATE) {
+                ctx.buffer[ctx.buf_pos++] = 0x00;
+            }
+            ctx.buffer[RATE - 1] |= 0x80;
+
+            for (size_t i = 0; i < RATE; ++i) {
+                reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+            }
+            KeccakCore::permute(ctx.state);
+            ctx.squeezed = true;
+            ctx.squeeze_pos = 0;
+        }
+
+        size_t out_idx = 0;
+        while (out_idx < out.size()) {
+            if (ctx.squeeze_pos == RATE) {
+                KeccakCore::permute(ctx.state);
+                ctx.squeeze_pos = 0;
+            }
+            size_t take = std::min(out.size() - out_idx, RATE - ctx.squeeze_pos);
+            std::memcpy(out.data() + out_idx, reinterpret_cast<const uint8_t*>(ctx.state) + ctx.squeeze_pos, take);
+            out_idx += take;
+            ctx.squeeze_pos += take;
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, size_t outLen = DEFAULT_DIGEST_SIZE) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        squeeze(ctx, out);
+        return out;
+    }
+};
+
+class Shake256 {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 64;
+    static constexpr size_t RATE                = 136; // (1600 - 512) / 8 = 136 bytes
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{0};
+        bool     squeezed{false};
+        size_t   squeeze_pos{0};
+    };
+
+    static void init(Context& ctx) noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+        ctx.squeezed = false;
+        ctx.squeeze_pos = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void squeeze(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.squeezed) {
+            ctx.buffer[ctx.buf_pos++] = 0x1F; // SHAKE domain separation
+            while (ctx.buf_pos < RATE) {
+                ctx.buffer[ctx.buf_pos++] = 0x00;
+            }
+            ctx.buffer[RATE - 1] |= 0x80;
+
+            for (size_t i = 0; i < RATE; ++i) {
+                reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+            }
+            KeccakCore::permute(ctx.state);
+            ctx.squeezed = true;
+            ctx.squeeze_pos = 0;
+        }
+
+        size_t out_idx = 0;
+        while (out_idx < out.size()) {
+            if (ctx.squeeze_pos == RATE) {
+                KeccakCore::permute(ctx.state);
+                ctx.squeeze_pos = 0;
+            }
+            size_t take = std::min(out.size() - out_idx, RATE - ctx.squeeze_pos);
+            std::memcpy(out.data() + out_idx, reinterpret_cast<const uint8_t*>(ctx.state) + ctx.squeeze_pos, take);
+            out_idx += take;
+            ctx.squeeze_pos += take;
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, size_t outLen = DEFAULT_DIGEST_SIZE) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        squeeze(ctx, out);
         return out;
     }
 };
@@ -2914,7 +3174,11 @@ enum class CryptoAlgorithm {
     Sp80056AConcat,
     Hkdf,
     Sha3_256,
+    Sha3_384,
     Sha3_512,
+    Sha3_224,
+    Shake128,
+    Shake256,
     Unknown
 };
 
@@ -2923,7 +3187,11 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_SHA384_ALGORITHM || algId == L"SHA-384") return CryptoAlgorithm::Sha384;
     if (algId == BCRYPT_SHA512_ALGORITHM || algId == L"SHA-512") return CryptoAlgorithm::Sha512;
     if (algId == BCRYPT_SHA3_256_ALGORITHM || algId == L"SHA3-256" || algId == L"sha3-256") return CryptoAlgorithm::Sha3_256;
+    if (algId == BCRYPT_SHA3_384_ALGORITHM || algId == L"SHA3-384" || algId == L"sha3-384") return CryptoAlgorithm::Sha3_384;
     if (algId == BCRYPT_SHA3_512_ALGORITHM || algId == L"SHA3-512" || algId == L"sha3-512") return CryptoAlgorithm::Sha3_512;
+    if (algId == BCRYPT_SHA3_224_ALGORITHM || algId == L"SHA3-224" || algId == L"sha3-224") return CryptoAlgorithm::Sha3_224;
+    if (algId == BCRYPT_SHAKE128_ALGORITHM || algId == L"SHAKE128" || algId == L"shake128") return CryptoAlgorithm::Shake128;
+    if (algId == BCRYPT_SHAKE256_ALGORITHM || algId == L"SHAKE256" || algId == L"shake256") return CryptoAlgorithm::Shake256;
     if (algId == BCRYPT_SHA1_ALGORITHM   || algId == L"SHA-1")   return CryptoAlgorithm::Sha1;
     if (algId == BCRYPT_MD5_ALGORITHM    || algId == L"md5")     return CryptoAlgorithm::Md5;
     if (algId == BCRYPT_AES_ALGORITHM)                           return CryptoAlgorithm::Aes;
@@ -2999,7 +3267,11 @@ public:
     HmacSha384::Context hmacSha384Ctx{};
     HmacSha512::Context hmacSha512Ctx{};
     Sha3_256::Context sha3_256Ctx{};
+    Sha3_384::Context sha3_384Ctx{};
     Sha3_512::Context sha3_512Ctx{};
+    Sha3_224::Context sha3_224Ctx{};
+    Shake128::Context shake128Ctx{};
+    Shake256::Context shake256Ctx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -3024,7 +3296,11 @@ public:
           hmacSha384Ctx(other.hmacSha384Ctx),
           hmacSha512Ctx(other.hmacSha512Ctx),
           sha3_256Ctx(other.sha3_256Ctx),
+          sha3_384Ctx(other.sha3_384Ctx),
           sha3_512Ctx(other.sha3_512Ctx),
+          sha3_224Ctx(other.sha3_224Ctx),
+          shake128Ctx(other.shake128Ctx),
+          shake256Ctx(other.shake256Ctx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -3059,8 +3335,16 @@ public:
             HmacSha512::init(hmacSha512Ctx, key);
         } else if (algorithm == CryptoAlgorithm::Sha3_256) {
             Sha3_256::init(sha3_256Ctx);
+        } else if (algorithm == CryptoAlgorithm::Sha3_384) {
+            Sha3_384::init(sha3_384Ctx);
         } else if (algorithm == CryptoAlgorithm::Sha3_512) {
             Sha3_512::init(sha3_512Ctx);
+        } else if (algorithm == CryptoAlgorithm::Sha3_224) {
+            Sha3_224::init(sha3_224Ctx);
+        } else if (algorithm == CryptoAlgorithm::Shake128) {
+            Shake128::init(shake128Ctx);
+        } else if (algorithm == CryptoAlgorithm::Shake256) {
+            Shake256::init(shake256Ctx);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -3091,8 +3375,16 @@ public:
             HmacSha512::update(hmacSha512Ctx, data);
         } else if (algorithm == CryptoAlgorithm::Sha3_256) {
             Sha3_256::update(sha3_256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Sha3_384) {
+            Sha3_384::update(sha3_384Ctx, data);
         } else if (algorithm == CryptoAlgorithm::Sha3_512) {
             Sha3_512::update(sha3_512Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Sha3_224) {
+            Sha3_224::update(sha3_224Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Shake128) {
+            Shake128::update(shake128Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Shake256) {
+            Shake256::update(shake256Ctx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -3154,9 +3446,25 @@ public:
             std::vector<uint8_t> out(32);
             Sha3_256::final(sha3_256Ctx, std::span<uint8_t, 32>(out.data(), 32));
             return out;
+        } else if (algorithm == CryptoAlgorithm::Sha3_384) {
+            std::vector<uint8_t> out(48);
+            Sha3_384::final(sha3_384Ctx, std::span<uint8_t, 48>(out.data(), 48));
+            return out;
         } else if (algorithm == CryptoAlgorithm::Sha3_512) {
             std::vector<uint8_t> out(64);
             Sha3_512::final(sha3_512Ctx, std::span<uint8_t, 64>(out.data(), 64));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Sha3_224) {
+            std::vector<uint8_t> out(28);
+            Sha3_224::final(sha3_224Ctx, std::span<uint8_t, 28>(out.data(), 28));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Shake128) {
+            std::vector<uint8_t> out(32);
+            Shake128::squeeze(shake128Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Shake256) {
+            std::vector<uint8_t> out(64);
+            Shake256::squeeze(shake256Ctx, out);
             return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
@@ -3406,9 +3714,10 @@ inline NTSTATUS BCryptGetProperty(
             uint32_t len = 32;
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256) len = 32;
-            else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384) len = 48;
-            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512) len = 64;
+            else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -3417,10 +3726,13 @@ inline NTSTATUS BCryptGetProperty(
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
-                           ((prov->algorithm == CryptoAlgorithm::Sha3_256) ? 136 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_224) ? 144 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256) ? 136 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_384) ? 104 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_512) ? 72 :
+                           ((prov->algorithm == CryptoAlgorithm::Shake128) ? 168 :
                            ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512 ||
-                             prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64)));
+                             prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64))))));
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }

@@ -5146,6 +5146,30 @@ inline BOOL InitOnceExecuteOnce(LPINIT_ONCE InitOnce, PINIT_ONCE_FN InitFn, PVOI
 
 struct TP_CALLBACK_INSTANCE {
     PVOID Reserved{nullptr};
+    bool Disassociated{false};
+    std::vector<PCRITICAL_SECTION> CriticalSectionsToLeave;
+    std::vector<HANDLE> MutexesToRelease;
+    std::vector<std::pair<HANDLE, DWORD>> SemaphoresToRelease;
+    std::vector<HANDLE> EventsToSet;
+
+    void runCleanup() {
+        for (auto* cs : CriticalSectionsToLeave) {
+            if (cs) LeaveCriticalSection(cs);
+        }
+        CriticalSectionsToLeave.clear();
+        for (auto hMut : MutexesToRelease) {
+            if (hMut) ReleaseMutex(hMut);
+        }
+        MutexesToRelease.clear();
+        for (auto& [hSem, rel] : SemaphoresToRelease) {
+            if (hSem) ReleaseSemaphore(hSem, rel, nullptr);
+        }
+        SemaphoresToRelease.clear();
+        for (auto hEvt : EventsToSet) {
+            if (hEvt) SetEvent(hEvt);
+        }
+        EventsToSet.clear();
+    }
 };
 
 struct TP_POOL_STACK_INFORMATION {
@@ -5304,6 +5328,7 @@ inline void WINAPI SubmitThreadpoolWork(PTP_WORK pwk) noexcept {
         if (!pwk->cancelled.load(std::memory_order_relaxed)) {
             TP_CALLBACK_INSTANCE inst{};
             pwk->callback(&inst, pwk->context, pwk);
+            inst.runCleanup();
         }
         int32_t rem = pwk->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
         if (rem <= 0) {
@@ -5334,6 +5359,51 @@ inline void WINAPI CloseThreadpoolWork(PTP_WORK pwk) noexcept {
 }
 
 inline void WINAPI FreeLibraryWhenCallbackReturns(PTP_CALLBACK_INSTANCE /*pci*/, HMODULE /*mod*/) noexcept {}
+
+inline void WINAPI LeaveCriticalSectionWhenCallbackReturns(PTP_CALLBACK_INSTANCE pci, PCRITICAL_SECTION pcs) noexcept {
+    if (pci && pcs) {
+        pci->CriticalSectionsToLeave.push_back(pcs);
+    }
+}
+
+inline void WINAPI ReleaseMutexWhenCallbackReturns(PTP_CALLBACK_INSTANCE pci, HANDLE mut) noexcept {
+    if (pci && mut) {
+        pci->MutexesToRelease.push_back(mut);
+    }
+}
+
+inline void WINAPI ReleaseSemaphoreWhenCallbackReturns(PTP_CALLBACK_INSTANCE pci, HANDLE sem, DWORD crel) noexcept {
+    if (pci && sem) {
+        pci->SemaphoresToRelease.emplace_back(sem, crel);
+    }
+}
+
+inline void WINAPI SetEventWhenCallbackReturns(PTP_CALLBACK_INSTANCE pci, HANDLE evt) noexcept {
+    if (pci && evt) {
+        pci->EventsToSet.push_back(evt);
+    }
+}
+
+inline void WINAPI DisassociateCurrentThreadFromCallback(PTP_CALLBACK_INSTANCE pci) noexcept {
+    if (pci) {
+        pci->Disassociated = true;
+    }
+}
+
+inline BOOL WINAPI CallbackMayRunLong(PTP_CALLBACK_INSTANCE pci) noexcept {
+    return pci ? TRUE : FALSE;
+}
+
+using LPOVERLAPPED_COMPLETION_ROUTINE = void (WINAPI *)(DWORD dwErrorCode, DWORD dwNumberOfBytesTransfered, LPOVERLAPPED lpOverlapped);
+
+inline BOOL WINAPI BindIoCompletionCallback(HANDLE FileHandle, LPOVERLAPPED_COMPLETION_ROUTINE Function, ULONG Flags) noexcept {
+    (void)Flags;
+    if (!FileHandle || FileHandle == INVALID_HANDLE_VALUE || !Function) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    return TRUE;
+}
 
 // Threadpool Timer APIs
 struct TP_TIMER {
@@ -5433,6 +5503,7 @@ inline void WINAPI SetThreadpoolTimer(PTP_TIMER pti, const FILETIME* pftDueTime,
                             if (!pti->cancelled.load(std::memory_order_relaxed)) {
                                 TP_CALLBACK_INSTANCE inst{};
                                 pti->callback(&inst, pti->context, pti);
+                                inst.runCleanup();
                             }
                             int32_t rem = pti->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
                             if (rem <= 0) {
@@ -5589,6 +5660,7 @@ inline void WINAPI SetThreadpoolWait(PTP_WAIT pwa, HANDLE h, const FILETIME* pft
                         if (!pwa->cancelled.load(std::memory_order_relaxed)) {
                             TP_CALLBACK_INSTANCE inst{};
                             pwa->callback(&inst, pwa->context, pwa, static_cast<TP_WAIT_RESULT>(res));
+                            inst.runCleanup();
                         }
                         int32_t rem = pwa->pendingCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
                         if (rem <= 0) {
@@ -6191,6 +6263,7 @@ inline void TriggerThreadpoolIoCompletion(PTP_IO pio, PVOID Overlapped, ULONG Io
     if (!pio || !pio->Active.load(std::memory_order_relaxed) || !pio->Callback) return;
     TP_CALLBACK_INSTANCE inst{};
     pio->Callback(&inst, pio->Context, Overlapped, IoResult, NumberOfBytesTransferred, pio);
+    inst.runCleanup();
     uint32_t cur = pio->PendingIoCount.load(std::memory_order_relaxed);
     while (cur > 0 && !pio->PendingIoCount.compare_exchange_weak(cur, cur - 1, std::memory_order_relaxed)) {}
     pio->Cv.notify_all();
@@ -10883,6 +10956,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InitializeThreadpoolEnvironment", reinterpret_cast<void*>(InitializeThreadpoolEnvironment));
     ldr.registerExport("kernel32.dll", "DestroyThreadpoolEnvironment", reinterpret_cast<void*>(DestroyThreadpoolEnvironment));
     ldr.registerExport("kernel32.dll", "FreeLibraryWhenCallbackReturns", reinterpret_cast<void*>(FreeLibraryWhenCallbackReturns));
+    ldr.registerExport("kernel32.dll", "LeaveCriticalSectionWhenCallbackReturns", reinterpret_cast<void*>(LeaveCriticalSectionWhenCallbackReturns));
+    ldr.registerExport("kernel32.dll", "ReleaseMutexWhenCallbackReturns", reinterpret_cast<void*>(ReleaseMutexWhenCallbackReturns));
+    ldr.registerExport("kernel32.dll", "ReleaseSemaphoreWhenCallbackReturns", reinterpret_cast<void*>(ReleaseSemaphoreWhenCallbackReturns));
+    ldr.registerExport("kernel32.dll", "SetEventWhenCallbackReturns", reinterpret_cast<void*>(SetEventWhenCallbackReturns));
+    ldr.registerExport("kernel32.dll", "DisassociateCurrentThreadFromCallback", reinterpret_cast<void*>(DisassociateCurrentThreadFromCallback));
+    ldr.registerExport("kernel32.dll", "CallbackMayRunLong", reinterpret_cast<void*>(CallbackMayRunLong));
+    ldr.registerExport("kernel32.dll", "BindIoCompletionCallback", reinterpret_cast<void*>(BindIoCompletionCallback));
 
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CreateThreadpool", reinterpret_cast<void*>(CreateThreadpool));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetThreadpoolThreadMaximum", reinterpret_cast<void*>(SetThreadpoolThreadMaximum));
@@ -10917,6 +10997,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CancelThreadpoolWait", reinterpret_cast<void*>(CancelThreadpoolWait));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "FreeLibraryWhenCallbackReturns", reinterpret_cast<void*>(FreeLibraryWhenCallbackReturns));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "LeaveCriticalSectionWhenCallbackReturns", reinterpret_cast<void*>(LeaveCriticalSectionWhenCallbackReturns));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "ReleaseMutexWhenCallbackReturns", reinterpret_cast<void*>(ReleaseMutexWhenCallbackReturns));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "ReleaseSemaphoreWhenCallbackReturns", reinterpret_cast<void*>(ReleaseSemaphoreWhenCallbackReturns));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "SetEventWhenCallbackReturns", reinterpret_cast<void*>(SetEventWhenCallbackReturns));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "DisassociateCurrentThreadFromCallback", reinterpret_cast<void*>(DisassociateCurrentThreadFromCallback));
+    ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "CallbackMayRunLong", reinterpret_cast<void*>(CallbackMayRunLong));
     ldr.registerExport("kernel32.dll", "MulDiv", reinterpret_cast<void*>(MulDiv));
     ldr.registerExport("kernel32.dll", "CompareStringOrdinal", reinterpret_cast<void*>(CompareStringOrdinal));
     ldr.registerExport("kernel32.dll", "CompareStringEx", reinterpret_cast<void*>(CompareStringEx));
@@ -11510,6 +11597,7 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "RegisterWaitForSingleObject", reinterpret_cast<void*>(RegisterWaitForSingleObject));
     ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "UnregisterWait", reinterpret_cast<void*>(UnregisterWait));
     ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "UnregisterWaitEx", reinterpret_cast<void*>(UnregisterWaitEx));
+    ldr.registerExport("api-ms-win-core-threadpool-legacy-l1-1-0.dll", "BindIoCompletionCallback", reinterpret_cast<void*>(BindIoCompletionCallback));
 
     ldr.registerExport("api-ms-win-core-threadpool-l1-2-0.dll", "TrySubmitThreadpoolCallback", reinterpret_cast<void*>(TrySubmitThreadpoolCallback));
 

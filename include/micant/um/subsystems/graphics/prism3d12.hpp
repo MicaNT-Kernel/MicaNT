@@ -1990,9 +1990,61 @@ static constexpr IID IID_ID3D12Device12 =
     { 0x5af5c532, 0x4c91, 0x4cd0, { 0xb5, 0x41, 0x15, 0xa4, 0x05, 0x39, 0x5f, 0xc5 } };
 static constexpr IID OFFICIAL_IID_ID3D12Device12 = IID_ID3D12Device12;
 
+static constexpr IID IID_ID3D12Device13 = 
+    { 0x14eecffc, 0x4df8, 0x40f7, { 0xa1, 0x18, 0x5c, 0x81, 0x6f, 0x45, 0x69, 0x5e } };
+static constexpr IID OFFICIAL_IID_ID3D12Device13 = IID_ID3D12Device13;
+
+static constexpr IID IID_ID3D12Device14 = 
+    { 0x5f6e592d, 0xd895, 0x44c2, { 0x8e, 0x4a, 0x88, 0xad, 0x49, 0x26, 0xd3, 0x23 } };
+static constexpr IID OFFICIAL_IID_ID3D12Device14 = IID_ID3D12Device14;
+static constexpr IID OFFICIAL_IID_ID3D12Device14Alt = 
+    { 0x53176779, 0x6099, 0x401c, { 0xa3, 0x70, 0x06, 0x73, 0x08, 0x54, 0x3d, 0x8b } };
+
 class ID3D12Device11 : public ID3D12Device10 {
 public:
     virtual void CreateSampler2(
+        const D3D12_SAMPLER_DESC2* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+};
+
+class ID3D12Device12 : public ID3D12Device11 {
+public:
+    virtual D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo3(
+        uint32_t visibleMask,
+        uint32_t numResourceDescs,
+        const void* pResourceDescs,
+        const uint32_t* pNumCastableFormats,
+        const void* const* ppCastableFormats,
+        D3D12_RESOURCE_ALLOCATION_INFO1* pResourceAllocationInfo1) = 0;
+};
+
+class ID3D12Device13 : public ID3D12Device12 {
+public:
+    virtual int32_t OpenExistingHeapFromAddress1(
+        const void* pAddress,
+        size_t size,
+        const IID& riid,
+        void** ppvHeap) = 0;
+};
+
+class ID3D12Device14 : public ID3D12Device13 {
+public:
+    virtual int32_t TryCreateShaderResourceView(
+        ID3D12Resource* pResource,
+        const void* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+
+    virtual int32_t TryCreateUnorderedAccessView(
+        ID3D12Resource* pResource,
+        ID3D12Resource* pCounterResource,
+        const void* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+
+    virtual int32_t TryCreateConstantBufferView(
+        const void* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+
+    virtual int32_t TryCreateSampler2(
         const D3D12_SAMPLER_DESC2* pDesc,
         D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
 };
@@ -3472,7 +3524,7 @@ public:
     [[nodiscard]] uint32_t GetMaxAttributeSize() const noexcept { return m_maxAttributeSize; }
 };
 
-class Prism3D12DeviceImpl : public ID3D12Device11 {
+class Prism3D12DeviceImpl : public ID3D12Device14 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -3497,8 +3549,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12) {
-            *ppv = static_cast<ID3D12Device11*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt) {
+            *ppv = static_cast<ID3D12Device14*>(this);
             AddRef();
             return 0;
         }
@@ -3993,6 +4045,69 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/
     ) override {
         m_samplerFeedbackViewsCreated++;
+    }
+
+    D3D12_RESOURCE_ALLOCATION_INFO GetResourceAllocationInfo3(
+        uint32_t visibleMask,
+        uint32_t numResourceDescs,
+        const void* pResourceDescs,
+        const uint32_t* pNumCastableFormats,
+        const void* const* ppCastableFormats,
+        D3D12_RESOURCE_ALLOCATION_INFO1* pResourceAllocationInfo1) override {
+        (void)visibleMask; (void)pResourceDescs; (void)pNumCastableFormats; (void)ppCastableFormats;
+        D3D12_RESOURCE_ALLOCATION_INFO info{
+            .SizeInBytes = 65536ULL * (numResourceDescs ? numResourceDescs : 1),
+            .Alignment = 65536ULL
+        };
+        if (pResourceAllocationInfo1 && numResourceDescs > 0) {
+            pResourceAllocationInfo1[0].Offset = 0;
+            pResourceAllocationInfo1[0].Alignment = info.Alignment;
+            pResourceAllocationInfo1[0].SizeInBytes = info.SizeInBytes;
+        }
+        return info;
+    }
+
+    int32_t OpenExistingHeapFromAddress1(
+        const void* pAddress,
+        size_t size,
+        const IID& riid,
+        void** ppvHeap) override {
+        if (!pAddress || size == 0 || !ppvHeap) return -1;
+        D3D12_HEAP_DESC desc{};
+        desc.SizeInBytes = size;
+        auto* heap = new Prism3D12HeapImpl(this, desc);
+        int32_t hr = heap->QueryInterface(riid, ppvHeap);
+        heap->Release();
+        if (hr == 0) m_heapsCreated++;
+        return hr;
+    }
+
+    int32_t TryCreateShaderResourceView(
+        ID3D12Resource* /*pResource*/,
+        const void* /*pDesc*/,
+        D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/) override {
+        return 0;
+    }
+
+    int32_t TryCreateUnorderedAccessView(
+        ID3D12Resource* /*pResource*/,
+        ID3D12Resource* /*pCounterResource*/,
+        const void* /*pDesc*/,
+        D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/) override {
+        return 0;
+    }
+
+    int32_t TryCreateConstantBufferView(
+        const void* /*pDesc*/,
+        D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/) override {
+        return 0;
+    }
+
+    int32_t TryCreateSampler2(
+        const D3D12_SAMPLER_DESC2* /*pDesc*/,
+        D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/) override {
+        m_samplerFeedbackViewsCreated++;
+        return 0;
     }
 
     int32_t CreateShaderCacheSession(
