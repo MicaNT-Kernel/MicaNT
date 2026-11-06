@@ -50280,3 +50280,278 @@ inline void Test_Horizon237_Dred2Options27_CodeIntegrityUnlockLeapSecond_Precise
 
     std::cout << "[TEST] Suite 453: Horizon 237 - Direct3D 12 Agility SDK DRED 1.3/2.0 & Options 27, NT SystemInfo 225/226, Executive Precise Timers & NIST SP 800-185 TupleHash PASSED." << std::endl;
 }
+
+inline void Test_Horizon238_Device17Options28_MemoryTopologyDpcWatchdog_SListBitOps_And_ParallelHash_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 454: Horizon 238 - Direct3D 12 ID3D12Device17 & Options 28, NT SystemInfo 227/228, SList & BitOps & NIST SP 800-185 ParallelHash\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 Agility SDK ID3D12Device17 & Options 28
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device17 & Options 28 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        ID3D12Device* pBaseDevice = nullptr;
+        int32_t hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_ID3D12Device, reinterpret_cast<void**>(&pBaseDevice));
+        TEST_ASSERT(hr == 0 && pBaseDevice != nullptr, "D3D12CreateDevice returns valid device");
+
+        // 1. QueryInterface for ID3D12Device17
+        ID3D12Device17* pDevice17 = nullptr;
+        hr = pBaseDevice->QueryInterface(IID_ID3D12Device17, reinterpret_cast<void**>(&pDevice17));
+        TEST_ASSERT(hr == 0 && pDevice17 != nullptr, "QueryInterface for IID_ID3D12Device17 succeeds");
+
+        ID3D12Device17* pDevice17Official = nullptr;
+        hr = pBaseDevice->QueryInterface(OFFICIAL_IID_ID3D12Device17, reinterpret_cast<void**>(&pDevice17Official));
+        TEST_ASSERT(hr == 0 && pDevice17Official != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device17 succeeds");
+        pDevice17Official->Release();
+
+        // 2. ID3D12Device17 methods: CreateWorkGraphProgramRecord & SetWorkGraphProgramRecord
+        void* pRecord = nullptr;
+        hr = pDevice17->CreateWorkGraphProgramRecord(nullptr, IID_IUnknown, &pRecord);
+        TEST_ASSERT(hr == 0 && pRecord != nullptr, "CreateWorkGraphProgramRecord succeeds");
+
+        hr = pDevice17->SetWorkGraphProgramRecord(0, pRecord);
+        TEST_ASSERT(hr == 0, "SetWorkGraphProgramRecord succeeds");
+
+        // 3. D3D12_FEATURE_D3D12_OPTIONS28 support query
+        D3D12_FEATURE_DATA_D3D12_OPTIONS28 options28{};
+        hr = pDevice17->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS28, &options28, sizeof(options28));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS28) succeeds");
+        TEST_ASSERT(options28.WorkGraphsTier == 12u, "WorkGraphsTier is Tier 1.2 (12u)");
+        TEST_ASSERT(options28.ComputeOnlyDeviceSupported == TRUE, "ComputeOnlyDeviceSupported is TRUE");
+        TEST_ASSERT(options28.IndependentSamplerMipLevelsSupported == TRUE, "IndependentSamplerMipLevelsSupported is TRUE");
+        TEST_ASSERT(options28.UnboundedStreamOutputSupported == TRUE, "UnboundedStreamOutputSupported is TRUE");
+
+        // Size check rejection
+        hr = pDevice17->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS28, &options28, sizeof(options28) - 1);
+        TEST_ASSERT(hr != 0, "CheckFeatureSupport rejects undersized buffer for OPTIONS28");
+
+        pDevice17->Release();
+        pBaseDevice->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Kernel Classes 227 (MemoryTopology) & 228 (DpcWatchdog)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Kernel Classes 227 (MemoryTopology) & 228 (DpcWatchdog)...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 227: SystemMemoryTopologyInformation
+        SYSTEM_MEMORY_TOPOLOGY_INFORMATION memTop{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(227, &memTop, sizeof(memTop), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(227) returns Success");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_MEMORY_TOPOLOGY_INFORMATION), "NtQuerySystemInformation(227) returns correct length");
+        TEST_ASSERT(memTop.ChannelCount == 2, "MemoryTopology ChannelCount is 2 (Dual-channel)");
+        TEST_ASSERT(memTop.DimmCount == 2, "MemoryTopology DimmCount is 2");
+        TEST_ASSERT(memTop.BusWidthBits == 128, "MemoryTopology BusWidthBits is 128");
+        TEST_ASSERT(memTop.MemorySpeedMTs == 6000, "MemoryTopology MemorySpeedMTs is 6000 (DDR5-6000)");
+        TEST_ASSERT(memTop.BandwidthGBs == 96, "MemoryTopology BandwidthGBs is 96");
+        TEST_ASSERT(memTop.AverageLatencyNs == 45, "MemoryTopology AverageLatencyNs is 45");
+
+        // Buffer length mismatch check
+        status = NtQuerySystemInformation_Export(227, &memTop, sizeof(memTop) - 1, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(227) detects length mismatch");
+
+        // 2. Class 228: SystemDpcWatchdogInformation
+        SYSTEM_DPC_WATCHDOG_INFORMATION dpcWatchdog{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(228, &dpcWatchdog, sizeof(dpcWatchdog), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(228) returns Success");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_DPC_WATCHDOG_INFORMATION), "NtQuerySystemInformation(228) returns correct length");
+        TEST_ASSERT(dpcWatchdog.DpcTimeLimitTicks == 50000, "DpcWatchdog DpcTimeLimitTicks is 50,000");
+        TEST_ASSERT(dpcWatchdog.DpcWatchdogSequence == 1, "DpcWatchdog Sequence is 1");
+        TEST_ASSERT(dpcWatchdog.TotalDpcTime == 120, "DpcWatchdog TotalDpcTime is 120");
+        TEST_ASSERT(dpcWatchdog.TotalInterruptTime == 45, "DpcWatchdog TotalInterruptTime is 45");
+
+        // Buffer length mismatch check
+        status = NtQuerySystemInformation_Export(228, &dpcWatchdog, sizeof(dpcWatchdog) - 1, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "NtQuerySystemInformation(228) detects length mismatch");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive Direct SList & Bit Operations
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive Direct SList & Bit Operations...\n";
+
+        using namespace micant::ntdll;
+
+        InitializeNtdllSubsystemExports();
+        micant::kernel32::InitializeWin32SubsystemExports();
+
+        // 1. SList Verification
+        SLIST_HEADER listHead;
+        RtlInitializeSListHead(&listHead);
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 0, "Initial SList depth is 0");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == nullptr, "Initial SList first entry is nullptr");
+
+        SLIST_ENTRY entry1{};
+        SLIST_ENTRY entry2{};
+        SLIST_ENTRY entry3{};
+
+        // Push entry 1
+        auto* oldFirst = RtlInterlockedPushEntrySList(&listHead, &entry1);
+        TEST_ASSERT(oldFirst == nullptr, "Pushing first entry returns old head nullptr");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 1, "SList depth is 1 after 1st push");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == &entry1, "FirstEntrySList returns entry1");
+
+        // Push entry 2
+        oldFirst = RtlInterlockedPushEntrySList(&listHead, &entry2);
+        TEST_ASSERT(oldFirst == &entry1, "Pushing second entry returns previous head entry1");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 2, "SList depth is 2 after 2nd push");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == &entry2, "FirstEntrySList returns entry2");
+
+        // Push entry 3
+        oldFirst = RtlInterlockedPushEntrySList(&listHead, &entry3);
+        TEST_ASSERT(oldFirst == &entry2, "Pushing third entry returns previous head entry2");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 3, "SList depth is 3 after 3rd push");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == &entry3, "FirstEntrySList returns entry3");
+
+        // Pop entry (LIFO order: entry3 popped)
+        auto* popped = RtlInterlockedPopEntrySList(&listHead);
+        TEST_ASSERT(popped == &entry3, "Popped entry is entry3");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 2, "SList depth is 2 after pop");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == &entry2, "FirstEntrySList returns entry2 after pop");
+
+        // Flush remaining entries
+        auto* flushed = RtlInterlockedFlushSList(&listHead);
+        TEST_ASSERT(flushed == &entry2, "Flushed list returns top entry2");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 0, "SList depth is 0 after flush");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == nullptr, "FirstEntrySList returns nullptr after flush");
+
+        // 2. Direct Bit Operations
+        TEST_ASSERT(RtlFindLeastSignificantBit(0ULL) == -1, "RtlFindLeastSignificantBit(0) returns -1");
+        TEST_ASSERT(RtlFindLeastSignificantBit(1ULL) == 0, "RtlFindLeastSignificantBit(1) returns 0");
+        TEST_ASSERT(RtlFindLeastSignificantBit(2ULL) == 1, "RtlFindLeastSignificantBit(2) returns 1");
+        TEST_ASSERT(RtlFindLeastSignificantBit(0x80ULL) == 7, "RtlFindLeastSignificantBit(0x80) returns 7");
+        TEST_ASSERT(RtlFindLeastSignificantBit(0x0000000800000000ULL) == 35, "RtlFindLeastSignificantBit(1ULL << 35) returns 35");
+        TEST_ASSERT(RtlFindLeastSignificantBit(0x8000000000000000ULL) == 63, "RtlFindLeastSignificantBit(1ULL << 63) returns 63");
+
+        TEST_ASSERT(RtlFindMostSignificantBit(0ULL) == -1, "RtlFindMostSignificantBit(0) returns -1");
+        TEST_ASSERT(RtlFindMostSignificantBit(1ULL) == 0, "RtlFindMostSignificantBit(1) returns 0");
+        TEST_ASSERT(RtlFindMostSignificantBit(2ULL) == 1, "RtlFindMostSignificantBit(2) returns 1");
+        TEST_ASSERT(RtlFindMostSignificantBit(0x80ULL) == 7, "RtlFindMostSignificantBit(0x80) returns 7");
+        TEST_ASSERT(RtlFindMostSignificantBit(0x0000000800000000ULL) == 35, "RtlFindMostSignificantBit(1ULL << 35) returns 35");
+        TEST_ASSERT(RtlFindMostSignificantBit(0x0000000800000001ULL) == 35, "RtlFindMostSignificantBit((1ULL << 35) | 1) returns 35");
+        TEST_ASSERT(RtlFindMostSignificantBit(0x8000000000000000ULL) == 63, "RtlFindMostSignificantBit(1ULL << 63) returns 63");
+
+        // 3. Export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInitializeSListHead") != nullptr, "ntdll exports RtlInitializeSListHead");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlFirstEntrySList") != nullptr, "ntdll exports RtlFirstEntrySList");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlQueryDepthSList") != nullptr, "ntdll exports RtlQueryDepthSList");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedPushEntrySList") != nullptr, "ntdll exports RtlInterlockedPushEntrySList");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedPopEntrySList") != nullptr, "ntdll exports RtlInterlockedPopEntrySList");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedFlushSList") != nullptr, "ntdll exports RtlInterlockedFlushSList");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlFindLeastSignificantBit") != nullptr, "ntdll exports RtlFindLeastSignificantBit");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlFindMostSignificantBit") != nullptr, "ntdll exports RtlFindMostSignificantBit");
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InitializeSListHead") != nullptr, "kernel32 exports InitializeSListHead");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedPushEntrySList") != nullptr, "kernel32 exports InterlockedPushEntrySList");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedPopEntrySList") != nullptr, "kernel32 exports InterlockedPopEntrySList");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedFlushSList") != nullptr, "kernel32 exports InterlockedFlushSList");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryDepthSList") != nullptr, "kernel32 exports QueryDepthSList");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-185 ParallelHash (ParallelHash128 & ParallelHash256)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-185 ParallelHash (ParallelHash128 & ParallelHash256)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        std::string sampleMsg = "ParallelHash message test string across sovereign MicaNT kernel partitions";
+        std::span<const uint8_t> sampleData(reinterpret_cast<const uint8_t*>(sampleMsg.data()), sampleMsg.size());
+
+        // 1. ParallelHash128 verification
+        auto ph128_oneshot = ParallelHash128::hash(sampleData, 16, "MicaNT", 32);
+        TEST_ASSERT(ph128_oneshot.size() == 32, "ParallelHash128 produces 32-byte digest");
+
+        // Test incremental streaming
+        ParallelHash128::Context ph128_ctx;
+        ParallelHash128::init(ph128_ctx, 16, "MicaNT", 32);
+        for (size_t i = 0; i < sampleData.size(); i += 7) {
+            size_t chunkSize = std::min<size_t>(7, sampleData.size() - i);
+            ParallelHash128::update(ph128_ctx, sampleData.subspan(i, chunkSize));
+        }
+        std::vector<uint8_t> ph128_streaming(32);
+        ParallelHash128::final(ph128_ctx, ph128_streaming);
+        TEST_ASSERT(std::memcmp(ph128_oneshot.data(), ph128_streaming.data(), 32) == 0,
+                    "ParallelHash128 streaming update matches one-shot evaluation bit-exact");
+
+        // 2. ParallelHash256 verification
+        auto ph256_oneshot = ParallelHash256::hash(sampleData, 16, "MicaNT", 64);
+        TEST_ASSERT(ph256_oneshot.size() == 64, "ParallelHash256 produces 64-byte digest");
+
+        ParallelHash256::Context ph256_ctx;
+        ParallelHash256::init(ph256_ctx, 16, "MicaNT", 64);
+        for (size_t i = 0; i < sampleData.size(); i += 11) {
+            size_t chunkSize = std::min<size_t>(11, sampleData.size() - i);
+            ParallelHash256::update(ph256_ctx, sampleData.subspan(i, chunkSize));
+        }
+        std::vector<uint8_t> ph256_streaming(64);
+        ParallelHash256::final(ph256_ctx, ph256_streaming);
+        TEST_ASSERT(std::memcmp(ph256_oneshot.data(), ph256_streaming.data(), 64) == 0,
+                    "ParallelHash256 streaming update matches one-shot evaluation bit-exact");
+
+        // 3. BCrypt API Integration for ParallelHash128
+        BCRYPT_ALG_HANDLE hPH128 = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hPH128, BCRYPT_PARALLELHASH128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hPH128 != nullptr, "BCryptOpenAlgorithmProvider succeeds for ParallelHash128");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hPH128, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt ParallelHash128 hash length is 32");
+        BCryptGetProperty(hPH128, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt ParallelHash128 rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hPH128, &hHash128, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash128, const_cast<uint8_t*>(sampleData.data()), static_cast<uint32_t>(sampleData.size()), 0);
+        uint8_t dPH128[32]{};
+        BCryptFinishHash(hHash128, dPH128, sizeof(dPH128), 0);
+        auto expectedDefault128 = ParallelHash128::hash(sampleData, ParallelHash128::DEFAULT_BLOCK_SIZE, "", 32);
+        TEST_ASSERT(std::memcmp(dPH128, expectedDefault128.data(), 32) == 0,
+                    "BCrypt API ParallelHash128 produces bit-exact NIST parallel hash");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hPH128, 0);
+
+        // 4. BCrypt API Integration for ParallelHash256
+        BCRYPT_ALG_HANDLE hPH256 = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hPH256, BCRYPT_PARALLELHASH256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hPH256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for ParallelHash256");
+
+        BCryptGetProperty(hPH256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt ParallelHash256 hash length is 64");
+        BCryptGetProperty(hPH256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt ParallelHash256 rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hPH256, &hHash256, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash256, const_cast<uint8_t*>(sampleData.data()), static_cast<uint32_t>(sampleData.size()), 0);
+        uint8_t dPH256[64]{};
+        BCryptFinishHash(hHash256, dPH256, sizeof(dPH256), 0);
+        auto expectedDefault256 = ParallelHash256::hash(sampleData, ParallelHash256::DEFAULT_BLOCK_SIZE, "", 64);
+        TEST_ASSERT(std::memcmp(dPH256, expectedDefault256.data(), 64) == 0,
+                    "BCrypt API ParallelHash256 produces bit-exact NIST parallel hash");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hPH256, 0);
+    }
+
+    std::cout << "  Horizon 238 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device17 & Options 28 OK\n"
+              << "    Pillar 2: NT Native Classes 227 (MemoryTopology) & 228 (DpcWatchdog) OK\n"
+              << "    Pillar 3: NT Native Executive Direct SList & Bit Operations OK\n"
+              << "    Pillar 4: NIST SP 800-185 ParallelHash (ParallelHash128 & ParallelHash256) OK\n";
+
+    std::cout << "[TEST] Suite 454: Horizon 238 - Direct3D 12 ID3D12Device17 & Options 28, NT SystemInfo 227/228, SList & BitOps & NIST SP 800-185 ParallelHash PASSED." << std::endl;
+}

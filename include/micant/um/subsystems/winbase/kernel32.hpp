@@ -3292,7 +3292,13 @@ inline void GetSystemTimeAsFileTime(FILETIME* lpTime) noexcept {
     lpTime->dwHighDateTime = static_cast<DWORD>(ft >> 32);
 }
 
-inline void InitializeSListHead(void* /*ListHead*/) noexcept {}
+inline void WINAPI InitializeSListHead(void* ListHead) noexcept {
+    if (ListHead) {
+        auto* p = static_cast<uint64_t*>(ListHead);
+        p[0] = 0;
+        p[1] = 0;
+    }
+}
 
 // ============================================================================
 // Win32 Fibers & Fiber Local Storage (FLS) (Windows NT / winbase.h)
@@ -9155,6 +9161,9 @@ inline SLIST_ENTRY* WINAPI InterlockedPushEntrySList(SLIST_HEADER* ListHead, SLI
     auto* oldFirst = reinterpret_cast<SLIST_ENTRY*>(ListHead->Alignment);
     ListEntry->Next = oldFirst;
     ListHead->Alignment = reinterpret_cast<uint64_t>(ListEntry);
+    uint64_t depth = (ListHead->Region & 0xFFFF) + 1;
+    uint64_t seq = ((ListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    ListHead->Region = (seq << 16) | (depth & 0xFFFF);
     return oldFirst;
 }
 
@@ -9486,8 +9495,30 @@ inline size_t WINAPI HeapCompact(HANDLE /*hHeap*/, DWORD /*dwFlags*/) noexcept {
     return 0;
 }
 
-inline void* WINAPI InterlockedFlushSList(SLIST_HEADER* /*ListHead*/) noexcept {
-    return nullptr;
+inline SLIST_ENTRY* WINAPI InterlockedPopEntrySList(SLIST_HEADER* ListHead) noexcept {
+    if (!ListHead) return nullptr;
+    auto* first = reinterpret_cast<SLIST_ENTRY*>(ListHead->Alignment);
+    if (!first) return nullptr;
+    ListHead->Alignment = reinterpret_cast<uint64_t>(first->Next);
+    uint64_t depth = ListHead->Region & 0xFFFF;
+    if (depth > 0) depth--;
+    uint64_t seq = ((ListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    ListHead->Region = (seq << 16) | (depth & 0xFFFF);
+    return first;
+}
+
+inline SLIST_ENTRY* WINAPI InterlockedFlushSList(SLIST_HEADER* ListHead) noexcept {
+    if (!ListHead) return nullptr;
+    auto* oldFirst = reinterpret_cast<SLIST_ENTRY*>(ListHead->Alignment);
+    ListHead->Alignment = 0;
+    uint64_t seq = ((ListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    ListHead->Region = (seq << 16);
+    return oldFirst;
+}
+
+inline uint16_t WINAPI QueryDepthSList(const SLIST_HEADER* ListHead) noexcept {
+    if (!ListHead) return 0;
+    return static_cast<uint16_t>(ListHead->Region & 0xFFFF);
 }
 
 inline BOOL WINAPI ReadConsoleA(HANDLE /*hConsoleInput*/, void* lpBuffer, DWORD nNumberOfCharsToRead, DWORD* lpNumberOfCharsRead, void* /*pInputControl*/) noexcept {
@@ -11296,6 +11327,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "HeapValidate", reinterpret_cast<void*>(HeapValidate));
     ldr.registerExport("kernel32.dll", "HeapCompact", reinterpret_cast<void*>(HeapCompact));
     ldr.registerExport("kernel32.dll", "InterlockedFlushSList", reinterpret_cast<void*>(InterlockedFlushSList));
+    ldr.registerExport("kernel32.dll", "InterlockedPopEntrySList", reinterpret_cast<void*>(InterlockedPopEntrySList));
+    ldr.registerExport("kernel32.dll", "QueryDepthSList", reinterpret_cast<void*>(QueryDepthSList));
     ldr.registerExport("kernel32.dll", "ReadConsoleA", reinterpret_cast<void*>(ReadConsoleA));
     ldr.registerExport("kernel32.dll", "RtlCaptureStackBackTrace", reinterpret_cast<void*>(RtlCaptureStackBackTrace));
     ldr.registerExport("kernel32.dll", "CheckRemoteDebuggerPresent", reinterpret_cast<void*>(CheckRemoteDebuggerPresent));

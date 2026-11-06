@@ -7,6 +7,7 @@
 #include <cwchar>
 #include <mutex>
 #include <vector>
+#include <bit>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/context.hpp"
 #include "micant/shared/ntstatus.hpp"
@@ -1662,6 +1663,26 @@ struct SYSTEM_LEAP_SECOND_INFORMATION {
 };
 using PSYSTEM_LEAP_SECOND_INFORMATION = SYSTEM_LEAP_SECOND_INFORMATION*;
 
+// Class 227: SystemMemoryTopologyInformation
+struct SYSTEM_MEMORY_TOPOLOGY_INFORMATION {
+    ULONG ChannelCount;
+    ULONG DimmCount;
+    ULONG BusWidthBits;
+    ULONG MemorySpeedMTs;
+    ULONG BandwidthGBs;
+    ULONG AverageLatencyNs;
+};
+using PSYSTEM_MEMORY_TOPOLOGY_INFORMATION = SYSTEM_MEMORY_TOPOLOGY_INFORMATION*;
+
+// Class 228: SystemDpcWatchdogInformation
+struct SYSTEM_DPC_WATCHDOG_INFORMATION {
+    ULONG DpcTimeLimitTicks;
+    ULONG DpcWatchdogSequence;
+    ULONG TotalDpcTime;
+    ULONG TotalInterruptTime;
+};
+using PSYSTEM_DPC_WATCHDOG_INFORMATION = SYSTEM_DPC_WATCHDOG_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3290,6 +3311,36 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_LEAP_SECOND_INFORMATION);
             return NtStatus::Success;
         }
+        case 227: { // SystemMemoryTopologyInformation (Class 227)
+            if (SystemInformationLength < sizeof(SYSTEM_MEMORY_TOPOLOGY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_TOPOLOGY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_MEMORY_TOPOLOGY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->ChannelCount = 2; // Dual-channel
+            pInfo->DimmCount = 2;    // 2 DIMMs
+            pInfo->BusWidthBits = 128; // 128-bit bus width
+            pInfo->MemorySpeedMTs = 6000; // DDR5-6000
+            pInfo->BandwidthGBs = 96; // 96 GB/s bandwidth
+            pInfo->AverageLatencyNs = 45; // 45 ns latency
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_TOPOLOGY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 228: { // SystemDpcWatchdogInformation (Class 228)
+            if (SystemInformationLength < sizeof(SYSTEM_DPC_WATCHDOG_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DPC_WATCHDOG_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_DPC_WATCHDOG_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->DpcTimeLimitTicks = 50000; // 50,000 clock ticks limit
+            pInfo->DpcWatchdogSequence = 1;
+            pInfo->TotalDpcTime = 120; // 120 ticks accumulated
+            pInfo->TotalInterruptTime = 45; // 45 ticks interrupt processing
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DPC_WATCHDOG_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4106,10 +4157,83 @@ inline NtStatus WINAPI RtlFindMessage(void* /*DllHandle*/, ULONG /*MessageTableI
     return NtStatus::Success;
 }
 
-inline void* WINAPI RtlFirstEntrySList(void* /*SListHead*/) noexcept { return nullptr; }
-inline void* WINAPI RtlInterlockedFlushSList(void* /*SListHead*/) noexcept { return nullptr; }
-inline void* WINAPI RtlInterlockedPopEntrySList(void* /*SListHead*/) noexcept { return nullptr; }
-inline void* WINAPI RtlInterlockedPushEntrySList(void* /*SListHead*/, void* ListEntry) noexcept { return ListEntry; }
+struct SLIST_ENTRY {
+    SLIST_ENTRY* Next;
+};
+using PSLIST_ENTRY = SLIST_ENTRY*;
+
+union alignas(16) SLIST_HEADER {
+    struct {
+        uint64_t Alignment;
+        uint64_t Region;
+    };
+    struct {
+        uint64_t Depth : 16;
+        uint64_t Sequence : 48;
+        uint64_t Reserved : 4;
+        uint64_t NextEntry : 60;
+    } HeaderX64;
+};
+using PSLIST_HEADER = SLIST_HEADER*;
+
+inline void WINAPI RtlInitializeSListHead(PSLIST_HEADER SListHead) noexcept {
+    if (SListHead) {
+        SListHead->Alignment = 0;
+        SListHead->Region = 0;
+    }
+}
+
+inline PSLIST_ENTRY WINAPI RtlFirstEntrySList(const SLIST_HEADER* SListHead) noexcept {
+    if (!SListHead) return nullptr;
+    return reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
+}
+
+inline uint16_t WINAPI RtlQueryDepthSList(const SLIST_HEADER* SListHead) noexcept {
+    if (!SListHead) return 0;
+    return static_cast<uint16_t>(SListHead->Region & 0xFFFF);
+}
+
+inline PSLIST_ENTRY WINAPI RtlInterlockedPushEntrySList(PSLIST_HEADER SListHead, PSLIST_ENTRY ListEntry) noexcept {
+    if (!SListHead || !ListEntry) return nullptr;
+    auto* oldFirst = reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
+    ListEntry->Next = oldFirst;
+    SListHead->Alignment = reinterpret_cast<uint64_t>(ListEntry);
+    uint64_t depth = (SListHead->Region & 0xFFFF) + 1;
+    uint64_t seq = ((SListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    SListHead->Region = (seq << 16) | (depth & 0xFFFF);
+    return oldFirst;
+}
+
+inline PSLIST_ENTRY WINAPI RtlInterlockedPopEntrySList(PSLIST_HEADER SListHead) noexcept {
+    if (!SListHead) return nullptr;
+    auto* first = reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
+    if (!first) return nullptr;
+    SListHead->Alignment = reinterpret_cast<uint64_t>(first->Next);
+    uint64_t depth = SListHead->Region & 0xFFFF;
+    if (depth > 0) depth--;
+    uint64_t seq = ((SListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    SListHead->Region = (seq << 16) | (depth & 0xFFFF);
+    return first;
+}
+
+inline PSLIST_ENTRY WINAPI RtlInterlockedFlushSList(PSLIST_HEADER SListHead) noexcept {
+    if (!SListHead) return nullptr;
+    auto* first = reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
+    SListHead->Alignment = 0;
+    uint64_t seq = ((SListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    SListHead->Region = (seq << 16);
+    return first;
+}
+
+inline int8_t WINAPI RtlFindLeastSignificantBit(uint64_t Set) noexcept {
+    if (Set == 0) return -1;
+    return static_cast<int8_t>(std::countr_zero(Set));
+}
+
+inline int8_t WINAPI RtlFindMostSignificantBit(uint64_t Set) noexcept {
+    if (Set == 0) return -1;
+    return static_cast<int8_t>(63 - std::countl_zero(Set));
+}
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
@@ -4557,9 +4681,13 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlExpandEnvironmentStrings_U", reinterpret_cast<void*>(RtlExpandEnvironmentStrings_U));
     ldr.registerExport("ntdll.dll", "RtlFindMessage", reinterpret_cast<void*>(RtlFindMessage));
     ldr.registerExport("ntdll.dll", "RtlFirstEntrySList", reinterpret_cast<void*>(RtlFirstEntrySList));
+    ldr.registerExport("ntdll.dll", "RtlInitializeSListHead", reinterpret_cast<void*>(RtlInitializeSListHead));
+    ldr.registerExport("ntdll.dll", "RtlQueryDepthSList", reinterpret_cast<void*>(RtlQueryDepthSList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedFlushSList", reinterpret_cast<void*>(RtlInterlockedFlushSList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPopEntrySList", reinterpret_cast<void*>(RtlInterlockedPopEntrySList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPushEntrySList", reinterpret_cast<void*>(RtlInterlockedPushEntrySList));
+    ldr.registerExport("ntdll.dll", "RtlFindLeastSignificantBit", reinterpret_cast<void*>(RtlFindLeastSignificantBit));
+    ldr.registerExport("ntdll.dll", "RtlFindMostSignificantBit", reinterpret_cast<void*>(RtlFindMostSignificantBit));
     ldr.registerExport("ntdll.dll", "RtlFormatMessage", reinterpret_cast<void*>(RtlFormatMessage));
     ldr.registerExport("ntdll.dll", "RtlGUIDFromString", reinterpret_cast<void*>(RtlGUIDFromString));
     ldr.registerExport("ntdll.dll", "RtlStringFromGUID", reinterpret_cast<void*>(RtlStringFromGUID));

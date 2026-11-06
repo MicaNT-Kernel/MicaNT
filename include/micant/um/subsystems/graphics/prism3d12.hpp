@@ -1227,6 +1227,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS24 = 40;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS25 = 41;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS26 = 42;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS27 = 43;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS28 = 44;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -1425,6 +1426,13 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS27 {
     BOOL     DynamicNodeExpansionSupported{ 1 };
     BOOL     MultiTierWorkGraphsSupported{ 1 };
     BOOL     AmplifiedMeshDispatchSupported{ 1 };
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS28 {
+    uint32_t WorkGraphsTier{ 12u }; // Tier 1.2
+    BOOL     ComputeOnlyDeviceSupported{ 1 };
+    BOOL     IndependentSamplerMipLevelsSupported{ 1 };
+    BOOL     UnboundedStreamOutputSupported{ 1 };
 };
 
 static constexpr GUID CLSID_D3D12DeviceRemovedExtendedData =
@@ -2270,6 +2278,10 @@ static constexpr IID IID_ID3D12Device16 =
     { 0x0f2f3f98, 0x65aa, 0x4dc6, { 0xbe, 0x64, 0x0c, 0xc1, 0x1d, 0x4d, 0x8a, 0x4b } };
 static constexpr IID OFFICIAL_IID_ID3D12Device16 = IID_ID3D12Device16;
 
+static constexpr IID IID_ID3D12Device17 = 
+    { 0x8e89f81d, 0x6663, 0x455b, { 0xb9, 0xd9, 0x0b, 0x79, 0x37, 0x5e, 0x11, 0x04 } };
+static constexpr IID OFFICIAL_IID_ID3D12Device17 = IID_ID3D12Device17;
+
 class ID3D12Device11 : public ID3D12Device10 {
 public:
     virtual void CreateSampler2(
@@ -2357,6 +2369,18 @@ public:
         ID3D12Resource* pTargetedResource,
         ID3D12Resource* pFeedbackResource,
         D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+};
+
+class ID3D12Device17 : public ID3D12Device16 {
+public:
+    virtual int32_t CreateWorkGraphProgramRecord(
+        const void* pDesc,
+        const IID& riid,
+        void** ppRecord) = 0;
+
+    virtual int32_t SetWorkGraphProgramRecord(
+        uint32_t ProgramIndex,
+        const void* pRecord) = 0;
 };
 
 class Prism3D12QueryHeapImpl : public ID3D12QueryHeap {
@@ -3866,7 +3890,7 @@ public:
     [[nodiscard]] uint32_t GetMaxAttributeSize() const noexcept { return m_maxAttributeSize; }
 };
 
-class Prism3D12DeviceImpl : public ID3D12Device16 {
+class Prism3D12DeviceImpl : public ID3D12Device17 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -3876,6 +3900,7 @@ private:
     uint32_t m_heapsCreated{ 0 };
     uint32_t m_placedResourcesCreated{ 0 };
     uint32_t m_pipelineLibrariesCreated{ 0 };
+    uint32_t m_workGraphProgramRecordsCreated{ 0 };
 
 public:
     Prism3D12DeviceImpl(IUnknown* pAdapter = nullptr, D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_12_0)
@@ -3891,8 +3916,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16) {
-            *ppv = static_cast<ID3D12Device16*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16 || riid == IID_ID3D12Device17 || riid == OFFICIAL_IID_ID3D12Device17) {
+            *ppv = static_cast<ID3D12Device17*>(this);
             AddRef();
             return 0;
         }
@@ -4517,6 +4542,22 @@ public:
         return 0;
     }
 
+    int32_t CreateWorkGraphProgramRecord(
+        const void* /*pDesc*/,
+        const IID& /*riid*/,
+        void** ppRecord) override {
+        if (!ppRecord) return -1;
+        *ppRecord = reinterpret_cast<void*>(0xDEADBEEF);
+        m_workGraphProgramRecordsCreated++;
+        return 0;
+    }
+
+    int32_t SetWorkGraphProgramRecord(
+        uint32_t /*ProgramIndex*/,
+        const void* /*pRecord*/) override {
+        return 0;
+    }
+
     int32_t CreateShaderCacheSession(
         const D3D12_SHADER_CACHE_SESSION_DESC* pDesc,
         const IID& riid,
@@ -4779,6 +4820,15 @@ public:
             pData->DynamicNodeExpansionSupported = TRUE;
             pData->MultiTierWorkGraphsSupported = TRUE;
             pData->AmplifiedMeshDispatchSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS28) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS28)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS28*>(pFeatureSupportData);
+            pData->WorkGraphsTier = 12u; // Tier 1.2
+            pData->ComputeOnlyDeviceSupported = TRUE;
+            pData->IndependentSamplerMipLevelsSupported = TRUE;
+            pData->UnboundedStreamOutputSupported = TRUE;
             return 0;
         }
 
