@@ -9242,6 +9242,30 @@ inline BOOLEAN WINAPI InterlockedBitTestAndReset64(LONG64 volatile* Base, LONG64
     return ntdll::RtlInterlockedBitTestAndReset64(Base, Bit);
 }
 
+inline LONG WINAPI InterlockedAnd(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedAnd(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedOr(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedOr(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedXor(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedXor(Destination, Value);
+}
+
+inline LONG64 WINAPI InterlockedAnd64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedAnd64(Destination, Value);
+}
+
+inline LONG64 WINAPI InterlockedOr64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedOr64(Destination, Value);
+}
+
+inline LONG64 WINAPI InterlockedXor64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedXor64(Destination, Value);
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11395,6 +11419,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedBitTestAndReset", reinterpret_cast<void*>(InterlockedBitTestAndReset));
     ldr.registerExport("kernel32.dll", "InterlockedBitTestAndSet64", reinterpret_cast<void*>(InterlockedBitTestAndSet64));
     ldr.registerExport("kernel32.dll", "InterlockedBitTestAndReset64", reinterpret_cast<void*>(InterlockedBitTestAndReset64));
+    ldr.registerExport("kernel32.dll", "InterlockedAnd", reinterpret_cast<void*>(InterlockedAnd));
+    ldr.registerExport("kernel32.dll", "InterlockedOr", reinterpret_cast<void*>(InterlockedOr));
+    ldr.registerExport("kernel32.dll", "InterlockedXor", reinterpret_cast<void*>(InterlockedXor));
+    ldr.registerExport("kernel32.dll", "InterlockedAnd64", reinterpret_cast<void*>(InterlockedAnd64));
+    ldr.registerExport("kernel32.dll", "InterlockedOr64", reinterpret_cast<void*>(InterlockedOr64));
+    ldr.registerExport("kernel32.dll", "InterlockedXor64", reinterpret_cast<void*>(InterlockedXor64));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

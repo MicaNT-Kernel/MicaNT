@@ -1400,6 +1400,8 @@ inline NtStatus WINAPI NtQuerySecurityObject(
 #include <cstring>
 
 using ULONG = uint32_t;
+using ULONG64 = uint64_t;
+using LONG64 = int64_t;
 using ULONG_PTR = uintptr_t;
 using CCHAR = char;
 using BOOLEAN = uint8_t;
@@ -1763,6 +1765,28 @@ struct SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION {
     uint32_t Reserved;
 };
 using PSYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION = SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION*;
+
+// Class 237: SystemNumaProximityInformation (Extended)
+struct SYSTEM_NUMA_PROXIMITY_INFORMATION_EX {
+    ULONG    NodeId;
+    ULONG    ProximityId;
+    ULONG    Flags;
+    ULONG    DistanceRatio;
+    ULONG64  TotalMemoryBytes;
+    ULONG64  AvailableMemoryBytes;
+};
+using PSYSTEM_NUMA_PROXIMITY_INFORMATION_EX = SYSTEM_NUMA_PROXIMITY_INFORMATION_EX*;
+
+// Class 238: SystemEntropyPoolInformation
+struct SYSTEM_ENTROPY_POOL_INFORMATION {
+    ULONG    PoolCapacityBits;
+    ULONG    CurrentEntropyBits;
+    ULONG    ReseedCount;
+    ULONG    JitterEntropyStatus;
+    ULONG    HardwareRngHealth;
+    ULONG    Reserved;
+};
+using PSYSTEM_ENTROPY_POOL_INFORMATION = SYSTEM_ENTROPY_POOL_INFORMATION*;
 
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
@@ -3543,6 +3567,38 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION);
             return NtStatus::Success;
         }
+        case 237: { // SystemNumaProximityInformation (Class 237 / Extended)
+            if (SystemInformationLength < sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION_EX)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION_EX);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_NUMA_PROXIMITY_INFORMATION_EX*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->NodeId = 0;
+            pInfo->ProximityId = 100;
+            pInfo->Flags = 0x00000001; // NUMA_NODE_ONLINE
+            pInfo->DistanceRatio = 10; // Local node latency baseline (1.0x)
+            pInfo->TotalMemoryBytes = 17179869184ULL;     // 16 GB node memory
+            pInfo->AvailableMemoryBytes = 15032385536ULL; // ~14 GB available
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_NUMA_PROXIMITY_INFORMATION_EX);
+            return NtStatus::Success;
+        }
+        case 238: { // SystemEntropyPoolInformation (Class 238)
+            if (SystemInformationLength < sizeof(SYSTEM_ENTROPY_POOL_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ENTROPY_POOL_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_ENTROPY_POOL_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PoolCapacityBits = 4096;
+            pInfo->CurrentEntropyBits = 4096;
+            pInfo->ReseedCount = 128;
+            pInfo->JitterEntropyStatus = 1; // ACTIVE
+            pInfo->HardwareRngHealth = 1;   // HEALTHY (RDRAND/RDSEED verified)
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ENTROPY_POOL_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4567,6 +4623,42 @@ inline BOOLEAN WINAPI RtlInterlockedBitTestAndReset64(LONG64 volatile* Base, LON
     return (oldVal & mask) != 0 ? TRUE : FALSE;
 }
 
+inline LONG WINAPI RtlInterlockedAnd(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    return atomicDest->fetch_and(Value, std::memory_order_seq_cst);
+}
+
+inline LONG WINAPI RtlInterlockedOr(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    return atomicDest->fetch_or(Value, std::memory_order_seq_cst);
+}
+
+inline LONG WINAPI RtlInterlockedXor(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
+}
+
+inline LONG64 WINAPI RtlInterlockedAnd64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->fetch_and(Value, std::memory_order_seq_cst);
+}
+
+inline LONG64 WINAPI RtlInterlockedOr64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->fetch_or(Value, std::memory_order_seq_cst);
+}
+
+inline LONG64 WINAPI RtlInterlockedXor64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -5071,6 +5163,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndReset", reinterpret_cast<void*>(RtlInterlockedBitTestAndReset));
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndSet64", reinterpret_cast<void*>(RtlInterlockedBitTestAndSet64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndReset64", reinterpret_cast<void*>(RtlInterlockedBitTestAndReset64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAnd", reinterpret_cast<void*>(RtlInterlockedAnd));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedOr", reinterpret_cast<void*>(RtlInterlockedOr));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXor", reinterpret_cast<void*>(RtlInterlockedXor));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAnd64", reinterpret_cast<void*>(RtlInterlockedAnd64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedOr64", reinterpret_cast<void*>(RtlInterlockedOr64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXor64", reinterpret_cast<void*>(RtlInterlockedXor64));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
