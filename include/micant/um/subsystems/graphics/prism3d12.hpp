@@ -526,6 +526,7 @@ class ID3D12GraphicsCommandList4;
 class ID3D12GraphicsCommandList5;
 class ID3D12GraphicsCommandList6;
 class ID3D12GraphicsCommandList10;
+class ID3D12GraphicsCommandList11;
 class ID3D12ProtectedResourceSession;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
@@ -1196,6 +1197,16 @@ public:
     virtual void DispatchGraph(const D3D12_DISPATCH_GRAPH_DESC* pDesc) = 0;
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList11 = 
+    { 0x845f9da5, 0xe11a, 0x45c1, { 0x9d, 0xc5, 0xd3, 0x6c, 0x50, 0x7c, 0x39, 0x05 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList11 = IID_ID3D12GraphicsCommandList11;
+
+class ID3D12GraphicsCommandList11 : public ID3D12GraphicsCommandList10 {
+public:
+    virtual void SetWorkGraphBackingMemory(const D3D12_GPU_VIRTUAL_ADDRESS_RANGE* pBackingMemory) = 0;
+    virtual void DispatchGraphProgramRecord(uint32_t NodeIndex, const void* pRecord) = 0;
+};
+
 class ID3D12CommandQueue : public ID3D12DeviceChild {
 public:
     virtual void ExecuteCommandLists(uint32_t NumCommandLists, ID3D12CommandList* const* ppCommandLists) = 0;
@@ -1228,6 +1239,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS25 = 41;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS26 = 42;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS27 = 43;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS28 = 44;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS29 = 45;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -1433,6 +1445,14 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS28 {
     BOOL     ComputeOnlyDeviceSupported{ 1 };
     BOOL     IndependentSamplerMipLevelsSupported{ 1 };
     BOOL     UnboundedStreamOutputSupported{ 1 };
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS29 {
+    uint32_t WorkGraphsTier{ 12u }; // Tier 1.2
+    BOOL     GPUUploadHeapSupported{ 1 };
+    BOOL     DynamicDepthBiasClampSupported{ 1 };
+    BOOL     BackingMemoryCustomPoolSupported{ 1 };
+    BOOL     ComputeOnlyDeviceSupported{ 1 };
 };
 
 static constexpr GUID CLSID_D3D12DeviceRemovedExtendedData =
@@ -2905,7 +2925,7 @@ public:
 };
 
 // Command List implementation
-class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList10 {
+class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList11 {
 public:
     enum class CommandType {
         TransitionBarrier,
@@ -2952,6 +2972,8 @@ private:
     bool m_hasProgram{ false };
     D3D12_SET_PROGRAM_DESC m_currentProgram{};
     std::vector<D3D12_DISPATCH_GRAPH_DESC> m_dispatchedGraphs;
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE m_backingMemory{};
+    std::vector<std::pair<uint32_t, const void*>> m_recordedProgramRecords;
     uint32_t m_recordedEnhancedBarriersCount{ 0 };
     uint32_t m_dispatchedMeshCount{ 0 };
     uint32_t m_dispatchedRaysCount{ 0 };
@@ -2988,6 +3010,11 @@ public:
             riid == IID_ID3D12GraphicsCommandList9 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList9 ||
             riid == IID_ID3D12GraphicsCommandList10 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList10) {
             *ppv = static_cast<ID3D12GraphicsCommandList10*>(this);
+            AddRef();
+            return 0;
+        }
+        if (riid == IID_ID3D12GraphicsCommandList11 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList11) {
+            *ppv = static_cast<ID3D12GraphicsCommandList11*>(this);
             AddRef();
             return 0;
         }
@@ -3037,6 +3064,8 @@ public:
         m_pShadingRateImage = nullptr;
         m_shadingRateSetCount = 0;
         m_shadingRateImageSetCount = 0;
+        m_backingMemory = {};
+        m_recordedProgramRecords.clear();
         m_isOpen = true;
         return 0;
     }
@@ -3044,6 +3073,8 @@ public:
     void ClearState(ID3D12PipelineState*) override {
         m_commands.clear();
         m_dispatchedGraphs.clear();
+        m_backingMemory = {};
+        m_recordedProgramRecords.clear();
         m_hasProgram = false;
         m_pProtectedSession = nullptr;
     }
@@ -3439,6 +3470,24 @@ public:
     [[nodiscard]] float GetDepthBiasClamp() const noexcept { return m_depthBiasClamp; }
     [[nodiscard]] float GetSlopeScaledDepthBias() const noexcept { return m_slopeScaledDepthBias; }
     [[nodiscard]] D3D12_INDEX_BUFFER_STRIP_CUT_VALUE GetIndexBufferStripCutValue() const noexcept { return m_ibStripCutValue; }
+
+    void SetWorkGraphBackingMemory(const D3D12_GPU_VIRTUAL_ADDRESS_RANGE* pBackingMemory) override {
+        if (!m_isOpen) return;
+        if (pBackingMemory) {
+            m_backingMemory = *pBackingMemory;
+        } else {
+            m_backingMemory = {};
+        }
+    }
+
+    void DispatchGraphProgramRecord(uint32_t NodeIndex, const void* pRecord) override {
+        if (!m_isOpen) return;
+        m_recordedProgramRecords.push_back({ NodeIndex, pRecord });
+    }
+
+    [[nodiscard]] const D3D12_GPU_VIRTUAL_ADDRESS_RANGE& GetWorkGraphBackingMemory() const noexcept { return m_backingMemory; }
+    [[nodiscard]] size_t GetRecordedProgramRecordCount() const noexcept { return m_recordedProgramRecords.size(); }
+    [[nodiscard]] const std::vector<std::pair<uint32_t, const void*>>& GetRecordedProgramRecords() const noexcept { return m_recordedProgramRecords; }
 
     const std::vector<Command>& GetRecordedCommands() const { return m_commands; }
     bool IsOpen() const { return m_isOpen; }
@@ -4829,6 +4878,16 @@ public:
             pData->ComputeOnlyDeviceSupported = TRUE;
             pData->IndependentSamplerMipLevelsSupported = TRUE;
             pData->UnboundedStreamOutputSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS29) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS29)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS29*>(pFeatureSupportData);
+            pData->WorkGraphsTier = 12u; // Tier 1.2
+            pData->GPUUploadHeapSupported = TRUE;
+            pData->DynamicDepthBiasClampSupported = TRUE;
+            pData->BackingMemoryCustomPoolSupported = TRUE;
+            pData->ComputeOnlyDeviceSupported = TRUE;
             return 0;
         }
 

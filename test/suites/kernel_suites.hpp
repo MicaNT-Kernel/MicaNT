@@ -50555,3 +50555,289 @@ inline void Test_Horizon238_Device17Options28_MemoryTopologyDpcWatchdog_SListBit
 
     std::cout << "[TEST] Suite 454: Horizon 238 - Direct3D 12 ID3D12Device17 & Options 28, NT SystemInfo 227/228, SList & BitOps & NIST SP 800-185 ParallelHash PASSED." << std::endl;
 }
+
+inline void Test_Horizon239_CommandList11Options29_PoolZeroingManifest_SListEx_And_ParallelHashXOF_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 455: Horizon 239 - Direct3D 12 CommandList11 & Options 29, NT SystemInfo 229/230, SList Ex & NIST SP 800-185 ParallelHashXOF\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12GraphicsCommandList11 & Options 29
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12GraphicsCommandList11 & Options 29 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. Verify Options 29 Feature Support
+        D3D12_FEATURE_DATA_D3D12_OPTIONS29 opts29{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS29, &opts29, sizeof(opts29));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS29 succeeds");
+        TEST_ASSERT(opts29.WorkGraphsTier == 12u, "Options 29 WorkGraphsTier is 12 (Tier 1.2)");
+        TEST_ASSERT(opts29.GPUUploadHeapSupported == TRUE, "Options 29 GPUUploadHeapSupported is TRUE");
+        TEST_ASSERT(opts29.DynamicDepthBiasClampSupported == TRUE, "Options 29 DynamicDepthBiasClampSupported is TRUE");
+        TEST_ASSERT(opts29.BackingMemoryCustomPoolSupported == TRUE, "Options 29 BackingMemoryCustomPoolSupported is TRUE");
+        TEST_ASSERT(opts29.ComputeOnlyDeviceSupported == TRUE, "Options 29 ComputeOnlyDeviceSupported is TRUE");
+
+        // 2. Command List 11 Interface & QueryInterface
+        Prism3D12CommandAllocatorImpl alloc(&device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        ID3D12GraphicsCommandList11* pCmdList11 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList11, reinterpret_cast<void**>(&pCmdList11));
+        TEST_ASSERT(hr == 0 && pCmdList11 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList11 succeeds");
+
+        ID3D12GraphicsCommandList11* pCmdList11Canon = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList11, reinterpret_cast<void**>(&pCmdList11Canon));
+        TEST_ASSERT(hr == 0 && pCmdList11Canon != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList11 succeeds");
+        pCmdList11Canon->Release();
+
+        // 3. Test SetWorkGraphBackingMemory
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory().StartAddress == 0, "Initial backing memory start address is 0");
+        D3D12_GPU_VIRTUAL_ADDRESS_RANGE memRange{};
+        memRange.StartAddress = 0xA0000000ULL;
+        memRange.SizeInBytes = 2097152; // 2 MB
+        pCmdList11->SetWorkGraphBackingMemory(&memRange);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory().StartAddress == 0xA0000000ULL, "Backing memory start address is 0xA0000000");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory().SizeInBytes == 2097152, "Backing memory size is 2 MB");
+
+        pCmdList11->SetWorkGraphBackingMemory(nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory().StartAddress == 0, "Nullptr clears backing memory address");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory().SizeInBytes == 0, "Nullptr clears backing memory size");
+
+        // 4. Test DispatchGraphProgramRecord
+        TEST_ASSERT(cmdList.GetRecordedProgramRecordCount() == 0, "Initial program record count is 0");
+        uint32_t recordPayload = 0xCAFEBABE;
+        pCmdList11->DispatchGraphProgramRecord(7, &recordPayload);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecordCount() == 1, "Recorded program record count is 1");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords()[0].first == 7, "Recorded node index is 7");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords()[0].second == &recordPayload, "Recorded pointer matches payload address");
+
+        // 5. Test Reset clears backing memory and program records
+        pCmdList11->SetWorkGraphBackingMemory(&memRange);
+        cmdList.Reset(&alloc, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory().StartAddress == 0, "Reset clears backing memory");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecordCount() == 0, "Reset clears program records");
+
+        pCmdList11->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 229 (PoolZeroing) & 230 (CodeIntegrityPlatformManifest)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 229 & 230...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 229: SystemPoolZeroingInformation
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            229,
+            nullptr,
+            0,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 229 with 0 length returns InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_POOL_ZEROING_INFORMATION), "Class 229 returned length matches sizeof structure");
+
+        SYSTEM_POOL_ZEROING_INFORMATION poolZero{};
+        status = NtQuerySystemInformation_Export(
+            229,
+            &poolZero,
+            sizeof(poolZero),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "Class 229 query succeeds");
+        TEST_ASSERT(poolZero.PoolZeroingSupported == 1, "PoolZeroingSupported is 1");
+        TEST_ASSERT(poolZero.PoolZeroingEnabled == 1, "PoolZeroingEnabled is 1");
+        TEST_ASSERT(poolZero.ZeroedPagesCount == 1048576, "ZeroedPagesCount is 1048576 pages");
+        TEST_ASSERT(poolZero.TotalAllocationsZeroed == 409600, "TotalAllocationsZeroed is 409600 allocations");
+
+        // 2. Class 230: SystemCodeIntegrityPlatformManifestInformation
+        status = NtQuerySystemInformation_Export(
+            230,
+            nullptr,
+            0,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 230 with 0 length returns InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION), "Class 230 returned length matches sizeof structure");
+
+        SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION manifest{};
+        status = NtQuerySystemInformation_Export(
+            230,
+            &manifest,
+            sizeof(manifest),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "Class 230 query succeeds");
+        TEST_ASSERT(manifest.PlatformManifestPresent == 1, "PlatformManifestPresent is 1");
+        TEST_ASSERT(manifest.ManifestHashType == 1, "ManifestHashType is 1 (SHA-256)");
+        TEST_ASSERT(manifest.ManifestCount == 2, "ManifestCount is 2");
+        TEST_ASSERT(manifest.PlatformPolicyVersion == 0x00010002, "PlatformPolicyVersion is 0x00010002");
+        TEST_ASSERT(std::memcmp(manifest.PlatformId, "MICANT-PLAT-001", 15) == 0, "PlatformId contains MICANT-PLAT-001");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive Direct SList Ex Operations
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive Direct SList Ex Operations...\n";
+
+        using namespace micant::ntdll;
+        InitializeNtdllSubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
+
+        SLIST_HEADER listHead{};
+        RtlInitializeSListHead(&listHead);
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 0, "Initial SList depth is 0");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == nullptr, "Initial FirstEntry is nullptr");
+
+        // Construct a linked chain: entry1 -> entry2 -> entry3
+        SLIST_ENTRY entry1{}, entry2{}, entry3{}, entry4{};
+        entry1.Next = &entry2;
+        entry2.Next = &entry3;
+        entry3.Next = nullptr;
+
+        // Push entire batch [entry1 .. entry3] of count 3
+        auto* oldFirst = RtlInterlockedPushListSListEx(&listHead, &entry1, &entry3, 3);
+        TEST_ASSERT(oldFirst == nullptr, "Batch push on empty head returns nullptr");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 3, "SList depth is 3 after batch push");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == &entry1, "First entry is entry1");
+
+        // Push single entry via RtlInterlockedPushEntrySListEx
+        oldFirst = RtlInterlockedPushEntrySListEx(&listHead, &entry4);
+        TEST_ASSERT(oldFirst == &entry1, "PushEntrySListEx returns previous head entry1");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 4, "SList depth is 4 after push entry");
+        TEST_ASSERT(RtlFirstEntrySList(&listHead) == &entry4, "First entry is entry4");
+
+        // Pop entries
+        auto* popped = RtlInterlockedPopEntrySList(&listHead);
+        TEST_ASSERT(popped == &entry4, "Popped entry is entry4");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 3, "Depth is 3 after pop");
+
+        popped = RtlInterlockedPopEntrySList(&listHead);
+        TEST_ASSERT(popped == &entry1, "Popped entry is entry1");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 2, "Depth is 2 after pop");
+
+        // Flush remaining
+        auto* flushed = RtlInterlockedFlushSList(&listHead);
+        TEST_ASSERT(flushed == &entry2, "Flushed entry is entry2");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 0, "Depth is 0 after flush");
+
+        // Export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedPushListSListEx") != nullptr, "ntdll exports RtlInterlockedPushListSListEx");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedPushEntrySListEx") != nullptr, "ntdll exports RtlInterlockedPushEntrySListEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedPushListSListEx") != nullptr, "kernel32 exports InterlockedPushListSListEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedPushListSList") != nullptr, "kernel32 exports InterlockedPushListSList");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-185 ParallelHashXOF (Extendable-Output ParallelHash)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-185 ParallelHashXOF (ParallelHashXOF128 & ParallelHashXOF256)...\n";
+
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        std::string sampleMsg = "ParallelHashXOF arbitrary extendable squeeze output across sovereign MicaNT partitions";
+        std::span<const uint8_t> sampleData(reinterpret_cast<const uint8_t*>(sampleMsg.data()), sampleMsg.size());
+
+        // 1. ParallelHashXOF128 verification
+        auto xof128_32 = ParallelHashXOF128::hash(sampleData, 16, "MicaNT", 32);
+        TEST_ASSERT(xof128_32.size() == 32, "ParallelHashXOF128 produces 32-byte digest");
+
+        auto xof128_64 = ParallelHashXOF128::hash(sampleData, 16, "MicaNT", 64);
+        TEST_ASSERT(xof128_64.size() == 64, "ParallelHashXOF128 produces 64-byte squeeze stream");
+        TEST_ASSERT(std::memcmp(xof128_32.data(), xof128_64.data(), 32) == 0,
+                    "First 32 bytes of 64-byte squeeze match 32-byte squeeze exactly (XOF property)");
+
+        // Incremental streaming for XOF128
+        ParallelHashXOF128::Context xof128_ctx;
+        ParallelHashXOF128::init(xof128_ctx, 16, "MicaNT");
+        for (size_t i = 0; i < sampleData.size(); i += 9) {
+            size_t chunkSize = std::min<size_t>(9, sampleData.size() - i);
+            ParallelHashXOF128::update(xof128_ctx, sampleData.subspan(i, chunkSize));
+        }
+        std::vector<uint8_t> xof128_streaming(32);
+        ParallelHashXOF128::squeeze(xof128_ctx, xof128_streaming);
+        TEST_ASSERT(std::memcmp(xof128_32.data(), xof128_streaming.data(), 32) == 0,
+                    "ParallelHashXOF128 streaming update matches one-shot evaluation bit-exact");
+
+        // 2. ParallelHashXOF256 verification
+        auto xof256_64 = ParallelHashXOF256::hash(sampleData, 16, "MicaNT", 64);
+        TEST_ASSERT(xof256_64.size() == 64, "ParallelHashXOF256 produces 64-byte digest");
+
+        auto xof256_128 = ParallelHashXOF256::hash(sampleData, 16, "MicaNT", 128);
+        TEST_ASSERT(xof256_128.size() == 128, "ParallelHashXOF256 produces 128-byte squeeze stream");
+        TEST_ASSERT(std::memcmp(xof256_64.data(), xof256_128.data(), 64) == 0,
+                    "First 64 bytes of 128-byte squeeze match 64-byte squeeze exactly (XOF property)");
+
+        ParallelHashXOF256::Context xof256_ctx;
+        ParallelHashXOF256::init(xof256_ctx, 16, "MicaNT");
+        for (size_t i = 0; i < sampleData.size(); i += 13) {
+            size_t chunkSize = std::min<size_t>(13, sampleData.size() - i);
+            ParallelHashXOF256::update(xof256_ctx, sampleData.subspan(i, chunkSize));
+        }
+        std::vector<uint8_t> xof256_streaming(64);
+        ParallelHashXOF256::squeeze(xof256_ctx, xof256_streaming);
+        TEST_ASSERT(std::memcmp(xof256_64.data(), xof256_streaming.data(), 64) == 0,
+                    "ParallelHashXOF256 streaming update matches one-shot evaluation bit-exact");
+
+        // 3. BCrypt API Integration for ParallelHashXOF128
+        BCRYPT_ALG_HANDLE hXOF128 = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hXOF128, BCRYPT_PARALLELHASHXOF128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXOF128 != nullptr, "BCryptOpenAlgorithmProvider succeeds for ParallelHashXOF128");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hXOF128, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt ParallelHashXOF128 default hash length is 32");
+        BCryptGetProperty(hXOF128, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt ParallelHashXOF128 rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hXOF128, &hHash128, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash128, const_cast<uint8_t*>(sampleData.data()), static_cast<uint32_t>(sampleData.size()), 0);
+        uint8_t dXOF128[32]{};
+        BCryptFinishHash(hHash128, dXOF128, sizeof(dXOF128), 0);
+        auto expectedDefXOF128 = ParallelHashXOF128::hash(sampleData, ParallelHashXOF128::DEFAULT_BLOCK_SIZE, "", 32);
+        TEST_ASSERT(std::memcmp(dXOF128, expectedDefXOF128.data(), 32) == 0,
+                    "BCrypt API ParallelHashXOF128 produces bit-exact NIST hash");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hXOF128, 0);
+
+        // 4. BCrypt API Integration for ParallelHashXOF256
+        BCRYPT_ALG_HANDLE hXOF256 = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hXOF256, BCRYPT_PARALLELHASHXOF256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXOF256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for ParallelHashXOF256");
+
+        BCryptGetProperty(hXOF256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt ParallelHashXOF256 default hash length is 64");
+        BCryptGetProperty(hXOF256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt ParallelHashXOF256 rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hXOF256, &hHash256, nullptr, 0, nullptr, 0, 0);
+        BCryptHashData(hHash256, const_cast<uint8_t*>(sampleData.data()), static_cast<uint32_t>(sampleData.size()), 0);
+        uint8_t dXOF256[64]{};
+        BCryptFinishHash(hHash256, dXOF256, sizeof(dXOF256), 0);
+        auto expectedDefXOF256 = ParallelHashXOF256::hash(sampleData, ParallelHashXOF256::DEFAULT_BLOCK_SIZE, "", 64);
+        TEST_ASSERT(std::memcmp(dXOF256, expectedDefXOF256.data(), 64) == 0,
+                    "BCrypt API ParallelHashXOF256 produces bit-exact NIST hash");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hXOF256, 0);
+    }
+
+    std::cout << "  Horizon 239 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12GraphicsCommandList11 & Options 29 OK\n"
+              << "    Pillar 2: NT Native Classes 229 (PoolZeroing) & 230 (CodeIntegrityPlatformManifest) OK\n"
+              << "    Pillar 3: NT Native Executive Direct SList Ex Operations OK\n"
+              << "    Pillar 4: NIST SP 800-185 ParallelHashXOF (128 & 256) OK\n";
+
+    std::cout << "[TEST] Suite 455: Horizon 239 - Direct3D 12 CommandList11 & Options 29, NT SystemInfo 229/230, SList Ex & NIST SP 800-185 ParallelHashXOF PASSED." << std::endl;
+}

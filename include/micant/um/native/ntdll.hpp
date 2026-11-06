@@ -1683,6 +1683,26 @@ struct SYSTEM_DPC_WATCHDOG_INFORMATION {
 };
 using PSYSTEM_DPC_WATCHDOG_INFORMATION = SYSTEM_DPC_WATCHDOG_INFORMATION*;
 
+// Class 229: SystemPoolZeroingInformation
+struct SYSTEM_POOL_ZEROING_INFORMATION {
+    BOOLEAN PoolZeroingSupported;
+    BOOLEAN PoolZeroingEnabled;
+    ULONG Reserved;
+    uint64_t ZeroedPagesCount;
+    uint64_t TotalAllocationsZeroed;
+};
+using PSYSTEM_POOL_ZEROING_INFORMATION = SYSTEM_POOL_ZEROING_INFORMATION*;
+
+// Class 230: SystemCodeIntegrityPlatformManifestInformation
+struct SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION {
+    BOOLEAN PlatformManifestPresent;
+    uint8_t ManifestHashType;
+    uint16_t ManifestCount;
+    ULONG PlatformPolicyVersion;
+    uint8_t PlatformId[16];
+};
+using PSYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION = SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3341,6 +3361,36 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_DPC_WATCHDOG_INFORMATION);
             return NtStatus::Success;
         }
+        case 229: { // SystemPoolZeroingInformation (Class 229)
+            if (SystemInformationLength < sizeof(SYSTEM_POOL_ZEROING_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_POOL_ZEROING_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_POOL_ZEROING_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PoolZeroingSupported = 1;
+            pInfo->PoolZeroingEnabled = 1;
+            pInfo->Reserved = 0;
+            pInfo->ZeroedPagesCount = 1048576; // 1M zeroed physical pages (4 GB)
+            pInfo->TotalAllocationsZeroed = 409600;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_POOL_ZEROING_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 230: { // SystemCodeIntegrityPlatformManifestInformation (Class 230)
+            if (SystemInformationLength < sizeof(SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PlatformManifestPresent = 1;
+            pInfo->ManifestHashType = 1; // SHA-256
+            pInfo->ManifestCount = 2;
+            pInfo->PlatformPolicyVersion = 0x00010002;
+            std::memcpy(pInfo->PlatformId, "MICANT-PLAT-001\0", 16);
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4204,6 +4254,27 @@ inline PSLIST_ENTRY WINAPI RtlInterlockedPushEntrySList(PSLIST_HEADER SListHead,
     return oldFirst;
 }
 
+inline PSLIST_ENTRY WINAPI RtlInterlockedPushListSListEx(
+    PSLIST_HEADER SListHead,
+    PSLIST_ENTRY List,
+    PSLIST_ENTRY ListEnd,
+    ULONG Count) noexcept {
+    if (!SListHead || !List || !ListEnd || Count == 0) return nullptr;
+    auto* oldFirst = reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
+    ListEnd->Next = oldFirst;
+    SListHead->Alignment = reinterpret_cast<uint64_t>(List);
+    uint64_t depth = (SListHead->Region & 0xFFFF) + Count;
+    uint64_t seq = ((SListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    SListHead->Region = (seq << 16) | (depth & 0xFFFF);
+    return oldFirst;
+}
+
+inline PSLIST_ENTRY WINAPI RtlInterlockedPushEntrySListEx(
+    PSLIST_HEADER SListHead,
+    PSLIST_ENTRY ListEntry) noexcept {
+    return RtlInterlockedPushListSListEx(SListHead, ListEntry, ListEntry, 1);
+}
+
 inline PSLIST_ENTRY WINAPI RtlInterlockedPopEntrySList(PSLIST_HEADER SListHead) noexcept {
     if (!SListHead) return nullptr;
     auto* first = reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
@@ -4686,6 +4757,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedFlushSList", reinterpret_cast<void*>(RtlInterlockedFlushSList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPopEntrySList", reinterpret_cast<void*>(RtlInterlockedPopEntrySList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPushEntrySList", reinterpret_cast<void*>(RtlInterlockedPushEntrySList));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedPushListSListEx", reinterpret_cast<void*>(RtlInterlockedPushListSListEx));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedPushEntrySListEx", reinterpret_cast<void*>(RtlInterlockedPushEntrySListEx));
     ldr.registerExport("ntdll.dll", "RtlFindLeastSignificantBit", reinterpret_cast<void*>(RtlFindLeastSignificantBit));
     ldr.registerExport("ntdll.dll", "RtlFindMostSignificantBit", reinterpret_cast<void*>(RtlFindMostSignificantBit));
     ldr.registerExport("ntdll.dll", "RtlFormatMessage", reinterpret_cast<void*>(RtlFormatMessage));

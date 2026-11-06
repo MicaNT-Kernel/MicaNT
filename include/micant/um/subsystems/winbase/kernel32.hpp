@@ -9167,6 +9167,21 @@ inline SLIST_ENTRY* WINAPI InterlockedPushEntrySList(SLIST_HEADER* ListHead, SLI
     return oldFirst;
 }
 
+inline SLIST_ENTRY* WINAPI InterlockedPushListSListEx(SLIST_HEADER* ListHead, SLIST_ENTRY* List, SLIST_ENTRY* ListEnd, ULONG Count) noexcept {
+    if (!ListHead || !List || !ListEnd || Count == 0) return nullptr;
+    auto* oldFirst = reinterpret_cast<SLIST_ENTRY*>(ListHead->Alignment);
+    ListEnd->Next = oldFirst;
+    ListHead->Alignment = reinterpret_cast<uint64_t>(List);
+    uint64_t depth = (ListHead->Region & 0xFFFF) + Count;
+    uint64_t seq = ((ListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
+    ListHead->Region = (seq << 16) | (depth & 0xFFFF);
+    return oldFirst;
+}
+
+inline SLIST_ENTRY* WINAPI InterlockedPushListSList(SLIST_HEADER* ListHead, SLIST_ENTRY* List, SLIST_ENTRY* ListEnd, ULONG Count) noexcept {
+    return InterlockedPushListSListEx(ListHead, List, ListEnd, Count);
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11306,6 +11321,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "UnlockFile", reinterpret_cast<void*>(UnlockFile));
     ldr.registerExport("kernel32.dll", "FindResourceExW", reinterpret_cast<void*>(FindResourceExW));
     ldr.registerExport("kernel32.dll", "InterlockedPushEntrySList", reinterpret_cast<void*>(InterlockedPushEntrySList));
+    ldr.registerExport("kernel32.dll", "InterlockedPushListSListEx", reinterpret_cast<void*>(InterlockedPushListSListEx));
+    ldr.registerExport("kernel32.dll", "InterlockedPushListSList", reinterpret_cast<void*>(InterlockedPushListSList));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
