@@ -66,6 +66,10 @@ inline constexpr const wchar_t* BCRYPT_SHA3_512_ALGORITHM               = L"SHA3
 inline constexpr const wchar_t* BCRYPT_SHA3_224_ALGORITHM               = L"SHA3-224";
 inline constexpr const wchar_t* BCRYPT_SHAKE128_ALGORITHM                = L"SHAKE128";
 inline constexpr const wchar_t* BCRYPT_SHAKE256_ALGORITHM                = L"SHAKE256";
+inline constexpr const wchar_t* BCRYPT_CSHAKE128_ALGORITHM               = L"CSHAKE128";
+inline constexpr const wchar_t* BCRYPT_CSHAKE256_ALGORITHM               = L"CSHAKE256";
+inline constexpr const wchar_t* BCRYPT_KMAC128_ALGORITHM                 = L"KMAC128";
+inline constexpr const wchar_t* BCRYPT_KMAC256_ALGORITHM                 = L"KMAC256";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -1288,6 +1292,198 @@ public:
         return out;
     }
 };
+
+// ============================================================================
+// NIST SP 800-185 SHA-3 Derived Functions (cSHAKE & KMAC)
+// ============================================================================
+class NistSp800_185 {
+public:
+    static std::vector<uint8_t> left_encode(uint64_t val) {
+        if (val == 0) return { 1, 0 };
+        std::vector<uint8_t> b;
+        uint64_t t = val;
+        while (t > 0) {
+            b.push_back(static_cast<uint8_t>(t & 0xFF));
+            t >>= 8;
+        }
+        std::reverse(b.begin(), b.end());
+        std::vector<uint8_t> res;
+        res.push_back(static_cast<uint8_t>(b.size()));
+        res.insert(res.end(), b.begin(), b.end());
+        return res;
+    }
+
+    static std::vector<uint8_t> right_encode(uint64_t val) {
+        if (val == 0) return { 0, 1 };
+        std::vector<uint8_t> b;
+        uint64_t t = val;
+        while (t > 0) {
+            b.push_back(static_cast<uint8_t>(t & 0xFF));
+            t >>= 8;
+        }
+        std::reverse(b.begin(), b.end());
+        b.push_back(static_cast<uint8_t>(b.size()));
+        return b;
+    }
+
+    static std::vector<uint8_t> encode_string(std::span<const uint8_t> s) {
+        auto enc = left_encode(s.size() * 8ULL);
+        enc.insert(enc.end(), s.begin(), s.end());
+        return enc;
+    }
+
+    static std::vector<uint8_t> encode_string(std::string_view s) {
+        return encode_string(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(s.data()), s.size()));
+    }
+
+    static std::vector<uint8_t> bytepad(std::span<const uint8_t> x, size_t w) {
+        auto z = left_encode(w);
+        z.insert(z.end(), x.begin(), x.end());
+        size_t rem = z.size() % w;
+        if (rem != 0) {
+            z.insert(z.end(), w - rem, 0x00);
+        }
+        return z;
+    }
+};
+
+template<size_t RateBytes, size_t DefaultDigestBytes>
+class GenericCShake {
+public:
+    static constexpr size_t RATE = RateBytes;
+    static constexpr size_t DEFAULT_DIGEST_SIZE = DefaultDigestBytes;
+
+    struct Context {
+        uint64_t state[25]{};
+        uint8_t  buffer[RATE]{};
+        size_t   buf_pos{ 0 };
+        bool     isCustom{ false };
+        bool     squeezed{ false };
+        size_t   squeeze_pos{ 0 };
+    };
+
+    static void init(Context& ctx, std::string_view N = "", std::string_view S = "") noexcept {
+        std::memset(ctx.state, 0, sizeof(ctx.state));
+        std::memset(ctx.buffer, 0, sizeof(ctx.buffer));
+        ctx.buf_pos = 0;
+        ctx.squeezed = false;
+        ctx.squeeze_pos = 0;
+        ctx.isCustom = (!N.empty() || !S.empty());
+        if (ctx.isCustom) {
+            std::vector<uint8_t> prefix;
+            auto encN = NistSp800_185::encode_string(N);
+            auto encS = NistSp800_185::encode_string(S);
+            prefix.insert(prefix.end(), encN.begin(), encN.end());
+            prefix.insert(prefix.end(), encS.begin(), encS.end());
+            auto padded = NistSp800_185::bytepad(prefix, RATE);
+            update(ctx, padded);
+        }
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        for (uint8_t byte : data) {
+            ctx.buffer[ctx.buf_pos++] = byte;
+            if (ctx.buf_pos == RATE) {
+                for (size_t i = 0; i < RATE; ++i) {
+                    reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+                }
+                KeccakCore::permute(ctx.state);
+                ctx.buf_pos = 0;
+            }
+        }
+    }
+
+    static void squeeze(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.squeezed) {
+            uint8_t domainPad = ctx.isCustom ? 0x04 : 0x1F;
+            ctx.buffer[ctx.buf_pos++] = domainPad;
+            while (ctx.buf_pos < RATE) {
+                ctx.buffer[ctx.buf_pos++] = 0x00;
+            }
+            ctx.buffer[RATE - 1] |= 0x80;
+
+            for (size_t i = 0; i < RATE; ++i) {
+                reinterpret_cast<uint8_t*>(ctx.state)[i] ^= ctx.buffer[i];
+            }
+            KeccakCore::permute(ctx.state);
+            ctx.squeezed = true;
+            ctx.squeeze_pos = 0;
+        }
+
+        size_t out_idx = 0;
+        while (out_idx < out.size()) {
+            if (ctx.squeeze_pos == RATE) {
+                KeccakCore::permute(ctx.state);
+                ctx.squeeze_pos = 0;
+            }
+            size_t take = std::min(out.size() - out_idx, RATE - ctx.squeeze_pos);
+            std::memcpy(out.data() + out_idx, reinterpret_cast<const uint8_t*>(ctx.state) + ctx.squeeze_pos, take);
+            out_idx += take;
+            ctx.squeeze_pos += take;
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, std::string_view N = "", std::string_view S = "", size_t outLen = DEFAULT_DIGEST_SIZE) {
+        Context ctx;
+        init(ctx, N, S);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        squeeze(ctx, out);
+        return out;
+    }
+};
+
+using CShake128 = GenericCShake<168, 32>;
+using CShake256 = GenericCShake<136, 64>;
+
+template<typename CShakeType>
+class GenericKmac {
+public:
+    static constexpr size_t RATE = CShakeType::RATE;
+    static constexpr size_t DEFAULT_DIGEST_SIZE = CShakeType::DEFAULT_DIGEST_SIZE;
+
+    struct Context {
+        typename CShakeType::Context cshake;
+        size_t macLen{ DEFAULT_DIGEST_SIZE };
+        bool   finalized{ false };
+    };
+
+    static void init(Context& ctx, std::span<const uint8_t> key, std::string_view custom = "", size_t macLen = DEFAULT_DIGEST_SIZE) noexcept {
+        ctx.macLen = macLen;
+        ctx.finalized = false;
+        CShakeType::init(ctx.cshake, "KMAC", custom);
+        auto encKey = NistSp800_185::encode_string(key);
+        auto paddedKey = NistSp800_185::bytepad(encKey, RATE);
+        CShakeType::update(ctx.cshake, paddedKey);
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.finalized) {
+            CShakeType::update(ctx.cshake, data);
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.finalized) {
+            auto encLen = NistSp800_185::right_encode(out.size() * 8ULL);
+            CShakeType::update(ctx.cshake, encLen);
+            ctx.finalized = true;
+        }
+        CShakeType::squeeze(ctx.cshake, out);
+    }
+
+    static std::vector<uint8_t> mac(std::span<const uint8_t> key, std::span<const uint8_t> data, std::string_view custom = "", size_t macLen = DEFAULT_DIGEST_SIZE) {
+        Context ctx;
+        init(ctx, key, custom, macLen);
+        update(ctx, data);
+        std::vector<uint8_t> out(macLen);
+        final(ctx, out);
+        return out;
+    }
+};
+
+using Kmac128 = GenericKmac<CShake128>;
+using Kmac256 = GenericKmac<CShake256>;
 
 // ============================================================================
 // 3. Clean-Room HMAC (RFC 2104 / FIPS 198-1) Engine
@@ -3179,6 +3375,10 @@ enum class CryptoAlgorithm {
     Sha3_224,
     Shake128,
     Shake256,
+    CShake128,
+    CShake256,
+    Kmac128,
+    Kmac256,
     Unknown
 };
 
@@ -3192,6 +3392,10 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_SHA3_224_ALGORITHM || algId == L"SHA3-224" || algId == L"sha3-224") return CryptoAlgorithm::Sha3_224;
     if (algId == BCRYPT_SHAKE128_ALGORITHM || algId == L"SHAKE128" || algId == L"shake128") return CryptoAlgorithm::Shake128;
     if (algId == BCRYPT_SHAKE256_ALGORITHM || algId == L"SHAKE256" || algId == L"shake256") return CryptoAlgorithm::Shake256;
+    if (algId == BCRYPT_CSHAKE128_ALGORITHM || algId == L"CSHAKE128" || algId == L"cshake128") return CryptoAlgorithm::CShake128;
+    if (algId == BCRYPT_CSHAKE256_ALGORITHM || algId == L"CSHAKE256" || algId == L"cshake256") return CryptoAlgorithm::CShake256;
+    if (algId == BCRYPT_KMAC128_ALGORITHM || algId == L"KMAC128" || algId == L"kmac128") return CryptoAlgorithm::Kmac128;
+    if (algId == BCRYPT_KMAC256_ALGORITHM || algId == L"KMAC256" || algId == L"kmac256") return CryptoAlgorithm::Kmac256;
     if (algId == BCRYPT_SHA1_ALGORITHM   || algId == L"SHA-1")   return CryptoAlgorithm::Sha1;
     if (algId == BCRYPT_MD5_ALGORITHM    || algId == L"md5")     return CryptoAlgorithm::Md5;
     if (algId == BCRYPT_AES_ALGORITHM)                           return CryptoAlgorithm::Aes;
@@ -3272,6 +3476,10 @@ public:
     Sha3_224::Context sha3_224Ctx{};
     Shake128::Context shake128Ctx{};
     Shake256::Context shake256Ctx{};
+    CShake128::Context cshake128Ctx{};
+    CShake256::Context cshake256Ctx{};
+    Kmac128::Context   kmac128Ctx{};
+    Kmac256::Context   kmac256Ctx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -3301,6 +3509,10 @@ public:
           sha3_224Ctx(other.sha3_224Ctx),
           shake128Ctx(other.shake128Ctx),
           shake256Ctx(other.shake256Ctx),
+          cshake128Ctx(other.cshake128Ctx),
+          cshake256Ctx(other.cshake256Ctx),
+          kmac128Ctx(other.kmac128Ctx),
+          kmac256Ctx(other.kmac256Ctx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -3345,6 +3557,14 @@ public:
             Shake128::init(shake128Ctx);
         } else if (algorithm == CryptoAlgorithm::Shake256) {
             Shake256::init(shake256Ctx);
+        } else if (algorithm == CryptoAlgorithm::CShake128) {
+            CShake128::init(cshake128Ctx);
+        } else if (algorithm == CryptoAlgorithm::CShake256) {
+            CShake256::init(cshake256Ctx);
+        } else if (algorithm == CryptoAlgorithm::Kmac128) {
+            Kmac128::init(kmac128Ctx, key);
+        } else if (algorithm == CryptoAlgorithm::Kmac256) {
+            Kmac256::init(kmac256Ctx, key);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -3385,6 +3605,14 @@ public:
             Shake128::update(shake128Ctx, data);
         } else if (algorithm == CryptoAlgorithm::Shake256) {
             Shake256::update(shake256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::CShake128) {
+            CShake128::update(cshake128Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::CShake256) {
+            CShake256::update(cshake256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Kmac128) {
+            Kmac128::update(kmac128Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Kmac256) {
+            Kmac256::update(kmac256Ctx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -3465,6 +3693,22 @@ public:
         } else if (algorithm == CryptoAlgorithm::Shake256) {
             std::vector<uint8_t> out(64);
             Shake256::squeeze(shake256Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::CShake128) {
+            std::vector<uint8_t> out(32);
+            CShake128::squeeze(cshake128Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::CShake256) {
+            std::vector<uint8_t> out(64);
+            CShake256::squeeze(cshake256Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Kmac128) {
+            std::vector<uint8_t> out(32);
+            Kmac128::final(kmac128Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Kmac256) {
+            std::vector<uint8_t> out(64);
+            Kmac256::final(kmac256Ctx, out);
             return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
@@ -3715,9 +3959,9 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
-            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256) len = 64;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -3727,10 +3971,10 @@ inline NTSTATUS BCryptGetProperty(
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_224) ? 144 :
-                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256) ? 136 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256) ? 136 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_384) ? 104 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_512) ? 72 :
-                           ((prov->algorithm == CryptoAlgorithm::Shake128) ? 168 :
+                           ((prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128) ? 168 :
                            ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512 ||
                              prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64))))));
             std::memcpy(pbOutput, &len, sizeof(len));

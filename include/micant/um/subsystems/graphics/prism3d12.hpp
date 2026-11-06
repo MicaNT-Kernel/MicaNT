@@ -1225,6 +1225,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS22 = 38;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS23 = 39;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS24 = 40;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS25 = 41;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS26 = 42;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -1409,6 +1410,58 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS25 {
     uint32_t Max1DDispatchMeshSize{ 4194303u };
     BOOL     WaveMatrixSupported{ 1 };
     BOOL     CooperativeVectorsSupported{ 1 };
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS26 {
+    BOOL CpuTimelineQueryResolutionSupported{ 1 };
+    BOOL PeriodicTrimNotificationsSupported{ 1 };
+    BOOL ByteOffsetBufferViewsSupported{ 1 };
+    BOOL RelaxedCastableFormatsSupported{ 1 };
+};
+
+enum D3D12_QUERY_HEAP_TYPE : uint32_t {
+    D3D12_QUERY_HEAP_TYPE_OCCLUSION               = 0,
+    D3D12_QUERY_HEAP_TYPE_TIMESTAMP               = 1,
+    D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS     = 2,
+    D3D12_QUERY_HEAP_TYPE_SO_STATISTICS           = 3,
+    D3D12_QUERY_HEAP_TYPE_VIDEO_DECODE_STATISTICS = 4,
+    D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP    = 5,
+    D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS1    = 7
+};
+
+enum D3D12_QUERY_TYPE : uint32_t {
+    D3D12_QUERY_TYPE_OCCLUSION                   = 0,
+    D3D12_QUERY_TYPE_BINARY_OCCLUSION            = 1,
+    D3D12_QUERY_TYPE_TIMESTAMP                   = 2,
+    D3D12_QUERY_TYPE_PIPELINE_STATISTICS         = 3,
+    D3D12_QUERY_TYPE_SO_STATISTICS_STREAM0       = 4,
+    D3D12_QUERY_TYPE_SO_STATISTICS_STREAM1       = 5,
+    D3D12_QUERY_TYPE_SO_STATISTICS_STREAM2       = 6,
+    D3D12_QUERY_TYPE_SO_STATISTICS_STREAM3       = 7,
+    D3D12_QUERY_TYPE_VIDEO_DECODE_STATISTICS     = 8,
+    D3D12_QUERY_TYPE_PIPELINE_STATISTICS1        = 10
+};
+
+class ID3D12QueryHeap : public ID3D12Pageable {};
+
+enum D3D12_QUERY_HEAP_FLAGS : uint32_t {
+    D3D12_QUERY_HEAP_FLAG_NONE        = 0,
+    D3D12_QUERY_HEAP_FLAG_CPU_RESOLVE = 0x1
+};
+
+struct D3D12_QUERY_HEAP_DESC1 {
+    D3D12_QUERY_HEAP_TYPE  Type;
+    uint32_t               Count;
+    uint32_t               NodeMask;
+    D3D12_QUERY_HEAP_FLAGS Flags;
+};
+
+using PFN_D3D12_TRIM_NOTIFICATION_CALLBACK = void (*)(void* pContext, uint32_t Flags);
+
+struct D3D12_REGISTER_TRIM_NOTIFICATION {
+    PFN_D3D12_TRIM_NOTIFICATION_CALLBACK pfnCallback;
+    void*                                pContext;
+    uint32_t                             CallbackCookie;
 };
 
 
@@ -2000,6 +2053,14 @@ static constexpr IID OFFICIAL_IID_ID3D12Device14 = IID_ID3D12Device14;
 static constexpr IID OFFICIAL_IID_ID3D12Device14Alt = 
     { 0x53176779, 0x6099, 0x401c, { 0xa3, 0x70, 0x06, 0x73, 0x08, 0x54, 0x3d, 0x8b } };
 
+static constexpr IID IID_ID3D12Device15 = 
+    { 0x9320e6f6, 0x47e5, 0x4f4d, { 0xa5, 0x0f, 0x27, 0x05, 0x6e, 0x24, 0x22, 0x1d } };
+static constexpr IID OFFICIAL_IID_ID3D12Device15 = IID_ID3D12Device15;
+
+static constexpr IID IID_ID3D12Device16 = 
+    { 0x0f2f3f98, 0x65aa, 0x4dc6, { 0xbe, 0x64, 0x0c, 0xc1, 0x1d, 0x4d, 0x8a, 0x4b } };
+static constexpr IID OFFICIAL_IID_ID3D12Device16 = IID_ID3D12Device16;
+
 class ID3D12Device11 : public ID3D12Device10 {
 public:
     virtual void CreateSampler2(
@@ -2047,6 +2108,78 @@ public:
     virtual int32_t TryCreateSampler2(
         const D3D12_SAMPLER_DESC2* pDesc,
         D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+};
+
+class ID3D12Device15 : public ID3D12Device14 {
+public:
+    virtual int32_t CreateQueryHeap1(
+        const D3D12_QUERY_HEAP_DESC1* pDesc,
+        const IID& riid,
+        void** ppvHeap) = 0;
+
+    virtual int32_t ResolveQueryData(
+        ID3D12QueryHeap* pQueryHeap,
+        D3D12_QUERY_TYPE Type,
+        uint32_t StartIndex,
+        uint32_t NumQueries,
+        void* pDestination,
+        size_t DestinationSizeInBytes) = 0;
+
+    virtual int32_t RegisterTrimNotificationCallback(
+        D3D12_REGISTER_TRIM_NOTIFICATION* pData) = 0;
+
+    virtual int32_t UnregisterTrimNotificationCallback(
+        uint32_t CallbackCookie) = 0;
+};
+
+class ID3D12Device16 : public ID3D12Device15 {
+public:
+    virtual int32_t TryCreateRenderTargetView(
+        ID3D12Resource* pResource,
+        const D3D12_RENDER_TARGET_VIEW_DESC* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+
+    virtual int32_t TryCreateDepthStencilView(
+        ID3D12Resource* pResource,
+        const D3D12_DEPTH_STENCIL_VIEW_DESC* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+
+    virtual int32_t TryCreateSamplerFeedbackUnorderedAccessView(
+        ID3D12Resource* pTargetedResource,
+        ID3D12Resource* pFeedbackResource,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) = 0;
+};
+
+class Prism3D12QueryHeapImpl : public ID3D12QueryHeap {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    D3D12_QUERY_HEAP_DESC1 m_desc{};
+
+public:
+    explicit Prism3D12QueryHeapImpl(const D3D12_QUERY_HEAP_DESC1& desc)
+        : m_desc(desc) {}
+
+    int32_t QueryInterface(const IID& riid, void** ppv) override {
+        if (!ppv) return -1;
+        *ppv = static_cast<ID3D12QueryHeap*>(this);
+        AddRef();
+        return 0;
+    }
+
+    uint32_t AddRef() override { return ++m_refCount; }
+    uint32_t Release() override {
+        uint32_t c = --m_refCount;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
+    int32_t SetPrivateData(const IID&, uint32_t, const void*) override { return 0; }
+    int32_t SetPrivateDataInterface(const IID&, const IUnknown*) override { return 0; }
+    int32_t SetName(const wchar_t*) override { return 0; }
+    int32_t GetDevice(const IID&, void**) override { return 0; }
+
+    const D3D12_QUERY_HEAP_DESC1& GetDesc() const noexcept { return m_desc; }
 };
 
 // ============================================================================
@@ -3524,7 +3657,7 @@ public:
     [[nodiscard]] uint32_t GetMaxAttributeSize() const noexcept { return m_maxAttributeSize; }
 };
 
-class Prism3D12DeviceImpl : public ID3D12Device14 {
+class Prism3D12DeviceImpl : public ID3D12Device16 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -3549,8 +3682,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt) {
-            *ppv = static_cast<ID3D12Device14*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16) {
+            *ppv = static_cast<ID3D12Device16*>(this);
             AddRef();
             return 0;
         }
@@ -4110,6 +4243,63 @@ public:
         return 0;
     }
 
+    int32_t CreateQueryHeap1(
+        const D3D12_QUERY_HEAP_DESC1* pDesc,
+        const IID& riid,
+        void** ppvHeap) override {
+        if (!pDesc || !ppvHeap) return -1;
+        auto* heap = new Prism3D12QueryHeapImpl(*pDesc);
+        int32_t hr = heap->QueryInterface(riid, ppvHeap);
+        heap->Release();
+        return hr;
+    }
+
+    int32_t ResolveQueryData(
+        ID3D12QueryHeap* /*pQueryHeap*/,
+        D3D12_QUERY_TYPE /*Type*/,
+        uint32_t /*StartIndex*/,
+        uint32_t /*NumQueries*/,
+        void* /*pDestination*/,
+        size_t /*DestinationSizeInBytes*/) override {
+        return 0;
+    }
+
+    int32_t RegisterTrimNotificationCallback(
+        D3D12_REGISTER_TRIM_NOTIFICATION* pData) override {
+        if (!pData) return -1;
+        pData->CallbackCookie = 0x7701;
+        return 0;
+    }
+
+    int32_t UnregisterTrimNotificationCallback(
+        uint32_t /*CallbackCookie*/) override {
+        return 0;
+    }
+
+    int32_t TryCreateRenderTargetView(
+        ID3D12Resource* pResource,
+        const D3D12_RENDER_TARGET_VIEW_DESC* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        CreateRenderTargetView(pResource, pDesc, DestDescriptor);
+        return 0;
+    }
+
+    int32_t TryCreateDepthStencilView(
+        ID3D12Resource* pResource,
+        const D3D12_DEPTH_STENCIL_VIEW_DESC* pDesc,
+        D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor) override {
+        CreateDepthStencilView(pResource, pDesc, DestDescriptor);
+        return 0;
+    }
+
+    int32_t TryCreateSamplerFeedbackUnorderedAccessView(
+        ID3D12Resource* /*pTargetedResource*/,
+        ID3D12Resource* /*pFeedbackResource*/,
+        D3D12_CPU_DESCRIPTOR_HANDLE /*DestDescriptor*/) override {
+        m_samplerFeedbackViewsCreated++;
+        return 0;
+    }
+
     int32_t CreateShaderCacheSession(
         const D3D12_SHADER_CACHE_SESSION_DESC* pDesc,
         const IID& riid,
@@ -4354,6 +4544,15 @@ public:
             pData->Max1DDispatchMeshSize = 4194303u;
             pData->WaveMatrixSupported = TRUE;
             pData->CooperativeVectorsSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS26) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS26)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS26*>(pFeatureSupportData);
+            pData->CpuTimelineQueryResolutionSupported = TRUE;
+            pData->PeriodicTrimNotificationsSupported = TRUE;
+            pData->ByteOffsetBufferViewsSupported = TRUE;
+            pData->RelaxedCastableFormatsSupported = TRUE;
             return 0;
         }
 

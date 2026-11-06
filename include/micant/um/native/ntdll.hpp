@@ -1622,6 +1622,27 @@ struct SYSTEM_BUILD_VERSION_INFORMATION {
 };
 using PSYSTEM_BUILD_VERSION_INFORMATION = SYSTEM_BUILD_VERSION_INFORMATION*;
 
+// Class 223: SystemPoolLimitInformation
+struct SYSTEM_POOL_LIMIT_INFORMATION {
+    ULONG_PTR PagedPoolLimit;
+    ULONG_PTR NonPagedPoolLimit;
+    ULONG_PTR PagedPoolSize;
+    ULONG_PTR NonPagedPoolSize;
+    ULONG     PagedPoolWarningLimit;
+    ULONG     NonPagedPoolWarningLimit;
+};
+using PSYSTEM_POOL_LIMIT_INFORMATION = SYSTEM_POOL_LIMIT_INFORMATION*;
+
+// Class 224: SystemCodeIntegrityAddDynamicStore
+struct SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION {
+    ULONG Flags;
+    ULONG DynamicStoreId;
+    ULONG CatalogCount;
+    ULONG HashAlgorithm;
+    GUID  StoreGuid;
+};
+using PSYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION = SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3190,6 +3211,37 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_BUILD_VERSION_INFORMATION);
             return NtStatus::Success;
         }
+        case 223: { // SystemPoolLimitInformation (Class 223)
+            if (SystemInformationLength < sizeof(SYSTEM_POOL_LIMIT_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_POOL_LIMIT_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_POOL_LIMIT_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PagedPoolLimit = 512 * 1024 * 1024ULL;
+            pInfo->NonPagedPoolLimit = 256 * 1024 * 1024ULL;
+            pInfo->PagedPoolSize = 64 * 1024 * 1024ULL;
+            pInfo->NonPagedPoolSize = 32 * 1024 * 1024ULL;
+            pInfo->PagedPoolWarningLimit = 80;
+            pInfo->NonPagedPoolWarningLimit = 85;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_POOL_LIMIT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 224: { // SystemCodeIntegrityAddDynamicStore (Class 224)
+            if (SystemInformationLength < sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Flags = 0x00000001;
+            pInfo->DynamicStoreId = 1001;
+            pInfo->CatalogCount = 4;
+            pInfo->HashAlgorithm = 0x800c; // CALG_SHA_256 / BCRYPT_SHA256
+            pInfo->StoreGuid = { 0x6e2a86f1, 0x118b, 0x4f1b, { 0x93, 0xd0, 0x3d, 0x82, 0x61, 0x8c, 0xb7, 0x4e } };
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -3911,6 +3963,75 @@ inline NtStatus WINAPI RtlRegisterWait(HANDLE* WaitHandle, HANDLE /*Handle*/, vo
     return NtStatus::Success;
 }
 
+using WORKERCALLBACKFUNC = void(WINAPI*)(void* Context);
+using WAITORTIMERCALLBACKFUNC = void(WINAPI*)(void* Context, BOOLEAN TimerOrWaitFired);
+
+inline NtStatus WINAPI RtlQueueWorkItem(WORKERCALLBACKFUNC Function, void* Context, ULONG Flags) noexcept {
+    (void)Flags;
+    if (!Function) return NtStatus::InvalidParameter;
+    Function(Context);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlCreateTimerQueue(HANDLE* TimerQueueHandle) noexcept {
+    if (!TimerQueueHandle) return NtStatus::InvalidParameter;
+    *TimerQueueHandle = reinterpret_cast<HANDLE>(0x9104);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlCreateTimer(
+    HANDLE TimerQueueHandle,
+    HANDLE* Handle,
+    WAITORTIMERCALLBACKFUNC Function,
+    void* Context,
+    ULONG DueTime,
+    ULONG Period,
+    ULONG Flags) noexcept {
+    (void)TimerQueueHandle;
+    (void)Function;
+    (void)Context;
+    (void)DueTime;
+    (void)Period;
+    (void)Flags;
+    if (!Handle) return NtStatus::InvalidParameter;
+    *Handle = reinterpret_cast<HANDLE>(0x9105);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlUpdateTimer(
+    HANDLE TimerQueueHandle,
+    HANDLE TimerHandle,
+    ULONG DueTime,
+    ULONG Period) noexcept {
+    (void)TimerQueueHandle;
+    (void)TimerHandle;
+    (void)DueTime;
+    (void)Period;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlDeleteTimer(
+    HANDLE TimerQueueHandle,
+    HANDLE TimerHandle,
+    HANDLE CompletionEvent) noexcept {
+    (void)TimerQueueHandle;
+    (void)TimerHandle;
+    (void)CompletionEvent;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlDeleteTimerQueueEx(
+    HANDLE TimerQueueHandle,
+    HANDLE CompletionEvent) noexcept {
+    (void)TimerQueueHandle;
+    (void)CompletionEvent;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlDeleteTimerQueue(HANDLE TimerQueueHandle) noexcept {
+    return RtlDeleteTimerQueueEx(TimerQueueHandle, nullptr);
+}
+
 inline NtStatus WINAPI RtlDosPathNameToNtPathName_U_WithStatus(const wchar_t* /*DosFileName*/, void* /*NtFileName*/, wchar_t** FilePart, void* /*Reserved*/) noexcept {
     if (FilePart) *FilePart = nullptr;
     return NtStatus::Success;
@@ -4353,6 +4474,13 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlLeaveCriticalSection", reinterpret_cast<void*>(RtlLeaveCriticalSection));
     ldr.registerExport("ntdll.dll", "RtlDeregisterWaitEx", reinterpret_cast<void*>(RtlDeregisterWaitEx));
     ldr.registerExport("ntdll.dll", "RtlRegisterWait", reinterpret_cast<void*>(RtlRegisterWait));
+    ldr.registerExport("ntdll.dll", "RtlQueueWorkItem", reinterpret_cast<void*>(RtlQueueWorkItem));
+    ldr.registerExport("ntdll.dll", "RtlCreateTimerQueue", reinterpret_cast<void*>(RtlCreateTimerQueue));
+    ldr.registerExport("ntdll.dll", "RtlCreateTimer", reinterpret_cast<void*>(RtlCreateTimer));
+    ldr.registerExport("ntdll.dll", "RtlUpdateTimer", reinterpret_cast<void*>(RtlUpdateTimer));
+    ldr.registerExport("ntdll.dll", "RtlDeleteTimer", reinterpret_cast<void*>(RtlDeleteTimer));
+    ldr.registerExport("ntdll.dll", "RtlDeleteTimerQueueEx", reinterpret_cast<void*>(RtlDeleteTimerQueueEx));
+    ldr.registerExport("ntdll.dll", "RtlDeleteTimerQueue", reinterpret_cast<void*>(RtlDeleteTimerQueue));
     ldr.registerExport("ntdll.dll", "RtlDosPathNameToNtPathName_U_WithStatus", reinterpret_cast<void*>(RtlDosPathNameToNtPathName_U_WithStatus));
     ldr.registerExport("ntdll.dll", "RtlDowncaseUnicodeChar", reinterpret_cast<void*>(RtlDowncaseUnicodeChar));
     ldr.registerExport("ntdll.dll", "RtlUpcaseUnicodeChar", reinterpret_cast<void*>(RtlUpcaseUnicodeChar));

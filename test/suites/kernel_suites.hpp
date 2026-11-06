@@ -49657,3 +49657,328 @@ inline void Test_Horizon235_Device12to14_ShadowStackBuildVersion_CallbackReturns
 
     std::cout << "[TEST] Suite 451: Horizon 235 - Direct3D 12 ID3D12Device12-14 & TryCreate, SystemInfo 221/222, Threadpool Callback Returns & Complete SHA-3/SHAKE PASSED." << std::endl;
 }
+
+inline void Test_Horizon236_Device15to16_PoolLimitDynamicStore_RtlThreadpool_And_NistKmacCshake_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 452: Horizon 236 - Direct3D 12 ID3D12Device15/16 & Options 26, SystemInfo 223/224, NT Rtl Threadpool & NIST SP 800-185 KMAC/cSHAKE\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device15/16, Query Heap 1 & Options 26
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device15/16 & Options 26 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. QueryInterface for ID3D12Device15
+        ID3D12Device15* pDev15 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device15, reinterpret_cast<void**>(&pDev15));
+        TEST_ASSERT(hr == 0 && pDev15 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device15 succeeds");
+
+        D3D12_QUERY_HEAP_DESC1 qDesc{};
+        qDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qDesc.Count = 64;
+        qDesc.Flags = D3D12_QUERY_HEAP_FLAG_CPU_RESOLVE;
+
+        ID3D12QueryHeap* pQHeap = nullptr;
+        hr = pDev15->CreateQueryHeap1(&qDesc, IID_IUnknown, reinterpret_cast<void**>(&pQHeap));
+        TEST_ASSERT(hr == 0 && pQHeap != nullptr, "CreateQueryHeap1 succeeds with CPU_RESOLVE flag");
+
+        hr = pDev15->ResolveQueryData(pQHeap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 4, nullptr, 0);
+        TEST_ASSERT(hr == 0, "ResolveQueryData returns S_OK (0)");
+
+        D3D12_REGISTER_TRIM_NOTIFICATION trimData{};
+        trimData.pfnCallback = [](void*, uint32_t) {};
+        hr = pDev15->RegisterTrimNotificationCallback(&trimData);
+        TEST_ASSERT(hr == 0, "RegisterTrimNotificationCallback succeeds");
+        TEST_ASSERT(trimData.CallbackCookie == 0x7701, "Trim notification cookie is populated");
+
+        hr = pDev15->UnregisterTrimNotificationCallback(trimData.CallbackCookie);
+        TEST_ASSERT(hr == 0, "UnregisterTrimNotificationCallback succeeds");
+
+        pQHeap->Release();
+        pDev15->Release();
+
+        // 2. QueryInterface for ID3D12Device16
+        ID3D12Device16* pDev16 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device16, reinterpret_cast<void**>(&pDev16));
+        TEST_ASSERT(hr == 0 && pDev16 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device16 succeeds");
+
+        D3D12_CPU_DESCRIPTOR_HANDLE hDesc{ 0 };
+        hr = pDev16->TryCreateRenderTargetView(nullptr, nullptr, hDesc);
+        TEST_ASSERT(hr == 0, "TryCreateRenderTargetView returns S_OK (0)");
+
+        hr = pDev16->TryCreateDepthStencilView(nullptr, nullptr, hDesc);
+        TEST_ASSERT(hr == 0, "TryCreateDepthStencilView returns S_OK (0)");
+
+        hr = pDev16->TryCreateSamplerFeedbackUnorderedAccessView(nullptr, nullptr, hDesc);
+        TEST_ASSERT(hr == 0, "TryCreateSamplerFeedbackUnorderedAccessView returns S_OK (0)");
+
+        pDev16->Release();
+
+        // 3. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS26
+        D3D12_FEATURE_DATA_D3D12_OPTIONS26 opt26{};
+        hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS26, &opt26, sizeof(opt26));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS26 succeeds");
+        TEST_ASSERT(opt26.CpuTimelineQueryResolutionSupported == TRUE, "CpuTimelineQueryResolutionSupported is reported TRUE");
+        TEST_ASSERT(opt26.PeriodicTrimNotificationsSupported == TRUE, "PeriodicTrimNotificationsSupported is reported TRUE");
+        TEST_ASSERT(opt26.ByteOffsetBufferViewsSupported == TRUE, "ByteOffsetBufferViewsSupported is reported TRUE");
+        TEST_ASSERT(opt26.RelaxedCastableFormatsSupported == TRUE, "RelaxedCastableFormatsSupported is reported TRUE");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 223 (Pool Limits) & 224 (Dynamic Code Integrity Store)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 223 & 224...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 223: SystemPoolLimitInformation
+        ULONG retLen = 0;
+        SYSTEM_POOL_LIMIT_INFORMATION poolLimit{};
+        NtStatus status = NtQuerySystemInformation_Export(
+            223,
+            &poolLimit,
+            sizeof(poolLimit),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 223 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_POOL_LIMIT_INFORMATION), "Class 223 returns sizeof(SYSTEM_POOL_LIMIT_INFORMATION)");
+        TEST_ASSERT(poolLimit.PagedPoolLimit == 512 * 1024 * 1024ULL, "Class 223 PagedPoolLimit is 512 MB");
+        TEST_ASSERT(poolLimit.NonPagedPoolLimit == 256 * 1024 * 1024ULL, "Class 223 NonPagedPoolLimit is 256 MB");
+        TEST_ASSERT(poolLimit.PagedPoolSize == 64 * 1024 * 1024ULL, "Class 223 PagedPoolSize is 64 MB");
+        TEST_ASSERT(poolLimit.NonPagedPoolSize == 32 * 1024 * 1024ULL, "Class 223 NonPagedPoolSize is 32 MB");
+        TEST_ASSERT(poolLimit.PagedPoolWarningLimit == 80, "Class 223 PagedPoolWarningLimit is 80%");
+        TEST_ASSERT(poolLimit.NonPagedPoolWarningLimit == 85, "Class 223 NonPagedPoolWarningLimit is 85%");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            223,
+            &poolLimit,
+            sizeof(poolLimit) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 223 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_POOL_LIMIT_INFORMATION), "Class 223 returns required length on mismatch");
+
+        // 2. Class 224: SystemCodeIntegrityAddDynamicStore
+        SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION dynamicStore{};
+        status = NtQuerySystemInformation_Export(
+            224,
+            &dynamicStore,
+            sizeof(dynamicStore),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 224 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION), "Class 224 returns sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION)");
+        TEST_ASSERT(dynamicStore.Flags == 0x00000001, "Class 224 Flags indicates active dynamic store");
+        TEST_ASSERT(dynamicStore.DynamicStoreId == 1001, "Class 224 DynamicStoreId is 1001");
+        TEST_ASSERT(dynamicStore.CatalogCount == 4, "Class 224 CatalogCount is 4");
+        TEST_ASSERT(dynamicStore.HashAlgorithm == 0x800c, "Class 224 HashAlgorithm is CALG_SHA_256 (0x800c)");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            224,
+            &dynamicStore,
+            sizeof(dynamicStore) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 224 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION), "Class 224 returns required length on mismatch");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Threadpool Executive Runtime (Rtl*)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Threadpool Executive Runtime (Rtl*)...\n";
+
+        using namespace micant::ntdll;
+
+        InitializeNtdllSubsystemExports();
+
+        // 1. RtlQueueWorkItem
+        bool workExecuted = false;
+        auto workCallback = [](void* ctx) {
+            *reinterpret_cast<bool*>(ctx) = true;
+        };
+        NtStatus status = RtlQueueWorkItem(workCallback, &workExecuted, 0);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQueueWorkItem returns Success");
+        TEST_ASSERT(workExecuted == true, "RtlQueueWorkItem executes work routine");
+
+        // Invalid callback check
+        status = RtlQueueWorkItem(nullptr, nullptr, 0);
+        TEST_ASSERT(status == NtStatus::InvalidParameter, "RtlQueueWorkItem validates callback pointer");
+
+        // 2. RtlCreateTimerQueue & Timer Operations
+        HANDLE hTimerQueue = nullptr;
+        status = RtlCreateTimerQueue(&hTimerQueue);
+        TEST_ASSERT(status == NtStatus::Success && hTimerQueue != nullptr, "RtlCreateTimerQueue succeeds");
+
+        HANDLE hTimer = nullptr;
+        auto timerCallback = [](void*, BOOLEAN) {};
+        status = RtlCreateTimer(hTimerQueue, &hTimer, timerCallback, nullptr, 100, 1000, 0);
+        TEST_ASSERT(status == NtStatus::Success && hTimer != nullptr, "RtlCreateTimer succeeds");
+
+        status = RtlUpdateTimer(hTimerQueue, hTimer, 200, 2000);
+        TEST_ASSERT(status == NtStatus::Success, "RtlUpdateTimer succeeds");
+
+        status = RtlDeleteTimer(hTimerQueue, hTimer, nullptr);
+        TEST_ASSERT(status == NtStatus::Success, "RtlDeleteTimer succeeds");
+
+        status = RtlDeleteTimerQueueEx(hTimerQueue, nullptr);
+        TEST_ASSERT(status == NtStatus::Success, "RtlDeleteTimerQueueEx succeeds");
+
+        status = RtlDeleteTimerQueue(hTimerQueue);
+        TEST_ASSERT(status == NtStatus::Success, "RtlDeleteTimerQueue succeeds");
+
+        // 3. Export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlQueueWorkItem") != nullptr, "ntdll exports RtlQueueWorkItem");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlCreateTimerQueue") != nullptr, "ntdll exports RtlCreateTimerQueue");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlCreateTimer") != nullptr, "ntdll exports RtlCreateTimer");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlUpdateTimer") != nullptr, "ntdll exports RtlUpdateTimer");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlDeleteTimer") != nullptr, "ntdll exports RtlDeleteTimer");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlDeleteTimerQueueEx") != nullptr, "ntdll exports RtlDeleteTimerQueueEx");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlDeleteTimerQueue") != nullptr, "ntdll exports RtlDeleteTimerQueue");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-185 SHA-3 Derived Functions (cSHAKE & KMAC)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-185 SHA-3 Derived Functions (cSHAKE & KMAC)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        const uint8_t key16[] = "MySecretKey12345";
+        const uint8_t key32[] = "MySecretKey12345MySecretKey12345";
+        const uint8_t msgAbc[] = "abc";
+
+        // 1. NIST SP 800-185 Encoding Helpers
+        auto le0 = NistSp800_185::left_encode(0);
+        TEST_ASSERT(le0.size() == 2 && le0[0] == 1 && le0[1] == 0, "left_encode(0) is [1, 0]");
+
+        auto le256 = NistSp800_185::left_encode(256);
+        TEST_ASSERT(le256.size() == 3 && le256[0] == 2 && le256[1] == 1 && le256[2] == 0, "left_encode(256) is [2, 1, 0]");
+
+        auto re256 = NistSp800_185::right_encode(256);
+        TEST_ASSERT(re256.size() == 3 && re256[0] == 1 && re256[1] == 0 && re256[2] == 2, "right_encode(256) is [1, 0, 2]");
+
+        // 2. cSHAKE128 & cSHAKE256 Canonical Golden Test Vectors
+        const uint8_t expectedCShake128_abc_MicaNT[32] = {
+            0xcb, 0x1b, 0x7c, 0x97, 0xab, 0xa3, 0x07, 0x6a, 0x03, 0x60, 0x74, 0xc6, 0xc8, 0xf0, 0xc4, 0xa9,
+            0xa5, 0x4e, 0x87, 0xcd, 0x87, 0xf9, 0x7c, 0x51, 0xad, 0xf2, 0xdc, 0xfb, 0x25, 0xc8, 0xb1, 0x95
+        };
+        auto cshake128Out = CShake128::hash(std::span<const uint8_t>(msgAbc, 3), "", "MicaNT", 32);
+        TEST_ASSERT(cshake128Out.size() == 32, "CShake128::hash returns 32 bytes");
+        TEST_ASSERT(std::memcmp(cshake128Out.data(), expectedCShake128_abc_MicaNT, 32) == 0,
+                    "cSHAKE128(\"abc\", custom=\"MicaNT\") matches NIST SP 800-185 bit-exact");
+
+        const uint8_t expectedCShake256_abc_MicaNT[64] = {
+            0x97, 0xe2, 0x72, 0x3b, 0xef, 0x96, 0xe2, 0xf9, 0xce, 0x5d, 0xbe, 0x27, 0xdd, 0xe1, 0x34, 0x0a,
+            0xb8, 0x05, 0xbc, 0x03, 0xa7, 0x41, 0xab, 0x24, 0x06, 0x71, 0xce, 0x12, 0xb7, 0xcf, 0x14, 0xaf,
+            0x2f, 0x01, 0x2b, 0xe6, 0xe8, 0x14, 0x9f, 0x49, 0xd1, 0xd0, 0x22, 0x94, 0xa5, 0x3f, 0x83, 0xc1,
+            0x76, 0xbc, 0x91, 0xce, 0x91, 0xc4, 0xe6, 0xd4, 0xf1, 0xc0, 0x47, 0x8d, 0x7f, 0xef, 0xd4, 0xa1
+        };
+        auto cshake256Out = CShake256::hash(std::span<const uint8_t>(msgAbc, 3), "", "MicaNT", 64);
+        TEST_ASSERT(cshake256Out.size() == 64, "CShake256::hash returns 64 bytes");
+        TEST_ASSERT(std::memcmp(cshake256Out.data(), expectedCShake256_abc_MicaNT, 64) == 0,
+                    "cSHAKE256(\"abc\", custom=\"MicaNT\") matches NIST SP 800-185 bit-exact");
+
+        // 3. KMAC128 & KMAC256 Golden Vectors
+        const uint8_t expectedKmac128_custom[32] = {
+            0xfa, 0x26, 0x91, 0x1b, 0x68, 0x56, 0xe8, 0x68, 0xa0, 0x4e, 0x14, 0x65, 0x6f, 0x43, 0x88, 0x1b,
+            0x4f, 0xc7, 0x9e, 0xf6, 0xf1, 0xbe, 0xa7, 0x33, 0xa0, 0xfa, 0x1a, 0x9c, 0xd4, 0x55, 0x4f, 0xc0
+        };
+        auto kmac128Custom = Kmac128::mac(std::span<const uint8_t>(key16, 16), std::span<const uint8_t>(msgAbc, 3), "MicaNT", 32);
+        TEST_ASSERT(kmac128Custom.size() == 32, "Kmac128::mac returns 32 bytes");
+        TEST_ASSERT(std::memcmp(kmac128Custom.data(), expectedKmac128_custom, 32) == 0,
+                    "KMAC128(\"abc\", custom=\"MicaNT\") matches NIST SP 800-185 bit-exact");
+
+        const uint8_t expectedKmac128_nocustom[32] = {
+            0xb5, 0x71, 0x27, 0x69, 0x1a, 0xb6, 0x46, 0x23, 0x96, 0x66, 0x94, 0x2c, 0x7a, 0x5a, 0x27, 0xf5,
+            0xf8, 0xfc, 0x8b, 0x7e, 0x52, 0x5c, 0x71, 0xcd, 0x0d, 0x7e, 0x49, 0xa6, 0xb1, 0xc1, 0x53, 0x90
+        };
+        auto kmac128NoCustom = Kmac128::mac(std::span<const uint8_t>(key16, 16), std::span<const uint8_t>(msgAbc, 3), "", 32);
+        TEST_ASSERT(kmac128NoCustom.size() == 32, "Kmac128::mac returns 32 bytes");
+        TEST_ASSERT(std::memcmp(kmac128NoCustom.data(), expectedKmac128_nocustom, 32) == 0,
+                    "KMAC128(\"abc\", no custom) matches NIST SP 800-185 bit-exact");
+
+        const uint8_t expectedKmac256_custom[64] = {
+            0x91, 0x8c, 0xbf, 0x9c, 0x67, 0xfd, 0xfb, 0x6e, 0x5f, 0x96, 0xdb, 0x39, 0xcd, 0xd1, 0x73, 0xae,
+            0xb4, 0x0b, 0x82, 0x8f, 0x4c, 0x9c, 0xee, 0xa3, 0x24, 0xa5, 0x37, 0x57, 0x25, 0x27, 0xa6, 0xab,
+            0xdb, 0x16, 0xe2, 0xa2, 0x14, 0x6a, 0xca, 0xb7, 0x3f, 0xe6, 0xcf, 0x8a, 0xa4, 0xa3, 0xfd, 0x6a,
+            0x3f, 0xb4, 0xc5, 0x54, 0x6d, 0x80, 0x44, 0x86, 0x1d, 0x2f, 0x2a, 0xab, 0xf1, 0x23, 0xfa, 0x63
+        };
+        auto kmac256Custom = Kmac256::mac(std::span<const uint8_t>(key32, 32), std::span<const uint8_t>(msgAbc, 3), "MicaNT", 64);
+        TEST_ASSERT(kmac256Custom.size() == 64, "Kmac256::mac returns 64 bytes");
+        TEST_ASSERT(std::memcmp(kmac256Custom.data(), expectedKmac256_custom, 64) == 0,
+                    "KMAC256(\"abc\", custom=\"MicaNT\") matches NIST SP 800-185 bit-exact");
+
+        const uint8_t expectedKmac256_nocustom[64] = {
+            0xa1, 0x2f, 0xed, 0x6d, 0x71, 0xe3, 0xf9, 0xa9, 0x9e, 0x45, 0xf9, 0xb1, 0xde, 0xc6, 0x2a, 0xed,
+            0xa1, 0x0b, 0x79, 0xa6, 0xd1, 0xdf, 0xa2, 0xe8, 0x66, 0x17, 0x24, 0x6b, 0x33, 0x75, 0xea, 0x36,
+            0x80, 0x9b, 0x37, 0x2f, 0x6d, 0xf3, 0x8d, 0x98, 0x6d, 0xa1, 0x63, 0x4f, 0xd2, 0x83, 0x5b, 0xeb,
+            0x18, 0x0c, 0xbf, 0xf1, 0x68, 0xca, 0xf8, 0xba, 0xec, 0x72, 0xa7, 0x7d, 0x66, 0xac, 0x5a, 0x37
+        };
+        auto kmac256NoCustom = Kmac256::mac(std::span<const uint8_t>(key32, 32), std::span<const uint8_t>(msgAbc, 3), "", 64);
+        TEST_ASSERT(kmac256NoCustom.size() == 64, "Kmac256::mac returns 64 bytes");
+        TEST_ASSERT(std::memcmp(kmac256NoCustom.data(), expectedKmac256_nocustom, 64) == 0,
+                    "KMAC256(\"abc\", no custom) matches NIST SP 800-185 bit-exact");
+
+        // 4. BCrypt API Integration for KMAC128 and KMAC256
+        BCRYPT_ALG_HANDLE hKmac128 = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKmac128, BCRYPT_KMAC128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKmac128 != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKmac128, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128 default hash length is 32");
+        BCryptGetProperty(hKmac128, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128 block length is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hKmac128, &hHash128, nullptr, 0, const_cast<uint8_t*>(key16), 16, 0);
+        BCryptHashData(hHash128, const_cast<uint8_t*>(msgAbc), 3, 0);
+        uint8_t dKmac128[32]{};
+        BCryptFinishHash(hHash128, dKmac128, sizeof(dKmac128), 0);
+        TEST_ASSERT(std::memcmp(dKmac128, expectedKmac128_nocustom, 32) == 0,
+                    "BCrypt API KMAC128 produces bit-exact NIST tag");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hKmac128, 0);
+
+        BCRYPT_ALG_HANDLE hKmac256 = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKmac256, BCRYPT_KMAC256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKmac256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256");
+
+        BCryptGetProperty(hKmac256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256 default hash length is 64");
+        BCryptGetProperty(hKmac256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256 block length is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hKmac256, &hHash256, nullptr, 0, const_cast<uint8_t*>(key32), 32, 0);
+        BCryptHashData(hHash256, const_cast<uint8_t*>(msgAbc), 3, 0);
+        uint8_t dKmac256[64]{};
+        BCryptFinishHash(hHash256, dKmac256, sizeof(dKmac256), 0);
+        TEST_ASSERT(std::memcmp(dKmac256, expectedKmac256_nocustom, 64) == 0,
+                    "BCrypt API KMAC256 produces bit-exact NIST tag");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hKmac256, 0);
+    }
+
+    std::cout << "  Horizon 236 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device15/16, Query Heap 1 & Options 26 OK\n"
+              << "    Pillar 2: NT Native Classes 223 (SystemPoolLimit) & 224 (SystemCodeIntegrityAddDynamicStore) OK\n"
+              << "    Pillar 3: NT Native Threadpool Executive Runtime (Rtl*) OK\n"
+              << "    Pillar 4: NIST SP 800-185 SHA-3 Derived Functions (cSHAKE & KMAC) OK\n";
+
+    std::cout << "[TEST] Suite 452: Horizon 236 - Direct3D 12 ID3D12Device15/16 & Options 26, SystemInfo 223/224, NT Rtl Threadpool & NIST SP 800-185 KMAC/cSHAKE PASSED." << std::endl;
+}
