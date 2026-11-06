@@ -1643,6 +1643,25 @@ struct SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION {
 };
 using PSYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION = SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION*;
 
+// Class 225: SystemCodeIntegrityUnlockInformation
+struct SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION {
+    ULONG UnlockFlags;
+    ULONG UnlockVersion;
+    GUID  UnlockId;
+    ULONG UnlockSequenceNumber;
+    ULONG Flags;
+};
+using PSYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION = SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION*;
+
+// Class 226: SystemLeapSecondInformation
+struct SYSTEM_LEAP_SECOND_INFORMATION {
+    BOOLEAN      Enabled;
+    ULONG        Flags;
+    LargeInteger NextLeapSecond;
+    LargeInteger PreviousLeapSecond;
+};
+using PSYSTEM_LEAP_SECOND_INFORMATION = SYSTEM_LEAP_SECOND_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3242,6 +3261,35 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_DYNAMIC_STORE_INFORMATION);
             return NtStatus::Success;
         }
+        case 225: { // SystemCodeIntegrityUnlockInformation (Class 225)
+            if (SystemInformationLength < sizeof(SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->UnlockFlags = 0x00000001; // CI_UNLOCK_FLAG_TEST_SIGNING_PERMITTED
+            pInfo->UnlockVersion = 1;
+            pInfo->UnlockId = { 0x47e5b221, 0x8a23, 0x4f12, { 0x99, 0xb8, 0x1d, 0x3f, 0x5a, 0x7e, 0x91, 0x04 } };
+            pInfo->UnlockSequenceNumber = 42;
+            pInfo->Flags = 0x00000003; // Production test unlock active
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 226: { // SystemLeapSecondInformation (Class 226)
+            if (SystemInformationLength < sizeof(SYSTEM_LEAP_SECOND_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_LEAP_SECOND_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_LEAP_SECOND_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Enabled = 1; // Leap second adjustments enabled
+            pInfo->Flags = 0x00000001; // Positive leap second transition
+            pInfo->NextLeapSecond.QuadPart = 133500000000000000LL;     // Future leap second interval (100-ns units)
+            pInfo->PreviousLeapSecond.QuadPart = 131276064000000000LL; // Past leap second interval (100-ns units)
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_LEAP_SECOND_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4190,6 +4238,27 @@ inline NtStatus WINAPI RtlQueryPerformanceFrequency(int64_t* PerformanceFrequenc
     return NtStatus::Success;
 }
 
+namespace details {
+    inline const auto s_systemBootTime = std::chrono::steady_clock::now();
+}
+
+inline NtStatus WINAPI RtlQueryUnbiasedInterruptTimePrecise(uint64_t* InterruptTime) noexcept {
+    if (!InterruptTime) return NtStatus::InvalidParameter;
+    auto now = std::chrono::steady_clock::now();
+    auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - details::s_systemBootTime).count();
+    *InterruptTime = static_cast<uint64_t>(nanos / 100) + 10000000ULL;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI RtlQueryInterruptTimePrecise(uint64_t* InterruptTime) noexcept {
+    if (!InterruptTime) return NtStatus::InvalidParameter;
+    auto now = std::chrono::steady_clock::now();
+    auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - details::s_systemBootTime).count();
+    // InterruptTime includes unbiased time plus system sleep/hibernation bias
+    *InterruptTime = static_cast<uint64_t>(nanos / 100) + 10000000ULL + 50000000ULL;
+    return NtStatus::Success;
+}
+
 inline NtStatus WINAPI RtlQueryProcessDebugInformation(ULONG /*ProcessId*/, ULONG /*DebugInfoClassMask*/, void* /*DebugBuffer*/) noexcept { return NtStatus::Success; }
 inline NtStatus WINAPI RtlQueueApcWow64Thread(HANDLE /*ThreadHandle*/, void* /*ApcRoutine*/, void* /*ApcRoutineContext*/, void* /*ApcStatusBlock*/, void* /*ApcReserved*/) noexcept { return NtStatus::Success; }
 
@@ -4514,6 +4583,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlSetHeapInformation", reinterpret_cast<void*>(RtlSetHeapInformation));
     ldr.registerExport("ntdll.dll", "RtlQueryPerformanceCounter", reinterpret_cast<void*>(RtlQueryPerformanceCounter));
     ldr.registerExport("ntdll.dll", "RtlQueryPerformanceFrequency", reinterpret_cast<void*>(RtlQueryPerformanceFrequency));
+    ldr.registerExport("ntdll.dll", "RtlQueryUnbiasedInterruptTimePrecise", reinterpret_cast<void*>(RtlQueryUnbiasedInterruptTimePrecise));
+    ldr.registerExport("ntdll.dll", "RtlQueryInterruptTimePrecise", reinterpret_cast<void*>(RtlQueryInterruptTimePrecise));
     ldr.registerExport("ntdll.dll", "RtlQueryProcessDebugInformation", reinterpret_cast<void*>(RtlQueryProcessDebugInformation));
     ldr.registerExport("ntdll.dll", "RtlQueueApcWow64Thread", reinterpret_cast<void*>(RtlQueueApcWow64Thread));
     ldr.registerExport("ntdll.dll", "RtlRaiseStatus", reinterpret_cast<void*>(RtlRaiseStatus));

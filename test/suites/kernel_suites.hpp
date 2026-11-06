@@ -49800,6 +49800,7 @@ inline void Test_Horizon236_Device15to16_PoolLimitDynamicStore_RtlThreadpool_And
         using namespace micant::ntdll;
 
         InitializeNtdllSubsystemExports();
+        micant::kernel32::InitializeWin32SubsystemExports();
 
         // 1. RtlQueueWorkItem
         bool workExecuted = false;
@@ -49981,4 +49982,301 @@ inline void Test_Horizon236_Device15to16_PoolLimitDynamicStore_RtlThreadpool_And
               << "    Pillar 4: NIST SP 800-185 SHA-3 Derived Functions (cSHAKE & KMAC) OK\n";
 
     std::cout << "[TEST] Suite 452: Horizon 236 - Direct3D 12 ID3D12Device15/16 & Options 26, SystemInfo 223/224, NT Rtl Threadpool & NIST SP 800-185 KMAC/cSHAKE PASSED." << std::endl;
+}
+
+inline void Test_Horizon237_Dred2Options27_CodeIntegrityUnlockLeapSecond_PreciseTimers_And_TupleHash_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 453: Horizon 237 - Direct3D 12 Agility SDK DRED 1.3/2.0 & Options 27, NT SystemInfo 225/226, Executive Precise Timers & NIST SP 800-185 TupleHash\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 Agility SDK DRED 1.3/2.0 & Options 27
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK DRED 1.3/2.0 & Options 27 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS27
+        D3D12_FEATURE_DATA_D3D12_OPTIONS27 opt27{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS27, &opt27, sizeof(opt27));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS27 succeeds");
+        TEST_ASSERT(opt27.WorkGraphsTier == 11u, "WorkGraphsTier is Tier 1.1");
+        TEST_ASSERT(opt27.DynamicNodeExpansionSupported == TRUE, "DynamicNodeExpansionSupported is TRUE");
+        TEST_ASSERT(opt27.MultiTierWorkGraphsSupported == TRUE, "MultiTierWorkGraphsSupported is TRUE");
+        TEST_ASSERT(opt27.AmplifiedMeshDispatchSupported == TRUE, "AmplifiedMeshDispatchSupported is TRUE");
+
+        // 2. D3D12GetInterface for CLSID_D3D12DeviceRemovedExtendedData
+        ID3D12DeviceRemovedExtendedDataSettings* pSettings = nullptr;
+        hr = D3D12GetInterface(
+            CLSID_D3D12DeviceRemovedExtendedData,
+            IID_ID3D12DeviceRemovedExtendedDataSettings,
+            reinterpret_cast<void**>(&pSettings)
+        );
+        TEST_ASSERT(hr == 0 && pSettings != nullptr, "D3D12GetInterface for CLSID_D3D12DeviceRemovedExtendedData succeeds");
+
+        pSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        pSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        pSettings->SetWatsonDumpEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+
+        ID3D12DeviceRemovedExtendedDataSettings1* pSettings1 = nullptr;
+        hr = pSettings->QueryInterface(
+            IID_ID3D12DeviceRemovedExtendedDataSettings1,
+            reinterpret_cast<void**>(&pSettings1)
+        );
+        TEST_ASSERT(hr == 0 && pSettings1 != nullptr, "QueryInterface for IID_ID3D12DeviceRemovedExtendedDataSettings1 succeeds");
+
+        pSettings1->SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        auto* pConcreteSettings = static_cast<Prism3D12DeviceRemovedExtendedDataSettingsImpl*>(pSettings1);
+        TEST_ASSERT(pConcreteSettings->GetAutoBreadcrumbsEnablement() == D3D12_DRED_ENABLEMENT_FORCED_ON, "AutoBreadcrumbs is FORCED_ON");
+        TEST_ASSERT(pConcreteSettings->GetPageFaultEnablement() == D3D12_DRED_ENABLEMENT_FORCED_ON, "PageFault is FORCED_ON");
+        TEST_ASSERT(pConcreteSettings->GetBreadcrumbContextEnablement() == D3D12_DRED_ENABLEMENT_FORCED_ON, "BreadcrumbContext is FORCED_ON");
+
+        pSettings1->Release();
+        pSettings->Release();
+
+        // 3. QueryInterface for DRED from Device
+        ID3D12DeviceRemovedExtendedData* pDred = nullptr;
+        hr = device.QueryInterface(IID_ID3D12DeviceRemovedExtendedData, reinterpret_cast<void**>(&pDred));
+        TEST_ASSERT(hr == 0 && pDred != nullptr, "QueryInterface for IID_ID3D12DeviceRemovedExtendedData succeeds");
+
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT autoBreadcrumbs{};
+        hr = pDred->GetAutoBreadcrumbsOutput(&autoBreadcrumbs);
+        TEST_ASSERT(hr == 0, "GetAutoBreadcrumbsOutput returns S_OK (0)");
+
+        D3D12_DRED_PAGE_FAULT_OUTPUT pageFault{};
+        hr = pDred->GetPageFaultAllocationOutput(&pageFault);
+        TEST_ASSERT(hr == 0, "GetPageFaultAllocationOutput returns S_OK (0)");
+        pDred->Release();
+
+        // Query ID3D12DeviceRemovedExtendedData2
+        ID3D12DeviceRemovedExtendedData2* pDred2 = nullptr;
+        hr = device.QueryInterface(IID_ID3D12DeviceRemovedExtendedData2, reinterpret_cast<void**>(&pDred2));
+        TEST_ASSERT(hr == 0 && pDred2 != nullptr, "QueryInterface for IID_ID3D12DeviceRemovedExtendedData2 succeeds");
+
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 breadcrumbs1{};
+        hr = pDred2->GetAutoBreadcrumbsOutput1(&breadcrumbs1);
+        TEST_ASSERT(hr == 0, "GetAutoBreadcrumbsOutput1 returns S_OK (0)");
+
+        D3D12_DRED_PAGE_FAULT_OUTPUT2 pageFault2{};
+        hr = pDred2->GetPageFaultAllocationOutput2(&pageFault2);
+        TEST_ASSERT(hr == 0, "GetPageFaultAllocationOutput2 returns S_OK (0)");
+        TEST_ASSERT(pDred2->GetDeviceState() == D3D12_DRED_DEVICE_STATE_UNKNOWN, "GetDeviceState returns UNKNOWN");
+        pDred2->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 225 (Code Integrity Unlock) & 226 (Leap Second)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 225 & 226...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 225: SystemCodeIntegrityUnlockInformation
+        ULONG retLen = 0;
+        SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION unlockInfo{};
+        NtStatus status = NtQuerySystemInformation_Export(
+            225,
+            &unlockInfo,
+            sizeof(unlockInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 225 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION), "Class 225 returns sizeof(SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION)");
+        TEST_ASSERT(unlockInfo.UnlockFlags == 0x00000001, "Class 225 UnlockFlags indicates test signing permitted");
+        TEST_ASSERT(unlockInfo.UnlockVersion == 1, "Class 225 UnlockVersion is 1");
+        TEST_ASSERT(unlockInfo.UnlockSequenceNumber == 42, "Class 225 UnlockSequenceNumber is 42");
+        TEST_ASSERT(unlockInfo.Flags == 0x00000003, "Class 225 Flags indicates production test unlock active");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            225,
+            &unlockInfo,
+            sizeof(unlockInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 225 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_UNLOCK_INFORMATION), "Class 225 returns required length on mismatch");
+
+        // 2. Class 226: SystemLeapSecondInformation
+        SYSTEM_LEAP_SECOND_INFORMATION leapInfo{};
+        status = NtQuerySystemInformation_Export(
+            226,
+            &leapInfo,
+            sizeof(leapInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 226 succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_LEAP_SECOND_INFORMATION), "Class 226 returns sizeof(SYSTEM_LEAP_SECOND_INFORMATION)");
+        TEST_ASSERT(leapInfo.Enabled == 1, "Class 226 Enabled indicates leap second adjustments are active");
+        TEST_ASSERT(leapInfo.Flags == 0x00000001, "Class 226 Flags indicates positive leap second transition");
+        TEST_ASSERT(leapInfo.NextLeapSecond.QuadPart == 133500000000000000LL, "Class 226 NextLeapSecond timestamp is valid");
+        TEST_ASSERT(leapInfo.PreviousLeapSecond.QuadPart == 131276064000000000LL, "Class 226 PreviousLeapSecond timestamp is valid");
+
+        // Length mismatch check
+        status = NtQuerySystemInformation_Export(
+            226,
+            &leapInfo,
+            sizeof(leapInfo) - 1,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 226 detects buffer length mismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_LEAP_SECOND_INFORMATION), "Class 226 returns required length on mismatch");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive Runtime High-Precision Counters
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive Runtime High-Precision Counters...\n";
+
+        using namespace micant::ntdll;
+
+        InitializeNtdllSubsystemExports();
+        micant::kernel32::InitializeWin32SubsystemExports();
+
+        // 1. RtlQueryUnbiasedInterruptTimePrecise
+        uint64_t unbiasedTime1 = 0;
+        NtStatus status = RtlQueryUnbiasedInterruptTimePrecise(&unbiasedTime1);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQueryUnbiasedInterruptTimePrecise returns Success");
+        TEST_ASSERT(unbiasedTime1 > 0, "RtlQueryUnbiasedInterruptTimePrecise returns non-zero interrupt time");
+
+        // Validation for null pointer
+        status = RtlQueryUnbiasedInterruptTimePrecise(nullptr);
+        TEST_ASSERT(status == NtStatus::InvalidParameter, "RtlQueryUnbiasedInterruptTimePrecise rejects null pointer");
+
+        // 2. RtlQueryInterruptTimePrecise
+        uint64_t interruptTime = 0;
+        status = RtlQueryInterruptTimePrecise(&interruptTime);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQueryInterruptTimePrecise returns Success");
+        TEST_ASSERT(interruptTime >= unbiasedTime1, "RtlQueryInterruptTimePrecise is monotonically forward");
+
+        // 3. Export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlQueryUnbiasedInterruptTimePrecise") != nullptr,
+                    "ntdll exports RtlQueryUnbiasedInterruptTimePrecise");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlQueryInterruptTimePrecise") != nullptr,
+                    "ntdll exports RtlQueryInterruptTimePrecise");
+
+        // 4. Kernel32 QueryUnbiasedInterruptTimePrecise
+        uint64_t kUnbiasedTime = 0;
+        micant::kernel32::QueryUnbiasedInterruptTimePrecise(&kUnbiasedTime);
+        TEST_ASSERT(kUnbiasedTime > 0, "Kernel32 QueryUnbiasedInterruptTimePrecise returns valid time");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryUnbiasedInterruptTimePrecise") != nullptr,
+                    "kernel32 exports QueryUnbiasedInterruptTimePrecise");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-185 TupleHash (TupleHash128 & TupleHash256)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-185 TupleHash (TupleHash128 & TupleHash256)...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        std::vector<std::vector<uint8_t>> tuple = {
+            { 'a', 'b', 'c' },
+            { 'd', 'e', 'f' },
+            { '1', '2', '3', '4', '5' }
+        };
+
+        // 1. TupleHash128 Golden Test Vectors
+        const uint8_t expectedTH128_MicaNT[32] = {
+            0xa2, 0x42, 0x5a, 0x04, 0xaf, 0xe6, 0x11, 0x53, 0x2f, 0x3a, 0x8e, 0xd5, 0x52, 0xe2, 0x5b, 0xbe,
+            0x1c, 0x61, 0x6f, 0xc9, 0xa4, 0x4e, 0x12, 0x2c, 0x13, 0x08, 0x6a, 0x4b, 0xf5, 0xff, 0xf4, 0x9a
+        };
+        auto th128MicaNT = TupleHash128::hash(tuple, "MicaNT", 32);
+        TEST_ASSERT(th128MicaNT.size() == 32, "TupleHash128::hash returns 32 bytes");
+        TEST_ASSERT(std::memcmp(th128MicaNT.data(), expectedTH128_MicaNT, 32) == 0,
+                    "TupleHash128(tuple, custom=\"MicaNT\") matches NIST SP 800-185 bit-exact");
+
+        const uint8_t expectedTH128_Empty[32] = {
+            0x8f, 0x6d, 0x19, 0xb0, 0xa0, 0xd4, 0x83, 0x24, 0x62, 0x20, 0xcd, 0x4b, 0x73, 0xb8, 0x60, 0x5e,
+            0xeb, 0xa6, 0xff, 0x16, 0xda, 0x60, 0xee, 0x25, 0x94, 0xfb, 0xe5, 0xfe, 0xdb, 0xfe, 0xaf, 0xe1
+        };
+        auto th128Empty = TupleHash128::hash(tuple, "", 32);
+        TEST_ASSERT(th128Empty.size() == 32, "TupleHash128::hash returns 32 bytes");
+        TEST_ASSERT(std::memcmp(th128Empty.data(), expectedTH128_Empty, 32) == 0,
+                    "TupleHash128(tuple, no custom) matches NIST SP 800-185 bit-exact");
+
+        // 2. TupleHash256 Golden Test Vectors
+        const uint8_t expectedTH256_MicaNT[64] = {
+            0x9e, 0x82, 0x5f, 0xed, 0x01, 0x79, 0xf7, 0x8b, 0x52, 0x6a, 0x36, 0xc5, 0x48, 0xf3, 0xc3, 0xcc,
+            0x93, 0x99, 0x62, 0x30, 0x29, 0x10, 0xb3, 0x88, 0x7c, 0xba, 0xe7, 0xd0, 0xe1, 0x24, 0x25, 0x48,
+            0x9c, 0x55, 0x53, 0x51, 0xbd, 0xf6, 0x85, 0xff, 0xeb, 0xa7, 0x56, 0x21, 0x56, 0xa3, 0x3d, 0x9d,
+            0x82, 0xe2, 0xb0, 0xf1, 0x91, 0x7c, 0x4b, 0x0d, 0x51, 0xfe, 0x48, 0x6f, 0x82, 0x0e, 0x7b, 0x94
+        };
+        auto th256MicaNT = TupleHash256::hash(tuple, "MicaNT", 64);
+        TEST_ASSERT(th256MicaNT.size() == 64, "TupleHash256::hash returns 64 bytes");
+        TEST_ASSERT(std::memcmp(th256MicaNT.data(), expectedTH256_MicaNT, 64) == 0,
+                    "TupleHash256(tuple, custom=\"MicaNT\") matches NIST SP 800-185 bit-exact");
+
+        const uint8_t expectedTH256_Empty[64] = {
+            0x2a, 0x55, 0xfc, 0xb3, 0x3d, 0x65, 0xee, 0x33, 0x1e, 0xe7, 0xe9, 0x4b, 0x2c, 0xb1, 0x41, 0x15,
+            0xfd, 0x49, 0x34, 0x3e, 0xa1, 0xd6, 0x50, 0x7a, 0x17, 0x4c, 0x47, 0x24, 0xe6, 0x2b, 0x15, 0xfb,
+            0x7e, 0xf3, 0xaa, 0xf6, 0xaa, 0x20, 0x12, 0xc8, 0xd7, 0xa1, 0x03, 0xf6, 0xa4, 0x4a, 0xc2, 0xd6,
+            0x9a, 0xf9, 0xad, 0x03, 0xe4, 0x47, 0x93, 0x6b, 0x7c, 0xa0, 0xdb, 0x6b, 0xd6, 0x11, 0xea, 0x8e
+        };
+        auto th256Empty = TupleHash256::hash(tuple, "", 64);
+        TEST_ASSERT(th256Empty.size() == 64, "TupleHash256::hash returns 64 bytes");
+        TEST_ASSERT(std::memcmp(th256Empty.data(), expectedTH256_Empty, 64) == 0,
+                    "TupleHash256(tuple, no custom) matches NIST SP 800-185 bit-exact");
+
+        // 3. BCrypt API Integration for TupleHash128 and TupleHash256
+        BCRYPT_ALG_HANDLE hTH128 = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hTH128, BCRYPT_TUPLEHASH128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hTH128 != nullptr, "BCryptOpenAlgorithmProvider succeeds for TupleHash128");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hTH128, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt TupleHash128 default hash length is 32");
+        BCryptGetProperty(hTH128, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt TupleHash128 rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hTH128, &hHash128, nullptr, 0, nullptr, 0, 0);
+        for (const auto& item : tuple) {
+            BCryptHashData(hHash128, const_cast<uint8_t*>(item.data()), static_cast<uint32_t>(item.size()), 0);
+        }
+        uint8_t dTH128[32]{};
+        BCryptFinishHash(hHash128, dTH128, sizeof(dTH128), 0);
+        TEST_ASSERT(std::memcmp(dTH128, expectedTH128_Empty, 32) == 0,
+                    "BCrypt API TupleHash128 produces bit-exact NIST tuple hash");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hTH128, 0);
+
+        BCRYPT_ALG_HANDLE hTH256 = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hTH256, BCRYPT_TUPLEHASH256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hTH256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for TupleHash256");
+
+        BCryptGetProperty(hTH256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt TupleHash256 default hash length is 64");
+        BCryptGetProperty(hTH256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt TupleHash256 rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hTH256, &hHash256, nullptr, 0, nullptr, 0, 0);
+        for (const auto& item : tuple) {
+            BCryptHashData(hHash256, const_cast<uint8_t*>(item.data()), static_cast<uint32_t>(item.size()), 0);
+        }
+        uint8_t dTH256[64]{};
+        BCryptFinishHash(hHash256, dTH256, sizeof(dTH256), 0);
+        TEST_ASSERT(std::memcmp(dTH256, expectedTH256_Empty, 64) == 0,
+                    "BCrypt API TupleHash256 produces bit-exact NIST tuple hash");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hTH256, 0);
+    }
+
+    std::cout << "  Horizon 237 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 Agility SDK DRED 1.3/2.0 & Options 27 OK\n"
+              << "    Pillar 2: NT Native Classes 225 (CodeIntegrityUnlock) & 226 (LeapSecond) OK\n"
+              << "    Pillar 3: NT Native Executive Runtime High-Precision Counters OK\n"
+              << "    Pillar 4: NIST SP 800-185 TupleHash (TupleHash128 & TupleHash256) OK\n";
+
+    std::cout << "[TEST] Suite 453: Horizon 237 - Direct3D 12 Agility SDK DRED 1.3/2.0 & Options 27, NT SystemInfo 225/226, Executive Precise Timers & NIST SP 800-185 TupleHash PASSED." << std::endl;
 }

@@ -1226,6 +1226,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS23 = 39;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS24 = 40;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS25 = 41;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS26 = 42;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS27 = 43;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -1417,6 +1418,214 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS26 {
     BOOL PeriodicTrimNotificationsSupported{ 1 };
     BOOL ByteOffsetBufferViewsSupported{ 1 };
     BOOL RelaxedCastableFormatsSupported{ 1 };
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS27 {
+    uint32_t WorkGraphsTier{ 11 }; // Tier 1.1
+    BOOL     DynamicNodeExpansionSupported{ 1 };
+    BOOL     MultiTierWorkGraphsSupported{ 1 };
+    BOOL     AmplifiedMeshDispatchSupported{ 1 };
+};
+
+static constexpr GUID CLSID_D3D12DeviceRemovedExtendedData =
+    { 0x5c7ca970, 0x8a92, 0x48a1, { 0x81, 0x4d, 0x45, 0x89, 0x61, 0x93, 0x22, 0x93 } };
+static constexpr GUID OFFICIAL_CLSID_D3D12DeviceRemovedExtendedData = CLSID_D3D12DeviceRemovedExtendedData;
+
+static constexpr IID IID_ID3D12DeviceRemovedExtendedDataSettings =
+    { 0x82bc481c, 0x6b9b, 0x4030, { 0xae, 0xdb, 0x7b, 0xdd, 0x49, 0x02, 0xc2, 0xe2 } };
+static constexpr IID OFFICIAL_IID_ID3D12DeviceRemovedExtendedDataSettings = IID_ID3D12DeviceRemovedExtendedDataSettings;
+
+static constexpr IID IID_ID3D12DeviceRemovedExtendedDataSettings1 =
+    { 0xdbd5ae51, 0x3317, 0x4baa, { 0x8f, 0x3b, 0xbb, 0x13, 0x09, 0x66, 0xac, 0x43 } };
+static constexpr IID OFFICIAL_IID_ID3D12DeviceRemovedExtendedDataSettings1 = IID_ID3D12DeviceRemovedExtendedDataSettings1;
+
+static constexpr IID IID_ID3D12DeviceRemovedExtendedData =
+    { 0x984e304b, 0x33de, 0x4a97, { 0x95, 0x86, 0x14, 0x94, 0x76, 0xec, 0xba, 0xe6 } };
+static constexpr IID OFFICIAL_IID_ID3D12DeviceRemovedExtendedData = IID_ID3D12DeviceRemovedExtendedData;
+
+static constexpr IID IID_ID3D12DeviceRemovedExtendedData1 =
+    { 0x972750d6, 0x1dd9, 0x4a25, { 0xac, 0x42, 0xe9, 0x88, 0x74, 0xa3, 0x30, 0xab } };
+static constexpr IID OFFICIAL_IID_ID3D12DeviceRemovedExtendedData1 = IID_ID3D12DeviceRemovedExtendedData1;
+
+static constexpr IID IID_ID3D12DeviceRemovedExtendedData2 =
+    { 0x67fc3316, 0x0f36, 0x444b, { 0xbc, 0x2c, 0x25, 0xa6, 0x42, 0xfc, 0x0d, 0x67 } };
+static constexpr IID OFFICIAL_IID_ID3D12DeviceRemovedExtendedData2 = IID_ID3D12DeviceRemovedExtendedData2;
+
+enum D3D12_DRED_ENABLEMENT : uint32_t {
+    D3D12_DRED_ENABLEMENT_SYSTEM_CONTROLLED = 0,
+    D3D12_DRED_ENABLEMENT_FORCED_OFF        = 1,
+    D3D12_DRED_ENABLEMENT_FORCED_ON         = 2
+};
+
+enum D3D12_DRED_PAGE_FAULT_FLAGS : uint32_t {
+    D3D12_DRED_PAGE_FAULT_FLAGS_NONE = 0
+};
+
+enum D3D12_DRED_DEVICE_STATE : uint32_t {
+    D3D12_DRED_DEVICE_STATE_UNKNOWN   = 0,
+    D3D12_DRED_DEVICE_STATE_HUNG      = 3,
+    D3D12_DRED_DEVICE_STATE_FAULT     = 4,
+    D3D12_DRED_DEVICE_STATE_PAGEFAULT = 5
+};
+
+struct D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT {
+    const void* pHeadAutoBreadcrumbNode{ nullptr };
+};
+
+struct D3D12_DRED_PAGE_FAULT_OUTPUT {
+    uint64_t    PageFaultVA{ 0 };
+    const void* pHeadExistingAllocationNode{ nullptr };
+    const void* pHeadRecentFreedAllocationNode{ nullptr };
+};
+
+struct D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 {
+    const void* pHeadAutoBreadcrumbNode{ nullptr };
+};
+
+struct D3D12_DRED_PAGE_FAULT_OUTPUT1 {
+    uint64_t    PageFaultVA{ 0 };
+    const void* pHeadExistingAllocationNode{ nullptr };
+    const void* pHeadRecentFreedAllocationNode{ nullptr };
+};
+
+struct D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT2 {
+    const void* pHeadAutoBreadcrumbNode{ nullptr };
+    uint32_t    BreadcrumbContextCount{ 0 };
+};
+
+struct D3D12_DRED_PAGE_FAULT_OUTPUT2 {
+    uint64_t    PageFaultVA{ 0 };
+    const void* pHeadExistingAllocationNode{ nullptr };
+    const void* pHeadRecentFreedAllocationNode{ nullptr };
+    uint32_t    PageFaultFlags{ 0 };
+};
+
+class ID3D12DeviceRemovedExtendedDataSettings : public IUnknown {
+public:
+    virtual void WINAPI SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT Enablement) = 0;
+    virtual void WINAPI SetPageFaultEnablement(D3D12_DRED_ENABLEMENT Enablement) = 0;
+    virtual void WINAPI SetWatsonDumpEnablement(D3D12_DRED_ENABLEMENT Enablement) = 0;
+};
+
+class ID3D12DeviceRemovedExtendedDataSettings1 : public ID3D12DeviceRemovedExtendedDataSettings {
+public:
+    virtual void WINAPI SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT Enablement) = 0;
+};
+
+class ID3D12DeviceRemovedExtendedData : public IUnknown {
+public:
+    virtual int32_t WINAPI GetAutoBreadcrumbsOutput(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT* pOutput) = 0;
+    virtual int32_t WINAPI GetPageFaultAllocationOutput(D3D12_DRED_PAGE_FAULT_OUTPUT* pOutput) = 0;
+};
+
+class ID3D12DeviceRemovedExtendedData1 : public ID3D12DeviceRemovedExtendedData {
+public:
+    virtual int32_t WINAPI GetAutoBreadcrumbsOutput1(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1* pOutput) = 0;
+    virtual int32_t WINAPI GetPageFaultAllocationOutput1(D3D12_DRED_PAGE_FAULT_OUTPUT1* pOutput) = 0;
+};
+
+class ID3D12DeviceRemovedExtendedData2 : public ID3D12DeviceRemovedExtendedData1 {
+public:
+    virtual int32_t WINAPI GetPageFaultAllocationOutput2(D3D12_DRED_PAGE_FAULT_OUTPUT2* pOutput) = 0;
+    virtual D3D12_DRED_DEVICE_STATE WINAPI GetDeviceState() = 0;
+};
+
+class Prism3D12DeviceRemovedExtendedDataSettingsImpl : public ID3D12DeviceRemovedExtendedDataSettings1 {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    D3D12_DRED_ENABLEMENT m_autoBreadcrumbs{ D3D12_DRED_ENABLEMENT_SYSTEM_CONTROLLED };
+    D3D12_DRED_ENABLEMENT m_pageFault{ D3D12_DRED_ENABLEMENT_SYSTEM_CONTROLLED };
+    D3D12_DRED_ENABLEMENT m_watsonDump{ D3D12_DRED_ENABLEMENT_SYSTEM_CONTROLLED };
+    D3D12_DRED_ENABLEMENT m_breadcrumbContext{ D3D12_DRED_ENABLEMENT_SYSTEM_CONTROLLED };
+
+public:
+    int32_t WINAPI QueryInterface(const IID& riid, void** ppvObject) override {
+        if (!ppvObject) return -1;
+        if (riid == IID_IUnknown ||
+            riid == IID_ID3D12DeviceRemovedExtendedDataSettings ||
+            riid == IID_ID3D12DeviceRemovedExtendedDataSettings1) {
+            *ppvObject = static_cast<ID3D12DeviceRemovedExtendedDataSettings1*>(this);
+            AddRef();
+            return 0; // S_OK
+        }
+        *ppvObject = nullptr;
+        return -2147467262; // E_NOINTERFACE
+    }
+    uint32_t WINAPI AddRef() override { return ++m_refCount; }
+    uint32_t WINAPI Release() override {
+        uint32_t r = --m_refCount;
+        if (r == 0) delete this;
+        return r;
+    }
+    void WINAPI SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT Enablement) override { m_autoBreadcrumbs = Enablement; }
+    void WINAPI SetPageFaultEnablement(D3D12_DRED_ENABLEMENT Enablement) override { m_pageFault = Enablement; }
+    void WINAPI SetWatsonDumpEnablement(D3D12_DRED_ENABLEMENT Enablement) override { m_watsonDump = Enablement; }
+    void WINAPI SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT Enablement) override { m_breadcrumbContext = Enablement; }
+
+    D3D12_DRED_ENABLEMENT GetAutoBreadcrumbsEnablement() const noexcept { return m_autoBreadcrumbs; }
+    D3D12_DRED_ENABLEMENT GetPageFaultEnablement() const noexcept { return m_pageFault; }
+    D3D12_DRED_ENABLEMENT GetBreadcrumbContextEnablement() const noexcept { return m_breadcrumbContext; }
+};
+
+class Prism3D12DeviceRemovedExtendedDataImpl : public ID3D12DeviceRemovedExtendedData2 {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+
+public:
+    int32_t WINAPI QueryInterface(const IID& riid, void** ppvObject) override {
+        if (!ppvObject) return -1;
+        if (riid == IID_IUnknown ||
+            riid == IID_ID3D12DeviceRemovedExtendedData ||
+            riid == IID_ID3D12DeviceRemovedExtendedData1 ||
+            riid == IID_ID3D12DeviceRemovedExtendedData2) {
+            *ppvObject = static_cast<ID3D12DeviceRemovedExtendedData2*>(this);
+            AddRef();
+            return 0; // S_OK
+        }
+        *ppvObject = nullptr;
+        return -2147467262; // E_NOINTERFACE
+    }
+    uint32_t WINAPI AddRef() override { return ++m_refCount; }
+    uint32_t WINAPI Release() override {
+        uint32_t r = --m_refCount;
+        if (r == 0) delete this;
+        return r;
+    }
+    int32_t WINAPI GetAutoBreadcrumbsOutput(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT* pOutput) override {
+        if (!pOutput) return -1;
+        pOutput->pHeadAutoBreadcrumbNode = nullptr;
+        return 0;
+    }
+    int32_t WINAPI GetPageFaultAllocationOutput(D3D12_DRED_PAGE_FAULT_OUTPUT* pOutput) override {
+        if (!pOutput) return -1;
+        pOutput->PageFaultVA = 0;
+        pOutput->pHeadExistingAllocationNode = nullptr;
+        pOutput->pHeadRecentFreedAllocationNode = nullptr;
+        return 0;
+    }
+    int32_t WINAPI GetAutoBreadcrumbsOutput1(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1* pOutput) override {
+        if (!pOutput) return -1;
+        pOutput->pHeadAutoBreadcrumbNode = nullptr;
+        return 0;
+    }
+    int32_t WINAPI GetPageFaultAllocationOutput1(D3D12_DRED_PAGE_FAULT_OUTPUT1* pOutput) override {
+        if (!pOutput) return -1;
+        pOutput->PageFaultVA = 0;
+        pOutput->pHeadExistingAllocationNode = nullptr;
+        pOutput->pHeadRecentFreedAllocationNode = nullptr;
+        return 0;
+    }
+    int32_t WINAPI GetPageFaultAllocationOutput2(D3D12_DRED_PAGE_FAULT_OUTPUT2* pOutput) override {
+        if (!pOutput) return -1;
+        pOutput->PageFaultVA = 0;
+        pOutput->pHeadExistingAllocationNode = nullptr;
+        pOutput->pHeadRecentFreedAllocationNode = nullptr;
+        pOutput->PageFaultFlags = D3D12_DRED_PAGE_FAULT_FLAGS_NONE;
+        return 0;
+    }
+    D3D12_DRED_DEVICE_STATE WINAPI GetDeviceState() override {
+        return D3D12_DRED_DEVICE_STATE_UNKNOWN;
+    }
 };
 
 enum D3D12_QUERY_HEAP_TYPE : uint32_t {
@@ -3687,6 +3896,14 @@ public:
             AddRef();
             return 0;
         }
+        if (riid == IID_ID3D12DeviceRemovedExtendedData ||
+            riid == IID_ID3D12DeviceRemovedExtendedData1 ||
+            riid == IID_ID3D12DeviceRemovedExtendedData2) {
+            auto* pDred = new Prism3D12DeviceRemovedExtendedDataImpl();
+            int32_t hr = pDred->QueryInterface(riid, ppv);
+            pDred->Release();
+            return hr;
+        }
         *ppv = nullptr;
         return -2147467262;
     }
@@ -4555,6 +4772,15 @@ public:
             pData->RelaxedCastableFormatsSupported = TRUE;
             return 0;
         }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS27) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS27)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS27*>(pFeatureSupportData);
+            pData->WorkGraphsTier = 11u; // Tier 1.1
+            pData->DynamicNodeExpansionSupported = TRUE;
+            pData->MultiTierWorkGraphsSupported = TRUE;
+            pData->AmplifiedMeshDispatchSupported = TRUE;
+            return 0;
+        }
 
         return 0;
     }
@@ -4674,6 +4900,12 @@ inline int32_t WINAPI D3D12GetInterface(const GUID& rclsid, const IID& riid, voi
         auto* cfg = new Prism3D12SDKConfigurationImpl();
         int32_t hr = cfg->QueryInterface(riid, ppvDebug);
         cfg->Release();
+        return hr;
+    }
+    if (rclsid == CLSID_D3D12DeviceRemovedExtendedData) {
+        auto* settings = new Prism3D12DeviceRemovedExtendedDataSettingsImpl();
+        int32_t hr = settings->QueryInterface(riid, ppvDebug);
+        settings->Release();
         return hr;
     }
     if (rclsid == CLSID_D3D12Debug) {
