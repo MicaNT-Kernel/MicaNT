@@ -1741,6 +1741,29 @@ struct SYSTEM_FIRMWARE_RAMDUMP_INFORMATION {
 };
 using PSYSTEM_FIRMWARE_RAMDUMP_INFORMATION = SYSTEM_FIRMWARE_RAMDUMP_INFORMATION*;
 
+// Class 235: SystemPhysicalMemoryZeroingInformation
+struct SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION {
+    uint64_t TotalPhysicalBytesZeroed;
+    uint64_t PendingZeroingBytes;
+    uint32_t ActiveZeroingWorkerThreads;
+    uint32_t ZeroingEfficiencyRating;
+    uint32_t Flags;
+    uint32_t Reserved;
+};
+using PSYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION = SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION*;
+
+// Class 236: SystemHypervisorProcessorPerformanceInformation
+struct SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION {
+    uint32_t ProcessorIndex;
+    uint32_t HypervisorEnlightenmentFlags;
+    uint64_t GuestKernelTime100ns;
+    uint64_t GuestUserTime100ns;
+    uint64_t HypervisorOverheadTime100ns;
+    uint32_t HypercallCount;
+    uint32_t Reserved;
+};
+using PSYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION = SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3487,6 +3510,39 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_RAMDUMP_INFORMATION);
             return NtStatus::Success;
         }
+        case 235: { // SystemPhysicalMemoryZeroingInformation (Class 235)
+            if (SystemInformationLength < sizeof(SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->TotalPhysicalBytesZeroed = 34359738368ULL; // 32 GB zeroed
+            pInfo->PendingZeroingBytes = 1073741824ULL;       // 1 GB pending
+            pInfo->ActiveZeroingWorkerThreads = 4;
+            pInfo->ZeroingEfficiencyRating = 98;              // 98% efficiency
+            pInfo->Flags = 0x00000003;                        // ZEROING_ENABLED | ZEROING_HW_ACCELERATED
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 236: { // SystemHypervisorProcessorPerformanceInformation (Class 236)
+            if (SystemInformationLength < sizeof(SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->ProcessorIndex = 0;
+            pInfo->HypervisorEnlightenmentFlags = 0x00000005; // HYPERVISOR_ENLIGHTENED | HYPERVISOR_PV_SPINLOCK
+            pInfo->GuestKernelTime100ns = 150000000ULL;
+            pInfo->GuestUserTime100ns = 80000000ULL;
+            pInfo->HypervisorOverheadTime100ns = 250000ULL;
+            pInfo->HypercallCount = 16384;
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -3588,6 +3644,8 @@ using HPROPSHEETPAGE = void*;
 using LSTATUS = int32_t;
 using HRESULT = int32_t;
 using LONG = int32_t;
+using LONG64 = int64_t;
+using ULONG64 = uint64_t;
 using LONG_PTR = intptr_t;
 using ULONG_PTR = uintptr_t;
 using LCID = uint32_t;
@@ -4473,6 +4531,42 @@ inline size_t WINAPI RtlCompareMemoryUlong(const void* Source, size_t Length, ui
     return matchedBytes;
 }
 
+inline BOOLEAN WINAPI RtlInterlockedBitTestAndSet(LONG volatile* Base, LONG Bit) noexcept {
+    if (!Base) return FALSE;
+    Base += (Bit / 32);
+    LONG mask = 1L << (Bit % 32);
+    auto* atomicBase = reinterpret_cast<std::atomic<LONG> volatile*>(Base);
+    LONG oldVal = atomicBase->fetch_or(mask, std::memory_order_seq_cst);
+    return (oldVal & mask) != 0 ? TRUE : FALSE;
+}
+
+inline BOOLEAN WINAPI RtlInterlockedBitTestAndReset(LONG volatile* Base, LONG Bit) noexcept {
+    if (!Base) return FALSE;
+    Base += (Bit / 32);
+    LONG mask = 1L << (Bit % 32);
+    auto* atomicBase = reinterpret_cast<std::atomic<LONG> volatile*>(Base);
+    LONG oldVal = atomicBase->fetch_and(~mask, std::memory_order_seq_cst);
+    return (oldVal & mask) != 0 ? TRUE : FALSE;
+}
+
+inline BOOLEAN WINAPI RtlInterlockedBitTestAndSet64(LONG64 volatile* Base, LONG64 Bit) noexcept {
+    if (!Base) return FALSE;
+    Base += (Bit / 64);
+    LONG64 mask = 1LL << (Bit % 64);
+    auto* atomicBase = reinterpret_cast<std::atomic<LONG64> volatile*>(Base);
+    LONG64 oldVal = atomicBase->fetch_or(mask, std::memory_order_seq_cst);
+    return (oldVal & mask) != 0 ? TRUE : FALSE;
+}
+
+inline BOOLEAN WINAPI RtlInterlockedBitTestAndReset64(LONG64 volatile* Base, LONG64 Bit) noexcept {
+    if (!Base) return FALSE;
+    Base += (Bit / 64);
+    LONG64 mask = 1LL << (Bit % 64);
+    auto* atomicBase = reinterpret_cast<std::atomic<LONG64> volatile*>(Base);
+    LONG64 oldVal = atomicBase->fetch_and(~mask, std::memory_order_seq_cst);
+    return (oldVal & mask) != 0 ? TRUE : FALSE;
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -4973,6 +5067,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlFillMemoryUlonglong", reinterpret_cast<void*>(RtlFillMemoryUlonglong));
     ldr.registerExport("ntdll.dll", "RtlZeroMemoryEx", reinterpret_cast<void*>(RtlZeroMemoryEx));
     ldr.registerExport("ntdll.dll", "RtlCompareMemoryUlong", reinterpret_cast<void*>(RtlCompareMemoryUlong));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndSet", reinterpret_cast<void*>(RtlInterlockedBitTestAndSet));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndReset", reinterpret_cast<void*>(RtlInterlockedBitTestAndReset));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndSet64", reinterpret_cast<void*>(RtlInterlockedBitTestAndSet64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndReset64", reinterpret_cast<void*>(RtlInterlockedBitTestAndReset64));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

@@ -51406,3 +51406,295 @@ inline void Test_Horizon241_Device19Options31_SyntheticCacheRamdump_MemoryUlong_
 
     std::cout << "[TEST] Suite 457: Horizon 241 - Direct3D 12 Device19/CommandList13 & Options 31, NT SystemInfo 233/234, Memory Ulong & NIST SP 800-185 KMACXOF PASSED." << std::endl;
 }
+
+inline void Test_Horizon242_Device20Options32_ZeroingHypervisor_InterlockedBitTest_And_KmacPrf_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 458: Horizon 242 - Direct3D 12 Device20/CommandList14 & Options 32, NT SystemInfo 235/236, Interlocked Bit Test & NIST KMAC PRF\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 Agility SDK 1.615+ ID3D12Device20, CommandList14 & Options 32
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device20, CommandList14 & Options 32 Architecture...\n";
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl dev(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. QueryInterface for ID3D12Device20
+        ID3D12Device20* pDev20 = nullptr;
+        int32_t hr = dev.QueryInterface(IID_ID3D12Device20, reinterpret_cast<void**>(&pDev20));
+        TEST_ASSERT(hr == 0 && pDev20 != nullptr, "QueryInterface for IID_ID3D12Device20 succeeds");
+
+        ID3D12Device20* pDev20Off = nullptr;
+        hr = dev.QueryInterface(OFFICIAL_IID_ID3D12Device20, reinterpret_cast<void**>(&pDev20Off));
+        TEST_ASSERT(hr == 0 && pDev20Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device20 succeeds");
+        pDev20Off->Release();
+
+        // 2. Test CreateWorkGraphProgramRecord4 & GetWorkGraphGlobalRootSignatureSupport
+        void* pRec = nullptr;
+        hr = pDev20->CreateWorkGraphProgramRecord4(nullptr, 0x4, 4194304ULL, 64u, IID_ID3D12Device20, &pRec);
+        TEST_ASSERT(hr == 0 && pRec == reinterpret_cast<void*>(0xCAFEBAB4),
+                    "CreateWorkGraphProgramRecord4 produces valid program record pointer");
+
+        int32_t rootSigSupported = 0;
+        hr = pDev20->GetWorkGraphGlobalRootSignatureSupport(&rootSigSupported);
+        TEST_ASSERT(hr == 0 && rootSigSupported == 1,
+                    "GetWorkGraphGlobalRootSignatureSupport returns supported status");
+
+        pDev20->Release();
+
+        // 3. Test CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS32
+        D3D12_FEATURE_DATA_D3D12_OPTIONS32 opts32{};
+        hr = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS32, &opts32, sizeof(opts32));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_OPTIONS32 succeeds");
+        TEST_ASSERT(opts32.WorkGraphsTier == 15u, "Options 32 reports WorkGraphsTier 15 (Tier 2.2)");
+        TEST_ASSERT(opts32.DynamicGlobalRootSignatureSupported == 1, "Options 32 reports DynamicGlobalRootSignatureSupported");
+        TEST_ASSERT(opts32.AsyncWorkGraphDispatchSupported == 1, "Options 32 reports AsyncWorkGraphDispatchSupported");
+        TEST_ASSERT(opts32.MaxWorkGraphConcurrencyGroups == 64u, "Options 32 reports MaxWorkGraphConcurrencyGroups 64");
+        TEST_ASSERT(opts32.EnhancedBarrierDynamicAliasingSupported == 1, "Options 32 reports EnhancedBarrierDynamicAliasingSupported");
+
+        // 4. Command Allocator and CommandList
+        Prism3D12CommandAllocatorImpl alloc(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        // 5. QueryInterface for ID3D12GraphicsCommandList14
+        ID3D12GraphicsCommandList14* pCmd14 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList14, reinterpret_cast<void**>(&pCmd14));
+        TEST_ASSERT(hr == 0 && pCmd14 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList14 succeeds");
+
+        ID3D12GraphicsCommandList14* pCmd14Off = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList14, reinterpret_cast<void**>(&pCmd14Off));
+        TEST_ASSERT(hr == 0 && pCmd14Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList14 succeeds");
+        pCmd14Off->Release();
+
+        // 6. Test SetWorkGraphBackingMemory4
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4Start() == 0, "Initial backing memory 4 start is 0");
+        pCmd14->SetWorkGraphBackingMemory4(0xFF000000ULL, 16777216ULL, 4194304ULL, 64u, 0x20);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4Start() == 0xFF000000ULL, "Backing memory 4 start matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4Size() == 16777216ULL, "Backing memory 4 size matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4ScratchSize() == 4194304ULL, "Backing memory 4 scratch size matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4MaxConcurrency() == 64u, "Backing memory 4 max concurrency matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4Flags() == 0x20, "Backing memory 4 flags matched");
+
+        // 7. Test DispatchGraphProgramRecord4
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord4Count() == 0, "Initial record 4 count is 0");
+        uint64_t dummyRec4 = 0x8899AABBCCDDEEFFULL;
+        pCmd14->DispatchGraphProgramRecord4(15, &dummyRec4, sizeof(dummyRec4), 8u, 0x4);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord4Count() == 1, "Recorded program record 4 count is 1");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords4()[0].NodeIndex == 15, "Record 4 node index matches");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords4()[0].pRecord == &dummyRec4, "Record 4 pointer matches");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords4()[0].RecordSizeInBytes == sizeof(dummyRec4), "Record 4 size matches");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords4()[0].ConcurrencyGroup == 8u, "Record 4 concurrency group matches");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords4()[0].DispatchFlags == 0x4, "Record 4 dispatch flags match");
+
+        // 8. Test Reset clears backing memory 4 and records 4
+        cmdList.Reset(&alloc, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory4Start() == 0, "Reset clears backing memory 4 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord4Count() == 0, "Reset clears program records 4");
+
+        pCmd14->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native System Information Classes 235 & 236
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 235 & 236...\n";
+        using namespace micant::ntdll;
+
+        // 1. Class 235: SystemPhysicalMemoryZeroingInformation
+        ULONG retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            235, nullptr, 0, &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 235 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION),
+                    "Class 235 reports exact required length on mismatch");
+
+        SYSTEM_PHYSICAL_MEMORY_ZEROING_INFORMATION zeroingInfo{};
+        st = NtQuerySystemInformation_Export(235, &zeroingInfo, sizeof(zeroingInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 235 succeeds with exact buffer");
+        TEST_ASSERT(zeroingInfo.TotalPhysicalBytesZeroed == 34359738368ULL, "Total physical bytes zeroed is 32 GB");
+        TEST_ASSERT(zeroingInfo.PendingZeroingBytes == 1073741824ULL, "Pending zeroing bytes is 1 GB");
+        TEST_ASSERT(zeroingInfo.ActiveZeroingWorkerThreads == 4, "Active zeroing worker threads is 4");
+        TEST_ASSERT(zeroingInfo.ZeroingEfficiencyRating == 98, "Zeroing efficiency rating is 98%");
+        TEST_ASSERT(zeroingInfo.Flags == 0x00000003, "Zeroing flags match ZEROING_ENABLED | ZEROING_HW_ACCELERATED");
+
+        // 2. Class 236: SystemHypervisorProcessorPerformanceInformation
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(
+            236, nullptr, 0, &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 236 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION),
+                    "Class 236 reports exact required length on mismatch");
+
+        SYSTEM_HYPERVISOR_PROCESSOR_PERFORMANCE_INFORMATION hypInfo{};
+        st = NtQuerySystemInformation_Export(236, &hypInfo, sizeof(hypInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 236 succeeds with exact buffer");
+        TEST_ASSERT(hypInfo.ProcessorIndex == 0, "Processor index is 0");
+        TEST_ASSERT(hypInfo.HypervisorEnlightenmentFlags == 0x00000005, "Hypervisor flags match expected enlightenment");
+        TEST_ASSERT(hypInfo.GuestKernelTime100ns == 150000000ULL, "Guest kernel time matched");
+        TEST_ASSERT(hypInfo.GuestUserTime100ns == 80000000ULL, "Guest user time matched");
+        TEST_ASSERT(hypInfo.HypervisorOverheadTime100ns == 250000ULL, "Hypervisor overhead time matched");
+        TEST_ASSERT(hypInfo.HypercallCount == 16384, "Hypercall count is 16384");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Single-Bit Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Interlocked Single-Bit Primitives...\n";
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+
+        // 1. RtlInterlockedBitTestAndSet (32-bit)
+        LONG bitArray32 = 0;
+        BOOLEAN oldBit = RtlInterlockedBitTestAndSet(&bitArray32, 5);
+        TEST_ASSERT(oldBit == FALSE, "RtlInterlockedBitTestAndSet on bit 5 initially returns FALSE");
+        TEST_ASSERT(bitArray32 == (1L << 5), "Bit 5 is set in bit array");
+
+        oldBit = RtlInterlockedBitTestAndSet(&bitArray32, 5);
+        TEST_ASSERT(oldBit == TRUE, "RtlInterlockedBitTestAndSet on already set bit 5 returns TRUE");
+        TEST_ASSERT(bitArray32 == (1L << 5), "Bit 5 remains set");
+
+        // 2. RtlInterlockedBitTestAndReset (32-bit)
+        oldBit = RtlInterlockedBitTestAndReset(&bitArray32, 5);
+        TEST_ASSERT(oldBit == TRUE, "RtlInterlockedBitTestAndReset on set bit 5 returns TRUE");
+        TEST_ASSERT(bitArray32 == 0, "Bit 5 is cleared");
+
+        oldBit = RtlInterlockedBitTestAndReset(&bitArray32, 5);
+        TEST_ASSERT(oldBit == FALSE, "RtlInterlockedBitTestAndReset on cleared bit 5 returns FALSE");
+
+        // Multi-dword bit indexing (bit 35 = dword 1, bit 3)
+        LONG multiDword[2] = { 0, 0 };
+        oldBit = RtlInterlockedBitTestAndSet(multiDword, 35);
+        TEST_ASSERT(oldBit == FALSE, "Bit 35 test and set returns FALSE initially");
+        TEST_ASSERT(multiDword[0] == 0, "Dword 0 untouched");
+        TEST_ASSERT(multiDword[1] == (1L << 3), "Dword 1 has bit 3 set");
+
+        // 3. RtlInterlockedBitTestAndSet64 (64-bit)
+        LONG64 bitArray64 = 0;
+        oldBit = RtlInterlockedBitTestAndSet64(&bitArray64, 42);
+        TEST_ASSERT(oldBit == FALSE, "RtlInterlockedBitTestAndSet64 on bit 42 initially returns FALSE");
+        TEST_ASSERT(bitArray64 == (1LL << 42), "Bit 42 is set in 64-bit array");
+
+        oldBit = RtlInterlockedBitTestAndSet64(&bitArray64, 42);
+        TEST_ASSERT(oldBit == TRUE, "RtlInterlockedBitTestAndSet64 on already set bit 42 returns TRUE");
+
+        // 4. RtlInterlockedBitTestAndReset64 (64-bit)
+        oldBit = RtlInterlockedBitTestAndReset64(&bitArray64, 42);
+        TEST_ASSERT(oldBit == TRUE, "RtlInterlockedBitTestAndReset64 on set bit 42 returns TRUE");
+        TEST_ASSERT(bitArray64 == 0, "Bit 42 is cleared");
+
+        // 5. Win32 Aliases
+        LONG winBit32 = 0;
+        oldBit = InterlockedBitTestAndSet(&winBit32, 7);
+        TEST_ASSERT(oldBit == FALSE && winBit32 == (1L << 7), "Win32 InterlockedBitTestAndSet sets bit 7");
+        oldBit = InterlockedBitTestAndReset(&winBit32, 7);
+        TEST_ASSERT(oldBit == TRUE && winBit32 == 0, "Win32 InterlockedBitTestAndReset clears bit 7");
+
+        LONG64 winBit64 = 0;
+        oldBit = InterlockedBitTestAndSet64(&winBit64, 55);
+        TEST_ASSERT(oldBit == FALSE && winBit64 == (1LL << 55), "Win32 InterlockedBitTestAndSet64 sets bit 55");
+        oldBit = InterlockedBitTestAndReset64(&winBit64, 55);
+        TEST_ASSERT(oldBit == TRUE && winBit64 == 0, "Win32 InterlockedBitTestAndReset64 clears bit 55");
+
+        // 6. Dynamic Loader Exports
+        InitializeNtdllSubsystemExports();
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitTestAndSet") != nullptr, "ntdll.dll exports RtlInterlockedBitTestAndSet");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitTestAndReset") != nullptr, "ntdll.dll exports RtlInterlockedBitTestAndReset");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitTestAndSet64") != nullptr, "ntdll.dll exports RtlInterlockedBitTestAndSet64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitTestAndReset64") != nullptr, "ntdll.dll exports RtlInterlockedBitTestAndReset64");
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitTestAndSet") != nullptr, "kernel32.dll exports InterlockedBitTestAndSet");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitTestAndReset") != nullptr, "kernel32.dll exports InterlockedBitTestAndReset");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitTestAndSet64") != nullptr, "kernel32.dll exports InterlockedBitTestAndSet64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitTestAndReset64") != nullptr, "kernel32.dll exports InterlockedBitTestAndReset64");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Cryptographic Advancements: Keccak Post-Quantum / NIST KMAC Sponge PRF & KDF Mode
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST KMAC PRF & KDF Mode (KMAC128-PRF & KMAC256-PRF)...\n";
+        using namespace micant::crypto;
+
+        std::vector<uint8_t> masterKey = { 'M', 'i', 'c', 'a', 'N', 'T', '_', 'M', 'a', 's', 't', 'e', 'r', 'K', 'e', 'y' };
+        std::vector<uint8_t> context = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 };
+        std::string label = "EncryptionSessionKey";
+
+        // 1. KMAC128 PRF key derivation
+        auto derivedKey128_32 = KmacPrf128::deriveKey(masterKey, label, context, 32);
+        TEST_ASSERT(derivedKey128_32.size() == 32, "KmacPrf128 derives 32-byte session key");
+
+        auto derivedKey128_64 = KmacPrf128::deriveKey(masterKey, label, context, 64);
+        TEST_ASSERT(derivedKey128_64.size() == 64, "KmacPrf128 derives 64-byte session key");
+        TEST_ASSERT(std::memcmp(derivedKey128_32.data(), derivedKey128_64.data(), 32) == 0,
+                    "First 32 bytes of 64-byte derived key match 32-byte key exactly (XOF sponge property)");
+
+        // 2. KMAC256 PRF key derivation
+        auto derivedKey256_64 = KmacPrf256::deriveKey(masterKey, label, context, 64);
+        TEST_ASSERT(derivedKey256_64.size() == 64, "KmacPrf256 derives 64-byte session key");
+
+        auto derivedKey256_128 = KmacPrf256::deriveKey(masterKey, label, context, 128);
+        TEST_ASSERT(derivedKey256_128.size() == 128, "KmacPrf256 derives 128-byte session key");
+        TEST_ASSERT(std::memcmp(derivedKey256_64.data(), derivedKey256_128.data(), 64) == 0,
+                    "First 64 bytes of 128-byte derived key match 64-byte key exactly (XOF sponge property)");
+
+        // 3. BCrypt API Integration for KMAC128-PRF
+        BCRYPT_ALG_HANDLE hKMAC128Prf = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128Prf, BCRYPT_KMAC128_PRF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128Prf != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-PRF");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128Prf, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-PRF default hash length is 32");
+        BCryptGetProperty(hKMAC128Prf, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-PRF rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hKMAC128Prf, &hHash128, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        BCryptHashData(hHash128, context.data(), static_cast<uint32_t>(context.size()), 0);
+        uint8_t dKMAC128Prf[32]{};
+        BCryptFinishHash(hHash128, dKMAC128Prf, sizeof(dKMAC128Prf), 0);
+        auto expectedDefKMAC128Prf = KmacPrf128::deriveKey(masterKey, "KDF", context, 32);
+        TEST_ASSERT(std::memcmp(dKMAC128Prf, expectedDefKMAC128Prf.data(), 32) == 0,
+                    "BCrypt API KMAC128-PRF produces bit-exact NIST KDF key");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hKMAC128Prf, 0);
+
+        // 4. BCrypt API Integration for KMAC256-PRF
+        BCRYPT_ALG_HANDLE hKMAC256Prf = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256Prf, BCRYPT_KMAC256_PRF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256Prf != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-PRF");
+
+        BCryptGetProperty(hKMAC256Prf, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-PRF default hash length is 64");
+        BCryptGetProperty(hKMAC256Prf, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-PRF rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hKMAC256Prf, &hHash256, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        BCryptHashData(hHash256, context.data(), static_cast<uint32_t>(context.size()), 0);
+        uint8_t dKMAC256Prf[64]{};
+        BCryptFinishHash(hHash256, dKMAC256Prf, sizeof(dKMAC256Prf), 0);
+        auto expectedDefKMAC256Prf = KmacPrf256::deriveKey(masterKey, "KDF", context, 64);
+        TEST_ASSERT(std::memcmp(dKMAC256Prf, expectedDefKMAC256Prf.data(), 64) == 0,
+                    "BCrypt API KMAC256-PRF produces bit-exact NIST KDF key");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hKMAC256Prf, 0);
+    }
+
+    std::cout << "  Horizon 242 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device20, ID3D12GraphicsCommandList14 & Options 32 OK\n"
+              << "    Pillar 2: NT Native Classes 235 (PhysicalMemoryZeroing) & 236 (HypervisorProcessorPerf) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Single-Bit Primitives OK\n"
+              << "    Pillar 4: NIST KMAC PRF & KDF Mode (KMAC128-PRF & KMAC256-PRF) OK\n";
+
+    std::cout << "[TEST] Suite 458: Horizon 242 - Direct3D 12 Device20/CommandList14 & Options 32, NT SystemInfo 235/236, Interlocked Bit Test & NIST KMAC PRF PASSED." << std::endl;
+}
