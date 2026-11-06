@@ -9182,6 +9182,32 @@ inline SLIST_ENTRY* WINAPI InterlockedPushListSList(SLIST_HEADER* ListHead, SLIS
     return InterlockedPushListSListEx(ListHead, List, ListEnd, Count);
 }
 
+inline BOOL WINAPI InitializeSListHeadEx(SLIST_HEADER* ListHead, ULONG Flags) noexcept {
+    if (!ListHead) return FALSE;
+    ListHead->Alignment = 0;
+    ListHead->Region = static_cast<uint64_t>(Flags) << 48;
+    return TRUE;
+}
+
+inline uint16_t WINAPI CompactSListHead(SLIST_HEADER* ListHead) noexcept {
+    if (!ListHead) return 0;
+    return static_cast<uint16_t>(ListHead->Region & 0xFFFF);
+}
+
+inline void* WINAPI InterlockedCompareExchangePointer(void** Destination, void* Exchange, void* Comperand) noexcept {
+    if (!Destination) return nullptr;
+    auto* atomicDest = reinterpret_cast<std::atomic<void*>*>(Destination);
+    void* expected = Comperand;
+    atomicDest->compare_exchange_strong(expected, Exchange, std::memory_order_seq_cst);
+    return expected;
+}
+
+inline void* WINAPI InterlockedExchangePointer(void** Destination, void* Exchange) noexcept {
+    if (!Destination) return nullptr;
+    auto* atomicDest = reinterpret_cast<std::atomic<void*>*>(Destination);
+    return atomicDest->exchange(Exchange, std::memory_order_seq_cst);
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11323,6 +11349,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedPushEntrySList", reinterpret_cast<void*>(InterlockedPushEntrySList));
     ldr.registerExport("kernel32.dll", "InterlockedPushListSListEx", reinterpret_cast<void*>(InterlockedPushListSListEx));
     ldr.registerExport("kernel32.dll", "InterlockedPushListSList", reinterpret_cast<void*>(InterlockedPushListSList));
+    ldr.registerExport("kernel32.dll", "InitializeSListHeadEx", reinterpret_cast<void*>(InitializeSListHeadEx));
+    ldr.registerExport("kernel32.dll", "CompactSListHead", reinterpret_cast<void*>(CompactSListHead));
+    ldr.registerExport("kernel32.dll", "InterlockedCompareExchangePointer", reinterpret_cast<void*>(InterlockedCompareExchangePointer));
+    ldr.registerExport("kernel32.dll", "InterlockedExchangePointer", reinterpret_cast<void*>(InterlockedExchangePointer));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

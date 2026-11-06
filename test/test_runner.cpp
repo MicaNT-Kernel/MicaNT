@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite456") {
+        RUN_TEST(Test_Horizon240_Device18Options30_InterruptCpuSetsSecureKernel_SListEx_And_TupleHashXOF_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite455") {
         RUN_TEST(Test_Horizon239_CommandList11Options29_PoolZeroingManifest_SListEx_And_ParallelHashXOF_Suite);
         return g_FailedTests;
@@ -2281,6 +2285,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon237_Dred2Options27_CodeIntegrityUnlockLeapSecond_PreciseTimers_And_TupleHash_Suite);
     RUN_TEST(Test_Horizon238_Device17Options28_MemoryTopologyDpcWatchdog_SListBitOps_And_ParallelHash_Suite);
     RUN_TEST(Test_Horizon239_CommandList11Options29_PoolZeroingManifest_SListEx_And_ParallelHashXOF_Suite);
+    RUN_TEST(Test_Horizon240_Device18Options30_InterruptCpuSetsSecureKernel_SListEx_And_TupleHashXOF_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

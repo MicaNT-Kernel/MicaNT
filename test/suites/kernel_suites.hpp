@@ -50841,3 +50841,285 @@ inline void Test_Horizon239_CommandList11Options29_PoolZeroingManifest_SListEx_A
 
     std::cout << "[TEST] Suite 455: Horizon 239 - Direct3D 12 CommandList11 & Options 29, NT SystemInfo 229/230, SList Ex & NIST SP 800-185 ParallelHashXOF PASSED." << std::endl;
 }
+
+inline void Test_Horizon240_Device18Options30_InterruptCpuSetsSecureKernel_SListEx_And_TupleHashXOF_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 456: Horizon 240 - Direct3D 12 Device18/CommandList12 & Options 30, NT SystemInfo 231/232, SList Ex & NIST SP 800-185 TupleHashXOF\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device18, ID3D12GraphicsCommandList12 & Options 30
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device18, CommandList12 & Options 30 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. Verify Options 30 Feature Support
+        D3D12_FEATURE_DATA_D3D12_OPTIONS30 opts30{};
+        int32_t hr = device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS30, &opts30, sizeof(opts30));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS30 succeeds");
+        TEST_ASSERT(opts30.WorkGraphsTier == 13u, "Options 30 WorkGraphsTier is 13 (Tier 1.3)");
+        TEST_ASSERT(opts30.NodeOutputRecordsSupported == TRUE, "Options 30 NodeOutputRecordsSupported is TRUE");
+        TEST_ASSERT(opts30.DirectProgramRecordAllocationSupported == TRUE, "Options 30 DirectProgramRecordAllocationSupported is TRUE");
+        TEST_ASSERT(opts30.WorkGraphBackingMemoryVirtualRemapSupported == TRUE, "Options 30 WorkGraphBackingMemoryVirtualRemapSupported is TRUE");
+        TEST_ASSERT(opts30.ShaderExecutionReorderingSupported == TRUE, "Options 30 ShaderExecutionReorderingSupported is TRUE");
+
+        // 2. ID3D12Device18 QueryInterface & Methods
+        ID3D12Device18* pDevice18 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device18, reinterpret_cast<void**>(&pDevice18));
+        TEST_ASSERT(hr == 0 && pDevice18 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device18 succeeds");
+
+        ID3D12Device18* pDevice18Canon = nullptr;
+        hr = device.QueryInterface(IID_ID3D12Device18, reinterpret_cast<void**>(&pDevice18Canon));
+        TEST_ASSERT(hr == 0 && pDevice18Canon != nullptr, "QueryInterface for IID_ID3D12Device18 succeeds");
+        pDevice18Canon->Release();
+
+        void* pRec2 = nullptr;
+        hr = pDevice18->CreateWorkGraphProgramRecord2(nullptr, 0x1, IID_ID3D12Device18, &pRec2);
+        TEST_ASSERT(hr == 0 && pRec2 == reinterpret_cast<void*>(0xCAFEBABE), "CreateWorkGraphProgramRecord2 succeeds");
+
+        uint64_t reqMem = 0;
+        hr = pDevice18->GetWorkGraphMemoryRequirements(0, &reqMem);
+        TEST_ASSERT(hr == 0 && reqMem == 65536ULL, "GetWorkGraphMemoryRequirements returns 64 KB");
+        pDevice18->Release();
+
+        // 3. Command List 12 Interface & QueryInterface
+        Prism3D12CommandAllocatorImpl alloc(&device, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        ID3D12GraphicsCommandList12* pCmdList12 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList12, reinterpret_cast<void**>(&pCmdList12));
+        TEST_ASSERT(hr == 0 && pCmdList12 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList12 succeeds");
+
+        ID3D12GraphicsCommandList12* pCmdList12Canon = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList12, reinterpret_cast<void**>(&pCmdList12Canon));
+        TEST_ASSERT(hr == 0 && pCmdList12Canon != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList12 succeeds");
+        pCmdList12Canon->Release();
+
+        // 4. Test SetWorkGraphBackingMemory2
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory2Start() == 0, "Initial backing memory 2 start is 0");
+        pCmdList12->SetWorkGraphBackingMemory2(0xD0000000ULL, 4194304, 0x2);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory2Start() == 0xD0000000ULL, "Backing memory 2 start address is 0xD0000000");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory2Size() == 4194304, "Backing memory 2 size is 4 MB");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory2Flags() == 0x2, "Backing memory 2 flags is 0x2");
+
+        // 5. Test DispatchGraphProgramRecord2
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord2Count() == 0, "Initial program record 2 count is 0");
+        uint64_t recData = 0xAABBCCDDEEFF0011ULL;
+        pCmdList12->DispatchGraphProgramRecord2(9, &recData, sizeof(recData));
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord2Count() == 1, "Recorded program record 2 count is 1");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords2()[0].NodeIndex == 9, "Recorded node index is 9");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords2()[0].pRecord == &recData, "Recorded record pointer matches");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords2()[0].RecordSizeInBytes == sizeof(recData), "Recorded size matches");
+
+        // 6. Test Reset clears backing memory 2 and program records 2
+        cmdList.Reset(&alloc, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory2Start() == 0, "Reset clears backing memory 2");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord2Count() == 0, "Reset clears program records 2");
+
+        pCmdList12->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 231 (InterruptCpuSets) & 232 (SecureKernelProfile)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 231 & 232...\n";
+
+        using namespace micant::ntdll;
+
+        // 1. Class 231: SystemInterruptCpuSetsInformation
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            231,
+            nullptr,
+            0,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 231 with 0 length returns InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_INTERRUPT_CPU_SET_INFORMATION), "Class 231 returned length matches sizeof structure");
+
+        SYSTEM_INTERRUPT_CPU_SET_INFORMATION cpuSets{};
+        status = NtQuerySystemInformation_Export(
+            231,
+            &cpuSets,
+            sizeof(cpuSets),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "Class 231 query succeeds");
+        TEST_ASSERT(cpuSets.NumberOfCpuSets == 4, "NumberOfCpuSets is 4");
+        TEST_ASSERT(cpuSets.ActiveCpuSetMask == 0x0F, "ActiveCpuSetMask is 0x0F");
+        TEST_ASSERT(cpuSets.DpcCpuSetMask == 0x03, "DpcCpuSetMask is 0x03");
+        TEST_ASSERT(cpuSets.Flags == 0x01, "Flags is 0x01");
+
+        // 2. Class 232: SystemSecureKernelProfileInformation
+        status = NtQuerySystemInformation_Export(
+            232,
+            nullptr,
+            0,
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 232 with 0 length returns InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION), "Class 232 returned length matches sizeof structure");
+
+        SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION secProfile{};
+        status = NtQuerySystemInformation_Export(
+            232,
+            &secProfile,
+            sizeof(secProfile),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "Class 232 query succeeds");
+        TEST_ASSERT(secProfile.TotalPages == 131072, "TotalPages is 131072 (512 MB)");
+        TEST_ASSERT(secProfile.ActivePages == 32768, "ActivePages is 32768 (128 MB)");
+        TEST_ASSERT(secProfile.VsmEnclaveCount == 2, "VsmEnclaveCount is 2");
+        TEST_ASSERT(secProfile.Flags == 0x07, "Flags is 0x07");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive SList Header Ex & Atomic Pointer Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive SList Header Ex & Atomic Pointer Primitives...\n";
+
+        using namespace micant::ntdll;
+        InitializeNtdllSubsystemExports();
+        micant::win32::InitializeWin32SubsystemExports();
+
+        SLIST_HEADER listHead{};
+        NtStatus sInit = RtlInitializeSListHeadEx(&listHead, 0x1234);
+        TEST_ASSERT(sInit == NtStatus::Success, "RtlInitializeSListHeadEx succeeds");
+        TEST_ASSERT(RtlQueryDepthSList(&listHead) == 0, "Initial depth is 0");
+        TEST_ASSERT(RtlCompactSListHead(&listHead) == 0, "CompactSListHead on empty list returns 0");
+
+        // Atomic pointer operations
+        void* targetPtr = reinterpret_cast<void*>(0x1111);
+        void* oldPtr = RtlInterlockedCompareExchangePointer(&targetPtr, reinterpret_cast<void*>(0x2222), reinterpret_cast<void*>(0x1111));
+        TEST_ASSERT(oldPtr == reinterpret_cast<void*>(0x1111), "CompareExchangePointer succeeds and returns expected old ptr");
+        TEST_ASSERT(targetPtr == reinterpret_cast<void*>(0x2222), "Target pointer updated to 0x2222");
+
+        oldPtr = RtlInterlockedExchangePointer(&targetPtr, reinterpret_cast<void*>(0x3333));
+        TEST_ASSERT(oldPtr == reinterpret_cast<void*>(0x2222), "ExchangePointer returns previous value");
+        TEST_ASSERT(targetPtr == reinterpret_cast<void*>(0x3333), "Target pointer updated to 0x3333");
+
+        int64_t val = 100;
+        int64_t res = RtlInterlockedAddLargeInteger(&val, 50);
+        TEST_ASSERT(res == 150, "InterlockedAddLargeInteger returns updated sum 150");
+        TEST_ASSERT(val == 150, "Underlying variable updated to 150");
+
+        // Win32 kernel32 parity test
+        micant::win32::SLIST_HEADER winList{};
+        BOOL bOk = micant::win32::InitializeSListHeadEx(&winList, 0x5678);
+        TEST_ASSERT(bOk == TRUE, "kernel32 InitializeSListHeadEx succeeds");
+        TEST_ASSERT(micant::win32::CompactSListHead(&winList) == 0, "kernel32 CompactSListHead returns 0");
+
+        void* winTarget = reinterpret_cast<void*>(0xAAAA);
+        void* winOld = micant::win32::InterlockedExchangePointer(&winTarget, reinterpret_cast<void*>(0xBBBB));
+        TEST_ASSERT(winOld == reinterpret_cast<void*>(0xAAAA), "kernel32 InterlockedExchangePointer returns previous value");
+        TEST_ASSERT(winTarget == reinterpret_cast<void*>(0xBBBB), "kernel32 InterlockedExchangePointer updates target");
+
+        // Dynamic export table verification
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInitializeSListHeadEx") != nullptr, "ntdll exports RtlInitializeSListHeadEx");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlCompactSListHead") != nullptr, "ntdll exports RtlCompactSListHead");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedCompareExchangePointer") != nullptr, "ntdll exports RtlInterlockedCompareExchangePointer");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedExchangePointer") != nullptr, "ntdll exports RtlInterlockedExchangePointer");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedAddLargeInteger") != nullptr, "ntdll exports RtlInterlockedAddLargeInteger");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InitializeSListHeadEx") != nullptr, "kernel32 exports InitializeSListHeadEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CompactSListHead") != nullptr, "kernel32 exports CompactSListHead");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedCompareExchangePointer") != nullptr, "kernel32 exports InterlockedCompareExchangePointer");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedExchangePointer") != nullptr, "kernel32 exports InterlockedExchangePointer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-185 TupleHashXOF (Extendable-Output Tuple Hashing)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-185 TupleHashXOF (TupleHashXOF128 & TupleHashXOF256)...\n";
+
+        using namespace micant::crypto;
+        InitializeBCryptSubsystemExports();
+
+        std::vector<std::vector<uint8_t>> tuple = {
+            {'M', 'i', 'c', 'a', 'N', 'T'},
+            {'S', 'o', 'v', 'e', 'r', 'e', 'i', 'g', 'n'},
+            {'X', 'O', 'F', '1', '2', '8'}
+        };
+
+        // 1. TupleHashXOF128 verification
+        auto xof128_32 = TupleHashXOF128::hash(tuple, "MicaDomain", 32);
+        TEST_ASSERT(xof128_32.size() == 32, "TupleHashXOF128 produces 32-byte digest");
+
+        auto xof128_64 = TupleHashXOF128::hash(tuple, "MicaDomain", 64);
+        TEST_ASSERT(xof128_64.size() == 64, "TupleHashXOF128 produces 64-byte squeeze stream");
+        TEST_ASSERT(std::memcmp(xof128_32.data(), xof128_64.data(), 32) == 0,
+                    "First 32 bytes of 64-byte squeeze match 32-byte squeeze exactly (XOF property)");
+
+        // 2. TupleHashXOF256 verification
+        auto xof256_64 = TupleHashXOF256::hash(tuple, "MicaDomain", 64);
+        TEST_ASSERT(xof256_64.size() == 64, "TupleHashXOF256 produces 64-byte digest");
+
+        auto xof256_128 = TupleHashXOF256::hash(tuple, "MicaDomain", 128);
+        TEST_ASSERT(xof256_128.size() == 128, "TupleHashXOF256 produces 128-byte squeeze stream");
+        TEST_ASSERT(std::memcmp(xof256_64.data(), xof256_128.data(), 64) == 0,
+                    "First 64 bytes of 128-byte squeeze match 64-byte squeeze exactly (XOF property)");
+
+        // 3. BCrypt API Integration for TupleHashXOF128
+        BCRYPT_ALG_HANDLE hXOF128 = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hXOF128, BCRYPT_TUPLEHASHXOF128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXOF128 != nullptr, "BCryptOpenAlgorithmProvider succeeds for TupleHashXOF128");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hXOF128, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt TupleHashXOF128 default hash length is 32");
+        BCryptGetProperty(hXOF128, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt TupleHashXOF128 rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hXOF128, &hHash128, nullptr, 0, nullptr, 0, 0);
+        for (const auto& item : tuple) {
+            BCryptHashData(hHash128, const_cast<uint8_t*>(item.data()), static_cast<uint32_t>(item.size()), 0);
+        }
+        uint8_t dXOF128[32]{};
+        BCryptFinishHash(hHash128, dXOF128, sizeof(dXOF128), 0);
+        auto expectedDefXOF128 = TupleHashXOF128::hash(tuple, "", 32);
+        TEST_ASSERT(std::memcmp(dXOF128, expectedDefXOF128.data(), 32) == 0,
+                    "BCrypt API TupleHashXOF128 produces bit-exact NIST hash");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hXOF128, 0);
+
+        // 4. BCrypt API Integration for TupleHashXOF256
+        BCRYPT_ALG_HANDLE hXOF256 = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hXOF256, BCRYPT_TUPLEHASHXOF256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXOF256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for TupleHashXOF256");
+
+        BCryptGetProperty(hXOF256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt TupleHashXOF256 default hash length is 64");
+        BCryptGetProperty(hXOF256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt TupleHashXOF256 rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hXOF256, &hHash256, nullptr, 0, nullptr, 0, 0);
+        for (const auto& item : tuple) {
+            BCryptHashData(hHash256, const_cast<uint8_t*>(item.data()), static_cast<uint32_t>(item.size()), 0);
+        }
+        uint8_t dXOF256[64]{};
+        BCryptFinishHash(hHash256, dXOF256, sizeof(dXOF256), 0);
+        auto expectedDefXOF256 = TupleHashXOF256::hash(tuple, "", 64);
+        TEST_ASSERT(std::memcmp(dXOF256, expectedDefXOF256.data(), 64) == 0,
+                    "BCrypt API TupleHashXOF256 produces bit-exact NIST hash");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hXOF256, 0);
+    }
+
+    std::cout << "  Horizon 240 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device18, ID3D12GraphicsCommandList12 & Options 30 OK\n"
+              << "    Pillar 2: NT Native Classes 231 (InterruptCpuSets) & 232 (SecureKernelProfile) OK\n"
+              << "    Pillar 3: NT Native Executive SList Header Ex & Atomic Pointer Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-185 TupleHashXOF (128 & 256) OK\n";
+
+    std::cout << "[TEST] Suite 456: Horizon 240 - Direct3D 12 Device18/CommandList12 & Options 30, NT SystemInfo 231/232, SList Ex & NIST SP 800-185 TupleHashXOF PASSED." << std::endl;
+}

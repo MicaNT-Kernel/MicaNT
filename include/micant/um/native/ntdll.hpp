@@ -1703,6 +1703,24 @@ struct SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION {
 };
 using PSYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION = SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION*;
 
+// Class 231: SystemInterruptCpuSetsInformation
+struct SYSTEM_INTERRUPT_CPU_SET_INFORMATION {
+    uint32_t NumberOfCpuSets;
+    uint32_t ActiveCpuSetMask;
+    uint32_t DpcCpuSetMask;
+    uint32_t Flags;
+};
+using PSYSTEM_INTERRUPT_CPU_SET_INFORMATION = SYSTEM_INTERRUPT_CPU_SET_INFORMATION*;
+
+// Class 232: SystemSecureKernelProfileInformation
+struct SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION {
+    uint32_t TotalPages;
+    uint32_t ActivePages;
+    uint32_t VsmEnclaveCount;
+    uint32_t Flags;
+};
+using PSYSTEM_SECURE_KERNEL_PROFILE_INFORMATION = SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3391,6 +3409,34 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_PLATFORM_MANIFEST_INFORMATION);
             return NtStatus::Success;
         }
+        case 231: { // SystemInterruptCpuSetsInformation (Class 231)
+            if (SystemInformationLength < sizeof(SYSTEM_INTERRUPT_CPU_SET_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_INTERRUPT_CPU_SET_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_INTERRUPT_CPU_SET_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->NumberOfCpuSets = 4;
+            pInfo->ActiveCpuSetMask = 0x0000000F; // 4 cores active
+            pInfo->DpcCpuSetMask = 0x00000003;    // Cores 0 and 1 steer DPCs
+            pInfo->Flags = 0x00000001;            // VSM / real-time affinity steering active
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_INTERRUPT_CPU_SET_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 232: { // SystemSecureKernelProfileInformation (Class 232)
+            if (SystemInformationLength < sizeof(SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->TotalPages = 131072;     // 512 MB VSM secure space
+            pInfo->ActivePages = 32768;     // 128 MB active enclave allocations
+            pInfo->VsmEnclaveCount = 2;     // Credential Guard & Isolated User Mode
+            pInfo->Flags = 0x00000007;      // VSM_ENABLED | ENCLAVES_ACTIVE | ISOLATION_GUARD
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4233,6 +4279,18 @@ inline void WINAPI RtlInitializeSListHead(PSLIST_HEADER SListHead) noexcept {
     }
 }
 
+inline NtStatus WINAPI RtlInitializeSListHeadEx(PSLIST_HEADER SListHead, ULONG Flags) noexcept {
+    if (!SListHead) return NtStatus::InvalidParameter;
+    SListHead->Alignment = 0;
+    SListHead->Region = static_cast<uint64_t>(Flags) << 48;
+    return NtStatus::Success;
+}
+
+inline uint16_t WINAPI RtlCompactSListHead(PSLIST_HEADER SListHead) noexcept {
+    if (!SListHead) return 0;
+    return static_cast<uint16_t>(SListHead->Region & 0xFFFF);
+}
+
 inline PSLIST_ENTRY WINAPI RtlFirstEntrySList(const SLIST_HEADER* SListHead) noexcept {
     if (!SListHead) return nullptr;
     return reinterpret_cast<PSLIST_ENTRY>(SListHead->Alignment);
@@ -4294,6 +4352,26 @@ inline PSLIST_ENTRY WINAPI RtlInterlockedFlushSList(PSLIST_HEADER SListHead) noe
     uint64_t seq = ((SListHead->Region >> 16) + 1) & 0xFFFFFFFFFFFFULL;
     SListHead->Region = (seq << 16);
     return first;
+}
+
+inline void* WINAPI RtlInterlockedCompareExchangePointer(void** Destination, void* Exchange, void* Comperand) noexcept {
+    if (!Destination) return nullptr;
+    auto* atomicDest = reinterpret_cast<std::atomic<void*>*>(Destination);
+    void* expected = Comperand;
+    atomicDest->compare_exchange_strong(expected, Exchange, std::memory_order_seq_cst);
+    return expected;
+}
+
+inline void* WINAPI RtlInterlockedExchangePointer(void** Destination, void* Exchange) noexcept {
+    if (!Destination) return nullptr;
+    auto* atomicDest = reinterpret_cast<std::atomic<void*>*>(Destination);
+    return atomicDest->exchange(Exchange, std::memory_order_seq_cst);
+}
+
+inline int64_t WINAPI RtlInterlockedAddLargeInteger(int64_t* Addend, int64_t Increment) noexcept {
+    if (!Addend) return 0;
+    auto* atomicVal = reinterpret_cast<std::atomic<int64_t>*>(Addend);
+    return atomicVal->fetch_add(Increment, std::memory_order_seq_cst) + Increment;
 }
 
 inline int8_t WINAPI RtlFindLeastSignificantBit(uint64_t Set) noexcept {
@@ -4753,12 +4831,17 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlFindMessage", reinterpret_cast<void*>(RtlFindMessage));
     ldr.registerExport("ntdll.dll", "RtlFirstEntrySList", reinterpret_cast<void*>(RtlFirstEntrySList));
     ldr.registerExport("ntdll.dll", "RtlInitializeSListHead", reinterpret_cast<void*>(RtlInitializeSListHead));
+    ldr.registerExport("ntdll.dll", "RtlInitializeSListHeadEx", reinterpret_cast<void*>(RtlInitializeSListHeadEx));
+    ldr.registerExport("ntdll.dll", "RtlCompactSListHead", reinterpret_cast<void*>(RtlCompactSListHead));
     ldr.registerExport("ntdll.dll", "RtlQueryDepthSList", reinterpret_cast<void*>(RtlQueryDepthSList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedFlushSList", reinterpret_cast<void*>(RtlInterlockedFlushSList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPopEntrySList", reinterpret_cast<void*>(RtlInterlockedPopEntrySList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPushEntrySList", reinterpret_cast<void*>(RtlInterlockedPushEntrySList));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPushListSListEx", reinterpret_cast<void*>(RtlInterlockedPushListSListEx));
     ldr.registerExport("ntdll.dll", "RtlInterlockedPushEntrySListEx", reinterpret_cast<void*>(RtlInterlockedPushEntrySListEx));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCompareExchangePointer", reinterpret_cast<void*>(RtlInterlockedCompareExchangePointer));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchangePointer", reinterpret_cast<void*>(RtlInterlockedExchangePointer));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAddLargeInteger", reinterpret_cast<void*>(RtlInterlockedAddLargeInteger));
     ldr.registerExport("ntdll.dll", "RtlFindLeastSignificantBit", reinterpret_cast<void*>(RtlFindLeastSignificantBit));
     ldr.registerExport("ntdll.dll", "RtlFindMostSignificantBit", reinterpret_cast<void*>(RtlFindMostSignificantBit));
     ldr.registerExport("ntdll.dll", "RtlFormatMessage", reinterpret_cast<void*>(RtlFormatMessage));
