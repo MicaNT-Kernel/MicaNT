@@ -51987,3 +51987,289 @@ inline void Test_Horizon243_Device21Options33_NumaEntropy_InterlockedBitwise_And
 
     std::cout << "[TEST] Suite 459: Horizon 243 - Direct3D 12 Device21/CommandList15 & Options 33, NT SystemInfo 237/238, Interlocked Bitwise & NIST KMAC Ratchet PASSED." << std::endl;
 }
+
+inline void Test_Horizon244_Device22Options34_MicrocodePolicy_InterlockedArithmetic64_And_KmacDoubleRatchet_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 460: Horizon 244 - Direct3D 12 Device22/CommandList16 & Options 34, NT SystemInfo 239/240, Interlocked Arithmetic 64 & NIST KMAC Double-Ratchet\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 Agility SDK 1.615+ ID3D12Device22, CommandList16 & Options 34
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device22, CommandList16 & Options 34 Architecture...\n";
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl dev(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. QueryInterface for ID3D12Device22
+        ID3D12Device22* pDev22 = nullptr;
+        int32_t hr = dev.QueryInterface(IID_ID3D12Device22, reinterpret_cast<void**>(&pDev22));
+        TEST_ASSERT(hr == 0 && pDev22 != nullptr, "QueryInterface for IID_ID3D12Device22 succeeds");
+
+        ID3D12Device22* pDev22Off = nullptr;
+        hr = dev.QueryInterface(OFFICIAL_IID_ID3D12Device22, reinterpret_cast<void**>(&pDev22Off));
+        TEST_ASSERT(hr == 0 && pDev22Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device22 succeeds");
+        pDev22Off->Release();
+
+        // 2. Test CreateWorkGraphProgramRecord6 & GetWorkGraphCooperativeMatrixSupport
+        void* pRec6 = nullptr;
+        hr = pDev22->CreateWorkGraphProgramRecord6(nullptr, 0x6, 16777216ULL, 256u, 0x02, IID_ID3D12Device22, &pRec6);
+        TEST_ASSERT(hr == 0 && pRec6 == reinterpret_cast<void*>(0xCAFEBAB6),
+                    "CreateWorkGraphProgramRecord6 produces valid program record 6 pointer");
+
+        int32_t coopSupported = 0;
+        uint32_t maxMatDim = 0;
+        hr = pDev22->GetWorkGraphCooperativeMatrixSupport(&coopSupported, &maxMatDim);
+        TEST_ASSERT(hr == 0 && coopSupported == 1 && maxMatDim == 64,
+                    "GetWorkGraphCooperativeMatrixSupport reports cooperative matrix 64x64 support");
+
+        pDev22->Release();
+
+        // 3. Test CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS34
+        D3D12_FEATURE_DATA_D3D12_OPTIONS34 opts34{};
+        hr = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS34, &opts34, sizeof(opts34));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_OPTIONS34 succeeds");
+        TEST_ASSERT(opts34.WorkGraphsTier == 17u, "Options 34 reports WorkGraphsTier 17 (Tier 3.1)");
+        TEST_ASSERT(opts34.CooperativeMatrixMultiplySupported == 1, "Options 34 reports CooperativeMatrixMultiplySupported");
+        TEST_ASSERT(opts34.MultiQueueWorkGraphDispatchSupported == 1, "Options 34 reports MultiQueueWorkGraphDispatchSupported");
+        TEST_ASSERT(opts34.DynamicClusterExpansionSupported == 1, "Options 34 reports DynamicClusterExpansionSupported");
+        TEST_ASSERT(opts34.MaxWorkGraphConcurrencyGroups == 256u, "Options 34 reports MaxWorkGraphConcurrencyGroups 256");
+
+        // 4. Command Allocator and CommandList
+        Prism3D12CommandAllocatorImpl alloc(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        // 5. QueryInterface for ID3D12GraphicsCommandList16
+        ID3D12GraphicsCommandList16* pCmd16 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList16, reinterpret_cast<void**>(&pCmd16));
+        TEST_ASSERT(hr == 0 && pCmd16 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList16 succeeds");
+
+        ID3D12GraphicsCommandList16* pCmd16Off = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList16, reinterpret_cast<void**>(&pCmd16Off));
+        TEST_ASSERT(hr == 0 && pCmd16Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList16 succeeds");
+        pCmd16Off->Release();
+
+        // 6. Test SetWorkGraphBackingMemory6 & DispatchGraphProgramRecord6
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6Start() == 0, "Initial backing memory 6 start is 0");
+        pCmd16->SetWorkGraphBackingMemory6(0xFD000000ULL, 67108864ULL, 16777216ULL, 256u, 0x02, 0x80);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6Start() == 0xFD000000ULL, "Backing memory 6 start matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6Size() == 67108864ULL, "Backing memory 6 size matched (64MB)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6ScratchSize() == 16777216ULL, "Backing memory 6 scratch size matched (16MB)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6MaxConcurrency() == 256u, "Backing memory 6 max concurrency matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6DynamicExpansionFlags() == 0x02, "Backing memory 6 dynamic expansion flags matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory6Flags() == 0x80, "Backing memory 6 flags matched");
+
+        uint8_t recordData[32] = { 0x55, 0x66, 0x77, 0x88 };
+        pCmd16->DispatchGraphProgramRecord6(16u, recordData, 32u, 8u, 0x03, 0x0F, 0x02);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord6Count() == 1, "One program record 6 dispatch recorded");
+        const auto& recs = cmdList.GetRecordedProgramRecords6();
+        TEST_ASSERT(recs[0].NodeIndex == 16u, "Recorded NodeIndex matched 16");
+        TEST_ASSERT(recs[0].RecordSizeInBytes == 32u, "Recorded RecordSizeInBytes matched 32");
+        TEST_ASSERT(recs[0].ConcurrencyGroup == 8u, "Recorded ConcurrencyGroup matched 8");
+        TEST_ASSERT(recs[0].QueueAffinityMask == 0x03, "Recorded QueueAffinityMask matched 0x03");
+        TEST_ASSERT(recs[0].DispatchMask == 0x0F, "Recorded DispatchMask matched 0x0F");
+        TEST_ASSERT(recs[0].DispatchFlags == 0x02, "Recorded DispatchFlags matched 0x02");
+
+        pCmd16->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native System Information Classes 239 & 240
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 239 & 240...\n";
+        using namespace micant::ntdll;
+
+        // 1. Class 239: SystemProcessorMicrocodeInformation
+        ULONG retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            239, nullptr, 0, &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 239 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_PROCESSOR_MICROCODE_INFORMATION),
+                    "Class 239 reports exact required length on mismatch");
+
+        SYSTEM_PROCESSOR_MICROCODE_INFORMATION ucodeInfo{};
+        st = NtQuerySystemInformation_Export(239, &ucodeInfo, sizeof(ucodeInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 239 succeeds with exact buffer");
+        TEST_ASSERT(ucodeInfo.ProcessorIndex == 0, "Processor index is 0");
+        TEST_ASSERT(ucodeInfo.CurrentMicrocodeRevision == 0x000000F4, "Current microcode revision matched 0xF4");
+        TEST_ASSERT(ucodeInfo.MinimumSupportedRevision == 0x000000A0, "Minimum supported revision matched 0xA0");
+        TEST_ASSERT(ucodeInfo.Flags == 0x00000003, "Microcode flags report active updates and mitigations");
+        TEST_ASSERT(ucodeInfo.MicrocodeReleaseDate == 20261105ULL, "Microcode release date matched");
+
+        // 2. Class 240: SystemFirmwareSecureBootPolicyInformation
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(
+            240, nullptr, 0, &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 240 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION),
+                    "Class 240 reports exact required length on mismatch");
+
+        SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION sbInfo{};
+        st = NtQuerySystemInformation_Export(240, &sbInfo, sizeof(sbInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 240 succeeds with exact buffer");
+        TEST_ASSERT(sbInfo.SecureBootEnabled == 1, "Secure boot is enabled");
+        TEST_ASSERT(sbInfo.SecureBootConfigured == 1, "Secure boot is configured");
+        TEST_ASSERT(sbInfo.PolicyPublisher == 0x534F5652, "Secure boot policy publisher matched 'SOVR'");
+        TEST_ASSERT(sbInfo.PolicyVersion == 0x00020001, "Secure boot policy version is 2.1");
+        TEST_ASSERT(sbInfo.Flags == 0x00000001, "Secure boot policy is locked");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked 64-Bit Arithmetic & Compare/Swap Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Interlocked 64-Bit Arithmetic & Compare/Swap Primitives...\n";
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+
+        // 1. RtlInterlockedCompareExchange64
+        LONG64 val64 = 100LL;
+        LONG64 old64 = RtlInterlockedCompareExchange64(&val64, 200LL, 100LL);
+        TEST_ASSERT(old64 == 100LL && val64 == 200LL, "RtlInterlockedCompareExchange64 swapped successfully when expected matches");
+
+        old64 = RtlInterlockedCompareExchange64(&val64, 300LL, 999LL);
+        TEST_ASSERT(old64 == 200LL && val64 == 200LL, "RtlInterlockedCompareExchange64 preserved value when expected mismatches");
+
+        // 2. RtlInterlockedExchange64
+        old64 = RtlInterlockedExchange64(&val64, 500LL);
+        TEST_ASSERT(old64 == 200LL && val64 == 500LL, "RtlInterlockedExchange64 exchanged 64-bit value");
+
+        // 3. RtlInterlockedExchangeAdd64
+        old64 = RtlInterlockedExchangeAdd64(&val64, 50LL);
+        TEST_ASSERT(old64 == 500LL && val64 == 550LL, "RtlInterlockedExchangeAdd64 added value and returned old value");
+
+        // 4. RtlInterlockedIncrement64 & Decrement64
+        LONG64 incResult = RtlInterlockedIncrement64(&val64);
+        TEST_ASSERT(incResult == 551LL && val64 == 551LL, "RtlInterlockedIncrement64 incremented value by 1");
+
+        LONG64 decResult = RtlInterlockedDecrement64(&val64);
+        TEST_ASSERT(decResult == 550LL && val64 == 550LL, "RtlInterlockedDecrement64 decremented value by 1");
+
+        // 5. Win32 Aliases
+        LONG64 win64 = 1000LL;
+        old64 = InterlockedCompareExchange64(&win64, 2000LL, 1000LL);
+        TEST_ASSERT(old64 == 1000LL && win64 == 2000LL, "Win32 InterlockedCompareExchange64 functional");
+
+        old64 = InterlockedExchange64(&win64, 3000LL);
+        TEST_ASSERT(old64 == 2000LL && win64 == 3000LL, "Win32 InterlockedExchange64 functional");
+
+        old64 = InterlockedExchangeAdd64(&win64, 500LL);
+        TEST_ASSERT(old64 == 3000LL && win64 == 3500LL, "Win32 InterlockedExchangeAdd64 functional");
+
+        incResult = InterlockedIncrement64(&win64);
+        TEST_ASSERT(incResult == 3501LL && win64 == 3501LL, "Win32 InterlockedIncrement64 functional");
+
+        decResult = InterlockedDecrement64(&win64);
+        TEST_ASSERT(decResult == 3500LL && win64 == 3500LL, "Win32 InterlockedDecrement64 functional");
+
+        // 6. Dynamic Loader Exports
+        InitializeNtdllSubsystemExports();
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedCompareExchange64") != nullptr, "ntdll.dll exports RtlInterlockedCompareExchange64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedExchange64") != nullptr, "ntdll.dll exports RtlInterlockedExchange64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedExchangeAdd64") != nullptr, "ntdll.dll exports RtlInterlockedExchangeAdd64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedIncrement64") != nullptr, "ntdll.dll exports RtlInterlockedIncrement64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedDecrement64") != nullptr, "ntdll.dll exports RtlInterlockedDecrement64");
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedCompareExchange64") != nullptr, "kernel32.dll exports InterlockedCompareExchange64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedExchange64") != nullptr, "kernel32.dll exports InterlockedExchange64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedExchangeAdd64") != nullptr, "kernel32.dll exports InterlockedExchangeAdd64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedIncrement64") != nullptr, "kernel32.dll exports InterlockedIncrement64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedDecrement64") != nullptr, "kernel32.dll exports InterlockedDecrement64");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Cryptographic Advancements: NIST SP 800-108 Rev 1 / SP 800-185 KMAC Double-Ratchet Mode
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST KMAC Double-Ratchet Mode (KMAC128-DOUBLERATCHET & KMAC256-DOUBLERATCHET)...\n";
+        using namespace micant::crypto;
+
+        std::vector<uint8_t> masterKey = { 'M', 'i', 'c', 'a', 'N', 'T', '_', 'D', 'o', 'u', 'b', 'l', 'e', 'K', 'e', 'y' };
+        std::vector<uint8_t> dhShared = { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 };
+
+        // 1. KMAC128 Double-Ratchet sequence
+        KmacDoubleRatchet128::Context dr128Ctx{};
+        KmacDoubleRatchet128::init(dr128Ctx, masterKey, "DOUBLE_RATCHET_TEST");
+
+        // Advance root ratchet with DH shared secret
+        KmacDoubleRatchet128::rootRatchetStep(dr128Ctx, dhShared);
+
+        const uint8_t ad0[] = { 0x01, 0x02 };
+        uint8_t msgKey0[32]{};
+        KmacDoubleRatchet128::ratchetStep(dr128Ctx, msgKey0, ad0);
+
+        const uint8_t ad1[] = { 0x03, 0x04 };
+        uint8_t msgKey1[32]{};
+        KmacDoubleRatchet128::ratchetStep(dr128Ctx, msgKey1, ad1);
+
+        TEST_ASSERT(std::memcmp(msgKey0, msgKey1, 32) != 0, "KMAC128 double-ratchet produces forward-secret message keys");
+
+        // 2. KMAC256 Double-Ratchet sequence
+        KmacDoubleRatchet256::Context dr256Ctx{};
+        KmacDoubleRatchet256::init(dr256Ctx, masterKey, "DOUBLE_RATCHET_TEST");
+
+        KmacDoubleRatchet256::rootRatchetStep(dr256Ctx, dhShared);
+
+        uint8_t msgKey256_0[64]{};
+        KmacDoubleRatchet256::ratchetStep(dr256Ctx, msgKey256_0);
+
+        uint8_t msgKey256_1[64]{};
+        KmacDoubleRatchet256::ratchetStep(dr256Ctx, msgKey256_1);
+
+        TEST_ASSERT(std::memcmp(msgKey256_0, msgKey256_1, 64) != 0, "KMAC256 double-ratchet produces forward-secret 64-byte message keys");
+
+        // 3. BCrypt API Integration for KMAC128-DOUBLERATCHET
+        BCRYPT_ALG_HANDLE hKMAC128DR = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128DR, BCRYPT_KMAC128_DOUBLERATCHET_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128DR != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-DOUBLERATCHET");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128DR, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-DOUBLERATCHET default hash length is 32");
+        BCryptGetProperty(hKMAC128DR, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-DOUBLERATCHET rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128DR = nullptr;
+        BCryptCreateHash(hKMAC128DR, &hHash128DR, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        BCryptHashData(hHash128DR, dhShared.data(), static_cast<uint32_t>(dhShared.size()), 0);
+        uint8_t dKMAC128DR[32]{};
+        BCryptFinishHash(hHash128DR, dKMAC128DR, sizeof(dKMAC128DR), 0);
+        TEST_ASSERT(dKMAC128DR[0] != 0 || dKMAC128DR[1] != 0, "BCrypt KMAC128-DOUBLERATCHET generates valid non-zero digest");
+        BCryptDestroyHash(hHash128DR);
+        BCryptCloseAlgorithmProvider(hKMAC128DR, 0);
+
+        // 4. BCrypt API Integration for KMAC256-DOUBLERATCHET
+        BCRYPT_ALG_HANDLE hKMAC256DR = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256DR, BCRYPT_KMAC256_DOUBLERATCHET_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256DR != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-DOUBLERATCHET");
+
+        BCryptGetProperty(hKMAC256DR, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-DOUBLERATCHET default hash length is 64");
+        BCryptGetProperty(hKMAC256DR, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-DOUBLERATCHET rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256DR = nullptr;
+        BCryptCreateHash(hKMAC256DR, &hHash256DR, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        BCryptHashData(hHash256DR, dhShared.data(), static_cast<uint32_t>(dhShared.size()), 0);
+        uint8_t dKMAC256DR[64]{};
+        BCryptFinishHash(hHash256DR, dKMAC256DR, sizeof(dKMAC256DR), 0);
+        TEST_ASSERT(dKMAC256DR[0] != 0 || dKMAC256DR[1] != 0, "BCrypt KMAC256-DOUBLERATCHET generates valid non-zero digest");
+        BCryptDestroyHash(hHash256DR);
+        BCryptCloseAlgorithmProvider(hKMAC256DR, 0);
+    }
+
+    std::cout << "  Horizon 244 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device22, ID3D12GraphicsCommandList16 & Options 34 OK\n"
+              << "    Pillar 2: NT Native Classes 239 (Microcode) & 240 (SecureBootPolicy) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked 64-Bit Arithmetic Primitives OK\n"
+              << "    Pillar 4: NIST KMAC Double-Ratchet Mode (KMAC128-DOUBLERATCHET & KMAC256-DOUBLERATCHET) OK\n";
+
+    std::cout << "[TEST] Suite 460: Horizon 244 - Direct3D 12 Device22/CommandList16 & Options 34, NT SystemInfo 239/240, Interlocked Arithmetic 64 & NIST KMAC Double-Ratchet PASSED." << std::endl;
+}

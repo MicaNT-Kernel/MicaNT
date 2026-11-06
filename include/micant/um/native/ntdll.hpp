@@ -1788,6 +1788,27 @@ struct SYSTEM_ENTROPY_POOL_INFORMATION {
 };
 using PSYSTEM_ENTROPY_POOL_INFORMATION = SYSTEM_ENTROPY_POOL_INFORMATION*;
 
+// Class 239: SystemProcessorMicrocodeInformation
+struct SYSTEM_PROCESSOR_MICROCODE_INFORMATION {
+    ULONG    ProcessorIndex;
+    ULONG    CurrentMicrocodeRevision;
+    ULONG    MinimumSupportedRevision;
+    ULONG    Flags;
+    ULONG64  MicrocodeReleaseDate;
+};
+using PSYSTEM_PROCESSOR_MICROCODE_INFORMATION = SYSTEM_PROCESSOR_MICROCODE_INFORMATION*;
+
+// Class 240: SystemFirmwareSecureBootPolicyInformation
+struct SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION {
+    ULONG    SecureBootEnabled;
+    ULONG    SecureBootConfigured;
+    ULONG    PolicyPublisher;
+    ULONG    PolicyVersion;
+    ULONG    Flags;
+    ULONG    Reserved;
+};
+using PSYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION = SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3599,6 +3620,37 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ENTROPY_POOL_INFORMATION);
             return NtStatus::Success;
         }
+        case 239: { // SystemProcessorMicrocodeInformation (Class 239)
+            if (SystemInformationLength < sizeof(SYSTEM_PROCESSOR_MICROCODE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PROCESSOR_MICROCODE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PROCESSOR_MICROCODE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->ProcessorIndex = 0;
+            pInfo->CurrentMicrocodeRevision = 0x000000F4;
+            pInfo->MinimumSupportedRevision = 0x000000A0;
+            pInfo->Flags = 0x00000003; // MICROCODE_UPDATE_APPLIED | MICROCODE_MITIGATIONS_ACTIVE
+            pInfo->MicrocodeReleaseDate = 20261105ULL;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PROCESSOR_MICROCODE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 240: { // SystemFirmwareSecureBootPolicyInformation (Class 240)
+            if (SystemInformationLength < sizeof(SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->SecureBootEnabled = 1;
+            pInfo->SecureBootConfigured = 1;
+            pInfo->PolicyPublisher = 0x534F5652; // 'SOVR' (Sovereign Root)
+            pInfo->PolicyVersion = 0x00020001;   // Policy v2.1
+            pInfo->Flags = 0x00000001;           // SECUREBOOT_POLICY_LOCKED
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4659,6 +4711,38 @@ inline LONG64 WINAPI RtlInterlockedXor64(LONG64 volatile* Destination, LONG64 Va
     return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
 }
 
+inline LONG64 WINAPI RtlInterlockedCompareExchange64(LONG64 volatile* Destination, LONG64 Exchange, LONG64 Comperand) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 expected = Comperand;
+    atomicDest->compare_exchange_strong(expected, Exchange, std::memory_order_seq_cst);
+    return expected;
+}
+
+inline LONG64 WINAPI RtlInterlockedExchange64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->exchange(Value, std::memory_order_seq_cst);
+}
+
+inline LONG64 WINAPI RtlInterlockedExchangeAdd64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->fetch_add(Value, std::memory_order_seq_cst);
+}
+
+inline LONG64 WINAPI RtlInterlockedIncrement64(LONG64 volatile* Addend) noexcept {
+    if (!Addend) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Addend);
+    return atomicDest->fetch_add(1, std::memory_order_seq_cst) + 1;
+}
+
+inline LONG64 WINAPI RtlInterlockedDecrement64(LONG64 volatile* Addend) noexcept {
+    if (!Addend) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Addend);
+    return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -5169,6 +5253,11 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAnd64", reinterpret_cast<void*>(RtlInterlockedAnd64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOr64", reinterpret_cast<void*>(RtlInterlockedOr64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXor64", reinterpret_cast<void*>(RtlInterlockedXor64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCompareExchange64", reinterpret_cast<void*>(RtlInterlockedCompareExchange64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchange64", reinterpret_cast<void*>(RtlInterlockedExchange64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd64", reinterpret_cast<void*>(RtlInterlockedExchangeAdd64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement64", reinterpret_cast<void*>(RtlInterlockedIncrement64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement64", reinterpret_cast<void*>(RtlInterlockedDecrement64));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
