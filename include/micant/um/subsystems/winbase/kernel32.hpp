@@ -9208,6 +9208,22 @@ inline void* WINAPI InterlockedExchangePointer(void** Destination, void* Exchang
     return atomicDest->exchange(Exchange, std::memory_order_seq_cst);
 }
 
+inline void WINAPI FillMemoryUlong(void* Destination, size_t Length, uint32_t Pattern) noexcept {
+    ntdll::RtlFillMemoryUlong(Destination, Length, Pattern);
+}
+
+inline void WINAPI FillMemoryUlonglong(void* Destination, size_t Length, uint64_t Pattern) noexcept {
+    ntdll::RtlFillMemoryUlonglong(Destination, Length, Pattern);
+}
+
+inline void WINAPI ZeroMemoryEx(void* Destination, size_t Length, uint32_t Flags) noexcept {
+    ntdll::RtlZeroMemoryEx(Destination, Length, Flags);
+}
+
+inline size_t WINAPI CompareMemoryUlong(const void* Source, size_t Length, uint32_t Pattern) noexcept {
+    return ntdll::RtlCompareMemoryUlong(Source, Length, Pattern);
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11353,6 +11369,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CompactSListHead", reinterpret_cast<void*>(CompactSListHead));
     ldr.registerExport("kernel32.dll", "InterlockedCompareExchangePointer", reinterpret_cast<void*>(InterlockedCompareExchangePointer));
     ldr.registerExport("kernel32.dll", "InterlockedExchangePointer", reinterpret_cast<void*>(InterlockedExchangePointer));
+    ldr.registerExport("kernel32.dll", "FillMemoryUlong", reinterpret_cast<void*>(FillMemoryUlong));
+    ldr.registerExport("kernel32.dll", "FillMemoryUlonglong", reinterpret_cast<void*>(FillMemoryUlonglong));
+    ldr.registerExport("kernel32.dll", "ZeroMemoryEx", reinterpret_cast<void*>(ZeroMemoryEx));
+    ldr.registerExport("kernel32.dll", "CompareMemoryUlong", reinterpret_cast<void*>(CompareMemoryUlong));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

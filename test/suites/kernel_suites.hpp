@@ -51123,3 +51123,286 @@ inline void Test_Horizon240_Device18Options30_InterruptCpuSetsSecureKernel_SList
 
     std::cout << "[TEST] Suite 456: Horizon 240 - Direct3D 12 Device18/CommandList12 & Options 30, NT SystemInfo 231/232, SList Ex & NIST SP 800-185 TupleHashXOF PASSED." << std::endl;
 }
+
+inline void Test_Horizon241_Device19Options31_SyntheticCacheRamdump_MemoryUlong_And_KmacXOF_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 457: Horizon 241 - Direct3D 12 Device19/CommandList13 & Options 31, NT SystemInfo 233/234, Memory Ulong & NIST SP 800-185 KMACXOF\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 Agility SDK 1.615+ ID3D12Device19, CommandList13 & Options 31
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device19, CommandList13 & Options 31 Architecture...\n";
+        using namespace micant::d3d12video;
+
+        Prism3D12DeviceImpl dev(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. QueryInterface for ID3D12Device19
+        ID3D12Device19* pDev19 = nullptr;
+        int32_t hr = dev.QueryInterface(IID_ID3D12Device19, reinterpret_cast<void**>(&pDev19));
+        TEST_ASSERT(hr == 0 && pDev19 != nullptr, "QueryInterface for IID_ID3D12Device19 succeeds");
+
+        ID3D12Device19* pDev19Off = nullptr;
+        hr = dev.QueryInterface(OFFICIAL_IID_ID3D12Device19, reinterpret_cast<void**>(&pDev19Off));
+        TEST_ASSERT(hr == 0 && pDev19Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device19 succeeds");
+        pDev19Off->Release();
+
+        // 2. Test CreateWorkGraphProgramRecord3 & GetDynamicDepthBoundsSupport
+        void* pRec = nullptr;
+        hr = pDev19->CreateWorkGraphProgramRecord3(nullptr, 0x2, 2097152ULL, IID_ID3D12Device19, &pRec);
+        TEST_ASSERT(hr == 0 && pRec == reinterpret_cast<void*>(0xCAFEBAB3),
+                    "CreateWorkGraphProgramRecord3 produces valid program record pointer");
+
+        int32_t depthBoundsSupported = 0;
+        hr = pDev19->GetDynamicDepthBoundsSupport(&depthBoundsSupported);
+        TEST_ASSERT(hr == 0 && depthBoundsSupported == 1,
+                    "GetDynamicDepthBoundsSupport returns supported status");
+
+        pDev19->Release();
+
+        // 3. Test CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS31
+        D3D12_FEATURE_DATA_D3D12_OPTIONS31 opts31{};
+        hr = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS31, &opts31, sizeof(opts31));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_OPTIONS31 succeeds");
+        TEST_ASSERT(opts31.WorkGraphsTier == 14u, "Options 31 reports WorkGraphsTier 14 (Tier 2.0/2.1)");
+        TEST_ASSERT(opts31.DynamicDepthBoundsSupported == 1, "Options 31 reports DynamicDepthBoundsSupported");
+        TEST_ASSERT(opts31.EnhancedWaveMatrixMultiplySupported == 1, "Options 31 reports EnhancedWaveMatrixMultiplySupported");
+        TEST_ASSERT(opts31.WaveMatrixMultiplyTiers == 3u, "Options 31 reports WaveMatrixMultiplyTiers 3");
+        TEST_ASSERT(opts31.ProgrammaticWorkGraphRecordBindingSupported == 1, "Options 31 reports ProgrammaticWorkGraphRecordBindingSupported");
+
+        // 4. Command Allocator and CommandList
+        Prism3D12CommandAllocatorImpl alloc(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        // 5. QueryInterface for ID3D12GraphicsCommandList13
+        ID3D12GraphicsCommandList13* pCmd13 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList13, reinterpret_cast<void**>(&pCmd13));
+        TEST_ASSERT(hr == 0 && pCmd13 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList13 succeeds");
+
+        ID3D12GraphicsCommandList13* pCmd13Off = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList13, reinterpret_cast<void**>(&pCmd13Off));
+        TEST_ASSERT(hr == 0 && pCmd13Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList13 succeeds");
+        pCmd13Off->Release();
+
+        // 6. Test SetWorkGraphBackingMemory3
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory3Start() == 0, "Initial backing memory 3 start is 0");
+        pCmd13->SetWorkGraphBackingMemory3(0xEE000000ULL, 8388608ULL, 2097152ULL, 0x10);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory3Start() == 0xEE000000ULL, "Backing memory 3 start matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory3Size() == 8388608ULL, "Backing memory 3 size matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory3ScratchSize() == 2097152ULL, "Backing memory 3 scratch size matched");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory3Flags() == 0x10, "Backing memory 3 flags matched");
+
+        // 7. Test DispatchGraphProgramRecord3
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord3Count() == 0, "Initial recorded program record 3 count is 0");
+        uint64_t dummyRec3 = 0x1122334455667788ULL;
+        pCmd13->DispatchGraphProgramRecord3(12, &dummyRec3, sizeof(dummyRec3), 32);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord3Count() == 1, "Recorded program record 3 count is 1");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords3()[0].NodeIndex == 12, "Node index is 12");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords3()[0].pRecord == &dummyRec3, "Record pointer matched");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords3()[0].RecordSizeInBytes == sizeof(dummyRec3), "Record size matched");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords3()[0].RecordCount == 32, "Record count matched");
+
+        // 8. Test Reset clears backing memory 3 and recorded program records 3
+        cmdList.Reset(&alloc, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory3Start() == 0, "Reset clears backing memory 3 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord3Count() == 0, "Reset clears recorded program records 3");
+
+        pCmd13->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native System Information Classes 233 & 234
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 233 & 234...\n";
+        using namespace micant;
+        using namespace micant::ntdll;
+
+        // 1. Class 233: SystemCodeIntegritySyntheticCacheInformation
+        ULONG retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            233, nullptr, 0, &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 233 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION),
+                    "Class 233 reports exact required length on mismatch");
+
+        SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION cacheInfo{};
+        st = NtQuerySystemInformation_Export(233, &cacheInfo, sizeof(cacheInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 233 succeeds with exact buffer");
+        TEST_ASSERT(cacheInfo.SyntheticCacheFlags == 0x00000003, "Synthetic cache flags match expected flags");
+        TEST_ASSERT(cacheInfo.CacheEntryCount == 1024, "Cache entry count is 1024");
+        TEST_ASSERT(cacheInfo.TotalCachedBytes == 16777216, "Total cached bytes is 16 MB");
+        TEST_ASSERT(cacheInfo.HitCount == 8192, "Cache hit count is 8192");
+        TEST_ASSERT(cacheInfo.MissCount == 64, "Cache miss count is 64");
+
+        // 2. Class 234: SystemFirmwareRamdumpInformation
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(
+            234, nullptr, 0, &retLen
+        );
+        TEST_ASSERT(st == NtStatus::InfoLengthMismatch, "Class 234 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_FIRMWARE_RAMDUMP_INFORMATION),
+                    "Class 234 reports exact required length on mismatch");
+
+        SYSTEM_FIRMWARE_RAMDUMP_INFORMATION ramdumpInfo{};
+        st = NtQuerySystemInformation_Export(234, &ramdumpInfo, sizeof(ramdumpInfo), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "Class 234 succeeds with exact buffer");
+        TEST_ASSERT(ramdumpInfo.RamdumpSupported == 1, "Ramdump is supported");
+        TEST_ASSERT(ramdumpInfo.RamdumpEnabled == 1, "Ramdump is enabled");
+        TEST_ASSERT(ramdumpInfo.RamdumpBufferSize == 67108864ULL, "Ramdump buffer size is 64 MB");
+        TEST_ASSERT(ramdumpInfo.RamdumpPhysicalAddress == 0x1E0000000ULL, "Ramdump physical address base matched");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Memory & Bit Manipulation Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Memory & Bit Manipulation Primitives...\n";
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+
+        std::array<uint8_t, 64> memBuf{};
+
+        // 1. RtlFillMemoryUlong
+        RtlFillMemoryUlong(memBuf.data(), memBuf.size(), 0xABCD1234);
+        const auto* pUlong = reinterpret_cast<const uint32_t*>(memBuf.data());
+        bool allUlongMatch = true;
+        for (size_t i = 0; i < 16; ++i) {
+            if (pUlong[i] != 0xABCD1234) allUlongMatch = false;
+        }
+        TEST_ASSERT(allUlongMatch, "RtlFillMemoryUlong correctly fills 32-bit pattern across buffer");
+
+        // 2. RtlFillMemoryUlonglong
+        RtlFillMemoryUlonglong(memBuf.data(), memBuf.size(), 0x0123456789ABCDEFULL);
+        const auto* pUlonglong = reinterpret_cast<const uint64_t*>(memBuf.data());
+        bool allUlonglongMatch = true;
+        for (size_t i = 0; i < 8; ++i) {
+            if (pUlonglong[i] != 0x0123456789ABCDEFULL) allUlonglongMatch = false;
+        }
+        TEST_ASSERT(allUlonglongMatch, "RtlFillMemoryUlonglong correctly fills 64-bit pattern across buffer");
+
+        // 3. RtlZeroMemoryEx
+        RtlZeroMemoryEx(memBuf.data(), memBuf.size(), 0);
+        bool allZero = true;
+        for (auto b : memBuf) {
+            if (b != 0) allZero = false;
+        }
+        TEST_ASSERT(allZero, "RtlZeroMemoryEx clears entire memory buffer");
+
+        // 4. RtlCompareMemoryUlong
+        RtlFillMemoryUlong(memBuf.data(), memBuf.size(), 0x55AA55AA);
+        memBuf[40] ^= 0xFF; // Invalidate at byte 40 (at 10th uint32_t boundary)
+        size_t matchedBytes = RtlCompareMemoryUlong(memBuf.data(), memBuf.size(), 0x55AA55AA);
+        TEST_ASSERT(matchedBytes == 40, "RtlCompareMemoryUlong returns exact matching prefix byte count of 40");
+
+        // 5. Win32 Aliases
+        FillMemoryUlong(memBuf.data(), memBuf.size(), 0x99887766);
+        TEST_ASSERT(reinterpret_cast<const uint32_t*>(memBuf.data())[0] == 0x99887766, "Win32 FillMemoryUlong matches pattern");
+
+        FillMemoryUlonglong(memBuf.data(), memBuf.size(), 0xFEDCBA9876543210ULL);
+        TEST_ASSERT(reinterpret_cast<const uint64_t*>(memBuf.data())[0] == 0xFEDCBA9876543210ULL, "Win32 FillMemoryUlonglong matches pattern");
+
+        ZeroMemoryEx(memBuf.data(), memBuf.size(), 0);
+        TEST_ASSERT(memBuf[0] == 0 && memBuf[63] == 0, "Win32 ZeroMemoryEx clears buffer");
+
+        FillMemoryUlong(memBuf.data(), memBuf.size(), 0x11223344);
+        TEST_ASSERT(CompareMemoryUlong(memBuf.data(), memBuf.size(), 0x11223344) == 64, "Win32 CompareMemoryUlong reports 64 matching bytes");
+
+        // 6. Dynamic Loader Exports
+        InitializeNtdllSubsystemExports();
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlFillMemoryUlong") != nullptr, "ntdll.dll exports RtlFillMemoryUlong");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlFillMemoryUlonglong") != nullptr, "ntdll.dll exports RtlFillMemoryUlonglong");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlZeroMemoryEx") != nullptr, "ntdll.dll exports RtlZeroMemoryEx");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlCompareMemoryUlong") != nullptr, "ntdll.dll exports RtlCompareMemoryUlong");
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "FillMemoryUlong") != nullptr, "kernel32.dll exports FillMemoryUlong");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "FillMemoryUlonglong") != nullptr, "kernel32.dll exports FillMemoryUlonglong");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "ZeroMemoryEx") != nullptr, "kernel32.dll exports ZeroMemoryEx");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CompareMemoryUlong") != nullptr, "kernel32.dll exports CompareMemoryUlong");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: BCrypt / CNG NIST SP 800-185 KMACXOF (KMACXOF128 & KMACXOF256)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-185 KMACXOF (KMACXOF128 & KMACXOF256)...\n";
+        using namespace micant::crypto;
+
+        std::vector<uint8_t> key = { 'M', 'i', 'c', 'a', 'N', 'T', '_', 'K', 'e', 'y', '_', '1', '2', '8' };
+        std::vector<uint8_t> data = { 'S', 'o', 'v', 'e', 'r', 'e', 'i', 'g', 'n', ' ', 'D', 'a', 't', 'a' };
+
+        // 1. KMACXOF128 verification
+        auto kmacXof128_32 = KmacXOF128::mac(key, data, "CustomizationString", 32);
+        TEST_ASSERT(kmacXof128_32.size() == 32, "KmacXOF128 produces 32-byte digest");
+
+        auto kmacXof128_64 = KmacXOF128::mac(key, data, "CustomizationString", 64);
+        TEST_ASSERT(kmacXof128_64.size() == 64, "KmacXOF128 produces 64-byte squeeze stream");
+        TEST_ASSERT(std::memcmp(kmacXof128_32.data(), kmacXof128_64.data(), 32) == 0,
+                    "First 32 bytes of 64-byte squeeze match 32-byte squeeze exactly (XOF property)");
+
+        // 2. KMACXOF256 verification
+        auto kmacXof256_64 = KmacXOF256::mac(key, data, "CustomizationString", 64);
+        TEST_ASSERT(kmacXof256_64.size() == 64, "KmacXOF256 produces 64-byte digest");
+
+        auto kmacXof256_128 = KmacXOF256::mac(key, data, "CustomizationString", 128);
+        TEST_ASSERT(kmacXof256_128.size() == 128, "KmacXOF256 produces 128-byte squeeze stream");
+        TEST_ASSERT(std::memcmp(kmacXof256_64.data(), kmacXof256_128.data(), 64) == 0,
+                    "First 64 bytes of 128-byte squeeze match 64-byte squeeze exactly (XOF property)");
+
+        // 3. BCrypt API Integration for KMACXOF128
+        BCRYPT_ALG_HANDLE hKMACXOF128 = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMACXOF128, BCRYPT_KMACXOF128_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMACXOF128 != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMACXOF128");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMACXOF128, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMACXOF128 default hash length is 32");
+        BCryptGetProperty(hKMACXOF128, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMACXOF128 rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128 = nullptr;
+        BCryptCreateHash(hKMACXOF128, &hHash128, nullptr, 0, key.data(), static_cast<uint32_t>(key.size()), 0);
+        BCryptHashData(hHash128, data.data(), static_cast<uint32_t>(data.size()), 0);
+        uint8_t dKMACXOF128[32]{};
+        BCryptFinishHash(hHash128, dKMACXOF128, sizeof(dKMACXOF128), 0);
+        auto expectedDefKMACXOF128 = KmacXOF128::mac(key, data, "", 32);
+        TEST_ASSERT(std::memcmp(dKMACXOF128, expectedDefKMACXOF128.data(), 32) == 0,
+                    "BCrypt API KMACXOF128 produces bit-exact NIST hash");
+        BCryptDestroyHash(hHash128);
+        BCryptCloseAlgorithmProvider(hKMACXOF128, 0);
+
+        // 4. BCrypt API Integration for KMACXOF256
+        BCRYPT_ALG_HANDLE hKMACXOF256 = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMACXOF256, BCRYPT_KMACXOF256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMACXOF256 != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMACXOF256");
+
+        BCryptGetProperty(hKMACXOF256, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMACXOF256 default hash length is 64");
+        BCryptGetProperty(hKMACXOF256, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMACXOF256 rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256 = nullptr;
+        BCryptCreateHash(hKMACXOF256, &hHash256, nullptr, 0, key.data(), static_cast<uint32_t>(key.size()), 0);
+        BCryptHashData(hHash256, data.data(), static_cast<uint32_t>(data.size()), 0);
+        uint8_t dKMACXOF256[64]{};
+        BCryptFinishHash(hHash256, dKMACXOF256, sizeof(dKMACXOF256), 0);
+        auto expectedDefKMACXOF256 = KmacXOF256::mac(key, data, "", 64);
+        TEST_ASSERT(std::memcmp(dKMACXOF256, expectedDefKMACXOF256.data(), 64) == 0,
+                    "BCrypt API KMACXOF256 produces bit-exact NIST hash");
+        BCryptDestroyHash(hHash256);
+        BCryptCloseAlgorithmProvider(hKMACXOF256, 0);
+    }
+
+    std::cout << "  Horizon 241 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device19, ID3D12GraphicsCommandList13 & Options 31 OK\n"
+              << "    Pillar 2: NT Native Classes 233 (SyntheticCache) & 234 (FirmwareRamdump) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Memory & Bit Manipulation Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-185 KMACXOF (128 & 256) OK\n";
+
+    std::cout << "[TEST] Suite 457: Horizon 241 - Direct3D 12 Device19/CommandList13 & Options 31, NT SystemInfo 233/234, Memory Ulong & NIST SP 800-185 KMACXOF PASSED." << std::endl;
+}

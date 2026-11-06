@@ -1721,6 +1721,26 @@ struct SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION {
 };
 using PSYSTEM_SECURE_KERNEL_PROFILE_INFORMATION = SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION*;
 
+// Class 233: SystemCodeIntegritySyntheticCacheInformation
+struct SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION {
+    uint32_t SyntheticCacheFlags;
+    uint32_t CacheEntryCount;
+    uint32_t TotalCachedBytes;
+    uint32_t HitCount;
+    uint32_t MissCount;
+};
+using PSYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION = SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION*;
+
+// Class 234: SystemFirmwareRamdumpInformation
+struct SYSTEM_FIRMWARE_RAMDUMP_INFORMATION {
+    uint32_t RamdumpSupported;
+    uint32_t RamdumpEnabled;
+    uint32_t Reserved;
+    uint64_t RamdumpBufferSize;
+    uint64_t RamdumpPhysicalAddress;
+};
+using PSYSTEM_FIRMWARE_RAMDUMP_INFORMATION = SYSTEM_FIRMWARE_RAMDUMP_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3437,6 +3457,36 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SECURE_KERNEL_PROFILE_INFORMATION);
             return NtStatus::Success;
         }
+        case 233: { // SystemCodeIntegritySyntheticCacheInformation (Class 233)
+            if (SystemInformationLength < sizeof(SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->SyntheticCacheFlags = 0x00000003; // SYNTHETIC_CACHE_ENABLED | SYNTHETIC_CACHE_VERIFIED
+            pInfo->CacheEntryCount = 1024;
+            pInfo->TotalCachedBytes = 16777216;     // 16 MB
+            pInfo->HitCount = 8192;
+            pInfo->MissCount = 64;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CODE_INTEGRITY_SYNTHETIC_CACHE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 234: { // SystemFirmwareRamdumpInformation (Class 234)
+            if (SystemInformationLength < sizeof(SYSTEM_FIRMWARE_RAMDUMP_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_RAMDUMP_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_FIRMWARE_RAMDUMP_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->RamdumpSupported = 1;
+            pInfo->RamdumpEnabled = 1;
+            pInfo->Reserved = 0;
+            pInfo->RamdumpBufferSize = 67108864ULL;       // 64 MB
+            pInfo->RamdumpPhysicalAddress = 0x1E0000000ULL; // Physical RAM dump buffer base
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_RAMDUMP_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4384,6 +4434,45 @@ inline int8_t WINAPI RtlFindMostSignificantBit(uint64_t Set) noexcept {
     return static_cast<int8_t>(63 - std::countl_zero(Set));
 }
 
+inline void WINAPI RtlFillMemoryUlong(void* Destination, size_t Length, uint32_t Pattern) noexcept {
+    if (!Destination || Length < sizeof(uint32_t)) return;
+    auto* p = reinterpret_cast<uint32_t*>(Destination);
+    size_t count = Length / sizeof(uint32_t);
+    for (size_t i = 0; i < count; ++i) {
+        p[i] = Pattern;
+    }
+}
+
+inline void WINAPI RtlFillMemoryUlonglong(void* Destination, size_t Length, uint64_t Pattern) noexcept {
+    if (!Destination || Length < sizeof(uint64_t)) return;
+    auto* p = reinterpret_cast<uint64_t*>(Destination);
+    size_t count = Length / sizeof(uint64_t);
+    for (size_t i = 0; i < count; ++i) {
+        p[i] = Pattern;
+    }
+}
+
+inline void WINAPI RtlZeroMemoryEx(void* Destination, size_t Length, uint32_t /*Flags*/) noexcept {
+    if (Destination && Length > 0) {
+        std::memset(Destination, 0, Length);
+    }
+}
+
+inline size_t WINAPI RtlCompareMemoryUlong(const void* Source, size_t Length, uint32_t Pattern) noexcept {
+    if (!Source || Length < sizeof(uint32_t)) return 0;
+    const auto* p = reinterpret_cast<const uint32_t*>(Source);
+    size_t count = Length / sizeof(uint32_t);
+    size_t matchedBytes = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (p[i] == Pattern) {
+            matchedBytes += sizeof(uint32_t);
+        } else {
+            break;
+        }
+    }
+    return matchedBytes;
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -4880,6 +4969,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlTimeFieldsToTime", reinterpret_cast<void*>(RtlTimeFieldsToTime));
     ldr.registerExport("ntdll.dll", "RtlValidAcl", reinterpret_cast<void*>(RtlValidAcl));
     ldr.registerExport("ntdll.dll", "RtlValidRelativeSecurityDescriptor", reinterpret_cast<void*>(RtlValidRelativeSecurityDescriptor));
+    ldr.registerExport("ntdll.dll", "RtlFillMemoryUlong", reinterpret_cast<void*>(RtlFillMemoryUlong));
+    ldr.registerExport("ntdll.dll", "RtlFillMemoryUlonglong", reinterpret_cast<void*>(RtlFillMemoryUlonglong));
+    ldr.registerExport("ntdll.dll", "RtlZeroMemoryEx", reinterpret_cast<void*>(RtlZeroMemoryEx));
+    ldr.registerExport("ntdll.dll", "RtlCompareMemoryUlong", reinterpret_cast<void*>(RtlCompareMemoryUlong));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

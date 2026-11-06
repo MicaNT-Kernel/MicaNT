@@ -78,6 +78,8 @@ inline constexpr const wchar_t* BCRYPT_PARALLELHASH128_ALGORITHM          = L"PA
 inline constexpr const wchar_t* BCRYPT_PARALLELHASH256_ALGORITHM          = L"PARALLELHASH256";
 inline constexpr const wchar_t* BCRYPT_PARALLELHASHXOF128_ALGORITHM       = L"PARALLELHASHXOF128";
 inline constexpr const wchar_t* BCRYPT_PARALLELHASHXOF256_ALGORITHM       = L"PARALLELHASHXOF256";
+inline constexpr const wchar_t* BCRYPT_KMACXOF128_ALGORITHM               = L"KMACXOF128";
+inline constexpr const wchar_t* BCRYPT_KMACXOF256_ALGORITHM               = L"KMACXOF256";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -1492,6 +1494,53 @@ public:
 
 using Kmac128 = GenericKmac<CShake128>;
 using Kmac256 = GenericKmac<CShake256>;
+
+template<typename CShakeType>
+class GenericKmacXof {
+public:
+    static constexpr size_t RATE = CShakeType::RATE;
+    static constexpr size_t DEFAULT_DIGEST_SIZE = CShakeType::DEFAULT_DIGEST_SIZE;
+
+    struct Context {
+        typename CShakeType::Context cshake;
+        bool   finalized{ false };
+    };
+
+    static void init(Context& ctx, std::span<const uint8_t> key, std::string_view custom = "") noexcept {
+        ctx.finalized = false;
+        CShakeType::init(ctx.cshake, "KMAC", custom);
+        auto encKey = NistSp800_185::encode_string(key);
+        auto paddedKey = NistSp800_185::bytepad(encKey, RATE);
+        CShakeType::update(ctx.cshake, paddedKey);
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.finalized) {
+            CShakeType::update(ctx.cshake, data);
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.finalized) {
+            auto encZero = NistSp800_185::right_encode(0ULL);
+            CShakeType::update(ctx.cshake, encZero);
+            ctx.finalized = true;
+        }
+        CShakeType::squeeze(ctx.cshake, out);
+    }
+
+    static std::vector<uint8_t> mac(std::span<const uint8_t> key, std::span<const uint8_t> data, std::string_view custom = "", size_t outLen = DEFAULT_DIGEST_SIZE) {
+        Context ctx;
+        init(ctx, key, custom);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        final(ctx, out);
+        return out;
+    }
+};
+
+using KmacXOF128 = GenericKmacXof<CShake128>;
+using KmacXOF256 = GenericKmacXof<CShake256>;
 
 template<typename CShakeType>
 class GenericTupleHash {
@@ -3696,6 +3745,8 @@ enum class CryptoAlgorithm {
     ParallelHashXOF256,
     TupleHashXOF128,
     TupleHashXOF256,
+    KmacXOF128,
+    KmacXOF256,
     Unknown
 };
 
@@ -3713,6 +3764,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_CSHAKE256_ALGORITHM || algId == L"CSHAKE256" || algId == L"cshake256") return CryptoAlgorithm::CShake256;
     if (algId == BCRYPT_KMAC128_ALGORITHM || algId == L"KMAC128" || algId == L"kmac128") return CryptoAlgorithm::Kmac128;
     if (algId == BCRYPT_KMAC256_ALGORITHM || algId == L"KMAC256" || algId == L"kmac256") return CryptoAlgorithm::Kmac256;
+    if (algId == BCRYPT_KMACXOF128_ALGORITHM || algId == L"KMACXOF128" || algId == L"kmacxof128") return CryptoAlgorithm::KmacXOF128;
+    if (algId == BCRYPT_KMACXOF256_ALGORITHM || algId == L"KMACXOF256" || algId == L"kmacxof256") return CryptoAlgorithm::KmacXOF256;
     if (algId == BCRYPT_TUPLEHASH128_ALGORITHM || algId == L"TUPLEHASH128" || algId == L"tuplehash128") return CryptoAlgorithm::TupleHash128;
     if (algId == BCRYPT_TUPLEHASH256_ALGORITHM || algId == L"TUPLEHASH256" || algId == L"tuplehash256") return CryptoAlgorithm::TupleHash256;
     if (algId == BCRYPT_TUPLEHASHXOF128_ALGORITHM || algId == L"TUPLEHASHXOF128" || algId == L"tuplehashxof128") return CryptoAlgorithm::TupleHashXOF128;
@@ -3813,6 +3866,8 @@ public:
     ParallelHashXOF256::Context parallelHashXof256Ctx{};
     TupleHashXOF128::Context tupleHashXof128Ctx{};
     TupleHashXOF256::Context tupleHashXof256Ctx{};
+    KmacXOF128::Context kmacXof128Ctx{};
+    KmacXOF256::Context kmacXof256Ctx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -3854,6 +3909,8 @@ public:
           parallelHashXof256Ctx(other.parallelHashXof256Ctx),
           tupleHashXof128Ctx(other.tupleHashXof128Ctx),
           tupleHashXof256Ctx(other.tupleHashXof256Ctx),
+          kmacXof128Ctx(other.kmacXof128Ctx),
+          kmacXof256Ctx(other.kmacXof256Ctx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -3922,6 +3979,10 @@ public:
             TupleHashXOF128::init(tupleHashXof128Ctx);
         } else if (algorithm == CryptoAlgorithm::TupleHashXOF256) {
             TupleHashXOF256::init(tupleHashXof256Ctx);
+        } else if (algorithm == CryptoAlgorithm::KmacXOF128) {
+            KmacXOF128::init(kmacXof128Ctx, key);
+        } else if (algorithm == CryptoAlgorithm::KmacXOF256) {
+            KmacXOF256::init(kmacXof256Ctx, key);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -3986,6 +4047,10 @@ public:
             TupleHashXOF128::update(tupleHashXof128Ctx, data);
         } else if (algorithm == CryptoAlgorithm::TupleHashXOF256) {
             TupleHashXOF256::update(tupleHashXof256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::KmacXOF128) {
+            KmacXOF128::update(kmacXof128Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::KmacXOF256) {
+            KmacXOF256::update(kmacXof256Ctx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -4114,6 +4179,14 @@ public:
         } else if (algorithm == CryptoAlgorithm::TupleHashXOF256) {
             std::vector<uint8_t> out(64);
             TupleHashXOF256::final(tupleHashXof256Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::KmacXOF128) {
+            std::vector<uint8_t> out(32);
+            KmacXOF128::final(kmacXof128Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::KmacXOF256) {
+            std::vector<uint8_t> out(64);
+            KmacXOF256::final(kmacXof256Ctx, out);
             return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
@@ -4364,9 +4437,9 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
-            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256) len = 64;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -4376,10 +4449,10 @@ inline NTSTATUS BCryptGetProperty(
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_224) ? 144 :
-                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256) ? 136 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256) ? 136 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_384) ? 104 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_512) ? 72 :
-                           ((prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128) ? 168 :
+                           ((prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128) ? 168 :
                            ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512 ||
                              prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64))))));
             std::memcpy(pbOutput, &len, sizeof(len));

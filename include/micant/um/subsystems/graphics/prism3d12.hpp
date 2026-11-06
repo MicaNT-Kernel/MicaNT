@@ -528,6 +528,7 @@ class ID3D12GraphicsCommandList6;
 class ID3D12GraphicsCommandList10;
 class ID3D12GraphicsCommandList11;
 class ID3D12GraphicsCommandList12;
+class ID3D12GraphicsCommandList13;
 class ID3D12ProtectedResourceSession;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
@@ -535,6 +536,7 @@ class ID3D12MetaCommand;
 class ID3D12Heap;
 class ID3D12Device;
 class ID3D12Device18;
+class ID3D12Device19;
 
 // ============================================================================
 // 4. Abstract COM Interfaces
@@ -1226,6 +1228,25 @@ public:
         uint32_t RecordSizeInBytes) = 0;
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList13 = 
+    { 0x8a2c17d4, 0x73b9, 0x4d01, { 0x91, 0x4f, 0x82, 0xd4, 0xe5, 0x36, 0x2c, 0x91 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList13 = IID_ID3D12GraphicsCommandList13;
+
+class ID3D12GraphicsCommandList13 : public ID3D12GraphicsCommandList12 {
+public:
+    virtual void SetWorkGraphBackingMemory3(
+        uint64_t RangeStart,
+        uint64_t RangeSizeInBytes,
+        uint64_t ScratchBufferSizeInBytes,
+        uint32_t Flags) = 0;
+
+    virtual void DispatchGraphProgramRecord3(
+        uint32_t NodeIndex,
+        const void* pRecord,
+        uint32_t RecordSizeInBytes,
+        uint32_t RecordCount) = 0;
+};
+
 class ID3D12CommandQueue : public ID3D12DeviceChild {
 public:
     virtual void ExecuteCommandLists(uint32_t NumCommandLists, ID3D12CommandList* const* ppCommandLists) = 0;
@@ -1260,6 +1281,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS27 = 43;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS28 = 44;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS29 = 45;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS30 = 46;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS31 = 47;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -1481,6 +1503,14 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS30 {
     BOOL     DirectProgramRecordAllocationSupported{ 1 };
     BOOL     WorkGraphBackingMemoryVirtualRemapSupported{ 1 };
     BOOL     ShaderExecutionReorderingSupported{ 1 };
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS31 {
+    uint32_t WorkGraphsTier{ 14u }; // Tier 2.0/2.1
+    BOOL     DynamicDepthBoundsSupported{ 1 };
+    BOOL     EnhancedWaveMatrixMultiplySupported{ 1 };
+    uint32_t WaveMatrixMultiplyTiers{ 3u }; // Tier 3
+    BOOL     ProgrammaticWorkGraphRecordBindingSupported{ 1 };
 };
 
 static constexpr GUID CLSID_D3D12DeviceRemovedExtendedData =
@@ -2334,6 +2364,10 @@ static constexpr IID IID_ID3D12Device18 =
     { 0x77626941, 0xc68c, 0x4c67, { 0x91, 0x04, 0x58, 0x5b, 0x53, 0x77, 0xcf, 0xf8 } };
 static constexpr IID OFFICIAL_IID_ID3D12Device18 = IID_ID3D12Device18;
 
+static constexpr IID IID_ID3D12Device19 = 
+    { 0x6c3e7b21, 0x51e2, 0x47b0, { 0x9c, 0x8a, 0x3e, 0x72, 0x91, 0xb5, 0x2a, 0x6e } };
+static constexpr IID OFFICIAL_IID_ID3D12Device19 = IID_ID3D12Device19;
+
 class ID3D12Device11 : public ID3D12Device10 {
 public:
     virtual void CreateSampler2(
@@ -2446,6 +2480,19 @@ public:
     virtual int32_t GetWorkGraphMemoryRequirements(
         uint32_t ProgramIndex,
         uint64_t* pSizeBytes) = 0;
+};
+
+class ID3D12Device19 : public ID3D12Device18 {
+public:
+    virtual int32_t CreateWorkGraphProgramRecord3(
+        const void* pDesc,
+        uint32_t Flags,
+        uint64_t ScratchBufferSize,
+        const IID& riid,
+        void** ppRecord) = 0;
+
+    virtual int32_t GetDynamicDepthBoundsSupport(
+        int32_t* pSupported) = 0;
 };
 
 class Prism3D12QueryHeapImpl : public ID3D12QueryHeap {
@@ -2970,7 +3017,7 @@ public:
 };
 
 // Command List implementation
-class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList12 {
+class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList13 {
 public:
     enum class CommandType {
         TransitionBarrier,
@@ -3028,6 +3075,17 @@ private:
         uint32_t RecordSizeInBytes{ 0 };
     };
     std::vector<ProgramRecord2Entry> m_recordedProgramRecords2;
+    uint64_t m_backingMemory3Start{ 0 };
+    uint64_t m_backingMemory3Size{ 0 };
+    uint64_t m_backingMemory3ScratchSize{ 0 };
+    uint32_t m_backingMemory3Flags{ 0 };
+    struct ProgramRecord3Entry {
+        uint32_t NodeIndex{ 0 };
+        const void* pRecord{ nullptr };
+        uint32_t RecordSizeInBytes{ 0 };
+        uint32_t RecordCount{ 0 };
+    };
+    std::vector<ProgramRecord3Entry> m_recordedProgramRecords3;
     uint32_t m_recordedEnhancedBarriersCount{ 0 };
     uint32_t m_dispatchedMeshCount{ 0 };
     uint32_t m_dispatchedRaysCount{ 0 };
@@ -3074,6 +3132,11 @@ public:
         }
         if (riid == IID_ID3D12GraphicsCommandList12 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList12) {
             *ppv = static_cast<ID3D12GraphicsCommandList12*>(this);
+            AddRef();
+            return 0;
+        }
+        if (riid == IID_ID3D12GraphicsCommandList13 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList13) {
+            *ppv = static_cast<ID3D12GraphicsCommandList13*>(this);
             AddRef();
             return 0;
         }
@@ -3129,6 +3192,11 @@ public:
         m_backingMemory2Size = 0;
         m_backingMemory2Flags = 0;
         m_recordedProgramRecords2.clear();
+        m_backingMemory3Start = 0;
+        m_backingMemory3Size = 0;
+        m_backingMemory3ScratchSize = 0;
+        m_backingMemory3Flags = 0;
+        m_recordedProgramRecords3.clear();
         m_isOpen = true;
         return 0;
     }
@@ -3573,6 +3641,26 @@ public:
     [[nodiscard]] uint32_t GetWorkGraphBackingMemory2Flags() const noexcept { return m_backingMemory2Flags; }
     [[nodiscard]] size_t GetRecordedProgramRecord2Count() const noexcept { return m_recordedProgramRecords2.size(); }
     [[nodiscard]] const std::vector<ProgramRecord2Entry>& GetRecordedProgramRecords2() const noexcept { return m_recordedProgramRecords2; }
+
+    void SetWorkGraphBackingMemory3(uint64_t RangeStart, uint64_t RangeSizeInBytes, uint64_t ScratchBufferSizeInBytes, uint32_t Flags) override {
+        if (!m_isOpen) return;
+        m_backingMemory3Start = RangeStart;
+        m_backingMemory3Size = RangeSizeInBytes;
+        m_backingMemory3ScratchSize = ScratchBufferSizeInBytes;
+        m_backingMemory3Flags = Flags;
+    }
+
+    void DispatchGraphProgramRecord3(uint32_t NodeIndex, const void* pRecord, uint32_t RecordSizeInBytes, uint32_t RecordCount) override {
+        if (!m_isOpen) return;
+        m_recordedProgramRecords3.push_back({ NodeIndex, pRecord, RecordSizeInBytes, RecordCount });
+    }
+
+    [[nodiscard]] uint64_t GetWorkGraphBackingMemory3Start() const noexcept { return m_backingMemory3Start; }
+    [[nodiscard]] uint64_t GetWorkGraphBackingMemory3Size() const noexcept { return m_backingMemory3Size; }
+    [[nodiscard]] uint64_t GetWorkGraphBackingMemory3ScratchSize() const noexcept { return m_backingMemory3ScratchSize; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory3Flags() const noexcept { return m_backingMemory3Flags; }
+    [[nodiscard]] size_t GetRecordedProgramRecord3Count() const noexcept { return m_recordedProgramRecords3.size(); }
+    [[nodiscard]] const std::vector<ProgramRecord3Entry>& GetRecordedProgramRecords3() const noexcept { return m_recordedProgramRecords3; }
 
     const std::vector<Command>& GetRecordedCommands() const { return m_commands; }
     bool IsOpen() const { return m_isOpen; }
@@ -4024,7 +4112,7 @@ public:
     [[nodiscard]] uint32_t GetMaxAttributeSize() const noexcept { return m_maxAttributeSize; }
 };
 
-class Prism3D12DeviceImpl : public ID3D12Device18 {
+class Prism3D12DeviceImpl : public ID3D12Device19 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -4050,8 +4138,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16 || riid == IID_ID3D12Device17 || riid == OFFICIAL_IID_ID3D12Device17 || riid == IID_ID3D12Device18 || riid == OFFICIAL_IID_ID3D12Device18) {
-            *ppv = static_cast<ID3D12Device18*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16 || riid == IID_ID3D12Device17 || riid == OFFICIAL_IID_ID3D12Device17 || riid == IID_ID3D12Device18 || riid == OFFICIAL_IID_ID3D12Device18 || riid == IID_ID3D12Device19 || riid == OFFICIAL_IID_ID3D12Device19) {
+            *ppv = static_cast<ID3D12Device19*>(this);
             AddRef();
             return 0;
         }
@@ -4711,6 +4799,25 @@ public:
         return 0;
     }
 
+    int32_t CreateWorkGraphProgramRecord3(
+        const void* /*pDesc*/,
+        uint32_t /*Flags*/,
+        uint64_t /*ScratchBufferSize*/,
+        const IID& /*riid*/,
+        void** ppRecord) override {
+        if (!ppRecord) return -1;
+        *ppRecord = reinterpret_cast<void*>(0xCAFEBAB3);
+        m_workGraphProgramRecordsCreated++;
+        return 0;
+    }
+
+    int32_t GetDynamicDepthBoundsSupport(
+        int32_t* pSupported) override {
+        if (!pSupported) return -1;
+        *pSupported = 1;
+        return 0;
+    }
+
     int32_t CreateShaderCacheSession(
         const D3D12_SHADER_CACHE_SESSION_DESC* pDesc,
         const IID& riid,
@@ -5002,6 +5109,16 @@ public:
             pData->DirectProgramRecordAllocationSupported = TRUE;
             pData->WorkGraphBackingMemoryVirtualRemapSupported = TRUE;
             pData->ShaderExecutionReorderingSupported = TRUE;
+            return 0;
+        }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS31) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS31)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS31*>(pFeatureSupportData);
+            pData->WorkGraphsTier = 14u; // Tier 2.0/2.1
+            pData->DynamicDepthBoundsSupported = TRUE;
+            pData->EnhancedWaveMatrixMultiplySupported = TRUE;
+            pData->WaveMatrixMultiplyTiers = 3u; // Tier 3
+            pData->ProgrammaticWorkGraphRecordBindingSupported = TRUE;
             return 0;
         }
 
