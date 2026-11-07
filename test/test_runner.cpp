@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite469") {
+        RUN_TEST(Test_Horizon253_Device31Options43_PagefileDefragCpuFabricLatency_InterlockedNor_And_KmacOfb_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite468") {
         RUN_TEST(Test_Horizon252_Device30Options42_PagefileCompactionCpuFabricQos_InterlockedNand_And_KmacCtr_Suite);
         return g_FailedTests;
@@ -2346,6 +2350,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon250_Device28Options40_PagefileCompressionCpuFabric_InterlockedExtended_And_KmacMgf_Suite);
     RUN_TEST(Test_Horizon251_Device29Options41_PagefileDecompressionCpuPartition_InterlockedXorNot_And_KmacKdf_Suite);
     RUN_TEST(Test_Horizon252_Device30Options42_PagefileCompactionCpuFabricQos_InterlockedNand_And_KmacCtr_Suite);
+    RUN_TEST(Test_Horizon253_Device31Options43_PagefileDefragCpuFabricLatency_InterlockedNor_And_KmacOfb_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

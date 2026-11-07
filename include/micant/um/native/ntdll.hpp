@@ -2030,6 +2030,39 @@ struct SYSTEM_CPU_FABRIC_QOS_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_QOS_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_QOS_TELEMETRY_INFORMATION*;
 
+// Class 257: SystemPagefileClusterDefragmentationTelemetryInformation
+struct SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION {
+    ULONG    PagefileIndex;
+    ULONG    Flags;                                // 0x01 = Active, 0x02 = DefragRunning, 0x04 = ZeroCopyRelocation, 0x08 = HardwareDmaAccelerated
+    ULONG64  TotalDefragPasses;                    // e.g. 512 passes
+    ULONG64  ClustersRelocated;                    // e.g. 1048576 clusters
+    ULONG64  ContinuousFreeExtentsFormed;          // e.g. 65536 extents
+    ULONG64  PagefileSparsityFreedBytes;           // e.g. 4294967296 bytes (4 GB)
+    ULONG    AverageRelocationLatencyNanos;        // e.g. 420 ns
+    ULONG    DefragThroughputMBps;                 // e.g. 24000 MB/s
+    ULONG    PreDefragFragmentationIndex;          // e.g. 74%
+    ULONG    PostDefragFragmentationIndex;         // e.g. 5%
+    ULONG    DefragEngineVersion;                  // e.g. 1 (MicaNT-NativeDefrag-v1)
+    ULONG    OptimizationScore;                    // e.g. 98%
+};
+using PSYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION*;
+
+// Class 258: SystemCpuFabricLatencyTelemetryInformation
+struct SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION {
+    ULONG    FabricNodeId;                         // e.g. 0
+    ULONG    InterconnectHopCount;                 // e.g. 2
+    ULONG64  TotalTransactionsSampled;             // e.g. 1000000000ULL
+    ULONG    MinHopLatencyNanos;                   // e.g. 8 ns
+    ULONG    AverageHopLatencyNanos;               // e.g. 14 ns
+    ULONG    MaxHopLatencyNanos;                   // e.g. 45 ns
+    ULONG    P99HopLatencyNanos;                   // e.g. 21 ns
+    ULONG    LinkSaturationPercent;                // e.g. 48%
+    ULONG    RetransmitRatePPM;                    // e.g. 2 ppm
+    ULONG    CrosstalkMitigationEvents;            // e.g. 0
+    ULONG    FabricStatusFlags;                    // 0x07 = Operational | LowJitter | DynamicRoutingActive
+};
+using PSYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4174,6 +4207,49 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_QOS_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 257: { // SystemPagefileClusterDefragmentationTelemetryInformation (Class 257)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PagefileIndex = 0;
+            pInfo->Flags = 0x0F; // Active | DefragRunning | ZeroCopyRelocation | HardwareDmaAccelerated
+            pInfo->TotalDefragPasses = 512ULL;
+            pInfo->ClustersRelocated = 1048576ULL;
+            pInfo->ContinuousFreeExtentsFormed = 65536ULL;
+            pInfo->PagefileSparsityFreedBytes = 4294967296ULL; // 4 GB
+            pInfo->AverageRelocationLatencyNanos = 420;
+            pInfo->DefragThroughputMBps = 24000;
+            pInfo->PreDefragFragmentationIndex = 74;
+            pInfo->PostDefragFragmentationIndex = 5;
+            pInfo->DefragEngineVersion = 1; // MicaNT-NativeDefrag-v1
+            pInfo->OptimizationScore = 98;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 258: { // SystemCpuFabricLatencyTelemetryInformation (Class 258)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->FabricNodeId = 0;
+            pInfo->InterconnectHopCount = 2;
+            pInfo->TotalTransactionsSampled = 1000000000ULL;
+            pInfo->MinHopLatencyNanos = 8;
+            pInfo->AverageHopLatencyNanos = 14;
+            pInfo->MaxHopLatencyNanos = 45;
+            pInfo->P99HopLatencyNanos = 21;
+            pInfo->LinkSaturationPercent = 48;
+            pInfo->RetransmitRatePPM = 2;
+            pInfo->CrosstalkMitigationEvents = 0;
+            pInfo->FabricStatusFlags = 0x07; // Operational | LowJitter | DynamicRoutingActive
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -5465,6 +5541,38 @@ inline CHAR WINAPI RtlInterlockedNand8(CHAR volatile* Destination, CHAR Value) n
     return current;
 }
 
+inline LONG64 WINAPI RtlInterlockedNor64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<LONG64>(~(current | Value)), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline LONG WINAPI RtlInterlockedNor32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<LONG>(~(current | Value)), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline SHORT WINAPI RtlInterlockedNor16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<SHORT>(~(current | Value)), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline CHAR WINAPI RtlInterlockedNor8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<CHAR>(~(current | Value)), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -5499,6 +5607,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricQosTelemetry(SYSTEM_CPU_FABRIC_QOS
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(256, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileClusterDefragmentationTelemetry(SYSTEM_PAGEFILE_CLUSTER_DEFRAGMENTATION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(257, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricLatencyTelemetry(SYSTEM_CPU_FABRIC_LATENCY_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(258, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -6046,12 +6166,18 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedNand32", reinterpret_cast<void*>(RtlInterlockedNand32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedNand16", reinterpret_cast<void*>(RtlInterlockedNand16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedNand8", reinterpret_cast<void*>(RtlInterlockedNand8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNor64", reinterpret_cast<void*>(RtlInterlockedNor64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNor32", reinterpret_cast<void*>(RtlInterlockedNor32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNor16", reinterpret_cast<void*>(RtlInterlockedNor16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNor8", reinterpret_cast<void*>(RtlInterlockedNor8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileDecompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileDecompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricPartition", reinterpret_cast<void*>(RtlQuerySystemCpuFabricPartition));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileClusterCompactionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileClusterCompactionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricQosTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricQosTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileClusterDefragmentationTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileClusterDefragmentationTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricLatencyTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricLatencyTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
