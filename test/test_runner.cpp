@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite463") {
+        RUN_TEST(Test_Horizon247_Device25Options37_SiloRootDirectoryMemoryBandwidth_InterlockedBitInversion_And_KmacAsyncRatchet_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite462") {
         RUN_TEST(Test_Horizon246_Device24Options36_SiloMemoryTopology_InterlockedArithmetic8_And_KmacTreeRatchet_Suite);
         return g_FailedTests;
@@ -2316,6 +2320,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon244_Device22Options34_MicrocodePolicy_InterlockedArithmetic64_And_KmacDoubleRatchet_Suite);
     RUN_TEST(Test_Horizon245_Device23Options35_RootSiloPartition_InterlockedArithmetic16_And_KmacTripleRatchet_Suite);
     RUN_TEST(Test_Horizon246_Device24Options36_SiloMemoryTopology_InterlockedArithmetic8_And_KmacTreeRatchet_Suite);
+    RUN_TEST(Test_Horizon247_Device25Options37_SiloRootDirectoryMemoryBandwidth_InterlockedBitInversion_And_KmacAsyncRatchet_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

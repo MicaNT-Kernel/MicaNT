@@ -9244,6 +9244,14 @@ inline BOOLEAN WINAPI InterlockedBitTestAndReset64(LONG64 volatile* Base, LONG64
     return ntdll::RtlInterlockedBitTestAndReset64(Base, Bit);
 }
 
+inline BOOLEAN WINAPI InterlockedBitTestAndComplement(LONG volatile* Base, LONG Bit) noexcept {
+    return ntdll::RtlInterlockedBitTestAndComplement(Base, Bit);
+}
+
+inline BOOLEAN WINAPI InterlockedBitTestAndComplement64(LONG64 volatile* Base, LONG64 Bit) noexcept {
+    return ntdll::RtlInterlockedBitTestAndComplement64(Base, Bit);
+}
+
 inline LONG WINAPI InterlockedAnd(LONG volatile* Destination, LONG Value) noexcept {
     return ntdll::RtlInterlockedAnd(Destination, Value);
 }
@@ -11481,6 +11489,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedBitTestAndReset", reinterpret_cast<void*>(InterlockedBitTestAndReset));
     ldr.registerExport("kernel32.dll", "InterlockedBitTestAndSet64", reinterpret_cast<void*>(InterlockedBitTestAndSet64));
     ldr.registerExport("kernel32.dll", "InterlockedBitTestAndReset64", reinterpret_cast<void*>(InterlockedBitTestAndReset64));
+    ldr.registerExport("kernel32.dll", "InterlockedBitTestAndComplement", reinterpret_cast<void*>(InterlockedBitTestAndComplement));
+    ldr.registerExport("kernel32.dll", "InterlockedBitTestAndComplement64", reinterpret_cast<void*>(InterlockedBitTestAndComplement64));
     ldr.registerExport("kernel32.dll", "InterlockedAnd", reinterpret_cast<void*>(InterlockedAnd));
     ldr.registerExport("kernel32.dll", "InterlockedOr", reinterpret_cast<void*>(InterlockedOr));
     ldr.registerExport("kernel32.dll", "InterlockedXor", reinterpret_cast<void*>(InterlockedXor));

@@ -52854,3 +52854,303 @@ inline void Test_Horizon246_Device24Options36_SiloMemoryTopology_InterlockedArit
 
     std::cout << "[TEST] Suite 462: Horizon 246 - Direct3D 12 Device24/CommandList18 & Options 36, NT SystemInfo 243/244, Interlocked Arithmetic 8 & NIST KMAC Tree-Ratchet PASSED." << std::endl;
 }
+
+inline void Test_Horizon247_Device25Options37_SiloRootDirectoryMemoryBandwidth_InterlockedBitInversion_And_KmacAsyncRatchet_Suite() {
+    std::cout << "[TEST] Suite 463: Horizon 247 - Direct3D 12 Device25/CommandList19 & Options 37, NT SystemInfo 245/246, Interlocked Bit Inversion & NIST KMAC Async-Ratchet...\n";
+
+    // ========================================================================
+    // Pillar 1: Direct3D 12 Agility SDK 1.615+/1.616+ ID3D12Device25, CommandList19 & Options 37
+    // ========================================================================
+    {
+        using namespace prism3d12;
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device25, CommandList19 & Options 37 Architecture...\n";
+
+        Prism3D12DeviceImpl dev(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. Device25 COM QueryInterface
+        ID3D12Device25* pDev25 = nullptr;
+        int32_t hr = dev.QueryInterface(IID_ID3D12Device25, reinterpret_cast<void**>(&pDev25));
+        TEST_ASSERT(hr == 0 && pDev25 != nullptr, "Device QueryInterface succeeds for IID_ID3D12Device25");
+
+        ID3D12Device25* pDev25Off = nullptr;
+        hr = dev.QueryInterface(OFFICIAL_IID_ID3D12Device25, reinterpret_cast<void**>(&pDev25Off));
+        TEST_ASSERT(hr == 0 && pDev25Off != nullptr, "Device QueryInterface succeeds for OFFICIAL_IID_ID3D12Device25");
+
+        // 2. D3D12_FEATURE_D3D12_OPTIONS37 CheckFeatureSupport
+        D3D12_FEATURE_DATA_D3D12_OPTIONS37 opt37{};
+        hr = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS37, &opt37, sizeof(opt37));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport succeeds for D3D12_FEATURE_D3D12_OPTIONS37");
+        TEST_ASSERT(opt37.WorkGraphsTier == 20u, "Options37 reports WorkGraphsTier 20 (Tier 3.4)");
+        TEST_ASSERT(opt37.CooperativeMatrixMultiply512Supported == TRUE, "Options37 reports 512x512 cooperative matrix support");
+        TEST_ASSERT(opt37.SubByteTensorQuantizationSupported == TRUE, "Options37 reports sub-byte FP4/INT2 tensor quantization support");
+        TEST_ASSERT(opt37.DynamicClusterExpansionTier5Supported == TRUE, "Options37 reports dynamic cluster expansion tier 5");
+        TEST_ASSERT(opt37.MaxWorkGraphConcurrencyGroups == 2048u, "Options37 reports 2048 concurrency groups");
+        TEST_ASSERT(opt37.AsynchronousTensorAccumulationSupported == TRUE, "Options37 reports asynchronous tensor accumulation support");
+
+        // 3. ID3D12Device25 Cooperative Matrix Support 4
+        int32_t supported = 0;
+        uint32_t maxDim = 0;
+        uint32_t dataTypes = 0;
+        uint32_t sparseAccel = 0;
+        int32_t asyncAccum = 0;
+        hr = pDev25->GetWorkGraphCooperativeMatrixSupport4(&supported, &maxDim, &dataTypes, &sparseAccel, &asyncAccum);
+        TEST_ASSERT(hr == 0 && supported == 1, "GetWorkGraphCooperativeMatrixSupport4 reports support");
+        TEST_ASSERT(maxDim == 512, "GetWorkGraphCooperativeMatrixSupport4 reports max dimension 512");
+        TEST_ASSERT(dataTypes == 0x1F, "GetWorkGraphCooperativeMatrixSupport4 reports 0x1F data types (FP16/BF16/FP8/INT8/FP4)");
+        TEST_ASSERT(sparseAccel == 1, "GetWorkGraphCooperativeMatrixSupport4 reports sparse tensor core acceleration");
+        TEST_ASSERT(asyncAccum == 1, "GetWorkGraphCooperativeMatrixSupport4 reports asynchronous tensor accumulation");
+
+        // 4. ID3D12Device25 CreateWorkGraphProgramRecord9
+        void* pProgRec9 = nullptr;
+        hr = pDev25->CreateWorkGraphProgramRecord9(
+            nullptr, 0x101, 256, 2048, 0x05, 5, 5, 0xFF,
+            IID_ID3D12Device25, &pProgRec9);
+        TEST_ASSERT(hr == 0, "CreateWorkGraphProgramRecord9 succeeds");
+        TEST_ASSERT(pProgRec9 == reinterpret_cast<void*>(0xCAFEBAB9), "Program record pointer matches sentinel 0xCAFEBAB9");
+
+        // 5. CommandList19 QueryInterface & Work Graph Backing Memory 9
+        Prism3D12CommandAllocatorImpl alloc(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+        ID3D12GraphicsCommandList19* pCmd19 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList19, reinterpret_cast<void**>(&pCmd19));
+        TEST_ASSERT(hr == 0 && pCmd19 != nullptr, "CommandList QueryInterface succeeds for IID_ID3D12GraphicsCommandList19");
+
+        ID3D12GraphicsCommandList19* pCmd19Off = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList19, reinterpret_cast<void**>(&pCmd19Off));
+        TEST_ASSERT(hr == 0 && pCmd19Off != nullptr, "CommandList QueryInterface succeeds for OFFICIAL_IID_ID3D12GraphicsCommandList19");
+
+        pCmd19->SetWorkGraphBackingMemory9(
+            0x90000000ULL, 128 * 1024 * 1024, 32 * 1024 * 1024,
+            2048, 0x05, 5, 0xAA, 0x55, 0x01);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9Start() == 0x90000000ULL, "Backing memory 9 range start set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9Size() == 128 * 1024 * 1024, "Backing memory 9 range size set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9ScratchSize() == 32 * 1024 * 1024, "Backing memory 9 scratch size set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9MaxConcurrency() == 2048, "Backing memory 9 max concurrency set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9DynamicExpansionFlags() == 0x05, "Backing memory 9 dynamic expansion flags set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9MemoryPoolTier() == 5, "Backing memory 9 memory pool tier set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9SparsityMask() == 0xAA, "Backing memory 9 sparsity mask set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9SubAllocationMask() == 0x55, "Backing memory 9 sub-allocation mask set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9Flags() == 0x01, "Backing memory 9 flags set correctly");
+
+        // 6. CommandList19 DispatchGraphProgramRecord9
+        const uint32_t recordPayload = 0xAABBCCDD;
+        pCmd19->DispatchGraphProgramRecord9(42, &recordPayload, sizeof(recordPayload), 10, 0x03, 5, 0x0F, 0x55, 0x01, 0x02);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord9Count() == 1, "Recorded program record 9 count is 1");
+        const auto& recs9 = cmdList.GetRecordedProgramRecords9();
+        TEST_ASSERT(recs9[0].NodeIndex == 42, "Record 9 node index is 42");
+        TEST_ASSERT(recs9[0].pRecord == &recordPayload, "Record 9 record payload pointer matches");
+        TEST_ASSERT(recs9[0].RecordSizeInBytes == sizeof(recordPayload), "Record 9 record size matches");
+        TEST_ASSERT(recs9[0].ConcurrencyGroup == 10, "Record 9 concurrency group matches");
+        TEST_ASSERT(recs9[0].QueueAffinityMask == 0x03, "Record 9 queue affinity mask matches");
+        TEST_ASSERT(recs9[0].DynamicClusterExpansionTier == 5, "Record 9 cluster expansion tier is 5");
+        TEST_ASSERT(recs9[0].TensorCoreMask == 0x0F, "Record 9 tensor core mask is 0x0F");
+        TEST_ASSERT(recs9[0].SubAllocationMask == 0x55, "Record 9 sub-allocation mask is 0x55");
+        TEST_ASSERT(recs9[0].DispatchMask == 0x01, "Record 9 dispatch mask matches");
+        TEST_ASSERT(recs9[0].DispatchFlags == 0x02, "Record 9 dispatch flags match");
+
+        // 7. Reset & ClearState validation
+        cmdList.ClearState(nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9Start() == 0, "ClearState resets backing memory 9 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord9Count() == 0, "ClearState clears recorded program records 9");
+
+        cmdList.Reset(nullptr, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory9Start() == 0, "Reset resets backing memory 9 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord9Count() == 0, "Reset clears recorded program records 9");
+    }
+
+    // ========================================================================
+    // Pillar 2: Windows NT System Information Classes 245 & 246
+    // ========================================================================
+    {
+        using namespace micant::ntdll;
+        std::cout << "  [PILLAR 2] Windows NT System Information Classes 245 & 246...\n";
+
+        // 1. Class 245: SystemSiloRootDirectoryInformation
+        ULONG returnLength = 0;
+        NtStatus status = NtQuerySystemInformation_Export(245, nullptr, 0, &returnLength);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 245 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION), "Class 245 returns required structure size");
+
+        SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION rootDir{};
+        status = NtQuerySystemInformation_Export(245, &rootDir, sizeof(rootDir), &returnLength);
+        TEST_ASSERT(status == NtStatus::Success, "Class 245 succeeds with valid buffer");
+        TEST_ASSERT(rootDir.SiloId == 1, "Class 245 reports SiloId 1");
+        TEST_ASSERT(rootDir.RootDirectoryHandle == 0x1000CAFE, "Class 245 reports root directory handle 0x1000CAFE");
+        TEST_ASSERT(rootDir.DirectoryPathLength > 0, "Class 245 reports non-zero path length");
+        TEST_ASSERT(std::wcscmp(rootDir.DirectoryPath, L"\\Device\\HarddiskVolume1\\Silos\\Silo1") == 0, "Class 245 reports correct directory path");
+        TEST_ASSERT(rootDir.Flags == 0x00000007, "Class 245 reports flags 0x00000007");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION), "Return length matches structure size");
+
+        // 2. Class 246: SystemPhysicalMemoryBandwidthInformation
+        returnLength = 0;
+        status = NtQuerySystemInformation_Export(246, nullptr, 0, &returnLength);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 246 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION), "Class 246 returns required structure size");
+
+        SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION bandwidth{};
+        status = NtQuerySystemInformation_Export(246, &bandwidth, sizeof(bandwidth), &returnLength);
+        TEST_ASSERT(status == NtStatus::Success, "Class 246 succeeds with valid buffer");
+        TEST_ASSERT(bandwidth.NumaNode == 0, "Class 246 reports NUMA node 0");
+        TEST_ASSERT(bandwidth.ChannelCount == 8, "Class 246 reports 8 memory channels");
+        TEST_ASSERT(bandwidth.TotalReadBandwidthMBs == 204800, "Class 246 reports 204800 MB/s total read bandwidth");
+        TEST_ASSERT(bandwidth.TotalWriteBandwidthMBs == 102400, "Class 246 reports 102400 MB/s total write bandwidth");
+        TEST_ASSERT(bandwidth.PeakBandwidthMBs == 307200, "Class 246 reports 307200 MB/s peak bandwidth");
+        TEST_ASSERT(bandwidth.ThrottledChannels == 0, "Class 246 reports 0 throttled channels");
+        TEST_ASSERT(bandwidth.BandwidthEfficiencyPercent == 95, "Class 246 reports 95% bandwidth efficiency");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION), "Return length matches structure size");
+    }
+
+    // ========================================================================
+    // Pillar 3: NT Native Executive & Win32 Interlocked Single-Bit Logic Inversion Primitives
+    // ========================================================================
+    {
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Interlocked Single-Bit Logic Inversion Primitives...\n";
+
+        // 1. RtlInterlockedBitTestAndComplement (32-bit)
+        LONG bitfield32 = 0;
+        BOOLEAN oldBit = RtlInterlockedBitTestAndComplement(&bitfield32, 5);
+        TEST_ASSERT(oldBit == FALSE, "RtlInterlockedBitTestAndComplement returns FALSE when bit was initially 0");
+        TEST_ASSERT(bitfield32 == (1L << 5), "RtlInterlockedBitTestAndComplement toggles bit from 0 to 1");
+
+        oldBit = RtlInterlockedBitTestAndComplement(&bitfield32, 5);
+        TEST_ASSERT(oldBit == TRUE, "RtlInterlockedBitTestAndComplement returns TRUE when bit was 1");
+        TEST_ASSERT(bitfield32 == 0, "RtlInterlockedBitTestAndComplement toggles bit from 1 to 0");
+
+        // 2. RtlInterlockedBitTestAndComplement64 (64-bit)
+        LONG64 bitfield64 = 0;
+        oldBit = RtlInterlockedBitTestAndComplement64(&bitfield64, 48);
+        TEST_ASSERT(oldBit == FALSE, "RtlInterlockedBitTestAndComplement64 returns FALSE when bit was initially 0");
+        TEST_ASSERT(bitfield64 == (1LL << 48), "RtlInterlockedBitTestAndComplement64 toggles bit from 0 to 1");
+
+        oldBit = RtlInterlockedBitTestAndComplement64(&bitfield64, 48);
+        TEST_ASSERT(oldBit == TRUE, "RtlInterlockedBitTestAndComplement64 returns TRUE when bit was 1");
+        TEST_ASSERT(bitfield64 == 0, "RtlInterlockedBitTestAndComplement64 toggles bit from 1 to 0");
+
+        // 3. Win32 InterlockedBitTestAndComplement & InterlockedBitTestAndComplement64
+        LONG winBitfield32 = 0;
+        oldBit = InterlockedBitTestAndComplement(&winBitfield32, 7);
+        TEST_ASSERT(oldBit == FALSE && winBitfield32 == (1L << 7), "Win32 InterlockedBitTestAndComplement sets bit");
+        oldBit = InterlockedBitTestAndComplement(&winBitfield32, 7);
+        TEST_ASSERT(oldBit == TRUE && winBitfield32 == 0, "Win32 InterlockedBitTestAndComplement resets bit");
+
+        LONG64 winBitfield64 = 0;
+        oldBit = InterlockedBitTestAndComplement64(&winBitfield64, 52);
+        TEST_ASSERT(oldBit == FALSE && winBitfield64 == (1LL << 52), "Win32 InterlockedBitTestAndComplement64 sets bit");
+        oldBit = InterlockedBitTestAndComplement64(&winBitfield64, 52);
+        TEST_ASSERT(oldBit == TRUE && winBitfield64 == 0, "Win32 InterlockedBitTestAndComplement64 resets bit");
+
+        // 4. Test Loader Export Registration
+        InitializeNtdllSubsystemExports();
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitTestAndComplement") != nullptr, "ntdll.dll exports RtlInterlockedBitTestAndComplement");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitTestAndComplement64") != nullptr, "ntdll.dll exports RtlInterlockedBitTestAndComplement64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitTestAndComplement") != nullptr, "kernel32.dll exports InterlockedBitTestAndComplement");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitTestAndComplement64") != nullptr, "kernel32.dll exports InterlockedBitTestAndComplement64");
+    }
+
+    // ========================================================================
+    // Pillar 4: NIST KMAC Continuous Asynchronous Stream-Cipher / KDF Ratchet Mode
+    // ========================================================================
+    {
+        using namespace micant::crypto;
+        std::cout << "  [PILLAR 4] NIST KMAC Continuous Asynchronous Stream-Cipher / KDF Ratchet Mode Architecture...\n";
+
+        std::vector<uint8_t> masterSecret = {
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+            0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+            0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F
+        };
+        std::vector<uint8_t> contextEntropy = { 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA };
+
+        // 1. Direct KmacAsyncRatchet128
+        KmacAsyncRatchet128::Context async128Ctx{};
+        KmacAsyncRatchet128::init(async128Ctx, masterSecret, "TEST_ASYNC_128");
+        TEST_ASSERT(async128Ctx.inboundCounter == 0 && async128Ctx.outboundCounter == 0, "KmacAsyncRatchet128 initialized with zero counters");
+
+        std::vector<uint8_t> inboundKey1(32);
+        KmacAsyncRatchet128::ratchetInbound(async128Ctx, inboundKey1, contextEntropy);
+        TEST_ASSERT(async128Ctx.inboundCounter == 1, "Inbound ratchet advances inbound counter");
+        TEST_ASSERT(inboundKey1[0] != 0 || inboundKey1[1] != 0, "Inbound ratchet produces non-zero derived key");
+
+        std::vector<uint8_t> outboundKey1(32);
+        KmacAsyncRatchet128::ratchetOutbound(async128Ctx, outboundKey1, contextEntropy);
+        TEST_ASSERT(async128Ctx.outboundCounter == 1, "Outbound ratchet advances outbound counter");
+        TEST_ASSERT(outboundKey1[0] != 0 || outboundKey1[1] != 0, "Outbound ratchet produces non-zero derived key");
+        TEST_ASSERT(inboundKey1 != outboundKey1, "Inbound and outbound chains produce distinct independent keys");
+
+        std::vector<uint8_t> inboundKey2(32);
+        KmacAsyncRatchet128::ratchetInbound(async128Ctx, inboundKey2, contextEntropy);
+        TEST_ASSERT(inboundKey1 != inboundKey2, "Subsequent inbound ratchet produces forward secret key");
+
+        // Async Rebase
+        std::vector<uint8_t> rebaseEntropy = { 0xDE, 0xAD, 0xBE, 0xEF };
+        KmacAsyncRatchet128::asyncRebase(async128Ctx, rebaseEntropy);
+        std::vector<uint8_t> postRebaseKey(32);
+        KmacAsyncRatchet128::ratchetInbound(async128Ctx, postRebaseKey);
+        TEST_ASSERT(postRebaseKey != inboundKey2, "Post-rebase key diverges cryptographically");
+
+        // 2. Direct KmacAsyncRatchet256
+        KmacAsyncRatchet256::Context async256Ctx{};
+        KmacAsyncRatchet256::init(async256Ctx, masterSecret, "TEST_ASYNC_256");
+
+        std::vector<uint8_t> in256Key1(64);
+        KmacAsyncRatchet256::ratchetInbound(async256Ctx, in256Key1, contextEntropy);
+        TEST_ASSERT(async256Ctx.inboundCounter == 1, "KmacAsyncRatchet256 advances inbound counter");
+        TEST_ASSERT(in256Key1[0] != 0 || in256Key1[1] != 0, "KmacAsyncRatchet256 produces non-zero 64-byte key");
+
+        std::vector<uint8_t> out256Key1(64);
+        KmacAsyncRatchet256::ratchetOutbound(async256Ctx, out256Key1, contextEntropy);
+        TEST_ASSERT(in256Key1 != out256Key1, "256-bit inbound and outbound chains produce distinct keys");
+
+        // 3. BCrypt API Integration for KMAC128-ASYNCRATCHET
+        BCRYPT_ALG_HANDLE hKMAC128AR = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128AR, BCRYPT_KMAC128_ASYNCRATCHET_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128AR != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-ASYNCRATCHET");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128AR, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-ASYNCRATCHET default hash length is 32");
+        BCryptGetProperty(hKMAC128AR, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-ASYNCRATCHET rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128AR = nullptr;
+        BCryptCreateHash(hKMAC128AR, &hHash128AR, nullptr, 0, masterSecret.data(), static_cast<uint32_t>(masterSecret.size()), 0);
+        BCryptHashData(hHash128AR, contextEntropy.data(), static_cast<uint32_t>(contextEntropy.size()), 0);
+        uint8_t dKMAC128AR[32]{};
+        BCryptFinishHash(hHash128AR, dKMAC128AR, sizeof(dKMAC128AR), 0);
+        TEST_ASSERT(dKMAC128AR[0] != 0 || dKMAC128AR[1] != 0, "BCrypt KMAC128-ASYNCRATCHET generates valid non-zero digest");
+        BCryptDestroyHash(hHash128AR);
+        BCryptCloseAlgorithmProvider(hKMAC128AR, 0);
+
+        // 4. BCrypt API Integration for KMAC256-ASYNCRATCHET
+        BCRYPT_ALG_HANDLE hKMAC256AR = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256AR, BCRYPT_KMAC256_ASYNCRATCHET_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256AR != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-ASYNCRATCHET");
+
+        BCryptGetProperty(hKMAC256AR, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-ASYNCRATCHET default hash length is 64");
+        BCryptGetProperty(hKMAC256AR, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-ASYNCRATCHET rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256AR = nullptr;
+        BCryptCreateHash(hKMAC256AR, &hHash256AR, nullptr, 0, masterSecret.data(), static_cast<uint32_t>(masterSecret.size()), 0);
+        BCryptHashData(hHash256AR, contextEntropy.data(), static_cast<uint32_t>(contextEntropy.size()), 0);
+        uint8_t dKMAC256AR[64]{};
+        BCryptFinishHash(hHash256AR, dKMAC256AR, sizeof(dKMAC256AR), 0);
+        TEST_ASSERT(dKMAC256AR[0] != 0 || dKMAC256AR[1] != 0, "BCrypt KMAC256-ASYNCRATCHET generates valid non-zero digest");
+        BCryptDestroyHash(hHash256AR);
+        BCryptCloseAlgorithmProvider(hKMAC256AR, 0);
+    }
+
+    std::cout << "  Horizon 247 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device25, ID3D12GraphicsCommandList19 & Options 37 OK\n"
+              << "    Pillar 2: NT Native Classes 245 (SiloRootDirectory) & 246 (PhysicalMemoryBandwidth) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Single-Bit Logic Inversion Primitives OK\n"
+              << "    Pillar 4: NIST KMAC Continuous Asynchronous Stream-Cipher / KDF Ratchet Mode OK\n";
+
+    std::cout << "[TEST] Suite 463: Horizon 247 - Direct3D 12 Device25/CommandList19 & Options 37, NT SystemInfo 245/246, Interlocked Bit Inversion & NIST KMAC Async-Ratchet PASSED." << std::endl;
+}

@@ -1859,6 +1859,30 @@ struct SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION {
 };
 using PSYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION = SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION*;
 
+// Class 245: SystemSiloRootDirectoryInformation
+struct SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION {
+    ULONG    SiloId;
+    ULONG    Reserved;
+    uint64_t RootDirectoryHandle;
+    ULONG    DirectoryPathLength;
+    wchar_t  DirectoryPath[260];
+    ULONG    Flags;
+};
+using PSYSTEM_SILO_ROOT_DIRECTORY_INFORMATION = SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION*;
+
+// Class 246: SystemPhysicalMemoryBandwidthInformation
+struct SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION {
+    ULONG    NumaNode;
+    ULONG    ChannelCount;
+    ULONG64  TotalReadBandwidthMBs;
+    ULONG64  TotalWriteBandwidthMBs;
+    ULONG64  PeakBandwidthMBs;
+    ULONG    ThrottledChannels;
+    ULONG    BandwidthEfficiencyPercent;
+    ULONG    Reserved;
+};
+using PSYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION = SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3770,6 +3794,42 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION);
             return NtStatus::Success;
         }
+        case 245: { // SystemSiloRootDirectoryInformation (Class 245)
+            if (SystemInformationLength < sizeof(SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->SiloId = 1;
+            pInfo->Reserved = 0;
+            pInfo->RootDirectoryHandle = 0x1000CAFE;
+            const wchar_t path[] = L"\\Device\\HarddiskVolume1\\Silos\\Silo1";
+            pInfo->DirectoryPathLength = static_cast<ULONG>(std::wcslen(path));
+            std::wcsncpy(pInfo->DirectoryPath, path, 259);
+            pInfo->DirectoryPath[259] = L'\0';
+            pInfo->Flags = 0x00000007; // SILO_ROOT_MOUNTED | SILO_ROOT_ISOLATED | SILO_ROOT_PERSISTENT
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SILO_ROOT_DIRECTORY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 246: { // SystemPhysicalMemoryBandwidthInformation (Class 246)
+            if (SystemInformationLength < sizeof(SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->NumaNode = 0;
+            pInfo->ChannelCount = 8;
+            pInfo->TotalReadBandwidthMBs = 204800; // 200 GB/s
+            pInfo->TotalWriteBandwidthMBs = 102400; // 100 GB/s
+            pInfo->PeakBandwidthMBs = 307200; // 300 GB/s
+            pInfo->ThrottledChannels = 0;
+            pInfo->BandwidthEfficiencyPercent = 95;
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4795,6 +4855,24 @@ inline BOOLEAN WINAPI RtlInterlockedBitTestAndReset64(LONG64 volatile* Base, LON
     return (oldVal & mask) != 0 ? TRUE : FALSE;
 }
 
+inline BOOLEAN WINAPI RtlInterlockedBitTestAndComplement(LONG volatile* Base, LONG Bit) noexcept {
+    if (!Base) return FALSE;
+    Base += (Bit / 32);
+    LONG mask = 1L << (Bit % 32);
+    auto* atomicBase = reinterpret_cast<std::atomic<LONG> volatile*>(Base);
+    LONG oldVal = atomicBase->fetch_xor(mask, std::memory_order_seq_cst);
+    return (oldVal & mask) != 0 ? TRUE : FALSE;
+}
+
+inline BOOLEAN WINAPI RtlInterlockedBitTestAndComplement64(LONG64 volatile* Base, LONG64 Bit) noexcept {
+    if (!Base) return FALSE;
+    Base += (Bit / 64);
+    LONG64 mask = 1LL << (Bit % 64);
+    auto* atomicBase = reinterpret_cast<std::atomic<LONG64> volatile*>(Base);
+    LONG64 oldVal = atomicBase->fetch_xor(mask, std::memory_order_seq_cst);
+    return (oldVal & mask) != 0 ? TRUE : FALSE;
+}
+
 inline LONG WINAPI RtlInterlockedAnd(LONG volatile* Destination, LONG Value) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
@@ -5431,6 +5509,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndReset", reinterpret_cast<void*>(RtlInterlockedBitTestAndReset));
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndSet64", reinterpret_cast<void*>(RtlInterlockedBitTestAndSet64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndReset64", reinterpret_cast<void*>(RtlInterlockedBitTestAndReset64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndComplement", reinterpret_cast<void*>(RtlInterlockedBitTestAndComplement));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitTestAndComplement64", reinterpret_cast<void*>(RtlInterlockedBitTestAndComplement64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAnd", reinterpret_cast<void*>(RtlInterlockedAnd));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOr", reinterpret_cast<void*>(RtlInterlockedOr));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXor", reinterpret_cast<void*>(RtlInterlockedXor));
