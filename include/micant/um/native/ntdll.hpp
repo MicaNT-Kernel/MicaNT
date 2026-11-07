@@ -1908,6 +1908,32 @@ struct SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION {
 };
 using PSYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION = SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION*;
 
+// Class 249: SystemPagefilePowerEfficiencyInformation
+struct SYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION {
+    ULONG    PagefileIndex;
+    ULONG    Flags;                     // Active, CompressionEnabled, TieredStorage
+    ULONG64  TotalAllocatedBytes;
+    ULONG64  ActiveWrittenBytes;
+    ULONG64  PowerSavedJoules;          // Energy conservation metric
+    ULONG    CompressionRatioPercent;  // e.g. 250% (2.5x)
+    ULONG    IoPowerState;              // Autonomous device power state
+    ULONG    Reserved;
+};
+using PSYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION = SYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION*;
+
+// Class 250: SystemCpuCooperativeAcceleratorInformation
+struct SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION {
+    ULONG    ProcessorIndex;
+    ULONG    AcceleratorType;           // 1 = Matrix/AMX, 2 = NPU, 3 = Crypto, 4 = DSA/IAA
+    ULONG    MaxTileDimensions;         // e.g. 2048
+    ULONG    SupportedDataTypes;        // Bitmask (FP16, BF16, FP8, INT8, FP4, MXFP)
+    ULONG64  OperationsPerSecondPeak;   // Peak TOPS/FLOPS
+    ULONG    QueueAffinityMask;
+    ULONG    CooperativeDispatchTier;
+    ULONG    Reserved;
+};
+using PSYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION = SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3890,6 +3916,42 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION);
             return NtStatus::Success;
         }
+        case 249: { // SystemPagefilePowerEfficiencyInformation (Class 249)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PagefileIndex = 0;
+            pInfo->Flags = 0x00000007; // PAGEFILE_ACTIVE | PAGEFILE_COMPRESSION_ENABLED | PAGEFILE_TIERED_STORAGE
+            pInfo->TotalAllocatedBytes = 16ULL * 1024 * 1024 * 1024; // 16 GB
+            pInfo->ActiveWrittenBytes = 2ULL * 1024 * 1024 * 1024;   // 2 GB
+            pInfo->PowerSavedJoules = 450000ULL;                     // 450 kJ
+            pInfo->CompressionRatioPercent = 250;                    // 2.5x
+            pInfo->IoPowerState = 0;                                 // Autonomous Active/High Performance
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_POWER_EFFICIENCY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 250: { // SystemCpuCooperativeAcceleratorInformation (Class 250)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->ProcessorIndex = 0;
+            pInfo->AcceleratorType = 1;         // Matrix / AMX Core Accelerator
+            pInfo->MaxTileDimensions = 2048;    // 2048x2048
+            pInfo->SupportedDataTypes = 0x007F; // FP16, BF16, FP8, INT8, FP4, MXFP6, MXFP4
+            pInfo->OperationsPerSecondPeak = 1250000000000ULL; // 1.25 TFLOPS
+            pInfo->QueueAffinityMask = 0x0000003F;             // 6 Queues
+            pInfo->CooperativeDispatchTier = 6;                // Tier 6 Work Graph Acceleration
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -5045,6 +5107,24 @@ inline SHORT WINAPI RtlInterlockedDecrement16(SHORT volatile* Addend) noexcept {
     return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
 }
 
+inline SHORT WINAPI RtlInterlockedAnd16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->fetch_and(Value, std::memory_order_seq_cst);
+}
+
+inline SHORT WINAPI RtlInterlockedOr16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->fetch_or(Value, std::memory_order_seq_cst);
+}
+
+inline SHORT WINAPI RtlInterlockedXor16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
+}
+
 inline CHAR WINAPI RtlInterlockedCompareExchange8(CHAR volatile* Destination, CHAR Exchange, CHAR Comperand) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
@@ -5075,6 +5155,24 @@ inline CHAR WINAPI RtlInterlockedDecrement8(CHAR volatile* Addend) noexcept {
     if (!Addend) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Addend);
     return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
+}
+
+inline CHAR WINAPI RtlInterlockedAnd8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->fetch_and(Value, std::memory_order_seq_cst);
+}
+
+inline CHAR WINAPI RtlInterlockedOr8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->fetch_or(Value, std::memory_order_seq_cst);
+}
+
+inline CHAR WINAPI RtlInterlockedXor8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -5601,11 +5699,17 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd16", reinterpret_cast<void*>(RtlInterlockedExchangeAdd16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement16", reinterpret_cast<void*>(RtlInterlockedIncrement16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement16", reinterpret_cast<void*>(RtlInterlockedDecrement16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAnd16", reinterpret_cast<void*>(RtlInterlockedAnd16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedOr16", reinterpret_cast<void*>(RtlInterlockedOr16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXor16", reinterpret_cast<void*>(RtlInterlockedXor16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedCompareExchange8", reinterpret_cast<void*>(RtlInterlockedCompareExchange8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchange8", reinterpret_cast<void*>(RtlInterlockedExchange8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd8", reinterpret_cast<void*>(RtlInterlockedExchangeAdd8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement8", reinterpret_cast<void*>(RtlInterlockedIncrement8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement8", reinterpret_cast<void*>(RtlInterlockedDecrement8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAnd8", reinterpret_cast<void*>(RtlInterlockedAnd8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedOr8", reinterpret_cast<void*>(RtlInterlockedOr8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXor8", reinterpret_cast<void*>(RtlInterlockedXor8));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
