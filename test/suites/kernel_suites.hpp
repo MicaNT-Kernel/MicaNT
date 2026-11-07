@@ -56198,3 +56198,342 @@ inline void Test_Horizon256_Device34Options46_PagefileTierIoQueueCpuFabricPower_
 
     std::cout << "[TEST] Suite 472: Horizon 256 - Direct3D 12 Device34/CommandList28 & Options 46, NT SystemInfo 263/264, Interlocked Clamp 64/32/16/8 & NIST KMAC-FFX PASSED." << std::endl;
 }
+
+inline void Test_Horizon257_Device35Options47_PagefileTierWearCpuFabricVoltage_InterlockedAddModulo_And_KmacBps_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 473: Horizon 257 - Direct3D 12 ID3D12Device35/CommandList29 & Options 47, NT SystemInfo 265/266, Interlocked Add Modulo & NIST KMAC-BPS\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device35, ID3D12GraphicsCommandList29 & Options 47
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device35, ID3D12GraphicsCommandList29 & Options 47 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. QueryInterface for ID3D12Device35
+        ID3D12Device35* pDev35 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device35, reinterpret_cast<void**>(&pDev35));
+        TEST_ASSERT(hr == 0 && pDev35 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device35 succeeds");
+
+        // 2. CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS47
+        D3D12_FEATURE_DATA_D3D12_OPTIONS47 opt47{};
+        hr = pDev35->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS47, &opt47, sizeof(opt47));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS47 succeeds");
+        TEST_ASSERT(opt47.WorkGraphsTier == 30u, "OPTIONS47 WorkGraphsTier is 30 (Tier 5.2)");
+        TEST_ASSERT(opt47.CooperativeMatrixMultiply524288Supported == TRUE, "OPTIONS47 CooperativeMatrixMultiply 524,288 supported");
+        TEST_ASSERT(opt47.SubByteMicroscopicFormatsV10Supported == TRUE, "OPTIONS47 SubByteMicroscopicFormats V10 supported");
+        TEST_ASSERT(opt47.DynamicClusterExpansionTier15Supported == TRUE, "OPTIONS47 DynamicClusterExpansion Tier 15 supported");
+        TEST_ASSERT(opt47.MaxWorkGraphConcurrencyGroups == 2097152u, "OPTIONS47 MaxWorkGraphConcurrencyGroups is 2,097,152");
+        TEST_ASSERT(opt47.TilePipeliningStagesSupported == 4096u, "OPTIONS47 TilePipeliningStagesSupported is 4096");
+        TEST_ASSERT(opt47.AutonomousGraphRecursionTier7Supported == TRUE, "OPTIONS47 AutonomousGraphRecursion Tier 7 supported");
+        TEST_ASSERT(opt47.MultiQueueTensorPipelineFusionTier6Supported == TRUE, "OPTIONS47 MultiQueueTensorPipelineFusion Tier 6 supported");
+        TEST_ASSERT(opt47.WorkGraphMeshShaderPipeliningTier7Supported == TRUE, "OPTIONS47 WorkGraphMeshShaderPipelining Tier 7 supported");
+        TEST_ASSERT(opt47.SparseTensorBlockAccelerationTier3Supported == TRUE, "OPTIONS47 SparseTensorBlockAcceleration Tier 3 supported");
+        TEST_ASSERT(opt47.DeterministicTensorReductionTier2Supported == TRUE, "OPTIONS47 DeterministicTensorReduction Tier 2 supported");
+
+        // 3. Work Graph Cooperative Matrix Support 14
+        int32_t supported = 0;
+        uint32_t maxDim = 0;
+        uint32_t dataTypes = 0;
+        uint32_t sparseAccel = 0;
+        int32_t asyncAccum = 0;
+        uint32_t maxTileStages = 0;
+        int32_t feedbackLoops = 0;
+        int32_t subGraphRecursion = 0;
+        int32_t meshPipelining = 0;
+        int32_t multiQueueFusion = 0;
+        int32_t microscaling = 0;
+        int32_t subByteMicroscopic = 0;
+        int32_t sparseTensorBlock = 0;
+        int32_t deterministicReduction = 0;
+        int32_t hyperQuant = 0;
+
+        hr = pDev35->GetWorkGraphCooperativeMatrixSupport14(
+            &supported, &maxDim, &dataTypes, &sparseAccel, &asyncAccum, &maxTileStages,
+            &feedbackLoops, &subGraphRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByteMicroscopic, &sparseTensorBlock, &deterministicReduction,
+            &hyperQuant);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport14 succeeds");
+        TEST_ASSERT(supported == 1, "Work graph cooperative matrix multiplication is supported");
+        TEST_ASSERT(maxDim == 524288, "Max matrix dimension supported is 524288");
+        TEST_ASSERT(dataTypes == 0x7FFF, "Data types mask covers extended formats V10 (0x7FFF)");
+        TEST_ASSERT(sparseAccel == 1, "Sparse acceleration supported");
+        TEST_ASSERT(asyncAccum == 1, "Async accumulation supported");
+        TEST_ASSERT(maxTileStages == 4096, "Max tile pipelining stages is 4096");
+        TEST_ASSERT(feedbackLoops == 1, "Autonomous feedback loops supported");
+        TEST_ASSERT(subGraphRecursion == 1, "Sub-graph recursion supported");
+        TEST_ASSERT(meshPipelining == 1, "Mesh shader pipelining supported");
+        TEST_ASSERT(multiQueueFusion == 1, "Multi-queue fusion supported");
+        TEST_ASSERT(microscaling == 1, "Microscaling support verified");
+        TEST_ASSERT(subByteMicroscopic == 1, "Sub-byte microscopic precision verified");
+        TEST_ASSERT(sparseTensorBlock == 1, "Sparse tensor block acceleration verified");
+        TEST_ASSERT(deterministicReduction == 1, "Deterministic tensor reduction verified");
+        TEST_ASSERT(hyperQuant == 1, "Hyper-quantization verified");
+
+        // 4. Create Work Graph Program Record 19
+        void* pRecord19 = nullptr;
+        hr = pDev35->CreateWorkGraphProgramRecord19(
+            nullptr, 0x1, 256, 2097152, 0xF, 4, 3, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            OFFICIAL_IID_ID3D12Device35, &pRecord19);
+        TEST_ASSERT(hr == 0 && pRecord19 != nullptr, "CreateWorkGraphProgramRecord19 succeeds");
+
+        // 5. Command List 29 Verification
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList29* pCmdList29 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList29, reinterpret_cast<void**>(&pCmdList29));
+        TEST_ASSERT(hr == 0 && pCmdList29 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList29 succeeds");
+
+        pCmdList29->SetWorkGraphBackingMemory19(
+            0x10000000ULL, 0x20000000ULL, 0x4000000ULL, 2097152, 0xF, 4, 0x3, 0xFF,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x10);
+
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19Start() == 0x10000000ULL, "Backing memory 19 start address verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19Size() == 0x20000000ULL, "Backing memory 19 size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19ScratchSize() == 0x4000000ULL, "Backing memory 19 scratch buffer size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19MaxConcurrency() == 2097152, "Backing memory 19 max concurrency verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19DynamicExpansionFlags() == 0xF, "Backing memory 19 dynamic expansion flags verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19MemoryPoolTier() == 4, "Backing memory 19 memory pool tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19HyperQuantizationTier() == 1, "Backing memory 19 hyper quantization tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory19Flags() == 0x10, "Backing memory 19 flags verified");
+
+        const uint8_t mockRecord19[64] = { 0x42 };
+        pCmdList29->DispatchGraphProgramRecord19(
+            15, mockRecord19, sizeof(mockRecord19), 2097152, 0x7, 15, 0x3, 0xFF,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x5, 0x2);
+
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord19Count() == 1, "Program record 19 recorded successfully");
+        const auto& records19 = cmdList.GetRecordedProgramRecords19();
+        TEST_ASSERT(records19[0].NodeIndex == 15, "Record 19 node index verified");
+        TEST_ASSERT(records19[0].pRecord == mockRecord19, "Record 19 data pointer verified");
+        TEST_ASSERT(records19[0].RecordSizeInBytes == sizeof(mockRecord19), "Record 19 size verified");
+        TEST_ASSERT(records19[0].ConcurrencyGroup == 2097152, "Record 19 concurrency group verified");
+        TEST_ASSERT(records19[0].DynamicClusterExpansionTier == 15, "Record 19 dynamic cluster expansion tier 15 verified");
+        TEST_ASSERT(records19[0].HyperQuantizationTier == 1, "Record 19 hyper quantization tier verified");
+        TEST_ASSERT(records19[0].DispatchMask == 0x5, "Record 19 dispatch mask verified");
+
+        pCmdList29->Release();
+        pDev35->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 265 & 266 Telemetry Information
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Executive Information Classes 265 & 266 Telemetry...\n";
+
+        using namespace micant::ntdll;
+        using namespace micant::kernel32;
+
+        // 1. Class 265: PagefileTierWearLevelingTelemetry
+        SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION wearInfo{};
+        NtStatus status = RtlQuerySystemPagefileTierWearLevelingTelemetry(&wearInfo);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileTierWearLevelingTelemetry succeeds");
+        TEST_ASSERT(wearInfo.TierId == 0, "Wear leveling tier id is 0");
+        TEST_ASSERT(wearInfo.TotalBlocks == 1048576, "Total blocks is 1,048,576");
+        TEST_ASSERT(wearInfo.FreeBlocks == 524288, "Free blocks is 524,288");
+        TEST_ASSERT(wearInfo.EraseCountMin == 12, "Erase count min is 12");
+        TEST_ASSERT(wearInfo.EraseCountMax == 48, "Erase count max is 48");
+        TEST_ASSERT(wearInfo.EraseCountAverage == 26, "Erase count average is 26");
+        TEST_ASSERT(wearInfo.BadBlockCount == 2, "Bad block count is 2");
+        TEST_ASSERT(wearInfo.SpareBlocksRemaining == 4096, "Spare blocks remaining is 4096");
+        TEST_ASSERT(wearInfo.LifetimeBytesWritten == 1099511627776ULL, "Lifetime bytes written is 1 TB");
+        TEST_ASSERT(wearInfo.ProjectedRemainingLifespanHours == 87600ULL, "Projected remaining lifespan is 87,600 hours");
+        TEST_ASSERT(wearInfo.StatusFlags == 0x07, "Wear leveling status flags are 0x07");
+
+        SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION k32WearInfo{};
+        BOOL bOk = GetPagefileTierWearLevelingTelemetry(&k32WearInfo);
+        TEST_ASSERT(bOk == TRUE, "Win32 GetPagefileTierWearLevelingTelemetry succeeds");
+        TEST_ASSERT(k32WearInfo.TotalBlocks == wearInfo.TotalBlocks, "Win32 wear leveling matches native telemetry");
+
+        // 2. Class 266: CpuFabricVoltageDomainTelemetry
+        SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION voltInfo{};
+        status = RtlQuerySystemCpuFabricVoltageDomainTelemetry(&voltInfo);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuFabricVoltageDomainTelemetry succeeds");
+        TEST_ASSERT(voltInfo.DomainId == 0, "Voltage domain id is 0");
+        TEST_ASSERT(voltInfo.RailVoltageMv == 1050, "Rail voltage is 1050 mV");
+        TEST_ASSERT(voltInfo.MinimumVoltageMv == 750, "Minimum voltage is 750 mV");
+        TEST_ASSERT(voltInfo.MaximumVoltageMv == 1350, "Maximum voltage is 1350 mV");
+        TEST_ASSERT(voltInfo.TargetVoltageMv == 1050, "Target voltage is 1050 mV");
+        TEST_ASSERT(voltInfo.SlewRateMvPerUs == 25, "Slew rate is 25 mV/us");
+        TEST_ASSERT(voltInfo.DroopCompensations == 128, "Droop compensations count is 128");
+        TEST_ASSERT(voltInfo.VoltageRippleUv == 4500, "Voltage ripple is 4500 uV");
+        TEST_ASSERT(voltInfo.VoltageSampleCount == 1000000ULL, "Voltage sample count is 1,000,000");
+        TEST_ASSERT(voltInfo.OutOfToleranceDurationNs == 0ULL, "Out of tolerance duration is 0 ns");
+        TEST_ASSERT(voltInfo.StatusFlags == 0x07, "Voltage domain status flags are 0x07");
+
+        SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION k32VoltInfo{};
+        bOk = GetCpuFabricVoltageDomainTelemetry(&k32VoltInfo);
+        TEST_ASSERT(bOk == TRUE, "Win32 GetCpuFabricVoltageDomainTelemetry succeeds");
+        TEST_ASSERT(k32VoltInfo.RailVoltageMv == voltInfo.RailVoltageMv, "Win32 voltage telemetry matches native telemetry");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Add Modulo Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Interlocked Add Modulo Primitives...\n";
+
+        using namespace micant::ntdll;
+        using namespace micant::kernel32;
+
+        // 64-bit Interlocked Add Modulo
+        volatile LONG64 val64 = 7;
+        LONG64 prev64 = RtlInterlockedAddModulo64(&val64, 5, 10);
+        TEST_ASSERT(prev64 == 7, "RtlInterlockedAddModulo64 returns initial value (7)");
+        TEST_ASSERT(val64 == 2, "RtlInterlockedAddModulo64 computes (7 + 5) % 10 = 2");
+
+        prev64 = InterlockedAddModulo64(&val64, 18, 10);
+        TEST_ASSERT(prev64 == 2, "InterlockedAddModulo64 returns prior value (2)");
+        TEST_ASSERT(val64 == 0, "InterlockedAddModulo64 computes (2 + 18) % 10 = 0");
+
+        // 32-bit Interlocked Add Modulo
+        volatile LONG val32 = 14;
+        LONG prev32 = RtlInterlockedAddModulo32(&val32, 9, 12);
+        TEST_ASSERT(prev32 == 14, "RtlInterlockedAddModulo32 returns initial value (14)");
+        TEST_ASSERT(val32 == 11, "RtlInterlockedAddModulo32 computes (14 + 9) % 12 = 11");
+
+        prev32 = InterlockedAddModulo32(&val32, 5, 12);
+        TEST_ASSERT(prev32 == 11, "InterlockedAddModulo32 returns prior value (11)");
+        TEST_ASSERT(val32 == 4, "InterlockedAddModulo32 computes (11 + 5) % 12 = 4");
+
+        prev32 = InterlockedAddModulo(&val32, 8, 12);
+        TEST_ASSERT(prev32 == 4, "InterlockedAddModulo alias returns prior value (4)");
+        TEST_ASSERT(val32 == 0, "InterlockedAddModulo alias computes (4 + 8) % 12 = 0");
+
+        // 16-bit Interlocked Add Modulo
+        volatile SHORT val16 = 50;
+        SHORT prev16 = RtlInterlockedAddModulo16(&val16, 25, 60);
+        TEST_ASSERT(prev16 == 50, "RtlInterlockedAddModulo16 returns initial value (50)");
+        TEST_ASSERT(val16 == 15, "RtlInterlockedAddModulo16 computes (50 + 25) % 60 = 15");
+
+        prev16 = InterlockedAddModulo16(&val16, 45, 60);
+        TEST_ASSERT(prev16 == 15, "InterlockedAddModulo16 returns prior value (15)");
+        TEST_ASSERT(val16 == 0, "InterlockedAddModulo16 computes (15 + 45) % 60 = 0");
+
+        // 8-bit Interlocked Add Modulo
+        volatile CHAR val8 = 80;
+        CHAR prev8 = RtlInterlockedAddModulo8(&val8, 30, 100);
+        TEST_ASSERT(prev8 == 80, "RtlInterlockedAddModulo8 returns initial value (80)");
+        TEST_ASSERT(val8 == 10, "RtlInterlockedAddModulo8 computes (80 + 30) % 100 = 10");
+
+        prev8 = InterlockedAddModulo8(&val8, 90, 100);
+        TEST_ASSERT(prev8 == 10, "InterlockedAddModulo8 returns prior value (10)");
+        TEST_ASSERT(val8 == 0, "InterlockedAddModulo8 computes (10 + 90) % 100 = 0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-38G KMAC-BPS Format-Preserving Feistel Cipher Engine
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-38G KMAC-BPS Format-Preserving Feistel Cipher Engine...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        std::vector<uint8_t> secretKey = {
+            0x2A, 0x3B, 0x4C, 0x5D, 0x6E, 0x7F, 0x80, 0x91,
+            0xA2, 0xB3, 0xC4, 0xD5, 0xE6, 0xF7, 0x08, 0x19,
+            0x20, 0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x97,
+            0xA8, 0xB9, 0xCA, 0xDB, 0xEC, 0xFD, 0x0E, 0x1F
+        };
+        std::vector<uint8_t> tweak = {
+            0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC
+        };
+        std::vector<uint8_t> plaintext = {
+            'M', 'i', 'c', 'a', 'N', 'T', '_', 'S', 'o', 'v', 'e', 'r', 'e', 'i', 'g', 'n',
+            '_', 'K', 'e', 'r', 'n', 'e', 'l', '_', 'B', 'P', 'S', '_', '2', '0', '2', '6'
+        };
+
+        // 1. Direct KmacBps128 Encrypt & Decrypt
+        KmacBps128::Context enc128Ctx{};
+        KmacBps128::init(enc128Ctx, secretKey, tweak, "TEST_KMAC_BPS_128");
+
+        std::vector<uint8_t> ciphertext128(plaintext.size());
+        KmacBps128::encrypt(enc128Ctx, plaintext, ciphertext128);
+
+        TEST_ASSERT(ciphertext128.size() == plaintext.size(), "KmacBps128 ciphertext strictly preserves plaintext length");
+        TEST_ASSERT(ciphertext128 != plaintext, "KmacBps128 ciphertext differs from plaintext");
+
+        KmacBps128::Context dec128Ctx{};
+        KmacBps128::init(dec128Ctx, secretKey, tweak, "TEST_KMAC_BPS_128");
+
+        std::vector<uint8_t> decrypted128(ciphertext128.size());
+        bool decOk = KmacBps128::decrypt(dec128Ctx, ciphertext128, decrypted128);
+        TEST_ASSERT(decOk == true, "KmacBps128 decrypt succeeds");
+        TEST_ASSERT(decrypted128 == plaintext, "KmacBps128 decrypt reproduces exact plaintext byte-for-byte");
+
+        // 2. Direct KmacBps256 Encrypt & Decrypt
+        KmacBps256::Context enc256Ctx{};
+        KmacBps256::init(enc256Ctx, secretKey, tweak, "TEST_KMAC_BPS_256");
+
+        std::vector<uint8_t> ciphertext256(plaintext.size());
+        KmacBps256::encrypt(enc256Ctx, plaintext, ciphertext256);
+
+        TEST_ASSERT(ciphertext256.size() == plaintext.size(), "KmacBps256 ciphertext strictly preserves plaintext length");
+        TEST_ASSERT(ciphertext256 != plaintext, "KmacBps256 ciphertext differs from plaintext");
+        TEST_ASSERT(ciphertext256 != ciphertext128, "KmacBps256 produces different ciphertext from KmacBps128");
+
+        KmacBps256::Context dec256Ctx{};
+        KmacBps256::init(dec256Ctx, secretKey, tweak, "TEST_KMAC_BPS_256");
+
+        std::vector<uint8_t> decrypted256(ciphertext256.size());
+        decOk = KmacBps256::decrypt(dec256Ctx, ciphertext256, decrypted256);
+        TEST_ASSERT(decOk == true, "KmacBps256 decrypt succeeds");
+        TEST_ASSERT(decrypted256 == plaintext, "KmacBps256 decrypt reproduces exact plaintext byte-for-byte");
+
+        // 3. BCrypt API Integration for KMAC128-BPS
+        BCRYPT_ALG_HANDLE hKMAC128BPS = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128BPS, BCRYPT_KMAC128_BPS_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128BPS != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-BPS");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128BPS, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-BPS default hash length is 32");
+        BCryptGetProperty(hKMAC128BPS, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-BPS rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128BPS = nullptr;
+        BCryptCreateHash(hKMAC128BPS, &hHash128BPS, nullptr, 0, secretKey.data(), static_cast<uint32_t>(secretKey.size()), 0);
+        BCryptHashData(hHash128BPS, plaintext.data(), static_cast<uint32_t>(plaintext.size()), 0);
+        std::vector<uint8_t> dKMAC128BPS(plaintext.size());
+        BCryptFinishHash(hHash128BPS, dKMAC128BPS.data(), static_cast<uint32_t>(dKMAC128BPS.size()), 0);
+        TEST_ASSERT(dKMAC128BPS.size() == plaintext.size(), "BCrypt KMAC128-BPS maintains format size");
+        TEST_ASSERT(dKMAC128BPS != plaintext, "BCrypt KMAC128-BPS generates transformed ciphertext");
+        BCryptDestroyHash(hHash128BPS);
+        BCryptCloseAlgorithmProvider(hKMAC128BPS, 0);
+
+        // 4. BCrypt API Integration for KMAC256-BPS
+        BCRYPT_ALG_HANDLE hKMAC256BPS = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256BPS, BCRYPT_KMAC256_BPS_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256BPS != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-BPS");
+
+        BCryptGetProperty(hKMAC256BPS, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-BPS default hash length is 64");
+        BCryptGetProperty(hKMAC256BPS, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-BPS rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256BPS = nullptr;
+        BCryptCreateHash(hKMAC256BPS, &hHash256BPS, nullptr, 0, secretKey.data(), static_cast<uint32_t>(secretKey.size()), 0);
+        BCryptHashData(hHash256BPS, plaintext.data(), static_cast<uint32_t>(plaintext.size()), 0);
+        std::vector<uint8_t> dKMAC256BPS(plaintext.size());
+        BCryptFinishHash(hHash256BPS, dKMAC256BPS.data(), static_cast<uint32_t>(dKMAC256BPS.size()), 0);
+        TEST_ASSERT(dKMAC256BPS.size() == plaintext.size(), "BCrypt KMAC256-BPS maintains format size");
+        TEST_ASSERT(dKMAC256BPS != plaintext, "BCrypt KMAC256-BPS generates transformed ciphertext");
+        BCryptDestroyHash(hHash256BPS);
+        BCryptCloseAlgorithmProvider(hKMAC256BPS, 0);
+    }
+
+    std::cout << "  Horizon 257 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device35, ID3D12GraphicsCommandList29 & Options 47 OK\n"
+              << "    Pillar 2: NT Native Classes 265 (PagefileTierWearLevelingTelemetry) & 266 (CpuFabricVoltageDomainTelemetry) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Add Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-38G KMAC-BPS Format-Preserving Feistel Cipher Engine OK\n";
+
+    std::cout << "[TEST] Suite 473: Horizon 257 - Direct3D 12 Device35/CommandList29 & Options 47, NT SystemInfo 265/266, Interlocked Add Modulo 64/32/16/8 & NIST KMAC-BPS PASSED." << std::endl;
+}

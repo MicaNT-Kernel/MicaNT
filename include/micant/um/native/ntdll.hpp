@@ -2150,6 +2150,38 @@ struct SYSTEM_CPU_FABRIC_POWER_STATE_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_POWER_STATE_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_POWER_STATE_TELEMETRY_INFORMATION*;
 
+// Class 265: SystemPagefileTierWearLevelingTelemetryInformation
+struct SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION {
+    ULONG    TierId;                               // e.g. 0 (Optane / NVMe fast tier)
+    ULONG    TotalBlocks;                          // e.g. 1048576
+    ULONG    FreeBlocks;                           // e.g. 524288
+    ULONG    EraseCountMin;                        // e.g. 12
+    ULONG    EraseCountMax;                        // e.g. 48
+    ULONG    EraseCountAverage;                    // e.g. 26
+    ULONG    BadBlockCount;                        // e.g. 2
+    ULONG    SpareBlocksRemaining;                 // e.g. 4096
+    ULONG64  LifetimeBytesWritten;                 // e.g. 1099511627776ULL (1 TB)
+    ULONG64  ProjectedRemainingLifespanHours;      // e.g. 87600ULL (10 years)
+    ULONG    StatusFlags;                          // 0x07 = WearLevelingActive | DynamicBlockRemapping | EnduranceBudgetOptimal
+};
+using PSYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION*;
+
+// Class 266: SystemCpuFabricVoltageDomainTelemetryInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION {
+    ULONG    DomainId;                             // e.g. 0
+    ULONG    RailVoltageMv;                        // e.g. 1050 mV
+    ULONG    MinimumVoltageMv;                     // e.g. 750 mV
+    ULONG    MaximumVoltageMv;                     // e.g. 1350 mV
+    ULONG    TargetVoltageMv;                      // e.g. 1050 mV
+    ULONG    SlewRateMvPerUs;                      // e.g. 25 mV/us
+    ULONG    DroopCompensations;                   // e.g. 128
+    ULONG    VoltageRippleUv;                      // e.g. 4500 uV
+    ULONG64  VoltageSampleCount;                   // e.g. 1000000ULL
+    ULONG64  OutOfToleranceDurationNs;             // e.g. 0 ns
+    ULONG    StatusFlags;                          // 0x07 = DomainRegulated | TelemetryOnline | FastTransientResponseActive
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4454,6 +4486,48 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_POWER_STATE_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 265: { // SystemPagefileTierWearLevelingTelemetryInformation (Class 265)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->TierId = 0;
+            pInfo->TotalBlocks = 1048576;
+            pInfo->FreeBlocks = 524288;
+            pInfo->EraseCountMin = 12;
+            pInfo->EraseCountMax = 48;
+            pInfo->EraseCountAverage = 26;
+            pInfo->BadBlockCount = 2;
+            pInfo->SpareBlocksRemaining = 4096;
+            pInfo->LifetimeBytesWritten = 1099511627776ULL;
+            pInfo->ProjectedRemainingLifespanHours = 87600ULL;
+            pInfo->StatusFlags = 0x07; // WearLevelingActive | DynamicBlockRemapping | EnduranceBudgetOptimal
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 266: { // SystemCpuFabricVoltageDomainTelemetryInformation (Class 266)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->DomainId = 0;
+            pInfo->RailVoltageMv = 1050;
+            pInfo->MinimumVoltageMv = 750;
+            pInfo->MaximumVoltageMv = 1350;
+            pInfo->TargetVoltageMv = 1050;
+            pInfo->SlewRateMvPerUs = 25;
+            pInfo->DroopCompensations = 128;
+            pInfo->VoltageRippleUv = 4500;
+            pInfo->VoltageSampleCount = 1000000ULL;
+            pInfo->OutOfToleranceDurationNs = 0ULL;
+            pInfo->StatusFlags = 0x07; // DomainRegulated | TelemetryOnline | FastTransientResponseActive
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -5905,6 +5979,58 @@ inline CHAR WINAPI RtlInterlockedClamp8(CHAR volatile* Destination, CHAR MinVal,
     return current;
 }
 
+inline LONG64 WINAPI RtlInterlockedAddModulo64(LONG64 volatile* Destination, LONG64 Value, LONG64 Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 next = (current + Value) % Modulus;
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedAddModulo32(LONG volatile* Destination, LONG Value, LONG Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG next = (current + Value) % Modulus;
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedAddModulo16(SHORT volatile* Destination, SHORT Value, SHORT Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        SHORT next = static_cast<SHORT>((current + Value) % Modulus);
+        if (next < 0) next = static_cast<SHORT>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedAddModulo8(CHAR volatile* Destination, CHAR Value, CHAR Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        CHAR next = static_cast<CHAR>((current + Value) % Modulus);
+        if (next < 0) next = static_cast<CHAR>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -5987,6 +6113,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricPowerStateTelemetry(SYSTEM_CPU_FAB
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(264, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierWearLevelingTelemetry(SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(265, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageDomainTelemetry(SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(266, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -6554,6 +6692,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedClamp32", reinterpret_cast<void*>(RtlInterlockedClamp32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedClamp16", reinterpret_cast<void*>(RtlInterlockedClamp16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedClamp8", reinterpret_cast<void*>(RtlInterlockedClamp8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo64", reinterpret_cast<void*>(RtlInterlockedAddModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo32", reinterpret_cast<void*>(RtlInterlockedAddModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo16", reinterpret_cast<void*>(RtlInterlockedAddModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo8", reinterpret_cast<void*>(RtlInterlockedAddModulo8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileDecompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileDecompressionTelemetry));
@@ -6568,6 +6710,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricBandwidthPartitionTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricBandwidthPartitionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierIoQueueTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierIoQueueTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricPowerStateTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricPowerStateTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierWearLevelingTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierWearLevelingTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageDomainTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageDomainTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

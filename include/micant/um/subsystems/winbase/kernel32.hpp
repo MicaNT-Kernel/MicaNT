@@ -9492,6 +9492,26 @@ inline CHAR WINAPI InterlockedClamp8(CHAR volatile* Destination, CHAR MinVal, CH
     return ntdll::RtlInterlockedClamp8(Destination, MinVal, MaxVal);
 }
 
+inline LONG64 WINAPI InterlockedAddModulo64(LONG64 volatile* Destination, LONG64 Value, LONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedAddModulo64(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedAddModulo(LONG volatile* Destination, LONG Value, LONG Modulus) noexcept {
+    return ntdll::RtlInterlockedAddModulo32(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedAddModulo32(LONG volatile* Destination, LONG Value, LONG Modulus) noexcept {
+    return ntdll::RtlInterlockedAddModulo32(Destination, Value, Modulus);
+}
+
+inline SHORT WINAPI InterlockedAddModulo16(SHORT volatile* Destination, SHORT Value, SHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedAddModulo16(Destination, Value, Modulus);
+}
+
+inline CHAR WINAPI InterlockedAddModulo8(CHAR volatile* Destination, CHAR Value, CHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedAddModulo8(Destination, Value, Modulus);
+}
+
 inline BOOL WINAPI GetPagefileCompressionTelemetry(ntdll::SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemPagefileCompressionTelemetry(Info)) ? TRUE : FALSE;
@@ -9560,6 +9580,16 @@ inline BOOL WINAPI GetPagefileTierIoQueueTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_I
 inline BOOL WINAPI GetCpuFabricPowerStateTelemetry(ntdll::SYSTEM_CPU_FABRIC_POWER_STATE_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricPowerStateTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileTierWearLevelingTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_WEAR_LEVELING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierWearLevelingTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltageDomainTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageDomainTelemetry(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -11777,6 +11807,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedClamp32", reinterpret_cast<void*>(InterlockedClamp32));
     ldr.registerExport("kernel32.dll", "InterlockedClamp16", reinterpret_cast<void*>(InterlockedClamp16));
     ldr.registerExport("kernel32.dll", "InterlockedClamp8", reinterpret_cast<void*>(InterlockedClamp8));
+    ldr.registerExport("kernel32.dll", "InterlockedAddModulo64", reinterpret_cast<void*>(InterlockedAddModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedAddModulo", reinterpret_cast<void*>(InterlockedAddModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedAddModulo32", reinterpret_cast<void*>(InterlockedAddModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedAddModulo16", reinterpret_cast<void*>(InterlockedAddModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedAddModulo8", reinterpret_cast<void*>(InterlockedAddModulo8));
     ldr.registerExport("kernel32.dll", "GetPagefileCompressionTelemetry", reinterpret_cast<void*>(GetPagefileCompressionTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuCooperativeFabricInformation", reinterpret_cast<void*>(GetCpuCooperativeFabricInformation));
     ldr.registerExport("kernel32.dll", "GetPagefileDecompressionTelemetry", reinterpret_cast<void*>(GetPagefileDecompressionTelemetry));
@@ -11791,6 +11826,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuFabricBandwidthPartitionTelemetry", reinterpret_cast<void*>(GetCpuFabricBandwidthPartitionTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileTierIoQueueTelemetry", reinterpret_cast<void*>(GetPagefileTierIoQueueTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricPowerStateTelemetry", reinterpret_cast<void*>(GetCpuFabricPowerStateTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierWearLevelingTelemetry", reinterpret_cast<void*>(GetPagefileTierWearLevelingTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageDomainTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageDomainTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
