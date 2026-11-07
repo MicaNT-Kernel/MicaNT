@@ -2245,6 +2245,41 @@ struct SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION*;
 
+// Class 271: SystemPagefileTierDynamicDrainInformation
+struct SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // e.g. 0
+    ULONG64  DrainedPagesTotal;                    // e.g. 32768ULL
+    ULONG64  DrainThroughputBytesPerSec;           // e.g. 4294967296ULL (~4 GB/s)
+    ULONG    TargetTierIndex;                      // e.g. 2
+    ULONG    SourceTierIndex;                      // e.g. 0
+    ULONG    ActiveDrainWorkers;                   // e.g. 8
+    ULONG    PendingDrainQueueDepth;               // e.g. 128
+    ULONG    EmergencyDrainTriggerCount;           // e.g. 3
+    ULONG    DrainCompletionLatencyUs;             // e.g. 450 (450 µs)
+    ULONG64  ReclaimedPhysicalMemoryBytes;         // e.g. 134217728ULL (128 MB)
+    ULONG    DynamicDrainFlags;                    // e.g. 0x07 (DrainActive | NonBlocking | LowImpact)
+    ULONG    Pad;                                  // 0
+};
+using PSYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION = SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION*;
+
+// Class 272: SystemCpuFabricVoltageDroopPredictiveInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // e.g. 0
+    ULONG64  PredictiveDroopEventsTotal;           // e.g. 180ULL
+    ULONG64  MitigatedDroopEventsTotal;            // e.g. 176ULL
+    ULONG    PredictedDroopMagnitudeMicrovolts;    // e.g. 45000 (45 mV)
+    ULONG    TransientCurrentSlewRateMAperNs;      // e.g. 1250 (1.25 A/ns)
+    ULONG    CompensationCapacitanceBoostPf;       // e.g. 3200 (3.2 nF)
+    ULONG    PhaseAdvanceLatencyPicoseconds;       // e.g. 250 (250 ps)
+    ULONG    VoltageStabilityMarginMillivolts;     // e.g. 85 (85 mV)
+    ULONG    FabricPowerSupplyRailIndex;           // e.g. 1
+    ULONG    DroopMitigationActionFlags;           // e.g. 0x0F (PredictiveClockStretch | CapBoost | ActivePhaseInject | VddRamp)
+    ULONG    VoltageDomainStatus;                  // e.g. 0x01 (NominalRegulated)
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4674,6 +4709,50 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 271: { // SystemPagefileTierDynamicDrainInformation (Class 271)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->DrainedPagesTotal = 32768ULL;
+            pInfo->DrainThroughputBytesPerSec = 4294967296ULL;
+            pInfo->TargetTierIndex = 2;
+            pInfo->SourceTierIndex = 0;
+            pInfo->ActiveDrainWorkers = 8;
+            pInfo->PendingDrainQueueDepth = 128;
+            pInfo->EmergencyDrainTriggerCount = 3;
+            pInfo->DrainCompletionLatencyUs = 450;
+            pInfo->ReclaimedPhysicalMemoryBytes = 134217728ULL;
+            pInfo->DynamicDrainFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 272: { // SystemCpuFabricVoltageDroopPredictiveInformation (Class 272)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PredictiveDroopEventsTotal = 180ULL;
+            pInfo->MitigatedDroopEventsTotal = 176ULL;
+            pInfo->PredictedDroopMagnitudeMicrovolts = 45000;
+            pInfo->TransientCurrentSlewRateMAperNs = 1250;
+            pInfo->CompensationCapacitanceBoostPf = 3200;
+            pInfo->PhaseAdvanceLatencyPicoseconds = 250;
+            pInfo->VoltageStabilityMarginMillivolts = 85;
+            pInfo->FabricPowerSupplyRailIndex = 1;
+            pInfo->DroopMitigationActionFlags = 0x0F;
+            pInfo->VoltageDomainStatus = 0x01;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -6341,6 +6420,88 @@ inline UCHAR WINAPI RtlInterlockedRotateLeft8(UCHAR volatile* Destination, ULONG
     }
 }
 
+inline constexpr uint8_t RtlpBitReverse8(uint8_t b) noexcept {
+    b = static_cast<uint8_t>(((b & 0xF0) >> 4) | ((b & 0x0F) << 4));
+    b = static_cast<uint8_t>(((b & 0xCC) >> 2) | ((b & 0x33) << 2));
+    b = static_cast<uint8_t>(((b & 0xAA) >> 1) | ((b & 0x55) << 1));
+    return b;
+}
+
+inline constexpr uint16_t RtlpBitReverse16(uint16_t w) noexcept {
+    w = static_cast<uint16_t>(((w & 0xFF00) >> 8) | ((w & 0x00FF) << 8));
+    w = static_cast<uint16_t>(((w & 0xF0F0) >> 4) | ((w & 0x0F0F) << 4));
+    w = static_cast<uint16_t>(((w & 0xCCCC) >> 2) | ((w & 0x3333) << 2));
+    w = static_cast<uint16_t>(((w & 0xAAAA) >> 1) | ((w & 0x5555) << 1));
+    return w;
+}
+
+inline constexpr uint32_t RtlpBitReverse32(uint32_t x) noexcept {
+    x = ((x & 0xFFFF0000u) >> 16) | ((x & 0x0000FFFFu) << 16);
+    x = ((x & 0xFF00FF00u) >> 8)  | ((x & 0x00FF00FFu) << 8);
+    x = ((x & 0xF0F0F0F0u) >> 4)  | ((x & 0x0F0F0F0Fu) << 4);
+    x = ((x & 0xCCCCCCCCu) >> 2)  | ((x & 0x33333333u) << 2);
+    x = ((x & 0xAAAAAAAAu) >> 1)  | ((x & 0x55555555u) << 1);
+    return x;
+}
+
+inline constexpr uint64_t RtlpBitReverse64(uint64_t x) noexcept {
+    x = ((x & 0xFFFFFFFF00000000ULL) >> 32) | ((x & 0x00000000FFFFFFFFULL) << 32);
+    x = ((x & 0xFFFF0000FFFF0000ULL) >> 16) | ((x & 0x0000FFFF0000FFFFULL) << 16);
+    x = ((x & 0xFF00FF00FF00FF00ULL) >> 8)  | ((x & 0x00FF00FF00FF00FFULL) << 8);
+    x = ((x & 0xF0F0F0F0F0F0F0F0ULL) >> 4)  | ((x & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    x = ((x & 0xCCCCCCCCCCCCCCCCULL) >> 2)  | ((x & 0x3333333333333333ULL) << 2);
+    x = ((x & 0xAAAAAAAAAAAAAAAAULL) >> 1)  | ((x & 0x5555555555555555ULL) << 1);
+    return x;
+}
+
+inline ULONG64 WINAPI RtlInterlockedBitReverse64(ULONG64 volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG64 next = RtlpBitReverse64(current);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedBitReverse32(ULONG volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG next = RtlpBitReverse32(current);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedBitReverse16(USHORT volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        USHORT next = RtlpBitReverse16(current);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedBitReverse8(UCHAR volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        UCHAR next = RtlpBitReverse8(current);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -6459,6 +6620,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricThermalThrottleTelemetry(SYSTEM_CP
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(270, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierDynamicDrain(SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(271, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageDroopPredictive(SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(272, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -7062,6 +7235,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricClockStretchingTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricClockStretchingTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierMigrationQos", reinterpret_cast<void*>(RtlQuerySystemPagefileTierMigrationQos));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricThermalThrottleTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricThermalThrottleTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitReverse64", reinterpret_cast<void*>(RtlInterlockedBitReverse64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitReverse32", reinterpret_cast<void*>(RtlInterlockedBitReverse32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitReverse16", reinterpret_cast<void*>(RtlInterlockedBitReverse16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitReverse8", reinterpret_cast<void*>(RtlInterlockedBitReverse8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierDynamicDrain", reinterpret_cast<void*>(RtlQuerySystemPagefileTierDynamicDrain));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageDroopPredictive", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageDroopPredictive));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

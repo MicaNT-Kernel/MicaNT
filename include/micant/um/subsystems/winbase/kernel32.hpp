@@ -9672,6 +9672,36 @@ inline BOOL WINAPI GetCpuFabricThermalThrottleTelemetry(ntdll::SYSTEM_CPU_FABRIC
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricThermalThrottleTelemetry(Info)) ? TRUE : FALSE;
 }
 
+inline ULONG64 WINAPI InterlockedBitReverse64(ULONG64 volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedBitReverse64(Destination);
+}
+
+inline ULONG WINAPI InterlockedBitReverse(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedBitReverse32(Destination);
+}
+
+inline ULONG WINAPI InterlockedBitReverse32(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedBitReverse32(Destination);
+}
+
+inline USHORT WINAPI InterlockedBitReverse16(USHORT volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedBitReverse16(Destination);
+}
+
+inline UCHAR WINAPI InterlockedBitReverse8(UCHAR volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedBitReverse8(Destination);
+}
+
+inline BOOL WINAPI GetPagefileTierDynamicDrainTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_DYNAMIC_DRAIN_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierDynamicDrain(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltageDroopPredictiveTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageDroopPredictive(Info)) ? TRUE : FALSE;
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11927,6 +11957,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuFabricClockStretchingTelemetry", reinterpret_cast<void*>(GetCpuFabricClockStretchingTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileTierMigrationQos", reinterpret_cast<void*>(GetPagefileTierMigrationQos));
     ldr.registerExport("kernel32.dll", "GetCpuFabricThermalThrottleTelemetry", reinterpret_cast<void*>(GetCpuFabricThermalThrottleTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedBitReverse64", reinterpret_cast<void*>(InterlockedBitReverse64));
+    ldr.registerExport("kernel32.dll", "InterlockedBitReverse", reinterpret_cast<void*>(InterlockedBitReverse));
+    ldr.registerExport("kernel32.dll", "InterlockedBitReverse32", reinterpret_cast<void*>(InterlockedBitReverse32));
+    ldr.registerExport("kernel32.dll", "InterlockedBitReverse16", reinterpret_cast<void*>(InterlockedBitReverse16));
+    ldr.registerExport("kernel32.dll", "InterlockedBitReverse8", reinterpret_cast<void*>(InterlockedBitReverse8));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierDynamicDrainTelemetry", reinterpret_cast<void*>(GetPagefileTierDynamicDrainTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageDroopPredictiveTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageDroopPredictiveTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
