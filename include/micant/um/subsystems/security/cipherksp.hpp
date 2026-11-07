@@ -120,6 +120,8 @@ inline constexpr const wchar_t* BCRYPT_ASCON128_ALGORITHM                = L"ASC
 inline constexpr const wchar_t* BCRYPT_ASCON_HASH_ALGORITHM              = L"ASCON-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON80PQ_ALGORITHM               = L"ASCON-80PQ";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOF_ALGORITHM               = L"ASCON-XOF";
+inline constexpr const wchar_t* BCRYPT_ASCON128A_ALGORITHM               = L"ASCON-128A";
+inline constexpr const wchar_t* BCRYPT_ASCON_XOFA_ALGORITHM              = L"ASCON-XOFA";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -3618,6 +3620,15 @@ public:
         }
     }
 
+    static inline void p8(uint64_t& x0, uint64_t& x1, uint64_t& x2, uint64_t& x3, uint64_t& x4) noexcept {
+        static constexpr uint8_t constants[8] = {
+            0xb4, 0xa5, 0x96, 0x87, 0x78, 0x69, 0x5a, 0x4b
+        };
+        for (int i = 0; i < 8; ++i) {
+            round(x0, x1, x2, x3, x4, constants[i]);
+        }
+    }
+
     static inline uint64_t load64_be(const uint8_t* b) noexcept {
         return (static_cast<uint64_t>(b[0]) << 56) |
                (static_cast<uint64_t>(b[1]) << 48) |
@@ -4225,6 +4236,321 @@ public:
             offset += take;
             if (offset < outLen) {
                 AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        squeeze(ctx, outDigest);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, size_t outLen = DEFAULT_DIGEST_SIZE) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        squeeze(ctx, out);
+        return out;
+    }
+};
+
+class Ascon128a {
+public:
+    static constexpr size_t KEY_SIZE = 16;
+    static constexpr size_t NONCE_SIZE = 16;
+    static constexpr size_t TAG_SIZE = 16;
+    static constexpr size_t RATE = 16;
+    static constexpr uint64_t ASCON128A_IV = 0x80800c0800000000ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        uint64_t k0{ 0 }, k1{ 0 };
+        std::vector<uint8_t> key{};
+        std::vector<uint8_t> nonce{};
+        std::vector<uint8_t> ad{};
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+    };
+
+    static void init(Context& ctx, std::span<const uint8_t> key, std::span<const uint8_t> nonce = {}) noexcept {
+        ctx.key.assign(key.begin(), key.end());
+        if (!nonce.empty()) {
+            ctx.nonce.assign(nonce.begin(), nonce.end());
+        }
+        ctx.buffer.clear();
+        ctx.ad.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = (key.size() >= KEY_SIZE);
+    }
+
+    static void setAssociatedData(Context& ctx, std::span<const uint8_t> ad) noexcept {
+        ctx.ad.assign(ad.begin(), ad.end());
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized || data.empty()) return;
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static bool encrypt(
+        Context& ctx,
+        std::span<const uint8_t> plaintext,
+        std::span<uint8_t> outCiphertext,
+        std::span<uint8_t> outTag,
+        std::span<const uint8_t> ad = {},
+        std::span<const uint8_t> nonce = {}) noexcept {
+        
+        if (!ctx.initialized || ctx.key.size() < KEY_SIZE) return false;
+        if (outCiphertext.size() < plaintext.size() || outTag.size() < TAG_SIZE) return false;
+
+        std::span<const uint8_t> n = !nonce.empty() ? nonce : std::span<const uint8_t>(ctx.nonce);
+        if (n.size() < NONCE_SIZE) return false;
+
+        ctx.k0 = AsconPermutation::load64_be(ctx.key.data());
+        ctx.k1 = AsconPermutation::load64_be(ctx.key.data() + 8);
+        uint64_t n0 = AsconPermutation::load64_be(n.data());
+        uint64_t n1 = AsconPermutation::load64_be(n.data() + 8);
+
+        ctx.x0 = ASCON128A_IV;
+        ctx.x1 = ctx.k0;
+        ctx.x2 = ctx.k1;
+        ctx.x3 = n0;
+        ctx.x4 = n1;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.x3 ^= ctx.k0;
+        ctx.x4 ^= ctx.k1;
+
+        std::span<const uint8_t> assoc = !ad.empty() ? ad : std::span<const uint8_t>(ctx.ad);
+        if (!assoc.empty()) {
+            size_t adLen = assoc.size();
+            size_t adBlocks = adLen / RATE;
+            for (size_t i = 0; i < adBlocks; ++i) {
+                ctx.x0 ^= AsconPermutation::load64_be(assoc.data() + i * RATE);
+                ctx.x1 ^= AsconPermutation::load64_be(assoc.data() + i * RATE + 8);
+                AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            }
+            uint8_t pad[16] = { 0 };
+            size_t rem = adLen % RATE;
+            std::memcpy(pad, assoc.data() + adBlocks * RATE, rem);
+            pad[rem] = 0x80;
+            ctx.x0 ^= AsconPermutation::load64_be(pad);
+            ctx.x1 ^= AsconPermutation::load64_be(pad + 8);
+            AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+        ctx.x4 ^= 1ULL;
+
+        size_t ptLen = plaintext.size();
+        size_t ptBlocks = ptLen / RATE;
+        for (size_t i = 0; i < ptBlocks; ++i) {
+            ctx.x0 ^= AsconPermutation::load64_be(plaintext.data() + i * RATE);
+            ctx.x1 ^= AsconPermutation::load64_be(plaintext.data() + i * RATE + 8);
+            AsconPermutation::store64_be(outCiphertext.data() + i * RATE, ctx.x0);
+            AsconPermutation::store64_be(outCiphertext.data() + i * RATE + 8, ctx.x1);
+            AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        size_t rem = ptLen % RATE;
+        uint8_t padPt[16] = { 0 };
+        if (rem > 0) {
+            std::memcpy(padPt, plaintext.data() + ptBlocks * RATE, rem);
+        }
+        padPt[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(padPt);
+        ctx.x1 ^= AsconPermutation::load64_be(padPt + 8);
+        uint8_t lastCtBuf[16];
+        AsconPermutation::store64_be(lastCtBuf, ctx.x0);
+        AsconPermutation::store64_be(lastCtBuf + 8, ctx.x1);
+        if (rem > 0) {
+            std::memcpy(outCiphertext.data() + ptBlocks * RATE, lastCtBuf, rem);
+        }
+
+        ctx.x2 ^= ctx.k0;
+        ctx.x3 ^= ctx.k1;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.x3 ^= ctx.k0;
+        ctx.x4 ^= ctx.k1;
+
+        AsconPermutation::store64_be(outTag.data(), ctx.x3);
+        AsconPermutation::store64_be(outTag.data() + 8, ctx.x4);
+
+        ctx.bytesProcessed += ptLen;
+        return true;
+    }
+
+    static bool decrypt(
+        Context& ctx,
+        std::span<const uint8_t> ciphertext,
+        std::span<const uint8_t> tag,
+        std::span<uint8_t> outPlaintext,
+        std::span<const uint8_t> ad = {},
+        std::span<const uint8_t> nonce = {}) noexcept {
+        
+        if (!ctx.initialized || ctx.key.size() < KEY_SIZE) return false;
+        if (outPlaintext.size() < ciphertext.size() || tag.size() < TAG_SIZE) return false;
+
+        std::span<const uint8_t> n = !nonce.empty() ? nonce : std::span<const uint8_t>(ctx.nonce);
+        if (n.size() < NONCE_SIZE) return false;
+
+        ctx.k0 = AsconPermutation::load64_be(ctx.key.data());
+        ctx.k1 = AsconPermutation::load64_be(ctx.key.data() + 8);
+        uint64_t n0 = AsconPermutation::load64_be(n.data());
+        uint64_t n1 = AsconPermutation::load64_be(n.data() + 8);
+
+        ctx.x0 = ASCON128A_IV;
+        ctx.x1 = ctx.k0;
+        ctx.x2 = ctx.k1;
+        ctx.x3 = n0;
+        ctx.x4 = n1;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.x3 ^= ctx.k0;
+        ctx.x4 ^= ctx.k1;
+
+        std::span<const uint8_t> assoc = !ad.empty() ? ad : std::span<const uint8_t>(ctx.ad);
+        if (!assoc.empty()) {
+            size_t adLen = assoc.size();
+            size_t adBlocks = adLen / RATE;
+            for (size_t i = 0; i < adBlocks; ++i) {
+                ctx.x0 ^= AsconPermutation::load64_be(assoc.data() + i * RATE);
+                ctx.x1 ^= AsconPermutation::load64_be(assoc.data() + i * RATE + 8);
+                AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            }
+            uint8_t pad[16] = { 0 };
+            size_t rem = adLen % RATE;
+            std::memcpy(pad, assoc.data() + adBlocks * RATE, rem);
+            pad[rem] = 0x80;
+            ctx.x0 ^= AsconPermutation::load64_be(pad);
+            ctx.x1 ^= AsconPermutation::load64_be(pad + 8);
+            AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+        ctx.x4 ^= 1ULL;
+
+        size_t ctLen = ciphertext.size();
+        size_t ctBlocks = ctLen / RATE;
+        for (size_t i = 0; i < ctBlocks; ++i) {
+            uint64_t c0 = AsconPermutation::load64_be(ciphertext.data() + i * RATE);
+            uint64_t c1 = AsconPermutation::load64_be(ciphertext.data() + i * RATE + 8);
+            AsconPermutation::store64_be(outPlaintext.data() + i * RATE, ctx.x0 ^ c0);
+            AsconPermutation::store64_be(outPlaintext.data() + i * RATE + 8, ctx.x1 ^ c1);
+            ctx.x0 = c0;
+            ctx.x1 = c1;
+            AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        size_t rem = ctLen % RATE;
+        uint8_t lastPt[16] = { 0 };
+        uint8_t prevX[16];
+        AsconPermutation::store64_be(prevX, ctx.x0);
+        AsconPermutation::store64_be(prevX + 8, ctx.x1);
+        for (size_t i = 0; i < rem; ++i) {
+            lastPt[i] = prevX[i] ^ ciphertext[ctBlocks * RATE + i];
+        }
+        if (rem > 0) {
+            std::memcpy(outPlaintext.data() + ctBlocks * RATE, lastPt, rem);
+        }
+        lastPt[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(lastPt);
+        ctx.x1 ^= AsconPermutation::load64_be(lastPt + 8);
+
+        ctx.x2 ^= ctx.k0;
+        ctx.x3 ^= ctx.k1;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.x3 ^= ctx.k0;
+        ctx.x4 ^= ctx.k1;
+
+        uint8_t expectedTag[16];
+        AsconPermutation::store64_be(expectedTag, ctx.x3);
+        AsconPermutation::store64_be(expectedTag + 8, ctx.x4);
+
+        uint8_t diff = 0;
+        for (size_t i = 0; i < TAG_SIZE; ++i) {
+            diff |= (tag[i] ^ expectedTag[i]);
+        }
+        if (diff != 0) return false;
+
+        ctx.bytesProcessed += ctLen;
+        return true;
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.initialized || out.empty()) return;
+        if (!ctx.buffer.empty()) {
+            std::vector<uint8_t> ct(ctx.buffer.size());
+            std::vector<uint8_t> tag(TAG_SIZE);
+            encrypt(ctx, ctx.buffer, ct, tag);
+            size_t copyLen = std::min(out.size(), ct.size());
+            std::memcpy(out.data(), ct.data(), copyLen);
+            ctx.buffer.clear();
+        }
+    }
+};
+
+class AsconXofa {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_XOFA_IV = 0x00400c0800000000ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+        bool squeezed{ false };
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_XOFA_IV;
+        ctx.x1 = 0;
+        ctx.x2 = 0;
+        ctx.x3 = 0;
+        ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+        ctx.squeezed = false;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized || data.empty()) return;
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static void padAndPermute(Context& ctx) noexcept {
+        if (ctx.squeezed) return;
+        size_t len = ctx.buffer.size();
+        size_t blocks = len / RATE;
+        for (size_t i = 0; i < blocks; ++i) {
+            ctx.x0 ^= AsconPermutation::load64_be(ctx.buffer.data() + i * RATE);
+            AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        uint8_t pad[8] = { 0 };
+        size_t rem = len % RATE;
+        if (rem > 0) {
+            std::memcpy(pad, ctx.buffer.data() + blocks * RATE, rem);
+        }
+        pad[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(pad);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.squeezed = true;
+    }
+
+    static void squeeze(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        if (!ctx.initialized || outDigest.empty()) return;
+        padAndPermute(ctx);
+        size_t outLen = outDigest.size();
+        size_t offset = 0;
+        while (offset < outLen) {
+            uint8_t block[8];
+            AsconPermutation::store64_be(block, ctx.x0);
+            size_t take = std::min(outLen - offset, static_cast<size_t>(8));
+            std::memcpy(outDigest.data() + offset, block, take);
+            offset += take;
+            if (offset < outLen) {
+                AsconPermutation::p8(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
             }
         }
     }
@@ -6488,6 +6814,8 @@ enum class CryptoAlgorithm {
     AsconHash,
     Ascon80pq,
     AsconXof,
+    Ascon128a,
+    AsconXofa,
     Unknown
 };
 
@@ -6496,6 +6824,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_HASH_ALGORITHM || algId == L"ASCON-HASH" || algId == L"ascon-hash" || algId == L"Ascon-Hash") return CryptoAlgorithm::AsconHash;
     if (algId == BCRYPT_ASCON80PQ_ALGORITHM || algId == L"ASCON-80PQ" || algId == L"ascon-80pq" || algId == L"Ascon-80pq") return CryptoAlgorithm::Ascon80pq;
     if (algId == BCRYPT_ASCON_XOF_ALGORITHM || algId == L"ASCON-XOF" || algId == L"ascon-xof" || algId == L"Ascon-Xof") return CryptoAlgorithm::AsconXof;
+    if (algId == BCRYPT_ASCON128A_ALGORITHM || algId == L"ASCON-128A" || algId == L"ascon-128a" || algId == L"Ascon-128a") return CryptoAlgorithm::Ascon128a;
+    if (algId == BCRYPT_ASCON_XOFA_ALGORITHM || algId == L"ASCON-XOFA" || algId == L"ascon-xofa" || algId == L"Ascon-Xofa") return CryptoAlgorithm::AsconXofa;
     if (algId == BCRYPT_SHA256_ALGORITHM || algId == L"SHA-256") return CryptoAlgorithm::Sha256;
     if (algId == BCRYPT_SHA384_ALGORITHM || algId == L"SHA-384") return CryptoAlgorithm::Sha384;
     if (algId == BCRYPT_SHA512_ALGORITHM || algId == L"SHA-512") return CryptoAlgorithm::Sha512;
@@ -6689,6 +7019,8 @@ public:
     AsconHash::Context asconHashCtx{};
     Ascon80pq::Context ascon80pqCtx{};
     AsconXof::Context asconXofCtx{};
+    Ascon128a::Context ascon128aCtx{};
+    AsconXofa::Context asconXofaCtx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -6772,6 +7104,8 @@ public:
           asconHashCtx(other.asconHashCtx),
           ascon80pqCtx(other.ascon80pqCtx),
           asconXofCtx(other.asconXofCtx),
+          ascon128aCtx(other.ascon128aCtx),
+          asconXofaCtx(other.asconXofaCtx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -6924,6 +7258,10 @@ public:
             Ascon80pq::init(ascon80pqCtx, key);
         } else if (algorithm == CryptoAlgorithm::AsconXof) {
             AsconXof::init(asconXofCtx);
+        } else if (algorithm == CryptoAlgorithm::Ascon128a) {
+            Ascon128a::init(ascon128aCtx, key);
+        } else if (algorithm == CryptoAlgorithm::AsconXofa) {
+            AsconXofa::init(asconXofaCtx);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -7072,6 +7410,10 @@ public:
             Ascon80pq::update(ascon80pqCtx, data);
         } else if (algorithm == CryptoAlgorithm::AsconXof) {
             AsconXof::update(asconXofCtx, data);
+        } else if (algorithm == CryptoAlgorithm::Ascon128a) {
+            Ascon128a::update(ascon128aCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconXofa) {
+            AsconXofa::update(asconXofaCtx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -7383,6 +7725,15 @@ public:
             std::vector<uint8_t> out(32);
             AsconXof::final(asconXofCtx, out);
             return out;
+        } else if (algorithm == CryptoAlgorithm::Ascon128a) {
+            size_t outSize = ascon128aCtx.buffer.empty() ? 16 : ascon128aCtx.buffer.size();
+            std::vector<uint8_t> out(outSize);
+            Ascon128a::final(ascon128aCtx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::AsconXofa) {
+            std::vector<uint8_t> out(32);
+            AsconXofa::final(asconXofaCtx, out);
+            return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
             if (aesCmacCtx->totalBytes > 0 && aesCmacCtx->buffer.size() == 16) {
@@ -7629,10 +7980,10 @@ inline NTSTATUS BCryptGetProperty(
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = 32;
-            if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac || prov->algorithm == CryptoAlgorithm::Ascon128 || prov->algorithm == CryptoAlgorithm::Ascon80pq) len = 16;
+            if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac || prov->algorithm == CryptoAlgorithm::Ascon128 || prov->algorithm == CryptoAlgorithm::Ascon80pq || prov->algorithm == CryptoAlgorithm::Ascon128a) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
             else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256 || prov->algorithm == CryptoAlgorithm::KmacKwp256 || prov->algorithm == CryptoAlgorithm::KmacAead256 || prov->algorithm == CryptoAlgorithm::KmacMgf256 || prov->algorithm == CryptoAlgorithm::KmacKdf256 || prov->algorithm == CryptoAlgorithm::KmacCtr256 || prov->algorithm == CryptoAlgorithm::KmacOfb256 || prov->algorithm == CryptoAlgorithm::KmacCfb256 || prov->algorithm == CryptoAlgorithm::KmacSiv256 || prov->algorithm == CryptoAlgorithm::KmacFfx256 || prov->algorithm == CryptoAlgorithm::KmacBps256 || prov->algorithm == CryptoAlgorithm::KmacKw256 || prov->algorithm == CryptoAlgorithm::KmacDrbg256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
@@ -7644,8 +7995,11 @@ inline NTSTATUS BCryptGetProperty(
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = 64;
             if (prov->algorithm == CryptoAlgorithm::Ascon128 || prov->algorithm == CryptoAlgorithm::AsconHash ||
-                prov->algorithm == CryptoAlgorithm::Ascon80pq || prov->algorithm == CryptoAlgorithm::AsconXof) {
+                prov->algorithm == CryptoAlgorithm::Ascon80pq || prov->algorithm == CryptoAlgorithm::AsconXof ||
+                prov->algorithm == CryptoAlgorithm::AsconXofa) {
                 len = 8;
+            } else if (prov->algorithm == CryptoAlgorithm::Ascon128a) {
+                len = 16;
             } else if (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) {
                 len = 16;
             } else if (prov->algorithm == CryptoAlgorithm::Sha3_224) {
@@ -7748,7 +8102,8 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
                   prov->algorithm != CryptoAlgorithm::Sp80056AConcat &&
                   prov->algorithm != CryptoAlgorithm::Hkdf &&
                   prov->algorithm != CryptoAlgorithm::Ascon128 &&
-                  prov->algorithm != CryptoAlgorithm::Ascon80pq)) {
+                  prov->algorithm != CryptoAlgorithm::Ascon80pq &&
+                  prov->algorithm != CryptoAlgorithm::Ascon128a)) {
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -7767,6 +8122,19 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
 
     if (prov->algorithm == CryptoAlgorithm::Ascon80pq) {
         if (cbSecret != 20) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        auto keyObj = std::make_shared<CngKeyObject>(
+            prov->algorithm,
+            std::span<const uint8_t>(pbSecret, cbSecret),
+            L""
+        );
+        *phKey = CipherKspEngine::get().registerKey(keyObj);
+        return STATUS_SUCCESS;
+    }
+
+    if (prov->algorithm == CryptoAlgorithm::Ascon128a) {
+        if (cbSecret != 16) {
             return STATUS_INVALID_PARAMETER;
         }
         auto keyObj = std::make_shared<CngKeyObject>(
@@ -7894,6 +8262,39 @@ inline NTSTATUS BCryptEncrypt(
         std::vector<uint8_t> ct(cbInput);
         std::vector<uint8_t> tag(16);
         if (!Ascon80pq::encrypt(ctx, pt, ct, tag, aad, nonce)) {
+            return STATUS_UNSUCCESSFUL;
+        }
+        std::memcpy(pbOutput, ct.data(), cbInput);
+        std::memcpy(authInfo->pbTag, tag.data(), 16);
+        return STATUS_SUCCESS;
+    }
+
+    if (keyObj->algorithm == CryptoAlgorithm::Ascon128a) {
+        if (!pPaddingInfo) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        auto* authInfo = reinterpret_cast<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO*>(pPaddingInfo);
+        if (!authInfo->pbNonce || authInfo->cbNonce < 16 || !authInfo->pbTag || authInfo->cbTag < 16) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        std::span<const uint8_t> nonce(authInfo->pbNonce, authInfo->cbNonce);
+        std::span<const uint8_t> aad{};
+        if (authInfo->pbAuthData && authInfo->cbAuthData > 0) {
+            aad = std::span<const uint8_t>(authInfo->pbAuthData, authInfo->cbAuthData);
+        }
+        std::span<const uint8_t> pt(pbInput, cbInput);
+        *pcbResult = cbInput;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < cbInput) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        Ascon128a::Context ctx;
+        Ascon128a::init(ctx, keyObj->secret, nonce);
+        std::vector<uint8_t> ct(cbInput);
+        std::vector<uint8_t> tag(16);
+        if (!Ascon128a::encrypt(ctx, pt, ct, tag, aad, nonce)) {
             return STATUS_UNSUCCESSFUL;
         }
         std::memcpy(pbOutput, ct.data(), cbInput);
@@ -8166,6 +8567,38 @@ inline NTSTATUS BCryptDecrypt(
         Ascon80pq::init(ctx, keyObj->secret, nonce);
         std::vector<uint8_t> pt(cbInput);
         if (!Ascon80pq::decrypt(ctx, ct, tag, pt, aad, nonce)) {
+            return STATUS_AUTH_TAG_MISMATCH;
+        }
+        std::memcpy(pbOutput, pt.data(), cbInput);
+        return STATUS_SUCCESS;
+    }
+
+    if (keyObj->algorithm == CryptoAlgorithm::Ascon128a) {
+        if (!pPaddingInfo) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        auto* authInfo = reinterpret_cast<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO*>(pPaddingInfo);
+        if (!authInfo->pbNonce || authInfo->cbNonce < 16 || !authInfo->pbTag || authInfo->cbTag < 16) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        std::span<const uint8_t> nonce(authInfo->pbNonce, authInfo->cbNonce);
+        std::span<const uint8_t> aad{};
+        if (authInfo->pbAuthData && authInfo->cbAuthData > 0) {
+            aad = std::span<const uint8_t>(authInfo->pbAuthData, authInfo->cbAuthData);
+        }
+        std::span<const uint8_t> ct(pbInput, cbInput);
+        std::span<const uint8_t> tag(authInfo->pbTag, authInfo->cbTag);
+        *pcbResult = cbInput;
+        if (!pbOutput) {
+            return STATUS_SUCCESS;
+        }
+        if (cbOutput < cbInput) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        Ascon128a::Context ctx;
+        Ascon128a::init(ctx, keyObj->secret, nonce);
+        std::vector<uint8_t> pt(cbInput);
+        if (!Ascon128a::decrypt(ctx, ct, tag, pt, aad, nonce)) {
             return STATUS_AUTH_TAG_MISMATCH;
         }
         std::memcpy(pbOutput, pt.data(), cbInput);

@@ -9732,6 +9732,40 @@ inline BOOL WINAPI GetCpuFabricVoltageResonanceTelemetry(ntdll::SYSTEM_CPU_FABRI
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageResonanceTelemetry(Info)) ? TRUE : FALSE;
 }
 
+inline ULONG64 WINAPI InterlockedCountLeadingZeros64(ULONG64 volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingZeros64(Destination);
+}
+
+inline ULONG WINAPI InterlockedCountLeadingZeros(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingZeros32(Destination);
+}
+
+inline ULONG WINAPI InterlockedCountLeadingZeros32(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingZeros32(Destination);
+}
+
+inline USHORT WINAPI InterlockedCountLeadingZeros16(USHORT volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingZeros16(Destination);
+}
+
+inline UCHAR WINAPI InterlockedCountLeadingZeros8(UCHAR volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingZeros8(Destination);
+}
+
+inline BOOL WINAPI GetPagefileTierThrottlingTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierThrottlingTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltagePhaseSpreadSpectrumTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltagePhaseSpreadSpectrum(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION* Info) noexcept {
+    return GetCpuFabricVoltagePhaseSpreadSpectrumTelemetry(Info);
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -12001,6 +12035,14 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedPopCount8", reinterpret_cast<void*>(InterlockedPopCount8));
     ldr.registerExport("kernel32.dll", "GetPagefileTierPressurePredictiveTelemetry", reinterpret_cast<void*>(GetPagefileTierPressurePredictiveTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageResonanceTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageResonanceTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingZeros64", reinterpret_cast<void*>(InterlockedCountLeadingZeros64));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingZeros", reinterpret_cast<void*>(InterlockedCountLeadingZeros));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingZeros32", reinterpret_cast<void*>(InterlockedCountLeadingZeros32));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingZeros16", reinterpret_cast<void*>(InterlockedCountLeadingZeros16));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingZeros8", reinterpret_cast<void*>(InterlockedCountLeadingZeros8));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierThrottlingTelemetry", reinterpret_cast<void*>(GetPagefileTierThrottlingTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltagePhaseSpreadSpectrumTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltagePhaseSpreadSpectrumTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltagePhaseSpreadSpectrum", reinterpret_cast<void*>(GetCpuFabricVoltagePhaseSpreadSpectrum));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

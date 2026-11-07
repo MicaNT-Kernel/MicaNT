@@ -2315,6 +2315,39 @@ struct SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION*;
 
+// Class 275: SystemPagefileTierThrottlingTelemetryInformation
+struct SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    TierIndex;                            // e.g. 1
+    ULONG    ThrottleLevelPercent;                 // e.g. 45 (45%)
+    ULONG    QueueBacklogDepth;                    // e.g. 128
+    ULONG    ThermalBudgetPercent;                 // e.g. 82 (82%)
+    ULONG64  ActiveThrottledCycles;                // e.g. 2500000ULL
+    ULONG64  EnforcedLatencyDeltaNs;               // e.g. 15000ULL (15 us)
+    ULONG64  ThrottledWriteBytes;                  // e.g. 52428800ULL (50 MB)
+    ULONG64  RecoveredCycles;                      // e.g. 1800000ULL
+    ULONG    ThrottlingMitigationFlags;            // e.g. 0x05 (DynamicCreditWindow | IOWeightDamping)
+    ULONG    Pad;                                  // 0
+};
+using PSYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION*;
+
+// Class 276: SystemCpuFabricVoltagePhaseSpreadSpectrumInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    SocketId;                             // e.g. 0
+    ULONG    PhaseCount;                           // e.g. 8
+    ULONG    ModulationFrequencyKhz;               // e.g. 330 (330 kHz spread spectrum modulation)
+    ULONG    SpreadSpectrumPercentagePpm;          // e.g. 5000 (0.5% / 5000 ppm)
+    ULONG64  PhaseCurrentMicroAmps[8];             // e.g. 18500000ULL per phase (18.5 A)
+    ULONG64  VoltageJitterRmsMicroVolts;           // e.g. 4200ULL (4.2 mV RMS jitter)
+    ULONG64  ActiveTransientSuppressionCycles;     // e.g. 960000ULL
+    ULONG    PhaseInterleavingFlags;               // e.g. 0x03 (QuadratureInterleave | SpreadSpectrumActive)
+    ULONG    Pad;                                  // 0
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4832,6 +4865,49 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 275: { // SystemPagefileTierThrottlingTelemetryInformation (Class 275)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TierIndex = 1;
+            pInfo->ThrottleLevelPercent = 45;
+            pInfo->QueueBacklogDepth = 128;
+            pInfo->ThermalBudgetPercent = 82;
+            pInfo->ActiveThrottledCycles = 2500000ULL;
+            pInfo->EnforcedLatencyDeltaNs = 15000ULL;
+            pInfo->ThrottledWriteBytes = 52428800ULL;
+            pInfo->RecoveredCycles = 1800000ULL;
+            pInfo->ThrottlingMitigationFlags = 0x05;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 276: { // SystemCpuFabricVoltagePhaseSpreadSpectrumInformation (Class 276)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->SocketId = 0;
+            pInfo->PhaseCount = 8;
+            pInfo->ModulationFrequencyKhz = 330;
+            pInfo->SpreadSpectrumPercentagePpm = 5000;
+            for (int i = 0; i < 8; ++i) {
+                pInfo->PhaseCurrentMicroAmps[i] = 18500000ULL;
+            }
+            pInfo->VoltageJitterRmsMicroVolts = 4200ULL;
+            pInfo->ActiveTransientSuppressionCycles = 960000ULL;
+            pInfo->PhaseInterleavingFlags = 0x03;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -6629,6 +6705,54 @@ inline UCHAR WINAPI RtlInterlockedPopCount8(UCHAR volatile* Destination) noexcep
     }
 }
 
+inline ULONG64 WINAPI RtlInterlockedCountLeadingZeros64(ULONG64 volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG64 next = static_cast<ULONG64>(std::countl_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedCountLeadingZeros32(ULONG volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG next = static_cast<ULONG>(std::countl_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedCountLeadingZeros16(USHORT volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        USHORT next = static_cast<USHORT>(std::countl_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedCountLeadingZeros8(UCHAR volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        UCHAR next = static_cast<UCHAR>(std::countl_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -6771,6 +6895,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageResonanceTelemetry(SYSTEM_C
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(274, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierThrottlingTelemetry(SYSTEM_PAGEFILE_TIER_THROTTLING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(275, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum(SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(276, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -7386,6 +7522,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedPopCount8", reinterpret_cast<void*>(RtlInterlockedPopCount8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierPressurePredictive", reinterpret_cast<void*>(RtlQuerySystemPagefileTierPressurePredictive));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageResonanceTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageResonanceTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingZeros64", reinterpret_cast<void*>(RtlInterlockedCountLeadingZeros64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingZeros32", reinterpret_cast<void*>(RtlInterlockedCountLeadingZeros32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingZeros16", reinterpret_cast<void*>(RtlInterlockedCountLeadingZeros16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingZeros8", reinterpret_cast<void*>(RtlInterlockedCountLeadingZeros8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierThrottlingTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierThrottlingTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
