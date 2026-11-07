@@ -9392,6 +9392,22 @@ inline CHAR WINAPI InterlockedXorNot8(CHAR volatile* Destination, CHAR Value) no
     return ntdll::RtlInterlockedXorNot8(Destination, Value);
 }
 
+inline LONG64 WINAPI InterlockedNand64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedNand64(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedNand32(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedNand32(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedNand16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedNand16(Destination, Value);
+}
+
+inline CHAR WINAPI InterlockedNand8(CHAR volatile* Destination, CHAR Value) noexcept {
+    return ntdll::RtlInterlockedNand8(Destination, Value);
+}
+
 inline BOOL WINAPI GetPagefileCompressionTelemetry(ntdll::SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemPagefileCompressionTelemetry(Info)) ? TRUE : FALSE;
@@ -9410,6 +9426,16 @@ inline BOOL WINAPI GetPagefileDecompressionTelemetry(ntdll::SYSTEM_PAGEFILE_DECO
 inline BOOL WINAPI GetCpuFabricPartitionInformation(ntdll::SYSTEM_CPU_FABRIC_PARTITION_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricPartition(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileClusterCompactionTelemetry(ntdll::SYSTEM_PAGEFILE_CLUSTER_COMPACTION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileClusterCompactionTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricQosTelemetry(ntdll::SYSTEM_CPU_FABRIC_QOS_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricQosTelemetry(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -11602,10 +11628,16 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedXorNot32", reinterpret_cast<void*>(InterlockedXorNot32));
     ldr.registerExport("kernel32.dll", "InterlockedXorNot16", reinterpret_cast<void*>(InterlockedXorNot16));
     ldr.registerExport("kernel32.dll", "InterlockedXorNot8", reinterpret_cast<void*>(InterlockedXorNot8));
+    ldr.registerExport("kernel32.dll", "InterlockedNand64", reinterpret_cast<void*>(InterlockedNand64));
+    ldr.registerExport("kernel32.dll", "InterlockedNand32", reinterpret_cast<void*>(InterlockedNand32));
+    ldr.registerExport("kernel32.dll", "InterlockedNand16", reinterpret_cast<void*>(InterlockedNand16));
+    ldr.registerExport("kernel32.dll", "InterlockedNand8", reinterpret_cast<void*>(InterlockedNand8));
     ldr.registerExport("kernel32.dll", "GetPagefileCompressionTelemetry", reinterpret_cast<void*>(GetPagefileCompressionTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuCooperativeFabricInformation", reinterpret_cast<void*>(GetCpuCooperativeFabricInformation));
     ldr.registerExport("kernel32.dll", "GetPagefileDecompressionTelemetry", reinterpret_cast<void*>(GetPagefileDecompressionTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricPartitionInformation", reinterpret_cast<void*>(GetCpuFabricPartitionInformation));
+    ldr.registerExport("kernel32.dll", "GetPagefileClusterCompactionTelemetry", reinterpret_cast<void*>(GetPagefileClusterCompactionTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricQosTelemetry", reinterpret_cast<void*>(GetCpuFabricQosTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
