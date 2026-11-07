@@ -2416,6 +2416,41 @@ struct SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_MARGIN_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_VOLTAGE_PHASE_MARGIN_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_MARGIN_TELEMETRY_INFORMATION*;
 
+// Class 281: SystemPagefileTierCompactDedupEfficiencyInformation
+struct SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    TierIndex;                            // e.g. 1
+    ULONG    DedupPassCount;                       // e.g. 84
+    ULONG64  TotalDeduplicatedBytes;               // e.g. 8589934592ULL (8 GB)
+    ULONG64  TotalCompactedPages;                  // e.g. 2097152ULL
+    ULONG    EfficiencyRatioBasisPoints;           // e.g. 8450 (84.50%)
+    ULONG    DedupHashCollisionsAvoided;           // e.g. 1420
+    BOOLEAN  BackgroundDedupActive;                // 1
+    BOOLEAN  TierCompactionThrottled;              // 0
+    uint8_t  StatusFlags;                          // e.g. 0x07 (DedupActive | HardwareHashAccEn | LosslessCompression)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION = SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION*;
+
+// Class 282: SystemCpuFabricVoltageTransitionalDroopIndexInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    FabricDomainId;                       // e.g. 0
+    ULONG    DroopEventsLogged;                    // e.g. 38
+    ULONG    MaxTransitionalDroopMillivolts;       // e.g. 28 (28 mV droop)
+    ULONG    AverageDroopRecoveryNanoseconds;      // e.g. 34 (34 ns recovery)
+    ULONG    DroopMitigationActivations;           // e.g. 195
+    BOOLEAN  AdaptiveLoadlineActive;               // 1
+    BOOLEAN  DroopSafetyMarginBreached;            // 0
+    uint8_t  DroopIndexStatusFlags;                // e.g. 0x05 (DynamicDroopIndexReady | FastTransientRecovery)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5061,6 +5096,47 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_MARGIN_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 281: { // SystemPagefileTierCompactDedupEfficiencyInformation (Class 281)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TierIndex = 1;
+            pInfo->DedupPassCount = 84;
+            pInfo->TotalDeduplicatedBytes = 8589934592ULL;
+            pInfo->TotalCompactedPages = 2097152ULL;
+            pInfo->EfficiencyRatioBasisPoints = 8450;
+            pInfo->DedupHashCollisionsAvoided = 1420;
+            pInfo->BackgroundDedupActive = 1;
+            pInfo->TierCompactionThrottled = 0;
+            pInfo->StatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 282: { // SystemCpuFabricVoltageTransitionalDroopIndexInformation (Class 282)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->FabricDomainId = 0;
+            pInfo->DroopEventsLogged = 38;
+            pInfo->MaxTransitionalDroopMillivolts = 28;
+            pInfo->AverageDroopRecoveryNanoseconds = 34;
+            pInfo->DroopMitigationActivations = 195;
+            pInfo->AdaptiveLoadlineActive = 1;
+            pInfo->DroopSafetyMarginBreached = 0;
+            pInfo->DroopIndexStatusFlags = 0x05;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7002,6 +7078,78 @@ inline UCHAR WINAPI RtlInterlockedCountSetBits8(UCHAR volatile* Destination) noe
     }
 }
 
+inline ULONG64 WINAPI RtlInterlockedCountLeadingSigns64(ULONG64 volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 sVal = static_cast<LONG64>(current);
+        ULONG64 cls;
+        if (sVal >= 0) {
+            cls = (sVal == 0) ? 63 : static_cast<ULONG64>(std::countl_zero(static_cast<uint64_t>(sVal)) - 1);
+        } else {
+            cls = (sVal == -1LL) ? 63 : static_cast<ULONG64>(std::countl_one(static_cast<uint64_t>(sVal)) - 1);
+        }
+        if (atomicDest->compare_exchange_weak(current, cls, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedCountLeadingSigns32(ULONG volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG sVal = static_cast<LONG>(current);
+        ULONG cls;
+        if (sVal >= 0) {
+            cls = (sVal == 0) ? 31 : static_cast<ULONG>(std::countl_zero(static_cast<uint32_t>(sVal)) - 1);
+        } else {
+            cls = (sVal == -1L) ? 31 : static_cast<ULONG>(std::countl_one(static_cast<uint32_t>(sVal)) - 1);
+        }
+        if (atomicDest->compare_exchange_weak(current, cls, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedCountLeadingSigns16(USHORT volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        SHORT sVal = static_cast<SHORT>(current);
+        USHORT cls;
+        if (sVal >= 0) {
+            cls = (sVal == 0) ? 15 : static_cast<USHORT>(std::countl_zero(static_cast<uint16_t>(sVal)) - 1);
+        } else {
+            cls = (sVal == -1) ? 15 : static_cast<USHORT>(std::countl_one(static_cast<uint16_t>(sVal)) - 1);
+        }
+        if (atomicDest->compare_exchange_weak(current, cls, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedCountLeadingSigns8(UCHAR volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        CHAR sVal = static_cast<CHAR>(current);
+        UCHAR cls;
+        if (sVal >= 0) {
+            cls = (sVal == 0) ? 7 : static_cast<UCHAR>(std::countl_zero(static_cast<uint8_t>(sVal)) - 1);
+        } else {
+            cls = (sVal == -1) ? 7 : static_cast<UCHAR>(std::countl_one(static_cast<uint8_t>(sVal)) - 1);
+        }
+        if (atomicDest->compare_exchange_weak(current, cls, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -7180,6 +7328,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltagePhaseMarginTelemetry(SYSTEM
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(280, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierCompactDedupEfficiency(SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(281, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex(SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(282, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -7811,8 +7971,14 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedCountSetBits32", reinterpret_cast<void*>(RtlInterlockedCountSetBits32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedCountSetBits16", reinterpret_cast<void*>(RtlInterlockedCountSetBits16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedCountSetBits8", reinterpret_cast<void*>(RtlInterlockedCountSetBits8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingSigns64", reinterpret_cast<void*>(RtlInterlockedCountLeadingSigns64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingSigns32", reinterpret_cast<void*>(RtlInterlockedCountLeadingSigns32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingSigns16", reinterpret_cast<void*>(RtlInterlockedCountLeadingSigns16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingSigns8", reinterpret_cast<void*>(RtlInterlockedCountLeadingSigns8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierExpansionRateTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierExpansionRateTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltagePhaseMarginTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltagePhaseMarginTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierCompactDedupEfficiency", reinterpret_cast<void*>(RtlQuerySystemPagefileTierCompactDedupEfficiency));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

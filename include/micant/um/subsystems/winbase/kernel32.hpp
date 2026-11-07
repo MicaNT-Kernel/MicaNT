@@ -9816,6 +9816,26 @@ inline UCHAR WINAPI InterlockedCountSetBits8(UCHAR volatile* Destination) noexce
     return ntdll::RtlInterlockedCountSetBits8(Destination);
 }
 
+inline ULONG64 WINAPI InterlockedCountLeadingSigns64(ULONG64 volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingSigns64(Destination);
+}
+
+inline ULONG WINAPI InterlockedCountLeadingSigns(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingSigns32(Destination);
+}
+
+inline ULONG WINAPI InterlockedCountLeadingSigns32(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingSigns32(Destination);
+}
+
+inline USHORT WINAPI InterlockedCountLeadingSigns16(USHORT volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingSigns16(Destination);
+}
+
+inline UCHAR WINAPI InterlockedCountLeadingSigns8(UCHAR volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedCountLeadingSigns8(Destination);
+}
+
 inline BOOL WINAPI GetPagefileTierExpansionRateTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_EXPANSION_RATE_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierExpansionRateTelemetry(Info)) ? TRUE : FALSE;
@@ -9824,6 +9844,16 @@ inline BOOL WINAPI GetPagefileTierExpansionRateTelemetry(ntdll::SYSTEM_PAGEFILE_
 inline BOOL WINAPI GetCpuFabricVoltagePhaseMarginTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_MARGIN_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltagePhaseMarginTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileTierCompactDedupEfficiencyTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_COMPACT_DEDUP_EFFICIENCY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierCompactDedupEfficiency(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltageTransitionalDroopIndexTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -12115,8 +12145,15 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedCountSetBits32", reinterpret_cast<void*>(InterlockedCountSetBits32));
     ldr.registerExport("kernel32.dll", "InterlockedCountSetBits16", reinterpret_cast<void*>(InterlockedCountSetBits16));
     ldr.registerExport("kernel32.dll", "InterlockedCountSetBits8", reinterpret_cast<void*>(InterlockedCountSetBits8));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingSigns64", reinterpret_cast<void*>(InterlockedCountLeadingSigns64));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingSigns", reinterpret_cast<void*>(InterlockedCountLeadingSigns));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingSigns32", reinterpret_cast<void*>(InterlockedCountLeadingSigns32));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingSigns16", reinterpret_cast<void*>(InterlockedCountLeadingSigns16));
+    ldr.registerExport("kernel32.dll", "InterlockedCountLeadingSigns8", reinterpret_cast<void*>(InterlockedCountLeadingSigns8));
     ldr.registerExport("kernel32.dll", "GetPagefileTierExpansionRateTelemetry", reinterpret_cast<void*>(GetPagefileTierExpansionRateTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricVoltagePhaseMarginTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltagePhaseMarginTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierCompactDedupEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileTierCompactDedupEfficiencyTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageTransitionalDroopIndexTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageTransitionalDroopIndexTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
