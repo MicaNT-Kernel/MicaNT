@@ -1966,6 +1966,37 @@ struct SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION {
 };
 using PSYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION = SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION*;
 
+// Class 253: SystemPagefileDecompressionTelemetryInformation
+struct SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION {
+    ULONG    PagefileIndex;
+    ULONG    Flags;                                // 0x01 = Active, 0x02 = DecompressionActive, 0x04 = HardwareDecompressionActive
+    ULONG64  TotalPagesDecompressed;               // e.g. 1048576 pages
+    ULONG64  HardwareDecompressedPages;            // e.g. 850000 pages
+    ULONG64  SoftwareFallbackPages;                // e.g. 198576 pages
+    ULONG64  CompressedBytesRead;                  // e.g. 1503238552 bytes (~1.4 GB)
+    ULONG64  DecompressedBytesProduced;            // e.g. 4294967296 bytes (4 GB)
+    ULONG    AverageDecompressionLatencyNanos;     // e.g. 420 ns
+    ULONG    DecompressionThroughputMBps;          // e.g. 12500 MB/s
+    ULONG    DecompressionAlgorithm;               // 1 = Xpress, 2 = XpressHuff, 3 = Zstandard-NT, 4 = LZ4-NT
+    ULONG64  IntegrityVerificationPasses;          // e.g. 1048576
+    ULONG    DecompressedCacheHitRatioPercent;     // e.g. 94%
+};
+using PSYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION*;
+
+// Class 254: SystemCpuFabricPartitionInformation
+struct SYSTEM_CPU_FABRIC_PARTITION_INFORMATION {
+    ULONG    TotalFabricPartitions;                // e.g. 4
+    ULONG    ActivePartitionId;                    // e.g. 0
+    ULONG64  PartitionAffinityMask;                // e.g. 0x00000000FFFFFFFFULL
+    ULONG    FabricBandwidthAllocationPercent;     // e.g. 75%
+    ULONG    LowPriorityThrottleRate;              // e.g. 10%
+    ULONG    FabricCongestionEvents;               // e.g. 5
+    ULONG64  CrossPartitionInvalidations;          // e.g. 2500ULL
+    ULONG    PartitionIsolationLevel;              // 1 = Shared, 2 = Guarded, 3 = Sovereign Isolated
+    ULONG    PartitionFlags;                       // 0x0F = Coherent | QoSGuaranteed | SvmBound | EncryptedInterconnect
+};
+using PSYSTEM_CPU_FABRIC_PARTITION_INFORMATION = SYSTEM_CPU_FABRIC_PARTITION_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4026,6 +4057,47 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION);
             return NtStatus::Success;
         }
+        case 253: { // SystemPagefileDecompressionTelemetryInformation (Class 253)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PagefileIndex = 0;
+            pInfo->Flags = 0x07;                      // Active | DecompressionActive | HardwareDecompressionActive
+            pInfo->TotalPagesDecompressed = 1048576ULL;
+            pInfo->HardwareDecompressedPages = 850000ULL;
+            pInfo->SoftwareFallbackPages = 198576ULL;
+            pInfo->CompressedBytesRead = 1503238552ULL;
+            pInfo->DecompressedBytesProduced = 4294967296ULL;
+            pInfo->AverageDecompressionLatencyNanos = 420;
+            pInfo->DecompressionThroughputMBps = 12500;
+            pInfo->DecompressionAlgorithm = 3;        // Zstandard-NT Sovereign Engine
+            pInfo->IntegrityVerificationPasses = 1048576ULL;
+            pInfo->DecompressedCacheHitRatioPercent = 94;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 254: { // SystemCpuFabricPartitionInformation (Class 254)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_PARTITION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_PARTITION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_PARTITION_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->TotalFabricPartitions = 4;
+            pInfo->ActivePartitionId = 0;
+            pInfo->PartitionAffinityMask = 0x00000000FFFFFFFFULL;
+            pInfo->FabricBandwidthAllocationPercent = 75;
+            pInfo->LowPriorityThrottleRate = 10;
+            pInfo->FabricCongestionEvents = 5;
+            pInfo->CrossPartitionInvalidations = 2500ULL;
+            pInfo->PartitionIsolationLevel = 3;       // Sovereign Isolated
+            pInfo->PartitionFlags = 0x0F;             // Coherent | QoSGuaranteed | SvmBound | EncryptedInterconnect
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_PARTITION_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -5261,6 +5333,30 @@ inline CHAR WINAPI RtlInterlockedAndNot8(CHAR volatile* Destination, CHAR Value)
     return atomicDest->fetch_and(static_cast<CHAR>(~Value), std::memory_order_seq_cst);
 }
 
+inline LONG64 WINAPI RtlInterlockedXorNot64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->fetch_xor(static_cast<LONG64>(~Value), std::memory_order_seq_cst);
+}
+
+inline LONG WINAPI RtlInterlockedXorNot32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    return atomicDest->fetch_xor(static_cast<LONG>(~Value), std::memory_order_seq_cst);
+}
+
+inline SHORT WINAPI RtlInterlockedXorNot16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->fetch_xor(static_cast<SHORT>(~Value), std::memory_order_seq_cst);
+}
+
+inline CHAR WINAPI RtlInterlockedXorNot8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->fetch_xor(static_cast<CHAR>(~Value), std::memory_order_seq_cst);
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -5271,6 +5367,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuCooperativeFabric(SYSTEM_CPU_COOPERATIVE
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(252, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileDecompressionTelemetry(SYSTEM_PAGEFILE_DECOMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(253, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricPartition(SYSTEM_CPU_FABRIC_PARTITION_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(254, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -5810,8 +5918,14 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedXor8", reinterpret_cast<void*>(RtlInterlockedXor8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAndNot16", reinterpret_cast<void*>(RtlInterlockedAndNot16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAndNot8", reinterpret_cast<void*>(RtlInterlockedAndNot8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXorNot64", reinterpret_cast<void*>(RtlInterlockedXorNot64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXorNot32", reinterpret_cast<void*>(RtlInterlockedXorNot32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXorNot16", reinterpret_cast<void*>(RtlInterlockedXorNot16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXorNot8", reinterpret_cast<void*>(RtlInterlockedXorNot8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileDecompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileDecompressionTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricPartition", reinterpret_cast<void*>(RtlQuerySystemCpuFabricPartition));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
