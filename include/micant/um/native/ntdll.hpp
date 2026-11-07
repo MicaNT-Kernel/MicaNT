@@ -2182,6 +2182,38 @@ struct SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION*;
 
+// Class 267: SystemPagefileTierFailoverTelemetryInformation
+struct SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION {
+    ULONG    PrimaryTierId;                        // e.g. 0
+    ULONG    SecondaryTierId;                      // e.g. 1
+    ULONG    FailoverEventsTotal;                  // e.g. 3
+    ULONG    FailoverRetries;                      // e.g. 0
+    ULONG64  PagesMigratedOnFailover;              // e.g. 65536ULL
+    ULONG64  FailoverLatencyMicroseconds;          // e.g. 420ULL
+    ULONG    SecondaryTierAvailable;               // e.g. 1 (TRUE)
+    ULONG    HighPriorityFailoverPending;          // e.g. 0
+    ULONG64  BytesRecoveredFromFaultedTier;        // e.g. 268435456ULL (256 MB)
+    ULONG    FailoverTriggerReason;                // e.g. 0x01 (I/O Timeout / Latency Threshold Exceeded)
+    ULONG    StatusFlags;                          // 0x07 = FailoverEngineActive | RedundantTierReady | ZeroDataLossGuarantee
+};
+using PSYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION*;
+
+// Class 268: SystemCpuFabricClockStretchingTelemetryInformation
+struct SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION {
+    ULONG    DomainId;                             // e.g. 0
+    ULONG    ActiveClockStretchingDomains;         // e.g. 4
+    ULONG    TotalStretchingEvents;                // e.g. 256
+    ULONG    VoltageDroopCompensatedCount;         // e.g. 240
+    ULONG    ThermalThrottleStretchCount;          // e.g. 16
+    ULONG    MaxStretchPercentage;                 // e.g. 12 (%)
+    ULONG64  CumulativeStretchedDurationPicoSeconds; // e.g. 1500000000ULL (1.5 ms)
+    ULONG64  AverageStretchDurationPicoSeconds;    // e.g. 5859375ULL
+    ULONG64  ClockCyclesPreserved;                 // e.g. 12000000ULL
+    ULONG    StretchHysteresisState;               // e.g. 0 (Normal)
+    ULONG    StatusFlags;                          // 0x07 = ClockStretchingEnabled | AutonomousDroopMitigation | PLLSynchronized
+};
+using PSYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4528,6 +4560,48 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DOMAIN_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 267: { // SystemPagefileTierFailoverTelemetryInformation (Class 267)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PrimaryTierId = 0;
+            pInfo->SecondaryTierId = 1;
+            pInfo->FailoverEventsTotal = 3;
+            pInfo->FailoverRetries = 0;
+            pInfo->PagesMigratedOnFailover = 65536ULL;
+            pInfo->FailoverLatencyMicroseconds = 420ULL;
+            pInfo->SecondaryTierAvailable = 1;
+            pInfo->HighPriorityFailoverPending = 0;
+            pInfo->BytesRecoveredFromFaultedTier = 268435456ULL;
+            pInfo->FailoverTriggerReason = 0x01;
+            pInfo->StatusFlags = 0x07; // FailoverEngineActive | RedundantTierReady | ZeroDataLossGuarantee
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 268: { // SystemCpuFabricClockStretchingTelemetryInformation (Class 268)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->DomainId = 0;
+            pInfo->ActiveClockStretchingDomains = 4;
+            pInfo->TotalStretchingEvents = 256;
+            pInfo->VoltageDroopCompensatedCount = 240;
+            pInfo->ThermalThrottleStretchCount = 16;
+            pInfo->MaxStretchPercentage = 12;
+            pInfo->CumulativeStretchedDurationPicoSeconds = 1500000000ULL;
+            pInfo->AverageStretchDurationPicoSeconds = 5859375ULL;
+            pInfo->ClockCyclesPreserved = 12000000ULL;
+            pInfo->StretchHysteresisState = 0;
+            pInfo->StatusFlags = 0x07; // ClockStretchingEnabled | AutonomousDroopMitigation | PLLSynchronized
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -6031,6 +6105,66 @@ inline CHAR WINAPI RtlInterlockedAddModulo8(CHAR volatile* Destination, CHAR Val
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedMulModulo64(LONG64 volatile* Destination, LONG64 Multiplier, LONG64 Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    if (Modulus <= 0) return atomicDest->load(std::memory_order_relaxed);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        __int128 prod = static_cast<__int128>(current) * static_cast<__int128>(Multiplier);
+        LONG64 next = static_cast<LONG64>(prod % Modulus);
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedMulModulo32(LONG volatile* Destination, LONG Multiplier, LONG Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    if (Modulus <= 0) return atomicDest->load(std::memory_order_relaxed);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        int64_t prod = static_cast<int64_t>(current) * static_cast<int64_t>(Multiplier);
+        LONG next = static_cast<LONG>(prod % Modulus);
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedMulModulo16(SHORT volatile* Destination, SHORT Multiplier, SHORT Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    if (Modulus <= 0) return atomicDest->load(std::memory_order_relaxed);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        int32_t prod = static_cast<int32_t>(current) * static_cast<int32_t>(Multiplier);
+        SHORT next = static_cast<SHORT>(prod % Modulus);
+        if (next < 0) next = static_cast<SHORT>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedMulModulo8(CHAR volatile* Destination, CHAR Multiplier, CHAR Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    if (Modulus <= 0) return atomicDest->load(std::memory_order_relaxed);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        int32_t prod = static_cast<int32_t>(current) * static_cast<int32_t>(Multiplier);
+        CHAR next = static_cast<CHAR>(prod % Modulus);
+        if (next < 0) next = static_cast<CHAR>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -6125,6 +6259,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageDomainTelemetry(SYSTEM_CPU_
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(266, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierFailoverTelemetry(SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(267, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricClockStretchingTelemetry(SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(268, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -6696,6 +6842,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo32", reinterpret_cast<void*>(RtlInterlockedAddModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo16", reinterpret_cast<void*>(RtlInterlockedAddModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAddModulo8", reinterpret_cast<void*>(RtlInterlockedAddModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo64", reinterpret_cast<void*>(RtlInterlockedMulModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo32", reinterpret_cast<void*>(RtlInterlockedMulModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo16", reinterpret_cast<void*>(RtlInterlockedMulModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo8", reinterpret_cast<void*>(RtlInterlockedMulModulo8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileDecompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileDecompressionTelemetry));
@@ -6712,6 +6862,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricPowerStateTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricPowerStateTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierWearLevelingTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierWearLevelingTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageDomainTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageDomainTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierFailoverTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierFailoverTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricClockStretchingTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricClockStretchingTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

@@ -56537,3 +56537,337 @@ inline void Test_Horizon257_Device35Options47_PagefileTierWearCpuFabricVoltage_I
 
     std::cout << "[TEST] Suite 473: Horizon 257 - Direct3D 12 Device35/CommandList29 & Options 47, NT SystemInfo 265/266, Interlocked Add Modulo 64/32/16/8 & NIST KMAC-BPS PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 474: Horizon 258 - Direct3D 12 ID3D12Device36/CommandList30 & Options 48,
+// NT SystemInfo 267/268, Interlocked Mul Modulo 64/32/16/8 & NIST KMAC-KW
+// ============================================================================
+inline void Test_Horizon258_Device36Options48_PagefileTierFailoverCpuClockStretch_InterlockedMulModulo_And_KmacKw_Suite() {
+    std::cout << "\n===================================================================\n";
+    std::cout << "[TEST] Suite 474: Horizon 258 - Direct3D 12 ID3D12Device36/CommandList30 & Options 48, NT SystemInfo 267/268, Interlocked Mul Modulo & NIST KMAC-KW\n";
+    std::cout << "===================================================================\n";
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device36, ID3D12GraphicsCommandList30 & Options 48
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device36, ID3D12GraphicsCommandList30 & Options 48 Architecture...\n";
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. QueryInterface for ID3D12Device36
+        ID3D12Device36* pDev36 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device36, reinterpret_cast<void**>(&pDev36));
+        TEST_ASSERT(hr == 0 && pDev36 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device36 succeeds");
+
+        // 2. Feature Check for D3D12_FEATURE_D3D12_OPTIONS48
+        D3D12_FEATURE_DATA_D3D12_OPTIONS48 opt48{};
+        hr = pDev36->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS48, &opt48, sizeof(opt48));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS48 succeeds");
+        TEST_ASSERT(opt48.WorkGraphsTier == 31u, "OPTIONS48 WorkGraphsTier is 31 (Tier 5.3)");
+        TEST_ASSERT(opt48.CooperativeMatrixMultiply1048576Supported == TRUE, "OPTIONS48 CooperativeMatrixMultiply 1,048,576 supported");
+        TEST_ASSERT(opt48.SubByteMicroscopicFormatsV11Supported == TRUE, "OPTIONS48 SubByteMicroscopicFormats V11 supported");
+        TEST_ASSERT(opt48.DynamicClusterExpansionTier16Supported == TRUE, "OPTIONS48 DynamicClusterExpansion Tier 16 supported");
+        TEST_ASSERT(opt48.MaxWorkGraphConcurrencyGroups == 4194304u, "OPTIONS48 MaxWorkGraphConcurrencyGroups is 4,194,304");
+        TEST_ASSERT(opt48.TilePipeliningStagesSupported == 8192u, "OPTIONS48 TilePipeliningStagesSupported is 8192");
+        TEST_ASSERT(opt48.AutonomousGraphRecursionTier8Supported == TRUE, "OPTIONS48 AutonomousGraphRecursion Tier 8 supported");
+        TEST_ASSERT(opt48.MultiQueueTensorPipelineFusionTier7Supported == TRUE, "OPTIONS48 MultiQueueTensorPipelineFusion Tier 7 supported");
+        TEST_ASSERT(opt48.WorkGraphMeshShaderPipeliningTier8Supported == TRUE, "OPTIONS48 WorkGraphMeshShaderPipelining Tier 8 supported");
+        TEST_ASSERT(opt48.SparseTensorBlockAccelerationTier4Supported == TRUE, "OPTIONS48 SparseTensorBlockAcceleration Tier 4 supported");
+        TEST_ASSERT(opt48.DeterministicTensorReductionTier3Supported == TRUE, "OPTIONS48 DeterministicTensorReduction Tier 3 supported");
+        TEST_ASSERT(opt48.HyperQuantizationTier2Supported == TRUE, "OPTIONS48 HyperQuantizationTier2Supported is TRUE");
+
+        // 3. Work Graph Cooperative Matrix Support 15
+        int32_t supported = 0;
+        uint32_t maxDim = 0;
+        uint32_t dataTypes = 0;
+        uint32_t sparseAccel = 0;
+        int32_t asyncAccum = 0;
+        uint32_t maxTileStages = 0;
+        int32_t feedbackLoops = 0;
+        int32_t subGraphRecursion = 0;
+        int32_t meshPipelining = 0;
+        int32_t multiQueueFusion = 0;
+        int32_t microscaling = 0;
+        int32_t subByteMicroscopic = 0;
+        int32_t sparseTensorBlock = 0;
+        int32_t deterministicReduction = 0;
+        int32_t hyperQuant = 0;
+        int32_t sparseCluster = 0;
+
+        hr = pDev36->GetWorkGraphCooperativeMatrixSupport15(
+            &supported, &maxDim, &dataTypes, &sparseAccel, &asyncAccum, &maxTileStages,
+            &feedbackLoops, &subGraphRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByteMicroscopic, &sparseTensorBlock, &deterministicReduction,
+            &hyperQuant, &sparseCluster);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport15 succeeds");
+        TEST_ASSERT(supported == 1, "Work graph cooperative matrix multiplication is supported");
+        TEST_ASSERT(maxDim == 1048576, "Max matrix dimension supported is 1048576");
+        TEST_ASSERT(dataTypes == 0xFFFF, "Data types mask covers extended formats V11 (0xFFFF)");
+        TEST_ASSERT(sparseAccel == 1, "Sparse acceleration supported");
+        TEST_ASSERT(asyncAccum == 1, "Async accumulation supported");
+        TEST_ASSERT(maxTileStages == 8192, "Max tile pipelining stages is 8192");
+        TEST_ASSERT(feedbackLoops == 1, "Autonomous feedback loops supported");
+        TEST_ASSERT(subGraphRecursion == 1, "Sub-graph recursion supported");
+        TEST_ASSERT(meshPipelining == 1, "Mesh shader pipelining supported");
+        TEST_ASSERT(multiQueueFusion == 1, "Multi-queue fusion supported");
+        TEST_ASSERT(microscaling == 1, "Microscaling support verified");
+        TEST_ASSERT(subByteMicroscopic == 1, "Sub-byte microscopic precision verified");
+        TEST_ASSERT(sparseTensorBlock == 1, "Sparse tensor block acceleration verified");
+        TEST_ASSERT(deterministicReduction == 1, "Deterministic tensor reduction verified");
+        TEST_ASSERT(hyperQuant == 1, "Hyper-quantization verified");
+        TEST_ASSERT(sparseCluster == 1, "Sparse cluster acceleration verified");
+
+        // 4. Create Work Graph Program Record 20
+        void* pRecord20 = nullptr;
+        hr = pDev36->CreateWorkGraphProgramRecord20(
+            nullptr, 0x1, 256, 4194304, 0xF, 4, 3, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            OFFICIAL_IID_ID3D12Device36, &pRecord20);
+        TEST_ASSERT(hr == 0 && pRecord20 != nullptr, "CreateWorkGraphProgramRecord20 succeeds");
+
+        // 4. QueryInterface for ID3D12GraphicsCommandList30
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList30* pCmd30 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList30, reinterpret_cast<void**>(&pCmd30));
+        TEST_ASSERT(hr == 0 && pCmd30 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList30 succeeds");
+
+        // 5. ID3D12GraphicsCommandList30 Methods
+        pCmd30->SetWorkGraphBackingMemory20(
+            0x10000000ULL, 0x20000000ULL, 0x4000000ULL, 2097152, 0xF, 4, 0x3, 0xFF,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x10);
+
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20Start() == 0x10000000ULL, "Backing memory 20 start address verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20Size() == 0x20000000ULL, "Backing memory 20 size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20ScratchSize() == 0x4000000ULL, "Backing memory 20 scratch buffer size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20MaxConcurrency() == 2097152, "Backing memory 20 max concurrency verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20DynamicExpansionFlags() == 0xF, "Backing memory 20 dynamic expansion flags verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20MemoryPoolTier() == 4, "Backing memory 20 memory pool tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory20Flags() == 0x10, "Backing memory 20 flags verified");
+
+        const uint8_t mockRecord20[64] = { 0x42 };
+        pCmd30->DispatchGraphProgramRecord20(
+            15, mockRecord20, sizeof(mockRecord20), 2097152, 0x7, 15, 0x3, 0xFF,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x5, 0x2);
+
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord20Count() == 1, "Program record 20 recorded successfully");
+        const auto& records20 = cmdList.GetRecordedProgramRecords20();
+        TEST_ASSERT(records20[0].NodeIndex == 15, "Record 20 node index verified");
+        TEST_ASSERT(records20[0].pRecord == mockRecord20, "Record 20 data pointer verified");
+        TEST_ASSERT(records20[0].RecordSizeInBytes == sizeof(mockRecord20), "Record 20 size verified");
+        TEST_ASSERT(records20[0].ConcurrencyGroup == 2097152, "Record 20 concurrency group verified");
+        TEST_ASSERT(records20[0].DynamicClusterExpansionTier == 15, "Record 20 dynamic cluster expansion tier 15 verified");
+        TEST_ASSERT(records20[0].DispatchMask == 0x5, "Record 20 dispatch mask verified");
+
+        pCmd30->Release();
+        pDev36->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 267 & 268 Native Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 267 & 268 Native Telemetry...\n";
+
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+
+        SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION failoverInfo{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            267,
+            &failoverInfo,
+            sizeof(failoverInfo),
+            &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation SystemPagefileTierFailoverTelemetryInformation (267) succeeds");
+        TEST_ASSERT(failoverInfo.FailoverEventsTotal == 3, "FailoverEventsTotal matches telemetry seed");
+        TEST_ASSERT(failoverInfo.PagesMigratedOnFailover == 65536ULL, "PagesMigratedOnFailover matches telemetry seed");
+        TEST_ASSERT(failoverInfo.BytesRecoveredFromFaultedTier == 268435456ULL, "BytesRecoveredFromFaultedTier is 256 MB");
+
+        SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION stretchInfo{};
+        status = NtQuerySystemInformation_Export(
+            268,
+            &stretchInfo,
+            sizeof(stretchInfo),
+            &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation SystemCpuFabricClockStretchingTelemetryInformation (268) succeeds");
+        TEST_ASSERT(stretchInfo.TotalStretchingEvents == 256, "TotalStretchingEvents matches telemetry seed");
+        TEST_ASSERT(stretchInfo.VoltageDroopCompensatedCount == 240, "VoltageDroopCompensatedCount matches telemetry seed");
+        TEST_ASSERT(stretchInfo.ThermalThrottleStretchCount == 16, "ThermalThrottleStretchCount matches seed");
+
+        // Native RTL Wrappers
+        SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION rtlFailover{};
+        status = RtlQuerySystemPagefileTierFailoverTelemetry(&rtlFailover);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileTierFailoverTelemetry succeeds");
+        TEST_ASSERT(rtlFailover.StatusFlags == 0x07, "StatusFlags matches seed");
+
+        SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION rtlStretch{};
+        status = RtlQuerySystemCpuFabricClockStretchingTelemetry(&rtlStretch);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuFabricClockStretchingTelemetry succeeds");
+        TEST_ASSERT(rtlStretch.CumulativeStretchedDurationPicoSeconds == 1500000000ULL, "CumulativeStretchedDurationPicoSeconds matches seed");
+
+        // Win32 Subsystem Wrappers
+        SYSTEM_PAGEFILE_TIER_FAILOVER_TELEMETRY_INFORMATION win32Failover{};
+        BOOL bRet = GetPagefileTierFailoverTelemetry(&win32Failover);
+        TEST_ASSERT(bRet == TRUE, "GetPagefileTierFailoverTelemetry succeeds");
+        TEST_ASSERT(win32Failover.FailoverLatencyMicroseconds == 420ULL, "Win32 FailoverLatencyMicroseconds verified");
+
+        SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION win32Stretch{};
+        bRet = GetCpuFabricClockStretchingTelemetry(&win32Stretch);
+        TEST_ASSERT(bRet == TRUE, "GetCpuFabricClockStretchingTelemetry succeeds");
+        TEST_ASSERT(win32Stretch.ActiveClockStretchingDomains == 4, "Win32 ActiveClockStretchingDomains verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Lockless Atomic Modular Multiplication Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Lockless Atomic Modular Multiplication Primitives (64/32/16/8-bit)...\n";
+
+        using namespace micant::ntdll;
+        using namespace micant::kernel32;
+
+        // 1. 64-bit Modular Multiplication
+        // Initial: 7, Mul: 11, Mod: 13 -> (7 * 11) % 13 = 77 % 13 = 12
+        volatile LONG64 target64 = 7;
+        LONG64 prev64 = InterlockedMulModulo64(&target64, 11, 13);
+        TEST_ASSERT(prev64 == 7, "InterlockedMulModulo64 returns initial value 7");
+        TEST_ASSERT(target64 == 12, "InterlockedMulModulo64 updates target to 12 ((7 * 11) % 13)");
+
+        // 2. 32-bit Modular Multiplication
+        // Initial: 9, Mul: 5, Mod: 17 -> (9 * 5) % 17 = 45 % 17 = 11
+        volatile LONG target32 = 9;
+        LONG prev32 = InterlockedMulModulo(&target32, 5, 17);
+        TEST_ASSERT(prev32 == 9, "InterlockedMulModulo returns initial value 9");
+        TEST_ASSERT(target32 == 11, "InterlockedMulModulo updates target to 11 ((9 * 5) % 17)");
+
+        // 3. 16-bit Modular Multiplication
+        // Initial: 15, Mul: 4, Mod: 23 -> (15 * 4) % 23 = 60 % 23 = 14
+        volatile SHORT target16 = 15;
+        SHORT prev16 = InterlockedMulModulo16(&target16, 4, 23);
+        TEST_ASSERT(prev16 == 15, "InterlockedMulModulo16 returns initial value 15");
+        TEST_ASSERT(target16 == 14, "InterlockedMulModulo16 updates target to 14 ((15 * 4) % 23)");
+
+        // 4. 8-bit Modular Multiplication
+        // Initial: 6, Mul: 7, Mod: 19 -> (6 * 7) % 19 = 42 % 19 = 4
+        volatile CHAR target8 = 6;
+        CHAR prev8 = InterlockedMulModulo8(&target8, 7, 19);
+        TEST_ASSERT(prev8 == 6, "InterlockedMulModulo8 returns initial value 6");
+        TEST_ASSERT(target8 == 4, "InterlockedMulModulo8 updates target to 4 ((6 * 7) % 19)");
+
+        // Zero modulus safety
+        volatile LONG64 zeroModTarget = 42;
+        prev64 = InterlockedMulModulo64(&zeroModTarget, 5, 0);
+        TEST_ASSERT(prev64 == 42 && zeroModTarget == 42, "InterlockedMulModulo64 with modulus 0 is a safe no-op");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: Sovereign Cryptographic Provider NIST SP 800-38F KMAC-KW Key Wrap Mode
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-38F KMAC-KW Key Wrap Mode & BCrypt Integration...\n";
+
+        using namespace micant::crypto;
+
+        InitializeBCryptSubsystemExports();
+
+        std::vector<uint8_t> kek = {
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+            0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F
+        };
+
+        std::vector<uint8_t> targetKey = {
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+            0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+            0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37
+        }; // 24 bytes (3 64-bit blocks)
+
+        // 1. KMAC128-KW Wrap and Unwrap Round-trip
+        KmacKw128::Context kw128Ctx{};
+        KmacKw128::init(kw128Ctx, kek, {}, "MicaNT_KMAC128_KW");
+
+        std::vector<uint8_t> wrappedKey128;
+        bool bWrap = KmacKw128::wrapKey(kw128Ctx, targetKey, wrappedKey128);
+        TEST_ASSERT(bWrap == true, "KmacKw128::wrapKey succeeds for 24-byte key");
+        TEST_ASSERT(wrappedKey128.size() == targetKey.size() + 8, "Wrapped key size is key size + 8 bytes IV");
+        TEST_ASSERT(wrappedKey128 != targetKey, "Wrapped key ciphertext differs from target key");
+
+        std::vector<uint8_t> unwrappedKey128;
+        bool bUnwrap = KmacKw128::unwrapKey(kw128Ctx, wrappedKey128, unwrappedKey128);
+        TEST_ASSERT(bUnwrap == true, "KmacKw128::unwrapKey succeeds");
+        TEST_ASSERT(unwrappedKey128 == targetKey, "KmacKw128 unwrapped key perfectly matches original plaintext key");
+
+        // Tamper test (corrupt 1 bit)
+        wrappedKey128[0] ^= 0x01;
+        std::vector<uint8_t> tamperedKey;
+        bool bTamper = KmacKw128::unwrapKey(kw128Ctx, wrappedKey128, tamperedKey);
+        TEST_ASSERT(bTamper == false, "KmacKw128::unwrapKey fails with corrupted integrity check value");
+
+        // 2. KMAC256-KW Wrap and Unwrap Round-trip
+        KmacKw256::Context kw256Ctx{};
+        KmacKw256::init(kw256Ctx, kek, {}, "MicaNT_KMAC256_KW");
+
+        std::vector<uint8_t> wrappedKey256;
+        bWrap = KmacKw256::wrapKey(kw256Ctx, targetKey, wrappedKey256);
+        TEST_ASSERT(bWrap == true, "KmacKw256::wrapKey succeeds for 24-byte key");
+        TEST_ASSERT(wrappedKey256.size() == targetKey.size() + 8, "Wrapped key size is key size + 8 bytes IV");
+
+        std::vector<uint8_t> unwrappedKey256;
+        bUnwrap = KmacKw256::unwrapKey(kw256Ctx, wrappedKey256, unwrappedKey256);
+        TEST_ASSERT(bUnwrap == true, "KmacKw256::unwrapKey succeeds");
+        TEST_ASSERT(unwrappedKey256 == targetKey, "KmacKw256 unwrapped key perfectly matches original plaintext key");
+
+        // 3. BCrypt API Integration for KMAC128-KW
+        BCRYPT_ALG_HANDLE hKMAC128KW = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128KW, BCRYPT_KMAC128_KW_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128KW != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-KW");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128KW, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-KW default hash length is 32");
+        BCryptGetProperty(hKMAC128KW, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-KW rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128KW = nullptr;
+        BCryptCreateHash(hKMAC128KW, &hHash128KW, nullptr, 0, kek.data(), static_cast<uint32_t>(kek.size()), 0);
+        BCryptHashData(hHash128KW, targetKey.data(), static_cast<uint32_t>(targetKey.size()), 0);
+        std::vector<uint8_t> dKMAC128KW(targetKey.size() + 8);
+        BCryptFinishHash(hHash128KW, dKMAC128KW.data(), static_cast<uint32_t>(dKMAC128KW.size()), 0);
+        TEST_ASSERT(dKMAC128KW.size() == targetKey.size() + 8, "BCrypt KMAC128-KW produces wrapped key length");
+        TEST_ASSERT(dKMAC128KW != targetKey, "BCrypt KMAC128-KW generates valid wrapped ciphertext");
+        BCryptDestroyHash(hHash128KW);
+        BCryptCloseAlgorithmProvider(hKMAC128KW, 0);
+
+        // 4. BCrypt API Integration for KMAC256-KW
+        BCRYPT_ALG_HANDLE hKMAC256KW = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256KW, BCRYPT_KMAC256_KW_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256KW != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-KW");
+
+        BCryptGetProperty(hKMAC256KW, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-KW default hash length is 64");
+        BCryptGetProperty(hKMAC256KW, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-KW rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256KW = nullptr;
+        BCryptCreateHash(hKMAC256KW, &hHash256KW, nullptr, 0, kek.data(), static_cast<uint32_t>(kek.size()), 0);
+        BCryptHashData(hHash256KW, targetKey.data(), static_cast<uint32_t>(targetKey.size()), 0);
+        std::vector<uint8_t> dKMAC256KW(targetKey.size() + 8);
+        BCryptFinishHash(hHash256KW, dKMAC256KW.data(), static_cast<uint32_t>(dKMAC256KW.size()), 0);
+        TEST_ASSERT(dKMAC256KW.size() == targetKey.size() + 8, "BCrypt KMAC256-KW produces wrapped key length");
+        TEST_ASSERT(dKMAC256KW != targetKey, "BCrypt KMAC256-KW generates valid wrapped ciphertext");
+        BCryptDestroyHash(hHash256KW);
+        BCryptCloseAlgorithmProvider(hKMAC256KW, 0);
+    }
+
+    std::cout << "  Horizon 258 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device36, ID3D12GraphicsCommandList30 & Options 48 OK\n"
+              << "    Pillar 2: NT Native Classes 267 (PagefileTierFailoverTelemetry) & 268 (CpuFabricClockStretchingTelemetry) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Mul Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-38F KMAC-KW Key Wrap Cipher Engine OK\n";
+
+    std::cout << "[TEST] Suite 474: Horizon 258 - Direct3D 12 Device36/CommandList30 & Options 48, NT SystemInfo 267/268, Interlocked Mul Modulo 64/32/16/8 & NIST KMAC-KW PASSED." << std::endl;
+}

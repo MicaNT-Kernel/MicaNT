@@ -540,6 +540,7 @@ class ID3D12GraphicsCommandList26;
 class ID3D12GraphicsCommandList27;
 class ID3D12GraphicsCommandList28;
 class ID3D12GraphicsCommandList29;
+class ID3D12GraphicsCommandList30;
 class ID3D12ProtectedResourceSession;
 class ID3D12CommandQueue;
 class ID3D12CommandSignature;
@@ -559,6 +560,7 @@ class ID3D12Device32;
 class ID3D12Device33;
 class ID3D12Device34;
 class ID3D12Device35;
+class ID3D12Device36;
 
 // ============================================================================
 // 4. Abstract COM Interfaces
@@ -1831,6 +1833,58 @@ public:
         uint32_t DispatchFlags) = 0;
 };
 
+static constexpr IID IID_ID3D12GraphicsCommandList30 = 
+    { 0x5e1f204d, 0x6b7c, 0x8d9e, { 0xaf, 0x10, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x70 } };
+static constexpr IID OFFICIAL_IID_ID3D12GraphicsCommandList30 = IID_ID3D12GraphicsCommandList30;
+
+class ID3D12GraphicsCommandList30 : public ID3D12GraphicsCommandList29 {
+public:
+    virtual void SetWorkGraphBackingMemory20(
+        uint64_t RangeStart,
+        uint64_t RangeSizeInBytes,
+        uint64_t ScratchBufferSizeInBytes,
+        uint32_t MaxConcurrency,
+        uint32_t DynamicExpansionFlags,
+        uint32_t MemoryPoolTier,
+        uint32_t SparsityMask,
+        uint32_t SubAllocationMask,
+        uint32_t PipelineCoherencyTier,
+        uint32_t FeedbackLoopTier,
+        uint32_t SubGraphRecursionTier,
+        uint32_t MeshPipeliningTier,
+        uint32_t MultiQueueFusionTier,
+        uint32_t MicroscalingTier,
+        uint32_t SubBytePrecisionTier,
+        uint32_t SparseTensorBlockTier,
+        uint32_t DeterministicTensorReductionTier,
+        uint32_t HyperQuantizationTier,
+        uint32_t SparseClusterTier,
+        uint32_t Flags) = 0;
+
+    virtual void DispatchGraphProgramRecord20(
+        uint32_t NodeIndex,
+        const void* pRecord,
+        uint32_t RecordSizeInBytes,
+        uint32_t ConcurrencyGroup,
+        uint32_t QueueAffinityMask,
+        uint32_t DynamicClusterExpansionTier,
+        uint32_t TensorCoreMask,
+        uint32_t SubAllocationMask,
+        uint32_t PipelineCoherencyTier,
+        uint32_t FeedbackLoopTier,
+        uint32_t SubGraphRecursionTier,
+        uint32_t MeshPipeliningTier,
+        uint32_t MultiQueueFusionTier,
+        uint32_t MicroscalingTier,
+        uint32_t SubBytePrecisionTier,
+        uint32_t SparseTensorBlockTier,
+        uint32_t DeterministicTensorReductionTier,
+        uint32_t HyperQuantizationTier,
+        uint32_t SparseClusterTier,
+        uint32_t DispatchMask,
+        uint32_t DispatchFlags) = 0;
+};
+
 class ID3D12CommandQueue : public ID3D12DeviceChild {
 public:
     virtual void ExecuteCommandLists(uint32_t NumCommandLists, ID3D12CommandList* const* ppCommandLists) = 0;
@@ -1882,6 +1936,7 @@ inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS44 = 60;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS45 = 61;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS46 = 62;
 inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS47 = 63;
+inline constexpr uint32_t D3D12_FEATURE_D3D12_OPTIONS48 = 64;
 
 enum D3D12_SAMPLE_LOCATIONS_TIER {
     D3D12_SAMPLE_LOCATIONS_TIER_NOT_SUPPORTED = 0,
@@ -2281,6 +2336,21 @@ struct D3D12_FEATURE_DATA_D3D12_OPTIONS47 {
     BOOL     WorkGraphMeshShaderPipeliningTier7Supported{ 1 };
     BOOL     SparseTensorBlockAccelerationTier3Supported{ 1 };
     BOOL     DeterministicTensorReductionTier2Supported{ 1 };
+};
+
+struct D3D12_FEATURE_DATA_D3D12_OPTIONS48 {
+    uint32_t WorkGraphsTier{ 31u }; // Tier 5.3
+    BOOL     CooperativeMatrixMultiply1048576Supported{ 1 };
+    BOOL     SubByteMicroscopicFormatsV11Supported{ 1 };
+    BOOL     DynamicClusterExpansionTier16Supported{ 1 };
+    uint32_t MaxWorkGraphConcurrencyGroups{ 4194304u };
+    uint32_t TilePipeliningStagesSupported{ 8192u };
+    BOOL     AutonomousGraphRecursionTier8Supported{ 1 };
+    BOOL     MultiQueueTensorPipelineFusionTier7Supported{ 1 };
+    BOOL     WorkGraphMeshShaderPipeliningTier8Supported{ 1 };
+    BOOL     SparseTensorBlockAccelerationTier4Supported{ 1 };
+    BOOL     DeterministicTensorReductionTier3Supported{ 1 };
+    BOOL     HyperQuantizationTier2Supported{ 1 };
 };
 
 static constexpr GUID CLSID_D3D12DeviceRemovedExtendedData =
@@ -3764,6 +3834,54 @@ public:
         int32_t* pHyperQuantization) = 0;
 };
 
+static constexpr IID IID_ID3D12Device36 = 
+    { 0xaf1b2e54, 0x4c6d, 0x7d8e, { 0xbc, 0x45, 0x6b, 0x8e, 0xaf, 0x20, 0x3b, 0x4c } };
+static constexpr IID OFFICIAL_IID_ID3D12Device36 = IID_ID3D12Device36;
+
+class ID3D12Device36 : public ID3D12Device35 {
+public:
+    virtual int32_t CreateWorkGraphProgramRecord20(
+        const void* pDesc,
+        uint32_t Flags,
+        uint64_t NodeRecordStride,
+        uint32_t MaxConcurrency,
+        uint32_t DynamicExpansionFlags,
+        uint32_t MemoryPoolTier,
+        uint32_t TensorExpansionTier,
+        uint32_t SubAllocationMask,
+        uint32_t PipelineCoherencyTier,
+        uint32_t FeedbackLoopTier,
+        uint32_t SubGraphRecursionTier,
+        uint32_t MeshPipeliningTier,
+        uint32_t MultiQueueFusionTier,
+        uint32_t MicroscalingTier,
+        uint32_t SubBytePrecisionTier,
+        uint32_t SparseTensorBlockTier,
+        uint32_t DeterministicTensorReductionTier,
+        uint32_t HyperQuantizationTier,
+        uint32_t SparseClusterTier,
+        const IID& riid,
+        void** ppRecord) = 0;
+
+    virtual int32_t GetWorkGraphCooperativeMatrixSupport15(
+        int32_t* pSupported,
+        uint32_t* pMaxMatrixDim,
+        uint32_t* pSupportedDataTypes,
+        uint32_t* pSparseAcceleration,
+        int32_t* pAsyncAccumulation,
+        uint32_t* pMaxTilePipeliningStages,
+        int32_t* pAutonomousFeedbackLoops,
+        int32_t* pSubGraphRecursion,
+        int32_t* pMeshShaderPipelining,
+        int32_t* pMultiQueueFusion,
+        int32_t* pMicroscalingSupport,
+        int32_t* pSubByteMicroscopicPrecision,
+        int32_t* pSparseTensorBlockAcceleration,
+        int32_t* pDeterministicTensorReduction,
+        int32_t* pHyperQuantization,
+        int32_t* pSparseClusterAcceleration) = 0;
+};
+
 class Prism3D12QueryHeapImpl : public ID3D12QueryHeap {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
@@ -4286,7 +4404,7 @@ public:
 };
 
 // Command List implementation
-class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList29 {
+class Prism3D12GraphicsCommandListImpl : public ID3D12GraphicsCommandList30 {
 public:
     enum class CommandType {
         TransitionBarrier,
@@ -4789,6 +4907,50 @@ private:
         uint32_t DispatchFlags{ 0 };
     };
     std::vector<ProgramRecord19Entry> m_recordedProgramRecords19;
+    uint64_t m_backingMemory20Start{ 0 };
+    uint64_t m_backingMemory20Size{ 0 };
+    uint64_t m_backingMemory20ScratchSize{ 0 };
+    uint32_t m_backingMemory20MaxConcurrency{ 0 };
+    uint32_t m_backingMemory20DynamicExpansionFlags{ 0 };
+    uint32_t m_backingMemory20MemoryPoolTier{ 0 };
+    uint32_t m_backingMemory20SparsityMask{ 0 };
+    uint32_t m_backingMemory20SubAllocationMask{ 0 };
+    uint32_t m_backingMemory20PipelineCoherencyTier{ 0 };
+    uint32_t m_backingMemory20FeedbackLoopTier{ 0 };
+    uint32_t m_backingMemory20SubGraphRecursionTier{ 0 };
+    uint32_t m_backingMemory20MeshPipeliningTier{ 0 };
+    uint32_t m_backingMemory20MultiQueueFusionTier{ 0 };
+    uint32_t m_backingMemory20MicroscalingTier{ 0 };
+    uint32_t m_backingMemory20SubBytePrecisionTier{ 0 };
+    uint32_t m_backingMemory20SparseTensorBlockTier{ 0 };
+    uint32_t m_backingMemory20DeterministicTensorReductionTier{ 0 };
+    uint32_t m_backingMemory20HyperQuantizationTier{ 0 };
+    uint32_t m_backingMemory20SparseClusterTier{ 0 };
+    uint32_t m_backingMemory20Flags{ 0 };
+    struct ProgramRecord20Entry {
+        uint32_t NodeIndex{ 0 };
+        const void* pRecord{ nullptr };
+        uint32_t RecordSizeInBytes{ 0 };
+        uint32_t ConcurrencyGroup{ 0 };
+        uint32_t QueueAffinityMask{ 0 };
+        uint32_t DynamicClusterExpansionTier{ 0 };
+        uint32_t TensorCoreMask{ 0 };
+        uint32_t SubAllocationMask{ 0 };
+        uint32_t PipelineCoherencyTier{ 0 };
+        uint32_t FeedbackLoopTier{ 0 };
+        uint32_t SubGraphRecursionTier{ 0 };
+        uint32_t MeshPipeliningTier{ 0 };
+        uint32_t MultiQueueFusionTier{ 0 };
+        uint32_t MicroscalingTier{ 0 };
+        uint32_t SubBytePrecisionTier{ 0 };
+        uint32_t SparseTensorBlockTier{ 0 };
+        uint32_t DeterministicTensorReductionTier{ 0 };
+        uint32_t HyperQuantizationTier{ 0 };
+        uint32_t SparseClusterTier{ 0 };
+        uint32_t DispatchMask{ 0 };
+        uint32_t DispatchFlags{ 0 };
+    };
+    std::vector<ProgramRecord20Entry> m_recordedProgramRecords20;
     uint32_t m_recordedEnhancedBarriersCount{ 0 };
     uint32_t m_dispatchedMeshCount{ 0 };
     uint32_t m_dispatchedRaysCount{ 0 };
@@ -4920,6 +5082,11 @@ public:
         }
         if (riid == IID_ID3D12GraphicsCommandList29 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList29) {
             *ppv = static_cast<ID3D12GraphicsCommandList29*>(this);
+            AddRef();
+            return 0;
+        }
+        if (riid == IID_ID3D12GraphicsCommandList30 || riid == OFFICIAL_IID_ID3D12GraphicsCommandList30) {
+            *ppv = static_cast<ID3D12GraphicsCommandList30*>(this);
             AddRef();
             return 0;
         }
@@ -5182,6 +5349,27 @@ public:
         m_backingMemory19HyperQuantizationTier = 0;
         m_backingMemory19Flags = 0;
         m_recordedProgramRecords19.clear();
+        m_backingMemory20Start = 0;
+        m_backingMemory20Size = 0;
+        m_backingMemory20ScratchSize = 0;
+        m_backingMemory20MaxConcurrency = 0;
+        m_backingMemory20DynamicExpansionFlags = 0;
+        m_backingMemory20MemoryPoolTier = 0;
+        m_backingMemory20SparsityMask = 0;
+        m_backingMemory20SubAllocationMask = 0;
+        m_backingMemory20PipelineCoherencyTier = 0;
+        m_backingMemory20FeedbackLoopTier = 0;
+        m_backingMemory20SubGraphRecursionTier = 0;
+        m_backingMemory20MeshPipeliningTier = 0;
+        m_backingMemory20MultiQueueFusionTier = 0;
+        m_backingMemory20MicroscalingTier = 0;
+        m_backingMemory20SubBytePrecisionTier = 0;
+        m_backingMemory20SparseTensorBlockTier = 0;
+        m_backingMemory20DeterministicTensorReductionTier = 0;
+        m_backingMemory20HyperQuantizationTier = 0;
+        m_backingMemory20SparseClusterTier = 0;
+        m_backingMemory20Flags = 0;
+        m_recordedProgramRecords20.clear();
         m_isOpen = true;
         return 0;
     }
@@ -5402,6 +5590,27 @@ public:
         m_backingMemory19HyperQuantizationTier = 0;
         m_backingMemory19Flags = 0;
         m_recordedProgramRecords19.clear();
+        m_backingMemory20Start = 0;
+        m_backingMemory20Size = 0;
+        m_backingMemory20ScratchSize = 0;
+        m_backingMemory20MaxConcurrency = 0;
+        m_backingMemory20DynamicExpansionFlags = 0;
+        m_backingMemory20MemoryPoolTier = 0;
+        m_backingMemory20SparsityMask = 0;
+        m_backingMemory20SubAllocationMask = 0;
+        m_backingMemory20PipelineCoherencyTier = 0;
+        m_backingMemory20FeedbackLoopTier = 0;
+        m_backingMemory20SubGraphRecursionTier = 0;
+        m_backingMemory20MeshPipeliningTier = 0;
+        m_backingMemory20MultiQueueFusionTier = 0;
+        m_backingMemory20MicroscalingTier = 0;
+        m_backingMemory20SubBytePrecisionTier = 0;
+        m_backingMemory20SparseTensorBlockTier = 0;
+        m_backingMemory20DeterministicTensorReductionTier = 0;
+        m_backingMemory20HyperQuantizationTier = 0;
+        m_backingMemory20SparseClusterTier = 0;
+        m_backingMemory20Flags = 0;
+        m_recordedProgramRecords20.clear();
         m_hasProgram = false;
         m_pProtectedSession = nullptr;
     }
@@ -6418,11 +6627,64 @@ public:
     [[nodiscard]] size_t GetRecordedProgramRecord19Count() const noexcept { return m_recordedProgramRecords19.size(); }
     [[nodiscard]] const std::vector<ProgramRecord19Entry>& GetRecordedProgramRecords19() const noexcept { return m_recordedProgramRecords19; }
 
+    void SetWorkGraphBackingMemory20(uint64_t RangeStart, uint64_t RangeSizeInBytes, uint64_t ScratchBufferSizeInBytes, uint32_t MaxConcurrency, uint32_t DynamicExpansionFlags, uint32_t MemoryPoolTier, uint32_t SparsityMask, uint32_t SubAllocationMask, uint32_t PipelineCoherencyTier, uint32_t FeedbackLoopTier, uint32_t SubGraphRecursionTier, uint32_t MeshPipeliningTier, uint32_t MultiQueueFusionTier, uint32_t MicroscalingTier, uint32_t SubBytePrecisionTier, uint32_t SparseTensorBlockTier, uint32_t DeterministicTensorReductionTier, uint32_t HyperQuantizationTier, uint32_t SparseClusterTier, uint32_t Flags) override {
+        if (!m_isOpen) return;
+        m_backingMemory20Start = RangeStart;
+        m_backingMemory20Size = RangeSizeInBytes;
+        m_backingMemory20ScratchSize = ScratchBufferSizeInBytes;
+        m_backingMemory20MaxConcurrency = MaxConcurrency;
+        m_backingMemory20DynamicExpansionFlags = DynamicExpansionFlags;
+        m_backingMemory20MemoryPoolTier = MemoryPoolTier;
+        m_backingMemory20SparsityMask = SparsityMask;
+        m_backingMemory20SubAllocationMask = SubAllocationMask;
+        m_backingMemory20PipelineCoherencyTier = PipelineCoherencyTier;
+        m_backingMemory20FeedbackLoopTier = FeedbackLoopTier;
+        m_backingMemory20SubGraphRecursionTier = SubGraphRecursionTier;
+        m_backingMemory20MeshPipeliningTier = MeshPipeliningTier;
+        m_backingMemory20MultiQueueFusionTier = MultiQueueFusionTier;
+        m_backingMemory20MicroscalingTier = MicroscalingTier;
+        m_backingMemory20SubBytePrecisionTier = SubBytePrecisionTier;
+        m_backingMemory20SparseTensorBlockTier = SparseTensorBlockTier;
+        m_backingMemory20DeterministicTensorReductionTier = DeterministicTensorReductionTier;
+        m_backingMemory20HyperQuantizationTier = HyperQuantizationTier;
+        m_backingMemory20SparseClusterTier = SparseClusterTier;
+        m_backingMemory20Flags = Flags;
+    }
+
+    void DispatchGraphProgramRecord20(uint32_t NodeIndex, const void* pRecord, uint32_t RecordSizeInBytes, uint32_t ConcurrencyGroup, uint32_t QueueAffinityMask, uint32_t DynamicClusterExpansionTier, uint32_t TensorCoreMask, uint32_t SubAllocationMask, uint32_t PipelineCoherencyTier, uint32_t FeedbackLoopTier, uint32_t SubGraphRecursionTier, uint32_t MeshPipeliningTier, uint32_t MultiQueueFusionTier, uint32_t MicroscalingTier, uint32_t SubBytePrecisionTier, uint32_t SparseTensorBlockTier, uint32_t DeterministicTensorReductionTier, uint32_t HyperQuantizationTier, uint32_t SparseClusterTier, uint32_t DispatchMask, uint32_t DispatchFlags) override {
+        if (!m_isOpen) return;
+        m_recordedProgramRecords20.push_back({ NodeIndex, pRecord, RecordSizeInBytes, ConcurrencyGroup, QueueAffinityMask, DynamicClusterExpansionTier, TensorCoreMask, SubAllocationMask, PipelineCoherencyTier, FeedbackLoopTier, SubGraphRecursionTier, MeshPipeliningTier, MultiQueueFusionTier, MicroscalingTier, SubBytePrecisionTier, SparseTensorBlockTier, DeterministicTensorReductionTier, HyperQuantizationTier, SparseClusterTier, DispatchMask, DispatchFlags });
+    }
+
+    [[nodiscard]] uint64_t GetWorkGraphBackingMemory20Start() const noexcept { return m_backingMemory20Start; }
+    [[nodiscard]] uint64_t GetWorkGraphBackingMemory20Size() const noexcept { return m_backingMemory20Size; }
+    [[nodiscard]] uint64_t GetWorkGraphBackingMemory20ScratchSize() const noexcept { return m_backingMemory20ScratchSize; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20MaxConcurrency() const noexcept { return m_backingMemory20MaxConcurrency; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20DynamicExpansionFlags() const noexcept { return m_backingMemory20DynamicExpansionFlags; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20MemoryPoolTier() const noexcept { return m_backingMemory20MemoryPoolTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20SparsityMask() const noexcept { return m_backingMemory20SparsityMask; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20SubAllocationMask() const noexcept { return m_backingMemory20SubAllocationMask; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20PipelineCoherencyTier() const noexcept { return m_backingMemory20PipelineCoherencyTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20FeedbackLoopTier() const noexcept { return m_backingMemory20FeedbackLoopTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20SubGraphRecursionTier() const noexcept { return m_backingMemory20SubGraphRecursionTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20MeshPipeliningTier() const noexcept { return m_backingMemory20MeshPipeliningTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20MultiQueueFusionTier() const noexcept { return m_backingMemory20MultiQueueFusionTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20MicroscalingTier() const noexcept { return m_backingMemory20MicroscalingTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20SubBytePrecisionTier() const noexcept { return m_backingMemory20SubBytePrecisionTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20SparseTensorBlockTier() const noexcept { return m_backingMemory20SparseTensorBlockTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20DeterministicTensorReductionTier() const noexcept { return m_backingMemory20DeterministicTensorReductionTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20HyperQuantizationTier() const noexcept { return m_backingMemory20HyperQuantizationTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20SparseClusterTier() const noexcept { return m_backingMemory20SparseClusterTier; }
+    [[nodiscard]] uint32_t GetWorkGraphBackingMemory20Flags() const noexcept { return m_backingMemory20Flags; }
+    [[nodiscard]] size_t GetRecordedProgramRecord20Count() const noexcept { return m_recordedProgramRecords20.size(); }
+    [[nodiscard]] const std::vector<ProgramRecord20Entry>& GetRecordedProgramRecords20() const noexcept { return m_recordedProgramRecords20; }
+
     const std::vector<Command>& GetRecordedCommands() const { return m_commands; }
     bool IsOpen() const { return m_isOpen; }
 };
 
 using Prism3D12GraphicsCommandList29Impl = Prism3D12GraphicsCommandListImpl;
+using Prism3D12GraphicsCommandList30Impl = Prism3D12GraphicsCommandListImpl;
 
 // Command Queue implementation
 class Prism3D12CommandQueueImpl : public ID3D12CommandQueue {
@@ -6870,7 +7132,7 @@ public:
     [[nodiscard]] uint32_t GetMaxAttributeSize() const noexcept { return m_maxAttributeSize; }
 };
 
-class Prism3D12DeviceImpl : public ID3D12Device35 {
+class Prism3D12DeviceImpl : public ID3D12Device36 {
 private:
     std::atomic<uint32_t> m_refCount{ 1 };
     IUnknown* m_pAdapter{ nullptr };
@@ -6896,8 +7158,8 @@ public:
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
-        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16 || riid == IID_ID3D12Device17 || riid == OFFICIAL_IID_ID3D12Device17 || riid == IID_ID3D12Device18 || riid == OFFICIAL_IID_ID3D12Device18 || riid == IID_ID3D12Device19 || riid == OFFICIAL_IID_ID3D12Device19 || riid == IID_ID3D12Device20 || riid == OFFICIAL_IID_ID3D12Device20 || riid == IID_ID3D12Device21 || riid == OFFICIAL_IID_ID3D12Device21 || riid == IID_ID3D12Device22 || riid == OFFICIAL_IID_ID3D12Device22 || riid == IID_ID3D12Device23 || riid == OFFICIAL_IID_ID3D12Device23 || riid == IID_ID3D12Device24 || riid == OFFICIAL_IID_ID3D12Device24 || riid == IID_ID3D12Device25 || riid == OFFICIAL_IID_ID3D12Device25 || riid == IID_ID3D12Device26 || riid == OFFICIAL_IID_ID3D12Device26 || riid == IID_ID3D12Device27 || riid == OFFICIAL_IID_ID3D12Device27 || riid == IID_ID3D12Device28 || riid == OFFICIAL_IID_ID3D12Device28 || riid == IID_ID3D12Device29 || riid == OFFICIAL_IID_ID3D12Device29 || riid == IID_ID3D12Device30 || riid == OFFICIAL_IID_ID3D12Device30 || riid == IID_ID3D12Device31 || riid == OFFICIAL_IID_ID3D12Device31 || riid == IID_ID3D12Device32 || riid == OFFICIAL_IID_ID3D12Device32 || riid == IID_ID3D12Device33 || riid == OFFICIAL_IID_ID3D12Device33 || riid == IID_ID3D12Device34 || riid == OFFICIAL_IID_ID3D12Device34 || riid == IID_ID3D12Device35 || riid == OFFICIAL_IID_ID3D12Device35) {
-            *ppv = static_cast<ID3D12Device35*>(this);
+        if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12Device || riid == IID_ID3D12Device1 || riid == IID_ID3D12Device4 || riid == IID_ID3D12Device5 || riid == IID_ID3D12Device8 || riid == IID_ID3D12Device9 || riid == IID_ID3D12Device10 || riid == IID_ID3D12Device11 || riid == OFFICIAL_IID_ID3D12Device11 || riid == IID_ID3D12Device12 || riid == OFFICIAL_IID_ID3D12Device12 || riid == IID_ID3D12Device13 || riid == OFFICIAL_IID_ID3D12Device13 || riid == IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14 || riid == OFFICIAL_IID_ID3D12Device14Alt || riid == IID_ID3D12Device15 || riid == OFFICIAL_IID_ID3D12Device15 || riid == IID_ID3D12Device16 || riid == OFFICIAL_IID_ID3D12Device16 || riid == IID_ID3D12Device17 || riid == OFFICIAL_IID_ID3D12Device17 || riid == IID_ID3D12Device18 || riid == OFFICIAL_IID_ID3D12Device18 || riid == IID_ID3D12Device19 || riid == OFFICIAL_IID_ID3D12Device19 || riid == IID_ID3D12Device20 || riid == OFFICIAL_IID_ID3D12Device20 || riid == IID_ID3D12Device21 || riid == OFFICIAL_IID_ID3D12Device21 || riid == IID_ID3D12Device22 || riid == OFFICIAL_IID_ID3D12Device22 || riid == IID_ID3D12Device23 || riid == OFFICIAL_IID_ID3D12Device23 || riid == IID_ID3D12Device24 || riid == OFFICIAL_IID_ID3D12Device24 || riid == IID_ID3D12Device25 || riid == OFFICIAL_IID_ID3D12Device25 || riid == IID_ID3D12Device26 || riid == OFFICIAL_IID_ID3D12Device26 || riid == IID_ID3D12Device27 || riid == OFFICIAL_IID_ID3D12Device27 || riid == IID_ID3D12Device28 || riid == OFFICIAL_IID_ID3D12Device28 || riid == IID_ID3D12Device29 || riid == OFFICIAL_IID_ID3D12Device29 || riid == IID_ID3D12Device30 || riid == OFFICIAL_IID_ID3D12Device30 || riid == IID_ID3D12Device31 || riid == OFFICIAL_IID_ID3D12Device31 || riid == IID_ID3D12Device32 || riid == OFFICIAL_IID_ID3D12Device32 || riid == IID_ID3D12Device33 || riid == OFFICIAL_IID_ID3D12Device33 || riid == IID_ID3D12Device34 || riid == OFFICIAL_IID_ID3D12Device34 || riid == IID_ID3D12Device35 || riid == OFFICIAL_IID_ID3D12Device35 || riid == IID_ID3D12Device36 || riid == OFFICIAL_IID_ID3D12Device36) {
+            *ppv = static_cast<ID3D12Device36*>(this);
             AddRef();
             return 0;
         }
@@ -8212,6 +8474,71 @@ public:
         return 0;
     }
 
+    int32_t CreateWorkGraphProgramRecord20(
+        const void* /*pDesc*/,
+        uint32_t /*Flags*/,
+        uint64_t /*NodeRecordStride*/,
+        uint32_t /*MaxConcurrency*/,
+        uint32_t /*DynamicExpansionFlags*/,
+        uint32_t /*MemoryPoolTier*/,
+        uint32_t /*TensorExpansionTier*/,
+        uint32_t /*SubAllocationMask*/,
+        uint32_t /*PipelineCoherencyTier*/,
+        uint32_t /*FeedbackLoopTier*/,
+        uint32_t /*SubGraphRecursionTier*/,
+        uint32_t /*MeshPipeliningTier*/,
+        uint32_t /*MultiQueueFusionTier*/,
+        uint32_t /*MicroscalingTier*/,
+        uint32_t /*SubBytePrecisionTier*/,
+        uint32_t /*SparseTensorBlockTier*/,
+        uint32_t /*DeterministicTensorReductionTier*/,
+        uint32_t /*HyperQuantizationTier*/,
+        uint32_t /*SparseClusterTier*/,
+        const IID& /*riid*/,
+        void** ppRecord) override {
+        if (!ppRecord) return -1;
+        *ppRecord = reinterpret_cast<void*>(0x88020);
+        m_workGraphProgramRecordsCreated++;
+        return 0;
+    }
+
+    int32_t GetWorkGraphCooperativeMatrixSupport15(
+        int32_t* pSupported,
+        uint32_t* pMaxMatrixDim,
+        uint32_t* pSupportedDataTypes,
+        uint32_t* pSparseAcceleration,
+        int32_t* pAsyncAccumulation,
+        uint32_t* pMaxTilePipeliningStages,
+        int32_t* pAutonomousFeedbackLoops,
+        int32_t* pSubGraphRecursion,
+        int32_t* pMeshShaderPipelining,
+        int32_t* pMultiQueueFusion,
+        int32_t* pMicroscalingSupport,
+        int32_t* pSubByteMicroscopicPrecision,
+        int32_t* pSparseTensorBlockAcceleration,
+        int32_t* pDeterministicTensorReduction,
+        int32_t* pHyperQuantization,
+        int32_t* pSparseClusterAcceleration) override {
+        if (!pSupported || !pMaxMatrixDim || !pSupportedDataTypes || !pSparseAcceleration || !pAsyncAccumulation || !pMaxTilePipeliningStages || !pAutonomousFeedbackLoops || !pSubGraphRecursion || !pMeshShaderPipelining || !pMultiQueueFusion || !pMicroscalingSupport || !pSubByteMicroscopicPrecision || !pSparseTensorBlockAcceleration || !pDeterministicTensorReduction || !pHyperQuantization || !pSparseClusterAcceleration) return -1;
+        *pSupported = 1;
+        *pMaxMatrixDim = 1048576;
+        *pSupportedDataTypes = 0xFFFF; // Full precision, extended microscaling v11 and fractional MXFP0.03125 / MXINT0.0625 tensor types
+        *pSparseAcceleration = 1;
+        *pAsyncAccumulation = 1;
+        *pMaxTilePipeliningStages = 8192;
+        *pAutonomousFeedbackLoops = 1;
+        *pSubGraphRecursion = 1;
+        *pMeshShaderPipelining = 1;
+        *pMultiQueueFusion = 1;
+        *pMicroscalingSupport = 1;
+        *pSubByteMicroscopicPrecision = 1;
+        *pSparseTensorBlockAcceleration = 1;
+        *pDeterministicTensorReduction = 1;
+        *pHyperQuantization = 1;
+        *pSparseClusterAcceleration = 1;
+        return 0;
+    }
+
     int32_t CreateShaderCacheSession(
         const D3D12_SHADER_CACHE_SESSION_DESC* pDesc,
         const IID& riid,
@@ -8717,12 +9044,30 @@ public:
             pData->DeterministicTensorReductionTier2Supported = TRUE;
             return 0;
         }
+        if (Feature == D3D12_FEATURE_D3D12_OPTIONS48) {
+            if (FeatureSupportDataSize < sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS48)) return -1;
+            auto* pData = reinterpret_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS48*>(pFeatureSupportData);
+            pData->WorkGraphsTier = 31u; // Tier 5.3
+            pData->CooperativeMatrixMultiply1048576Supported = TRUE;
+            pData->SubByteMicroscopicFormatsV11Supported = TRUE;
+            pData->DynamicClusterExpansionTier16Supported = TRUE;
+            pData->MaxWorkGraphConcurrencyGroups = 4194304u;
+            pData->TilePipeliningStagesSupported = 8192u;
+            pData->AutonomousGraphRecursionTier8Supported = TRUE;
+            pData->MultiQueueTensorPipelineFusionTier7Supported = TRUE;
+            pData->WorkGraphMeshShaderPipeliningTier8Supported = TRUE;
+            pData->SparseTensorBlockAccelerationTier4Supported = TRUE;
+            pData->DeterministicTensorReductionTier3Supported = TRUE;
+            pData->HyperQuantizationTier2Supported = TRUE;
+            return 0;
+        }
 
         return 0;
     }
 };
 
 using Prism3D12Device35Impl = Prism3D12DeviceImpl;
+using Prism3D12Device36Impl = Prism3D12DeviceImpl;
 
 // ============================================================================
 // 6. Exported C APIs (d3d12.dll parity)
