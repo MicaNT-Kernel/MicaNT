@@ -57676,3 +57676,447 @@ inline void Test_Horizon260_Device38Options50_PagefileTierDynamicDrainCpuVoltage
 
     std::cout << "[TEST] Suite 476: Horizon 260 - Direct3D 12 Device38/CommandList32 & Options 50, NT SystemInfo 271/272, Interlocked Bit-Reversal 64/32/16/8 & NIST Ascon-128/Ascon-Hash PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 477: Horizon 261 - Direct3D 12 ID3D12Device39 / ID3D12GraphicsCommandList33 &
+//            Options 51 ABI, NT Native System Information Classes 273 / 274
+//            (PagefileTierPressurePredictive / CpuFabricVoltageResonanceTelemetry),
+//            NT Native Executive & Win32 Interlocked PopCount 64/32/16/8-bit Primitives &
+//            NIST SP 800-232 Ascon-80pq AEAD & Ascon-Xof Lightweight Cryptography
+// ============================================================================
+inline void Test_Horizon261_Device39Options51_PagefilePressureCpuVoltageResonance_InterlockedPopCount_And_Ascon80pqXof_Suite() {
+    std::cout << "\n===================================================================\n" << std::flush;
+    std::cout << "[TEST] Running Suite 477: Horizon 261 - Direct3D 12 Device39/CommandList33 & Options 51, NT SystemInfo 273/274, Interlocked PopCount 64/32/16/8 & NIST Ascon-80pq/Ascon-Xof...\n" << std::flush;
+    std::cout << "===================================================================\n" << std::flush;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device39, ID3D12GraphicsCommandList33 & Options 51 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device39, ID3D12GraphicsCommandList33 & Options 51 Architecture...\n" << std::flush;
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. QueryInterface for ID3D12Device39
+        ID3D12Device39* pDev39 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device39, reinterpret_cast<void**>(&pDev39));
+        TEST_ASSERT(hr == 0 && pDev39 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device39 succeeds");
+
+        // 2. Feature Check for D3D12_FEATURE_D3D12_OPTIONS51
+        D3D12_FEATURE_DATA_D3D12_OPTIONS51 opt51{};
+        hr = pDev39->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS51, &opt51, sizeof(opt51));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS51 succeeds");
+        TEST_ASSERT(opt51.WorkGraphsTier == 34u, "OPTIONS51 WorkGraphsTier is 34 (Tier 5.6)");
+        TEST_ASSERT(opt51.CooperativeMatrixMultiply8388608Supported == TRUE, "OPTIONS51 CooperativeMatrixMultiply 8,388,608 supported");
+        TEST_ASSERT(opt51.SubByteMicroscopicFormatsV14Supported == TRUE, "OPTIONS51 SubByteMicroscopicFormats V14 supported");
+        TEST_ASSERT(opt51.DynamicClusterExpansionTier19Supported == TRUE, "OPTIONS51 DynamicClusterExpansion Tier 19 supported");
+        TEST_ASSERT(opt51.MaxWorkGraphConcurrencyGroups == 33554432u, "OPTIONS51 MaxWorkGraphConcurrencyGroups is 33,554,432");
+        TEST_ASSERT(opt51.TilePipeliningStagesSupported == 65536u, "OPTIONS51 TilePipeliningStagesSupported is 65536");
+        TEST_ASSERT(opt51.AutonomousGraphRecursionTier11Supported == TRUE, "OPTIONS51 AutonomousGraphRecursion Tier 11 supported");
+        TEST_ASSERT(opt51.MultiQueueTensorPipelineFusionTier10Supported == TRUE, "OPTIONS51 MultiQueueTensorPipelineFusion Tier 10 supported");
+        TEST_ASSERT(opt51.WorkGraphMeshShaderPipeliningTier11Supported == TRUE, "OPTIONS51 WorkGraphMeshShaderPipelining Tier 11 supported");
+        TEST_ASSERT(opt51.SparseTensorBlockAccelerationTier7Supported == TRUE, "OPTIONS51 SparseTensorBlockAcceleration Tier 7 supported");
+        TEST_ASSERT(opt51.DeterministicTensorReductionTier6Supported == TRUE, "OPTIONS51 DeterministicTensorReduction Tier 6 supported");
+        TEST_ASSERT(opt51.HyperQuantizationTier5Supported == TRUE, "OPTIONS51 HyperQuantizationTier5Supported is TRUE");
+        TEST_ASSERT(opt51.SparseClusterTier4Supported == TRUE, "OPTIONS51 SparseClusterTier4Supported is TRUE");
+        TEST_ASSERT(opt51.MultiQueueWorkGraphSyncTier3Supported == TRUE, "OPTIONS51 MultiQueueWorkGraphSyncTier3Supported is TRUE");
+        TEST_ASSERT(opt51.AsynchronousKernelDispatchTier4Supported == TRUE, "OPTIONS51 AsynchronousKernelDispatchTier4Supported is TRUE");
+        TEST_ASSERT(opt51.NeuralExecutionEngineTier1Supported == TRUE, "OPTIONS51 NeuralExecutionEngineTier1Supported is TRUE");
+
+        // 3. Work Graph Cooperative Matrix Support 18
+        int32_t supported = 0;
+        uint32_t maxDim = 0;
+        uint32_t dataTypes = 0;
+        uint32_t sparseAccel = 0;
+        int32_t asyncAccum = 0;
+        uint32_t maxTileStages = 0;
+        int32_t feedbackLoops = 0;
+        int32_t subGraphRecursion = 0;
+        int32_t meshPipelining = 0;
+        int32_t multiQueueFusion = 0;
+        int32_t microscaling = 0;
+        int32_t subByteMicroscopic = 0;
+        int32_t sparseTensorBlock = 0;
+        int32_t deterministicReduction = 0;
+        int32_t hyperQuant = 0;
+        int32_t sparseCluster = 0;
+        int32_t multiQueueSync = 0;
+        int32_t asyncKernelDispatch = 0;
+        int32_t neuralExecutionEngine = 0;
+
+        hr = pDev39->GetWorkGraphCooperativeMatrixSupport18(
+            &supported, &maxDim, &dataTypes, &sparseAccel, &asyncAccum, &maxTileStages,
+            &feedbackLoops, &subGraphRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByteMicroscopic, &sparseTensorBlock, &deterministicReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernelDispatch, &neuralExecutionEngine);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport18 succeeds");
+        TEST_ASSERT(supported == 1, "Work graph cooperative matrix multiplication is supported");
+        TEST_ASSERT(maxDim == 8388608, "Max matrix dimension supported is 8388608");
+        TEST_ASSERT(dataTypes == 0x7FFFF, "Data types mask covers extended formats V14 (0x7FFFF)");
+        TEST_ASSERT(sparseAccel == 1, "Sparse acceleration supported");
+        TEST_ASSERT(asyncAccum == 1, "Async accumulation supported");
+        TEST_ASSERT(maxTileStages == 65536, "Max tile pipelining stages is 65536");
+        TEST_ASSERT(feedbackLoops == 1, "Autonomous feedback loops supported");
+        TEST_ASSERT(subGraphRecursion == 1, "Sub-graph recursion supported");
+        TEST_ASSERT(meshPipelining == 1, "Mesh shader pipelining supported");
+        TEST_ASSERT(multiQueueFusion == 1, "Multi-queue fusion supported");
+        TEST_ASSERT(microscaling == 1, "Microscaling support verified");
+        TEST_ASSERT(subByteMicroscopic == 1, "Sub-byte microscopic precision verified");
+        TEST_ASSERT(sparseTensorBlock == 1, "Sparse tensor block acceleration verified");
+        TEST_ASSERT(deterministicReduction == 1, "Deterministic tensor reduction verified");
+        TEST_ASSERT(hyperQuant == 1, "Hyper-quantization verified");
+        TEST_ASSERT(sparseCluster == 1, "Sparse cluster acceleration verified");
+        TEST_ASSERT(multiQueueSync == 1, "Multi-queue synchronization acceleration verified");
+        TEST_ASSERT(asyncKernelDispatch == 1, "Asynchronous kernel dispatch acceleration verified");
+        TEST_ASSERT(neuralExecutionEngine == 1, "Neural execution engine acceleration verified");
+
+        // 4. Create Work Graph Program Record 23
+        void* pRecord23 = nullptr;
+        hr = pDev39->CreateWorkGraphProgramRecord23(
+            nullptr, 0x1, 512, 33554432, 0x3F, 6, 5, 0x3FF, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1,
+            OFFICIAL_IID_ID3D12Device39, &pRecord23);
+        TEST_ASSERT(hr == 0 && pRecord23 != nullptr, "CreateWorkGraphProgramRecord23 succeeds");
+
+        // 5. QueryInterface for ID3D12GraphicsCommandList33
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList33* pCmd33 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList33, reinterpret_cast<void**>(&pCmd33));
+        TEST_ASSERT(hr == 0 && pCmd33 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList33 succeeds");
+
+        // 6. ID3D12GraphicsCommandList33 Methods
+        pCmd33->SetWorkGraphBackingMemory23(
+            0x30000000ULL, 0x60000000ULL, 0x10000000ULL, 16777216, 0x7F, 7, 0x1F, 0x7FF,
+            4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 1, 0x80);
+
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23Start() == 0x30000000ULL, "Backing memory 23 start address verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23Size() == 0x60000000ULL, "Backing memory 23 size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23ScratchSize() == 0x10000000ULL, "Backing memory 23 scratch buffer size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23MaxConcurrency() == 16777216, "Backing memory 23 max concurrency verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23DynamicExpansionFlags() == 0x7F, "Backing memory 23 dynamic expansion flags verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23MemoryPoolTier() == 7, "Backing memory 23 memory pool tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23SparsityMask() == 0x1F, "Backing memory 23 sparsity mask verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23SubAllocationMask() == 0x7FF, "Backing memory 23 sub allocation mask verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23AsyncKernelDispatchTier() == 4, "Backing memory 23 async kernel dispatch tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23NeuralExecutionEngineTier() == 1, "Backing memory 23 neural execution engine tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory23Flags() == 0x80, "Backing memory 23 flags verified");
+
+        const uint8_t mockRecord23[64] = { 0x77 };
+        pCmd33->DispatchGraphProgramRecord23(
+            33, mockRecord23, sizeof(mockRecord23), 16777216, 0x3F, 19, 0x1F, 0x7FF,
+            4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 1, 0x28, 0x10);
+
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord23Count() == 1, "Program record 23 recorded successfully");
+        const auto& records23 = cmdList.GetRecordedProgramRecords23();
+        TEST_ASSERT(records23[0].NodeIndex == 33, "Record 23 node index verified");
+        TEST_ASSERT(records23[0].pRecord == mockRecord23, "Record 23 data pointer verified");
+        TEST_ASSERT(records23[0].RecordSizeInBytes == sizeof(mockRecord23), "Record 23 size verified");
+        TEST_ASSERT(records23[0].ConcurrencyGroup == 16777216, "Record 23 concurrency group verified");
+        TEST_ASSERT(records23[0].DynamicClusterExpansionTier == 19, "Record 23 dynamic cluster expansion tier 19 verified");
+        TEST_ASSERT(records23[0].MultiQueueSyncTier == 4, "Record 23 multi-queue sync tier verified");
+        TEST_ASSERT(records23[0].AsyncKernelDispatchTier == 4, "Record 23 async kernel dispatch tier verified");
+        TEST_ASSERT(records23[0].NeuralExecutionEngineTier == 1, "Record 23 neural execution engine tier verified");
+        TEST_ASSERT(records23[0].DispatchMask == 0x28, "Record 23 dispatch mask verified");
+
+        pCmd33->Release();
+        pDev39->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Executive System Information Classes 273 & 274
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 273 & 274...\n" << std::flush;
+
+        using namespace micant::ntdll;
+        using namespace micant::kernel32;
+
+        // 1. Class 273: SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION
+        SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION pressureInfo{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            273,
+            &pressureInfo,
+            sizeof(pressureInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 273 succeeds");
+        TEST_ASSERT(retLen == sizeof(pressureInfo), "Return length matches Class 273 size");
+        TEST_ASSERT(pressureInfo.Version == 1, "Version is 1");
+        TEST_ASSERT(pressureInfo.PredictedExhaustionTimestampNs == 1000000000ULL, "PredictedExhaustionTimestampNs matches seed");
+        TEST_ASSERT(pressureInfo.TierPressureRateBytesPerSec == 104857600ULL, "TierPressureRateBytesPerSec matches seed");
+        TEST_ASSERT(pressureInfo.TierIndex == 1, "TierIndex matches seed");
+        TEST_ASSERT(pressureInfo.CurrentPressurePercentage == 68, "CurrentPressurePercentage matches seed");
+        TEST_ASSERT(pressureInfo.PredictedPressureThresholdPercentage == 85, "PredictedPressureThresholdPercentage matches seed");
+        TEST_ASSERT(pressureInfo.TimeToThresholdSeconds == 120, "TimeToThresholdSeconds matches seed");
+        TEST_ASSERT(pressureInfo.ActiveEvictionWorkers == 4, "ActiveEvictionWorkers matches seed");
+        TEST_ASSERT(pressureInfo.PendingAllocationBacklogPages == 512, "PendingAllocationBacklogPages matches seed");
+        TEST_ASSERT(pressureInfo.RecommendedPreemptiveAllocBytes == 67108864ULL, "RecommendedPreemptiveAllocBytes matches seed");
+        TEST_ASSERT(pressureInfo.PressureMitigationFlags == 0x07, "PressureMitigationFlags matches seed");
+
+        // RTL Helper
+        SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION rtlPressureInfo{};
+        status = RtlQuerySystemPagefileTierPressurePredictive(&rtlPressureInfo);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileTierPressurePredictive succeeds");
+        TEST_ASSERT(rtlPressureInfo.PredictedExhaustionTimestampNs == 1000000000ULL && rtlPressureInfo.CurrentPressurePercentage == 68, "RTL pressure telemetry matches");
+
+        // Win32 Helper
+        SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION win32PressureInfo{};
+        BOOL bOk = GetPagefileTierPressurePredictiveTelemetry(&win32PressureInfo);
+        TEST_ASSERT(bOk == TRUE, "GetPagefileTierPressurePredictiveTelemetry succeeds");
+        TEST_ASSERT(win32PressureInfo.TierPressureRateBytesPerSec == 104857600ULL, "Win32 pressure telemetry verified");
+
+        // 2. Class 274: SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION
+        SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION resonanceInfo{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(
+            274,
+            &resonanceInfo,
+            sizeof(resonanceInfo),
+            &retLen
+        );
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation for Class 274 succeeds");
+        TEST_ASSERT(retLen == sizeof(resonanceInfo), "Return length matches Class 274 size");
+        TEST_ASSERT(resonanceInfo.Version == 1, "Version is 1");
+        TEST_ASSERT(resonanceInfo.ResonanceEventsTotal == 96ULL, "ResonanceEventsTotal matches seed");
+        TEST_ASSERT(resonanceInfo.SuppressionCyclesTotal == 48000ULL, "SuppressionCyclesTotal matches seed");
+        TEST_ASSERT(resonanceInfo.ResonancePeakFrequencyKhz == 12500, "ResonancePeakFrequencyKhz is 12500");
+        TEST_ASSERT(resonanceInfo.ResonanceHarmonicCount == 3, "ResonanceHarmonicCount is 3");
+        TEST_ASSERT(resonanceInfo.PeakVoltageOscillationMicrovolts == 38000, "PeakVoltageOscillationMicrovolts is 38000");
+        TEST_ASSERT(resonanceInfo.ActiveDampingResistanceMilliOhms == 45, "ActiveDampingResistanceMilliOhms is 45");
+        TEST_ASSERT(resonanceInfo.HarmonicSuppressionAttenuationDb == 24, "HarmonicSuppressionAttenuationDb is 24");
+        TEST_ASSERT(resonanceInfo.FabricClockPhaseModulationDegrees == 15, "FabricClockPhaseModulationDegrees is 15");
+        TEST_ASSERT(resonanceInfo.ResonanceSuppressionFlags == 0x0F, "ResonanceSuppressionFlags is 0x0F");
+        TEST_ASSERT(resonanceInfo.VoltageDomainStatus == 0x01, "VoltageDomainStatus is 0x01");
+
+        // RTL Helper
+        SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION rtlResonanceInfo{};
+        status = RtlQuerySystemCpuFabricVoltageResonanceTelemetry(&rtlResonanceInfo);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuFabricVoltageResonanceTelemetry succeeds");
+        TEST_ASSERT(rtlResonanceInfo.ResonanceEventsTotal == 96ULL && rtlResonanceInfo.PeakVoltageOscillationMicrovolts == 38000, "RTL resonance telemetry matches");
+
+        // Win32 Helper
+        SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION win32ResonanceInfo{};
+        bOk = GetCpuFabricVoltageResonanceTelemetry(&win32ResonanceInfo);
+        TEST_ASSERT(bOk == TRUE, "GetCpuFabricVoltageResonanceTelemetry succeeds");
+        TEST_ASSERT(win32ResonanceInfo.SuppressionCyclesTotal == 48000ULL, "Win32 resonance telemetry verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked PopCount Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Interlocked PopCount Primitives...\n" << std::flush;
+
+        using namespace micant::ntdll;
+        using namespace micant::kernel32;
+
+        // 1. 64-bit PopCount
+        volatile ULONG64 target64 = 0xF0F0F0F00F0F0F0FULL; // 32 bits set
+        ULONG64 prev64 = RtlInterlockedPopCount64(&target64);
+        TEST_ASSERT(prev64 == 0xF0F0F0F00F0F0F0FULL, "RtlInterlockedPopCount64 returns initial value");
+        TEST_ASSERT(target64 == 32ULL, "Popcount correctly computes 32 bits set");
+
+        prev64 = InterlockedPopCount64(&target64); // 32ULL has 1 bit set (2^5)
+        TEST_ASSERT(prev64 == 32ULL, "InterlockedPopCount64 returns previous value");
+        TEST_ASSERT(target64 == 1ULL, "Popcount of 32 is 1");
+
+        // 2. 32-bit PopCount
+        volatile ULONG target32 = 0xAAAAAAAAUL; // 16 bits set
+        ULONG prev32 = RtlInterlockedPopCount32(&target32);
+        TEST_ASSERT(prev32 == 0xAAAAAAAAUL, "RtlInterlockedPopCount32 returns initial value");
+        TEST_ASSERT(target32 == 16UL, "Popcount correctly computes 16 bits set");
+
+        ULONG prev32w = InterlockedPopCount(&target32); // 16 has 1 bit set
+        TEST_ASSERT(prev32w == 16UL, "InterlockedPopCount returns previous value");
+        TEST_ASSERT(target32 == 1UL, "Popcount of 16 is 1");
+
+        target32 = 0x7FFFFFFFUL; // 31 bits set
+        prev32w = InterlockedPopCount32(&target32);
+        TEST_ASSERT(prev32w == 0x7FFFFFFFUL, "InterlockedPopCount32 returns original value");
+        TEST_ASSERT(target32 == 31UL, "Popcount of 0x7FFFFFFF is 31");
+
+        // 3. 16-bit PopCount
+        volatile USHORT target16 = 0x5555U; // 8 bits set
+        USHORT prev16 = RtlInterlockedPopCount16(&target16);
+        TEST_ASSERT(prev16 == 0x5555U, "RtlInterlockedPopCount16 returns initial value");
+        TEST_ASSERT(target16 == 8U, "Popcount correctly computes 8 bits set");
+
+        USHORT prev16w = InterlockedPopCount16(&target16); // 8 has 1 bit set
+        TEST_ASSERT(prev16w == 8U, "InterlockedPopCount16 returns previous value");
+        TEST_ASSERT(target16 == 1U, "Popcount of 8 is 1");
+
+        // 4. 8-bit PopCount
+        volatile UCHAR target8 = 0x0FU; // 4 bits set
+        UCHAR prev8 = RtlInterlockedPopCount8(&target8);
+        TEST_ASSERT(prev8 == 0x0FU, "RtlInterlockedPopCount8 returns initial value");
+        TEST_ASSERT(target8 == 4U, "Popcount correctly computes 4 bits set");
+
+        UCHAR prev8w = InterlockedPopCount8(&target8); // 4 has 1 bit set
+        TEST_ASSERT(prev8w == 4U, "InterlockedPopCount8 returns previous value");
+        TEST_ASSERT(target8 == 1U, "Popcount of 4 is 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-80pq AEAD & Ascon-Xof Lightweight Cryptography
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-80pq AEAD & Ascon-Xof Engine...\n";
+
+        using namespace micant::crypto;
+
+        // 1. Direct Ascon-80pq AEAD Encryption and Decryption (160-bit key)
+        std::vector<uint8_t> key80pq = {
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+            0x10, 0x11, 0x12, 0x13
+        };
+        std::vector<uint8_t> nonce80pq = {
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+            0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F
+        };
+        std::string plainStr = "MicaNT Sovereign NT Kernel Ascon-80pq AEAD 160-Bit Authenticated Payload";
+        std::vector<uint8_t> plaintext(plainStr.begin(), plainStr.end());
+        std::string adStr = "NIST SP 800-232 Ascon-80pq Associated Data Header";
+        std::vector<uint8_t> ad(adStr.begin(), adStr.end());
+
+        Ascon80pq::Context asconCtx{};
+        Ascon80pq::init(asconCtx, key80pq, nonce80pq);
+
+        std::vector<uint8_t> ciphertext(plaintext.size());
+        std::vector<uint8_t> tag(16);
+        bool encOk = Ascon80pq::encrypt(asconCtx, plaintext, ciphertext, tag, ad, nonce80pq);
+        TEST_ASSERT(encOk, "Ascon80pq encrypt succeeds");
+        TEST_ASSERT(ciphertext.size() == plaintext.size(), "Ciphertext matches plaintext size");
+        TEST_ASSERT(ciphertext != plaintext, "Ciphertext is encrypted");
+
+        // Decrypt with valid parameters
+        std::vector<uint8_t> decrypted(ciphertext.size());
+        bool decOk = Ascon80pq::decrypt(asconCtx, ciphertext, tag, decrypted, ad, nonce80pq);
+        TEST_ASSERT(decOk, "Ascon80pq decrypt succeeds with matching key, nonce, AD and tag");
+        TEST_ASSERT(decrypted == plaintext, "Decrypted plaintext matches original");
+
+        // Decrypt with tampered tag -> must fail!
+        std::vector<uint8_t> badTag = tag;
+        badTag[0] ^= 0x01;
+        std::vector<uint8_t> badDecrypted(ciphertext.size());
+        bool tamperTagOk = Ascon80pq::decrypt(asconCtx, ciphertext, badTag, badDecrypted, ad, nonce80pq);
+        TEST_ASSERT(!tamperTagOk, "Ascon80pq decrypt fails when authentication tag is tampered");
+
+        // Decrypt with tampered ciphertext -> must fail!
+        std::vector<uint8_t> badCt = ciphertext;
+        badCt[0] ^= 0xFF;
+        bool tamperCtOk = Ascon80pq::decrypt(asconCtx, badCt, tag, badDecrypted, ad, nonce80pq);
+        TEST_ASSERT(!tamperCtOk, "Ascon80pq decrypt fails when ciphertext is tampered");
+
+        // Decrypt with tampered associated data -> must fail!
+        std::vector<uint8_t> badAd = ad;
+        badAd[0] ^= 0x42;
+        bool tamperAdOk = Ascon80pq::decrypt(asconCtx, ciphertext, tag, badDecrypted, badAd, nonce80pq);
+        TEST_ASSERT(!tamperAdOk, "Ascon80pq decrypt fails when associated data is tampered");
+
+        // 2. Direct Ascon-Xof Arbitrary Squeeze Digest Calculation
+        std::string xofInput = "Sovereign Clean-Room Ascon-Xof Extendable Output Function";
+        std::vector<uint8_t> xofData(xofInput.begin(), xofInput.end());
+        auto digest32 = AsconXof::hash(xofData, 32);
+        TEST_ASSERT(digest32.size() == 32, "AsconXof produces 32-byte digest");
+        TEST_ASSERT(!std::all_of(digest32.begin(), digest32.end(), [](uint8_t b) { return b == 0; }), "32-byte digest is non-zero");
+
+        auto digest64 = AsconXof::hash(xofData, 64);
+        TEST_ASSERT(digest64.size() == 64, "AsconXof produces 64-byte extended squeeze digest");
+        TEST_ASSERT(std::memcmp(digest64.data(), digest32.data(), 32) == 0, "First 32 bytes of 64-byte squeeze match 32-byte squeeze prefix");
+
+        // Determinism test
+        auto digest32_dup = AsconXof::hash(xofData, 32);
+        TEST_ASSERT(digest32 == digest32_dup, "AsconXof is deterministic for identical input");
+
+        // Avalanche test
+        std::vector<uint8_t> xofDataTampered = xofData;
+        xofDataTampered[0] ^= 0x01;
+        auto digestTampered = AsconXof::hash(xofDataTampered, 32);
+        TEST_ASSERT(digest32 != digestTampered, "AsconXof achieves avalanche effect on 1-bit input flip");
+
+        // 3. BCrypt CNG Integration for Ascon-80pq
+        BCRYPT_ALG_HANDLE hAscon80pqAlg = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hAscon80pqAlg, BCRYPT_ASCON80PQ_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hAscon80pqAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-80PQ succeeds");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hAscon80pqAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 16, "BCrypt ASCON-80PQ tag length is 16 bytes");
+        BCryptGetProperty(hAscon80pqAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 8, "BCrypt ASCON-80PQ block/rate length is 8 bytes");
+
+        BCRYPT_KEY_HANDLE hAsconKey = nullptr;
+        bStatus = BCryptGenerateSymmetricKey(hAscon80pqAlg, &hAsconKey, nullptr, 0, key80pq.data(), static_cast<uint32_t>(key80pq.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hAsconKey != nullptr, "BCryptGenerateSymmetricKey for ASCON-80PQ succeeds");
+
+        std::vector<uint8_t> bct(plaintext.size());
+        std::vector<uint8_t> btag(16);
+        BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO encModeInfo{};
+        encModeInfo.cbSize = sizeof(encModeInfo);
+        encModeInfo.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+        encModeInfo.pbNonce = nonce80pq.data();
+        encModeInfo.cbNonce = static_cast<uint32_t>(nonce80pq.size());
+        encModeInfo.pbAuthData = ad.data();
+        encModeInfo.cbAuthData = static_cast<uint32_t>(ad.size());
+        encModeInfo.pbTag = btag.data();
+        encModeInfo.cbTag = static_cast<uint32_t>(btag.size());
+
+        uint32_t encResult = 0;
+        bStatus = BCryptEncrypt(hAsconKey, plaintext.data(), static_cast<uint32_t>(plaintext.size()), &encModeInfo, nullptr, 0, bct.data(), static_cast<uint32_t>(bct.size()), &encResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptEncrypt ASCON-80PQ AEAD succeeds");
+        TEST_ASSERT(encResult == plaintext.size(), "Encrypted length matches input");
+
+        // BCrypt Decrypt
+        std::vector<uint8_t> bpt(bct.size());
+        BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO decModeInfo = encModeInfo;
+        uint32_t decResult = 0;
+        bStatus = BCryptDecrypt(hAsconKey, bct.data(), static_cast<uint32_t>(bct.size()), &decModeInfo, nullptr, 0, bpt.data(), static_cast<uint32_t>(bpt.size()), &decResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptDecrypt ASCON-80PQ AEAD succeeds");
+        TEST_ASSERT(bpt == plaintext, "BCrypt decrypted plaintext matches original");
+
+        // BCrypt Decrypt with mismatching tag
+        btag[0] ^= 0x55;
+        bStatus = BCryptDecrypt(hAsconKey, bct.data(), static_cast<uint32_t>(bct.size()), &decModeInfo, nullptr, 0, bpt.data(), static_cast<uint32_t>(bpt.size()), &decResult, 0);
+        TEST_ASSERT(bStatus == STATUS_AUTH_TAG_MISMATCH, "BCryptDecrypt fails with STATUS_AUTH_TAG_MISMATCH on corrupted tag");
+
+        BCryptDestroyKey(hAsconKey);
+        BCryptCloseAlgorithmProvider(hAscon80pqAlg, 0);
+
+        // 4. BCrypt CNG Integration for Ascon-Xof
+        BCRYPT_ALG_HANDLE hAsconXofAlg = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hAsconXofAlg, BCRYPT_ASCON_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hAsconXofAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-XOF succeeds");
+
+        BCryptGetProperty(hAsconXofAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt ASCON-XOF digest length is 32 bytes");
+        BCryptGetProperty(hAsconXofAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 8, "BCrypt ASCON-XOF rate is 8 bytes");
+
+        BCRYPT_HASH_HANDLE hHash = nullptr;
+        bStatus = BCryptCreateHash(hAsconXofAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHash != nullptr, "BCryptCreateHash for ASCON-XOF succeeds");
+
+        bStatus = BCryptHashData(hHash, xofData.data(), static_cast<uint32_t>(xofData.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-XOF succeeds");
+
+        std::vector<uint8_t> bHashOut(32);
+        bStatus = BCryptFinishHash(hHash, bHashOut.data(), static_cast<uint32_t>(bHashOut.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-XOF succeeds");
+        TEST_ASSERT(std::memcmp(bHashOut.data(), digest32.data(), 32) == 0, "BCrypt ASCON-XOF produces identical digest to direct engine");
+
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAsconXofAlg, 0);
+    }
+
+    std::cout << "  Horizon 261 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device39, ID3D12GraphicsCommandList33 & Options 51 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 273 (PagefileTierPressurePredictive) & 274 (CpuFabricVoltageResonanceTelemetry) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked PopCount 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-80pq AEAD & Ascon-Xof Lightweight Cryptography OK\n";
+
+    std::cout << "[TEST] Suite 477: Horizon 261 - Direct3D 12 Device39/CommandList33 & Options 51, NT SystemInfo 273/274, Interlocked PopCount 64/32/16/8 & NIST Ascon-80pq/Ascon-Xof PASSED." << std::endl;
+}

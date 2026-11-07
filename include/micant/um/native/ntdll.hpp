@@ -2280,6 +2280,41 @@ struct SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION*;
 
+// Class 273: SystemPagefileTierPressurePredictiveInformation
+struct SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // e.g. 0
+    ULONG64  PredictedExhaustionTimestampNs;       // e.g. 1000000000ULL
+    ULONG64  TierPressureRateBytesPerSec;          // e.g. 104857600ULL (100 MB/s)
+    ULONG    TierIndex;                            // e.g. 1
+    ULONG    CurrentPressurePercentage;            // e.g. 68 (68%)
+    ULONG    PredictedPressureThresholdPercentage; // e.g. 85 (85%)
+    ULONG    TimeToThresholdSeconds;               // e.g. 120 (120 s)
+    ULONG    ActiveEvictionWorkers;                // e.g. 4
+    ULONG    PendingAllocationBacklogPages;        // e.g. 512
+    ULONG64  RecommendedPreemptiveAllocBytes;      // e.g. 67108864ULL (64 MB)
+    ULONG    PressureMitigationFlags;              // e.g. 0x07 (PreemptiveExpand | ThrottleBulkIO | PromoteHotPages)
+    ULONG    Pad;                                  // 0
+};
+using PSYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION = SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION*;
+
+// Class 274: SystemCpuFabricVoltageResonanceTelemetryInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // e.g. 0
+    ULONG64  ResonanceEventsTotal;                 // e.g. 96ULL
+    ULONG64  SuppressionCyclesTotal;               // e.g. 48000ULL
+    ULONG    ResonancePeakFrequencyKhz;            // e.g. 12500 (12.5 MHz)
+    ULONG    ResonanceHarmonicCount;               // e.g. 3
+    ULONG    PeakVoltageOscillationMicrovolts;     // e.g. 38000 (38 mV)
+    ULONG    ActiveDampingResistanceMilliOhms;     // e.g. 45 (45 mΩ)
+    ULONG    HarmonicSuppressionAttenuationDb;     // e.g. 24 (24 dB)
+    ULONG    FabricClockPhaseModulationDegrees;    // e.g. 15 (15 deg)
+    ULONG    ResonanceSuppressionFlags;            // e.g. 0x0F (PhaseSpreadSpectrum | ActiveDamping | HarmonicNotch | ClockDither)
+    ULONG    VoltageDomainStatus;                  // e.g. 0x01 (NominalRegulated)
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4753,6 +4788,50 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DROOP_PREDICTIVE_INFORMATION);
             return NtStatus::Success;
         }
+        case 273: { // SystemPagefileTierPressurePredictiveInformation (Class 273)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PredictedExhaustionTimestampNs = 1000000000ULL;
+            pInfo->TierPressureRateBytesPerSec = 104857600ULL;
+            pInfo->TierIndex = 1;
+            pInfo->CurrentPressurePercentage = 68;
+            pInfo->PredictedPressureThresholdPercentage = 85;
+            pInfo->TimeToThresholdSeconds = 120;
+            pInfo->ActiveEvictionWorkers = 4;
+            pInfo->PendingAllocationBacklogPages = 512;
+            pInfo->RecommendedPreemptiveAllocBytes = 67108864ULL;
+            pInfo->PressureMitigationFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 274: { // SystemCpuFabricVoltageResonanceTelemetryInformation (Class 274)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->ResonanceEventsTotal = 96ULL;
+            pInfo->SuppressionCyclesTotal = 48000ULL;
+            pInfo->ResonancePeakFrequencyKhz = 12500;
+            pInfo->ResonanceHarmonicCount = 3;
+            pInfo->PeakVoltageOscillationMicrovolts = 38000;
+            pInfo->ActiveDampingResistanceMilliOhms = 45;
+            pInfo->HarmonicSuppressionAttenuationDb = 24;
+            pInfo->FabricClockPhaseModulationDegrees = 15;
+            pInfo->ResonanceSuppressionFlags = 0x0F;
+            pInfo->VoltageDomainStatus = 0x01;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -6502,6 +6581,54 @@ inline UCHAR WINAPI RtlInterlockedBitReverse8(UCHAR volatile* Destination) noexc
     }
 }
 
+inline ULONG64 WINAPI RtlInterlockedPopCount64(ULONG64 volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG64 next = static_cast<ULONG64>(std::popcount(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedPopCount32(ULONG volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG next = static_cast<ULONG>(std::popcount(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedPopCount16(USHORT volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        USHORT next = static_cast<USHORT>(std::popcount(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedPopCount8(UCHAR volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        UCHAR next = static_cast<UCHAR>(std::popcount(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -6632,6 +6759,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageDroopPredictive(SYSTEM_CPU_
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(272, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierPressurePredictive(SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(273, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageResonanceTelemetry(SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(274, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -7241,6 +7380,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitReverse8", reinterpret_cast<void*>(RtlInterlockedBitReverse8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierDynamicDrain", reinterpret_cast<void*>(RtlQuerySystemPagefileTierDynamicDrain));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageDroopPredictive", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageDroopPredictive));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedPopCount64", reinterpret_cast<void*>(RtlInterlockedPopCount64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedPopCount32", reinterpret_cast<void*>(RtlInterlockedPopCount32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedPopCount16", reinterpret_cast<void*>(RtlInterlockedPopCount16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedPopCount8", reinterpret_cast<void*>(RtlInterlockedPopCount8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierPressurePredictive", reinterpret_cast<void*>(RtlQuerySystemPagefileTierPressurePredictive));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageResonanceTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageResonanceTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

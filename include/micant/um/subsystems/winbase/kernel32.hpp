@@ -9702,6 +9702,36 @@ inline BOOL WINAPI GetCpuFabricVoltageDroopPredictiveTelemetry(ntdll::SYSTEM_CPU
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageDroopPredictive(Info)) ? TRUE : FALSE;
 }
 
+inline ULONG64 WINAPI InterlockedPopCount64(ULONG64 volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedPopCount64(Destination);
+}
+
+inline ULONG WINAPI InterlockedPopCount(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedPopCount32(Destination);
+}
+
+inline ULONG WINAPI InterlockedPopCount32(ULONG volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedPopCount32(Destination);
+}
+
+inline USHORT WINAPI InterlockedPopCount16(USHORT volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedPopCount16(Destination);
+}
+
+inline UCHAR WINAPI InterlockedPopCount8(UCHAR volatile* Destination) noexcept {
+    return ntdll::RtlInterlockedPopCount8(Destination);
+}
+
+inline BOOL WINAPI GetPagefileTierPressurePredictiveTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_PRESSURE_PREDICTIVE_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierPressurePredictive(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltageResonanceTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_RESONANCE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageResonanceTelemetry(Info)) ? TRUE : FALSE;
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11964,6 +11994,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedBitReverse8", reinterpret_cast<void*>(InterlockedBitReverse8));
     ldr.registerExport("kernel32.dll", "GetPagefileTierDynamicDrainTelemetry", reinterpret_cast<void*>(GetPagefileTierDynamicDrainTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageDroopPredictiveTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageDroopPredictiveTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedPopCount64", reinterpret_cast<void*>(InterlockedPopCount64));
+    ldr.registerExport("kernel32.dll", "InterlockedPopCount", reinterpret_cast<void*>(InterlockedPopCount));
+    ldr.registerExport("kernel32.dll", "InterlockedPopCount32", reinterpret_cast<void*>(InterlockedPopCount32));
+    ldr.registerExport("kernel32.dll", "InterlockedPopCount16", reinterpret_cast<void*>(InterlockedPopCount16));
+    ldr.registerExport("kernel32.dll", "InterlockedPopCount8", reinterpret_cast<void*>(InterlockedPopCount8));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierPressurePredictiveTelemetry", reinterpret_cast<void*>(GetPagefileTierPressurePredictiveTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageResonanceTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageResonanceTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
