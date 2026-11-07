@@ -2214,6 +2214,37 @@ struct SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION*;
 
+// Class 269: SystemPagefileTierMigrationQosInformation
+struct SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // e.g. 0
+    ULONG64  HighPriorityMigrationsTotal;          // e.g. 1024ULL
+    ULONG64  StandardPriorityMigrationsTotal;      // e.g. 16384ULL
+    ULONG64  BackgroundPriorityMigrationsTotal;    // e.g. 65536ULL
+    ULONG64  ThrottledMigrationsTotal;             // e.g. 12ULL
+    ULONG64  PreemptedMigrationsTotal;             // e.g. 4ULL
+    ULONG64  AverageMigrationLatencyNs;            // e.g. 12500ULL (12.5 µs)
+    ULONG64  PeakMigrationBandwidthBytesPerSec;    // e.g. 6442450944ULL (~6 GB/s)
+    ULONG    ActiveMigrationQosQueues;             // e.g. 4
+    ULONG    TierMigrationFlags;                   // e.g. 0x07 (QoSEnforced | PreemptionEnabled | ZeroCopyActive)
+};
+using PSYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION = SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION*;
+
+// Class 270: SystemCpuFabricThermalThrottleTelemetryInformation
+struct SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // e.g. 0
+    ULONG64  TotalThermalThrottleEvents;           // e.g. 42ULL
+    ULONG64  ActiveThermalThrottleDurationUs;      // e.g. 150000ULL (150 ms)
+    ULONG64  JunctionTemperatureMillicelsius;      // e.g. 65000ULL (65.0 C)
+    ULONG64  ThrottleTemperatureThresholdMillicelsius; // e.g. 95000ULL (95.0 C)
+    ULONG64  CoreFabricFrequencyReductionMhz;      // e.g. 400ULL
+    ULONG64  TjMaxMarginMillicelsius;              // e.g. 30000ULL (30.0 C margin)
+    ULONG    ActiveThrottledNodesMask;             // e.g. 0x00000001
+    ULONG    ThermalGovernorFlags;                 // e.g. 0x07 (DynamicThermalScaling | TjMaxSupervised | HysteresisActive)
+};
+using PSYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4602,6 +4633,47 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_CLOCK_STRETCHING_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 269: { // SystemPagefileTierMigrationQosInformation (Class 269)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->HighPriorityMigrationsTotal = 1024ULL;
+            pInfo->StandardPriorityMigrationsTotal = 16384ULL;
+            pInfo->BackgroundPriorityMigrationsTotal = 65536ULL;
+            pInfo->ThrottledMigrationsTotal = 12ULL;
+            pInfo->PreemptedMigrationsTotal = 4ULL;
+            pInfo->AverageMigrationLatencyNs = 12500ULL;
+            pInfo->PeakMigrationBandwidthBytesPerSec = 6442450944ULL;
+            pInfo->ActiveMigrationQosQueues = 4;
+            pInfo->TierMigrationFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 270: { // SystemCpuFabricThermalThrottleTelemetryInformation (Class 270)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TotalThermalThrottleEvents = 42ULL;
+            pInfo->ActiveThermalThrottleDurationUs = 150000ULL;
+            pInfo->JunctionTemperatureMillicelsius = 65000ULL;
+            pInfo->ThrottleTemperatureThresholdMillicelsius = 95000ULL;
+            pInfo->CoreFabricFrequencyReductionMhz = 400ULL;
+            pInfo->TjMaxMarginMillicelsius = 30000ULL;
+            pInfo->ActiveThrottledNodesMask = 0x00000001;
+            pInfo->ThermalGovernorFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -6165,6 +6237,110 @@ inline CHAR WINAPI RtlInterlockedMulModulo8(CHAR volatile* Destination, CHAR Mul
     }
 }
 
+inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG shift = ShiftCount & 63u;
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG64 next = (shift == 0) ? current : ((current >> shift) | (current << (64u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedRotateRight32(ULONG volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG shift = ShiftCount & 31u;
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG next = (shift == 0) ? current : ((current >> shift) | (current << (32u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedRotateRight16(USHORT volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    ULONG shift = ShiftCount & 15u;
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        USHORT next = (shift == 0) ? current : static_cast<USHORT>((current >> shift) | (current << (16u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedRotateRight8(UCHAR volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    ULONG shift = ShiftCount & 7u;
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        UCHAR next = (shift == 0) ? current : static_cast<UCHAR>((current >> shift) | (current << (8u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG64 WINAPI RtlInterlockedRotateLeft64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG shift = ShiftCount & 63u;
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG64 next = (shift == 0) ? current : ((current << shift) | (current >> (64u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedRotateLeft32(ULONG volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG shift = ShiftCount & 31u;
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG next = (shift == 0) ? current : ((current << shift) | (current >> (32u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedRotateLeft16(USHORT volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    ULONG shift = ShiftCount & 15u;
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        USHORT next = (shift == 0) ? current : static_cast<USHORT>((current << shift) | (current >> (16u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedRotateLeft8(UCHAR volatile* Destination, ULONG ShiftCount) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    ULONG shift = ShiftCount & 7u;
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        UCHAR next = (shift == 0) ? current : static_cast<UCHAR>((current << shift) | (current >> (8u - shift)));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -6271,6 +6447,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricClockStretchingTelemetry(SYSTEM_CP
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(268, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierMigrationQos(SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(269, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricThermalThrottleTelemetry(SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(270, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -6846,6 +7034,14 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo32", reinterpret_cast<void*>(RtlInterlockedMulModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo16", reinterpret_cast<void*>(RtlInterlockedMulModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo8", reinterpret_cast<void*>(RtlInterlockedMulModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight64", reinterpret_cast<void*>(RtlInterlockedRotateRight64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight32", reinterpret_cast<void*>(RtlInterlockedRotateRight32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight16", reinterpret_cast<void*>(RtlInterlockedRotateRight16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight8", reinterpret_cast<void*>(RtlInterlockedRotateRight8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft64", reinterpret_cast<void*>(RtlInterlockedRotateLeft64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft32", reinterpret_cast<void*>(RtlInterlockedRotateLeft32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft16", reinterpret_cast<void*>(RtlInterlockedRotateLeft16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft8", reinterpret_cast<void*>(RtlInterlockedRotateLeft8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileDecompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileDecompressionTelemetry));
@@ -6864,6 +7060,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageDomainTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageDomainTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierFailoverTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierFailoverTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricClockStretchingTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricClockStretchingTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierMigrationQos", reinterpret_cast<void*>(RtlQuerySystemPagefileTierMigrationQos));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricThermalThrottleTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricThermalThrottleTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

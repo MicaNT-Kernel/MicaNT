@@ -56871,3 +56871,363 @@ inline void Test_Horizon258_Device36Options48_PagefileTierFailoverCpuClockStretc
 
     std::cout << "[TEST] Suite 474: Horizon 258 - Direct3D 12 Device36/CommandList30 & Options 48, NT SystemInfo 267/268, Interlocked Mul Modulo 64/32/16/8 & NIST KMAC-KW PASSED." << std::endl;
 }
+
+// ============================================================================
+// Suite 475: Horizon 259 - Direct3D 12 ID3D12Device37/CommandList31 & Options 49,
+// NT SystemInfo 269/270, Interlocked Circular Rotation 64/32/16/8 & NIST KMAC-DRBG
+// ============================================================================
+inline void Test_Horizon259_Device37Options49_PagefileTierMigrationQosCpuFabricThermalThrottle_InterlockedRotate_And_KmacDrbg_Suite() {
+    std::cout << "\n===================================================================\n" << std::flush;
+    std::cout << "[TEST] Suite 475: Horizon 259 - Direct3D 12 ID3D12Device37/CommandList31 & Options 49, NT SystemInfo 269/270, Interlocked Circular Rotation & NIST KMAC-DRBG\n" << std::flush;
+    std::cout << "===================================================================\n" << std::flush;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device37, ID3D12GraphicsCommandList31 & Options 49
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device37, ID3D12GraphicsCommandList31 & Options 49 Architecture...\n" << std::flush;
+
+        using namespace micant::prism3d12;
+
+        Prism3D12DeviceImpl device;
+
+        // 1. QueryInterface for ID3D12Device37
+        ID3D12Device37* pDev37 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device37, reinterpret_cast<void**>(&pDev37));
+        TEST_ASSERT(hr == 0 && pDev37 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device37 succeeds");
+
+        // 2. Feature Check for D3D12_FEATURE_D3D12_OPTIONS49
+        D3D12_FEATURE_DATA_D3D12_OPTIONS49 opt49{};
+        hr = pDev37->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS49, &opt49, sizeof(opt49));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS49 succeeds");
+        TEST_ASSERT(opt49.WorkGraphsTier == 32u, "OPTIONS49 WorkGraphsTier is 32 (Tier 5.4)");
+        TEST_ASSERT(opt49.CooperativeMatrixMultiply2097152Supported == TRUE, "OPTIONS49 CooperativeMatrixMultiply 2,097,152 supported");
+        TEST_ASSERT(opt49.SubByteMicroscopicFormatsV12Supported == TRUE, "OPTIONS49 SubByteMicroscopicFormats V12 supported");
+        TEST_ASSERT(opt49.DynamicClusterExpansionTier17Supported == TRUE, "OPTIONS49 DynamicClusterExpansion Tier 17 supported");
+        TEST_ASSERT(opt49.MaxWorkGraphConcurrencyGroups == 8388608u, "OPTIONS49 MaxWorkGraphConcurrencyGroups is 8,388,608");
+        TEST_ASSERT(opt49.TilePipeliningStagesSupported == 16384u, "OPTIONS49 TilePipeliningStagesSupported is 16384");
+        TEST_ASSERT(opt49.AutonomousGraphRecursionTier9Supported == TRUE, "OPTIONS49 AutonomousGraphRecursion Tier 9 supported");
+        TEST_ASSERT(opt49.MultiQueueTensorPipelineFusionTier8Supported == TRUE, "OPTIONS49 MultiQueueTensorPipelineFusion Tier 8 supported");
+        TEST_ASSERT(opt49.WorkGraphMeshShaderPipeliningTier9Supported == TRUE, "OPTIONS49 WorkGraphMeshShaderPipelining Tier 9 supported");
+        TEST_ASSERT(opt49.SparseTensorBlockAccelerationTier5Supported == TRUE, "OPTIONS49 SparseTensorBlockAcceleration Tier 5 supported");
+        TEST_ASSERT(opt49.DeterministicTensorReductionTier4Supported == TRUE, "OPTIONS49 DeterministicTensorReduction Tier 4 supported");
+        TEST_ASSERT(opt49.HyperQuantizationTier3Supported == TRUE, "OPTIONS49 HyperQuantizationTier3Supported is TRUE");
+        TEST_ASSERT(opt49.SparseClusterTier2Supported == TRUE, "OPTIONS49 SparseClusterTier2Supported is TRUE");
+        TEST_ASSERT(opt49.MultiQueueWorkGraphSyncSupported == TRUE, "OPTIONS49 MultiQueueWorkGraphSyncSupported is TRUE");
+
+        // 3. Work Graph Cooperative Matrix Support 16
+        int32_t supported = 0;
+        uint32_t maxDim = 0;
+        uint32_t dataTypes = 0;
+        uint32_t sparseAccel = 0;
+        int32_t asyncAccum = 0;
+        uint32_t maxTileStages = 0;
+        int32_t feedbackLoops = 0;
+        int32_t subGraphRecursion = 0;
+        int32_t meshPipelining = 0;
+        int32_t multiQueueFusion = 0;
+        int32_t microscaling = 0;
+        int32_t subByteMicroscopic = 0;
+        int32_t sparseTensorBlock = 0;
+        int32_t deterministicReduction = 0;
+        int32_t hyperQuant = 0;
+        int32_t sparseCluster = 0;
+        int32_t multiQueueSync = 0;
+
+        hr = pDev37->GetWorkGraphCooperativeMatrixSupport16(
+            &supported, &maxDim, &dataTypes, &sparseAccel, &asyncAccum, &maxTileStages,
+            &feedbackLoops, &subGraphRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByteMicroscopic, &sparseTensorBlock, &deterministicReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport16 succeeds");
+        TEST_ASSERT(supported == 1, "Work graph cooperative matrix multiplication is supported");
+        TEST_ASSERT(maxDim == 2097152, "Max matrix dimension supported is 2097152");
+        TEST_ASSERT(dataTypes == 0x1FFFF, "Data types mask covers extended formats V12 (0x1FFFF)");
+        TEST_ASSERT(sparseAccel == 1, "Sparse acceleration supported");
+        TEST_ASSERT(asyncAccum == 1, "Async accumulation supported");
+        TEST_ASSERT(maxTileStages == 16384, "Max tile pipelining stages is 16384");
+        TEST_ASSERT(feedbackLoops == 1, "Autonomous feedback loops supported");
+        TEST_ASSERT(subGraphRecursion == 1, "Sub-graph recursion supported");
+        TEST_ASSERT(meshPipelining == 1, "Mesh shader pipelining supported");
+        TEST_ASSERT(multiQueueFusion == 1, "Multi-queue fusion supported");
+        TEST_ASSERT(microscaling == 1, "Microscaling support verified");
+        TEST_ASSERT(subByteMicroscopic == 1, "Sub-byte microscopic precision verified");
+        TEST_ASSERT(sparseTensorBlock == 1, "Sparse tensor block acceleration verified");
+        TEST_ASSERT(deterministicReduction == 1, "Deterministic tensor reduction verified");
+        TEST_ASSERT(hyperQuant == 1, "Hyper-quantization verified");
+        TEST_ASSERT(sparseCluster == 1, "Sparse cluster acceleration verified");
+        TEST_ASSERT(multiQueueSync == 1, "Multi-queue synchronization acceleration verified");
+
+        // 4. Create Work Graph Program Record 21
+        void* pRecord21 = nullptr;
+        hr = pDev37->CreateWorkGraphProgramRecord21(
+            nullptr, 0x1, 512, 8388608, 0x1F, 5, 4, 0x1FF, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            OFFICIAL_IID_ID3D12Device37, &pRecord21);
+        TEST_ASSERT(hr == 0 && pRecord21 != nullptr, "CreateWorkGraphProgramRecord21 succeeds");
+
+        // 5. QueryInterface for ID3D12GraphicsCommandList31
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList31* pCmd31 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList31, reinterpret_cast<void**>(&pCmd31));
+        TEST_ASSERT(hr == 0 && pCmd31 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList31 succeeds");
+
+        // 6. ID3D12GraphicsCommandList31 Methods
+        pCmd31->SetWorkGraphBackingMemory21(
+            0x10000000ULL, 0x20000000ULL, 0x4000000ULL, 4194304, 0x1F, 5, 0x7, 0x1FF,
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0x20);
+
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21Start() == 0x10000000ULL, "Backing memory 21 start address verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21Size() == 0x20000000ULL, "Backing memory 21 size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21ScratchSize() == 0x4000000ULL, "Backing memory 21 scratch buffer size verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21MaxConcurrency() == 4194304, "Backing memory 21 max concurrency verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21DynamicExpansionFlags() == 0x1F, "Backing memory 21 dynamic expansion flags verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21MemoryPoolTier() == 5, "Backing memory 21 memory pool tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21SparseClusterTier() == 2, "Backing memory 21 sparse cluster tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21MultiQueueSyncTier() == 2, "Backing memory 21 multi queue sync tier verified");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory21Flags() == 0x20, "Backing memory 21 flags verified");
+
+        const uint8_t mockRecord21[64] = { 0x55 };
+        pCmd31->DispatchGraphProgramRecord21(
+            16, mockRecord21, sizeof(mockRecord21), 4194304, 0xF, 16, 0x7, 0x1FF,
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0xA, 0x4);
+
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord21Count() == 1, "Program record 21 recorded successfully");
+        const auto& records21 = cmdList.GetRecordedProgramRecords21();
+        TEST_ASSERT(records21[0].NodeIndex == 16, "Record 21 node index verified");
+        TEST_ASSERT(records21[0].pRecord == mockRecord21, "Record 21 data pointer verified");
+        TEST_ASSERT(records21[0].RecordSizeInBytes == sizeof(mockRecord21), "Record 21 size verified");
+        TEST_ASSERT(records21[0].ConcurrencyGroup == 4194304, "Record 21 concurrency group verified");
+        TEST_ASSERT(records21[0].DynamicClusterExpansionTier == 16, "Record 21 dynamic cluster expansion tier 16 verified");
+        TEST_ASSERT(records21[0].MultiQueueSyncTier == 2, "Record 21 multi-queue sync tier verified");
+        TEST_ASSERT(records21[0].DispatchMask == 0xA, "Record 21 dispatch mask verified");
+
+        pCmd31->Release();
+        pDev37->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 269 & 270 Native Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 269 & 270 Native Telemetry...\n" << std::flush;
+
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+
+        SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION qosInfo{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(
+            269,
+            &qosInfo,
+            sizeof(qosInfo),
+            &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation SystemPagefileTierMigrationQosInformation (269) succeeds");
+        TEST_ASSERT(qosInfo.HighPriorityMigrationsTotal == 1024ULL, "HighPriorityMigrationsTotal matches telemetry seed");
+        TEST_ASSERT(qosInfo.StandardPriorityMigrationsTotal == 16384ULL, "StandardPriorityMigrationsTotal matches telemetry seed");
+        TEST_ASSERT(qosInfo.BackgroundPriorityMigrationsTotal == 65536ULL, "BackgroundPriorityMigrationsTotal matches telemetry seed");
+        TEST_ASSERT(qosInfo.ThrottledMigrationsTotal == 12ULL, "ThrottledMigrationsTotal matches telemetry seed");
+        TEST_ASSERT(qosInfo.PreemptedMigrationsTotal == 4ULL, "PreemptedMigrationsTotal matches telemetry seed");
+        TEST_ASSERT(qosInfo.AverageMigrationLatencyNs == 12500ULL, "AverageMigrationLatencyNs matches seed");
+        TEST_ASSERT(qosInfo.PeakMigrationBandwidthBytesPerSec == 6442450944ULL, "PeakMigrationBandwidthBytesPerSec matches seed");
+        TEST_ASSERT(qosInfo.ActiveMigrationQosQueues == 4, "ActiveMigrationQosQueues matches seed");
+        TEST_ASSERT(qosInfo.TierMigrationFlags == 0x07, "TierMigrationFlags matches seed");
+
+        SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION thermalInfo{};
+        status = NtQuerySystemInformation_Export(
+            270,
+            &thermalInfo,
+            sizeof(thermalInfo),
+            &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation SystemCpuFabricThermalThrottleTelemetryInformation (270) succeeds");
+        TEST_ASSERT(thermalInfo.TotalThermalThrottleEvents == 42ULL, "TotalThermalThrottleEvents matches telemetry seed");
+        TEST_ASSERT(thermalInfo.ActiveThermalThrottleDurationUs == 150000ULL, "ActiveThermalThrottleDurationUs matches telemetry seed");
+        TEST_ASSERT(thermalInfo.JunctionTemperatureMillicelsius == 65000ULL, "JunctionTemperatureMillicelsius matches seed");
+        TEST_ASSERT(thermalInfo.ThrottleTemperatureThresholdMillicelsius == 95000ULL, "ThrottleTemperatureThresholdMillicelsius matches seed");
+        TEST_ASSERT(thermalInfo.CoreFabricFrequencyReductionMhz == 400ULL, "CoreFabricFrequencyReductionMhz matches seed");
+        TEST_ASSERT(thermalInfo.TjMaxMarginMillicelsius == 30000ULL, "TjMaxMarginMillicelsius matches seed");
+        TEST_ASSERT(thermalInfo.ActiveThrottledNodesMask == 0x00000001, "ActiveThrottledNodesMask matches seed");
+        TEST_ASSERT(thermalInfo.ThermalGovernorFlags == 0x07, "ThermalGovernorFlags matches seed");
+
+        // Native RTL Wrappers
+        SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION rtlQos{};
+        status = RtlQuerySystemPagefileTierMigrationQos(&rtlQos);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileTierMigrationQos succeeds");
+        TEST_ASSERT(rtlQos.TierMigrationFlags == 0x07, "StatusFlags matches seed");
+
+        SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION rtlThermal{};
+        status = RtlQuerySystemCpuFabricThermalThrottleTelemetry(&rtlThermal);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuFabricThermalThrottleTelemetry succeeds");
+        TEST_ASSERT(rtlThermal.TotalThermalThrottleEvents == 42ULL, "TotalThermalThrottleEvents matches seed");
+
+        // Win32 Subsystem Wrappers
+        SYSTEM_PAGEFILE_TIER_MIGRATION_QOS_INFORMATION win32Qos{};
+        BOOL bRet = GetPagefileTierMigrationQos(&win32Qos);
+        TEST_ASSERT(bRet == TRUE, "GetPagefileTierMigrationQos succeeds");
+        TEST_ASSERT(win32Qos.AverageMigrationLatencyNs == 12500ULL, "Win32 AverageMigrationLatencyNs verified");
+
+        SYSTEM_CPU_FABRIC_THERMAL_THROTTLE_TELEMETRY_INFORMATION win32Thermal{};
+        bRet = GetCpuFabricThermalThrottleTelemetry(&win32Thermal);
+        TEST_ASSERT(bRet == TRUE, "GetCpuFabricThermalThrottleTelemetry succeeds");
+        TEST_ASSERT(win32Thermal.CoreFabricFrequencyReductionMhz == 400ULL, "Win32 CoreFabricFrequencyReductionMhz verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Lockless Atomic Circular Bit Rotation Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Lockless Atomic Circular Bit Rotation Primitives (64/32/16/8-bit)...\n";
+
+        using namespace micant::ntdll;
+        using namespace micant::kernel32;
+
+        // 1. 64-bit Circular Rotation
+        // Right rotate: 0x8000000000000001ULL ROR 1 = 0xC000000000000000ULL
+        volatile ULONG64 target64 = 0x8000000000000001ULL;
+        ULONG64 prev64 = InterlockedRotateRight64(&target64, 1);
+        TEST_ASSERT(prev64 == 0x8000000000000001ULL, "InterlockedRotateRight64 returns initial value");
+        TEST_ASSERT(target64 == 0xC000000000000000ULL, "InterlockedRotateRight64 rotates correctly");
+
+        // Left rotate: 0xC000000000000000ULL ROL 1 = 0x8000000000000001ULL
+        prev64 = InterlockedRotateLeft64(&target64, 1);
+        TEST_ASSERT(prev64 == 0xC000000000000000ULL, "InterlockedRotateLeft64 returns previous value");
+        TEST_ASSERT(target64 == 0x8000000000000001ULL, "InterlockedRotateLeft64 restores initial value");
+
+        // 2. 32-bit Circular Rotation
+        // Right rotate: 0x80000001UL ROR 1 = 0xC0000000UL
+        volatile ULONG target32 = 0x80000001UL;
+        ULONG prev32 = InterlockedRotateRight(&target32, 1);
+        TEST_ASSERT(prev32 == 0x80000001UL, "InterlockedRotateRight returns initial value");
+        TEST_ASSERT(target32 == 0xC0000000UL, "InterlockedRotateRight rotates correctly");
+
+        // Left rotate: 0xC0000000UL ROL 1 = 0x80000001UL
+        prev32 = InterlockedRotateLeft(&target32, 1);
+        TEST_ASSERT(prev32 == 0xC0000000UL, "InterlockedRotateLeft returns previous value");
+        TEST_ASSERT(target32 == 0x80000001UL, "InterlockedRotateLeft restores initial value");
+
+        // 3. 16-bit Circular Rotation
+        // Right rotate: 0x8001U ROR 1 = 0xC000U
+        volatile USHORT target16 = 0x8001U;
+        USHORT prev16 = InterlockedRotateRight16(&target16, 1);
+        TEST_ASSERT(prev16 == 0x8001U, "InterlockedRotateRight16 returns initial value");
+        TEST_ASSERT(target16 == 0xC000U, "InterlockedRotateRight16 rotates correctly");
+
+        // Left rotate: 0xC000U ROL 1 = 0x8001U
+        prev16 = InterlockedRotateLeft16(&target16, 1);
+        TEST_ASSERT(prev16 == 0xC000U, "InterlockedRotateLeft16 returns previous value");
+        TEST_ASSERT(target16 == 0x8001U, "InterlockedRotateLeft16 restores initial value");
+
+        // 4. 8-bit Circular Rotation
+        // Right rotate: 0x81U ROR 1 = 0xC0U
+        volatile UCHAR target8 = 0x81U;
+        UCHAR prev8 = InterlockedRotateRight8(&target8, 1);
+        TEST_ASSERT(prev8 == 0x81U, "InterlockedRotateRight8 returns initial value");
+        TEST_ASSERT(target8 == 0xC0U, "InterlockedRotateRight8 rotates correctly");
+
+        // Left rotate: 0xC0U ROL 1 = 0x81U
+        prev8 = InterlockedRotateLeft8(&target8, 1);
+        TEST_ASSERT(prev8 == 0xC0U, "InterlockedRotateLeft8 returns previous value");
+        TEST_ASSERT(target8 == 0x81U, "InterlockedRotateLeft8 restores initial value");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-90A / SP 800-185 KMAC-DRBG Sponge PRNG Engine
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-90A / SP 800-185 KMAC-DRBG Sponge PRNG Engine...\n";
+
+        using namespace micant::crypto;
+
+        // 1. Direct Engine Instantiation and Generation for KMAC-DRBG-128
+        KmacDrbg128::Context drbg128Ctx{};
+        std::vector<uint8_t> entropy128 = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                                            0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+                                            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38 };
+        KmacDrbg128::instantiate(drbg128Ctx, entropy128);
+
+        std::vector<uint8_t> rand128_1(48);
+        bool genOk = KmacDrbg128::generate(drbg128Ctx, rand128_1);
+        TEST_ASSERT(genOk, "KmacDrbg128 generate succeeds");
+        TEST_ASSERT(!std::all_of(rand128_1.begin(), rand128_1.end(), [](uint8_t b) { return b == 0; }), "KmacDrbg128 produces non-zero entropy");
+
+        // Forward secrecy test: consecutive generations yield different random bytes
+        std::vector<uint8_t> rand128_2(48);
+        genOk = KmacDrbg128::generate(drbg128Ctx, rand128_2);
+        TEST_ASSERT(genOk, "Second KmacDrbg128 generate succeeds");
+        TEST_ASSERT(rand128_1 != rand128_2, "Forward secrecy verified (consecutive blocks differ)");
+
+        // Reseed test
+        std::vector<uint8_t> extraEntropy = { 0xAA, 0xBB, 0xCC, 0xDD };
+        KmacDrbg128::reseed(drbg128Ctx, extraEntropy);
+        std::vector<uint8_t> rand128_3(48);
+        KmacDrbg128::generate(drbg128Ctx, rand128_3);
+        TEST_ASSERT(rand128_3 != rand128_2 && rand128_3 != rand128_1, "Reseeded generator produces distinct stream");
+
+        KmacDrbg128::uninstantiate(drbg128Ctx);
+
+        // 2. Determinism Verification: Identical seeds produce identical sequences
+        KmacDrbg128::Context drbgA{}, drbgB{};
+        KmacDrbg128::instantiate(drbgA, entropy128);
+        KmacDrbg128::instantiate(drbgB, entropy128);
+        std::vector<uint8_t> outA(64), outB(64);
+        KmacDrbg128::generate(drbgA, outA);
+        KmacDrbg128::generate(drbgB, outB);
+        TEST_ASSERT(outA == outB, "Deterministic KAT property holds for KMAC-DRBG-128");
+        KmacDrbg128::uninstantiate(drbgA);
+        KmacDrbg128::uninstantiate(drbgB);
+
+        // 3. Direct Engine Instantiation and Generation for KMAC-DRBG-256
+        KmacDrbg256::Context drbg256Ctx{};
+        std::vector<uint8_t> entropy256(64, 0x5A);
+        KmacDrbg256::instantiate(drbg256Ctx, entropy256);
+        std::vector<uint8_t> rand256(64);
+        genOk = KmacDrbg256::generate(drbg256Ctx, rand256);
+        TEST_ASSERT(genOk, "KmacDrbg256 generate succeeds");
+        TEST_ASSERT(!std::all_of(rand256.begin(), rand256.end(), [](uint8_t b) { return b == 0; }), "KmacDrbg256 produces non-zero entropy");
+        KmacDrbg256::uninstantiate(drbg256Ctx);
+
+        // 4. BCrypt API Integration for KMAC128-DRBG
+        BCRYPT_ALG_HANDLE hKMAC128DRBG = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128DRBG, BCRYPT_KMAC128_DRBG_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128DRBG != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-DRBG");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128DRBG, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-DRBG default digest length is 32");
+        BCryptGetProperty(hKMAC128DRBG, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-DRBG rate is 168");
+
+        std::vector<uint8_t> bcryptRand128(32);
+        bStatus = BCryptGenRandom(hKMAC128DRBG, bcryptRand128.data(), static_cast<uint32_t>(bcryptRand128.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptGenRandom via KMAC128-DRBG provider succeeds");
+        TEST_ASSERT(!std::all_of(bcryptRand128.begin(), bcryptRand128.end(), [](uint8_t b) { return b == 0; }), "BCryptGenRandom KMAC128-DRBG returns random bytes");
+
+        BCryptCloseAlgorithmProvider(hKMAC128DRBG, 0);
+
+        // 5. BCrypt API Integration for KMAC256-DRBG
+        BCRYPT_ALG_HANDLE hKMAC256DRBG = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256DRBG, BCRYPT_KMAC256_DRBG_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256DRBG != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-DRBG");
+
+        BCryptGetProperty(hKMAC256DRBG, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-DRBG default digest length is 64");
+        BCryptGetProperty(hKMAC256DRBG, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-DRBG rate is 136");
+
+        std::vector<uint8_t> bcryptRand256(64);
+        bStatus = BCryptGenRandom(hKMAC256DRBG, bcryptRand256.data(), static_cast<uint32_t>(bcryptRand256.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptGenRandom via KMAC256-DRBG provider succeeds");
+        TEST_ASSERT(!std::all_of(bcryptRand256.begin(), bcryptRand256.end(), [](uint8_t b) { return b == 0; }), "BCryptGenRandom KMAC256-DRBG returns random bytes");
+
+        BCryptCloseAlgorithmProvider(hKMAC256DRBG, 0);
+    }
+
+    std::cout << "  Horizon 259 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device37, ID3D12GraphicsCommandList31 & Options 49 OK\n"
+              << "    Pillar 2: NT Native Classes 269 (PagefileTierMigrationQos) & 270 (CpuFabricThermalThrottleTelemetry) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Circular Rotation 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-90A / SP 800-185 KMAC-DRBG Sponge PRNG Engine OK\n";
+
+    std::cout << "[TEST] Suite 475: Horizon 259 - Direct3D 12 Device37/CommandList31 & Options 49, NT SystemInfo 269/270, Interlocked Circular Rotation 64/32/16/8 & NIST KMAC-DRBG PASSED." << std::endl;
+}

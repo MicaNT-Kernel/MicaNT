@@ -398,7 +398,8 @@ static int g_FailedTests = 0;
 #define TEST_ASSERT(cond, msg) \
     do { \
         if (!(cond)) { \
-            std::cerr << "  [FAIL] " << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n"; \
+            std::cout << "  [FAIL] " << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n" << std::flush; \
+            std::cerr << "  [FAIL] " << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n" << std::flush; \
             g_FailedTests++; \
             return; \
         } \
@@ -451,6 +452,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite475") {
+        RUN_TEST(Test_Horizon259_Device37Options49_PagefileTierMigrationQosCpuFabricThermalThrottle_InterlockedRotate_And_KmacDrbg_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite474") {
@@ -2376,6 +2381,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon256_Device34Options46_PagefileTierIoQueueCpuFabricPower_InterlockedClamp_And_KmacFfx_Suite);
     RUN_TEST(Test_Horizon257_Device35Options47_PagefileTierWearCpuFabricVoltage_InterlockedAddModulo_And_KmacBps_Suite);
     RUN_TEST(Test_Horizon258_Device36Options48_PagefileTierFailoverCpuClockStretch_InterlockedMulModulo_And_KmacKw_Suite);
+    RUN_TEST(Test_Horizon259_Device37Options49_PagefileTierMigrationQosCpuFabricThermalThrottle_InterlockedRotate_And_KmacDrbg_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
