@@ -1404,6 +1404,7 @@ using ULONG64 = uint64_t;
 using LONG64 = int64_t;
 using ULONG_PTR = uintptr_t;
 using CCHAR = char;
+using CHAR = char;
 using BOOLEAN = uint8_t;
 
 #ifndef _MIO_GUID_DEFINED
@@ -1828,6 +1829,35 @@ struct SYSTEM_MEMORY_PARTITION_INFORMATION {
     ULONG    Reserved;
 };
 using PSYSTEM_MEMORY_PARTITION_INFORMATION = SYSTEM_MEMORY_PARTITION_INFORMATION*;
+
+// Class 243: SystemSiloMemoryInformation
+struct SYSTEM_SILO_MEMORY_INFORMATION {
+    ULONG    SiloId;
+    ULONG    SiloFlags;
+    ULONG64  CommittedMemoryBytes;
+    ULONG64  CommitLimitMemoryBytes;
+    ULONG64  WorkingSetBytes;
+    ULONG64  PeakWorkingSetBytes;
+    ULONG64  SharedMemoryBytes;
+    ULONG    ProcessCount;
+    ULONG    Reserved;
+};
+using PSYSTEM_SILO_MEMORY_INFORMATION = SYSTEM_SILO_MEMORY_INFORMATION*;
+
+// Class 244: SystemMemoryTopologyExInformation
+struct SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION {
+    ULONG    NumaNodeCount;
+    ULONG    ChannelCount;
+    ULONG    DimmSlotCount;
+    ULONG    PopulatedDimmCount;
+    ULONG64  TotalPhysicalBytes;
+    ULONG64  AvailablePhysicalBytes;
+    ULONG    InterleaveWays;
+    ULONG    MemorySpeedMhz;
+    ULONG    MemoryType;
+    ULONG    Reserved;
+};
+using PSYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION = SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION*;
 
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
@@ -3701,6 +3731,45 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_PARTITION_INFORMATION);
             return NtStatus::Success;
         }
+        case 243: { // SystemSiloMemoryInformation (Class 243)
+            if (SystemInformationLength < sizeof(SYSTEM_SILO_MEMORY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SILO_MEMORY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_SILO_MEMORY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->SiloId = 1;
+            pInfo->SiloFlags = 0x00000003; // SILO_ACTIVE | SILO_MEMORY_ENFORCED
+            pInfo->CommittedMemoryBytes = 4ULL * 1024 * 1024 * 1024;    // 4 GB
+            pInfo->CommitLimitMemoryBytes = 16ULL * 1024 * 1024 * 1024; // 16 GB
+            pInfo->WorkingSetBytes = 2ULL * 1024 * 1024 * 1024;        // 2 GB
+            pInfo->PeakWorkingSetBytes = 3ULL * 1024 * 1024 * 1024;    // 3 GB
+            pInfo->SharedMemoryBytes = 512ULL * 1024 * 1024;           // 512 MB
+            pInfo->ProcessCount = 12;
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_SILO_MEMORY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 244: { // SystemMemoryTopologyExInformation (Class 244)
+            if (SystemInformationLength < sizeof(SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->NumaNodeCount = 2;
+            pInfo->ChannelCount = 4;
+            pInfo->DimmSlotCount = 8;
+            pInfo->PopulatedDimmCount = 4;
+            pInfo->TotalPhysicalBytes = 64ULL * 1024 * 1024 * 1024;
+            pInfo->AvailablePhysicalBytes = 48ULL * 1024 * 1024 * 1024;
+            pInfo->InterleaveWays = 4;
+            pInfo->MemorySpeedMhz = 5600; // DDR5-5600
+            pInfo->MemoryType = 0x1E;     // DDR5
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4826,6 +4895,38 @@ inline SHORT WINAPI RtlInterlockedDecrement16(SHORT volatile* Addend) noexcept {
     return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
 }
 
+inline CHAR WINAPI RtlInterlockedCompareExchange8(CHAR volatile* Destination, CHAR Exchange, CHAR Comperand) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR expected = Comperand;
+    atomicDest->compare_exchange_strong(expected, Exchange, std::memory_order_seq_cst);
+    return expected;
+}
+
+inline CHAR WINAPI RtlInterlockedExchange8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->exchange(Value, std::memory_order_seq_cst);
+}
+
+inline CHAR WINAPI RtlInterlockedExchangeAdd8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->fetch_add(Value, std::memory_order_seq_cst);
+}
+
+inline CHAR WINAPI RtlInterlockedIncrement8(CHAR volatile* Addend) noexcept {
+    if (!Addend) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Addend);
+    return atomicDest->fetch_add(1, std::memory_order_seq_cst) + 1;
+}
+
+inline CHAR WINAPI RtlInterlockedDecrement8(CHAR volatile* Addend) noexcept {
+    if (!Addend) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Addend);
+    return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -5346,6 +5447,11 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd16", reinterpret_cast<void*>(RtlInterlockedExchangeAdd16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement16", reinterpret_cast<void*>(RtlInterlockedIncrement16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement16", reinterpret_cast<void*>(RtlInterlockedDecrement16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCompareExchange8", reinterpret_cast<void*>(RtlInterlockedCompareExchange8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchange8", reinterpret_cast<void*>(RtlInterlockedExchange8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd8", reinterpret_cast<void*>(RtlInterlockedExchangeAdd8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement8", reinterpret_cast<void*>(RtlInterlockedIncrement8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement8", reinterpret_cast<void*>(RtlInterlockedDecrement8));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

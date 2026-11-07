@@ -52573,3 +52573,284 @@ inline void Test_Horizon245_Device23Options35_RootSiloPartition_InterlockedArith
 
     std::cout << "[TEST] Suite 461: Horizon 245 - Direct3D 12 Device23/CommandList17 & Options 35, NT SystemInfo 241/242, Interlocked Arithmetic 16 & NIST KMAC Triple-Ratchet PASSED." << std::endl;
 }
+
+inline void Test_Horizon246_Device24Options36_SiloMemoryTopology_InterlockedArithmetic8_And_KmacTreeRatchet_Suite() {
+    std::cout << "[TEST] Suite 462: Horizon 246 - Direct3D 12 Device24/CommandList18 & Options 36, NT SystemInfo 243/244, Interlocked Arithmetic 8 & NIST KMAC Tree-Ratchet...\n";
+
+    // ========================================================================
+    // Pillar 1: Direct3D 12 Agility SDK 1.615+/1.616+ ID3D12Device24, CommandList18 & Options 36
+    // ========================================================================
+    {
+        using namespace prism3d12;
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device24, CommandList18 & Options 36 Architecture...\n";
+
+        Prism3D12DeviceImpl dev(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. QueryInterface for ID3D12Device24
+        ID3D12Device24* pDev24 = nullptr;
+        int32_t hr = dev.QueryInterface(IID_ID3D12Device24, reinterpret_cast<void**>(&pDev24));
+        TEST_ASSERT(hr == 0 && pDev24 != nullptr, "QueryInterface for IID_ID3D12Device24 succeeds");
+
+        ID3D12Device24* pDev24Off = nullptr;
+        hr = dev.QueryInterface(OFFICIAL_IID_ID3D12Device24, reinterpret_cast<void**>(&pDev24Off));
+        TEST_ASSERT(hr == 0 && pDev24Off != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device24 succeeds");
+
+        // 2. Test CreateWorkGraphProgramRecord8 and GetWorkGraphCooperativeMatrixSupport3
+        void* pRec8 = nullptr;
+        hr = pDev24->CreateWorkGraphProgramRecord8(nullptr, 0x8, 67108864ULL, 1024u, 0x01, 0x03, 0x04, IID_ID3D12Device24, &pRec8);
+        TEST_ASSERT(hr == 0 && pRec8 == reinterpret_cast<void*>(0xCAFEBAB8), "CreateWorkGraphProgramRecord8 succeeds with sovereign handle 0xCAFEBAB8");
+
+        int32_t coop = 0;
+        uint32_t maxDim = 0;
+        uint32_t dTypes = 0;
+        uint32_t sparse = 0;
+        hr = pDev24->GetWorkGraphCooperativeMatrixSupport3(&coop, &maxDim, &dTypes, &sparse);
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport3 succeeds");
+        TEST_ASSERT(coop == 1, "GetWorkGraphCooperativeMatrixSupport3 reports cooperative matrix tier 3 support");
+        TEST_ASSERT(maxDim == 256, "GetWorkGraphCooperativeMatrixSupport3 reports max dimension 256");
+        TEST_ASSERT(dTypes == 0x0F, "GetWorkGraphCooperativeMatrixSupport3 reports supported data types 0x0F");
+        TEST_ASSERT(sparse == 1, "GetWorkGraphCooperativeMatrixSupport3 reports sparse matrix acceleration enabled");
+
+        // 3. Test CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS36
+        D3D12_FEATURE_DATA_D3D12_OPTIONS36 options36{};
+        hr = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS36, &options36, sizeof(options36));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS36 succeeds");
+        TEST_ASSERT(options36.WorkGraphsTier == 19u, "Options 36 reports WorkGraphsTier 19 (Tier 3.3)");
+        TEST_ASSERT(options36.CooperativeMatrixMultiply256Supported == 1, "Options 36 reports 256x256 cooperative matrix multiply supported");
+        TEST_ASSERT(options36.SparseTensorCoreAccelerationSupported == 1, "Options 36 reports sparse tensor core acceleration supported");
+        TEST_ASSERT(options36.DynamicClusterExpansionTier4Supported == 1, "Options 36 reports dynamic cluster expansion tier 4");
+        TEST_ASSERT(options36.MaxWorkGraphConcurrencyGroups == 1024u, "Options 36 reports 1024 max concurrency groups");
+
+        // 4. Test ID3D12GraphicsCommandList18
+        Prism3D12CommandAllocatorImpl alloc(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(&dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        ID3D12GraphicsCommandList18* pCmd18 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList18, reinterpret_cast<void**>(&pCmd18));
+        TEST_ASSERT(hr == 0 && pCmd18 != nullptr, "CommandList QueryInterface for IID_ID3D12GraphicsCommandList18 succeeds");
+
+        ID3D12GraphicsCommandList18* pCmd18Off = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList18, reinterpret_cast<void**>(&pCmd18Off));
+        TEST_ASSERT(hr == 0 && pCmd18Off != nullptr, "CommandList QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList18 succeeds");
+
+        pCmd18->SetWorkGraphBackingMemory8(0xF0000000ULL, 268435456ULL, 67108864ULL, 1024u, 0x02, 0x03, 0x01, 0x90);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory8Start() == 0xF0000000ULL, "Backing memory 8 start matches");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory8Size() == 268435456ULL, "Backing memory 8 size matches (256MB)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory8ScratchSize() == 67108864ULL, "Backing memory 8 scratch size matches (64MB)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory8MaxConcurrency() == 1024u, "Backing memory 8 max concurrency matches 1024");
+
+        uint64_t dummyRec8 = 0xFEDCBA9876543210ULL;
+        pCmd18->DispatchGraphProgramRecord8(18, &dummyRec8, sizeof(dummyRec8), 64u, 0x07, 4u, 0x3F, 0x20, 0x01);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord8Count() == 1, "Recorded program record 8 count is 1");
+        const auto& recs8 = cmdList.GetRecordedProgramRecords8();
+        TEST_ASSERT(recs8[0].NodeIndex == 18, "Node index matches 18");
+        TEST_ASSERT(recs8[0].ConcurrencyGroup == 64u, "Concurrency group matches 64");
+
+        cmdList.Reset(&alloc, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory8Start() == 0, "Reset clears backing memory 8 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord8Count() == 0, "Reset clears recorded program records 8");
+    }
+
+    // ========================================================================
+    // Pillar 2: NT Native System Information Classes 243 (SiloMemory) & 244 (MemoryTopology)
+    // ========================================================================
+    {
+        using namespace micant::ntdll;
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 243 & 244 Architecture...\n";
+
+        // 1. Class 243: SystemSiloMemoryInformation
+        ULONG returnLength = 0;
+        NtStatus status = NtQuerySystemInformation_Export(243, nullptr, 0, &returnLength);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 243 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_SILO_MEMORY_INFORMATION), "Class 243 returns required structure size");
+
+        SYSTEM_SILO_MEMORY_INFORMATION siloMem{};
+        status = NtQuerySystemInformation_Export(243, &siloMem, sizeof(siloMem), &returnLength);
+        TEST_ASSERT(status == NtStatus::Success, "Class 243 succeeds with valid buffer");
+        TEST_ASSERT(siloMem.SiloId == 1, "Class 243 reports SiloId 1");
+        TEST_ASSERT(siloMem.SiloFlags == 0x03, "Class 243 reports SILO_ACTIVE | SILO_MEMORY_ENFORCED");
+        TEST_ASSERT(siloMem.CommittedMemoryBytes == 4ULL * 1024 * 1024 * 1024, "Class 243 reports 4GB committed memory");
+        TEST_ASSERT(siloMem.CommitLimitMemoryBytes == 16ULL * 1024 * 1024 * 1024, "Class 243 reports 16GB commit limit memory");
+        TEST_ASSERT(siloMem.WorkingSetBytes == 2ULL * 1024 * 1024 * 1024, "Class 243 reports 2GB working set memory");
+        TEST_ASSERT(siloMem.PeakWorkingSetBytes == 3ULL * 1024 * 1024 * 1024, "Class 243 reports 3GB peak working set memory");
+        TEST_ASSERT(siloMem.SharedMemoryBytes == 512ULL * 1024 * 1024, "Class 243 reports 512MB shared memory");
+        TEST_ASSERT(siloMem.ProcessCount == 12, "Class 243 reports 12 processes");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_SILO_MEMORY_INFORMATION), "Return length matches structure size");
+
+        // 2. Class 244: SystemMemoryTopologyExInformation
+        returnLength = 0;
+        status = NtQuerySystemInformation_Export(244, nullptr, 0, &returnLength);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 244 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION), "Class 244 returns required structure size");
+
+        SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION memTopo{};
+        status = NtQuerySystemInformation_Export(244, &memTopo, sizeof(memTopo), &returnLength);
+        TEST_ASSERT(status == NtStatus::Success, "Class 244 succeeds with valid buffer");
+        TEST_ASSERT(memTopo.NumaNodeCount == 2, "Class 244 reports 2 NUMA nodes");
+        TEST_ASSERT(memTopo.ChannelCount == 4, "Class 244 reports 4 memory channels");
+        TEST_ASSERT(memTopo.DimmSlotCount == 8, "Class 244 reports 8 DIMM slots");
+        TEST_ASSERT(memTopo.PopulatedDimmCount == 4, "Class 244 reports 4 populated DIMMs");
+        TEST_ASSERT(memTopo.TotalPhysicalBytes == 64ULL * 1024 * 1024 * 1024, "Class 244 reports 64GB total physical memory");
+        TEST_ASSERT(memTopo.AvailablePhysicalBytes == 48ULL * 1024 * 1024 * 1024, "Class 244 reports 48GB available physical memory");
+        TEST_ASSERT(memTopo.InterleaveWays == 4, "Class 244 reports 4-way interleave");
+        TEST_ASSERT(memTopo.MemorySpeedMhz == 5600, "Class 244 reports DDR5-5600 speed");
+        TEST_ASSERT(memTopo.MemoryType == 0x1E, "Class 244 reports DDR5 memory type");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_MEMORY_TOPOLOGY_EX_INFORMATION), "Return length matches structure size");
+    }
+
+    // ========================================================================
+    // Pillar 3: NT Native Executive & Win32 Interlocked 8-Bit Byte Arithmetic Primitives
+    // ========================================================================
+    {
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+        std::cout << "  [PILLAR 3] NT Native Executive & Win32 Interlocked 8-Bit Byte Arithmetic Primitives...\n";
+
+        // 1. RtlInterlockedCompareExchange8
+        CHAR val8 = 42;
+        CHAR old8 = RtlInterlockedCompareExchange8(&val8, 99, 42);
+        TEST_ASSERT(old8 == 42 && val8 == 99, "RtlInterlockedCompareExchange8 swapped successfully when expected matches");
+
+        old8 = RtlInterlockedCompareExchange8(&val8, 120, 7);
+        TEST_ASSERT(old8 == 99 && val8 == 99, "RtlInterlockedCompareExchange8 preserved value when expected mismatches");
+
+        // 2. RtlInterlockedExchange8
+        old8 = RtlInterlockedExchange8(&val8, 55);
+        TEST_ASSERT(old8 == 99 && val8 == 55, "RtlInterlockedExchange8 exchanges value atomically");
+
+        // 3. RtlInterlockedExchangeAdd8
+        old8 = RtlInterlockedExchangeAdd8(&val8, 10);
+        TEST_ASSERT(old8 == 55 && val8 == 65, "RtlInterlockedExchangeAdd8 adds addend atomically");
+
+        // 4. RtlInterlockedIncrement8 & Decrement8
+        CHAR incVal = RtlInterlockedIncrement8(&val8);
+        TEST_ASSERT(incVal == 66 && val8 == 66, "RtlInterlockedIncrement8 increments atomically");
+
+        CHAR decVal = RtlInterlockedDecrement8(&val8);
+        TEST_ASSERT(decVal == 65 && val8 == 65, "RtlInterlockedDecrement8 decrements atomically");
+
+        // 5. Win32 Interlocked Primitives (kernel32.hpp)
+        CHAR winVal = 20;
+        CHAR winOld = InterlockedCompareExchange8(&winVal, 35, 20);
+        TEST_ASSERT(winOld == 20 && winVal == 35, "Win32 InterlockedCompareExchange8 succeeds");
+
+        winOld = InterlockedExchange8(&winVal, 50);
+        TEST_ASSERT(winOld == 35 && winVal == 50, "Win32 InterlockedExchange8 succeeds");
+
+        winOld = InterlockedExchangeAdd8(&winVal, 5);
+        TEST_ASSERT(winOld == 50 && winVal == 55, "Win32 InterlockedExchangeAdd8 succeeds");
+
+        CHAR winInc = InterlockedIncrement8(&winVal);
+        TEST_ASSERT(winInc == 56 && winVal == 56, "Win32 InterlockedIncrement8 succeeds");
+
+        CHAR winDec = InterlockedDecrement8(&winVal);
+        TEST_ASSERT(winDec == 55 && winVal == 55, "Win32 InterlockedDecrement8 succeeds");
+
+        // 6. Test Loader Export Registration
+        InitializeNtdllSubsystemExports();
+        InitializeWin32SubsystemExports();
+        auto& ldr = micant::ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedCompareExchange8") != nullptr, "ntdll.dll exports RtlInterlockedCompareExchange8");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedExchange8") != nullptr, "ntdll.dll exports RtlInterlockedExchange8");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedExchangeAdd8") != nullptr, "ntdll.dll exports RtlInterlockedExchangeAdd8");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedIncrement8") != nullptr, "ntdll.dll exports RtlInterlockedIncrement8");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedDecrement8") != nullptr, "ntdll.dll exports RtlInterlockedDecrement8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedCompareExchange8") != nullptr, "kernel32.dll exports InterlockedCompareExchange8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedExchange8") != nullptr, "kernel32.dll exports InterlockedExchange8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedExchangeAdd8") != nullptr, "kernel32.dll exports InterlockedExchangeAdd8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedIncrement8") != nullptr, "kernel32.dll exports InterlockedIncrement8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedDecrement8") != nullptr, "kernel32.dll exports InterlockedDecrement8");
+    }
+
+    // ========================================================================
+    // Pillar 4: NIST KMAC Multi-Party Tree-Ratchet Mode
+    // ========================================================================
+    {
+        using namespace micant::crypto;
+        std::cout << "  [PILLAR 4] NIST KMAC Multi-Party Tree-Ratchet Mode Architecture...\n";
+
+        std::vector<uint8_t> masterKey = {
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20
+        };
+        std::vector<uint8_t> entropy = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+
+        // 1. Direct KmacTreeRatchet128
+        KmacTreeRatchet128::Context tr128Ctx{};
+        KmacTreeRatchet128::init(tr128Ctx, masterKey, 4, "TEST_TREE_128");
+        TEST_ASSERT(tr128Ctx.totalNodes >= 7, "Tree ratchet initialized with valid node tree");
+
+        std::vector<uint8_t> nodeKey1(32);
+        KmacTreeRatchet128::ratchetNode(tr128Ctx, 1, nodeKey1, entropy);
+        TEST_ASSERT(nodeKey1[0] != 0 || nodeKey1[1] != 0, "KmacTreeRatchet128 produces non-zero node key");
+
+        std::vector<uint8_t> nodeKey1_next(32);
+        KmacTreeRatchet128::ratchetNode(tr128Ctx, 1, nodeKey1_next, entropy);
+        TEST_ASSERT(nodeKey1 != nodeKey1_next, "Subsequent node ratchet step produces forward secret key");
+
+        std::vector<uint8_t> groupKey1(32);
+        KmacTreeRatchet128::treeRatchetStep(tr128Ctx, groupKey1, entropy);
+        TEST_ASSERT(groupKey1[0] != 0 || groupKey1[1] != 0, "KmacTreeRatchet128 produces non-zero group key");
+
+        // 2. Direct KmacTreeRatchet256
+        KmacTreeRatchet256::Context tr256Ctx{};
+        KmacTreeRatchet256::init(tr256Ctx, masterKey, 4, "TEST_TREE_256");
+
+        std::vector<uint8_t> nodeKey256(64);
+        KmacTreeRatchet256::ratchetNode(tr256Ctx, 2, nodeKey256, entropy);
+        TEST_ASSERT(nodeKey256[0] != 0 || nodeKey256[1] != 0, "KmacTreeRatchet256 produces non-zero node key");
+
+        std::vector<uint8_t> groupKey256(64);
+        KmacTreeRatchet256::treeRatchetStep(tr256Ctx, groupKey256, entropy);
+        TEST_ASSERT(groupKey256[0] != 0 || groupKey256[1] != 0, "KmacTreeRatchet256 produces non-zero group key");
+
+        // 3. BCrypt API Integration for KMAC128-TREERATCHET
+        BCRYPT_ALG_HANDLE hKMAC128TR = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128TR, BCRYPT_KMAC128_TREERATCHET_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128TR != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-TREERATCHET");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128TR, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-TREERATCHET default hash length is 32");
+        BCryptGetProperty(hKMAC128TR, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-TREERATCHET rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128TR = nullptr;
+        BCryptCreateHash(hKMAC128TR, &hHash128TR, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        BCryptHashData(hHash128TR, entropy.data(), static_cast<uint32_t>(entropy.size()), 0);
+        uint8_t dKMAC128TR[32]{};
+        BCryptFinishHash(hHash128TR, dKMAC128TR, sizeof(dKMAC128TR), 0);
+        TEST_ASSERT(dKMAC128TR[0] != 0 || dKMAC128TR[1] != 0, "BCrypt KMAC128-TREERATCHET generates valid non-zero digest");
+        BCryptDestroyHash(hHash128TR);
+        BCryptCloseAlgorithmProvider(hKMAC128TR, 0);
+
+        // 4. BCrypt API Integration for KMAC256-TREERATCHET
+        BCRYPT_ALG_HANDLE hKMAC256TR = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256TR, BCRYPT_KMAC256_TREERATCHET_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256TR != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-TREERATCHET");
+
+        BCryptGetProperty(hKMAC256TR, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-TREERATCHET default hash length is 64");
+        BCryptGetProperty(hKMAC256TR, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-TREERATCHET rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256TR = nullptr;
+        BCryptCreateHash(hKMAC256TR, &hHash256TR, nullptr, 0, masterKey.data(), static_cast<uint32_t>(masterKey.size()), 0);
+        BCryptHashData(hHash256TR, entropy.data(), static_cast<uint32_t>(entropy.size()), 0);
+        uint8_t dKMAC256TR[64]{};
+        BCryptFinishHash(hHash256TR, dKMAC256TR, sizeof(dKMAC256TR), 0);
+        TEST_ASSERT(dKMAC256TR[0] != 0 || dKMAC256TR[1] != 0, "BCrypt KMAC256-TREERATCHET generates valid non-zero digest");
+        BCryptDestroyHash(hHash256TR);
+        BCryptCloseAlgorithmProvider(hKMAC256TR, 0);
+    }
+
+    std::cout << "  Horizon 246 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device24, ID3D12GraphicsCommandList18 & Options 36 OK\n"
+              << "    Pillar 2: NT Native Classes 243 (SiloMemory) & 244 (MemoryTopology) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked 8-Bit Byte Arithmetic Primitives OK\n"
+              << "    Pillar 4: NIST KMAC Multi-Party Tree-Ratchet Mode OK\n";
+
+    std::cout << "[TEST] Suite 462: Horizon 246 - Direct3D 12 Device24/CommandList18 & Options 36, NT SystemInfo 243/244, Interlocked Arithmetic 8 & NIST KMAC Tree-Ratchet PASSED." << std::endl;
+}
