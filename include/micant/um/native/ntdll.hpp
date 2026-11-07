@@ -2095,6 +2095,29 @@ struct SYSTEM_CPU_FABRIC_CONGESTION_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_CONGESTION_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_CONGESTION_TELEMETRY_INFORMATION*;
 
+// Class 261: SystemPagefileTierExpulsionTelemetryInformation
+struct SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION {
+    ULONG    PagefileId;                           // e.g. 0
+    ULONG64  TotalExpulsions;                      // e.g. 16384ULL
+    ULONG64  BytesExpelled;                        // e.g. 4294967296ULL (4 GB)
+    ULONG64  ColdToPurgeExpulsions;                // e.g. 8192ULL
+    ULONG64  AverageExpulsionLatencyMicros;        // e.g. 120ULL
+    ULONG64  ExpulsionThroughputMBps;              // e.g. 3200ULL
+    ULONG    StatusFlags;                          // 0x07 = ExpulsionActive | AutoTuningEnabled | PurgeCoalescingActive
+};
+using PSYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION*;
+
+// Class 262: SystemCpuFabricBandwidthPartitionTelemetryInformation
+struct SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION {
+    ULONG    FabricId;                             // e.g. 0
+    ULONG    PartitionCount;                       // e.g. 8
+    ULONG64  GuaranteedBandwidthMBps;              // e.g. 128000ULL
+    ULONG64  BurstBandwidthMBps;                   // e.g. 256000ULL
+    ULONG64  PartitionThrottlingCount;             // e.g. 18ULL
+    ULONG    StatusFlags;                          // 0x05 = PartitioningEnforced | QosGuaranteed
+};
+using PSYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4324,6 +4347,39 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_CONGESTION_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 261: { // SystemPagefileTierExpulsionTelemetryInformation (Class 261)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PagefileId = 0;
+            pInfo->TotalExpulsions = 16384ULL;
+            pInfo->BytesExpelled = 4294967296ULL;
+            pInfo->ColdToPurgeExpulsions = 8192ULL;
+            pInfo->AverageExpulsionLatencyMicros = 120ULL;
+            pInfo->ExpulsionThroughputMBps = 3200ULL;
+            pInfo->StatusFlags = 0x07; // ExpulsionActive | AutoTuningEnabled | PurgeCoalescingActive
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 262: { // SystemCpuFabricBandwidthPartitionTelemetryInformation (Class 262)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->FabricId = 0;
+            pInfo->PartitionCount = 8;
+            pInfo->GuaranteedBandwidthMBps = 128000ULL;
+            pInfo->BurstBandwidthMBps = 256000ULL;
+            pInfo->PartitionThrottlingCount = 18ULL;
+            pInfo->StatusFlags = 0x05; // PartitioningEnforced | QosGuaranteed
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -5679,6 +5735,70 @@ inline CHAR WINAPI RtlInterlockedXnor8(CHAR volatile* Destination, CHAR Value) n
     return current;
 }
 
+inline LONG64 WINAPI RtlInterlockedMin64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::min(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline LONG WINAPI RtlInterlockedMin32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::min(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline SHORT WINAPI RtlInterlockedMin16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::min(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline CHAR WINAPI RtlInterlockedMin8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::min(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline LONG64 WINAPI RtlInterlockedMax64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::max(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline LONG WINAPI RtlInterlockedMax32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::max(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline SHORT WINAPI RtlInterlockedMax16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::max(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline CHAR WINAPI RtlInterlockedMax8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, std::max(current, Value), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -5737,6 +5857,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricCongestionTelemetry(SYSTEM_CPU_FAB
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(260, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierExpulsionTelemetry(SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(261, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricBandwidthPartitionTelemetry(SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(262, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -6292,6 +6424,14 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnor32", reinterpret_cast<void*>(RtlInterlockedXnor32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnor16", reinterpret_cast<void*>(RtlInterlockedXnor16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnor8", reinterpret_cast<void*>(RtlInterlockedXnor8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMin64", reinterpret_cast<void*>(RtlInterlockedMin64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMin32", reinterpret_cast<void*>(RtlInterlockedMin32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMin16", reinterpret_cast<void*>(RtlInterlockedMin16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMin8", reinterpret_cast<void*>(RtlInterlockedMin8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMax64", reinterpret_cast<void*>(RtlInterlockedMax64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMax32", reinterpret_cast<void*>(RtlInterlockedMax32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMax16", reinterpret_cast<void*>(RtlInterlockedMax16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedMax8", reinterpret_cast<void*>(RtlInterlockedMax8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileDecompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileDecompressionTelemetry));
@@ -6302,6 +6442,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricLatencyTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricLatencyTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileExtentMigrationTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileExtentMigrationTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricCongestionTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricCongestionTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierExpulsionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierExpulsionTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricBandwidthPartitionTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricBandwidthPartitionTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

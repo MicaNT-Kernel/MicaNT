@@ -9440,6 +9440,38 @@ inline CHAR WINAPI InterlockedXnor8(CHAR volatile* Destination, CHAR Value) noex
     return ntdll::RtlInterlockedXnor8(Destination, Value);
 }
 
+inline LONG64 WINAPI InterlockedMin64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedMin64(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedMin32(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedMin32(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedMin16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedMin16(Destination, Value);
+}
+
+inline CHAR WINAPI InterlockedMin8(CHAR volatile* Destination, CHAR Value) noexcept {
+    return ntdll::RtlInterlockedMin8(Destination, Value);
+}
+
+inline LONG64 WINAPI InterlockedMax64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedMax64(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedMax32(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedMax32(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedMax16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedMax16(Destination, Value);
+}
+
+inline CHAR WINAPI InterlockedMax8(CHAR volatile* Destination, CHAR Value) noexcept {
+    return ntdll::RtlInterlockedMax8(Destination, Value);
+}
+
 inline BOOL WINAPI GetPagefileCompressionTelemetry(ntdll::SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemPagefileCompressionTelemetry(Info)) ? TRUE : FALSE;
@@ -9488,6 +9520,16 @@ inline BOOL WINAPI GetPagefileExtentMigrationTelemetry(ntdll::SYSTEM_PAGEFILE_EX
 inline BOOL WINAPI GetCpuFabricCongestionTelemetry(ntdll::SYSTEM_CPU_FABRIC_CONGESTION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricCongestionTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileTierExpulsionTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_EXPULSION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierExpulsionTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricBandwidthPartitionTelemetry(ntdll::SYSTEM_CPU_FABRIC_BANDWIDTH_PARTITION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricBandwidthPartitionTelemetry(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -11692,6 +11734,14 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedXnor32", reinterpret_cast<void*>(InterlockedXnor32));
     ldr.registerExport("kernel32.dll", "InterlockedXnor16", reinterpret_cast<void*>(InterlockedXnor16));
     ldr.registerExport("kernel32.dll", "InterlockedXnor8", reinterpret_cast<void*>(InterlockedXnor8));
+    ldr.registerExport("kernel32.dll", "InterlockedMin64", reinterpret_cast<void*>(InterlockedMin64));
+    ldr.registerExport("kernel32.dll", "InterlockedMin32", reinterpret_cast<void*>(InterlockedMin32));
+    ldr.registerExport("kernel32.dll", "InterlockedMin16", reinterpret_cast<void*>(InterlockedMin16));
+    ldr.registerExport("kernel32.dll", "InterlockedMin8", reinterpret_cast<void*>(InterlockedMin8));
+    ldr.registerExport("kernel32.dll", "InterlockedMax64", reinterpret_cast<void*>(InterlockedMax64));
+    ldr.registerExport("kernel32.dll", "InterlockedMax32", reinterpret_cast<void*>(InterlockedMax32));
+    ldr.registerExport("kernel32.dll", "InterlockedMax16", reinterpret_cast<void*>(InterlockedMax16));
+    ldr.registerExport("kernel32.dll", "InterlockedMax8", reinterpret_cast<void*>(InterlockedMax8));
     ldr.registerExport("kernel32.dll", "GetPagefileCompressionTelemetry", reinterpret_cast<void*>(GetPagefileCompressionTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuCooperativeFabricInformation", reinterpret_cast<void*>(GetCpuCooperativeFabricInformation));
     ldr.registerExport("kernel32.dll", "GetPagefileDecompressionTelemetry", reinterpret_cast<void*>(GetPagefileDecompressionTelemetry));
@@ -11702,6 +11752,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuFabricLatencyTelemetry", reinterpret_cast<void*>(GetCpuFabricLatencyTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileExtentMigrationTelemetry", reinterpret_cast<void*>(GetPagefileExtentMigrationTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricCongestionTelemetry", reinterpret_cast<void*>(GetCpuFabricCongestionTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierExpulsionTelemetry", reinterpret_cast<void*>(GetPagefileTierExpulsionTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricBandwidthPartitionTelemetry", reinterpret_cast<void*>(GetCpuFabricBandwidthPartitionTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
