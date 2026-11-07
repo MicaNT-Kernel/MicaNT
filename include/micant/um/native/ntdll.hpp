@@ -1809,6 +1809,26 @@ struct SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION {
 };
 using PSYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION = SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION*;
 
+// Class 241: SystemRootSiloInformation
+struct SYSTEM_ROOT_SILO_INFORMATION {
+    ULONG NumberOfRootSilos;
+    ULONG ActiveSilosCount;
+    ULONG SiloFlags;
+    ULONG MaxSiloDepth;
+};
+using PSYSTEM_ROOT_SILO_INFORMATION = SYSTEM_ROOT_SILO_INFORMATION*;
+
+// Class 242: SystemMemoryPartitionInformation
+struct SYSTEM_MEMORY_PARTITION_INFORMATION {
+    ULONG    PartitionCount;
+    ULONG    ActivePartitions;
+    ULONG64  TotalPartitionMemoryBytes;
+    ULONG64  AvailablePartitionMemoryBytes;
+    ULONG    NumaNodesCovered;
+    ULONG    Reserved;
+};
+using PSYSTEM_MEMORY_PARTITION_INFORMATION = SYSTEM_MEMORY_PARTITION_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3651,6 +3671,36 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_FIRMWARE_SECUREBOOT_POLICY_INFORMATION);
             return NtStatus::Success;
         }
+        case 241: { // SystemRootSiloInformation (Class 241)
+            if (SystemInformationLength < sizeof(SYSTEM_ROOT_SILO_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ROOT_SILO_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_ROOT_SILO_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->NumberOfRootSilos = 1;
+            pInfo->ActiveSilosCount = 1;
+            pInfo->SiloFlags = 0x00000001; // SILO_FLAG_SERVER_CORE
+            pInfo->MaxSiloDepth = 4;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_ROOT_SILO_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 242: { // SystemMemoryPartitionInformation (Class 242)
+            if (SystemInformationLength < sizeof(SYSTEM_MEMORY_PARTITION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_PARTITION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_MEMORY_PARTITION_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PartitionCount = 2;
+            pInfo->ActivePartitions = 2;
+            pInfo->TotalPartitionMemoryBytes = 64ULL * 1024 * 1024 * 1024;
+            pInfo->AvailablePartitionMemoryBytes = 48ULL * 1024 * 1024 * 1024;
+            pInfo->NumaNodesCovered = 2;
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_PARTITION_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -3738,6 +3788,7 @@ using BOOLEAN = uint8_t;
 using DWORD = uint32_t;
 using ULONG = uint32_t;
 using USHORT = uint16_t;
+using SHORT = int16_t;
 using UCHAR = uint8_t;
 using WORD = uint16_t;
 using BYTE = uint8_t;
@@ -4743,6 +4794,38 @@ inline LONG64 WINAPI RtlInterlockedDecrement64(LONG64 volatile* Addend) noexcept
     return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
 }
 
+inline SHORT WINAPI RtlInterlockedCompareExchange16(SHORT volatile* Destination, SHORT Exchange, SHORT Comperand) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT expected = Comperand;
+    atomicDest->compare_exchange_strong(expected, Exchange, std::memory_order_seq_cst);
+    return expected;
+}
+
+inline SHORT WINAPI RtlInterlockedExchange16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->exchange(Value, std::memory_order_seq_cst);
+}
+
+inline SHORT WINAPI RtlInterlockedExchangeAdd16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->fetch_add(Value, std::memory_order_seq_cst);
+}
+
+inline SHORT WINAPI RtlInterlockedIncrement16(SHORT volatile* Addend) noexcept {
+    if (!Addend) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Addend);
+    return atomicDest->fetch_add(1, std::memory_order_seq_cst) + 1;
+}
+
+inline SHORT WINAPI RtlInterlockedDecrement16(SHORT volatile* Addend) noexcept {
+    if (!Addend) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Addend);
+    return atomicDest->fetch_sub(1, std::memory_order_seq_cst) - 1;
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -5258,6 +5341,11 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd64", reinterpret_cast<void*>(RtlInterlockedExchangeAdd64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement64", reinterpret_cast<void*>(RtlInterlockedIncrement64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement64", reinterpret_cast<void*>(RtlInterlockedDecrement64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCompareExchange16", reinterpret_cast<void*>(RtlInterlockedCompareExchange16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchange16", reinterpret_cast<void*>(RtlInterlockedExchange16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd16", reinterpret_cast<void*>(RtlInterlockedExchangeAdd16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedIncrement16", reinterpret_cast<void*>(RtlInterlockedIncrement16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDecrement16", reinterpret_cast<void*>(RtlInterlockedDecrement16));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

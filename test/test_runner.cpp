@@ -453,6 +453,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite461") {
+        RUN_TEST(Test_Horizon245_Device23Options35_RootSiloPartition_InterlockedArithmetic16_And_KmacTripleRatchet_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite460") {
         RUN_TEST(Test_Horizon244_Device22Options34_MicrocodePolicy_InterlockedArithmetic64_And_KmacDoubleRatchet_Suite);
         return g_FailedTests;
@@ -2306,6 +2310,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon242_Device20Options32_ZeroingHypervisor_InterlockedBitTest_And_KmacPrf_Suite);
     RUN_TEST(Test_Horizon243_Device21Options33_NumaEntropy_InterlockedBitwise_And_KmacRatchet_Suite);
     RUN_TEST(Test_Horizon244_Device22Options34_MicrocodePolicy_InterlockedArithmetic64_And_KmacDoubleRatchet_Suite);
+    RUN_TEST(Test_Horizon245_Device23Options35_RootSiloPartition_InterlockedArithmetic16_And_KmacTripleRatchet_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -79,6 +79,7 @@ using ULONG     = uint32_t;
 using KAFFINITY = ULONG_PTR;
 using PULONG    = uint32_t*;
 using USHORT    = uint16_t;
+using SHORT     = int16_t;
 using PUSHORT   = uint16_t*;
 
 struct GROUP_AFFINITY {
@@ -9286,6 +9287,26 @@ inline LONG64 WINAPI InterlockedDecrement64(LONG64 volatile* Addend) noexcept {
     return ntdll::RtlInterlockedDecrement64(Addend);
 }
 
+inline SHORT WINAPI InterlockedCompareExchange16(SHORT volatile* Destination, SHORT Exchange, SHORT Comperand) noexcept {
+    return ntdll::RtlInterlockedCompareExchange16(Destination, Exchange, Comperand);
+}
+
+inline SHORT WINAPI InterlockedExchange16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedExchange16(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedExchangeAdd16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedExchangeAdd16(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedIncrement16(SHORT volatile* Addend) noexcept {
+    return ntdll::RtlInterlockedIncrement16(Addend);
+}
+
+inline SHORT WINAPI InterlockedDecrement16(SHORT volatile* Addend) noexcept {
+    return ntdll::RtlInterlockedDecrement16(Addend);
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11450,6 +11471,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedExchangeAdd64", reinterpret_cast<void*>(InterlockedExchangeAdd64));
     ldr.registerExport("kernel32.dll", "InterlockedIncrement64", reinterpret_cast<void*>(InterlockedIncrement64));
     ldr.registerExport("kernel32.dll", "InterlockedDecrement64", reinterpret_cast<void*>(InterlockedDecrement64));
+    ldr.registerExport("kernel32.dll", "InterlockedCompareExchange16", reinterpret_cast<void*>(InterlockedCompareExchange16));
+    ldr.registerExport("kernel32.dll", "InterlockedExchange16", reinterpret_cast<void*>(InterlockedExchange16));
+    ldr.registerExport("kernel32.dll", "InterlockedExchangeAdd16", reinterpret_cast<void*>(InterlockedExchangeAdd16));
+    ldr.registerExport("kernel32.dll", "InterlockedIncrement16", reinterpret_cast<void*>(InterlockedIncrement16));
+    ldr.registerExport("kernel32.dll", "InterlockedDecrement16", reinterpret_cast<void*>(InterlockedDecrement16));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
