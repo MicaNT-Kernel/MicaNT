@@ -92,6 +92,8 @@ inline constexpr const wchar_t* BCRYPT_KMAC128_TREERATCHET_ALGORITHM      = L"KM
 inline constexpr const wchar_t* BCRYPT_KMAC256_TREERATCHET_ALGORITHM      = L"KMAC256-TREERATCHET";
 inline constexpr const wchar_t* BCRYPT_KMAC128_ASYNCRATCHET_ALGORITHM    = L"KMAC128-ASYNCRATCHET";
 inline constexpr const wchar_t* BCRYPT_KMAC256_ASYNCRATCHET_ALGORITHM    = L"KMAC256-ASYNCRATCHET";
+inline constexpr const wchar_t* BCRYPT_KMAC128_KWP_ALGORITHM             = L"KMAC128-KWP";
+inline constexpr const wchar_t* BCRYPT_KMAC256_KWP_ALGORITHM             = L"KMAC256-KWP";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -2017,6 +2019,164 @@ public:
 
 using KmacAsyncRatchet128 = GenericKmacAsyncRatchet<CShake128>;
 using KmacAsyncRatchet256 = GenericKmacAsyncRatchet<CShake256>;
+
+template<typename CShakeType>
+class GenericKmacKwp {
+public:
+    static constexpr size_t RATE = CShakeType::RATE;
+    static constexpr size_t DEFAULT_DIGEST_SIZE = CShakeType::DEFAULT_DIGEST_SIZE;
+
+    struct Context {
+        typename GenericKmacXof<CShakeType>::Context kwpKmac{};
+        std::vector<uint8_t> kek{};
+        std::vector<uint8_t> buffer{};
+        uint64_t wrappedCount{ 0 };
+        uint64_t unwrappedCount{ 0 };
+    };
+
+    static void init(Context& ctx, std::span<const uint8_t> kek, std::string_view label = "KMAC_KWP") noexcept {
+        ctx.kek.assign(kek.begin(), kek.end());
+        ctx.buffer.clear();
+        ctx.wrappedCount = 0;
+        ctx.unwrappedCount = 0;
+        GenericKmacXof<CShakeType>::init(ctx.kwpKmac, kek, label);
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        GenericKmacXof<CShakeType>::update(ctx.kwpKmac, data);
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> out) noexcept {
+        GenericKmacXof<CShakeType>::final(ctx.kwpKmac, out);
+    }
+
+    // NIST SP 800-38F Key Wrap with Padding (KWP) using KMAC:
+    // Format: 4-byte ICV (0xA65959A6) + 4-byte big-endian plaintext length + plaintext + zero padding to 8-byte boundary.
+    // Encrypted with keystream derived via KMAC-XOF("KMAC_KWP_STREAM", kek), and authenticated with tag via KMAC("KMAC_KWP_MAC", kek) over (associatedData || ciphertext).
+    static bool wrapKey(
+        Context& ctx,
+        std::span<const uint8_t> plaintextKey,
+        std::vector<uint8_t>& wrappedKey,
+        std::span<const uint8_t> associatedData = {}) noexcept {
+        
+        if (plaintextKey.empty()) return false;
+        size_t ptLen = plaintextKey.size();
+        size_t padLen = (8 - (ptLen % 8)) % 8;
+        size_t payloadLen = 8 + ptLen + padLen;
+
+        std::vector<uint8_t> payload(payloadLen, 0);
+        // ICV = 0xA65959A6
+        payload[0] = 0xA6;
+        payload[1] = 0x59;
+        payload[2] = 0x59;
+        payload[3] = 0xA6;
+        // Big-endian length
+        payload[4] = static_cast<uint8_t>((ptLen >> 24) & 0xFF);
+        payload[5] = static_cast<uint8_t>((ptLen >> 16) & 0xFF);
+        payload[6] = static_cast<uint8_t>((ptLen >> 8) & 0xFF);
+        payload[7] = static_cast<uint8_t>(ptLen & 0xFF);
+        // Plaintext
+        std::memcpy(&payload[8], plaintextKey.data(), ptLen);
+
+        // Keystream encryption
+        typename GenericKmacXof<CShakeType>::Context streamKmac{};
+        GenericKmacXof<CShakeType>::init(streamKmac, ctx.kek, "KMAC_KWP_STREAM");
+        std::vector<uint8_t> keystream(payloadLen);
+        GenericKmacXof<CShakeType>::final(streamKmac, std::span<uint8_t>(keystream.data(), keystream.size()));
+
+        std::vector<uint8_t> ciphertext(payloadLen);
+        for (size_t i = 0; i < payloadLen; ++i) {
+            ciphertext[i] = payload[i] ^ keystream[i];
+        }
+
+        // Authentication tag via KMAC-MAC
+        typename GenericKmac<CShakeType>::Context macKmac{};
+        GenericKmac<CShakeType>::init(macKmac, ctx.kek, "KMAC_KWP_MAC");
+        if (!associatedData.empty()) {
+            GenericKmac<CShakeType>::update(macKmac, associatedData);
+        }
+        GenericKmac<CShakeType>::update(macKmac, std::span<const uint8_t>(ciphertext.data(), ciphertext.size()));
+
+        std::vector<uint8_t> tag(DEFAULT_DIGEST_SIZE);
+        GenericKmac<CShakeType>::final(macKmac, std::span<uint8_t>(tag.data(), tag.size()));
+
+        // Total wrapped key = ciphertext || tag
+        wrappedKey.resize(payloadLen + DEFAULT_DIGEST_SIZE);
+        std::memcpy(wrappedKey.data(), ciphertext.data(), payloadLen);
+        std::memcpy(wrappedKey.data() + payloadLen, tag.data(), DEFAULT_DIGEST_SIZE);
+
+        ctx.wrappedCount++;
+        return true;
+    }
+
+    static bool unwrapKey(
+        Context& ctx,
+        std::span<const uint8_t> wrappedKey,
+        std::vector<uint8_t>& unwrappedKey,
+        std::span<const uint8_t> associatedData = {}) noexcept {
+        
+        if (wrappedKey.size() < 8 + DEFAULT_DIGEST_SIZE) return false;
+        size_t payloadLen = wrappedKey.size() - DEFAULT_DIGEST_SIZE;
+        if (payloadLen < 8 || (payloadLen % 8) != 0) return false;
+
+        const uint8_t* pCiphertext = wrappedKey.data();
+        const uint8_t* pTag = wrappedKey.data() + payloadLen;
+
+        // Verify MAC
+        typename GenericKmac<CShakeType>::Context macKmac{};
+        GenericKmac<CShakeType>::init(macKmac, ctx.kek, "KMAC_KWP_MAC");
+        if (!associatedData.empty()) {
+            GenericKmac<CShakeType>::update(macKmac, associatedData);
+        }
+        GenericKmac<CShakeType>::update(macKmac, std::span<const uint8_t>(pCiphertext, payloadLen));
+
+        std::vector<uint8_t> expectedTag(DEFAULT_DIGEST_SIZE);
+        GenericKmac<CShakeType>::final(macKmac, std::span<uint8_t>(expectedTag.data(), expectedTag.size()));
+
+        // Constant-time compare
+        uint8_t diff = 0;
+        for (size_t i = 0; i < DEFAULT_DIGEST_SIZE; ++i) {
+            diff |= (pTag[i] ^ expectedTag[i]);
+        }
+        if (diff != 0) return false;
+
+        // Decrypt payload
+        typename GenericKmacXof<CShakeType>::Context streamKmac{};
+        GenericKmacXof<CShakeType>::init(streamKmac, ctx.kek, "KMAC_KWP_STREAM");
+        std::vector<uint8_t> keystream(payloadLen);
+        GenericKmacXof<CShakeType>::final(streamKmac, std::span<uint8_t>(keystream.data(), keystream.size()));
+
+        std::vector<uint8_t> payload(payloadLen);
+        for (size_t i = 0; i < payloadLen; ++i) {
+            payload[i] = pCiphertext[i] ^ keystream[i];
+        }
+
+        // Verify ICV
+        if (payload[0] != 0xA6 || payload[1] != 0x59 || payload[2] != 0x59 || payload[3] != 0xA6) {
+            return false;
+        }
+
+        uint32_t ptLen = (static_cast<uint32_t>(payload[4]) << 24) |
+                         (static_cast<uint32_t>(payload[5]) << 16) |
+                         (static_cast<uint32_t>(payload[6]) << 8) |
+                         static_cast<uint32_t>(payload[7]);
+
+        if (ptLen > payloadLen - 8) return false;
+
+        // Check padding is zero
+        for (size_t i = 8 + ptLen; i < payloadLen; ++i) {
+            if (payload[i] != 0) return false;
+        }
+
+        unwrappedKey.assign(payload.begin() + 8, payload.begin() + 8 + ptLen);
+        ctx.unwrappedCount++;
+        return true;
+    }
+};
+
+using KmacKwp128 = GenericKmacKwp<CShake128>;
+using KmacKwp256 = GenericKmacKwp<CShake256>;
 
 template<typename CShakeType>
 class GenericTupleHash {
@@ -4235,6 +4395,8 @@ enum class CryptoAlgorithm {
     KmacTreeRatchet256,
     KmacAsyncRatchet128,
     KmacAsyncRatchet256,
+    KmacKwp128,
+    KmacKwp256,
     Unknown
 };
 
@@ -4266,6 +4428,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_KMAC256_TREERATCHET_ALGORITHM || algId == L"KMAC256-TREERATCHET" || algId == L"kmac256-treeratchet") return CryptoAlgorithm::KmacTreeRatchet256;
     if (algId == BCRYPT_KMAC128_ASYNCRATCHET_ALGORITHM || algId == L"KMAC128-ASYNCRATCHET" || algId == L"kmac128-asyncratchet") return CryptoAlgorithm::KmacAsyncRatchet128;
     if (algId == BCRYPT_KMAC256_ASYNCRATCHET_ALGORITHM || algId == L"KMAC256-ASYNCRATCHET" || algId == L"kmac256-asyncratchet") return CryptoAlgorithm::KmacAsyncRatchet256;
+    if (algId == BCRYPT_KMAC128_KWP_ALGORITHM || algId == L"KMAC128-KWP" || algId == L"kmac128-kwp") return CryptoAlgorithm::KmacKwp128;
+    if (algId == BCRYPT_KMAC256_KWP_ALGORITHM || algId == L"KMAC256-KWP" || algId == L"kmac256-kwp") return CryptoAlgorithm::KmacKwp256;
     if (algId == BCRYPT_TUPLEHASH128_ALGORITHM || algId == L"TUPLEHASH128" || algId == L"tuplehash128") return CryptoAlgorithm::TupleHash128;
     if (algId == BCRYPT_TUPLEHASH256_ALGORITHM || algId == L"TUPLEHASH256" || algId == L"tuplehash256") return CryptoAlgorithm::TupleHash256;
     if (algId == BCRYPT_TUPLEHASHXOF128_ALGORITHM || algId == L"TUPLEHASHXOF128" || algId == L"tuplehashxof128") return CryptoAlgorithm::TupleHashXOF128;
@@ -4380,6 +4544,8 @@ public:
     KmacTreeRatchet256::Context kmacTreeRatchet256Ctx{};
     KmacAsyncRatchet128::Context kmacAsyncRatchet128Ctx{};
     KmacAsyncRatchet256::Context kmacAsyncRatchet256Ctx{};
+    KmacKwp128::Context kmacKwp128Ctx{};
+    KmacKwp256::Context kmacKwp256Ctx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -4435,6 +4601,8 @@ public:
           kmacTreeRatchet256Ctx(other.kmacTreeRatchet256Ctx),
           kmacAsyncRatchet128Ctx(other.kmacAsyncRatchet128Ctx),
           kmacAsyncRatchet256Ctx(other.kmacAsyncRatchet256Ctx),
+          kmacKwp128Ctx(other.kmacKwp128Ctx),
+          kmacKwp256Ctx(other.kmacKwp256Ctx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -4531,6 +4699,10 @@ public:
             KmacAsyncRatchet128::init(kmacAsyncRatchet128Ctx, key, "ASYNC_RATCHET");
         } else if (algorithm == CryptoAlgorithm::KmacAsyncRatchet256) {
             KmacAsyncRatchet256::init(kmacAsyncRatchet256Ctx, key, "ASYNC_RATCHET");
+        } else if (algorithm == CryptoAlgorithm::KmacKwp128) {
+            KmacKwp128::init(kmacKwp128Ctx, key, "KMAC128_KWP");
+        } else if (algorithm == CryptoAlgorithm::KmacKwp256) {
+            KmacKwp256::init(kmacKwp256Ctx, key, "KMAC256_KWP");
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -4623,6 +4795,10 @@ public:
             KmacAsyncRatchet128::update(kmacAsyncRatchet128Ctx, data);
         } else if (algorithm == CryptoAlgorithm::KmacAsyncRatchet256) {
             KmacAsyncRatchet256::update(kmacAsyncRatchet256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::KmacKwp128) {
+            KmacKwp128::update(kmacKwp128Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::KmacKwp256) {
+            KmacKwp256::update(kmacKwp256Ctx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -4807,6 +4983,14 @@ public:
         } else if (algorithm == CryptoAlgorithm::KmacAsyncRatchet256) {
             std::vector<uint8_t> out(64);
             KmacAsyncRatchet256::final(kmacAsyncRatchet256Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::KmacKwp128) {
+            std::vector<uint8_t> out(32);
+            KmacKwp128::final(kmacKwp128Ctx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::KmacKwp256) {
+            std::vector<uint8_t> out(64);
+            KmacKwp256::final(kmacKwp256Ctx, out);
             return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
@@ -5057,9 +5241,9 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
-            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256) len = 64;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256 || prov->algorithm == CryptoAlgorithm::KmacKwp256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -5069,10 +5253,10 @@ inline NTSTATUS BCryptGetProperty(
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
             uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes || prov->algorithm == CryptoAlgorithm::AesCmac) ? 16 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_224) ? 144 :
-                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256) ? 136 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256 || prov->algorithm == CryptoAlgorithm::KmacKwp256) ? 136 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_384) ? 104 :
                            ((prov->algorithm == CryptoAlgorithm::Sha3_512) ? 72 :
-                           ((prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128) ? 168 :
+                           ((prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128) ? 168 :
                            ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512 ||
                              prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::HmacSha512) ? 128 : 64))))));
             std::memcpy(pbOutput, &len, sizeof(len));

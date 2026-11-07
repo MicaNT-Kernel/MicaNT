@@ -9276,6 +9276,14 @@ inline LONG64 WINAPI InterlockedXor64(LONG64 volatile* Destination, LONG64 Value
     return ntdll::RtlInterlockedXor64(Destination, Value);
 }
 
+inline LONG WINAPI InterlockedAndNot(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedAndNot(Destination, Value);
+}
+
+inline LONG64 WINAPI InterlockedAndNot64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedAndNot64(Destination, Value);
+}
+
 inline LONG64 WINAPI InterlockedCompareExchange64(LONG64 volatile* Destination, LONG64 Exchange, LONG64 Comperand) noexcept {
     return ntdll::RtlInterlockedCompareExchange64(Destination, Exchange, Comperand);
 }
@@ -11497,6 +11505,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAnd64", reinterpret_cast<void*>(InterlockedAnd64));
     ldr.registerExport("kernel32.dll", "InterlockedOr64", reinterpret_cast<void*>(InterlockedOr64));
     ldr.registerExport("kernel32.dll", "InterlockedXor64", reinterpret_cast<void*>(InterlockedXor64));
+    ldr.registerExport("kernel32.dll", "InterlockedAndNot", reinterpret_cast<void*>(InterlockedAndNot));
+    ldr.registerExport("kernel32.dll", "InterlockedAndNot64", reinterpret_cast<void*>(InterlockedAndNot64));
     ldr.registerExport("kernel32.dll", "InterlockedCompareExchange64", reinterpret_cast<void*>(InterlockedCompareExchange64));
     ldr.registerExport("kernel32.dll", "InterlockedExchange64", reinterpret_cast<void*>(InterlockedExchange64));
     ldr.registerExport("kernel32.dll", "InterlockedExchangeAdd64", reinterpret_cast<void*>(InterlockedExchangeAdd64));

@@ -1883,6 +1883,31 @@ struct SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION {
 };
 using PSYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION = SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION*;
 
+// Class 247: SystemMemoryPowerStateInformation
+struct SYSTEM_MEMORY_POWER_STATE_INFORMATION {
+    ULONG    NumaNode;
+    ULONG    PowerState;                // 0 = Active/High Performance, 1 = Self-Refresh, 2 = Deep Power Down
+    ULONG64  ActivePowerMilliwatts;
+    ULONG64  StandbyPowerMilliwatts;
+    ULONG    ThermalThrottlingLimitDegreesC;
+    ULONG    CurrentTemperatureDegreesC;
+    ULONG    LowPowerTransitionsCount;
+    ULONG    Reserved;
+};
+using PSYSTEM_MEMORY_POWER_STATE_INFORMATION = SYSTEM_MEMORY_POWER_STATE_INFORMATION*;
+
+// Class 248: SystemCpuExecutionCharacteristicsInformation
+struct SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION {
+    ULONG    ProcessorIndex;
+    ULONG    ExecutionEfficiencyClass;  // Efficiency class (0=Efficiency, 1=Performance)
+    ULONG    InstructionIssueWidth;     // 6-wide, 8-wide decode/issue
+    ULONG    MicrocodeRevision;
+    ULONG64  HardwarePrefetcherFlags;   // Bitmask of enabled L1/L2/L3 streaming prefetchers
+    ULONG    BranchPredictorTier;       // Branch prediction capability tier
+    ULONG    SpeculativeExecutionFeatures; // CET, PCONFIG, TSX, IBRS, etc.
+};
+using PSYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION = SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3830,6 +3855,41 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PHYSICAL_MEMORY_BANDWIDTH_INFORMATION);
             return NtStatus::Success;
         }
+        case 247: { // SystemMemoryPowerStateInformation (Class 247)
+            if (SystemInformationLength < sizeof(SYSTEM_MEMORY_POWER_STATE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_POWER_STATE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_MEMORY_POWER_STATE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->NumaNode = 0;
+            pInfo->PowerState = 0; // Active / Performance
+            pInfo->ActivePowerMilliwatts = 14500; // 14.5W
+            pInfo->StandbyPowerMilliwatts = 1800;  // 1.8W
+            pInfo->ThermalThrottlingLimitDegreesC = 85;
+            pInfo->CurrentTemperatureDegreesC = 42;
+            pInfo->LowPowerTransitionsCount = 12;
+            pInfo->Reserved = 0;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_MEMORY_POWER_STATE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 248: { // SystemCpuExecutionCharacteristicsInformation (Class 248)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->ProcessorIndex = 0;
+            pInfo->ExecutionEfficiencyClass = 1; // Performance core
+            pInfo->InstructionIssueWidth = 8;    // 8-wide decode/issue
+            pInfo->MicrocodeRevision = 0x0000012A;
+            pInfo->HardwarePrefetcherFlags = 0x000000000000000F; // L1/L2 stream prefetchers enabled
+            pInfo->BranchPredictorTier = 3;      // Advanced TAGE branch predictor
+            pInfo->SpeculativeExecutionFeatures = 0x0000001F; // CET, TSX, IBRS, SSBD, STIBP
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_EXECUTION_CHARACTERISTICS_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -4909,6 +4969,18 @@ inline LONG64 WINAPI RtlInterlockedXor64(LONG64 volatile* Destination, LONG64 Va
     return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
 }
 
+inline LONG WINAPI RtlInterlockedAndNot(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    return atomicDest->fetch_and(~Value, std::memory_order_seq_cst);
+}
+
+inline LONG64 WINAPI RtlInterlockedAndNot64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    return atomicDest->fetch_and(~Value, std::memory_order_seq_cst);
+}
+
 inline LONG64 WINAPI RtlInterlockedCompareExchange64(LONG64 volatile* Destination, LONG64 Exchange, LONG64 Comperand) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
@@ -5517,6 +5589,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAnd64", reinterpret_cast<void*>(RtlInterlockedAnd64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOr64", reinterpret_cast<void*>(RtlInterlockedOr64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXor64", reinterpret_cast<void*>(RtlInterlockedXor64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNot", reinterpret_cast<void*>(RtlInterlockedAndNot));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNot64", reinterpret_cast<void*>(RtlInterlockedAndNot64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedCompareExchange64", reinterpret_cast<void*>(RtlInterlockedCompareExchange64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchange64", reinterpret_cast<void*>(RtlInterlockedExchange64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedExchangeAdd64", reinterpret_cast<void*>(RtlInterlockedExchangeAdd64));
