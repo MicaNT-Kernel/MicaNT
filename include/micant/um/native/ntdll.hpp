@@ -1934,6 +1934,38 @@ struct SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION {
 };
 using PSYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION = SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION*;
 
+// Class 251: SystemPagefileCompressionTelemetryInformation
+struct SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION {
+    ULONG    PagefileIndex;
+    ULONG    Flags;                             // 0x01 = Active, 0x02 = CompressionActive, 0x04 = HardwareAccelerated
+    ULONG64  TotalPagesCompressed;              // e.g. 524288 pages
+    ULONG64  TotalPagesDecompressed;            // e.g. 262144 pages
+    ULONG64  UncompressedBytes;                 // e.g. 2147483648 bytes (2 GB)
+    ULONG64  CompressedBytes;                   // e.g. 751619276 bytes (~716 MB)
+    ULONG    CompressionRatioPercent;           // e.g. 285% (2.85x)
+    ULONG    AverageCompressionLatencyNanos;    // e.g. 1250 ns
+    ULONG    CompressionAlgorithm;              // 1 = Xpress, 2 = XpressHuff, 3 = Zstandard-NT, 4 = LZ4-NT
+    ULONG    HardwareAcceleratorActive;         // 1
+    ULONG64  HardwareAcceleratedPages;          // e.g. 400000 pages
+    ULONG64  BypassedPagesDueToIncompressibility; // e.g. 12000 pages
+};
+using PSYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION*;
+
+// Class 252: SystemCpuCooperativeFabricInformation
+struct SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION {
+    ULONG    TotalFabricNodes;                  // e.g. 16
+    ULONG    ActiveFabricInterconnects;         // e.g. 32
+    ULONG64  FabricBandwidthGBps;               // e.g. 2048 GB/s
+    ULONG    CoherencyProtocolVersion;          // e.g. 0x0302
+    ULONG    LatencyNanosecondsAverage;         // e.g. 45 ns
+    ULONG    CacheCoherentAcceleratorCount;     // e.g. 8
+    ULONG64  TotalFabricTransactions;           // e.g. 10000000000ULL
+    ULONG64  InterNodeRetries;                  // e.g. 12
+    ULONG    ThermalThrottleStatus;             // 0 = Nominal
+    ULONG    FabricFlags;                       // 0x07 = DynamicTopology | SubByteQuantRouting | CoherentPipelining
+};
+using PSYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION = SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -3952,6 +3984,48 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_COOPERATIVE_ACCELERATOR_INFORMATION);
             return NtStatus::Success;
         }
+        case 251: { // SystemPagefileCompressionTelemetryInformation (Class 251)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->PagefileIndex = 0;
+            pInfo->Flags = 0x00000007; // Active | CompressionActive | HardwareAccelerated
+            pInfo->TotalPagesCompressed = 524288ULL;
+            pInfo->TotalPagesDecompressed = 262144ULL;
+            pInfo->UncompressedBytes = 2147483648ULL; // 2 GB
+            pInfo->CompressedBytes = 751619276ULL;   // ~716 MB
+            pInfo->CompressionRatioPercent = 285;    // 2.85x
+            pInfo->AverageCompressionLatencyNanos = 1250;
+            pInfo->CompressionAlgorithm = 3;         // Zstandard-NT Sovereign Engine
+            pInfo->HardwareAcceleratorActive = 1;
+            pInfo->HardwareAcceleratedPages = 400000ULL;
+            pInfo->BypassedPagesDueToIncompressibility = 12000ULL;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 252: { // SystemCpuCooperativeFabricInformation (Class 252)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->TotalFabricNodes = 16;
+            pInfo->ActiveFabricInterconnects = 32;
+            pInfo->FabricBandwidthGBps = 2048ULL;
+            pInfo->CoherencyProtocolVersion = 0x0302; // Coherent v3.2
+            pInfo->LatencyNanosecondsAverage = 45;
+            pInfo->CacheCoherentAcceleratorCount = 8;
+            pInfo->TotalFabricTransactions = 10000000000ULL;
+            pInfo->InterNodeRetries = 12;
+            pInfo->ThermalThrottleStatus = 0;        // Nominal
+            pInfo->FabricFlags = 0x00000007;         // DynamicTopology | SubByteQuantRouting | CoherentPipelining
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -5175,6 +5249,30 @@ inline CHAR WINAPI RtlInterlockedXor8(CHAR volatile* Destination, CHAR Value) no
     return atomicDest->fetch_xor(Value, std::memory_order_seq_cst);
 }
 
+inline SHORT WINAPI RtlInterlockedAndNot16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    return atomicDest->fetch_and(static_cast<SHORT>(~Value), std::memory_order_seq_cst);
+}
+
+inline CHAR WINAPI RtlInterlockedAndNot8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    return atomicDest->fetch_and(static_cast<CHAR>(~Value), std::memory_order_seq_cst);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(251, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuCooperativeFabric(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(252, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -5710,6 +5808,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAnd8", reinterpret_cast<void*>(RtlInterlockedAnd8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOr8", reinterpret_cast<void*>(RtlInterlockedOr8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXor8", reinterpret_cast<void*>(RtlInterlockedXor8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNot16", reinterpret_cast<void*>(RtlInterlockedAndNot16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNot8", reinterpret_cast<void*>(RtlInterlockedAndNot8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompressionTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileCompressionTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCooperativeFabric", reinterpret_cast<void*>(RtlQuerySystemCpuCooperativeFabric));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

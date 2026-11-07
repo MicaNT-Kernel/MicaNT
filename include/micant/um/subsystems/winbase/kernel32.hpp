@@ -9368,6 +9368,24 @@ inline CHAR WINAPI InterlockedXor8(CHAR volatile* Destination, CHAR Value) noexc
     return ntdll::RtlInterlockedXor8(Destination, Value);
 }
 
+inline SHORT WINAPI InterlockedAndNot16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedAndNot16(Destination, Value);
+}
+
+inline CHAR WINAPI InterlockedAndNot8(CHAR volatile* Destination, CHAR Value) noexcept {
+    return ntdll::RtlInterlockedAndNot8(Destination, Value);
+}
+
+inline BOOL WINAPI GetPagefileCompressionTelemetry(ntdll::SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileCompressionTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuCooperativeFabricInformation(ntdll::SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuCooperativeFabric(Info)) ? TRUE : FALSE;
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -11552,6 +11570,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAnd8", reinterpret_cast<void*>(InterlockedAnd8));
     ldr.registerExport("kernel32.dll", "InterlockedOr8", reinterpret_cast<void*>(InterlockedOr8));
     ldr.registerExport("kernel32.dll", "InterlockedXor8", reinterpret_cast<void*>(InterlockedXor8));
+    ldr.registerExport("kernel32.dll", "InterlockedAndNot16", reinterpret_cast<void*>(InterlockedAndNot16));
+    ldr.registerExport("kernel32.dll", "InterlockedAndNot8", reinterpret_cast<void*>(InterlockedAndNot8));
+    ldr.registerExport("kernel32.dll", "GetPagefileCompressionTelemetry", reinterpret_cast<void*>(GetPagefileCompressionTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuCooperativeFabricInformation", reinterpret_cast<void*>(GetCpuCooperativeFabricInformation));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

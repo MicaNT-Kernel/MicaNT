@@ -53812,3 +53812,327 @@ inline void Test_Horizon249_Device27Options39_PagefilePowerCpuAccelerator_Interl
 
     std::cout << "[TEST] Suite 465: Horizon 249 - Direct3D 12 Device27/CommandList21 & Options 39, NT SystemInfo 249/250, Interlocked Logic 8/16 & NIST KMAC-AEAD PASSED." << std::endl;
 }
+
+inline void Test_Horizon250_Device28Options40_PagefileCompressionCpuFabric_InterlockedExtended_And_KmacMgf_Suite() {
+    std::cout << "[TEST] Suite 466: Horizon 250 - Direct3D 12 Device28/CommandList22 & Options 40, NT SystemInfo 251/252, Interlocked AndNot 8/16 & NIST SP 800-185 KMAC-MGF...\n";
+
+    // ========================================================================
+    // Pillar 1: Direct3D 12 Agility SDK ID3D12Device28, CommandList22 & Options 40
+    // ========================================================================
+    {
+        using namespace prism3d12;
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK ID3D12Device28, CommandList22 & Options 40 Architecture...\n";
+
+        Prism3D12DeviceImpl dev(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. Device28 COM QueryInterface
+        ID3D12Device28* pDev28 = nullptr;
+        int32_t hr = dev.QueryInterface(IID_ID3D12Device28, reinterpret_cast<void**>(&pDev28));
+        TEST_ASSERT(hr == 0 && pDev28 != nullptr, "Device QueryInterface succeeds for IID_ID3D12Device28");
+
+        ID3D12Device28* pDev28Off = nullptr;
+        hr = dev.QueryInterface(OFFICIAL_IID_ID3D12Device28, reinterpret_cast<void**>(&pDev28Off));
+        TEST_ASSERT(hr == 0 && pDev28Off != nullptr, "Device QueryInterface succeeds for OFFICIAL_IID_ID3D12Device28");
+
+        // 2. D3D12_FEATURE_D3D12_OPTIONS40 CheckFeatureSupport
+        D3D12_FEATURE_DATA_D3D12_OPTIONS40 opt40{};
+        hr = dev.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS40, &opt40, sizeof(opt40));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport succeeds for D3D12_FEATURE_D3D12_OPTIONS40");
+        TEST_ASSERT(opt40.WorkGraphsTier == 23u, "Options40 reports WorkGraphsTier 23 (Tier 3.7)");
+        TEST_ASSERT(opt40.CooperativeMatrixMultiply4096Supported == TRUE, "Options40 reports 4096x4096 cooperative matrix support");
+        TEST_ASSERT(opt40.SubByteMicroscalingTensorFormatsV3Supported == TRUE, "Options40 reports sub-byte microscaling tensor format v3 support");
+        TEST_ASSERT(opt40.DynamicClusterExpansionTier8Supported == TRUE, "Options40 reports dynamic cluster expansion tier 8");
+        TEST_ASSERT(opt40.MaxWorkGraphConcurrencyGroups == 16384u, "Options40 reports 16384 concurrency groups");
+        TEST_ASSERT(opt40.TilePipeliningStagesSupported == 32u, "Options40 reports 32 tile pipelining stages");
+        TEST_ASSERT(opt40.AutonomousGraphRecursionSupported == TRUE, "Options40 reports autonomous graph recursion support");
+        TEST_ASSERT(opt40.AsynchronousTensorPipelineFusionSupported == TRUE, "Options40 reports asynchronous tensor pipeline fusion support");
+
+        // 3. CreateWorkGraphProgramRecord12
+        void* pRec12 = nullptr;
+        hr = pDev28->CreateWorkGraphProgramRecord12(nullptr, 0x10, 256ULL, 16384u, 0x08, 0x8, 0x8, 0x7F, 0x08, 0x03, 0x02, IID_ID3D12Device28, &pRec12);
+        TEST_ASSERT(hr == 0, "CreateWorkGraphProgramRecord12 succeeds");
+        TEST_ASSERT(pRec12 == reinterpret_cast<void*>(0x88012), "CreateWorkGraphProgramRecord12 returns expected 0x88012 sentinel pointer");
+
+        // 4. GetWorkGraphCooperativeMatrixSupport7
+        int32_t supported = 0, asyncAccum = 0, autoFeedback = 0, subGraphRec = 0;
+        uint32_t maxDim = 0, dataTypes = 0, sparseAccel = 0, maxStages = 0;
+        hr = pDev28->GetWorkGraphCooperativeMatrixSupport7(&supported, &maxDim, &dataTypes, &sparseAccel, &asyncAccum, &maxStages, &autoFeedback, &subGraphRec);
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport7 succeeds");
+        TEST_ASSERT(supported == 1, "Cooperative matrix support 7 supported flag is 1");
+        TEST_ASSERT(maxDim == 4096, "Cooperative matrix support 7 max dimension is 4096");
+        TEST_ASSERT(dataTypes == 0xFF, "Cooperative matrix support 7 supports all floating & microscaling types (0xFF)");
+        TEST_ASSERT(sparseAccel == 1, "Cooperative matrix support 7 supports sparse acceleration");
+        TEST_ASSERT(asyncAccum == 1, "Cooperative matrix support 7 supports async accumulation");
+        TEST_ASSERT(maxStages == 32, "Cooperative matrix support 7 max stages is 32");
+        TEST_ASSERT(autoFeedback == 1, "Cooperative matrix support 7 supports autonomous feedback");
+        TEST_ASSERT(subGraphRec == 1, "Cooperative matrix support 7 supports sub-graph recursion");
+
+        // 5. CommandList22 COM QueryInterface & Operations
+        Prism3D12CommandAllocatorImpl alloc(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        Prism3D12GraphicsCommandListImpl cmdList(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc);
+
+        ID3D12GraphicsCommandList22* pCmd22 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList22, reinterpret_cast<void**>(&pCmd22));
+        TEST_ASSERT(hr == 0 && pCmd22 != nullptr, "CommandList QueryInterface succeeds for IID_ID3D12GraphicsCommandList22");
+
+        ID3D12GraphicsCommandList22* pCmd22Off = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList22, reinterpret_cast<void**>(&pCmd22Off));
+        TEST_ASSERT(hr == 0 && pCmd22Off != nullptr, "CommandList QueryInterface succeeds for OFFICIAL_IID_ID3D12GraphicsCommandList22");
+
+        // 6. CommandList22 SetWorkGraphBackingMemory12
+        pCmd22->SetWorkGraphBackingMemory12(0xDEADBEEF000ULL, 2048 * 1024 * 1024ULL, 512 * 1024 * 1024ULL, 16384, 0x1F, 8, 0x1FF, 0x7F, 8, 3, 2, 0xD0);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12Start() == 0xDEADBEEF000ULL, "Backing memory 12 start address matches");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12Size() == 2048 * 1024 * 1024ULL, "Backing memory 12 size matches 2GB");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12ScratchSize() == 512 * 1024 * 1024ULL, "Backing memory 12 scratch size matches 512MB");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12MaxConcurrency() == 16384, "Backing memory 12 max concurrency set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12DynamicExpansionFlags() == 0x1F, "Backing memory 12 dynamic expansion flags set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12MemoryPoolTier() == 8, "Backing memory 12 memory pool tier set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12SparsityMask() == 0x1FF, "Backing memory 12 sparsity mask set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12SubAllocationMask() == 0x7F, "Backing memory 12 sub-allocation mask set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12PipelineCoherencyTier() == 8, "Backing memory 12 pipeline coherency tier set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12FeedbackLoopTier() == 3, "Backing memory 12 feedback loop tier set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12SubGraphRecursionTier() == 2, "Backing memory 12 sub-graph recursion tier set correctly");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12Flags() == 0xD0, "Backing memory 12 flags set correctly");
+
+        // 7. CommandList22 DispatchGraphProgramRecord12
+        const uint64_t recordPayload12 = 0xAABBCCDDEEFF0011ULL;
+        pCmd22->DispatchGraphProgramRecord12(122, &recordPayload12, sizeof(recordPayload12), 1024, 0x7F, 9, 0xFFF, 0x3F, 8, 3, 2, 0x3FF, 0xA0);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord12Count() == 1, "Recorded program record 12 count is 1");
+        const auto& recs12 = cmdList.GetRecordedProgramRecords12();
+        TEST_ASSERT(recs12[0].NodeIndex == 122, "Record 12 node index is 122");
+        TEST_ASSERT(recs12[0].pRecord == &recordPayload12, "Record 12 record payload pointer matches");
+        TEST_ASSERT(recs12[0].RecordSizeInBytes == sizeof(recordPayload12), "Record 12 record size matches");
+        TEST_ASSERT(recs12[0].ConcurrencyGroup == 1024, "Record 12 concurrency group matches");
+        TEST_ASSERT(recs12[0].QueueAffinityMask == 0x7F, "Record 12 queue affinity mask matches");
+        TEST_ASSERT(recs12[0].DynamicClusterExpansionTier == 9, "Record 12 cluster expansion tier is 9");
+        TEST_ASSERT(recs12[0].TensorCoreMask == 0xFFF, "Record 12 tensor core mask is 0xFFF");
+        TEST_ASSERT(recs12[0].SubAllocationMask == 0x3F, "Record 12 sub-allocation mask is 0x3F");
+        TEST_ASSERT(recs12[0].PipelineCoherencyTier == 8, "Record 12 pipeline coherency tier is 8");
+        TEST_ASSERT(recs12[0].FeedbackLoopTier == 3, "Record 12 feedback loop tier is 3");
+        TEST_ASSERT(recs12[0].SubGraphRecursionTier == 2, "Record 12 sub-graph recursion tier is 2");
+        TEST_ASSERT(recs12[0].DispatchMask == 0x3FF, "Record 12 dispatch mask matches");
+        TEST_ASSERT(recs12[0].DispatchFlags == 0xA0, "Record 12 dispatch flags match");
+
+        // 8. Reset & ClearState validation
+        cmdList.ClearState(nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12Start() == 0, "ClearState resets backing memory 12 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord12Count() == 0, "ClearState clears recorded program records 12");
+
+        cmdList.Reset(nullptr, nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory12Start() == 0, "Reset resets backing memory 12 start");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord12Count() == 0, "Reset clears recorded program records 12");
+    }
+
+    // ========================================================================
+    // Pillar 2: Windows NT System Information Classes 251 & 252
+    // ========================================================================
+    {
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+        std::cout << "  [PILLAR 2] Windows NT System Information Classes 251 & 252...\n";
+
+        // 1. Class 251: SystemPagefileCompressionTelemetryInformation
+        ULONG returnLength = 0;
+        NtStatus status = NtQuerySystemInformation_Export(251, nullptr, 0, &returnLength);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 251 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION), "Class 251 returns required structure size");
+
+        SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION pageComp{};
+        status = NtQuerySystemInformation_Export(251, &pageComp, sizeof(pageComp), &returnLength);
+        TEST_ASSERT(status == NtStatus::Success, "Class 251 succeeds with valid buffer");
+        TEST_ASSERT(pageComp.PagefileIndex == 0, "Class 251 reports pagefile index 0");
+        TEST_ASSERT(pageComp.Flags == 0x00000007, "Class 251 reports flags 0x07 (Active/Compression/HardwareAccelerated)");
+        TEST_ASSERT(pageComp.TotalPagesCompressed == 524288ULL, "Class 251 reports 524288 pages compressed");
+        TEST_ASSERT(pageComp.TotalPagesDecompressed == 262144ULL, "Class 251 reports 262144 pages decompressed");
+        TEST_ASSERT(pageComp.UncompressedBytes == 2147483648ULL, "Class 251 reports 2GB uncompressed");
+        TEST_ASSERT(pageComp.CompressedBytes == 751619276ULL, "Class 251 reports ~716MB compressed");
+        TEST_ASSERT(pageComp.CompressionRatioPercent == 285, "Class 251 reports 285% compression ratio (2.85x)");
+        TEST_ASSERT(pageComp.AverageCompressionLatencyNanos == 1250, "Class 251 reports 1250ns latency");
+        TEST_ASSERT(pageComp.CompressionAlgorithm == 3, "Class 251 reports algorithm 3 (Zstandard-NT)");
+        TEST_ASSERT(pageComp.HardwareAcceleratorActive == 1, "Class 251 reports hardware accelerator active");
+        TEST_ASSERT(pageComp.HardwareAcceleratedPages == 400000ULL, "Class 251 reports 400000 hw-accelerated pages");
+        TEST_ASSERT(pageComp.BypassedPagesDueToIncompressibility == 12000ULL, "Class 251 reports 12000 incompressible pages");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION), "Return length matches structure size");
+
+        // Native & Win32 wrappers
+        SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION rtlPageComp{};
+        NtStatus rtlStatus = RtlQuerySystemPagefileCompressionTelemetry(&rtlPageComp);
+        TEST_ASSERT(rtlStatus == NtStatus::Success, "RtlQuerySystemPagefileCompressionTelemetry succeeds");
+        TEST_ASSERT(rtlPageComp.CompressionRatioPercent == 285, "RtlQuerySystemPagefileCompressionTelemetry reports 285%");
+
+        SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION win32PageComp{};
+        BOOL wOk = GetPagefileCompressionTelemetry(&win32PageComp);
+        TEST_ASSERT(wOk == TRUE && win32PageComp.CompressionRatioPercent == 285, "GetPagefileCompressionTelemetry succeeds");
+
+        // 2. Class 252: SystemCpuCooperativeFabricInformation
+        returnLength = 0;
+        status = NtQuerySystemInformation_Export(252, nullptr, 0, &returnLength);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch, "Class 252 rejects undersized buffer with InfoLengthMismatch");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION), "Class 252 returns required structure size");
+
+        SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION cpuFabric{};
+        status = NtQuerySystemInformation_Export(252, &cpuFabric, sizeof(cpuFabric), &returnLength);
+        TEST_ASSERT(status == NtStatus::Success, "Class 252 succeeds with valid buffer");
+        TEST_ASSERT(cpuFabric.TotalFabricNodes == 16, "Class 252 reports 16 fabric nodes");
+        TEST_ASSERT(cpuFabric.ActiveFabricInterconnects == 32, "Class 252 reports 32 interconnects");
+        TEST_ASSERT(cpuFabric.FabricBandwidthGBps == 2048ULL, "Class 252 reports 2048 GB/s bandwidth");
+        TEST_ASSERT(cpuFabric.CoherencyProtocolVersion == 0x0302, "Class 252 reports coherency protocol 0x0302");
+        TEST_ASSERT(cpuFabric.LatencyNanosecondsAverage == 45, "Class 252 reports 45ns average latency");
+        TEST_ASSERT(cpuFabric.CacheCoherentAcceleratorCount == 8, "Class 252 reports 8 cache-coherent accelerators");
+        TEST_ASSERT(cpuFabric.TotalFabricTransactions == 10000000000ULL, "Class 252 reports 10B transactions");
+        TEST_ASSERT(cpuFabric.InterNodeRetries == 12, "Class 252 reports 12 retries");
+        TEST_ASSERT(cpuFabric.ThermalThrottleStatus == 0, "Class 252 reports 0 (Nominal) thermal throttle status");
+        TEST_ASSERT(cpuFabric.FabricFlags == 0x00000007, "Class 252 reports flags 0x07");
+        TEST_ASSERT(returnLength == sizeof(SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION), "Return length matches structure size");
+
+        // Native & Win32 wrappers
+        SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION rtlFabric{};
+        rtlStatus = RtlQuerySystemCpuCooperativeFabric(&rtlFabric);
+        TEST_ASSERT(rtlStatus == NtStatus::Success, "RtlQuerySystemCpuCooperativeFabric succeeds");
+        TEST_ASSERT(rtlFabric.TotalFabricNodes == 16, "RtlQuerySystemCpuCooperativeFabric reports 16 nodes");
+
+        SYSTEM_CPU_COOPERATIVE_FABRIC_INFORMATION win32Fabric{};
+        wOk = GetCpuCooperativeFabricInformation(&win32Fabric);
+        TEST_ASSERT(wOk == TRUE && win32Fabric.FabricBandwidthGBps == 2048ULL, "GetCpuCooperativeFabricInformation succeeds");
+    }
+
+    // ========================================================================
+    // Pillar 3: NT Native Executive & Win32 Interlocked AndNot (16-bit and 8-bit)
+    // ========================================================================
+    {
+        using namespace micant::ntdll;
+        using namespace micant::win32;
+        std::cout << "  [PILLAR 3] NT Executive & Win32 Interlocked AndNot 16-bit & 8-bit Primitives...\n";
+
+        // 1. 16-bit Interlocked AndNot (Rtl & Win32)
+        alignas(2) SHORT target16 = 0x55AA;
+        // ~0x0FF0 is 0xF00F. 0x55AA & 0xF00F = 0x500A.
+        SHORT old16 = RtlInterlockedAndNot16(&target16, 0x0FF0);
+        TEST_ASSERT(old16 == 0x55AA, "RtlInterlockedAndNot16 returns original value 0x55AA");
+        TEST_ASSERT(target16 == 0x500A, "RtlInterlockedAndNot16 modifies target to 0x500A");
+
+        target16 = 0x1234;
+        // ~0x0030 is 0xFFCF. 0x1234 & 0xFFCF = 0x1204.
+        old16 = InterlockedAndNot16(&target16, 0x0030);
+        TEST_ASSERT(old16 == 0x1234 && target16 == 0x1204, "Win32 InterlockedAndNot16 behaves correctly");
+
+        // 2. 8-bit Interlocked AndNot (Rtl & Win32)
+        alignas(1) CHAR target8 = 0x5A;
+        // ~0x3C is 0xC3. 0x5A (01011010) & 0xC3 (11000011) = 0x42 (01000010).
+        CHAR old8 = RtlInterlockedAndNot8(&target8, 0x3C);
+        TEST_ASSERT(old8 == 0x5A, "RtlInterlockedAndNot8 returns original value 0x5A");
+        TEST_ASSERT(target8 == 0x42, "RtlInterlockedAndNot8 modifies target to 0x42");
+
+        target8 = 0x4B;
+        // ~0x08 is 0xF7. 0x4B & 0xF7 = 0x43.
+        old8 = InterlockedAndNot8(&target8, 0x08);
+        TEST_ASSERT(old8 == 0x4B && target8 == 0x43, "Win32 InterlockedAndNot8 behaves correctly");
+    }
+
+    // ========================================================================
+    // Pillar 4: NIST SP 800-185 KMAC Mask Generation Function (KMAC-MGF)
+    // ========================================================================
+    {
+        using namespace micant::crypto;
+        std::cout << "  [PILLAR 4] NIST SP 800-185 KMAC Mask Generation Function (KMAC-MGF)...\n";
+
+        std::vector<uint8_t> key = {
+            0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F,
+            0x11, 0x13, 0x15, 0x17, 0x19, 0x1B, 0x1D, 0x1F,
+            0x21, 0x23, 0x25, 0x27, 0x29, 0x2B, 0x2D, 0x2F,
+            0x31, 0x33, 0x35, 0x37, 0x39, 0x3B, 0x3D, 0x3F
+        };
+        std::vector<uint8_t> seed = { 'S', 'o', 'v', 'e', 'r', 'e', 'i', 'g', 'n', 'S', 'e', 'e', 'd' };
+
+        // 1. Direct KmacMgf128 mask generation & XOR stream
+        KmacMgf128::Context mgf128Ctx{};
+        KmacMgf128::init(mgf128Ctx, key, "TEST_KMAC_MGF_128");
+        KmacMgf128::update(mgf128Ctx, seed);
+
+        std::vector<uint8_t> mask128(256);
+        KmacMgf128::generate_mask(mgf128Ctx, mask128);
+        TEST_ASSERT(mask128.size() == 256, "KmacMgf128 generates 256 bytes mask");
+        TEST_ASSERT(mask128[0] != 0 || mask128[1] != 0, "KmacMgf128 mask is non-zero");
+
+        // Deterministic reproducibility test
+        std::vector<uint8_t> mask128Rep = KmacMgf128::mask(key, seed, 256, "TEST_KMAC_MGF_128");
+        TEST_ASSERT(mask128 == mask128Rep, "KmacMgf128 produces deterministic output for identical key and seed");
+
+        // Keystream XOR reversibility test
+        std::vector<uint8_t> plaintext = { 'M', 'i', 'c', 'a', 'N', 'T', ' ', 'K', 'M', 'A', 'C', '-', 'M', 'G', 'F', '!' };
+        std::vector<uint8_t> ciphertext(plaintext.size());
+        std::vector<uint8_t> recovered(plaintext.size());
+
+        KmacMgf128::Context encCtx{};
+        KmacMgf128::init(encCtx, key, "MGF_XOR_TEST");
+        KmacMgf128::update(encCtx, seed);
+        KmacMgf128::mask_xor(encCtx, plaintext, ciphertext);
+        TEST_ASSERT(ciphertext != plaintext, "KMAC-MGF mask_xor ciphertext differs from plaintext");
+
+        KmacMgf128::Context decCtx{};
+        KmacMgf128::init(decCtx, key, "MGF_XOR_TEST");
+        KmacMgf128::update(decCtx, seed);
+        KmacMgf128::mask_xor(decCtx, ciphertext, recovered);
+        TEST_ASSERT(recovered == plaintext, "KMAC-MGF mask_xor decodes back to original plaintext");
+
+        // 2. Direct KmacMgf256 mask generation
+        KmacMgf256::Context mgf256Ctx{};
+        KmacMgf256::init(mgf256Ctx, key, "TEST_KMAC_MGF_256");
+        KmacMgf256::update(mgf256Ctx, seed);
+
+        std::vector<uint8_t> mask256(512);
+        KmacMgf256::generate_mask(mgf256Ctx, mask256);
+        TEST_ASSERT(mask256.size() == 512, "KmacMgf256 generates 512 bytes mask");
+        TEST_ASSERT(mask256[0] != 0 || mask256[1] != 0, "KmacMgf256 mask is non-zero");
+
+        std::vector<uint8_t> mask256Rep = KmacMgf256::mask(key, seed, 512, "TEST_KMAC_MGF_256");
+        TEST_ASSERT(mask256 == mask256Rep, "KmacMgf256 produces deterministic output");
+
+        // 3. BCrypt API Integration for KMAC128-MGF
+        BCRYPT_ALG_HANDLE hKMAC128MGF = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hKMAC128MGF, BCRYPT_KMAC128_MGF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC128MGF != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC128-MGF");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        BCryptGetProperty(hKMAC128MGF, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 32, "BCrypt KMAC128-MGF default hash length is 32");
+        BCryptGetProperty(hKMAC128MGF, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 168, "BCrypt KMAC128-MGF rate is 168");
+
+        BCRYPT_HASH_HANDLE hHash128MGF = nullptr;
+        BCryptCreateHash(hKMAC128MGF, &hHash128MGF, nullptr, 0, key.data(), static_cast<uint32_t>(key.size()), 0);
+        BCryptHashData(hHash128MGF, seed.data(), static_cast<uint32_t>(seed.size()), 0);
+        uint8_t dKMAC128MGF[32]{};
+        BCryptFinishHash(hHash128MGF, dKMAC128MGF, sizeof(dKMAC128MGF), 0);
+        TEST_ASSERT(dKMAC128MGF[0] != 0 || dKMAC128MGF[1] != 0, "BCrypt KMAC128-MGF generates valid non-zero mask");
+        BCryptDestroyHash(hHash128MGF);
+        BCryptCloseAlgorithmProvider(hKMAC128MGF, 0);
+
+        // 4. BCrypt API Integration for KMAC256-MGF
+        BCRYPT_ALG_HANDLE hKMAC256MGF = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hKMAC256MGF, BCRYPT_KMAC256_MGF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKMAC256MGF != nullptr, "BCryptOpenAlgorithmProvider succeeds for KMAC256-MGF");
+
+        BCryptGetProperty(hKMAC256MGF, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(hashLen == 64, "BCrypt KMAC256-MGF default hash length is 64");
+        BCryptGetProperty(hKMAC256MGF, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(blockLen == 136, "BCrypt KMAC256-MGF rate is 136");
+
+        BCRYPT_HASH_HANDLE hHash256MGF = nullptr;
+        BCryptCreateHash(hKMAC256MGF, &hHash256MGF, nullptr, 0, key.data(), static_cast<uint32_t>(key.size()), 0);
+        BCryptHashData(hHash256MGF, seed.data(), static_cast<uint32_t>(seed.size()), 0);
+        uint8_t dKMAC256MGF[64]{};
+        BCryptFinishHash(hHash256MGF, dKMAC256MGF, sizeof(dKMAC256MGF), 0);
+        TEST_ASSERT(dKMAC256MGF[0] != 0 || dKMAC256MGF[1] != 0, "BCrypt KMAC256-MGF generates valid non-zero mask");
+        BCryptDestroyHash(hHash256MGF);
+        BCryptCloseAlgorithmProvider(hKMAC256MGF, 0);
+    }
+
+    std::cout << "  Horizon 250 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device28, ID3D12GraphicsCommandList22 & Options 40 OK\n"
+              << "    Pillar 2: NT Native Classes 251 (PagefileCompressionTelemetry) & 252 (CpuCooperativeFabric) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked AndNot 8-bit & 16-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-185 KMAC Mask Generation Function (KMAC-MGF) Engine OK\n";
+
+    std::cout << "[TEST] Suite 466: Horizon 250 - Direct3D 12 Device28/CommandList22 & Options 40, NT SystemInfo 251/252, Interlocked AndNot 8/16 & NIST KMAC-MGF PASSED." << std::endl;
+}
