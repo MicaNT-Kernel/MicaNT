@@ -2348,6 +2348,40 @@ struct SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION*;
 
+// Class 277: SystemPagefileTierCompactionPressureInformation
+struct SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    TierIndex;                            // e.g. 1
+    ULONG    CompactionPressurePercent;            // e.g. 68 (68% compaction pressure)
+    ULONG    FragmentationLevelPercent;            // e.g. 35 (35% fragmentation)
+    ULONG    CompressionRatioBasisPoints;          // e.g. 2400 (2.40x compression ratio)
+    ULONG64  CompactedPageCount;                   // e.g. 1048576ULL (1M pages)
+    ULONG64  ReclaimedMemoryBytes;                 // e.g. 4294967296ULL (4 GB)
+    ULONG64  CompactionDurationCycles;             // e.g. 3500000ULL
+    ULONG64  DecompressionDurationCycles;           // e.g. 1200000ULL
+    ULONG    CompactionEngineFlags;                // e.g. 0x07 (HardwareAccelerated | ZeroPageElimination | DeduplicationActive)
+    ULONG    Pad;                                  // 0
+};
+using PSYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION = SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION*;
+
+// Class 278: SystemCpuFabricVoltageSlewRateTelemetryInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    SocketId;                             // e.g. 0
+    ULONG    SlewRateVPerMicroSec;                 // e.g. 250 (250 V/us)
+    ULONG    MaxAllowableSlewRateVPerMicroSec;      // e.g. 500 (500 V/us)
+    ULONG    OverShootMicroVolts;                  // e.g. 15000 (15 mV overshoot)
+    ULONG64  TransientStepDurationNs;              // e.g. 40ULL (40 ns)
+    ULONG64  DrcCompensatedCycles;                 // e.g. 1850000ULL
+    ULONG64  SlewRateViolationCount;               // e.g. 0ULL
+    ULONG64  ActivePowerRailMicroAmps;              // e.g. 32000000ULL (32 A)
+    ULONG    SlewRateControlFlags;                 // e.g. 0x03 (AdaptiveSlewDamping | FastTransientCapacitanceActive)
+    ULONG    Pad;                                  // 0
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -4908,6 +4942,48 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_PHASE_SPREAD_SPECTRUM_INFORMATION);
             return NtStatus::Success;
         }
+        case 277: { // SystemPagefileTierCompactionPressureInformation (Class 277)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TierIndex = 1;
+            pInfo->CompactionPressurePercent = 68;
+            pInfo->FragmentationLevelPercent = 35;
+            pInfo->CompressionRatioBasisPoints = 2400;
+            pInfo->CompactedPageCount = 1048576ULL;
+            pInfo->ReclaimedMemoryBytes = 4294967296ULL;
+            pInfo->CompactionDurationCycles = 3500000ULL;
+            pInfo->DecompressionDurationCycles = 1200000ULL;
+            pInfo->CompactionEngineFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 278: { // SystemCpuFabricVoltageSlewRateTelemetryInformation (Class 278)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->SocketId = 0;
+            pInfo->SlewRateVPerMicroSec = 250;
+            pInfo->MaxAllowableSlewRateVPerMicroSec = 500;
+            pInfo->OverShootMicroVolts = 15000;
+            pInfo->TransientStepDurationNs = 40ULL;
+            pInfo->DrcCompensatedCycles = 1850000ULL;
+            pInfo->SlewRateViolationCount = 0ULL;
+            pInfo->ActivePowerRailMicroAmps = 32000000ULL;
+            pInfo->SlewRateControlFlags = 0x03;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -6753,6 +6829,54 @@ inline UCHAR WINAPI RtlInterlockedCountLeadingZeros8(UCHAR volatile* Destination
     }
 }
 
+inline ULONG64 WINAPI RtlInterlockedCountTrailingZeros64(ULONG64 volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
+    ULONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG64 next = static_cast<ULONG64>(std::countr_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline ULONG WINAPI RtlInterlockedCountTrailingZeros32(ULONG volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<ULONG> volatile*>(Destination);
+    ULONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        ULONG next = static_cast<ULONG>(std::countr_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline USHORT WINAPI RtlInterlockedCountTrailingZeros16(USHORT volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<USHORT> volatile*>(Destination);
+    USHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        USHORT next = static_cast<USHORT>(std::countr_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline UCHAR WINAPI RtlInterlockedCountTrailingZeros8(UCHAR volatile* Destination) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<UCHAR> volatile*>(Destination);
+    UCHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        UCHAR next = static_cast<UCHAR>(std::countr_zero(current));
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -6907,6 +7031,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum(SYSTEM_
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(276, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierCompactionPressure(SYSTEM_PAGEFILE_TIER_COMPACTION_PRESSURE_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(277, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageSlewRateTelemetry(SYSTEM_CPU_FABRIC_VOLTAGE_SLEW_RATE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(278, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -7528,6 +7664,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedCountLeadingZeros8", reinterpret_cast<void*>(RtlInterlockedCountLeadingZeros8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierThrottlingTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierThrottlingTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltagePhaseSpreadSpectrum));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountTrailingZeros64", reinterpret_cast<void*>(RtlInterlockedCountTrailingZeros64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountTrailingZeros32", reinterpret_cast<void*>(RtlInterlockedCountTrailingZeros32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountTrailingZeros16", reinterpret_cast<void*>(RtlInterlockedCountTrailingZeros16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedCountTrailingZeros8", reinterpret_cast<void*>(RtlInterlockedCountTrailingZeros8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierCompactionPressure", reinterpret_cast<void*>(RtlQuerySystemPagefileTierCompactionPressure));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageSlewRateTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageSlewRateTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
