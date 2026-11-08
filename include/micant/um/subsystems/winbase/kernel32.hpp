@@ -9652,6 +9652,26 @@ inline CHAR WINAPI InterlockedDivModulo8(CHAR volatile* Destination, CHAR Diviso
     return ntdll::RtlInterlockedDivModulo8(Destination, Divisor, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedExpModulo64(LONG64 volatile* Destination, LONG64 Exponent, LONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedExpModulo64(Destination, Exponent, Modulus);
+}
+
+inline LONG WINAPI InterlockedExpModulo(LONG volatile* Destination, LONG Exponent, LONG Modulus) noexcept {
+    return ntdll::RtlInterlockedExpModulo32(Destination, Exponent, Modulus);
+}
+
+inline LONG WINAPI InterlockedExpModulo32(LONG volatile* Destination, LONG Exponent, LONG Modulus) noexcept {
+    return ntdll::RtlInterlockedExpModulo32(Destination, Exponent, Modulus);
+}
+
+inline SHORT WINAPI InterlockedExpModulo16(SHORT volatile* Destination, SHORT Exponent, SHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedExpModulo16(Destination, Exponent, Modulus);
+}
+
+inline CHAR WINAPI InterlockedExpModulo8(CHAR volatile* Destination, CHAR Exponent, CHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedExpModulo8(Destination, Exponent, Modulus);
+}
+
 inline ULONG64 WINAPI InterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     return ntdll::RtlInterlockedRotateRight64(Destination, ShiftCount);
 }
@@ -10024,6 +10044,16 @@ inline BOOL WINAPI GetPagefileCompactionLatencyQuantilesTelemetry(ntdll::SYSTEM_
 inline BOOL WINAPI GetCpuVoltageRegulatorDroopSlewTelemetry(ntdll::SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileExpansionThrottlingLatencyTelemetry(ntdll::SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileExpansionThrottlingLatencyInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuVoltageRegulatorPhaseMarginJitterTelemetry(ntdll::SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuVoltageRegulatorPhaseMarginJitterInformation(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -12261,6 +12291,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedDivModulo32", reinterpret_cast<void*>(InterlockedDivModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedDivModulo16", reinterpret_cast<void*>(InterlockedDivModulo16));
     ldr.registerExport("kernel32.dll", "InterlockedDivModulo8", reinterpret_cast<void*>(InterlockedDivModulo8));
+    ldr.registerExport("kernel32.dll", "InterlockedExpModulo64", reinterpret_cast<void*>(InterlockedExpModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedExpModulo", reinterpret_cast<void*>(InterlockedExpModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedExpModulo32", reinterpret_cast<void*>(InterlockedExpModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedExpModulo16", reinterpret_cast<void*>(InterlockedExpModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedExpModulo8", reinterpret_cast<void*>(InterlockedExpModulo8));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight64", reinterpret_cast<void*>(InterlockedRotateRight64));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight", reinterpret_cast<void*>(InterlockedRotateRight));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight32", reinterpret_cast<void*>(InterlockedRotateRight32));
@@ -12363,6 +12398,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuVoltageRegulatorSlewRateTelemetry", reinterpret_cast<void*>(GetCpuVoltageRegulatorSlewRateTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileCompactionLatencyQuantilesTelemetry", reinterpret_cast<void*>(GetPagefileCompactionLatencyQuantilesTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuVoltageRegulatorDroopSlewTelemetry", reinterpret_cast<void*>(GetCpuVoltageRegulatorDroopSlewTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileExpansionThrottlingLatencyTelemetry", reinterpret_cast<void*>(GetPagefileExpansionThrottlingLatencyTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuVoltageRegulatorPhaseMarginJitterTelemetry", reinterpret_cast<void*>(GetCpuVoltageRegulatorPhaseMarginJitterTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

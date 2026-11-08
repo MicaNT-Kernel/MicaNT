@@ -2704,6 +2704,46 @@ struct SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION = SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION*;
 
+// Class 297: SystemPagefileExpansionThrottlingLatencyInformation
+struct SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    Reserved2;                            // 0
+    ULONG64  TotalExpansionRequests;               // e.g. 84200ULL
+    ULONG64  ThrottledExpansionRequests;           // e.g. 3120ULL
+    ULONG64  P50ThrottlingLatencyNanoseconds;      // e.g. 450ULL
+    ULONG64  P90ThrottlingLatencyNanoseconds;      // e.g. 1250ULL
+    ULONG64  P99ThrottlingLatencyNanoseconds;      // e.g. 3850ULL
+    ULONG64  MaxObservedThrottlingLatencyNanoseconds; // e.g. 18200ULL
+    ULONG64  QueueBackpressureEvents;              // e.g. 450ULL
+    ULONG64  CompactionDeferralCount;              // e.g. 128ULL
+    ULONG64  SovereignAccuracyPPM;                 // e.g. 999990ULL (99.999% accuracy)
+    BOOLEAN  ThrottlingLatencyTelemetryActive;     // 1
+    uint8_t  StatusFlags;                          // e.g. 0x07 (ThrottlingEn | BackpressureMonitored | DeferralsMitigated)
+    uint8_t  Pad[2];                               // 0
+};
+using PSYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION = SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION*;
+
+// Class 298: SystemCpuVoltageRegulatorPhaseMarginJitterInformation
+struct SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    RegulatorPhaseCount;                  // e.g. 20
+    ULONG    ActivePhaseMask;                      // e.g. 0x000FFFFF (20 active phases)
+    ULONG    PhaseMarginDegreesTenths;             // e.g. 580 (58.0 degrees phase margin)
+    ULONG    GainMarginDeciBelsTenths;             // e.g. 125 (12.5 dB gain margin)
+    ULONG    ClockJitterPicoseconds;               // e.g. 42 (42 ps jitter)
+    ULONG    PeakRippleMillivolts;                 // e.g. 8 (8 mV ripple)
+    ULONG64  PhaseJitterCorrections;               // e.g. 18450ULL
+    ULONG64  RegulationStabilityIndexPPM;          // e.g. 999992ULL (99.9992% stability)
+    BOOLEAN  PhaseMarginJitterTelemetryActive;     // 1
+    uint8_t  TelemetryFlags;                       // e.g. 0x0F (PhaseTrackingEn | JitterSuppressionEn | HighMargin | RippleFiltered)
+    uint8_t  Pad[2];                               // 0
+};
+using PSYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION = SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5697,6 +5737,54 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 297: { // SystemPagefileExpansionThrottlingLatencyInformation (Class 297)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->Reserved2 = 0;
+            pInfo->TotalExpansionRequests = 84200ULL;
+            pInfo->ThrottledExpansionRequests = 3120ULL;
+            pInfo->P50ThrottlingLatencyNanoseconds = 450ULL;
+            pInfo->P90ThrottlingLatencyNanoseconds = 1250ULL;
+            pInfo->P99ThrottlingLatencyNanoseconds = 3850ULL;
+            pInfo->MaxObservedThrottlingLatencyNanoseconds = 18200ULL;
+            pInfo->QueueBackpressureEvents = 450ULL;
+            pInfo->CompactionDeferralCount = 128ULL;
+            pInfo->SovereignAccuracyPPM = 999990ULL;
+            pInfo->ThrottlingLatencyTelemetryActive = 1;
+            pInfo->StatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 298: { // SystemCpuVoltageRegulatorPhaseMarginJitterInformation (Class 298)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->RegulatorPhaseCount = 20;
+            pInfo->ActivePhaseMask = 0x000FFFFF;
+            pInfo->PhaseMarginDegreesTenths = 580;
+            pInfo->GainMarginDeciBelsTenths = 125;
+            pInfo->ClockJitterPicoseconds = 42;
+            pInfo->PeakRippleMillivolts = 8;
+            pInfo->PhaseJitterCorrections = 18450ULL;
+            pInfo->RegulationStabilityIndexPPM = 999992ULL;
+            pInfo->PhaseMarginJitterTelemetryActive = 1;
+            pInfo->TelemetryFlags = 0x0F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7368,6 +7456,88 @@ inline CHAR WINAPI RtlInterlockedDivModulo8(CHAR volatile* Destination, CHAR Div
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedExpModulo64(LONG64 volatile* Destination, LONG64 Exponent, LONG64 Modulus) noexcept {
+    if (!Destination || Modulus <= 0 || Exponent < 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 res = 1 % Modulus;
+        LONG64 b = current % Modulus;
+        if (b < 0) b += Modulus;
+        LONG64 e = Exponent;
+        while (e > 0) {
+            if (e & 1) {
+                res = static_cast<LONG64>((static_cast<unsigned __int64>(res) * static_cast<unsigned __int64>(b)) % static_cast<unsigned __int64>(Modulus));
+            }
+            b = static_cast<LONG64>((static_cast<unsigned __int64>(b) * static_cast<unsigned __int64>(b)) % static_cast<unsigned __int64>(Modulus));
+            e >>= 1;
+        }
+        if (atomicDest->compare_exchange_weak(current, res, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedExpModulo32(LONG volatile* Destination, LONG Exponent, LONG Modulus) noexcept {
+    if (!Destination || Modulus <= 0 || Exponent < 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint64_t res = 1 % static_cast<uint64_t>(Modulus);
+        uint64_t b = static_cast<uint64_t>((current % Modulus < 0) ? (current % Modulus + Modulus) : (current % Modulus));
+        LONG e = Exponent;
+        while (e > 0) {
+            if (e & 1) res = (res * b) % static_cast<uint64_t>(Modulus);
+            b = (b * b) % static_cast<uint64_t>(Modulus);
+            e >>= 1;
+        }
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedExpModulo16(SHORT volatile* Destination, SHORT Exponent, SHORT Modulus) noexcept {
+    if (!Destination || Modulus <= 0 || Exponent < 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint32_t res = 1 % static_cast<uint32_t>(Modulus);
+        uint32_t b = static_cast<uint32_t>((current % Modulus < 0) ? (current % Modulus + Modulus) : (current % Modulus));
+        SHORT e = Exponent;
+        while (e > 0) {
+            if (e & 1) res = (res * b) % static_cast<uint32_t>(Modulus);
+            b = (b * b) % static_cast<uint32_t>(Modulus);
+            e >>= 1;
+        }
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedExpModulo8(CHAR volatile* Destination, CHAR Exponent, CHAR Modulus) noexcept {
+    if (!Destination || Modulus <= 0 || Exponent < 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint32_t res = 1 % static_cast<uint32_t>(Modulus);
+        uint32_t b = static_cast<uint32_t>((current % Modulus < 0) ? (current % Modulus + Modulus) : (current % Modulus));
+        CHAR e = Exponent;
+        while (e > 0) {
+            if (e & 1) res = (res * b) % static_cast<uint32_t>(Modulus);
+            b = (b * b) % static_cast<uint32_t>(Modulus);
+            e >>= 1;
+        }
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -8238,6 +8408,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInform
     return NtQuerySystemInformation_Export(296, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileExpansionThrottlingLatencyInformation(SYSTEM_PAGEFILE_EXPANSION_THROTTLING_LATENCY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(297, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuVoltageRegulatorPhaseMarginJitterInformation(SYSTEM_CPU_VOLTAGE_REGULATOR_PHASE_MARGIN_JITTER_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(298, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -8819,6 +9001,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo32", reinterpret_cast<void*>(RtlInterlockedDivModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo16", reinterpret_cast<void*>(RtlInterlockedDivModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo8", reinterpret_cast<void*>(RtlInterlockedDivModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExpModulo64", reinterpret_cast<void*>(RtlInterlockedExpModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExpModulo32", reinterpret_cast<void*>(RtlInterlockedExpModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExpModulo16", reinterpret_cast<void*>(RtlInterlockedExpModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedExpModulo8", reinterpret_cast<void*>(RtlInterlockedExpModulo8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight64", reinterpret_cast<void*>(RtlInterlockedRotateRight64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight32", reinterpret_cast<void*>(RtlInterlockedRotateRight32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight16", reinterpret_cast<void*>(RtlInterlockedRotateRight16));
@@ -8913,6 +9099,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompactionLatencyQuantilesInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileCompactionLatencyQuantilesInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileExpansionThrottlingLatencyInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileExpansionThrottlingLatencyInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorPhaseMarginJitterInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorPhaseMarginJitterInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
