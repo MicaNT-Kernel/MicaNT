@@ -9886,6 +9886,36 @@ inline BOOL WINAPI GetCpuFabricVoltageDloadTransientMarginTelemetry(ntdll::SYSTE
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageDloadTransientMargin(Info)) ? TRUE : FALSE;
 }
 
+inline LONG64 WINAPI InterlockedAvgRoundUp64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedAvgRoundUp64(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedAvgRoundUp(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedAvgRoundUp32(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedAvgRoundUp32(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedAvgRoundUp32(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedAvgRoundUp16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedAvgRoundUp16(Destination, Value);
+}
+
+inline CHAR WINAPI InterlockedAvgRoundUp8(CHAR volatile* Destination, CHAR Value) noexcept {
+    return ntdll::RtlInterlockedAvgRoundUp8(Destination, Value);
+}
+
+inline BOOL WINAPI GetPagefileTierReclaimEfficiencyTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_RECLAIM_EFFICIENCY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierReclaimEfficiency(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuCoreVoltageGuardBandHeadroomTelemetry(ntdll::SYSTEM_CPU_CORE_VOLTAGE_GUARD_BAND_HEADROOM_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuCoreVoltageGuardBandHeadroom(Info)) ? TRUE : FALSE;
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -12191,6 +12221,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAbsDiff8", reinterpret_cast<void*>(InterlockedAbsDiff8));
     ldr.registerExport("kernel32.dll", "GetPagefileTierEvictionPolicyTelemetry", reinterpret_cast<void*>(GetPagefileTierEvictionPolicyTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageDloadTransientMarginTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageDloadTransientMarginTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedAvgRoundUp64", reinterpret_cast<void*>(InterlockedAvgRoundUp64));
+    ldr.registerExport("kernel32.dll", "InterlockedAvgRoundUp", reinterpret_cast<void*>(InterlockedAvgRoundUp));
+    ldr.registerExport("kernel32.dll", "InterlockedAvgRoundUp32", reinterpret_cast<void*>(InterlockedAvgRoundUp32));
+    ldr.registerExport("kernel32.dll", "InterlockedAvgRoundUp16", reinterpret_cast<void*>(InterlockedAvgRoundUp16));
+    ldr.registerExport("kernel32.dll", "InterlockedAvgRoundUp8", reinterpret_cast<void*>(InterlockedAvgRoundUp8));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierReclaimEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileTierReclaimEfficiencyTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuCoreVoltageGuardBandHeadroomTelemetry", reinterpret_cast<void*>(GetCpuCoreVoltageGuardBandHeadroomTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
