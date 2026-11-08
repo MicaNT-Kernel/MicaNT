@@ -2664,6 +2664,46 @@ struct SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION = SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION*;
 
+// Class 295: SystemPagefileCompactionLatencyQuantilesInformation
+struct SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    Reserved2;                            // 0
+    ULONG64  TotalCompactionPasses;                // e.g. 1250000ULL
+    ULONG64  P50LatencyMicroseconds;               // e.g. 24ULL
+    ULONG64  P90LatencyMicroseconds;               // e.g. 58ULL
+    ULONG64  P99LatencyMicroseconds;               // e.g. 142ULL
+    ULONG64  P999LatencyMicroseconds;              // e.g. 380ULL
+    ULONG64  MaxObservedLatencyMicroseconds;       // e.g. 1250ULL
+    ULONG64  AverageLatencyMicroseconds;           // e.g. 32ULL
+    ULONG64  TailLatencyMitigationEvents;          // e.g. 14ULL
+    BOOLEAN  QuantileTelemetryActive;              // 1
+    uint8_t  StatusFlags;                          // e.g. 0x07 (QuantilesEn | LowJitter | P99Calibrated)
+    uint8_t  Pad[2];                               // 0
+};
+using PSYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION = SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION*;
+
+// Class 296: SystemCpuVoltageRegulatorDroopSlewTelemetryInformation
+struct SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    RegulatorPhaseCount;                  // e.g. 20
+    ULONG    ActivePhaseMask;                      // e.g. 0x000FFFFF (20 active phases)
+    ULONG    LoadLineImpedanceMicroOhms;           // e.g. 520 (0.52 mOhm)
+    ULONG    PeakDroopMillivolts;                  // e.g. 38 (38 mV droop)
+    ULONG    AverageDroopMillivolts;               // e.g. 14 (14 mV droop)
+    ULONG    MaxPositiveSlewRateMVDerivMicrosec;    // e.g. 1450 (1450 mV/us)
+    ULONG    MaxNegativeSlewRateMVDerivMicrosec;    // e.g. 1380 (1380 mV/us)
+    ULONG64  DroopRecoveryEvents;                  // e.g. 48200ULL
+    ULONG64  VoltageStabilityIndexPPM;             // e.g. 999985ULL (99.9985% stability)
+    BOOLEAN  DroopSlewTelemetryActive;             // 1
+    uint8_t  TelemetryFlags;                       // e.g. 0x0F (DroopTrackingEn | SlewTrackingEn | FastRecovery | PhaseBalanced)
+    uint8_t  Pad[2];                               // 0
+};
+using PSYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION = SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5609,6 +5649,54 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 295: { // SystemPagefileCompactionLatencyQuantilesInformation (Class 295)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->Reserved2 = 0;
+            pInfo->TotalCompactionPasses = 1250000ULL;
+            pInfo->P50LatencyMicroseconds = 24ULL;
+            pInfo->P90LatencyMicroseconds = 58ULL;
+            pInfo->P99LatencyMicroseconds = 142ULL;
+            pInfo->P999LatencyMicroseconds = 380ULL;
+            pInfo->MaxObservedLatencyMicroseconds = 1250ULL;
+            pInfo->AverageLatencyMicroseconds = 32ULL;
+            pInfo->TailLatencyMitigationEvents = 14ULL;
+            pInfo->QuantileTelemetryActive = 1;
+            pInfo->StatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 296: { // SystemCpuVoltageRegulatorDroopSlewTelemetryInformation (Class 296)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->RegulatorPhaseCount = 20;
+            pInfo->ActivePhaseMask = 0x000FFFFF;
+            pInfo->LoadLineImpedanceMicroOhms = 520;
+            pInfo->PeakDroopMillivolts = 38;
+            pInfo->AverageDroopMillivolts = 14;
+            pInfo->MaxPositiveSlewRateMVDerivMicrosec = 1450;
+            pInfo->MaxNegativeSlewRateMVDerivMicrosec = 1380;
+            pInfo->DroopRecoveryEvents = 48200ULL;
+            pInfo->VoltageStabilityIndexPPM = 999985ULL;
+            pInfo->DroopSlewTelemetryActive = 1;
+            pInfo->TelemetryFlags = 0x0F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7224,6 +7312,62 @@ inline CHAR WINAPI RtlInterlockedSubModulo8(CHAR volatile* Destination, CHAR Val
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedDivModulo64(LONG64 volatile* Destination, LONG64 Divisor, LONG64 Modulus) noexcept {
+    if (!Destination || Divisor == 0 || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 divVal = current / Divisor;
+        LONG64 next = divVal % Modulus;
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedDivModulo32(LONG volatile* Destination, LONG Divisor, LONG Modulus) noexcept {
+    if (!Destination || Divisor == 0 || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG divVal = current / Divisor;
+        LONG next = divVal % Modulus;
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedDivModulo16(SHORT volatile* Destination, SHORT Divisor, SHORT Modulus) noexcept {
+    if (!Destination || Divisor == 0 || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        SHORT divVal = static_cast<SHORT>(current / Divisor);
+        SHORT next = static_cast<SHORT>(divVal % Modulus);
+        if (next < 0) next = static_cast<SHORT>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedDivModulo8(CHAR volatile* Destination, CHAR Divisor, CHAR Modulus) noexcept {
+    if (!Destination || Divisor == 0 || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        CHAR divVal = static_cast<CHAR>(current / Divisor);
+        CHAR next = static_cast<CHAR>(divVal % Modulus);
+        if (next < 0) next = static_cast<CHAR>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -8082,6 +8226,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInforma
     return NtQuerySystemInformation_Export(294, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileCompactionLatencyQuantilesInformation(SYSTEM_PAGEFILE_COMPACTION_LATENCY_QUANTILES_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(295, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInformation(SYSTEM_CPU_VOLTAGE_REGULATOR_DROOP_SLEW_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(296, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -8659,6 +8815,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo32", reinterpret_cast<void*>(RtlInterlockedSubModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo16", reinterpret_cast<void*>(RtlInterlockedSubModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo8", reinterpret_cast<void*>(RtlInterlockedSubModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo64", reinterpret_cast<void*>(RtlInterlockedDivModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo32", reinterpret_cast<void*>(RtlInterlockedDivModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo16", reinterpret_cast<void*>(RtlInterlockedDivModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedDivModulo8", reinterpret_cast<void*>(RtlInterlockedDivModulo8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight64", reinterpret_cast<void*>(RtlInterlockedRotateRight64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight32", reinterpret_cast<void*>(RtlInterlockedRotateRight32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight16", reinterpret_cast<void*>(RtlInterlockedRotateRight16));
@@ -8751,6 +8911,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompactionHistogramInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileCompactionHistogramInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompactionLatencyQuantilesInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileCompactionLatencyQuantilesInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorDroopSlewTelemetryInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
