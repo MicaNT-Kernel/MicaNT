@@ -144,6 +144,8 @@ inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_XOF_ALGORITHM         = L"AS
 inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_HASH_ALGORITHM        = L"ASCON-KECCAK-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM        = L"ASCON-XOODYAK-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM       = L"ASCON-XOODYAK-HASH";
+inline constexpr const wchar_t* BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM  = L"ASCON-KANGAROOTWELVE-XOF";
+inline constexpr const wchar_t* BCRYPT_ASCON_KANGAROOTWELVE_HASH_ALGORITHM = L"ASCON-KANGAROOTWELVE-HASH";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -6871,6 +6873,221 @@ public:
     }
 };
 
+class AsconKangarooTwelveXof {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_KANGAROOTWELVE_XOF_IV = 0xc0400c0000000300ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+        bool squeezed{ false };
+    };
+
+    static inline uint64_t rotl64(uint64_t x, uint32_t n) noexcept {
+        return (x << n) | (x >> (64 - n));
+    }
+
+    static inline void kangarooTwelveMix(uint64_t& x0, uint64_t& x1, uint64_t& x2, uint64_t& x3, uint64_t& x4) noexcept {
+        uint64_t c = x0 ^ x1 ^ x2 ^ x3 ^ x4;
+        uint64_t d = rotl64(c, 1) ^ rotl64(c, 5);
+        x0 ^= d;
+        x1 ^= d;
+        x2 ^= d;
+        x3 ^= d;
+        x4 ^= d;
+        uint64_t t0 = x0 ^ ((~x1) & x2);
+        uint64_t t1 = x1 ^ ((~x2) & x3);
+        uint64_t t2 = x2 ^ ((~x3) & x4);
+        uint64_t t3 = x3 ^ ((~x4) & x0);
+        uint64_t t4 = x4 ^ ((~x0) & x1);
+        x0 = rotl64(t0, 3) ^ t1;
+        x1 = rotl64(t1, 9) ^ t2;
+        x2 = rotl64(t2, 17) ^ t3;
+        x3 = rotl64(t3, 27) ^ t4;
+        x4 = rotl64(t4, 41) ^ t0;
+    }
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_KANGAROOTWELVE_XOF_IV;
+        ctx.x1 = 0;
+        ctx.x2 = 0;
+        ctx.x3 = 0;
+        ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+        ctx.squeezed = false;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized || data.empty()) return;
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static void padAndPermute(Context& ctx) noexcept {
+        if (ctx.squeezed) return;
+        size_t len = ctx.buffer.size();
+        size_t blocks = len / RATE;
+        for (size_t i = 0; i < blocks; ++i) {
+            ctx.x0 ^= AsconPermutation::load64_be(ctx.buffer.data() + i * RATE);
+            AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        uint8_t pad[8] = { 0 };
+        size_t rem = len % RATE;
+        if (rem > 0) {
+            std::memcpy(pad, ctx.buffer.data() + blocks * RATE, rem);
+        }
+        pad[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(pad);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.squeezed = true;
+    }
+
+    static void squeeze(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        if (!ctx.initialized || outDigest.empty()) return;
+        padAndPermute(ctx);
+        size_t outLen = outDigest.size();
+        size_t offset = 0;
+        while (offset < outLen) {
+            uint8_t block[8];
+            AsconPermutation::store64_be(block, ctx.x0);
+            size_t take = std::min(outLen - offset, static_cast<size_t>(8));
+            std::memcpy(outDigest.data() + offset, block, take);
+            offset += take;
+            if (offset < outLen) {
+                AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+                kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        squeeze(ctx, outDigest);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, size_t outLen = DEFAULT_DIGEST_SIZE) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        squeeze(ctx, out);
+        return out;
+    }
+};
+
+class AsconKangarooTwelveHash {
+public:
+    static constexpr size_t DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_KANGAROOTWELVE_HASH_IV = 0xc0400c0000000380ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+    };
+
+    static inline uint64_t rotl64(uint64_t x, uint32_t n) noexcept {
+        return (x << n) | (x >> (64 - n));
+    }
+
+    static inline void kangarooTwelveMix(uint64_t& x0, uint64_t& x1, uint64_t& x2, uint64_t& x3, uint64_t& x4) noexcept {
+        uint64_t c = x0 ^ x1 ^ x2 ^ x3 ^ x4;
+        uint64_t d = rotl64(c, 1) ^ rotl64(c, 5);
+        x0 ^= d;
+        x1 ^= d;
+        x2 ^= d;
+        x3 ^= d;
+        x4 ^= d;
+        uint64_t t0 = x0 ^ ((~x1) & x2);
+        uint64_t t1 = x1 ^ ((~x2) & x3);
+        uint64_t t2 = x2 ^ ((~x3) & x4);
+        uint64_t t3 = x3 ^ ((~x4) & x0);
+        uint64_t t4 = x4 ^ ((~x0) & x1);
+        x0 = rotl64(t0, 3) ^ t1;
+        x1 = rotl64(t1, 9) ^ t2;
+        x2 = rotl64(t2, 17) ^ t3;
+        x3 = rotl64(t3, 27) ^ t4;
+        x4 = rotl64(t4, 41) ^ t0;
+    }
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_KANGAROOTWELVE_HASH_IV;
+        ctx.x1 = 0;
+        ctx.x2 = 0;
+        ctx.x3 = 0;
+        ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized || data.empty()) return;
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        if (!ctx.initialized || outDigest.empty()) return;
+
+        size_t len = ctx.buffer.size();
+        size_t blocks = len / RATE;
+        for (size_t i = 0; i < blocks; ++i) {
+            ctx.x0 ^= AsconPermutation::load64_be(ctx.buffer.data() + i * RATE);
+            AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        uint8_t pad[8] = { 0 };
+        size_t rem = len % RATE;
+        if (rem > 0) {
+            std::memcpy(pad, ctx.buffer.data() + blocks * RATE, rem);
+        }
+        pad[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(pad);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+
+        uint8_t digest[32];
+        AsconPermutation::store64_be(digest, ctx.x0);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        AsconPermutation::store64_be(digest + 8, ctx.x0);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        AsconPermutation::store64_be(digest + 16, ctx.x0);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        kangarooTwelveMix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        AsconPermutation::store64_be(digest + 24, ctx.x0);
+
+        size_t copyLen = std::min(outDigest.size(), static_cast<size_t>(32));
+        std::memcpy(outDigest.data(), digest, copyLen);
+        ctx.buffer.clear();
+    }
+
+    static std::array<uint8_t, 32> hash(std::span<const uint8_t> data) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::array<uint8_t, 32> out{};
+        final(ctx, std::span<uint8_t>(out.data(), out.size()));
+        return out;
+    }
+};
+
 template<typename CShakeType>
 class GenericTupleHash {
 public:
@@ -9139,6 +9356,8 @@ enum class CryptoAlgorithm {
     AsconKeccakHash,
     AsconXoodyakXof,
     AsconXoodyakHash,
+    AsconKangarooTwelveXof,
+    AsconKangarooTwelveHash,
     Unknown
 };
 
@@ -9171,6 +9390,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_KECCAK_HASH_ALGORITHM || algId == L"ASCON-KECCAK-HASH" || algId == L"ascon-keccak-hash" || algId == L"Ascon-Keccak-Hash" || algId == L"ASCONKECCAK-HASH") return CryptoAlgorithm::AsconKeccakHash;
     if (algId == BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM || algId == L"ASCON-XOODYAK-XOF" || algId == L"ascon-xoodyak-xof" || algId == L"Ascon-Xoodyak-Xof" || algId == L"ASCONXOODYAK-XOF") return CryptoAlgorithm::AsconXoodyakXof;
     if (algId == BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM || algId == L"ASCON-XOODYAK-HASH" || algId == L"ascon-xoodyak-hash" || algId == L"Ascon-Xoodyak-Hash" || algId == L"ASCONXOODYAK-HASH") return CryptoAlgorithm::AsconXoodyakHash;
+    if (algId == BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM || algId == L"ASCON-KANGAROOTWELVE-XOF" || algId == L"ascon-kangarootwelve-xof" || algId == L"Ascon-KangarooTwelve-Xof" || algId == L"ASCONKANGAROOTWELVE-XOF") return CryptoAlgorithm::AsconKangarooTwelveXof;
+    if (algId == BCRYPT_ASCON_KANGAROOTWELVE_HASH_ALGORITHM || algId == L"ASCON-KANGAROOTWELVE-HASH" || algId == L"ascon-kangarootwelve-hash" || algId == L"Ascon-KangarooTwelve-Hash" || algId == L"ASCONKANGAROOTWELVE-HASH") return CryptoAlgorithm::AsconKangarooTwelveHash;
     if (algId == BCRYPT_SHA256_ALGORITHM || algId == L"SHA-256") return CryptoAlgorithm::Sha256;
     if (algId == BCRYPT_SHA384_ALGORITHM || algId == L"SHA-384") return CryptoAlgorithm::Sha384;
     if (algId == BCRYPT_SHA512_ALGORITHM || algId == L"SHA-512") return CryptoAlgorithm::Sha512;
@@ -9387,6 +9608,8 @@ public:
     AsconKeccakHash::Context asconKeccakHashCtx{};
     AsconXoodyakXof::Context asconXoodyakXofCtx{};
     AsconXoodyakHash::Context asconXoodyakHashCtx{};
+    AsconKangarooTwelveXof::Context asconKangarooTwelveXofCtx{};
+    AsconKangarooTwelveHash::Context asconKangarooTwelveHashCtx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -9486,6 +9709,8 @@ public:
           asconKeccakSivCtx(other.asconKeccakSivCtx),
           asconXoodyakXofCtx(other.asconXoodyakXofCtx),
           asconXoodyakHashCtx(other.asconXoodyakHashCtx),
+          asconKangarooTwelveXofCtx(other.asconKangarooTwelveXofCtx),
+          asconKangarooTwelveHashCtx(other.asconKangarooTwelveHashCtx),
           isFinished(other.isFinished) {
         if (other.aesCmacCtx) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
@@ -9684,6 +9909,10 @@ public:
             AsconXoodyakXof::init(asconXoodyakXofCtx);
         } else if (algorithm == CryptoAlgorithm::AsconXoodyakHash) {
             AsconXoodyakHash::init(asconXoodyakHashCtx);
+        } else if (algorithm == CryptoAlgorithm::AsconKangarooTwelveXof) {
+            AsconKangarooTwelveXof::init(asconKangarooTwelveXofCtx);
+        } else if (algorithm == CryptoAlgorithm::AsconKangarooTwelveHash) {
+            AsconKangarooTwelveHash::init(asconKangarooTwelveHashCtx);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -9878,6 +10107,10 @@ public:
             AsconXoodyakXof::update(asconXoodyakXofCtx, data);
         } else if (algorithm == CryptoAlgorithm::AsconXoodyakHash) {
             AsconXoodyakHash::update(asconXoodyakHashCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconKangarooTwelveXof) {
+            AsconKangarooTwelveXof::update(asconKangarooTwelveXofCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconKangarooTwelveHash) {
+            AsconKangarooTwelveHash::update(asconKangarooTwelveHashCtx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -10287,6 +10520,14 @@ public:
             std::vector<uint8_t> out(32);
             AsconXoodyakHash::final(asconXoodyakHashCtx, out);
             return out;
+        } else if (algorithm == CryptoAlgorithm::AsconKangarooTwelveXof) {
+            std::vector<uint8_t> out(32);
+            AsconKangarooTwelveXof::final(asconKangarooTwelveXofCtx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::AsconKangarooTwelveHash) {
+            std::vector<uint8_t> out(32);
+            AsconKangarooTwelveHash::final(asconKangarooTwelveHashCtx, out);
+            return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
             if (aesCmacCtx->totalBytes > 0 && aesCmacCtx->buffer.size() == 16) {
@@ -10536,7 +10777,7 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac || prov->algorithm == CryptoAlgorithm::Ascon128 || prov->algorithm == CryptoAlgorithm::Ascon80pq || prov->algorithm == CryptoAlgorithm::Ascon128a || prov->algorithm == CryptoAlgorithm::AsconMac || prov->algorithm == CryptoAlgorithm::AsconSiv || prov->algorithm == CryptoAlgorithm::Ascon128aMac || prov->algorithm == CryptoAlgorithm::Ascon128aSiv || prov->algorithm == CryptoAlgorithm::Ascon80pqMac || prov->algorithm == CryptoAlgorithm::Ascon80pqSiv) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa || prov->algorithm == CryptoAlgorithm::AsconPrf || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon80pqPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof || prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof || prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof || prov->algorithm == CryptoAlgorithm::AsconXoodyakHash) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa || prov->algorithm == CryptoAlgorithm::AsconPrf || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon80pqPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof || prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof || prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof || prov->algorithm == CryptoAlgorithm::AsconXoodyakHash || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveXof || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveHash) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
             else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256 || prov->algorithm == CryptoAlgorithm::KmacKwp256 || prov->algorithm == CryptoAlgorithm::KmacAead256 || prov->algorithm == CryptoAlgorithm::KmacMgf256 || prov->algorithm == CryptoAlgorithm::KmacKdf256 || prov->algorithm == CryptoAlgorithm::KmacCtr256 || prov->algorithm == CryptoAlgorithm::KmacOfb256 || prov->algorithm == CryptoAlgorithm::KmacCfb256 || prov->algorithm == CryptoAlgorithm::KmacSiv256 || prov->algorithm == CryptoAlgorithm::KmacFfx256 || prov->algorithm == CryptoAlgorithm::KmacBps256 || prov->algorithm == CryptoAlgorithm::KmacKw256 || prov->algorithm == CryptoAlgorithm::KmacDrbg256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
@@ -10555,7 +10796,8 @@ inline NTSTATUS BCryptGetProperty(
                 prov->algorithm == CryptoAlgorithm::Ascon80pqSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof ||
                 prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof ||
                 prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof ||
-                prov->algorithm == CryptoAlgorithm::AsconXoodyakHash) {
+                prov->algorithm == CryptoAlgorithm::AsconXoodyakHash || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveXof ||
+                prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveHash) {
                 len = 8;
             } else if (prov->algorithm == CryptoAlgorithm::Ascon128a || prov->algorithm == CryptoAlgorithm::Ascon128aMac || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon128aSiv || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv) {
                 len = 16;

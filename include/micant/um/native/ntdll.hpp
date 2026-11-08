@@ -2629,6 +2629,41 @@ struct SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION = SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION*;
 
+// Class 293: SystemPagefileCompactionHistogramInformation
+struct SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    CompactionHistogramBuckets[8];        // e.g. [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+    ULONG64  TotalCompactedBytes;                  // e.g. 8589934592ULL (8 GB)
+    ULONG64  TotalUncompactedBytes;                // e.g. 17179869184ULL (16 GB)
+    ULONG    AverageCompressionRatioPermille;      // e.g. 500 (50.0% ratio)
+    ULONG    CompactionEfficiencyScore;            // e.g. 95
+    BOOLEAN  HistogramTelemetryActive;             // 1
+    uint8_t  StatusFlags;                          // e.g. 0x07 (HistogramEn | CompressionRatioCalibrated | RealtimeBucketing)
+    uint8_t  Pad[2];                               // 0
+};
+using PSYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION = SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION*;
+
+// Class 294: SystemCpuVoltageRegulatorSlewRateTelemetryInformation
+struct SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    MeasuredSlewRateMvPerMicrosecond;     // e.g. 1250 (1250 mV/us)
+    ULONG    TargetSlewRateMvPerMicrosecond;       // e.g. 1200 (1200 mV/us)
+    ULONG    SlewRateOvershootPercentage;          // e.g. 4 (4% overshoot)
+    ULONG    ActiveVrmPhases;                      // e.g. 16
+    ULONG    VrmResponseDelayPicoseconds;          // e.g. 450 (450 ps delay)
+    ULONG64  SlewRateTrackingCycles;               // e.g. 5000000ULL
+    BOOLEAN  SlewRateRegulationEngaged;            // 1
+    BOOLEAN  ThermalDeratingActive;                // 0
+    uint8_t  SlewRateStatusFlags;                  // e.g. 0x0F (SlewTrackingEn | VrmLocked | FastFeedbackEn | TelemetryAccurate)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION = SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5525,6 +5560,55 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 293: { // SystemPagefileCompactionHistogramInformation (Class 293)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->CompactionHistogramBuckets[0] = 128;
+            pInfo->CompactionHistogramBuckets[1] = 256;
+            pInfo->CompactionHistogramBuckets[2] = 512;
+            pInfo->CompactionHistogramBuckets[3] = 1024;
+            pInfo->CompactionHistogramBuckets[4] = 2048;
+            pInfo->CompactionHistogramBuckets[5] = 4096;
+            pInfo->CompactionHistogramBuckets[6] = 8192;
+            pInfo->CompactionHistogramBuckets[7] = 16384;
+            pInfo->TotalCompactedBytes = 8589934592ULL;
+            pInfo->TotalUncompactedBytes = 17179869184ULL;
+            pInfo->AverageCompressionRatioPermille = 500;
+            pInfo->CompactionEfficiencyScore = 95;
+            pInfo->HistogramTelemetryActive = 1;
+            pInfo->StatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 294: { // SystemCpuVoltageRegulatorSlewRateTelemetryInformation (Class 294)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->MeasuredSlewRateMvPerMicrosecond = 1250;
+            pInfo->TargetSlewRateMvPerMicrosecond = 1200;
+            pInfo->SlewRateOvershootPercentage = 4;
+            pInfo->ActiveVrmPhases = 16;
+            pInfo->VrmResponseDelayPicoseconds = 450;
+            pInfo->SlewRateTrackingCycles = 5000000ULL;
+            pInfo->SlewRateRegulationEngaged = 1;
+            pInfo->ThermalDeratingActive = 0;
+            pInfo->SlewRateStatusFlags = 0x0F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7088,6 +7172,58 @@ inline CHAR WINAPI RtlInterlockedMulModulo8(CHAR volatile* Destination, CHAR Mul
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedSubModulo64(LONG64 volatile* Destination, LONG64 Value, LONG64 Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 next = (current - Value) % Modulus;
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedSubModulo32(LONG volatile* Destination, LONG Value, LONG Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG next = (current - Value) % Modulus;
+        if (next < 0) next += Modulus;
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedSubModulo16(SHORT volatile* Destination, SHORT Value, SHORT Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        SHORT next = static_cast<SHORT>((current - Value) % Modulus);
+        if (next < 0) next = static_cast<SHORT>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedSubModulo8(CHAR volatile* Destination, CHAR Value, CHAR Modulus) noexcept {
+    if (!Destination || Modulus <= 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        CHAR next = static_cast<CHAR>((current - Value) % Modulus);
+        if (next < 0) next = static_cast<CHAR>(next + Modulus);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -7934,6 +8070,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry(SYSTE
     return NtQuerySystemInformation_Export(292, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileCompactionHistogramInformation(SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(293, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation(SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(294, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -8507,6 +8655,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo32", reinterpret_cast<void*>(RtlInterlockedMulModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo16", reinterpret_cast<void*>(RtlInterlockedMulModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMulModulo8", reinterpret_cast<void*>(RtlInterlockedMulModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo64", reinterpret_cast<void*>(RtlInterlockedSubModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo32", reinterpret_cast<void*>(RtlInterlockedSubModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo16", reinterpret_cast<void*>(RtlInterlockedSubModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedSubModulo8", reinterpret_cast<void*>(RtlInterlockedSubModulo8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight64", reinterpret_cast<void*>(RtlInterlockedRotateRight64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight32", reinterpret_cast<void*>(RtlInterlockedRotateRight32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight16", reinterpret_cast<void*>(RtlInterlockedRotateRight16));
@@ -8597,6 +8749,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCommitChargeTracking", reinterpret_cast<void*>(RtlQuerySystemPagefileCommitChargeTracking));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompactionHistogramInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileCompactionHistogramInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

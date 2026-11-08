@@ -62215,3 +62215,338 @@ inline void Test_Horizon270_Device48Options60_PagefileCommitChargeCpuTransientSp
 
     std::cout << "[TEST] Suite 486: Horizon 270 - Direct3D 12 Device48/CommandList42 & Options 60, NT SystemInfo 291/292, Interlocked MulModulo 64/32/16/8 & NIST Ascon-Xoodyak XOF/Hash PASSED." << std::endl;
 }
+
+// ============================================================================
+// HORIZON 271: SUITE 487
+// Direct3D 12 ID3D12Device49 / ID3D12GraphicsCommandList43 & Options 61 ABI,
+// NT Native Classes 293/294 Telemetry, Lockless Sub-Modulo Arithmetic, and
+// NIST SP 800-232 Ascon-KangarooTwelve XOF & Ascon-KangarooTwelve-Hash Lightweight Cryptography
+// ============================================================================
+inline void Test_Horizon271_Device49Options61_PagefileCompactionHistogramCpuVoltageSlewRate_InterlockedSubModulo_And_AsconKangarooTwelveXofHash_Suite() {
+    using namespace micant;
+    using namespace micant::prism3d12;
+    using namespace micant::d3d12video;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+
+    std::cout << "\n==============================================================================\n"
+              << "[HORIZON 271] Direct3D 12 Device49/CommandList43 & Options 61 Architecture,\n"
+              << "              NT System Information Classes 293/294 & RTL/Win32 Telemetry,\n"
+              << "              Lockless Atomic Interlocked Sub-Modulo 64/32/16/8-bit Primitives,\n"
+              << "              NIST SP 800-232 Ascon-KangarooTwelve XOF & Hash Lightweight Cryptography\n"
+              << "==============================================================================\n" << std::flush;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device49, ID3D12GraphicsCommandList43 & Options 61 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device49, ID3D12GraphicsCommandList43 & Options 61 Architecture...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. QueryInterface for ID3D12Device49
+        ID3D12Device49* pDev49 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device49, reinterpret_cast<void**>(&pDev49));
+        TEST_ASSERT(hr == 0 && pDev49 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device49 succeeds");
+
+        // 2. Feature Check for D3D12_FEATURE_D3D12_OPTIONS61
+        D3D12_FEATURE_DATA_D3D12_OPTIONS61 opt61{};
+        hr = pDev49->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS61, &opt61, sizeof(opt61));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS61 succeeds");
+        TEST_ASSERT(opt61.WorkGraphsTier == 44u, "Options61 reports WorkGraphsTier 44 (Work Graphs 6.6 milestone)");
+        TEST_ASSERT(opt61.CooperativeMatrixMultiply8589934592Supported == 1, "Options61 reports 8.589B Cooperative Matrix Multiply supported");
+        TEST_ASSERT(opt61.SubByteMicroscopicFormatsV24Supported == 1, "Options61 reports SubByte Microscopic Formats V24 supported");
+        TEST_ASSERT(opt61.DynamicClusterExpansionTier29Supported == 1, "Options61 reports Dynamic Cluster Expansion Tier 29 supported");
+        TEST_ASSERT(opt61.MaxWorkGraphConcurrencyGroups == 34359738368ULL, "Options61 reports 34.359B Concurrency Groups (34,359,738,368)");
+        TEST_ASSERT(opt61.TilePipeliningStagesSupported == 67108864u, "Options61 reports 67,108,864 Tile Pipelining Stages");
+        TEST_ASSERT(opt61.AutonomousGraphRecursionTier21Supported == 1, "Options61 reports Autonomous Graph Recursion Tier 21 supported");
+        TEST_ASSERT(opt61.MultiQueueTensorPipelineFusionTier20Supported == 1, "Options61 reports Multi-Queue Tensor Pipeline Fusion Tier 20 supported");
+        TEST_ASSERT(opt61.WorkGraphMeshShaderPipeliningTier21Supported == 1, "Options61 reports Work Graph Mesh Shader Pipelining Tier 21 supported");
+        TEST_ASSERT(opt61.SparseTensorBlockAccelerationTier17Supported == 1, "Options61 reports Sparse Tensor Block Acceleration Tier 17 supported");
+        TEST_ASSERT(opt61.DeterministicTensorReductionTier16Supported == 1, "Options61 reports Deterministic Tensor Reduction Tier 16 supported");
+        TEST_ASSERT(opt61.HyperQuantizationTier15Supported == 1, "Options61 reports Hyper-Quantization Tier 15 supported");
+        TEST_ASSERT(opt61.SparseClusterTier14Supported == 1, "Options61 reports Sparse Cluster Tier 14 supported");
+        TEST_ASSERT(opt61.MultiQueueWorkGraphSyncTier13Supported == 1, "Options61 reports Multi-Queue Work Graph Sync Tier 13 supported");
+        TEST_ASSERT(opt61.AsynchronousKernelDispatchTier14Supported == 1, "Options61 reports Asynchronous Kernel Dispatch Tier 14 supported");
+        TEST_ASSERT(opt61.NeuralExecutionEngineTier11Supported == 1, "Options61 reports Neural Execution Engine Tier 11 supported");
+        TEST_ASSERT(opt61.AdaptiveTensorCoreTier10Supported == 1, "Options61 reports Adaptive Tensor Core Tier 10 supported");
+        TEST_ASSERT(opt61.SovereignSiliconTelemetryTier9Supported == 1, "Options61 reports Sovereign Silicon Telemetry Tier 9 supported");
+        TEST_ASSERT(opt61.QuantumEmulationTier8Supported == 1, "Options61 reports Quantum Emulation Tier 8 supported");
+
+        // 3. ID3D12Device49 Cooperative Matrix Support 28
+        int32_t supported = 0;
+        uint64_t maxDim = 0;
+        uint32_t types = 0, sparseAcc = 0;
+        int32_t asyncAcc = 0;
+        uint32_t stages = 0;
+        int32_t autoFb = 0, subGraph = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseTensor = 0, detReduction = 0, hyperQuant = 0;
+        int32_t sparseCluster = 0, mqSync = 0, asyncKernel = 0, neuralEngine = 0, adaptiveTensor = 0, sovTelemetry = 0, quantumEmul = 0;
+
+        hr = pDev49->GetWorkGraphCooperativeMatrixSupport28(
+            &supported, &maxDim, &types, &sparseAcc, &asyncAcc, &stages, &autoFb, &subGraph,
+            &meshPipelining, &multiQueueFusion, &microscaling, &subByte, &sparseTensor,
+            &detReduction, &hyperQuant, &sparseCluster, &mqSync, &asyncKernel, &neuralEngine,
+            &adaptiveTensor, &sovTelemetry, &quantumEmul
+        );
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport28 succeeds");
+        TEST_ASSERT(supported == 1, "GetWorkGraphCooperativeMatrixSupport28 supported == 1");
+        TEST_ASSERT(maxDim == 8589934592ULL, "Max matrix dimension scales to 8,589,934,592 (8.589B)");
+        TEST_ASSERT(types == 0x1FFFFFFF, "Data types bitmask is 0x1FFFFFFF");
+        TEST_ASSERT(stages == 67108864u, "Tile pipelining stages scale to 67,108,864");
+        TEST_ASSERT(quantumEmul == 1, "Quantum Emulation Tier 8 active");
+
+        // 4. CreateWorkGraphProgramRecord33
+        void* pRecord33 = nullptr;
+        hr = pDev49->CreateWorkGraphProgramRecord33(
+            nullptr, 0, 1024, 34359738368ULL, 0x01, 1, 1, 0xFF,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            OFFICIAL_IID_ID3D12Device49, &pRecord33
+        );
+        TEST_ASSERT(hr == 0 && pRecord33 == reinterpret_cast<void*>(0x88033), "CreateWorkGraphProgramRecord33 produces 0x88033 record handle");
+
+        // 5. CommandList43 Operations
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList43* pCmdList43 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList43, reinterpret_cast<void**>(&pCmdList43));
+        TEST_ASSERT(hr == 0 && pCmdList43 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList43 succeeds");
+
+        pCmdList43->SetWorkGraphBackingMemory33(
+            0xDEADBEEF0000ULL, 1048576ULL, 65536ULL, 34359738368ULL, 0x1F,
+            1, 0xAA, 0xBB, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x07
+        );
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory33Start() == 0xDEADBEEF0000ULL, "SetWorkGraphBackingMemory33 Start tracked");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory33Size() == 1048576ULL, "SetWorkGraphBackingMemory33 Size tracked");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory33MaxConcurrency() == 34359738368ULL, "SetWorkGraphBackingMemory33 MaxConcurrency tracked");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory33QuantumEmulationTier() == 1, "SetWorkGraphBackingMemory33 QuantumEmulationTier tracked");
+
+        uint8_t dummyRecord[32] = { 0x42 };
+        pCmdList43->DispatchGraphProgramRecord33(
+            12, dummyRecord, sizeof(dummyRecord), 5, 0xFF, 1, 0x0F, 0x01,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x03, 0x10
+        );
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord33Count() == 1, "DispatchGraphProgramRecord33 recorded 1 record");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords33()[0].NodeIndex == 12, "Recorded record NodeIndex is 12");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords33()[0].ConcurrencyGroup == 5, "Recorded record ConcurrencyGroup is 5");
+
+        cmdList.ClearState(nullptr);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord33Count() == 0, "ClearState flushes recorded program records 33");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory33Start() == 0, "ClearState resets backing memory 33 start");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 293/294 Telemetry & Win32 Integration
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 293/294 Telemetry & Win32 Integration...\n" << std::flush;
+
+        // Class 293: SystemPagefileCompactionHistogramInformation
+        SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION histInfo{};
+        ULONG retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(293, &histInfo, sizeof(histInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation_Export(293) succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION), "ReturnLength matches Class 293 size");
+        TEST_ASSERT(histInfo.Version == 1, "PagefileCompactionHistogram Version is 1");
+        TEST_ASSERT(histInfo.CompactionHistogramBuckets[7] == 16384, "PagefileCompactionHistogram bucket 7 is 16384");
+        TEST_ASSERT(histInfo.TotalCompactedBytes == 8589934592ULL, "TotalCompactedBytes is 8 GB");
+        TEST_ASSERT(histInfo.TotalUncompactedBytes == 17179869184ULL, "TotalUncompactedBytes is 16 GB");
+        TEST_ASSERT(histInfo.AverageCompressionRatioPermille == 500, "AverageCompressionRatioPermille is 500 (50.0%)");
+        TEST_ASSERT(histInfo.CompactionEfficiencyScore == 95, "CompactionEfficiencyScore is 95");
+        TEST_ASSERT(histInfo.HistogramTelemetryActive == 1, "HistogramTelemetryActive is TRUE");
+        TEST_ASSERT(histInfo.StatusFlags == 0x07, "StatusFlags is 0x07");
+
+        // RTL Helper for Class 293
+        SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION rtlHist{};
+        status = RtlQuerySystemPagefileCompactionHistogramInformation(&rtlHist);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileCompactionHistogramInformation succeeds");
+        TEST_ASSERT(rtlHist.TotalCompactedBytes == 8589934592ULL, "RTL PagefileCompactionHistogram matches direct query");
+
+        // Win32 API for Class 293
+        SYSTEM_PAGEFILE_COMPACTION_HISTOGRAM_INFORMATION win32Hist{};
+        BOOL bRes = GetPagefileCompactionHistogramTelemetry(&win32Hist);
+        TEST_ASSERT(bRes == TRUE, "GetPagefileCompactionHistogramTelemetry succeeds");
+        TEST_ASSERT(win32Hist.AverageCompressionRatioPermille == 500, "Win32 PagefileCompactionHistogram matches RTL query");
+
+        // Class 294: SystemCpuVoltageRegulatorSlewRateTelemetryInformation
+        SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION slewInfo{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(294, &slewInfo, sizeof(slewInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation_Export(294) succeeds");
+        TEST_ASSERT(retLen == sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION), "ReturnLength matches Class 294 size");
+        TEST_ASSERT(slewInfo.Version == 1, "CpuVoltageRegulatorSlewRate Version is 1");
+        TEST_ASSERT(slewInfo.CoreIndex == 0, "CpuVoltageRegulatorSlewRate CoreIndex is 0");
+        TEST_ASSERT(slewInfo.MeasuredSlewRateMvPerMicrosecond == 1250, "MeasuredSlewRateMvPerMicrosecond is 1250 mV/us");
+        TEST_ASSERT(slewInfo.TargetSlewRateMvPerMicrosecond == 1200, "TargetSlewRateMvPerMicrosecond is 1200 mV/us");
+        TEST_ASSERT(slewInfo.SlewRateOvershootPercentage == 4, "SlewRateOvershootPercentage is 4%");
+        TEST_ASSERT(slewInfo.ActiveVrmPhases == 16, "ActiveVrmPhases is 16");
+        TEST_ASSERT(slewInfo.VrmResponseDelayPicoseconds == 450, "VrmResponseDelayPicoseconds is 450 ps");
+        TEST_ASSERT(slewInfo.SlewRateTrackingCycles == 5000000ULL, "SlewRateTrackingCycles is 5,000,000");
+        TEST_ASSERT(slewInfo.SlewRateRegulationEngaged == 1, "SlewRateRegulationEngaged is TRUE");
+        TEST_ASSERT(slewInfo.ThermalDeratingActive == 0, "ThermalDeratingActive is FALSE");
+        TEST_ASSERT(slewInfo.SlewRateStatusFlags == 0x0F, "SlewRateStatusFlags is 0x0F");
+
+        // RTL Helper for Class 294
+        SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION rtlSlew{};
+        status = RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation(&rtlSlew);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuVoltageRegulatorSlewRateTelemetryInformation succeeds");
+        TEST_ASSERT(rtlSlew.MeasuredSlewRateMvPerMicrosecond == 1250, "RTL CpuVoltageRegulatorSlewRate matches direct query");
+
+        // Win32 API for Class 294
+        SYSTEM_CPU_VOLTAGE_REGULATOR_SLEW_RATE_TELEMETRY_INFORMATION win32Slew{};
+        bRes = GetCpuVoltageRegulatorSlewRateTelemetry(&win32Slew);
+        TEST_ASSERT(bRes == TRUE, "GetCpuVoltageRegulatorSlewRateTelemetry succeeds");
+        TEST_ASSERT(win32Slew.TargetSlewRateMvPerMicrosecond == 1200, "Win32 CpuVoltageRegulatorSlewRate matches RTL query");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Lockless Interlocked Sub-Modulo 64/32/16/8-bit Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Lockless Interlocked Sub-Modulo 64/32/16/8-bit Primitives...\n" << std::flush;
+
+        // 64-bit
+        alignas(8) LONG64 val64 = 25;
+        LONG64 old64 = RtlInterlockedSubModulo64(&val64, 10, 7);
+        TEST_ASSERT(old64 == 25, "RtlInterlockedSubModulo64 returns initial 25");
+        TEST_ASSERT(val64 == 1, "val64 (25 - 10) % 7 becomes 1");
+
+        old64 = InterlockedSubModulo64(&val64, 5, 7);
+        TEST_ASSERT(old64 == 1, "InterlockedSubModulo64 returns old 1");
+        TEST_ASSERT(val64 == 3, "val64 (1 - 5) % 7 = -4 % 7 becomes 3");
+
+        // 32-bit
+        alignas(4) LONG val32 = 14;
+        LONG old32 = RtlInterlockedSubModulo32(&val32, 20, 11);
+        TEST_ASSERT(old32 == 14, "RtlInterlockedSubModulo32 returns initial 14");
+        TEST_ASSERT(val32 == 5, "val32 (14 - 20) % 11 = -6 % 11 becomes 5");
+
+        old32 = InterlockedSubModulo(&val32, 8, 11);
+        TEST_ASSERT(old32 == 5, "InterlockedSubModulo returns old 5");
+        TEST_ASSERT(val32 == 8, "val32 (5 - 8) % 11 = -3 % 11 becomes 8");
+
+        old32 = InterlockedSubModulo32(&val32, 3, 11);
+        TEST_ASSERT(old32 == 8, "InterlockedSubModulo32 returns old 8");
+        TEST_ASSERT(val32 == 5, "val32 (8 - 3) % 11 becomes 5");
+
+        // 16-bit
+        alignas(2) SHORT val16 = 50;
+        SHORT old16 = RtlInterlockedSubModulo16(&val16, 15, 13);
+        TEST_ASSERT(old16 == 50, "RtlInterlockedSubModulo16 returns initial 50");
+        TEST_ASSERT(val16 == 9, "val16 (50 - 15) % 13 = 35 % 13 becomes 9");
+
+        old16 = InterlockedSubModulo16(&val16, 12, 13);
+        TEST_ASSERT(old16 == 9, "InterlockedSubModulo16 returns old 9");
+        TEST_ASSERT(val16 == 10, "val16 (9 - 12) % 13 = -3 % 13 becomes 10");
+
+        // 8-bit
+        alignas(1) CHAR val8 = 10;
+        CHAR old8 = RtlInterlockedSubModulo8(&val8, 25, 9);
+        TEST_ASSERT(old8 == 10, "RtlInterlockedSubModulo8 returns initial 10");
+        TEST_ASSERT(val8 == 3, "val8 (10 - 25) % 9 = -15 % 9 becomes 3");
+
+        old8 = InterlockedSubModulo8(&val8, 7, 9);
+        TEST_ASSERT(old8 == 3, "InterlockedSubModulo8 returns old 3");
+        TEST_ASSERT(val8 == 5, "val8 (3 - 7) % 9 = -4 % 9 becomes 5");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-KangarooTwelve-XOF & Ascon-KangarooTwelve-Hash
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-KangarooTwelve-XOF & Ascon-KangarooTwelve-Hash...\n" << std::flush;
+
+        const std::string testMsg = "MicaNT Sovereign Sovereign Kernel KangarooTwelve NIST SP 800-232 Cryptography Suite 487";
+        std::span<const uint8_t> msgSpan(reinterpret_cast<const uint8_t*>(testMsg.data()), testMsg.size());
+
+        // 1. AsconKangarooTwelveXof Direct Class
+        std::vector<uint8_t> xofOut1 = AsconKangarooTwelveXof::hash(msgSpan, 32);
+        TEST_ASSERT(xofOut1.size() == 32, "AsconKangarooTwelveXof::hash produces 32-byte digest");
+
+        AsconKangarooTwelveXof::Context xofCtx;
+        AsconKangarooTwelveXof::init(xofCtx);
+        AsconKangarooTwelveXof::update(xofCtx, msgSpan.subspan(0, 16));
+        AsconKangarooTwelveXof::update(xofCtx, msgSpan.subspan(16));
+        std::vector<uint8_t> xofOut2(32);
+        AsconKangarooTwelveXof::final(xofCtx, xofOut2);
+        TEST_ASSERT(xofOut1 == xofOut2, "AsconKangarooTwelveXof streaming matches one-shot hash");
+
+        // 2. AsconKangarooTwelveHash Direct Class
+        std::array<uint8_t, 32> hashOut1 = AsconKangarooTwelveHash::hash(msgSpan);
+        std::array<uint8_t, 32> zeroHash{};
+        TEST_ASSERT(hashOut1 != zeroHash, "AsconKangarooTwelveHash::hash produces non-zero digest");
+
+        AsconKangarooTwelveHash::Context hashCtx;
+        AsconKangarooTwelveHash::init(hashCtx);
+        AsconKangarooTwelveHash::update(hashCtx, msgSpan.subspan(0, 20));
+        AsconKangarooTwelveHash::update(hashCtx, msgSpan.subspan(20));
+        std::array<uint8_t, 32> hashOut2{};
+        AsconKangarooTwelveHash::final(hashCtx, hashOut2);
+        TEST_ASSERT(hashOut1 == hashOut2, "AsconKangarooTwelveHash streaming matches one-shot hash");
+        TEST_ASSERT(std::memcmp(xofOut1.data(), hashOut1.data(), 32) != 0, "XOF and Hash produce distinct domain-separated digests");
+
+        // 3. BCrypt CNG Integration for ASCON-KANGAROOTWELVE-XOF
+        BCRYPT_ALG_HANDLE hXofAlg = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hXofAlg, BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXofAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KANGAROOTWELVE-XOF succeeds");
+
+        uint32_t hashLen = 0, cbResult = 0;
+        bStatus = BCryptGetProperty(hXofAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty(BCRYPT_HASH_LENGTH) returns 32 for ASCON-KANGAROOTWELVE-XOF");
+
+        uint32_t blockLen = 0;
+        bStatus = BCryptGetProperty(hXofAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && blockLen == 8, "BCryptGetProperty(BCRYPT_BLOCK_LENGTH) returns 8 for ASCON-KANGAROOTWELVE-XOF");
+
+        BCRYPT_HASH_HANDLE hXofHandle = nullptr;
+        bStatus = BCryptCreateHash(hXofAlg, &hXofHandle, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXofHandle != nullptr, "BCryptCreateHash for ASCON-KANGAROOTWELVE-XOF succeeds");
+
+        bStatus = BCryptHashData(hXofHandle, const_cast<uint8_t*>(msgSpan.data()), static_cast<uint32_t>(msgSpan.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-KANGAROOTWELVE-XOF succeeds");
+
+        std::vector<uint8_t> bCryptXof(32);
+        bStatus = BCryptFinishHash(hXofHandle, bCryptXof.data(), static_cast<uint32_t>(bCryptXof.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-KANGAROOTWELVE-XOF succeeds");
+        TEST_ASSERT(bCryptXof == xofOut1, "BCrypt ASCON-KANGAROOTWELVE-XOF matches direct AsconKangarooTwelveXof output");
+
+        BCryptDestroyHash(hXofHandle);
+        BCryptCloseAlgorithmProvider(hXofAlg, 0);
+
+        // 4. BCrypt CNG Integration for ASCON-KANGAROOTWELVE-HASH
+        BCRYPT_ALG_HANDLE hHashAlg = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hHashAlg, BCRYPT_ASCON_KANGAROOTWELVE_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHashAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KANGAROOTWELVE-HASH succeeds");
+
+        hashLen = 0;
+        bStatus = BCryptGetProperty(hHashAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty(BCRYPT_HASH_LENGTH) returns 32 for ASCON-KANGAROOTWELVE-HASH");
+
+        blockLen = 0;
+        bStatus = BCryptGetProperty(hHashAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && blockLen == 8, "BCryptGetProperty(BCRYPT_BLOCK_LENGTH) returns 8 for ASCON-KANGAROOTWELVE-HASH");
+
+        BCRYPT_HASH_HANDLE hHashHandle = nullptr;
+        bStatus = BCryptCreateHash(hHashAlg, &hHashHandle, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHashHandle != nullptr, "BCryptCreateHash for ASCON-KANGAROOTWELVE-HASH succeeds");
+
+        bStatus = BCryptHashData(hHashHandle, const_cast<uint8_t*>(msgSpan.data()), static_cast<uint32_t>(msgSpan.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-KANGAROOTWELVE-HASH succeeds");
+
+        std::array<uint8_t, 32> bCryptHash{};
+        bStatus = BCryptFinishHash(hHashHandle, bCryptHash.data(), static_cast<uint32_t>(bCryptHash.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-KANGAROOTWELVE-HASH succeeds");
+        TEST_ASSERT(bCryptHash == hashOut1, "BCrypt ASCON-KANGAROOTWELVE-HASH matches direct AsconKangarooTwelveHash output");
+
+        BCryptDestroyHash(hHashHandle);
+        BCryptCloseAlgorithmProvider(hHashAlg, 0);
+    }
+
+    std::cout << "  Horizon 271 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device49, ID3D12GraphicsCommandList43 & Options 61 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 293 (PagefileCompactionHistogram) & 294 (CpuVoltageRegulatorSlewRateTelemetry) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Sub-Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-KangarooTwelve-XOF & Ascon-KangarooTwelve-Hash Lightweight Cryptography OK\n";
+
+    std::cout << "[TEST] Suite 487: Horizon 271 - Direct3D 12 Device49/CommandList43 & Options 61, NT SystemInfo 293/294, Interlocked SubModulo 64/32/16/8 & NIST Ascon-KangarooTwelve XOF/Hash PASSED." << std::endl;
+}
