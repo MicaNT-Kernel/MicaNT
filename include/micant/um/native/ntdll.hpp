@@ -2521,6 +2521,41 @@ struct SYSTEM_CPU_CORE_VOLTAGE_GUARD_BAND_HEADROOM_INFORMATION {
 };
 using PSYSTEM_CPU_CORE_VOLTAGE_GUARD_BAND_HEADROOM_INFORMATION = SYSTEM_CPU_CORE_VOLTAGE_GUARD_BAND_HEADROOM_INFORMATION*;
 
+// Class 287: SystemPagefileTierMigrationLatencyInformation
+struct SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    SourceTierIndex;                      // e.g. 0
+    ULONG    TargetTierIndex;                      // e.g. 1
+    ULONG64  PagesMigrated;                        // e.g. 4194304ULL (4M pages)
+    ULONG64  MigrationBytes;                       // e.g. 17179869184ULL (16 GB)
+    ULONG    AverageLatencyNanoseconds;            // e.g. 85 ns
+    ULONG    PeakLatencyNanoseconds;               // e.g. 240 ns
+    BOOLEAN  MigrationThrottleActive;              // 0
+    BOOLEAN  DmaEngineAssisted;                    // 1
+    uint8_t  MigrationStatusFlags;                 // e.g. 0x07 (TierPipelineSync | NonBlockingAsync | CompressionEn)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION = SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION*;
+
+// Class 288: SystemCpuCoreVoltageDroopPreventionTelemetryInformation
+struct SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    DroopMitigationEvents;                // e.g. 312
+    ULONG    CurrentTargetMicrovolts;              // e.g. 1180000 (1.18 V)
+    ULONG    DroopCompensationMicrovolts;          // e.g. 35000 (35 mV droop compensation)
+    ULONG    ActiveVdroopLoadlineResistanceUohm;   // e.g. 1250 (1.25 mOhm)
+    BOOLEAN  DroopPreventionActive;                // 1
+    BOOLEAN  UnderVoltageDetected;                 // 0
+    uint8_t  DroopPreventionStatusFlags;           // e.g. 0x05 (DynamicDroopComp | HighFreqSamplingEn)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION = SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5289,6 +5324,47 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CORE_VOLTAGE_GUARD_BAND_HEADROOM_INFORMATION);
             return NtStatus::Success;
         }
+        case 287: { // SystemPagefileTierMigrationLatencyInformation (Class 287)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->SourceTierIndex = 0;
+            pInfo->TargetTierIndex = 1;
+            pInfo->PagesMigrated = 4194304ULL;
+            pInfo->MigrationBytes = 17179869184ULL;
+            pInfo->AverageLatencyNanoseconds = 85;
+            pInfo->PeakLatencyNanoseconds = 240;
+            pInfo->MigrationThrottleActive = 0;
+            pInfo->DmaEngineAssisted = 1;
+            pInfo->MigrationStatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 288: { // SystemCpuCoreVoltageDroopPreventionTelemetryInformation (Class 288)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->DroopMitigationEvents = 312;
+            pInfo->CurrentTargetMicrovolts = 1180000;
+            pInfo->DroopCompensationMicrovolts = 35000;
+            pInfo->ActiveVdroopLoadlineResistanceUohm = 1250;
+            pInfo->DroopPreventionActive = 1;
+            pInfo->UnderVoltageDetected = 0;
+            pInfo->DroopPreventionStatusFlags = 0x05;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7398,6 +7474,54 @@ inline CHAR WINAPI RtlInterlockedAvgRoundUp8(CHAR volatile* Destination, CHAR Va
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedAvgRoundDown64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 avg = (current & Value) + ((current ^ Value) >> 1);
+        if (atomicDest->compare_exchange_weak(current, avg, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedAvgRoundDown32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG avg = (current & Value) + ((current ^ Value) >> 1);
+        if (atomicDest->compare_exchange_weak(current, avg, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedAvgRoundDown16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        SHORT avg = static_cast<SHORT>((current & Value) + ((current ^ Value) >> 1));
+        if (atomicDest->compare_exchange_weak(current, avg, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedAvgRoundDown8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        CHAR avg = static_cast<CHAR>((current & Value) + ((current ^ Value) >> 1));
+        if (atomicDest->compare_exchange_weak(current, avg, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -7612,6 +7736,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuCoreVoltageGuardBandHeadroom(SYSTEM_CPU_
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(286, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierMigrationLatency(SYSTEM_PAGEFILE_TIER_MIGRATION_LATENCY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(287, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry(SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(288, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -8263,6 +8399,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAvgRoundUp8", reinterpret_cast<void*>(RtlInterlockedAvgRoundUp8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierReclaimEfficiency", reinterpret_cast<void*>(RtlQuerySystemPagefileTierReclaimEfficiency));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCoreVoltageGuardBandHeadroom", reinterpret_cast<void*>(RtlQuerySystemCpuCoreVoltageGuardBandHeadroom));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAvgRoundDown64", reinterpret_cast<void*>(RtlInterlockedAvgRoundDown64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAvgRoundDown32", reinterpret_cast<void*>(RtlInterlockedAvgRoundDown32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAvgRoundDown16", reinterpret_cast<void*>(RtlInterlockedAvgRoundDown16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAvgRoundDown8", reinterpret_cast<void*>(RtlInterlockedAvgRoundDown8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierMigrationLatency", reinterpret_cast<void*>(RtlQuerySystemPagefileTierMigrationLatency));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
