@@ -2556,6 +2556,43 @@ struct SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION = SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION*;
 
+// Class 289: SystemPagefileWriteCoalescingThroughputInformation
+struct SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    TotalCoalescedWriteOperations;        // e.g. 1048576
+    ULONG64  TotalBytesCoalesced;                  // e.g. 4294967296ULL (4 GB)
+    ULONG    AverageBurstCoalesceBatchSize;        // e.g. 64
+    ULONG    MaxBurstCoalesceBatchSize;            // e.g. 256
+    ULONG    CoalescingWindowDurationMicroseconds; // e.g. 250 us
+    ULONG64  PeakWriteThroughputBytesPerSec;       // e.g. 14000000000ULL (14 GB/s)
+    ULONG64  CurrentWriteThroughputBytesPerSec;    // e.g. 12500000000ULL (12.5 GB/s)
+    ULONG    CoalesceBufferSaturationPercentage;   // e.g. 42 %
+    uint8_t  CoalescingStatusFlags;                // e.g. 0x0F (WriteCoalesceEn | RingBufferActive | BurstFlushEn | FlushDmaDirect)
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION = SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION*;
+
+// Class 290: SystemCpuLoadLineCalibrationImpedanceTelemetryInformation
+struct SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    ConfiguredLoadLineImpedanceMicroOhms; // e.g. 800 (0.80 mOhm)
+    ULONG    MeasuredEffectiveImpedanceMicroOhms;  // e.g. 795 (0.795 mOhm)
+    ULONG    ImpedanceDeviationPercentage;         // e.g. 1 %
+    ULONG    ActiveVrmPhaseCount;                  // e.g. 16
+    ULONG    PhaseCurrentBalanceMicroAmperes;      // e.g. 25000 (25 mA)
+    ULONG    TransientResponseTimeNanoseconds;     // e.g. 45 ns
+    ULONG    ThermalThrottlingMarginMillidegreesC; // e.g. 28500 (28.5 C)
+    BOOLEAN  LoadLineCompensationActive;           // 1
+    BOOLEAN  PhaseBalanceLocked;                   // 1
+    uint8_t  CalibrationTelemetryStatusFlags;      // e.g. 0x07 (LLCCompActive | PhaseLocked | TelemetryAccurate)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION = SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5365,6 +5402,50 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CORE_VOLTAGE_DROOP_PREVENTION_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 289: { // SystemPagefileWriteCoalescingThroughputInformation (Class 289)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TotalCoalescedWriteOperations = 1048576;
+            pInfo->TotalBytesCoalesced = 4294967296ULL;
+            pInfo->AverageBurstCoalesceBatchSize = 64;
+            pInfo->MaxBurstCoalesceBatchSize = 256;
+            pInfo->CoalescingWindowDurationMicroseconds = 250;
+            pInfo->PeakWriteThroughputBytesPerSec = 14000000000ULL;
+            pInfo->CurrentWriteThroughputBytesPerSec = 12500000000ULL;
+            pInfo->CoalesceBufferSaturationPercentage = 42;
+            pInfo->CoalescingStatusFlags = 0x0F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 290: { // SystemCpuLoadLineCalibrationImpedanceTelemetryInformation (Class 290)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->ConfiguredLoadLineImpedanceMicroOhms = 800;
+            pInfo->MeasuredEffectiveImpedanceMicroOhms = 795;
+            pInfo->ImpedanceDeviationPercentage = 1;
+            pInfo->ActiveVrmPhaseCount = 16;
+            pInfo->PhaseCurrentBalanceMicroAmperes = 25000;
+            pInfo->TransientResponseTimeNanoseconds = 45;
+            pInfo->ThermalThrottlingMarginMillidegreesC = 28500;
+            pInfo->LoadLineCompensationActive = 1;
+            pInfo->PhaseBalanceLocked = 1;
+            pInfo->CalibrationTelemetryStatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7750,6 +7831,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry(SYST
     return NtQuerySystemInformation_Export(288, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileWriteCoalescingThroughput(SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(289, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry(SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(290, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -8405,6 +8498,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAvgRoundDown8", reinterpret_cast<void*>(RtlInterlockedAvgRoundDown8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierMigrationLatency", reinterpret_cast<void*>(RtlQuerySystemPagefileTierMigrationLatency));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedClamp64", reinterpret_cast<void*>(RtlInterlockedClamp64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedClamp32", reinterpret_cast<void*>(RtlInterlockedClamp32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedClamp16", reinterpret_cast<void*>(RtlInterlockedClamp16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedClamp8", reinterpret_cast<void*>(RtlInterlockedClamp8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingThroughput", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingThroughput));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

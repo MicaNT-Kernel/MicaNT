@@ -9946,6 +9946,16 @@ inline BOOL WINAPI GetCpuCoreVoltageDroopPreventionTelemetry(ntdll::SYSTEM_CPU_C
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuCoreVoltageDroopPreventionTelemetry(Info)) ? TRUE : FALSE;
 }
 
+inline BOOL WINAPI GetPagefileWriteCoalescingThroughputTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COALESCING_THROUGHPUT_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteCoalescingThroughput(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuLoadLineCalibrationImpedanceTelemetry(ntdll::SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry(Info)) ? TRUE : FALSE;
+}
+
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
@@ -12265,6 +12275,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAvgRoundDown8", reinterpret_cast<void*>(InterlockedAvgRoundDown8));
     ldr.registerExport("kernel32.dll", "GetPagefileTierMigrationLatencyTelemetry", reinterpret_cast<void*>(GetPagefileTierMigrationLatencyTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuCoreVoltageDroopPreventionTelemetry", reinterpret_cast<void*>(GetCpuCoreVoltageDroopPreventionTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingThroughputTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingThroughputTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuLoadLineCalibrationImpedanceTelemetry", reinterpret_cast<void*>(GetCpuLoadLineCalibrationImpedanceTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
