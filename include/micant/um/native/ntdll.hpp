@@ -2451,6 +2451,41 @@ struct SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION {
 };
 using PSYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION*;
 
+// Class 283: SystemPagefileTierEvictionPolicyTelemetryInformation
+struct SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    TierIndex;                            // e.g. 1
+    ULONG    EvictionPassCount;                    // e.g. 96
+    ULONG64  TotalEvictedBytes;                    // e.g. 17179869184ULL (16 GB)
+    ULONG64  TotalEvictedPages;                    // e.g. 4194304ULL
+    ULONG    EvictionLatencyNanoseconds;           // e.g. 125
+    ULONG    EvictionPressureScore;                // e.g. 7420 (74.20%)
+    BOOLEAN  PreemptiveEvictionActive;             // 1
+    BOOLEAN  EvictionThrottlingEngaged;            // 0
+    uint8_t  PolicyFlags;                          // e.g. 0x07 (LRUOptimized | TierAware | WritebackAccelerated)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION*;
+
+// Class 284: SystemCpuFabricVoltageDloadTransientMarginInformation
+struct SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    FabricDomainId;                       // e.g. 0
+    ULONG    DloadTransientEvents;                 // e.g. 52
+    ULONG    TransientMarginMicrovolts;             // e.g. 35000 (35 mV margin)
+    ULONG    DloadSlewRateMvPerMicrosec;           // e.g. 850
+    ULONG    AdaptiveDloadMitigations;             // e.g. 210
+    BOOLEAN  DloadRegulationActive;                // 1
+    BOOLEAN  TransientMarginWarning;               // 0
+    uint8_t  DloadMarginStatusFlags;               // e.g. 0x06 (FastDloadControl | MarginTrackingEn)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION = SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5137,6 +5172,47 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION);
             return NtStatus::Success;
         }
+        case 283: { // SystemPagefileTierEvictionPolicyTelemetryInformation (Class 283)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TierIndex = 1;
+            pInfo->EvictionPassCount = 96;
+            pInfo->TotalEvictedBytes = 17179869184ULL;
+            pInfo->TotalEvictedPages = 4194304ULL;
+            pInfo->EvictionLatencyNanoseconds = 125;
+            pInfo->EvictionPressureScore = 7420;
+            pInfo->PreemptiveEvictionActive = 1;
+            pInfo->EvictionThrottlingEngaged = 0;
+            pInfo->PolicyFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 284: { // SystemCpuFabricVoltageDloadTransientMarginInformation (Class 284)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->FabricDomainId = 0;
+            pInfo->DloadTransientEvents = 52;
+            pInfo->TransientMarginMicrovolts = 35000;
+            pInfo->DloadSlewRateMvPerMicrosec = 850;
+            pInfo->AdaptiveDloadMitigations = 210;
+            pInfo->DloadRegulationActive = 1;
+            pInfo->TransientMarginWarning = 0;
+            pInfo->DloadMarginStatusFlags = 0x06;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7150,6 +7226,54 @@ inline UCHAR WINAPI RtlInterlockedCountLeadingSigns8(UCHAR volatile* Destination
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedAbsDiff64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG64 diff = (current >= Value) ? (current - Value) : (Value - current);
+        if (atomicDest->compare_exchange_weak(current, diff, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedAbsDiff32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        LONG diff = (current >= Value) ? (current - Value) : (Value - current);
+        if (atomicDest->compare_exchange_weak(current, diff, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedAbsDiff16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        SHORT diff = static_cast<SHORT>((current >= Value) ? (current - Value) : (Value - current));
+        if (atomicDest->compare_exchange_weak(current, diff, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedAbsDiff8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        CHAR diff = static_cast<CHAR>((current >= Value) ? (current - Value) : (Value - current));
+        if (atomicDest->compare_exchange_weak(current, diff, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileCompressionTelemetry(SYSTEM_PAGEFILE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -7340,6 +7464,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex(SYST
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
     return NtQuerySystemInformation_Export(282, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemPagefileTierEvictionPolicyTelemetry(SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(283, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuFabricVoltageDloadTransientMargin(SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(284, Info, sizeof(*Info), &retLen);
 }
 
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
@@ -7979,6 +8115,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltagePhaseMarginTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltagePhaseMarginTelemetry));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierCompactDedupEfficiency", reinterpret_cast<void*>(RtlQuerySystemPagefileTierCompactDedupEfficiency));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiff64", reinterpret_cast<void*>(RtlInterlockedAbsDiff64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiff32", reinterpret_cast<void*>(RtlInterlockedAbsDiff32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiff16", reinterpret_cast<void*>(RtlInterlockedAbsDiff16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiff8", reinterpret_cast<void*>(RtlInterlockedAbsDiff8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileTierEvictionPolicyTelemetry", reinterpret_cast<void*>(RtlQuerySystemPagefileTierEvictionPolicyTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuFabricVoltageDloadTransientMargin", reinterpret_cast<void*>(RtlQuerySystemCpuFabricVoltageDloadTransientMargin));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

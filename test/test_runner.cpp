@@ -454,6 +454,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite482") {
+        RUN_TEST(Test_Horizon266_Device44Options56_PagefileEvictionCpuDloadMargin_InterlockedAbsDiff_And_AsconKeccakMacPrfSiv_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite481") {
         RUN_TEST(Test_Horizon265_Device43Options55_PagefileDedupCpuDroopIndex_InterlockedCLS_And_Ascon80pqMacPrfSiv_Suite);
         return g_FailedTests;
@@ -2412,6 +2416,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon263_Device41Options53_PagefileTierCompactionCpuSlewRate_InterlockedCTZ_And_AsconMacPrfSiv_Suite);
     RUN_TEST(Test_Horizon264_Device42Options54_PagefileExpansionCpuPhaseMargin_InterlockedCountSetBits_And_Ascon128aMacPrfSiv_Suite);
     RUN_TEST(Test_Horizon265_Device43Options55_PagefileDedupCpuDroopIndex_InterlockedCLS_And_Ascon80pqMacPrfSiv_Suite);
+    RUN_TEST(Test_Horizon266_Device44Options56_PagefileEvictionCpuDloadMargin_InterlockedAbsDiff_And_AsconKeccakMacPrfSiv_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

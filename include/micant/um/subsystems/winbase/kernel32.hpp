@@ -9836,6 +9836,26 @@ inline UCHAR WINAPI InterlockedCountLeadingSigns8(UCHAR volatile* Destination) n
     return ntdll::RtlInterlockedCountLeadingSigns8(Destination);
 }
 
+inline LONG64 WINAPI InterlockedAbsDiff64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    return ntdll::RtlInterlockedAbsDiff64(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedAbsDiff(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedAbsDiff32(Destination, Value);
+}
+
+inline LONG WINAPI InterlockedAbsDiff32(LONG volatile* Destination, LONG Value) noexcept {
+    return ntdll::RtlInterlockedAbsDiff32(Destination, Value);
+}
+
+inline SHORT WINAPI InterlockedAbsDiff16(SHORT volatile* Destination, SHORT Value) noexcept {
+    return ntdll::RtlInterlockedAbsDiff16(Destination, Value);
+}
+
+inline CHAR WINAPI InterlockedAbsDiff8(CHAR volatile* Destination, CHAR Value) noexcept {
+    return ntdll::RtlInterlockedAbsDiff8(Destination, Value);
+}
+
 inline BOOL WINAPI GetPagefileTierExpansionRateTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_EXPANSION_RATE_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierExpansionRateTelemetry(Info)) ? TRUE : FALSE;
@@ -9854,6 +9874,16 @@ inline BOOL WINAPI GetPagefileTierCompactDedupEfficiencyTelemetry(ntdll::SYSTEM_
 inline BOOL WINAPI GetCpuFabricVoltageTransitionalDroopIndexTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_TRANSITIONAL_DROOP_INDEX_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageTransitionalDroopIndex(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileTierEvictionPolicyTelemetry(ntdll::SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileTierEvictionPolicyTelemetry(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuFabricVoltageDloadTransientMarginTelemetry(ntdll::SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuFabricVoltageDloadTransientMargin(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -12154,6 +12184,13 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuFabricVoltagePhaseMarginTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltagePhaseMarginTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileTierCompactDedupEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileTierCompactDedupEfficiencyTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageTransitionalDroopIndexTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageTransitionalDroopIndexTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedAbsDiff64", reinterpret_cast<void*>(InterlockedAbsDiff64));
+    ldr.registerExport("kernel32.dll", "InterlockedAbsDiff", reinterpret_cast<void*>(InterlockedAbsDiff));
+    ldr.registerExport("kernel32.dll", "InterlockedAbsDiff32", reinterpret_cast<void*>(InterlockedAbsDiff32));
+    ldr.registerExport("kernel32.dll", "InterlockedAbsDiff16", reinterpret_cast<void*>(InterlockedAbsDiff16));
+    ldr.registerExport("kernel32.dll", "InterlockedAbsDiff8", reinterpret_cast<void*>(InterlockedAbsDiff8));
+    ldr.registerExport("kernel32.dll", "GetPagefileTierEvictionPolicyTelemetry", reinterpret_cast<void*>(GetPagefileTierEvictionPolicyTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuFabricVoltageDloadTransientMarginTelemetry", reinterpret_cast<void*>(GetCpuFabricVoltageDloadTransientMarginTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

@@ -60250,3 +60250,446 @@ inline void Test_Horizon265_Device43Options55_PagefileDedupCpuDroopIndex_Interlo
 
     std::cout << "[TEST] Suite 481: Horizon 265 - Direct3D 12 Device43/CommandList37 & Options 55, NT SystemInfo 281/282, Interlocked Count Leading Signs 64/32/16/8 & NIST Ascon-80pq MAC/PRF/SIV PASSED." << std::endl;
 }
+
+// ============================================================================
+// SUITE 482: Horizon 266 Architectural Validation
+// Direct3D 12 Device44/CommandList38 & Options 56 Architecture,
+// NT Native System Information Classes 283 & 284 Telemetry,
+// Lockless Atomic Interlocked Integer Absolute Difference 64/32/16/8-bit,
+// NIST SP 800-232 Ascon-Keccak Hybrid MAC, PRF & SIV (256-bit Key) Cryptography
+// ============================================================================
+inline void Test_Horizon266_Device44Options56_PagefileEvictionCpuDloadMargin_InterlockedAbsDiff_And_AsconKeccakMacPrfSiv_Suite() {
+    using namespace micant;
+    using namespace micant::prism3d12;
+    using namespace micant::d3d12video;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+
+    std::cout << "\n==============================================================================\n"
+              << "[HORIZON 266] Direct3D 12 Device44/CommandList38 & Options 56 Architecture,\n"
+              << "              NT System Information Classes 283/284 & RTL/Win32 Telemetry,\n"
+              << "              Lockless Atomic Interlocked Integer Absolute Difference 64/32/16/8-bit,\n"
+              << "              NIST SP 800-232 Ascon-Keccak MAC, PRF & SIV (256-bit Key) Cryptography\n"
+              << "==============================================================================\n" << std::flush;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device44, ID3D12GraphicsCommandList38 & Options 56 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device44, ID3D12GraphicsCommandList38 & Options 56 Architecture...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+
+        // 1. QueryInterface for ID3D12Device44
+        ID3D12Device44* pDev44 = nullptr;
+        int32_t hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device44, reinterpret_cast<void**>(&pDev44));
+        TEST_ASSERT(hr == 0 && pDev44 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device44 succeeds");
+
+        // 2. Feature Check for D3D12_FEATURE_D3D12_OPTIONS56
+        D3D12_FEATURE_DATA_D3D12_OPTIONS56 opt56{};
+        hr = pDev44->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS56, &opt56, sizeof(opt56));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS56 succeeds");
+        TEST_ASSERT(opt56.WorkGraphsTier == 39u, "Options56 reports WorkGraphsTier 39 (Work Graphs 6.1 milestone)");
+        TEST_ASSERT(opt56.CooperativeMatrixMultiply268435456Supported == 1, "Options56 reports 268.4M Cooperative Matrix Multiply supported");
+        TEST_ASSERT(opt56.SubByteMicroscopicFormatsV19Supported == 1, "Options56 reports SubByte Microscopic Formats V19 supported");
+        TEST_ASSERT(opt56.DynamicClusterExpansionTier24Supported == 1, "Options56 reports Dynamic Cluster Expansion Tier 24 supported");
+        TEST_ASSERT(opt56.MaxWorkGraphConcurrencyGroups == 1073741824u, "Options56 reports 1.07B Concurrency Groups (1,073,741,824)");
+        TEST_ASSERT(opt56.TilePipeliningStagesSupported == 2097152u, "Options56 reports 2,097,152 Tile Pipelining Stages");
+        TEST_ASSERT(opt56.AutonomousGraphRecursionTier16Supported == 1, "Options56 reports Autonomous Graph Recursion Tier 16 supported");
+        TEST_ASSERT(opt56.MultiQueueTensorPipelineFusionTier15Supported == 1, "Options56 reports Multi-Queue Tensor Pipeline Fusion Tier 15 supported");
+        TEST_ASSERT(opt56.WorkGraphMeshShaderPipeliningTier16Supported == 1, "Options56 reports Work Graph Mesh Shader Pipelining Tier 16 supported");
+        TEST_ASSERT(opt56.SparseTensorBlockAccelerationTier12Supported == 1, "Options56 reports Sparse Tensor Block Acceleration Tier 12 supported");
+        TEST_ASSERT(opt56.DeterministicTensorReductionTier11Supported == 1, "Options56 reports Deterministic Tensor Reduction Tier 11 supported");
+        TEST_ASSERT(opt56.HyperQuantizationTier10Supported == 1, "Options56 reports HyperQuantization Tier 10 supported");
+        TEST_ASSERT(opt56.SparseClusterTier9Supported == 1, "Options56 reports Sparse Cluster Tier 9 supported");
+        TEST_ASSERT(opt56.MultiQueueWorkGraphSyncTier8Supported == 1, "Options56 reports Multi-Queue Work Graph Sync Tier 8 supported");
+        TEST_ASSERT(opt56.AsynchronousKernelDispatchTier9Supported == 1, "Options56 reports Async Kernel Dispatch Tier 9 supported");
+        TEST_ASSERT(opt56.NeuralExecutionEngineTier6Supported == 1, "Options56 reports Neural Execution Engine Tier 6 supported");
+        TEST_ASSERT(opt56.AdaptiveTensorCoreTier5Supported == 1, "Options56 reports Adaptive Tensor Core Tier 5 supported");
+        TEST_ASSERT(opt56.SovereignSiliconTelemetryTier4Supported == 1, "Options56 reports Sovereign Silicon Telemetry Tier 4 supported");
+        TEST_ASSERT(opt56.QuantumEmulationTier3Supported == 1, "Options56 reports Quantum Emulation Tier 3 supported");
+
+        // 3. ID3D12Device44 Cooperative Matrix Support 23
+        int32_t supported = 0;
+        uint32_t maxDim = 0, types = 0, sparseAcc = 0, stages = 0;
+        int32_t asyncAcc = 0, autoFb = 0, subGraph = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseTensor = 0, detReduction = 0, hyperQuant = 0;
+        int32_t sparseCluster = 0, mqSync = 0, asyncKernel = 0, neuralEngine = 0, adaptiveTensor = 0, sovTelemetry = 0, quantumEmul = 0;
+
+        hr = pDev44->GetWorkGraphCooperativeMatrixSupport23(
+            &supported, &maxDim, &types, &sparseAcc, &asyncAcc, &stages, &autoFb, &subGraph,
+            &meshPipelining, &multiQueueFusion, &microscaling, &subByte, &sparseTensor,
+            &detReduction, &hyperQuant, &sparseCluster, &mqSync, &asyncKernel, &neuralEngine,
+            &adaptiveTensor, &sovTelemetry, &quantumEmul
+        );
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport23 succeeds");
+        TEST_ASSERT(supported == 1, "GetWorkGraphCooperativeMatrixSupport23 supported == 1");
+        TEST_ASSERT(maxDim == 268435456, "Max matrix dimension scales to 268,435,456 (268.4M)");
+        TEST_ASSERT(types == 0xFFFFFF, "Data types bitmask is 0xFFFFFF");
+        TEST_ASSERT(stages == 2097152, "Tile pipelining stages scale to 2,097,152");
+        TEST_ASSERT(quantumEmul == 1, "Quantum Emulation Tier 3 acceleration active");
+
+        // 4. CreateWorkGraphProgramRecord28
+        void* pRecord28 = nullptr;
+        hr = pDev44->CreateWorkGraphProgramRecord28(
+            nullptr, 0, 64, 1073741824u, 0x01, 1, 1, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            OFFICIAL_IID_ID3D12Device44, &pRecord28);
+        TEST_ASSERT(hr == 0 && pRecord28 != nullptr, "CreateWorkGraphProgramRecord28 succeeds");
+        TEST_ASSERT(pRecord28 == reinterpret_cast<void*>(0x88028), "CreateWorkGraphProgramRecord28 returns token 0x88028");
+
+        // 5. QueryInterface for ID3D12GraphicsCommandList38
+        Prism3D12GraphicsCommandListImpl cmdList(&device, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList38* pCmd38 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList38, reinterpret_cast<void**>(&pCmd38));
+        TEST_ASSERT(hr == 0 && pCmd38 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList38 succeeds");
+
+        // 6. ID3D12GraphicsCommandList38 Methods
+        pCmd38->SetWorkGraphBackingMemory28(
+            0x80000000ULL, 2147483648ULL, 536870912ULL, 1073741824u, 0x01u, 1, 0xFFu, 0x0Fu, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x06u);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory28Start() == 0x80000000ULL, "BackingMemory28 Start matches");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory28Size() == 2147483648ULL, "BackingMemory28 Size matches (2 GB)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory28ScratchSize() == 536870912ULL, "BackingMemory28 ScratchSize matches (512 MB)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory28MaxConcurrency() == 1073741824u, "BackingMemory28 MaxConcurrency matches (1.07B)");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory28Flags() == 0x06u, "BackingMemory28 Flags match");
+
+        pCmd38->DispatchGraphProgramRecord28(1, pRecord28, 512, 256, 0x01, 24, 0x03, 0x01, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x01, 0x02);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord28Count() == 1, "Recorded ProgramRecord28 count is 1");
+        const auto& recs = cmdList.GetRecordedProgramRecords28();
+        TEST_ASSERT(recs[0].NodeIndex == 1, "ProgramRecord28 NodeIndex matches");
+        TEST_ASSERT(recs[0].pRecord == pRecord28, "ProgramRecord28 pRecord matches 0x88028");
+        TEST_ASSERT(recs[0].RecordSizeInBytes == 512, "ProgramRecord28 RecordSize matches");
+        TEST_ASSERT(recs[0].ConcurrencyGroup == 256, "ProgramRecord28 ConcurrencyGroup matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 283 & 284 and RTL/Win32 Wrappers
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 283 & 284 Telemetry...\n" << std::flush;
+
+        // Class 283: SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION
+        SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION evictionInfo{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(283, &evictionInfo, sizeof(evictionInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(283) succeeds");
+        TEST_ASSERT(retLen == sizeof(evictionInfo), "Return length matches sizeof(SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION)");
+        TEST_ASSERT(evictionInfo.Version == 1, "Pagefile eviction version == 1");
+        TEST_ASSERT(evictionInfo.TierIndex == 1, "Pagefile eviction TierIndex == 1");
+        TEST_ASSERT(evictionInfo.EvictionPassCount == 96, "Pagefile eviction pass count == 96");
+        TEST_ASSERT(evictionInfo.TotalEvictedBytes == 17179869184ULL, "Total evicted bytes == 16 GB");
+        TEST_ASSERT(evictionInfo.TotalEvictedPages == 4194304ULL, "Total evicted pages == 4,194,304");
+        TEST_ASSERT(evictionInfo.EvictionLatencyNanoseconds == 125, "Eviction latency == 125 ns");
+        TEST_ASSERT(evictionInfo.EvictionPressureScore == 7420, "Eviction pressure score == 74.20% (7420)");
+        TEST_ASSERT(evictionInfo.PreemptiveEvictionActive == 1, "Preemptive eviction active == 1");
+        TEST_ASSERT(evictionInfo.EvictionThrottlingEngaged == 0, "Eviction throttling engaged == 0");
+        TEST_ASSERT(evictionInfo.PolicyFlags == 0x07, "Eviction policy flags == 0x07");
+
+        // Class 284: SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION
+        SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION marginInfo{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(284, &marginInfo, sizeof(marginInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(284) succeeds");
+        TEST_ASSERT(retLen == sizeof(marginInfo), "Return length matches sizeof(SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION)");
+        TEST_ASSERT(marginInfo.Version == 1, "CPU dload margin version == 1");
+        TEST_ASSERT(marginInfo.FabricDomainId == 0, "FabricDomainId == 0");
+        TEST_ASSERT(marginInfo.DloadTransientEvents == 52, "Dload transient events logged == 52");
+        TEST_ASSERT(marginInfo.TransientMarginMicrovolts == 35000, "Transient margin == 35,000 uV (35 mV)");
+        TEST_ASSERT(marginInfo.DloadSlewRateMvPerMicrosec == 850, "Dload slew rate == 850 mV/us");
+        TEST_ASSERT(marginInfo.AdaptiveDloadMitigations == 210, "Adaptive dload mitigations == 210");
+        TEST_ASSERT(marginInfo.DloadRegulationActive == 1, "Dload regulation active == 1");
+        TEST_ASSERT(marginInfo.TransientMarginWarning == 0, "Transient margin warning == 0");
+        TEST_ASSERT(marginInfo.DloadMarginStatusFlags == 0x06, "Dload margin status flags == 0x06");
+
+        // RTL Wrappers
+        SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION rtlEvictionInfo{};
+        status = RtlQuerySystemPagefileTierEvictionPolicyTelemetry(&rtlEvictionInfo);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileTierEvictionPolicyTelemetry succeeds");
+        TEST_ASSERT(rtlEvictionInfo.TotalEvictedBytes == 17179869184ULL, "RtlQuerySystemPagefileTierEvictionPolicyTelemetry data matches");
+
+        SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION rtlMarginInfo{};
+        status = RtlQuerySystemCpuFabricVoltageDloadTransientMargin(&rtlMarginInfo);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuFabricVoltageDloadTransientMargin succeeds");
+        TEST_ASSERT(rtlMarginInfo.TransientMarginMicrovolts == 35000, "RtlQuerySystemCpuFabricVoltageDloadTransientMargin data matches");
+
+        // Win32 Wrappers
+        SYSTEM_PAGEFILE_TIER_EVICTION_POLICY_TELEMETRY_INFORMATION k32EvictionInfo{};
+        BOOL k32Ret = kernel32::GetPagefileTierEvictionPolicyTelemetry(&k32EvictionInfo);
+        TEST_ASSERT(k32Ret == TRUE, "GetPagefileTierEvictionPolicyTelemetry succeeds");
+        TEST_ASSERT(k32EvictionInfo.EvictionPressureScore == 7420, "GetPagefileTierEvictionPolicyTelemetry data matches");
+
+        SYSTEM_CPU_FABRIC_VOLTAGE_DLOAD_TRANSIENT_MARGIN_INFORMATION k32MarginInfo{};
+        k32Ret = kernel32::GetCpuFabricVoltageDloadTransientMarginTelemetry(&k32MarginInfo);
+        TEST_ASSERT(k32Ret == TRUE, "GetCpuFabricVoltageDloadTransientMarginTelemetry succeeds");
+        TEST_ASSERT(k32MarginInfo.DloadTransientEvents == 52, "GetCpuFabricVoltageDloadTransientMarginTelemetry data matches");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Lockless Interlocked Integer Absolute Difference (AbsDiff) 64/32/16/8-bit
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Lockless Interlocked Integer Absolute Difference (AbsDiff) Primitives...\n" << std::flush;
+
+        // 64-bit AbsDiff
+        // Destination = 100, Value = 40 -> |100 - 40| = 60, prev = 100, new = 60
+        LONG64 target64 = 100LL;
+        LONG64 prev64 = RtlInterlockedAbsDiff64(&target64, 40LL);
+        TEST_ASSERT(prev64 == 100LL, "RtlInterlockedAbsDiff64 returns initial value 100");
+        TEST_ASSERT(target64 == 60LL, "RtlInterlockedAbsDiff64 updates target to 60 (|100 - 40|)");
+
+        // Destination = 25, Value = 75 -> |25 - 75| = 50, prev = 25, new = 50
+        target64 = 25LL;
+        prev64 = InterlockedAbsDiff64(&target64, 75LL);
+        TEST_ASSERT(prev64 == 25LL, "InterlockedAbsDiff64 returns initial value 25");
+        TEST_ASSERT(target64 == 50LL, "InterlockedAbsDiff64 updates target to 50 (|25 - 75|)");
+
+        // Negative values: Destination = -50, Value = 30 -> |-50 - 30| = 80, prev = -50, new = 80
+        target64 = -50LL;
+        prev64 = InterlockedAbsDiff64(&target64, 30LL);
+        TEST_ASSERT(prev64 == -50LL, "InterlockedAbsDiff64 handles negative operand: returns -50");
+        TEST_ASSERT(target64 == 80LL, "InterlockedAbsDiff64 updates target to 80 (|-50 - 30|)");
+
+        // 32-bit AbsDiff
+        LONG target32 = 200L;
+        LONG prev32 = RtlInterlockedAbsDiff32(&target32, 50L);
+        TEST_ASSERT(prev32 == 200L, "RtlInterlockedAbsDiff32 returns initial value 200");
+        TEST_ASSERT(target32 == 150L, "RtlInterlockedAbsDiff32 updates target to 150 (|200 - 50|)");
+
+        target32 = 50L;
+        prev32 = InterlockedAbsDiff32(&target32, 120L);
+        TEST_ASSERT(prev32 == 50L, "InterlockedAbsDiff32 returns initial value 50");
+        TEST_ASSERT(target32 == 70L, "InterlockedAbsDiff32 updates target to 70 (|50 - 120|)");
+
+        target32 = 10L;
+        prev32 = InterlockedAbsDiff(&target32, 5L);
+        TEST_ASSERT(prev32 == 10L, "InterlockedAbsDiff alias returns initial value 10");
+        TEST_ASSERT(target32 == 5L, "InterlockedAbsDiff alias updates target to 5 (|10 - 5|)");
+
+        // 16-bit AbsDiff
+        SHORT target16 = 500;
+        SHORT prev16 = RtlInterlockedAbsDiff16(&target16, 200);
+        TEST_ASSERT(prev16 == 500, "RtlInterlockedAbsDiff16 returns initial value 500");
+        TEST_ASSERT(target16 == 300, "RtlInterlockedAbsDiff16 updates target to 300 (|500 - 200|)");
+
+        target16 = 100;
+        prev16 = InterlockedAbsDiff16(&target16, 350);
+        TEST_ASSERT(prev16 == 100, "InterlockedAbsDiff16 returns initial value 100");
+        TEST_ASSERT(target16 == 250, "InterlockedAbsDiff16 updates target to 250 (|100 - 350|)");
+
+        // 8-bit AbsDiff
+        CHAR target8 = 90;
+        CHAR prev8 = RtlInterlockedAbsDiff8(&target8, 30);
+        TEST_ASSERT(prev8 == 90, "RtlInterlockedAbsDiff8 returns initial value 90");
+        TEST_ASSERT(target8 == 60, "RtlInterlockedAbsDiff8 updates target to 60 (|90 - 30|)");
+
+        target8 = 20;
+        prev8 = InterlockedAbsDiff8(&target8, 80);
+        TEST_ASSERT(prev8 == 20, "InterlockedAbsDiff8 returns initial value 20");
+        TEST_ASSERT(target8 == 60, "InterlockedAbsDiff8 updates target to 60 (|20 - 80|)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-Keccak MAC, PRF & SIV (256-bit Key)
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-Keccak MAC, PRF & SIV Cryptography...\n" << std::flush;
+
+        const std::array<uint8_t, 32> asconKeccakKey = {
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20
+        };
+        const std::vector<uint8_t> testData = { 'M', 'i', 'c', 'a', 'N', 'T', '-', 'H', 'o', 'r', 'i', 'z', 'o', 'n', '2', '6', '6' };
+        const std::vector<uint8_t> alteredData = { 'M', 'i', 'c', 'a', 'N', 'T', '-', 'H', 'o', 'r', 'i', 'z', 'o', 'n', '2', '6', '7' };
+        const std::vector<uint8_t> testAd = { 'A', 's', 'c', 'o', 'n', '-', 'K', 'e', 'c', 'c', 'a', 'k', '-', 'A', 'E', 'A', 'D' };
+
+        // 1. Direct Engine: AsconKeccakMac
+        AsconKeccakMac::Context macCtx;
+        AsconKeccakMac::init(macCtx, asconKeccakKey);
+        AsconKeccakMac::update(macCtx, testData);
+        std::array<uint8_t, 32> directMac{};
+        AsconKeccakMac::final(macCtx, std::span<uint8_t>(directMac.data(), directMac.size()));
+
+        std::array<uint8_t, 32> helperMac = AsconKeccakMac::mac(asconKeccakKey, testData);
+        TEST_ASSERT(directMac == helperMac, "AsconKeccakMac::final matches AsconKeccakMac::mac helper output");
+
+        std::array<uint8_t, 32> alteredMac = AsconKeccakMac::mac(asconKeccakKey, alteredData);
+        TEST_ASSERT(directMac != alteredMac, "AsconKeccakMac tag changes when input changes");
+
+        // 2. Direct Engine: AsconKeccakPrf
+        AsconKeccakPrf::Context prfCtx;
+        AsconKeccakPrf::init(prfCtx, asconKeccakKey);
+        AsconKeccakPrf::update(prfCtx, testData);
+        std::vector<uint8_t> directPrf32(32);
+        AsconKeccakPrf::final(prfCtx, directPrf32);
+
+        std::vector<uint8_t> helperPrf32 = AsconKeccakPrf::prf(asconKeccakKey, testData, 32);
+        TEST_ASSERT(directPrf32 == helperPrf32, "AsconKeccakPrf::final matches AsconKeccakPrf::prf helper output");
+
+        std::vector<uint8_t> prf64 = AsconKeccakPrf::prf(asconKeccakKey, testData, 64);
+        TEST_ASSERT(prf64.size() == 64, "AsconKeccakPrf produces variable length output (64 bytes)");
+        TEST_ASSERT(std::memcmp(prf64.data(), directPrf32.data(), 32) == 0, "AsconKeccakPrf prefix matches 32-byte digest");
+
+        // 3. Direct Engine: AsconKeccakSiv
+        AsconKeccakSiv::Context sivCtx;
+        AsconKeccakSiv::init(sivCtx, asconKeccakKey);
+        std::vector<uint8_t> sivCt(testData.size());
+        std::array<uint8_t, 32> sivTag{};
+        bool sealOk = AsconKeccakSiv::seal(sivCtx, testData, sivTag, sivCt, testAd);
+        TEST_ASSERT(sealOk == true, "AsconKeccakSiv::seal succeeds");
+        TEST_ASSERT(sivCt != testData, "AsconKeccakSiv ciphertext differs from plaintext");
+
+        std::vector<uint8_t> decryptedPt(testData.size());
+        bool openOk = AsconKeccakSiv::open(sivCtx, sivCt, sivTag, decryptedPt, testAd);
+        TEST_ASSERT(openOk == true, "AsconKeccakSiv::open succeeds with authentic tag and AD");
+        TEST_ASSERT(decryptedPt == testData, "AsconKeccakSiv decrypted plaintext matches original");
+
+        // Tamper tag -> must fail
+        std::array<uint8_t, 32> tamperedTag = sivTag;
+        tamperedTag[0] ^= 0x01;
+        bool tamperTagOk = AsconKeccakSiv::open(sivCtx, sivCt, tamperedTag, decryptedPt, testAd);
+        TEST_ASSERT(tamperTagOk == false, "AsconKeccakSiv::open fails on tampered tag");
+
+        // 4. BCrypt CNG Integration for AsconKeccakMac
+        BCRYPT_ALG_HANDLE hMacAlg = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hMacAlg, BCRYPT_ASCON_KECCAK_MAC_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hMacAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KECCAK-MAC succeeds");
+
+        uint32_t hashLen = 0, cbResult = 0;
+        bStatus = BCryptGetProperty(hMacAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty(BCRYPT_HASH_LENGTH) for ASCON-KECCAK-MAC is 32");
+
+        BCRYPT_HASH_HANDLE hMacHash = nullptr;
+        bStatus = BCryptCreateHash(hMacAlg, &hMacHash, nullptr, 0, const_cast<uint8_t*>(asconKeccakKey.data()), static_cast<uint32_t>(asconKeccakKey.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hMacHash != nullptr, "BCryptCreateHash for ASCON-KECCAK-MAC with 32-byte key succeeds");
+
+        bStatus = BCryptHashData(hMacHash, const_cast<uint8_t*>(testData.data()), static_cast<uint32_t>(testData.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-KECCAK-MAC succeeds");
+
+        std::array<uint8_t, 32> bCryptMac{};
+        bStatus = BCryptFinishHash(hMacHash, bCryptMac.data(), static_cast<uint32_t>(bCryptMac.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-KECCAK-MAC succeeds");
+        TEST_ASSERT(bCryptMac == directMac, "BCrypt ASCON-KECCAK-MAC matches direct AsconKeccakMac output");
+
+        BCryptDestroyHash(hMacHash);
+        BCryptCloseAlgorithmProvider(hMacAlg, 0);
+
+        // 5. BCrypt CNG Integration for AsconKeccakPrf
+        BCRYPT_ALG_HANDLE hPrfAlg = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hPrfAlg, BCRYPT_ASCON_KECCAK_PRF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hPrfAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KECCAK-PRF succeeds");
+
+        uint32_t prfLen = 0;
+        bStatus = BCryptGetProperty(hPrfAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&prfLen), sizeof(prfLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && prfLen == 32, "BCryptGetProperty(BCRYPT_HASH_LENGTH) for ASCON-KECCAK-PRF is 32");
+
+        BCRYPT_HASH_HANDLE hPrfHash = nullptr;
+        bStatus = BCryptCreateHash(hPrfAlg, &hPrfHash, nullptr, 0, const_cast<uint8_t*>(asconKeccakKey.data()), static_cast<uint32_t>(asconKeccakKey.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hPrfHash != nullptr, "BCryptCreateHash for ASCON-KECCAK-PRF with 32-byte key succeeds");
+
+        bStatus = BCryptHashData(hPrfHash, const_cast<uint8_t*>(testData.data()), static_cast<uint32_t>(testData.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-KECCAK-PRF succeeds");
+
+        std::vector<uint8_t> bCryptPrf(32);
+        bStatus = BCryptFinishHash(hPrfHash, bCryptPrf.data(), static_cast<uint32_t>(bCryptPrf.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-KECCAK-PRF succeeds");
+        TEST_ASSERT(bCryptPrf == directPrf32, "BCrypt ASCON-KECCAK-PRF matches direct AsconKeccakPrf output");
+
+        BCryptDestroyHash(hPrfHash);
+        BCryptCloseAlgorithmProvider(hPrfAlg, 0);
+
+        // 6. BCrypt CNG Integration for AsconKeccakSiv (Encrypt & Decrypt)
+        BCRYPT_ALG_HANDLE hSivAlg = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hSivAlg, BCRYPT_ASCON_KECCAK_SIV_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hSivAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KECCAK-SIV succeeds");
+
+        BCRYPT_KEY_HANDLE hKeySiv = nullptr;
+        bStatus = BCryptGenerateSymmetricKey(hSivAlg, &hKeySiv, nullptr, 0, asconKeccakKey.data(), static_cast<uint32_t>(asconKeccakKey.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hKeySiv != nullptr, "BCryptGenerateSymmetricKey for ASCON-KECCAK-SIV succeeds");
+
+        // Encrypt via BCrypt
+        std::vector<uint8_t> bCryptCt(testData.size());
+        std::array<uint8_t, 32> bCryptTag{};
+        BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfoEnc{};
+        authInfoEnc.cbSize = sizeof(authInfoEnc);
+        authInfoEnc.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+        authInfoEnc.pbAuthData = const_cast<uint8_t*>(testAd.data());
+        authInfoEnc.cbAuthData = static_cast<uint32_t>(testAd.size());
+        authInfoEnc.pbTag = bCryptTag.data();
+        authInfoEnc.cbTag = static_cast<uint32_t>(bCryptTag.size());
+
+        uint32_t cbCtResult = 0;
+        bStatus = BCryptEncrypt(
+            hKeySiv,
+            testData.data(),
+            static_cast<uint32_t>(testData.size()),
+            &authInfoEnc,
+            nullptr,
+            0,
+            bCryptCt.data(),
+            static_cast<uint32_t>(bCryptCt.size()),
+            &cbCtResult,
+            0
+        );
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptEncrypt for ASCON-KECCAK-SIV succeeds");
+        TEST_ASSERT(cbCtResult == testData.size(), "BCryptEncrypt result length matches testData length");
+        TEST_ASSERT(bCryptCt == sivCt, "BCrypt ASCON-KECCAK-SIV ciphertext matches direct AsconKeccakSiv ciphertext");
+        TEST_ASSERT(bCryptTag == sivTag, "BCrypt ASCON-KECCAK-SIV tag matches direct AsconKeccakSiv tag");
+
+        // Decrypt via BCrypt
+        BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfoDec{};
+        authInfoDec.cbSize = sizeof(authInfoDec);
+        authInfoDec.dwInfoVersion = BCRYPT_AUTH_MODE_INFO_VERSION;
+        authInfoDec.pbAuthData = const_cast<uint8_t*>(testAd.data());
+        authInfoDec.cbAuthData = static_cast<uint32_t>(testAd.size());
+        authInfoDec.pbTag = bCryptTag.data();
+        authInfoDec.cbTag = static_cast<uint32_t>(bCryptTag.size());
+
+        std::vector<uint8_t> bCryptPt(bCryptCt.size());
+        uint32_t cbPtResult = 0;
+        bStatus = BCryptDecrypt(
+            hKeySiv,
+            bCryptCt.data(),
+            static_cast<uint32_t>(bCryptCt.size()),
+            &authInfoDec,
+            nullptr,
+            0,
+            bCryptPt.data(),
+            static_cast<uint32_t>(bCryptPt.size()),
+            &cbPtResult,
+            0
+        );
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptDecrypt for ASCON-KECCAK-SIV succeeds");
+        TEST_ASSERT(cbPtResult == testData.size(), "BCryptDecrypt output length matches testData");
+        TEST_ASSERT(bCryptPt == testData, "BCryptDecrypt plaintext matches original");
+
+        // Tamper tag in BCrypt Decrypt -> must fail with STATUS_AUTH_TAG_MISMATCH
+        bCryptTag[0] ^= 0x01;
+        bStatus = BCryptDecrypt(
+            hKeySiv,
+            bCryptCt.data(),
+            static_cast<uint32_t>(bCryptCt.size()),
+            &authInfoDec,
+            nullptr,
+            0,
+            bCryptPt.data(),
+            static_cast<uint32_t>(bCryptPt.size()),
+            &cbPtResult,
+            0
+        );
+        TEST_ASSERT(bStatus == STATUS_AUTH_TAG_MISMATCH, "BCryptDecrypt for ASCON-KECCAK-SIV fails with STATUS_AUTH_TAG_MISMATCH on tag tamper");
+
+        BCRYPT_KEY_HANDLE hKeySivClose = hKeySiv;
+        BCryptDestroyKey(hKeySivClose);
+        BCryptCloseAlgorithmProvider(hSivAlg, 0);
+    }
+
+    std::cout << "  Horizon 266 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device44, ID3D12GraphicsCommandList38 & Options 56 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 283 (PagefileTierEvictionPolicy) & 284 (CpuFabricVoltageDloadTransientMargin) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Integer Absolute Difference 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-Keccak MAC, PRF & Ascon-Keccak-SIV Lightweight Cryptography OK\n";
+
+    std::cout << "[TEST] Suite 482: Horizon 266 - Direct3D 12 Device44/CommandList38 & Options 56, NT SystemInfo 283/284, Interlocked AbsDiff 64/32/16/8 & NIST Ascon-Keccak MAC/PRF/SIV PASSED." << std::endl;
+}
