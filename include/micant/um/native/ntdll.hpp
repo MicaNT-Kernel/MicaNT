@@ -2593,6 +2593,42 @@ struct SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION = SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION*;
 
+// Class 291: SystemPagefileCommitChargeTrackingInformation
+struct SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG64  TotalCommitLimitPages;                // e.g. 16777216ULL (64 GB in 4KB pages)
+    ULONG64  TotalCommittedPages;                  // e.g. 4194304ULL (16 GB in 4KB pages)
+    ULONG64  PeakCommitChargePages;                // e.g. 8388608ULL (32 GB in 4KB pages)
+    ULONG64  PagefileBackingCommitPages;           // e.g. 2097152ULL (8 GB in 4KB pages)
+    ULONG    CommitChargeGrowthRatePagesPerSec;    // e.g. 1024 pages/sec
+    ULONG    CommitFailureCount;                   // e.g. 0
+    ULONG    OvercommitThresholdPercentage;        // e.g. 90 %
+    uint8_t  CommitTrackingStatusFlags;            // e.g. 0x07 (CommitTrackingEn | BackingCommitted | LowCommitPressure)
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION = SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION*;
+
+// Class 292: SystemCpuPowerSupplyTransientSpikeTelemetryInformation
+struct SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    TransientSpikeCount;                  // e.g. 12
+    ULONG    MaxPositiveSpikeMicrovolts;           // e.g. 45000 (45 mV overshoot)
+    ULONG    MaxNegativeSpikeMicrovolts;           // e.g. 52000 (52 mV undershoot)
+    ULONG    AverageSpikeDurationNanoseconds;      // e.g. 25 ns
+    ULONG    VrmSwitchingFrequencyKHz;             // e.g. 800 kHz
+    ULONG    CapacitanceDecouplingMarginPercentage;// e.g. 35 %
+    ULONG    ActivePhaseCount;                     // e.g. 16
+    BOOLEAN  SpikeSuppressionEngaged;              // 1
+    BOOLEAN  VrmFastResponseActive;                // 1
+    uint8_t  TransientTelemetryStatusFlags;        // e.g. 0x0F (SpikeMonitoringEn | ClampActive | VrmFastFeedback | TelemetryStable)
+    uint8_t  Pad;                                  // 0
+    ULONG    Reserved2;                            // 0
+};
+using PSYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION = SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5446,6 +5482,49 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_LOAD_LINE_CALIBRATION_IMPEDANCE_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 291: { // SystemPagefileCommitChargeTrackingInformation (Class 291)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->TotalCommitLimitPages = 16777216ULL;
+            pInfo->TotalCommittedPages = 4194304ULL;
+            pInfo->PeakCommitChargePages = 8388608ULL;
+            pInfo->PagefileBackingCommitPages = 2097152ULL;
+            pInfo->CommitChargeGrowthRatePagesPerSec = 1024;
+            pInfo->CommitFailureCount = 0;
+            pInfo->OvercommitThresholdPercentage = 90;
+            pInfo->CommitTrackingStatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 292: { // SystemCpuPowerSupplyTransientSpikeTelemetryInformation (Class 292)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->TransientSpikeCount = 12;
+            pInfo->MaxPositiveSpikeMicrovolts = 45000;
+            pInfo->MaxNegativeSpikeMicrovolts = 52000;
+            pInfo->AverageSpikeDurationNanoseconds = 25;
+            pInfo->VrmSwitchingFrequencyKHz = 800;
+            pInfo->CapacitanceDecouplingMarginPercentage = 35;
+            pInfo->ActivePhaseCount = 16;
+            pInfo->SpikeSuppressionEngaged = 1;
+            pInfo->VrmFastResponseActive = 1;
+            pInfo->TransientTelemetryStatusFlags = 0x0F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7843,6 +7922,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry(SY
     return NtQuerySystemInformation_Export(290, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileCommitChargeTracking(SYSTEM_PAGEFILE_COMMIT_CHARGE_TRACKING_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(291, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry(SYSTEM_CPU_POWER_SUPPLY_TRANSIENT_SPIKE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(292, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -8504,6 +8595,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedClamp8", reinterpret_cast<void*>(RtlInterlockedClamp8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingThroughput", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingThroughput));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuLoadLineCalibrationImpedanceTelemetry));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCommitChargeTracking", reinterpret_cast<void*>(RtlQuerySystemPagefileCommitChargeTracking));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry", reinterpret_cast<void*>(RtlQuerySystemCpuPowerSupplyTransientSpikeTelemetry));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
