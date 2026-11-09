@@ -65968,3 +65968,328 @@ inline void Suite497_MultiCharacterDriveIdentifiers_DosDevicesParity_And_Unbound
 inline void Test_Horizon281_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution_Suite() {
     Suite497_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution();
 }
+
+// ============================================================================
+// SUITE 498: HORIZON 282 - DIRECT3D 12 DEVICE59 & COMMANDLIST53 WITH OPTIONS 71 ABI,
+//            NT NATIVE CLASSES 313 & 314,
+//            INTERLOCKED BITWISE XNOR-MODULO 64/32/16/8-BIT PRIMITIVES,
+//            AND NIST SP 800-232 ASCON-SUBTERRANEAN-XOF & ASCON-SUBTERRANEAN-HASH LIGHTWEIGHT CRYPTOGRAPHY
+// ============================================================================
+inline void Suite498_Direct3D12_Device59_CommandList53_Options71_NTNative_PagefileAsyncWriteBurstBuffer_CpuClockJitter_InterlockedXnorModulo_AsconSubterranean() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 498: Horizon 282 - Direct3D 12 Device59/CommandList53 & Options 71, NT Native 313/314, Interlocked XnorModulo 64/32/16/8 & NIST Ascon-Subterranean XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device59, ID3D12GraphicsCommandList53 & Options 71 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device59, ID3D12GraphicsCommandList53 & Options 71 ABI...\n" << std::flush;
+
+        micant::prism3d12::Prism3D12DeviceImpl device(nullptr, micant::prism3d12::D3D_FEATURE_LEVEL_12_2);
+        micant::prism3d12::ID3D12Device59* pDevice59 = nullptr;
+
+        int32_t hr = device.QueryInterface(micant::prism3d12::IID_ID3D12Device59, reinterpret_cast<void**>(&pDevice59));
+        TEST_ASSERT(hr == 0 && pDevice59 != nullptr, "QueryInterface for IID_ID3D12Device59 succeeds");
+
+        micant::prism3d12::ID3D12Device59* pOfficialDevice59 = nullptr;
+        hr = device.QueryInterface(micant::prism3d12::OFFICIAL_IID_ID3D12Device59, reinterpret_cast<void**>(&pOfficialDevice59));
+        TEST_ASSERT(hr == 0 && pOfficialDevice59 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device59 succeeds");
+        pOfficialDevice59->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS71
+        micant::prism3d12::D3D12_FEATURE_DATA_D3D12_OPTIONS71 opt71{};
+        hr = pDevice59->CheckFeatureSupport(micant::prism3d12::D3D12_FEATURE_D3D12_OPTIONS71, &opt71, sizeof(opt71));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS71 succeeds");
+        TEST_ASSERT(opt71.WorkGraphsTier == 54u, "D3D12_OPTIONS71 reports WorkGraphsTier 54");
+        TEST_ASSERT(opt71.CooperativeMatrixMultiply8796093022208Supported == TRUE, "D3D12_OPTIONS71 reports CooperativeMatrixMultiply8796093022208Supported == TRUE");
+        TEST_ASSERT(opt71.SubByteMicroscopicFormatsV34Supported == TRUE, "D3D12_OPTIONS71 reports SubByteMicroscopicFormatsV34Supported == TRUE");
+        TEST_ASSERT(opt71.DynamicClusterExpansionTier39Supported == TRUE, "D3D12_OPTIONS71 reports DynamicClusterExpansionTier39Supported == TRUE");
+        TEST_ASSERT(opt71.MaxWorkGraphConcurrencyGroups == 35184372088832ULL, "D3D12_OPTIONS71 reports 35.184T concurrency groups");
+        TEST_ASSERT(opt71.TilePipeliningStagesSupported == 68719476736ULL, "D3D12_OPTIONS71 reports 68.719B tile pipelining stages");
+        TEST_ASSERT(opt71.AutonomousGraphRecursionTier31Supported == TRUE, "D3D12_OPTIONS71 reports AutonomousGraphRecursionTier31Supported == TRUE");
+        TEST_ASSERT(opt71.MultiQueueTensorPipelineFusionTier30Supported == TRUE, "D3D12_OPTIONS71 reports MultiQueueTensorPipelineFusionTier30Supported == TRUE");
+        TEST_ASSERT(opt71.WorkGraphMeshShaderPipeliningTier31Supported == TRUE, "D3D12_OPTIONS71 reports WorkGraphMeshShaderPipeliningTier31Supported == TRUE");
+        TEST_ASSERT(opt71.SparseTensorBlockAccelerationTier27Supported == TRUE, "D3D12_OPTIONS71 reports SparseTensorBlockAccelerationTier27Supported == TRUE");
+        TEST_ASSERT(opt71.DeterministicTensorReductionTier26Supported == TRUE, "D3D12_OPTIONS71 reports DeterministicTensorReductionTier26Supported == TRUE");
+        TEST_ASSERT(opt71.HyperQuantizationTier25Supported == TRUE, "D3D12_OPTIONS71 reports HyperQuantizationTier25Supported == TRUE");
+        TEST_ASSERT(opt71.SparseClusterTier24Supported == TRUE, "D3D12_OPTIONS71 reports SparseClusterTier24Supported == TRUE");
+        TEST_ASSERT(opt71.MultiQueueWorkGraphSyncTier23Supported == TRUE, "D3D12_OPTIONS71 reports MultiQueueWorkGraphSyncTier23Supported == TRUE");
+        TEST_ASSERT(opt71.AsynchronousKernelDispatchTier24Supported == TRUE, "D3D12_OPTIONS71 reports AsynchronousKernelDispatchTier24Supported == TRUE");
+        TEST_ASSERT(opt71.NeuralExecutionEngineTier21Supported == TRUE, "D3D12_OPTIONS71 reports NeuralExecutionEngineTier21Supported == TRUE");
+        TEST_ASSERT(opt71.AdaptiveTensorCoreTier20Supported == TRUE, "D3D12_OPTIONS71 reports AdaptiveTensorCoreTier20Supported == TRUE");
+        TEST_ASSERT(opt71.SovereignSiliconTelemetryTier19Supported == TRUE, "D3D12_OPTIONS71 reports SovereignSiliconTelemetryTier19Supported == TRUE");
+        TEST_ASSERT(opt71.QuantumEmulationTier18Supported == TRUE, "D3D12_OPTIONS71 reports QuantumEmulationTier18Supported == TRUE");
+
+        // ABI alias check (110)
+        micant::prism3d12::D3D12_FEATURE_DATA_D3D12_OPTIONS71 opt71Abi{};
+        hr = pDevice59->CheckFeatureSupport(micant::prism3d12::D3D12_FEATURE_ABI_D3D12_OPTIONS71, &opt71Abi, sizeof(opt71Abi));
+        TEST_ASSERT(hr == 0 && opt71Abi.WorkGraphsTier == 54u, "CheckFeatureSupport for D3D12_FEATURE_ABI_D3D12_OPTIONS71 succeeds");
+
+        // CreateWorkGraphProgramRecord43 call
+        void* pProgRec43 = nullptr;
+        hr = pDevice59->CreateWorkGraphProgramRecord43(nullptr, 0, 128, 35184372088832ULL, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, micant::prism3d12::IID_ID3D12Device59, &pProgRec43);
+        TEST_ASSERT(hr == 0 && pProgRec43 == reinterpret_cast<void*>(0x88043), "CreateWorkGraphProgramRecord43 returns 0x88043 sentinel");
+
+        // GetWorkGraphCooperativeMatrixSupport38 call
+        int32_t supported = 0, asyncAccum = 0, autoFeedback = 0, subGraphRec = 0, meshPipe = 0, multiQueueFusion = 0, microscaling = 0, subByteMicro = 0, sparseTensor = 0, determRed = 0, hyperQuant = 0, sparseCluster = 0, multiQueueSync = 0, asyncKernel = 0, neuralEngine = 0, adaptiveTensor = 0, sovereignTelemetry = 0, quantumEmul = 0;
+        uint64_t maxDim = 0, maxTileStages = 0;
+        uint32_t supTypes = 0, sparseAccel = 0;
+        hr = pDevice59->GetWorkGraphCooperativeMatrixSupport38(&supported, &maxDim, &supTypes, &sparseAccel, &asyncAccum, &maxTileStages, &autoFeedback, &subGraphRec, &meshPipe, &multiQueueFusion, &microscaling, &subByteMicro, &sparseTensor, &determRed, &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernel, &neuralEngine, &adaptiveTensor, &sovereignTelemetry, &quantumEmul);
+        TEST_ASSERT(hr == 0 && supported == 1 && maxDim == 8796093022208ULL && maxTileStages == 68719476736ULL, "GetWorkGraphCooperativeMatrixSupport38 succeeds and reports 8.796T dimension and 68.719B stages");
+
+        // CommandList53 validation
+        micant::prism3d12::Prism3D12GraphicsCommandListImpl cmdList(&device, micant::prism3d12::D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        micant::prism3d12::ID3D12GraphicsCommandList53* pCmdList53 = nullptr;
+        hr = cmdList.QueryInterface(micant::prism3d12::IID_ID3D12GraphicsCommandList53, reinterpret_cast<void**>(&pCmdList53));
+        TEST_ASSERT(hr == 0 && pCmdList53 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList53 succeeds");
+
+        micant::prism3d12::ID3D12GraphicsCommandList53* pOfficialCmdList53 = nullptr;
+        hr = cmdList.QueryInterface(micant::prism3d12::OFFICIAL_IID_ID3D12GraphicsCommandList53, reinterpret_cast<void**>(&pOfficialCmdList53));
+        TEST_ASSERT(hr == 0 && pOfficialCmdList53 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList53 succeeds");
+        pOfficialCmdList53->Release();
+
+        // SetWorkGraphBackingMemory43
+        pCmdList53->SetWorkGraphBackingMemory43(0x90000000ULL, 134217728ULL, 67108864ULL, 35184372088832ULL, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 0xFF);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory43Start() == 0x90000000ULL, "SetWorkGraphBackingMemory43 persists RangeStart");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory43Size() == 134217728ULL, "SetWorkGraphBackingMemory43 persists RangeSizeInBytes");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory43MaxConcurrency() == 35184372088832ULL, "SetWorkGraphBackingMemory43 persists MaxConcurrency");
+
+        // DispatchGraphProgramRecord43
+        const uint8_t recData[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+        pCmdList53->DispatchGraphProgramRecord43(43, recData, sizeof(recData), 4294000043u, 0x01, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0xAA, 0xBB);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord43Count() == 1, "DispatchGraphProgramRecord43 records entry");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords43()[0].NodeIndex == 43, "Recorded entry NodeIndex is 43");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords43()[0].ConcurrencyGroup == 4294000043u, "Recorded entry ConcurrencyGroup is 4294000043u");
+
+        cmdList.ClearState(nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory43Start() == 0 && cmdList.GetRecordedProgramRecord43Count() == 0, "ClearState clears backing memory 43 and recorded program records");
+
+        pCmdList53->Release();
+        pDevice59->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native System Information Classes 313 & 314
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 313 & 314...\n" << std::flush;
+
+        // Class 313: SystemPagefileAsyncWriteBurstBufferInformation
+        SYSTEM_PAGEFILE_ASYNC_WRITE_BURST_BUFFER_INFORMATION pagefileAsyncWrite{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(313, &pagefileAsyncWrite, sizeof(pagefileAsyncWrite) - 4, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch && retLen == sizeof(SYSTEM_PAGEFILE_ASYNC_WRITE_BURST_BUFFER_INFORMATION), "NtQuerySystemInformation(313) fails on undersized buffer with length mismatch");
+
+        status = RtlQuerySystemPagefileAsyncWriteBurstBufferInformation(&pagefileAsyncWrite);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileAsyncWriteBurstBufferInformation succeeds");
+        TEST_ASSERT(pagefileAsyncWrite.Version == 1, "PagefileAsyncWrite Version == 1");
+        TEST_ASSERT(pagefileAsyncWrite.BurstWriteBufferPagesAllocated == 65536, "PagefileAsyncWrite PagesAllocated == 65536");
+        TEST_ASSERT(pagefileAsyncWrite.BurstWriteBufferPoolSizeBytes == 268435456ULL, "PagefileAsyncWrite PoolSize == 256 MB");
+        TEST_ASSERT(pagefileAsyncWrite.BurstWriteCommitThresholdBytes == 134217728ULL, "PagefileAsyncWrite CommitThreshold == 128 MB");
+        TEST_ASSERT(pagefileAsyncWrite.TotalBurstWritesServiced == 2451900ULL, "PagefileAsyncWrite ServicedWrites == 2451900");
+        TEST_ASSERT(pagefileAsyncWrite.BurstWriteBufferExhaustionCount == 8ULL, "PagefileAsyncWrite ExhaustionCount == 8");
+        TEST_ASSERT(std::abs(pagefileAsyncWrite.BurstWriteFillRatio - 0.485) < 1e-4, "PagefileAsyncWrite FillRatio == 0.485");
+        TEST_ASSERT(std::abs(pagefileAsyncWrite.BurstWriteLatencyNanoseconds - 420.0) < 1e-4, "PagefileAsyncWrite Latency == 420.0 ns");
+        TEST_ASSERT(std::abs(pagefileAsyncWrite.BurstWriteAccelerationEfficiencyFactor - 5.12) < 1e-4, "PagefileAsyncWrite EfficiencyFactor == 5.12");
+        TEST_ASSERT(pagefileAsyncWrite.ActiveBurstWriteChannels == 16, "PagefileAsyncWrite ActiveChannels == 16");
+
+        SYSTEM_PAGEFILE_ASYNC_WRITE_BURST_BUFFER_INFORMATION win32PagefileAsyncWrite{};
+        BOOL bRes = GetPagefileAsyncWriteBurstBufferTelemetry(&win32PagefileAsyncWrite);
+        TEST_ASSERT(bRes == TRUE && win32PagefileAsyncWrite.BurstWriteBufferPoolSizeBytes == 268435456ULL, "Win32 GetPagefileAsyncWriteBurstBufferTelemetry succeeds");
+
+        // Class 314: SystemCpuClockJitterHistogramInformation
+        SYSTEM_CPU_CLOCK_JITTER_HISTOGRAM_INFORMATION cpuClockJitter{};
+        status = NtQuerySystemInformation_Export(314, &cpuClockJitter, sizeof(cpuClockJitter) - 4, &retLen);
+        TEST_ASSERT(status == NtStatus::InfoLengthMismatch && retLen == sizeof(SYSTEM_CPU_CLOCK_JITTER_HISTOGRAM_INFORMATION), "NtQuerySystemInformation(314) fails on undersized buffer with length mismatch");
+
+        status = RtlQuerySystemCpuClockJitterHistogramInformation(&cpuClockJitter);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuClockJitterHistogramInformation succeeds");
+        TEST_ASSERT(cpuClockJitter.Version == 1, "CpuClockJitter Version == 1");
+        TEST_ASSERT(cpuClockJitter.JitterSampleCount == 845200ULL, "CpuClockJitter JitterSampleCount == 845200");
+        TEST_ASSERT(cpuClockJitter.MaxClockJitterMagnitudePicoseconds == 18500ULL, "CpuClockJitter MaxClockJitterMagnitude == 18500 ps");
+        TEST_ASSERT(std::abs(cpuClockJitter.AvgClockPeriodNanoseconds - 0.208) < 1e-4, "CpuClockJitter AvgClockPeriod == 0.208 ns");
+        TEST_ASSERT(std::abs(cpuClockJitter.PeakCycleToCycleJitterDegrees - 0.95) < 1e-4, "CpuClockJitter PhaseJitter == 0.95 deg");
+        TEST_ASSERT(std::abs(cpuClockJitter.ClockDistributionImpedanceOhms - 50.0) < 1e-4, "CpuClockJitter DistributionImpedance == 50.0 Ohm");
+        TEST_ASSERT(std::abs(cpuClockJitter.ClockJitterCompensationSlewRateDegPerNs - 15.8) < 1e-4, "CpuClockJitter SlewRate == 15.8 deg/ns");
+        TEST_ASSERT(cpuClockJitter.ClockJitterHistogramBinCount == 16, "CpuClockJitter HistogramBinCount == 16");
+
+        SYSTEM_CPU_CLOCK_JITTER_HISTOGRAM_INFORMATION win32CpuClockJitter{};
+        bRes = GetCpuClockJitterHistogramTelemetry(&win32CpuClockJitter);
+        TEST_ASSERT(bRes == TRUE && win32CpuClockJitter.JitterSampleCount == 845200ULL, "Win32 GetCpuClockJitterHistogramTelemetry succeeds");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Lockless Interlocked Bitwise XNOR Modulo 64/32/16/8-bit Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] NT Native & Win32 Interlocked Bitwise XNOR Modulo Primitives...\n" << std::flush;
+
+        // 64-bit: RtlInterlockedXnorModulo64 & InterlockedXnorModulo64
+        LONG64 dest64 = 0x00FF00FF00FF00FFLL;
+        LONG64 val64 = 0x0F0F0F0F0F0F0F0FLL;
+        ULONG64 mod64 = 1000003ULL;
+        // ~(dest ^ val)
+        uint64_t expectedXnor64 = ~(static_cast<uint64_t>(dest64) ^ static_cast<uint64_t>(val64));
+        LONG64 expectedRes64 = static_cast<LONG64>(expectedXnor64 % mod64);
+
+        LONG64 old64 = RtlInterlockedXnorModulo64(&dest64, val64, mod64);
+        TEST_ASSERT(old64 == 0x00FF00FF00FF00FFLL, "RtlInterlockedXnorModulo64 returns initial value");
+        TEST_ASSERT(dest64 == expectedRes64, "RtlInterlockedXnorModulo64 updates destination correctly");
+
+        LONG64 winDest64 = 0x00FF00FF00FF00FFLL;
+        LONG64 winOld64 = InterlockedXnorModulo64(&winDest64, val64, mod64);
+        TEST_ASSERT(winOld64 == 0x00FF00FF00FF00FFLL && winDest64 == expectedRes64, "Win32 InterlockedXnorModulo64 behaves identically");
+
+        // 32-bit: RtlInterlockedXnorModulo32, InterlockedXnorModulo32 & InterlockedXnorModulo
+        LONG dest32 = 0x12345678;
+        LONG val32 = 0x55AA55AA;
+        ULONG mod32 = 65521;
+        uint32_t expectedXnor32 = ~(static_cast<uint32_t>(dest32) ^ static_cast<uint32_t>(val32));
+        LONG expectedRes32 = static_cast<LONG>(expectedXnor32 % mod32);
+
+        LONG old32 = RtlInterlockedXnorModulo32(&dest32, val32, mod32);
+        TEST_ASSERT(old32 == 0x12345678, "RtlInterlockedXnorModulo32 returns initial value");
+        TEST_ASSERT(dest32 == expectedRes32, "RtlInterlockedXnorModulo32 updates destination correctly");
+
+        LONG winDest32 = 0x12345678;
+        LONG winOld32 = InterlockedXnorModulo32(&winDest32, val32, mod32);
+        TEST_ASSERT(winOld32 == 0x12345678 && winDest32 == expectedRes32, "Win32 InterlockedXnorModulo32 behaves identically");
+
+        LONG winDest32Generic = 0x12345678;
+        LONG winOldGeneric = InterlockedXnorModulo(&winDest32Generic, val32, mod32);
+        TEST_ASSERT(winOldGeneric == 0x12345678 && winDest32Generic == expectedRes32, "Win32 InterlockedXnorModulo alias behaves identically");
+
+        // 16-bit: RtlInterlockedXnorModulo16 & InterlockedXnorModulo16
+        SHORT dest16 = 0x1234;
+        SHORT val16 = 0x4321;
+        USHORT mod16 = 7919;
+        uint16_t expectedXnor16 = static_cast<uint16_t>(~(static_cast<uint16_t>(dest16) ^ static_cast<uint16_t>(val16)));
+        SHORT expectedRes16 = static_cast<SHORT>(expectedXnor16 % mod16);
+
+        SHORT old16 = RtlInterlockedXnorModulo16(&dest16, val16, mod16);
+        TEST_ASSERT(old16 == 0x1234, "RtlInterlockedXnorModulo16 returns initial value");
+        TEST_ASSERT(dest16 == expectedRes16, "RtlInterlockedXnorModulo16 updates destination correctly");
+
+        SHORT winDest16 = 0x1234;
+        SHORT winOld16 = InterlockedXnorModulo16(&winDest16, val16, mod16);
+        TEST_ASSERT(winOld16 == 0x1234 && winDest16 == expectedRes16, "Win32 InterlockedXnorModulo16 behaves identically");
+
+        // 8-bit: RtlInterlockedXnorModulo8 & InterlockedXnorModulo8
+        CHAR dest8 = static_cast<CHAR>(0x5A);
+        CHAR val8 = static_cast<CHAR>(0xA5);
+        UCHAR mod8 = 97;
+        uint8_t expectedXnor8 = static_cast<uint8_t>(~(static_cast<uint8_t>(dest8) ^ static_cast<uint8_t>(val8)));
+        CHAR expectedRes8 = static_cast<CHAR>(expectedXnor8 % mod8);
+
+        CHAR old8 = RtlInterlockedXnorModulo8(&dest8, val8, mod8);
+        TEST_ASSERT(old8 == static_cast<CHAR>(0x5A), "RtlInterlockedXnorModulo8 returns initial value");
+        TEST_ASSERT(dest8 == expectedRes8, "RtlInterlockedXnorModulo8 updates destination correctly");
+
+        CHAR winDest8 = static_cast<CHAR>(0x5A);
+        CHAR winOld8 = InterlockedXnorModulo8(&winDest8, val8, mod8);
+        TEST_ASSERT(winOld8 == static_cast<CHAR>(0x5A) && winDest8 == expectedRes8, "Win32 InterlockedXnorModulo8 behaves identically");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-Subterranean-XOF & Ascon-Subterranean-Hash Lightweight Cryptography
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-Subterranean-XOF & Ascon-Subterranean-Hash Lightweight Cryptography...\n" << std::flush;
+
+        const std::string msg = "MicaNT-Horizon282-AsconSubterranean-LightweightCryptography-Kernel-Validation";
+        std::span<const uint8_t> msgSpan(reinterpret_cast<const uint8_t*>(msg.data()), msg.size());
+
+        // 1. Direct AsconSubterraneanXof
+        auto xofOut1 = AsconSubterraneanXof::hash(msgSpan);
+        auto xofOut2 = AsconSubterraneanXof::hash(msgSpan);
+        TEST_ASSERT(xofOut1 == xofOut2, "AsconSubterraneanXof is deterministic");
+
+        // 2. Direct AsconSubterraneanHash
+        auto hashOut1 = AsconSubterraneanHash::hash(msgSpan);
+        auto hashOut2 = AsconSubterraneanHash::hash(msgSpan);
+        TEST_ASSERT(hashOut1 == hashOut2, "AsconSubterraneanHash is deterministic");
+        TEST_ASSERT(std::memcmp(xofOut1.data(), hashOut1.data(), 32) != 0, "AsconSubterraneanXof and AsconSubterraneanHash produce distinct domain-separated digests");
+
+        // Avalanche test
+        std::string mutatedMsg = msg;
+        mutatedMsg[0] ^= 0x01;
+        std::span<const uint8_t> mutatedSpan(reinterpret_cast<const uint8_t*>(mutatedMsg.data()), mutatedMsg.size());
+        auto hashMutated = AsconSubterraneanHash::hash(mutatedSpan);
+        int diffBits = 0;
+        for (size_t i = 0; i < 32; ++i) {
+            diffBits += std::popcount(static_cast<uint8_t>(hashOut1[i] ^ hashMutated[i]));
+        }
+        TEST_ASSERT(diffBits >= 80 && diffBits <= 180, "AsconSubterraneanHash achieves cryptographic avalanche (close to 128 bit diffs)");
+
+        // 3. BCrypt CNG Provider Validation - ASCON-SUBTERRANEAN-XOF
+        BCRYPT_ALG_HANDLE hXofAlg = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hXofAlg, BCRYPT_ASCON_SUBTERRANEAN_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXofAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-SUBTERRANEAN-XOF succeeds");
+
+        uint32_t hashLen = 0, blockLen = 0, cbResult = 0;
+        bStatus = BCryptGetProperty(hXofAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty BCRYPT_HASH_LENGTH for ASCON-SUBTERRANEAN-XOF is 32 bytes");
+
+        bStatus = BCryptGetProperty(hXofAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && blockLen == 8, "BCryptGetProperty BCRYPT_BLOCK_LENGTH for ASCON-SUBTERRANEAN-XOF is 8 bytes");
+
+        BCRYPT_HASH_HANDLE hXofHandle = nullptr;
+        bStatus = BCryptCreateHash(hXofAlg, &hXofHandle, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXofHandle != nullptr, "BCryptCreateHash for ASCON-SUBTERRANEAN-XOF succeeds");
+
+        bStatus = BCryptHashData(hXofHandle, const_cast<uint8_t*>(msgSpan.data()), static_cast<uint32_t>(msgSpan.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-SUBTERRANEAN-XOF succeeds");
+
+        std::array<uint8_t, 32> bCryptXof{};
+        bStatus = BCryptFinishHash(hXofHandle, bCryptXof.data(), static_cast<uint32_t>(bCryptXof.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-SUBTERRANEAN-XOF succeeds");
+        TEST_ASSERT(bCryptXof == xofOut1, "BCrypt ASCON-SUBTERRANEAN-XOF matches direct AsconSubterraneanXof output");
+
+        BCryptDestroyHash(hXofHandle);
+        BCryptCloseAlgorithmProvider(hXofAlg, 0);
+
+        // 4. BCrypt CNG Provider Validation - ASCON-SUBTERRANEAN-HASH
+        BCRYPT_ALG_HANDLE hHashAlg = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hHashAlg, BCRYPT_ASCON_SUBTERRANEAN_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHashAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-SUBTERRANEAN-HASH succeeds");
+
+        bStatus = BCryptGetProperty(hHashAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty BCRYPT_HASH_LENGTH for ASCON-SUBTERRANEAN-HASH is 32 bytes");
+
+        bStatus = BCryptGetProperty(hHashAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && blockLen == 8, "BCryptGetProperty BCRYPT_BLOCK_LENGTH for ASCON-SUBTERRANEAN-HASH is 8 bytes");
+
+        BCRYPT_HASH_HANDLE hHashHandle = nullptr;
+        bStatus = BCryptCreateHash(hHashAlg, &hHashHandle, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHashHandle != nullptr, "BCryptCreateHash for ASCON-SUBTERRANEAN-HASH succeeds");
+
+        bStatus = BCryptHashData(hHashHandle, const_cast<uint8_t*>(msgSpan.data()), static_cast<uint32_t>(msgSpan.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-SUBTERRANEAN-HASH succeeds");
+
+        std::array<uint8_t, 32> bCryptHash{};
+        bStatus = BCryptFinishHash(hHashHandle, bCryptHash.data(), static_cast<uint32_t>(bCryptHash.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-SUBTERRANEAN-HASH succeeds");
+        TEST_ASSERT(bCryptHash == hashOut1, "BCrypt ASCON-SUBTERRANEAN-HASH matches direct AsconSubterraneanHash output");
+
+        BCryptDestroyHash(hHashHandle);
+        BCryptCloseAlgorithmProvider(hHashAlg, 0);
+    }
+
+    std::cout << "  Horizon 282 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device59, ID3D12GraphicsCommandList53 & Options 71 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 313 (PagefileAsyncWriteBurstBuffer) & 314 (CpuClockJitter) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise XNOR Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-Subterranean-XOF & Ascon-Subterranean-Hash Lightweight Cryptography OK\n";
+
+    std::cout << "[TEST] Suite 498: Horizon 282 - Direct3D 12 Device59/CommandList53 & Options 71, NT SystemInfo 313/314, Interlocked XnorModulo 64/32/16/8 & NIST Ascon-Subterranean XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon282_Device59Options71_PagefileAsyncWriteBurstBufferCpuClockJitter_InterlockedXnorModulo_And_AsconSubterraneanXofHash_Suite() {
+    Suite498_Direct3D12_Device59_CommandList53_Options71_NTNative_PagefileAsyncWriteBurstBuffer_CpuClockJitter_InterlockedXnorModulo_AsconSubterranean();
+}
+
