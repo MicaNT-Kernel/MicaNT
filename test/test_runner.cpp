@@ -454,6 +454,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite493") {
+        RUN_TEST(Test_Horizon277_Device55Options67_PagefileZeroPageScavengeCpuThermalThrottlingJitter_InterlockedNegateModulo_And_AsconChamXofHash_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite492") {
         RUN_TEST(Test_Horizon276_Device54Options66_PagefileWriteCoalescingCpuLoadLineResonance_InterlockedInvertModulo_And_AsconLeaXofHash_Suite);
         return g_FailedTests;
@@ -2467,6 +2471,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon274_Device52Options64_PagefileCompactionBandwidthLimitingCpuCurrentImbalance_InterlockedRotateLeftModulo_And_AsconSeedXofHash_Suite);
     RUN_TEST(Test_Horizon275_Device53Options65_PagefileFragmentationEntropyCpuPhaseMargin_InterlockedRotateRightModulo_And_AsconHightXofHash_Suite);
     RUN_TEST(Test_Horizon276_Device54Options66_PagefileWriteCoalescingCpuLoadLineResonance_InterlockedInvertModulo_And_AsconLeaXofHash_Suite);
+    RUN_TEST(Test_Horizon277_Device55Options67_PagefileZeroPageScavengeCpuThermalThrottlingJitter_InterlockedNegateModulo_And_AsconChamXofHash_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

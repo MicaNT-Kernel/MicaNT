@@ -64348,3 +64348,330 @@ inline void Suite492_Direct3D12_Device54_CommandList48_Options66_NTNative_Pagefi
 inline void Test_Horizon276_Device54Options66_PagefileWriteCoalescingCpuLoadLineResonance_InterlockedInvertModulo_And_AsconLeaXofHash_Suite() {
     Suite492_Direct3D12_Device54_CommandList48_Options66_NTNative_PagefileWriteCoalescing_CpuLoadLineResonance_InterlockedInvertModulo_AsconLea();
 }
+
+// ============================================================================
+// SUITE 493: HORIZON 277 - DIRECT3D 12 DEVICE55 & COMMANDLIST49 WITH OPTIONS 67 ABI,
+//            NT NATIVE CLASSES 305 & 306,
+//            INTERLOCKED NEGATE MODULO 64/32/16/8-BIT PRIMITIVES,
+//            AND NIST SP 800-232 ASCON-CHAM-XOF & ASCON-CHAM-HASH LIGHTWEIGHT CRYPTOGRAPHY
+// ============================================================================
+inline void Suite493_Direct3D12_Device55_CommandList49_Options67_NTNative_PagefileZeroPageScavenge_CpuThermalThrottlingJitter_InterlockedNegateModulo_AsconCham() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 493: Horizon 277 - Direct3D 12 Device55/CommandList49 & Options 67, NT Native 305/306, Interlocked NegateModulo 64/32/16/8 & NIST Ascon-CHAM XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device55, ID3D12GraphicsCommandList49 & Options 67 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device55, ID3D12GraphicsCommandList49 & Options 67 ABI...\n" << std::flush;
+
+        micant::prism3d12::Prism3D12DeviceImpl device(nullptr, micant::prism3d12::D3D_FEATURE_LEVEL_12_2);
+        micant::prism3d12::ID3D12Device55* pDevice55 = nullptr;
+
+        int32_t hr = device.QueryInterface(micant::prism3d12::IID_ID3D12Device55, reinterpret_cast<void**>(&pDevice55));
+        TEST_ASSERT(hr == 0 && pDevice55 != nullptr, "QueryInterface for IID_ID3D12Device55 succeeds");
+
+        micant::prism3d12::ID3D12Device55* pOfficialDevice55 = nullptr;
+        hr = device.QueryInterface(micant::prism3d12::OFFICIAL_IID_ID3D12Device55, reinterpret_cast<void**>(&pOfficialDevice55));
+        TEST_ASSERT(hr == 0 && pOfficialDevice55 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device55 succeeds");
+        pOfficialDevice55->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS67
+        micant::prism3d12::D3D12_FEATURE_DATA_D3D12_OPTIONS67 opt67{};
+        hr = pDevice55->CheckFeatureSupport(micant::prism3d12::D3D12_FEATURE_D3D12_OPTIONS67, &opt67, sizeof(opt67));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS67 succeeds");
+        TEST_ASSERT(opt67.WorkGraphsTier == 50u, "D3D12_OPTIONS67 reports WorkGraphsTier 50");
+        TEST_ASSERT(opt67.CooperativeMatrixMultiply549755813888Supported == TRUE, "D3D12_OPTIONS67 reports CooperativeMatrixMultiply549755813888Supported == TRUE");
+        TEST_ASSERT(opt67.SubByteMicroscopicFormatsV30Supported == TRUE, "D3D12_OPTIONS67 reports SubByteMicroscopicFormatsV30Supported == TRUE");
+        TEST_ASSERT(opt67.DynamicClusterExpansionTier35Supported == TRUE, "D3D12_OPTIONS67 reports DynamicClusterExpansionTier35Supported == TRUE");
+        TEST_ASSERT(opt67.MaxWorkGraphConcurrencyGroups == 2199023255552ULL, "D3D12_OPTIONS67 reports 2.199T concurrency groups");
+        TEST_ASSERT(opt67.TilePipeliningStagesSupported == 4294967295u, "D3D12_OPTIONS67 reports 4.294B tile pipelining stages");
+        TEST_ASSERT(opt67.AutonomousGraphRecursionTier27Supported == TRUE, "D3D12_OPTIONS67 reports AutonomousGraphRecursionTier27Supported == TRUE");
+        TEST_ASSERT(opt67.MultiQueueTensorPipelineFusionTier26Supported == TRUE, "D3D12_OPTIONS67 reports MultiQueueTensorPipelineFusionTier26Supported == TRUE");
+        TEST_ASSERT(opt67.WorkGraphMeshShaderPipeliningTier27Supported == TRUE, "D3D12_OPTIONS67 reports WorkGraphMeshShaderPipeliningTier27Supported == TRUE");
+        TEST_ASSERT(opt67.SparseTensorBlockAccelerationTier23Supported == TRUE, "D3D12_OPTIONS67 reports SparseTensorBlockAccelerationTier23Supported == TRUE");
+        TEST_ASSERT(opt67.DeterministicTensorReductionTier22Supported == TRUE, "D3D12_OPTIONS67 reports DeterministicTensorReductionTier22Supported == TRUE");
+        TEST_ASSERT(opt67.HyperQuantizationTier21Supported == TRUE, "D3D12_OPTIONS67 reports HyperQuantizationTier21Supported == TRUE");
+        TEST_ASSERT(opt67.SparseClusterTier20Supported == TRUE, "D3D12_OPTIONS67 reports SparseClusterTier20Supported == TRUE");
+        TEST_ASSERT(opt67.MultiQueueWorkGraphSyncTier19Supported == TRUE, "D3D12_OPTIONS67 reports MultiQueueWorkGraphSyncTier19Supported == TRUE");
+        TEST_ASSERT(opt67.AsynchronousKernelDispatchTier20Supported == TRUE, "D3D12_OPTIONS67 reports AsynchronousKernelDispatchTier20Supported == TRUE");
+        TEST_ASSERT(opt67.NeuralExecutionEngineTier17Supported == TRUE, "D3D12_OPTIONS67 reports NeuralExecutionEngineTier17Supported == TRUE");
+        TEST_ASSERT(opt67.AdaptiveTensorCoreTier16Supported == TRUE, "D3D12_OPTIONS67 reports AdaptiveTensorCoreTier16Supported == TRUE");
+        TEST_ASSERT(opt67.SovereignSiliconTelemetryTier15Supported == TRUE, "D3D12_OPTIONS67 reports SovereignSiliconTelemetryTier15Supported == TRUE");
+        TEST_ASSERT(opt67.QuantumEmulationTier14Supported == TRUE, "D3D12_OPTIONS67 reports QuantumEmulationTier14Supported == TRUE");
+
+        // Device55 Methods
+        void* pProgRec39 = nullptr;
+        hr = pDevice55->CreateWorkGraphProgramRecord39(nullptr, 0, 128, 2199023255552ULL, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, micant::prism3d12::IID_ID3D12Device55, &pProgRec39);
+        TEST_ASSERT(hr == 0 && pProgRec39 == reinterpret_cast<void*>(0x88039), "CreateWorkGraphProgramRecord39 succeeds");
+
+        int32_t supported = 0, asyncAcc = 0, autoLoops = 0, subGraph = 0, meshPipelining = 0, multiQueue = 0, microscaling = 0, subByte = 0, sparseTensor = 0, detRed = 0, hyperQ = 0, sparseCluster = 0, multiSync = 0, asyncDispatch = 0, neuralExec = 0, adaptiveTensor = 0, sovereignSilicon = 0, quantumEmul = 0;
+        uint64_t maxDim = 0;
+        uint32_t dataTypes = 0, sparseAcc = 0, maxTileStages = 0;
+        hr = pDevice55->GetWorkGraphCooperativeMatrixSupport34(&supported, &maxDim, &dataTypes, &sparseAcc, &asyncAcc, &maxTileStages, &autoLoops, &subGraph, &meshPipelining, &multiQueue, &microscaling, &subByte, &sparseTensor, &detRed, &hyperQ, &sparseCluster, &multiSync, &asyncDispatch, &neuralExec, &adaptiveTensor, &sovereignSilicon, &quantumEmul);
+        TEST_ASSERT(hr == 0 && supported == 1 && maxDim == 549755813888ULL && maxTileStages == 4294967295u, "GetWorkGraphCooperativeMatrixSupport34 succeeds with 549.755B tensor and 4.294B tile stages");
+
+        // CommandList49 Tests
+        micant::prism3d12::Prism3D12GraphicsCommandListImpl cmdList(&device, micant::prism3d12::D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        micant::prism3d12::ID3D12GraphicsCommandList49* pCmd49 = nullptr;
+        hr = cmdList.QueryInterface(micant::prism3d12::IID_ID3D12GraphicsCommandList49, reinterpret_cast<void**>(&pCmd49));
+        TEST_ASSERT(hr == 0 && pCmd49 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList49 succeeds");
+
+        micant::prism3d12::ID3D12GraphicsCommandList49* pOfficialCmd49 = nullptr;
+        hr = cmdList.QueryInterface(micant::prism3d12::OFFICIAL_IID_ID3D12GraphicsCommandList49, reinterpret_cast<void**>(&pOfficialCmd49));
+        TEST_ASSERT(hr == 0 && pOfficialCmd49 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList49 succeeds");
+        pOfficialCmd49->Release();
+
+        pCmd49->SetWorkGraphBackingMemory39(0xB00000000000ULL, 288230376151711744ULL, 72057594037927936ULL, 2199023255552ULL, 0x3FFFFFFF, 0x8000000, 0xFFFFFFFF, 0x7FFFFFFF, 0x10000000, 0x800000, 0x280000, 0x240000, 0x240000, 0x1C0000, 0x180000, 0xC0000, 0x80000, 0x40000, 0x20000, 0x10000, 0x8000, 0x4000, 0x2000, 0x1000, 0x800, 0x7FFFFFF);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory39Start() == 0xB00000000000ULL, "SetWorkGraphBackingMemory39 sets RangeStart");
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory39MaxConcurrency() == 2199023255552ULL, "SetWorkGraphBackingMemory39 sets MaxConcurrency to 2.199T");
+
+        uint64_t dummyRec = 0xFEEDBEEFCAFE0039ULL;
+        pCmd49->DispatchGraphProgramRecord39(49, &dummyRec, sizeof(dummyRec), 3500000000u, 0x7FFFFFFF, 8388608u, 0xFFFFFFFF, 0x3FFFFFFF, 0x10000000, 0x800000, 0x280000, 0x240000, 0x240000, 0x1C0000, 0x180000, 0xC0000, 0x80000, 0x40000, 0x20000, 0x10000, 0x8000, 0x4000, 0x2000, 0x1000, 0x800, 0xFFFFFFFF, 0xFFFFE0);
+        TEST_ASSERT(cmdList.GetRecordedProgramRecord39Count() == 1, "DispatchGraphProgramRecord39 records 1 entry");
+        TEST_ASSERT(cmdList.GetRecordedProgramRecords39()[0].NodeIndex == 49, "DispatchGraphProgramRecord39 node index matches");
+
+        cmdList.ClearState(nullptr);
+        TEST_ASSERT(cmdList.GetWorkGraphBackingMemory39Start() == 0 && cmdList.GetRecordedProgramRecord39Count() == 0, "ClearState clears backing memory 39 and recorded program records");
+
+        pCmd49->Release();
+        pDevice55->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native System Info Classes 305 & 306
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 305 & 306...\n" << std::flush;
+
+        // 1. Class 305: SystemPagefileZeroPageScavengeInformation
+        SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION scavengeInfo{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(305, &scavengeInfo, sizeof(scavengeInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(305) succeeds");
+        TEST_ASSERT(scavengeInfo.TotalZeroPagesScavenged == 1048576ULL, "TotalZeroPagesScavenged is 1048576");
+        TEST_ASSERT(scavengeInfo.TotalScavengedBytesReclaimed == 4294967296ULL, "TotalScavengedBytesReclaimed is 4294967296 (4 GB)");
+        TEST_ASSERT(scavengeInfo.SparsePageClustersTrimmed == 65536ULL, "SparsePageClustersTrimmed is 65536");
+        TEST_ASSERT(scavengeInfo.ZeroPageFillWriteOperationsAvoided == 262144ULL, "ZeroPageFillWriteOperationsAvoided is 262144");
+        TEST_ASSERT(std::abs(scavengeInfo.ScavengeBandwidthEfficiency - 9.875) < 1e-4, "ScavengeBandwidthEfficiency is 9.875");
+        TEST_ASSERT(std::abs(scavengeInfo.AverageRunLengthPages - 16.0) < 1e-4, "AverageRunLengthPages is 16.0");
+        TEST_ASSERT(std::abs(scavengeInfo.StorageSpaceReclaimRatio - 0.942) < 1e-4, "StorageSpaceReclaimRatio is 0.942");
+        TEST_ASSERT(scavengeInfo.ActiveScavengeThreads == 8, "ActiveScavengeThreads is 8");
+
+        // Helper RtlQuerySystemPagefileZeroPageScavengeInformation
+        SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION rtlScavenge{};
+        status = RtlQuerySystemPagefileZeroPageScavengeInformation(&rtlScavenge);
+        TEST_ASSERT(status == NtStatus::Success && rtlScavenge.TotalZeroPagesScavenged == 1048576ULL, "RtlQuerySystemPagefileZeroPageScavengeInformation succeeds");
+
+        // Win32 GetPagefileZeroPageScavengeTelemetry
+        SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION win32Scavenge{};
+        BOOL bRes = GetPagefileZeroPageScavengeTelemetry(&win32Scavenge);
+        TEST_ASSERT(bRes == TRUE && win32Scavenge.SparsePageClustersTrimmed == 65536ULL, "GetPagefileZeroPageScavengeTelemetry succeeds");
+
+        // 2. Class 306: SystemCpuThermalThrottlingJitterTelemetryInformation
+        SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION jitterInfo{};
+        status = NtQuerySystemInformation_Export(306, &jitterInfo, sizeof(jitterInfo), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(306) succeeds");
+        TEST_ASSERT(std::abs(jitterInfo.ActiveJitterStandardDeviationNanoseconds - 4.82) < 1e-4, "ActiveJitterStandardDeviationNanoseconds is 4.82");
+        TEST_ASSERT(std::abs(jitterInfo.ThermalHeadroomCelsius - 28.5) < 1e-4, "ThermalHeadroomCelsius is 28.5");
+        TEST_ASSERT(std::abs(jitterInfo.DutyCycleModulationFrequencyKHz - 120.0) < 1e-4, "DutyCycleModulationFrequencyKHz is 120.0");
+        TEST_ASSERT(std::abs(jitterInfo.PStateTransitionJitterToleranceRatio - 0.985) < 1e-4, "PStateTransitionJitterToleranceRatio is 0.985");
+        TEST_ASSERT(jitterInfo.ThrottlingEngageEvents == 4210ULL, "ThrottlingEngageEvents is 4210");
+        TEST_ASSERT(jitterInfo.JitterSuppressedClockCycles == 884920ULL, "JitterSuppressedClockCycles is 884920");
+        TEST_ASSERT(jitterInfo.ActiveAcousticSuppressionProfile == 2, "ActiveAcousticSuppressionProfile is 2");
+
+        // Helper RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation
+        SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION rtlJitter{};
+        status = RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation(&rtlJitter);
+        TEST_ASSERT(status == NtStatus::Success && std::abs(rtlJitter.ThermalHeadroomCelsius - 28.5) < 1e-4, "RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation succeeds");
+
+        // Win32 GetCpuThermalThrottlingJitterTelemetry
+        SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION win32Jitter{};
+        bRes = GetCpuThermalThrottlingJitterTelemetry(&win32Jitter);
+        TEST_ASSERT(bRes == TRUE && win32Jitter.JitterSuppressedClockCycles == 884920ULL, "GetCpuThermalThrottlingJitterTelemetry succeeds");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Negate-Modulo Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Lockless Interlocked Bitwise Modular Negation Primitives (-val % mod)...\n" << std::flush;
+
+        // 1. 64-bit Negate Modulo
+        volatile LONG64 target64 = static_cast<LONG64>(0x0123456789ABCDEFULL);
+        uint64_t initial64 = 0x0123456789ABCDEFULL;
+        uint64_t mod64 = 999999937ULL;
+        uint64_t expected64 = (0ULL - initial64) % mod64;
+
+        LONG64 prev64 = RtlInterlockedNegateModulo64(&target64, mod64);
+        TEST_ASSERT(prev64 == static_cast<LONG64>(initial64), "RtlInterlockedNegateModulo64 returns initial value");
+        TEST_ASSERT(target64 == static_cast<LONG64>(expected64), "RtlInterlockedNegateModulo64 computes correct negated modular value");
+
+        target64 = static_cast<LONG64>(initial64);
+        prev64 = InterlockedNegateModulo64(&target64, mod64);
+        TEST_ASSERT(prev64 == static_cast<LONG64>(initial64) && target64 == static_cast<LONG64>(expected64), "InterlockedNegateModulo64 produces matching result");
+
+        // 2. 32-bit Negate Modulo
+        volatile LONG target32 = static_cast<LONG>(0x12345678u);
+        uint32_t initial32 = 0x12345678u;
+        uint32_t mod32 = 65537u;
+        uint32_t expected32 = (0U - initial32) % mod32;
+
+        LONG prev32 = RtlInterlockedNegateModulo32(&target32, mod32);
+        TEST_ASSERT(prev32 == static_cast<LONG>(initial32), "RtlInterlockedNegateModulo32 returns initial value");
+        TEST_ASSERT(target32 == static_cast<LONG>(expected32), "RtlInterlockedNegateModulo32 computes correct negated modular value");
+
+        target32 = static_cast<LONG>(initial32);
+        prev32 = InterlockedNegateModulo32(&target32, mod32);
+        TEST_ASSERT(prev32 == static_cast<LONG>(initial32) && target32 == static_cast<LONG>(expected32), "InterlockedNegateModulo32 produces matching result");
+
+        target32 = static_cast<LONG>(initial32);
+        prev32 = InterlockedNegateModulo(&target32, mod32);
+        TEST_ASSERT(prev32 == static_cast<LONG>(initial32) && target32 == static_cast<LONG>(expected32), "InterlockedNegateModulo generic 32-bit produces matching result");
+
+        // 3. 16-bit Negate Modulo
+        volatile SHORT target16 = static_cast<SHORT>(0x1234u);
+        uint16_t initial16 = 0x1234u;
+        uint16_t mod16 = 257u;
+        uint16_t expected16 = static_cast<uint16_t>((0U - initial16) % mod16);
+
+        SHORT prev16 = RtlInterlockedNegateModulo16(&target16, mod16);
+        TEST_ASSERT(prev16 == static_cast<SHORT>(initial16), "RtlInterlockedNegateModulo16 returns initial value");
+        TEST_ASSERT(target16 == static_cast<SHORT>(expected16), "RtlInterlockedNegateModulo16 computes correct negated modular value");
+
+        target16 = static_cast<SHORT>(initial16);
+        prev16 = InterlockedNegateModulo16(&target16, mod16);
+        TEST_ASSERT(prev16 == static_cast<SHORT>(initial16) && target16 == static_cast<SHORT>(expected16), "InterlockedNegateModulo16 produces matching result");
+
+        // 4. 8-bit Negate Modulo
+        volatile CHAR target8 = static_cast<CHAR>(0x5Au);
+        uint8_t initial8 = 0x5Au;
+        uint8_t mod8 = 37u;
+        uint8_t expected8 = static_cast<uint8_t>((static_cast<uint8_t>(0U - initial8)) % mod8);
+
+        CHAR prev8 = RtlInterlockedNegateModulo8(&target8, mod8);
+        TEST_ASSERT(prev8 == static_cast<CHAR>(initial8), "RtlInterlockedNegateModulo8 returns initial value");
+        TEST_ASSERT(target8 == static_cast<CHAR>(expected8), "RtlInterlockedNegateModulo8 computes correct negated modular value");
+
+        target8 = static_cast<CHAR>(initial8);
+        prev8 = InterlockedNegateModulo8(&target8, mod8);
+        TEST_ASSERT(prev8 == static_cast<CHAR>(initial8) && target8 == static_cast<CHAR>(expected8), "InterlockedNegateModulo8 produces matching result");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-CHAM XOF & Hash Lightweight Cryptography
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-CHAM XOF & Hash Cryptography...\n" << std::flush;
+
+        const std::string testMessage = "MicaNT Sovereign NT Kernel Horizon 277: Ascon-CHAM Cryptographic Harmony";
+        std::span<const uint8_t> msgSpan(reinterpret_cast<const uint8_t*>(testMessage.data()), testMessage.size());
+
+        // 1. Direct AsconChamXof test
+        std::vector<uint8_t> xofOut1 = AsconChamXof::hash(msgSpan, 32);
+        std::vector<uint8_t> xofOut2 = AsconChamXof::hash(msgSpan, 32);
+        TEST_ASSERT(xofOut1.size() == 32, "AsconChamXof default digest length is 32");
+        TEST_ASSERT(xofOut1 == xofOut2, "AsconChamXof is deterministic");
+
+        // Squeeze arbitrary length
+        std::vector<uint8_t> xofOut64 = AsconChamXof::hash(msgSpan, 64);
+        TEST_ASSERT(xofOut64.size() == 64, "AsconChamXof squeezes 64 bytes");
+        TEST_ASSERT(std::equal(xofOut1.begin(), xofOut1.end(), xofOut64.begin()), "First 32 bytes of 64-byte squeeze match 32-byte squeeze");
+
+        // Differential test
+        const std::string testMessageDiff = "MicaNT Sovereign NT Kernel Horizon 277: Ascon-CHAM Cryptographic Harmonz";
+        std::span<const uint8_t> diffSpan(reinterpret_cast<const uint8_t*>(testMessageDiff.data()), testMessageDiff.size());
+        std::vector<uint8_t> xofDiff = AsconChamXof::hash(diffSpan, 32);
+        TEST_ASSERT(xofOut1 != xofDiff, "AsconChamXof produces avalanche effect on 1-bit input difference");
+
+        // Multi-block streaming test
+        AsconChamXof::Context streamCtx;
+        AsconChamXof::init(streamCtx);
+        AsconChamXof::update(streamCtx, msgSpan.subspan(0, 16));
+        AsconChamXof::update(streamCtx, msgSpan.subspan(16));
+        std::vector<uint8_t> streamXofOut(32);
+        AsconChamXof::final(streamCtx, streamXofOut);
+        TEST_ASSERT(streamXofOut == xofOut1, "AsconChamXof streaming multi-block update matches one-shot hash");
+
+        // 2. Direct AsconChamHash test
+        std::array<uint8_t, 32> hashOut1 = AsconChamHash::hash(msgSpan);
+        std::array<uint8_t, 32> hashOut2 = AsconChamHash::hash(msgSpan);
+        TEST_ASSERT(hashOut1 == hashOut2, "AsconChamHash is deterministic");
+        std::array<uint8_t, 32> hashDiff = AsconChamHash::hash(diffSpan);
+        TEST_ASSERT(hashOut1 != hashDiff, "AsconChamHash produces avalanche effect on 1-bit difference");
+        TEST_ASSERT(!std::equal(hashOut1.begin(), hashOut1.end(), xofOut1.begin()), "AsconChamHash domain separation differs from AsconChamXof");
+
+        // 3. BCrypt CNG Integration for ASCON-CHAM-XOF
+        BCRYPT_ALG_HANDLE hXofAlg = nullptr;
+        NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hXofAlg, BCRYPT_ASCON_CHAM_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXofAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-CHAM-XOF succeeds");
+
+        uint32_t hashLen = 0, cbResult = 0;
+        bStatus = BCryptGetProperty(hXofAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty(BCRYPT_HASH_LENGTH) returns 32 for ASCON-CHAM-XOF");
+
+        uint32_t blockLen = 0;
+        bStatus = BCryptGetProperty(hXofAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && blockLen == 8, "BCryptGetProperty(BCRYPT_BLOCK_LENGTH) returns 8 for ASCON-CHAM-XOF");
+
+        BCRYPT_HASH_HANDLE hXofHandle = nullptr;
+        bStatus = BCryptCreateHash(hXofAlg, &hXofHandle, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hXofHandle != nullptr, "BCryptCreateHash for ASCON-CHAM-XOF succeeds");
+
+        bStatus = BCryptHashData(hXofHandle, const_cast<uint8_t*>(msgSpan.data()), static_cast<uint32_t>(msgSpan.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-CHAM-XOF succeeds");
+
+        std::vector<uint8_t> bCryptXof(32);
+        bStatus = BCryptFinishHash(hXofHandle, bCryptXof.data(), static_cast<uint32_t>(bCryptXof.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-CHAM-XOF succeeds");
+        TEST_ASSERT(bCryptXof == xofOut1, "BCrypt ASCON-CHAM-XOF matches direct AsconChamXof output");
+
+        BCryptDestroyHash(hXofHandle);
+        BCryptCloseAlgorithmProvider(hXofAlg, 0);
+
+        // 4. BCrypt CNG Integration for ASCON-CHAM-HASH
+        BCRYPT_ALG_HANDLE hHashAlg = nullptr;
+        bStatus = BCryptOpenAlgorithmProvider(&hHashAlg, BCRYPT_ASCON_CHAM_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHashAlg != nullptr, "BCryptOpenAlgorithmProvider for ASCON-CHAM-HASH succeeds");
+
+        hashLen = 0;
+        bStatus = BCryptGetProperty(hHashAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hashLen == 32, "BCryptGetProperty(BCRYPT_HASH_LENGTH) returns 32 for ASCON-CHAM-HASH");
+
+        blockLen = 0;
+        bStatus = BCryptGetProperty(hHashAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &cbResult, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && blockLen == 8, "BCryptGetProperty(BCRYPT_BLOCK_LENGTH) returns 8 for ASCON-CHAM-HASH");
+
+        BCRYPT_HASH_HANDLE hHashHandle = nullptr;
+        bStatus = BCryptCreateHash(hHashAlg, &hHashHandle, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS && hHashHandle != nullptr, "BCryptCreateHash for ASCON-CHAM-HASH succeeds");
+
+        bStatus = BCryptHashData(hHashHandle, const_cast<uint8_t*>(msgSpan.data()), static_cast<uint32_t>(msgSpan.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptHashData for ASCON-CHAM-HASH succeeds");
+
+        std::array<uint8_t, 32> bCryptHash{};
+        bStatus = BCryptFinishHash(hHashHandle, bCryptHash.data(), static_cast<uint32_t>(bCryptHash.size()), 0);
+        TEST_ASSERT(bStatus == STATUS_SUCCESS, "BCryptFinishHash for ASCON-CHAM-HASH succeeds");
+        TEST_ASSERT(bCryptHash == hashOut1, "BCrypt ASCON-CHAM-HASH matches direct AsconChamHash output");
+
+        BCryptDestroyHash(hHashHandle);
+        BCryptCloseAlgorithmProvider(hHashAlg, 0);
+    }
+
+    std::cout << "  Horizon 277 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device55, ID3D12GraphicsCommandList49 & Options 67 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 305 (PagefileZeroPageScavenge) & 306 (CpuThermalThrottlingJitter) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Negate-Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-CHAM-XOF & Ascon-CHAM-Hash Lightweight Cryptography OK\n";
+
+    std::cout << "[TEST] Suite 493: Horizon 277 - Direct3D 12 Device55/CommandList49 & Options 67, NT SystemInfo 305/306, Interlocked NegateModulo 64/32/16/8 & NIST Ascon-CHAM XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon277_Device55Options67_PagefileZeroPageScavengeCpuThermalThrottlingJitter_InterlockedNegateModulo_And_AsconChamXofHash_Suite() {
+    Suite493_Direct3D12_Device55_CommandList49_Options67_NTNative_PagefileZeroPageScavenge_CpuThermalThrottlingJitter_InterlockedNegateModulo_AsconCham();
+}

@@ -9732,6 +9732,26 @@ inline CHAR WINAPI InterlockedInvertModulo8(CHAR volatile* Destination, UCHAR Mo
     return ntdll::RtlInterlockedInvertModulo8(Destination, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedNegateModulo64(LONG64 volatile* Destination, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedNegateModulo64(Destination, Modulus);
+}
+
+inline LONG WINAPI InterlockedNegateModulo(LONG volatile* Destination, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedNegateModulo32(Destination, Modulus);
+}
+
+inline LONG WINAPI InterlockedNegateModulo32(LONG volatile* Destination, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedNegateModulo32(Destination, Modulus);
+}
+
+inline SHORT WINAPI InterlockedNegateModulo16(SHORT volatile* Destination, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedNegateModulo16(Destination, Modulus);
+}
+
+inline CHAR WINAPI InterlockedNegateModulo8(CHAR volatile* Destination, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedNegateModulo8(Destination, Modulus);
+}
+
 inline ULONG64 WINAPI InterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     return ntdll::RtlInterlockedRotateRight64(Destination, ShiftCount);
 }
@@ -10144,6 +10164,16 @@ inline BOOL WINAPI GetPagefileWriteCoalescingEfficiencyTelemetry(ntdll::SYSTEM_P
 inline BOOL WINAPI GetCpuLoadLineResonanceDampingTelemetry(ntdll::SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuLoadLineResonanceDampingInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileZeroPageScavengeTelemetry(ntdll::SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileZeroPageScavengeInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuThermalThrottlingJitterTelemetry(ntdll::SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -12401,6 +12431,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedInvertModulo32", reinterpret_cast<void*>(InterlockedInvertModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedInvertModulo16", reinterpret_cast<void*>(InterlockedInvertModulo16));
     ldr.registerExport("kernel32.dll", "InterlockedInvertModulo8", reinterpret_cast<void*>(InterlockedInvertModulo8));
+    ldr.registerExport("kernel32.dll", "InterlockedNegateModulo64", reinterpret_cast<void*>(InterlockedNegateModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedNegateModulo", reinterpret_cast<void*>(InterlockedNegateModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedNegateModulo32", reinterpret_cast<void*>(InterlockedNegateModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedNegateModulo16", reinterpret_cast<void*>(InterlockedNegateModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedNegateModulo8", reinterpret_cast<void*>(InterlockedNegateModulo8));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight64", reinterpret_cast<void*>(InterlockedRotateRight64));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight", reinterpret_cast<void*>(InterlockedRotateRight));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight32", reinterpret_cast<void*>(InterlockedRotateRight32));
@@ -12511,6 +12546,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuPhaseMarginStabilityTelemetry", reinterpret_cast<void*>(GetCpuPhaseMarginStabilityTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingEfficiencyTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuLoadLineResonanceDampingTelemetry", reinterpret_cast<void*>(GetCpuLoadLineResonanceDampingTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileZeroPageScavengeTelemetry", reinterpret_cast<void*>(GetPagefileZeroPageScavengeTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuThermalThrottlingJitterTelemetry", reinterpret_cast<void*>(GetCpuThermalThrottlingJitterTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

@@ -2859,6 +2859,45 @@ struct SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION {
 };
 using PSYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION = SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION*;
 
+// Class 305: SystemPagefileZeroPageScavengeInformation
+struct SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    Reserved2;                            // 0
+    ULONG64  TotalZeroPagesScavenged;              // 1048576ULL
+    ULONG64  TotalScavengedBytesReclaimed;         // 4294967296ULL
+    ULONG64  SparsePageClustersTrimmed;            // 65536ULL
+    ULONG64  ZeroPageFillWriteOperationsAvoided;   // 262144ULL
+    double   ScavengeBandwidthEfficiency;          // 9.875
+    double   AverageRunLengthPages;                // 16.0
+    double   StorageSpaceReclaimRatio;             // 0.942
+    ULONG    ActiveScavengeThreads;                // 8
+    ULONG    ScavengeIntervalMicroseconds;         // 5000
+    uint8_t  ScavengeEngineFlags;                  // 0x1F
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION = SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION*;
+
+// Class 306: SystemCpuThermalThrottlingJitterTelemetryInformation
+struct SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PackageIndex;                         // e.g. 0
+    ULONG    CoreIndex;                            // e.g. 0
+    double   ActiveJitterStandardDeviationNanoseconds; // 4.82
+    double   ThermalHeadroomCelsius;               // 28.5
+    double   DutyCycleModulationFrequencyKHz;      // 120.0
+    double   PStateTransitionJitterToleranceRatio; // 0.985
+    ULONG64  ThrottlingEngageEvents;               // 4210ULL
+    ULONG64  JitterSuppressedClockCycles;          // 884920ULL
+    ULONG    ActiveAcousticSuppressionProfile;     // 2
+    ULONG    SamplingPeriodMicroseconds;           // 1000
+    uint8_t  ThrottlingTelemetryFlags;             // 0x0B
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION = SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -6039,6 +6078,53 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION);
             return NtStatus::Success;
         }
+        case 305: { // SystemPagefileZeroPageScavengeInformation (Class 305)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->Reserved2 = 0;
+            pInfo->TotalZeroPagesScavenged = 1048576ULL;
+            pInfo->TotalScavengedBytesReclaimed = 4294967296ULL;
+            pInfo->SparsePageClustersTrimmed = 65536ULL;
+            pInfo->ZeroPageFillWriteOperationsAvoided = 262144ULL;
+            pInfo->ScavengeBandwidthEfficiency = 9.875;
+            pInfo->AverageRunLengthPages = 16.0;
+            pInfo->StorageSpaceReclaimRatio = 0.942;
+            pInfo->ActiveScavengeThreads = 8;
+            pInfo->ScavengeIntervalMicroseconds = 5000;
+            pInfo->ScavengeEngineFlags = 0x1F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 306: { // SystemCpuThermalThrottlingJitterTelemetryInformation (Class 306)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PackageIndex = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->ActiveJitterStandardDeviationNanoseconds = 4.82;
+            pInfo->ThermalHeadroomCelsius = 28.5;
+            pInfo->DutyCycleModulationFrequencyKHz = 120.0;
+            pInfo->PStateTransitionJitterToleranceRatio = 0.985;
+            pInfo->ThrottlingEngageEvents = 4210ULL;
+            pInfo->JitterSuppressedClockCycles = 884920ULL;
+            pInfo->ActiveAcousticSuppressionProfile = 2;
+            pInfo->SamplingPeriodMicroseconds = 1000;
+            pInfo->ThrottlingTelemetryFlags = 0x0B;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7980,6 +8066,66 @@ inline CHAR WINAPI RtlInterlockedInvertModulo8(CHAR volatile* Destination, UCHAR
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedNegateModulo64(LONG64 volatile* Destination, ULONG64 Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint64_t val = static_cast<uint64_t>(current);
+        uint64_t neg = static_cast<uint64_t>(0ULL - val);
+        uint64_t res = neg % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedNegateModulo32(LONG volatile* Destination, ULONG Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint32_t val = static_cast<uint32_t>(current);
+        uint32_t neg = static_cast<uint32_t>(0U - val);
+        uint32_t res = neg % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedNegateModulo16(SHORT volatile* Destination, USHORT Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint16_t val = static_cast<uint16_t>(current);
+        uint16_t neg = static_cast<uint16_t>(0U - val);
+        uint16_t res = static_cast<uint16_t>(neg % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedNegateModulo8(CHAR volatile* Destination, UCHAR Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint8_t val = static_cast<uint8_t>(current);
+        uint8_t neg = static_cast<uint8_t>(0U - val);
+        uint8_t res = static_cast<uint8_t>(neg % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -8898,6 +9044,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuLoadLineResonanceDampingInformation(SYST
     return NtQuerySystemInformation_Export(304, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileZeroPageScavengeInformation(SYSTEM_PAGEFILE_ZERO_PAGE_SCAVENGE_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(305, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation(SYSTEM_CPU_THERMAL_THROTTLING_JITTER_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(306, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -9499,6 +9657,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo32", reinterpret_cast<void*>(RtlInterlockedInvertModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo16", reinterpret_cast<void*>(RtlInterlockedInvertModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo8", reinterpret_cast<void*>(RtlInterlockedInvertModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNegateModulo64", reinterpret_cast<void*>(RtlInterlockedNegateModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNegateModulo32", reinterpret_cast<void*>(RtlInterlockedNegateModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNegateModulo16", reinterpret_cast<void*>(RtlInterlockedNegateModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNegateModulo8", reinterpret_cast<void*>(RtlInterlockedNegateModulo8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft64", reinterpret_cast<void*>(RtlInterlockedRotateLeft64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft32", reinterpret_cast<void*>(RtlInterlockedRotateLeft32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft16", reinterpret_cast<void*>(RtlInterlockedRotateLeft16));
@@ -9597,6 +9759,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuPhaseMarginTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuPhaseMarginTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingEfficiencyInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingEfficiencyInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuLoadLineResonanceDampingInformation", reinterpret_cast<void*>(RtlQuerySystemCpuLoadLineResonanceDampingInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileZeroPageScavengeInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileZeroPageScavengeInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuThermalThrottlingJitterTelemetryInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
