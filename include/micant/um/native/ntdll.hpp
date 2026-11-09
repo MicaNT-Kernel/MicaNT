@@ -7874,9 +7874,46 @@ inline LONG64 WINAPI RtlInterlockedMulModulo64(LONG64 volatile* Destination, LON
     if (Modulus <= 0) return atomicDest->load(std::memory_order_relaxed);
     LONG64 current = atomicDest->load(std::memory_order_relaxed);
     while (true) {
-        __int128 prod = static_cast<__int128>(current) * static_cast<__int128>(Multiplier);
-        LONG64 next = static_cast<LONG64>(prod % Modulus);
-        if (next < 0) next += Modulus;
+        bool neg = false;
+        uint64_t uCurrent;
+        if (current < 0) {
+            neg = !neg;
+            uCurrent = static_cast<uint64_t>(-static_cast<__int128>(current));
+        } else {
+            uCurrent = static_cast<uint64_t>(current);
+        }
+
+        uint64_t uMult;
+        if (Multiplier < 0) {
+            neg = !neg;
+            uMult = static_cast<uint64_t>(-static_cast<__int128>(Multiplier));
+        } else {
+            uMult = static_cast<uint64_t>(Multiplier);
+        }
+
+        uint64_t uMod = static_cast<uint64_t>(Modulus);
+        unsigned __int128 prod = static_cast<unsigned __int128>(uCurrent) * uMult;
+        uint64_t hi = static_cast<uint64_t>(prod >> 64);
+        uint64_t lo = static_cast<uint64_t>(prod);
+
+        uint64_t rem = hi % uMod;
+#if defined(__GNUC__) || defined(__clang__)
+        uint64_t q = 0, r = 0;
+        __asm__("divq %4" : "=a"(q), "=d"(r) : "0"(lo), "1"(rem), "rm"(uMod));
+        uint64_t uNext = r;
+#else
+        for (int i = 63; i >= 0; --i) {
+            rem = (rem << 1) | ((lo >> i) & 1);
+            if (rem >= uMod) rem -= uMod;
+        }
+        uint64_t uNext = rem;
+#endif
+
+        LONG64 next = static_cast<LONG64>(uNext);
+        if (neg && next != 0) {
+            next = Modulus - next;
+        }
+
         if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
             return current;
         }
