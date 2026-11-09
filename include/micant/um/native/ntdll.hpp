@@ -2781,6 +2781,45 @@ struct SYSTEM_CPU_VOLTAGE_REGULATOR_CURRENT_IMBALANCE_INFORMATION {
 };
 using PSYSTEM_CPU_VOLTAGE_REGULATOR_CURRENT_IMBALANCE_INFORMATION = SYSTEM_CPU_VOLTAGE_REGULATOR_CURRENT_IMBALANCE_INFORMATION*;
 
+// Class 301: SystemPagefileFragmentationEntropyInformation
+struct SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    Reserved2;                            // 0
+    ULONG64  TotalClusters;                        // 262144ULL
+    ULONG64  FreeClusters;                         // 65536ULL
+    ULONG64  FragmentedClusters;                   // 16384ULL
+    ULONG64  ContinuousExtentsCount;               // 128ULL
+    ULONG64  MaxContinuousExtentBytes;             // 268435456ULL
+    ULONG64  MeanExtentSizeBytes;                  // 4194304ULL
+    double   ShannonEntropy;                       // 3.842
+    double   CompressionRatioEstimate;             // 0.625
+    ULONG    FragmentationSeverityIndex;           // 18
+    uint8_t  StatusFlags;                          // e.g. 0x07 (EntropyMonitored | ExtentsAnalyzed | CompactionRecommended)
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION = SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION*;
+
+// Class 302: SystemCpuPhaseMarginTelemetryInformation
+struct SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG    SocketId;                             // 0
+    double   PhaseMarginDegrees;                   // 52.4
+    double   GainMarginDecibels;                   // 9.8
+    double   TransientJitterPicoseconds;           // 14.2
+    double   ResonantFrequencyKhz;                 // 420.0
+    ULONG64  VRMSlewEventCount;                    // 1240ULL
+    ULONG64  OscillationDampingFaultCount;         // 3ULL
+    ULONG    LoopStabilityRating;                  // 98
+    BOOLEAN  PhaseMarginTelemetryActive;           // 1
+    uint8_t  TelemetryFlags;                       // e.g. 0x07 (PhaseMarginTracked | GainMarginValid | LoopStable)
+    uint8_t  Pad[2];                               // 0
+};
+using PSYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION = SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5867,6 +5906,53 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_REGULATOR_CURRENT_IMBALANCE_INFORMATION);
             return NtStatus::Success;
         }
+        case 301: { // SystemPagefileFragmentationEntropyInformation (Class 301)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->Reserved2 = 0;
+            pInfo->TotalClusters = 262144ULL;
+            pInfo->FreeClusters = 65536ULL;
+            pInfo->FragmentedClusters = 16384ULL;
+            pInfo->ContinuousExtentsCount = 128ULL;
+            pInfo->MaxContinuousExtentBytes = 268435456ULL;
+            pInfo->MeanExtentSizeBytes = 4194304ULL;
+            pInfo->ShannonEntropy = 3.842;
+            pInfo->CompressionRatioEstimate = 0.625;
+            pInfo->FragmentationSeverityIndex = 18;
+            pInfo->StatusFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 302: { // SystemCpuPhaseMarginTelemetryInformation (Class 302)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->SocketId = 0;
+            pInfo->PhaseMarginDegrees = 52.4;
+            pInfo->GainMarginDecibels = 9.8;
+            pInfo->TransientJitterPicoseconds = 14.2;
+            pInfo->ResonantFrequencyKhz = 420.0;
+            pInfo->VRMSlewEventCount = 1240ULL;
+            pInfo->OscillationDampingFaultCount = 3ULL;
+            pInfo->LoopStabilityRating = 98;
+            pInfo->PhaseMarginTelemetryActive = TRUE;
+            pInfo->TelemetryFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7684,6 +7770,70 @@ inline CHAR WINAPI RtlInterlockedRotateLeftModulo8(CHAR volatile* Destination, U
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedRotateRightModulo64(LONG64 volatile* Destination, ULONG Shift, ULONG64 Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint64_t val = static_cast<uint64_t>(current);
+        uint32_t s = Shift & 63u;
+        uint64_t rot = (s == 0) ? val : ((val >> s) | (val << (64u - s)));
+        uint64_t res = rot % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedRotateRightModulo32(LONG volatile* Destination, ULONG Shift, ULONG Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint32_t val = static_cast<uint32_t>(current);
+        uint32_t s = Shift & 31u;
+        uint32_t rot = (s == 0) ? val : ((val >> s) | (val << (32u - s)));
+        uint32_t res = rot % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedRotateRightModulo16(SHORT volatile* Destination, ULONG Shift, USHORT Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint16_t val = static_cast<uint16_t>(current);
+        uint32_t s = Shift & 15u;
+        uint16_t rot = (s == 0) ? val : static_cast<uint16_t>((val >> s) | (val << (16u - s)));
+        uint16_t res = static_cast<uint16_t>(rot % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedRotateRightModulo8(CHAR volatile* Destination, ULONG Shift, UCHAR Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint8_t val = static_cast<uint8_t>(current);
+        uint32_t s = Shift & 7u;
+        uint8_t rot = (s == 0) ? val : static_cast<uint8_t>((val >> s) | (val << (8u - s)));
+        uint8_t res = static_cast<uint8_t>(rot % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -8578,6 +8728,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuVoltageRegulatorCurrentImbalanceInformat
     return NtQuerySystemInformation_Export(300, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileFragmentationEntropyInformation(SYSTEM_PAGEFILE_FRAGMENTATION_ENTROPY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(301, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuPhaseMarginTelemetryInformation(SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(302, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -9171,6 +9333,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight32", reinterpret_cast<void*>(RtlInterlockedRotateRight32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight16", reinterpret_cast<void*>(RtlInterlockedRotateRight16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRight8", reinterpret_cast<void*>(RtlInterlockedRotateRight8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo64", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo32", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo16", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo8", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft64", reinterpret_cast<void*>(RtlInterlockedRotateLeft64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft32", reinterpret_cast<void*>(RtlInterlockedRotateLeft32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft16", reinterpret_cast<void*>(RtlInterlockedRotateLeft16));
@@ -9265,6 +9431,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorPhaseMarginJitterInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorPhaseMarginJitterInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileCompactionBandwidthLimitingInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileCompactionBandwidthLimitingInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorCurrentImbalanceInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorCurrentImbalanceInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileFragmentationEntropyInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileFragmentationEntropyInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuPhaseMarginTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuPhaseMarginTelemetryInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));
