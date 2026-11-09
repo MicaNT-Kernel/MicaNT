@@ -9890,6 +9890,26 @@ inline CHAR WINAPI InterlockedAndNotModulo8(CHAR volatile* Destination, CHAR Val
     return ntdll::RtlInterlockedAndNotModulo8(Destination, Value, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedOrNotModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedOrNotModulo64(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedOrNotModulo(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedOrNotModulo32(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedOrNotModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedOrNotModulo32(Destination, Value, Modulus);
+}
+
+inline SHORT WINAPI InterlockedOrNotModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedOrNotModulo16(Destination, Value, Modulus);
+}
+
+inline CHAR WINAPI InterlockedOrNotModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedOrNotModulo8(Destination, Value, Modulus);
+}
+
 
 inline ULONG64 WINAPI InterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     return ntdll::RtlInterlockedRotateRight64(Destination, ShiftCount);
@@ -10363,6 +10383,16 @@ inline BOOL WINAPI GetPagefileAsyncWriteDrainBufferTelemetry(ntdll::SYSTEM_PAGEF
 inline BOOL WINAPI GetCpuClockPhaseNoiseSpectrumTelemetry(ntdll::SYSTEM_CPU_CLOCK_PHASE_NOISE_SPECTRUM_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseNoiseSpectrumInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileWriteCompressionTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COMPRESSION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteCompressionTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockSpreadSpectrumModulationTelemetry(ntdll::SYSTEM_CPU_CLOCK_SPREAD_SPECTRUM_MODULATION_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockSpreadSpectrumModulationInformation(Info)) ? TRUE : FALSE;
 }
 
 
@@ -12651,6 +12681,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAndNotModulo32", reinterpret_cast<void*>(InterlockedAndNotModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedAndNotModulo16", reinterpret_cast<void*>(InterlockedAndNotModulo16));
     ldr.registerExport("kernel32.dll", "InterlockedAndNotModulo8", reinterpret_cast<void*>(InterlockedAndNotModulo8));
+    ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo64", reinterpret_cast<void*>(InterlockedOrNotModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo", reinterpret_cast<void*>(InterlockedOrNotModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo32", reinterpret_cast<void*>(InterlockedOrNotModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo16", reinterpret_cast<void*>(InterlockedOrNotModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo8", reinterpret_cast<void*>(InterlockedOrNotModulo8));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight64", reinterpret_cast<void*>(InterlockedRotateRight64));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight", reinterpret_cast<void*>(InterlockedRotateRight));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight32", reinterpret_cast<void*>(InterlockedRotateRight32));
@@ -12773,6 +12808,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuClockJitterHistogramTelemetry", reinterpret_cast<void*>(GetCpuClockJitterHistogramTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileAsyncWriteDrainBufferTelemetry", reinterpret_cast<void*>(GetPagefileAsyncWriteDrainBufferTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuClockPhaseNoiseSpectrumTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseNoiseSpectrumTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteCompressionTelemetry", reinterpret_cast<void*>(GetPagefileWriteCompressionTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockSpreadSpectrumModulationTelemetry", reinterpret_cast<void*>(GetCpuClockSpreadSpectrumModulationTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
