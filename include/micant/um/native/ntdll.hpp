@@ -2820,6 +2820,45 @@ struct SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION = SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION*;
 
+// Class 303: SystemPagefileWriteCoalescingEfficiencyInformation
+struct SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    Reserved2;                            // 0
+    ULONG64  TotalCoalescedWriteBatches;           // 524288ULL
+    ULONG64  TotalSequentialDiskFlushes;           // 131072ULL
+    ULONG64  BypassedRotationalSeekCount;          // 393216ULL
+    ULONG64  UncoalescedDirectFlushes;             // 4096ULL
+    double   WriteThroughputGainFactor;            // 4.385
+    double   AverageCoalescedSpanKiB;              // 512.0
+    double   SeekPenaltyAvoidanceRatio;            // 0.884
+    ULONG    ActiveCoalescingQueues;               // 16
+    ULONG    TargetCoalesceWindowMicroseconds;     // 2500
+    uint8_t  CoalescingSaturationFlags;           // 0x0F
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION = SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION*;
+
+// Class 304: SystemCpuLoadLineResonanceDampingInformation
+struct SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PackageIndex;                         // e.g. 0
+    ULONG    CoreIndex;                            // e.g. 0
+    double   ActiveResonanceFrequencyMHz;          // 185.5
+    double   ResonanceDampingRatioZeta;            // 0.707
+    double   LoadLineImpedanceMilliohms;           // 1.25
+    double   TransientOvershootSuppressionDb;      // 18.6
+    ULONG64  PhaseInterleavingCorrectionCount;     // 839210ULL
+    ULONG64  HighFrequencyRingingEventsDamped;     // 1420ULL
+    ULONG    ActiveVrmPhaseCount;                  // 16
+    ULONG    DampingLoopBandwidthKHz;              // 850
+    uint8_t  ResonanceFlags;                       // 0x07
+    uint8_t  Pad[3];                               // 0
+};
+using PSYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION = SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -5953,6 +5992,53 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 303: { // SystemPagefileWriteCoalescingEfficiencyInformation (Class 303)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->Reserved2 = 0;
+            pInfo->TotalCoalescedWriteBatches = 524288ULL;
+            pInfo->TotalSequentialDiskFlushes = 131072ULL;
+            pInfo->BypassedRotationalSeekCount = 393216ULL;
+            pInfo->UncoalescedDirectFlushes = 4096ULL;
+            pInfo->WriteThroughputGainFactor = 4.385;
+            pInfo->AverageCoalescedSpanKiB = 512.0;
+            pInfo->SeekPenaltyAvoidanceRatio = 0.884;
+            pInfo->ActiveCoalescingQueues = 16;
+            pInfo->TargetCoalesceWindowMicroseconds = 2500;
+            pInfo->CoalescingSaturationFlags = 0x0F;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 304: { // SystemCpuLoadLineResonanceDampingInformation (Class 304)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PackageIndex = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->ActiveResonanceFrequencyMHz = 185.5;
+            pInfo->ResonanceDampingRatioZeta = 0.707;
+            pInfo->LoadLineImpedanceMilliohms = 1.25;
+            pInfo->TransientOvershootSuppressionDb = 18.6;
+            pInfo->PhaseInterleavingCorrectionCount = 839210ULL;
+            pInfo->HighFrequencyRingingEventsDamped = 1420ULL;
+            pInfo->ActiveVrmPhaseCount = 16;
+            pInfo->DampingLoopBandwidthKHz = 850;
+            pInfo->ResonanceFlags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -7834,6 +7920,66 @@ inline CHAR WINAPI RtlInterlockedRotateRightModulo8(CHAR volatile* Destination, 
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedInvertModulo64(LONG64 volatile* Destination, ULONG64 Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint64_t val = static_cast<uint64_t>(current);
+        uint64_t inv = ~val;
+        uint64_t res = inv % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedInvertModulo32(LONG volatile* Destination, ULONG Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint32_t val = static_cast<uint32_t>(current);
+        uint32_t inv = ~val;
+        uint32_t res = inv % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedInvertModulo16(SHORT volatile* Destination, USHORT Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint16_t val = static_cast<uint16_t>(current);
+        uint16_t inv = static_cast<uint16_t>(~val);
+        uint16_t res = static_cast<uint16_t>(inv % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedInvertModulo8(CHAR volatile* Destination, UCHAR Modulus) noexcept {
+    if (!Destination || Modulus == 0) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (true) {
+        uint8_t val = static_cast<uint8_t>(current);
+        uint8_t inv = static_cast<uint8_t>(~val);
+        uint8_t res = static_cast<uint8_t>(inv % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -8740,6 +8886,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuPhaseMarginTelemetryInformation(SYSTEM_C
     return NtQuerySystemInformation_Export(302, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileWriteCoalescingEfficiencyInformation(SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(303, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuLoadLineResonanceDampingInformation(SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(304, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -9337,6 +9495,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo32", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo16", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateRightModulo8", reinterpret_cast<void*>(RtlInterlockedRotateRightModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo64", reinterpret_cast<void*>(RtlInterlockedInvertModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo32", reinterpret_cast<void*>(RtlInterlockedInvertModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo16", reinterpret_cast<void*>(RtlInterlockedInvertModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedInvertModulo8", reinterpret_cast<void*>(RtlInterlockedInvertModulo8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft64", reinterpret_cast<void*>(RtlInterlockedRotateLeft64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft32", reinterpret_cast<void*>(RtlInterlockedRotateLeft32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedRotateLeft16", reinterpret_cast<void*>(RtlInterlockedRotateLeft16));
@@ -9433,6 +9595,8 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageRegulatorCurrentImbalanceInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageRegulatorCurrentImbalanceInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileFragmentationEntropyInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileFragmentationEntropyInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuPhaseMarginTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuPhaseMarginTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingEfficiencyInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingEfficiencyInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuLoadLineResonanceDampingInformation", reinterpret_cast<void*>(RtlQuerySystemCpuLoadLineResonanceDampingInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

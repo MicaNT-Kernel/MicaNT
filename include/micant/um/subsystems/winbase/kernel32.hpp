@@ -9712,6 +9712,26 @@ inline CHAR WINAPI InterlockedRotateRightModulo8(CHAR volatile* Destination, ULO
     return ntdll::RtlInterlockedRotateRightModulo8(Destination, Shift, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedInvertModulo64(LONG64 volatile* Destination, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedInvertModulo64(Destination, Modulus);
+}
+
+inline LONG WINAPI InterlockedInvertModulo(LONG volatile* Destination, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedInvertModulo32(Destination, Modulus);
+}
+
+inline LONG WINAPI InterlockedInvertModulo32(LONG volatile* Destination, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedInvertModulo32(Destination, Modulus);
+}
+
+inline SHORT WINAPI InterlockedInvertModulo16(SHORT volatile* Destination, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedInvertModulo16(Destination, Modulus);
+}
+
+inline CHAR WINAPI InterlockedInvertModulo8(CHAR volatile* Destination, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedInvertModulo8(Destination, Modulus);
+}
+
 inline ULONG64 WINAPI InterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     return ntdll::RtlInterlockedRotateRight64(Destination, ShiftCount);
 }
@@ -10114,6 +10134,16 @@ inline BOOL WINAPI GetPagefileFragmentationEntropyTelemetry(ntdll::SYSTEM_PAGEFI
 inline BOOL WINAPI GetCpuPhaseMarginStabilityTelemetry(ntdll::SYSTEM_CPU_PHASE_MARGIN_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuPhaseMarginTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetPagefileWriteCoalescingEfficiencyTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteCoalescingEfficiencyInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuLoadLineResonanceDampingTelemetry(ntdll::SYSTEM_CPU_LOAD_LINE_RESONANCE_DAMPING_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuLoadLineResonanceDampingInformation(Info)) ? TRUE : FALSE;
 }
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
@@ -12366,6 +12396,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedRotateRightModulo32", reinterpret_cast<void*>(InterlockedRotateRightModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRightModulo16", reinterpret_cast<void*>(InterlockedRotateRightModulo16));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRightModulo8", reinterpret_cast<void*>(InterlockedRotateRightModulo8));
+    ldr.registerExport("kernel32.dll", "InterlockedInvertModulo64", reinterpret_cast<void*>(InterlockedInvertModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedInvertModulo", reinterpret_cast<void*>(InterlockedInvertModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedInvertModulo32", reinterpret_cast<void*>(InterlockedInvertModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedInvertModulo16", reinterpret_cast<void*>(InterlockedInvertModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedInvertModulo8", reinterpret_cast<void*>(InterlockedInvertModulo8));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight64", reinterpret_cast<void*>(InterlockedRotateRight64));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight", reinterpret_cast<void*>(InterlockedRotateRight));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight32", reinterpret_cast<void*>(InterlockedRotateRight32));
@@ -12474,6 +12509,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuVoltageRegulatorCurrentImbalanceTelemetry", reinterpret_cast<void*>(GetCpuVoltageRegulatorCurrentImbalanceTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileFragmentationEntropyTelemetry", reinterpret_cast<void*>(GetPagefileFragmentationEntropyTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuPhaseMarginStabilityTelemetry", reinterpret_cast<void*>(GetCpuPhaseMarginStabilityTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingEfficiencyTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuLoadLineResonanceDampingTelemetry", reinterpret_cast<void*>(GetCpuLoadLineResonanceDampingTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
