@@ -9772,6 +9772,27 @@ inline CHAR WINAPI InterlockedAbsDiffModulo8(CHAR volatile* Destination, CHAR Va
     return ntdll::RtlInterlockedAbsDiffModulo8(Destination, Value, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedNorModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedNorModulo64(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedNorModulo(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedNorModulo32(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedNorModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedNorModulo32(Destination, Value, Modulus);
+}
+
+inline SHORT WINAPI InterlockedNorModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedNorModulo16(Destination, Value, Modulus);
+}
+
+inline CHAR WINAPI InterlockedNorModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedNorModulo8(Destination, Value, Modulus);
+}
+
+
 inline ULONG64 WINAPI InterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     return ntdll::RtlInterlockedRotateRight64(Destination, ShiftCount);
 }
@@ -10205,6 +10226,17 @@ inline BOOL WINAPI GetCpuTransientThermalRecoveryTelemetry(ntdll::SYSTEM_CPU_TRA
     if (!Info) return FALSE;
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuTransientThermalRecoveryTelemetryInformation(Info)) ? TRUE : FALSE;
 }
+
+inline BOOL WINAPI GetPagefileWriteBurstBufferAllocationTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteBurstBufferAllocationInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuVoltageTransitionDroopHistogramTelemetry(ntdll::SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuVoltageTransitionDroopHistogramInformation(Info)) ? TRUE : FALSE;
+}
+
 
 inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
@@ -12471,6 +12503,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAbsDiffModulo32", reinterpret_cast<void*>(InterlockedAbsDiffModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedAbsDiffModulo16", reinterpret_cast<void*>(InterlockedAbsDiffModulo16));
     ldr.registerExport("kernel32.dll", "InterlockedAbsDiffModulo8", reinterpret_cast<void*>(InterlockedAbsDiffModulo8));
+    ldr.registerExport("kernel32.dll", "InterlockedNorModulo64", reinterpret_cast<void*>(InterlockedNorModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedNorModulo", reinterpret_cast<void*>(InterlockedNorModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedNorModulo32", reinterpret_cast<void*>(InterlockedNorModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedNorModulo16", reinterpret_cast<void*>(InterlockedNorModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedNorModulo8", reinterpret_cast<void*>(InterlockedNorModulo8));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight64", reinterpret_cast<void*>(InterlockedRotateRight64));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight", reinterpret_cast<void*>(InterlockedRotateRight));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight32", reinterpret_cast<void*>(InterlockedRotateRight32));
@@ -12585,6 +12622,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCpuThermalThrottlingJitterTelemetry", reinterpret_cast<void*>(GetCpuThermalThrottlingJitterTelemetry));
     ldr.registerExport("kernel32.dll", "GetPagefileClusteredWriteAggregationTelemetry", reinterpret_cast<void*>(GetPagefileClusteredWriteAggregationTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuTransientThermalRecoveryTelemetry", reinterpret_cast<void*>(GetCpuTransientThermalRecoveryTelemetry));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteBurstBufferAllocationTelemetry", reinterpret_cast<void*>(GetPagefileWriteBurstBufferAllocationTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuVoltageTransitionDroopHistogramTelemetry", reinterpret_cast<void*>(GetCpuVoltageTransitionDroopHistogramTelemetry));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
     ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
     ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));

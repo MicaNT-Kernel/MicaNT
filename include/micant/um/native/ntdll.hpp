@@ -2933,6 +2933,41 @@ struct SYSTEM_CPU_TRANSIENT_THERMAL_RECOVERY_TELEMETRY_INFORMATION {
 };
 using PSYSTEM_CPU_TRANSIENT_THERMAL_RECOVERY_TELEMETRY_INFORMATION = SYSTEM_CPU_TRANSIENT_THERMAL_RECOVERY_TELEMETRY_INFORMATION*;
 
+// Class 309: SystemPagefileWriteBurstBufferAllocationInformation
+struct SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    BurstBufferPagesAllocated;            // 32768
+    ULONG64  BurstBufferPoolSizeBytes;             // 134217728ULL (128 MB)
+    ULONG64  BurstFlushThresholdBytes;             // 67108864ULL (64 MB)
+    ULONG64  TotalBurstWritesServiced;             // 1450200ULL
+    ULONG64  BurstBufferExhaustionCount;           // 18ULL
+    double   BurstFillRatio;                       // 0.485
+    double   BurstWriteLatencyNanoseconds;         // 620.0
+    double   BurstAbsorptionEfficiencyFactor;      // 4.15
+    ULONG    ActiveBurstChannels;                  // 8
+    ULONG    BurstAllocationFlags;                 // 0x03
+};
+using PSYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION = SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION*;
+
+// Class 310: SystemCpuVoltageTransitionDroopHistogramInformation
+struct SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PackageIndex;                         // e.g. 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG64  VoltageTransitionCount;               // 582400ULL
+    ULONG64  MaxDroopMagnitudeMicrovolts;          // 42500ULL
+    double   AvgDroopRecoveryMicroseconds;         // 85.0
+    double   PeakTransientUndershootMillivolts;    // 38.2
+    double   LoadLineImpedanceMilliohms;           // 1.25
+    double   DroopCompensationSlewRateMvPerUs;     // 18.4
+    ULONG    DroopHistogramBinCount;               // 16
+    ULONG    DroopMitigationFlags;                 // 0x05
+};
+using PSYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION = SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -6205,6 +6240,51 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_TRANSIENT_THERMAL_RECOVERY_TELEMETRY_INFORMATION);
             return NtStatus::Success;
         }
+        case 309: { // SystemPagefileWriteBurstBufferAllocationInformation (Class 309)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->BurstBufferPagesAllocated = 32768;
+            pInfo->BurstBufferPoolSizeBytes = 134217728ULL; // 128 MB
+            pInfo->BurstFlushThresholdBytes = 67108864ULL;  // 64 MB
+            pInfo->TotalBurstWritesServiced = 1450200ULL;
+            pInfo->BurstBufferExhaustionCount = 18ULL;
+            pInfo->BurstFillRatio = 0.485;
+            pInfo->BurstWriteLatencyNanoseconds = 620.0;
+            pInfo->BurstAbsorptionEfficiencyFactor = 4.15;
+            pInfo->ActiveBurstChannels = 8;
+            pInfo->BurstAllocationFlags = 0x03;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION);
+            return NtStatus::Success;
+        }
+        case 310: { // SystemCpuVoltageTransitionDroopHistogramInformation (Class 310)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PackageIndex = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->VoltageTransitionCount = 582400ULL;
+            pInfo->MaxDroopMagnitudeMicrovolts = 42500ULL;
+            pInfo->AvgDroopRecoveryMicroseconds = 85.0;
+            pInfo->PeakTransientUndershootMillivolts = 38.2;
+            pInfo->LoadLineImpedanceMilliohms = 1.25;
+            pInfo->DroopCompensationSlewRateMvPerUs = 18.4;
+            pInfo->DroopHistogramBinCount = 16;
+            pInfo->DroopMitigationFlags = 0x05;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION);
+            return NtStatus::Success;
+        }
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -8266,6 +8346,66 @@ inline CHAR WINAPI RtlInterlockedAbsDiffModulo8(CHAR volatile* Destination, CHAR
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedNorModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint64_t nor_val = ~(static_cast<uint64_t>(current) | static_cast<uint64_t>(Value));
+        uint64_t res = nor_val % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedNorModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint32_t nor_val = ~(static_cast<uint32_t>(current) | static_cast<uint32_t>(Value));
+        uint32_t res = nor_val % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedNorModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint16_t nor_val = static_cast<uint16_t>(~(static_cast<uint16_t>(current) | static_cast<uint16_t>(Value)));
+        uint16_t res = static_cast<uint16_t>(nor_val % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedNorModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint8_t nor_val = static_cast<uint8_t>(~(static_cast<uint8_t>(current) | static_cast<uint8_t>(Value)));
+        uint8_t res = static_cast<uint8_t>(nor_val % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -9208,6 +9348,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuTransientThermalRecoveryTelemetryInforma
     return NtQuerySystemInformation_Export(308, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileWriteBurstBufferAllocationInformation(SYSTEM_PAGEFILE_WRITE_BURST_BUFFER_ALLOCATION_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(309, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuVoltageTransitionDroopHistogramInformation(SYSTEM_CPU_VOLTAGE_TRANSITION_DROOP_HISTOGRAM_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(310, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -9917,8 +10069,14 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiffModulo32", reinterpret_cast<void*>(RtlInterlockedAbsDiffModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiffModulo16", reinterpret_cast<void*>(RtlInterlockedAbsDiffModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedAbsDiffModulo8", reinterpret_cast<void*>(RtlInterlockedAbsDiffModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNorModulo64", reinterpret_cast<void*>(RtlInterlockedNorModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNorModulo32", reinterpret_cast<void*>(RtlInterlockedNorModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNorModulo16", reinterpret_cast<void*>(RtlInterlockedNorModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedNorModulo8", reinterpret_cast<void*>(RtlInterlockedNorModulo8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileClusteredWriteAggregationInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileClusteredWriteAggregationInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuTransientThermalRecoveryTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuTransientThermalRecoveryTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteBurstBufferAllocationInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteBurstBufferAllocationInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuVoltageTransitionDroopHistogramInformation", reinterpret_cast<void*>(RtlQuerySystemCpuVoltageTransitionDroopHistogramInformation));
 
     // Threadpool
     ldr.registerExport("ntdll.dll", "TpAllocIoCompletion", reinterpret_cast<void*>(TpAllocIoCompletion));

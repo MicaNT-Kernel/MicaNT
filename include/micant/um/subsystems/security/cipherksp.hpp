@@ -160,6 +160,8 @@ inline constexpr const wchar_t* BCRYPT_ASCON_CHAM_XOF_ALGORITHM            = L"A
 inline constexpr const wchar_t* BCRYPT_ASCON_CHAM_HASH_ALGORITHM           = L"ASCON-CHAM-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_SPARKLE_XOF_ALGORITHM         = L"ASCON-SPARKLE-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_SPARKLE_HASH_ALGORITHM        = L"ASCON-SPARKLE-HASH";
+inline constexpr const wchar_t* BCRYPT_ASCON_GIFT_COFB_XOF_ALGORITHM       = L"ASCON-GIFT-COFB-XOF";
+inline constexpr const wchar_t* BCRYPT_ASCON_GIFT_COFB_HASH_ALGORITHM      = L"ASCON-GIFT-COFB-HASH";
 
 #ifndef KDF_HKDF_SALT
 inline constexpr uint32_t KDF_HKDF_SALT     = 12;
@@ -8833,6 +8835,263 @@ public:
     }
 };
 
+class GiftCofbDiffusion {
+public:
+    static constexpr uint8_t sbox[16] = {
+        0x1, 0xa, 0x4, 0xc, 0x6, 0xf, 0x3, 0x9,
+        0x2, 0xd, 0xb, 0x7, 0x5, 0x0, 0x8, 0xe
+    };
+
+    static constexpr uint32_t rotr(uint32_t v, int n) noexcept {
+        return (v >> n) | (v << (32 - n));
+    }
+    static constexpr uint32_t rotl(uint32_t v, int n) noexcept {
+        return (v << n) | (v >> (32 - n));
+    }
+
+    static void gift_round(uint32_t& w0, uint32_t& w1, uint32_t& w2, uint32_t& w3, uint32_t round_c) noexcept {
+        for (int i = 0; i < 8; ++i) {
+            uint8_t nibble0 = (w0 >> (i * 4)) & 0xF;
+            uint8_t nibble1 = (w1 >> (i * 4)) & 0xF;
+            uint8_t nibble2 = (w2 >> (i * 4)) & 0xF;
+            uint8_t nibble3 = (w3 >> (i * 4)) & 0xF;
+
+            w0 = (w0 & ~(0xFu << (i * 4))) | (static_cast<uint32_t>(sbox[nibble0]) << (i * 4));
+            w1 = (w1 & ~(0xFu << (i * 4))) | (static_cast<uint32_t>(sbox[nibble1]) << (i * 4));
+            w2 = (w2 & ~(0xFu << (i * 4))) | (static_cast<uint32_t>(sbox[nibble2]) << (i * 4));
+            w3 = (w3 & ~(0xFu << (i * 4))) | (static_cast<uint32_t>(sbox[nibble3]) << (i * 4));
+        }
+
+        w1 = rotr(w1, 2) ^ rotl(w2, 1);
+        w2 = rotl(w2, 3) ^ w3;
+        w3 = rotr(w3, 5) ^ w0;
+        w0 = rotl(w0, 7) ^ round_c;
+
+        w0 ^= 0x80000000u;
+        w3 ^= round_c;
+    }
+
+    static void mix(uint64_t& x0, uint64_t& x1, uint64_t& x2, uint64_t& x3, uint64_t& x4) noexcept {
+        uint8_t b[40];
+        AsconPermutation::store64_be(b, x0);
+        AsconPermutation::store64_be(b + 8, x1);
+        AsconPermutation::store64_be(b + 16, x2);
+        AsconPermutation::store64_be(b + 24, x3);
+        AsconPermutation::store64_be(b + 32, x4);
+
+        static constexpr uint32_t c_gift[8] = {
+            0x0103070Fu, 0x1F3F7EBDu, 0x7B776F5Fu, 0x3F7EBD7Bu,
+            0x776F5F3Eu, 0x7CBD776Eu, 0x5D3B76ECu, 0x593366CCu
+        };
+
+        uint32_t w[10];
+        for (int i = 0; i < 10; ++i) {
+            w[i] = (static_cast<uint32_t>(b[i * 4 + 0]) << 24) |
+                   (static_cast<uint32_t>(b[i * 4 + 1]) << 16) |
+                   (static_cast<uint32_t>(b[i * 4 + 2]) << 8)  |
+                   (static_cast<uint32_t>(b[i * 4 + 3]));
+        }
+
+        for (int r = 0; r < 4; ++r) {
+            gift_round(w[0], w[1], w[2], w[3], c_gift[r * 2 + 0]);
+            gift_round(w[4], w[5], w[6], w[7], c_gift[r * 2 + 1]);
+
+            w[8] ^= w[0] ^ w[4] ^ c_gift[(r + 2) & 7];
+            w[9] ^= w[2] ^ w[6] ^ c_gift[(r + 3) & 7];
+
+            uint32_t t0 = w[0], t1 = w[1];
+            for (int j = 0; j < 8; ++j) {
+                w[j] = w[j + 2];
+            }
+            w[8] = t0;
+            w[9] = t1;
+        }
+
+        for (int i = 0; i < 10; ++i) {
+            b[i * 4 + 0] = static_cast<uint8_t>(w[i] >> 24);
+            b[i * 4 + 1] = static_cast<uint8_t>(w[i] >> 16);
+            b[i * 4 + 2] = static_cast<uint8_t>(w[i] >> 8);
+            b[i * 4 + 3] = static_cast<uint8_t>(w[i]);
+        }
+
+        x0 = AsconPermutation::load64_be(b);
+        x1 = AsconPermutation::load64_be(b + 8);
+        x2 = AsconPermutation::load64_be(b + 16);
+        x3 = AsconPermutation::load64_be(b + 24);
+        x4 = AsconPermutation::load64_be(b + 32);
+    }
+};
+
+class AsconGiftCofbXof {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_GIFT_COFB_XOF_IV = 0xc0400c0000000a01ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+        bool squeezed{ false };
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_GIFT_COFB_XOF_IV;
+        ctx.x1 = 0;
+        ctx.x2 = 0;
+        ctx.x3 = 0;
+        ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+        ctx.squeezed = false;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized || data.empty()) return;
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static void padAndPermute(Context& ctx) noexcept {
+        if (ctx.squeezed) return;
+        size_t len = ctx.buffer.size();
+        size_t blocks = len / RATE;
+        for (size_t i = 0; i < blocks; ++i) {
+            ctx.x0 ^= AsconPermutation::load64_be(ctx.buffer.data() + i * RATE);
+            AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        uint8_t pad[8] = { 0 };
+        size_t rem = len % RATE;
+        if (rem > 0) {
+            std::memcpy(pad, ctx.buffer.data() + blocks * RATE, rem);
+        }
+        pad[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(pad);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.squeezed = true;
+    }
+
+    static void squeeze(Context& ctx, std::span<uint8_t> out) noexcept {
+        if (!ctx.initialized || out.empty()) return;
+        if (!ctx.squeezed) {
+            padAndPermute(ctx);
+        }
+
+        size_t offset = 0;
+        size_t outLen = out.size();
+        while (offset < outLen) {
+            uint8_t block[8];
+            AsconPermutation::store64_be(block, ctx.x0);
+            size_t take = std::min(outLen - offset, static_cast<size_t>(8));
+            std::memcpy(out.data() + offset, block, take);
+            offset += take;
+            if (offset < outLen) {
+                AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+                GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            }
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        squeeze(ctx, outDigest);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, size_t outLen = DEFAULT_DIGEST_SIZE) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        squeeze(ctx, out);
+        return out;
+    }
+};
+
+class AsconGiftCofbHash {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_GIFT_COFB_HASH_IV = 0x00400c0000000a01ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+        bool finalized{ false };
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_GIFT_COFB_HASH_IV;
+        ctx.x1 = 0;
+        ctx.x2 = 0;
+        ctx.x3 = 0;
+        ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+        ctx.finalized = false;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized || data.empty()) return;
+        ctx.buffer.insert(ctx.buffer.end(), data.begin(), data.end());
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        if (!ctx.initialized || outDigest.empty() || ctx.finalized) return;
+        size_t len = ctx.buffer.size();
+        size_t blocks = len / RATE;
+        for (size_t i = 0; i < blocks; ++i) {
+            ctx.x0 ^= AsconPermutation::load64_be(ctx.buffer.data() + i * RATE);
+            AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        }
+
+        uint8_t pad[8] = { 0 };
+        size_t rem = len % RATE;
+        if (rem > 0) {
+            std::memcpy(pad, ctx.buffer.data() + blocks * RATE, rem);
+        }
+        pad[rem] = 0x80;
+        ctx.x0 ^= AsconPermutation::load64_be(pad);
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+
+        size_t offset = 0;
+        size_t outLen = outDigest.size();
+        while (offset < outLen) {
+            uint8_t block[8];
+            AsconPermutation::store64_be(block, ctx.x0);
+            size_t take = std::min(outLen - offset, static_cast<size_t>(8));
+            std::memcpy(outDigest.data() + offset, block, take);
+            offset += take;
+            if (offset < outLen) {
+                AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+                GiftCofbDiffusion::mix(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            }
+        }
+        ctx.finalized = true;
+    }
+
+    static std::array<uint8_t, 32> hash(std::span<const uint8_t> data) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::array<uint8_t, 32> out{};
+        final(ctx, std::span<uint8_t>(out.data(), out.size()));
+        return out;
+    }
+};
+
 template<typename CShakeType>
 class GenericTupleHash {
 public:
@@ -11117,6 +11376,8 @@ enum class CryptoAlgorithm {
     AsconChamHash,
     AsconSparkleXof,
     AsconSparkleHash,
+    AsconGiftCofbXof,
+    AsconGiftCofbHash,
     Unknown
 };
 
@@ -11165,6 +11426,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_CHAM_HASH_ALGORITHM || algId == L"ASCON-CHAM-HASH" || algId == L"ascon-cham-hash" || algId == L"Ascon-Cham-Hash" || algId == L"ASCONCHAM-HASH") return CryptoAlgorithm::AsconChamHash;
     if (algId == BCRYPT_ASCON_SPARKLE_XOF_ALGORITHM || algId == L"ASCON-SPARKLE-XOF" || algId == L"ascon-sparkle-xof" || algId == L"Ascon-Sparkle-Xof" || algId == L"ASCONSPARKLE-XOF") return CryptoAlgorithm::AsconSparkleXof;
     if (algId == BCRYPT_ASCON_SPARKLE_HASH_ALGORITHM || algId == L"ASCON-SPARKLE-HASH" || algId == L"ascon-sparkle-hash" || algId == L"Ascon-Sparkle-Hash" || algId == L"ASCONSPARKLE-HASH") return CryptoAlgorithm::AsconSparkleHash;
+    if (algId == BCRYPT_ASCON_GIFT_COFB_XOF_ALGORITHM || algId == L"ASCON-GIFT-COFB-XOF" || algId == L"ascon-gift-cofb-xof" || algId == L"Ascon-Gift-Cofb-Xof" || algId == L"ASCONGIFTCOFB-XOF") return CryptoAlgorithm::AsconGiftCofbXof;
+    if (algId == BCRYPT_ASCON_GIFT_COFB_HASH_ALGORITHM || algId == L"ASCON-GIFT-COFB-HASH" || algId == L"ascon-gift-cofb-hash" || algId == L"Ascon-Gift-Cofb-Hash" || algId == L"ASCONGIFTCOFB-HASH") return CryptoAlgorithm::AsconGiftCofbHash;
     if (algId == BCRYPT_SHA256_ALGORITHM || algId == L"SHA-256") return CryptoAlgorithm::Sha256;
     if (algId == BCRYPT_SHA384_ALGORITHM || algId == L"SHA-384") return CryptoAlgorithm::Sha384;
     if (algId == BCRYPT_SHA512_ALGORITHM || algId == L"SHA-512") return CryptoAlgorithm::Sha512;
@@ -11397,6 +11660,8 @@ public:
     AsconChamHash::Context asconChamHashCtx{};
     AsconSparkleXof::Context asconSparkleXofCtx{};
     AsconSparkleHash::Context asconSparkleHashCtx{};
+    AsconGiftCofbXof::Context asconGiftCofbXofCtx{};
+    AsconGiftCofbHash::Context asconGiftCofbHashCtx{};
 
     struct AesCmacContext {
         std::unique_ptr<Aes> aes;
@@ -11728,6 +11993,10 @@ public:
             AsconSparkleXof::init(asconSparkleXofCtx);
         } else if (algorithm == CryptoAlgorithm::AsconSparkleHash) {
             AsconSparkleHash::init(asconSparkleHashCtx);
+        } else if (algorithm == CryptoAlgorithm::AsconGiftCofbXof) {
+            AsconGiftCofbXof::init(asconGiftCofbXofCtx);
+        } else if (algorithm == CryptoAlgorithm::AsconGiftCofbHash) {
+            AsconGiftCofbHash::init(asconGiftCofbHashCtx);
         } else if (algorithm == CryptoAlgorithm::AesCmac) {
             aesCmacCtx = std::make_unique<AesCmacContext>();
             if (key.size() == 16 || key.size() == 24 || key.size() == 32) {
@@ -11954,6 +12223,10 @@ public:
             AsconSparkleXof::update(asconSparkleXofCtx, data);
         } else if (algorithm == CryptoAlgorithm::AsconSparkleHash) {
             AsconSparkleHash::update(asconSparkleHashCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconGiftCofbXof) {
+            AsconGiftCofbXof::update(asconGiftCofbXofCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconGiftCofbHash) {
+            AsconGiftCofbHash::update(asconGiftCofbHashCtx, data);
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             if (data.empty()) return;
             aesCmacCtx->totalBytes += data.size();
@@ -12427,6 +12700,14 @@ public:
             std::vector<uint8_t> out(32);
             AsconSparkleHash::final(asconSparkleHashCtx, out);
             return out;
+        } else if (algorithm == CryptoAlgorithm::AsconGiftCofbXof) {
+            std::vector<uint8_t> out(32);
+            AsconGiftCofbXof::final(asconGiftCofbXofCtx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::AsconGiftCofbHash) {
+            std::vector<uint8_t> out(32);
+            AsconGiftCofbHash::final(asconGiftCofbHashCtx, out);
+            return out;
         } else if (algorithm == CryptoAlgorithm::AesCmac && aesCmacCtx && aesCmacCtx->aes) {
             std::array<uint8_t, 16> M_last{};
             if (aesCmacCtx->totalBytes > 0 && aesCmacCtx->buffer.size() == 16) {
@@ -12676,7 +12957,7 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac || prov->algorithm == CryptoAlgorithm::Ascon128 || prov->algorithm == CryptoAlgorithm::Ascon80pq || prov->algorithm == CryptoAlgorithm::Ascon128a || prov->algorithm == CryptoAlgorithm::AsconMac || prov->algorithm == CryptoAlgorithm::AsconSiv || prov->algorithm == CryptoAlgorithm::Ascon128aMac || prov->algorithm == CryptoAlgorithm::Ascon128aSiv || prov->algorithm == CryptoAlgorithm::Ascon80pqMac || prov->algorithm == CryptoAlgorithm::Ascon80pqSiv) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa || prov->algorithm == CryptoAlgorithm::AsconPrf || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon80pqPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof || prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof || prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof || prov->algorithm == CryptoAlgorithm::AsconXoodyakHash || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveXof || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveHash || prov->algorithm == CryptoAlgorithm::AsconMarsXof || prov->algorithm == CryptoAlgorithm::AsconMarsHash || prov->algorithm == CryptoAlgorithm::AsconClefiaXof || prov->algorithm == CryptoAlgorithm::AsconClefiaHash || prov->algorithm == CryptoAlgorithm::AsconSeedXof || prov->algorithm == CryptoAlgorithm::AsconSeedHash || prov->algorithm == CryptoAlgorithm::AsconHightXof || prov->algorithm == CryptoAlgorithm::AsconHightHash || prov->algorithm == CryptoAlgorithm::AsconLeaXof || prov->algorithm == CryptoAlgorithm::AsconLeaHash || prov->algorithm == CryptoAlgorithm::AsconChamXof || prov->algorithm == CryptoAlgorithm::AsconChamHash || prov->algorithm == CryptoAlgorithm::AsconSparkleXof || prov->algorithm == CryptoAlgorithm::AsconSparkleHash) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa || prov->algorithm == CryptoAlgorithm::AsconPrf || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon80pqPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof || prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof || prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof || prov->algorithm == CryptoAlgorithm::AsconXoodyakHash || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveXof || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveHash || prov->algorithm == CryptoAlgorithm::AsconMarsXof || prov->algorithm == CryptoAlgorithm::AsconMarsHash || prov->algorithm == CryptoAlgorithm::AsconClefiaXof || prov->algorithm == CryptoAlgorithm::AsconClefiaHash || prov->algorithm == CryptoAlgorithm::AsconSeedXof || prov->algorithm == CryptoAlgorithm::AsconSeedHash || prov->algorithm == CryptoAlgorithm::AsconHightXof || prov->algorithm == CryptoAlgorithm::AsconHightHash || prov->algorithm == CryptoAlgorithm::AsconLeaXof || prov->algorithm == CryptoAlgorithm::AsconLeaHash || prov->algorithm == CryptoAlgorithm::AsconChamXof || prov->algorithm == CryptoAlgorithm::AsconChamHash || prov->algorithm == CryptoAlgorithm::AsconSparkleXof || prov->algorithm == CryptoAlgorithm::AsconSparkleHash || prov->algorithm == CryptoAlgorithm::AsconGiftCofbXof || prov->algorithm == CryptoAlgorithm::AsconGiftCofbHash) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
             else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256 || prov->algorithm == CryptoAlgorithm::KmacKwp256 || prov->algorithm == CryptoAlgorithm::KmacAead256 || prov->algorithm == CryptoAlgorithm::KmacMgf256 || prov->algorithm == CryptoAlgorithm::KmacKdf256 || prov->algorithm == CryptoAlgorithm::KmacCtr256 || prov->algorithm == CryptoAlgorithm::KmacOfb256 || prov->algorithm == CryptoAlgorithm::KmacCfb256 || prov->algorithm == CryptoAlgorithm::KmacSiv256 || prov->algorithm == CryptoAlgorithm::KmacFfx256 || prov->algorithm == CryptoAlgorithm::KmacBps256 || prov->algorithm == CryptoAlgorithm::KmacKw256 || prov->algorithm == CryptoAlgorithm::KmacDrbg256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
@@ -12703,7 +12984,9 @@ inline NTSTATUS BCryptGetProperty(
                 prov->algorithm == CryptoAlgorithm::AsconHightHash || prov->algorithm == CryptoAlgorithm::AsconLeaXof ||
                 prov->algorithm == CryptoAlgorithm::AsconLeaHash || prov->algorithm == CryptoAlgorithm::AsconChamXof ||
                 prov->algorithm == CryptoAlgorithm::AsconChamHash || prov->algorithm == CryptoAlgorithm::AsconSparkleXof ||
-                prov->algorithm == CryptoAlgorithm::AsconSparkleHash) {
+                prov->algorithm == CryptoAlgorithm::AsconSparkleHash ||
+                prov->algorithm == CryptoAlgorithm::AsconGiftCofbXof ||
+                prov->algorithm == CryptoAlgorithm::AsconGiftCofbHash) {
                 len = 8;
             } else if (prov->algorithm == CryptoAlgorithm::Ascon128a || prov->algorithm == CryptoAlgorithm::Ascon128aMac || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon128aSiv || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv) {
                 len = 16;
