@@ -20,7 +20,7 @@ If you have discovered a potential security vulnerability, memory safety concern
 
 If you prefer out-of-band communication or encrypted correspondence:
 - **Primary Contact**: Daniel Elliott
-- **Email**: `ssfdre38@gmail.com`
+- **Email**: `daniel@micant.org` (or `security@micant.org`)
 - **PGP / Encrypted Inquiries**: Available upon request for confidential vendor and platform interoperability discussions.
 
 ---
