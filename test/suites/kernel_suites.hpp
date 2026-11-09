@@ -65695,3 +65695,276 @@ inline void Suite496_Direct3D12_Device58_CommandList52_Options70_NTNative_Pagefi
 inline void Test_Horizon280_Device58Options70_PagefileAsyncReadBurstBufferCpuPllDroop_InterlockedNandModulo_And_AsconIsapXofHash_Suite() {
     Suite496_Direct3D12_Device58_CommandList52_Options70_NTNative_PagefileAsyncReadBurstBuffer_CpuPllDroop_InterlockedNandModulo_AsconIsap();
 }
+
+// ============================================================================
+// SUITE 497: HORIZON 281 - MULTI-CHARACTER DRIVE IDENTIFIERS (Ca:\, Nvme0:\, Pool0:\)
+// AND DAVE CUTLER 32,767-CHARACTER UNBOUNDED PATH RESOLUTION ARCHITECTURE
+// ============================================================================
+
+inline void Suite497_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution() {
+    using namespace micant::win32;
+    std::cout << "\n[TEST] Running Suite 497: Horizon 281 - Multi-Character Drive Identifiers (Ca:\\, Nvme0:\\, Pool0:\\), DosDevices Parity & 32K Unbounded Path Resolution..." << std::endl;
+
+    auto& vfs = fs::VirtualFileSystem::get();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Multi-Character Drive Identifier Normalization & Mapping
+    // ------------------------------------------------------------------------
+    std::cout << "  Testing Pillar 1: Multi-Character Drive Identifier Normalization & VFS Mapping..." << std::endl;
+    {
+        TEST_ASSERT(fs::VirtualFileSystem::normalizeDriveIdentifier(L"ca:") == L"CA", "normalizeDriveIdentifier ca: -> CA");
+        TEST_ASSERT(fs::VirtualFileSystem::normalizeDriveIdentifier(L"Nvme0:\\") == L"NVME0", "normalizeDriveIdentifier Nvme0:\\ -> NVME0");
+        TEST_ASSERT(fs::VirtualFileSystem::normalizeDriveIdentifier(L"Pool_0") == L"POOL_0", "normalizeDriveIdentifier Pool_0 -> POOL_0");
+
+        // Assign Ca:
+        NtStatus st = vfs.assignDriveIdentifier(L"Ca", L"\\Device\\Harddisk0\\Partition1", L"\\\\?\\Volume{ca000000-0000-0000-0000-000000000001}\\", L"MICA_CA");
+        TEST_ASSERT(NT_SUCCESS(st), "assignDriveIdentifier Ca succeeds");
+        TEST_ASSERT(vfs.isDriveIdentifierAssigned(L"Ca"), "isDriveIdentifierAssigned Ca is true");
+        TEST_ASSERT(vfs.isDriveIdentifierAssigned(L"ca"), "isDriveIdentifierAssigned ca case-insensitive is true");
+        TEST_ASSERT(vfs.getDeviceForDriveIdentifier(L"Ca") == L"\\Device\\Harddisk0\\Partition1", "getDeviceForDriveIdentifier Ca matches target");
+
+        // Assign Nvme0: -> NTFS
+        st = vfs.assignDriveIdentifier(L"Nvme0", L"\\Device\\Harddisk0\\Partition2", L"\\\\?\\Volume{nvme0000-0000-0000-0000-000000000002}\\", L"MICA_NVME0");
+        TEST_ASSERT(NT_SUCCESS(st), "assignDriveIdentifier Nvme0 succeeds");
+        TEST_ASSERT(vfs.isDriveIdentifierAssigned(L"Nvme0"), "isDriveIdentifierAssigned Nvme0 is true");
+
+        // Assign Pool0: -> ZFS
+        st = vfs.assignDriveIdentifier(L"Pool0", L"\\Device\\ZfsPool_Storage", L"\\\\?\\Volume{pool0000-0000-0000-0000-000000000003}\\", L"MICA_POOL0");
+        TEST_ASSERT(NT_SUCCESS(st), "assignDriveIdentifier Pool0 succeeds");
+        TEST_ASSERT(vfs.isDriveIdentifierAssigned(L"Pool0"), "isDriveIdentifierAssigned Pool0 is true");
+
+        // Assign Data: -> exFAT
+        st = vfs.assignDriveIdentifier(L"Data", L"\\Device\\Harddisk0\\Partition3", L"\\\\?\\Volume{data0000-0000-0000-0000-000000000004}\\", L"MICA_DATA");
+        TEST_ASSERT(NT_SUCCESS(st), "assignDriveIdentifier Data succeeds");
+        TEST_ASSERT(vfs.isDriveIdentifierAssigned(L"Data"), "isDriveIdentifierAssigned Data is true");
+
+        auto mounted = vfs.getMountedDriveIdentifiers();
+        TEST_ASSERT(std::find(mounted.begin(), mounted.end(), L"CA") != mounted.end(), "Mounted identifiers contains CA");
+        TEST_ASSERT(std::find(mounted.begin(), mounted.end(), L"NVME0") != mounted.end(), "Mounted identifiers contains NVME0");
+        TEST_ASSERT(std::find(mounted.begin(), mounted.end(), L"POOL0") != mounted.end(), "Mounted identifiers contains POOL0");
+        TEST_ASSERT(std::find(mounted.begin(), mounted.end(), L"DATA") != mounted.end(), "Mounted identifiers contains DATA");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Win32 DefineDosDeviceW & QueryDosDeviceW Parity
+    // ------------------------------------------------------------------------
+    std::cout << "  Testing Pillar 2: Win32 DefineDosDeviceW & QueryDosDeviceW Multi-Character Parity..." << std::endl;
+    {
+        // Define San0 via Win32 API
+        BOOL ok = win32::DefineDosDeviceW(0, L"San0:", L"\\Device\\Harddisk0\\Partition1");
+        TEST_ASSERT(ok == TRUE, "DefineDosDeviceW San0: succeeds");
+        TEST_ASSERT(vfs.isDriveIdentifierAssigned(L"San0"), "San0 is assigned in VFS");
+
+        // Query San0:
+        wchar_t targetBuf[256]{};
+        DWORD cch = win32::QueryDosDeviceW(L"San0:", targetBuf, 256);
+        TEST_ASSERT(cch > 0, "QueryDosDeviceW San0: succeeds");
+        TEST_ASSERT(std::wstring(targetBuf) == L"\\Device\\Harddisk0\\Partition1", "QueryDosDeviceW San0: target matches");
+
+        // Query all devices (null lpDeviceName)
+        std::vector<wchar_t> allDevs(4096, 0);
+        DWORD allLen = win32::QueryDosDeviceW(nullptr, allDevs.data(), static_cast<DWORD>(allDevs.size()));
+        TEST_ASSERT(allLen > 0, "QueryDosDeviceW(null) returns multistring");
+
+        // Check that multistring contains CA:, NVME0:, POOL0:, SAN0:
+        std::vector<std::wstring> names;
+        const wchar_t* p = allDevs.data();
+        while (*p) {
+            names.emplace_back(p);
+            p += wcslen(p) + 1;
+        }
+        TEST_ASSERT(std::find(names.begin(), names.end(), L"CA:") != names.end(), "QueryDosDeviceW multistring has CA:");
+        TEST_ASSERT(std::find(names.begin(), names.end(), L"NVME0:") != names.end(), "QueryDosDeviceW multistring has NVME0:");
+        TEST_ASSERT(std::find(names.begin(), names.end(), L"POOL0:") != names.end(), "QueryDosDeviceW multistring has POOL0:");
+        TEST_ASSERT(std::find(names.begin(), names.end(), L"SAN0:") != names.end(), "QueryDosDeviceW multistring has SAN0:");
+
+        // Remove San0 via DDD_REMOVE_DEFINITION
+        ok = win32::DefineDosDeviceW(win32::DDD_REMOVE_DEFINITION, L"San0:", nullptr);
+        TEST_ASSERT(ok == TRUE, "DefineDosDeviceW DDD_REMOVE_DEFINITION San0: succeeds");
+        TEST_ASSERT(!vfs.isDriveIdentifierAssigned(L"San0"), "San0 successfully unmounted");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Win32 GetLogicalDriveStrings & Volume Information Parity
+    // ------------------------------------------------------------------------
+    std::cout << "  Testing Pillar 3: Win32 GetLogicalDriveStrings & Volume Information Parity..." << std::endl;
+    {
+        // GetLogicalDriveStringsW
+        std::vector<wchar_t> driveStrings(4096, 0);
+        DWORD dsLen = win32::GetLogicalDriveStringsW(static_cast<DWORD>(driveStrings.size()), driveStrings.data());
+        TEST_ASSERT(dsLen > 0, "GetLogicalDriveStringsW succeeds");
+
+        std::vector<std::wstring> roots;
+        const wchar_t* cur = driveStrings.data();
+        while (*cur) {
+            roots.emplace_back(cur);
+            cur += wcslen(cur) + 1;
+        }
+        TEST_ASSERT(std::find(roots.begin(), roots.end(), L"CA:\\") != roots.end(), "GetLogicalDriveStringsW has CA:\\");
+        TEST_ASSERT(std::find(roots.begin(), roots.end(), L"NVME0:\\") != roots.end(), "GetLogicalDriveStringsW has NVME0:\\");
+        TEST_ASSERT(std::find(roots.begin(), roots.end(), L"POOL0:\\") != roots.end(), "GetLogicalDriveStringsW has POOL0:\\");
+
+        // GetLogicalDriveStringsA
+        std::vector<char> driveStringsA(4096, 0);
+        DWORD dsLenA = win32::GetLogicalDriveStringsA(static_cast<DWORD>(driveStringsA.size()), driveStringsA.data());
+        TEST_ASSERT(dsLenA > 0, "GetLogicalDriveStringsA succeeds");
+
+        std::vector<std::string> rootsA;
+        const char* curA = driveStringsA.data();
+        while (*curA) {
+            rootsA.emplace_back(curA);
+            curA += strlen(curA) + 1;
+        }
+        TEST_ASSERT(std::find(rootsA.begin(), rootsA.end(), "CA:\\") != rootsA.end(), "GetLogicalDriveStringsA has CA:\\");
+        TEST_ASSERT(std::find(rootsA.begin(), rootsA.end(), "NVME0:\\") != rootsA.end(), "GetLogicalDriveStringsA has NVME0:\\");
+
+        // Legacy GetLogicalDrives() 26-bit bitmask compatibility
+        DWORD mask = win32::GetLogicalDrives();
+        TEST_ASSERT((mask & (1u << (L'C' - L'A'))) != 0, "GetLogicalDrives bitmask retains drive C");
+        TEST_ASSERT((mask & (1u << (L'D' - L'A'))) != 0, "GetLogicalDrives bitmask retains drive D");
+
+        // GetVolumeInformationW on Ca:\ (FAT32)
+        wchar_t volName[64]{};
+        wchar_t fsName[64]{};
+        DWORD serial = 0, maxComp = 0, flags = 0;
+        BOOL viOk = win32::GetVolumeInformationW(L"Ca:\\", volName, 64, &serial, &maxComp, &flags, fsName, 64);
+        TEST_ASSERT(viOk == TRUE, "GetVolumeInformationW Ca:\\ succeeds");
+        TEST_ASSERT(std::wstring(fsName) == L"FAT32", "Ca:\\ filesystem name is FAT32");
+
+        // GetVolumeInformationW on Pool0:\ (ZFS)
+        viOk = win32::GetVolumeInformationW(L"Pool0:\\", volName, 64, &serial, &maxComp, &flags, fsName, 64);
+        TEST_ASSERT(viOk == TRUE, "GetVolumeInformationW Pool0:\\ succeeds");
+        TEST_ASSERT(std::wstring(fsName) == L"ZFS", "Pool0:\\ filesystem name is ZFS");
+
+        // GetFullPathNameW on Ca:\file.txt
+        wchar_t fullBuf[256]{};
+        wchar_t* filePart = nullptr;
+        DWORD fullLen = win32::GetFullPathNameW(L"Ca:\\dir\\file.txt", 256, fullBuf, &filePart);
+        TEST_ASSERT(fullLen > 0, "GetFullPathNameW Ca:\\dir\\file.txt succeeds");
+        TEST_ASSERT(std::wstring(fullBuf) == L"Ca:\\dir\\file.txt", "GetFullPathNameW preserves Ca:\\ root");
+        TEST_ASSERT(filePart && std::wstring(filePart) == L"file.txt", "filePart matches file.txt");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: VFS File & Directory Operations on Multi-Character Drives
+    // ------------------------------------------------------------------------
+    std::cout << "  Testing Pillar 4: VFS File & Directory Operations on Ca:\\ and Pool0:\\..." << std::endl;
+    {
+        auto WriteHelper = [&](std::wstring_view p, std::string_view payload) -> bool {
+            std::shared_ptr<micant::fs::FileObject> fObj;
+            NtStatus stCr = vfs.createOrOpenFile(p, micant::fs::FILE_WRITE_DATA, micant::fs::FILE_OVERWRITE_IF, fObj);
+            if (!NT_SUCCESS(stCr) || !fObj) return false;
+            uint32_t wr = 0;
+            NtStatus stWr = vfs.writeFile(fObj.get(), payload.data(), static_cast<uint32_t>(payload.size()), nullptr, wr);
+            vfs.closeFile(fObj.get());
+            return NT_SUCCESS(stWr) && wr == payload.size();
+        };
+
+        auto ReadHelper = [&](std::wstring_view p) -> std::string {
+            std::shared_ptr<micant::fs::FileObject> fObj;
+            NtStatus stOp = vfs.createOrOpenFile(p, micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, fObj);
+            if (!NT_SUCCESS(stOp) || !fObj) return "";
+            std::vector<char> buf(1024, 0);
+            uint32_t rd = 0;
+            NtStatus stRd = vfs.readFile(fObj.get(), buf.data(), static_cast<uint32_t>(buf.size()), nullptr, rd);
+            vfs.closeFile(fObj.get());
+            if (!NT_SUCCESS(stRd)) return "";
+            return std::string(buf.data(), rd);
+        };
+
+        // Directory creation on Ca:
+        NtStatus st = vfs.createDirectory(L"Ca:\\Users\\admin\\Horizon281");
+        TEST_ASSERT(NT_SUCCESS(st), "createDirectory Ca:\\Users\\admin\\Horizon281 succeeds");
+
+        // File creation and write on Ca:
+        const std::string payload = "MicaNT Multi-Character Drive Architecture: Ca:\\ is fully live!";
+        bool okWr = WriteHelper(L"Ca:\\Users\\admin\\Horizon281\\manifest.txt", payload);
+        TEST_ASSERT(okWr, "writeFile to Ca:\\ manifest.txt succeeds");
+
+        // Read back from Ca:
+        std::string readStr = ReadHelper(L"Ca:\\Users\\admin\\Horizon281\\manifest.txt");
+        TEST_ASSERT(readStr == payload, "Ca:\\ file contents match written payload");
+
+        // Enumerate directory on Ca:
+        std::vector<micant::fs::VirtualFileSystem::DirectoryEntry> entries;
+        st = vfs.queryDirectory(L"Ca:\\Users\\admin\\Horizon281", entries);
+        TEST_ASSERT(NT_SUCCESS(st), "queryDirectory on Ca:\\ succeeds");
+        TEST_ASSERT(!entries.empty(), "Directory contains entries");
+        TEST_ASSERT(entries[0].name == L"manifest.txt", "Entry name is manifest.txt");
+
+        // Snapshot lifecycle on Nvme0: (NTFS)
+        st = vfs.createVolumeSnapshot(L"Nvme0", "horizon281_snap1");
+        TEST_ASSERT(NT_SUCCESS(st), "createVolumeSnapshot on Nvme0 succeeds");
+        auto snaps = vfs.listVolumeSnapshots(L"Nvme0");
+        TEST_ASSERT(std::find(snaps.begin(), snaps.end(), "horizon281_snap1") != snaps.end(), "listVolumeSnapshots includes horizon281_snap1");
+        st = vfs.rollbackVolumeSnapshot(L"Nvme0", "horizon281_snap1");
+        TEST_ASSERT(NT_SUCCESS(st), "rollbackVolumeSnapshot on Nvme0 succeeds");
+        st = vfs.deleteVolumeSnapshot(L"Nvme0", "horizon281_snap1");
+        TEST_ASSERT(NT_SUCCESS(st), "deleteVolumeSnapshot on Nvme0 succeeds");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 5: Dave Cutler 32,767-Character Unbounded Path Architecture
+    // ------------------------------------------------------------------------
+    std::cout << "  Testing Pillar 5: Dave Cutler 32K Unbounded Path Resolution..." << std::endl;
+    {
+        auto WriteHelper = [&](std::wstring_view p, std::string_view payload) -> bool {
+            std::shared_ptr<micant::fs::FileObject> fObj;
+            NtStatus stCr = vfs.createOrOpenFile(p, micant::fs::FILE_WRITE_DATA, micant::fs::FILE_OVERWRITE_IF, fObj);
+            if (!NT_SUCCESS(stCr) || !fObj) return false;
+            uint32_t wr = 0;
+            NtStatus stWr = vfs.writeFile(fObj.get(), payload.data(), static_cast<uint32_t>(payload.size()), nullptr, wr);
+            vfs.closeFile(fObj.get());
+            return NT_SUCCESS(stWr) && wr == payload.size();
+        };
+
+        auto ReadHelper = [&](std::wstring_view p) -> std::string {
+            std::shared_ptr<micant::fs::FileObject> fObj;
+            NtStatus stOp = vfs.createOrOpenFile(p, micant::fs::FILE_READ_DATA, micant::fs::FILE_OPEN, fObj);
+            if (!NT_SUCCESS(stOp) || !fObj) return "";
+            std::vector<char> buf(1024, 0);
+            uint32_t rd = 0;
+            NtStatus stRd = vfs.readFile(fObj.get(), buf.data(), static_cast<uint32_t>(buf.size()), nullptr, rd);
+            vfs.closeFile(fObj.get());
+            if (!NT_SUCCESS(stRd)) return "";
+            return std::string(buf.data(), rd);
+        };
+
+        TEST_ASSERT(win32::MAX_PATH == 260, "Classic Win32 MAX_PATH is 260");
+        TEST_ASSERT(win32::MICA_MAX_PATH == 32767, "Dave Cutler UNICODE_STRING MICA_MAX_PATH is 32,767");
+
+        // Construct a deep unbounded path > 600 characters without \\?\ prefix
+        std::wstring deepPath = L"Ca:\\UnboundedHorizon";
+        for (int i = 0; i < 25; ++i) {
+            deepPath += L"\\Segment" + std::to_wstring(i) + L"_CuttingEdgeCutlerArchitecture";
+        }
+        deepPath += L"\\unbounded_payload.dat";
+        TEST_ASSERT(deepPath.size() > 600, "Constructed path exceeds 600 characters (MAX_PATH is 260)");
+
+        const std::string deepData = "Dave Cutler 32K Native UNICODE_STRING Standard in MicaNT";
+        bool okWr = WriteHelper(deepPath, deepData);
+        TEST_ASSERT(okWr, "writeFile on 600+ char unbounded path succeeds without \\\\?\\ prefix");
+
+        std::string deepStr = ReadHelper(deepPath);
+        TEST_ASSERT(deepStr == deepData, "Unbounded path read content matches written data");
+    }
+
+    // Clean up temporary multi-character mounts
+    vfs.removeDriveIdentifier(L"Ca");
+    vfs.removeDriveIdentifier(L"Nvme0");
+    vfs.removeDriveIdentifier(L"Pool0");
+    vfs.removeDriveIdentifier(L"Data");
+
+    std::cout << "  Horizon 281 Architectural Validation Complete:\n"
+              << "    Pillar 1: Multi-Character Drive Identifier Normalization & VFS Mapping OK\n"
+              << "    Pillar 2: Win32 DefineDosDeviceW & QueryDosDeviceW Parity OK\n"
+              << "    Pillar 3: Win32 GetLogicalDriveStrings & Volume Information Parity OK\n"
+              << "    Pillar 4: VFS File & Directory Operations on Multi-Character Drives OK\n"
+              << "    Pillar 5: Dave Cutler 32,767-Character Unbounded Path Resolution Architecture OK\n";
+
+    std::cout << "[TEST] Suite 497: Horizon 281 - Multi-Character Drive Identifiers (Ca:\\, Nvme0:\\, Pool0:\\), DosDevices Parity & 32K Unbounded Path Resolution PASSED." << std::endl;
+}
+
+inline void Test_Horizon281_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution_Suite() {
+    Suite497_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution();
+}

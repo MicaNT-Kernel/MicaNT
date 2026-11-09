@@ -50,6 +50,9 @@ using LPDWORD = uint32_t*;
 using PDWORD  = uint32_t*;
 using UINT    = uint32_t;
 using BOOL    = int32_t;
+
+inline constexpr DWORD MAX_PATH = 260;
+inline constexpr DWORD MICA_MAX_PATH = 32767;
 using HANDLE  = void*;
 using HMODULE = void*;
 using HWND    = void*;
@@ -1982,7 +1985,23 @@ inline BOOL SetCurrentDirectoryA(LPCSTR lpPathName) noexcept {
 inline DWORD GetFullPathNameW(LPCWSTR lpFileName, DWORD nBufferLength, LPWSTR lpBuffer, LPWSTR* lpFilePart) noexcept {
     if (!lpFileName) return 0;
     std::wstring fullPath;
-    if (lpFileName[0] == L'\\' || (lpFileName[0] != L'\0' && lpFileName[1] == L':')) {
+    bool isAbsolute = (lpFileName[0] == L'\\' || lpFileName[0] == L'/');
+    if (!isAbsolute && lpFileName[0] != L'\0') {
+        std::wstring_view sv(lpFileName);
+        size_t colon = sv.find(L':');
+        if (colon != std::wstring_view::npos && colon >= 1 && colon <= 32) {
+            bool validId = true;
+            for (size_t i = 0; i < colon; ++i) {
+                wchar_t c = sv[i];
+                if (!std::iswalnum(c) && c != L'_' && c != L'-') {
+                    validId = false;
+                    break;
+                }
+            }
+            if (validId) isAbsolute = true;
+        }
+    }
+    if (isAbsolute) {
         fullPath = lpFileName;
     } else {
         fullPath = g_CurrentDirectory + L"\\" + lpFileName;
@@ -4371,20 +4390,24 @@ inline BOOL GetVolumeInformationW(
     LPWSTR lpFileSystemNameBuffer,
     DWORD nFileSystemNameSize
 ) noexcept {
-    wchar_t driveLetter = L'C';
+    std::wstring driveId = L"C";
     if (lpRootPathName && lpRootPathName[0] != L'\0') {
         std::wstring_view root(lpRootPathName);
-        if (root.starts_with(L"\\DosDevices\\") && root.size() >= 14 && root[13] == L':') {
-            driveLetter = static_cast<wchar_t>(std::towupper(root[12]));
-        } else if (root.starts_with(L"\\?\\") && root.size() >= 6 && root[5] == L':') {
-            driveLetter = static_cast<wchar_t>(std::towupper(root[4]));
-        } else if (root.size() >= 2 && root[1] == L':') {
-            driveLetter = static_cast<wchar_t>(std::towupper(root[0]));
+        if (root.starts_with(L"\\DosDevices\\")) {
+            root = root.substr(12);
+        } else if (root.starts_with(L"\\\\?\\")) {
+            root = root.substr(4);
+        } else if (root.starts_with(L"\\??\\")) {
+            root = root.substr(4);
+        }
+        size_t colon = root.find(L':');
+        if (colon != std::wstring_view::npos && colon >= 1 && colon <= 32) {
+            driveId = fs::VirtualFileSystem::normalizeDriveIdentifier(root.substr(0, colon));
         }
     }
 
     fs::FileSystemVolumeInfo vi{};
-    NtStatus st = fs::VirtualFileSystem::get().queryVolumeInfo(driveLetter, vi);
+    NtStatus st = fs::VirtualFileSystem::get().queryVolumeInfo(driveId, vi);
     if (!NT_SUCCESS(st)) {
         SetLastError(ntdll::RtlNtStatusToDosError(st));
         return FALSE;
@@ -4442,8 +4465,11 @@ inline BOOL FindNextStreamW(HANDLE /*hFindStream*/, LPVOID /*lpFindStreamData*/)
 }
 
 inline DWORD GetLogicalDriveStringsW(DWORD nBufferLength, LPWSTR lpBuffer) noexcept {
-    auto letters = fs::VirtualFileSystem::get().getMountedDriveLetters();
-    DWORD totalChars = static_cast<DWORD>(letters.size() * 4 + 1); // "X:\\\0" for each + trailing '\0'
+    auto ids = fs::VirtualFileSystem::get().getMountedDriveIdentifiers();
+    DWORD totalChars = 1;
+    for (const auto& id : ids) {
+        totalChars += static_cast<DWORD>(id.size() + 3); // "<id>:\\\0"
+    }
     if (nBufferLength < totalChars) {
         return totalChars;
     }
@@ -4451,8 +4477,10 @@ inline DWORD GetLogicalDriveStringsW(DWORD nBufferLength, LPWSTR lpBuffer) noexc
         return 0;
     }
     LPWSTR cur = lpBuffer;
-    for (wchar_t l : letters) {
-        *cur++ = static_cast<wchar_t>(std::towupper(l));
+    for (const auto& id : ids) {
+        for (wchar_t ch : id) {
+            *cur++ = static_cast<wchar_t>(std::towupper(ch));
+        }
         *cur++ = L':';
         *cur++ = L'\\';
         *cur++ = L'\0';
@@ -8613,14 +8641,14 @@ inline BOOL WINAPI DefineDosDeviceW(DWORD dwFlags, LPCWSTR lpDeviceName, LPCWSTR
         SetLastError(87);
         return FALSE;
     }
-    wchar_t d = static_cast<wchar_t>(std::towupper(lpDeviceName[0]));
-    if (d < L'A' || d > L'Z') {
+    std::wstring normId = fs::VirtualFileSystem::normalizeDriveIdentifier(lpDeviceName);
+    if (normId.empty() || normId.size() > 32) {
         SetLastError(87);
         return FALSE;
     }
 
     if (dwFlags & DDD_REMOVE_DEFINITION) {
-        fs::VirtualFileSystem::get().removeDriveLetter(d);
+        fs::VirtualFileSystem::get().removeDriveIdentifier(normId);
         SetLastError(0);
         return TRUE;
     }
@@ -8630,7 +8658,7 @@ inline BOOL WINAPI DefineDosDeviceW(DWORD dwFlags, LPCWSTR lpDeviceName, LPCWSTR
         return FALSE;
     }
 
-    NtStatus st = fs::VirtualFileSystem::get().assignDriveLetter(d, lpTargetPath);
+    NtStatus st = fs::VirtualFileSystem::get().assignDriveIdentifier(normId, lpTargetPath);
     if (!NT_SUCCESS(st)) {
         SetLastError(ntdll::RtlNtStatusToDosError(st));
         return FALSE;
@@ -8663,8 +8691,11 @@ inline DWORD WINAPI QueryDosDeviceW(LPCWSTR lpDeviceName, LPWSTR lpTargetPath, D
     auto& vfs = fs::VirtualFileSystem::get();
 
     if (!lpDeviceName || lpDeviceName[0] == L'\0') {
-        auto letters = vfs.getMountedDriveLetters();
-        size_t totalNeeded = letters.size() * 3 + 1; // "C:\0" per letter plus trailing '\0'
+        auto ids = vfs.getMountedDriveIdentifiers();
+        size_t totalNeeded = 1; // Trailing null terminator for multistring
+        for (const auto& id : ids) {
+            totalNeeded += (id.size() + 2); // "<id>:\0"
+        }
 
         if (ucchMax < totalNeeded) {
             SetLastError(122); // ERROR_INSUFFICIENT_BUFFER
@@ -8672,8 +8703,10 @@ inline DWORD WINAPI QueryDosDeviceW(LPCWSTR lpDeviceName, LPWSTR lpTargetPath, D
         }
 
         LPWSTR cur = lpTargetPath;
-        for (wchar_t l : letters) {
-            *cur++ = l;
+        for (const auto& id : ids) {
+            for (wchar_t ch : id) {
+                *cur++ = static_cast<wchar_t>(std::towupper(ch));
+            }
             *cur++ = L':';
             *cur++ = L'\0';
         }
@@ -8682,14 +8715,14 @@ inline DWORD WINAPI QueryDosDeviceW(LPCWSTR lpDeviceName, LPWSTR lpTargetPath, D
         return static_cast<DWORD>(totalNeeded);
     }
 
-    wchar_t d = static_cast<wchar_t>(std::towupper(lpDeviceName[0]));
-    std::wstring symName = std::wstring(L"\\DosDevices\\") + d + L":";
+    std::wstring normId = fs::VirtualFileSystem::normalizeDriveIdentifier(lpDeviceName);
+    std::wstring symName = std::wstring(L"\\DosDevices\\") + normId + L":";
     auto sym = ob::ObjectNamespace::get().getSymbolicLink(symName);
     std::wstring target;
     if (sym) {
         target = sym->getTargetPath();
     } else {
-        target = vfs.getDeviceForDriveLetter(d);
+        target = vfs.getDeviceForDriveIdentifier(normId);
     }
 
     if (target.empty()) {
@@ -8733,12 +8766,12 @@ inline BOOL WINAPI SetVolumeMountPointW(LPCWSTR lpszVolumeMountPoint, LPCWSTR lp
         SetLastError(87);
         return FALSE;
     }
-    wchar_t d = static_cast<wchar_t>(std::towupper(lpszVolumeMountPoint[0]));
-    if (d < L'A' || d > L'Z') {
+    std::wstring normId = fs::VirtualFileSystem::normalizeDriveIdentifier(lpszVolumeMountPoint);
+    if (normId.empty() || normId.size() > 32) {
         SetLastError(87);
         return FALSE;
     }
-    NtStatus st = fs::VirtualFileSystem::get().assignDriveLetter(d, lpszVolumeName, lpszVolumeName);
+    NtStatus st = fs::VirtualFileSystem::get().assignDriveIdentifier(normId, lpszVolumeName, lpszVolumeName);
     if (!NT_SUCCESS(st)) {
         SetLastError(ntdll::RtlNtStatusToDosError(st));
         return FALSE;
@@ -8759,8 +8792,8 @@ inline BOOL WINAPI DeleteVolumeMountPointW(LPCWSTR lpszVolumeMountPoint) noexcep
         SetLastError(87);
         return FALSE;
     }
-    wchar_t d = static_cast<wchar_t>(std::towupper(lpszVolumeMountPoint[0]));
-    fs::VirtualFileSystem::get().removeDriveLetter(d);
+    std::wstring normId = fs::VirtualFileSystem::normalizeDriveIdentifier(lpszVolumeMountPoint);
+    fs::VirtualFileSystem::get().removeDriveIdentifier(normId);
     SetLastError(0);
     return TRUE;
 }
@@ -8791,8 +8824,11 @@ inline BOOL WINAPI GetDiskFreeSpaceExA(
 }
 
 inline DWORD WINAPI GetLogicalDriveStringsA(DWORD nBufferLength, char* lpBuffer) noexcept {
-    auto letters = fs::VirtualFileSystem::get().getMountedDriveLetters();
-    DWORD totalChars = static_cast<DWORD>(letters.size() * 4 + 1);
+    auto ids = fs::VirtualFileSystem::get().getMountedDriveIdentifiers();
+    DWORD totalChars = 1;
+    for (const auto& id : ids) {
+        totalChars += static_cast<DWORD>(id.size() + 3);
+    }
     if (nBufferLength < totalChars) {
         return totalChars;
     }
@@ -8800,8 +8836,10 @@ inline DWORD WINAPI GetLogicalDriveStringsA(DWORD nBufferLength, char* lpBuffer)
         return 0;
     }
     char* cur = lpBuffer;
-    for (wchar_t l : letters) {
-        *cur++ = static_cast<char>(std::towupper(l));
+    for (const auto& id : ids) {
+        for (wchar_t ch : id) {
+            *cur++ = static_cast<char>(std::towupper(ch));
+        }
         *cur++ = ':';
         *cur++ = '\\';
         *cur++ = '\0';
