@@ -26,6 +26,12 @@ typedef struct MicaWin32kSystemTime {
     uint8_t month, day, hour, minute, second;
     uint16_t reserved;
 } MicaWin32kSystemTime;
+typedef struct MicaWin32kKeyboardEvent {
+    uint16_t virtualKey;
+    uint8_t character;
+    uint8_t flags; /* bit 0: key down, bit 1: Shift, bit 2: Caps Lock */
+    uint32_t sequence;
+} MicaWin32kKeyboardEvent;
 typedef struct MicaWin32kMessage {
     void* hwnd;
     uint32_t message;

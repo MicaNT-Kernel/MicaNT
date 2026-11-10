@@ -460,6 +460,11 @@ static MicaWin32kInputEvent s_win32kInputQueue[128]{};
 static volatile uint32_t s_win32kInputHead = 0;
 static volatile uint32_t s_win32kInputTail = 0;
 static uint32_t s_win32kInputSequence = 0;
+static MicaWin32kKeyboardEvent s_win32kKeyboardQueue[128]{};
+static volatile uint32_t s_win32kKeyboardHead = 0;
+static volatile uint32_t s_win32kKeyboardTail = 0;
+static uint32_t s_win32kKeyboardSequence = 0;
+static bool s_ps2CapsLock = false;
 static volatile bool s_ring3ApplicationRunning = false;
 static uint8_t s_asyncMousePacket[3]{};
 static uint8_t s_asyncMousePacketPos = 0;
@@ -494,6 +499,45 @@ static void pollPs2MouseFromClockInterrupt() {
             s_asyncMousePacketPos = 0;
             publishWin32kMousePacket(s_asyncMousePacket);
         }
+    }
+}
+
+static uint8_t ps2Set1Character(uint8_t code, bool shift, bool caps) {
+    static constexpr char normal[] = "\0\0331234567890-=" "\010\tqwertyuiop[]\n\0asdfghjkl;'`\0\\zxcvbnm,./";
+    static constexpr char shifted[] = "\0\033!@#$%^&*()_+" "\010\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~\0|ZXCVBNM<>?";
+    if (code >= 58) return 0;
+    const bool letter = (code >= 16 && code <= 25) || (code >= 30 && code <= 38) || (code >= 44 && code <= 50);
+    return static_cast<uint8_t>((shift ^ (letter && caps) ? shifted : normal)[code]);
+}
+
+static void publishWin32kKeyboard(uint8_t raw) {
+    const bool down = (raw & 0x80) == 0;
+    const uint8_t code = raw & 0x7F;
+    static bool leftShift = false, rightShift = false;
+    if (code == 42) leftShift = down;
+    if (code == 54) rightShift = down;
+    if (code == 58 && down) s_ps2CapsLock = !s_ps2CapsLock;
+    const bool shift = leftShift || rightShift;
+    uint16_t vk = code;
+    if (code == 1) vk = 0x1B;
+    else if (code == 14) vk = 0x08;
+    else if (code == 15) vk = 0x09;
+    else if (code == 28) vk = 0x0D;
+    else if (code == 42 || code == 54) vk = 0x10;
+    else if (code == 58) vk = 0x14;
+    uint8_t ch = down ? ps2Set1Character(code, shift, s_ps2CapsLock) : 0;
+    if (!down && code != 42 && code != 54) return;
+    uint32_t head = s_win32kKeyboardHead;
+    if (head - s_win32kKeyboardTail >= 128) s_win32kKeyboardTail = head - 127;
+    s_win32kKeyboardQueue[head % 128] = {vk, ch, static_cast<uint8_t>((down ? 1 : 0) | (shift ? 2 : 0) | (s_ps2CapsLock ? 4 : 0)), ++s_win32kKeyboardSequence};
+    s_win32kKeyboardHead = head + 1;
+}
+
+static void pollPs2KeyboardFromClockInterrupt() {
+    for (unsigned drained = 0; drained < 8; ++drained) {
+        const uint8_t status = inb(0x64);
+        if (!(status & 0x01) || (status & 0x20)) break;
+        publishWin32kKeyboard(inb(0x60));
     }
 }
 static bool s_ps2ShiftState = false;
@@ -887,6 +931,15 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                        month, day, hour, minute, second, 0};
             return 1;
         }
+        case 0x84: { // NtUserPollKeyboardInput
+            auto* output = reinterpret_cast<MicaWin32kKeyboardEvent*>(arg1);
+            if (!output || !micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1)) return 0;
+            const uint32_t tail = s_win32kKeyboardTail;
+            if (tail == s_win32kKeyboardHead) return 0;
+            *output = s_win32kKeyboardQueue[tail % 128];
+            s_win32kKeyboardTail = tail + 1;
+            return 1;
+        }
         default:
             return 0;
     }
@@ -1188,7 +1241,7 @@ extern "C" __attribute__((naked)) void KiPageFaultStub() {
 extern "C" void KiClockInterruptHandler() {
     auto& intEngine = micant::hal::idt::InterruptEngine64::get();
     intEngine.updateSystemTime();
-    if (s_ring3ApplicationRunning) pollPs2MouseFromClockInterrupt();
+    if (s_ring3ApplicationRunning) { pollPs2MouseFromClockInterrupt(); pollPs2KeyboardFromClockInterrupt(); }
     intEngine.sendEoi();
 }
 

@@ -2000,6 +2000,7 @@ public:
                 if (m_currentDesktop) {
                     m_currentDesktop->bringToTop(hit);
                     m_currentDesktop->setActiveWindow(hit);
+                    m_currentDesktop->setFocusWindow(hit);
                 }
                 const int32_t frame = windowFrameInset(*hitWindow);
                 const int32_t caption = windowCaptionHeight(*hitWindow);
@@ -2409,6 +2410,19 @@ private:
 
     void pumpMouseInput() {
 #if defined(__x86_64__)
+        for (unsigned count = 0; count < 64; ++count) {
+            MicaWin32kKeyboardEvent key{};
+            uint64_t available = 0;
+            __asm__ __volatile__("movq %1, %%r10; movl $0x84, %%eax; syscall"
+                                 : "=a"(available) : "r"(&key)
+                                 : "r10", "rcx", "r11", "memory");
+            if (available != 1) break;
+            HWND target = m_currentDesktop ? m_currentDesktop->getFocusWindow() : nullptr;
+            if (!target && m_currentDesktop) target = m_currentDesktop->getActiveWindow();
+            if (!target) continue;
+            postMessage(target, (key.flags & 1) ? WM_KEYDOWN : WM_KEYUP, key.virtualKey, 0);
+            if ((key.flags & 1) && key.character) postMessage(target, WM_CHAR, key.character, 0);
+        }
         bool inputChanged = false;
         for (unsigned count = 0; count < 128; ++count) {
             MicaWin32kInputEvent input{};
