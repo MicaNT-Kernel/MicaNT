@@ -18,6 +18,31 @@ void SyscallDispatcher::initializeStandardTable() {}
 
 namespace {
 int32_t PresentComposedDesktop(TitanWin32kSubsystem& server) {
+    auto base = server.composeDesktopFrame(false);
+    auto heldLayers = server.collectDesktopCompositionLayers();
+    if (base && !base->pixels.empty()) {
+        std::vector<micant::boot_driver::CompositionLayer> layers;
+        layers.reserve(heldLayers.size());
+        for (const auto& layer : heldLayers) layers.push_back(layer.descriptor);
+        struct CompositionParams {
+            uint64_t baseSurfaceBufferVa;
+            uint64_t layersVa;
+            uint32_t width, height, pitch, layerCount;
+        } composition{};
+        composition.baseSurfaceBufferVa = reinterpret_cast<uint64_t>(base->pixels.data());
+        composition.layersVa = reinterpret_cast<uint64_t>(layers.data());
+        composition.width = base->width;
+        composition.height = base->height;
+        composition.pitch = base->stride / sizeof(uint32_t);
+        composition.layerCount = static_cast<uint32_t>(layers.size());
+        uint64_t compositionStatus = 0;
+#if defined(__x86_64__)
+        __asm__ __volatile__("movq %1, %%r10; movl $0x85, %%eax; syscall"
+                             : "=a"(compositionStatus) : "r"(&composition)
+                             : "r10", "rcx", "r11", "memory");
+#endif
+        if (compositionStatus == 0) return 1;
+    }
     auto bitmap = server.composeDesktopFrame();
     if (!bitmap || bitmap->pixels.empty() || bitmap->width == 0 || bitmap->height == 0) return 0;
     struct PresentParams {

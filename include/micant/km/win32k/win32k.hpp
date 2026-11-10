@@ -46,6 +46,7 @@
 #include <algorithm>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/boot_driver.hpp"
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
@@ -939,6 +940,11 @@ struct GdiBitmap {
     }
 };
 
+struct DesktopCompositionLayer {
+    micant::boot_driver::CompositionLayer descriptor{};
+    std::shared_ptr<GdiBitmap> surface;
+};
+
 struct GdiDeviceContext {
     HDC     handle{nullptr};
     bool    isMemoryDC{false};
@@ -1686,7 +1692,7 @@ public:
 
     // Compose independent per-window GDI surfaces into the desktop primary
     // surface. Desktop::getZOrder() is front-to-back, so paint in reverse.
-    std::shared_ptr<GdiBitmap> composeDesktopFrame() {
+    std::shared_ptr<GdiBitmap> composeDesktopFrame(bool includeWindowSurfaces = true) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         auto screen = m_gdiEngine.getBitmapForDC(m_gdiEngine.getScreenDC());
         if (!screen) return nullptr;
@@ -1777,7 +1783,7 @@ public:
                 }
             }
 
-            if (!window.hdc) continue;
+            if (!includeWindowSurfaces || !window.hdc) continue;
             auto surface = m_gdiEngine.getBitmapForDC(window.hdc);
             if (!surface || surface->width == 0 || surface->height == 0) continue;
 
@@ -1912,6 +1918,36 @@ public:
             }
         }
         return screen;
+    }
+
+    std::vector<DesktopCompositionLayer> collectDesktopCompositionLayers() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        std::vector<DesktopCompositionLayer> layers;
+        if (!m_currentDesktop) return layers;
+        const auto zOrder = m_currentDesktop->getZOrder(); // front-to-back
+        layers.reserve(zOrder.size());
+        for (auto order = zOrder.rbegin(); order != zOrder.rend(); ++order) {
+            auto it = m_windows.find(*order);
+            if (it == m_windows.end() || !it->second || !it->second->isVisible ||
+                it->second->isMinimized || it->second->isDestroyed || !it->second->hdc) continue;
+            const auto& window = *it->second;
+            auto surface = m_gdiEngine.getBitmapForDC(window.hdc);
+            if (!surface || surface->width == 0 || surface->height == 0) continue;
+            const int32_t frame = windowFrameInset(window);
+            const int32_t caption = windowCaptionHeight(window);
+            DesktopCompositionLayer layer{};
+            layer.descriptor.SurfaceId = reinterpret_cast<uintptr_t>(window.hdc);
+            layer.descriptor.Pixels = surface->pixels.data();
+            layer.descriptor.Width = surface->width;
+            layer.descriptor.Height = surface->height;
+            layer.descriptor.Pitch = surface->stride / sizeof(uint32_t);
+            layer.descriptor.X = window.rcWindow.left + frame;
+            layer.descriptor.Y = window.rcWindow.top + frame + caption;
+            layer.descriptor.Opacity = 0xFF;
+            layer.surface = std::move(surface);
+            layers.push_back(std::move(layer));
+        }
+        return layers;
     }
 
     // Route kernel PS/2 mouse packets to the topmost window. Non-client input

@@ -36,6 +36,21 @@ struct KernelServices {
 using PresentFrameRoutine = bool (*)(void*, const uint32_t*, uint32_t, uint32_t,
                                      uint32_t, int32_t, int32_t);
 
+struct CompositionLayer {
+    uint64_t SurfaceId;
+    const uint32_t* Pixels;
+    uint32_t Width;
+    uint32_t Height;
+    uint32_t Pitch;
+    int32_t X;
+    int32_t Y;
+    uint8_t Opacity;
+    uint8_t Reserved[7];
+};
+
+using PresentCompositionRoutine = bool (*)(void*, const uint32_t*, uint32_t, uint32_t,
+                                            uint32_t, const CompositionLayer*, uint32_t);
+
 struct DisplayDevice {
     uint32_t Size;
     uint32_t Version;
@@ -45,6 +60,7 @@ struct DisplayDevice {
     uint32_t PixelFormat;
     void* Context;
     PresentFrameRoutine PresentFrame;
+    PresentCompositionRoutine PresentComposition;
 };
 
 struct DriverObject {

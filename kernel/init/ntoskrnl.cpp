@@ -729,10 +729,10 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     s_ring3Telemetry.lastSyscallArg2 = arg2;
 
     auto& pm = micant::um::UserProcessManager64::get();
-    pm.dispatchSyscall(ssn, arg1, arg2, arg3, arg4,
+    const micant::NtStatus syscallStatus = pm.dispatchSyscall(ssn, arg1, arg2, arg3, arg4,
                        s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
 
-    if (ssn != 0x81 && ssn != 0x82 && ssn != 0x83 && ssn != 0x84) {
+    if (ssn != 0x81 && ssn != 0x82 && ssn != 0x83 && ssn != 0x84 && ssn != 0x85) {
         UartSerial::print("[KiSystemCall64] Fast Syscall #");
         UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
         UartSerial::print(" from Ring 3: SSN=0x");
@@ -1050,6 +1050,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             *output = s_win32kKeyboardQueue[tail % 128];
             s_win32kKeyboardTail = tail + 1;
             return 1;
+        }
+        case 0x85: { // NtGdiPresentComposition
+            return static_cast<uint64_t>(syscallStatus);
         }
         default:
             return 0;

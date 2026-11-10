@@ -343,6 +343,15 @@ struct UserPresentSurfaceParams64 {
     uint32_t pitch{0};           // Userland buffer pitch in pixels (0 = width)
     uint32_t reserved{0};        // 64-bit alignment padding
 };
+
+struct UserPresentCompositionParams64 {
+    uint64_t baseSurfaceBufferVa{0};
+    uint64_t layersVa{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t pitch{0};
+    uint32_t layerCount{0};
+};
 #pragma pack(pop)
 
 // ============================================================================
@@ -362,6 +371,7 @@ inline constexpr uint32_t SSN_NT_UNMAP_VIEW_OF_SECTION    = 0x002A; // ZwUnmapVi
 inline constexpr uint32_t SSN_NT_EMPTY_WORKING_SET        = 0x008F; // ZwEmptyWorkingSet
 inline constexpr uint32_t SSN_NT_GDI_GET_VIDEO_INFO       = 0x0080; // Query screen dimensions & framebuffer format
 inline constexpr uint32_t SSN_NT_GDI_PRESENT_SURFACE      = 0x0081; // Scanline burst blit to physical VRAM
+inline constexpr uint32_t SSN_NT_GDI_PRESENT_COMPOSITION  = 0x0085; // Ordered independent desktop surfaces
 
 struct SsdtEntry {
     uint32_t    ssn{0};
@@ -390,6 +400,7 @@ public:
         addEntry(SSN_NT_EMPTY_WORKING_SET, "NtEmptyWorkingSet", 1);
         addEntry(SSN_NT_GDI_GET_VIDEO_INFO, "NtGdiGetVideoInfo", 1);
         addEntry(SSN_NT_GDI_PRESENT_SURFACE, "NtGdiPresentSurface", 1);
+        addEntry(SSN_NT_GDI_PRESENT_COMPOSITION, "NtGdiPresentComposition", 1);
     }
 
     constexpr void addEntry(uint32_t ssn, const char* name, uint32_t argCount) noexcept {
@@ -793,6 +804,53 @@ public:
                 }
                 m_totalFramesPresented++;
                 m_totalPixelsBlitted += (static_cast<uint64_t>(params->width) * params->height);
+                return micant::NtStatus::Success;
+            }
+
+            case SSN_NT_GDI_PRESENT_COMPOSITION: {
+                if (arg1 == 0) return micant::NtStatus::InvalidParameter;
+                const auto probe = ProbeUserMemory(reinterpret_cast<void*>(arg1),
+                    sizeof(UserPresentCompositionParams64), alignof(uint32_t));
+                if (probe != micant::NtStatus::Success) return probe;
+                const auto* params = reinterpret_cast<const UserPresentCompositionParams64*>(arg1);
+                if (!params->baseSurfaceBufferVa || !params->width || !params->height ||
+                    params->width > 8192 || params->height > 8192 || params->pitch > 8192 ||
+                    params->pitch < params->width || params->layerCount > 64 ||
+                    (params->layerCount && !params->layersVa)) {
+                    return micant::NtStatus::InvalidParameter;
+                }
+                const uint64_t baseBytes = static_cast<uint64_t>(params->pitch) * params->height * sizeof(uint32_t);
+                if (baseBytes > SIZE_MAX) return micant::NtStatus::InvalidParameter;
+                auto status = ProbeUserMemory(reinterpret_cast<void*>(params->baseSurfaceBufferVa),
+                    static_cast<size_t>(baseBytes), alignof(uint32_t));
+                if (status != micant::NtStatus::Success) return status;
+                size_t layerBytes = static_cast<size_t>(params->layerCount) * sizeof(boot_driver::CompositionLayer);
+                if (params->layerCount) {
+                    status = ProbeUserMemory(reinterpret_cast<void*>(params->layersVa), layerBytes,
+                        alignof(boot_driver::CompositionLayer));
+                    if (status != micant::NtStatus::Success) return status;
+                }
+                auto* layers = reinterpret_cast<const boot_driver::CompositionLayer*>(params->layersVa);
+                for (uint32_t i = 0; i < params->layerCount; ++i) {
+                    const auto& layer = layers[i];
+                    if (!layer.Pixels || !layer.Width || !layer.Height || layer.Width > 8192 ||
+                        layer.Height > 8192 || layer.Pitch > 8192 || layer.Pitch < layer.Width)
+                        return micant::NtStatus::InvalidParameter;
+                    const uint64_t bytes = static_cast<uint64_t>(layer.Pitch) * layer.Height * sizeof(uint32_t);
+                    if (bytes > SIZE_MAX) return micant::NtStatus::InvalidParameter;
+                    status = ProbeUserMemory(const_cast<uint32_t*>(layer.Pixels),
+                        static_cast<size_t>(bytes), alignof(uint32_t));
+                    if (status != micant::NtStatus::Success) return status;
+                }
+                if (!m_displayDevice || !m_displayDevice->PresentComposition)
+                    return micant::NtStatus::NotImplemented;
+                if (!m_displayDevice->PresentComposition(m_displayDevice->Context,
+                        reinterpret_cast<const uint32_t*>(params->baseSurfaceBufferVa),
+                        params->width, params->height, params->pitch, layers, params->layerCount))
+                    return micant::NtStatus::DeviceNotReady;
+                ++m_totalFramesPresented;
+                ++m_totalFramesPresentedByDevice;
+                m_totalPixelsBlitted += static_cast<uint64_t>(params->width) * params->height;
                 return micant::NtStatus::Success;
             }
 
