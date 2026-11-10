@@ -144,11 +144,13 @@ struct PARTITION_INFORMATION_GPT {
     GUID PartitionType{};
     GUID PartitionId{};
     uint64_t Attributes{0};
-    wchar_t Name[36]{0};
+    // Windows WCHAR is 16 bits on every host architecture.
+    char16_t Name[36]{0};
 };
 
 struct PARTITION_INFORMATION_EX {
     PARTITION_STYLE PartitionStyle{PARTITION_STYLE::Mbr};
+    uint16_t PartitionOrdinal{0};
     LargeInteger StartingOffset{};
     LargeInteger PartitionLength{};
     uint32_t PartitionNumber{0};
@@ -446,99 +448,86 @@ public:
  * Implements canonical Windows NT disk.sys IRP handling.
  */
 inline NtStatus DiskDriverDispatch(io::DeviceObject* dev, io::Irp* irp) {
-    if (!dev || !irp) return NtStatus::InvalidParameter;
+    if (!irp) return NtStatus::InvalidParameter;
+    auto complete = [irp](NtStatus status, uintptr_t information = 0) {
+        irp->ioStatus.status = status;
+        irp->ioStatus.information = information;
+        return status;
+    };
+    if (!dev) return complete(NtStatus::InvalidParameter);
     auto* blockDevice = static_cast<IBlockDevice*>(dev->deviceExtension);
-    if (!blockDevice) return NtStatus::DeviceNotReady;
+    if (!blockDevice) return complete(NtStatus::DeviceNotReady);
 
     switch (irp->majorFunction) {
         case io::IRP_MJ_CREATE:
-        case io::IRP_MJ_CLOSE: {
-            irp->ioStatus.status = NtStatus::Success;
-            irp->ioStatus.information = 1; // FILE_OPENED
-            return NtStatus::Success;
-        }
+            return complete(NtStatus::Success, 1); // FILE_OPENED
+        case io::IRP_MJ_CLOSE:
+            return complete(NtStatus::Success);
 
         case io::IRP_MJ_READ: {
-            if (!irp->userBuffer) return NtStatus::InvalidParameter;
+            if (irp->length == 0) return complete(NtStatus::Success);
+            if (!irp->userBuffer || irp->byteOffset.quadPart < 0) return complete(NtStatus::InvalidParameter);
             uint32_t blockSize = blockDevice->getBlockSize();
-            if (blockSize == 0) blockSize = SECTOR_SIZE_512;
+            if (blockSize == 0 || static_cast<uint64_t>(irp->byteOffset.quadPart) % blockSize != 0 || irp->length % blockSize != 0)
+                return complete(NtStatus::InvalidParameter);
             uint64_t lba = static_cast<uint64_t>(irp->byteOffset.quadPart) / blockSize;
             uint32_t blockCount = irp->length / blockSize;
-            if (blockCount == 0 && irp->length > 0) blockCount = 1;
 
             NtStatus st = blockDevice->readBlocks(lba, blockCount, irp->userBuffer);
-            irp->ioStatus.status = st;
-            irp->ioStatus.information = NT_SUCCESS(st) ? (blockCount * blockSize) : 0;
-            return st;
+            return complete(st, NT_SUCCESS(st) ? irp->length : 0);
         }
 
         case io::IRP_MJ_WRITE: {
-            if (!irp->userBuffer) return NtStatus::InvalidParameter;
+            if (irp->length == 0) return complete(NtStatus::Success);
+            if (!irp->userBuffer || irp->byteOffset.quadPart < 0) return complete(NtStatus::InvalidParameter);
             uint32_t blockSize = blockDevice->getBlockSize();
-            if (blockSize == 0) blockSize = SECTOR_SIZE_512;
+            if (blockSize == 0 || static_cast<uint64_t>(irp->byteOffset.quadPart) % blockSize != 0 || irp->length % blockSize != 0)
+                return complete(NtStatus::InvalidParameter);
             uint64_t lba = static_cast<uint64_t>(irp->byteOffset.quadPart) / blockSize;
             uint32_t blockCount = irp->length / blockSize;
-            if (blockCount == 0 && irp->length > 0) blockCount = 1;
 
             NtStatus st = blockDevice->writeBlocks(lba, blockCount, irp->userBuffer);
-            irp->ioStatus.status = st;
-            irp->ioStatus.information = NT_SUCCESS(st) ? (blockCount * blockSize) : 0;
-            return st;
+            return complete(st, NT_SUCCESS(st) ? irp->length : 0);
         }
 
         case io::IRP_MJ_DEVICE_CONTROL: {
             uint32_t ioctl = irp->byteOffset.lowPart;
             switch (ioctl) {
                 case IOCTL_DISK_GET_DRIVE_GEOMETRY: {
-                    if (irp->length < sizeof(DISK_GEOMETRY) || !irp->userBuffer) {
-                        irp->ioStatus.status = NtStatus::BufferTooSmall;
-                        return NtStatus::BufferTooSmall;
-                    }
+                    if (!irp->userBuffer) return complete(NtStatus::InvalidParameter);
+                    if (irp->length < sizeof(DISK_GEOMETRY)) return complete(NtStatus::BufferTooSmall);
                     auto geom = blockDevice->getGeometry();
                     std::memcpy(irp->userBuffer, &geom, sizeof(DISK_GEOMETRY));
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = sizeof(DISK_GEOMETRY);
-                    return NtStatus::Success;
+                    return complete(NtStatus::Success, sizeof(DISK_GEOMETRY));
                 }
 
                 case IOCTL_DISK_GET_DRIVE_GEOMETRY_EX: {
-                    if (irp->length < sizeof(DISK_GEOMETRY_EX) || !irp->userBuffer) {
-                        irp->ioStatus.status = NtStatus::BufferTooSmall;
-                        return NtStatus::BufferTooSmall;
-                    }
+                    constexpr size_t minimumLength = sizeof(DISK_GEOMETRY) + sizeof(LargeInteger);
+                    if (!irp->userBuffer) return complete(NtStatus::InvalidParameter);
+                    if (irp->length < minimumLength) return complete(NtStatus::BufferTooSmall);
                     DISK_GEOMETRY_EX geomEx{};
                     geomEx.Geometry = blockDevice->getGeometry();
                     geomEx.DiskSize.quadPart = static_cast<int64_t>(blockDevice->getTotalBytes());
-                    std::memcpy(irp->userBuffer, &geomEx, sizeof(DISK_GEOMETRY_EX));
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = sizeof(DISK_GEOMETRY_EX);
-                    return NtStatus::Success;
+                    std::memcpy(irp->userBuffer, &geomEx, minimumLength);
+                    return complete(NtStatus::Success, minimumLength);
                 }
 
                 case IOCTL_DISK_GET_LENGTH_INFO: {
-                    if (irp->length < sizeof(GET_LENGTH_INFORMATION) || !irp->userBuffer) {
-                        irp->ioStatus.status = NtStatus::BufferTooSmall;
-                        return NtStatus::BufferTooSmall;
-                    }
+                    if (!irp->userBuffer) return complete(NtStatus::InvalidParameter);
+                    if (irp->length < sizeof(GET_LENGTH_INFORMATION)) return complete(NtStatus::BufferTooSmall);
                     GET_LENGTH_INFORMATION lenInfo{};
                     lenInfo.Length.quadPart = static_cast<int64_t>(blockDevice->getTotalBytes());
                     std::memcpy(irp->userBuffer, &lenInfo, sizeof(GET_LENGTH_INFORMATION));
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = sizeof(GET_LENGTH_INFORMATION);
-                    return NtStatus::Success;
+                    return complete(NtStatus::Success, sizeof(GET_LENGTH_INFORMATION));
                 }
 
                 case IOCTL_DISK_IS_WRITABLE: {
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = 0;
-                    return NtStatus::Success;
+                    return complete(NtStatus::Success);
                 }
 
                 case IOCTL_DISK_GET_PARTITION_INFO: {
-                    if (irp->length < sizeof(PARTITION_INFORMATION) || !irp->userBuffer) {
-                        irp->ioStatus.status = NtStatus::BufferTooSmall;
-                        return NtStatus::BufferTooSmall;
-                    }
+                    if (!irp->userBuffer) return complete(NtStatus::InvalidParameter);
+                    if (irp->length < sizeof(PARTITION_INFORMATION)) return complete(NtStatus::BufferTooSmall);
                     PARTITION_INFORMATION partInfo{};
                     uint64_t startLba = blockDevice->getStartLba();
                     uint32_t blockSize = blockDevice->getBlockSize();
@@ -550,16 +539,12 @@ inline NtStatus DiskDriverDispatch(io::DeviceObject* dev, io::Irp* irp) {
                     partInfo.BootIndicator = (partInfo.PartitionNumber == 1);
                     partInfo.RecognizedPartition = true;
                     std::memcpy(irp->userBuffer, &partInfo, sizeof(PARTITION_INFORMATION));
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = sizeof(PARTITION_INFORMATION);
-                    return NtStatus::Success;
+                    return complete(NtStatus::Success, sizeof(PARTITION_INFORMATION));
                 }
 
                 case IOCTL_DISK_GET_PARTITION_INFO_EX: {
-                    if (irp->length < sizeof(PARTITION_INFORMATION_EX) || !irp->userBuffer) {
-                        irp->ioStatus.status = NtStatus::BufferTooSmall;
-                        return NtStatus::BufferTooSmall;
-                    }
+                    if (!irp->userBuffer) return complete(NtStatus::InvalidParameter);
+                    if (irp->length < sizeof(PARTITION_INFORMATION_EX)) return complete(NtStatus::BufferTooSmall);
                     PARTITION_INFORMATION_EX partInfoEx{};
                     partInfoEx.PartitionStyle = PARTITION_STYLE::Mbr;
                     uint64_t startLba = blockDevice->getStartLba();
@@ -572,35 +557,28 @@ inline NtStatus DiskDriverDispatch(io::DeviceObject* dev, io::Irp* irp) {
                     partInfoEx.Mbr.RecognizedPartition = true;
                     partInfoEx.Mbr.HiddenSectors = static_cast<uint32_t>(startLba);
                     std::memcpy(irp->userBuffer, &partInfoEx, sizeof(PARTITION_INFORMATION_EX));
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = sizeof(PARTITION_INFORMATION_EX);
-                    return NtStatus::Success;
+                    return complete(NtStatus::Success, sizeof(PARTITION_INFORMATION_EX));
                 }
 
                 case IOCTL_STORAGE_GET_DEVICE_NUMBER: {
-                    if (irp->length < sizeof(STORAGE_DEVICE_NUMBER) || !irp->userBuffer) {
-                        irp->ioStatus.status = NtStatus::BufferTooSmall;
-                        return NtStatus::BufferTooSmall;
-                    }
+                    if (!irp->userBuffer) return complete(NtStatus::InvalidParameter);
+                    if (irp->length < sizeof(STORAGE_DEVICE_NUMBER)) return complete(NtStatus::BufferTooSmall);
                     STORAGE_DEVICE_NUMBER devNum{
                         .DeviceType = IOCTL_DISK_BASE,
                         .DeviceNumber = 0,
                         .PartitionNumber = blockDevice->getPartitionNumber()
                     };
                     std::memcpy(irp->userBuffer, &devNum, sizeof(STORAGE_DEVICE_NUMBER));
-                    irp->ioStatus.status = NtStatus::Success;
-                    irp->ioStatus.information = sizeof(STORAGE_DEVICE_NUMBER);
-                    return NtStatus::Success;
+                    return complete(NtStatus::Success, sizeof(STORAGE_DEVICE_NUMBER));
                 }
 
                 default:
-                    irp->ioStatus.status = NtStatus::InvalidDeviceRequest;
-                    return NtStatus::InvalidDeviceRequest;
+                    return complete(NtStatus::InvalidDeviceRequest);
             }
         }
 
         default:
-            return NtStatus::InvalidDeviceRequest;
+            return complete(NtStatus::InvalidDeviceRequest);
     }
 }
 
