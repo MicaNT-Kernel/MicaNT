@@ -15,19 +15,43 @@ bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
 }
 
-// Sovereign Heap Pool (64 KB)
-static uint8_t s_ucrtHeap[65536];
-static size_t s_ucrtOffset = 0;
+// UCRT's heap occupies the lower half of the executive's 16 MB process heap.
+// The generic HeapAlloc/malloc trampolines use the upper half, so both paths
+// share the process PEB contract without overlapping allocations.
+// The process loader reserves the first 64 KB for the PEB, TEB TLS vector,
+// and the static TLS blocks shared by loaded DLLs.
+static size_t s_ucrtOffset = 0x10000;
+
+static uint8_t* processHeapBase() noexcept {
+    uint64_t pebVa = 0;
+#if defined(__x86_64__)
+    __asm__ __volatile__("movq %%gs:0x60, %0" : "=r"(pebVa));
+#endif
+    if (!pebVa) return nullptr;
+    auto* processHeap = reinterpret_cast<uint64_t*>(pebVa + 0x30);
+    return reinterpret_cast<uint8_t*>(*processHeap);
+}
 
 __declspec(dllexport) void* malloc(size_t size) noexcept {
     if (size == 0) size = 1;
-    size_t aligned = (size + 15) & ~15ULL;
-    if (s_ucrtOffset + aligned <= sizeof(s_ucrtHeap)) {
-        void* ptr = &s_ucrtHeap[s_ucrtOffset];
-        s_ucrtOffset += aligned;
-        return ptr;
-    }
-    return nullptr;
+    if (size > static_cast<size_t>(-1) - 31) return nullptr;
+    const size_t aligned = (size + 15) & ~static_cast<size_t>(15);
+    const size_t allocationSize = aligned + 16;
+    size_t offset = allocationSize;
+#if defined(__x86_64__)
+    __asm__ __volatile__("lock xaddq %0, %1" : "+r"(offset), "+m"(s_ucrtOffset) : : "memory");
+#else
+    offset = s_ucrtOffset;
+    s_ucrtOffset += aligned;
+#endif
+    if (offset < allocationSize || offset > 8 * 1024 * 1024 ||
+        allocationSize > 8 * 1024 * 1024 - offset) return nullptr;
+    uint8_t* base = processHeapBase();
+    if (!base) return nullptr;
+    uint8_t* allocation = base + offset;
+    *reinterpret_cast<size_t*>(allocation) = size;
+    *reinterpret_cast<size_t*>(allocation + sizeof(size_t)) = 0x4D4943414E54414CULL;
+    return allocation + 16;
 }
 
 __declspec(dllexport) void free(void* /*ptr*/) noexcept {
@@ -35,6 +59,7 @@ __declspec(dllexport) void free(void* /*ptr*/) noexcept {
 }
 
 __declspec(dllexport) void* calloc(size_t num, size_t size) noexcept {
+    if (size != 0 && num > static_cast<size_t>(-1) / size) return nullptr;
     size_t total = num * size;
     void* p = malloc(total);
     if (p) {
@@ -46,11 +71,17 @@ __declspec(dllexport) void* calloc(size_t num, size_t size) noexcept {
 
 __declspec(dllexport) void* realloc(void* ptr, size_t size) noexcept {
     if (!ptr) return malloc(size);
+    if (size == 0) return nullptr;
     void* newPtr = malloc(size);
     if (newPtr && ptr) {
         auto* d = static_cast<char*>(newPtr);
         auto* s = static_cast<const char*>(ptr);
-        for (size_t i = 0; i < size; ++i) d[i] = s[i];
+        const auto* oldAllocation = reinterpret_cast<const uint8_t*>(ptr) - 16;
+        const size_t oldSize = *reinterpret_cast<const size_t*>(oldAllocation);
+        if (*reinterpret_cast<const size_t*>(oldAllocation + sizeof(size_t)) != 0x4D4943414E54414CULL)
+            return nullptr;
+        const size_t copyBytes = oldSize < size ? oldSize : size;
+        for (size_t i = 0; i < copyBytes; ++i) d[i] = s[i];
     }
     return newPtr;
 }

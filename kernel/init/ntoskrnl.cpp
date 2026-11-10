@@ -1596,6 +1596,8 @@ static bool transitionToRing3(
                     size_t offset;
                     bool mapped;
                     micant::um::UserLoadedImageInfo image;
+                    uint64_t tlsCallbacks[16]{};
+                    size_t tlsCallbackCount{0};
                 } modules[] = {
                     {"user32.dll", 0, false, {}},
                     {"gdi32.dll", 0, false, {}},
@@ -1700,6 +1702,102 @@ static bool transitionToRing3(
                             modulesLoaded = bindImageImports(moduleImage(module), module.image.sizeOfImage);
                         }
                     }
+                    uint64_t reallocTarget = trampBaseVa + 0x480;
+                    for (const auto& module : modules) {
+                        if (!module.mapped || !strEqual(module.name, "ucrtbase.dll")) continue;
+                        uint32_t reallocRva = 0;
+                        if (micant::um::UserImageLoader64::resolveExportRva(
+                                moduleImage(module), module.image.sizeOfImage, "realloc", reallocRva)) {
+                            reallocTarget = targetBaseVa + module.offset + reallocRva;
+                        }
+                        break;
+                    }
+                    // HeapReAlloc's adapter keeps Win32's 4-argument signature
+                    // while forwarding (ptr, size) to UCRT's realloc.
+                    std::memcpy(s_userTrampolinePage + 0xF20 + 8, &reallocTarget, sizeof(reallocTarget));
+                }
+
+                if (modulesLoaded) {
+                    constexpr size_t tlsVectorOffset = 0x8000;
+                    constexpr size_t tlsBlockOffset = 0x1000;
+                    constexpr size_t tlsBlockLimit = tlsVectorOffset - tlsBlockOffset;
+                    constexpr size_t tlsVectorCapacity = 64;
+                    auto* process = pm.findProcess(activePid);
+                    auto* tlsVector = reinterpret_cast<uint64_t*>(s_userHeapBuffer + tlsVectorOffset);
+                    std::memset(s_userHeapBuffer, 0, tlsVectorOffset + tlsVectorCapacity * sizeof(uint64_t));
+                    size_t tlsIndex = 0;
+                    size_t tlsBytesUsed = 0;
+                    for (auto& module : modules) {
+                        if (!module.mapped || module.image.sizeOfImage < sizeof(micant::pe::ImageDosHeader)) continue;
+                        uint8_t* image = moduleImage(module);
+                        auto* dos = reinterpret_cast<const micant::pe::ImageDosHeader*>(image);
+                        if (dos->e_magic != micant::pe::DOS_MAGIC || dos->e_lfanew <= 0 ||
+                            static_cast<size_t>(dos->e_lfanew) + sizeof(micant::pe::ImageNtHeaders64) > module.image.sizeOfImage) {
+                            modulesLoaded = false;
+                            break;
+                        }
+                        auto* nt = reinterpret_cast<const micant::pe::ImageNtHeaders64*>(image + dos->e_lfanew);
+                        if (nt->optionalHeader.numberOfRvaAndSizes <= micant::pe::IMAGE_DIRECTORY_ENTRY_TLS) continue;
+                        const auto& tlsDir = nt->optionalHeader.dataDirectory[micant::pe::IMAGE_DIRECTORY_ENTRY_TLS];
+                        if (!tlsDir.virtualAddress || tlsDir.size < sizeof(micant::pe::ImageTlsDirectory64)) continue;
+                        if (tlsDir.virtualAddress + sizeof(micant::pe::ImageTlsDirectory64) > module.image.sizeOfImage ||
+                            tlsIndex >= tlsVectorCapacity) {
+                            modulesLoaded = false;
+                            break;
+                        }
+                        const auto* tls = reinterpret_cast<const micant::pe::ImageTlsDirectory64*>(image + tlsDir.virtualAddress);
+                        const uint64_t imageBase = module.image.imageBaseVa;
+                        if (tls->startAddressOfRawData < imageBase || tls->endAddressOfRawData < tls->startAddressOfRawData ||
+                            tls->endAddressOfRawData > imageBase + module.image.sizeOfImage ||
+                            tls->addressOfIndex < imageBase || tls->addressOfIndex + sizeof(uint32_t) > imageBase + module.image.sizeOfImage) {
+                            modulesLoaded = false;
+                            break;
+                        }
+                        const size_t templateBytes = static_cast<size_t>(tls->endAddressOfRawData - tls->startAddressOfRawData);
+                        const size_t blockBytes = templateBytes + tls->sizeOfZeroFill;
+                        const size_t alignedOffset = (tlsBlockOffset + tlsBytesUsed + 15) & ~static_cast<size_t>(15);
+                        if (blockBytes > tlsBlockLimit || alignedOffset > tlsVectorOffset || blockBytes > tlsVectorOffset - alignedOffset) {
+                            modulesLoaded = false;
+                            break;
+                        }
+                        auto* tlsBlock = s_userHeapBuffer + alignedOffset;
+                        std::memcpy(tlsBlock, image + (tls->startAddressOfRawData - imageBase), templateBytes);
+                        std::memset(tlsBlock + templateBytes, 0, tls->sizeOfZeroFill);
+                        tlsVector[tlsIndex] = reinterpret_cast<uint64_t>(tlsBlock);
+                        *reinterpret_cast<uint32_t*>(image + (tls->addressOfIndex - imageBase)) = static_cast<uint32_t>(tlsIndex);
+                        tlsBytesUsed = alignedOffset - tlsBlockOffset + blockBytes;
+
+                        if (tls->addressOfCallBacks) {
+                            if (tls->addressOfCallBacks < imageBase || tls->addressOfCallBacks >= imageBase + module.image.sizeOfImage) {
+                                modulesLoaded = false;
+                                break;
+                            }
+                            auto* callbacks = reinterpret_cast<const uint64_t*>(image + (tls->addressOfCallBacks - imageBase));
+                            for (size_t i = 0; i < 16; ++i) {
+                                uint64_t callback = callbacks[i];
+                                if (!callback) break;
+                                if (callback < imageBase || callback >= imageBase + module.image.sizeOfImage) {
+                                    modulesLoaded = false;
+                                    break;
+                                }
+                                module.tlsCallbacks[module.tlsCallbackCount++] = callback;
+                            }
+                            if (!modulesLoaded) break;
+                        }
+                        ++tlsIndex;
+                    }
+                    if (modulesLoaded && process) {
+                        process->peb.processHeap = reinterpret_cast<uint64_t>(s_userHeapBuffer);
+                        process->teb.threadLocalStoragePointer = reinterpret_cast<uint64_t>(tlsVector);
+                        UartSerial::print("[UserLoader] Initialized static TLS for ");
+                        UartSerial::printDec(static_cast<uint32_t>(tlsIndex));
+                        UartSerial::print(" System32 DLLs\r\n");
+                    } else if (modulesLoaded) {
+                        modulesLoaded = false;
+                    }
+                    if (!modulesLoaded) {
+                        UartSerial::print("[UserLoader] Static TLS directory could not be initialized\r\n");
+                    }
                 }
 
                 if (!modulesLoaded) {
@@ -1727,6 +1825,19 @@ static bool transitionToRing3(
                 for (size_t i = moduleCount; i > 0; --i) {
                     const auto& module = modules[i - 1];
                     if (!module.mapped || !module.image.entryPointVa) continue;
+                    for (size_t callbackIndex = 0; callbackIndex < module.tlsCallbackCount; ++callbackIndex) {
+                        const uint8_t setModule[] = {0x48, 0xB9};
+                        const uint8_t setCallback[] = {0x48, 0xB8};
+                        const uint8_t processAttach[] = {0xBA, 0x01, 0x00, 0x00, 0x00, 0x45, 0x31, 0xC0,
+                                                         0x48, 0x83, 0xEC, 0x28};
+                        const uint8_t callCallback[] = {0xFF, 0xD0, 0x48, 0x83, 0xC4, 0x28};
+                        startupFits = emitImmediate64(setModule, sizeof(setModule), targetBaseVa + module.offset) &&
+                                      emitBytes(processAttach, sizeof(processAttach)) &&
+                                      emitImmediate64(setCallback, sizeof(setCallback), module.tlsCallbacks[callbackIndex]) &&
+                                      emitBytes(callCallback, sizeof(callCallback));
+                        if (!startupFits) break;
+                    }
+                    if (!startupFits) break;
                     const uint8_t setModule[] = {0x48, 0xB9}; // mov rcx, image base
                     const uint8_t setEntry[] = {0x48, 0xB8}; // mov rax, DLL entry point
                     const uint8_t processAttach[] = {0xBA, 0x01, 0x00, 0x00, 0x00, 0x45, 0x31, 0xC0,
