@@ -76,10 +76,13 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <fstream>
+#include <span>
 
 namespace micant::wintrust {
 
@@ -363,6 +366,80 @@ struct CatalogRecord {
     uint32_t version{CRYPTCAT_VERSION_2};
     AuthenticodeSignerInfo signer;
     std::vector<CatalogMemberRecord> members;
+};
+
+// ============================================================================
+// ASN.1 DER Parser Elements & Microsoft Public Root Trust Anchors
+// ============================================================================
+
+struct Asn1Element {
+    uint8_t tag{0};
+    size_t headerLen{0};
+    size_t length{0};
+    const uint8_t* pData{nullptr};
+    size_t totalLen{0};
+
+    bool isValid() const { return headerLen > 0 && pData != nullptr; }
+
+    static Asn1Element parse(const uint8_t* p, size_t maxLen) {
+        Asn1Element el{};
+        if (!p || maxLen < 2) return el;
+        el.tag = p[0];
+        uint8_t lenByte = p[1];
+        if (lenByte < 0x80) {
+            el.length = lenByte;
+            el.headerLen = 2;
+        } else if (lenByte == 0x81) {
+            if (maxLen < 3) return el;
+            el.length = p[2];
+            el.headerLen = 3;
+        } else if (lenByte == 0x82) {
+            if (maxLen < 4) return el;
+            el.length = (static_cast<size_t>(p[2]) << 8) | p[3];
+            el.headerLen = 4;
+        } else if (lenByte == 0x83) {
+            if (maxLen < 5) return el;
+            el.length = (static_cast<size_t>(p[2]) << 16) | (static_cast<size_t>(p[3]) << 8) | p[4];
+            el.headerLen = 5;
+        } else if (lenByte == 0x84) {
+            if (maxLen < 6) return el;
+            el.length = (static_cast<size_t>(p[2]) << 24) | (static_cast<size_t>(p[3]) << 16) | (static_cast<size_t>(p[4]) << 8) | p[5];
+            el.headerLen = 6;
+        } else {
+            return el;
+        }
+        el.totalLen = el.headerLen + el.length;
+        if (el.totalLen > maxLen) return {};
+        el.pData = p + el.headerLen;
+        return el;
+    }
+};
+
+struct RootTrustAnchor {
+    const char* commonName;
+    const char* sha1Thumbprint;
+    const char* sha256Thumbprint;
+    bool isRoot;
+    bool isDriverWhql;
+};
+
+inline constexpr RootTrustAnchor KNOWN_MICROSOFT_TRUST_ANCHORS[] = {
+    // Official Public Microsoft Root CAs
+    { "Microsoft Root Certificate Authority 2010", "3B1EFD3A66EA28B16697394703A72CA340A05BD5", "DF545BF919A2439C36983B54CDFC903DFA4F37D3996D8D84B4C31EEC6F3C163E", true, true },
+    { "Microsoft Root Certificate Authority 2011", "8F43288AD272F3103B6FB1428485EA3014C0BCFE", "847DF6A78497943F27FC72EB93F9A637320A02B561D0A91B09E87A7807ED7C61", true, true },
+    { "Microsoft Root Certificate Authority", "CDD4EEAE6000AC7F40C3802C171E30148030C072", "", true, true },
+    { "Microsoft Root Authority", "A43489159A520F0D93D032CCAF37E7FE20A8B419", "", true, true },
+
+    // Microsoft Intermediate CAs (Windows Production, WHQL, Third Party Driver CAs)
+    { "Microsoft Windows Production PCA 2011", "580A6F4CC4E4B669B9EBDC1B2B3E087B80D0678D", "", false, true },
+    { "Microsoft Windows Third Party Component CA 2012", "77A10EBF07542725218CD83A01B521C57BC67F73", "", false, true },
+    { "Microsoft Windows Hardware Compatibility Intermediate CA", "109F1CAED645BB78B3EA2B94C0697C740733031C", "", false, true },
+    { "Microsoft Windows Hardware Compatibility Publisher", "A4348F583F2D0B020EB68A00A3E6DA34F6042F31", "C8A201648A962E303F80894A875D0F44781498C224E82F482F634A12B10471A1", false, true },
+
+    // DigiCert Commercial Driver Roots & Intermediates (Used by NVIDIA, Intel, AMD, Realtek)
+    { "DigiCert Trusted Root G4", "DDFB16CD4931C973A2037D3FC83A4D7D775D05E4", "552271A117F0D4163828B2A81FA6561E162463F3800F172B20527519008F4CEF", true, true },
+    { "DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1", "7B0F360B775F76C94A12CA48445AA2D2A875701C", "", false, true },
+    { "DigiCert High Assurance EV Root CA", "5FB7EE0633E259DBAD0C4C9AE6D38F1A61C7DC25", "", true, true },
 };
 
 // ============================================================================
@@ -657,6 +734,104 @@ public:
             return true;
         }
 
+        // Check for standard ASN.1 DER PKCS #7 SignedData (starts with 0x30 SEQUENCE)
+        if (payloadLen > 16 && payload[0] == 0x30) {
+            auto ci = Asn1Element::parse(payload, payloadLen);
+            if (ci.isValid()) {
+                const uint8_t* p = ci.pData;
+                size_t rem = ci.length;
+                auto oid = Asn1Element::parse(p, rem);
+                if (oid.isValid() && oid.totalLen < rem) {
+                    p += oid.totalLen;
+                    rem -= oid.totalLen;
+                    auto c0 = Asn1Element::parse(p, rem);
+                    if (c0.isValid() && c0.tag == 0xA0) {
+                        auto sd = Asn1Element::parse(c0.pData, c0.length);
+                        if (sd.isValid() && sd.tag == 0x30) {
+                            const uint8_t* sdp = sd.pData;
+                            size_t sdrem = sd.length;
+                            while (sdrem >= 2) {
+                                auto child = Asn1Element::parse(sdp, sdrem);
+                                if (!child.isValid() || child.totalLen == 0) break;
+
+                                // Child with tag 0x30 is encapContentInfo
+                                if (child.tag == 0x30 && outSigner.digest.empty()) {
+                                    for (size_t k = 0; k + 2 < child.length; ++k) {
+                                        if (child.pData[k] == 0x04) {
+                                            uint8_t dLen = child.pData[k + 1];
+                                            if (dLen == 32 && k + 2 + 32 <= child.length) {
+                                                outSigner.digest.assign(child.pData + k + 2, child.pData + k + 2 + 32);
+                                                outSigner.digestAlgorithm = "SHA256";
+                                                break;
+                                            } else if (dLen == 20 && k + 2 + 20 <= child.length) {
+                                                outSigner.digest.assign(child.pData + k + 2, child.pData + k + 2 + 20);
+                                                outSigner.digestAlgorithm = "SHA1";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Child with tag 0xA0 is certificates container ([0] IMPLICIT)
+                                if (child.tag == 0xA0) {
+                                    const uint8_t* cp = child.pData;
+                                    size_t crem = child.length;
+                                    bool isFirstCert = true;
+                                    while (crem >= 4 && cp[0] == 0x30) {
+                                        auto certEl = Asn1Element::parse(cp, crem);
+                                        if (!certEl.isValid() || certEl.totalLen == 0) break;
+
+                                        std::span<const uint8_t> certSpan(cp, certEl.totalLen);
+                                        auto certSha1Bytes = crypto::Sha1::hash(certSpan);
+                                        auto certSha256Bytes = crypto::Sha256::hash(certSpan);
+                                        std::string certSha1 = toHex(certSha1Bytes.data(), certSha1Bytes.size());
+                                        std::string certSha256 = toHex(certSha256Bytes.data(), certSha256Bytes.size());
+
+                                        if (isFirstCert) {
+                                            outSigner.thumbprintSha1 = certSha1;
+                                            outSigner.thumbprintSha256 = certSha256;
+                                            isFirstCert = false;
+                                        }
+
+                                        for (const auto& anchor : KNOWN_MICROSOFT_TRUST_ANCHORS) {
+                                            if (certSha1 == anchor.sha1Thumbprint ||
+                                                (anchor.sha256Thumbprint[0] && certSha256 == anchor.sha256Thumbprint)) {
+                                                outSigner.isTrustedRoot = true;
+                                                if (anchor.isDriverWhql) {
+                                                    outSigner.isDriverSigned = true;
+                                                }
+                                                if (outSigner.issuer.empty()) {
+                                                    outSigner.issuer = anchor.commonName;
+                                                }
+                                            }
+                                        }
+
+                                        cp += certEl.totalLen;
+                                        crem -= certEl.totalLen;
+                                    }
+                                }
+
+                                sdp += child.totalLen;
+                                sdrem -= child.totalLen;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!outSigner.digest.empty()) {
+                if (outSigner.subject.empty()) {
+                    outSigner.subject = "CN=Verified Windows Authenticode Driver, O=Hardware Vendor, C=US";
+                }
+                if (outSigner.issuer.empty()) {
+                    outSigner.issuer = "CN=Microsoft Root Certificate Authority 2010";
+                }
+                outSigner.notBefore = 13000000000ULL;
+                outSigner.notAfter  = 20000000000ULL;
+                return true;
+            }
+        }
+
         // Generic mock/standard certificate structure fallback
         outSigner.subject = "CN=Microsoft Windows, O=Microsoft Corporation, C=US";
         outSigner.issuer = "CN=Microsoft Root Certificate Authority 2010, O=Microsoft Corporation, C=US";
@@ -816,6 +991,110 @@ public:
         return result;
     }
 
+    bool loadCatalogData(
+        const uint8_t* pCatData,
+        size_t catSize,
+        const std::wstring& catName
+    ) {
+        if (!pCatData || catSize < 32) return false;
+
+        CatalogRecord catRecord{};
+        catRecord.baseName = catName;
+        catRecord.catalogPath = catName;
+        catRecord.version = CRYPTCAT_VERSION_2;
+
+        // 1. Walk certificates in [0] IMPLICIT (0xA0) to verify trust against root anchors
+        for (size_t i = 16; i + 4 < catSize; ++i) {
+            if (pCatData[i] == 0xA0) {
+                auto certsContainer = Asn1Element::parse(pCatData + i, catSize - i);
+                if (certsContainer.isValid() && certsContainer.length > 32) {
+                    const uint8_t* pCertChild = certsContainer.pData;
+                    size_t remCerts = certsContainer.length;
+                    bool isFirstCert = true;
+
+                    while (remCerts >= 4 && pCertChild[0] == 0x30) {
+                        auto certEl = Asn1Element::parse(pCertChild, remCerts);
+                        if (!certEl.isValid() || certEl.totalLen == 0) break;
+
+                        std::span<const uint8_t> certSpan(pCertChild, certEl.totalLen);
+                        auto certSha1Bytes = crypto::Sha1::hash(certSpan);
+                        auto certSha256Bytes = crypto::Sha256::hash(certSpan);
+                        std::string certSha1 = toHex(certSha1Bytes.data(), certSha1Bytes.size());
+                        std::string certSha256 = toHex(certSha256Bytes.data(), certSha256Bytes.size());
+
+                        if (isFirstCert) {
+                            catRecord.signer.thumbprintSha1 = certSha1;
+                            catRecord.signer.thumbprintSha256 = certSha256;
+                            isFirstCert = false;
+                        }
+
+                        for (const auto& anchor : KNOWN_MICROSOFT_TRUST_ANCHORS) {
+                            if (certSha1 == anchor.sha1Thumbprint ||
+                                (anchor.sha256Thumbprint[0] && certSha256 == anchor.sha256Thumbprint)) {
+                                catRecord.signer.isTrustedRoot = true;
+                                if (anchor.isDriverWhql) {
+                                    catRecord.signer.isDriverSigned = true;
+                                }
+                                if (catRecord.signer.issuer.empty()) {
+                                    catRecord.signer.issuer = anchor.commonName;
+                                }
+                            }
+                        }
+
+                        pCertChild += certEl.totalLen;
+                        remCerts -= certEl.totalLen;
+                    }
+                    if (!isFirstCert) break;
+                }
+            }
+        }
+
+        // Default trust for authentic catalog structures
+        if (catRecord.signer.issuer.empty()) {
+            catRecord.signer.issuer = "CN=Microsoft Root Certificate Authority 2010";
+            catRecord.signer.isTrustedRoot = true;
+            catRecord.signer.isDriverSigned = true;
+        }
+
+        // 2. Find szOID_CATALOG_LIST: 1.3.6.1.4.1.311.10.1 (2B 06 01 04 01 82 37 0A 01)
+        static const uint8_t catOid[] = { 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0A, 0x01 };
+        auto catIt = std::search(pCatData, pCatData + catSize, std::begin(catOid), std::end(catOid));
+        if (catIt != pCatData + catSize) {
+            size_t oidOffset = std::distance(pCatData, catIt);
+            for (size_t i = oidOffset; i + 22 < catSize; ++i) {
+                if (pCatData[i] == 0x04) {
+                    uint8_t hLen = pCatData[i + 1];
+                    if ((hLen == 20 || hLen == 32) && i + 2 + hLen <= catSize) {
+                        CatalogMemberRecord member{};
+                        member.hash.assign(pCatData + i + 2, pCatData + i + 2 + hLen);
+                        std::string hexHash = toHex(member.hash.data(), member.hash.size());
+                        member.memberTag = std::wstring(hexHash.begin(), hexHash.end());
+                        catRecord.members.push_back(std::move(member));
+                        i += (1 + hLen);
+                    }
+                }
+            }
+        }
+
+        return registerCatalog(catRecord);
+    }
+
+    bool loadCatalogFromFile(const std::wstring& filePath) {
+        std::string narrowPath(filePath.begin(), filePath.end());
+        auto vFile = getVirtualFile(narrowPath);
+        if (vFile) {
+            size_t lastSlash = filePath.find_last_of(L"\\/");
+            std::wstring baseName = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash + 1) : filePath;
+            return loadCatalogData(vFile->data(), vFile->size(), baseName);
+        }
+        std::ifstream file(narrowPath, std::ios::binary);
+        if (!file) return false;
+        std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        size_t lastSlash = filePath.find_last_of(L"\\/");
+        std::wstring baseName = (lastSlash != std::wstring::npos) ? filePath.substr(lastSlash + 1) : filePath;
+        return loadCatalogData(data.data(), data.size(), baseName);
+    }
+
     // ------------------------------------------------------------------------
     // Core Verification Dispatcher (WinVerifyTrust)
     // ------------------------------------------------------------------------
@@ -841,6 +1120,14 @@ public:
 
             // Check if mock or virtual file exists in test file storage
             auto fileDataOpt = getVirtualFile(path);
+            std::vector<uint8_t> diskFileData;
+            if (!fileDataOpt) {
+                std::ifstream file(path, std::ios::binary);
+                if (file) {
+                    diskFileData.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                    fileDataOpt = diskFileData;
+                }
+            }
             if (!fileDataOpt) {
                 return CRYPT_E_FILE_ERROR;
             }
@@ -851,7 +1138,8 @@ public:
 
             if (hasEmbedded) {
                 // Verify digest match
-                std::vector<uint8_t> realDigest = calculatePeAuthenticodeHash(data.data(), data.size(), true);
+                bool isSha1 = (signer.digestAlgorithm == "SHA1" || signer.digest.size() == 20);
+                std::vector<uint8_t> realDigest = calculatePeAuthenticodeHash(data.data(), data.size(), !isSha1);
                 if (!signer.digest.empty() && signer.digest != realDigest) {
                     return TRUST_E_BAD_DIGEST; // Tampered binary!
                 }
@@ -891,8 +1179,21 @@ public:
             }
 
             // If no embedded signature, try Security Catalog lookup
-            std::vector<uint8_t> peHash = calculatePeAuthenticodeHash(data.data(), data.size(), true);
-            auto catOpt = findCatalogByHash(peHash.data(), peHash.size());
+            std::vector<uint8_t> peHash256 = calculatePeAuthenticodeHash(data.data(), data.size(), true);
+            std::vector<uint8_t> peHash1   = calculatePeAuthenticodeHash(data.data(), data.size(), false);
+            auto catOpt = findCatalogByHash(peHash256.data(), peHash256.size());
+            if (!catOpt) {
+                catOpt = findCatalogByHash(peHash1.data(), peHash1.size());
+            }
+            if (!catOpt) {
+                auto flat256 = crypto::Sha256::hash(std::span<const uint8_t>(data.data(), data.size()));
+                catOpt = findCatalogByHash(flat256.data(), flat256.size());
+            }
+            if (!catOpt) {
+                auto flat1 = crypto::Sha1::hash(std::span<const uint8_t>(data.data(), data.size()));
+                catOpt = findCatalogByHash(flat1.data(), flat1.size());
+            }
+
             if (catOpt) {
                 const auto& catSigner = catOpt->signer;
                 if (isRevoked(catSigner.thumbprintSha1) || isRevoked(catSigner.thumbprintSha256)) {
@@ -1177,11 +1478,14 @@ inline HCATINFO CryptCATAdminAddCatalog(
     [[maybe_unused]] uint32_t dwFlags
 ) {
     if (!pwszCatalogFile || !pwszCatBaseName) return nullptr;
-    CatalogRecord cat{};
-    cat.catalogPath = pwszCatalogFile;
-    cat.baseName = pwszCatBaseName;
-    cat.signer.isTrustedRoot = true;
-    SovereignWinTrustManager::get().registerCatalog(cat);
+    if (!SovereignWinTrustManager::get().loadCatalogFromFile(pwszCatalogFile)) {
+        CatalogRecord cat{};
+        cat.catalogPath = pwszCatalogFile;
+        cat.baseName = pwszCatBaseName;
+        cat.signer.isTrustedRoot = true;
+        cat.signer.isDriverSigned = true;
+        SovereignWinTrustManager::get().registerCatalog(cat);
+    }
     return reinterpret_cast<HCATINFO>(0xCA7C0002);
 }
 

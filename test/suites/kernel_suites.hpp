@@ -66970,3 +66970,376 @@ inline void Test_Horizon284_Device61Options73_PagefileWriteCompressionTelemetryC
     Suite500_Direct3D12_Device61_CommandList55_Options73_NTNative_PagefileWriteCompressionTelemetry_CpuClockSpreadSpectrum_InterlockedOrNotModulo_AsconRomulus();
 }
 
+// ============================================================================
+// Suite 501: Horizon 285 - Windows Authenticode ASN.1 PKCS#7 Parser,
+// Sovereign Microsoft Public Root Trust Anchors, Security Catalog (CatRoot)
+// Code Integrity & KMCS Driver Verification Subsystem
+// ============================================================================
+
+#include "micant/um/subsystems/security/wintrust.hpp"
+
+inline void Suite501_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity() {
+    std::cout << "\n[SUITE 501] Horizon 285: Authenticode ASN.1 PKCS#7, Microsoft Trust Anchors & CatRoot Driver Integrity\n";
+
+    using namespace micant::wintrust;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: ASN.1 DER Parser & PKCS #7 SignedData Envelope Processor
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Clean-Room ASN.1 DER Decoding & PKCS #7 Envelope Processing...\n" << std::flush;
+
+        // 1. Primitive & Constructed ASN.1 Tag Decoding
+        uint8_t shortSeq[] = { 0x30, 0x05, 0x02, 0x01, 0x42, 0x05, 0x00 };
+        auto elShort = Asn1Element::parse(shortSeq, sizeof(shortSeq));
+        TEST_ASSERT(elShort.isValid(), "Short-form SEQUENCE element must parse successfully");
+        TEST_ASSERT(elShort.tag == 0x30, "Tag must be 0x30 (SEQUENCE)");
+        TEST_ASSERT(elShort.headerLen == 2, "Header length for short form must be 2 bytes");
+        TEST_ASSERT(elShort.length == 5, "Payload length must be 5 bytes");
+        TEST_ASSERT(elShort.totalLen == 7, "Total element length must be 7 bytes");
+
+        // 2. Long-Form (2-byte length) ASN.1 Decoding (0x82)
+        uint8_t longSeq[300] = { 0x30, 0x82, 0x01, 0x24 }; // 0x0124 = 292 bytes
+        auto elLong = Asn1Element::parse(longSeq, sizeof(longSeq));
+        TEST_ASSERT(elLong.isValid(), "Long-form 0x82 SEQUENCE element must parse successfully");
+        TEST_ASSERT(elLong.tag == 0x30, "Tag must be 0x30");
+        TEST_ASSERT(elLong.headerLen == 4, "Header length for 0x82 long form must be 4 bytes");
+        TEST_ASSERT(elLong.length == 0x0124, "Decoded length must match 292 bytes");
+        TEST_ASSERT(elLong.totalLen == 296, "Total length must be 296 bytes");
+
+        // 3. Context-Specific Tag [0] (0xA0) Processing
+        uint8_t ctxTag[] = { 0xA0, 0x03, 0x02, 0x01, 0x01 };
+        auto elCtx = Asn1Element::parse(ctxTag, sizeof(ctxTag));
+        TEST_ASSERT(elCtx.isValid() && elCtx.tag == 0xA0, "Context-specific [0] element must parse");
+        TEST_ASSERT(elCtx.length == 3, "Context length must be 3 bytes");
+
+        // 4. Clean-Room PKCS #7 SignedData Envelope Construction & Extraction
+        auto makeDer = [](uint8_t tag, const std::vector<uint8_t>& content) -> std::vector<uint8_t> {
+            std::vector<uint8_t> res;
+            res.push_back(tag);
+            if (content.size() < 128) {
+                res.push_back(static_cast<uint8_t>(content.size()));
+            } else {
+                res.push_back(0x82);
+                res.push_back(static_cast<uint8_t>((content.size() >> 8) & 0xFF));
+                res.push_back(static_cast<uint8_t>(content.size() & 0xFF));
+            }
+            res.insert(res.end(), content.begin(), content.end());
+            return res;
+        };
+
+        std::vector<uint8_t> syntheticDigest(32, 0x5A);
+
+        std::vector<uint8_t> algId = { 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00 };
+        std::vector<uint8_t> octetDigest = makeDer(0x04, syntheticDigest);
+        std::vector<uint8_t> digestInfoContent = algId;
+        digestInfoContent.insert(digestInfoContent.end(), octetDigest.begin(), octetDigest.end());
+        std::vector<uint8_t> digestInfo = makeDer(0x30, digestInfoContent);
+
+        std::vector<uint8_t> spcData = { 0x30, 0x03, 0x06, 0x01, 0x00 };
+        std::vector<uint8_t> spcContent = spcData;
+        spcContent.insert(spcContent.end(), digestInfo.begin(), digestInfo.end());
+        std::vector<uint8_t> spcIndirect = makeDer(0x30, spcContent);
+
+        std::vector<uint8_t> spcOid = { 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x04 };
+        std::vector<uint8_t> expSpc = makeDer(0xA0, spcIndirect);
+        std::vector<uint8_t> encapContent = spcOid;
+        encapContent.insert(encapContent.end(), expSpc.begin(), expSpc.end());
+        std::vector<uint8_t> encapContentInfo = makeDer(0x30, encapContent);
+
+        std::vector<uint8_t> version = { 0x02, 0x01, 0x01 };
+        std::vector<uint8_t> digestAlgs = { 0x31, 0x00 };
+        std::vector<uint8_t> sdContent = version;
+        sdContent.insert(sdContent.end(), digestAlgs.begin(), digestAlgs.end());
+        sdContent.insert(sdContent.end(), encapContentInfo.begin(), encapContentInfo.end());
+        std::vector<uint8_t> signedData = makeDer(0x30, sdContent);
+
+        std::vector<uint8_t> sdOid = { 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02 };
+        std::vector<uint8_t> expSd = makeDer(0xA0, signedData);
+        std::vector<uint8_t> ciContent = sdOid;
+        ciContent.insert(ciContent.end(), expSd.begin(), expSd.end());
+        std::vector<uint8_t> mockContentInfo = makeDer(0x30, ciContent);
+
+        // Build minimal mock PE binary with this WIN_CERTIFICATE table
+        std::vector<uint8_t> mockPe(1024, 0);
+        auto* dos = reinterpret_cast<pe::ImageDosHeader*>(mockPe.data());
+        dos->e_magic = pe::DOS_MAGIC;
+        dos->e_lfanew = 128;
+        *reinterpret_cast<uint32_t*>(mockPe.data() + 128) = pe::NT_SIGNATURE;
+        auto* fileHdr = reinterpret_cast<pe::ImageFileHeader*>(mockPe.data() + 132);
+        fileHdr->sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+        auto* opt64 = reinterpret_cast<pe::ImageOptionalHeader64*>(mockPe.data() + 132 + sizeof(pe::ImageFileHeader));
+        opt64->magic = pe::PE32PLUS_MAGIC;
+        opt64->sizeOfHeaders = 512;
+        opt64->numberOfRvaAndSizes = 16;
+        opt64->dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_SECURITY].virtualAddress = 512;
+        opt64->dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_SECURITY].size = static_cast<uint32_t>(sizeof(WIN_CERTIFICATE) + mockContentInfo.size());
+
+        auto* winCert = reinterpret_cast<WIN_CERTIFICATE*>(mockPe.data() + 512);
+        winCert->dwLength = static_cast<uint32_t>(sizeof(WIN_CERTIFICATE) - 1 + mockContentInfo.size());
+        winCert->wRevision = WIN_CERT_REVISION_2_0;
+        winCert->wCertificateType = WIN_CERT_TYPE_PKCS_SIGNED_DATA;
+        std::memcpy(winCert->bCertificate, mockContentInfo.data(), mockContentInfo.size());
+
+        AuthenticodeSignerInfo signerInfo{};
+        bool extracted = SovereignWinTrustManager::get().getEmbeddedSignature(mockPe.data(), mockPe.size(), signerInfo);
+        TEST_ASSERT(extracted, "Extraction from synthetic ASN.1 PKCS#7 envelope must succeed");
+        TEST_ASSERT(signerInfo.digest == syntheticDigest, "Extracted digest must match embedded 32-byte synthetic digest");
+        TEST_ASSERT(signerInfo.digestAlgorithm == "SHA256", "Extracted digest algorithm must be SHA256");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: Sovereign Public Microsoft Root & Intermediate Trust Anchors
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] Sovereign Microsoft Public Root & Intermediate Trust Anchors...\n" << std::flush;
+
+        // 1. Validate Known Trust Anchor Definitions
+        bool foundRoot2010 = false, foundRoot2011 = false, foundWhqlPCA = false, foundDigiCert = false;
+        for (const auto& anchor : KNOWN_MICROSOFT_TRUST_ANCHORS) {
+            std::string name = anchor.commonName;
+            std::string sha1 = anchor.sha1Thumbprint;
+            if (name.find("Microsoft Root Certificate Authority 2010") != std::string::npos) {
+                TEST_ASSERT(sha1 == "3B1EFD3A66EA28B16697394703A72CA340A05BD5", "Microsoft Root CA 2010 SHA-1 thumbprint must match official public anchor");
+                TEST_ASSERT(anchor.isRoot && anchor.isDriverWhql, "Microsoft Root CA 2010 must be trusted root and driver approved");
+                foundRoot2010 = true;
+            } else if (name.find("Microsoft Root Certificate Authority 2011") != std::string::npos) {
+                TEST_ASSERT(sha1 == "8F43288AD272F3103B6FB1428485EA3014C0BCFE", "Microsoft Root CA 2011 SHA-1 thumbprint must match official public anchor");
+                TEST_ASSERT(anchor.isRoot && anchor.isDriverWhql, "Microsoft Root CA 2011 must be trusted root and driver approved");
+                foundRoot2011 = true;
+            } else if (name.find("Microsoft Windows Production PCA 2011") != std::string::npos) {
+                TEST_ASSERT(sha1 == "580A6F4CC4E4B669B9EBDC1B2B3E087B80D0678D", "Windows Production PCA 2011 SHA-1 thumbprint must match official intermediate");
+                TEST_ASSERT(!anchor.isRoot && anchor.isDriverWhql, "Windows Production PCA 2011 must be driver WHQL approved");
+                foundWhqlPCA = true;
+            } else if (name.find("DigiCert Trusted G4 Code Signing") != std::string::npos) {
+                TEST_ASSERT(sha1 == "7B0F360B775F76C94A12CA48445AA2D2A875701C", "DigiCert Trusted G4 Code Signing Intermediate SHA-1 thumbprint must match");
+                TEST_ASSERT(!anchor.isRoot && anchor.isDriverWhql, "DigiCert Code Signing CA must be driver approved");
+                foundDigiCert = true;
+            }
+        }
+        TEST_ASSERT(foundRoot2010, "Microsoft Root CA 2010 trust anchor must be registered");
+        TEST_ASSERT(foundRoot2011, "Microsoft Root CA 2011 trust anchor must be registered");
+        TEST_ASSERT(foundWhqlPCA, "Microsoft Windows Production PCA 2011 intermediate anchor must be registered");
+        TEST_ASSERT(foundDigiCert, "DigiCert Trusted G4 Code Signing intermediate anchor must be registered");
+
+        // 2. Validate Live Host Windows Driver Chain (if present on filesystem)
+        std::ifstream hostDriverFile("C:\\Windows\\System32\\drivers\\aehd.sys", std::ios::binary);
+        if (hostDriverFile) {
+            std::vector<uint8_t> driverBytes((std::istreambuf_iterator<char>(hostDriverFile)), std::istreambuf_iterator<char>());
+            AuthenticodeSignerInfo hostSigner{};
+            bool gotHostSig = SovereignWinTrustManager::get().getEmbeddedSignature(driverBytes.data(), driverBytes.size(), hostSigner);
+            TEST_ASSERT(gotHostSig, "Extraction from live Windows system driver must succeed");
+            TEST_ASSERT(hostSigner.isTrustedRoot, "Host driver chain must anchor to recognized root authority");
+            TEST_ASSERT(hostSigner.isDriverSigned, "Host driver chain must satisfy KMCS driver signing requirements");
+            TEST_ASSERT(!hostSigner.thumbprintSha1.empty(), "Leaf certificate thumbprint must be calculated");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: Security Catalog (CatRoot) Code Integrity Subsystem
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Security Catalog (.cat / CatRoot) Code Integrity Subsystem...\n" << std::flush;
+
+        auto& trustMgr = SovereignWinTrustManager::get();
+
+        // 1. Synthetic Security Catalog Creation and Member Registration
+        CatalogRecord synthCat{};
+        synthCat.baseName = L"MicaNT_NetworkDriver_Package.cat";
+        synthCat.catalogPath = L"C:\\Windows\\System32\\CatRoot\\{F750E6C3-38EE-11d1-85E5-00C04FC295EE}\\MicaNT_NetworkDriver_Package.cat";
+        synthCat.signer.issuer = "CN=Microsoft Windows Hardware Compatibility Publisher";
+        synthCat.signer.thumbprintSha1 = "A4348F583F2D0B020EB68A00A3E6DA34F6042F31";
+        synthCat.signer.isTrustedRoot = true;
+        synthCat.signer.isDriverSigned = true;
+
+        std::vector<uint8_t> driverHash1 = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA,
+                                             0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11, 0x22, 0x33, 0x44 };
+        std::vector<uint8_t> driverHash2(32, 0x7E);
+
+        CatalogMemberRecord m1{};
+        m1.memberTag = L"netdriver.sys";
+        m1.hash = driverHash1;
+        synthCat.members.push_back(m1);
+
+        CatalogMemberRecord m2{};
+        m2.memberTag = L"netdriver64.sys";
+        m2.hash = driverHash2;
+        synthCat.members.push_back(m2);
+
+        bool regOk = trustMgr.registerCatalog(synthCat);
+        TEST_ASSERT(regOk, "Registering synthetic catalog must succeed");
+
+        // 2. Member Hash Lookup
+        auto catFind1 = trustMgr.findCatalogByHash(driverHash1.data(), driverHash1.size());
+        TEST_ASSERT(catFind1.has_value(), "Member 1 SHA-1 hash must resolve to registered catalog");
+        TEST_ASSERT(catFind1->baseName == synthCat.baseName, "Catalog base name must match");
+
+        auto catFind2 = trustMgr.findCatalogByHash(driverHash2.data(), driverHash2.size());
+        TEST_ASSERT(catFind2.has_value(), "Member 2 SHA-256 hash must resolve to registered catalog");
+
+        // Unregistered hash must return nullopt
+        std::vector<uint8_t> unknownHash(32, 0x00);
+        auto unknownFind = trustMgr.findCatalogByHash(unknownHash.data(), unknownHash.size());
+        TEST_ASSERT(!unknownFind.has_value(), "Unknown hash must not resolve to catalog");
+
+        // 3. CryptCATAdmin C ABI Function Tests
+        HCATADMIN hCatAdmin = nullptr;
+        BOOL bAcq = CryptCATAdminAcquireContext(&hCatAdmin, nullptr, 0);
+        TEST_ASSERT(bAcq && hCatAdmin != nullptr, "CryptCATAdminAcquireContext must succeed");
+
+        uint32_t hashLen = 0;
+        BOOL bCalc1 = CryptCATAdminCalcHashFromFileHandle2(hCatAdmin, nullptr, &hashLen, nullptr, 0);
+        TEST_ASSERT(bCalc1 && hashLen == 32, "CryptCATAdminCalcHashFromFileHandle2 query length must return 32");
+
+        std::vector<uint8_t> calcBuf(hashLen);
+        BOOL bCalc2 = CryptCATAdminCalcHashFromFileHandle2(hCatAdmin, nullptr, &hashLen, calcBuf.data(), 0);
+        TEST_ASSERT(bCalc2, "CryptCATAdminCalcHashFromFileHandle2 compute hash must succeed");
+
+        HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash(hCatAdmin, driverHash1.data(), static_cast<uint32_t>(driverHash1.size()), 0, nullptr);
+        TEST_ASSERT(hCatInfo != nullptr, "CryptCATAdminEnumCatalogFromHash must find catalog context for registered member");
+
+        BOOL bRelCat = CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatInfo, 0);
+        TEST_ASSERT(bRelCat, "CryptCATAdminReleaseCatalogContext must succeed");
+
+        BOOL bRel = CryptCATAdminReleaseContext(hCatAdmin, 0);
+        TEST_ASSERT(bRel, "CryptCATAdminReleaseContext must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: End-to-End Kernel-Mode Driver Code Integrity Verification
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] End-to-End KMCS Driver Code Integrity Verification...\n" << std::flush;
+
+        auto& trustMgr = SovereignWinTrustManager::get();
+
+        // 1. Create a clean mock driver PE binary
+        std::vector<uint8_t> driverPe(2048, 0);
+        auto* dos = reinterpret_cast<pe::ImageDosHeader*>(driverPe.data());
+        dos->e_magic = pe::DOS_MAGIC;
+        dos->e_lfanew = 128;
+        *reinterpret_cast<uint32_t*>(driverPe.data() + 128) = pe::NT_SIGNATURE;
+        auto* fileHdr = reinterpret_cast<pe::ImageFileHeader*>(driverPe.data() + 132);
+        fileHdr->numberOfSections = 1;
+        fileHdr->sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+        auto* opt64 = reinterpret_cast<pe::ImageOptionalHeader64*>(driverPe.data() + 132 + sizeof(pe::ImageFileHeader));
+        opt64->magic = pe::PE32PLUS_MAGIC;
+        opt64->sizeOfHeaders = 512;
+        opt64->numberOfRvaAndSizes = 16;
+
+        auto* sec = reinterpret_cast<pe::ImageSectionHeader*>(driverPe.data() + 132 + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64));
+        std::memcpy(sec->name, ".text\0\0\0", 8);
+        sec->virtualAddress = 0x1000;
+        sec->sizeOfRawData = 512;
+        sec->pointerToRawData = 512;
+
+        // Fill .text with mock code
+        std::memset(driverPe.data() + 512, 0x90, 512); // NOPs
+
+        // 2. Sign driver binary using WHQL configuration
+        AuthenticodeSignerInfo signerConfig{};
+        signerConfig.subject = "CN=Vendor Certified Driver, O=Hardware Co, C=US";
+        signerConfig.issuer = "CN=Microsoft Windows Production PCA 2011, O=Microsoft Corporation, C=US";
+        signerConfig.serialNumber = "1234567890ABCDEF";
+        signerConfig.thumbprintSha1 = "580A6F4CC4E4B669B9EBDC1B2B3E087B80D0678D"; // Matches PCA 2011
+        signerConfig.thumbprintSha256 = "C8A201648A962E303F80894A875D0F44781498C224E82F482F634A12B10471A1";
+        signerConfig.isTrustedRoot = true;
+        signerConfig.isDriverSigned = true;
+        signerConfig.notBefore = 10000000000ULL;
+        signerConfig.notAfter  = 30000000000ULL;
+
+        std::vector<uint8_t> signedDriver = trustMgr.signPeBinary(driverPe.data(), 1024, signerConfig);
+        TEST_ASSERT(!signedDriver.empty(), "signPeBinary must successfully embed Authenticode signature");
+
+        std::string vDriverPath = "C:\\Drivers\\whql_net.sys";
+        trustMgr.setVirtualFile(vDriverPath, signedDriver);
+
+        // 3. Verify signed driver with DRIVER_ACTION_VERIFY
+        WINTRUST_FILE_INFO fileInfo{};
+        std::wstring wDriverPath(vDriverPath.begin(), vDriverPath.end());
+        fileInfo.pcwszFilePath = wDriverPath.c_str();
+
+        WINTRUST_DATA wvtData{};
+        wvtData.dwUnionChoice = WTD_CHOICE_FILE;
+        wvtData.pFile = &fileInfo;
+
+        GUID driverAction = DRIVER_ACTION_VERIFY;
+        int32_t status = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(status == TRUST_E_SUCCESS, "WinVerifyTrust on WHQL signed driver must return TRUST_E_SUCCESS (0)");
+
+        // 4. Tamper Detection (Modify 1 byte in .text section)
+        std::vector<uint8_t> tamperedDriver = signedDriver;
+        tamperedDriver[512] ^= 0xFF; // Flip byte
+        std::string vTamperedPath = "C:\\Drivers\\tampered_net.sys";
+        trustMgr.setVirtualFile(vTamperedPath, tamperedDriver);
+
+        std::wstring wTamperedPath(vTamperedPath.begin(), vTamperedPath.end());
+        fileInfo.pcwszFilePath = wTamperedPath.c_str();
+        int32_t tamperStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(tamperStatus == TRUST_E_BAD_DIGEST, "WinVerifyTrust on tampered driver must return TRUST_E_BAD_DIGEST (0x80096010)");
+
+        // 5. Unsigned Driver Rejection
+        std::string vUnsignedPath = "C:\\Drivers\\unsigned_net.sys";
+        trustMgr.setVirtualFile(vUnsignedPath, driverPe); // Original unsigned binary
+        std::wstring wUnsignedPath(vUnsignedPath.begin(), vUnsignedPath.end());
+        fileInfo.pcwszFilePath = wUnsignedPath.c_str();
+        int32_t unsignedStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(unsignedStatus == TRUST_E_NOSIGNATURE, "WinVerifyTrust on unsigned driver without catalog must return TRUST_E_NOSIGNATURE (0x800B0100)");
+
+        // 6. Security Catalog (CatRoot) Driver Verification
+        // Compute Authenticode hash of unsigned binary and register it into a catalog
+        std::vector<uint8_t> peHash = SovereignWinTrustManager::calculatePeAuthenticodeHash(driverPe.data(), driverPe.size(), true);
+        CatalogRecord catPkg{};
+        catPkg.baseName = L"VerifiedDriverPackage.cat";
+        catPkg.signer = signerConfig;
+        CatalogMemberRecord catMember{};
+        catMember.memberTag = L"unsigned_net.sys";
+        catMember.hash = peHash;
+        catPkg.members.push_back(catMember);
+        trustMgr.registerCatalog(catPkg);
+
+        int32_t catVerifyStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(catVerifyStatus == TRUST_E_SUCCESS, "Unsigned driver covered by registered Security Catalog must return TRUST_E_SUCCESS (0)");
+
+        // 7. Certificate Revocation Enforcement
+        trustMgr.revokeCertificate(signerConfig.thumbprintSha1);
+        fileInfo.pcwszFilePath = wDriverPath.c_str();
+        int32_t revokedStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(revokedStatus == CERT_E_REVOKED, "WinVerifyTrust on revoked driver certificate must return CERT_E_REVOKED (0x800B010C)");
+        trustMgr.clearRevocations();
+
+        // 8. Test-Signing Policy Override (Developer Mode)
+        // Untrusted / self-signed certificate rejected under normal policy
+        AuthenticodeSignerInfo testSignerConfig = signerConfig;
+        testSignerConfig.isTrustedRoot = false;
+        testSignerConfig.isDriverSigned = false;
+        testSignerConfig.thumbprintSha1 = "1111111111111111111111111111111111111111";
+        std::vector<uint8_t> testSignedDriver = trustMgr.signPeBinary(driverPe.data(), 1024, testSignerConfig);
+        std::string vTestSignedPath = "C:\\Drivers\\test_signed.sys";
+        trustMgr.setVirtualFile(vTestSignedPath, testSignedDriver);
+        std::wstring wTestSignedPath(vTestSignedPath.begin(), vTestSignedPath.end());
+        fileInfo.pcwszFilePath = wTestSignedPath.c_str();
+
+        int32_t untrustedStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(untrustedStatus == CERT_E_UNTRUSTEDROOT, "Untrusted test driver must return CERT_E_UNTRUSTEDROOT (0x800B0109)");
+
+        // Enable WTPF_TRUSTTEST (TESTSIGNING ON)
+        trustMgr.setPolicyFlags(trustMgr.getPolicyFlags() | WTPF_TRUSTTEST);
+        int32_t testModeStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+        TEST_ASSERT(testModeStatus == TRUST_E_SUCCESS, "Test driver must pass verification when WTPF_TRUSTTEST is enabled");
+        trustMgr.setPolicyFlags(trustMgr.getPolicyFlags() & ~WTPF_TRUSTTEST);
+    }
+
+    std::cout << "  Horizon 285 Architectural Validation Complete:\n"
+              << "    Pillar 1: Clean-Room ASN.1 DER Parser & PKCS #7 SignedData Envelope Processor OK\n"
+              << "    Pillar 2: Sovereign Public Microsoft Root & Intermediate Trust Anchors OK\n"
+              << "    Pillar 3: Security Catalog (.cat / CatRoot) Code Integrity Subsystem OK\n"
+              << "    Pillar 4: End-to-End KMCS Driver Code Integrity Verification OK\n";
+
+    std::cout << "[TEST] Suite 501: Horizon 285 - Authenticode ASN.1 PKCS#7, Microsoft Trust Anchors, CatRoot & KMCS Driver Integrity PASSED." << std::endl;
+}
+
+inline void Test_Horizon285_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity_Suite() {
+    Suite501_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity();
+}
+
