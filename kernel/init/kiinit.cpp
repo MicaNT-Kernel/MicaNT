@@ -59,6 +59,7 @@
 #include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
+#include "micant/km/drivers/system/beep.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
 #include "micant/um/native/ntdll.hpp"
@@ -394,6 +395,10 @@ extern "C" NtStatus KiSystemStartup(
     (void)km::hid::I8042ConnectClassDevice(*pointerPortDevice, *pointerClassDevice,
         km::hid::IOCTL_INTERNAL_MOUSE_CONNECT,
         reinterpret_cast<void*>(km::hid::MouseClassServiceCallback));
+    io::DriverObject beepDriver{};
+    km::system::InitializeBeepDriver(beepDriver);
+    auto beepDevice = km::system::InitializeBeepDevice(ioMgr, beepDriver);
+    (void)beepDevice;
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
               << (km::cc::VACB_MAPPING_GRANULARITY / 1024) << " KB, BCB Pinning & Lazy Writer Active)\n";

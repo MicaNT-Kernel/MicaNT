@@ -104,6 +104,7 @@
 #include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
+#include "micant/km/drivers/system/beep.hpp"
 #include "micant/km/executive/cc.hpp"
 #include "micant/km/executive/fsrtl.hpp"
 #include "micant/km/executive/dbgk.hpp"

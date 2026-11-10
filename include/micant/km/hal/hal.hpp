@@ -18,6 +18,36 @@
 
 namespace micant::hal {
 
+// Legacy 8254/PIT PC-speaker support for the NT beep device. This HAL-private
+// primitive is available only on x86 systems with the compatible speaker port.
+inline bool SetPcSpeakerTone(uint32_t frequency) noexcept {
+#if defined(__i386__) || defined(__x86_64__)
+    auto readPort = [](uint16_t port) noexcept {
+        uint8_t value{};
+        __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
+        return value;
+    };
+    auto writePort = [](uint16_t port, uint8_t value) noexcept {
+        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
+    };
+    const uint8_t gate = readPort(0x61);
+    if (frequency == 0) {
+        writePort(0x61, static_cast<uint8_t>(gate & ~0x03u));
+        return true;
+    }
+    const uint32_t divisor = 1193182u / frequency;
+    if (divisor == 0 || divisor > 0xFFFFu) return false;
+    writePort(0x43, 0xB6);
+    writePort(0x42, static_cast<uint8_t>(divisor & 0xFF));
+    writePort(0x42, static_cast<uint8_t>((divisor >> 8) & 0xFF));
+    writePort(0x61, static_cast<uint8_t>(gate | 0x03u));
+    return true;
+#else
+    (void)frequency;
+    return false;
+#endif
+}
+
 // ============================================================================
 // 1. Processor Architecture & Topology Types
 // ============================================================================
