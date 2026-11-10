@@ -273,6 +273,13 @@ KNOWN_DLLS = [
     ("tools/dlls/ucrtbase.cpp", "build/ucrtbase.dll", "ucrtbase.dll"),
 ]
 
+WINDOWING_DLLS = [
+    ("kernel/ps/winnt_win32k_server.cpp", "win32k.dll", "MICANT_WIN32K_EXPORTS", False),
+    ("kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp", "user32.dll", "BUILD_SYSTEM32_USER32_DLL", True),
+    ("kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp", "gdi32.dll", "BUILD_SYSTEM32_GDI32_DLL", True),
+    ("kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp", "imm32.dll", "BUILD_SYSTEM32_IMM32_DLL", True),
+]
+
 DRIVER_STUBS = [
     ("tools/drivers/driver_template.cpp", "build/ahci.sys", "ahci.sys"),
     ("tools/drivers/driver_template.cpp", "build/i210.sys", "i210.sys"),
@@ -505,6 +512,42 @@ def run_local_build():
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
             sys.exit(1)
 
+    # Build the real User32/GDI32/IMM32 -> win32k.dll chain, with exact
+    # Windows DLL names and an import library shared by all three clients.
+    windowing_dir = os.path.join(REPO_ROOT, "bin", "system32")
+    os.makedirs(windowing_dir, exist_ok=True)
+    win32k_dll = os.path.join(windowing_dir, "win32k.dll")
+    win32k_implib = os.path.join(windowing_dir, "libwin32k.dll.a")
+    win32k_src = "kernel/ps/winnt_win32k_server.cpp"
+    win32k_cmd = [
+        "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23", "-O2",
+        "-Iinclude", "-DBUILD_SYSTEM32_STANDALONE_DLL", "-DMICANT_WIN32K_EXPORTS",
+        "-shared", "-static", f"-Wl,--out-implib,{win32k_implib}", win32k_src,
+        "-o", win32k_dll,
+    ]
+    r = subprocess.run(win32k_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"[FATAL] win32k.dll build failed:\n{r.stderr}")
+        sys.exit(1)
+    for src, dll_name, export_def, imports_win32k in WINDOWING_DLLS[1:]:
+        dll_path = os.path.join(windowing_dir, dll_name)
+        cmd = [
+            "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23", "-O2",
+            "-Iinclude", "-DBUILD_SYSTEM32_STANDALONE_DLL", f"-D{export_def}",
+            "-shared", "-static",
+        ]
+        link_win32k = False
+        if imports_win32k:
+            cmd.append("-DMICANT_WIN32K_IMPORTS")
+            link_win32k = True
+        cmd.extend([src, "-o", dll_path])
+        if link_win32k:
+            cmd.append(win32k_implib)
+        r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[FATAL] {dll_name} build failed:\n{r.stderr}")
+            sys.exit(1)
+
     # Compile Kernel Driver Stubs (PE32+ Native Drivers, Incremental)
     print("      Compiling 14 Kernel Driver Stubs (.sys)...")
     for src, out_path, name in DRIVER_STUBS:
@@ -603,6 +646,11 @@ def main():
 
     for _, out_path, name in KNOWN_DLLS:
         p = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
+    for _, name, _, _ in WINDOWING_DLLS:
+        p = os.path.join(REPO_ROOT, "bin", "system32", name)
         if os.path.exists(p):
             sftp.put(p, f"/tmp/{name}")
 

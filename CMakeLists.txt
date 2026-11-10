@@ -124,6 +124,9 @@ if(WIN32)
     # DLL at runtime so it never embeds a private copy of TitanWin32kSubsystem.
     add_library(micant_win32k SHARED kernel/ps/winnt_win32k_server.cpp)
     target_compile_definitions(micant_win32k PRIVATE BUILD_SYSTEM32_STANDALONE_DLL MICANT_WIN32K_EXPORTS)
+    if(MINGW)
+        target_link_options(micant_win32k PRIVATE -static)
+    endif()
     set_target_properties(micant_win32k PROPERTIES
         OUTPUT_NAME "win32k"
         PREFIX ""
@@ -138,6 +141,9 @@ if(WIN32)
         target_compile_definitions(micant_${_dll_lower} PRIVATE
             BUILD_SYSTEM32_${_dll}_DLL BUILD_SYSTEM32_STANDALONE_DLL MICANT_WIN32K_IMPORTS)
         target_link_libraries(micant_${_dll_lower} PRIVATE micant_win32k)
+        if(MINGW)
+            target_link_options(micant_${_dll_lower} PRIVATE -static)
+        endif()
         set_target_properties(micant_${_dll_lower} PROPERTIES
             OUTPUT_NAME "${_dll_lower}"
             PREFIX ""

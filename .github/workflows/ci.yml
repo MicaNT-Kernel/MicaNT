@@ -92,7 +92,9 @@ jobs:
               }
               $importDefinitions = @()
               if ($dll.ImportWin32k) { $importDefinitions += "-DMICANT_WIN32K_IMPORTS" }
-              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" @importDefinitions $dll.Src @extraArgs -o $dllPath
+              $runtimeFlags = @()
+              if ($dll.Name -in @("win32k.dll", "user32.dll", "gdi32.dll", "imm32.dll") -and -not $isMsvc) { $runtimeFlags += "-static" }
+              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag @runtimeFlags "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" @importDefinitions $dll.Src @extraArgs -o $dllPath
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

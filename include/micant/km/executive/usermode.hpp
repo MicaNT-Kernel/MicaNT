@@ -1390,6 +1390,13 @@ struct UserLoadedImageInfo {
 
 class UserImageLoader64 {
 private:
+    struct ImageExportDirectory64 {
+        uint32_t characteristics, timeDateStamp;
+        uint16_t majorVersion, minorVersion;
+        uint32_t name, ordinalBase, numberOfFunctions, numberOfNames;
+        uint32_t addressOfFunctions, addressOfNames, addressOfNameOrdinals;
+    };
+
     static inline bool streq(const char* a, const char* b) noexcept {
         if (!a || !b) return false;
         while (*a && *b) {
@@ -1410,7 +1417,103 @@ private:
         return (*a == *b);
     }
 
+    static bool hasTerminator(const uint8_t* image, size_t imageSize, uint32_t rva) noexcept {
+        if (!image || rva >= imageSize) return false;
+        for (size_t i=rva; i<imageSize; ++i) if (image[i] == 0) return true;
+        return false;
+    }
+
+    static bool findExportRva(uint8_t* image, size_t imageSize, const char* symbol,
+                              uint16_t ordinal, uint32_t& outRva) noexcept {
+        if (!image || imageSize < sizeof(pe::ImageDosHeader)) return false;
+        const auto* dos=reinterpret_cast<const pe::ImageDosHeader*>(image);
+        if (dos->e_magic != pe::DOS_MAGIC || dos->e_lfanew < 0 ||
+            static_cast<size_t>(dos->e_lfanew)+sizeof(pe::ImageNtHeaders64)>imageSize) return false;
+        auto* nt=reinterpret_cast<pe::ImageNtHeaders64*>(image+dos->e_lfanew);
+        if (nt->signature!=pe::NT_SIGNATURE || nt->optionalHeader.numberOfRvaAndSizes<=pe::IMAGE_DIRECTORY_ENTRY_EXPORT) return false;
+        const auto& dir=nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!dir.virtualAddress || dir.size<sizeof(ImageExportDirectory64) ||
+            dir.virtualAddress>imageSize || dir.size>imageSize-dir.virtualAddress) return false;
+        const auto* exports=reinterpret_cast<const ImageExportDirectory64*>(image+dir.virtualAddress);
+        if (exports->numberOfFunctions>imageSize/sizeof(uint32_t) ||
+            exports->addressOfFunctions>imageSize ||
+            static_cast<size_t>(exports->numberOfFunctions)*sizeof(uint32_t)>imageSize-exports->addressOfFunctions) return false;
+        const auto* functions=reinterpret_cast<const uint32_t*>(image+exports->addressOfFunctions);
+        uint32_t functionIndex=UINT32_MAX;
+        if (ordinal) {
+            if (ordinal<exports->ordinalBase) return false;
+            functionIndex=ordinal-exports->ordinalBase;
+        } else {
+            if (!symbol || exports->numberOfNames>imageSize/sizeof(uint32_t) ||
+                exports->addressOfNames>imageSize ||
+                static_cast<size_t>(exports->numberOfNames)*sizeof(uint32_t)>imageSize-exports->addressOfNames ||
+                exports->addressOfNameOrdinals>imageSize ||
+                static_cast<size_t>(exports->numberOfNames)*sizeof(uint16_t)>imageSize-exports->addressOfNameOrdinals) return false;
+            const auto* names=reinterpret_cast<const uint32_t*>(image+exports->addressOfNames);
+            const auto* ordinals=reinterpret_cast<const uint16_t*>(image+exports->addressOfNameOrdinals);
+            for (uint32_t i=0;i<exports->numberOfNames;++i) {
+                if (names[i]>=imageSize || !hasTerminator(image,imageSize,names[i])) continue;
+                if (streq(reinterpret_cast<const char*>(image+names[i]),symbol)) {
+                    functionIndex=ordinals[i];
+                    break;
+                }
+            }
+        }
+        if (functionIndex>=exports->numberOfFunctions) return false;
+        outRva=functions[functionIndex];
+        // Forwarded exports point back into the export directory and require
+        // another module-resolution pass, so reject them at this layer.
+        return outRva<imageSize && !(outRva>=dir.virtualAddress && outRva<dir.virtualAddress+dir.size);
+    }
+
 public:
+    static bool bindImportsToMappedModule(uint8_t* image, size_t imageSize,
+                                           const char* moduleName,
+                                           uint8_t* moduleImage, size_t moduleSize,
+                                           uint64_t moduleBaseVa) noexcept {
+        if (!image || !moduleName || !moduleImage || imageSize<sizeof(pe::ImageDosHeader)) return false;
+        const auto* dos=reinterpret_cast<const pe::ImageDosHeader*>(image);
+        if (dos->e_magic!=pe::DOS_MAGIC || dos->e_lfanew<0 ||
+            static_cast<size_t>(dos->e_lfanew)+sizeof(pe::ImageNtHeaders64)>imageSize) return false;
+        auto* nt=reinterpret_cast<pe::ImageNtHeaders64*>(image+dos->e_lfanew);
+        if (nt->signature!=pe::NT_SIGNATURE || nt->optionalHeader.numberOfRvaAndSizes<=pe::IMAGE_DIRECTORY_ENTRY_IMPORT) return true;
+        const auto& importDir=nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (!importDir.virtualAddress || importDir.virtualAddress>=imageSize || importDir.size>imageSize-importDir.virtualAddress) return true;
+        auto* desc=reinterpret_cast<pe::ImageImportDescriptor*>(image+importDir.virtualAddress);
+        for (size_t d=0; d<importDir.size/sizeof(pe::ImageImportDescriptor) && desc[d].name; ++d) {
+            auto& entry=desc[d];
+            if (entry.name>=imageSize || !hasTerminator(image,imageSize,entry.name)) return false;
+            if (!strcaseeq(reinterpret_cast<const char*>(image+entry.name),moduleName)) continue;
+            if (!entry.originalFirstThunk) return false;
+            const uint32_t thunkRva=entry.originalFirstThunk;
+            if (thunkRva>=imageSize || entry.firstThunk>=imageSize) return false;
+            const auto* names=reinterpret_cast<const uint64_t*>(image+thunkRva);
+            size_t index=0;
+            while (thunkRva+(index+1)*sizeof(uint64_t)<=imageSize && names[index]) {
+                const uint64_t value=names[index];
+                const uint32_t iatRva=entry.firstThunk+static_cast<uint32_t>(index*sizeof(uint64_t));
+                if (iatRva>imageSize || sizeof(uint64_t)>imageSize-iatRva) return false;
+                uint32_t exportRva=0;
+                bool resolved=false;
+                if (value&pe::IMAGE_ORDINAL_FLAG64) {
+                    resolved=findExportRva(moduleImage,moduleSize,nullptr,static_cast<uint16_t>(value&0xFFFF),exportRva);
+                } else {
+                    const uint32_t nameRva=static_cast<uint32_t>(value&0xFFFFFFFF);
+                    if (nameRva>imageSize || nameRva+sizeof(uint16_t)>=imageSize || !hasTerminator(image,imageSize,nameRva+sizeof(uint16_t))) return false;
+                    const auto* byName=reinterpret_cast<const pe::ImageImportByName*>(image+nameRva);
+                    resolved=findExportRva(moduleImage,moduleSize,byName->name,0,exportRva);
+                }
+                if (!resolved) return false;
+                *reinterpret_cast<uint64_t*>(image+iatRva)=moduleBaseVa+exportRva;
+                ++index;
+            }
+        }
+        // A caller binds a set of candidate modules; absence of this particular
+        // dependency is not an error. Malformed imports and unresolved symbols
+        // in a matching module still fail above.
+        return true;
+    }
+
     static micant::NtStatus loadAndMapImage(
         std::span<const uint8_t> rawPeBytes,
         uint8_t* destinationBuffer,
@@ -1429,7 +1532,8 @@ public:
         UserLoadedImageInfo& outInfo,
         uint64_t userHeapVa = 0,
         size_t userHeapSize = 0,
-        const char* cmdLine = nullptr
+        const char* cmdLine = nullptr,
+        bool registerAsProcess = true
     ) noexcept {
         outInfo = UserLoadedImageInfo{};
         outInfo.pid = pid;
@@ -2352,23 +2456,25 @@ public:
         outInfo.imageBaseVa = targetBaseVa;
         outInfo.entryPointVa = entryPointVa;
 
-        auto& pm = UserProcessManager64::get();
-        auto* proc = pm.createProcess(imageName, pid, parentPid,
-                                      targetBaseVa, nt->optionalHeader.sizeOfImage,
-                                      userStackTopVa, userStackSize,
-                                      pebVa, tebVa);
-        if (proc) {
-            proc->peb.imageBaseAddress = targetBaseVa;
-            proc->peb.imageSubsystem = nt->optionalHeader.subsystem;
-            proc->peb.imageSubsystemMajorVersion = nt->optionalHeader.majorSubsystemVersion;
-            proc->peb.imageSubsystemMinorVersion = nt->optionalHeader.minorSubsystemVersion;
-            proc->peb.osMajorVersion = 10;
-            proc->peb.osMinorVersion = 0;
-            proc->peb.osBuildNumber = 26100;
-        }
+        if (registerAsProcess) {
+            auto& pm = UserProcessManager64::get();
+            auto* proc = pm.createProcess(imageName, pid, parentPid,
+                                          targetBaseVa, nt->optionalHeader.sizeOfImage,
+                                          userStackTopVa, userStackSize,
+                                          pebVa, tebVa);
+            if (proc) {
+                proc->peb.imageBaseAddress = targetBaseVa;
+                proc->peb.imageSubsystem = nt->optionalHeader.subsystem;
+                proc->peb.imageSubsystemMajorVersion = nt->optionalHeader.majorSubsystemVersion;
+                proc->peb.imageSubsystemMinorVersion = nt->optionalHeader.minorSubsystemVersion;
+                proc->peb.osMajorVersion = 10;
+                proc->peb.osMinorVersion = 0;
+                proc->peb.osBuildNumber = 26100;
+            }
 
-        auto& sched = UserThreadScheduler64::get();
-        sched.createThread(pid, pid, 16, entryPointVa, userStackTopVa, tebVa, imageName);
+            auto& sched = UserThreadScheduler64::get();
+            sched.createThread(pid, pid, 16, entryPointVa, userStackTopVa, tebVa, imageName);
+        }
 
         return micant::NtStatus::Success;
     }

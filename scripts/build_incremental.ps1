@@ -217,6 +217,8 @@ try {
                 if ($isMsvc) { $extraArgs += $win32kLibPath }
                 else { $extraArgs += @("-L$sys32Dir", "-lwin32k") }
             }
+            $runtimeFlags = @()
+            if ($dll.Name -in @("win32k.dll", "user32.dll", "gdi32.dll", "imm32.dll") -and -not $isMsvc) { $runtimeFlags += "-static" }
             if ($dll.DefFile) {
                 if ($isMsvc) {
                     $extraArgs += "-Wl,/DEF:$((Join-Path $repoRoot $dll.DefFile).Replace('/', '\'))"
@@ -224,7 +226,7 @@ try {
                     $extraArgs += (Join-Path $repoRoot $dll.DefFile)
                 }
             }
-            & clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" @importDefinitions $dll.Src @extraArgs -o $dllPath
+            & clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag @runtimeFlags "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" @importDefinitions $dll.Src @extraArgs -o $dllPath
             if ($LASTEXITCODE -ne 0) { throw "Failed building System32 PE32+ DLL $($dll.Name)" }
         }
     }
