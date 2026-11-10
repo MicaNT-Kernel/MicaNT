@@ -45,7 +45,6 @@ public:
         }
 
         enumerateNamespace(ns);
-        if (children_.empty()) return NtStatus::NoSuchDevice;
 
         auto& pnp = pnp::PnpManager::get();
         pnp.initialize();
@@ -67,13 +66,13 @@ public:
         if (!NT_SUCCESS(status)) return status;
 
         auto* battery = findBatteryPdo();
-        if (!battery) return NtStatus::NoSuchDevice;
+        if (!battery) return NtStatus::Success;
         for (const auto& child : enumerated) {
             if (child->getPdo() != battery) continue;
             batteryDevNode_ = child;
             break;
         }
-        if (!batteryDevNode_) return NtStatus::NoSuchDevice;
+        if (!batteryDevNode_) return NtStatus::Success;
         batteryDevNode_->setDeviceDescription(L"ACPI Control Method Battery");
         batteryDevNode_->setHardwareIds({L"ACPI\\PNP0C0A"});
         batteryDevNode_->setCompatibleIds({L"PNP0C0A"});
@@ -133,9 +132,31 @@ private:
                 return complete(irp, NtStatus::InvalidParameter);
             }
         }
+        if (irp->minorFunction == pnp::IRP_MN_QUERY_CAPABILITIES) {
+            auto* capabilities = static_cast<pnp::DEVICE_CAPABILITIES*>(stack->parameters.pnp.argument);
+            if (!capabilities) capabilities = static_cast<pnp::DEVICE_CAPABILITIES*>(irp->userBuffer);
+            if (!capabilities || capabilities->size < sizeof(pnp::DEVICE_CAPABILITIES))
+                return complete(irp, NtStatus::InvalidParameter);
+            capabilities->rawDeviceOK = true;
+            capabilities->uniqueId = true;
+            if (device != self->busPdo_.get()) {
+                const auto* extension = static_cast<AcpiPdoExtension*>(device->deviceExtension);
+                const auto sta = micant::acpi::TitanAcpiSubsystem::Instance().getNamespace()
+                    .evaluate(extension->namespacePath + "._STA");
+                capabilities->hardwareDisabled = sta.type == micant::acpi::AmlObjectType::Integer &&
+                    !(sta.integerVal & 1U);
+            }
+            return complete(irp, NtStatus::Success);
+        }
         if (irp->minorFunction == pnp::IRP_MN_START_DEVICE ||
             irp->minorFunction == pnp::IRP_MN_STOP_DEVICE ||
-            irp->minorFunction == pnp::IRP_MN_REMOVE_DEVICE)
+            irp->minorFunction == pnp::IRP_MN_REMOVE_DEVICE ||
+            irp->minorFunction == pnp::IRP_MN_QUERY_STOP_DEVICE ||
+            irp->minorFunction == pnp::IRP_MN_CANCEL_STOP_DEVICE ||
+            irp->minorFunction == pnp::IRP_MN_QUERY_REMOVE_DEVICE ||
+            irp->minorFunction == pnp::IRP_MN_CANCEL_REMOVE_DEVICE ||
+            irp->minorFunction == pnp::IRP_MN_SURPRISE_REMOVAL ||
+            irp->minorFunction == pnp::IRP_MN_DEVICE_USAGE_NOTIFICATION)
             return complete(irp, NtStatus::Success);
         return complete(irp, NtStatus::InvalidDeviceRequest);
     }
@@ -195,21 +216,18 @@ private:
                     else if (hidValue.type == micant::acpi::AmlObjectType::Integer)
                         hid = eisaIdToString(static_cast<uint32_t>(hidValue.integerVal));
                     if (!hid.empty()) {
-                        const auto sta = ns.evaluate(path + "._STA");
-                        if (sta.type != micant::acpi::AmlObjectType::Integer || (sta.integerVal & 1U)) {
-                            std::wstring wideHid(hid.begin(), hid.end());
-                            const uint32_t instance = instances[wideHid]++;
-                            auto extension = std::make_unique<AcpiPdoExtension>();
-                            extension->hardwareId = L"ACPI\\" + wideHid;
-                            extension->instanceId = std::to_wstring(instance);
-                            extension->namespacePath = path;
-                            const std::wstring pdoName = L"\\Device\\AcpiPdo" + std::to_wstring(index++);
-                            auto pdo = io::IoManager::get().createDevice(&driver_, pdoName,
-                                wideHid == L"PNP0C0A" ? io::DeviceType::Battery : io::DeviceType::Unknown,
-                                extension.get());
-                            pdo->flags &= ~io::DO_DEVICE_INITIALIZING;
-                            children_.push_back({std::move(extension), std::move(pdo)});
-                        }
+                        std::wstring wideHid(hid.begin(), hid.end());
+                        const uint32_t instance = instances[wideHid]++;
+                        auto extension = std::make_unique<AcpiPdoExtension>();
+                        extension->hardwareId = L"ACPI\\" + wideHid;
+                        extension->instanceId = std::to_wstring(instance);
+                        extension->namespacePath = path;
+                        const std::wstring pdoName = L"\\Device\\AcpiPdo" + std::to_wstring(index++);
+                        auto pdo = io::IoManager::get().createDevice(&driver_, pdoName,
+                            wideHid == L"PNP0C0A" ? io::DeviceType::Battery : io::DeviceType::Unknown,
+                            extension.get());
+                        pdo->flags &= ~io::DO_DEVICE_INITIALIZING;
+                        children_.push_back({std::move(extension), std::move(pdo)});
                     }
                 }
             }

@@ -201,6 +201,10 @@ public:
         auto& extension = *static_cast<MiniportExtension*>(device->deviceExtension);
         switch (irp->minorFunction) {
         case pnp::IRP_MN_START_DEVICE:
+            if (extension.pdo->driverObject) {
+                const auto lowerStatus = extension.pdo->driverObject->dispatch(extension.pdo, irp);
+                if (!NT_SUCCESS(lowerStatus)) return lowerStatus;
+            }
             extension.started = true;
             (void)RefreshClassDevice();
             if (!InterfaceSymbolicLink().empty())
@@ -212,11 +216,15 @@ public:
             extension.started = false;
             if (!InterfaceSymbolicLink().empty())
                 (void)pnp::PnpManager::get().setDeviceInterfaceState(InterfaceSymbolicLink(), false);
+            if (extension.pdo->driverObject)
+                return extension.pdo->driverObject->dispatch(extension.pdo, irp);
             break;
         case pnp::IRP_MN_REMOVE_DEVICE:
             extension.started = false;
             if (!InterfaceSymbolicLink().empty())
                 (void)pnp::PnpManager::get().setDeviceInterfaceState(InterfaceSymbolicLink(), false);
+            if (extension.pdo->driverObject)
+                (void)extension.pdo->driverObject->dispatch(extension.pdo, irp);
             if (extension.classData) {
                 (void)BatteryClassUnload(extension.classData);
                 extension.classData = nullptr;
@@ -225,9 +233,15 @@ public:
             io::IoManager::get().deleteDevice(device);
             break;
         default:
-            irp->ioStatus.status = NtStatus::InvalidDeviceRequest;
+            if (extension.pdo && extension.pdo->driverObject) {
+                irp->deviceObject = extension.pdo;
+                auto* stack = irp->getCurrentStack();
+                if (stack) stack->deviceObject = extension.pdo;
+                return extension.pdo->driverObject->dispatch(extension.pdo, irp);
+            }
+            irp->ioStatus.status = NtStatus::NoSuchDevice;
             irp->ioStatus.information = 0;
-            return NtStatus::InvalidDeviceRequest;
+            return NtStatus::NoSuchDevice;
         }
         irp->ioStatus.status = NtStatus::Success;
         irp->ioStatus.information = 0;
