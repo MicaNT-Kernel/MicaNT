@@ -479,6 +479,7 @@ struct WND {
     bool isDestroyed{false};
     bool isPaintInvalidated{false};
     HDC hdc{nullptr};
+    HBITMAP clientBitmap{nullptr};
 };
 
 // ============================================================================
@@ -1370,6 +1371,12 @@ public:
 
         auto wnd = it->second;
         wnd->isDestroyed = true;
+        if (wnd->hdc) {
+            if (wnd->clientBitmap) m_gdiEngine.deleteObject(wnd->clientBitmap);
+            m_gdiEngine.releaseDC(wnd->hdc);
+            wnd->clientBitmap=nullptr;
+            wnd->hdc=nullptr;
+        }
 
         if (m_currentDesktop) {
             m_currentDesktop->removeWindowFromZOrder(hwnd);
@@ -1529,9 +1536,52 @@ public:
         }
         if (wnd->rcWindow.left != oldX || wnd->rcWindow.top != oldY)
             postMessage(hwnd, WM_MOVE, 0, static_cast<LPARAM>((wnd->rcWindow.top << 16) | (wnd->rcWindow.left & 0xFFFF)));
-        if (wnd->rcWindow.width() != oldW || wnd->rcWindow.height() != oldH)
+        if (wnd->rcWindow.width() != oldW || wnd->rcWindow.height() != oldH) {
+            if (wnd->hdc) {
+                HBITMAP replacement=m_gdiEngine.createCompatibleBitmap(wnd->hdc,
+                    std::max(1,wnd->rcClient.width()),std::max(1,wnd->rcClient.height()));
+                if (replacement) {
+                    HBITMAP old=wnd->clientBitmap;
+                    m_gdiEngine.selectObject(wnd->hdc,replacement);
+                    wnd->clientBitmap=replacement;
+                    if (old) m_gdiEngine.deleteObject(old);
+                }
+            }
             postMessage(hwnd, WM_SIZE, 0, static_cast<LPARAM>((wnd->rcWindow.height() << 16) | (wnd->rcWindow.width() & 0xFFFF)));
+        }
         return TRUE_VAL;
+    }
+
+    HDC getDC(HWND hwnd) {
+        if (!hwnd) return m_gdiEngine.getScreenDC();
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it=m_windows.find(hwnd);
+        if (it == m_windows.end()) return nullptr;
+        auto& wnd=*it->second;
+        if (wnd.hdc) return wnd.hdc;
+        const int width=std::max(1,wnd.rcClient.width());
+        const int height=std::max(1,wnd.rcClient.height());
+        HDC dc=m_gdiEngine.createCompatibleDC(m_gdiEngine.getScreenDC());
+        HBITMAP bitmap=m_gdiEngine.createCompatibleBitmap(dc,width,height);
+        if (!dc || !bitmap || !m_gdiEngine.selectObject(dc,bitmap)) {
+            if (bitmap) m_gdiEngine.deleteObject(bitmap);
+            if (dc) m_gdiEngine.releaseDC(dc);
+            return nullptr;
+        }
+        wnd.hdc=dc;
+        wnd.clientBitmap=bitmap;
+        return dc;
+    }
+
+    BOOL releaseDC(HWND hwnd, HDC dc) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it=m_windows.find(hwnd);
+        if (it != m_windows.end() && it->second->hdc == dc) {
+            if (it->second->clientBitmap) m_gdiEngine.deleteObject(it->second->clientBitmap);
+            it->second->clientBitmap=nullptr;
+            it->second->hdc=nullptr;
+        }
+        return m_gdiEngine.releaseDC(dc);
     }
 
     std::shared_ptr<WND> getWindow(HWND hwnd) const {
@@ -1963,13 +2013,11 @@ inline BOOL WINAPI NtUserSwitchDesktop(HDESK hDesktop) noexcept {
 }
 
 inline HDC WINAPI NtUserGetDC(HWND hWnd) noexcept {
-    (void)hWnd;
-    return TitanWin32kSubsystem::Instance().getGdi().getScreenDC();
+    return TitanWin32kSubsystem::Instance().getDC(hWnd);
 }
 
 inline BOOL WINAPI NtUserReleaseDC(HWND hWnd, HDC hDC) noexcept {
-    (void)hWnd;
-    return TitanWin32kSubsystem::Instance().getGdi().releaseDC(hDC);
+    return TitanWin32kSubsystem::Instance().releaseDC(hWnd,hDC);
 }
 
 inline HDC WINAPI NtGdiCreateCompatibleDC(HDC hdc) noexcept {
