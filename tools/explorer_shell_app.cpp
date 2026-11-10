@@ -461,12 +461,18 @@ extern "C" void _start(const char* = nullptr) {
     }
 
     redrawDesktop();
+    updateClock();
+    uint32_t clockPollDivider = 0;
     for (;;) {
-        updateClock();
+        // Clock reads cross into the kernel and query the RTC; the taskbar only
+        // needs seconds precision, so avoid doing that work on every idle spin.
+        if (++clockPollDivider == 2000000U) {
+            clockPollDivider = 0;
+            updateClock();
+        }
         MicaWin32kMessage msg{};
         while (MicaWin32kPeekMessageW(&msg, nullptr, 0, 0, 1)) {
             MicaWin32kDispatchMessageW(&msg);
-            updateClock();
         }
         __asm__ __volatile__("pause");
     }

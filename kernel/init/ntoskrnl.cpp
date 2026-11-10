@@ -631,7 +631,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     pm.dispatchSyscall(ssn, arg1, arg2, arg3, arg4,
                        s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
 
-    if (ssn != 0x81 && ssn != 0x82) {
+    if (ssn != 0x81 && ssn != 0x82 && ssn != 0x83 && ssn != 0x84) {
         UartSerial::print("[KiSystemCall64] Fast Syscall #");
         UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
         UartSerial::print(" from Ring 3: SSN=0x");
