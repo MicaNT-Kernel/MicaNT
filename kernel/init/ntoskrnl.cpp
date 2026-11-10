@@ -856,6 +856,37 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             s_win32kInputTail = tail + 1;
             return 1;
         }
+        case 0x83: { // NtQueryRealTimeClock
+            auto* output = reinterpret_cast<MicaWin32kSystemTime*>(arg1);
+            if (!output || !micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1)) return 0;
+            auto readCmos = [](uint8_t reg) {
+                outb(0x70, reg);
+                return inb(0x71);
+            };
+            for (uint32_t wait = 0; wait < 100000 && (readCmos(0x0A) & 0x80); ++wait) {}
+            uint8_t second = readCmos(0x00), minute = readCmos(0x02), hour = readCmos(0x04);
+            uint8_t day = readCmos(0x07), month = readCmos(0x08), year = readCmos(0x09);
+            const uint8_t statusB = readCmos(0x0B);
+            auto bcdToBinary = [](uint8_t value) -> uint8_t {
+                return static_cast<uint8_t>((value >> 4) * 10 + (value & 0x0F));
+            };
+            const bool binaryMode = (statusB & 0x04) != 0;
+            const bool mode24Hour = (statusB & 0x02) != 0;
+            const bool isPm = (hour & 0x80) != 0;
+            hour &= 0x7F;
+            if (!binaryMode) {
+                second = bcdToBinary(second); minute = bcdToBinary(minute);
+                hour = bcdToBinary(hour); day = bcdToBinary(day);
+                month = bcdToBinary(month); year = bcdToBinary(year);
+            }
+            if (!mode24Hour) {
+                hour = static_cast<uint8_t>(hour % 12);
+                if (isPm) hour = static_cast<uint8_t>(hour + 12);
+            }
+            *output = {static_cast<uint16_t>(year >= 70 ? 1900 + year : 2000 + year),
+                       month, day, hour, minute, second, 0};
+            return 1;
+        }
         default:
             return 0;
     }

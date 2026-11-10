@@ -21,6 +21,11 @@ typedef struct MicaWin32kInputEvent {
     uint32_t buttons;
     uint32_t sequence;
 } MicaWin32kInputEvent;
+typedef struct MicaWin32kSystemTime {
+    uint16_t year;
+    uint8_t month, day, hour, minute, second;
+    uint16_t reserved;
+} MicaWin32kSystemTime;
 typedef struct MicaWin32kMessage {
     void* hwnd;
     uint32_t message;

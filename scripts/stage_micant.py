@@ -62,7 +62,7 @@ SYSTEM32_TOOLS = [
     ("tools/notepad_app.cpp", "build/notepad.exe", "notepad.exe"),
     ("tools/taskmgr_app.cpp", "build/taskmgr.exe", "taskmgr.exe"),
     ("tools/regedit_app.cpp", "build/regedit.exe", "regedit.exe"),
-    ("tools/explorer_app.cpp", "build/explorer.exe", "explorer.exe"),
+    ("tools/explorer_shell_app.cpp", "build/explorer.exe", "explorer.exe"),
     ("tools/paint_app.cpp", "build/mspaint.exe", "mspaint.exe"),
     ("tools/devmgmt_app.cpp", "build/devmgmt.exe", "devmgmt.exe"),
     ("tools/diskmgmt_app.cpp", "build/diskmgmt.exe", "diskmgmt.exe"),
@@ -422,6 +422,9 @@ def run_local_build():
     # Compile System32 Standalone Ring 3 Utilities (Incremental)
     print(f"      Compiling {len(SYSTEM32_TOOLS)} System32 Utilities & Desktop Apps...")
     for src, out_path, name in SYSTEM32_TOOLS:
+        # explorer.exe links to the win32k import library, built below.
+        if name == "explorer.exe":
+            continue
         full_src = os.path.join(REPO_ROOT, src)
         full_out = os.path.join(REPO_ROOT, out_path)
         if os.path.exists(full_out) and os.path.exists(full_src):
@@ -532,6 +535,21 @@ def run_local_build():
     if r.returncode != 0:
         print(f"[FATAL] win32k.dll build failed:\n{r.stderr}")
         sys.exit(1)
+
+    # The interactive desktop shell is a Win32 client of win32k.dll, not a
+    # direct framebuffer utility. Build it after the window manager import lib.
+    explorer_cmd = [
+        "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23",
+        "-ffreestanding", "-fno-exceptions", "-fno-rtti", "-fno-stack-protector",
+        "-mno-red-zone", "-mno-stack-arg-probe", "-O2", "-Iinclude", "-Itools",
+        "-Wl,--subsystem,console", "-Wl,-e,_start", "-nostdlib",
+        "tools/explorer_shell_app.cpp", win32k_implib, "-o", "build/explorer.exe",
+    ]
+    explorer_result = subprocess.run(explorer_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    if explorer_result.returncode != 0:
+        print(f"[FATAL] explorer.exe build failed:\n{explorer_result.stderr}")
+        sys.exit(1)
+
     for src, dll_name, export_def, imports_win32k in WINDOWING_DLLS[1:]:
         dll_path = os.path.join(windowing_dir, dll_name)
         cmd = [
