@@ -12402,6 +12402,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(scm.getServiceRecord(L"hidusb") != nullptr, "hidusb service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"kbdclass") != nullptr, "kbdclass service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"kbdhid") != nullptr, "kbdhid service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"mouhid") != nullptr, "mouhid service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"mouclass") != nullptr, "mouclass service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"i8042prt") != nullptr, "i8042prt service record must exist");
 
@@ -12412,6 +12413,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(verDb.GetModuleInfo("hidusb.sys") != nullptr, "hidusb.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("kbdclass.sys") != nullptr, "kbdclass.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("kbdhid.sys") != nullptr, "kbdhid.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("mouhid.sys") != nullptr, "mouhid.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("mouclass.sys") != nullptr, "mouclass.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("i8042prt.sys") != nullptr, "i8042prt.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("hid.dll") != nullptr, "hid.dll must be in Version Database");
@@ -12492,6 +12494,27 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(vcaps[0].LogicalMin == -32767 && vcaps[0].LogicalMax == 32767, "X axis must have signed 16-bit logical bounds");
         TEST_ASSERT(vcaps[1].NotRange.Usage == HID_USAGE_GENERIC_Y && vcaps[1].BitSize == 16, "ValueCap 1 must be 16-bit Y");
         TEST_ASSERT(vcaps[2].NotRange.Usage == HID_USAGE_GENERIC_WHEEL && vcaps[2].BitSize == 8, "ValueCap 2 must be 8-bit Wheel");
+
+        std::array<uint8_t, 7> mouseReport{0, 1, 2, 0, 0xFD, 0xFF, 1};
+        TEST_ASSERT(MouHidDriver::Instance().process(0x4102, mouPreparsed,
+            mouseReport.data(), mouseReport.size()) == HIDP_STATUS_SUCCESS,
+            "mouhid must accept a valid mouse input report");
+        MOUSE_INPUT_DATA mousePacket{};
+        TEST_ASSERT(MouClassPopInputData(mousePacket), "mouhid must forward a mouse input packet");
+        TEST_ASSERT(mousePacket.LastX == 2 && mousePacket.LastY == -3,
+            "mouhid must preserve signed relative X and Y movement");
+        TEST_ASSERT(mousePacket.RawButtons == 1 && (mousePacket.ButtonFlags & MOUSE_LEFT_BUTTON_DOWN),
+            "mouhid must map HID button 1 to the left button transition");
+        TEST_ASSERT((mousePacket.ButtonFlags & MOUSE_WHEEL) && mousePacket.ButtonData == 120,
+            "mouhid must map one vertical wheel unit to a 120-unit wheel delta");
+        mouseReport = {0, 0, 0, 0, 0, 0, 0};
+        TEST_ASSERT(MouHidDriver::Instance().process(0x4102, mouPreparsed,
+            mouseReport.data(), mouseReport.size()) == HIDP_STATUS_SUCCESS,
+            "mouhid must accept a button release report");
+        TEST_ASSERT(MouClassPopInputData(mousePacket) &&
+            (mousePacket.ButtonFlags & MOUSE_LEFT_BUTTON_UP),
+            "mouhid must forward the left button release transition");
+        MouHidDriver::Instance().removeCollection(0x4102);
 
         HidD_FreePreparsedData(mouPreparsed);
     }

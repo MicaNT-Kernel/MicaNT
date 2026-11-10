@@ -56,6 +56,7 @@
 #include "micant/km/core/ke.hpp"
 #include "micant/km/drivers/input/kbdclass_contract.hpp"
 #include "micant/km/drivers/input/kbdhid_contract.hpp"
+#include "micant/km/drivers/input/mouhid_contract.hpp"
 #include "micant/km/drivers/input/i8042prt.hpp"
 #include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/mouclass_contract.hpp"
@@ -925,6 +926,10 @@ public:
                 col.PreparsedData.Caps.Usage == HID_USAGE_GENERIC_KEYBOARD) {
                 KbdHidProcessInputReport(reinterpret_cast<uintptr_t>(collectionHandle),
                     &col.PreparsedData, simulatedDevicePayload, payloadLen);
+            } else if (col.PreparsedData.Caps.UsagePage == HID_USAGE_PAGE_GENERIC &&
+                col.PreparsedData.Caps.Usage == HID_USAGE_GENERIC_MOUSE) {
+                MouHidProcessInputReport(reinterpret_cast<uintptr_t>(collectionHandle),
+                    &col.PreparsedData, simulatedDevicePayload, payloadLen);
             }
         }
 
@@ -1752,6 +1757,7 @@ inline void InitializeHidSubsystemExports() {
     registerKernelDriver(L"hidusb",   L"Sovereign USB HID Miniport Driver", scm::SERVICE_SYSTEM_START, L"\\SystemRoot\\System32\\drivers\\hidusb.sys");
     registerKernelDriver(L"kbdclass", L"Sovereign Keyboard Class Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\kbdclass.sys");
     registerKernelDriver(L"kbdhid", L"Sovereign HID Keyboard Mapper Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\kbdhid.sys");
+    registerKernelDriver(L"mouhid", L"Sovereign HID Mouse Mapper Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\mouhid.sys");
     registerKernelDriver(L"mouclass", L"Sovereign Mouse Class Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\mouclass.sys");
     registerKernelDriver(L"i8042prt", L"Sovereign PS/2 i8042 Port Driver", scm::SERVICE_SYSTEM_START, L"\\SystemRoot\\System32\\drivers\\i8042prt.sys");
 
@@ -1762,6 +1768,7 @@ inline void InitializeHidSubsystemExports() {
     verDb.RegisterModule("hidusb.sys",   "10.0.26100.1", "Sovereign USB HID Miniport Driver");
     verDb.RegisterModule("kbdclass.sys", "10.0.26100.1", "Sovereign Keyboard Class Driver");
     verDb.RegisterModule("kbdhid.sys", "10.0.26100.1", "Sovereign HID Keyboard Mapper Driver");
+    verDb.RegisterModule("mouhid.sys", "10.0.26100.1", "Sovereign HID Mouse Mapper Driver");
     verDb.RegisterModule("mouclass.sys", "10.0.26100.1", "Sovereign Mouse Class Driver");
     verDb.RegisterModule("i8042prt.sys", "10.0.26100.1", "Sovereign PS/2 i8042 Port Controller Driver");
     verDb.RegisterModule("hid.dll",      "10.0.26100.1", "Sovereign User-Mode HID Client Library");

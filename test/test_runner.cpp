@@ -105,6 +105,7 @@
 #include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/kbdhid.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
+#include "micant/km/drivers/input/mouhid.hpp"
 #include "micant/km/drivers/system/beep.hpp"
 #include "micant/km/executive/cc.hpp"
 #include "micant/km/executive/fsrtl.hpp"

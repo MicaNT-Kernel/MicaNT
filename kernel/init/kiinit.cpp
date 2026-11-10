@@ -60,6 +60,7 @@
 #include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/kbdhid.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
+#include "micant/km/drivers/input/mouhid.hpp"
 #include "micant/km/drivers/system/beep.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
@@ -382,6 +383,8 @@ extern "C" NtStatus KiSystemStartup(
     km::hid::InitializeMouClassExports();
     io::DriverObject mouclassDriver{};
     km::hid::InitializeMouClassDriver(mouclassDriver);
+    io::DriverObject mouhidDriver{};
+    km::hid::InitializeMouHidDriver(mouhidDriver);
     auto pointerClassDevice = ioMgr.createDevice(
         &mouclassDriver, L"\\Device\\PointerClass0", static_cast<io::DeviceType>(0x0000000F));
     pointerClassDevice->flags = (pointerClassDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
