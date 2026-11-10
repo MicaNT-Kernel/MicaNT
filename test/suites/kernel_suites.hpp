@@ -12362,9 +12362,11 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
     // ------------------------------------------------------------------------
     {
         InitializeHidSubsystemExports();
+        InitializeKbdClassExports();
         InitializeMouClassExports();
         auto& hidSys = TitanHidInputSubsystem::Instance();
         hidSys.resetForTesting();
+        KbdClassResetState();
         MouClassResetState();
 
         // 1. JanusLDR Exports Verification (hid.dll, hidparse.sys, hidclass.sys, hidusb.sys, kbdclass.sys, mouclass.sys, i8042prt.sys)
@@ -12588,18 +12590,18 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         auto& hidSys = TitanHidInputSubsystem::Instance();
 
         KEYBOARD_ATTRIBUTES kbdAttr{};
-        NtStatus stAttr = hidSys.dispatchKeyboardIoctl(IOCTL_KEYBOARD_QUERY_ATTRIBUTES, nullptr, 0, &kbdAttr, sizeof(kbdAttr));
+        NtStatus stAttr = KbdClassQueryAttributes(&kbdAttr, sizeof(kbdAttr));
         TEST_ASSERT(stAttr == NtStatus::Success, "IOCTL_KEYBOARD_QUERY_ATTRIBUTES must succeed");
         TEST_ASSERT(kbdAttr.NumberOfKeysTotal == 104, "Keyboard must report 104 keys");
         TEST_ASSERT(kbdAttr.NumberOfFunctionKeys == 12, "Keyboard must report 12 function keys");
 
         // Set & Query LED Indicators (CapsLock + NumLock)
         KEYBOARD_INDICATOR_PARAMETERS setInd{0, KEYBOARD_CAPS_LOCK_ON | KEYBOARD_NUM_LOCK_ON};
-        TEST_ASSERT(hidSys.dispatchKeyboardIoctl(IOCTL_KEYBOARD_SET_INDICATORS, &setInd, sizeof(setInd), nullptr, 0) == NtStatus::Success,
+        TEST_ASSERT(KbdClassDeviceControl(IOCTL_KEYBOARD_SET_INDICATORS, &setInd, sizeof(setInd), 0) == NtStatus::Success,
                     "IOCTL_KEYBOARD_SET_INDICATORS must succeed");
 
         KEYBOARD_INDICATOR_PARAMETERS getInd{};
-        TEST_ASSERT(hidSys.dispatchKeyboardIoctl(IOCTL_KEYBOARD_QUERY_INDICATORS, nullptr, 0, &getInd, sizeof(getInd)) == NtStatus::Success,
+        TEST_ASSERT(KbdClassDeviceControl(IOCTL_KEYBOARD_QUERY_INDICATORS, &getInd, 0, sizeof(getInd)) == NtStatus::Success,
                     "IOCTL_KEYBOARD_QUERY_INDICATORS must succeed");
         TEST_ASSERT(getInd.LedFlags == (KEYBOARD_CAPS_LOCK_ON | KEYBOARD_NUM_LOCK_ON), "Queried LED indicators must match CapsLock + NumLock");
 
@@ -12608,9 +12610,9 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         kbdBatch[0] = {0, 0x1E, KEY_MAKE, 0, 0};  // 'A' Make
         kbdBatch[1] = {0, 0x1E, KEY_BREAK, 0, 0}; // 'A' Break
         ULONG consumed = 0;
-        KeyboardClassServiceCallback(kbdBatch, kbdBatch + 2, &consumed);
+        KeyboardClassServiceCallback(nullptr, kbdBatch, kbdBatch + 2, &consumed);
         TEST_ASSERT(consumed == 2, "KeyboardClassServiceCallback must consume 2 packets");
-        TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 2, "Keyboard ring buffer depth must be 2");
+        TEST_ASSERT(KbdClassQueueDepth() == 2, "Keyboard ring buffer depth must be 2");
     }
 
     // ------------------------------------------------------------------------
@@ -12687,7 +12689,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         // 2. Inject Extended E0 Scancode via IRQ1 (Right Arrow: 0xE0, 0x4D)
         hidSys.i8042InjectKeyboardIrq1(0xE0);
         hidSys.i8042InjectKeyboardIrq1(0x4D);
-        TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 3, "Keyboard queue must now contain 3 packets (2 from Phase 6 + 1 from IRQ1)");
+        TEST_ASSERT(KbdClassQueueDepth() == 3, "Keyboard queue must now contain 3 packets (2 from Phase 6 + 1 from IRQ1)");
 
         // 3. Inject PS/2 Mouse IRQ12 4-Byte IntelliMouse Packet
         hidSys.i8042InjectMouseIrq12Packet(0x09 /* Left button + bit 3 */, 15, -10, 1);
@@ -12710,7 +12712,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         auto& hidSys = TitanHidInputSubsystem::Instance();
         uint32_t injected = hidSys.pumpRawInputToWin32k(hwnd);
         TEST_ASSERT(injected >= 5, "Raw Input Thread must inject queued keyboard and mouse messages into Win32k");
-        TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 0, "Keyboard ring buffer must be completely drained");
+        TEST_ASSERT(KbdClassQueueDepth() == 0, "Keyboard ring buffer must be completely drained");
         TEST_ASSERT(MouClassQueueDepth() == 0, "Mouse ring buffer must be completely drained");
 
         // Verify message arrival in Win32k thread queue

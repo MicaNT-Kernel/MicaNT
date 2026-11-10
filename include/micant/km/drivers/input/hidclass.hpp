@@ -54,6 +54,7 @@
 #include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/drivers/input/kbdclass_contract.hpp"
 #include "micant/km/drivers/input/mouclass_contract.hpp"
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/win32k/win32k.hpp"
@@ -156,13 +157,6 @@ inline constexpr uint32_t IOCTL_HID_SET_OUTPUT_REPORT           = 0x000B01A5;
 inline constexpr uint32_t IOCTL_HID_GET_MANUFACTURER_STRING     = 0x000B01B8;
 inline constexpr uint32_t IOCTL_HID_GET_PRODUCT_STRING          = 0x000B01BC;
 inline constexpr uint32_t IOCTL_HID_GET_SERIALNUMBER_STRING     = 0x000B01C0;
-
-// Keyboard & Mouse Class Driver IOCTLs
-inline constexpr uint32_t IOCTL_KEYBOARD_QUERY_ATTRIBUTES       = 0x000B0000;
-inline constexpr uint32_t IOCTL_KEYBOARD_SET_TYPEMATIC          = 0x000B0004;
-inline constexpr uint32_t IOCTL_KEYBOARD_SET_INDICATORS         = 0x000B0008;
-inline constexpr uint32_t IOCTL_KEYBOARD_QUERY_TYPEMATIC        = 0x000B0020;
-inline constexpr uint32_t IOCTL_KEYBOARD_QUERY_INDICATORS       = 0x000B0040;
 
 // USB HID Class-Specific Control Requests (bRequest)
 inline constexpr uint8_t USB_HID_REQ_GET_REPORT                 = 0x01;
@@ -356,46 +350,6 @@ using PHIDP_PREPARSED_DATA = _HIDP_PREPARSED_DATA*;
 // ============================================================================
 // 3. Keyboard & Mouse Class Structures (kbdclass.sys / mouclass.sys)
 // ============================================================================
-
-// Keyboard Input Flags
-inline constexpr USHORT KEY_MAKE              = 0x0000;
-inline constexpr USHORT KEY_BREAK             = 0x0001;
-inline constexpr USHORT KEY_E0                = 0x0002;
-inline constexpr USHORT KEY_E1                = 0x0004;
-
-// Keyboard LED Indicators
-inline constexpr USHORT KEYBOARD_SCROLL_LOCK_ON = 0x0001;
-inline constexpr USHORT KEYBOARD_NUM_LOCK_ON    = 0x0002;
-inline constexpr USHORT KEYBOARD_CAPS_LOCK_ON   = 0x0004;
-
-struct KEYBOARD_INPUT_DATA {
-    USHORT UnitId{0};
-    USHORT MakeCode{0};
-    USHORT Flags{KEY_MAKE};
-    USHORT Reserved{0};
-    ULONG  ExtraInformation{0};
-};
-
-struct KEYBOARD_INDICATOR_PARAMETERS {
-    USHORT UnitId{0};
-    USHORT LedFlags{0};
-};
-
-struct KEYBOARD_TYPEMATIC_PARAMETERS {
-    USHORT UnitId{0};
-    USHORT Rate{30};
-    USHORT Delay{250};
-};
-
-struct KEYBOARD_ATTRIBUTES {
-    UCHAR                         KeyboardMode{1}; // Scancode Set 1 translated
-    UCHAR                         NumberOfFunctionKeys{12};
-    UCHAR                         NumberOfIndicators{3};
-    USHORT                        NumberOfKeysTotal{104};
-    ULONG                         InputDataQueueLength{128};
-    KEYBOARD_TYPEMATIC_PARAMETERS KeyRepeatMinimum{0, 2, 250};
-    KEYBOARD_TYPEMATIC_PARAMETERS KeyRepeatMaximum{0, 30, 1000};
-};
 
 // ============================================================================
 // 4. Canonical HID Report Descriptors (Keyboard, Gaming Mouse, Gamepad)
@@ -1071,70 +1025,6 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    // Keyboard Class Driver (kbdclass.sys) Operations
-    // ------------------------------------------------------------------------
-
-    void keyboardClassServiceCallback(const KEYBOARD_INPUT_DATA* start, const KEYBOARD_INPUT_DATA* end, ULONG* consumed) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        ULONG count = 0;
-        for (const KEYBOARD_INPUT_DATA* p = start; p < end; ++p) {
-            if (m_keyboardQueue.size() >= m_keyboardAttributes.InputDataQueueLength) {
-                m_keyboardQueue.pop_front();
-            }
-            m_keyboardQueue.push_back(*p);
-            count++;
-            m_telemetry.totalKeyboardPacketsQueued++;
-        }
-        if (consumed) *consumed = count;
-    }
-
-    bool popKeyboardInputData(KEYBOARD_INPUT_DATA& outData) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_keyboardQueue.empty()) return false;
-        outData = m_keyboardQueue.front();
-        m_keyboardQueue.pop_front();
-        return true;
-    }
-
-    size_t getKeyboardQueueDepth() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_keyboardQueue.size();
-    }
-
-    NtStatus dispatchKeyboardIoctl(uint32_t ioctlCode, const void* inBuf, size_t inLen, void* outBuf, size_t outLen) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        switch (ioctlCode) {
-            case IOCTL_KEYBOARD_QUERY_ATTRIBUTES:
-                if (!outBuf || outLen < sizeof(KEYBOARD_ATTRIBUTES)) return NtStatus::BufferTooSmall;
-                *static_cast<KEYBOARD_ATTRIBUTES*>(outBuf) = m_keyboardAttributes;
-                return NtStatus::Success;
-
-            case IOCTL_KEYBOARD_QUERY_INDICATORS:
-                if (!outBuf || outLen < sizeof(KEYBOARD_INDICATOR_PARAMETERS)) return NtStatus::BufferTooSmall;
-                *static_cast<KEYBOARD_INDICATOR_PARAMETERS*>(outBuf) = m_keyboardIndicators;
-                return NtStatus::Success;
-
-            case IOCTL_KEYBOARD_SET_INDICATORS:
-                if (!inBuf || inLen < sizeof(KEYBOARD_INDICATOR_PARAMETERS)) return NtStatus::InvalidParameter;
-                m_keyboardIndicators = *static_cast<const KEYBOARD_INDICATOR_PARAMETERS*>(inBuf);
-                return NtStatus::Success;
-
-            case IOCTL_KEYBOARD_QUERY_TYPEMATIC:
-                if (!outBuf || outLen < sizeof(KEYBOARD_TYPEMATIC_PARAMETERS)) return NtStatus::BufferTooSmall;
-                *static_cast<KEYBOARD_TYPEMATIC_PARAMETERS*>(outBuf) = m_keyboardTypematic;
-                return NtStatus::Success;
-
-            case IOCTL_KEYBOARD_SET_TYPEMATIC:
-                if (!inBuf || inLen < sizeof(KEYBOARD_TYPEMATIC_PARAMETERS)) return NtStatus::InvalidParameter;
-                m_keyboardTypematic = *static_cast<const KEYBOARD_TYPEMATIC_PARAMETERS*>(inBuf);
-                return NtStatus::Success;
-
-            default:
-                return NtStatus::InvalidDeviceRequest;
-        }
-    }
-
-    // ------------------------------------------------------------------------
     // Mouse Class Driver (mouclass.sys) Operations
     // ------------------------------------------------------------------------
 
@@ -1236,7 +1126,7 @@ public:
 
         if (emitPacket) {
             ULONG consumed = 0;
-            keyboardClassServiceCallback(&pkt, &pkt + 1, &consumed);
+            KeyboardClassServiceCallback(nullptr, &pkt, &pkt + 1, &consumed);
         }
     }
 
@@ -1289,7 +1179,7 @@ public:
 
         // 1. Drain Keyboard Class Ring Buffer
         KEYBOARD_INPUT_DATA kbdPkt{};
-        while (popKeyboardInputData(kbdPkt)) {
+        while (KbdClassPopInputData(kbdPkt)) {
             uint32_t msg = (kbdPkt.Flags & KEY_BREAK) ? win32k::WM_KEYUP : win32k::WM_KEYDOWN;
             uint64_t vk  = translateScancodeToVirtualKey(kbdPkt.MakeCode);
             int64_t lParam = static_cast<int64_t>((static_cast<uint64_t>(kbdPkt.MakeCode) << 16) | 1ULL);
@@ -1353,6 +1243,7 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         ke::SpinLockGuard mouseTelemetryLock(m_mouseTelemetryLock);
         m_telemetry.activeTopLevelCollections = static_cast<uint32_t>(m_collections.size());
+        m_telemetry.totalKeyboardPacketsQueued = KbdClassPacketsQueuedTotal();
         m_telemetry.totalMousePacketsQueued = MouClassPacketsQueuedTotal();
         return m_telemetry;
     }
@@ -1384,15 +1275,11 @@ private:
 
     void setupInternalState() {
         m_collections.clear();
-        m_keyboardQueue.clear();
         {
             ke::SpinLockGuard lock(m_mouseTelemetryLock);
             m_telemetry = HID_SUBSYSTEM_TELEMETRY{};
         }
 
-        m_keyboardAttributes = KEYBOARD_ATTRIBUTES{};
-        m_keyboardIndicators = KEYBOARD_INDICATOR_PARAMETERS{0, KEYBOARD_NUM_LOCK_ON};
-        m_keyboardTypematic  = KEYBOARD_TYPEMATIC_PARAMETERS{0, 30, 250};
 
         m_i8042StatusReg    = I8042_STS_SYS;
         m_i8042OutputBuffer = 0x55;
@@ -1483,11 +1370,7 @@ private:
     std::map<uintptr_t, HID_TOP_LEVEL_COLLECTION> m_collections;
 
     // Keyboard & Mouse Class State
-    std::deque<KEYBOARD_INPUT_DATA> m_keyboardQueue;
     ke::SpinLock m_mouseTelemetryLock{};
-    KEYBOARD_ATTRIBUTES             m_keyboardAttributes{};
-    KEYBOARD_INDICATOR_PARAMETERS   m_keyboardIndicators{};
-    KEYBOARD_TYPEMATIC_PARAMETERS   m_keyboardTypematic{};
 
     // i8042 Controller State
     uint8_t m_i8042StatusReg{I8042_STS_SYS};
@@ -2005,14 +1888,6 @@ inline HIDP_STATUS WINAPI HidP_SetUsageValue(
 
 // --- Kernel Driver Exports (kbdclass.sys, mouclass.sys, i8042prt.sys, hidclass.sys) ---
 
-inline void WINAPI KeyboardClassServiceCallback(
-    const KEYBOARD_INPUT_DATA* InputDataStart,
-    const KEYBOARD_INPUT_DATA* InputDataEnd,
-    ULONG* InputDataConsumed
-) {
-    TitanHidInputSubsystem::Instance().keyboardClassServiceCallback(InputDataStart, InputDataEnd, InputDataConsumed);
-}
-
 inline uint8_t WINAPI I8042ReadPortUchar(uint16_t Port) {
     return TitanHidInputSubsystem::Instance().i8042ReadPort(Port);
 }
@@ -2079,8 +1954,8 @@ inline void InitializeHidSubsystemExports() {
     ldr.registerExport("hidclass.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
     ldr.registerExport("hidusb.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
 
-    // 4. Register kbdclass.sys, mouclass.sys & i8042prt.sys exports
-    ldr.registerExport("kbdclass.sys", "KeyboardClassServiceCallback", reinterpret_cast<void*>(KeyboardClassServiceCallback));
+    // 4. Register i8042prt.sys exports. The class callbacks belong to their
+    // independently initialized class drivers.
     ldr.registerExport("i8042prt.sys", "I8042ReadPortUchar", reinterpret_cast<void*>(I8042ReadPortUchar));
     ldr.registerExport("i8042prt.sys", "I8042WritePortUchar", reinterpret_cast<void*>(I8042WritePortUchar));
 
@@ -2159,7 +2034,6 @@ namespace micant {
     using km::hid::HidP_SetUsages;
     using km::hid::HidP_GetUsageValue;
     using km::hid::HidP_SetUsageValue;
-    using km::hid::KeyboardClassServiceCallback;
     using km::hid::I8042ReadPortUchar;
     using km::hid::I8042WritePortUchar;
     using km::hid::HidGetTelemetry;

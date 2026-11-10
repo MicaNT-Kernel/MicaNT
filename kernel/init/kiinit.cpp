@@ -55,6 +55,7 @@
 #include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/km/drivers/fs/npfs.hpp"
 #include "micant/km/drivers/input/hidclass.hpp"
+#include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
@@ -360,6 +361,12 @@ extern "C" NtStatus KiSystemStartup(
     sys::internal::Ring2LsaInitializeExecutiveSubsystem();
     sys::internal::Ring2ScmInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
+    km::hid::InitializeKbdClassExports();
+    io::DriverObject kbdclassDriver{};
+    km::hid::InitializeKbdClassDriver(kbdclassDriver);
+    auto keyboardClassDevice = ioMgr.createDevice(
+        &kbdclassDriver, L"\\Device\\KeyboardClass0", static_cast<io::DeviceType>(0x0000000B));
+    keyboardClassDevice->flags = (keyboardClassDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
     km::hid::InitializeMouClassExports();
     io::DriverObject mouclassDriver{};
     km::hid::InitializeMouClassDriver(mouclassDriver);
