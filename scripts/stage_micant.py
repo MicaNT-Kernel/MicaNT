@@ -558,6 +558,7 @@ def run_local_build():
         "-mno-red-zone", "-mno-stack-arg-probe", "-O2", "-Iinclude", "-Itools",
         "-Wl,--subsystem,windows", "-Wl,-e,_start", "-nostdlib",
         "tools/explorer_shell_app.cpp", "tools/explorer_shell/taskbar.cpp",
+        "tools/explorer_shell/task_switcher.cpp",
         "tools/explorer_shell/start_menu.cpp", "tools/explorer_shell/desktop.cpp",
         "tools/explorer_shell/notification_area.cpp",
         "-luser32", "-lgdi32", "-o", "build/explorer.exe",

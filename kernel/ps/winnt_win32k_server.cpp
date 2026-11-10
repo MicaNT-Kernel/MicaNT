@@ -178,4 +178,26 @@ int32_t MicaWin32kGetClientRect(void* hwnd, MicaWin32kRect* out) {
 int32_t MicaWin32kGetWindowRect(void* hwnd, MicaWin32kRect* out) {
     return CopyRect(hwnd,out,false);
 }
+int32_t MicaWin32kEnumWindows(void* callback, intptr_t parameter) {
+    if (!callback) return 0;
+    using EnumProc = int32_t (*)(void*, intptr_t);
+    auto proc = reinterpret_cast<EnumProc>(callback);
+    const auto windows = TitanWin32kSubsystem::Instance().enumerateTopLevelWindows();
+    for (void* hwnd : windows) {
+        if (!proc(hwnd, parameter)) return 0;
+    }
+    return 1;
+}
+int32_t MicaWin32kGetWindowTextW(void* hwnd, wchar_t* output, int32_t capacity) {
+    return TitanWin32kSubsystem::Instance().getWindowText(hwnd, output, capacity);
+}
+int32_t MicaWin32kIsWindowVisible(void* hwnd) {
+    return TitanWin32kSubsystem::Instance().isWindowVisible(hwnd);
+}
+int32_t MicaWin32kIsIconic(void* hwnd) {
+    return TitanWin32kSubsystem::Instance().isIconic(hwnd);
+}
+void* MicaWin32kGetForegroundWindow() {
+    return TitanWin32kSubsystem::Instance().getForegroundWindow();
+}
 }

@@ -99,6 +99,11 @@ MICANT_WIN32K_API int32_t MicaWin32kPeekMessageW(MicaWin32kMessage*, void*, uint
 MICANT_WIN32K_API int32_t MicaWin32kGetMessageW(MicaWin32kMessage*, void*, uint32_t, uint32_t);
 MICANT_WIN32K_API int32_t MicaWin32kGetClientRect(void*, MicaWin32kRect*);
 MICANT_WIN32K_API int32_t MicaWin32kGetWindowRect(void*, MicaWin32kRect*);
+MICANT_WIN32K_API int32_t MicaWin32kEnumWindows(void*, intptr_t);
+MICANT_WIN32K_API int32_t MicaWin32kGetWindowTextW(void*, wchar_t*, int32_t);
+MICANT_WIN32K_API int32_t MicaWin32kIsWindowVisible(void*);
+MICANT_WIN32K_API int32_t MicaWin32kIsIconic(void*);
+MICANT_WIN32K_API void* MicaWin32kGetForegroundWindow(void);
 
 #ifdef __cplusplus
 }

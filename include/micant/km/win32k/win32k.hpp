@@ -1570,6 +1570,65 @@ public:
         return 0;
     }
 
+    std::vector<HWND> enumerateTopLevelWindows() const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        std::vector<HWND> result;
+        if (!m_currentDesktop) return result;
+        const auto zOrder = m_currentDesktop->getZOrder();
+        result.reserve(zOrder.size());
+        for (HWND hwnd : zOrder) {
+            auto it = m_windows.find(hwnd);
+            if (it == m_windows.end() || !it->second || it->second->hwndParent ||
+                it->second->isDestroyed) continue;
+            result.push_back(hwnd);
+        }
+        return result;
+    }
+
+    BOOL isWindowVisible(HWND hwnd) const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_windows.find(hwnd);
+        return it != m_windows.end() && it->second && it->second->isVisible
+            ? TRUE_VAL : FALSE_VAL;
+    }
+
+    BOOL isIconic(HWND hwnd) const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_windows.find(hwnd);
+        return it != m_windows.end() && it->second && it->second->isMinimized
+            ? TRUE_VAL : FALSE_VAL;
+    }
+
+    int32_t getWindowText(HWND hwnd, wchar_t* output, int32_t capacity) const {
+        if (output && capacity > 0) output[0] = L'\0';
+        if (!hwnd || !output || capacity <= 0) return 0;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_windows.find(hwnd);
+        if (it == m_windows.end() || !it->second) return 0;
+        const auto& window = *it->second;
+        const size_t length = std::min<size_t>(
+#if defined(BUILD_SYSTEM32_STANDALONE_DLL)
+            window.titleUtf16Length,
+#else
+            window.windowName.size(),
+#endif
+            static_cast<size_t>(capacity - 1));
+        for (size_t index = 0; index < length; ++index) {
+#if defined(BUILD_SYSTEM32_STANDALONE_DLL)
+            output[index] = static_cast<wchar_t>(window.titleUtf16[index]);
+#else
+            output[index] = window.windowName[index];
+#endif
+        }
+        output[length] = L'\0';
+        return static_cast<int32_t>(length);
+    }
+
+    HWND getForegroundWindow() const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        return m_currentDesktop ? m_currentDesktop->getActiveWindow() : nullptr;
+    }
+
     BOOL showWindow(HWND hwnd, int nCmdShow) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         auto it = m_windows.find(hwnd);

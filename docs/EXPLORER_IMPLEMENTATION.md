@@ -17,11 +17,11 @@ freestanding C++ and Win32k APIs:
 | MicaNT block | Responsibility | State |
 | --- | --- | --- |
 | `tools/explorer_shell_app.cpp` | Shell startup, desktop/window state, event routing | Uses user32/gdi32 imports; owns independent desktop, taskbar, menu, and window surfaces |
-| `tools/explorer_shell/taskbar.hpp` and `.cpp` | Topmost taskbar window, painting from a snapshot of open shell tasks | Tracks Explorer-owned windows; activation, minimize/restore, and resize state feed task buttons |
+| `tools/explorer_shell/taskbar.hpp` and `.cpp` | Topmost taskbar window, painting from a snapshot of open shell tasks | Paints visible top-level windows enumerated through USER32; task buttons activate or minimize/restore their HWND |
 | `tools/explorer_shell/start_menu.hpp` and `.cpp` | Start menu painting and explicit hit-test actions | Implemented; application launching/search still need shell services |
 | `tools/explorer_shell/desktop.hpp` and `.cpp` | Desktop background, icons, and icon hit-testing | Implemented as a separate desktop window/surface |
 | `tools/explorer_shell/notification_area.hpp` and `.cpp` | Clock/network/sound tray rendering and hit testing | Clock and network open their shell views; volume is currently an indicator because there is no audio endpoint API |
-| `tools/explorer_shell/task_switcher.*` | Window enumeration, activation, minimize/restore | OS-wide enumeration is pending; the taskbar currently tracks windows owned by Explorer |
+| `tools/explorer_shell/task_switcher.hpp` and `.cpp` | Window enumeration, activation, minimize/restore | Implemented with `EnumWindows`, `GetWindowTextW`, `IsWindowVisible`, `IsIconic`, and `GetForegroundWindow`; excludes Explorer's desktop, taskbar, and Start menu |
 
 The executable is built by `scripts/stage_micant.py` as `build/explorer.exe` and
 staged into `C:\MicaNT\System32`. From the current MicaNT command shell it can

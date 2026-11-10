@@ -54,6 +54,7 @@ using HRAWINPUT = void*;
 using HWND      = win32::HWND;
 
 using WNDPROC = LRESULT (*)(win32::HWND, UINT, WPARAM, LPARAM);
+using WNDENUMPROC = BOOL (*)(HWND, LPARAM);
 
 using POINT = micant::prismx::POINT;
 using RECT  = micant::prismx::RECT;
@@ -580,6 +581,17 @@ public:
     bool isWindow(win32::HWND hWnd) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         return windows_.find(hWnd) != windows_.end();
+    }
+
+    std::vector<win32::HWND> enumerateTopLevelWindows() {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        std::vector<win32::HWND> result;
+        result.reserve(windows_.size());
+        for (const auto& entry : windows_) {
+            const auto& window = entry.second;
+            if (window && window->hwndParent == nullptr) result.push_back(entry.first);
+        }
+        return result;
     }
 
     // ------------------------------------------------------------------------
@@ -1664,11 +1676,15 @@ inline win32::BOOL SetWindowTextW(win32::HWND /*hWnd*/, const wchar_t* /*lpStrin
     return win32::TRUE;
 }
 
-inline int32_t GetWindowTextW(win32::HWND /*hWnd*/, wchar_t* lpString, int32_t nMaxCount) noexcept {
-    if (lpString && nMaxCount > 0) {
-        *lpString = L'\0';
-    }
-    return 0;
+inline int32_t GetWindowTextW(win32::HWND hWnd, wchar_t* lpString, int32_t nMaxCount) noexcept {
+    if (!lpString || nMaxCount <= 0) return 0;
+    lpString[0] = L'\0';
+    const auto window = WindowManager::get().getWindow(hWnd);
+    if (!window) return 0;
+    const size_t count = std::min(window->windowName.size(), static_cast<size_t>(nMaxCount - 1));
+    if (count) std::memcpy(lpString, window->windowName.data(), count * sizeof(wchar_t));
+    lpString[count] = L'\0';
+    return static_cast<int32_t>(count);
 }
 
 inline int32_t GetWindowTextLengthW(win32::HWND /*hWnd*/) noexcept {
@@ -2481,7 +2497,14 @@ inline BOOL DefFrameProcW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*
 inline BOOL CharToOemBuffW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline BOOL ClipCursor(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline BOOL SendMessageA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
-inline BOOL EnumWindows(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL EnumWindows(WNDENUMPROC lpEnumFunc, LPARAM lParam) noexcept {
+    if (!lpEnumFunc) return win32::FALSE;
+    const auto windows = WindowManager::get().enumerateTopLevelWindows();
+    for (const HWND hwnd : windows) {
+        if (lpEnumFunc(hwnd, lParam) == win32::FALSE) return win32::FALSE;
+    }
+    return win32::TRUE;
+}
 inline BOOL ShowOwnedPopups(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline BOOL SetActiveWindow(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* GetKeyboardLayoutList(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
@@ -2520,7 +2543,7 @@ inline void* GetCursorInfo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /
 inline BOOL CharUpperBuffW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline BOOL SetClassLongPtrW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* GetClassLongPtrW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
-inline void* GetForegroundWindow(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline HWND GetForegroundWindow() noexcept { return WindowManager::get().getActiveWindow(); }
 inline BOOL MsgWaitForMultipleObjectsEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* LoadKeyboardLayoutW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
 inline void* GetMenuItemInfoA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }

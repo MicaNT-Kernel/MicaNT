@@ -29,6 +29,11 @@ template <typename T> T Win32kProc(const char* name) noexcept {
     MICA_WIN32K_PROC(MicaWin32kGetMessageW);
     MICA_WIN32K_PROC(MicaWin32kGetClientRect);
     MICA_WIN32K_PROC(MicaWin32kGetWindowRect);
+    MICA_WIN32K_PROC(MicaWin32kEnumWindows);
+    MICA_WIN32K_PROC(MicaWin32kGetWindowTextW);
+    MICA_WIN32K_PROC(MicaWin32kIsWindowVisible);
+    MICA_WIN32K_PROC(MicaWin32kIsIconic);
+    MICA_WIN32K_PROC(MicaWin32kGetForegroundWindow);
     MICA_WIN32K_PROC(MicaWin32kRegisterClassW);
     MICA_WIN32K_PROC(MicaWin32kDispatchMessageW);
     MICA_WIN32K_PROC(MicaWin32kSetWindowLongPtrW);
@@ -212,6 +217,39 @@ int32_t User32_GetWindowRect(void* hWnd, WinNtRect* lpRect) noexcept {
     if(!hWnd||!lpRect)return 0;
     using Fn=int32_t (*)(void*,MicaWin32kRect*); auto fn=Win32kProc<Fn>("MicaWin32kGetWindowRect");
     return fn ? fn(hWnd,reinterpret_cast<MicaWin32kRect*>(lpRect)) : 0;
+}
+
+int32_t User32_EnumWindows(void* callback, intptr_t parameter) noexcept {
+    if (!callback) return 0;
+    using Fn=int32_t (*)(void*,intptr_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kEnumWindows");
+    return fn ? fn(callback,parameter) : 0;
+}
+
+int32_t User32_GetWindowTextW(void* hWnd, wchar_t* lpString, int32_t nMaxCount) noexcept {
+    if (lpString && nMaxCount > 0) lpString[0]=L'\0';
+    if (!hWnd || !lpString || nMaxCount <= 0) return 0;
+    using Fn=int32_t (*)(void*,wchar_t*,int32_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kGetWindowTextW");
+    return fn ? fn(hWnd,lpString,nMaxCount) : 0;
+}
+
+int32_t User32_IsWindowVisible(void* hWnd) noexcept {
+    using Fn=int32_t (*)(void*);
+    auto fn=Win32kProc<Fn>("MicaWin32kIsWindowVisible");
+    return fn ? fn(hWnd) : 0;
+}
+
+int32_t User32_IsIconic(void* hWnd) noexcept {
+    using Fn=int32_t (*)(void*);
+    auto fn=Win32kProc<Fn>("MicaWin32kIsIconic");
+    return fn ? fn(hWnd) : 0;
+}
+
+void* User32_GetForegroundWindow() noexcept {
+    using Fn=void* (*)(void);
+    auto fn=Win32kProc<Fn>("MicaWin32kGetForegroundWindow");
+    return fn ? fn() : nullptr;
 }
 
 int32_t User32_AdjustWindowRectEx(WinNtRect* lpRect, uint32_t /*dwStyle*/, int32_t /*bMenu*/, uint32_t /*dwExStyle*/) noexcept {
@@ -575,6 +613,22 @@ __declspec(dllexport) int32_t GetClientRect(void* hWnd, micant::um::winnt_user32
 }
 __declspec(dllexport) int32_t GetWindowRect(void* hWnd, micant::um::winnt_user32_gdi32_imm32_abi::WinNtRect* lpRect) {
     return micant::um::winnt_user32_gdi32_imm32_abi::User32_GetWindowRect(hWnd, lpRect);
+}
+__declspec(dllexport) int32_t EnumWindows(int32_t (*lpEnumFunc)(void*, intptr_t), intptr_t lParam) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_EnumWindows(
+        reinterpret_cast<void*>(lpEnumFunc), lParam);
+}
+__declspec(dllexport) int32_t GetWindowTextW(void* hWnd, wchar_t* lpString, int32_t nMaxCount) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_GetWindowTextW(hWnd, lpString, nMaxCount);
+}
+__declspec(dllexport) int32_t IsWindowVisible(void* hWnd) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_IsWindowVisible(hWnd);
+}
+__declspec(dllexport) int32_t IsIconic(void* hWnd) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_IsIconic(hWnd);
+}
+__declspec(dllexport) void* GetForegroundWindow(void) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_GetForegroundWindow();
 }
 __declspec(dllexport) int32_t AdjustWindowRectEx(micant::um::winnt_user32_gdi32_imm32_abi::WinNtRect* lpRect, uint32_t dwStyle, int32_t bMenu, uint32_t dwExStyle) {
     return micant::um::winnt_user32_gdi32_imm32_abi::User32_AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle);

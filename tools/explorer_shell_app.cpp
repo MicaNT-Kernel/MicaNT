@@ -14,6 +14,7 @@
 #include "explorer_shell/start_menu.hpp"
 #include "explorer_shell/desktop.hpp"
 #include "explorer_shell/notification_area.hpp"
+#include "explorer_shell/task_switcher.hpp"
 
 namespace {
 
@@ -51,6 +52,7 @@ struct ShellState {
     uint32_t* menuPixels{};
     bool startOpen{};
     AppWindow apps[MAX_APP_WINDOWS]{};
+    micant::explorer::TaskSwitchSnapshot taskSwitch{};
     uint8_t appCount{};
     uint8_t activeApp{0xFF};
     uint8_t clockSecond{0xFF};
@@ -168,20 +170,14 @@ void present(HWND hwnd) noexcept {
 }
 
 size_t collectTaskbarButtons(micant::explorer::TaskbarButton* buttons) noexcept {
-    size_t count = 0;
-    for (size_t i = 0; buttons && i < MAX_APP_WINDOWS; ++i) {
-        if (!g.apps[i].open) continue;
-        auto& button = buttons[count++];
-        button.title = g.apps[i].view == View::MyComputer ? "My Computer" :
-                       g.apps[i].view == View::MyDocuments ? "My Documents" :
-                       g.apps[i].view == View::ControlPanel ? "Control Panel" :
-                       g.apps[i].view == View::RecycleBin ? "Recycle Bin" :
-                       g.apps[i].view == View::DateTime ? "Date and Time" : "Network Places";
-        button.iconColor = g.apps[i].view == View::ControlPanel ? rgb(68, 137, 199) :
-                           g.apps[i].view == View::RecycleBin ? rgb(195, 210, 221) : rgb(236, 190, 67);
-        button.active = g.activeApp == i && !g.apps[i].minimized;
+    micant::explorer::BuildTaskSwitchSnapshot(&g.taskSwitch, g.desktop, g.taskbar, g.startMenu);
+    for (size_t i = 0; buttons && i < g.taskSwitch.count; ++i) {
+        auto& button = buttons[i];
+        button.title = g.taskSwitch.entries[i].title;
+        button.iconColor = rgb(236, 190, 67);
+        button.active = g.taskSwitch.entries[i].active;
     }
-    return count;
+    return g.taskSwitch.count;
 }
 
 void redrawTaskbar() noexcept {
@@ -335,25 +331,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (x < 104) {
             toggleStart();
         } else if (x < static_cast<int32_t>(g.screenW) - 124) {
-            size_t taskCount = 0;
-            for (const auto& app : g.apps) if (app.open) ++taskCount;
+            micant::explorer::TaskbarButton buttons[MAX_APP_WINDOWS]{};
+            const size_t taskCount = collectTaskbarButtons(buttons);
             const int32_t available = static_cast<int32_t>(g.screenW) - 126 - 112;
             const int32_t taskWidth = taskCount == 0 || available <= 0 ? 0 :
                 (available / static_cast<int32_t>(taskCount) < 146
                     ? available / static_cast<int32_t>(taskCount) : 146);
             int32_t slotLeft = 112;
-            for (size_t i = 0; i < MAX_APP_WINDOWS && taskWidth >= 64; ++i) {
-                if (!g.apps[i].open) continue;
+            for (size_t i = 0; i < taskCount && taskWidth >= 64; ++i) {
                 if (x >= slotLeft && x < slotLeft + taskWidth - 4) {
-                    if (g.activeApp == i && !g.apps[i].minimized) {
-                        ShowWindow(g.apps[i].hwnd, SW_MINIMIZE);
-                        g.apps[i].minimized = true;
-                        g.activeApp = 0xFF;
+                    const auto& task = g.taskSwitch.entries[i];
+                    if (task.active && !task.minimized) {
+                        ShowWindow(task.hwnd, SW_MINIMIZE);
                     } else {
-                        ShowWindow(g.apps[i].hwnd, SW_RESTORE);
-                        SetWindowPos(g.apps[i].hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-                        g.apps[i].minimized = false;
-                        g.activeApp = static_cast<uint8_t>(i);
+                        ShowWindow(task.hwnd, SW_RESTORE);
+                        SetWindowPos(task.hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
                     }
                     redrawTaskbar();
                     break;
