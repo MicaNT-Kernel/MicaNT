@@ -82,23 +82,23 @@ struct BatteryQueryInformation {
 };
 
 struct BatteryInformation {
-    uint32_t capabilities{BATTERY_SYSTEM_BATTERY};
-    uint8_t  technology{1}; // 1 = Rechargeable (Secondary)
+    uint32_t capabilities{0};
+    uint8_t  technology{0};
     uint8_t  reserved[3]{0, 0, 0};
-    uint8_t  chemistry[4]{ 'L', 'I', 'O', 'N' };
-    uint32_t designedCapacity{70000};    // Nominal design capacity (mWh)
-    uint32_t fullChargedCapacity{66500}; // Degraded full charge capacity (mWh)
-    uint32_t defaultAlert1{7000};        // Low alert threshold (mWh, ~10%)
-    uint32_t defaultAlert2{3500};        // Critical alert threshold (mWh, ~5%)
+    uint8_t  chemistry[4]{};
+    uint32_t designedCapacity{0};
+    uint32_t fullChargedCapacity{0};
+    uint32_t defaultAlert1{0};
+    uint32_t defaultAlert2{0};
     uint32_t criticalBias{0};
     uint32_t cycleCount{42};
 };
 
 struct BatteryStatus {
-    uint32_t powerState{BATTERY_POWER_ON_LINE};
-    uint32_t capacity{66500}; // Remaining capacity (mWh)
-    uint32_t voltage{16800};  // Pack terminal voltage (mV)
-    int32_t  rate{0};         // Charge (+) or discharge (-) rate (mW)
+    uint32_t powerState{0};
+    uint32_t capacity{0};
+    uint32_t voltage{0};
+    int32_t  rate{0};
 };
 
 struct BatteryWaitStatus {
@@ -159,7 +159,6 @@ private:
     BatteryInformation       m_info{};
     BatteryStatus            m_status{};
     CellTelemetry            m_cells{};
-    BatteryManufactureDate   m_mfgDate{ 14, 10, 2026 };
     std::string              m_deviceName{"MicaNT Sovereign Smart Battery Pack"};
     std::string              m_mfgName{"Barrer Silicon Systems"};
     std::string              m_serialNumber{"BSS-2026-BMS-0042"};
@@ -212,10 +211,37 @@ public:
 
     void setBatteryPresent(bool present) noexcept {
         std::lock_guard<std::mutex> lock(m_lock);
-        m_batteryPresent = present;
-        if (present) {
-            m_batteryTag++;
+        if (m_batteryPresent != present) {
+            ++m_batteryTag;
+            if (m_batteryTag == 0) ++m_batteryTag;
         }
+        m_batteryPresent = present;
+    }
+
+    // The ACPI control-method miniport supplies firmware-reported data here.
+    // The class driver continues to own the public battery device and IOCTLs.
+    void updateFromAcpi(bool present, const BatteryInformation& information,
+                        const BatteryStatus& status, std::string_view deviceName,
+                        std::string_view serialNumber, std::string_view manufacturer) noexcept {
+        std::lock_guard<std::mutex> lock(m_lock);
+        if (m_batteryPresent != present) {
+            ++m_batteryTag;
+            if (m_batteryTag == 0) ++m_batteryTag;
+        }
+        m_batteryPresent = present;
+        if (!present) {
+            m_info = {};
+            m_status = {};
+            m_deviceName.clear();
+            m_serialNumber.clear();
+            m_mfgName.clear();
+            return;
+        }
+        m_info = information;
+        m_status = status;
+        m_deviceName.assign(deviceName);
+        m_serialNumber.assign(serialNumber);
+        m_mfgName.assign(manufacturer);
     }
 
     // Connect or disconnect AC mains / USB-PD charger
@@ -357,12 +383,6 @@ public:
                         bytesReturned = sizeof(BatteryInformation);
                         return NtStatus::Success;
                     }
-                    case BatteryQueryInfoLevel::BatteryTemperature: {
-                        if (outLen < sizeof(uint32_t)) return NtStatus::BufferTooSmall;
-                        *reinterpret_cast<uint32_t*>(outBuf) = m_cells.temperatureKelvinTenths;
-                        bytesReturned = sizeof(uint32_t);
-                        return NtStatus::Success;
-                    }
                     case BatteryQueryInfoLevel::BatteryEstimatedTime: {
                         if (outLen < sizeof(uint32_t)) return NtStatus::BufferTooSmall;
                         uint32_t runtime = 0xFFFFFFFF;
@@ -396,14 +416,8 @@ public:
                         bytesReturned = strLen;
                         return NtStatus::Success;
                     }
-                    case BatteryQueryInfoLevel::BatteryManufactureDate: {
-                        if (outLen < sizeof(BatteryManufactureDate)) return NtStatus::BufferTooSmall;
-                        std::memcpy(outBuf, &m_mfgDate, sizeof(BatteryManufactureDate));
-                        bytesReturned = sizeof(BatteryManufactureDate);
-                        return NtStatus::Success;
-                    }
                     default:
-                        return NtStatus::NotSupported;
+                        return NtStatus::InvalidDeviceRequest;
                 }
             }
 
@@ -419,7 +433,7 @@ public:
             }
 
             default:
-                return NtStatus::NotImplemented;
+                return NtStatus::InvalidDeviceRequest;
         }
     }
 

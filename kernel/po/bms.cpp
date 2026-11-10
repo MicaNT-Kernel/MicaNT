@@ -7,6 +7,7 @@
  */
 
 #include "micant/km/executive/bms.hpp"
+#include "micant/km/drivers/acpi/cmbatt.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/po.hpp"
@@ -70,6 +71,10 @@ static micant::io::DeviceObject s_batteryDevice;
 static micant::ob::ObjectHeader s_batteryHeader;
 
 void InitializeBatterySubsystem() noexcept {
+    // Register and query the ACPI battery miniport before publishing the
+    // class-device state to the power manager.
+    micant::km::acpi::cmbatt::InitializeCmbattDriver();
+
     auto& ons = micant::ob::ObjectNamespace::get();
     ons.initializeRoot();
 
