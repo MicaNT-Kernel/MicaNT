@@ -1199,6 +1199,13 @@ public:
         winSta0->switchDesktop(L"Default");
         m_currentDesktop = dDefault;
 
+        // The standard control classes exist before application startup.
+        for (const wchar_t* name : {L"STATIC",L"BUTTON",L"EDIT",L"LISTBOX",L"COMBOBOX",L"SCROLLBAR"}) {
+            const ATOM atom=m_nextWindowClassAtom++;
+            m_windowClasses.emplace(name,&BuiltInWindowProcedure);
+            m_windowClassAtoms.emplace(name,atom);
+        }
+
         // 3. Register Shadow SSDT dispatcher into central SyscallDispatcher
         auto& dispatcher = micant::sys::SyscallDispatcher::get();
         dispatcher.setShadowDispatcher([this](const micant::sys::SyscallFrame& frame) -> NtStatus {
@@ -1309,6 +1316,7 @@ public:
                         HWND hWndParent, HMENU /*hMenu*/, HINSTANCE /*hInstance*/, void* lpParam,
                         uint32_t tid = 1, uint32_t pid = 4) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (!lpClassName || m_windowClasses.find(lpClassName) == m_windowClasses.end()) return nullptr;
         static uintptr_t s_nextHwnd = 0x10000;
         HWND hwnd = reinterpret_cast<HWND>(s_nextHwnd++);
 
@@ -1816,6 +1824,10 @@ public:
     }
 
 private:
+    static LRESULT WINAPI BuiltInWindowProcedure(HWND, UINT message, WPARAM, LPARAM) {
+        return message == 0x0081 ? 1 : 0; // Accept WM_NCCREATE for built-in controls.
+    }
+
     TitanWin32kSubsystem() {
         initialize();
     }
