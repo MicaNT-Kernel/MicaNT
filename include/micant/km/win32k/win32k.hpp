@@ -51,6 +51,7 @@
 #include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/km/core/dispatcher.hpp"
 #include "micant/km/drivers/video/wddm.hpp"
+#include "micant/km/hal/bootvid.hpp"
 
 namespace micant::win32k {
 
@@ -477,6 +478,9 @@ struct WND {
     bool isVisible{false};
     bool isEnabled{true};
     bool isDestroyed{false};
+    bool isMinimized{false};
+    bool isMaximized{false};
+    RECT restoreRect{0, 0, 0, 0};
     bool isPaintInvalidated{false};
     HDC hdc{nullptr};
     HBITMAP clientBitmap{nullptr};
@@ -1356,7 +1360,7 @@ public:
         wnd->style = dwStyle;
         wnd->exStyle = dwExStyle;
         wnd->rcWindow = {x, y, x + nWidth, y + nHeight};
-        wnd->rcClient = {0, 0, nWidth, nHeight};
+        updateClientGeometry(*wnd);
         wnd->hwndParent = hWndParent;
         wnd->threadId = tid;
         wnd->processId = pid;
@@ -1510,10 +1514,39 @@ public:
         if (nCmdShow == SW_HIDE) {
             it->second->isVisible = false;
             it->second->style &= ~WS_VISIBLE;
+        } else if (nCmdShow == SW_MINIMIZE || nCmdShow == SW_SHOWMINIMIZED ||
+                   nCmdShow == SW_SHOWMINNOACTIVE) {
+            auto& window = *it->second;
+            if (!window.isMinimized && !window.isMaximized) window.restoreRect = window.rcWindow;
+            window.isMinimized = true;
+            window.isMaximized = false;
+            window.style = (window.style | WS_VISIBLE | WS_MINIMIZE) & ~WS_MAXIMIZE;
+            window.isVisible = true;
+        } else if (nCmdShow == SW_MAXIMIZE || nCmdShow == SW_SHOWMAXIMIZED) {
+            auto& window = *it->second;
+            if (!window.isMaximized && !window.isMinimized) window.restoreRect = window.rcWindow;
+            window.isMaximized = true;
+            window.isMinimized = false;
+            window.style = (window.style | WS_VISIBLE | WS_MAXIMIZE) & ~WS_MINIMIZE;
+            window.isVisible = true;
+            auto screen = m_gdiEngine.getBitmapForDC(m_gdiEngine.getScreenDC());
+            if (screen) {
+                window.rcWindow = {0, 0, static_cast<int32_t>(screen->width), static_cast<int32_t>(screen->height)};
+                updateClientGeometry(window);
+            }
         } else {
-            it->second->isVisible = true;
-            it->second->style |= WS_VISIBLE;
+            auto& window = *it->second;
+            if (window.isMinimized || window.isMaximized) {
+                if (window.restoreRect.width() > 0 && window.restoreRect.height() > 0)
+                    window.rcWindow = window.restoreRect;
+                updateClientGeometry(window);
+            }
+            window.isMinimized = false;
+            window.isMaximized = false;
+            window.style = (window.style | WS_VISIBLE) & ~(WS_MINIMIZE | WS_MAXIMIZE);
+            window.isVisible = true;
         }
+        if (it->second->isVisible && m_currentDesktop) m_currentDesktop->setActiveWindow(hwnd);
         postMessage(hwnd, WM_SHOWWINDOW, it->second->isVisible ? 1U : 0U, 0);
 
         if (m_currentDesktop && m_currentDesktop->getHeap() && it->second->desktopHeapOffset != 0) {
@@ -1536,12 +1569,11 @@ public:
             int w = (uFlags & SWP_NOSIZE) ? wnd->rcWindow.width() : cx;
             int h = (uFlags & SWP_NOSIZE) ? wnd->rcWindow.height() : cy;
             wnd->rcWindow = {x, y, x + w, y + h};
-            wnd->rcClient = {0, 0, w, h};
         } else if (!(uFlags & SWP_NOSIZE)) {
             wnd->rcWindow.right = wnd->rcWindow.left + cx;
             wnd->rcWindow.bottom = wnd->rcWindow.top + cy;
-            wnd->rcClient = {0, 0, cx, cy};
         }
+        updateClientGeometry(*wnd);
 
         if (uFlags & SWP_SHOWWINDOW) {
             wnd->isVisible = true;
@@ -1639,29 +1671,99 @@ public:
         screen->clear(0xFF101722);
         if (!m_currentDesktop) return screen;
 
+        const int64_t screenWidth = screen->width;
+        const int64_t screenHeight = screen->height;
+        auto fillRect = [&](int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t color) {
+            left = std::clamp<int64_t>(left, 0, screenWidth);
+            top = std::clamp<int64_t>(top, 0, screenHeight);
+            right = std::clamp<int64_t>(right, 0, screenWidth);
+            bottom = std::clamp<int64_t>(bottom, 0, screenHeight);
+            if (left >= right || top >= bottom) return;
+            for (int64_t y = top; y < bottom; ++y) {
+                const size_t offset = static_cast<size_t>(y) * screen->width + static_cast<size_t>(left);
+                std::fill_n(screen->pixels.data() + offset, static_cast<size_t>(right - left), color);
+            }
+        };
+
         const auto zOrder = m_currentDesktop->getZOrder();
         for (auto order = zOrder.rbegin(); order != zOrder.rend(); ++order) {
             auto it = m_windows.find(*order);
             if (it == m_windows.end() || !it->second || !it->second->isVisible ||
-                it->second->isDestroyed || !it->second->hdc) continue;
+                it->second->isMinimized || it->second->isDestroyed) continue;
 
             const auto& window = *it->second;
+            const int64_t left = window.rcWindow.left;
+            const int64_t top = window.rcWindow.top;
+            const int64_t right = window.rcWindow.right;
+            const int64_t bottom = window.rcWindow.bottom;
+            const int64_t frame = windowFrameInset(window);
+            const int64_t caption = windowCaptionHeight(window);
+            const bool hasFrame = frame != 0 || caption != 0;
+            const bool active = m_currentDesktop->getActiveWindow() == window.hwnd;
+
+            if (hasFrame) {
+                const uint32_t frameColor = active ? 0xFF4B668A : 0xFF303B4D;
+                const uint32_t captionColor = active ? 0xFF214C7A : 0xFF303B4D;
+                fillRect(left, top, right, bottom, frameColor);
+                if (caption != 0) {
+                    fillRect(left + frame, top + frame, right - frame, top + frame + caption, captionColor);
+
+                    const int64_t closeLeft = right - frame - 30;
+                    const int64_t buttonTop = top + frame + 2;
+                    const int64_t buttonBottom = top + frame + caption - 2;
+                    fillRect(closeLeft, buttonTop, right - frame - 2, buttonBottom, 0xFF9A3E49);
+                    fillRect(closeLeft - 29, buttonTop, closeLeft - 1, buttonBottom, 0xFF40516B);
+                    fillRect(closeLeft - 58, buttonTop, closeLeft - 30, buttonBottom, 0xFF40516B);
+
+                    // Three simple, legible caption glyphs: minimize, maximize, close.
+                    const int64_t glyphY = top + frame + caption / 2;
+                    fillRect(closeLeft - 21, glyphY + 4, closeLeft - 9, glyphY + 6, 0xFFF2F5FA);
+                    fillRect(closeLeft - 50, glyphY - 5, closeLeft - 40, glyphY + 5, 0xFFF2F5FA);
+                    fillRect(closeLeft - 48, glyphY - 3, closeLeft - 42, glyphY + 3, 0xFF40516B);
+                    for (int64_t d = 0; d < 9; ++d) {
+                        fillRect(closeLeft + 10 + d, glyphY - 4 + d, closeLeft + 12 + d, glyphY - 2 + d, 0xFFF2F5FA);
+                        fillRect(closeLeft + 18 - d, glyphY - 4 + d, closeLeft + 20 - d, glyphY - 2 + d, 0xFFF2F5FA);
+                    }
+
+                    int64_t textX = left + frame + 9;
+                    const int64_t textLimit = closeLeft - 8;
+                    const int64_t textY = top + frame + (caption - 8) / 2;
+                    for (wchar_t ch : window.windowName) {
+                        if (textX + 8 > textLimit) break;
+                        const uint32_t ascii = (ch >= 32 && ch <= 126) ? static_cast<uint32_t>(ch) : static_cast<uint32_t>('?');
+                        const uint8_t* glyph = micant::bootvid::font::GLYPH_DATA[ascii - 32];
+                        for (int row = 0; row < 8; ++row) {
+                            for (int col = 0; col < 8; ++col) {
+                                if (glyph[row] & (1U << (7 - col))) {
+                                    const int64_t px = textX + col;
+                                    const int64_t py = textY + row;
+                                    if (px >= 0 && px < screenWidth && py >= 0 && py < screenHeight)
+                                        screen->pixels[static_cast<size_t>(py) * screen->width + static_cast<size_t>(px)] = 0xFFF4F6FA;
+                                }
+                            }
+                        }
+                        textX += 8;
+                    }
+                }
+            }
+
+            if (!window.hdc) continue;
             auto surface = m_gdiEngine.getBitmapForDC(window.hdc);
             if (!surface || surface->width == 0 || surface->height == 0) continue;
 
-            const int32_t dstX = window.rcWindow.left;
-            const int32_t dstY = window.rcWindow.top;
-            const int32_t xBegin = std::max<int32_t>(0, -dstX);
-            const int32_t yBegin = std::max<int32_t>(0, -dstY);
-            const int32_t xEnd = std::min<int32_t>(surface->width,
-                static_cast<int32_t>(screen->width) - dstX);
-            const int32_t yEnd = std::min<int32_t>(surface->height,
-                static_cast<int32_t>(screen->height) - dstY);
+            const int64_t clientX = left + frame;
+            const int64_t clientY = top + frame + caption;
+            const int64_t clientWidth = std::min<int64_t>(surface->width, window.rcClient.width());
+            const int64_t clientHeight = std::min<int64_t>(surface->height, window.rcClient.height());
+            const int64_t xBegin = std::max<int64_t>(0, -clientX);
+            const int64_t yBegin = std::max<int64_t>(0, -clientY);
+            const int64_t xEnd = std::min<int64_t>(clientWidth, screenWidth - clientX);
+            const int64_t yEnd = std::min<int64_t>(clientHeight, screenHeight - clientY);
             if (xBegin >= xEnd || yBegin >= yEnd) continue;
 
-            for (int32_t y = yBegin; y < yEnd; ++y) {
-                const size_t srcOffset = static_cast<size_t>(y) * surface->width + xBegin;
-                const size_t dstOffset = static_cast<size_t>(dstY + y) * screen->width + (dstX + xBegin);
+            for (int64_t y = yBegin; y < yEnd; ++y) {
+                const size_t srcOffset = static_cast<size_t>(y) * surface->width + static_cast<size_t>(xBegin);
+                const size_t dstOffset = static_cast<size_t>(clientY + y) * screen->width + static_cast<size_t>(clientX + xBegin);
                 std::copy_n(surface->pixels.data() + srcOffset,
                             static_cast<size_t>(xEnd - xBegin), screen->pixels.data() + dstOffset);
             }
@@ -1952,6 +2054,26 @@ public:
     }
 
 private:
+    static int32_t windowFrameInset(const WND& window) noexcept {
+        if (window.hwndParent) return 0;
+        if (window.style & WS_THICKFRAME) return 5;
+        return (window.style & (WS_BORDER | WS_DLGFRAME)) ? 1 : 0;
+    }
+
+    static int32_t windowCaptionHeight(const WND& window) noexcept {
+        return (!window.hwndParent && (window.style & WS_CAPTION)) ? 26 : 0;
+    }
+
+    static void updateClientGeometry(WND& window) noexcept {
+        const int32_t outerWidth = std::max<int32_t>(1, window.rcWindow.width());
+        const int32_t outerHeight = std::max<int32_t>(1, window.rcWindow.height());
+        const int32_t inset = windowFrameInset(window);
+        const int32_t caption = windowCaptionHeight(window);
+        const int32_t clientWidth = std::max<int32_t>(1, outerWidth - inset * 2);
+        const int32_t clientHeight = std::max<int32_t>(1, outerHeight - inset * 2 - caption);
+        window.rcClient = {0, 0, clientWidth, clientHeight};
+    }
+
     static LRESULT WINAPI BuiltInWindowProcedure(HWND, UINT message, WPARAM, LPARAM) {
         return message == 0x0081 ? 1 : 0; // Accept WM_NCCREATE for built-in controls.
     }
