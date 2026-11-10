@@ -1003,8 +1003,12 @@ public:
             if (!existingChild) {
                 // Query device IDs from child PDO
                 std::wstring devId;
+                std::wstring hardwareId;
+                std::wstring compatibleId;
                 std::wstring instId;
                 queryDeviceId(childPdo, BUS_QUERY_ID_TYPE::BusQueryDeviceID, devId);
+                queryDeviceId(childPdo, BUS_QUERY_ID_TYPE::BusQueryHardwareIDs, hardwareId);
+                queryDeviceId(childPdo, BUS_QUERY_ID_TYPE::BusQueryCompatibleIDs, compatibleId);
                 queryDeviceId(childPdo, BUS_QUERY_ID_TYPE::BusQueryInstanceID, instId);
 
                 if (devId.empty()) {
@@ -1017,6 +1021,8 @@ public:
                 auto newChild = std::make_shared<PnpDeviceNode>(devId, instId, busDevNode);
                 newChild->setPdo(childPdo);
                 newChild->setState(PnpDeviceState::Initialized);
+                if (!hardwareId.empty()) newChild->setHardwareIds({hardwareId});
+                if (!compatibleId.empty()) newChild->setCompatibleIds({compatibleId});
 
                 // Query capabilities
                 DEVICE_CAPABILITIES caps{};

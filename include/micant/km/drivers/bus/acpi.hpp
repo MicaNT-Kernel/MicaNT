@@ -19,6 +19,7 @@ namespace micant::km::bus::acpi {
 
 struct AcpiPdoExtension {
     std::wstring hardwareId;
+    std::wstring compatibleId;
     std::wstring instanceId;
     std::string namespacePath;
 };
@@ -122,8 +123,11 @@ private:
             case pnp::BUS_QUERY_ID_TYPE::BusQueryHardwareIDs:
                 return queryId(irp, extension->hardwareId, extension->instanceId, true);
             case pnp::BUS_QUERY_ID_TYPE::BusQueryCompatibleIDs: {
-                std::wstring compatible = extension->hardwareId;
-                if (compatible.starts_with(L"ACPI\\")) compatible.erase(0, 5);
+                std::wstring compatible = extension->compatibleId;
+                if (compatible.empty()) {
+                    compatible = extension->hardwareId;
+                    if (compatible.starts_with(L"ACPI\\")) compatible.erase(0, 5);
+                }
                 return queryId(irp, compatible, extension->instanceId, true);
             }
             case pnp::BUS_QUERY_ID_TYPE::BusQueryInstanceID:
@@ -209,18 +213,30 @@ private:
             if (node->value.type == micant::acpi::AmlObjectType::Device) {
                 const auto hidIt = node->children.find("_HID");
                 if (hidIt != node->children.end() && hidIt->second) {
-                    std::string hid;
-                    const auto& hidValue = hidIt->second->value;
-                    if (hidValue.type == micant::acpi::AmlObjectType::String)
-                        hid = hidValue.stringVal;
-                    else if (hidValue.type == micant::acpi::AmlObjectType::Integer)
-                        hid = eisaIdToString(static_cast<uint32_t>(hidValue.integerVal));
+                        std::string hid = decodeId(hidIt->second->value);
                     if (!hid.empty()) {
                         std::wstring wideHid(hid.begin(), hid.end());
                         const uint32_t instance = instances[wideHid]++;
                         auto extension = std::make_unique<AcpiPdoExtension>();
                         extension->hardwareId = L"ACPI\\" + wideHid;
-                        extension->instanceId = std::to_wstring(instance);
+                            extension->instanceId = decodeUid(ns.evaluate(path + "._UID"));
+                            if (extension->instanceId.empty())
+                                extension->instanceId = std::to_wstring(instance);
+                            const auto cid = ns.evaluate(path + "._CID");
+                            if (cid.type == micant::acpi::AmlObjectType::Package) {
+                                for (const auto& item : cid.packageElements) {
+                                    const auto decoded = decodeId(item);
+                                    if (!decoded.empty()) {
+                                        extension->compatibleId = L"ACPI\\" +
+                                            std::wstring(decoded.begin(), decoded.end());
+                                        break;
+                                    }
+                                }
+                            } else {
+                                const auto decoded = decodeId(cid);
+                                if (!decoded.empty()) extension->compatibleId = L"ACPI\\" +
+                                    std::wstring(decoded.begin(), decoded.end());
+                            }
                         extension->namespacePath = path;
                         const std::wstring pdoName = L"\\Device\\AcpiPdo" + std::to_wstring(index++);
                         auto pdo = io::IoManager::get().createDevice(&driver_, pdoName,
@@ -244,6 +260,21 @@ private:
         std::string out{a, b, c, hex[(id >> 12) & 0xF], hex[(id >> 8) & 0xF],
             hex[(id >> 4) & 0xF], hex[id & 0xF]};
         return out;
+    }
+
+    static std::string decodeId(const micant::acpi::AmlValue& value) {
+        if (value.type == micant::acpi::AmlObjectType::String) return value.stringVal;
+        if (value.type == micant::acpi::AmlObjectType::Integer)
+            return eisaIdToString(static_cast<uint32_t>(value.integerVal));
+        return {};
+    }
+
+    static std::wstring decodeUid(const micant::acpi::AmlValue& value) {
+        if (value.type == micant::acpi::AmlObjectType::String)
+            return std::wstring(value.stringVal.begin(), value.stringVal.end());
+        if (value.type == micant::acpi::AmlObjectType::Integer)
+            return std::to_wstring(value.integerVal);
+        return {};
     }
 
     io::DeviceObject* findBatteryPdo() const noexcept {
