@@ -456,6 +456,7 @@ struct Ring3Telemetry {
 };
 static Ring3Telemetry s_ring3Telemetry{};
 static bool s_loggedFirstGdiPresent = false;
+static bool s_loggedCompositionPath = false;
 static micant::um::UserLoadedImageInfo s_loadedPeInfo{};
 static MicaWin32kInputEvent s_win32kInputQueue[128]{};
 static volatile uint32_t s_win32kInputHead = 0;
@@ -1052,6 +1053,12 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             return 1;
         }
         case 0x85: { // NtGdiPresentComposition
+            if (!s_loggedCompositionPath) {
+                s_loggedCompositionPath = true;
+                UartSerial::print(syscallStatus == micant::NtStatus::Success
+                    ? "  -> NtGdiPresentComposition: desktop layers composed by display driver\r\n"
+                    : "  -> NtGdiPresentComposition: driver has no layer compositor; using software composition\r\n");
+            }
             return static_cast<uint64_t>(syscallStatus);
         }
         default:
