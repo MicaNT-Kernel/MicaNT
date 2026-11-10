@@ -1948,10 +1948,10 @@ public:
             // 16-byte stack aligned per Win64 ABI
             const uint8_t s30[] = {
                 0x48, 0x39, 0xD1,                         // 1: cmp %rdx, %rcx
-                0x73, 0x1A,                               // jae 2f (+26)
+                0x73, 0x1C,                               // jae 2f (+28)
                 0x48, 0x8B, 0x01,                         // mov (%rcx), %rax
                 0x48, 0x85, 0xC0,                         // test %rax, %rax
-                0x74, 0x0D,                               // jz 3f (+13)
+                0x74, 0x0E,                               // jz 3f (+14)
                 0x51,                                     // push %rcx
                 0x52,                                     // push %rdx
                 0x48, 0x83, 0xEC, 0x28,                   // sub $40, %rsp (16-byte align)
@@ -1969,10 +1969,10 @@ public:
             // 16-byte stack aligned per Win64 ABI
             const uint8_t s31[] = {
                 0x48, 0x39, 0xD1,                         // 1: cmp %rdx, %rcx
-                0x73, 0x24,                               // jae 2f (+36)
+                0x73, 0x20,                               // jae 2f (+32)
                 0x48, 0x8B, 0x01,                         // mov (%rcx), %rax
                 0x48, 0x85, 0xC0,                         // test %rax, %rax
-                0x74, 0x17,                               // jz 3f (+23)
+                0x74, 0x12,                               // jz 3f (+18)
                 0x51,                                     // push %rcx
                 0x52,                                     // push %rdx
                 0x48, 0x83, 0xEC, 0x28,                   // sub $40, %rsp (16-byte align)
@@ -1983,7 +1983,7 @@ public:
                 0x85, 0xC0,                               // test %eax, %eax
                 0x75, 0x09,                               // jne 4f (+9)
                 0x48, 0x83, 0xC1, 0x08,                   // 3: add $8, %rcx
-                0xEB, 0xD5,                               // jmp 1b (-43)
+                0xEB, 0xDB,                               // jmp 1b (-37)
                 0x31, 0xC0,                               // 2: xor %eax, %eax
                 0xC3,                                     // ret
                 0xC3                                      // 4: ret
