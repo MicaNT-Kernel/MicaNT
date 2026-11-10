@@ -70,23 +70,20 @@ intptr_t User32_DefWindowProcW(void* /*hWnd*/, uint32_t /*Msg*/, uintptr_t /*wPa
 
 int32_t User32_PeekMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t /*wMsgFilterMin*/, uint32_t /*wMsgFilterMax*/, uint32_t wRemoveMsg) noexcept {
     if (!lpMsg) return 0;
-    if (g_primaryWindow.pendingMessages == 0) {
-        return 0;
-    }
-    lpMsg->hwnd    = hWnd ? hWnd : &g_primaryWindow;
-    lpMsg->message = WM_INPUT_OFFICIAL;
-    lpMsg->wParam  = 0;
-    lpMsg->lParam  = 0x00000000000F0100LL;
-    lpMsg->time    = 10000U;
-    lpMsg->pt      = g_cursorPos;
-    if (wRemoveMsg & PM_REMOVE_OFFICIAL) {
-        g_primaryWindow.pendingMessages--;
-    }
+    micant::win32k::MSG msg{};
+    const auto ok = micant::win32k::NtUserPeekMessage(&msg, hWnd, 0, 0, wRemoveMsg);
+    if (!ok) return 0;
+    lpMsg->hwnd=msg.hwnd; lpMsg->message=msg.message; lpMsg->wParam=msg.wParam;
+    lpMsg->lParam=msg.lParam; lpMsg->time=msg.time; lpMsg->pt={msg.pt.x,msg.pt.y};
     return 1;
 }
 
 int32_t User32_GetMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t wMsgFilterMin, uint32_t wMsgFilterMax) noexcept {
-    return User32_PeekMessageW(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, PM_REMOVE_OFFICIAL);
+    if (!lpMsg) return -1;
+    micant::win32k::MSG msg{};
+    const auto ok=micant::win32k::NtUserGetMessage(&msg,hWnd,wMsgFilterMin,wMsgFilterMax);
+    lpMsg->hwnd=msg.hwnd;lpMsg->message=msg.message;lpMsg->wParam=msg.wParam;lpMsg->lParam=msg.lParam;lpMsg->time=msg.time;lpMsg->pt={msg.pt.x,msg.pt.y};
+    return ok;
 }
 
 int32_t User32_TranslateMessage(const WinNtMsg* lpMsg) noexcept {
