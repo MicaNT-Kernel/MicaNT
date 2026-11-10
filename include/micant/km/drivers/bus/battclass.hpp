@@ -27,6 +27,7 @@ struct BATTERY_NOTIFY {
     uint32_t LowCapacity;
     uint32_t HighCapacity;
 };
+static_assert(sizeof(BATTERY_NOTIFY) == 12);
 using BatteryClassSetStatusNotify = NtStatus (*)(void* context, uint32_t batteryTag, BATTERY_NOTIFY* notify);
 using BatteryClassDisableStatusNotify = NtStatus (*)(void* context);
 
@@ -50,6 +51,11 @@ inline constexpr GUID GUID_DEVICE_BATTERY = {
     0x72631E54, 0x78A4, 0x11D0, {0xBC, 0xF7, 0x00, 0xAA, 0x00, 0xB7, 0xB3, 0x2A}};
 static_assert(offsetof(BATTERY_MINIPORT_INFO, MajorVersion) == 0);
 static_assert(offsetof(BATTERY_MINIPORT_INFO, MinorVersion) == 2);
+static_assert(offsetof(BATTERY_MINIPORT_INFO, Context) ==
+    ((sizeof(void*) == 8) ? 8U : 4U));
+static_assert(offsetof(BATTERY_MINIPORT_INFO, Pdo) ==
+    ((sizeof(void*) == 8) ? 64U : 32U));
+static_assert(sizeof(BATTERY_MINIPORT_INFO) == ((sizeof(void*) == 8) ? 80U : 40U));
 
 struct BatteryClassDevice {
     BATTERY_MINIPORT_INFO Miniport{};
