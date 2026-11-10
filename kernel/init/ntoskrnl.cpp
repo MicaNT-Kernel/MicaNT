@@ -4263,24 +4263,31 @@ extern "C" micant::NtStatus KiSystemStartup(
         ExecuteCommandImpl(ExecuteCommandImpl, cmd);
     };
 
+    struct DesktopWindow { bool open{}, minimized{}, maximized{}; int x{}, y{}, w{}, h{}; char title[40]{}; };
+    DesktopWindow desktopWindows[8]{};
+    int activeWindow = -1;
     bool desktopPanelOpen = false;
     int panelX = 100, panelY = 80;
-    const int panelW = static_cast<int>(width) - 200;
-    const int panelH = 400;
+    int panelW = static_cast<int>(width) - 200, panelH = 400;
     bool panelDragging = false;
     int dragOffsetX = 0, dragOffsetY = 0;
     const char* panelTitle = "";
     auto drawDesktopPanel = [&]() {
         using micant::bootvid::Color;
+        if (activeWindow < 0 || !desktopWindows[activeWindow].open || desktopWindows[activeWindow].minimized) return;
+        auto& win = desktopWindows[activeWindow];
+        panelX = win.x; panelY = win.y; panelW = win.w; panelH = win.h;
         videoDriver.fillRectangle(panelX, panelY, panelW, panelH, Color{14, 20, 32});
         videoDriver.drawRectangle(panelX, panelY, panelW, panelH, Color{0, 180, 220}, 2);
         videoDriver.fillRectangle(panelX + 2, panelY + 2, panelW - 4, 34, Color{28, 38, 60});
         videoDriver.drawString(panelX + 14, panelY + 12, panelTitle, Color{255,255,255}, Color{28,38,60}, 1);
-        videoDriver.fillRectangle(panelX + panelW - 40, panelY + 5, 32, 26, Color{90,40,48});
-        videoDriver.drawString(panelX + panelW - 29, panelY + 10, "X", Color{255,255,255}, Color{90,40,48}, 1);
+        videoDriver.fillRectangle(panelX + panelW - 108, panelY + 5, 30, 26, Color{45,65,95}); videoDriver.drawString(panelX + panelW - 101, panelY + 10, "_", Color{255,255,255}, Color{45,65,95}, 1);
+        videoDriver.fillRectangle(panelX + panelW - 74, panelY + 5, 30, 26, Color{45,65,95}); videoDriver.drawString(panelX + panelW - 67, panelY + 10, win.maximized ? "R" : "[]", Color{255,255,255}, Color{45,65,95}, 1);
+        videoDriver.fillRectangle(panelX + panelW - 40, panelY + 5, 32, 26, Color{90,40,48}); videoDriver.drawString(panelX + panelW - 29, panelY + 10, "X", Color{255,255,255}, Color{90,40,48}, 1);
         for (size_t i = 0; i < s_shellOutputCount && i < 13; ++i)
             videoDriver.drawString(panelX + 16, panelY + 54 + i * 22, s_shellOutputLines[i].text, s_shellOutputLines[i].color, Color{14,20,32}, 1);
-        videoDriver.drawString(panelX + 16, panelY + panelH - 25, "Drag title bar | Click X to close | TAB: console", Color{140,160,190}, Color{14,20,32}, 1);
+        videoDriver.drawString(panelX + 16, panelY + panelH - 25, "Drag title | _ minimize | [] maximize | corner resize", Color{140,160,190}, Color{14,20,32}, 1);
+        videoDriver.drawRectangle(panelX + panelW - 12, panelY + panelH - 12, 10, 10, Color{0,180,220});
     };
     auto handleDesktopClick = [&]() {
         const int dockW = width > 600 ? 540 : static_cast<int>(width) - 40;
@@ -4288,9 +4295,11 @@ extern "C" micant::NtStatus KiSystemStartup(
         const int dockY = static_cast<int>(height) - 60;
         const int hubW = width >= 960 ? static_cast<int>((width - 64) / 2 > 460 ? 460 : (width - 64) / 2) : (width > 500 ? 460 : static_cast<int>(width) - 32);
         const int hubX = width >= 960 ? 24 : (static_cast<int>(width) - hubW) / 2;
-        if (desktopPanelOpen && mouseX >= panelX && mouseX < panelX + panelW && mouseY >= panelY + 2 && mouseY < panelY + 36 && mouseX < panelX + panelW - 44) {
+        if (desktopPanelOpen && mouseX >= panelX && mouseX < panelX + panelW && mouseY >= panelY + 2 && mouseY < panelY + 36 && mouseX < panelX + panelW - 112) {
             panelDragging = true; dragOffsetX = mouseX - panelX; dragOffsetY = mouseY - panelY; return;
         }
+        if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 108 && mouseX < panelX + panelW - 78) { desktopWindows[activeWindow].minimized=true; desktopPanelOpen=false; DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp); return; }
+        if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 74 && mouseX < panelX + panelW - 44) { auto& w=desktopWindows[activeWindow]; w.maximized=!w.maximized; if(w.maximized){w.x=8;w.y=40;w.w=width-16;w.h=height-112;}else{w.x=100;w.y=80;w.w=width-200;w.h=400;} DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp);drawDesktopPanel();return; }
         if (desktopPanelOpen && mouseX >= panelX + panelW - 44 && mouseX < panelX + panelW && mouseY >= panelY && mouseY < panelY + 36) {
             hideCursor(); desktopPanelOpen = false;
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
@@ -4326,7 +4335,10 @@ extern "C" micant::NtStatus KiSystemStartup(
             DrawExecutiveConsole(); RedrawShellLine();
             UartSerial::print("[Mouse] Opened terminal.\r\n"); return;
         }
-        panelTitle = title;
+        int slot=-1; for(int i=0;i<8;i++) if(desktopWindows[i].open && strEqual(desktopWindows[i].title,title)){slot=i;break;}
+        if(slot<0) for(int i=0;i<8;i++) if(!desktopWindows[i].open){slot=i;break;}
+        if(slot<0) slot=activeWindow<0?0:activeWindow;
+        activeWindow=slot; auto& w=desktopWindows[slot]; w.open=true; w.minimized=false; w.maximized=false; w.x=100+slot*24; w.y=80+slot*20; w.w=width-200; w.h=400; copyStr(w.title,title,sizeof(w.title)); panelTitle=title; panelX=w.x;panelY=w.y;panelW=w.w;panelH=w.h;
         if (command) ExecuteCommand(command);
         else { ShellClearOutput(); ShellAddLine("This application is not implemented yet."); }
         DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
@@ -4599,8 +4611,9 @@ extern "C" micant::NtStatus KiSystemStartup(
                             if (panelY < 32) panelY = 32;
                             if (panelX + panelW > static_cast<int>(width)) panelX = width - panelW;
                             if (panelY + panelH > static_cast<int>(height)) panelY = height - panelH;
-                            DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp); drawDesktopPanel();
+                            auto& w=desktopWindows[activeWindow];w.x=panelX;w.y=panelY; DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp); drawDesktopPanel();
                         }
+                        if(desktopPanelOpen && (mousePacket[0]&1) && !panelDragging && mouseX>=panelX+panelW-16 && mouseY>=panelY+panelH-16){panelW=mouseX-panelX;panelH=mouseY-panelY;if(panelW<260)panelW=260;if(panelH<160)panelH=160;auto&w=desktopWindows[activeWindow];w.w=panelW;w.h=panelH;DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp);drawDesktopPanel();}
                         if (s_showDesktop) showCursor();
                         bool leftDown = (mousePacket[0] & 1) != 0;
                         if (leftDown && !mouseLeftDown && s_showDesktop) handleDesktopClick();
