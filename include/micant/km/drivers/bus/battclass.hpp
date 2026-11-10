@@ -148,10 +148,25 @@ extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io
 
     switch (stack->parameters.deviceIoControl.ioControlCode) {
     case IOCTL_BATTERY_QUERY_TAG: {
+        if (!buffer || inLength < sizeof(uint32_t)) { status = NtStatus::InvalidParameter; break; }
         if (!buffer || outLength < sizeof(uint32_t)) { status = NtStatus::BufferTooSmall; break; }
+        uint32_t timeout = 0;
+        std::memcpy(&timeout, buffer, sizeof(timeout));
+        const bool infiniteTimeout = timeout == UINT32_MAX;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
         uint32_t tag = 0;
-        status = state->Miniport.QueryTag(state->Miniport.Context, &tag);
-        if (NT_SUCCESS(status)) { std::memcpy(buffer, &tag, sizeof(tag)); bytesReturned = sizeof(tag); }
+        for (;;) {
+            status = state->Miniport.QueryTag(state->Miniport.Context, &tag);
+            if (!NT_SUCCESS(status) || tag != 0) break;
+            if (timeout == 0 || (!infiniteTimeout && std::chrono::steady_clock::now() >= deadline)) {
+                tag = UINT32_MAX; // BATTERY_TAG_INVALID
+                status = NtStatus::NoSuchDevice;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::memcpy(buffer, &tag, sizeof(tag));
+        bytesReturned = sizeof(tag);
         break;
     }
     case IOCTL_BATTERY_QUERY_INFORMATION: {
@@ -169,17 +184,20 @@ extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io
         std::memcpy(&wait, buffer, sizeof(wait));
         if (outLength < sizeof(BatteryStatus)) { status = NtStatus::BufferTooSmall; break; }
         BatteryStatus batteryStatus{};
+        const bool infiniteTimeout = wait.timeout == UINT32_MAX;
         const auto deadline = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(wait.timeout);
         for (;;) {
             status = state->Miniport.QueryStatus(state->Miniport.Context, wait.batteryTag, &batteryStatus);
             if (!NT_SUCCESS(status) || wait.timeout == 0) break;
-            const bool powerMatch = wait.powerState == 0 ||
-                (batteryStatus.powerState & wait.powerState) != 0;
-            const bool lowMatch = wait.lowCapacity != 0 && batteryStatus.capacity <= wait.lowCapacity;
-            const bool highMatch = wait.highCapacity != 0 && batteryStatus.capacity >= wait.highCapacity;
-            if (powerMatch || lowMatch || highMatch) break;
-            if (std::chrono::steady_clock::now() >= deadline) {
+            const bool powerChanged = batteryStatus.powerState != wait.powerState;
+            const bool capacityKnown = batteryStatus.capacity != UINT32_MAX;
+            const bool belowLow = capacityKnown && wait.lowCapacity != 0 &&
+                batteryStatus.capacity < wait.lowCapacity;
+            const bool aboveHigh = capacityKnown && wait.highCapacity != 0 &&
+                batteryStatus.capacity > wait.highCapacity;
+            if (powerChanged || belowLow || aboveHigh) break;
+            if (!infiniteTimeout && std::chrono::steady_clock::now() >= deadline) {
                 status = NtStatus::Timeout;
                 break;
             }

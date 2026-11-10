@@ -205,6 +205,11 @@ public:
         m_status.voltage = 16800; // 4S x 4.2V = 16.8V
         m_status.rate = 0;        // Float idle on AC
 
+        m_reportingScales = {};
+        m_reportingScaleCount = 0;
+        m_deviceName = "MicaNT Sovereign Smart Battery Pack";
+        m_mfgName = "Barrer Silicon Systems";
+        m_serialNumber = "BSS-2026-BMS-0042";
         m_cells = CellTelemetry{};
         m_acWattage = 65;
     }
@@ -222,8 +227,7 @@ public:
     void setBatteryPresent(bool present) noexcept {
         std::lock_guard<std::mutex> lock(m_lock);
         if (m_batteryPresent != present) {
-            ++m_batteryTag;
-            if (m_batteryTag == 0) ++m_batteryTag;
+            advanceBatteryTag();
         }
         m_batteryPresent = present;
     }
@@ -236,9 +240,32 @@ public:
                         const std::array<BatteryReportingScale, 4>& reportingScales = {},
                         uint32_t reportingScaleCount = 0) noexcept {
         std::lock_guard<std::mutex> lock(m_lock);
-        if (m_batteryPresent != present) {
-            ++m_batteryTag;
-            if (m_batteryTag == 0) ++m_batteryTag;
+        bool characteristicsChanged = false;
+        if (present && m_batteryPresent) {
+            characteristicsChanged = m_info.capabilities != information.capabilities ||
+                m_info.technology != information.technology ||
+                std::memcmp(m_info.chemistry, information.chemistry, sizeof(m_info.chemistry)) != 0 ||
+                m_info.designedCapacity != information.designedCapacity ||
+                m_info.fullChargedCapacity != information.fullChargedCapacity ||
+                m_info.defaultAlert1 != information.defaultAlert1 ||
+                m_info.defaultAlert2 != information.defaultAlert2 ||
+                m_info.criticalBias != information.criticalBias ||
+                m_info.cycleCount != information.cycleCount ||
+                m_deviceName != deviceName || m_serialNumber != serialNumber ||
+                m_mfgName != manufacturer || m_reportingScaleCount != reportingScaleCount;
+            if (!characteristicsChanged) {
+                const uint32_t compareCount = std::min<uint32_t>(reportingScaleCount, 4);
+                for (uint32_t i = 0; i < compareCount; ++i) {
+                    if (m_reportingScales[i].Granularity != reportingScales[i].Granularity ||
+                        m_reportingScales[i].Capacity != reportingScales[i].Capacity) {
+                        characteristicsChanged = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (m_batteryPresent != present || characteristicsChanged) {
+            advanceBatteryTag();
         }
         m_batteryPresent = present;
         if (!present) {
@@ -531,6 +558,11 @@ public:
     }
 
 private:
+    void advanceBatteryTag() noexcept {
+        ++m_batteryTag;
+        if (m_batteryTag == 0) ++m_batteryTag;
+    }
+
     void recalculateCellVoltages() noexcept {
         uint32_t soc = (m_info.fullChargedCapacity > 0) ? (m_status.capacity * 100) / m_info.fullChargedCapacity : 0;
         // Lithium OCV Curve: ~3.30V at 0%, ~3.70V at 50%, ~4.20V at 100%
