@@ -1467,6 +1467,26 @@ private:
     }
 
 public:
+    static bool imageImportsModule(const uint8_t* image, size_t imageSize,
+                                   const char* moduleName) noexcept {
+        if (!image || !moduleName || imageSize < sizeof(pe::ImageDosHeader)) return false;
+        const auto* dos = reinterpret_cast<const pe::ImageDosHeader*>(image);
+        if (dos->e_magic != pe::DOS_MAGIC || dos->e_lfanew < 0 ||
+            static_cast<size_t>(dos->e_lfanew) + sizeof(pe::ImageNtHeaders64) > imageSize) return false;
+        const auto* nt = reinterpret_cast<const pe::ImageNtHeaders64*>(image + dos->e_lfanew);
+        if (nt->signature != pe::NT_SIGNATURE ||
+            nt->optionalHeader.numberOfRvaAndSizes <= pe::IMAGE_DIRECTORY_ENTRY_IMPORT) return false;
+        const auto& importDir = nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (!importDir.virtualAddress || importDir.virtualAddress > imageSize ||
+            importDir.size > imageSize - importDir.virtualAddress) return false;
+        const auto* desc = reinterpret_cast<const pe::ImageImportDescriptor*>(image + importDir.virtualAddress);
+        for (size_t d = 0; d < importDir.size / sizeof(pe::ImageImportDescriptor) && desc[d].name; ++d) {
+            if (desc[d].name >= imageSize || !hasTerminator(image, imageSize, desc[d].name)) return false;
+            if (strcaseeq(reinterpret_cast<const char*>(image + desc[d].name), moduleName)) return true;
+        }
+        return false;
+    }
+
     static bool bindImportsToMappedModule(uint8_t* image, size_t imageSize,
                                            const char* moduleName,
                                            uint8_t* moduleImage, size_t moduleSize,

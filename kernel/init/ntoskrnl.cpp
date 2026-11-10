@@ -1593,17 +1593,31 @@ static bool transitionToRing3(
                 struct MappedSystemModule {
                     const char* name;
                     size_t offset;
+                    bool mapped;
                     micant::um::UserLoadedImageInfo image;
                 } modules[] = {
-                    {"win32k.dll", 0, {}},
-                    {"user32.dll", 0, {}},
-                    {"gdi32.dll", 0, {}},
-                    {"imm32.dll", 0, {}}
+                    {"win32k.dll", 0, false, {}},
+                    {"user32.dll", 0, false, {}},
+                    {"gdi32.dll", 0, false, {}},
+                    {"imm32.dll", 0, false, {}}
                 };
                 size_t nextModuleOffset = (static_cast<size_t>(s_loadedPeInfo.sizeOfImage) + 0xFFFFu) & ~static_cast<size_t>(0xFFFFu);
                 auto& systemFs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
                 bool modulesLoaded = true;
-                for (auto& module : modules) {
+                bool needWin32k = micant::um::UserImageLoader64::imageImportsModule(
+                    s_userImageBuffer, s_loadedPeInfo.sizeOfImage, "win32k.dll");
+                for (size_t i = 1; i < sizeof(modules) / sizeof(modules[0]); ++i) {
+                    const bool required = micant::um::UserImageLoader64::imageImportsModule(
+                        s_userImageBuffer, s_loadedPeInfo.sizeOfImage, modules[i].name);
+                    needWin32k = needWin32k || required;
+                }
+                for (size_t moduleIndex = 0; moduleIndex < sizeof(modules) / sizeof(modules[0]); ++moduleIndex) {
+                    auto& module = modules[moduleIndex];
+                    const bool required = moduleIndex == 0
+                        ? needWin32k
+                        : micant::um::UserImageLoader64::imageImportsModule(
+                              s_userImageBuffer, s_loadedPeInfo.sizeOfImage, module.name);
+                    if (!required) continue;
                     char path[96] = "\\MicaNT\\System32\\";
                     size_t pathLen = 16;
                     for (size_t i = 0; path[i] && i < sizeof(path) - 1; ++i) pathLen = i + 1;
@@ -1645,6 +1659,7 @@ static bool transitionToRing3(
                         modulesLoaded = false;
                         break;
                     }
+                    module.mapped = true;
                     nextModuleOffset += (static_cast<size_t>(module.image.sizeOfImage) + 0xFFFFu) & ~static_cast<size_t>(0xFFFFu);
                 }
 
@@ -1652,9 +1667,11 @@ static bool transitionToRing3(
                     auto moduleImage = [&](MappedSystemModule& module) -> uint8_t* {
                         return s_userImageBuffer + module.offset;
                     };
+                    const bool win32kMapped = modules[0].mapped;
                     const uint64_t win32kBase = targetBaseVa + modules[0].offset;
                     const size_t win32kSize = static_cast<size_t>(modules[0].image.sizeOfImage);
-                    for (size_t i = 1; i < sizeof(modules) / sizeof(modules[0]); ++i) {
+                    for (size_t i = 1; win32kMapped && i < sizeof(modules) / sizeof(modules[0]); ++i) {
+                        if (!modules[i].mapped) continue;
                         if (!micant::um::UserImageLoader64::bindImportsToMappedModule(
                                 moduleImage(modules[i]), modules[i].image.sizeOfImage,
                                 "win32k.dll", moduleImage(modules[0]), win32kSize, win32kBase)) {
@@ -1666,7 +1683,7 @@ static bool transitionToRing3(
                         }
                     }
                     for (auto& module : modules) {
-                        if (modulesLoaded && !micant::um::UserImageLoader64::bindImportsToMappedModule(
+                        if (modulesLoaded && module.mapped && !micant::um::UserImageLoader64::bindImportsToMappedModule(
                                 s_userImageBuffer, s_loadedPeInfo.sizeOfImage,
                                 module.name, moduleImage(module), module.image.sizeOfImage,
                                 targetBaseVa + module.offset)) {
@@ -1680,7 +1697,7 @@ static bool transitionToRing3(
                     UartSerial::print("[UserLoader] System DLL dependency chain could not be mapped\r\n");
                     return false;
                 }
-                UartSerial::print("[UserLoader] Mapped win32k/user32/gdi32/imm32 into process image space\r\n");
+                UartSerial::print("[UserLoader] Resolved required windowing DLL imports in process image space\r\n");
             }
             entryRip = s_loadedPeInfo.entryPointVa;
             UartSerial::print("[ntoskrnl.exe] Loaded standalone PE32+ image: EntryPoint=0x");
