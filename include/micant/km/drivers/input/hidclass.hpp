@@ -55,6 +55,7 @@
 #include "micant/km/executive/io.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/drivers/input/kbdclass_contract.hpp"
+#include "micant/km/drivers/input/i8042prt.hpp"
 #include "micant/km/drivers/input/mouclass_contract.hpp"
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/win32k/win32k.hpp"
@@ -807,27 +808,6 @@ public:
 // 6. PS/2 i8042 Controller Port Driver (i8042prt.sys)
 // ============================================================================
 
-inline constexpr uint16_t I8042_DATA_PORT    = 0x0060;
-inline constexpr uint16_t I8042_STATUS_PORT  = 0x0064;
-inline constexpr uint16_t I8042_COMMAND_PORT = 0x0064;
-
-// i8042 Status Register Bits
-inline constexpr uint8_t I8042_STS_OBF       = 0x01; // Output Buffer Full
-inline constexpr uint8_t I8042_STS_IBF       = 0x02; // Input Buffer Full
-inline constexpr uint8_t I8042_STS_SYS       = 0x04; // System Flag (POST passed)
-inline constexpr uint8_t I8042_STS_A2        = 0x08; // Command/Data (1=Command)
-inline constexpr uint8_t I8042_STS_AUXOBF    = 0x20; // Mouse Output Buffer Full
-
-// i8042 Controller Commands
-inline constexpr uint8_t I8042_CMD_READ_CFG  = 0x20;
-inline constexpr uint8_t I8042_CMD_WRITE_CFG = 0x60;
-inline constexpr uint8_t I8042_CMD_DIS_MOUSE = 0xA7;
-inline constexpr uint8_t I8042_CMD_EN_MOUSE  = 0xA8;
-inline constexpr uint8_t I8042_CMD_SELF_TEST = 0xAA;
-inline constexpr uint8_t I8042_CMD_KBD_TEST  = 0xAB;
-inline constexpr uint8_t I8042_CMD_EN_KBD    = 0xAE;
-inline constexpr uint8_t I8042_CMD_WRITE_AUX = 0xD4;
-
 // ============================================================================
 // 7. Top-Level Collection (TLC) Device Representation & Subsystem Telemetry
 // ============================================================================
@@ -1029,147 +1009,6 @@ public:
     // ------------------------------------------------------------------------
 
     // ------------------------------------------------------------------------
-    // PS/2 i8042 Controller Port Driver (i8042prt.sys) Port 0x60/0x64 Engine
-    // ------------------------------------------------------------------------
-
-    uint8_t i8042ReadPort(uint16_t port) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (port == I8042_STATUS_PORT) {
-            return m_i8042StatusReg;
-        }
-        if (port == I8042_DATA_PORT) {
-            m_i8042StatusReg &= static_cast<uint8_t>(~(I8042_STS_OBF | I8042_STS_AUXOBF));
-            return m_i8042OutputBuffer;
-        }
-        return 0xFF;
-    }
-
-    void i8042WritePort(uint16_t port, uint8_t value) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (port == I8042_COMMAND_PORT) {
-            m_i8042LastCommand = value;
-            switch (value) {
-                case I8042_CMD_SELF_TEST:
-                    m_i8042OutputBuffer = 0x55; // Self-test passed
-                    m_i8042StatusReg |= (I8042_STS_OBF | I8042_STS_SYS);
-                    break;
-                case I8042_CMD_KBD_TEST:
-                    m_i8042OutputBuffer = 0x00; // Interface test passed
-                    m_i8042StatusReg |= I8042_STS_OBF;
-                    break;
-                case I8042_CMD_READ_CFG:
-                    m_i8042OutputBuffer = m_i8042ConfigByte;
-                    m_i8042StatusReg |= I8042_STS_OBF;
-                    break;
-                case I8042_CMD_EN_MOUSE:
-                    m_i8042ConfigByte |= 0x02; // Enable IRQ12
-                    break;
-                case I8042_CMD_DIS_MOUSE:
-                    m_i8042ConfigByte &= static_cast<uint8_t>(~0x02);
-                    break;
-                case I8042_CMD_EN_KBD:
-                    m_i8042ConfigByte |= 0x01; // Enable IRQ1
-                    break;
-                default:
-                    break;
-            }
-        } else if (port == I8042_DATA_PORT) {
-            if (m_i8042LastCommand == I8042_CMD_WRITE_CFG) {
-                m_i8042ConfigByte = value;
-                m_i8042LastCommand = 0;
-            } else if (m_i8042LastCommand == I8042_CMD_WRITE_AUX) {
-                // Command sent to PS/2 mouse -> ACK (0xFA)
-                m_i8042OutputBuffer = 0xFA;
-                m_i8042StatusReg |= (I8042_STS_OBF | I8042_STS_AUXOBF);
-                m_i8042LastCommand = 0;
-            } else {
-                // Command sent to PS/2 keyboard -> ACK (0xFA)
-                m_i8042OutputBuffer = 0xFA;
-                m_i8042StatusReg |= I8042_STS_OBF;
-            }
-        }
-    }
-
-    // Simulate IRQ1 Keyboard Interrupt (Scancode Set 1 byte)
-    void i8042InjectKeyboardIrq1(uint8_t scancodeByte) {
-        KEYBOARD_INPUT_DATA pkt{};
-        bool emitPacket = false;
-
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_telemetry.totalI8042InterruptsServiced++;
-            m_i8042OutputBuffer = scancodeByte;
-            m_i8042StatusReg |= I8042_STS_OBF;
-
-            if (scancodeByte == 0xE0) {
-                m_i8042ExtendedE0 = true;
-                return;
-            }
-            if (scancodeByte == 0xE1) {
-                m_i8042ExtendedE1 = true;
-                return;
-            }
-
-            pkt.UnitId   = 0;
-            pkt.MakeCode = static_cast<USHORT>(scancodeByte & 0x7F);
-            pkt.Flags    = (scancodeByte & 0x80) ? KEY_BREAK : KEY_MAKE;
-            if (m_i8042ExtendedE0) {
-                pkt.Flags |= KEY_E0;
-                m_i8042ExtendedE0 = false;
-            }
-            if (m_i8042ExtendedE1) {
-                pkt.Flags |= KEY_E1;
-                m_i8042ExtendedE1 = false;
-            }
-            emitPacket = true;
-        }
-
-        if (emitPacket) {
-            ULONG consumed = 0;
-            KeyboardClassServiceCallback(nullptr, &pkt, &pkt + 1, &consumed);
-        }
-    }
-
-    // Simulate IRQ12 PS/2 Mouse 4-Byte IntelliMouse Packet
-    void i8042InjectMouseIrq12Packet(uint8_t statusByte, int8_t deltaX, int8_t deltaY, int8_t wheelZ = 0) {
-        MOUSE_INPUT_DATA pkt{};
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_telemetry.totalI8042InterruptsServiced++;
-            pkt.UnitId = 0;
-            pkt.Flags  = MOUSE_MOVE_RELATIVE;
-            pkt.LastX  = deltaX;
-            pkt.LastY  = -deltaY; // PS/2 Y axis is inverted relative to screen coordinates
-
-            uint16_t btnFlags = 0;
-            bool leftNow   = (statusByte & 0x01) != 0;
-            bool rightNow  = (statusByte & 0x02) != 0;
-            bool middleNow = (statusByte & 0x04) != 0;
-
-            if (leftNow && !m_ps2LeftDown)     btnFlags |= MOUSE_LEFT_BUTTON_DOWN;
-            if (!leftNow && m_ps2LeftDown)     btnFlags |= MOUSE_LEFT_BUTTON_UP;
-            if (rightNow && !m_ps2RightDown)   btnFlags |= MOUSE_RIGHT_BUTTON_DOWN;
-            if (!rightNow && m_ps2RightDown)   btnFlags |= MOUSE_RIGHT_BUTTON_UP;
-            if (middleNow && !m_ps2MiddleDown) btnFlags |= MOUSE_MIDDLE_BUTTON_DOWN;
-            if (!middleNow && m_ps2MiddleDown) btnFlags |= MOUSE_MIDDLE_BUTTON_UP;
-
-            m_ps2LeftDown   = leftNow;
-            m_ps2RightDown  = rightNow;
-            m_ps2MiddleDown = middleNow;
-
-            if (wheelZ != 0) {
-                btnFlags |= MOUSE_WHEEL;
-                pkt.ButtonData = static_cast<USHORT>(static_cast<int16_t>(wheelZ) * 120);
-            }
-            pkt.ButtonFlags = btnFlags;
-            pkt.RawButtons  = statusByte & 0x07;
-        }
-
-        ULONG consumed = 0;
-        MouseClassServiceCallback(nullptr, &pkt, &pkt + 1, &consumed);
-    }
-
-    // ------------------------------------------------------------------------
     // Kernel Raw Input Thread (RIT) -> Win32k Window Message Bridge
     // ------------------------------------------------------------------------
 
@@ -1244,6 +1083,7 @@ public:
         ke::SpinLockGuard mouseTelemetryLock(m_mouseTelemetryLock);
         m_telemetry.activeTopLevelCollections = static_cast<uint32_t>(m_collections.size());
         m_telemetry.totalKeyboardPacketsQueued = KbdClassPacketsQueuedTotal();
+        m_telemetry.totalI8042InterruptsServiced = I8042InterruptsServiced();
         m_telemetry.totalMousePacketsQueued = MouClassPacketsQueuedTotal();
         return m_telemetry;
     }
@@ -1281,15 +1121,6 @@ private:
         }
 
 
-        m_i8042StatusReg    = I8042_STS_SYS;
-        m_i8042OutputBuffer = 0x55;
-        m_i8042ConfigByte   = 0x47; // IRQ1 enabled, IRQ12 enabled, System Flag, Translation enabled
-        m_i8042LastCommand  = 0;
-        m_i8042ExtendedE0   = false;
-        m_i8042ExtendedE1   = false;
-        m_ps2LeftDown       = false;
-        m_ps2RightDown      = false;
-        m_ps2MiddleDown     = false;
 
         // Register 3 Canonical Top-Level Collections:
         // 1. Collection 0x4101: Sovereign Mechanical RGB Keyboard
@@ -1373,15 +1204,6 @@ private:
     ke::SpinLock m_mouseTelemetryLock{};
 
     // i8042 Controller State
-    uint8_t m_i8042StatusReg{I8042_STS_SYS};
-    uint8_t m_i8042OutputBuffer{0x55};
-    uint8_t m_i8042ConfigByte{0x47};
-    uint8_t m_i8042LastCommand{0};
-    bool    m_i8042ExtendedE0{false};
-    bool    m_i8042ExtendedE1{false};
-    bool    m_ps2LeftDown{false};
-    bool    m_ps2RightDown{false};
-    bool    m_ps2MiddleDown{false};
 
     HID_SUBSYSTEM_TELEMETRY m_telemetry{};
 };
@@ -1888,14 +1710,6 @@ inline HIDP_STATUS WINAPI HidP_SetUsageValue(
 
 // --- Kernel Driver Exports (kbdclass.sys, mouclass.sys, i8042prt.sys, hidclass.sys) ---
 
-inline uint8_t WINAPI I8042ReadPortUchar(uint16_t Port) {
-    return TitanHidInputSubsystem::Instance().i8042ReadPort(Port);
-}
-
-inline void WINAPI I8042WritePortUchar(uint16_t Port, uint8_t Value) {
-    TitanHidInputSubsystem::Instance().i8042WritePort(Port, Value);
-}
-
 inline BOOL WINAPI HidGetTelemetry(HID_SUBSYSTEM_TELEMETRY* outTelemetry) {
     if (!outTelemetry) return FALSE_VAL;
     *outTelemetry = TitanHidInputSubsystem::Instance().getTelemetry();
@@ -1954,10 +1768,7 @@ inline void InitializeHidSubsystemExports() {
     ldr.registerExport("hidclass.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
     ldr.registerExport("hidusb.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
 
-    // 4. Register i8042prt.sys exports. The class callbacks belong to their
-    // independently initialized class drivers.
-    ldr.registerExport("i8042prt.sys", "I8042ReadPortUchar", reinterpret_cast<void*>(I8042ReadPortUchar));
-    ldr.registerExport("i8042prt.sys", "I8042WritePortUchar", reinterpret_cast<void*>(I8042WritePortUchar));
+    // Device-driver entry points and callbacks are initialized by their own driver code.
 
     // 5. Register SCM Service Records
     auto& scm = scm::ServiceControlManager::get();
@@ -2034,8 +1845,6 @@ namespace micant {
     using km::hid::HidP_SetUsages;
     using km::hid::HidP_GetUsageValue;
     using km::hid::HidP_SetUsageValue;
-    using km::hid::I8042ReadPortUchar;
-    using km::hid::I8042WritePortUchar;
     using km::hid::HidGetTelemetry;
     using km::hid::HidQueryTelemetry;
     using km::hid::InitializeHidSubsystemExports;

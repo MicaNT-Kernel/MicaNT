@@ -373,6 +373,20 @@ extern "C" NtStatus KiSystemStartup(
     auto pointerClassDevice = ioMgr.createDevice(
         &mouclassDriver, L"\\Device\\PointerClass0", static_cast<io::DeviceType>(0x0000000F));
     pointerClassDevice->flags = (pointerClassDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
+    io::DriverObject i8042Driver{};
+    km::hid::InitializeI8042PortDriver(i8042Driver);
+    auto keyboardPortDevice = ioMgr.createDevice(&i8042Driver, L"\\Device\\KeyboardPort0",
+        static_cast<io::DeviceType>(0x0000000B), &km::hid::I8042KeyboardPortTag);
+    auto pointerPortDevice = ioMgr.createDevice(&i8042Driver, L"\\Device\\PointerPort0",
+        static_cast<io::DeviceType>(0x0000000F), &km::hid::I8042PointerPortTag);
+    keyboardPortDevice->flags = (keyboardPortDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
+    pointerPortDevice->flags = (pointerPortDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
+    (void)km::hid::I8042ConnectClassDevice(*keyboardPortDevice, *keyboardClassDevice,
+        km::hid::IOCTL_INTERNAL_KEYBOARD_CONNECT,
+        reinterpret_cast<void*>(km::hid::KeyboardClassServiceCallback));
+    (void)km::hid::I8042ConnectClassDevice(*pointerPortDevice, *pointerClassDevice,
+        km::hid::IOCTL_INTERNAL_MOUSE_CONNECT,
+        reinterpret_cast<void*>(km::hid::MouseClassServiceCallback));
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
               << (km::cc::VACB_MAPPING_GRANULARITY / 1024) << " KB, BCB Pinning & Lazy Writer Active)\n";

@@ -12389,8 +12389,6 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(ldr.getExport("hidusb.sys", "HidGetTelemetry") != nullptr, "hidusb.sys HidGetTelemetry must exist");
         TEST_ASSERT(ldr.getExport("kbdclass.sys", "KeyboardClassServiceCallback") != nullptr, "kbdclass.sys KeyboardClassServiceCallback must exist");
         TEST_ASSERT(ldr.getExport("mouclass.sys", "MouseClassServiceCallback") != nullptr, "mouclass.sys MouseClassServiceCallback must exist");
-        TEST_ASSERT(ldr.getExport("i8042prt.sys", "I8042ReadPortUchar") != nullptr, "i8042prt.sys I8042ReadPortUchar must exist");
-        TEST_ASSERT(ldr.getExport("i8042prt.sys", "I8042WritePortUchar") != nullptr, "i8042prt.sys I8042WritePortUchar must exist");
 
         // 2. SCM Service Records Verification
         auto& scm = scm::ServiceControlManager::get();
@@ -12677,8 +12675,6 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
     // Phase 8: PS/2 i8042 Controller Port Driver (i8042prt.sys)
     // ------------------------------------------------------------------------
     {
-        auto& hidSys = TitanHidInputSubsystem::Instance();
-
         // 1. Execute i8042 Controller Self-Test (Command 0xAA on Port 0x64 -> 0x55 on Port 0x60)
         I8042WritePortUchar(I8042_COMMAND_PORT, I8042_CMD_SELF_TEST);
         uint8_t status = I8042ReadPortUchar(I8042_STATUS_PORT);
@@ -12687,12 +12683,12 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(selfTestResult == 0x55, "i8042 Self-Test must return 0x55");
 
         // 2. Inject Extended E0 Scancode via IRQ1 (Right Arrow: 0xE0, 0x4D)
-        hidSys.i8042InjectKeyboardIrq1(0xE0);
-        hidSys.i8042InjectKeyboardIrq1(0x4D);
+        I8042InjectKeyboardIrq1(0xE0);
+        I8042InjectKeyboardIrq1(0x4D);
         TEST_ASSERT(KbdClassQueueDepth() == 3, "Keyboard queue must now contain 3 packets (2 from Phase 6 + 1 from IRQ1)");
 
         // 3. Inject PS/2 Mouse IRQ12 4-Byte IntelliMouse Packet
-        hidSys.i8042InjectMouseIrq12Packet(0x09 /* Left button + bit 3 */, 15, -10, 1);
+        I8042InjectMouseIrq12Packet(0x09 /* Left button + bit 3 */, 15, -10, 1);
         TEST_ASSERT(MouClassQueueDepth() == 1, "Mouse queue must now contain the newly injected packet");
     }
 
