@@ -1996,7 +1996,7 @@ public:
                 0x48, 0x89, 0xC8,                         // mov %rcx, %rax (return dst)
                 0x57,                                     // push %rdi
                 0x56,                                     // push %rsi
-                0x49, 0x89, 0xC9,                         // mov %r8, %rcx (count)
+                0x4C, 0x89, 0xC1,                         // mov %r8, %rcx (count)
                 0x48, 0x89, 0xC7,                         // mov %rax, %rdi (dst)
                 0x48, 0x89, 0xD6,                         // mov %rdx, %rsi (src)
                 0xFC,                                     // cld
@@ -2012,7 +2012,7 @@ public:
             const uint8_t s33[] = {
                 0x49, 0x89, 0xC9,                         // mov %rcx, %r9 (save dst)
                 0x57,                                     // push %rdi
-                0x49, 0x89, 0xC1,                         // mov %r8, %rcx (count)
+                0x4C, 0x89, 0xC1,                         // mov %r8, %rcx (count)
                 0x4C, 0x89, 0xCF,                         // mov %r9, %rdi (dst)
                 0x88, 0xD0,                               // mov %dl, %al (val)
                 0xFC,                                     // cld
