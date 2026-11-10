@@ -155,6 +155,7 @@ inline constexpr uint32_t FS_SUPPORTS_COW_SNAPSHOTS       = 0x10000000;
 inline constexpr uint32_t FS_SUPPORTS_RAID_PARITY         = 0x20000000;
 
 struct FileSystemVolumeInfo {
+    std::wstring driveIdentifier{L"C"};
     wchar_t driveLetter{L'C'};
     std::wstring volumeLabel{L"MICA_SYS"};
     std::wstring fileSystemName{L"FAT32"};
@@ -180,12 +181,28 @@ public:
     };
 
     struct DriveMapping {
-        wchar_t letter{L'C'};
+        std::wstring identifier{L"C"};
         PartitionResolution::VolumeType type{PartitionResolution::VolumeType::Fat32};
         std::wstring targetDevice{L"\\Device\\Harddisk0\\Partition1"};
         std::wstring volumeGuid;
         std::wstring volumeLabel;
+
+        // Legacy compatibility helper for single-character drives
+        [[nodiscard]] wchar_t letter() const noexcept {
+            return identifier.empty() ? L'\0' : identifier[0];
+        }
     };
+
+    static std::wstring normalizeDriveIdentifier(std::wstring_view id) {
+        std::wstring result;
+        result.reserve(id.size());
+        for (wchar_t ch : id) {
+            if (ch != L':' && ch != L'\\' && ch != L'/') {
+                result.push_back(static_cast<wchar_t>(std::towupper(ch)));
+            }
+        }
+        return result;
+    }
 
     static VirtualFileSystem& get() {
         static VirtualFileSystem instance;
@@ -193,15 +210,15 @@ public:
         return instance;
     }
 
-    NtStatus assignDriveLetter(
-        wchar_t letter,
+    NtStatus assignDriveIdentifier(
+        std::wstring_view identifier,
         std::wstring_view targetDevice,
         std::wstring_view volumeGuid = L"",
         std::wstring_view volumeLabel = L""
     ) {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(letter));
-        if (d < L'A' || d > L'Z') return NtStatus::InvalidParameter;
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        if (normId.empty() || normId.size() > 32) return NtStatus::InvalidParameter;
 
         std::wstring target(targetDevice);
         PartitionResolution::VolumeType vType = PartitionResolution::VolumeType::Fat32;
@@ -228,154 +245,207 @@ public:
             if (vLabel.empty()) vLabel = L"MICA_F2FS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\F2fs0";
-        } else if (target.contains(L"Zfs") || target.contains(L"tank") || target.contains(L"0006")) {
+        } else if (target.contains(L"Zfs") || target.contains(L"tank") || target.contains(L"0006") || normId.contains(L"ZFS") || normId.contains(L"POOL")) {
             vType = PartitionResolution::VolumeType::Zfs;
             if (vLabel.empty()) vLabel = L"MICA_ZFS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\ZfsPool_Storage";
-        } else if (target.contains(L"Partition2") || target.contains(L"Ntfs") || target.contains(L"NTFS") || target.contains(L"0002")) {
+        } else if (target.contains(L"Partition2") || target.contains(L"Ntfs") || target.contains(L"NTFS") || target.contains(L"0002") || normId.contains(L"NTFS")) {
             vType = PartitionResolution::VolumeType::Ntfs;
             if (vLabel.empty()) vLabel = L"MICA_NTFS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Harddisk0\\Partition2";
-        } else if (target.contains(L"Partition3") || target.contains(L"ExFat") || target.contains(L"exfat") || target.contains(L"0003")) {
+        } else if (target.contains(L"Partition3") || target.contains(L"ExFat") || target.contains(L"exfat") || target.contains(L"0003") || normId.contains(L"EXFAT")) {
             vType = PartitionResolution::VolumeType::Exfat;
             if (vLabel.empty()) vLabel = L"MICA_EXFAT";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Harddisk0\\Partition3";
-        } else if (target.contains(L"CdRom") || target.contains(L"Cdfs") || target.contains(L"cdfs") || target.contains(L"0004")) {
+        } else if (target.contains(L"CdRom") || target.contains(L"Cdfs") || target.contains(L"cdfs") || target.contains(L"0004") || normId.contains(L"CDROM")) {
             vType = PartitionResolution::VolumeType::Cdfs;
             if (vLabel.empty()) vLabel = L"MICA_CDFS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\CdRom0";
-        } else if (target.contains(L"Partition4") || target.contains(L"Refs") || target.contains(L"REFS") || target.contains(L"0005")) {
+        } else if (target.contains(L"Partition4") || target.contains(L"Refs") || target.contains(L"REFS") || target.contains(L"0005") || normId.contains(L"REFS")) {
             vType = PartitionResolution::VolumeType::Refs;
             if (vLabel.empty()) vLabel = L"MICA_REFS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Harddisk0\\Partition4";
+        } else if (target.contains(L"Nvme") || target.contains(L"nvme") || normId.starts_with(L"NVME")) {
+            vType = PartitionResolution::VolumeType::Ntfs;
+            if (vLabel.empty()) vLabel = L"MICA_NVME";
+            if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0011-0000-0000-000000000011}\\";
+            if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Nvme0";
         } else if (target.contains(L"Partition1") || target.contains(L"Fat") || target.contains(L"FAT") || target.contains(L"0001")) {
             vType = PartitionResolution::VolumeType::Fat32;
             if (vLabel.empty()) vLabel = L"MICA_SYS";
             if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\";
             if (target.empty() || target.contains(L"Volume{")) target = L"\\Device\\Harddisk0\\Partition1";
         } else {
-            // Target is unspecified or arbitrary, fall back to drive letter defaults
-            if (d == L'B') {
+            if (normId == L"B") {
                 vType = PartitionResolution::VolumeType::Btrfs;
                 if (vLabel.empty()) vLabel = L"MICA_BTRFS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0007-0000-0000-000000000007}\\";
                 if (target.empty()) target = L"\\Device\\Btrfs0";
-            } else if (d == L'X') {
+            } else if (normId == L"X") {
                 vType = PartitionResolution::VolumeType::Ext4;
                 if (vLabel.empty()) vLabel = L"MICA_EXT4";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0008-0000-0000-000000000008}\\";
                 if (target.empty()) target = L"\\Device\\ExtFs0";
-            } else if (d == L'S') {
+            } else if (normId == L"S") {
                 vType = PartitionResolution::VolumeType::Xfs;
                 if (vLabel.empty()) vLabel = L"MICA_XFS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0009-0000-0000-000000000009}\\";
                 if (target.empty()) target = L"\\Device\\Xfs0";
-            } else if (d == L'Y') {
+            } else if (normId == L"Y") {
                 vType = PartitionResolution::VolumeType::F2fs;
                 if (vLabel.empty()) vLabel = L"MICA_F2FS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\";
                 if (target.empty()) target = L"\\Device\\F2fs0";
-            } else if (d == L'Z') {
+            } else if (normId == L"Z") {
                 vType = PartitionResolution::VolumeType::Zfs;
                 if (vLabel.empty()) vLabel = L"MICA_ZFS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\";
                 if (target.empty()) target = L"\\Device\\ZfsPool_Storage";
-            } else if (d == L'D') {
+            } else if (normId == L"D") {
                 vType = PartitionResolution::VolumeType::Ntfs;
                 if (vLabel.empty()) vLabel = L"MICA_NTFS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\";
                 if (target.empty()) target = L"\\Device\\Harddisk0\\Partition2";
-            } else if (d == L'E') {
+            } else if (normId == L"E") {
                 vType = PartitionResolution::VolumeType::Exfat;
                 if (vLabel.empty()) vLabel = L"MICA_EXFAT";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\";
                 if (target.empty()) target = L"\\Device\\Harddisk0\\Partition3";
-            } else if (d == L'F') {
+            } else if (normId == L"F") {
                 vType = PartitionResolution::VolumeType::Cdfs;
                 if (vLabel.empty()) vLabel = L"MICA_CDFS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\";
                 if (target.empty()) target = L"\\Device\\CdRom0";
-            } else if (d == L'G') {
+            } else if (normId == L"G") {
                 vType = PartitionResolution::VolumeType::Refs;
                 if (vLabel.empty()) vLabel = L"MICA_REFS";
                 if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\";
                 if (target.empty()) target = L"\\Device\\Harddisk0\\Partition4";
             } else {
                 vType = PartitionResolution::VolumeType::Fat32;
-                if (vLabel.empty()) vLabel = L"MICA_SYS";
-                if (guid.empty()) guid = L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\";
-                if (target.empty()) target = L"\\Device\\Harddisk0\\Partition1";
+                if (vLabel.empty()) vLabel = std::wstring(L"MICA_") + normId;
+                if (guid.empty()) guid = std::wstring(L"\\\\?\\Volume{") + normId + L"}\\";
+                if (target.empty()) target = std::wstring(L"\\Device\\HarddiskVolume_") + normId;
             }
         }
 
-        driveMappings_[d] = DriveMapping{
-            .letter = d,
+        driveMappings_[normId] = DriveMapping{
+            .identifier = normId,
             .type = vType,
             .targetDevice = target,
             .volumeGuid = guid,
             .volumeLabel = vLabel
         };
 
-        // Update Object Manager symbolic link \DosDevices\<d>: -> target
-        std::wstring dosName = std::wstring(L"\\DosDevices\\") + d + L":";
+        // Update Object Manager symbolic link \DosDevices\<normId>: -> target
+        std::wstring dosName = std::wstring(L"\\DosDevices\\") + normId + L":";
         ob::ObjectNamespace::get().createSymbolicLink(dosName, target);
 
         return NtStatus::Success;
     }
 
-    NtStatus removeDriveLetter(wchar_t letter) {
-        std::lock_guard<std::mutex> lock(mutex_);
+    NtStatus assignDriveLetter(
+        wchar_t letter,
+        std::wstring_view targetDevice,
+        std::wstring_view volumeGuid = L"",
+        std::wstring_view volumeLabel = L""
+    ) {
         wchar_t d = static_cast<wchar_t>(std::towupper(letter));
-        driveMappings_.erase(d);
+        if (d < L'A' || d > L'Z') return NtStatus::InvalidParameter;
+        return assignDriveIdentifier(std::wstring(1, d), targetDevice, volumeGuid, volumeLabel);
+    }
 
-        std::wstring dosName = std::wstring(L"\\DosDevices\\") + d + L":";
+    NtStatus removeDriveIdentifier(std::wstring_view identifier) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        driveMappings_.erase(normId);
+
+        std::wstring dosName = std::wstring(L"\\DosDevices\\") + normId + L":";
         ob::ObjectNamespace::get().removeSymbolicLink(dosName);
         return NtStatus::Success;
     }
 
-    [[nodiscard]] bool isDriveLetterAssigned(wchar_t letter) const {
-        std::lock_guard<std::mutex> lock(mutex_);
+    NtStatus removeDriveLetter(wchar_t letter) {
         wchar_t d = static_cast<wchar_t>(std::towupper(letter));
-        return driveMappings_.contains(d);
+        return removeDriveIdentifier(std::wstring(1, d));
+    }
+
+    [[nodiscard]] bool isDriveIdentifierAssigned(std::wstring_view identifier) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        return driveMappings_.contains(normId);
+    }
+
+    [[nodiscard]] bool isDriveLetterAssigned(wchar_t letter) const {
+        wchar_t d = static_cast<wchar_t>(std::towupper(letter));
+        return isDriveIdentifierAssigned(std::wstring(1, d));
+    }
+
+    [[nodiscard]] std::vector<std::wstring> getMountedDriveIdentifiers() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::wstring> ids;
+        ids.reserve(driveMappings_.size());
+        for (const auto& [id, _] : driveMappings_) {
+            ids.push_back(id);
+        }
+        std::sort(ids.begin(), ids.end());
+        return ids;
     }
 
     [[nodiscard]] std::vector<wchar_t> getMountedDriveLetters() const {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<wchar_t> letters;
-        for (const auto& [l, _] : driveMappings_) {
-            letters.push_back(l);
+        for (const auto& [id, _] : driveMappings_) {
+            if (id.size() == 1 && id[0] >= L'A' && id[0] <= L'Z') {
+                letters.push_back(id[0]);
+            }
         }
         std::sort(letters.begin(), letters.end());
         return letters;
     }
 
-    [[nodiscard]] std::wstring getDeviceForDriveLetter(wchar_t letter) const {
+    [[nodiscard]] std::wstring getDeviceForDriveIdentifier(std::wstring_view identifier) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(letter));
-        auto it = driveMappings_.find(d);
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        auto it = driveMappings_.find(normId);
         if (it != driveMappings_.end()) return it->second.targetDevice;
         return L"";
     }
 
-    [[nodiscard]] wchar_t getDriveLetterForDevice(std::wstring_view devicePath) const {
+    [[nodiscard]] std::wstring getDeviceForDriveLetter(wchar_t letter) const {
+        wchar_t d = static_cast<wchar_t>(std::towupper(letter));
+        return getDeviceForDriveIdentifier(std::wstring(1, d));
+    }
+
+    [[nodiscard]] std::wstring getDriveIdentifierForDevice(std::wstring_view devicePath) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto& [l, m] : driveMappings_) {
-            if (m.targetDevice == devicePath) return l;
+        for (const auto& [id, m] : driveMappings_) {
+            if (m.targetDevice == devicePath) return id;
         }
-        return L'\0';
+        return L"";
+    }
+
+    [[nodiscard]] wchar_t getDriveLetterForDevice(std::wstring_view devicePath) const {
+        std::wstring id = getDriveIdentifierForDevice(devicePath);
+        return (id.size() == 1) ? id[0] : L'\0';
+    }
+
+    [[nodiscard]] std::wstring getDriveIdentifierForVolumeGuid(std::wstring_view volumeGuid) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, m] : driveMappings_) {
+            if (m.volumeGuid == volumeGuid) return id;
+        }
+        return L"";
     }
 
     [[nodiscard]] wchar_t getDriveLetterForVolumeGuid(std::wstring_view volumeGuid) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto& [l, m] : driveMappings_) {
-            if (m.volumeGuid == volumeGuid) return l;
-        }
-        return L'\0';
+        std::wstring id = getDriveIdentifierForVolumeGuid(volumeGuid);
+        return (id.size() == 1) ? id[0] : L'\0';
     }
 
     void initialize() {
@@ -454,17 +524,17 @@ public:
 
         // Seed standard initial drive mappings (C: through G:, Z:)
         if (driveMappings_.empty()) {
-            driveMappings_[L'C'] = DriveMapping{ L'C', PartitionResolution::VolumeType::Fat32, L"\\Device\\Harddisk0\\Partition1", L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\", L"MICA_SYS" };
-            driveMappings_[L'D'] = DriveMapping{ L'D', PartitionResolution::VolumeType::Ntfs, L"\\Device\\Harddisk0\\Partition2", L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\", L"MICA_NTFS" };
-            driveMappings_[L'E'] = DriveMapping{ L'E', PartitionResolution::VolumeType::Exfat, L"\\Device\\Harddisk0\\Partition3", L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\", L"MICA_EXFAT" };
-            driveMappings_[L'F'] = DriveMapping{ L'F', PartitionResolution::VolumeType::Cdfs, L"\\Device\\CdRom0", L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\", L"MICA_CDFS" };
-            driveMappings_[L'G'] = DriveMapping{ L'G', PartitionResolution::VolumeType::Refs, L"\\Device\\Harddisk0\\Partition4", L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\", L"MICA_REFS" };
-            driveMappings_[L'Z'] = DriveMapping{ L'Z', PartitionResolution::VolumeType::Zfs, L"\\Device\\ZfsPool_Storage", L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\", L"MICA_ZFS" };
+            driveMappings_[L"C"] = DriveMapping{ L"C", PartitionResolution::VolumeType::Fat32, L"\\Device\\Harddisk0\\Partition1", L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\", L"MICA_SYS" };
+            driveMappings_[L"D"] = DriveMapping{ L"D", PartitionResolution::VolumeType::Ntfs, L"\\Device\\Harddisk0\\Partition2", L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\", L"MICA_NTFS" };
+            driveMappings_[L"E"] = DriveMapping{ L"E", PartitionResolution::VolumeType::Exfat, L"\\Device\\Harddisk0\\Partition3", L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\", L"MICA_EXFAT" };
+            driveMappings_[L"F"] = DriveMapping{ L"F", PartitionResolution::VolumeType::Cdfs, L"\\Device\\CdRom0", L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\", L"MICA_CDFS" };
+            driveMappings_[L"G"] = DriveMapping{ L"G", PartitionResolution::VolumeType::Refs, L"\\Device\\Harddisk0\\Partition4", L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\", L"MICA_REFS" };
+            driveMappings_[L"Z"] = DriveMapping{ L"Z", PartitionResolution::VolumeType::Zfs, L"\\Device\\ZfsPool_Storage", L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\", L"MICA_ZFS" };
         }
 
         auto& obNs = ob::ObjectNamespace::get();
-        for (const auto& [l, m] : driveMappings_) {
-            std::wstring dosName = std::wstring(L"\\DosDevices\\") + l + L":";
+        for (const auto& [id, m] : driveMappings_) {
+            std::wstring dosName = std::wstring(L"\\DosDevices\\") + id + L":";
             obNs.createSymbolicLink(dosName, m.targetDevice);
         }
 
@@ -691,19 +761,21 @@ public:
         return f2fsFs_;
     }
 
-    NtStatus queryVolumeInfo(wchar_t driveLetter, FileSystemVolumeInfo& outInfo) const {
+    NtStatus queryVolumeInfo(std::wstring_view identifier, FileSystemVolumeInfo& outInfo) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
-        auto it = driveMappings_.find(d);
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        auto it = driveMappings_.find(normId);
         if (it == driveMappings_.end()) {
             return NtStatus::NoSuchDevice;
         }
 
+        wchar_t legacyLetter = (normId.size() == 1) ? normId[0] : L'\0';
         const auto& map = it->second;
         switch (map.type) {
             case PartitionResolution::VolumeType::Fat32:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_SYS" : map.volumeLabel,
                     .fileSystemName = L"FAT32",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0001-0000-0000-000000000001}\\" : map.volumeGuid,
@@ -722,7 +794,8 @@ public:
 
             case PartitionResolution::VolumeType::Ntfs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_NTFS" : map.volumeLabel,
                     .fileSystemName = L"NTFS",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0002-0000-0000-000000000002}\\" : map.volumeGuid,
@@ -741,7 +814,8 @@ public:
 
             case PartitionResolution::VolumeType::Exfat:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_EXFAT" : map.volumeLabel,
                     .fileSystemName = L"exFAT",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0003-0000-0000-000000000003}\\" : map.volumeGuid,
@@ -760,7 +834,8 @@ public:
 
             case PartitionResolution::VolumeType::Cdfs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_CDFS" : map.volumeLabel,
                     .fileSystemName = L"CDFS",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0004-0000-0000-000000000004}\\" : map.volumeGuid,
@@ -779,7 +854,8 @@ public:
 
             case PartitionResolution::VolumeType::Refs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_REFS" : map.volumeLabel,
                     .fileSystemName = L"ReFS",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0005-0000-0000-000000000005}\\" : map.volumeGuid,
@@ -798,7 +874,8 @@ public:
 
             case PartitionResolution::VolumeType::Zfs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_ZFS" : map.volumeLabel,
                     .fileSystemName = L"ZFS",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0006-0000-0000-000000000006}\\" : map.volumeGuid,
@@ -817,7 +894,8 @@ public:
 
             case PartitionResolution::VolumeType::Btrfs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_BTRFS" : map.volumeLabel,
                     .fileSystemName = L"Btrfs",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0007-0000-0000-000000000007}\\" : map.volumeGuid,
@@ -836,7 +914,8 @@ public:
 
             case PartitionResolution::VolumeType::Ext4:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_EXT4" : map.volumeLabel,
                     .fileSystemName = L"EXT4",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0008-0000-0000-000000000008}\\" : map.volumeGuid,
@@ -855,7 +934,8 @@ public:
 
             case PartitionResolution::VolumeType::Xfs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_XFS" : map.volumeLabel,
                     .fileSystemName = L"XFS",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0009-0000-0000-000000000009}\\" : map.volumeGuid,
@@ -874,7 +954,8 @@ public:
 
             case PartitionResolution::VolumeType::F2fs:
                 outInfo = FileSystemVolumeInfo{
-                    .driveLetter = d,
+                    .driveIdentifier = normId,
+                    .driveLetter = legacyLetter,
                     .volumeLabel = map.volumeLabel.empty() ? L"MICA_F2FS" : map.volumeLabel,
                     .fileSystemName = L"F2FS",
                     .volumeGuid = map.volumeGuid.empty() ? L"\\\\?\\Volume{a4bf011e-0010-0000-0000-000000000010}\\" : map.volumeGuid,
@@ -894,22 +975,27 @@ public:
         return NtStatus::NoSuchDevice;
     }
 
+    NtStatus queryVolumeInfo(wchar_t driveLetter, FileSystemVolumeInfo& outInfo) const {
+        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
+        return queryVolumeInfo(std::wstring(1, d), outInfo);
+    }
+
     std::vector<FileSystemVolumeInfo> queryAllVolumes() const {
         std::vector<FileSystemVolumeInfo> vols;
-        auto letters = getMountedDriveLetters();
-        for (wchar_t l : letters) {
+        auto ids = getMountedDriveIdentifiers();
+        for (const auto& id : ids) {
             FileSystemVolumeInfo vi;
-            if (NT_SUCCESS(queryVolumeInfo(l, vi))) {
+            if (NT_SUCCESS(queryVolumeInfo(id, vi))) {
                 vols.push_back(vi);
             }
         }
         return vols;
     }
 
-    NtStatus createVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+    NtStatus createVolumeSnapshot(std::wstring_view identifier, std::string_view snapName) {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
-        std::wstring volPath = std::wstring(1, d) + L":\\";
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        std::wstring volPath = normId + L":\\";
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
@@ -923,7 +1009,7 @@ public:
                 if (refsFs_) return refsFs_->createCheckpoint(snapName);
                 break;
             case PartitionResolution::VolumeType::Ntfs:
-                ntfsSnapshots_[std::string(snapName)] = d;
+                ntfsSnapshots_[std::string(snapName)] = normId;
                 return NtStatus::Success;
             default:
                 break;
@@ -931,10 +1017,14 @@ public:
         return NtStatus::Success;
     }
 
-    NtStatus rollbackVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+    NtStatus createVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        return createVolumeSnapshot(std::wstring(1, driveLetter), snapName);
+    }
+
+    NtStatus rollbackVolumeSnapshot(std::wstring_view identifier, std::string_view snapName) {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
-        std::wstring volPath = std::wstring(1, d) + L":\\";
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        std::wstring volPath = normId + L":\\";
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
@@ -956,10 +1046,14 @@ public:
         return NtStatus::Success;
     }
 
-    [[nodiscard]] std::vector<std::string> listVolumeSnapshots(wchar_t driveLetter) {
+    NtStatus rollbackVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        return rollbackVolumeSnapshot(std::wstring(1, driveLetter), snapName);
+    }
+
+    [[nodiscard]] std::vector<std::string> listVolumeSnapshots(std::wstring_view identifier) {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
-        std::wstring volPath = std::wstring(1, d) + L":\\";
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        std::wstring volPath = normId + L":\\";
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
@@ -975,7 +1069,7 @@ public:
             case PartitionResolution::VolumeType::Ntfs: {
                 std::vector<std::string> res;
                 for (const auto& [name, drv] : ntfsSnapshots_) {
-                    if (drv == d) res.push_back(name);
+                    if (drv == normId) res.push_back(name);
                 }
                 return res;
             }
@@ -985,10 +1079,14 @@ public:
         return {};
     }
 
-    NtStatus deleteVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+    [[nodiscard]] std::vector<std::string> listVolumeSnapshots(wchar_t driveLetter) {
+        return listVolumeSnapshots(std::wstring(1, driveLetter));
+    }
+
+    NtStatus deleteVolumeSnapshot(std::wstring_view identifier, std::string_view snapName) {
         std::lock_guard<std::mutex> lock(mutex_);
-        wchar_t d = static_cast<wchar_t>(std::towupper(driveLetter));
-        std::wstring volPath = std::wstring(1, d) + L":\\";
+        std::wstring normId = normalizeDriveIdentifier(identifier);
+        std::wstring volPath = normId + L":\\";
         auto pr = resolvePartitionPath(volPath);
 
         switch (pr.type) {
@@ -1007,6 +1105,10 @@ public:
                 break;
         }
         return NtStatus::Success;
+    }
+
+    NtStatus deleteVolumeSnapshot(wchar_t driveLetter, std::string_view snapName) {
+        return deleteVolumeSnapshot(std::wstring(1, driveLetter), snapName);
     }
 
 
@@ -1846,37 +1948,55 @@ public:
         } else if (s == L"\\Device\\Harddisk0\\Partition4" || s == L"\\Device\\ReFS0" || s == L"\\Device\\ReFS_G") {
             pr.type = PartitionResolution::VolumeType::Refs;
             pr.relPath = L"";
-        } else if (s.size() >= 2 && s[1] == L':') {
-            wchar_t drive = static_cast<wchar_t>(std::towupper(s[0]));
-            std::wstring rel = s.substr(2);
-            while (rel.starts_with(L"\\")) rel = rel.substr(1);
-
-            auto it = driveMappings_.find(drive);
-            if (it != driveMappings_.end()) {
-                pr.type = it->second.type;
-            } else {
-                auto sym = ob::ObjectNamespace::get().getSymbolicLink(std::wstring(L"\\DosDevices\\") + drive + L":");
-                if (sym) {
-                    const auto& tgt = sym->getTargetPath();
-                    if (tgt.contains(L"Zfs") || tgt.contains(L"tank")) pr.type = PartitionResolution::VolumeType::Zfs;
-                    else if (tgt.contains(L"Btrfs") || tgt.contains(L"btrfs")) pr.type = PartitionResolution::VolumeType::Btrfs;
-                    else if (tgt.contains(L"Ext") || tgt.contains(L"ext")) pr.type = PartitionResolution::VolumeType::Ext4;
-                    else if (tgt.contains(L"Xfs") || tgt.contains(L"xfs")) pr.type = PartitionResolution::VolumeType::Xfs;
-                    else if (tgt.contains(L"F2fs") || tgt.contains(L"f2fs")) pr.type = PartitionResolution::VolumeType::F2fs;
-                    else if (tgt.contains(L"Partition2") || tgt.contains(L"Ntfs")) pr.type = PartitionResolution::VolumeType::Ntfs;
-                    else if (tgt.contains(L"Partition3") || tgt.contains(L"ExFat")) pr.type = PartitionResolution::VolumeType::Exfat;
-                    else if (tgt.contains(L"CdRom") || tgt.contains(L"Cdfs")) pr.type = PartitionResolution::VolumeType::Cdfs;
-                    else if (tgt.contains(L"Partition4") || tgt.contains(L"Refs")) pr.type = PartitionResolution::VolumeType::Refs;
-                    else pr.type = PartitionResolution::VolumeType::Fat32;
-                } else {
-                    pr.type = PartitionResolution::VolumeType::Fat32;
-                }
-            }
-            pr.relPath = std::move(rel);
         } else {
-            while (s.starts_with(L"\\")) s = s.substr(1);
-            pr.type = PartitionResolution::VolumeType::Fat32;
-            pr.relPath = std::move(s);
+            size_t colonPos = s.find(L':');
+            if (colonPos != std::wstring::npos && colonPos >= 1 && colonPos <= 32 &&
+                (colonPos + 1 == s.size() || s[colonPos + 1] == L'\\' || s[colonPos + 1] == L'/')) {
+                bool validId = true;
+                for (size_t i = 0; i < colonPos; ++i) {
+                    wchar_t c = s[i];
+                    if (!std::iswalnum(c) && c != L'_' && c != L'-') {
+                        validId = false;
+                        break;
+                    }
+                }
+                if (validId) {
+                    std::wstring driveId = normalizeDriveIdentifier(s.substr(0, colonPos));
+                    std::wstring rel = (colonPos + 1 < s.size()) ? s.substr(colonPos + 1) : L"";
+                    while (rel.starts_with(L"\\") || rel.starts_with(L"/")) rel = rel.substr(1);
+
+                    auto it = driveMappings_.find(driveId);
+                    if (it != driveMappings_.end()) {
+                        pr.type = it->second.type;
+                    } else {
+                        auto sym = ob::ObjectNamespace::get().getSymbolicLink(std::wstring(L"\\DosDevices\\") + driveId + L":");
+                        if (sym) {
+                            const auto& tgt = sym->getTargetPath();
+                            if (tgt.contains(L"Zfs") || tgt.contains(L"tank")) pr.type = PartitionResolution::VolumeType::Zfs;
+                            else if (tgt.contains(L"Btrfs") || tgt.contains(L"btrfs")) pr.type = PartitionResolution::VolumeType::Btrfs;
+                            else if (tgt.contains(L"Ext") || tgt.contains(L"ext")) pr.type = PartitionResolution::VolumeType::Ext4;
+                            else if (tgt.contains(L"Xfs") || tgt.contains(L"xfs")) pr.type = PartitionResolution::VolumeType::Xfs;
+                            else if (tgt.contains(L"F2fs") || tgt.contains(L"f2fs")) pr.type = PartitionResolution::VolumeType::F2fs;
+                            else if (tgt.contains(L"Partition2") || tgt.contains(L"Ntfs")) pr.type = PartitionResolution::VolumeType::Ntfs;
+                            else if (tgt.contains(L"Partition3") || tgt.contains(L"ExFat")) pr.type = PartitionResolution::VolumeType::Exfat;
+                            else if (tgt.contains(L"CdRom") || tgt.contains(L"Cdfs")) pr.type = PartitionResolution::VolumeType::Cdfs;
+                            else if (tgt.contains(L"Partition4") || tgt.contains(L"Refs")) pr.type = PartitionResolution::VolumeType::Refs;
+                            else pr.type = PartitionResolution::VolumeType::Fat32;
+                        } else {
+                            pr.type = PartitionResolution::VolumeType::Fat32;
+                        }
+                    }
+                    pr.relPath = std::move(rel);
+                } else {
+                    while (s.starts_with(L"\\")) s = s.substr(1);
+                    pr.type = PartitionResolution::VolumeType::Fat32;
+                    pr.relPath = std::move(s);
+                }
+            } else {
+                while (s.starts_with(L"\\")) s = s.substr(1);
+                pr.type = PartitionResolution::VolumeType::Fat32;
+                pr.relPath = std::move(s);
+            }
         }
 
         // Clean up any trailing wildcard or slashes
@@ -2603,14 +2723,27 @@ private:
 
     std::wstring normalizePath(std::wstring_view path) const {
         std::wstring res(path);
-        // Strip DOS drive prefix like DosDevices/C: or ??/C: or C:
-        if (res.starts_with(L"\\DosDevices\\C:\\")) {
-            res = res.substr(14);
-        } else if (res.starts_with(L"\\??\\C:\\")) {
-            res = res.substr(7);
-        } else if (res.starts_with(L"C:\\") || res.starts_with(L"c:\\")) {
-            res = res.substr(3);
-        } else if (res.starts_with(L"\\")) {
+        // Strip DOS drive prefix like DosDevices/<id>: or ??/<id>: or <id>:
+        if (res.starts_with(L"\\DosDevices\\")) {
+            res = res.substr(12);
+        } else if (res.starts_with(L"\\??\\")) {
+            res = res.substr(4);
+        }
+        size_t colon = res.find(L':');
+        if (colon != std::wstring::npos && colon >= 1 && colon <= 32) {
+            bool isDrivePrefix = true;
+            for (size_t i = 0; i < colon; ++i) {
+                wchar_t c = res[i];
+                if (!std::iswalnum(c) && c != L'_' && c != L'-') {
+                    isDrivePrefix = false;
+                    break;
+                }
+            }
+            if (isDrivePrefix) {
+                res = res.substr(colon + 1);
+            }
+        }
+        while (res.starts_with(L"\\") || res.starts_with(L"/")) {
             res = res.substr(1);
         }
         return res;
@@ -2682,8 +2815,8 @@ private:
 
     bool initialized_{false};
     mutable std::mutex mutex_;
-    std::unordered_map<wchar_t, DriveMapping> driveMappings_;
-    std::unordered_map<std::string, wchar_t> ntfsSnapshots_;
+    std::unordered_map<std::wstring, DriveMapping> driveMappings_;
+    std::unordered_map<std::string, std::wstring> ntfsSnapshots_;
     std::unique_ptr<io::DriverObject> fastFatDriver_;
     std::shared_ptr<io::DeviceObject> partitionDevice_;
     std::shared_ptr<VfsEntry> rootEntry_;

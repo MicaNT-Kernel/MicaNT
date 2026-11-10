@@ -454,6 +454,26 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite501") {
+        RUN_TEST(Test_Horizon285_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity_Suite);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite500") {
+        RUN_TEST(Test_Horizon284_Device61Options73_PagefileWriteCompressionTelemetryCpuSpreadSpectrum_InterlockedOrNotModulo_And_AsconRomulusXofHash_Suite);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite499") {
+        RUN_TEST(Test_Horizon283_Device60Options72_PagefileAsyncWriteDrainBufferCpuClockPhaseNoise_InterlockedAndNotModulo_And_AsconTinyJambuXofHash_Suite);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite498") {
+        RUN_TEST(Test_Horizon282_Device59Options71_PagefileAsyncWriteBurstBufferCpuClockJitter_InterlockedXnorModulo_And_AsconSubterraneanXofHash_Suite);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite497") {
+        RUN_TEST(Test_Horizon281_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite496") {
         RUN_TEST(Test_Horizon280_Device58Options70_PagefileAsyncReadBurstBufferCpuPllDroop_InterlockedNandModulo_And_AsconIsapXofHash_Suite);
         return g_FailedTests;
@@ -2487,6 +2507,11 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon278_Device56Options68_PagefileClusteredWriteCpuTransientThermal_InterlockedAbsDiffModulo_And_AsconSparkleXofHash_Suite);
     RUN_TEST(Test_Horizon279_Device57Options69_PagefileWriteBurstBufferCpuVoltageDroop_InterlockedNorModulo_And_AsconGiftCofbXofHash_Suite);
     RUN_TEST(Test_Horizon280_Device58Options70_PagefileAsyncReadBurstBufferCpuPllDroop_InterlockedNandModulo_And_AsconIsapXofHash_Suite);
+    RUN_TEST(Test_Horizon281_MultiCharacterDriveIdentifiers_DosDevicesParity_And_UnboundedPathResolution_Suite);
+    RUN_TEST(Test_Horizon282_Device59Options71_PagefileAsyncWriteBurstBufferCpuClockJitter_InterlockedXnorModulo_And_AsconSubterraneanXofHash_Suite);
+    RUN_TEST(Test_Horizon283_Device60Options72_PagefileAsyncWriteDrainBufferCpuClockPhaseNoise_InterlockedAndNotModulo_And_AsconTinyJambuXofHash_Suite);
+    RUN_TEST(Test_Horizon284_Device61Options73_PagefileWriteCompressionTelemetryCpuSpreadSpectrum_InterlockedOrNotModulo_And_AsconRomulusXofHash_Suite);
+    RUN_TEST(Test_Horizon285_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
