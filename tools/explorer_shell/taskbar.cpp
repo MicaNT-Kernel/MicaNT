@@ -1,4 +1,5 @@
 #include "taskbar.hpp"
+#include "notification_area.hpp"
 #include "../gui_common.hpp"
 
 namespace micant::explorer {
@@ -10,7 +11,6 @@ using micant_gui::PackBGRA;
 constexpr uint32_t kBlue = 0xFF245BAE;
 constexpr uint32_t kBlueEdge = 0xFF5B9AE3;
 constexpr uint32_t kBlueShadow = 0xFF1E468E;
-constexpr uint32_t kTrayBlue = 0xFF1D4F97;
 constexpr uint32_t kTaskBlue = 0xFF3D76C7;
 constexpr uint32_t kTaskActive = 0xFF1C4F91;
 
@@ -86,16 +86,7 @@ void DrawTaskbar(uint32_t* pixels, uint32_t screenWidth, uint32_t screenHeight,
         taskX += taskWidth;
     }
 
-    const int32_t trayX = static_cast<int32_t>(screenWidth) - 122;
-    fill(pixels, screenWidth, screenHeight, trayX, barY + 5, 122, taskbarHeight - 5, kTrayBlue);
-    fill(pixels, screenWidth, screenHeight, trayX, barY + 7, 1, taskbarHeight - 9, 0xFF193E7A);
-    fill(pixels, screenWidth, screenHeight, trayX + 12, barY + 17, 5, 8, 0xFFEFF5FC);
-    fill(pixels, screenWidth, screenHeight, trayX + 17, barY + 14, 4, 14, 0xFFEFF5FC);
-    fill(pixels, screenWidth, screenHeight, trayX + 34, barY + 24, 4, 4, 0xFFF7F7F7);
-    fill(pixels, screenWidth, screenHeight, trayX + 33, barY + 20, 6, 3, 0xFFF7F7F7);
-    fill(pixels, screenWidth, screenHeight, trayX + 31, barY + 16, 10, 3, 0xFFF7F7F7);
-    text(pixels, screenWidth, screenHeight, trayX + 50, barY + 16,
-         clockText ? clockText : "--:--", 0xFFFFFFFF);
+    DrawNotificationArea(pixels, screenWidth, taskbarHeight, clockText);
 }
 
 } // namespace micant::explorer

@@ -139,6 +139,9 @@ inline constexpr UINT WM_NCDESTROY      = 0x0082;
 inline constexpr UINT WM_MOVE           = 0x0003;
 inline constexpr UINT WM_SIZE           = 0x0005;
 inline constexpr UINT WM_ACTIVATE       = 0x0006;
+inline constexpr WPARAM SIZE_RESTORED   = 0;
+inline constexpr WPARAM SIZE_MINIMIZED  = 1;
+inline constexpr WPARAM SIZE_MAXIMIZED  = 2;
 inline constexpr UINT WM_SETFOCUS       = 0x0007;
 inline constexpr UINT WM_KILLFOCUS      = 0x0008;
 inline constexpr UINT WM_ENABLE         = 0x000A;
@@ -1529,8 +1532,10 @@ public:
         if (it == m_windows.end()) return FALSE_VAL;
 
         bool wasVisible = it->second->isVisible;
-        const int32_t oldWidth = it->second->rcWindow.width();
-        const int32_t oldHeight = it->second->rcWindow.height();
+        const bool wasMinimized = it->second->isMinimized;
+        const bool wasMaximized = it->second->isMaximized;
+        const int32_t oldClientWidth = it->second->rcClient.width();
+        const int32_t oldClientHeight = it->second->rcClient.height();
         if (nCmdShow == SW_HIDE) {
             it->second->isVisible = false;
             it->second->style &= ~WS_VISIBLE;
@@ -1581,9 +1586,16 @@ public:
             }
             m_currentDesktop->setActiveWindow(nextActive);
         }
-        if (it->second->rcWindow.width() != oldWidth || it->second->rcWindow.height() != oldHeight) {
-            postMessage(hwnd, WM_SIZE, 0, static_cast<LPARAM>((it->second->rcWindow.height() << 16) |
-                                                               (it->second->rcWindow.width() & 0xFFFF)));
+        const bool sizeStateChanged = wasMinimized != it->second->isMinimized ||
+                                      wasMaximized != it->second->isMaximized;
+        const int32_t clientWidth = it->second->isMinimized ? 0 : it->second->rcClient.width();
+        const int32_t clientHeight = it->second->isMinimized ? 0 : it->second->rcClient.height();
+        if (sizeStateChanged || clientWidth != oldClientWidth || clientHeight != oldClientHeight) {
+            const WPARAM sizeType = it->second->isMinimized ? SIZE_MINIMIZED :
+                                    it->second->isMaximized ? SIZE_MAXIMIZED : SIZE_RESTORED;
+            const LPARAM size = it->second->isMinimized ? 0 :
+                static_cast<LPARAM>((clientHeight << 16) | (clientWidth & 0xFFFF));
+            postMessage(hwnd, WM_SIZE, sizeType, size);
         }
         postMessage(hwnd, WM_SHOWWINDOW, it->second->isVisible ? 1U : 0U, 0);
 
@@ -1602,7 +1614,7 @@ public:
 
         auto wnd = it->second;
         const int oldX=wnd->rcWindow.left, oldY=wnd->rcWindow.top;
-        const int oldW=wnd->rcWindow.width(), oldH=wnd->rcWindow.height();
+        const int oldW=wnd->rcClient.width(), oldH=wnd->rcClient.height();
         if (!(uFlags & SWP_NOMOVE)) {
             int w = (uFlags & SWP_NOSIZE) ? wnd->rcWindow.width() : cx;
             int h = (uFlags & SWP_NOSIZE) ? wnd->rcWindow.height() : cy;
@@ -1632,8 +1644,14 @@ public:
         }
         if (wnd->rcWindow.left != oldX || wnd->rcWindow.top != oldY)
             postMessage(hwnd, WM_MOVE, 0, static_cast<LPARAM>((wnd->rcWindow.top << 16) | (wnd->rcWindow.left & 0xFFFF)));
-        if (wnd->rcWindow.width() != oldW || wnd->rcWindow.height() != oldH) {
-            postMessage(hwnd, WM_SIZE, 0, static_cast<LPARAM>((wnd->rcWindow.height() << 16) | (wnd->rcWindow.width() & 0xFFFF)));
+        const int clientWidth = wnd->isMinimized ? 0 : wnd->rcClient.width();
+        const int clientHeight = wnd->isMinimized ? 0 : wnd->rcClient.height();
+        if (clientWidth != oldW || clientHeight != oldH) {
+            const WPARAM sizeType = wnd->isMinimized ? SIZE_MINIMIZED :
+                                    wnd->isMaximized ? SIZE_MAXIMIZED : SIZE_RESTORED;
+            const LPARAM size = wnd->isMinimized ? 0 :
+                static_cast<LPARAM>((clientHeight << 16) | (clientWidth & 0xFFFF));
+            postMessage(hwnd, WM_SIZE, sizeType, size);
         }
         return TRUE_VAL;
     }

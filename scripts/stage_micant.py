@@ -550,16 +550,17 @@ def run_local_build():
         print(f"[FATAL] win32k.dll build failed:\n{r.stderr}")
         sys.exit(1)
 
-    # The interactive desktop shell is a Win32 client of win32k.dll, not a
-    # direct framebuffer utility. Build it after the window manager import lib.
+    # The shell imports only the documented user32.dll/gdi32.dll client APIs;
+    # those DLLs translate the Windows ABI to MicaNT's private win32k backend.
     explorer_cmd = [
         "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23",
         "-ffreestanding", "-fno-exceptions", "-fno-rtti", "-fno-stack-protector",
         "-mno-red-zone", "-mno-stack-arg-probe", "-O2", "-Iinclude", "-Itools",
-        "-Wl,--subsystem,console", "-Wl,-e,_start", "-nostdlib",
+        "-Wl,--subsystem,windows", "-Wl,-e,_start", "-nostdlib",
         "tools/explorer_shell_app.cpp", "tools/explorer_shell/taskbar.cpp",
         "tools/explorer_shell/start_menu.cpp", "tools/explorer_shell/desktop.cpp",
-        win32k_implib, "-o", "build/explorer.exe",
+        "tools/explorer_shell/notification_area.cpp",
+        "-luser32", "-lgdi32", "-o", "build/explorer.exe",
     ]
     explorer_result = subprocess.run(explorer_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     if explorer_result.returncode != 0:

@@ -56,6 +56,15 @@ struct WinNtMsg {
     WinNtPoint pt{};
 };
 
+struct WinNtPaintStruct {
+    void* hdc{nullptr};
+    int32_t fErase{0};
+    WinNtRect rcPaint{};
+    int32_t fRestore{0};
+    int32_t fIncUpdate{0};
+    uint8_t rgbReserved[32]{};
+};
+
 struct WinNtRawInputDevice {
     uint16_t usUsagePage{0x01}; // HID_USAGE_PAGE_GENERIC
     uint16_t usUsage{0x02};     // HID_USAGE_GENERIC_MOUSE

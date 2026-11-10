@@ -111,6 +111,39 @@ int32_t User32_UpdateWindow(void* hWnd) noexcept {
     return 1;
 }
 
+int32_t User32_InvalidateRect(void* hWnd, const WinNtRect*, int32_t) noexcept {
+    if (!hWnd) return 0;
+    using Fn=int32_t (*)(void*,uint32_t,uintptr_t,intptr_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kPostMessageW");
+    return fn ? fn(hWnd, WM_PAINT_OFFICIAL, 0, 0) : 0;
+}
+
+void* User32_BeginPaint(void* hWnd, WinNtPaintStruct* paint) noexcept {
+    if (!hWnd || !paint) return nullptr;
+    using GetDcFn=void* (*)(void*);
+    using GetRectFn=int32_t (*)(void*,MicaWin32kRect*);
+    auto getDc=Win32kProc<GetDcFn>("MicaWin32kGetDC");
+    auto getRect=Win32kProc<GetRectFn>("MicaWin32kGetClientRect");
+    if (!getDc || !getRect) return nullptr;
+    MicaWin32kRect rect{};
+    void* dc=getDc(hWnd);
+    if (!dc || !getRect(hWnd,&rect)) return nullptr;
+    paint->hdc=dc;
+    paint->fErase=0;
+    paint->rcPaint={rect.left,rect.top,rect.right,rect.bottom};
+    paint->fRestore=0;
+    paint->fIncUpdate=0;
+    std::memset(paint->rgbReserved,0,sizeof(paint->rgbReserved));
+    return dc;
+}
+
+int32_t User32_EndPaint(void* hWnd, const WinNtPaintStruct* paint) noexcept {
+    if (!hWnd || !paint || !paint->hdc) return 0;
+    using PresentFn=int32_t (*)(void*);
+    auto present=Win32kProc<PresentFn>("MicaWin32kPresentDC");
+    return present ? present(paint->hdc) : 0;
+}
+
 intptr_t User32_DefWindowProcW(void* hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam) noexcept {
     using Fn=intptr_t (*)(void*,uint32_t,uintptr_t,intptr_t);
     auto fn=Win32kProc<Fn>("MicaWin32kDefWindowProcW");
@@ -270,17 +303,18 @@ int32_t User32_SetProcessDpiAwarenessContext(void* /*value*/) noexcept {
     return 1;
 }
 
-// gdi32.dll implementations
-void* Gdi32_GetDC(void* hWnd) noexcept {
+// user32.dll implementations
+void* User32_GetDC(void* hWnd) noexcept {
     using Fn=void* (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kGetDC");
     return fn ? fn(hWnd) : nullptr;
 }
 
-int32_t Gdi32_ReleaseDC(void* hWnd, void* hDC) noexcept {
+int32_t User32_ReleaseDC(void* hWnd, void* hDC) noexcept {
     using Fn=int32_t (*)(void*,void*); auto fn=Win32kProc<Fn>("MicaWin32kReleaseDC");
     return fn ? fn(hWnd,hDC) : 0;
 }
 
+// gdi32.dll implementations
 void* Gdi32_CreateCompatibleDC(void* hdc) noexcept {
     using Fn=void* (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kCreateCompatibleDC");
     return fn ? fn(hdc) : nullptr;
@@ -450,14 +484,14 @@ Horizon111User32Gdi32Imm32AuditReport WinNtUser32Gdi32Imm32Coordinator::runUser3
         }
 
         // Verify GDI32 HDC + PixelFormat + SwapBuffers
-        void* hdc = Gdi32_GetDC(hwnd);
+        void* hdc = User32_GetDC(hwnd);
         rep.createdHdc = hdc;
         uint32_t dummyPfd[10]{sizeof(dummyPfd)};
         int32_t pf = Gdi32_ChoosePixelFormat(hdc, dummyPfd);
         if (pf > 0 && Gdi32_SetPixelFormat(hdc, pf, dummyPfd) && Gdi32_SwapBuffers(hdc)) {
             rep.gdiPixelFormatSwapBuffersVerified = (Gdi32_GetDeviceCaps(hdc, 116) == 240);
         }
-        Gdi32_ReleaseDC(hwnd, hdc);
+        User32_ReleaseDC(hwnd, hdc);
 
         // Verify IMM32 full-screen game IME suppression (ImmAssociateContext(hwnd, nullptr))
         void* oldImc = Imm32_ImmAssociateContext(hwnd, nullptr);
@@ -496,6 +530,21 @@ __declspec(dllexport) int32_t ShowWindow(void* hWnd, int32_t nCmdShow) {
 }
 __declspec(dllexport) int32_t UpdateWindow(void* hWnd) {
     return micant::um::winnt_user32_gdi32_imm32_abi::User32_UpdateWindow(hWnd);
+}
+__declspec(dllexport) int32_t InvalidateRect(void* hWnd, const micant::um::winnt_user32_gdi32_imm32_abi::WinNtRect* lpRect, int32_t bErase) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_InvalidateRect(hWnd, lpRect, bErase);
+}
+__declspec(dllexport) void* BeginPaint(void* hWnd, micant::um::winnt_user32_gdi32_imm32_abi::WinNtPaintStruct* lpPaint) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_BeginPaint(hWnd, lpPaint);
+}
+__declspec(dllexport) int32_t EndPaint(void* hWnd, const micant::um::winnt_user32_gdi32_imm32_abi::WinNtPaintStruct* lpPaint) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_EndPaint(hWnd, lpPaint);
+}
+__declspec(dllexport) void* GetDC(void* hWnd) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_GetDC(hWnd);
+}
+__declspec(dllexport) int32_t ReleaseDC(void* hWnd, void* hDC) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_ReleaseDC(hWnd, hDC);
 }
 __declspec(dllexport) intptr_t DefWindowProcW(void* hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam) {
     return micant::um::winnt_user32_gdi32_imm32_abi::User32_DefWindowProcW(hWnd, Msg, wParam, lParam);
@@ -575,12 +624,6 @@ __declspec(dllexport) int32_t SetProcessDpiAwarenessContext(void* value) {
 } // extern "C"
 #elif defined(BUILD_SYSTEM32_GDI32_DLL)
 extern "C" {
-__declspec(dllexport) void* GetDC(void* hWnd) {
-    return micant::um::winnt_user32_gdi32_imm32_abi::Gdi32_GetDC(hWnd);
-}
-__declspec(dllexport) int32_t ReleaseDC(void* hWnd, void* hDC) {
-    return micant::um::winnt_user32_gdi32_imm32_abi::Gdi32_ReleaseDC(hWnd, hDC);
-}
 __declspec(dllexport) void* CreateCompatibleDC(void* hdc) {
     return micant::um::winnt_user32_gdi32_imm32_abi::Gdi32_CreateCompatibleDC(hdc);
 }
