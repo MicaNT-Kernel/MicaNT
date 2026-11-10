@@ -52,7 +52,10 @@ struct BootModuleDescriptor {
     uintptr_t dllBase{0};
     size_t sizeOfImage{0};
     uintptr_t entryPoint{0};
+    uint32_t moduleFlags{0};
 };
+
+inline constexpr uint32_t BOOT_MODULE_FLAG_BOOT_START_DRIVER = 0x00000001;
 
 /**
  * @brief Linear Framebuffer Video Descriptor (from UEFI GOP).

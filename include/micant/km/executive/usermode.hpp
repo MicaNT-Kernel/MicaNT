@@ -27,6 +27,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/hal/cpu.hpp"
 #include "micant/km/hal/bootvid.hpp"
+#include "micant/shared/boot_driver.hpp"
 #include "micant/um/native/pe.hpp"
 
 namespace micant::um {
@@ -434,7 +435,9 @@ private:
     uint64_t  m_totalProcessesSpawned{0};
     uint64_t  m_totalProcessesTerminated{0};
     bootvid::BootVideoDriver* m_videoDriver{nullptr};
+    boot_driver::DisplayDevice* m_displayDevice{nullptr};
     uint64_t  m_totalFramesPresented{0};
+    uint64_t  m_totalFramesPresentedByDevice{0};
     uint64_t  m_totalPixelsBlitted{0};
     uint64_t  m_totalPageFaults{0};
     uint64_t  m_totalDemandPagesCommitted{0};
@@ -731,7 +734,14 @@ public:
                 if (probe != micant::NtStatus::Success) return probe;
 
                 auto* info = reinterpret_cast<UserVideoInfo64*>(arg1);
-                if (m_videoDriver && m_videoDriver->isInitialized()) {
+                if (m_displayDevice && m_displayDevice->PresentFrame) {
+                    info->width = m_displayDevice->Width;
+                    info->height = m_displayDevice->Height;
+                    info->pitch = m_displayDevice->Pitch;
+                    info->bpp = 32;
+                    info->pixelFormat = m_displayDevice->PixelFormat;
+                    info->physicalBase = 0; // Device scanout is not CPU-addressable framebuffer memory.
+                } else if (m_videoDriver && m_videoDriver->isInitialized()) {
                     info->width = m_videoDriver->getWidth();
                     info->height = m_videoDriver->getHeight();
                     info->pitch = m_videoDriver->getPitch();
@@ -765,7 +775,13 @@ public:
                 micant::NtStatus bufProbe = ProbeUserMemory(reinterpret_cast<void*>(params->surfaceBufferVa), bufferBytes, sizeof(uint32_t));
                 if (bufProbe != micant::NtStatus::Success) return bufProbe;
 
-                if (m_videoDriver && m_videoDriver->isInitialized()) {
+                const bool presentedByDevice = m_displayDevice && m_displayDevice->PresentFrame &&
+                    m_displayDevice->PresentFrame(m_displayDevice->Context,
+                        reinterpret_cast<const uint32_t*>(params->surfaceBufferVa),
+                        params->width, params->height, params->pitch ? params->pitch : params->width,
+                        static_cast<int32_t>(params->dstX), static_cast<int32_t>(params->dstY));
+                if (presentedByDevice) ++m_totalFramesPresentedByDevice;
+                if (!presentedByDevice && m_videoDriver && m_videoDriver->isInitialized()) {
                     m_videoDriver->blit(
                         params->dstX,
                         params->dstY,
@@ -786,8 +802,11 @@ public:
     }
 
     void setVideoDriver(bootvid::BootVideoDriver* driver) noexcept { m_videoDriver = driver; }
+    void setDisplayDevice(boot_driver::DisplayDevice* device) noexcept { m_displayDevice = device; }
+    [[nodiscard]] boot_driver::DisplayDevice* getDisplayDevice() const noexcept { return m_displayDevice; }
     [[nodiscard]] bootvid::BootVideoDriver* getVideoDriver() const noexcept { return m_videoDriver; }
     [[nodiscard]] uint64_t getTotalFramesPresented() const noexcept { return m_totalFramesPresented; }
+    [[nodiscard]] uint64_t getTotalFramesPresentedByDevice() const noexcept { return m_totalFramesPresentedByDevice; }
     [[nodiscard]] uint64_t getTotalPixelsBlitted() const noexcept { return m_totalPixelsBlitted; }
 
     [[nodiscard]] const SsdtTable& getSsdt() const noexcept { return m_ssdt; }

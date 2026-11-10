@@ -42,6 +42,7 @@
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
 #include "micant/km/executive/mm_baremetal.hpp"
+#include "micant/shared/boot_driver.hpp"
 #include "../test/unmodified_fixture.hpp"
 
 extern "C" void ___chkstk_ms() {}
@@ -543,6 +544,10 @@ static void pollPs2KeyboardFromClockInterrupt() {
 static bool s_ps2ShiftState = false;
 
 static micant::bootvid::BootVideoDriver* s_globalVideoDriver = nullptr;
+static micant::boot_driver::KernelServices s_bootDriverServices{};
+static micant::boot_driver::DriverObject s_virtioGpuDriverObject{};
+static micant::boot_driver::DisplayDevice s_virtioGpuDisplayDevice{};
+static uint64_t s_bootDriverMmioNextVa = 0xFFFFFE8000000000ULL; // Reserved PML4[509] MMIO window.
 static uint32_t s_logRightX = 0, s_logMidY = 0, s_logRightW = 0, s_logMidH = 0;
 static constexpr size_t KERNEL_LOG_LINES = 16;
 static char s_kernelLogBuffer[KERNEL_LOG_LINES][128]{};
@@ -576,6 +581,102 @@ static void LogKernel(const char* msg) {
     UartSerial::print("[ntoskrnl.exe] ");
     UartSerial::print(msg);
     UartSerial::print("\r\n");
+}
+
+static uint64_t BootDriverTranslateVirtualAddress(void*, const void* address) {
+    uint64_t cr3 = 0;
+#if defined(__x86_64__)
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
+#endif
+    return micant::km::mm_baremetal::BareMetalPaging::getPhysicalAddress(
+        cr3 & 0x000FFFFFFFFFF000ULL, reinterpret_cast<uint64_t>(address));
+}
+
+static void* BootDriverMapDeviceMemory(void*, uint64_t physicalAddress, size_t) {
+    if (physicalAddress == 0) return nullptr;
+    constexpr uint64_t pageMask = micant::km::mm_baremetal::PAGE_MASK_4KB;
+    const uint64_t pageBase = physicalAddress & ~pageMask;
+    const uint64_t pageOffset = physicalAddress & pageMask;
+    const uint64_t mapVa = s_bootDriverMmioNextVa;
+    uint64_t cr3 = 0;
+#if defined(__x86_64__)
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
+#endif
+    const uint64_t cr3Physical = cr3 & 0x000FFFFFFFFFF000ULL;
+    using namespace micant::km::mm_baremetal;
+    if (!BareMetalPaging::mapVirtualPage(cr3Physical, mapVa, pageBase,
+            PTE_PRESENT | PTE_WRITABLE | PTE_PCD | PTE_PWT | PTE_NO_EXECUTE)) return nullptr;
+
+    // mapVirtualPage intentionally enables user access for user VADs. MMIO
+    // mappings must remain supervisor-only, so clear U/S on the leaf PTE.
+    auto* pml4 = reinterpret_cast<uint64_t*>(cr3Physical);
+    const uint64_t pml4Entry = pml4[(mapVa >> 39) & 0x1FF];
+    auto* pdpt = reinterpret_cast<uint64_t*>(pml4Entry & PTE_PHYS_MASK);
+    const uint64_t pdptEntry = pdpt[(mapVa >> 30) & 0x1FF];
+    auto* pd = reinterpret_cast<uint64_t*>(pdptEntry & PTE_PHYS_MASK);
+    const uint64_t pdEntry = pd[(mapVa >> 21) & 0x1FF];
+    auto* pt = reinterpret_cast<uint64_t*>(pdEntry & PTE_PHYS_MASK);
+    pt[(mapVa >> 12) & 0x1FF] &= ~PTE_USER;
+    s_bootDriverMmioNextVa += PAGE_SIZE_4KB;
+    return reinterpret_cast<void*>(mapVa + pageOffset);
+}
+
+static void BootDriverLog(void*, const char* message) {
+    if (message) LogKernel(message);
+}
+
+static bool IsBootDriverModule(const micant::boot::BootModuleDescriptor& module) {
+    const std::wstring_view name(module.baseDllName);
+    return (module.moduleFlags & micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER) != 0 &&
+           name.size() >= 4 && name.substr(name.size() - 4) == L".sys" && module.dllBase && module.entryPoint;
+}
+
+static void LoadBootStartDrivers(const micant::boot::LoaderParameterBlock& lpb,
+                                 micant::um::UserProcessManager64& processManager,
+                                 const micant::bootvid::BootVideoDriver& bootVideo) {
+    s_bootDriverServices = {
+        .Size = sizeof(micant::boot_driver::KernelServices),
+        .Version = micant::boot_driver::DRIVER_ABI_VERSION,
+        .BootWidth = bootVideo.getWidth(),
+        .BootHeight = bootVideo.getHeight(),
+        .Context = nullptr,
+        .TranslateVirtualAddress = BootDriverTranslateVirtualAddress,
+        .MapDeviceMemory = BootDriverMapDeviceMemory,
+        .Log = BootDriverLog
+    };
+
+    LogKernel("[PnpBoot] Starting boot-start driver image scan.");
+    for (const auto& module : lpb.bootModules) {
+        if (!IsBootDriverModule(module)) continue;
+        LogKernel("[PnpBoot] Entering boot-start .sys DriverEntry.");
+        UartSerial::print("[PnpBoot] Driver image base/entry: 0x");
+        UartSerial::printHex64(module.dllBase);
+        UartSerial::print(" / 0x");
+        UartSerial::printHex64(module.entryPoint);
+        UartSerial::print("\r\n");
+        micant::boot_driver::DriverObject driver{};
+        driver.Size = sizeof(driver);
+        driver.Version = micant::boot_driver::DRIVER_ABI_VERSION;
+        driver.Flags = micant::boot_driver::DRIVER_FLAG_BOOT_START;
+        driver.DriverStart = reinterpret_cast<void*>(module.dllBase);
+        driver.DriverSize = module.sizeOfImage;
+        driver.HardwareResources = &s_bootDriverServices;
+        driver.Display = &s_virtioGpuDisplayDevice;
+        auto entry = reinterpret_cast<micant::boot_driver::DriverEntryRoutine>(module.entryPoint);
+        const micant::boot_driver::UnicodeString registryPath{};
+        const int32_t status = entry(&driver, &registryPath);
+        UartSerial::print("[PnpBoot] DriverEntry returned 0x");
+        UartSerial::printHex32(static_cast<uint32_t>(status));
+        UartSerial::print("\r\n");
+        if (status == micant::boot_driver::STATUS_SUCCESS &&
+            driver.Display->PresentFrame && driver.Display->Width && driver.Display->Height) {
+            s_virtioGpuDriverObject = driver;
+            processManager.setDisplayDevice(&s_virtioGpuDisplayDevice);
+            LogKernel("[PnpBoot] virtio_gpu.sys DriverEntry succeeded; display device registered.");
+        } else {
+            LogKernel("[PnpBoot] Boot-start display driver failed; UEFI GOP remains available.");
+        }
+    }
 }
 
 // Sovereign Executive Console Line Buffer (Visible in GOP Shell Window)
@@ -833,11 +934,19 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             return 0;
         }
         case 0x80: { // NtGdiGetVideoInfo
-            UartSerial::print("  -> NtGdiGetVideoInfo: Querying GOP linear framebuffer metrics: ");
+            UartSerial::print("  -> NtGdiGetVideoInfo: Querying active display metrics: ");
             const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
             if (vad != nullptr && arg1 != 0) {
                 auto* info = reinterpret_cast<micant::um::UserVideoInfo64*>(arg1);
-                if (s_globalVideoDriver && s_globalVideoDriver->isInitialized()) {
+                auto* displayDevice = pm.getDisplayDevice();
+                if (displayDevice && displayDevice->PresentFrame) {
+                    info->width = displayDevice->Width;
+                    info->height = displayDevice->Height;
+                    info->pitch = displayDevice->Pitch;
+                    info->bpp = 32;
+                    info->pixelFormat = displayDevice->PixelFormat;
+                    info->physicalBase = 0;
+                } else if (s_globalVideoDriver && s_globalVideoDriver->isInitialized()) {
                     info->width = s_globalVideoDriver->getWidth();
                     info->height = s_globalVideoDriver->getHeight();
                     info->pitch = s_globalVideoDriver->getPitch();
@@ -869,7 +978,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             s_ring3Telemetry.totalPixelsBlitted = pm.getTotalPixelsBlitted();
             if (!s_loggedFirstGdiPresent && pm.getTotalFramesPresented() != 0) {
                 s_loggedFirstGdiPresent = true;
-                UartSerial::print("  -> NtGdiPresentSurface: 32-bpp BGRA surface blitted to physical VRAM: ");
+                UartSerial::print(pm.getTotalFramesPresentedByDevice() != 0
+                    ? "  -> NtGdiPresentSurface: frame submitted through boot-start display driver: "
+                    : "  -> NtGdiPresentSurface: frame copied to UEFI GOP fallback: ");
                 const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
                 if (vad != nullptr && arg1 != 0) {
                     auto* p = reinterpret_cast<micant::um::UserPresentSurfaceParams64*>(arg1);
@@ -2845,6 +2956,10 @@ extern "C" micant::NtStatus KiSystemStartup(
             LogKernel("[Mm] High-Half Canonical Kernel Active (0xFFFFF800... PML4[496]).");
         }
     }
+
+    // Enter separately loaded boot-start .sys images only after kernel mappings
+    // are live, and publish the display miniport to the GDI present syscall.
+    LoadBootStartDrivers(*lpb, pm, videoDriver);
 
     // Initialize 64-bit IDT and Local APIC (Horizon 97 / Suite 341)
     auto& intEngine = micant::hal::idt::InterruptEngine64::get();

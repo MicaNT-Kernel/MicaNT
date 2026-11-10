@@ -12,6 +12,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 REPO_ROOT = r"C:\Users\admin\source\MicaNT"
 EFI_SOURCE = os.path.join(REPO_ROOT, r"build\esp\EFI\BOOT\BOOTX64.EFI")
 KRNL_SOURCE = os.path.join(REPO_ROOT, r"build\ntoskrnl.exe")
+VIRTIO_GPU_SOURCE = os.path.join(REPO_ROOT, r"build\virtio_gpu.sys")
 APP_SOURCE = os.path.join(REPO_ROOT, r"build\app.exe")
 BENCH_SOURCE = os.path.join(REPO_ROOT, r"build\bench.exe")
 CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\bin\prismx_3d_cube_app.exe")
@@ -314,7 +315,7 @@ REGISTRY_HIVES = [
 ]
 
 def run_local_build():
-    print("[1/5] Compiling clean-room freestanding BOOTX64.EFI, ntoskrnl.exe, app.exe, and bench.exe...")
+    print("[1/5] Compiling clean-room BOOTX64.EFI, ntoskrnl.exe, virtio_gpu.sys, app.exe, and bench.exe...")
     os.makedirs(os.path.join(REPO_ROOT, "build", "esp", "EFI", "BOOT"), exist_ok=True)
     
     cmd_efi = [
@@ -367,6 +368,19 @@ def run_local_build():
         sys.exit(1)
     sz_k = os.path.getsize(KRNL_SOURCE)
     print(f"      ntoskrnl.exe Compiled OK ({sz_k:,} bytes)")
+
+    cmd_gpu = [
+        "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23",
+        "-ffreestanding", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics",
+        "-fno-stack-protector", "-fno-builtin", "-mno-red-zone", "-mno-stack-arg-probe",
+        "-O2", "-Iinclude", "-Wl,--subsystem,native", "-Wl,-e,DriverEntry", "-nostdlib",
+        "drivers/virtio_gpu/virtio_gpu.cpp", "-o", "build/virtio_gpu.sys"
+    ]
+    res_gpu = subprocess.run(cmd_gpu, cwd=REPO_ROOT, capture_output=True, text=True)
+    if res_gpu.returncode != 0:
+        print(f"[FATAL] virtio_gpu.sys build failed:\n{res_gpu.stderr}")
+        sys.exit(1)
+    print(f"      virtio_gpu.sys Compiled OK ({os.path.getsize(VIRTIO_GPU_SOURCE):,} bytes)")
 
     cmd_app = [
         "clang++",
@@ -644,6 +658,7 @@ def main():
     sftp = ssh.open_sftp()
     sftp.put(EFI_SOURCE, "/tmp/BOOTX64.EFI")
     sftp.put(KRNL_SOURCE, "/tmp/ntoskrnl.exe")
+    sftp.put(VIRTIO_GPU_SOURCE, "/tmp/virtio_gpu.sys")
     sftp.put(APP_SOURCE, "/tmp/app.exe")
     sftp.put(BENCH_SOURCE, "/tmp/bench.exe")
     if os.path.exists(CUBE_SOURCE):
@@ -708,12 +723,14 @@ mount -o rw,umask=000 /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52
 mount -o rw,umask=000 /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 /mnt/micaesp
 
 mkdir -p /mnt/micasys/MicaNT/System32/drivers/etc
+mkdir -p /mnt/micasys/MicaNT/System32/drivers
 mkdir -p /mnt/micasys/MicaNT/System32/config
 mkdir -p /mnt/micasys/MicaNT/System32/LogFiles
 
 echo "--- Copying Kernel and Userland Executables ---"
 cp -v /tmp/ntoskrnl.exe /mnt/micasys/MicaNT/System32/
 cp -v /tmp/ntoskrnl.exe /mnt/micasys/
+cp -v /tmp/virtio_gpu.sys /mnt/micasys/MicaNT/System32/drivers/
 cp -v /tmp/app.exe /mnt/micasys/MicaNT/System32/
 cp -v /tmp/bench.exe /mnt/micasys/MicaNT/System32/
 [ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/ || true
@@ -821,15 +838,19 @@ done
 
 echo "--- Mirroring Bootloader to ESP ---"
 mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT
+mkdir -p /mnt/micaesp/EFI/MicaNT/System32/drivers
 cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI
 cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI
 cp -v /tmp/ntoskrnl.exe /mnt/micaesp/EFI/MicaNT/
+cp -v /tmp/virtio_gpu.sys /mnt/micaesp/EFI/MicaNT/System32/drivers/
 cp -v /tmp/ntoskrnl.exe /mnt/micaesp/
 rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true
 
 mkdir -p /boot/efi/EFI/MicaNT
+mkdir -p /boot/efi/EFI/MicaNT/System32/drivers
 cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI
 cp -v /tmp/ntoskrnl.exe /boot/efi/EFI/MicaNT/
+cp -v /tmp/virtio_gpu.sys /boot/efi/EFI/MicaNT/System32/drivers/
 cp -v /tmp/ntoskrnl.exe /boot/efi/
 rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true
 

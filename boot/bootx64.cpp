@@ -1314,6 +1314,12 @@ static bool s_ntoskrnlLoadedFromDisk = false;
 static uint64_t s_ntoskrnlEntryPoint = 0;
 static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedNtoskrnlInfo{};
 
+alignas(4096) static uint8_t s_virtioGpuFileBuffer[16777216];
+alignas(4096) static uint8_t s_virtioGpuImageBuffer[16777216];
+static size_t s_virtioGpuFileSize = 0;
+static uint64_t s_virtioGpuEntryPoint = 0;
+static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedVirtioGpuInfo{};
+
 extern "C" char* strstr(const char* haystack, const char* needle) {
     if (!haystack || !needle) return nullptr;
     if (!*needle) return const_cast<char*>(haystack);
@@ -2274,6 +2280,53 @@ extern "C" micant::uefi::EfiStatus EfiMain(
                     systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] ERROR: loadAndMapKernelImage failed!\r\n");
                 }
             }
+        }
+    }
+
+    // Load the display miniport as a separate boot-start native .sys image.
+    // The kernel enters its DriverEntry only after paging and kernel services
+    // are available, just like a boot-start driver in an NT boot sequence.
+    if (systemTable->bootServices) {
+        size_t driverBytes = loadFileFromEfiSystemPartition(
+            imageHandle, systemTable->bootServices,
+            L"\\EFI\\MicaNT\\System32\\drivers\\virtio_gpu.sys",
+            micant::bootloader::s_virtioGpuFileBuffer,
+            sizeof(micant::bootloader::s_virtioGpuFileBuffer));
+        if (driverBytes == 0) {
+            driverBytes = loadFileFromEfiSystemPartition(
+                imageHandle, systemTable->bootServices,
+                L"\\EFI\\MicaNT\\virtio_gpu.sys",
+                micant::bootloader::s_virtioGpuFileBuffer,
+                sizeof(micant::bootloader::s_virtioGpuFileBuffer));
+        }
+        if (driverBytes != 0) {
+            micant::bootloader::s_virtioGpuFileSize = driverBytes;
+            std::span<const uint8_t> rawDriver(micant::bootloader::s_virtioGpuFileBuffer, driverBytes);
+            uint64_t targetBase = reinterpret_cast<uint64_t>(micant::bootloader::s_virtioGpuImageBuffer);
+            micant::NtStatus status = micant::km::executive::NtoskrnlImageLoader64::loadAndMapKernelImage(
+                rawDriver,
+                micant::bootloader::s_virtioGpuImageBuffer,
+                sizeof(micant::bootloader::s_virtioGpuImageBuffer),
+                targetBase,
+                micant::bootloader::s_loadedVirtioGpuInfo);
+            if (status == micant::NtStatus::Success && micant::bootloader::s_loadedVirtioGpuInfo.headersValid) {
+                micant::bootloader::s_virtioGpuEntryPoint = micant::bootloader::s_loadedVirtioGpuInfo.entryPointVa;
+                engine.getLpb().bootModules.push_back({
+                    .baseDllName = L"virtio_gpu.sys",
+                    .fullDllName = L"\\SystemRoot\\System32\\drivers\\virtio_gpu.sys",
+                    .dllBase = reinterpret_cast<uintptr_t>(micant::bootloader::s_virtioGpuImageBuffer),
+                    .sizeOfImage = static_cast<size_t>(micant::bootloader::s_loadedVirtioGpuInfo.sizeOfImage),
+                    .entryPoint = static_cast<uintptr_t>(micant::bootloader::s_virtioGpuEntryPoint),
+                    .moduleFlags = micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER
+                });
+                micant::bootloader::UartSerial::print("[MicaNT Boot] Loaded boot-start virtio_gpu.sys, DriverEntry=0x");
+                micant::bootloader::UartSerial::printHex64(micant::bootloader::s_virtioGpuEntryPoint);
+                micant::bootloader::UartSerial::print("\r\n");
+            } else {
+                micant::bootloader::UartSerial::print("[MicaNT Boot] virtio_gpu.sys PE load failed; GOP remains active.\r\n");
+            }
+        } else {
+            micant::bootloader::UartSerial::print("[MicaNT Boot] virtio_gpu.sys absent; GOP fallback selected.\r\n");
         }
     }
 

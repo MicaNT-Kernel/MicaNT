@@ -255,12 +255,20 @@ try {
         Write-Host "[MicaNT Build] Building Standalone PE32+ Kernel (build/ntoskrnl.exe)..."
         & clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,native" "-Wl,-e,KiSystemStartup" -nostdlib kernel/init/ntoskrnl.cpp -o build/ntoskrnl.exe
         if ($LASTEXITCODE -ne 0) { throw "Failed building ntoskrnl.exe" }
+
+        Write-Host "[MicaNT Build] Building standalone boot-start display driver (build/virtio_gpu.sys)..."
+        & clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -fno-builtin -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,native" "-Wl,-e,DriverEntry" -nostdlib drivers/virtio_gpu/virtio_gpu.cpp -o build/virtio_gpu.sys
+        if ($LASTEXITCODE -ne 0) { throw "Failed building virtio_gpu.sys" }
     }
 
     if ($BuildEfi) {
         Write-Host "[MicaNT Build] Building UEFI PE32+ Bootloader (build/esp/EFI/BOOT/BOOTX64.EFI)..."
         & clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,efi_application" "-Wl,-e,EfiMain" -nostdlib boot/bootx64.cpp -o build/esp/EFI/BOOT/BOOTX64.EFI
         if ($LASTEXITCODE -ne 0) { throw "Failed building BOOTX64.EFI" }
+
+        $driverDir = Join-Path $repoRoot "build\esp\EFI\MicaNT\System32\drivers"
+        New-Item -ItemType Directory -Force -Path $driverDir | Out-Null
+        Copy-Item -Force build/virtio_gpu.sys (Join-Path $driverDir "virtio_gpu.sys")
     }
 
     Write-Host "[MicaNT Build] SUCCESS: Incremental build complete with BelowNormal CPU priority."
