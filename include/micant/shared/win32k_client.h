@@ -22,12 +22,43 @@ typedef struct MicaWin32kMessage {
     uint32_t time;
     MicaWin32kPoint pt;
 } MicaWin32kMessage;
+typedef struct MicaWin32kWindowClassEx {
+    uint32_t cbSize, style;
+    void* wndProc;
+    int32_t classExtra, windowExtra;
+    void* instance;
+    void* icon;
+    void* cursor;
+    void* background;
+    const wchar_t* menuName;
+    const wchar_t* className;
+    void* smallIcon;
+} MicaWin32kWindowClassEx;
+typedef struct MicaWin32kCreateStruct {
+    void* createParams;
+    void* instance;
+    void* menu;
+    void* parent;
+    int32_t height, width, y, x;
+    int32_t style;
+    const wchar_t* title;
+    const wchar_t* className;
+    uint32_t exStyle;
+} MicaWin32kCreateStruct;
 
 MICANT_WIN32K_API void* MicaWin32kCreateWindowExW(uint32_t, const wchar_t*, const wchar_t*, uint32_t,
     int32_t, int32_t, int32_t, int32_t, void*, void*, void*, void*);
 MICANT_WIN32K_API int32_t MicaWin32kDestroyWindow(void*);
 MICANT_WIN32K_API int32_t MicaWin32kShowWindow(void*, int32_t);
 MICANT_WIN32K_API int32_t MicaWin32kSetWindowPos(void*, void*, int32_t, int32_t, int32_t, int32_t, uint32_t);
+MICANT_WIN32K_API int32_t MicaWin32kPostMessageW(void*, uint32_t, uintptr_t, intptr_t);
+MICANT_WIN32K_API intptr_t MicaWin32kSendMessageW(void*, uint32_t, uintptr_t, intptr_t);
+MICANT_WIN32K_API void MicaWin32kPostQuitMessage(int32_t);
+MICANT_WIN32K_API uint16_t MicaWin32kRegisterClassW(const wchar_t*, void*);
+MICANT_WIN32K_API intptr_t MicaWin32kDispatchMessageW(const MicaWin32kMessage*);
+MICANT_WIN32K_API intptr_t MicaWin32kSetWindowLongPtrW(void*, int32_t, intptr_t);
+MICANT_WIN32K_API intptr_t MicaWin32kGetWindowLongPtrW(void*, int32_t);
+MICANT_WIN32K_API intptr_t MicaWin32kDefWindowProcW(void*, uint32_t, uintptr_t, intptr_t);
 MICANT_WIN32K_API int32_t MicaWin32kPeekMessageW(MicaWin32kMessage*, void*, uint32_t, uint32_t, uint32_t);
 MICANT_WIN32K_API int32_t MicaWin32kGetMessageW(MicaWin32kMessage*, void*, uint32_t, uint32_t);
 MICANT_WIN32K_API int32_t MicaWin32kGetClientRect(void*, MicaWin32kRect*);

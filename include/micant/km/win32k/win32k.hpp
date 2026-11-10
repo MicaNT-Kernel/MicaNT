@@ -82,6 +82,7 @@ using HMENU     = void*;
 using HICON     = void*;
 using HCURSOR   = void*;
 using HINSTANCE = void*;
+using WNDPROC   = LRESULT (WINAPI *)(HWND, UINT, WPARAM, LPARAM);
 
 inline constexpr BOOL TRUE_VAL  = 1;
 inline constexpr BOOL FALSE_VAL = 0;
@@ -132,6 +133,7 @@ inline constexpr uint32_t SSN_NTCALLBACKRETURN              = 0x1021;
 inline constexpr UINT WM_NULL           = 0x0000;
 inline constexpr UINT WM_CREATE         = 0x0001;
 inline constexpr UINT WM_DESTROY        = 0x0002;
+inline constexpr UINT WM_NCDESTROY      = 0x0082;
 inline constexpr UINT WM_MOVE           = 0x0003;
 inline constexpr UINT WM_SIZE           = 0x0005;
 inline constexpr UINT WM_ACTIVATE       = 0x0006;
@@ -140,11 +142,13 @@ inline constexpr UINT WM_KILLFOCUS      = 0x0008;
 inline constexpr UINT WM_ENABLE         = 0x000A;
 inline constexpr UINT WM_SETTEXT        = 0x000C;
 inline constexpr UINT WM_GETTEXT        = 0x000D;
+inline constexpr UINT WM_GETTEXTLENGTH  = 0x000E;
 inline constexpr UINT WM_PAINT          = 0x000F;
 inline constexpr UINT WM_CLOSE          = 0x0010;
 inline constexpr UINT WM_QUIT           = 0x0012;
 inline constexpr UINT WM_ERASEBKGND     = 0x0014;
 inline constexpr UINT WM_SHOWWINDOW     = 0x0018;
+inline constexpr UINT WM_NCHITTEST       = 0x0084;
 inline constexpr UINT WM_COMMAND        = 0x0111;
 inline constexpr UINT WM_SYSCOMMAND     = 0x0112;
 inline constexpr UINT WM_TIMER          = 0x0113;
@@ -1312,6 +1316,8 @@ public:
         wnd->hwnd = hwnd;
         wnd->className = lpClassName ? lpClassName : L"";
         wnd->windowName = lpWindowName ? lpWindowName : L"";
+        auto wndProc = m_windowClasses.find(wnd->className);
+        if (wndProc != m_windowClasses.end()) wnd->wndProc = reinterpret_cast<void*>(wndProc->second);
         wnd->style = dwStyle;
         wnd->exStyle = dwExStyle;
         wnd->rcWindow = {x, y, x + nWidth, y + nHeight};
@@ -1351,6 +1357,9 @@ public:
         auto it = m_windows.find(hwnd);
         if (it == m_windows.end()) return FALSE_VAL;
 
+        postMessage(hwnd, WM_DESTROY, 0, 0);
+        postMessage(hwnd, WM_NCDESTROY, 0, 0);
+
         auto wnd = it->second;
         wnd->isDestroyed = true;
 
@@ -1366,6 +1375,91 @@ public:
         return TRUE_VAL;
     }
 
+    ATOM registerWindowClass(const wchar_t* name, WNDPROC proc) {
+        if (!name || !*name || !proc) return 0;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it=m_windowClasses.find(name);
+        if (it != m_windowClasses.end()) return m_windowClassAtoms[name];
+        const ATOM atom=m_nextWindowClassAtom++;
+        m_windowClasses.emplace(name,proc);
+        m_windowClassAtoms.emplace(name,atom);
+        return atom;
+    }
+
+    LRESULT dispatchMessage(const MSG& msg) {
+        WNDPROC proc=nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            auto it=m_windows.find(msg.hwnd);
+            if (it != m_windows.end()) proc=reinterpret_cast<WNDPROC>(it->second->wndProc);
+        }
+        return proc ? proc(msg.hwnd,msg.message,msg.wParam,msg.lParam) : 0;
+    }
+
+    LRESULT defWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+        if (message == 0x0081) return 1; // WM_NCCREATE
+        if (message == WM_CLOSE) { destroyWindow(hwnd); return 0; }
+        if (message == WM_NCHITTEST) return 1; // HTCLIENT
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it=m_windows.find(hwnd);
+        if (it == m_windows.end()) return 0;
+        if (message == WM_SETTEXT) {
+            const auto* text=reinterpret_cast<const wchar_t*>(lParam);
+            if (!text) return 0;
+            it->second->windowName=text;
+            postMessage(hwnd,WM_PAINT,0,0);
+            return 1;
+        }
+        if (message == WM_GETTEXTLENGTH) return static_cast<LRESULT>(it->second->windowName.size());
+        if (message == WM_GETTEXT && wParam && lParam) {
+            auto* output=reinterpret_cast<wchar_t*>(lParam);
+            const size_t capacity=static_cast<size_t>(wParam);
+            const size_t count=std::min(it->second->windowName.size(),capacity-1);
+            std::copy_n(it->second->windowName.data(),count,output);
+            output[count]=L'\0';
+            return static_cast<LRESULT>(count);
+        }
+        return 0;
+    }
+
+    intptr_t setWindowLongPtr(HWND hwnd, int32_t index, intptr_t value) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it=m_windows.find(hwnd);
+        if (it == m_windows.end()) return 0;
+        if (index == -21) {
+            const intptr_t previous=static_cast<intptr_t>(it->second->userData);
+            it->second->userData=static_cast<uint64_t>(value);
+            return previous;
+        }
+        if (index == -4) {
+            const intptr_t previous=reinterpret_cast<intptr_t>(it->second->wndProc);
+            it->second->wndProc=reinterpret_cast<void*>(value);
+            return previous;
+        }
+        if (index == -16) {
+            const intptr_t previous=static_cast<intptr_t>(it->second->style);
+            it->second->style=static_cast<uint32_t>(value);
+            return previous;
+        }
+        if (index == -20) {
+            const intptr_t previous=static_cast<intptr_t>(it->second->exStyle);
+            it->second->exStyle=static_cast<uint32_t>(value);
+            return previous;
+        }
+        return 0;
+    }
+
+    intptr_t getWindowLongPtr(HWND hwnd, int32_t index) const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it=m_windows.find(hwnd);
+        if (it == m_windows.end()) return 0;
+        if (index == -21) return static_cast<intptr_t>(it->second->userData);
+        if (index == -4) return reinterpret_cast<intptr_t>(it->second->wndProc);
+        if (index == -16) return static_cast<intptr_t>(it->second->style);
+        if (index == -20) return static_cast<intptr_t>(it->second->exStyle);
+        return 0;
+    }
+
     BOOL showWindow(HWND hwnd, int nCmdShow) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         auto it = m_windows.find(hwnd);
@@ -1379,6 +1473,7 @@ public:
             it->second->isVisible = true;
             it->second->style |= WS_VISIBLE;
         }
+        postMessage(hwnd, WM_SHOWWINDOW, it->second->isVisible ? 1U : 0U, 0);
 
         if (m_currentDesktop && m_currentDesktop->getHeap() && it->second->desktopHeapOffset != 0) {
             m_currentDesktop->getHeap()->updateClientWnd(
@@ -1394,6 +1489,8 @@ public:
         if (it == m_windows.end()) return FALSE_VAL;
 
         auto wnd = it->second;
+        const int oldX=wnd->rcWindow.left, oldY=wnd->rcWindow.top;
+        const int oldW=wnd->rcWindow.width(), oldH=wnd->rcWindow.height();
         if (!(uFlags & SWP_NOMOVE)) {
             int w = (uFlags & SWP_NOSIZE) ? wnd->rcWindow.width() : cx;
             int h = (uFlags & SWP_NOSIZE) ? wnd->rcWindow.height() : cy;
@@ -1422,6 +1519,10 @@ public:
                 wnd->desktopHeapOffset, wnd->rcWindow, wnd->rcClient,
                 wnd->style, wnd->exStyle, wnd->isVisible);
         }
+        if (wnd->rcWindow.left != oldX || wnd->rcWindow.top != oldY)
+            postMessage(hwnd, WM_MOVE, 0, static_cast<LPARAM>((wnd->rcWindow.top << 16) | (wnd->rcWindow.left & 0xFFFF)));
+        if (wnd->rcWindow.width() != oldW || wnd->rcWindow.height() != oldH)
+            postMessage(hwnd, WM_SIZE, 0, static_cast<LPARAM>((wnd->rcWindow.height() << 16) | (wnd->rcWindow.width() & 0xFFFF)));
         return TRUE_VAL;
     }
 
@@ -1442,6 +1543,12 @@ public:
         auto queue = std::make_shared<ThreadMessageQueue>(tid);
         m_threadQueues[tid] = queue;
         return queue;
+    }
+
+    void postQuitMessage(int32_t exitCode, uint32_t tid = 1) {
+        auto queue = getOrCreateThreadQueue(tid);
+        MSG msg{nullptr, WM_QUIT, static_cast<WPARAM>(exitCode), 0, 0, {0, 0}};
+        queue->postMessage(msg);
     }
 
     BOOL postMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1719,6 +1826,9 @@ private:
     std::shared_ptr<Desktop> m_currentDesktop;
 
     std::unordered_map<HWND, std::shared_ptr<WND>> m_windows;
+    std::unordered_map<std::wstring, WNDPROC> m_windowClasses;
+    std::unordered_map<std::wstring, ATOM> m_windowClassAtoms;
+    ATOM m_nextWindowClassAtom{0xC001};
     std::unordered_map<uint32_t, std::shared_ptr<ThreadMessageQueue>> m_threadQueues;
 
     GdiEngine m_gdiEngine;
@@ -1753,6 +1863,26 @@ inline BOOL WINAPI NtUserDestroyWindow(HWND hWnd) noexcept {
     return TitanWin32kSubsystem::Instance().destroyWindow(hWnd);
 }
 
+inline ATOM WINAPI NtUserRegisterClassW(const wchar_t* className, WNDPROC proc) noexcept {
+    return TitanWin32kSubsystem::Instance().registerWindowClass(className,proc);
+}
+
+inline LRESULT WINAPI NtUserDispatchMessage(const MSG* msg) noexcept {
+    return msg ? TitanWin32kSubsystem::Instance().dispatchMessage(*msg) : 0;
+}
+
+inline LRESULT WINAPI NtUserDefWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept {
+    return TitanWin32kSubsystem::Instance().defWindowProc(hwnd,message,wParam,lParam);
+}
+
+inline intptr_t WINAPI NtUserSetWindowLongPtr(HWND hwnd, int32_t index, intptr_t value) noexcept {
+    return TitanWin32kSubsystem::Instance().setWindowLongPtr(hwnd,index,value);
+}
+
+inline intptr_t WINAPI NtUserGetWindowLongPtr(HWND hwnd, int32_t index) noexcept {
+    return TitanWin32kSubsystem::Instance().getWindowLongPtr(hwnd,index);
+}
+
 inline BOOL WINAPI NtUserShowWindow(HWND hWnd, int nCmdShow) noexcept {
     return TitanWin32kSubsystem::Instance().showWindow(hWnd, nCmdShow);
 }
@@ -1764,6 +1894,10 @@ inline BOOL WINAPI NtUserSetWindowPos(HWND hWnd, HWND hWndInsertAfter,
 
 inline BOOL WINAPI NtUserPostMessage(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) noexcept {
     return TitanWin32kSubsystem::Instance().postMessage(hWnd, Msg, wParam, lParam);
+}
+
+inline void WINAPI NtUserPostQuitMessage(int32_t exitCode) noexcept {
+    TitanWin32kSubsystem::Instance().postQuitMessage(exitCode);
 }
 
 inline LRESULT WINAPI NtUserSendMessage(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) noexcept {

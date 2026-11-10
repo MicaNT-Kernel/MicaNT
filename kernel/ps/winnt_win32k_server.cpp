@@ -18,7 +18,14 @@ void* MicaWin32kCreateWindowExW(uint32_t ex, const wchar_t* cls,
     void* parent, void* menu, void* instance, void* param) {
     auto& server = TitanWin32kSubsystem::Instance();
     server.initialize();
-    return server.createWindowEx(ex, cls, title, style, x, y, w, h, parent, menu, instance, param);
+    void* hwnd=server.createWindowEx(ex, cls, title, style, x, y, w, h, parent, menu, instance, param);
+    if (!hwnd || !server.getWindowLongPtr(hwnd,-4)) return hwnd;
+    MicaWin32kCreateStruct create{param,instance,menu,parent,h,w,y,x,static_cast<int32_t>(style),title,cls,ex};
+    MSG msg{hwnd,0x0081,1,reinterpret_cast<intptr_t>(&create),0,{0,0}}; // WM_NCCREATE
+    if (!server.dispatchMessage(msg)) { server.destroyWindow(hwnd); return nullptr; }
+    msg.message=0x0001; msg.wParam=0; // WM_CREATE
+    if (server.dispatchMessage(msg) == -1) { server.destroyWindow(hwnd); return nullptr; }
+    return hwnd;
 }
 int32_t MicaWin32kDestroyWindow(void* hwnd) {
     return NtUserDestroyWindow(hwnd);
@@ -29,6 +36,32 @@ int32_t MicaWin32kShowWindow(void* hwnd, int32_t cmd) {
 int32_t MicaWin32kSetWindowPos(void* hwnd, void* after,
     int32_t x, int32_t y, int32_t w, int32_t h, uint32_t flags) {
     return NtUserSetWindowPos(hwnd, after, x, y, w, h, flags);
+}
+int32_t MicaWin32kPostMessageW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
+    return NtUserPostMessage(hwnd, message, wParam, lParam);
+}
+intptr_t MicaWin32kSendMessageW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
+    return NtUserSendMessage(hwnd, message, wParam, lParam);
+}
+void MicaWin32kPostQuitMessage(int32_t exitCode) {
+    NtUserPostQuitMessage(exitCode);
+}
+uint16_t MicaWin32kRegisterClassW(const wchar_t* className, void* proc) {
+    return NtUserRegisterClassW(className,reinterpret_cast<WNDPROC>(proc));
+}
+intptr_t MicaWin32kDispatchMessageW(const MicaWin32kMessage* input) {
+    if (!input) return 0;
+    MSG msg{input->hwnd,input->message,input->wParam,input->lParam,input->time,{input->pt.x,input->pt.y}};
+    return NtUserDispatchMessage(&msg);
+}
+intptr_t MicaWin32kSetWindowLongPtrW(void* hwnd, int32_t index, intptr_t value) {
+    return NtUserSetWindowLongPtr(hwnd,index,value);
+}
+intptr_t MicaWin32kGetWindowLongPtrW(void* hwnd, int32_t index) {
+    return NtUserGetWindowLongPtr(hwnd,index);
+}
+intptr_t MicaWin32kDefWindowProcW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
+    return NtUserDefWindowProc(hwnd,message,wParam,lParam);
 }
 int32_t MicaWin32kPeekMessageW(MicaWin32kMessage* out, void* hwnd,
     uint32_t min, uint32_t max, uint32_t remove) {

@@ -40,11 +40,19 @@ int32_t g_cursorShowCount = 0;
 WinNtPoint g_cursorPos{1920, 1080};
 int32_t g_activePixelFormat = 1;
 int32_t g_imeOpenStatus = 0;
+intptr_t AuditWindowProc(void*,uint32_t message,uintptr_t,intptr_t) noexcept {
+    return message == 0x0081 ? 1 : 0;
+}
 } // namespace
 
 // user32.dll implementations
 uint16_t User32_RegisterClassExW(const void* lpWndClassEx) noexcept {
-    return lpWndClassEx ? 0xC001U : 0U;
+    if (!lpWndClassEx) return 0;
+    const auto* wc=static_cast<const MicaWin32kWindowClassEx*>(lpWndClassEx);
+    if (wc->cbSize < sizeof(MicaWin32kWindowClassEx) || !wc->className || !wc->wndProc) return 0;
+    using Fn=uint16_t (*)(const wchar_t*,void*);
+    auto fn=Win32kProc<Fn>("MicaWin32kRegisterClassW");
+    return fn ? fn(wc->className,wc->wndProc) : 0;
 }
 
 void* User32_CreateWindowExW(
@@ -74,11 +82,18 @@ int32_t User32_ShowWindow(void* hWnd, int32_t nCmdShow) noexcept {
 }
 
 int32_t User32_UpdateWindow(void* hWnd) noexcept {
-    return hWnd ? 1 : 0;
+    if (!hWnd) return 0;
+    using Fn=intptr_t (*)(void*,uint32_t,uintptr_t,intptr_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kSendMessageW");
+    if (!fn) return 0;
+    fn(hWnd,WM_PAINT_OFFICIAL,0,0);
+    return 1;
 }
 
-intptr_t User32_DefWindowProcW(void* /*hWnd*/, uint32_t /*Msg*/, uintptr_t /*wParam*/, intptr_t /*lParam*/) noexcept {
-    return 0;
+intptr_t User32_DefWindowProcW(void* hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam) noexcept {
+    using Fn=intptr_t (*)(void*,uint32_t,uintptr_t,intptr_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kDefWindowProcW");
+    return fn ? fn(hWnd,Msg,wParam,lParam) : 0;
 }
 
 int32_t User32_PeekMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t wMsgFilterMin, uint32_t wMsgFilterMax, uint32_t wRemoveMsg) noexcept {
@@ -109,11 +124,28 @@ int32_t User32_TranslateMessage(const WinNtMsg* lpMsg) noexcept {
 
 intptr_t User32_DispatchMessageW(const WinNtMsg* lpMsg) noexcept {
     if (!lpMsg) return 0;
-    return User32_DefWindowProcW(lpMsg->hwnd, lpMsg->message, lpMsg->wParam, lpMsg->lParam);
+    using Fn=intptr_t (*)(const MicaWin32kMessage*);
+    auto fn=Win32kProc<Fn>("MicaWin32kDispatchMessageW");
+    MicaWin32kMessage msg{lpMsg->hwnd,lpMsg->message,lpMsg->wParam,lpMsg->lParam,lpMsg->time,{lpMsg->pt.x,lpMsg->pt.y}};
+    return fn ? fn(&msg) : User32_DefWindowProcW(lpMsg->hwnd,lpMsg->message,lpMsg->wParam,lpMsg->lParam);
 }
 
-void User32_PostQuitMessage(int32_t /*nExitCode*/) noexcept {
+void User32_PostQuitMessage(int32_t exitCode) noexcept {
+    using Fn=void (*)(int32_t); auto fn=Win32kProc<Fn>("MicaWin32kPostQuitMessage");
+    if (fn) fn(exitCode);
     g_primaryWindow.pendingMessages = 0;
+}
+
+int32_t User32_PostMessageW(void* hWnd, uint32_t message, uintptr_t wParam, intptr_t lParam) noexcept {
+    using Fn=int32_t (*)(void*,uint32_t,uintptr_t,intptr_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kPostMessageW");
+    return fn ? fn(hWnd,message,wParam,lParam) : 0;
+}
+
+intptr_t User32_SendMessageW(void* hWnd, uint32_t message, uintptr_t wParam, intptr_t lParam) noexcept {
+    using Fn=intptr_t (*)(void*,uint32_t,uintptr_t,intptr_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kSendMessageW");
+    return fn ? fn(hWnd,message,wParam,lParam) : 0;
 }
 
 int32_t User32_GetClientRect(void* hWnd, WinNtRect* lpRect) noexcept {
@@ -132,15 +164,14 @@ int32_t User32_AdjustWindowRectEx(WinNtRect* lpRect, uint32_t /*dwStyle*/, int32
     return lpRect ? 1 : 0;
 }
 
-intptr_t User32_SetWindowLongPtrW(void* hWnd, int32_t /*nIndex*/, intptr_t dwNewLong) noexcept {
-    if (!hWnd) return 0;
-    intptr_t prev = g_primaryWindow.userData;
-    g_primaryWindow.userData = dwNewLong;
-    return prev;
+intptr_t User32_SetWindowLongPtrW(void* hWnd, int32_t nIndex, intptr_t dwNewLong) noexcept {
+    using Fn=intptr_t (*)(void*,int32_t,intptr_t); auto fn=Win32kProc<Fn>("MicaWin32kSetWindowLongPtrW");
+    return fn ? fn(hWnd,nIndex,dwNewLong) : 0;
 }
 
-intptr_t User32_GetWindowLongPtrW(void* hWnd, int32_t /*nIndex*/) noexcept {
-    return hWnd ? g_primaryWindow.userData : 0;
+intptr_t User32_GetWindowLongPtrW(void* hWnd, int32_t nIndex) noexcept {
+    using Fn=intptr_t (*)(void*,int32_t); auto fn=Win32kProc<Fn>("MicaWin32kGetWindowLongPtrW");
+    return fn ? fn(hWnd,nIndex) : 0;
 }
 
 int32_t User32_SetWindowPos(void* hWnd, void* hWndInsertAfter, int32_t X, int32_t Y, int32_t cx, int32_t cy, uint32_t uFlags) noexcept {
@@ -334,8 +365,11 @@ Horizon111User32Gdi32Imm32AuditReport WinNtUser32Gdi32Imm32Coordinator::runUser3
     rep.gdi32ExportCount  = 14;
     rep.imm32ExportCount  = 8;
 
-    uint32_t dummyWndClass[12]{sizeof(dummyWndClass)};
-    if (User32_RegisterClassExW(dummyWndClass) != 0) {
+    MicaWin32kWindowClassEx dummyWndClass{};
+    dummyWndClass.cbSize=sizeof(dummyWndClass);
+    dummyWndClass.wndProc=reinterpret_cast<void*>(&AuditWindowProc);
+    dummyWndClass.className=L"PrismXGameWindowClass";
+    if (User32_RegisterClassExW(&dummyWndClass) != 0) {
         void* hwnd = User32_CreateWindowExW(
             0, L"PrismXGameWindowClass", L"MicaNT DirectX 12 Ultimate Game",
             WS_OVERLAPPEDWINDOW_OFFICIAL | WS_VISIBLE_OFFICIAL,
@@ -437,6 +471,12 @@ __declspec(dllexport) intptr_t DispatchMessageW(const micant::um::winnt_user32_g
 }
 __declspec(dllexport) void PostQuitMessage(int32_t nExitCode) {
     micant::um::winnt_user32_gdi32_imm32_abi::User32_PostQuitMessage(nExitCode);
+}
+__declspec(dllexport) int32_t PostMessageW(void* hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_PostMessageW(hWnd,Msg,wParam,lParam);
+}
+__declspec(dllexport) intptr_t SendMessageW(void* hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::User32_SendMessageW(hWnd,Msg,wParam,lParam);
 }
 __declspec(dllexport) int32_t GetClientRect(void* hWnd, micant::um::winnt_user32_gdi32_imm32_abi::WinNtRect* lpRect) {
     return micant::um::winnt_user32_gdi32_imm32_abi::User32_GetClientRect(hWnd, lpRect);
