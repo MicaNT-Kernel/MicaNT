@@ -136,7 +136,13 @@ void InitializeBatterySubsystem() noexcept {
     sysBat.maxCapacity = bInfo.fullChargedCapacity;
     sysBat.remainingCapacity = bStatus.capacity;
     sysBat.rate = bStatus.rate;
-    sysBat.estimatedTime = (bStatus.rate < 0) ? (bStatus.capacity * 3600) / static_cast<uint32_t>(std::abs(bStatus.rate)) : 0xFFFFFFFF;
+    sysBat.estimatedTime = BATTERY_UNKNOWN_TIME;
+    if (bStatus.rate < 0 && bStatus.rate != BATTERY_UNKNOWN_RATE) {
+        const uint64_t dischargeRate = static_cast<uint64_t>(-
+            static_cast<int64_t>(bStatus.rate));
+        const uint64_t seconds = static_cast<uint64_t>(bStatus.capacity) * 3600U / dischargeRate;
+        sysBat.estimatedTime = static_cast<uint32_t>(std::min<uint64_t>(seconds, UINT32_MAX - 1U));
+    }
 
     po.updateBatteryState(sysBat);
 }

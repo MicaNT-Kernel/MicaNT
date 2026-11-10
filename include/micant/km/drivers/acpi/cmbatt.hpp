@@ -114,15 +114,19 @@ public:
         status.powerState = acOnline ? po::bms::BATTERY_POWER_ON_LINE : 0;
         status.capacity = capacity;
         status.voltage = voltage;
-        if (unit == 1 && voltage != 0) {
-            const uint64_t converted = static_cast<uint64_t>(rawRate) * voltage / 1000U;
-            status.rate = clampSigned32(converted);
+        if (rawRate == 0 || rawRate == UINT32_MAX) {
+            status.rate = po::bms::BATTERY_UNKNOWN_RATE;
         } else {
-            status.rate = clampSigned32(rawRate);
-        }
-        if (state & 0x01U) {
-            status.powerState |= po::bms::BATTERY_DISCHARGING;
-            status.rate = -status.rate;
+            if (unit == 1 && voltage != 0) {
+                const uint64_t converted = static_cast<uint64_t>(rawRate) * voltage / 1000U;
+                status.rate = clampSigned32(converted);
+            } else {
+                status.rate = clampSigned32(rawRate);
+            }
+            if (state & 0x01U) {
+                status.powerState |= po::bms::BATTERY_DISCHARGING;
+                status.rate = -status.rate;
+            }
         }
         if (state & 0x02U) status.powerState |= po::bms::BATTERY_CHARGING;
         if (state & 0x04U) status.powerState |= po::bms::BATTERY_CRITICAL;

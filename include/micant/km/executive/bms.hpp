@@ -100,6 +100,8 @@ struct BatteryStatus {
     uint32_t voltage{0};
     int32_t  rate{0};
 };
+inline constexpr int32_t BATTERY_UNKNOWN_RATE = -1;
+inline constexpr uint32_t BATTERY_UNKNOWN_TIME = UINT32_MAX;
 
 struct BatteryReportingScale {
     uint32_t Granularity;
@@ -339,10 +341,12 @@ public:
     // Estimated Run-Time Remaining (Seconds)
     [[nodiscard]] uint32_t getEstimatedRuntimeSeconds() const noexcept {
         std::lock_guard<std::mutex> lock(m_lock);
-        if (m_status.rate >= 0) return 0xFFFFFFFF; // Indefinite on AC or charging
+        if (m_status.rate >= 0 || m_status.rate == BATTERY_UNKNOWN_RATE)
+            return BATTERY_UNKNOWN_TIME;
         uint32_t dischargeMw = static_cast<uint32_t>(std::abs(m_status.rate));
-        if (dischargeMw == 0) return 0xFFFFFFFF;
-        return (m_status.capacity * 3600) / dischargeMw;
+        if (dischargeMw == 0) return BATTERY_UNKNOWN_TIME;
+        const uint64_t seconds = static_cast<uint64_t>(m_status.capacity) * 3600U / dischargeMw;
+        return static_cast<uint32_t>(std::min<uint64_t>(seconds, UINT32_MAX - 1U));
     }
 
     // Time to Full Charge (Seconds)
@@ -418,16 +422,16 @@ public:
                     }
                     case BatteryQueryInfoLevel::BatteryEstimatedTime: {
                         if (outLen < sizeof(uint32_t)) return NtStatus::BufferTooSmall;
-                        uint32_t runtime = 0xFFFFFFFF;
+                        uint32_t runtime = BATTERY_UNKNOWN_TIME;
                         const int32_t rate = query->atRate != 0
                             ? static_cast<int32_t>(query->atRate) : m_status.rate;
-                        if (rate < 0) {
+                        if (rate < 0 && rate != BATTERY_UNKNOWN_RATE) {
                             const uint32_t dischargeRate = static_cast<uint32_t>(-
                                 static_cast<int64_t>(rate));
                             if (dischargeRate > 0) {
                                 const uint64_t seconds = static_cast<uint64_t>(m_status.capacity) * 3600U /
                                     dischargeRate;
-                                runtime = static_cast<uint32_t>(std::min<uint64_t>(seconds, 0xFFFFFFFEU));
+                                runtime = static_cast<uint32_t>(std::min<uint64_t>(seconds, UINT32_MAX - 1U));
                             }
                         }
                         *reinterpret_cast<uint32_t*>(outBuf) = runtime;
