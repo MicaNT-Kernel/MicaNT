@@ -558,7 +558,7 @@ def run_local_build():
         "-mno-red-zone", "-mno-stack-arg-probe", "-O2", "-Iinclude", "-Itools",
         "-Wl,--subsystem,console", "-Wl,-e,_start", "-nostdlib",
         "tools/explorer_shell_app.cpp", "tools/explorer_shell/taskbar.cpp",
-        "tools/explorer_shell/start_menu.cpp",
+        "tools/explorer_shell/start_menu.cpp", "tools/explorer_shell/desktop.cpp",
         win32k_implib, "-o", "build/explorer.exe",
     ]
     explorer_result = subprocess.run(explorer_cmd, cwd=REPO_ROOT, capture_output=True, text=True)

@@ -11,6 +11,7 @@
 #include "gui_common.hpp"
 #include "explorer_shell/taskbar.hpp"
 #include "explorer_shell/start_menu.hpp"
+#include "explorer_shell/desktop.hpp"
 
 namespace {
 
@@ -19,6 +20,7 @@ using namespace micant_gui;
 constexpr uint32_t WS_VISIBLE = 0x10000000U;
 constexpr uint32_t WS_POPUP = 0x80000000U;
 constexpr uint32_t WS_OVERLAPPEDWINDOW = 0x00CF0000U;
+constexpr uint32_t WS_EX_TOPMOST = 0x00000008U;
 constexpr uint32_t SW_HIDE = 0;
 constexpr uint32_t SW_SHOW = 5;
 constexpr uint32_t SW_RESTORE = 9;
@@ -50,6 +52,9 @@ struct ShellState {
     void* desktop{};
     void* desktopDc{};
     uint32_t* desktopPixels{};
+    void* taskbar{};
+    void* taskbarDc{};
+    uint32_t* taskbarPixels{};
     void* startMenu{};
     void* menuDc{};
     uint32_t* menuPixels{};
@@ -64,6 +69,7 @@ struct ShellState {
 ShellState g{};
 constexpr wchar_t kClassName[] = L"MicaNT.Explorer.Desktop";
 constexpr wchar_t kDesktopTitle[] = L"MicaNT Desktop";
+constexpr wchar_t kTaskbarTitle[] = L"MicaNT Taskbar";
 constexpr wchar_t kStartTitle[] = L"Start";
 
 inline uint32_t rgb(uint8_t r, uint8_t green, uint8_t b) noexcept {
@@ -91,88 +97,6 @@ void text(uint32_t* p, uint32_t w, uint32_t h, int32_t x, int32_t y,
         if (gx < 0 || gx + 8 > static_cast<int32_t>(w) || y < 0 || y + 8 > static_cast<int32_t>(h)) break;
         DrawChar(p, w, static_cast<uint32_t>(gx), static_cast<uint32_t>(y), value[i], color);
     }
-}
-
-void icon(uint32_t* p, uint32_t w, uint32_t h, int32_t x, int32_t y, View kind) noexcept {
-    fill(p, w, h, x + 4, y + 5, 34, 28, rgb(0, 0, 0));
-    if (kind == View::MyComputer) {
-        fill(p, w, h, x + 5, y + 2, 29, 19, rgb(28, 93, 170));
-        fill(p, w, h, x + 8, y + 5, 23, 13, rgb(117, 199, 244));
-        fill(p, w, h, x + 1, y + 22, 37, 8, rgb(210, 218, 225));
-        fill(p, w, h, x + 4, y + 24, 31, 3, rgb(94, 107, 121));
-    } else if (kind == View::MyDocuments) {
-        fill(p, w, h, x + 7, y + 3, 25, 27, rgb(240, 197, 59));
-        fill(p, w, h, x + 11, y + 8, 16, 2, rgb(255, 255, 240));
-        fill(p, w, h, x + 11, y + 13, 16, 2, rgb(255, 255, 240));
-        fill(p, w, h, x + 11, y + 18, 12, 2, rgb(255, 255, 240));
-    } else if (kind == View::ControlPanel) {
-        fill(p, w, h, x + 5, y + 4, 29, 25, rgb(215, 221, 228));
-        fill(p, w, h, x + 9, y + 8, 8, 8, rgb(68, 137, 199));
-        fill(p, w, h, x + 21, y + 8, 8, 8, rgb(228, 116, 52));
-        fill(p, w, h, x + 9, y + 19, 8, 7, rgb(91, 165, 91));
-        fill(p, w, h, x + 21, y + 19, 8, 7, rgb(190, 79, 79));
-    } else if (kind == View::Network) {
-        fill(p, w, h, x + 5, y + 6, 29, 23, rgb(232, 236, 240));
-        fill(p, w, h, x + 8, y + 9, 23, 17, rgb(59, 129, 196));
-        fill(p, w, h, x + 11, y + 12, 17, 11, rgb(128, 202, 240));
-    } else {
-        fill(p, w, h, x + 8, y + 5, 24, 25, rgb(195, 210, 221));
-        fill(p, w, h, x + 11, y + 9, 18, 17, rgb(238, 243, 247));
-    }
-}
-
-void desktopIcon(uint32_t* p, int32_t y, View view, const char* label) noexcept {
-    icon(p, g.screenW, g.screenH - TASKBAR_H, 22, y, view);
-    text(p, g.screenW, g.screenH - TASKBAR_H, 16, y + 36, label, rgb(255, 255, 255));
-}
-
-void drawWallpaper() noexcept {
-    const uint32_t w = g.screenW, h = g.screenH - TASKBAR_H;
-    for (uint32_t y = 0; y < h; ++y) {
-        for (uint32_t x = 0; x < w; ++x) {
-            uint32_t c;
-            const int32_t horizon = static_cast<int32_t>(h * 48 / 100);
-            if (static_cast<int32_t>(y) < horizon) {
-                const uint32_t t = static_cast<uint32_t>(y) * 100 / (horizon ? horizon : 1);
-                c = rgb(static_cast<uint8_t>(46 + t / 4), static_cast<uint8_t>(133 + t / 3),
-                        static_cast<uint8_t>(205 + t / 6));
-                const int32_t sx = static_cast<int32_t>(x) - static_cast<int32_t>(w * 78 / 100);
-                const int32_t sy = static_cast<int32_t>(y) - static_cast<int32_t>(h * 15 / 100);
-                if (sx * sx + sy * sy < static_cast<int32_t>(h * h / 150)) c = rgb(248, 222, 141);
-            } else {
-                const int32_t dx = static_cast<int32_t>(x) - static_cast<int32_t>(w * 57 / 100);
-                const int32_t dy = static_cast<int32_t>(y) - horizon;
-                const int32_t curve = (dx * dx) / static_cast<int32_t>(w * 5) + horizon - static_cast<int32_t>(h * 6 / 100);
-                if (static_cast<int32_t>(y) < curve) c = rgb(37, 126, 49);
-                else c = rgb(static_cast<uint8_t>(52 + (x % 23)), static_cast<uint8_t>(151 + (x % 31)), 59);
-                const int32_t dx2 = static_cast<int32_t>(x) - static_cast<int32_t>(w * 15 / 100);
-                const int32_t curve2 = (dx2 * dx2) / static_cast<int32_t>(w * 4) + horizon + static_cast<int32_t>(h * 1 / 100);
-                if (static_cast<int32_t>(y) > curve2) c = rgb(41, 139, 48);
-            }
-            g.desktopPixels[static_cast<size_t>(y) * w + x] = c;
-        }
-    }
-
-    desktopIcon(g.desktopPixels, 28, View::MyComputer, "My Computer");
-    desktopIcon(g.desktopPixels, 124, View::MyDocuments, "My Documents");
-    desktopIcon(g.desktopPixels, 220, View::Network, "Network Places");
-    desktopIcon(g.desktopPixels, 316, View::RecycleBin, "Recycle Bin");
-
-    micant::explorer::TaskbarButton buttons[MAX_APP_WINDOWS]{};
-    size_t buttonCount = 0;
-    for (size_t i = 0; i < MAX_APP_WINDOWS; ++i) {
-        if (!g.apps[i].open) continue;
-        auto& button = buttons[buttonCount++];
-        button.title = g.apps[i].view == View::MyComputer ? "My Computer" :
-                       g.apps[i].view == View::MyDocuments ? "My Documents" :
-                       g.apps[i].view == View::ControlPanel ? "Control Panel" :
-                       g.apps[i].view == View::RecycleBin ? "Recycle Bin" : "Network Places";
-        button.iconColor = g.apps[i].view == View::ControlPanel ? rgb(68, 137, 199) :
-                           g.apps[i].view == View::RecycleBin ? rgb(195, 210, 221) : rgb(236, 190, 67);
-        button.active = g.activeApp == i;
-    }
-    micant::explorer::DrawTaskbar(g.desktopPixels, g.screenW, g.screenH, TASKBAR_H,
-                                  buttons, buttonCount, g.clockText);
 }
 
 void drawAppWindow(AppWindow& app) noexcept {
@@ -222,10 +146,36 @@ void present(void* dc) noexcept {
     if (dc) MicaWin32kPresentDC(dc);
 }
 
+size_t collectTaskbarButtons(micant::explorer::TaskbarButton* buttons) noexcept {
+    size_t count = 0;
+    for (size_t i = 0; buttons && i < MAX_APP_WINDOWS; ++i) {
+        if (!g.apps[i].open) continue;
+        auto& button = buttons[count++];
+        button.title = g.apps[i].view == View::MyComputer ? "My Computer" :
+                       g.apps[i].view == View::MyDocuments ? "My Documents" :
+                       g.apps[i].view == View::ControlPanel ? "Control Panel" :
+                       g.apps[i].view == View::RecycleBin ? "Recycle Bin" : "Network Places";
+        button.iconColor = g.apps[i].view == View::ControlPanel ? rgb(68, 137, 199) :
+                           g.apps[i].view == View::RecycleBin ? rgb(195, 210, 221) : rgb(236, 190, 67);
+        button.active = g.activeApp == i;
+    }
+    return count;
+}
+
+void redrawTaskbar() noexcept {
+    if (!g.taskbarPixels) return;
+    micant::explorer::TaskbarButton buttons[MAX_APP_WINDOWS]{};
+    const size_t count = collectTaskbarButtons(buttons);
+    micant::explorer::DrawTaskbar(g.taskbarPixels, g.screenW, TASKBAR_H, TASKBAR_H,
+                                  buttons, count, g.clockText);
+    present(g.taskbarDc);
+}
+
 void redrawDesktop() noexcept {
     if (!g.desktopPixels) return;
-    drawWallpaper();
+    micant::explorer::DrawDesktop(g.desktopPixels, g.screenW, g.screenH - TASKBAR_H);
     present(g.desktopDc);
+    redrawTaskbar();
 }
 
 AppWindow* appFromHwnd(void* hwnd) noexcept {
@@ -317,45 +267,55 @@ void updateClock() noexcept {
     g.clockText[6] = pm ? 'P' : 'A';
     g.clockText[7] = 'M';
     g.clockText[8] = '\0';
-    redrawDesktop();
+    redrawTaskbar();
 }
 
 intptr_t WindowProc(void* hwnd, uint32_t message, uintptr_t, intptr_t lParam) {
     if (message == WM_NCCREATE) return 1;
+    if (hwnd == g.taskbar && message == WM_LBUTTONUP) {
+        const int32_t x = static_cast<int16_t>(static_cast<uint32_t>(lParam) & 0xFFFFU);
+        const int32_t y = static_cast<int16_t>((static_cast<uint32_t>(lParam) >> 16) & 0xFFFFU);
+        if (y < 0 || y >= static_cast<int32_t>(TASKBAR_H)) return 0;
+        if (x < 104) {
+            toggleStart();
+        } else if (x < static_cast<int32_t>(g.screenW) - 124) {
+            size_t taskCount = 0;
+            for (const auto& app : g.apps) if (app.open) ++taskCount;
+            const int32_t available = static_cast<int32_t>(g.screenW) - 126 - 112;
+            const int32_t taskWidth = taskCount == 0 || available <= 0 ? 0 :
+                (available / static_cast<int32_t>(taskCount) < 146
+                    ? available / static_cast<int32_t>(taskCount) : 146);
+            int32_t slotLeft = 112;
+            for (size_t i = 0; i < MAX_APP_WINDOWS && taskWidth >= 64; ++i) {
+                if (!g.apps[i].open) continue;
+                if (x >= slotLeft && x < slotLeft + taskWidth - 4) {
+                    g.activeApp = static_cast<uint8_t>(i);
+                    MicaWin32kShowWindow(g.apps[i].hwnd, SW_RESTORE);
+                    MicaWin32kSetWindowPos(g.apps[i].hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                    redrawTaskbar();
+                    break;
+                }
+                slotLeft += taskWidth;
+            }
+        }
+        return 0;
+    }
     if (hwnd == g.desktop && message == WM_LBUTTONUP) {
         const int32_t x = static_cast<int16_t>(static_cast<uint32_t>(lParam) & 0xFFFFU);
         const int32_t y = static_cast<int16_t>((static_cast<uint32_t>(lParam) >> 16) & 0xFFFFU);
-        if (y >= static_cast<int32_t>(g.screenH - TASKBAR_H)) {
-            if (x < 104) toggleStart();
-            else if (x < static_cast<int32_t>(g.screenW) - 124) {
-                size_t taskCount = 0;
-                for (const auto& app : g.apps) if (app.open) ++taskCount;
-                const int32_t taskRight = static_cast<int32_t>(g.screenW) - 126;
-                const int32_t available = taskRight > 112 ? taskRight - 112 : 0;
-                const int32_t taskWidth = taskCount == 0 ? 0 :
-                    (available / static_cast<int32_t>(taskCount) < 146
-                        ? available / static_cast<int32_t>(taskCount) : 146);
-                int32_t slotLeft = 112;
-                for (size_t i = 0; i < MAX_APP_WINDOWS && taskWidth >= 64; ++i) {
-                    if (!g.apps[i].open) continue;
-                    if (x >= slotLeft && x < slotLeft + taskWidth - 4) {
-                        g.activeApp = static_cast<uint8_t>(i);
-                        MicaWin32kShowWindow(g.apps[i].hwnd, SW_RESTORE);
-                        MicaWin32kSetWindowPos(g.apps[i].hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-                        redrawDesktop();
-                        break;
-                    }
-                    slotLeft += taskWidth;
-                }
-            }
-        } else if (g.startOpen) {
+        if (g.startOpen) {
             g.startOpen = false;
             MicaWin32kShowWindow(g.startMenu, SW_HIDE);
             redrawDesktop();
-        } else if (x < 86 && y >= 28 && y < 112) openView(View::MyComputer);
-        else if (x < 86 && y >= 124 && y < 208) openView(View::MyDocuments);
-        else if (x < 86 && y >= 220 && y < 304) openView(View::Network);
-        else if (x < 86 && y >= 316 && y < 400) openView(View::RecycleBin);
+        } else {
+            switch (micant::explorer::HitTestDesktop(x, y)) {
+                case micant::explorer::DesktopAction::MyComputer: openView(View::MyComputer); break;
+                case micant::explorer::DesktopAction::MyDocuments: openView(View::MyDocuments); break;
+                case micant::explorer::DesktopAction::Network: openView(View::Network); break;
+                case micant::explorer::DesktopAction::RecycleBin: openView(View::RecycleBin); break;
+                case micant::explorer::DesktopAction::None: break;
+            }
+        }
         return 0;
     }
     if (hwnd == g.startMenu && message == WM_LBUTTONUP) {
@@ -409,19 +369,33 @@ extern "C" void _start(const char* = nullptr) {
     }
 
     g.desktop = MicaWin32kCreateWindowExW(0, kClassName, kDesktopTitle,
-        WS_POPUP | WS_VISIBLE, 0, 0, static_cast<int32_t>(g.screenW), static_cast<int32_t>(g.screenH),
+        WS_POPUP | WS_VISIBLE, 0, 0, static_cast<int32_t>(g.screenW),
+        static_cast<int32_t>(g.screenH - TASKBAR_H),
         nullptr, nullptr, nullptr, nullptr);
     if (!g.desktop) for (;;) __asm__ __volatile__("pause");
     g.desktopDc = MicaWin32kGetDC(g.desktop);
     void* desktopBits = nullptr;
     void* desktopBitmap = MicaWin32kCreateDibSection(g.desktopDc, static_cast<int32_t>(g.screenW),
-        static_cast<int32_t>(g.screenH), &desktopBits);
+        static_cast<int32_t>(g.screenH - TASKBAR_H), &desktopBits);
     if (!desktopBitmap || !desktopBits) for (;;) __asm__ __volatile__("pause");
     MicaWin32kSelectObject(g.desktopDc, desktopBitmap);
     g.desktopPixels = static_cast<uint32_t*>(desktopBits);
 
+    const int32_t taskbarY = static_cast<int32_t>(g.screenH - TASKBAR_H);
+    g.taskbar = MicaWin32kCreateWindowExW(WS_EX_TOPMOST, kClassName, kTaskbarTitle,
+        WS_POPUP | WS_VISIBLE, 0, taskbarY, static_cast<int32_t>(g.screenW), TASKBAR_H,
+        nullptr, nullptr, nullptr, nullptr);
+    if (!g.taskbar) for (;;) __asm__ __volatile__("pause");
+    g.taskbarDc = MicaWin32kGetDC(g.taskbar);
+    void* taskbarBits = nullptr;
+    void* taskbarBitmap = MicaWin32kCreateDibSection(g.taskbarDc, static_cast<int32_t>(g.screenW),
+        TASKBAR_H, &taskbarBits);
+    if (!taskbarBitmap || !taskbarBits) for (;;) __asm__ __volatile__("pause");
+    MicaWin32kSelectObject(g.taskbarDc, taskbarBitmap);
+    g.taskbarPixels = static_cast<uint32_t*>(taskbarBits);
+
     const int32_t menuY = static_cast<int32_t>(g.screenH) - static_cast<int32_t>(MENU_H) - static_cast<int32_t>(TASKBAR_H);
-    g.startMenu = MicaWin32kCreateWindowExW(0, kClassName, kStartTitle, WS_POPUP,
+    g.startMenu = MicaWin32kCreateWindowExW(WS_EX_TOPMOST, kClassName, kStartTitle, WS_POPUP,
         0, menuY, MENU_W, MENU_H, nullptr, nullptr, nullptr, nullptr);
     if (g.startMenu) {
         g.menuDc = MicaWin32kGetDC(g.startMenu);
