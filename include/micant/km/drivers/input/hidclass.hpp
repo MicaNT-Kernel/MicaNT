@@ -1755,16 +1755,7 @@ inline void InitializeHidSubsystemExports() {
     ldr.registerExport("hid.dll", "HidP_GetUsageValue", reinterpret_cast<void*>(HidP_GetUsageValue));
     ldr.registerExport("hid.dll", "HidP_SetUsageValue", reinterpret_cast<void*>(HidP_SetUsageValue));
 
-    // 2. Register hidparse.sys exports
-    ldr.registerExport("hidparse.sys", "HidP_GetCaps", reinterpret_cast<void*>(HidP_GetCaps));
-    ldr.registerExport("hidparse.sys", "HidP_GetButtonCaps", reinterpret_cast<void*>(HidP_GetButtonCaps));
-    ldr.registerExport("hidparse.sys", "HidP_GetValueCaps", reinterpret_cast<void*>(HidP_GetValueCaps));
-    ldr.registerExport("hidparse.sys", "HidP_GetUsages", reinterpret_cast<void*>(HidP_GetUsages));
-    ldr.registerExport("hidparse.sys", "HidP_SetUsages", reinterpret_cast<void*>(HidP_SetUsages));
-    ldr.registerExport("hidparse.sys", "HidP_GetUsageValue", reinterpret_cast<void*>(HidP_GetUsageValue));
-    ldr.registerExport("hidparse.sys", "HidP_SetUsageValue", reinterpret_cast<void*>(HidP_SetUsageValue));
-
-    // 3. Register hidclass.sys & hidusb.sys exports
+    // 2. Register hidclass.sys & hidusb.sys exports
     ldr.registerExport("hidclass.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
     ldr.registerExport("hidusb.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
 

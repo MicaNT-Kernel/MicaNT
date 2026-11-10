@@ -12362,6 +12362,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
     // ------------------------------------------------------------------------
     {
         InitializeHidSubsystemExports();
+        InitializeHidParseExports();
         InitializeKbdClassExports();
         InitializeMouClassExports();
         auto& hidSys = TitanHidInputSubsystem::Instance();
