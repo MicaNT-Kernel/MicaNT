@@ -26,6 +26,7 @@ constexpr uint8_t kVirtioPciCapCommon = 1;
 constexpr uint8_t kVirtioPciCapNotify = 2;
 constexpr uint8_t kVirtioPciCapDevice = 4;
 constexpr uint32_t kVirtioFeatureVersion1 = 1u;
+constexpr uint32_t kVirtioGpuFeatureVirgl = 1u;
 constexpr uint32_t kVirtioStatusAcknowledge = 1;
 constexpr uint32_t kVirtioStatusDriver = 2;
 constexpr uint32_t kVirtioStatusDriverOk = 4;
@@ -48,6 +49,20 @@ constexpr uint32_t kCmdTransferToHost2D = 0x0105;
 constexpr uint32_t kCmdResourceAttachBacking = 0x0106;
 constexpr uint32_t kRespOkNoData = 0x1100;
 constexpr uint32_t kRespOkDisplayInfo = 0x1101;
+constexpr uint32_t kCmdCtxCreate = 0x0200;
+constexpr uint32_t kCmdCtxAttachResource = 0x0202;
+constexpr uint32_t kCmdResourceCreate3D = 0x0204;
+constexpr uint32_t kCmdTransferToHost3D = 0x0205;
+constexpr uint32_t kCmdSubmit3D = 0x0207;
+constexpr uint32_t kVirglContextId = 1;
+constexpr uint32_t kVirglTargetTexture2D = 2;
+constexpr uint32_t kVirglBindDisplayTarget = 1u << 0;
+constexpr uint32_t kVirglBindRenderTarget = 1u << 1;
+constexpr uint32_t kVirglBindSamplerView = 1u << 3;
+constexpr uint32_t kVirglFormatB8G8R8A8 = 1;
+constexpr uint32_t kVirglCopyRegion = 17;
+constexpr uint32_t kVirglOutputResourceId = 2;
+constexpr uint32_t kMaxCompositionLayers = 32;
 
 struct PciLocation { uint8_t bus, device, function; };
 struct PciRegion { uint8_t bar; uint32_t offset, length, notifyMultiplier; };
@@ -174,9 +189,37 @@ struct CommandFlush { CommandHeader header; Rect rect; uint32_t resourceId, padd
 struct CommandUnref { CommandHeader header; uint32_t resourceId, padding; };
 struct CommandAttachPrefix { CommandHeader header; uint32_t resourceId, entries; };
 struct MemoryEntry { uint64_t address; uint32_t length, padding; };
+struct CommandDetachBacking { CommandHeader header; uint32_t resourceId, padding; };
+struct Box3D { uint32_t x, y, z, width, height, depth; };
+struct CommandCreate3D {
+    CommandHeader header;
+    uint32_t resourceId, target, format, bind, width, height;
+    uint32_t depth, arraySize, lastLevel, samples, flags, padding;
+};
+struct CommandContextCreate { CommandHeader header; uint32_t nameLength, contextInit; char name[64]; };
+struct CommandContextResource { CommandHeader header; uint32_t resourceId, padding; };
+struct CommandTransfer3D {
+    CommandHeader header; Box3D box; uint64_t offset;
+    uint32_t resourceId, level, stride, layerStride;
+};
+struct CommandSubmit3D { CommandHeader header; uint32_t size, padding; };
 struct ResponseHeader { uint32_t type, flags; uint64_t fenceId; uint32_t contextId; uint8_t ringIndex, padding[3]; };
 struct DisplayInfo { Rect rect; uint32_t enabled, flags; };
 struct ResponseDisplayInfo { ResponseHeader header; DisplayInfo scanouts[16]; };
+
+struct LayerResource {
+    uint64_t surfaceId{};
+    uint64_t pixelsVa{};
+    uint32_t width{}, height{}, pitch{}, resourceId{};
+    uint64_t lastUsedFrame{};
+    bool active{};
+};
+
+static_assert(sizeof(CommandHeader) == 24);
+static_assert(sizeof(CommandCreate3D) == 72);
+static_assert(sizeof(CommandContextCreate) == 96);
+static_assert(sizeof(CommandTransfer3D) == 72);
+static_assert(sizeof(CommandSubmit3D) == 32);
 
 struct alignas(4096) DeviceState {
     VirtqDesc descriptors[kQueueSize]{};
@@ -193,8 +236,13 @@ struct alignas(4096) DeviceState {
     uint16_t lastUsed{};
     uint16_t notifyOffset{};
     uint32_t notifyMultiplier{};
+    uint32_t nextResourceId{100};
+    uint64_t compositionFrame{};
     const KernelServices* services{};
+    LayerResource layers[kMaxCompositionLayers]{};
     volatile uint32_t queueLock{};
+    bool virglOffered{};
+    bool virglActive{};
     bool initialized{};
 };
 
@@ -302,11 +350,11 @@ bool initializeQueue(const PciLocation& location, const PciCaps& caps,
         return false;
     }
 
-    // Negotiate only VERSION_1. The host therefore uses its standard 2D scanout
-    // path and remains compatible with QEMU builds that do not ship virglrenderer.
-    (void)featuresLow;
+    // VIRGL is optional: negotiate it when offered, while retaining VERSION_1
+    // and the 2D path so hosts without virglrenderer still work.
+    g_device.virglOffered = (featuresLow & kVirtioGpuFeatureVirgl) != 0;
     mmioWrite<uint32_t>(g_device.common, 8, 0);
-    mmioWrite<uint32_t>(g_device.common, 12, 0);
+    mmioWrite<uint32_t>(g_device.common, 12, g_device.virglOffered ? kVirtioGpuFeatureVirgl : 0);
     mmioWrite<uint32_t>(g_device.common, 8, 1);
     mmioWrite<uint32_t>(g_device.common, 12, kVirtioFeatureVersion1);
     mmioWrite<uint8_t>(g_device.common, 20,
@@ -423,6 +471,223 @@ bool createScanout(uint32_t width, uint32_t height) {
     return sendNoData(&flush, sizeof(flush));
 }
 
+bool attachResourceBacking(uint32_t resourceId, const uint32_t* pixels,
+                           uint32_t width, uint32_t height, uint32_t pitch) {
+    if (!pixels || !width || !height || pitch < width || width > kMaxWidth ||
+        height > kMaxHeight || pitch > kMaxWidth) return false;
+    const uint64_t bytes = static_cast<uint64_t>(pitch) * height * sizeof(uint32_t);
+    const uint64_t pixelVa = reinterpret_cast<uint64_t>(pixels);
+    const uint64_t firstPageVa = pixelVa & ~0xFFFULL;
+    const uint32_t firstOffset = static_cast<uint32_t>(pixelVa & 0xFFFULL);
+    const uint32_t pageCount = static_cast<uint32_t>((firstOffset + bytes + 4095) / 4096);
+    if (pageCount == 0 || pageCount > kMaxBackingPages) return false;
+
+    auto* attach = reinterpret_cast<CommandAttachPrefix*>(g_device.command);
+    initHeader(attach->header, kCmdResourceAttachBacking);
+    attach->resourceId = resourceId;
+    attach->entries = pageCount;
+    auto* entries = reinterpret_cast<MemoryEntry*>(g_device.command + sizeof(CommandAttachPrefix));
+    for (uint32_t page = 0; page < pageCount; ++page) {
+        const auto* va = reinterpret_cast<const void*>(firstPageVa + static_cast<uint64_t>(page) * 4096);
+        const uint64_t pa = physicalAddress(va);
+        if (!pa) return false;
+        entries[page] = {pa & ~0xFFFULL, 4096, 0};
+    }
+    return sendNoData(g_device.command,
+        sizeof(CommandAttachPrefix) + pageCount * sizeof(MemoryEntry));
+}
+
+bool transferResource3D(uint32_t resourceId, const uint32_t* pixels,
+                        uint32_t width, uint32_t height, uint32_t pitch) {
+    CommandTransfer3D transfer{};
+    initHeader(transfer.header, kCmdTransferToHost3D);
+    transfer.header.contextId = kVirglContextId;
+    transfer.box = {0, 0, 0, width, height, 1};
+    transfer.offset = reinterpret_cast<uint64_t>(pixels) & 0xFFFULL;
+    transfer.resourceId = resourceId;
+    transfer.stride = pitch * sizeof(uint32_t);
+    transfer.layerStride = transfer.stride * height;
+    return sendNoData(&transfer, sizeof(transfer));
+}
+
+bool createResource3D(uint32_t resourceId, uint32_t width, uint32_t height,
+                      const uint32_t* pixels, uint32_t pitch) {
+    CommandCreate3D create{};
+    initHeader(create.header, kCmdResourceCreate3D);
+    create.resourceId = resourceId;
+    create.target = kVirglTargetTexture2D;
+    create.format = kVirglFormatB8G8R8A8;
+    create.bind = kVirglBindDisplayTarget | kVirglBindRenderTarget | kVirglBindSamplerView;
+    create.width = width;
+    create.height = height;
+    create.depth = 1;
+    create.arraySize = 1;
+    if (!sendNoData(&create, sizeof(create))) return false;
+    if (!attachResourceBacking(resourceId, pixels, width, height, pitch)) return false;
+
+    CommandContextResource attach{};
+    initHeader(attach.header, kCmdCtxAttachResource);
+    attach.header.contextId = kVirglContextId;
+    attach.resourceId = resourceId;
+    return sendNoData(&attach, sizeof(attach));
+}
+
+void destroyResource3D(uint32_t resourceId) {
+    CommandContextResource detach{};
+    initHeader(detach.header, 0x0203); // VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE
+    detach.header.contextId = kVirglContextId;
+    detach.resourceId = resourceId;
+    sendNoData(&detach, sizeof(detach));
+    CommandUnref unref{};
+    initHeader(unref.header, kCmdResourceUnref);
+    unref.resourceId = resourceId;
+    sendNoData(&unref, sizeof(unref));
+}
+
+bool setupVirgl() {
+    if (!g_device.virglOffered) return false;
+    CommandContextCreate context{};
+    initHeader(context.header, kCmdCtxCreate);
+    context.header.contextId = kVirglContextId;
+    constexpr char contextName[] = "MicaNT Desktop Compositor";
+    context.nameLength = sizeof(contextName) - 1;
+    for (size_t i = 0; i < sizeof(contextName); ++i) context.name[i] = contextName[i];
+    if (!sendNoData(&context, sizeof(context))) return false;
+
+    if (!createResource3D(kVirglOutputResourceId, g_device.width, g_device.height,
+                          reinterpret_cast<const uint32_t*>(g_device.frame), g_device.pitch)) {
+        destroyResource3D(kVirglOutputResourceId);
+        return false;
+    }
+    if (!transferResource3D(kVirglOutputResourceId,
+            reinterpret_cast<const uint32_t*>(g_device.frame), g_device.width, g_device.height, g_device.pitch)) {
+        destroyResource3D(kVirglOutputResourceId);
+        return false;
+    }
+    CommandSetScanout scanout{};
+    initHeader(scanout.header, kCmdSetScanout);
+    scanout.rect = {0, 0, g_device.width, g_device.height};
+    scanout.scanoutId = 0;
+    scanout.resourceId = kVirglOutputResourceId;
+    if (!sendNoData(&scanout, sizeof(scanout))) {
+        destroyResource3D(kVirglOutputResourceId);
+        return false;
+    }
+    g_device.virglActive = true;
+    if (g_device.services->Log)
+        g_device.services->Log(g_device.services->Context, "virtio_gpu.sys: VirGL 3D compositor enabled");
+    return true;
+}
+
+bool submitCopyRegion(uint32_t sourceResource, uint32_t srcX, uint32_t srcY,
+                      uint32_t dstX, uint32_t dstY, uint32_t width, uint32_t height) {
+    if (!width || !height) return true;
+    auto* submit = reinterpret_cast<CommandSubmit3D*>(g_device.command);
+    initHeader(submit->header, kCmdSubmit3D);
+    submit->header.contextId = kVirglContextId;
+    submit->size = 14 * sizeof(uint32_t); // 1 VirGL header dword + 13 payload dwords.
+    auto* words = reinterpret_cast<uint32_t*>(g_device.command + sizeof(CommandSubmit3D));
+    words[0] = kVirglCopyRegion | (13u << 16);
+    words[1] = kVirglOutputResourceId;
+    words[2] = 0;
+    words[3] = dstX; words[4] = dstY; words[5] = 0;
+    words[6] = sourceResource;
+    words[7] = 0;
+    words[8] = srcX; words[9] = srcY; words[10] = 0;
+    words[11] = width; words[12] = height; words[13] = 1;
+    ioBarrier();
+    return sendNoData(g_device.command, sizeof(CommandSubmit3D) + submit->size);
+}
+
+LayerResource* findOrCreateLayer(const micant::boot_driver::CompositionLayer& layer) {
+    LayerResource* slot = nullptr;
+    for (auto& resource : g_device.layers) {
+        if (resource.active && resource.surfaceId == layer.SurfaceId) { slot = &resource; break; }
+        if (!resource.active && !slot) slot = &resource;
+    }
+    if (!slot) {
+        slot = &g_device.layers[0];
+        for (auto& resource : g_device.layers) {
+            if (resource.lastUsedFrame < slot->lastUsedFrame) slot = &resource;
+        }
+        destroyResource3D(slot->resourceId);
+        *slot = {};
+    }
+    if (!slot) return nullptr;
+    const uint64_t pixelVa = reinterpret_cast<uint64_t>(layer.Pixels);
+    if (!slot->active || slot->width != layer.Width || slot->height != layer.Height ||
+        slot->pitch != layer.Pitch) {
+        if (slot->active) destroyResource3D(slot->resourceId);
+        *slot = {};
+        slot->surfaceId = layer.SurfaceId;
+        slot->resourceId = g_device.nextResourceId++;
+        slot->width = layer.Width;
+        slot->height = layer.Height;
+        slot->pitch = layer.Pitch;
+        if (!createResource3D(slot->resourceId, layer.Width, layer.Height, layer.Pixels, layer.Pitch)) {
+            destroyResource3D(slot->resourceId);
+            *slot = {};
+            return nullptr;
+        }
+        slot->pixelsVa = pixelVa;
+        slot->lastUsedFrame = g_device.compositionFrame;
+        slot->active = true;
+        return slot;
+    }
+    if (slot->pixelsVa != pixelVa) {
+        CommandDetachBacking detach{};
+        initHeader(detach.header, 0x0107); // VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING
+        detach.resourceId = slot->resourceId;
+        if (!sendNoData(&detach, sizeof(detach)) ||
+            !attachResourceBacking(slot->resourceId, layer.Pixels, layer.Width, layer.Height, layer.Pitch))
+            return nullptr;
+        slot->pixelsVa = pixelVa;
+    }
+    slot->lastUsedFrame = g_device.compositionFrame;
+    return slot;
+}
+
+bool presentComposition(void*, const uint32_t* base, uint32_t width, uint32_t height,
+                        uint32_t pitch, const micant::boot_driver::CompositionLayer* layers,
+                        uint32_t layerCount) {
+    if (!g_device.virglActive || !base || (layerCount && !layers) || width != g_device.width ||
+        height != g_device.height || pitch < width || layerCount > kMaxCompositionLayers) return false;
+    ++g_device.compositionFrame;
+    for (uint32_t row = 0; row < height; ++row) {
+        const uint32_t* source = base + static_cast<size_t>(row) * pitch;
+        uint32_t* destination = reinterpret_cast<uint32_t*>(g_device.frame) +
+            static_cast<size_t>(row) * g_device.pitch;
+        for (uint32_t col = 0; col < width; ++col) destination[col] = source[col];
+    }
+    ioBarrier();
+    if (!transferResource3D(kVirglOutputResourceId,
+            reinterpret_cast<const uint32_t*>(g_device.frame), width, height, g_device.pitch)) return false;
+
+    for (uint32_t index = 0; index < layerCount; ++index) {
+        const auto& layer = layers[index];
+        if (!layer.Pixels || !layer.Width || !layer.Height || layer.Pitch < layer.Width ||
+            layer.Opacity != 0xFF || layer.Width > kMaxWidth || layer.Height > kMaxHeight) return false;
+        const int64_t sourceX = layer.X < 0 ? -static_cast<int64_t>(layer.X) : 0;
+        const int64_t sourceY = layer.Y < 0 ? -static_cast<int64_t>(layer.Y) : 0;
+        const int64_t destinationX = layer.X > 0 ? layer.X : 0;
+        const int64_t destinationY = layer.Y > 0 ? layer.Y : 0;
+        int64_t copyWidth = static_cast<int64_t>(layer.Width) - sourceX;
+        int64_t copyHeight = static_cast<int64_t>(layer.Height) - sourceY;
+        if (destinationX + copyWidth > width) copyWidth = width - destinationX;
+        if (destinationY + copyHeight > height) copyHeight = height - destinationY;
+        if (copyWidth <= 0 || copyHeight <= 0) continue;
+
+        LayerResource* resource = findOrCreateLayer(layer);
+        if (!resource || !transferResource3D(resource->resourceId, layer.Pixels,
+                layer.Width, layer.Height, layer.Pitch) ||
+            !submitCopyRegion(resource->resourceId, static_cast<uint32_t>(sourceX),
+                static_cast<uint32_t>(sourceY), static_cast<uint32_t>(destinationX),
+                static_cast<uint32_t>(destinationY), static_cast<uint32_t>(copyWidth),
+                static_cast<uint32_t>(copyHeight))) return false;
+    }
+    return true;
+}
+
 bool presentFrame(void*, const uint32_t* pixels, uint32_t width, uint32_t height,
                   uint32_t pitch, int32_t dstX, int32_t dstY) {
     if (!g_device.initialized || !pixels || width == 0 || height == 0 || pitch < width) return false;
@@ -441,6 +706,11 @@ bool presentFrame(void*, const uint32_t* pixels, uint32_t width, uint32_t height
         for (int64_t col = 0; col < copyWidth; ++col) dst[col] = src[col];
     }
     ioBarrier();
+    if (g_device.virglActive) {
+        return transferResource3D(kVirglOutputResourceId,
+            reinterpret_cast<const uint32_t*>(g_device.frame), g_device.width,
+            g_device.height, g_device.pitch);
+    }
     CommandTransfer2D transfer{};
     initHeader(transfer.header, kCmdTransferToHost2D);
     transfer.rect = {0, 0, g_device.width, g_device.height};
@@ -492,6 +762,12 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
         if (services.Log) services.Log(services.Context, "virtio_gpu.sys: 2D resource or scanout setup failed");
         return STATUS_DEVICE_NOT_READY;
     }
+    const bool hasVirglCompositor = setupVirgl();
+    if (!hasVirglCompositor && services.Log) {
+        services.Log(services.Context, g_device.virglOffered
+            ? "virtio_gpu.sys: VirGL initialization failed; using VirtIO 2D scanout"
+            : "virtio_gpu.sys: VirGL not offered; using VirtIO 2D scanout");
+    }
 
     driver->Flags |= DRIVER_FLAG_DISPLAY;
     driver->DeviceExtension = &g_device;
@@ -503,6 +779,7 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     driver->Display->PixelFormat = kFormatB8G8R8A8Unorm;
     driver->Display->Context = &g_device;
     driver->Display->PresentFrame = presentFrame;
+    driver->Display->PresentComposition = hasVirglCompositor ? presentComposition : nullptr;
     if (services.Log) services.Log(services.Context, "virtio_gpu.sys: VirtIO 1.0 2D scanout initialized");
     return STATUS_SUCCESS;
 }
