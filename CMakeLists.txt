@@ -126,6 +126,7 @@ if(WIN32)
     target_compile_definitions(micant_win32k PRIVATE BUILD_SYSTEM32_STANDALONE_DLL MICANT_WIN32K_EXPORTS)
     set_target_properties(micant_win32k PROPERTIES
         OUTPUT_NAME "win32k"
+        PREFIX ""
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32"
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32")
 
@@ -133,10 +134,13 @@ if(WIN32)
         string(TOLOWER "${_dll}" _dll_lower)
         add_library(micant_${_dll_lower} SHARED
             kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp)
+        add_dependencies(micant_${_dll_lower} micant_win32k)
         target_compile_definitions(micant_${_dll_lower} PRIVATE
-            BUILD_SYSTEM32_${_dll}_DLL BUILD_SYSTEM32_STANDALONE_DLL)
+            BUILD_SYSTEM32_${_dll}_DLL BUILD_SYSTEM32_STANDALONE_DLL MICANT_WIN32K_IMPORTS)
+        target_link_libraries(micant_${_dll_lower} PRIVATE micant_win32k)
         set_target_properties(micant_${_dll_lower} PROPERTIES
             OUTPUT_NAME "${_dll_lower}"
+            PREFIX ""
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32"
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32")
     endforeach()

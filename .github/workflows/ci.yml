@@ -50,9 +50,9 @@ jobs:
               @{ Name = "kernel32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
               @{ Name = "advapi32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
               @{ Name = "win32k.dll";          Src = "kernel/ps/winnt_win32k_server.cpp";                       Def = "MICANT_WIN32K_EXPORTS" },
-              @{ Name = "user32.dll";         Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_USER32_DLL" },
-              @{ Name = "gdi32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_GDI32_DLL" },
-              @{ Name = "imm32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_IMM32_DLL" },
+              @{ Name = "user32.dll";         Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_USER32_DLL"; ImportWin32k = $true },
+              @{ Name = "gdi32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_GDI32_DLL";  ImportWin32k = $true },
+              @{ Name = "imm32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_IMM32_DLL";  ImportWin32k = $true },
               @{ Name = "ole32.dll";          Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_OLE32_DLL" },
               @{ Name = "dwmapi.dll";         Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_DWMAPI_DLL" },
               @{ Name = "winmm.dll";          Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_WINMM_DLL" },
@@ -83,7 +83,16 @@ jobs:
                       $extraArgs += $dll.DefFile
                   }
               }
-              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
+              if ($dll.Name -eq "win32k.dll") {
+                  if ($isMsvc) { $extraArgs += "-Wl,/IMPLIB:bin/system32/win32k.lib" }
+                  else { $extraArgs += "-Wl,--out-implib,bin/system32/libwin32k.dll.a" }
+              } elseif ($dll.ImportWin32k) {
+                  if ($isMsvc) { $extraArgs += "bin/system32/win32k.lib" }
+                  else { $extraArgs += @("-Lbin/system32", "-lwin32k") }
+              }
+              $importDefinitions = @()
+              if ($dll.ImportWin32k) { $importDefinitions += "-DMICANT_WIN32K_IMPORTS" }
+              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" @importDefinitions $dll.Src @extraArgs -o $dllPath
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

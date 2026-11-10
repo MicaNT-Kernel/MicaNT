@@ -63,6 +63,24 @@ intptr_t MicaWin32kGetWindowLongPtrW(void* hwnd, int32_t index) {
 intptr_t MicaWin32kDefWindowProcW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
     return NtUserDefWindowProc(hwnd,message,wParam,lParam);
 }
+void* MicaWin32kGetDC(void* hwnd) { return NtUserGetDC(hwnd); }
+int32_t MicaWin32kReleaseDC(void* hwnd, void* dc) { return NtUserReleaseDC(hwnd,dc); }
+void* MicaWin32kCreateCompatibleDC(void* dc) { return NtGdiCreateCompatibleDC(dc); }
+void* MicaWin32kCreateCompatibleBitmap(void* dc, int32_t w, int32_t h) { return NtGdiCreateCompatibleBitmap(dc,w,h); }
+void* MicaWin32kSelectObject(void* dc, void* object) { return NtGdiSelectBitmap(dc,object); }
+int32_t MicaWin32kBitBlt(void* dst, int32_t x, int32_t y, int32_t w, int32_t h,
+    void* src, int32_t sx, int32_t sy, uint32_t rop) { return NtGdiBitBlt(dst,x,y,w,h,src,sx,sy,rop); }
+int32_t MicaWin32kDeleteObject(void* object) { return NtGdiDeleteObjectApp(object); }
+void* MicaWin32kGetStockObject(int32_t index) { return NtGdiGetStockObject(index); }
+void* MicaWin32kCreateDibSection(void* dc, int32_t width, int32_t height, void** bits) {
+    if (bits) *bits=nullptr;
+    if (width<=0 || height<=0 || width>16384 || height>16384) return nullptr;
+    auto bitmap=NtGdiCreateCompatibleBitmap(dc,width,height);
+    auto surface=TitanWin32kSubsystem::Instance().getGdi().getBitmap(bitmap);
+    if (!surface) return nullptr;
+    if (bits) *bits=surface->pixels.data();
+    return bitmap;
+}
 int32_t MicaWin32kPeekMessageW(MicaWin32kMessage* out, void* hwnd,
     uint32_t min, uint32_t max, uint32_t remove) {
     if (!out) return 0;

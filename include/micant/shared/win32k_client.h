@@ -4,6 +4,8 @@
 
 #if defined(MICANT_WIN32K_EXPORTS)
 #define MICANT_WIN32K_API __declspec(dllexport)
+#elif defined(MICANT_WIN32K_IMPORTS)
+#define MICANT_WIN32K_API __declspec(dllimport)
 #else
 #define MICANT_WIN32K_API
 #endif
@@ -45,6 +47,14 @@ typedef struct MicaWin32kCreateStruct {
     const wchar_t* className;
     uint32_t exStyle;
 } MicaWin32kCreateStruct;
+typedef struct MicaWin32kBitmapInfoHeader {
+    uint32_t size;
+    int32_t width, height;
+    uint16_t planes, bitCount;
+    uint32_t compression, imageSize;
+    int32_t xPixelsPerMeter, yPixelsPerMeter;
+    uint32_t colorsUsed, colorsImportant;
+} MicaWin32kBitmapInfoHeader;
 
 MICANT_WIN32K_API void* MicaWin32kCreateWindowExW(uint32_t, const wchar_t*, const wchar_t*, uint32_t,
     int32_t, int32_t, int32_t, int32_t, void*, void*, void*, void*);
@@ -59,6 +69,15 @@ MICANT_WIN32K_API intptr_t MicaWin32kDispatchMessageW(const MicaWin32kMessage*);
 MICANT_WIN32K_API intptr_t MicaWin32kSetWindowLongPtrW(void*, int32_t, intptr_t);
 MICANT_WIN32K_API intptr_t MicaWin32kGetWindowLongPtrW(void*, int32_t);
 MICANT_WIN32K_API intptr_t MicaWin32kDefWindowProcW(void*, uint32_t, uintptr_t, intptr_t);
+MICANT_WIN32K_API void* MicaWin32kGetDC(void*);
+MICANT_WIN32K_API int32_t MicaWin32kReleaseDC(void*, void*);
+MICANT_WIN32K_API void* MicaWin32kCreateCompatibleDC(void*);
+MICANT_WIN32K_API void* MicaWin32kCreateCompatibleBitmap(void*, int32_t, int32_t);
+MICANT_WIN32K_API void* MicaWin32kSelectObject(void*, void*);
+MICANT_WIN32K_API int32_t MicaWin32kBitBlt(void*, int32_t, int32_t, int32_t, int32_t, void*, int32_t, int32_t, uint32_t);
+MICANT_WIN32K_API int32_t MicaWin32kDeleteObject(void*);
+MICANT_WIN32K_API void* MicaWin32kGetStockObject(int32_t);
+MICANT_WIN32K_API void* MicaWin32kCreateDibSection(void*, int32_t, int32_t, void**);
 MICANT_WIN32K_API int32_t MicaWin32kPeekMessageW(MicaWin32kMessage*, void*, uint32_t, uint32_t, uint32_t);
 MICANT_WIN32K_API int32_t MicaWin32kGetMessageW(MicaWin32kMessage*, void*, uint32_t, uint32_t);
 MICANT_WIN32K_API int32_t MicaWin32kGetClientRect(void*, MicaWin32kRect*);

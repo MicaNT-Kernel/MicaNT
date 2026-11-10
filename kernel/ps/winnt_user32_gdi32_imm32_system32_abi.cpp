@@ -9,22 +9,38 @@
 #include "micant/um/subsystems/winuser/winnt_user32_gdi32_imm32_system32_abi.hpp"
 #include "micant/shared/win32k_client.h"
 
-#if defined(_WIN32)
-extern "C" __declspec(dllimport) void* __stdcall LoadLibraryW(const wchar_t*);
-extern "C" __declspec(dllimport) void* __stdcall GetProcAddress(void*, const char*);
-#endif
-
 namespace micant::um::winnt_user32_gdi32_imm32_abi {
 
 namespace {
 template <typename T> T Win32kProc(const char* name) noexcept {
-#if defined(_WIN32)
-    static void* module = LoadLibraryW(L"win32k.dll");
-    return module ? reinterpret_cast<T>(GetProcAddress(module, name)) : nullptr;
-#else
-    (void)name;
+#define MICA_WIN32K_PROC(exportName) if (std::strcmp(name, #exportName) == 0) return reinterpret_cast<T>(&exportName)
+    MICA_WIN32K_PROC(MicaWin32kCreateWindowExW);
+    MICA_WIN32K_PROC(MicaWin32kDestroyWindow);
+    MICA_WIN32K_PROC(MicaWin32kShowWindow);
+    MICA_WIN32K_PROC(MicaWin32kSetWindowPos);
+    MICA_WIN32K_PROC(MicaWin32kPostMessageW);
+    MICA_WIN32K_PROC(MicaWin32kSendMessageW);
+    MICA_WIN32K_PROC(MicaWin32kPostQuitMessage);
+    MICA_WIN32K_PROC(MicaWin32kPeekMessageW);
+    MICA_WIN32K_PROC(MicaWin32kGetMessageW);
+    MICA_WIN32K_PROC(MicaWin32kGetClientRect);
+    MICA_WIN32K_PROC(MicaWin32kGetWindowRect);
+    MICA_WIN32K_PROC(MicaWin32kRegisterClassW);
+    MICA_WIN32K_PROC(MicaWin32kDispatchMessageW);
+    MICA_WIN32K_PROC(MicaWin32kSetWindowLongPtrW);
+    MICA_WIN32K_PROC(MicaWin32kGetWindowLongPtrW);
+    MICA_WIN32K_PROC(MicaWin32kDefWindowProcW);
+    MICA_WIN32K_PROC(MicaWin32kGetDC);
+    MICA_WIN32K_PROC(MicaWin32kReleaseDC);
+    MICA_WIN32K_PROC(MicaWin32kCreateCompatibleDC);
+    MICA_WIN32K_PROC(MicaWin32kCreateCompatibleBitmap);
+    MICA_WIN32K_PROC(MicaWin32kSelectObject);
+    MICA_WIN32K_PROC(MicaWin32kBitBlt);
+    MICA_WIN32K_PROC(MicaWin32kDeleteObject);
+    MICA_WIN32K_PROC(MicaWin32kGetStockObject);
+    MICA_WIN32K_PROC(MicaWin32kCreateDibSection);
+#undef MICA_WIN32K_PROC
     return nullptr;
-#endif
 }
 
 struct WinNtWindowState {
@@ -250,20 +266,29 @@ int32_t User32_SetProcessDpiAwarenessContext(void* /*value*/) noexcept {
 }
 
 // gdi32.dll implementations
-void* Gdi32_GetDC(void* /*hWnd*/) noexcept {
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(0x00000000000C0100ULL));
+void* Gdi32_GetDC(void* hWnd) noexcept {
+    using Fn=void* (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kGetDC");
+    return fn ? fn(hWnd) : nullptr;
 }
 
-int32_t Gdi32_ReleaseDC(void* /*hWnd*/, void* hDC) noexcept {
-    return hDC ? 1 : 0;
+int32_t Gdi32_ReleaseDC(void* hWnd, void* hDC) noexcept {
+    using Fn=int32_t (*)(void*,void*); auto fn=Win32kProc<Fn>("MicaWin32kReleaseDC");
+    return fn ? fn(hWnd,hDC) : 0;
 }
 
-void* Gdi32_CreateCompatibleDC(void* /*hdc*/) noexcept {
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(0x00000000000C0200ULL));
+void* Gdi32_CreateCompatibleDC(void* hdc) noexcept {
+    using Fn=void* (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kCreateCompatibleDC");
+    return fn ? fn(hdc) : nullptr;
+}
+
+void* Gdi32_CreateCompatibleBitmap(void* hdc, int32_t width, int32_t height) noexcept {
+    using Fn=void* (*)(void*,int32_t,int32_t); auto fn=Win32kProc<Fn>("MicaWin32kCreateCompatibleBitmap");
+    return fn ? fn(hdc,width,height) : nullptr;
 }
 
 int32_t Gdi32_DeleteDC(void* hdc) noexcept {
-    return hdc ? 1 : 0;
+    using Fn=int32_t (*)(void*,void*); auto fn=Win32kProc<Fn>("MicaWin32kReleaseDC");
+    return fn ? fn(nullptr,hdc) : 0;
 }
 
 int32_t Gdi32_GetDeviceCaps(void* /*hdc*/, int32_t index) noexcept {
@@ -292,26 +317,36 @@ int32_t Gdi32_SwapBuffers(void* hdc) noexcept {
     return hdc ? 1 : 0;
 }
 
-void* Gdi32_CreateDIBSection(void* /*hdc*/, const void* /*pbmi*/, uint32_t /*usage*/, void** ppvBits, void* /*hSection*/, uint32_t /*offset*/) noexcept {
-    static uint32_t s_dummySurface[64]{};
-    if (ppvBits) *ppvBits = s_dummySurface;
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(0x00000000000C0300ULL));
+void* Gdi32_CreateDIBSection(void* hdc, const void* pbmi, uint32_t /*usage*/, void** ppvBits, void* /*hSection*/, uint32_t /*offset*/) noexcept {
+    if (ppvBits) *ppvBits=nullptr;
+    if (!pbmi) return nullptr;
+    const auto* info=static_cast<const MicaWin32kBitmapInfoHeader*>(pbmi);
+    if (info->size < sizeof(MicaWin32kBitmapInfoHeader) || info->planes != 1 || info->bitCount != 32 || info->compression != 0)
+        return nullptr;
+    const int32_t height=info->height < 0 ? -info->height : info->height;
+    using Fn=void* (*)(void*,int32_t,int32_t,void**); auto fn=Win32kProc<Fn>("MicaWin32kCreateDibSection");
+    return fn ? fn(hdc,info->width,height,ppvBits) : nullptr;
 }
 
-int32_t Gdi32_BitBlt(void* hdc, int32_t /*x*/, int32_t /*y*/, int32_t /*cx*/, int32_t /*cy*/, void* /*hdcSrc*/, int32_t /*x1*/, int32_t /*y1*/, uint32_t /*rop*/) noexcept {
-    return hdc ? 1 : 0;
+int32_t Gdi32_BitBlt(void* hdc, int32_t x, int32_t y, int32_t cx, int32_t cy, void* hdcSrc, int32_t x1, int32_t y1, uint32_t rop) noexcept {
+    using Fn=int32_t (*)(void*,int32_t,int32_t,int32_t,int32_t,void*,int32_t,int32_t,uint32_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kBitBlt");
+    return fn ? fn(hdc,x,y,cx,cy,hdcSrc,x1,y1,rop) : 0;
 }
 
-void* Gdi32_GetStockObject(int32_t /*i*/) noexcept {
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(0x00000000000C0400ULL));
+void* Gdi32_GetStockObject(int32_t i) noexcept {
+    using Fn=void* (*)(int32_t); auto fn=Win32kProc<Fn>("MicaWin32kGetStockObject");
+    return fn ? fn(i) : nullptr;
 }
 
 void* Gdi32_SelectObject(void* hdc, void* h) noexcept {
-    return (hdc && h) ? h : nullptr;
+    using Fn=void* (*)(void*,void*); auto fn=Win32kProc<Fn>("MicaWin32kSelectObject");
+    return fn ? fn(hdc,h) : nullptr;
 }
 
 int32_t Gdi32_DeleteObject(void* ho) noexcept {
-    return ho ? 1 : 0;
+    using Fn=int32_t (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kDeleteObject");
+    return fn ? fn(ho) : 0;
 }
 
 // imm32.dll implementations
@@ -540,6 +575,9 @@ __declspec(dllexport) int32_t ReleaseDC(void* hWnd, void* hDC) {
 }
 __declspec(dllexport) void* CreateCompatibleDC(void* hdc) {
     return micant::um::winnt_user32_gdi32_imm32_abi::Gdi32_CreateCompatibleDC(hdc);
+}
+__declspec(dllexport) void* CreateCompatibleBitmap(void* hdc, int32_t width, int32_t height) {
+    return micant::um::winnt_user32_gdi32_imm32_abi::Gdi32_CreateCompatibleBitmap(hdc,width,height);
 }
 __declspec(dllexport) int32_t DeleteDC(void* hdc) {
     return micant::um::winnt_user32_gdi32_imm32_abi::Gdi32_DeleteDC(hdc);
