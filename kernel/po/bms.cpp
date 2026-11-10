@@ -8,15 +8,20 @@
 
 #include "micant/km/executive/bms.hpp"
 #include "micant/km/drivers/acpi/cmbatt.hpp"
+#include "micant/km/drivers/bus/battclass.hpp"
+#include "micant/km/drivers/bus/acpi.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/po.hpp"
 
 namespace micant::po::bms {
 
+static micant::io::DeviceObject s_batteryDevice;
+static micant::io::DeviceObject* s_batteryLowerDevice{};
+static bool s_batteryClassAttached{};
+
 static NtStatus BattcDispatch(micant::io::DeviceObject* device, micant::io::Irp* irp) {
-    (void)device;
-    if (!irp) return NtStatus::InvalidParameter;
+    if (!device || !irp) return NtStatus::InvalidParameter;
 
     auto* stack = micant::io::IoGetCurrentIrpStackLocation(irp);
     if (!stack) {
@@ -27,6 +32,21 @@ static NtStatus BattcDispatch(micant::io::DeviceObject* device, micant::io::Irp*
     }
 
     switch (stack->majorFunction) {
+        case micant::io::IRP_MJ_PNP: {
+            if (!s_batteryLowerDevice || !s_batteryLowerDevice->driverObject) {
+                irp->ioStatus.status = NtStatus::NoSuchDevice;
+                return NtStatus::NoSuchDevice;
+            }
+            irp->deviceObject = s_batteryLowerDevice;
+            stack->deviceObject = s_batteryLowerDevice;
+            const NtStatus status = s_batteryLowerDevice->driverObject->dispatch(s_batteryLowerDevice, irp);
+            if (stack->minorFunction == micant::pnp::IRP_MN_REMOVE_DEVICE) {
+                device->deviceExtension = nullptr;
+                s_batteryClassAttached = false;
+                s_batteryLowerDevice = nullptr;
+            }
+            return status;
+        }
         case micant::io::IRP_MJ_CREATE:
         case micant::io::IRP_MJ_CLOSE:
         case micant::io::IRP_MJ_CLEANUP: {
@@ -37,22 +57,7 @@ static NtStatus BattcDispatch(micant::io::DeviceObject* device, micant::io::Irp*
         }
 
         case micant::io::IRP_MJ_DEVICE_CONTROL: {
-            auto& bms = SmartBatterySubsystem::get();
-            size_t bytesRet = 0;
-            void* inBuf = irp->systemBuffer;
-            void* outBuf = irp->userBuffer ? irp->userBuffer : irp->systemBuffer;
-
-            NtStatus status = bms.handleIoctl(
-                stack->parameters.deviceIoControl.ioControlCode,
-                inBuf,
-                stack->parameters.deviceIoControl.inputBufferLength,
-                outBuf,
-                stack->parameters.deviceIoControl.outputBufferLength,
-                bytesRet
-            );
-
-            irp->ioStatus.status = status;
-            irp->ioStatus.information = bytesRet;
+            NtStatus status = BatteryClassIoctl(device->deviceExtension, irp);
             micant::io::IoCompleteRequest(irp, 0);
             return status;
         }
@@ -67,13 +72,14 @@ static NtStatus BattcDispatch(micant::io::DeviceObject* device, micant::io::Irp*
 }
 
 static micant::io::DriverObject s_battcDriver;
-static micant::io::DeviceObject s_batteryDevice;
 static micant::ob::ObjectHeader s_batteryHeader;
 
 void InitializeBatterySubsystem() noexcept {
-    // Register and query the ACPI battery miniport before publishing the
-    // class-device state to the power manager.
-    micant::km::acpi::cmbatt::InitializeCmbattDriver();
+    // ACPI enumerates its firmware PDO; cmbatt attaches and registers its
+    // battery miniport through the battery class contract before publication.
+    (void)micant::km::bus::acpi::InitializeAcpiBusDriver();
+    auto* const batteryPdo = micant::km::bus::acpi::AcpiBusEnumerator::Instance().batteryPdo();
+    void* const batteryClassData = BatteryClassRegistry::Instance().handleForPdo(batteryPdo);
 
     auto& ons = micant::ob::ObjectNamespace::get();
     ons.initializeRoot();
@@ -84,28 +90,37 @@ void InitializeBatterySubsystem() noexcept {
     s_battcDriver.setDispatch(micant::io::IRP_MJ_CLOSE, BattcDispatch);
     s_battcDriver.setDispatch(micant::io::IRP_MJ_CLEANUP, BattcDispatch);
     s_battcDriver.setDispatch(micant::io::IRP_MJ_DEVICE_CONTROL, BattcDispatch);
+    s_battcDriver.setDispatch(micant::io::IRP_MJ_PNP, BattcDispatch);
 
     // 2. Setup Device Object (\Device\Battery0)
-    s_batteryDevice.driverObject = &s_battcDriver;
-    s_batteryDevice.deviceType = micant::io::DeviceType::Battery;
-    s_batteryDevice.deviceName = L"\\Device\\Battery0";
-    s_batteryDevice.flags = micant::io::DO_BUFFERED_IO | micant::io::DO_POWER_PAGABLE;
+    if (batteryClassData) {
+        if (!s_batteryClassAttached) {
+            s_batteryDevice.driverObject = &s_battcDriver;
+            s_batteryDevice.deviceType = micant::io::DeviceType::Battery;
+            s_batteryDevice.deviceName = L"\\Device\\Battery0";
+            s_batteryDevice.deviceExtension = batteryClassData;
+            s_batteryDevice.flags = micant::io::DO_BUFFERED_IO | micant::io::DO_POWER_PAGABLE;
+            s_batteryLowerDevice = batteryPdo ? batteryPdo->attachedDevice : nullptr;
+            s_batteryClassAttached = batteryPdo &&
+                micant::io::IoAttachDeviceToDeviceStack(&s_batteryDevice, batteryPdo);
+        }
 
-    auto devDir = ons.getDirectory(L"\\Device");
-    if (!devDir) {
-        ons.createDirectory(L"\\Device");
-        devDir = ons.getDirectory(L"\\Device");
-    }
+        auto devDir = ons.getDirectory(L"\\Device");
+        if (!devDir) {
+            ons.createDirectory(L"\\Device");
+            devDir = ons.getDirectory(L"\\Device");
+        }
 
-    const auto* devType = ons.getType(L"Device");
-    s_batteryHeader.type = devType;
-    s_batteryHeader.objectName = L"Battery0";
-    if (devDir) {
-        devDir->insertObject(L"Battery0", &s_batteryHeader);
-    }
+        const auto* devType = ons.getType(L"Device");
+        s_batteryHeader.type = devType;
+        s_batteryHeader.objectName = L"Battery0";
+        if (devDir) devDir->insertObject(L"Battery0", &s_batteryHeader);
 
     // 3. Create Symbolic Link \DosDevices\Battery0 -> \Device\Battery0
-    ons.createSymbolicLink(L"\\DosDevices\\Battery0", L"\\Device\\Battery0");
+        ons.createSymbolicLink(L"\\DosDevices\\Battery0", L"\\Device\\Battery0");
+    } else {
+        SmartBatterySubsystem::get().updateFromAcpi(false, {}, {}, {}, {}, {});
+    }
 
     // 4. Synchronize Battery State into Executive PowerManager
     auto& po = micant::po::PowerManager::get();

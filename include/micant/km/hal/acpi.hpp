@@ -1504,6 +1504,8 @@ private:
                 AmlValue::MakeInteger(15400), // Design Voltage
                 AmlValue::MakeInteger(5000),  // Design Capacity Warning
                 AmlValue::MakeInteger(1000),  // Design Capacity Low
+                AmlValue::MakeInteger(100),   // Capacity granularity, low-to-warning
+                AmlValue::MakeInteger(500),   // Capacity granularity, warning-to-full
                 AmlValue::MakeString("MicaNT Smart Battery"),
                 AmlValue::MakeString("BAT-2026-X1"),
                 AmlValue::MakeString("Li-Ion"),
@@ -1516,6 +1518,21 @@ private:
         bat0->addChild(bst);
         bat0->addChild(bif);
         sb->addChild(bat0);
+
+        // AC adapter status is reported separately from the battery's _BST.
+        // This fixture provides the standard ACPI0003 / _PSR object consumed
+        // by the battery miniport when forming BATTERY_STATUS.PowerState.
+        auto acAdapter = std::make_shared<AmlNode>("AC", AmlObjectType::Device);
+        auto acHid = std::make_shared<AmlNode>("_HID", AmlObjectType::String);
+        acHid->value = AmlValue::MakeString("ACPI0003");
+        auto acSta = std::make_shared<AmlNode>("_STA", AmlObjectType::Method);
+        acSta->methodHandler = [](const std::vector<AmlValue>&) { return AmlValue::MakeInteger(0x0F); };
+        auto acPsr = std::make_shared<AmlNode>("_PSR", AmlObjectType::Method);
+        acPsr->methodHandler = [](const std::vector<AmlValue>&) { return AmlValue::MakeInteger(1); };
+        acAdapter->addChild(acHid);
+        acAdapter->addChild(acSta);
+        acAdapter->addChild(acPsr);
+        sb->addChild(acAdapter);
 
         // 8. Thermal Zone: \_TZ.TZ00
         auto tz00 = std::make_shared<AmlNode>("TZ00", AmlObjectType::ThermalZone);

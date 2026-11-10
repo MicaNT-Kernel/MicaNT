@@ -952,7 +952,6 @@ public:
         std::vector<std::shared_ptr<PnpDeviceNode>>& outChildren
     ) {
         if (!busDevNode) return NtStatus::InvalidParameter;
-        std::lock_guard<std::mutex> lock(mutex_);
 
         {
             std::lock_guard<std::mutex> tlk(g_PnpTelemetryMutex);
@@ -1052,9 +1051,15 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
 
         std::wstring guidStr = GuidToWString(interfaceClassGuid);
-        std::wstring baseName = pdo->deviceName;
-        if (baseName.starts_with(L"\\Device\\")) {
-            baseName = baseName.substr(8);
+        auto devNode = findDevNodeByPdoInternal(pdo);
+        std::wstring baseName;
+        if (devNode) {
+            baseName = devNode->getDeviceId();
+            std::replace(baseName.begin(), baseName.end(), L'\\', L'#');
+            baseName += L"#" + devNode->getInstanceId();
+        } else {
+            baseName = pdo->deviceName;
+            if (baseName.starts_with(L"\\Device\\")) baseName = baseName.substr(8);
         }
 
         std::wstring symLink = L"\\\\?\\" + baseName + L"#" + guidStr;
@@ -1073,7 +1078,6 @@ public:
         registeredInterfaces_[symLink] = entry;
 
         // Associate with DevNode if present
-        auto devNode = findDevNodeByPdoInternal(pdo);
         if (devNode) {
             devNode->addInterface(entry);
         }

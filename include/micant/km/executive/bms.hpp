@@ -101,6 +101,12 @@ struct BatteryStatus {
     int32_t  rate{0};
 };
 
+struct BatteryReportingScale {
+    uint32_t Granularity;
+    uint32_t Capacity;
+};
+static_assert(sizeof(BatteryReportingScale) == 8);
+
 struct BatteryWaitStatus {
     uint32_t batteryTag{0};
     uint32_t timeout{0};
@@ -158,6 +164,8 @@ private:
     bool                     m_batteryPresent{true};
     BatteryInformation       m_info{};
     BatteryStatus            m_status{};
+    std::array<BatteryReportingScale, 4> m_reportingScales{};
+    uint32_t m_reportingScaleCount{0};
     CellTelemetry            m_cells{};
     std::string              m_deviceName{"MicaNT Sovereign Smart Battery Pack"};
     std::string              m_mfgName{"Barrer Silicon Systems"};
@@ -222,7 +230,9 @@ public:
     // The class driver continues to own the public battery device and IOCTLs.
     void updateFromAcpi(bool present, const BatteryInformation& information,
                         const BatteryStatus& status, std::string_view deviceName,
-                        std::string_view serialNumber, std::string_view manufacturer) noexcept {
+                        std::string_view serialNumber, std::string_view manufacturer,
+                        const std::array<BatteryReportingScale, 4>& reportingScales = {},
+                        uint32_t reportingScaleCount = 0) noexcept {
         std::lock_guard<std::mutex> lock(m_lock);
         if (m_batteryPresent != present) {
             ++m_batteryTag;
@@ -232,6 +242,8 @@ public:
         if (!present) {
             m_info = {};
             m_status = {};
+            m_reportingScales = {};
+            m_reportingScaleCount = 0;
             m_deviceName.clear();
             m_serialNumber.clear();
             m_mfgName.clear();
@@ -239,6 +251,8 @@ public:
         }
         m_info = information;
         m_status = status;
+        m_reportingScales = reportingScales;
+        m_reportingScaleCount = std::min<uint32_t>(reportingScaleCount, 4);
         m_deviceName.assign(deviceName);
         m_serialNumber.assign(serialNumber);
         m_mfgName.assign(manufacturer);
@@ -361,6 +375,16 @@ public:
     NtStatus handleIoctl(uint32_t ioctlCode, const void* inBuf, size_t inLen, void* outBuf, size_t outLen, size_t& bytesReturned) noexcept {
         bytesReturned = 0;
         std::lock_guard<std::mutex> lock(m_lock);
+        const auto copyUnicode = [outBuf, outLen, &bytesReturned](std::string_view value) -> NtStatus {
+            const size_t required = (value.size() + 1) * sizeof(uint16_t);
+            if (!outBuf || outLen < required) return NtStatus::BufferTooSmall;
+            auto* destination = static_cast<uint16_t*>(outBuf);
+            for (size_t i = 0; i < value.size(); ++i)
+                destination[i] = static_cast<uint8_t>(value[i]);
+            destination[value.size()] = 0;
+            bytesReturned = required;
+            return NtStatus::Success;
+        };
 
         switch (ioctlCode) {
             case IOCTL_BATTERY_QUERY_TAG: {
@@ -383,39 +407,43 @@ public:
                         bytesReturned = sizeof(BatteryInformation);
                         return NtStatus::Success;
                     }
+                    case BatteryQueryInfoLevel::BatteryGranularityInformation: {
+                        const size_t required = static_cast<size_t>(m_reportingScaleCount) *
+                            sizeof(BatteryReportingScale);
+                        if (required == 0) return NtStatus::InvalidDeviceRequest;
+                        if (outLen < required) return NtStatus::BufferTooSmall;
+                        std::memcpy(outBuf, m_reportingScales.data(), required);
+                        bytesReturned = required;
+                        return NtStatus::Success;
+                    }
                     case BatteryQueryInfoLevel::BatteryEstimatedTime: {
                         if (outLen < sizeof(uint32_t)) return NtStatus::BufferTooSmall;
                         uint32_t runtime = 0xFFFFFFFF;
-                        if (m_status.rate < 0) {
-                            uint32_t rate = static_cast<uint32_t>(std::abs(m_status.rate));
-                            if (rate > 0) runtime = (m_status.capacity * 3600) / rate;
+                        const int32_t rate = query->atRate != 0
+                            ? static_cast<int32_t>(query->atRate) : m_status.rate;
+                        if (rate < 0) {
+                            const uint32_t dischargeRate = static_cast<uint32_t>(-
+                                static_cast<int64_t>(rate));
+                            if (dischargeRate > 0) {
+                                const uint64_t seconds = static_cast<uint64_t>(m_status.capacity) * 3600U /
+                                    dischargeRate;
+                                runtime = static_cast<uint32_t>(std::min<uint64_t>(seconds, 0xFFFFFFFEU));
+                            }
                         }
                         *reinterpret_cast<uint32_t*>(outBuf) = runtime;
                         bytesReturned = sizeof(uint32_t);
                         return NtStatus::Success;
                     }
                     case BatteryQueryInfoLevel::BatteryDeviceName: {
-                        size_t strLen = m_deviceName.size() + 1;
-                        if (outLen < strLen) return NtStatus::BufferTooSmall;
-                        std::memcpy(outBuf, m_deviceName.c_str(), strLen);
-                        bytesReturned = strLen;
-                        return NtStatus::Success;
+                        return copyUnicode(m_deviceName);
                     }
                     case BatteryQueryInfoLevel::BatteryManufactureName: {
-                        size_t strLen = m_mfgName.size() + 1;
-                        if (outLen < strLen) return NtStatus::BufferTooSmall;
-                        std::memcpy(outBuf, m_mfgName.c_str(), strLen);
-                        bytesReturned = strLen;
-                        return NtStatus::Success;
+                        return copyUnicode(m_mfgName);
+                    }
+                    case BatteryQueryInfoLevel::BatterySerialNumber: {
+                        return copyUnicode(m_serialNumber);
                     }
                     case BatteryQueryInfoLevel::BatteryUniqueID:
-                    case BatteryQueryInfoLevel::BatterySerialNumber: {
-                        size_t strLen = m_serialNumber.size() + 1;
-                        if (outLen < strLen) return NtStatus::BufferTooSmall;
-                        std::memcpy(outBuf, m_serialNumber.c_str(), strLen);
-                        bytesReturned = strLen;
-                        return NtStatus::Success;
-                    }
                     default:
                         return NtStatus::InvalidDeviceRequest;
                 }
