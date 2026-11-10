@@ -461,6 +461,8 @@ struct WND {
     HWND hwnd{nullptr};
     std::wstring className;
     std::wstring windowName;
+    std::array<uint16_t, 128> titleUtf16{};
+    uint16_t titleUtf16Length{0};
     uint32_t style{0};
     uint32_t exStyle{0};
     RECT rcWindow{0, 0, 0, 0};
@@ -1355,6 +1357,15 @@ public:
         wnd->hwnd = hwnd;
         wnd->className = lpClassName ? lpClassName : L"";
         wnd->windowName = lpWindowName ? lpWindowName : L"";
+#if defined(BUILD_SYSTEM32_STANDALONE_DLL)
+        if (lpWindowName) {
+            const auto* titleUnits = reinterpret_cast<const uint16_t*>(lpWindowName);
+            while (wnd->titleUtf16Length < wnd->titleUtf16.size() - 1 && titleUnits[wnd->titleUtf16Length]) {
+                wnd->titleUtf16[wnd->titleUtf16Length] = titleUnits[wnd->titleUtf16Length];
+                ++wnd->titleUtf16Length;
+            }
+        }
+#endif
         auto wndProc = m_windowClasses.find(wnd->className);
         if (wndProc != m_windowClasses.end()) wnd->wndProc = reinterpret_cast<void*>(wndProc->second);
         wnd->style = dwStyle;
@@ -1438,7 +1449,8 @@ public:
             auto it=m_windows.find(msg.hwnd);
             if (it != m_windows.end()) proc=reinterpret_cast<WNDPROC>(it->second->wndProc);
         }
-        return proc ? proc(msg.hwnd,msg.message,msg.wParam,msg.lParam) : 0;
+        return proc ? proc(msg.hwnd,msg.message,msg.wParam,msg.lParam)
+                    : defWindowProc(msg.hwnd,msg.message,msg.wParam,msg.lParam);
     }
 
     LRESULT defWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1511,6 +1523,8 @@ public:
         if (it == m_windows.end()) return FALSE_VAL;
 
         bool wasVisible = it->second->isVisible;
+        const int32_t oldWidth = it->second->rcWindow.width();
+        const int32_t oldHeight = it->second->rcWindow.height();
         if (nCmdShow == SW_HIDE) {
             it->second->isVisible = false;
             it->second->style &= ~WS_VISIBLE;
@@ -1546,7 +1560,25 @@ public:
             window.style = (window.style | WS_VISIBLE) & ~(WS_MINIMIZE | WS_MAXIMIZE);
             window.isVisible = true;
         }
-        if (it->second->isVisible && m_currentDesktop) m_currentDesktop->setActiveWindow(hwnd);
+        const bool mayActivate = nCmdShow != SW_SHOWMINNOACTIVE && nCmdShow != SW_SHOWNOACTIVATE && nCmdShow != SW_SHOWNA;
+        if (m_currentDesktop && it->second->isVisible && !it->second->isMinimized && mayActivate) {
+            m_currentDesktop->setActiveWindow(hwnd);
+        } else if (m_currentDesktop && m_currentDesktop->getActiveWindow() == hwnd && it->second->isMinimized) {
+            HWND nextActive = nullptr;
+            for (HWND candidate : m_currentDesktop->getZOrder()) {
+                auto candidateIt = m_windows.find(candidate);
+                if (candidateIt != m_windows.end() && candidateIt->second && candidateIt->second->isVisible &&
+                    !candidateIt->second->isMinimized && !candidateIt->second->isDestroyed) {
+                    nextActive = candidate;
+                    break;
+                }
+            }
+            m_currentDesktop->setActiveWindow(nextActive);
+        }
+        if (it->second->rcWindow.width() != oldWidth || it->second->rcWindow.height() != oldHeight) {
+            postMessage(hwnd, WM_SIZE, 0, static_cast<LPARAM>((it->second->rcWindow.height() << 16) |
+                                                               (it->second->rcWindow.width() & 0xFFFF)));
+        }
         postMessage(hwnd, WM_SHOWWINDOW, it->second->isVisible ? 1U : 0U, 0);
 
         if (m_currentDesktop && m_currentDesktop->getHeap() && it->second->desktopHeapOffset != 0) {
@@ -1595,16 +1627,6 @@ public:
         if (wnd->rcWindow.left != oldX || wnd->rcWindow.top != oldY)
             postMessage(hwnd, WM_MOVE, 0, static_cast<LPARAM>((wnd->rcWindow.top << 16) | (wnd->rcWindow.left & 0xFFFF)));
         if (wnd->rcWindow.width() != oldW || wnd->rcWindow.height() != oldH) {
-            if (wnd->hdc) {
-                HBITMAP replacement=m_gdiEngine.createCompatibleBitmap(wnd->hdc,
-                    std::max(1,wnd->rcClient.width()),std::max(1,wnd->rcClient.height()));
-                if (replacement) {
-                    HBITMAP old=wnd->clientBitmap;
-                    m_gdiEngine.selectObject(wnd->hdc,replacement);
-                    wnd->clientBitmap=replacement;
-                    if (old) m_gdiEngine.deleteObject(old);
-                }
-            }
             postMessage(hwnd, WM_SIZE, 0, static_cast<LPARAM>((wnd->rcWindow.height() << 16) | (wnd->rcWindow.width() & 0xFFFF)));
         }
         return TRUE_VAL;
@@ -1726,10 +1748,18 @@ public:
                     }
 
                     int64_t textX = left + frame + 9;
-                    const int64_t textLimit = closeLeft - 8;
+                    const int64_t textLimit = closeLeft - 66;
                     const int64_t textY = top + frame + (caption - 8) / 2;
-                    for (wchar_t ch : window.windowName) {
+#if defined(BUILD_SYSTEM32_STANDALONE_DLL)
+                    const size_t titleLength = window.titleUtf16Length;
+                    auto titleChar = [&](size_t index) { return static_cast<wchar_t>(window.titleUtf16[index]); };
+#else
+                    const size_t titleLength = window.windowName.size();
+                    auto titleChar = [&](size_t index) { return window.windowName[index]; };
+#endif
+                    for (size_t titleIndex = 0; titleIndex < titleLength; ++titleIndex) {
                         if (textX + 8 > textLimit) break;
+                        const wchar_t ch = titleChar(titleIndex);
                         const uint32_t ascii = (ch >= 32 && ch <= 126) ? static_cast<uint32_t>(ch) : static_cast<uint32_t>('?');
                         const uint8_t* glyph = micant::bootvid::font::GLYPH_DATA[ascii - 32];
                         for (int row = 0; row < 8; ++row) {
@@ -1753,8 +1783,8 @@ public:
 
             const int64_t clientX = left + frame;
             const int64_t clientY = top + frame + caption;
-            const int64_t clientWidth = std::min<int64_t>(surface->width, window.rcClient.width());
-            const int64_t clientHeight = std::min<int64_t>(surface->height, window.rcClient.height());
+            const int64_t clientWidth = window.rcClient.width();
+            const int64_t clientHeight = window.rcClient.height();
             const int64_t xBegin = std::max<int64_t>(0, -clientX);
             const int64_t yBegin = std::max<int64_t>(0, -clientY);
             const int64_t xEnd = std::min<int64_t>(clientWidth, screenWidth - clientX);
@@ -1762,13 +1792,300 @@ public:
             if (xBegin >= xEnd || yBegin >= yEnd) continue;
 
             for (int64_t y = yBegin; y < yEnd; ++y) {
-                const size_t srcOffset = static_cast<size_t>(y) * surface->width + static_cast<size_t>(xBegin);
                 const size_t dstOffset = static_cast<size_t>(clientY + y) * screen->width + static_cast<size_t>(clientX + xBegin);
-                std::copy_n(surface->pixels.data() + srcOffset,
-                            static_cast<size_t>(xEnd - xBegin), screen->pixels.data() + dstOffset);
+                const uint32_t sourceY = static_cast<uint32_t>(y * surface->height / std::max<int64_t>(1, clientHeight));
+                for (int64_t x = xBegin; x < xEnd; ++x) {
+                    const uint32_t sourceX = static_cast<uint32_t>(x * surface->width / std::max<int64_t>(1, clientWidth));
+                    screen->pixels[dstOffset + static_cast<size_t>(x - xBegin)] =
+                        surface->pixels[static_cast<size_t>(sourceY) * surface->width + sourceX];
+                }
+            }
+        }
+        size_t minimizedCount = 0;
+        for (HWND hwnd : zOrder) {
+            auto it = m_windows.find(hwnd);
+            if (it != m_windows.end() && it->second && it->second->isVisible && it->second->isMinimized)
+                ++minimizedCount;
+        }
+        if (minimizedCount != 0) {
+            const int64_t barTop = std::max<int64_t>(0, screenHeight - 38);
+            fillRect(0, barTop, screenWidth, screenHeight, 0xF018202E);
+            const int64_t buttonWidth = std::min<int64_t>(180, std::max<int64_t>(112,
+                (screenWidth - 16) / static_cast<int64_t>(std::min<size_t>(minimizedCount, 8)) - 6));
+            size_t slot = 0;
+            for (HWND hwnd : zOrder) {
+                auto it = m_windows.find(hwnd);
+                if (it == m_windows.end() || !it->second || !it->second->isVisible || !it->second->isMinimized) continue;
+                if (slot >= 8) break;
+                const auto& window = *it->second;
+                const int64_t buttonLeft = 8 + static_cast<int64_t>(slot++) * (buttonWidth + 6);
+                fillRect(buttonLeft, barTop + 4, buttonLeft + buttonWidth, screenHeight - 4, 0xFF35455D);
+#if defined(BUILD_SYSTEM32_STANDALONE_DLL)
+                const size_t titleLength = window.titleUtf16Length;
+                auto titleChar = [&](size_t index) { return static_cast<wchar_t>(window.titleUtf16[index]); };
+#else
+                const size_t titleLength = window.windowName.size();
+                auto titleChar = [&](size_t index) { return window.windowName[index]; };
+#endif
+                int64_t textX = buttonLeft + 8;
+                for (size_t c = 0; c < titleLength && textX + 8 < buttonLeft + buttonWidth - 4 && c < 20; ++c) {
+                    const wchar_t ch = titleChar(c);
+                    const uint32_t ascii = (ch >= 32 && ch <= 126) ? static_cast<uint32_t>(ch) : static_cast<uint32_t>('?');
+                    const uint8_t* glyph = micant::bootvid::font::GLYPH_DATA[ascii - 32];
+                    for (int row = 0; row < 8; ++row) for (int col = 0; col < 8; ++col) {
+                        if (glyph[row] & (1U << (7 - col))) {
+                            const int64_t px = textX + col, py = barTop + 14 + row;
+                            if (px >= 0 && px < screenWidth && py < screenHeight)
+                                screen->pixels[static_cast<size_t>(py) * screen->width + static_cast<size_t>(px)] = 0xFFF4F6FA;
+                        }
+                    }
+                    textX += 8;
+                }
+            }
+        }
+        if (m_pointerVisible) {
+            auto cursorPixel = [&](int32_t x, int32_t y, uint32_t color = 0xFFF5F7FC) {
+                fillRect(x, y, x + 1, y + 1, color);
+            };
+            auto cursorLine = [&](int32_t x1, int32_t y1, int32_t x2, int32_t y2, uint32_t color = 0xFFF5F7FC) {
+                const int32_t dx = std::abs(x2 - x1), sx = x1 < x2 ? 1 : -1;
+                const int32_t dy = -std::abs(y2 - y1), sy = y1 < y2 ? 1 : -1;
+                int32_t error = dx + dy;
+                for (;;) {
+                    cursorPixel(x1, y1, color);
+                    if (x1 == x2 && y1 == y2) break;
+                    const int32_t twice = error * 2;
+                    if (twice >= dy) { error += dy; x1 += sx; }
+                    if (twice <= dx) { error += dx; y1 += sy; }
+                }
+            };
+            if (m_cursorShape == CursorShape::Arrow) {
+            for (int32_t row = 0; row < 16; ++row) {
+                for (int32_t col = 0; col < 12; ++col) {
+                    const bool edge = col == 0 || col == row / 2 || (row >= 12 && col >= 5 && col <= 7);
+                    const bool body = (row < 12 && col <= row / 2) || (row >= 10 && row < 16 && col >= 4 && col <= 8);
+                    if (body) fillRect(m_pointerX + col, m_pointerY + row, m_pointerX + col + 1,
+                                       m_pointerY + row + 1, edge ? 0xFF080A0E : 0xFFF5F7FC);
+                }
+            }
+            } else {
+                const int32_t cx = m_pointerX, cy = m_pointerY;
+                const uint32_t outline = 0xFF080A0E;
+                auto outlinedLine = [&](int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
+                    cursorLine(x1 - 1, y1, x2 - 1, y2, outline);
+                    cursorLine(x1 + 1, y1, x2 + 1, y2, outline);
+                    cursorLine(x1, y1 - 1, x2, y2 - 1, outline);
+                    cursorLine(x1, y1 + 1, x2, y2 + 1, outline);
+                    cursorLine(x1, y1, x2, y2);
+                };
+                switch (m_cursorShape) {
+                    case CursorShape::Move:
+                        outlinedLine(cx - 8, cy, cx + 8, cy);
+                        outlinedLine(cx, cy - 8, cx, cy + 8);
+                        cursorLine(cx - 8, cy, cx - 4, cy - 3); cursorLine(cx - 8, cy, cx - 4, cy + 3);
+                        cursorLine(cx + 8, cy, cx + 4, cy - 3); cursorLine(cx + 8, cy, cx + 4, cy + 3);
+                        cursorLine(cx, cy - 8, cx - 3, cy - 4); cursorLine(cx, cy - 8, cx + 3, cy - 4);
+                        cursorLine(cx, cy + 8, cx - 3, cy + 4); cursorLine(cx, cy + 8, cx + 3, cy + 4);
+                        break;
+                    case CursorShape::ResizeNS:
+                        outlinedLine(cx, cy - 8, cx, cy + 8);
+                        cursorLine(cx, cy - 8, cx - 4, cy - 4); cursorLine(cx, cy - 8, cx + 4, cy - 4);
+                        cursorLine(cx, cy + 8, cx - 4, cy + 4); cursorLine(cx, cy + 8, cx + 4, cy + 4);
+                        break;
+                    case CursorShape::ResizeEW:
+                        outlinedLine(cx - 8, cy, cx + 8, cy);
+                        cursorLine(cx - 8, cy, cx - 4, cy - 4); cursorLine(cx - 8, cy, cx - 4, cy + 4);
+                        cursorLine(cx + 8, cy, cx + 4, cy - 4); cursorLine(cx + 8, cy, cx + 4, cy + 4);
+                        break;
+                    case CursorShape::ResizeNWSE:
+                        outlinedLine(cx - 7, cy - 7, cx + 7, cy + 7);
+                        cursorLine(cx - 7, cy - 7, cx - 2, cy - 7); cursorLine(cx - 7, cy - 7, cx - 7, cy - 2);
+                        cursorLine(cx + 7, cy + 7, cx + 2, cy + 7); cursorLine(cx + 7, cy + 7, cx + 7, cy + 2);
+                        break;
+                    case CursorShape::ResizeNESW:
+                        outlinedLine(cx + 7, cy - 7, cx - 7, cy + 7);
+                        cursorLine(cx + 7, cy - 7, cx + 2, cy - 7); cursorLine(cx + 7, cy - 7, cx + 7, cy - 2);
+                        cursorLine(cx - 7, cy + 7, cx - 2, cy + 7); cursorLine(cx - 7, cy + 7, cx - 7, cy + 2);
+                        break;
+                    default: break;
+                }
             }
         }
         return screen;
+    }
+
+    // Route kernel PS/2 mouse packets to the topmost window. Non-client input
+    // is handled here so caption buttons and resize borders remain responsive
+    // even when the application only pumps its normal Win32 message queue.
+    void routeMouseInput(const MicaWin32kInputEvent& input) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_pointerX = input.x;
+        m_pointerY = input.y;
+        m_pointerVisible = true;
+        const bool wasDown = (m_pointerButtons & 1U) != 0;
+        const bool isDown = (input.buttons & 1U) != 0;
+        const int32_t x = input.x;
+        const int32_t y = input.y;
+
+        HWND hit = nullptr;
+        std::shared_ptr<WND> hitWindow;
+        if (m_currentDesktop) {
+            for (HWND candidate : m_currentDesktop->getZOrder()) {
+                auto it = m_windows.find(candidate);
+                if (it == m_windows.end() || !it->second || !it->second->isVisible ||
+                    it->second->isMinimized || it->second->isDestroyed || it->second->hwndParent) continue;
+                if (it->second->rcWindow.contains(x, y)) { hit = candidate; hitWindow = it->second; break; }
+            }
+        }
+        if (m_mouseInteraction == MouseInteraction::Move) {
+            m_cursorShape = CursorShape::Move;
+        } else if (m_mouseInteraction == MouseInteraction::Resize) {
+            m_cursorShape = cursorForResizeEdges(m_resizeEdges);
+        } else if (hitWindow) {
+            const int32_t frame = windowFrameInset(*hitWindow);
+            const int32_t localX = x - hitWindow->rcWindow.left;
+            const int32_t localY = y - hitWindow->rcWindow.top;
+            const int32_t width = hitWindow->rcWindow.width();
+            const int32_t height = hitWindow->rcWindow.height();
+            const int32_t caption = windowCaptionHeight(*hitWindow);
+            if (caption && localY >= frame && localY < frame + caption) {
+                m_cursorShape = CursorShape::Move;
+            } else {
+                uint8_t edges = 0;
+                if (localX < 9) edges |= 0x01;
+                if (localX >= width - 9) edges |= 0x02;
+                if (localY < 9) edges |= 0x04;
+                if (localY >= height - 9) edges |= 0x08;
+                m_cursorShape = cursorForResizeEdges(edges);
+            }
+        } else {
+            m_cursorShape = CursorShape::Arrow;
+        }
+
+        if (isDown && !wasDown) {
+            if (!hit && m_currentDesktop) {
+                auto screen = m_gdiEngine.getBitmapForDC(m_gdiEngine.getScreenDC());
+                if (screen && y >= static_cast<int32_t>(screen->height) - 38) {
+                    const auto order = m_currentDesktop->getZOrder();
+                    size_t minimizedCount = 0;
+                    for (HWND candidate : order) {
+                        auto it = m_windows.find(candidate);
+                        if (it != m_windows.end() && it->second && it->second->isVisible && it->second->isMinimized)
+                            ++minimizedCount;
+                    }
+                    const int32_t shownCount = static_cast<int32_t>(std::min<size_t>(minimizedCount, 8));
+                    const int32_t buttonWidth = std::min<int32_t>(180, std::max<int32_t>(112,
+                        (static_cast<int32_t>(screen->width) - 16) / std::max(1, shownCount) - 6));
+                    const int32_t buttonStride = buttonWidth + 6;
+                    size_t slot = 0;
+                    for (HWND candidate : order) {
+                        auto it = m_windows.find(candidate);
+                        if (it == m_windows.end() || !it->second || !it->second->isVisible || !it->second->isMinimized) continue;
+                        const int32_t buttonLeft = 8 + static_cast<int32_t>(slot) * buttonStride;
+                        if (slot < 8 && x >= buttonLeft && x < buttonLeft + buttonWidth) {
+                            showWindow(candidate, SW_RESTORE);
+                            m_currentDesktop->bringToTop(candidate);
+                            m_currentDesktop->setActiveWindow(candidate);
+                            m_pointerButtons = input.buttons;
+                            return;
+                        }
+                        ++slot;
+                    }
+                }
+            }
+            m_mouseCapture = hit;
+            m_pressedCaptionButton = 0;
+            m_mouseInteraction = MouseInteraction::None;
+            if (hitWindow) {
+                if (m_currentDesktop) {
+                    m_currentDesktop->bringToTop(hit);
+                    m_currentDesktop->setActiveWindow(hit);
+                }
+                const int32_t frame = windowFrameInset(*hitWindow);
+                const int32_t caption = windowCaptionHeight(*hitWindow);
+                const int32_t localX = x - hitWindow->rcWindow.left;
+                const int32_t localY = y - hitWindow->rcWindow.top;
+                const int32_t width = hitWindow->rcWindow.width();
+                const int32_t height = hitWindow->rcWindow.height();
+                const int32_t closeLeft = width - frame - 30;
+                if (caption && localY >= frame && localY < frame + caption) {
+                    if (localX >= closeLeft && localX < width - frame - 2) m_pressedCaptionButton = 3;
+                    else if (localX >= closeLeft - 29 && localX < closeLeft - 1) m_pressedCaptionButton = 2;
+                    else if (localX >= closeLeft - 58 && localX < closeLeft - 30) m_pressedCaptionButton = 1;
+                    else {
+                        m_mouseInteraction = MouseInteraction::Move;
+                        m_dragOffsetX = localX;
+                        m_dragOffsetY = localY;
+                    }
+                } else if (hitWindow->style & WS_THICKFRAME) {
+                    const uint8_t edges = static_cast<uint8_t>((localX < 9 ? 0x01 : 0) |
+                        (localX >= width - 9 ? 0x02 : 0) |
+                        (localY < 9 ? 0x04 : 0) | (localY >= height - 9 ? 0x08 : 0));
+                    if (!edges) {
+                        postMouseMessage(hitWindow, WM_LBUTTONDOWN, input.buttons, x, y);
+                    } else {
+                    m_mouseInteraction = MouseInteraction::Resize;
+                    m_resizeStartRect = hitWindow->rcWindow;
+                    m_dragOffsetX = x;
+                    m_dragOffsetY = y;
+                    m_resizeEdges = edges;
+                    }
+                } else {
+                    postMouseMessage(hitWindow, WM_LBUTTONDOWN, input.buttons, x, y);
+                }
+            }
+        } else if (isDown && wasDown && m_mouseCapture) {
+            auto it = m_windows.find(m_mouseCapture);
+            if (it != m_windows.end() && it->second) {
+                auto window = it->second;
+                if (m_mouseInteraction == MouseInteraction::Move) {
+                    setWindowPos(window->hwnd, HWND_TOP, x - m_dragOffsetX, y - m_dragOffsetY,
+                                 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+                } else if (m_mouseInteraction == MouseInteraction::Resize) {
+                    int32_t left = m_resizeStartRect.left, top = m_resizeStartRect.top;
+                    int32_t right = m_resizeStartRect.right, bottom = m_resizeStartRect.bottom;
+                    if (m_resizeEdges & 0x01) left = std::min(x, right - 140);
+                    if (m_resizeEdges & 0x02) right = std::max(x, left + 140);
+                    if (m_resizeEdges & 0x04) top = std::min(y, bottom - 90);
+                    if (m_resizeEdges & 0x08) bottom = std::max(y, top + 90);
+                    setWindowPos(window->hwnd, HWND_TOP, left, top, right - left, bottom - top,
+                                 SWP_NOZORDER | SWP_NOACTIVATE);
+                } else if (!m_pressedCaptionButton) {
+                    postMouseMessage(window, WM_MOUSEMOVE, input.buttons, x, y);
+                }
+            }
+        } else if (!isDown && wasDown) {
+            auto it = m_windows.find(m_mouseCapture);
+            if (it != m_windows.end() && it->second) {
+                auto window = it->second;
+                if (m_pressedCaptionButton) {
+                    const int32_t frame = windowFrameInset(*window);
+                    const int32_t caption = windowCaptionHeight(*window);
+                    const int32_t localX = x - window->rcWindow.left;
+                    const int32_t localY = y - window->rcWindow.top;
+                    const int32_t width = window->rcWindow.width();
+                    const int32_t closeLeft = width - frame - 30;
+                    const bool inCaption = localY >= frame && localY < frame + caption;
+                    const bool stillInButton = m_pressedCaptionButton == 3 ? (localX >= closeLeft && localX < width - frame - 2) :
+                        m_pressedCaptionButton == 2 ? (localX >= closeLeft - 29 && localX < closeLeft - 1) :
+                                                      (localX >= closeLeft - 58 && localX < closeLeft - 30);
+                    if (inCaption && stillInButton) {
+                        if (m_pressedCaptionButton == 1) showWindow(window->hwnd, SW_MINIMIZE);
+                        else if (m_pressedCaptionButton == 2) showWindow(window->hwnd, window->isMaximized ? SW_RESTORE : SW_MAXIMIZE);
+                        else postMessage(window->hwnd, WM_CLOSE, 0, 0);
+                    }
+                } else if (m_mouseInteraction == MouseInteraction::None) {
+                    postMouseMessage(window, WM_LBUTTONUP, input.buttons, x, y);
+                }
+            }
+            m_mouseCapture = nullptr;
+            m_mouseInteraction = MouseInteraction::None;
+            m_pressedCaptionButton = 0;
+            m_resizeEdges = 0;
+        } else if (!isDown && hitWindow) {
+            postMouseMessage(hitWindow, WM_MOUSEMOVE, input.buttons, x, y);
+        }
+        m_pointerButtons = input.buttons;
     }
 
     // --- Message Queue & Pump ---
@@ -1840,10 +2157,17 @@ public:
 
     BOOL getMessage(MSG& outMsg, HWND hwndFilter, UINT msgMin, UINT msgMax, uint32_t tid = 1) {
         auto queue = getOrCreateThreadQueue(tid);
-        return queue->getMessage(outMsg, hwndFilter, msgMin, msgMax);
+        for (;;) {
+            pumpMouseInput();
+            if (queue->peekMessage(outMsg, hwndFilter, msgMin, msgMax, PM_REMOVE)) return TRUE_VAL;
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
     }
 
     BOOL peekMessage(MSG& outMsg, HWND hwndFilter, UINT msgMin, UINT msgMax, UINT removeFlag, uint32_t tid = 1) {
+        pumpMouseInput();
         auto queue = getOrCreateThreadQueue(tid);
         return queue->peekMessage(outMsg, hwndFilter, msgMin, msgMax, removeFlag) ? TRUE_VAL : FALSE_VAL;
     }
@@ -2054,6 +2378,67 @@ public:
     }
 
 private:
+    enum class MouseInteraction : uint8_t { None, Move, Resize };
+    enum class CursorShape : uint8_t { Arrow, Move, ResizeNS, ResizeEW, ResizeNWSE, ResizeNESW };
+
+    static CursorShape cursorForResizeEdges(uint8_t edges) noexcept {
+        const bool horizontal = (edges & (0x01 | 0x02)) != 0;
+        const bool vertical = (edges & (0x04 | 0x08)) != 0;
+        if (horizontal && vertical) {
+            const bool sameDirection = ((edges & 0x01) && (edges & 0x04)) ||
+                                       ((edges & 0x02) && (edges & 0x08));
+            return sameDirection ? CursorShape::ResizeNWSE : CursorShape::ResizeNESW;
+        }
+        if (horizontal) return CursorShape::ResizeEW;
+        if (vertical) return CursorShape::ResizeNS;
+        return CursorShape::Arrow;
+    }
+
+    static LPARAM packMousePoint(int32_t x, int32_t y) noexcept {
+        return static_cast<LPARAM>((static_cast<uint32_t>(y) & 0xFFFFU) << 16 |
+                                   (static_cast<uint32_t>(x) & 0xFFFFU));
+    }
+
+    void postMouseMessage(const std::shared_ptr<WND>& window, UINT message,
+                          WPARAM buttons, int32_t screenX, int32_t screenY) {
+        if (!window) return;
+        const int32_t clientX = screenX - window->rcWindow.left - windowFrameInset(*window);
+        const int32_t clientY = screenY - window->rcWindow.top - windowFrameInset(*window) - windowCaptionHeight(*window);
+        postMessage(window->hwnd, message, buttons, packMousePoint(clientX, clientY));
+    }
+
+    void pumpMouseInput() {
+#if defined(__x86_64__)
+        bool inputChanged = false;
+        for (unsigned count = 0; count < 128; ++count) {
+            MicaWin32kInputEvent input{};
+            uint64_t available = 0;
+            __asm__ __volatile__("movq %1, %%r10; movl $0x82, %%eax; syscall"
+                                 : "=a"(available) : "r"(&input)
+                                 : "r10", "rcx", "r11", "memory");
+            if (available != 1) break;
+            routeMouseInput(input);
+            inputChanged = true;
+        }
+        if (inputChanged) {
+            auto frame = composeDesktopFrame();
+            if (!frame || frame->pixels.empty()) return;
+            struct PresentParams {
+                uint64_t surfaceBufferVa;
+                uint32_t dstX, dstY, width, height, pitch, reserved;
+            } params{};
+            params.surfaceBufferVa = reinterpret_cast<uint64_t>(frame->pixels.data());
+            params.width = frame->width;
+            params.height = frame->height;
+            params.pitch = frame->width;
+            uint64_t status = 0;
+            __asm__ __volatile__("movq %1, %%r10; movl $0x81, %%eax; syscall"
+                                 : "=a"(status) : "r"(&params)
+                                 : "r10", "rcx", "r11", "memory");
+        }
+#endif
+    }
+
     static int32_t windowFrameInset(const WND& window) noexcept {
         if (window.hwndParent) return 0;
         if (window.style & WS_THICKFRAME) return 5;
@@ -2101,6 +2486,17 @@ private:
     std::atomic<uint64_t> m_totalWindowsDestroyed{0};
     std::atomic<uint64_t> m_totalMessagesPosted{0};
     std::atomic<uint64_t> m_totalMessagesSent{0};
+
+    HWND m_mouseCapture{nullptr};
+    MouseInteraction m_mouseInteraction{MouseInteraction::None};
+    CursorShape m_cursorShape{CursorShape::Arrow};
+    int32_t m_dragOffsetX{0}, m_dragOffsetY{0};
+    int32_t m_pointerX{512}, m_pointerY{384};
+    uint32_t m_pointerButtons{0};
+    uint8_t m_pressedCaptionButton{0};
+    RECT m_resizeStartRect{0, 0, 0, 0};
+    uint8_t m_resizeEdges{0};
+    bool m_pointerVisible{true};
 
     mutable std::recursive_mutex m_mutex;
 };

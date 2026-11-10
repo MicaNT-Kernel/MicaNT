@@ -16,6 +16,30 @@ namespace micant::sys {
 void SyscallDispatcher::initializeStandardTable() {}
 }
 
+namespace {
+int32_t PresentComposedDesktop(TitanWin32kSubsystem& server) {
+    auto bitmap = server.composeDesktopFrame();
+    if (!bitmap || bitmap->pixels.empty() || bitmap->width == 0 || bitmap->height == 0) return 0;
+    struct PresentParams {
+        uint64_t surfaceBufferVa;
+        uint32_t dstX, dstY, width, height, pitch, reserved;
+    } params{};
+    params.surfaceBufferVa = reinterpret_cast<uint64_t>(bitmap->pixels.data());
+    params.width = bitmap->width;
+    params.height = bitmap->height;
+    params.pitch = bitmap->width;
+    uint64_t status = 0;
+#if defined(__x86_64__)
+    __asm__ __volatile__("movq %1, %%r10; movl $0x81, %%eax; syscall"
+                         : "=a"(status) : "r"(&params)
+                         : "r10", "rcx", "r11", "memory");
+#else
+    return 0;
+#endif
+    return status == 0 ? 1 : 0;
+}
+}
+
 extern "C" {
 void* MicaWin32kCreateWindowExW(uint32_t ex, const wchar_t* cls,
     const wchar_t* title, uint32_t style, int32_t x, int32_t y, int32_t w, int32_t h,
@@ -32,14 +56,20 @@ void* MicaWin32kCreateWindowExW(uint32_t ex, const wchar_t* cls,
     return hwnd;
 }
 int32_t MicaWin32kDestroyWindow(void* hwnd) {
-    return NtUserDestroyWindow(hwnd);
+    const int32_t result = NtUserDestroyWindow(hwnd);
+    if (result) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
+    return result;
 }
 int32_t MicaWin32kShowWindow(void* hwnd, int32_t cmd) {
-    return NtUserShowWindow(hwnd, cmd);
+    const int32_t result = NtUserShowWindow(hwnd, cmd);
+    if (hwnd) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
+    return result;
 }
 int32_t MicaWin32kSetWindowPos(void* hwnd, void* after,
     int32_t x, int32_t y, int32_t w, int32_t h, uint32_t flags) {
-    return NtUserSetWindowPos(hwnd, after, x, y, w, h, flags);
+    const int32_t result = NtUserSetWindowPos(hwnd, after, x, y, w, h, flags);
+    if (result) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
+    return result;
 }
 int32_t MicaWin32kPostMessageW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
     return NtUserPostMessage(hwnd, message, wParam, lParam);
@@ -65,7 +95,9 @@ intptr_t MicaWin32kGetWindowLongPtrW(void* hwnd, int32_t index) {
     return NtUserGetWindowLongPtr(hwnd,index);
 }
 intptr_t MicaWin32kDefWindowProcW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
-    return NtUserDefWindowProc(hwnd,message,wParam,lParam);
+    const intptr_t result = NtUserDefWindowProc(hwnd,message,wParam,lParam);
+    if (message == 0x0010) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
+    return result;
 }
 void* MicaWin32kGetDC(void* hwnd) { return NtUserGetDC(hwnd); }
 int32_t MicaWin32kReleaseDC(void* hwnd, void* dc) { return NtUserReleaseDC(hwnd,dc); }
@@ -76,28 +108,7 @@ int32_t MicaWin32kBitBlt(void* dst, int32_t x, int32_t y, int32_t w, int32_t h,
     void* src, int32_t sx, int32_t sy, uint32_t rop) { return NtGdiBitBlt(dst,x,y,w,h,src,sx,sy,rop); }
 int32_t MicaWin32kPresentDC(void* hdc) {
     if (!hdc) return 0;
-    auto& server = TitanWin32kSubsystem::Instance();
-    auto bitmap = server.composeDesktopFrame();
-    if (!bitmap || bitmap->pixels.empty() || bitmap->width == 0 || bitmap->height == 0) return 0;
-
-    struct PresentParams {
-        uint64_t surfaceBufferVa;
-        uint32_t dstX, dstY, width, height, pitch, reserved;
-    } params{};
-    params.surfaceBufferVa = reinterpret_cast<uint64_t>(bitmap->pixels.data());
-    params.width = bitmap->width;
-    params.height = bitmap->height;
-    params.pitch = bitmap->width;
-
-    uint64_t status = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movq %1, %%r10; movl $0x81, %%eax; syscall"
-                         : "=a"(status) : "r"(&params)
-                         : "r10", "rcx", "r11", "memory");
-#else
-    return 0;
-#endif
-    return status == 0 ? 1 : 0;
+    return PresentComposedDesktop(TitanWin32kSubsystem::Instance());
 }
 int32_t MicaWin32kDeleteObject(void* object) { return NtGdiDeleteObjectApp(object); }
 void* MicaWin32kGetStockObject(int32_t index) { return NtGdiGetStockObject(index); }

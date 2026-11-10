@@ -16,6 +16,11 @@ extern "C" {
 
 typedef struct MicaWin32kRect { int32_t left, top, right, bottom; } MicaWin32kRect;
 typedef struct MicaWin32kPoint { int32_t x, y; } MicaWin32kPoint;
+typedef struct MicaWin32kInputEvent {
+    int32_t x, y;
+    uint32_t buttons;
+    uint32_t sequence;
+} MicaWin32kInputEvent;
 typedef struct MicaWin32kMessage {
     void* hwnd;
     uint32_t message;

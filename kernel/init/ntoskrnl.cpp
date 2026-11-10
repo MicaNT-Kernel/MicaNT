@@ -28,6 +28,7 @@
 
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/win32k_client.h"
 #include "micant/km/hal/boot.hpp"
 #include "micant/km/hal/bootvid.hpp"
 #include "micant/km/hal/cpu.hpp"
@@ -453,7 +454,48 @@ struct Ring3Telemetry {
     bool userProcessExitedCleanly{false};
 };
 static Ring3Telemetry s_ring3Telemetry{};
+static bool s_loggedFirstGdiPresent = false;
 static micant::um::UserLoadedImageInfo s_loadedPeInfo{};
+static MicaWin32kInputEvent s_win32kInputQueue[128]{};
+static volatile uint32_t s_win32kInputHead = 0;
+static volatile uint32_t s_win32kInputTail = 0;
+static uint32_t s_win32kInputSequence = 0;
+static volatile bool s_ring3ApplicationRunning = false;
+static uint8_t s_asyncMousePacket[3]{};
+static uint8_t s_asyncMousePacketPos = 0;
+static int32_t s_win32kMouseX = 512, s_win32kMouseY = 384;
+static int32_t s_mouseScreenWidth = 1024, s_mouseScreenHeight = 768;
+
+static void publishWin32kMousePacket(const uint8_t packet[3]) {
+    if (packet[0] & 0xC0) return;
+    s_win32kMouseX += static_cast<int8_t>(packet[1]);
+    s_win32kMouseY -= static_cast<int8_t>(packet[2]);
+    if (s_win32kMouseX < 0) s_win32kMouseX = 0;
+    if (s_win32kMouseY < 0) s_win32kMouseY = 0;
+    if (s_win32kMouseX >= s_mouseScreenWidth) s_win32kMouseX = s_mouseScreenWidth - 1;
+    if (s_win32kMouseY >= s_mouseScreenHeight) s_win32kMouseY = s_mouseScreenHeight - 1;
+    uint32_t head = s_win32kInputHead;
+    if (head - s_win32kInputTail >= 128) s_win32kInputTail = head - 127;
+    s_win32kInputQueue[head % 128] = {
+        s_win32kMouseX, s_win32kMouseY, static_cast<uint32_t>(packet[0] & 0x07),
+        ++s_win32kInputSequence
+    };
+    s_win32kInputHead = head + 1;
+}
+
+static void pollPs2MouseFromClockInterrupt() {
+    for (unsigned drained = 0; drained < 8; ++drained) {
+        const uint8_t status = inb(0x64);
+        if (!(status & 0x01) || !(status & 0x20)) break;
+        const uint8_t byte = inb(0x60);
+        if (s_asyncMousePacketPos == 0 && !(byte & 0x08)) continue;
+        s_asyncMousePacket[s_asyncMousePacketPos++] = byte;
+        if (s_asyncMousePacketPos == 3) {
+            s_asyncMousePacketPos = 0;
+            publishWin32kMousePacket(s_asyncMousePacket);
+        }
+    }
+}
 static bool s_ps2ShiftState = false;
 
 static micant::bootvid::BootVideoDriver* s_globalVideoDriver = nullptr;
@@ -545,13 +587,15 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     pm.dispatchSyscall(ssn, arg1, arg2, arg3, arg4,
                        s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
 
-    UartSerial::print("[KiSystemCall64] Fast Syscall #");
-    UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
-    UartSerial::print(" from Ring 3: SSN=0x");
-    UartSerial::printHex64(ssn);
-    UartSerial::print(" | Arg1=0x");
-    UartSerial::printHex64(arg1);
-    UartSerial::print("\r\n");
+    if (ssn != 0x81 && ssn != 0x82) {
+        UartSerial::print("[KiSystemCall64] Fast Syscall #");
+        UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
+        UartSerial::print(" from Ring 3: SSN=0x");
+        UartSerial::printHex64(ssn);
+        UartSerial::print(" | Arg1=0x");
+        UartSerial::printHex64(arg1);
+        UartSerial::print("\r\n");
+    }
 
     switch (ssn) {
         case 0x08: { // NtShutdownSystem (0=Shutdown, 1=Reboot, 2=PowerOff)
@@ -777,28 +821,40 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             return 0;
         }
         case 0x81: { // NtGdiPresentSurface
-            UartSerial::print("  -> NtGdiPresentSurface: 32-bpp BGRA surface blitted to physical VRAM: ");
-            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
-            if (vad != nullptr && arg1 != 0) {
-                auto* p = reinterpret_cast<micant::um::UserPresentSurfaceParams64*>(arg1);
-                UartSerial::printDec(p->width);
-                UartSerial::print("x");
-                UartSerial::printDec(p->height);
-                UartSerial::print(" @ (");
-                UartSerial::printDec(p->dstX);
-                UartSerial::print(", ");
-                UartSerial::printDec(p->dstY);
-                UartSerial::print(")");
-            }
             s_ring3Telemetry.totalFramesPresented = pm.getTotalFramesPresented();
             s_ring3Telemetry.totalPixelsBlitted = pm.getTotalPixelsBlitted();
-            UartSerial::print(" [Total Frames: ");
-            UartSerial::printDec(static_cast<uint32_t>(pm.getTotalFramesPresented()));
-            UartSerial::print(" | Total Pixels: ");
-            UartSerial::printDec(static_cast<uint32_t>(pm.getTotalPixelsBlitted()));
-            UartSerial::print("] -> STATUS_SUCCESS\r\n");
-            LogKernel("[Syscall] NtGdiPresentSurface (0x81) Surface Blitted");
+            if (!s_loggedFirstGdiPresent && pm.getTotalFramesPresented() != 0) {
+                s_loggedFirstGdiPresent = true;
+                UartSerial::print("  -> NtGdiPresentSurface: 32-bpp BGRA surface blitted to physical VRAM: ");
+                const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+                if (vad != nullptr && arg1 != 0) {
+                    auto* p = reinterpret_cast<micant::um::UserPresentSurfaceParams64*>(arg1);
+                    UartSerial::printDec(p->width);
+                    UartSerial::print("x");
+                    UartSerial::printDec(p->height);
+                    UartSerial::print(" @ (");
+                    UartSerial::printDec(p->dstX);
+                    UartSerial::print(", ");
+                    UartSerial::printDec(p->dstY);
+                    UartSerial::print(")");
+                }
+                UartSerial::print(" [Total Frames: ");
+                UartSerial::printDec(static_cast<uint32_t>(pm.getTotalFramesPresented()));
+                UartSerial::print(" | Total Pixels: ");
+                UartSerial::printDec(static_cast<uint32_t>(pm.getTotalPixelsBlitted()));
+                UartSerial::print("] -> STATUS_SUCCESS\r\n");
+                LogKernel("[Syscall] NtGdiPresentSurface (0x81) Surface Blitted");
+            }
             return 0;
+        }
+        case 0x82: { // NtUserPollMouseInput
+            auto* output = reinterpret_cast<MicaWin32kInputEvent*>(arg1);
+            if (!output || !micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1)) return 0;
+            const uint32_t tail = s_win32kInputTail;
+            if (tail == s_win32kInputHead) return 0;
+            *output = s_win32kInputQueue[tail % 128];
+            s_win32kInputTail = tail + 1;
+            return 1;
         }
         default:
             return 0;
@@ -1101,6 +1157,7 @@ extern "C" __attribute__((naked)) void KiPageFaultStub() {
 extern "C" void KiClockInterruptHandler() {
     auto& intEngine = micant::hal::idt::InterruptEngine64::get();
     intEngine.updateSystemTime();
+    if (s_ring3ApplicationRunning) pollPs2MouseFromClockInterrupt();
     intEngine.sendEoi();
 }
 
@@ -1970,6 +2027,7 @@ static bool transitionToRing3(
     wrmsr(micant::cpu::MSR_GS_BASE, tebVa);
 
     s_ring3Telemetry.userlandExecutionCount++;
+    s_ring3ApplicationRunning = true;
 
     // 5. Transition to Ring 3 via IRETQ
 #if defined(__x86_64__)
@@ -1999,7 +2057,7 @@ static bool transitionToRing3(
         "movq %3, %%rdi\n\t"
         "pushq $0x002B\n\t"
         "pushq %1\n\t"
-        "pushq $0x0002\n\t"
+        "pushq $0x0202\n\t"
         "pushq $0x0033\n\t"
         "pushq %0\n\t"
         "iretq\n\t"
@@ -2009,6 +2067,8 @@ static bool transitionToRing3(
         : "rax", "rcx", "rdx", "rdi", "memory"
     );
 #endif
+
+    s_ring3ApplicationRunning = false;
 
     return s_ring3Telemetry.userProcessExitedCleanly;
 }
@@ -3017,6 +3077,8 @@ extern "C" micant::NtStatus KiSystemStartup(
 
     bool s_showDesktop = false;
     bool mouseReady = initPs2Mouse();
+    s_mouseScreenWidth = static_cast<int32_t>(width);
+    s_mouseScreenHeight = static_cast<int32_t>(height);
     UartSerial::print(mouseReady ? "[PS/2] Mouse enabled.\r\n" : "[PS/2] Mouse unavailable.\r\n");
     int mouseX = static_cast<int>(width / 2), mouseY = static_cast<int>(height / 2);
     uint8_t mousePacket[3]{};
@@ -4980,12 +5042,25 @@ extern "C" micant::NtStatus KiSystemStartup(
                     mousePacketPos = 0;
                     if (!(mousePacket[0] & 0xc0)) {
                         if (s_showDesktop) hideCursor();
+                        mouseX = s_win32kMouseX;
+                        mouseY = s_win32kMouseY;
                         mouseX += static_cast<int8_t>(mousePacket[1]);
                         mouseY -= static_cast<int8_t>(mousePacket[2]);
                         if (mouseX < 0) mouseX = 0;
                         if (mouseY < 0) mouseY = 0;
                         if (mouseX >= static_cast<int>(width)) mouseX = width - 1;
                         if (mouseY >= static_cast<int>(height)) mouseY = height - 1;
+                        s_win32kMouseX = mouseX;
+                        s_win32kMouseY = mouseY;
+                        uint32_t inputHead = s_win32kInputHead;
+                        if (inputHead - s_win32kInputTail >= 128) {
+                            s_win32kInputTail = inputHead - 127;
+                        }
+                        s_win32kInputQueue[inputHead % 128] = {
+                            mouseX, mouseY, static_cast<uint32_t>(mousePacket[0] & 0x07),
+                            ++s_win32kInputSequence
+                        };
+                        s_win32kInputHead = inputHead + 1;
                         if (desktopPanelOpen && panelDragging && (mousePacket[0] & 1)) {
                             panelX = mouseX - dragOffsetX; panelY = mouseY - dragOffsetY;
                             if (panelX < 0) panelX = 0;
