@@ -534,14 +534,16 @@ static void ShellAddLine(const char* text, micant::bootvid::Color col = micant::
 }
 
 // Fast Syscall Dispatcher
-extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64_t arg2) {
+extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64_t arg2,
+                                               uint64_t arg3, uint64_t arg4) {
     s_ring3Telemetry.syscallDispatchCount++;
     s_ring3Telemetry.lastSyscallNumber = ssn;
     s_ring3Telemetry.lastSyscallArg1 = arg1;
     s_ring3Telemetry.lastSyscallArg2 = arg2;
 
     auto& pm = micant::um::UserProcessManager64::get();
-    pm.dispatchSyscall(ssn, arg1, arg2, 0, 0, s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
+    pm.dispatchSyscall(ssn, arg1, arg2, arg3, arg4,
+                       s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
 
     UartSerial::print("[KiSystemCall64] Fast Syscall #");
     UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
@@ -810,8 +812,14 @@ extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
         "pushq %r15\n\t"
         "cmpq $0x01, %rax\n\t"
         "je 2f\n\t"
-        "movq %rax, %rcx\n\t"
+        // Windows x64 syscall ABI: SSN=EAX, arg1=R10, arg2=RDX,
+        // arg3=R8, arg4=R9. KiSystemCall64Dispatcher uses the Windows ABI.
         "subq $40, %rsp\n\t"
+        "movq %r9, 32(%rsp)\n\t"
+        "movq %r8, %r9\n\t"
+        "movq %rdx, %r8\n\t"
+        "movq %r10, %rdx\n\t"
+        "movq %rax, %rcx\n\t"
         "callq KiSystemCall64Dispatcher\n\t"
         "addq $40, %rsp\n\t"
         "movq %rax, s_savedSyscallRet(%rip)\n\t"
@@ -838,8 +846,12 @@ extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
         "movq s_savedSyscallRet(%rip), %rax\n\t"
         "iretq\n\t"
         "2:\n\t"
-        "movq %rax, %rcx\n\t"
         "subq $40, %rsp\n\t"
+        "movq %r9, 32(%rsp)\n\t"
+        "movq %r8, %r9\n\t"
+        "movq %rdx, %r8\n\t"
+        "movq %r10, %rdx\n\t"
+        "movq %rax, %rcx\n\t"
         "callq KiSystemCall64Dispatcher\n\t"
         "addq $40, %rsp\n\t"
         "movq 0*8+s_kernelSavedGprs(%rip), %rbx\n\t"
@@ -1325,6 +1337,13 @@ static void DrawPrismX3DViewport(
     videoDriver.drawString(vx + 10, vy + vh - 18, "5-Pass Frame Graph: SM6.9 Mesh + DXR 1.1 + DirectML", Color{140, 180, 210}, Color{16, 22, 34}, 1);
 }
 
+struct SurShellDesktopWindow {
+    bool open{}, minimized{}, maximized{};
+    int x{}, y{}, w{}, h{};
+    char title[40]{};
+};
+static SurShellDesktopWindow s_surShellWindows[8]{};
+
 static void DrawSurShellDesktop(
     micant::bootvid::BootVideoDriver& videoDriver,
     uint32_t width,
@@ -1446,6 +1465,26 @@ static void DrawSurShellDesktop(
 
         videoDriver.fillRectangle(hubX + 20, cardY + cardH - 32, hubW - 40, 22, micant::bootvid::Color{16, 22, 34});
         videoDriver.drawString(hubX + 28, cardY + cardH - 26, "User: MicaAdmin  |  Session 1 Interactive  |  Power", micant::bootvid::Color{160, 180, 210}, micant::bootvid::Color{16, 22, 34}, 1);
+    }
+
+    // Compose every visible top-level window in stable back-to-front slot order.
+    for (const auto& win : s_surShellWindows) {
+        if (!win.open || win.minimized || win.w < 80 || win.h < 50) continue;
+        const int x = win.x, y = win.y, w = win.w, h = win.h;
+        videoDriver.fillRectangle(x, y, w, h, micant::bootvid::Color{14, 20, 32});
+        videoDriver.drawRectangle(x, y, w, h, micant::bootvid::Color{0, 180, 220}, 2);
+        videoDriver.fillRectangle(x + 2, y + 2, w - 4, 34, micant::bootvid::Color{28, 38, 60});
+        videoDriver.drawString(x + 14, y + 12, win.title, micant::bootvid::Color{255,255,255}, micant::bootvid::Color{28,38,60}, 1);
+        videoDriver.fillRectangle(x + w - 108, y + 5, 30, 26, micant::bootvid::Color{45,65,95});
+        videoDriver.drawString(x + w - 101, y + 10, "_", micant::bootvid::Color{255,255,255}, micant::bootvid::Color{45,65,95}, 1);
+        videoDriver.fillRectangle(x + w - 74, y + 5, 30, 26, micant::bootvid::Color{45,65,95});
+        videoDriver.drawString(x + w - 67, y + 10, win.maximized ? "R" : "[]", micant::bootvid::Color{255,255,255}, micant::bootvid::Color{45,65,95}, 1);
+        videoDriver.fillRectangle(x + w - 40, y + 5, 32, 26, micant::bootvid::Color{90,40,48});
+        videoDriver.drawString(x + w - 29, y + 10, "X", micant::bootvid::Color{255,255,255}, micant::bootvid::Color{90,40,48}, 1);
+        for (size_t line = 0; line < s_shellOutputCount && line < 8; ++line)
+            videoDriver.drawString(x + 16, y + 54 + line * 22, s_shellOutputLines[line].text,
+                s_shellOutputLines[line].color, micant::bootvid::Color{14,20,32}, 1);
+        videoDriver.drawRectangle(x + w - 12, y + h - 12, 10, 10, micant::bootvid::Color{0,180,220});
     }
 
     // Top Navigation / Banner
@@ -4263,8 +4302,8 @@ extern "C" micant::NtStatus KiSystemStartup(
         ExecuteCommandImpl(ExecuteCommandImpl, cmd);
     };
 
-    struct DesktopWindow { bool open{}, minimized{}, maximized{}; int x{}, y{}, w{}, h{}; char title[40]{}; };
-    DesktopWindow desktopWindows[8]{};
+    using DesktopWindow = SurShellDesktopWindow;
+    auto& desktopWindows = s_surShellWindows;
     int activeWindow = -1;
     bool desktopPanelOpen = false;
     int panelX = 100, panelY = 80;
@@ -4295,13 +4334,30 @@ extern "C" micant::NtStatus KiSystemStartup(
         const int dockY = static_cast<int>(height) - 60;
         const int hubW = width >= 960 ? static_cast<int>((width - 64) / 2 > 460 ? 460 : (width - 64) / 2) : (width > 500 ? 460 : static_cast<int>(width) - 32);
         const int hubX = width >= 960 ? 24 : (static_cast<int>(width) - hubW) / 2;
+        for (int pass = 0; pass < 9; ++pass) {
+            const int i = pass == 0 ? activeWindow : 8 - pass;
+            if (i < 0 || i >= 8) continue;
+            auto& candidate = desktopWindows[i];
+            if (!candidate.open || candidate.minimized || mouseX < candidate.x || mouseX >= candidate.x + candidate.w ||
+                mouseY < candidate.y || mouseY >= candidate.y + candidate.h) continue;
+            if (i != activeWindow) {
+                activeWindow = i;
+                panelTitle = candidate.title;
+                panelX = candidate.x; panelY = candidate.y; panelW = candidate.w; panelH = candidate.h;
+                desktopPanelOpen = true;
+                DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
+                drawDesktopPanel();
+                return;
+            }
+            break;
+        }
         if (desktopPanelOpen && mouseX >= panelX && mouseX < panelX + panelW && mouseY >= panelY + 2 && mouseY < panelY + 36 && mouseX < panelX + panelW - 112) {
             panelDragging = true; dragOffsetX = mouseX - panelX; dragOffsetY = mouseY - panelY; return;
         }
         if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 108 && mouseX < panelX + panelW - 78) { desktopWindows[activeWindow].minimized=true; desktopPanelOpen=false; DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp); return; }
         if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 74 && mouseX < panelX + panelW - 44) { auto& w=desktopWindows[activeWindow]; w.maximized=!w.maximized; if(w.maximized){w.x=8;w.y=40;w.w=width-16;w.h=height-112;}else{w.x=100;w.y=80;w.w=width-200;w.h=400;} DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp);drawDesktopPanel();return; }
         if (desktopPanelOpen && mouseX >= panelX + panelW - 44 && mouseX < panelX + panelW && mouseY >= panelY && mouseY < panelY + 36) {
-            hideCursor(); desktopPanelOpen = false;
+            hideCursor(); desktopWindows[activeWindow].open = false; desktopPanelOpen = false;
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
             UartSerial::print("[Mouse] Closed desktop panel.\r\n");
             showCursor(); return;
@@ -4338,7 +4394,9 @@ extern "C" micant::NtStatus KiSystemStartup(
         int slot=-1; for(int i=0;i<8;i++) if(desktopWindows[i].open && strEqual(desktopWindows[i].title,title)){slot=i;break;}
         if(slot<0) for(int i=0;i<8;i++) if(!desktopWindows[i].open){slot=i;break;}
         if(slot<0) slot=activeWindow<0?0:activeWindow;
-        activeWindow=slot; auto& w=desktopWindows[slot]; w.open=true; w.minimized=false; w.maximized=false; w.x=100+slot*24; w.y=80+slot*20; w.w=width-200; w.h=400; copyStr(w.title,title,sizeof(w.title)); panelTitle=title; panelX=w.x;panelY=w.y;panelW=w.w;panelH=w.h;
+        activeWindow=slot; auto& w=desktopWindows[slot]; const bool wasOpen=w.open; w.open=true; w.minimized=false;
+        if (!wasOpen) { w.maximized=false; w.x=100+slot*24; w.y=80+slot*20; w.w=width-200; w.h=400; }
+        copyStr(w.title,title,sizeof(w.title)); panelTitle=w.title; panelX=w.x;panelY=w.y;panelW=w.w;panelH=w.h;
         if (command) ExecuteCommand(command);
         else { ShellClearOutput(); ShellAddLine("This application is not implemented yet."); }
         DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
