@@ -1340,9 +1340,11 @@ static void DrawPrismX3DViewport(
 struct SurShellDesktopWindow {
     bool open{}, minimized{}, maximized{};
     int x{}, y{}, w{}, h{};
+    int restoreX{}, restoreY{}, restoreW{}, restoreH{};
     char title[40]{};
 };
 static SurShellDesktopWindow s_surShellWindows[8]{};
+static int s_surShellActiveWindow = -1;
 
 static void DrawSurShellDesktop(
     micant::bootvid::BootVideoDriver& videoDriver,
@@ -1468,7 +1470,11 @@ static void DrawSurShellDesktop(
     }
 
     // Compose every visible top-level window in stable back-to-front slot order.
-    for (const auto& win : s_surShellWindows) {
+    for (int pass = 0; pass < 2; ++pass) {
+      for (size_t index = 0; index < 8; ++index) {
+        const auto& win = s_surShellWindows[index];
+        const bool isActive = static_cast<int>(index) == s_surShellActiveWindow;
+        if ((pass == 0 && isActive) || (pass == 1 && !isActive)) continue;
         if (!win.open || win.minimized || win.w < 80 || win.h < 50) continue;
         const int x = win.x, y = win.y, w = win.w, h = win.h;
         videoDriver.fillRectangle(x, y, w, h, micant::bootvid::Color{14, 20, 32});
@@ -1485,6 +1491,7 @@ static void DrawSurShellDesktop(
             videoDriver.drawString(x + 16, y + 54 + line * 22, s_shellOutputLines[line].text,
                 s_shellOutputLines[line].color, micant::bootvid::Color{14,20,32}, 1);
         videoDriver.drawRectangle(x + w - 12, y + h - 12, 10, 10, micant::bootvid::Color{0,180,220});
+      }
     }
 
     // Top Navigation / Banner
@@ -4304,7 +4311,7 @@ extern "C" micant::NtStatus KiSystemStartup(
 
     using DesktopWindow = SurShellDesktopWindow;
     auto& desktopWindows = s_surShellWindows;
-    int activeWindow = -1;
+    int& activeWindow = s_surShellActiveWindow;
     bool desktopPanelOpen = false;
     int panelX = 100, panelY = 80;
     int panelW = static_cast<int>(width) - 200, panelH = 400;
@@ -4355,7 +4362,18 @@ extern "C" micant::NtStatus KiSystemStartup(
             panelDragging = true; dragOffsetX = mouseX - panelX; dragOffsetY = mouseY - panelY; return;
         }
         if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 108 && mouseX < panelX + panelW - 78) { desktopWindows[activeWindow].minimized=true; desktopPanelOpen=false; DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp); return; }
-        if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 74 && mouseX < panelX + panelW - 44) { auto& w=desktopWindows[activeWindow]; w.maximized=!w.maximized; if(w.maximized){w.x=8;w.y=40;w.w=width-16;w.h=height-112;}else{w.x=100;w.y=80;w.w=width-200;w.h=400;} DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp);drawDesktopPanel();return; }
+        if (desktopPanelOpen && mouseY >= panelY && mouseY < panelY + 36 && mouseX >= panelX + panelW - 74 && mouseX < panelX + panelW - 44) {
+            auto& w=desktopWindows[activeWindow];
+            if (!w.maximized) {
+                w.restoreX=w.x; w.restoreY=w.y; w.restoreW=w.w; w.restoreH=w.h;
+                w.maximized=true; w.x=8; w.y=40; w.w=static_cast<int>(width)-16; w.h=static_cast<int>(height)-112;
+            } else {
+                w.maximized=false; w.x=w.restoreX; w.y=w.restoreY;
+                w.w=w.restoreW; w.h=w.restoreH;
+            }
+            panelX=w.x; panelY=w.y; panelW=w.w; panelH=w.h;
+            DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp);drawDesktopPanel();return;
+        }
         if (desktopPanelOpen && mouseX >= panelX + panelW - 44 && mouseX < panelX + panelW && mouseY >= panelY && mouseY < panelY + 36) {
             hideCursor(); desktopWindows[activeWindow].open = false; desktopPanelOpen = false;
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
@@ -4395,7 +4413,10 @@ extern "C" micant::NtStatus KiSystemStartup(
         if(slot<0) for(int i=0;i<8;i++) if(!desktopWindows[i].open){slot=i;break;}
         if(slot<0) slot=activeWindow<0?0:activeWindow;
         activeWindow=slot; auto& w=desktopWindows[slot]; const bool wasOpen=w.open; w.open=true; w.minimized=false;
-        if (!wasOpen) { w.maximized=false; w.x=100+slot*24; w.y=80+slot*20; w.w=width-200; w.h=400; }
+        if (!wasOpen) {
+            w.maximized=false; w.x=100+slot*24; w.y=80+slot*20; w.w=width-200; w.h=400;
+            w.restoreX=w.x; w.restoreY=w.y; w.restoreW=w.w; w.restoreH=w.h;
+        }
         copyStr(w.title,title,sizeof(w.title)); panelTitle=w.title; panelX=w.x;panelY=w.y;panelW=w.w;panelH=w.h;
         if (command) ExecuteCommand(command);
         else { ShellClearOutput(); ShellAddLine("This application is not implemented yet."); }
@@ -4669,9 +4690,20 @@ extern "C" micant::NtStatus KiSystemStartup(
                             if (panelY < 32) panelY = 32;
                             if (panelX + panelW > static_cast<int>(width)) panelX = width - panelW;
                             if (panelY + panelH > static_cast<int>(height)) panelY = height - panelH;
-                            auto& w=desktopWindows[activeWindow];w.x=panelX;w.y=panelY; DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp); drawDesktopPanel();
+                            auto& w=desktopWindows[activeWindow]; w.x=panelX; w.y=panelY;
+                            if (!w.maximized) { w.restoreX=w.x; w.restoreY=w.y; }
+                            DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp); drawDesktopPanel();
                         }
-                        if(desktopPanelOpen && (mousePacket[0]&1) && !panelDragging && mouseX>=panelX+panelW-16 && mouseY>=panelY+panelH-16){panelW=mouseX-panelX;panelH=mouseY-panelY;if(panelW<260)panelW=260;if(panelH<160)panelH=160;auto&w=desktopWindows[activeWindow];w.w=panelW;w.h=panelH;DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp);drawDesktopPanel();}
+                        if(desktopPanelOpen && (mousePacket[0]&1) && !panelDragging && activeWindow>=0 &&
+                           !desktopWindows[activeWindow].maximized && mouseX>=panelX+panelW-16 && mouseY>=panelY+panelH-16) {
+                            panelW=mouseX-panelX; panelH=mouseY-panelY;
+                            if(panelW<260) panelW=260; if(panelH<160) panelH=160;
+                            if(panelX+panelW>static_cast<int>(width)) panelW=static_cast<int>(width)-panelX;
+                            if(panelY+panelH>static_cast<int>(height)) panelH=static_cast<int>(height)-panelY;
+                            auto& w=desktopWindows[activeWindow]; w.w=panelW; w.h=panelH;
+                            w.restoreW=w.w; w.restoreH=w.h;
+                            DrawSurShellDesktop(videoDriver,width,height,lastDtsTemp); drawDesktopPanel();
+                        }
                         if (s_showDesktop) showCursor();
                         bool leftDown = (mousePacket[0] & 1) != 0;
                         if (leftDown && !mouseLeftDown && s_showDesktop) handleDesktopClick();
