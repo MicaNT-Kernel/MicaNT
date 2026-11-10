@@ -356,12 +356,16 @@ bool createScanout(uint32_t width, uint32_t height) {
     if (displayInfo.scanouts[0].enabled == 0 || displayInfo.scanouts[0].rect.width == 0 ||
         displayInfo.scanouts[0].rect.height == 0) return false;
 
-    const uint32_t maxWidth = displayInfo.scanouts[0].rect.width < kMaxWidth
-        ? displayInfo.scanouts[0].rect.width : kMaxWidth;
-    const uint32_t maxHeight = displayInfo.scanouts[0].rect.height < kMaxHeight
-        ? displayInfo.scanouts[0].rect.height : kMaxHeight;
-    g_device.width = width > 0 && width < maxWidth ? width : maxWidth;
-    g_device.height = height > 0 && height < maxHeight ? height : maxHeight;
+    // GET_DISPLAY_INFO reports the firmware's current scanout, not a maximum
+    // mode. VirtIO permits SET_SCANOUT to resize the host output to the new
+    // resource rectangle, so do not clamp a useful desktop mode to a tiny UEFI
+    // boot logo mode (QEMU commonly starts at 267x200).
+    if (width < 640 || height < 480) {
+        width = 1024;
+        height = 768;
+    }
+    g_device.width = width > 0 && width <= kMaxWidth ? width : kMaxWidth;
+    g_device.height = height > 0 && height <= kMaxHeight ? height : kMaxHeight;
     if (g_device.width == 0 || g_device.height == 0) return false;
     g_device.pitch = g_device.width;
     const uint32_t frameBytes = g_device.width * g_device.height * 4;
