@@ -103,7 +103,6 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prism_dxcore_adapter_factory_com_abi.cpp
     kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp
     kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp
-    kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp
     kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp
     kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp
     kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp
@@ -116,6 +115,23 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
 add_library(ntoskrnl_core STATIC
     ${NTOSKRNL_SUBSYSTEM_SOURCES}
 )
+
+# Win32 user APIs are independent user-mode PE DLLs. Keep their implementation
+# out of ntoskrnl_core; each DLL is built from the shared ABI source with only
+# its own export surface enabled.
+if(WIN32)
+    foreach(_dll IN ITEMS USER32 GDI32 IMM32)
+        string(TOLOWER "${_dll}" _dll_lower)
+        add_library(micant_${_dll_lower} SHARED
+            kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp)
+        target_compile_definitions(micant_${_dll_lower} PRIVATE
+            BUILD_SYSTEM32_${_dll}_DLL BUILD_SYSTEM32_STANDALONE_DLL)
+        set_target_properties(micant_${_dll_lower} PROPERTIES
+            OUTPUT_NAME "${_dll_lower}"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32")
+    endforeach()
+endif()
 
 # Core Kernel Executable (ntoskrnl / kiinit)
 add_executable(micant_kernel
