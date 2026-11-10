@@ -48,6 +48,7 @@
 
 // 5. Kernel Mode (Ring 0): Device Drivers & Filesystems
 #include "micant/km/drivers/storage/storage.hpp"
+#include "micant/km/drivers/system/null.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/fs/fs.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -148,6 +149,7 @@ extern "C" NtStatus KiSystemStartup(
     auto& ioMgr = io::IoManager::get();
     io::DriverObject nullDriver{ .driverName = L"\\Driver\\Null" };
     io::DriverObject diskDriver{ .driverName = L"\\Driver\\Disk" };
+    null_driver::Initialize(nullDriver);
     storage::InitializeDiskDriver(diskDriver);
     auto nullDev = ioMgr.createDevice(&nullDriver, L"\\Device\\Null", io::DeviceType::Null);
 
