@@ -7,6 +7,7 @@
  */
 
 #include "micant/um/subsystems/winuser/winnt_user32_gdi32_imm32_system32_abi.hpp"
+#include "micant/km/win32k/win32k.hpp"
 
 namespace micant::um::winnt_user32_gdi32_imm32_abi {
 
@@ -32,30 +33,31 @@ uint16_t User32_RegisterClassExW(const void* lpWndClassEx) noexcept {
 }
 
 void* User32_CreateWindowExW(
-    uint32_t /*dwExStyle*/,
-    const wchar_t* /*lpClassName*/,
-    const wchar_t* /*lpWindowName*/,
-    uint32_t /*dwStyle*/,
-    int32_t /*X*/,
-    int32_t /*Y*/,
+    uint32_t dwExStyle,
+    const wchar_t* lpClassName,
+    const wchar_t* lpWindowName,
+    uint32_t dwStyle,
+    int32_t X,
+    int32_t Y,
     int32_t nWidth,
     int32_t nHeight,
-    void* /*hWndParent*/,
-    void* /*hMenu*/,
-    void* /*hInstance*/,
-    void* /*lpParam*/) noexcept {
-    if (nWidth > 0) g_primaryWindow.width = nWidth;
-    if (nHeight > 0) g_primaryWindow.height = nHeight;
-    g_primaryWindow.pendingMessages = 1;
-    return &g_primaryWindow;
+    void* hWndParent,
+    void* hMenu,
+    void* hInstance,
+    void* lpParam) noexcept {
+    using namespace micant::win32k;
+    TitanWin32kSubsystem::Instance().initialize();
+    HWND hwnd = NtUserCreateWindowEx(dwExStyle, lpClassName, lpWindowName, dwStyle,
+        X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
+    return hwnd;
 }
 
 int32_t User32_DestroyWindow(void* hWnd) noexcept {
-    return hWnd ? 1 : 0;
+    return micant::win32k::NtUserDestroyWindow(hWnd);
 }
 
-int32_t User32_ShowWindow(void* hWnd, int32_t /*nCmdShow*/) noexcept {
-    return hWnd ? 1 : 0;
+int32_t User32_ShowWindow(void* hWnd, int32_t nCmdShow) noexcept {
+    return micant::win32k::NtUserShowWindow(hWnd, nCmdShow);
 }
 
 int32_t User32_UpdateWindow(void* hWnd) noexcept {
@@ -128,11 +130,9 @@ intptr_t User32_GetWindowLongPtrW(void* hWnd, int32_t /*nIndex*/) noexcept {
     return hWnd ? g_primaryWindow.userData : 0;
 }
 
-int32_t User32_SetWindowPos(void* hWnd, void* /*hWndInsertAfter*/, int32_t /*X*/, int32_t /*Y*/, int32_t cx, int32_t cy, uint32_t /*uFlags*/) noexcept {
+int32_t User32_SetWindowPos(void* hWnd, void* hWndInsertAfter, int32_t X, int32_t Y, int32_t cx, int32_t cy, uint32_t uFlags) noexcept {
     if (!hWnd) return 0;
-    if (cx > 0) g_primaryWindow.width = cx;
-    if (cy > 0) g_primaryWindow.height = cy;
-    return 1;
+    return micant::win32k::NtUserSetWindowPos(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags);
 }
 
 int32_t User32_RegisterRawInputDevices(const WinNtRawInputDevice* pRawInputDevices, uint32_t uiNumDevices, uint32_t cbSize) noexcept {
