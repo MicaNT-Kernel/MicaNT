@@ -40,10 +40,14 @@
 #include <atomic>
 #include <cwchar>
 #include <cstdio>
+#include <cstddef>
+#include <utility>
+#include <optional>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/arbiter.hpp"
 
 namespace micant::pnp {
 
@@ -448,6 +452,49 @@ public:
         return false;
     }
 
+    // Internal PnP-manager storage for the ABI-form resource lists. The buffers
+    // remain owned by the devnode while synchronous start IRPs are dispatched.
+    void setStartDeviceResourceLists(std::vector<std::byte> raw, std::vector<std::byte> translated) {
+        allocatedResourcesRaw_ = std::move(raw);
+        allocatedResourcesTranslated_ = std::move(translated);
+        startResourcesReady_ = true;
+    }
+
+    void setResourceRequirements(micant::km::arb::IO_RESOURCE_REQUIREMENTS_LIST requirements) {
+        resourceRequirements_ = std::move(requirements);
+        allocatedResourcesRaw_.clear();
+        allocatedResourcesTranslated_.clear();
+        startResourcesReady_ = false;
+    }
+
+    [[nodiscard]] const micant::km::arb::IO_RESOURCE_REQUIREMENTS_LIST* resourceRequirements() const noexcept {
+        return resourceRequirements_ ? &*resourceRequirements_ : nullptr;
+    }
+
+    [[nodiscard]] bool hasStartDeviceResources() const noexcept { return startResourcesReady_; }
+    void markResourcesArbitrated() noexcept { resourcesArbitrated_ = true; }
+    [[nodiscard]] bool resourcesArbitrated() const noexcept { return resourcesArbitrated_; }
+    void clearArbitratedResources() noexcept {
+        if (!resourcesArbitrated_) return;
+        allocatedResourcesRaw_.clear();
+        allocatedResourcesTranslated_.clear();
+        startResourcesReady_ = false;
+        resourcesArbitrated_ = false;
+    }
+
+    void assignStartDeviceResources(std::vector<std::byte> raw, std::vector<std::byte> translated) {
+        setStartDeviceResourceLists(std::move(raw), std::move(translated));
+    }
+
+    [[nodiscard]] wdm::PCM_RESOURCE_LIST allocatedResources() noexcept {
+        return allocatedResourcesRaw_.empty() ? nullptr :
+            reinterpret_cast<wdm::PCM_RESOURCE_LIST>(allocatedResourcesRaw_.data());
+    }
+    [[nodiscard]] wdm::PCM_RESOURCE_LIST allocatedResourcesTranslated() noexcept {
+        return allocatedResourcesTranslated_.empty() ? nullptr :
+            reinterpret_cast<wdm::PCM_RESOURCE_LIST>(allocatedResourcesTranslated_.data());
+    }
+
 private:
     std::wstring deviceId_;
     std::wstring instanceId_;
@@ -464,6 +511,11 @@ private:
     PnpDeviceState previousState_{PnpDeviceState::Uninitialized};
     DEVICE_CAPABILITIES capabilities_{};
     std::vector<DeviceInterfaceEntry> interfaces_;
+    std::vector<std::byte> allocatedResourcesRaw_;
+    std::vector<std::byte> allocatedResourcesTranslated_;
+    std::optional<micant::km::arb::IO_RESOURCE_REQUIREMENTS_LIST> resourceRequirements_;
+    bool startResourcesReady_{false};
+    bool resourcesArbitrated_{false};
 };
 
 // ============================================================================
@@ -549,6 +601,20 @@ public:
         if (!devNode) return NtStatus::InvalidParameter;
         std::lock_guard<std::mutex> lock(mutex_);
 
+        if (!devNode->hasStartDeviceResources()) {
+            if (const auto* requirements = devNode->resourceRequirements()) {
+                micant::km::arb::CM_RESOURCE_LIST rawResources{};
+                micant::km::arb::CM_RESOURCE_LIST translatedResources{};
+                const NtStatus allocationStatus = micant::km::arb::ArbArbitrateAndTranslateResources(
+                    requirements, devNode->getPdo(), &rawResources, &translatedResources);
+                if (!NT_SUCCESS(allocationStatus)) return allocationStatus;
+                devNode->assignStartDeviceResources(
+                    micant::km::arb::SerializeWdmResourceList(rawResources),
+                    micant::km::arb::SerializeWdmResourceList(translatedResources));
+                devNode->markResourcesArbitrated();
+            }
+        }
+
         devNode->setState(PnpDeviceState::StartPending);
 
         {
@@ -570,6 +636,9 @@ public:
                     stack->deviceObject = topDev;
                     stack->majorFunction = io::IRP_MJ_PNP;
                     stack->minorFunction = IRP_MN_START_DEVICE;
+                    stack->parameters.startDevice.AllocatedResources = devNode->allocatedResources();
+                    stack->parameters.startDevice.AllocatedResourcesTranslated =
+                        devNode->allocatedResourcesTranslated();
                 }
 
                 NtStatus st = io::IoCallDriver(topDev, irp);
@@ -692,6 +761,11 @@ public:
             }
         }
 
+        if (devNode->resourcesArbitrated()) {
+            micant::km::arb::TitanResourceArbiterManager::get().releaseDeviceResources(devNode->getPdo());
+            devNode->clearArbitratedResources();
+        }
+
         devNode->setState(PnpDeviceState::Stopped);
         return NtStatus::Success;
     }
@@ -802,6 +876,10 @@ public:
         }
 
         devNode->setState(PnpDeviceState::Removed);
+        if (devNode->resourcesArbitrated()) {
+            micant::km::arb::TitanResourceArbiterManager::get().releaseDeviceResources(devNode->getPdo());
+            devNode->clearArbitratedResources();
+        }
 
         // Teardown and disable all registered device interfaces for this node
         for (const auto& iface : devNode->getInterfaces()) {
@@ -1149,6 +1227,10 @@ private:
         }
 
         devNode->setState(PnpDeviceState::Removed);
+        if (devNode->resourcesArbitrated()) {
+            micant::km::arb::TitanResourceArbiterManager::get().releaseDeviceResources(devNode->getPdo());
+            devNode->clearArbitratedResources();
+        }
 
         for (const auto& iface : devNode->getInterfaces()) {
             if (iface.enabled) {

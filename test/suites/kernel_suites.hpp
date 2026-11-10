@@ -7318,12 +7318,14 @@ void Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces(
     // 3. PnP IRP State Machine: Start Device & Two-Phase Stop / Rebalancing
     {
         static uint32_t s_startCount = 0;
+        static bool s_startResourcesPassed = false;
         static uint32_t s_queryStopCount = 0;
         static uint32_t s_cancelStopCount = 0;
         static uint32_t s_stopCount = 0;
         static bool s_vetoStop = false;
 
         s_startCount = 0;
+        s_startResourcesPassed = false;
         s_queryStopCount = 0;
         s_cancelStopCount = 0;
         s_stopCount = 0;
@@ -7334,6 +7336,14 @@ void Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces(
             switch (irp->minorFunction) {
                 case pnp::IRP_MN_START_DEVICE:
                     s_startCount++;
+                    if (auto* stack = irp->getCurrentStack()) {
+                        auto* raw = stack->parameters.startDevice.AllocatedResources;
+                        auto* translated = stack->parameters.startDevice.AllocatedResourcesTranslated;
+                        s_startResourcesPassed = raw && translated && raw->Count == 1 &&
+                            translated->Count == 1 && raw->List[0].PartialResourceList.Count == 1 &&
+                            raw->List[0].PartialResourceList.PartialDescriptors[0].u.Port.Start == 0x3F8 &&
+                            translated->List[0].PartialResourceList.PartialDescriptors[0].u.Port.Start == 0x3F8;
+                    }
                     irp->ioStatus.status = NtStatus::Success;
                     return NtStatus::Success;
                 case pnp::IRP_MN_QUERY_STOP_DEVICE:
@@ -7358,11 +7368,25 @@ void Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces(
             }
         });
 
+        micant::km::arb::IO_RESOURCE_REQUIREMENTS_LIST comRequirements{};
+        comRequirements.InterfaceType = 0;
+        micant::km::arb::IO_RESOURCE_DESCRIPTOR comPort{};
+        comPort.Type = micant::km::arb::CM_RESOURCE_TYPE::CmResourceTypePort;
+        comPort.ShareDisposition = micant::km::arb::CM_SHARE_DISPOSITION::CmResourceShareDeviceExclusive;
+        comPort.Flags = micant::km::arb::CM_RESOURCE_PORT_IO;
+        comPort.MinimumAddress = 0x3F8;
+        comPort.MaximumAddress = 0x3FF;
+        comPort.Length = 8;
+        comRequirements.Descriptors.push_back(comPort);
+        nicNode->setResourceRequirements(std::move(comRequirements));
+
         // Start Device
         NtStatus stStart = pnpMgr.startDevice(nicNode.get());
         TEST_ASSERT(NT_SUCCESS(stStart), "startDevice must succeed");
         TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must be Started");
         TEST_ASSERT(s_startCount == 1, "Start IRP count must be 1");
+        TEST_ASSERT(s_startResourcesPassed,
+            "Start IRP must carry the assigned raw and translated resource lists in WDM layout");
 
         // Two-Phase Stop: Step A: Query Stop
         NtStatus stQueryStop = pnpMgr.queryStopDevice(nicNode.get());
@@ -7399,6 +7423,8 @@ void Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces(
         TEST_ASSERT(NT_SUCCESS(stStart), "startDevice after rebalance must succeed");
         TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must return to Started");
         TEST_ASSERT(s_startCount == 2, "Start IRP count must be 2");
+        TEST_ASSERT(s_startResourcesPassed,
+            "Restarted devices must receive newly allocated raw and translated resources");
     }
 
     // 4. PnP IRP State Machine: Two-Phase Query-Remove, Veto & Orderly Removal

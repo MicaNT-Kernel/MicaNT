@@ -48,6 +48,7 @@
 
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/wdm_resource.hpp"
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
@@ -172,6 +173,56 @@ struct CM_RESOURCE_LIST {
 };
 
 using PCM_RESOURCE_LIST = CM_RESOURCE_LIST*;
+
+inline std::vector<std::byte> SerializeWdmResourceList(const CM_RESOURCE_LIST& source) {
+    using namespace micant::wdm;
+    const size_t descriptorOffset = offsetof(micant::wdm::CM_RESOURCE_LIST, List) +
+        offsetof(micant::wdm::CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList) +
+        offsetof(micant::wdm::CM_PARTIAL_RESOURCE_LIST, PartialDescriptors);
+    const size_t byteCount = descriptorOffset +
+        source.Descriptors.size() * sizeof(micant::wdm::CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    std::vector<std::byte> bytes(byteCount);
+    auto* list = reinterpret_cast<micant::wdm::CM_RESOURCE_LIST*>(bytes.data());
+    list->Count = 1;
+    auto& full = list->List[0];
+    full.InterfaceType = static_cast<int32_t>(source.InterfaceType);
+    full.BusNumber = source.BusNumber;
+    full.PartialResourceList.Version = source.Version;
+    full.PartialResourceList.Revision = source.Revision;
+    full.PartialResourceList.Count = static_cast<uint32_t>(source.Descriptors.size());
+    auto* out = reinterpret_cast<micant::wdm::CM_PARTIAL_RESOURCE_DESCRIPTOR*>(
+        bytes.data() + descriptorOffset);
+    for (size_t index = 0; index < source.Descriptors.size(); ++index) {
+        const auto& in = source.Descriptors[index];
+        out[index].Type = static_cast<uint8_t>(in.Type);
+        out[index].ShareDisposition = static_cast<uint8_t>(in.ShareDisposition);
+        out[index].Flags = in.Flags;
+        switch (in.Type) {
+        case CM_RESOURCE_TYPE::CmResourceTypePort:
+            out[index].u.Port.Start = static_cast<int64_t>(in.u.Port.Start);
+            out[index].u.Port.Length = in.u.Port.Length;
+            break;
+        case CM_RESOURCE_TYPE::CmResourceTypeMemory:
+        case CM_RESOURCE_TYPE::CmResourceTypeMemoryLarge:
+            out[index].u.Memory.Start = static_cast<int64_t>(in.u.Memory.Start);
+            out[index].u.Memory.Length = in.u.Memory.Length;
+            break;
+        case CM_RESOURCE_TYPE::CmResourceTypeInterrupt:
+            out[index].u.Interrupt.Level = in.u.Interrupt.Level;
+            out[index].u.Interrupt.Vector = in.u.Interrupt.Vector;
+            out[index].u.Interrupt.Affinity = static_cast<uintptr_t>(in.u.Interrupt.Affinity);
+            break;
+        case CM_RESOURCE_TYPE::CmResourceTypeDma:
+            out[index].u.Dma.Channel = in.u.Dma.Channel;
+            out[index].u.Dma.Port = in.u.Dma.Port;
+            out[index].u.Dma.Reserved1 = in.u.Dma.Reserved1;
+            break;
+        default:
+            break;
+        }
+    }
+    return bytes;
+}
 
 // Device Resource Requirement Descriptor (Input to Arbiter)
 struct IO_RESOURCE_DESCRIPTOR {
@@ -448,6 +499,16 @@ public:
         stagedPackages_.clear();
         nextDynamicImageBase_ = 0xFFFFF80040000000ULL;
         nextMsiVector_        = 0x60;
+    }
+
+    void releaseDeviceResources(void* ownerPdo) noexcept {
+        if (!ownerPdo) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        ensureArbitersInitializedLocked();
+        (void)RtlDeleteOwnersRanges(&rootMemArbiter_.Allocation, ownerPdo);
+        (void)RtlDeleteOwnersRanges(&rootPortArbiter_.Allocation, ownerPdo);
+        (void)RtlDeleteOwnersRanges(&rootIrqArbiter_.Allocation, ownerPdo);
+        (void)RtlDeleteOwnersRanges(&rootDmaArbiter_.Allocation, ownerPdo);
     }
 
     // ------------------------------------------------------------------------

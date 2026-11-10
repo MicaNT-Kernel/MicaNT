@@ -12,6 +12,7 @@
 #include <atomic>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/wdm_resource.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/executive/mm.hpp"
@@ -207,6 +208,11 @@ struct IoStackLocation {
             uint32_t type;
             void* argument;
         } pnp;
+
+        struct {
+            wdm::PCM_RESOURCE_LIST AllocatedResources;
+            wdm::PCM_RESOURCE_LIST AllocatedResourcesTranslated;
+        } startDevice;
     } parameters{};
 
     DeviceObject* deviceObject{nullptr};
