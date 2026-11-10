@@ -166,14 +166,14 @@ extern "C" NtStatus KiSystemStartup(
     if (!NT_SUCCESS(writeMbrStatus)) {
         std::cerr << "[MicaNT Boot] [PartMgr] Failed to initialize the boot disk MBR: "
                   << NtStatusToString(writeMbrStatus) << "\n";
-        return 1;
+        return writeMbrStatus;
     }
     std::vector<storage::MbrPartitionEntry> discoveredPartitions;
     const NtStatus partitionStatus = storage::PartitionManager::parseMbr(*bootDisk, discoveredPartitions);
     if (!NT_SUCCESS(partitionStatus) || discoveredPartitions.empty()) {
         std::cerr << "[MicaNT Boot] [PartMgr] Failed to discover the boot partition: "
                   << NtStatusToString(partitionStatus) << "\n";
-        return 1;
+        return NT_SUCCESS(partitionStatus) ? NtStatus::UnrecognizedVolume : partitionStatus;
     }
     const auto& bootPartitionEntry = discoveredPartitions.front();
 
