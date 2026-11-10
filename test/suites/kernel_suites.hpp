@@ -12401,6 +12401,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(scm.getServiceRecord(L"hidparse") != nullptr, "hidparse service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"hidusb") != nullptr, "hidusb service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"kbdclass") != nullptr, "kbdclass service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"kbdhid") != nullptr, "kbdhid service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"mouclass") != nullptr, "mouclass service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"i8042prt") != nullptr, "i8042prt service record must exist");
 
@@ -12410,6 +12411,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(verDb.GetModuleInfo("hidparse.sys") != nullptr, "hidparse.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("hidusb.sys") != nullptr, "hidusb.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("kbdclass.sys") != nullptr, "kbdclass.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("kbdhid.sys") != nullptr, "kbdhid.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("mouclass.sys") != nullptr, "mouclass.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("i8042prt.sys") != nullptr, "i8042prt.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("hid.dll") != nullptr, "hid.dll must be in Version Database");
@@ -12433,6 +12435,39 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(kbdCaps.OutputReportByteLength == 2, "Keyboard OutputReportByteLength must be 2 (1 ReportID + 1 LED byte)");
         TEST_ASSERT(kbdCaps.NumberInputButtonCaps == 2, "Keyboard must have 2 InputButtonCaps (Modifiers + 6KRO Array)");
         TEST_ASSERT(kbdCaps.NumberOutputButtonCaps == 1, "Keyboard must have 1 OutputButtonCap (5 LEDs)");
+
+        // Kbdhid maps HID usage transitions into kbdclass scan-code packets.
+        std::array<uint8_t, 9> keyboardReport{0, 0, 0, 0x04, 0, 0, 0, 0, 0};
+        KbdClassResetState();
+        TEST_ASSERT(KbdHidDriver::Instance().process(0x4101, kbdPreparsed,
+            keyboardReport.data(), keyboardReport.size()) == HIDP_STATUS_SUCCESS,
+            "kbdhid must accept a valid keyboard input report");
+        KEYBOARD_INPUT_DATA keyPacket{};
+        TEST_ASSERT(KbdClassPopInputData(keyPacket), "kbdhid must forward a key make to kbdclass");
+        TEST_ASSERT(keyPacket.MakeCode == 0x1E && keyPacket.Flags == KEY_MAKE,
+            "HID keyboard usage A must map to the Set 1 A make code");
+        keyboardReport[3] = 0;
+        TEST_ASSERT(KbdHidDriver::Instance().process(0x4101, kbdPreparsed,
+            keyboardReport.data(), keyboardReport.size()) == HIDP_STATUS_SUCCESS,
+            "kbdhid must accept a key release report");
+        TEST_ASSERT(KbdClassPopInputData(keyPacket), "kbdhid must forward a key break to kbdclass");
+        TEST_ASSERT(keyPacket.MakeCode == 0x1E && keyPacket.Flags == KEY_BREAK,
+            "HID keyboard usage A must map to the Set 1 A break code");
+        keyboardReport[3] = 0x4F;
+        TEST_ASSERT(KbdHidDriver::Instance().process(0x4101, kbdPreparsed,
+            keyboardReport.data(), keyboardReport.size()) == HIDP_STATUS_SUCCESS,
+            "kbdhid must accept an extended navigation key report");
+        TEST_ASSERT(KbdClassPopInputData(keyPacket), "kbdhid must forward an extended navigation key");
+        TEST_ASSERT(keyPacket.MakeCode == 0x4D && keyPacket.Flags == (KEY_MAKE | KEY_E0),
+            "HID Right Arrow must map to the extended Right Arrow scan code");
+        keyboardReport[3] = 0;
+        TEST_ASSERT(KbdHidDriver::Instance().process(0x4101, kbdPreparsed,
+            keyboardReport.data(), keyboardReport.size()) == HIDP_STATUS_SUCCESS,
+            "kbdhid must accept an extended key release report");
+        TEST_ASSERT(KbdClassPopInputData(keyPacket), "kbdhid must forward an extended key break");
+        TEST_ASSERT(keyPacket.MakeCode == 0x4D && keyPacket.Flags == (KEY_BREAK | KEY_E0),
+            "HID Right Arrow release must preserve the extended scan code flag");
+        KbdHidDriver::Instance().removeCollection(0x4101);
 
         TEST_ASSERT(HidD_FreePreparsedData(kbdPreparsed) == TRUE_B, "HidD_FreePreparsedData must succeed");
 

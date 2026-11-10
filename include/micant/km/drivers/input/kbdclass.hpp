@@ -61,6 +61,8 @@ public:
     }
     size_t depth() { ke::SpinLockGuard guard(m_lock); return m_count; }
     uint64_t packetsQueuedTotal() { ke::SpinLockGuard guard(m_lock); return m_totalPacketsQueued; }
+    void setClassDevice(io::DeviceObject* device) { ke::SpinLockGuard guard(m_lock); m_classDevice = device; }
+    io::DeviceObject* classDevice() { ke::SpinLockGuard guard(m_lock); return m_classDevice; }
 
     NtStatus queryAttributes(void* output, size_t length) const {
         if (!output || length < sizeof(m_attributes)) return NtStatus::BufferTooSmall;
@@ -138,6 +140,7 @@ private:
     std::array<KEYBOARD_INPUT_DATA, 128> m_packets{};
     size_t m_head{0}, m_count{0};
     uint64_t m_totalPacketsQueued{0};
+    io::DeviceObject* m_classDevice{nullptr};
     std::array<io::Irp*, PendingCapacity> m_pending{};
     size_t m_pendingHead{0}, m_pendingCount{0};
     KEYBOARD_ATTRIBUTES m_attributes{};
@@ -165,6 +168,7 @@ inline void InitializeKbdClassExports() {
 inline bool KbdClassPopInputData(KEYBOARD_INPUT_DATA& data) { return KbdClassDriver::Instance().pop(data); }
 inline size_t KbdClassQueueDepth() { return KbdClassDriver::Instance().depth(); }
 inline uint64_t KbdClassPacketsQueuedTotal() { return KbdClassDriver::Instance().packetsQueuedTotal(); }
+inline void KbdClassSetDeviceObject(io::DeviceObject* device) { KbdClassDriver::Instance().setClassDevice(device); }
 inline void KbdClassResetState() { KbdClassDriver::Instance().reset(); }
 inline NtStatus KbdClassQueryAttributes(void* output, size_t length) {
     return KbdClassDriver::Instance().queryAttributes(output, length);

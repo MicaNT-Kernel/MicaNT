@@ -55,6 +55,7 @@
 #include "micant/km/executive/io.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/drivers/input/kbdclass_contract.hpp"
+#include "micant/km/drivers/input/kbdhid_contract.hpp"
 #include "micant/km/drivers/input/i8042prt.hpp"
 #include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/mouclass_contract.hpp"
@@ -347,7 +348,6 @@ struct _HIDP_PREPARSED_DATA {
     bool                          UsesReportIds{false};
 };
 
-using PHIDP_PREPARSED_DATA = _HIDP_PREPARSED_DATA*;
 
 // ============================================================================
 // 3. Keyboard & Mouse Class Structures (kbdclass.sys / mouclass.sys)
@@ -921,6 +921,11 @@ public:
                 col.PendingInputReports.pop_front();
             }
             col.PendingInputReports.push_back(std::move(reportFrame));
+            if (col.PreparsedData.Caps.UsagePage == HID_USAGE_PAGE_GENERIC &&
+                col.PreparsedData.Caps.Usage == HID_USAGE_GENERIC_KEYBOARD) {
+                KbdHidProcessInputReport(reinterpret_cast<uintptr_t>(collectionHandle),
+                    &col.PreparsedData, simulatedDevicePayload, payloadLen);
+            }
         }
 
         m_telemetry.totalPingPongUrbsDispatched++;
@@ -1746,6 +1751,7 @@ inline void InitializeHidSubsystemExports() {
     registerKernelDriver(L"hidparse", L"Sovereign HID Report Descriptor Parser", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\hidparse.sys");
     registerKernelDriver(L"hidusb",   L"Sovereign USB HID Miniport Driver", scm::SERVICE_SYSTEM_START, L"\\SystemRoot\\System32\\drivers\\hidusb.sys");
     registerKernelDriver(L"kbdclass", L"Sovereign Keyboard Class Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\kbdclass.sys");
+    registerKernelDriver(L"kbdhid", L"Sovereign HID Keyboard Mapper Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\kbdhid.sys");
     registerKernelDriver(L"mouclass", L"Sovereign Mouse Class Driver", scm::SERVICE_BOOT_START, L"\\SystemRoot\\System32\\drivers\\mouclass.sys");
     registerKernelDriver(L"i8042prt", L"Sovereign PS/2 i8042 Port Driver", scm::SERVICE_SYSTEM_START, L"\\SystemRoot\\System32\\drivers\\i8042prt.sys");
 
@@ -1755,6 +1761,7 @@ inline void InitializeHidSubsystemExports() {
     verDb.RegisterModule("hidparse.sys", "10.0.26100.1", "Sovereign HID Report Descriptor Parser");
     verDb.RegisterModule("hidusb.sys",   "10.0.26100.1", "Sovereign USB HID Miniport Driver");
     verDb.RegisterModule("kbdclass.sys", "10.0.26100.1", "Sovereign Keyboard Class Driver");
+    verDb.RegisterModule("kbdhid.sys", "10.0.26100.1", "Sovereign HID Keyboard Mapper Driver");
     verDb.RegisterModule("mouclass.sys", "10.0.26100.1", "Sovereign Mouse Class Driver");
     verDb.RegisterModule("i8042prt.sys", "10.0.26100.1", "Sovereign PS/2 i8042 Port Controller Driver");
     verDb.RegisterModule("hid.dll",      "10.0.26100.1", "Sovereign User-Mode HID Client Library");

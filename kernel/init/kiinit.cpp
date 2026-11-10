@@ -58,6 +58,7 @@
 #include "micant/km/drivers/input/hidparse.hpp"
 #include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/kbdclass.hpp"
+#include "micant/km/drivers/input/kbdhid.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
 #include "micant/km/drivers/system/beep.hpp"
 
@@ -372,9 +373,12 @@ extern "C" NtStatus KiSystemStartup(
     km::hid::InitializeKbdClassExports();
     io::DriverObject kbdclassDriver{};
     km::hid::InitializeKbdClassDriver(kbdclassDriver);
+    io::DriverObject kbdhidDriver{};
+    km::hid::InitializeKbdHidDriver(kbdhidDriver);
     auto keyboardClassDevice = ioMgr.createDevice(
         &kbdclassDriver, L"\\Device\\KeyboardClass0", static_cast<io::DeviceType>(0x0000000B));
     keyboardClassDevice->flags = (keyboardClassDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
+    km::hid::KbdClassSetDeviceObject(keyboardClassDevice.get());
     km::hid::InitializeMouClassExports();
     io::DriverObject mouclassDriver{};
     km::hid::InitializeMouClassDriver(mouclassDriver);
