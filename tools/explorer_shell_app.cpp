@@ -10,6 +10,7 @@
 #include "micant/shared/win32k_client.h"
 #include "gui_common.hpp"
 #include "explorer_shell/taskbar.hpp"
+#include "explorer_shell/start_menu.hpp"
 
 namespace {
 
@@ -174,33 +175,6 @@ void drawWallpaper() noexcept {
                                   buttons, buttonCount, g.clockText);
 }
 
-void drawStartMenu() noexcept {
-    if (!g.menuPixels) return;
-    const uint32_t w = MENU_W, h = MENU_H;
-    fill(g.menuPixels, w, h, 0, 0, w, h, rgb(243, 243, 243));
-    fill(g.menuPixels, w, h, 0, 0, w, 50, rgb(31, 89, 166));
-    fill(g.menuPixels, w, h, 8, 8, 34, 34, rgb(235, 246, 250));
-    fill(g.menuPixels, w, h, 12, 12, 12, 12, rgb(228, 65, 48));
-    fill(g.menuPixels, w, h, 25, 12, 12, 12, rgb(77, 164, 65));
-    fill(g.menuPixels, w, h, 12, 25, 12, 12, rgb(55, 124, 206));
-    fill(g.menuPixels, w, h, 25, 25, 12, 12, rgb(242, 192, 42));
-    text(g.menuPixels, w, h, 53, 19, "MicaNT User", rgb(255, 255, 255));
-    fill(g.menuPixels, w, h, 0, 50, 205, h - 92, rgb(255, 255, 255));
-    fill(g.menuPixels, w, h, 205, 50, w - 205, h - 92, rgb(220, 231, 244));
-    const char* left[] = {"Internet", "E-mail", "----------------", "My Documents", "My Pictures", "My Music", "My Computer", "Control Panel", "Connect To", "Printers", "Help and Support", "Search", "Run..."};
-    for (size_t i = 0; i < sizeof(left) / sizeof(left[0]); ++i) {
-        const int32_t y = 63 + static_cast<int32_t>(i) * 23;
-        if (left[i][0] == '-') fill(g.menuPixels, w, h, 12, y + 8, 178, 1, rgb(215, 215, 215));
-        else text(g.menuPixels, w, h, 18, y, left[i], rgb(30, 30, 30));
-    }
-    const char* right[] = {"My Recent Documents", "My Pictures", "My Music", "My Computer", "Control Panel", "Set Program Access", "Connect To", "Printers and Faxes", "Help and Support", "Search", "Run..."};
-    for (size_t i = 0; i < sizeof(right) / sizeof(right[0]); ++i)
-        text(g.menuPixels, w, h, 216, 69 + static_cast<int32_t>(i) * 25, right[i], rgb(29, 65, 116));
-    fill(g.menuPixels, w, h, 0, h - 42, w, 42, rgb(31, 89, 166));
-    text(g.menuPixels, w, h, 18, h - 25, "Log Off", rgb(255, 255, 255));
-    text(g.menuPixels, w, h, 214, h - 25, "Turn Off Computer", rgb(255, 255, 255));
-}
-
 void drawAppWindow(AppWindow& app) noexcept {
     if (!app.pixels) return;
     uint32_t* p = app.pixels;
@@ -312,7 +286,7 @@ void openView(View view) noexcept {
 void toggleStart() noexcept {
     g.startOpen = !g.startOpen;
     if (g.startOpen) {
-        drawStartMenu();
+        micant::explorer::DrawStartMenu(g.menuPixels, MENU_W, MENU_H, "MicaNT User");
         MicaWin32kShowWindow(g.startMenu, SW_SHOW);
         present(g.menuDc);
     } else {
@@ -387,22 +361,22 @@ intptr_t WindowProc(void* hwnd, uint32_t message, uintptr_t, intptr_t lParam) {
     if (hwnd == g.startMenu && message == WM_LBUTTONUP) {
         const int32_t x = static_cast<int16_t>(static_cast<uint32_t>(lParam) & 0xFFFFU);
         const int32_t y = static_cast<int16_t>((static_cast<uint32_t>(lParam) >> 16) & 0xFFFFU);
-        View view = View::MyComputer;
-        if (y < 0 || y >= static_cast<int32_t>(MENU_H)) return 0;
-        if (x >= 205) {
-            const int32_t row = (y - 69) / 25;
-            if (row == 0 || row == 1) view = View::MyDocuments;
-            else if (row == 4) view = View::ControlPanel;
-            else if (row == 6) view = View::Network;
-        } else {
-            const int32_t row = (y - 63) / 23;
-            if (row == 3 || row == 4 || row == 5) view = View::MyDocuments;
-            else if (row == 7) view = View::ControlPanel;
-            else if (row == 8) view = View::Network;
-        }
+        const auto action = micant::explorer::HitTestStartMenu(x, y, MENU_W, MENU_H);
         g.startOpen = false;
         MicaWin32kShowWindow(g.startMenu, SW_HIDE);
-        openView(view);
+        switch (action) {
+            case micant::explorer::StartMenuAction::MyComputer: openView(View::MyComputer); break;
+            case micant::explorer::StartMenuAction::MyDocuments: openView(View::MyDocuments); break;
+            case micant::explorer::StartMenuAction::ControlPanel: openView(View::ControlPanel); break;
+            case micant::explorer::StartMenuAction::Network: openView(View::Network); break;
+            case micant::explorer::StartMenuAction::RecycleBin: openView(View::RecycleBin); break;
+            case micant::explorer::StartMenuAction::Dismiss:
+            case micant::explorer::StartMenuAction::Search:
+            case micant::explorer::StartMenuAction::Run:
+            case micant::explorer::StartMenuAction::LogOff:
+            case micant::explorer::StartMenuAction::PowerOff:
+                break;
+        }
         redrawDesktop();
         return 0;
     }

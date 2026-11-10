@@ -16,7 +16,7 @@ freestanding C++ and Win32k APIs:
 | --- | --- | --- |
 | `tools/explorer_shell_app.cpp` | Shell startup, desktop/window state, event routing | Existing shell; still being split into focused blocks |
 | `tools/explorer_shell/taskbar.hpp` and `.cpp` | Taskbar painting from a snapshot of open shell tasks | First independent block implemented |
-| `tools/explorer_shell/start_menu.*` | Start menu content, selection, and launch actions | Pending |
+| `tools/explorer_shell/start_menu.hpp` and `.cpp` | Start menu painting and explicit hit-test actions | Implemented; application launching/search still need shell services |
 | `tools/explorer_shell/desktop.*` | Wallpaper, desktop icons, and icon interaction | Pending |
 | `tools/explorer_shell/notification_area.*` | Clock and notification icons | Pending |
 | `tools/explorer_shell/task_switcher.*` | Window enumeration, activation, minimize/restore | Pending |
