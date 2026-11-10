@@ -101,6 +101,7 @@
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/drivers/input/hidclass.hpp"
 #include "micant/km/drivers/input/hidparse.hpp"
+#include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
 #include "micant/km/executive/cc.hpp"

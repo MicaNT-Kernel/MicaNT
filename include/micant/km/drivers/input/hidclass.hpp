@@ -56,6 +56,7 @@
 #include "micant/km/core/ke.hpp"
 #include "micant/km/drivers/input/kbdclass_contract.hpp"
 #include "micant/km/drivers/input/i8042prt.hpp"
+#include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/mouclass_contract.hpp"
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/win32k/win32k.hpp"
@@ -904,23 +905,14 @@ public:
 
         auto& col = it->second;
 
-        // Allocate a real URB via USBD_UrbAllocate and dispatch through xhci.hpp
-        xhci::URB* urb = xhci::USBD_UrbAllocate();
-        if (!urb) return NtStatus::InsufficientResources;
-
         std::vector<uint8_t> transferBuf(payloadLen, 0);
         if (simulatedDevicePayload && payloadLen > 0) {
             std::memcpy(transferBuf.data(), simulatedDevicePayload, payloadLen);
         }
 
-        urb->UrbHeader.Function = xhci::URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER;
-        urb->UrbBulkOrInterruptTransfer.TransferBuffer       = transferBuf.data();
-        urb->UrbBulkOrInterruptTransfer.TransferBufferLength = static_cast<uint32_t>(payloadLen);
-        urb->UrbBulkOrInterruptTransfer.TransferFlags        = xhci::USBD_TRANSFER_DIRECTION_IN | xhci::USBD_SHORT_TRANSFER_OK;
-
         // Submit to xHCI slot (default to Slot 2 Logitech Mouse if slot is 0)
         uint8_t slotId = (col.XhciSlotId != 0) ? col.XhciSlotId : 2;
-        NtStatus st = xhci::XhciSubmitUrb(urb, slotId);
+        NtStatus st = HidUsbMiniport::submitInterrupt(slotId, transferBuf.data(), static_cast<uint32_t>(payloadLen));
 
         // Preserve caller's injected HID report frame if provided
         if (simulatedDevicePayload && payloadLen > 0) {
@@ -931,7 +923,6 @@ public:
             col.PendingInputReports.push_back(std::move(reportFrame));
         }
 
-        xhci::USBD_UrbFree(urb);
         m_telemetry.totalPingPongUrbsDispatched++;
         return st;
     }
@@ -949,31 +940,8 @@ public:
         if (it == m_collections.end()) return NtStatus::InvalidHandle;
 
         auto& col = it->second;
-        xhci::URB* urb = xhci::USBD_UrbAllocate();
-        if (!urb) return NtStatus::InsufficientResources;
-
-        urb->UrbHeader.Function = xhci::URB_FUNCTION_CONTROL_TRANSFER_EX;
-        auto* ct = &urb->UrbControlTransferEx;
-        ct->TransferBuffer       = buffer;
-        ct->TransferBufferLength = bufferLength;
-
-        bool isRead = (bRequest == USB_HID_REQ_GET_REPORT ||
-                       bRequest == USB_HID_REQ_GET_IDLE ||
-                       bRequest == USB_HID_REQ_GET_PROTOCOL);
-
-        ct->TransferFlags = isRead ? xhci::USBD_TRANSFER_DIRECTION_IN : xhci::USBD_TRANSFER_DIRECTION_OUT;
-
-        usb::USB_DEFAULT_PIPE_SETUP_PACKET setup{};
-        setup.bmRequestType = usb::RequestType::Class | usb::RequestType::RecipientInterface |
-                              (isRead ? usb::RequestType::DirectionIn : usb::RequestType::DirectionOut);
-        setup.bRequest      = bRequest;
-        setup.wValue        = static_cast<uint16_t>((static_cast<uint16_t>(reportType) << 8) | reportId);
-        setup.wIndex        = 0;
-        setup.wLength       = bufferLength;
-        std::memcpy(ct->SetupPacket, &setup, sizeof(setup));
-
         uint8_t slotId = (col.XhciSlotId != 0) ? col.XhciSlotId : 2;
-        NtStatus st = xhci::XhciSubmitUrb(urb, slotId);
+        NtStatus st = HidUsbMiniport::submitControl(slotId, bRequest, reportType, reportId, buffer, bufferLength);
 
         if (bRequest == USB_HID_REQ_SET_REPORT && buffer && bufferLength > 0) {
             const uint8_t* raw = static_cast<const uint8_t*>(buffer);
@@ -999,7 +967,6 @@ public:
             }
         }
 
-        xhci::USBD_UrbFree(urb);
         m_telemetry.totalPingPongUrbsDispatched++;
         return st;
     }
@@ -1757,7 +1724,6 @@ inline void InitializeHidSubsystemExports() {
 
     // 2. Register hidclass.sys & hidusb.sys exports
     ldr.registerExport("hidclass.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
-    ldr.registerExport("hidusb.sys", "HidGetTelemetry", reinterpret_cast<void*>(HidGetTelemetry));
 
     // Device-driver entry points and callbacks are initialized by their own driver code.
 

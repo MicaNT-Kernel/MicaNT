@@ -12387,7 +12387,6 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(ldr.getExport("hidparse.sys", "HidP_GetValueCaps") != nullptr, "hidparse.sys HidP_GetValueCaps must exist");
 
         TEST_ASSERT(ldr.getExport("hidclass.sys", "HidGetTelemetry") != nullptr, "hidclass.sys HidGetTelemetry must exist");
-        TEST_ASSERT(ldr.getExport("hidusb.sys", "HidGetTelemetry") != nullptr, "hidusb.sys HidGetTelemetry must exist");
         TEST_ASSERT(ldr.getExport("kbdclass.sys", "KeyboardClassServiceCallback") != nullptr, "kbdclass.sys KeyboardClassServiceCallback must exist");
         TEST_ASSERT(ldr.getExport("mouclass.sys", "MouseClassServiceCallback") != nullptr, "mouclass.sys MouseClassServiceCallback must exist");
 

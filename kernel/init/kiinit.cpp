@@ -56,6 +56,7 @@
 #include "micant/km/drivers/fs/npfs.hpp"
 #include "micant/km/drivers/input/hidclass.hpp"
 #include "micant/km/drivers/input/hidparse.hpp"
+#include "micant/km/drivers/input/hidusb.hpp"
 #include "micant/km/drivers/input/kbdclass.hpp"
 #include "micant/km/drivers/input/mouclass.hpp"
 
@@ -362,6 +363,8 @@ extern "C" NtStatus KiSystemStartup(
     sys::internal::Ring2LsaInitializeExecutiveSubsystem();
     sys::internal::Ring2ScmInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
+    io::DriverObject hidusbDriver{};
+    km::hid::InitializeHidUsbDriver(hidusbDriver);
     io::DriverObject hidparseDriver{};
     km::hid::InitializeHidParseDriver(hidparseDriver);
     km::hid::InitializeHidParseExports();
