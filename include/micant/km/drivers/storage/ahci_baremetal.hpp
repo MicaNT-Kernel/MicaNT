@@ -188,6 +188,9 @@ alignas(4096) static uint8_t s_ahciDmaBuffer[65536];       // 64 KB DMA Transfer
  */
 class BareMetalAhciController {
 private:
+    uint8_t m_pciBus{0};
+    uint8_t m_pciDevice{0};
+    uint8_t m_pciFunction{0};
     uint32_t m_abarPhys{0};
     volatile uint32_t* m_abar{nullptr};
     bool     m_initialized{false};
@@ -209,29 +212,41 @@ public:
     [[nodiscard]] uint64_t getPort1TotalSectors() const noexcept { return m_port1TotalSectors; }
     [[nodiscard]] const char* getDiskModel() const noexcept { return m_diskModel; }
 
-    /**
-     * @brief Discover Intel C236 SATA AHCI Controller and initialize SATA Port 1 (/dev/sdb).
-     */
+    /** Discover an AHCI PCI function and initialize SATA Port 1 (/dev/sdb). */
     bool initialize() noexcept {
-        // 1. Scan PCI Bus 00, Dev 0x17, Func 0x00
-        uint32_t vendorDev = pciRead32(0, 0x17, 0, 0x00);
-        uint16_t vendorId = vendorDev & 0xFFFF;
-        uint16_t deviceId = (vendorDev >> 16) & 0xFFFF;
-
-        if (vendorId != 0x8086) {
-            return false;
+        // Controller locations differ between the target C236 platform
+        // (00:17.0) and Q35/ICH9 (00:1f.2), so select by PCI class instead
+        // of assuming one chipset's BDF.
+        bool foundController = false;
+        for (uint16_t device = 0; device < 32 && !foundController; ++device) {
+            for (uint8_t function = 0; function < 8; ++function) {
+                const uint32_t vendorDev = pciRead32(0, static_cast<uint8_t>(device), function, 0x00);
+                if (static_cast<uint16_t>(vendorDev) == 0xFFFF) continue;
+                const uint32_t classReg = pciRead32(0, static_cast<uint8_t>(device), function, 0x08);
+                const uint8_t programmingInterface = static_cast<uint8_t>((classReg >> 8) & 0xFF);
+                const uint8_t subclass = static_cast<uint8_t>((classReg >> 16) & 0xFF);
+                const uint8_t baseClass = static_cast<uint8_t>((classReg >> 24) & 0xFF);
+                if (baseClass == 0x01 && subclass == 0x06 && programmingInterface == 0x01) {
+                    m_pciBus = 0;
+                    m_pciDevice = static_cast<uint8_t>(device);
+                    m_pciFunction = function;
+                    foundController = true;
+                    break;
+                }
+            }
         }
+        if (!foundController) return false;
 
-        // 2. Read BAR5 (ABAR MMIO)
-        uint32_t bar5 = pciRead32(0, 0x17, 0, 0x24);
+        // Read BAR5 (ABAR MMIO) from the discovered controller.
+        uint32_t bar5 = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x24);
         m_abarPhys = bar5 & ~0xFULL;
         if (m_abarPhys == 0) {
             return false;
         }
 
-        // 3. Enable Bus Master, Memory Space, and I/O Space in PCI Command register
-        uint32_t pciCmd = pciRead32(0, 0x17, 0, 0x04);
-        pciWrite32(0, 0x17, 0, 0x04, pciCmd | 0x07);
+        // Enable Bus Master, Memory Space, and I/O Space.
+        uint32_t pciCmd = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x04);
+        pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x04, pciCmd | 0x07);
 
         // 4. Map ABAR pointer
         m_abar = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(m_abarPhys));
