@@ -160,13 +160,26 @@ extern "C" NtStatus KiSystemStartup(
     bootPartitions[0].partitionType = storage::MBR_TYPE_FAT32_LBA;
     bootPartitions[0].startLba = 2048;
     bootPartitions[0].sectorCount = static_cast<uint32_t>(bootDisk->getTotalBlocks() - 2048);
-    (void)storage::PartitionManager::writeMbr(*bootDisk, bootPartitions);
+    const NtStatus writeMbrStatus = storage::PartitionManager::writeMbr(*bootDisk, bootPartitions);
+    if (!NT_SUCCESS(writeMbrStatus)) {
+        std::cerr << "[MicaNT Boot] [PartMgr] Failed to initialize the boot disk MBR: "
+                  << NtStatusToString(writeMbrStatus) << "\n";
+        return 1;
+    }
+    std::vector<storage::MbrPartitionEntry> discoveredPartitions;
+    const NtStatus partitionStatus = storage::PartitionManager::parseMbr(*bootDisk, discoveredPartitions);
+    if (!NT_SUCCESS(partitionStatus) || discoveredPartitions.empty()) {
+        std::cerr << "[MicaNT Boot] [PartMgr] Failed to discover the boot partition: "
+                  << NtStatusToString(partitionStatus) << "\n";
+        return 1;
+    }
+    const auto& bootPartitionEntry = discoveredPartitions.front();
 
     auto bootPartition = std::make_shared<storage::PartitionDevice>(
         L"\\Device\\Harddisk0\\Partition1",
         bootDisk,
-        bootPartitions[0].startLba,
-        bootPartitions[0].sectorCount
+        bootPartitionEntry.startLba,
+        bootPartitionEntry.sectorCount
     );
 
     auto diskDev = ioMgr.createDevice(&diskDriver, L"\\Device\\Harddisk0", io::DeviceType::Disk, bootDisk.get());

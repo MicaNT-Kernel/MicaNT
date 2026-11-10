@@ -14,12 +14,14 @@
  */
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <memory>
 #include <mutex>
 #include <span>
+#include <utility>
 #include <cstring>
 #include <algorithm>
 #include "micant/shared/ntdef.hpp"
@@ -366,24 +368,44 @@ class PartitionManager {
 public:
     static NtStatus parseMbr(IBlockDevice& device, std::vector<MbrPartitionEntry>& outPartitions) {
         outPartitions.clear();
-        if (device.getBlockSize() < sizeof(MasterBootRecord)) {
+        const uint32_t blockSize = device.getBlockSize();
+        const uint64_t totalBlocks = device.getTotalBlocks();
+        if (blockSize < sizeof(MasterBootRecord) || totalBlocks == 0) {
             return NtStatus::InvalidParameter;
         }
 
-        std::vector<uint8_t> sector(device.getBlockSize());
+        std::vector<uint8_t> sector(blockSize);
         NtStatus st = device.readBlocks(0, 1, sector.data());
         if (!NT_SUCCESS(st)) return st;
 
-        const auto* mbr = reinterpret_cast<const MasterBootRecord*>(sector.data());
-        if (mbr->signature != MBR_SIGNATURE) {
+        uint16_t signature = 0;
+        std::memcpy(&signature, sector.data() + offsetof(MasterBootRecord, signature), sizeof(signature));
+        if (signature != MBR_SIGNATURE) {
             return NtStatus::UnrecognizedVolume;
         }
 
+        MasterBootRecord mbr{};
+        std::memcpy(&mbr, sector.data(), sizeof(mbr));
+        std::vector<std::pair<uint64_t, uint64_t>> extents;
         for (int i = 0; i < 4; ++i) {
-            const auto& p = mbr->partitions[i];
-            if (p.partitionType != MBR_TYPE_EMPTY && p.sectorCount > 0) {
-                outPartitions.push_back(p);
+            const auto& p = mbr.partitions[i];
+            if (p.partitionType == MBR_TYPE_EMPTY || p.sectorCount == 0) continue;
+            const uint64_t start = p.startLba;
+            const uint64_t count = p.sectorCount;
+            if ((p.bootIndicator != 0 && p.bootIndicator != 0x80) || start == 0 ||
+                start >= totalBlocks || count > totalBlocks - start) {
+                outPartitions.clear();
+                return NtStatus::UnrecognizedVolume;
             }
+            const uint64_t end = start + count;
+            for (const auto& extent : extents) {
+                if (start < extent.second && extent.first < end) {
+                    outPartitions.clear();
+                    return NtStatus::UnrecognizedVolume;
+                }
+            }
+            extents.emplace_back(start, end);
+            outPartitions.push_back(p);
         }
         return NtStatus::Success;
     }
@@ -393,12 +415,13 @@ public:
         if (device.getBlockSize() < sizeof(MasterBootRecord)) return NtStatus::InvalidParameter;
 
         std::vector<uint8_t> sector(device.getBlockSize(), 0);
-        auto* mbr = reinterpret_cast<MasterBootRecord*>(sector.data());
-        mbr->signature = MBR_SIGNATURE;
+        MasterBootRecord mbr{};
+        mbr.signature = MBR_SIGNATURE;
 
         for (size_t i = 0; i < partitions.size(); ++i) {
-            mbr->partitions[i] = partitions[i];
+            mbr.partitions[i] = partitions[i];
         }
+        std::memcpy(sector.data(), &mbr, sizeof(mbr));
 
         return device.writeBlocks(0, 1, sector.data());
     }
