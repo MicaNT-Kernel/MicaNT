@@ -47,6 +47,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/boot_driver.hpp"
+#include "micant/shared/win32k_client.h"
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
