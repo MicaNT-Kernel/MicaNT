@@ -62,6 +62,7 @@
 #include "micant/km/drivers/input/mouclass.hpp"
 #include "micant/km/drivers/input/mouhid.hpp"
 #include "micant/km/drivers/input/sermouse.hpp"
+#include "micant/km/drivers/serial/serial.hpp"
 #include "micant/km/drivers/system/beep.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
@@ -388,6 +389,8 @@ extern "C" NtStatus KiSystemStartup(
     km::hid::InitializeMouHidDriver(mouhidDriver);
     io::DriverObject sermouseDriver{};
     km::input::InitializeSerMouseDriver(sermouseDriver);
+    io::DriverObject serialDriver{};
+    km::serial::InitializeSerialDriver(serialDriver);
     auto pointerClassDevice = ioMgr.createDevice(
         &mouclassDriver, L"\\Device\\PointerClass0", static_cast<io::DeviceType>(0x0000000F));
     pointerClassDevice->flags = (pointerClassDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
