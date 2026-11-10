@@ -1417,6 +1417,18 @@ private:
         return (*a == *b);
     }
 
+    static bool startsWithCaseInsensitive(const char* value, const char* prefix) noexcept {
+        if (!value || !prefix) return false;
+        while (*prefix) {
+            char a = *value++;
+            char b = *prefix++;
+            if (a >= 'A' && a <= 'Z') a = static_cast<char>(a + ('a' - 'A'));
+            if (b >= 'A' && b <= 'Z') b = static_cast<char>(b + ('a' - 'A'));
+            if (a != b) return false;
+        }
+        return true;
+    }
+
     static bool hasTerminator(const uint8_t* image, size_t imageSize, uint32_t rva) noexcept {
         if (!image || rva >= imageSize) return false;
         for (size_t i=rva; i<imageSize; ++i) if (image[i] == 0) return true;
@@ -1482,7 +1494,10 @@ public:
         const auto* desc = reinterpret_cast<const pe::ImageImportDescriptor*>(image + importDir.virtualAddress);
         for (size_t d = 0; d < importDir.size / sizeof(pe::ImageImportDescriptor) && desc[d].name; ++d) {
             if (desc[d].name >= imageSize || !hasTerminator(image, imageSize, desc[d].name)) return false;
-            if (strcaseeq(reinterpret_cast<const char*>(image + desc[d].name), moduleName)) return true;
+            const char* importedName = reinterpret_cast<const char*>(image + desc[d].name);
+            if (strcaseeq(importedName, moduleName) ||
+                (strcaseeq(moduleName, "ucrtbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-crt-")) ||
+                (strcaseeq(moduleName, "kernelbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-core-"))) return true;
         }
         return false;
     }
@@ -1490,7 +1505,8 @@ public:
     static bool bindImportsToMappedModule(uint8_t* image, size_t imageSize,
                                            const char* moduleName,
                                            uint8_t* moduleImage, size_t moduleSize,
-                                           uint64_t moduleBaseVa) noexcept {
+                                           uint64_t moduleBaseVa,
+                                           bool allowUnresolved = false) noexcept {
         if (!image || !moduleName || !moduleImage || imageSize<sizeof(pe::ImageDosHeader)) return false;
         const auto* dos=reinterpret_cast<const pe::ImageDosHeader*>(image);
         if (dos->e_magic!=pe::DOS_MAGIC || dos->e_lfanew<0 ||
@@ -1503,7 +1519,11 @@ public:
         for (size_t d=0; d<importDir.size/sizeof(pe::ImageImportDescriptor) && desc[d].name; ++d) {
             auto& entry=desc[d];
             if (entry.name>=imageSize || !hasTerminator(image,imageSize,entry.name)) return false;
-            if (!strcaseeq(reinterpret_cast<const char*>(image+entry.name),moduleName)) continue;
+            const char* importedName = reinterpret_cast<const char*>(image + entry.name);
+            const bool matchesModule = strcaseeq(importedName, moduleName) ||
+                (strcaseeq(moduleName, "ucrtbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-crt-")) ||
+                (strcaseeq(moduleName, "kernelbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-core-"));
+            if (!matchesModule) continue;
             if (!entry.originalFirstThunk) return false;
             const uint32_t thunkRva=entry.originalFirstThunk;
             if (thunkRva>=imageSize || entry.firstThunk>=imageSize) return false;
@@ -1523,7 +1543,11 @@ public:
                     const auto* byName=reinterpret_cast<const pe::ImageImportByName*>(image+nameRva);
                     resolved=findExportRva(moduleImage,moduleSize,byName->name,0,exportRva);
                 }
-                if (!resolved) return false;
+                if (!resolved) {
+                    if (!allowUnresolved) return false;
+                    ++index;
+                    continue;
+                }
                 *reinterpret_cast<uint64_t*>(image+iatRva)=moduleBaseVa+exportRva;
                 ++index;
             }

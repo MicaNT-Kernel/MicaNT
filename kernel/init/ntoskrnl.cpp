@@ -1528,6 +1528,7 @@ static bool transitionToRing3(
     uint64_t pebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[0]);
     uint64_t tebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[512]);
     uint64_t entryRip = 0;
+    bool hasDllStartupThunk = false;
     uint32_t activePid = 1024;
 
     char* userCmdLine = reinterpret_cast<char*>(&s_userPebTebPage[2048]);
@@ -1596,99 +1597,107 @@ static bool transitionToRing3(
                     bool mapped;
                     micant::um::UserLoadedImageInfo image;
                 } modules[] = {
-                    {"win32k.dll", 0, false, {}},
                     {"user32.dll", 0, false, {}},
                     {"gdi32.dll", 0, false, {}},
-                    {"imm32.dll", 0, false, {}}
+                    {"imm32.dll", 0, false, {}},
+                    {"win32k.dll", 0, false, {}},
+                    {"kernel32.dll", 0, false, {}},
+                    {"kernelbase.dll", 0, false, {}},
+                    {"ntdll.dll", 0, false, {}},
+                    {"ucrtbase.dll", 0, false, {}}
                 };
                 size_t nextModuleOffset = (static_cast<size_t>(s_loadedPeInfo.sizeOfImage) + 0xFFFFu) & ~static_cast<size_t>(0xFFFFu);
                 auto& systemFs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
                 bool modulesLoaded = true;
-                bool needWin32k = micant::um::UserImageLoader64::imageImportsModule(
-                    s_userImageBuffer, s_loadedPeInfo.sizeOfImage, "win32k.dll");
-                for (size_t i = 1; i < sizeof(modules) / sizeof(modules[0]); ++i) {
-                    const bool required = micant::um::UserImageLoader64::imageImportsModule(
-                        s_userImageBuffer, s_loadedPeInfo.sizeOfImage, modules[i].name);
-                    needWin32k = needWin32k || required;
-                }
-                for (size_t moduleIndex = 0; moduleIndex < sizeof(modules) / sizeof(modules[0]); ++moduleIndex) {
-                    auto& module = modules[moduleIndex];
-                    const bool required = moduleIndex == 0
-                        ? needWin32k
-                        : micant::um::UserImageLoader64::imageImportsModule(
-                              s_userImageBuffer, s_loadedPeInfo.sizeOfImage, module.name);
-                    if (!required) continue;
-                    char path[96] = "\\MicaNT\\System32\\";
-                    size_t pathLen = 16;
-                    for (size_t i = 0; path[i] && i < sizeof(path) - 1; ++i) pathLen = i + 1;
-                    size_t nameLen = 0;
-                    while (module.name[nameLen] && pathLen + nameLen < sizeof(path) - 1) {
-                        path[pathLen + nameLen] = module.name[nameLen];
-                        ++nameLen;
-                    }
-                    path[pathLen + nameLen] = '\0';
+                const size_t moduleCount = sizeof(modules) / sizeof(modules[0]);
+                auto imageImportsCandidate = [&](const uint8_t* image, size_t imageSize,
+                                                 const MappedSystemModule& candidate) {
+                    return micant::um::UserImageLoader64::imageImportsModule(image, imageSize, candidate.name);
+                };
+                auto moduleImage = [&](const MappedSystemModule& module) -> uint8_t* {
+                    return s_userImageBuffer + module.offset;
+                };
 
-                    size_t moduleBytes = 0;
-                    if (!systemFs.readFile(path, s_diskAppBuffer, sizeof(s_diskAppBuffer), moduleBytes) || moduleBytes == 0) {
-                        UartSerial::print("[UserLoader] Required system DLL missing: ");
-                        UartSerial::print(module.name);
-                        UartSerial::print("\r\n");
-                        modulesLoaded = false;
-                        break;
-                    }
-                    if (nextModuleOffset >= sizeof(s_userImageBuffer)) {
-                        modulesLoaded = false;
-                        break;
-                    }
-                    module.offset = nextModuleOffset;
-                    const uint64_t moduleBaseVa = targetBaseVa + module.offset;
-                    const micant::NtStatus moduleStatus = micant::um::UserImageLoader64::loadAndMapImage(
-                        std::span<const uint8_t>(s_diskAppBuffer, moduleBytes),
-                        s_userImageBuffer + module.offset,
-                        sizeof(s_userImageBuffer) - module.offset,
-                        moduleBaseVa,
-                        s_userTrampolinePage, sizeof(s_userTrampolinePage), trampBaseVa,
-                        userStackTop, sizeof(s_userStack), pebVa, tebVa,
-                        activePid, 480, module.name, module.image,
-                        reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer),
-                        userCmdLine, false);
-                    if (moduleStatus != micant::NtStatus::Success || !module.image.headersValid) {
-                        UartSerial::print("[UserLoader] Invalid system DLL image: ");
-                        UartSerial::print(module.name);
-                        UartSerial::print("\r\n");
-                        modulesLoaded = false;
-                        break;
-                    }
-                    module.mapped = true;
-                    nextModuleOffset += (static_cast<size_t>(module.image.sizeOfImage) + 0xFFFFu) & ~static_cast<size_t>(0xFFFFu);
-                }
+                // Resolve the transitive import closure. API-set CRT imports
+                // are represented by ucrtbase.dll; API-set core imports by
+                // kernelbase.dll, as on Windows installations.
+                bool discoveredModule = true;
+                while (modulesLoaded && discoveredModule) {
+                    discoveredModule = false;
+                    for (auto& module : modules) {
+                        if (module.mapped) continue;
+                        bool required = imageImportsCandidate(s_userImageBuffer, s_loadedPeInfo.sizeOfImage, module);
+                        for (const auto& parent : modules) {
+                            if (required) break;
+                            if (parent.mapped) {
+                                required = imageImportsCandidate(moduleImage(parent),
+                                                                 parent.image.sizeOfImage, module);
+                            }
+                        }
+                        if (!required) continue;
 
-                if (modulesLoaded) {
-                    auto moduleImage = [&](MappedSystemModule& module) -> uint8_t* {
-                        return s_userImageBuffer + module.offset;
-                    };
-                    const bool win32kMapped = modules[0].mapped;
-                    const uint64_t win32kBase = targetBaseVa + modules[0].offset;
-                    const size_t win32kSize = static_cast<size_t>(modules[0].image.sizeOfImage);
-                    for (size_t i = 1; win32kMapped && i < sizeof(modules) / sizeof(modules[0]); ++i) {
-                        if (!modules[i].mapped) continue;
-                        if (!micant::um::UserImageLoader64::bindImportsToMappedModule(
-                                moduleImage(modules[i]), modules[i].image.sizeOfImage,
-                                "win32k.dll", moduleImage(modules[0]), win32kSize, win32kBase)) {
-                            UartSerial::print("[UserLoader] Could not resolve win32k imports in ");
-                            UartSerial::print(modules[i].name);
+                        char path[96] = "\\MicaNT\\System32\\";
+                        size_t pathLen = 0;
+                        while (path[pathLen] && pathLen + 1 < sizeof(path)) ++pathLen;
+                        size_t nameLen = 0;
+                        while (module.name[nameLen] && pathLen + nameLen + 1 < sizeof(path)) {
+                            path[pathLen + nameLen] = module.name[nameLen];
+                            ++nameLen;
+                        }
+                        path[pathLen + nameLen] = '\0';
+
+                        size_t moduleBytes = 0;
+                        if (!systemFs.readFile(path, s_diskAppBuffer, sizeof(s_diskAppBuffer), moduleBytes) || moduleBytes == 0) {
+                            UartSerial::print("[UserLoader] Required system DLL missing: ");
+                            UartSerial::print(module.name);
                             UartSerial::print("\r\n");
                             modulesLoaded = false;
                             break;
                         }
-                    }
-                    for (auto& module : modules) {
-                        if (modulesLoaded && module.mapped && !micant::um::UserImageLoader64::bindImportsToMappedModule(
-                                s_userImageBuffer, s_loadedPeInfo.sizeOfImage,
-                                module.name, moduleImage(module), module.image.sizeOfImage,
-                                targetBaseVa + module.offset)) {
+                        if (nextModuleOffset >= sizeof(s_userImageBuffer)) {
                             modulesLoaded = false;
                             break;
+                        }
+                        module.offset = nextModuleOffset;
+                        const micant::NtStatus moduleStatus = micant::um::UserImageLoader64::loadAndMapImage(
+                            std::span<const uint8_t>(s_diskAppBuffer, moduleBytes),
+                            s_userImageBuffer + module.offset,
+                            sizeof(s_userImageBuffer) - module.offset,
+                            targetBaseVa + module.offset,
+                            s_userTrampolinePage, sizeof(s_userTrampolinePage), trampBaseVa,
+                            userStackTop, sizeof(s_userStack), pebVa, tebVa,
+                            activePid, 480, module.name, module.image,
+                            reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer),
+                            userCmdLine, false);
+                        if (moduleStatus != micant::NtStatus::Success || !module.image.headersValid) {
+                            UartSerial::print("[UserLoader] Invalid system DLL image: ");
+                            UartSerial::print(module.name);
+                            UartSerial::print("\r\n");
+                            modulesLoaded = false;
+                            break;
+                        }
+                        module.mapped = true;
+                        nextModuleOffset += (static_cast<size_t>(module.image.sizeOfImage) + 0xFFFFu) & ~static_cast<size_t>(0xFFFFu);
+                        discoveredModule = true;
+                    }
+                }
+
+                if (modulesLoaded) {
+                    auto bindImageImports = [&](uint8_t* image, size_t imageSize) {
+                        for (auto& module : modules) {
+                            if (!module.mapped) continue;
+                            const bool strictWin32k = strEqual(module.name, "win32k.dll");
+                            if (!micant::um::UserImageLoader64::bindImportsToMappedModule(
+                                    image, imageSize, module.name, moduleImage(module),
+                                    module.image.sizeOfImage, targetBaseVa + module.offset,
+                                    !strictWin32k)) return false;
+                        }
+                        return true;
+                    };
+                    modulesLoaded = bindImageImports(s_userImageBuffer, s_loadedPeInfo.sizeOfImage);
+                    for (auto& module : modules) {
+                        if (modulesLoaded && module.mapped) {
+                            modulesLoaded = bindImageImports(moduleImage(module), module.image.sizeOfImage);
                         }
                     }
                 }
@@ -1697,9 +1706,52 @@ static bool transitionToRing3(
                     UartSerial::print("[UserLoader] System DLL dependency chain could not be mapped\r\n");
                     return false;
                 }
-                UartSerial::print("[UserLoader] Resolved required windowing DLL imports in process image space\r\n");
+                uint8_t* startup = s_userCodePage;
+                std::memset(startup, 0xCC, sizeof(s_userCodePage));
+                size_t startupOffset = 0;
+                auto emitBytes = [&](const uint8_t* bytes, size_t count) {
+                    if (startupOffset + count > sizeof(s_userCodePage)) return false;
+                    std::memcpy(startup + startupOffset, bytes, count);
+                    startupOffset += count;
+                    return true;
+                };
+                auto emitImmediate64 = [&](const uint8_t* opcode, size_t opcodeSize, uint64_t value) {
+                    if (!emitBytes(opcode, opcodeSize) || startupOffset + sizeof(value) > sizeof(s_userCodePage)) return false;
+                    std::memcpy(startup + startupOffset, &value, sizeof(value));
+                    startupOffset += sizeof(value);
+                    return true;
+                };
+                bool startupFits = true;
+                // Attach dependencies before their clients. The module table
+                // is dependency-discovered from the executable outward.
+                for (size_t i = moduleCount; i > 0; --i) {
+                    const auto& module = modules[i - 1];
+                    if (!module.mapped || !module.image.entryPointVa) continue;
+                    const uint8_t setModule[] = {0x48, 0xB9}; // mov rcx, image base
+                    const uint8_t setEntry[] = {0x48, 0xB8}; // mov rax, DLL entry point
+                    const uint8_t processAttach[] = {0xBA, 0x01, 0x00, 0x00, 0x00, 0x45, 0x31, 0xC0,
+                                                     0x48, 0x83, 0xEC, 0x28};
+                    const uint8_t callEntry[] = {0xFF, 0xD0, 0x48, 0x83, 0xC4, 0x28};
+                    startupFits = emitImmediate64(setModule, sizeof(setModule), targetBaseVa + module.offset) &&
+                                  emitBytes(processAttach, sizeof(processAttach)) &&
+                                  emitImmediate64(setEntry, sizeof(setEntry), module.image.entryPointVa) &&
+                                  emitBytes(callEntry, sizeof(callEntry));
+                    if (!startupFits) break;
+                }
+                const uint8_t jumpToApp[] = {0x48, 0xB8}; // mov rax, application entry point
+                const uint8_t jumpRax[] = {0xFF, 0xE0};
+                startupFits = startupFits &&
+                              emitImmediate64(jumpToApp, sizeof(jumpToApp), s_loadedPeInfo.entryPointVa) &&
+                              emitBytes(jumpRax, sizeof(jumpRax));
+                if (!startupFits) {
+                    UartSerial::print("[UserLoader] DLL startup thunk exceeds its executable page\r\n");
+                    return false;
+                }
+                entryRip = reinterpret_cast<uint64_t>(s_userCodePage);
+                hasDllStartupThunk = true;
+                UartSerial::print("[UserLoader] Resolved imported System32 DLL dependency graph in process image space\r\n");
             }
-            entryRip = s_loadedPeInfo.entryPointVa;
+            if (!hasDllStartupThunk) entryRip = s_loadedPeInfo.entryPointVa;
             UartSerial::print("[ntoskrnl.exe] Loaded standalone PE32+ image: EntryPoint=0x");
             UartSerial::printHex64(entryRip);
             UartSerial::print("\r\n");
