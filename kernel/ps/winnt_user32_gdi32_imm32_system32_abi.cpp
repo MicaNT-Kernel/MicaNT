@@ -101,15 +101,20 @@ void User32_PostQuitMessage(int32_t /*nExitCode*/) noexcept {
 
 int32_t User32_GetClientRect(void* hWnd, WinNtRect* lpRect) noexcept {
     if (!hWnd || !lpRect) return 0;
-    lpRect->left   = 0;
-    lpRect->top    = 0;
-    lpRect->right  = g_primaryWindow.width;
-    lpRect->bottom = g_primaryWindow.height;
+    auto wnd=micant::win32k::TitanWin32kSubsystem::Instance().getWindow(hWnd);
+    if(!wnd) return 0;
+    lpRect->left=wnd->rcClient.left; lpRect->top=wnd->rcClient.top;
+    lpRect->right=wnd->rcClient.right; lpRect->bottom=wnd->rcClient.bottom;
     return 1;
 }
 
 int32_t User32_GetWindowRect(void* hWnd, WinNtRect* lpRect) noexcept {
-    return User32_GetClientRect(hWnd, lpRect);
+    if(!hWnd||!lpRect)return 0;
+    auto wnd=micant::win32k::TitanWin32kSubsystem::Instance().getWindow(hWnd);
+    if(!wnd)return 0;
+    lpRect->left=wnd->rcWindow.left;lpRect->top=wnd->rcWindow.top;
+    lpRect->right=wnd->rcWindow.right;lpRect->bottom=wnd->rcWindow.bottom;
+    return 1;
 }
 
 int32_t User32_AdjustWindowRectEx(WinNtRect* lpRect, uint32_t /*dwStyle*/, int32_t /*bMenu*/, uint32_t /*dwExStyle*/) noexcept {
