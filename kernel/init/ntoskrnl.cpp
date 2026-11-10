@@ -1106,6 +1106,39 @@ extern "C" __attribute__((naked)) void KiClockInterruptStub() {
 
 
 
+// Private copies prevent writes to firmware-owned, read-only page tables.
+alignas(4096) static uint64_t s_privatePageTables[128][512];
+static size_t s_privatePageTableCount = 0;
+static uint64_t* writableChildTable(uint64_t& entry) {
+    constexpr uint64_t mask = 0x000FFFFFFFFFF000ULL;
+    auto* child = reinterpret_cast<uint64_t*>(entry & mask);
+    for (size_t i = 0; i < s_privatePageTableCount; ++i)
+        if (child == s_privatePageTables[i]) return child;
+    if (s_privatePageTableCount == 128) return nullptr;
+    auto* copy = s_privatePageTables[s_privatePageTableCount++];
+    for (size_t i = 0; i < 512; ++i) copy[i] = child[i];
+    entry = (entry & ~mask) | reinterpret_cast<uint64_t>(copy);
+    return copy;
+}
+
+static bool initPs2Mouse() {
+    auto waitInput = []() { for (int i = 0; i < 100000; ++i) if (!(inb(0x64) & 2)) return true; return false; };
+    auto sendMouse = [&](uint8_t value) {
+        if (!waitInput()) return false;
+        outb(0x64, 0xd4);
+        if (!waitInput()) return false;
+        outb(0x60, value);
+        for (int i = 0; i < 1000000; ++i) {
+            uint8_t status = inb(0x64);
+            if ((status & 0x21) == 0x21) return inb(0x60) == 0xfa;
+        }
+        return false;
+    };
+    if (!waitInput()) return false;
+    outb(0x64, 0xa8);
+    return sendMouse(0xf6) && sendMouse(0xf4);
+}
+
 static void enableUserPagingForRange(uint64_t startVa, size_t size) {
     uint64_t cr3 = 0;
 #if defined(__x86_64__)
@@ -1127,22 +1160,22 @@ static void enableUserPagingForRange(uint64_t startVa, size_t size) {
         if (!(pml4[pml4Idx] & 1)) continue;
         pml4[pml4Idx] = (pml4[pml4Idx] & ~(1ULL << 63)) | 0x6;
 
-        uint64_t pdptPhys = pml4[pml4Idx] & 0x000FFFFFFFFFF000ULL;
-        auto* pdpt = reinterpret_cast<uint64_t*>(pdptPhys);
+        auto* pdpt = writableChildTable(pml4[pml4Idx]);
+        if (!pdpt) return;
         if (!(pdpt[pdptIdx] & 1)) continue;
         pdpt[pdptIdx] = (pdpt[pdptIdx] & ~(1ULL << 63)) | 0x6;
 
         if (pdpt[pdptIdx] & (1ULL << 7)) continue;
 
-        uint64_t pdPhys = pdpt[pdptIdx] & 0x000FFFFFFFFFF000ULL;
-        auto* pd = reinterpret_cast<uint64_t*>(pdPhys);
+        auto* pd = writableChildTable(pdpt[pdptIdx]);
+        if (!pd) return;
         if (!(pd[pdIdx] & 1)) continue;
         pd[pdIdx] = (pd[pdIdx] & ~(1ULL << 63)) | 0x6;
 
         if (pd[pdIdx] & (1ULL << 7)) continue;
 
-        uint64_t ptPhys = pd[pdIdx] & 0x000FFFFFFFFFF000ULL;
-        auto* pt = reinterpret_cast<uint64_t*>(ptPhys);
+        auto* pt = writableChildTable(pd[pdIdx]);
+        if (!pt) return;
         if (!(pt[ptIdx] & 1)) continue;
         pt[ptIdx] = (pt[ptIdx] & ~(1ULL << 63)) | 0x6;
     }
@@ -2305,12 +2338,17 @@ extern "C" micant::NtStatus KiSystemStartup(
 #endif
     uint64_t pml4Phys = cr3Val & 0x000FFFFFFFFFF000ULL;
     if (pml4Phys != 0) {
-        auto* pml4 = reinterpret_cast<uint64_t*>(pml4Phys);
+        // Firmware may map its own page tables read-only with CR0.WP set.
+        // Keep its lower levels, but own the root before adding kernel mappings.
+        alignas(4096) static uint64_t kernelPml4[512];
+        const auto* firmwarePml4 = reinterpret_cast<const uint64_t*>(pml4Phys);
+        for (size_t i = 0; i < 512; ++i) kernelPml4[i] = firmwarePml4[i];
         auto& highHalfEngine = micant::hal::highhalf::HighHalfPagingEngine64::get();
-        bool mirrored = highHalfEngine.mirrorHighCanonicalSpace(pml4);
+        bool mirrored = highHalfEngine.mirrorHighCanonicalSpace(kernelPml4);
         if (mirrored) {
 #if defined(__x86_64__)
-            __asm__ __volatile__("mov %0, %%cr3" : : "r"(cr3Val) : "memory");
+            const uint64_t kernelCr3 = reinterpret_cast<uint64_t>(kernelPml4) | (cr3Val & 0xfffULL);
+            __asm__ __volatile__("mov %0, %%cr3" : : "r"(kernelCr3) : "memory");
 #endif
             LogKernel("[Mm] High-Half Canonical Kernel Active (0xFFFFF800... PML4[496]).");
         }
@@ -2630,6 +2668,35 @@ extern "C" micant::NtStatus KiSystemStartup(
     }
 
     bool s_showDesktop = false;
+    bool mouseReady = initPs2Mouse();
+    UartSerial::print(mouseReady ? "[PS/2] Mouse enabled.\r\n" : "[PS/2] Mouse unavailable.\r\n");
+    int mouseX = static_cast<int>(width / 2), mouseY = static_cast<int>(height / 2);
+    uint8_t mousePacket[3]{};
+    unsigned mousePacketPos = 0;
+    bool mouseLeftDown = false;
+    bool cursorVisible = false;
+    micant::bootvid::Color cursorUnder[16 * 20];
+    auto hideCursor = [&]() {
+        if (!cursorVisible) return;
+        for (int y = 0; y < 20; ++y) for (int x = 0; x < 16; ++x) {
+            auto c = cursorUnder[y * 16 + x]; c.a = 255;
+            videoDriver.putPixel(mouseX + x, mouseY + y, c);
+        }
+        cursorVisible = false;
+    };
+    auto showCursor = [&]() {
+        if (cursorVisible || !s_showDesktop) return;
+        for (int y = 0; y < 20; ++y) for (int x = 0; x < 16; ++x) {
+            cursorUnder[y * 16 + x] = videoDriver.getPixel(mouseX + x, mouseY + y);
+            // A white arrow with a dark outline, drawn into the framebuffer.
+            bool arrow = (y < 15 && x <= y / 2) || (y >= 10 && y < 19 && x >= 4 && x <= 7);
+            if (arrow) {
+                bool edge = x == 0 || x == y / 2 || y == 14 || (y >= 15 && (x == 4 || x == 7 || y == 18));
+                videoDriver.putPixel(mouseX + x, mouseY + y, edge ? micant::bootvid::Color{0, 0, 0} : micant::bootvid::Color{255, 255, 255});
+            }
+        }
+        cursorVisible = true;
+    };
     DrawExecutiveConsole();
     RedrawShellLine();
 
@@ -4196,6 +4263,79 @@ extern "C" micant::NtStatus KiSystemStartup(
         ExecuteCommandImpl(ExecuteCommandImpl, cmd);
     };
 
+    bool desktopPanelOpen = false;
+    int panelX = 100, panelY = 80;
+    const int panelW = static_cast<int>(width) - 200;
+    const int panelH = 400;
+    bool panelDragging = false;
+    int dragOffsetX = 0, dragOffsetY = 0;
+    const char* panelTitle = "";
+    auto drawDesktopPanel = [&]() {
+        using micant::bootvid::Color;
+        videoDriver.fillRectangle(panelX, panelY, panelW, panelH, Color{14, 20, 32});
+        videoDriver.drawRectangle(panelX, panelY, panelW, panelH, Color{0, 180, 220}, 2);
+        videoDriver.fillRectangle(panelX + 2, panelY + 2, panelW - 4, 34, Color{28, 38, 60});
+        videoDriver.drawString(panelX + 14, panelY + 12, panelTitle, Color{255,255,255}, Color{28,38,60}, 1);
+        videoDriver.fillRectangle(panelX + panelW - 40, panelY + 5, 32, 26, Color{90,40,48});
+        videoDriver.drawString(panelX + panelW - 29, panelY + 10, "X", Color{255,255,255}, Color{90,40,48}, 1);
+        for (size_t i = 0; i < s_shellOutputCount && i < 13; ++i)
+            videoDriver.drawString(panelX + 16, panelY + 54 + i * 22, s_shellOutputLines[i].text, s_shellOutputLines[i].color, Color{14,20,32}, 1);
+        videoDriver.drawString(panelX + 16, panelY + panelH - 25, "Drag title bar | Click X to close | TAB: console", Color{140,160,190}, Color{14,20,32}, 1);
+    };
+    auto handleDesktopClick = [&]() {
+        const int dockW = width > 600 ? 540 : static_cast<int>(width) - 40;
+        const int dockX = (static_cast<int>(width) - dockW) / 2;
+        const int dockY = static_cast<int>(height) - 60;
+        const int hubW = width >= 960 ? static_cast<int>((width - 64) / 2 > 460 ? 460 : (width - 64) / 2) : (width > 500 ? 460 : static_cast<int>(width) - 32);
+        const int hubX = width >= 960 ? 24 : (static_cast<int>(width) - hubW) / 2;
+        if (desktopPanelOpen && mouseX >= panelX && mouseX < panelX + panelW && mouseY >= panelY + 2 && mouseY < panelY + 36 && mouseX < panelX + panelW - 44) {
+            panelDragging = true; dragOffsetX = mouseX - panelX; dragOffsetY = mouseY - panelY; return;
+        }
+        if (desktopPanelOpen && mouseX >= panelX + panelW - 44 && mouseX < panelX + panelW && mouseY >= panelY && mouseY < panelY + 36) {
+            hideCursor(); desktopPanelOpen = false;
+            DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
+            UartSerial::print("[Mouse] Closed desktop panel.\r\n");
+            showCursor(); return;
+        }
+        if (desktopPanelOpen && mouseX >= panelX && mouseX < panelX + panelW && mouseY >= panelY && mouseY < panelY + panelH) return;
+        const char* command = nullptr;
+        const char* title = nullptr;
+        bool terminal = false;
+        if (mouseY >= dockY + 8 && mouseY < dockY + 40) {
+            int x = mouseX - dockX;
+            if (x >= 12 && x < 44) { title = "Command reference"; command = "help"; }
+            else if (x >= 56 && x < 136) terminal = true;
+            else if (x >= 144 && x < 224) { title = "File Explorer"; command = "dir"; }
+            else if (x >= 232 && x < 312) { title = "Task Manager"; command = "ps"; }
+            else if (x >= 320 && x < 400) title = "Settings";
+        } else if (!desktopPanelOpen && mouseX >= hubX + 24 && mouseX < hubX + hubW - 24 && mouseY >= 140 && mouseY < 284) {
+            int row = (mouseY - 140) / 24;
+            if ((mouseY - 140) % 24 < 20) {
+                if (row == 0) terminal = true;
+                else if (row == 1) { title = "File Explorer"; command = "dir"; }
+                else if (row == 2) { title = "Task Manager"; command = "ps"; }
+                else if (row == 3) title = "Registry Editor";
+                else if (row == 4) title = "NetBird";
+                else title = "Security Monitor";
+            }
+        }
+        if (!terminal && !title) return;
+        hideCursor();
+        if (terminal) {
+            desktopPanelOpen = false; s_showDesktop = false;
+            DrawExecutiveConsole(); RedrawShellLine();
+            UartSerial::print("[Mouse] Opened terminal.\r\n"); return;
+        }
+        panelTitle = title;
+        if (command) ExecuteCommand(command);
+        else { ShellClearOutput(); ShellAddLine("This application is not implemented yet."); }
+        DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
+        desktopPanelOpen = true;
+        drawDesktopPanel();
+        UartSerial::print("[Mouse] Opened panel: "); UartSerial::print(title); UartSerial::print("\r\n");
+        showCursor();
+    };
+
     // Autoexec: Execute C:\autoexec.bat if present on C: volume
     {
         auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
@@ -4225,6 +4365,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     static int s_uartEscState = 0;
 
     while (true) {
+        if (!s_showDesktop) { cursorVisible = false; desktopPanelOpen = false; panelDragging = false; }
+        else showCursor();
         // Network: Poll Intel I210 Gigabit Ethernet for incoming packets (ARP & ICMP echo)
         micant::km::i210_baremetal::BareMetalI210Driver::get().pollRx();
 
@@ -4439,7 +4581,33 @@ extern "C" micant::NtStatus KiSystemStartup(
         if ((kbdStatus & 1) != 0) {
             uint8_t dataByte = inb(0x60);
             if ((kbdStatus & 0x20) != 0) {
-                // AUX / PS/2 Mouse byte (e.g. Left button = 0x01 or movement): ignore to prevent phantom keystrokes
+                if (mousePacketPos == 0 && !(dataByte & 0x08)) continue;
+                mousePacket[mousePacketPos++] = dataByte;
+                if (mousePacketPos == 3) {
+                    mousePacketPos = 0;
+                    if (!(mousePacket[0] & 0xc0)) {
+                        if (s_showDesktop) hideCursor();
+                        mouseX += static_cast<int8_t>(mousePacket[1]);
+                        mouseY -= static_cast<int8_t>(mousePacket[2]);
+                        if (mouseX < 0) mouseX = 0;
+                        if (mouseY < 0) mouseY = 0;
+                        if (mouseX >= static_cast<int>(width)) mouseX = width - 1;
+                        if (mouseY >= static_cast<int>(height)) mouseY = height - 1;
+                        if (desktopPanelOpen && panelDragging && (mousePacket[0] & 1)) {
+                            panelX = mouseX - dragOffsetX; panelY = mouseY - dragOffsetY;
+                            if (panelX < 0) panelX = 0;
+                            if (panelY < 32) panelY = 32;
+                            if (panelX + panelW > static_cast<int>(width)) panelX = width - panelW;
+                            if (panelY + panelH > static_cast<int>(height)) panelY = height - panelH;
+                            DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp); drawDesktopPanel();
+                        }
+                        if (s_showDesktop) showCursor();
+                        bool leftDown = (mousePacket[0] & 1) != 0;
+                        if (leftDown && !mouseLeftDown && s_showDesktop) handleDesktopClick();
+                        if (!leftDown) panelDragging = false;
+                        mouseLeftDown = leftDown;
+                    }
+                }
                 continue;
             }
             if (dataByte == 0xE0) {

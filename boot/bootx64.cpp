@@ -1537,19 +1537,12 @@ public:
                     UartSerial::printDec(info->pixelsPerScanLine);
                     UartSerial::print(")\r\n");
 
-                    // Select 1920x1080 if supported, then 1280x1024, then highest resolution
-                    if (info->horizontalResolution == 1920 && info->verticalResolution == 1080) {
+                    // The framebuffer UI uses fixed-size bitmap text. Prefer a
+                    // readable desktop-sized mode instead of shrinking 1080p.
+                    if (info->horizontalResolution == 1024 && info->verticalResolution == 768) {
                         bestMode = m;
-                        bestW = 1920;
-                        bestH = 1080;
-                    } else if (bestW < 1920 && info->horizontalResolution == 1280 && info->verticalResolution == 1024) {
-                        bestMode = m;
-                        bestW = 1280;
-                        bestH = 1024;
-                    } else if (bestW < 1280 && info->horizontalResolution > bestW) {
-                        bestMode = m;
-                        bestW = info->horizontalResolution;
-                        bestH = info->verticalResolution;
+                        bestW = 1024;
+                        bestH = 768;
                     }
 
                     if (m_systemTable->bootServices && m_systemTable->bootServices->freePool) {
