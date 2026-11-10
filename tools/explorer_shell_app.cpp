@@ -231,8 +231,8 @@ void openView(View view) noexcept {
     for (auto& candidate : g.apps) if (!candidate.open) { app = &candidate; break; }
     if (!app) return;
     app->view = view;
-    app->width = 500;
-    app->height = 320;
+    constexpr uint32_t kInitialWindowWidth = 500;
+    constexpr uint32_t kInitialWindowHeight = 320;
     app->hwnd = CreateWindowExW(0, kClassName,
         view == View::MyComputer ? L"My Computer" :
         view == View::MyDocuments ? L"My Documents" :
@@ -240,9 +240,19 @@ void openView(View view) noexcept {
         view == View::RecycleBin ? L"Recycle Bin" :
         view == View::DateTime ? L"Date and Time" : L"Network Places",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, 190 + static_cast<int32_t>(g.appCount % 4) * 32,
-        90 + static_cast<int32_t>(g.appCount % 4) * 28, app->width, app->height,
+        90 + static_cast<int32_t>(g.appCount % 4) * 28,
+        static_cast<int32_t>(kInitialWindowWidth), static_cast<int32_t>(kInitialWindowHeight),
         nullptr, nullptr, nullptr, nullptr);
     if (!app->hwnd) return;
+    RECT clientRect{};
+    if (!GetClientRect(app->hwnd, &clientRect) || clientRect.right <= clientRect.left ||
+        clientRect.bottom <= clientRect.top) {
+        DestroyWindow(app->hwnd);
+        *app = {};
+        return;
+    }
+    app->width = static_cast<uint32_t>(clientRect.right - clientRect.left);
+    app->height = static_cast<uint32_t>(clientRect.bottom - clientRect.top);
     app->open = true;
     app->minimized = false;
     g.activeApp = static_cast<uint8_t>(app - g.apps);

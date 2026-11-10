@@ -508,24 +508,62 @@ public:
     [[nodiscard]] HDESK getHandle() const noexcept { return m_handle; }
     [[nodiscard]] std::shared_ptr<DesktopHeap> getHeap() const noexcept { return m_heap; }
 
-    void addWindowToZOrder(HWND hwnd, HWND insertAfter) {
+    void addWindowToZOrder(HWND hwnd, HWND insertAfter, bool topmost = false) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (insertAfter == HWND_TOPMOST) topmost = true;
+        else if (insertAfter == HWND_NOTOPMOST || insertAfter == HWND_BOTTOM) topmost = false;
+
         // Remove first if already present
         auto it = std::find(m_zOrder.begin(), m_zOrder.end(), hwnd);
         if (it != m_zOrder.end()) m_zOrder.erase(it);
 
-        if (insertAfter == HWND_TOP || insertAfter == nullptr || insertAfter == HWND_TOPMOST) {
-            m_zOrder.insert(m_zOrder.begin(), hwnd);
-        } else if (insertAfter == HWND_BOTTOM) {
+        auto topmostIt = std::find(m_topmostWindows.begin(), m_topmostWindows.end(), hwnd);
+        if (topmost) {
+            if (topmostIt == m_topmostWindows.end()) m_topmostWindows.push_back(hwnd);
+        } else if (topmostIt != m_topmostWindows.end()) {
+            m_topmostWindows.erase(topmostIt);
+        }
+
+        if (insertAfter == HWND_BOTTOM) {
             m_zOrder.push_back(hwnd);
-        } else if (insertAfter == HWND_NOTOPMOST) {
-            m_zOrder.push_back(hwnd);
+        } else if (insertAfter == HWND_TOP || insertAfter == nullptr ||
+                   insertAfter == HWND_TOPMOST || insertAfter == HWND_NOTOPMOST) {
+            if (topmost) {
+                m_zOrder.insert(m_zOrder.begin(), hwnd);
+            } else {
+                const auto firstNonTopmost = std::find_if(m_zOrder.begin(), m_zOrder.end(),
+                    [&](HWND candidate) {
+                        return std::find(m_topmostWindows.begin(), m_topmostWindows.end(), candidate) ==
+                               m_topmostWindows.end();
+                    });
+                m_zOrder.insert(firstNonTopmost, hwnd);
+            }
         } else {
             auto pos = std::find(m_zOrder.begin(), m_zOrder.end(), insertAfter);
             if (pos != m_zOrder.end()) {
-                m_zOrder.insert(pos + 1, hwnd);
+                const bool anchorTopmost = std::find(m_topmostWindows.begin(), m_topmostWindows.end(), insertAfter) !=
+                                           m_topmostWindows.end();
+                if (topmost && anchorTopmost) {
+                    m_zOrder.insert(pos + 1, hwnd);
+                } else if (!topmost && anchorTopmost) {
+                    const auto firstNonTopmost = std::find_if(m_zOrder.begin(), m_zOrder.end(),
+                        [&](HWND candidate) {
+                            return std::find(m_topmostWindows.begin(), m_topmostWindows.end(), candidate) ==
+                                   m_topmostWindows.end();
+                        });
+                    m_zOrder.insert(firstNonTopmost, hwnd);
+                } else if (topmost) {
+                    m_zOrder.insert(m_zOrder.begin(), hwnd);
+                } else {
+                    m_zOrder.insert(pos + 1, hwnd);
+                }
             } else {
-                m_zOrder.insert(m_zOrder.begin(), hwnd);
+                const auto firstNonTopmost = std::find_if(m_zOrder.begin(), m_zOrder.end(),
+                    [&](HWND candidate) {
+                        return std::find(m_topmostWindows.begin(), m_topmostWindows.end(), candidate) ==
+                               m_topmostWindows.end();
+                    });
+                m_zOrder.insert(topmost ? m_zOrder.begin() : firstNonTopmost, hwnd);
             }
         }
     }
@@ -534,13 +572,18 @@ public:
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         auto it = std::find(m_zOrder.begin(), m_zOrder.end(), hwnd);
         if (it != m_zOrder.end()) m_zOrder.erase(it);
+        auto topmost = std::find(m_topmostWindows.begin(), m_topmostWindows.end(), hwnd);
+        if (topmost != m_topmostWindows.end()) m_topmostWindows.erase(topmost);
         if (m_hwndActive == hwnd) m_hwndActive = nullptr;
         if (m_hwndFocus == hwnd) m_hwndFocus = nullptr;
         if (m_hwndCapture == hwnd) m_hwndCapture = nullptr;
     }
 
     void bringToTop(HWND hwnd) {
-        addWindowToZOrder(hwnd, HWND_TOP);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        const bool topmost = std::find(m_topmostWindows.begin(), m_topmostWindows.end(), hwnd) !=
+                             m_topmostWindows.end();
+        addWindowToZOrder(hwnd, HWND_TOP, topmost);
     }
 
     [[nodiscard]] std::vector<HWND> getZOrder() const {
@@ -574,6 +617,7 @@ private:
     HDESK m_handle;
     std::shared_ptr<DesktopHeap> m_heap;
     std::vector<HWND> m_zOrder;
+    std::vector<HWND> m_topmostWindows;
     HWND m_hwndActive{nullptr};
     HWND m_hwndFocus{nullptr};
     HWND m_hwndCapture{nullptr};
@@ -1634,7 +1678,11 @@ public:
         }
 
         if (!(uFlags & SWP_NOZORDER) && m_currentDesktop) {
-            m_currentDesktop->addWindowToZOrder(hwnd, hWndInsertAfter);
+            if (hWndInsertAfter == HWND_TOPMOST) wnd->exStyle |= WS_EX_TOPMOST;
+            else if (hWndInsertAfter == HWND_NOTOPMOST || hWndInsertAfter == HWND_BOTTOM)
+                wnd->exStyle &= ~WS_EX_TOPMOST;
+            m_currentDesktop->addWindowToZOrder(hwnd, hWndInsertAfter,
+                (wnd->exStyle & WS_EX_TOPMOST) != 0);
         }
 
         if (m_currentDesktop && m_currentDesktop->getHeap() && wnd->desktopHeapOffset != 0) {
