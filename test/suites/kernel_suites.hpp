@@ -12362,8 +12362,10 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
     // ------------------------------------------------------------------------
     {
         InitializeHidSubsystemExports();
+        InitializeMouClassExports();
         auto& hidSys = TitanHidInputSubsystem::Instance();
         hidSys.resetForTesting();
+        MouClassResetState();
 
         // 1. JanusLDR Exports Verification (hid.dll, hidparse.sys, hidclass.sys, hidusb.sys, kbdclass.sys, mouclass.sys, i8042prt.sys)
         auto& ldr = ldr::DynamicLoader::get();
@@ -12618,10 +12620,10 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         auto& hidSys = TitanHidInputSubsystem::Instance();
 
         MOUSE_ATTRIBUTES mouAttr{};
-        TEST_ASSERT(hidSys.dispatchMouseIoctl(IOCTL_MOUSE_QUERY_ATTRIBUTES, &mouAttr, sizeof(mouAttr)) == NtStatus::Success,
+        TEST_ASSERT(MouClassQueryAttributes(&mouAttr, sizeof(mouAttr)) == NtStatus::Success,
                     "IOCTL_MOUSE_QUERY_ATTRIBUTES must succeed");
         TEST_ASSERT(mouAttr.NumberOfButtons == 5, "Mouse must report 5 buttons");
-        TEST_ASSERT(mouAttr.SampleRate == 1000, "Mouse must report 1000 Hz sample rate");
+        TEST_ASSERT(mouAttr.SampleRate == 0, "USB mouse sample rate is not applicable");
 
         MOUSE_INPUT_DATA mouPkt{};
         mouPkt.UnitId      = 0;
@@ -12631,10 +12633,42 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         mouPkt.LastX       = 64;
         mouPkt.LastY       = 32;
 
+        io::DriverObject mouclassDriver{};
+        InitializeMouClassDriver(mouclassDriver);
+        io::DeviceObject classDevice{};
+        classDevice.driverObject = &mouclassDriver;
+
         ULONG consumed = 0;
-        MouseClassServiceCallback(&mouPkt, &mouPkt + 1, &consumed);
+        MouseClassServiceCallback(&classDevice, &mouPkt, &mouPkt + 1, &consumed);
         TEST_ASSERT(consumed == 1, "MouseClassServiceCallback must consume 1 packet");
-        TEST_ASSERT(hidSys.getMouseQueueDepth() == 1, "Mouse ring buffer depth must be 1");
+        TEST_ASSERT(MouClassQueueDepth() == 1, "Mouse ring buffer depth must be 1");
+        std::array<MOUSE_INPUT_DATA, 1> readPackets{};
+        io::Irp readIrp{};
+        readIrp.majorFunction = io::IRP_MJ_READ;
+        readIrp.deviceObject = &classDevice;
+        readIrp.userBuffer = readPackets.data();
+        readIrp.length = sizeof(readPackets);
+        TEST_ASSERT(MouClassDriver::Instance().dispatch(&classDevice, &readIrp) == NtStatus::Success,
+                    "Mouclass IRP_MJ_READ must return queued input packets");
+        TEST_ASSERT(readIrp.ioStatus.information == sizeof(MOUSE_INPUT_DATA),
+                    "Mouclass read completion must report transferred packet bytes");
+        TEST_ASSERT(readPackets[0].LastX == mouPkt.LastX && readPackets[0].ButtonFlags == mouPkt.ButtonFlags,
+                    "Mouclass read must preserve packet fields");
+
+        std::array<MOUSE_INPUT_DATA, 1> pendingBuffer{};
+        io::Irp pendingRead{};
+        pendingRead.majorFunction = io::IRP_MJ_READ;
+        pendingRead.deviceObject = &classDevice;
+        pendingRead.userBuffer = pendingBuffer.data();
+        pendingRead.length = sizeof(pendingBuffer);
+        TEST_ASSERT(MouClassDriver::Instance().dispatch(&classDevice, &pendingRead) == NtStatus::Pending,
+                    "Mouclass empty read must pend until input arrives");
+        consumed = 0;
+        MouseClassServiceCallback(&classDevice, &mouPkt, &mouPkt + 1, &consumed);
+        TEST_ASSERT(consumed == 1 && pendingRead.ioStatus.status == NtStatus::Success,
+                    "Mouse service callback must complete a pending read when data arrives");
+        TEST_ASSERT(pendingRead.ioStatus.information == sizeof(MOUSE_INPUT_DATA),
+                    "Completed pending read must report packet bytes");
     }
 
     // ------------------------------------------------------------------------
@@ -12657,7 +12691,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
 
         // 3. Inject PS/2 Mouse IRQ12 4-Byte IntelliMouse Packet
         hidSys.i8042InjectMouseIrq12Packet(0x09 /* Left button + bit 3 */, 15, -10, 1);
-        TEST_ASSERT(hidSys.getMouseQueueDepth() == 2, "Mouse queue must now contain 2 packets");
+        TEST_ASSERT(MouClassQueueDepth() == 1, "Mouse queue must now contain the newly injected packet");
     }
 
     // ------------------------------------------------------------------------
@@ -12677,7 +12711,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         uint32_t injected = hidSys.pumpRawInputToWin32k(hwnd);
         TEST_ASSERT(injected >= 5, "Raw Input Thread must inject queued keyboard and mouse messages into Win32k");
         TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 0, "Keyboard ring buffer must be completely drained");
-        TEST_ASSERT(hidSys.getMouseQueueDepth() == 0, "Mouse ring buffer must be completely drained");
+        TEST_ASSERT(MouClassQueueDepth() == 0, "Mouse ring buffer must be completely drained");
 
         // Verify message arrival in Win32k thread queue
         win32k::MSG msg{};

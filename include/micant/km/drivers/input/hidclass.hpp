@@ -53,6 +53,8 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/km/executive/io.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/drivers/input/mouclass_contract.hpp"
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/win32k/win32k.hpp"
 
@@ -161,7 +163,6 @@ inline constexpr uint32_t IOCTL_KEYBOARD_SET_TYPEMATIC          = 0x000B0004;
 inline constexpr uint32_t IOCTL_KEYBOARD_SET_INDICATORS         = 0x000B0008;
 inline constexpr uint32_t IOCTL_KEYBOARD_QUERY_TYPEMATIC        = 0x000B0020;
 inline constexpr uint32_t IOCTL_KEYBOARD_QUERY_INDICATORS       = 0x000B0040;
-inline constexpr uint32_t IOCTL_MOUSE_QUERY_ATTRIBUTES          = 0x000F0000;
 
 // USB HID Class-Specific Control Requests (bRequest)
 inline constexpr uint8_t USB_HID_REQ_GET_REPORT                 = 0x01;
@@ -394,49 +395,6 @@ struct KEYBOARD_ATTRIBUTES {
     ULONG                         InputDataQueueLength{128};
     KEYBOARD_TYPEMATIC_PARAMETERS KeyRepeatMinimum{0, 2, 250};
     KEYBOARD_TYPEMATIC_PARAMETERS KeyRepeatMaximum{0, 30, 1000};
-};
-
-// Mouse Input Flags
-inline constexpr USHORT MOUSE_MOVE_RELATIVE      = 0x0000;
-inline constexpr USHORT MOUSE_MOVE_ABSOLUTE      = 0x0001;
-inline constexpr USHORT MOUSE_VIRTUAL_DESKTOP    = 0x0002;
-inline constexpr USHORT MOUSE_ATTRIBUTES_CHANGED = 0x0004;
-
-// Mouse Button Flags
-inline constexpr USHORT MOUSE_LEFT_BUTTON_DOWN   = 0x0001;
-inline constexpr USHORT MOUSE_LEFT_BUTTON_UP     = 0x0002;
-inline constexpr USHORT MOUSE_RIGHT_BUTTON_DOWN  = 0x0004;
-inline constexpr USHORT MOUSE_RIGHT_BUTTON_UP    = 0x0008;
-inline constexpr USHORT MOUSE_MIDDLE_BUTTON_DOWN = 0x0010;
-inline constexpr USHORT MOUSE_MIDDLE_BUTTON_UP   = 0x0020;
-inline constexpr USHORT MOUSE_BUTTON_4_DOWN      = 0x0040;
-inline constexpr USHORT MOUSE_BUTTON_4_UP        = 0x0080;
-inline constexpr USHORT MOUSE_BUTTON_5_DOWN      = 0x0100;
-inline constexpr USHORT MOUSE_BUTTON_5_UP        = 0x0200;
-inline constexpr USHORT MOUSE_WHEEL              = 0x0400;
-inline constexpr USHORT MOUSE_HWHEEL             = 0x0800;
-
-struct MOUSE_INPUT_DATA {
-    USHORT UnitId{0};
-    USHORT Flags{MOUSE_MOVE_RELATIVE};
-    union {
-        ULONG Buttons{0};
-        struct {
-            USHORT ButtonFlags;
-            USHORT ButtonData;
-        };
-    };
-    ULONG  RawButtons{0};
-    LONG   LastX{0};
-    LONG   LastY{0};
-    ULONG  ExtraInformation{0};
-};
-
-struct MOUSE_ATTRIBUTES {
-    USHORT MouseIdentifier{0x0100}; // WHEELMOUSE_HID_HARDWARE
-    USHORT NumberOfButtons{5};
-    USHORT SampleRate{1000};        // 1000 Hz polling rate
-    ULONG  InputDataQueueLength{256};
 };
 
 // ============================================================================
@@ -1180,43 +1138,6 @@ public:
     // Mouse Class Driver (mouclass.sys) Operations
     // ------------------------------------------------------------------------
 
-    void mouseClassServiceCallback(const MOUSE_INPUT_DATA* start, const MOUSE_INPUT_DATA* end, ULONG* consumed) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        ULONG count = 0;
-        for (const MOUSE_INPUT_DATA* p = start; p < end; ++p) {
-            if (m_mouseQueue.size() >= m_mouseAttributes.InputDataQueueLength) {
-                m_mouseQueue.pop_front();
-            }
-            m_mouseQueue.push_back(*p);
-            count++;
-            m_telemetry.totalMousePacketsQueued++;
-        }
-        if (consumed) *consumed = count;
-    }
-
-    bool popMouseInputData(MOUSE_INPUT_DATA& outData) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_mouseQueue.empty()) return false;
-        outData = m_mouseQueue.front();
-        m_mouseQueue.pop_front();
-        return true;
-    }
-
-    size_t getMouseQueueDepth() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_mouseQueue.size();
-    }
-
-    NtStatus dispatchMouseIoctl(uint32_t ioctlCode, void* outBuf, size_t outLen) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (ioctlCode == IOCTL_MOUSE_QUERY_ATTRIBUTES) {
-            if (!outBuf || outLen < sizeof(MOUSE_ATTRIBUTES)) return NtStatus::BufferTooSmall;
-            *static_cast<MOUSE_ATTRIBUTES*>(outBuf) = m_mouseAttributes;
-            return NtStatus::Success;
-        }
-        return NtStatus::InvalidDeviceRequest;
-    }
-
     // ------------------------------------------------------------------------
     // PS/2 i8042 Controller Port Driver (i8042prt.sys) Port 0x60/0x64 Engine
     // ------------------------------------------------------------------------
@@ -1355,7 +1276,7 @@ public:
         }
 
         ULONG consumed = 0;
-        mouseClassServiceCallback(&pkt, &pkt + 1, &consumed);
+        MouseClassServiceCallback(nullptr, &pkt, &pkt + 1, &consumed);
     }
 
     // ------------------------------------------------------------------------
@@ -1381,7 +1302,7 @@ public:
 
         // 2. Drain Mouse Class Ring Buffer
         MOUSE_INPUT_DATA mouPkt{};
-        while (popMouseInputData(mouPkt)) {
+        while (MouClassPopInputData(mouPkt)) {
             if (mouPkt.LastX != 0 || mouPkt.LastY != 0) {
                 int64_t lParam = static_cast<int64_t>(
                     (static_cast<uint64_t>(static_cast<uint16_t>(mouPkt.LastY)) << 16) |
@@ -1430,7 +1351,9 @@ public:
 
     HID_SUBSYSTEM_TELEMETRY getTelemetry() {
         std::lock_guard<std::mutex> lock(m_mutex);
+        ke::SpinLockGuard mouseTelemetryLock(m_mouseTelemetryLock);
         m_telemetry.activeTopLevelCollections = static_cast<uint32_t>(m_collections.size());
+        m_telemetry.totalMousePacketsQueued = MouClassPacketsQueuedTotal();
         return m_telemetry;
     }
 
@@ -1462,13 +1385,14 @@ private:
     void setupInternalState() {
         m_collections.clear();
         m_keyboardQueue.clear();
-        m_mouseQueue.clear();
-        m_telemetry = HID_SUBSYSTEM_TELEMETRY{};
+        {
+            ke::SpinLockGuard lock(m_mouseTelemetryLock);
+            m_telemetry = HID_SUBSYSTEM_TELEMETRY{};
+        }
 
         m_keyboardAttributes = KEYBOARD_ATTRIBUTES{};
         m_keyboardIndicators = KEYBOARD_INDICATOR_PARAMETERS{0, KEYBOARD_NUM_LOCK_ON};
         m_keyboardTypematic  = KEYBOARD_TYPEMATIC_PARAMETERS{0, 30, 250};
-        m_mouseAttributes    = MOUSE_ATTRIBUTES{};
 
         m_i8042StatusReg    = I8042_STS_SYS;
         m_i8042OutputBuffer = 0x55;
@@ -1560,11 +1484,10 @@ private:
 
     // Keyboard & Mouse Class State
     std::deque<KEYBOARD_INPUT_DATA> m_keyboardQueue;
-    std::deque<MOUSE_INPUT_DATA>    m_mouseQueue;
+    ke::SpinLock m_mouseTelemetryLock{};
     KEYBOARD_ATTRIBUTES             m_keyboardAttributes{};
     KEYBOARD_INDICATOR_PARAMETERS   m_keyboardIndicators{};
     KEYBOARD_TYPEMATIC_PARAMETERS   m_keyboardTypematic{};
-    MOUSE_ATTRIBUTES                m_mouseAttributes{};
 
     // i8042 Controller State
     uint8_t m_i8042StatusReg{I8042_STS_SYS};
@@ -2090,14 +2013,6 @@ inline void WINAPI KeyboardClassServiceCallback(
     TitanHidInputSubsystem::Instance().keyboardClassServiceCallback(InputDataStart, InputDataEnd, InputDataConsumed);
 }
 
-inline void WINAPI MouseClassServiceCallback(
-    const MOUSE_INPUT_DATA* InputDataStart,
-    const MOUSE_INPUT_DATA* InputDataEnd,
-    ULONG* InputDataConsumed
-) {
-    TitanHidInputSubsystem::Instance().mouseClassServiceCallback(InputDataStart, InputDataEnd, InputDataConsumed);
-}
-
 inline uint8_t WINAPI I8042ReadPortUchar(uint16_t Port) {
     return TitanHidInputSubsystem::Instance().i8042ReadPort(Port);
 }
@@ -2117,6 +2032,7 @@ inline BOOL WINAPI HidGetTelemetry(HID_SUBSYSTEM_TELEMETRY* outTelemetry) {
 inline HID_SUBSYSTEM_TELEMETRY HidQueryTelemetry() noexcept {
     return TitanHidInputSubsystem::Instance().getTelemetry();
 }
+
 
 // ============================================================================
 // 10. Subsystem Export Registration (JanusLDR, SCM, VersionDatabase)
@@ -2165,7 +2081,6 @@ inline void InitializeHidSubsystemExports() {
 
     // 4. Register kbdclass.sys, mouclass.sys & i8042prt.sys exports
     ldr.registerExport("kbdclass.sys", "KeyboardClassServiceCallback", reinterpret_cast<void*>(KeyboardClassServiceCallback));
-    ldr.registerExport("mouclass.sys", "MouseClassServiceCallback", reinterpret_cast<void*>(MouseClassServiceCallback));
     ldr.registerExport("i8042prt.sys", "I8042ReadPortUchar", reinterpret_cast<void*>(I8042ReadPortUchar));
     ldr.registerExport("i8042prt.sys", "I8042WritePortUchar", reinterpret_cast<void*>(I8042WritePortUchar));
 
@@ -2245,7 +2160,6 @@ namespace micant {
     using km::hid::HidP_GetUsageValue;
     using km::hid::HidP_SetUsageValue;
     using km::hid::KeyboardClassServiceCallback;
-    using km::hid::MouseClassServiceCallback;
     using km::hid::I8042ReadPortUchar;
     using km::hid::I8042WritePortUchar;
     using km::hid::HidGetTelemetry;

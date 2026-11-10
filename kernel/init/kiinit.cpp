@@ -55,6 +55,7 @@
 #include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/km/drivers/fs/npfs.hpp"
 #include "micant/km/drivers/input/hidclass.hpp"
+#include "micant/km/drivers/input/mouclass.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
 #include "micant/um/native/ntdll.hpp"
@@ -359,6 +360,12 @@ extern "C" NtStatus KiSystemStartup(
     sys::internal::Ring2LsaInitializeExecutiveSubsystem();
     sys::internal::Ring2ScmInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
+    km::hid::InitializeMouClassExports();
+    io::DriverObject mouclassDriver{};
+    km::hid::InitializeMouClassDriver(mouclassDriver);
+    auto pointerClassDevice = ioMgr.createDevice(
+        &mouclassDriver, L"\\Device\\PointerClass0", static_cast<io::DeviceType>(0x0000000F));
+    pointerClassDevice->flags = (pointerClassDevice->flags | io::DO_BUFFERED_IO) & ~io::DO_DEVICE_INITIALIZING;
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
               << (km::cc::VACB_MAPPING_GRANULARITY / 1024) << " KB, BCB Pinning & Lazy Writer Active)\n";

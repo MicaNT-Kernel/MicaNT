@@ -100,6 +100,7 @@
 #include "micant/km/executive/bugcheck.hpp"
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/drivers/input/hidclass.hpp"
+#include "micant/km/drivers/input/mouclass.hpp"
 #include "micant/km/executive/cc.hpp"
 #include "micant/km/executive/fsrtl.hpp"
 #include "micant/km/executive/dbgk.hpp"
