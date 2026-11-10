@@ -49,6 +49,7 @@ jobs:
           $sys32Dlls = @(
               @{ Name = "kernel32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
               @{ Name = "advapi32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
+              @{ Name = "win32k.dll";          Src = "kernel/ps/winnt_win32k_server.cpp";                       Def = "MICANT_WIN32K_EXPORTS" },
               @{ Name = "user32.dll";         Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_USER32_DLL" },
               @{ Name = "gdi32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_GDI32_DLL" },
               @{ Name = "imm32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_IMM32_DLL" },

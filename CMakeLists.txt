@@ -120,6 +120,15 @@ add_library(ntoskrnl_core STATIC
 # out of ntoskrnl_core; each DLL is built from the shared ABI source with only
 # its own export surface enabled.
 if(WIN32)
+    # The window manager has one process-wide state owner. User32 resolves this
+    # DLL at runtime so it never embeds a private copy of TitanWin32kSubsystem.
+    add_library(micant_win32k SHARED kernel/ps/winnt_win32k_server.cpp)
+    target_compile_definitions(micant_win32k PRIVATE BUILD_SYSTEM32_STANDALONE_DLL MICANT_WIN32K_EXPORTS)
+    set_target_properties(micant_win32k PROPERTIES
+        OUTPUT_NAME "win32k"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/system32")
+
     foreach(_dll IN ITEMS USER32 GDI32 IMM32)
         string(TOLOWER "${_dll}" _dll_lower)
         add_library(micant_${_dll_lower} SHARED

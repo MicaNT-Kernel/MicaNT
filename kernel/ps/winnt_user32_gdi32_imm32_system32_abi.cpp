@@ -7,11 +7,26 @@
  */
 
 #include "micant/um/subsystems/winuser/winnt_user32_gdi32_imm32_system32_abi.hpp"
-#include "micant/km/win32k/win32k.hpp"
+#include "micant/shared/win32k_client.h"
+
+#if defined(_WIN32)
+extern "C" __declspec(dllimport) void* __stdcall LoadLibraryW(const wchar_t*);
+extern "C" __declspec(dllimport) void* __stdcall GetProcAddress(void*, const char*);
+#endif
 
 namespace micant::um::winnt_user32_gdi32_imm32_abi {
 
 namespace {
+template <typename T> T Win32kProc(const char* name) noexcept {
+#if defined(_WIN32)
+    static void* module = LoadLibraryW(L"win32k.dll");
+    return module ? reinterpret_cast<T>(GetProcAddress(module, name)) : nullptr;
+#else
+    (void)name;
+    return nullptr;
+#endif
+}
+
 struct WinNtWindowState {
     uint64_t  magic{0x4D4E5448574E4431ULL}; // "MNTHWD1"
     int32_t   width{3840};
@@ -45,19 +60,17 @@ void* User32_CreateWindowExW(
     void* hMenu,
     void* hInstance,
     void* lpParam) noexcept {
-    using namespace micant::win32k;
-    TitanWin32kSubsystem::Instance().initialize();
-    HWND hwnd = NtUserCreateWindowEx(dwExStyle, lpClassName, lpWindowName, dwStyle,
-        X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
-    return hwnd;
+    using Fn = void* (*)(uint32_t,const wchar_t*,const wchar_t*,uint32_t,int32_t,int32_t,int32_t,int32_t,void*,void*,void*,void*);
+    auto fn=Win32kProc<Fn>("MicaWin32kCreateWindowExW");
+    return fn ? fn(dwExStyle,lpClassName,lpWindowName,dwStyle,X,Y,nWidth,nHeight,hWndParent,hMenu,hInstance,lpParam) : nullptr;
 }
 
 int32_t User32_DestroyWindow(void* hWnd) noexcept {
-    return micant::win32k::NtUserDestroyWindow(hWnd);
+    using Fn=int32_t (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kDestroyWindow"); return fn ? fn(hWnd) : 0;
 }
 
 int32_t User32_ShowWindow(void* hWnd, int32_t nCmdShow) noexcept {
-    return micant::win32k::NtUserShowWindow(hWnd, nCmdShow);
+    using Fn=int32_t (*)(void*,int32_t); auto fn=Win32kProc<Fn>("MicaWin32kShowWindow"); return fn ? fn(hWnd,nCmdShow) : 0;
 }
 
 int32_t User32_UpdateWindow(void* hWnd) noexcept {
@@ -68,10 +81,12 @@ intptr_t User32_DefWindowProcW(void* /*hWnd*/, uint32_t /*Msg*/, uintptr_t /*wPa
     return 0;
 }
 
-int32_t User32_PeekMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t /*wMsgFilterMin*/, uint32_t /*wMsgFilterMax*/, uint32_t wRemoveMsg) noexcept {
+int32_t User32_PeekMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t wMsgFilterMin, uint32_t wMsgFilterMax, uint32_t wRemoveMsg) noexcept {
     if (!lpMsg) return 0;
-    micant::win32k::MSG msg{};
-    const auto ok = micant::win32k::NtUserPeekMessage(&msg, hWnd, 0, 0, wRemoveMsg);
+    MicaWin32kMessage msg{};
+    using Fn=int32_t (*)(MicaWin32kMessage*,void*,uint32_t,uint32_t,uint32_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kPeekMessageW");
+    const auto ok = fn ? fn(&msg,hWnd,wMsgFilterMin,wMsgFilterMax,wRemoveMsg) : 0;
     if (!ok) return 0;
     lpMsg->hwnd=msg.hwnd; lpMsg->message=msg.message; lpMsg->wParam=msg.wParam;
     lpMsg->lParam=msg.lParam; lpMsg->time=msg.time; lpMsg->pt={msg.pt.x,msg.pt.y};
@@ -80,8 +95,10 @@ int32_t User32_PeekMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t /*wMsgFilterMi
 
 int32_t User32_GetMessageW(WinNtMsg* lpMsg, void* hWnd, uint32_t wMsgFilterMin, uint32_t wMsgFilterMax) noexcept {
     if (!lpMsg) return -1;
-    micant::win32k::MSG msg{};
-    const auto ok=micant::win32k::NtUserGetMessage(&msg,hWnd,wMsgFilterMin,wMsgFilterMax);
+    MicaWin32kMessage msg{};
+    using Fn=int32_t (*)(MicaWin32kMessage*,void*,uint32_t,uint32_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kGetMessageW");
+    const auto ok=fn ? fn(&msg,hWnd,wMsgFilterMin,wMsgFilterMax) : -1;
     lpMsg->hwnd=msg.hwnd;lpMsg->message=msg.message;lpMsg->wParam=msg.wParam;lpMsg->lParam=msg.lParam;lpMsg->time=msg.time;lpMsg->pt={msg.pt.x,msg.pt.y};
     return ok;
 }
@@ -101,20 +118,14 @@ void User32_PostQuitMessage(int32_t /*nExitCode*/) noexcept {
 
 int32_t User32_GetClientRect(void* hWnd, WinNtRect* lpRect) noexcept {
     if (!hWnd || !lpRect) return 0;
-    auto wnd=micant::win32k::TitanWin32kSubsystem::Instance().getWindow(hWnd);
-    if(!wnd) return 0;
-    lpRect->left=wnd->rcClient.left; lpRect->top=wnd->rcClient.top;
-    lpRect->right=wnd->rcClient.right; lpRect->bottom=wnd->rcClient.bottom;
-    return 1;
+    using Fn=int32_t (*)(void*,MicaWin32kRect*); auto fn=Win32kProc<Fn>("MicaWin32kGetClientRect");
+    return fn ? fn(hWnd,reinterpret_cast<MicaWin32kRect*>(lpRect)) : 0;
 }
 
 int32_t User32_GetWindowRect(void* hWnd, WinNtRect* lpRect) noexcept {
     if(!hWnd||!lpRect)return 0;
-    auto wnd=micant::win32k::TitanWin32kSubsystem::Instance().getWindow(hWnd);
-    if(!wnd)return 0;
-    lpRect->left=wnd->rcWindow.left;lpRect->top=wnd->rcWindow.top;
-    lpRect->right=wnd->rcWindow.right;lpRect->bottom=wnd->rcWindow.bottom;
-    return 1;
+    using Fn=int32_t (*)(void*,MicaWin32kRect*); auto fn=Win32kProc<Fn>("MicaWin32kGetWindowRect");
+    return fn ? fn(hWnd,reinterpret_cast<MicaWin32kRect*>(lpRect)) : 0;
 }
 
 int32_t User32_AdjustWindowRectEx(WinNtRect* lpRect, uint32_t /*dwStyle*/, int32_t /*bMenu*/, uint32_t /*dwExStyle*/) noexcept {
@@ -134,7 +145,8 @@ intptr_t User32_GetWindowLongPtrW(void* hWnd, int32_t /*nIndex*/) noexcept {
 
 int32_t User32_SetWindowPos(void* hWnd, void* hWndInsertAfter, int32_t X, int32_t Y, int32_t cx, int32_t cy, uint32_t uFlags) noexcept {
     if (!hWnd) return 0;
-    return micant::win32k::NtUserSetWindowPos(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags);
+    using Fn=int32_t (*)(void*,void*,int32_t,int32_t,int32_t,int32_t,uint32_t);
+    auto fn=Win32kProc<Fn>("MicaWin32kSetWindowPos"); return fn ? fn(hWnd,hWndInsertAfter,X,Y,cx,cy,uFlags) : 0;
 }
 
 int32_t User32_RegisterRawInputDevices(const WinNtRawInputDevice* pRawInputDevices, uint32_t uiNumDevices, uint32_t cbSize) noexcept {
