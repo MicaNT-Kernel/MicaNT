@@ -1896,9 +1896,9 @@ public:
             std::memcpy(trampolineBuffer + 0x3A0 + wLen * 2, &zero16, 2);
 
 
-            // Reserve the lower 8 MB for the UCRT allocator; generic heap
-            // trampolines use the upper half of the process heap.
-            uint64_t initialBump = (userHeapVa != 0) ? userHeapVa + ((userHeapSize > 0x800000) ? 0x800000 : 0) :
+            // Split the process heap evenly: lower 64 MB for UCRT and upper
+            // 64 MB for the generic HeapAlloc trampolines.
+            uint64_t initialBump = (userHeapVa != 0) ? userHeapVa + ((userHeapSize > 0x4000000) ? 0x4000000 : 0) :
                                    ((targetBaseVa == 0x140000000ULL) ? (targetBaseVa + 0x400000ULL) : (trampolineBaseVa + 0x1000ULL));
             std::memcpy(trampolineBuffer + 0x3F8, &initialBump, sizeof(initialBump));
 

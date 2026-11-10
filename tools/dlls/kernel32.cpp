@@ -17,18 +17,20 @@ bool DllMain(void*, unsigned long, void*) noexcept {
 }
 
 // Low-level syscall invocation helper
-static inline uint64_t SyscallDispatch(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
+static inline uint64_t SyscallDispatch(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0,
+                                      uint64_t arg3 = 0) noexcept {
     uint64_t res = 0;
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
+        "movq %2, %%r10\n\t"
+        "movq %3, %%rdx\n\t"
+        "movq %4, %%r8\n\t"
         "syscall\n\t"
         "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
+        : "=&a"(res)
+        : "r"(ssn), "r"(arg1), "r"(arg2), "r"(arg3)
+        : "r10", "rdx", "r8", "rcx", "r11", "memory"
     );
 #endif
     return res;
@@ -39,7 +41,7 @@ static inline uint64_t SyscallDispatch(uint64_t ssn, uint64_t arg1 = 0, uint64_t
 // ============================================================================
 
 __declspec(dllexport) void ExitProcess(uint32_t uExitCode) noexcept {
-    SyscallDispatch(0x01, 0, uExitCode); // NtTerminateProcess(0, exitCode)
+    SyscallDispatch(0x01, uExitCode); // MicaNT NtTerminateProcess(exitCode)
     while (true) {}
 }
 
@@ -131,7 +133,7 @@ __declspec(dllexport) bool ReadFile(
 ) noexcept {
     uint64_t h = reinterpret_cast<uint64_t>(hFile);
     uint64_t buf = reinterpret_cast<uint64_t>(lpBuffer);
-    uint64_t res = SyscallDispatch(0x24, h, buf); // NtReadFile
+    uint64_t res = SyscallDispatch(0x24, buf, nNumberOfBytesToRead);
     if (lpNumberOfBytesRead) {
         *lpNumberOfBytesRead = (res == 0) ? nNumberOfBytesToRead : 0;
     }
@@ -147,7 +149,7 @@ __declspec(dllexport) bool WriteFile(
 ) noexcept {
     uint64_t h = reinterpret_cast<uint64_t>(hFile);
     uint64_t buf = reinterpret_cast<uint64_t>(lpBuffer);
-    uint64_t res = SyscallDispatch(0x25, h, buf); // NtWriteFile
+    uint64_t res = SyscallDispatch(0x25, buf, nNumberOfBytesToWrite);
     if (lpNumberOfBytesWritten) {
         *lpNumberOfBytesWritten = (res == 0) ? nNumberOfBytesToWrite : 0;
     }

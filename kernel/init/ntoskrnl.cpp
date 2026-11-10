@@ -375,7 +375,7 @@ static inline uint32_t getCpuTemperatureC() noexcept {
 // Userland Ring 3 Buffers
 alignas(4096) static uint8_t s_userImageBuffer[8388608]{}; // 8 MB Userland PE buffer
 alignas(4096) static uint8_t s_userSurfaceBuffer[4194304]{}; // 4 MB Dedicated Userland Surface buffer (1024x768x4 = 3.14MB)
-alignas(4096) static uint8_t s_userHeapBuffer[16777216]{}; // 16 MB Dedicated Userland Dynamic Heap buffer
+alignas(4096) static uint8_t s_userHeapBuffer[134217728]{}; // 128 MB process heap, split between UCRT and HeapAlloc
 alignas(4096) static uint8_t s_userTrampolinePage[4096]{};
 alignas(4096) static uint8_t s_userCodePage[4096]{};
 alignas(4096) static uint8_t s_userPebTebPage[4096]{};
@@ -749,6 +749,21 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
             if (vad != nullptr && arg1 != 0) {
                 auto* info = reinterpret_cast<micant::um::UserVideoInfo64*>(arg1);
+                if (s_globalVideoDriver && s_globalVideoDriver->isInitialized()) {
+                    info->width = s_globalVideoDriver->getWidth();
+                    info->height = s_globalVideoDriver->getHeight();
+                    info->pitch = s_globalVideoDriver->getPitch();
+                    info->bpp = 32;
+                    info->pixelFormat = s_globalVideoDriver->getPixelFormat();
+                    info->physicalBase = reinterpret_cast<uint64_t>(s_globalVideoDriver->getRawBuffer());
+                } else {
+                    info->width = 1024;
+                    info->height = 768;
+                    info->pitch = 1024;
+                    info->bpp = 32;
+                    info->pixelFormat = 1;
+                    info->physicalBase = 0;
+                }
                 UartSerial::printDec(info->width);
                 UartSerial::print("x");
                 UartSerial::printDec(info->height);
@@ -1126,7 +1141,10 @@ static uint64_t* writableChildTable(uint64_t& entry) {
     auto* child = reinterpret_cast<uint64_t*>(entry & mask);
     for (size_t i = 0; i < s_privatePageTableCount; ++i)
         if (child == s_privatePageTables[i]) return child;
-    if (s_privatePageTableCount == 128) return nullptr;
+    if (s_privatePageTableCount == 128) {
+        UartSerial::print("[Mm] Private user page-table pool exhausted.\r\n");
+        return nullptr;
+    }
     auto* copy = s_privatePageTables[s_privatePageTableCount++];
     for (size_t i = 0; i < 512; ++i) copy[i] = child[i];
     entry = (entry & ~mask) | reinterpret_cast<uint64_t>(copy);
@@ -2668,6 +2686,17 @@ extern "C" micant::NtStatus KiSystemStartup(
 #if defined(__x86_64__)
             const uint64_t kernelCr3 = reinterpret_cast<uint64_t>(kernelPml4) | (cr3Val & 0xfffULL);
             __asm__ __volatile__("mov %0, %%cr3" : : "r"(kernelCr3) : "memory");
+            // The high-half setup installs a new PML4 root. Re-apply the
+            // user mappings to that active root before entering ring 3; the
+            // earlier setup may have modified the firmware root that was just
+            // replaced here.
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer));
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userSurfaceBuffer), sizeof(s_userSurfaceBuffer));
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer));
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userTrampolinePage), sizeof(s_userTrampolinePage));
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage));
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userStack), sizeof(s_userStack));
+            enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage));
 #endif
             LogKernel("[Mm] High-Half Canonical Kernel Active (0xFFFFF800... PML4[496]).");
         }

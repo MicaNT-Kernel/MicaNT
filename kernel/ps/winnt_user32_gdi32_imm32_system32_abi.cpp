@@ -9,6 +9,10 @@
 #include "micant/um/subsystems/winuser/winnt_user32_gdi32_imm32_system32_abi.hpp"
 #include "micant/shared/win32k_client.h"
 
+#if defined(BUILD_SYSTEM32_STANDALONE_DLL)
+extern "C" bool DllMain(void*, unsigned long, void*) noexcept { return true; }
+#endif
+
 namespace micant::um::winnt_user32_gdi32_imm32_abi {
 
 namespace {
@@ -36,6 +40,7 @@ template <typename T> T Win32kProc(const char* name) noexcept {
     MICA_WIN32K_PROC(MicaWin32kCreateCompatibleBitmap);
     MICA_WIN32K_PROC(MicaWin32kSelectObject);
     MICA_WIN32K_PROC(MicaWin32kBitBlt);
+    MICA_WIN32K_PROC(MicaWin32kPresentDC);
     MICA_WIN32K_PROC(MicaWin32kDeleteObject);
     MICA_WIN32K_PROC(MicaWin32kGetStockObject);
     MICA_WIN32K_PROC(MicaWin32kCreateDibSection);
@@ -314,7 +319,10 @@ int32_t Gdi32_DescribePixelFormat(void* hdc, int32_t iPixelFormat, uint32_t /*nB
 }
 
 int32_t Gdi32_SwapBuffers(void* hdc) noexcept {
-    return hdc ? 1 : 0;
+    if (!hdc) return 0;
+    using Fn=int32_t (*)(void*);
+    auto fn=Win32kProc<Fn>("MicaWin32kPresentDC");
+    return fn ? fn(hdc) : 0;
 }
 
 void* Gdi32_CreateDIBSection(void* hdc, const void* pbmi, uint32_t /*usage*/, void** ppvBits, void* /*hSection*/, uint32_t /*offset*/) noexcept {

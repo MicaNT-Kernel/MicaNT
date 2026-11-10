@@ -15,7 +15,7 @@ bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
 }
 
-// UCRT's heap occupies the lower half of the executive's 16 MB process heap.
+// UCRT's heap occupies the lower half of the executive's 128 MB process heap.
 // The generic HeapAlloc/malloc trampolines use the upper half, so both paths
 // share the process PEB contract without overlapping allocations.
 // The process loader reserves the first 64 KB for the PEB, TEB TLS vector,
@@ -28,7 +28,8 @@ static uint8_t* processHeapBase() noexcept {
     __asm__ __volatile__("movq %%gs:0x60, %0" : "=r"(pebVa));
 #endif
     if (!pebVa) return nullptr;
-    auto* processHeap = reinterpret_cast<uint64_t*>(pebVa + 0x30);
+    // Peb64::processHeap is at offset 0x28; 0x30 is FastPebLock.
+    auto* processHeap = reinterpret_cast<uint64_t*>(pebVa + 0x28);
     return reinterpret_cast<uint8_t*>(*processHeap);
 }
 
@@ -39,13 +40,24 @@ __declspec(dllexport) void* malloc(size_t size) noexcept {
     const size_t allocationSize = aligned + 16;
     size_t offset = allocationSize;
 #if defined(__x86_64__)
+    // These DLLs enter directly through DllMain, so CRT global constructors do
+    // not run. The allocator state is constant-initialized in the PE image,
+    // but seed it lazily as well in case the loader supplied a zeroed .data.
+    uint64_t expected = 0;
+    const uint64_t initialOffset = 0x10000;
+    __asm__ __volatile__("lock cmpxchgq %2, %1"
+                         : "+a"(expected), "+m"(s_ucrtOffset)
+                         : "r"(initialOffset)
+                         : "memory");
     __asm__ __volatile__("lock xaddq %0, %1" : "+r"(offset), "+m"(s_ucrtOffset) : : "memory");
 #else
     offset = s_ucrtOffset;
     s_ucrtOffset += aligned;
 #endif
-    if (offset < allocationSize || offset > 8 * 1024 * 1024 ||
-        allocationSize > 8 * 1024 * 1024 - offset) return nullptr;
+    if (offset > 64 * 1024 * 1024 ||
+        allocationSize > 64 * 1024 * 1024 - offset) {
+        return nullptr;
+    }
     uint8_t* base = processHeapBase();
     if (!base) return nullptr;
     uint8_t* allocation = base + offset;
@@ -122,7 +134,8 @@ __declspec(dllexport) int strcmp(const char* s1, const char* s2) noexcept {
 
 __declspec(dllexport) void abort() noexcept {
 #if defined(__x86_64__)
-    __asm__ __volatile__("movq $0x01, %%rax; movq $3, %%rdx; syscall" ::: "rax", "rdx", "rcx", "r11");
+    __asm__ __volatile__("movq $3, %%r10; movq $0x01, %%rax; syscall"
+                         ::: "rax", "r10", "rcx", "r11");
 #endif
     while (true) {}
 }
@@ -130,7 +143,8 @@ __declspec(dllexport) void abort() noexcept {
 __declspec(dllexport) void exit(int code) noexcept {
 #if defined(__x86_64__)
     uint64_t c = static_cast<uint64_t>(code);
-    __asm__ __volatile__("movq $0x01, %%rax; movq %0, %%rdx; syscall" :: "r"(c) : "rax", "rdx", "rcx", "r11");
+    __asm__ __volatile__("movq %0, %%r10; movq $0x01, %%rax; syscall"
+                         :: "r"(c) : "rax", "r10", "rcx", "r11");
 #endif
     while (true) {}
 }

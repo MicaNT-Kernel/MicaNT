@@ -1308,7 +1308,7 @@ static bool s_userPeFileFromDisk = false;
 static micant::um::UserLoadedImageInfo s_loadedPeInfo{};
 
 alignas(4096) static uint8_t s_ntoskrnlFileBuffer[16777216]; // 16 MB
-alignas(4096) static uint8_t s_ntoskrnlImageBuffer[67108864]; // 64 MB Kernel Image Buffer
+alignas(4096) static uint8_t s_ntoskrnlImageBuffer[201326592]; // 192 MB Kernel Image Buffer (kernel image includes userland heaps)
 static size_t s_ntoskrnlFileSize = 0;
 static bool s_ntoskrnlLoadedFromDisk = false;
 static uint64_t s_ntoskrnlEntryPoint = 0;

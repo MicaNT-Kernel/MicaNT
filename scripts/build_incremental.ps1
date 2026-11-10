@@ -219,6 +219,14 @@ try {
             }
             $runtimeFlags = @()
             if ($dll.Name -in @("win32k.dll", "user32.dll", "gdi32.dll", "imm32.dll") -and -not $isMsvc) { $runtimeFlags += "-static" }
+            if ($dll.Name -in @("win32k.dll", "user32.dll", "gdi32.dll", "imm32.dll")) {
+                $runtimeFlags += @("-fno-rtti", "-fno-threadsafe-statics", "-fno-use-cxa-atexit", "-ffunction-sections", "-fdata-sections")
+                if ($isMsvc) {
+                    $extraArgs += @("-Wl,/ENTRY:DllMain", "-Wl,/OPT:REF")
+                } else {
+                    $extraArgs += @("-Wl,-e,DllMain", "-Wl,--gc-sections")
+                }
+            }
             if ($dll.DefFile) {
                 if ($isMsvc) {
                     $extraArgs += "-Wl,/DEF:$((Join-Path $repoRoot $dll.DefFile).Replace('/', '\'))"

@@ -522,7 +522,10 @@ def run_local_build():
     win32k_cmd = [
         "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23", "-O2",
         "-Iinclude", "-DBUILD_SYSTEM32_STANDALONE_DLL", "-DMICANT_WIN32K_EXPORTS",
-        "-shared", "-static", f"-Wl,--out-implib,{win32k_implib}", win32k_src,
+        "-shared", "-static", "-fno-rtti", "-fno-threadsafe-statics",
+        "-fno-use-cxa-atexit", "-ffunction-sections", "-fdata-sections",
+        "-Wl,--gc-sections", "-Wl,-e,DllMain",
+        f"-Wl,--out-implib,{win32k_implib}", win32k_src,
         "-o", win32k_dll,
     ]
     r = subprocess.run(win32k_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
@@ -534,7 +537,9 @@ def run_local_build():
         cmd = [
             "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23", "-O2",
             "-Iinclude", "-DBUILD_SYSTEM32_STANDALONE_DLL", f"-D{export_def}",
-            "-shared", "-static",
+            "-shared", "-static", "-fno-rtti", "-fno-threadsafe-statics",
+            "-fno-use-cxa-atexit", "-ffunction-sections", "-fdata-sections",
+            "-Wl,--gc-sections", "-Wl,-e,DllMain",
         ]
         link_win32k = False
         if imports_win32k:

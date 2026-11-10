@@ -949,10 +949,27 @@ class GdiEngine {
 public:
     GdiEngine() {
         initializeStockObjects();
-        createScreenDC();
+        uint32_t width = 1024;
+        uint32_t height = 768;
+        struct VideoInfo {
+            uint32_t width, height, pitch, bpp, pixelFormat, reserved;
+            uint64_t physicalBase;
+        } info{width, height, width, 32, 1, 0, 0};
+#if defined(__x86_64__)
+        uint64_t status = 1;
+        __asm__ __volatile__("movq %1, %%r10; movl $0x80, %%eax; syscall"
+                             : "=a"(status) : "r"(&info)
+                             : "r10", "rcx", "r11", "memory");
+        if (status == 0 && info.width != 0 && info.height != 0 &&
+            info.width <= 16384 && info.height <= 16384) {
+            width = info.width;
+            height = info.height;
+        }
+#endif
+        createScreenDC(width, height);
     }
 
-    HDC createScreenDC() {
+    HDC createScreenDC(uint32_t width = 1024, uint32_t height = 768) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         if (m_screenDC) return m_screenDC->handle;
 
@@ -964,8 +981,9 @@ public:
         m_dcs[dc->handle] = dc;
         m_screenDC = dc;
 
-        // Allocate primary screen surface (default 3840x2160)
-        auto bmp = createBitmapInternal(3840, 2160, 32);
+        // Match the physical GOP mode; allocating a larger virtual surface
+        // wastes process heap and clips presentation at the real display size.
+        auto bmp = createBitmapInternal(width, height, 32);
         bmp->clear(0x001E1E1E); // Default sovereign dark background
         dc->selectedBitmap = bmp->handle;
 
@@ -1109,6 +1127,14 @@ public:
         auto it = m_bitmaps.find(hBitmap);
         if (it != m_bitmaps.end()) return it->second;
         return nullptr;
+    }
+
+    std::shared_ptr<GdiBitmap> getBitmapForDC(HDC hdc) const {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto dc = m_dcs.find(hdc);
+        if (dc == m_dcs.end() || !dc->second->selectedBitmap) return nullptr;
+        auto bitmap = m_bitmaps.find(dc->second->selectedBitmap);
+        return bitmap == m_bitmaps.end() ? nullptr : bitmap->second;
     }
 
     [[nodiscard]] uint64_t getTotalBitBlts() const noexcept {
@@ -1563,11 +1589,15 @@ public:
         const int height=std::max(1,wnd.rcClient.height());
         HDC dc=m_gdiEngine.createCompatibleDC(m_gdiEngine.getScreenDC());
         HBITMAP bitmap=m_gdiEngine.createCompatibleBitmap(dc,width,height);
-        if (!dc || !bitmap || !m_gdiEngine.selectObject(dc,bitmap)) {
+        if (!dc || !bitmap) {
             if (bitmap) m_gdiEngine.deleteObject(bitmap);
             if (dc) m_gdiEngine.releaseDC(dc);
             return nullptr;
         }
+        // SelectObject returns the previous bitmap, which is legitimately
+        // null for a newly-created DC. The successful selection itself does
+        // not require a non-null previous object.
+        m_gdiEngine.selectObject(dc,bitmap);
         wnd.hdc=dc;
         wnd.clientBitmap=bitmap;
         return dc;
@@ -1589,6 +1619,54 @@ public:
         auto it = m_windows.find(hwnd);
         if (it != m_windows.end()) return it->second;
         return nullptr;
+    }
+
+    std::shared_ptr<WND> getWindowForDC(HDC hdc) const {
+        if (!hdc) return nullptr;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        for (const auto& entry : m_windows) {
+            if (entry.second && entry.second->hdc == hdc) return entry.second;
+        }
+        return nullptr;
+    }
+
+    // Compose independent per-window GDI surfaces into the desktop primary
+    // surface. Desktop::getZOrder() is front-to-back, so paint in reverse.
+    std::shared_ptr<GdiBitmap> composeDesktopFrame() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto screen = m_gdiEngine.getBitmapForDC(m_gdiEngine.getScreenDC());
+        if (!screen) return nullptr;
+        screen->clear(0xFF101722);
+        if (!m_currentDesktop) return screen;
+
+        const auto zOrder = m_currentDesktop->getZOrder();
+        for (auto order = zOrder.rbegin(); order != zOrder.rend(); ++order) {
+            auto it = m_windows.find(*order);
+            if (it == m_windows.end() || !it->second || !it->second->isVisible ||
+                it->second->isDestroyed || !it->second->hdc) continue;
+
+            const auto& window = *it->second;
+            auto surface = m_gdiEngine.getBitmapForDC(window.hdc);
+            if (!surface || surface->width == 0 || surface->height == 0) continue;
+
+            const int32_t dstX = window.rcWindow.left;
+            const int32_t dstY = window.rcWindow.top;
+            const int32_t xBegin = std::max<int32_t>(0, -dstX);
+            const int32_t yBegin = std::max<int32_t>(0, -dstY);
+            const int32_t xEnd = std::min<int32_t>(surface->width,
+                static_cast<int32_t>(screen->width) - dstX);
+            const int32_t yEnd = std::min<int32_t>(surface->height,
+                static_cast<int32_t>(screen->height) - dstY);
+            if (xBegin >= xEnd || yBegin >= yEnd) continue;
+
+            for (int32_t y = yBegin; y < yEnd; ++y) {
+                const size_t srcOffset = static_cast<size_t>(y) * surface->width + xBegin;
+                const size_t dstOffset = static_cast<size_t>(dstY + y) * screen->width + (dstX + xBegin);
+                std::copy_n(surface->pixels.data() + srcOffset,
+                            static_cast<size_t>(xEnd - xBegin), screen->pixels.data() + dstOffset);
+            }
+        }
+        return screen;
     }
 
     // --- Message Queue & Pump ---
