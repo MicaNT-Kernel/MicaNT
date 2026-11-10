@@ -9910,6 +9910,37 @@ inline CHAR WINAPI InterlockedOrNotModulo8(CHAR volatile* Destination, CHAR Valu
     return ntdll::RtlInterlockedOrNotModulo8(Destination, Value, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedImplicationModulo64(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedImplicationModulo(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedImplicationModulo32(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedImplicationModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedImplicationModulo32(Destination, Value, Modulus);
+}
+
+inline SHORT WINAPI InterlockedImplicationModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedImplicationModulo16(Destination, Value, Modulus);
+}
+
+inline CHAR WINAPI InterlockedImplicationModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedImplicationModulo8(Destination, Value, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteDeduplicationTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_DEDUPLICATION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteDeduplicationTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockDynamicFrequencyScalingJitter(ntdll::SYSTEM_CPU_CLOCK_DYNAMIC_FREQUENCY_SCALING_JITTER_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockDynamicFrequencyScalingJitterInformation(Info)) ? TRUE : FALSE;
+}
+
+
 
 inline ULONG64 WINAPI InterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     return ntdll::RtlInterlockedRotateRight64(Destination, ShiftCount);
@@ -12686,6 +12717,14 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo32", reinterpret_cast<void*>(InterlockedOrNotModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo16", reinterpret_cast<void*>(InterlockedOrNotModulo16));
     ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo8", reinterpret_cast<void*>(InterlockedOrNotModulo8));
+    ldr.registerExport("kernel32.dll", "InterlockedImplicationModulo64", reinterpret_cast<void*>(InterlockedImplicationModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedImplicationModulo", reinterpret_cast<void*>(InterlockedImplicationModulo));
+    ldr.registerExport("kernel32.dll", "InterlockedImplicationModulo32", reinterpret_cast<void*>(InterlockedImplicationModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedImplicationModulo16", reinterpret_cast<void*>(InterlockedImplicationModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedImplicationModulo8", reinterpret_cast<void*>(InterlockedImplicationModulo8));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteDeduplicationTelemetry", reinterpret_cast<void*>(GetPagefileWriteDeduplicationTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockDynamicFrequencyScalingJitter", reinterpret_cast<void*>(GetCpuClockDynamicFrequencyScalingJitter));
+
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight64", reinterpret_cast<void*>(InterlockedRotateRight64));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight", reinterpret_cast<void*>(InterlockedRotateRight));
     ldr.registerExport("kernel32.dll", "InterlockedRotateRight32", reinterpret_cast<void*>(InterlockedRotateRight32));
