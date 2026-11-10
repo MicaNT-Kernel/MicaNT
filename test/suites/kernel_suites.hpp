@@ -12365,6 +12365,8 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         InitializeHidParseExports();
         InitializeKbdClassExports();
         InitializeMouClassExports();
+        io::DriverObject sermouseDriver{};
+        micant::km::input::InitializeSerMouseDriver(sermouseDriver);
         auto& hidSys = TitanHidInputSubsystem::Instance();
         hidSys.resetForTesting();
         KbdClassResetState();
@@ -12403,6 +12405,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(scm.getServiceRecord(L"kbdclass") != nullptr, "kbdclass service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"kbdhid") != nullptr, "kbdhid service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"mouhid") != nullptr, "mouhid service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"sermouse") != nullptr, "sermouse service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"mouclass") != nullptr, "mouclass service record must exist");
         TEST_ASSERT(scm.getServiceRecord(L"i8042prt") != nullptr, "i8042prt service record must exist");
 
@@ -12414,6 +12417,7 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         TEST_ASSERT(verDb.GetModuleInfo("kbdclass.sys") != nullptr, "kbdclass.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("kbdhid.sys") != nullptr, "kbdhid.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("mouhid.sys") != nullptr, "mouhid.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("sermouse.sys") != nullptr, "sermouse.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("mouclass.sys") != nullptr, "mouclass.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("i8042prt.sys") != nullptr, "i8042prt.sys must be in Version Database");
         TEST_ASSERT(verDb.GetModuleInfo("hid.dll") != nullptr, "hid.dll must be in Version Database");
@@ -12517,6 +12521,38 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
         MouHidDriver::Instance().removeCollection(0x4102);
 
         HidD_FreePreparsedData(mouPreparsed);
+    }
+
+    // ------------------------------------------------------------------------
+    // Serial Microsoft mouse protocol framing and class delivery
+    // ------------------------------------------------------------------------
+    {
+        using micant::km::input::SerialMouseByteResult;
+        auto& serialMouse = micant::km::input::SerMouseDriver::Instance();
+        MouClassResetState();
+        constexpr uintptr_t portId = 0x5301;
+        constexpr uint8_t header = 0xC0 | 0x20 | 0x0C; // left button, X=+5, Y=-2
+        TEST_ASSERT(serialMouse.processByte(portId, header) == SerialMouseByteResult::PacketStarted,
+            "sermouse must synchronize on a tagged packet header");
+        TEST_ASSERT(serialMouse.processByte(portId, 0x05) == SerialMouseByteResult::PacketContinued,
+            "sermouse must collect the X motion byte");
+        TEST_ASSERT(serialMouse.processByte(portId, 0x3E) == SerialMouseByteResult::PacketDelivered,
+            "sermouse must complete and deliver a three-byte report");
+        MOUSE_INPUT_DATA serialPacket{};
+        TEST_ASSERT(MouClassPopInputData(serialPacket), "sermouse must submit decoded input to mouclass");
+        TEST_ASSERT(serialPacket.LastX == 5 && serialPacket.LastY == -2,
+            "sermouse must decode signed X/Y motion from the tagged header");
+        TEST_ASSERT(serialPacket.ButtonFlags & MOUSE_LEFT_BUTTON_DOWN,
+            "sermouse must translate the left button state");
+
+        TEST_ASSERT(serialMouse.processByte(portId, 0xC0) == SerialMouseByteResult::PacketStarted,
+            "sermouse must begin the next packet after a completed report");
+        (void)serialMouse.processByte(portId, 0);
+        (void)serialMouse.processByte(portId, 0);
+        TEST_ASSERT(MouClassPopInputData(serialPacket) &&
+            (serialPacket.ButtonFlags & MOUSE_LEFT_BUTTON_UP),
+            "sermouse must report button release transitions");
+        serialMouse.removePort(portId);
     }
 
     // ------------------------------------------------------------------------
