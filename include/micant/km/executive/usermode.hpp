@@ -1802,7 +1802,7 @@ public:
             std::memcpy(trampolineBuffer + 0x240, s18, sizeof(s18));
 
             // Slot 19 (0x260): GetSystemTimeAsFileTime (writes timestamp to [rcx])
-            const uint8_t s19[] = { 0x48, 0x85, 0xC9, 0x74, 0x0E, 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xD9, 0x01, 0x48, 0x89, 0x01, 0xC3 };
+            const uint8_t s19[] = { 0x48, 0x85, 0xC9, 0x74, 0x10, 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xD9, 0x01, 0x48, 0x89, 0x01, 0xC3 };
             std::memcpy(trampolineBuffer + 0x260, s19, sizeof(s19));
 
             // Slot 20 (0x280): GetProcessHeap (returns non-null handle 0x10000)
@@ -2027,15 +2027,15 @@ public:
             const uint8_t s34[] = {
                 0x31, 0xC0,                               // xor %eax, %eax
                 0x4D, 0x85, 0xC0,                         // test %r8, %r8
-                0x74, 0x15,                               // jz 2f
+                0x74, 0x18,                               // jz 2f (+24)
                 0x44, 0x0F, 0xB6, 0x09,                   // 1: movzbl (%rcx), %r9d
                 0x44, 0x0F, 0xB6, 0x12,                   // movzbl (%rdx), %r10d
                 0x45, 0x39, 0xD1,                         // cmp %r10d, %r9d
-                0x75, 0x08,                               // jne 3f
+                0x75, 0x0C,                               // jne 3f (+12)
                 0x48, 0xFF, 0xC1,                         // inc %rcx
                 0x48, 0xFF, 0xC2,                         // inc %rdx
                 0x49, 0xFF, 0xC8,                         // dec %r8
-                0x75, 0xEB,                               // jnz 1b
+                0x75, 0xE8,                               // jnz 1b (-24)
                 0xC3,                                     // 2: ret
                 0x45, 0x29, 0xD1,                         // 3: subl %r10d, %r9d
                 0x44, 0x89, 0xC8,                         // mov %r9d, %eax
@@ -2047,9 +2047,9 @@ public:
             const uint8_t s35[] = {
                 0x48, 0x31, 0xC0,                         // xor %rax, %rax
                 0x80, 0x3C, 0x01, 0x00,                   // 1: cmpb $0, (%rcx, %rax)
-                0x74, 0x04,                               // jz 2f
+                0x74, 0x05,                               // jz 2f (+5)
                 0x48, 0xFF, 0xC0,                         // inc %rax
-                0xEB, 0xF6,                               // jmp 1b
+                0xEB, 0xF5,                               // jmp 1b (-11)
                 0xC3                                      // 2: ret
             };
             std::memcpy(trampolineBuffer + 0x600, s35, sizeof(s35));
@@ -2059,12 +2059,12 @@ public:
                 0x0F, 0xB6, 0x01,                         // 1: movzbl (%rcx), %eax
                 0x44, 0x0F, 0xB6, 0x02,                   // movzbl (%rdx), %r8d
                 0x41, 0x38, 0xC0,                         // cmp %al, %r8b
-                0x75, 0x08,                               // jne 2f
+                0x75, 0x0C,                               // jne 2f (+12)
                 0x84, 0xC0,                               // test %al, %al
-                0x74, 0x08,                               // jz 3f
+                0x74, 0x0C,                               // jz 3f (+12)
                 0x48, 0xFF, 0xC1,                         // inc %rcx
                 0x48, 0xFF, 0xC2,                         // inc %rdx
-                0xEB, 0xED,                               // jmp 1b
+                0xEB, 0xE8,                               // jmp 1b (-24)
                 0x44, 0x29, 0xC0,                         // 2: subl %r8d, %eax
                 0xC3,                                     // ret
                 0x31, 0xC0,                               // 3: xor %eax, %eax
