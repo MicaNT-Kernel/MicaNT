@@ -9,6 +9,7 @@
 #define MICANT_WIN32K_IMPORTS
 #include "micant/shared/win32k_client.h"
 #include "gui_common.hpp"
+#include "explorer_shell/taskbar.hpp"
 
 namespace {
 
@@ -54,6 +55,7 @@ struct ShellState {
     bool startOpen{};
     AppWindow apps[MAX_APP_WINDOWS]{};
     uint8_t appCount{};
+    uint8_t activeApp{0xFF};
     uint8_t clockSecond{0xFF};
     char clockText[12]{"--:--"};
 };
@@ -155,46 +157,21 @@ void drawWallpaper() noexcept {
     desktopIcon(g.desktopPixels, 220, View::Network, "Network Places");
     desktopIcon(g.desktopPixels, 316, View::RecycleBin, "Recycle Bin");
 
-    const int32_t barY = static_cast<int32_t>(g.screenH - TASKBAR_H);
-    fill(g.desktopPixels, g.screenW, g.screenH, 0, barY, g.screenW, TASKBAR_H, rgb(36, 91, 174));
-    fill(g.desktopPixels, g.screenW, g.screenH, 0, barY, g.screenW, 3, rgb(91, 154, 227));
-    fill(g.desktopPixels, g.screenW, g.screenH, 0, barY + 4, g.screenW, 1, rgb(30, 70, 142));
-
-    // XP Start orb and pill.
-    fill(g.desktopPixels, g.screenW, g.screenH, 0, barY + 3, 102, TASKBAR_H - 3, rgb(45, 147, 49));
-    fill(g.desktopPixels, g.screenW, g.screenH, 0, barY + 3, 8, TASKBAR_H - 3, rgb(82, 183, 68));
-    fill(g.desktopPixels, g.screenW, g.screenH, 12, barY + 8, 24, 24, rgb(225, 238, 243));
-    fill(g.desktopPixels, g.screenW, g.screenH, 15, barY + 11, 8, 8, rgb(235, 59, 47));
-    fill(g.desktopPixels, g.screenW, g.screenH, 24, barY + 11, 8, 8, rgb(75, 165, 66));
-    fill(g.desktopPixels, g.screenW, g.screenH, 15, barY + 20, 8, 8, rgb(53, 125, 202));
-    fill(g.desktopPixels, g.screenW, g.screenH, 24, barY + 20, 8, 8, rgb(250, 197, 50));
-    text(g.desktopPixels, g.screenW, g.screenH, 42, barY + 15, "start", rgb(255, 255, 255));
-
-    int32_t taskX = 112;
+    micant::explorer::TaskbarButton buttons[MAX_APP_WINDOWS]{};
+    size_t buttonCount = 0;
     for (size_t i = 0; i < MAX_APP_WINDOWS; ++i) {
         if (!g.apps[i].open) continue;
-        fill(g.desktopPixels, g.screenW, g.screenH, taskX, barY + 8, 146, 25, rgb(61, 118, 199));
-        fill(g.desktopPixels, g.screenW, g.screenH, taskX + 1, barY + 9, 144, 1, rgb(116, 166, 225));
-        icon(g.desktopPixels, g.screenW, g.screenH, taskX + 3, barY + 7, g.apps[i].view);
-        const char* title = g.apps[i].view == View::MyComputer ? "My Computer" :
-                            g.apps[i].view == View::MyDocuments ? "My Documents" :
-                            g.apps[i].view == View::ControlPanel ? "Control Panel" :
-                            g.apps[i].view == View::RecycleBin ? "Recycle Bin" : "Network Places";
-        text(g.desktopPixels, g.screenW, g.screenH, taskX + 34, barY + 16, title, rgb(255, 255, 255));
-        taskX += 151;
+        auto& button = buttons[buttonCount++];
+        button.title = g.apps[i].view == View::MyComputer ? "My Computer" :
+                       g.apps[i].view == View::MyDocuments ? "My Documents" :
+                       g.apps[i].view == View::ControlPanel ? "Control Panel" :
+                       g.apps[i].view == View::RecycleBin ? "Recycle Bin" : "Network Places";
+        button.iconColor = g.apps[i].view == View::ControlPanel ? rgb(68, 137, 199) :
+                           g.apps[i].view == View::RecycleBin ? rgb(195, 210, 221) : rgb(236, 190, 67);
+        button.active = g.activeApp == i;
     }
-
-    const int32_t trayX = static_cast<int32_t>(g.screenW) - 122;
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX, barY + 5, 122, TASKBAR_H - 5, rgb(29, 79, 151));
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX, barY + 7, 1, TASKBAR_H - 9, rgb(25, 62, 122));
-    // Volume glyph.
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX + 12, barY + 17, 5, 8, rgb(239, 245, 252));
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX + 17, barY + 14, 4, 14, rgb(239, 245, 252));
-    // Network status glyph.
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX + 34, barY + 24, 4, 4, rgb(247, 247, 247));
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX + 33, barY + 20, 6, 3, rgb(247, 247, 247));
-    fill(g.desktopPixels, g.screenW, g.screenH, trayX + 31, barY + 16, 10, 3, rgb(247, 247, 247));
-    text(g.desktopPixels, g.screenW, g.screenH, trayX + 50, barY + 16, g.clockText, rgb(255, 255, 255));
+    micant::explorer::DrawTaskbar(g.desktopPixels, g.screenW, g.screenH, TASKBAR_H,
+                                  buttons, buttonCount, g.clockText);
 }
 
 void drawStartMenu() noexcept {
@@ -282,11 +259,22 @@ AppWindow* appFromHwnd(void* hwnd) noexcept {
     return nullptr;
 }
 
+void activateApp(void* hwnd) noexcept {
+    for (size_t i = 0; i < MAX_APP_WINDOWS; ++i) {
+        if (g.apps[i].open && g.apps[i].hwnd == hwnd) {
+            g.activeApp = static_cast<uint8_t>(i);
+            return;
+        }
+    }
+}
+
 void openView(View view) noexcept {
     for (auto& existing : g.apps) {
         if (existing.open && existing.view == view) {
+            activateApp(existing.hwnd);
             MicaWin32kShowWindow(existing.hwnd, SW_RESTORE);
             MicaWin32kSetWindowPos(existing.hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            redrawDesktop();
             return;
         }
     }
@@ -306,6 +294,7 @@ void openView(View view) noexcept {
         nullptr, nullptr, nullptr, nullptr);
     if (!app->hwnd) return;
     app->open = true;
+    g.activeApp = static_cast<uint8_t>(app - g.apps);
     ++g.appCount;
     app->dc = MicaWin32kGetDC(app->hwnd);
     void* appBits = nullptr;
@@ -365,15 +354,24 @@ intptr_t WindowProc(void* hwnd, uint32_t message, uintptr_t, intptr_t lParam) {
         if (y >= static_cast<int32_t>(g.screenH - TASKBAR_H)) {
             if (x < 104) toggleStart();
             else if (x < static_cast<int32_t>(g.screenW) - 124) {
+                size_t taskCount = 0;
+                for (const auto& app : g.apps) if (app.open) ++taskCount;
+                const int32_t taskRight = static_cast<int32_t>(g.screenW) - 126;
+                const int32_t available = taskRight > 112 ? taskRight - 112 : 0;
+                const int32_t taskWidth = taskCount == 0 ? 0 :
+                    (available / static_cast<int32_t>(taskCount) < 146
+                        ? available / static_cast<int32_t>(taskCount) : 146);
                 int32_t slotLeft = 112;
-                for (auto& app : g.apps) {
-                    if (!app.open) continue;
-                    if (x >= slotLeft && x < slotLeft + 146) {
-                        MicaWin32kShowWindow(app.hwnd, SW_RESTORE);
-                        MicaWin32kSetWindowPos(app.hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                for (size_t i = 0; i < MAX_APP_WINDOWS && taskWidth >= 64; ++i) {
+                    if (!g.apps[i].open) continue;
+                    if (x >= slotLeft && x < slotLeft + taskWidth - 4) {
+                        g.activeApp = static_cast<uint8_t>(i);
+                        MicaWin32kShowWindow(g.apps[i].hwnd, SW_RESTORE);
+                        MicaWin32kSetWindowPos(g.apps[i].hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                        redrawDesktop();
                         break;
                     }
-                    slotLeft += 151;
+                    slotLeft += taskWidth;
                 }
             }
         } else if (g.startOpen) {
@@ -411,6 +409,7 @@ intptr_t WindowProc(void* hwnd, uint32_t message, uintptr_t, intptr_t lParam) {
     if (message == WM_CLOSE) {
         if (auto* app = appFromHwnd(hwnd)) {
             app->open = false;
+            if (g.activeApp == static_cast<uint8_t>(app - g.apps)) g.activeApp = 0xFF;
             app->hwnd = nullptr;
             app->dc = nullptr;
             app->pixels = nullptr;
