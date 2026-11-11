@@ -132,6 +132,7 @@ inline constexpr uint8_t MADT_TYPE_NMI_SOURCE           = 3;
 inline constexpr uint8_t MADT_TYPE_LOCAL_APIC_NMI       = 4;
 inline constexpr uint8_t MADT_TYPE_LOCAL_APIC_OVERRIDE  = 5;
 inline constexpr uint8_t MADT_TYPE_LOCAL_X2APIC         = 9;
+inline constexpr uint8_t MADT_TYPE_LOCAL_X2APIC_NMI     = 10;
 inline constexpr uint8_t MADT_TYPE_GICC                 = 11;
 inline constexpr uint8_t MADT_TYPE_GICD                 = 12;
 
@@ -337,6 +338,33 @@ struct AcpiMadtIntrOverride {
     uint8_t  source;             // Bus-relative IRQ
     uint32_t gsi;                // Global System Interrupt mapping
     uint16_t flags;              // Polarity and Trigger Mode
+};
+
+struct AcpiMadtNmiSource {
+    AcpiMadtRecordHeader header;
+    uint16_t flags;
+    uint32_t gsi;
+};
+
+struct AcpiMadtLocalApicNmi {
+    AcpiMadtRecordHeader header;
+    uint8_t processorId;
+    uint16_t flags;
+    uint8_t lint;
+};
+
+struct AcpiMadtLocalApicAddressOverride {
+    AcpiMadtRecordHeader header;
+    uint16_t reserved;
+    uint64_t address;
+};
+
+struct AcpiMadtLocalX2ApicNmi {
+    AcpiMadtRecordHeader header;
+    uint16_t flags;
+    uint8_t lint;
+    uint8_t reserved[3];
+    uint32_t processorUid;
 };
 
 // PCI Express Memory Mapped Configuration Table (MCFG) Allocation Record
@@ -2079,6 +2107,10 @@ class TitanAcpiSubsystem {
     std::vector<AcpiMadtLocalX2Apic> m_localX2Apics;
     std::vector<AcpiMadtIoApic> m_ioApics;
     std::vector<AcpiMadtIntrOverride> m_intrOverrides;
+    std::vector<AcpiMadtNmiSource> m_nmiSources;
+    std::vector<AcpiMadtLocalApicNmi> m_localApicNmis;
+    std::vector<AcpiMadtLocalX2ApicNmi> m_localX2ApicNmis;
+    uint64_t m_localApicAddress{0};
     AcpiMcfgHeader m_mcfg{};
     AcpiDmarHeader m_dmar{};
     AcpiSratHeader m_srat{};
@@ -2178,6 +2210,10 @@ public:
         m_localX2Apics.clear();
         m_ioApics.clear();
         m_intrOverrides.clear();
+        m_nmiSources.clear();
+        m_localApicNmis.clear();
+        m_localX2ApicNmis.clear();
+        m_localApicAddress = 0;
         m_namespace.resetForFirmware();
         m_firmwareNamespaceComplete = false;
         m_madtHeader = {};
@@ -2233,6 +2269,7 @@ public:
                 dsdtAddress = m_fadt.xDsdtAddress ? m_fadt.xDsdtAddress : m_fadt.dsdtAddress;
             } else if (signature == "APIC" && bytes.size() >= sizeof(AcpiMadtHeader)) {
                 std::memcpy(&m_madtHeader, bytes.data(), sizeof(m_madtHeader));
+                m_localApicAddress = m_madtHeader.localApicAddress;
                 size_t offset = sizeof(AcpiMadtHeader);
                 while (offset + sizeof(AcpiMadtRecordHeader) <= bytes.size()) {
                     AcpiMadtRecordHeader record{};
@@ -2257,6 +2294,26 @@ public:
                         AcpiMadtIntrOverride overrideEntry{};
                         std::memcpy(&overrideEntry, entry, sizeof(overrideEntry));
                         m_intrOverrides.push_back(overrideEntry);
+                    } else if (record.type == MADT_TYPE_NMI_SOURCE &&
+                               record.length >= sizeof(AcpiMadtNmiSource)) {
+                        AcpiMadtNmiSource nmi{};
+                        std::memcpy(&nmi, entry, sizeof(nmi));
+                        m_nmiSources.push_back(nmi);
+                    } else if (record.type == MADT_TYPE_LOCAL_APIC_NMI &&
+                               record.length >= sizeof(AcpiMadtLocalApicNmi)) {
+                        AcpiMadtLocalApicNmi nmi{};
+                        std::memcpy(&nmi, entry, sizeof(nmi));
+                        m_localApicNmis.push_back(nmi);
+                    } else if (record.type == MADT_TYPE_LOCAL_APIC_OVERRIDE &&
+                               record.length >= sizeof(AcpiMadtLocalApicAddressOverride)) {
+                        AcpiMadtLocalApicAddressOverride address{};
+                        std::memcpy(&address, entry, sizeof(address));
+                        if (address.address) m_localApicAddress = address.address;
+                    } else if (record.type == MADT_TYPE_LOCAL_X2APIC_NMI &&
+                               record.length >= sizeof(AcpiMadtLocalX2ApicNmi)) {
+                        AcpiMadtLocalX2ApicNmi nmi{};
+                        std::memcpy(&nmi, entry, sizeof(nmi));
+                        m_localX2ApicNmis.push_back(nmi);
                     }
                     offset += record.length;
                 }
@@ -2375,6 +2432,7 @@ public:
         std::memcpy(m_madtHeader.header.oemId, "MICANT", 6);
         std::memcpy(m_madtHeader.header.oemTableId, "MNTMADT ", 8);
         m_madtHeader.localApicAddress = 0xFEE00000;
+        m_localApicAddress = m_madtHeader.localApicAddress;
         m_madtHeader.flags = 1; // PC-AT dual 8259 installed
 
         m_localApics.clear();
@@ -2560,6 +2618,7 @@ public:
     const AcpiMadtHeader& getMadtHeader() const { return m_madtHeader; }
     const std::vector<AcpiMadtLocalApic>& getLocalApics() const { return m_localApics; }
     const std::vector<AcpiMadtLocalX2Apic>& getLocalX2Apics() const { return m_localX2Apics; }
+    uint64_t getLocalApicAddress() const { return m_localApicAddress; }
     uint32_t getEnabledProcessorCount() const {
         uint32_t count = 0;
         for (const auto& cpu : m_localApics)
@@ -2570,6 +2629,9 @@ public:
     }
     const std::vector<AcpiMadtIoApic>& getIoApics() const { return m_ioApics; }
     const std::vector<AcpiMadtIntrOverride>& getIntrOverrides() const { return m_intrOverrides; }
+    const std::vector<AcpiMadtNmiSource>& getNmiSources() const { return m_nmiSources; }
+    const std::vector<AcpiMadtLocalApicNmi>& getLocalApicNmis() const { return m_localApicNmis; }
+    const std::vector<AcpiMadtLocalX2ApicNmi>& getLocalX2ApicNmis() const { return m_localX2ApicNmis; }
     const AcpiMcfgHeader& getMcfg() const { return m_mcfg; }
     const AcpiDmarHeader& getDmar() const { return m_dmar; }
     const AcpiSratHeader& getSrat() const { return m_srat; }
