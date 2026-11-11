@@ -168,7 +168,9 @@ inline LoaderParameterBlock createDefaultUefiBootBlock() {
         .entryPoint = 0xFFFFF80001208000ULL
     });
 
-    lpb.acpiTablePhysicalAddress = 0x000000007FEF0000ULL;
+    // This helper has no firmware memory map backing ACPI physical addresses.
+    // Keep the field empty so ACPI uses its explicit synthetic test setup.
+    lpb.acpiTablePhysicalAddress = 0;
 
     lpb.framebuffer = {
         .physicalBase = 0x00000000E0000000ULL,

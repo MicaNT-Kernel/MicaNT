@@ -2588,13 +2588,18 @@ inline void AcpiResetTelemetryForTesting() {
 // 13. Subsystem Initialization & SCM Driver Registration
 // ============================================================================
 
-inline void InitializeAcpiSubsystem() {
+inline bool InitializeAcpiSubsystem(uint64_t firmwareRsdpAddress = 0) {
     static bool s_registered = false;
-    if (s_registered) return;
-    s_registered = true;
+    if (s_registered) return true;
 
-    // 1. Initialize Subsystem Singleton & Table Tree
-    TitanAcpiSubsystem::Instance().initialize();
+    // 1. Ingest firmware tables when the loader supplied an RSDP. The
+    // synthetic table set is reserved for hosted boot/test paths without one.
+    auto& acpi = TitanAcpiSubsystem::Instance();
+    if (firmwareRsdpAddress != 0) {
+        if (!acpi.initializeFromFirmware(firmwareRsdpAddress)) return false;
+    } else {
+        acpi.initialize();
+    }
 
     // 2. Dynamic Loader Exports for acpi.sys
     auto& ldr = ldr::DynamicLoader::get();
@@ -2635,6 +2640,8 @@ inline void InitializeAcpiSubsystem() {
         "10.0.22621.1",
         "MicaNT Sovereign ACPI 6.5 Platform Driver"
     );
+    s_registered = true;
+    return true;
 }
 
 } // namespace micant::acpi

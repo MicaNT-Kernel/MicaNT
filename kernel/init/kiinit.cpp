@@ -18,6 +18,7 @@
 #include "micant/km/hal/bootvid.hpp"
 #include "micant/km/hal/inbv.hpp"
 #include "micant/km/hal/uefi.hpp"
+#include "micant/km/hal/acpi.hpp"
 
 // 3. Kernel Mode (Ring 0): Microkernel Core (Ke)
 #include "micant/km/core/ke.hpp"
@@ -337,6 +338,14 @@ extern "C" NtStatus KiSystemStartup(
 
     // 12.1 Initialize 39-Unit Modular NT Kernel Linkage (Phase 1 Ring 0, Phase 2 Ring 1 & Phase 2.5 Ring 2 Complete through Horizon 67)
     std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 39 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, pofx_whea, umdf_msix, zerobsod, livehotswap, sysinfo_taskmgr, quotagov, mftzipui, srm_ci, afd_wsk, kuser_seal, ring1_vfs, ring1_dxgk, ring1_audio, ring1_smss, ring2_wudf, ring2_lsa, ring2_scm, ex, hal, pnp, po, init)...\n";
+    if (!acpi::InitializeAcpiSubsystem(lpb.acpiTablePhysicalAddress)) {
+        std::cerr << "[Acpi] Firmware RSDP/table validation failed; ACPI startup aborted.\n";
+        return NtStatus::Unsuccessful;
+    }
+    std::cout << (lpb.acpiTablePhysicalAddress != 0
+        ? "[Acpi] Firmware RSDP accepted; ACPI tables initialized.\n"
+        : "[Acpi] No firmware RSDP in hosted LPB; initialized test table set.\n");
+
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
