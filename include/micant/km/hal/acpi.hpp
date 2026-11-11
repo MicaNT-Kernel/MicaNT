@@ -2618,11 +2618,14 @@ inline void AcpiResetTelemetryForTesting() {
 
 inline bool InitializeAcpiSubsystem(uint64_t firmwareRsdpAddress = 0) {
     static bool s_registered = false;
-    if (s_registered) return true;
-
-    // 1. Ingest firmware tables when the loader supplied an RSDP. The
-    // synthetic table set is reserved for hosted boot/test paths without one.
     auto& acpi = TitanAcpiSubsystem::Instance();
+    if (s_registered) {
+        return firmwareRsdpAddress == 0 ? acpi.isInitialized()
+                                        : acpi.initializeFromFirmware(firmwareRsdpAddress);
+    }
+
+    // Ingest firmware tables when the loader supplied an RSDP. The synthetic
+    // table set is reserved for hosted boot/test paths without one.
     if (firmwareRsdpAddress != 0) {
         if (!acpi.initializeFromFirmware(firmwareRsdpAddress)) return false;
     } else {
