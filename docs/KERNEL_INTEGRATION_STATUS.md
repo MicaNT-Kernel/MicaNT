@@ -175,6 +175,8 @@ an application import table. The client also checks an invalid output pointer,
 access denial, unsupported inheritance and a repeated unmap. The boot ownership test checks that the Ob
 section object itself remains alive after its last handle closes until its
 last view is unmapped.
+An injected second-page mapping failure in QEMU verifies that the first real
+PTE is removed, the VAD disappears and PFN accounting returns to baseline.
 The internal backend also changes view page protections and rejects upgrading a
 view beyond its retained access; a bare-metal QEMU test exercises those changes.
 

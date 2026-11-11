@@ -2,6 +2,20 @@
 #include "micant/km/executive/section.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 
+namespace {
+struct FailingSectionMap { size_t successfulMaps{}; };
+bool mapUntilSecond(void* context, uintptr_t address, uint64_t pfn, uint32_t protection) noexcept {
+    auto& state = *static_cast<FailingSectionMap*>(context);
+    if (state.successfulMaps == 1) return false;
+    if (!micant::hal::amd64::mapBootstrapManagedPage(nullptr, address, pfn, protection)) return false;
+    ++state.successfulMaps;
+    return true;
+}
+bool unmapSectionPage(void*, uintptr_t address) noexcept {
+    return micant::hal::amd64::unmapBootstrapManagedPage(nullptr, address);
+}
+}
+
 extern "C" int MicantTestMmProcessAddressSpace() noexcept {
     using namespace micant;
     using namespace micant::mm;
@@ -78,6 +92,21 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
         if (space.unmapSharedPages(first + 1) != NtStatus::Success ||
             *readonly != 0xabcdef1234567890ULL ||
             space.unmapSharedPages(second) != NtStatus::Success) return 14;
+    }
+    {
+        ProcessAddressSpace space;
+        FailingSectionMap fault{};
+        if (!space.configurePagingBackend({&fault, mapUntilSecond, unmapSectionPage},
+                                          BootstrapManagedBase, BootstrapManagedSize)) return 16;
+        section::SectionObject section(2 * PageSize4KB, section::SEC_COMMIT, PAGE_READWRITE);
+        if (section.getInitializationStatus() != NtStatus::Success) return 17;
+        const auto backing = section.getBackingReference();
+        uintptr_t address = BootstrapManagedBase;
+        if (space.mapSharedPages(address, 2 * PageSize4KB, PAGE_READWRITE,
+                                 backing.pfns, backing.pageCount, backing.context,
+                                 backing.acquire, backing.release) != NtStatus::Unsuccessful ||
+            fault.successfulMaps != 1 || space.getRegionCount() != 0 ||
+            bootstrapUserRange(address, PageSize4KB, false)) return 18;
     }
 
     return database.getActiveCount() == active &&
