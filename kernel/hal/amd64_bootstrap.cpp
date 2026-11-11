@@ -491,9 +491,13 @@ void MicantSyscallClientProgram() {
     int64_t maximum = 4096;
     size_t firstSize = 4096, secondSize = 4096;
     auto* current = reinterpret_cast<void*>(~uint64_t{0});
-    if (create(&section, 4, nullptr, &maximum, 4, 0x08000000, nullptr) ||
+    if (create(nullptr, 4, nullptr, &maximum, 4, 0x08000000, nullptr) !=
+            static_cast<int32_t>(0xc0000005u) ||
+        create(&section, 4, nullptr, &maximum, 4, 0x08000000, nullptr) ||
         map(section, current, &first, 0, 0, nullptr, &firstSize, 2, 0, 4) !=
             static_cast<int32_t>(0xc0000022u) ||
+        map(section, current, &first, 0, 0, nullptr, &firstSize, 1, 0, 2) !=
+            static_cast<int32_t>(0xc0000002u) ||
         first || close(section)) __builtin_trap();
     section = nullptr;
     if (create(&section, 6, nullptr, &maximum, 4, 0x08000000, nullptr) ||
@@ -503,7 +507,8 @@ void MicantSyscallClientProgram() {
     if (*static_cast<volatile uint64_t*>(second) != 0x12345678 ||
         unmap(current, first) || close(section) ||
         *static_cast<volatile uint64_t*>(second) != 0x12345678 ||
-        unmap(current, second)) __builtin_trap();
+        unmap(current, second) ||
+        unmap(current, second) != static_cast<int32_t>(0xc0000019u)) __builtin_trap();
     __asm__ __volatile__(
         ".globl MicantSyscallClientBreakpoint\nMicantSyscallClientBreakpoint:\n"
         "int3\nud2\n"

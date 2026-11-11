@@ -170,7 +170,8 @@ of a view after close, and checks PFN accounting after cleanup. An additional
 CPL3 PE diagnostic loads the real NTDLL PE, resolves the four section/close
 exports, and calls them through the syscall boundary. This uses a bounded
 build-time fixture and explicit export resolution, not process DLL startup or
-an application import table. The boot ownership test checks that the Ob
+an application import table. The client also checks an invalid output pointer,
+access denial, unsupported inheritance and a repeated unmap. The boot ownership test checks that the Ob
 section object itself remains alive after its last handle closes until its
 last view is unmapped.
 The internal backend also changes view page protections and rejects upgrading a
