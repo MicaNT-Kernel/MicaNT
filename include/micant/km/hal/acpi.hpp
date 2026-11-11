@@ -2378,9 +2378,7 @@ inline uint64_t AmlBytecodeParser::executeBytecode(std::span<const uint8_t> byte
 // 12. Windows ACPI Driver & HAL C ABI Exports (acpi.sys and hal.dll)
 // ============================================================================
 
-extern "C" {
-
-inline BOOL WINAPI AcpiFindTable(const char* signature, uint64_t* outPhysicalAddress, uint32_t* outLength) {
+inline BOOL AcpiFindTable(const char* signature, uint64_t* outPhysicalAddress, uint32_t* outLength) {
     if (!signature || !outPhysicalAddress) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2395,7 +2393,7 @@ inline BOOL WINAPI AcpiFindTable(const char* signature, uint64_t* outPhysicalAdd
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiEvaluateObject(const char* path, uint64_t* outInteger) {
+inline BOOL AcpiEvaluateObject(const char* path, uint64_t* outInteger) {
     if (!path || !outInteger) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2405,7 +2403,7 @@ inline BOOL WINAPI AcpiEvaluateObject(const char* path, uint64_t* outInteger) {
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiGetSystemPowerState(uint8_t* outState) {
+inline BOOL AcpiGetSystemPowerState(uint8_t* outState) {
     if (!outState) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2414,7 +2412,7 @@ inline BOOL WINAPI AcpiGetSystemPowerState(uint8_t* outState) {
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiSetSystemPowerState(uint8_t state) {
+inline BOOL AcpiSetSystemPowerState(uint8_t state) {
     if (state > 5) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2422,7 +2420,7 @@ inline BOOL WINAPI AcpiSetSystemPowerState(uint8_t state) {
     return acpi.transitionSleepState(static_cast<AcpiSleepState>(state)) ? TRUE : FALSE;
 }
 
-inline BOOL WINAPI AcpiGetThermalZoneTemp(uint32_t* outKelvinTenths) {
+inline BOOL AcpiGetThermalZoneTemp(uint32_t* outKelvinTenths) {
     if (!outKelvinTenths) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2432,7 +2430,7 @@ inline BOOL WINAPI AcpiGetThermalZoneTemp(uint32_t* outKelvinTenths) {
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiGetBatteryStatus(
+inline BOOL AcpiGetBatteryStatus(
     uint32_t* outState,
     uint32_t* outPresentRate,
     uint32_t* outRemainingCapacity,
@@ -2451,13 +2449,13 @@ inline BOOL WINAPI AcpiGetBatteryStatus(
     return TRUE;
 }
 
-inline uint32_t WINAPI AcpiGetProcessorCount() {
+inline uint32_t AcpiGetProcessorCount() {
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
     return acpi.getEnabledProcessorCount();
 }
 
-inline BOOL WINAPI AcpiRegisterGpeHandler(uint32_t gpeNumber, void (*handler)(uint32_t)) {
+inline BOOL AcpiRegisterGpeHandler(uint32_t gpeNumber, void (*handler)(uint32_t)) {
     if (gpeNumber >= 64 || !handler) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2468,7 +2466,7 @@ inline BOOL WINAPI AcpiRegisterGpeHandler(uint32_t gpeNumber, void (*handler)(ui
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiDispatchGpe(uint32_t gpeNumber) {
+inline BOOL AcpiDispatchGpe(uint32_t gpeNumber) {
     if (gpeNumber >= 64) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2480,7 +2478,7 @@ inline BOOL WINAPI AcpiDispatchGpe(uint32_t gpeNumber) {
     return ok ? TRUE : FALSE;
 }
 
-inline BOOL WINAPI AcpiGetDeviceResources(
+inline BOOL AcpiGetDeviceResources(
     const char* devicePath,
     ACPI_RESOURCE* outResources,
     uint32_t maxResources,
@@ -2510,7 +2508,7 @@ inline BOOL WINAPI AcpiGetDeviceResources(
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiTranslatePciRouting(uint32_t pciAddress, uint8_t pin, uint32_t* outGsi) {
+inline BOOL AcpiTranslatePciRouting(uint32_t pciAddress, uint8_t pin, uint32_t* outGsi) {
     if (!outGsi) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2518,7 +2516,7 @@ inline BOOL WINAPI AcpiTranslatePciRouting(uint32_t pciAddress, uint8_t pin, uin
     return acpi.translatePciRouting(pciAddress, pin, outGsi) ? TRUE : FALSE;
 }
 
-inline BOOL WINAPI AcpiSetDevicePowerState(const char* devicePath, uint8_t state) {
+inline BOOL AcpiSetDevicePowerState(const char* devicePath, uint8_t state) {
     if (!devicePath || state > 4) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2526,7 +2524,7 @@ inline BOOL WINAPI AcpiSetDevicePowerState(const char* devicePath, uint8_t state
     return acpi.setDevicePowerState(devicePath, static_cast<AcpiDevicePowerState>(state)) ? TRUE : FALSE;
 }
 
-inline BOOL WINAPI AcpiLoadTable(const uint8_t* tableBytes, uint32_t length, uint32_t* outHandle) {
+inline BOOL AcpiLoadTable(const uint8_t* tableBytes, uint32_t length, uint32_t* outHandle) {
     if (!tableBytes || length == 0 || !outHandle) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2537,7 +2535,7 @@ inline BOOL WINAPI AcpiLoadTable(const uint8_t* tableBytes, uint32_t length, uin
     return TRUE;
 }
 
-inline BOOL WINAPI AcpiUnloadTable(uint32_t handle) {
+inline BOOL AcpiUnloadTable(uint32_t handle) {
     if (handle == 0) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2545,7 +2543,7 @@ inline BOOL WINAPI AcpiUnloadTable(uint32_t handle) {
     return acpi.unloadSsdtTable(handle) ? TRUE : FALSE;
 }
 
-inline BOOL WINAPI AcpiGetTelemetry(ACPI_TELEMETRY* outTelemetry) {
+inline BOOL AcpiGetTelemetry(ACPI_TELEMETRY* outTelemetry) {
     if (!outTelemetry) return FALSE;
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
@@ -2554,6 +2552,7 @@ inline BOOL WINAPI AcpiGetTelemetry(ACPI_TELEMETRY* outTelemetry) {
     return TRUE;
 }
 
+extern "C" {
 inline ULONG WINAPI HalGetBusDataByOffset(
     BUS_DATA_TYPE busDataType,
     ULONG busNumber,
