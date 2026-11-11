@@ -843,6 +843,143 @@ bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
                    kUser | kNoExecute | (protection == mm::PAGE_READWRITE ? kWritable : 0));
 }
 
+static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const uint64_t* pfns,
+                                        size_t count, uint32_t protection, int failAfter) noexcept {
+    if (context || !bootstrapPagingContext() || !pfns || !count ||
+        address < BootstrapManagedBase || (address & mm::PageMask4KB) ||
+        address - BootstrapManagedBase >= BootstrapManagedSize ||
+        count > (BootstrapManagedSize - (address - BootstrapManagedBase)) / mm::PageSize4KB ||
+        (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)) return false;
+
+    // This 16 MiB aligned window needs at most eight PTs, one PD and one
+    // PDPT. Upper levels are installed without any present leaf PTEs.
+    uint64_t* createdEntries[16]{};
+    uint64_t createdPfns[16]{};
+    size_t createdCount{};
+    auto& database = mm::PfnDatabase::get();
+    bool prepared = true;
+    for (size_t i = 0; i < count && prepared; ++i) {
+        if (!pfns[i] || pfns[i] > (kPhysicalMask >> mm::PageShift4KB)) {
+            prepared = false;
+            break;
+        }
+        const uintptr_t va = address + i * mm::PageSize4KB;
+        uint64_t* table = g_pml4;
+        for (int shift = 39; shift > 12; shift -= 9) {
+            uint64_t& entry = table[(va >> shift) & 511];
+            if (!entry) {
+                if (createdCount == 16) { prepared = false; break; }
+                const uint64_t pfn = failAfter == 0 ? 0 : database.allocatePage();
+                if (!pfn) { prepared = false; break; }
+                if (failAfter > 0) --failAfter;
+                const uint64_t physical = pfn << 12;
+                if (physical > kPhysicalMask || !mappedRange(physical, 4096, false, true, false) ||
+                    walk(reinterpret_cast<uint64_t>(g_pml4), physical) != physical) {
+                    database.freePage(pfn);
+                    prepared = false;
+                    break;
+                }
+                database.zeroPage(pfn);
+                entry = physical | kPresent | kWritable | kOwnedTable | kUser;
+                createdEntries[createdCount] = &entry;
+                createdPfns[createdCount++] = pfn;
+            }
+            if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) ||
+                !(entry & kWritable) || !(entry & kUser) || (entry & kNoExecute)) {
+                prepared = false;
+                break;
+            }
+            table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
+        }
+        if (prepared && table[(va >> 12) & 511]) prepared = false;
+    }
+    if (!prepared) {
+        while (createdCount) {
+            --createdCount;
+            *createdEntries[createdCount] = 0;
+            invalidatePage(address);
+            database.freePage(createdPfns[createdCount]);
+        }
+        return false;
+    }
+    // Interrupts are disabled and only the BSP is running. No leaf can change
+    // between validation and publication, and this phase cannot fail.
+    for (size_t i = 0; i < count; ++i) {
+        const uintptr_t va = address + i * mm::PageSize4KB;
+        uint64_t* table = g_pml4;
+        for (int shift = 39; shift > 12; shift -= 9)
+            table = reinterpret_cast<uint64_t*>(table[(va >> shift) & 511] & kPhysicalMask);
+        table[(va >> 12) & 511] = mm::PageTableEntry::create(
+            pfns[i], protection == mm::PAGE_READWRITE, true, true).value;
+        invalidatePage(va);
+    }
+    return true;
+}
+
+bool mapBootstrapManagedView(void* context, uintptr_t address, const uint64_t* pfns,
+                             size_t count, uint32_t protection) noexcept {
+    return mapBootstrapManagedViewImpl(context, address, pfns, count, protection, -1);
+}
+
+bool unmapBootstrapManagedView(void* context, uintptr_t address, size_t count) noexcept {
+    if (context || !bootstrapPagingContext() || !count || (address & mm::PageMask4KB) ||
+        address < BootstrapManagedBase || address - BootstrapManagedBase >= BootstrapManagedSize ||
+        count > (BootstrapManagedSize - (address - BootstrapManagedBase)) / mm::PageSize4KB)
+        return false;
+    for (size_t i = 0; i < count; ++i) {
+        const uintptr_t va = address + i * mm::PageSize4KB;
+        const uint64_t* table = g_pml4;
+        for (int shift = 39; shift > 12; shift -= 9) {
+            const uint64_t entry = table[(va >> shift) & 511];
+            if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) || !(entry & kUser))
+                return false;
+            table = reinterpret_cast<const uint64_t*>(entry & kPhysicalMask);
+        }
+        if (!(table[(va >> 12) & 511] & kPresent)) return false;
+    }
+    // No interrupt or concurrent CPU can alter the validated page tables.
+    for (size_t i = 0; i < count; ++i) {
+        if (!unmapPage(address + i * mm::PageSize4KB, true)) __builtin_trap();
+    }
+    return true;
+}
+
+bool verifyBootstrapManagedViewRollback() noexcept {
+    auto& database = mm::PfnDatabase::get();
+    const size_t active = database.getActiveCount();
+    const uint64_t pfn = database.allocatePage();
+    if (!pfn) return false;
+    const size_t held = database.getActiveCount();
+    const uint64_t pfns[]{pfn, 0};
+    bool ok = true;
+    for (int failAfter = 0; failAfter <= 3; ++failAfter) {
+        if (mapBootstrapManagedViewImpl(nullptr, BootstrapManagedBase, pfns, 2,
+                                        mm::PAGE_READWRITE, failAfter) ||
+            bootstrapUserRange(BootstrapManagedBase, mm::PageSize4KB, false) ||
+            database.getActiveCount() != held) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        const uintptr_t occupied = BootstrapManagedBase + mm::PageSize4KB;
+        const uint64_t pair[]{pfn, pfn};
+        if (!mapBootstrapManagedPage(nullptr, occupied, pfn, mm::PAGE_READWRITE)) {
+            ok = false;
+        } else {
+            const size_t mapped = database.getActiveCount();
+            if (unmapBootstrapManagedView(nullptr, BootstrapManagedBase, 2) ||
+                mapBootstrapManagedView(nullptr, BootstrapManagedBase, pair, 2, mm::PAGE_READWRITE) ||
+                bootstrapUserRange(BootstrapManagedBase, mm::PageSize4KB, false) ||
+                !bootstrapUserRange(occupied, mm::PageSize4KB, true) ||
+                database.getActiveCount() != mapped) ok = false;
+            if (!unmapBootstrapManagedPage(nullptr, occupied)) ok = false;
+        }
+    }
+    database.freePage(pfn);
+    return ok && database.getActiveCount() == active;
+}
+
 bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept {
     if (context || address < BootstrapManagedBase ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||

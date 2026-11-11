@@ -27,7 +27,8 @@ bool initializeBootstrapSectionServices() noexcept {
     sectionType.deleteProcedure = deleteSection;
     return addressSpace.configurePagingBackend(
         {nullptr, hal::amd64::mapBootstrapManagedPage, hal::amd64::unmapBootstrapManagedPage,
-         hal::amd64::mapBootstrapProtectManagedPage},
+         hal::amd64::mapBootstrapProtectManagedPage, hal::amd64::mapBootstrapManagedView,
+         hal::amd64::unmapBootstrapManagedView},
         hal::amd64::BootstrapManagedBase, hal::amd64::BootstrapManagedSize);
 }
 

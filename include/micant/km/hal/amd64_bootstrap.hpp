@@ -13,6 +13,10 @@ inline constexpr uintptr_t BootstrapManagedBase = (uintptr_t{128} << 39) + 0x200
 inline constexpr size_t BootstrapManagedSize = 16 * 1024 * 1024;
 bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
                              uint32_t protection) noexcept;
+bool mapBootstrapManagedView(void* context, uintptr_t address, const uint64_t* pfns,
+                             size_t count, uint32_t protection) noexcept;
+bool unmapBootstrapManagedView(void* context, uintptr_t address, size_t count) noexcept;
+bool verifyBootstrapManagedViewRollback() noexcept;
 bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept;
 bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
                                     uint32_t protection) noexcept;

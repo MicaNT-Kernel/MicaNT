@@ -1067,6 +1067,10 @@ public:
         bool (*map)(void*, uintptr_t, uint64_t, uint32_t) noexcept {nullptr};
         bool (*unmap)(void*, uintptr_t) noexcept {nullptr};
         bool (*protect)(void*, uintptr_t, uint32_t) noexcept {nullptr};
+        // Failure must leave every leaf unmapped; success maps the whole view.
+        bool (*mapBatch)(void*, uintptr_t, const uint64_t*, size_t, uint32_t) noexcept {nullptr};
+        // Failure must leave the entire view mapped.
+        bool (*unmapBatch)(void*, uintptr_t, size_t) noexcept {nullptr};
     };
 
     ProcessAddressSpace() : nextFreeAddress_(0x0000000100000000ULL) {}
@@ -1285,6 +1289,35 @@ public:
         node->sectionMaxProtection = maxProtection;
         auto* vad = node.get();
         if (!vadTree_.insert(std::move(node))) return NtStatus::Conflict;
+        if (backend_.mapBatch) {
+            std::unique_ptr<VirtualAddressDescriptor::CommitRange> pending;
+            for (size_t i = 0; i < count; ++i) {
+                std::unique_ptr<VirtualAddressDescriptor::CommitRange> page(
+                    new (std::nothrow_t{}) VirtualAddressDescriptor::CommitRange{});
+                if (!page || !pfns[i]) {
+                    if (!vadTree_.remove(start)) ownershipInvariantFailure();
+                    return page ? NtStatus::InvalidParameter : NtStatus::NoMemory;
+                }
+                page->firstVpn = page->lastVpn = (start >> PageShift4KB) + i;
+                page->pfn = pfns[i];
+                page->protection = protect;
+                page->next = std::move(pending);
+                pending = std::move(page);
+            }
+            if (!backend_.mapBatch(backend_.context, start, pfns, count, protect)) {
+                if (!vadTree_.remove(start)) ownershipInvariantFailure();
+                return NtStatus::Unsuccessful;
+            }
+            vad->commitRanges = std::move(pending);
+            vad->commitCharge = count;
+            vad->committed = true;
+            workingSet_.commitCharge += count;
+            workingSet_.residentPages += count;
+            workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
+            workingSet_.peakResidentPages = std::max(workingSet_.peakResidentPages, workingSet_.residentPages);
+            baseAddress = start;
+            return NtStatus::Success;
+        }
         NtStatus failure = NtStatus::Success;
         for (size_t i = 0; i < count; ++i) {
             std::unique_ptr<VirtualAddressDescriptor::CommitRange> page(
@@ -1605,6 +1638,19 @@ private:
         VirtualAddressDescriptor& vad, uint64_t firstVpn = 0,
         uint64_t lastVpn = std::numeric_limits<uint64_t>::max()) noexcept {
         auto& db = PfnDatabase::get();
+        if (vad.isSectionView && backend_.mapBatch && backend_.unmapBatch && firstVpn == 0 &&
+            lastVpn == std::numeric_limits<uint64_t>::max() && vad.commitCharge) {
+            if (!backend_.unmapBatch(backend_.context, vad.startingAddress, vad.pageCount()))
+                return false;
+            if (workingSet_.commitCharge < vad.commitCharge || workingSet_.residentPages < vad.commitCharge)
+                ownershipInvariantFailure();
+            workingSet_.commitCharge -= vad.commitCharge;
+            workingSet_.residentPages -= vad.commitCharge;
+            vad.commitRanges.reset();
+            vad.commitCharge = 0;
+            vad.committed = false;
+            return true;
+        }
         bool success = true;
         auto* link = &vad.commitRanges;
         while (*link) {

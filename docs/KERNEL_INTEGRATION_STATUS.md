@@ -180,8 +180,12 @@ PTE is removed, the VAD disappears and PFN accounting returns to baseline.
 The internal backend also changes view page protections and rejects upgrading a
 view beyond its retained access; a bare-metal QEMU test exercises those changes.
 
-M1 remains open: this service is limited to the bootstrap current-process
-pseudo-handle and the bounded bootstrap address window. A QEMU CPL3 probe
+M1's anonymous-section bootstrap acceptance path is complete: the loaded
+NTDLL exports reach the syscall dispatcher, Ob and hardware-backed Mm, and
+the QEMU tests above cover sharing, protection, unmapping and reclamation.
+This does not establish general NT section compatibility. The service is
+limited to the bootstrap current-process pseudo-handle and bounded bootstrap
+address window. A QEMU CPL3 probe
 also checks nonzero section offsets, 64 KiB rounding and distinct backing pages;
 process handle access checks, normal NTDLL loading and import binding, complete
 argument and protection semantics, a native protection syscall, and a real
@@ -191,13 +195,15 @@ the limited freestanding `SectionObject` implementation. Microsoft contracts:
 [create](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesection),
 [map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmapviewofsection),
 [unmap](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunmapviewofsection).
-If backend unmapping fails while rolling back a failed map, the retained VAD
-keeps its object reference and physical pages. Before the next section mapping,
-Mm retries cleanup without requiring the caller to know the automatically
-selected address; new section mappings fail while cleanup remains blocked.
-QEMU and host tests exercise a temporary unmap failure followed by recovery.
-A persistent backend failure still retains the mapping and backing until the
-backend can remove the PTE or the address space is torn down.
+The active AMD64 backend prepares every page-table level and checks every leaf
+before publishing a view; a failed preparation publishes no leaf. It also
+validates an entire view before unmapping it. QEMU injects allocation failures
+at each page-table level, an invalid PFN, and a conflicting PTE, and verifies
+that existing mappings and PFN accounting remain intact. These operations
+currently rely on the single BSP and disabled interrupts; SMP and TLB
+shootdown remain future work. The generic per-page backend retains a failed
+rollback and retries it before a later section map; a persistent backend
+failure can still retain its mapping and backing.
 ReactOS comparison used `ntoskrnl/mm/section.c` and
 `ntoskrnl/mm/ARM3/section.c` at the revision above.
 
