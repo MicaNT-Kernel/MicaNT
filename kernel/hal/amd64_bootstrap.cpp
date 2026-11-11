@@ -612,6 +612,8 @@ bool verifyRing3Transition() noexcept {
         return false;
     }
     g_userTebPage.teb.self = kUserTebBase;
+    g_userTebPage.teb.uniqueProcessId = 0x11223344;
+    g_userTebPage.teb.uniqueThreadId = 0x55667788;
     // Read CS at CPL=3, verify RPL=3, then enter the kernel via #BP.
     constexpr uint8_t code[]{
         0x8c, 0xc8,             // mov ax, cs
@@ -683,6 +685,12 @@ bool verifyRing3Transition() noexcept {
         0x78, 0x56, 0x34, 0x12,
         0x65, 0x8B, 0x04, 0x25, 0x68, 0x00, 0x00, 0x00,
         0x3D, 0x78, 0x56, 0x34, 0x12,
+        0x75, 0x02,
+        0x65, 0x8B, 0x04, 0x25, 0x40, 0x00, 0x00, 0x00,
+        0x3D, 0x44, 0x33, 0x22, 0x11,
+        0x75, 0x02,
+        0x65, 0x8B, 0x04, 0x25, 0x48, 0x00, 0x00, 0x00,
+        0x3D, 0x88, 0x77, 0x66, 0x55,
         0x75, 0x02, 0xCC, 0x0F, 0x0B,
     };
     for (size_t index = 0; index < sizeof(tebCode); ++index) {
@@ -690,12 +698,14 @@ bool verifyRing3Transition() noexcept {
     }
     g_probeMode = 7;
     g_probeSucceeded = false;
-    g_probeReturnRip = kUserBase + 28;
+    g_probeReturnRip = kUserBase + sizeof(tebCode) - 2;
     cpu::cpuWrmsr(cpu::MSR_GS_BASE, kUserTebBase);
     MicantProbeEnter();
     cpu::cpuWrmsr(cpu::MSR_GS_BASE, 0);
     if (!g_probeSucceeded ||
-        g_userTebPage.teb.lastErrorValue != 0x12345678) {
+        g_userTebPage.teb.lastErrorValue != 0x12345678 ||
+        g_userTebPage.teb.uniqueProcessId != 0x11223344 ||
+        g_userTebPage.teb.uniqueThreadId != 0x55667788) {
         return false;
     }
     __asm__ __volatile__(

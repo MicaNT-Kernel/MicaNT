@@ -134,12 +134,19 @@ export, host DLL or synthetic import trampoline fills those gaps.
 ### Freestanding Kernel32 last-error accessors
 
 The canonical Kernel32 ABI source has a freestanding `kernel32_boot` target
-that exports only `GetLastError` and `SetLastError`. Both access the current
-thread's `TEB64.LastErrorValue` at GS offset `0x68`; compile-time assertions
-pin the corresponding TEB fields at offsets `0x60` and `0x68`. The DLL has no
-external PE imports. The native process loader does not yet initialize a real
-process TEB or GS base; only the isolated CPL3 diagnostic TEB has been
-exercised.
+that exports `GetCurrentProcessId`, `GetCurrentThreadId`, `GetLastError`, and
+`SetLastError`. The ID accessors read `TEB64.UniqueProcessId` / `UniqueThreadId`
+at GS offsets `0x40` / `0x48`; last-error accessors read/write offset `0x68`.
+Compile-time assertions pin these offsets and the PEB pointer at `0x60`. The
+DLL has no external PE imports. The native process loader does not yet
+initialize a real process TEB or GS base; only the isolated CPL3 diagnostic
+TEB has been exercised.
+The API contracts are documented by Microsoft Learn for
+[`GetCurrentProcessId`](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessid),
+[`GetCurrentThreadId`](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentthreadid),
+[`GetLastError`](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-getlasterror),
+and
+[`SetLastError`](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-setlasterror).
 
 Verified:
 
@@ -150,9 +157,9 @@ python3 scripts/verify_kernel_architecture.py
 python3 qemu.py --headless
 ```
 
-Results: passed. LLVM PE inspection confirms the two named exports; headless
-QEMU confirms the isolated TEB GS read/write probe and the existing syscall,
-input, and scanout checks. This does not establish real process TEB
+Results: passed. LLVM PE inspection confirms the four named exports; headless
+QEMU confirms the isolated TEB GS field probe and the existing syscall, input,
+and scanout checks. This does not establish real process TEB
 initialization. The full Explorer preflight still reports 25 missing Kernel32
 exports and 23 missing UCRT exports (48 total); import closure remains
 incomplete.

@@ -163,6 +163,8 @@ struct Teb64 {
 };
 
 static_assert(offsetof(Teb64, processEnvironmentBlock) == 0x60);
+static_assert(offsetof(Teb64, uniqueProcessId) == 0x40);
+static_assert(offsetof(Teb64, uniqueThreadId) == 0x48);
 static_assert(offsetof(Teb64, lastErrorValue) == 0x68);
 
 #pragma pack(pop)

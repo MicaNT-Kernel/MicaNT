@@ -6,6 +6,18 @@ static_assert(sizeof(void*) == 8);
 
 extern "C" {
 
+__declspec(dllexport) uint32_t __stdcall GetCurrentProcessId() noexcept {
+    uint32_t processId = 0;
+    __asm__ __volatile__("movl %%gs:0x40, %0" : "=r"(processId));
+    return processId;
+}
+
+__declspec(dllexport) uint32_t __stdcall GetCurrentThreadId() noexcept {
+    uint32_t threadId = 0;
+    __asm__ __volatile__("movl %%gs:0x48, %0" : "=r"(threadId));
+    return threadId;
+}
+
 __declspec(dllexport) uint32_t __stdcall GetLastError() noexcept {
     uint32_t error = 0;
     __asm__ __volatile__("movl %%gs:0x68, %0" : "=r"(error));
