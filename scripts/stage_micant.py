@@ -6,18 +6,21 @@ import sys
 import paramiko
 import random
 import socket
+from pathlib import Path
+
+from verify_kernel_architecture import validate_build_manifest
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-REPO_ROOT = r"C:\Users\admin\source\MicaNT"
-EFI_SOURCE = os.path.join(REPO_ROOT, r"build\esp\EFI\BOOT\BOOTX64.EFI")
-KRNL_SOURCE = os.path.join(REPO_ROOT, r"build\ntoskrnl.exe")
-VIRTIO_GPU_SOURCE = os.path.join(REPO_ROOT, r"build\virtio_gpu.sys")
-APP_SOURCE = os.path.join(REPO_ROOT, r"build\app.exe")
-BENCH_SOURCE = os.path.join(REPO_ROOT, r"build\bench.exe")
-CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\bin\prismx_3d_cube_app.exe")
+REPO_ROOT = str(Path(__file__).resolve().parents[1])
+EFI_SOURCE = os.path.join(REPO_ROOT, "build", "esp", "EFI", "BOOT", "BOOTX64.EFI")
+KRNL_SOURCE = os.path.join(REPO_ROOT, "build", "baremetal", "ntoskrnl.exe")
+VIRTIO_GPU_SOURCE = os.path.join(REPO_ROOT, "build", "virtio_gpu.sys")
+APP_SOURCE = os.path.join(REPO_ROOT, "build", "app.exe")
+BENCH_SOURCE = os.path.join(REPO_ROOT, "build", "bench.exe")
+CUBE_SOURCE = os.path.join(REPO_ROOT, "build", "bin", "prismx_3d_cube_app.exe")
 if not os.path.exists(CUBE_SOURCE):
-    CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\prismx_3d_cube_app.exe")
+    CUBE_SOURCE = os.path.join(REPO_ROOT, "build", "prismx_3d_cube_app.exe")
 
 HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
 USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
@@ -343,31 +346,9 @@ def run_local_build():
     sz = os.path.getsize(EFI_SOURCE)
     print(f"      BOOTX64.EFI Compiled OK ({sz:,} bytes)")
 
-    cmd_krnl = [
-        "clang++",
-        "-target", "x86_64-w64-mingw32",
-        "-std=c++23",
-        "-ffreestanding",
-        "-fno-exceptions",
-        "-fno-rtti",
-        "-fno-threadsafe-statics",
-        "-fno-stack-protector",
-        "-mno-red-zone",
-        "-mno-stack-arg-probe",
-        "-O2",
-        "-Iinclude",
-        "-Wl,--subsystem,native",
-        "-Wl,-e,KiSystemStartup",
-        "-nostdlib",
-        "kernel/init/ntoskrnl.cpp",
-        "-o", "build/ntoskrnl.exe"
-    ]
-    res_k = subprocess.run(cmd_krnl, cwd=REPO_ROOT, capture_output=True, text=True)
-    if res_k.returncode != 0:
-        print(f"[FATAL] ntoskrnl.exe build failed:\n{res_k.stderr}")
-        sys.exit(1)
+    validate_build_manifest(Path(REPO_ROOT))
     sz_k = os.path.getsize(KRNL_SOURCE)
-    print(f"      ntoskrnl.exe Compiled OK ({sz_k:,} bytes)")
+    print(f"      Modular ntoskrnl.exe verified ({sz_k:,} bytes)")
 
     cmd_gpu = [
         "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23",
@@ -639,7 +620,7 @@ def get_ssh():
     raise RuntimeError('Could not connect')
 
 def exec_sudo(ssh, cmd):
-    sudo_pass = os.environ.get("MICANT_SUDO_PASS", "Fairfield866")
+    sudo_pass = os.environ.get("MICANT_SUDO_PASS", "")
     if sudo_pass:
         full_cmd = f"echo {sudo_pass} | sudo -S bash -c {cmd!r}"
     else:
@@ -667,7 +648,7 @@ def main():
     sftp.put(BENCH_SOURCE, "/tmp/bench.exe")
     if os.path.exists(CUBE_SOURCE):
         sftp.put(CUBE_SOURCE, "/tmp/prismx_3d_cube_app.exe")
-    surshell_path = os.path.join(REPO_ROOT, r"build\surshell.exe")
+    surshell_path = os.path.join(REPO_ROOT, "build", "surshell.exe")
     if not os.path.exists(surshell_path):
         alt_surshell = r"C:\Users\admin\source\SurShell\build\bin\surshell_app.exe"
         if os.path.exists(alt_surshell):

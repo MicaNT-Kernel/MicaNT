@@ -252,9 +252,9 @@ try {
     }
 
     if ($BuildKernel -or $BuildEfi) {
-        Write-Host "[MicaNT Build] Building Standalone PE32+ Kernel (build/ntoskrnl.exe)..."
-        & clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,native" "-Wl,-e,KiSystemStartup" -nostdlib kernel/init/ntoskrnl.cpp -o build/ntoskrnl.exe
-        if ($LASTEXITCODE -ne 0) { throw "Failed building ntoskrnl.exe" }
+        Write-Host "[MicaNT Build] Building modular bare-metal kernel target..."
+        & cmake --build build --target ntoskrnl_core_baremetal
+        if ($LASTEXITCODE -ne 0) { throw "Failed building the modular ntoskrnl_core bare-metal target" }
 
         Write-Host "[MicaNT Build] Building standalone boot-start display driver (build/virtio_gpu.sys)..."
         & clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -fno-builtin -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,native" "-Wl,-e,DriverEntry" -nostdlib drivers/virtio_gpu/virtio_gpu.cpp -o build/virtio_gpu.sys

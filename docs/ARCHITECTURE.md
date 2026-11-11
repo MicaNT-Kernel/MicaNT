@@ -1,5 +1,9 @@
 # MicaNT Kernel & Subsystem Architecture Specification
 
+> This document is a subsystem catalog. For the authoritative active-kernel
+> design, build targets, boot status, and migration policy, see
+> [KERNEL_ARCHITECTURE.md](KERNEL_ARCHITECTURE.md).
+
 ## 1. Canonical Source Tree Hierarchy (`base/ntos` & `WDK` Layout)
 
 MicaNT enforces a strict separation between **Kernel-Mode (`km`)**, **User-Mode (`um`)**, **Mode-Neutral Shared Contracts (`shared`)**, and **Compiled Kernel Subsystems (`kernel/`)**. Zero loose files are permitted in root directories; this invariant is verified on every commit by `scripts/clean_room_sentinel.js`.
@@ -7,7 +11,7 @@ MicaNT enforces a strict separation between **Kernel-Mode (`km`)**, **User-Mode 
 | Layer | Path | Responsibility |
 | :--- | :--- | :--- |
 | **UEFI Bootloader** | `boot/bootx64.cpp` | Bare-metal UEFI GOP framebuffer setup, memory map ingestion, Loader Parameter Block (`LPB`) construction, and Ring-0 handover. |
-| **Kernel Init** | `kernel/init/kiinit.cpp` | `KiSystemStartup`, Phase 0 & Phase 1 Executive initialization, SMP bring-up, and Boot Video splash. |
+| **Kernel Init** | `kernel/init/kiinit.cpp` | Hosted initialization harness; not a freestanding kernel entry. |
 | **Microkernel (`Ke`)** | `kernel/ke/`, `include/micant/km/core/` | IRQL state machine, 32-queue scheduler, DPC/APC queues, Wait blocks, Timers, Trap/Exception frames (`trap.hpp`), Kernel Debugger (`kd.hpp`), and SSDT (`dispatcher.cpp`). |
 | **Executive (`Ex`, `Ob`, `Mm`, `Io`, `Cc`, `Ps`, `Se`, `Cm`, `Lpc`, `PnP`, `Po`)** | `kernel/{ex,ob,mm,io,cc,ps,se,cm,lpc,pnp,po}/`, `include/micant/km/executive/` | Pool allocator (`NonPagedPool`/`PagedPool`), Object Manager namespace & handle tables, VAD/PFN Memory Manager, I/O Manager & Filter Manager (`fltmgr.hpp`), 256 KB VACB Cache Manager (`cc.hpp`), Process/Thread/Job Manager, Security Reference Monitor, Registry Hive Configuration Manager, ALPC, KMDF (`wdf.hpp`), PnP, Power, and Crash Dump/BugCheck engine (`bugcheck.hpp`). |
 | **HAL (`Hal`)** | `kernel/hal/`, `include/micant/km/hal/` | KPCR/KPRCB (`GS:[0]`), Local APIC / IOAPIC / HPET, ACPI 6.5 AML interpreter (`acpi.hpp`), PCIe Root Complex (`pci.hpp`), IOMMU (`iommu.hpp`), UEFI Runtime Services, and ARM64 VMSA (`arm64.hpp`). |
@@ -44,4 +48,3 @@ MicaNT ships with a **334-suite automated verification battery** (118 Horizons, 
 ## 4. Bare-Metal Silicon Hardware Verification
 
 MicaNT is validated on real physical hardware (Intel Xeon E3-1270 v6, Supermicro X11SSH-F / Intel S1200SP, ASPEED AST2400 GOP framebuffer). For complete architectural details on hardware MSR cycle counters (`IA32_MPERF` MSR `0xE7`), ACPI MADT multi-core APIC topology normalization, and vectorized GOP MMIO burst fills, see [`docs/BAREMETAL_TELEMETRY.md`](BAREMETAL_TELEMETRY.md).
-

@@ -17,6 +17,11 @@
 
 ---
 
+> **Kernel status:** MicaNT is consolidating on one modular kernel. The
+> standalone kernel source is archived and is not a supported build or boot
+> path. Modular bare-metal boot has not yet been verified; see the authoritative
+> [kernel architecture and migration status](docs/KERNEL_ARCHITECTURE.md).
+
 <p align="center">
   <img src="docs/bootscreen_splash.png" alt="MicaNT UEFI Boot Splash" width="420">
   &nbsp;&nbsp;
@@ -299,7 +304,7 @@ MicaNT/
 ├── boot/
 │   └── bootx64.cpp             # Freestanding UEFI GOP bootloader & Ring-0 handover
 ├── kernel/                     # Modular NT Executive & Microkernel (.cpp units -> ntoskrnl_core)
-│   ├── init/kiinit.cpp         # KiSystemStartup, LPB ingestion & Phase 0/1 executive init
+│   ├── init/kiinit.cpp         # Hosted initialization harness; not a freestanding kernel entry
 │   ├── ke/                     # dispatcher.cpp (SSDT), wait.cpp (Wait blocks, Timers, Delays)
 │   ├── mm/                     # virtual.cpp (VAD virtual memory & Section objects)
 │   ├── io/                     # iomgr.cpp (IRP dispatch, File/Device I/O, Named Pipes, IOCP)
@@ -341,6 +346,11 @@ MicaNT/
 cmake -B build -G Ninja
 cmake --build build
 ```
+
+`micant_kernel` is currently a hosted harness and must not be interpreted as a
+bare-metal kernel boot. The modular Native PE target and QEMU/OVMF boot remain
+unimplemented; see [docs/KERNEL_ARCHITECTURE.md](docs/KERNEL_ARCHITECTURE.md)
+for the verified status and migration criteria.
 
 ### Run the 258-Suite Verification Battery & Clean-Room Sentinel
 ```powershell
@@ -386,5 +396,4 @@ We welcome community participation, technical discussions, and contributions!
 - **[CONTRIBUTING.md](CONTRIBUTING.md)**: Clean-room engineering rules, developer workflow, and Microsoft OSPO authorized contribution channel.
 - **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**: Contributor Covenant v2.1 standards for a welcoming, respectful, and harassment-free community.
 - **[Security Policy](.github/SECURITY.md)**: Responsible disclosure and vulnerability reporting process.
-
 
