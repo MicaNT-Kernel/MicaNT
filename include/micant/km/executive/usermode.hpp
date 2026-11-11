@@ -160,12 +160,18 @@ struct Teb64 {
     uint32_t currentLocale{0x0409}; // en-US
     uint32_t fpSoftwareStatusRegister{0};
     uint64_t reservedForDebuggerInstrumentation[16]{0};
+    uint8_t reservedToTlsSlots[0x1480 - 0x18C]{};
+    uint64_t tlsSlots[64]{};
+    uint8_t reservedToTlsExpansionSlots[0x100]{};
+    uint64_t tlsExpansionSlots{0};
 };
 
 static_assert(offsetof(Teb64, processEnvironmentBlock) == 0x60);
 static_assert(offsetof(Teb64, uniqueProcessId) == 0x40);
 static_assert(offsetof(Teb64, uniqueThreadId) == 0x48);
 static_assert(offsetof(Teb64, lastErrorValue) == 0x68);
+static_assert(offsetof(Teb64, tlsSlots) == 0x1480);
+static_assert(offsetof(Teb64, tlsExpansionSlots) == 0x1780);
 
 #pragma pack(pop)
 

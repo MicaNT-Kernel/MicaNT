@@ -37,6 +37,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Display] Desktop presented through virtio_gpu.sys",
     "[MicaNT Explorer] Desktop and taskbar rendered",
     "[MicaNT Ps] CPL3 execution and Ring 0 trap return verified",
+    "[MicaNT Ps] GS-based TEB TLS slot read/write verified",
     "[MicaNT Mm] User/kernel isolation and read-only user code verified",
     "[MicaNT Mm] Supervisor MMIO and non-executable user stack verified",
     "[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified",

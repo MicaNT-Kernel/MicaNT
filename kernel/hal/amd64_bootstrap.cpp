@@ -21,12 +21,12 @@ uint64_t g_deviceNext = kDeviceBase;
 bool g_addressSpaceReady{};
 alignas(4096) uint8_t g_userCode[4096]{};
 alignas(4096) uint8_t g_userStack[4096]{};
-struct alignas(4096) BootstrapTebPage {
+struct alignas(4096) BootstrapTebStorage {
     micant::um::Teb64 teb{};
-    uint8_t padding[4096 - sizeof(micant::um::Teb64)]{};
+    uint8_t padding[8192 - sizeof(micant::um::Teb64)]{};
 };
-static_assert(sizeof(BootstrapTebPage) == 4096);
-BootstrapTebPage g_userTebPage{};
+static_assert(sizeof(BootstrapTebStorage) == 8192);
+BootstrapTebStorage g_userTebStorage{};
 alignas(4096) uint8_t g_nativeProbeImage[8192]{};
 uint8_t g_nativeProbeFile[512 + 4096]{};
 micant::um::NativeUserImageSet64 g_nativeProbeModules{};
@@ -607,13 +607,16 @@ bool verifyRing3Transition() noexcept {
         !mapPage(kUserBase, reinterpret_cast<uint64_t>(g_userCode), kUser) ||
         !mapPage(kUserBase + 4096, reinterpret_cast<uint64_t>(g_userStack),
                  kUser | kWritable | kNoExecute) ||
-        !mapPage(kUserTebBase, reinterpret_cast<uint64_t>(&g_userTebPage),
+        !mapPage(kUserTebBase, reinterpret_cast<uint64_t>(&g_userTebStorage),
+                 kUser | kWritable | kNoExecute) ||
+        !mapPage(kUserTebBase + 4096,
+                 reinterpret_cast<uint64_t>(&g_userTebStorage) + 4096,
                  kUser | kWritable | kNoExecute)) {
         return false;
     }
-    g_userTebPage.teb.self = kUserTebBase;
-    g_userTebPage.teb.uniqueProcessId = 0x11223344;
-    g_userTebPage.teb.uniqueThreadId = 0x55667788;
+    g_userTebStorage.teb.self = kUserTebBase;
+    g_userTebStorage.teb.uniqueProcessId = 0x11223344;
+    g_userTebStorage.teb.uniqueThreadId = 0x55667788;
     // Read CS at CPL=3, verify RPL=3, then enter the kernel via #BP.
     constexpr uint8_t code[]{
         0x8c, 0xc8,             // mov ax, cs
@@ -686,6 +689,11 @@ bool verifyRing3Transition() noexcept {
         0x65, 0x8B, 0x04, 0x25, 0x68, 0x00, 0x00, 0x00,
         0x3D, 0x78, 0x56, 0x34, 0x12,
         0x75, 0x02,
+        0x65, 0x48, 0xC7, 0x04, 0x25, 0x80, 0x14, 0x00, 0x00,
+        0x78, 0x56, 0x34, 0x12,
+        0x65, 0x8B, 0x04, 0x25, 0x80, 0x14, 0x00, 0x00,
+        0x3D, 0x78, 0x56, 0x34, 0x12,
+        0x75, 0x02,
         0x65, 0x8B, 0x04, 0x25, 0x40, 0x00, 0x00, 0x00,
         0x3D, 0x44, 0x33, 0x22, 0x11,
         0x75, 0x02,
@@ -703,9 +711,10 @@ bool verifyRing3Transition() noexcept {
     MicantProbeEnter();
     cpu::cpuWrmsr(cpu::MSR_GS_BASE, 0);
     if (!g_probeSucceeded ||
-        g_userTebPage.teb.lastErrorValue != 0x12345678 ||
-        g_userTebPage.teb.uniqueProcessId != 0x11223344 ||
-        g_userTebPage.teb.uniqueThreadId != 0x55667788) {
+        g_userTebStorage.teb.lastErrorValue != 0x12345678 ||
+        g_userTebStorage.teb.tlsSlots[0] != 0x12345678 ||
+        g_userTebStorage.teb.uniqueProcessId != 0x11223344 ||
+        g_userTebStorage.teb.uniqueThreadId != 0x55667788) {
         return false;
     }
     __asm__ __volatile__(

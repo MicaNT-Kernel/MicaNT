@@ -15,8 +15,11 @@ specification. The compatibility inventory is
 - Hardware syscall entry with a kernel stack, register/SIMD preservation,
   bounded user-buffer checks and actual user-originated VirtIO presentation.
 - Isolated CPL3 TEB/GS probe: user code writes and reads
-  `TEB64.LastErrorValue` at GS offset `0x68`; the kernel verifies the value
-  after a checked ring transition.
+  `TEB64.LastErrorValue` at GS offset `0x68` and `TlsSlots[0]` at `0x1480`;
+  compile-time layout assertions and the boot harness verify both accesses
+  after a checked ring transition. The diagnostic TEB is mapped in two user,
+  writable, NX pages; this does not initialize a process's TLS allocation map
+  or static TLS template.
 - Polled PS/2 cursor movement and click delivery; QMP pixel/input checks pass.
 - Original bounded PE diagnostic mapped by the canonical native loader and
   entered at CPL3. This is not a process, DLL startup, or Explorer.
