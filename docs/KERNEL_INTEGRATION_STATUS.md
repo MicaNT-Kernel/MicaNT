@@ -63,6 +63,21 @@ presenting a simulated success.
 | `python3 qemu.py --check-explorer` | Boundary checks and PE linking passed; runtime import-closure validation then failed on unresolved Kernel32/UCRT exports. Explorer is not yet runnable |
 | `python3 qemu.py --headless` | Passed; modular boot, scanout and PS/2 movement/click validation |
 
+### Explorer software GDI increment
+
+The user-mode Win32k client now provides bounded DIB/compatible-bitmap
+surfaces, compatible memory DCs, bitmap selection, clipped `SRCCOPY` BitBlt,
+and presentation through the kernel's validated user-buffer service. Pixel
+storage is fixed-capacity; unsupported stock objects, other raster operations,
+and invalid handles fail explicitly. This is software composition/presentation,
+not GPU-accelerated composition, a full GDI implementation, or proof that
+Explorer has executed as a process.
+
+| Command | Result |
+|---|---|
+| `cmake --build build/qemu-cmake-mingw --config Release --target explorer_runtime_boot` | Passed; Win32k/User32/GDI32/IMM32 and Explorer PE linked, and all user/kernel boundary checks passed |
+| `python3 qemu.py --headless` | Passed before the software GDI addition; QEMU does not yet execute the generated Explorer PE |
+
 The runner invokes the affected build before staging and validates the exact
 kernel/bootloader/driver artifact set. An up-to-date Ninja result is not a
 substitute for those checks. Host tests and PE linking do not establish boot
