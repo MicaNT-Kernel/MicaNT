@@ -2752,12 +2752,13 @@ void Test_Ntdll_SyscallStubsAndPebTeb() {
     uintptr_t testVmBase = 0;
     size_t testVmSize = 4096;
     NtStatus vmAllocStatus = ntdll::NtAllocateVirtualMemory(
-        0, &testVmBase, 0, &testVmSize, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE
+        InvalidHandleValue, &testVmBase, 0, &testVmSize, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE
     );
     TEST_ASSERT(NT_SUCCESS(vmAllocStatus), "NtAllocateVirtualMemory userland stub must succeed");
     TEST_ASSERT(testVmBase != 0, "Allocated base address must be non-zero");
 
-    NtStatus vmFreeStatus = ntdll::NtFreeVirtualMemory(0, &testVmBase, &testVmSize, mm::MEM_RELEASE);
+    testVmSize = 0;
+    NtStatus vmFreeStatus = ntdll::NtFreeVirtualMemory(InvalidHandleValue, &testVmBase, &testVmSize, mm::MEM_RELEASE);
     TEST_ASSERT(NT_SUCCESS(vmFreeStatus), "NtFreeVirtualMemory userland stub must succeed");
 
     // 5. Test Delay Execution Syscall Stub

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +17,22 @@
 #include "micant/km/executive/ps.hpp"
 
 namespace micant::section {
+
+#if defined(MICANT_FREESTANDING)
+class SectionMutex {
+public:
+    void lock() noexcept {
+        // Bootstrap-only, as with the Mm locks: interrupts must be disabled.
+        while (flag_.test_and_set(std::memory_order_acquire)) {}
+    }
+    void unlock() noexcept { flag_.clear(std::memory_order_release); }
+
+private:
+    std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
+};
+#else
+using SectionMutex = std::mutex;
+#endif
 
 // ============================================================================
 // 1. Section Access Rights (NT Standard)
@@ -133,7 +150,15 @@ struct CONTROL_AREA {
     // Coherent Backing Memory
     std::vector<uint8_t> backingStore;
 
-    mutable std::mutex mutex;
+    mutable SectionMutex mutex;
+
+    // The PFN database must outlive the control area and all retained references.
+    ~CONTROL_AREA() {
+        for (const auto& entry : sharedPfnMap) {
+            mm::PfnDatabase::get().freePage(entry.second);
+        }
+        if (segment) segment->controlArea = nullptr;
+    }
 };
 
 // ============================================================================
@@ -165,6 +190,17 @@ public:
         allocationAttributes_(allocationAttributes),
         pageProtection_(pageProtection)
     {
+#if defined(MICANT_FREESTANDING)
+        if (maximumSize == 0) {
+            initializationStatus_ = NtStatus::InvalidParameter;
+            return;
+        }
+        if (allocationAttributes != SEC_COMMIT || fileObject || !backingPath.empty() ||
+            (pageProtection != mm::PAGE_READONLY && pageProtection != mm::PAGE_READWRITE)) {
+            initializationStatus_ = NtStatus::NotImplemented;
+            return;
+        }
+#endif
         controlArea_ = std::make_shared<CONTROL_AREA>();
         segment_ = std::make_shared<SEGMENT>();
 
@@ -181,11 +217,14 @@ public:
         controlArea_->isWriteCombined = (allocationAttributes & SEC_WRITECOMBINE) != 0;
         controlArea_->numberOfSectionReferences = 1;
 
+#if !defined(MICANT_FREESTANDING)
         if (maximumSize_ > 0) {
             controlArea_->backingStore.resize(maximumSize_, 0);
         }
+#endif
 
-        size_t pageCount = (maximumSize_ + mm::PageMask4KB) / mm::PageSize4KB;
+        size_t pageCount = maximumSize_ / mm::PageSize4KB +
+                           (maximumSize_ % mm::PageSize4KB != 0);
         segment_->totalNumberOfPtes = pageCount;
         segment_->sizeOfSegment = maximumSize_;
         segment_->prototypePtes.resize(pageCount);
@@ -193,8 +232,23 @@ public:
         if (controlArea_->isCommit) {
             auto& pfnDb = mm::PfnDatabase::get();
             for (size_t i = 0; i < pageCount; ++i) {
+                auto [entry, inserted] = controlArea_->sharedPfnMap.try_emplace(i, 0);
+                (void)inserted;
                 uint64_t pfn = pfnDb.allocatePage(true);
-                controlArea_->sharedPfnMap[i] = pfn;
+                entry->second = pfn;
+                bool initialized = pfn != 0;
+#if defined(MICANT_FREESTANDING)
+                if (initialized) initialized = pfnDb.zeroAllocatedPage(pfn);
+#endif
+                if (!initialized) {
+                    for (const auto& entry : controlArea_->sharedPfnMap)
+                        pfnDb.freePage(entry.second);
+                    controlArea_->sharedPfnMap.clear();
+                    std::fill(segment_->prototypePtes.begin(), segment_->prototypePtes.end(),
+                              PROTOTYPE_PTE{});
+                    initializationStatus_ = pfn == 0 ? NtStatus::NoMemory : NtStatus::Unsuccessful;
+                    return;
+                }
                 segment_->prototypePtes[i].pfn = pfn;
                 segment_->prototypePtes[i].valid = true;
                 segment_->prototypePtes[i].protection = pageProtection_;
@@ -206,31 +260,37 @@ public:
         }
     }
 
-    ~SectionObject() {
-        if (controlArea_) {
-            auto& pfnDb = mm::PfnDatabase::get();
-            for (const auto& [pageIdx, pfn] : controlArea_->sharedPfnMap) {
-                pfnDb.freePage(pfn);
-            }
-            controlArea_->sharedPfnMap.clear();
-        }
-    }
-
     [[nodiscard]] size_t getSize() const noexcept { return maximumSize_; }
+    [[nodiscard]] NtStatus getInitializationStatus() const noexcept { return initializationStatus_; }
     [[nodiscard]] uint32_t getAllocationAttributes() const noexcept { return allocationAttributes_; }
     [[nodiscard]] uint32_t getPageProtection() const noexcept { return pageProtection_; }
 
     [[nodiscard]] uint8_t* getData() noexcept {
+#if defined(MICANT_FREESTANDING)
+        return nullptr;
+#else
         return controlArea_ ? controlArea_->backingStore.data() : nullptr;
+#endif
     }
     [[nodiscard]] const uint8_t* getData() const noexcept {
+#if defined(MICANT_FREESTANDING)
+        return nullptr;
+#else
         return controlArea_ ? controlArea_->backingStore.data() : nullptr;
+#endif
     }
 
-    void loadData(const void* src, size_t size) {
-        if (!src || size == 0 || !controlArea_) return;
+    NtStatus loadData(const void* src, size_t size) {
+#if defined(MICANT_FREESTANDING)
+        (void)src;
+        (void)size;
+        return NtStatus::NotImplemented;
+#else
+        if (!src || size == 0 || !controlArea_) return NtStatus::InvalidParameter;
         size_t copySize = std::min(size, maximumSize_);
         std::memcpy(controlArea_->backingStore.data(), src, copySize);
+        return NtStatus::Success;
+#endif
     }
 
     [[nodiscard]] std::shared_ptr<CONTROL_AREA> getControlArea() const noexcept { return controlArea_; }
@@ -243,7 +303,7 @@ public:
     }
 
     void addView(const SECTION_VIEW& view) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         views_.push_back(view);
         if (controlArea_) {
             controlArea_->numberOfMappedViews++;
@@ -251,7 +311,7 @@ public:
     }
 
     bool removeView(ps::EProcess* process, uintptr_t baseAddress) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         auto it = std::find_if(views_.begin(), views_.end(), [&](const SECTION_VIEW& v) {
             return v.process == process && v.baseAddress == baseAddress;
         });
@@ -266,7 +326,7 @@ public:
     }
 
     SECTION_VIEW* findView(ps::EProcess* process, uintptr_t baseAddress) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         for (auto& v : views_) {
             if (v.process == process && v.baseAddress == baseAddress) {
                 return &v;
@@ -278,19 +338,33 @@ public:
     const std::vector<SECTION_VIEW>& getMappedViews() const noexcept { return views_; }
 
     NtStatus read(uint64_t offset, void* buffer, size_t size) {
+#if defined(MICANT_FREESTANDING)
+        (void)offset;
+        (void)buffer;
+        (void)size;
+        return NtStatus::NotImplemented;
+#else
         if (!buffer || size == 0) return NtStatus::InvalidParameter;
-        if (offset + size > maximumSize_) return NtStatus::InvalidParameter;
-        std::lock_guard<std::mutex> lock(controlArea_->mutex);
+        if (offset > maximumSize_ || size > maximumSize_ - offset) return NtStatus::InvalidParameter;
+        std::lock_guard<SectionMutex> lock(controlArea_->mutex);
         std::memcpy(buffer, controlArea_->backingStore.data() + offset, size);
         return NtStatus::Success;
+#endif
     }
 
     NtStatus write(uint64_t offset, const void* buffer, size_t size) {
+#if defined(MICANT_FREESTANDING)
+        (void)offset;
+        (void)buffer;
+        (void)size;
+        return NtStatus::NotImplemented;
+#else
         if (!buffer || size == 0) return NtStatus::InvalidParameter;
-        if (offset + size > maximumSize_) return NtStatus::InvalidParameter;
-        std::lock_guard<std::mutex> lock(controlArea_->mutex);
+        if (offset > maximumSize_ || size > maximumSize_ - offset) return NtStatus::InvalidParameter;
+        std::lock_guard<SectionMutex> lock(controlArea_->mutex);
         std::memcpy(controlArea_->backingStore.data() + offset, buffer, size);
         return NtStatus::Success;
+#endif
     }
 
 private:
@@ -336,11 +410,12 @@ private:
     size_t maximumSize_{0};
     uint32_t allocationAttributes_{0};
     uint32_t pageProtection_{0};
+    NtStatus initializationStatus_{NtStatus::Success};
     std::shared_ptr<CONTROL_AREA> controlArea_;
     std::shared_ptr<SEGMENT> segment_;
     SECTION_IMAGE_INFORMATION imageInfo_{};
     std::vector<SECTION_VIEW> views_;
-    mutable std::mutex mutex_;
+    mutable SectionMutex mutex_;
 };
 
 // ============================================================================
@@ -378,8 +453,13 @@ public:
             return NtStatus::InvalidParameter;
         }
 
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         outSection = std::make_shared<SectionObject>(maximumSize, allocationAttributes, pageProtection);
+        if (!NT_SUCCESS(outSection->getInitializationStatus())) {
+            NtStatus status = outSection->getInitializationStatus();
+            outSection.reset();
+            return status;
+        }
         activeSections_.push_back(outSection);
         telemetry_.totalSectionsCreated++;
         telemetry_.totalActiveSections++;
@@ -409,8 +489,13 @@ public:
     ) {
         if (maximumSize == 0) return NtStatus::InvalidParameter;
         uint32_t attrs = allocationAttributes | SEC_FILE;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         outSection = std::make_shared<SectionObject>(maximumSize, attrs, pageProtection, fileObject, filePath);
+        if (!NT_SUCCESS(outSection->getInitializationStatus())) {
+            NtStatus status = outSection->getInitializationStatus();
+            outSection.reset();
+            return status;
+        }
         activeSections_.push_back(outSection);
         telemetry_.totalSectionsCreated++;
         telemetry_.totalActiveSections++;
@@ -436,6 +521,7 @@ public:
         SECTION_INHERIT inherit = SECTION_INHERIT::ViewShare
     ) {
         if (!section) return NtStatus::InvalidHandle;
+        if (!NT_SUCCESS(section->getInitializationStatus())) return section->getInitializationStatus();
 
         if (sectionOffset >= section->getSize()) return NtStatus::InvalidParameter;
         size_t mappedSize = viewSize;
@@ -452,7 +538,8 @@ public:
             effectiveProtect,
             section->getControlArea()->sharedPfnMap,
             section.get(),
-            sectionOffset
+            sectionOffset,
+            section
         );
 
         if (NT_SUCCESS(status)) {
@@ -468,7 +555,7 @@ public:
                 .privateCowData = {}
             };
             section->addView(view);
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<SectionMutex> lock(mutex_);
             telemetry_.totalMappedViews++;
         }
 
@@ -476,7 +563,7 @@ public:
     }
 
     NtStatus unmapViewOfSection(ps::EProcess& targetProcess, uintptr_t baseAddress) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         for (auto& sec : activeSections_) {
             if (sec && sec->removeView(&targetProcess, baseAddress)) {
                 if (telemetry_.totalMappedViews > 0) telemetry_.totalMappedViews--;
@@ -494,7 +581,7 @@ public:
         size_t size
     ) {
         if (!buffer || size == 0) return NtStatus::InvalidParameter;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         for (auto& sec : activeSections_) {
             if (!sec) continue;
             auto* view = sec->findView(&process, baseAddress);
@@ -519,7 +606,7 @@ public:
         size_t size
     ) {
         if (!buffer || size == 0) return NtStatus::InvalidParameter;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         for (auto& sec : activeSections_) {
             if (!sec) continue;
             auto* view = sec->findView(&process, baseAddress);
@@ -550,7 +637,7 @@ public:
         uintptr_t baseAddress,
         size_t regionSize
     ) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         for (auto& sec : activeSections_) {
             if (!sec) continue;
             auto* view = sec->findView(&process, baseAddress);
@@ -564,12 +651,12 @@ public:
     }
 
     [[nodiscard]] SECTION_TELEMETRY getTelemetry() const noexcept {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         return telemetry_;
     }
 
     void resetForTesting() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<SectionMutex> lock(mutex_);
         activeSections_.clear();
         telemetry_ = SECTION_TELEMETRY{};
     }
@@ -579,7 +666,7 @@ private:
 
     std::vector<std::shared_ptr<SectionObject>> activeSections_;
     SECTION_TELEMETRY telemetry_{};
-    mutable std::mutex mutex_;
+    mutable SectionMutex mutex_;
 };
 
 // ============================================================================

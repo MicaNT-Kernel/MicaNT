@@ -570,6 +570,9 @@ struct VirtualAddressDescriptor {
     bool      isGuardPage{false};
     bool      isSectionView{false};
     void*     sectionContext{nullptr};
+#if !defined(MICANT_FREESTANDING)
+    std::shared_ptr<void> sectionOwner;
+#endif
     uint64_t  sectionOffset{0};
     size_t    commitCharge{0};
 
@@ -1108,9 +1111,9 @@ public:
         uintptr_t targetAddr = baseAddress;
         if (targetAddr == 0) {
             bool topDown = (allocationType & MEM_TOP_DOWN) != 0;
-            targetAddr = vadTree_.findFreeRange(alignedSize, PageSize4KB, topDown, nextFreeAddress_, UserSpaceMax);
+            targetAddr = vadTree_.findFreeRange(alignedSize, AllocationGranularity, topDown, nextFreeAddress_, UserSpaceMax);
             if (targetAddr == 0) {
-                targetAddr = vadTree_.findFreeRange(alignedSize, PageSize4KB, topDown, UserSpaceMin, UserSpaceMax);
+                targetAddr = vadTree_.findFreeRange(alignedSize, AllocationGranularity, topDown, UserSpaceMin, UserSpaceMax);
             }
             if (targetAddr == 0) {
                 return NtStatus::NoMemory;
@@ -1150,7 +1153,8 @@ public:
         uint32_t protect,
         const std::unordered_map<size_t, uint64_t>& sharedPfns,
         void* sectionContext = nullptr,
-        uint64_t sectionOffset = 0
+        uint64_t sectionOffset = 0,
+        std::shared_ptr<void> sectionOwner = {}
     ) {
         Guard lock(*this);
         if (backend_.map) return NtStatus::NotImplemented;
@@ -1188,6 +1192,11 @@ public:
         vad->commitCharge = vad->pageCount();
         vad->isSectionView = true;
         vad->sectionContext = sectionContext;
+#if !defined(MICANT_FREESTANDING)
+        vad->sectionOwner = std::move(sectionOwner);
+#else
+        (void)sectionOwner;
+#endif
         vad->sectionOffset = sectionOffset;
 
         auto& pfnDb = PfnDatabase::get();

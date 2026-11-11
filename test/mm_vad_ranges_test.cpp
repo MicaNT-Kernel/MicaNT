@@ -88,10 +88,10 @@ int main() {
     ProcessAddressSpace top;
     uintptr_t high = 0;
     assert(top.allocate(high, page, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE) == NtStatus::Success);
-    assert(high == max - page + 1);
+    assert(high == (max & ~(ProcessAddressSpace::AllocationGranularity - 1)));
     uintptr_t high2 = 0;
     assert(top.allocate(high2, page, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE) == NtStatus::Success);
-    assert(high2 == high - page);
+    assert(high2 == high - ProcessAddressSpace::AllocationGranularity);
 
     ProcessAddressSpace reverse;
     uintptr_t mapped = hint;
@@ -100,7 +100,7 @@ int main() {
     assert(reverse.allocate(reserve, 2 * page, MEM_RESERVE, PAGE_READWRITE) == NtStatus::Conflict);
     uintptr_t autoReserve = 0;
     assert(reverse.allocate(autoReserve, page, MEM_COMMIT, PAGE_READWRITE) == NtStatus::Success);
-    assert(autoReserve == hint + 2 * page);
+    assert(autoReserve == hint + ProcessAddressSpace::AllocationGranularity);
 
     ProcessAddressSpace deletion;
     uintptr_t middle = hint + page, left = hint, right = hint + 2 * page;

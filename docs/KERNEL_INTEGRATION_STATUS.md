@@ -119,6 +119,52 @@ Structural comparison used ReactOS commit
 `ntoskrnl/mm/ARM3/vadnode.c` and `ntoskrnl/mm/ARM3/virtual.c`; the MicaNT
 implementation is independent.
 
+#### Hosted virtual-memory service boundary
+
+The hosted native service currently uses a single private
+`ProcessAddressSpace` model, not a process-bound baremetal address space.
+It accepts the current-process pseudo-handle, zero `ZeroBits`, and read-only or
+read-write protection; unsupported cases fail explicitly. The hosted model
+does not provide real accessible user mappings. Its current protect and
+decommit service wrappers support only a whole VAD. The native dispatcher has
+no protect registration, and the freestanding bootstrap does not link or
+dispatch `kernel/mm/virtual.cpp`.
+
+The separate System32 ABI entrypoints still use a shared arena and `calloc`,
+respectively, not this address space or the real syscall path. Their existing
+audit is therefore not evidence of canonical VM integration. Some other hosted
+tests still use a zero process handle or nonzero release size and need to be
+updated rather than relying on the old service behavior.
+
+The hosted Win32 bridge rejects zero sizes before reservation rounding and
+requires 64 KiB-aligned reservation results. If a broken allocator returns an
+unaligned reservation, the bridge attempts release; it reports the release
+failure through `GetLastError`, or `ERROR_INVALID_ADDRESS` after successful
+cleanup. A failed cleanup can retain an inaccessible reservation: the Win32
+API has no output parameter for returning that address on failure. The
+allocator's 64 KiB alignment invariant is therefore essential, not a
+substitute for recovery.
+
+#### Section ownership preparation
+
+The existing section control area retains its PFNs until its last owner is
+released, and hosted VADs keep the section object alive until their views are
+unmapped. Allocation failure is reported rather than publishing an invalid
+section. A limited freestanding `SEC_COMMIT` path validates RW/RO protection,
+explicitly zeroes allocated PFNs and rejects unsupported variants.
+This preparation is not a working section mapping.
+
+An attempt to construct `SectionObject` in the boot test failed at link time:
+the freestanding runtime lacks the libc++ shared-ownership, wide-string and
+hash-table support used by that class, as well as `wcslen` and `ceilf`.
+The experimental boot call was removed and the normal QEMU test passed again.
+An integrated section still needs freestanding-compatible ownership and PFN
+tracking, mapping/unmapping in the canonical VAD and paging backend, and
+per-process address spaces. The freestanding VAD does not yet retain section
+ownership, and `NtMapViewOfSection` still returns `NotImplemented`.
+ReactOS comparison used `ntoskrnl/mm/section.c` and
+`ntoskrnl/mm/ARM3/section.c` at the revision above.
+
 | Command | Result |
 |---|---|
 | `python3 qemu.py --headless` | Passed; VAD/mapping marker and existing CPL3, syscall, scanout and PS/2 checks |

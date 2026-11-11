@@ -635,8 +635,24 @@ namespace detail {
  * @brief Reserves, commits, or changes the state of a region of pages in virtual memory.
  */
 inline LPVOID VirtualAlloc(LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect) noexcept {
+    if (dwSize == 0) {
+        SetLastError(87); // ERROR_INVALID_PARAMETER
+        return nullptr;
+    }
     uintptr_t base = reinterpret_cast<uintptr_t>(lpAddress);
     SIZE_T size = dwSize;
+    constexpr uintptr_t allocationMask = 0xFFFF;
+    const bool reserve = (flAllocationType & MEM_RESERVE) != 0 ||
+                         (base == 0 && (flAllocationType & MEM_COMMIT) != 0);
+    if (reserve && base != 0) {
+        const SIZE_T offset = base & allocationMask;
+        if (size > static_cast<SIZE_T>(-1) - offset) {
+            SetLastError(87);
+            return nullptr;
+        }
+        base -= offset;
+        size += offset;
+    }
     NtStatus status = ntdll::NtAllocateVirtualMemory(
         static_cast<Handle>(-1), // CurrentProcess
         &base,
@@ -645,7 +661,18 @@ inline LPVOID VirtualAlloc(LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationTy
         flAllocationType,
         flProtect
     );
-    if (!NT_SUCCESS(status)) return nullptr;
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return nullptr;
+    }
+    if (reserve && (base & allocationMask) != 0) {
+        SIZE_T releaseSize = 0;
+        const NtStatus cleanup = ntdll::NtFreeVirtualMemory(
+            static_cast<Handle>(-1), &base, &releaseSize, MEM_RELEASE);
+        // A failed rollback may leave a reservation behind; report its error, not success.
+        SetLastError(NT_SUCCESS(cleanup) ? 487 : ntdll::RtlNtStatusToDosError(cleanup));
+        return nullptr;
+    }
     return reinterpret_cast<LPVOID>(base);
 }
 

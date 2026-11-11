@@ -62,7 +62,7 @@ int main() {
     uintptr_t vmAddr = 0;
     size_t vmSize = 64 * 1024; // 64 KB
     NtStatus vmStatus = ntdll::NtAllocateVirtualMemory(
-        0, // Current process
+        InvalidHandleValue, // Current process pseudo-handle
         &vmAddr,
         0,
         &vmSize,
@@ -72,8 +72,13 @@ int main() {
     if (NT_SUCCESS(vmStatus)) {
         std::cout << "[Userland App] [Mm] NtAllocateVirtualMemory succeeded: 64 KB allocated at 0x" 
                   << std::hex << vmAddr << std::dec << "\n";
-        ntdll::NtFreeVirtualMemory(0, &vmAddr, &vmSize, mm::MEM_RELEASE);
-        std::cout << "[Userland App] [Mm] NtFreeVirtualMemory released region cleanly.\n";
+        vmSize = 0;
+        NtStatus freeStatus = ntdll::NtFreeVirtualMemory(
+            InvalidHandleValue, &vmAddr, &vmSize, mm::MEM_RELEASE);
+        std::cout << "[Userland App] [Mm] NtFreeVirtualMemory: "
+                  << (NT_SUCCESS(freeStatus) ? "released" : "failed") << ".\n";
+    } else {
+        std::cout << "[Userland App] [Mm] NtAllocateVirtualMemory failed.\n";
     }
 
     // 5. Free Heap Memory via RtlFreeHeap
