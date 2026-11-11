@@ -85,6 +85,28 @@ integration.
 
 ## Integration increments
 
+### Executive failure reporting
+
+The hosted Executive's `NtTerminateProcess` and `NtProtectVirtualMemory` no
+longer report success without terminating a process or changing protection.
+`NtQueryInformationProcess(ProcessBasicInformation)` no longer returns invented
+process IDs or a fabricated PEB address. These paths now report
+`STATUS_NOT_IMPLEMENTED` after their existing basic argument checks; output
+values remain unchanged on that failure.
+
+The hosted implementations in `kernel/ps/psmgr.cpp` and
+`kernel/mm/virtual.cpp` are not connected to the bootstrap syscall service.
+This change does not implement process termination, process queries, virtual
+memory protection, process address spaces, or native syscall dispatch.
+
+| Command | Result |
+|---|---|
+| `clang++ -std=c++23 -ffunction-sections -fdata-sections -Wno-unused-parameter -I include test/executive_unimplemented_test.cpp kernel/ps/psmgr.cpp kernel/mm/virtual.cpp -Wl,-dead_strip -o build/executive-unimplemented-test && build/executive-unimplemented-test` | Passed on the macOS host; checks failure status and unchanged outputs |
+| `cmake --build build/qemu-cmake-mingw --config Release --target ntoskrnl_core -j 4` | Passed; hosted Executive static library rebuilt with the cross-toolchain |
+
+No QEMU test was run for this hosted-only change; it is not evidence of
+bare-metal process or memory behavior.
+
 ### Protected syscall boundary
 
 Commit `d8e8d42`: one shared user-service ABI helper; real AMD64 entry/return

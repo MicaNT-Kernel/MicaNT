@@ -58,15 +58,12 @@ NtStatus NtProtectVirtualMemory(
     uintptr_t* baseAddress,
     size_t* regionSize,
     uint32_t /*newProtect*/,
-    uint32_t* oldProtect
+    uint32_t* /*oldProtect*/
 ) {
     if (!baseAddress || !regionSize) {
         return NtStatus::InvalidParameter;
     }
-    if (oldProtect) {
-        *oldProtect = mm::PAGE_READWRITE;
-    }
-    return NtStatus::Success;
+    return NtStatus::NotImplemented;
 }
 
 NtStatus NtCreateSection(
