@@ -14,6 +14,12 @@ inline constexpr size_t BootstrapManagedSize = 16 * 1024 * 1024;
 bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
                              uint32_t protection) noexcept;
 bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept;
+bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
+                                    uint32_t protection) noexcept;
+// Deliberate faults are restricted to the QEMU TCG bootstrap diagnostic.
+bool bootstrapQemuFaultTestsAvailable() noexcept;
+bool verifyBootstrapManagedPageFault(uintptr_t address, bool write,
+                                     bool present) noexcept;
 uint64_t translateBootstrapAddress(const void* address) noexcept;
 void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept;
 

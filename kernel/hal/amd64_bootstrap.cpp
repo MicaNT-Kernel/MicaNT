@@ -71,6 +71,13 @@ struct Idtr {
 #pragma pack(pop)
 
 alignas(16) InterruptGate g_idt[256]{};
+alignas(16) InterruptGate g_managedFaultIdt[256]{};
+uintptr_t g_managedFaultAddress{};
+uintptr_t g_managedFaultRip{};
+uintptr_t g_managedFaultResume{};
+uint64_t g_managedFaultError{};
+volatile bool g_managedFaultArmed{};
+volatile bool g_managedFaultObserved{};
 
 uint64_t walk(uint64_t root, uint64_t address) noexcept {
     auto* table = reinterpret_cast<const uint64_t*>(root & kPhysicalMask);
@@ -265,6 +272,54 @@ void logTrapValue(const char* label, uint64_t value) noexcept {
 } // namespace
 
 extern "C" {
+extern char MicantManagedReadFault[], MicantManagedReadResume[];
+extern char MicantManagedWriteFault[], MicantManagedWriteResume[];
+
+__attribute__((naked)) void MicantManagedReadProbe(uintptr_t) noexcept {
+    __asm__ __volatile__(
+        ".globl MicantManagedReadFault\nMicantManagedReadFault:\n"
+        "movb (%rcx), %al\n"
+        ".globl MicantManagedReadResume\nMicantManagedReadResume:\nretq\n");
+}
+
+__attribute__((naked)) void MicantManagedWriteProbe(uintptr_t) noexcept {
+    __asm__ __volatile__(
+        ".globl MicantManagedWriteFault\nMicantManagedWriteFault:\n"
+        "movb $0x5a, (%rcx)\n"
+        ".globl MicantManagedWriteResume\nMicantManagedWriteResume:\nretq\n");
+}
+
+void MicantManagedPageFault(uint64_t* frame) noexcept {
+    uint64_t address{};
+    __asm__ __volatile__("movq %%cr2, %0" : "=r"(address));
+    if (!g_managedFaultArmed || address != g_managedFaultAddress ||
+        frame[0] != g_managedFaultError || frame[1] != g_managedFaultRip ||
+        (frame[2] & 3) != 0) {
+        if (g_log) g_log("[MicaNT Mm] Unexpected managed probe page fault\r\n");
+        logTrapValue("[MicaNT Mm] PF CR2=0x", address);
+        logTrapValue("[MicaNT Mm] PF error=0x", frame[0]);
+        logTrapValue("[MicaNT Mm] PF RIP=0x", frame[1]);
+        logTrapValue("[MicaNT Mm] PF CS=0x", frame[2]);
+        stopOnTrap();
+    }
+    g_managedFaultArmed = false;
+    g_managedFaultObserved = true;
+    frame[1] = g_managedFaultResume;
+}
+
+__attribute__((naked)) void MicantManagedPageFaultEntry() {
+    __asm__ __volatile__(
+        "cld\n"
+        "pushq %rax\npushq %rcx\npushq %rdx\n"
+        "pushq %r8\npushq %r9\npushq %r10\npushq %r11\npushq %r12\n"
+        "leaq 64(%rsp), %rcx\nmovq %rsp, %r12\n"
+        "andq $-16, %rsp\nsubq $32, %rsp\ncallq MicantManagedPageFault\n"
+        "movq %r12, %rsp\n"
+        "popq %r12\npopq %r11\npopq %r10\npopq %r9\n"
+        "popq %r8\npopq %rdx\npopq %rcx\npopq %rax\n"
+        "addq $8, %rsp\niretq\n");
+}
+
 uint64_t MicantProbeKernelRsp{};
 uint64_t MicantProbeUserRip = kUserBase;
 uint64_t MicantProbeUserRsp =
@@ -703,6 +758,85 @@ bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept {
     return unmapPage(address, true);
 }
 
+bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
+                                    uint32_t protection) noexcept {
+    if (context || !bootstrapPagingContext() || address < BootstrapManagedBase ||
+        address - BootstrapManagedBase >= BootstrapManagedSize ||
+        (address & mm::PageMask4KB) ||
+        (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)) {
+        return false;
+    }
+    uint64_t* table = g_pml4;
+    for (int shift = 39; shift > 12; shift -= 9) {
+        const uint64_t entry = table[(address >> shift) & 511];
+        if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) ||
+            !(entry & kUser) || !(entry & kWritable) || (entry & kNoExecute)) {
+            return false;
+        }
+        table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
+    }
+    uint64_t& leaf = table[(address >> 12) & 511];
+    if (!(leaf & kPresent) || !(leaf & kUser) || !(leaf & kNoExecute)) return false;
+    leaf = protection == mm::PAGE_READWRITE ? leaf | kWritable : leaf & ~kWritable;
+    invalidatePage(address);
+    return true;
+}
+
+bool bootstrapQemuFaultTestsAvailable() noexcept {
+    uint32_t eax = 1, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (!(ecx & (uint32_t{1} << 31))) return false;
+    eax = 0x40000000;
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    // QEMU's TCG hypervisor signature; the runner explicitly selects TCG.
+    return eax >= 0x40000000 && ebx == 0x54474354 &&
+           ecx == 0x43544743 && edx == 0x47435447;
+}
+
+bool verifyBootstrapManagedPageFault(uintptr_t address, bool write,
+                                     bool present) noexcept {
+    if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext() ||
+        address < BootstrapManagedBase ||
+        address - BootstrapManagedBase >= BootstrapManagedSize ||
+        (write && !present) || (!write && present) || g_managedFaultArmed) return false;
+
+    uint16_t cs{};
+    uint64_t cr0{};
+    Idtr previous{};
+    __asm__ __volatile__("movw %%cs, %0; movq %%cr0, %1; sidt %2"
+                         : "=r"(cs), "=r"(cr0), "=m"(previous) : : "memory");
+    if (previous.base == reinterpret_cast<uint64_t>(g_managedFaultIdt)) return false;
+    for (size_t vector = 0; vector < 256; ++vector) {
+        const uint64_t handler = vector == 14
+            ? reinterpret_cast<uint64_t>(MicantManagedPageFaultEntry)
+            : reinterpret_cast<uint64_t>(MicantProbeFaultEntry);
+        g_managedFaultIdt[vector] = {static_cast<uint16_t>(handler), cs, 0, 0x8e,
+                                    static_cast<uint16_t>(handler >> 16),
+                                    static_cast<uint32_t>(handler >> 32), 0};
+    }
+    const Idtr idtr{sizeof(g_managedFaultIdt) - 1,
+                    reinterpret_cast<uint64_t>(g_managedFaultIdt)};
+    g_managedFaultAddress = address;
+    g_managedFaultError = write ? 3 : 0;
+    g_managedFaultRip = reinterpret_cast<uintptr_t>(write ? MicantManagedWriteFault
+                                                          : MicantManagedReadFault);
+    g_managedFaultResume = reinterpret_cast<uintptr_t>(write ? MicantManagedWriteResume
+                                                             : MicantManagedReadResume);
+    g_managedFaultObserved = false;
+    g_managedFaultArmed = true;
+    __asm__ __volatile__("lidt %0; movq %1, %%cr0"
+                         : : "m"(idtr), "r"(cr0 | (uint64_t{1} << 16)) : "memory");
+    if (write) MicantManagedWriteProbe(address);
+    else MicantManagedReadProbe(address);
+    __asm__ __volatile__("movq %0, %%cr0; lidt %1"
+                         : : "r"(cr0), "m"(previous) : "memory");
+    g_managedFaultArmed = false;
+    Idtr restored{};
+    __asm__ __volatile__("sidt %0" : "=m"(restored) : : "memory");
+    return g_managedFaultObserved && restored.base == previous.base &&
+           restored.limit == previous.limit;
+}
+
 bool verifyBootstrapPageTables() noexcept {
     if (!bootstrapPagingContext() || g_pml4[130] != 0) return false;
     auto& database = mm::PfnDatabase::get();
@@ -1020,6 +1154,11 @@ bool verifyRing3Transition() noexcept {
     }
     const Idtr idtr{sizeof(g_idt) - 1, reinterpret_cast<uint64_t>(g_idt)};
     __asm__ __volatile__("lidt %0" : : "m"(idtr) : "memory");
+    // Exercise IDT restoration while the CPL3 probe table is actually active.
+    if (bootstrapQemuFaultTestsAvailable() &&
+        !verifyBootstrapManagedPageFault(BootstrapManagedBase, false, false)) {
+        return false;
+    }
     g_probeReturnRip = kUserBase + 11;
     MicantProbeEnter();
     if (!g_probeSucceeded) {

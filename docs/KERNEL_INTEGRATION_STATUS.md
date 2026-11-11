@@ -85,24 +85,31 @@ integration.
 
 ## Integration increments
 
-### Bootstrap VAD reserve, commit and release
+### Bootstrap VAD reserve, commit, protection and release
 
 The canonical `ProcessAddressSpace` can use the AMD64 bootstrap paging backend
 and the UEFI-derived PFN database. The boot test reserves an unmapped VAD,
 rejects an overlap, commits a page inside it, reads and writes that real
 virtual mapping, repeats the commit, and releases the reservation and its
-PFNs and page tables. It also checks the page-table write permission for a
-read-only mapping. Fault delivery on a prohibited write is not tested.
+PFNs and page tables. A second boot test reserves 128 KiB and commits a 4 KiB
+page, then tests read/write access, a read-only protection change, decommit,
+recommit and release across four cycles with PFN accounting. On QEMU TCG it
+also checks actual page faults for an uncommitted neighboring page, a write to
+a read-only page and a decommitted page, checking the fault address and error
+code. The diagnostic temporarily enables supervisor write protection and uses
+its own IDT before restoring the previous state.
 
 This is a bounded 16 MiB window in the active bootstrap CR3, not an isolated
 per-process address space. The backend requires the BSP with interrupts
 disabled and has no SMP TLB shootdown. Commit eagerly allocates physical pages;
-general protection changes, decommit, sections, demand paging, and NT syscall
-integration remain unimplemented. Reservation placement currently uses 4 KiB
-alignment; the Windows allocation-granularity distinction for reserve remains
-to be resolved before claiming full allocation compatibility. A failed unmap
-retains its VAD/PFN state, and failed teardown stops rather than silently
-discarding it.
+only read-only and read-write protection are implemented. Sections, demand
+paging, process isolation and NT syscall integration remain unimplemented.
+Backend-chosen addresses are 64 KiB aligned; explicit native addresses are
+rounded to 4 KiB, independently of the Win32 reservation contract. A failed
+unmap retains its VAD/PFN state for an explicit, retryable `close()`; destroying
+an address space that still cannot release its mappings is an ownership
+invariant failure. A failed multi-page protect can leave partial changes if
+rollback itself fails; the tracked page protections retain the actual state.
 
 The relevant public contracts are
 [NtAllocateVirtualMemory](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntallocatevirtualmemory)
@@ -116,6 +123,7 @@ implementation is independent.
 |---|---|
 | `python3 qemu.py --headless` | Passed; VAD/mapping marker and existing CPL3, syscall, scanout and PS/2 checks |
 | `python3 qemu.py --headless --runtime-selftest` | Passed; VAD/mapping marker and runtime teardown |
+| `python3 -c 'import subprocess; subprocess.run(["python3", "qemu.py", "--headless"], timeout=180, check=True); subprocess.run(["python3", "qemu.py", "--headless", "--runtime-selftest"], timeout=180, check=True)'` | Passed; each QEMU run also had a 180-second external timeout |
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_process_backend_test.cpp -o build/mm_process_backend_test-asan && build/mm_process_backend_test-asan` | Passed; backend failures, rollback and teardown |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed |
 
@@ -169,10 +177,10 @@ Firmware mappings are not owned by this path.
 The same kernel executes the canonical `MmAvlTable` using the page-backed
 allocator. The test checks partial overlap rejection, gap searches, removal and
 PFN accounting after tree destruction. This is a tree test, **not** a
-process address space, reservation, commitment, or section-mapping test.
-`ProcessAddressSpace` still has a hosted simulated paging engine and is not
-wired to this hardware backend; the native virtual-memory syscalls, section
-views, per-process isolation and fault handling remain incomplete.
+process address space, reservation, commitment, or section-mapping test. The
+later bootstrap VAD increment above connects `ProcessAddressSpace` to the
+hardware backend; native virtual-memory syscalls, section views, per-process
+isolation and general fault handling remain incomplete.
 
 ReactOS reference, revision
 [`8fe3cee05606aecd9442674e40038649f048d10d`](https://github.com/reactos/reactos/tree/8fe3cee05606aecd9442674e40038649f048d10d):

@@ -52,6 +52,7 @@ extern "C" bool MicantVerifyContextSwitch(
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
+extern "C" int MicantTestMmManagedProtection() noexcept;
 extern "C" int pe_tls_freestanding_test();
 
 void writePort(uint16_t port, uint8_t value) noexcept {
@@ -827,6 +828,18 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("\r\n");
     }
     serialWrite("[MicaNT Mm] VAD reserve, commit, mapping and release verified\r\n");
+    const int protectionTest = MicantTestMmManagedProtection();
+    if (protectionTest != 0) {
+        serialWrite("[MicaNT Mm] Managed protection verification failed: ");
+        serialWriteNumber(static_cast<uint64_t>(protectionTest));
+        stopWithError("\r\n");
+    }
+    serialWrite("[MicaNT Mm] Managed protection, decommit and PFN reclamation verified\r\n");
+    if (micant::hal::amd64::bootstrapQemuFaultTestsAvailable()) {
+        serialWrite("[MicaNT Mm] QEMU managed noncommitted and read-only faults verified\r\n");
+    } else {
+        serialWrite("[MicaNT Mm] Managed fault probes skipped outside QEMU TCG\r\n");
+    }
 #if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
     const size_t initialActive = micant::mm::PfnDatabase::get().getActiveCount();
     const size_t initialAvailable = micant::mm::PfnDatabase::get().getFreeCount() +

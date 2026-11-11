@@ -1043,12 +1043,14 @@ class ProcessAddressSpace {
 public:
     static constexpr uintptr_t UserSpaceMin = 0x0000000000010000ULL;
     static constexpr uintptr_t UserSpaceMax = 0x00007FFFFFFFFFFFULL;
+    static constexpr size_t AllocationGranularity = 64 * 1024;
 
     struct PagingBackend {
         void* context{nullptr};
         // A failed operation must leave the page mapping unchanged.
         bool (*map)(void*, uintptr_t, uint64_t, uint32_t) noexcept {nullptr};
         bool (*unmap)(void*, uintptr_t) noexcept {nullptr};
+        bool (*protect)(void*, uintptr_t, uint32_t) noexcept {nullptr};
     };
 
     ProcessAddressSpace() : nextFreeAddress_(0x0000000100000000ULL) {}
@@ -1068,17 +1070,21 @@ public:
     }
 
     ~ProcessAddressSpace() {
-        if (!backend_.map) return;
+        if (!backend_.map || close() == NtStatus::Success) return;
+        // Destruction cannot preserve ownership of mappings that failed cleanup.
+        ownershipInvariantFailure();
+    }
+
+    [[nodiscard]] NtStatus close() noexcept {
+        Guard lock(*this);
+        if (!backend_.map) return NtStatus::NotImplemented;
         while (const uintptr_t base = vadTree_.firstAddress()) {
             auto* vad = vadTree_.find(base);
-            if (!vad || !releaseBackendPages(*vad) || !vadTree_.remove(base)) {
-#if defined(MICANT_FREESTANDING)
-                __builtin_trap();
-#else
-                std::terminate();
-#endif
-            }
+            if (!vad) ownershipInvariantFailure();
+            if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
+            if (!vadTree_.remove(base)) ownershipInvariantFailure();
         }
+        return NtStatus::Success;
     }
 
     NtStatus allocate(uintptr_t& baseAddress, size_t size, uint32_t allocationType, uint32_t protect) {
@@ -1219,13 +1225,28 @@ public:
     NtStatus free(uintptr_t baseAddress, size_t size, uint32_t freeType) {
         Guard lock(*this);
         if (backend_.map) {
-            if (freeType != MEM_RELEASE) return NtStatus::NotImplemented;
             auto* vad = vadTree_.find(baseAddress);
-            if (!vad || vad->startingAddress != baseAddress || size != 0)
+            if (!vad) return NtStatus::InvalidParameter;
+            if (freeType == MEM_RELEASE) {
+                if (vad->startingAddress != baseAddress || size != 0)
+                    return NtStatus::InvalidParameter;
+                if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
+                if (!vadTree_.remove(baseAddress)) ownershipInvariantFailure();
+                return NtStatus::Success;
+            }
+            if (freeType != MEM_DECOMMIT) return NtStatus::NotImplemented;
+            uintptr_t start{}, end{};
+            if (size == 0) {
+                if (baseAddress != vad->startingAddress) return NtStatus::InvalidParameter;
+                start = vad->startingAddress;
+                end = vad->endingAddress;
+            } else if (!pageRange(baseAddress, size, start, end)) {
                 return NtStatus::InvalidParameter;
-            if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
-            vadTree_.remove(baseAddress);
-            return NtStatus::Success;
+            }
+            if (start < vad->startingAddress || end > vad->endingAddress)
+                return NtStatus::Conflict;
+            return releaseBackendPages(*vad, start >> PageShift4KB, end >> PageShift4KB)
+                ? NtStatus::Success : NtStatus::Unsuccessful;
         }
 #if defined(MICANT_FREESTANDING)
         return NtStatus::NotImplemented;
@@ -1274,7 +1295,7 @@ public:
 
     NtStatus protect(uintptr_t baseAddress, size_t size, uint32_t newProtect, uint32_t* oldProtect) {
         Guard lock(*this);
-        if (backend_.map) return NtStatus::NotImplemented;
+        if (backend_.map) return protectBackend(baseAddress, size, newProtect, oldProtect);
 #if defined(MICANT_FREESTANDING)
         return NtStatus::NotImplemented;
 #endif
@@ -1423,6 +1444,14 @@ public:
     }
 
 private:
+    [[noreturn]] static void ownershipInvariantFailure() noexcept {
+#if defined(MICANT_FREESTANDING)
+        __builtin_trap();
+#else
+        std::terminate();
+#endif
+    }
+
     class Guard {
     public:
         explicit Guard(const ProcessAddressSpace& space) noexcept
@@ -1452,17 +1481,34 @@ private:
 #endif
     };
 
-    [[nodiscard]] bool releaseBackendPages(VirtualAddressDescriptor& vad) noexcept {
+    static bool pageRange(uintptr_t address, size_t size, uintptr_t& start,
+                          uintptr_t& end) noexcept {
+        if (!size || address > std::numeric_limits<uintptr_t>::max() - (size - 1))
+            return false;
+        start = address & ~static_cast<uintptr_t>(PageMask4KB);
+        end = (address + size - 1) | static_cast<uintptr_t>(PageMask4KB);
+        return true;
+    }
+
+    [[nodiscard]] bool releaseBackendPages(
+        VirtualAddressDescriptor& vad, uint64_t firstVpn = 0,
+        uint64_t lastVpn = std::numeric_limits<uint64_t>::max()) noexcept {
         auto& db = PfnDatabase::get();
         bool success = true;
         auto* link = &vad.commitRanges;
         while (*link) {
             auto& page = **link;
+            if (page.firstVpn < firstVpn || page.firstVpn > lastVpn) {
+                link = &page.next;
+                continue;
+            }
             if (!backend_.unmap(backend_.context, page.firstVpn << PageShift4KB)) {
                 success = false;
                 link = &page.next;
                 continue;
             }
+            if (!vad.commitCharge || !workingSet_.commitCharge || !workingSet_.residentPages)
+                ownershipInvariantFailure();
             db.freePage(page.pfn);
             --vad.commitCharge;
             --workingSet_.commitCharge;
@@ -1471,6 +1517,57 @@ private:
         }
         vad.committed = vad.commitCharge != 0;
         return success;
+    }
+
+    NtStatus protectBackend(uintptr_t address, size_t size, uint32_t protection,
+                            uint32_t* oldProtection) noexcept {
+        if (!backend_.protect) return NtStatus::NotImplemented;
+        if (!oldProtection) return NtStatus::InvalidParameter;
+        if (protection != PAGE_READONLY && protection != PAGE_READWRITE)
+            return NtStatus::NotImplemented;
+        uintptr_t start{}, end{};
+        if (!pageRange(address, size, start, end)) return NtStatus::InvalidParameter;
+        auto* vad = vadTree_.find(start);
+        if (!vad || end > vad->endingAddress || vad->isSectionView) return NtStatus::Conflict;
+
+        struct Change {
+            VirtualAddressDescriptor::CommitRange* page;
+            uint32_t oldProtection;
+            std::unique_ptr<Change> next;
+        };
+        std::unique_ptr<Change> changes;
+        for (uintptr_t va = start;; va += PageSize4KB) {
+            auto* page = vad->commitRanges.get();
+            const auto vpn = va >> PageShift4KB;
+            while (page && page->firstVpn != vpn) page = page->next.get();
+            if (!page) return NtStatus::Conflict;
+            std::unique_ptr<Change> change(new (std::nothrow_t{}) Change{page, page->protection, {}});
+            if (!change) return NtStatus::NoMemory;
+            change->next = std::move(changes);
+            changes = std::move(change);
+            if (va == (end & ~static_cast<uintptr_t>(PageMask4KB))) break;
+        }
+        const uint32_t firstProtection = changes ? [&] {
+            auto* first = changes.get();
+            while (first->next) first = first->next.get();
+            return first->oldProtection;
+        }() : 0;
+        auto* change = changes.get();
+        for (; change; change = change->next.get()) {
+            const uintptr_t va = change->page->firstVpn << PageShift4KB;
+            if (!backend_.protect(backend_.context, va, protection)) break;
+            change->page->protection = protection;
+        }
+        if (change) {
+            for (auto* rollback = changes.get(); rollback != change; rollback = rollback->next.get()) {
+                const uintptr_t va = rollback->page->firstVpn << PageShift4KB;
+                if (backend_.protect(backend_.context, va, rollback->oldProtection))
+                    rollback->page->protection = rollback->oldProtection;
+            }
+            return NtStatus::Unsuccessful;
+        }
+        *oldProtection = firstProtection;
+        return NtStatus::Success;
     }
 
     NtStatus allocateBackend(uintptr_t& baseAddress, size_t size, uint32_t type, uint32_t protect) noexcept {
@@ -1492,7 +1589,7 @@ private:
         length = (length + PageMask4KB) & ~PageMask4KB;
         const bool reserve = (type & MEM_RESERVE) != 0 || baseAddress == 0;
         if (!start) {
-            start = vadTree_.findFreeRange(length, PageSize4KB, (type & MEM_TOP_DOWN) != 0,
+            start = vadTree_.findFreeRange(length, AllocationGranularity, (type & MEM_TOP_DOWN) != 0,
                                            backendBase_, backendEnd_);
             if (!start) return NtStatus::NoMemory;
         }
@@ -1569,7 +1666,6 @@ private:
         workingSet_.peakResidentPages = std::max(workingSet_.peakResidentPages, workingSet_.residentPages);
         if (failure != NtStatus::Success) {
             if (reserve && vad->commitCharge == 0) vadTree_.remove(start);
-            else if (reserve) baseAddress = start;
             return failure;
         }
         baseAddress = start;
