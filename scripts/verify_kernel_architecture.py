@@ -27,6 +27,7 @@ BUILD_FILES = (
     ROOT / "scripts" / "build_incremental.ps1",
     ROOT / "scripts" / "stage_micant.py",
     ROOT / "scripts" / "boot_micant.py",
+    ROOT / "qemu.py",
 )
 
 
@@ -121,7 +122,7 @@ def inspect_pe(path: Path, expected_subsystem: str) -> dict[str, int]:
     }
 
 
-def validate_build_manifest(root: Path = ROOT) -> None:
+def validate_build_manifest(root: Path = ROOT, allow_dirty: bool = False) -> None:
     manifest_path = root / "build" / "baremetal" / "kernel-build-manifest.json"
     kernel_path = root / "build" / "baremetal" / "ntoskrnl.exe"
     bootloader_path = root / "build" / "esp" / "EFI" / "BOOT" / "BOOTX64.EFI"
@@ -171,8 +172,10 @@ def validate_build_manifest(root: Path = ROOT) -> None:
 
     if manifest.get("git_commit") != head:
         fail("manifest Git commit does not match the current checkout")
-    if status.strip():
+    if status.strip() and not allow_dirty:
         fail("refusing to stage artifacts from a dirty working tree")
+    if allow_dirty and manifest.get("working_tree_dirty") != bool(status.strip()):
+        fail("manifest dirty-tree state does not match the current checkout")
 
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):

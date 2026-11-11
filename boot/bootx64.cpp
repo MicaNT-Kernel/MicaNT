@@ -10,6 +10,7 @@
  */
 #include "micant/km/hal/uefi.hpp"
 #include "micant/km/hal/boot.hpp"
+#include "micant/km/hal/boot_contract.hpp"
 #include "micant/km/hal/bootvid.hpp"
 #include "micant/km/hal/cpu.hpp"
 #include "micant/km/executive/usermode.hpp"
@@ -1414,6 +1415,7 @@ private:
     uefi::EfiSystemTable* m_systemTable{nullptr};
     uefi::EfiGraphicsOutputProtocol* m_gop{nullptr};
     boot::LoaderParameterBlock m_lpb{};
+    boot::UefiKernelHandoffV1 m_handoff{};
     bootvid::BootVideoDriver m_videoDriver{};
     uefi::EfiTime m_bootTime{};
     bool m_hasBootTime{false};
@@ -1632,7 +1634,16 @@ public:
      */
     bool buildLoaderParameterBlock(std::span<const uefi::EfiMemoryDescriptor> memoryMap) {
         m_lpb = uefi::BuildLpbFromUefi(m_systemTable, m_gop, memoryMap);
+        m_handoff = uefi::BuildKernelHandoffFromUefi(m_systemTable, m_gop, memoryMap);
         return true;
+    }
+
+    void updateMemoryMap(const void* memoryMap, uint64_t memoryMapSize,
+                         uint64_t descriptorSize, uint32_t descriptorVersion) noexcept {
+        m_handoff.memoryMapAddress = reinterpret_cast<uint64_t>(memoryMap);
+        m_handoff.memoryMapSize = memoryMapSize;
+        m_handoff.memoryMapDescriptorSize = static_cast<uint32_t>(descriptorSize);
+        m_handoff.memoryMapDescriptorVersion = descriptorVersion;
     }
 
     /**
@@ -1738,19 +1749,18 @@ public:
         m_videoDriver.drawString(cardX + 20, handY + 14, "MicaNT CUTLER EDITION - BARE-METAL BOOT MANAGER", bootvid::Color{0, 229, 255}, bootvid::Color{14, 18, 28}, 1);
 
         m_videoDriver.drawString(cardX + 24, handY + 40, "[1] MicaNT Cutler Edition (Sovereign OS on /dev/sdb2)       [1/b/Enter]", bootvid::Color{240, 245, 255}, bootvid::Color{14, 18, 28}, 1);
-        m_videoDriver.drawString(cardX + 24, handY + 62, "[2] Ubuntu Linux 26.04 Fallback (Chainload shimx64.efi on sda1)    [2/u]", bootvid::Color{100, 240, 160}, bootvid::Color{14, 18, 28}, 1);
-        m_videoDriver.drawString(cardX + 24, handY + 84, "[3] Supermicro UEFI Firmware Setup Utility                         [3/s]", bootvid::Color{180, 200, 230}, bootvid::Color{14, 18, 28}, 1);
-        m_videoDriver.drawString(cardX + 24, handY + 106, "[4] Cold Reboot Bare-Metal Server (Intel PCH Port 0xCF9)           [4/r]", bootvid::Color{255, 140, 140}, bootvid::Color{14, 18, 28}, 1);
+        m_videoDriver.drawString(cardX + 24, handY + 62, "[2] Return to UEFI Firmware                                    [2/s]", bootvid::Color{180, 200, 230}, bootvid::Color{14, 18, 28}, 1);
+        m_videoDriver.drawString(cardX + 24, handY + 84, "[3] Cold Reboot Bare-Metal Server (Intel PCH Port 0xCF9)           [3/r]", bootvid::Color{255, 140, 140}, bootvid::Color{14, 18, 28}, 1);
+        m_videoDriver.fillRectangle(cardX + 24, handY + 106, cardW - 48, 22, bootvid::Color{14, 18, 28});
 
         // COM1 announcement
         UartSerial::print("\r\n=======================================================\r\n");
         UartSerial::print("  MicaNT Cutler Edition - Bare-Metal Boot Manager\r\n");
         UartSerial::print("=======================================================\r\n");
         UartSerial::print("  [1] MicaNT Cutler Edition (Sovereign OS on sdb2)\r\n");
-        UartSerial::print("  [2] Ubuntu Linux 26.04 Fallback (Chainload on sda1)\r\n");
-        UartSerial::print("  [3] Supermicro UEFI Firmware Setup\r\n");
-        UartSerial::print("  [4] Cold Reboot Server (Port 0xCF9)\r\n");
-        UartSerial::print("  Press [1] or Enter for MicaNT, [2] or 'u' for Ubuntu, [4] for Reboot.\r\n");
+        UartSerial::print("  [2] Return to UEFI Firmware\r\n");
+        UartSerial::print("  [3] Cold Reboot Server (Port 0xCF9)\r\n");
+        UartSerial::print("  Press [1] or Enter for MicaNT, [2] for Setup, [3] for Reboot.\r\n");
 
         int defaultChoice = 1;
         int totalCountdown = 5;
@@ -1809,9 +1819,6 @@ public:
         }
         if (iniSz > 0) {
             iniBuf[iniSz] = '\0';
-            if (strstr(iniBuf, "default=ubuntu") || strstr(iniBuf, "default=2")) {
-                defaultChoice = 2;
-            }
             if (strstr(iniBuf, "timeout=0")) {
                 totalCountdown = 0;
             } else if (strstr(iniBuf, "timeout=1")) {
@@ -1822,29 +1829,6 @@ public:
                 totalCountdown = 10;
             }
 
-            // One-shot directive: Delete all boot.ini instances across all ESP & system volumes
-            if (m_systemTable->bootServices && m_systemTable->bootServices->locateHandleBuffer) {
-                auto* bs = m_systemTable->bootServices;
-                uefi::EfiHandle* delHandles = nullptr;
-                uint64_t delCount = 0;
-                if (bs->locateHandleBuffer(uefi::BY_PROTOCOL, &uefi::EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID, nullptr, &delCount, &delHandles) == uefi::EFI_SUCCESS && delHandles) {
-                    const wchar_t* delPaths[] = { L"\\EFI\\MicaNT\\boot.ini", L"\\boot.ini", L"boot.ini", L"EFI\\MicaNT\\boot.ini" };
-                    for (uint64_t dh = 0; dh < delCount; ++dh) {
-                        uefi::EfiSimpleFileSystemProtocol* dfs = nullptr;
-                        if (bs->handleProtocol(delHandles[dh], &uefi::EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID, reinterpret_cast<void**>(&dfs)) != uefi::EFI_SUCCESS || !dfs || !dfs->openVolume) continue;
-                        uefi::EfiFileProtocol* droot = nullptr;
-                        if (dfs->openVolume(dfs, &droot) != uefi::EFI_SUCCESS || !droot || !droot->open) continue;
-                        for (const auto* dpth : delPaths) {
-                            uefi::EfiFileProtocol* df = nullptr;
-                            if (droot->open(droot, &df, dpth, uefi::EFI_FILE_MODE_READ | uefi::EFI_FILE_MODE_WRITE, 0) == uefi::EFI_SUCCESS && df) {
-                                if (df->deleteFile) df->deleteFile(df);
-                                else if (df->close) df->close(df);
-                            }
-                        }
-                        if (droot->close) droot->close(droot);
-                    }
-                }
-            }
         }
 
         if (totalCountdown == 0) {
@@ -1888,15 +1872,12 @@ public:
                     if (c == '1' || c == '\r' || c == '\n' || c == 'b' || c == 'B' || c == 'k' || c == 'K') {
                         UartSerial::print("[MicaNT Boot] Option 1 (MicaNT) selected via COM1.\r\n");
                         return 1;
-                    } else if (c == '2' || c == 'u' || c == 'U') {
-                        UartSerial::print("[MicaNT Boot] Option 2 (Ubuntu) selected via COM1.\r\n");
+                    } else if (c == '2' || c == 's' || c == 'S') {
+                        UartSerial::print("[MicaNT Boot] Option 2 (UEFI Setup) selected via COM1.\r\n");
                         return 2;
-                    } else if (c == '3' || c == 's' || c == 'S' || c == 27) {
-                        UartSerial::print("[MicaNT Boot] Option 3 (UEFI Setup) selected via COM1.\r\n");
+                    } else if (c == '3' || c == 'r' || c == 'R') {
+                        UartSerial::print("[MicaNT Boot] Option 3 (Reboot) selected via COM1.\r\n");
                         return 3;
-                    } else if (c == '4' || c == 'r' || c == 'R') {
-                        UartSerial::print("[MicaNT Boot] Option 4 (Reboot) selected via COM1.\r\n");
-                        return 4;
                     }
                 }
 
@@ -1907,15 +1888,12 @@ public:
                         if (key.unicodeChar == L'1' || key.unicodeChar == L'\r' || key.unicodeChar == L'b' || key.unicodeChar == L'B') {
                             UartSerial::print("[MicaNT Boot] Option 1 (MicaNT) selected via keyboard.\r\n");
                             return 1;
-                        } else if (key.unicodeChar == L'2' || key.unicodeChar == L'u' || key.unicodeChar == L'U') {
-                            UartSerial::print("[MicaNT Boot] Option 2 (Ubuntu) selected via keyboard.\r\n");
+                        } else if (key.unicodeChar == L'2' || key.unicodeChar == L's' || key.unicodeChar == L'S') {
+                            UartSerial::print("[MicaNT Boot] Option 2 (UEFI Setup) selected via keyboard.\r\n");
                             return 2;
-                        } else if (key.unicodeChar == L'3' || key.unicodeChar == L's' || key.unicodeChar == L'S' || key.scanCode == 0x17 /* ESC */) {
-                            UartSerial::print("[MicaNT Boot] Option 3 (UEFI Setup) selected via keyboard.\r\n");
+                        } else if (key.unicodeChar == L'3' || key.unicodeChar == L'r' || key.unicodeChar == L'R') {
+                            UartSerial::print("[MicaNT Boot] Option 3 (Reboot) selected via keyboard.\r\n");
                             return 3;
-                        } else if (key.unicodeChar == L'4' || key.unicodeChar == L'r' || key.unicodeChar == L'R') {
-                            UartSerial::print("[MicaNT Boot] Option 4 (Reboot) selected via keyboard.\r\n");
-                            return 4;
                         }
                     }
                 }
@@ -1932,6 +1910,9 @@ public:
 
     [[nodiscard]] const boot::LoaderParameterBlock& getLpb() const noexcept { return m_lpb; }
     [[nodiscard]] boot::LoaderParameterBlock& getLpb() noexcept { return m_lpb; }
+    [[nodiscard]] const boot::UefiKernelHandoffV1& getHandoff() const noexcept {
+        return m_handoff;
+    }
     [[nodiscard]] bootvid::BootVideoDriver& getVideoDriver() noexcept { return m_videoDriver; }
     [[nodiscard]] bool hasExitedBootServices() const noexcept { return m_bootServicesExited; }
 };
@@ -2050,55 +2031,6 @@ using micant::bootloader::loadFileFromEfiSystemPartition;
 /**
  * @brief Standard UEFI PE32+ Application Entry Point (bootx64.efi)
  */
-alignas(4096) static uint8_t s_chainBuf[16 * 1024 * 1024]; // 16 MB Buffer for Ubuntu shim / GRUB
-
-static bool chainloadUbuntu(
-    micant::uefi::EfiSystemTable* systemTable,
-    micant::uefi::EfiHandle imageHandle
-) {
-    if (!systemTable || !systemTable->runtimeServices) return false;
-
-    micant::bootloader::UartSerial::print("[MicaNT Boot] Arming UEFI BootNext=000C (Ubuntu Linux Fallback)...\r\n");
-    if (systemTable->conOut && systemTable->conOut->outputString) {
-        systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Arming UEFI BootNext=000C (Ubuntu Linux Fallback)...\r\n");
-        systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Cold rebooting to native Ubuntu GRUB...\r\n");
-    }
-
-    uint16_t bootNextVal = 0x000C; // Boot000C is Ubuntu
-    const micant::uefi::EfiGuid efiGlobalVarGuid = {
-        0x8BE4DF61, 0x93CA, 0x11D2,
-        {0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C}
-    };
-    using PfnSetVariable = micant::uefi::EfiStatus (*)(
-        const wchar_t* variableName,
-        const micant::uefi::EfiGuid* vendorGuid,
-        uint32_t attributes,
-        uint64_t dataSize,
-        const void* data
-    );
-    if (systemTable->runtimeServices->setVariable) {
-        auto pfnSetVar = reinterpret_cast<PfnSetVariable>(systemTable->runtimeServices->setVariable);
-        pfnSetVar(
-            L"BootNext",
-            &efiGlobalVarGuid,
-            0x00000001 | 0x00000002 | 0x00000004, // EFI_VARIABLE_NON_VOLATILE | BOOTSERVICE_ACCESS | RUNTIME_ACCESS
-            sizeof(bootNextVal),
-            &bootNextVal
-        );
-    }
-
-    if (systemTable->bootServices && systemTable->bootServices->stall) {
-        systemTable->bootServices->stall(500000); // 500ms
-    }
-
-    // Hardware cold reset via UEFI Runtime Services and PCH Port 0xCF9
-    micant::bootloader::UartSerial::print("[MicaNT Boot] Resetting system via Port 0xCF9...\r\n");
-    if (systemTable->runtimeServices->resetSystem) {
-        systemTable->runtimeServices->resetSystem(0, micant::uefi::EFI_SUCCESS, 0, nullptr);
-    }
-    micant::bootloader::HalpColdResetServer();
-}
-
 extern "C" micant::uefi::EfiStatus EfiMain(
     micant::uefi::EfiHandle imageHandle,
     micant::uefi::EfiSystemTable* systemTable
@@ -2415,27 +2347,19 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     micant::bootloader::s_engineInstance = &engine;
 
     // 5. Bootloader Handover Menu & Countdown (3 seconds)
-    int bootDecision = 1; // 1 = Boot Kernel, 2 = Diagnostic Harness, 3 = Reboot
+    int bootDecision = 1; // 1 = Boot Kernel, 2 = UEFI Setup, 3 = Reboot
     if (hasGop) {
         bootDecision = engine.runBootloaderHandoverMenu();
     }
 
     if (bootDecision == 2) {
-        micant::bootloader::UartSerial::print("[MicaNT Boot] Option 2 selected: Chainloading Ubuntu Linux Fallback...\r\n");
-        chainloadUbuntu(systemTable, imageHandle);
-        micant::bootloader::UartSerial::print("[MicaNT Boot] Chainload returned. Cold rebooting bare-metal server to Ubuntu...\r\n");
-        if (systemTable->runtimeServices && systemTable->runtimeServices->resetSystem) {
-            systemTable->runtimeServices->resetSystem(0, micant::uefi::EFI_SUCCESS, 0, nullptr);
-        }
-        micant::bootloader::HalpColdResetServer();
-    } else if (bootDecision == 3) {
-        micant::bootloader::UartSerial::print("[MicaNT Boot] Option 3 selected: Exiting to UEFI Firmware Setup Utility...\r\n");
+        micant::bootloader::UartSerial::print("[MicaNT Boot] Option 2 selected: Returning to UEFI firmware...\r\n");
         if (systemTable->conOut) {
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Exiting to UEFI Firmware Setup...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Returning to UEFI firmware...\r\n");
         }
         return micant::uefi::EFI_SUCCESS;
-    } else if (bootDecision == 4) {
-        micant::bootloader::UartSerial::print("[MicaNT Boot] Option 4 selected: Cold rebooting bare-metal server...\r\n");
+    } else if (bootDecision == 3) {
+        micant::bootloader::UartSerial::print("[MicaNT Boot] Option 3 selected: Cold rebooting bare-metal server...\r\n");
         if (systemTable->runtimeServices && systemTable->runtimeServices->resetSystem) {
             systemTable->runtimeServices->resetSystem(0, micant::uefi::EFI_SUCCESS, 0, nullptr);
         }
@@ -2446,13 +2370,11 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     if (!micant::bootloader::s_ntoskrnlLoadedFromDisk || micant::bootloader::s_ntoskrnlEntryPoint == 0) {
         micant::bootloader::UartSerial::print("[MicaNT Boot] FATAL: \\EFI\\MicaNT\\ntoskrnl.exe was not loaded from disk!\r\n");
         if (systemTable->conOut) {
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] FATAL: \\EFI\\MicaNT\\ntoskrnl.exe not loaded!\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Chainloading Ubuntu Linux Fallback in 3 seconds...\r\n");
+            systemTable->conOut->outputString(
+                systemTable->conOut,
+                L"[MicaNT Boot] FATAL: modular ntoskrnl.exe not loaded; refusing fallback.\r\n"
+            );
         }
-        if (systemTable->bootServices && systemTable->bootServices->stall) {
-            systemTable->bootServices->stall(3000000);
-        }
-        chainloadUbuntu(systemTable, imageHandle);
         return micant::uefi::EFI_NOT_FOUND;
     }
 
@@ -2463,25 +2385,49 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     micant::bootloader::UartSerial::print("\r\n[MicaNT Boot] Calling ExitBootServices to terminate UEFI firmware...\r\n");
 
     memoryMapSize = sizeof(s_memoryMapBuffer);
-    systemTable->bootServices->getMemoryMap(
+    mapStatus = systemTable->bootServices->getMemoryMap(
         &memoryMapSize,
         reinterpret_cast<micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
         &mapKey,
         &descriptorSize,
         &descriptorVersion
     );
+    if (mapStatus != micant::uefi::EFI_SUCCESS ||
+        descriptorSize < sizeof(micant::uefi::EfiMemoryDescriptor)) {
+        micant::bootloader::UartSerial::print(
+            "[MicaNT Boot] FATAL: final UEFI memory map could not be acquired.\r\n"
+        );
+        return mapStatus;
+    }
+    engine.updateMemoryMap(s_memoryMapBuffer, memoryMapSize, descriptorSize,
+                           descriptorVersion);
 
     micant::uefi::EfiStatus exitStatus = engine.exitBootServices(mapKey);
     if (exitStatus != micant::uefi::EFI_SUCCESS) {
         memoryMapSize = sizeof(s_memoryMapBuffer);
-        systemTable->bootServices->getMemoryMap(
+        mapStatus = systemTable->bootServices->getMemoryMap(
             &memoryMapSize,
             reinterpret_cast<micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
             &mapKey,
             &descriptorSize,
             &descriptorVersion
         );
-        engine.exitBootServices(mapKey);
+        if (mapStatus != micant::uefi::EFI_SUCCESS ||
+            descriptorSize < sizeof(micant::uefi::EfiMemoryDescriptor)) {
+            micant::bootloader::UartSerial::print(
+                "[MicaNT Boot] FATAL: UEFI memory map refresh failed.\r\n"
+            );
+            return mapStatus;
+        }
+        engine.updateMemoryMap(s_memoryMapBuffer, memoryMapSize, descriptorSize,
+                               descriptorVersion);
+        exitStatus = engine.exitBootServices(mapKey);
+    }
+    if (exitStatus != micant::uefi::EFI_SUCCESS) {
+        micant::bootloader::UartSerial::print(
+            "[MicaNT Boot] FATAL: ExitBootServices failed; kernel was not entered.\r\n"
+        );
+        return exitStatus;
     }
 
     micant::bootloader::UartSerial::print("[MicaNT Boot] ExitBootServices SUCCESS! CPU now in pure 64-bit Long Mode.\r\n");
@@ -2490,12 +2436,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     micant::bootloader::UartSerial::print("...\r\n\r\n");
 
     using PfnKiSystemStartup = micant::NtStatus (*)(
-        micant::boot::LoaderParameterBlock* lpb,
-        const char* execCmd,
-        bool launchInteractive
+        const micant::boot::UefiKernelHandoffV1* handoff
     );
     auto pfnKernel = reinterpret_cast<PfnKiSystemStartup>(micant::bootloader::s_ntoskrnlEntryPoint);
-    pfnKernel(const_cast<micant::boot::LoaderParameterBlock*>(&engine.getLpb()), nullptr, false);
+    pfnKernel(&engine.getHandoff());
 
     while (true) {
 #if defined(__x86_64__)

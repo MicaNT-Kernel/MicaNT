@@ -2946,6 +2946,25 @@ void Test_UefiBootloader_GopAndMemoryMap() {
                 "First descriptor must be translated to LoaderFree");
     TEST_ASSERT(lpb.memoryDescriptors[1].memoryType == boot::LoaderMemoryType::LoaderFirmwareTemporary,
                 "Second descriptor must be translated to LoaderFirmwareTemporary");
+
+    // 7. The firmware-to-kernel boundary uses a versioned, allocation-free POD.
+    const auto handoff = uefi::BuildKernelHandoffFromUefi(&sysTable, &gop, uefiMap);
+    TEST_ASSERT(handoff.signature == boot::UEFI_KERNEL_HANDOFF_SIGNATURE,
+                "Kernel handoff must carry the versioned signature");
+    TEST_ASSERT(handoff.size == sizeof(handoff) &&
+                handoff.version == boot::UEFI_KERNEL_HANDOFF_VERSION,
+                "Kernel handoff must declare its complete versioned layout");
+    TEST_ASSERT(handoff.memoryMapAddress ==
+                    reinterpret_cast<uint64_t>(uefiMap.data()) &&
+                handoff.memoryMapSize == uefiMap.size() * sizeof(uefi::EfiMemoryDescriptor) &&
+                handoff.memoryMapDescriptorSize == sizeof(uefi::EfiMemoryDescriptor),
+                "Kernel handoff must reference the caller-owned UEFI memory map");
+    TEST_ASSERT(handoff.framebuffer.physicalBase == gopMode.frameBufferBase &&
+                handoff.framebuffer.width == modeInfo.horizontalResolution &&
+                handoff.framebuffer.height == modeInfo.verticalResolution,
+                "Kernel handoff must preserve GOP framebuffer metadata");
+    TEST_ASSERT(handoff.acpiTablePhysicalAddress == fakeRsdpAddress,
+                "Kernel handoff must discover the ACPI 2.0 RSDP");
 }
 
 void Test_BootVid_FramebufferAndSplashRenderer() {

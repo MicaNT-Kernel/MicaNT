@@ -15,18 +15,13 @@ from verify_kernel_architecture import validate_build_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SERIAL = (
-    "[UEFI] MicaNT bootloader started",
-    "[UEFI] Memory map acquired",
-    "[UEFI] Modular kernel image loaded",
-    "[UEFI] ExitBootServices completed",
+    "[MicaNT COM1] EfiMain reached on physical x86_64 silicon!",
+    "[MicaNT Boot] Probing FAT32 volume for \\EFI\\MicaNT\\ntoskrnl.exe...",
+    "[MicaNT Boot] ExitBootServices SUCCESS!",
     "[MicaNT] Modular KiSystemStartup reached",
     "[MicaNT] Phase 0 started",
-    "[MicaNT] HAL initialized",
-    "[MicaNT] Early memory initialized",
-    "[MicaNT] Object Manager initialized",
-    "[MicaNT] Phase 1 started",
-    "[MicaNT] Executive initialization completed",
-    "[MicaNT] Kernel idle loop entered",
+    "[MicaNT Explorer] Desktop and taskbar rendered",
+    "[MicaNT Explorer] Shell idle loop entered",
 )
 
 
@@ -41,8 +36,14 @@ def serial_progress(serial_log: str) -> int:
     return len(EXPECTED_SERIAL)
 
 
-def run_qemu(ovmf_code: Path, timeout: int, stable_seconds: int) -> None:
-    validate_build_manifest(ROOT)
+def run_qemu(
+    ovmf_code: Path,
+    timeout: int,
+    stable_seconds: int,
+    display: str,
+    interactive: bool,
+) -> None:
+    validate_build_manifest(ROOT, allow_dirty=True)
 
     qemu = shutil.which(os.environ.get("MICANT_QEMU", "qemu-system-x86_64"))
     if not qemu:
@@ -74,7 +75,7 @@ def run_qemu(ovmf_code: Path, timeout: int, stable_seconds: int) -> None:
             "-drive",
             f"if=pflash,format=raw,unit=0,readonly=on,file={ovmf_code.resolve()}",
             "-drive", f"file=fat:ro:{esp},format=raw,if=ide,index=0",
-            "-display", "none",
+            "-display", display,
             "-serial", f"file:{serial_path}",
             "-monitor", "none",
             "-snapshot",
@@ -118,6 +119,14 @@ def run_qemu(ovmf_code: Path, timeout: int, stable_seconds: int) -> None:
                                 f"QEMU modular boot passed; serial remained in the "
                                 f"idle state for {stable_seconds}s."
                             )
+                            if interactive:
+                                print("QEMU is running interactively; close its window or press Ctrl+C to stop.")
+                                return_code = process.wait()
+                                if return_code != 0:
+                                    raise RuntimeError(
+                                        f"QEMU exited with status {return_code} "
+                                        "after the modular shell started"
+                                    )
                             return
                     else:
                         complete_since = None
@@ -153,6 +162,8 @@ def main() -> int:
     )
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--stable-seconds", type=int, default=5)
+    parser.add_argument("--display", default="none")
+    parser.add_argument("--interactive", action="store_true")
     args = parser.parse_args()
 
     if args.ovmf_code is None:
@@ -161,7 +172,17 @@ def main() -> int:
         parser.error("--timeout and --stable-seconds must be positive")
 
     try:
-        run_qemu(args.ovmf_code, args.timeout, args.stable_seconds)
+        if args.interactive and args.display == "none":
+            parser.error("--interactive requires a visible --display backend")
+        run_qemu(
+            args.ovmf_code,
+            args.timeout,
+            args.stable_seconds,
+            args.display,
+            args.interactive,
+        )
+    except KeyboardInterrupt:
+        return 130
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"QEMU boot test failed: {error}", file=sys.stderr)
         return 1

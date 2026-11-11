@@ -8,6 +8,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/hal/boot.hpp"
+#include "micant/km/hal/boot_contract.hpp"
 
 namespace micant::uefi {
 
@@ -657,6 +658,55 @@ inline boot::LoaderParameterBlock BuildLpbFromUefi(
     });
 
     return lpb;
+}
+
+inline boot::UefiKernelHandoffV1 BuildKernelHandoffFromUefi(
+    const EfiSystemTable* systemTable,
+    const EfiGraphicsOutputProtocol* gop,
+    std::span<const EfiMemoryDescriptor> memoryMap
+) noexcept {
+    boot::UefiKernelHandoffV1 handoff{};
+    handoff.signature = boot::UEFI_KERNEL_HANDOFF_SIGNATURE;
+    handoff.size = sizeof(handoff);
+    handoff.version = boot::UEFI_KERNEL_HANDOFF_VERSION;
+    handoff.memoryMapAddress = reinterpret_cast<uint64_t>(memoryMap.data());
+    handoff.memoryMapSize = memoryMap.size_bytes();
+    handoff.memoryMapDescriptorSize = sizeof(EfiMemoryDescriptor);
+    handoff.memoryMapDescriptorVersion = 1;
+
+    if (gop && gop->mode && gop->mode->info) {
+        handoff.framebuffer = {
+            .physicalBase = gop->mode->frameBufferBase,
+            .size = gop->mode->frameBufferSize,
+            .width = gop->mode->info->horizontalResolution,
+            .height = gop->mode->info->verticalResolution,
+            .pixelsPerScanLine = gop->mode->info->pixelsPerScanLine,
+            .pixelFormat = static_cast<uint32_t>(gop->mode->info->pixelFormat),
+        };
+    }
+
+    if (systemTable && systemTable->configurationTable) {
+        for (uint64_t i = 0; i < systemTable->numberOfTableEntries; ++i) {
+            const auto& entry = systemTable->configurationTable[i];
+            if (entry.vendorGuid == ACPI_20_TABLE_GUID) {
+                handoff.acpiTablePhysicalAddress =
+                    reinterpret_cast<uint64_t>(entry.vendorTable);
+                break;
+            }
+        }
+        if (handoff.acpiTablePhysicalAddress == 0) {
+            for (uint64_t i = 0; i < systemTable->numberOfTableEntries; ++i) {
+                const auto& entry = systemTable->configurationTable[i];
+                if (entry.vendorGuid == ACPI_10_TABLE_GUID) {
+                    handoff.acpiTablePhysicalAddress =
+                        reinterpret_cast<uint64_t>(entry.vendorTable);
+                    break;
+                }
+            }
+        }
+    }
+
+    return handoff;
 }
 
 } // namespace micant::uefi

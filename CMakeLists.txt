@@ -4,6 +4,7 @@ project(MicaNT VERSION 0.1.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(MICANT_ENABLE_BAREMETAL "Build the AMD64 freestanding PE boot targets" OFF)
 
 # Canonical Include Root (all headers addressed via micant/<layer>/<header>.hpp)
 include_directories(
@@ -215,6 +216,29 @@ add_library(bootx64 OBJECT
     boot/bootx64.cpp
 )
 
+if (MICANT_ENABLE_BAREMETAL)
+    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        message(FATAL_ERROR "The freestanding AMD64 PE targets require a Clang/GNU cross-toolchain.")
+    endif()
+
+    add_executable(ntoskrnl_core_baremetal
+        kernel/init/kiinit.cpp
+        tools/explorer_shell/desktop.cpp
+        tools/explorer_shell/notification_area.cpp
+        tools/explorer_shell/taskbar.cpp
+    )
+    target_include_directories(ntoskrnl_core_baremetal PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+        "${CMAKE_SOURCE_DIR}/tools"
+    )
+    target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_FREESTANDING)
+
+    add_executable(bootx64_efi
+        boot/bootx64.cpp
+    )
+    target_include_directories(bootx64_efi PRIVATE "${CMAKE_SOURCE_DIR}")
+endif()
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(ntoskrnl_core PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     target_compile_options(micant_kernel PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
@@ -222,6 +246,32 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(userland_app PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     target_compile_options(win32_app PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     target_compile_options(bootx64 PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
+    if (MICANT_ENABLE_BAREMETAL)
+        foreach(_target IN ITEMS ntoskrnl_core_baremetal bootx64_efi)
+            target_compile_options(${_target} PRIVATE
+                -ffreestanding
+                -fno-exceptions
+                -fno-rtti
+                -fno-threadsafe-statics
+                -fno-stack-protector
+                -mno-red-zone
+                -ffunction-sections
+                -fdata-sections
+                -O2
+            )
+        endforeach()
+        target_link_options(ntoskrnl_core_baremetal PRIVATE
+            -nostdlib
+            -Wl,--subsystem,native
+            -Wl,-e,KiSystemStartup
+            -Wl,--gc-sections
+        )
+        target_link_options(bootx64_efi PRIVATE
+            -nostdlib
+            -Wl,--subsystem,efi_application
+            -Wl,-e,EfiMain
+        )
+    endif()
 elseif (MSVC)
     target_compile_options(ntoskrnl_core PRIVATE /W4 /permissive- /O2)
     target_compile_options(micant_kernel PRIVATE /W4 /permissive- /O2)
@@ -249,3 +299,22 @@ set_target_properties(win32_app PROPERTIES
 set_target_properties(prismx_3d_cube_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+if (MICANT_ENABLE_BAREMETAL)
+    set_target_properties(ntoskrnl_core_baremetal PROPERTIES
+        OUTPUT_NAME "ntoskrnl"
+        SUFFIX ".exe"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/baremetal"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build/baremetal"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/build/baremetal"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_SOURCE_DIR}/build/baremetal"
+    )
+    set_target_properties(bootx64_efi PROPERTIES
+        OUTPUT_NAME "BOOTX64"
+        SUFFIX ".EFI"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/esp/EFI/BOOT"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build/esp/EFI/BOOT"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/build/esp/EFI/BOOT"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_SOURCE_DIR}/build/esp/EFI/BOOT"
+    )
+endif()

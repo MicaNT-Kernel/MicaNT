@@ -1,3 +1,135 @@
+#if defined(MICANT_FREESTANDING)
+
+#include "micant/km/hal/boot_contract.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "tools/explorer_shell/desktop.hpp"
+#include "tools/explorer_shell/taskbar.hpp"
+
+namespace {
+
+constexpr uint32_t kWidth = 1024;
+constexpr uint32_t kHeight = 768;
+constexpr uint32_t kTaskbarHeight = 40;
+alignas(16) uint32_t g_explorerSurface[kWidth * kHeight]{};
+
+void writePort(uint16_t port, uint8_t value) noexcept {
+    __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+uint8_t readPort(uint16_t port) noexcept {
+    uint8_t value{};
+    __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+void serialInitialize() noexcept {
+    writePort(0x3F9, 0x00);
+    writePort(0x3FB, 0x80);
+    writePort(0x3F8, 0x01);
+    writePort(0x3F9, 0x00);
+    writePort(0x3FB, 0x03);
+    writePort(0x3FA, 0xC7);
+    writePort(0x3FC, 0x0B);
+}
+
+void serialWrite(const char* text) noexcept {
+    for (size_t i = 0; text[i] != '\0'; ++i) {
+        for (uint32_t wait = 0; wait < 1000000; ++wait) {
+            if (readPort(0x3FD) & 0x20) break;
+            __asm__ __volatile__("pause");
+        }
+        writePort(0x3F8, static_cast<uint8_t>(text[i]));
+    }
+}
+
+[[noreturn]] void stopWithError(const char* message) noexcept {
+    serialWrite(message);
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
+}
+
+bool validHandoff(const micant::boot::UefiKernelHandoffV1* handoff) noexcept {
+    if (!handoff ||
+        handoff->signature != micant::boot::UEFI_KERNEL_HANDOFF_SIGNATURE ||
+        handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION ||
+        handoff->size < sizeof(*handoff) ||
+        handoff->memoryMapAddress == 0 ||
+        handoff->memoryMapDescriptorSize < 40 ||
+        handoff->memoryMapSize < handoff->memoryMapDescriptorSize) {
+        return false;
+    }
+
+    const auto& framebuffer = handoff->framebuffer;
+    if (framebuffer.physicalBase == 0 ||
+        framebuffer.width < 320 || framebuffer.height < 200 ||
+        framebuffer.pixelsPerScanLine < framebuffer.width ||
+        framebuffer.pixelFormat > 1) {
+        return false;
+    }
+    const uint64_t rowBytes =
+        static_cast<uint64_t>(framebuffer.pixelsPerScanLine) * sizeof(uint32_t);
+    return rowBytes <= framebuffer.size &&
+           framebuffer.height <= framebuffer.size / rowBytes &&
+           handoff->memoryMapSize % handoff->memoryMapDescriptorSize == 0;
+}
+
+void drawExplorerDesktop(const micant::boot::KernelFramebufferV1& framebuffer) noexcept {
+    const uint32_t width = framebuffer.width < kWidth ? framebuffer.width : kWidth;
+    const uint32_t height = framebuffer.height < kHeight ? framebuffer.height : kHeight;
+    const uint32_t taskbarHeight =
+        height < kTaskbarHeight ? height : kTaskbarHeight;
+
+    micant::explorer::DrawDesktop(
+        g_explorerSurface, kWidth, height - taskbarHeight
+    );
+    micant::explorer::DrawTaskbar(
+        g_explorerSurface, kWidth, height, taskbarHeight, nullptr, 0, "QEMU"
+    );
+
+    auto* destination = reinterpret_cast<volatile uint32_t*>(
+        static_cast<uintptr_t>(framebuffer.physicalBase)
+    );
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint32_t* source = g_explorerSurface + static_cast<size_t>(y) * kWidth;
+        volatile uint32_t* row =
+            destination + static_cast<size_t>(y) * framebuffer.pixelsPerScanLine;
+        for (uint32_t x = 0; x < width; ++x) {
+            uint32_t pixel = source[x];
+            if (framebuffer.pixelFormat == 0) {
+                pixel = (pixel & 0xFF00FF00u) |
+                        ((pixel & 0x000000FFu) << 16) |
+                        ((pixel & 0x00FF0000u) >> 16);
+            }
+            row[x] = pixel;
+        }
+    }
+}
+
+} // namespace
+
+extern "C" micant::NtStatus KiSystemStartup(
+    const micant::boot::UefiKernelHandoffV1* handoff
+) noexcept {
+    serialInitialize();
+    serialWrite("[MicaNT] Modular KiSystemStartup reached\r\n");
+    serialWrite("[MicaNT] Phase 0 started\r\n");
+
+    if (!validHandoff(handoff)) {
+        stopWithError("[MicaNT] Invalid UEFI kernel handoff\r\n");
+    }
+
+    drawExplorerDesktop(handoff->framebuffer);
+    serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
+    serialWrite("[MicaNT Explorer] Shell idle loop entered\r\n");
+
+    for (;;) {
+        __asm__ __volatile__("cli; hlt");
+    }
+}
+
+#else
+
 #include <iostream>
 #include <iomanip>
 #include <memory>
@@ -809,3 +941,4 @@ int main(int argc, char* argv[]) {
     return NT_SUCCESS(status) ? 0 : 1;
 }
 
+#endif

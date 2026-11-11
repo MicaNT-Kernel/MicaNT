@@ -19,8 +19,20 @@
 
 > **Kernel status:** MicaNT is consolidating on one modular kernel. The
 > standalone kernel source is archived and is not a supported build or boot
-> path. Modular bare-metal boot has not yet been verified; see the authoritative
+> path. The current AMD64 bootstrap has been verified in QEMU through rendering
+> an Explorer-style desktop and taskbar; the full Executive and a user-mode
+> `explorer.exe` are still in progress. See the authoritative
 > [kernel architecture and migration status](docs/KERNEL_ARCHITECTURE.md).
+
+Build and launch the current QEMU session from the repository root:
+
+```bash
+python3 qemu.py
+```
+
+This requires CMake, Ninja, QEMU, OVMF, and an AMD64 LLVM-MinGW cross-compiler
+(set `MICANT_CXX` or pass `--cxx` if it is not on `PATH`). Use the `--headless`
+option to run the serial-verified smoke test without opening a display.
 
 <p align="center">
   <img src="docs/bootscreen_splash.png" alt="MicaNT UEFI Boot Splash" width="420">
@@ -347,10 +359,12 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
-`micant_kernel` is currently a hosted harness and must not be interpreted as a
-bare-metal kernel boot. The modular Native PE target and QEMU/OVMF boot remain
-unimplemented; see [docs/KERNEL_ARCHITECTURE.md](docs/KERNEL_ARCHITECTURE.md)
-for the verified status and migration criteria.
+`micant_kernel` is a hosted harness and must not be interpreted as a bare-metal
+kernel boot. The separate Native PE bootstrap can be built and launched through
+`python3 qemu.py`; it renders the initial Explorer-style desktop, but does not
+yet initialize the full Executive or launch a user-mode `explorer.exe`. See
+[docs/KERNEL_ARCHITECTURE.md](docs/KERNEL_ARCHITECTURE.md) for verified status
+and migration criteria.
 
 ### Run the 258-Suite Verification Battery & Clean-Room Sentinel
 ```powershell
