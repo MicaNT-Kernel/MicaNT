@@ -2279,6 +2279,7 @@ extern "C" micant::uefi::EfiStatus EfiMain(
             const wchar_t* name;
         };
         const ProbeTarget targets[] = {
+            { L"\\EFI\\MicaNT\\explorer.exe",     L"EFI\\MicaNT\\explorer.exe",     L"explorer.exe" },
             { L"\\EFI\\MicaNT\\app.exe",          L"EFI\\MicaNT\\app.exe",          L"app.exe" },
             { L"\\EFI\\MicaNT\\surshell_app.exe", L"EFI\\MicaNT\\surshell_app.exe", L"surshell_app.exe" }
         };
