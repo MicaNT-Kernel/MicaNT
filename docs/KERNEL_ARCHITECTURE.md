@@ -31,7 +31,8 @@ Executive or a user-mode `explorer.exe` process.
 | `ntoskrnl_core_baremetal` | Freestanding AMD64 bootstrap, shared desktop renderer, CPL3 diagnostic | `build/baremetal/ntoskrnl.exe`; QEMU verified, Executive integration incomplete |
 | `bootx64_efi` | UEFI PE bootloader | `build/esp/EFI/BOOT/BOOTX64.EFI` |
 | `virtio_gpu_boot` | Separate boot-start VirtIO-GPU display driver | `build/virtio_gpu.sys`; VirtIO 2D verified in QEMU |
-| `explorer_runtime_boot` | Build-only aggregate for the actual Explorer and windowing DLLs | `build/explorer.exe`, `build/system32/{user32,gdi32,imm32,win32k}.dll`; compile/link verified, not loaded by the kernel |
+| `explorer_runtime_boot` | Build-only aggregate for the actual Explorer, windowing DLLs and native UCRT memory subset | `build/explorer.exe`, `build/system32/{user32,gdi32,imm32,win32k,ucrtbase}.dll`; compile/link verified, not loaded by the kernel |
+| `ucrtbase_boot` | Freestanding user-mode memory/string subset with native static TLS | `build/system32/ucrtbase.dll`; 16 exports, no imports, not a complete UCRT |
 
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
 external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
@@ -281,6 +282,14 @@ into a hosted C runtime. Those implementations cannot be treated as a native
 runtime just because their host tests pass. A default toolchain link of the
 Kernel32 candidate also collides with its own `Sleep`/`GetLastError` exports.
 That failed candidate was not added to the supported targets.
+
+The separately selected `MICANT_FREESTANDING_UCRT` branch now builds a
+no-import native memory/string subset from the same canonical source.
+It has a bounded 64 MiB coalescing heap and real PE static TLS for `errno`;
+the process loader must initialize that TLS before allocation is called.
+It does not replace the missing CRT startup, stdio, locale, aligned allocation
+or unwind contracts. The current import check still fails on 26 Kernel32
+requirements and 31 UCRT exports; no success fallback is introduced.
 
 Structural inspection of the archived standalone kernel identified its
 loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import

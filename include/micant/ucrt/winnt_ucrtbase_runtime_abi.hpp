@@ -8,7 +8,7 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <cstring>
+#include <cstdarg>
 
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"

@@ -5,11 +5,238 @@
  *        and C-Runtime Startup Sequences for Standard Windows PE32+ Executables.
  */
 
+#if defined(MICANT_FREESTANDING_UCRT)
+
+#include "micant/ucrt/bounded_arena.hpp"
+#include <cstdint>
+
+namespace {
+
+// Fixed per-module capacity; increase when Explorer surface demand requires it.
+micant::ucrt::BoundedArena<64u * 1024u * 1024u> g_nativeHeap{};
+
+}
+
+extern "C" {
+
+struct NativeTlsDirectory64 {
+    const void* startAddressOfRawData;
+    const void* endAddressOfRawData;
+    unsigned long* addressOfIndex;
+    void** addressOfCallbacks;
+    unsigned long sizeOfZeroFill;
+    unsigned long characteristics;
+};
+
+static_assert(sizeof(NativeTlsDirectory64) == 40);
+
+unsigned long _tls_index = 0;
+extern unsigned char __tls_start;
+extern unsigned char __tls_end;
+extern thread_local int g_nativeErrno
+    __attribute__((section(".tls$M")));
+unsigned char __tls_start
+    __attribute__((section(".tls$A"), used)) = 0;
+thread_local int g_nativeErrno
+    __attribute__((section(".tls$M"))) = 0;
+unsigned char __tls_end
+    __attribute__((section(".tls$Z"), used)) = 0;
+extern const NativeTlsDirectory64 _tls_used
+    __attribute__((section(".rdata$T"), used)) = {
+        &__tls_start,
+        &__tls_end,
+        &_tls_index,
+        nullptr,
+        0,
+        0
+    };
+
+}
+
+namespace micant::ucrt::winnt_ucrtbase_abi {
+
+void* Ucrt_malloc(std::size_t size) noexcept {
+    return detail::allocateWithErrno(g_nativeHeap, size, g_nativeErrno);
+}
+
+void* Ucrt_calloc(std::size_t count, std::size_t size) noexcept {
+    return detail::allocateZeroedWithErrno(g_nativeHeap, count, size,
+                                           g_nativeErrno);
+}
+
+void* Ucrt_realloc(void* block, std::size_t size) noexcept {
+    return detail::reallocateWithErrno(g_nativeHeap, block, size,
+                                       g_nativeErrno);
+}
+
+void Ucrt_free(void* block) noexcept {
+    g_nativeHeap.release(block);
+}
+
+}
+
+static_assert(sizeof(wchar_t) == 2);
+static_assert(alignof(std::max_align_t) >= 16);
+
+extern "C" int __stdcall DllMainCRTStartup(
+    void*, unsigned long, void*) noexcept {
+    return 1;
+}
+
+extern "C" {
+
+__declspec(dllexport) int* __cdecl _errno() {
+    return &g_nativeErrno;
+}
+
+__declspec(dllexport) void* __cdecl malloc(std::size_t size) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_malloc(size);
+}
+
+__declspec(dllexport) void* __cdecl calloc(std::size_t count,
+                                           std::size_t size) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_calloc(count, size);
+}
+
+__declspec(dllexport) void* __cdecl realloc(void* block,
+                                            std::size_t size) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_realloc(block, size);
+}
+
+__declspec(dllexport) void __cdecl free(void* block) {
+    micant::ucrt::winnt_ucrtbase_abi::Ucrt_free(block);
+}
+
+__declspec(dllexport) void* __cdecl memcpy(
+    void* destination, const void* source, std::size_t count) {
+    auto* out = static_cast<unsigned char*>(destination);
+    const auto* in = static_cast<const unsigned char*>(source);
+    for (std::size_t i = 0; i < count; ++i) {
+        out[i] = in[i];
+    }
+    return destination;
+}
+
+__declspec(dllexport) void* __cdecl memmove(
+    void* destination, const void* source, std::size_t count) {
+    auto* out = static_cast<unsigned char*>(destination);
+    const auto* in = static_cast<const unsigned char*>(source);
+    const auto outAddress = reinterpret_cast<std::uintptr_t>(out);
+    const auto inAddress = reinterpret_cast<std::uintptr_t>(in);
+    if (outAddress < inAddress || outAddress - inAddress >= count) {
+        for (std::size_t i = 0; i < count; ++i) {
+            out[i] = in[i];
+        }
+    } else {
+        for (std::size_t i = count; i != 0; --i) {
+            out[i - 1] = in[i - 1];
+        }
+    }
+    return destination;
+}
+
+__declspec(dllexport) void* __cdecl memset(
+    void* destination, int value, std::size_t count) {
+    auto* out = static_cast<unsigned char*>(destination);
+    const auto byte = static_cast<unsigned char>(value);
+    for (std::size_t i = 0; i < count; ++i) {
+        out[i] = byte;
+    }
+    return destination;
+}
+
+__declspec(dllexport) int __cdecl memcmp(
+    const void* left, const void* right, std::size_t count) {
+    const auto* a = static_cast<const unsigned char*>(left);
+    const auto* b = static_cast<const unsigned char*>(right);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (a[i] != b[i]) {
+            return static_cast<int>(a[i]) - static_cast<int>(b[i]);
+        }
+    }
+    return 0;
+}
+
+__declspec(dllexport) void* __cdecl memchr(
+    const void* buffer, int value, std::size_t count) {
+    const auto* bytes = static_cast<const unsigned char*>(buffer);
+    const auto target = static_cast<unsigned char>(value);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (bytes[i] == target) {
+            return const_cast<unsigned char*>(bytes + i);
+        }
+    }
+    return nullptr;
+}
+
+__declspec(dllexport) std::size_t __cdecl strlen(const char* string) {
+    const char* end = string;
+    while (*end != '\0') {
+        ++end;
+    }
+    return static_cast<std::size_t>(end - string);
+}
+
+__declspec(dllexport) int __cdecl strcmp(
+    const char* left, const char* right) {
+    const auto* a = reinterpret_cast<const unsigned char*>(left);
+    const auto* b = reinterpret_cast<const unsigned char*>(right);
+    while (*a != 0 && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return static_cast<int>(*a) - static_cast<int>(*b);
+}
+
+__declspec(dllexport) int __cdecl strncmp(
+    const char* left, const char* right, std::size_t count) {
+    const auto* a = reinterpret_cast<const unsigned char*>(left);
+    const auto* b = reinterpret_cast<const unsigned char*>(right);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (a[i] != b[i] || a[i] == 0) {
+            return static_cast<int>(a[i]) - static_cast<int>(b[i]);
+        }
+    }
+    return 0;
+}
+
+__declspec(dllexport) std::size_t __cdecl strnlen(
+    const char* string, std::size_t count) {
+    std::size_t length = 0;
+    while (length < count && string[length] != '\0') {
+        ++length;
+    }
+    return length;
+}
+
+__declspec(dllexport) std::size_t __cdecl wcslen(
+    const wchar_t* string) {
+    const wchar_t* end = string;
+    while (*end != L'\0') {
+        ++end;
+    }
+    return static_cast<std::size_t>(end - string);
+}
+
+__declspec(dllexport) std::size_t __cdecl wcsnlen(
+    const wchar_t* string, std::size_t count) {
+    std::size_t length = 0;
+    while (length < count && string[length] != L'\0') {
+        ++length;
+    }
+    return length;
+}
+
+}
+
+#else
+
 #include "micant/ucrt/winnt_ucrtbase_runtime_abi.hpp"
 #include <cstdlib>
 #include <cstdio>
 #include <cmath>
 #include <cstdarg>
+#include <cstring>
 #include <vector>
 
 namespace micant::ucrt::winnt_ucrtbase_abi {
@@ -118,7 +345,14 @@ void* Ucrt_calloc(size_t count, size_t size) noexcept {
 }
 
 void* Ucrt_realloc(void* block, size_t size) noexcept {
-    return std::realloc(block, size > 0 ? size : 1);
+    if (!block) {
+        return std::malloc(size > 0 ? size : 1);
+    }
+    if (size == 0) {
+        std::free(block);
+        return nullptr;
+    }
+    return std::realloc(block, size);
 }
 
 void Ucrt_free(void* block) noexcept {
@@ -269,4 +503,6 @@ __declspec(dllexport) double ucrt_cos(double x) { return micant::ucrt::winnt_ucr
 __declspec(dllexport) double ucrt_sqrt(double x) { return micant::ucrt::winnt_ucrtbase_abi::Ucrt_sqrt(x); }
 __declspec(dllexport) double ucrt_pow(double x, double y) { return micant::ucrt::winnt_ucrtbase_abi::Ucrt_pow(x, y); }
 } // extern "C"
+#endif
+
 #endif

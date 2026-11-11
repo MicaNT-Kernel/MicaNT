@@ -299,8 +299,25 @@ if (MICANT_ENABLE_BAREMETAL)
         OUTPUT_NAME "explorer"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
     )
+    add_library(ucrtbase_boot SHARED EXCLUDE_FROM_ALL
+        kernel/ps/winnt_ucrtbase_runtime_abi.cpp
+    )
+    target_compile_definitions(ucrtbase_boot PRIVATE MICANT_FREESTANDING_UCRT)
+    target_compile_options(ucrtbase_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-use-cxa-atexit -fno-emulated-tls
+        -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(ucrtbase_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMainCRTStartup
+    )
+    set_target_properties(ucrtbase_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "ucrtbase"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
     add_custom_target(explorer_runtime_boot
-        DEPENDS explorer_boot imm32_boot
+        DEPENDS explorer_boot imm32_boot ucrtbase_boot
     )
 
     add_executable(virtio_gpu_boot drivers/virtio_gpu/virtio_gpu.cpp)

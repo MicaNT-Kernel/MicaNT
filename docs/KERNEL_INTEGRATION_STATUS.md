@@ -78,10 +78,37 @@ fallback and is not enabled by this increment.
 
 The canonical UCRT source has an isolated freestanding memory/string branch
 with a bounded 64 MiB coalescing arena and native PE static TLS for `errno`.
-Arena/errno-helper ASan/UBSan tests pass. A standalone DLL has been inspected
-for an empty import table and native GS/TLS accesses; it is not yet a supported
-boot module or a complete UCRT. Its TLS has not been executed by the kernel.
+The supported `ucrtbase_boot` CMake target builds it into
+`build/system32/ucrtbase.dll`; the Explorer build aggregate includes it.
+It exports 16 memory/string/errno functions, with no external PE imports.
 Incomplete aligned-allocation exports are deliberately absent.
+
+Verified:
+
+```bash
+clang++ -std=c++23 -Wall -Wextra -Werror -pedantic \
+  -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude \
+  test/ucrt_bounded_arena_test.cpp -o build/native-ucrt-arena-sanitized
+build/native-ucrt-arena-sanitized
+cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot
+build/pe_image_view_test build/system32/ucrtbase.dll
+```
+
+Results: passed. LLVM PE inspection confirms the actual target's empty import
+table and valid TLS template/index; `_errno` disassembly reads the GS TLS vector
+at offset `0x58`. The native target uses `-fno-emulated-tls`, no hosted CRT,
+and an entry appropriate only to its constant-initialized memory subset.
+The windowing DLLs still retain their real CRT constructor startup.
+The canonical hosted UCRT branch also compiles with the cross-toolchain.
+
+This is not a staged boot module or complete UCRT. TLS has not been executed
+by the kernel; mapping/inspection is not a substitute. Its contract follows
+the public [CRT errno documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/errno-doserrno-sys-errlist-and-sys-nerr)
+and [PE TLS specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-section).
+`python3 qemu.py --check-explorer` still **fails explicitly** on 26 Kernel32
+requirements and 31 UCRT exports, reduced from 73 total missing requirements
+to 57. No fake export, host DLL or synthetic import trampoline fills those
+gaps. Headless boot, the 12 parser tests and architecture checks still pass.
 
 ## Milestones
 
