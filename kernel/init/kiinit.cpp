@@ -419,10 +419,12 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Mm] User/kernel isolation and read-only user code verified\r\n");
     serialWrite("[MicaNT Mm] Supervisor MMIO and non-executable user stack verified\r\n");
     if (!micant::hal::amd64::initializeBootstrapSyscalls(dispatchBootstrapService) ||
-        !micant::hal::amd64::verifyBootstrapSyscalls()) {
+        !micant::hal::amd64::verifyBootstrapSyscalls() ||
+        !micant::hal::amd64::verifyNativeImageLoading()) {
         stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
     }
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
+    serialWrite("[MicaNT Ps] Bounded native PE mapping and compiled user entry verified\r\n");
     if (!initializeMouse()) {
         stopWithError("[MicaNT Input] PS/2 mouse initialization failed\r\n");
     }

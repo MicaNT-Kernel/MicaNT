@@ -38,6 +38,10 @@ without opening a display. The Ring 3 diagnostic is not yet a running Explorer
 process; Start, windows and accelerated composition are not connected. The
 diagnostic does exercise native syscall entry/return, protected user buffers,
 and a user-originated surface submission verified in the VirtIO scanout.
+It also maps an original bounded PE diagnostic and executes its compiled
+entry at CPL3; this does not initialize an Explorer process or its DLLs.
+See the [integration status](docs/KERNEL_INTEGRATION_STATUS.md) for verified
+increments and remaining prerequisites.
 
 To build the real Explorer and windowing DLLs and check their native imports:
 

@@ -30,6 +30,7 @@ EXPECTED_SERIAL = (
     "[MicaNT Mm] User/kernel isolation and read-only user code verified",
     "[MicaNT Mm] Supervisor MMIO and non-executable user stack verified",
     "[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified",
+    "[MicaNT Ps] Bounded native PE mapping and compiled user entry verified",
     "[MicaNT Input] PS/2 mouse polling initialized",
     "[MicaNT Explorer] Shell idle loop entered",
 )

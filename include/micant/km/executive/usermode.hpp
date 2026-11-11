@@ -1436,6 +1436,182 @@ struct UserLoadedImageInfo {
     bool     sectionsMapped{false};
 };
 
+// Borrows boot-owned files and storage; never installs synthetic import targets.
+class NativeUserImageSet64 {
+public:
+    struct Module {
+        std::string_view name{};
+        pe::PeImageView64 view{};
+        std::span<uint8_t> image{};
+        uint64_t base{};
+    };
+    struct BindingFailure {
+        std::string_view library{};
+        std::string_view symbol{};
+        uint16_t ordinal{};
+    };
+
+    NtStatus addModule(std::string_view name, std::span<const uint8_t> file,
+                       std::span<uint8_t> storage, uint64_t base) noexcept {
+        if (bound_) return NtStatus::InvalidParameter;
+        if (count_ == modules_.size()) return NtStatus::InsufficientResources;
+        if (name.empty() || base < MM_LOWEST_USER_ADDRESS || base % 65536) {
+            return NtStatus::InvalidParameter;
+        }
+        Module candidate;
+        candidate.name = name;
+        NtStatus status = candidate.view.inspect(file);
+        if (status != NtStatus::Success) return status;
+        const uint64_t size = candidate.view.headers().optionalHeader.sizeOfImage;
+        if (base > MM_HIGHEST_USER_ADDRESS || size > MM_HIGHEST_USER_ADDRESS - base + 1) {
+            return NtStatus::InvalidParameter;
+        }
+        if (storage.size() < size) return NtStatus::BufferTooSmall;
+        for (size_t index = 0; index < count_; ++index) {
+            const auto& other = modules_[index];
+            if (equal(name, other.name, true)) return NtStatus::ObjectNameCollision;
+            if (base < other.base + other.image.size() && other.base < base + size) {
+                return NtStatus::Conflict;
+            }
+            const auto first = reinterpret_cast<uintptr_t>(storage.data());
+            const auto second = reinterpret_cast<uintptr_t>(other.image.data());
+            if (first >= second ? first - second < other.image.size()
+                                : second - first < size) {
+                return NtStatus::Conflict;
+            }
+        }
+        status = candidate.view.map(storage, base);
+        if (status != NtStatus::Success) return status;
+        candidate.image = storage.first(static_cast<size_t>(size));
+        candidate.base = base;
+        modules_[count_++] = candidate;
+        bound_ = false;
+        return NtStatus::Success;
+    }
+
+    NtStatus bindAll() noexcept {
+        if (bound_) return NtStatus::Success;
+        failure_ = {};
+        if (!count_) return NtStatus::InvalidParameter;
+        // Validate the entire closure before overwriting an IAT used as its INT.
+        for (unsigned pass = 0; pass < 2; ++pass) {
+            for (size_t index = 0; index < count_; ++index) {
+                auto& current = modules_[index];
+                const NtStatus status = current.view.bindImports(current.image,
+                    [&](std::string_view library, std::string_view name,
+                        uint16_t ordinal, uint64_t& address) {
+                        const NtStatus result = resolve(library, name, ordinal, address);
+                        if (result != NtStatus::Success) failure_ = {library, name, ordinal};
+                        return result;
+                    }, pass == 1);
+                if (status != NtStatus::Success) return status;
+            }
+        }
+        bound_ = true;
+        return NtStatus::Success;
+    }
+
+    NtStatus resolve(std::string_view library, std::string_view name,
+                     uint16_t ordinal, uint64_t& address) const noexcept {
+        address = 0;
+        struct Visited {
+            size_t module{};
+            std::string_view symbol{};
+            uint16_t ordinal{};
+        };
+        std::array<Visited, 64> visited{};
+        size_t depth{};
+        for (;;) {
+            const size_t index = findModule(library);
+            if (index == count_) return NtStatus::NoSuchFile;
+            for (size_t previous = 0; previous < depth; ++previous) {
+                const auto& key = visited[previous];
+                if (key.module == index && equal(key.symbol, name) && key.ordinal == ordinal) {
+                    return NtStatus::CircularReference;
+                }
+            }
+            if (depth == visited.size()) return NtStatus::NotSupported;
+            visited[depth++] = {index, name, ordinal};
+            const auto& current = modules_[index];
+            pe::PeImageView64::ExportTarget target;
+            const NtStatus status = current.view.findExport(current.image, current.base,
+                                                           name, ordinal, target);
+            if (status != NtStatus::Success) return status;
+            if (target.address) {
+                address = target.address;
+                return NtStatus::Success;
+            }
+            const auto forwarder = target.forwarder;
+            size_t separator = forwarder.size();
+            for (size_t byte = 0; byte < forwarder.size(); ++byte) {
+                if (forwarder[byte] == '.') separator = byte;
+            }
+            if (separator == 0 || separator >= forwarder.size() - 1) {
+                return NtStatus::InvalidImageFormat;
+            }
+            library = {forwarder.data(), separator};
+            name = {forwarder.data() + separator + 1, forwarder.size() - separator - 1};
+            ordinal = 0;
+            if (name[0] == '#') {
+                uint32_t value{};
+                if (name.size() == 1) return NtStatus::InvalidImageFormat;
+                for (size_t digit = 1; digit < name.size(); ++digit) {
+                    if (name[digit] < '0' || name[digit] > '9') {
+                        return NtStatus::InvalidImageFormat;
+                    }
+                    value = value * 10 + static_cast<uint32_t>(name[digit] - '0');
+                    if (value > UINT16_MAX) return NtStatus::InvalidImageFormat;
+                }
+                ordinal = static_cast<uint16_t>(value);
+                name = {};
+            }
+        }
+    }
+
+    [[nodiscard]] size_t size() const noexcept { return count_; }
+    [[nodiscard]] const Module* module(size_t index) const noexcept {
+        return index < count_ ? &modules_[index] : nullptr;
+    }
+    [[nodiscard]] bool importsBound() const noexcept { return bound_; }
+    [[nodiscard]] const BindingFailure& bindingFailure() const noexcept { return failure_; }
+
+private:
+    static char lower(char character) noexcept {
+        return character >= 'A' && character <= 'Z'
+            ? static_cast<char>(character + ('a' - 'A')) : character;
+    }
+    static bool equal(std::string_view first, std::string_view second,
+                      bool insensitive = false) noexcept {
+        if (first.size() != second.size()) return false;
+        for (size_t byte = 0; byte < first.size(); ++byte) {
+            if (insensitive ? lower(first[byte]) != lower(second[byte])
+                            : first[byte] != second[byte]) return false;
+        }
+        return true;
+    }
+    [[nodiscard]] size_t findModule(std::string_view name) const noexcept {
+        constexpr std::string_view crt = "api-ms-win-crt-";
+        if (name.size() > crt.size() &&
+            equal({name.data(), crt.size()}, crt, true)) {
+            name = {"ucrtbase.dll", sizeof("ucrtbase.dll") - 1};
+        }
+        for (size_t index = 0; index < count_; ++index) {
+            const auto candidate = modules_[index].name;
+            if (equal(name, candidate, true) ||
+                (candidate.size() == name.size() + 4 &&
+                 equal({candidate.data(), name.size()}, name, true) &&
+                 equal({candidate.data() + name.size(), 4}, {".dll", 4}, true))) {
+                return index;
+            }
+        }
+        return count_;
+    }
+    std::array<Module, 16> modules_{};
+    size_t count_{};
+    bool bound_{};
+    BindingFailure failure_{};
+};
+
 class UserImageLoader64 {
 private:
     struct ImageExportDirectory64 {

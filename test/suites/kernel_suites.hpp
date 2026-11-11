@@ -249,7 +249,7 @@ void Test_PeLoader_ValidAndCorruptedHeaders() {
     TEST_ASSERT(!NT_SUCCESS(smallStatus), "Too small buffer should fail inspect");
 
     // 2. Test synthetic valid PE64 header structure
-    std::vector<uint8_t> peBuffer(sizeof(pe::ImageDosHeader) + sizeof(pe::ImageNtHeaders64) + sizeof(pe::ImageSectionHeader), 0);
+    std::vector<uint8_t> peBuffer(512, 0);
     auto* dos = reinterpret_cast<pe::ImageDosHeader*>(peBuffer.data());
     dos->e_magic = pe::DOS_MAGIC;
     dos->e_lfanew = sizeof(pe::ImageDosHeader);
@@ -262,6 +262,10 @@ void Test_PeLoader_ValidAndCorruptedHeaders() {
     nt->optionalHeader.magic = pe::PE32PLUS_MAGIC;
     nt->optionalHeader.addressOfEntryPoint = 0x1000;
     nt->optionalHeader.imageBase = 0x140000000;
+    nt->optionalHeader.fileAlignment = 512;
+    nt->optionalHeader.sectionAlignment = 4096;
+    nt->optionalHeader.sizeOfHeaders = 512;
+    nt->optionalHeader.sizeOfImage = 0x3000;
 
     auto* sec = reinterpret_cast<pe::ImageSectionHeader*>(
         peBuffer.data() + dos->e_lfanew + sizeof(uint32_t) + sizeof(pe::ImageFileHeader) + nt->fileHeader.sizeOfOptionalHeader
@@ -67500,4 +67504,3 @@ inline void Suite501_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog
 inline void Test_Horizon285_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity_Suite() {
     Suite501_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity();
 }
-

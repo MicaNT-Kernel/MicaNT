@@ -19,5 +19,8 @@ bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;
 bool verifyBootstrapSyscalls() noexcept;
+bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
+                            bool writable, bool executable) noexcept;
+bool verifyNativeImageLoading() noexcept;
 
 } // namespace micant::hal::amd64

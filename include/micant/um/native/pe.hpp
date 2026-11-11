@@ -6,8 +6,8 @@
 #include <span>
 #include <vector>
 #include <optional>
+#include <array>
 #include "micant/shared/ntstatus.hpp"
-#include "micant/km/executive/mm.hpp"
 
 namespace micant::pe {
 
@@ -226,6 +226,20 @@ struct ImageTlsDirectory64 {
     uint32_t characteristics;
 };
 
+struct ImageExportDirectory {
+    uint32_t characteristics;
+    uint32_t timeDateStamp;
+    uint16_t majorVersion;
+    uint16_t minorVersion;
+    uint32_t name;
+    uint32_t base;
+    uint32_t numberOfFunctions;
+    uint32_t numberOfNames;
+    uint32_t addressOfFunctions;
+    uint32_t addressOfNames;
+    uint32_t addressOfNameOrdinals;
+};
+
 #pragma pack(pop)
 
 struct ImportedSymbol {
@@ -246,41 +260,438 @@ inline constexpr uint32_t IMAGE_SCN_MEM_READ      = 0x40000000;
 inline constexpr uint32_t IMAGE_SCN_MEM_WRITE     = 0x80000000;
 inline constexpr uint32_t IMAGE_SCN_MEM_DISCARDABLE = 0x02000000;
 
+// Allocation-free PE32+ view used before a process runtime or heap exists.
+class PeImageView64 {
+public:
+    struct ExportTarget {
+        uint64_t address{};
+        std::string_view forwarder{};
+    };
+    struct TlsLayout {
+        std::span<const uint8_t> initialData{};
+        uint32_t zeroFill{};
+        uint32_t indexRva{};
+        size_t alignment{1};
+        std::array<uint64_t, 64> callbacks{};
+        size_t callbackCount{};
+        bool present{};
+    };
+    NtStatus inspect(std::span<const uint8_t> file) noexcept {
+        *this = {};
+        ImageDosHeader dos{};
+        if (!read(file, 0, dos) || dos.e_magic != DOS_MAGIC || dos.e_lfanew < 0) {
+            return NtStatus::InvalidImageFormat;
+        }
+        const size_t ntOffset = static_cast<uint32_t>(dos.e_lfanew);
+        uint32_t signature{};
+        ImageFileHeader coff{};
+        if (!read(file, ntOffset, signature) || signature != NT_SIGNATURE ||
+            !read(file, ntOffset + 4, coff) || coff.machine != MACHINE_AMD64 ||
+            !coff.numberOfSections || coff.numberOfSections > 96 ||
+            coff.sizeOfOptionalHeader < 112) {
+            return NtStatus::InvalidImageFormat;
+        }
+        const size_t optionalOffset = ntOffset + 4 + sizeof(coff);
+        if (!fits(file.size(), optionalOffset, coff.sizeOfOptionalHeader)) {
+            return NtStatus::InvalidImageFormat;
+        }
+        headers_.signature = signature;
+        headers_.fileHeader = coff;
+        const size_t optionalBytes = coff.sizeOfOptionalHeader < sizeof(headers_.optionalHeader)
+            ? coff.sizeOfOptionalHeader : sizeof(headers_.optionalHeader);
+        copy(&headers_.optionalHeader, file.data() + optionalOffset, optionalBytes);
+        const auto& opt = headers_.optionalHeader;
+        if (opt.magic != PE32PLUS_MAGIC || opt.numberOfRvaAndSizes > 16 ||
+            112 + opt.numberOfRvaAndSizes * 8 > coff.sizeOfOptionalHeader ||
+            !powerOfTwo(opt.fileAlignment) || opt.fileAlignment < 512 ||
+            opt.fileAlignment > 65536 || !powerOfTwo(opt.sectionAlignment) ||
+            opt.sectionAlignment < opt.fileAlignment || !opt.sizeOfImage ||
+            opt.sizeOfImage % opt.sectionAlignment ||
+            !opt.sizeOfHeaders || opt.sizeOfHeaders > file.size() ||
+            opt.sizeOfHeaders > opt.sizeOfImage ||
+            opt.sizeOfHeaders % opt.fileAlignment) {
+            return NtStatus::InvalidImageFormat;
+        }
+        if (opt.sectionAlignment < 4096) {
+            return NtStatus::NotSupported;
+        }
+        sectionsOffset_ = optionalOffset + coff.sizeOfOptionalHeader;
+        if (!fits(opt.sizeOfHeaders, sectionsOffset_,
+                  static_cast<size_t>(coff.numberOfSections) * sizeof(ImageSectionHeader))) {
+            return NtStatus::InvalidImageFormat;
+        }
+        file_ = file;
+        for (size_t index = 0; index < coff.numberOfSections; ++index) {
+            const auto current = section(index);
+            const size_t size = sectionSize(current);
+            if (current.virtualAddress < opt.sizeOfHeaders ||
+                current.virtualAddress % opt.sectionAlignment ||
+                !fits(opt.sizeOfImage, current.virtualAddress, size) ||
+                (current.sizeOfRawData &&
+                    (current.pointerToRawData < opt.sizeOfHeaders ||
+                     current.pointerToRawData % opt.fileAlignment ||
+                     !fits(file.size(), current.pointerToRawData, current.sizeOfRawData)))) {
+                file_ = {};
+                return NtStatus::InvalidImageFormat;
+            }
+            for (size_t previous = 0; previous < index; ++previous) {
+                const auto other = section(previous);
+                if (size && sectionSize(other) &&
+                    current.virtualAddress < other.virtualAddress + sectionSize(other) &&
+                    other.virtualAddress < current.virtualAddress + size) {
+                    file_ = {};
+                    return NtStatus::InvalidImageFormat;
+                }
+            }
+        }
+        if (opt.addressOfEntryPoint && !executableRva(opt.addressOfEntryPoint)) {
+            file_ = {};
+            return NtStatus::InvalidImageFormat;
+        }
+        for (uint32_t index = 0; index < opt.numberOfRvaAndSizes; ++index) {
+            const auto dir = opt.dataDirectory[index];
+            if (!dir.virtualAddress && !dir.size) continue;
+            if (!dir.virtualAddress || !dir.size ||
+                (index == IMAGE_DIRECTORY_ENTRY_SECURITY
+                    ? !fits(file.size(), dir.virtualAddress, dir.size)
+                    : !mappedRange(dir.virtualAddress, dir.size))) {
+                file_ = {};
+                return NtStatus::InvalidImageFormat;
+            }
+        }
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] const ImageNtHeaders64& headers() const noexcept { return headers_; }
+    [[nodiscard]] ImageSectionHeader section(size_t index) const noexcept {
+        ImageSectionHeader result{};
+        if (index < headers_.fileHeader.numberOfSections) {
+            read(file_, sectionsOffset_ + index * sizeof(result), result);
+        }
+        return result;
+    }
+    [[nodiscard]] bool executableRva(uint32_t rva) const noexcept {
+        for (size_t index = 0; index < headers_.fileHeader.numberOfSections; ++index) {
+            const auto sec = section(index);
+            if ((sec.characteristics & IMAGE_SCN_MEM_EXECUTE) &&
+                rva >= sec.virtualAddress && rva - sec.virtualAddress < sectionSize(sec)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    [[nodiscard]] bool mappedRange(uint32_t rva, size_t count) const noexcept {
+        return count && count <= mappedRemaining(rva);
+    }
+
+    NtStatus map(std::span<uint8_t> destination, uint64_t actualBase) const noexcept {
+        if (file_.empty() || destination.size() < headers_.optionalHeader.sizeOfImage) {
+            return NtStatus::BufferTooSmall;
+        }
+        if (actualBase > UINT64_MAX - headers_.optionalHeader.sizeOfImage) {
+            return NtStatus::InvalidParameter;
+        }
+        const uintptr_t source = reinterpret_cast<uintptr_t>(file_.data());
+        const uintptr_t target = reinterpret_cast<uintptr_t>(destination.data());
+        if (target >= source ? target - source < file_.size()
+                             : source - target < headers_.optionalHeader.sizeOfImage) {
+            return NtStatus::InvalidParameter;
+        }
+        destination = destination.first(headers_.optionalHeader.sizeOfImage);
+        for (auto& byte : destination) byte = 0;
+        copy(destination.data(), file_.data(), headers_.optionalHeader.sizeOfHeaders);
+        for (size_t index = 0; index < headers_.fileHeader.numberOfSections; ++index) {
+            const auto sec = section(index);
+            if (sec.sizeOfRawData) {
+                copy(destination.data() + sec.virtualAddress,
+                     file_.data() + sec.pointerToRawData, sec.sizeOfRawData);
+            }
+        }
+        const uint64_t delta = actualBase - headers_.optionalHeader.imageBase;
+        if (!delta) return NtStatus::Success;
+        const auto dir = directory(IMAGE_DIRECTORY_ENTRY_BASERELOC);
+        if (!dir.size || (headers_.fileHeader.characteristics & 1)) {
+            return NtStatus::Conflict;
+        }
+        size_t cursor = dir.virtualAddress;
+        const size_t end = cursor + dir.size;
+        while (cursor < end) {
+            ImageBaseRelocation block{};
+            if (!fits(end, cursor, sizeof(block)) || !read(destination, cursor, block) ||
+                block.sizeOfBlock < sizeof(block) ||
+                (block.sizeOfBlock - sizeof(block)) % 2 ||
+                !fits(end, cursor, block.sizeOfBlock) || block.virtualAddress % 4096) {
+                return NtStatus::InvalidImageFormat;
+            }
+            for (size_t offset = sizeof(block); offset < block.sizeOfBlock; offset += 2) {
+                uint16_t relocation{};
+                read(destination, cursor + offset, relocation);
+                const uint16_t type = relocation >> 12;
+                if (type == IMAGE_REL_BASED_ABSOLUTE) continue;
+                if (type != IMAGE_REL_BASED_DIR64 ||
+                    block.virtualAddress > UINT32_MAX - (relocation & 4095)) {
+                    return NtStatus::InvalidImageFormat;
+                }
+                const uint32_t rva = block.virtualAddress + (relocation & 4095);
+                uint64_t value{};
+                if (!mappedRange(rva, sizeof(value)) || !read(destination, rva, value)) {
+                    return NtStatus::InvalidImageFormat;
+                }
+                value += delta;
+                copy(destination.data() + rva, &value, sizeof(value));
+            }
+            cursor += block.sizeOfBlock;
+        }
+        return NtStatus::Success;
+    }
+
+    template <typename Resolver>
+    NtStatus bindImports(std::span<uint8_t> image, Resolver&& resolve,
+                         bool writeBindings = true) const {
+        if (file_.empty() || image.size() < headers_.optionalHeader.sizeOfImage) {
+            return NtStatus::InvalidParameter;
+        }
+        const auto dir = directory(IMAGE_DIRECTORY_ENTRY_IMPORT);
+        if (!dir.size) return NtStatus::Success;
+        size_t cursor = dir.virtualAddress;
+        const size_t end = cursor + dir.size;
+        while (fits(end, cursor, sizeof(ImageImportDescriptor))) {
+            ImageImportDescriptor descriptor{};
+            read(image, cursor, descriptor);
+            if (!descriptor.originalFirstThunk && !descriptor.timeDateStamp &&
+                !descriptor.forwarderChain && !descriptor.name && !descriptor.firstThunk) {
+                return NtStatus::Success;
+            }
+            std::string_view library;
+            if (!descriptor.firstThunk || !stringAt(image, descriptor.name, library) ||
+                library.empty()) return NtStatus::InvalidImageFormat;
+            size_t lookup = descriptor.originalFirstThunk
+                ? descriptor.originalFirstThunk : descriptor.firstThunk;
+            size_t slot = descriptor.firstThunk;
+            for (;;) {
+                uint64_t entry{};
+                if (lookup > UINT32_MAX || slot > UINT32_MAX ||
+                    !mappedRange(static_cast<uint32_t>(lookup), sizeof(entry)) ||
+                    !mappedRange(static_cast<uint32_t>(slot), sizeof(entry)) ||
+                    !read(image, lookup, entry)) {
+                    return NtStatus::InvalidImageFormat;
+                }
+                if (!entry) break;
+                uint16_t ordinal{};
+                std::string_view name;
+                if (entry & IMAGE_ORDINAL_FLAG64) {
+                    if (entry & ~(IMAGE_ORDINAL_FLAG64 | uint64_t{0xFFFF})) {
+                        return NtStatus::InvalidImageFormat;
+                    }
+                    ordinal = static_cast<uint16_t>(entry);
+                } else {
+                    if (entry > UINT32_MAX - 2 || !mappedRange(static_cast<uint32_t>(entry), 3) ||
+                        !stringAt(image, static_cast<uint32_t>(entry) + 2, name) || name.empty()) {
+                        return NtStatus::InvalidImageFormat;
+                    }
+                }
+                uint64_t address{};
+                const NtStatus status = resolve(library, name, ordinal, address);
+                if (status != NtStatus::Success) return status;
+                if (!address) return NtStatus::ProcedureNotFound;
+                if (writeBindings) copy(image.data() + slot, &address, sizeof(address));
+                lookup += sizeof(entry);
+                slot += sizeof(entry);
+            }
+            cursor += sizeof(descriptor);
+        }
+        return NtStatus::InvalidImageFormat;
+    }
+
+    NtStatus findExport(std::span<const uint8_t> image, uint64_t actualBase,
+                        std::string_view name, uint16_t ordinal,
+                        ExportTarget& result) const noexcept {
+        result = {};
+        if (file_.empty() || image.size() < headers_.optionalHeader.sizeOfImage ||
+            actualBase > UINT64_MAX - headers_.optionalHeader.sizeOfImage) {
+            return NtStatus::InvalidParameter;
+        }
+        const auto dir = directory(IMAGE_DIRECTORY_ENTRY_EXPORT);
+        if (!dir.size) return NtStatus::ProcedureNotFound;
+        ImageExportDirectory exports{};
+        if (dir.size < sizeof(exports) || !read(image, dir.virtualAddress, exports) ||
+            !exports.numberOfFunctions ||
+            !mappedRange(exports.addressOfFunctions,
+                         static_cast<size_t>(exports.numberOfFunctions) * 4)) {
+            return NtStatus::InvalidImageFormat;
+        }
+        uint32_t index{};
+        if (!name.empty()) {
+            if (!exports.numberOfNames) return NtStatus::ProcedureNotFound;
+            if (!mappedRange(exports.addressOfNames, static_cast<size_t>(exports.numberOfNames) * 4) ||
+                !mappedRange(exports.addressOfNameOrdinals, static_cast<size_t>(exports.numberOfNames) * 2)) {
+                return NtStatus::InvalidImageFormat;
+            }
+            bool found{};
+            for (size_t entry = 0; entry < exports.numberOfNames; ++entry) {
+                uint32_t rva{};
+                uint16_t namedIndex{};
+                read(image, exports.addressOfNames + entry * 4, rva);
+                read(image, exports.addressOfNameOrdinals + entry * 2, namedIndex);
+                std::string_view candidate;
+                if (namedIndex >= exports.numberOfFunctions || !stringAt(image, rva, candidate)) {
+                    return NtStatus::InvalidImageFormat;
+                }
+                if (candidate == name) {
+                    index = namedIndex;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return NtStatus::ProcedureNotFound;
+        } else {
+            if (ordinal < exports.base || ordinal - exports.base >= exports.numberOfFunctions) {
+                return NtStatus::ProcedureNotFound;
+            }
+            index = ordinal - exports.base;
+        }
+        uint32_t rva{};
+        read(image, exports.addressOfFunctions + static_cast<size_t>(index) * 4, rva);
+        if (!rva) return NtStatus::ProcedureNotFound;
+        if (!mappedRange(rva, 1)) return NtStatus::InvalidImageFormat;
+        if (rva >= dir.virtualAddress && rva - dir.virtualAddress < dir.size) {
+            if (!stringAt(image, rva, result.forwarder) || result.forwarder.empty() ||
+                result.forwarder.size() + 1 > dir.size - (rva - dir.virtualAddress)) {
+                result = {};
+                return NtStatus::InvalidImageFormat;
+            }
+        } else {
+            result.address = actualBase + rva;
+        }
+        return NtStatus::Success;
+    }
+
+    NtStatus tlsLayout(std::span<const uint8_t> image, uint64_t actualBase,
+                       TlsLayout& result) const noexcept {
+        result = {};
+        if (file_.empty() || image.size() < headers_.optionalHeader.sizeOfImage ||
+            actualBase > UINT64_MAX - headers_.optionalHeader.sizeOfImage) {
+            return NtStatus::InvalidParameter;
+        }
+        const auto dir = directory(IMAGE_DIRECTORY_ENTRY_TLS);
+        if (!dir.size) return NtStatus::Success;
+        ImageTlsDirectory64 tls{};
+        if (dir.size < sizeof(tls) || !read(image, dir.virtualAddress, tls) ||
+            tls.endAddressOfRawData < tls.startAddressOfRawData) {
+            return NtStatus::InvalidImageFormat;
+        }
+        const auto relative = [&](uint64_t va, size_t count, uint32_t& rva) {
+            if (va < actualBase || va - actualBase > UINT32_MAX) return false;
+            rva = static_cast<uint32_t>(va - actualBase);
+            return mappedRange(rva, count);
+        };
+        const uint64_t size = tls.endAddressOfRawData - tls.startAddressOfRawData;
+        uint32_t rva{};
+        if (size) {
+            if (size > image.size() || !relative(tls.startAddressOfRawData, size, rva)) {
+                return NtStatus::InvalidImageFormat;
+            }
+            result.initialData = image.subspan(rva, static_cast<size_t>(size));
+        }
+        if (!relative(tls.addressOfIndex, sizeof(uint32_t), result.indexRva)) {
+            result = {};
+            return NtStatus::InvalidImageFormat;
+        }
+        const uint32_t alignment = (tls.characteristics >> 20) & 15;
+        if (alignment == 15) return NtStatus::InvalidImageFormat;
+        result.alignment = alignment ? size_t{1} << (alignment - 1) : 1;
+        result.zeroFill = tls.sizeOfZeroFill;
+        if (tls.addressOfCallBacks) {
+            if (!relative(tls.addressOfCallBacks, 8, rva)) return NtStatus::InvalidImageFormat;
+            for (;;) {
+                uint64_t callback{};
+                if (!mappedRange(rva, 8) || !read(image, rva, callback)) {
+                    return NtStatus::InvalidImageFormat;
+                }
+                if (!callback) break;
+                uint32_t callbackRva{};
+                if (!relative(callback, 1, callbackRva) || !executableRva(callbackRva)) {
+                    return NtStatus::InvalidImageFormat;
+                }
+                if (result.callbackCount == result.callbacks.size()) {
+                    return NtStatus::NotSupported;
+                }
+                result.callbacks[result.callbackCount++] = callback;
+                rva += 8;
+            }
+        }
+        result.present = true;
+        return NtStatus::Success;
+    }
+
+private:
+    static bool powerOfTwo(uint32_t value) noexcept { return value && !(value & (value - 1)); }
+    static bool fits(size_t size, size_t start, size_t count) noexcept {
+        return start <= size && count <= size - start;
+    }
+    static size_t sectionSize(const ImageSectionHeader& sec) noexcept {
+        return sec.misc.virtualSize > sec.sizeOfRawData
+            ? sec.misc.virtualSize : sec.sizeOfRawData;
+    }
+    static void copy(void* to, const void* from, size_t count) noexcept {
+        auto* destination = static_cast<uint8_t*>(to);
+        const auto* source = static_cast<const uint8_t*>(from);
+        for (size_t byte = 0; byte < count; ++byte) destination[byte] = source[byte];
+    }
+    template <typename T>
+    static bool read(std::span<const uint8_t> bytes, size_t offset, T& result) noexcept {
+        if (!fits(bytes.size(), offset, sizeof(T))) return false;
+        copy(&result, bytes.data() + offset, sizeof(T));
+        return true;
+    }
+    [[nodiscard]] ImageDataDirectory directory(uint32_t index) const noexcept {
+        return index < headers_.optionalHeader.numberOfRvaAndSizes
+            ? headers_.optionalHeader.dataDirectory[index] : ImageDataDirectory{};
+    }
+    [[nodiscard]] size_t mappedRemaining(uint32_t rva) const noexcept {
+        if (file_.empty()) return 0;
+        if (rva < headers_.optionalHeader.sizeOfHeaders) {
+            return headers_.optionalHeader.sizeOfHeaders - rva;
+        }
+        for (size_t index = 0; index < headers_.fileHeader.numberOfSections; ++index) {
+            const auto sec = section(index);
+            if (rva >= sec.virtualAddress && rva - sec.virtualAddress < sectionSize(sec)) {
+                return sectionSize(sec) - (rva - sec.virtualAddress);
+            }
+        }
+        return 0;
+    }
+    bool stringAt(std::span<const uint8_t> image, uint32_t rva,
+                  std::string_view& text) const noexcept {
+        const size_t remaining = mappedRemaining(rva);
+        if (!remaining || !fits(image.size(), rva, remaining)) return false;
+        for (size_t size = 0; size < remaining; ++size) {
+            if (!image[rva + size]) {
+                text = {reinterpret_cast<const char*>(image.data() + rva), size};
+                return true;
+            }
+        }
+        return false;
+    }
+    std::span<const uint8_t> file_{};
+    ImageNtHeaders64 headers_{};
+    size_t sectionsOffset_{};
+};
+
 /**
  * @brief Clean-room 64-bit PE Image Parser & Loader.
  */
 class PeLoader {
 public:
     static NtStatus inspect(std::span<const uint8_t> bytes, ImageNtHeaders64& outHeaders, std::vector<ImageSectionHeader>& outSections) {
-        if (bytes.size() < sizeof(ImageDosHeader)) {
-            return NtStatus::InvalidParameter;
-        }
-
-        const auto* dos = reinterpret_cast<const ImageDosHeader*>(bytes.data());
-        if (dos->e_magic != DOS_MAGIC) {
-            return NtStatus::InvalidParameter;
-        }
-
-        if (dos->e_lfanew <= 0 || static_cast<size_t>(dos->e_lfanew) + sizeof(ImageNtHeaders64) > bytes.size()) {
-            return NtStatus::InvalidParameter;
-        }
-
-        const auto* nt = reinterpret_cast<const ImageNtHeaders64*>(bytes.data() + dos->e_lfanew);
-        if (nt->signature != NT_SIGNATURE || nt->fileHeader.machine != MACHINE_AMD64 || nt->optionalHeader.magic != PE32PLUS_MAGIC) {
-            return NtStatus::InvalidParameter;
-        }
-
-        outHeaders = *nt;
-
-        const auto* section = reinterpret_cast<const ImageSectionHeader*>(
-            bytes.data() + dos->e_lfanew + sizeof(uint32_t) + sizeof(ImageFileHeader) + nt->fileHeader.sizeOfOptionalHeader
-        );
-
+        PeImageView64 view;
+        const NtStatus status = view.inspect(bytes);
+        if (status != NtStatus::Success) return status;
+        outHeaders = view.headers();
         outSections.clear();
-        for (uint16_t i = 0; i < nt->fileHeader.numberOfSections; ++i) {
-            outSections.push_back(section[i]);
+        for (uint16_t i = 0; i < outHeaders.fileHeader.numberOfSections; ++i) {
+            outSections.push_back(view.section(i));
         }
-
         return NtStatus::Success;
     }
 

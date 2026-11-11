@@ -176,17 +176,22 @@ canonical owner.
 | IDT and exceptions | `Ke` + `Hal` / AMD64 | Diagnostic GDT/TSS/IDT and checked #BP/#PF returns verified in QEMU; general exception dispatch pending |
 | APIC and timer | `Hal` + `Ke` | Headers/contracts exist; modular bare-metal initialization is not verified |
 | Initial paging and PFN allocator | `Mm` + `Hal` mechanism | Kernel-owned root, supervisor MMIO and bounded user mappings verified; firmware mappings retained, PFN allocator pending |
-| AMD64 syscall dispatch | `Ke` + native API boundary | Not migrated to a verified modular kernel entry |
+| AMD64 syscall dispatch | `Ke` + native API boundary | Protected hardware entry/return, user-buffer validation and private display/input services verified; Executive NT dispatch remains pending |
 | Ring 3 transition | `Ps` + platform code | Hardware CPL3 entry/return and four page-protection probes verified; not a scheduled user process |
-| PE image loading | Native loader + `Ps` | Not migrated to a verified modular kernel path |
+| PE image loading | Native loader + `Ps` | Bounded canonical PE view/module binding tested on host; mapped compiled diagnostic executes at CPL3 in QEMU; process/DLL initialization remains pending |
 | AHCI, USB/HID, and boot storage | `Io` + canonical drivers + `Hal` | Driver headers/implementations exist; boot-start integration is not verified; the QEMU bootstrap separately polls PS/2 mouse packets for a software cursor |
 | Display and shell input | Boot video + `Hal` / display driver | Separate VirtIO 2D driver presents shared desktop/taskbar and cursor; mouse movement and click delivery verified, but no Start/menu/window actions or user-mode Explorer session |
 | Bare-metal Object Manager | `Ob` | Host implementation exists; no freestanding boot integration |
 | Bare-metal I/O Manager | `Io` | Host implementation exists; no freestanding boot integration |
-| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | QEMU bootstrap polls PS/2 with interrupts disabled; no freestanding runtime, scheduler, or Executive idle thread yet |
+| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | Minimal memory/string primitives linked without hosted CRT; QEMU polls PS/2 with interrupts disabled; allocator, C++ runtime, scheduler and Executive idle thread remain pending |
 
 This matrix is a migration inventory, not evidence that these functions
 already work on hardware.
+
+The per-translation-unit dependency audit is maintained in
+[`FREESTANDING_GAP_MATRIX.md`](FREESTANDING_GAP_MATRIX.md). Verified integration
+increments and their remaining prerequisites are recorded separately in
+[`KERNEL_INTEGRATION_STATUS.md`](KERNEL_INTEGRATION_STATUS.md).
 
 ## G. Verification levels
 

@@ -2,14 +2,7 @@
 #include "micant/km/hal/cpu.hpp"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
-
-extern "C" void* memset(void* destination, int value, size_t count) {
-    auto* bytes = static_cast<volatile uint8_t*>(destination);
-    for (size_t index = 0; index < count; ++index) {
-        bytes[index] = static_cast<uint8_t>(value);
-    }
-    return destination;
-}
+#include "micant/km/executive/usermode.hpp"
 
 namespace {
 
@@ -21,12 +14,15 @@ constexpr uint64_t kPhysicalMask = 0x000FFFFFFFFFF000ULL;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
 alignas(4096) uint64_t g_pml4[512]{};
-alignas(4096) uint64_t g_tables[32][512]{};
+alignas(4096) uint64_t g_tables[256][512]{};
 size_t g_tableCount{};
 uint64_t g_deviceNext = kDeviceBase;
 bool g_addressSpaceReady{};
 alignas(4096) uint8_t g_userCode[4096]{};
 alignas(4096) uint8_t g_userStack[4096]{};
+alignas(4096) uint8_t g_nativeProbeImage[8192]{};
+uint8_t g_nativeProbeFile[512 + 4096]{};
+micant::um::NativeUserImageSet64 g_nativeProbeModules{};
 alignas(16) uint8_t g_kernelStack[32768]{};
 volatile bool g_probeSucceeded{};
 uint32_t g_probeMode{};
@@ -90,7 +86,7 @@ bool mapPage(uint64_t address, uint64_t physical, uint64_t flags) noexcept {
     for (int shift = 39; shift > 12; shift -= 9) {
         uint64_t& entry = table[(address >> shift) & 511];
         if ((entry & kPresent) == 0) {
-            if (g_tableCount == 32) {
+            if (g_tableCount == sizeof(g_tables) / sizeof(g_tables[0])) {
                 return false;
             }
             entry = reinterpret_cast<uint64_t>(g_tables[g_tableCount++]) |
@@ -122,6 +118,7 @@ bool mapPage(uint64_t address, uint64_t physical, uint64_t flags) noexcept {
 
 extern "C" {
 uint64_t MicantProbeKernelRsp{};
+uint64_t MicantProbeUserRip = kUserBase;
 
 void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
     using micant::hal::amd64::bootstrapUserRange;
@@ -340,7 +337,7 @@ __attribute__((naked)) void MicantProbeEnter() {
         "pushq $0x2b\n"
         "movabsq $0x400000001ff0, %rax\npushq %rax\n"
         "pushq $2\npushq $0x33\n"
-        "movabsq $0x400000000000, %rax\npushq %rax\niretq\n"
+        "movq MicantProbeUserRip(%rip), %rax\npushq %rax\niretq\n"
     );
 }
 }
@@ -412,6 +409,33 @@ bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
     }
 }
 
+bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
+                            bool writable, bool executable) noexcept {
+    const uint64_t physical = reinterpret_cast<uint64_t>(backing);
+    if (!g_addressSpaceReady || !size || (size & 4095) || (address & 4095) ||
+        (physical & 4095) || !physical || address < kUserBase ||
+        address >= kUserBase + (uint64_t{1} << 39) ||
+        size > kUserBase + (uint64_t{1} << 39) - address ||
+        physical > kPhysicalMask || size - 1 > kPhysicalMask + 4095 - physical ||
+        (size / 4096 + 511) / 512 + 5 >
+            sizeof(g_tables) / sizeof(g_tables[0]) - g_tableCount) {
+        return false;
+    }
+    const uint64_t root = reinterpret_cast<uint64_t>(g_pml4);
+    for (size_t offset = 0; offset < size; offset += 4096) {
+        if (walk(root, address + offset) ||
+            walk(root, physical + offset) != physical + offset) {
+            return false;
+        }
+    }
+    const uint64_t flags = kUser | (writable ? kWritable : 0) |
+                           (executable ? 0 : kNoExecute);
+    for (size_t offset = 0; offset < size; offset += 4096) {
+        if (!mapPage(address + offset, physical + offset, flags)) return false;
+    }
+    return true;
+}
+
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept {
     if (!g_addressSpaceReady || !g_probeSucceeded || !dispatch || g_dispatch) {
         return false;
@@ -449,28 +473,72 @@ bool verifyBootstrapSyscalls() noexcept {
     if (!g_probeSucceeded) {
         return false;
     }
+    __asm__ __volatile__(
+        "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
+        : : : "rax", "memory"
+    );
+    return true;
+}
+
+bool verifyNativeImageLoading() noexcept {
+    using namespace micant::pe;
+    if (!g_dispatch || !g_probeSucceeded) return false;
+    constexpr uint64_t imageBase = kUserBase + 0x10000;
     const auto* client = reinterpret_cast<const uint8_t*>(MicantSyscallClientProgram);
     const size_t clientSize = reinterpret_cast<uint64_t>(MicantSyscallClientEnd) -
                               reinterpret_cast<uint64_t>(client);
     const size_t breakpointOffset =
         reinterpret_cast<uint64_t>(MicantSyscallClientBreakpoint) -
         reinterpret_cast<uint64_t>(client);
-    if (clientSize > sizeof(g_userCode) - 16 || breakpointOffset >= clientSize) {
+    if (clientSize > 4096 - 16 || breakpointOffset >= clientSize) {
         return false;
     }
+    ImageDosHeader dos{};
+    dos.e_magic = DOS_MAGIC;
+    dos.e_lfanew = 64;
+    memcpy(g_nativeProbeFile, &dos, sizeof(dos));
+    ImageNtHeaders64 nt{};
+    nt.signature = NT_SIGNATURE;
+    nt.fileHeader.machine = MACHINE_AMD64;
+    nt.fileHeader.numberOfSections = 1;
+    nt.fileHeader.sizeOfOptionalHeader = sizeof(ImageOptionalHeader64);
+    nt.fileHeader.characteristics = IMAGE_FILE_EXECUTABLE_IMAGE;
+    nt.optionalHeader.magic = PE32PLUS_MAGIC;
+    nt.optionalHeader.imageBase = imageBase;
+    nt.optionalHeader.addressOfEntryPoint = 4096;
+    nt.optionalHeader.sectionAlignment = 4096;
+    nt.optionalHeader.fileAlignment = 512;
+    nt.optionalHeader.sizeOfImage = sizeof(g_nativeProbeImage);
+    nt.optionalHeader.sizeOfHeaders = 512;
+    nt.optionalHeader.subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI;
+    memcpy(g_nativeProbeFile + 64, &nt, sizeof(nt));
+    ImageSectionHeader text{};
+    text.virtualAddress = 4096;
+    text.misc.virtualSize = 4096;
+    text.pointerToRawData = 512;
+    text.sizeOfRawData = 4096;
+    text.characteristics = IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ;
+    memcpy(g_nativeProbeFile + 64 + sizeof(nt), &text, sizeof(text));
     // CALL gives a compiled Windows x64 function the required entry alignment.
-    g_userCode[0] = 0xE8;
-    g_userCode[1] = 11;
-    g_userCode[2] = g_userCode[3] = g_userCode[4] = 0;
-    g_userCode[5] = 0x0F;
-    g_userCode[6] = 0x0B;
+    constexpr uint8_t call[]{0x48, 0x83, 0xEC, 0x20, 0xE8, 7, 0, 0, 0, 0x0F, 0x0B};
+    memcpy(g_nativeProbeFile + 512, call, sizeof(call));
     for (size_t byte = 0; byte < clientSize; ++byte) {
-        g_userCode[16 + byte] = client[byte];
+        g_nativeProbeFile[512 + 16 + byte] = client[byte];
     }
+    if (g_nativeProbeModules.addModule("syscall-probe.exe", g_nativeProbeFile,
+            g_nativeProbeImage, imageBase) != micant::NtStatus::Success ||
+        g_nativeProbeModules.bindAll() != micant::NtStatus::Success ||
+        !mapBootstrapUserMemory(imageBase, g_nativeProbeImage, 4096, false, false) ||
+        !mapBootstrapUserMemory(imageBase + 4096, g_nativeProbeImage + 4096,
+                                4096, false, true)) {
+        return false;
+    }
+    MicantProbeUserRip = imageBase + 4096;
     g_probeMode = 6;
     g_probeSucceeded = false;
-    g_probeReturnRip = kUserBase + 16 + breakpointOffset + 1;
+    g_probeReturnRip = imageBase + 4096 + 16 + breakpointOffset + 1;
     MicantProbeEnter();
+    MicantProbeUserRip = kUserBase;
     __asm__ __volatile__(
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
         : : : "rax", "memory"

@@ -224,6 +224,7 @@ if (MICANT_ENABLE_BAREMETAL)
     add_executable(ntoskrnl_core_baremetal
         kernel/init/kiinit.cpp
         kernel/hal/amd64_bootstrap.cpp
+        kernel/ex/freestanding.cpp
         tools/explorer_shell/desktop.cpp
         tools/explorer_shell/notification_area.cpp
         tools/explorer_shell/taskbar.cpp
