@@ -33,6 +33,8 @@ Reproduced from the current sources, not by accepting an old kernel binary:
 |---|---|
 | `python3 qemu.py --build-only` | Passed; kernel, bootloader, driver and manifest generated/validated |
 | `python3 qemu.py --headless` | Passed; ordered serial milestones, stable idle, PS/2 and scanout checks |
+| `cmake --build build/qemu-cmake-mingw --target ntoskrnl_core` | Passed; canonical core builds the kernel-owned Win32k dispatcher and WDDM adapter |
+| `cmake --build build/qemu-cmake-mingw --target micant_tests -j 4` | Test runner compiles, but link fails on duplicate `micant::ucrt::initializeOnExitTable`; tests did not run |
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted Ke behavior remains intact |
 | `cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot` | Rejected by the new boundary check: `win32k_boot` transitively includes private `micant/km/` headers |
 | `python3 -m unittest discover -s test -p test_explorer_runtime.py -v` | 12 passed |
@@ -242,6 +244,16 @@ and many transitive `micant/km/` Executive, memory, I/O, driver and HAL
 headers. As a result, `win32k_boot` and `explorer_runtime_boot` are currently
 blocked by design. That implementation must move to the canonical kernel
 owner and expose real user-mode service calls before this gate can pass.
+
+A kernel-owned Win32k dispatch entry and WDDM adapter now compile into
+`ntoskrnl_core`; the standard Executive dispatcher installs that handler.
+This is only the hosted modular-kernel step, not a completed migration:
+`win32k_boot` still contains the legacy user-mode implementation, the new
+module is not part of `ntoskrnl_core_baremetal`, and its object currently has
+unresolved C++ standard-library/runtime symbols that the freestanding kernel
+cannot import. The next step is a bounded freestanding service implementation
+and a user-mode syscall client with validated request marshalling and return
+values. Explorer remains blocked.
 
 ### Allocation-free firmware memory descriptors
 

@@ -22,6 +22,8 @@ struct SyscallFrame {
 
 using SyscallHandler = std::function<NtStatus(const SyscallFrame&)>;
 
+NtStatus DispatchWin32kShadowSyscall(const SyscallFrame& frame) noexcept;
+
 struct SyscallDescriptor {
     std::string_view name;
     uint32_t ssn;

@@ -50,11 +50,12 @@
 #include "micant/shared/win32k_client.h"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
+#if !defined(MICANT_KERNEL_WIN32K_CORE)
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
+#endif
 #include "micant/km/core/dispatcher.hpp"
-#include "micant/km/drivers/video/wddm.hpp"
 #include "micant/km/hal/bootvid.hpp"
 
 namespace micant::win32k {
@@ -1295,12 +1296,6 @@ public:
             m_windowClassAtoms.emplace(name,atom);
         }
 
-        // 3. Register Shadow SSDT dispatcher into central SyscallDispatcher
-        auto& dispatcher = micant::sys::SyscallDispatcher::get();
-        dispatcher.setShadowDispatcher([this](const micant::sys::SyscallFrame& frame) -> NtStatus {
-            return this->dispatchShadowSyscall(frame);
-        });
-
         m_initialized = true;
     }
 
@@ -2344,18 +2339,8 @@ public:
 
     // --- WDDM Display Surface Presentation ---
 
-    bool blitToWddmPrimary(HDC hdcSrc, int32_t nXSrc, int32_t nYSrc, int32_t nWidth, int32_t nHeight) {
-        auto& wddmSubsystem = micant::wddm::TitanWddmSubsystem::Instance();
-        auto primaryAdapter = wddmSubsystem.getPrimaryAdapter();
-        if (!primaryAdapter) return false;
-
-        // Perform GDI blit to Screen DC
-        HDC hScreenDC = m_gdiEngine.getScreenDC();
-        if (!hScreenDC) return false;
-
-        m_gdiEngine.bitBlt(hScreenDC, 0, 0, nWidth, nHeight, hdcSrc, nXSrc, nYSrc, SRCCOPY);
-        return true;
-    }
+    bool blitToWddmPrimary(HDC hdcSrc, int32_t nXSrc, int32_t nYSrc,
+                           int32_t nWidth, int32_t nHeight);
 
     // --- Diagnostic Telemetry ---
 
@@ -2841,6 +2826,7 @@ inline WIN32K_TELEMETRY W32kQueryTelemetry() noexcept {
 // 14. Subsystem Module Export Registration (JanusLDR, SCM, Version)
 // ============================================================================
 
+#if !defined(MICANT_KERNEL_WIN32K_CORE)
 inline void InitializeWin32kSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -2904,6 +2890,7 @@ inline void InitializeWin32kSubsystemExports() {
     // Initialize the Subsystem singleton instance
     TitanWin32kSubsystem::Instance().initialize();
 }
+#endif
 
 } // namespace micant::win32k
 
@@ -2921,5 +2908,7 @@ namespace micant {
     using win32k::WIN32K_TELEMETRY;
     using win32k::W32kQueryTelemetry;
     using win32k::W32kGetTelemetry;
+#if !defined(MICANT_KERNEL_WIN32K_CORE)
     using win32k::InitializeWin32kSubsystemExports;
+#endif
 } // namespace micant

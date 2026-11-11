@@ -18,6 +18,8 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ke/dispatcher.cpp
     kernel/ke/context_switch.cpp
     kernel/ke/wait.cpp
+    kernel/win32k/win32k.cpp
+    kernel/win32k/win32k_wddm.cpp
     kernel/mm/virtual.cpp
     kernel/io/iomgr.cpp
     kernel/ob/obref.cpp

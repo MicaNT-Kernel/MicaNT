@@ -541,6 +541,8 @@ void SyscallDispatcher::initializeStandardTable() {
             createOptions, mailslotQuota, maxMessageSize, readTimeout
         );
     });
+
+    setShadowDispatcher(DispatchWin32kShadowSyscall);
 }
 
 } // namespace micant::sys
