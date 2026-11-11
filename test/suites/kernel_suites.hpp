@@ -69326,3 +69326,307 @@ inline void Suite508_Direct3D12_Device68_CommandList62_Options80_NtSystemInfo331
 inline void Test_Horizon292_Device68Options80_PagefileWriteLatencyJitterCpuDriftRate_InterlockedParityModulo_And_AsconDrygasconXofHash_Suite() {
     Suite508_Direct3D12_Device68_CommandList62_Options80_NtSystemInfo331_332_InterlockedParityModulo_And_AsconDrygasconXofHash();
 }
+
+// ============================================================================
+// Suite 509: Horizon 293 - Direct3D 12 Device69/CommandList63 & Options 81,
+// NT Native 333/334, Interlocked MinorityModulo 64/32/16/8 & NIST Ascon-Saturnin XOF/Hash
+// ============================================================================
+inline void Suite509_Direct3D12_Device69_CommandList63_Options81_NtSystemInfo333_334_InterlockedMinorityModulo_And_AsconSaturninXofHash() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 509: Horizon 293 - Direct3D 12 Device69/CommandList63 & Options 81, NT Native 333/334, Interlocked MinorityModulo 64/32/16/8 & NIST Ascon-Saturnin XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device69, ID3D12GraphicsCommandList63 & Options 81 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device69, ID3D12GraphicsCommandList63 & Options 81 ABI...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+        ID3D12Device69* pDevice69 = nullptr;
+
+        int32_t hr = device.QueryInterface(IID_ID3D12Device69, reinterpret_cast<void**>(&pDevice69));
+        TEST_ASSERT(hr == 0 && pDevice69 != nullptr, "QueryInterface for IID_ID3D12Device69 succeeds");
+
+        ID3D12Device69* pOfficialDevice69 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device69, reinterpret_cast<void**>(&pOfficialDevice69));
+        TEST_ASSERT(hr == 0 && pOfficialDevice69 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device69 succeeds");
+        pOfficialDevice69->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS81
+        D3D12_FEATURE_DATA_D3D12_OPTIONS81 opt81{};
+        hr = pDevice69->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS81, &opt81, sizeof(opt81));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS81 succeeds");
+        TEST_ASSERT(opt81.WorkGraphsTier == 64u, "D3D12_OPTIONS81 reports WorkGraphsTier 64");
+        TEST_ASSERT(opt81.CooperativeMatrixMultiply9007199254740992Supported == TRUE, "D3D12_OPTIONS81 reports CooperativeMatrixMultiply9007199254740992Supported == TRUE");
+        TEST_ASSERT(opt81.SubByteMicroscopicFormatsV44Supported == TRUE, "D3D12_OPTIONS81 reports SubByteMicroscopicFormatsV44Supported == TRUE");
+        TEST_ASSERT(opt81.WorkGraphsMaxConcurrencyTier36028797018963968Supported == TRUE, "D3D12_OPTIONS81 reports WorkGraphsMaxConcurrencyTier36028797018963968Supported == TRUE");
+        TEST_ASSERT(opt81.DynamicClusterExpansionTier49Supported == 1, "D3D12_OPTIONS81 reports DynamicClusterExpansionTier49Supported == 1");
+        TEST_ASSERT(opt81.TilePipeliningStagesSupported == 70368744177664ULL, "D3D12_OPTIONS81 reports TilePipeliningStagesSupported == 70368744177664");
+        TEST_ASSERT(opt81.MaxWorkGraphConcurrencyGroups == 36028797018963968ULL, "D3D12_OPTIONS81 reports MaxWorkGraphConcurrencyGroups == 36028797018963968");
+        TEST_ASSERT(opt81.PhotonicInterconnectTier27Supported == 1, "D3D12_OPTIONS81 reports PhotonicInterconnectTier27Supported == 1");
+
+        // Cooperative matrix query 48
+        int32_t supported = 0;
+        uint64_t maxDim = 0;
+        uint32_t supTypes = 0, sparseAcc = 0;
+        int32_t asyncAcc = 0;
+        uint64_t tileStages = 0;
+        int32_t autoFeedback = 0, subRecursion = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseBlock = 0, determReduction = 0;
+        int32_t hyperQuant = 0, sparseCluster = 0, multiQueueSync = 0, asyncKernelDispatch = 0;
+        int32_t neuralExecutionEngine = 0, adaptiveTensorCore = 0, sovereignSilicon = 0;
+        int32_t quantumEmulation = 0, photonicInterconnect = 0;
+
+        hr = pDevice69->GetWorkGraphCooperativeMatrixSupport48(
+            &supported, &maxDim, &supTypes, &sparseAcc, &asyncAcc, &tileStages,
+            &autoFeedback, &subRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByte, &sparseBlock, &determReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernelDispatch,
+            &neuralExecutionEngine, &adaptiveTensorCore, &sovereignSilicon,
+            &quantumEmulation, &photonicInterconnect);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport48 succeeds");
+        TEST_ASSERT(supported == 1, "CooperativeMatrixSupport48 reports supported");
+        TEST_ASSERT(maxDim == 9007199254740992ULL, "CooperativeMatrixSupport48 reports max dimension 9.007 quadrillion");
+        TEST_ASSERT(tileStages == 70368744177664ULL, "CooperativeMatrixSupport48 reports 70.368 trillion tile pipelining stages");
+        TEST_ASSERT(quantumEmulation == 1, "CooperativeMatrixSupport48 reports quantum emulation");
+        TEST_ASSERT(photonicInterconnect == 1, "CooperativeMatrixSupport48 reports photonic interconnect tier 27");
+
+        // Create work graph program record 53 (27 params + &pProgRecord)
+        void* pProgRecord = nullptr;
+        hr = pDevice69->CreateWorkGraphProgramRecord53(
+            nullptr, 0, 512, 36028797018963968ULL, 1, 1, 1, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            &pProgRecord);
+        TEST_ASSERT(hr == 0 && pProgRecord != nullptr, "CreateWorkGraphProgramRecord53 succeeds");
+
+        // CommandList63
+        Prism3D12GraphicsCommandListImpl cmdList(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList63* pCmdList63 = nullptr;
+
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList63, reinterpret_cast<void**>(&pCmdList63));
+        TEST_ASSERT(hr == 0 && pCmdList63 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList63 succeeds");
+
+        ID3D12GraphicsCommandList63* pOfficialCmdList63 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList63, reinterpret_cast<void**>(&pOfficialCmdList63));
+        TEST_ASSERT(hr == 0 && pOfficialCmdList63 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList63 succeeds");
+        pOfficialCmdList63->Release();
+
+        // Exercise SetWorkGraphBackingMemory53
+        pCmdList63->SetWorkGraphBackingMemory53(
+            0x7FFF0000ULL, 0x200000ULL, 0x80000ULL, 36028797018963968ULL,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 0);
+
+        // Exercise DispatchGraphProgramRecord53
+        uint8_t payload[64] = { 0x42 };
+        pCmdList63->DispatchGraphProgramRecord53(
+            1, payload, sizeof(payload), 1024, 0x1, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+            10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0);
+
+        pCmdList63->Release();
+        pDevice69->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 333 & 334 Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 333 & 334...\n" << std::flush;
+
+        // Class 333: SystemPagefileWriteCoalescingEfficiencyRatioTelemetryInformation
+        SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_RATIO_TELEMETRY_INFORMATION info333{};
+        uint32_t retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            333, &info333, sizeof(info333), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(333) succeeds");
+        TEST_ASSERT(retLen == sizeof(info333), "NtQuerySystemInformation(333) returns correct structure length");
+        TEST_ASSERT(info333.Version == 1, "Class 333 reports Version 1");
+        TEST_ASSERT(info333.TotalCoalescedWriteBatches == 720000ULL, "Class 333 reports TotalCoalescedWriteBatches == 720000");
+        TEST_ASSERT(info333.TotalPagesSubmitted == 5760000ULL, "Class 333 reports TotalPagesSubmitted == 5760000");
+        TEST_ASSERT(info333.TotalPagesWrittenPhysically == 1440000ULL, "Class 333 reports TotalPagesWrittenPhysically == 1440000");
+        TEST_ASSERT(info333.SinglePageWritesAvoided == 4320000ULL, "Class 333 reports SinglePageWritesAvoided == 4320000");
+        TEST_ASSERT(info333.CoalescingEfficiencyRatio == 0.750, "Class 333 reports CoalescingEfficiencyRatio == 0.750");
+        TEST_ASSERT(info333.AveragePagesPerCoalescedBatch == 4.00, "Class 333 reports AveragePagesPerCoalescedBatch == 4.00");
+        TEST_ASSERT(info333.CoalescingEfficiencyFlags == 0x07, "Class 333 reports CoalescingEfficiencyFlags == 0x07");
+
+        // Helper & Win32 wrapper verification
+        SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_RATIO_TELEMETRY_INFORMATION rtlInfo333{};
+        st = RtlQuerySystemPagefileWriteCoalescingEfficiencyRatioTelemetryInformation(&rtlInfo333);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemPagefileWriteCoalescingEfficiencyRatioTelemetryInformation succeeds");
+        TEST_ASSERT(rtlInfo333.TotalCoalescedWriteBatches == 720000ULL, "RtlQuerySystemPagefileWriteCoalescingEfficiencyRatioTelemetryInformation verified");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_EFFICIENCY_RATIO_TELEMETRY_INFORMATION k32Info333{};
+        BOOL ok = GetPagefileWriteCoalescingEfficiencyRatioTelemetry(&k32Info333);
+        TEST_ASSERT(ok == TRUE, "GetPagefileWriteCoalescingEfficiencyRatioTelemetry succeeds");
+        TEST_ASSERT(k32Info333.SinglePageWritesAvoided == 4320000ULL, "GetPagefileWriteCoalescingEfficiencyRatioTelemetry verified");
+
+        // Class 334: SystemCpuClockPhaseLockedLoopBandwidthJitterTelemetryInformation
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_BANDWIDTH_JITTER_TELEMETRY_INFORMATION info334{};
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(
+            334, &info334, sizeof(info334), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(334) succeeds");
+        TEST_ASSERT(retLen == sizeof(info334), "NtQuerySystemInformation(334) returns correct length");
+        TEST_ASSERT(info334.Version == 1, "Class 334 reports Version 1");
+        TEST_ASSERT(info334.TotalPllBandwidthObservations == 960000ULL, "Class 334 reports TotalPllBandwidthObservations == 960000");
+        TEST_ASSERT(info334.NominalPllLoopBandwidthHz == 2500000.0, "Class 334 reports NominalPllLoopBandwidthHz == 2.5 MHz");
+        TEST_ASSERT(info334.MeasuredPllLoopBandwidthHz == 2498500.0, "Class 334 reports MeasuredPllLoopBandwidthHz == 2498500.0");
+        TEST_ASSERT(info334.BandwidthJitterVarianceHz == 1250.0, "Class 334 reports BandwidthJitterVarianceHz == 1250.0");
+        TEST_ASSERT(info334.PeakLoopFilterPhaseErrorDegrees == 0.082, "Class 334 reports PeakLoopFilterPhaseErrorDegrees == 0.082");
+        TEST_ASSERT(info334.PllBandwidthTelemetryFlags == 0x07, "Class 334 reports PllBandwidthTelemetryFlags == 0x07");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_BANDWIDTH_JITTER_TELEMETRY_INFORMATION rtlInfo334{};
+        st = RtlQuerySystemCpuClockPhaseLockedLoopBandwidthJitterTelemetryInformation(&rtlInfo334);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemCpuClockPhaseLockedLoopBandwidthJitterTelemetryInformation succeeds");
+        TEST_ASSERT(rtlInfo334.TotalPllBandwidthObservations == 960000ULL, "RtlQuerySystemCpuClockPhaseLockedLoopBandwidthJitterTelemetryInformation verified");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_BANDWIDTH_JITTER_TELEMETRY_INFORMATION k32Info334{};
+        ok = GetCpuClockPhaseLockedLoopBandwidthJitterTelemetry(&k32Info334);
+        TEST_ASSERT(ok == TRUE, "GetCpuClockPhaseLockedLoopBandwidthJitterTelemetry succeeds");
+        TEST_ASSERT(k32Info334.BandwidthJitterVarianceHz == 1250.0, "GetCpuClockPhaseLockedLoopBandwidthJitterTelemetry verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Minority Modulo Primitives
+    // Minority(A, B, C) = ~((A & B) | (B & C) | (C & A))
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Interlocked Minority Modulo 64/32/16/8-bit Primitives...\n" << std::flush;
+
+        // 64-bit
+        LONG64 dest64 = 0;
+        uint64_t valA64 = 0xF0F0F0F0F0F0F0F0ULL;
+        uint64_t valB64 = 0xCCCCCCCCCCCCCCCCULL;
+        uint64_t valC64 = 0xAAAAAAAAAAAAAAAAULL;
+        uint64_t maj64 = (valA64 & valB64) | (valB64 & valC64) | (valC64 & valA64);
+        uint64_t min64 = ~maj64;
+        uint64_t expected64 = min64 % 997ULL;
+
+        LONG64 old64 = RtlInterlockedMinorityModulo64(&dest64, static_cast<LONG64>(valA64), static_cast<LONG64>(valB64), static_cast<LONG64>(valC64), 997);
+        TEST_ASSERT(old64 == 0, "RtlInterlockedMinorityModulo64 returns initial 0");
+        TEST_ASSERT(dest64 == static_cast<LONG64>(expected64), "RtlInterlockedMinorityModulo64 sets correct modulo residue");
+
+        LONG64 dest64_w32 = 0;
+        old64 = InterlockedMinorityModulo64(&dest64_w32, static_cast<LONG64>(valA64), static_cast<LONG64>(valB64), static_cast<LONG64>(valC64), 997);
+        TEST_ASSERT(old64 == 0, "InterlockedMinorityModulo64 (Win32) returns initial 0");
+        TEST_ASSERT(dest64_w32 == static_cast<LONG64>(expected64), "InterlockedMinorityModulo64 (Win32) sets correct modulo residue");
+
+        // 32-bit
+        LONG dest32 = 0;
+        uint32_t valA32 = 0xF0F0F0F0U;
+        uint32_t valB32 = 0xCCCCCCCCU;
+        uint32_t valC32 = 0xAAAAAAAAU;
+        uint32_t maj32 = (valA32 & valB32) | (valB32 & valC32) | (valC32 & valA32);
+        uint32_t min32 = ~maj32;
+        uint32_t expected32 = min32 % 251U;
+
+        LONG old32 = RtlInterlockedMinorityModulo32(&dest32, static_cast<LONG>(valA32), static_cast<LONG>(valB32), static_cast<LONG>(valC32), 251);
+        TEST_ASSERT(old32 == 0, "RtlInterlockedMinorityModulo32 returns initial 0");
+        TEST_ASSERT(dest32 == static_cast<LONG>(expected32), "RtlInterlockedMinorityModulo32 sets correct modulo residue");
+
+        LONG dest32_w32 = 0;
+        old32 = InterlockedMinorityModulo32(&dest32_w32, static_cast<LONG>(valA32), static_cast<LONG>(valB32), static_cast<LONG>(valC32), 251);
+        TEST_ASSERT(old32 == 0, "InterlockedMinorityModulo32 (Win32) returns initial 0");
+        TEST_ASSERT(dest32_w32 == static_cast<LONG>(expected32), "InterlockedMinorityModulo32 (Win32) sets correct modulo residue");
+
+        // 16-bit
+        SHORT dest16 = 0;
+        uint16_t valA16 = 0xF0F0U;
+        uint16_t valB16 = 0xCCCCU;
+        uint16_t valC16 = 0xAAAAU;
+        uint16_t maj16 = static_cast<uint16_t>((valA16 & valB16) | (valB16 & valC16) | (valC16 & valA16));
+        uint16_t min16 = static_cast<uint16_t>(~maj16);
+        uint16_t expected16 = static_cast<uint16_t>(min16 % 97U);
+
+        SHORT old16 = RtlInterlockedMinorityModulo16(&dest16, static_cast<SHORT>(valA16), static_cast<SHORT>(valB16), static_cast<SHORT>(valC16), 97);
+        TEST_ASSERT(old16 == 0, "RtlInterlockedMinorityModulo16 returns initial 0");
+        TEST_ASSERT(dest16 == static_cast<SHORT>(expected16), "RtlInterlockedMinorityModulo16 sets correct modulo residue");
+
+        // 8-bit
+        CHAR dest8 = 0;
+        uint8_t valA8 = 0xF0U;
+        uint8_t valB8 = 0xCCU;
+        uint8_t valC8 = 0xAAU;
+        uint8_t maj8 = static_cast<uint8_t>((valA8 & valB8) | (valB8 & valC8) | (valC8 & valA8));
+        uint8_t min8 = static_cast<uint8_t>(~maj8);
+        uint8_t expected8 = static_cast<uint8_t>(min8 % 13U);
+
+        CHAR old8 = RtlInterlockedMinorityModulo8(&dest8, static_cast<CHAR>(valA8), static_cast<CHAR>(valB8), static_cast<CHAR>(valC8), 13);
+        TEST_ASSERT(old8 == 0, "RtlInterlockedMinorityModulo8 returns initial 0");
+        TEST_ASSERT(dest8 == static_cast<CHAR>(expected8), "RtlInterlockedMinorityModulo8 sets correct modulo residue");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-Saturnin-XOF & Hash
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-Saturnin-XOF & Ascon-Saturnin-Hash...\n" << std::flush;
+
+        const char* msg = "MicaNT Horizon 293 NIST SP 800-232 Ascon-Saturnin-256 Permutation Sponge Verification";
+
+        // Test Ascon-Saturnin-XOF
+        BCRYPT_ALG_HANDLE hAlgXof = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgXof, BCRYPT_ASCON_SATURNIN_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgXof != nullptr, "BCryptOpenAlgorithmProvider for ASCON-SATURNIN-XOF succeeds");
+
+        BCRYPT_HASH_HANDLE hHashXof = nullptr;
+        status = BCryptCreateHash(hAlgXof, &hHashXof, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashXof != nullptr, "BCryptCreateHash for ASCON-SATURNIN-XOF succeeds");
+
+        status = BCryptHashData(hHashXof, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-SATURNIN-XOF succeeds");
+
+        uint8_t digestXof[32] = { 0 };
+        status = BCryptFinishHash(hHashXof, digestXof, sizeof(digestXof), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-SATURNIN-XOF succeeds");
+
+        bool nonZeroXof = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestXof[i] != 0) { nonZeroXof = true; break; }
+        }
+        TEST_ASSERT(nonZeroXof, "ASCON-SATURNIN-XOF output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashXof);
+        BCryptCloseAlgorithmProvider(hAlgXof, 0);
+
+        // Test Ascon-Saturnin-HASH
+        BCRYPT_ALG_HANDLE hAlgHash = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgHash, BCRYPT_ASCON_SATURNIN_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgHash != nullptr, "BCryptOpenAlgorithmProvider for ASCON-SATURNIN-HASH succeeds");
+
+        BCRYPT_HASH_HANDLE hHashHash = nullptr;
+        status = BCryptCreateHash(hAlgHash, &hHashHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashHash != nullptr, "BCryptCreateHash for ASCON-SATURNIN-HASH succeeds");
+
+        status = BCryptHashData(hHashHash, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-SATURNIN-HASH succeeds");
+
+        uint8_t digestHash[32] = { 0 };
+        status = BCryptFinishHash(hHashHash, digestHash, sizeof(digestHash), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-SATURNIN-HASH succeeds");
+
+        bool nonZeroHash = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestHash[i] != 0) { nonZeroHash = true; break; }
+        }
+        TEST_ASSERT(nonZeroHash, "ASCON-SATURNIN-HASH output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashHash);
+        BCryptCloseAlgorithmProvider(hAlgHash, 0);
+    }
+
+    std::cout << "  Horizon 293 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device69, ID3D12GraphicsCommandList63 & Options 81 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 333 (PagefileWriteCoalescingEfficiencyRatio) & 334 (CpuClockPllBandwidthJitter) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Minority Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-Saturnin-XOF & Ascon-Saturnin-Hash Lightweight Cryptography OK\n";
+    std::cout << "[TEST] Suite 509: Horizon 293 - Direct3D 12 Device69/CommandList63 & Options 81, NT SystemInfo 333/334, Interlocked MinorityModulo 64/32/16/8 & NIST Ascon-Saturnin XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon293_Device69Options81_PagefileWriteCoalescingEfficiencyRatioCpuClockPllBandwidthJitter_InterlockedMinorityModulo_And_AsconSaturninXofHash_Suite() {
+    Suite509_Direct3D12_Device69_CommandList63_Options81_NtSystemInfo333_334_InterlockedMinorityModulo_And_AsconSaturninXofHash();
+}

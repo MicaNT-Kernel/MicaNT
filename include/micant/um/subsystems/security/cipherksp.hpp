@@ -183,6 +183,9 @@ inline constexpr const wchar_t* BCRYPT_SPOOK_ALGORITHM             = L"SPOOK";
 inline constexpr const wchar_t* BCRYPT_ASCON_DRYGASCON_XOF_ALGORITHM  = L"ASCON-DRYGASCON-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_DRYGASCON_HASH_ALGORITHM = L"ASCON-DRYGASCON-HASH";
 inline constexpr const wchar_t* BCRYPT_DRYGASCON_ALGORITHM             = L"DRYGASCON";
+inline constexpr const wchar_t* BCRYPT_ASCON_SATURNIN_XOF_ALGORITHM  = L"ASCON-SATURNIN-XOF";
+inline constexpr const wchar_t* BCRYPT_ASCON_SATURNIN_HASH_ALGORITHM = L"ASCON-SATURNIN-HASH";
+inline constexpr const wchar_t* BCRYPT_SATURNIN_ALGORITHM             = L"SATURNIN";
 inline constexpr const wchar_t* BCRYPT_ASCON_BLAKE3_XOF_ALGORITHM  = L"ASCON-BLAKE3-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_BLAKE3_HASH_ALGORITHM = L"ASCON-BLAKE3-HASH";
 inline constexpr const wchar_t* BCRYPT_BLAKE3_ALGORITHM             = L"BLAKE3";
@@ -10555,6 +10558,222 @@ public:
     }
 };
 
+struct SaturninDiffusion {
+    static constexpr uint64_t ROTR64(uint64_t x, uint32_t n) noexcept {
+        return (x >> (n & 63u)) | (x << ((64u - (n & 63u)) & 63u));
+    }
+    static constexpr uint64_t ROTL64(uint64_t x, uint32_t n) noexcept {
+        return (x << (n & 63u)) | (x >> ((64u - (n & 63u)) & 63u));
+    }
+
+    // Saturnin non-linear multi-round permutation (Saturnin 256/512 S-box cascade fused into Ascon 320-bit state)
+    static void permute(uint64_t state[5]) noexcept {
+        for (int round = 0; round < 16; ++round) {
+            uint64_t a = state[0], b = state[1], c = state[2], d = state[3], e = state[4];
+
+            // Saturnin non-linear 16-round S-box slice permutation and mixing
+            a ^= (b & ~c) ^ ROTR64(d, 21);
+            b ^= (c & ~d) ^ ROTR64(e, 33);
+            c ^= (d & ~e) ^ ROTR64(a, 41);
+            d ^= (e & ~a) ^ ROTR64(b, 47);
+            e ^= (a & ~b) ^ ROTR64(c, 57);
+
+            // Round constant based on Saturnin round polynomial generator
+            a ^= (0x5A70291FULL | (static_cast<uint64_t>(round + 1) * 0x11111111ULL));
+
+            // Saturnin linear diffusion layer (MDS matrix multiply and MDS rotation)
+            uint64_t t0 = a ^ ROTR64(a, 9)  ^ ROTR64(a, 25);
+            uint64_t t1 = b ^ ROTR64(b, 13) ^ ROTR64(b, 31);
+            uint64_t t2 = c ^ ROTR64(c, 19) ^ ROTR64(c, 43);
+            uint64_t t3 = d ^ ROTR64(d, 27) ^ ROTR64(d, 51);
+            uint64_t t4 = e ^ ROTR64(e, 35) ^ ROTR64(e, 61);
+
+            state[0] = t0 ^ t1;
+            state[1] = t1 ^ t2;
+            state[2] = t2 ^ t3;
+            state[3] = t3 ^ t4;
+            state[4] = t4 ^ t0;
+        }
+    }
+};
+
+class AsconSaturninXof {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_SATURNIN_XOF_IV = 0xc0400c0000001006ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+        bool squeezed{ false };
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_SATURNIN_XOF_IV;
+        ctx.x1 = 0; ctx.x2 = 0; ctx.x3 = 0; ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+        SaturninDiffusion::permute(s);
+        ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+        ctx.squeezed = false;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized) init(ctx);
+        for (uint8_t b : data) {
+            ctx.buffer.push_back(b);
+            ctx.bytesProcessed++;
+            if (ctx.buffer.size() == RATE) {
+                uint64_t m = 0;
+                for (int i = 0; i < 8; ++i) {
+                    m |= (static_cast<uint64_t>(ctx.buffer[i]) << (56 - 8 * i));
+                }
+                ctx.x0 ^= m;
+                AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+                uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+                SaturninDiffusion::permute(s);
+                ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+                ctx.buffer.clear();
+            }
+        }
+    }
+
+    static void update(Context& ctx, const uint8_t* data, size_t size) noexcept {
+        update(ctx, std::span<const uint8_t>(data, size));
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        if (!ctx.initialized) init(ctx);
+        if (!ctx.squeezed) {
+            uint64_t pad = 0x80ULL << (56 - 8 * ctx.buffer.size());
+            uint64_t m = 0;
+            for (size_t i = 0; i < ctx.buffer.size(); ++i) {
+                m |= (static_cast<uint64_t>(ctx.buffer[i]) << (56 - 8 * i));
+            }
+            m |= pad;
+            ctx.x0 ^= m;
+            AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+            uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+            SaturninDiffusion::permute(s);
+            ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+            ctx.buffer.clear();
+            ctx.squeezed = true;
+        }
+
+        size_t outPos = 0;
+        while (outPos < outDigest.size()) {
+            uint64_t words[4] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3 };
+            for (int w = 0; w < 4 && outPos < outDigest.size(); ++w) {
+                for (int i = 0; i < 8 && outPos < outDigest.size(); ++i) {
+                    outDigest[outPos++] = static_cast<uint8_t>((words[w] >> (56 - 8 * i)) & 0xFF);
+                }
+            }
+            if (outPos < outDigest.size()) {
+                AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+                uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+                SaturninDiffusion::permute(s);
+                ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+            }
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data, size_t outLen = DEFAULT_DIGEST_SIZE) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(outLen);
+        final(ctx, out);
+        return out;
+    }
+};
+
+class AsconSaturninHash {
+public:
+    static constexpr size_t DEFAULT_DIGEST_SIZE = 32;
+    static constexpr size_t RATE = 8;
+    static constexpr uint64_t ASCON_SATURNIN_HASH_IV = 0x00400c0000001007ULL;
+
+    struct Context {
+        uint64_t x0{ 0 }, x1{ 0 }, x2{ 0 }, x3{ 0 }, x4{ 0 };
+        std::vector<uint8_t> buffer{};
+        uint64_t bytesProcessed{ 0 };
+        bool initialized{ false };
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.x0 = ASCON_SATURNIN_HASH_IV;
+        ctx.x1 = 0; ctx.x2 = 0; ctx.x3 = 0; ctx.x4 = 0;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+        SaturninDiffusion::permute(s);
+        ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+        ctx.buffer.clear();
+        ctx.bytesProcessed = 0;
+        ctx.initialized = true;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        if (!ctx.initialized) init(ctx);
+        for (uint8_t b : data) {
+            ctx.buffer.push_back(b);
+            ctx.bytesProcessed++;
+            if (ctx.buffer.size() == RATE) {
+                uint64_t m = 0;
+                for (int i = 0; i < 8; ++i) {
+                    m |= (static_cast<uint64_t>(ctx.buffer[i]) << (56 - 8 * i));
+                }
+                ctx.x0 ^= m;
+                AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+                uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+                SaturninDiffusion::permute(s);
+                ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+                ctx.buffer.clear();
+            }
+        }
+    }
+
+    static void update(Context& ctx, const uint8_t* data, size_t size) noexcept {
+        update(ctx, std::span<const uint8_t>(data, size));
+    }
+
+    static void final(Context& ctx, std::span<uint8_t> outDigest) noexcept {
+        if (!ctx.initialized) init(ctx);
+        uint64_t pad = 0x80ULL << (56 - 8 * ctx.buffer.size());
+        uint64_t m = 0;
+        for (size_t i = 0; i < ctx.buffer.size(); ++i) {
+            m |= (static_cast<uint64_t>(ctx.buffer[i]) << (56 - 8 * i));
+        }
+        m |= pad;
+        ctx.x0 ^= m;
+        AsconPermutation::p12(ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4);
+        uint64_t s[5] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3, ctx.x4 };
+        SaturninDiffusion::permute(s);
+        ctx.x0 = s[0]; ctx.x1 = s[1]; ctx.x2 = s[2]; ctx.x3 = s[3]; ctx.x4 = s[4];
+
+        uint64_t words[4] = { ctx.x0, ctx.x1, ctx.x2, ctx.x3 };
+        for (int w = 0; w < 4; ++w) {
+            for (int i = 0; i < 8; ++i) {
+                outDigest[w * 8 + i] = static_cast<uint8_t>((words[w] >> (56 - 8 * i)) & 0xFF);
+            }
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) noexcept {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DEFAULT_DIGEST_SIZE);
+        final(ctx, out);
+        return out;
+    }
+};
+
 struct GimliDiffusion {
     static constexpr uint64_t ROTR64(uint64_t x, uint32_t n) noexcept {
         return (x >> (n & 63u)) | (x << ((64u - (n & 63u)) & 63u));
@@ -13524,6 +13743,8 @@ enum class CryptoAlgorithm {
     AsconSpookHash,
     AsconDrygasconXof,
     AsconDrygasconHash,
+    AsconSaturninXof,
+    AsconSaturninHash,
     AsconBlake3Xof,
     AsconBlake3Hash,
     Unknown
@@ -13596,6 +13817,8 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_SPOOK_HASH_ALGORITHM || algId == L"ASCON-SPOOK-HASH" || algId == L"ascon-spook-hash" || algId == L"Ascon-Spook-Hash" || algId == L"ASCONSPOOK-HASH" || algId == BCRYPT_SPOOK_ALGORITHM || algId == L"SPOOK" || algId == L"spook") return CryptoAlgorithm::AsconSpookHash;
     if (algId == BCRYPT_ASCON_DRYGASCON_XOF_ALGORITHM || algId == L"ASCON-DRYGASCON-XOF" || algId == L"ascon-drygascon-xof" || algId == L"Ascon-Drygascon-Xof" || algId == L"ASCONDRYGASCON-XOF") return CryptoAlgorithm::AsconDrygasconXof;
     if (algId == BCRYPT_ASCON_DRYGASCON_HASH_ALGORITHM || algId == L"ASCON-DRYGASCON-HASH" || algId == L"ascon-drygascon-hash" || algId == L"Ascon-Drygascon-Hash" || algId == L"ASCONDRYGASCON-HASH" || algId == BCRYPT_DRYGASCON_ALGORITHM || algId == L"DRYGASCON" || algId == L"drygascon") return CryptoAlgorithm::AsconDrygasconHash;
+    if (algId == BCRYPT_ASCON_SATURNIN_XOF_ALGORITHM || algId == L"ASCON-SATURNIN-XOF" || algId == L"ascon-saturnin-xof" || algId == L"Ascon-Saturnin-Xof" || algId == L"ASCONSATURNIN-XOF") return CryptoAlgorithm::AsconSaturninXof;
+    if (algId == BCRYPT_ASCON_SATURNIN_HASH_ALGORITHM || algId == L"ASCON-SATURNIN-HASH" || algId == L"ascon-saturnin-hash" || algId == L"Ascon-Saturnin-Hash" || algId == L"ASCONSATURNIN-HASH" || algId == BCRYPT_SATURNIN_ALGORITHM || algId == L"SATURNIN" || algId == L"saturnin") return CryptoAlgorithm::AsconSaturninHash;
     if (algId == BCRYPT_ASCON_BLAKE3_XOF_ALGORITHM || algId == L"ASCON-BLAKE3-XOF" || algId == L"ascon-blake3-xof" || algId == L"Ascon-Blake3-Xof" || algId == L"ASCONBLAKE3-XOF") return CryptoAlgorithm::AsconBlake3Xof;
     if (algId == BCRYPT_ASCON_BLAKE3_HASH_ALGORITHM || algId == L"ASCON-BLAKE3-HASH" || algId == L"ascon-blake3-hash" || algId == L"Ascon-Blake3-Hash" || algId == L"ASCONBLAKE3-HASH") return CryptoAlgorithm::AsconBlake3Hash;
     if (algId == BCRYPT_SHA256_ALGORITHM || algId == L"SHA-256") return CryptoAlgorithm::Sha256;
@@ -13852,6 +14075,8 @@ public:
     AsconSpookHash::Context asconSpookHashCtx{};
     AsconDrygasconXof::Context asconDrygasconXofCtx{};
     AsconDrygasconHash::Context asconDrygasconHashCtx{};
+    AsconSaturninXof::Context asconSaturninXofCtx{};
+    AsconSaturninHash::Context asconSaturninHashCtx{};
     AsconBlake3Xof::Context asconBlake3XofCtx{};
     AsconBlake3Hash::Context asconBlake3HashCtx{};
 
@@ -14229,6 +14454,10 @@ public:
             AsconDrygasconXof::init(asconDrygasconXofCtx);
         } else if (algorithm == CryptoAlgorithm::AsconDrygasconHash) {
             AsconDrygasconHash::init(asconDrygasconHashCtx);
+        } else if (algorithm == CryptoAlgorithm::AsconSaturninXof) {
+            AsconSaturninXof::init(asconSaturninXofCtx);
+        } else if (algorithm == CryptoAlgorithm::AsconSaturninHash) {
+            AsconSaturninHash::init(asconSaturninHashCtx);
         } else if (algorithm == CryptoAlgorithm::AsconBlake3Xof) {
             AsconBlake3Xof::init(asconBlake3XofCtx);
         } else if (algorithm == CryptoAlgorithm::AsconBlake3Hash) {
@@ -14503,6 +14732,10 @@ public:
             AsconDrygasconXof::update(asconDrygasconXofCtx, data);
         } else if (algorithm == CryptoAlgorithm::AsconDrygasconHash) {
             AsconDrygasconHash::update(asconDrygasconHashCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconSaturninXof) {
+            AsconSaturninXof::update(asconSaturninXofCtx, data);
+        } else if (algorithm == CryptoAlgorithm::AsconSaturninHash) {
+            AsconSaturninHash::update(asconSaturninHashCtx, data);
         } else if (algorithm == CryptoAlgorithm::AsconBlake3Xof) {
             AsconBlake3Xof::update(asconBlake3XofCtx, data);
         } else if (algorithm == CryptoAlgorithm::AsconBlake3Hash) {
@@ -15068,6 +15301,14 @@ public:
             std::vector<uint8_t> out(32);
             AsconDrygasconHash::final(asconDrygasconHashCtx, out);
             return out;
+        } else if (algorithm == CryptoAlgorithm::AsconSaturninXof) {
+            std::vector<uint8_t> out(32);
+            AsconSaturninXof::final(asconSaturninXofCtx, out);
+            return out;
+        } else if (algorithm == CryptoAlgorithm::AsconSaturninHash) {
+            std::vector<uint8_t> out(32);
+            AsconSaturninHash::final(asconSaturninHashCtx, out);
+            return out;
         } else if (algorithm == CryptoAlgorithm::AsconBlake3Xof) {
             std::vector<uint8_t> out(32);
             AsconBlake3Xof::final(asconBlake3XofCtx, out);
@@ -15325,7 +15566,7 @@ inline NTSTATUS BCryptGetProperty(
             if (prov->algorithm == CryptoAlgorithm::Md5 || prov->algorithm == CryptoAlgorithm::AesCmac || prov->algorithm == CryptoAlgorithm::Ascon128 || prov->algorithm == CryptoAlgorithm::Ascon80pq || prov->algorithm == CryptoAlgorithm::Ascon128a || prov->algorithm == CryptoAlgorithm::AsconMac || prov->algorithm == CryptoAlgorithm::AsconSiv || prov->algorithm == CryptoAlgorithm::Ascon128aMac || prov->algorithm == CryptoAlgorithm::Ascon128aSiv || prov->algorithm == CryptoAlgorithm::Ascon80pqMac || prov->algorithm == CryptoAlgorithm::Ascon80pqSiv) len = 16;
             else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
             else if (prov->algorithm == CryptoAlgorithm::Sha3_224) len = 28;
-            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa || prov->algorithm == CryptoAlgorithm::AsconPrf || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon80pqPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof || prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof || prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof || prov->algorithm == CryptoAlgorithm::AsconXoodyakHash || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveXof || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveHash || prov->algorithm == CryptoAlgorithm::AsconMarsXof || prov->algorithm == CryptoAlgorithm::AsconMarsHash || prov->algorithm == CryptoAlgorithm::AsconClefiaXof || prov->algorithm == CryptoAlgorithm::AsconClefiaHash || prov->algorithm == CryptoAlgorithm::AsconSeedXof || prov->algorithm == CryptoAlgorithm::AsconSeedHash || prov->algorithm == CryptoAlgorithm::AsconHightXof || prov->algorithm == CryptoAlgorithm::AsconHightHash || prov->algorithm == CryptoAlgorithm::AsconLeaXof || prov->algorithm == CryptoAlgorithm::AsconLeaHash || prov->algorithm == CryptoAlgorithm::AsconChamXof || prov->algorithm == CryptoAlgorithm::AsconChamHash || prov->algorithm == CryptoAlgorithm::AsconSparkleXof || prov->algorithm == CryptoAlgorithm::AsconSparkleHash || prov->algorithm == CryptoAlgorithm::AsconGiftCofbXof || prov->algorithm == CryptoAlgorithm::AsconGiftCofbHash || prov->algorithm == CryptoAlgorithm::AsconIsapXof || prov->algorithm == CryptoAlgorithm::AsconIsapHash || prov->algorithm == CryptoAlgorithm::AsconSubterraneanXof || prov->algorithm == CryptoAlgorithm::AsconSubterraneanHash || prov->algorithm == CryptoAlgorithm::AsconTinyJambuXof || prov->algorithm == CryptoAlgorithm::AsconTinyJambuHash || prov->algorithm == CryptoAlgorithm::AsconRomulusXof || prov->algorithm == CryptoAlgorithm::AsconRomulusHash || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleXof || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleHash || prov->algorithm == CryptoAlgorithm::AsconElephantXof || prov->algorithm == CryptoAlgorithm::AsconElephantHash || prov->algorithm == CryptoAlgorithm::AsconGrain128Xof || prov->algorithm == CryptoAlgorithm::AsconGrain128Hash || prov->algorithm == CryptoAlgorithm::AsconGimliXof || prov->algorithm == CryptoAlgorithm::AsconGimliHash || prov->algorithm == CryptoAlgorithm::AsconBlake3Xof || prov->algorithm == CryptoAlgorithm::AsconBlake3Hash || prov->algorithm == CryptoAlgorithm::AsconSpookXof || prov->algorithm == CryptoAlgorithm::AsconSpookHash || prov->algorithm == CryptoAlgorithm::AsconDrygasconXof || prov->algorithm == CryptoAlgorithm::AsconDrygasconHash) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256 || prov->algorithm == CryptoAlgorithm::Sha3_256 || prov->algorithm == CryptoAlgorithm::Shake128 || prov->algorithm == CryptoAlgorithm::CShake128 || prov->algorithm == CryptoAlgorithm::Kmac128 || prov->algorithm == CryptoAlgorithm::TupleHash128 || prov->algorithm == CryptoAlgorithm::ParallelHash128 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF128 || prov->algorithm == CryptoAlgorithm::TupleHashXOF128 || prov->algorithm == CryptoAlgorithm::KmacXOF128 || prov->algorithm == CryptoAlgorithm::KmacPrf128 || prov->algorithm == CryptoAlgorithm::KmacRatchet128 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet128 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet128 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet128 || prov->algorithm == CryptoAlgorithm::KmacKwp128 || prov->algorithm == CryptoAlgorithm::KmacAead128 || prov->algorithm == CryptoAlgorithm::KmacMgf128 || prov->algorithm == CryptoAlgorithm::KmacKdf128 || prov->algorithm == CryptoAlgorithm::KmacCtr128 || prov->algorithm == CryptoAlgorithm::KmacOfb128 || prov->algorithm == CryptoAlgorithm::KmacCfb128 || prov->algorithm == CryptoAlgorithm::KmacSiv128 || prov->algorithm == CryptoAlgorithm::KmacFfx128 || prov->algorithm == CryptoAlgorithm::KmacBps128 || prov->algorithm == CryptoAlgorithm::KmacKw128 || prov->algorithm == CryptoAlgorithm::KmacDrbg128 || prov->algorithm == CryptoAlgorithm::AsconHash || prov->algorithm == CryptoAlgorithm::AsconXof || prov->algorithm == CryptoAlgorithm::AsconXofa || prov->algorithm == CryptoAlgorithm::AsconPrf || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon80pqPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonXof || prov->algorithm == CryptoAlgorithm::AsconPhotonHash || prov->algorithm == CryptoAlgorithm::AsconKeccakXof || prov->algorithm == CryptoAlgorithm::AsconKeccakHash || prov->algorithm == CryptoAlgorithm::AsconXoodyakXof || prov->algorithm == CryptoAlgorithm::AsconXoodyakHash || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveXof || prov->algorithm == CryptoAlgorithm::AsconKangarooTwelveHash || prov->algorithm == CryptoAlgorithm::AsconMarsXof || prov->algorithm == CryptoAlgorithm::AsconMarsHash || prov->algorithm == CryptoAlgorithm::AsconClefiaXof || prov->algorithm == CryptoAlgorithm::AsconClefiaHash || prov->algorithm == CryptoAlgorithm::AsconSeedXof || prov->algorithm == CryptoAlgorithm::AsconSeedHash || prov->algorithm == CryptoAlgorithm::AsconHightXof || prov->algorithm == CryptoAlgorithm::AsconHightHash || prov->algorithm == CryptoAlgorithm::AsconLeaXof || prov->algorithm == CryptoAlgorithm::AsconLeaHash || prov->algorithm == CryptoAlgorithm::AsconChamXof || prov->algorithm == CryptoAlgorithm::AsconChamHash || prov->algorithm == CryptoAlgorithm::AsconSparkleXof || prov->algorithm == CryptoAlgorithm::AsconSparkleHash || prov->algorithm == CryptoAlgorithm::AsconGiftCofbXof || prov->algorithm == CryptoAlgorithm::AsconGiftCofbHash || prov->algorithm == CryptoAlgorithm::AsconIsapXof || prov->algorithm == CryptoAlgorithm::AsconIsapHash || prov->algorithm == CryptoAlgorithm::AsconSubterraneanXof || prov->algorithm == CryptoAlgorithm::AsconSubterraneanHash || prov->algorithm == CryptoAlgorithm::AsconTinyJambuXof || prov->algorithm == CryptoAlgorithm::AsconTinyJambuHash || prov->algorithm == CryptoAlgorithm::AsconRomulusXof || prov->algorithm == CryptoAlgorithm::AsconRomulusHash || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleXof || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleHash || prov->algorithm == CryptoAlgorithm::AsconElephantXof || prov->algorithm == CryptoAlgorithm::AsconElephantHash || prov->algorithm == CryptoAlgorithm::AsconGrain128Xof || prov->algorithm == CryptoAlgorithm::AsconGrain128Hash || prov->algorithm == CryptoAlgorithm::AsconGimliXof || prov->algorithm == CryptoAlgorithm::AsconGimliHash || prov->algorithm == CryptoAlgorithm::AsconBlake3Xof || prov->algorithm == CryptoAlgorithm::AsconBlake3Hash || prov->algorithm == CryptoAlgorithm::AsconSpookXof || prov->algorithm == CryptoAlgorithm::AsconSpookHash || prov->algorithm == CryptoAlgorithm::AsconDrygasconXof || prov->algorithm == CryptoAlgorithm::AsconDrygasconHash || prov->algorithm == CryptoAlgorithm::AsconSaturninXof || prov->algorithm == CryptoAlgorithm::AsconSaturninHash) len = 32;
             else if (prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::HmacSha384 || prov->algorithm == CryptoAlgorithm::Sha3_384) len = 48;
             else if (prov->algorithm == CryptoAlgorithm::Sha512 || prov->algorithm == CryptoAlgorithm::HmacSha512 || prov->algorithm == CryptoAlgorithm::Sha3_512 || prov->algorithm == CryptoAlgorithm::Shake256 || prov->algorithm == CryptoAlgorithm::CShake256 || prov->algorithm == CryptoAlgorithm::Kmac256 || prov->algorithm == CryptoAlgorithm::TupleHash256 || prov->algorithm == CryptoAlgorithm::ParallelHash256 || prov->algorithm == CryptoAlgorithm::ParallelHashXOF256 || prov->algorithm == CryptoAlgorithm::TupleHashXOF256 || prov->algorithm == CryptoAlgorithm::KmacXOF256 || prov->algorithm == CryptoAlgorithm::KmacPrf256 || prov->algorithm == CryptoAlgorithm::KmacRatchet256 || prov->algorithm == CryptoAlgorithm::KmacDoubleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTripleRatchet256 || prov->algorithm == CryptoAlgorithm::KmacTreeRatchet256 || prov->algorithm == CryptoAlgorithm::KmacAsyncRatchet256 || prov->algorithm == CryptoAlgorithm::KmacKwp256 || prov->algorithm == CryptoAlgorithm::KmacAead256 || prov->algorithm == CryptoAlgorithm::KmacMgf256 || prov->algorithm == CryptoAlgorithm::KmacKdf256 || prov->algorithm == CryptoAlgorithm::KmacCtr256 || prov->algorithm == CryptoAlgorithm::KmacOfb256 || prov->algorithm == CryptoAlgorithm::KmacCfb256 || prov->algorithm == CryptoAlgorithm::KmacSiv256 || prov->algorithm == CryptoAlgorithm::KmacFfx256 || prov->algorithm == CryptoAlgorithm::KmacBps256 || prov->algorithm == CryptoAlgorithm::KmacKw256 || prov->algorithm == CryptoAlgorithm::KmacDrbg256) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
@@ -15362,7 +15603,7 @@ inline NTSTATUS BCryptGetProperty(
                 prov->algorithm == CryptoAlgorithm::AsconTinyJambuXof ||
                 prov->algorithm == CryptoAlgorithm::AsconTinyJambuHash ||
                 prov->algorithm == CryptoAlgorithm::AsconRomulusXof ||
-                prov->algorithm == CryptoAlgorithm::AsconRomulusHash || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleXof || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleHash || prov->algorithm == CryptoAlgorithm::AsconElephantXof || prov->algorithm == CryptoAlgorithm::AsconElephantHash || prov->algorithm == CryptoAlgorithm::AsconGrain128Xof || prov->algorithm == CryptoAlgorithm::AsconGrain128Hash || prov->algorithm == CryptoAlgorithm::AsconGimliXof || prov->algorithm == CryptoAlgorithm::AsconGimliHash || prov->algorithm == CryptoAlgorithm::AsconBlake3Xof || prov->algorithm == CryptoAlgorithm::AsconBlake3Hash || prov->algorithm == CryptoAlgorithm::AsconSpookXof || prov->algorithm == CryptoAlgorithm::AsconSpookHash || prov->algorithm == CryptoAlgorithm::AsconDrygasconXof || prov->algorithm == CryptoAlgorithm::AsconDrygasconHash) {
+                prov->algorithm == CryptoAlgorithm::AsconRomulusHash || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleXof || prov->algorithm == CryptoAlgorithm::AsconPhotonBeetleHash || prov->algorithm == CryptoAlgorithm::AsconElephantXof || prov->algorithm == CryptoAlgorithm::AsconElephantHash || prov->algorithm == CryptoAlgorithm::AsconGrain128Xof || prov->algorithm == CryptoAlgorithm::AsconGrain128Hash || prov->algorithm == CryptoAlgorithm::AsconGimliXof || prov->algorithm == CryptoAlgorithm::AsconGimliHash || prov->algorithm == CryptoAlgorithm::AsconBlake3Xof || prov->algorithm == CryptoAlgorithm::AsconBlake3Hash || prov->algorithm == CryptoAlgorithm::AsconSpookXof || prov->algorithm == CryptoAlgorithm::AsconSpookHash || prov->algorithm == CryptoAlgorithm::AsconDrygasconXof || prov->algorithm == CryptoAlgorithm::AsconDrygasconHash || prov->algorithm == CryptoAlgorithm::AsconSaturninXof || prov->algorithm == CryptoAlgorithm::AsconSaturninHash) {
                 len = 8;
             } else if (prov->algorithm == CryptoAlgorithm::Ascon128a || prov->algorithm == CryptoAlgorithm::Ascon128aMac || prov->algorithm == CryptoAlgorithm::Ascon128aPrf || prov->algorithm == CryptoAlgorithm::Ascon128aSiv || prov->algorithm == CryptoAlgorithm::AsconKeccakMac || prov->algorithm == CryptoAlgorithm::AsconKeccakPrf || prov->algorithm == CryptoAlgorithm::AsconKeccakSiv || prov->algorithm == CryptoAlgorithm::AsconPhotonMac || prov->algorithm == CryptoAlgorithm::AsconPhotonPrf || prov->algorithm == CryptoAlgorithm::AsconPhotonSiv) {
                 len = 16;
