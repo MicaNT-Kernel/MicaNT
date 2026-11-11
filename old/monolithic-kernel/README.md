@@ -10,6 +10,9 @@ was established on 2026-10-13. The standalone implementation duplicated
 initialization and hardware-facing behavior instead of composing the existing
 `ntoskrnl_core` subsystems.
 
+The archive move was recorded in commit
+`d23e8c12eeee2ca0913f492e0baad322a01fc1d2`.
+
 Do not compile, link, stage, install, or use this source to resolve missing
 symbols. New kernel work belongs in the canonical subsystem and must not
 reintroduce a parallel kernel. The intended architecture and current migration
