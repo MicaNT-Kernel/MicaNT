@@ -18,7 +18,10 @@
 #include <cstring>
 #include <span>
 
-namespace micant::sys { bool initializeBootstrapSectionServices() noexcept; }
+namespace micant::sys {
+bool initializeBootstrapSectionServices() noexcept;
+bool verifyBootstrapSectionOwnership() noexcept;
+}
 
 namespace {
 
@@ -904,6 +907,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ex] Kernel C++ constructors dispatched\r\n");
     if (!micant::sys::initializeBootstrapSectionServices()) {
         stopWithError("[MicaNT Mm] Section service initialization failed\r\n");
+    }
+    if (!micant::sys::verifyBootstrapSectionOwnership()) {
+        stopWithError("[MicaNT Mm] Section object ownership verification failed\r\n");
     }
     if (!verifyKernelObjectHandles()) {
         stopWithError("[MicaNT Ob] Kernel handle verification failed\r\n");

@@ -31,6 +31,10 @@ struct alignas(4096) BootstrapTebStorage {
 static_assert(sizeof(BootstrapTebStorage) == 8192);
 BootstrapTebStorage g_userTebStorage{};
 alignas(4096) uint8_t g_nativeProbeImage[8192]{};
+alignas(4096) uint8_t g_ntdllProbeImage[0x20000]{};
+const uint8_t g_ntdllProbeFile[]{
+#include "ntdll-probe.inc"
+};
 uint8_t g_nativeProbeFile[512 + 4096]{};
 micant::um::NativeUserImageSet64 g_nativeProbeModules{};
 alignas(16) uint8_t g_kernelStack[32768]{};
@@ -471,6 +475,35 @@ void MicantSyscallClientProgram() {
     if (micant::sys::invokeUserService(0x25, reinterpret_cast<uint64_t>(message), 6)) {
         __builtin_trap();
     }
+    // The loader resolves these addresses from the actual NTDLL PE exports.
+    auto* exports = reinterpret_cast<const uint64_t*>(kUserBase + 4096 + 768);
+    using Create = int32_t (*)(void**, uint32_t, void*, int64_t*, uint32_t, uint32_t, void*);
+    using Map = int32_t (*)(void*, void*, void**, uintptr_t, size_t, int64_t*, size_t*, uint32_t, uint32_t, uint32_t);
+    using Unmap = int32_t (*)(void*, void*);
+    using Close = int32_t (*)(void*);
+    auto create = reinterpret_cast<Create>(exports[0]);
+    auto map = reinterpret_cast<Map>(exports[1]);
+    auto unmap = reinterpret_cast<Unmap>(exports[2]);
+    auto close = reinterpret_cast<Close>(exports[3]);
+    void* section{};
+    void* first{};
+    void* second{};
+    int64_t maximum = 4096;
+    size_t firstSize = 4096, secondSize = 4096;
+    auto* current = reinterpret_cast<void*>(~uint64_t{0});
+    if (create(&section, 4, nullptr, &maximum, 4, 0x08000000, nullptr) ||
+        map(section, current, &first, 0, 0, nullptr, &firstSize, 2, 0, 4) !=
+            static_cast<int32_t>(0xc0000022u) ||
+        first || close(section)) __builtin_trap();
+    section = nullptr;
+    if (create(&section, 6, nullptr, &maximum, 4, 0x08000000, nullptr) ||
+        map(section, current, &first, 0, 0, nullptr, &firstSize, 2, 0, 4) ||
+        map(section, current, &second, 0, 0, nullptr, &secondSize, 2, 0, 2)) __builtin_trap();
+    *static_cast<volatile uint64_t*>(first) = 0x12345678;
+    if (*static_cast<volatile uint64_t*>(second) != 0x12345678 ||
+        unmap(current, first) || close(section) ||
+        *static_cast<volatile uint64_t*>(second) != 0x12345678 ||
+        unmap(current, second)) __builtin_trap();
     __asm__ __volatile__(
         ".globl MicantSyscallClientBreakpoint\nMicantSyscallClientBreakpoint:\n"
         "int3\nud2\n"
@@ -1046,6 +1079,7 @@ bool verifyNativeImageLoading() noexcept {
     using namespace micant::pe;
     if (!g_dispatch || !g_probeSucceeded) return false;
     constexpr uint64_t imageBase = kUserBase + 0x10000;
+    constexpr uint64_t ntdllBase = kUserBase + 0x20000;
     const auto* client = reinterpret_cast<const uint8_t*>(MicantSyscallClientProgram);
     const size_t clientSize = reinterpret_cast<uint64_t>(MicantSyscallClientEnd) -
                               reinterpret_cast<uint64_t>(client);
@@ -1089,16 +1123,40 @@ bool verifyNativeImageLoading() noexcept {
     }
     if (g_nativeProbeModules.addModule("syscall-probe.exe", g_nativeProbeFile,
             g_nativeProbeImage, imageBase) != micant::NtStatus::Success ||
+        g_nativeProbeModules.addModule("ntdll.dll", g_ntdllProbeFile,
+            g_ntdllProbeImage, ntdllBase) != micant::NtStatus::Success ||
         g_nativeProbeModules.bindAll() != micant::NtStatus::Success ||
         !mapBootstrapUserMemory(imageBase, g_nativeProbeImage, 4096, false, false) ||
         !mapBootstrapUserMemory(imageBase + 4096, g_nativeProbeImage + 4096,
                                 4096, false, true)) {
         return false;
     }
+    const auto* dll = g_nativeProbeModules.module(1);
+    if (!dll || !mapBootstrapUserMemory(ntdllBase, g_ntdllProbeImage, 4096, false, false))
+        return false;
+    for (size_t index = 0; index < dll->view.headers().fileHeader.numberOfSections; ++index) {
+        const auto section = dll->view.section(index);
+        const size_t size = section.misc.virtualSize > section.sizeOfRawData
+            ? section.misc.virtualSize : section.sizeOfRawData;
+        if (!size) continue;
+        if ((section.virtualAddress & 4095) || section.virtualAddress > dll->image.size() ||
+            size > dll->image.size() - section.virtualAddress ||
+            !mapBootstrapUserMemory(ntdllBase + section.virtualAddress,
+                g_ntdllProbeImage + section.virtualAddress, (size + 4095) & ~size_t{4095},
+                (section.characteristics & IMAGE_SCN_MEM_WRITE) != 0,
+                (section.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)) return false;
+    }
+    constexpr const char* names[]{"NtCreateSection", "NtMapViewOfSection", "NtUnmapViewOfSection", "NtClose"};
+    auto* exports = reinterpret_cast<uint64_t*>(kUserBase + 4096 + 768);
+    for (size_t index = 0; index < 4; ++index) {
+        if (g_nativeProbeModules.resolve("ntdll.dll", names[index], 0, exports[index]) != micant::NtStatus::Success ||
+            !bootstrapUserRange(exports[index], 1, false, true)) return false;
+    }
     MicantProbeUserRip = imageBase + 4096;
     g_probeMode = 6;
     g_probeSucceeded = false;
     g_probeReturnRip = imageBase + 4096 + 16 + breakpointOffset + 1;
+    const size_t activeBefore = mm::PfnDatabase::get().getActiveCount();
     MicantProbeEnter();
     if (g_log) g_log("[MicaNT Hal] CPL3 syscall probe returned to kernel\r\n");
     MicantProbeUserRip = kUserBase;
@@ -1106,7 +1164,7 @@ bool verifyNativeImageLoading() noexcept {
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
         : : : "rax", "memory"
     );
-    return g_probeSucceeded;
+    return g_probeSucceeded && mm::PfnDatabase::get().getActiveCount() == activeBefore;
 }
 
 void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {

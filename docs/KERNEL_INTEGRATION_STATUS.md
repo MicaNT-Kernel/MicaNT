@@ -166,21 +166,31 @@ copies stack arguments from the user stack. A limited anonymous `SEC_COMMIT`
 section service in `kernel/mm/virtual.cpp` uses the canonical Ob handle table
 and the bootstrap paging backend. A CPL3 diagnostic issues create, map, unmap
 and close syscalls, checks handle access denial, shared data and the lifetime
-of a view after close, and checks PFN accounting after cleanup. The diagnostic
-issues syscall instructions directly; it does not load an NTDLL section stub.
+of a view after close, and checks PFN accounting after cleanup. An additional
+CPL3 PE diagnostic loads the real NTDLL PE, resolves the four section/close
+exports, and calls them through the syscall boundary. This uses a bounded
+build-time fixture and explicit export resolution, not process DLL startup or
+an application import table. The boot ownership test checks that the Ob
+section object itself remains alive after its last handle closes until its
+last view is unmapped.
 The internal backend also changes view page protections and rejects upgrading a
 view beyond its retained access; a bare-metal QEMU test exercises those changes.
 
 M1 remains open: this service is limited to the bootstrap current-process
 pseudo-handle and the bounded bootstrap address window. A QEMU CPL3 probe
 also checks nonzero section offsets, 64 KiB rounding and distinct backing pages;
-process handle access checks, loading and calling the NTDLL exports, complete
+process handle access checks, normal NTDLL loading and import binding, complete
 argument and protection semantics, a native protection syscall, and a real
-process address space remain unimplemented. The bootstrap test depends on
+process address space remain unimplemented. `ViewShare` is rejected until
+child-process view inheritance is available. The bootstrap test depends on
 the limited freestanding `SectionObject` implementation. Microsoft contracts:
 [create](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesection),
 [map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmapviewofsection),
 [unmap](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunmapviewofsection).
+If backend unmapping fails while rolling back a failed map, the retained VAD
+keeps its object reference and physical pages, but an automatically selected
+address is not returned to the caller. Recovery of that orphan before process
+teardown is still unresolved.
 ReactOS comparison used `ntoskrnl/mm/section.c` and
 `ntoskrnl/mm/ARM3/section.c` at the revision above.
 
@@ -188,8 +198,8 @@ ReactOS comparison used `ntoskrnl/mm/section.c` and
 |---|---|
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_avl_section_owner_test.cpp -o build/mm_avl_section_owner_test && build/mm_avl_section_owner_test` | Passed; successor ownership and final release without host traps |
 | `clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_shared_backend_test.cpp -o /tmp/micant-mm-shared-test && /tmp/micant-mm-shared-test` | Passed; two backend views, ownership and mapping failure rollback |
-| `python3 qemu.py --headless` | Passed; CPL3 direct syscall section lifecycle, access denial, PFN accounting and existing modular boot checks |
-| `x86_64-w64-mingw32-clang++ ... tools/dlls/ntdll.cpp` and `llvm-objdump` | Built a native PE DLL and verified the four section/close exports and syscall instructions; loading that DLL in the CPL3 probe remains open |
+| `python3 qemu.py --headless` | Passed; section lifecycle through direct syscalls and loaded NTDLL exports, access denial, Ob lifetime, PFN accounting and existing modular boot checks |
+| `x86_64-w64-mingw32-clang++ ... tools/dlls/ntdll.cpp` and `llvm-objdump` | Built a native PE DLL and verified the four section/close exports and syscall instructions |
 
 #### Bootstrap VAD verification
 

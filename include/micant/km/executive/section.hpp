@@ -48,7 +48,7 @@ inline constexpr uint32_t SECTION_MAP_READ             = 0x0004;
 inline constexpr uint32_t SECTION_MAP_EXECUTE          = 0x0008;
 inline constexpr uint32_t SECTION_EXTEND_SIZE          = 0x0010;
 inline constexpr uint32_t SECTION_MAP_EXECUTE_EXPLICIT = 0x0020;
-inline constexpr uint32_t SECTION_ALL_ACCESS           = 0x001F001F;
+inline constexpr uint32_t SECTION_ALL_ACCESS           = 0x000F001F;
 
 // ============================================================================
 // 2. Section Allocation Attributes (SEC_*)

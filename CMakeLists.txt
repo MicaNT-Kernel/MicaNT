@@ -225,7 +225,21 @@ if (MICANT_ENABLE_BAREMETAL)
         message(FATAL_ERROR "The freestanding AMD64 PE targets require a Clang/GNU cross-toolchain.")
     endif()
 
+    set(_ntdll_probe_dll "${CMAKE_CURRENT_BINARY_DIR}/ntdll-probe.dll")
+    set(_ntdll_probe_header "${CMAKE_CURRENT_BINARY_DIR}/ntdll-probe.inc")
+    add_custom_command(OUTPUT "${_ntdll_probe_dll}"
+        COMMAND "${CMAKE_CXX_COMPILER}" -std=c++23 -ffreestanding -fno-exceptions
+            -fno-rtti -fno-stack-protector -shared -nostdlib -Wl,-e,DllMain
+            -Wl,--subsystem,native -Wl,--image-base,0x400000020000 -O2
+            "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" -o "${_ntdll_probe_dll}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" VERBATIM)
+    add_custom_command(OUTPUT "${_ntdll_probe_header}"
+        COMMAND "${CMAKE_COMMAND}" -DINPUT=${_ntdll_probe_dll} -DOUTPUT=${_ntdll_probe_header}
+            -P "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake"
+        DEPENDS "${_ntdll_probe_dll}" "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake" VERBATIM)
+
     add_executable(ntoskrnl_core_baremetal
+        "${_ntdll_probe_header}"
         kernel/init/kiinit.cpp
         kernel/ke/context_switch.cpp
         kernel/hal/amd64_bootstrap.cpp
@@ -246,6 +260,7 @@ if (MICANT_ENABLE_BAREMETAL)
     target_include_directories(ntoskrnl_core_baremetal PRIVATE
         "${CMAKE_SOURCE_DIR}"
         "${CMAKE_SOURCE_DIR}/tools"
+        "${CMAKE_CURRENT_BINARY_DIR}"
     )
     target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_FREESTANDING)
     if (MICANT_BOOTSTRAP_RUNTIME_SELFTEST)

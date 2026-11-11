@@ -13,6 +13,13 @@ ob::ObjectType sectionType;
 void deleteSection(ob::ObjectHeader* header) {
     header->as<section::SectionObject>()->~SectionObject();
 }
+bool acquireSectionView(void* owner) noexcept {
+    static_cast<ob::ObjectHeader*>(owner)->addReference();
+    return true;
+}
+void releaseSectionView(void* owner) noexcept {
+    ob::ObDereferenceObject(static_cast<ob::ObjectHeader*>(owner));
+}
 }
 
 bool initializeBootstrapSectionServices() noexcept {
@@ -48,7 +55,10 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
                             uint32_t inherit, uint32_t allocation, uint32_t protection) {
     if (!base || !viewSize) return NtStatus::InvalidParameter;
     if (process != InvalidHandleValue) return NtStatus::NotImplemented;
-    if (zeroBits || commitSize || allocation || (inherit != 1 && inherit != 2))
+    if (inherit != 1 && inherit != 2) return NtStatus::InvalidParameter;
+    // ViewShare requires inheritance into future child address spaces, which
+    // the bootstrap process model does not yet provide.
+    if (inherit == 1 || zeroBits || commitSize || allocation)
         return NtStatus::NotImplemented;
     if (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)
         return NtStatus::NotImplemented;
@@ -93,7 +103,7 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
     const uint32_t maximumProtection = protection;
     status = addressSpace.mapSharedPages(target, length, protection, backing.pfns + firstPage,
                                          backing.pageCount - firstPage,
-                                         backing.context, backing.acquire, backing.release, maximumProtection);
+                                         header, acquireSectionView, releaseSectionView, maximumProtection);
     if (status == NtStatus::Success) {
         *base = target;
         *viewSize = length;
@@ -107,6 +117,26 @@ NtStatus NtUnmapViewOfSection(Handle process, uintptr_t base) {
     if (process != InvalidHandleValue) return NtStatus::NotImplemented;
     const auto result = addressSpace.unmapSharedPages(base);
     return result == NtStatus::InvalidParameter ? NtStatus::NotMappedView : result;
+}
+
+bool verifyBootstrapSectionOwnership() noexcept {
+    const size_t activeBefore = mm::PfnDatabase::get().getActiveCount();
+    const auto objectsBefore = sectionType.totalNumberOfObjects.load(std::memory_order_relaxed);
+    LargeInteger maximum{};
+    maximum.quadPart = mm::PageSize4KB;
+    Handle handle{};
+    if (NtCreateSection(&handle, section::SECTION_MAP_READ, nullptr, &maximum,
+                        mm::PAGE_READONLY, section::SEC_COMMIT, 0) != NtStatus::Success) return false;
+    uintptr_t base{};
+    size_t size = mm::PageSize4KB;
+    const auto mapStatus = NtMapViewOfSection(handle, InvalidHandleValue, &base, 0, 0,
+                                               nullptr, &size, 2, 0, mm::PAGE_READONLY);
+    if (mapStatus != NtStatus::Success) { NtClose(handle); return false; }
+    if (NtClose(handle) != NtStatus::Success ||
+        sectionType.totalNumberOfObjects.load(std::memory_order_relaxed) != objectsBefore + 1) return false;
+    if (NtUnmapViewOfSection(InvalidHandleValue, base) != NtStatus::Success) return false;
+    return sectionType.totalNumberOfObjects.load(std::memory_order_relaxed) == objectsBefore &&
+           mm::PfnDatabase::get().getActiveCount() == activeBefore;
 }
 }
 #else
