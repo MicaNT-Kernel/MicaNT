@@ -59,7 +59,8 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
             if (space.mapSharedPages(first, PageSize4KB, PAGE_READWRITE, backing.pfns,
                                      backing.pageCount, backing.context, backing.acquire, backing.release) != NtStatus::Success ||
                 space.mapSharedPages(second, PageSize4KB, PAGE_READONLY, backing.pfns,
-                                     backing.pageCount, backing.context, backing.acquire, backing.release) != NtStatus::Success) return 12;
+                                     backing.pageCount, backing.context, backing.acquire, backing.release,
+                                     PAGE_READONLY) != NtStatus::Success) return 12;
         }
         auto* writable = reinterpret_cast<volatile uint64_t*>(first);
         auto* readonly = reinterpret_cast<volatile uint64_t*>(second);
@@ -67,6 +68,13 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
         if (*readonly != *writable || bootstrapUserRange(second, PageSize4KB, true) ||
             !bootstrapUserRange(first, PageSize4KB, true) ||
             (bootstrapQemuFaultTestsAvailable() && !verifyBootstrapManagedPageFault(second, true, true))) return 13;
+        uint32_t oldProtection{};
+        if (space.protect(second, PageSize4KB, PAGE_READWRITE, &oldProtection) != NtStatus::SectionProtection ||
+            bootstrapUserRange(second, PageSize4KB, true) ||
+            space.protect(first, PageSize4KB, PAGE_READONLY, &oldProtection) != NtStatus::Success ||
+            oldProtection != PAGE_READWRITE || bootstrapUserRange(first, PageSize4KB, true) ||
+            space.protect(first, PageSize4KB, PAGE_READWRITE, &oldProtection) != NtStatus::Success ||
+            oldProtection != PAGE_READONLY || !bootstrapUserRange(first, PageSize4KB, true)) return 15;
         if (space.unmapSharedPages(first + 1) != NtStatus::Success ||
             *readonly != 0xabcdef1234567890ULL ||
             space.unmapSharedPages(second) != NtStatus::Success) return 14;

@@ -88,9 +88,12 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
     uintptr_t target = *base ? *base & ~(static_cast<uintptr_t>(mm::ProcessAddressSpace::AllocationGranularity) - 1) : 0;
     const auto backing = object->getBackingReference();
     const size_t firstPage = static_cast<size_t>(sectionOffset) >> mm::PageShift4KB;
+    // Later protection changes must remain compatible with this view's
+    // original mapping protection, even if the section handle grants more.
+    const uint32_t maximumProtection = protection;
     status = addressSpace.mapSharedPages(target, length, protection, backing.pfns + firstPage,
                                          backing.pageCount - firstPage,
-                                         backing.context, backing.acquire, backing.release);
+                                         backing.context, backing.acquire, backing.release, maximumProtection);
     if (status == NtStatus::Success) {
         *base = target;
         *viewSize = length;

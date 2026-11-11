@@ -569,6 +569,7 @@ struct VirtualAddressDescriptor {
     bool      isCopyOnWrite{false};
     bool      isGuardPage{false};
     bool      isSectionView{false};
+    uint32_t  sectionMaxProtection{PAGE_NOACCESS};
     void*     sectionContext{nullptr};
     void (*sectionRelease)(void*) noexcept{nullptr};
 #if !defined(MICANT_FREESTANDING)
@@ -793,6 +794,7 @@ private:
             node->isCopyOnWrite = temp->isCopyOnWrite;
             node->isGuardPage = temp->isGuardPage;
             node->isSectionView = temp->isSectionView;
+            node->sectionMaxProtection = temp->sectionMaxProtection;
             if (node->sectionRelease) node->sectionRelease(node->sectionContext);
             node->sectionContext = temp->sectionContext;
             node->sectionRelease = temp->sectionRelease;
@@ -1247,12 +1249,17 @@ public:
     NtStatus mapSharedPages(uintptr_t& baseAddress, size_t size, uint32_t protect,
                             const uint64_t* pfns, size_t pageCount, void* owner,
                             bool (*acquire)(void*) noexcept,
-                            void (*release)(void*) noexcept) noexcept {
+                            void (*release)(void*) noexcept,
+                            uint32_t maxProtection = PAGE_NOACCESS) noexcept {
         Guard lock(*this);
         if (!backend_.map) return NtStatus::NotImplemented;
         if (!size || size > std::numeric_limits<size_t>::max() - PageMask4KB ||
             !pfns || !owner || !acquire || !release) return NtStatus::InvalidParameter;
         if (protect != PAGE_READONLY && protect != PAGE_READWRITE) return NtStatus::NotImplemented;
+        if (maxProtection == PAGE_NOACCESS) maxProtection = protect;
+        if ((maxProtection != PAGE_READONLY && maxProtection != PAGE_READWRITE) ||
+            (protect == PAGE_READWRITE && maxProtection != PAGE_READWRITE))
+            return NtStatus::SectionProtection;
         const size_t length = (size + PageMask4KB) & ~PageMask4KB;
         const size_t count = length >> PageShift4KB;
         if (count > pageCount) return NtStatus::InvalidParameter;
@@ -1273,6 +1280,7 @@ public:
         node->protection = protect;
         node->allocationType = MEM_COMMIT;
         node->isSectionView = true;
+        node->sectionMaxProtection = maxProtection;
         auto* vad = node.get();
         if (!vadTree_.insert(std::move(node))) return NtStatus::Conflict;
         NtStatus failure = NtStatus::Success;
@@ -1626,7 +1634,9 @@ private:
         uintptr_t start{}, end{};
         if (!pageRange(address, size, start, end)) return NtStatus::InvalidParameter;
         auto* vad = vadTree_.find(start);
-        if (!vad || end > vad->endingAddress || vad->isSectionView) return NtStatus::Conflict;
+        if (!vad || end > vad->endingAddress) return NtStatus::Conflict;
+        if (vad->isSectionView && protection == PAGE_READWRITE &&
+            vad->sectionMaxProtection != PAGE_READWRITE) return NtStatus::SectionProtection;
 
         struct Change {
             VirtualAddressDescriptor::CommitRange* page;
