@@ -85,6 +85,35 @@ integration.
 
 ## Integration increments
 
+### Freestanding Ke ready queues
+
+The canonical `PriorityScheduler` now has an allocation-free freestanding
+ready-queue implementation using links owned by `KThread`. It selects the
+highest priority first and preserves FIFO order within a priority, rejects
+duplicate queueing, and puts selected threads into `Standby` without counting
+a context switch. The existing cooperative AMD64 context switch accepts a
+selected thread and rejects a thread still in a ready queue.
+
+The QEMU bootstrap test enqueues and selects two existing kernel contexts,
+checks duplicate rejection and the switch counter, and actually switches
+through both contexts. This is limited to the bootstrap's single CPU with
+interrupts disabled and a shared address space. It is not a preemptive
+scheduler, an interrupt-safe SMP queue, thread creation, event waits, or
+Ring 3 process execution. Ke's existing spinlock does not mask hardware
+interrupts, so this queue must not be used by interrupt-enabled scheduling
+paths until interrupt synchronization is implemented.
+
+The priority ordering follows the documented
+[Windows scheduling priority model](https://learn.microsoft.com/en-us/windows/win32/procthread/scheduling-priorities);
+the broader Ke comparison and ReactOS reference paths remain recorded in
+[NT_KERNEL_EXPANSION_MATRIX.md](NT_KERNEL_EXPANSION_MATRIX.md).
+
+| Command | Result |
+|---|---|
+| `clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -I include test/ke_freestanding_ready_queue_test.cpp -o build/ke-freestanding-ready-test && build/ke-freestanding-ready-test` | Passed on the host; priority, FIFO, duplicate, state and counter checks |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -I include test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted context regression |
+| `python3 qemu.py --headless` | Passed; ready-queue marker, cooperative context canaries, boot, scanout and PS/2 checks |
+
 ### Executive failure reporting
 
 The hosted Executive's `NtTerminateProcess` and `NtProtectVirtualMemory` no

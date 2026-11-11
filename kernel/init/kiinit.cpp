@@ -178,7 +178,24 @@ void verifyKernelContextSwitch() noexcept {
         sizeof(g_secondContextStack));
 
     const KIRQL previousIrql = KfRaiseIrql(DISPATCH_LEVEL);
-    if (!KiSwapContext(&g_bootContextThread, &g_firstContextThread)) {
+    auto& scheduler = PriorityScheduler::get();
+    if (!scheduler.readyKThread(&g_firstContextThread) ||
+        !scheduler.readyKThread(&g_secondContextThread) ||
+        scheduler.readyKThread(&g_firstContextThread) ||
+        scheduler.getReadyThreadCount() != 2 ||
+        KiSwapContext(&g_bootContextThread, &g_firstContextThread)) {
+        stopWithError("[MicaNT Ke] Ready queue insertion verification failed\r\n");
+    }
+    KThread* first = scheduler.selectNextThread();
+    KThread* second = scheduler.selectNextThread();
+    if (first != &g_firstContextThread || second != &g_secondContextThread ||
+        scheduler.selectNextThread() || scheduler.getReadyThreadCount() != 0 ||
+        first->state != ThreadState::Standby ||
+        second->state != ThreadState::Standby ||
+        g_CurrentCpu.contextSwitches != initialSwitchCount) {
+        stopWithError("[MicaNT Ke] Ready queue selection verification failed\r\n");
+    }
+    if (!KiSwapContext(&g_bootContextThread, first)) {
         stopWithError("[MicaNT Ke] Initial AMD64 context switch failed\r\n");
     }
     KeLowerIrql(previousIrql);
@@ -214,6 +231,7 @@ void verifyKernelContextSwitch() noexcept {
         g_firstContextLocal == g_secondContextLocal) {
         stopWithError("[MicaNT Ke] Context stack ownership verification failed\r\n");
     }
+    serialWrite("[MicaNT Ke] Allocation-free ready queue selected cooperative contexts\r\n");
     serialWrite("[MicaNT Ke] Cooperative AMD64 contexts, stacks, GPR, XMM and FP control verified\r\n");
 }
 

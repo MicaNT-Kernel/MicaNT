@@ -444,6 +444,10 @@ struct KThread {
     bool specialApcDisable{false};
     bool alertable{false};
     bool alerted{false};
+#if defined(MICANT_FREESTANDING)
+    KThread* readyNext{nullptr};
+    bool readyQueued{false};
+#endif
 };
 
 // ============================================================================
@@ -473,6 +477,67 @@ struct ScheduledThreadEntry {
 
 class PriorityScheduler {
 public:
+#if defined(MICANT_FREESTANDING)
+    // Bootstrap-only: callers must keep hardware interrupts disabled.
+    static PriorityScheduler& get() noexcept {
+        static constinit PriorityScheduler instance;
+        return instance;
+    }
+
+    [[nodiscard]] bool readyKThread(KThread* thread) noexcept {
+        if (!thread) return false;
+        SpinLockGuard guard(lock_);
+        if (thread->readyQueued ||
+            (thread->state != ThreadState::Initialized &&
+             thread->state != ThreadState::Ready &&
+             thread->state != ThreadState::Waiting)) {
+            return false;
+        }
+        const uint32_t priority = std::min(thread->priority, PRIORITY_REALTIME_MAX);
+        thread->priority = priority;
+        thread->state = ThreadState::Ready;
+        thread->readyNext = nullptr;
+        thread->readyQueued = true;
+        auto& queue = runQueues_[priority];
+        if (queue.tail) queue.tail->readyNext = thread;
+        else queue.head = thread;
+        queue.tail = thread;
+        ++totalReadyThreads_;
+        return true;
+    }
+
+    [[nodiscard]] KThread* selectNextThread() noexcept {
+        SpinLockGuard guard(lock_);
+        for (int priority = PRIORITY_REALTIME_MAX; priority >= 0; --priority) {
+            auto& queue = runQueues_[static_cast<size_t>(priority)];
+            if (!queue.head) continue;
+            KThread* thread = queue.head;
+            queue.head = thread->readyNext;
+            if (!queue.head) queue.tail = nullptr;
+            thread->readyNext = nullptr;
+            thread->readyQueued = false;
+            thread->state = ThreadState::Standby;
+            --totalReadyThreads_;
+            return thread;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] size_t getReadyThreadCount() noexcept {
+        SpinLockGuard guard(lock_);
+        return totalReadyThreads_;
+    }
+
+private:
+    struct ReadyQueue {
+        KThread* head{nullptr};
+        KThread* tail{nullptr};
+    };
+    constexpr PriorityScheduler() = default;
+    SpinLock lock_;
+    std::array<ReadyQueue, NUM_PRIORITY_LEVELS> runQueues_{};
+    size_t totalReadyThreads_{0};
+#else
     static PriorityScheduler& get() {
         static PriorityScheduler instance;
         return instance;
@@ -587,6 +652,7 @@ private:
     mutable SpinLock lock_;
     std::array<std::deque<ScheduledThreadEntry>, NUM_PRIORITY_LEVELS> runQueues_;
     std::atomic<size_t> totalReadyThreads_;
+#endif
 };
 
 // ============================================================================
@@ -606,12 +672,14 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
 
 #if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
     if (!outgoing || outgoing == incoming ||
-        KeGetCurrentThread() != outgoing ||
+        KeGetCurrentThread() != outgoing || outgoing->readyQueued ||
         (outgoing->state != ThreadState::Running &&
          outgoing->state != ThreadState::Terminated) ||
         g_CurrentCpu.currentIrql != DISPATCH_LEVEL ||
         (incoming->state != ThreadState::Initialized &&
-         incoming->state != ThreadState::Ready) ||
+         incoming->state != ThreadState::Ready &&
+         incoming->state != ThreadState::Standby) ||
+        incoming->readyQueued ||
         incoming->context.rip == 0 || incoming->context.rsp == 0 ||
         outgoing->directoryTableBase != incoming->directoryTableBase) {
         return false;
