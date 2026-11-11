@@ -44,7 +44,7 @@ static_assert(std::is_trivially_copyable_v<EfiMemoryDescriptor>);
 namespace micant::boot {
 
 inline constexpr uint64_t UEFI_KERNEL_HANDOFF_SIGNATURE = 0x4D4943414E54424FULL;
-inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION = 2;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION = 3;
 
 struct KernelFramebufferV1 {
     uint64_t physicalBase;
@@ -61,7 +61,12 @@ struct KernelBootImageV1 {
     uint64_t entryPoint;
 };
 
-struct UefiKernelHandoffV2 {
+struct KernelBootFileV1 {
+    uint64_t base;
+    uint64_t size;
+};
+
+struct UefiKernelHandoffV3 {
     uint64_t signature;
     uint32_t size;
     uint32_t version;
@@ -72,11 +77,13 @@ struct UefiKernelHandoffV2 {
     KernelFramebufferV1 framebuffer;
     uint64_t acpiTablePhysicalAddress;
     KernelBootImageV1 displayDriver;
+    KernelBootFileV1 userImageFile;
 };
 
-static_assert(std::is_standard_layout_v<UefiKernelHandoffV2>);
-static_assert(std::is_trivially_copyable_v<UefiKernelHandoffV2>);
-static_assert(sizeof(UefiKernelHandoffV2) == 104);
-static_assert(offsetof(UefiKernelHandoffV2, displayDriver) == 80);
+static_assert(std::is_standard_layout_v<UefiKernelHandoffV3>);
+static_assert(std::is_trivially_copyable_v<UefiKernelHandoffV3>);
+static_assert(sizeof(UefiKernelHandoffV3) == 120);
+static_assert(offsetof(UefiKernelHandoffV3, displayDriver) == 80);
+static_assert(offsetof(UefiKernelHandoffV3, userImageFile) == 104);
 
 } // namespace micant::boot

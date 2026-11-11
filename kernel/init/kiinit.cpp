@@ -298,7 +298,7 @@ bool verifyKernelObjectHandles() noexcept {
            object.handleInfo.handleCount == 0 && type.totalNumberOfHandles == 0;
 }
 
-void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV2& handoff) noexcept {
+void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV3& handoff) noexcept {
     using namespace micant;
     const uint64_t descriptorCount = handoff.memoryMapSize / handoff.memoryMapDescriptorSize;
     if (handoff.memoryMapDescriptorVersion != 1 ||
@@ -445,7 +445,7 @@ void presentCursorRect(uint32_t x, uint32_t y) noexcept {
     }
 }
 
-bool validHandoff(const micant::boot::UefiKernelHandoffV2* handoff) noexcept {
+bool validHandoff(const micant::boot::UefiKernelHandoffV3* handoff) noexcept {
     if (!handoff ||
         handoff->signature != micant::boot::UEFI_KERNEL_HANDOFF_SIGNATURE ||
         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION ||
@@ -454,6 +454,12 @@ bool validHandoff(const micant::boot::UefiKernelHandoffV2* handoff) noexcept {
         handoff->memoryMapSize > UINT64_MAX - handoff->memoryMapAddress ||
         handoff->memoryMapDescriptorSize < sizeof(micant::uefi::EfiMemoryDescriptor) ||
         handoff->memoryMapSize < handoff->memoryMapDescriptorSize) {
+        return false;
+    }
+    const auto& userImage = handoff->userImageFile;
+    if ((userImage.base == 0) != (userImage.size == 0) ||
+        userImage.size > 16 * 1024 * 1024 ||
+        userImage.size > UINT64_MAX - userImage.base) {
         return false;
     }
 
@@ -734,7 +740,7 @@ bool pollMouseInput(MicaWin32kInputEvent& event) noexcept {
 } // namespace
 
 extern "C" micant::NtStatus KiSystemStartup(
-    const micant::boot::UefiKernelHandoffV2* handoff
+    const micant::boot::UefiKernelHandoffV3* handoff
 ) noexcept {
     __asm__ __volatile__("cli");
     serialInitialize();
@@ -749,6 +755,11 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT] Bootstrap address-space initialization failed\r\n");
     }
     serialWrite("[MicaNT] Kernel-owned page-table root active\r\n");
+    if (handoff->userImageFile.size &&
+        !micant::hal::amd64::bootstrapKernelRange(
+            handoff->userImageFile.base, handoff->userImageFile.size, false)) {
+        stopWithError("[MicaNT Ps] Staged user PE is not kernel-readable\r\n");
+    }
     if (!micant::mm::detail::initializeBootstrapProbes(probeBootstrapRange)) {
         stopWithError("[MicaNT Ex] Bootstrap probe binding failed\r\n");
     }

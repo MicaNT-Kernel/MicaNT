@@ -88,10 +88,13 @@ Ring 3
 
 The current bootloader is `boot/bootx64.cpp`; it locates
 `\EFI\MicaNT\ntoskrnl.exe` and passes a versioned, size-checked
-`UefiKernelHandoffV2` POD contract (104 bytes). The legacy STL loader block remains local
+`UefiKernelHandoffV3` POD contract (120 bytes). The legacy STL loader block remains local
 to the bootloader and is not passed across `ExitBootServices`. The handoff
 contains a pointer and byte range for the final UEFI memory map, GOP metadata,
 the ACPI root pointer, and the mapped display driver's base, size and entry.
+It also carries an optional base and file size for a user PE staged from the
+EFI System Partition; the kernel validates the descriptor and mapped range but
+does not yet load it as a process.
 Its pointer fields are valid only while the
 bootloader image and identity-mapped firmware memory remain available.
 

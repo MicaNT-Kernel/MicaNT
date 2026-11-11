@@ -35,6 +35,7 @@ Reproduced from the current sources, not by accepting an old kernel binary:
 | `python3 qemu.py --headless` | Passed; ordered serial milestones, stable idle, PS/2 and scanout checks |
 | `cmake --build build/qemu-cmake-mingw --target ntoskrnl_core` | Passed; canonical core builds the kernel-owned Win32k dispatcher and WDDM adapter |
 | `cmake --build build/qemu-cmake-mingw --target micant_tests -j 4` | Test runner compiles, but link fails on duplicate `micant::ucrt::initializeOnExitTable`; tests did not run |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/uefi_handoff_contract_test.cpp -o build/uefi-handoff-contract-test && build/uefi-handoff-contract-test` | Passed; validates V3 user-image file range serialization |
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted Ke behavior remains intact |
 | `cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot` | Rejected by the new boundary check: `win32k_boot` transitively includes private `micant/km/` headers |
 | `python3 -m unittest discover -s test -p test_explorer_runtime.py -v` | 12 passed |
@@ -264,8 +265,10 @@ The existing UEFI memory-type and descriptor declarations now live in
 [`boot_contract.hpp`](../include/micant/km/hal/boot_contract.hpp), which the
 hosted UEFI header already includes. There is one unchanged declaration, not
 a second boot memory-map format. Static assertions preserve the 40-byte
-descriptor and field offsets; `UefiKernelHandoffV2` remains 104 bytes.
-The standalone handoff test and headless QEMU boot pass after the extraction.
+descriptor and field offsets; `UefiKernelHandoffV3` is 120 bytes and can carry
+the optional staged user-PE file range. The kernel does not yet consume that
+range to create a process.
+The standalone handoff test and headless QEMU boot pass after the V3 extension.
 This only removes a hosted-header dependency; PFN enrollment is not claimed
 by the extraction itself.
 

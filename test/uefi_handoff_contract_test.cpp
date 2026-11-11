@@ -8,10 +8,11 @@ int main() {
     using namespace micant;
     std::array<uefi::EfiMemoryDescriptor, 2> memoryMap{};
     const auto empty = uefi::BuildKernelHandoffFromUefi(nullptr, nullptr, {});
-    assert(empty.version == 2 && empty.size == 104);
+    assert(empty.version == 3 && empty.size == 120);
     assert(empty.framebuffer.physicalBase == 0);
     assert(empty.displayDriver.base == 0 && empty.displayDriver.size == 0 &&
            empty.displayDriver.entryPoint == 0);
+    assert(empty.userImageFile.base == 0 && empty.userImageFile.size == 0);
 
     uefi::EfiGraphicsOutputModeInformation info{};
     info.horizontalResolution = 1024;
@@ -36,11 +37,14 @@ int main() {
     assert(handoff.framebuffer.pixelsPerScanLine == 1024);
     assert(handoff.framebuffer.pixelFormat == 1);
     handoff.displayDriver = {0x100000, 0x20000, 0x101000};
+    handoff.userImageFile = {0x200000, 0x18000};
     std::array<std::byte, sizeof(handoff)> bytes{};
     std::memcpy(bytes.data(), &handoff, sizeof(handoff));
-    boot::UefiKernelHandoffV2 restored{};
+    boot::UefiKernelHandoffV3 restored{};
     std::memcpy(&restored, bytes.data(), bytes.size());
     assert(restored.displayDriver.base == handoff.displayDriver.base);
     assert(restored.displayDriver.size == handoff.displayDriver.size);
     assert(restored.displayDriver.entryPoint == handoff.displayDriver.entryPoint);
+    assert(restored.userImageFile.base == handoff.userImageFile.base);
+    assert(restored.userImageFile.size == handoff.userImageFile.size);
 }
