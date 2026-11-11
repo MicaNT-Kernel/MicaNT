@@ -1891,8 +1891,16 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
             "AML loader must reject a table with a bad ACPI checksum");
         TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_.TEST").integerVal == 42,
             "AML namespace loader must preserve scoped integer Name objects");
+        TEST_ASSERT(firmwareNamespace.evaluate("\\_SB.TEST").integerVal == 42,
+            "ACPI _SB NameSeg padding must resolve through the kernel canonical path");
         TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_._STA").integerVal == 85,
             "AML Method evaluation must resolve and update scoped Name objects");
+        uint32_t notifiedValue = 0;
+        TEST_ASSERT(firmwareNamespace.registerNotifyHandler("\\_SB.TEST",
+            [&notifiedValue](std::string_view, uint32_t value) { notifiedValue = value; }) != 0,
+            "ACPI notifications must register against canonical _SB paths");
+        TEST_ASSERT(firmwareNamespace.dispatchNotify("\\_SB_.TEST", 0x80) == 1 && notifiedValue == 0x80,
+            "AML Notify paths must match handlers across _SB NameSeg padding");
     }
 
     // Initialize Subsystem

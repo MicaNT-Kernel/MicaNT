@@ -834,6 +834,14 @@ public:
     std::shared_ptr<AmlNode> findChild(std::string_view childName) const {
         auto it = children.find(std::string(childName));
         if (it != children.end()) return it->second;
+        const auto canonical = [](std::string_view name) {
+            if (name == "_SB_" || name == "_PR_" || name == "_TZ_" || name == "_SI_")
+                name.remove_suffix(1);
+            return name;
+        };
+        const auto expected = canonical(childName);
+        for (const auto& [name, child] : children)
+            if (canonical(name) == expected) return child;
         return nullptr;
     }
 };
@@ -1288,7 +1296,7 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         uint64_t token = m_nextNotifyToken++;
         if (token == 0) token = m_nextNotifyToken++;
-        m_notifyHandlers.push_back({token, std::string(path), std::move(callback)});
+        m_notifyHandlers.push_back({token, canonicalizePath(path), std::move(callback)});
         return token;
     }
 
@@ -1304,12 +1312,13 @@ public:
 
     size_t dispatchNotify(std::string_view path, uint32_t value) const {
         std::vector<std::function<void(std::string_view, uint32_t)>> callbacks;
+        const std::string canonicalPath = canonicalizePath(path);
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             for (const auto& item : m_notifyHandlers)
-                if (item.path == path) callbacks.push_back(item.callback);
+                if (item.path == canonicalPath) callbacks.push_back(item.callback);
         }
-        for (const auto& callback : callbacks) callback(path, value);
+        for (const auto& callback : callbacks) callback(canonicalPath, value);
         return callbacks.size();
     }
 
@@ -1665,6 +1674,25 @@ public:
     }
 
 private:
+    static std::string canonicalizePath(std::string_view path) {
+        std::string result;
+        result.reserve(path.size());
+        for (size_t begin = 0; begin < path.size();) {
+            if (path[begin] == '\\' || path[begin] == '.') {
+                result.push_back(path[begin++]);
+                continue;
+            }
+            size_t end = path.find('.', begin);
+            if (end == std::string_view::npos) end = path.size();
+            std::string_view segment = path.substr(begin, end - begin);
+            if (segment == "_SB_" || segment == "_PR_" || segment == "_TZ_" || segment == "_SI_")
+                segment.remove_suffix(1);
+            result.append(segment);
+            begin = end;
+        }
+        return result;
+    }
+
     AmlValue evaluatePath(std::string_view path, const std::vector<AmlValue>& args, uint32_t depth) const {
         if (depth >= 32) return AmlValue::MakeInteger(0);
         auto node = resolvePath(path);
