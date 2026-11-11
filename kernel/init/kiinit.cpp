@@ -6,6 +6,8 @@
 #include "micant/km/executive/freestanding.hpp"
 #include "micant/km/executive/probe.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/section.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/win32k/freestanding.hpp"
@@ -52,6 +54,10 @@ alignas(4096) uint8_t g_secondContextStack[32768]{};
 uintptr_t g_firstContextLocal{};
 uintptr_t g_secondContextLocal{};
 uint32_t g_contextOrder{};
+micant::Handle g_contextSection{};
+micant::Handle g_firstContextSection{};
+micant::Handle g_secondContextSection{};
+micant::Handle g_firstOnlySection{};
 void serialWriteNumber(uint64_t value) noexcept;
 extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
@@ -104,6 +110,19 @@ void firstContextEntry() noexcept {
     if (actualCr3 != g_firstContextThread.directoryTableBase ||
         actualCr3 != micant::ke::g_CurrentCpu.currentCr3)
         stopWithError("[MicaNT Ke] First thread CR3 mismatch\r\n");
+    if (g_contextSection) {
+        uintptr_t privateAddress = micant::hal::amd64::BootstrapManagedBase;
+        uintptr_t sharedAddress = privateAddress + micant::mm::ProcessAddressSpace::AllocationGranularity;
+        size_t viewSize = micant::mm::PageSize4KB;
+        if (!g_firstContextThread.owningProcess ||
+            g_firstContextThread.owningProcess->getAddressSpace().allocate(privateAddress, viewSize,
+                micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
+            micant::sys::NtMapViewOfSection(g_firstContextSection, micant::InvalidHandleValue, &sharedAddress,
+                0, 0, nullptr, &viewSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success)
+            stopWithError("[MicaNT Ps] First process mapping failed\r\n");
+        *reinterpret_cast<volatile uint64_t*>(privateAddress) = 0x11111111;
+        *reinterpret_cast<volatile uint64_t*>(sharedAddress) = 0x22222222;
+    }
     volatile uint64_t pattern[16]{};
     for (size_t index = 0; index < 16; ++index) pattern[index] = 0xA100 + index;
     g_firstContextLocal = reinterpret_cast<uintptr_t>(&pattern[0]);
@@ -115,6 +134,11 @@ void firstContextEntry() noexcept {
         g_contextOrder != 12) {
         stopWithError("[MicaNT Ke] First context resume verification failed\r\n");
     }
+    if (g_contextSection &&
+        (*reinterpret_cast<volatile uint64_t*>(micant::hal::amd64::BootstrapManagedBase) != 0x11111111 ||
+         *reinterpret_cast<volatile uint64_t*>(micant::hal::amd64::BootstrapManagedBase +
+             micant::mm::ProcessAddressSpace::AllocationGranularity) != 0x33333333))
+        stopWithError("[MicaNT Ps] First process isolation failed\r\n");
     for (size_t index = 0; index < 16; ++index) {
         if (pattern[index] != 0xA100 + index) {
             stopWithError("[MicaNT Ke] First context stack verification failed\r\n");
@@ -132,6 +156,27 @@ void secondContextEntry() noexcept {
     if (actualCr3 != g_secondContextThread.directoryTableBase ||
         actualCr3 != micant::ke::g_CurrentCpu.currentCr3)
         stopWithError("[MicaNT Ke] Second thread CR3 mismatch\r\n");
+    if (g_contextSection) {
+        uintptr_t privateAddress = micant::hal::amd64::BootstrapManagedBase;
+        uintptr_t sharedAddress = privateAddress + micant::mm::ProcessAddressSpace::AllocationGranularity;
+        size_t viewSize = micant::mm::PageSize4KB;
+        uintptr_t forbiddenAddress{};
+        size_t forbiddenSize = viewSize;
+        if (micant::sys::NtMapViewOfSection(g_firstOnlySection, micant::InvalidHandleValue, &forbiddenAddress,
+                0, 0, nullptr, &forbiddenSize, 2, 0, micant::mm::PAGE_READONLY) != micant::NtStatus::InvalidHandle ||
+            forbiddenAddress != 0)
+            stopWithError("[MicaNT Ps] Handle table isolation failed\r\n");
+        if (!g_secondContextThread.owningProcess ||
+            g_secondContextThread.owningProcess->getAddressSpace().allocate(privateAddress, viewSize,
+                micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
+            micant::sys::NtMapViewOfSection(g_secondContextSection, micant::InvalidHandleValue, &sharedAddress,
+                0, 0, nullptr, &viewSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
+            *reinterpret_cast<volatile uint64_t*>(privateAddress) != 0 ||
+            *reinterpret_cast<volatile uint64_t*>(sharedAddress) != 0x22222222)
+            stopWithError("[MicaNT Ps] Second process mapping failed\r\n");
+        *reinterpret_cast<volatile uint64_t*>(privateAddress) = 0x44444444;
+        *reinterpret_cast<volatile uint64_t*>(sharedAddress) = 0x33333333;
+    }
     volatile uint64_t pattern[16]{};
     for (size_t index = 0; index < 16; ++index) pattern[index] = 0xB200 + index;
     g_secondContextLocal = reinterpret_cast<uintptr_t>(&pattern[0]);
@@ -143,6 +188,9 @@ void secondContextEntry() noexcept {
         g_contextOrder != 121) {
         stopWithError("[MicaNT Ke] Second context resume verification failed\r\n");
     }
+    if (g_contextSection &&
+        *reinterpret_cast<volatile uint64_t*>(micant::hal::amd64::BootstrapManagedBase) != 0x44444444)
+        stopWithError("[MicaNT Ps] Second process isolation failed\r\n");
     for (size_t index = 0; index < 16; ++index) {
         if (pattern[index] != 0xB200 + index) {
             stopWithError("[MicaNT Ke] Second context stack verification failed\r\n");
@@ -186,9 +234,11 @@ void initializeContextThread(
 void verifyKernelContextSwitch(bool separateRoots) noexcept {
     using namespace micant::ke;
     using namespace micant::hal::amd64;
-    ProcessPagingRoot firstRoot;
-    ProcessPagingRoot secondRoot;
-    if (separateRoots && (!createProcessPagingRoot(firstRoot) || !createProcessPagingRoot(secondRoot)))
+    const size_t activePages = micant::mm::PfnDatabase::get().getActiveCount();
+    micant::ps::EProcess firstProcess;
+    micant::ps::EProcess secondProcess;
+    if (separateRoots && (firstProcess.initializeAddressSpace() != micant::NtStatus::Success ||
+                          secondProcess.initializeAddressSpace() != micant::NtStatus::Success))
         stopWithError("[MicaNT Ke] Context root allocation failed\r\n");
     g_contextOrder = 0;
     uintptr_t activeCr3{};
@@ -207,8 +257,24 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
         g_secondContextThread, secondContextEntry, g_secondContextStack,
         sizeof(g_secondContextStack));
     if (separateRoots) {
-        g_firstContextThread.directoryTableBase = firstRoot.pfn << micant::mm::PageShift4KB;
-        g_secondContextThread.directoryTableBase = secondRoot.pfn << micant::mm::PageShift4KB;
+        if (firstProcess.attachThread(g_firstContextThread) != micant::NtStatus::Success ||
+            secondProcess.attachThread(g_secondContextThread) != micant::NtStatus::Success ||
+            firstProcess.closeAddressSpace() != micant::NtStatus::InvalidParameter)
+            stopWithError("[MicaNT Ps] Context ownership verification failed\r\n");
+        micant::LargeInteger maximum{};
+        maximum.quadPart = micant::mm::PageSize4KB;
+        if (micant::sys::NtCreateSection(&g_contextSection,
+                micant::section::SECTION_MAP_READ | micant::section::SECTION_MAP_WRITE,
+                nullptr, &maximum, micant::mm::PAGE_READWRITE, micant::section::SEC_COMMIT, 0) != micant::NtStatus::Success)
+            stopWithError("[MicaNT Ps] Shared section creation failed\r\n");
+        auto& sourceHandles = micant::ob::detail::kernelHandleTable();
+        if (sourceHandles.duplicateHandle(g_contextSection, firstProcess.getHandleTable(),
+                                           g_firstContextSection) != micant::NtStatus::Success ||
+            sourceHandles.duplicateHandle(g_contextSection, secondProcess.getHandleTable(),
+                                           g_secondContextSection) != micant::NtStatus::Success ||
+            sourceHandles.duplicateHandle(g_contextSection, firstProcess.getHandleTable(),
+                                           g_firstOnlySection) != micant::NtStatus::Success)
+            stopWithError("[MicaNT Ps] Section handle duplication failed\r\n");
     }
 
     const KIRQL previousIrql = KfRaiseIrql(DISPATCH_LEVEL);
@@ -265,8 +331,19 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
         g_firstContextLocal == g_secondContextLocal) {
         stopWithError("[MicaNT Ke] Context stack ownership verification failed\r\n");
     }
-    if (separateRoots && (!destroyProcessPagingRoot(secondRoot) || !destroyProcessPagingRoot(firstRoot)))
-        stopWithError("[MicaNT Ke] Context roots were not reclaimed\r\n");
+    if (separateRoots &&
+        (firstProcess.detachThread(g_firstContextThread) != micant::NtStatus::Success ||
+         secondProcess.detachThread(g_secondContextThread) != micant::NtStatus::Success ||
+         micant::sys::NtClose(g_contextSection) != micant::NtStatus::Success ||
+         firstProcess.closeAddressSpace() != micant::NtStatus::Success ||
+         secondProcess.closeAddressSpace() != micant::NtStatus::Success))
+        stopWithError("[MicaNT Ps] Context address spaces were not reclaimed\r\n");
+    g_contextSection = 0;
+    g_firstContextSection = 0;
+    g_secondContextSection = 0;
+    g_firstOnlySection = 0;
+    if (separateRoots && micant::mm::PfnDatabase::get().getActiveCount() != activePages)
+        stopWithError("[MicaNT Ps] Context PFN accounting mismatch\r\n");
     serialWrite("[MicaNT Ke] Allocation-free ready queue selected cooperative contexts\r\n");
     serialWrite("[MicaNT Ke] Cooperative AMD64 contexts, stacks, GPR, XMM and FP control verified\r\n");
 }

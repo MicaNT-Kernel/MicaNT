@@ -3,6 +3,8 @@
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/section.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/core/ke.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include <new>
 
@@ -10,6 +12,10 @@ namespace micant::sys {
 namespace {
 mm::ProcessAddressSpace addressSpace;
 ob::ObjectType sectionType;
+mm::ProcessAddressSpace& currentAddressSpace() noexcept {
+    const auto* thread = ke::KeGetCurrentThread();
+    return thread && thread->owningProcess ? thread->owningProcess->getAddressSpace() : addressSpace;
+}
 void deleteSection(ob::ObjectHeader* header) {
     header->as<section::SectionObject>()->~SectionObject();
 }
@@ -52,7 +58,7 @@ NtStatus NtCreateSection(Handle* out, uint32_t access, ObjectAttributes* attribu
     auto* object = new (body) section::SectionObject(static_cast<size_t>(maximum->quadPart), allocation, protect);
     status = object->getInitializationStatus();
     if (status == NtStatus::Success)
-        status = ob::detail::kernelHandleTable().createHandle(header, *out, access);
+        status = ob::detail::currentHandleTable().createHandle(header, *out, access);
     ob::ObDereferenceObject(header);
     return status;
 }
@@ -71,7 +77,7 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
         return NtStatus::NotImplemented;
     uint32_t desired = protection == mm::PAGE_READWRITE ? section::SECTION_MAP_WRITE : section::SECTION_MAP_READ;
     ob::ObjectHeader* header{};
-    NtStatus status = ob::ObReferenceObjectByHandle(handle, ob::detail::kernelHandleTable(),
+    NtStatus status = ob::ObReferenceObjectByHandle(handle, ob::detail::currentHandleTable(),
                                                      desired, &sectionType, &header);
     if (status != NtStatus::Success) return status;
     auto* object = header->as<section::SectionObject>();
@@ -108,7 +114,7 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
     // Later protection changes must remain compatible with this view's
     // original mapping protection, even if the section handle grants more.
     const uint32_t maximumProtection = protection;
-    status = addressSpace.mapSharedPages(target, length, protection, backing.pfns + firstPage,
+    status = currentAddressSpace().mapSharedPages(target, length, protection, backing.pfns + firstPage,
                                          backing.pageCount - firstPage,
                                          header, acquireSectionView, releaseSectionView, maximumProtection);
     if (status == NtStatus::Success) {
@@ -122,7 +128,7 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
 
 NtStatus NtUnmapViewOfSection(Handle process, uintptr_t base) {
     if (process != InvalidHandleValue) return NtStatus::NotImplemented;
-    const auto result = addressSpace.unmapSharedPages(base);
+    const auto result = currentAddressSpace().unmapSharedPages(base);
     return result == NtStatus::InvalidParameter ? NtStatus::NotMappedView : result;
 }
 

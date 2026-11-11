@@ -248,6 +248,7 @@ if (MICANT_ENABLE_BAREMETAL)
         kernel/ex/libcpp_support.cpp
         kernel/ob/obref.cpp
         kernel/mm/virtual.cpp
+        kernel/ps/address_space.cpp
         test/kernel_context_canary.cpp
         test/kernel_ke_ready_queue_test.cpp
         test/kernel_mm_avl_test.cpp

@@ -1,5 +1,35 @@
 #pragma once
 
+#if defined(MICANT_FREESTANDING)
+#include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/hal/amd64_bootstrap.hpp"
+#include <memory>
+
+namespace micant::ke { struct KThread; }
+namespace micant::ps {
+// Process-owned bootstrap address space. Lifecycle operations require the
+// single BSP with interrupts disabled; this is not yet NtCreateProcessEx.
+class EProcess {
+public:
+    EProcess() = default;
+    EProcess(const EProcess&) = delete;
+    EProcess& operator=(const EProcess&) = delete;
+    NtStatus initializeAddressSpace() noexcept;
+    NtStatus closeAddressSpace() noexcept;
+    NtStatus attachThread(ke::KThread& thread) noexcept;
+    NtStatus detachThread(ke::KThread& thread) noexcept;
+    [[nodiscard]] mm::ProcessAddressSpace& getAddressSpace() noexcept { return addressSpace_; }
+    [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
+    [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
+private:
+    hal::amd64::ProcessPagingRoot root_{};
+    mm::ProcessAddressSpace addressSpace_{};
+    std::unique_ptr<ob::HandleTable> handles_{};
+    size_t attachedThreads_{0};
+};
+}
+#else
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -1030,3 +1060,4 @@ inline NtStatus PsCreateProcessEx(
 }
 
 } // namespace micant::ps
+#endif

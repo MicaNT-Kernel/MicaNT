@@ -20,6 +20,7 @@
 #include "micant/shared/ntstatus.hpp"
 #if defined(MICANT_FREESTANDING)
 #include "micant/km/hal/amd64_bootstrap.hpp"
+namespace micant::ps { class EProcess; }
 #endif
 
 namespace micant::ke {
@@ -430,6 +431,9 @@ extern "C" bool MicantAmd64SwitchContext(KThreadContext*, KThreadContext*) noexc
 struct KThread {
     Handle tid{0};
     Handle pid{0};
+#if defined(MICANT_FREESTANDING)
+    ps::EProcess* owningProcess{nullptr};
+#endif
     ThreadState state{ThreadState::Initialized};
     uint32_t basePriority{8};
     uint32_t priority{8};

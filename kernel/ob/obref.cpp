@@ -1,4 +1,8 @@
 #include "micant/km/executive/ob.hpp"
+#if defined(MICANT_FREESTANDING)
+#include "micant/km/core/ke.hpp"
+#include "micant/km/executive/ps.hpp"
+#endif
 #if !defined(MICANT_FREESTANDING)
 #include "micant/km/core/ntos_internal.hpp"
 #include "micant/km/core/sync.hpp"
@@ -46,7 +50,7 @@ NtStatus NtClose(Handle handle) {
 }
 #else
 NtStatus NtClose(Handle handle) {
-    return g_KernelHandleTable.closeHandle(handle);
+    return ob::detail::currentHandleTable().closeHandle(handle);
 }
 #endif
 
@@ -57,5 +61,12 @@ namespace micant::ob::detail {
 HandleTable& kernelHandleTable() noexcept {
     return sys::g_KernelHandleTable;
 }
+
+#if defined(MICANT_FREESTANDING)
+HandleTable& currentHandleTable() noexcept {
+    const auto* thread = ke::KeGetCurrentThread();
+    return thread && thread->owningProcess ? thread->owningProcess->getHandleTable() : kernelHandleTable();
+}
+#endif
 
 } // namespace micant::ob::detail

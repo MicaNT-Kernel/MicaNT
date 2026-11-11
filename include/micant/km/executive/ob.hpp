@@ -466,6 +466,12 @@ public:
         return count;
     }
 
+    void closeAllHandles() {
+        for (size_t i = 1; i < table_.size(); ++i) {
+            if (table_[i].isValid()) (void)closeHandle(static_cast<Handle>(i * 4));
+        }
+    }
+
 private:
     std::vector<HandleTableEntry> table_;
 };
@@ -473,6 +479,9 @@ private:
 namespace detail {
 // Borrow the canonical kernel table; process tables remain owned by Ps.
 HandleTable& kernelHandleTable() noexcept;
+#if defined(MICANT_FREESTANDING)
+HandleTable& currentHandleTable() noexcept;
+#endif
 }
 
 // ============================================================================
