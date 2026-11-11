@@ -145,6 +145,8 @@ inline constexpr uint8_t AML_WORD_PREFIX        = 0x0B;
 inline constexpr uint8_t AML_DWORD_PREFIX       = 0x0C;
 inline constexpr uint8_t AML_STRING_PREFIX      = 0x0D;
 inline constexpr uint8_t AML_QWORD_PREFIX       = 0x0E;
+inline constexpr uint8_t AML_EXT_OP_PREFIX      = 0x5B;
+inline constexpr uint8_t AML_NOTIFY_OP          = 0x86;
 inline constexpr uint8_t AML_SCOPE_OP           = 0x10;
 inline constexpr uint8_t AML_BUFFER_OP          = 0x11;
 inline constexpr uint8_t AML_PACKAGE_OP         = 0x12;
@@ -833,6 +835,8 @@ class AmlBytecodeParser {
     uint64_t m_returnValue{0};
     bool m_hasReturned{false};
     uint64_t m_opsExecuted{0};
+    std::string m_scopePath{"\\"};
+    std::function<void(std::string_view, uint32_t)> m_notifyHandler;
 
 public:
     AmlBytecodeParser() = default;
@@ -866,7 +870,9 @@ public:
     uint64_t getReturnValue() const { return m_returnValue; }
     uint64_t getOpsExecuted() const { return m_opsExecuted; }
 
-    uint64_t executeBytecode(std::span<const uint8_t> bytecode, const std::vector<AmlValue>& args = {});
+    uint64_t executeBytecode(std::span<const uint8_t> bytecode,
+        const std::vector<AmlValue>& args = {}, std::string_view scopePath = "\\",
+        std::function<void(std::string_view, uint32_t)> notifyHandler = {});
 
 private:
     bool hasMore() const { return m_pc < m_bytecode.size(); }
@@ -968,12 +974,56 @@ private:
         return executeStatement();
     }
 
+    bool parseNameString(std::string& path) {
+        if (!hasMore()) return false;
+        bool rooted = false;
+        uint32_t parents = 0;
+        if (peek() == 0x5C) {
+            consume();
+            rooted = true;
+        } else {
+            while (hasMore() && peek() == 0x5E) { consume(); ++parents; }
+        }
+        uint32_t segments = 1;
+        if (hasMore() && peek() == 0x00) { consume(); segments = 0; }
+        else if (hasMore() && peek() == 0x2E) { consume(); segments = 2; }
+        else if (hasMore() && peek() == 0x2F) {
+            consume();
+            segments = consume();
+        }
+        std::string prefix = rooted ? "\\" : m_scopePath;
+        while (parents-- && prefix != "\\") {
+            const size_t dot = prefix.find_last_of('.');
+            prefix = dot == std::string::npos ? "\\" : prefix.substr(0, dot);
+        }
+        path = std::move(prefix);
+        for (uint32_t index = 0; index < segments; ++index) {
+            if (m_bytecode.size() - m_pc < 4) return false;
+            std::string segment;
+            segment.reserve(4);
+            for (int i = 0; i < 4; ++i) segment.push_back(static_cast<char>(consume()));
+            if (path.empty() || path.back() != '\\') path.push_back('.');
+            path += segment;
+        }
+        return true;
+    }
+
     uint64_t executeStatement() {
         if (!hasMore()) return 0;
         uint8_t op = consume();
         recordOp();
 
         switch (op) {
+        case AML_EXT_OP_PREFIX: {
+            if (!hasMore()) return 0;
+            const uint8_t extOp = consume();
+            if (extOp != AML_NOTIFY_OP) return 0;
+            std::string targetPath;
+            if (!parseNameString(targetPath)) return 0;
+            const uint32_t value = static_cast<uint32_t>(parseOperand());
+            if (m_notifyHandler) m_notifyHandler(targetPath, value);
+            return value;
+        }
         case AML_STORE_OP: {
             uint64_t val = parseOperand();
             storeResult(val);
@@ -1912,8 +1962,12 @@ public:
 
     AmlBytecodeParser& getAmlParser() { return m_amlParser; }
 
-    uint64_t executeAmlBytecode(std::span<const uint8_t> bytecode, const std::vector<AmlValue>& args = {}) {
-        return m_amlParser.executeBytecode(bytecode, args);
+    uint64_t executeAmlBytecode(std::span<const uint8_t> bytecode,
+        const std::vector<AmlValue>& args = {}, std::string_view scopePath = "\\") {
+        return m_amlParser.executeBytecode(bytecode, args, scopePath,
+            [this](std::string_view path, uint32_t value) {
+                (void)m_namespace.dispatchNotify(path, value);
+            });
     }
 
     void recordAmlOp() {
@@ -2079,9 +2133,13 @@ inline void AmlBytecodeParser::recordOp() {
     TitanAcpiSubsystem::Instance().recordAmlOp();
 }
 
-inline uint64_t AmlBytecodeParser::executeBytecode(std::span<const uint8_t> bytecode, const std::vector<AmlValue>& args) {
+inline uint64_t AmlBytecodeParser::executeBytecode(std::span<const uint8_t> bytecode,
+    const std::vector<AmlValue>& args, std::string_view scopePath,
+    std::function<void(std::string_view, uint32_t)> notifyHandler) {
     reset();
     m_bytecode = bytecode;
+    m_scopePath = scopePath.empty() ? "\\" : std::string(scopePath);
+    m_notifyHandler = std::move(notifyHandler);
     for (size_t i = 0; i < args.size() && i < 7; ++i) {
         m_args[i] = args[i].integerVal;
     }
