@@ -22,6 +22,8 @@ constexpr uint64_t kUserStackBase = kUserBase + 4096;
 alignas(4096) uint64_t g_pml4[512]{};
 uint64_t g_deviceNext = kDeviceBase;
 bool g_addressSpaceReady{};
+micant::hal::amd64::ProcessPagingRoot* g_processPagingRoots{};
+bool g_ownedSharedRootSlots[2]{};
 alignas(4096) uint8_t g_userCode[4096]{};
 alignas(4096) uint8_t g_userStack[4 * 4096]{};
 struct alignas(4096) BootstrapTebStorage {
@@ -102,6 +104,12 @@ uint64_t walk(uint64_t root, uint64_t address) noexcept {
     return 0;
 }
 
+uint64_t* activePagingRoot() noexcept {
+    uint64_t cr3{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(cr3));
+    return reinterpret_cast<uint64_t*>(cr3 & kPhysicalMask);
+}
+
 bool mappedRange(uint64_t address, size_t size, bool user, bool writable,
                  bool executable) noexcept {
     if (!g_addressSpaceReady || !size || size - 1 > UINT64_MAX - address) {
@@ -113,7 +121,7 @@ bool mappedRange(uint64_t address, size_t size, bool user, bool writable,
         return false;
     }
     for (uint64_t page = address & ~uint64_t{4095};; page += 4096) {
-        const uint64_t* table = g_pml4;
+        const uint64_t* table = activePagingRoot();
         bool userAccessible = true;
         for (int shift = 39; shift >= 12; shift -= 9) {
             const uint64_t entry = table[(page >> shift) & 511];
@@ -140,9 +148,21 @@ bool bootstrapPagingContext() noexcept {
     uint64_t flags{}, cr3{};
     __asm__ __volatile__("pushfq; popq %0; movq %%cr3, %1"
                          : "=r"(flags), "=r"(cr3) : : "memory");
-    return g_addressSpaceReady && !(flags & (uint64_t{1} << 9)) &&
-           (cr3 & kPhysicalMask) == reinterpret_cast<uint64_t>(g_pml4) &&
-           micant::mm::PfnDatabase::get().getTotalPages() != 0;
+    if (!g_addressSpaceReady || (flags & (uint64_t{1} << 9)) ||
+        micant::mm::PfnDatabase::get().getTotalPages() == 0) return false;
+    if ((cr3 & kPhysicalMask) == reinterpret_cast<uint64_t>(g_pml4)) return true;
+    for (const auto* root = g_processPagingRoots; root; root = root->next)
+        if ((root->pfn << micant::mm::PageShift4KB) == (cr3 & kPhysicalMask)) return true;
+    return false;
+}
+
+bool pagingContextMatches(void* context) noexcept {
+    if (!bootstrapPagingContext()) return false;
+    const auto active = reinterpret_cast<uint64_t>(activePagingRoot());
+    if (!context) return active == reinterpret_cast<uint64_t>(g_pml4);
+    for (const auto* root = g_processPagingRoots; root; root = root->next)
+        if (root == context) return (root->pfn << micant::mm::PageShift4KB) == active;
+    return false;
 }
 
 void invalidatePage(uint64_t address) noexcept {
@@ -171,7 +191,7 @@ bool mapPage(uint64_t address, uint64_t physical, uint64_t flags,
     uint64_t* createdEntries[3]{};
     uint64_t createdPfns[3]{};
     size_t createdCount{};
-    uint64_t* table = g_pml4;
+    uint64_t* table = activePagingRoot();
     for (int shift = 39; shift > 12; shift -= 9) {
         uint64_t& entry = table[(address >> shift) & 511];
         if (entry == 0) {
@@ -180,7 +200,7 @@ bool mapPage(uint64_t address, uint64_t physical, uint64_t flags,
             if (failAfter > 0) --failAfter;
             const uint64_t page = pfn << 12;
             if (page > kPhysicalMask || !mappedRange(page, 4096, false, true, false) ||
-                walk(reinterpret_cast<uint64_t>(g_pml4), page) != page) {
+                walk(reinterpret_cast<uint64_t>(activePagingRoot()), page) != page) {
                 database.freePage(pfn);
                 goto rollback;
             }
@@ -222,7 +242,7 @@ bool unmapPage(uint64_t address, bool user) noexcept {
     }
     uint64_t* parents[3]{};
     uint64_t* tables[3]{};
-    uint64_t* table = g_pml4;
+    uint64_t* table = activePagingRoot();
     size_t level{};
     for (int shift = 39; shift > 12; shift -= 9) {
         uint64_t* entry = &table[(address >> shift) & 511];
@@ -238,6 +258,10 @@ bool unmapPage(uint64_t address, bool user) noexcept {
     invalidatePage(address);
     auto& database = micant::mm::PfnDatabase::get();
     while (level && emptyTable(tables[level - 1])) {
+        // Process roots share these supervisor branches. Keep their top-level
+        // tables pinned while any process root can still reference them.
+        const uint64_t slot = address >> 39;
+        if (level == 1 && g_processPagingRoots && !user && (slot == 129 || slot == 130)) break;
         --level;
         const uint64_t pfn = (*parents[level] & kPhysicalMask) >> 12;
         *parents[level] = 0;
@@ -808,6 +832,108 @@ bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept
     return true;
 }
 
+ProcessPagingRoot::~ProcessPagingRoot() {
+    if (pfn || next) __builtin_trap();
+}
+
+static void reclaimUnusedSharedRootSlots() noexcept {
+    if (g_processPagingRoots) return;
+    auto& database = mm::PfnDatabase::get();
+    for (size_t index = 0; index < 2; ++index) {
+        if (!g_ownedSharedRootSlots[index]) continue;
+        uint64_t& entry = g_pml4[129 + index];
+        if (!entry) { g_ownedSharedRootSlots[index] = false; continue; }
+        auto* table = reinterpret_cast<const uint64_t*>(entry & kPhysicalMask);
+        if (!emptyTable(table)) continue;
+        const uint64_t pfn = (entry & kPhysicalMask) >> mm::PageShift4KB;
+        entry = 0;
+        invalidatePage((129 + index) << 39);
+        database.freePage(pfn);
+        g_ownedSharedRootSlots[index] = false;
+    }
+}
+
+bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept {
+    if (!bootstrapPagingContext() || root.pfn || root.next) return false;
+    uint64_t cr4{};
+    __asm__ __volatile__("movq %%cr4, %0" : "=r"(cr4));
+    if (cr4 & (uint64_t{1} << 17)) return false; // PCID is not supported here.
+    auto& database = mm::PfnDatabase::get();
+    for (size_t index = 0; index < 2; ++index) {
+        uint64_t& entry = g_pml4[129 + index];
+        if (!entry) {
+            const uint64_t pfn = database.allocatePage();
+            if (!pfn) { reclaimUnusedSharedRootSlots(); return false; }
+            const uint64_t physical = pfn << mm::PageShift4KB;
+            if (physical > kPhysicalMask || !mappedRange(physical, 4096, false, true, false) ||
+                walk(reinterpret_cast<uint64_t>(g_pml4), physical) != physical) {
+                database.freePage(pfn);
+                reclaimUnusedSharedRootSlots();
+                return false;
+            }
+            database.zeroPage(pfn);
+            entry = physical | kPresent | kWritable | kOwnedTable;
+            g_ownedSharedRootSlots[index] = true;
+        }
+        if (!(entry & kPresent) || !(entry & kWritable) || !(entry & kOwnedTable) ||
+            (entry & (kUser | kNoExecute | 128))) {
+            reclaimUnusedSharedRootSlots();
+            return false;
+        }
+    }
+    const uint64_t pfn = database.allocatePage();
+    if (!pfn) { reclaimUnusedSharedRootSlots(); return false; }
+    const uint64_t physical = pfn << mm::PageShift4KB;
+    if (physical > kPhysicalMask || !mappedRange(physical, 4096, false, true, false) ||
+        walk(reinterpret_cast<uint64_t>(g_pml4), physical) != physical) {
+        database.freePage(pfn);
+        reclaimUnusedSharedRootSlots();
+        return false;
+    }
+    database.zeroPage(pfn);
+    auto* table = reinterpret_cast<uint64_t*>(physical);
+    for (size_t i = 0; i < 512; ++i) table[i] = i == 128 ? 0 : g_pml4[i] & ~kUser;
+    root.pfn = pfn;
+    root.next = g_processPagingRoots;
+    g_processPagingRoots = &root;
+    return true;
+}
+
+bool switchProcessPagingRoot(const ProcessPagingRoot* root) noexcept {
+    uint64_t flags{}, cr3{}, cr4{};
+    __asm__ __volatile__("pushfq; popq %0; movq %%cr3, %1; movq %%cr4, %2"
+                         : "=r"(flags), "=r"(cr3), "=r"(cr4) : : "memory");
+    if (!g_addressSpaceReady || (flags & (uint64_t{1} << 9)) || (cr4 & (uint64_t{1} << 17)))
+        return false;
+    bool currentKnown = (cr3 & kPhysicalMask) == reinterpret_cast<uint64_t>(g_pml4);
+    bool targetKnown = root == nullptr;
+    for (const auto* item = g_processPagingRoots; item; item = item->next) {
+        if ((item->pfn << mm::PageShift4KB) == (cr3 & kPhysicalMask)) currentKnown = true;
+        if (item == root) targetKnown = true;
+    }
+    if (!currentKnown || !targetKnown) return false;
+    const uint64_t target = root ? root->pfn << mm::PageShift4KB : reinterpret_cast<uint64_t>(g_pml4);
+    __asm__ __volatile__("movq %0, %%cr3" : : "r"(target) : "memory");
+    return true;
+}
+
+bool destroyProcessPagingRoot(ProcessPagingRoot& root) noexcept {
+    if (!bootstrapPagingContext() || !root.pfn) return false;
+    if (reinterpret_cast<uint64_t>(activePagingRoot()) == (root.pfn << mm::PageShift4KB)) return false;
+    auto** link = &g_processPagingRoots;
+    while (*link && *link != &root) link = &(*link)->next;
+    if (!*link) return false;
+    auto* table = reinterpret_cast<const uint64_t*>(root.pfn << mm::PageShift4KB);
+    if (table[128]) return false;
+    *link = root.next;
+    const uint64_t pfn = root.pfn;
+    root.pfn = 0;
+    root.next = nullptr;
+    mm::PfnDatabase::get().freePage(pfn);
+    reclaimUnusedSharedRootSlots();
+    return true;
+}
+
 uint64_t translateBootstrapAddress(const void* address) noexcept {
     if (!g_addressSpaceReady) {
         return 0;
@@ -832,7 +958,7 @@ bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept
 
 bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
                              uint32_t protection) noexcept {
-    if (context || address < BootstrapManagedBase ||
+    if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         (address & mm::PageMask4KB) || !pfn ||
         pfn > (kPhysicalMask >> mm::PageShift4KB) ||
@@ -845,7 +971,7 @@ bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
 
 static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const uint64_t* pfns,
                                         size_t count, uint32_t protection, int failAfter) noexcept {
-    if (context || !bootstrapPagingContext() || !pfns || !count ||
+    if (!pagingContextMatches(context) || !pfns || !count ||
         address < BootstrapManagedBase || (address & mm::PageMask4KB) ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         count > (BootstrapManagedSize - (address - BootstrapManagedBase)) / mm::PageSize4KB ||
@@ -864,7 +990,7 @@ static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const 
             break;
         }
         const uintptr_t va = address + i * mm::PageSize4KB;
-        uint64_t* table = g_pml4;
+        uint64_t* table = activePagingRoot();
         for (int shift = 39; shift > 12; shift -= 9) {
             uint64_t& entry = table[(va >> shift) & 511];
             if (!entry) {
@@ -874,7 +1000,7 @@ static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const 
                 if (failAfter > 0) --failAfter;
                 const uint64_t physical = pfn << 12;
                 if (physical > kPhysicalMask || !mappedRange(physical, 4096, false, true, false) ||
-                    walk(reinterpret_cast<uint64_t>(g_pml4), physical) != physical) {
+                    walk(reinterpret_cast<uint64_t>(activePagingRoot()), physical) != physical) {
                     database.freePage(pfn);
                     prepared = false;
                     break;
@@ -906,7 +1032,7 @@ static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const 
     // between validation and publication, and this phase cannot fail.
     for (size_t i = 0; i < count; ++i) {
         const uintptr_t va = address + i * mm::PageSize4KB;
-        uint64_t* table = g_pml4;
+        uint64_t* table = activePagingRoot();
         for (int shift = 39; shift > 12; shift -= 9)
             table = reinterpret_cast<uint64_t*>(table[(va >> shift) & 511] & kPhysicalMask);
         table[(va >> 12) & 511] = mm::PageTableEntry::create(
@@ -922,13 +1048,13 @@ bool mapBootstrapManagedView(void* context, uintptr_t address, const uint64_t* p
 }
 
 bool unmapBootstrapManagedView(void* context, uintptr_t address, size_t count) noexcept {
-    if (context || !bootstrapPagingContext() || !count || (address & mm::PageMask4KB) ||
+    if (!pagingContextMatches(context) || !count || (address & mm::PageMask4KB) ||
         address < BootstrapManagedBase || address - BootstrapManagedBase >= BootstrapManagedSize ||
         count > (BootstrapManagedSize - (address - BootstrapManagedBase)) / mm::PageSize4KB)
         return false;
     for (size_t i = 0; i < count; ++i) {
         const uintptr_t va = address + i * mm::PageSize4KB;
-        const uint64_t* table = g_pml4;
+        const uint64_t* table = activePagingRoot();
         for (int shift = 39; shift > 12; shift -= 9) {
             const uint64_t entry = table[(va >> shift) & 511];
             if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) || !(entry & kUser))
@@ -981,7 +1107,7 @@ bool verifyBootstrapManagedViewRollback() noexcept {
 }
 
 bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept {
-    if (context || address < BootstrapManagedBase ||
+    if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         (address & mm::PageMask4KB)) {
         return false;
@@ -991,13 +1117,13 @@ bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept {
 
 bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
                                     uint32_t protection) noexcept {
-    if (context || !bootstrapPagingContext() || address < BootstrapManagedBase ||
+    if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         (address & mm::PageMask4KB) ||
         (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)) {
         return false;
     }
-    uint64_t* table = g_pml4;
+    uint64_t* table = activePagingRoot();
     for (int shift = 39; shift > 12; shift -= 9) {
         const uint64_t entry = table[(address >> shift) & 511];
         if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) ||

@@ -125,6 +125,80 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
             address != BootstrapManagedBase || space.getRegionCount() != 1 ||
             space.unmapSharedPages(address) != NtStatus::Success) return 20;
     }
+    {
+        ProcessPagingRoot first;
+        ProcessPagingRoot second;
+        if (!createProcessPagingRoot(first)) return 22;
+        if (!createProcessPagingRoot(second)) {
+            if (!destroyProcessPagingRoot(first)) __builtin_trap();
+            return 23;
+        }
+        uint64_t bootstrapCr3{}, observed{};
+        __asm__ __volatile__("movq %%cr3, %0" : "=r"(bootstrapCr3));
+        bool valid = first.pfn != second.pfn;
+        {
+            ProcessAddressSpace firstSpace;
+            ProcessAddressSpace secondSpace;
+            section::SectionObject section(PageSize4KB, section::SEC_COMMIT, PAGE_READWRITE);
+            const ProcessAddressSpace::PagingBackend firstBackend{
+                &first, mapBootstrapManagedPage, unmapBootstrapManagedPage,
+                mapBootstrapProtectManagedPage, mapBootstrapManagedView, unmapBootstrapManagedView};
+            const ProcessAddressSpace::PagingBackend secondBackend{
+                &second, mapBootstrapManagedPage, unmapBootstrapManagedPage,
+                mapBootstrapProtectManagedPage, mapBootstrapManagedView, unmapBootstrapManagedView};
+            valid = valid && section.getInitializationStatus() == NtStatus::Success &&
+                firstSpace.configurePagingBackend(firstBackend, BootstrapManagedBase, BootstrapManagedSize) &&
+                secondSpace.configurePagingBackend(secondBackend, BootstrapManagedBase, BootstrapManagedSize);
+            const auto backing = section.getBackingReference();
+            uintptr_t privateFirst = BootstrapManagedBase, privateSecond = BootstrapManagedBase;
+            uintptr_t sharedFirst = BootstrapManagedBase + ProcessAddressSpace::AllocationGranularity;
+            uintptr_t sharedSecond = sharedFirst;
+            if (valid) valid = switchProcessPagingRoot(&first);
+            if (valid) {
+                __asm__ __volatile__("movq %%cr3, %0" : "=r"(observed));
+                valid = observed == first.pfn * PageSize4KB &&
+                    !destroyProcessPagingRoot(first) &&
+                    firstSpace.allocate(privateFirst, PageSize4KB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == NtStatus::Success &&
+                    firstSpace.mapSharedPages(sharedFirst, PageSize4KB, PAGE_READWRITE, backing.pfns,
+                                              backing.pageCount, backing.context, backing.acquire, backing.release) == NtStatus::Success;
+            }
+            if (valid) {
+                *reinterpret_cast<volatile uint64_t*>(privateFirst) = 0x1111222233334444ULL;
+                *reinterpret_cast<volatile uint64_t*>(sharedFirst) = 0xabcddcba12344321ULL;
+                valid = switchProcessPagingRoot(&second);
+            }
+            if (valid) {
+                __asm__ __volatile__("movq %%cr3, %0" : "=r"(observed));
+                valid = observed == second.pfn * PageSize4KB &&
+                    !bootstrapUserRange(privateSecond, PageSize4KB, false) &&
+                    secondSpace.allocate(privateSecond, PageSize4KB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == NtStatus::Success &&
+                    secondSpace.mapSharedPages(sharedSecond, PageSize4KB, PAGE_READWRITE, backing.pfns,
+                                               backing.pageCount, backing.context, backing.acquire, backing.release) == NtStatus::Success;
+            }
+            if (valid) {
+                valid = *reinterpret_cast<volatile uint64_t*>(privateSecond) == 0 &&
+                    *reinterpret_cast<volatile uint64_t*>(sharedSecond) == 0xabcddcba12344321ULL;
+                *reinterpret_cast<volatile uint64_t*>(privateSecond) = 0x9999888877776666ULL;
+                *reinterpret_cast<volatile uint64_t*>(sharedSecond) = 0x5555666677778888ULL;
+                valid = valid && switchProcessPagingRoot(&first);
+            }
+            if (valid) {
+                valid = *reinterpret_cast<volatile uint64_t*>(privateFirst) == 0x1111222233334444ULL &&
+                    *reinterpret_cast<volatile uint64_t*>(sharedFirst) == 0x5555666677778888ULL &&
+                    !bootstrapKernelRange(privateFirst, PageSize4KB, false);
+            }
+            if (!switchProcessPagingRoot(&first) || firstSpace.close() != NtStatus::Success ||
+                !switchProcessPagingRoot(&second)) __builtin_trap();
+            if (valid) valid = *reinterpret_cast<volatile uint64_t*>(privateSecond) == 0x9999888877776666ULL &&
+                *reinterpret_cast<volatile uint64_t*>(sharedSecond) == 0x5555666677778888ULL;
+            if (secondSpace.close() != NtStatus::Success ||
+                !switchProcessPagingRoot(nullptr)) __builtin_trap();
+        }
+        __asm__ __volatile__("movq %%cr3, %0" : "=r"(observed));
+        valid = valid && observed == bootstrapCr3;
+        if (!destroyProcessPagingRoot(second) || !destroyProcessPagingRoot(first)) __builtin_trap();
+        if (!valid) return 24;
+    }
 
     return database.getActiveCount() == active &&
            database.getFreeCount() + database.getZeroedCount() +

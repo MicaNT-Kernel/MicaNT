@@ -6,6 +6,19 @@
 namespace micant::hal::amd64 {
 
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept;
+// BSP-only root ownership while IRQs are disabled. The root must be closed
+// before its owner is destroyed and must not be copied.
+struct ProcessPagingRoot {
+    uint64_t pfn{0};
+    ProcessPagingRoot* next{nullptr};
+    ProcessPagingRoot() = default;
+    ~ProcessPagingRoot();
+    ProcessPagingRoot(const ProcessPagingRoot&) = delete;
+    ProcessPagingRoot& operator=(const ProcessPagingRoot&) = delete;
+};
+bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept;
+bool switchProcessPagingRoot(const ProcessPagingRoot* root) noexcept;
+bool destroyProcessPagingRoot(ProcessPagingRoot& root) noexcept;
 // IRQ-disabled, single-CPU bootstrap test of PFN-backed paging and reclamation.
 bool verifyBootstrapPageTables() noexcept;
 // Bootstrap CR3 only; callbacks require the BSP with interrupts disabled.
