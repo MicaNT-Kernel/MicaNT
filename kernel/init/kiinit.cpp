@@ -5,6 +5,7 @@
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/freestanding.hpp"
 #include "micant/km/executive/probe.hpp"
+#include "micant/km/executive/ob.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
@@ -120,6 +121,39 @@ bool probeBootstrapRange(uintptr_t address, size_t size, bool writable,
     }
     return mode == micant::mm::KernelMode &&
            micant::hal::amd64::bootstrapKernelRange(address, size, writable);
+}
+
+bool verifyKernelObjectHandles() noexcept {
+    using namespace micant;
+    auto& handles = ob::detail::kernelHandleTable();
+    if (handles.getActiveHandleCount() != 0) return false;
+    ob::ObjectType type;
+    ob::ObjectHeader object;
+    object.type = &type;
+    constexpr uint32_t access = ob::SYNCHRONIZE | 1;
+    Handle first{}, second{};
+    uint32_t granted{};
+    if (handles.createHandle(&object, first, access) != NtStatus::Success ||
+        !first || handles.lookup(first, &granted) != &object || granted != access ||
+        object.pointerCount != 2 || object.handleCount != 1 ||
+        type.totalNumberOfHandles != 1 ||
+        handles.duplicateHandle(first, handles, second, 0, true) != NtStatus::Success ||
+        first == second || handles.lookup(second, &granted) != &object ||
+        granted != access || handles.getActiveHandleCount() != 2 ||
+        !handles.getEntry(second) ||
+        handles.getEntry(second)->handleAttributes != OBJ_INHERIT ||
+        object.pointerCount != 3 || object.handleCount != 2 ||
+        type.totalNumberOfHandles != 2 ||
+        handles.closeHandle(first) != NtStatus::Success ||
+        handles.lookup(first) || handles.lookup(second) != &object ||
+        handles.closeHandle(first) != NtStatus::InvalidHandle ||
+        object.pointerCount != 2 || object.handleCount != 1 ||
+        handles.closeHandle(second) != NtStatus::Success) {
+        return false;
+    }
+    return handles.getActiveHandleCount() == 0 &&
+           object.pointerCount == 1 && object.handleCount == 0 &&
+           object.handleInfo.handleCount == 0 && type.totalNumberOfHandles == 0;
 }
 
 void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV2& handoff) noexcept {
@@ -582,6 +616,35 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Bootstrap runtime verification failed\r\n");
     }
     serialWrite("[MicaNT Ex] Canonical page-backed C and C++ allocation verified\r\n");
+#if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
+    const size_t initialActive = micant::mm::PfnDatabase::get().getActiveCount();
+    const size_t initialAvailable = micant::mm::PfnDatabase::get().getFreeCount() +
+                                   micant::mm::PfnDatabase::get().getZeroedCount();
+    if (!micant::ex::test::verifyCxxBeforeInitialization()) {
+        stopWithError("[MicaNT Ex] Premature C++ initialization failed\r\n");
+    }
+#endif
+    if (!micant::ex::initializeBootstrapCxxRuntime()) {
+        stopWithError("[MicaNT Ex] Kernel C++ initialization failed\r\n");
+    }
+    serialWrite("[MicaNT Ex] Kernel C++ constructors dispatched\r\n");
+    if (!verifyKernelObjectHandles()) {
+        stopWithError("[MicaNT Ob] Kernel handle verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ob] Canonical kernel handle storage and references verified\r\n");
+#if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
+    if (!micant::ex::test::verifyCxxAfterInitialization() ||
+        !micant::ex::shutdownBootstrapCxxRuntime() ||
+        !micant::ex::test::verifyCxxAfterDestruction() ||
+        micant::mm::PfnDatabase::get().getActiveCount() != initialActive ||
+        micant::mm::PfnDatabase::get().getFreeCount() +
+            micant::mm::PfnDatabase::get().getZeroedCount() != initialAvailable) {
+        stopWithError("[MicaNT Ex] Kernel C++ teardown verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ex] Compiler-generated construction and LIFO teardown verified\r\n");
+    serialWrite("[MicaNT Ex] Runtime self-test halted\r\n");
+    for (;;) __asm__ __volatile__("cli; hlt");
+#endif
     initializeDisplay(handoff->displayDriver);
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");

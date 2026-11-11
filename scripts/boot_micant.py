@@ -16,7 +16,7 @@ from verify_kernel_architecture import validate_build_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_SERIAL = (
+EXPECTED_BOOTSTRAP_SERIAL = (
     "[MicaNT COM1] EfiMain reached on physical x86_64 silicon!",
     "[MicaNT Boot] Probing FAT32 volume for \\EFI\\MicaNT\\ntoskrnl.exe...",
     "[MicaNT Boot] ExitBootServices SUCCESS!",
@@ -25,6 +25,14 @@ EXPECTED_SERIAL = (
     "[MicaNT] Kernel-owned page-table root active",
     "[MicaNT Mm] Canonical physical allocation, zeroing and release verified",
     "[MicaNT Ex] Canonical page-backed C and C++ allocation verified",
+    "[MicaNT Ex] Kernel C++ constructors dispatched",
+    "[MicaNT Ob] Canonical kernel handle storage and references verified",
+)
+EXPECTED_RUNTIME_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
+    "[MicaNT Ex] Compiler-generated construction and LIFO teardown verified",
+    "[MicaNT Ex] Runtime self-test halted",
+)
+EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Display] virtio_gpu.sys: VirtIO 1.0 2D scanout initialized",
     "[MicaNT Display] Desktop presented through virtio_gpu.sys",
     "[MicaNT Explorer] Desktop and taskbar rendered",
@@ -123,15 +131,22 @@ def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
             raise RuntimeError("PS/2 left click did not reach the kernel input loop")
 
 
-def serial_progress(serial_log: str) -> int:
+def serial_progress(serial_log: str, expected: tuple[str, ...] = EXPECTED_SERIAL) -> int:
     """Return how many expected messages occur, in order, in the serial log."""
     cursor = 0
-    for index, marker in enumerate(EXPECTED_SERIAL):
+    for index, marker in enumerate(expected):
         found = serial_log.find(marker, cursor)
         if found < 0:
             return index
         cursor = found + len(marker)
-    return len(EXPECTED_SERIAL)
+    return len(expected)
+
+
+def serial_has_failure(serial_log: str) -> bool:
+    return "FATAL:" in serial_log or any(
+        line.startswith("[MicaNT") and (" failed" in line or "Invalid " in line)
+        for line in serial_log.splitlines()
+    )
 
 
 def run_qemu(
@@ -141,8 +156,12 @@ def run_qemu(
     display: str,
     interactive: bool,
     verify_input: bool,
+    runtime_selftest: bool = False,
 ) -> None:
-    validate_build_manifest(ROOT, allow_dirty=True)
+    if runtime_selftest and (interactive or verify_input):
+        raise RuntimeError("runtime self-test halts before desktop/input; incompatible runner options")
+    validate_build_manifest(ROOT, allow_dirty=True, runtime_selftest=runtime_selftest)
+    expected = EXPECTED_RUNTIME_SELFTEST_SERIAL if runtime_selftest else EXPECTED_SERIAL
 
     qemu = shutil.which(os.environ.get("MICANT_QEMU", "qemu-system-x86_64"))
     if not qemu:
@@ -207,7 +226,7 @@ def run_qemu(
                         )
                         raise RuntimeError(
                             f"QEMU exited with status {return_code} before the "
-                            f"modular idle loop.\n{details}"
+                            f"required boot state.\n{details}"
                         )
 
                     serial_log = (
@@ -215,24 +234,20 @@ def run_qemu(
                         if serial_path.exists()
                         else ""
                     )
-                    if ("[MicaNT Hal] FATAL:" in serial_log or
-                            any(line.startswith("[MicaNT") and
-                                (" failed" in line or "Invalid " in line)
-                                for line in serial_log.splitlines())):
+                    if serial_has_failure(serial_log):
                         raise RuntimeError(f"Kernel bootstrap failed:\n{serial_log[-8000:]}")
-                    progress = serial_progress(serial_log)
-                    if progress == len(EXPECTED_SERIAL):
+                    progress = serial_progress(serial_log, expected)
+                    if progress == len(expected):
                         if complete_since is None:
                             complete_since = time.monotonic()
                         elif time.monotonic() - complete_since >= stable_seconds:
                             if verify_input:
                                 verify_mouse(temp / "qmp.sock", temp, serial_path)
                                 print("PS/2 movement, scanout updates and left-click delivery passed.", flush=True)
-                            print(
-                                f"QEMU modular boot passed; serial remained in the "
-                                f"idle state for {stable_seconds}s.",
-                                flush=True,
-                            )
+                            result = ("C++ runtime self-test" if runtime_selftest
+                                      else "modular boot")
+                            print(f"QEMU {result} passed; serial remained stable for "
+                                  f"{stable_seconds}s.", flush=True)
                             if interactive:
                                 print("QEMU is running interactively; close its window or press Ctrl+C to stop.", flush=True)
                                 return_code = process.wait()
@@ -251,8 +266,8 @@ def run_qemu(
                     if serial_path.exists()
                     else ""
                 )
-                progress = serial_progress(serial_log)
-                missing = (EXPECTED_SERIAL[progress] if progress < len(EXPECTED_SERIAL)
+                progress = serial_progress(serial_log, expected)
+                missing = (expected[progress] if progress < len(expected)
                            else "stable idle interval")
                 qemu_output.flush()
                 details = qemu_output_path.read_text(encoding="utf-8", errors="replace")
@@ -284,6 +299,7 @@ def main() -> int:
     parser.add_argument("--display", default="none")
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--verify-input", action="store_true")
+    parser.add_argument("--runtime-selftest", action="store_true")
     args = parser.parse_args()
 
     if args.ovmf_code is None:
@@ -301,6 +317,7 @@ def main() -> int:
             args.display,
             args.interactive,
             args.verify_input,
+            args.runtime_selftest,
         )
     except KeyboardInterrupt:
         return 130

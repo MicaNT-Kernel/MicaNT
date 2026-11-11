@@ -16,6 +16,13 @@ initialized or exercised as an Executive module in QEMU.** Header-only native
 PE functionality exercised by the diagnostic is a narrower, separate claim.
 Compilation alone does not change those integration states.
 
+**Integration update:** the later C++ lifecycle increment links and initializes
+`kernel/ob/obref.cpp`'s canonical global handle table in QEMU and verifies
+handle/reference/access lifecycle. Its native `NtClose` remains absent pending
+the owning subsystem close paths; no full Ob/namespace claim follows.
+Consequently one of the baseline 98 units is now partially active; the
+original audit table is historical evidence, not the current link manifest.
+
 Subsequent verified increment: the canonical header-only `PfnDatabase` now
 supports borrowed boot backing and runs against real physical pages in QEMU.
 This does not make the baseline's hosted virtual-memory translation unit

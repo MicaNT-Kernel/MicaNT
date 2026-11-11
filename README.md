@@ -43,6 +43,15 @@ entry at CPL3; this does not initialize an Explorer process or its DLLs.
 The canonical physical-page allocator now consumes validated usable UEFI
 ranges within an explicit 256 MiB bootstrap window and verifies actual RAM
 allocation, zeroing and release before continuing the boot.
+PFN-backed kernel allocation, compiler-generated C++ global initialization and
+the canonical kernel handle table are also verified. To test final destructor
+dispatch and physical-page reclamation, then halt instead of booting a desktop:
+
+```bash
+python3 qemu.py --headless --runtime-selftest
+```
+
+Normal boot keeps those objects alive and explicitly disables this test mode.
 See the [integration status](docs/KERNEL_INTEGRATION_STATUS.md) for verified
 increments and remaining prerequisites.
 

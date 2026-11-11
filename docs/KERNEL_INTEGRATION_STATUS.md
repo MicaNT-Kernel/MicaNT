@@ -243,12 +243,49 @@ memory or protection against concurrent unmapping. Before enabling scheduling,
 IRQs or SMP, replace this restricted backend with proper pinning/fault
 recovery. No hosted synthetic access permission is accepted by the kernel.
 
+### Kernel C++ lifecycle and canonical Ob handle storage
+
+The private kernel runtime now dispatches real compiler-generated `.ctors`
+and PE `.CRT` initialization after the PFN heap. Bounded `atexit` registrations
+run in LIFO order on final shutdown; overflow, invalid phases and library
+contract failures explicitly log and halt. The compiler ABI abort path logs
+its original format verbatim, not fabricated formatted arguments.
+
+The actual `kernel/ob/obref.cpp` is now linked, with its one original
+`g_KernelHandleTable`. Its compiler-generated global constructor allocates the
+canonical vector through the real kernel heap. Boot verifies actual handle
+creation, granted access, duplication/inheritance, reference/handle counters,
+close, rejected double close and empty-table restoration. There is no second
+Ob or alternate table. Native `NtClose` is deliberately absent until the
+sync/Io/Mm/Cm/Se/Lpc close paths exist: the hosted implementation is preserved,
+not replaced by fake close hooks. Namespace/security/process ownership remain
+unintegrated.
+
+Verified:
+
+| Command | Result |
+|---|---|
+| `python3 qemu.py --headless --runtime-selftest` | Passed; genuine C/global constructors allocate/write/check memory, destructors execute in order 21 and all PFN allocation accounting returns to its pre-construction value, including Ob vector destruction |
+| `python3 qemu.py --headless` | Passed; normal boot keeps globals alive and preserves CPL3/protection/scanout/mouse tests |
+| `python3 -m unittest discover -s test -p 'test_*runtime*.py' -v` | 19 passed; mode-specific milestones, fatal detection, provenance and normal-mode restoration |
+| `build/bootstrap-object-handles-sanitized` | Passed; ASan/UBSan canonical handle lifecycle |
+| Cross-toolchain compilation of hosted `kernel/ob/obref.cpp` | Passed; native gating does not remove hosted close functionality |
+| `llvm-nm -u build/baremetal/ntoskrnl.exe` / `llvm-readobj --coff-imports build/baremetal/ntoskrnl.exe` | No undefined symbols or external PE imports |
+
+The self-test is opt-in and halts after final teardown, never using destroyed
+objects to continue a desktop boot. Normal invocations explicitly reset the
+CMake option to OFF. Its manifest records the mode; ordinary staging rejects
+self-test artifacts. This foundation is still single-CPU/IRQ-disabled,
+bounded to 4096 initializers per table and 1024 destructor registrations,
+without C++ exceptions, arbitrary libc++ linkage, native TLS, thread-safe
+static guards or a general shutdown/session lifecycle.
+
 ## Milestones
 
 | Milestone | State | Missing acceptance evidence |
 |---|---|---|
-| M1: freestanding foundation | Partial; canonical PFN and page-backed kernel allocation operational | Shared C++ library/synchronization/lifecycle and broader Executive initialization |
-| M2: Mm + Ob | Physical allocator subset verified | Full mapping/freeing/address spaces and canonical namespace/handles in QEMU |
+| M1: freestanding foundation | Partial; PFN heap and kernel constructor/destructor dispatch verified | Shared C++ library/synchronization and broader Executive initialization |
+| M2: Mm + Ob | PFN and canonical kernel handle storage verified | Full mapping/freeing/address spaces, namespace/security and NtClose closure |
 | M3: Ke + Ps | Not integrated | IRQ/timer backend, scheduler, independent address spaces, actual context switching |
 | M4: Io + syscall | Partial platform boundary only | Canonical driver/device/IRP initialization, completion and NT service routing |
 | M5: Ring 3 processes | Diagnostic only | Real process loader, PEB/TEB/TLS, termination and two concurrent processes |

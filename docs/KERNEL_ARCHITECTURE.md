@@ -43,6 +43,14 @@ references and contiguous release are verified in QEMU. Full virtual-memory
 integration, scheduler and process environment remain missing. A host target
 passing does not validate this artifact.
 
+Kernel C++ constructors now run after the PFN-backed heap and initialize the
+canonical global Ob handle table. Creation/duplication/reference/close paths
+are exercised in QEMU; native NtClose and namespace initialization are still
+absent. Opt-in `python3 qemu.py --headless --runtime-selftest` additionally
+verifies final LIFO destructors and complete page reclamation, then halts.
+Its mode-tagged artifacts are not accepted by normal staging or normal boot
+validation. Regular boot keeps initialized globals alive.
+
 The build manifest required for staging is
 `build/baremetal/kernel-build-manifest.json`. Schema version 2 must
 identify the build, Git commit, toolchain, configuration, target, architecture,

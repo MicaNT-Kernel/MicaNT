@@ -466,6 +466,11 @@ private:
     std::vector<HandleTableEntry> table_;
 };
 
+namespace detail {
+// Borrow the canonical kernel table; process tables remain owned by Ps.
+HandleTable& kernelHandleTable() noexcept;
+}
+
 // ============================================================================
 // 7. Symbolic Link Object
 // ============================================================================

@@ -1,6 +1,8 @@
-#include "micant/km/core/ntos_internal.hpp"
 #include "micant/km/executive/ob.hpp"
+#if !defined(MICANT_FREESTANDING)
+#include "micant/km/core/ntos_internal.hpp"
 #include "micant/km/core/sync.hpp"
+#endif
 
 namespace micant::sys {
 
@@ -21,6 +23,8 @@ NtStatus ObCloseGenericHandle(Handle h) {
 
 } // namespace internal
 
+#if !defined(MICANT_FREESTANDING)
+// Native NtClose is not exported until all owning subsystem close paths exist.
 NtStatus NtClose(Handle handle) {
     if (handle == 0 || handle == InvalidHandleValue) {
         return NtStatus::InvalidHandle;
@@ -40,5 +44,14 @@ NtStatus NtClose(Handle handle) {
     }
     return internal::ObCloseGenericHandle(handle);
 }
+#endif
 
 } // namespace micant::sys
+
+namespace micant::ob::detail {
+
+HandleTable& kernelHandleTable() noexcept {
+    return sys::g_KernelHandleTable;
+}
+
+} // namespace micant::ob::detail
