@@ -247,6 +247,9 @@ owner and expose real user-mode service calls before this gate can pass.
 
 A kernel-owned Win32k dispatch entry and WDDM adapter now compile into
 `ntoskrnl_core`; the standard Executive dispatcher installs that handler.
+The entry rejects in-range shadow calls with `STATUS_NOT_SUPPORTED` rather
+than invoking legacy handlers that dereference user pointers directly and
+cannot return handles. It is a safety gate, not a working Win32k service.
 This is only the hosted modular-kernel step, not a completed migration:
 `win32k_boot` still contains the legacy user-mode implementation, the new
 module is not part of `ntoskrnl_core_baremetal`, and its object currently has

@@ -9,9 +9,9 @@ NtStatus DispatchWin32kShadowSyscall(const micant::sys::SyscallFrame& frame) noe
         return NtStatus::InvalidDeviceRequest;
     }
 
-    auto& subsystem = micant::win32k::TitanWin32kSubsystem::Instance();
-    subsystem.initialize();
-    return subsystem.dispatchShadowSyscall(frame);
+    // The legacy handlers dereference user pointers directly and cannot return
+    // handles. Keep the syscall boundary closed until a marshalled ABI exists.
+    return NtStatus::NotSupported;
 }
 
 } // namespace micant::sys
