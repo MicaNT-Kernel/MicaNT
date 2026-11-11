@@ -12,6 +12,7 @@ constexpr uint64_t kUser = 4;
 constexpr uint64_t kNoExecute = uint64_t{1} << 63;
 constexpr uint64_t kPhysicalMask = 0x000FFFFFFFFFF000ULL;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
+constexpr uint64_t kUserTebBase = kUserBase + 0x8000;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
 alignas(4096) uint64_t g_pml4[512]{};
 alignas(4096) uint64_t g_tables[256][512]{};
@@ -20,6 +21,12 @@ uint64_t g_deviceNext = kDeviceBase;
 bool g_addressSpaceReady{};
 alignas(4096) uint8_t g_userCode[4096]{};
 alignas(4096) uint8_t g_userStack[4096]{};
+struct alignas(4096) BootstrapTebPage {
+    micant::um::Teb64 teb{};
+    uint8_t padding[4096 - sizeof(micant::um::Teb64)]{};
+};
+static_assert(sizeof(BootstrapTebPage) == 4096);
+BootstrapTebPage g_userTebPage{};
 alignas(4096) uint8_t g_nativeProbeImage[8192]{};
 uint8_t g_nativeProbeFile[512 + 4096]{};
 micant::um::NativeUserImageSet64 g_nativeProbeModules{};
@@ -294,7 +301,8 @@ __attribute__((naked)) void MicantSyscallProbeProgram() {
 
 void MicantProbeTrap(const uint64_t* frame) noexcept {
     // The trap frame is written by the CPU, not supplied by user memory.
-    g_probeSucceeded = (g_probeMode == 0 || g_probeMode == 5 || g_probeMode == 6) &&
+    g_probeSucceeded = (g_probeMode == 0 || g_probeMode == 5 ||
+                        g_probeMode == 6 || g_probeMode == 7) &&
                        frame[0] == g_probeReturnRip &&
                        frame[1] == micant::cpu::SELECTOR_UCODE64 &&
                        frame[4] == micant::cpu::SELECTOR_UDATA64 &&
@@ -598,9 +606,12 @@ bool verifyRing3Transition() noexcept {
     if (!g_addressSpaceReady ||
         !mapPage(kUserBase, reinterpret_cast<uint64_t>(g_userCode), kUser) ||
         !mapPage(kUserBase + 4096, reinterpret_cast<uint64_t>(g_userStack),
+                 kUser | kWritable | kNoExecute) ||
+        !mapPage(kUserTebBase, reinterpret_cast<uint64_t>(&g_userTebPage),
                  kUser | kWritable | kNoExecute)) {
         return false;
     }
+    g_userTebPage.teb.self = kUserTebBase;
     // Read CS at CPL=3, verify RPL=3, then enter the kernel via #BP.
     constexpr uint8_t code[]{
         0x8c, 0xc8,             // mov ax, cs
@@ -666,6 +677,26 @@ bool verifyRing3Transition() noexcept {
         if (!g_probeSucceeded) {
             return false;
         }
+    }
+    constexpr uint8_t tebCode[]{
+        0x65, 0xC7, 0x04, 0x25, 0x68, 0x00, 0x00, 0x00,
+        0x78, 0x56, 0x34, 0x12,
+        0x65, 0x8B, 0x04, 0x25, 0x68, 0x00, 0x00, 0x00,
+        0x3D, 0x78, 0x56, 0x34, 0x12,
+        0x75, 0x02, 0xCC, 0x0F, 0x0B,
+    };
+    for (size_t index = 0; index < sizeof(tebCode); ++index) {
+        g_userCode[index] = tebCode[index];
+    }
+    g_probeMode = 7;
+    g_probeSucceeded = false;
+    g_probeReturnRip = kUserBase + 28;
+    cpu::cpuWrmsr(cpu::MSR_GS_BASE, kUserTebBase);
+    MicantProbeEnter();
+    cpu::cpuWrmsr(cpu::MSR_GS_BASE, 0);
+    if (!g_probeSucceeded ||
+        g_userTebPage.teb.lastErrorValue != 0x12345678) {
+        return false;
     }
     __asm__ __volatile__(
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"

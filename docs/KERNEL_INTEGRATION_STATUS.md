@@ -14,6 +14,9 @@ specification. The compatibility inventory is
   supervisor/RO/NX protection probes.
 - Hardware syscall entry with a kernel stack, register/SIMD preservation,
   bounded user-buffer checks and actual user-originated VirtIO presentation.
+- Isolated CPL3 TEB/GS probe: user code writes and reads
+  `TEB64.LastErrorValue` at GS offset `0x68`; the kernel verifies the value
+  after a checked ring transition.
 - Polled PS/2 cursor movement and click delivery; QMP pixel/input checks pass.
 - Original bounded PE diagnostic mapped by the canonical native loader and
   entered at CPL3. This is not a process, DLL startup, or Explorer.
@@ -134,8 +137,9 @@ The canonical Kernel32 ABI source has a freestanding `kernel32_boot` target
 that exports only `GetLastError` and `SetLastError`. Both access the current
 thread's `TEB64.LastErrorValue` at GS offset `0x68`; compile-time assertions
 pin the corresponding TEB fields at offsets `0x60` and `0x68`. The DLL has no
-external PE imports. This is not yet runtime-verified: the native process
-loader does not initialize a user TEB or GS base.
+external PE imports. The native process loader does not yet initialize a real
+process TEB or GS base; only the isolated CPL3 diagnostic TEB has been
+exercised.
 
 Verified:
 
@@ -143,11 +147,15 @@ Verified:
 cmake --build build/qemu-cmake-mingw --target kernel32_boot
 cmake --build build/qemu-cmake-mingw --target ntoskrnl_core
 python3 scripts/verify_kernel_architecture.py
+python3 qemu.py --headless
 ```
 
-Results: passed. LLVM PE inspection confirms the two named exports. The full
-Explorer preflight now reports 25 missing Kernel32 exports and 23 missing
-UCRT exports (48 total); import closure remains incomplete.
+Results: passed. LLVM PE inspection confirms the two named exports; headless
+QEMU confirms the isolated TEB GS read/write probe and the existing syscall,
+input, and scanout checks. This does not establish real process TEB
+initialization. The full Explorer preflight still reports 25 missing Kernel32
+exports and 23 missing UCRT exports (48 total); import closure remains
+incomplete.
 
 ### Allocation-free firmware memory descriptors
 

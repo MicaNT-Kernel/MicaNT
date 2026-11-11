@@ -306,10 +306,10 @@ dispatch routines. These do not replace full DLL CRT startup, which the kernel
 loader does not yet perform. Aligned allocation and release use the bounded
 arena; the CRT invalid-parameter handler, stdio, locale, and unwind contracts
 remain missing. `kernel32_boot` reads and writes `TEB64.LastErrorValue` at the
-verified GS offset, but that path is not yet runnable because the native
-process loader does not initialize user GS/TEB. The current import check still
-fails on 25 other Kernel32 exports and 23 UCRT exports; no success fallback is
-introduced.
+verified GS offset. An isolated CPL3 probe verifies GS-based TEB access, but
+the native process loader does not yet initialize a real process's TEB/GS.
+The current import check still fails on 25 other Kernel32 exports and 23 UCRT
+exports; no success fallback is introduced.
 
 Structural inspection of the archived standalone kernel identified its
 loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import

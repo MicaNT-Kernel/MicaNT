@@ -796,11 +796,18 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ps] Ring 3 transition failed\r\n");
     }
     serialWrite("[MicaNT Ps] CPL3 execution and Ring 0 trap return verified\r\n");
+    serialWrite("[MicaNT Ps] GS-based TEB LastErrorValue read/write verified\r\n");
     serialWrite("[MicaNT Mm] User/kernel isolation and read-only user code verified\r\n");
     serialWrite("[MicaNT Mm] Supervisor MMIO and non-executable user stack verified\r\n");
-    if (!micant::hal::amd64::initializeBootstrapSyscalls(dispatchBootstrapService) ||
-        !micant::hal::amd64::verifyBootstrapSyscalls() ||
-        !micant::hal::amd64::verifyNativeImageLoading()) {
+    if (!micant::hal::amd64::initializeBootstrapSyscalls(dispatchBootstrapService)) {
+        stopWithError("[MicaNT Ke] Syscall entry initialization failed\r\n");
+    }
+    serialWrite("[MicaNT Ke] Bootstrap syscall entry initialized\r\n");
+    if (!micant::hal::amd64::verifyBootstrapSyscalls()) {
+        stopWithError("[MicaNT Ke] Syscall entry verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ke] Bootstrap syscall service probes passed\r\n");
+    if (!micant::hal::amd64::verifyNativeImageLoading()) {
         stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
     }
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
