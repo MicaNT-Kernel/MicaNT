@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "micant/km/executive/io.hpp"
+#include "micant/km/executive/wmilib.hpp"
 #include "micant/km/executive/bms.hpp"
 #include "micant/shared/ntdef.hpp"
 
@@ -89,6 +90,18 @@ inline constexpr uint16_t BATTERY_CLASS_MAJOR_VERSION = 1;
 inline constexpr uint16_t BATTERY_CLASS_MINOR_VERSION = 0;
 inline constexpr GUID GUID_DEVICE_BATTERY = {
     0x72631E54, 0x78A4, 0x11D0, {0xBC, 0xF7, 0x00, 0xAA, 0x00, 0xB7, 0xB3, 0x2A}};
+inline constexpr GUID BATTERY_STATUS_WMI_GUID = {
+    0xFC4670D1, 0xEBBF, 0x416E, {0x87, 0xCE, 0x37, 0x4A, 0x4E, 0xBC, 0x11, 0x1A}};
+inline constexpr GUID BATTERY_RUNTIME_WMI_GUID = {
+    0x535A3767, 0x1AC2, 0x49BC, {0xA0, 0x77, 0x3F, 0x7A, 0x02, 0xE4, 0x0A, 0xEC}};
+inline constexpr GUID BATTERY_TEMPERATURE_WMI_GUID = {
+    0x1A52A14D, 0xADCE, 0x4A44, {0x9A, 0x3E, 0xC8, 0xD8, 0xF1, 0x5F, 0xF2, 0xC2}};
+inline constexpr GUID BATTERY_FULL_CHARGED_CAPACITY_WMI_GUID = {
+    0x40B40565, 0x96F7, 0x4435, {0x86, 0x94, 0x97, 0xE0, 0xE4, 0x39, 0x59, 0x05}};
+inline constexpr GUID BATTERY_CYCLE_COUNT_WMI_GUID = {
+    0xEF98DB24, 0x0014, 0x4C25, {0xA5, 0x0B, 0xC7, 0x24, 0xAE, 0x5C, 0xD3, 0x71}};
+inline constexpr GUID BATTERY_STATIC_DATA_WMI_GUID = {
+    0x05E1E463, 0xE4E2, 0x4EA9, {0x80, 0xCB, 0x9B, 0xD4, 0xB3, 0xCA, 0x06, 0x55}};
 static_assert(offsetof(BATTERY_MINIPORT_INFO, MajorVersion) == 0);
 static_assert(offsetof(BATTERY_MINIPORT_INFO, MinorVersion) == 2);
 static_assert(offsetof(BATTERY_MINIPORT_INFO, Context) ==
@@ -208,6 +221,7 @@ extern "C" inline micant::NtStatus BatteryClassStatusNotify(void* classData) {
 extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io::Irp* irp) {
     using namespace micant;
     using namespace micant::po::bms;
+    using namespace micant::km;
     if (!irp) return NtStatus::InvalidParameter;
     if (!classData) {
         irp->ioStatus.status = NtStatus::DeviceNotReady;
@@ -348,7 +362,7 @@ extern "C" inline micant::NtStatus BatteryClassQueryWmiDataBlock(
     using namespace micant::po::bms;
     if (!irp || !deviceObject) return NtStatus::InvalidParameter;
     auto state = BatteryClassRegistry::resolve(classData);
-    if (!state || state->Miniport.Pdo != deviceObject) return NtStatus::InvalidParameter;
+    if (!state) return NtStatus::InvalidParameter;
     if (guidIndex > BATTERY_WMI_STATIC_DATA_GUID_INDEX) {
         irp->ioStatus.status = NtStatus::WmiGuidNotFound;
         irp->ioStatus.information = 0;
@@ -514,4 +528,18 @@ extern "C" inline micant::NtStatus BatteryClassQueryWmiDataBlock(
     irp->ioStatus.status = status;
     irp->ioStatus.information = NT_SUCCESS(status) ? required : 0;
     return status;
+}
+
+extern "C" inline micant::NtStatus BatteryClassSystemControl(
+    void* classData, void* wmiLibContext, micant::io::DeviceObject* deviceObject,
+    micant::io::Irp* irp, void* disposition) {
+    using namespace micant;
+    using namespace micant::po::bms;
+    using namespace micant::km;
+    if (!classData || !wmiLibContext || !deviceObject || !irp || !disposition)
+        return NtStatus::InvalidParameter;
+    if (!BatteryClassRegistry::resolve(classData)) return NtStatus::InvalidParameter;
+    auto* result = static_cast<wmilib::SysctlIrpDisposition*>(disposition);
+    return wmilib::WmiSystemControl(
+        static_cast<const wmilib::WMILIB_CONTEXT*>(wmiLibContext), deviceObject, irp, result);
 }

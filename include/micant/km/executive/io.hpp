@@ -213,6 +213,13 @@ struct IoStackLocation {
             wdm::PCM_RESOURCE_LIST AllocatedResources;
             wdm::PCM_RESOURCE_LIST AllocatedResourcesTranslated;
         } startDevice;
+
+        struct {
+            uintptr_t providerId;
+            void* dataPath;
+            uint32_t bufferSize;
+            void* buffer;
+        } wmi;
     } parameters{};
 
     DeviceObject* deviceObject{nullptr};

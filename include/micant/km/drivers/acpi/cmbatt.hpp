@@ -13,6 +13,7 @@
 #include "micant/km/drivers/bus/battclass.hpp"
 #include "micant/km/executive/po.hpp"
 #include "micant/km/executive/pnp.hpp"
+#include "micant/km/executive/wmi_driver_compat.hpp"
 #include "micant/km/hal/acpi.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
@@ -37,6 +38,7 @@ struct MiniportExtension {
     po::bms::BATTERY_NOTIFY notify{};
     bool started{};
     bool notifyEnabled{};
+    bool wmiRegistered{};
 };
 
 class ControlMethodBatteryMiniport {
@@ -256,6 +258,69 @@ public:
         return NtStatus::Success;
     }
 
+    static NtStatus NTAPI QueryWmiDataBlock(io::DeviceObject* device, io::Irp* irp,
+        uint32_t guidIndex, uint32_t, uint32_t instanceCount,
+        uint32_t* instanceLengthArray, uint32_t bufferAvailable, uint8_t* buffer) {
+        if (!device || !device->deviceExtension || instanceCount != 1)
+            return NtStatus::InvalidParameter;
+        auto& extension = *static_cast<MiniportExtension*>(device->deviceExtension);
+        if (!extension.classData) return NtStatus::DeviceNotReady;
+        return BatteryClassQueryWmiDataBlock(extension.classData, device, irp, guidIndex,
+            instanceLengthArray, bufferAvailable, buffer);
+    }
+
+    static NtStatus NTAPI QueryWmiRegInfo(io::DeviceObject* device, uint32_t* registrationFlags,
+        UNICODE_STRING* instanceName, UNICODE_STRING** registryPath,
+        UNICODE_STRING* mofResourceName, io::DeviceObject** pdo) {
+        if (!device || !device->deviceExtension || !registrationFlags || !pdo)
+            return NtStatus::InvalidParameter;
+        auto& extension = *static_cast<MiniportExtension*>(device->deviceExtension);
+        static const UNICODE_STRING serviceRegistryPath(
+            L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\cmbatt");
+        *registrationFlags = 0;
+        if (instanceName) *instanceName = {};
+        if (registryPath) *registryPath = const_cast<UNICODE_STRING*>(&serviceRegistryPath);
+        if (mofResourceName) *mofResourceName = {};
+        *pdo = extension.pdo;
+        return NtStatus::Success;
+    }
+
+    static wmilib::WMILIB_CONTEXT& WmiLibContext() {
+        using namespace po::bms;
+        static std::array<wmilib::WMIGUIDREGINFO, 6> guidList{{
+            {&BATTERY_STATUS_WMI_GUID, 1, wmilib::WMIREG_FLAG_INSTANCE_PDO},
+            {&BATTERY_RUNTIME_WMI_GUID, 1, wmilib::WMIREG_FLAG_INSTANCE_PDO},
+            {&BATTERY_TEMPERATURE_WMI_GUID, 1, wmilib::WMIREG_FLAG_INSTANCE_PDO},
+            {&BATTERY_FULL_CHARGED_CAPACITY_WMI_GUID, 1, wmilib::WMIREG_FLAG_INSTANCE_PDO},
+            {&BATTERY_CYCLE_COUNT_WMI_GUID, 1, wmilib::WMIREG_FLAG_INSTANCE_PDO},
+            {&BATTERY_STATIC_DATA_WMI_GUID, 1, wmilib::WMIREG_FLAG_INSTANCE_PDO},
+        }};
+        static wmilib::WMILIB_CONTEXT context{
+            static_cast<uint32_t>(guidList.size()), guidList.data(), QueryWmiRegInfo,
+            QueryWmiDataBlock, nullptr, nullptr, nullptr, nullptr};
+        return context;
+    }
+
+    static NtStatus DispatchSystemControl(io::DeviceObject* device, io::Irp* irp) noexcept {
+        if (!device || !device->deviceExtension || !irp) return NtStatus::InvalidParameter;
+        auto& extension = *static_cast<MiniportExtension*>(device->deviceExtension);
+        if (!extension.classData) return NtStatus::DeviceNotReady;
+        wmilib::SysctlIrpDisposition disposition{};
+        const auto status = BatteryClassSystemControl(extension.classData, &WmiLibContext(),
+            device, irp, &disposition);
+        if (disposition == wmilib::SysctlIrpDisposition::Forward ||
+            disposition == wmilib::SysctlIrpDisposition::NotWmi) {
+            if (extension.pdo && extension.pdo->driverObject) {
+                irp->deviceObject = extension.pdo;
+                auto* stack = irp->getCurrentStack();
+                if (stack) stack->deviceObject = extension.pdo;
+                return extension.pdo->driverObject->dispatch(extension.pdo, irp);
+            }
+            return NtStatus::NoSuchDevice;
+        }
+        return status;
+    }
+
     static NtStatus HandleFirmwareNotify(io::DeviceObject* pdo, uint32_t event) {
         if (event != 0x80 && event != 0x81) return NtStatus::InvalidParameter;
         auto* classData = po::bms::BatteryClassRegistry::Instance().handleForPdo(pdo);
@@ -320,6 +385,10 @@ public:
                 (void)BatteryClassUnload(extension.classData);
                 extension.classData = nullptr;
             }
+            if (extension.wmiRegistered) {
+                (void)wmi::IoWMIRegistrationControl(device, wmi::WMIREG_ACTION_DEREGISTER);
+                extension.wmiRegistered = false;
+            }
             io::IoDetachDevice(extension.pdo);
             io::IoManager::get().deleteDevice(device);
             break;
@@ -372,9 +441,20 @@ public:
             io::IoManager::get().deleteDevice(fdo.get());
             return classStatus;
         }
+        const auto wmiStatus = wmi::IoWMIRegistrationControl(fdo.get(), wmi::WMIREG_ACTION_REGISTER);
+        if (!NT_SUCCESS(wmiStatus)) {
+            (void)BatteryClassUnload(extension.classData);
+            extension.classData = nullptr;
+            io::IoDetachDevice(pdo);
+            io::IoManager::get().deleteDevice(fdo.get());
+            return wmiStatus;
+        }
+        extension.wmiRegistered = true;
         const auto interfaceStatus = pnp::PnpManager::get().registerDeviceInterface(
             pdo, po::bms::GUID_DEVICE_BATTERY, {}, InterfaceSymbolicLink());
         if (!NT_SUCCESS(interfaceStatus)) {
+            (void)wmi::IoWMIRegistrationControl(fdo.get(), wmi::WMIREG_ACTION_DEREGISTER);
+            extension.wmiRegistered = false;
             (void)BatteryClassUnload(extension.classData);
             extension.classData = nullptr;
             io::IoDetachDevice(pdo);
@@ -395,6 +475,7 @@ public:
         driver.driverName = L"\\Driver\\Cmbatt";
         driver.driverAddDevice = AddDevice;
         driver.setDispatch(io::IRP_MJ_PNP, DispatchPnp);
+        driver.setDispatch(io::IRP_MJ_SYSTEM_CONTROL, DispatchSystemControl);
     }
 
     static void RegisterService() {
