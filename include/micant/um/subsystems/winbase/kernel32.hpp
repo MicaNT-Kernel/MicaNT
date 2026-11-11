@@ -9966,6 +9966,32 @@ inline BOOL WINAPI GetCpuClockPhaseLockedLoopSlewRateHistogramTelemetry(ntdll::S
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopSlewRateHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
+inline LONG64 WINAPI InterlockedNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedNonImplicationModulo64(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedNonImplicationModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedNonImplicationModulo32(Destination, Value, Modulus);
+}
+
+inline SHORT WINAPI InterlockedNonImplicationModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedNonImplicationModulo16(Destination, Value, Modulus);
+}
+
+inline CHAR WINAPI InterlockedNonImplicationModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedNonImplicationModulo8(Destination, Value, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteBandwidthThrottlingTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_BANDWIDTH_THROTTLING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteBandwidthThrottlingTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockPhaseLockedLoopDitherModulationHistogramTelemetry(ntdll::SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DITHER_MODULATION_HISTOGRAM_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopDitherModulationHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
 inline LONG64 WINAPI InterlockedConverseNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedConverseNonImplicationModulo64(Destination, Value, Modulus);
 }
@@ -12783,6 +12809,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedConverseImplicationModulo8", reinterpret_cast<void*>(InterlockedConverseImplicationModulo8));
     ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingHistogramTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingHistogramTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopSlewRateHistogramTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopSlewRateHistogramTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo64", reinterpret_cast<void*>(InterlockedNonImplicationModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo32", reinterpret_cast<void*>(InterlockedNonImplicationModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo16", reinterpret_cast<void*>(InterlockedNonImplicationModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo8", reinterpret_cast<void*>(InterlockedNonImplicationModulo8));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteBandwidthThrottlingTelemetry", reinterpret_cast<void*>(GetPagefileWriteBandwidthThrottlingTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopDitherModulationHistogramTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopDitherModulationHistogramTelemetry));
     ldr.registerExport("kernel32.dll", "InterlockedConverseNonImplicationModulo64", reinterpret_cast<void*>(InterlockedConverseNonImplicationModulo64));
     ldr.registerExport("kernel32.dll", "InterlockedConverseNonImplicationModulo32", reinterpret_cast<void*>(InterlockedConverseNonImplicationModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedConverseNonImplicationModulo16", reinterpret_cast<void*>(InterlockedConverseNonImplicationModulo16));
