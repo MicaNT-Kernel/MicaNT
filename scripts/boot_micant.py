@@ -24,7 +24,9 @@ EXPECTED_BOOTSTRAP_SERIAL = (
     "[MicaNT] Phase 0 started",
     "[MicaNT] Kernel-owned page-table root active",
     "[MicaNT Mm] Canonical physical allocation, zeroing and release verified",
+    "[MicaNT Mm] PFN-backed page tables, TLB and reclaim verified",
     "[MicaNT Ex] Canonical page-backed C and C++ allocation verified",
+    "[MicaNT Mm] Canonical VAD tree exclusion and cleanup verified",
     "[MicaNT Ex] Kernel C++ constructors dispatched",
     "[MicaNT Ob] Canonical kernel handle storage and references verified",
 )
@@ -47,7 +49,6 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Input] PS/2 mouse polling initialized",
     "[MicaNT Explorer] Shell idle loop entered",
 )
-
 
 def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
     """Exercise the emulated mouse and verify its actual scanout pixels."""
@@ -174,7 +175,7 @@ def run_qemu(
     kernel = ROOT / "build" / "baremetal" / "ntoskrnl.exe"
     bootloader = ROOT / "build" / "esp" / "EFI" / "BOOT" / "BOOTX64.EFI"
 
-    with tempfile.TemporaryDirectory(prefix="micant-qemu-") as temp_root:
+    with tempfile.TemporaryDirectory(prefix="qemu-", dir=ROOT / "build") as temp_root:
         temp = Path(temp_root)
         esp = temp / "esp"
         boot_dir = esp / "EFI" / "BOOT"

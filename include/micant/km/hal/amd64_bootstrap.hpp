@@ -6,6 +6,8 @@
 namespace micant::hal::amd64 {
 
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept;
+// IRQ-disabled, single-CPU bootstrap test of PFN-backed paging and reclamation.
+bool verifyBootstrapPageTables() noexcept;
 uint64_t translateBootstrapAddress(const void* address) noexcept;
 void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept;
 

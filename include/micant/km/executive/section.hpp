@@ -430,16 +430,17 @@ public:
         ps::EProcess& targetProcess,
         uintptr_t& baseAddress,
         size_t& viewSize,
-        uint32_t allocationType,
+        uint32_t /*allocationType*/,
         uint32_t protect,
         uint64_t sectionOffset = 0,
         SECTION_INHERIT inherit = SECTION_INHERIT::ViewShare
     ) {
         if (!section) return NtStatus::InvalidHandle;
 
-        if (viewSize == 0 || viewSize > (section->getSize() - sectionOffset)) {
-            viewSize = section->getSize() - sectionOffset;
-        }
+        if (sectionOffset >= section->getSize()) return NtStatus::InvalidParameter;
+        size_t mappedSize = viewSize;
+        if (mappedSize == 0 || mappedSize > (section->getSize() - sectionOffset))
+            mappedSize = section->getSize() - sectionOffset;
 
         uint32_t effectiveProtect = (protect != 0) ? protect : section->getPageProtection();
         bool isCow = (effectiveProtect == mm::PAGE_WRITECOPY || effectiveProtect == mm::PAGE_EXECUTE_WRITECOPY);
@@ -447,23 +448,15 @@ public:
         // Map coherent view into target process address space using shared physical PFNs
         NtStatus status = targetProcess.getAddressSpace().mapSectionView(
             baseAddress,
-            viewSize,
+            mappedSize,
             effectiveProtect,
             section->getControlArea()->sharedPfnMap,
             section.get(),
             sectionOffset
         );
 
-        if (!NT_SUCCESS(status)) {
-            status = targetProcess.getAddressSpace().allocate(
-                baseAddress,
-                viewSize,
-                allocationType ? allocationType : (mm::MEM_COMMIT | mm::MEM_RESERVE),
-                effectiveProtect
-            );
-        }
-
         if (NT_SUCCESS(status)) {
+            viewSize = mappedSize;
             SECTION_VIEW view{
                 .process = &targetProcess,
                 .baseAddress = baseAddress,

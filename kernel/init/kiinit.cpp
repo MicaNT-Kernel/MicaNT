@@ -49,6 +49,7 @@ uint32_t g_contextOrder{};
 void serialWriteNumber(uint64_t value) noexcept;
 extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
+extern "C" int MicantTestMmAvlTable() noexcept;
 
 void writePort(uint16_t port, uint8_t value) noexcept {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -800,11 +801,22 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Bootstrap probe binding failed\r\n");
     }
     initializePhysicalMemory(*handoff);
+    if (!micant::hal::amd64::verifyBootstrapPageTables()) {
+        stopWithError("[MicaNT Mm] PFN-backed page-table verification failed\r\n");
+    }
+    serialWrite("[MicaNT Mm] PFN-backed page tables, TLB and reclaim verified\r\n");
     if (!micant::ex::initializeBootstrapRuntime(serialWrite, mapBootstrapHeapPages) ||
         !micant::ex::verifyBootstrapRuntime()) {
         stopWithError("[MicaNT Ex] Bootstrap runtime verification failed\r\n");
     }
     serialWrite("[MicaNT Ex] Canonical page-backed C and C++ allocation verified\r\n");
+    const int vadTest = MicantTestMmAvlTable();
+    if (vadTest != 0) {
+        serialWrite("[MicaNT Mm] Canonical VAD tree verification failed: ");
+        serialWriteNumber(static_cast<uint64_t>(vadTest));
+        stopWithError("\r\n");
+    }
+    serialWrite("[MicaNT Mm] Canonical VAD tree exclusion and cleanup verified\r\n");
 #if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
     const size_t initialActive = micant::mm::PfnDatabase::get().getActiveCount();
     const size_t initialAvailable = micant::mm::PfnDatabase::get().getFreeCount() +

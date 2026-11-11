@@ -85,6 +85,67 @@ integration.
 
 ## Integration increments
 
+### Bootstrap PFN-backed paging and VAD tree
+
+The AMD64 bootstrap now obtains intermediate page-table pages from the
+canonical UEFI-initialized PFN database, zeroes them before use, and releases
+empty owned tables after unmapping. Failed page-table allocation rolls back
+newly allocated levels. The QEMU test writes and reads a physical frame through
+a virtual mapping, exercises duplicate rejection and injected allocation
+failures, remaps after invalidation, and checks reclamation. It runs only on
+the bootstrap CPU with interrupts disabled; there is no remote TLB shootdown.
+Firmware mappings are not owned by this path.
+
+The same kernel executes the canonical `MmAvlTable` using the page-backed
+allocator. The test checks partial overlap rejection, gap searches, removal and
+PFN accounting after tree destruction. This is a tree test, **not** a
+process address space, reservation, commitment, or section-mapping test.
+`ProcessAddressSpace` still has a hosted simulated paging engine and is not
+wired to this hardware backend; the native virtual-memory syscalls, section
+views, per-process isolation and fault handling remain incomplete.
+
+ReactOS reference, revision
+[`8fe3cee05606aecd9442674e40038649f048d10d`](https://github.com/reactos/reactos/tree/8fe3cee05606aecd9442674e40038649f048d10d):
+`ntoskrnl/mm/ARM3/vadnode.c`, `virtual.c`, `section.c`, and `pagfault.c`.
+The [WDK allocation contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwallocatevirtualmemory)
+distinguishes reserving a range from committing pages within it; the
+[section contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/managing-memory-sections)
+requires views and section objects to retain their respective lifetimes.
+
+| Command | Result |
+|---|---|
+| `python3 qemu.py --headless` | Passed; PFN-backed page-table and VAD-tree markers, existing CPL3, syscall, display and mouse checks |
+| `python3 qemu.py --headless --runtime-selftest` | Passed; VAD cleanup and existing C++ lifecycle teardown |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_vad_ranges_test.cpp -o build/mm-vad-ranges-test && build/mm-vad-ranges-test` | Passed; hosted VAD regression |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -DMICANT_FREESTANDING -Iinclude test/mm_avl_freestanding_test.cpp -o build/mm-avl-freestanding-test && build/mm-avl-freestanding-test` | Passed; shared VAD tree including gap-search stress |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/mm_page_table_entry_test.cpp -o build/mm-page-table-entry-test && build/mm-page-table-entry-test` | Passed; PTE layout and NX encoding |
+| `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | Passed; 7 runner tests |
+
+### Hosted VAD range exclusion
+
+The canonical hosted `ProcessAddressSpace` now rejects overlapping reservations
+and section views, including partial overlaps, and searches gaps for automatic
+placements using inclusive bounds and checked arithmetic. The AVL insertion
+also rejects overlapping ranges; failed section mappings no longer fall back
+to an unrelated anonymous allocation. The Executive's separate
+`NtMapViewOfSection` path returns `NotImplemented`: its former host-buffer
+address was not a mapped process view.
+
+This is a hosted model, not a freestanding process address space. A non-null
+commit-only request returns `NotImplemented` rather than inserting another VAD
+or claiming to commit part of a reservation: the model tracks commitment per
+VAD, not per page. Explicit unaligned allocation requests also return
+`NotImplemented`; allocation-granularity rounding and the full Windows
+allocation, section, and process-handle contracts remain unimplemented.
+The [WDK allocation contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwallocatevirtualmemory)
+distinguishes reserving pages from committing a previously reserved range.
+
+| Command | Result |
+|---|---|
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_vad_ranges_test.cpp -o build/mm-vad-ranges-test && build/mm-vad-ranges-test` | Passed; hosted overlap, search, bounds, section caller and VAD removal checks |
+| `clang++ -std=c++23 -ffunction-sections -fdata-sections -Wno-unused-parameter -I include test/executive_unimplemented_test.cpp kernel/ps/psmgr.cpp kernel/mm/virtual.cpp kernel/io/iomgr.cpp -Wl,-dead_strip -o build/executive-unimplemented-test && build/executive-unimplemented-test` | Passed; Executive failure reporting and unchanged mapping outputs |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/pfn_database_bootstrap_test.cpp -o build/pfn-vad-regression-test && build/pfn-vad-regression-test` | Passed; PFN database regression |
+
 ### Freestanding Ke ready queues
 
 The canonical `PriorityScheduler` now has an allocation-free freestanding

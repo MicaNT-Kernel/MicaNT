@@ -109,31 +109,13 @@ NtStatus NtMapViewOfSection(
     LargeInteger* /*sectionOffset*/,
     size_t* viewSize,
     uint32_t /*inheritDisposition*/,
-    uint32_t allocationType,
-    uint32_t win32Protect
+    uint32_t /*allocationType*/,
+    uint32_t /*win32Protect*/
 ) {
     if (!baseAddress || !viewSize) return NtStatus::InvalidParameter;
     auto it = g_KernelSections.find(sectionHandle);
     if (it == g_KernelSections.end() || !it->second) return NtStatus::InvalidHandle;
-
-    auto sec = it->second;
-    size_t sz = (*viewSize == 0 || *viewSize > sec->getSize()) ? sec->getSize() : *viewSize;
-
-    uintptr_t addr = *baseAddress;
-    if (addr == 0) {
-        addr = reinterpret_cast<uintptr_t>(sec->getData());
-    }
-
-    g_KernelAddressSpace.allocate(
-        addr,
-        sz,
-        allocationType ? allocationType : (mm::MEM_COMMIT | mm::MEM_RESERVE),
-        win32Protect ? win32Protect : sec->getPageProtection()
-    );
-
-    *baseAddress = addr;
-    *viewSize = sz;
-    return NtStatus::Success;
+    return NtStatus::NotImplemented;
 }
 
 NtStatus NtUnmapViewOfSection(Handle /*processHandle*/, uintptr_t baseAddress) {

@@ -27,4 +27,12 @@ int main() {
     assert(address == 0x10000 && size == 4096 && oldProtection == 99);
     assert(NtProtectVirtualMemory(0, nullptr, &size, 0x04, &oldProtection)
            == NtStatus::InvalidParameter);
+
+    Handle section = 0;
+    assert(NtCreateSection(&section, 0, nullptr, nullptr, 0x04, 0, 0) == NtStatus::Success);
+    uintptr_t view = 0;
+    size_t viewSize = 4096;
+    assert(NtMapViewOfSection(section, 0, &view, 0, 0, nullptr, &viewSize, 0, 0, 0x04)
+           == NtStatus::NotImplemented);
+    assert(view == 0 && viewSize == 4096);
 }

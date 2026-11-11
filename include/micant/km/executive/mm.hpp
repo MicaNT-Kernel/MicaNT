@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <optional>
 #include <atomic>
+#include <limits>
 #include "micant/shared/ntdef.hpp"
 
 namespace micant::mm {
@@ -71,9 +72,9 @@ union PageTableEntry {
         uint64_t global : 1;
         uint64_t available : 3;
         uint64_t pageFrameNumber : 40;
+        uint64_t reservedHigh : 11;
         uint64_t noExecute : 1;
     };
-
     [[nodiscard]] uintptr_t getPhysicalAddress() const noexcept {
         return static_cast<uintptr_t>(pageFrameNumber) << PageShift4KB;
     }
@@ -88,6 +89,7 @@ union PageTableEntry {
         return pte;
     }
 };
+static_assert(sizeof(PageTableEntry) == sizeof(uint64_t));
 
 // ============================================================================
 // 3. Physical Page Frame Number (PFN) Database
@@ -584,7 +586,40 @@ class MmAvlTable {
 private:
     std::unique_ptr<VirtualAddressDescriptor> root_{nullptr};
     size_t count_{0};
+#if defined(MICANT_FREESTANDING)
+    mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+#else
     mutable std::mutex mutex_;
+#endif
+
+    class Guard {
+    public:
+        explicit Guard(const MmAvlTable& table) noexcept
+#if defined(MICANT_FREESTANDING)
+            : lock_(table.lock_)
+#else
+            : lock_(table.mutex_)
+#endif
+        {
+#if defined(MICANT_FREESTANDING)
+            // Bootstrap only: callers must keep interrupts disabled while using the table.
+            while (lock_.test_and_set(std::memory_order_acquire)) {}
+#endif
+        }
+        ~Guard() noexcept {
+#if defined(MICANT_FREESTANDING)
+            lock_.clear(std::memory_order_release);
+#endif
+        }
+        Guard(const Guard&) = delete;
+        Guard& operator=(const Guard&) = delete;
+    private:
+#if defined(MICANT_FREESTANDING)
+        std::atomic_flag& lock_;
+#else
+        std::lock_guard<std::mutex> lock_;
+#endif
+    };
 
     static int getHeight(const VirtualAddressDescriptor* node) noexcept {
         return node ? node->height : 0;
@@ -681,6 +716,16 @@ private:
         return node;
     }
 
+    static const VirtualAddressDescriptor* nextNode(const VirtualAddressDescriptor* node) noexcept {
+        if (node->right) return findMin(node->right.get());
+        const auto* parent = node->parent;
+        while (parent && node == parent->right.get()) {
+            node = parent;
+            parent = parent->parent;
+        }
+        return parent;
+    }
+
     std::unique_ptr<VirtualAddressDescriptor> removeNode(
         std::unique_ptr<VirtualAddressDescriptor> node,
         uintptr_t startingAddress,
@@ -717,6 +762,9 @@ private:
             node->committed = temp->committed;
             node->isCopyOnWrite = temp->isCopyOnWrite;
             node->isGuardPage = temp->isGuardPage;
+            node->isSectionView = temp->isSectionView;
+            node->sectionContext = temp->sectionContext;
+            node->sectionOffset = temp->sectionOffset;
             node->commitCharge = temp->commitCharge;
             node->physicalPages = std::move(temp->physicalPages);
 
@@ -756,29 +804,42 @@ public:
     MmAvlTable() = default;
 
     [[nodiscard]] std::vector<VirtualAddressDescriptor*> inOrder() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
         std::vector<VirtualAddressDescriptor*> result;
         collectInOrder(root_.get(), result);
         return result;
     }
 
-    void insert(std::unique_ptr<VirtualAddressDescriptor> vad) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!vad) return;
+    bool insert(std::unique_ptr<VirtualAddressDescriptor> vad) {
+        Guard lock(*this);
+        if (!vad || vad->startingAddress > vad->endingAddress ||
+            (vad->startingAddress & PageMask4KB) != 0 ||
+            (vad->endingAddress & PageMask4KB) != PageMask4KB) return false;
+        const auto* curr = root_.get();
+        while (curr) {
+            if (vad->endingAddress < curr->startingAddress) {
+                curr = curr->left.get();
+            } else if (vad->startingAddress > curr->endingAddress) {
+                curr = curr->right.get();
+            } else {
+                return false;
+            }
+        }
         vad->startingVpn = vad->startingAddress >> PageShift4KB;
         vad->endingVpn = vad->endingAddress >> PageShift4KB;
         root_ = insertNode(std::move(root_), std::move(vad));
+        return true;
     }
 
     bool remove(uintptr_t startingAddress) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
         bool removed = false;
         root_ = removeNode(std::move(root_), startingAddress, removed);
         return removed;
     }
 
     [[nodiscard]] VirtualAddressDescriptor* find(uintptr_t address) noexcept {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
         VirtualAddressDescriptor* curr = root_.get();
         uint64_t vpn = address >> PageShift4KB;
 
@@ -796,7 +857,7 @@ public:
     }
 
     [[nodiscard]] const VirtualAddressDescriptor* find(uintptr_t address) const noexcept {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
         const VirtualAddressDescriptor* curr = root_.get();
         uint64_t vpn = address >> PageShift4KB;
 
@@ -820,54 +881,50 @@ public:
         uintptr_t minAddr = 0x0000000000010000ULL,
         uintptr_t maxAddr = 0x00007FFFFFFFFFFFULL
     ) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<VirtualAddressDescriptor*> sorted;
-        collectInOrder(root_.get(), sorted);
+        Guard lock(*this);
 
-        size_t align = std::max(alignment, PageSize4KB);
-        size_t alignedSize = (size + PageMask4KB) & ~PageMask4KB;
+        const size_t align = std::max(alignment, PageSize4KB);
+        if (size == 0 || size > std::numeric_limits<size_t>::max() - PageMask4KB ||
+            (align & (align - 1)) != 0 || minAddr > maxAddr) return 0;
+        const size_t alignedSize = (size + PageMask4KB) & ~PageMask4KB;
+        const uintptr_t maxValue = std::numeric_limits<uintptr_t>::max();
+        auto fit = [&](uintptr_t low, uintptr_t high) -> uintptr_t {
+            if (low > high || alignedSize - 1 > high - low) return 0;
+            if (topDown) {
+                const uintptr_t start = (high - (alignedSize - 1)) & ~(align - 1);
+                return start >= low ? start : 0;
+            }
+            if (low > maxValue - (align - 1)) return 0;
+            const uintptr_t start = (low + align - 1) & ~(align - 1);
+            return start <= high && alignedSize - 1 <= high - start ? start : 0;
+        };
 
-        if (!topDown) {
-            // Bottom-Up Search
-            uintptr_t candidate = (minAddr + align - 1) & ~(align - 1);
-            for (const auto* vad : sorted) {
-                if (candidate + alignedSize <= vad->startingAddress) {
-                    return candidate;
-                }
-                candidate = (vad->endingAddress + 1 + align - 1) & ~(align - 1);
-            }
-            if (candidate + alignedSize <= maxAddr) {
-                return candidate;
-            }
-        } else {
-            // Top-Down Search
-            uintptr_t candidate = (maxAddr - alignedSize) & ~(align - 1);
-            for (auto it = sorted.rbegin(); it != sorted.rend(); ++it) {
-                const auto* vad = *it;
-                if (candidate >= vad->endingAddress) {
-                    return candidate;
-                }
-                if (vad->startingAddress >= alignedSize) {
-                    candidate = (vad->startingAddress - alignedSize) & ~(align - 1);
-                } else {
-                    break;
+        uintptr_t low = minAddr;
+        uintptr_t best = 0;
+        for (const auto* vad = findMin(root_.get()); vad; vad = nextNode(vad)) {
+            if (vad->endingAddress < low) continue;
+            if (vad->startingAddress > maxAddr) break;
+            if (vad->startingAddress > low) {
+                uintptr_t candidate = fit(low, vad->startingAddress - 1);
+                if (candidate) {
+                    if (!topDown) return candidate;
+                    best = candidate;
                 }
             }
-            if (candidate >= minAddr) {
-                return candidate;
-            }
+            if (vad->endingAddress >= maxAddr) return best;
+            low = vad->endingAddress + 1;
         }
-
-        return 0; // Out of virtual address space
+        uintptr_t candidate = fit(low, maxAddr);
+        return candidate ? candidate : best;
     }
 
     [[nodiscard]] size_t size() const noexcept {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
         return count_;
     }
 
     void clear() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
         root_.reset();
         count_ = 0;
     }
@@ -961,7 +1018,15 @@ public:
     ProcessAddressSpace() : nextFreeAddress_(0x0000000100000000ULL) {}
 
     NtStatus allocate(uintptr_t& baseAddress, size_t size, uint32_t allocationType, uint32_t protect) {
-        if (size == 0) return NtStatus::InvalidParameter;
+        if (size == 0 || size > std::numeric_limits<size_t>::max() - PageMask4KB)
+            return NtStatus::InvalidParameter;
+        if ((allocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN)) != 0 ||
+            !(allocationType & (MEM_COMMIT | MEM_RESERVE)))
+            return NtStatus::NotImplemented;
+        if (!(allocationType & MEM_RESERVE) && baseAddress != 0)
+            return NtStatus::NotImplemented;
+        if (baseAddress != 0 && (baseAddress & PageMask4KB))
+            return NtStatus::NotImplemented;
 
         std::lock_guard<std::mutex> lock(mutex_);
         size_t alignedSize = (size + PageMask4KB) & ~PageMask4KB;
@@ -976,8 +1041,10 @@ public:
             if (targetAddr == 0) {
                 return NtStatus::NoMemory;
             }
-            nextFreeAddress_ = targetAddr + alignedSize + PageSize4KB;
         }
+        if (targetAddr < UserSpaceMin || targetAddr > UserSpaceMax ||
+            alignedSize - 1 > UserSpaceMax - targetAddr)
+            return NtStatus::InvalidParameter;
 
         auto vad = std::make_unique<VirtualAddressDescriptor>();
         vad->startingAddress = targetAddr;
@@ -989,12 +1056,16 @@ public:
         vad->isGuardPage = (protect & PAGE_GUARD) != 0;
         vad->commitCharge = vad->committed ? vad->pageCount() : 0;
 
-        if (vad->committed) {
-            workingSet_.commitCharge += vad->commitCharge;
+        const size_t commitCharge = vad->commitCharge;
+        if (!vadTree_.insert(std::move(vad))) return NtStatus::Conflict;
+        if (commitCharge) {
+            workingSet_.commitCharge += commitCharge;
             workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
         }
 
-        vadTree_.insert(std::move(vad));
+        if (baseAddress == 0)
+            nextFreeAddress_ = targetAddr + alignedSize <= UserSpaceMax
+                ? targetAddr + alignedSize : UserSpaceMin;
         baseAddress = targetAddr;
         return NtStatus::Success;
     }
@@ -1008,18 +1079,23 @@ public:
         uint64_t sectionOffset = 0
     ) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (size == 0) return NtStatus::InvalidParameter;
+        if (size == 0 || size > std::numeric_limits<size_t>::max() - PageMask4KB)
+            return NtStatus::InvalidParameter;
 
         size_t alignedSize = (size + PageMask4KB) & ~PageMask4KB;
         uintptr_t targetAddr = baseAddress;
 
         if (targetAddr == 0) {
-            targetAddr = nextFreeAddress_;
-            nextFreeAddress_ += alignedSize + PageSize4KB;
+            targetAddr = vadTree_.findFreeRange(alignedSize, PageSize4KB, false, nextFreeAddress_, UserSpaceMax);
+            if (!targetAddr)
+                targetAddr = vadTree_.findFreeRange(alignedSize, PageSize4KB, false, UserSpaceMin, UserSpaceMax);
+            if (!targetAddr) return NtStatus::NoMemory;
         } else {
             if (targetAddr & PageMask4KB) return NtStatus::InvalidParameter;
-            if (vadTree_.find(targetAddr)) return NtStatus::Conflict;
         }
+        if (targetAddr < UserSpaceMin || targetAddr > UserSpaceMax ||
+            alignedSize - 1 > UserSpaceMax - targetAddr)
+            return NtStatus::InvalidParameter;
 
         auto vad = std::make_unique<VirtualAddressDescriptor>();
         vad->startingAddress = targetAddr;
@@ -1039,24 +1115,31 @@ public:
         auto& pfnDb = PfnDatabase::get();
         size_t pageOffset = sectionOffset >> PageShift4KB;
         size_t numPages = alignedSize >> PageShift4KB;
+        if (numPages - 1 > std::numeric_limits<size_t>::max() - pageOffset)
+            return NtStatus::InvalidParameter;
+
+        auto* mappedVad = vad.get();
+        if (!vadTree_.insert(std::move(vad))) return NtStatus::Conflict;
 
         for (size_t i = 0; i < numPages; ++i) {
-            uint64_t vpn = vad->startingVpn + i;
+            uint64_t vpn = mappedVad->startingVpn + i;
             auto it = sharedPfns.find(pageOffset + i);
             if (it != sharedPfns.end()) {
                 uint64_t pfn = it->second;
-                vad->physicalPages[vpn] = pfn;
+                mappedVad->physicalPages[vpn] = pfn;
                 pfnDb.referencePage(pfn);
                 pagingEngine_.mapPage(directoryTableBase_, vpn << PageShift4KB, pfn, protect, true);
                 workingSet_.residentPages++;
             }
         }
 
-        workingSet_.commitCharge += vad->commitCharge;
+        workingSet_.commitCharge += mappedVad->commitCharge;
         workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
         workingSet_.peakResidentPages = std::max(workingSet_.peakResidentPages, workingSet_.residentPages);
 
-        vadTree_.insert(std::move(vad));
+        if (baseAddress == 0)
+            nextFreeAddress_ = targetAddr + alignedSize <= UserSpaceMax
+                ? targetAddr + alignedSize : UserSpaceMin;
         baseAddress = targetAddr;
         return NtStatus::Success;
     }

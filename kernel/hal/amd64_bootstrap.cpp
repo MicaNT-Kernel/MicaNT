@@ -3,6 +3,7 @@
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
 #include "micant/shared/win32k_client.h"
+#include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/usermode.hpp"
 
 namespace {
@@ -12,13 +13,13 @@ constexpr uint64_t kWritable = 2;
 constexpr uint64_t kUser = 4;
 constexpr uint64_t kNoExecute = uint64_t{1} << 63;
 constexpr uint64_t kPhysicalMask = 0x000FFFFFFFFFF000ULL;
+constexpr uint64_t kOwnedTable = uint64_t{1} << 9;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
 constexpr uint64_t kUserTebBase = kUserBase + 0x8000;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
+constexpr uint64_t kTestBase = uint64_t{130} << 39;
 constexpr uint64_t kUserStackBase = kUserBase + 4096;
 alignas(4096) uint64_t g_pml4[512]{};
-alignas(4096) uint64_t g_tables[256][512]{};
-size_t g_tableCount{};
 uint64_t g_deviceNext = kDeviceBase;
 bool g_addressSpaceReady{};
 alignas(4096) uint8_t g_userCode[4096]{};
@@ -123,27 +124,115 @@ bool mappedRange(uint64_t address, size_t size, bool user, bool writable,
     }
 }
 
-bool mapPage(uint64_t address, uint64_t physical, uint64_t flags) noexcept {
+bool bootstrapPagingContext() noexcept {
+    // The bootstrap has only its BSP online; no remote TLB shootdown exists.
+    uint64_t flags{}, cr3{};
+    __asm__ __volatile__("pushfq; popq %0; movq %%cr3, %1"
+                         : "=r"(flags), "=r"(cr3) : : "memory");
+    return g_addressSpaceReady && !(flags & (uint64_t{1} << 9)) &&
+           (cr3 & kPhysicalMask) == reinterpret_cast<uint64_t>(g_pml4) &&
+           micant::mm::PfnDatabase::get().getTotalPages() != 0;
+}
+
+void invalidatePage(uint64_t address) noexcept {
+    __asm__ __volatile__("invlpg (%0)" : : "r"(address) : "memory");
+}
+
+bool ownedAddress(uint64_t address, bool user) noexcept {
+    const uint64_t slot = address >> 39;
+    return user ? slot == 128 : slot == 129 || slot == 130;
+}
+
+bool emptyTable(const uint64_t* table) noexcept {
+    for (size_t i = 0; i < 512; ++i) {
+        if (table[i] != 0) return false;
+    }
+    return true;
+}
+
+bool mapPage(uint64_t address, uint64_t physical, uint64_t flags,
+             int failAfter = -1) noexcept {
+    if (!bootstrapPagingContext() || (address & 4095) || (physical & 4095) ||
+        physical > kPhysicalMask || !ownedAddress(address, (flags & kUser) != 0)) {
+        return false;
+    }
+    auto& database = micant::mm::PfnDatabase::get();
+    uint64_t* createdEntries[3]{};
+    uint64_t createdPfns[3]{};
+    size_t createdCount{};
     uint64_t* table = g_pml4;
     for (int shift = 39; shift > 12; shift -= 9) {
         uint64_t& entry = table[(address >> shift) & 511];
-        if ((entry & kPresent) == 0) {
-            if (g_tableCount == sizeof(g_tables) / sizeof(g_tables[0])) {
-                return false;
+        if (entry == 0) {
+            const uint64_t pfn = failAfter == 0 ? 0 : database.allocatePage();
+            if (!pfn) goto rollback;
+            if (failAfter > 0) --failAfter;
+            const uint64_t page = pfn << 12;
+            if (page > kPhysicalMask || !mappedRange(page, 4096, false, true, false) ||
+                walk(reinterpret_cast<uint64_t>(g_pml4), page) != page) {
+                database.freePage(pfn);
+                goto rollback;
             }
-            entry = reinterpret_cast<uint64_t>(g_tables[g_tableCount++]) |
-                    kPresent | kWritable | (flags & kUser);
+            database.zeroPage(pfn);
+            entry = page | kPresent | kWritable | kOwnedTable | (flags & kUser);
+            createdEntries[createdCount] = &entry;
+            createdPfns[createdCount++] = pfn;
         }
-        if (entry & 128) {
-            return false;
+        if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) ||
+            !(entry & kWritable) || ((entry & kUser) != (flags & kUser)) ||
+            (entry & kNoExecute)) {
+            goto rollback;
         }
         table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
     }
-    uint64_t& leaf = table[(address >> 12) & 511];
-    if (leaf & kPresent) {
+    {
+        uint64_t& leaf = table[(address >> 12) & 511];
+        if (leaf != 0) goto rollback;
+        const auto pte = micant::mm::PageTableEntry::create(
+            (physical & kPhysicalMask) >> 12, (flags & kWritable) != 0,
+            (flags & kUser) != 0, (flags & kNoExecute) != 0);
+        leaf = pte.value | (flags & ~(kPresent | kWritable | kUser | kNoExecute));
+        invalidatePage(address);
+        return true;
+    }
+rollback:
+    while (createdCount) {
+        --createdCount;
+        *createdEntries[createdCount] = 0;
+        invalidatePage(address);
+        database.freePage(createdPfns[createdCount]);
+    }
+    return false;
+}
+
+bool unmapPage(uint64_t address, bool user) noexcept {
+    if (!bootstrapPagingContext() || (address & 4095) || !ownedAddress(address, user)) {
         return false;
     }
-    leaf = (physical & kPhysicalMask) | flags | kPresent;
+    uint64_t* parents[3]{};
+    uint64_t* tables[3]{};
+    uint64_t* table = g_pml4;
+    size_t level{};
+    for (int shift = 39; shift > 12; shift -= 9) {
+        uint64_t* entry = &table[(address >> shift) & 511];
+        if (!(*entry & kPresent) || !(*entry & kOwnedTable) || (*entry & 128) ||
+            ((*entry & kUser) != (user ? kUser : 0))) return false;
+        parents[level] = entry;
+        table = reinterpret_cast<uint64_t*>(*entry & kPhysicalMask);
+        tables[level++] = table;
+    }
+    uint64_t& leaf = table[(address >> 12) & 511];
+    if (!(leaf & kPresent)) return false;
+    leaf = 0;
+    invalidatePage(address);
+    auto& database = micant::mm::PfnDatabase::get();
+    while (level && emptyTable(tables[level - 1])) {
+        --level;
+        const uint64_t pfn = (*parents[level] & kPhysicalMask) >> 12;
+        *parents[level] = 0;
+        invalidatePage(address);
+        database.freePage(pfn);
+    }
     return true;
 }
 
@@ -592,6 +681,73 @@ bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept
     return mappedRange(address, size, false, writable, false);
 }
 
+bool verifyBootstrapPageTables() noexcept {
+    if (!bootstrapPagingContext() || g_pml4[130] != 0) return false;
+    auto& database = mm::PfnDatabase::get();
+    const size_t active = database.getActiveCount();
+    const size_t available = database.getFreeCount() + database.getZeroedCount() +
+                             database.getStandbyCount();
+    const uint64_t originalRoot = g_pml4[0];
+    const uint64_t rootAddress = reinterpret_cast<uint64_t>(g_pml4);
+    const uint64_t rootTranslation = walk(rootAddress, rootAddress);
+    if (!rootTranslation || unmapPage(rootAddress & ~uint64_t{4095}, false) ||
+        mapPage(rootAddress & ~uint64_t{4095}, rootAddress, kWritable)) return false;
+    const uint64_t first = database.allocatePage();
+    const uint64_t second = database.allocatePage();
+    if (!first || !second) {
+        if (first) database.freePage(first);
+        if (second) database.freePage(second);
+        return false;
+    }
+    database.zeroPage(first);
+    database.zeroPage(second);
+    auto* firstBytes = reinterpret_cast<volatile uint64_t*>(first << 12);
+    auto* secondBytes = reinterpret_cast<volatile uint64_t*>(second << 12);
+    const bool zeroed = *firstBytes == 0 && firstBytes[511] == 0 &&
+                        *secondBytes == 0 && secondBytes[511] == 0;
+    *firstBytes = 0x1122334455667788ULL;
+    *secondBytes = 0x8877665544332211ULL;
+    bool ok = zeroed;
+    for (int fail = 0; fail < 3; ++fail) {
+        if (mapPage(kTestBase, first << 12, kWritable | kNoExecute, fail) ||
+            g_pml4[130] != 0 || database.getActiveCount() != active + 2) ok = false;
+    }
+    const uint64_t sibling = kTestBase + 4096;
+    const uint64_t branch = kTestBase + (uint64_t{1} << 30);
+    if (!mapPage(kTestBase, first << 12, kWritable | kNoExecute)) ok = false;
+    if (ok) {
+        auto* mapped = reinterpret_cast<volatile uint64_t*>(kTestBase);
+        if (*mapped != *firstBytes || !bootstrapKernelRange(kTestBase, 4096, true) ||
+            bootstrapUserRange(kTestBase, 4096, true) ||
+            mapPage(kTestBase, second << 12, kWritable | kNoExecute)) ok = false;
+        *mapped = 0xA1B2C3D4E5F60718ULL;
+        if (*firstBytes != 0xA1B2C3D4E5F60718ULL) ok = false;
+        for (int fail = 0; fail < 2; ++fail) {
+            if (mapPage(branch, second << 12, kWritable | kNoExecute, fail) ||
+                database.getActiveCount() != active + 5 ||
+                *mapped != *firstBytes) ok = false;
+        }
+        if (!mapPage(branch, second << 12, kWritable | kNoExecute) ||
+            database.getActiveCount() != active + 7 ||
+            !unmapPage(branch, false) || unmapPage(branch, false) ||
+            database.getActiveCount() != active + 5 || *mapped != *firstBytes) ok = false;
+        if (!mapPage(sibling, second << 12, kWritable | kNoExecute) ||
+            database.getActiveCount() != active + 5 ||
+            !unmapPage(kTestBase, false) ||
+            database.getActiveCount() != active + 5 ||
+            !mapPage(kTestBase, second << 12, kWritable | kNoExecute) ||
+            *mapped != *secondBytes) ok = false;
+        if (!unmapPage(kTestBase, false) || !unmapPage(sibling, false)) ok = false;
+    }
+    database.freePage(first);
+    database.freePage(second);
+    return ok && g_pml4[130] == 0 && g_pml4[0] == originalRoot &&
+           walk(rootAddress, rootAddress) == rootTranslation &&
+           database.getActiveCount() == active &&
+           database.getFreeCount() + database.getZeroedCount() +
+               database.getStandbyCount() == available;
+}
+
 bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
                             bool writable, bool executable) noexcept {
     const uint64_t physical = reinterpret_cast<uint64_t>(backing);
@@ -599,9 +755,7 @@ bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
         (physical & 4095) || !physical || address < kUserBase ||
         address >= kUserBase + (uint64_t{1} << 39) ||
         size > kUserBase + (uint64_t{1} << 39) - address ||
-        physical > kPhysicalMask || size - 1 > kPhysicalMask + 4095 - physical ||
-        (size / 4096 + 511) / 512 + 5 >
-            sizeof(g_tables) / sizeof(g_tables[0]) - g_tableCount) {
+        physical > kPhysicalMask || size - 1 > kPhysicalMask + 4095 - physical) {
         return false;
     }
     const uint64_t root = reinterpret_cast<uint64_t>(g_pml4);
@@ -614,7 +768,13 @@ bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
     const uint64_t flags = kUser | (writable ? kWritable : 0) |
                            (executable ? 0 : kNoExecute);
     for (size_t offset = 0; offset < size; offset += 4096) {
-        if (!mapPage(address + offset, physical + offset, flags)) return false;
+        if (!mapPage(address + offset, physical + offset, flags)) {
+            while (offset) {
+                offset -= 4096;
+                (void)unmapPage(address + offset, true);
+            }
+            return false;
+        }
     }
     return true;
 }
@@ -752,6 +912,10 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
         // PWT/PCD avoid caching device registers; no user-accessible MMIO.
         if (!mapPage(start + page, (physical & ~uint64_t{4095}) + page,
                      kWritable | kNoExecute | 0x18)) {
+            while (page) {
+                page -= 4096;
+                (void)unmapPage(start + page, false);
+            }
             return nullptr;
         }
     }
@@ -768,15 +932,24 @@ bool verifyRing3Transition() noexcept {
         if (!mapPage(kUserStackBase + offset,
                      reinterpret_cast<uint64_t>(g_userStack) + offset,
                      kUser | kWritable | kNoExecute)) {
+            while (offset) {
+                offset -= 4096;
+                (void)unmapPage(kUserStackBase + offset, true);
+            }
+            (void)unmapPage(kUserBase, true);
             return false;
         }
     }
-    if (
-        !mapPage(kUserTebBase, reinterpret_cast<uint64_t>(&g_userTebStorage),
-                 kUser | kWritable | kNoExecute) ||
-        !mapPage(kUserTebBase + 4096,
-                 reinterpret_cast<uint64_t>(&g_userTebStorage) + 4096,
+    const bool firstTeb = mapPage(kUserTebBase, reinterpret_cast<uint64_t>(&g_userTebStorage),
+                                  kUser | kWritable | kNoExecute);
+    if (!firstTeb ||
+        !mapPage(kUserTebBase + 4096, reinterpret_cast<uint64_t>(&g_userTebStorage) + 4096,
                  kUser | kWritable | kNoExecute)) {
+        if (firstTeb) (void)unmapPage(kUserTebBase, true);
+        for (size_t offset = 0; offset < sizeof(g_userStack); offset += 4096) {
+            (void)unmapPage(kUserStackBase + offset, true);
+        }
+        (void)unmapPage(kUserBase, true);
         return false;
     }
     g_userTebStorage.teb.self = kUserTebBase;
