@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture — MicaNT Kernel Executive Deep Dive</title>
+  <meta name="description" content="Detailed architectural specification of the MicaNT operating system executive, Object Manager, Security Trinity, PrismX 3D, and USB 3.2 xHCI driver.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT</span>
+      </a>
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown active">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–290 (506/506 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper & fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost command line</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/#crash-screen" class="nav-dropdown-item">
+                <span class="dropdown-icon">🚨</span>
+                <div class="dropdown-text">
+                  <h4>Crash Screen Playground</h4>
+                  <p>Midnight Obsidian, Emerald & Royal themes</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol & parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/about" class="nav-link">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Architecture Hero -->
+  <section class="hero" style="padding: 70px 0 40px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">ISO C++23 Native Executive</div>
+        <div class="badge-pill">Dave Cutler DEC MICA / PRISM Heritage</div>
+        <div class="badge-pill">290 Horizons Implemented</div>
+      </div>
+      <h1>Subsystem <span class="gradient">Architecture</span> Deep Dive</h1>
+      <p class="hero-subtitle">
+        A pure clean-room reimplementation of the Dave Cutler NT operating system model, engineered with modern zero-overhead C++23 abstractions, compile-time type safety, and zero telemetry.
+      </p>
+    </div>
+  </section>
+
+  <!-- Architecture Overview Diagram / Hierarchy -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container">
+      <div class="diag-card" style="border-color: rgba(0, 242, 254, 0.3); background: linear-gradient(180deg, rgba(0, 242, 254, 0.04) 0%, rgba(15, 23, 42, 0.8) 100%);">
+        <h3 style="font-size: 1.4rem; margin-bottom: 8px;">The Sovereign Ring 0 Executive Map</h3>
+        <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 24px;">
+          MicaNT eliminates legacy 16-bit and 32-bit compatibility bloat, focusing exclusively on a pristine AMD64 microkernel-executive hybrid with handle-based object security.
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; font-family: var(--font-mono); font-size: 0.85rem;">
+          <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="color: var(--prism-cyan); font-weight: 700; margin-bottom: 6px;">[USERLAND SUBSYSTEMS]</div>
+            <ul style="list-style: none; color: var(--text-muted); line-height: 1.8;">
+              <li>&bull; Win32 ConHost Desktop (<code>cmd.exe</code>)</li>
+              <li>&bull; Service Control Manager (<code>services.exe</code>)</li>
+              <li>&bull; Local Security Authority (<code>lsass.exe</code>)</li>
+              <li>&bull; Session Manager Subsystem (<code>smss.exe</code>)</li>
+              <li>&bull; Client/Server Runtime (<code>csrss.exe</code>)</li>
+            </ul>
+          </div>
+
+          <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="color: #34d399; font-weight: 700; margin-bottom: 6px;">[SYSTEM SERVICE DISPATCHER]</div>
+            <ul style="list-style: none; color: var(--text-muted); line-height: 1.8;">
+              <li>&bull; AMD64 <code>SYSCALL</code> / <code>SYSRET</code> Traps</li>
+              <li>&bull; Fast System Call MSR Table (0xC0000082)</li>
+              <li>&bull; User-Mode Pointer Probing &amp; ProbeForRead</li>
+              <li>&bull; Structured Exception Handling (SEH)</li>
+              <li>&bull; Asynchronous I/O Completion Ports (IOCP)</li>
+            </ul>
+          </div>
+
+          <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="color: #60a5fa; font-weight: 700; margin-bottom: 6px;">[RING 0 EXECUTIVE CORE]</div>
+            <ul style="list-style: none; color: var(--text-muted); line-height: 1.8;">
+              <li>&bull; Pure Object Manager (<code>ob/</code>)</li>
+              <li>&bull; Process &amp; Thread Scheduler (<code>ps/</code>, <code>ke/</code>)</li>
+              <li>&bull; 4-Level PML4 Virtual Memory (<code>mm/</code>)</li>
+              <li>&bull; TitanCrashDumpEngine (<code>bugcheck/</code>)</li>
+              <li>&bull; Security Reference Monitor (<code>se/</code>)</li>
+            </ul>
+          </div>
+
+          <div style="background: rgba(0, 0, 0, 0.4); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="color: #f59e0b; font-weight: 700; margin-bottom: 6px;">[DEVICE DRIVERS &amp; BUSES]</div>
+            <ul style="list-style: none; color: var(--text-muted); line-height: 1.8;">
+              <li>&bull; USB 3.2 xHCI Host Controller (Horizon 40)</li>
+              <li>&bull; PrismX Direct3D 11/12 &amp; Vulkan ICD</li>
+              <li>&bull; NTFS MFT &amp; FAT32 VFS Drivers</li>
+              <li>&bull; NDIS 6.x &amp; RFC 793 TCP/IP Stack</li>
+              <li>&bull; NVMe / AHCI Storage Controllers</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Detailed Subsystem Pillars -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <h2>Core Subsystem Specifications</h2>
+        <p>Explore the engineering decisions behind each major kernel subsystem.</p>
+      </div>
+
+      <div class="pillars-grid">
+
+        <!-- 1. Horizon 40 xHCI -->
+        <div class="pillar-card featured">
+          <span class="pillar-tag">Horizon 40</span>
+          <div class="pillar-icon">🔌</div>
+          <h3>USB 3.2 xHCI Host Controller &amp; URB Pipeline</h3>
+          <p>
+            MicaNT implements the complete Extensible Host Controller Interface (xHCI 1.2) specification. Features MMIO Capability and Operational register banks, 64-entry Device Context Base Address Array (DCBAA), Command Ring, Event Ring with Event Ring Segment Table (ERST), and per-endpoint Transfer Rings with chained Scatter-Gather Transfer Request Blocks (TRBs). Includes full asynchronous USB Request Block (<code>URB</code>) dispatching and Root Hub PnP enumeration (<code>PCI\VEN_8086&amp;DEV_02ED</code> &rarr; <code>USB\ROOT_HUB30</code>).
+          </p>
+        </div>
+
+        <!-- 2. Object Manager -->
+        <div class="pillar-card">
+          <div class="pillar-icon">⚡</div>
+          <h3>Pure Object Manager (<code>ob/</code>)</h3>
+          <p>
+            Directly inspired by Dave Cutler’s DEC PRISM and Windows NT Object Manager. Provides a unified, hierarchical namespace (<code>\Device</code>, <code>\DosDevices</code>, <code>\KernelObjects</code>, <code>\BaseNamedObjects</code>). Every kernel entity (File, Process, Thread, Mutex, Event, Semaphore, Section) is represented as an Object Header with type descriptors, atomic reference counts, handle table entries, and access mask validations.
+          </p>
+        </div>
+
+        <!-- 3. Security Trinity -->
+        <div class="pillar-card">
+          <div class="pillar-icon">🛡️</div>
+          <h3>Security Trinity (SAM, LSASS, Winlogon)</h3>
+          <p>
+            Clean-room implementation of the sovereign Windows security subsystem:
+            SAM user account database with RFC 1320 MD4 NT-Password hash generation; LSASS process hosting the MSV1_0 authentication package with cryptographically secure NTLM challenge/response verification; and Winlogon secure desktop isolation managing user sessions and primary token synthesis.
+          </p>
+        </div>
+
+        <!-- 4. PrismX Graphics -->
+        <div class="pillar-card">
+          <div class="pillar-icon">🎮</div>
+          <h3>PrismX &amp; Prism3D Graphics Engine</h3>
+          <p>
+            DirectX 11/12 and Vulkan 1.3 presentation engine built without proprietary headers. Implements <code>IDXGIFactory1</code>, <code>IDXGISwapChain</code> (with <code>FLIP_DISCARD</code> presentation models), software barycentric Gouraud triangle rasterizer with Z-buffer depth testing, and WDDM kernel thunking (<code>dxgkrnl.sys</code> / D3DKMT).
+          </p>
+        </div>
+
+        <!-- 5. Filesystems -->
+        <div class="pillar-card">
+          <div class="pillar-icon">💾</div>
+          <h3>NTFS &amp; FAT32 Storage Drivers</h3>
+          <p>
+            Zero-dependency, clean-room filesystem engines: Full 1024-byte NTFS Master File Table (MFT) record parser, non-resident runlist decompressor, multi-extent file reading, and B-Tree index allocation. Paired with a resilient FAT32 cluster chain crawler and Virtual File System (VFS) mount table.
+          </p>
+        </div>
+
+        <!-- 6. NDIS Networking -->
+        <div class="pillar-card">
+          <div class="pillar-icon">🌐</div>
+          <h3>NDIS 6.x &amp; RFC 793 TCP/IP Stack</h3>
+          <p>
+            Dual-stack IPv4 and IPv6 network pipeline implementing ARP resolution, ICMP echo requests/replies, UDP datagram processing, and a full RFC 793 11-state TCP state machine (LISTEN, SYN_SENT, SYN_RECEIVED, ESTABLISHED, FIN_WAIT, CLOSE_WAIT, etc.). Exposes a standard Winsock 2 (<code>ws2_32.dll</code>) userland API.
+          </p>
+        </div>
+
+        <!-- 7. Process & Thread Scheduler -->
+        <div class="pillar-card">
+          <div class="pillar-icon">⏱️</div>
+          <h3>Preemptive Scheduler &amp; Quantum Accounting</h3>
+          <p>
+            Multicore AMD64 scheduler featuring 32 priority levels divided into Real-Time (16–31) and Variable (0–15) classes. Implements round-robin quantum tracking, priority boosting upon I/O completion, inter-processor interrupts (IPI), and low-latency task state segment (TSS) context switching.
+          </p>
+        </div>
+
+        <!-- 8. Titan Crash Executive -->
+        <div class="pillar-card">
+          <div class="pillar-icon">🚨</div>
+          <h3>Titan Crash Dump Engine (BugCheck)</h3>
+          <p>
+            High-reliability crash dump writer that operates at elevated IRQL (<code>HIGH_LEVEL / 0x1F</code>). Bypasses memory paging to write triage minidumps directly to NVMe/AHCI block sectors, captures full <code>CONTEXT64</code> AMD64 register state and unwound stack frames, and presents the multi-theme sovereign crash screen.
+          </p>
+        </div>
+
+        <!-- 9. Service Control Manager -->
+        <div class="pillar-card">
+          <div class="pillar-icon">⚙️</div>
+          <h3>Service Control Manager (SCM)</h3>
+          <p>
+            Clean-room <code>services.exe</code> daemon managing system services, automatic/manual startup dependencies, state transitions (START_PENDING, RUNNING, STOP_PENDING), and shared <code>svchost.exe</code> service host worker isolation via Named Pipe RPC.
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="section" style="background: rgba(15, 23, 42, 0.4); border-top: 1px solid var(--bg-card-border); text-align: center;">
+    <div class="container">
+      <h2>Experience MicaNT</h2>
+      <p style="color: var(--text-muted); max-width: 600px; margin: 12px auto 30px;">
+        Test the graphics pipeline in your browser, try the interactive terminal shell, or explore the complete 290 Horizons chronicle.
+      </p>
+      <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+        <a href="/graphics" class="btn btn-primary" style="padding: 12px 28px;">Explore PrismX 3D &rarr;</a>
+        <a href="/terminal" class="btn btn-secondary" style="padding: 12px 28px;">Launch Interactive Terminal</a>
+        <a href="/roadmap" class="btn btn-secondary" style="padding: 12px 28px;">View Horizons Roadmap</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

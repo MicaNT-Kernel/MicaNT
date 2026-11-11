@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About MicaNT &amp; Barrer Software — Fighting for the Users</title>
+  <meta name="description" content="The story behind MicaNT, Daniel Elliott (@ssfdre38), and Barrer Software. Resurrecting Dave Cutler's 1988 DEC MICA clean-room architecture for digital autonomy.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT</span>
+      </a>
+
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–285 (501/501 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper &amp; fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost command line</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/#crash-screen" class="nav-dropdown-item">
+                <span class="dropdown-icon">🚨</span>
+                <div class="dropdown-text">
+                  <h4>Crash Screen Playground</h4>
+                  <p>Midnight Obsidian, Emerald &amp; Royal themes</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol &amp; parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/about" class="nav-link active">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" style="padding: 70px 0 35px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">🛡️ Sovereign Systems Engineering</div>
+        <div class="badge-pill">Barrer Software &bull; ssfdre38</div>
+        <div class="badge-pill">I Fight for the Users</div>
+      </div>
+      <h1>About MicaNT &amp; <span class="gradient">Barrer Software</span></h1>
+      <blockquote style="max-width: 720px; margin: 18px auto 24px; padding: 12px 20px; border-left: 3px solid var(--prism-cyan); background: rgba(0, 242, 254, 0.05); border-radius: 0 10px 10px 0; font-style: italic; color: #e2e8f0; font-size: 1.15rem;">
+        &ldquo;Shoot for the sky and land on the roof. Shoot for the stars and land on the moon.&rdquo;
+      </blockquote>
+      <p class="hero-subtitle">
+        How a relentless rebellion against modern operating system bloat, spyware, and planned obsolescence became a sovereign bare-metal operating system.
+      </p>
+    </div>
+  </section>
+
+  <!-- Main Narrative -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container" style="max-width: 960px;">
+
+      <!-- Origin & Manifesto Card -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.6rem; margin-bottom: 14px; color: #ffffff;">The Manifesto: Reclaiming Digital Autonomy</h2>
+        <p style="color: var(--text-muted); line-height: 1.85; margin-bottom: 16px;">
+          Somewhere over the past twenty years, the personal computer stopped belonging to the person who bought it.
+        </p>
+        <p style="color: var(--text-muted); line-height: 1.85; margin-bottom: 16px;">
+          Modern mainstream operating systems have devolved into bloated surveillance delivery vehicles. They ship with background telemetries that cannot be disabled, forced updates that overwrite user configurations, ad networks baked directly into taskbars, and memory footprints exceeding <strong>8 gigabytes of RAM just to idle at a desktop</strong>. A computer running on modern consumer hardware spends more computational power analyzing the user than executing the user’s code.
+        </p>
+        <p style="color: var(--text-muted); line-height: 1.85;">
+          <strong>MicaNT was born as an absolute rejection of this paradigm.</strong> It is built on a single, unbending covenant: <em>your hardware belongs to you</em>. No telemetry. No phone-home diagnostics. No forced reboots. An operating system executive that idles in less than 32 megabytes of RAM, boots in milliseconds, and executes every cycle in service of the human sitting in front of the screen.
+        </p>
+      </div>
+
+      <!-- The Architect Card -->
+      <div class="diag-card">
+        <div style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;">
+          <div style="flex: 1; min-width: 300px;">
+            <div style="color: var(--prism-cyan); font-weight: 700; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; margin-bottom: 6px;">The Architect</div>
+            <h2 style="font-size: 1.6rem; margin-bottom: 14px; color: #ffffff;">Daniel Elliott (<span style="color: var(--prism-cyan);">@ssfdre38</span>)</h2>
+            <p style="color: var(--text-muted); line-height: 1.85; margin-bottom: 14px;">
+              I am Daniel Elliott, an independent systems engineer, kernel architect, and founder of <strong>Barrer Software</strong>. My work spans modular operating system internals, high-performance machine learning quantizations, low-level network protocol stacks, and sovereign local-first computing.
+            </p>
+            <p style="color: var(--text-muted); line-height: 1.85; margin-bottom: 14px;">
+              My journey began deep in game modding, low-level reverse engineering, and custom C++/C# engine integrations. I discovered firsthand that when software is stripped of corporate bureaucracy, telemetry hooks, and arbitrary runtime bloat, consumer hardware is capable of astonishing performance.
+            </p>
+            <p style="color: var(--text-muted); line-height: 1.85;">
+              Whether engineering the <strong>G4 Turbo</strong> model family (33,000+ downloads worldwide), developing the <strong>Ash Server</strong> companion ecosystem, or authoring 40 consecutive engineering horizons for MicaNT, the north star remains unchanged: <em>I fight for the users</em>.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- The Dave Cutler Heritage Card -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.6rem; margin-bottom: 14px; color: #ffffff;">The Dave Cutler DEC MICA &amp; PRISM Heritage</h2>
+        <p style="color: var(--text-muted); line-height: 1.85; margin-bottom: 16px;">
+          MicaNT is not a Linux distribution with a theme, nor is it a repackaged hypervisor. It is an independent, clean-room resurrection of <strong>Dave Cutler’s original 1988 DEC MICA &amp; PRISM architecture</strong>—the architectural predecessor to the original Windows NT executive.
+        </p>
+        <p style="color: var(--text-muted); line-height: 1.85; margin-bottom: 16px;">
+          Cutler’s original systems design was arguably the most elegant computing architecture of the late 20th century:
+        </p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 20px 0;">
+          <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="font-weight: 700; color: var(--prism-cyan); margin-bottom: 6px;">The Object Manager (<code>ob/</code>)</div>
+            <div style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6;">
+              A single, handle-based, atomic-counted namespace uniting every file, driver, thread, and physical device under uniform security descriptors.
+            </div>
+          </div>
+          <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="font-weight: 700; color: #34d399; margin-bottom: 6px;">Asynchronous Completion (IOCP)</div>
+            <div style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6;">
+              True non-blocking I/O queues allowing a single thread to drive millions of packet transfers without thread starvation or priority inversion.
+            </div>
+          </div>
+          <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--bg-card-border); padding: 18px; border-radius: 8px;">
+            <div style="font-weight: 700; color: #60a5fa; margin-bottom: 6px;">Structured Exceptions (SEH)</div>
+            <div style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6;">
+              Two-pass exception dispatching with zero-cost table-based unwinding, preserving complete CPU state during unexpected faults.
+            </div>
+          </div>
+        </div>
+        <p style="color: var(--text-muted); line-height: 1.85;">
+          MicaNT takes these pure principles and reimagines them in modern <strong>ISO C++23</strong>—leveraging compile-time type safety, concepts, strict RAII resource lifetime management, and zero legacy 16-bit/32-bit compatibility cruft.
+        </p>
+      </div>
+
+      <!-- The Barrer Software Ecosystem Grid -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.6rem; margin-bottom: 8px; color: #ffffff;">The Barrer Software Sovereign Stack</h2>
+        <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 24px;">
+          MicaNT is the foundational operating system layer of the wider Barrer Software sovereign computing ecosystem:
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px;">
+          <div style="background: rgba(0, 0, 0, 0.35); border: 1px solid var(--bg-card-border); padding: 20px; border-radius: 10px;">
+            <div style="font-size: 1.4rem; margin-bottom: 8px;">🦙</div>
+            <h3 style="font-size: 1.1rem; margin-bottom: 6px; color: #ffffff;">G4 Turbo Model Family</h3>
+            <p style="color: var(--text-muted); font-size: 0.86rem; line-height: 1.6; margin-bottom: 12px;">
+              33,000+ downloads. Highly optimized, non-linear IQ4_XS quants of Google Gemma 4 achieving 51%+ faster local inference on standard consumer CPUs.
+            </p>
+            <a href="https://g4turbo.com" target="_blank" style="color: var(--prism-cyan); font-size: 0.84rem; text-decoration: underline;">g4turbo.com &rarr;</a>
+          </div>
+
+          <div style="background: rgba(0, 0, 0, 0.35); border: 1px solid var(--bg-card-border); padding: 20px; border-radius: 10px;">
+            <div style="font-size: 1.4rem; margin-bottom: 8px;">🤖</div>
+            <h3 style="font-size: 1.1rem; margin-bottom: 6px; color: #ffffff;">Ash Server &amp; Pocket Ash</h3>
+            <p style="color: var(--text-muted); font-size: 0.86rem; line-height: 1.6; margin-bottom: 12px;">
+              Zero-polling, push-streaming autonomous AI companion bot and mobile interface operating entirely across private peer-to-peer mesh networks.
+            </p>
+            <a href="https://ash-forge.com" target="_blank" style="color: var(--prism-cyan); font-size: 0.84rem; text-decoration: underline;">ash-forge.com &rarr;</a>
+          </div>
+
+          <div style="background: rgba(0, 0, 0, 0.35); border: 1px solid var(--bg-card-border); padding: 20px; border-radius: 10px;">
+            <div style="font-size: 1.4rem; margin-bottom: 8px;">🌐</div>
+            <h3 style="font-size: 1.1rem; margin-bottom: 6px; color: #ffffff;">Project Tron</h3>
+            <p style="color: var(--text-muted); font-size: 0.86rem; line-height: 1.6; margin-bottom: 12px;">
+              Decentralized, encrypted peer-to-peer compute grid allowing machines on home networks to share memory and model inference securely.
+            </p>
+            <a href="https://barrersoftware.com" target="_blank" style="color: var(--prism-cyan); font-size: 0.84rem; text-decoration: underline;">barrersoftware.com &rarr;</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connect & Support -->
+      <div class="diag-card" style="text-align: center; padding: 40px;">
+        <h2 style="font-size: 1.6rem; margin-bottom: 12px; color: #ffffff;">Connect With Daniel &amp; The Community</h2>
+        <p style="color: var(--text-muted); max-width: 620px; margin: 0 auto 28px; line-height: 1.7;">
+          All code is open-source under the MIT license. Join our Discord server to talk systems engineering, kernel architecture, and local AI with Daniel and the community:
+        </p>
+
+        <div style="display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;">
+          <a href="https://discord.gg/DCYC2fFQQ6" target="_blank" class="btn btn-primary" style="padding: 12px 24px;">💬 Join Discord Server</a>
+          <a href="https://github.com/ssfdre38" target="_blank" class="btn btn-secondary" style="padding: 12px 24px;">💻 GitHub (@ssfdre38)</a>
+          <a href="https://ko-fi.com/ssfdre38" target="_blank" class="btn btn-kofi" style="padding: 12px 24px;">☕ Support on Ko-fi</a>
+          <a href="https://barrersoftware.com" target="_blank" class="btn btn-secondary" style="padding: 12px 24px;">⬡ Barrer Software</a>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

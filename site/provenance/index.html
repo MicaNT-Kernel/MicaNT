@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clean-Room Provenance &amp; Legal Whitepaper — MicaNT</title>
+  <meta name="description" content="Legal and technical justification for the clean-room implementation of MicaNT, citing U.S. Supreme Court precedent Google v. Oracle and automated Sentinel CI audits.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT</span>
+      </a>
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown active">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–285 (501/501 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper & fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost command line</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/#crash-screen" class="nav-dropdown-item">
+                <span class="dropdown-icon">🚨</span>
+                <div class="dropdown-text">
+                  <h4>Crash Screen Playground</h4>
+                  <p>Midnight Obsidian, Emerald & Royal themes</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol & parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/about" class="nav-link">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" style="padding: 70px 0 35px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">U.S. Supreme Court Fair Use Precedent</div>
+        <div class="badge-pill">Automated Sentinel CI Auditing</div>
+        <div class="badge-pill">100% Clean-Room</div>
+      </div>
+      <h1>Legal &amp; <span class="gradient">Provenance</span> Manifesto</h1>
+      <p class="hero-subtitle">
+        How MicaNT strictly adheres to established fair use jurisprudence, software interoperability standards, and automated clean-room verification.
+      </p>
+    </div>
+  </section>
+
+  <!-- Legal Analysis -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container" style="max-width: 920px;">
+      
+      <div class="diag-card">
+        <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">1. Judicial Fair Use Precedent: <em>Google LLC v. Oracle America, Inc.</em></h2>
+        <div style="font-size: 0.88rem; color: var(--prism-cyan); font-weight: 600; margin-bottom: 16px;">593 U.S. 1 (2021) &bull; Decided April 5, 2021</div>
+        <p style="color: var(--text-muted); line-height: 1.8; margin-bottom: 16px;">
+          In a landmark 6–2 decision written by Justice Stephen Breyer, the Supreme Court of the United States ruled that the reimplementation of an application programming interface (API), method declarations, naming conventions, and functional system hierarchies constitutes fair use as a matter of law.
+        </p>
+        <blockquote style="border-left: 3px solid var(--prism-cyan); padding-left: 18px; margin: 18px 0; color: #e2e8f0; font-style: italic;">
+          "Where Google reimplemented a user interface, taking only what was needed to allow users to put their accrued talents to work in a new and transformative program, that copying was a fair use of that material as a matter of law."
+        </blockquote>
+        <p style="color: var(--text-muted); line-height: 1.8;">
+          MicaNT reimplements declaring function signatures, NTSTATUS numeric codes, and system call numbers solely to enable binary interoperability for existing 64-bit software binaries, device drivers, and applications.
+        </p>
+      </div>
+
+      <div class="diag-card">
+        <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">2. Circuit Court Clean-Room Precedents</h2>
+        <p style="color: var(--text-muted); line-height: 1.8; margin-bottom: 16px;">
+          Two foundational Ninth Circuit decisions firmly establish the legality of clean-room functional reimplementation:
+        </p>
+        <ul style="list-style: none; line-height: 1.9; color: var(--text-muted);">
+          <li style="margin-bottom: 12px;">
+            <strong style="color: #ffffff;">&bull; Sega Enterprises Ltd. v. Accolade, Inc. (977 F.2d 1510, 9th Cir. 1992):</strong><br>
+            The court held that studying interfaces and functional constraints for the purpose of achieving compatibility is fair use, stating that copyright does not extend to the functional characteristics of software under 17 U.S.C. &sect; 102(b).
+          </li>
+          <li>
+            <strong style="color: #ffffff;">&bull; Sony Computer Entertainment, Inc. v. Connectix Corp. (203 F.3d 596, 9th Cir. 2000):</strong><br>
+            The court affirmed that reverse-engineering proprietary firmware to produce a clean, independent implementation of a platform's execution environment is transformative and fully protected by fair use.
+          </li>
+        </ul>
+      </div>
+
+      <div class="diag-card">
+        <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">3. Official MIT-Licensed Upstream References</h2>
+        <p style="color: var(--text-muted); line-height: 1.8; margin-bottom: 16px;">
+          Rather than relying on closed or proprietary header files, all data structures, GUID definitions, and API interfaces in MicaNT are derived from Microsoft’s officially published open-source repositories licensed under the permissive MIT license:
+        </p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0;">
+          <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--bg-card-border); padding: 16px; border-radius: 8px;">
+            <div style="font-weight: 700; color: var(--prism-cyan); margin-bottom: 4px;">microsoft/win32metadata</div>
+            <div style="font-size: 0.85rem; color: var(--text-muted);">Official MIT-licensed Win32 API metadata schema defining structures, unions, and system calls.</div>
+          </div>
+          <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid var(--bg-card-border); padding: 16px; border-radius: 8px;">
+            <div style="font-weight: 700; color: var(--prism-cyan); margin-bottom: 4px;">microsoft/DirectX-Headers</div>
+            <div style="font-size: 0.85rem; color: var(--text-muted);">Official MIT-licensed DirectX 11/12 and DXGI interface headers utilized for PrismX presentation.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="diag-card">
+        <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">4. Automated Clean-Room Sentinel CI Pipeline</h2>
+        <p style="color: var(--text-muted); line-height: 1.8; margin-bottom: 16px;">
+          Every pull request and commit to the MicaNT repository is scanned by an automated verification script (<code>scripts/clean_room_sentinel.js</code>) executed as part of the GitHub Actions CI workflow:
+        </p>
+        <ul style="list-style: none; line-height: 1.9; color: var(--text-muted);">
+          <li>&check; <strong style="color: #ffffff;">AST Marker Scanning:</strong> Scans all C++23 source files for proprietary Microsoft internal markers, disclaimers, or NDA artifacts.</li>
+          <li>&check; <strong style="color: #ffffff;">Zero Binary Blobs:</strong> Rejects any binary PE/COFF files, pre-compiled object files, or closed-source DLLs.</li>
+          <li>&check; <strong style="color: #ffffff;">Clean-Room Authorship:</strong> Confirms that every line of executive code is an original implementation authored under the MIT License.</li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MicaNT Kernel Stop Code Diagnostic Engine</title>
+  <meta name="description" content="Official diagnostic symbol resolution, parameter definitions, and crash dump analysis for MicaNT operating system stop codes.">
+  <link rel="stylesheet" href="../../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT <span style="font-size: 0.95rem; font-weight: 500; color: var(--prism-cyan); margin-left: 6px;">/ Diagnostics</span></span>
+      </a>
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–285 (501/501 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper & fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown active">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost command line</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/#crash-screen" class="nav-dropdown-item">
+                <span class="dropdown-icon">🚨</span>
+                <div class="dropdown-text">
+                  <h4>Crash Screen Playground</h4>
+                  <p>Midnight Obsidian, Emerald & Royal themes</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol & parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/about" class="nav-link">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Diagnostic Hero -->
+  <section class="hero" style="padding: 60px 0 30px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">Sovereign Crash Telemetry</div>
+        <div class="badge-pill">Zero Data Telemetry</div>
+        <div class="badge-pill">KD64 / WinDbg Symbols</div>
+      </div>
+      <h1>Kernel <span class="gradient">Stop Code</span> Diagnostic Portal</h1>
+      <p class="hero-subtitle">
+        Official reference for MicaNT BugCheck stop codes, parameter registers (P1&ndash;P4), culprit driver triage, and minidump analysis.
+      </p>
+
+      <div class="stopcode-search-box">
+        <input type="text" id="diag-search" class="stopcode-input" placeholder="Search by hex (e.g. 0x7E, 0xEF) or name (e.g. THREAD, IRQL)..." autofocus />
+      </div>
+    </div>
+  </section>
+
+  <!-- Diagnostic Content -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container" id="diagnostic-results">
+      <!-- Injected dynamically via JS or rendered default -->
+    </div>
+  </section>
+
+  <!-- Troubleshooting & Minidump Guide -->
+  <section class="section" style="background: rgba(15, 23, 42, 0.4); border-top: 1px solid var(--bg-card-border); border-bottom: 1px solid var(--bg-card-border);">
+    <div class="container">
+      <div class="section-header">
+        <h2>Sovereign Crash Dump Analysis</h2>
+        <p>How to inspect triage memory dumps generated by MicaNT’s TitanCrashDumpEngine.</p>
+      </div>
+
+      <div class="pillars-grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+        <div class="pillar-card">
+          <div class="pillar-icon">📂</div>
+          <h3>Minidump Storage Location</h3>
+          <p>Crash dumps are written to <code>\DosDevices\C:\Windows\Minidump\Minidump_YYYYMMDD_HHMMSS.dmp</code> (or NVMe block sector 0x1000 in fallback halts). Size is restricted to 256KB triage buffers to prevent stalling.</p>
+        </div>
+
+        <div class="pillar-card">
+          <div class="pillar-icon">🔍</div>
+          <h3>WinDbg / KD64 Commands</h3>
+          <p>Open the triage dump in standard WinDbg or KD64 and run:
+          <code>!analyze -v</code> to parse the <code>DUMP_HEADER64</code>, <code>r</code> to examine AMD64 register context, and <code>kn</code> to inspect the unwound callstack.</p>
+        </div>
+
+        <div class="pillar-card">
+          <div class="pillar-icon">🎨</div>
+          <h3>Customizing Crash Screen Theme</h3>
+          <p>To change the crash screen color palette across your system:
+          <code>reg.exe add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl /v CrashScreenTheme /t REG_DWORD /d 0</code> (0 = Midnight Obsidian, 1 = Emerald Prism, 2 = Royal Navy).</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+  <!-- Stop Code Database and Script -->
+  <script>
+    const stopCodes = [
+      {
+        code: "0x0000007E",
+        alias: "0x7E",
+        name: "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED",
+        subsystem: "Executive / Threading / I/O Pipeline",
+        severity: "Fatal Kernel Halt",
+        summary: "A system thread generated an exception that the error handler did not catch. Often occurs in kernel drivers during asynchronous I/O completion or interrupt servicing.",
+        params: [
+          { name: "Parameter 1", desc: "The exception code that was not handled (e.g. 0xC0000005 for STATUS_ACCESS_VIOLATION)." },
+          { name: "Parameter 2", desc: "The virtual address at which the exception occurred (RIP register)." },
+          { name: "Parameter 3", desc: "The address of the Exception Record (EXCEPTION_RECORD64)." },
+          { name: "Parameter 4", desc: "The address of the Context Record (CONTEXT64)." }
+        ],
+        triage: "Check Parameter 1. If 0xC0000005, a driver attempted an invalid memory access. Check Parameter 2 in the symbol map to identify the offending driver function (e.g., xhci.sys!XhciSubmitTransferRingTrb). Inspect CR2 for the target unmapped address.",
+        culprits: "xhci.sys (USB 3.2 Host Controller), prismx.sys (GPU miniport), ntfs.sys (filesystem driver)."
+      },
+      {
+        code: "0x000000EF",
+        alias: "0xEF",
+        name: "CRITICAL_PROCESS_DIED",
+        subsystem: "Process Manager / Core Subsystems",
+        severity: "Fatal System Integrity Halt",
+        summary: "A critical system process whose termination violates system integrity has unexpectedly died (e.g., csrss.exe, wininit.exe, services.exe, lsass.exe).",
+        params: [
+          { name: "Parameter 1", desc: "Kernel pointer to the EPROCESS object of the process that terminated." },
+          { name: "Parameter 2", desc: "Reserved (Process termination reason flags)." },
+          { name: "Parameter 3", desc: "Reserved (Thread object pointer that triggered termination)." },
+          { name: "Parameter 4", desc: "Exit status code returned by the dying process." }
+        ],
+        triage: "Inspect Parameter 1 using !process in KD64 to determine which binary terminated. If csrss.exe or lsass.exe terminated with 0xC0000005, verify memory mapping and RPC Named Pipe connectivity.",
+        culprits: "csrss.exe, wininit.exe, services.exe, lsass.exe, smss.exe."
+      },
+      {
+        code: "0x0000003B",
+        alias: "0x3B",
+        name: "SYSTEM_SERVICE_EXCEPTION",
+        subsystem: "System Call Dispatcher / Win32k",
+        severity: "Fatal Kernel Dispatch Halt",
+        summary: "An unhandled exception occurred while executing routine transition code from user-mode to kernel-mode (system call dispatch). Common in GDI/User window manager (win32kbase.sys).",
+        params: [
+          { name: "Parameter 1", desc: "The exception code that caused the bug check (e.g. 0xC0000005)." },
+          { name: "Parameter 2", desc: "The virtual address of the instruction that caused the exception." },
+          { name: "Parameter 3", desc: "The virtual address of the CONTEXT record for the thread." },
+          { name: "Parameter 4", desc: "Reserved (0x0000000000000000)." }
+        ],
+        triage: "Examine Parameter 2 instruction pointer. In MicaNT, this frequently indicates a corrupt GDI handle table lookup or unvalidated user-mode pointer passed to NtGdiBitBltInternal without probe.",
+        culprits: "win32kbase.sys, win32kfull.sys, ntoskrnl.exe."
+      },
+      {
+        code: "0x00000050",
+        alias: "0x50",
+        name: "PAGE_FAULT_IN_NONPAGED_AREA",
+        subsystem: "Memory Manager (Mm) / VFS",
+        severity: "Fatal Memory Subsystem Halt",
+        summary: "Invalid system memory was referenced. Memory cannot be protected at this address or paging is prohibited (e.g. non-paged pool corruption or invalid pointer dereference).",
+        params: [
+          { name: "Parameter 1", desc: "Virtual memory address that was referenced and caused the fault." },
+          { name: "Parameter 2", desc: "Access type: 0 = Read, 1 = Write, 8 = Execute." },
+          { name: "Parameter 3", desc: "Virtual address of the instruction that referenced memory (RIP)." },
+          { name: "Parameter 4", desc: "Reserved fault subtype." }
+        ],
+        triage: "Verify if Parameter 1 is near zero (null pointer dereference) or an invalid kernel virtual address. If Parameter 2 is 0 (read) and Parameter 3 is inside ntfs.sys, inspect MFT record alignment.",
+        culprits: "ntfs.sys, fastfat.sys, mm.sys, driver pool allocations."
+      },
+      {
+        code: "0x0000001E",
+        alias: "0x1E",
+        name: "KMODE_EXCEPTION_NOT_HANDLED",
+        subsystem: "Core Kernel Traps / Architecture",
+        severity: "Fatal Hardware/Trap Halt",
+        summary: "A kernel-mode program generated an exception that the error handler did not catch. Indicates a bug in kernel-mode code or hardware interrupt service routine.",
+        params: [
+          { name: "Parameter 1", desc: "The exception code that was not handled (e.g. 0xC0000005)." },
+          { name: "Parameter 2", desc: "The virtual address at which the exception occurred." },
+          { name: "Parameter 3", desc: "Parameter 0 of the exception." },
+          { name: "Parameter 4", desc: "Parameter 1 of the exception." }
+        ],
+        triage: "Locate the instruction address in Parameter 2. Unwind the stack trace to determine if an invalid IRQL was raised or an unchecked buffer pointer was passed to NDIS / TCP/IP stack.",
+        culprits: "ndis.sys, tcpip.sys, hal.sys."
+      },
+      {
+        code: "0x000000D1",
+        alias: "0xD1",
+        name: "DRIVER_IRQL_NOT_LESS_OR_EQUAL",
+        subsystem: "Interrupt Architecture / DPC Pipeline",
+        severity: "Fatal IRQL Violation Halt",
+        summary: "A kernel-mode driver attempted to access pageable memory at a process IRQL that was too high (DISPATCH_LEVEL or above). Page faults cannot be handled at elevated IRQL.",
+        params: [
+          { name: "Parameter 1", desc: "Memory referenced by the driver." },
+          { name: "Parameter 2", desc: "IRQL at the time of the fault (e.g., 2 = DISPATCH_LEVEL)." },
+          { name: "Parameter 3", desc: "Access type: 0 = Read, 1 = Write, 8 = Execute." },
+          { name: "Parameter 4", desc: "Address of the instruction that referenced memory." }
+        ],
+        triage: "Parameter 2 shows the execution IRQL. If >= 2 (DISPATCH_LEVEL), the driver must only access NonPagedPool. Check if prismx.sys or xhci.sys DPC routine accessed paged data structures.",
+        culprits: "prismx.sys (GPU miniport), xhci.sys, ndis.sys."
+      },
+      {
+        code: "0x00000133",
+        alias: "0x133",
+        name: "DPC_WATCHDOG_VIOLATION",
+        subsystem: "Timer & DPC Watchdog (Ke/Hal)",
+        severity: "Fatal Watchdog Timeout Halt",
+        summary: "The DPC watchdog detected a single long-running deferred procedure call (DPC) or that the system spent an extended period of time at DISPATCH_LEVEL or above.",
+        params: [
+          { name: "Parameter 1", desc: "0 = Single DPC timeout, 1 = Cumulative DPC threshold exceeded." },
+          { name: "Parameter 2", desc: "DPC time-out interval in clock ticks." },
+          { name: "Parameter 3", desc: "Number of clock ticks spent in DPC routine." },
+          { name: "Parameter 4", desc: "Reserved or DPC routine pointer." }
+        ],
+        triage: "A hardware device driver held a spinlock or looped continuously in an ISR/DPC. Inspect Parameter 4 to identify which driver loop stalled the CPU core.",
+        culprits: "hal.sys, storport.sys, xhci.sys."
+      },
+      {
+        code: "0x00000139",
+        alias: "0x139",
+        name: "KERNEL_SECURITY_CHECK_FAILURE",
+        subsystem: "Security / FastFail (KiFastFailDispatch)",
+        severity: "Fatal Integrity Violation",
+        summary: "The kernel detected the corruption of a critical data structure (e.g., doubly-linked list corruption via LIST_ENTRY check failure, stack buffer overrun, or CFG violation).",
+        params: [
+          { name: "Parameter 1", desc: "Subcode specifying the type of security check failure (3 = Corrupt LIST_ENTRY)." },
+          { name: "Parameter 2", desc: "Address of the context record." },
+          { name: "Parameter 3", desc: "Address of the trap frame." },
+          { name: "Parameter 4", desc: "Subcode-specific diagnostic parameter." }
+        ],
+        triage: "Subcode 3 indicates safe unlinking detected Flink/Blink tampering in an active executive list (e.g. process thread queue or IRP queue). Check recent pool writes for buffer overrun.",
+        culprits: "ntoskrnl.exe, pool memory corruption, unauthorized memory overwrite."
+      },
+      {
+        code: "0x0000007B",
+        alias: "0x7B",
+        name: "INACCESSIBLE_BOOT_DEVICE",
+        subsystem: "Storage / Boot Phase / VFS",
+        severity: "Fatal Boot Pipeline Halt",
+        summary: "During I/O system initialization, the boot device driver failed to initialize the boot device or the file system that reads the boot device failed to recognize the data.",
+        params: [
+          { name: "Parameter 1", desc: "Pointer to the DEVICE_OBJECT of the boot device." },
+          { name: "Parameter 2", desc: "Pointer to the UNICODE_STRING of the boot path (or NTSTATUS)." },
+          { name: "Parameter 3", desc: "Reserved." },
+          { name: "Parameter 4", desc: "Reserved." }
+        ],
+        triage: "Verify AHCI/NVMe controller driver binding and FAT32/NTFS volume partition GUID tables. Ensure the system partition UUID matches the BCD / UEFI loader device path.",
+        culprits: "nvme.sys, ahci.sys, fastfat.sys, vfs.hpp."
+      },
+      {
+        code: "0x0000000A",
+        alias: "0xA",
+        name: "IRQL_NOT_LESS_OR_EQUAL",
+        subsystem: "Interrupt Architecture / Paging",
+        severity: "Fatal IRQL Page Fault",
+        summary: "An attempt was made to access a pageable (or invalid) address at an interrupt request level (IRQL) that is too high.",
+        params: [
+          { name: "Parameter 1", desc: "Memory referenced." },
+          { name: "Parameter 2", desc: "IRQL that requested the access." },
+          { name: "Parameter 3", desc: "Type of access: 0 = Read, 1 = Write, 8 = Execute." },
+          { name: "Parameter 4", desc: "Address of instruction that referenced memory." }
+        ],
+        triage: "Identify the driver associated with Parameter 4. Verify whether an interrupt handler or timer callback attempted to access paged pool memory.",
+        culprits: "device drivers, network miniports, storage drivers."
+      },
+      {
+        code: "0x000000C2",
+        alias: "0xC2",
+        name: "BAD_POOL_CALLER",
+        subsystem: "Memory Manager Pool Allocator (Ex/Mm)",
+        severity: "Fatal Pool Corruption Halt",
+        summary: "The current thread is making a bad pool request (e.g. freeing pool that was already freed, freeing with incorrect pool tag, or allocating zero bytes).",
+        params: [
+          { name: "Parameter 1", desc: "Pool issue subtype (e.g. 0x07 = Attempt to free already freed pool)." },
+          { name: "Parameter 2", desc: "Pool address being manipulated." },
+          { name: "Parameter 3", desc: "Pool tag or pool allocation size." },
+          { name: "Parameter 4", desc: "Pool header contents." }
+        ],
+        triage: "Inspect Parameter 1 subcode. In MicaNT, check ExFreePoolWithTag calls across recent driver additions to confirm proper pool ownership.",
+        culprits: "kernel drivers, custom miniports."
+      }
+    ];
+
+    const resultsContainer = document.getElementById("diagnostic-results");
+    const searchInput = document.getElementById("diag-search");
+
+    function renderStopCodes(filterText = "") {
+      const q = filterText.trim().toLowerCase();
+      const filtered = stopCodes.filter(item => {
+        if (!q) return true;
+        return item.code.toLowerCase().includes(q) ||
+               item.alias.toLowerCase().includes(q) ||
+               item.name.toLowerCase().includes(q) ||
+               item.subsystem.toLowerCase().includes(q) ||
+               item.summary.toLowerCase().includes(q);
+      });
+
+      if (filtered.length === 0) {
+        resultsContainer.innerHTML = `
+          <div class="diag-card" style="text-align: center; padding: 48px;">
+            <h3 style="color: var(--text-muted); margin-bottom: 8px;">No stop codes found matching "${filterText}"</h3>
+            <p style="color: var(--text-dim); font-size: 0.9rem;">Try searching for <code>0x7E</code>, <code>0xEF</code>, <code>0x3B</code>, <code>PAGE_FAULT</code>, or <code>IRQL</code>.</p>
+          </div>
+        `;
+        return;
+      }
+
+      resultsContainer.innerHTML = filtered.map(item => `
+        <div class="diag-card" id="code-${item.alias}">
+          <div class="diag-header">
+            <div>
+              <h2 style="font-size: 1.35rem; margin-bottom: 4px;">${item.name}</h2>
+              <div style="font-size: 0.88rem; color: var(--text-dim);">
+                Subsystem: <strong style="color: var(--text-muted);">${item.subsystem}</strong> &bull; Severity: <span style="color: #f16061;">${item.severity}</span>
+              </div>
+            </div>
+            <div class="diag-code-pill">${item.code}</div>
+          </div>
+
+          <p style="margin-bottom: 16px; font-size: 0.95rem; color: var(--text-muted);">${item.summary}</p>
+
+          <h4 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-top: 18px;">BugCheck Parameters</h4>
+          <table class="diag-param-table">
+            <thead>
+              <tr>
+                <th>Register</th>
+                <th>Diagnostic Meaning &amp; Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${item.params.map(p => `
+                <tr>
+                  <td>${p.name}</td>
+                  <td>${p.desc}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <div style="background: rgba(0, 0, 0, 0.25); border-left: 3px solid var(--prism-cyan); padding: 12px 16px; border-radius: 4px; margin: 16px 0; font-size: 0.88rem;">
+            <strong style="color: var(--prism-cyan);">Triage Guide:</strong> ${item.triage}
+          </div>
+
+          <div style="font-size: 0.84rem; color: var(--text-dim);">
+            Common Culprit Drivers: <span style="color: var(--text-muted); font-family: var(--font-mono);">${item.culprits}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Auto-search via URL query param (?code=0x7E or ?code=7E)
+    const urlParams = new URLSearchParams(window.location.search);
+    const codeQuery = urlParams.get("code");
+    if (codeQuery) {
+      searchInput.value = codeQuery;
+      renderStopCodes(codeQuery);
+    } else {
+      renderStopCodes();
+    }
+
+    searchInput.addEventListener("input", (e) => {
+      renderStopCodes(e.target.value);
+    });
+  </script>
+
+</body>
+</html>

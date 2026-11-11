@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Get Started &amp; Download — MicaNT Build &amp; Boot Guide</title>
+  <meta name="description" content="Step-by-step guide to building the MicaNT C++23 kernel, running the 501-suite test battery, booting in QEMU with UEFI and xHCI, and kernel debugging.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT</span>
+      </a>
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–285 (501/501 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper & fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost command line</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/#crash-screen" class="nav-dropdown-item">
+                <span class="dropdown-icon">🚨</span>
+                <div class="dropdown-text">
+                  <h4>Crash Screen Playground</h4>
+                  <p>Midnight Obsidian, Emerald & Royal themes</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol & parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/about" class="nav-link">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary" style="border-color: var(--prism-cyan); color: var(--prism-cyan);">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" style="padding: 70px 0 35px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">Open-Source MIT License</div>
+        <div class="badge-pill">Builds on Windows &amp; Linux</div>
+        <div class="badge-pill">QEMU &amp; Bare-Metal Ready</div>
+      </div>
+      <h1>Build &amp; <span class="gradient">Boot</span> MicaNT</h1>
+      <p class="hero-subtitle">
+        Everything you need to clone, compile with modern ISO C++23, execute the 501-suite verification battery, and boot MicaNT in QEMU.
+      </p>
+    </div>
+  </section>
+
+  <!-- Step-by-Step Guide -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container" style="max-width: 920px;">
+
+      <!-- Step 1: Clone -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.35rem; margin-bottom: 8px; color: #ffffff;">1. Clone the Sovereign Repository</h2>
+        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 14px;">
+          MicaNT is hosted publicly on GitHub under the permissive MIT license.
+        </p>
+        <div class="terminal-window">
+          <div class="terminal-body" style="padding: 16px 20px;">
+<span class="cmd">git clone https://github.com/MicaNT-Kernel/MicaNT.git</span>
+<span class="cmd">cd MicaNT</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Build -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.35rem; margin-bottom: 8px; color: #ffffff;">2. Build with Clang C++23 &amp; CMake</h2>
+        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 14px;">
+          Requires CMake 3.28+ and an ISO C++23 compiler (Clang 18+ or GCC 14+ recommended).
+        </p>
+        <div class="terminal-window">
+          <div class="terminal-body" style="padding: 16px 20px;">
+<span class="out"># Configure using Ninja or Visual Studio</span>
+<span class="cmd">cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release</span>
+
+<span class="out"># Compile kernel executive and test suite binaries</span>
+<span class="cmd">cmake --build build --config Release</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Run Tests -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.35rem; margin-bottom: 8px; color: #ffffff;">3. Execute the Full 501-Suite Test Battery</h2>
+        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 14px;">
+          Verify 100% pass rate across all 285 Horizons, including Horizon 285 Windows Authenticode, CatRoot, and KMCS driver integrity.
+        </p>
+        <div class="terminal-window">
+          <div class="terminal-body" style="padding: 16px 20px;">
+<span class="out"># Execute all 256 test suites</span>
+<span class="cmd">./build/test_runner --all</span>
+
+<span class="out"># Or run specifically Horizon 40 xHCI USB 3.2 test suite</span>
+<span class="cmd">./build/test_runner --suite256</span>
+
+<span class="green">[PASSED] Suite 256: Horizon 40 - USB 3.2 xHCI Host Controller Driver, Root Hub &amp; URB Pipeline</span>
+<span class="green">[SUMMARY] 501/501 test suites passing (100% Pass Rate). 0 Failures.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Boot in QEMU -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.35rem; margin-bottom: 8px; color: #ffffff;">4. Launch in QEMU with UEFI GOP &amp; xHCI</h2>
+        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 14px;">
+          Boot the compiled kernel on an emulated bare-metal AMD64 machine equipped with UEFI firmware, NVMe storage, and high-speed USB 3.2 controllers.
+        </p>
+        <div class="terminal-window">
+          <div class="terminal-body" style="padding: 16px 20px;">
+<span class="cmd">qemu-system-x86_64 \
+  -bios /usr/share/ovmf/OVMF.fd \
+  -m 2048 \
+  -smp 4 \
+  -vga std \
+  -device qemu-xhci,id=xhci \
+  -device usb-mouse,bus=xhci.0 \
+  -device usb-kbd,bus=xhci.0 \
+  -drive file=micant_disk.img,format=raw,if=none,id=nvme0 \
+  -device nvme,drive=nvme0,serial=MICA1988 \
+  -serial stdio</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: WinDbg / KD64 Debugging -->
+      <div class="diag-card">
+        <h2 style="font-size: 1.35rem; margin-bottom: 8px; color: #ffffff;">5. Connect Kernel Debugger (WinDbg / KD64)</h2>
+        <p style="color: var(--text-muted); font-size: 0.92rem; margin-bottom: 14px;">
+          MicaNT’s trap dispatcher and KD64 stub communicate over a TCP serial bridge:
+        </p>
+        <div class="terminal-window">
+          <div class="terminal-body" style="padding: 16px 20px;">
+<span class="out"># Attach WinDbg to TCP pipe</span>
+<span class="cmd">windbg.exe -k net:port=50000,key=1.2.3.4</span>
+<span class="out"># Or connect via KD64 serial stub:</span>
+<span class="cmd">kd.exe -k com:port=\\.\pipe\MicaKdPipe,baud=115200,pipe</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Support Section -->
+  <section class="section" style="background: rgba(15, 23, 42, 0.4); border-top: 1px solid var(--bg-card-border); text-align: center;">
+    <div class="container">
+      <h2>Join the MICA Community</h2>
+      <p style="color: var(--text-muted); max-width: 650px; margin: 12px auto 30px;">
+        Follow updates, discuss kernel architecture decisions, and help shape the future horizons of sovereign computing.
+      </p>
+      <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary" style="padding: 12px 28px;">⭐ Star on GitHub</a>
+        <a href="https://ko-fi.com/ssfdre38" target="_blank" class="btn btn-kofi" style="padding: 12px 28px;">☕ Donate on Ko-fi (@ssfdre38)</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

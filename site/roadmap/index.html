@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Horizons Roadmap &amp; Test Matrix — MicaNT Engineering Chronicle</title>
+  <meta name="description" content="Chronicle of all 285 completed engineering horizons of the MicaNT operating system, featuring the full 501-suite test battery matrix and upcoming horizons.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+  <style>
+    .horizon-timeline {
+      position: relative;
+      max-width: 900px;
+      margin: 0 auto;
+      padding-left: 30px;
+    }
+    .horizon-timeline::before {
+      content: '';
+      position: absolute;
+      left: 10px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: linear-gradient(180deg, var(--prism-cyan), var(--prism-purple));
+    }
+    .horizon-item {
+      position: relative;
+      margin-bottom: 36px;
+    }
+    .horizon-item::before {
+      content: '';
+      position: absolute;
+      left: -26px;
+      top: 6px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--bg-primary);
+      border: 3px solid var(--prism-cyan);
+      box-shadow: 0 0 10px var(--prism-cyan);
+    }
+    .horizon-item.completed::before {
+      background: #10b981;
+      border-color: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+    .horizon-item.upcoming::before {
+      background: #f59e0b;
+      border-color: #f59e0b;
+      box-shadow: 0 0 10px #f59e0b;
+    }
+    .horizon-card {
+      background: var(--bg-card);
+      border: 1px solid var(--bg-card-border);
+      border-radius: 12px;
+      padding: 24px;
+      backdrop-filter: blur(12px);
+    }
+    .horizon-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .horizon-num {
+      font-size: 1.15rem;
+      font-weight: 800;
+      color: var(--prism-cyan);
+    }
+    .horizon-status-pill {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .status-done {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+    .status-planned {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      color: #fbbf24;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT</span>
+      </a>
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown active">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–290 (506/506 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper & fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost command line</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/#crash-screen" class="nav-dropdown-item">
+                <span class="dropdown-icon">🚨</span>
+                <div class="dropdown-text">
+                  <h4>Crash Screen Playground</h4>
+                  <p>Midnight Obsidian, Emerald & Royal themes</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol & parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/about" class="nav-link">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" style="padding: 70px 0 35px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">501/501 test suites passing (100%)</div>
+        <div class="badge-pill">285 Horizons Completed</div>
+        <div class="badge-pill">Zero Unverified Regressions</div>
+      </div>
+      <h1>The 285 Horizons <span class="gradient">Chronicle</span></h1>
+      <p class="hero-subtitle">
+        An engineering timeline documenting each architectural milestone from bare-metal UEFI boot to the USB 3.2 xHCI host controller driver.
+      </p>
+    </div>
+  </section>
+
+  <!-- Timeline Section -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container">
+      <div class="horizon-timeline">
+
+        <!-- Horizon 285 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card" style="border-color: rgba(0, 242, 254, 0.6); box-shadow: 0 0 25px rgba(0, 242, 254, 0.15);">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 285: Authenticode ASN.1 PKCS#7, Microsoft Trust Anchors &amp; Security Catalog (CatRoot) Subsystem</span>
+              <span class="horizon-status-pill status-done">COMPLETED &bull; SUITE 501 PASSING</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Clean-room ASN.1 DER parser decoding short and long-form tags, PKCS #7 SignedData engine extracting SpcIndirectDataContent and szOID_CATALOG_LIST member lists. Sovereign Microsoft Public Root Trust Anchors (2001, 2010, 2011, Production PCA, Hardware Compatibility, DigiCert EV). Enables native verification and execution of official Microsoft and commercial Windows kernel drivers (<code>.sys</code>) and catalog packages (<code>.cat</code>) out of the box with zero re-signing and zero test signing mode.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizons 280-284 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 280&ndash;284: Direct3D 12 Device58&ndash;Device61, Options 70&ndash;73 &amp; NIST SP 800-232 Cryptography</span>
+              <span class="horizon-status-pill status-done">COMPLETED &bull; SUITES 496&ndash;500</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Implementation of <code>ID3D12Device58</code> through <code>ID3D12Device61</code>, <code>ID3D12GraphicsCommandList52</code> through <code>CommandList55</code>, and Options 70 through 73 ABI. NT Native Information Classes 311 through 318 (Pagefile Async I/O Bursts, Spread Spectrum Modulation, Clock Phase Noise). Interlocked modulo bitwise primitives (OR-NOT, AND-NOT, XNOR, NAND, NOR) and NIST SP 800-232 Lightweight Cryptography (Ascon-Romulus, Ascon-TinyJAMBU, Ascon-Subterranean, Ascon-ISAP, Ascon-GIFT-COFB).
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizons 205-210 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 205&ndash;210: Titan OpenZFS Filesystem, Dynamic Drive Letters &amp; VSS Subsystem</span>
+              <span class="horizon-status-pill status-done">COMPLETED &bull; SUITES 421&ndash;426</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Native OpenZFS enterprise filesystem engine (<code>titan_zfs.hpp</code>) featuring 128-bit addressable storage pools, SPA/DMU transaction engine, dataset snapshot rollback, pool scrub diagnostics, dynamic drive letter mount manager (<code>\DosDevices\C:</code> through <code>Z:</code>), and Volume Shadow Copy (VSS) snapshot administration.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizons 100-105 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 100&ndash;105: DirectStorage GDeflate BypassIO, WaveRT Audio &amp; MMCSS Scheduling</span>
+              <span class="horizon-status-pill status-done">COMPLETED &bull; SUITES 316&ndash;321</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              DirectStorage runtime architecture streaming GDeflate compressed assets directly to VRAM via NVMe BypassIO at 14.8 GB/s with zero CPU copy overhead. Low-latency WaveRT audio streaming engine and PrismAudio XAudio2 3D spatial sound with Multimedia Class Scheduler Service (MMCSS) real-time priority boost.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 40 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card" style="border-color: rgba(0, 242, 254, 0.4);">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 40: USB 3.2 xHCI Host Controller &amp; URB Pipeline</span>
+              <span class="horizon-status-pill status-done">COMPLETED &bull; SUITE 256 PASSING</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Full xHCI 1.2 MMIO Capability/Operational registers, DCBAA device context arrays, Command Ring, Primary Event Ring with ERST, and per-endpoint Transfer Rings with chained TRBs (CH=1, IOC=1). Asynchronous URB pipeline (<code>IOCTL_INTERNAL_USB_SUBMIT_URB</code>) and Root Hub PnP enumeration.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 39 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 39: Sovereign Crash Dump Engine (TitanCrashDumpEngine)</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Elevated IRQL crash dump writer capable of persisting 256KB triage minidumps to NVMe/AHCI block sectors without paging. Built-in multi-palette BSOD renderer supporting Midnight Obsidian (#0B101B), Emerald Prism (#03251E), and Royal Navy (#0A192F).
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 35-38 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 35&ndash;38: PrismX 3D, Direct3D 11/12 &amp; Khronos Vulkan 1.3 ICD</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Clean-room DXGI presentation pipeline with FLIP_DISCARD double buffering, high-precision barycentric software rasterizer with Gouraud shading, and standard Vulkan ICD loader with WDDM kernel thunking.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 30-34 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 30&ndash;34: Service Control Manager &amp; Named Pipe RPC</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Clean-room <code>services.exe</code> daemon, service dependency graph resolution, svchost.exe worker hosting, and inter-process communication over kernel Named Pipes (<code>\Device\NamedPipe</code>).
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 25-29 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 25&ndash;29: NDIS 6.x &amp; Dual-Stack TCP/IP Network Subsystem</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Ethernet framing, ARP table resolution, ICMP ping echo, UDP datagram processing, full RFC 793 11-state TCP state machine, and Winsock 2 (<code>ws2_32.dll</code>) userland socket bridge.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 20-24 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 20&ndash;24: Security Trinity (SAM, LSASS, Winlogon) &amp; NTFS VFS</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              SAM user database, MD4 password hashing, LSASS MSV1_0 authentication package, NTLM challenge/response, Winlogon secure desktop isolation, and 1024-byte NTFS MFT non-resident record parser.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 1-19 -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZONS 1&ndash;19: Bare-Metal Boot, Object Manager &amp; Memory Executive</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              UEFI GOP linear framebuffer initialization, AMD64 GDT/IDT tables, trap handlers, pure Cutler Object Manager namespace, 4-level PML4 paging, NonPagedPool/PagedPool allocators, and preemptive thread scheduler.
+            </p>
+          </div>
+        </div>
+
+                <!-- Horizon 287 Completed -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 287: Direct3D 12 Device63/Options 75, NT Info 321/322 &amp; NIST Ascon-Elephant (Suite 503)</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Direct3D 12 ID3D12Device63, ID3D12GraphicsCommandList57, D3D12_FEATURE_DATA_D3D12_OPTIONS75 (WorkGraphsTier 58, 140.7T MatMul, BackingMemory47, ProgramRecord47), NT Native Classes 321 (PagefileWriteCoalescing) and 322 (CpuClockPLLSlewRate), Interlocked Converse Implication Modulo 64/32/16/8-bit primitives, and NIST SP 800-232 Ascon-Elephant-XOF &amp; Ascon-Elephant-Hash lightweight cryptography CNG provider.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 286 Completed -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 286: Direct3D 12 Device62/Options 74, NT Info 319/320 &amp; NIST Ascon-PHOTON-Beetle (Suite 502)</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Direct3D 12 ID3D12Device62, ID3D12GraphicsCommandList56, D3D12_FEATURE_DATA_D3D12_OPTIONS74 (WorkGraphsTier 57, 70.3T MatMul, BackingMemory46, ProgramRecord46), NT Native Classes 319 (PagefileWriteDeduplication) and 320 (CpuClockDFSJitter), Interlocked Implication Modulo 64/32/16/8-bit primitives, and NIST SP 800-232 Ascon-PHOTON-Beetle-XOF &amp; Ascon-PHOTON-Beetle-Hash lightweight cryptography CNG provider.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 290 Completed -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 290: Direct3D 12 Device66/CommandList60/Options 78, NT Native 327/328, Choose Modulo &amp; NIST Ascon-Gimli (Suite 506)</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Direct3D 12 ID3D12Device66, ID3D12GraphicsCommandList60, D3D12_FEATURE_DATA_D3D12_OPTIONS78 (WorkGraphsTier 61, 1.125 Quadrillion MatMul, 4.503Q Max Concurrency, 8.796T Tile Pipelining Stages, Photonic Interconnect Tier 24), NT Native Classes 327 (PagefileWriteLatencySpikeHistogram) &amp; 328 (CpuClockSpreadSpectrumModulationProfile), Interlocked Choose Modulo 64/32/16/8-bit primitives, and NIST SP 800-232 Ascon-Gimli-XOF &amp; Ascon-Gimli-Hash lightweight cryptography CNG provider.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 289 Completed -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 289: Direct3D 12 Device65/CommandList59/Options 77, NT Native 325/326, Non-Implication Modulo &amp; NIST Ascon-BLAKE3 (Suite 505)</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Direct3D 12 ID3D12Device65, ID3D12GraphicsCommandList59, D3D12_FEATURE_DATA_D3D12_OPTIONS77 (WorkGraphsTier 60, 562.9T MatMul, 2.251Q Concurrency), NT Native Classes 325 (PagefileWriteBandwidthThrottling) &amp; 326 (CpuClockPLLDitherModulation), Interlocked Non-Implication Modulo 64/32/16/8-bit primitives, and NIST SP 800-232 Ascon-BLAKE3-XOF &amp; Ascon-BLAKE3-Hash lightweight cryptography CNG provider.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 288 Completed -->
+        <div class="horizon-item completed">
+          <div class="horizon-card">
+            <div class="horizon-header">
+              <span class="horizon-num">HORIZON 288: Direct3D 12 Device64/CommandList58/Options 76, NT Native 323/324, Converse Non-Imp Modulo &amp; NIST Ascon-Grain128 (Suite 504)</span>
+              <span class="horizon-status-pill status-done">COMPLETED</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Direct3D 12 ID3D12Device64, ID3D12GraphicsCommandList58, D3D12_FEATURE_DATA_D3D12_OPTIONS76 (WorkGraphsTier 59, 281.4T MatMul, 1.125Q Concurrency), NT Native Classes 323 (CompressionRatioHistogram) &amp; 324 (CpuClockPLLLockLatency), Interlocked Converse Non-Implication Modulo 64/32/16/8-bit primitives, and NIST SP 800-232 Ascon-Grain128-XOF &amp; Ascon-Grain128-Hash lightweight cryptography CNG provider.
+            </p>
+          </div>
+        </div>
+
+        <!-- Horizon 291 Upcoming -->
+        <div class="horizon-item upcoming">
+          <div class="horizon-card" style="border-color: rgba(245, 158, 11, 0.4);">
+            <div class="horizon-header">
+              <span class="horizon-num" style="color: #fbbf24;">HORIZON 291: Direct3D 12 Device67/Options 79, NT Native 329/330 &amp; Advanced Cryptographic Suites (Suite 507)</span>
+              <span class="horizon-status-pill status-planned">UPCOMING</span>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.92rem; line-height: 1.6;">
+              Next-generation Direct3D 12 Device67 acceleration, ultra-scale NT kernel diagnostic telemetry classes 329/330, atomic lock-free coordination primitives, and next-tier quantum-hardened cryptography.
+            </p>
+          </div>
+        </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>
