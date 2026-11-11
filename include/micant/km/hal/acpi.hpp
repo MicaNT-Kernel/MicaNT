@@ -2141,6 +2141,14 @@ public:
     const AcpiMadtHeader& getMadtHeader() const { return m_madtHeader; }
     const std::vector<AcpiMadtLocalApic>& getLocalApics() const { return m_localApics; }
     const std::vector<AcpiMadtLocalX2Apic>& getLocalX2Apics() const { return m_localX2Apics; }
+    uint32_t getEnabledProcessorCount() const {
+        uint32_t count = 0;
+        for (const auto& cpu : m_localApics)
+            if (cpu.flags & 0x1U) ++count;
+        for (const auto& cpu : m_localX2Apics)
+            if (cpu.flags & 0x1U) ++count;
+        return count;
+    }
     const std::vector<AcpiMadtIoApic>& getIoApics() const { return m_ioApics; }
     const std::vector<AcpiMadtIntrOverride>& getIntrOverrides() const { return m_intrOverrides; }
     const AcpiMcfgHeader& getMcfg() const { return m_mcfg; }
@@ -2446,7 +2454,7 @@ inline BOOL WINAPI AcpiGetBatteryStatus(
 inline uint32_t WINAPI AcpiGetProcessorCount() {
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
-    return static_cast<uint32_t>(acpi.getLocalApics().size() + acpi.getLocalX2Apics().size());
+    return acpi.getEnabledProcessorCount();
 }
 
 inline BOOL WINAPI AcpiRegisterGpeHandler(uint32_t gpeNumber, void (*handler)(uint32_t)) {
