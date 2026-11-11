@@ -275,11 +275,11 @@ public:
         if (!device || !device->deviceExtension || !registrationFlags || !pdo)
             return NtStatus::InvalidParameter;
         auto& extension = *static_cast<MiniportExtension*>(device->deviceExtension);
-        static const UNICODE_STRING serviceRegistryPath(
+        static UNICODE_STRING serviceRegistryPath(
             L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\cmbatt");
         *registrationFlags = 0;
         if (instanceName) *instanceName = {};
-        if (registryPath) *registryPath = const_cast<UNICODE_STRING*>(&serviceRegistryPath);
+        if (registryPath) *registryPath = &serviceRegistryPath;
         if (mofResourceName) *mofResourceName = {};
         *pdo = extension.pdo;
         return NtStatus::Success;

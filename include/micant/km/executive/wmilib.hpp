@@ -63,6 +63,22 @@ struct WNODE_SINGLE_INSTANCE {
     uint32_t DataBlockOffset{};
     uint32_t SizeDataBlock{};
 };
+struct WNODE_SINGLE_ITEM {
+    WNODE_HEADER WnodeHeader{};
+    uint32_t OffsetInstanceName{};
+    uint32_t InstanceIndex{};
+    uint32_t ItemId{};
+    uint32_t DataBlockOffset{};
+    uint32_t SizeDataItem{};
+};
+struct WNODE_METHOD_ITEM {
+    WNODE_HEADER WnodeHeader{};
+    uint32_t OffsetInstanceName{};
+    uint32_t InstanceIndex{};
+    uint32_t MethodId{};
+    uint32_t DataBlockOffset{};
+    uint32_t SizeDataBlock{};
+};
 struct WNODE_ALL_DATA {
     WNODE_HEADER WnodeHeader{};
     uint32_t DataBlockOffset{};
@@ -107,6 +123,8 @@ inline constexpr uint32_t WMIREG_FLAG_INSTANCE_PDO = 0x00000020;
 
 static_assert(sizeof(WNODE_HEADER) == 48);
 static_assert(sizeof(WNODE_SINGLE_INSTANCE) == 64);
+static_assert(sizeof(WNODE_SINGLE_ITEM) == 72);
+static_assert(sizeof(WNODE_METHOD_ITEM) == 72);
 static_assert(sizeof(WNODE_ALL_DATA) == 64);
 static_assert(sizeof(WNODE_TOO_SMALL) == 56);
 
@@ -264,12 +282,46 @@ inline NtStatus NTAPI WmiSystemControl(const WMILIB_CONTEXT* context, io::Device
             ? WMIEnableDisableControl::Event : WMIEnableDisableControl::DataBlock;
         return finish(context->WmiFunctionControl(device, irp, guidIndex, control, enable));
     }
-    if (minor == IRP_MN_CHANGE_SINGLE_INSTANCE && context->SetWmiDataBlock)
-        return finish(NtStatus::NotSupported);
-    if (minor == IRP_MN_CHANGE_SINGLE_ITEM && context->SetWmiDataItem)
-        return finish(NtStatus::NotSupported);
-    if (minor == IRP_MN_EXECUTE_METHOD && context->ExecuteWmiMethod)
-        return finish(NtStatus::NotSupported);
+    if (minor == IRP_MN_CHANGE_SINGLE_INSTANCE && context->SetWmiDataBlock) {
+        if (bufferSize < sizeof(WNODE_SINGLE_INSTANCE)) return finish(NtStatus::BufferTooSmall);
+        auto* wnode = reinterpret_cast<WNODE_SINGLE_INSTANCE*>(buffer);
+        if ((wnode->WnodeHeader.Flags & WNODE_FLAG_STATIC_INSTANCE_NAMES) &&
+            wnode->InstanceIndex >= context->GuidList[guidIndex].InstanceCount)
+            return finish(NtStatus::WmiInstanceNotFound);
+        if (wnode->DataBlockOffset < sizeof(WNODE_SINGLE_INSTANCE) ||
+            wnode->DataBlockOffset > bufferSize ||
+            wnode->SizeDataBlock > bufferSize - wnode->DataBlockOffset)
+            return finish(NtStatus::InvalidParameter);
+        return finish(context->SetWmiDataBlock(device, irp, guidIndex, wnode->InstanceIndex,
+            wnode->SizeDataBlock, buffer + wnode->DataBlockOffset));
+    }
+    if (minor == IRP_MN_CHANGE_SINGLE_ITEM && context->SetWmiDataItem) {
+        if (bufferSize < sizeof(WNODE_SINGLE_ITEM)) return finish(NtStatus::BufferTooSmall);
+        auto* wnode = reinterpret_cast<WNODE_SINGLE_ITEM*>(buffer);
+        if ((wnode->WnodeHeader.Flags & WNODE_FLAG_STATIC_INSTANCE_NAMES) &&
+            wnode->InstanceIndex >= context->GuidList[guidIndex].InstanceCount)
+            return finish(NtStatus::WmiInstanceNotFound);
+        if (wnode->DataBlockOffset < sizeof(WNODE_SINGLE_ITEM) ||
+            wnode->DataBlockOffset > bufferSize ||
+            wnode->SizeDataItem > bufferSize - wnode->DataBlockOffset)
+            return finish(NtStatus::InvalidParameter);
+        return finish(context->SetWmiDataItem(device, irp, guidIndex, wnode->InstanceIndex,
+            wnode->ItemId, wnode->SizeDataItem, buffer + wnode->DataBlockOffset));
+    }
+    if (minor == IRP_MN_EXECUTE_METHOD && context->ExecuteWmiMethod) {
+        if (bufferSize < sizeof(WNODE_METHOD_ITEM)) return finish(NtStatus::BufferTooSmall);
+        auto* wnode = reinterpret_cast<WNODE_METHOD_ITEM*>(buffer);
+        if ((wnode->WnodeHeader.Flags & WNODE_FLAG_STATIC_INSTANCE_NAMES) &&
+            wnode->InstanceIndex >= context->GuidList[guidIndex].InstanceCount)
+            return finish(NtStatus::WmiInstanceNotFound);
+        if (wnode->DataBlockOffset < sizeof(WNODE_METHOD_ITEM) ||
+            wnode->DataBlockOffset > bufferSize ||
+            wnode->SizeDataBlock > bufferSize - wnode->DataBlockOffset)
+            return finish(NtStatus::InvalidParameter);
+        return finish(context->ExecuteWmiMethod(device, irp, guidIndex, wnode->InstanceIndex,
+            wnode->MethodId, wnode->SizeDataBlock, bufferSize - wnode->DataBlockOffset,
+            buffer + wnode->DataBlockOffset));
+    }
     return finish(NtStatus::InvalidDeviceRequest);
 }
 
