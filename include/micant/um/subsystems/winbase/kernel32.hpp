@@ -10096,6 +10096,32 @@ inline BOOL WINAPI GetCpuClockPhaseLockedLoopDcoTuningResolutionTelemetry(ntdll:
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningResolutionTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
+inline LONG64 WINAPI InterlockedNotEqualModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedNotEqualModulo64(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline LONG WINAPI InterlockedNotEqualModulo32(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedNotEqualModulo32(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline SHORT WINAPI InterlockedNotEqualModulo16(SHORT volatile* Destination, SHORT ValA, SHORT ValB, SHORT ValC, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedNotEqualModulo16(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline CHAR WINAPI InterlockedNotEqualModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedNotEqualModulo8(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteCoalescingEnergySavingsRatioTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetry(ntdll::SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
 inline LONG64 WINAPI InterlockedNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedNonImplicationModulo64(Destination, Value, Modulus);
 }
@@ -12969,6 +12995,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedEqualModulo8", reinterpret_cast<void*>(InterlockedEqualModulo8));
     ldr.registerExport("kernel32.dll", "GetPagefileWriteCompressionEnergyEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileWriteCompressionEnergyEfficiencyTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopDcoTuningResolutionTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopDcoTuningResolutionTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedNotEqualModulo64", reinterpret_cast<void*>(InterlockedNotEqualModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedNotEqualModulo32", reinterpret_cast<void*>(InterlockedNotEqualModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedNotEqualModulo16", reinterpret_cast<void*>(InterlockedNotEqualModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedNotEqualModulo8", reinterpret_cast<void*>(InterlockedNotEqualModulo8));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingEnergySavingsRatioTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingEnergySavingsRatioTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetry));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo64", reinterpret_cast<void*>(InterlockedNonImplicationModulo64));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo32", reinterpret_cast<void*>(InterlockedNonImplicationModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo16", reinterpret_cast<void*>(InterlockedNonImplicationModulo16));

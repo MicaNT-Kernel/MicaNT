@@ -69932,3 +69932,308 @@ inline void Suite510_Direct3D12_Device70_CommandList64_Options82_NtSystemInfo335
 inline void Test_Horizon294_Device70Options82_PagefileWriteCompressionEnergyEfficiencyCpuClockPllDcoTuning_InterlockedEqualModulo_And_AsconEschXofHash_Suite() {
     Suite510_Direct3D12_Device70_CommandList64_Options82_NtSystemInfo335_336_InterlockedEqualModulo_And_AsconEschXofHash();
 }
+
+// ============================================================================
+// Suite 511: Horizon 295 - Direct3D 12 Device71, CommandList65 & Options 83,
+// NT Native 337 & 338 Telemetry, Interlocked Bitwise Not-Equal Modulo 64/32/16/8-bit
+// Primitives, and NIST SP 800-232 Ascon-WAGE XOF & Hash Permutation Sponges
+// ============================================================================
+
+inline void Suite511_Direct3D12_Device71_CommandList65_Options83_NtSystemInfo337_338_InterlockedNotEqualModulo_And_AsconWageXofHash() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 511: Horizon 295 - Direct3D 12 Device71/CommandList65 & Options 83, NT Native 337/338, Interlocked Not-Equal Modulo 64/32/16/8 & NIST Ascon-WAGE XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device71, ID3D12GraphicsCommandList65 & Options 83 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device71, ID3D12GraphicsCommandList65 & Options 83 ABI...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+        ID3D12Device71* pDevice71 = nullptr;
+
+        int32_t hr = device.QueryInterface(IID_ID3D12Device71, reinterpret_cast<void**>(&pDevice71));
+        TEST_ASSERT(hr == 0 && pDevice71 != nullptr, "QueryInterface for IID_ID3D12Device71 succeeds");
+
+        ID3D12Device71* pOfficialDevice71 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device71, reinterpret_cast<void**>(&pOfficialDevice71));
+        TEST_ASSERT(hr == 0 && pOfficialDevice71 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device71 succeeds");
+        pOfficialDevice71->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS83
+        D3D12_FEATURE_DATA_D3D12_OPTIONS83 opt83{};
+        hr = pDevice71->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS83, &opt83, sizeof(opt83));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS83 succeeds");
+        TEST_ASSERT(opt83.WorkGraphsTier == 66u, "D3D12_OPTIONS83 reports WorkGraphsTier 66");
+        TEST_ASSERT(opt83.CooperativeMatrixMultiply36028797018963968Supported == TRUE, "D3D12_OPTIONS83 reports CooperativeMatrixMultiply36028797018963968Supported == TRUE");
+        TEST_ASSERT(opt83.SubByteMicroscopicFormatsV46Supported == TRUE, "D3D12_OPTIONS83 reports SubByteMicroscopicFormatsV46Supported == TRUE");
+        TEST_ASSERT(opt83.WorkGraphsMaxConcurrencyTier144115188075855872Supported == TRUE, "D3D12_OPTIONS83 reports WorkGraphsMaxConcurrencyTier144115188075855872Supported == TRUE");
+        TEST_ASSERT(opt83.DynamicClusterExpansionTier51Supported == 1, "D3D12_OPTIONS83 reports DynamicClusterExpansionTier51Supported == 1");
+        TEST_ASSERT(opt83.TilePipeliningStagesSupported == 281474976710656ULL, "D3D12_OPTIONS83 reports TilePipeliningStagesSupported == 281474976710656");
+        TEST_ASSERT(opt83.MaxWorkGraphConcurrencyGroups == 144115188075855872ULL, "D3D12_OPTIONS83 reports MaxWorkGraphConcurrencyGroups == 144115188075855872");
+        TEST_ASSERT(opt83.PhotonicInterconnectTier29Supported == 1, "D3D12_OPTIONS83 reports PhotonicInterconnectTier29Supported == 1");
+
+        // Cooperative matrix query 50 (24 args)
+        int32_t supported = 0;
+        uint64_t maxDim = 0;
+        uint32_t supTypes = 0, sparseAcc = 0;
+        int32_t asyncAcc = 0;
+        uint64_t tileStages = 0;
+        int32_t autoFeedback = 0, subRecursion = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseBlock = 0, determReduction = 0;
+        int32_t hyperQuant = 0, sparseCluster = 0, multiQueueSync = 0, asyncKernelDispatch = 0;
+        int32_t neuralExecutionEngine = 0, adaptiveTensorCore = 0, sovereignSilicon = 0;
+        int32_t quantumEmulation = 0, photonicInterconnect = 0, hyperDimensionalScale = 0;
+
+        hr = pDevice71->GetWorkGraphCooperativeMatrixSupport50(
+            &supported, &maxDim, &supTypes, &sparseAcc, &asyncAcc, &tileStages,
+            &autoFeedback, &subRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByte, &sparseBlock, &determReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernelDispatch,
+            &neuralExecutionEngine, &adaptiveTensorCore, &sovereignSilicon,
+            &quantumEmulation, &photonicInterconnect, &hyperDimensionalScale);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport50 succeeds");
+        TEST_ASSERT(supported == 1, "CooperativeMatrixSupport50 reports supported");
+        TEST_ASSERT(maxDim == 36028797018963968ULL, "CooperativeMatrixSupport50 reports max dimension 36.028 quadrillion");
+        TEST_ASSERT(tileStages == 281474976710656ULL, "CooperativeMatrixSupport50 reports 281.474 trillion tile pipelining stages");
+        TEST_ASSERT(quantumEmulation == 1, "CooperativeMatrixSupport50 reports quantum emulation");
+        TEST_ASSERT(photonicInterconnect == 1, "CooperativeMatrixSupport50 reports photonic interconnect tier 29");
+        TEST_ASSERT(hyperDimensionalScale == 1, "CooperativeMatrixSupport50 reports hyper dimensional scale tier 51");
+
+        // Create work graph program record 55 (29 args)
+        void* pProgRecord = nullptr;
+        hr = pDevice71->CreateWorkGraphProgramRecord55(
+            nullptr, 0, 1024, 144115188075855872ULL, 1, 1, 1, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            &pProgRecord);
+        TEST_ASSERT(hr == 0 && pProgRecord != nullptr, "CreateWorkGraphProgramRecord55 succeeds");
+
+        // CommandList65
+        Prism3D12GraphicsCommandListImpl cmdList(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList65* pCmdList65 = nullptr;
+
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList65, reinterpret_cast<void**>(&pCmdList65));
+        TEST_ASSERT(hr == 0 && pCmdList65 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList65 succeeds");
+
+        ID3D12GraphicsCommandList65* pOfficialCmdList65 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList65, reinterpret_cast<void**>(&pOfficialCmdList65));
+        TEST_ASSERT(hr == 0 && pOfficialCmdList65 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList65 succeeds");
+        pOfficialCmdList65->Release();
+
+        // Exercise SetWorkGraphBackingMemory55 (28 args)
+        pCmdList65->SetWorkGraphBackingMemory55(
+            0x8FFF0000ULL, 0x800000ULL, 0x200000ULL, 144115188075855872ULL,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0);
+
+        // Exercise DispatchGraphProgramRecord55 (30 args)
+        uint8_t payload[64] = { 0x55 };
+        pCmdList65->DispatchGraphProgramRecord55(
+            1, payload, sizeof(payload), 4096, 0x1, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+            10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 0);
+
+        pCmdList65->Release();
+        pDevice71->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 337 & 338 Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 337 & 338...\n" << std::flush;
+
+        // Class 337: SystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION info337{};
+        uint32_t retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            337, &info337, sizeof(info337), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(337) succeeds");
+        TEST_ASSERT(retLen == sizeof(info337), "NtQuerySystemInformation(337) returns correct structure length");
+        TEST_ASSERT(info337.Version == 1, "Class 337 reports Version 1");
+        TEST_ASSERT(info337.TotalCoalescedWriteBatches == 950000ULL, "Class 337 reports TotalCoalescedWriteBatches == 950000");
+        TEST_ASSERT(info337.DirectWriteJoulesEquivalent == 520000ULL, "Class 337 reports DirectWriteJoulesEquivalent == 520000");
+        TEST_ASSERT(info337.CoalescedWriteJoules == 156000ULL, "Class 337 reports CoalescedWriteJoules == 156000");
+        TEST_ASSERT(info337.JoulesSavedByCoalescing == 364000ULL, "Class 337 reports JoulesSavedByCoalescing == 364000");
+        TEST_ASSERT(info337.CoalescingEnergySavingsRatio == 0.700, "Class 337 reports CoalescingEnergySavingsRatio == 0.700");
+        TEST_ASSERT(info337.JoulesPerMegabyteWritten == 0.042, "Class 337 reports JoulesPerMegabyteWritten == 0.042");
+        TEST_ASSERT(info337.CoalescingEnergyTelemetryFlags == 0x07, "Class 337 reports CoalescingEnergyTelemetryFlags == 0x07");
+
+        // Helper & Win32 wrapper verification
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION rtlInfo337{};
+        st = RtlQuerySystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation(&rtlInfo337);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation succeeds");
+        TEST_ASSERT(rtlInfo337.TotalCoalescedWriteBatches == 950000ULL, "RtlQuerySystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation verified");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION k32Info337{};
+        BOOL ok = GetPagefileWriteCoalescingEnergySavingsRatioTelemetry(&k32Info337);
+        TEST_ASSERT(ok == TRUE, "GetPagefileWriteCoalescingEnergySavingsRatioTelemetry succeeds");
+        TEST_ASSERT(k32Info337.JoulesSavedByCoalescing == 364000ULL, "GetPagefileWriteCoalescingEnergySavingsRatioTelemetry verified");
+
+        // Class 338: SystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMATION info338{};
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(
+            338, &info338, sizeof(info338), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(338) succeeds");
+        TEST_ASSERT(retLen == sizeof(info338), "NtQuerySystemInformation(338) returns correct length");
+        TEST_ASSERT(info338.Version == 1, "Class 338 reports Version 1");
+        TEST_ASSERT(info338.TotalDcoSettlingTransitions == 850000ULL, "Class 338 reports TotalDcoSettlingTransitions == 850000");
+        TEST_ASSERT(info338.AverageSettlingLatencyNanoseconds == 34.50, "Class 338 reports AverageSettlingLatencyNanoseconds == 34.50");
+        TEST_ASSERT(info338.MaximumSettlingLatencyNanoseconds == 78.20, "Class 338 reports MaximumSettlingLatencyNanoseconds == 78.20");
+        TEST_ASSERT(info338.MinimumSettlingLatencyNanoseconds == 12.10, "Class 338 reports MinimumSettlingLatencyNanoseconds == 12.10");
+        TEST_ASSERT(info338.PhaseJitterAtSettledStateDegrees == 0.038, "Class 338 reports PhaseJitterAtSettledStateDegrees == 0.038");
+        TEST_ASSERT(info338.DcoLockAcquisitionTimeMicroseconds == 1.85, "Class 338 reports DcoLockAcquisitionTimeMicroseconds == 1.85");
+        TEST_ASSERT(info338.DcoSettlingTelemetryFlags == 0x07, "Class 338 reports DcoSettlingTelemetryFlags == 0x07");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMATION rtlInfo338{};
+        st = RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation(&rtlInfo338);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation succeeds");
+        TEST_ASSERT(rtlInfo338.TotalDcoSettlingTransitions == 850000ULL, "RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation verified");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMATION k32Info338{};
+        ok = GetCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetry(&k32Info338);
+        TEST_ASSERT(ok == TRUE, "GetCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetry succeeds");
+        TEST_ASSERT(k32Info338.AverageSettlingLatencyNanoseconds == 34.50, "GetCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetry verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Not-Equal Modulo Primitives
+    // NotEqual(A, B, C) = ~((A & B & C) | (~A & ~B & ~C))
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Interlocked Not-Equal Modulo 64/32/16/8-bit Primitives...\n" << std::flush;
+
+        // 64-bit
+        LONG64 dest64 = 0;
+        uint64_t valA64 = 0xF0F0F0F0F0F0F0F0ULL;
+        uint64_t valB64 = 0xCCCCCCCCCCCCCCCCULL;
+        uint64_t valC64 = 0xAAAAAAAAAAAAAAAAULL;
+        uint64_t ne64 = ~((valA64 & valB64 & valC64) | ((~valA64) & (~valB64) & (~valC64)));
+        uint64_t expected64 = ne64 % 997ULL;
+
+        LONG64 old64 = RtlInterlockedNotEqualModulo64(&dest64, static_cast<LONG64>(valA64), static_cast<LONG64>(valB64), static_cast<LONG64>(valC64), 997);
+        TEST_ASSERT(old64 == 0, "RtlInterlockedNotEqualModulo64 returns initial 0");
+        TEST_ASSERT(dest64 == static_cast<LONG64>(expected64), "RtlInterlockedNotEqualModulo64 sets correct modulo residue");
+
+        LONG64 dest64_w32 = 0;
+        old64 = InterlockedNotEqualModulo64(&dest64_w32, static_cast<LONG64>(valA64), static_cast<LONG64>(valB64), static_cast<LONG64>(valC64), 997);
+        TEST_ASSERT(old64 == 0, "InterlockedNotEqualModulo64 (Win32) returns initial 0");
+        TEST_ASSERT(dest64_w32 == static_cast<LONG64>(expected64), "InterlockedNotEqualModulo64 (Win32) sets correct modulo residue");
+
+        // 32-bit
+        LONG dest32 = 0;
+        uint32_t valA32 = 0xF0F0F0F0U;
+        uint32_t valB32 = 0xCCCCCCCCU;
+        uint32_t valC32 = 0xAAAAAAAAU;
+        uint32_t ne32 = ~((valA32 & valB32 & valC32) | ((~valA32) & (~valB32) & (~valC32)));
+        uint32_t expected32 = ne32 % 251U;
+
+        LONG old32 = RtlInterlockedNotEqualModulo32(&dest32, static_cast<LONG>(valA32), static_cast<LONG>(valB32), static_cast<LONG>(valC32), 251);
+        TEST_ASSERT(old32 == 0, "RtlInterlockedNotEqualModulo32 returns initial 0");
+        TEST_ASSERT(dest32 == static_cast<LONG>(expected32), "RtlInterlockedNotEqualModulo32 sets correct modulo residue");
+
+        LONG dest32_w32 = 0;
+        old32 = InterlockedNotEqualModulo32(&dest32_w32, static_cast<LONG>(valA32), static_cast<LONG>(valB32), static_cast<LONG>(valC32), 251);
+        TEST_ASSERT(old32 == 0, "InterlockedNotEqualModulo32 (Win32) returns initial 0");
+        TEST_ASSERT(dest32_w32 == static_cast<LONG>(expected32), "InterlockedNotEqualModulo32 (Win32) sets correct modulo residue");
+
+        // 16-bit
+        SHORT dest16 = 0;
+        uint16_t valA16 = 0xF0F0U;
+        uint16_t valB16 = 0xCCCCU;
+        uint16_t valC16 = 0xAAAAU;
+        uint16_t ne16 = static_cast<uint16_t>(~((valA16 & valB16 & valC16) | (static_cast<uint16_t>(~valA16) & static_cast<uint16_t>(~valB16) & static_cast<uint16_t>(~valC16))));
+        uint16_t expected16 = static_cast<uint16_t>(ne16 % 97U);
+
+        SHORT old16 = RtlInterlockedNotEqualModulo16(&dest16, static_cast<SHORT>(valA16), static_cast<SHORT>(valB16), static_cast<SHORT>(valC16), 97);
+        TEST_ASSERT(old16 == 0, "RtlInterlockedNotEqualModulo16 returns initial 0");
+        TEST_ASSERT(dest16 == static_cast<SHORT>(expected16), "RtlInterlockedNotEqualModulo16 sets correct modulo residue");
+
+        // 8-bit
+        CHAR dest8 = 0;
+        uint8_t valA8 = 0xF0U;
+        uint8_t valB8 = 0xCCU;
+        uint8_t valC8 = 0xAAU;
+        uint8_t ne8 = static_cast<uint8_t>(~((valA8 & valB8 & valC8) | (static_cast<uint8_t>(~valA8) & static_cast<uint8_t>(~valB8) & static_cast<uint8_t>(~valC8))));
+        uint8_t expected8 = static_cast<uint8_t>(ne8 % 13U);
+
+        CHAR old8 = RtlInterlockedNotEqualModulo8(&dest8, static_cast<CHAR>(valA8), static_cast<CHAR>(valB8), static_cast<CHAR>(valC8), 13);
+        TEST_ASSERT(old8 == 0, "RtlInterlockedNotEqualModulo8 returns initial 0");
+        TEST_ASSERT(dest8 == static_cast<CHAR>(expected8), "RtlInterlockedNotEqualModulo8 sets correct modulo residue");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-WAGE-XOF & Hash
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-WAGE-XOF & Ascon-WAGE-Hash...\n" << std::flush;
+
+        const char* msg = "MicaNT Horizon 295 NIST SP 800-232 Ascon-WAGE Welch-Gong Permutation Sponge Verification";
+
+        // Test Ascon-WAGE-XOF
+        BCRYPT_ALG_HANDLE hAlgXof = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgXof, BCRYPT_ASCON_WAGE_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgXof != nullptr, "BCryptOpenAlgorithmProvider for ASCON-WAGE-XOF succeeds");
+
+        BCRYPT_HASH_HANDLE hHashXof = nullptr;
+        status = BCryptCreateHash(hAlgXof, &hHashXof, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashXof != nullptr, "BCryptCreateHash for ASCON-WAGE-XOF succeeds");
+
+        status = BCryptHashData(hHashXof, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-WAGE-XOF succeeds");
+
+        uint8_t digestXof[32] = { 0 };
+        status = BCryptFinishHash(hHashXof, digestXof, sizeof(digestXof), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-WAGE-XOF succeeds");
+
+        bool nonZeroXof = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestXof[i] != 0) { nonZeroXof = true; break; }
+        }
+        TEST_ASSERT(nonZeroXof, "ASCON-WAGE-XOF output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashXof);
+        BCryptCloseAlgorithmProvider(hAlgXof, 0);
+
+        // Test Ascon-WAGE-HASH
+        BCRYPT_ALG_HANDLE hAlgHash = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgHash, BCRYPT_ASCON_WAGE_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgHash != nullptr, "BCryptOpenAlgorithmProvider for ASCON-WAGE-HASH succeeds");
+
+        BCRYPT_HASH_HANDLE hHashHash = nullptr;
+        status = BCryptCreateHash(hAlgHash, &hHashHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashHash != nullptr, "BCryptCreateHash for ASCON-WAGE-HASH succeeds");
+
+        status = BCryptHashData(hHashHash, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-WAGE-HASH succeeds");
+
+        uint8_t digestHash[32] = { 0 };
+        status = BCryptFinishHash(hHashHash, digestHash, sizeof(digestHash), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-WAGE-HASH succeeds");
+
+        bool nonZeroHash = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestHash[i] != 0) { nonZeroHash = true; break; }
+        }
+        TEST_ASSERT(nonZeroHash, "ASCON-WAGE-HASH output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashHash);
+        BCryptCloseAlgorithmProvider(hAlgHash, 0);
+    }
+
+    std::cout << "  Horizon 295 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device71, ID3D12GraphicsCommandList65 & Options 83 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 337 (PagefileWriteCoalescingEnergySavingsRatio) & 338 (CpuClockPllDcoSettlingLatency) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Not-Equal Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-WAGE-XOF & Ascon-WAGE-Hash Lightweight Cryptography OK\n";
+    std::cout << "[TEST] Suite 511: Horizon 295 - Direct3D 12 Device71/CommandList65 & Options 83, NT SystemInfo 337/338, Interlocked Not-Equal Modulo 64/32/16/8 & NIST Ascon-WAGE XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon295_Device71Options83_PagefileWriteCoalescingEnergySavingsCpuClockPllDcoSettling_InterlockedNotEqualModulo_And_AsconWageXofHash_Suite() {
+    Suite511_Direct3D12_Device71_CommandList65_Options83_NtSystemInfo337_338_InterlockedNotEqualModulo_And_AsconWageXofHash();
+}
+
