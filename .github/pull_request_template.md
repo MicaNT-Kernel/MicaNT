@@ -8,7 +8,7 @@
 - [ ] **Clean-Room Non-Contamination Affirmation**: I certify that this code was authored cleanly from first principles or public specifications without referencing leaked Windows source code (NT4, Win2k, WRK) or proprietary disassembler dumps (IDA Pro / Ghidra).
 - [ ] **Interface Attribution**: All Win32 / NT API signatures and types trace directly to Microsoft's MIT-licensed `microsoft/win32metadata` repository or public Microsoft Learn / MSDN documentation.
 - [ ] **C++23 Standards**: Code adheres to modern ISO C++23 standards (RAII, zero raw pointer leaks, smart pointers, atomics).
-- [ ] **Test Coverage**: Tested against MicaNT test battery with 100% pass rate (`bin/micant_tests.exe`).
+- [ ] **Test Coverage**: Tested against MicaNT test battery with 100% pass rate (`build/host/micant_tests.exe`).
 
 ---
 

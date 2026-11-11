@@ -24,8 +24,8 @@ from being reported as a successful kernel boot.
 | Target | Current role | Output / status |
 |---|---|---|
 | `ntoskrnl_core` | Shared modular subsystem library | CMake static library |
-| `micant_tests` | Host unit-test runner linked to `ntoskrnl_core` | `${CMAKE_BINARY_DIR}/bin/micant_tests` |
-| `micant_kernel` | Hosted initialization harness linked to `ntoskrnl_core` | `${CMAKE_BINARY_DIR}/bin/micant_kernel`; not a kernel PE |
+| `micant_tests` | Host unit-test runner linked to `ntoskrnl_core` | `${CMAKE_BINARY_DIR}/host/micant_tests` |
+| `micant_kernel` | Hosted initialization harness linked to `ntoskrnl_core` | `${CMAKE_BINARY_DIR}/host/micant_kernel`; not a kernel PE |
 | `bootx64` | Bootloader object target in CMake | Does not by itself produce `BOOTX64.EFI` |
 | Modular bare-metal kernel | Required future target | `build/baremetal/ntoskrnl.exe`; not yet implemented |
 

@@ -355,10 +355,10 @@ for the verified status and migration criteria.
 ### Run the 258-Suite Verification Battery & Clean-Room Sentinel
 ```powershell
 # Run all 258 Test Suites (100% Pass Rate Required):
-.\build\bin\micant_tests.exe
+.\build\host\micant_tests.exe
 
 # Run the latest Horizon suite only:
-.\build\bin\micant_tests.exe --last
+.\build\host\micant_tests.exe --last
 
 # Run Clean-Room & Directory Architecture Sentinel Audit:
 node scripts/clean_room_sentinel.js
@@ -367,10 +367,10 @@ node scripts/clean_room_sentinel.js
 ### Boot the Executive & Interactive Shell
 ```powershell
 # Boot the MicaNT Executive:
-.\build\bin\micant_kernel.exe
+.\build\host\micant_kernel.exe
 
 # Or boot directly into the interactive MicaNT Command Prompt Shell:
-.\build\bin\micant_kernel.exe --shell
+.\build\host\micant_kernel.exe --shell
 ```
 
 ---
@@ -396,4 +396,3 @@ We welcome community participation, technical discussions, and contributions!
 - **[CONTRIBUTING.md](CONTRIBUTING.md)**: Clean-room engineering rules, developer workflow, and Microsoft OSPO authorized contribution channel.
 - **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**: Contributor Covenant v2.1 standards for a welcoming, respectful, and harassment-free community.
 - **[Security Policy](.github/SECURITY.md)**: Responsible disclosure and vulnerability reporting process.
-

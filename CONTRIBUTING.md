@@ -79,11 +79,12 @@ Signed-off-by: Jane Doe <janedoe@microsoft.com>
 Ensure the full test suite passes with 100% success before submitting:
 
 ```bash
-# Compile test runner:
-clang++ -std=c++23 -O2 -Iinclude test/test_runner.cpp kernel/dispatcher.cpp kernel/syscalls.cpp -o bin/micant_tests.exe
+# Configure and compile the host test runner:
+cmake -S . -B build -G Ninja
+cmake --build build --target micant_tests
 
 # Run all test suites:
-.\bin\micant_tests.exe
+.\build\host\micant_tests.exe
 ```
 
 ### 2. Run the Clean-Room Sentinel Audit

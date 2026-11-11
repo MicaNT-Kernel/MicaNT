@@ -20,6 +20,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path bin
           New-Item -ItemType Directory -Force -Path bin/system32
+          New-Item -ItemType Directory -Force -Path build/host
           New-Item -ItemType Directory -Force -Path build/esp/EFI/BOOT
 
       - name: Compile Modular Kernel Subsystems, System32 DLLs & Bootloader (Clang C++23)
@@ -98,12 +99,12 @@ jobs:
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
-          Write-Host "[CI] Linking bin/micant_kernel.exe ($($objFiles.Count) modular kernel object units)..."
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp @objFiles -o bin/micant_kernel.exe
+          Write-Host "[CI] Linking build/host/micant_kernel.exe ($($objFiles.Count) modular kernel object units)..."
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp @objFiles -o build/host/micant_kernel.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          Write-Host "[CI] Linking bin/micant_tests.exe ($($objFiles.Count) modular kernel object units)..."
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp @objFiles -o bin/micant_tests.exe
+          Write-Host "[CI] Linking build/host/micant_tests.exe ($($objFiles.Count) modular kernel object units)..."
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp @objFiles -o build/host/micant_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Write-Host "[CI] Compiling Bare-Metal UEFI PE32+ Bootloader (build/esp/EFI/BOOT/BOOTX64.EFI)..."
@@ -117,9 +118,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          .\bin\micant_kernel.exe
+          .\build\host\micant_kernel.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\bin\micant_tests.exe
+          .\build\host\micant_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/clean_room_sentinel.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

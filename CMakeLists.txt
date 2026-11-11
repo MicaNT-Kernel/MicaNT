@@ -10,7 +10,8 @@ include_directories(
     include
 )
 
-# Modular NT Kernel Executive & Microkernel Subsystem Library (base/ntos)
+# Explicit modular NT Kernel Executive & Microkernel source manifest.
+# Historical sources under old/ are never kernel or driver build inputs.
 set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ke/dispatcher.cpp
     kernel/ke/wait.cpp
@@ -152,7 +153,7 @@ if(WIN32)
     endforeach()
 endif()
 
-# Core Kernel Executable (ntoskrnl / kiinit)
+# Hosted initialization harness. This is not a freestanding kernel image.
 add_executable(micant_kernel
     kernel/init/kiinit.cpp
 )
@@ -230,12 +231,15 @@ elseif (MSVC)
     target_compile_options(bootx64 PRIVATE /W4 /permissive- /O2)
 endif()
 
-set_target_properties(micant_kernel PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+set_target_properties(micant_kernel micant_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/host"
 )
-set_target_properties(micant_tests PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
+foreach(_config Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${_config}" _config_upper)
+    set_target_properties(micant_kernel micant_tests PROPERTIES
+        "RUNTIME_OUTPUT_DIRECTORY_${_config_upper}" "${CMAKE_BINARY_DIR}/host"
+    )
+endforeach()
 set_target_properties(userland_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

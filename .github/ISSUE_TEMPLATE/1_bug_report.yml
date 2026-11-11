@@ -40,8 +40,8 @@ body:
       label: Execution Environment
       description: Where did this bug manifest?
       options:
-        - "Unit Test Suite (bin/micant_tests.exe)"
-        - "Host Kernel Simulator (bin/micant_kernel.exe)"
+        - "Unit Test Suite (build/host/micant_tests.exe)"
+        - "Host Kernel Simulator (build/host/micant_kernel.exe)"
         - "Bare-Metal / QEMU UEFI GOP (bootx64.efi)"
         - "Build / Compilation Phase"
     validations:
@@ -81,7 +81,7 @@ body:
       label: Steps to Reproduce
       description: Describe the exact steps or provide the minimal code snippet to reproduce.
       placeholder: |
-        1. Boot into MicaNT command prompt with `bin/micant_kernel.exe --shell`
+        1. Run the host harness with `build/host/micant_kernel.exe --shell`
         2. Run `cipher /e C:\Test.txt`
         3. Observe return code...
     validations:

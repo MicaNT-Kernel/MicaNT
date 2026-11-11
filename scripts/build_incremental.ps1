@@ -5,7 +5,7 @@
 .DESCRIPTION
     1. Sets process priority to BelowNormal so compilation never pegs the host CPU or starves UI threads.
     2. Incrementally compiles only modified kernel/*.cpp units into build/clang_obj/*.o sequentially (max ~8% CPU on 12-thread Xeon).
-    3. Links bin/micant_kernel.exe, bin/micant_tests.exe, and build/esp/EFI/BOOT/BOOTX64.EFI as requested.
+    3. Links build/host/micant_kernel.exe, build/host/micant_tests.exe, and build/esp/EFI/BOOT/BOOTX64.EFI as requested.
 #>
 
 param(
@@ -24,8 +24,10 @@ Push-Location $repoRoot
 try {
     $objDir = Join-Path $repoRoot "build\clang_obj"
     $binDir = Join-Path $repoRoot "bin"
+    $hostDir = Join-Path $repoRoot "build\host"
     New-Item -ItemType Directory -Force -Path $objDir | Out-Null
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $hostDir | Out-Null
 
     $units = @(
         @{ Src = "kernel/ke/dispatcher.cpp";          Obj = "ke_dispatcher.o" },
@@ -241,14 +243,14 @@ try {
 
     $allObjs = $units | ForEach-Object { Join-Path "build/clang_obj" $_.Obj }
 
-    Write-Host "[MicaNT Build] Linking bin/micant_kernel.exe..."
-    & clang++ -std=c++23 -O2 -Iinclude kernel/init/kiinit.cpp @allObjs -o bin/micant_kernel.exe
-    if ($LASTEXITCODE -ne 0) { throw "Failed linking bin/micant_kernel.exe" }
+    Write-Host "[MicaNT Build] Linking build/host/micant_kernel.exe..."
+    & clang++ -std=c++23 -O2 -Iinclude kernel/init/kiinit.cpp @allObjs -o build/host/micant_kernel.exe
+    if ($LASTEXITCODE -ne 0) { throw "Failed linking build/host/micant_kernel.exe" }
 
     if (-not $SkipTests) {
-        Write-Host "[MicaNT Build] Linking bin/micant_tests.exe..."
-        & clang++ -std=c++23 -O2 -Iinclude -I. test/test_runner.cpp @allObjs -o bin/micant_tests.exe
-        if ($LASTEXITCODE -ne 0) { throw "Failed linking bin/micant_tests.exe" }
+        Write-Host "[MicaNT Build] Linking build/host/micant_tests.exe..."
+        & clang++ -std=c++23 -O2 -Iinclude -I. test/test_runner.cpp @allObjs -o build/host/micant_tests.exe
+        if ($LASTEXITCODE -ne 0) { throw "Failed linking build/host/micant_tests.exe" }
     }
 
     if ($BuildKernel -or $BuildEfi) {
