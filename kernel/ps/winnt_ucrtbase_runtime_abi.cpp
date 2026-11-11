@@ -9,6 +9,7 @@
 
 #include "micant/ucrt/bounded_arena.hpp"
 #include "micant/ucrt/ceilf.hpp"
+#include "micant/ucrt/onexit_table.hpp"
 #include <cstdint>
 
 namespace {
@@ -82,6 +83,35 @@ static_assert(alignof(std::max_align_t) >= 16);
 extern "C" int __stdcall DllMainCRTStartup(
     void*, unsigned long, void*) noexcept {
     return 1;
+}
+
+namespace micant::ucrt::winnt_ucrtbase_abi {
+
+using _onexit_t = micant::ucrt::OnExitRoutine;
+using _onexit_table_t = micant::ucrt::OnExitTable;
+
+int32_t Ucrt_initialize_onexit_table(_onexit_table_t* table) noexcept {
+    return micant::ucrt::initializeOnExitTable(table);
+}
+
+int32_t Ucrt_register_onexit_function(
+    _onexit_table_t* table, _onexit_t function) noexcept {
+    return micant::ucrt::registerOnExitFunction(table, function, g_nativeHeap);
+}
+
+int32_t Ucrt_execute_onexit_table(_onexit_table_t* table) noexcept {
+    return micant::ucrt::executeOnExitTable(table, g_nativeHeap);
+}
+
+void Ucrt_initterm(void (**first)(void), void (**last)(void)) noexcept {
+    micant::ucrt::initializeFunctionTable(first, last);
+}
+
+int32_t Ucrt_initterm_e(
+    int32_t (**first)(void), int32_t (**last)(void)) noexcept {
+    return micant::ucrt::initializeFunctionTableWithStatus(first, last);
+}
+
 }
 
 extern "C" {
@@ -230,6 +260,32 @@ __declspec(dllexport) std::size_t __cdecl wcsnlen(
 
 __declspec(dllexport) float __cdecl ceilf(float value) {
     return micant::ucrt::ceilf(value);
+}
+
+__declspec(dllexport) int32_t _initialize_onexit_table(
+    micant::ucrt::winnt_ucrtbase_abi::_onexit_table_t* table) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_initialize_onexit_table(table);
+}
+
+__declspec(dllexport) int32_t _register_onexit_function(
+    micant::ucrt::winnt_ucrtbase_abi::_onexit_table_t* table,
+    micant::ucrt::winnt_ucrtbase_abi::_onexit_t function) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_register_onexit_function(
+        table, function);
+}
+
+__declspec(dllexport) int32_t _execute_onexit_table(
+    micant::ucrt::winnt_ucrtbase_abi::_onexit_table_t* table) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_execute_onexit_table(table);
+}
+
+__declspec(dllexport) void _initterm(void (**first)(void), void (**last)(void)) {
+    micant::ucrt::winnt_ucrtbase_abi::Ucrt_initterm(first, last);
+}
+
+__declspec(dllexport) int32_t _initterm_e(
+    int32_t (**first)(void), int32_t (**last)(void)) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_initterm_e(first, last);
 }
 
 }

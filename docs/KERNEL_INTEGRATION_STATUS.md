@@ -84,8 +84,9 @@ The canonical UCRT source has an isolated freestanding memory/string branch
 with a bounded 64 MiB coalescing arena and native PE static TLS for `errno`.
 The supported `ucrtbase_boot` CMake target builds it into
 `build/system32/ucrtbase.dll`; the Explorer build aggregate includes it.
-It exports 17 memory/string/errno/math functions, including `ceilf`, with no
-external PE imports.
+It exports 22 memory/string/errno/math/startup functions, including `ceilf`,
+on-exit table operations, and initializer-table dispatch, with no external PE
+imports.
 Incomplete aligned-allocation exports are deliberately absent.
 
 Verified:
@@ -99,6 +100,10 @@ clang++ -std=c++23 -Wall -Wextra -Werror -pedantic \
   -fsanitize=address,undefined -Iinclude test/ucrt_ceilf_test.cpp \
   -o build/ucrt-ceilf-test
 build/ucrt-ceilf-test
+clang++ -std=c++23 -Wall -Wextra -Werror -pedantic \
+  -fsanitize=address,undefined -Iinclude test/ucrt_onexit_test.cpp \
+  -o build/ucrt-onexit-test
+build/ucrt-onexit-test
 cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot
 build/pe_image_view_test build/system32/ucrtbase.dll
 ```
@@ -115,10 +120,11 @@ by the kernel; mapping/inspection is not a substitute. Its contract follows
 the public [CRT errno documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/errno-doserrno-sys-errlist-and-sys-nerr)
 and [PE TLS specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-section).
 `python3 qemu.py --check-explorer` still **fails explicitly** on 26 Kernel32
-requirements and 30 UCRT exports, reduced from 73 total missing requirements
-to 56 by the tested `ceilf` export. No fake export, host DLL or synthetic
-import trampoline fills those gaps. Headless boot, the 12 parser tests and
-architecture checks still pass.
+requirements and 25 UCRT exports, reduced from 73 total missing requirements
+to 51 by the tested `ceilf` and CRT startup-table exports. The initializer and
+on-exit helpers are not full DLL CRT startup; the kernel loader does not yet
+dispatch module initializers or TLS. No fake export, host DLL or synthetic
+import trampoline fills those gaps.
 
 ### Allocation-free firmware memory descriptors
 

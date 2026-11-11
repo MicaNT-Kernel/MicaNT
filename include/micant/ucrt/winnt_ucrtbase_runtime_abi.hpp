@@ -10,18 +10,14 @@
 #include <cstddef>
 #include <cstdarg>
 
+#include "micant/ucrt/onexit_table.hpp"
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 
 namespace micant::ucrt::winnt_ucrtbase_abi {
 
 using _onexit_t = int (__cdecl *)(void);
-
-struct _onexit_table_t {
-    _onexit_t* _first{nullptr};
-    _onexit_t* _last{nullptr};
-    _onexit_t* _end{nullptr};
-};
+using _onexit_table_t = micant::ucrt::OnExitTable;
 
 // --- ucrtbase.dll official exports (26 functions) ---
 int32_t  Ucrt_initialize_onexit_table(_onexit_table_t* table) noexcept;

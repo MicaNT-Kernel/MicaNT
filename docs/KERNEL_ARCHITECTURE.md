@@ -300,10 +300,11 @@ The separately selected `MICANT_FREESTANDING_UCRT` branch now builds a
 no-import native memory/string subset from the same canonical source.
 It has a bounded 64 MiB coalescing heap and real PE static TLS for `errno`;
 the process loader must initialize that TLS before allocation is called.
-It also exports a tested freestanding `ceilf` implementation. It does not
-replace the missing CRT startup, stdio, locale, aligned allocation or unwind
-contracts. The current import check still fails on 26 Kernel32 requirements
-and 30 UCRT exports; no success fallback is introduced.
+It also exports tested freestanding `ceilf`, on-exit table, and initializer
+dispatch routines. These do not replace full DLL CRT startup, which the kernel
+loader does not yet perform. Stdio, locale, aligned allocation and unwind
+contracts remain missing. The current import check still fails on 26 Kernel32
+requirements and 25 UCRT exports; no success fallback is introduced.
 
 Structural inspection of the archived standalone kernel identified its
 loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import
