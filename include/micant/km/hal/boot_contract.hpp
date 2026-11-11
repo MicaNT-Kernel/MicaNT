@@ -4,6 +4,43 @@
 #include <cstdint>
 #include <type_traits>
 
+namespace micant::uefi {
+
+enum class EfiMemoryType : uint32_t {
+    EfiReservedMemoryType          = 0,
+    EfiLoaderCode                  = 1,
+    EfiLoaderData                  = 2,
+    EfiBootServicesCode            = 3,
+    EfiBootServicesData            = 4,
+    EfiRuntimeServicesCode         = 5,
+    EfiRuntimeServicesData         = 6,
+    EfiConventionalMemory          = 7,
+    EfiUnusableMemory              = 8,
+    EfiACPIReclaimMemory           = 9,
+    EfiACPIMemoryNVS               = 10,
+    EfiMemoryMappedIO              = 11,
+    EfiMemoryMappedIOPortSpace     = 12,
+    EfiPalCode                     = 13,
+    EfiPersistentMemory            = 14,
+    EfiMaxMemoryType               = 15
+};
+
+struct EfiMemoryDescriptor {
+    uint32_t type{0};
+    uint32_t pad{0};
+    uint64_t physicalStart{0};
+    uint64_t virtualStart{0};
+    uint64_t numberOfPages{0};
+    uint64_t attribute{0};
+};
+
+static_assert(sizeof(EfiMemoryDescriptor) == 40);
+static_assert(offsetof(EfiMemoryDescriptor, physicalStart) == 8);
+static_assert(offsetof(EfiMemoryDescriptor, numberOfPages) == 24);
+static_assert(std::is_trivially_copyable_v<EfiMemoryDescriptor>);
+
+} // namespace micant::uefi
+
 namespace micant::boot {
 
 inline constexpr uint64_t UEFI_KERNEL_HANDOFF_SIGNATURE = 0x4D4943414E54424FULL;

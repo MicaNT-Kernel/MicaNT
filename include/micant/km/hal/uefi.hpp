@@ -155,40 +155,6 @@ struct EfiGraphicsOutputProtocol {
 };
 
 /**
- * @brief UEFI Memory Types.
- */
-enum class EfiMemoryType : uint32_t {
-    EfiReservedMemoryType          = 0,
-    EfiLoaderCode                  = 1,
-    EfiLoaderData                  = 2,
-    EfiBootServicesCode            = 3,
-    EfiBootServicesData            = 4,
-    EfiRuntimeServicesCode         = 5,
-    EfiRuntimeServicesData         = 6,
-    EfiConventionalMemory          = 7,
-    EfiUnusableMemory              = 8,
-    EfiACPIReclaimMemory           = 9,
-    EfiACPIMemoryNVS               = 10,
-    EfiMemoryMappedIO              = 11,
-    EfiMemoryMappedIOPortSpace     = 12,
-    EfiPalCode                     = 13,
-    EfiPersistentMemory            = 14,
-    EfiMaxMemoryType               = 15
-};
-
-/**
- * @brief UEFI Memory Descriptor.
- */
-struct EfiMemoryDescriptor {
-    uint32_t type{0};
-    uint32_t pad{0};
-    uint64_t physicalStart{0};
-    uint64_t virtualStart{0};
-    uint64_t numberOfPages{0};
-    uint64_t attribute{0};
-};
-
-/**
  * @brief System Configuration Table entry (for ACPI RSDP, SMBIOS).
  */
 struct EfiConfigurationTable {

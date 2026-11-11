@@ -110,6 +110,17 @@ requirements and 31 UCRT exports, reduced from 73 total missing requirements
 to 57. No fake export, host DLL or synthetic import trampoline fills those
 gaps. Headless boot, the 12 parser tests and architecture checks still pass.
 
+### Allocation-free firmware memory descriptors
+
+The existing UEFI memory-type and descriptor declarations now live in
+[`boot_contract.hpp`](../include/micant/km/hal/boot_contract.hpp), which the
+hosted UEFI header already includes. There is one unchanged declaration, not
+a second boot memory-map format. Static assertions preserve the 40-byte
+descriptor and field offsets; `UefiKernelHandoffV2` remains 104 bytes.
+The standalone handoff test and headless QEMU boot pass after the extraction.
+This only removes a hosted-header dependency; PFN enrollment is not claimed
+by the extraction itself.
+
 ## Milestones
 
 | Milestone | State | Missing acceptance evidence |
