@@ -4,9 +4,9 @@
 // fixed-width members, callback signatures and version constants ABI-exact.
 #include <cstdint>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <vector>
 
 #include "micant/km/executive/io.hpp"
@@ -59,6 +59,10 @@ static_assert(sizeof(BATTERY_MINIPORT_INFO) == ((sizeof(void*) == 8) ? 80U : 40U
 
 struct BatteryClassDevice {
     BATTERY_MINIPORT_INFO Miniport{};
+    std::mutex waitMutex;
+    std::condition_variable waitCondition;
+    uint64_t statusSequence{};
+    bool unloaded{};
 };
 
 class BatteryClassRegistry {
@@ -74,35 +78,58 @@ public:
             info->DeviceName || !info->QueryTag || !info->QueryInformation || !info->SetInformation ||
             !info->QueryStatus || !info->SetStatusNotify || !info->DisableStatusNotify)
             return NtStatus::InvalidParameter;
-        auto device = std::make_unique<BatteryClassDevice>();
+        auto device = std::make_shared<BatteryClassDevice>();
         device->Miniport = *info;
         void* handle = device.get();
         std::lock_guard<std::mutex> guard(lock_);
-        devices_.push_back(std::move(device));
+        devices_.push_back(device);
         *classData = handle;
         return NtStatus::Success;
     }
 
     NtStatus unloadDevice(void* classData) {
         if (!classData) return NtStatus::InvalidParameter;
-        std::lock_guard<std::mutex> guard(lock_);
-        for (auto it = devices_.begin(); it != devices_.end(); ++it) {
-            if (it->get() == classData) {
-                devices_.erase(it);
-                return NtStatus::Success;
+        std::shared_ptr<BatteryClassDevice> removed;
+        {
+            std::lock_guard<std::mutex> guard(lock_);
+            for (auto it = devices_.begin(); it != devices_.end(); ++it) {
+                if (it->get() == classData) {
+                    removed = *it;
+                    devices_.erase(it);
+                    break;
+                }
             }
         }
-        return NtStatus::InvalidParameter;
+        if (!removed) return NtStatus::InvalidParameter;
+        {
+            std::lock_guard<std::mutex> guard(removed->waitMutex);
+            removed->unloaded = true;
+            ++removed->statusSequence;
+        }
+        removed->waitCondition.notify_all();
+        return NtStatus::Success;
     }
 
-    static BatteryClassDevice* resolve(void* classData) noexcept {
-        if (!classData) return nullptr;
+    static std::shared_ptr<BatteryClassDevice> resolve(void* classData) noexcept {
+        if (!classData) return {};
         auto* device = static_cast<BatteryClassDevice*>(classData);
         // Class handles are opaque. Verify membership before using the pointer.
         auto& registry = Instance();
         std::lock_guard<std::mutex> guard(registry.lock_);
-        for (const auto& item : registry.devices_) if (item.get() == device) return device;
-        return nullptr;
+        for (const auto& item : registry.devices_) if (item.get() == device) return item;
+        return {};
+    }
+
+    NtStatus statusNotify(void* classData) noexcept {
+        auto device = resolve(classData);
+        if (!device) return NtStatus::InvalidParameter;
+        {
+            std::lock_guard<std::mutex> guard(device->waitMutex);
+            if (device->unloaded) return NtStatus::NoSuchDevice;
+            ++device->statusSequence;
+        }
+        device->waitCondition.notify_all();
+        return NtStatus::Success;
     }
 
     void* firstHandle() noexcept {
@@ -120,7 +147,7 @@ public:
 
 private:
     std::mutex lock_;
-    std::vector<std::unique_ptr<BatteryClassDevice>> devices_;
+    std::vector<std::shared_ptr<BatteryClassDevice>> devices_;
 };
 
 } // namespace micant::po::bms
@@ -134,6 +161,10 @@ extern "C" inline micant::NtStatus BatteryClassUnload(void* classData) {
     return micant::po::bms::BatteryClassRegistry::Instance().unloadDevice(classData);
 }
 
+extern "C" inline micant::NtStatus BatteryClassStatusNotify(void* classData) {
+    return micant::po::bms::BatteryClassRegistry::Instance().statusNotify(classData);
+}
+
 extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io::Irp* irp) {
     using namespace micant;
     using namespace micant::po::bms;
@@ -143,7 +174,7 @@ extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io
         irp->ioStatus.information = 0;
         return NtStatus::DeviceNotReady;
     }
-    auto* state = BatteryClassRegistry::resolve(classData);
+    auto state = BatteryClassRegistry::resolve(classData);
     auto* stack = irp->getCurrentStack();
     if (!state || !stack) return NtStatus::InvalidParameter;
     void* buffer = irp->systemBuffer ? irp->systemBuffer : irp->userBuffer;
@@ -161,15 +192,37 @@ extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io
         const bool infiniteTimeout = timeout == UINT32_MAX;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
         uint32_t tag = 0;
+        std::unique_lock<std::mutex> waitLock(state->waitMutex);
         for (;;) {
+            const uint64_t observedSequence = state->statusSequence;
+            const bool unloaded = state->unloaded;
+            waitLock.unlock();
+            if (unloaded) {
+                status = NtStatus::NoSuchDevice;
+                tag = UINT32_MAX;
+                waitLock.lock();
+                break;
+            }
             status = state->Miniport.QueryTag(state->Miniport.Context, &tag);
-            if (!NT_SUCCESS(status) || tag != 0) break;
+            if (!NT_SUCCESS(status) || tag != 0) { waitLock.lock(); break; }
             if (timeout == 0 || (!infiniteTimeout && std::chrono::steady_clock::now() >= deadline)) {
                 tag = UINT32_MAX; // BATTERY_TAG_INVALID
                 status = NtStatus::NoSuchDevice;
+                waitLock.lock();
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            waitLock.lock();
+            if (infiniteTimeout) {
+                state->waitCondition.wait(waitLock, [&] {
+                    return state->statusSequence != observedSequence || state->unloaded;
+                });
+            } else if (!state->waitCondition.wait_until(waitLock, deadline, [&] {
+                    return state->statusSequence != observedSequence || state->unloaded;
+                })) {
+                tag = UINT32_MAX;
+                status = NtStatus::NoSuchDevice;
+                break;
+            }
         }
         std::memcpy(buffer, &tag, sizeof(tag));
         bytesReturned = sizeof(tag);
@@ -193,21 +246,33 @@ extern "C" inline micant::NtStatus BatteryClassIoctl(void* classData, micant::io
         const bool infiniteTimeout = wait.timeout == UINT32_MAX;
         const auto deadline = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(wait.timeout);
+        std::unique_lock<std::mutex> waitLock(state->waitMutex);
         for (;;) {
+            const uint64_t observedSequence = state->statusSequence;
+            if (state->unloaded) { status = NtStatus::NoSuchDevice; break; }
+            waitLock.unlock();
             status = state->Miniport.QueryStatus(state->Miniport.Context, wait.batteryTag, &batteryStatus);
-            if (!NT_SUCCESS(status) || wait.timeout == 0) break;
+            if (!NT_SUCCESS(status) || wait.timeout == 0) { waitLock.lock(); break; }
             const bool powerChanged = batteryStatus.powerState != wait.powerState;
             const bool capacityKnown = batteryStatus.capacity != UINT32_MAX;
             const bool belowLow = capacityKnown && wait.lowCapacity != 0 &&
                 batteryStatus.capacity < wait.lowCapacity;
             const bool aboveHigh = capacityKnown && wait.highCapacity != 0 &&
                 batteryStatus.capacity > wait.highCapacity;
-            if (powerChanged || belowLow || aboveHigh) break;
-            if (!infiniteTimeout && std::chrono::steady_clock::now() >= deadline) {
-                status = NtStatus::Timeout;
+            if (powerChanged || belowLow || aboveHigh) { waitLock.lock(); break; }
+            waitLock.lock();
+            if (infiniteTimeout) {
+                state->waitCondition.wait(waitLock, [&] {
+                    return state->statusSequence != observedSequence || state->unloaded;
+                });
+            } else if (!state->waitCondition.wait_until(waitLock, deadline, [&] {
+                    return state->statusSequence != observedSequence || state->unloaded;
+                })) {
+                waitLock.unlock();
+                status = state->Miniport.QueryStatus(state->Miniport.Context, wait.batteryTag, &batteryStatus);
+                waitLock.lock();
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         if (NT_SUCCESS(status)) {
             std::memcpy(buffer, &batteryStatus, sizeof(batteryStatus));

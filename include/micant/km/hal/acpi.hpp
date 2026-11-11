@@ -1161,6 +1161,14 @@ struct ACPI_TELEMETRY {
 class AcpiNamespace {
     std::shared_ptr<AmlNode> m_root;
     mutable std::mutex m_mutex;
+    struct NotifyRegistration {
+        uint64_t token{};
+        std::string path;
+        std::function<void(std::string_view, uint32_t)> callback;
+    };
+    std::vector<NotifyRegistration> m_notifyHandlers;
+    std::unordered_map<void*, std::string> m_devicePaths;
+    uint64_t m_nextNotifyToken{1};
 
 public:
     AcpiNamespace() {
@@ -1196,6 +1204,55 @@ public:
             return node->methodHandler(args);
         }
         return node->value;
+    }
+
+    uint64_t registerNotifyHandler(std::string_view path,
+        std::function<void(std::string_view, uint32_t)> callback) {
+        if (path.empty() || !callback || !resolvePath(path)) return 0;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint64_t token = m_nextNotifyToken++;
+        if (token == 0) token = m_nextNotifyToken++;
+        m_notifyHandlers.push_back({token, std::string(path), std::move(callback)});
+        return token;
+    }
+
+    bool unregisterNotifyHandler(uint64_t token) {
+        if (token == 0) return false;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto oldSize = m_notifyHandlers.size();
+        std::erase_if(m_notifyHandlers, [token](const NotifyRegistration& item) {
+            return item.token == token;
+        });
+        return m_notifyHandlers.size() != oldSize;
+    }
+
+    size_t dispatchNotify(std::string_view path, uint32_t value) const {
+        std::vector<std::function<void(std::string_view, uint32_t)>> callbacks;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (const auto& item : m_notifyHandlers)
+                if (item.path == path) callbacks.push_back(item.callback);
+        }
+        for (const auto& callback : callbacks) callback(path, value);
+        return callbacks.size();
+    }
+
+    void bindDevicePath(void* deviceObject, std::string_view path) {
+        if (!deviceObject || path.empty()) return;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_devicePaths[deviceObject] = std::string(path);
+    }
+
+    void unbindDevicePath(void* deviceObject) {
+        if (!deviceObject) return;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_devicePaths.erase(deviceObject);
+    }
+
+    std::string pathForDevice(void* deviceObject) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = m_devicePaths.find(deviceObject);
+        return it == m_devicePaths.end() ? std::string{} : it->second;
     }
 
 private:

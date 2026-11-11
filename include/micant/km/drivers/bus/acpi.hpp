@@ -34,7 +34,7 @@ public:
     NtStatus initialize() {
         auto& subsystem = micant::acpi::TitanAcpiSubsystem::Instance();
         if (!subsystem.isInitialized()) subsystem.initialize();
-        const auto& ns = subsystem.getNamespace();
+        auto& ns = subsystem.getNamespace();
         if (!ns.resolvePath("\\_SB")) return NtStatus::NoSuchDevice;
 
         configureDriver();
@@ -46,6 +46,8 @@ public:
         }
 
         enumerateNamespace(ns);
+        registerNotifyHandlers(ns);
+        registerGpeMethods(ns);
 
         auto& pnp = pnp::PnpManager::get();
         pnp.initialize();
@@ -194,7 +196,7 @@ private:
         return status;
     }
 
-    void enumerateNamespace(const micant::acpi::AcpiNamespace& ns) {
+    void enumerateNamespace(micant::acpi::AcpiNamespace& ns) {
         if (!children_.empty()) return;
         auto sb = ns.resolvePath("\\_SB");
         if (!sb) return;
@@ -203,7 +205,7 @@ private:
         enumerateNamespaceNode(ns, sb, "\\_SB", instances, index, 0);
     }
 
-    void enumerateNamespaceNode(const micant::acpi::AcpiNamespace& ns,
+    void enumerateNamespaceNode(micant::acpi::AcpiNamespace& ns,
         const std::shared_ptr<micant::acpi::AmlNode>& parent, const std::string& parentPath,
         std::unordered_map<std::wstring, uint32_t>& instances, uint32_t& index, uint32_t depth) {
         if (!parent || depth > 64) return;
@@ -243,12 +245,56 @@ private:
                             wideHid == L"PNP0C0A" ? io::DeviceType::Battery : io::DeviceType::Unknown,
                             extension.get());
                         pdo->flags &= ~io::DO_DEVICE_INITIALIZING;
+                        ns.bindDevicePath(pdo.get(), extension->namespacePath);
                         children_.push_back({std::move(extension), std::move(pdo)});
                     }
                 }
             }
             enumerateNamespaceNode(ns, node, path, instances, index, depth + 1);
         }
+    }
+
+    void registerNotifyHandlers(micant::acpi::AcpiNamespace& ns) {
+        for (const auto& child : children_) {
+            if (notifyTokens_.contains(child.pdo.get())) continue;
+            const auto pdo = child.pdo.get();
+            const auto path = child.extension->namespacePath;
+            const auto token = ns.registerNotifyHandler(path,
+                [pdo](std::string_view, uint32_t value) {
+                    if (value == 0x80 || value == 0x81)
+                        (void)micant::km::acpi::cmbatt::ControlMethodBatteryMiniport::HandleFirmwareNotify(
+                            pdo, value);
+                });
+            if (token) notifyTokens_[pdo] = token;
+        }
+    }
+
+    void registerGpeMethods(micant::acpi::AcpiNamespace& ns) {
+        if (gpeMethodsRegistered_) return;
+        auto gpeScope = ns.resolvePath("\\_GPE");
+        if (!gpeScope) return;
+        auto& controller = micant::acpi::TitanAcpiSubsystem::Instance().getGpeController();
+        for (const auto& [name, node] : gpeScope->children) {
+            if (!node || node->type != micant::acpi::AmlObjectType::Method || name.size() != 4 ||
+                (name[1] != 'L' && name[1] != 'E')) continue;
+            const int high = hexDigit(name[2]);
+            const int low = hexDigit(name[3]);
+            if (high < 0 || low < 0) continue;
+            const uint32_t gpe = static_cast<uint32_t>((high << 4) | low);
+            if (gpe >= 64) continue;
+            const std::string path = "\\_GPE." + name;
+            controller.registerHandler(gpe, [&ns, path](uint32_t) {
+                (void)ns.evaluate(path);
+            }, name[1] == 'L');
+        }
+        gpeMethodsRegistered_ = true;
+    }
+
+    static int hexDigit(char value) noexcept {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+        return -1;
     }
 
     static std::string eisaIdToString(uint32_t id) {
@@ -306,6 +352,8 @@ private:
     io::DriverObject driver_{};
     std::shared_ptr<io::DeviceObject> busPdo_;
     std::vector<ChildDevice> children_;
+    std::unordered_map<io::DeviceObject*, uint64_t> notifyTokens_;
+    bool gpeMethodsRegistered_{};
     std::shared_ptr<pnp::PnpDeviceNode> busDevNode_;
     std::shared_ptr<pnp::PnpDeviceNode> batteryDevNode_;
 };

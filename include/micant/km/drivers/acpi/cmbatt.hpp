@@ -11,6 +11,7 @@
 
 #include "micant/km/executive/bms.hpp"
 #include "micant/km/drivers/bus/battclass.hpp"
+#include "micant/km/executive/po.hpp"
 #include "micant/km/executive/pnp.hpp"
 #include "micant/km/hal/acpi.hpp"
 #include "micant/um/servers/scm.hpp"
@@ -32,27 +33,32 @@ struct FirmwareBatterySnapshot {
 struct MiniportExtension {
     io::DeviceObject* pdo{};
     void* classData{};
+    std::string namespacePath;
+    po::bms::BATTERY_NOTIFY notify{};
     bool started{};
+    bool notifyEnabled{};
 };
 
 class ControlMethodBatteryMiniport {
 public:
-    static bool QueryFirmware(FirmwareBatterySnapshot& snapshot) {
+    static bool QueryFirmware(FirmwareBatterySnapshot& snapshot,
+                              std::string_view batteryPath = "\\_SB.BAT0") {
         auto& subsystem = TitanAcpiSubsystem::Instance();
         if (!subsystem.isInitialized()) subsystem.initialize();
         const auto& ns = subsystem.getNamespace();
 
         const bool acOnline = queryAcOnline(ns);
 
-        const auto sta = ns.evaluate("\\_SB.BAT0._STA");
+        const auto sta = ns.evaluate(objectPath(batteryPath, "_STA"));
         snapshot.present = sta.type == AmlObjectType::Integer && (sta.integerVal & 0x01U) != 0;
         if (!snapshot.present) return true;
 
         // ACPI 4.0 _BIX extends and supersedes _BIF. Prefer it when present,
         // while retaining support for firmware that only provides _BIF.
-        const bool hasBix = static_cast<bool>(ns.resolvePath("\\_SB.BAT0._BIX"));
-        const auto bif = ns.evaluate(hasBix ? "\\_SB.BAT0._BIX" : "\\_SB.BAT0._BIF");
-        const auto bst = ns.evaluate("\\_SB.BAT0._BST");
+        const auto bixPath = objectPath(batteryPath, "_BIX");
+        const bool hasBix = static_cast<bool>(ns.resolvePath(bixPath));
+        const auto bif = ns.evaluate(hasBix ? bixPath : objectPath(batteryPath, "_BIF"));
+        const auto bst = ns.evaluate(objectPath(batteryPath, "_BST"));
         const size_t base = hasBix ? 1 : 0;
         if (bif.type != AmlObjectType::Package ||
             bif.packageElements.size() < (hasBix ? 20U : 13U) ||
@@ -133,20 +139,23 @@ public:
         return true;
     }
 
-    static bool RefreshClassDevice() {
+    static bool RefreshClassDevice(MiniportExtension* extension = nullptr) {
         FirmwareBatterySnapshot snapshot{};
-        const bool queried = QueryFirmware(snapshot);
+        const std::string_view path = extension && !extension->namespacePath.empty()
+            ? std::string_view(extension->namespacePath) : std::string_view("\\_SB.BAT0");
+        const bool queried = QueryFirmware(snapshot, path);
         if (!queried) snapshot.present = false;
         po::bms::SmartBatterySubsystem::get().updateFromAcpi(
             snapshot.present, snapshot.information, snapshot.status,
             snapshot.deviceName, snapshot.serialNumber, snapshot.manufacturer,
             snapshot.reportingScales, snapshot.reportingScaleCount);
+        updatePowerManagerState();
         return queried;
     }
 
     static NtStatus QueryTag(void* context, uint32_t* batteryTag) {
         if (!context || !batteryTag) return NtStatus::InvalidParameter;
-        (void)RefreshClassDevice();
+        (void)RefreshClassDevice(static_cast<MiniportExtension*>(context));
         *batteryTag = po::bms::SmartBatterySubsystem::get().getBatteryTag();
         return NtStatus::Success;
     }
@@ -156,7 +165,8 @@ public:
                                      uint32_t* returnedLength) {
         if (!context || !returnedLength || (!buffer && bufferLength)) return NtStatus::InvalidParameter;
         *returnedLength = 0;
-        (void)RefreshClassDevice();
+        auto* extension = static_cast<MiniportExtension*>(context);
+        (void)RefreshClassDevice(extension);
         auto& battery = po::bms::SmartBatterySubsystem::get();
         if (batteryTag == 0 || batteryTag != battery.getBatteryTag()) return NtStatus::DeviceNotReady;
         const po::bms::BatteryQueryInformation query{
@@ -170,17 +180,18 @@ public:
 
     static NtStatus SetInformation(void* context, uint32_t batteryTag, uint32_t, void*) {
         if (!context) return NtStatus::InvalidParameter;
-        (void)RefreshClassDevice();
+        auto* extension = static_cast<MiniportExtension*>(context);
+        (void)RefreshClassDevice(extension);
         const auto currentTag = po::bms::SmartBatterySubsystem::get().getBatteryTag();
         if (!batteryTag || batteryTag != currentTag) return NtStatus::DeviceNotReady;
-        // This ACPI device has no _BTP/_BMC implementation, so accepting a
-        // firmware trip-point or charge-control write would be false success.
+        // This ACPI device has no _BMC charge-control method. Firmware
+        // trip-point configuration is handled by SetStatusNotify/_BTP.
         return NtStatus::InvalidDeviceRequest;
     }
 
     static NtStatus QueryStatus(void* context, uint32_t batteryTag, void* output) {
         if (!context || !output) return NtStatus::InvalidParameter;
-        (void)RefreshClassDevice();
+        (void)RefreshClassDevice(static_cast<MiniportExtension*>(context));
         auto& battery = po::bms::SmartBatterySubsystem::get();
         if (!batteryTag || batteryTag != battery.getBatteryTag()) return NtStatus::DeviceNotReady;
         const auto& status = battery.getStatus();
@@ -188,16 +199,78 @@ public:
         return NtStatus::Success;
     }
 
-    static NtStatus SetStatusNotify(void* context, uint32_t batteryTag, po::bms::BATTERY_NOTIFY*) {
+    static NtStatus SetStatusNotify(void* context, uint32_t batteryTag,
+                                    po::bms::BATTERY_NOTIFY* notify) {
         if (!context) return NtStatus::InvalidParameter;
+        if (!notify) return NtStatus::InvalidParameter;
         if (!batteryTag || batteryTag != po::bms::SmartBatterySubsystem::get().getBatteryTag())
             return NtStatus::DeviceNotReady;
-        // The ACPI event/Notify path is not wired yet; do not claim monitoring.
-        return NtStatus::NotSupported;
+        constexpr uint32_t supportedPowerState = po::bms::BATTERY_POWER_ON_LINE |
+            po::bms::BATTERY_CHARGING | po::bms::BATTERY_DISCHARGING | po::bms::BATTERY_CRITICAL;
+        if (notify->PowerState & ~supportedPowerState) return NtStatus::NotSupported;
+        if (notify->LowCapacity && notify->HighCapacity) return NtStatus::NotSupported;
+        auto& extension = *static_cast<MiniportExtension*>(context);
+        auto& ns = TitanAcpiSubsystem::Instance().getNamespace();
+        const auto btpPath = objectPath(extension.namespacePath, "_BTP");
+        const bool hasTripPoint = static_cast<bool>(ns.resolvePath(btpPath));
+        const uint32_t tripPoint = notify->LowCapacity ? notify->LowCapacity : notify->HighCapacity;
+        if (tripPoint && !hasTripPoint) return NtStatus::NotSupported;
+        if (hasTripPoint) {
+            FirmwareBatterySnapshot snapshot{};
+            if (!QueryFirmware(snapshot, extension.namespacePath) || !snapshot.present)
+                return NtStatus::DeviceNotReady;
+            const auto bixPath = objectPath(extension.namespacePath, "_BIX");
+            const bool hasBix = static_cast<bool>(ns.resolvePath(bixPath));
+            const auto bif = ns.evaluate(hasBix ? bixPath :
+                objectPath(extension.namespacePath, "_BIF"));
+            const size_t base = hasBix ? 1U : 0U;
+            if (bif.type != AmlObjectType::Package || bif.packageElements.size() <= base + 4 ||
+                bif.packageElements[base].type != AmlObjectType::Integer ||
+                bif.packageElements[base + 4].type != AmlObjectType::Integer)
+                return NtStatus::InvalidDeviceRequest;
+            const uint32_t unit = static_cast<uint32_t>(bif.packageElements[base].integerVal);
+            const uint32_t voltage = clamp32(bif.packageElements[base + 4].integerVal);
+            uint64_t acpiTripPoint = tripPoint;
+            if (unit == 1 && voltage != 0)
+                acpiTripPoint = static_cast<uint64_t>(tripPoint) * 1000U / voltage;
+            (void)ns.evaluate(btpPath, {AmlValue::MakeInteger(acpiTripPoint)});
+        } else if (tripPoint) {
+            return NtStatus::NotSupported;
+        }
+        extension.notify = *notify;
+        extension.notifyEnabled = true;
+        return NtStatus::Success;
     }
 
     static NtStatus DisableStatusNotify(void* context) {
-        return context ? NtStatus::NotSupported : NtStatus::InvalidParameter;
+        if (!context) return NtStatus::InvalidParameter;
+        auto& extension = *static_cast<MiniportExtension*>(context);
+        auto& ns = TitanAcpiSubsystem::Instance().getNamespace();
+        const auto btpPath = objectPath(extension.namespacePath, "_BTP");
+        if (ns.resolvePath(btpPath)) (void)ns.evaluate(btpPath, {AmlValue::MakeInteger(0)});
+        extension.notify = {};
+        extension.notifyEnabled = false;
+        return NtStatus::Success;
+    }
+
+    static NtStatus HandleFirmwareNotify(io::DeviceObject* pdo, uint32_t event) {
+        if (event != 0x80 && event != 0x81) return NtStatus::InvalidParameter;
+        auto* classData = po::bms::BatteryClassRegistry::Instance().handleForPdo(pdo);
+        auto classDevice = po::bms::BatteryClassRegistry::resolve(classData);
+        if (!classDevice) return NtStatus::NoSuchDevice;
+        auto* extension = static_cast<MiniportExtension*>(classDevice->Miniport.Context);
+        if (!extension) return NtStatus::NoSuchDevice;
+        const auto& before = po::bms::SmartBatterySubsystem::get().getStatus();
+        const auto oldState = before.powerState;
+        const auto oldCapacity = before.capacity;
+        const auto oldTag = po::bms::SmartBatterySubsystem::get().getBatteryTag();
+        (void)RefreshClassDevice(extension);
+        const auto& after = po::bms::SmartBatterySubsystem::get().getStatus();
+        const auto newTag = po::bms::SmartBatterySubsystem::get().getBatteryTag();
+        updatePowerManagerState();
+        if (event == 0x81 || oldState != after.powerState || oldCapacity != after.capacity || oldTag != newTag)
+            return BatteryClassStatusNotify(classData);
+        return NtStatus::Success;
     }
 
     static NtStatus DispatchPnp(io::DeviceObject* device, io::Irp* irp) noexcept {
@@ -210,7 +283,7 @@ public:
                 if (!NT_SUCCESS(lowerStatus)) return lowerStatus;
             }
             extension.started = true;
-            (void)RefreshClassDevice();
+            (void)RefreshClassDevice(&extension);
             if (!InterfaceSymbolicLink().empty())
                 (void)pnp::PnpManager::get().setDeviceInterfaceState(InterfaceSymbolicLink(), true);
             device->flags = (device->flags | io::DO_BUFFERED_IO | io::DO_POWER_PAGABLE) &
@@ -261,6 +334,8 @@ public:
         if (!NT_SUCCESS(status)) return status;
         auto& extension = *static_cast<MiniportExtension*>(fdo->deviceExtension);
         extension.pdo = pdo;
+        extension.namespacePath = TitanAcpiSubsystem::Instance().getNamespace().pathForDevice(pdo);
+        if (extension.namespacePath.empty()) extension.namespacePath = "\\_SB.BAT0";
         if (!io::IoAttachDeviceToDeviceStack(fdo.get(), pdo)) {
             io::IoManager::get().deleteDevice(fdo.get());
             return NtStatus::NoSuchDevice;
@@ -323,6 +398,35 @@ public:
     }
 
 private:
+    static std::string objectPath(std::string_view base, std::string_view object) {
+        std::string path(base);
+        if (!path.empty() && path.back() != '.') path.push_back('.');
+        path.append(object);
+        return path;
+    }
+
+    static void updatePowerManagerState() {
+        auto& battery = po::bms::SmartBatterySubsystem::get();
+        const auto status = battery.getStatus();
+        const auto information = battery.getInformation();
+        po::SystemBatteryState state{};
+        state.acOnLine = (status.powerState & po::bms::BATTERY_POWER_ON_LINE) != 0;
+        state.batteryPresent = battery.isBatteryPresent();
+        state.charging = (status.powerState & po::bms::BATTERY_CHARGING) != 0;
+        state.discharging = (status.powerState & po::bms::BATTERY_DISCHARGING) != 0;
+        state.maxCapacity = information.fullChargedCapacity;
+        state.remainingCapacity = status.capacity;
+        state.rate = status.rate;
+        state.estimatedTime = po::bms::BATTERY_UNKNOWN_TIME;
+        if (status.rate < 0 && status.rate != po::bms::BATTERY_UNKNOWN_RATE) {
+            const uint64_t rate = static_cast<uint64_t>(-
+                static_cast<int64_t>(status.rate));
+            const uint64_t seconds = static_cast<uint64_t>(status.capacity) * 3600U / rate;
+            state.estimatedTime = static_cast<uint32_t>(std::min<uint64_t>(seconds, UINT32_MAX - 1U));
+        }
+        po::PowerManager::get().updateBatteryState(state);
+    }
+
     static std::wstring& InterfaceSymbolicLink() {
         static std::wstring link;
         return link;
