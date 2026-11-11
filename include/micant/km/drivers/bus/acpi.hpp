@@ -108,8 +108,10 @@ private:
             relations->objects.clear();
             const auto& ns = micant::acpi::TitanAcpiSubsystem::Instance().getNamespace();
             for (const auto& child : self->children_) {
-                const auto sta = ns.evaluate(child.extension->namespacePath + "._STA");
-                const bool present = sta.type != micant::acpi::AmlObjectType::Integer ||
+                const std::string staPath = child.extension->namespacePath + "._STA";
+                const auto staNode = ns.resolvePath(staPath);
+                const auto sta = staNode ? ns.evaluate(staPath) : micant::acpi::AmlValue::MakeInteger(0x0F);
+                const bool present = !staNode || sta.type != micant::acpi::AmlObjectType::Integer ||
                     (sta.integerVal & 1U) != 0;
                 if (present) relations->objects.push_back(child.pdo.get());
             }
@@ -147,9 +149,11 @@ private:
             capabilities->uniqueId = true;
             if (device != self->busPdo_.get()) {
                 const auto* extension = static_cast<AcpiPdoExtension*>(device->deviceExtension);
-                const auto sta = micant::acpi::TitanAcpiSubsystem::Instance().getNamespace()
-                    .evaluate(extension->namespacePath + "._STA");
-                capabilities->hardwareDisabled = sta.type == micant::acpi::AmlObjectType::Integer &&
+                const auto& ns = micant::acpi::TitanAcpiSubsystem::Instance().getNamespace();
+                const std::string staPath = extension->namespacePath + "._STA";
+                const auto staNode = ns.resolvePath(staPath);
+                const auto sta = staNode ? ns.evaluate(staPath) : micant::acpi::AmlValue::MakeInteger(0x0F);
+                capabilities->hardwareDisabled = staNode && sta.type == micant::acpi::AmlObjectType::Integer &&
                     !(sta.integerVal & 1U);
             }
             return complete(irp, NtStatus::Success);
