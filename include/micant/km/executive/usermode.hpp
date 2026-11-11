@@ -28,6 +28,7 @@
 #include "micant/km/hal/cpu.hpp"
 #include "micant/km/hal/bootvid.hpp"
 #include "micant/shared/boot_driver.hpp"
+#include "micant/shared/user_graphics.hpp"
 #include "micant/um/native/pe.hpp"
 
 namespace micant::um {
@@ -323,36 +324,6 @@ struct UserProcessContext64 {
 // ----------------------------------------------------------------------------
 // Win32k GDI / Framebuffer Graphics System Service Structures (Ring 3 <-> Ring 0)
 // ----------------------------------------------------------------------------
-#pragma pack(push, 1)
-struct UserVideoInfo64 {
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t pitch{0};        // In pixels
-    uint32_t bpp{32};         // 32-bit color
-    uint32_t pixelFormat{1};  // 1 = BGRA, 0 = RGBA
-    uint32_t reserved{0};     // 64-bit alignment padding
-    uint64_t physicalBase{0}; // Physical or mapped VRAM base
-};
-
-struct UserPresentSurfaceParams64 {
-    uint64_t surfaceBufferVa{0}; // Userland 32-bpp BGRA buffer pointer
-    uint32_t dstX{0};
-    uint32_t dstY{0};
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t pitch{0};           // Userland buffer pitch in pixels (0 = width)
-    uint32_t reserved{0};        // 64-bit alignment padding
-};
-
-struct UserPresentCompositionParams64 {
-    uint64_t baseSurfaceBufferVa{0};
-    uint64_t layersVa{0};
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t pitch{0};
-    uint32_t layerCount{0};
-};
-#pragma pack(pop)
 
 // ============================================================================
 // 3. System Service Descriptor Table (SSDT) & Fast Syscall Engine
@@ -2623,4 +2594,3 @@ public:
 };
 
 } // namespace micant::um
-

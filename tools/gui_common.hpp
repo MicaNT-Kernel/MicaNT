@@ -11,46 +11,16 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "micant/shared/user_syscall.hpp"
+#include "micant/shared/user_graphics.hpp"
 
 namespace micant_gui {
 
-#pragma pack(push, 1)
-struct UserVideoInfo64 {
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t pitch{0};
-    uint32_t bpp{32};
-    uint32_t pixelFormat{1}; // 1 = BGRA
-    uint32_t reserved{0};
-    uint64_t physicalBase{0};
-};
-
-struct UserPresentSurfaceParams64 {
-    uint64_t surfaceBufferVa{0};
-    uint32_t dstX{0};
-    uint32_t dstY{0};
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t pitch{0};
-    uint32_t reserved{0};
-};
-#pragma pack(pop)
+using micant::um::UserVideoInfo64;
+using micant::um::UserPresentSurfaceParams64;
 
 inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
+    return micant::sys::invokeUserService(ssn, arg1, arg2);
 }
 
 constexpr size_t StrLen(const char* s) noexcept {

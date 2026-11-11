@@ -293,12 +293,8 @@ void toggleStart() noexcept {
 
 void updateClock() noexcept {
     MicaWin32kSystemTime value{};
-    uint64_t ok = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movq %1, %%r10; movl $0x83, %%eax; syscall"
-                         : "=a"(ok) : "r"(&value) : "r10", "rcx", "r11", "memory");
-#endif
-    if (!ok || value.second == g.clockSecond) return;
+    const uint64_t ok = DoSyscall(0x83, reinterpret_cast<uint64_t>(&value));
+    if (ok != 1 || value.second == g.clockSecond) return;
     g.clockSecond = value.second;
     g.systemTime = value;
     uint8_t hour = value.hour;

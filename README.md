@@ -35,7 +35,9 @@ This requires CMake, Ninja, QEMU, OVMF, and an AMD64 LLVM-MinGW cross-compiler
 (set `MICANT_CXX` or pass `--cxx` if it is not on `PATH`). Use the `--headless`
 option to run the serial-verified smoke test and automated mouse/scanout checks
 without opening a display. The Ring 3 diagnostic is not yet a running Explorer
-process; Start, windows and accelerated composition are not connected.
+process; Start, windows and accelerated composition are not connected. The
+diagnostic does exercise native syscall entry/return, protected user buffers,
+and a user-originated surface submission verified in the VirtIO scanout.
 
 To build the real Explorer and windowing DLLs and check their native imports:
 

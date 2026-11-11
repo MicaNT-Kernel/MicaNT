@@ -4,6 +4,8 @@
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/user_graphics.hpp"
+#include "micant/shared/win32k_client.h"
 #include "tools/explorer_shell/desktop.hpp"
 #include "tools/explorer_shell/taskbar.hpp"
 
@@ -18,6 +20,11 @@ uint32_t g_cursorFrame[kCursorSize * kCursorSize]{};
 micant::boot_driver::KernelServices g_displayServices{};
 micant::boot_driver::DisplayDevice g_display{};
 micant::boot_driver::DriverObject g_displayDriver{};
+uint32_t g_mouseX = (kWidth - kCursorSize) / 2;
+uint32_t g_mouseY = (kHeight - kCursorSize) / 2;
+uint32_t g_mouseButtons{};
+uint32_t g_mouseSequence{};
+bool pollMouseInput(MicaWin32kInputEvent& event) noexcept;
 
 void writePort(uint16_t port, uint8_t value) noexcept {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -177,6 +184,79 @@ void drawMouseCursor(uint32_t x, uint32_t y) noexcept {
     presentCursorRect(x, y);
 }
 
+uint64_t dispatchBootstrapService(uint64_t number, uint64_t first,
+                                  uint64_t second) noexcept {
+    using namespace micant;
+    using hal::amd64::bootstrapUserRange;
+    const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
+    if (number == 0x80) {
+        if (!bootstrapUserRange(first, sizeof(um::UserVideoInfo64), true)) {
+            return status(NtStatus::AccessViolation);
+        }
+        auto* output = reinterpret_cast<um::UserVideoInfo64*>(first);
+        *output = {g_display.Width, g_display.Height, g_display.Pitch,
+                   32, g_display.PixelFormat, 0, 0};
+        return status(NtStatus::Success);
+    }
+    if (number == 0x81) {
+        if (!bootstrapUserRange(first, sizeof(um::UserPresentSurfaceParams64), false)) {
+            return status(NtStatus::AccessViolation);
+        }
+        const auto params = *reinterpret_cast<const um::UserPresentSurfaceParams64*>(first);
+        const uint32_t pitch = params.pitch ? params.pitch : params.width;
+        if (!params.width || !params.height || params.dstX >= kWidth ||
+            params.dstY >= kHeight || params.width > kWidth - params.dstX ||
+            params.height > kHeight - params.dstY || pitch < params.width ||
+            pitch > 16384 || params.reserved) {
+            return status(NtStatus::InvalidParameter);
+        }
+        const size_t bytes = (static_cast<size_t>(params.height - 1) * pitch +
+                              params.width) * sizeof(uint32_t);
+        if (!bootstrapUserRange(params.surfaceBufferVa, bytes, false)) {
+            return status(NtStatus::AccessViolation);
+        }
+        const auto* pixels = reinterpret_cast<const uint32_t*>(params.surfaceBufferVa);
+        for (uint32_t row = 0; row < params.height; ++row) {
+            for (uint32_t column = 0; column < params.width; ++column) {
+                g_explorerSurface[(params.dstY + row) * kWidth + params.dstX + column] =
+                    pixels[static_cast<size_t>(row) * pitch + column];
+            }
+        }
+        if (!g_display.PresentFrame(g_display.Context,
+                g_explorerSurface + params.dstY * kWidth + params.dstX,
+                params.width, params.height, kWidth,
+                static_cast<int32_t>(params.dstX), static_cast<int32_t>(params.dstY))) {
+            return status(NtStatus::DeviceError);
+        }
+        return status(NtStatus::Success);
+    }
+    if (number == 0x25) {
+        if (!second || second > 4096 ||
+            !bootstrapUserRange(first, static_cast<size_t>(second), false)) {
+            return status(NtStatus::AccessViolation);
+        }
+        const auto* text = reinterpret_cast<const char*>(first);
+        char character[2]{};
+        for (size_t byte = 0; byte < second; ++byte) {
+            character[0] = text[byte];
+            serialWrite(character);
+        }
+        return status(NtStatus::Success);
+    }
+    if (number == 0x82) {
+        if (!bootstrapUserRange(first, sizeof(MicaWin32kInputEvent), true)) {
+            return status(NtStatus::AccessViolation);
+        }
+        MicaWin32kInputEvent event{};
+        if (!pollMouseInput(event)) {
+            return 0;
+        }
+        *reinterpret_cast<MicaWin32kInputEvent*>(first) = event;
+        return 1;
+    }
+    return status(NtStatus::NotSupported);
+}
+
 bool waitForControllerInput() noexcept {
     for (uint32_t wait = 0; wait < 100000; ++wait) {
         if ((readPort(0x64) & 0x02) == 0) {
@@ -237,19 +317,13 @@ bool initializeMouse() noexcept {
     return sendMouseCommand(0xF6) && sendMouseCommand(0xF4);
 }
 
-[[noreturn]] void runMouseShell() noexcept {
-    uint32_t x = (kWidth - kCursorSize) / 2;
-    uint32_t y = (kHeight - kCursorSize) / 2;
-    drawMouseCursor(x, y);
-
-    uint8_t packet[3]{};
-    uint32_t packetIndex = 0;
-    bool leftButtonWasDown = false;
-    for (;;) {
+bool pollMouseInput(MicaWin32kInputEvent& event) noexcept {
+    static uint8_t packet[3]{};
+    static uint32_t packetIndex = 0;
+    for (unsigned count = 0; count < 64; ++count) {
         const uint8_t status = readPort(0x64);
         if ((status & 0x01) == 0) {
-            __asm__ __volatile__("pause");
-            continue;
+            return false;
         }
         const uint8_t data = readPort(0x60);
         if ((status & 0x20) == 0) {
@@ -268,17 +342,14 @@ bool initializeMouse() noexcept {
             continue;
         }
 
-        const bool leftButtonIsDown = (packet[0] & 0x01) != 0;
-        const bool leftButtonClicked =
-            leftButtonIsDown && !leftButtonWasDown;
-        leftButtonWasDown = leftButtonIsDown;
+        const uint32_t buttons = packet[0] & 7;
 
         const int32_t deltaX = static_cast<int32_t>(packet[1]) -
                               ((packet[0] & 0x10) ? 256 : 0);
         const int32_t deltaY = static_cast<int32_t>(packet[2]) -
                               ((packet[0] & 0x20) ? 256 : 0);
-        const int32_t nextX = static_cast<int32_t>(x) + deltaX;
-        const int32_t nextY = static_cast<int32_t>(y) - deltaY;
+        const int32_t nextX = static_cast<int32_t>(g_mouseX) + deltaX;
+        const int32_t nextY = static_cast<int32_t>(g_mouseY) - deltaY;
         const uint32_t maxX = kWidth - kCursorSize;
         const uint32_t maxY = kHeight - kCursorSize;
         const uint32_t clampedX = nextX < 0 ? 0 :
@@ -287,18 +358,35 @@ bool initializeMouse() noexcept {
         const uint32_t clampedY = nextY < 0 ? 0 :
             (static_cast<uint32_t>(nextY) > maxY ? maxY :
                                                    static_cast<uint32_t>(nextY));
-        const bool cursorMoved = clampedX != x || clampedY != y;
-        if (!cursorMoved && !leftButtonClicked) {
+        const bool cursorMoved = clampedX != g_mouseX || clampedY != g_mouseY;
+        if (!cursorMoved && buttons == g_mouseButtons) {
             continue;
         }
 
-        restoreCursorBackground(x, y);
-        x = clampedX;
-        y = clampedY;
-        if (leftButtonClicked) {
-            serialWrite("[MicaNT Input] Left button pressed; user-mode shell not started\r\n");
+        restoreCursorBackground(g_mouseX, g_mouseY);
+        g_mouseX = clampedX;
+        g_mouseY = clampedY;
+        g_mouseButtons = buttons;
+        drawMouseCursor(g_mouseX, g_mouseY);
+        event = {static_cast<int32_t>(g_mouseX), static_cast<int32_t>(g_mouseY),
+                 buttons, ++g_mouseSequence};
+        return true;
+    }
+    return false;
+}
+
+[[noreturn]] void runMouseShell() noexcept {
+    drawMouseCursor(g_mouseX, g_mouseY);
+    uint32_t buttons{};
+    for (;;) {
+        MicaWin32kInputEvent event{};
+        if (pollMouseInput(event)) {
+            if ((event.buttons & 1) && !(buttons & 1)) {
+                serialWrite("[MicaNT Input] Left button pressed; user-mode shell not started\r\n");
+            }
+            buttons = event.buttons;
         }
-        drawMouseCursor(x, y);
+        __asm__ __volatile__("pause");
     }
 }
 
@@ -330,6 +418,11 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ps] CPL3 execution and Ring 0 trap return verified\r\n");
     serialWrite("[MicaNT Mm] User/kernel isolation and read-only user code verified\r\n");
     serialWrite("[MicaNT Mm] Supervisor MMIO and non-executable user stack verified\r\n");
+    if (!micant::hal::amd64::initializeBootstrapSyscalls(dispatchBootstrapService) ||
+        !micant::hal::amd64::verifyBootstrapSyscalls()) {
+        stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
     if (!initializeMouse()) {
         stopWithError("[MicaNT Input] PS/2 mouse initialization failed\r\n");
     }

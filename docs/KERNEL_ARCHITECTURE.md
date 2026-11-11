@@ -286,6 +286,39 @@ syscall buffers, input delivery and process lifecycle must be connected and
 exercised. The previous CPL3/PS2/VirtIO smoke test remains a separate,
 strictly smaller verification level.
 
+### Native syscall boundary
+
+The modular AMD64 bootstrap now installs `STAR`, `LSTAR`, `SFMASK` and
+`EFER.SCE`. The entry uses `SWAPGS` and a supervisor-owned syscall stack;
+it never calls C++ on the user stack. It preserves general registers and
+XMM0-XMM15, reserves the Windows x64 home space, clears the direction flag
+before C++, and returns through a checked `IRETQ` frame. RIP must name an
+executable user page, RSP must name writable user memory, and privileged
+RFLAGS are stripped. IRQs remain disabled: this is a single-CPU polled
+bootstrap, not yet a preemptive Executive or a multi-process syscall engine.
+
+The GUI helper, Explorer and Win32k use the same private service transport:
+service number in RAX, first argument in R10, second in RDX. The service IDs
+are internal transport identifiers, not declared Windows syscall numbers.
+Shared graphics POD layouts are in `include/micant/shared/user_graphics.hpp`.
+
+The connected services query the actual display, present user pixels through
+the boot-start driver, poll PS/2 input into the existing Win32k event layout,
+and write bounded diagnostic bytes to COM1. Buffer validation walks every
+page and checks effective user/write/execute permissions at all four levels;
+supervisor pointers, wraparound and partially mapped buffers fail explicitly.
+Surface parameters and pixel extents are validated before any driver call;
+pixels are copied into kernel-owned backing storage. Unsupported services
+return `STATUS_NOT_SUPPORTED`, never success-shaped placeholders.
+
+The QEMU smoke test now requires a real CPL3 syscall round trip. It verifies
+register preservation, display dimensions, a zero physical framebuffer
+pointer, read-only/supervisor/null/wrapping/cross-page output rejection,
+bounded console output with the second argument, invalid surface rejection,
+and an actual user-originated 2x2 surface submission. QMP checks the resulting
+RGB `(17, 34, 51)` pixels at the scanout origin before testing mouse movement.
+These diagnostics deliberately do not stand in for an Explorer process.
+
 PE table validation follows the public
 [Microsoft PE/COFF format specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format);
 the CRT API-set preflight follows the

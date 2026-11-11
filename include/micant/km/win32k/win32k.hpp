@@ -48,6 +48,8 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/win32k_client.h"
+#include "micant/shared/user_graphics.hpp"
+#include "micant/shared/user_syscall.hpp"
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
@@ -2574,10 +2576,8 @@ private:
 #if defined(__x86_64__)
         for (unsigned count = 0; count < 64; ++count) {
             MicaWin32kKeyboardEvent key{};
-            uint64_t available = 0;
-            __asm__ __volatile__("movq %1, %%r10; movl $0x84, %%eax; syscall"
-                                 : "=a"(available) : "r"(&key)
-                                 : "r10", "rcx", "r11", "memory");
+            const uint64_t available = micant::sys::invokeUserService(
+                0x84, reinterpret_cast<uint64_t>(&key));
             if (available != 1) break;
             HWND target = m_currentDesktop ? m_currentDesktop->getFocusWindow() : nullptr;
             if (!target && m_currentDesktop) target = m_currentDesktop->getActiveWindow();
@@ -2588,10 +2588,8 @@ private:
         bool inputChanged = false;
         for (unsigned count = 0; count < 128; ++count) {
             MicaWin32kInputEvent input{};
-            uint64_t available = 0;
-            __asm__ __volatile__("movq %1, %%r10; movl $0x82, %%eax; syscall"
-                                 : "=a"(available) : "r"(&input)
-                                 : "r10", "rcx", "r11", "memory");
+            const uint64_t available = micant::sys::invokeUserService(
+                0x82, reinterpret_cast<uint64_t>(&input));
             if (available != 1) break;
             routeMouseInput(input);
             inputChanged = true;
@@ -2599,18 +2597,12 @@ private:
         if (inputChanged) {
             auto frame = composeDesktopFrame();
             if (!frame || frame->pixels.empty()) return;
-            struct PresentParams {
-                uint64_t surfaceBufferVa;
-                uint32_t dstX, dstY, width, height, pitch, reserved;
-            } params{};
+            micant::um::UserPresentSurfaceParams64 params{};
             params.surfaceBufferVa = reinterpret_cast<uint64_t>(frame->pixels.data());
             params.width = frame->width;
             params.height = frame->height;
             params.pitch = frame->width;
-            uint64_t status = 0;
-            __asm__ __volatile__("movq %1, %%r10; movl $0x81, %%eax; syscall"
-                                 : "=a"(status) : "r"(&params)
-                                 : "r10", "rcx", "r11", "memory");
+            micant::sys::invokeUserService(0x81, reinterpret_cast<uint64_t>(&params));
         }
 #endif
     }
@@ -2931,4 +2923,3 @@ namespace micant {
     using win32k::W32kGetTelemetry;
     using win32k::InitializeWin32kSubsystemExports;
 } // namespace micant
-

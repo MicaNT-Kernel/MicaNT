@@ -2,6 +2,8 @@
 #define MICANT_WIN32K_EXPORTS
 #endif
 #include "micant/shared/win32k_client.h"
+#include "micant/shared/user_graphics.hpp"
+#include "micant/shared/user_syscall.hpp"
 #include "micant/km/win32k/win32k.hpp"
 
 using namespace micant::win32k;
@@ -24,43 +26,26 @@ int32_t PresentComposedDesktop(TitanWin32kSubsystem& server) {
         std::vector<micant::boot_driver::CompositionLayer> layers;
         layers.reserve(heldLayers.size());
         for (const auto& layer : heldLayers) layers.push_back(layer.descriptor);
-        struct CompositionParams {
-            uint64_t baseSurfaceBufferVa;
-            uint64_t layersVa;
-            uint32_t width, height, pitch, layerCount;
-        } composition{};
+        micant::um::UserPresentCompositionParams64 composition{};
         composition.baseSurfaceBufferVa = reinterpret_cast<uint64_t>(base->pixels.data());
         composition.layersVa = reinterpret_cast<uint64_t>(layers.data());
         composition.width = base->width;
         composition.height = base->height;
         composition.pitch = base->stride / sizeof(uint32_t);
         composition.layerCount = static_cast<uint32_t>(layers.size());
-        uint64_t compositionStatus = 0;
-#if defined(__x86_64__)
-        __asm__ __volatile__("movq %1, %%r10; movl $0x85, %%eax; syscall"
-                             : "=a"(compositionStatus) : "r"(&composition)
-                             : "r10", "rcx", "r11", "memory");
-#endif
+        const uint64_t compositionStatus = micant::sys::invokeUserService(
+            0x85, reinterpret_cast<uint64_t>(&composition));
         if (compositionStatus == 0) return 1;
     }
     auto bitmap = server.composeDesktopFrame();
     if (!bitmap || bitmap->pixels.empty() || bitmap->width == 0 || bitmap->height == 0) return 0;
-    struct PresentParams {
-        uint64_t surfaceBufferVa;
-        uint32_t dstX, dstY, width, height, pitch, reserved;
-    } params{};
+    micant::um::UserPresentSurfaceParams64 params{};
     params.surfaceBufferVa = reinterpret_cast<uint64_t>(bitmap->pixels.data());
     params.width = bitmap->width;
     params.height = bitmap->height;
     params.pitch = bitmap->width;
-    uint64_t status = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movq %1, %%r10; movl $0x81, %%eax; syscall"
-                         : "=a"(status) : "r"(&params)
-                         : "r10", "rcx", "r11", "memory");
-#else
-    return 0;
-#endif
+    const uint64_t status = micant::sys::invokeUserService(
+        0x81, reinterpret_cast<uint64_t>(&params));
     return status == 0 ? 1 : 0;
 }
 }

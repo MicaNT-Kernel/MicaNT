@@ -29,6 +29,7 @@ EXPECTED_SERIAL = (
     "[MicaNT Ps] CPL3 execution and Ring 0 trap return verified",
     "[MicaNT Mm] User/kernel isolation and read-only user code verified",
     "[MicaNT Mm] Supervisor MMIO and non-executable user stack verified",
+    "[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified",
     "[MicaNT Input] PS/2 mouse polling initialized",
     "[MicaNT Explorer] Shell idle loop entered",
 )
@@ -76,6 +77,11 @@ def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
 
             execute("qmp_capabilities")
             before = screen("before.ppm")
+            for y in range(2):
+                for x in range(2):
+                    pixel = (y * 1024 + x) * 3
+                    if before[pixel:pixel + 3] != bytes((0x11, 0x22, 0x33)):
+                        raise RuntimeError("CPL3 surface presentation did not reach VirtIO scanout")
             execute("input-send-event", {"events": [
                 {"type": "rel", "data": {"axis": "x", "value": 40}},
                 {"type": "rel", "data": {"axis": "y", "value": 20}},
