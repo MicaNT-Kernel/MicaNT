@@ -765,6 +765,7 @@ enum class AmlObjectType {
     String,
     Buffer,
     Package,
+    Reference,
     Device,
     Scope,
     Method,
@@ -776,6 +777,7 @@ struct AmlValue {
     AmlObjectType type{AmlObjectType::Integer};
     uint64_t integerVal{0};
     std::string stringVal;
+    std::string referencePath;
     std::vector<uint8_t> bufferVal;
     std::vector<AmlValue> packageElements;
 
@@ -790,6 +792,13 @@ struct AmlValue {
         AmlValue val{};
         val.type = AmlObjectType::String;
         val.stringVal = s;
+        return val;
+    }
+
+    static AmlValue MakeReference(std::string_view path) {
+        AmlValue val{};
+        val.type = AmlObjectType::Reference;
+        val.referencePath = path;
         return val;
     }
 
@@ -1264,12 +1273,7 @@ public:
     }
 
     AmlValue evaluate(std::string_view path, const std::vector<AmlValue>& args = {}) const {
-        auto node = resolvePath(path);
-        if (!node) return AmlValue::MakeInteger(0);
-        if (node->methodHandler) {
-            return node->methodHandler(args);
-        }
-        return node->value;
+        return evaluatePath(path, args, 0);
     }
 
     uint64_t registerNotifyHandler(std::string_view path,
@@ -1338,7 +1342,8 @@ public:
         std::memcpy(&header, table.data(), sizeof(header));
         if ((std::memcmp(header.signature, "DSDT", 4) != 0 &&
              std::memcmp(header.signature, "SSDT", 4) != 0) ||
-            header.length < sizeof(AcpiTableHeader) || header.length > table.size()) return false;
+            header.length < sizeof(AcpiTableHeader) || header.length > table.size() ||
+            !VerifyAcpiChecksum(table.data(), header.length)) return false;
         std::lock_guard<std::mutex> namespaceLock(m_mutex);
 
         const auto bytes = table.first(header.length);
@@ -1463,7 +1468,7 @@ public:
                 --pos;
                 std::string reference;
                 if (!namePath(pos, limit, scopePath, reference)) return false;
-                value = AmlValue::MakeString(reference);
+                value = AmlValue::MakeReference(reference);
                 return true;
             }
             return false;
@@ -1623,6 +1628,23 @@ public:
     }
 
 private:
+    AmlValue evaluatePath(std::string_view path, const std::vector<AmlValue>& args, uint32_t depth) const {
+        if (depth >= 32) return AmlValue::MakeInteger(0);
+        auto node = resolvePath(path);
+        if (!node) return AmlValue::MakeInteger(0);
+        if (node->methodHandler) return node->methodHandler(args);
+        if (node->value.type == AmlObjectType::Reference)
+            return evaluatePath(node->value.referencePath, {}, depth + 1);
+        AmlValue value = node->value;
+        if (value.type == AmlObjectType::Package) {
+            for (auto& element : value.packageElements) {
+                if (element.type == AmlObjectType::Reference)
+                    element = evaluatePath(element.referencePath, {}, depth + 1);
+            }
+        }
+        return value;
+    }
+
     void populatePredefinedTree() {
         // Root Scopes: \_SB (System Bus), \_PR (Processors), \_TZ (Thermal Zones), \_SI (System Indicators)
         auto sb = std::make_shared<AmlNode>("_SB", AmlObjectType::Scope);

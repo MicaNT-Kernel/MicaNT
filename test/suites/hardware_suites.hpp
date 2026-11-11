@@ -1884,6 +1884,10 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
         dsdt[offsetof(acpi::AcpiTableHeader, checksum)] = static_cast<uint8_t>(
             0U - acpi::CalculateAcpiChecksum(dsdt.data(), dsdt.size()));
         TEST_ASSERT(firmwareNamespace.loadDefinitionBlock(dsdt), "AML DSDT namespace declarations must load");
+        auto corruptDsdt = dsdt;
+        corruptDsdt.back() ^= 0x01;
+        TEST_ASSERT(!firmwareNamespace.loadDefinitionBlock(corruptDsdt),
+            "AML loader must reject a table with a bad ACPI checksum");
         TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_.TEST").integerVal == 42,
             "AML namespace loader must preserve scoped integer Name objects");
         TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_._STA").integerVal == 42,
