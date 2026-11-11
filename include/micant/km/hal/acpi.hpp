@@ -312,6 +312,15 @@ struct AcpiMadtLocalApic {
     uint32_t flags;              // Bit 0 = Enabled, Bit 1 = Online capable
 };
 
+// MADT Type 9: Processor Local x2APIC (ACPI 4.0+).
+struct AcpiMadtLocalX2Apic {
+    AcpiMadtRecordHeader header; // type = 9, length = 16
+    uint16_t reserved;
+    uint32_t x2ApicId;
+    uint32_t flags;              // Bit 0 = Enabled, Bit 1 = Online capable
+    uint32_t processorUid;
+};
+
 // MADT Type 1: I/O APIC
 struct AcpiMadtIoApic {
     AcpiMadtRecordHeader header; // type = 1, length = 12
@@ -1672,6 +1681,7 @@ class TitanAcpiSubsystem {
     AcpiFadt m_fadt{};
     AcpiMadtHeader m_madtHeader{};
     std::vector<AcpiMadtLocalApic> m_localApics;
+    std::vector<AcpiMadtLocalX2Apic> m_localX2Apics;
     std::vector<AcpiMadtIoApic> m_ioApics;
     std::vector<AcpiMadtIntrOverride> m_intrOverrides;
     AcpiMcfgHeader m_mcfg{};
@@ -1767,6 +1777,7 @@ public:
         m_tableStorage.clear();
         m_tablePhysicalAddresses.clear();
         m_localApics.clear();
+        m_localX2Apics.clear();
         m_ioApics.clear();
         m_intrOverrides.clear();
         m_madtHeader = {};
@@ -1830,6 +1841,11 @@ public:
                         AcpiMadtLocalApic local{};
                         std::memcpy(&local, entry, sizeof(local));
                         m_localApics.push_back(local);
+                    } else if (record.type == MADT_TYPE_LOCAL_X2APIC &&
+                               record.length >= sizeof(AcpiMadtLocalX2Apic)) {
+                        AcpiMadtLocalX2Apic local{};
+                        std::memcpy(&local, entry, sizeof(local));
+                        m_localX2Apics.push_back(local);
                     } else if (record.type == MADT_TYPE_IO_APIC && record.length >= sizeof(AcpiMadtIoApic)) {
                         AcpiMadtIoApic ioApic{};
                         std::memcpy(&ioApic, entry, sizeof(ioApic));
@@ -2124,6 +2140,7 @@ public:
     const AcpiFadt& getFadt() const { return m_fadt; }
     const AcpiMadtHeader& getMadtHeader() const { return m_madtHeader; }
     const std::vector<AcpiMadtLocalApic>& getLocalApics() const { return m_localApics; }
+    const std::vector<AcpiMadtLocalX2Apic>& getLocalX2Apics() const { return m_localX2Apics; }
     const std::vector<AcpiMadtIoApic>& getIoApics() const { return m_ioApics; }
     const std::vector<AcpiMadtIntrOverride>& getIntrOverrides() const { return m_intrOverrides; }
     const AcpiMcfgHeader& getMcfg() const { return m_mcfg; }
@@ -2429,7 +2446,7 @@ inline BOOL WINAPI AcpiGetBatteryStatus(
 inline uint32_t WINAPI AcpiGetProcessorCount() {
     auto& acpi = TitanAcpiSubsystem::Instance();
     if (!acpi.isInitialized()) acpi.initialize();
-    return static_cast<uint32_t>(acpi.getLocalApics().size());
+    return static_cast<uint32_t>(acpi.getLocalApics().size() + acpi.getLocalX2Apics().size());
 }
 
 inline BOOL WINAPI AcpiRegisterGpeHandler(uint32_t gpeNumber, void (*handler)(uint32_t)) {
