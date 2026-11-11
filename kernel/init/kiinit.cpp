@@ -345,6 +345,10 @@ extern "C" NtStatus KiSystemStartup(
     std::cout << (lpb.acpiTablePhysicalAddress != 0
         ? "[Acpi] Firmware RSDP accepted; ACPI tables initialized.\n"
         : "[Acpi] No firmware RSDP in hosted LPB; initialized test table set.\n");
+    if (lpb.acpiTablePhysicalAddress != 0 &&
+        !acpi::TitanAcpiSubsystem::Instance().isFirmwareNamespaceComplete()) {
+        std::cerr << "[Acpi] Firmware tables loaded, but one or more AML namespace terms are unsupported.\n";
+    }
 
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();

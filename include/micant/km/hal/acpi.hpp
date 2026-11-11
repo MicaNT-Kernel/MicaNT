@@ -846,6 +846,7 @@ class AmlBytecodeParser {
     uint64_t m_opsExecuted{0};
     std::string m_scopePath{"\\"};
     std::function<void(std::string_view, uint32_t)> m_notifyHandler;
+    std::function<uint64_t(std::string_view)> m_nameResolver;
 
 public:
     AmlBytecodeParser() = default;
@@ -881,7 +882,8 @@ public:
 
     uint64_t executeBytecode(std::span<const uint8_t> bytecode,
         const std::vector<AmlValue>& args = {}, std::string_view scopePath = "\\",
-        std::function<void(std::string_view, uint32_t)> notifyHandler = {});
+        std::function<void(std::string_view, uint32_t)> notifyHandler = {},
+        std::function<uint64_t(std::string_view)> nameResolver = {});
 
 private:
     bool hasMore() const { return m_pc < m_bytecode.size(); }
@@ -977,6 +979,11 @@ private:
         if (op >= AML_ARG0_OP && op <= AML_ARG6_OP) {
             consume();
             return m_args[op - AML_ARG0_OP];
+        }
+        if (m_nameResolver && (op == 0x5C || op == 0x5E || op == 0x5F || op == 0x2E || op == 0x2F ||
+                               (op >= 'A' && op <= 'Z'))) {
+            std::string path;
+            if (parseNameString(path)) return m_nameResolver(path);
         }
 
         // If it's an operator expression, execute it
@@ -1312,6 +1319,307 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         const auto it = m_devicePaths.find(deviceObject);
         return it == m_devicePaths.end() ? std::string{} : it->second;
+    }
+
+    void resetForFirmware() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_root = std::make_shared<AmlNode>("\\", AmlObjectType::Scope);
+        m_notifyHandlers.clear();
+        m_devicePaths.clear();
+        m_nextNotifyToken = 1;
+    }
+
+    // Load the namespace declarations carried by a validated DSDT or SSDT.
+    // This parser intentionally accepts only AML objects implemented by the
+    // current interpreter; unknown terms fail instead of fabricating nodes.
+    bool loadDefinitionBlock(std::span<const uint8_t> table) {
+        if (table.size() < sizeof(AcpiTableHeader)) return false;
+        AcpiTableHeader header{};
+        std::memcpy(&header, table.data(), sizeof(header));
+        if ((std::memcmp(header.signature, "DSDT", 4) != 0 &&
+             std::memcmp(header.signature, "SSDT", 4) != 0) ||
+            header.length < sizeof(AcpiTableHeader) || header.length > table.size()) return false;
+        std::lock_guard<std::mutex> namespaceLock(m_mutex);
+
+        const auto bytes = table.first(header.length);
+        auto pkgLength = [&](size_t& cursor, size_t limit, size_t& end) -> bool {
+            if (cursor >= limit) return false;
+            const size_t start = cursor;
+            const uint8_t lead = bytes[cursor++];
+            const uint8_t follow = static_cast<uint8_t>((lead >> 6) & 3U);
+            size_t length = follow == 0 ? (lead & 0x3FU) : (lead & 0x0FU);
+            for (uint8_t n = 0; n < follow; ++n) {
+                if (cursor >= limit) return false;
+                length |= static_cast<size_t>(bytes[cursor++]) << (4U + 8U * n);
+            }
+            if (length < cursor - start || length > limit - start) return false;
+            end = start + length;
+            return true;
+        };
+        auto namePath = [&](size_t& cursor, size_t limit, std::string_view scope,
+                            std::string& path) -> bool {
+            if (cursor >= limit) return false;
+            bool rooted = false;
+            uint32_t parents = 0;
+            if (bytes[cursor] == 0x5C) { ++cursor; rooted = true; }
+            else while (cursor < limit && bytes[cursor] == 0x5E) { ++cursor; ++parents; }
+            size_t segments = 1;
+            if (cursor < limit && bytes[cursor] == 0x00) { ++cursor; segments = 0; }
+            else if (cursor < limit && bytes[cursor] == 0x2E) { ++cursor; segments = 2; }
+            else if (cursor < limit && bytes[cursor] == 0x2F) {
+                ++cursor;
+                if (cursor >= limit) return false;
+                segments = bytes[cursor++];
+            }
+            path = rooted ? "\\" : std::string(scope);
+            while (parents-- && path != "\\") {
+                const size_t dot = path.find_last_of('.');
+                path = dot == std::string::npos ? "\\" : path.substr(0, dot);
+            }
+            for (size_t n = 0; n < segments; ++n) {
+                if (limit - cursor < 4) return false;
+                if (path.size() > 1) path.push_back('.');
+                for (size_t c = 0; c < 4; ++c) path.push_back(static_cast<char>(bytes[cursor++]));
+            }
+            return true;
+        };
+        auto findOrCreate = [&](std::string_view path, AmlObjectType type) {
+            auto node = m_root;
+            size_t begin = path.starts_with("\\") ? 1 : 0;
+            while (begin < path.size()) {
+                const size_t dot = path.find('.', begin);
+                const size_t end = dot == std::string_view::npos ? path.size() : dot;
+                const std::string segment(path.substr(begin, end - begin));
+                auto child = node->findChild(segment);
+                if (!child) {
+                    child = std::make_shared<AmlNode>(segment, end == path.size() ? type : AmlObjectType::Scope);
+                    node->addChild(child);
+                }
+                node = std::move(child);
+                begin = end + 1;
+            }
+            node->type = type;
+            return node;
+        };
+
+        auto cursor = sizeof(AcpiTableHeader);
+        std::function<bool(size_t&, size_t, std::string_view, uint32_t)> parseTerms;
+        std::function<bool(size_t&, size_t, AmlValue&, uint32_t, std::string_view)> parseData;
+        parseData = [&](size_t& pos, size_t limit, AmlValue& value, uint32_t depth,
+                        std::string_view scopePath) -> bool {
+            if (pos >= limit || depth > 16) return false;
+            const uint8_t op = bytes[pos++];
+            if (op == AML_ZERO_OP || op == AML_ONE_OP || op == AML_ONES_OP) {
+                value = AmlValue::MakeInteger(op == AML_ZERO_OP ? 0 : op == AML_ONE_OP ? 1 : UINT64_MAX);
+                return true;
+            }
+            if (op == AML_BYTE_PREFIX || op == AML_WORD_PREFIX || op == AML_DWORD_PREFIX || op == AML_QWORD_PREFIX) {
+                const size_t width = op == AML_BYTE_PREFIX ? 1 : op == AML_WORD_PREFIX ? 2 : op == AML_DWORD_PREFIX ? 4 : 8;
+                if (width > limit - pos) return false;
+                uint64_t integer = 0;
+                for (size_t i = 0; i < width; ++i) integer |= static_cast<uint64_t>(bytes[pos++]) << (8U * i);
+                value = AmlValue::MakeInteger(integer);
+                return true;
+            }
+            if (op == 0x0D) {
+                const size_t start = pos;
+                while (pos < limit && bytes[pos] != 0) ++pos;
+                if (pos == limit) return false;
+                value = AmlValue::MakeString(std::string_view(reinterpret_cast<const char*>(bytes.data() + start), pos - start));
+                ++pos;
+                return true;
+            }
+            if (op == 0x11) {
+                size_t end = 0;
+                if (!pkgLength(pos, limit, end)) return false;
+                AmlValue bufferSize{};
+                if (!parseData(pos, end, bufferSize, depth + 1, scopePath) ||
+                    bufferSize.type != AmlObjectType::Integer || bufferSize.integerVal > 1024U * 1024U)
+                    return false;
+                std::vector<uint8_t> data(bufferSize.integerVal, 0);
+                const size_t available = end - pos;
+                const size_t copyLength = std::min<size_t>(available, data.size());
+                if (copyLength) std::memcpy(data.data(), bytes.data() + pos, copyLength);
+                pos = end;
+                value = AmlValue::MakeBuffer(std::move(data));
+                return true;
+            }
+            if (op == 0x12) {
+                size_t end = 0;
+                if (!pkgLength(pos, limit, end) || pos >= end) return false;
+                const uint8_t count = bytes[pos++];
+                std::vector<AmlValue> elements;
+                elements.reserve(count);
+                for (uint8_t i = 0; i < count; ++i) {
+                    AmlValue element{};
+                    if (!parseData(pos, end, element, depth + 1, scopePath)) return false;
+                    elements.push_back(std::move(element));
+                }
+                pos = end;
+                value = AmlValue::MakePackage(std::move(elements));
+                return true;
+            }
+            if (op == 0x5C || op == 0x5E || op == 0x5F || (op >= 'A' && op <= 'Z')) {
+                --pos;
+                std::string reference;
+                if (!namePath(pos, limit, scopePath, reference)) return false;
+                value = AmlValue::MakeString(reference);
+                return true;
+            }
+            return false;
+        };
+        std::function<bool(size_t&, size_t, std::string_view, uint32_t)> skipObject;
+        skipObject = [&](size_t& pos, size_t limit, std::string_view scope, uint32_t depth) -> bool {
+            if (pos >= limit || depth > 16) return false;
+            const uint8_t op = bytes[pos];
+            if (op == 0x11 || op == 0x12 || op == 0x13) {
+                ++pos;
+                size_t end = 0;
+                if (!pkgLength(pos, limit, end)) return false;
+                pos = end;
+                return true;
+            }
+            if (op == 0x0D) {
+                ++pos;
+                while (pos < limit && bytes[pos] != 0) ++pos;
+                if (pos >= limit) return false;
+                ++pos;
+                return true;
+            }
+            if (op == AML_ZERO_OP || op == AML_ONE_OP || op == AML_ONES_OP) { ++pos; return true; }
+            if (op == AML_BYTE_PREFIX || op == AML_WORD_PREFIX || op == AML_DWORD_PREFIX || op == AML_QWORD_PREFIX) {
+                ++pos;
+                const size_t count = op == AML_BYTE_PREFIX ? 1 : op == AML_WORD_PREFIX ? 2 : op == AML_DWORD_PREFIX ? 4 : 8;
+                if (count > limit - pos) return false;
+                pos += count;
+                return true;
+            }
+            if (op == 0x5C || op == 0x5E || op == 0x5F || (op >= 'A' && op <= 'Z')) {
+                std::string ignored;
+                return namePath(pos, limit, scope, ignored);
+            }
+            return false;
+        };
+        parseTerms = [&](size_t& pos, size_t limit, std::string_view scope, uint32_t depth) -> bool {
+            if (depth > 32) return false;
+            while (pos < limit) {
+                const size_t termStart = pos;
+                uint8_t op = bytes[pos++];
+                bool extended = false;
+                if (op == AML_EXT_OP_PREFIX) {
+                    if (pos >= limit) return false;
+                    op = bytes[pos++];
+                    extended = true;
+                }
+                const bool isScope = !extended && op == AML_SCOPE_OP;
+                const bool isDevice = extended && op == 0x82;
+                const bool isProcessor = extended && op == 0x83;
+                const bool isPower = extended && op == 0x84;
+                const bool isThermal = extended && op == 0x85;
+                if (isScope || isDevice || isProcessor || isPower || isThermal) {
+                    size_t end = 0;
+                    if (!pkgLength(pos, limit, end)) return false;
+                    std::string path;
+                    if (!namePath(pos, end, scope, path)) return false;
+                    AmlObjectType type = isDevice ? AmlObjectType::Device :
+                        isProcessor ? AmlObjectType::Processor :
+                        isThermal ? AmlObjectType::ThermalZone : AmlObjectType::Scope;
+                    findOrCreate(path, type);
+                    // Processor and PowerResource declarations include fixed
+                    // metadata fields before their nested term list.
+                    if (isProcessor) {
+                        if (end - pos < 6) return false;
+                        pos += 6;
+                    } else if (isPower) {
+                        if (end - pos < 3) return false;
+                        pos += 3;
+                    }
+                    if (!parseTerms(pos, end, path, depth + 1)) return false;
+                    pos = end;
+                    continue;
+                }
+                if (!extended && op == AML_NAME_OP) {
+                    std::string path;
+                    if (!namePath(pos, limit, scope, path)) return false;
+                    AmlValue value{};
+                    if (!parseData(pos, limit, value, depth + 1, scope)) return false;
+                    auto node = findOrCreate(path, value.type);
+                    node->value = std::move(value);
+                    continue;
+                }
+                if (!extended && op == AML_METHOD_OP) {
+                    size_t end = 0;
+                    if (!pkgLength(pos, limit, end)) return false;
+                    std::string path;
+                    if (!namePath(pos, end, scope, path) || pos >= end) return false;
+                    const uint8_t flags = bytes[pos++];
+                    std::vector<uint8_t> methodCode(bytes.begin() + pos, bytes.begin() + end);
+                    auto methodLock = std::make_shared<std::mutex>();
+                    auto node = findOrCreate(path, AmlObjectType::Method);
+                    node->methodHandler = [this, methodCode = std::move(methodCode), methodLock, path,
+                                           argCount = static_cast<uint8_t>(flags & 0x07U)](const std::vector<AmlValue>& args) {
+                        if (args.size() < argCount) return AmlValue::MakeInteger(0);
+                        std::lock_guard<std::mutex> lock(*methodLock);
+                        AmlBytecodeParser parser;
+                        const uint64_t result = parser.executeBytecode(methodCode, args, path,
+                            [this](std::string_view notifyPath, uint32_t value) {
+                                (void)dispatchNotify(notifyPath, value);
+                            },
+                            [this](std::string_view namePath) {
+                                return evaluate(namePath).integerVal;
+                            });
+                        return AmlValue::MakeInteger(result);
+                    };
+                    pos = end;
+                    continue;
+                }
+                // External declarations do not introduce executable objects.
+                if (!extended && op == 0x15) {
+                    std::string ignored;
+                    if (!namePath(pos, limit, scope, ignored) || limit - pos < 2) return false;
+                    pos += 2;
+                    continue;
+                }
+                if (extended && op == 0x80) { // OperationRegion
+                    std::string ignored;
+                    if (!namePath(pos, limit, scope, ignored) || pos >= limit) return false;
+                    ++pos; // RegionSpace
+                    if (!skipObject(pos, limit, scope, depth + 1) ||
+                        !skipObject(pos, limit, scope, depth + 1)) return false;
+                    continue;
+                }
+                if (extended && (op == 0x81 || op == 0x86 || op == 0x87)) { // Field family
+                    size_t end = 0;
+                    if (!pkgLength(pos, limit, end)) return false;
+                    pos = end;
+                    continue;
+                }
+                if (extended && (op == 0x01 || op == 0x02)) { // Mutex / Event
+                    std::string path;
+                    if (!namePath(pos, limit, scope, path)) return false;
+                    if (op == 0x01) {
+                        if (pos >= limit) return false;
+                        ++pos; // SyncLevel
+                    }
+                    findOrCreate(path, AmlObjectType::Integer);
+                    continue;
+                }
+                if (!extended && op == 0x06) { // Alias
+                    std::string source, alias;
+                    if (!namePath(pos, limit, scope, source) || !namePath(pos, limit, scope, alias)) return false;
+                    auto sourceNode = findOrCreate(source, AmlObjectType::Scope);
+                    auto aliasNode = findOrCreate(alias, sourceNode->type);
+                    aliasNode->value = sourceNode->value;
+                    aliasNode->methodHandler = sourceNode->methodHandler;
+                    continue;
+                }
+                pos = termStart;
+                return false;
+            }
+            return true;
+        };
+
+        return parseTerms(cursor, bytes.size(), "\\", 0);
     }
 
 private:
@@ -1708,6 +2016,7 @@ class TitanAcpiSubsystem {
     ACPI_TELEMETRY m_telemetry{};
     std::atomic<bool> m_initialized{false};
     bool m_firmwareTablesLoaded{false};
+    bool m_firmwareNamespaceComplete{false};
     mutable std::mutex m_mutex;
 
     TitanAcpiSubsystem() = default;
@@ -1782,6 +2091,8 @@ public:
         m_localX2Apics.clear();
         m_ioApics.clear();
         m_intrOverrides.clear();
+        m_namespace.resetForFirmware();
+        m_firmwareNamespaceComplete = false;
         m_madtHeader = {};
         m_fadt = {};
         m_mcfg = {};
@@ -1895,6 +2206,22 @@ public:
             if (readTable(dsdtAddress, dsdt) && std::memcmp(dsdt.data(), "DSDT", 4) == 0) {
                 m_tableStorage["DSDT"] = dsdt;
                 m_tablePhysicalAddresses["DSDT"] = dsdtAddress;
+                m_firmwareNamespaceComplete = m_namespace.loadDefinitionBlock(dsdt);
+                for (size_t index = 0; index < rootEntryCount; ++index) {
+                    const auto* entry = rootTable.data() + sizeof(AcpiTableHeader) + index * entryWidth;
+                    uint64_t tableAddress = 0;
+                    if (rootIsXsdt) std::memcpy(&tableAddress, entry, sizeof(tableAddress));
+                    else {
+                        uint32_t address32 = 0;
+                        std::memcpy(&address32, entry, sizeof(address32));
+                        tableAddress = address32;
+                    }
+                    std::vector<uint8_t> ssdt;
+                    if (readTable(tableAddress, ssdt) && std::memcmp(ssdt.data(), "SSDT", 4) == 0) {
+                        const bool loaded = m_namespace.loadDefinitionBlock(ssdt);
+                        m_firmwareNamespaceComplete = loaded && m_firmwareNamespaceComplete;
+                    }
+                }
             }
         }
         m_telemetry.tablesDiscovered = m_tablePhysicalAddresses.size();
@@ -2135,6 +2462,7 @@ public:
     }
 
     bool isInitialized() const { return m_initialized.load(); }
+    bool isFirmwareNamespaceComplete() const { return m_firmwareNamespaceComplete; }
     const AcpiRsdp& getRsdp() const { return m_rsdp; }
     const AcpiTableHeader& getRsdtHeader() const { return m_rsdtHeader; }
     const std::vector<uint32_t>& getRsdtEntries() const { return m_rsdtEntries; }
@@ -2362,11 +2690,13 @@ inline void AmlBytecodeParser::recordOp() {
 
 inline uint64_t AmlBytecodeParser::executeBytecode(std::span<const uint8_t> bytecode,
     const std::vector<AmlValue>& args, std::string_view scopePath,
-    std::function<void(std::string_view, uint32_t)> notifyHandler) {
+    std::function<void(std::string_view, uint32_t)> notifyHandler,
+    std::function<uint64_t(std::string_view)> nameResolver) {
     reset();
     m_bytecode = bytecode;
     m_scopePath = scopePath.empty() ? "\\" : std::string(scopePath);
     m_notifyHandler = std::move(notifyHandler);
+    m_nameResolver = std::move(nameResolver);
     for (size_t i = 0; i < args.size() && i < 7; ++i) {
         m_args[i] = args[i].integerVal;
     }
