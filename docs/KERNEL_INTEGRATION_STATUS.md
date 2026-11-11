@@ -34,7 +34,7 @@ Reproduced from the current sources, not by accepting an old kernel binary:
 | `python3 qemu.py --build-only` | Passed; kernel, bootloader, driver and manifest generated/validated |
 | `python3 qemu.py --headless` | Passed; ordered serial milestones, stable idle, PS/2 and scanout checks |
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted Ke behavior remains intact |
-| `cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot` | Passed; actual Explorer and windowing DLLs built, not executed |
+| `cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot` | Rejected by the new boundary check: `win32k_boot` transitively includes private `micant/km/` headers |
 | `python3 -m unittest discover -s test -p test_explorer_runtime.py -v` | 12 passed |
 | `python3 scripts/verify_kernel_architecture.py` | Passed |
 
@@ -89,8 +89,9 @@ fallback and is not enabled by this increment.
 The canonical UCRT source has an isolated freestanding memory/string branch
 with a bounded 64 MiB coalescing arena and native PE static TLS for `errno`.
 The supported `ucrtbase_boot` CMake target builds it into
-`build/system32/ucrtbase.dll`; the Explorer build aggregate includes it.
-It exports 24 memory/string/errno/math/startup functions, including `ceilf`,
+`build/system32/ucrtbase.dll`; it is included in the Explorer build aggregate,
+which remains blocked by the Win32k boundary violation below.
+It exports 26 memory/string/errno/math/startup functions, including `ceilf`,
 on-exit table operations, initializer-table dispatch, and aligned allocation,
 with no external PE imports. `_aligned_malloc` validates nonzero size and
 power-of-two alignment, sets `errno` on invalid input or allocation failure,
@@ -112,7 +113,7 @@ clang++ -std=c++23 -Wall -Wextra -Werror -pedantic \
   -fsanitize=address,undefined -Iinclude test/ucrt_onexit_test.cpp \
   -o build/ucrt-onexit-test
 build/ucrt-onexit-test
-cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot
+cmake --build build/qemu-cmake-mingw --target ucrtbase_boot
 build/pe_image_view_test build/system32/ucrtbase.dll
 ```
 
@@ -127,13 +128,13 @@ This is not a staged boot module or complete UCRT. TLS has not been executed
 by the kernel; mapping/inspection is not a substitute. Its contract follows
 the public [CRT errno documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/errno-doserrno-sys-errlist-and-sys-nerr)
 and [PE TLS specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-section).
-`python3 qemu.py --check-explorer` still **fails explicitly** on 23 Kernel32
-requirements and 21 UCRT exports, reduced from 73 total missing requirements
-to 44 by the tested `ceilf`, CRT startup-table, aligned-allocation, UTF-8
-conversion, and UTF-8 locale-profile increments. The initializer and on-exit
-helpers are not full DLL CRT startup; the kernel loader does not yet dispatch
-module initializers or TLS. No fake export, host DLL or synthetic import
-trampoline fills those gaps.
+The PE closure measured before the boundary gate was introduced still has 23
+Kernel32 and 21 UCRT missing exports (44 total), down from 73. The current
+`python3 qemu.py --check-explorer` stops earlier: CMake rejects `win32k_boot`
+because its transitive dependencies include private `micant/km/` headers. The
+initializer and on-exit helpers are not full DLL CRT startup; the kernel loader
+does not yet dispatch module initializers or TLS. No fake export, host DLL or
+synthetic import trampoline fills those gaps.
 
 ### Freestanding Kernel32 last-error accessors
 
@@ -216,17 +217,31 @@ The cross-toolchain declaration for `___mb_cur_max_func` is in its public
 `locale.h` with an `unsigned int` return. Verification:
 
 ```bash
-cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot
+cmake --build build/qemu-cmake-mingw --target ucrtbase_boot
 build/llvm-mingw-20260616-ucrt-macos-universal/bin/llvm-readobj \
   --coff-exports --coff-imports build/system32/ucrtbase.dll
 python3 qemu.py --check-explorer
 ```
 
-Results: the freestanding aggregate build passed and LLVM confirms both named
-exports with no external imports. The preflight resolves both locale imports
-and still fails on 44 remaining imports (23 Kernel32, 21 UCRT). A legacy
-`build/` host cache points to a different, removed source checkout and could
-not run `cmake --build build --target micant_tests`; it was left untouched.
+Results: the freestanding UCRT target build passed and LLVM confirms both
+named exports with no external imports. The previously built runtime resolves
+both locale imports but still has 44 missing imports (23 Kernel32, 21 UCRT).
+A legacy `build/` host cache points to a different, removed source checkout
+and could not run `cmake --build build --target micant_tests`; it was left
+untouched.
+
+### Strict user-mode / kernel-mode build boundary
+
+`scripts/check_user_mode_boundary.py` runs the configured C++ compiler's
+preprocessor dependency scan for each native user-mode target variant. CMake
+adds the corresponding check as a prerequisite of each DLL/application target
+and of the Explorer aggregate. The compliant freestanding Kernel32, UCRT,
+User32, GDI32 and IMM32 source variants pass. The Win32k DLL variant is
+rejected: `kernel/ps/winnt_win32k_server.cpp` depends on `micant/km/win32k/`
+and many transitive `micant/km/` Executive, memory, I/O, driver and HAL
+headers. As a result, `win32k_boot` and `explorer_runtime_boot` are currently
+blocked by design. That implementation must move to the canonical kernel
+owner and expose real user-mode service calls before this gate can pass.
 
 ### Allocation-free firmware memory descriptors
 

@@ -26,6 +26,17 @@ These rules apply to every change in this repository. Read them together with `R
 - Prefer RAII, bounded views such as `std::span`, explicit ownership, and the project's synchronization primitives. Validate sizes, state transitions, and failure paths.
 - Preserve zero-telemetry behavior and avoid unrelated changes.
 
+## Strict user-mode / kernel-mode boundary
+
+- Enforce strict separation between Ring 3 system DLLs and Ring 0 kernel implementation.
+- User-mode DLLs (`kernel32.dll`, `kernelbase.dll`, `ntdll.dll`, `advapi32.dll`, `user32.dll`, `gdi32.dll`, and other user-mode libraries) must not include or depend on private `micant/km/` implementation headers. Shared declarations may be included only through ABI-safe public or mode-neutral headers.
+- Access kernel services through the appropriate NTDLL native API, system-call interface, or documented user-mode subsystem mechanism.
+- User-mode libraries must not instantiate or manipulate kernel Executive objects, scheduler structures, process managers, memory managers, or driver objects.
+- Do not implement simulated kernel services in user-mode DLLs when the corresponding MicaNT kernel service exists.
+- Keep host-side test adapters separate from native user-mode DLL implementations.
+- The build system must check the actual transitive header dependencies of native user-mode targets and reject any dependency on private `micant/km/` headers.
+- Preserve legitimate user-mode operations, including TEB access, string conversion, loader bookkeeping, and other functionality that does not require a system call.
+
 ## Change workflow
 
 - Read the relevant specification and existing implementation before editing. Identify the owning subsystem and the Windows contract first.

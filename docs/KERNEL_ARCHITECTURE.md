@@ -31,9 +31,10 @@ Executive or a user-mode `explorer.exe` process.
 | `ntoskrnl_core_baremetal` | Freestanding AMD64 bootstrap, shared desktop renderer, CPL3 diagnostic | `build/baremetal/ntoskrnl.exe`; QEMU verified, Executive integration incomplete |
 | `bootx64_efi` | UEFI PE bootloader | `build/esp/EFI/BOOT/BOOTX64.EFI` |
 | `virtio_gpu_boot` | Separate boot-start VirtIO-GPU display driver | `build/virtio_gpu.sys`; VirtIO 2D verified in QEMU |
-| `explorer_runtime_boot` | Build-only aggregate for Explorer, windowing DLLs, partial Kernel32 and native UCRT subset | `build/explorer.exe`, `build/system32/{kernel32,user32,gdi32,imm32,win32k,ucrtbase}.dll`; compile/link verified, not loaded by the kernel |
+| `explorer_runtime_boot` | Build-only aggregate for Explorer and partial user-mode DLLs; gated by transitive header audit | Build is currently rejected because `win32k_boot` includes private kernel headers; Explorer is not loaded by the kernel |
 | `kernel32_boot` | Freestanding TEB-backed process/thread ID, last-error, and UTF-8 conversion subset | `build/system32/kernel32.dll`; 6 exports, no imports, not a complete Kernel32 |
 | `ucrtbase_boot` | Freestanding user-mode memory/string and UTF-8 locale-profile subset with native static TLS | `build/system32/ucrtbase.dll`; 26 exports, no imports, not a complete UCRT |
+| `win32k_boot` | Legacy user-mode DLL wrapping the Win32k implementation | Rejected by the user-mode boundary audit because it depends on `micant/km/` headers |
 
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
 external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
@@ -314,9 +315,20 @@ invalid-input flags, surrogate pairs, size queries and buffer/error checks.
 They do not implement other Windows code pages. The conversion code is covered
 by sanitized host tests; the DLL is linked but not called by a native process.
 An isolated CPL3 probe verifies the TEB fields, but the native process loader
-does not yet initialize a real process's TEB/GS. The current import check still
-fails on 23 other Kernel32 exports and 21 other UCRT exports; no success fallback is
-introduced.
+does not yet initialize a real process's TEB/GS. The last direct PE import
+inventory found 23 missing Kernel32 exports and 21 missing UCRT exports; the
+current aggregate build is rejected earlier by the boundary check. No success
+fallback is introduced.
+
+Native user-mode targets run a compiler-preprocessed dependency audit before
+building. The current `win32k_boot`/`micant_win32k` implementation fails that
+audit: `kernel/ps/winnt_win32k_server.cpp` includes
+`micant/km/win32k/win32k.hpp`, which transitively pulls in Executive, MM, I/O,
+driver and HAL headers. The check intentionally blocks the DLL and the
+`explorer_runtime_boot` aggregate rather than treating this simulated user-mode
+service as a kernel implementation. It must be integrated into the canonical
+kernel owner and reached through the supported user-mode service boundary
+before the Explorer DLL aggregate can build again.
 
 Structural inspection of the archived standalone kernel identified its
 loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import

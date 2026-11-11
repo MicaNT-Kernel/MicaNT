@@ -62,8 +62,10 @@ python3 qemu.py --check-explorer
 ```
 
 This is a build/preflight check, not an Explorer boot option. It currently
-fails because a complete native Kernel32/UCRT runtime is missing; it never
-substitutes host Windows DLLs or synthetic import trampolines.
+is blocked by the user-mode boundary audit: the current `win32k.dll` target
+transitively includes private `micant/km/` headers. The remaining Kernel32/UCRT
+import closure is also incomplete. The check never substitutes host Windows
+DLLs or synthetic import trampolines.
 
 <p align="center">
   <img src="docs/bootscreen_splash.png" alt="MicaNT UEFI Boot Splash" width="420">

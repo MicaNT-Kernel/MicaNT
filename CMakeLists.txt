@@ -356,6 +356,34 @@ if (MICANT_ENABLE_BAREMETAL)
     )
 endif()
 
+if(WIN32 OR MICANT_ENABLE_BAREMETAL)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_custom_target(micant_user_mode_boundary_check)
+    foreach(_user_mode_variant IN ITEMS
+        micant_win32k micant_user32 micant_gdi32 micant_imm32
+        kernel32_boot ucrtbase_boot win32k_boot user32_boot gdi32_boot
+        imm32_boot explorer_boot explorer_runtime_boot
+    )
+        add_custom_target(micant_boundary_${_user_mode_variant}
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_SOURCE_DIR}/scripts/check_user_mode_boundary.py"
+                --root "${CMAKE_SOURCE_DIR}"
+                --compiler "${CMAKE_CXX_COMPILER}"
+                --target "${_user_mode_variant}"
+            VERBATIM
+        )
+        add_dependencies(micant_user_mode_boundary_check
+                         micant_boundary_${_user_mode_variant})
+        if(TARGET ${_user_mode_variant})
+            add_dependencies(${_user_mode_variant}
+                             micant_boundary_${_user_mode_variant})
+        endif()
+    endforeach()
+    if(TARGET explorer_runtime_boot)
+        add_dependencies(explorer_runtime_boot micant_boundary_explorer_runtime_boot)
+    endif()
+endif()
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(ntoskrnl_core PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     target_compile_options(micant_kernel PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
