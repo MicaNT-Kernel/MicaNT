@@ -3,6 +3,7 @@
 #include "micant/km/hal/boot_contract.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/freestanding.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
@@ -95,6 +96,17 @@ volatile uint8_t* physicalPageBytes(uint64_t pfn) noexcept {
 void zeroPhysicalPage(uint64_t pfn) noexcept {
     auto* bytes = physicalPageBytes(pfn);
     for (size_t index = 0; index < 4096; ++index) bytes[index] = 0;
+}
+
+void* mapBootstrapHeapPages(uint64_t firstPfn, size_t pageCount) noexcept {
+    if (firstPfn < 256 || !pageCount || firstPfn >= kBootstrapPfnCount ||
+        pageCount > kBootstrapPfnCount - firstPfn) {
+        return nullptr;
+    }
+    for (size_t index = 0; index < pageCount; ++index) {
+        (void)physicalPageBytes(firstPfn + index);
+    }
+    return reinterpret_cast<void*>(firstPfn * 4096);
 }
 
 void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV2& handoff) noexcept {
@@ -542,6 +554,11 @@ extern "C" micant::NtStatus KiSystemStartup(
     }
     serialWrite("[MicaNT] Kernel-owned page-table root active\r\n");
     initializePhysicalMemory(*handoff);
+    if (!micant::ex::initializeBootstrapRuntime(serialWrite, mapBootstrapHeapPages) ||
+        !micant::ex::verifyBootstrapRuntime()) {
+        stopWithError("[MicaNT Ex] Bootstrap runtime verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ex] Canonical page-backed C and C++ allocation verified\r\n");
     initializeDisplay(handoff->displayDriver);
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");

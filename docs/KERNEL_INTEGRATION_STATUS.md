@@ -170,11 +170,42 @@ Mm virtual-memory API. Borrowed backing and its private atomic lock are for
 the current IRQ-disabled bootstrap only; they do not implement Ke IRQL or
 scheduled waits. No parallel bare-metal memory manager is activated.
 
+The subsequent sparse-map regression (`9a10596`) prevents partial physical
+release when a requested contiguous range crosses an allocated page and a
+reserved hole. Native and hosted sanitizer tests check PFN 0, holes, wrapping
+and oversized release ranges without mutating counts or invoking the zero
+callback. Headless boot passed again after integration.
+
+### PFN-backed kernel C/C++ allocation
+
+The private runtime frontends in `kernel/ex/freestanding.cpp` now allocate
+through canonical `PfnDatabase::allocateContiguousPages` and release through
+its corresponding free path. The boot callback verifies actual writable
+supervisor identity backing for every frame before returning a mapping.
+No user-mode arena, hosted CRT, new memory manager or dummy export is used.
+The existing no-import Native kernel PE still links.
+
+`python3 qemu.py --headless` passes a new mandatory runtime check exercising
+actual `malloc`, `calloc`, preserving grow/shrink/failed `realloc`, `free`,
+ordinary/array/over-aligned/nothrow C++ allocation and deletion, real RAM
+contents, overlap-safe memory moves, overflow rejection logging and restored
+PFN accounting. Throwing allocation failure and invalid frees explicitly
+stop rather than pretending success. The runtime has no unresolved hosted
+symbols in the freestanding object probe.
+
+This is deliberately a page-granular bootstrap allocator: each allocation
+consumes contiguous pages, with in-page ownership metadata. It is not a
+fragmentation-resistant Executive pool, a pageable heap, an SMP allocator,
+general C++ library support, constructor registration, synchronization or
+exception/unwind runtime. Its private contract requires one CPU and disabled
+interrupts, matching the current boot. Higher managers still need their
+shared runtime and lifecycle dependencies from the gap matrix.
+
 ## Milestones
 
 | Milestone | State | Missing acceptance evidence |
 |---|---|---|
-| M1: freestanding foundation | Partial; canonical PFN component operational | Shared C++ runtime/kernel heap and broader Executive initialization |
+| M1: freestanding foundation | Partial; canonical PFN and page-backed kernel allocation operational | Shared C++ library/synchronization/lifecycle and broader Executive initialization |
 | M2: Mm + Ob | Physical allocator subset verified | Full mapping/freeing/address spaces and canonical namespace/handles in QEMU |
 | M3: Ke + Ps | Not integrated | IRQ/timer backend, scheduler, independent address spaces, actual context switching |
 | M4: Io + syscall | Partial platform boundary only | Canonical driver/device/IRP initialization, completion and NT service routing |

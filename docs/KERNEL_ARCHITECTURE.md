@@ -188,7 +188,7 @@ canonical owner.
 | Display and shell input | Boot video + `Hal` / display driver | Separate VirtIO 2D driver presents shared desktop/taskbar and cursor; mouse movement and click delivery verified, but no Start/menu/window actions or user-mode Explorer session |
 | Bare-metal Object Manager | `Ob` | Host implementation exists; no freestanding boot integration |
 | Bare-metal I/O Manager | `Io` | Host implementation exists; no freestanding boot integration |
-| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | Minimal memory/string primitives linked without hosted CRT; QEMU polls PS/2 with interrupts disabled; allocator, C++ runtime, scheduler and Executive idle thread remain pending |
+| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | PFN-backed C/C++ bootstrap allocation and memory/string primitives verified without hosted CRT; polls PS/2 with interrupts disabled; shared C++ library/lifecycle, scheduler and Executive idle thread remain pending |
 
 This matrix is a migration inventory, not evidence that these functions
 already work on hardware.

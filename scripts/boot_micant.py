@@ -24,6 +24,7 @@ EXPECTED_SERIAL = (
     "[MicaNT] Phase 0 started",
     "[MicaNT] Kernel-owned page-table root active",
     "[MicaNT Mm] Canonical physical allocation, zeroing and release verified",
+    "[MicaNT Ex] Canonical page-backed C and C++ allocation verified",
     "[MicaNT Display] virtio_gpu.sys: VirtIO 1.0 2D scanout initialized",
     "[MicaNT Display] Desktop presented through virtio_gpu.sys",
     "[MicaNT Explorer] Desktop and taskbar rendered",
