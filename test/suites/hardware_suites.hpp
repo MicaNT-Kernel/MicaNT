@@ -1864,15 +1864,16 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
     std::cout << "========================================================================\n";
 
     // Firmware AML declarations must populate a clean namespace and preserve
-    // package scope. The fixture contains \\_SB_.TEST = 42 and _STA() returns it.
+    // package scope. The fixture contains \\_SB_.TEST = 42 and _STA stores 85.
     {
         acpi::AcpiNamespace firmwareNamespace;
         firmwareNamespace.resetForFirmware();
         std::vector<uint8_t> dsdt(sizeof(acpi::AcpiTableHeader));
         const uint8_t aml[] = {
-            acpi::AML_SCOPE_OP, 0x0C, '_', 'S', 'B', '_',
+            acpi::AML_SCOPE_OP, 0x1F, '_', 'S', 'B', '_',
             acpi::AML_NAME_OP, '_', 'T', 'S', 'T', acpi::AML_BYTE_PREFIX, 42,
-            acpi::AML_METHOD_OP, 0x0B, '_', 'S', 'T', 'A', 0x00,
+            acpi::AML_METHOD_OP, 0x12, '_', 'S', 'T', 'A', 0x00,
+            acpi::AML_STORE_OP, acpi::AML_BYTE_PREFIX, 85, 'T', 'E', 'S', 'T',
             acpi::AML_RETURN_OP, 'T', 'E', 'S', 'T'
         };
         dsdt.insert(dsdt.end(), aml, aml + sizeof(aml));
@@ -1890,8 +1891,8 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
             "AML loader must reject a table with a bad ACPI checksum");
         TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_.TEST").integerVal == 42,
             "AML namespace loader must preserve scoped integer Name objects");
-        TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_._STA").integerVal == 42,
-            "AML Method evaluation must resolve scoped Name objects");
+        TEST_ASSERT(firmwareNamespace.evaluate("\\_SB_._STA").integerVal == 85,
+            "AML Method evaluation must resolve and update scoped Name objects");
     }
 
     // Initialize Subsystem

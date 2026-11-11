@@ -856,6 +856,7 @@ class AmlBytecodeParser {
     std::string m_scopePath{"\\"};
     std::function<void(std::string_view, uint32_t)> m_notifyHandler;
     std::function<uint64_t(std::string_view)> m_nameResolver;
+    std::function<void(std::string_view, uint64_t)> m_nameWriter;
 
 public:
     AmlBytecodeParser() = default;
@@ -892,7 +893,8 @@ public:
     uint64_t executeBytecode(std::span<const uint8_t> bytecode,
         const std::vector<AmlValue>& args = {}, std::string_view scopePath = "\\",
         std::function<void(std::string_view, uint32_t)> notifyHandler = {},
-        std::function<uint64_t(std::string_view)> nameResolver = {});
+        std::function<uint64_t(std::string_view)> nameResolver = {},
+        std::function<void(std::string_view, uint64_t)> nameWriter = {});
 
 private:
     bool hasMore() const { return m_pc < m_bytecode.size(); }
@@ -946,6 +948,10 @@ private:
             m_args[target - AML_ARG0_OP] = value;
         } else if (target == AML_ZERO_OP) {
             consume(); // Discarded target
+        } else if (m_nameWriter && (target == 0x5C || target == 0x5E || target == 0x5F ||
+                                    target == 0x2E || target == 0x2F || (target >= 'A' && target <= 'Z'))) {
+            std::string path;
+            if (parseNameString(path)) m_nameWriter(path, value);
         }
     }
 
@@ -1319,6 +1325,24 @@ public:
         m_devicePaths.erase(deviceObject);
     }
 
+    bool storeInteger(std::string_view path, uint64_t value) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (path.empty()) return false;
+        std::string normalized(path);
+        if (normalized.front() == '\\') normalized.erase(0, 1);
+        auto node = m_root;
+        std::stringstream segments(normalized);
+        std::string segment;
+        while (std::getline(segments, segment, '.')) {
+            if (segment.empty()) continue;
+            node = node->findChild(segment);
+            if (!node) return false;
+        }
+        node->type = AmlObjectType::Integer;
+        node->value = AmlValue::MakeInteger(value);
+        return true;
+    }
+
     std::string pathForDevice(void* deviceObject) const {
         std::lock_guard<std::mutex> lock(m_mutex);
         const auto it = m_devicePaths.find(deviceObject);
@@ -1408,6 +1432,7 @@ public:
         };
 
         auto cursor = sizeof(AcpiTableHeader);
+        bool namespaceComplete = true;
         std::function<bool(size_t&, size_t, std::string_view, uint32_t)> parseTerms;
         std::function<bool(size_t&, size_t, AmlValue&, uint32_t, std::string_view)> parseData;
         parseData = [&](size_t& pos, size_t limit, AmlValue& value, uint32_t depth,
@@ -1535,9 +1560,11 @@ public:
                     if (isProcessor) {
                         if (end - pos < 6) return false;
                         pos += 6;
+                        namespaceComplete = false;
                     } else if (isPower) {
                         if (end - pos < 3) return false;
                         pos += 3;
+                        namespaceComplete = false;
                     }
                     if (!parseTerms(pos, end, path, depth + 1)) return false;
                     pos = end;
@@ -1560,18 +1587,24 @@ public:
                     const uint8_t flags = bytes[pos++];
                     std::vector<uint8_t> methodCode(bytes.begin() + pos, bytes.begin() + end);
                     auto methodLock = std::make_shared<std::mutex>();
+                    const size_t scopeSeparator = path.find_last_of('.');
+                    const std::string methodScope = scopeSeparator == std::string::npos
+                        ? "\\" : path.substr(0, scopeSeparator);
                     auto node = findOrCreate(path, AmlObjectType::Method);
-                    node->methodHandler = [this, methodCode = std::move(methodCode), methodLock, path,
+                    node->methodHandler = [this, methodCode = std::move(methodCode), methodLock, methodScope,
                                            argCount = static_cast<uint8_t>(flags & 0x07U)](const std::vector<AmlValue>& args) {
                         if (args.size() < argCount) return AmlValue::MakeInteger(0);
                         std::lock_guard<std::mutex> lock(*methodLock);
                         AmlBytecodeParser parser;
-                        const uint64_t result = parser.executeBytecode(methodCode, args, path,
+                        const uint64_t result = parser.executeBytecode(methodCode, args, methodScope,
                             [this](std::string_view notifyPath, uint32_t value) {
                                 (void)dispatchNotify(notifyPath, value);
                             },
                             [this](std::string_view namePath) {
                                 return evaluate(namePath).integerVal;
+                            },
+                            [this](std::string_view namePath, uint64_t value) {
+                                (void)storeInteger(namePath, value);
                             });
                         return AmlValue::MakeInteger(result);
                     };
@@ -1591,12 +1624,14 @@ public:
                     ++pos; // RegionSpace
                     if (!skipObject(pos, limit, scope, depth + 1) ||
                         !skipObject(pos, limit, scope, depth + 1)) return false;
+                    namespaceComplete = false; // Region address space is not bound to hardware yet.
                     continue;
                 }
                 if (extended && (op == 0x81 || op == 0x86 || op == 0x87)) { // Field family
                     size_t end = 0;
                     if (!pkgLength(pos, limit, end)) return false;
                     pos = end;
+                    namespaceComplete = false; // Field units need region access and bit-field semantics.
                     continue;
                 }
                 if (extended && (op == 0x01 || op == 0x02)) { // Mutex / Event
@@ -1607,6 +1642,7 @@ public:
                         ++pos; // SyncLevel
                     }
                     findOrCreate(path, AmlObjectType::Integer);
+                    namespaceComplete = false; // Mutex/Event execution is not implemented yet.
                     continue;
                 }
                 if (!extended && op == 0x06) { // Alias
@@ -1616,6 +1652,7 @@ public:
                     auto aliasNode = findOrCreate(alias, sourceNode->type);
                     aliasNode->value = sourceNode->value;
                     aliasNode->methodHandler = sourceNode->methodHandler;
+                    namespaceComplete = false; // Alias indirection is not modeled as a live object link.
                     continue;
                 }
                 pos = termStart;
@@ -1624,7 +1661,7 @@ public:
             return true;
         };
 
-        return parseTerms(cursor, bytes.size(), "\\", 0);
+        return parseTerms(cursor, bytes.size(), "\\", 0) && namespaceComplete;
     }
 
 private:
@@ -2713,12 +2750,14 @@ inline void AmlBytecodeParser::recordOp() {
 inline uint64_t AmlBytecodeParser::executeBytecode(std::span<const uint8_t> bytecode,
     const std::vector<AmlValue>& args, std::string_view scopePath,
     std::function<void(std::string_view, uint32_t)> notifyHandler,
-    std::function<uint64_t(std::string_view)> nameResolver) {
+    std::function<uint64_t(std::string_view)> nameResolver,
+    std::function<void(std::string_view, uint64_t)> nameWriter) {
     reset();
     m_bytecode = bytecode;
     m_scopePath = scopePath.empty() ? "\\" : std::string(scopePath);
     m_notifyHandler = std::move(notifyHandler);
     m_nameResolver = std::move(nameResolver);
+    m_nameWriter = std::move(nameWriter);
     for (size_t i = 0; i < args.size() && i < 7; ++i) {
         m_args[i] = args[i].integerVal;
     }
