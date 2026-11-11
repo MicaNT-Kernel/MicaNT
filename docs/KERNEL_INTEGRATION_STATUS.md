@@ -149,7 +149,9 @@ substitute for recovery.
 
 The existing section control area retains its PFNs until its last owner is
 released, and hosted VADs keep the section object alive until their views are
-unmapped. Allocation failure is reported rather than publishing an invalid
+unmapped. AVL removal transfers that ownership when replacing a node with its
+successor, so the successor's view does not lose its section reference.
+Allocation failure is reported rather than publishing an invalid
 section. A limited freestanding `SEC_COMMIT` path validates RW/RO protection,
 explicitly zeroes allocated PFNs and rejects unsupported variants.
 This preparation is not a working section mapping.
@@ -164,6 +166,12 @@ per-process address spaces. The freestanding VAD does not yet retain section
 ownership, and `NtMapViewOfSection` still returns `NotImplemented`.
 ReactOS comparison used `ntoskrnl/mm/section.c` and
 `ntoskrnl/mm/ARM3/section.c` at the revision above.
+
+| Command | Result |
+|---|---|
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_avl_section_owner_test.cpp -o build/mm_avl_section_owner_test && build/mm_avl_section_owner_test` | Passed; successor ownership and final release without host traps |
+
+#### Bootstrap VAD verification
 
 | Command | Result |
 |---|---|

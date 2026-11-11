@@ -789,6 +789,9 @@ private:
             node->isGuardPage = temp->isGuardPage;
             node->isSectionView = temp->isSectionView;
             node->sectionContext = temp->sectionContext;
+#if !defined(MICANT_FREESTANDING)
+            node->sectionOwner = std::move(temp->sectionOwner);
+#endif
             node->sectionOffset = temp->sectionOffset;
             node->commitCharge = temp->commitCharge;
             node->physicalPages = std::move(temp->physicalPages);
