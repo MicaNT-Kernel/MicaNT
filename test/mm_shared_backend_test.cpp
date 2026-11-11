@@ -59,5 +59,28 @@ int main() {
     assert(mapper.frames[2] && db.getActiveCount() == 2);
     assert(space.unmapSharedPages(b) == NtStatus::Success);
     assert(db.getActiveCount() == 0 && space.getRegionCount() == 0);
+    {
+        SectionObject section(2 * PageSize4KB, SEC_COMMIT, PAGE_READWRITE);
+        const auto ref = section.getBackingReference();
+        uintptr_t automatic = 0;
+        mapper.fail = 1;
+        mapper.failUnmap = 0;
+        assert(space.mapSharedPages(automatic, 2 * PageSize4KB, PAGE_READWRITE,
+                                    ref.pfns, ref.pageCount, ref.context, ref.acquire,
+                                    ref.release) == NtStatus::Unsuccessful);
+        assert(automatic == 0 && mapper.frames[0] && space.getRegionCount() == 1);
+        mapper.fail = -1;
+        assert(space.mapSharedPages(automatic, PageSize4KB, PAGE_READWRITE,
+                                    ref.pfns, ref.pageCount, ref.context, ref.acquire,
+                                    ref.release) == NtStatus::Unsuccessful);
+        assert(automatic == 0 && mapper.frames[0] && space.getRegionCount() == 1);
+        mapper.failUnmap = -1;
+        assert(space.mapSharedPages(automatic, PageSize4KB, PAGE_READWRITE,
+                                    ref.pfns, ref.pageCount, ref.context, ref.acquire,
+                                    ref.release) == NtStatus::Success);
+        assert(automatic == Base && space.getRegionCount() == 1);
+        assert(space.unmapSharedPages(automatic) == NtStatus::Success);
+    }
+    assert(db.getActiveCount() == 0);
     db.resetForTesting();
 }

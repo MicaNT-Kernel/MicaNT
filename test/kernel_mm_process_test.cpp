@@ -3,7 +3,7 @@
 #include "micant/km/hal/amd64_bootstrap.hpp"
 
 namespace {
-struct FailingSectionMap { size_t successfulMaps{}; };
+struct FailingSectionMap { size_t successfulMaps{}; bool blockUnmap{}; };
 bool mapUntilSecond(void* context, uintptr_t address, uint64_t pfn, uint32_t protection) noexcept {
     auto& state = *static_cast<FailingSectionMap*>(context);
     if (state.successfulMaps == 1) return false;
@@ -11,7 +11,8 @@ bool mapUntilSecond(void* context, uintptr_t address, uint64_t pfn, uint32_t pro
     ++state.successfulMaps;
     return true;
 }
-bool unmapSectionPage(void*, uintptr_t address) noexcept {
+bool unmapSectionPage(void* context, uintptr_t address) noexcept {
+    if (static_cast<FailingSectionMap*>(context)->blockUnmap) return false;
     return micant::hal::amd64::unmapBootstrapManagedPage(nullptr, address);
 }
 }
@@ -107,6 +108,21 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
                                  backing.acquire, backing.release) != NtStatus::Unsuccessful ||
             fault.successfulMaps != 1 || space.getRegionCount() != 0 ||
             bootstrapUserRange(address, PageSize4KB, false)) return 18;
+        fault.successfulMaps = 0;
+        fault.blockUnmap = true;
+        address = 0;
+        if (space.mapSharedPages(address, 2 * PageSize4KB, PAGE_READWRITE,
+                                 backing.pfns, backing.pageCount, backing.context,
+                                 backing.acquire, backing.release) != NtStatus::Unsuccessful ||
+            address != 0 || space.getRegionCount() != 1 ||
+            !bootstrapUserRange(BootstrapManagedBase, PageSize4KB, true)) return 19;
+        fault.blockUnmap = false;
+        fault.successfulMaps = 0;
+        if (space.mapSharedPages(address, PageSize4KB, PAGE_READWRITE,
+                                 backing.pfns, backing.pageCount, backing.context,
+                                 backing.acquire, backing.release) != NtStatus::Success ||
+            address != BootstrapManagedBase || space.getRegionCount() != 1 ||
+            space.unmapSharedPages(address) != NtStatus::Success) return 20;
     }
 
     return database.getActiveCount() == active &&

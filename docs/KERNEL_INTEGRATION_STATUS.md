@@ -192,9 +192,12 @@ the limited freestanding `SectionObject` implementation. Microsoft contracts:
 [map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmapviewofsection),
 [unmap](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunmapviewofsection).
 If backend unmapping fails while rolling back a failed map, the retained VAD
-keeps its object reference and physical pages, but an automatically selected
-address is not returned to the caller. Recovery of that orphan before process
-teardown is still unresolved.
+keeps its object reference and physical pages. Before the next section mapping,
+Mm retries cleanup without requiring the caller to know the automatically
+selected address; new section mappings fail while cleanup remains blocked.
+QEMU and host tests exercise a temporary unmap failure followed by recovery.
+A persistent backend failure still retains the mapping and backing until the
+backend can remove the PTE or the address space is torn down.
 ReactOS comparison used `ntoskrnl/mm/section.c` and
 `ntoskrnl/mm/ARM3/section.c` at the revision above.
 

@@ -1099,6 +1099,7 @@ public:
             if (!vad) ownershipInvariantFailure();
             if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
             if (!vadTree_.remove(base)) ownershipInvariantFailure();
+            if (rollbackPending_ == base) rollbackPending_ = 0;
         }
         return NtStatus::Success;
     }
@@ -1253,6 +1254,7 @@ public:
                             uint32_t maxProtection = PAGE_NOACCESS) noexcept {
         Guard lock(*this);
         if (!backend_.map) return NtStatus::NotImplemented;
+        if (!recoverFailedSectionMapping()) return NtStatus::Unsuccessful;
         if (!size || size > std::numeric_limits<size_t>::max() - PageMask4KB ||
             !pfns || !owner || !acquire || !release) return NtStatus::InvalidParameter;
         if (protect != PAGE_READONLY && protect != PAGE_READWRITE) return NtStatus::NotImplemented;
@@ -1307,6 +1309,8 @@ public:
             // outlive their physical pages. close() can retry cleanup.
             if (releaseBackendPages(*vad)) {
                 if (!vadTree_.remove(start)) ownershipInvariantFailure();
+            } else {
+                rollbackPending_ = start;
             }
             return failure;
         }
@@ -1324,6 +1328,7 @@ public:
         const uintptr_t start = vad->startingAddress;
         if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
         if (!vadTree_.remove(start)) ownershipInvariantFailure();
+        if (rollbackPending_ == start) rollbackPending_ = 0;
         return NtStatus::Success;
     }
 
@@ -1625,6 +1630,20 @@ private:
         return success;
     }
 
+    // Failed rollback retains the backing until the backend can remove every
+    // PTE. Retry it before allowing another section mapping; the address of
+    // an automatically selected failed view never has to be known by callers.
+    [[nodiscard]] bool recoverFailedSectionMapping() noexcept {
+        if (!rollbackPending_) return true;
+        auto* vad = vadTree_.find(rollbackPending_);
+        if (!vad || !vad->isSectionView) ownershipInvariantFailure();
+        if (!releaseBackendPages(*vad)) return false;
+        const uintptr_t base = rollbackPending_;
+        rollbackPending_ = 0;
+        if (!vadTree_.remove(base)) ownershipInvariantFailure();
+        return true;
+    }
+
     NtStatus protectBackend(uintptr_t address, size_t size, uint32_t protection,
                             uint32_t* oldProtection) noexcept {
         if (!backend_.protect) return NtStatus::NotImplemented;
@@ -1788,6 +1807,7 @@ private:
     PagingBackend backend_{};
     uintptr_t backendBase_{0};
     uintptr_t backendEnd_{0};
+    uintptr_t rollbackPending_{0};
 #if defined(MICANT_FREESTANDING)
     mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
 #else
