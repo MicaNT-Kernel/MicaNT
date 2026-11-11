@@ -212,7 +212,8 @@ public:
         auto& extension = *static_cast<MiniportExtension*>(context);
         auto& ns = TitanAcpiSubsystem::Instance().getNamespace();
         const auto btpPath = objectPath(extension.namespacePath, "_BTP");
-        const bool hasTripPoint = static_cast<bool>(ns.resolvePath(btpPath));
+        const auto btp = ns.resolvePath(btpPath);
+        const bool hasTripPoint = btp && btp->type == AmlObjectType::Method;
         const uint32_t tripPoint = notify->LowCapacity ? notify->LowCapacity : notify->HighCapacity;
         if (tripPoint && !hasTripPoint) return NtStatus::NotSupported;
         if (hasTripPoint) {
@@ -247,7 +248,9 @@ public:
         auto& extension = *static_cast<MiniportExtension*>(context);
         auto& ns = TitanAcpiSubsystem::Instance().getNamespace();
         const auto btpPath = objectPath(extension.namespacePath, "_BTP");
-        if (ns.resolvePath(btpPath)) (void)ns.evaluate(btpPath, {AmlValue::MakeInteger(0)});
+        const auto btp = ns.resolvePath(btpPath);
+        if (btp && btp->type == AmlObjectType::Method)
+            (void)ns.evaluate(btpPath, {AmlValue::MakeInteger(0)});
         extension.notify = {};
         extension.notifyEnabled = false;
         return NtStatus::Success;
@@ -266,9 +269,20 @@ public:
         const auto oldTag = po::bms::SmartBatterySubsystem::get().getBatteryTag();
         (void)RefreshClassDevice(extension);
         const auto& after = po::bms::SmartBatterySubsystem::get().getStatus();
+        const auto newState = after.powerState;
+        const auto newCapacity = after.capacity;
         const auto newTag = po::bms::SmartBatterySubsystem::get().getBatteryTag();
-        updatePowerManagerState();
-        if (event == 0x81 || oldState != after.powerState || oldCapacity != after.capacity || oldTag != newTag)
+        const bool stateChanged = oldState != newState;
+        const bool crossedLow = extension->notifyEnabled && extension->notify.LowCapacity != 0 &&
+            oldCapacity > extension->notify.LowCapacity && newCapacity <= extension->notify.LowCapacity;
+        const bool crossedHigh = extension->notifyEnabled && extension->notify.HighCapacity != 0 &&
+            oldCapacity < extension->notify.HighCapacity && newCapacity >= extension->notify.HighCapacity;
+        const bool requestedPowerChange = extension->notifyEnabled &&
+            ((oldState ^ newState) & extension->notify.PowerState) != 0;
+        const bool mandatoryStatusChange = stateChanged ||
+            ((newState & po::bms::BATTERY_CRITICAL) && !(oldState & po::bms::BATTERY_CRITICAL));
+        if (event == 0x81 || oldTag != newTag || mandatoryStatusChange || requestedPowerChange ||
+            crossedLow || crossedHigh)
             return BatteryClassStatusNotify(classData);
         return NtStatus::Success;
     }
