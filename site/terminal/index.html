@@ -211,6 +211,7 @@
         <button class="quick-cmd-btn" data-cmd="directstorage">directstorage</button>
         <button class="quick-cmd-btn" data-cmd="xhci">xhci</button>
         <button class="quick-cmd-btn" data-cmd="prismx">prismx</button>
+        <button class="quick-cmd-btn" data-cmd="prismx cube" style="border-color: #38bdf8; color: #38bdf8;">prismx cube</button>
         <button class="quick-cmd-btn" data-cmd="whoami /priv">whoami /priv</button>
         <button class="quick-cmd-btn" data-cmd="tasklist">tasklist</button>
         <button class="quick-cmd-btn" data-cmd="netstat">netstat</button>
@@ -284,6 +285,196 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
       out.innerHTML = html;
       shellHistory.appendChild(out);
       shellScreen.scrollTop = shellScreen.scrollHeight;
+    }
+
+
+    // Virtual Filesystem State
+    let currentDir = "C:\\Windows\\System32";
+    const vfs = {
+      "C:\\": {
+        dirs: ["Windows", "Assets", "Users"],
+        files: {
+          "boot.ini": "[boot loader]\ntimeout=3\ndefault=multi(0)disk(0)rdisk(0)partition(1)\\MICA\n[operating systems]\nmulti(0)disk(0)rdisk(0)partition(1)\\MICA=\"MicaNT Sovereign Clean-Room Executive\" /fastdetect /zerotelemetry /prismx",
+          "license.txt": "Project MICA // Sovereign Clean-Room Operating System\nLicensed under the MIT License.\nDedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM & Windows NT teams."
+        }
+      },
+      "C:\\Windows": {
+        dirs: ["System32", "Fonts"],
+        files: {
+          "system.ini": "; MicaNT System Configuration\n[drivers]\nwave=prismoch.sys\nmidi=none\ndisplay=prismx.sys",
+          "win.ini": "[MicaNT]\nCleanRoom=1\nTelemetry=0\nFeatureLevel=12.2"
+        }
+      },
+      "C:\\Windows\\System32": {
+        dirs: ["drivers", "config"],
+        files: {
+          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 506 Suites Sealed]",
+          "hal.sys": "[PE32+ System Driver: Hardware Abstraction Layer, ACPI 6.5, APIC/x2APIC]",
+          "cmd.exe": "[PE32+ Win32 Console Shell]",
+          "ntfs.sys": "[Titan NTFS Driver with Transactional Logging]",
+          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 506/506 Test Suites Sealed with 0 Failures"
+        }
+      },
+      "C:\\Windows\\System32\\drivers": {
+        dirs: [],
+        files: {
+          "prismx.sys": "[PrismX Direct3D 12 WDDM Sovereign Display Driver, Milestone 110]",
+          "xhci.sys": "[USB 3.2 xHCI 1.2 Extensible Host Controller Driver, Horizon 40]",
+          "aehd.sys": "[AHCI High Performance Storage Driver, Microsoft Signed]",
+          "titan_zfs.sys": "[OpenZFS 2.3 Sovereign Storage Driver]"
+        }
+      },
+      "C:\\Assets": {
+        dirs: ["Textures", "Shaders"],
+        files: {
+          "PrismX_Crystal.gdeflate": "[DirectStorage GDeflate Compressed 3D Mesh & Texture Data, 65,536 bytes]",
+          "crystal.vert": "cbuffer SceneData : register(b0) {\n    matrix ModelViewProjection;\n};\nstruct VSInput {\n    float3 Pos : POSITION;\n    float4 Color : COLOR;\n};\nstruct VSOutput {\n    float4 Pos : SV_POSITION;\n    float4 Color : COLOR;\n};\nVSOutput main(VSInput input) {\n    VSOutput output;\n    output.Pos = mul(float4(input.Pos, 1.0f), ModelViewProjection);\n    output.Color = input.Color;\n    return output;\n}",
+          "crystal.frag": "struct PSInput {\n    float4 Pos : SV_POSITION;\n    float4 Color : COLOR;\n};\nfloat4 main(PSInput input) : SV_TARGET {\n    return input.Color;\n}"
+        }
+      }
+    };
+
+    let cubeInterval = null;
+
+    function stopCube() {
+      if (cubeInterval) {
+        clearInterval(cubeInterval);
+        cubeInterval = null;
+        appendOutput(`<span style="color: #f59e0b;">[PrismX] 3D ASCII Cube rendering halted. Console returned to shell.</span>`);
+        shellInput.focus();
+      }
+    }
+
+    function runCubeDemo() {
+      if (cubeInterval) stopCube();
+
+      const container = document.createElement("div");
+      container.style.margin = "12px 0";
+      container.style.padding = "14px";
+      container.style.background = "#050914";
+      container.style.border = "1px solid #38bdf8";
+      container.style.borderRadius = "8px";
+
+      const titleBar = document.createElement("div");
+      titleBar.style.display = "flex";
+      titleBar.style.justifyContent = "space-between";
+      titleBar.style.alignItems = "center";
+      titleBar.style.borderBottom = "1px dashed rgba(56, 189, 248, 0.4)";
+      titleBar.style.paddingBottom = "8px";
+      titleBar.style.marginBottom = "8px";
+      titleBar.innerHTML = `<span style="color: #38bdf8; font-weight: 700;">▲ PRISMX SOVEREIGN 3D SOFTWARE RASTERIZER // LIVE ASCII CUBE</span>
+                            <button id="btnStopCube" style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 3px 10px; border-radius: 4px; font-size: 0.75rem; cursor: pointer;">Stop Demo</button>`;
+      container.appendChild(titleBar);
+
+      const pre = document.createElement("pre");
+      pre.style.color = "#00f2fe";
+      pre.style.fontFamily = "var(--font-mono)";
+      pre.style.fontSize = "13px";
+      pre.style.lineHeight = "1.05";
+      pre.style.margin = "0";
+      container.appendChild(pre);
+
+      const status = document.createElement("div");
+      status.style.fontSize = "0.8rem";
+      status.style.color = "#94a3b8";
+      status.style.marginTop = "8px";
+      status.style.borderTop = "1px dashed rgba(56, 189, 248, 0.2)";
+      status.style.paddingTop = "6px";
+      status.innerHTML = `Mode: Direct3D 12 Device66 Software Transform &bull; Target: 30 FPS &bull; Type <strong style="color: #38bdf8;">stop</strong> or click Stop`;
+      container.appendChild(status);
+
+      shellHistory.appendChild(container);
+      shellScreen.scrollTop = shellScreen.scrollHeight;
+
+      document.getElementById("btnStopCube").addEventListener("click", stopCube);
+
+      let angleA = 0;
+      let angleB = 0;
+      let frame = 0;
+      const width = 46;
+      const height = 22;
+
+      // Cube vertices (-1 to 1)
+      const vertices = [
+        [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+        [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1]
+      ];
+
+      // Cube edges (pairs of vertex indices)
+      const edges = [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7]
+      ];
+
+      cubeInterval = setInterval(() => {
+        angleA += 0.06;
+        angleB += 0.04;
+        frame++;
+
+        const cosA = Math.cos(angleA), sinA = Math.sin(angleA);
+        const cosB = Math.cos(angleB), sinB = Math.sin(angleB);
+
+        // Project vertices
+        const proj = [];
+        for (let i = 0; i < vertices.length; i++) {
+          let [x, y, z] = vertices[i];
+          // Rotate around X
+          let y1 = y * cosA - z * sinA;
+          let z1 = y * sinA + z * cosA;
+          // Rotate around Y
+          let x2 = x * cosB + z1 * sinB;
+          let z2 = -x * sinB + z1 * cosB;
+
+          // Perspective projection
+          const dist = 3.2;
+          const fov = 20;
+          const sz = z2 + dist;
+          const px = Math.floor(width / 2 + (x2 / sz) * fov * 2);
+          const py = Math.floor(height / 2 + (y1 / sz) * fov);
+          proj.push([px, py]);
+        }
+
+        // Character canvas buffer
+        const buffer = Array.from({ length: height }, () => Array(width).fill(" "));
+
+        // Draw line with Bresenham's algorithm
+        function drawLine(x0, y0, x1, y1, ch) {
+          let dx = Math.abs(x1 - x0);
+          let dy = Math.abs(y1 - y0);
+          let sx = (x0 < x1) ? 1 : -1;
+          let sy = (y0 < y1) ? 1 : -1;
+          let err = dx - dy;
+
+          while (true) {
+            if (x0 >= 0 && x0 < width && y0 >= 0 && y0 < height) {
+              buffer[y0][x0] = ch;
+            }
+            if (x0 === x1 && y0 === y1) break;
+            let e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 < dx)  { err += dx; y0 += sy; }
+          }
+        }
+
+        // Draw edges
+        for (let i = 0; i < edges.length; i++) {
+          const [u, v] = edges[i];
+          const ch = (i < 4) ? "#" : (i < 8) ? "*" : "+";
+          drawLine(proj[u][0], proj[u][1], proj[v][0], proj[v][1], ch);
+        }
+
+        // Mark vertices with bright nodes
+        for (let i = 0; i < proj.length; i++) {
+          const [px, py] = proj[i];
+          if (px >= 0 && px < width && py >= 0 && py < height) {
+            buffer[py][px] = "O";
+          }
+        }
+
+        pre.textContent = buffer.map(row => row.join("")).join("\n");
+        status.innerHTML = `Frame: ${frame} &bull; Yaw: ${(angleB * 57.2958 % 360).toFixed(1)}&deg; &bull; Pitch: ${(angleA * 57.2958 % 360).toFixed(1)}&deg; &bull; Press <strong style="color: #38bdf8;">'q'</strong> or click Stop`;
+      }, 40);
     }
 
     function executeCommand(rawCmd) {
@@ -661,6 +852,11 @@ conhost.exe                   1028 Console                    1     2,890 KB
     }
 
     shellInput.addEventListener("keydown", (e) => {
+      if (cubeInterval && (e.key === "q" || e.key === "Escape" || (e.ctrlKey && e.key === "c"))) {
+        stopCube();
+        e.preventDefault();
+        return;
+      }
       if (e.key === "Enter") {
         const val = shellInput.value;
         shellInput.value = "";
