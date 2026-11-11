@@ -2,12 +2,15 @@
 
 #include "micant/km/hal/boot_contract.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/km/executive/mm.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/win32k_client.h"
 #include "tools/explorer_shell/desktop.hpp"
 #include "tools/explorer_shell/taskbar.hpp"
+#include <cstring>
+#include <span>
 
 namespace {
 
@@ -15,6 +18,11 @@ constexpr uint32_t kWidth = 1024;
 constexpr uint32_t kHeight = 768;
 constexpr uint32_t kTaskbarHeight = 40;
 constexpr uint32_t kCursorSize = 16;
+constexpr size_t kBootstrapPfnCount = 65536;
+constexpr size_t kMaximumMemoryDescriptors = 1024;
+alignas(4096) micant::mm::Mmpfn g_bootPfnMetadata[kBootstrapPfnCount]{};
+micant::uefi::EfiMemoryDescriptor g_bootMemoryDescriptors[kMaximumMemoryDescriptors]{};
+micant::mm::PhysicalPageRange g_bootAvailableRanges[kMaximumMemoryDescriptors]{};
 alignas(16) uint32_t g_explorerSurface[kWidth * kHeight]{};
 uint32_t g_cursorFrame[kCursorSize * kCursorSize]{};
 micant::boot_driver::KernelServices g_displayServices{};
@@ -61,6 +69,130 @@ void serialWrite(const char* text) noexcept {
     for (;;) {
         __asm__ __volatile__("cli; hlt");
     }
+}
+
+void serialWriteNumber(uint64_t value) noexcept {
+    char text[21]{};
+    size_t index = sizeof(text) - 1;
+    do {
+        text[--index] = static_cast<char>('0' + value % 10);
+        value /= 10;
+    } while (value);
+    serialWrite(text + index);
+}
+
+volatile uint8_t* physicalPageBytes(uint64_t pfn) noexcept {
+    const uint64_t address = pfn * 4096;
+    if (pfn < 256 || pfn >= kBootstrapPfnCount ||
+        !micant::hal::amd64::bootstrapKernelRange(address, 4096, true) ||
+        micant::hal::amd64::translateBootstrapAddress(
+            reinterpret_cast<const void*>(address)) != address) {
+        stopWithError("[MicaNT Mm] Physical page lacks writable supervisor identity backing\r\n");
+    }
+    return reinterpret_cast<volatile uint8_t*>(address);
+}
+
+void zeroPhysicalPage(uint64_t pfn) noexcept {
+    auto* bytes = physicalPageBytes(pfn);
+    for (size_t index = 0; index < 4096; ++index) bytes[index] = 0;
+}
+
+void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV2& handoff) noexcept {
+    using namespace micant;
+    const uint64_t descriptorCount = handoff.memoryMapSize / handoff.memoryMapDescriptorSize;
+    if (handoff.memoryMapDescriptorVersion != 1 ||
+        descriptorCount > kMaximumMemoryDescriptors ||
+        !hal::amd64::bootstrapKernelRange(
+            handoff.memoryMapAddress, handoff.memoryMapSize, false) ||
+        !hal::amd64::bootstrapKernelRange(
+            reinterpret_cast<uint64_t>(g_bootPfnMetadata), sizeof(g_bootPfnMetadata), true)) {
+        stopWithError("[MicaNT Mm] Invalid, unsupported or unmapped firmware memory map\r\n");
+    }
+    size_t rangeCount{};
+    uint64_t deferredPages{};
+    for (size_t index = 0; index < descriptorCount; ++index) {
+        auto& descriptor = g_bootMemoryDescriptors[index];
+        std::memcpy(&descriptor, reinterpret_cast<const void*>(
+            handoff.memoryMapAddress + index * handoff.memoryMapDescriptorSize),
+            sizeof(descriptor));
+        if ((descriptor.physicalStart & 4095) || !descriptor.numberOfPages ||
+            descriptor.numberOfPages > (UINT64_MAX - descriptor.physicalStart) / 4096) {
+            stopWithError("[MicaNT Mm] Invalid physical range in firmware memory map\r\n");
+        }
+        const uint64_t end = descriptor.physicalStart + descriptor.numberOfPages * 4096;
+        for (size_t previous = 0; previous < index; ++previous) {
+            const auto& other = g_bootMemoryDescriptors[previous];
+            if (descriptor.physicalStart < other.physicalStart + other.numberOfPages * 4096 &&
+                other.physicalStart < end) {
+                stopWithError("[MicaNT Mm] Overlapping firmware memory descriptors\r\n");
+            }
+        }
+        if (descriptor.type != static_cast<uint32_t>(
+                uefi::EfiMemoryType::EfiConventionalMemory)) continue;
+        uint64_t enrolled{};
+        if (!(descriptor.attribute & (uint64_t{1} << 63))) {
+            uint64_t first = descriptor.physicalStart / 4096;
+            uint64_t last = end / 4096;
+            if (first < 256) first = 256;
+            if (last > kBootstrapPfnCount) last = kBootstrapPfnCount;
+            if (first < last) {
+                enrolled = last - first;
+                g_bootAvailableRanges[rangeCount++] = {first, enrolled};
+            }
+        }
+        deferredPages += descriptor.numberOfPages - enrolled;
+    }
+    auto& database = mm::PfnDatabase::get();
+    if (database.initializeFromBootMemory(
+            g_bootPfnMetadata, std::span(g_bootAvailableRanges, rangeCount),
+            zeroPhysicalPage) != NtStatus::Success ||
+        database.getFreeCount() < 3 || database.getZeroedCount() != 0 ||
+        database.getActiveCount() != 0) {
+        stopWithError("[MicaNT Mm] Canonical PFN database initialization failed\r\n");
+    }
+    const size_t initialFree = database.getFreeCount();
+    const uint64_t pfn = database.allocatePage(false);
+    if (!pfn || database.getActiveCount() != 1) {
+        stopWithError("[MicaNT Mm] Physical allocation failed\r\n");
+    }
+    auto* bytes = physicalPageBytes(pfn);
+    for (size_t index = 0; index < 4096; ++index) bytes[index] = 0xA5;
+    database.referencePage(pfn);
+    database.freePage(pfn);
+    if (database.getActiveCount() != 1) {
+        stopWithError("[MicaNT Mm] Referenced physical page released too early\r\n");
+    }
+    database.freePage(pfn);
+    database.zeroPage(pfn);
+    for (size_t index = 0; index < 4096; ++index) {
+        if (bytes[index] != 0) {
+            stopWithError("[MicaNT Mm] Physical zeroing verification failed\r\n");
+        }
+    }
+    if (database.getZeroedCount() != 1 || database.allocatePage(true) != pfn) {
+        stopWithError("[MicaNT Mm] Zeroed physical page allocation failed\r\n");
+    }
+    database.freePage(pfn);
+    const uint64_t contiguous = database.allocateContiguousPages(2);
+    if (!contiguous || database.getActiveCount() != 2) {
+        stopWithError("[MicaNT Mm] Contiguous physical allocation failed\r\n");
+    }
+    physicalPageBytes(contiguous)[0] = 0x37;
+    physicalPageBytes(contiguous + 1)[4095] = 0x79;
+    if (physicalPageBytes(contiguous)[0] != 0x37 ||
+        physicalPageBytes(contiguous + 1)[4095] != 0x79) {
+        stopWithError("[MicaNT Mm] Physical frame backing verification failed\r\n");
+    }
+    database.freeContiguousPages(contiguous, 2);
+    if (database.getActiveCount() != 0 || database.getFreeCount() != initialFree) {
+        stopWithError("[MicaNT Mm] Physical release accounting failed\r\n");
+    }
+    serialWrite("[MicaNT Mm] Bootstrap PFN window: first 256 MiB; usable pages=");
+    serialWriteNumber(initialFree);
+    serialWrite("; deferred conventional pages=");
+    serialWriteNumber(deferredPages);
+    serialWrite("\r\n");
+    serialWrite("[MicaNT Mm] Canonical physical allocation, zeroing and release verified\r\n");
 }
 
 void initializeDisplay(const micant::boot::KernelBootImageV1& image) noexcept {
@@ -118,7 +250,8 @@ bool validHandoff(const micant::boot::UefiKernelHandoffV2* handoff) noexcept {
         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION ||
         handoff->size < sizeof(*handoff) ||
         handoff->memoryMapAddress == 0 ||
-        handoff->memoryMapDescriptorSize < 40 ||
+        handoff->memoryMapSize > UINT64_MAX - handoff->memoryMapAddress ||
+        handoff->memoryMapDescriptorSize < sizeof(micant::uefi::EfiMemoryDescriptor) ||
         handoff->memoryMapSize < handoff->memoryMapDescriptorSize) {
         return false;
     }
@@ -408,6 +541,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT] Bootstrap address-space initialization failed\r\n");
     }
     serialWrite("[MicaNT] Kernel-owned page-table root active\r\n");
+    initializePhysicalMemory(*handoff);
     initializeDisplay(handoff->displayDriver);
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");

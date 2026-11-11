@@ -17,6 +17,9 @@ specification. The compatibility inventory is
 - Polled PS/2 cursor movement and click delivery; QMP pixel/input checks pass.
 - Original bounded PE diagnostic mapped by the canonical native loader and
   entered at CPL3. This is not a process, DLL startup, or Explorer.
+- Canonical PFN database initialized from validated firmware conventional
+  ranges; actual physical writes, reference retention, complete page zeroing
+  and contiguous release verified before display initialization.
 
 Reproduced from the current sources, not by accepting an old kernel binary:
 
@@ -121,12 +124,58 @@ The standalone handoff test and headless QEMU boot pass after the extraction.
 This only removes a hosted-header dependency; PFN enrollment is not claimed
 by the extraction itself.
 
+### Canonical PFN boot backing
+
+Commit `9b6d735` integrates the isolated Mm worker's canonical `PfnDatabase`
+adapter. It keeps one manager and shared allocation/reference/free algorithms;
+intrusive PFN links replace dynamic page lists. Native metadata is borrowed,
+not allocated through a hosted runtime. Hosted legacy initialization remains
+available. Initial native pages are Free, never falsely reported Zeroed.
+
+The boot integration owns stable metadata for **65,536 PFNs (256 MiB)**.
+It validates descriptor version/stride/range/overlap and supervisor mappings,
+enrolls only non-runtime conventional pages above the first MiB, and leaves
+all other PFNs reserved. Higher and intentionally unmanaged conventional
+pages are counted and logged explicitly, not silently reclaimed.
+Loader/firmware, kernel, driver, MMIO and runtime-service pages are not
+reclassified as free.
+
+The supplied zero routine verifies writable supervisor identity backing
+before clearing actual RAM. Boot dirties all 4096 bytes of an allocated
+physical page, verifies reference retention, frees and zeros it, checks every
+byte, reallocates that zeroed frame, and verifies two contiguous frames and
+restored free/active counts. The smoke runner now requires this real
+verification before the existing display/CPL3/input markers.
+
+```bash
+clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror \
+  -Wno-unused-parameter -fsanitize=address,undefined -Iinclude \
+  test/pfn_database_bootstrap_test.cpp -o build/pfn-native-sanitized
+build/pfn-native-sanitized
+clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter \
+  -fsanitize=address,undefined -Iinclude test/pfn_database_bootstrap_test.cpp \
+  -o build/pfn-hosted-sanitized
+build/pfn-hosted-sanitized
+python3 qemu.py --headless
+```
+
+Results: native and hosted sanitizer tests passed, including sparse and
+invalid maps, references, zeroing, contiguous allocation, exhaustion and
+reinitialization; QEMU passed every old and new required milestone.
+The isolated production-flag PFN probe needs only memory copying and its
+supplied zero routine, not heap, mutex, TLS, atexit or static-guard symbols.
+
+**Limits:** this is the canonical physical allocator component, not the full
+Mm virtual-memory API. Borrowed backing and its private atomic lock are for
+the current IRQ-disabled bootstrap only; they do not implement Ke IRQL or
+scheduled waits. No parallel bare-metal memory manager is activated.
+
 ## Milestones
 
 | Milestone | State | Missing acceptance evidence |
 |---|---|---|
-| M1: freestanding foundation | Partial | Shared C++ runtime/allocator backing and first full canonical Executive initialization |
-| M2: Mm + Ob | Not integrated | Physical allocation from UEFI map, mapping/freeing, canonical namespace/handles in QEMU |
+| M1: freestanding foundation | Partial; canonical PFN component operational | Shared C++ runtime/kernel heap and broader Executive initialization |
+| M2: Mm + Ob | Physical allocator subset verified | Full mapping/freeing/address spaces and canonical namespace/handles in QEMU |
 | M3: Ke + Ps | Not integrated | IRQ/timer backend, scheduler, independent address spaces, actual context switching |
 | M4: Io + syscall | Partial platform boundary only | Canonical driver/device/IRP initialization, completion and NT service routing |
 | M5: Ring 3 processes | Diagnostic only | Real process loader, PEB/TEB/TLS, termination and two concurrent processes |

@@ -37,8 +37,11 @@ Executive or a user-mode `explorer.exe` process.
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
 external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
 diagnostic IDT. It retains firmware identity mappings and the initial firmware
-stack; a physical allocator, scheduler and process environment are still
-missing. A host target passing does not validate this artifact.
+stack. The canonical PFN allocator now enrolls usable firmware pages within
+an explicit first-256-MiB bootstrap window; physical writes, real zeroing,
+references and contiguous release are verified in QEMU. Full virtual-memory
+integration, scheduler and process environment remain missing. A host target
+passing does not validate this artifact.
 
 The build manifest required for staging is
 `build/baremetal/kernel-build-manifest.json`. Schema version 2 must
@@ -83,7 +86,8 @@ Its pointer fields are valid only while the
 bootloader image and identity-mapped firmware memory remain available.
 
 The current kernel entry validates the handoff, installs its page-table root,
-maps supervisor-only uncached MMIO and calls the separate display driver's
+validates and consumes conventional-memory descriptors through the canonical
+PFN database, maps supervisor-only uncached MMIO and calls the separate display driver's
 entry through the existing private `boot_driver` contract. This is not a WDK
 driver-loading ABI or a complete I/O Manager. Desktop and cursor pixels are
 presented through `DisplayDevice::PresentFrame`, not drawn into GOP memory.
@@ -172,11 +176,11 @@ canonical owner.
 
 | Legacy function area | Canonical destination | Current migration status |
 |---|---|---|
-| UEFI handover and loader data | `kernel/init/`, shared boot contract | Versioned POD handoff is validated in QEMU; memory-map consumption is pending |
+| UEFI handover and loader data | `kernel/init/`, shared boot contract | Versioned POD handoff and bounded, strided memory map validated; usable pages in the first 256 MiB enrolled, higher RAM deferred explicitly |
 | Serial debug | `Hal` / AMD64 platform | Bootstrap kernel initializes COM1 and emits verified serial milestones; HAL ownership is pending |
 | IDT and exceptions | `Ke` + `Hal` / AMD64 | Diagnostic GDT/TSS/IDT and checked #BP/#PF returns verified in QEMU; general exception dispatch pending |
 | APIC and timer | `Hal` + `Ke` | Headers/contracts exist; modular bare-metal initialization is not verified |
-| Initial paging and PFN allocator | `Mm` + `Hal` mechanism | Kernel-owned root, supervisor MMIO and bounded user mappings verified; firmware mappings retained, PFN allocator pending |
+| Initial paging and PFN allocator | `Mm` + `Hal` mechanism | Canonical PFN allocator uses borrowed boot metadata and validated conventional ranges; allocation/reference/real-zeroing/contiguous-release verified; firmware mappings retained, full VM integration pending |
 | AMD64 syscall dispatch | `Ke` + native API boundary | Protected hardware entry/return, user-buffer validation and private display/input services verified; Executive NT dispatch remains pending |
 | Ring 3 transition | `Ps` + platform code | Hardware CPL3 entry/return and four page-protection probes verified; not a scheduled user process |
 | PE image loading | Native loader + `Ps` | Bounded canonical PE view/module binding tested on host; mapped compiled diagnostic executes at CPL3 in QEMU; process/DLL initialization remains pending |

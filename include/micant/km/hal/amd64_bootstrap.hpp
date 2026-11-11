@@ -18,6 +18,7 @@ using UserServiceRoutine = uint64_t (*)(uint64_t number, uint64_t first,
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;
+bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept;
 bool verifyBootstrapSyscalls() noexcept;
 bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
                             bool writable, bool executable) noexcept;

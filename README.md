@@ -40,6 +40,9 @@ diagnostic does exercise native syscall entry/return, protected user buffers,
 and a user-originated surface submission verified in the VirtIO scanout.
 It also maps an original bounded PE diagnostic and executes its compiled
 entry at CPL3; this does not initialize an Explorer process or its DLLs.
+The canonical physical-page allocator now consumes validated usable UEFI
+ranges within an explicit 256 MiB bootstrap window and verifies actual RAM
+allocation, zeroing and release before continuing the boot.
 See the [integration status](docs/KERNEL_INTEGRATION_STATUS.md) for verified
 increments and remaining prerequisites.
 

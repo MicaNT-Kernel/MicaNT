@@ -81,6 +81,39 @@ uint64_t walk(uint64_t root, uint64_t address) noexcept {
     return 0;
 }
 
+bool mappedRange(uint64_t address, size_t size, bool user, bool writable,
+                 bool executable) noexcept {
+    if (!g_addressSpaceReady || !size || size - 1 > UINT64_MAX - address) {
+        return false;
+    }
+    const uint64_t end = address + size - 1;
+    const uint64_t region = address >> 47;
+    if ((region != 0 && region != 0x1FFFF) || (end >> 47) != region) {
+        return false;
+    }
+    for (uint64_t page = address & ~uint64_t{4095};; page += 4096) {
+        const uint64_t* table = g_pml4;
+        bool userAccessible = true;
+        for (int shift = 39; shift >= 12; shift -= 9) {
+            const uint64_t entry = table[(page >> shift) & 511];
+            userAccessible = userAccessible && (entry & kUser);
+            if (!(entry & kPresent) || (user && !userAccessible) ||
+                (writable && !(entry & kWritable)) ||
+                (executable && (entry & kNoExecute))) {
+                return false;
+            }
+            if (shift > 12 && (entry & 128)) {
+                if (user || (shift != 30 && shift != 21)) return false;
+                break;
+            }
+            if (shift == 12) break;
+            table = reinterpret_cast<const uint64_t*>(entry & kPhysicalMask);
+        }
+        if (userAccessible != user) return false;
+        if (end - page < 4096) return true;
+    }
+}
+
 bool mapPage(uint64_t address, uint64_t physical, uint64_t flags) noexcept {
     uint64_t* table = g_pml4;
     for (int shift = 39; shift > 12; shift -= 9) {
@@ -388,25 +421,11 @@ bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
         size > kUserBase + (uint64_t{1} << 39) - address) {
         return false;
     }
-    const uint64_t end = address + size - 1;
-    for (uint64_t page = address & ~uint64_t{4095};; page += 4096) {
-        const uint64_t* table = g_pml4;
-        for (int shift = 39; shift >= 12; shift -= 9) {
-            const uint64_t entry = table[(page >> shift) & 511];
-            if ((entry & (kPresent | kUser)) != (kPresent | kUser) ||
-                (writable && !(entry & kWritable)) ||
-                (executable && (entry & kNoExecute)) ||
-                (shift > 12 && (entry & 128))) {
-                return false;
-            }
-            if (shift > 12) {
-                table = reinterpret_cast<const uint64_t*>(entry & kPhysicalMask);
-            }
-        }
-        if (end - page < 4096) {
-            return true;
-        }
-    }
+    return mappedRange(address, size, true, writable, executable);
+}
+
+bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept {
+    return mappedRange(address, size, false, writable, false);
 }
 
 bool mapBootstrapUserMemory(uint64_t address, const void* backing, size_t size,
@@ -454,7 +473,14 @@ bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept {
 }
 
 bool verifyBootstrapSyscalls() noexcept {
-    if (!g_dispatch) {
+    if (!g_dispatch ||
+        !bootstrapKernelRange(reinterpret_cast<uint64_t>(g_nativeProbeImage),
+                              sizeof(g_nativeProbeImage), true) ||
+        bootstrapKernelRange(kUserBase, 1, false) ||
+        bootstrapKernelRange(kUserBase + 4096, 1, true) ||
+        bootstrapKernelRange(0x0000800000000000ULL, 1, false) ||
+        bootstrapKernelRange(UINT64_MAX - 8, 16, false) ||
+        bootstrapKernelRange(reinterpret_cast<uint64_t>(g_nativeProbeImage), 0, true)) {
         return false;
     }
     const auto* begin = reinterpret_cast<const uint8_t*>(MicantSyscallProbeProgram);

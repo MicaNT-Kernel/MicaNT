@@ -16,6 +16,11 @@ initialized or exercised as an Executive module in QEMU.** Header-only native
 PE functionality exercised by the diagnostic is a narrower, separate claim.
 Compilation alone does not change those integration states.
 
+Subsequent verified increment: the canonical header-only `PfnDatabase` now
+supports borrowed boot backing and runs against real physical pages in QEMU.
+This does not make the baseline's hosted virtual-memory translation unit
+freestanding or activate `mm_baremetal.hpp`; see the integration record.
+
 Classes:
 
 - **A:** verified freestanding without adaptation.
