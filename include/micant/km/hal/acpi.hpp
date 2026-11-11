@@ -1729,11 +1729,13 @@ public:
             !VerifyAcpiChecksum(rsdpBytes, 20)) return false;
         AcpiRsdp rsdp{};
         std::memcpy(&rsdp, rsdpBytes, 20);
+        size_t rsdpByteLength = 20;
         if (rsdp.revision >= 2) {
             uint32_t rsdpLength = 0;
             std::memcpy(&rsdpLength, rsdpBytes + 20, sizeof(rsdpLength));
             if (rsdpLength < sizeof(AcpiRsdp) || rsdpLength > 4096 ||
                 !VerifyAcpiChecksum(rsdpBytes, rsdpLength)) return false;
+            rsdpByteLength = rsdpLength;
             std::memcpy(&rsdp, rsdpBytes, sizeof(AcpiRsdp));
         }
 
@@ -1788,6 +1790,7 @@ public:
         m_hpet = {};
         m_bgrt = {};
         m_tablePhysicalAddresses.emplace("RSDP", rsdpAddress);
+        m_tableStorage["RSDP"].assign(rsdpBytes, rsdpBytes + rsdpByteLength);
         const char* rootSignature = rootIsXsdt ? "XSDT" : "RSDT";
         m_tableStorage[rootSignature] = rootTable;
         m_tablePhysicalAddresses[rootSignature] = rootAddress;
@@ -2212,6 +2215,7 @@ public:
         if (sig == "BGRT") return m_bgrt.header.length;
         if (sig == "XSDT") return m_xsdtHeader.length;
         if (sig == "RSDT") return m_rsdtHeader.length;
+        if (sig == "RSDP") return m_rsdp.revision >= 2 ? m_rsdp.length : 20;
         return 0;
     }
 
