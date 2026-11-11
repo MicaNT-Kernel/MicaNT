@@ -60,6 +60,30 @@ inline constexpr uintptr_t MM_LOWEST_USER_ADDRESS     = 0x0000000000010000ULL; /
 inline constexpr size_t    PAGE_SIZE                  = 4096;
 inline constexpr uintptr_t PAGE_MASK                  = 0xFFF;
 
+#if defined(MICANT_FREESTANDING)
+namespace detail {
+
+// Private status-returning bootstrap adapter, not the exported WDK probe ABI.
+// The backend must keep mappings stable through the subsequent copy. The
+// current AMD64 binding rejects use outside single-CPU, IRQ-disabled boot.
+using BootstrapProbeRoutine =
+    bool (*)(uintptr_t, size_t, bool, KPROCESSOR_MODE) noexcept;
+inline BootstrapProbeRoutine bootstrapProbeRoutine{};
+
+inline bool initializeBootstrapProbes(BootstrapProbeRoutine routine) noexcept {
+    if (!routine || bootstrapProbeRoutine) return false;
+    bootstrapProbeRoutine = routine;
+    return true;
+}
+
+inline bool bootstrapRangeAccessible(uintptr_t address, size_t size,
+                                     bool writable, KPROCESSOR_MODE mode) noexcept {
+    return bootstrapProbeRoutine &&
+           bootstrapProbeRoutine(address, size, writable, mode);
+}
+
+} // namespace detail
+#else
 /**
  * @brief Memory page permission tracker for synthetic probe tests and page boundary verification.
  */
@@ -107,6 +131,7 @@ private:
     ProbeMemoryManager() = default;
     std::unordered_map<uintptr_t, PROBE_PAGE_ENTRY> pages_;
 };
+#endif
 
 /**
  * @brief Validates that a buffer is within permissible address space boundaries,
@@ -126,6 +151,12 @@ inline NtStatus ProbeForRead(
 
     uintptr_t addr = reinterpret_cast<uintptr_t>(address);
 
+#if defined(MICANT_FREESTANDING)
+    if (!alignment || (alignment & (alignment - 1))) {
+        ex::GetSyncTelemetry().totalProbeViolationsCaught++;
+        return NtStatus::InvalidParameter;
+    }
+#endif
     // Alignment check (alignment must be a power of 2)
     if (alignment > 1 && (addr & (alignment - 1)) != 0) {
         ex::GetSyncTelemetry().totalProbeViolationsCaught++;
@@ -137,6 +168,13 @@ inline NtStatus ProbeForRead(
         ex::GetSyncTelemetry().totalProbeViolationsCaught++;
         return NtStatus::AccessViolation;
     }
+
+#if defined(MICANT_FREESTANDING)
+    if (!detail::bootstrapRangeAccessible(addr, length, false, mode)) {
+        ex::GetSyncTelemetry().totalProbeViolationsCaught++;
+        return NtStatus::AccessViolation;
+    }
+#endif
 
     // Kernel-mode requests bypass user-space ceiling and null-trap boundaries
     if (mode == KernelMode) {
@@ -177,6 +215,12 @@ inline NtStatus ProbeForWrite(
     if (length == 0) return NtStatus::Success;
 
     uintptr_t addr = reinterpret_cast<uintptr_t>(address);
+#if defined(MICANT_FREESTANDING)
+    if (!detail::bootstrapRangeAccessible(addr, length, true, mode)) {
+        ex::GetSyncTelemetry().totalProbeViolationsCaught++;
+        return NtStatus::AccessViolation;
+    }
+#else
     uintptr_t startPage = addr & ~PAGE_MASK;
     uintptr_t endPage = (addr + length - 1) & ~PAGE_MASK;
 
@@ -186,6 +230,7 @@ inline NtStatus ProbeForWrite(
             return NtStatus::AccessViolation;
         }
     }
+#endif
 
     return NtStatus::Success;
 }
@@ -208,6 +253,16 @@ inline NtStatus ExSafeCopyFromUser(
         return st;
     }
 
+#if defined(MICANT_FREESTANDING)
+    st = ProbeForWrite(kernelDest, length, 1, KernelMode);
+    if (st != NtStatus::Success) {
+        ex::GetSyncTelemetry().totalSafeCopyFaultsCaught++;
+        return st;
+    }
+    std::memcpy(kernelDest, userSrc, length);
+    ex::GetSyncTelemetry().totalSafeCopiesCompleted++;
+    return NtStatus::Success;
+#else
     try {
         std::memcpy(kernelDest, userSrc, length);
         ex::GetSyncTelemetry().totalSafeCopiesCompleted++;
@@ -216,6 +271,7 @@ inline NtStatus ExSafeCopyFromUser(
         ex::GetSyncTelemetry().totalSafeCopyFaultsCaught++;
         return NtStatus::AccessViolation;
     }
+#endif
 }
 
 /**
@@ -236,6 +292,16 @@ inline NtStatus ExSafeCopyToUser(
         return st;
     }
 
+#if defined(MICANT_FREESTANDING)
+    st = ProbeForRead(kernelSrc, length, 1, KernelMode);
+    if (st != NtStatus::Success) {
+        ex::GetSyncTelemetry().totalSafeCopyFaultsCaught++;
+        return st;
+    }
+    std::memcpy(userDest, kernelSrc, length);
+    ex::GetSyncTelemetry().totalSafeCopiesCompleted++;
+    return NtStatus::Success;
+#else
     try {
         std::memcpy(userDest, kernelSrc, length);
         ex::GetSyncTelemetry().totalSafeCopiesCompleted++;
@@ -244,6 +310,7 @@ inline NtStatus ExSafeCopyToUser(
         ex::GetSyncTelemetry().totalSafeCopyFaultsCaught++;
         return NtStatus::AccessViolation;
     }
+#endif
 }
 
 /**
@@ -416,5 +483,7 @@ namespace micant::ex {
     using mm::ExSafeProbeAndWrite;
     using mm::ExSafeReadUnicodeString;
     using mm::ExSafeReadAnsiString;
+#if !defined(MICANT_FREESTANDING)
     using mm::ProbeMemoryManager;
+#endif
 } // namespace micant::ex

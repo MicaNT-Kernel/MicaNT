@@ -201,6 +201,48 @@ exception/unwind runtime. Its private contract requires one CPU and disabled
 interrupts, matching the current boot. Higher managers still need their
 shared runtime and lifecycle dependencies from the gap matrix.
 
+### Canonical Ex checked-copy boundary
+
+The existing status-returning helpers in `probe.hpp` now bind a private,
+allocation-free native range checker rather than the hosted synthetic
+permission map. The binding uses the effective permissions from the active
+AMD64 hardware tables and rejects use with interrupts enabled. The native
+branch has no C++ `try/catch`; it checks the complete user span and the
+supervisor source/destination before copying. The hosted synthetic backend
+and exception-enabled helpers retain their existing behavior.
+
+All current bootstrap graphics, serial and mouse syscall buffer accesses now
+use those canonical helpers. The real CPL3 diagnostic still checks returned
+contents, null/RO/unmapped/supervisor/wrapping rejection, registers and SIMD;
+the submitted pixels are checked through QMP. The boot also requires observed
+successful and rejected canonical-copy paths, not just linked symbols.
+
+`python3 qemu.py --headless` passed after wiring. Both standalone modes below
+passed ASan/UBSan, including absent backend, binding validation, misalignment,
+overflow, cross-page protection, untouched rejected destinations and kernel
+source/destination validation:
+
+```bash
+clang++ -std=c++23 -DMICANT_FREESTANDING -fno-exceptions -fno-rtti \
+  -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined \
+  -Iinclude test/bootstrap_probe_test.cpp -o build/bootstrap-probe-native-sanitized
+build/bootstrap-probe-native-sanitized
+clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter \
+  -fsanitize=address,undefined -Iinclude test/bootstrap_probe_test.cpp \
+  -o build/bootstrap-probe-hosted-sanitized
+build/bootstrap-probe-hosted-sanitized
+```
+
+These are private C++ status adapters, **not** exported WDK `ProbeForRead` or
+`ProbeForWrite` implementations: the documented Windows ABI is void and
+raises exceptions. See the official [read](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-probeforread)
+and [write](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-probeforwrite)
+contracts. Native validation/copy requires immutable mappings on one CPU with
+interrupts disabled; this is not recoverable access to arbitrary faulting
+memory or protection against concurrent unmapping. Before enabling scheduling,
+IRQs or SMP, replace this restricted backend with proper pinning/fault
+recovery. No hosted synthetic access permission is accepted by the kernel.
+
 ## Milestones
 
 | Milestone | State | Missing acceptance evidence |

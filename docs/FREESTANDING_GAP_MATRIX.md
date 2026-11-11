@@ -21,6 +21,14 @@ supports borrowed boot backing and runs against real physical pages in QEMU.
 This does not make the baseline's hosted virtual-memory translation unit
 freestanding or activate `mm_baremetal.hpp`; see the integration record.
 
+Later runtime increments also supply PFN-backed kernel C/C++ allocation and
+connect the canonical `probe.hpp` status-returning copy helpers to real AMD64
+page permissions. The native branch removes its `try/catch` parser blocker;
+it requires immutable mappings and IRQ-disabled single-CPU use, not general
+SEH or scheduled memory access. Hosted synthetic permissions remain test-only.
+These header/runtime improvements do not clear the remaining R/S dependencies
+or change the original translation-unit audit results below.
+
 Classes:
 
 - **A:** verified freestanding without adaptation.

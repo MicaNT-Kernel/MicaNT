@@ -4,6 +4,7 @@
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/freestanding.hpp"
+#include "micant/km/executive/probe.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
@@ -107,6 +108,18 @@ void* mapBootstrapHeapPages(uint64_t firstPfn, size_t pageCount) noexcept {
         (void)physicalPageBytes(firstPfn + index);
     }
     return reinterpret_cast<void*>(firstPfn * 4096);
+}
+
+bool probeBootstrapRange(uintptr_t address, size_t size, bool writable,
+                         micant::mm::KPROCESSOR_MODE mode) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
+    if (flags & (uint64_t{1} << 9)) return false;
+    if (mode == micant::mm::UserMode) {
+        return micant::hal::amd64::bootstrapUserRange(address, size, writable);
+    }
+    return mode == micant::mm::KernelMode &&
+           micant::hal::amd64::bootstrapKernelRange(address, size, writable);
 }
 
 void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV2& handoff) noexcept {
@@ -332,22 +345,18 @@ void drawMouseCursor(uint32_t x, uint32_t y) noexcept {
 uint64_t dispatchBootstrapService(uint64_t number, uint64_t first,
                                   uint64_t second) noexcept {
     using namespace micant;
-    using hal::amd64::bootstrapUserRange;
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
     if (number == 0x80) {
-        if (!bootstrapUserRange(first, sizeof(um::UserVideoInfo64), true)) {
-            return status(NtStatus::AccessViolation);
-        }
-        auto* output = reinterpret_cast<um::UserVideoInfo64*>(first);
-        *output = {g_display.Width, g_display.Height, g_display.Pitch,
-                   32, g_display.PixelFormat, 0, 0};
-        return status(NtStatus::Success);
+        const um::UserVideoInfo64 info{g_display.Width, g_display.Height, g_display.Pitch,
+                                       32, g_display.PixelFormat, 0, 0};
+        return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(first),
+                                           &info, sizeof(info)));
     }
     if (number == 0x81) {
-        if (!bootstrapUserRange(first, sizeof(um::UserPresentSurfaceParams64), false)) {
-            return status(NtStatus::AccessViolation);
-        }
-        const auto params = *reinterpret_cast<const um::UserPresentSurfaceParams64*>(first);
+        um::UserPresentSurfaceParams64 params{};
+        const NtStatus copyStatus = ex::ExSafeCopyFromUser(
+            &params, reinterpret_cast<const void*>(first), sizeof(params));
+        if (copyStatus != NtStatus::Success) return status(copyStatus);
         const uint32_t pitch = params.pitch ? params.pitch : params.width;
         if (!params.width || !params.height || params.dstX >= kWidth ||
             params.dstY >= kHeight || params.width > kWidth - params.dstX ||
@@ -357,15 +366,16 @@ uint64_t dispatchBootstrapService(uint64_t number, uint64_t first,
         }
         const size_t bytes = (static_cast<size_t>(params.height - 1) * pitch +
                               params.width) * sizeof(uint32_t);
-        if (!bootstrapUserRange(params.surfaceBufferVa, bytes, false)) {
-            return status(NtStatus::AccessViolation);
-        }
+        const NtStatus probeStatus = ex::ProbeForRead(
+            reinterpret_cast<const void*>(params.surfaceBufferVa), bytes, 1);
+        if (probeStatus != NtStatus::Success) return status(probeStatus);
         const auto* pixels = reinterpret_cast<const uint32_t*>(params.surfaceBufferVa);
         for (uint32_t row = 0; row < params.height; ++row) {
-            for (uint32_t column = 0; column < params.width; ++column) {
-                g_explorerSurface[(params.dstY + row) * kWidth + params.dstX + column] =
-                    pixels[static_cast<size_t>(row) * pitch + column];
-            }
+            const NtStatus rowStatus = ex::ExSafeCopyFromUser(
+                g_explorerSurface + (params.dstY + row) * kWidth + params.dstX,
+                pixels + static_cast<size_t>(row) * pitch,
+                params.width * sizeof(uint32_t));
+            if (rowStatus != NtStatus::Success) return status(rowStatus);
         }
         if (!g_display.PresentFrame(g_display.Context,
                 g_explorerSurface + params.dstY * kWidth + params.dstX,
@@ -376,27 +386,37 @@ uint64_t dispatchBootstrapService(uint64_t number, uint64_t first,
         return status(NtStatus::Success);
     }
     if (number == 0x25) {
-        if (!second || second > 4096 ||
-            !bootstrapUserRange(first, static_cast<size_t>(second), false)) {
+        if (!second || second > 4096) {
             return status(NtStatus::AccessViolation);
         }
         const auto* text = reinterpret_cast<const char*>(first);
-        char character[2]{};
-        for (size_t byte = 0; byte < second; ++byte) {
-            character[0] = text[byte];
-            serialWrite(character);
+        const NtStatus probeStatus = ex::ProbeForRead(text, second, 1);
+        if (probeStatus != NtStatus::Success) return status(probeStatus);
+        char buffer[128]{};
+        for (size_t byte = 0; byte < second;) {
+            const size_t remaining = static_cast<size_t>(second) - byte;
+            const size_t chunk = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+            const NtStatus copyStatus = ex::ExSafeCopyFromUser(buffer, text + byte, chunk);
+            if (copyStatus != NtStatus::Success) return status(copyStatus);
+            for (size_t index = 0; index < chunk; ++index) {
+                const char character[2]{buffer[index], '\0'};
+                serialWrite(character);
+            }
+            byte += chunk;
         }
         return status(NtStatus::Success);
     }
     if (number == 0x82) {
-        if (!bootstrapUserRange(first, sizeof(MicaWin32kInputEvent), true)) {
-            return status(NtStatus::AccessViolation);
-        }
+        const NtStatus probeStatus = ex::ProbeForWrite(
+            reinterpret_cast<void*>(first), sizeof(MicaWin32kInputEvent), 1);
+        if (probeStatus != NtStatus::Success) return status(probeStatus);
         MicaWin32kInputEvent event{};
         if (!pollMouseInput(event)) {
             return 0;
         }
-        *reinterpret_cast<MicaWin32kInputEvent*>(first) = event;
+        const NtStatus copyStatus = ex::ExSafeCopyToUser(
+            reinterpret_cast<void*>(first), &event, sizeof(event));
+        if (copyStatus != NtStatus::Success) return status(copyStatus);
         return 1;
     }
     return status(NtStatus::NotSupported);
@@ -553,6 +573,9 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT] Bootstrap address-space initialization failed\r\n");
     }
     serialWrite("[MicaNT] Kernel-owned page-table root active\r\n");
+    if (!micant::mm::detail::initializeBootstrapProbes(probeBootstrapRange)) {
+        stopWithError("[MicaNT Ex] Bootstrap probe binding failed\r\n");
+    }
     initializePhysicalMemory(*handoff);
     if (!micant::ex::initializeBootstrapRuntime(serialWrite, mapBootstrapHeapPages) ||
         !micant::ex::verifyBootstrapRuntime()) {
@@ -575,6 +598,13 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
     }
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
+    const auto probeTelemetry = micant::ex::ExQuerySyncTelemetry();
+    if (!probeTelemetry.totalSafeCopiesCompleted ||
+        !probeTelemetry.totalSafeCopyFaultsCaught ||
+        !probeTelemetry.totalProbeViolationsCaught) {
+        stopWithError("[MicaNT Ex] Canonical checked user-copy paths not exercised\r\n");
+    }
+    serialWrite("[MicaNT Ex] Canonical checked user copies verified at CPL3 boundary\r\n");
     serialWrite("[MicaNT Ps] Bounded native PE mapping and compiled user entry verified\r\n");
     if (!initializeMouse()) {
         stopWithError("[MicaNT Input] PS/2 mouse initialization failed\r\n");
