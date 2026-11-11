@@ -125,11 +125,12 @@ by the kernel; mapping/inspection is not a substitute. Its contract follows
 the public [CRT errno documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/errno-doserrno-sys-errlist-and-sys-nerr)
 and [PE TLS specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-section).
 `python3 qemu.py --check-explorer` still **fails explicitly** on 23 Kernel32
-requirements and 23 UCRT exports, reduced from 73 total missing requirements
-to 46 by the tested `ceilf`, CRT startup-table, aligned-allocation, and UTF-8
-conversion increments. The initializer and on-exit helpers are not full DLL
-CRT startup; the kernel loader does not yet dispatch module initializers or
-TLS. No fake export, host DLL or synthetic import trampoline fills those gaps.
+requirements and 21 UCRT exports, reduced from 73 total missing requirements
+to 44 by the tested `ceilf`, CRT startup-table, aligned-allocation, UTF-8
+conversion, and UTF-8 locale-profile increments. The initializer and on-exit
+helpers are not full DLL CRT startup; the kernel loader does not yet dispatch
+module initializers or TLS. No fake export, host DLL or synthetic import
+trampoline fills those gaps.
 
 ### Freestanding Kernel32 last-error accessors
 
@@ -160,9 +161,10 @@ python3 qemu.py --headless
 Results: passed. LLVM PE inspection confirms the four named exports; headless
 QEMU confirms the isolated TEB GS field probe and the existing syscall, input,
 and scanout checks. This does not establish real process TEB
-initialization. The full Explorer preflight subsequently resolved the two
-conversion imports, but still reports 23 missing Kernel32 exports and 23
-missing UCRT exports (46 total); import closure remains incomplete.
+initialization. Later increments resolved those conversion imports and two
+locale-profile imports; the current preflight reports 23 missing Kernel32
+exports and 21 missing UCRT exports (44 total), so import closure remains
+incomplete.
 
 ### Freestanding UTF-8 / UTF-16 conversion
 
@@ -196,6 +198,32 @@ Results: host conversion tests and DLL build passed; LLVM PE inspection confirms
 the two new named exports. The preflight resolves both new imports and fails on
 the remaining 46 exports (23 Kernel32, 23 UCRT). The full Explorer executable
 still is not loaded or executed.
+
+### Freestanding UCRT UTF-8 locale profile
+
+The freestanding UCRT now exports `___lc_codepage_func` and
+`___mb_cur_max_func`, returning codepage 65001 and maximum encoded character
+length 4 for the UTF-8 locale profile. The canonical hosted UCRT helper's
+return type now matches the MinGW UCRT declaration (`int`) and reports the
+same maximum. This does not implement locale selection, locale data, or
+`localeconv`.
+
+The cross-toolchain declaration for `___mb_cur_max_func` is in its public
+`stdlib.h` and declares an `int` return; `___lc_codepage_func` is declared in
+`locale.h` with an `unsigned int` return. Verification:
+
+```bash
+cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot
+build/llvm-mingw-20260616-ucrt-macos-universal/bin/llvm-readobj \
+  --coff-exports --coff-imports build/system32/ucrtbase.dll
+python3 qemu.py --check-explorer
+```
+
+Results: the freestanding aggregate build passed and LLVM confirms both named
+exports with no external imports. The preflight resolves both locale imports
+and still fails on 44 remaining imports (23 Kernel32, 21 UCRT). A legacy
+`build/` host cache points to a different, removed source checkout and could
+not run `cmake --build build --target micant_tests`; it was left untouched.
 
 ### Allocation-free firmware memory descriptors
 

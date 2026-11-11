@@ -568,8 +568,8 @@ inline unsigned int ___lc_codepage_func() noexcept {
     return 65001; // CP_UTF8
 }
 
-inline size_t ___mb_cur_max_func() noexcept {
-    return 2;
+inline int ___mb_cur_max_func() noexcept {
+    return 4;
 }
 
 inline uint64_t __C_specific_handler(void*, void*, void*, void*) noexcept {

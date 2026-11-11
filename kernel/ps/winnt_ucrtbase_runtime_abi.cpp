@@ -129,6 +129,14 @@ __declspec(dllexport) int* __cdecl _errno() {
     return &g_nativeErrno;
 }
 
+__declspec(dllexport) unsigned int __cdecl ___lc_codepage_func() {
+    return 65001;
+}
+
+__declspec(dllexport) int __cdecl ___mb_cur_max_func() {
+    return 4;
+}
+
 __declspec(dllexport) void* __cdecl malloc(std::size_t size) {
     return micant::ucrt::winnt_ucrtbase_abi::Ucrt_malloc(size);
 }

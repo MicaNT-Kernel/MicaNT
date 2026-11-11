@@ -33,7 +33,7 @@ Executive or a user-mode `explorer.exe` process.
 | `virtio_gpu_boot` | Separate boot-start VirtIO-GPU display driver | `build/virtio_gpu.sys`; VirtIO 2D verified in QEMU |
 | `explorer_runtime_boot` | Build-only aggregate for Explorer, windowing DLLs, partial Kernel32 and native UCRT subset | `build/explorer.exe`, `build/system32/{kernel32,user32,gdi32,imm32,win32k,ucrtbase}.dll`; compile/link verified, not loaded by the kernel |
 | `kernel32_boot` | Freestanding TEB-backed process/thread ID, last-error, and UTF-8 conversion subset | `build/system32/kernel32.dll`; 6 exports, no imports, not a complete Kernel32 |
-| `ucrtbase_boot` | Freestanding user-mode memory/string subset with native static TLS | `build/system32/ucrtbase.dll`; 24 exports, no imports, not a complete UCRT |
+| `ucrtbase_boot` | Freestanding user-mode memory/string and UTF-8 locale-profile subset with native static TLS | `build/system32/ucrtbase.dll`; 26 exports, no imports, not a complete UCRT |
 
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
 external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
@@ -303,10 +303,11 @@ no-import native memory/string subset from the same canonical source.
 It has a bounded 64 MiB coalescing heap and real PE static TLS for `errno`;
 the process loader must initialize that TLS before allocation is called.
 It also exports tested freestanding `ceilf`, on-exit table, and initializer
-dispatch routines. These do not replace full DLL CRT startup, which the kernel
+dispatch routines, plus the active UTF-8 locale codepage and maximum multibyte
+length queries. These do not replace full DLL CRT startup, which the kernel
 loader does not yet perform. Aligned allocation and release use the bounded
-arena; the CRT invalid-parameter handler, stdio, locale, and unwind contracts
-remain missing. `kernel32_boot` accesses the current TEB's process ID, thread ID and last-error
+arena; the CRT invalid-parameter handler, stdio and full locale configuration
+and unwind contracts remain missing. `kernel32_boot` accesses the current TEB's process ID, thread ID and last-error
 fields at compile-time-verified GS offsets. Its UTF-8 conversion exports
 support the project's declared UTF-8 ACP and `CP_UTF8`, including strict
 invalid-input flags, surrogate pairs, size queries and buffer/error checks.
@@ -314,7 +315,7 @@ They do not implement other Windows code pages. The conversion code is covered
 by sanitized host tests; the DLL is linked but not called by a native process.
 An isolated CPL3 probe verifies the TEB fields, but the native process loader
 does not yet initialize a real process's TEB/GS. The current import check still
-fails on 23 other Kernel32 exports and 23 UCRT exports; no success fallback is
+fails on 23 other Kernel32 exports and 21 other UCRT exports; no success fallback is
 introduced.
 
 Structural inspection of the archived standalone kernel identified its
