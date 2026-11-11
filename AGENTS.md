@@ -44,6 +44,16 @@ These rules apply to every change in this repository. Read them together with `R
 - Build the affected targets and run the applicable existing checks when feasible. Do not claim a behavior is verified unless it was exercised; record environmental limits clearly.
 - Keep commits focused on one implementation step and do not include unrelated working-tree changes.
 
+## Fast incremental development
+
+- Implement and verify coherent functional batches rather than rebuilding after each small change. During implementation, use code analysis, targeted type or syntax checks, and focused unit tests; do not start QEMU for every edit.
+- Reuse compatible, persistent CMake/Ninja build directories and artifacts. Keep host and cross-toolchain configurations separate; do not clean, recreate configurations, or rebuild everything without a technical reason. Prefer building only affected targets with appropriate parallelism.
+- After each batch, incrementally build and link affected targets, run relevant subsystem tests, and check new unresolved symbols. Do not repeat passing checks when their dependencies have not changed. Diagnose the first significant failure and fix related errors before rebuilding.
+- At milestone completion, perform the integrated build, PE/ABI checks, relevant regression tests, and QEMU smoke test. QEMU verification is mandatory before claiming changes to boot, paging, interrupts, syscalls, context switching, or memory protection are verified.
+- If parallel agents are used, isolate their work in separate worktrees and avoid concurrent full builds of the same repository; reserve integrated builds and QEMU for the integrator.
+- Consider supported compilation caches, debug builds, incremental linking, and selective tests where appropriate; do not change ABI or freestanding flags merely for speed. Never disable tests, hide build errors, replace real behavior with stubs, or weaken the user/kernel boundary.
+- Report implemented functionality, changed files, blockers, and focused tests concisely; update technical status at the end of each functional batch.
+
 ## Single modular kernel policy
 
 MicaNT has one canonical modular kernel. All kernel subsystem development must target the modular `ntoskrnl_core` architecture and its bare-metal entry point. The archived monolithic kernel under `old/` is historical reference only and must never be built, linked, staged, or used to satisfy missing symbols.
