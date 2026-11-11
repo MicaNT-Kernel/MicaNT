@@ -309,6 +309,23 @@ if (MICANT_ENABLE_BAREMETAL)
         OUTPUT_NAME "explorer"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
     )
+    add_library(kernel32_boot SHARED EXCLUDE_FROM_ALL
+        kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp
+    )
+    target_compile_definitions(kernel32_boot PRIVATE MICANT_FREESTANDING_KERNEL32)
+    target_compile_options(kernel32_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-use-cxa-atexit -fno-emulated-tls
+        -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(kernel32_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMainCRTStartup
+    )
+    set_target_properties(kernel32_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "kernel32"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
     add_library(ucrtbase_boot SHARED EXCLUDE_FROM_ALL
         kernel/ps/winnt_ucrtbase_runtime_abi.cpp
     )
@@ -327,7 +344,7 @@ if (MICANT_ENABLE_BAREMETAL)
         ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
     )
     add_custom_target(explorer_runtime_boot
-        DEPENDS explorer_boot imm32_boot ucrtbase_boot
+        DEPENDS explorer_boot imm32_boot kernel32_boot ucrtbase_boot
     )
 
     add_executable(virtio_gpu_boot drivers/virtio_gpu/virtio_gpu.cpp)

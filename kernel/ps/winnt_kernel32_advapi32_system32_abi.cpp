@@ -1,3 +1,29 @@
+#if defined(MICANT_FREESTANDING_KERNEL32)
+
+#include <cstdint>
+
+static_assert(sizeof(void*) == 8);
+
+extern "C" {
+
+__declspec(dllexport) uint32_t __stdcall GetLastError() noexcept {
+    uint32_t error = 0;
+    __asm__ __volatile__("movl %%gs:0x68, %0" : "=r"(error));
+    return error;
+}
+
+__declspec(dllexport) void __stdcall SetLastError(uint32_t error) noexcept {
+    __asm__ __volatile__("movl %0, %%gs:0x68" : : "r"(error) : "memory");
+}
+
+int __stdcall DllMainCRTStartup(void*, unsigned long, void*) noexcept {
+    return 1;
+}
+
+}
+
+#else
+
 /**
  * @file winnt_kernel32_advapi32_system32_abi.cpp
  * @brief Horizon 110 (Kernel Unit #82): Sovereign WinNT Core User-Mode System32 DLLs
@@ -426,4 +452,6 @@ __declspec(dllexport) uint8_t SystemFunction036(void* RandomBuffer, uint32_t Ran
     return micant::um::winnt_kernel32_advapi32_abi::Advapi32_SystemFunction036(RandomBuffer, RandomBufferLength);
 }
 } // extern "C"
+#endif
+
 #endif

@@ -31,8 +31,9 @@ Executive or a user-mode `explorer.exe` process.
 | `ntoskrnl_core_baremetal` | Freestanding AMD64 bootstrap, shared desktop renderer, CPL3 diagnostic | `build/baremetal/ntoskrnl.exe`; QEMU verified, Executive integration incomplete |
 | `bootx64_efi` | UEFI PE bootloader | `build/esp/EFI/BOOT/BOOTX64.EFI` |
 | `virtio_gpu_boot` | Separate boot-start VirtIO-GPU display driver | `build/virtio_gpu.sys`; VirtIO 2D verified in QEMU |
-| `explorer_runtime_boot` | Build-only aggregate for the actual Explorer, windowing DLLs and native UCRT memory subset | `build/explorer.exe`, `build/system32/{user32,gdi32,imm32,win32k,ucrtbase}.dll`; compile/link verified, not loaded by the kernel |
-| `ucrtbase_boot` | Freestanding user-mode memory/string subset with native static TLS | `build/system32/ucrtbase.dll`; 16 exports, no imports, not a complete UCRT |
+| `explorer_runtime_boot` | Build-only aggregate for Explorer, windowing DLLs, partial Kernel32 and native UCRT subset | `build/explorer.exe`, `build/system32/{kernel32,user32,gdi32,imm32,win32k,ucrtbase}.dll`; compile/link verified, not loaded by the kernel |
+| `kernel32_boot` | Freestanding TEB-backed `GetLastError` / `SetLastError` subset | `build/system32/kernel32.dll`; 2 exports, no imports, not a complete Kernel32 |
+| `ucrtbase_boot` | Freestanding user-mode memory/string subset with native static TLS | `build/system32/ucrtbase.dll`; 24 exports, no imports, not a complete UCRT |
 
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
 external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
@@ -289,12 +290,12 @@ The current preflight fails on native Kernel32 and UCRT requirements:
 - C runtime: allocator and aligned allocation, memory/string functions,
   on-exit initialization, stream formatting, locale and conversion.
 
-The existing Kernel32 implementation contains simulated time/handles and a
-single reused allocation arena; the UCRT wrapper forwards allocation back
-into a hosted C runtime. Those implementations cannot be treated as a native
-runtime just because their host tests pass. A default toolchain link of the
-Kernel32 candidate also collides with its own `Sleep`/`GetLastError` exports.
-That failed candidate was not added to the supported targets.
+The existing full Kernel32 implementation contains simulated time/handles
+and a single reused allocation arena; the UCRT wrapper forwards allocation
+back into a hosted C runtime. Those implementations cannot be treated as a
+native runtime just because their host tests pass. The separate freestanding
+`kernel32_boot` target exports only the TEB-backed `GetLastError` and
+`SetLastError`; it does not enable the incomplete hosted candidate.
 
 The separately selected `MICANT_FREESTANDING_UCRT` branch now builds a
 no-import native memory/string subset from the same canonical source.
@@ -304,8 +305,11 @@ It also exports tested freestanding `ceilf`, on-exit table, and initializer
 dispatch routines. These do not replace full DLL CRT startup, which the kernel
 loader does not yet perform. Aligned allocation and release use the bounded
 arena; the CRT invalid-parameter handler, stdio, locale, and unwind contracts
-remain missing. The current import check still fails on 26 Kernel32
-requirements and 23 UCRT exports; no success fallback is introduced.
+remain missing. `kernel32_boot` reads and writes `TEB64.LastErrorValue` at the
+verified GS offset, but that path is not yet runnable because the native
+process loader does not initialize user GS/TEB. The current import check still
+fails on 25 other Kernel32 exports and 23 UCRT exports; no success fallback is
+introduced.
 
 Structural inspection of the archived standalone kernel identified its
 loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import
