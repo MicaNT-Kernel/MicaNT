@@ -660,12 +660,12 @@ inline boot::LoaderParameterBlock BuildLpbFromUefi(
     return lpb;
 }
 
-inline boot::UefiKernelHandoffV1 BuildKernelHandoffFromUefi(
+inline boot::UefiKernelHandoffV2 BuildKernelHandoffFromUefi(
     const EfiSystemTable* systemTable,
     const EfiGraphicsOutputProtocol* gop,
     std::span<const EfiMemoryDescriptor> memoryMap
 ) noexcept {
-    boot::UefiKernelHandoffV1 handoff{};
+    boot::UefiKernelHandoffV2 handoff{};
     handoff.signature = boot::UEFI_KERNEL_HANDOFF_SIGNATURE;
     handoff.size = sizeof(handoff);
     handoff.version = boot::UEFI_KERNEL_HANDOFF_VERSION;

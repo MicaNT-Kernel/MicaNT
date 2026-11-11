@@ -223,6 +223,7 @@ if (MICANT_ENABLE_BAREMETAL)
 
     add_executable(ntoskrnl_core_baremetal
         kernel/init/kiinit.cpp
+        kernel/hal/amd64_bootstrap.cpp
         tools/explorer_shell/desktop.cpp
         tools/explorer_shell/notification_area.cpp
         tools/explorer_shell/taskbar.cpp
@@ -232,11 +233,20 @@ if (MICANT_ENABLE_BAREMETAL)
         "${CMAKE_SOURCE_DIR}/tools"
     )
     target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_FREESTANDING)
+    target_compile_options(ntoskrnl_core_baremetal PRIVATE -fno-builtin)
 
     add_executable(bootx64_efi
         boot/bootx64.cpp
     )
     target_include_directories(bootx64_efi PRIVATE "${CMAKE_SOURCE_DIR}")
+
+    add_executable(virtio_gpu_boot drivers/virtio_gpu/virtio_gpu.cpp)
+    set_target_properties(virtio_gpu_boot PROPERTIES
+        OUTPUT_NAME "virtio_gpu"
+        SUFFIX ".sys"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build"
+    )
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -247,7 +257,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(win32_app PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     target_compile_options(bootx64 PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     if (MICANT_ENABLE_BAREMETAL)
-        foreach(_target IN ITEMS ntoskrnl_core_baremetal bootx64_efi)
+        foreach(_target IN ITEMS ntoskrnl_core_baremetal bootx64_efi virtio_gpu_boot)
             target_compile_options(${_target} PRIVATE
                 -ffreestanding
                 -fno-exceptions
@@ -270,6 +280,10 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
             -nostdlib
             -Wl,--subsystem,efi_application
             -Wl,-e,EfiMain
+        )
+        target_compile_options(virtio_gpu_boot PRIVATE -fno-builtin -mno-stack-arg-probe)
+        target_link_options(virtio_gpu_boot PRIVATE
+            -nostdlib -Wl,--subsystem,native -Wl,-e,DriverEntry
         )
     endif()
 elseif (MSVC)

@@ -1415,7 +1415,7 @@ private:
     uefi::EfiSystemTable* m_systemTable{nullptr};
     uefi::EfiGraphicsOutputProtocol* m_gop{nullptr};
     boot::LoaderParameterBlock m_lpb{};
-    boot::UefiKernelHandoffV1 m_handoff{};
+    boot::UefiKernelHandoffV2 m_handoff{};
     bootvid::BootVideoDriver m_videoDriver{};
     uefi::EfiTime m_bootTime{};
     bool m_hasBootTime{false};
@@ -1644,6 +1644,10 @@ public:
         m_handoff.memoryMapSize = memoryMapSize;
         m_handoff.memoryMapDescriptorSize = static_cast<uint32_t>(descriptorSize);
         m_handoff.memoryMapDescriptorVersion = descriptorVersion;
+    }
+
+    void setDisplayDriver(boot::KernelBootImageV1 image) noexcept {
+        m_handoff.displayDriver = image;
     }
 
     /**
@@ -1910,7 +1914,7 @@ public:
 
     [[nodiscard]] const boot::LoaderParameterBlock& getLpb() const noexcept { return m_lpb; }
     [[nodiscard]] boot::LoaderParameterBlock& getLpb() noexcept { return m_lpb; }
-    [[nodiscard]] const boot::UefiKernelHandoffV1& getHandoff() const noexcept {
+    [[nodiscard]] const boot::UefiKernelHandoffV2& getHandoff() const noexcept {
         return m_handoff;
     }
     [[nodiscard]] bootvid::BootVideoDriver& getVideoDriver() noexcept { return m_videoDriver; }
@@ -2379,6 +2383,14 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     }
 
     // 7. Clean exit from Boot Services: enter 64-bit Long Mode on bare metal
+    // Keep driver ownership in the POD handoff, not in the bootloader's STL LPB.
+    if (micant::bootloader::s_virtioGpuEntryPoint != 0) {
+        engine.setDisplayDriver({
+            reinterpret_cast<uint64_t>(micant::bootloader::s_virtioGpuImageBuffer),
+            micant::bootloader::s_loadedVirtioGpuInfo.sizeOfImage,
+            micant::bootloader::s_virtioGpuEntryPoint,
+        });
+    }
     if (systemTable->conOut) {
         systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Exiting UEFI Boot Services and entering Long Mode...\r\n");
     }
@@ -2436,7 +2448,7 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     micant::bootloader::UartSerial::print("...\r\n\r\n");
 
     using PfnKiSystemStartup = micant::NtStatus (*)(
-        const micant::boot::UefiKernelHandoffV1* handoff
+        const micant::boot::UefiKernelHandoffV2* handoff
     );
     auto pfnKernel = reinterpret_cast<PfnKiSystemStartup>(micant::bootloader::s_ntoskrnlEntryPoint);
     pfnKernel(&engine.getHandoff());

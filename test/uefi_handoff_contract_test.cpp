@@ -1,0 +1,46 @@
+#include <array>
+#include <cassert>
+#include <cstring>
+
+#include "micant/km/hal/uefi.hpp"
+
+int main() {
+    using namespace micant;
+    std::array<uefi::EfiMemoryDescriptor, 2> memoryMap{};
+    const auto empty = uefi::BuildKernelHandoffFromUefi(nullptr, nullptr, {});
+    assert(empty.version == 2 && empty.size == 104);
+    assert(empty.framebuffer.physicalBase == 0);
+    assert(empty.displayDriver.base == 0 && empty.displayDriver.size == 0 &&
+           empty.displayDriver.entryPoint == 0);
+
+    uefi::EfiGraphicsOutputModeInformation info{};
+    info.horizontalResolution = 1024;
+    info.verticalResolution = 768;
+    info.pixelsPerScanLine = 1024;
+    info.pixelFormat = uefi::EfiGraphicsPixelFormat::PixelBlueGreenRedReserved8BitPerColor;
+    uefi::EfiGraphicsOutputProtocolMode mode{};
+    mode.info = &info;
+    mode.frameBufferBase = 0xE0000000;
+    mode.frameBufferSize = 1024 * 768 * 4;
+    uefi::EfiGraphicsOutputProtocol gop{};
+    gop.mode = &mode;
+
+    auto handoff = uefi::BuildKernelHandoffFromUefi(nullptr, &gop, memoryMap);
+    assert(handoff.signature == boot::UEFI_KERNEL_HANDOFF_SIGNATURE);
+    assert(handoff.memoryMapAddress == reinterpret_cast<uint64_t>(memoryMap.data()));
+    assert(handoff.memoryMapSize == sizeof(memoryMap));
+    assert(handoff.memoryMapDescriptorSize == sizeof(memoryMap[0]));
+    assert(handoff.framebuffer.physicalBase == mode.frameBufferBase);
+    assert(handoff.framebuffer.size == mode.frameBufferSize);
+    assert(handoff.framebuffer.width == 1024 && handoff.framebuffer.height == 768);
+    assert(handoff.framebuffer.pixelsPerScanLine == 1024);
+    assert(handoff.framebuffer.pixelFormat == 1);
+    handoff.displayDriver = {0x100000, 0x20000, 0x101000};
+    std::array<std::byte, sizeof(handoff)> bytes{};
+    std::memcpy(bytes.data(), &handoff, sizeof(handoff));
+    boot::UefiKernelHandoffV2 restored{};
+    std::memcpy(&restored, bytes.data(), bytes.size());
+    assert(restored.displayDriver.base == handoff.displayDriver.base);
+    assert(restored.displayDriver.size == handoff.displayDriver.size);
+    assert(restored.displayDriver.entryPoint == handoff.displayDriver.entryPoint);
+}

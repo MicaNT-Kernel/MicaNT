@@ -19,8 +19,9 @@
 
 > **Kernel status:** MicaNT is consolidating on one modular kernel. The
 > standalone kernel source is archived and is not a supported build or boot
-> path. The current AMD64 bootstrap has been verified in QEMU through rendering
-> an Explorer-style desktop and taskbar; the full Executive and a user-mode
+> path. The current AMD64 bootstrap has been verified in QEMU with a separate
+> VirtIO 2D driver, desktop/taskbar rendering, mouse input, and diagnostic
+> Ring 3 execution with page-protection tests. The full Executive and a user-mode
 > `explorer.exe` are still in progress. See the authoritative
 > [kernel architecture and migration status](docs/KERNEL_ARCHITECTURE.md).
 
@@ -32,7 +33,9 @@ python3 qemu.py
 
 This requires CMake, Ninja, QEMU, OVMF, and an AMD64 LLVM-MinGW cross-compiler
 (set `MICANT_CXX` or pass `--cxx` if it is not on `PATH`). Use the `--headless`
-option to run the serial-verified smoke test without opening a display.
+option to run the serial-verified smoke test and automated mouse/scanout checks
+without opening a display. The Ring 3 diagnostic is not yet a running Explorer
+process; Start, windows and accelerated composition are not connected.
 
 <p align="center">
   <img src="docs/bootscreen_splash.png" alt="MicaNT UEFI Boot Splash" width="420">

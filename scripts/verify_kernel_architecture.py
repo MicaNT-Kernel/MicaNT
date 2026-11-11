@@ -141,7 +141,7 @@ def validate_build_manifest(root: Path = ROOT, allow_dirty: bool = False) -> Non
 
     if not isinstance(manifest, dict):
         fail("kernel build manifest root must be an object")
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") != 2:
         fail("unsupported or missing kernel build manifest schema_version")
     if not manifest.get("build_id"):
         fail("kernel build manifest has no build_id")
@@ -189,6 +189,8 @@ def validate_build_manifest(root: Path = ROOT, allow_dirty: bool = False) -> Non
             "build/esp/EFI/BOOT/BOOTX64.EFI",
             "EFI_APPLICATION",
         ),
+        ("display_driver", root / "build" / "virtio_gpu.sys",
+         "build/virtio_gpu.sys", "NATIVE"),
     ):
         record = artifacts.get(name)
         if not isinstance(record, dict):

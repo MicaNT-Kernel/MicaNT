@@ -16,7 +16,8 @@ adapters may differ; they must not implement a competing Executive.
 hosted executable built from `kernel/init/kiinit.cpp`; the host harness is not
 a freestanding kernel. An AMD64 freestanding bootstrap PE now validates a
 versioned UEFI handoff and renders the shared Explorer desktop/taskbar drawing
-code directly to GOP. It is an initial boot vertical slice, not yet the full
+code through the separately loaded VirtIO-GPU driver. It is an initial boot
+vertical slice, not yet the full
 Executive or a user-mode `explorer.exe` process.
 
 ## B. Build targets
@@ -27,21 +28,23 @@ Executive or a user-mode `explorer.exe` process.
 | `micant_tests` | Host unit-test runner linked to `ntoskrnl_core` | `${CMAKE_BINARY_DIR}/host/micant_tests` |
 | `micant_kernel` | Hosted initialization harness linked to `ntoskrnl_core` | `${CMAKE_BINARY_DIR}/host/micant_kernel`; not a kernel PE |
 | `bootx64` | Bootloader object target in CMake | Does not by itself produce `BOOTX64.EFI` |
-| `ntoskrnl_core_baremetal` | Freestanding AMD64 bootstrap and GOP Explorer desktop renderer | `build/baremetal/ntoskrnl.exe`; QEMU verified, Executive integration incomplete |
+| `ntoskrnl_core_baremetal` | Freestanding AMD64 bootstrap, shared desktop renderer, CPL3 diagnostic | `build/baremetal/ntoskrnl.exe`; QEMU verified, Executive integration incomplete |
 | `bootx64_efi` | UEFI PE bootloader | `build/esp/EFI/BOOT/BOOTX64.EFI` |
+| `virtio_gpu_boot` | Separate boot-start VirtIO-GPU display driver | `build/virtio_gpu.sys`; VirtIO 2D verified in QEMU |
 
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
-external PE imports. Its current entry preserves the firmware execution
-context; it does not yet establish its own page tables, IDT, allocator,
-scheduler, or user-mode environment. A host target passing does not validate
-this artifact.
+external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
+diagnostic IDT. It retains firmware identity mappings and the initial firmware
+stack; a physical allocator, scheduler and process environment are still
+missing. A host target passing does not validate this artifact.
 
 The build manifest required for staging is
-`build/baremetal/kernel-build-manifest.json`. Its schema is versioned and must
+`build/baremetal/kernel-build-manifest.json`. Schema version 2 must
 identify the build, Git commit, toolchain, configuration, target, architecture,
-both artifact paths, PE machine/subsystem/entry point, and each artifact's
+all three artifact paths, PE machine/subsystem/entry point, and each artifact's
 SHA-256. Staging accepts only a manifest matching the current clean checkout
-and the exact bootloader and modular kernel files that will be installed. No
+and the exact bootloader, modular kernel and display driver files that will be
+installed. Staging must not recompile these files after validation. No
 previous-build or monolithic fallback is allowed.
 
 ## C. Boot sequence
@@ -70,17 +73,34 @@ Ring 3
 
 The current bootloader is `boot/bootx64.cpp`; it locates
 `\EFI\MicaNT\ntoskrnl.exe` and passes a versioned, size-checked
-`UefiKernelHandoffV1` POD contract. The legacy STL loader block remains local
+`UefiKernelHandoffV2` POD contract (104 bytes). The legacy STL loader block remains local
 to the bootloader and is not passed across `ExitBootServices`. The handoff
 contains a pointer and byte range for the final UEFI memory map, GOP metadata,
-and the ACPI root pointer. Its pointer fields are valid only while the
+the ACPI root pointer, and the mapped display driver's base, size and entry.
+Its pointer fields are valid only while the
 bootloader image and identity-mapped firmware memory remain available.
 
-The current kernel entry validates the handoff, emits serial diagnostics,
-renders the Explorer desktop and taskbar to GOP, and enters a halted idle loop.
-It relies on the UEFI-provided AMD64 context and stack. Kernel-owned paging,
-IDT/trap setup, allocator/runtime, interrupts, Executive initialization, and
-Ring 3 launch remain to be implemented and verified.
+The current kernel entry validates the handoff, installs its page-table root,
+maps supervisor-only uncached MMIO and calls the separate display driver's
+entry through the existing private `boot_driver` contract. This is not a WDK
+driver-loading ABI or a complete I/O Manager. Desktop and cursor pixels are
+presented through `DisplayDevice::PresentFrame`, not drawn into GOP memory.
+Without VirGL, the driver explicitly reports 2D scanout only.
+
+The HAL then installs GDT/TSS/IDT and executes a diagnostic at CPL3 through
+`iretq`. A checked CPU-generated breakpoint frame verifies user execution and
+return to Ring 0. Four further probes must raise checked page faults: reading
+kernel memory, writing the user code page, executing the NX user stack, and
+reading supervisor MMIO. The user mappings occupy a reserved, initially empty
+PML4 slot, separate from the retained supervisor firmware mappings.
+
+After these probes, a polled PS/2 loop moves a software cursor through the
+display driver and logs left-button presses. This is **not** a running
+`explorer.exe`: Start and windows are not wired to the Win32 message loop.
+The existing Explorer application, Win32 DLL/server path, syscall dispatch,
+PE/DLL process loading, allocator/runtime, interrupts and Executive scheduling
+must still be integrated. There is no claim of an accelerated DWM session or
+complete user-process isolation from these bounded diagnostics.
 
 ## D. Kernel subsystem ownership
 
@@ -152,17 +172,17 @@ canonical owner.
 |---|---|---|
 | UEFI handover and loader data | `kernel/init/`, shared boot contract | Versioned POD handoff is validated in QEMU; memory-map consumption is pending |
 | Serial debug | `Hal` / AMD64 platform | Bootstrap kernel initializes COM1 and emits verified serial milestones; HAL ownership is pending |
-| IDT and exceptions | `Ke` + `Hal` / AMD64 | Headers/contracts exist; modular bare-metal initialization is not verified |
+| IDT and exceptions | `Ke` + `Hal` / AMD64 | Diagnostic GDT/TSS/IDT and checked #BP/#PF returns verified in QEMU; general exception dispatch pending |
 | APIC and timer | `Hal` + `Ke` | Headers/contracts exist; modular bare-metal initialization is not verified |
-| Initial paging and PFN allocator | `Mm` | Modular host subsystem exists; freestanding boot path is not migrated |
+| Initial paging and PFN allocator | `Mm` + `Hal` mechanism | Kernel-owned root, supervisor MMIO and bounded user mappings verified; firmware mappings retained, PFN allocator pending |
 | AMD64 syscall dispatch | `Ke` + native API boundary | Not migrated to a verified modular kernel entry |
-| Ring 3 transition | `Ps` + platform code | Not migrated to a verified modular kernel path |
+| Ring 3 transition | `Ps` + platform code | Hardware CPL3 entry/return and four page-protection probes verified; not a scheduled user process |
 | PE image loading | Native loader + `Ps` | Not migrated to a verified modular kernel path |
-| AHCI, USB/HID, and boot storage | `Io` + canonical drivers + `Hal` | Driver headers/implementations exist; boot-start integration is not verified |
-| GOP/framebuffer output | Boot video + `Hal` / display driver | Bootstrap kernel renders the shared Explorer desktop/taskbar via the handoff framebuffer; display-driver ownership is pending |
+| AHCI, USB/HID, and boot storage | `Io` + canonical drivers + `Hal` | Driver headers/implementations exist; boot-start integration is not verified; the QEMU bootstrap separately polls PS/2 mouse packets for a software cursor |
+| Display and shell input | Boot video + `Hal` / display driver | Separate VirtIO 2D driver presents shared desktop/taskbar and cursor; mouse movement and click delivery verified, but no Start/menu/window actions or user-mode Explorer session |
 | Bare-metal Object Manager | `Ob` | Host implementation exists; no freestanding boot integration |
 | Bare-metal I/O Manager | `Io` | Host implementation exists; no freestanding boot integration |
-| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | QEMU bootstrap reaches a halted loop; no freestanding runtime, scheduler, or Executive idle thread yet |
+| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | QEMU bootstrap polls PS/2 with interrupts disabled; no freestanding runtime, scheduler, or Executive idle thread yet |
 
 This matrix is a migration inventory, not evidence that these functions
 already work on hardware.
@@ -175,7 +195,8 @@ These results are distinct and must be reported separately:
 2. **Unit tests** — host tests exercise shared subsystem behavior.
 3. **Kernel integration** — real kernel targets initialize together.
 4. **QEMU/OVMF boot** — firmware loads and executes the modular bootstrap,
-   which renders the initial Explorer desktop/taskbar and reaches its halt loop.
+   which presents the desktop/taskbar through VirtIO, verifies CPL3 probes,
+   and reaches its polled input loop.
 5. **Hardware boot** — the kernel runs on identified physical hardware.
 6. **Windows compatibility** — externally visible Windows contracts are
    validated against approved metadata and public documentation.
@@ -183,9 +204,12 @@ These results are distinct and must be reported separately:
 The existing host build failure on the current ARM64 macOS environment and
 the stale, relocated `build/` cache are not evidence of a successful host
 baseline. The QEMU smoke test builds into an isolated CMake cache, captures
-serial output from the kernel itself, and verifies the shell marker remains
-stable. This does not verify the full Executive or a user-mode Explorer
-process.
+serial output from the kernel itself, and requires driver, CPL3 and protection
+milestones in order. The headless run also injects PS/2 movement and a click
+through QMP, compares actual scanout pixels before/after movement, checks that
+pixels outside the old/new cursor rectangles remain unchanged, and requires
+the kernel's click diagnostic. This does not verify the full Executive or a
+user-mode Explorer process.
 
 Build and launch the visible QEMU session from the repository root with:
 
@@ -194,8 +218,16 @@ python3 qemu.py
 ```
 
 The runner configures the cross build, produces and validates the kernel,
-bootloader, and manifest, then starts QEMU `q35` with one AMD64 virtual CPU,
-OVMF pflash, a read-only FAT ESP, and a snapshot. It uses a visible display by
+bootloader, display driver and manifest, then starts QEMU `q35` with one AMD64 virtual CPU,
+OVMF pflash, `virtio-vga`, a read-only FAT ESP, and a snapshot. It uses a visible display by
 default and leaves QEMU open after serial milestones pass. Use `--headless` for
 the automated smoke test, `--ovmf-code <path>` to select firmware explicitly,
 or `--cxx <path>` / `MICANT_CXX` to select LLVM-MinGW.
+
+The standalone handoff layout/copy contract can also run on the host without
+the full Executive test harness:
+
+```bash
+clang++ -std=c++23 -Iinclude test/uefi_handoff_contract_test.cpp -o build/uefi_handoff_contract_test
+build/uefi_handoff_contract_test
+```

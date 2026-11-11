@@ -1,6 +1,8 @@
 #if defined(MICANT_FREESTANDING)
 
 #include "micant/km/hal/boot_contract.hpp"
+#include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "tools/explorer_shell/desktop.hpp"
 #include "tools/explorer_shell/taskbar.hpp"
@@ -10,7 +12,12 @@ namespace {
 constexpr uint32_t kWidth = 1024;
 constexpr uint32_t kHeight = 768;
 constexpr uint32_t kTaskbarHeight = 40;
+constexpr uint32_t kCursorSize = 16;
 alignas(16) uint32_t g_explorerSurface[kWidth * kHeight]{};
+uint32_t g_cursorFrame[kCursorSize * kCursorSize]{};
+micant::boot_driver::KernelServices g_displayServices{};
+micant::boot_driver::DisplayDevice g_display{};
+micant::boot_driver::DriverObject g_displayDriver{};
 
 void writePort(uint16_t port, uint8_t value) noexcept {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -49,7 +56,56 @@ void serialWrite(const char* text) noexcept {
     }
 }
 
-bool validHandoff(const micant::boot::UefiKernelHandoffV1* handoff) noexcept {
+void initializeDisplay(const micant::boot::KernelBootImageV1& image) noexcept {
+    if (image.base == 0 || image.size == 0 ||
+        image.size > UINT64_MAX - image.base ||
+        image.entryPoint < image.base ||
+        image.entryPoint - image.base >= image.size) {
+        stopWithError("[MicaNT Display] Invalid or missing boot-start driver\r\n");
+    }
+    using namespace micant::boot_driver;
+    g_displayServices.Size = sizeof(g_displayServices);
+    g_displayServices.Version = DRIVER_ABI_VERSION;
+    g_displayServices.BootWidth = kWidth;
+    g_displayServices.BootHeight = kHeight;
+    g_displayServices.TranslateVirtualAddress = [](void*, const void* address) {
+        return micant::hal::amd64::translateBootstrapAddress(address);
+    };
+    g_displayServices.MapDeviceMemory = [](void*, uint64_t address, size_t size) {
+        return micant::hal::amd64::mapBootstrapDeviceMemory(address, size);
+    };
+    g_displayServices.Log = [](void*, const char* text) {
+        serialWrite("[MicaNT Display] ");
+        serialWrite(text);
+        serialWrite("\r\n");
+    };
+    g_displayDriver.Size = sizeof(g_displayDriver);
+    g_displayDriver.Version = DRIVER_ABI_VERSION;
+    g_displayDriver.Flags = DRIVER_FLAG_BOOT_START;
+    g_displayDriver.DriverStart = reinterpret_cast<void*>(image.base);
+    g_displayDriver.DriverSize = image.size;
+    g_displayDriver.HardwareResources = &g_displayServices;
+    g_displayDriver.Display = &g_display;
+    const auto entry = reinterpret_cast<DriverEntryRoutine>(image.entryPoint);
+    if (entry(&g_displayDriver, nullptr) != STATUS_SUCCESS ||
+        !g_display.PresentFrame || g_display.Width != kWidth ||
+        g_display.Height != kHeight) {
+        stopWithError("[MicaNT Display] Boot-start driver initialization failed\r\n");
+    }
+    serialWrite(g_display.PresentComposition
+        ? "[MicaNT Display] VirGL composition available\r\n"
+        : "[MicaNT Display] VirtIO 2D active; GPU composition unavailable\r\n");
+}
+
+void presentCursorRect(uint32_t x, uint32_t y) noexcept {
+    if (!g_display.PresentFrame(g_display.Context, g_cursorFrame,
+            kCursorSize, kCursorSize, kCursorSize,
+            static_cast<int32_t>(x), static_cast<int32_t>(y))) {
+        stopWithError("[MicaNT Display] Cursor presentation failed\r\n");
+    }
+}
+
+bool validHandoff(const micant::boot::UefiKernelHandoffV2* handoff) noexcept {
     if (!handoff ||
         handoff->signature != micant::boot::UEFI_KERNEL_HANDOFF_SIGNATURE ||
         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION ||
@@ -74,43 +130,184 @@ bool validHandoff(const micant::boot::UefiKernelHandoffV1* handoff) noexcept {
            handoff->memoryMapSize % handoff->memoryMapDescriptorSize == 0;
 }
 
-void drawExplorerDesktop(const micant::boot::KernelFramebufferV1& framebuffer) noexcept {
-    const uint32_t width = framebuffer.width < kWidth ? framebuffer.width : kWidth;
-    const uint32_t height = framebuffer.height < kHeight ? framebuffer.height : kHeight;
-    const uint32_t taskbarHeight =
-        height < kTaskbarHeight ? height : kTaskbarHeight;
-
+void drawExplorerDesktop() noexcept {
     micant::explorer::DrawDesktop(
-        g_explorerSurface, kWidth, height - taskbarHeight
+        g_explorerSurface, kWidth, kHeight - kTaskbarHeight
     );
     micant::explorer::DrawTaskbar(
-        g_explorerSurface, kWidth, height, taskbarHeight, nullptr, 0, "QEMU"
+        g_explorerSurface, kWidth, kHeight, kTaskbarHeight, nullptr, 0, "QEMU"
     );
+    if (!g_display.PresentFrame(g_display.Context, g_explorerSurface,
+                               kWidth, kHeight, kWidth, 0, 0)) {
+        stopWithError("[MicaNT Display] Desktop presentation failed\r\n");
+    }
+    serialWrite("[MicaNT Display] Desktop presented through virtio_gpu.sys\r\n");
+}
 
-    auto* destination = reinterpret_cast<volatile uint32_t*>(
-        static_cast<uintptr_t>(framebuffer.physicalBase)
-    );
-    for (uint32_t y = 0; y < height; ++y) {
-        const uint32_t* source = g_explorerSurface + static_cast<size_t>(y) * kWidth;
-        volatile uint32_t* row =
-            destination + static_cast<size_t>(y) * framebuffer.pixelsPerScanLine;
-        for (uint32_t x = 0; x < width; ++x) {
-            uint32_t pixel = source[x];
-            if (framebuffer.pixelFormat == 0) {
-                pixel = (pixel & 0xFF00FF00u) |
-                        ((pixel & 0x000000FFu) << 16) |
-                        ((pixel & 0x00FF0000u) >> 16);
-            }
-            row[x] = pixel;
+void restoreCursorBackground(uint32_t x, uint32_t y) noexcept {
+    for (uint32_t row = 0; row < kCursorSize; ++row) {
+        for (uint32_t column = 0; column < kCursorSize; ++column) {
+            g_cursorFrame[row * kCursorSize + column] =
+                g_explorerSurface[static_cast<size_t>(y + row) * kWidth + x + column];
         }
+    }
+    presentCursorRect(x, y);
+}
+
+void drawMouseCursor(uint32_t x, uint32_t y) noexcept {
+    constexpr uint16_t shape[kCursorSize]{
+        0x8000, 0xC000, 0xE000, 0xF000,
+        0xF800, 0xFC00, 0xFE00, 0xFF00,
+        0xFF80, 0xFFC0, 0xFE00, 0xCE00,
+        0x8700, 0x0700, 0x0300, 0x0000
+    };
+    for (uint32_t row = 0; row < kCursorSize; ++row) {
+        uint32_t* target = g_cursorFrame + row * kCursorSize;
+        for (uint32_t column = 0; column < kCursorSize; ++column) {
+            target[column] = g_explorerSurface[(y + row) * kWidth + x + column];
+            if (shape[row] & (0x8000u >> column)) {
+                target[column] = 0xFF101820u;
+            }
+            if (row > 0 &&
+                ((shape[row - 1] >> 1) & (0x8000u >> column))) {
+                target[column] = 0xFFF4F7FFu;
+            }
+        }
+    }
+    presentCursorRect(x, y);
+}
+
+bool waitForControllerInput() noexcept {
+    for (uint32_t wait = 0; wait < 100000; ++wait) {
+        if ((readPort(0x64) & 0x02) == 0) {
+            return true;
+        }
+        __asm__ __volatile__("pause");
+    }
+    return false;
+}
+
+bool waitForControllerOutput() noexcept {
+    for (uint32_t wait = 0; wait < 100000; ++wait) {
+        if (readPort(0x64) & 0x01) {
+            return true;
+        }
+        __asm__ __volatile__("pause");
+    }
+    return false;
+}
+
+bool sendMouseCommand(uint8_t command) noexcept {
+    if (!waitForControllerInput()) {
+        return false;
+    }
+    writePort(0x64, 0xD4);
+    if (!waitForControllerInput()) {
+        return false;
+    }
+    writePort(0x60, command);
+    if (!waitForControllerOutput()) {
+        return false;
+    }
+    return readPort(0x60) == 0xFA;
+}
+
+bool initializeMouse() noexcept {
+    if (!waitForControllerInput()) {
+        return false;
+    }
+    writePort(0x64, 0xA8);
+    if (!waitForControllerInput()) {
+        return false;
+    }
+    writePort(0x64, 0x20);
+    if (!waitForControllerOutput()) {
+        return false;
+    }
+    uint8_t configuration = readPort(0x60);
+    configuration = static_cast<uint8_t>(configuration & ~0x22u);
+    if (!waitForControllerInput()) {
+        return false;
+    }
+    writePort(0x64, 0x60);
+    if (!waitForControllerInput()) {
+        return false;
+    }
+    writePort(0x60, configuration);
+    return sendMouseCommand(0xF6) && sendMouseCommand(0xF4);
+}
+
+[[noreturn]] void runMouseShell() noexcept {
+    uint32_t x = (kWidth - kCursorSize) / 2;
+    uint32_t y = (kHeight - kCursorSize) / 2;
+    drawMouseCursor(x, y);
+
+    uint8_t packet[3]{};
+    uint32_t packetIndex = 0;
+    bool leftButtonWasDown = false;
+    for (;;) {
+        const uint8_t status = readPort(0x64);
+        if ((status & 0x01) == 0) {
+            __asm__ __volatile__("pause");
+            continue;
+        }
+        const uint8_t data = readPort(0x60);
+        if ((status & 0x20) == 0) {
+            continue;
+        }
+
+        if (packetIndex == 0 && (data & 0x08) == 0) {
+            continue;
+        }
+        packet[packetIndex++] = data;
+        if (packetIndex < 3) {
+            continue;
+        }
+        packetIndex = 0;
+        if (packet[0] & 0xC0) {
+            continue;
+        }
+
+        const bool leftButtonIsDown = (packet[0] & 0x01) != 0;
+        const bool leftButtonClicked =
+            leftButtonIsDown && !leftButtonWasDown;
+        leftButtonWasDown = leftButtonIsDown;
+
+        const int32_t deltaX = static_cast<int32_t>(packet[1]) -
+                              ((packet[0] & 0x10) ? 256 : 0);
+        const int32_t deltaY = static_cast<int32_t>(packet[2]) -
+                              ((packet[0] & 0x20) ? 256 : 0);
+        const int32_t nextX = static_cast<int32_t>(x) + deltaX;
+        const int32_t nextY = static_cast<int32_t>(y) - deltaY;
+        const uint32_t maxX = kWidth - kCursorSize;
+        const uint32_t maxY = kHeight - kCursorSize;
+        const uint32_t clampedX = nextX < 0 ? 0 :
+            (static_cast<uint32_t>(nextX) > maxX ? maxX :
+                                                   static_cast<uint32_t>(nextX));
+        const uint32_t clampedY = nextY < 0 ? 0 :
+            (static_cast<uint32_t>(nextY) > maxY ? maxY :
+                                                   static_cast<uint32_t>(nextY));
+        const bool cursorMoved = clampedX != x || clampedY != y;
+        if (!cursorMoved && !leftButtonClicked) {
+            continue;
+        }
+
+        restoreCursorBackground(x, y);
+        x = clampedX;
+        y = clampedY;
+        if (leftButtonClicked) {
+            serialWrite("[MicaNT Input] Left button pressed; user-mode shell not started\r\n");
+        }
+        drawMouseCursor(x, y);
     }
 }
 
 } // namespace
 
 extern "C" micant::NtStatus KiSystemStartup(
-    const micant::boot::UefiKernelHandoffV1* handoff
+    const micant::boot::UefiKernelHandoffV2* handoff
 ) noexcept {
+    __asm__ __volatile__("cli");
     serialInitialize();
     serialWrite("[MicaNT] Modular KiSystemStartup reached\r\n");
     serialWrite("[MicaNT] Phase 0 started\r\n");
@@ -119,13 +316,26 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT] Invalid UEFI kernel handoff\r\n");
     }
 
-    drawExplorerDesktop(handoff->framebuffer);
-    serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
-    serialWrite("[MicaNT Explorer] Shell idle loop entered\r\n");
-
-    for (;;) {
-        __asm__ __volatile__("cli; hlt");
+    if (!micant::hal::amd64::initializeBootstrapAddressSpace(serialWrite)) {
+        stopWithError("[MicaNT] Bootstrap address-space initialization failed\r\n");
     }
+    serialWrite("[MicaNT] Kernel-owned page-table root active\r\n");
+    initializeDisplay(handoff->displayDriver);
+    drawExplorerDesktop();
+    serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
+    serialWrite("[MicaNT Ps] Entering isolated CPL3 probe\r\n");
+    if (!micant::hal::amd64::verifyRing3Transition()) {
+        stopWithError("[MicaNT Ps] Ring 3 transition failed\r\n");
+    }
+    serialWrite("[MicaNT Ps] CPL3 execution and Ring 0 trap return verified\r\n");
+    serialWrite("[MicaNT Mm] User/kernel isolation and read-only user code verified\r\n");
+    serialWrite("[MicaNT Mm] Supervisor MMIO and non-executable user stack verified\r\n");
+    if (!initializeMouse()) {
+        stopWithError("[MicaNT Input] PS/2 mouse initialization failed\r\n");
+    }
+    serialWrite("[MicaNT Input] PS/2 mouse polling initialized\r\n");
+    serialWrite("[MicaNT Explorer] Shell idle loop entered\r\n");
+    runMouseShell();
 }
 
 #else

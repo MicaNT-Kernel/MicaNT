@@ -318,50 +318,10 @@ REGISTRY_HIVES = [
 ]
 
 def run_local_build():
-    print("[1/5] Compiling clean-room BOOTX64.EFI, ntoskrnl.exe, virtio_gpu.sys, app.exe, and bench.exe...")
-    os.makedirs(os.path.join(REPO_ROOT, "build", "esp", "EFI", "BOOT"), exist_ok=True)
-    
-    cmd_efi = [
-        "clang++",
-        "-target", "x86_64-w64-mingw32",
-        "-std=c++23",
-        "-ffreestanding",
-        "-fno-exceptions",
-        "-fno-rtti",
-        "-fno-stack-protector",
-        "-mno-red-zone",
-        "-mno-stack-arg-probe",
-        "-O2",
-        "-Iinclude",
-        "-Wl,--subsystem,efi_application",
-        "-Wl,-e,EfiMain",
-        "-nostdlib",
-        "boot/bootx64.cpp",
-        "-o", "build/esp/EFI/BOOT/BOOTX64.EFI"
-    ]
-    res = subprocess.run(cmd_efi, cwd=REPO_ROOT, capture_output=True, text=True)
-    if res.returncode != 0:
-        print(f"[FATAL] BOOTX64.EFI build failed:\n{res.stderr}")
-        sys.exit(1)
-    sz = os.path.getsize(EFI_SOURCE)
-    print(f"      BOOTX64.EFI Compiled OK ({sz:,} bytes)")
-
+    print("[1/5] Verifying boot artifacts and compiling clean-room userland...")
     validate_build_manifest(Path(REPO_ROOT))
-    sz_k = os.path.getsize(KRNL_SOURCE)
-    print(f"      Modular ntoskrnl.exe verified ({sz_k:,} bytes)")
-
-    cmd_gpu = [
-        "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23",
-        "-ffreestanding", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics",
-        "-fno-stack-protector", "-fno-builtin", "-mno-red-zone", "-mno-stack-arg-probe",
-        "-O2", "-Iinclude", "-Wl,--subsystem,native", "-Wl,-e,DriverEntry", "-nostdlib",
-        "drivers/virtio_gpu/virtio_gpu.cpp", "-o", "build/virtio_gpu.sys"
-    ]
-    res_gpu = subprocess.run(cmd_gpu, cwd=REPO_ROOT, capture_output=True, text=True)
-    if res_gpu.returncode != 0:
-        print(f"[FATAL] virtio_gpu.sys build failed:\n{res_gpu.stderr}")
-        sys.exit(1)
-    print(f"      virtio_gpu.sys Compiled OK ({os.path.getsize(VIRTIO_GPU_SOURCE):,} bytes)")
+    for path in (EFI_SOURCE, KRNL_SOURCE, VIRTIO_GPU_SOURCE):
+        print(f"      {os.path.basename(path)} verified ({os.path.getsize(path):,} bytes)")
 
     cmd_app = [
         "clang++",

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent
 BUILD_DIR = ROOT / "build" / "qemu-cmake-mingw"
 KERNEL = ROOT / "build" / "baremetal" / "ntoskrnl.exe"
 BOOTLOADER = ROOT / "build" / "esp" / "EFI" / "BOOT" / "BOOTX64.EFI"
+DISPLAY_DRIVER = ROOT / "build" / "virtio_gpu.sys"
 MANIFEST = ROOT / "build" / "baremetal" / "kernel-build-manifest.json"
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -147,8 +148,8 @@ def run(command: list[str]) -> None:
 
 
 def write_manifest(cxx: Path) -> None:
-    if not KERNEL.is_file() or not BOOTLOADER.is_file():
-        raise RuntimeError("CMake completed without producing both PE artifacts")
+    if not all(path.is_file() for path in (KERNEL, BOOTLOADER, DISPLAY_DRIVER)):
+        raise RuntimeError("CMake completed without producing all boot PE artifacts")
 
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -176,8 +177,9 @@ def write_manifest(cxx: Path) -> None:
 
     kernel_pe = inspect_pe(KERNEL, "NATIVE")
     bootloader_pe = inspect_pe(BOOTLOADER, "EFI_APPLICATION")
+    display_driver_pe = inspect_pe(DISPLAY_DRIVER, "NATIVE")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "build_id": f"{commit[:12]}-{time.time_ns()}",
         "git_commit": commit,
         "working_tree_dirty": working_tree_dirty,
@@ -199,6 +201,13 @@ def write_manifest(cxx: Path) -> None:
                 "machine": "AMD64",
                 "subsystem": "EFI_APPLICATION",
                 "entry_point_rva": bootloader_pe["entry_point_rva"],
+            },
+            "display_driver": {
+                "path": "build/virtio_gpu.sys",
+                "sha256": sha256(DISPLAY_DRIVER),
+                "machine": "AMD64",
+                "subsystem": "NATIVE",
+                "entry_point_rva": display_driver_pe["entry_point_rva"],
             },
         },
     }
@@ -272,13 +281,14 @@ def main() -> int:
                 "--target",
                 "ntoskrnl_core_baremetal",
                 "bootx64_efi",
+                "virtio_gpu_boot",
             ]
         )
         write_manifest(cxx)
         validate_build_manifest(ROOT, allow_dirty=True)
 
         if args.build_only:
-            print("Modular kernel and UEFI bootloader build passed.")
+            print("Modular kernel, UEFI bootloader and display driver build passed.")
             return 0
 
         firmware = find_ovmf(args.ovmf_code)
@@ -296,6 +306,8 @@ def main() -> int:
         ]
         if not args.headless:
             boot_command.append("--interactive")
+        else:
+            boot_command.append("--verify-input")
         run(boot_command)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"MicaNT QEMU launch failed: {error}", file=sys.stderr)
