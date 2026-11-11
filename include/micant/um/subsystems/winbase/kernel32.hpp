@@ -10018,6 +10018,32 @@ inline BOOL WINAPI GetCpuClockPhaseLockedLoopSettlingTimeHistogramTelemetry(ntdl
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopSettlingTimeHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
+inline LONG64 WINAPI InterlockedParityModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedParityModulo64(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline LONG WINAPI InterlockedParityModulo32(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedParityModulo32(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline SHORT WINAPI InterlockedParityModulo16(SHORT volatile* Destination, SHORT ValA, SHORT ValB, SHORT ValC, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedParityModulo16(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline CHAR WINAPI InterlockedParityModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedParityModulo8(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteLatencyJitterHistogramTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_LATENCY_JITTER_HISTOGRAM_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteLatencyJitterHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockFrequencyDriftRateHistogramTelemetry(ntdll::SYSTEM_CPU_CLOCK_FREQUENCY_DRIFT_RATE_HISTOGRAM_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockFrequencyDriftRateHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
 inline LONG64 WINAPI InterlockedNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedNonImplicationModulo64(Destination, Value, Modulus);
 }
@@ -12873,6 +12899,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedMajorityModulo8", reinterpret_cast<void*>(InterlockedMajorityModulo8));
     ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingLatencyBreakdownTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingLatencyBreakdownTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopSettlingTimeHistogramTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopSettlingTimeHistogramTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedParityModulo64", reinterpret_cast<void*>(InterlockedParityModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedParityModulo32", reinterpret_cast<void*>(InterlockedParityModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedParityModulo16", reinterpret_cast<void*>(InterlockedParityModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedParityModulo8", reinterpret_cast<void*>(InterlockedParityModulo8));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteLatencyJitterHistogramTelemetry", reinterpret_cast<void*>(GetPagefileWriteLatencyJitterHistogramTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockFrequencyDriftRateHistogramTelemetry", reinterpret_cast<void*>(GetCpuClockFrequencyDriftRateHistogramTelemetry));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo64", reinterpret_cast<void*>(InterlockedNonImplicationModulo64));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo32", reinterpret_cast<void*>(InterlockedNonImplicationModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo16", reinterpret_cast<void*>(InterlockedNonImplicationModulo16));

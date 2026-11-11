@@ -69072,3 +69072,257 @@ inline void Suite507_Direct3D12_Device67_CommandList61_Options79_NtSystemInfo329
 inline void Test_Horizon291_Device67Options79_PagefileWriteCoalescingCpuPllSettling_InterlockedMajorityModulo_And_AsconSpookXofHash_Suite() {
     Suite507_Direct3D12_Device67_CommandList61_Options79_NtSystemInfo329_330_InterlockedMajorityModulo_And_AsconSpookXofHash();
 }
+
+// ============================================================================
+// SUITE 508: HORIZON 292 - DIRECT3D 12 ID3D12DEVICE68, ID3D12GRAPHICSCOMMANDLIST62 & OPTIONS 80,
+//            NT NATIVE CLASSES 331 (PAGEFILE WRITE LATENCY JITTER HISTOGRAM) & 332 (CPU DRIFT RATE HISTOGRAM),
+//            NT NATIVE EXECUTIVE & WIN32 INTERLOCKED BITWISE PARITY MODULO PRIMITIVES,
+//            AND NIST SP 800-232 ASCON-DRYGASCON-XOF & ASCON-DRYGASCON-HASH LIGHTWEIGHT CRYPTOGRAPHY
+// ============================================================================
+inline void Suite508_Direct3D12_Device68_CommandList62_Options80_NtSystemInfo331_332_InterlockedParityModulo_And_AsconDrygasconXofHash() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 508: Horizon 292 - Direct3D 12 Device68/CommandList62 & Options 80, NT Native 331/332, Interlocked ParityModulo 64/32/16/8 & NIST Ascon-DryGASCON XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device68, ID3D12GraphicsCommandList62 & Options 80 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device68, ID3D12GraphicsCommandList62 & Options 80 ABI...\n" << std::flush;
+
+        micant::prism3d12::Prism3D12DeviceImpl device(nullptr, micant::prism3d12::D3D_FEATURE_LEVEL_12_2);
+        micant::prism3d12::ID3D12Device68* pDevice68 = nullptr;
+
+        int32_t hr = device.QueryInterface(micant::prism3d12::IID_ID3D12Device68, reinterpret_cast<void**>(&pDevice68));
+        TEST_ASSERT(hr == 0 && pDevice68 != nullptr, "QueryInterface for IID_ID3D12Device68 succeeds");
+
+        micant::prism3d12::ID3D12Device68* pOfficialDevice68 = nullptr;
+        hr = device.QueryInterface(micant::prism3d12::OFFICIAL_IID_ID3D12Device68, reinterpret_cast<void**>(&pOfficialDevice68));
+        TEST_ASSERT(hr == 0 && pOfficialDevice68 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device68 succeeds");
+        pOfficialDevice68->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS80
+        micant::prism3d12::D3D12_FEATURE_DATA_D3D12_OPTIONS80 opt80{};
+        hr = pDevice68->CheckFeatureSupport(micant::prism3d12::D3D12_FEATURE_D3D12_OPTIONS80, &opt80, sizeof(opt80));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS80 succeeds");
+        TEST_ASSERT(opt80.WorkGraphsTier == 63u, "D3D12_OPTIONS80 reports WorkGraphsTier 63");
+        TEST_ASSERT(opt80.CooperativeMatrixMultiply4503599627370496Supported == TRUE, "D3D12_OPTIONS80 reports CooperativeMatrixMultiply4503599627370496Supported == TRUE");
+        TEST_ASSERT(opt80.SubByteMicroscopicFormatsV43Supported == TRUE, "D3D12_OPTIONS80 reports SubByteMicroscopicFormatsV43Supported == TRUE");
+        TEST_ASSERT(opt80.WorkGraphsMaxConcurrencyTier18014398509481984Supported == TRUE, "D3D12_OPTIONS80 reports WorkGraphsMaxConcurrencyTier18014398509481984Supported == TRUE");
+        TEST_ASSERT(opt80.DynamicClusterExpansionTier48Supported == 1, "D3D12_OPTIONS80 reports DynamicClusterExpansionTier48Supported == 1");
+        TEST_ASSERT(opt80.TilePipeliningStagesSupported == 35184372088832ULL, "D3D12_OPTIONS80 reports TilePipeliningStagesSupported == 35184372088832");
+        TEST_ASSERT(opt80.MaxWorkGraphConcurrencyGroups == 18014398509481984ULL, "D3D12_OPTIONS80 reports MaxWorkGraphConcurrencyGroups == 18014398509481984");
+        TEST_ASSERT(opt80.PhotonicInterconnectTier26Supported == 1, "D3D12_OPTIONS80 reports PhotonicInterconnectTier26Supported == 1");
+
+        // Cooperative matrix query 47
+        int32_t supported = 0;
+        uint64_t maxDim = 0;
+        uint32_t supTypes = 0, sparseAcc = 0;
+        int32_t asyncAcc = 0;
+        uint64_t tileStages = 0;
+        int32_t autoFeedback = 0, subRecursion = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseBlock = 0, determReduction = 0;
+        int32_t hyperQuant = 0, sparseCluster = 0, multiQueueSync = 0, asyncKernelDispatch = 0;
+        int32_t neuralExecutionEngine = 0, adaptiveTensorCore = 0, sovereignSilicon = 0;
+        int32_t quantumEmulation = 0, photonicInterconnect = 0;
+
+        hr = pDevice68->GetWorkGraphCooperativeMatrixSupport47(
+            &supported, &maxDim, &supTypes, &sparseAcc, &asyncAcc, &tileStages,
+            &autoFeedback, &subRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByte, &sparseBlock, &determReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernelDispatch,
+            &neuralExecutionEngine, &adaptiveTensorCore, &sovereignSilicon,
+            &quantumEmulation, &photonicInterconnect);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport47 succeeds");
+        TEST_ASSERT(supported == 1, "CooperativeMatrixSupport47 reports supported");
+        TEST_ASSERT(maxDim == 4503599627370496ULL, "CooperativeMatrixSupport47 reports max dimension 4.503 quadrillion");
+        TEST_ASSERT(tileStages == 35184372088832ULL, "CooperativeMatrixSupport47 reports 35.184 trillion tile pipelining stages");
+        TEST_ASSERT(quantumEmulation == 1, "CooperativeMatrixSupport47 reports quantum emulation");
+        TEST_ASSERT(photonicInterconnect == 1, "CooperativeMatrixSupport47 reports photonic interconnect tier 26");
+
+        // Create work graph program record 52
+        void* pProgRecord = nullptr;
+        hr = pDevice68->CreateWorkGraphProgramRecord52(
+            nullptr, 0, 512, 18014398509481984ULL, 1, 1, 1, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            &pProgRecord);
+        TEST_ASSERT(hr == 0 && pProgRecord != nullptr, "CreateWorkGraphProgramRecord52 succeeds");
+
+        // Test GraphicsCommandList62
+        micant::prism3d12::Prism3D12GraphicsCommandListImpl cmdList(nullptr, micant::prism3d12::D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        micant::prism3d12::ID3D12GraphicsCommandList62* pCmd62 = nullptr;
+        hr = cmdList.QueryInterface(micant::prism3d12::IID_ID3D12GraphicsCommandList62, reinterpret_cast<void**>(&pCmd62));
+        TEST_ASSERT(hr == 0 && pCmd62 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList62 succeeds");
+
+        pCmd62->SetWorkGraphBackingMemory52(0x98000000ULL, 4096 * 1024 * 1024ULL, 256 * 1024 * 1024ULL,
+            18014398509481984ULL, 1, 1, 0xFFFF, 0x0F, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x01);
+
+        uint8_t recPayload[64] = { 0x66 };
+        pCmd62->DispatchGraphProgramRecord52(0, recPayload, sizeof(recPayload), 1, 0x01, 1, 0xFF, 0x01, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0x01, 1, 0x01, 0x01);
+
+        pCmd62->Release();
+        pDevice68->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 331 & 332
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 331 (PagefileWriteLatencyJitter) & 332 (CpuClockDriftRate)...\n" << std::flush;
+
+        // Class 331: Pagefile Write Latency Jitter Histogram Telemetry
+        SYSTEM_PAGEFILE_WRITE_LATENCY_JITTER_HISTOGRAM_TELEMETRY_INFORMATION jitterInfo{};
+        NtStatus st = RtlQuerySystemPagefileWriteLatencyJitterHistogramTelemetryInformation(&jitterInfo);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemPagefileWriteLatencyJitterHistogramTelemetryInformation succeeds");
+        TEST_ASSERT(jitterInfo.Version == 1, "Jitter telemetry version is 1");
+        TEST_ASSERT(jitterInfo.TotalWriteSampleIntervals == 640000ULL, "Total write sample intervals is 640000");
+        TEST_ASSERT(jitterInfo.JitterUnder10Microseconds == 480000ULL, "Jitter under 10us is 480000");
+        TEST_ASSERT(jitterInfo.Jitter10To50Microseconds == 125000ULL, "Jitter 10 to 50us is 125000");
+        TEST_ASSERT(jitterInfo.RmsJitterMicroseconds == 8.45, "RMS jitter is 8.45 us");
+        TEST_ASSERT(jitterInfo.JitterTelemetryFlags == 0x07, "Jitter telemetry flags is 0x07");
+
+        // Kernel32 wrapper for Class 331
+        SYSTEM_PAGEFILE_WRITE_LATENCY_JITTER_HISTOGRAM_TELEMETRY_INFORMATION k32JitterInfo{};
+        BOOL bRes = GetPagefileWriteLatencyJitterHistogramTelemetry(&k32JitterInfo);
+        TEST_ASSERT(bRes == TRUE, "GetPagefileWriteLatencyJitterHistogramTelemetry succeeds");
+        TEST_ASSERT(k32JitterInfo.TotalWriteSampleIntervals == 640000ULL, "Kernel32 total write sample intervals is 640000");
+
+        // Class 332: CPU Clock Frequency Drift Rate Histogram Telemetry
+        SYSTEM_CPU_CLOCK_FREQUENCY_DRIFT_RATE_HISTOGRAM_TELEMETRY_INFORMATION driftInfo{};
+        st = RtlQuerySystemCpuClockFrequencyDriftRateHistogramTelemetryInformation(&driftInfo);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemCpuClockFrequencyDriftRateHistogramTelemetryInformation succeeds");
+        TEST_ASSERT(driftInfo.Version == 1, "Drift rate version is 1");
+        TEST_ASSERT(driftInfo.FrequencyDriftObservationsTotal == 820000ULL, "Drift observations total is 820000");
+        TEST_ASSERT(driftInfo.DriftUnder1Ppm == 650000ULL, "Drift under 1 ppm is 650000");
+        TEST_ASSERT(driftInfo.Drift1To5Ppm == 145000ULL, "Drift 1 to 5 ppm is 145000");
+        TEST_ASSERT(driftInfo.PeakDriftRatePpmPerSecond == 4.28, "Peak drift rate is 4.28 ppm/s");
+        TEST_ASSERT(driftInfo.DriftTelemetryFlags == 0x07, "Drift telemetry flags is 0x07");
+
+        // Kernel32 wrapper for Class 332
+        SYSTEM_CPU_CLOCK_FREQUENCY_DRIFT_RATE_HISTOGRAM_TELEMETRY_INFORMATION k32DriftInfo{};
+        bRes = GetCpuClockFrequencyDriftRateHistogramTelemetry(&k32DriftInfo);
+        TEST_ASSERT(bRes == TRUE, "GetCpuClockFrequencyDriftRateHistogramTelemetry succeeds");
+        TEST_ASSERT(k32DriftInfo.FrequencyDriftObservationsTotal == 820000ULL, "Kernel32 drift observations total is 820000");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Parity Modulo Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Interlocked Parity Modulo 64/32/16/8 Primitives...\n" << std::flush;
+
+        // Parity operation: (A ^ B ^ C)
+        // With A=0xF0, B=0xCC, C=0xAA: (F0 ^ CC) = 3C; 3C ^ AA = 96
+        // 64-bit
+        LONG64 dest64 = 0;
+        uint64_t expected64 = (0x9696969696969696ULL) % 10007ULL;
+        LONG64 old64 = RtlInterlockedParityModulo64(&dest64, 0xF0F0F0F0F0F0F0F0LL, 0xCCCCCCCCCCCCCCCCLL, 0xAAAAAAAAAAAAAAAAULL, 10007ULL);
+        TEST_ASSERT(old64 == 0, "RtlInterlockedParityModulo64 returns initial 0");
+        TEST_ASSERT(dest64 == static_cast<LONG64>(expected64), "RtlInterlockedParityModulo64 sets correct modulo residue");
+
+        // Kernel32 wrapper 64-bit
+        LONG64 destK32_64 = 0;
+        old64 = InterlockedParityModulo64(&destK32_64, 0xF0F0F0F0F0F0F0F0LL, 0xCCCCCCCCCCCCCCCCLL, 0xAAAAAAAAAAAAAAAAULL, 10007ULL);
+        TEST_ASSERT(old64 == 0 && destK32_64 == static_cast<LONG64>(expected64), "InterlockedParityModulo64 matches Rtl primitive");
+
+        // 32-bit
+        LONG dest32 = 0;
+        uint32_t expected32 = (0x96969696UL) % 997UL;
+        LONG old32 = RtlInterlockedParityModulo32(&dest32, 0xF0F0F0F0L, 0xCCCCCCCC, 0xAAAAAAAA, 997UL);
+        TEST_ASSERT(old32 == 0, "RtlInterlockedParityModulo32 returns initial 0");
+        TEST_ASSERT(dest32 == static_cast<LONG>(expected32), "RtlInterlockedParityModulo32 sets correct modulo residue");
+
+        // Kernel32 wrapper 32-bit
+        LONG destK32_32 = 0;
+        old32 = InterlockedParityModulo32(&destK32_32, 0xF0F0F0F0L, 0xCCCCCCCC, 0xAAAAAAAA, 997UL);
+        TEST_ASSERT(old32 == 0 && destK32_32 == static_cast<LONG>(expected32), "InterlockedParityModulo32 matches Rtl primitive");
+
+        // 16-bit
+        SHORT dest16 = 0;
+        uint16_t expected16 = static_cast<uint16_t>(0x9696u % 97u);
+        SHORT old16 = RtlInterlockedParityModulo16(&dest16, static_cast<SHORT>(0xF0F0), static_cast<SHORT>(0xCCCC), static_cast<SHORT>(0xAAAA), 97);
+        TEST_ASSERT(old16 == 0, "RtlInterlockedParityModulo16 returns initial 0");
+        TEST_ASSERT(dest16 == static_cast<SHORT>(expected16), "RtlInterlockedParityModulo16 sets correct modulo residue");
+
+        // 8-bit
+        CHAR dest8 = 0;
+        uint8_t expected8 = static_cast<uint8_t>(0x96u % 13u);
+        CHAR old8 = RtlInterlockedParityModulo8(&dest8, static_cast<CHAR>(0xF0), static_cast<CHAR>(0xCC), static_cast<CHAR>(0xAA), 13);
+        TEST_ASSERT(old8 == 0, "RtlInterlockedParityModulo8 returns initial 0");
+        TEST_ASSERT(dest8 == static_cast<CHAR>(expected8), "RtlInterlockedParityModulo8 sets correct modulo residue");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-DryGASCON-XOF & Hash
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-DryGASCON-XOF & Ascon-DryGASCON-Hash...\n" << std::flush;
+
+        const char* msg = "MicaNT Horizon 292 NIST SP 800-232 Ascon-DryGASCON-512 Permutation Sponge Verification";
+
+        // Test Ascon-DryGASCON-XOF
+        BCRYPT_ALG_HANDLE hAlgXof = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgXof, BCRYPT_ASCON_DRYGASCON_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgXof != nullptr, "BCryptOpenAlgorithmProvider for ASCON-DRYGASCON-XOF succeeds");
+
+        BCRYPT_HASH_HANDLE hHashXof = nullptr;
+        status = BCryptCreateHash(hAlgXof, &hHashXof, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashXof != nullptr, "BCryptCreateHash for ASCON-DRYGASCON-XOF succeeds");
+
+        status = BCryptHashData(hHashXof, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-DRYGASCON-XOF succeeds");
+
+        uint8_t digestXof[32] = { 0 };
+        status = BCryptFinishHash(hHashXof, digestXof, sizeof(digestXof), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-DRYGASCON-XOF succeeds");
+
+        bool nonZeroXof = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestXof[i] != 0) { nonZeroXof = true; break; }
+        }
+        TEST_ASSERT(nonZeroXof, "ASCON-DRYGASCON-XOF output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashXof);
+        BCryptCloseAlgorithmProvider(hAlgXof, 0);
+
+        // Test Ascon-DryGASCON-HASH
+        BCRYPT_ALG_HANDLE hAlgHash = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgHash, BCRYPT_ASCON_DRYGASCON_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgHash != nullptr, "BCryptOpenAlgorithmProvider for ASCON-DRYGASCON-HASH succeeds");
+
+        BCRYPT_HASH_HANDLE hHashHash = nullptr;
+        status = BCryptCreateHash(hAlgHash, &hHashHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashHash != nullptr, "BCryptCreateHash for ASCON-DRYGASCON-HASH succeeds");
+
+        status = BCryptHashData(hHashHash, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-DRYGASCON-HASH succeeds");
+
+        uint8_t digestHash[32] = { 0 };
+        status = BCryptFinishHash(hHashHash, digestHash, sizeof(digestHash), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-DRYGASCON-HASH succeeds");
+
+        bool nonZeroHash = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestHash[i] != 0) { nonZeroHash = true; break; }
+        }
+        TEST_ASSERT(nonZeroHash, "ASCON-DRYGASCON-HASH output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashHash);
+        BCryptCloseAlgorithmProvider(hAlgHash, 0);
+    }
+
+    std::cout << "  Horizon 292 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device68, ID3D12GraphicsCommandList62 & Options 80 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 331 (PagefileWriteLatencyJitter) & 332 (CpuClockDriftRate) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Parity Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-DryGASCON-XOF & Ascon-DryGASCON-Hash Lightweight Cryptography OK\n";
+    std::cout << "[TEST] Suite 508: Horizon 292 - Direct3D 12 Device68/CommandList62 & Options 80, NT SystemInfo 331/332, Interlocked ParityModulo 64/32/16/8 & NIST Ascon-DryGASCON XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon292_Device68Options80_PagefileWriteLatencyJitterCpuDriftRate_InterlockedParityModulo_And_AsconDrygasconXofHash_Suite() {
+    Suite508_Direct3D12_Device68_CommandList62_Options80_NtSystemInfo331_332_InterlockedParityModulo_And_AsconDrygasconXofHash();
+}

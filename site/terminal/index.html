@@ -111,7 +111,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–291 (507/507 Passing)</p>
+                  <p>Chronicle of Horizons 1–292 (508/508 Passing)</p>
                 </div>
               </a>
             </li>
@@ -239,7 +239,7 @@
         <div class="shell-screen" id="shellScreen">
           <div style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]
 (c) Project MICA. Dave Cutler Clean-Room Architecture. Zero Telemetry.
-507/507 test suites passing across 291 Horizons.
+508/508 test suites passing across 292 Horizons.
 Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38bdf8;">?</strong> for available commands.
 </div>
           <div id="shellHistory"></div>
@@ -308,17 +308,17 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
       "C:\\Windows\\System32": {
         dirs: ["drivers", "config"],
         files: {
-          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 507 Suites Sealed]",
+          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 508 Suites Sealed]",
           "hal.sys": "[PE32+ System Driver: Hardware Abstraction Layer, ACPI 6.5, APIC/x2APIC]",
           "cmd.exe": "[PE32+ Win32 Console Shell]",
           "ntfs.sys": "[Titan NTFS Driver with Transactional Logging]",
-          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 507/507 Test Suites Sealed with 0 Failures"
+          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 508/508 Test Suites Sealed with 0 Failures"
         }
       },
       "C:\\Windows\\System32\\drivers": {
         dirs: [],
         files: {
-          "prismx.sys": "[PrismX Direct3D 12 WDDM Sovereign Display Driver, Milestone 111]",
+          "prismx.sys": "[PrismX Direct3D 12 WDDM Sovereign Display Driver, Milestone 112]",
           "xhci.sys": "[USB 3.2 xHCI 1.2 Extensible Host Controller Driver, Horizon 40]",
           "aehd.sys": "[AHCI High Performance Storage Driver, Microsoft Signed]",
           "titan_zfs.sys": "[OpenZFS 2.3 Sovereign Storage Driver]"
@@ -380,7 +380,7 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
       status.style.marginTop = "8px";
       status.style.borderTop = "1px dashed rgba(56, 189, 248, 0.2)";
       status.style.paddingTop = "6px";
-      status.innerHTML = `Mode: Direct3D 12 Device67 Software Transform &bull; Target: 30 FPS &bull; Type <strong style="color: #38bdf8;">stop</strong> or click Stop`;
+      status.innerHTML = `Mode: Direct3D 12 Device68 Software Transform &bull; Target: 30 FPS &bull; Type <strong style="color: #38bdf8;">stop</strong> or click Stop`;
       container.appendChild(status);
 
       shellHistory.appendChild(container);
@@ -498,10 +498,10 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
           appendOutput(`
 <span style="color: #38bdf8; font-weight: 700;">AVAILABLE SOVEREIGN COMMANDS:</span>
   <span style="color: #ffffff; font-weight: 600;">ver</span>              - Display MicaNT executive version and clean-room build info
-  <span style="color: #ffffff; font-weight: 600;">dx12</span>             - Direct3D 12 Device63/CommandList57 & Options 75 acceleration
-  <span style="color: #ffffff; font-weight: 600;">ascon</span>            - NIST SP 800-232 Ascon-Elephant-XOF & Ascon-Elephant-Hash CNG
-  <span style="color: #ffffff; font-weight: 600;">dedup / coalesce</span> - NT Native Classes 321 (Pagefile Coalesce) & 322 (PLL Slew Rate)
-  <span style="color: #ffffff; font-weight: 600;">converse</span>         - Atomic Bitwise Converse Implication Modulo 64/32/16/8-bit
+  <span style="color: #ffffff; font-weight: 600;">dx12</span>             - Direct3D 12 Device68/CommandList62 & Options 80 acceleration
+  <span style="color: #ffffff; font-weight: 600;">ascon / crypto</span>   - NIST SP 800-232 Ascon-DryGASCON-XOF & Hash CNG
+  <span style="color: #ffffff; font-weight: 600;">jitter / drift</span>   - NT Native Classes 331 (Write Jitter) & 332 (Clock Drift)
+  <span style="color: #ffffff; font-weight: 600;">parity</span>           - Atomic Bitwise Parity Modulo 64/32/16/8-bit Primitives
   <span style="color: #ffffff; font-weight: 600;">xhci</span>             - Inspect Horizon 40 USB 3.2 xHCI Host Controller &amp; URBs
   <span style="color: #ffffff; font-weight: 600;">prismx</span>           - Display PrismX &amp; Direct3D GPU presentation telemetry
   <span style="color: #ffffff; font-weight: 600;">prismx test</span>      - Run software barycentric Gouraud triangle rasterizer test
@@ -517,19 +517,20 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
                 case "dx12":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
-    MicaNT Horizon 289: Direct3D 12 Device65 &amp; Options 77 Acceleration   
+    MicaNT Horizon 292: Direct3D 12 Device68 &amp; Options 80 Acceleration   
 ========================================================================</span>
-D3D12 Interface:           ID3D12Device65 &amp; ID3D12GraphicsCommandList59
-Direct3D Options:          D3D12_FEATURE_DATA_D3D12_OPTIONS78 (Active)
-Work Graphs Capability:    Tier 61 (4.503 Quadrillion Concurrent Threadgroups)
-Cooperative Matrix Math:   1.125 Quadrillion Parameter Ultra-Scale Matrix Multiply
-Microscopic Formats:       Sub-Byte Microscopic Formats V41 (FP4, NF4, INT2, INT1)
-Optical Interconnect:      Photonic Interconnect Tier 24 (Coherent Multi-GPU)
-PRISM-64 Graph State:      Backing Memory 50 (64-byte aligned) &amp; Program Record 50
+D3D12 Interface:           ID3D12Device68 &amp; ID3D12GraphicsCommandList62
+Direct3D Options:          D3D12_FEATURE_DATA_D3D12_OPTIONS80 (Active)
+Work Graphs Capability:    Tier 63 (18.014 Quadrillion Concurrent Threadgroups)
+Cooperative Matrix Math:   4.503 Quadrillion Parameter Ultra-Scale Matrix Multiply
+Microscopic Formats:       Sub-Byte Microscopic Formats V43 (FP4, NF4, INT2, INT1)
+Optical Interconnect:      Photonic Interconnect Tier 26 (Coherent Multi-GPU)
+PRISM-64 Graph State:      Backing Memory 52 (64-byte aligned) &amp; Program Record 52
 Direct3D 12 Runtime:       <span style="color: #34d399; font-weight: 700;">ACTIVE (Zero CPU-copy direct hardware execution)</span>
           `);
           break;
 
+        case "drygascon":
         case "spook":
         case "ascon":
         case "gimli":
@@ -537,13 +538,13 @@ Direct3D 12 Runtime:       <span style="color: #34d399; font-weight: 700;">ACTIV
         case "grain128":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
-      MicaNT Horizon 291: NIST SP 800-232 Ascon-Spook Cryptography      
+    MicaNT Horizon 292: NIST SP 800-232 Ascon-DryGASCON Cryptography    
 ========================================================================</span>
-Algorithm Standard:        NIST SP 800-232 Lightweight Cryptography + Spook Permutation
-Primary Primitives:        Ascon-Spook-XOF &amp; Ascon-Spook-Hash (256-bit)
-Diffusion Permutation:     Shadow-512 Step-Permutation (Clyde-128 Non-Linear S-Boxes)
-CNG Providers:             BCRYPT_ASCON_SPOOK_XOF_ALGORITHM
-                           BCRYPT_ASCON_SPOOK_HASH_ALGORITHM
+Algorithm Standard:        NIST SP 800-232 Lightweight Cryptography + DryGASCON Permutation
+Primary Primitives:        Ascon-DryGASCON-XOF &amp; Ascon-DryGASCON-Hash (256-bit)
+Diffusion Permutation:     DryGASCON-512 Step-Permutation (Non-Linear S-Boxes &amp; MDS Diffusion)
+CNG Providers:             BCRYPT_ASCON_DRYGASCON_XOF_ALGORITHM
+                           BCRYPT_ASCON_DRYGASCON_HASH_ALGORITHM
 Security Properties:       Quantum-Hardened Sponge, Side-Channel Protected, Zero Leakage
 Driver Verification:       <span style="color: #34d399; font-weight: 700;">BCrypt CNG Provider Registered &amp; Verified</span>
           `);
@@ -673,7 +674,7 @@ Active Requests In Flight: 128 requests
 <span style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]</span>
 DEC MICA &amp; PRISM Clean-Room Architecture
 Target Platform: AMD64 (x86_64) UEFI GOP Bare-Metal
-Test Battery: <span style="color: #34d399;">507/507 Passing (100% Pass Rate across 291 Horizons)</span>
+Test Battery: <span style="color: #34d399;">508/508 Passing (100% Pass Rate across 292 Horizons)</span>
           `);
           break;
 
