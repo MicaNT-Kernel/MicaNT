@@ -1697,6 +1697,7 @@ class TitanAcpiSubsystem {
 
     ACPI_TELEMETRY m_telemetry{};
     std::atomic<bool> m_initialized{false};
+    bool m_firmwareTablesLoaded{false};
     mutable std::mutex m_mutex;
 
     TitanAcpiSubsystem() = default;
@@ -1705,6 +1706,182 @@ public:
     static TitanAcpiSubsystem& Instance() {
         static TitanAcpiSubsystem s_inst;
         return s_inst;
+    }
+
+    bool initializeFromFirmware(uint64_t rsdpAddress) {
+        if (rsdpAddress == 0) return false;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_firmwareTablesLoaded)
+            return m_tablePhysicalAddresses.contains("XSDT") || m_tablePhysicalAddresses.contains("RSDT");
+
+        const auto* rsdpBytes = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(rsdpAddress));
+        if (std::memcmp(rsdpBytes, ACPI_SIG_RSDP, sizeof(ACPI_SIG_RSDP)) != 0 ||
+            !VerifyAcpiChecksum(rsdpBytes, 20)) return false;
+        AcpiRsdp rsdp{};
+        std::memcpy(&rsdp, rsdpBytes, 20);
+        if (rsdp.revision >= 2) {
+            uint32_t rsdpLength = 0;
+            std::memcpy(&rsdpLength, rsdpBytes + 20, sizeof(rsdpLength));
+            if (rsdpLength < sizeof(AcpiRsdp) || rsdpLength > 4096 ||
+                !VerifyAcpiChecksum(rsdpBytes, rsdpLength)) return false;
+            std::memcpy(&rsdp, rsdpBytes, sizeof(AcpiRsdp));
+        }
+
+        const auto readTable = [](uint64_t address, std::vector<uint8_t>& out) -> bool {
+            if (address == 0) return false;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(address));
+            AcpiTableHeader header{};
+            std::memcpy(&header, bytes, sizeof(header));
+            constexpr uint32_t kMaximumAcpiTableBytes = 16U * 1024U * 1024U;
+            if (header.length < sizeof(AcpiTableHeader) || header.length > kMaximumAcpiTableBytes)
+                return false;
+            out.assign(bytes, bytes + header.length);
+            return VerifyAcpiChecksum(out.data(), out.size());
+        };
+
+        std::vector<uint8_t> rootTable;
+        uint64_t rootAddress = 0;
+        bool rootIsXsdt = false;
+        if (rsdp.revision >= 2 && rsdp.xsdtAddress && readTable(rsdp.xsdtAddress, rootTable) &&
+            std::memcmp(rootTable.data(), "XSDT", 4) == 0) {
+            rootAddress = rsdp.xsdtAddress;
+            rootIsXsdt = true;
+        } else if (rsdp.rsdtAddress && readTable(rsdp.rsdtAddress, rootTable) &&
+                   std::memcmp(rootTable.data(), "RSDT", 4) == 0) {
+            rootAddress = rsdp.rsdtAddress;
+        } else {
+            return false;
+        }
+
+        AcpiTableHeader rootHeader{};
+        std::memcpy(&rootHeader, rootTable.data(), sizeof(rootHeader));
+        const size_t entryWidth = rootIsXsdt ? sizeof(uint64_t) : sizeof(uint32_t);
+        const size_t payloadBytes = rootTable.size() - sizeof(AcpiTableHeader);
+        if (payloadBytes % entryWidth != 0) return false;
+        const size_t rootEntryCount = payloadBytes / entryWidth;
+        if (rootEntryCount > 4096) return false;
+
+        m_rsdp = rsdp;
+        m_rsdtEntries.clear();
+        m_xsdtEntries.clear();
+        m_tableStorage.clear();
+        m_tablePhysicalAddresses.clear();
+        m_localApics.clear();
+        m_ioApics.clear();
+        m_intrOverrides.clear();
+        m_madtHeader = {};
+        m_fadt = {};
+        m_mcfg = {};
+        m_dmar = {};
+        m_srat = {};
+        m_hpet = {};
+        m_bgrt = {};
+        m_tablePhysicalAddresses.emplace("RSDP", rsdpAddress);
+        const char* rootSignature = rootIsXsdt ? "XSDT" : "RSDT";
+        m_tableStorage[rootSignature] = rootTable;
+        m_tablePhysicalAddresses[rootSignature] = rootAddress;
+        if (rootIsXsdt) {
+            m_xsdtHeader = rootHeader;
+            m_xsdtEntries.reserve(rootEntryCount);
+        } else {
+            m_rsdtHeader = rootHeader;
+            m_rsdtEntries.reserve(rootEntryCount);
+        }
+
+        uint32_t duplicateSdtIndex = 0;
+        uint64_t dsdtAddress = 0;
+        for (size_t index = 0; index < rootEntryCount; ++index) {
+            uint64_t tableAddress = 0;
+            const auto* entryBytes = rootTable.data() + sizeof(AcpiTableHeader) + index * entryWidth;
+            if (rootIsXsdt) {
+                std::memcpy(&tableAddress, entryBytes, sizeof(tableAddress));
+                m_xsdtEntries.push_back(tableAddress);
+            } else {
+                uint32_t address32 = 0;
+                std::memcpy(&address32, entryBytes, sizeof(address32));
+                tableAddress = address32;
+                m_rsdtEntries.push_back(address32);
+            }
+            if (!tableAddress) continue;
+
+            std::vector<uint8_t> bytes;
+            if (!readTable(tableAddress, bytes)) continue;
+            AcpiTableHeader header{};
+            std::memcpy(&header, bytes.data(), sizeof(header));
+            const std::string signature(header.signature, sizeof(header.signature));
+            std::string storageKey = signature;
+            if (m_tableStorage.contains(storageKey))
+                storageKey += "#" + std::to_string(++duplicateSdtIndex);
+            m_tableStorage[storageKey] = bytes;
+            m_tablePhysicalAddresses.try_emplace(signature, tableAddress);
+
+            if (signature == "FACP") {
+                std::memcpy(&m_fadt, bytes.data(), std::min(bytes.size(), sizeof(m_fadt)));
+                dsdtAddress = m_fadt.xDsdtAddress ? m_fadt.xDsdtAddress : m_fadt.dsdtAddress;
+            } else if (signature == "APIC" && bytes.size() >= sizeof(AcpiMadtHeader)) {
+                std::memcpy(&m_madtHeader, bytes.data(), sizeof(m_madtHeader));
+                size_t offset = sizeof(AcpiMadtHeader);
+                while (offset + sizeof(AcpiMadtRecordHeader) <= bytes.size()) {
+                    AcpiMadtRecordHeader record{};
+                    std::memcpy(&record, bytes.data() + offset, sizeof(record));
+                    if (record.length < sizeof(record) || record.length > bytes.size() - offset) break;
+                    const uint8_t* entry = bytes.data() + offset;
+                    if (record.type == MADT_TYPE_LOCAL_APIC && record.length >= sizeof(AcpiMadtLocalApic)) {
+                        AcpiMadtLocalApic local{};
+                        std::memcpy(&local, entry, sizeof(local));
+                        m_localApics.push_back(local);
+                    } else if (record.type == MADT_TYPE_IO_APIC && record.length >= sizeof(AcpiMadtIoApic)) {
+                        AcpiMadtIoApic ioApic{};
+                        std::memcpy(&ioApic, entry, sizeof(ioApic));
+                        m_ioApics.push_back(ioApic);
+                    } else if (record.type == MADT_TYPE_INTERRUPT_OVERRIDE &&
+                               record.length >= sizeof(AcpiMadtIntrOverride)) {
+                        AcpiMadtIntrOverride overrideEntry{};
+                        std::memcpy(&overrideEntry, entry, sizeof(overrideEntry));
+                        m_intrOverrides.push_back(overrideEntry);
+                    }
+                    offset += record.length;
+                }
+            } else if (signature == "MCFG" && bytes.size() >= sizeof(AcpiMcfgHeader)) {
+                std::memcpy(&m_mcfg, bytes.data(), std::min(bytes.size(), sizeof(m_mcfg)));
+            } else if (signature == "DMAR" && bytes.size() >= sizeof(AcpiDmarHeader)) {
+                std::memcpy(&m_dmar, bytes.data(), sizeof(m_dmar));
+            } else if (signature == "SRAT" && bytes.size() >= sizeof(AcpiSratHeader)) {
+                std::memcpy(&m_srat, bytes.data(), sizeof(m_srat));
+            } else if (signature == "HPET" && bytes.size() >= sizeof(AcpiHpetTable)) {
+                std::memcpy(&m_hpet, bytes.data(), sizeof(m_hpet));
+            } else if (signature == "BGRT" && bytes.size() >= sizeof(AcpiBgrtTable)) {
+                std::memcpy(&m_bgrt, bytes.data(), sizeof(m_bgrt));
+            }
+        }
+
+        if (rootIsXsdt && rsdp.rsdtAddress) {
+            std::vector<uint8_t> rsdt;
+            if (readTable(rsdp.rsdtAddress, rsdt) && rsdt.size() >= sizeof(AcpiTableHeader) &&
+                std::memcmp(rsdt.data(), "RSDT", 4) == 0) {
+                const size_t rsdtPayload = rsdt.size() - sizeof(AcpiTableHeader);
+                if (rsdtPayload % sizeof(uint32_t) == 0 && rsdtPayload / sizeof(uint32_t) <= 4096) {
+                    std::memcpy(&m_rsdtHeader, rsdt.data(), sizeof(m_rsdtHeader));
+                    m_rsdtEntries.resize(rsdtPayload / sizeof(uint32_t));
+                    if (rsdtPayload)
+                        std::memcpy(m_rsdtEntries.data(), rsdt.data() + sizeof(AcpiTableHeader), rsdtPayload);
+                    m_tableStorage["RSDT"] = std::move(rsdt);
+                    m_tablePhysicalAddresses["RSDT"] = rsdp.rsdtAddress;
+                }
+            }
+        }
+
+        if (dsdtAddress) {
+            std::vector<uint8_t> dsdt;
+            if (readTable(dsdtAddress, dsdt) && std::memcmp(dsdt.data(), "DSDT", 4) == 0) {
+                m_tableStorage["DSDT"] = dsdt;
+                m_tablePhysicalAddresses["DSDT"] = dsdtAddress;
+            }
+        }
+        m_telemetry.tablesDiscovered = m_tablePhysicalAddresses.size();
+        m_firmwareTablesLoaded = true;
+        m_initialized.store(true);
+        return true;
     }
 
     void initialize(uint64_t rsdpPhysical = 0x000000007FEF0000ULL) {
@@ -1992,6 +2169,27 @@ public:
         return 0;
     }
 
+    uint32_t getTableLength(std::string_view sig) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto table = m_tableStorage.find(std::string(sig));
+        if (table != m_tableStorage.end() && table->second.size() >= sizeof(AcpiTableHeader)) {
+            AcpiTableHeader header{};
+            std::memcpy(&header, table->second.data(), sizeof(header));
+            return header.length <= table->second.size() ? header.length : 0;
+        }
+        // Synthetic-table mode stores typed table objects separately.
+        if (sig == "FACP") return m_fadt.header.length;
+        if (sig == "APIC") return m_madtHeader.header.length;
+        if (sig == "MCFG") return m_mcfg.header.length;
+        if (sig == "DMAR") return m_dmar.header.length;
+        if (sig == "SRAT") return m_srat.header.length;
+        if (sig == "HPET") return m_hpet.header.length;
+        if (sig == "BGRT") return m_bgrt.header.length;
+        if (sig == "XSDT") return m_xsdtHeader.length;
+        if (sig == "RSDT") return m_rsdtHeader.length;
+        return 0;
+    }
+
     std::vector<std::pair<std::string, uint64_t>> getAllTables() const {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::vector<std::pair<std::string, uint64_t>> res;
@@ -2167,15 +2365,7 @@ inline BOOL WINAPI AcpiFindTable(const char* signature, uint64_t* outPhysicalAdd
 
     *outPhysicalAddress = addr;
     if (outLength) {
-        std::string sig(signature);
-        if (sig == "FACP") *outLength = sizeof(AcpiFadt);
-        else if (sig == "APIC") *outLength = sizeof(AcpiMadtHeader);
-        else if (sig == "MCFG") *outLength = sizeof(AcpiMcfgHeader);
-        else if (sig == "DMAR") *outLength = sizeof(AcpiDmarHeader);
-        else if (sig == "SRAT") *outLength = sizeof(AcpiSratHeader);
-        else if (sig == "HPET") *outLength = sizeof(AcpiHpetTable);
-        else if (sig == "BGRT") *outLength = sizeof(AcpiBgrtTable);
-        else *outLength = sizeof(AcpiTableHeader);
+        *outLength = acpi.getTableLength(signature);
     }
     return TRUE;
 }
