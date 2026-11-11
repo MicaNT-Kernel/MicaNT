@@ -1,6 +1,7 @@
 #if defined(MICANT_FREESTANDING_KERNEL32)
 
 #include <cstdint>
+#include "micant/um/subsystems/winbase/utf8_conversion.hpp"
 
 static_assert(sizeof(void*) == 8);
 
@@ -26,6 +27,55 @@ __declspec(dllexport) uint32_t __stdcall GetLastError() noexcept {
 
 __declspec(dllexport) void __stdcall SetLastError(uint32_t error) noexcept {
     __asm__ __volatile__("movl %0, %%gs:0x68" : : "r"(error) : "memory");
+}
+
+static void SetConversionError(micant::um::winbase::utf8::Error error) noexcept {
+    uint32_t win32Error = 87;
+    if (error == micant::um::winbase::utf8::Error::insufficient_buffer) win32Error = 122;
+    if (error == micant::um::winbase::utf8::Error::no_unicode_translation) win32Error = 1113;
+    SetLastError(win32Error);
+}
+
+__declspec(dllexport) int __stdcall MultiByteToWideChar(
+    uint32_t codePage, uint32_t flags, const char* input, int inputCount,
+    wchar_t* output, int outputCapacity) noexcept {
+    if ((codePage != 0 && codePage != 65001) || (flags & ~0x8U) != 0 ||
+        (output == nullptr && outputCapacity != 0) || inputCount == 0 ||
+        inputCount < -1 || outputCapacity < 0) {
+        SetConversionError(micant::um::winbase::utf8::Error::invalid_parameter);
+        return 0;
+    }
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+    const auto result = micant::um::winbase::utf8::to_utf16(
+        input, inputCount, reinterpret_cast<uint16_t*>(output), outputCapacity,
+        (flags & 0x8U) != 0);
+    if (result.error != micant::um::winbase::utf8::Error::none) {
+        SetConversionError(result.error);
+        return 0;
+    }
+    return result.count;
+}
+
+__declspec(dllexport) int __stdcall WideCharToMultiByte(
+    uint32_t codePage, uint32_t flags, const wchar_t* input, int inputCount,
+    char* output, int outputCapacity, const char* defaultChar,
+    int* usedDefaultChar) noexcept {
+    if ((codePage != 0 && codePage != 65001) || (flags & ~0x80U) != 0 ||
+        defaultChar != nullptr || usedDefaultChar != nullptr ||
+        (output == nullptr && outputCapacity != 0) || inputCount == 0 ||
+        inputCount < -1 || outputCapacity < 0) {
+        SetConversionError(micant::um::winbase::utf8::Error::invalid_parameter);
+        return 0;
+    }
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+    const auto result = micant::um::winbase::utf8::to_utf8(
+        reinterpret_cast<const uint16_t*>(input), inputCount, output, outputCapacity,
+        (flags & 0x80U) != 0);
+    if (result.error != micant::um::winbase::utf8::Error::none) {
+        SetConversionError(result.error);
+        return 0;
+    }
+    return result.count;
 }
 
 int __stdcall DllMainCRTStartup(void*, unsigned long, void*) noexcept {

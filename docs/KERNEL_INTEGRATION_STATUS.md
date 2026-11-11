@@ -124,12 +124,12 @@ This is not a staged boot module or complete UCRT. TLS has not been executed
 by the kernel; mapping/inspection is not a substitute. Its contract follows
 the public [CRT errno documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/errno-doserrno-sys-errlist-and-sys-nerr)
 and [PE TLS specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-section).
-`python3 qemu.py --check-explorer` still **fails explicitly** on 26 Kernel32
+`python3 qemu.py --check-explorer` still **fails explicitly** on 23 Kernel32
 requirements and 23 UCRT exports, reduced from 73 total missing requirements
-to 49 by the tested `ceilf`, CRT startup-table, and aligned-allocation
-increments. The initializer and on-exit helpers are not full DLL CRT startup;
-the kernel loader does not yet dispatch module initializers or TLS. No fake
-export, host DLL or synthetic import trampoline fills those gaps.
+to 46 by the tested `ceilf`, CRT startup-table, aligned-allocation, and UTF-8
+conversion increments. The initializer and on-exit helpers are not full DLL
+CRT startup; the kernel loader does not yet dispatch module initializers or
+TLS. No fake export, host DLL or synthetic import trampoline fills those gaps.
 
 ### Freestanding Kernel32 last-error accessors
 
@@ -160,9 +160,42 @@ python3 qemu.py --headless
 Results: passed. LLVM PE inspection confirms the four named exports; headless
 QEMU confirms the isolated TEB GS field probe and the existing syscall, input,
 and scanout checks. This does not establish real process TEB
-initialization. The full Explorer preflight still reports 25 missing Kernel32
-exports and 23 missing UCRT exports (48 total); import closure remains
-incomplete.
+initialization. The full Explorer preflight subsequently resolved the two
+conversion imports, but still reports 23 missing Kernel32 exports and 23
+missing UCRT exports (46 total); import closure remains incomplete.
+
+### Freestanding UTF-8 / UTF-16 conversion
+
+The canonical Kernel32 ABI source now exports `MultiByteToWideChar` and
+`WideCharToMultiByte` from `kernel32_boot`. This implementation supports
+`CP_UTF8` and `CP_ACP` (the project's `GetACP()` is 65001), UTF-8 scalar
+validation, UTF-16 surrogate pairs, `-1` null-terminated lengths, size queries,
+strict invalid-input flags, replacement characters when strict mode is off,
+and insufficient-buffer/error reporting. Other code pages and UTF-8 default
+character pointers are rejected; this is a bounded UTF-8 profile, not full
+Windows NLS/code-page support.
+
+The public contracts are documented by Microsoft Learn for
+[`MultiByteToWideChar`](https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-multibytetowidechar)
+and
+[`WideCharToMultiByte`](https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-widechartomultibyte).
+The allocation-free conversion routines have ASan/UBSan host coverage:
+
+```bash
+clang++ -std=c++23 -Wall -Wextra -Werror -pedantic \
+  -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude \
+  test/utf8_conversion_test.cpp -o build/utf8-conversion-test
+build/utf8-conversion-test
+cmake --build build/qemu-cmake-mingw --target kernel32_boot
+build/llvm-mingw-20260616-ucrt-macos-universal/bin/llvm-readobj \
+  --coff-exports build/system32/kernel32.dll
+python3 qemu.py --check-explorer
+```
+
+Results: host conversion tests and DLL build passed; LLVM PE inspection confirms
+the two new named exports. The preflight resolves both new imports and fails on
+the remaining 46 exports (23 Kernel32, 23 UCRT). The full Explorer executable
+still is not loaded or executed.
 
 ### Allocation-free firmware memory descriptors
 
