@@ -681,6 +681,28 @@ bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept
     return mappedRange(address, size, false, writable, false);
 }
 
+bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
+                             uint32_t protection) noexcept {
+    if (context || address < BootstrapManagedBase ||
+        address - BootstrapManagedBase >= BootstrapManagedSize ||
+        (address & mm::PageMask4KB) || !pfn ||
+        pfn > (kPhysicalMask >> mm::PageShift4KB) ||
+        (protection != mm::PAGE_READWRITE && protection != mm::PAGE_READONLY)) {
+        return false;
+    }
+    return mapPage(address, pfn << mm::PageShift4KB,
+                   kUser | kNoExecute | (protection == mm::PAGE_READWRITE ? kWritable : 0));
+}
+
+bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept {
+    if (context || address < BootstrapManagedBase ||
+        address - BootstrapManagedBase >= BootstrapManagedSize ||
+        (address & mm::PageMask4KB)) {
+        return false;
+    }
+    return unmapPage(address, true);
+}
+
 bool verifyBootstrapPageTables() noexcept {
     if (!bootstrapPagingContext() || g_pml4[130] != 0) return false;
     auto& database = mm::PfnDatabase::get();

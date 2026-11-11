@@ -27,6 +27,7 @@ EXPECTED_BOOTSTRAP_SERIAL = (
     "[MicaNT Mm] PFN-backed page tables, TLB and reclaim verified",
     "[MicaNT Ex] Canonical page-backed C and C++ allocation verified",
     "[MicaNT Mm] Canonical VAD tree exclusion and cleanup verified",
+    "[MicaNT Mm] VAD reserve, commit, mapping and release verified",
     "[MicaNT Ex] Kernel C++ constructors dispatched",
     "[MicaNT Ob] Canonical kernel handle storage and references verified",
     "[MicaNT Ke] Ready-queue withdrawal verified",

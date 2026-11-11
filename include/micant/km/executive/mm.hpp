@@ -11,6 +11,10 @@
 #include <optional>
 #include <atomic>
 #include <limits>
+#include <new>
+#if !defined(MICANT_FREESTANDING)
+#include <exception>
+#endif
 #include "micant/shared/ntdef.hpp"
 
 namespace micant::mm {
@@ -496,6 +500,16 @@ public:
         insertTailLocked(zeroedList_, pfn, PageLocation::ZeroedPageList);
     }
 
+    [[nodiscard]] bool zeroAllocatedPage(uint64_t pfn) noexcept {
+        Guard guard(*this);
+        if (!zeroPhysicalPage_ || pfn == 0 || pfn >= entries_.size() ||
+            entries_[static_cast<size_t>(pfn)].location != PageLocation::ActiveAndValid ||
+            entries_[static_cast<size_t>(pfn)].referenceCount == 0) return false;
+        zeroPhysicalPage_(pfn);
+        entries_[static_cast<size_t>(pfn)].modified = false;
+        return true;
+    }
+
     void setModified(uint64_t pfn, bool modified) {
         Guard guard(*this);
         if (pfn < entries_.size()) {
@@ -538,6 +552,13 @@ public:
  * Represents a contiguous range of committed or reserved virtual memory in an NT process.
  */
 struct VirtualAddressDescriptor {
+    struct CommitRange {
+        uint64_t firstVpn{0};
+        uint64_t lastVpn{0};
+        uint64_t pfn{0};
+        uint32_t protection{PAGE_NOACCESS};
+        std::unique_ptr<CommitRange> next;
+    };
     uintptr_t startingAddress{0};
     uintptr_t endingAddress{0};
     uint64_t  startingVpn{0};
@@ -560,6 +581,7 @@ struct VirtualAddressDescriptor {
 
     // Demand-Paged Physical Page Frame Map (VPN -> PFN)
     std::unordered_map<uint64_t, uint64_t> physicalPages;
+    std::unique_ptr<CommitRange> commitRanges;
 
     [[nodiscard]] size_t size() const noexcept {
         return endingAddress >= startingAddress ? (endingAddress - startingAddress + 1) : 0;
@@ -767,6 +789,7 @@ private:
             node->sectionOffset = temp->sectionOffset;
             node->commitCharge = temp->commitCharge;
             node->physicalPages = std::move(temp->physicalPages);
+            node->commitRanges = std::move(temp->commitRanges);
 
             bool subRemoved = false;
             node->right = removeNode(std::move(node->right), succStart, subRemoved);
@@ -923,6 +946,12 @@ public:
         return count_;
     }
 
+    [[nodiscard]] uintptr_t firstAddress() const noexcept {
+        Guard lock(*this);
+        const auto* node = findMin(root_.get());
+        return node ? node->startingAddress : 0;
+    }
+
     void clear() {
         Guard lock(*this);
         root_.reset();
@@ -1015,9 +1044,49 @@ public:
     static constexpr uintptr_t UserSpaceMin = 0x0000000000010000ULL;
     static constexpr uintptr_t UserSpaceMax = 0x00007FFFFFFFFFFFULL;
 
+    struct PagingBackend {
+        void* context{nullptr};
+        // A failed operation must leave the page mapping unchanged.
+        bool (*map)(void*, uintptr_t, uint64_t, uint32_t) noexcept {nullptr};
+        bool (*unmap)(void*, uintptr_t) noexcept {nullptr};
+    };
+
     ProcessAddressSpace() : nextFreeAddress_(0x0000000100000000ULL) {}
 
+    // The backend and PFN database must outlive this address space.
+    [[nodiscard]] bool configurePagingBackend(PagingBackend backend, uintptr_t base, size_t size) noexcept {
+        Guard lock(*this);
+        if (backend_.map || vadTree_.size() != 0 || !backend.map || !backend.unmap ||
+            base < UserSpaceMin || (base & PageMask4KB) || size == 0 ||
+            (size & PageMask4KB) || base > UserSpaceMax || size - 1 > UserSpaceMax - base)
+            return false;
+        backend_ = backend;
+        backendBase_ = base;
+        backendEnd_ = base + size - 1;
+        nextFreeAddress_ = base;
+        return true;
+    }
+
+    ~ProcessAddressSpace() {
+        if (!backend_.map) return;
+        while (const uintptr_t base = vadTree_.firstAddress()) {
+            auto* vad = vadTree_.find(base);
+            if (!vad || !releaseBackendPages(*vad) || !vadTree_.remove(base)) {
+#if defined(MICANT_FREESTANDING)
+                __builtin_trap();
+#else
+                std::terminate();
+#endif
+            }
+        }
+    }
+
     NtStatus allocate(uintptr_t& baseAddress, size_t size, uint32_t allocationType, uint32_t protect) {
+        Guard lock(*this);
+        if (backend_.map) return allocateBackend(baseAddress, size, allocationType, protect);
+#if defined(MICANT_FREESTANDING)
+        return NtStatus::NotImplemented;
+#endif
         if (size == 0 || size > std::numeric_limits<size_t>::max() - PageMask4KB)
             return NtStatus::InvalidParameter;
         if ((allocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN)) != 0 ||
@@ -1028,7 +1097,6 @@ public:
         if (baseAddress != 0 && (baseAddress & PageMask4KB))
             return NtStatus::NotImplemented;
 
-        std::lock_guard<std::mutex> lock(mutex_);
         size_t alignedSize = (size + PageMask4KB) & ~PageMask4KB;
 
         uintptr_t targetAddr = baseAddress;
@@ -1078,7 +1146,11 @@ public:
         void* sectionContext = nullptr,
         uint64_t sectionOffset = 0
     ) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
+        if (backend_.map) return NtStatus::NotImplemented;
+#if defined(MICANT_FREESTANDING)
+        return NtStatus::NotImplemented;
+#endif
         if (size == 0 || size > std::numeric_limits<size_t>::max() - PageMask4KB)
             return NtStatus::InvalidParameter;
 
@@ -1145,11 +1217,25 @@ public:
     }
 
     NtStatus free(uintptr_t baseAddress, size_t size, uint32_t freeType) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
+        if (backend_.map) {
+            if (freeType != MEM_RELEASE) return NtStatus::NotImplemented;
+            auto* vad = vadTree_.find(baseAddress);
+            if (!vad || vad->startingAddress != baseAddress || size != 0)
+                return NtStatus::InvalidParameter;
+            if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
+            vadTree_.remove(baseAddress);
+            return NtStatus::Success;
+        }
+#if defined(MICANT_FREESTANDING)
+        return NtStatus::NotImplemented;
+#endif
         VirtualAddressDescriptor* vad = vadTree_.find(baseAddress);
         if (!vad) return NtStatus::InvalidParameter;
 
         if (freeType & MEM_RELEASE) {
+            if (freeType != MEM_RELEASE || size != 0 || baseAddress != vad->startingAddress)
+                return NtStatus::InvalidParameter;
             // Unmap and free all physical page frames allocated for this VAD
             auto& pfnDb = PfnDatabase::get();
             for (const auto& [vpn, pfn] : vad->physicalPages) {
@@ -1187,7 +1273,11 @@ public:
     }
 
     NtStatus protect(uintptr_t baseAddress, size_t size, uint32_t newProtect, uint32_t* oldProtect) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
+        if (backend_.map) return NtStatus::NotImplemented;
+#if defined(MICANT_FREESTANDING)
+        return NtStatus::NotImplemented;
+#endif
         VirtualAddressDescriptor* vad = vadTree_.find(baseAddress);
         if (!vad) return NtStatus::InvalidParameter;
 
@@ -1229,7 +1319,11 @@ public:
      * @param isExecute True if instruction fetch fault
      */
     NtStatus handlePageFault(uintptr_t faultingAddress, bool isWrite, bool isUser, bool isExecute) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
+        if (backend_.map) return NtStatus::AccessViolation;
+#if defined(MICANT_FREESTANDING)
+        return NtStatus::NotImplemented;
+#endif
 
         // 1. Locate VAD in AVL Tree in O(log N)
         VirtualAddressDescriptor* vad = vadTree_.find(faultingAddress);
@@ -1296,7 +1390,11 @@ public:
     void setDirectoryTableBase(uintptr_t cr3) noexcept { directoryTableBase_ = cr3; }
 
     size_t trimWorkingSet(size_t targetPages) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        Guard lock(*this);
+        if (backend_.map) return 0;
+#if defined(MICANT_FREESTANDING)
+        return 0;
+#endif
         size_t trimmed = 0;
         auto& pfnDb = PfnDatabase::get();
 
@@ -1325,12 +1423,172 @@ public:
     }
 
 private:
+    class Guard {
+    public:
+        explicit Guard(const ProcessAddressSpace& space) noexcept
+#if defined(MICANT_FREESTANDING)
+            : lock_(space.lock_)
+#else
+            : lock_(space.mutex_)
+#endif
+        {
+#if defined(MICANT_FREESTANDING)
+            // Bootstrap callers must keep interrupts disabled.
+            while (lock_.test_and_set(std::memory_order_acquire)) {}
+#endif
+        }
+        ~Guard() noexcept {
+#if defined(MICANT_FREESTANDING)
+            lock_.clear(std::memory_order_release);
+#endif
+        }
+        Guard(const Guard&) = delete;
+        Guard& operator=(const Guard&) = delete;
+    private:
+#if defined(MICANT_FREESTANDING)
+        std::atomic_flag& lock_;
+#else
+        std::lock_guard<std::mutex> lock_;
+#endif
+    };
+
+    [[nodiscard]] bool releaseBackendPages(VirtualAddressDescriptor& vad) noexcept {
+        auto& db = PfnDatabase::get();
+        bool success = true;
+        auto* link = &vad.commitRanges;
+        while (*link) {
+            auto& page = **link;
+            if (!backend_.unmap(backend_.context, page.firstVpn << PageShift4KB)) {
+                success = false;
+                link = &page.next;
+                continue;
+            }
+            db.freePage(page.pfn);
+            --vad.commitCharge;
+            --workingSet_.commitCharge;
+            --workingSet_.residentPages;
+            *link = std::move(page.next);
+        }
+        vad.committed = vad.commitCharge != 0;
+        return success;
+    }
+
+    NtStatus allocateBackend(uintptr_t& baseAddress, size_t size, uint32_t type, uint32_t protect) noexcept {
+        if (!size || size > std::numeric_limits<size_t>::max() - PageMask4KB)
+            return NtStatus::InvalidParameter;
+        if ((type & ~(MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN)) ||
+            !(type & (MEM_RESERVE | MEM_COMMIT))) return NtStatus::NotImplemented;
+        if (protect != PAGE_READONLY && protect != PAGE_READWRITE) return NtStatus::NotImplemented;
+
+        uintptr_t start = baseAddress;
+        size_t length = size;
+        if (start) {
+            const size_t offset = start & PageMask4KB;
+            if (length > std::numeric_limits<size_t>::max() - offset - PageMask4KB)
+                return NtStatus::InvalidParameter;
+            length += offset;
+            start &= ~static_cast<uintptr_t>(PageMask4KB);
+        }
+        length = (length + PageMask4KB) & ~PageMask4KB;
+        const bool reserve = (type & MEM_RESERVE) != 0 || baseAddress == 0;
+        if (!start) {
+            start = vadTree_.findFreeRange(length, PageSize4KB, (type & MEM_TOP_DOWN) != 0,
+                                           backendBase_, backendEnd_);
+            if (!start) return NtStatus::NoMemory;
+        }
+        if (start < backendBase_ || start > backendEnd_ || length - 1 > backendEnd_ - start)
+            return NtStatus::InvalidParameter;
+        const uintptr_t end = start + length - 1;
+
+        VirtualAddressDescriptor* vad = nullptr;
+        if (reserve) {
+            std::unique_ptr<VirtualAddressDescriptor> node(new (std::nothrow_t{}) VirtualAddressDescriptor{});
+            if (!node) return NtStatus::NoMemory;
+            node->startingAddress = start;
+            node->endingAddress = end;
+            node->protection = protect;
+            node->allocationType = type;
+            vad = node.get();
+            if (!vadTree_.insert(std::move(node))) return NtStatus::Conflict;
+        } else {
+            vad = vadTree_.find(start);
+            if (!vad || end > vad->endingAddress || vad->isSectionView) return NtStatus::Conflict;
+        }
+        if (!(type & MEM_COMMIT)) {
+            baseAddress = start;
+            return NtStatus::Success;
+        }
+
+        auto& db = PfnDatabase::get();
+        std::unique_ptr<VirtualAddressDescriptor::CommitRange> pending;
+        NtStatus failure = NtStatus::Success;
+        for (uintptr_t va = start;; va += PageSize4KB) {
+            const uint64_t vpn = va >> PageShift4KB;
+            auto* existing = vad->commitRanges.get();
+            while (existing && existing->firstVpn != vpn) existing = existing->next.get();
+            if (!existing) {
+                std::unique_ptr<VirtualAddressDescriptor::CommitRange> page(
+                    new (std::nothrow_t{}) VirtualAddressDescriptor::CommitRange{});
+                if (!page) { failure = NtStatus::NoMemory; break; }
+                page->firstVpn = page->lastVpn = vpn;
+                page->protection = protect;
+                page->pfn = db.allocatePage();
+                if (!page->pfn) { failure = NtStatus::NoMemory; break; }
+                if (!db.zeroAllocatedPage(page->pfn)) {
+                    db.freePage(page->pfn);
+                    failure = NtStatus::Unsuccessful;
+                    break;
+                }
+                if (!backend_.map(backend_.context, va, page->pfn, protect)) {
+                    db.freePage(page->pfn);
+                    failure = NtStatus::Unsuccessful;
+                    break;
+                }
+                page->next = std::move(pending);
+                pending = std::move(page);
+            }
+            if (va == (end & ~static_cast<uintptr_t>(PageMask4KB))) break;
+        }
+
+        while (pending) {
+            auto page = std::move(pending);
+            pending = std::move(page->next);
+            if (failure != NtStatus::Success &&
+                backend_.unmap(backend_.context, page->firstVpn << PageShift4KB)) {
+                db.freePage(page->pfn);
+                continue;
+            }
+            page->next = std::move(vad->commitRanges);
+            vad->commitRanges = std::move(page);
+            ++vad->commitCharge;
+            ++workingSet_.commitCharge;
+            ++workingSet_.residentPages;
+        }
+        vad->committed = vad->commitCharge != 0;
+        workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
+        workingSet_.peakResidentPages = std::max(workingSet_.peakResidentPages, workingSet_.residentPages);
+        if (failure != NtStatus::Success) {
+            if (reserve && vad->commitCharge == 0) vadTree_.remove(start);
+            else if (reserve) baseAddress = start;
+            return failure;
+        }
+        baseAddress = start;
+        return NtStatus::Success;
+    }
+
     MmAvlTable vadTree_;
     WorkingSetList workingSet_;
     HardwarePagingEngine pagingEngine_;
     uintptr_t directoryTableBase_{0x1000};
     uintptr_t nextFreeAddress_{0x0000000100000000ULL};
+    PagingBackend backend_{};
+    uintptr_t backendBase_{0};
+    uintptr_t backendEnd_{0};
+#if defined(MICANT_FREESTANDING)
+    mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+#else
     mutable std::mutex mutex_;
+#endif
 };
 
 // ============================================================================

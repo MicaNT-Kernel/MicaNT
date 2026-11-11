@@ -85,6 +85,40 @@ integration.
 
 ## Integration increments
 
+### Bootstrap VAD reserve, commit and release
+
+The canonical `ProcessAddressSpace` can use the AMD64 bootstrap paging backend
+and the UEFI-derived PFN database. The boot test reserves an unmapped VAD,
+rejects an overlap, commits a page inside it, reads and writes that real
+virtual mapping, repeats the commit, and releases the reservation and its
+PFNs and page tables. It also checks the page-table write permission for a
+read-only mapping. Fault delivery on a prohibited write is not tested.
+
+This is a bounded 16 MiB window in the active bootstrap CR3, not an isolated
+per-process address space. The backend requires the BSP with interrupts
+disabled and has no SMP TLB shootdown. Commit eagerly allocates physical pages;
+general protection changes, decommit, sections, demand paging, and NT syscall
+integration remain unimplemented. Reservation placement currently uses 4 KiB
+alignment; the Windows allocation-granularity distinction for reserve remains
+to be resolved before claiming full allocation compatibility. A failed unmap
+retains its VAD/PFN state, and failed teardown stops rather than silently
+discarding it.
+
+The relevant public contracts are
+[NtAllocateVirtualMemory](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntallocatevirtualmemory)
+and [NtFreeVirtualMemory](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntfreevirtualmemory).
+Structural comparison used ReactOS commit
+`8fe3cee05606aecd9442674e40038649f048d10d`, specifically
+`ntoskrnl/mm/ARM3/vadnode.c` and `ntoskrnl/mm/ARM3/virtual.c`; the MicaNT
+implementation is independent.
+
+| Command | Result |
+|---|---|
+| `python3 qemu.py --headless` | Passed; VAD/mapping marker and existing CPL3, syscall, scanout and PS/2 checks |
+| `python3 qemu.py --headless --runtime-selftest` | Passed; VAD/mapping marker and runtime teardown |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_process_backend_test.cpp -o build/mm_process_backend_test-asan && build/mm_process_backend_test-asan` | Passed; backend failures, rollback and teardown |
+| `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed |
+
 ### PE TLS template initialization
 
 The bounded native PE loader can initialize separate aligned storage blocks

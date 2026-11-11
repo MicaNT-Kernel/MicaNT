@@ -51,6 +51,7 @@ extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
+extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int pe_tls_freestanding_test();
 
 void writePort(uint16_t port, uint8_t value) noexcept {
@@ -819,6 +820,13 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("\r\n");
     }
     serialWrite("[MicaNT Mm] Canonical VAD tree exclusion and cleanup verified\r\n");
+    const int processMemoryTest = MicantTestMmProcessAddressSpace();
+    if (processMemoryTest != 0) {
+        serialWrite("[MicaNT Mm] Process address-space verification failed: ");
+        serialWriteNumber(static_cast<uint64_t>(processMemoryTest));
+        stopWithError("\r\n");
+    }
+    serialWrite("[MicaNT Mm] VAD reserve, commit, mapping and release verified\r\n");
 #if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
     const size_t initialActive = micant::mm::PfnDatabase::get().getActiveCount();
     const size_t initialAvailable = micant::mm::PfnDatabase::get().getFreeCount() +
