@@ -229,6 +229,7 @@ if (MICANT_ENABLE_BAREMETAL)
         kernel/init/kiinit.cpp
         kernel/ke/context_switch.cpp
         kernel/hal/amd64_bootstrap.cpp
+        kernel/win32k/freestanding.cpp
         kernel/ex/freestanding.cpp
         kernel/ex/libcpp_support.cpp
         kernel/ob/obref.cpp

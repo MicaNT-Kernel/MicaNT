@@ -23,6 +23,10 @@ specification. The compatibility inventory is
 - Polled PS/2 cursor movement and click delivery; QMP pixel/input checks pass.
 - Original bounded PE diagnostic mapped by the canonical native loader and
   entered at CPL3. This is not a process, DLL startup, or Explorer.
+- A fixed-size Win32k request is marshalled across the syscall boundary and
+  exercised from CPL3 for class registration, window creation, client-rectangle
+  query and destruction. The request service and its bounded freestanding
+  manager are verified; this does not establish Explorer or GDI compatibility.
 - Canonical PFN database initialized from validated firmware conventional
   ranges; actual physical writes, reference retention, complete page zeroing
   and contiguous release verified before display initialization.
@@ -38,6 +42,8 @@ Reproduced from the current sources, not by accepting an old kernel binary:
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/uefi_handoff_contract_test.cpp -o build/uefi-handoff-contract-test && build/uefi-handoff-contract-test` | Passed; validates V3 user-image file range serialization |
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted Ke behavior remains intact |
 | `cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot` | Rejected by the new boundary check: `win32k_boot` transitively includes private `micant/km/` headers |
+| `c++ -std=c++23 -I include test/win32k_freestanding_test.cpp kernel/win32k/freestanding.cpp -o /tmp/micant_win32k_test && /tmp/micant_win32k_test` | Passed; standalone Win32k manager lifecycle and message test |
+| `cmake -S . -B build/host-check -G Ninja && cmake --build build/host-check --target micant_tests -j 4` | Failed before test execution on existing host-build errors in `ntdll.hpp` and inline assembly |
 | `python3 -m unittest discover -s test -p test_explorer_runtime.py -v` | 12 passed |
 | `python3 scripts/verify_kernel_architecture.py` | Passed |
 

@@ -2,6 +2,7 @@
 #include "micant/km/hal/cpu.hpp"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
+#include "micant/shared/win32k_client.h"
 #include "micant/km/executive/usermode.hpp"
 
 namespace {
@@ -14,13 +15,14 @@ constexpr uint64_t kPhysicalMask = 0x000FFFFFFFFFF000ULL;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
 constexpr uint64_t kUserTebBase = kUserBase + 0x8000;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
+constexpr uint64_t kUserStackBase = kUserBase + 4096;
 alignas(4096) uint64_t g_pml4[512]{};
 alignas(4096) uint64_t g_tables[256][512]{};
 size_t g_tableCount{};
 uint64_t g_deviceNext = kDeviceBase;
 bool g_addressSpaceReady{};
 alignas(4096) uint8_t g_userCode[4096]{};
-alignas(4096) uint8_t g_userStack[4096]{};
+alignas(4096) uint8_t g_userStack[4 * 4096]{};
 struct alignas(4096) BootstrapTebStorage {
     micant::um::Teb64 teb{};
     uint8_t padding[8192 - sizeof(micant::um::Teb64)]{};
@@ -154,17 +156,43 @@ bool mapPage(uint64_t address, uint64_t physical, uint64_t flags) noexcept {
     }
 }
 
+void logTrapValue(const char* label, uint64_t value) noexcept {
+    if (!g_log) return;
+    constexpr char digits[] = "0123456789ABCDEF";
+    char message[64]{};
+    size_t index = 0;
+    while (label[index] && index < sizeof(message) - 19) {
+        message[index] = label[index];
+        ++index;
+    }
+    for (int shift = 60; shift >= 0; shift -= 4) {
+        message[index++] = digits[(value >> shift) & 0xF];
+    }
+    message[index++] = '\r';
+    message[index++] = '\n';
+    g_log(message);
+}
+
 } // namespace
 
 extern "C" {
 uint64_t MicantProbeKernelRsp{};
 uint64_t MicantProbeUserRip = kUserBase;
+uint64_t MicantProbeUserRsp =
+    kUserStackBase + sizeof(g_userStack) - 16;
 
 void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
     using micant::hal::amd64::bootstrapUserRange;
-    if (!g_dispatch ||
-        !bootstrapUserRange(frame->rip, 1, false, true) ||
-        !bootstrapUserRange(frame->rsp, sizeof(uint64_t), true)) {
+    if (!g_dispatch) {
+        if (g_log) g_log("[MicaNT Hal] Bootstrap syscall dispatcher is unset\r\n");
+        stopOnTrap();
+    }
+    if (!bootstrapUserRange(frame->rip, 1, false, true)) {
+        if (g_log) g_log("[MicaNT Hal] Syscall return address is not user executable\r\n");
+        stopOnTrap();
+    }
+    if (!bootstrapUserRange(frame->rsp, sizeof(uint64_t), true)) {
+        if (g_log) g_log("[MicaNT Hal] Syscall stack pointer is not user writable\r\n");
         stopOnTrap();
     }
     frame->rax = g_dispatch(frame->rax, frame->r10, frame->rdx);
@@ -213,11 +241,84 @@ extern const uint8_t MicantSyscallClientBreakpoint[];
 __attribute__((noinline, section(".uclient$a")))
 void MicantSyscallClientProgram() {
     auto* video = reinterpret_cast<micant::um::UserVideoInfo64*>(kUserBase + 4096);
+    auto* message = reinterpret_cast<char*>(kUserBase + 4096 + 64);
     if (micant::sys::invokeUserService(0x80, reinterpret_cast<uint64_t>(video)) ||
         video->width != 1024 || video->height != 768 || video->physicalBase) {
         __builtin_trap();
     }
-    auto* message = reinterpret_cast<char*>(kUserBase + 4096 + 64);
+    auto* request = reinterpret_cast<MicaWin32kRequest*>(kUserBase + 8192);
+    auto clearRequest = [request]() {
+        auto* bytes = reinterpret_cast<volatile uint8_t*>(request);
+        for (size_t index = 0; index < sizeof(*request); ++index) {
+            bytes[index] = 0;
+        }
+    };
+    clearRequest();
+    request->size = sizeof(*request);
+    request->version = MICANT_WIN32K_REQUEST_VERSION;
+    request->operation = MICANT_WIN32K_OP_REGISTER_CLASS;
+    volatile uint16_t* className = request->className;
+    className[0] = 'M'; className[1] = 'i'; className[2] = 'c';
+    className[3] = 'a'; className[4] = 'N'; className[5] = 'T';
+    className[6] = '.'; className[7] = 'P'; className[8] = 'r';
+    className[9] = 'o'; className[10] = 'b'; className[11] = 'e';
+    className[12] = 'W'; className[13] = 'i'; className[14] = 'n';
+    className[15] = 'd'; className[16] = 'o'; className[17] = 'w';
+    className[18] = 0;
+    if (micant::sys::invokeUserService(
+            0x86, reinterpret_cast<uint64_t>(request)) != 0 ||
+        request->result == 0) {
+        __builtin_trap();
+    }
+    clearRequest();
+    request->size = sizeof(*request);
+    request->version = MICANT_WIN32K_REQUEST_VERSION;
+    request->operation = MICANT_WIN32K_OP_CREATE_WINDOW;
+    className = request->className;
+    className[0] = 'M'; className[1] = 'i'; className[2] = 'c';
+    className[3] = 'a'; className[4] = 'N'; className[5] = 'T';
+    className[6] = '.'; className[7] = 'P'; className[8] = 'r';
+    className[9] = 'o'; className[10] = 'b'; className[11] = 'e';
+    className[12] = 'W'; className[13] = 'i'; className[14] = 'n';
+    className[15] = 'd'; className[16] = 'o'; className[17] = 'w';
+    className[18] = 0;
+    volatile uint16_t* title = request->title;
+    title[0] = 'C'; title[1] = 'P'; title[2] = 'L'; title[3] = '3';
+    title[4] = ' '; title[5] = 'W'; title[6] = 'i'; title[7] = 'n';
+    title[8] = '3'; title[9] = '2'; title[10] = 'k'; title[11] = ' ';
+    title[12] = 'P'; title[13] = 'r'; title[14] = 'o'; title[15] = 'b';
+    title[16] = 'e'; title[17] = 0;
+    request->args[1] = 0x10000000;
+    request->args[2] = 10;
+    request->args[3] = 20;
+    request->args[4] = 320;
+    request->args[5] = 240;
+    if (micant::sys::invokeUserService(
+            0x86, reinterpret_cast<uint64_t>(request)) != 0 ||
+        request->result == 0) {
+        __builtin_trap();
+    }
+    const uint64_t window = request->result;
+    clearRequest();
+    request->size = sizeof(*request);
+    request->version = MICANT_WIN32K_REQUEST_VERSION;
+    request->operation = MICANT_WIN32K_OP_GET_CLIENT_RECT;
+    request->args[0] = window;
+    if (micant::sys::invokeUserService(
+            0x86, reinterpret_cast<uint64_t>(request)) != 0 ||
+        request->rect.right != 320 || request->rect.bottom != 240) {
+        __builtin_trap();
+    }
+    clearRequest();
+    request->size = sizeof(*request);
+    request->version = MICANT_WIN32K_REQUEST_VERSION;
+    request->operation = MICANT_WIN32K_OP_DESTROY_WINDOW;
+    request->args[0] = window;
+    if (micant::sys::invokeUserService(
+            0x86, reinterpret_cast<uint64_t>(request)) != 0 ||
+        request->result != 1) {
+        __builtin_trap();
+    }
     message[0] = 'C'; message[1] = 'P'; message[2] = 'L';
     message[3] = '3'; message[4] = '\r'; message[5] = '\n';
     if (micant::sys::invokeUserService(0x25, reinterpret_cast<uint64_t>(message), 6)) {
@@ -253,7 +354,7 @@ __attribute__((naked)) void MicantSyscallProbeProgram() {
         "cmpl $0xc0000005, %eax\njne 9f\n" // Null output.
         "movabsq $0x400000000000, %r10\nmovl $0x80, %eax\nsyscall\n"
         "cmpl $0xc0000005, %eax\njne 9f\n" // Read-only code.
-        "movabsq $0x400000001ff0, %r10\nmovl $0x80, %eax\nsyscall\n"
+        "movabsq $0x400000004ff0, %r10\nmovl $0x80, %eax\nsyscall\n"
         "cmpl $0xc0000005, %eax\njne 9f\n" // Crosses into an unmapped page.
         "movq $0x1000, %r10\nmovl $0x80, %eax\nsyscall\n"
         "cmpl $0xc0000005, %eax\njne 9f\n" // Supervisor address.
@@ -275,7 +376,7 @@ __attribute__((naked)) void MicantSyscallProbeProgram() {
         "cmpl $0xc000000d, %eax\njne 9f\n" // Zero width.
         "movl $2, 16(%r10)\nmovq $0, (%r10)\n"
         "movl $0x81, %eax\nsyscall\ncmpl $0xc0000005, %eax\njne 9f\n"
-        "movabsq $0x400000001ff8, %rax\nmovq %rax, (%r10)\n"
+        "movabsq $0x400000004ff8, %rax\nmovq %rax, (%r10)\n"
         "movl $0x81, %eax\nsyscall\ncmpl $0xc0000005, %eax\njne 9f\n"
         "movl $0x7fffffff, %eax\nsyscall\n"
         "cmpl $0xc00000bb, %eax\njne 9f\n"
@@ -308,10 +409,30 @@ void MicantProbeTrap(const uint64_t* frame) noexcept {
                        frame[4] == micant::cpu::SELECTOR_UDATA64 &&
                        (g_probeMode == 6
                            ? micant::hal::amd64::bootstrapUserRange(frame[3], 8, true)
-                           : frame[3] == kUserBase + 8192 - 16) &&
+                           : frame[3] == MicantProbeUserRsp) &&
                        (frame[2] & 0x3000) == 0;
     if (!g_probeSucceeded) {
+        if (g_log) {
+            if (frame[0] != g_probeReturnRip) {
+                g_log("[MicaNT Hal] CPL3 probe trap RIP mismatch\r\n");
+            }
+            if (frame[1] != micant::cpu::SELECTOR_UCODE64 ||
+                frame[4] != micant::cpu::SELECTOR_UDATA64) {
+                g_log("[MicaNT Hal] CPL3 probe trap selector mismatch\r\n");
+            }
+            if ((g_probeMode == 6 &&
+                 !micant::hal::amd64::bootstrapUserRange(frame[3], 8, true)) ||
+                (g_probeMode != 6 && frame[3] != MicantProbeUserRsp)) {
+                g_log("[MicaNT Hal] CPL3 probe trap stack mismatch\r\n");
+            }
+            if (frame[2] & 0x3000) {
+                g_log("[MicaNT Hal] CPL3 probe trap privilege flags mismatch\r\n");
+            }
+        }
         stopOnTrap();
+    }
+    if (g_log && g_probeMode == 6) {
+        g_log("[MicaNT Hal] CPL3 syscall probe breakpoint accepted\r\n");
     }
     MicantProbeReturn();
 }
@@ -331,12 +452,33 @@ void MicantProbePageFault(const uint64_t* frame) noexcept {
                        frame[1] == expectedRip &&
                        frame[2] == micant::cpu::SELECTOR_UCODE64 &&
                        frame[5] == micant::cpu::SELECTOR_UDATA64 &&
-                       frame[4] == kUserBase + 8192 - 16 &&
+                       frame[4] == MicantProbeUserRsp &&
                        (frame[3] & 0x3000) == 0;
     if (!g_probeSucceeded) {
+        if (g_log) {
+            g_log("[MicaNT Hal] Unexpected bootstrap page fault\r\n");
+        }
+        logTrapValue("[MicaNT Hal] PF CR2=0x", faultAddress);
+        logTrapValue("[MicaNT Hal] PF error=0x", frame[0]);
+        logTrapValue("[MicaNT Hal] PF RIP=0x", frame[1]);
+        logTrapValue("[MicaNT Hal] PF CS=0x", frame[2]);
         stopOnTrap();
     }
     MicantProbeReturn();
+}
+
+void MicantProbeUnexpectedInvalidOpcode() noexcept {
+    if (g_log) {
+        g_log("[MicaNT Hal] Unexpected bootstrap invalid opcode (#UD)\r\n");
+    }
+    stopOnTrap();
+}
+
+void MicantProbeUnexpectedGeneralProtection() noexcept {
+    if (g_log) {
+        g_log("[MicaNT Hal] Unexpected bootstrap general protection fault (#GP)\r\n");
+    }
+    stopOnTrap();
 }
 
 __attribute__((naked)) void MicantProbeTrapEntry() {
@@ -349,6 +491,20 @@ __attribute__((naked)) void MicantProbeTrapEntry() {
 __attribute__((naked)) void MicantProbeFaultEntry() {
     __asm__ __volatile__(
         "cli\ncld\nandq $-16, %rsp\nsubq $32, %rsp\ncallq MicantProbeUnexpectedTrap\nud2\n"
+    );
+}
+
+__attribute__((naked)) void MicantProbeInvalidOpcodeEntry() {
+    __asm__ __volatile__(
+        "cli\ncld\nandq $-16, %rsp\nsubq $32, %rsp\n"
+        "callq MicantProbeUnexpectedInvalidOpcode\nud2\n"
+    );
+}
+
+__attribute__((naked)) void MicantProbeGeneralProtectionEntry() {
+    __asm__ __volatile__(
+        "cli\ncld\nandq $-16, %rsp\nsubq $32, %rsp\n"
+        "callq MicantProbeUnexpectedGeneralProtection\nud2\n"
     );
 }
 
@@ -376,7 +532,7 @@ __attribute__((naked)) void MicantProbeEnter() {
         "movq %rsp, MicantProbeKernelRsp(%rip)\n"
         "movw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
         "pushq $0x2b\n"
-        "movabsq $0x400000001ff0, %rax\npushq %rax\n"
+        "movq MicantProbeUserRsp(%rip), %rax\npushq %rax\n"
         "pushq $2\npushq $0x33\n"
         "movq MicantProbeUserRip(%rip), %rax\npushq %rax\niretq\n"
     );
@@ -572,6 +728,7 @@ bool verifyNativeImageLoading() noexcept {
     g_probeSucceeded = false;
     g_probeReturnRip = imageBase + 4096 + 16 + breakpointOffset + 1;
     MicantProbeEnter();
+    if (g_log) g_log("[MicaNT Hal] CPL3 syscall probe returned to kernel\r\n");
     MicantProbeUserRip = kUserBase;
     __asm__ __volatile__(
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
@@ -604,9 +761,17 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
 
 bool verifyRing3Transition() noexcept {
     if (!g_addressSpaceReady ||
-        !mapPage(kUserBase, reinterpret_cast<uint64_t>(g_userCode), kUser) ||
-        !mapPage(kUserBase + 4096, reinterpret_cast<uint64_t>(g_userStack),
-                 kUser | kWritable | kNoExecute) ||
+        !mapPage(kUserBase, reinterpret_cast<uint64_t>(g_userCode), kUser)) {
+        return false;
+    }
+    for (size_t offset = 0; offset < sizeof(g_userStack); offset += 4096) {
+        if (!mapPage(kUserStackBase + offset,
+                     reinterpret_cast<uint64_t>(g_userStack) + offset,
+                     kUser | kWritable | kNoExecute)) {
+            return false;
+        }
+    }
+    if (
         !mapPage(kUserTebBase, reinterpret_cast<uint64_t>(&g_userTebStorage),
                  kUser | kWritable | kNoExecute) ||
         !mapPage(kUserTebBase + 4096,
@@ -644,6 +809,10 @@ bool verifyRing3Transition() noexcept {
     for (size_t vector = 0; vector < 256; ++vector) {
         const uint64_t handler = vector == 3
             ? reinterpret_cast<uint64_t>(MicantProbeTrapEntry)
+            : vector == 6
+                ? reinterpret_cast<uint64_t>(MicantProbeInvalidOpcodeEntry)
+            : vector == 13
+                ? reinterpret_cast<uint64_t>(MicantProbeGeneralProtectionEntry)
             : vector == 14 ? reinterpret_cast<uint64_t>(MicantProbePageFaultEntry)
                           : reinterpret_cast<uint64_t>(MicantProbeFaultEntry);
         g_idt[vector] = {

@@ -7,6 +7,7 @@
 #include "micant/km/executive/probe.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/win32k/freestanding.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
@@ -600,6 +601,23 @@ uint64_t dispatchBootstrapService(uint64_t number, uint64_t first,
             reinterpret_cast<void*>(first), &event, sizeof(event));
         if (copyStatus != NtStatus::Success) return status(copyStatus);
         return 1;
+    }
+    if (number == 0x86) {
+        MicaWin32kRequest request{};
+        const NtStatus copyStatus = ex::ExSafeCopyFromUser(
+            &request, reinterpret_cast<const void*>(first), sizeof(request));
+        if (copyStatus != NtStatus::Success) return status(copyStatus);
+        if (request.size != sizeof(request) ||
+            request.version != MICANT_WIN32K_REQUEST_VERSION ||
+            request.flags != 0) {
+            return status(NtStatus::InvalidParameter);
+        }
+        const NtStatus requestStatus =
+            win32k::freestanding::dispatchRequest(request);
+        if (requestStatus != NtStatus::Success) return status(requestStatus);
+        const NtStatus resultStatus = ex::ExSafeCopyToUser(
+            reinterpret_cast<void*>(first), &request, sizeof(request));
+        return status(resultStatus);
     }
     return status(NtStatus::NotSupported);
 }

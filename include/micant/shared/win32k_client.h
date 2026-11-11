@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #if defined(MICANT_WIN32K_EXPORTS)
@@ -71,6 +72,59 @@ typedef struct MicaWin32kBitmapInfoHeader {
     int32_t xPixelsPerMeter, yPixelsPerMeter;
     uint32_t colorsUsed, colorsImportant;
 } MicaWin32kBitmapInfoHeader;
+
+#define MICANT_WIN32K_REQUEST_VERSION 1u
+#define MICANT_WIN32K_TEXT_CAPACITY 128u
+#define MICANT_WIN32K_WINDOW_CAPACITY 64u
+
+enum {
+    MICANT_WIN32K_OP_REGISTER_CLASS = 1,
+    MICANT_WIN32K_OP_CREATE_WINDOW,
+    MICANT_WIN32K_OP_DESTROY_WINDOW,
+    MICANT_WIN32K_OP_SHOW_WINDOW,
+    MICANT_WIN32K_OP_SET_WINDOW_POS,
+    MICANT_WIN32K_OP_POST_MESSAGE,
+    MICANT_WIN32K_OP_SEND_MESSAGE,
+    MICANT_WIN32K_OP_POST_QUIT,
+    MICANT_WIN32K_OP_PEEK_MESSAGE,
+    MICANT_WIN32K_OP_GET_MESSAGE,
+    MICANT_WIN32K_OP_GET_CLIENT_RECT,
+    MICANT_WIN32K_OP_GET_WINDOW_RECT,
+    MICANT_WIN32K_OP_ENUM_WINDOWS,
+    MICANT_WIN32K_OP_GET_WINDOW_TEXT,
+    MICANT_WIN32K_OP_IS_WINDOW_VISIBLE,
+    MICANT_WIN32K_OP_IS_ICONIC,
+    MICANT_WIN32K_OP_GET_FOREGROUND_WINDOW,
+    MICANT_WIN32K_OP_SET_WINDOW_LONG,
+    MICANT_WIN32K_OP_GET_WINDOW_LONG,
+    MICANT_WIN32K_OP_DEF_WINDOW_PROC
+};
+
+typedef struct MicaWin32kRequest {
+    uint32_t size;
+    uint32_t version;
+    uint32_t operation;
+    uint32_t flags;
+    uint64_t result;
+    uint64_t args[8];
+    uint64_t messageHwnd;
+    uint64_t messageWParam;
+    int64_t messageLParam;
+    uint32_t messageId;
+    uint32_t messageTime;
+    int32_t messageX, messageY;
+    MicaWin32kRect rect;
+    uint16_t className[MICANT_WIN32K_TEXT_CAPACITY];
+    uint16_t title[MICANT_WIN32K_TEXT_CAPACITY];
+    uint16_t text[MICANT_WIN32K_TEXT_CAPACITY];
+    uint64_t windowHandles[MICANT_WIN32K_WINDOW_CAPACITY];
+} MicaWin32kRequest;
+
+#if defined(__cplusplus)
+static_assert(sizeof(MicaWin32kRequest) == 1424);
+static_assert(offsetof(MicaWin32kRequest, args) == 24);
+static_assert(offsetof(MicaWin32kRequest, windowHandles) == 912);
+#endif
 
 MICANT_WIN32K_API void* MicaWin32kCreateWindowExW(uint32_t, const wchar_t*, const wchar_t*, uint32_t,
     int32_t, int32_t, int32_t, int32_t, void*, void*, void*, void*);
