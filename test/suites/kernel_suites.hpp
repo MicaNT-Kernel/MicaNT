@@ -10517,23 +10517,10 @@ void Test_Horizon35_ACPI_HAL_DeviceTree_And_AML_Interpreter() {
     // Phase 10: Dynamic Loader Exports, SCM Services & ACPI Diagnostic Telemetry
     // ------------------------------------------------------------------------
     {
-        // 1. JanusLDR Driver Exports Verification
+        // MicaNT-only ACPI diagnostics stay private to the kernel.
         auto& ldr = ldr::DynamicLoader::get();
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiFindTable") != nullptr, "acpi.sys AcpiFindTable must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiEvaluateObject") != nullptr, "acpi.sys AcpiEvaluateObject must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetSystemPowerState") != nullptr, "acpi.sys AcpiGetSystemPowerState must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiSetSystemPowerState") != nullptr, "acpi.sys AcpiSetSystemPowerState must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetThermalZoneTemp") != nullptr, "acpi.sys AcpiGetThermalZoneTemp must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetBatteryStatus") != nullptr, "acpi.sys AcpiGetBatteryStatus must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetProcessorCount") != nullptr, "acpi.sys AcpiGetProcessorCount must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiRegisterGpeHandler") != nullptr, "acpi.sys AcpiRegisterGpeHandler must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiDispatchGpe") != nullptr, "acpi.sys AcpiDispatchGpe must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetDeviceResources") != nullptr, "acpi.sys AcpiGetDeviceResources must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiTranslatePciRouting") != nullptr, "acpi.sys AcpiTranslatePciRouting must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiSetDevicePowerState") != nullptr, "acpi.sys AcpiSetDevicePowerState must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiLoadTable") != nullptr, "acpi.sys AcpiLoadTable must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiUnloadTable") != nullptr, "acpi.sys AcpiUnloadTable must exist");
-        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetTelemetry") != nullptr, "acpi.sys AcpiGetTelemetry must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiFindTable") == nullptr, "private ACPI helper must not be exported");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiEvaluateObject") == nullptr, "private ACPI helper must not be exported");
 
         // hal.dll exports
         TEST_ASSERT(ldr.getExport("hal.dll", "HalGetBusDataByOffset") != nullptr, "hal.dll HalGetBusDataByOffset must exist");

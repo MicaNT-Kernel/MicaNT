@@ -1982,15 +1982,10 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
     acpi::AcpiGetSystemPowerState(&pState);
     TEST_ASSERT(pState == 0, "Power state must return to S0 after wake handshake");
 
-    // Stage 12: Dynamic Loader Module Exports in acpi.sys & SCM Driver Record
+    // Stage 12: Keep MicaNT diagnostics private; represent ACPI through its SCM driver record.
     auto& ldr = ldr::DynamicLoader::get();
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiFindTable") != nullptr, "acpi.sys AcpiFindTable export must exist");
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiEvaluateObject") != nullptr, "acpi.sys AcpiEvaluateObject export must exist");
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetSystemPowerState") != nullptr, "acpi.sys AcpiGetSystemPowerState export must exist");
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiSetSystemPowerState") != nullptr, "acpi.sys AcpiSetSystemPowerState export must exist");
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetThermalZoneTemp") != nullptr, "acpi.sys AcpiGetThermalZoneTemp export must exist");
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetBatteryStatus") != nullptr, "acpi.sys AcpiGetBatteryStatus export must exist");
-    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetProcessorCount") != nullptr, "acpi.sys AcpiGetProcessorCount export must exist");
+    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiFindTable") == nullptr, "private ACPI helper must not be exported");
+    TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiEvaluateObject") == nullptr, "private ACPI helper must not be exported");
 
     auto acpiSvc = scm::ServiceControlManager::get().getServiceRecord(L"acpi");
     TEST_ASSERT(acpiSvc != nullptr, "acpi service record must exist in SCM");

@@ -2626,24 +2626,9 @@ inline bool InitializeAcpiSubsystem(uint64_t firmwareRsdpAddress = 0) {
         acpi.initialize();
     }
 
-    // 2. Dynamic Loader Exports for acpi.sys
+    // 2. Keep implementation helpers internal. These names are not Windows
+    // exports from acpi.sys and must not be published as a private ABI.
     auto& ldr = ldr::DynamicLoader::get();
-    ldr.registerExport("acpi.sys", "AcpiFindTable", reinterpret_cast<void*>(AcpiFindTable));
-    ldr.registerExport("acpi.sys", "AcpiEvaluateObject", reinterpret_cast<void*>(AcpiEvaluateObject));
-    ldr.registerExport("acpi.sys", "AcpiGetSystemPowerState", reinterpret_cast<void*>(AcpiGetSystemPowerState));
-    ldr.registerExport("acpi.sys", "AcpiSetSystemPowerState", reinterpret_cast<void*>(AcpiSetSystemPowerState));
-    ldr.registerExport("acpi.sys", "AcpiGetThermalZoneTemp", reinterpret_cast<void*>(AcpiGetThermalZoneTemp));
-    ldr.registerExport("acpi.sys", "AcpiGetBatteryStatus", reinterpret_cast<void*>(AcpiGetBatteryStatus));
-    ldr.registerExport("acpi.sys", "AcpiGetProcessorCount", reinterpret_cast<void*>(AcpiGetProcessorCount));
-    ldr.registerExport("acpi.sys", "AcpiRegisterGpeHandler", reinterpret_cast<void*>(AcpiRegisterGpeHandler));
-    ldr.registerExport("acpi.sys", "AcpiDispatchGpe", reinterpret_cast<void*>(AcpiDispatchGpe));
-    ldr.registerExport("acpi.sys", "AcpiGetDeviceResources", reinterpret_cast<void*>(AcpiGetDeviceResources));
-    ldr.registerExport("acpi.sys", "AcpiTranslatePciRouting", reinterpret_cast<void*>(AcpiTranslatePciRouting));
-    ldr.registerExport("acpi.sys", "AcpiSetDevicePowerState", reinterpret_cast<void*>(AcpiSetDevicePowerState));
-    ldr.registerExport("acpi.sys", "AcpiLoadTable", reinterpret_cast<void*>(AcpiLoadTable));
-    ldr.registerExport("acpi.sys", "AcpiUnloadTable", reinterpret_cast<void*>(AcpiUnloadTable));
-    ldr.registerExport("acpi.sys", "AcpiGetTelemetry", reinterpret_cast<void*>(AcpiGetTelemetry));
-
     // 3. Dynamic Loader Exports for hal.dll
     ldr.registerExport("hal.dll", "HalGetBusDataByOffset", reinterpret_cast<void*>(HalGetBusDataByOffset));
     ldr.registerExport("hal.dll", "HalSetBusDataByOffset", reinterpret_cast<void*>(HalSetBusDataByOffset));
