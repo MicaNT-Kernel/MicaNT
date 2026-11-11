@@ -8,6 +8,7 @@
 #if defined(MICANT_FREESTANDING_UCRT)
 
 #include "micant/ucrt/bounded_arena.hpp"
+#include "micant/ucrt/ceilf.hpp"
 #include <cstdint>
 
 namespace {
@@ -225,6 +226,10 @@ __declspec(dllexport) std::size_t __cdecl wcsnlen(
         ++length;
     }
     return length;
+}
+
+__declspec(dllexport) float __cdecl ceilf(float value) {
+    return micant::ucrt::ceilf(value);
 }
 
 }
