@@ -9966,6 +9966,32 @@ inline BOOL WINAPI GetCpuClockPhaseLockedLoopSlewRateHistogramTelemetry(ntdll::S
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopSlewRateHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
+inline LONG64 WINAPI InterlockedChooseModulo64(LONG64 volatile* Destination, LONG64 ChoiceMask, LONG64 TrueVal, LONG64 FalseVal, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedChooseModulo64(Destination, ChoiceMask, TrueVal, FalseVal, Modulus);
+}
+
+inline LONG WINAPI InterlockedChooseModulo32(LONG volatile* Destination, LONG ChoiceMask, LONG TrueVal, LONG FalseVal, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedChooseModulo32(Destination, ChoiceMask, TrueVal, FalseVal, Modulus);
+}
+
+inline SHORT WINAPI InterlockedChooseModulo16(SHORT volatile* Destination, SHORT ChoiceMask, SHORT TrueVal, SHORT FalseVal, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedChooseModulo16(Destination, ChoiceMask, TrueVal, FalseVal, Modulus);
+}
+
+inline CHAR WINAPI InterlockedChooseModulo8(CHAR volatile* Destination, CHAR ChoiceMask, CHAR TrueVal, CHAR FalseVal, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedChooseModulo8(Destination, ChoiceMask, TrueVal, FalseVal, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteLatencySpikeHistogramTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_LATENCY_SPIKE_HISTOGRAM_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteLatencySpikeHistogramTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockSpreadSpectrumModulationProfileTelemetry(ntdll::SYSTEM_CPU_CLOCK_SPREAD_SPECTRUM_MODULATION_PROFILE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockSpreadSpectrumModulationProfileTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
 inline LONG64 WINAPI InterlockedNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedNonImplicationModulo64(Destination, Value, Modulus);
 }
@@ -12809,6 +12835,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedConverseImplicationModulo8", reinterpret_cast<void*>(InterlockedConverseImplicationModulo8));
     ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingHistogramTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingHistogramTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopSlewRateHistogramTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopSlewRateHistogramTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedChooseModulo64", reinterpret_cast<void*>(InterlockedChooseModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedChooseModulo32", reinterpret_cast<void*>(InterlockedChooseModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedChooseModulo16", reinterpret_cast<void*>(InterlockedChooseModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedChooseModulo8", reinterpret_cast<void*>(InterlockedChooseModulo8));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteLatencySpikeHistogramTelemetry", reinterpret_cast<void*>(GetPagefileWriteLatencySpikeHistogramTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockSpreadSpectrumModulationProfileTelemetry", reinterpret_cast<void*>(GetCpuClockSpreadSpectrumModulationProfileTelemetry));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo64", reinterpret_cast<void*>(InterlockedNonImplicationModulo64));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo32", reinterpret_cast<void*>(InterlockedNonImplicationModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo16", reinterpret_cast<void*>(InterlockedNonImplicationModulo16));
