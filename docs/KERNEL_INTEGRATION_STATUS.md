@@ -47,6 +47,22 @@ Reproduced from the current sources, not by accepting an old kernel binary:
 | `python3 -m unittest discover -s test -p test_explorer_runtime.py -v` | 12 passed |
 | `python3 scripts/verify_kernel_architecture.py` | Passed |
 
+### User-mode Win32k boundary increment
+
+The freestanding Win32k request service is now called by the `win32k.dll`
+client through the fixed-size syscall request ABI. The client no longer links
+the hosted `TitanWin32kSubsystem`, scheduler, Executive or private kernel
+headers. Class procedures are retained by the kernel window manager but called
+from user mode by the client. Unsupported GDI exports fail rather than
+presenting a simulated success.
+
+| Command | Result |
+|---|---|
+| `python3 scripts/check_user_mode_boundary.py --root . --compiler build/llvm-mingw-20260616-ucrt-macos-universal/bin/x86_64-w64-mingw32-clang++ --target win32k_boot` | Passed |
+| `cmake --build build/qemu-cmake-mingw --config Release --target win32k_boot` | Passed |
+| `python3 qemu.py --check-explorer` | Boundary checks and PE linking passed; runtime import-closure validation then failed on unresolved Kernel32/UCRT exports. Explorer is not yet runnable |
+| `python3 qemu.py --headless` | Passed; modular boot, scanout and PS/2 movement/click validation |
+
 The runner invokes the affected build before staging and validates the exact
 kernel/bootloader/driver artifact set. An up-to-date Ninja result is not a
 substitute for those checks. Host tests and PE linking do not establish boot

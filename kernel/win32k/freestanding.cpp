@@ -39,6 +39,7 @@ public:
 struct WindowClass {
     uint16_t name[MICANT_WIN32K_TEXT_CAPACITY]{};
     uint16_t atom{};
+    uint64_t windowProcedure{};
     bool active{};
 };
 
@@ -180,6 +181,7 @@ NtStatus registerClass(MicaWin32kRequest& request) noexcept {
         windowClass.active = true;
         windowClass.atom = g_nextAtom++;
         if (g_nextAtom == 0) g_nextAtom = 1;
+        windowClass.windowProcedure = request.args[0];
         copyText(windowClass.name, request.className);
         request.result = windowClass.atom;
         return NtStatus::Success;
@@ -213,6 +215,7 @@ NtStatus createWindow(MicaWin32kRequest& request) noexcept {
         window.width = static_cast<int32_t>(width);
         window.height = static_cast<int32_t>(height);
         window.classAtom = windowClass->atom;
+        window.windowProcedure = windowClass->windowProcedure;
         window.visible = (window.style & 0x10000000u) != 0;
         copyText(window.title, request.title);
         request.result = window.handle;

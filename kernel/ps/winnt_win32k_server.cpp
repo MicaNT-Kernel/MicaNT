@@ -1,188 +1,295 @@
 #ifndef MICANT_WIN32K_EXPORTS
 #define MICANT_WIN32K_EXPORTS
 #endif
-#include "micant/shared/win32k_client.h"
+
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
-#include "micant/km/win32k/win32k.hpp"
+#include "micant/shared/win32k_client.h"
 
-using namespace micant::win32k;
+#include <cstdint>
 
 #if defined(BUILD_SYSTEM32_STANDALONE_DLL)
 extern "C" bool DllMain(void*, unsigned long, void*) noexcept { return true; }
 #endif
 
-// The user-mode Win32k service owns its own dispatcher instance; the kernel's
-// standard syscall table is initialized by ntoskrnl and must not be linked here.
-namespace micant::sys {
-void SyscallDispatcher::initializeStandardTable() {}
+namespace {
+
+bool request(uint32_t operation, MicaWin32kRequest& value) noexcept {
+    value.size = sizeof(value);
+    value.version = MICANT_WIN32K_REQUEST_VERSION;
+    value.operation = operation;
+    return micant::sys::invokeUserService(
+        0x86, reinterpret_cast<uint64_t>(&value)) == 0;
 }
 
-namespace {
-int32_t PresentComposedDesktop(TitanWin32kSubsystem& server) {
-    auto base = server.composeDesktopFrame(false);
-    auto heldLayers = server.collectDesktopCompositionLayers();
-    if (base && !base->pixels.empty()) {
-        std::vector<micant::boot_driver::CompositionLayer> layers;
-        layers.reserve(heldLayers.size());
-        for (const auto& layer : heldLayers) layers.push_back(layer.descriptor);
-        micant::um::UserPresentCompositionParams64 composition{};
-        composition.baseSurfaceBufferVa = reinterpret_cast<uint64_t>(base->pixels.data());
-        composition.layersVa = reinterpret_cast<uint64_t>(layers.data());
-        composition.width = base->width;
-        composition.height = base->height;
-        composition.pitch = base->stride / sizeof(uint32_t);
-        composition.layerCount = static_cast<uint32_t>(layers.size());
-        const uint64_t compositionStatus = micant::sys::invokeUserService(
-            0x85, reinterpret_cast<uint64_t>(&composition));
-        if (compositionStatus == 0) return 1;
+bool copyText(uint16_t* destination, const wchar_t* source) noexcept {
+    if (!source) {
+        destination[0] = 0;
+        return true;
     }
-    auto bitmap = server.composeDesktopFrame();
-    if (!bitmap || bitmap->pixels.empty() || bitmap->width == 0 || bitmap->height == 0) return 0;
-    micant::um::UserPresentSurfaceParams64 params{};
-    params.surfaceBufferVa = reinterpret_cast<uint64_t>(bitmap->pixels.data());
-    params.width = bitmap->width;
-    params.height = bitmap->height;
-    params.pitch = bitmap->width;
-    const uint64_t status = micant::sys::invokeUserService(
-        0x81, reinterpret_cast<uint64_t>(&params));
-    return status == 0 ? 1 : 0;
+    for (size_t index = 0; index < MICANT_WIN32K_TEXT_CAPACITY; ++index) {
+        const auto character = static_cast<uint16_t>(source[index]);
+        destination[index] = character;
+        if (!character) return true;
+    }
+    destination[MICANT_WIN32K_TEXT_CAPACITY - 1] = 0;
+    return false;
 }
+
+intptr_t callWindowProcedure(void* hwnd, uint32_t message,
+                             uintptr_t wParam, intptr_t lParam) noexcept {
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = static_cast<uint64_t>(-4);
+    if (!request(MICANT_WIN32K_OP_GET_WINDOW_LONG, value)) return 0;
+    using WindowProcedure = intptr_t (*)(void*, uint32_t, uintptr_t, intptr_t);
+    auto procedure = reinterpret_cast<WindowProcedure>(value.result);
+    return procedure ? procedure(hwnd, message, wParam, lParam)
+                     : MicaWin32kDefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void copyMessage(const MicaWin32kRequest& source,
+                 MicaWin32kMessage* destination) noexcept {
+    destination->hwnd = reinterpret_cast<void*>(source.messageHwnd);
+    destination->message = source.messageId;
+    destination->wParam = static_cast<uintptr_t>(source.messageWParam);
+    destination->lParam = static_cast<intptr_t>(source.messageLParam);
+    destination->time = source.messageTime;
+    destination->pt = {source.messageX, source.messageY};
+}
+
 }
 
 extern "C" {
-void* MicaWin32kCreateWindowExW(uint32_t ex, const wchar_t* cls,
-    const wchar_t* title, uint32_t style, int32_t x, int32_t y, int32_t w, int32_t h,
-    void* parent, void* menu, void* instance, void* param) {
-    auto& server = TitanWin32kSubsystem::Instance();
-    server.initialize();
-    void* hwnd=server.createWindowEx(ex, cls, title, style, x, y, w, h, parent, menu, instance, param);
-    if (!hwnd || !server.getWindowLongPtr(hwnd,-4)) return hwnd;
-    MicaWin32kCreateStruct create{param,instance,menu,parent,h,w,y,x,static_cast<int32_t>(style),title,cls,ex};
-    MSG msg{hwnd,0x0081,1,reinterpret_cast<intptr_t>(&create),0,{0,0}}; // WM_NCCREATE
-    if (!server.dispatchMessage(msg)) { server.destroyWindow(hwnd); return nullptr; }
-    msg.message=0x0001; msg.wParam=0; // WM_CREATE
-    if (server.dispatchMessage(msg) == -1) { server.destroyWindow(hwnd); return nullptr; }
+
+void* MicaWin32kCreateWindowExW(uint32_t exStyle, const wchar_t* className,
+    const wchar_t* title, uint32_t style, int32_t x, int32_t y, int32_t width,
+    int32_t height, void* parent, void* menu, void* instance, void* parameter) {
+    MicaWin32kRequest value{};
+    if (!copyText(value.className, className) ||
+        !copyText(value.title, title)) return nullptr;
+    value.args[0] = exStyle;
+    value.args[1] = style;
+    value.args[2] = static_cast<uint64_t>(static_cast<int64_t>(x));
+    value.args[3] = static_cast<uint64_t>(static_cast<int64_t>(y));
+    value.args[4] = static_cast<uint64_t>(static_cast<int64_t>(width));
+    value.args[5] = static_cast<uint64_t>(static_cast<int64_t>(height));
+    value.args[6] = reinterpret_cast<uint64_t>(parent);
+    value.args[7] = reinterpret_cast<uint64_t>(menu);
+    if (!request(MICANT_WIN32K_OP_CREATE_WINDOW, value) || !value.result) {
+        return nullptr;
+    }
+    void* hwnd = reinterpret_cast<void*>(value.result);
+    MicaWin32kCreateStruct create{parameter, instance, menu, parent, height,
+        width, y, x, static_cast<int32_t>(style), title, className, exStyle};
+    if (callWindowProcedure(hwnd, 0x0081, 1,
+                            reinterpret_cast<intptr_t>(&create)) == 0 ||
+        callWindowProcedure(hwnd, 0x0001, 0,
+                            reinterpret_cast<intptr_t>(&create)) == -1) {
+        MicaWin32kDestroyWindow(hwnd);
+        return nullptr;
+    }
     return hwnd;
 }
+
 int32_t MicaWin32kDestroyWindow(void* hwnd) {
-    const int32_t result = NtUserDestroyWindow(hwnd);
-    if (result) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
-    return result;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    return request(MICANT_WIN32K_OP_DESTROY_WINDOW, value) && value.result;
 }
-int32_t MicaWin32kShowWindow(void* hwnd, int32_t cmd) {
-    const int32_t result = NtUserShowWindow(hwnd, cmd);
-    if (hwnd) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
-    return result;
+
+int32_t MicaWin32kShowWindow(void* hwnd, int32_t command) {
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = static_cast<uint64_t>(static_cast<int64_t>(command));
+    return request(MICANT_WIN32K_OP_SHOW_WINDOW, value)
+        ? static_cast<int32_t>(value.result) : 0;
 }
-int32_t MicaWin32kSetWindowPos(void* hwnd, void* after,
-    int32_t x, int32_t y, int32_t w, int32_t h, uint32_t flags) {
-    const int32_t result = NtUserSetWindowPos(hwnd, after, x, y, w, h, flags);
-    if (result) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
-    return result;
+
+int32_t MicaWin32kSetWindowPos(void* hwnd, void* after, int32_t x,
+    int32_t y, int32_t width, int32_t height, uint32_t flags) {
+    (void)after;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = static_cast<uint64_t>(static_cast<int64_t>(x));
+    value.args[2] = static_cast<uint64_t>(static_cast<int64_t>(y));
+    value.args[3] = static_cast<uint64_t>(static_cast<int64_t>(width));
+    value.args[4] = static_cast<uint64_t>(static_cast<int64_t>(height));
+    value.args[5] = flags;
+    return request(MICANT_WIN32K_OP_SET_WINDOW_POS, value) && value.result;
 }
-int32_t MicaWin32kPostMessageW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
-    return NtUserPostMessage(hwnd, message, wParam, lParam);
+
+int32_t MicaWin32kPostMessageW(void* hwnd, uint32_t message,
+                               uintptr_t wParam, intptr_t lParam) {
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = message;
+    value.args[2] = wParam;
+    value.args[3] = static_cast<uint64_t>(lParam);
+    return request(MICANT_WIN32K_OP_POST_MESSAGE, value) && value.result;
 }
-intptr_t MicaWin32kSendMessageW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
-    return NtUserSendMessage(hwnd, message, wParam, lParam);
+
+intptr_t MicaWin32kSendMessageW(void* hwnd, uint32_t message,
+                                uintptr_t wParam, intptr_t lParam) {
+    if (message == 0x0010) {
+        MicaWin32kPostMessageW(hwnd, 0x0010, wParam, lParam);
+        return 1;
+    }
+    return callWindowProcedure(hwnd, message, wParam, lParam);
 }
+
 void MicaWin32kPostQuitMessage(int32_t exitCode) {
-    NtUserPostQuitMessage(exitCode);
+    MicaWin32kRequest value{};
+    value.args[0] = static_cast<uint64_t>(static_cast<int64_t>(exitCode));
+    request(MICANT_WIN32K_OP_POST_QUIT, value);
 }
-uint16_t MicaWin32kRegisterClassW(const wchar_t* className, void* proc) {
-    return NtUserRegisterClassW(className,reinterpret_cast<WNDPROC>(proc));
+
+uint16_t MicaWin32kRegisterClassW(const wchar_t* className, void* procedure) {
+    MicaWin32kRequest value{};
+    if (!copyText(value.className, className)) return 0;
+    value.args[0] = reinterpret_cast<uint64_t>(procedure);
+    return request(MICANT_WIN32K_OP_REGISTER_CLASS, value)
+        ? static_cast<uint16_t>(value.result) : 0;
 }
-intptr_t MicaWin32kDispatchMessageW(const MicaWin32kMessage* input) {
-    if (!input) return 0;
-    MSG msg{input->hwnd,input->message,input->wParam,input->lParam,input->time,{input->pt.x,input->pt.y}};
-    return NtUserDispatchMessage(&msg);
+
+intptr_t MicaWin32kDispatchMessageW(const MicaWin32kMessage* message) {
+    if (!message) return 0;
+    return callWindowProcedure(message->hwnd, message->message,
+                               message->wParam, message->lParam);
 }
-intptr_t MicaWin32kSetWindowLongPtrW(void* hwnd, int32_t index, intptr_t value) {
-    return NtUserSetWindowLongPtr(hwnd,index,value);
+
+intptr_t MicaWin32kSetWindowLongPtrW(void* hwnd, int32_t index,
+                                     intptr_t newValue) {
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = static_cast<uint64_t>(static_cast<int64_t>(index));
+    value.args[2] = static_cast<uint64_t>(newValue);
+    return request(MICANT_WIN32K_OP_SET_WINDOW_LONG, value)
+        ? static_cast<intptr_t>(value.result) : 0;
 }
+
 intptr_t MicaWin32kGetWindowLongPtrW(void* hwnd, int32_t index) {
-    return NtUserGetWindowLongPtr(hwnd,index);
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = static_cast<uint64_t>(static_cast<int64_t>(index));
+    return request(MICANT_WIN32K_OP_GET_WINDOW_LONG, value)
+        ? static_cast<intptr_t>(value.result) : 0;
 }
-intptr_t MicaWin32kDefWindowProcW(void* hwnd, uint32_t message, uintptr_t wParam, intptr_t lParam) {
-    const intptr_t result = NtUserDefWindowProc(hwnd,message,wParam,lParam);
-    if (message == 0x0010) PresentComposedDesktop(TitanWin32kSubsystem::Instance());
-    return result;
+
+intptr_t MicaWin32kDefWindowProcW(void* hwnd, uint32_t message,
+                                  uintptr_t wParam, intptr_t lParam) {
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = message;
+    value.args[2] = wParam;
+    value.args[3] = static_cast<uint64_t>(lParam);
+    return request(MICANT_WIN32K_OP_DEF_WINDOW_PROC, value)
+        ? static_cast<intptr_t>(value.result) : 0;
 }
-void* MicaWin32kGetDC(void* hwnd) { return NtUserGetDC(hwnd); }
-int32_t MicaWin32kReleaseDC(void* hwnd, void* dc) { return NtUserReleaseDC(hwnd,dc); }
-void* MicaWin32kCreateCompatibleDC(void* dc) { return NtGdiCreateCompatibleDC(dc); }
-void* MicaWin32kCreateCompatibleBitmap(void* dc, int32_t w, int32_t h) { return NtGdiCreateCompatibleBitmap(dc,w,h); }
-void* MicaWin32kSelectObject(void* dc, void* object) { return NtGdiSelectBitmap(dc,object); }
-int32_t MicaWin32kBitBlt(void* dst, int32_t x, int32_t y, int32_t w, int32_t h,
-    void* src, int32_t sx, int32_t sy, uint32_t rop) { return NtGdiBitBlt(dst,x,y,w,h,src,sx,sy,rop); }
-int32_t MicaWin32kPresentDC(void* hdc) {
-    if (!hdc) return 0;
-    return PresentComposedDesktop(TitanWin32kSubsystem::Instance());
-}
-int32_t MicaWin32kDeleteObject(void* object) { return NtGdiDeleteObjectApp(object); }
-void* MicaWin32kGetStockObject(int32_t index) { return NtGdiGetStockObject(index); }
-void* MicaWin32kCreateDibSection(void* dc, int32_t width, int32_t height, void** bits) {
-    if (bits) *bits=nullptr;
-    if (width<=0 || height<=0 || width>16384 || height>16384) return nullptr;
-    auto bitmap=NtGdiCreateCompatibleBitmap(dc,width,height);
-    auto surface=TitanWin32kSubsystem::Instance().getGdi().getBitmap(bitmap);
-    if (!surface) return nullptr;
-    if (bits) *bits=surface->pixels.data();
-    return bitmap;
-}
-int32_t MicaWin32kPeekMessageW(MicaWin32kMessage* out, void* hwnd,
-    uint32_t min, uint32_t max, uint32_t remove) {
-    if (!out) return 0;
-    MSG msg{};
-    if (!NtUserPeekMessage(&msg, hwnd, min, max, remove)) return 0;
-    out->hwnd=msg.hwnd; out->message=msg.message; out->wParam=msg.wParam;
-    out->lParam=msg.lParam; out->time=msg.time; out->pt={msg.pt.x,msg.pt.y};
+
+int32_t MicaWin32kPeekMessageW(MicaWin32kMessage* output, void* hwnd,
+    uint32_t minimum, uint32_t maximum, uint32_t remove) {
+    if (!output) return 0;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = minimum;
+    value.args[2] = maximum;
+    value.args[3] = remove;
+    if (!request(MICANT_WIN32K_OP_PEEK_MESSAGE, value) || !value.result) return 0;
+    copyMessage(value, output);
     return 1;
 }
-int32_t MicaWin32kGetMessageW(MicaWin32kMessage* out, void* hwnd,
-    uint32_t min, uint32_t max) {
-    if (!out) return -1;
-    MSG msg{};
-    const auto result=NtUserGetMessage(&msg, hwnd, min, max);
-    out->hwnd=msg.hwnd; out->message=msg.message; out->wParam=msg.wParam;
-    out->lParam=msg.lParam; out->time=msg.time; out->pt={msg.pt.x,msg.pt.y};
-    return result;
+
+int32_t MicaWin32kGetMessageW(MicaWin32kMessage* output, void* hwnd,
+    uint32_t minimum, uint32_t maximum) {
+    if (!output) return -1;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    value.args[1] = minimum;
+    value.args[2] = maximum;
+    if (!request(MICANT_WIN32K_OP_GET_MESSAGE, value)) return -1;
+    if (!value.result) return 0;
+    copyMessage(value, output);
+    return value.messageId == 0x0012 ? 0 : 1;
 }
-static int32_t CopyRect(void* hwnd, MicaWin32kRect* out, bool client) {
-    if (!hwnd || !out) return 0;
-    auto wnd=TitanWin32kSubsystem::Instance().getWindow(hwnd);
-    if (!wnd) return 0;
-    const auto& r=client ? wnd->rcClient : wnd->rcWindow;
-    *out={r.left,r.top,r.right,r.bottom};
+
+int32_t MicaWin32kGetClientRect(void* hwnd, MicaWin32kRect* output) {
+    if (!output) return 0;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    if (!request(MICANT_WIN32K_OP_GET_CLIENT_RECT, value) || !value.result) return 0;
+    *output = value.rect;
     return 1;
 }
-int32_t MicaWin32kGetClientRect(void* hwnd, MicaWin32kRect* out) {
-    return CopyRect(hwnd,out,true);
+
+int32_t MicaWin32kGetWindowRect(void* hwnd, MicaWin32kRect* output) {
+    if (!output) return 0;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    if (!request(MICANT_WIN32K_OP_GET_WINDOW_RECT, value) || !value.result) return 0;
+    *output = value.rect;
+    return 1;
 }
-int32_t MicaWin32kGetWindowRect(void* hwnd, MicaWin32kRect* out) {
-    return CopyRect(hwnd,out,false);
-}
+
 int32_t MicaWin32kEnumWindows(void* callback, intptr_t parameter) {
     if (!callback) return 0;
-    using EnumProc = int32_t (*)(void*, intptr_t);
-    auto proc = reinterpret_cast<EnumProc>(callback);
-    const auto windows = TitanWin32kSubsystem::Instance().enumerateTopLevelWindows();
-    for (void* hwnd : windows) {
-        if (!proc(hwnd, parameter)) return 0;
+    MicaWin32kRequest value{};
+    if (!request(MICANT_WIN32K_OP_ENUM_WINDOWS, value)) return 0;
+    using Callback = int32_t (*)(void*, intptr_t);
+    auto enumerate = reinterpret_cast<Callback>(callback);
+    for (uint64_t index = 0; index < value.result; ++index) {
+        if (!enumerate(reinterpret_cast<void*>(value.windowHandles[index]),
+                       parameter)) return 0;
     }
     return 1;
 }
-int32_t MicaWin32kGetWindowTextW(void* hwnd, wchar_t* output, int32_t capacity) {
-    return TitanWin32kSubsystem::Instance().getWindowText(hwnd, output, capacity);
+
+int32_t MicaWin32kGetWindowTextW(void* hwnd, wchar_t* output,
+                                 int32_t capacity) {
+    if (!output || capacity <= 0) return 0;
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    if (!request(MICANT_WIN32K_OP_GET_WINDOW_TEXT, value)) return 0;
+    const uint64_t count = value.result < static_cast<uint64_t>(capacity - 1)
+        ? value.result : static_cast<uint64_t>(capacity - 1);
+    for (uint64_t index = 0; index < count; ++index) output[index] = value.text[index];
+    output[count] = 0;
+    return static_cast<int32_t>(count);
 }
+
 int32_t MicaWin32kIsWindowVisible(void* hwnd) {
-    return TitanWin32kSubsystem::Instance().isWindowVisible(hwnd);
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    return request(MICANT_WIN32K_OP_IS_WINDOW_VISIBLE, value)
+        ? static_cast<int32_t>(value.result) : 0;
 }
+
 int32_t MicaWin32kIsIconic(void* hwnd) {
-    return TitanWin32kSubsystem::Instance().isIconic(hwnd);
+    MicaWin32kRequest value{};
+    value.args[0] = reinterpret_cast<uint64_t>(hwnd);
+    return request(MICANT_WIN32K_OP_IS_ICONIC, value)
+        ? static_cast<int32_t>(value.result) : 0;
 }
+
 void* MicaWin32kGetForegroundWindow() {
-    return TitanWin32kSubsystem::Instance().getForegroundWindow();
+    MicaWin32kRequest value{};
+    return request(MICANT_WIN32K_OP_GET_FOREGROUND_WINDOW, value)
+        ? reinterpret_cast<void*>(value.result) : nullptr;
 }
+
+void* MicaWin32kGetDC(void*) { return nullptr; }
+int32_t MicaWin32kReleaseDC(void*, void*) { return 0; }
+void* MicaWin32kCreateCompatibleDC(void*) { return nullptr; }
+void* MicaWin32kCreateCompatibleBitmap(void*, int32_t, int32_t) { return nullptr; }
+void* MicaWin32kSelectObject(void*, void*) { return nullptr; }
+int32_t MicaWin32kBitBlt(void*, int32_t, int32_t, int32_t, int32_t,
+                         void*, int32_t, int32_t, uint32_t) { return 0; }
+int32_t MicaWin32kPresentDC(void*) { return 0; }
+int32_t MicaWin32kDeleteObject(void*) { return 0; }
+void* MicaWin32kGetStockObject(int32_t) { return nullptr; }
+void* MicaWin32kCreateDibSection(void*, int32_t, int32_t, void** bits) {
+    if (bits) *bits = nullptr;
+    return nullptr;
+}
+
 }
