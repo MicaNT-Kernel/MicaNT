@@ -63,8 +63,13 @@ struct ProcessorControlBlock {
     bool dpcRoutineActive{false};
 };
 
-// Per-CPU simulated KPCR
+// The bootstrap target is single-CPU and has no TLS runtime; hosted builds
+// retain thread-local state for processor-context tests.
+#if defined(MICANT_FREESTANDING)
+inline ProcessorControlBlock g_CurrentCpu{
+#else
 inline thread_local ProcessorControlBlock g_CurrentCpu{
+#endif
     .processorNumber = 0,
     .currentIrql = PASSIVE_LEVEL,
     .interruptCount = 0,
@@ -386,11 +391,26 @@ struct KThreadContext {
     uint64_t rflags{0x202};
     uint64_t rbx{0};
     uint64_t rbp{0};
+    uint64_t rsi{0};
+    uint64_t rdi{0};
     uint64_t r12{0};
     uint64_t r13{0};
     uint64_t r14{0};
     uint64_t r15{0};
+    uint32_t mxcsr{0x1F80};
+    uint16_t x87ControlWord{0x037F};
+    uint16_t reserved{0};
+    alignas(16) std::array<uint8_t, 160> xmm6To15{};
 };
+
+static_assert(offsetof(KThreadContext, rip) == 0);
+static_assert(offsetof(KThreadContext, rsp) == 8);
+static_assert(offsetof(KThreadContext, mxcsr) == 88);
+static_assert(offsetof(KThreadContext, xmm6To15) == 96);
+
+#if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+extern "C" bool MicantAmd64SwitchContext(KThreadContext*, KThreadContext*) noexcept;
+#endif
 
 /**
  * @brief Kernel Thread Object (KTHREAD).
@@ -573,9 +593,9 @@ private:
 // 9. Hardware Context Switcher (KiSwapContext & KiSwapThread)
 // ============================================================================
 /**
- * @brief Clean-room implementation of Dave Cutler's KiSwapContext.
- * Saves outgoing registers, switches address space (CR3) if crossing process
- * boundary, updates per-CPU KPCR state, and restores incoming thread registers.
+ * @brief Cooperative AMD64 context switch for the bootstrap single-CPU path.
+ * The freestanding backend requires DISPATCH_LEVEL, interrupts disabled, and
+ * a shared address space. The hosted backend preserves its state-model behavior.
  *
  * @param outgoing Thread yielding the processor
  * @param incoming Thread taking ownership of the processor
@@ -584,6 +604,33 @@ private:
 inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
     if (!incoming) return false;
 
+#if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+    if (!outgoing || outgoing == incoming ||
+        KeGetCurrentThread() != outgoing ||
+        (outgoing->state != ThreadState::Running &&
+         outgoing->state != ThreadState::Terminated) ||
+        g_CurrentCpu.currentIrql != DISPATCH_LEVEL ||
+        (incoming->state != ThreadState::Initialized &&
+         incoming->state != ThreadState::Ready) ||
+        incoming->context.rip == 0 || incoming->context.rsp == 0 ||
+        outgoing->directoryTableBase != incoming->directoryTableBase) {
+        return false;
+    }
+
+    uint64_t rflags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(rflags));
+    if (rflags & (uint64_t{1} << 9)) {
+        return false;
+    }
+
+    if (outgoing->state == ThreadState::Running) {
+        outgoing->state = ThreadState::Ready;
+    }
+    g_CurrentCpu.currentThread = incoming;
+    g_CurrentCpu.contextSwitches++;
+    incoming->state = ThreadState::Running;
+    return MicantAmd64SwitchContext(&outgoing->context, &incoming->context);
+#else
     // 1. In Windows NT, context switching occurs strictly at DISPATCH_LEVEL
     KIRQL currentIrql = KeGetCurrentIrql();
     bool raisedIrql = false;
@@ -621,6 +668,7 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
         KeLowerIrql(currentIrql);
     }
     return true;
+#endif
 }
 
 // ============================================================================
@@ -800,5 +848,3 @@ inline void KeLeaveGuardedRegion() noexcept {
 }
 
 } // namespace micant::ke
-
-

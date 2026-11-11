@@ -27,6 +27,7 @@ Reproduced from the current sources, not by accepting an old kernel binary:
 |---|---|
 | `python3 qemu.py --build-only` | Passed; kernel, bootloader, driver and manifest generated/validated |
 | `python3 qemu.py --headless` | Passed; ordered serial milestones, stable idle, PS/2 and scanout checks |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Iinclude test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted Ke behavior remains intact |
 | `cmake --build build/qemu-cmake-mingw --target explorer_runtime_boot` | Passed; actual Explorer and windowing DLLs built, not executed |
 | `python3 -m unittest discover -s test -p test_explorer_runtime.py -v` | 12 passed |
 | `python3 scripts/verify_kernel_architecture.py` | Passed |
@@ -286,11 +287,19 @@ static guards or a general shutdown/session lifecycle.
 |---|---|---|
 | M1: freestanding foundation | Partial; PFN heap and kernel constructor/destructor dispatch verified | Shared C++ library/synchronization and broader Executive initialization |
 | M2: Mm + Ob | PFN and canonical kernel handle storage verified | Full mapping/freeing/address spaces, namespace/security and NtClose closure |
-| M3: Ke + Ps | Not integrated | IRQ/timer backend, scheduler, independent address spaces, actual context switching |
+| M3: Ke + Ps | Cooperative AMD64 context switching verified in QEMU | IRQ/timer backend, scheduler, independent address spaces, process/thread lifecycle |
 | M4: Io + syscall | Partial platform boundary only | Canonical driver/device/IRP initialization, completion and NT service routing |
 | M5: Ring 3 processes | Diagnostic only | Real process loader, PEB/TEB/TLS, termination and two concurrent processes |
 | M6: system services | Not integrated | Registry/filesystem/service/console startup and native Win32 session |
 | Interactive Explorer | Not running | Runtime closure, actual shell process, Start/window/message-loop verification |
+
+The Ke bootstrap switch saves/restores the Windows x64 nonvolatile GPRs
+(including RSI/RDI), XMM6-XMM15 and floating-point control words. Its QEMU
+self-test switches between two real stacks, checks preserved-register canaries,
+thread states and five transitions, and returns to the bootstrap stack. The
+backend remains cooperative, single-CPU, interrupt-disabled and limited to a
+shared address space; this does not establish a dispatcher, preemption,
+independent processes or an Explorer process.
 
 The displayed bootstrap taskbar is shared drawing code, not proof of an
 Explorer process. VirtIO 2D scanout is not VirGL or an accelerated DWM.

@@ -6,6 +6,7 @@
 #include "micant/km/executive/freestanding.hpp"
 #include "micant/km/executive/probe.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/core/ke.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
@@ -36,6 +37,17 @@ uint32_t g_mouseY = (kHeight - kCursorSize) / 2;
 uint32_t g_mouseButtons{};
 uint32_t g_mouseSequence{};
 bool pollMouseInput(MicaWin32kInputEvent& event) noexcept;
+micant::ke::KThread g_bootContextThread{};
+micant::ke::KThread g_firstContextThread{};
+micant::ke::KThread g_secondContextThread{};
+alignas(4096) uint8_t g_firstContextStack[32768]{};
+alignas(4096) uint8_t g_secondContextStack[32768]{};
+uintptr_t g_firstContextLocal{};
+uintptr_t g_secondContextLocal{};
+uint32_t g_contextOrder{};
+void serialWriteNumber(uint64_t value) noexcept;
+extern "C" bool MicantVerifyContextSwitch(
+    micant::ke::KThread*, micant::ke::KThread*) noexcept;
 
 void writePort(uint16_t port, uint8_t value) noexcept {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -72,6 +84,136 @@ void serialWrite(const char* text) noexcept {
     for (;;) {
         __asm__ __volatile__("cli; hlt");
     }
+}
+
+void firstContextEntry() noexcept {
+    volatile uint64_t pattern[16]{};
+    for (size_t index = 0; index < 16; ++index) pattern[index] = 0xA100 + index;
+    g_firstContextLocal = reinterpret_cast<uintptr_t>(&pattern[0]);
+    g_contextOrder = g_contextOrder * 10 + 1;
+    if (!MicantVerifyContextSwitch(&g_firstContextThread, &g_secondContextThread)) {
+        stopWithError("[MicaNT Ke] First context register verification failed\r\n");
+    }
+    if (micant::ke::KeGetCurrentThread() != &g_firstContextThread ||
+        g_contextOrder != 12) {
+        stopWithError("[MicaNT Ke] First context resume verification failed\r\n");
+    }
+    for (size_t index = 0; index < 16; ++index) {
+        if (pattern[index] != 0xA100 + index) {
+            stopWithError("[MicaNT Ke] First context stack verification failed\r\n");
+        }
+    }
+    g_contextOrder = g_contextOrder * 10 + 1;
+    g_firstContextThread.state = micant::ke::ThreadState::Terminated;
+    (void)MicantVerifyContextSwitch(&g_firstContextThread, &g_secondContextThread);
+    stopWithError("[MicaNT Ke] Terminated first context resumed\r\n");
+}
+
+void secondContextEntry() noexcept {
+    volatile uint64_t pattern[16]{};
+    for (size_t index = 0; index < 16; ++index) pattern[index] = 0xB200 + index;
+    g_secondContextLocal = reinterpret_cast<uintptr_t>(&pattern[0]);
+    g_contextOrder = g_contextOrder * 10 + 2;
+    if (!MicantVerifyContextSwitch(&g_secondContextThread, &g_firstContextThread)) {
+        stopWithError("[MicaNT Ke] Second context register verification failed\r\n");
+    }
+    if (micant::ke::KeGetCurrentThread() != &g_secondContextThread ||
+        g_contextOrder != 121) {
+        stopWithError("[MicaNT Ke] Second context resume verification failed\r\n");
+    }
+    for (size_t index = 0; index < 16; ++index) {
+        if (pattern[index] != 0xB200 + index) {
+            stopWithError("[MicaNT Ke] Second context stack verification failed\r\n");
+        }
+    }
+    g_contextOrder = g_contextOrder * 10 + 2;
+    g_secondContextThread.state = micant::ke::ThreadState::Terminated;
+    (void)MicantVerifyContextSwitch(&g_secondContextThread, &g_bootContextThread);
+    stopWithError("[MicaNT Ke] Terminated second context resumed\r\n");
+}
+
+[[noreturn]] void contextEntryReturned() noexcept {
+    stopWithError("[MicaNT Ke] Context entry returned unexpectedly\r\n");
+}
+
+void initializeContextThread(
+    micant::ke::KThread& thread,
+    void (*entry)() noexcept,
+    uint8_t* stack,
+    size_t stackSize
+) noexcept {
+    const uintptr_t stackBase = reinterpret_cast<uintptr_t>(stack);
+    if (stackSize < 256 || stackBase > UINTPTR_MAX - stackSize) {
+        stopWithError("[MicaNT Ke] Invalid context stack bounds\r\n");
+    }
+    const uintptr_t stackTop = (stackBase + stackSize) & ~uintptr_t{15};
+    const uintptr_t initialRsp = stackTop - 40;
+    auto* frame = reinterpret_cast<uintptr_t*>(initialRsp);
+    frame[0] = reinterpret_cast<uintptr_t>(&contextEntryReturned);
+
+    thread.kernelStackBase = stackBase;
+    thread.kernelStackTop = stackTop;
+    thread.directoryTableBase = g_bootContextThread.directoryTableBase;
+    thread.context = micant::ke::KThreadContext{};
+    thread.context.rip = reinterpret_cast<uintptr_t>(entry);
+    thread.context.rsp = initialRsp;
+    thread.context.rflags = 0x2;
+    thread.state = micant::ke::ThreadState::Ready;
+}
+
+void verifyKernelContextSwitch() noexcept {
+    using namespace micant::ke;
+    const uintptr_t activeCr3 = g_CurrentCpu.currentCr3;
+    const uint64_t initialSwitchCount = g_CurrentCpu.contextSwitches;
+
+    g_bootContextThread.state = ThreadState::Running;
+    g_bootContextThread.directoryTableBase = activeCr3;
+    g_CurrentCpu.currentThread = &g_bootContextThread;
+    initializeContextThread(
+        g_firstContextThread, firstContextEntry, g_firstContextStack,
+        sizeof(g_firstContextStack));
+    initializeContextThread(
+        g_secondContextThread, secondContextEntry, g_secondContextStack,
+        sizeof(g_secondContextStack));
+
+    const KIRQL previousIrql = KfRaiseIrql(DISPATCH_LEVEL);
+    if (!KiSwapContext(&g_bootContextThread, &g_firstContextThread)) {
+        stopWithError("[MicaNT Ke] Initial AMD64 context switch failed\r\n");
+    }
+    KeLowerIrql(previousIrql);
+
+    const uintptr_t firstStack = reinterpret_cast<uintptr_t>(g_firstContextStack);
+    const uintptr_t secondStack = reinterpret_cast<uintptr_t>(g_secondContextStack);
+    if (g_CurrentCpu.currentThread != &g_bootContextThread ||
+        g_bootContextThread.state != ThreadState::Running) {
+        stopWithError("[MicaNT Ke] Bootstrap context state verification failed\r\n");
+    }
+    if (g_firstContextThread.state != ThreadState::Terminated ||
+        g_secondContextThread.state != ThreadState::Terminated) {
+        stopWithError("[MicaNT Ke] Thread termination state verification failed\r\n");
+    }
+    if (g_contextOrder != 1212) {
+        stopWithError("[MicaNT Ke] Context execution order verification failed\r\n");
+    }
+    if (g_CurrentCpu.currentCr3 != activeCr3) {
+        serialWrite("[MicaNT Ke] current CR3 expected/observed: ");
+        serialWriteNumber(activeCr3);
+        serialWrite("/");
+        serialWriteNumber(g_CurrentCpu.currentCr3);
+        serialWrite("\r\n");
+        stopWithError("[MicaNT Ke] Context address-space verification failed\r\n");
+    }
+    if (g_CurrentCpu.contextSwitches != initialSwitchCount + 5) {
+        stopWithError("[MicaNT Ke] Context switch count verification failed\r\n");
+    }
+    if (g_firstContextLocal < firstStack ||
+        g_firstContextLocal >= firstStack + sizeof(g_firstContextStack) ||
+        g_secondContextLocal < secondStack ||
+        g_secondContextLocal >= secondStack + sizeof(g_secondContextStack) ||
+        g_firstContextLocal == g_secondContextLocal) {
+        stopWithError("[MicaNT Ke] Context stack ownership verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ke] Cooperative AMD64 contexts, stacks, GPR, XMM and FP control verified\r\n");
 }
 
 void serialWriteNumber(uint64_t value) noexcept {
@@ -645,6 +787,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ex] Runtime self-test halted\r\n");
     for (;;) __asm__ __volatile__("cli; hlt");
 #endif
+    verifyKernelContextSwitch();
     initializeDisplay(handoff->displayDriver);
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");

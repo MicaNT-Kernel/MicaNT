@@ -16,6 +16,7 @@ include_directories(
 # Historical sources under old/ are never kernel or driver build inputs.
 set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ke/dispatcher.cpp
+    kernel/ke/context_switch.cpp
     kernel/ke/wait.cpp
     kernel/mm/virtual.cpp
     kernel/io/iomgr.cpp
@@ -224,10 +225,12 @@ if (MICANT_ENABLE_BAREMETAL)
 
     add_executable(ntoskrnl_core_baremetal
         kernel/init/kiinit.cpp
+        kernel/ke/context_switch.cpp
         kernel/hal/amd64_bootstrap.cpp
         kernel/ex/freestanding.cpp
         kernel/ex/libcpp_support.cpp
         kernel/ob/obref.cpp
+        test/kernel_context_canary.cpp
         tools/explorer_shell/desktop.cpp
         tools/explorer_shell/notification_area.cpp
         tools/explorer_shell/taskbar.cpp
