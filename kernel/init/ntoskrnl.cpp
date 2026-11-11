@@ -584,6 +584,142 @@ static void LogKernel(const char* msg) {
     UartSerial::print("\r\n");
 }
 
+static uint8_t KiAcpiChecksum(const uint8_t* bytes, size_t length) {
+    uint8_t sum = 0;
+    for (size_t i = 0; i < length; ++i) sum = static_cast<uint8_t>(sum + bytes[i]);
+    return sum;
+}
+
+static uint32_t KiAcpiReadU32(const uint8_t* bytes) {
+    return static_cast<uint32_t>(bytes[0]) |
+        (static_cast<uint32_t>(bytes[1]) << 8) |
+        (static_cast<uint32_t>(bytes[2]) << 16) |
+        (static_cast<uint32_t>(bytes[3]) << 24);
+}
+
+static uint64_t KiAcpiReadU64(const uint8_t* bytes) {
+    return static_cast<uint64_t>(KiAcpiReadU32(bytes)) |
+        (static_cast<uint64_t>(KiAcpiReadU32(bytes + 4)) << 32);
+}
+
+static bool KiAcpiValidateSdt(uint64_t address, const uint8_t** outBytes, uint32_t* outLength) {
+    if (!address || !outBytes || !outLength) return false;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(address));
+    const uint32_t length = KiAcpiReadU32(bytes + 4);
+    if (length < 36 || length > 16U * 1024U * 1024U || KiAcpiChecksum(bytes, length) != 0)
+        return false;
+    *outBytes = bytes;
+    *outLength = length;
+    return true;
+}
+
+static bool KiInitializeFirmwareAcpi(uint64_t rsdpAddress) {
+    if (!rsdpAddress) {
+        LogKernel("[Acpi] No firmware RSDP was supplied by the loader.");
+        return false;
+    }
+    const auto* rsdp = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(rsdpAddress));
+    constexpr char signature[] = "RSD PTR ";
+    for (size_t i = 0; i < sizeof(signature) - 1; ++i) {
+        if (rsdp[i] != static_cast<uint8_t>(signature[i])) {
+            LogKernel("[Acpi] Firmware RSDP signature is invalid.");
+            return false;
+        }
+    }
+    if (KiAcpiChecksum(rsdp, 20) != 0) {
+        LogKernel("[Acpi] Firmware RSDP v1 checksum is invalid.");
+        return false;
+    }
+
+    const uint8_t revision = rsdp[15];
+    const uint32_t rsdpLength = revision >= 2 ? KiAcpiReadU32(rsdp + 20) : 20;
+    if (revision >= 2 && (rsdpLength < 36 || rsdpLength > 4096 ||
+                          KiAcpiChecksum(rsdp, rsdpLength) != 0)) {
+        LogKernel("[Acpi] Firmware RSDP extended checksum or length is invalid.");
+        return false;
+    }
+
+    const uint64_t xsdtAddress = revision >= 2 ? KiAcpiReadU64(rsdp + 24) : 0;
+    const uint64_t rsdtAddress = KiAcpiReadU32(rsdp + 16);
+    const uint8_t* root = nullptr;
+    uint32_t rootLength = 0;
+    size_t rootEntryWidth = 4;
+    if (xsdtAddress && KiAcpiValidateSdt(xsdtAddress, &root, &rootLength) &&
+        root[0] == 'X' && root[1] == 'S' && root[2] == 'D' && root[3] == 'T') {
+        rootEntryWidth = 8;
+    } else if (KiAcpiValidateSdt(rsdtAddress, &root, &rootLength) &&
+               root[0] == 'R' && root[1] == 'S' && root[2] == 'D' && root[3] == 'T') {
+        rootEntryWidth = 4;
+    } else {
+        LogKernel("[Acpi] Neither XSDT nor RSDT passed signature and checksum validation.");
+        return false;
+    }
+
+    const size_t payloadLength = rootLength - 36;
+    if (payloadLength % rootEntryWidth != 0 || payloadLength / rootEntryWidth > 4096) {
+        LogKernel("[Acpi] Root table has an invalid entry array.");
+        return false;
+    }
+
+    uint32_t validTableCount = 0;
+    uint32_t enabledProcessorCount = 0;
+    bool fadtVerified = false;
+    bool dsdtVerified = false;
+    bool madtVerified = false;
+    const size_t count = payloadLength / rootEntryWidth;
+    for (size_t i = 0; i < count; ++i) {
+        const uint8_t* entry = root + 36 + i * rootEntryWidth;
+        const uint64_t tableAddress = rootEntryWidth == 8 ? KiAcpiReadU64(entry) : KiAcpiReadU32(entry);
+        const uint8_t* table = nullptr;
+        uint32_t tableLength = 0;
+        if (!KiAcpiValidateSdt(tableAddress, &table, &tableLength)) continue;
+        ++validTableCount;
+        if (table[0] == 'F' && table[1] == 'A' && table[2] == 'C' && table[3] == 'P' && tableLength >= 44) {
+            fadtVerified = true;
+            uint64_t dsdtAddress = KiAcpiReadU32(table + 40);
+            if (tableLength >= 148) {
+                const uint64_t extendedDsdtAddress = KiAcpiReadU64(table + 140);
+                if (extendedDsdtAddress) dsdtAddress = extendedDsdtAddress;
+            }
+            const uint8_t* dsdt = nullptr;
+            uint32_t dsdtLength = 0;
+            dsdtVerified = KiAcpiValidateSdt(dsdtAddress, &dsdt, &dsdtLength) &&
+                dsdtLength >= 36 && dsdt[0] == 'D' && dsdt[1] == 'S' && dsdt[2] == 'D' && dsdt[3] == 'T';
+        }
+        if (table[0] != 'A' || table[1] != 'P' || table[2] != 'I' || table[3] != 'C' || tableLength < 44)
+            continue;
+        madtVerified = true;
+        for (size_t offset = 44; offset + 2 <= tableLength;) {
+            const uint8_t type = table[offset];
+            const uint8_t length = table[offset + 1];
+            if (length < 2 || length > tableLength - offset) break;
+            if (type == 0 && length >= 8 && (KiAcpiReadU32(table + offset + 4) & 1U))
+                ++enabledProcessorCount;
+            else if (type == 9 && length >= 16 && (KiAcpiReadU32(table + offset + 8) & 1U))
+                ++enabledProcessorCount;
+            offset += length;
+        }
+    }
+
+    char summary[112]{};
+    copyStr(summary, "[Acpi] RSDP/root/FADT/DSDT/MADT=", sizeof(summary));
+    concatStr(summary, fadtVerified ? "Y/" : "N/", sizeof(summary));
+    concatStr(summary, dsdtVerified ? "Y/" : "N/", sizeof(summary));
+    concatStr(summary, madtVerified ? "Y; valid tables=" : "N; valid tables=", sizeof(summary));
+    char number[16]{};
+    size_t digits = 0;
+    uint32_t value = validTableCount;
+    do { number[digits++] = static_cast<char>('0' + (value % 10)); value /= 10; } while (value && digits < sizeof(number));
+    while (digits) { char digit[2]{number[--digits], '\0'}; concatStr(summary, digit, sizeof(summary)); }
+    concatStr(summary, ", enabled MADT processors=", sizeof(summary));
+    value = enabledProcessorCount;
+    digits = 0;
+    do { number[digits++] = static_cast<char>('0' + (value % 10)); value /= 10; } while (value && digits < sizeof(number));
+    while (digits) { char digit[2]{number[--digits], '\0'}; concatStr(summary, digit, sizeof(summary)); }
+    LogKernel(summary);
+    return true;
+}
+
 static uint64_t BootDriverTranslateVirtualAddress(void*, const void* address) {
     uint64_t cr3 = 0;
 #if defined(__x86_64__)
@@ -2930,7 +3066,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     LogKernel("[ExtFS] Linux Ext4 Partition Found at LBA 2 (Magic 0xEF53 Valid).");
     LogKernel("[ExtFS] Auto-Mounted \\DosDevices\\E: -> Strict Read-Only Enforced.");
     LogKernel("[ExtFS] Verified /etc/os-release: 'Ubuntu 24.04 LTS (Noble)'.");
-    LogKernel("[Po] ACPI 2.0 RSDP Table Verified (S0 Working State Active).");
+    (void)KiInitializeFirmwareAcpi(lpb->acpiTablePhysicalAddress);
     LogKernel("[Kd] Kernel Debugger Active on COM1 UART (115200 8N1).");
 
     // High-Half Canonical Kernel Paging (Horizon 96 / Suite 340)
