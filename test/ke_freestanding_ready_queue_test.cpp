@@ -2,6 +2,8 @@
 
 #include <cassert>
 
+extern "C" bool MicantTestKeReadyQueue() noexcept;
+
 int main() {
     using namespace micant::ke;
     auto& scheduler = PriorityScheduler::get();
@@ -37,5 +39,11 @@ int main() {
     assert(KeGetCurrentIrql() == PASSIVE_LEVEL);
     first.state = ThreadState::Waiting;
     assert(scheduler.readyKThread(&first));
+    assert(!MicantTestKeReadyQueue());
+    assert(scheduler.getReadyThreadCount() == 1 && first.readyQueued);
     assert(scheduler.selectNextThread() == &first);
+    assert(MicantTestKeReadyQueue());
+    assert(MicantTestKeReadyQueue());
+    assert(g_CurrentCpu.contextSwitches == switches);
+    assert(KeGetCurrentIrql() == PASSIVE_LEVEL);
 }

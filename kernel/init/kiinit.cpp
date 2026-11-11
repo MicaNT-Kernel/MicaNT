@@ -49,6 +49,7 @@ uint32_t g_contextOrder{};
 void serialWriteNumber(uint64_t value) noexcept;
 extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
+extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 
 void writePort(uint16_t port, uint8_t value) noexcept {
@@ -833,6 +834,10 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ob] Kernel handle verification failed\r\n");
     }
     serialWrite("[MicaNT Ob] Canonical kernel handle storage and references verified\r\n");
+    if (!MicantTestKeReadyQueue()) {
+        stopWithError("[MicaNT Ke] Ready-queue withdrawal verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ke] Ready-queue withdrawal verified\r\n");
 #if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
     if (!micant::ex::test::verifyCxxAfterInitialization() ||
         !micant::ex::shutdownBootstrapCxxRuntime() ||

@@ -487,7 +487,7 @@ public:
     [[nodiscard]] bool readyKThread(KThread* thread) noexcept {
         if (!thread) return false;
         SpinLockGuard guard(lock_);
-        if (thread->readyQueued ||
+        if (thread == KeGetCurrentThread() || thread->readyQueued ||
             (thread->state != ThreadState::Initialized &&
              thread->state != ThreadState::Ready &&
              thread->state != ThreadState::Waiting)) {
@@ -504,6 +504,34 @@ public:
         queue.tail = thread;
         ++totalReadyThreads_;
         return true;
+    }
+
+    // Withdraw only a queued thread. Transition is an internal handoff to
+    // its lifecycle owner, not termination or a Windows termination API.
+    // The owner must keep the thread alive and serialize further transitions.
+    [[nodiscard]] bool removeReadyThread(KThread* thread) noexcept {
+        if (!thread) return false;
+        SpinLockGuard guard(lock_);
+        if (!thread->readyQueued || thread == KeGetCurrentThread()) return false;
+        // Priority may have changed since insertion, so search every queue.
+        for (auto& queue : runQueues_) {
+            KThread* previous = nullptr;
+            for (KThread* current = queue.head; current; current = current->readyNext) {
+                if (current != thread) {
+                    previous = current;
+                    continue;
+                }
+                if (previous) previous->readyNext = current->readyNext;
+                else queue.head = current->readyNext;
+                if (queue.tail == current) queue.tail = previous;
+                current->readyNext = nullptr;
+                current->readyQueued = false;
+                current->state = ThreadState::Transition;
+                --totalReadyThreads_;
+                return true;
+            }
+        }
+        return false;
     }
 
     [[nodiscard]] KThread* selectNextThread() noexcept {

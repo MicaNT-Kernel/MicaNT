@@ -29,6 +29,7 @@ EXPECTED_BOOTSTRAP_SERIAL = (
     "[MicaNT Mm] Canonical VAD tree exclusion and cleanup verified",
     "[MicaNT Ex] Kernel C++ constructors dispatched",
     "[MicaNT Ob] Canonical kernel handle storage and references verified",
+    "[MicaNT Ke] Ready-queue withdrawal verified",
 )
 EXPECTED_RUNTIME_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ex] Compiler-generated construction and LIFO teardown verified",

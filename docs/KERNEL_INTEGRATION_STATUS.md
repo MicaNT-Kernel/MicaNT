@@ -85,6 +85,23 @@ integration.
 
 ## Integration increments
 
+### Bootstrap Ke ready-queue withdrawal
+
+The freestanding `PriorityScheduler` can withdraw a queued thread and place it
+in the internal `Transition` state for its lifecycle owner. It also rejects
+queueing the current thread. The boot test exercises head, middle and tail
+withdrawal, changed priority, requeueing, and FIFO order. This does not
+implement thread termination, preemption, SMP scheduling, or interrupt-safe
+synchronization; callers must retain thread ownership and keep interrupts
+disabled in the bootstrap.
+
+| Command | Result |
+|---|---|
+| `python3 qemu.py --headless` | Passed; ready-queue withdrawal marker and existing boot checks |
+| `python3 qemu.py --headless --runtime-selftest` | Passed; ready-queue withdrawal and runtime teardown |
+| `clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/ke_freestanding_ready_queue_test.cpp test/kernel_ke_ready_queue_test.cpp -o build/ke-freestanding-ready-test && build/ke-freestanding-ready-test` | Passed; queue and withdrawal regression |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -Iinclude test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted context regression |
+
 ### Bootstrap PFN-backed paging and VAD tree
 
 The AMD64 bootstrap now obtains intermediate page-table pages from the
@@ -171,7 +188,7 @@ the broader Ke comparison and ReactOS reference paths remain recorded in
 
 | Command | Result |
 |---|---|
-| `clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -I include test/ke_freestanding_ready_queue_test.cpp -o build/ke-freestanding-ready-test && build/ke-freestanding-ready-test` | Passed on the host; priority, FIFO, duplicate, state and counter checks |
+| `clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/ke_freestanding_ready_queue_test.cpp test/kernel_ke_ready_queue_test.cpp -o build/ke-freestanding-ready-test && build/ke-freestanding-ready-test` | Passed on the host; priority, FIFO, duplicate, state and counter checks |
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -I include test/ke_context_hosted_test.cpp -o build/ke-context-hosted-test && build/ke-context-hosted-test` | Passed; hosted context regression |
 | `python3 qemu.py --headless` | Passed; ready-queue marker, cooperative context canaries, boot, scanout and PS/2 checks |
 
