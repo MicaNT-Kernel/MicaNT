@@ -2,51 +2,21 @@
 
 Thank you for your interest in contributing to **MicaNT**!
 
-MicaNT is a modern, sovereign, zero-telemetry C++23 operating system executive and kernel honoring Dave Cutler's 1988 MICA architecture. Because MicaNT is a **strict clean-room engineering project**, all contributions must comply with our non-contamination rules to ensure absolute legal and architectural purity.
+MicaNT is a C++23 operating system kernel and executive. Contributions should follow the research, reuse, rewrite, and integration approach in [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md), while preserving MicaNT's single modular-kernel architecture and Windows compatibility contracts.
 
 ---
 
-## 1. Clean-Room Non-Contamination Rules
+## 1. Research and implementation references
 
-Before writing or submitting any code, review **[docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md)** and **[docs/LEGAL.md](docs/LEGAL.md)**.
+Before changing a subsystem, inspect its current implementation, applicable Microsoft contract, and relevant public references.
 
-### Strictly Prohibited
-- ❌ **No Leaked Code**: Never view, possess, quote, or reference leaked Windows NT 4.0, Windows 2000, Windows XP, or Windows Research Kernel (WRK) source trees.
-- ❌ **No Decompiled Code**: Never paste or port disassembly/decompilation dumps from tools like IDA Pro or Ghidra (`sub_*`, `qword_*`, raw register dumps).
-- ❌ **No Copyrighted Binary Assets**: Never bundle proprietary Microsoft DLLs, EXEs, SYS drivers, fonts, or icons.
+Primary contract references:
 
-### Permitted & Authorized Sources
-- ✅ **Official Metadata**: Microsoft's MIT-licensed repository: [`https://github.com/microsoft/win32metadata`](https://github.com/microsoft/win32metadata).
-- ✅ **Public Documentation**: Microsoft Learn / MSDN technical articles, public Windows Driver Kit (WDK) documentation, and published RFC / IEEE / NIST specifications.
-- ✅ **Clean-Room Independent Authorship**: Reimplementing functionality and data structures from first principles in modern ISO C++23.
+- Microsoft's [`win32metadata`](https://github.com/microsoft/win32metadata), Microsoft Learn, and public WDK documentation.
+- Relevant open-source implementation and test references, including ReactOS for NT kernel behavior and Wine for user-mode behavior.
+- Other public technical projects where their subject matter is relevant.
 
----
-
-## 2. 🔷 Special Channel: Microsoft Employees & OSPO Contributions
-
-MicaNT warmly welcomes contributions from **Microsoft employees, architects, and engineering teams**.
-
-If you are a Microsoft employee contributing code or architectural improvements authorized by Microsoft's **Open Source Programs Office (OSPO)** and **Legal (LCA)**:
-
-### How to Submit an Authorized Microsoft Contribution:
-1. Ensure your contribution is authorized under Microsoft's internal open-source contribution policy.
-2. Author your commits using your corporate `@microsoft.com` git email address.
-3. Include official tracking trailers in your commit message:
-
-```git
-feat(subsystem): refine executive component implementation
-
-Detailed technical explanation of the changes made...
-
-MS-OSPO-Approved: OSPO-2026-10492
-Microsoft-Legal-Clearance: LCA-OSS-88319
-Signed-off-by: Jane Doe <janedoe@microsoft.com>
-```
-
-### Why This Is Trackable and Legally Sound:
-- **First-Party Licensing**: Microsoft holds the underlying intellectual property and explicitly authorizes the open-source contribution under standard open-source licenses (MIT/Apache 2.0).
-- **Automated CI Recognition**: MicaNT's Clean-Room Sentinel CI automatically detects `@microsoft.com` identities and `MS-OSPO-Approved` trailers, waiving generic internal leak heuristics for authorized Microsoft technical structures.
-- **Audit Paper Trail**: The commit metadata permanently preserves Microsoft's internal OSPO and LCA tracking references in the git log, allowing Microsoft's legal and compliance teams to verify provenance at any time.
+Apply appropriate usage terms when incorporating external code, retain required notices, and do not use leaked/confidential source, decompiled proprietary implementation, or proprietary binary assets. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md). No particular external implementation or architecture is mandatory; preserve valid MicaNT code and make focused, testable changes in the canonical subsystem.
 
 ---
 
@@ -76,7 +46,9 @@ Signed-off-by: Jane Doe <janedoe@microsoft.com>
 ## 4. Development Workflow
 
 ### 1. Build and Test Locally
-Ensure the full test suite passes with 100% success before submitting:
+Run the relevant existing tests and report their exact results. Host tests do
+not replace freestanding build or QEMU validation when the change affects
+those paths:
 
 ```bash
 # Configure and compile the host test runner:
@@ -87,22 +59,22 @@ cmake --build build --target micant_tests
 .\build\host\micant_tests.exe
 ```
 
-### 2. Run the Clean-Room Sentinel Audit
-Run the automated provenance sentinel against your local changeset:
+### 2. Run the repository checks
+Run the checks relevant to the change. The sentinel is a repository-specific static check, not proof of compatibility or provenance:
 
 ```bash
 node scripts/clean_room_sentinel.js
 ```
 
-Ensure the verdict reports `PASSED: Clean-Room Status: Clean` (or `Microsoft OSPO Authorized` for Microsoft corporate contributions).
+Review the command output and report what was run and its result.
 
 ### 3. Open a Pull Request
 - Fill out the provided **[Pull Request Template](.github/pull_request_template.md)**.
-- Confirm the Clean-Room Non-Contamination checklist.
-- The automated Clean-Room Sentinel GitHub Action will audit the PR diff and post the provenance report.
+- Include the affected subsystem, implementation behavior, and relevant validation evidence.
+- The automated Clean-Room Sentinel GitHub Action may run its configured checks; it does not replace contract review or tests.
 
 ---
 
 ## 5. Community Code of Conduct
 
-All contributors and community participants in Project MICA are expected to adhere to the standards outlined in our **[Code of Conduct](CODE_OF_CONDUCT.md)**. We are committed to maintaining a welcoming, inclusive, and harassment-free environment for everyone, grounded in respectful technical collaboration and clean-room provenance integrity.
+All contributors and community participants in Project MICA are expected to adhere to the standards outlined in our **[Code of Conduct](CODE_OF_CONDUCT.md)**. We are committed to maintaining a welcoming, inclusive, and harassment-free environment for everyone, grounded in respectful technical collaboration.

@@ -1,11 +1,11 @@
 # MicaNT (Project MICA)
 
-> **"The cleanest NT architecture on Earth."**  
-> An open-source, zero-telemetry, modern C++23 NT-compatible operating system kernel and executive, built as a **strict clean-room implementation** using Microsoft's official [`win32metadata`](https://github.com/microsoft/win32metadata) repository for interface reference.
+> **"The cleanest NT architecture on Earth."**
+> An open-source, zero-telemetry, modern C++23 NT-compatible operating system kernel and executive. Its architecture and public interfaces are developed against Microsoft's [`win32metadata`](https://github.com/microsoft/win32metadata), Microsoft Learn, and WDK contracts.
 
 [![Website: micant.org](https://img.shields.io/badge/Website-micant.org-4CAF50.svg?logo=googlechrome&logoColor=white)](https://micant.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Clean Room: Certified](https://img.shields.io/badge/Clean%20Room-Certified-success.svg)](docs/CLEAN_ROOM.md)
+[![NT Compatibility: In Progress](https://img.shields.io/badge/NT%20Compatibility-In%20Progress-orange.svg)](docs/KERNEL_ARCHITECTURE.md)
 [![Contributing: Guide](https://img.shields.io/badge/Contributing-Guide-blue.svg)](CONTRIBUTING.md)
 [![Standard: C++23](https://img.shields.io/badge/Language-C%2B%2B23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![Reference: win32metadata](https://img.shields.io/badge/Reference-microsoft%2Fwin32metadata-purple.svg)](https://github.com/microsoft/win32metadata)
@@ -76,13 +76,8 @@ substitutes host Windows DLLs or synthetic import trampolines.
 ---
 
 > [!IMPORTANT]
-> **CLEAN-ROOM IMPLEMENTATION & REFERENCE NOTICE**  
-> MicaNT is a **100% clean-room engineering project**. All kernel subsystems, memory managers, schedulers, and object tables are original implementations authored in modern ISO C++23.  
-> 
-> System service interfaces, data structures, and status codes are referenced and auto-generated strictly from Microsoft's MIT-licensed open-source repository:  
-> **[`https://github.com/microsoft/win32metadata`](https://github.com/microsoft/win32metadata)**  
-> 
-> In accordance with the U.S. Supreme Court precedent in *Google LLC v. Oracle America, Inc.* (2021), reimplementing functional declaring code and interface signatures for binary interoperability is protected fair use. No proprietary or leaked Microsoft source code was used or referenced. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md), [docs/LEGAL.md](docs/LEGAL.md), [CONTRIBUTING.md](CONTRIBUTING.md), and our [Open Statement to Microsoft Corporation](docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation) for full compliance documentation and partnership intent.
+> **Research and implementation references**
+> MicaNT uses public Microsoft interface metadata and documentation to establish Windows contracts, and may study relevant open-source implementations to understand behavior, algorithms, dependencies, and tests. External code is reused or adapted only where its applicable terms permit; otherwise it is a reference for an implementation integrated into MicaNT's canonical C++23 subsystem architecture. Leaked or confidential source and decompiled proprietary implementation are not used. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -140,49 +135,36 @@ Linux is the undisputed king of cloud servers, but on personal workstations and 
 
 ---
 
-### 3. Why Not ReactOS?
-ReactOS is an inspiring, historic effort, but it was architected in **1996** under vastly different paradigms:
-- **Legacy 1990s C vs. Modern ISO C++23**: ReactOS is written in ANSI C99 with raw pointers, macro magic, manual memory tracking, and vulnerability-prone buffer handling. MicaNT is authored in **pure ISO C++23** with RAII, concepts, compile-time bounds checking, and atomic synchronization.
-- **Target Architecture**: ReactOS targets 32-bit (x86) Windows Server 2003 / Windows XP compatibility. MicaNT is **exclusively 64-bit (`x86_64` and `ARM64`)**, discarding 16-bit real-mode shims, WOW16, and obsolete legacy hooks.
-- **Clean-Room & Metadata Foundation**: ReactOS historically suffered from clean-room contamination concerns and source audit halts. MicaNT is built from day zero using **Microsoft's official open-source [`win32metadata`](https://github.com/microsoft/win32metadata) repository** and is continuously verified by automated AI clean-room sentinel audits.
-- **Footprint & Performance**: ReactOS requires hundreds of megabytes of RAM; MicaNT idles at **< 32 MB of RAM** and boots to an interactive console in **< 50 milliseconds**.
+### 3. Researching NT implementations
+ReactOS and Wine are useful public technical references for understanding subsystem behavior, dependency order, algorithms, and compatibility tests. MicaNT compares those references with Microsoft's documented contracts and its own existing code; it keeps its single modular-kernel architecture and adopts only changes that fit the canonical subsystem owner. Their internal designs are references, not an architecture MicaNT must reproduce.
 
 ---
 
-### 4. Why Not Commercial Windows?
+### 4. Project goals
 Modern commercial Windows has drifted far from its origin as a developer-first operating system:
 - **Gigabytes of Telemetry & Adware**: Modern consumer Windows ships with mandatory background diagnostic collection, advertising identifiers, Cortana/Copilot telemetry daemons, Edge background tasks, and sponsored Start Menu tiles.
 - **Memory Overhead**: An idle Windows 11 installation consumes **4 GB to 8 GB of RAM** before opening a single user application.
 - **Uncontrolled Updates**: Forced restarts, background update thrashing, and telemetry services prioritize corporate metrics over user control.
 - **Forced Online Accounts & Cloud Enclosure**: Mandatory Microsoft account logins, OneDrive auto-redirection, and cloud dependency erode local sovereign ownership of hardware.
 
-**MicaNT is 100% Sovereign**:
-- **Zero Telemetry**: No network beacons, no tracking GUIDs, no diagnostic logging.
-- **Sub-32 MB Idle Memory**: The full executive, object manager, scheduler, and console environment run in less memory than a single Chrome tab.
-- **Instant Boot**: Boots to an interactive console shell in under **50 milliseconds**.
-- **User-Controlled Hardware**: Your computer belongs to you. No forced updates, no remote revocation, no background telemetry.
+MicaNT targets local operation without telemetry and a user-controlled system. Memory footprint, boot-time, and compatibility targets are not current verified capabilities; see the status section above and the integration documents for evidence.
 
 ---
 
 ### Architectural Comparison Matrix
 
-| Feature | MicaNT | Windows 11 | ReactOS | Linux (Modern) |
-| :--- | :---: | :---: | :---: | :---: |
-| **Language Standard** | **ISO C++23** | C / C++ (Legacy MSVC) | ANSI C99 | C11 / Rust (Partial) |
-| **Architecture Target** | **x86_64 / ARM64** | x86_64 / ARM64 | x86 (32-bit focus) | Universal |
-| **Idle Memory Footprint** | **< 32 MB** | 4,000 – 8,000 MB | ~150 – 300 MB | ~400 – 1,200 MB |
-| **Cold Boot Time** | **< 50 ms** | 10 – 30 seconds | 2 – 5 seconds | 1 – 5 seconds |
-| **Background Telemetry** | **ZERO (0%)** | Continuous | None | Distro-dependent |
-| **Interface Reference** | **win32metadata (MIT)** | Proprietary Closed | Reverse Engineered | POSIX / Linux ABI |
-| **Clean-Room Sentinel CI** | **Verified (Automated)** | Closed Source | Manual Review | Open Source |
-| **I/O Model** | **Proactive IOCP** | Proactive IOCP | Proactive IOCP | Reactive epoll / io_uring |
-| **Kernel Windowing in Ring 0** | **NO (Clean Isolation)** | YES (`win32kfull.sys`) | YES (`win32k.sys`) | NO (Userland Wayland/X11) |
+| Feature | MicaNT current evidence | MicaNT direction |
+| :--- | :--- | :--- |
+| **Kernel** | One modular `ntoskrnl_core`; AMD64 bootstrap booted in QEMU | One modular NT-compatible kernel |
+| **Architecture** | AMD64 bootstrap verified; ARM64 not verified | AMD64 with ARM64 preparation |
+| **Desktop** | VirtIO 2D desktop/taskbar and diagnostic Ring 3 path verified; not Explorer | Explorer as a real user process |
+| **NT compatibility** | Partial; per-interface evidence is tracked separately | Compatibility with the selected NT profile |
 
 ---
 
 ## 3. Key Pillars
 
-MicaNT is engineered around foundational architectural tenets that deliver complete 64-bit Windows NT application compatibility without the historical technical debt, telemetry probes, or multi-gigabyte footprint of legacy systems:
+MicaNT is engineered around these architectural goals; the subsystem catalog is not proof of implementation or compatibility:
 
 1. **Modern C++23 Core & Zero Legacy Debt**: Built with RAII, concepts, compile-time type safety, and atomic synchronization. No naked pointers or raw un-checked buffers.
 2. **Metadata-Driven Syscall Surface**: The entire `Zw*` / `Nt*` system call table, types, and NTSTATUS codes are auto-generated from Microsoft's MIT-licensed [`win32metadata`](https://github.com/microsoft/win32metadata) repository.
@@ -195,7 +177,7 @@ MicaNT is engineered around foundational architectural tenets that deliver compl
 6. **Native 64-bit Windows PE Execution**: Direct execution of standard 64-bit Windows console binaries (`x86-64` / `ARM64`) with PE `.idata`/`.reloc` binding, userland `TEB`/`PEB` layout, and full `ntdll.dll` / `kernel32.dll` runtime bridges.
 7. **Complete Zero Telemetry**: Pure sovereign computing with no telemetry probes, no advertising IDs, no diagnostic tracking, and no network dial-home.
 
-> 📖 **Complete Subsystem Reference**: For an exhaustive, item-by-item technical specification of all subsystems, driver models, graphics pipelines, and userland services, see **[docs/KEY_PILLARS.md](docs/KEY_PILLARS.md)**.
+> 📖 **Subsystem catalog**: [docs/KEY_PILLARS.md](docs/KEY_PILLARS.md) lists intended surfaces. Verified implementation status is maintained in [docs/KERNEL_ARCHITECTURE.md](docs/KERNEL_ARCHITECTURE.md) and [docs/KERNEL_INTEGRATION_STATUS.md](docs/KERNEL_INTEGRATION_STATUS.md).
 
 ---
 

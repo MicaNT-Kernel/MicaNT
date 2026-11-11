@@ -177,10 +177,11 @@ the same.
 ## F. Legacy policy and migration matrix
 
 The archived `old/monolithic-kernel/ntoskrnl.cpp` is excluded from active
-source scans, compilation, linking, staging, installation, and symbol
-resolution. No new implementation may be copied from it. Its history is
-preserved by Git; migration work must be independently implemented in the
-canonical owner.
+compilation, linking, staging, installation, and symbol resolution. It may be
+consulted as historical MicaNT behavior and migration evidence, but it is not
+a supported kernel or an alternate source of active symbols. Any retained or
+adapted behavior must be reviewed and integrated into its canonical subsystem
+owner; the archived kernel itself must never be restored as a second kernel.
 
 | Legacy function area | Canonical destination | Current migration status |
 |---|---|---|
@@ -194,9 +195,9 @@ canonical owner.
 | PE image loading | Native loader + `Ps` | Bounded canonical PE view/module binding tested on host; mapped compiled diagnostic executes at CPL3 in QEMU; process/DLL initialization remains pending |
 | AHCI, USB/HID, and boot storage | `Io` + canonical drivers + `Hal` | Driver headers/implementations exist; boot-start integration is not verified; the QEMU bootstrap separately polls PS/2 mouse packets for a software cursor |
 | Display and shell input | Boot video + `Hal` / display driver | Separate VirtIO 2D driver presents shared desktop/taskbar and cursor; mouse movement and click delivery verified, but no Start/menu/window actions or user-mode Explorer session |
-| Bare-metal Object Manager | `Ob` | Host implementation exists; no freestanding boot integration |
-| Bare-metal I/O Manager | `Io` | Host implementation exists; no freestanding boot integration |
-| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | PFN-backed C/C++ bootstrap allocation and memory/string primitives verified without hosted CRT; polls PS/2 with interrupts disabled; shared C++ library/lifecycle, scheduler and Executive idle thread remain pending |
+| Bare-metal Object Manager | `Ob` | Canonical global handle table initialized by the freestanding C++ lifecycle; bounded create/duplicate/reference/close accounting verified in QEMU; namespace and native `NtClose` integration remain pending |
+| Bare-metal I/O Manager | `Io` | Host implementation exists; no freestanding IRP/device-stack integration; the display driver's private boot contract is not WDK loading |
+| Runtime and idle loop | `Ex`, `Ke`, `kernel/init/` | PFN-backed allocation, global constructors, bounded LIFO destructors, and physical-page reclamation verified in QEMU; polls PS/2 with interrupts disabled; general scheduler and Executive idle thread remain pending |
 
 This matrix is a migration inventory, not evidence that these functions
 already work on hardware.
@@ -349,3 +350,24 @@ PE table validation follows the public
 [Microsoft PE/COFF format specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format);
 the CRT API-set preflight follows the
 [Universal CRT deployment contract](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment).
+
+## I. Reference implementation research and coverage inventories
+
+The implementation method is **Study → Compare → Reuse → Redesign →
+Modernize → Optimize → Validate → Integrate**. Microsoft documentation and
+`win32metadata` establish the external Windows contract; ReactOS is a priority
+behavioral and architectural reference for kernel NT, and Wine is useful for
+user-mode behavior. A reference does not override the Microsoft contract or
+the canonical MicaNT subsystem owner. Reuse or adaptation is limited to code
+whose applicable terms permit it; otherwise, use the reference to inform a
+MicaNT implementation.
+
+[`NT_KERNEL_EXPANSION_MATRIX.md`](NT_KERNEL_EXPANSION_MATRIX.md) records
+subsystem responsibilities, dependencies, tests, and current evidence-backed
+MicaNT status. [`NT_ABI_STRUCTURE_MATRIX.md`](NT_ABI_STRUCTURE_MATRIX.md)
+separates public and partially visible layouts from private internal
+structures and tracks ABI assertions still needed. Both are inventories, not
+claims of completed compatibility. The optional
+[`scripts/nt_reference_inventory.py`](../scripts/nt_reference_inventory.py)
+scans a local ReactOS checkout for candidate definitions, files, and tests;
+its lexical results are discovery aids and require semantic review.

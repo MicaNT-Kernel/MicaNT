@@ -1,17 +1,18 @@
 # MicaNT Kernel & Subsystem Architecture Specification
 
-> This document is a subsystem catalog. For the authoritative active-kernel
-> design, build targets, boot status, and migration policy, see
+> This is a catalog of source areas and intended subsystem ownership, not a
+> claim that every listed operation is complete or verified. For the
+> authoritative active-kernel design, build targets, boot status, and migration policy, see
 > [KERNEL_ARCHITECTURE.md](KERNEL_ARCHITECTURE.md).
 
 ## 1. Canonical Source Tree Hierarchy (`base/ntos` & `WDK` Layout)
 
-MicaNT enforces a strict separation between **Kernel-Mode (`km`)**, **User-Mode (`um`)**, **Mode-Neutral Shared Contracts (`shared`)**, and **Compiled Kernel Subsystems (`kernel/`)**. Zero loose files are permitted in root directories; this invariant is verified on every commit by `scripts/clean_room_sentinel.js`.
+MicaNT separates **Kernel-Mode (`km`)**, **User-Mode (`um`)**, **Mode-Neutral Shared Contracts (`shared`)**, and **Compiled Kernel Subsystems (`kernel/`)**. The table describes intended ownership and representative source locations; actual completeness is tracked in the integration status documents.
 
 | Layer | Path | Responsibility |
 | :--- | :--- | :--- |
 | **UEFI Bootloader** | `boot/bootx64.cpp` | Bare-metal UEFI GOP framebuffer setup, memory map ingestion, Loader Parameter Block (`LPB`) construction, and Ring-0 handover. |
-| **Kernel Init** | `kernel/init/kiinit.cpp` | Hosted initialization harness; not a freestanding kernel entry. |
+| **Kernel Init** | `kernel/init/kiinit.cpp` | Shared initialization and bootstrap wiring; host and bare-metal entry paths have distinct roles. |
 | **Microkernel (`Ke`)** | `kernel/ke/`, `include/micant/km/core/` | IRQL state machine, 32-queue scheduler, DPC/APC queues, Wait blocks, Timers, Trap/Exception frames (`trap.hpp`), Kernel Debugger (`kd.hpp`), and SSDT (`dispatcher.cpp`). |
 | **Executive (`Ex`, `Ob`, `Mm`, `Io`, `Cc`, `Ps`, `Se`, `Cm`, `Lpc`, `PnP`, `Po`)** | `kernel/{ex,ob,mm,io,cc,ps,se,cm,lpc,pnp,po}/`, `include/micant/km/executive/` | Pool allocator (`NonPagedPool`/`PagedPool`), Object Manager namespace & handle tables, VAD/PFN Memory Manager, I/O Manager & Filter Manager (`fltmgr.hpp`), 256 KB VACB Cache Manager (`cc.hpp`), Process/Thread/Job Manager, Security Reference Monitor, Registry Hive Configuration Manager, ALPC, KMDF (`wdf.hpp`), PnP, Power, and Crash Dump/BugCheck engine (`bugcheck.hpp`). |
 | **HAL (`Hal`)** | `kernel/hal/`, `include/micant/km/hal/` | KPCR/KPRCB (`GS:[0]`), Local APIC / IOAPIC / HPET, ACPI 6.5 AML interpreter (`acpi.hpp`), PCIe Root Complex (`pci.hpp`), IOMMU (`iommu.hpp`), UEFI Runtime Services, and ARM64 VMSA (`arm64.hpp`). |
@@ -39,12 +40,12 @@ MicaNT enforces a strict separation between **Kernel-Mode (`km`)**, **User-Mode 
 
 ---
 
-## 3. Verification Battery (`test/test_runner.cpp`)
+## 3. Verification
 
-MicaNT ships with a **334-suite automated verification battery** (118 Horizons, 90 Units, 44 PE32+ System32 DLLs) covering all microkernel, executive, HAL, driver, user-mode subsystem, and real-world FOSS application compatibility horizons, paired with `scripts/clean_room_sentinel.js` for continuous clean-room provenance and directory architecture enforcement.
+Host unit tests, freestanding build checks, and QEMU/OVMF integration tests cover different behaviors. Passing one level does not establish another. Run the tests documented in the repository and consult [KERNEL_ARCHITECTURE.md](KERNEL_ARCHITECTURE.md) and [KERNEL_INTEGRATION_STATUS.md](KERNEL_INTEGRATION_STATUS.md) for verified milestones and remaining work.
 
 ---
 
-## 4. Bare-Metal Silicon Hardware Verification
+## 4. Bare-Metal Verification
 
-MicaNT is validated on real physical hardware (Intel Xeon E3-1270 v6, Supermicro X11SSH-F / Intel S1200SP, ASPEED AST2400 GOP framebuffer). For complete architectural details on hardware MSR cycle counters (`IA32_MPERF` MSR `0xE7`), ACPI MADT multi-core APIC topology normalization, and vectorized GOP MMIO burst fills, see [`docs/BAREMETAL_TELEMETRY.md`](BAREMETAL_TELEMETRY.md).
+The currently documented bare-metal verification uses QEMU/OVMF; do not infer physical-hardware support from source declarations or host tests. The QEMU boot path and its limits are described in [KERNEL_ARCHITECTURE.md](KERNEL_ARCHITECTURE.md).

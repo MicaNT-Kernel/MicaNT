@@ -10,12 +10,13 @@ These rules apply to every change in this repository. Read them together with `R
 - Keep private implementation details private. Internal helpers are allowed only when they do not alter or masquerade as the Windows ABI.
 - Treat compatibility as an implementation requirement to be verified, not as a claim that an unimplemented surface is already 100% compatible.
 
-## Clean-room implementation and dependencies
+## Research, reuse, rewrite, and integrate
 
-- Write new, independent MicaNT implementations in the repository's established C++23 architecture. Public documentation and interface metadata may guide behavior; they do not authorize copying implementation code.
-- Do not import, vendor, port, or copy source code or assets from ReactOS, Wine, Windows, or another external project. Such projects may be consulted only as structural or behavioral references when the task permits it; implement the functionality anew.
+- Study public specifications, metadata, tests, and relevant open-source implementations (including ReactOS and Wine) when useful. Compare their behavior and architecture with the existing MicaNT implementation before changing code.
+- Reuse or adapt external code only when its license and required notices permit that use; otherwise use it as a technical reference and implement the required behavior in MicaNT. Preserve required attribution and notices. Do not copy leaked or confidential source, decompiled proprietary implementation, or proprietary assets.
+- Prefer preserving valid MicaNT code, then completing or correcting it. Rewrite only when technically justified. Rework adopted algorithms to fit MicaNT's C++23 conventions and canonical subsystem boundaries; do not disguise provenance by renaming or reformatting.
 - Do not add external runtime libraries or dependencies. Use the repository's existing code and approved toolchain. A proposed build-time tool or dependency must be justified against the project documentation before being introduced.
-- Do not use leaked or confidential source, decompiled proprietary binaries, or copyrighted Microsoft binaries/assets. Follow the clean-room requirements in `CONTRIBUTING.md` and `docs/CLEAN_ROOM.md`.
+- Do not use leaked or confidential source, or decompiled proprietary binaries. Do not add third-party code or assets without permission under their applicable terms. Follow `CONTRIBUTING.md` and `docs/CLEAN_ROOM.md`.
 
 ## Architecture and implementation
 
@@ -35,3 +36,7 @@ These rules apply to every change in this repository. Read them together with `R
 ## Single modular kernel policy
 
 MicaNT has one canonical modular kernel. All kernel subsystem development must target the modular `ntoskrnl_core` architecture and its bare-metal entry point. The archived monolithic kernel under `old/` is historical reference only and must never be built, linked, staged, or used to satisfy missing symbols.
+
+## Evidence and status
+
+Use the Microsoft Windows contract as the compatibility requirement and official `win32metadata` plus Microsoft Learn/WDK as primary sources. Record unresolved contract details rather than guessing. Keep implementation status separate from declarations, compilation, host tests, QEMU results, and compatibility claims; use `docs/KERNEL_ARCHITECTURE.md` and the integration status documents as the evidence source.
