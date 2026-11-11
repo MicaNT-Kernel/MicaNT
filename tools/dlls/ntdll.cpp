@@ -133,18 +133,40 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtFreeVirtualMemory(
 #endif
 }
 
-__attribute__((naked)) __declspec(dllexport) uint64_t NtClose(void* /*handle*/) noexcept {
+__attribute__((naked)) __declspec(dllexport) int32_t NtClose(void* /*handle*/) noexcept {
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
-        "movq $0x1E, %rax\n\t"
-        "movq %rdx, %r8\n\t"
+        "movl $0x0F, %eax\n\t"
         "syscall\n\t"
         "ret\n\t"
     );
 #else
     return 0;
 #endif
+}
+
+// These service numbers are the MicaNT NTDLL/kernel profile, not a stable
+// Windows ABI. The x64 home area and arguments after the fourth stay on the
+// caller's stack for the kernel to capture.
+__attribute__((naked)) __declspec(dllexport) int32_t NtCreateSection(
+    void** /*sectionHandle*/, uint32_t /*desiredAccess*/, void* /*objectAttributes*/,
+    int64_t* /*maximumSize*/, uint32_t /*pageProtection*/,
+    uint32_t /*allocationAttributes*/, void* /*fileHandle*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x4a, %eax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtMapViewOfSection(
+    void* /*sectionHandle*/, void* /*processHandle*/, void** /*baseAddress*/,
+    uintptr_t /*zeroBits*/, size_t /*commitSize*/, int64_t* /*sectionOffset*/,
+    size_t* /*viewSize*/, uint32_t /*inheritDisposition*/, uint32_t /*allocationType*/,
+    uint32_t /*win32Protect*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x28, %eax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtUnmapViewOfSection(
+    void* /*processHandle*/, void* /*baseAddress*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x2a, %eax\n\tsyscall\n\tret\n\t");
 }
 
 __attribute__((naked)) __declspec(dllexport) uint64_t NtReadFile(
