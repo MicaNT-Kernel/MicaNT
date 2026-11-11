@@ -87,6 +87,11 @@ integration.
 
 ### Bootstrap VAD reserve, commit, protection and release
 
+The cooperative Ke bootstrap now initializes its thread and processor CR3
+from the hardware register and rejects a context switch if the saved state
+does not match it. QEMU verifies the existing shared-address-space context
+switches with this check. This does not yet switch between process roots.
+
 The canonical `ProcessAddressSpace` can use the AMD64 bootstrap paging backend
 and the UEFI-derived PFN database. The boot test reserves an unmapped VAD,
 rejects an overlap, commits a page inside it, reads and writes that real

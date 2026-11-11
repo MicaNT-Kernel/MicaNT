@@ -175,7 +175,10 @@ void initializeContextThread(
 
 void verifyKernelContextSwitch() noexcept {
     using namespace micant::ke;
-    const uintptr_t activeCr3 = g_CurrentCpu.currentCr3;
+    uintptr_t activeCr3{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(activeCr3));
+    if (!activeCr3) stopWithError("[MicaNT Ke] Bootstrap CR3 is invalid\r\n");
+    g_CurrentCpu.currentCr3 = activeCr3;
     const uint64_t initialSwitchCount = g_CurrentCpu.contextSwitches;
 
     g_bootContextThread.state = ThreadState::Running;

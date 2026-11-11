@@ -56,7 +56,11 @@ struct ProcessorControlBlock {
     uint64_t dpcCount{0};
     uint64_t apcCount{0};
     uint64_t contextSwitches{0};
+#if defined(MICANT_FREESTANDING)
+    uintptr_t currentCr3{0};
+#else
     uintptr_t currentCr3{0x1000};
+#endif
     KThread* currentThread{nullptr};
     KThread* nextThread{nullptr};
     KThread* idleThread{nullptr};
@@ -76,7 +80,11 @@ inline thread_local ProcessorControlBlock g_CurrentCpu{
     .dpcCount = 0,
     .apcCount = 0,
     .contextSwitches = 0,
+#if defined(MICANT_FREESTANDING)
+    .currentCr3 = 0,
+#else
     .currentCr3 = 0x1000,
+#endif
     .currentThread = nullptr,
     .nextThread = nullptr,
     .idleThread = nullptr,
@@ -427,7 +435,11 @@ struct KThread {
     std::string name;
 
     // Address space and stacks
+#if defined(MICANT_FREESTANDING)
+    uintptr_t directoryTableBase{0};
+#else
     uintptr_t directoryTableBase{0x1000};
+#endif
     uintptr_t kernelStackTop{0};
     uintptr_t kernelStackBase{0};
     uintptr_t userStackTop{0};
@@ -750,9 +762,10 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
         return false;
     }
 
-    uint64_t rflags{};
-    __asm__ __volatile__("pushfq; popq %0" : "=r"(rflags));
-    if (rflags & (uint64_t{1} << 9)) {
+    uint64_t rflags{}, hardwareCr3{};
+    __asm__ __volatile__("pushfq; popq %0; movq %%cr3, %1" : "=r"(rflags), "=r"(hardwareCr3));
+    if ((rflags & (uint64_t{1} << 9)) || !outgoing->directoryTableBase ||
+        hardwareCr3 != outgoing->directoryTableBase || hardwareCr3 != g_CurrentCpu.currentCr3) {
         return false;
     }
 
