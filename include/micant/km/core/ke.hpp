@@ -450,6 +450,43 @@ struct KThread {
 #endif
 };
 
+#if defined(MICANT_FREESTANDING)
+namespace detail {
+
+using BootstrapThreadEntry = void (*)(void*) noexcept;
+extern "C" void MicantAmd64BootstrapThread() noexcept;
+
+// The caller owns a writable, resident stack until the thread can no longer
+// run. This bootstrap path is single-CPU and requires interrupts disabled.
+[[nodiscard]] inline bool prepareBootstrapThread(
+    KThread& thread, void* stack, size_t stackSize,
+    BootstrapThreadEntry entry, void* argument) noexcept {
+    const uintptr_t base = reinterpret_cast<uintptr_t>(stack);
+    if (!stack || !entry || stackSize < 256 ||
+        base > UINTPTR_MAX - stackSize ||
+        thread.state != ThreadState::Initialized || thread.readyQueued ||
+        &thread == KeGetCurrentThread() || thread.context.rip || thread.context.rsp ||
+        thread.kernelStackBase || thread.kernelStackTop) {
+        return false;
+    }
+    const uintptr_t top = (base + stackSize) & ~uintptr_t{15};
+    if (top < base || top - base < 40) return false;
+
+    KThreadContext context{};
+    context.rip = reinterpret_cast<uintptr_t>(&MicantAmd64BootstrapThread);
+    context.rsp = top - 32;
+    context.rflags = 0x2;
+    context.r12 = reinterpret_cast<uintptr_t>(entry);
+    context.r13 = reinterpret_cast<uintptr_t>(argument);
+    thread.kernelStackBase = base;
+    thread.kernelStackTop = top;
+    thread.context = context;
+    return true;
+}
+
+} // namespace detail
+#endif
+
 // ============================================================================
 // 8. 32-Queue Priority Thread Scheduler & Preemption Engine
 // ============================================================================

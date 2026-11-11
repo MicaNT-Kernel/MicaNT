@@ -27,8 +27,10 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept;
 // This validates privilege transitions, not a process loader or Win32 session.
 bool verifyRing3Transition() noexcept;
 
-using UserServiceRoutine = uint64_t (*)(uint64_t number, uint64_t first,
-                                       uint64_t second) noexcept;
+struct UserServiceArguments {
+    uint64_t number, first, second, third, fourth, userStack;
+};
+using UserServiceRoutine = uint64_t (*)(const UserServiceArguments&) noexcept;
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;

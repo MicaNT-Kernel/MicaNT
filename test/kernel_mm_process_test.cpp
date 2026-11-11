@@ -1,4 +1,5 @@
 #include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/section.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 
 extern "C" int MicantTestMmProcessAddressSpace() noexcept {
@@ -49,6 +50,26 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
             !bootstrapUserRange(base, PageSize4KB, false) ||
             bootstrapUserRange(base, PageSize4KB, true) ||
             space.free(base, 0, MEM_RELEASE) != NtStatus::Success) return 10;
+        uintptr_t first = BootstrapManagedBase;
+        uintptr_t second = first + PageSize4KB;
+        {
+            section::SectionObject section(PageSize4KB, section::SEC_COMMIT, PAGE_READWRITE);
+            if (section.getInitializationStatus() != NtStatus::Success) return 11;
+            const auto backing = section.getBackingReference();
+            if (space.mapSharedPages(first, PageSize4KB, PAGE_READWRITE, backing.pfns,
+                                     backing.pageCount, backing.context, backing.acquire, backing.release) != NtStatus::Success ||
+                space.mapSharedPages(second, PageSize4KB, PAGE_READONLY, backing.pfns,
+                                     backing.pageCount, backing.context, backing.acquire, backing.release) != NtStatus::Success) return 12;
+        }
+        auto* writable = reinterpret_cast<volatile uint64_t*>(first);
+        auto* readonly = reinterpret_cast<volatile uint64_t*>(second);
+        *writable = 0xabcdef1234567890ULL;
+        if (*readonly != *writable || bootstrapUserRange(second, PageSize4KB, true) ||
+            !bootstrapUserRange(first, PageSize4KB, true) ||
+            (bootstrapQemuFaultTestsAvailable() && !verifyBootstrapManagedPageFault(second, true, true))) return 13;
+        if (space.unmapSharedPages(first + 1) != NtStatus::Success ||
+            *readonly != 0xabcdef1234567890ULL ||
+            space.unmapSharedPages(second) != NtStatus::Success) return 14;
     }
 
     return database.getActiveCount() == active &&

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <atomic>
+#include <new>
+#if !defined(MICANT_FREESTANDING)
 #include <string>
 #include <string_view>
 #include <vector>
@@ -10,11 +12,14 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cstring>
+#endif
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#if !defined(MICANT_FREESTANDING)
 #include "micant/km/executive/ob.hpp"
-#include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/ps.hpp"
+#endif
+#include "micant/km/executive/mm.hpp"
 
 namespace micant::section {
 
@@ -65,6 +70,133 @@ enum class SECTION_INHERIT : uint32_t {
     ViewUnmap = 2
 };
 using ViewShare = SECTION_INHERIT;
+
+#if defined(MICANT_FREESTANDING)
+
+// Borrowed descriptor: acquire while the caller still owns a reference.
+// The immutable PFN array stays valid until the acquired reference is released.
+struct SectionBackingReference {
+    void* context{nullptr};
+    bool (*acquire)(void*) noexcept{nullptr};
+    void (*release)(void*) noexcept{nullptr};
+    size_t pageCount{0};
+    const uint64_t* pfns{nullptr};
+};
+
+class SectionObject {
+    struct Backing {
+        std::atomic<size_t> references{1};
+        size_t pageCount{0};
+        uint64_t* pfns{nullptr};
+
+        ~Backing() {
+            for (size_t i = 0; i < pageCount; ++i)
+                mm::PfnDatabase::get().freePage(pfns[i]);
+            delete[] pfns;
+        }
+
+        static bool acquire(void* context) noexcept {
+            if (!context) return false;
+            auto* backing = static_cast<Backing*>(context);
+            size_t count = backing->references.load(std::memory_order_relaxed);
+            while (count != 0 && count != static_cast<size_t>(-1)) {
+                if (backing->references.compare_exchange_weak(
+                        count, count + 1, std::memory_order_relaxed,
+                        std::memory_order_relaxed))
+                    return true;
+            }
+            return false;
+        }
+
+        static void release(void* context) noexcept {
+            if (!context) return;
+            auto* backing = static_cast<Backing*>(context);
+            if (backing->references.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                delete backing;
+        }
+    };
+
+public:
+    SectionObject(size_t maximumSize, uint32_t allocationAttributes,
+                  uint32_t pageProtection, void* fileObject = nullptr,
+                  const wchar_t* backingPath = nullptr) noexcept
+        : maximumSize_(maximumSize), allocationAttributes_(allocationAttributes),
+          pageProtection_(pageProtection) {
+        if (maximumSize == 0) {
+            status_ = NtStatus::InvalidParameter;
+            return;
+        }
+        if (allocationAttributes != SEC_COMMIT || fileObject ||
+            (backingPath && *backingPath) ||
+            (pageProtection != mm::PAGE_READONLY && pageProtection != mm::PAGE_READWRITE)) {
+            status_ = NtStatus::NotImplemented;
+            return;
+        }
+        const size_t count = maximumSize / mm::PageSize4KB +
+                             (maximumSize % mm::PageSize4KB != 0);
+        if (count > static_cast<size_t>(-1) / sizeof(uint64_t)) {
+            status_ = NtStatus::NoMemory;
+            return;
+        }
+        auto* backing = new (std::nothrow_t{}) Backing;
+        if (!backing) {
+            status_ = NtStatus::NoMemory;
+            return;
+        }
+        backing->pfns = new (std::nothrow_t{}) uint64_t[count];
+        if (!backing->pfns) {
+            delete backing;
+            status_ = NtStatus::NoMemory;
+            return;
+        }
+        auto& db = mm::PfnDatabase::get();
+        for (size_t i = 0; i < count; ++i) {
+            const uint64_t pfn = db.allocatePage(true);
+            if (!pfn) {
+                status_ = NtStatus::NoMemory;
+                delete backing;
+                return;
+            }
+            backing->pfns[backing->pageCount++] = pfn;
+            if (!db.zeroAllocatedPage(pfn)) {
+                status_ = NtStatus::Unsuccessful;
+                delete backing;
+                return;
+            }
+        }
+        backing_ = backing;
+    }
+
+    ~SectionObject() { Backing::release(backing_); }
+    SectionObject(const SectionObject&) = delete;
+    SectionObject& operator=(const SectionObject&) = delete;
+    SectionObject(SectionObject&&) = delete;
+    SectionObject& operator=(SectionObject&&) = delete;
+
+    [[nodiscard]] size_t getSize() const noexcept { return maximumSize_; }
+    [[nodiscard]] NtStatus getInitializationStatus() const noexcept { return status_; }
+    [[nodiscard]] uint32_t getAllocationAttributes() const noexcept { return allocationAttributes_; }
+    [[nodiscard]] uint32_t getPageProtection() const noexcept { return pageProtection_; }
+    [[nodiscard]] SectionBackingReference getBackingReference() const noexcept {
+        if (!backing_) return {};
+        return {backing_, Backing::acquire, Backing::release,
+                backing_->pageCount, backing_->pfns};
+    }
+    [[nodiscard]] uint8_t* getData() noexcept { return nullptr; }
+    [[nodiscard]] const uint8_t* getData() const noexcept { return nullptr; }
+    NtStatus loadData(const void*, size_t) noexcept { return NtStatus::NotImplemented; }
+    NtStatus read(uint64_t, void*, size_t) noexcept { return NtStatus::NotImplemented; }
+    NtStatus write(uint64_t, const void*, size_t) noexcept { return NtStatus::NotImplemented; }
+
+private:
+    size_t maximumSize_{0};
+    uint32_t allocationAttributes_{0};
+    uint32_t pageProtection_{0};
+    NtStatus status_{NtStatus::Success};
+    Backing* backing_{nullptr};
+};
+
+#else
 
 // ============================================================================
 // 4. Section Image Information Architecture (SEC_IMAGE)
@@ -726,5 +858,7 @@ inline NtStatus MmFlushVirtualMemory(
 ) {
     return SectionManager::get().flushVirtualMemory(targetProcess, baseAddress, regionSize);
 }
+
+#endif
 
 } // namespace micant::section

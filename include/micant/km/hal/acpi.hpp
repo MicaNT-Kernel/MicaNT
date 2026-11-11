@@ -135,6 +135,10 @@ inline constexpr uint8_t MADT_TYPE_LOCAL_X2APIC         = 9;
 inline constexpr uint8_t MADT_TYPE_LOCAL_X2APIC_NMI     = 10;
 inline constexpr uint8_t MADT_TYPE_GICC                 = 11;
 inline constexpr uint8_t MADT_TYPE_GICD                 = 12;
+inline constexpr uint8_t SRAT_TYPE_PROCESSOR_AFFINITY   = 0;
+inline constexpr uint8_t SRAT_TYPE_MEMORY_AFFINITY      = 1;
+inline constexpr uint8_t SRAT_TYPE_X2APIC_AFFINITY      = 2;
+inline constexpr uint8_t SRAT_TYPE_GICC_AFFINITY        = 3;
 
 // AML Opcode Tokens (ACPI 6.5 Chapter 20 AML Specification)
 inline constexpr uint8_t AML_ZERO_OP            = 0x00;
@@ -387,6 +391,46 @@ struct AcpiSratHeader {
     AcpiTableHeader header;
     uint32_t tableRevision;      // 1
     uint64_t reserved;
+};
+
+struct AcpiSratAffinityHeader { uint8_t type; uint8_t length; };
+
+struct AcpiSratProcessorAffinity {
+    AcpiSratAffinityHeader header;
+    uint8_t proximityDomainLow;
+    uint8_t apicId;
+    uint32_t flags;
+    uint8_t localSapicEid;
+    uint8_t proximityDomainHigh[3];
+    uint32_t clockDomain;
+};
+
+struct AcpiSratMemoryAffinity {
+    AcpiSratAffinityHeader header;
+    uint32_t proximityDomain;
+    uint16_t reserved1;
+    uint64_t baseAddress;
+    uint64_t length;
+    uint32_t reserved2;
+    uint32_t flags;
+    uint64_t reserved3;
+};
+
+struct AcpiSratX2ApicAffinity {
+    AcpiSratAffinityHeader header;
+    uint16_t reserved;
+    uint32_t proximityDomain;
+    uint32_t x2ApicId;
+    uint32_t flags;
+    uint32_t clockDomain;
+};
+
+struct AcpiSratGiccAffinity {
+    AcpiSratAffinityHeader header;
+    uint32_t proximityDomain;
+    uint32_t processorUid;
+    uint32_t flags;
+    uint32_t clockDomain;
 };
 
 // DMA Remapping Reporting Table (DMAR) Header
@@ -2115,6 +2159,10 @@ class TitanAcpiSubsystem {
     std::vector<AcpiMcfgAllocation> m_mcfgAllocations;
     AcpiDmarHeader m_dmar{};
     AcpiSratHeader m_srat{};
+    std::vector<AcpiSratProcessorAffinity> m_sratProcessorAffinities;
+    std::vector<AcpiSratMemoryAffinity> m_sratMemoryAffinities;
+    std::vector<AcpiSratX2ApicAffinity> m_sratX2ApicAffinities;
+    std::vector<AcpiSratGiccAffinity> m_sratGiccAffinities;
     AcpiHpetTable m_hpet{};
     AcpiBgrtTable m_bgrt{};
 
@@ -2223,6 +2271,10 @@ public:
         m_mcfgAllocations.clear();
         m_dmar = {};
         m_srat = {};
+        m_sratProcessorAffinities.clear();
+        m_sratMemoryAffinities.clear();
+        m_sratX2ApicAffinities.clear();
+        m_sratGiccAffinities.clear();
         m_hpet = {};
         m_bgrt = {};
         m_tablePhysicalAddresses.emplace("RSDP", rsdpAddress);
@@ -2334,6 +2386,35 @@ public:
                 std::memcpy(&m_dmar, bytes.data(), sizeof(m_dmar));
             } else if (signature == "SRAT" && bytes.size() >= sizeof(AcpiSratHeader)) {
                 std::memcpy(&m_srat, bytes.data(), sizeof(m_srat));
+                size_t offset = sizeof(AcpiSratHeader);
+                while (offset + sizeof(AcpiSratAffinityHeader) <= bytes.size()) {
+                    AcpiSratAffinityHeader record{};
+                    std::memcpy(&record, bytes.data() + offset, sizeof(record));
+                    if (record.length < sizeof(record) || record.length > bytes.size() - offset) break;
+                    const uint8_t* entry = bytes.data() + offset;
+                    if (record.type == SRAT_TYPE_PROCESSOR_AFFINITY &&
+                        record.length >= sizeof(AcpiSratProcessorAffinity)) {
+                        AcpiSratProcessorAffinity affinity{};
+                        std::memcpy(&affinity, entry, sizeof(affinity));
+                        m_sratProcessorAffinities.push_back(affinity);
+                    } else if (record.type == SRAT_TYPE_MEMORY_AFFINITY &&
+                               record.length >= sizeof(AcpiSratMemoryAffinity)) {
+                        AcpiSratMemoryAffinity affinity{};
+                        std::memcpy(&affinity, entry, sizeof(affinity));
+                        m_sratMemoryAffinities.push_back(affinity);
+                    } else if (record.type == SRAT_TYPE_X2APIC_AFFINITY &&
+                               record.length >= sizeof(AcpiSratX2ApicAffinity)) {
+                        AcpiSratX2ApicAffinity affinity{};
+                        std::memcpy(&affinity, entry, sizeof(affinity));
+                        m_sratX2ApicAffinities.push_back(affinity);
+                    } else if (record.type == SRAT_TYPE_GICC_AFFINITY &&
+                               record.length >= sizeof(AcpiSratGiccAffinity)) {
+                        AcpiSratGiccAffinity affinity{};
+                        std::memcpy(&affinity, entry, sizeof(affinity));
+                        m_sratGiccAffinities.push_back(affinity);
+                    }
+                    offset += record.length;
+                }
             } else if (signature == "HPET" && bytes.size() >= sizeof(AcpiHpetTable)) {
                 std::memcpy(&m_hpet, bytes.data(), sizeof(m_hpet));
             } else if (signature == "BGRT" && bytes.size() >= sizeof(AcpiBgrtTable)) {

@@ -25,8 +25,11 @@ constexpr uint64_t kHandleTag = 0x4D574B0000000000ULL;
 
 struct DeviceContext {
     uint64_t handle{};
+    uint64_t defaultBitmapHandle{};
     void* window{};
     uint32_t bitmap{};
+    uint32_t defaultPixel{};
+    bool memory{};
     bool active{};
 };
 
@@ -66,12 +69,16 @@ Bitmap* findBitmap(void* handle) noexcept {
     return nullptr;
 }
 
-DeviceContext* allocateContext(void* window) noexcept {
+DeviceContext* allocateContext(void* window, bool memory) noexcept {
     for (auto& context : g_contexts) {
         if (context.active) continue;
         context = {};
         context.handle = makeHandle(1, &context - g_contexts);
         context.window = window;
+        context.memory = memory;
+        if (memory) {
+            context.defaultBitmapHandle = makeHandle(3, &context - g_contexts);
+        }
         context.active = true;
         return &context;
     }
@@ -126,6 +133,11 @@ uint32_t* pixelsFor(DeviceContext& context, uint32_t& width,
         width = bitmap.width;
         height = bitmap.height;
         return g_pixelArena + bitmap.pixelOffset;
+    }
+    if (context.memory) {
+        width = 1;
+        height = 1;
+        return &context.defaultPixel;
     }
     width = kScreenWidth;
     height = kScreenHeight;
@@ -414,22 +426,27 @@ void* MicaWin32kGetForegroundWindow() {
 }
 
 void* MicaWin32kGetDC(void* window) {
-    for (auto& context : g_contexts) {
-        if (context.active && context.window == window && context.bitmap == 0) {
-            return reinterpret_cast<void*>(context.handle);
-        }
-    }
-    auto* context = allocateContext(window);
+    auto* context = allocateContext(window, false);
     return context ? reinterpret_cast<void*>(context->handle) : nullptr;
 }
 
-int32_t MicaWin32kReleaseDC(void*, void* dc) {
-    return findContext(dc) ? 1 : 0;
+int32_t MicaWin32kReleaseDC(void* window, void* dc) {
+    auto* context = findContext(dc);
+    if (!context || context->memory || context->window != window) return 0;
+    context->active = false;
+    return 1;
 }
 
 void* MicaWin32kCreateCompatibleDC(void*) {
-    auto* context = allocateContext(nullptr);
+    auto* context = allocateContext(nullptr, true);
     return context ? reinterpret_cast<void*>(context->handle) : nullptr;
+}
+
+int32_t MicaWin32kDeleteDC(void* dc) {
+    auto* context = findContext(dc);
+    if (!context || !context->memory) return 0;
+    context->active = false;
+    return 1;
 }
 
 void* MicaWin32kCreateCompatibleBitmap(void*, int32_t width, int32_t height) {
@@ -441,12 +458,23 @@ void* MicaWin32kCreateCompatibleBitmap(void*, int32_t width, int32_t height) {
 
 void* MicaWin32kSelectObject(void* dc, void* object) {
     auto* context = findContext(dc);
+    if (!context || !context->memory) return nullptr;
     auto* bitmap = findBitmap(object);
-    if (!context || !bitmap) return nullptr;
+    const bool selectDefault =
+        reinterpret_cast<uint64_t>(object) == context->defaultBitmapHandle;
+    if (!bitmap && !selectDefault) return nullptr;
+    if (bitmap) {
+        const uint32_t index = static_cast<uint32_t>(bitmap - g_bitmaps) + 1;
+        for (const auto& other : g_contexts) {
+            if (other.active && &other != context && other.bitmap == index) {
+                return nullptr;
+            }
+        }
+    }
     void* previous = context->bitmap
         ? reinterpret_cast<void*>(g_bitmaps[context->bitmap - 1].handle)
-        : nullptr;
-    context->bitmap = static_cast<uint32_t>(bitmap - g_bitmaps) + 1;
+        : reinterpret_cast<void*>(context->defaultBitmapHandle);
+    context->bitmap = bitmap ? static_cast<uint32_t>(bitmap - g_bitmaps) + 1 : 0;
     return previous;
 }
 
@@ -503,7 +531,7 @@ int32_t MicaWin32kPresentDC(void* dc) {
         originX = static_cast<uint32_t>(rect.left);
         originY = static_cast<uint32_t>(rect.top);
     }
-    if (!context->bitmap) {
+    if (!context->memory) {
         return presentSurface(pixels, kScreenWidth, kScreenHeight, 0, 0);
     }
     return presentSurface(pixels, width, height, originX, originY);
@@ -514,7 +542,7 @@ int32_t MicaWin32kDeleteObject(void* object) {
     if (!bitmap) return 0;
     const uint32_t index = static_cast<uint32_t>(bitmap - g_bitmaps) + 1;
     for (auto& context : g_contexts) {
-        if (context.active && context.bitmap == index) context.bitmap = 0;
+        if (context.active && context.bitmap == index) return 0;
     }
     bitmap->active = false;
     return 1;

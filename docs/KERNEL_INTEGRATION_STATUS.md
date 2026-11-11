@@ -145,7 +145,7 @@ API has no output parameter for returning that address on failure. The
 allocator's 64 KiB alignment invariant is therefore essential, not a
 substitute for recovery.
 
-#### Section ownership preparation
+#### Bootstrap section views
 
 The existing section control area retains its PFNs until its last owner is
 released, and hosted VADs keep the section object alive until their views are
@@ -153,23 +153,40 @@ unmapped. AVL removal transfers that ownership when replacing a node with its
 successor, so the successor's view does not lose its section reference.
 Allocation failure is reported rather than publishing an invalid
 section. A limited freestanding `SEC_COMMIT` path validates RW/RO protection,
-explicitly zeroes allocated PFNs and rejects unsupported variants.
-This preparation is not a working section mapping.
+explicitly zeroes allocated PFNs and rejects unsupported variants. The
+bootstrap paging backend can map these PFNs into two VADs, with one backing
+reference per view and independent unmapping. Failed mappings are rolled back;
+if an unmap fails, the VAD retains ownership for a subsequent cleanup attempt.
+In QEMU, the boot test writes through one view and reads through the other,
+checks the read-only mapping and fault probe, unmaps the first view, and checks
+the remaining view and PFN accounting after the last unmap.
 
-An attempt to construct `SectionObject` in the boot test failed at link time:
-the freestanding runtime lacks the libc++ shared-ownership, wide-string and
-hash-table support used by that class, as well as `wcslen` and `ceilf`.
-The experimental boot call was removed and the normal QEMU test passed again.
-An integrated section still needs freestanding-compatible ownership and PFN
-tracking, mapping/unmapping in the canonical VAD and paging backend, and
-per-process address spaces. The freestanding VAD does not yet retain section
-ownership, and `NtMapViewOfSection` still returns `NotImplemented`.
+The AMD64 bootstrap dispatcher now accepts the four register arguments and
+copies stack arguments from the user stack. A limited anonymous `SEC_COMMIT`
+section service in `kernel/mm/virtual.cpp` uses the canonical Ob handle table
+and the bootstrap paging backend. A CPL3 diagnostic issues create, map, unmap
+and close syscalls, checks handle access denial, shared data and the lifetime
+of a view after close, and checks PFN accounting after cleanup. The diagnostic
+issues syscall instructions directly; it does not load an NTDLL section stub.
+
+M1 remains open: this service is limited to the bootstrap current-process
+pseudo-handle and the bounded bootstrap address window; nonzero section-offset
+handling is implemented but has not yet been exercised in QEMU;
+process handle access checks, NTDLL exports, complete argument and protection
+semantics, view protection changes, and a real process address space remain
+unimplemented. The bootstrap test depends on the in-progress freestanding
+`SectionObject` implementation in the working tree. Microsoft contracts:
+[create](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesection),
+[map](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmapviewofsection),
+[unmap](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunmapviewofsection).
 ReactOS comparison used `ntoskrnl/mm/section.c` and
 `ntoskrnl/mm/ARM3/section.c` at the revision above.
 
 | Command | Result |
 |---|---|
 | `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_avl_section_owner_test.cpp -o build/mm_avl_section_owner_test && build/mm_avl_section_owner_test` | Passed; successor ownership and final release without host traps |
+| `clang++ -std=c++23 -DMICANT_FREESTANDING -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/mm_shared_backend_test.cpp -o /tmp/micant-mm-shared-test && /tmp/micant-mm-shared-test` | Passed; two backend views, ownership and mapping failure rollback |
+| `python3 qemu.py --headless` | Passed; CPL3 direct syscall section lifecycle, access denial, PFN accounting and existing modular boot checks |
 
 #### Bootstrap VAD verification
 

@@ -339,7 +339,10 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
         if (g_log) g_log("[MicaNT Hal] Syscall stack pointer is not user writable\r\n");
         stopOnTrap();
     }
-    frame->rax = g_dispatch(frame->rax, frame->r10, frame->rdx);
+    const micant::hal::amd64::UserServiceArguments args{
+        frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp
+    };
+    frame->rax = g_dispatch(args);
     // Interrupts remain disabled until the bootstrap owns hardware IRQ routing.
     frame->flags = (frame->flags & 0xCD5) | 2;
 }
@@ -522,6 +525,58 @@ __attribute__((naked)) void MicantSyscallProbeProgram() {
         "movl $0x81, %eax\nsyscall\ncmpl $0xc0000005, %eax\njne 9f\n"
         "movabsq $0x400000004ff8, %rax\nmovq %rax, (%r10)\n"
         "movl $0x81, %eax\nsyscall\ncmpl $0xc0000005, %eax\njne 9f\n"
+        // Windows x64 syscall stack slots: return address, home area, then
+        // arguments five onward. The probe supplies this frame explicitly.
+        "subq $96, %rsp\n"
+        "movabsq $0x400000001100, %rbx\n"
+        "movq $4096, 8(%rbx)\nmovq $0, 16(%rbx)\nmovq $0, 24(%rbx)\n"
+        "movq $4096, 32(%rbx)\nmovq $4096, 40(%rbx)\n"
+        "movq $4, 40(%rsp)\nmovq $0x08000000, 48(%rsp)\nmovq $0, 56(%rsp)\n"
+        // A read-only handle cannot create a writable view.
+        "leaq 0(%rbx), %r10\nmovq $4, %rdx\nxorq %r8, %r8\nleaq 8(%rbx), %r9\n"
+        "movl $0x4a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq $0, 40(%rsp)\nmovq $0, 48(%rsp)\nleaq 32(%rbx), %rax\nmovq %rax, 56(%rsp)\n"
+        "movq $2, 64(%rsp)\nmovq $0, 72(%rsp)\nmovq $4, 80(%rsp)\n"
+        "movq 0(%rbx), %r10\nmovq $-1, %rdx\nleaq 16(%rbx), %r8\nxorq %r9, %r9\n"
+        "movl $0x28, %eax\nsyscall\ncmpl $0xc0000022, %eax\njne 9f\n"
+        "movq 0(%rbx), %r10\nmovl $0x0f, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq $4, 40(%rsp)\nmovq $0x08000000, 48(%rsp)\nmovq $0, 56(%rsp)\n"
+        "leaq 0(%rbx), %r10\nmovq $6, %rdx\nxorq %r8, %r8\nleaq 8(%rbx), %r9\n"
+        "movl $0x4a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq $0, 40(%rsp)\nmovq $0, 48(%rsp)\nleaq 32(%rbx), %rax\nmovq %rax, 56(%rsp)\n"
+        "movq $2, 64(%rsp)\nmovq $0, 72(%rsp)\nmovq $4, 80(%rsp)\n"
+        "movq 0(%rbx), %r10\nmovq $-1, %rdx\nleaq 16(%rbx), %r8\nxorq %r9, %r9\n"
+        "movl $0x28, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "leaq 40(%rbx), %rax\nmovq %rax, 56(%rsp)\nmovq $2, 80(%rsp)\n"
+        "movq 0(%rbx), %r10\nmovq $-1, %rdx\nleaq 24(%rbx), %r8\nxorq %r9, %r9\n"
+        "movl $0x28, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq 16(%rbx), %rax\nmovq $0x12345678, (%rax)\n"
+        "movq 24(%rbx), %rax\ncmpq $0x12345678, (%rax)\njne 9f\n"
+        "movq $-1, %r10\nmovq 16(%rbx), %rdx\nmovl $0x2a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq 0(%rbx), %r10\nmovl $0x0f, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq 0(%rbx), %r10\nmovl $0x0f, %eax\nsyscall\ncmpl $0xc0000008, %eax\njne 9f\n"
+        "movq 24(%rbx), %rax\ncmpq $0x12345678, (%rax)\njne 9f\n"
+        "movq $-1, %r10\nmovq 24(%rbx), %rdx\nmovl $0x2a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        // Map the first and seventeenth pages of a larger section. The input
+        // offset is rounded down to the 64 KiB allocation granularity.
+        "movq $69632, 8(%rbx)\nmovq $0, 16(%rbx)\nmovq $0, 24(%rbx)\n"
+        "movq $4096, 32(%rbx)\nmovq $4096, 40(%rbx)\nmovq $65537, 48(%rbx)\n"
+        "movq $4, 40(%rsp)\nmovq $0x08000000, 48(%rsp)\nmovq $0, 56(%rsp)\n"
+        "leaq 0(%rbx), %r10\nmovq $6, %rdx\nxorq %r8, %r8\nleaq 8(%rbx), %r9\n"
+        "movl $0x4a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq $0, 40(%rsp)\nmovq $0, 48(%rsp)\nleaq 32(%rbx), %rax\nmovq %rax, 56(%rsp)\n"
+        "movq $2, 64(%rsp)\nmovq $0, 72(%rsp)\nmovq $4, 80(%rsp)\n"
+        "movq 0(%rbx), %r10\nmovq $-1, %rdx\nleaq 16(%rbx), %r8\nxorq %r9, %r9\n"
+        "movl $0x28, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "leaq 48(%rbx), %rax\nmovq %rax, 48(%rsp)\nleaq 40(%rbx), %rax\nmovq %rax, 56(%rsp)\n"
+        "movq 0(%rbx), %r10\nmovq $-1, %rdx\nleaq 24(%rbx), %r8\nxorq %r9, %r9\n"
+        "movl $0x28, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "cmpq $65536, 48(%rbx)\njne 9f\n"
+        "movq 16(%rbx), %rax\nmovq $123, (%rax)\nmovq 24(%rbx), %rax\ncmpq $0, (%rax)\njne 9f\n"
+        "movq $-1, %r10\nmovq 16(%rbx), %rdx\nmovl $0x2a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq $-1, %r10\nmovq 24(%rbx), %rdx\nmovl $0x2a, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "movq 0(%rbx), %r10\nmovl $0x0f, %eax\nsyscall\ntestl %eax, %eax\njnz 9f\n"
+        "addq $96, %rsp\n"
         "movl $0x7fffffff, %eax\nsyscall\n"
         "cmpl $0xc00000bb, %eax\njne 9f\n"
         "int3\n9: ud2\n"
@@ -975,8 +1030,9 @@ bool verifyBootstrapSyscalls() noexcept {
     g_probeMode = 5;
     g_probeSucceeded = false;
     g_probeReturnRip = kUserBase + size - 2;
+    const size_t activeBefore = mm::PfnDatabase::get().getActiveCount();
     MicantProbeEnter();
-    if (!g_probeSucceeded) {
+    if (!g_probeSucceeded || mm::PfnDatabase::get().getActiveCount() != activeBefore) {
         return false;
     }
     __asm__ __volatile__(

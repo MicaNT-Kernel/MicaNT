@@ -142,6 +142,7 @@ MICANT_WIN32K_API intptr_t MicaWin32kDefWindowProcW(void*, uint32_t, uintptr_t, 
 MICANT_WIN32K_API void* MicaWin32kGetDC(void*);
 MICANT_WIN32K_API int32_t MicaWin32kReleaseDC(void*, void*);
 MICANT_WIN32K_API void* MicaWin32kCreateCompatibleDC(void*);
+MICANT_WIN32K_API int32_t MicaWin32kDeleteDC(void*);
 MICANT_WIN32K_API void* MicaWin32kCreateCompatibleBitmap(void*, int32_t, int32_t);
 MICANT_WIN32K_API void* MicaWin32kSelectObject(void*, void*);
 MICANT_WIN32K_API int32_t MicaWin32kBitBlt(void*, int32_t, int32_t, int32_t, int32_t, void*, int32_t, int32_t, uint32_t);

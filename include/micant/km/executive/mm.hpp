@@ -570,6 +570,7 @@ struct VirtualAddressDescriptor {
     bool      isGuardPage{false};
     bool      isSectionView{false};
     void*     sectionContext{nullptr};
+    void (*sectionRelease)(void*) noexcept{nullptr};
 #if !defined(MICANT_FREESTANDING)
     std::shared_ptr<void> sectionOwner;
 #endif
@@ -585,6 +586,10 @@ struct VirtualAddressDescriptor {
     // Demand-Paged Physical Page Frame Map (VPN -> PFN)
     std::unordered_map<uint64_t, uint64_t> physicalPages;
     std::unique_ptr<CommitRange> commitRanges;
+
+    ~VirtualAddressDescriptor() {
+        if (sectionRelease) sectionRelease(sectionContext);
+    }
 
     [[nodiscard]] size_t size() const noexcept {
         return endingAddress >= startingAddress ? (endingAddress - startingAddress + 1) : 0;
@@ -788,7 +793,10 @@ private:
             node->isCopyOnWrite = temp->isCopyOnWrite;
             node->isGuardPage = temp->isGuardPage;
             node->isSectionView = temp->isSectionView;
+            if (node->sectionRelease) node->sectionRelease(node->sectionContext);
             node->sectionContext = temp->sectionContext;
+            node->sectionRelease = temp->sectionRelease;
+            temp->sectionRelease = nullptr;
 #if !defined(MICANT_FREESTANDING)
             node->sectionOwner = std::move(temp->sectionOwner);
 #endif
@@ -1234,11 +1242,89 @@ public:
         return NtStatus::Success;
     }
 
+    // The caller holds a backing reference while this method acquires its own.
+    // This is an internal paging operation, not the NtMapViewOfSection contract.
+    NtStatus mapSharedPages(uintptr_t& baseAddress, size_t size, uint32_t protect,
+                            const uint64_t* pfns, size_t pageCount, void* owner,
+                            bool (*acquire)(void*) noexcept,
+                            void (*release)(void*) noexcept) noexcept {
+        Guard lock(*this);
+        if (!backend_.map) return NtStatus::NotImplemented;
+        if (!size || size > std::numeric_limits<size_t>::max() - PageMask4KB ||
+            !pfns || !owner || !acquire || !release) return NtStatus::InvalidParameter;
+        if (protect != PAGE_READONLY && protect != PAGE_READWRITE) return NtStatus::NotImplemented;
+        const size_t length = (size + PageMask4KB) & ~PageMask4KB;
+        const size_t count = length >> PageShift4KB;
+        if (count > pageCount) return NtStatus::InvalidParameter;
+        uintptr_t start = baseAddress;
+        if (!start) {
+            start = vadTree_.findFreeRange(length, AllocationGranularity, false, backendBase_, backendEnd_);
+            if (!start) return NtStatus::NoMemory;
+        }
+        if ((start & PageMask4KB) || start < backendBase_ || start > backendEnd_ ||
+            length - 1 > backendEnd_ - start) return NtStatus::InvalidParameter;
+        std::unique_ptr<VirtualAddressDescriptor> node(new (std::nothrow_t{}) VirtualAddressDescriptor{});
+        if (!node) return NtStatus::NoMemory;
+        if (!acquire(owner)) return NtStatus::Unsuccessful;
+        node->sectionContext = owner;
+        node->sectionRelease = release;
+        node->startingAddress = start;
+        node->endingAddress = start + length - 1;
+        node->protection = protect;
+        node->allocationType = MEM_COMMIT;
+        node->isSectionView = true;
+        auto* vad = node.get();
+        if (!vadTree_.insert(std::move(node))) return NtStatus::Conflict;
+        NtStatus failure = NtStatus::Success;
+        for (size_t i = 0; i < count; ++i) {
+            std::unique_ptr<VirtualAddressDescriptor::CommitRange> page(
+                new (std::nothrow_t{}) VirtualAddressDescriptor::CommitRange{});
+            if (!page) { failure = NtStatus::NoMemory; break; }
+            page->firstVpn = page->lastVpn = (start >> PageShift4KB) + i;
+            page->pfn = pfns[i];
+            page->protection = protect;
+            if (!page->pfn || !backend_.map(backend_.context, start + i * PageSize4KB, page->pfn, protect)) {
+                failure = NtStatus::Unsuccessful;
+                break;
+            }
+            page->next = std::move(vad->commitRanges);
+            vad->commitRanges = std::move(page);
+            ++vad->commitCharge;
+            ++workingSet_.commitCharge;
+            ++workingSet_.residentPages;
+        }
+        vad->committed = vad->commitCharge != 0;
+        if (failure != NtStatus::Success) {
+            // Retain the VAD and backing if an unmap fails: live PTEs must not
+            // outlive their physical pages. close() can retry cleanup.
+            if (releaseBackendPages(*vad)) {
+                if (!vadTree_.remove(start)) ownershipInvariantFailure();
+            }
+            return failure;
+        }
+        workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
+        workingSet_.peakResidentPages = std::max(workingSet_.peakResidentPages, workingSet_.residentPages);
+        baseAddress = start;
+        return NtStatus::Success;
+    }
+
+    NtStatus unmapSharedPages(uintptr_t address) noexcept {
+        Guard lock(*this);
+        if (!backend_.map) return NtStatus::NotImplemented;
+        auto* vad = vadTree_.find(address);
+        if (!vad || !vad->isSectionView) return NtStatus::InvalidParameter;
+        const uintptr_t start = vad->startingAddress;
+        if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
+        if (!vadTree_.remove(start)) ownershipInvariantFailure();
+        return NtStatus::Success;
+    }
+
     NtStatus free(uintptr_t baseAddress, size_t size, uint32_t freeType) {
         Guard lock(*this);
         if (backend_.map) {
             auto* vad = vadTree_.find(baseAddress);
             if (!vad) return NtStatus::InvalidParameter;
+            if (vad->isSectionView) return NtStatus::Conflict;
             if (freeType == MEM_RELEASE) {
                 if (vad->startingAddress != baseAddress || size != 0)
                     return NtStatus::InvalidParameter;
@@ -1521,7 +1607,7 @@ private:
             }
             if (!vad.commitCharge || !workingSet_.commitCharge || !workingSet_.residentPages)
                 ownershipInvariantFailure();
-            db.freePage(page.pfn);
+            if (!vad.isSectionView) db.freePage(page.pfn);
             --vad.commitCharge;
             --workingSet_.commitCharge;
             --workingSet_.residentPages;

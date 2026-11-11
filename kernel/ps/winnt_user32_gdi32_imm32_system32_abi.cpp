@@ -42,6 +42,7 @@ template <typename T> T Win32kProc(const char* name) noexcept {
     MICA_WIN32K_PROC(MicaWin32kGetDC);
     MICA_WIN32K_PROC(MicaWin32kReleaseDC);
     MICA_WIN32K_PROC(MicaWin32kCreateCompatibleDC);
+    MICA_WIN32K_PROC(MicaWin32kDeleteDC);
     MICA_WIN32K_PROC(MicaWin32kCreateCompatibleBitmap);
     MICA_WIN32K_PROC(MicaWin32kSelectObject);
     MICA_WIN32K_PROC(MicaWin32kBitBlt);
@@ -127,12 +128,18 @@ void* User32_BeginPaint(void* hWnd, WinNtPaintStruct* paint) noexcept {
     if (!hWnd || !paint) return nullptr;
     using GetDcFn=void* (*)(void*);
     using GetRectFn=int32_t (*)(void*,MicaWin32kRect*);
+    using ReleaseFn=int32_t (*)(void*,void*);
     auto getDc=Win32kProc<GetDcFn>("MicaWin32kGetDC");
     auto getRect=Win32kProc<GetRectFn>("MicaWin32kGetClientRect");
-    if (!getDc || !getRect) return nullptr;
+    auto release=Win32kProc<ReleaseFn>("MicaWin32kReleaseDC");
+    if (!getDc || !getRect || !release) return nullptr;
     MicaWin32kRect rect{};
     void* dc=getDc(hWnd);
-    if (!dc || !getRect(hWnd,&rect)) return nullptr;
+    if (!dc) return nullptr;
+    if (!getRect(hWnd,&rect)) {
+        release(hWnd,dc);
+        return nullptr;
+    }
     paint->hdc=dc;
     paint->fErase=0;
     paint->rcPaint={rect.left,rect.top,rect.right,rect.bottom};
@@ -145,8 +152,12 @@ void* User32_BeginPaint(void* hWnd, WinNtPaintStruct* paint) noexcept {
 int32_t User32_EndPaint(void* hWnd, const WinNtPaintStruct* paint) noexcept {
     if (!hWnd || !paint || !paint->hdc) return 0;
     using PresentFn=int32_t (*)(void*);
+    using ReleaseFn=int32_t (*)(void*,void*);
     auto present=Win32kProc<PresentFn>("MicaWin32kPresentDC");
-    return present ? present(paint->hdc) : 0;
+    auto release=Win32kProc<ReleaseFn>("MicaWin32kReleaseDC");
+    const int32_t presented = present ? present(paint->hdc) : 0;
+    const int32_t released = release ? release(hWnd,paint->hdc) : 0;
+    return presented && released;
 }
 
 intptr_t User32_DefWindowProcW(void* hWnd, uint32_t Msg, uintptr_t wParam, intptr_t lParam) noexcept {
@@ -364,8 +375,8 @@ void* Gdi32_CreateCompatibleBitmap(void* hdc, int32_t width, int32_t height) noe
 }
 
 int32_t Gdi32_DeleteDC(void* hdc) noexcept {
-    using Fn=int32_t (*)(void*,void*); auto fn=Win32kProc<Fn>("MicaWin32kReleaseDC");
-    return fn ? fn(nullptr,hdc) : 0;
+    using Fn=int32_t (*)(void*); auto fn=Win32kProc<Fn>("MicaWin32kDeleteDC");
+    return fn ? fn(hdc) : 0;
 }
 
 int32_t Gdi32_GetDeviceCaps(void* /*hdc*/, int32_t index) noexcept {

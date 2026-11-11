@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <new>
+#include <limits>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 
@@ -354,6 +356,8 @@ struct HandleTableEntry {
     }
 };
 
+inline void ObDereferenceObject(ObjectHeader* object);
+
 /**
  * @brief Per-Process Handle Table.
  * Maps opaque userland `Handle` (values 4, 8, 12...) to ObjectHeader pointers with access control.
@@ -428,7 +432,7 @@ public:
         if (obj->type) {
             const_cast<ObjectType*>(obj->type)->totalNumberOfHandles.fetch_sub(1, std::memory_order_relaxed);
         }
-        obj->releaseReference();
+        ObDereferenceObject(obj);
         return NtStatus::Success;
     }
 
@@ -770,16 +774,25 @@ inline NtStatus ObCreateObject(
 ) {
     if (!objectType || !outObjectBody) return NtStatus::InvalidParameter;
 
+    if (bodySize > std::numeric_limits<size_t>::max() - sizeof(ObjectHeader))
+        return NtStatus::InsufficientResources;
     size_t totalSize = sizeof(ObjectHeader) + bodySize;
-    uint8_t* memory = new (std::nothrow) uint8_t[totalSize]();
+    uint8_t* memory = new (std::nothrow_t{}) uint8_t[totalSize]();
     if (!memory) return NtStatus::InsufficientResources;
 
-    auto* header = reinterpret_cast<ObjectHeader*>(memory);
+    auto* header = new (memory) ObjectHeader{};
     header->pointerCount.store(1, std::memory_order_relaxed);
     header->handleCount.store(0, std::memory_order_relaxed);
     header->type = objectType;
     header->dynamicallyAllocated = true;
 
+#if defined(MICANT_FREESTANDING)
+    if (objectAttributes) {
+        header->~ObjectHeader();
+        delete[] memory;
+        return NtStatus::NotImplemented;
+    }
+#else
     if (objectAttributes) {
         header->attributes = objectAttributes->attributes;
         if (objectAttributes->objectName) {
@@ -788,9 +801,12 @@ inline NtStatus ObCreateObject(
         }
         header->securityDescriptor = objectAttributes->securityDescriptor;
     }
+#endif
 
+#if !defined(MICANT_FREESTANDING)
     header->creatorInfo.createTime = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+#endif
     header->creatorInfo.creatorProcessId = 4; // System process
     header->creatorInfo.creatorThreadId = 1;
 
@@ -799,10 +815,12 @@ inline NtStatus ObCreateObject(
 
     const_cast<ObjectType*>(objectType)->totalNumberOfObjects.fetch_add(1, std::memory_order_relaxed);
 
+#if !defined(MICANT_FREESTANDING)
     {
         std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
         g_ObTelemetry.totalObjectsCreated++;
     }
+#endif
 
     *outObjectBody = header->getBody();
     if (outHeader) *outHeader = header;
@@ -1031,11 +1049,14 @@ inline void ObDereferenceObject(ObjectHeader* object) {
         if (object->type) {
             const_cast<ObjectType*>(object->type)->totalNumberOfObjects.fetch_sub(1, std::memory_order_relaxed);
         }
+#if !defined(MICANT_FREESTANDING)
         {
             std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
             g_ObTelemetry.totalObjectsDestroyed++;
         }
+#endif
         if (object->dynamicallyAllocated) {
+            object->~ObjectHeader();
             delete[] reinterpret_cast<uint8_t*>(object);
         }
     }
@@ -1049,6 +1070,8 @@ inline NtStatus ObCloseHandle(Handle handle, HandleTable& handleTable) {
     if (!entry || !entry->isValid()) return NtStatus::InvalidHandle;
 
     ObjectHeader* obj = entry->object;
+    // Keep the header alive through close callbacks and namespace cleanup.
+    obj->addReference();
     if (obj->type && obj->type->closeProcedure) {
         obj->type->closeProcedure(obj, handle);
     }
@@ -1074,22 +1097,8 @@ inline NtStatus ObCloseHandle(Handle handle, HandleTable& handleTable) {
             }
         }
 
-        if (obj->pointerCount.load(std::memory_order_relaxed) <= 0) {
-            if (obj->type && obj->type->deleteProcedure) {
-                obj->type->deleteProcedure(obj);
-            }
-            if (obj->type) {
-                const_cast<ObjectType*>(obj->type)->totalNumberOfObjects.fetch_sub(1, std::memory_order_relaxed);
-            }
-            {
-                std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
-                g_ObTelemetry.totalObjectsDestroyed++;
-            }
-            if (obj->dynamicallyAllocated) {
-                delete[] reinterpret_cast<uint8_t*>(obj);
-            }
-        }
     }
+    ObDereferenceObject(obj);
     return st;
 }
 

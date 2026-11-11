@@ -7,6 +7,7 @@
 #include "micant/km/executive/probe.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/syscalls.hpp"
 #include "micant/km/win32k/freestanding.hpp"
 #include "micant/shared/boot_driver.hpp"
 #include "micant/shared/ntstatus.hpp"
@@ -16,6 +17,8 @@
 #include "tools/explorer_shell/taskbar.hpp"
 #include <cstring>
 #include <span>
+
+namespace micant::sys { bool initializeBootstrapSectionServices() noexcept; }
 
 namespace {
 
@@ -548,10 +551,57 @@ void drawMouseCursor(uint32_t x, uint32_t y) noexcept {
     presentCursorRect(x, y);
 }
 
-uint64_t dispatchBootstrapService(uint64_t number, uint64_t first,
-                                  uint64_t second) noexcept {
+uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments& args) noexcept {
     using namespace micant;
+    const auto number = args.number, first = args.first, second = args.second;
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
+    if (number == sys::SSN_NtClose)
+        return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtCreateSection || number == sys::SSN_NtMapViewOfSection) {
+        uint64_t extra[6]{};
+        const size_t count = number == sys::SSN_NtCreateSection ? 3 : 6;
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   count * sizeof(uint64_t)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        if (number == sys::SSN_NtCreateSection) {
+            if (args.third) return status(NtStatus::NotImplemented);
+            LargeInteger maximum{};
+            if (ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success ||
+                ex::ExSafeCopyFromUser(&maximum, reinterpret_cast<const void*>(args.fourth), sizeof(maximum)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            Handle handle{};
+            const auto result = sys::NtCreateSection(&handle, static_cast<uint32_t>(second), nullptr, &maximum,
+                                                      static_cast<uint32_t>(extra[0]), static_cast<uint32_t>(extra[1]), extra[2]);
+            if (result != NtStatus::Success) return status(result);
+            const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+            if (copy != NtStatus::Success) sys::NtClose(handle);
+            return status(copy);
+        }
+        uintptr_t base{};
+        size_t size{};
+        LargeInteger offset{};
+        if (ex::ProbeForWrite(reinterpret_cast<void*>(args.third), sizeof(base), 1) != NtStatus::Success ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(extra[2]), sizeof(size), 1) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(&base, reinterpret_cast<const void*>(args.third), sizeof(base)) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(&size, reinterpret_cast<const void*>(extra[2]), sizeof(size)) != NtStatus::Success ||
+            (extra[1] && (ex::ProbeForWrite(reinterpret_cast<void*>(extra[1]), sizeof(offset), 1) != NtStatus::Success ||
+                          ex::ExSafeCopyFromUser(&offset, reinterpret_cast<const void*>(extra[1]), sizeof(offset)) != NtStatus::Success)))
+            return status(NtStatus::AccessViolation);
+        const auto result = sys::NtMapViewOfSection(first, second, &base, args.fourth, extra[0],
+            extra[1] ? &offset : nullptr, &size, static_cast<uint32_t>(extra[3]),
+            static_cast<uint32_t>(extra[4]), static_cast<uint32_t>(extra[5]));
+        if (result != NtStatus::Success) return status(result);
+        if (ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.third), &base, sizeof(base)) != NtStatus::Success ||
+            ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[2]), &size, sizeof(size)) != NtStatus::Success ||
+            (extra[1] && ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[1]), &offset, sizeof(offset)) != NtStatus::Success)) {
+            sys::NtUnmapViewOfSection(second, base);
+            return status(NtStatus::AccessViolation);
+        }
+        return status(NtStatus::Success);
+    }
+    if (number == sys::SSN_NtUnmapViewOfSection)
+        return status(sys::NtUnmapViewOfSection(first, second));
     if (number == 0x80) {
         const um::UserVideoInfo64 info{g_display.Width, g_display.Height, g_display.Pitch,
                                        32, g_display.PixelFormat, 0, 0};
@@ -852,6 +902,9 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Kernel C++ initialization failed\r\n");
     }
     serialWrite("[MicaNT Ex] Kernel C++ constructors dispatched\r\n");
+    if (!micant::sys::initializeBootstrapSectionServices()) {
+        stopWithError("[MicaNT Mm] Section service initialization failed\r\n");
+    }
     if (!verifyKernelObjectHandles()) {
         stopWithError("[MicaNT Ob] Kernel handle verification failed\r\n");
     }

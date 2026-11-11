@@ -13,9 +13,11 @@ struct EnumContext {
 
 BOOL CALLBACK collectWindow(HWND hwnd, LPARAM parameter) {
     auto* context = reinterpret_cast<EnumContext*>(parameter);
-    if (!context || !context->snapshot || hwnd == context->desktop ||
-        hwnd == context->taskbar || hwnd == context->startMenu ||
-        !IsWindowVisible(hwnd) || context->snapshot->count >= kMaxTaskSwitchEntries) {
+    if (!context || !context->snapshot) return FALSE;
+    const bool minimized = IsIconic(hwnd) != FALSE;
+    if (hwnd == context->desktop || hwnd == context->taskbar || hwnd == context->startMenu ||
+        (!IsWindowVisible(hwnd) && !minimized) ||
+        context->snapshot->count >= kMaxTaskSwitchEntries) {
         return TRUE;
     }
 
@@ -30,7 +32,7 @@ BOOL CALLBACK collectWindow(HWND hwnd, LPARAM parameter) {
         entry.title[i] = ch >= 32 && ch <= 126 ? static_cast<char>(ch) : '?';
     }
     entry.title[sizeof(entry.title) - 1] = '\0';
-    entry.minimized = IsIconic(hwnd) != FALSE;
+    entry.minimized = minimized;
     entry.active = hwnd == context->foreground && !entry.minimized;
     ++context->snapshot->count;
     return TRUE;

@@ -1,3 +1,112 @@
+#if defined(MICANT_FREESTANDING)
+#include "micant/km/core/syscalls.hpp"
+#include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/section.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/hal/amd64_bootstrap.hpp"
+#include <new>
+
+namespace micant::sys {
+namespace {
+mm::ProcessAddressSpace addressSpace;
+ob::ObjectType sectionType;
+void deleteSection(ob::ObjectHeader* header) {
+    header->as<section::SectionObject>()->~SectionObject();
+}
+}
+
+bool initializeBootstrapSectionServices() noexcept {
+    sectionType.typeId = ob::ObjectTypeId::Section;
+    sectionType.deleteProcedure = deleteSection;
+    return addressSpace.configurePagingBackend(
+        {nullptr, hal::amd64::mapBootstrapManagedPage, hal::amd64::unmapBootstrapManagedPage,
+         hal::amd64::mapBootstrapProtectManagedPage},
+        hal::amd64::BootstrapManagedBase, hal::amd64::BootstrapManagedSize);
+}
+
+NtStatus NtCreateSection(Handle* out, uint32_t access, ObjectAttributes* attributes,
+                         LargeInteger* maximum, uint32_t protect, uint32_t allocation,
+                         Handle file) {
+    if (!out || !maximum || maximum->quadPart <= 0) return NtStatus::InvalidParameter;
+    if (attributes || file) return NtStatus::NotImplemented;
+    if (access & ~section::SECTION_ALL_ACCESS) return NtStatus::NotImplemented;
+    void* body{};
+    ob::ObjectHeader* header{};
+    NtStatus status = ob::ObCreateObject(ob::KernelMode, &sectionType, nullptr,
+                                         sizeof(section::SectionObject), &body, &header);
+    if (status != NtStatus::Success) return status;
+    auto* object = new (body) section::SectionObject(static_cast<size_t>(maximum->quadPart), allocation, protect);
+    status = object->getInitializationStatus();
+    if (status == NtStatus::Success)
+        status = ob::detail::kernelHandleTable().createHandle(header, *out, access);
+    ob::ObDereferenceObject(header);
+    return status;
+}
+
+NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uintptr_t zeroBits,
+                            size_t commitSize, LargeInteger* offset, size_t* viewSize,
+                            uint32_t inherit, uint32_t allocation, uint32_t protection) {
+    if (!base || !viewSize) return NtStatus::InvalidParameter;
+    if (process != InvalidHandleValue) return NtStatus::NotImplemented;
+    if (zeroBits || commitSize || allocation || (inherit != 1 && inherit != 2))
+        return NtStatus::NotImplemented;
+    if (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)
+        return NtStatus::NotImplemented;
+    uint32_t desired = protection == mm::PAGE_READWRITE ? section::SECTION_MAP_WRITE : section::SECTION_MAP_READ;
+    ob::ObjectHeader* header{};
+    NtStatus status = ob::ObReferenceObjectByHandle(handle, ob::detail::kernelHandleTable(),
+                                                     desired, &sectionType, &header);
+    if (status != NtStatus::Success) return status;
+    auto* object = header->as<section::SectionObject>();
+    if (offset && offset->quadPart < 0) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidParameter;
+    }
+    const uint64_t sectionOffset = offset ? static_cast<uint64_t>(offset->quadPart) &
+        ~(static_cast<uint64_t>(mm::ProcessAddressSpace::AllocationGranularity) - 1) : 0;
+    if (protection == mm::PAGE_READWRITE && object->getPageProtection() != mm::PAGE_READWRITE) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::SectionProtection;
+    }
+    if (object->getSize() > SIZE_MAX - mm::PageMask4KB) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidViewSize;
+    }
+    const size_t sectionSize = (object->getSize() + mm::PageMask4KB) & ~mm::PageMask4KB;
+    if (sectionOffset >= sectionSize) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidViewSize;
+    }
+    const size_t remaining = sectionSize - static_cast<size_t>(sectionOffset);
+    size_t length = *viewSize ? *viewSize : remaining;
+    if (!length || length > remaining || length > SIZE_MAX - mm::PageMask4KB) {
+        const auto failure = length > remaining ? NtStatus::InvalidViewSize : NtStatus::InvalidParameter;
+        ob::ObDereferenceObject(header);
+        return failure;
+    }
+    length = (length + mm::PageMask4KB) & ~mm::PageMask4KB;
+    uintptr_t target = *base ? *base & ~(static_cast<uintptr_t>(mm::ProcessAddressSpace::AllocationGranularity) - 1) : 0;
+    const auto backing = object->getBackingReference();
+    const size_t firstPage = static_cast<size_t>(sectionOffset) >> mm::PageShift4KB;
+    status = addressSpace.mapSharedPages(target, length, protection, backing.pfns + firstPage,
+                                         backing.pageCount - firstPage,
+                                         backing.context, backing.acquire, backing.release);
+    if (status == NtStatus::Success) {
+        *base = target;
+        *viewSize = length;
+        if (offset) offset->quadPart = static_cast<int64_t>(sectionOffset);
+    }
+    ob::ObDereferenceObject(header);
+    return status;
+}
+
+NtStatus NtUnmapViewOfSection(Handle process, uintptr_t base) {
+    if (process != InvalidHandleValue) return NtStatus::NotImplemented;
+    const auto result = addressSpace.unmapSharedPages(base);
+    return result == NtStatus::InvalidParameter ? NtStatus::NotMappedView : result;
+}
+}
+#else
 #include "micant/km/core/ntos_internal.hpp"
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/section.hpp"
@@ -194,3 +303,4 @@ NtStatus NtUnmapViewOfSection(Handle /*processHandle*/, uintptr_t baseAddress) {
 }
 
 } // namespace micant::sys
+#endif

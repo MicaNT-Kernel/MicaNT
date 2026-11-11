@@ -1,6 +1,14 @@
 #include "micant/km/core/ke.hpp"
 
 #if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+extern "C" __attribute__((naked)) void MicantAmd64BootstrapThread() noexcept {
+    __asm__ __volatile__(
+        "movq %r13, %rcx\n"
+        "callq *%r12\n"
+        "ud2\n"
+    );
+}
+
 extern "C" __attribute__((naked)) bool MicantAmd64SwitchContext(
     micant::ke::KThreadContext*, micant::ke::KThreadContext*) noexcept {
     __asm__ __volatile__(

@@ -44,6 +44,10 @@ NtStatus NtClose(Handle handle) {
     }
     return internal::ObCloseGenericHandle(handle);
 }
+#else
+NtStatus NtClose(Handle handle) {
+    return g_KernelHandleTable.closeHandle(handle);
+}
 #endif
 
 } // namespace micant::sys
