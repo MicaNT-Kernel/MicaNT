@@ -10070,6 +10070,32 @@ inline BOOL WINAPI GetCpuClockPhaseLockedLoopBandwidthJitterTelemetry(ntdll::SYS
     return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopBandwidthJitterTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
+inline LONG64 WINAPI InterlockedEqualModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedEqualModulo64(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline LONG WINAPI InterlockedEqualModulo32(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedEqualModulo32(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline SHORT WINAPI InterlockedEqualModulo16(SHORT volatile* Destination, SHORT ValA, SHORT ValB, SHORT ValC, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedEqualModulo16(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline CHAR WINAPI InterlockedEqualModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedEqualModulo8(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteCompressionEnergyEfficiencyTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteCompressionEnergyEfficiencyTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockPhaseLockedLoopDcoTuningResolutionTelemetry(ntdll::SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_RESOLUTION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningResolutionTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
 inline LONG64 WINAPI InterlockedNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedNonImplicationModulo64(Destination, Value, Modulus);
 }
@@ -12937,6 +12963,12 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedMinorityModulo8", reinterpret_cast<void*>(InterlockedMinorityModulo8));
     ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingEfficiencyRatioTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingEfficiencyRatioTelemetry));
     ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopBandwidthJitterTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopBandwidthJitterTelemetry));
+    ldr.registerExport("kernel32.dll", "InterlockedEqualModulo64", reinterpret_cast<void*>(InterlockedEqualModulo64));
+    ldr.registerExport("kernel32.dll", "InterlockedEqualModulo32", reinterpret_cast<void*>(InterlockedEqualModulo32));
+    ldr.registerExport("kernel32.dll", "InterlockedEqualModulo16", reinterpret_cast<void*>(InterlockedEqualModulo16));
+    ldr.registerExport("kernel32.dll", "InterlockedEqualModulo8", reinterpret_cast<void*>(InterlockedEqualModulo8));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteCompressionEnergyEfficiencyTelemetry", reinterpret_cast<void*>(GetPagefileWriteCompressionEnergyEfficiencyTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopDcoTuningResolutionTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopDcoTuningResolutionTelemetry));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo64", reinterpret_cast<void*>(InterlockedNonImplicationModulo64));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo32", reinterpret_cast<void*>(InterlockedNonImplicationModulo32));
     ldr.registerExport("kernel32.dll", "InterlockedNonImplicationModulo16", reinterpret_cast<void*>(InterlockedNonImplicationModulo16));
