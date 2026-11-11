@@ -2112,6 +2112,7 @@ class TitanAcpiSubsystem {
     std::vector<AcpiMadtLocalX2ApicNmi> m_localX2ApicNmis;
     uint64_t m_localApicAddress{0};
     AcpiMcfgHeader m_mcfg{};
+    std::vector<AcpiMcfgAllocation> m_mcfgAllocations;
     AcpiDmarHeader m_dmar{};
     AcpiSratHeader m_srat{};
     AcpiHpetTable m_hpet{};
@@ -2219,6 +2220,7 @@ public:
         m_madtHeader = {};
         m_fadt = {};
         m_mcfg = {};
+        m_mcfgAllocations.clear();
         m_dmar = {};
         m_srat = {};
         m_hpet = {};
@@ -2319,6 +2321,15 @@ public:
                 }
             } else if (signature == "MCFG" && bytes.size() >= sizeof(AcpiMcfgHeader)) {
                 std::memcpy(&m_mcfg, bytes.data(), std::min(bytes.size(), sizeof(m_mcfg)));
+                constexpr size_t allocationOffset = offsetof(AcpiMcfgHeader, allocations);
+                if (bytes.size() >= allocationOffset &&
+                    (bytes.size() - allocationOffset) % sizeof(AcpiMcfgAllocation) == 0) {
+                    const size_t allocationCount = (bytes.size() - allocationOffset) / sizeof(AcpiMcfgAllocation);
+                    m_mcfgAllocations.resize(allocationCount);
+                    if (allocationCount)
+                        std::memcpy(m_mcfgAllocations.data(), bytes.data() + allocationOffset,
+                            allocationCount * sizeof(AcpiMcfgAllocation));
+                }
             } else if (signature == "DMAR" && bytes.size() >= sizeof(AcpiDmarHeader)) {
                 std::memcpy(&m_dmar, bytes.data(), sizeof(m_dmar));
             } else if (signature == "SRAT" && bytes.size() >= sizeof(AcpiSratHeader)) {
@@ -2478,6 +2489,7 @@ public:
 
         // 4. Build MCFG (PCIe ECAM Memory Mapped Config)
         m_mcfg = {};
+        m_mcfgAllocations.clear();
         std::memcpy(m_mcfg.header.signature, "MCFG", 4);
         m_mcfg.header.length = sizeof(AcpiMcfgHeader);
         m_mcfg.header.revision = 1;
@@ -2487,6 +2499,7 @@ public:
         m_mcfg.allocations[0].pciSegmentGroup = 0;
         m_mcfg.allocations[0].startBusNumber = 0;
         m_mcfg.allocations[0].endBusNumber = 255;
+        m_mcfgAllocations.push_back(m_mcfg.allocations[0]);
         m_tablePhysicalAddresses["MCFG"] = rsdpPhysical + 0x6000;
 
         // 5. Build DMAR (DMA Remapping / Intel VT-d)
@@ -2633,6 +2646,7 @@ public:
     const std::vector<AcpiMadtLocalApicNmi>& getLocalApicNmis() const { return m_localApicNmis; }
     const std::vector<AcpiMadtLocalX2ApicNmi>& getLocalX2ApicNmis() const { return m_localX2ApicNmis; }
     const AcpiMcfgHeader& getMcfg() const { return m_mcfg; }
+    const std::vector<AcpiMcfgAllocation>& getMcfgAllocations() const { return m_mcfgAllocations; }
     const AcpiDmarHeader& getDmar() const { return m_dmar; }
     const AcpiSratHeader& getSrat() const { return m_srat; }
     const AcpiHpetTable& getHpet() const { return m_hpet; }
