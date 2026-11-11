@@ -18,6 +18,9 @@
 #endif
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#if defined(MICANT_FREESTANDING)
+#include "micant/km/hal/amd64_bootstrap.hpp"
+#endif
 
 namespace micant::ke {
 
@@ -738,7 +741,7 @@ private:
 /**
  * @brief Cooperative AMD64 context switch for the bootstrap single-CPU path.
  * The freestanding backend requires DISPATCH_LEVEL, interrupts disabled, and
- * a shared address space. The hosted backend preserves its state-model behavior.
+ * registered page-table roots. The hosted backend preserves its state-model behavior.
  *
  * @param outgoing Thread yielding the processor
  * @param incoming Thread taking ownership of the processor
@@ -758,7 +761,7 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
          incoming->state != ThreadState::Standby) ||
         incoming->readyQueued ||
         incoming->context.rip == 0 || incoming->context.rsp == 0 ||
-        outgoing->directoryTableBase != incoming->directoryTableBase) {
+        !incoming->directoryTableBase) {
         return false;
     }
 
@@ -768,6 +771,9 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
         hardwareCr3 != outgoing->directoryTableBase || hardwareCr3 != g_CurrentCpu.currentCr3) {
         return false;
     }
+    if (hardwareCr3 != incoming->directoryTableBase &&
+        !hal::amd64::switchProcessPagingRootByPhysical(incoming->directoryTableBase)) return false;
+    g_CurrentCpu.currentCr3 = incoming->directoryTableBase;
 
     if (outgoing->state == ThreadState::Running) {
         outgoing->state = ThreadState::Ready;

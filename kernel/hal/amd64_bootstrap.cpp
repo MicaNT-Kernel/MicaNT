@@ -917,6 +917,16 @@ bool switchProcessPagingRoot(const ProcessPagingRoot* root) noexcept {
     return true;
 }
 
+bool switchProcessPagingRootByPhysical(uintptr_t physicalRoot) noexcept {
+    if (physicalRoot == reinterpret_cast<uintptr_t>(g_pml4))
+        return switchProcessPagingRoot(nullptr);
+    for (const auto* root = g_processPagingRoots; root; root = root->next) {
+        if ((root->pfn << mm::PageShift4KB) == physicalRoot)
+            return switchProcessPagingRoot(root);
+    }
+    return false;
+}
+
 bool destroyProcessPagingRoot(ProcessPagingRoot& root) noexcept {
     if (!bootstrapPagingContext() || !root.pfn) return false;
     if (reinterpret_cast<uint64_t>(activePagingRoot()) == (root.pfn << mm::PageShift4KB)) return false;

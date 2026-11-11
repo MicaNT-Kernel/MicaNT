@@ -89,8 +89,10 @@ integration.
 
 The cooperative Ke bootstrap now initializes its thread and processor CR3
 from the hardware register and rejects a context switch if the saved state
-does not match it. QEMU verifies the existing shared-address-space context
-switches with this check. This does not yet switch between process roots.
+does not match it. The BSP-only cooperative switch accepts registered roots,
+reloads CR3 for a different root and updates the current processor state.
+QEMU exercises the existing register and stack canaries with both shared and
+distinct roots. This does not yet establish preemption or process lifecycle.
 
 The AMD64 bootstrap can create PFN-backed page-table roots with private user
 slot 128 and shared supervisor branches. With interrupts disabled on the BSP,
@@ -99,8 +101,8 @@ reloads CR3 when switching roots. QEMU maps distinct private pages at the same
 virtual address in two roots and maps one section into both; it verifies the
 private values, shared updates, user/kernel access checks, independent
 teardown and PFN accounting. The roots are currently exercised directly by
-the diagnostic: Ps ownership, process handles and Ke context switching across
-roots remain unintegrated, so M2 is not complete.
+the diagnostic: Ps ownership and process handles remain unintegrated, so M2
+is not complete.
 
 The canonical `ProcessAddressSpace` can use the AMD64 bootstrap paging backend
 and the UEFI-derived PFN database. The boot test reserves an unmapped VAD,

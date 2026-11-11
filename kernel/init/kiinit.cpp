@@ -99,6 +99,11 @@ void serialWrite(const char* text) noexcept {
 }
 
 void firstContextEntry() noexcept {
+    uint64_t actualCr3{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(actualCr3));
+    if (actualCr3 != g_firstContextThread.directoryTableBase ||
+        actualCr3 != micant::ke::g_CurrentCpu.currentCr3)
+        stopWithError("[MicaNT Ke] First thread CR3 mismatch\r\n");
     volatile uint64_t pattern[16]{};
     for (size_t index = 0; index < 16; ++index) pattern[index] = 0xA100 + index;
     g_firstContextLocal = reinterpret_cast<uintptr_t>(&pattern[0]);
@@ -122,6 +127,11 @@ void firstContextEntry() noexcept {
 }
 
 void secondContextEntry() noexcept {
+    uint64_t actualCr3{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(actualCr3));
+    if (actualCr3 != g_secondContextThread.directoryTableBase ||
+        actualCr3 != micant::ke::g_CurrentCpu.currentCr3)
+        stopWithError("[MicaNT Ke] Second thread CR3 mismatch\r\n");
     volatile uint64_t pattern[16]{};
     for (size_t index = 0; index < 16; ++index) pattern[index] = 0xB200 + index;
     g_secondContextLocal = reinterpret_cast<uintptr_t>(&pattern[0]);
@@ -173,8 +183,14 @@ void initializeContextThread(
     thread.state = micant::ke::ThreadState::Ready;
 }
 
-void verifyKernelContextSwitch() noexcept {
+void verifyKernelContextSwitch(bool separateRoots) noexcept {
     using namespace micant::ke;
+    using namespace micant::hal::amd64;
+    ProcessPagingRoot firstRoot;
+    ProcessPagingRoot secondRoot;
+    if (separateRoots && (!createProcessPagingRoot(firstRoot) || !createProcessPagingRoot(secondRoot)))
+        stopWithError("[MicaNT Ke] Context root allocation failed\r\n");
+    g_contextOrder = 0;
     uintptr_t activeCr3{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(activeCr3));
     if (!activeCr3) stopWithError("[MicaNT Ke] Bootstrap CR3 is invalid\r\n");
@@ -190,6 +206,10 @@ void verifyKernelContextSwitch() noexcept {
     initializeContextThread(
         g_secondContextThread, secondContextEntry, g_secondContextStack,
         sizeof(g_secondContextStack));
+    if (separateRoots) {
+        g_firstContextThread.directoryTableBase = firstRoot.pfn << micant::mm::PageShift4KB;
+        g_secondContextThread.directoryTableBase = secondRoot.pfn << micant::mm::PageShift4KB;
+    }
 
     const KIRQL previousIrql = KfRaiseIrql(DISPATCH_LEVEL);
     auto& scheduler = PriorityScheduler::get();
@@ -245,6 +265,8 @@ void verifyKernelContextSwitch() noexcept {
         g_firstContextLocal == g_secondContextLocal) {
         stopWithError("[MicaNT Ke] Context stack ownership verification failed\r\n");
     }
+    if (separateRoots && (!destroyProcessPagingRoot(secondRoot) || !destroyProcessPagingRoot(firstRoot)))
+        stopWithError("[MicaNT Ke] Context roots were not reclaimed\r\n");
     serialWrite("[MicaNT Ke] Allocation-free ready queue selected cooperative contexts\r\n");
     serialWrite("[MicaNT Ke] Cooperative AMD64 contexts, stacks, GPR, XMM and FP control verified\r\n");
 }
@@ -946,7 +968,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ex] Runtime self-test halted\r\n");
     for (;;) __asm__ __volatile__("cli; hlt");
 #endif
-    verifyKernelContextSwitch();
+    verifyKernelContextSwitch(false);
+    verifyKernelContextSwitch(true);
     initializeDisplay(handoff->displayDriver);
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
