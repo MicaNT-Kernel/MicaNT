@@ -2614,6 +2614,11 @@ public:
 
     uint32_t getTableLength(std::string_view sig) const {
         std::lock_guard<std::mutex> lock(m_mutex);
+        if (sig == "RSDP") {
+            auto rsdpTable = m_tableStorage.find("RSDP");
+            if (rsdpTable != m_tableStorage.end()) return static_cast<uint32_t>(rsdpTable->second.size());
+            return m_rsdp.revision >= 2 ? m_rsdp.length : 20;
+        }
         auto table = m_tableStorage.find(std::string(sig));
         if (table != m_tableStorage.end() && table->second.size() >= sizeof(AcpiTableHeader)) {
             AcpiTableHeader header{};
@@ -2630,7 +2635,6 @@ public:
         if (sig == "BGRT") return m_bgrt.header.length;
         if (sig == "XSDT") return m_xsdtHeader.length;
         if (sig == "RSDT") return m_rsdtHeader.length;
-        if (sig == "RSDP") return m_rsdp.revision >= 2 ? m_rsdp.length : 20;
         return 0;
     }
 
