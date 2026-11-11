@@ -37,6 +37,16 @@ option to run the serial-verified smoke test and automated mouse/scanout checks
 without opening a display. The Ring 3 diagnostic is not yet a running Explorer
 process; Start, windows and accelerated composition are not connected.
 
+To build the real Explorer and windowing DLLs and check their native imports:
+
+```bash
+python3 qemu.py --check-explorer
+```
+
+This is a build/preflight check, not an Explorer boot option. It currently
+fails because a complete native Kernel32/UCRT runtime is missing; it never
+substitutes host Windows DLLs or synthetic import trampolines.
+
 <p align="center">
   <img src="docs/bootscreen_splash.png" alt="MicaNT UEFI Boot Splash" width="420">
   &nbsp;&nbsp;

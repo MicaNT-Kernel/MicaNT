@@ -234,10 +234,16 @@ def main() -> int:
     parser.add_argument(
         "--build-only", action="store_true", help="build and validate artifacts without launching QEMU"
     )
+    parser.add_argument(
+        "--check-explorer", action="store_true",
+        help="build the real Explorer/Win32 DLLs and check their native import closure; do not boot",
+    )
     args = parser.parse_args()
 
     if args.timeout <= 0 or args.stable_seconds <= 0:
         parser.error("--timeout and --stable-seconds must be positive")
+    if args.build_only and args.check_explorer:
+        parser.error("--build-only and --check-explorer are mutually exclusive")
 
     try:
         cmake = shutil.which("cmake")
@@ -248,7 +254,7 @@ def main() -> int:
             raise RuntimeError("ninja was not found on PATH")
         cxx = find_compiler(args.cxx)
         cc = find_c_compiler(cxx)
-        qemu = find_qemu() if not args.build_only else None
+        qemu = find_qemu() if not (args.build_only or args.check_explorer) else None
         display = (
             choose_display(qemu, args.display)
             if qemu and not args.headless
@@ -271,6 +277,13 @@ def main() -> int:
                 "-DMICANT_ENABLE_BAREMETAL=ON",
             ]
         )
+        if args.check_explorer:
+            run([
+                cmake, "--build", str(BUILD_DIR), "--config", "Release",
+                "--target", "explorer_runtime_boot",
+            ])
+            run([sys.executable, str(SCRIPTS / "verify_explorer_runtime.py")])
+            return 0
         run(
             [
                 cmake,
@@ -310,7 +323,8 @@ def main() -> int:
             boot_command.append("--verify-input")
         run(boot_command)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        print(f"MicaNT QEMU launch failed: {error}", file=sys.stderr)
+        operation = "Explorer runtime check" if args.check_explorer else "QEMU launch"
+        print(f"MicaNT {operation} failed: {error}", file=sys.stderr)
         return 1
     return 0
 

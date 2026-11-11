@@ -43,7 +43,9 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def inspect_pe(path: Path, expected_subsystem: str) -> dict[str, int]:
+def inspect_pe(
+    path: Path, expected_subsystem: str, *, allow_imports: bool = False
+) -> dict[str, int]:
     data = path.read_bytes()
     if len(data) < 0x40 or data[:2] != b"MZ":
         fail(f"{path}: missing DOS signature")
@@ -65,6 +67,7 @@ def inspect_pe(path: Path, expected_subsystem: str) -> dict[str, int]:
     subsystem = struct.unpack_from("<H", data, optional_offset + 68)[0]
     expected_subsystem_value = {
         "NATIVE": 1,
+        "WINDOWS_GUI": 2,
         "EFI_APPLICATION": 10,
     }.get(expected_subsystem)
 
@@ -111,7 +114,7 @@ def inspect_pe(path: Path, expected_subsystem: str) -> dict[str, int]:
         import_rva, import_size = struct.unpack_from(
             "<II", data, optional_offset + 120
         )
-        if import_rva != 0 or import_size != 0:
+        if not allow_imports and (import_rva != 0 or import_size != 0):
             fail(f"{path}: freestanding image has an external import directory")
 
     return {

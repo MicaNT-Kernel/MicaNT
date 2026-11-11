@@ -240,6 +240,68 @@ if (MICANT_ENABLE_BAREMETAL)
     )
     target_include_directories(bootx64_efi PRIVATE "${CMAKE_SOURCE_DIR}")
 
+    add_library(win32k_boot SHARED EXCLUDE_FROM_ALL kernel/ps/winnt_win32k_server.cpp)
+    target_compile_definitions(win32k_boot PRIVATE
+        BUILD_SYSTEM32_STANDALONE_DLL MICANT_WIN32K_EXPORTS
+    )
+    target_compile_options(win32k_boot PRIVATE
+        -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
+        -ffunction-sections -fdata-sections -O2
+    )
+    target_link_options(win32k_boot PRIVATE -static -Wl,--gc-sections)
+    set_target_properties(win32k_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "win32k"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
+    foreach(_client IN ITEMS user32 gdi32 imm32)
+        string(TOUPPER "${_client}" _client_upper)
+        add_library(${_client}_boot SHARED EXCLUDE_FROM_ALL
+            kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp
+        )
+        target_compile_definitions(${_client}_boot PRIVATE
+            BUILD_SYSTEM32_STANDALONE_DLL
+            "BUILD_SYSTEM32_${_client_upper}_DLL" MICANT_WIN32K_IMPORTS
+        )
+        target_compile_options(${_client}_boot PRIVATE
+            -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
+            -ffunction-sections -fdata-sections -O2
+        )
+        target_link_options(${_client}_boot PRIVATE -static -Wl,--gc-sections)
+        target_link_libraries(${_client}_boot PRIVATE win32k_boot)
+        set_target_properties(${_client}_boot PROPERTIES
+            PREFIX "" OUTPUT_NAME "${_client}"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+            ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+        )
+    endforeach()
+
+    add_executable(explorer_boot EXCLUDE_FROM_ALL
+        tools/explorer_shell_app.cpp
+        tools/explorer_shell/desktop.cpp
+        tools/explorer_shell/taskbar.cpp
+        tools/explorer_shell/start_menu.cpp
+        tools/explorer_shell/notification_area.cpp
+        tools/explorer_shell/task_switcher.cpp
+    )
+    target_include_directories(explorer_boot PRIVATE "${CMAKE_SOURCE_DIR}/tools")
+    target_compile_options(explorer_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-stack-protector -mno-red-zone -mno-stack-arg-probe -O2
+    )
+    target_link_options(explorer_boot PRIVATE
+        -nostdlib -Wl,--subsystem,windows -Wl,-e,_start
+    )
+    target_link_libraries(explorer_boot PRIVATE user32_boot gdi32_boot win32k_boot)
+    set_target_properties(explorer_boot PROPERTIES
+        OUTPUT_NAME "explorer"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
+    )
+    add_custom_target(explorer_runtime_boot
+        DEPENDS explorer_boot imm32_boot
+    )
+
     add_executable(virtio_gpu_boot drivers/virtio_gpu/virtio_gpu.cpp)
     set_target_properties(virtio_gpu_boot PROPERTIES
         OUTPUT_NAME "virtio_gpu"

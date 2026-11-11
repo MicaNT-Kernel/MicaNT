@@ -31,6 +31,7 @@ Executive or a user-mode `explorer.exe` process.
 | `ntoskrnl_core_baremetal` | Freestanding AMD64 bootstrap, shared desktop renderer, CPL3 diagnostic | `build/baremetal/ntoskrnl.exe`; QEMU verified, Executive integration incomplete |
 | `bootx64_efi` | UEFI PE bootloader | `build/esp/EFI/BOOT/BOOTX64.EFI` |
 | `virtio_gpu_boot` | Separate boot-start VirtIO-GPU display driver | `build/virtio_gpu.sys`; VirtIO 2D verified in QEMU |
+| `explorer_runtime_boot` | Build-only aggregate for the actual Explorer and windowing DLLs | `build/explorer.exe`, `build/system32/{user32,gdi32,imm32,win32k}.dll`; compile/link verified, not loaded by the kernel |
 
 The bootstrap kernel is PE32+ AMD64, uses the Native subsystem, and has no
 external PE imports. It installs a kernel-owned page-table root, GDT/TSS and
@@ -231,3 +232,61 @@ the full Executive test harness:
 clang++ -std=c++23 -Iinclude test/uefi_handoff_contract_test.cpp -o build/uefi_handoff_contract_test
 build/uefi_handoff_contract_test
 ```
+
+## H. Real Explorer runtime closure
+
+The actual shell and its canonical User32/GDI32/IMM32 -> Win32k chain can be
+built with the same cross-toolchain in the isolated QEMU cache:
+
+```bash
+python3 qemu.py --check-explorer
+python3 -m unittest discover -s test -p test_explorer_runtime.py -v
+```
+
+The first command deliberately does **not** launch QEMU or replace the
+bootstrap desktop. It builds the actual sources, then checks PE imports
+transitively against exports in `build/system32`, including ordinal imports
+and forwarded exports. DLL matching is case-insensitive; CRT API-set names
+are routed to `ucrtbase.dll`. Other API sets require their own contract and
+are not guessed. The parser bounds-checks file-backed directory/string/table
+ranges and rejects malformed images, missing exports and forwarder cycles.
+The freestanding kernel/driver validator still forbids imports by default.
+Passing this preflight would establish symbol closure only, not behavioral
+compatibility, DLL initialization, isolation or a functioning user process.
+
+The windowing DLL targets retain the toolchain's DLL startup entry rather
+than overriding the PE entry with `DllMain`: their C++ static objects require
+initialization before the user entry is called. No Microsoft DLLs are copied
+into the build or used as a fallback.
+
+The current preflight fails on native Kernel32 and UCRT requirements:
+
+- Synchronization/TLS: critical sections, SRW locks, condition variables,
+  `TlsGetValue`.
+- Loader and virtual memory: module/procedure lookup, `VirtualProtect`,
+  `VirtualQuery`.
+- Time, conversion and exception/unwind support: real QPC/system time,
+  character conversion, `RaiseException`, `Rtl*` unwind/context operations.
+- C runtime: allocator and aligned allocation, memory/string functions,
+  on-exit initialization, stream formatting, locale and conversion.
+
+The existing Kernel32 implementation contains simulated time/handles and a
+single reused allocation arena; the UCRT wrapper forwards allocation back
+into a hosted C runtime. Those implementations cannot be treated as a native
+runtime just because their host tests pass. A default toolchain link of the
+Kernel32 candidate also collides with its own `Sleep`/`GetLastError` exports.
+That failed candidate was not added to the supported targets.
+
+Structural inspection of the archived standalone kernel identified its
+loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import
+trampolines. They were not copied, built or enabled as a workaround. Before
+the actual Explorer can be launched, canonical runtime implementations,
+bounded PE/DLL loading and initialization, process/TEB/TLS setup, validated
+syscall buffers, input delivery and process lifecycle must be connected and
+exercised. The previous CPL3/PS2/VirtIO smoke test remains a separate,
+strictly smaller verification level.
+
+PE table validation follows the public
+[Microsoft PE/COFF format specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format);
+the CRT API-set preflight follows the
+[Universal CRT deployment contract](https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment).
