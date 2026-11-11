@@ -2225,6 +2225,7 @@ public:
             if (m_tableStorage.contains(storageKey))
                 storageKey += "#" + std::to_string(++duplicateSdtIndex);
             m_tableStorage[storageKey] = bytes;
+            m_tablePhysicalAddresses.try_emplace(storageKey, tableAddress);
             m_tablePhysicalAddresses.try_emplace(signature, tableAddress);
 
             if (signature == "FACP") {
