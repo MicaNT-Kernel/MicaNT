@@ -51,6 +51,7 @@ extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
+extern "C" int pe_tls_freestanding_test();
 
 void writePort(uint16_t port, uint8_t value) noexcept {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -838,6 +839,13 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ke] Ready-queue withdrawal verification failed\r\n");
     }
     serialWrite("[MicaNT Ke] Ready-queue withdrawal verified\r\n");
+    const int tlsTest = pe_tls_freestanding_test();
+    if (tlsTest != 0) {
+        serialWrite("[MicaNT Ldr] TLS template verification failed: ");
+        serialWriteNumber(static_cast<uint64_t>(tlsTest));
+        stopWithError("\r\n");
+    }
+    serialWrite("[MicaNT Ldr] Independent TLS templates verified\r\n");
 #if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
     if (!micant::ex::test::verifyCxxAfterInitialization() ||
         !micant::ex::shutdownBootstrapCxxRuntime() ||

@@ -276,6 +276,40 @@ public:
         size_t callbackCount{};
         bool present{};
     };
+
+    // Copies the template and its zero-fill into aligned, non-overlapping
+    // directly addressed storage, leaving any trailing storage unchanged.
+    // The layout's image must remain alive; allocation, user-VA alignment,
+    // TLS indices, thread vectors and callbacks remain the caller's responsibility.
+    static NtStatus initializeTlsData(const TlsLayout& layout,
+                                      std::span<uint8_t> storage) noexcept {
+        if (!layout.present || !layout.alignment ||
+            (layout.alignment & (layout.alignment - 1))) {
+            return NtStatus::InvalidParameter;
+        }
+        if (layout.initialData.size() > storage.size() ||
+            layout.zeroFill > storage.size() - layout.initialData.size()) {
+            return NtStatus::BufferTooSmall;
+        }
+        const size_t total = layout.initialData.size() + layout.zeroFill;
+        if (total && (reinterpret_cast<uintptr_t>(storage.data()) & (layout.alignment - 1))) {
+            return NtStatus::DatatypeMisalignment;
+        }
+        if (!layout.initialData.empty() && total) {
+            const uintptr_t source = reinterpret_cast<uintptr_t>(layout.initialData.data());
+            const uintptr_t target = reinterpret_cast<uintptr_t>(storage.data());
+            if (target >= source ? target - source < layout.initialData.size()
+                                 : source - target < total) {
+                return NtStatus::InvalidParameter;
+            }
+        }
+        for (size_t i = 0; i < layout.initialData.size(); ++i) {
+            storage[i] = layout.initialData[i];
+        }
+        for (size_t i = layout.initialData.size(); i < total; ++i) storage[i] = 0;
+        return NtStatus::Success;
+    }
+
     NtStatus inspect(std::span<const uint8_t> file) noexcept {
         *this = {};
         ImageDosHeader dos{};

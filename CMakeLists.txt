@@ -236,6 +236,7 @@ if (MICANT_ENABLE_BAREMETAL)
         test/kernel_context_canary.cpp
         test/kernel_ke_ready_queue_test.cpp
         test/kernel_mm_avl_test.cpp
+        test/pe_tls_freestanding_test.cpp
         tools/explorer_shell/desktop.cpp
         tools/explorer_shell/notification_area.cpp
         tools/explorer_shell/taskbar.cpp

@@ -85,6 +85,25 @@ integration.
 
 ## Integration increments
 
+### PE TLS template initialization
+
+The bounded native PE loader can initialize separate aligned storage blocks
+from an inspected image's TLS template, including zero-fill. It rejects
+insufficient, misaligned or overlapping storage. A bare-metal boot test maps
+an original synthetic PE and verifies two independent template copies and
+error paths. These are storage blocks, not scheduled threads: TLS index
+allocation, per-thread TLS vectors, callbacks, user mappings and process
+startup remain unimplemented.
+
+The template and zero-fill fields follow the
+[Microsoft PE/COFF TLS directory](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-directory).
+
+| Command | Result |
+|---|---|
+| `python3 qemu.py --headless` | Passed; TLS template marker and existing CPL3, syscall, display and input checks |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/pe_tls_freestanding_test.cpp -o build/pe-tls-freestanding-test && build/pe-tls-freestanding-test` | Passed; TLS template and failure paths |
+| `clang++ -std=c++23 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -Iinclude test/pe_image_view_test.cpp -o build/pe-image-view-test && build/pe-image-view-test` | Passed; native PE mapping and import regression |
+
 ### Bootstrap Ke ready-queue withdrawal
 
 The freestanding `PriorityScheduler` can withdraw a queued thread and place it
