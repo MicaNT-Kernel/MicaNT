@@ -302,9 +302,10 @@ It has a bounded 64 MiB coalescing heap and real PE static TLS for `errno`;
 the process loader must initialize that TLS before allocation is called.
 It also exports tested freestanding `ceilf`, on-exit table, and initializer
 dispatch routines. These do not replace full DLL CRT startup, which the kernel
-loader does not yet perform. Stdio, locale, aligned allocation and unwind
-contracts remain missing. The current import check still fails on 26 Kernel32
-requirements and 25 UCRT exports; no success fallback is introduced.
+loader does not yet perform. Aligned allocation and release use the bounded
+arena; the CRT invalid-parameter handler, stdio, locale, and unwind contracts
+remain missing. The current import check still fails on 26 Kernel32
+requirements and 23 UCRT exports; no success fallback is introduced.
 
 Structural inspection of the archived standalone kernel identified its
 loader/import/DLL-attach/syscall sequence, but also fixed-result/no-op import

@@ -84,10 +84,12 @@ The canonical UCRT source has an isolated freestanding memory/string branch
 with a bounded 64 MiB coalescing arena and native PE static TLS for `errno`.
 The supported `ucrtbase_boot` CMake target builds it into
 `build/system32/ucrtbase.dll`; the Explorer build aggregate includes it.
-It exports 22 memory/string/errno/math/startup functions, including `ceilf`,
-on-exit table operations, and initializer-table dispatch, with no external PE
-imports.
-Incomplete aligned-allocation exports are deliberately absent.
+It exports 24 memory/string/errno/math/startup functions, including `ceilf`,
+on-exit table operations, initializer-table dispatch, and aligned allocation,
+with no external PE imports. `_aligned_malloc` validates nonzero size and
+power-of-two alignment, sets `errno` on invalid input or allocation failure,
+and `_aligned_free` returns the block to the same arena. The CRT invalid
+parameter handler contract is not implemented.
 
 Verified:
 
@@ -120,11 +122,11 @@ by the kernel; mapping/inspection is not a substitute. Its contract follows
 the public [CRT errno documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/errno-doserrno-sys-errlist-and-sys-nerr)
 and [PE TLS specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#the-tls-section).
 `python3 qemu.py --check-explorer` still **fails explicitly** on 26 Kernel32
-requirements and 25 UCRT exports, reduced from 73 total missing requirements
-to 51 by the tested `ceilf` and CRT startup-table exports. The initializer and
-on-exit helpers are not full DLL CRT startup; the kernel loader does not yet
-dispatch module initializers or TLS. No fake export, host DLL or synthetic
-import trampoline fills those gaps.
+requirements and 23 UCRT exports, reduced from 73 total missing requirements
+to 49 by the tested `ceilf`, CRT startup-table, and aligned-allocation
+increments. The initializer and on-exit helpers are not full DLL CRT startup;
+the kernel loader does not yet dispatch module initializers or TLS. No fake
+export, host DLL or synthetic import trampoline fills those gaps.
 
 ### Allocation-free firmware memory descriptors
 

@@ -116,6 +116,27 @@ int main() {
                errnoHeap, std::numeric_limits<std::size_t>::max(), error) == nullptr);
     assert(error == micant::ucrt::detail::kErrnoNoMemory);
 
+    error = 123;
+    void* alignedWithErrno =
+        micant::ucrt::detail::allocateAlignedWithErrno(errnoHeap, 48, 256, error);
+    assert(alignedWithErrno != nullptr && error == 123);
+    assert(reinterpret_cast<std::uintptr_t>(alignedWithErrno) % 256 == 0);
+    errnoHeap.release(alignedWithErrno);
+
+    error = 124;
+    assert(micant::ucrt::detail::allocateAlignedWithErrno(
+               errnoHeap, 48, 0, error) == nullptr);
+    assert(error == micant::ucrt::detail::kErrnoInvalidArgument);
+    error = 125;
+    assert(micant::ucrt::detail::allocateAlignedWithErrno(
+               errnoHeap, 0, 16, error) == nullptr);
+    assert(error == micant::ucrt::detail::kErrnoInvalidArgument);
+
+    error = 126;
+    assert(micant::ucrt::detail::allocateAlignedWithErrno(
+               exhausted, 900, 64, error) == nullptr);
+    assert(error == micant::ucrt::detail::kErrnoNoMemory);
+
     error = 117;
     assert(micant::ucrt::detail::reallocateWithErrno(
                errnoHeap, errnoFirst, 900, error) == nullptr);

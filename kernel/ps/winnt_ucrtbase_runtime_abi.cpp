@@ -75,6 +75,15 @@ void Ucrt_free(void* block) noexcept {
     g_nativeHeap.release(block);
 }
 
+void* Ucrt_aligned_malloc(std::size_t size, std::size_t alignment) noexcept {
+    return micant::ucrt::detail::allocateAlignedWithErrno(
+        g_nativeHeap, size, alignment, g_nativeErrno);
+}
+
+void Ucrt_aligned_free(void* block) noexcept {
+    g_nativeHeap.release(block);
+}
+
 }
 
 static_assert(sizeof(wchar_t) == 2);
@@ -136,6 +145,16 @@ __declspec(dllexport) void* __cdecl realloc(void* block,
 
 __declspec(dllexport) void __cdecl free(void* block) {
     micant::ucrt::winnt_ucrtbase_abi::Ucrt_free(block);
+}
+
+__declspec(dllexport) void* __cdecl _aligned_malloc(
+    std::size_t size, std::size_t alignment) {
+    return micant::ucrt::winnt_ucrtbase_abi::Ucrt_aligned_malloc(
+        size, alignment);
+}
+
+__declspec(dllexport) void __cdecl _aligned_free(void* block) {
+    micant::ucrt::winnt_ucrtbase_abi::Ucrt_aligned_free(block);
 }
 
 __declspec(dllexport) void* __cdecl memcpy(

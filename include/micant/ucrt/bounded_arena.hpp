@@ -9,6 +9,27 @@ namespace micant::ucrt {
 namespace detail {
 
 inline constexpr int kErrnoNoMemory = 12;
+inline constexpr int kErrnoInvalidArgument = 22;
+
+inline constexpr bool isPowerOfTwo(std::size_t value) noexcept {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+template <typename Arena>
+[[nodiscard]] void* allocateAlignedWithErrno(Arena& arena, std::size_t size,
+                                             std::size_t alignment,
+                                             int& error) noexcept {
+    if (size == 0 || !isPowerOfTwo(alignment)) {
+        error = kErrnoInvalidArgument;
+        return nullptr;
+    }
+
+    void* result = arena.allocate(size, alignment);
+    if (!result) {
+        error = kErrnoNoMemory;
+    }
+    return result;
+}
 
 template <typename Arena>
 [[nodiscard]] void* allocateWithErrno(Arena& arena, std::size_t size,
