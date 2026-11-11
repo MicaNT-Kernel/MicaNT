@@ -454,6 +454,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite504") {
+        RUN_TEST(Test_Horizon288_Device64Options76_PagefileWriteCompressionRatioHistogramCpuPllLockLatency_InterlockedConverseNonImplicationModulo_And_AsconGrain128XofHash_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite503") {
         RUN_TEST(Test_Horizon287_Device63Options75_PagefileWriteCoalescingHistogramCpuPllSlewRate_InterlockedConverseImplicationModulo_And_AsconElephantXofHash_Suite);
         return g_FailedTests;
@@ -2522,6 +2526,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon285_Authenticode_Asn1Pkcs7_MicrosoftRootAnchors_SecurityCatalog_And_DriverIntegrity_Suite);
     RUN_TEST(Test_Horizon286_Device62Options74_PagefileWriteDeduplicationTelemetryCpuDfsJitter_InterlockedImplicationModulo_And_AsconPhotonBeetleXofHash_Suite);
     RUN_TEST(Test_Horizon287_Device63Options75_PagefileWriteCoalescingHistogramCpuPllSlewRate_InterlockedConverseImplicationModulo_And_AsconElephantXofHash_Suite);
+    RUN_TEST(Test_Horizon288_Device64Options76_PagefileWriteCompressionRatioHistogramCpuPllLockLatency_InterlockedConverseNonImplicationModulo_And_AsconGrain128XofHash_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

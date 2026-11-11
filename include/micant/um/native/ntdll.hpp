@@ -3176,6 +3176,42 @@ struct SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_SLEW_RATE_HISTOGRAM_TELEMETRY_INFORMAT
 };
 using PSYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_SLEW_RATE_HISTOGRAM_TELEMETRY_INFORMATION = SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_SLEW_RATE_HISTOGRAM_TELEMETRY_INFORMATION*;
 
+// Class 323: SystemPagefileWriteCompressionRatioHistogramTelemetryInformation
+struct SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // e.g. 0
+    ULONG    HistogramBucketsCount;                // e.g. 8
+    ULONG64  CompressionRunsUnder2x;               // 16384ULL
+    ULONG64  CompressionRuns2xTo4x;                // 65536ULL
+    ULONG64  CompressionRuns4xTo8x;                // 131072ULL
+    ULONG64  CompressionRunsAbove8x;               // 32768ULL
+    ULONG64  TotalWriteRequestsCompressed;         // 245760ULL
+    double   AverageCompressionRatio;              // 4.65
+    double   PeakCompressionRatio;                 // 14.8
+    ULONG    CompressedByteSavingsPercent;         // 72
+    ULONG    CompressionFlags;                     // 0x05
+};
+using PSYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION*;
+
+// Class 324: SystemCpuClockPhaseLockedLoopLockLatencyHistogramTelemetryInformation
+struct SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // e.g. 1
+    ULONG    Reserved;                             // 0
+    ULONG    PackageIndex;                         // e.g. 0
+    ULONG    CoreIndex;                            // e.g. 0
+    ULONG64  LockLatencyEventsTotal;               // 400000ULL
+    ULONG64  LockLatencyUnder50Ns;                 // 80000ULL
+    ULONG64  LockLatency50To150Ns;                 // 220000ULL
+    ULONG64  LockLatency150To300Ns;                // 85000ULL
+    ULONG64  LockLatencyAbove300Ns;                // 15000ULL
+    double   MinLockLatencyNanoseconds;            // 18.2
+    double   MeanLockLatencyNanoseconds;           // 112.5
+    double   MaxLockLatencyNanoseconds;            // 425.0
+    ULONG    PllLockFlags;                         // 0x03
+};
+using PSYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION = SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION*;
+
 inline constexpr ULONG TPM_FLAG_ENABLED           = 0x00000001;
 inline constexpr ULONG TPM_FLAG_ACTIVATED         = 0x00000002;
 inline constexpr ULONG TPM_FLAG_OWNED             = 0x00000004;
@@ -6764,6 +6800,54 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             return NtStatus::Success;
         }
 
+        case 323: { // SystemPagefileWriteCompressionRatioHistogramTelemetryInformation (Class 323)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->HistogramBucketsCount = 8;
+            pInfo->CompressionRunsUnder2x = 16384ULL;
+            pInfo->CompressionRuns2xTo4x = 65536ULL;
+            pInfo->CompressionRuns4xTo8x = 131072ULL;
+            pInfo->CompressionRunsAbove8x = 32768ULL;
+            pInfo->TotalWriteRequestsCompressed = 245760ULL;
+            pInfo->AverageCompressionRatio = 4.65;
+            pInfo->PeakCompressionRatio = 14.8;
+            pInfo->CompressedByteSavingsPercent = 72;
+            pInfo->CompressionFlags = 0x05;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+
+        case 324: { // SystemCpuClockPhaseLockedLoopLockLatencyHistogramTelemetryInformation (Class 324)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PackageIndex = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->LockLatencyEventsTotal = 400000ULL;
+            pInfo->LockLatencyUnder50Ns = 80000ULL;
+            pInfo->LockLatency50To150Ns = 220000ULL;
+            pInfo->LockLatency150To300Ns = 85000ULL;
+            pInfo->LockLatencyAbove300Ns = 15000ULL;
+            pInfo->MinLockLatencyNanoseconds = 18.2;
+            pInfo->MeanLockLatencyNanoseconds = 112.5;
+            pInfo->MaxLockLatencyNanoseconds = 425.0;
+            pInfo->PllLockFlags = 0x03;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+
         default: {
             if (SystemInformation && SystemInformationLength > 0) {
                 std::memset(SystemInformation, 0, SystemInformationLength);
@@ -9282,6 +9366,75 @@ inline CHAR WINAPI RtlInterlockedConverseImplicationModulo8(CHAR volatile* Desti
     }
 }
 
+
+inline LONG64 WINAPI RtlInterlockedConverseNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint64_t cur = static_cast<uint64_t>(current);
+        uint64_t val = static_cast<uint64_t>(Value);
+        uint64_t op = (~cur) & val;
+        uint64_t res = op % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedConverseNonImplicationModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint32_t cur = static_cast<uint32_t>(current);
+        uint32_t val = static_cast<uint32_t>(Value);
+        uint32_t op = (~cur) & val;
+        uint32_t res = op % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedConverseNonImplicationModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint16_t cur = static_cast<uint16_t>(current);
+        uint16_t val = static_cast<uint16_t>(Value);
+        uint16_t op = static_cast<uint16_t>((~cur) & val);
+        uint16_t res = static_cast<uint16_t>(op % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedConverseNonImplicationModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint8_t cur = static_cast<uint8_t>(current);
+        uint8_t val = static_cast<uint8_t>(Value);
+        uint8_t op = static_cast<uint8_t>((~cur) & val);
+        uint8_t res = static_cast<uint8_t>(op % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline ULONG64 WINAPI RtlInterlockedRotateRight64(ULONG64 volatile* Destination, ULONG ShiftCount) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<ULONG64> volatile*>(Destination);
@@ -10308,6 +10461,19 @@ inline NtStatus WINAPI RtlQuerySystemCpuClockPhaseLockedLoopSlewRateHistogramTel
     return NtQuerySystemInformation_Export(322, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileWriteCompressionRatioHistogramTelemetryInformation(SYSTEM_PAGEFILE_WRITE_COMPRESSION_RATIO_HISTOGRAM_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(323, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuClockPhaseLockedLoopLockLatencyHistogramTelemetryInformation(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_LOCK_LATENCY_HISTOGRAM_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(324, Info, sizeof(*Info), &retLen);
+}
+
+
 inline NtStatus WINAPI RtlFormatMessage(const wchar_t* /*MessageFormat*/, ULONG /*MaximumWidth*/, BOOLEAN /*IgnoreInserts*/, BOOLEAN /*ArgumentsAreAnsi*/, BOOLEAN /*ArgumentsAreAnArray*/, void* /*Arguments*/, wchar_t* Length, ULONG /*Size*/, ULONG* ReturnLength) noexcept {
     if (ReturnLength) *ReturnLength = 0;
     return NtStatus::Success;
@@ -11061,6 +11227,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedConverseImplicationModulo8", reinterpret_cast<void*>(RtlInterlockedConverseImplicationModulo8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingHistogramTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingHistogramTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopSlewRateHistogramTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockPhaseLockedLoopSlewRateHistogramTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedConverseNonImplicationModulo64", reinterpret_cast<void*>(RtlInterlockedConverseNonImplicationModulo64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedConverseNonImplicationModulo32", reinterpret_cast<void*>(RtlInterlockedConverseNonImplicationModulo32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedConverseNonImplicationModulo16", reinterpret_cast<void*>(RtlInterlockedConverseNonImplicationModulo16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedConverseNonImplicationModulo8", reinterpret_cast<void*>(RtlInterlockedConverseNonImplicationModulo8));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCompressionRatioHistogramTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCompressionRatioHistogramTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopLockLatencyHistogramTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockPhaseLockedLoopLockLatencyHistogramTelemetryInformation));
 
 
     // Threadpool
