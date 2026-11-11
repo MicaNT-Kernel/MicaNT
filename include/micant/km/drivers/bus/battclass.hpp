@@ -46,10 +46,11 @@ struct BATTERY_WMI_RUNTIME { uint32_t Tag; uint32_t EstimatedRuntime; };
 struct BATTERY_WMI_TEMPERATURE { uint32_t Tag; uint32_t Temperature; };
 struct BATTERY_WMI_FULL_CHARGED_CAPACITY { uint32_t Tag; uint32_t FullChargedCapacity; };
 struct BATTERY_WMI_CYCLE_COUNT { uint32_t Tag; uint32_t CycleCount; };
+struct BATTERY_WMI_REPORTING_SCALE { uint32_t Granularity; uint32_t Capacity; };
 struct BATTERY_WMI_STATIC_DATA {
     uint32_t Tag;
     uint16_t ManufactureDate[25];
-    BatteryReportingScale Granularity[4];
+    BATTERY_WMI_REPORTING_SCALE Granularity[4];
     uint32_t Capabilities;
     uint8_t Technology;
     uint32_t Chemistry;
@@ -61,6 +62,7 @@ struct BATTERY_WMI_STATIC_DATA {
 };
 static_assert(sizeof(BATTERY_WMI_STATUS) == 24);
 static_assert(sizeof(BATTERY_WMI_RUNTIME) == 8);
+static_assert(offsetof(BATTERY_WMI_STATIC_DATA, Granularity) == 56);
 static_assert(offsetof(BATTERY_WMI_STATIC_DATA, Strings) == 116);
 
 inline constexpr uint32_t BATTERY_WMI_STATUS_GUID_INDEX = 0;
@@ -494,7 +496,8 @@ extern "C" inline micant::NtStatus BatteryClassQueryWmiDataBlock(
             data.resize(offsetof(BATTERY_WMI_STATIC_DATA, Strings));
             BATTERY_WMI_STATIC_DATA value{};
             value.Tag = tag;
-            std::copy_n(scales.begin(), scaleCount, value.Granularity);
+            for (size_t index = 0; index < scaleCount; ++index)
+                value.Granularity[index] = {scales[index].Granularity, scales[index].Capacity};
             value.Capabilities = information.capabilities;
             value.Technology = information.technology;
             value.Chemistry = static_cast<uint32_t>(information.chemistry[0]) |
