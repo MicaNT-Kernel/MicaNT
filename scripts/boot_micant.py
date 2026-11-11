@@ -1,49 +1,172 @@
 #!/usr/bin/env python3
+"""Boot the verified modular kernel in QEMU/OVMF and check serial milestones."""
+
+import argparse
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
-import paramiko
+from pathlib import Path
 
-sys.stdout.reconfigure(encoding='utf-8')
+from verify_kernel_architecture import validate_build_manifest
 
-HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
-USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
-KEY_PATH = os.environ.get("MICANT_SSH_KEY", r"C:\Users\admin\.ssh\micant_ci_key")
 
-def main():
-    print("[1/2] Connecting to server via SSH...")
-    import socket
-    import random
-    k = paramiko.RSAKey.from_private_key_file(KEY_PATH)
-    ssh = None
-    for _ in range(10):
-        try:
-            s = socket.socket()
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            port = random.randint(53000, 64000)
-            s.bind(('0.0.0.0', port))
-            s.connect((HOST, 22))
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(HOST, 22, USER, pkey=k, sock=s)
-            break
-        except OSError:
-            pass
-    if not ssh:
-        raise RuntimeError("Could not connect to server")
-    print("      Connected.")
+ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_SERIAL = (
+    "[UEFI] MicaNT bootloader started",
+    "[UEFI] Memory map acquired",
+    "[UEFI] Modular kernel image loaded",
+    "[UEFI] ExitBootServices completed",
+    "[MicaNT] Modular KiSystemStartup reached",
+    "[MicaNT] Phase 0 started",
+    "[MicaNT] HAL initialized",
+    "[MicaNT] Early memory initialized",
+    "[MicaNT] Object Manager initialized",
+    "[MicaNT] Phase 1 started",
+    "[MicaNT] Executive initialization completed",
+    "[MicaNT] Kernel idle loop entered",
+)
 
-    print("[2/2] Arming BootNext=000D (MicaNT_SDB) and issuing reboot...")
-    cmd = "sudo efibootmgr --bootnext 000D && sudo reboot"
+
+def serial_progress(serial_log: str) -> int:
+    """Return how many expected messages occur, in order, in the serial log."""
+    cursor = 0
+    for index, marker in enumerate(EXPECTED_SERIAL):
+        found = serial_log.find(marker, cursor)
+        if found < 0:
+            return index
+        cursor = found + len(marker)
+    return len(EXPECTED_SERIAL)
+
+
+def run_qemu(ovmf_code: Path, timeout: int, stable_seconds: int) -> None:
+    validate_build_manifest(ROOT)
+
+    qemu = shutil.which(os.environ.get("MICANT_QEMU", "qemu-system-x86_64"))
+    if not qemu:
+        raise RuntimeError("qemu-system-x86_64 was not found on PATH")
+    if not ovmf_code.is_file():
+        raise RuntimeError(f"OVMF code image does not exist: {ovmf_code}")
+
+    kernel = ROOT / "build" / "baremetal" / "ntoskrnl.exe"
+    bootloader = ROOT / "build" / "esp" / "EFI" / "BOOT" / "BOOTX64.EFI"
+
+    with tempfile.TemporaryDirectory(prefix="micant-qemu-") as temp_root:
+        temp = Path(temp_root)
+        esp = temp / "esp"
+        boot_dir = esp / "EFI" / "BOOT"
+        kernel_dir = esp / "EFI" / "MicaNT"
+        boot_dir.mkdir(parents=True)
+        kernel_dir.mkdir(parents=True)
+        shutil.copyfile(bootloader, boot_dir / "BOOTX64.EFI")
+        shutil.copyfile(kernel, kernel_dir / "ntoskrnl.exe")
+        serial_path = temp / "serial.log"
+        qemu_output_path = temp / "qemu.log"
+
+        command = [
+            qemu,
+            "-machine", "q35",
+            "-cpu", "qemu64",
+            "-smp", "1",
+            "-m", "1024",
+            "-drive",
+            f"if=pflash,format=raw,unit=0,readonly=on,file={ovmf_code.resolve()}",
+            "-drive", f"file=fat:ro:{esp},format=raw,if=ide,index=0",
+            "-display", "none",
+            "-serial", f"file:{serial_path}",
+            "-monitor", "none",
+            "-snapshot",
+            "-no-reboot",
+            "-no-shutdown",
+        ]
+        started = time.monotonic()
+        complete_since = None
+
+        with qemu_output_path.open("w", encoding="utf-8") as qemu_output:
+            process = subprocess.Popen(
+                command,
+                cwd=ROOT,
+                stdout=qemu_output,
+                stderr=subprocess.STDOUT,
+            )
+            try:
+                while time.monotonic() - started < timeout:
+                    return_code = process.poll()
+                    if return_code is not None:
+                        qemu_output.flush()
+                        details = qemu_output_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        raise RuntimeError(
+                            f"QEMU exited with status {return_code} before the "
+                            f"modular idle loop.\n{details}"
+                        )
+
+                    serial_log = (
+                        serial_path.read_text(encoding="utf-8", errors="replace")
+                        if serial_path.exists()
+                        else ""
+                    )
+                    progress = serial_progress(serial_log)
+                    if progress == len(EXPECTED_SERIAL):
+                        if complete_since is None:
+                            complete_since = time.monotonic()
+                        elif time.monotonic() - complete_since >= stable_seconds:
+                            print(
+                                f"QEMU modular boot passed; serial remained in the "
+                                f"idle state for {stable_seconds}s."
+                            )
+                            return
+                    else:
+                        complete_since = None
+                    time.sleep(0.1)
+
+                serial_log = (
+                    serial_path.read_text(encoding="utf-8", errors="replace")
+                    if serial_path.exists()
+                    else ""
+                )
+                missing = EXPECTED_SERIAL[serial_progress(serial_log)]
+                raise RuntimeError(
+                    f"QEMU boot timed out after {timeout}s; next required serial "
+                    f"milestone: {missing}"
+                )
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ovmf-code",
+        type=Path,
+        default=os.environ.get("MICANT_OVMF_CODE"),
+        help="path to the x86_64 OVMF code image (or MICANT_OVMF_CODE)",
+    )
+    parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--stable-seconds", type=int, default=5)
+    args = parser.parse_args()
+
+    if args.ovmf_code is None:
+        parser.error("--ovmf-code or MICANT_OVMF_CODE is required")
+    if args.timeout <= 0 or args.stable_seconds <= 0:
+        parser.error("--timeout and --stable-seconds must be positive")
+
     try:
-        stdin, stdout, stderr = ssh.exec_command(cmd, timeout=5)
-        out = stdout.read().decode('utf-8', errors='replace').strip()
-        print(f"      Server response:\n{out}")
-    except Exception as e:
-        print(f"      Reboot triggered (connection dropped as expected): {e}")
+        run_qemu(args.ovmf_code, args.timeout, args.stable_seconds)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"QEMU boot test failed: {error}", file=sys.stderr)
+        return 1
+    return 0
 
-    ssh.close()
-    print("      Server is now rebooting into MicaNT Cutler Edition on sda1!")
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

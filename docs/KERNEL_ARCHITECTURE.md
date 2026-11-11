@@ -182,3 +182,16 @@ No QEMU boot result is claimed. A QEMU smoke test must capture serial output
 from the modular kernel itself and reach a controlled idle loop; printing
 expected messages from the bootloader or a demonstration function is
 insufficient.
+
+Once the modular PE, manifest, and OVMF firmware are available, run the
+reproducible single-core smoke test with:
+
+```powershell
+python scripts/boot_micant.py --ovmf-code <path-to-OVMF_CODE.fd>
+```
+
+The test uses QEMU `q35`, one AMD64 virtual CPU, OVMF pflash, a read-only FAT
+ESP, and a snapshot; it requires the ordered serial milestones above and a
+stable idle loop. The QEMU/OVMF/FAT launch configuration has been smoke-tested,
+but the test exits before kernel launch because the modular PE and manifest
+have not yet been produced.

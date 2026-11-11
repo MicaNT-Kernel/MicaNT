@@ -26,6 +26,7 @@ BUILD_FILES = (
     ROOT / ".github" / "workflows" / "ci.yml",
     ROOT / "scripts" / "build_incremental.ps1",
     ROOT / "scripts" / "stage_micant.py",
+    ROOT / "scripts" / "boot_micant.py",
 )
 
 
