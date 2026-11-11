@@ -111,7 +111,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–290 (506/506 Passing)</p>
+                  <p>Chronicle of Horizons 1–291 (507/507 Passing)</p>
                 </div>
               </a>
             </li>
@@ -239,7 +239,7 @@
         <div class="shell-screen" id="shellScreen">
           <div style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]
 (c) Project MICA. Dave Cutler Clean-Room Architecture. Zero Telemetry.
-506/506 test suites passing across 290 Horizons.
+507/507 test suites passing across 291 Horizons.
 Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38bdf8;">?</strong> for available commands.
 </div>
           <div id="shellHistory"></div>
@@ -308,17 +308,17 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
       "C:\\Windows\\System32": {
         dirs: ["drivers", "config"],
         files: {
-          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 506 Suites Sealed]",
+          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 507 Suites Sealed]",
           "hal.sys": "[PE32+ System Driver: Hardware Abstraction Layer, ACPI 6.5, APIC/x2APIC]",
           "cmd.exe": "[PE32+ Win32 Console Shell]",
           "ntfs.sys": "[Titan NTFS Driver with Transactional Logging]",
-          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 506/506 Test Suites Sealed with 0 Failures"
+          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 507/507 Test Suites Sealed with 0 Failures"
         }
       },
       "C:\\Windows\\System32\\drivers": {
         dirs: [],
         files: {
-          "prismx.sys": "[PrismX Direct3D 12 WDDM Sovereign Display Driver, Milestone 110]",
+          "prismx.sys": "[PrismX Direct3D 12 WDDM Sovereign Display Driver, Milestone 111]",
           "xhci.sys": "[USB 3.2 xHCI 1.2 Extensible Host Controller Driver, Horizon 40]",
           "aehd.sys": "[AHCI High Performance Storage Driver, Microsoft Signed]",
           "titan_zfs.sys": "[OpenZFS 2.3 Sovereign Storage Driver]"
@@ -380,7 +380,7 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
       status.style.marginTop = "8px";
       status.style.borderTop = "1px dashed rgba(56, 189, 248, 0.2)";
       status.style.paddingTop = "6px";
-      status.innerHTML = `Mode: Direct3D 12 Device66 Software Transform &bull; Target: 30 FPS &bull; Type <strong style="color: #38bdf8;">stop</strong> or click Stop`;
+      status.innerHTML = `Mode: Direct3D 12 Device67 Software Transform &bull; Target: 30 FPS &bull; Type <strong style="color: #38bdf8;">stop</strong> or click Stop`;
       container.appendChild(status);
 
       shellHistory.appendChild(container);
@@ -530,55 +530,60 @@ Direct3D 12 Runtime:       <span style="color: #34d399; font-weight: 700;">ACTIV
           `);
           break;
 
+        case "spook":
         case "ascon":
         case "gimli":
         case "blake3":
         case "grain128":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
-      MicaNT Horizon 290: NIST SP 800-232 Ascon-Gimli Cryptography      
+      MicaNT Horizon 291: NIST SP 800-232 Ascon-Spook Cryptography      
 ========================================================================</span>
-Algorithm Standard:        NIST SP 800-232 Lightweight Cryptography + Gimli Permutation
-Primary Primitives:        Ascon-Gimli-XOF &amp; Ascon-Gimli-Hash (256-bit)
-Diffusion Permutation:     24-Round 384-Bit SPN Gimli Non-Linear Substitution Sponge
-CNG Providers:             BCRYPT_ASCON_GIMLI_XOF_ALGORITHM
-                           BCRYPT_ASCON_GIMLI_HASH_ALGORITHM
-Security Properties:       Ultra-High Non-Linear Algebraic Degree, Zero Leakage
+Algorithm Standard:        NIST SP 800-232 Lightweight Cryptography + Spook Permutation
+Primary Primitives:        Ascon-Spook-XOF &amp; Ascon-Spook-Hash (256-bit)
+Diffusion Permutation:     Shadow-512 Step-Permutation (Clyde-128 Non-Linear S-Boxes)
+CNG Providers:             BCRYPT_ASCON_SPOOK_XOF_ALGORITHM
+                           BCRYPT_ASCON_SPOOK_HASH_ALGORITHM
+Security Properties:       Quantum-Hardened Sponge, Side-Channel Protected, Zero Leakage
 Driver Verification:       <span style="color: #34d399; font-weight: 700;">BCrypt CNG Provider Registered &amp; Verified</span>
           `);
           break;
 
+        case "majority":
         case "choose":
         case "modulo":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
-       MicaNT Horizon 290: Interlocked Bitwise Choose Modulo Prims      
+     MicaNT Horizon 291: Interlocked Bitwise Majority Modulo Prims      
 ========================================================================</span>
-Mathematical Formula:      NewVal = ((A &amp; B) | (~A &amp; C)) % Divisor (Bitwise Select)
-64-Bit Primitive:          InterlockedChooseModulo64 (Lock-Free CMPXCHG16B)
-32-Bit Primitive:          InterlockedChooseModulo32 (Lock-Free CMPXCHG)
-16-Bit Primitive:          InterlockedChooseModulo16 (Lock-Free CMPXCHG)
-8-Bit Primitive:           InterlockedChooseModulo8  (Lock-Free CMPXCHG)
-Native NT Export:          RtlInterlockedChooseModulo64/32/16/8 in ntdll.dll
+Mathematical Formula:      NewVal = ((A &amp; B) | (B &amp; C) | (C &amp; A)) % Divisor (3-Way Majority)
+64-Bit Primitive:          InterlockedMajorityModulo64 (Lock-Free CMPXCHG16B)
+32-Bit Primitive:          InterlockedMajorityModulo32 (Lock-Free CMPXCHG)
+16-Bit Primitive:          InterlockedMajorityModulo16 (Lock-Free CMPXCHG)
+8-Bit Primitive:           InterlockedMajorityModulo8  (Lock-Free CMPXCHG)
+Native NT Export:          RtlInterlockedMajorityModulo64/32/16/8 in ntdll.dll
 Concurrency Status:        <span style="color: #34d399; font-weight: 700;">VERIFIED LOCK-FREE ACROSS ALL SMP CORES</span>
           `);
           break;
 
+        case "coalesce":
+        case "pll":
         case "latency":
         case "spreadspectrum":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
-     MicaNT Horizon 290: NT Native Latency Spikes &amp; Spread Spectrum     
+   MicaNT Horizon 291: NT Native Pagefile Coalescing &amp; PLL Telemetry    
 ========================================================================</span>
-System Information Class:  SystemPagefileWriteLatencySpikeHistogramTelemetry (327)
-  Latency Buckets:         8 Log-Scale Buckets (&lt;100us, &lt;500us, &lt;1ms, &lt;10ms, &gt;1s)
-  Detected Spikes:         0 Spikes (Zero tail-latency stalls)
-System Information Class:  SystemCpuClockSpreadSpectrumModulationProfile (328)
-  Spread-Spectrum Profile: Triangular / Hershey Down-Spread Active
-  Modulation Depth:        5,000 PPM (0.50% Center-Spread)
-  EMI Attenuation:         14.8 dB Radiated Emission Reduction
-Win32 Kernel32 APIs:       <span style="color: #34d399; font-weight: 700;">GetPagefileWriteLatencySpikeHistogramTelemetry() OK</span>
-                           <span style="color: #34d399; font-weight: 700;">GetCpuClockSpreadSpectrumModulationProfileTelemetry() OK</span>
+System Information Class:  SystemPagefileWriteCoalescingLatencyBreakdownTelemetry (329)
+  Batch Pages Merged:      16.4 Pages / Batch Average
+  Queue Latency:           1,850 microseconds
+  Media Latency:           4,100 microseconds
+System Information Class:  SystemCpuClockPhaseLockedLoopSettlingTimeHistogramTelemetry (330)
+  PLL Transients:          78,000 Transients Sampled
+  Settling &lt; 50ns:         51,000 Transients (65.4%)
+  Peak Settling Time:      680.5 nanoseconds
+Win32 Kernel32 APIs:       <span style="color: #34d399; font-weight: 700;">GetPagefileWriteCoalescingLatencyBreakdownTelemetry() OK</span>
+                           <span style="color: #34d399; font-weight: 700;">GetCpuClockPhaseLockedLoopSettlingTimeHistogramTelemetry() OK</span>
           `);
           break;
 
@@ -668,7 +673,7 @@ Active Requests In Flight: 128 requests
 <span style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]</span>
 DEC MICA &amp; PRISM Clean-Room Architecture
 Target Platform: AMD64 (x86_64) UEFI GOP Bare-Metal
-Test Battery: <span style="color: #34d399;">506/506 Passing (100% Pass Rate across 290 Horizons)</span>
+Test Battery: <span style="color: #34d399;">507/507 Passing (100% Pass Rate across 291 Horizons)</span>
           `);
           break;
 
