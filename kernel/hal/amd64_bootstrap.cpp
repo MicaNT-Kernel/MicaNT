@@ -490,10 +490,11 @@ void MicantSyscallClientProgram() {
     void* second{};
     int64_t maximum = 4096;
     size_t firstSize = 4096, secondSize = 4096;
+    micant::ObjectAttributes attributes{};
     auto* current = reinterpret_cast<void*>(~uint64_t{0});
     if (create(nullptr, 4, nullptr, &maximum, 4, 0x08000000, nullptr) !=
             static_cast<int32_t>(0xc0000005u) ||
-        create(&section, 4, nullptr, &maximum, 4, 0x08000000, nullptr) ||
+        create(&section, 4, &attributes, &maximum, 4, 0x08000000, nullptr) ||
         map(section, current, &first, 0, 0, nullptr, &firstSize, 2, 0, 4) !=
             static_cast<int32_t>(0xc0000022u) ||
         map(section, current, &first, 0, 0, nullptr, &firstSize, 1, 0, 2) !=

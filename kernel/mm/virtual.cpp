@@ -35,7 +35,13 @@ NtStatus NtCreateSection(Handle* out, uint32_t access, ObjectAttributes* attribu
                          LargeInteger* maximum, uint32_t protect, uint32_t allocation,
                          Handle file) {
     if (!out || !maximum || maximum->quadPart <= 0) return NtStatus::InvalidParameter;
-    if (attributes || file) return NtStatus::NotImplemented;
+    if (attributes) {
+        if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
+        if (attributes->rootDirectory || attributes->objectName || attributes->attributes ||
+            attributes->securityDescriptor || attributes->securityQualityOfService)
+            return NtStatus::NotImplemented;
+    }
+    if (file) return NtStatus::NotImplemented;
     if (access & ~section::SECTION_ALL_ACCESS) return NtStatus::NotImplemented;
     void* body{};
     ob::ObjectHeader* header{};

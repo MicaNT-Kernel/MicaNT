@@ -568,13 +568,17 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
                                    count * sizeof(uint64_t)) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
         if (number == sys::SSN_NtCreateSection) {
-            if (args.third) return status(NtStatus::NotImplemented);
             LargeInteger maximum{};
+            ObjectAttributes attributes{};
+            if (args.third && ex::ExSafeCopyFromUser(&attributes,
+                    reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
             if (ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success ||
                 ex::ExSafeCopyFromUser(&maximum, reinterpret_cast<const void*>(args.fourth), sizeof(maximum)) != NtStatus::Success)
                 return status(NtStatus::AccessViolation);
             Handle handle{};
-            const auto result = sys::NtCreateSection(&handle, static_cast<uint32_t>(second), nullptr, &maximum,
+            const auto result = sys::NtCreateSection(&handle, static_cast<uint32_t>(second),
+                                                      args.third ? &attributes : nullptr, &maximum,
                                                       static_cast<uint32_t>(extra[0]), static_cast<uint32_t>(extra[1]), extra[2]);
             if (result != NtStatus::Success) return status(result);
             const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));

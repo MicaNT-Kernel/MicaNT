@@ -164,7 +164,8 @@ the remaining view and PFN accounting after the last unmap.
 The AMD64 bootstrap dispatcher now accepts the four register arguments and
 copies stack arguments from the user stack. A limited anonymous `SEC_COMMIT`
 section service in `kernel/mm/virtual.cpp` uses the canonical Ob handle table
-and the bootstrap paging backend. A CPL3 diagnostic issues create, map, unmap
+and the bootstrap paging backend. Unnamed `OBJECT_ATTRIBUTES` with no other
+attributes are captured from user memory and supported. A CPL3 diagnostic issues create, map, unmap
 and close syscalls, checks handle access denial, shared data and the lifetime
 of a view after close, and checks PFN accounting after cleanup. An additional
 CPL3 PE diagnostic loads the real NTDLL PE, resolves the four section/close
