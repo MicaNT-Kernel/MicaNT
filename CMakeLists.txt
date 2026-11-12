@@ -268,6 +268,7 @@ if (MICANT_ENABLE_BAREMETAL)
         test/kernel_context_canary.cpp
         test/kernel_ke_ready_queue_test.cpp
         test/kernel_ke_block_wake_test.cpp
+        test/kernel_ke_apc_fifo_test.cpp
         test/kernel_ke_event_test.cpp
         test/kernel_ps_thread_test.cpp
         test/kernel_ps_user_test.cpp

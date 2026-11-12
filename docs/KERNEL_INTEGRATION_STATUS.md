@@ -198,6 +198,13 @@ releasing the stack and address space. QEMU exercises this path, rejects
 premature cleanup and duplicate readying, and checks PFN accounting. This is
 not yet a waitable Ob thread object or an implementation of `NtCreateThreadEx`
 or general process termination.
+The freestanding `KThread` now keeps resident APC objects in intrusive FIFO
+queues rather than constructing allocating `std::deque`s. QEMU verifies FIFO
+delivery for the current kernel thread and duplicate insertion rejection; Ps
+refuses to reap a thread with queued APCs until rundown is implemented. Target
+thread lookup, normal APC delivery semantics, rundown and alertable user waits
+remain incomplete. ReactOS `ntoskrnl/ke/apc.c` was consulted for queue and
+rundown context.
 Ps can also roll back a not-yet-started thread, withdrawing it from the Ke
 ready queue before it is reaped. QEMU checks cancellation both before and
 after queueing, rejection after selection or while running, and a clean PFN
@@ -303,6 +310,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
 | `python3 qemu.py --headless` | Passed; Ps image loading through Mm/Ob sections and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS rollback and PFN/Ob cleanup |
+| `python3 qemu.py --headless` | Passed; kernel APC FIFO order, duplicate insertion and refusal to reap a thread with queued APCs |
 | `python3 qemu.py --headless` | Passed; three CPL3 threads, cancellation of unsignaled event waits, wait restoration, process termination and event/section object reclamation |
 | `clang++ ... -fsanitize=address,undefined test/mm_process_backend_test.cpp` | Passed; ordinary section protection and backend regression |
 | `llvm-readobj --coff-imports build/qemu-cmake-mingw/ntdll-process.dll` | Passed; no external PE imports |

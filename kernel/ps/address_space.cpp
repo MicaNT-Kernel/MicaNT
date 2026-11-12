@@ -313,6 +313,7 @@ NtStatus EThread::reap() noexcept {
     if (!thread_ || !process_ || thread_->readyQueued || thread_.get() == ke::KeGetCurrentThread() ||
         (thread_->state != ke::ThreadState::Initialized && thread_->state != ke::ThreadState::Terminated))
         return NtStatus::InvalidParameter;
+    if (!thread_->kernelApcList.empty() || !thread_->userApcList.empty()) return NtStatus::NotImplemented;
     const auto cleanup = releaseUserMemory();
     if (cleanup != NtStatus::Success) return cleanup;
     const auto status = process_->detachThread(*thread_);

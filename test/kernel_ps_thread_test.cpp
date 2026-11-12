@@ -62,8 +62,14 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
         State state{&process, boot, false, &thread};
         ps::EThread cancelled;
         if (cancelled.cancelBeforeStart() != NtStatus::InvalidParameter ||
-            cancelled.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
-            cancelled.ready() != NtStatus::Success || scheduler.getReadyThreadCount() != 1 ||
+            cancelled.initialize(process, 16384, threadEntry, &state) != NtStatus::Success) return false;
+        KAPC pending{};
+        pending.inserted = true;
+        cancelled.kernelThread()->kernelApcList.push_back(&pending);
+        if (cancelled.reap() != NtStatus::NotImplemented) return false;
+        cancelled.kernelThread()->kernelApcList.pop_front();
+        pending.inserted = false;
+        if (cancelled.ready() != NtStatus::Success || scheduler.getReadyThreadCount() != 1 ||
             cancelled.cancelBeforeStart() != NtStatus::Success || scheduler.getReadyThreadCount() ||
             cancelled.cancelBeforeStart() != NtStatus::InvalidParameter ||
             cancelled.ready() != NtStatus::InvalidParameter || cancelled.reap() != NtStatus::Success ||

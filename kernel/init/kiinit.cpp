@@ -64,6 +64,7 @@ extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" bool MicantTestKeBlockWake() noexcept;
+extern "C" bool MicantTestKeApcFifo() noexcept;
 extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
@@ -1171,6 +1172,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestKeBlockWake())
         stopWithError("[MicaNT Ke] Block and wake verification failed\r\n");
     serialWrite("[MicaNT Ke] Kernel thread block and wake verified\r\n");
+    if (!MicantTestKeApcFifo())
+        stopWithError("[MicaNT Ke] APC FIFO verification failed\r\n");
+    serialWrite("[MicaNT Ke] Kernel APC FIFO verified\r\n");
     micant::sys::initializeBootstrapEventServices();
     if (!MicantTestKeEventWait())
         stopWithError("[MicaNT Ke] Event wait verification failed\r\n");

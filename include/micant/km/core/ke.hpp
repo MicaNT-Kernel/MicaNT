@@ -397,7 +397,34 @@ struct KAPC {
     uint8_t apcMode{0}; // 0 = KernelMode, 1 = UserMode
     bool inserted{false};
     bool isSpecialKernelApc{false};
+#if defined(MICANT_FREESTANDING)
+    KAPC* queueNext{nullptr};
+#endif
 };
+
+#if defined(MICANT_FREESTANDING)
+// Intrusive FIFO for resident APC objects; its owner serializes operations.
+class ApcQueue {
+public:
+    [[nodiscard]] bool empty() const noexcept { return head_ == nullptr; }
+    [[nodiscard]] KAPC* front() const noexcept { return head_; }
+    void push_back(KAPC* apc) noexcept {
+        apc->queueNext = nullptr;
+        if (tail_) tail_->queueNext = apc; else head_ = apc;
+        tail_ = apc;
+    }
+    void pop_front() noexcept {
+        if (!head_) return;
+        auto* previous = head_;
+        head_ = previous->queueNext;
+        if (!head_) tail_ = nullptr;
+        previous->queueNext = nullptr;
+    }
+private:
+    KAPC* head_{nullptr};
+    KAPC* tail_{nullptr};
+};
+#endif
 
 // ============================================================================
 // 7. Thread Execution State & Hardware Context Frame
@@ -478,8 +505,13 @@ struct KThread {
     KTrapFrame* trapFrame{nullptr};
 
     // APC Queues (Kernel-Mode & User-Mode)
+#if defined(MICANT_FREESTANDING)
+    ApcQueue kernelApcList;
+    ApcQueue userApcList;
+#else
     std::deque<KAPC*> kernelApcList;
     std::deque<KAPC*> userApcList;
+#endif
     bool kernelApcDisable{false};
     bool specialApcDisable{false};
     bool alertable{false};
@@ -971,18 +1003,16 @@ inline void KeInitializeApc(
  * @brief Queue an APC to target thread (KeInsertQueueApc).
  */
 inline bool KeInsertQueueApc(KAPC* apc, void* sysArg1 = nullptr, void* sysArg2 = nullptr) {
-    if (!apc || apc->inserted) return false;
+    auto* curr = g_CurrentCpu.currentThread;
+    if (!apc || apc->inserted || !curr) return false;
     apc->systemArgument1 = sysArg1;
     apc->systemArgument2 = sysArg2;
     apc->inserted = true;
 
-    auto* curr = g_CurrentCpu.currentThread;
-    if (curr) {
-        if (apc->apcMode == 0) {
-            curr->kernelApcList.push_back(apc);
-        } else {
-            curr->userApcList.push_back(apc);
-        }
+    if (apc->apcMode == 0) {
+        curr->kernelApcList.push_back(apc);
+    } else {
+        curr->userApcList.push_back(apc);
     }
     return true;
 }
