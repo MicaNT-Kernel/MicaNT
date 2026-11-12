@@ -51,11 +51,13 @@ void Test_ObjectManager_DirectoryAndHandles() {
     ob::HandleTable targetTable;
     Handle hTarget = 0;
     NtStatus dupHandleStatus = handleTable.duplicateHandle(h1, targetTable, hTarget, ob::GENERIC_ALL, false, 0);
-    TEST_ASSERT(NT_SUCCESS(dupHandleStatus), "Handle duplication must succeed");
+    TEST_ASSERT(dupHandleStatus == NtStatus::AccessDenied, "Unchecked access escalation must fail");
+    dupHandleStatus = handleTable.duplicateHandle(h1, targetTable, hTarget, 0, false, 0);
+    TEST_ASSERT(NT_SUCCESS(dupHandleStatus), "Same-access handle duplication must succeed");
     TEST_ASSERT(hTarget == 4, "First handle in target table must be 4");
     uint32_t targetAccess = 0;
     TEST_ASSERT(targetTable.lookup(hTarget, &targetAccess) == obj1.get(), "Duplicated handle must point to original object");
-    TEST_ASSERT(targetAccess == ob::GENERIC_ALL, "Duplicated handle granted access must match GENERIC_ALL");
+    TEST_ASSERT(targetAccess == ob::GENERIC_READ, "Duplicated handle must retain source access");
 
     // 7. ObReferenceObjectByHandle Type Safety & Access Rights
     ob::ObjectType eventType{

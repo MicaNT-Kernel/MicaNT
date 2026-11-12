@@ -47,8 +47,11 @@ NtStatus NtCreateEvent(Handle* out, uint32_t access, ObjectAttributes* attribute
 
 NtStatus NtSetEvent(Handle handle, int32_t* previousState) {
     ob::ObjectHeader* header{};
-    const auto status = ob::ObReferenceObjectByHandle(handle, ob::detail::currentHandleTable(),
-                                                       EventModifyState, &eventType, &header);
+    ob::HandleTable* table{};
+    Handle raw{};
+    auto status = ob::detail::resolveHandle(handle, table, raw);
+    if (status == NtStatus::Success)
+        status = ob::ObReferenceObjectByHandle(raw, *table, EventModifyState, &eventType, &header);
     if (status != NtStatus::Success) return status;
     const bool previous = header->as<Event>()->set();
     if (previousState) *previousState = previous ? 1 : 0;
@@ -59,14 +62,28 @@ NtStatus NtSetEvent(Handle handle, int32_t* previousState) {
 NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* timeout) {
     if (alertable || (timeout && timeout->quadPart != 0)) return NtStatus::NotImplemented;
     ob::ObjectHeader* header{};
-    const auto status = ob::ObReferenceObjectByHandle(handle, ob::detail::currentHandleTable(),
-                                                       ob::SYNCHRONIZE, nullptr, &header);
+    NtStatus status{};
+    if (handle == InvalidHandleValue) {
+        ps::EProcess* process{};
+        status = ps::detail::referenceCurrentProcess(process, header);
+    } else if (handle == static_cast<Handle>(-2)) {
+        ps::EThread* thread{};
+        status = ps::detail::referenceCurrentThread(thread, header);
+    } else {
+        ob::HandleTable* table{};
+        Handle raw{};
+        status = ob::detail::resolveHandle(handle, table, raw);
+        if (status == NtStatus::Success)
+            status = ob::ObReferenceObjectByHandle(raw, *table, ob::SYNCHRONIZE, nullptr, &header);
+    }
     if (status != NtStatus::Success) return status;
     Event* waitObject{};
     if (header->type == &eventType) {
         waitObject = header->as<Event>();
     } else if (ps::detail::isProcessObject(*header)) {
         waitObject = &header->as<ps::EProcess>()->terminationEvent();
+    } else if (ps::detail::isThreadObject(*header)) {
+        waitObject = &header->as<ps::EThread>()->terminationEvent();
     } else {
         ob::ObDereferenceObject(header);
         return NtStatus::ObjectTypeMismatch;
@@ -77,13 +94,15 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
         return NtStatus::InvalidParameter;
     }
     current->eventWaitInProgress = true;
+    current->eventWaitUserMode = current->previousUserMode;
+    current->eventWaitCanTerminate = ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL;
     const auto result = waitObject->wait(timeout != nullptr);
     current->eventWaitInProgress = false;
+    current->eventWaitUserMode = false;
+    current->eventWaitCanTerminate = false;
     ob::ObDereferenceObject(header);
-    if (current->owningProcess && current->owningProcess->isTerminating()) {
-        (void)current->owningProcess->terminateCurrent(current->owningProcess->exitStatus());
-        __builtin_trap();
-    }
+    // A cancelled user wait unwinds through its caller before termination is
+    // serviced at the user-return boundary.
     return result;
 }
 }

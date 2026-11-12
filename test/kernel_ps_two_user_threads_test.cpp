@@ -1,4 +1,5 @@
 #include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/ps_objects.hpp"
 #include "micant/km/executive/image_metadata.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/syscalls.hpp"
@@ -299,14 +300,54 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         invalidTls.alignment = 3; // Fails after user pages were allocated; reap must roll them back.
         if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::InvalidParameter ||
             first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        // Compose a separate process and initial user thread through the
+        // private Ps factory, then roll it back before its entry executes.
+        Handle createdProcess{}, createdThread{};
+        const ps::detail::BootstrapProcessImage processImages[]{
+            {"fixture.exe", std::span<const uint8_t>{file}, executablePath},
+            {"ntdll.dll", std::span<const uint8_t>{nativeDll}, dllPath},
+            {"tls.dll", std::span<const uint8_t>{tlsDllFile}, tlsPath},
+        };
+        if (ps::detail::createBootstrapUserProcess({}, executablePath, commandLine, 32768,
+                mm::PageSize4KB, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
+                createdProcess, createdThread) != NtStatus::InvalidParameter || createdProcess || createdThread ||
+            ps::detail::createBootstrapUserProcess(processImages, executablePath, commandLine, 32768,
+                mm::PageSize4KB, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
+                createdProcess, createdThread) != NtStatus::Success) return false;
+        ps::EThread* createdThreadObject{};
+        ob::ObjectHeader* createdThreadRef{};
+        if (ps::detail::referenceThreadHandle(createdThread, ob::SYNCHRONIZE,
+                createdThreadObject, createdThreadRef) != NtStatus::Success || !createdThreadObject ||
+            createdThreadObject->cancelBeforeStart() != NtStatus::Success ||
+            createdThreadObject->reap() != NtStatus::Success) return false;
+        ob::ObDereferenceObject(createdThreadRef);
+        if (sys::NtClose(createdThread) != NtStatus::Success ||
+            sys::NtClose(createdProcess) != NtStatus::Success ||
+            mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        // Exercise Ob ownership for a user context before the real workers.
+        Handle objectHandle{};
+        ps::EThread* objectThread{};
+        if (ps::detail::createUserThreadHandle(process, entry, 32768, mm::PageSize4KB,
+                                               preemptive, ob::SYNCHRONIZE,
+                                               objectHandle, objectThread) != NtStatus::Success ||
+            !objectThread || objectThread->cancelBeforeStart() != NtStatus::Success)
+            return false;
+        LargeInteger objectPoll{};
+        if (sys::NtWaitForSingleObject(objectHandle, false, &objectPoll) != NtStatus::Success ||
+            objectThread->reap() != NtStatus::Success || sys::NtClose(objectHandle) != NtStatus::Success ||
+            mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
         ps::EThread* threads[]{&first, &second, &third};
         uintptr_t tebs[3]{}, tlsBlocks[3]{}, tlsSecond[3]{};
         for (size_t i = 0; i < threadCount; ++i) {
             if (threads[i]->initializeUser(process, entry, 32768, mm::PageSize4KB, preemptive) != NtStatus::Success)
                 return false;
             tebs[i] = threads[i]->userTebAddress();
-            tlsBlocks[i] = threads[i]->userTlsStorage();
             const auto* teb = reinterpret_cast<const um::Teb64*>(tebs[i]);
+            if (!teb || teb->uniqueProcessId != process.processId() ||
+                !teb->uniqueThreadId || teb->uniqueThreadId != threads[i]->kernelThread()->tid ||
+                (i && teb->uniqueThreadId == reinterpret_cast<const um::Teb64*>(tebs[0])->uniqueThreadId))
+                return false;
+            tlsBlocks[i] = threads[i]->userTlsStorage();
             tlsSecond[i] = reinterpret_cast<const uint64_t*>(teb->threadLocalStoragePointer)[1];
             auto* arguments = reinterpret_cast<uint64_t*>(threads[i]->userStackPointer());
             arguments[0] = eventFirst;

@@ -359,10 +359,24 @@ micant::ke::KThread* MicantTimerBootThread{};
 bool MicantTimerBootQueued{};
 uint64_t MicantTimerBootDeadline{24};
 
-void MicantBootstrapInterruptExit(uint64_t savedFlags) noexcept {
+uint64_t MicantBootstrapEnterInterrupt(uint64_t savedCs) noexcept {
+    auto* thread = micant::ke::KeGetCurrentThread();
+    if (!thread) return 0;
+    const bool previous = thread->previousUserMode;
+    if ((savedCs & 3) == 3) thread->previousUserMode = true;
+    return previous ? 1 : 0;
+}
+
+void MicantBootstrapLeaveInterrupt(uint64_t previous) noexcept {
+    if (auto* thread = micant::ke::KeGetCurrentThread())
+        thread->previousUserMode = previous != 0;
+}
+
+void MicantBootstrapInterruptExit(uint64_t savedFlags, uint64_t savedCs) noexcept {
     if (savedFlags & (uint64_t{1} << 9)) {
         micant::ke::detail::servicePendingDpcs();
         micant::ke::detail::servicePendingKernelApcs();
+        if ((savedCs & 3) == 3) micant::ke::detail::serviceUserReturnTermination();
     }
 }
 
@@ -423,8 +437,10 @@ __attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
         "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
         "xsave64 (%r13)\njmp 2f\n"
         "1: fxsave64 64(%rsp)\n"
-        "2: callq MicantBootstrapTimerDispatch\n"
-        "movq 136(%r12), %rcx\ncallq MicantBootstrapInterruptExit\n"
+        "2: movq 128(%r12), %rcx\ncallq MicantBootstrapEnterInterrupt\n"
+        "movq %rax, 40(%rsp)\ncallq MicantBootstrapTimerDispatch\n"
+        "movq 136(%r12), %rcx\nmovq 128(%r12), %rdx\ncallq MicantBootstrapInterruptExit\n"
+        "movq 40(%rsp), %rcx\ncallq MicantBootstrapLeaveInterrupt\n"
         "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
         "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
         "xrstor64 64(%rsp)\njmp 4f\n"
@@ -471,8 +487,10 @@ __attribute__((naked)) void MicantBootstrapPs2Interrupt() noexcept {
         "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
         "xsave64 (%r13)\njmp 2f\n"
         "1: fxsave64 64(%rsp)\n"
-        "2: callq MicantBootstrapPs2Dispatch\n"
-        "movq 136(%r12), %rcx\ncallq MicantBootstrapInterruptExit\n"
+        "2: movq 128(%r12), %rcx\ncallq MicantBootstrapEnterInterrupt\n"
+        "movq %rax, 40(%rsp)\ncallq MicantBootstrapPs2Dispatch\n"
+        "movq 136(%r12), %rcx\nmovq 128(%r12), %rdx\ncallq MicantBootstrapInterruptExit\n"
+        "movq 40(%rsp), %rcx\ncallq MicantBootstrapLeaveInterrupt\n"
         "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
         "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
         "xrstor64 64(%rsp)\njmp 4f\n"
@@ -557,6 +575,9 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
     const micant::hal::amd64::UserServiceArguments args{
         frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp
     };
+    auto* syscallThread = micant::ke::KeGetCurrentThread();
+    const bool previousUserMode = syscallThread && syscallThread->previousUserMode;
+    if (syscallThread) syscallThread->previousUserMode = true;
     frame->rax = g_dispatch(args);
     // Service routines can make a higher-priority thread ready while the
     // syscall entry has interrupts disabled. Dispatch after service cleanup.
@@ -565,8 +586,12 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
         micant::ke::detail::dispatchHigherPriority();
         if (frame->flags & (uint64_t{1} << 9)) micant::ke::detail::servicePendingKernelApcs();
     }
+    // Even early bootstrap user contexts may return with IF clear. A pending
+    // process termination must be serviced before any return to user mode.
+    micant::ke::detail::serviceUserReturnTermination();
     // Preserve user IF only after the BSP scheduler clock owns IRQ routing.
     frame->flags = (frame->flags & (g_schedulerClockActive ? 0xED5 : 0xCD5)) | 2;
+    if (syscallThread) syscallThread->previousUserMode = previousUserMode;
 }
 
 __attribute__((naked)) void MicantBootstrapSyscallEntry() {
@@ -965,10 +990,11 @@ void MicantProbePageFault(const uint64_t* frame) noexcept {
     MicantProbeReturn();
 }
 
-void MicantProbeUnexpectedInvalidOpcode() noexcept {
+void MicantProbeUnexpectedInvalidOpcode(const uint64_t* frame) noexcept {
     if (g_log) {
         g_log("[MicaNT Hal] Unexpected bootstrap invalid opcode (#UD)\r\n");
     }
+    logTrapValue("[MicaNT Hal] UD RIP=0x", frame[0]);
     stopOnTrap();
 }
 
@@ -994,7 +1020,7 @@ __attribute__((naked)) void MicantProbeFaultEntry() {
 
 __attribute__((naked)) void MicantProbeInvalidOpcodeEntry() {
     __asm__ __volatile__(
-        "cli\ncld\nandq $-16, %rsp\nsubq $32, %rsp\n"
+        "cli\ncld\nmovq %rsp, %rcx\nandq $-16, %rsp\nsubq $32, %rsp\n"
         "callq MicantProbeUnexpectedInvalidOpcode\nud2\n"
     );
 }
@@ -2378,6 +2404,8 @@ bool verifyBootstrapSchedulerClock() noexcept {
 }
 
 bool bootstrapSchedulerClockFailed() noexcept { return MicantTimerDispatchFailed; }
+bool bootstrapSchedulerClockActive() noexcept { return g_schedulerClockActive; }
+uintptr_t bootstrapKernelPagingRoot() noexcept { return reinterpret_cast<uintptr_t>(g_pml4); }
 uint64_t bootstrapSchedulerClockTicks() noexcept { return MicantTimerTicks; }
 
 bool verifyRing3Transition() noexcept {

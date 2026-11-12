@@ -207,6 +207,9 @@ NtStatus NtCreateMailslotFile(
 );
 
 NtStatus NtClose(Handle handle);
+#if defined(MICANT_FREESTANDING)
+extern "C" NtStatus ZwClose(Handle handle) noexcept;
+#endif
 
 fs::FileObject* LookupKernelFileObject(Handle handle);
 

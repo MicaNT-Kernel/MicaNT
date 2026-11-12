@@ -11,6 +11,10 @@
 namespace micant::sys {
 
 static ob::HandleTable g_KernelHandleTable;
+#if defined(MICANT_FREESTANDING)
+// Bootstrap CPL3 probes without a Ps process must not share kernel handles.
+static ob::HandleTable g_BootstrapUserHandleTable;
+#endif
 static Handle g_NextExecutiveHandle = 0x100;
 
 namespace internal {
@@ -50,7 +54,18 @@ NtStatus NtClose(Handle handle) {
 }
 #else
 NtStatus NtClose(Handle handle) {
-    return ob::detail::currentHandleTable().closeHandle(handle);
+    ob::HandleTable* table{};
+    Handle raw{};
+    const auto status = ob::detail::resolveHandle(handle, table, raw);
+    return status == NtStatus::Success ? table->closeHandle(raw) : status;
+}
+
+extern "C" __declspec(dllexport) NtStatus ZwClose(Handle handle) noexcept {
+    ob::HandleTable* table{};
+    Handle raw{};
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidParameter;
+    const auto status = ob::detail::resolveHandle(handle, table, raw);
+    return status == NtStatus::Success ? table->closeHandle(raw) : status;
 }
 #endif
 
@@ -65,7 +80,29 @@ HandleTable& kernelHandleTable() noexcept {
 #if defined(MICANT_FREESTANDING)
 HandleTable& currentHandleTable() noexcept {
     const auto* thread = ke::KeGetCurrentThread();
-    return thread && thread->owningProcess ? thread->owningProcess->getHandleTable() : kernelHandleTable();
+    if (thread && thread->owningProcess) return thread->owningProcess->getHandleTable();
+    if (thread && thread->previousUserMode) return sys::g_BootstrapUserHandleTable;
+    return kernelHandleTable();
+}
+
+Handle encodeKernelHandle(Handle handle) noexcept {
+    constexpr uintptr_t tag = uintptr_t{1} << (sizeof(Handle) * 8 - 1);
+    return static_cast<Handle>(static_cast<uintptr_t>(handle) | tag);
+}
+
+NtStatus resolveHandle(Handle handle, HandleTable*& table, Handle& untagged, bool kernelAccess) noexcept {
+    constexpr uintptr_t tag = uintptr_t{1} << (sizeof(Handle) * 8 - 1);
+    const auto value = static_cast<uintptr_t>(handle);
+    if (value & tag) {
+        const auto* thread = ke::KeGetCurrentThread();
+        if (!kernelAccess && thread && thread->previousUserMode) return NtStatus::InvalidHandle;
+        table = &kernelHandleTable();
+        untagged = static_cast<Handle>(value & ~tag);
+    } else {
+        table = &currentHandleTable();
+        untagged = handle;
+    }
+    return NtStatus::Success;
 }
 #endif
 

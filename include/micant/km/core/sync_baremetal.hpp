@@ -24,7 +24,14 @@ public:
         auto* current = ke::KeGetCurrentThread();
         if (current && current->state == ke::ThreadState::Running &&
             ke::KeGetCurrentIrql() <= ke::APC_LEVEL) {
-            if (signaled_) {
+            if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL && !current->kernelApcList.empty()) {
+                if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+                ke::KiDeliverApc(0);
+                __asm__ __volatile__("cli" : : : "memory");
+            }
+            if (current->terminationRequested && current->eventWaitUserMode && current->eventWaitCanTerminate) {
+                result = NtStatus::Unsuccessful;
+            } else if (signaled_) {
                 if (!notification_) signaled_ = false;
                 result = NtStatus::Success;
             } else if (poll) {
@@ -33,15 +40,38 @@ public:
                 Waiter waiter{current};
                 current->eventWaitObject = this;
                 current->eventWaitBlock = &waiter;
-                if (tail_) tail_->next = &waiter;
-                else head_ = &waiter;
-                tail_ = &waiter;
-                if (ke::detail::blockCurrentThread()) {
-                    if (!waiter.satisfied && !waiter.cancelled) __builtin_trap();
-                    result = waiter.cancelled ? NtStatus::Unsuccessful : NtStatus::Success;
-                } else {
-                    unlink(waiter);
+                // A kernel APC interrupts the wait only to run its callback;
+                // the original wait resumes unless it was signaled/cancelled.
+                if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL)
+                    current->interruptWaitForApc = interruptForKernelApc;
+                for (;;) {
+                    waiter.next = nullptr;
+                    if (tail_) tail_->next = &waiter; else head_ = &waiter;
+                    tail_ = &waiter;
+                    if (!ke::detail::blockCurrentThread()) {
+                        unlink(waiter);
+                        break;
+                    }
+                    if (waiter.satisfied || waiter.cancelled) {
+                        result = waiter.cancelled ? NtStatus::Unsuccessful : NtStatus::Success;
+                        break;
+                    }
+                    if (!waiter.apcInterrupted) __builtin_trap();
+                    waiter.apcInterrupted = false;
+                    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+                    ke::KiDeliverApc(0);
+                    __asm__ __volatile__("cli" : : : "memory");
+                    if (waiter.cancelled || current->eventWaitCancelled ||
+                        (current->terminationRequested && current->eventWaitUserMode && current->eventWaitCanTerminate)) break;
+                    // A signal may arrive while the waiter is detached for
+                    // APC delivery; consume it before re-entering the queue.
+                    if (signaled_) {
+                        if (!notification_) signaled_ = false;
+                        result = NtStatus::Success;
+                        break;
+                    }
                 }
+                current->interruptWaitForApc = nullptr;
                 current->eventWaitObject = nullptr;
                 current->eventWaitBlock = nullptr;
                 current->eventWaitCancelled = false;
@@ -115,7 +145,18 @@ private:
         Waiter* next{nullptr};
         bool satisfied{false};
         bool cancelled{false};
+        bool apcInterrupted{false};
     };
+    static bool interruptForKernelApc(ke::KThread& thread) noexcept {
+        if (!thread.eventWaitObject || !thread.eventWaitBlock ||
+            thread.state != ke::ThreadState::Waiting || thread.eventWaitCancelled) return false;
+        auto& event = *static_cast<BootstrapEvent*>(thread.eventWaitObject);
+        auto& waiter = *static_cast<Waiter*>(thread.eventWaitBlock);
+        event.unlink(waiter);
+        waiter.apcInterrupted = true;
+        if (!ke::PriorityScheduler::get().readyKThread(&thread)) __builtin_trap();
+        return true;
+    }
     void unlink(Waiter& waiter) noexcept {
         Waiter* previous = nullptr;
         for (Waiter* item = head_; item; item = item->next) {

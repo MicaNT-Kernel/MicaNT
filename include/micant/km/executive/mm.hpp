@@ -173,7 +173,9 @@ private:
 #endif
         {
 #if defined(MICANT_FREESTANDING)
-            // This bootstrap-only lock is valid only while interrupts are disabled.
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+            __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags_) : : "memory");
+#endif
             while (lock_.test_and_set(std::memory_order_acquire)) {}
 #endif
         }
@@ -181,6 +183,9 @@ private:
         ~Guard() noexcept {
 #if defined(MICANT_FREESTANDING)
             lock_.clear(std::memory_order_release);
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+            if (flags_ & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
 #endif
         }
 
@@ -190,6 +195,9 @@ private:
     private:
 #if defined(MICANT_FREESTANDING)
         std::atomic_flag& lock_;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        uint64_t flags_{};
+#endif
 #else
         std::lock_guard<std::mutex> lock_;
 #endif
@@ -634,13 +642,18 @@ private:
 #endif
         {
 #if defined(MICANT_FREESTANDING)
-            // Bootstrap only: callers must keep interrupts disabled while using the table.
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+            __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags_) : : "memory");
+#endif
             while (lock_.test_and_set(std::memory_order_acquire)) {}
 #endif
         }
         ~Guard() noexcept {
 #if defined(MICANT_FREESTANDING)
             lock_.clear(std::memory_order_release);
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+            if (flags_ & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
 #endif
         }
         Guard(const Guard&) = delete;
@@ -648,6 +661,9 @@ private:
     private:
 #if defined(MICANT_FREESTANDING)
         std::atomic_flag& lock_;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        uint64_t flags_{};
+#endif
 #else
         std::lock_guard<std::mutex> lock_;
 #endif
@@ -1095,6 +1111,33 @@ public:
         if (!backend_.map || close() == NtStatus::Success) return;
         // Destruction cannot preserve ownership of mappings that failed cleanup.
         ownershipInvariantFailure();
+    }
+
+    struct DeferredOwnerRelease {
+        void* context{};
+        void (*release)(void*) noexcept{};
+    };
+
+    // Remove one lowest VAD and transfer its owner reference to the caller.
+    // The caller releases it after leaving Mm locks and the target CR3.
+    [[nodiscard]] NtStatus closeOne(DeferredOwnerRelease& owner, bool& done) noexcept {
+        Guard lock(*this);
+        owner = {};
+        done = false;
+        if (!backend_.map) return NtStatus::NotImplemented;
+        const uintptr_t base = vadTree_.firstAddress();
+        if (!base) { done = true; return NtStatus::Success; }
+        auto* vad = vadTree_.find(base);
+        if (!vad) ownershipInvariantFailure();
+        if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
+        owner = {vad->sectionContext, vad->sectionRelease};
+        vad->sectionContext = nullptr;
+        vad->sectionRelease = nullptr;
+        // The lowest node has no left child; removal cannot replace it with a
+        // different VAD or release another owner's reference.
+        if (!vadTree_.remove(base)) ownershipInvariantFailure();
+        if (rollbackPending_ == base) rollbackPending_ = 0;
+        return NtStatus::Success;
     }
 
     [[nodiscard]] NtStatus close() noexcept {
@@ -1610,13 +1653,18 @@ private:
 #endif
         {
 #if defined(MICANT_FREESTANDING)
-            // Bootstrap callers must keep interrupts disabled.
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+            __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags_) : : "memory");
+#endif
             while (lock_.test_and_set(std::memory_order_acquire)) {}
 #endif
         }
         ~Guard() noexcept {
 #if defined(MICANT_FREESTANDING)
             lock_.clear(std::memory_order_release);
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+            if (flags_ & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
 #endif
         }
         Guard(const Guard&) = delete;
@@ -1624,6 +1672,9 @@ private:
     private:
 #if defined(MICANT_FREESTANDING)
         std::atomic_flag& lock_;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        uint64_t flags_{};
+#endif
 #else
         std::lock_guard<std::mutex> lock_;
 #endif

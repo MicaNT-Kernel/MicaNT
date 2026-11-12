@@ -141,8 +141,11 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
         return NtStatus::NotImplemented;
     uint32_t desired = protection == mm::PAGE_READWRITE ? section::SECTION_MAP_WRITE : section::SECTION_MAP_READ;
     ob::ObjectHeader* header{};
-    NtStatus status = ob::ObReferenceObjectByHandle(handle, ob::detail::currentHandleTable(),
-                                                     desired, &sectionType, &header);
+    ob::HandleTable* table{};
+    Handle raw{};
+    NtStatus status = ob::detail::resolveHandle(handle, table, raw);
+    if (status == NtStatus::Success)
+        status = ob::ObReferenceObjectByHandle(raw, *table, desired, &sectionType, &header);
     if (status != NtStatus::Success) return status;
     auto* object = header->as<section::SectionObject>();
     if (offset && offset->quadPart < 0) {

@@ -17,6 +17,13 @@ int main() {
     assert(table.lookup(first, &granted) == &object && granted == access);
     assert(object.pointerCount == 2 && object.handleCount == 1);
     assert(object.handleInfo.handleCount == 1 && type.totalNumberOfHandles == 1);
+    Handle denied{};
+    assert(table.duplicateHandle(first, table, denied, 2) == NtStatus::AccessDenied);
+    assert(!denied && table.getActiveHandleCount() == 1);
+    ob::ObjectHeader* reference{};
+    assert(ob::ObReferenceObjectByHandle(first, table, access, &type, &reference) == NtStatus::Success);
+    assert(reference == &object && object.pointerCount == 3);
+    ob::ObDereferenceObject(reference);
 
     assert(table.duplicateHandle(first, table, second, 0, true) == NtStatus::Success);
     assert(first != second && table.getActiveHandleCount() == 2);

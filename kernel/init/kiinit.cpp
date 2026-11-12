@@ -77,6 +77,7 @@ extern "C" bool MicantTestKeApcFifo() noexcept;
 extern "C" bool MicantTestKeDeferredDelivery() noexcept;
 extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
+extern "C" bool MicantTestPsDeferredReaper() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
 extern "C" bool MicantTestPsTwoUserThreads() noexcept;
 extern "C" bool MicantTestPsThreeUserThreads() noexcept;
@@ -1409,6 +1410,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (clockActive && !micant::hal::amd64::verifyBootstrapSchedulerClock())
         stopWithError("[MicaNT Ke] Runtime scheduler preemption failed\r\n");
     if (clockActive) serialWrite("[MicaNT Ke] Runtime idle wait and wake verified\r\n");
+    if (clockActive && !MicantTestPsDeferredReaper())
+        stopWithError("[MicaNT Ps] Deferred reaper verification failed\r\n");
+    if (clockActive) serialWrite("[MicaNT Ps] Deferred reaper verified\r\n");
     if (clockActive && !MicantTestKeDeferredDelivery())
         stopWithError("[MicaNT Ke] Runtime DPC/APC delivery failed\r\n");
     if (clockActive) serialWrite("[MicaNT Ke] Runtime DPC/APC delivery verified\r\n");

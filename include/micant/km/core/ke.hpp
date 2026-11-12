@@ -20,7 +20,7 @@
 #include "micant/shared/ntstatus.hpp"
 #if defined(MICANT_FREESTANDING)
 #include "micant/km/hal/amd64_bootstrap.hpp"
-namespace micant::ps { class EProcess; }
+namespace micant::ps { class EProcess; class EThread; }
 #endif
 
 namespace micant::ke {
@@ -69,6 +69,9 @@ struct ProcessorControlBlock {
     KThread* nextThread{nullptr};
     KThread* idleThread{nullptr};
     bool dpcRoutineActive{false};
+#if defined(MICANT_FREESTANDING)
+    void (*serviceDeferredCleanup)() noexcept{nullptr};
+#endif
 };
 
 // The bootstrap target is single-CPU and has no TLS runtime; hosted builds
@@ -589,6 +592,17 @@ public:
         if (tail_) tail_->queueNext = apc; else head_ = apc;
         tail_ = apc;
     }
+    // Special kernel APCs precede normal APCs, preserving FIFO within each
+    // class. User APCs continue to use the ordinary FIFO insertion.
+    void pushKernel(KAPC* apc) noexcept {
+        if (!apc->isSpecialKernelApc) { push_back(apc); return; }
+        KAPC* previous{};
+        auto* next = head_;
+        while (next && next->isSpecialKernelApc) { previous = next; next = next->queueNext; }
+        apc->queueNext = next;
+        if (previous) previous->queueNext = apc; else head_ = apc;
+        if (!next) tail_ = apc;
+    }
     void pop_front() noexcept {
         if (!head_) return;
         auto* previous = head_;
@@ -672,11 +686,24 @@ struct KThread {
     Handle pid{0};
 #if defined(MICANT_FREESTANDING)
     ps::EProcess* owningProcess{nullptr};
+    ps::EThread* owningThread{nullptr};
     KThread* processNext{nullptr};
+    KThread* clientIdNext{nullptr};
     bool eventWaitInProgress{false};
+    bool eventWaitUserMode{false};
+    bool eventWaitCanTerminate{false};
     bool eventWaitCancelled{false};
+    bool terminationRequested{false};
+    bool terminationQueuedByProcess{false};
+    bool terminationActive{false};
+    void (*serviceTermination)(void*) noexcept{nullptr};
     void* eventWaitObject{nullptr};
     void* eventWaitBlock{nullptr};
+    bool (*interruptWaitForApc)(KThread&) noexcept{nullptr};
+    // Called with BSP interrupts disabled only after a terminating switch is
+    // committed. The lifecycle owner keeps the callback context resident.
+    void (*terminationNotify)(void*) noexcept{nullptr};
+    void* terminationContext{nullptr};
 #endif
     ThreadState state{ThreadState::Initialized};
     uint32_t basePriority{8};
@@ -701,6 +728,7 @@ struct KThread {
 #if defined(MICANT_FREESTANDING)
     // A suspended SYSCALL has already exchanged user and kernel GS bases.
     bool syscallGsActive{false};
+    bool previousUserMode{false};
 #endif
 
     // Registers & Trap Frame
@@ -718,7 +746,13 @@ struct KThread {
     uint16_t kernelApcDisable{0};
     uint16_t specialApcDisable{0};
 #if defined(MICANT_FREESTANDING)
+    bool systemInitialRegionActive{false};
+#endif
+#if defined(MICANT_FREESTANDING)
     bool normalKernelApcActive{false};
+    bool apcQueueable{true};
+    bool apcRundownActive{false};
+    bool apcRundownComplete{false};
     struct PendingNormalApc {
         PKNORMAL_ROUTINE routine{};
         void* context{};
@@ -739,6 +773,45 @@ struct KThread {
 
 #if defined(MICANT_FREESTANDING)
 namespace detail {
+
+// BSP-only registry of process-owned contexts. Its entries remain resident
+// until Ps detaches and reaps the thread; all operations exclude interrupts.
+inline KThread* clientIdThreads{};
+inline void registerClientThread(KThread& thread) noexcept {
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+#endif
+    if (!thread.tid || thread.clientIdNext) __builtin_trap();
+    for (auto* entry = clientIdThreads; entry; entry = entry->clientIdNext)
+        if (entry == &thread || entry->tid == thread.tid) __builtin_trap();
+    thread.clientIdNext = clientIdThreads;
+    clientIdThreads = &thread;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
+}
+inline void unregisterClientThread(KThread& thread) noexcept {
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+#endif
+    auto** link = &clientIdThreads;
+    while (*link && *link != &thread) link = &(*link)->clientIdNext;
+    if (!*link) __builtin_trap();
+    *link = thread.clientIdNext;
+    thread.clientIdNext = nullptr;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
+}
+// Caller must hold the BSP exclusion through the resulting queue operation.
+[[nodiscard]] inline KThread* findClientThread(Handle tid) noexcept {
+    if (!tid) return nullptr;
+    for (auto* entry = clientIdThreads; entry; entry = entry->clientIdNext)
+        if (entry->tid == tid) return entry;
+    return nullptr;
+}
 
 using BootstrapThreadEntry = void (*)(void*) noexcept;
 extern "C" void MicantAmd64BootstrapThread() noexcept;
@@ -1188,6 +1261,8 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming, bool prequeued =
     g_CurrentCpu.currentThread = incoming;
     g_CurrentCpu.contextSwitches++;
     incoming->state = ThreadState::Running;
+    if (outgoing->state == ThreadState::Terminated && outgoing->terminationNotify)
+        outgoing->terminationNotify(outgoing->terminationContext);
     return MicantAmd64SwitchContext(&outgoing->context, &incoming->context);
 #else
     (void)prequeued;
@@ -1315,18 +1390,24 @@ inline bool KeInsertQueueApc(KAPC* apc, void* sysArg1 = nullptr, void* sysArg2 =
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     auto* curr = g_CurrentCpu.currentThread;
-    // There is no cross-thread lookup/ownership contract on this path yet.
-    if (!apc || apc->inserted || !curr || apc->targetTid != curr->tid || apc->apcMode > 1) {
+    auto* target = apc && curr && apc->targetTid == curr->tid ? curr :
+        apc ? detail::findClientThread(apc->targetTid) : nullptr;
+    if (!apc || apc->inserted || !target || !target->apcQueueable || target->terminationRequested ||
+        target->state == ThreadState::Terminated || target->state == ThreadState::Transition || apc->apcMode > 1) {
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return false;
     }
     apc->systemArgument1 = sysArg1;
     apc->systemArgument2 = sysArg2;
     apc->inserted = true;
-    if (apc->apcMode == 0) curr->kernelApcList.push_back(apc);
-    else curr->userApcList.push_back(apc);
+    if (apc->apcMode == 0) {
+        target->kernelApcList.pushKernel(apc);
+        if (target != curr && target->interruptWaitForApc && !target->specialApcDisable &&
+            (apc->isSpecialKernelApc || (!target->kernelApcDisable && !target->normalKernelApcActive)))
+            (void)target->interruptWaitForApc(*target);
+    } else target->userApcList.push_back(apc);
     if (flags & (uint64_t{1} << 9)) {
-        detail::servicePendingKernelApcs();
+        if (target == curr) detail::servicePendingKernelApcs();
         __asm__ __volatile__("sti" : : : "memory");
     }
     return true;
@@ -1346,6 +1427,41 @@ inline bool KeInsertQueueApc(KAPC* apc, void* sysArg1 = nullptr, void* sysArg2 =
 #endif
 }
 
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+namespace detail {
+// Run only on the terminating thread at PASSIVE_LEVEL. KAPCs are borrowed:
+// a null rundown leaves storage with its owner after removing the queue entry.
+inline bool rundownCurrentUserApcs() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    auto* thread = KeGetCurrentThread();
+    if (!thread || thread->apcRundownActive || thread->apcRundownComplete ||
+        thread->state != ThreadState::Running || KeGetCurrentIrql() != PASSIVE_LEVEL || thread->kernelApcDisable || thread->specialApcDisable || thread->normalKernelApcActive ||
+        thread->pendingNormalCount || !thread->kernelApcList.empty()) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    thread->apcQueueable = false;
+    thread->apcRundownActive = true;
+    while (!thread->userApcList.empty()) {
+        auto* apc = thread->userApcList.front();
+        thread->userApcList.pop_front();
+        apc->inserted = false;
+        auto rundown = apc->rundownRoutine;
+        if (rundown) {
+            if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+            rundown(apc); // The callback may destroy the APC.
+            __asm__ __volatile__("cli" : : : "memory");
+        }
+    }
+    thread->apcRundownActive = false;
+    thread->apcRundownComplete = true;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return true;
+}
+}
+#endif
+
 /**
  * @brief Deliver pending APCs to the currently running thread (KiDeliverApc).
  */
@@ -1362,7 +1478,10 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
     }
     for (;;) {
         if (thread->specialApcDisable) break;
-        if (!thread->kernelApcDisable && !thread->normalKernelApcActive && thread->pendingNormalCount) {
+        const bool specialQueued = thread->kernelApcList.front() &&
+            thread->kernelApcList.front()->isSpecialKernelApc;
+        if (!specialQueued && !thread->kernelApcDisable && !thread->normalKernelApcActive &&
+            thread->pendingNormalCount) {
             const auto pending = thread->pendingNormalApcs[thread->pendingNormalHead];
             thread->pendingNormalHead = (thread->pendingNormalHead + 1) % thread->pendingNormalApcs.size();
             --thread->pendingNormalCount;
@@ -1373,12 +1492,14 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
             thread->normalKernelApcActive = false;
             continue;
         }
-        // A kernel routine can supply a normal callback and release its APC
-        // object. Reserve capacity before invoking it so no callback is lost.
-        if (thread->pendingNormalCount == thread->pendingNormalApcs.size()) break;
-        const bool normalDisabled = thread->kernelApcDisable || thread->normalKernelApcActive;
+        // Capacity limits normal APCs only; special APCs remain eligible.
+        // A normal kernel routine can release its APC and supply a callback,
+        // so reserve a slot before invoking that routine.
+        const bool normalDisabled = thread->kernelApcDisable || thread->normalKernelApcActive ||
+            thread->pendingNormalCount == thread->pendingNormalApcs.size();
         auto* apc = thread->kernelApcList.takeEligible(normalDisabled);
         if (!apc) break;
+        const bool special = apc->isSpecialKernelApc;
         apc->inserted = false;
         auto kernelRoutine = apc->kernelRoutine;
         PKNORMAL_ROUTINE normalRoutine = apc->normalRoutine;
@@ -1391,7 +1512,7 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
         __asm__ __volatile__("cli" : : : "memory");
         KeLowerIrql(old);
         ++g_CurrentCpu.apcCount;
-        if (normalRoutine) {
+        if (!special && normalRoutine) {
             const size_t tail = (thread->pendingNormalHead + thread->pendingNormalCount) %
                                 thread->pendingNormalApcs.size();
             thread->pendingNormalApcs[tail] = {normalRoutine, normalContext, arg1, arg2};
@@ -1465,6 +1586,23 @@ inline void servicePendingKernelApcs() noexcept {
     __asm__ __volatile__("sti" : : : "memory");
     KiDeliverApc(0);
     __asm__ __volatile__("cli" : : : "memory");
+    if (g_CurrentCpu.serviceDeferredCleanup) g_CurrentCpu.serviceDeferredCleanup();
+}
+
+// Called only when the kernel has finished the interrupted user operation and
+// holds no syscall-local references or locks. IF is disabled on entry.
+inline void serviceUserReturnTermination() noexcept {
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) return;
+    auto* current = KeGetCurrentThread();
+    if (!current || !current->terminationRequested || current->terminationActive ||
+        !current->serviceTermination || current->eventWaitObject || current->eventWaitInProgress ||
+        current->kernelApcDisable || current->specialApcDisable || current->normalKernelApcActive ||
+        g_CurrentCpu.dpcRoutineActive) return;
+    current->terminationActive = true;
+    __asm__ __volatile__("sti" : : : "memory");
+    current->serviceTermination(current->terminationContext);
+    __asm__ __volatile__("cli" : : : "memory");
+    current->terminationActive = false;
 }
 }
 #endif
@@ -1513,6 +1651,9 @@ inline void KeLeaveCriticalRegion() noexcept {
     if (auto* thread = KeGetCurrentThread()) {
         if (!thread->kernelApcDisable) __builtin_trap();
         --thread->kernelApcDisable;
+#if defined(MICANT_FREESTANDING)
+        if (!thread->kernelApcDisable) thread->systemInitialRegionActive = false;
+#endif
     }
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     uint64_t flags{};

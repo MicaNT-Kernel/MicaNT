@@ -176,6 +176,15 @@ inline void ObResetTelemetryForTesting() {
 /**
  * @brief Representation of an Object Type in the Object Manager.
  */
+[[nodiscard]] inline uint32_t MapGenericAccess(uint32_t access, const GENERIC_MAPPING& mapping) noexcept {
+    uint32_t mapped = access & ~(GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL);
+    if (access & GENERIC_READ) mapped |= mapping.genericRead;
+    if (access & GENERIC_WRITE) mapped |= mapping.genericWrite;
+    if (access & GENERIC_EXECUTE) mapped |= mapping.genericExecute;
+    if (access & GENERIC_ALL) mapped |= mapping.genericAll;
+    return mapped;
+}
+
 struct ObjectType {
     std::wstring typeName;
     ObjectTypeId typeId{ObjectTypeId::Type};
@@ -193,6 +202,10 @@ struct ObjectType {
     OB_OPEN_METHOD openProcedure{nullptr};
     OB_CLOSE_METHOD closeProcedure{nullptr};
     OB_DELETE_METHOD deleteProcedure{nullptr};
+#if defined(MICANT_FREESTANDING)
+    // A type may transfer a zero-reference header to a passive cleanup worker.
+    bool (*deferDelete)(ObjectHeader*) noexcept{nullptr};
+#endif
     OB_PARSE_METHOD parseProcedure{nullptr};
 };
 
@@ -214,6 +227,9 @@ struct ObjectHeader {
     OBJECT_HEADER_QUOTA_INFO quotaInfo{};
     OBJECT_HEADER_HANDLE_INFO handleInfo{};
     bool dynamicallyAllocated{false};
+#if defined(MICANT_FREESTANDING)
+    ObjectHeader* deferredDeleteNext{nullptr};
+#endif
 
     [[nodiscard]] void* getBody() noexcept {
         return reinterpret_cast<void*>(this + 1);
@@ -357,11 +373,38 @@ struct HandleTableEntry {
 };
 
 inline void ObDereferenceObject(ObjectHeader* object);
+class HandleTable;
+inline NtStatus ObCloseHandle(Handle handle, HandleTable& table);
+inline NtStatus ObFinishClose(ObjectHeader* object, Handle handle);
 
 /**
  * @brief Per-Process Handle Table.
  * Maps opaque userland `Handle` (values 4, 8, 12...) to ObjectHeader pointers with access control.
  */
+namespace detail {
+// The native dispatcher is currently single-BSP. Exclude preemption while a
+// table entry and its owning reference are changed as one transaction.
+class HandleTableGuard {
+public:
+    HandleTableGuard() noexcept {
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags_) : : "memory");
+#endif
+    }
+    ~HandleTableGuard() {
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        if (flags_ & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
+    }
+    HandleTableGuard(const HandleTableGuard&) = delete;
+    HandleTableGuard& operator=(const HandleTableGuard&) = delete;
+private:
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags_{};
+#endif
+};
+}
+
 class HandleTable {
 public:
     static constexpr size_t MaxHandles = 4096;
@@ -379,6 +422,8 @@ public:
         uint32_t attributes = 0
     ) {
         if (!object) return NtStatus::InvalidParameter;
+        detail::HandleTableGuard guard;
+        if (closing_) return NtStatus::ProcessIsTerminating;
 
         // NT Handles start at 4 and increment by 4
         for (size_t i = 1; i < table_.size(); ++i) {
@@ -401,6 +446,8 @@ public:
         return NtStatus::NoMemory;
     }
 
+    // Borrowed view: caller must hold BSP exclusion and the owning table
+    // must remain alive. Use referenceHandle when the result may outlive it.
     [[nodiscard]] ObjectHeader* lookup(Handle handle, uint32_t* outGrantedAccess = nullptr) const {
         size_t index = static_cast<size_t>(handle) / 4;
         if (index == 0 || index >= table_.size() || !table_[index].isValid()) {
@@ -412,6 +459,7 @@ public:
         return table_[index].object;
     }
 
+    // Borrowed entry; caller must serialize against table mutation.
     [[nodiscard]] const HandleTableEntry* getEntry(Handle handle) const {
         size_t index = static_cast<size_t>(handle) / 4;
         if (index == 0 || index >= table_.size() || !table_[index].isValid()) {
@@ -420,47 +468,60 @@ public:
         return &table_[index];
     }
 
-    NtStatus closeHandle(Handle handle) {
-        size_t index = static_cast<size_t>(handle) / 4;
-        if (index == 0 || index >= table_.size() || !table_[index].isValid()) {
-            return NtStatus::InvalidHandle;
-        }
-
-        ObjectHeader* obj = table_[index].object;
-        table_[index] = HandleTableEntry{};
-
-        obj->handleCount.fetch_sub(1, std::memory_order_relaxed);
-        obj->handleInfo.handleCount = static_cast<uint32_t>(obj->handleCount.load(std::memory_order_relaxed));
-        if (obj->type) {
-            const_cast<ObjectType*>(obj->type)->totalNumberOfHandles.fetch_sub(1, std::memory_order_relaxed);
-        }
-        ObDereferenceObject(obj);
+    // Return a retained object acquired atomically with the table lookup.
+    NtStatus referenceHandle(Handle handle, uint32_t desiredAccess, const ObjectType* expectedType,
+                             ObjectHeader** outObject, uint32_t* outGrantedAccess = nullptr) const {
+        if (!outObject) return NtStatus::InvalidParameter;
+        *outObject = nullptr;
+        detail::HandleTableGuard guard;
+        uint32_t granted{};
+        auto* object = lookup(handle, &granted);
+        if (!object) return NtStatus::InvalidHandle;
+        if (desiredAccess && (granted & desiredAccess) != desiredAccess) return NtStatus::AccessDenied;
+        if (expectedType && object->type != expectedType) return NtStatus::ObjectTypeMismatch;
+        object->addReference();
+        if (outGrantedAccess) *outGrantedAccess = granted;
+        *outObject = object;
         return NtStatus::Success;
     }
 
+    // Remove an entry while retaining its former handle reference. The caller
+    // must dereference after callbacks and after leaving the table exclusion.
+    [[nodiscard]] ObjectHeader* takeHandle(Handle handle) noexcept {
+        detail::HandleTableGuard guard;
+        return takeHandleLocked(handle);
+    }
+
+    NtStatus closeHandle(Handle handle) {
+        return ObCloseHandle(handle, *this);
+    }
+
     NtStatus duplicateHandle(
-        Handle sourceHandle,
-        HandleTable& targetTable,
-        Handle& targetHandle,
-        uint32_t desiredAccess = 0,
-        bool inherit = false,
-        uint32_t options = 0
+        Handle sourceHandle, HandleTable& targetTable, Handle& targetHandle,
+        uint32_t desiredAccess = 0, bool inherit = false, uint32_t options = 0
     ) {
-        uint32_t currentAccess = 0;
-        ObjectHeader* obj = lookup(sourceHandle, &currentAccess);
-        if (!obj) return NtStatus::InvalidHandle;
-
-        uint32_t accessToGrant = (desiredAccess != 0) ? desiredAccess : currentAccess;
-        uint32_t attrs = inherit ? OBJ_INHERIT : 0;
-
-        NtStatus st = targetTable.createHandle(obj, targetHandle, accessToGrant, attrs);
-        if (NT_SUCCESS(st) && (options & 0x00000001)) { // DUPLICATE_CLOSE_SOURCE
-            closeHandle(sourceHandle);
+        if (options & ~uint32_t{3}) return NtStatus::InvalidParameter;
+        ObjectHeader* removed{};
+        NtStatus status = NtStatus::InvalidHandle;
+        {
+            detail::HandleTableGuard guard;
+            uint32_t granted{};
+            auto* object = lookup(sourceHandle, &granted);
+            if (object) {
+                const uint32_t requested = object->type ? MapGenericAccess(desiredAccess, object->type->genericMapping)
+                                                        : desiredAccess;
+                const uint32_t access = (options & 2) || !desiredAccess ? granted : requested;
+                if ((access & ~granted) != 0) status = NtStatus::AccessDenied;
+                else status = targetTable.createHandle(object, targetHandle, access, inherit ? OBJ_INHERIT : 0);
+                if (options & 1) removed = takeHandleLocked(sourceHandle);
+            }
         }
-        return st;
+        if (removed) (void)ObFinishClose(removed, sourceHandle);
+        return status;
     }
 
     [[nodiscard]] size_t getActiveHandleCount() const noexcept {
+        detail::HandleTableGuard guard;
         size_t count = 0;
         for (size_t i = 1; i < table_.size(); ++i) {
             if (table_[i].isValid()) ++count;
@@ -469,12 +530,27 @@ public:
     }
 
     void closeAllHandles() {
-        for (size_t i = 1; i < table_.size(); ++i) {
-            if (table_[i].isValid()) (void)closeHandle(static_cast<Handle>(i * 4));
+        {
+            detail::HandleTableGuard guard;
+            closing_ = true;
         }
+        for (size_t i = 1; i < table_.size(); ++i)
+            (void)closeHandle(static_cast<Handle>(i * 4));
     }
 
 private:
+    bool closing_{false};
+    ObjectHeader* takeHandleLocked(Handle handle) noexcept {
+        const size_t index = static_cast<size_t>(handle) / 4;
+        if (index == 0 || index >= table_.size() || !table_[index].isValid()) return nullptr;
+        auto* object = table_[index].object;
+        table_[index] = HandleTableEntry{};
+        object->handleCount.fetch_sub(1, std::memory_order_relaxed);
+        object->handleInfo.handleCount = static_cast<uint32_t>(object->handleCount.load(std::memory_order_relaxed));
+        if (object->type)
+            const_cast<ObjectType*>(object->type)->totalNumberOfHandles.fetch_sub(1, std::memory_order_relaxed);
+        return object;
+    }
 #if defined(MICANT_FREESTANDING)
     std::array<HandleTableEntry, MaxHandles> table_{};
 #else
@@ -487,6 +563,10 @@ namespace detail {
 HandleTable& kernelHandleTable() noexcept;
 #if defined(MICANT_FREESTANDING)
 HandleTable& currentHandleTable() noexcept;
+// Kernel handles use an internal tag and are unavailable to user-mode calls.
+[[nodiscard]] Handle encodeKernelHandle(Handle handle) noexcept;
+NtStatus resolveHandle(Handle handle, HandleTable*& table, Handle& untagged,
+                       bool kernelAccess = false) noexcept;
 #endif
 }
 
@@ -1035,29 +1115,13 @@ inline NtStatus ObReferenceObjectByHandle(
     if (!outObject) return NtStatus::InvalidParameter;
     *outObject = nullptr;
 
-    uint32_t grantedAccess = 0;
-    ObjectHeader* obj = handleTable.lookup(handle, &grantedAccess);
-    if (!obj) return NtStatus::InvalidHandle;
-
-    if (desiredAccess != 0 && (grantedAccess & desiredAccess) != desiredAccess) {
-        return NtStatus::AccessDenied;
-    }
-
-    if (expectedType && obj->type != expectedType) {
-        return NtStatus::ObjectTypeMismatch;
-    }
-
-    obj->addReference();
-    *outObject = obj;
-    return NtStatus::Success;
+    return handleTable.referenceHandle(handle, desiredAccess, expectedType, outObject);
 }
 
 /**
  * @brief Canonical Dereference Object (ObDereferenceObject).
  */
-inline void ObDereferenceObject(ObjectHeader* object) {
-    if (!object) return;
-    if (object->releaseReference()) {
+inline void ObFinishDelete(ObjectHeader* object) {
         if (object->type && object->type->deleteProcedure) {
             object->type->deleteProcedure(object);
         }
@@ -1074,47 +1138,45 @@ inline void ObDereferenceObject(ObjectHeader* object) {
             object->~ObjectHeader();
             delete[] reinterpret_cast<uint8_t*>(object);
         }
-    }
+}
+
+inline void ObDereferenceObject(ObjectHeader* object) {
+    if (!object || !object->releaseReference()) return;
+#if defined(MICANT_FREESTANDING)
+    if (object->type && object->type->deferDelete && object->type->deferDelete(object)) return;
+#endif
+    ObFinishDelete(object);
 }
 
 /**
  * @brief Canonical Close Handle (ObCloseHandle).
  */
+inline NtStatus ObFinishClose(ObjectHeader* object, Handle handle) {
+    if (!object) return NtStatus::InvalidHandle;
+    if (object->type && object->type->closeProcedure) object->type->closeProcedure(object, handle);
+#if !defined(MICANT_FREESTANDING)
+    {
+        std::lock_guard<std::mutex> lock(g_ObTelemetryMutex);
+        g_ObTelemetry.totalHandlesClosed++;
+    }
+    if (object->handleCount.load(std::memory_order_relaxed) == 0 && !object->isPermanent() &&
+        object->parentDirectory) {
+        auto* directory = reinterpret_cast<DirectoryObject*>(object->parentDirectory);
+        directory->removeObject(object->objectName);
+        object->parentDirectory = nullptr;
+        object->nameInfo.directory = nullptr;
+        std::lock_guard<std::mutex> lock(g_ObTelemetryMutex);
+        g_ObTelemetry.totalTemporaryObjectsUnlinked++;
+    }
+#endif
+    ObDereferenceObject(object);
+    return NtStatus::Success;
+}
+
 inline NtStatus ObCloseHandle(Handle handle, HandleTable& handleTable) {
-    const auto* entry = handleTable.getEntry(handle);
-    if (!entry || !entry->isValid()) return NtStatus::InvalidHandle;
-
-    ObjectHeader* obj = entry->object;
-    // Keep the header alive through close callbacks and namespace cleanup.
-    obj->addReference();
-    if (obj->type && obj->type->closeProcedure) {
-        obj->type->closeProcedure(obj, handle);
-    }
-
-    NtStatus st = handleTable.closeHandle(handle);
-    if (NT_SUCCESS(st)) {
-        {
-            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
-            g_ObTelemetry.totalHandlesClosed++;
-        }
-
-        // Automatic unlinking of temporary objects when last handle is closed
-        if (obj->handleCount.load(std::memory_order_relaxed) == 0 && !obj->isPermanent()) {
-            if (obj->parentDirectory) {
-                auto* dir = reinterpret_cast<DirectoryObject*>(obj->parentDirectory);
-                dir->removeObject(obj->objectName);
-                obj->parentDirectory = nullptr;
-                obj->nameInfo.directory = nullptr;
-                {
-                    std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
-                    g_ObTelemetry.totalTemporaryObjectsUnlinked++;
-                }
-            }
-        }
-
-    }
-    ObDereferenceObject(obj);
-    return st;
+    // The detached handle reference protects the object until the callback
+    // completes, outside the handle-table exclusion.
+    return ObFinishClose(handleTable.takeHandle(handle), handle);
 }
 
 /**

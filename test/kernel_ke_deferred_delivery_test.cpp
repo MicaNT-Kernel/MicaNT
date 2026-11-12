@@ -34,6 +34,41 @@ void apcKernelRoutine(KAPC*, PKNORMAL_ROUTINE* normal, void** context,
     state.order = state.order * 10 + (*normal ? 2 : 1);
 }
 
+void apcNormalRoutine(void* context, void* arg1, void* arg2);
+
+struct ApcPrecedenceState {
+    KAPC* special{};
+    unsigned order{};
+    bool invalid{};
+};
+
+void precedenceSpecial(KAPC*, PKNORMAL_ROUTINE*, void** context, void**, void**) {
+    auto& state = *static_cast<ApcPrecedenceState*>(*context);
+    if (KeGetCurrentIrql() != APC_LEVEL || !interruptsEnabled()) state.invalid = true;
+    state.order = state.order * 10 + 2;
+}
+
+void precedenceNormal(void* context, void*, void*) {
+    auto& state = *static_cast<ApcPrecedenceState*>(context);
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !interruptsEnabled()) state.invalid = true;
+    state.order = state.order * 10 + 3;
+}
+
+void precedenceKernel(KAPC*, PKNORMAL_ROUTINE*, void** context, void**, void**) {
+    auto& state = *static_cast<ApcPrecedenceState*>(*context);
+    if (KeGetCurrentIrql() != APC_LEVEL || !interruptsEnabled() ||
+        !KeInsertQueueApc(state.special)) state.invalid = true;
+    state.order = state.order * 10 + 1;
+}
+
+void specialCannotBecomeNormal(KAPC*, PKNORMAL_ROUTINE* normal, void** context,
+                               void**, void**) {
+    auto& state = *static_cast<DeliveryState*>(*context);
+    if (KeGetCurrentIrql() != APC_LEVEL || !interruptsEnabled()) state.invalid = true;
+    ++state.order;
+    *normal = apcNormalRoutine;
+}
+
 void apcNormalRoutine(void* context, void* arg1, void* arg2) {
     auto& state = *static_cast<DeliveryState*>(context);
     if (KeGetCurrentIrql() != PASSIVE_LEVEL || !interruptsEnabled() ||
@@ -93,9 +128,39 @@ extern "C" bool MicantTestKeDeferredDelivery() noexcept {
     const bool nestedCritical = apcState.order == 1 && normalApc.inserted;
     KeLeaveCriticalRegion();
     __asm__ __volatile__("cli" : : : "memory");
-    return apcsQueued && nestedGuarded && specialDelivered && nestedCritical &&
+    if (!(apcsQueued && nestedGuarded && specialDelivered && nestedCritical &&
         !apcState.invalid && apcState.order == 123 && !normalApc.inserted &&
         current->kernelApcList.empty() && !current->pendingNormalCount &&
         !current->kernelApcDisable && !current->specialApcDisable &&
-        KeGetCurrentIrql() == PASSIVE_LEVEL && !interruptsEnabled();
+        KeGetCurrentIrql() == PASSIVE_LEVEL && !interruptsEnabled())) return false;
+
+    ApcPrecedenceState precedence{};
+    KAPC precedenceNormalApc{}, precedenceSpecialApc{};
+    precedence.special = &precedenceSpecialApc;
+    KeInitializeApc(&precedenceSpecialApc, current->tid, precedenceSpecial, nullptr, nullptr, 0, &precedence);
+    KeInitializeApc(&precedenceNormalApc, current->tid, precedenceKernel, nullptr, precedenceNormal, 0, &precedence);
+    if (!KeInsertQueueApc(&precedenceNormalApc)) return false;
+    __asm__ __volatile__("sti" : : : "memory");
+    KiDeliverApc(0);
+    __asm__ __volatile__("cli" : : : "memory");
+    if (precedence.invalid || precedence.order != 123 || precedenceNormalApc.inserted ||
+        precedenceSpecialApc.inserted || current->pendingNormalCount) return false;
+
+    DeliveryState fullState{};
+    KAPC special{};
+    KeInitializeApc(&special, current->tid, specialCannotBecomeNormal, nullptr, nullptr, 0, &fullState);
+    current->pendingNormalCount = current->pendingNormalApcs.size();
+    KeEnterCriticalRegion();
+    const bool specialQueued = KeInsertQueueApc(&special);
+    __asm__ __volatile__("sti" : : : "memory");
+    KiDeliverApc(0);
+    __asm__ __volatile__("cli" : : : "memory");
+    const bool deliveredWithFullNormalQueue = specialQueued && !special.inserted &&
+        !fullState.invalid && fullState.order == 1 &&
+        current->pendingNormalCount == current->pendingNormalApcs.size();
+    current->pendingNormalCount = 0;
+    current->pendingNormalHead = 0;
+    KeLeaveCriticalRegion();
+    return deliveredWithFullNormalQueue && current->kernelApcList.empty() &&
+        !current->kernelApcDisable && !interruptsEnabled();
 }

@@ -95,10 +95,11 @@ differs from the historical integration inventory below.
 | M1: section mapping | Anonymous section mapping through Mm and Ob exercised in QEMU, including shared pages and cleanup. |
 | M2: independent address spaces | Bounded BSP acceptance path exercised through Ps, Ke, Mm and Ob in QEMU, including private pages, shared section, survivor and PFN rollback. General process creation and termination remain outstanding. |
 | M3: preemptive scheduler | Bootstrap acceptance criteria completed on the single BSP in QEMU: timer-preempted kernel threads without voluntary yield, block/wakeup and bounded cleanup. General lifecycle and APC rundown remain M4 work; this is not a claim of full NT scheduler compatibility. |
-| M4: process and thread lifecycle | Bounded Ps kernel thread creation, execution and reap verified in QEMU. A subsequent QEMU-tested batch rejects current-process termination when any active thread has APCs disabled, a normal APC active or APCs awaiting delivery/rundown; deferred termination, automatic cleanup, waitable thread objects, normal process termination and native creation services remain outstanding. Process polling after explicit reap was exercised in QEMU; a blocked process waiter remains unverified. |
+| M4: process and thread lifecycle | QEMU exercises bounded Ps/Ob thread and process lifecycle, APC rundown, termination, waiters and deferred reaping. General native creation, complete security checks and broader lifecycle coverage remain outstanding. |
 | M5: NT system calls | Section, close and bounded current-process allocation/free calls exercised from CPL3. The services needed for native process/thread creation, synchronization and termination are incomplete. |
 | M6: first Ring 3 PE process | Not complete. The PE and CPL3 probes are diagnostics; image section mapping, process startup, PEB/TEB and termination are not integrated. |
 | M7: two threads, TLS and synchronization | Not complete. Two user threads in a real process, independent TLS, event synchronization and a verifiable exit status have not been exercised. |
+| M8: POSIX, Linux-style VFS and `sh.exe` | Planned; no M8 integration verification recorded. Scope, dependencies, phases and acceptance criteria are defined in [KERNEL_MILESTONES.md](KERNEL_MILESTONES.md#m8--posix-vfs-linux-style-e-shexe) and [the POSIX/VFS specification](<POSIX, VFS Linux.md>). |
 
 The detailed increments and commands below record the checks actually run;
 an isolated diagnostic does not establish a complete milestone contract.
@@ -277,22 +278,98 @@ resident kernel stack and Ke context, attaches the thread to its process root,
 queues and runs it, and reaps the terminated thread from another context before
 releasing the stack and address space. QEMU exercises this path, rejects
 premature cleanup and duplicate readying, and checks PFN accounting. This is
-not yet a waitable Ob thread object or an implementation of `NtCreateThreadEx`
-or general process termination.
+not yet an implementation of `NtCreateThreadEx` or general process termination.
+The later bounded Ob thread factory and its verification are described above.
 A bounded M4 batch lets the existing non-alertable BSP
 `NtWaitForSingleObject` path wait on an Ob process handle with `SYNCHRONIZE`.
 The retained object reference protects its notification event; the event is
 signaled only after explicit reap of the last attached thread closes the
-address space. QEMU exercised zero-timeout polling before and after reap and repeat waits, plus rejection of termination with a queued user APC or disabled APC delivery. A blocked process waiter has not been independently exercised. There is no autonomous reaper yet, so a waiter
-alone cannot cause termination cleanup to finish. Thread handles, general
-process termination, alertable waits and timeouts remain incomplete. The
+address space. QEMU exercised zero-timeout polling before and after reap and repeat waits, plus rejection of termination with a queued user APC or disabled APC delivery. A blocked waiter also resumed after reap despite its handle being closed during the wait; its retained Ob reference kept the object alive. That verified run used explicit reap; a later unverified deferred reaper is
+described below. General process termination, alertable waits and timeouts remain incomplete. The
 process signaling requirement is documented in [Terminating a Process](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process).
+
+A bounded M4 batch adds user-APC rundown on return from a bootstrap Ps
+kernel-thread start routine. It runs callbacks on the terminating thread at
+PASSIVE_LEVEL, disables further APC insertion before invoking them, and does
+not access an APC after its callback, which may destroy it. The initial user
+rundown test passed in QEMU; an expanded QEMU test also delivered queued normal
+and special kernel APCs before user rundown. The QEMU-tested version required every queued user APC to provide a rundown
+routine and rejected APC-disable regions or residual kernel APCs. A later
+unverified change removes a borrowed APC with no callback without freeing its
+storage; its owner remains responsible for that storage. Process-termination
+and never-started-thread rundown remain unimplemented. QEMU also exercised rejection of reentrant rundown and a callback that frees its own APC. ReactOS `ntoskrnl/ps/kill.c` was consulted for
+its current-thread rundown and kernel-queue exit handling; Microsoft documents
+[APC types](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/types-of-apcs)
+and [waits and termination](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/waits-and-apcs).
+
+A bounded internal Ps factory now creates Ob-backed thread objects. A lifecycle
+reference keeps each object alive if its last handle closes before reap. The
+Ke switch commit signals thread termination before the outgoing stack is
+reaped; cancellation before start signals it as well. QEMU exercised polling,
+a blocked waiter whose handle was closed, wakeup before reap, repeat wait,
+and closing the last handle before cancellation/reap. Native thread creation,
+automatic reaping and general remote termination remain outstanding. The
+[thread termination contract](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-thread)
+requires signaling and object lifetime independent of open handles.
+
+The current batch assigns distinct nonzero process and
+thread IDs to bootstrap Ps objects and populates user TEB IDs. It registers
+resident Ps thread contexts for BSP APC insertion, rejects insertion after a
+termination request, and adds an event-wait interruption path for a remote
+kernel APC. The wait resumes after kernel APC delivery and rechecks a signal
+that arrived while the waiter was detached. Tests cover cross-thread insertion and interrupt/resume. The
+remote event-wait termination path is also extended to deliver pending kernel
+APCs and run user rundown in the target thread after releasing the wait's Ob
+reference. Cancellation before
+start now schedules a target only for APC cleanup when it has queued APCs;
+its original entry is skipped and reap remains unavailable until that cleanup
+finishes. The batch further adds
+an Ob-owned deferred reaper, last-thread process termination, passive-boundary
+termination requests for ready or waiting threads, a current-thread exit path
+that delivers kernel APCs and rundowns user APCs, and a private composition
+helper that loads supplied images and constructs a user thread using existing
+Ps/Mm/Ob/Ke operations. The helper is not the native `NtCreateUserProcess` or `NtCreateThreadEx` ABI; their
+Microsoft declarations and full startup semantics remain unresolved. A further
+batch adds the documented WDK `PsCreateSystemThread` and
+`PsTerminateSystemThread` entry points, a persistent system process, kernel-only
+handle tagging, syscall previous-mode tracking and a lifecycle test. It uses
+existing Ps/Ob/Ke ownership and starts the kernel routine in a critical region.
+Object names, security descriptors, general access checks and the full driver
+loading path remain unsupported. The contract consulted is
+[PsCreateSystemThread](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pscreatesystemthread). The
+first QEMU run after adding client IDs was interrupted at the user's request;
+it does not establish that the ID or later code works.
+
+The batch also moves deferred termination to the actual user-return
+boundary, serializes thread publication, cancellation and reap against APC
+insertion, and captures bootstrap process image inputs before changing CR3.
+With the scheduler clock active, zero-reference process objects are queued
+for deletion by the passive reaper; early bootstrap still uses synchronous
+deletion. ReactOS
+`sdk/include/ndk/psfuncs.h`, `ntoskrnl/ps/thread.c` and
+`ntoskrnl/ps/process.c` were consulted where Microsoft metadata does not
+provide the native creation contracts. Native creation remains incomplete:
+the canonical thread path needs full AMD64 context, caller-owned stack and
+suspension semantics, while process creation needs executable file-backed
+sections or address-space cloning and the corresponding access checks.
+
+The subsequent integrated validation built and linked the bare-metal kernel
+and passed `python3 qemu.py --headless`, including the lifecycle, APC,
+deferred reaper, user-thread, preemption, input and idle markers. The separate
+`python3 qemu.py --headless --runtime-selftest` passed runtime teardown. The
+seven bootstrap runner unit tests, architecture check, hosted Ke context and
+canonical Ob handle regressions also passed. These results cover the bounded paths exercised by
+those tests; they do not complete M4 or validate general native creation,
+SMP, arbitrary access checks or all APC interleavings.
+The cross-toolchain `micant_tests` target compiled its test runner but did not
+link: the existing UCRT `initializeOnExitTable` definition is duplicated in
+the runner and `ntoskrnl_core`, so that general suite was not executed. The
+cross-toolchain `ntoskrnl_core` target itself linked successfully.
 
 The freestanding `KThread` now keeps resident APC objects in intrusive FIFO
 queues rather than constructing allocating `std::deque`s. QEMU verifies FIFO
 delivery for the current kernel thread and duplicate insertion rejection; Ps
-refuses to reap a thread with queued APCs until rundown is implemented. Target
-thread lookup, normal APC delivery semantics, rundown and alertable user waits
+refuses to reap a thread with queued APCs until rundown is implemented. Full target-thread lifetime/lookup semantics, general rundown and alertable user waits
 remain incomplete. ReactOS `ntoskrnl/ke/apc.c` was consulted for queue and
 rundown context.
 Ps can also roll back a not-yet-started thread, withdrawing it from the Ke
@@ -315,10 +392,20 @@ thread resumes in the kernel, releases its retained event reference and
 terminates before returning to user mode. QEMU verifies this with three CPL3
 threads blocked on an unsignaled event, the event and section Ob object counts,
 and PFN cleanup. The Ke test also cancels and restores a wait before signaling
-it. Arbitrary process handles, other thread states, APCs and
-general multi-thread termination remain unsupported. The contract is
+it. Other thread states, APCs and general multi-thread termination remain unsupported;
+the later bounded remote-process path is described below. The contract is
 [ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntddk/nf-ntddk-zwterminateprocess);
 ReactOS `ntoskrnl/ps/kill.c` was consulted for termination and cleanup.
+
+The bounded `NtTerminateProcess` path also accepts a handle to a different
+process with PROCESS_TERMINATE access when it has no attached threads, or when
+all active threads are in the supported bootstrap event-wait path. In the
+latter case their waits are cancelled and each thread resumes in its own
+kernel context to release the retained object reference and terminate. QEMU
+exercised both the empty process and a blocked thread, exit status, signaling,
+handle closure and PFN recovery. Arbitrary ready/running threads, APC rundown
+on this path, asynchronous reaping and other wait types remain unsupported.
+The access and termination contract is [ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwterminateprocess).
 
 An additional QEMU test now creates a real Ps process and Ke thread with a
 private CR3, PFN-backed user stack and executable page, enters CPL3, performs
