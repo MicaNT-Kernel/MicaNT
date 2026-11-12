@@ -19,6 +19,7 @@ class Variant:
 
 def variants() -> tuple[Variant, ...]:
     result = [
+        Variant("ntdll_boot", "tools/dlls/ntdll.cpp"),
         Variant("kernel32_boot", "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp",
                 ("MICANT_FREESTANDING_KERNEL32",)),
         Variant("ucrtbase_boot", "kernel/ps/winnt_ucrtbase_runtime_abi.cpp",

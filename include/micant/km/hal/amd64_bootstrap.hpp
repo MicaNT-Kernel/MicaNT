@@ -5,6 +5,20 @@
 
 namespace micant::hal::amd64 {
 
+// Layout of the bootstrap SYSCALL entry's saved user register frame. The
+// syscall continuation service updates this frame before the common IRETQ.
+struct SyscallFrame {
+    uint64_t r15, r14, r13, r12, r10, r9, r8, rdx;
+    uint64_t rsi, rdi, rbp, rbx, rax;
+    uint64_t rcx, r11, rip, cs, flags, rsp, ss;
+};
+inline constexpr uint64_t BootstrapNtContinueApplied = 0x4D4943414E54434EULL;
+static_assert(sizeof(SyscallFrame) == 160);
+static_assert(offsetof(SyscallFrame, rax) == 96);
+static_assert(offsetof(SyscallFrame, rcx) == 104);
+static_assert(offsetof(SyscallFrame, r11) == 112);
+static_assert(offsetof(SyscallFrame, rip) == 120);
+
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept;
 // BSP-only root ownership while IRQs are disabled. The root must be closed
 // before its owner is destroyed and must not be copied.
@@ -69,6 +83,12 @@ uint64_t bootstrapSchedulerClockTicks() noexcept;
 
 struct UserServiceArguments {
     uint64_t number, first, second, third, fourth, userStack;
+    // Kernel-only continuation plumbing for NtContinue. These point to the
+    // active entry frame and its saved XSAVE area on the current syscall stack.
+    void* trapFrame{};
+    void* floatingState{};
+    size_t floatingStateSize{};
+    uint32_t xsaveMask{};
 };
 using UserServiceRoutine = uint64_t (*)(const UserServiceArguments&) noexcept;
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;

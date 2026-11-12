@@ -6,6 +6,7 @@
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/sync.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/shared/context.hpp"
 #include "micant/um/native/pe.hpp"
 #include <array>
 #include <memory>
@@ -13,6 +14,7 @@
 
 namespace micant::ke { struct KThread; }
 namespace micant::um { class NativeUserImageSet64; }
+namespace micant::section { class SectionObject; }
 namespace micant::ps {
 namespace detail { struct ProcessObjectFactory; struct ThreadObjectFactory; struct ThreadReaper; }
 // Process-owned bootstrap address space. Lifecycle operations require the
@@ -28,6 +30,9 @@ public:
     NtStatus cloneNativeMetadata(const EProcess& source) noexcept;
     NtStatus attachThread(ke::KThread& thread) noexcept;
     NtStatus detachThread(ke::KThread& thread) noexcept;
+    NtStatus referenceAddressSpaceForAttach(uintptr_t& directoryTableBase,
+                                            ob::ObjectHeader*& reference) noexcept;
+    void releaseAddressSpaceAttachReference(ob::ObjectHeader* reference) noexcept;
     // Bounded current-process termination; successful termination does not
     // return. The owning context performs deferred cleanup after switch.
     NtStatus terminateCurrent(NtStatus exitStatus) noexcept;
@@ -41,6 +46,10 @@ public:
     NtStatus setNativeProcessParameters(std::u16string_view imagePath,
                                         std::u16string_view commandLine) noexcept;
     NtStatus finalizeNativeImages() noexcept;
+    NtStatus initializeMainImageFromSection(section::SectionObject& image,
+                                            ob::ObjectHeader* sectionReference) noexcept;
+    NtStatus replaceMainImageFromSection(section::SectionObject& image,
+                                         ob::ObjectHeader* sectionReference) noexcept;
     [[nodiscard]] const um::NativeUserImageSet64* nativeImages() const noexcept { return images_.get(); }
     [[nodiscard]] mm::ProcessAddressSpace& getAddressSpace() noexcept { return addressSpace_; }
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
@@ -72,9 +81,12 @@ private:
     mm::ProcessAddressSpace addressSpace_{};
     std::unique_ptr<ob::HandleTable> handles_{};
     size_t attachedThreads_{0};
+    size_t activeAttachReferences_{0};
     ke::KThread* threads_{nullptr};
     bool terminating_{false};
+    bool processPublished_{false};
     bool addressSpaceClosing_{false};
+    bool synchronousCleanupRetry_{false};
     EProcess* deferredNext_{nullptr};
     bool deferredQueued_{false};
     bool systemProcess_{false};
@@ -95,10 +107,15 @@ private:
     uintptr_t userPeb_{0};
     uintptr_t userLoaderData_{0};
     uintptr_t userProcessParameters_{0};
+    // Read-only user mapping of the validated file-backed API-set namespace.
+    // The address-space VAD owns its pages; this field tracks the PEB target.
+    uintptr_t userApiSetMap_{0};
+    size_t userApiSetMapSize_{0};
     std::array<std::u16string_view, 16> nativeImagePaths_{};
     std::u16string_view processImagePath_{};
     std::u16string_view processCommandLine_{};
     bool processParametersConfigured_{false};
+    bool imageSectionBacked_{false};
     std::unique_ptr<pe::PeImageView64::TlsLayout[]> userTlsLayouts_{};
     size_t userTlsCount_{0};
 };
@@ -141,8 +158,10 @@ public:
     NtStatus rollbackBeforeStart() noexcept;
     // Successful current-thread exit never returns; stack release is deferred.
     NtStatus exitCurrent(NtStatus status) noexcept;
-    // Request target-context termination on the bootstrap processor. A
-    // blocked kernel-mode wait cannot yet be interrupted by this path.
+    // Request target-context termination on the bootstrap processor. A thread
+    // blocked in the canonical Ke event wait may be woken and terminated
+    // after the wait syscall releases its object reference; other wait engines
+    // remain unsupported.
     NtStatus terminateOther(NtStatus status) noexcept;
     NtStatus reap() noexcept;
     [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
@@ -150,6 +169,21 @@ public:
     [[nodiscard]] uintptr_t userStackPointer() const noexcept { return userStackPointer_; }
     [[nodiscard]] bool isSystemThread() const noexcept { return systemThread_; }
     [[nodiscard]] uintptr_t userTebAddress() const noexcept { return userTeb_; }
+    // Caller handles the trap frame and passes a fault from this thread's
+    // current process; no user exception is dispatched by this helper.
+    NtStatus resolveUserStackGuard(uintptr_t address) noexcept;
+    // Build the AMD64 user exception frame on the faulting thread's stack.
+    // The HAL owns trap-frame restoration; this method only validates and
+    // redirects the saved user return frame to NTDLL's exception dispatcher.
+    NtStatus prepareUserException(uint32_t exceptionCode, uint32_t exceptionVector,
+                                  uintptr_t address,
+                                  uint64_t* hardwareFrame, uint64_t* savedRegisters,
+                                  const void* floatingState) noexcept;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    NtStatus prepareUserApc(const ke::UserApcDelivery* deliveries, size_t deliveryCount,
+                            uint64_t* hardwareFrame, uint64_t* savedRegisters,
+                            const void* floatingState) noexcept;
+#endif
     NtStatus configureUserStart(uintptr_t routine, uintptr_t argument) noexcept;
     [[nodiscard]] uintptr_t userTlsStorage() const noexcept { return userTls_ ? userTls_ + 0x100 : 0; }
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
@@ -194,6 +228,10 @@ private:
     uintptr_t userStartRoutine_{0};
     uintptr_t userStartArgument_{0};
     uintptr_t userStack_{0};
+    // Kernel-owned address of the next stack guard; never trust the writable TEB.
+    uintptr_t userStackGuard_{0};
+    uintptr_t userStackLimit_{0};
+    uintptr_t userStackTop_{0};
     uintptr_t userStackPointer_{0};
     uintptr_t userTeb_{0};
     uintptr_t userTls_{0};

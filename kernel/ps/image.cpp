@@ -1,14 +1,548 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/executive/image_metadata.hpp"
+#include "micant/km/executive/section.hpp"
+#include "micant/km/executive/io_file.hpp"
+#include "micant/km/core/syscalls.hpp"
 #include <new>
 #include <cstring>
 
 namespace micant::sys {
 NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, size_t size) noexcept;
+NtStatus mapBootstrapFileImageView(mm::ProcessAddressSpace& space, uintptr_t& base,
+                                   section::SectionObject& image,
+                                   ob::ObjectHeader* sectionReference) noexcept;
+NtStatus mapBootstrapRelocatedFileImageView(mm::ProcessAddressSpace& space, uintptr_t& base,
+                                            section::SectionObject& image,
+                                            ob::ObjectHeader* sectionReference) noexcept;
+NtStatus referenceProcessImageSection(Handle handle, ob::ObjectHeader*& reference) noexcept;
 }
 
 namespace micant::ps {
+namespace {
+bool initializeLoaderMetadata(const um::NativeUserImageSet64& images, uintptr_t address,
+                              std::span<const std::u16string_view> paths) noexcept;
+
+struct ScopedHandle {
+    Handle value{};
+    ~ScopedHandle() {
+        if (value && sys::NtClose(value) != NtStatus::Success) __builtin_trap();
+    }
+};
+
+struct ScopedObjectReference {
+    ob::ObjectHeader* value{};
+    ~ScopedObjectReference() { if (value) ob::ObDereferenceObject(value); }
+};
+
+NtStatus buildNtdllPath(char16_t (&path)[256], size_t& pathLength) noexcept {
+    constexpr char16_t systemNtdll[] = u"C:\\Windows\\System32\\ntdll.dll";
+    constexpr size_t length = (sizeof(systemNtdll) / sizeof(systemNtdll[0])) - 1;
+    static_assert(length < 256);
+    for (size_t i = 0; i < length; ++i) path[i] = systemNtdll[i];
+    pathLength = length;
+    return NtStatus::Success;
+}
+
+NtStatus buildSystemDllPath(std::string_view library, char16_t (&path)[256],
+                            size_t& pathLength) noexcept {
+    constexpr char16_t prefix[] = u"C:\\Windows\\System32\\";
+    constexpr size_t prefixLength = (sizeof(prefix) / sizeof(prefix[0])) - 1;
+    if (library.size() < 5 || library.size() > 128 ||
+        library[library.size() - 4] != '.' ||
+        (library[library.size() - 3] != 'd' && library[library.size() - 3] != 'D') ||
+        (library[library.size() - 2] != 'l' && library[library.size() - 2] != 'L') ||
+        (library[library.size() - 1] != 'l' && library[library.size() - 1] != 'L') ||
+        prefixLength + library.size() >= sizeof(path) / sizeof(path[0]))
+        return NtStatus::NotSupported;
+    for (const char ch : library) {
+        const bool alpha = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+        const bool digit = ch >= '0' && ch <= '9';
+        if (!alpha && !digit && ch != '-' && ch != '_' && ch != '.')
+            return NtStatus::NotSupported;
+    }
+    for (size_t i = 0; i < prefixLength; ++i) path[i] = prefix[i];
+    for (size_t i = 0; i < library.size(); ++i)
+        path[prefixLength + i] = static_cast<char16_t>(static_cast<uint8_t>(library[i]));
+    pathLength = prefixLength + library.size();
+    return NtStatus::Success;
+}
+
+NtStatus buildImageModuleName(std::u16string_view path, char (&storage)[260],
+                              std::string_view& moduleName) noexcept {
+    moduleName = {};
+    size_t nameOffset{};
+    for (size_t index = 0; index < path.size(); ++index)
+        if (path[index] == u'\\' || path[index] == u'/') nameOffset = index + 1;
+    const size_t nameLength = path.size() - nameOffset;
+    if (!nameLength || nameLength >= sizeof(storage)) return NtStatus::NotSupported;
+    for (size_t index = 0; index < nameLength; ++index) {
+        const char16_t ch = path[nameOffset + index];
+        if (!ch || ch > 0x7f || ch == u':' || ch == u'\\' || ch == u'/')
+            return NtStatus::NotSupported;
+        storage[index] = static_cast<char>(ch);
+    }
+    moduleName = {storage, nameLength};
+    return NtStatus::Success;
+}
+
+struct ApiSetNamespaceV6 {
+    uint32_t version, size, flags, count, entryOffset, hashOffset, hashFactor;
+};
+struct ApiSetHashEntryV6 { uint32_t hash, index; };
+struct ApiSetNamespaceEntryV6 {
+    uint32_t flags, nameOffset, nameLength, hashedLength, valueOffset, valueCount;
+};
+struct ApiSetValueEntryV6 {
+    uint32_t flags, nameOffset, nameLength, valueOffset, valueLength;
+};
+static_assert(sizeof(ApiSetNamespaceV6) == 28);
+static_assert(sizeof(ApiSetHashEntryV6) == 8);
+static_assert(sizeof(ApiSetNamespaceEntryV6) == 24);
+static_assert(sizeof(ApiSetValueEntryV6) == 20);
+
+class ApiSetSchemaV6 {
+public:
+    NtStatus namespaceBlob(std::span<const uint8_t>& blob) noexcept {
+        blob = {};
+        const auto status = ensureLoaded();
+        if (status != NtStatus::Success) return status;
+        blob = {schemaBytes_, namespaceSize_};
+        return NtStatus::Success;
+    }
+
+    NtStatus resolve(std::string_view contract, std::string_view importingModule,
+                     std::string_view& host) noexcept {
+        host = {};
+        auto status = ensureLoaded();
+        if (status != NtStatus::Success) return status;
+        if (contract.size() >= 4 && suffixDll(contract)) contract.remove_suffix(4);
+        if (!isApiSetName(contract) || contract.size() > 255) return NtStatus::NotSupported;
+        size_t lastDash = contract.size();
+        for (size_t i = 0; i < contract.size(); ++i)
+            if (contract[i] == '-') lastDash = i;
+        if (lastDash == contract.size() || !lastDash || lastDash * sizeof(char16_t) > UINT32_MAX)
+            return NtStatus::NotSupported;
+        uint32_t wantedHash{};
+        for (size_t i = 0; i < lastDash; ++i)
+            wantedHash = wantedHash * namespace_.hashFactor + lowerAscii(contract[i]);
+
+        size_t first = 0;
+        size_t last = namespace_.count;
+        while (first < last) {
+            const size_t middle = first + (last - first) / 2;
+            ApiSetHashEntryV6 hash{};
+            if (!readAt(namespace_.hashOffset + middle * sizeof(hash), hash))
+                return NtStatus::InvalidImageFormat;
+            if (hash.hash < wantedHash) first = middle + 1;
+            else last = middle;
+        }
+        for (size_t index = first; index < namespace_.count; ++index) {
+            ApiSetHashEntryV6 hash{};
+            if (!readAt(namespace_.hashOffset + index * sizeof(hash), hash))
+                return NtStatus::InvalidImageFormat;
+            if (hash.hash != wantedHash) break;
+            if (hash.index >= namespace_.count) return NtStatus::InvalidImageFormat;
+            ApiSetNamespaceEntryV6 entry{};
+            if (!readAt(namespace_.entryOffset + static_cast<size_t>(hash.index) * sizeof(entry), entry))
+                return NtStatus::InvalidImageFormat;
+            if (entry.hashedLength != lastDash * sizeof(char16_t) ||
+                !equalsAscii(entry.nameOffset, entry.nameLength, contract)) continue;
+            return selectHost(entry, importingModule, host);
+        }
+        return NtStatus::NotSupported;
+    }
+
+private:
+    static constexpr std::u16string_view schemaPath = u"C:\\Windows\\System32\\apisetschema.dll";
+    static bool suffixDll(std::string_view name) noexcept {
+        const size_t offset = name.size() - 4;
+        return name[offset] == '.' && lowerAscii(name[offset + 1]) == 'd' &&
+            lowerAscii(name[offset + 2]) == 'l' && lowerAscii(name[offset + 3]) == 'l';
+    }
+    static char lowerAscii(char value) noexcept {
+        return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
+    }
+    static char16_t lowerAscii(char16_t value) noexcept {
+        return value >= u'A' && value <= u'Z' ? static_cast<char16_t>(value + (u'a' - u'A')) : value;
+    }
+    static bool isApiSetName(std::string_view name) noexcept {
+        if (name.size() < 4) return false;
+        return (lowerAscii(name[0]) == 'a' && lowerAscii(name[1]) == 'p' &&
+                lowerAscii(name[2]) == 'i' && name[3] == '-') ||
+               (lowerAscii(name[0]) == 'e' && lowerAscii(name[1]) == 'x' &&
+                lowerAscii(name[2]) == 't' && name[3] == '-');
+    }
+    [[nodiscard]] size_t dataSize() const noexcept {
+        return namespaceSize_ ? namespaceSize_ : schemaSize_;
+    }
+    template <typename T>
+    bool readAt(size_t offset, T& value) const noexcept {
+        const size_t size = dataSize();
+        if (offset > size || sizeof(T) > size - offset) return false;
+        std::memcpy(&value, schemaBytes_ + offset, sizeof(value));
+        return true;
+    }
+    bool validString(uint32_t offset, uint32_t length, bool allowEmpty) const noexcept {
+        const size_t size = dataSize();
+        if (length > size || (length & 1) || (offset & 1) ||
+            offset > size || length > size - offset || (!allowEmpty && !length))
+            return false;
+        return true;
+    }
+    char16_t characterAt(uint32_t offset, size_t index) const noexcept {
+        char16_t value{};
+        std::memcpy(&value, schemaBytes_ + offset + index * sizeof(char16_t), sizeof(value));
+        return value;
+    }
+    bool equalsAscii(uint32_t offset, uint32_t length, std::string_view ascii) const noexcept {
+        if (!validString(offset, length, false) || length / sizeof(char16_t) != ascii.size()) return false;
+        for (size_t i = 0; i < ascii.size(); ++i) {
+            const char16_t value = characterAt(offset, i);
+            if (value > 0x7f || lowerAscii(value) != static_cast<char16_t>(lowerAscii(ascii[i])))
+                return false;
+        }
+        return true;
+    }
+    bool validModuleString(uint32_t offset, uint32_t length, bool allowEmpty,
+                          bool requireDllSuffix) const noexcept {
+        if (!validString(offset, length, allowEmpty) || length / sizeof(char16_t) > 260)
+            return false;
+        const size_t count = length / sizeof(char16_t);
+        if (!count) return allowEmpty && !requireDllSuffix;
+        for (size_t index = 0; index < count; ++index) {
+            const char16_t value = characterAt(offset, index);
+            const char16_t lower = lowerAscii(value);
+            if (!((lower >= u'a' && lower <= u'z') || (lower >= u'0' && lower <= u'9') ||
+                  value == u'-' || value == u'_' || value == u'.')) return false;
+        }
+        if (!requireDllSuffix) return true;
+        return count >= 5 && characterAt(offset, count - 4) == u'.' &&
+            lowerAscii(characterAt(offset, count - 3)) == u'd' &&
+            lowerAscii(characterAt(offset, count - 2)) == u'l' &&
+            lowerAscii(characterAt(offset, count - 1)) == u'l';
+    }
+    static bool checkedArray(uint32_t offset, uint32_t count, size_t itemSize,
+                             uint32_t dataSize) noexcept {
+        return !(offset & 3) && offset <= dataSize &&
+            count <= (dataSize - offset) / itemSize;
+    }
+    uint32_t hashName(uint32_t offset, uint32_t byteLength) const noexcept {
+        uint32_t hash{};
+        for (size_t i = 0; i < byteLength / sizeof(char16_t); ++i)
+            hash = hash * namespace_.hashFactor + lowerAscii(characterAt(offset, i));
+        return hash;
+    }
+    NtStatus selectHost(const ApiSetNamespaceEntryV6& entry, std::string_view importer,
+                        std::string_view& host) noexcept {
+        ApiSetValueEntryV6 fallback{};
+        bool hasFallback = false;
+        for (uint32_t index = 0; index < entry.valueCount; ++index) {
+            ApiSetValueEntryV6 value{};
+            const size_t offset = static_cast<size_t>(entry.valueOffset) +
+                                  static_cast<size_t>(index) * sizeof(value);
+            if (!readAt(offset, value)) return NtStatus::InvalidImageFormat;
+            if (!value.nameLength) { fallback = value; hasFallback = true; continue; }
+            if (nameMatchesImporter(value.nameOffset, value.nameLength, importer)) {
+                if (!value.valueLength) return NtStatus::NotSupported;
+                return copyHost(value, host);
+            }
+        }
+        if (!hasFallback || !fallback.valueLength) return NtStatus::NotSupported;
+        return copyHost(fallback, host);
+    }
+    bool nameMatchesImporter(uint32_t offset, uint32_t length,
+                             std::string_view importer) const noexcept {
+        if (!validString(offset, length, false)) return false;
+        if (equalsAscii(offset, length, importer)) return true;
+        const bool valueHasDll = length >= 8 &&
+            lowerAscii(characterAt(offset, length / 2 - 3)) == u'd' &&
+            lowerAscii(characterAt(offset, length / 2 - 2)) == u'l' &&
+            lowerAscii(characterAt(offset, length / 2 - 1)) == u'l' &&
+            characterAt(offset, length / 2 - 4) == u'.';
+        if (valueHasDll) {
+            const std::string_view base{importer.data(), importer.size() >= 4 ? importer.size() - 4 : importer.size()};
+            return equalsAscii(offset, length - 8, base);
+        }
+        if (importer.size() >= 4 && suffixDll(importer))
+            return equalsAscii(offset, length, importer.substr(0, importer.size() - 4));
+        return false;
+    }
+    NtStatus copyHost(const ApiSetValueEntryV6& value, std::string_view& host) noexcept {
+        if (!validString(value.valueOffset, value.valueLength, false) ||
+            value.valueLength / sizeof(char16_t) >= hostBuffer_.size())
+            return NtStatus::InvalidImageFormat;
+        const size_t length = value.valueLength / sizeof(char16_t);
+        for (size_t i = 0; i < length; ++i) {
+            const char16_t valueChar = characterAt(value.valueOffset, i);
+            if (valueChar > 0x7f) return NtStatus::InvalidImageFormat;
+            hostBuffer_[i] = static_cast<char>(valueChar);
+        }
+        host = {hostBuffer_.data(), length};
+        if (length < 5 || !suffixDll(host)) return NtStatus::InvalidImageFormat;
+        for (const char ch : host) {
+            const char lower = lowerAscii(ch);
+            if (!((lower >= 'a' && lower <= 'z') || (lower >= '0' && lower <= '9') ||
+                  ch == '-' || ch == '_' || ch == '.')) return NtStatus::InvalidImageFormat;
+        }
+        return NtStatus::Success;
+    }
+    NtStatus ensureLoaded() noexcept {
+        if (loadAttempted_) return loadStatus_;
+        loadAttempted_ = true;
+        ScopedHandle fileHandle;
+        auto status = io::IoOpenBackendFile(&fileHandle.value, 0x0001, schemaPath);
+        if (status != NtStatus::Success) return loadStatus_ = NtStatus::NotSupported;
+        io::FileObject* file{};
+        ScopedObjectReference fileReference;
+        status = io::IoReferenceFileHandle(fileHandle.value, 0x0001, file, fileReference.value);
+        if (status != NtStatus::Success || !file || !file->size() || file->size() > SIZE_MAX)
+            return loadStatus_ = NtStatus::InvalidImageFormat;
+        const size_t fileSize = static_cast<size_t>(file->size());
+        fileBytes_.reset(new (std::nothrow_t{}) uint8_t[fileSize]);
+        if (!fileBytes_) return loadStatus_ = NtStatus::NoMemory;
+        size_t total{};
+        while (total < fileSize) {
+            size_t read{};
+            status = file->read(total, fileBytes_.get() + total, fileSize - total, &read);
+            if (status != NtStatus::Success || !read || read > fileSize - total)
+                return loadStatus_ = status == NtStatus::Success ? NtStatus::EndOfFile : status;
+            total += read;
+        }
+        pe::PeImageView64 peView;
+        status = peView.inspect({fileBytes_.get(), fileSize});
+        if (status != NtStatus::Success) return loadStatus_ = status;
+        pe::ImageSectionHeader schemaSection{};
+        bool foundSchemaSection = false;
+        for (size_t i = 0; i < peView.headers().fileHeader.numberOfSections; ++i) {
+            const auto candidate = peView.section(i);
+            if (candidate.getName() != ".apiset") continue;
+            if (foundSchemaSection) return loadStatus_ = NtStatus::InvalidImageFormat;
+            schemaSection = candidate;
+            foundSchemaSection = true;
+        }
+        if (!foundSchemaSection || !schemaSection.sizeOfRawData ||
+            schemaSection.pointerToRawData > fileSize ||
+            schemaSection.sizeOfRawData > fileSize - schemaSection.pointerToRawData)
+            return loadStatus_ = NtStatus::NotSupported;
+        schemaBytes_ = fileBytes_.get() + schemaSection.pointerToRawData;
+        schemaSize_ = schemaSection.sizeOfRawData;
+        if (schemaSize_ < sizeof(namespace_)) return loadStatus_ = NtStatus::InvalidImageFormat;
+        std::memcpy(&namespace_, schemaBytes_, sizeof(namespace_));
+        return loadStatus_ = validateSchema();
+    }
+    NtStatus validateSchema() noexcept {
+        if (namespace_.version != 6 || namespace_.size < sizeof(namespace_) ||
+            namespace_.size > schemaSize_ || namespace_.size > 16 * 1024 * 1024 ||
+            !namespace_.count || namespace_.count > 65536 ||
+            !namespace_.hashFactor ||
+            !checkedArray(namespace_.entryOffset, namespace_.count, sizeof(ApiSetNamespaceEntryV6), namespace_.size) ||
+            !checkedArray(namespace_.hashOffset, namespace_.count, sizeof(ApiSetHashEntryV6), namespace_.size))
+            return namespace_.version == 6 ? NtStatus::InvalidImageFormat : NtStatus::NotSupported;
+        namespaceSize_ = namespace_.size;
+        std::unique_ptr<uint8_t[]> seen(new (std::nothrow_t{}) uint8_t[namespace_.count]{});
+        if (!seen) return NtStatus::NoMemory;
+        uint32_t previousHash{};
+        for (uint32_t index = 0; index < namespace_.count; ++index) {
+            ApiSetHashEntryV6 hash{};
+            if (!readAt(namespace_.hashOffset + static_cast<size_t>(index) * sizeof(hash), hash) ||
+                hash.index >= namespace_.count || (index && hash.hash < previousHash) || seen[hash.index])
+                return NtStatus::InvalidImageFormat;
+            previousHash = hash.hash;
+            seen[hash.index] = 1;
+            ApiSetNamespaceEntryV6 entry{};
+            if (!readAt(namespace_.entryOffset + static_cast<size_t>(hash.index) * sizeof(entry), entry) ||
+                !validString(entry.nameOffset, entry.nameLength, false) ||
+                !entry.hashedLength || (entry.hashedLength & 1) ||
+                entry.hashedLength > entry.nameLength || !entry.valueCount || entry.valueCount > 256 ||
+                !checkedArray(entry.valueOffset, entry.valueCount, sizeof(ApiSetValueEntryV6), namespace_.size) ||
+                hashName(entry.nameOffset, entry.hashedLength) != hash.hash)
+                return NtStatus::InvalidImageFormat;
+            for (size_t c = 0; c < entry.nameLength / sizeof(char16_t); ++c) {
+                const char16_t ch = characterAt(entry.nameOffset, c);
+                if (ch > 0x7f || !((lowerAscii(ch) >= u'a' && lowerAscii(ch) <= u'z') ||
+                    (lowerAscii(ch) >= u'0' && lowerAscii(ch) <= u'9') || ch == u'-' || ch == u'~'))
+                    return NtStatus::InvalidImageFormat;
+            }
+            for (uint32_t valueIndex = 0; valueIndex < entry.valueCount; ++valueIndex) {
+                ApiSetValueEntryV6 value{};
+                if (!readAt(entry.valueOffset + static_cast<size_t>(valueIndex) * sizeof(value), value) ||
+                    !validModuleString(value.nameOffset, value.nameLength, true, false) ||
+                    !validModuleString(value.valueOffset, value.valueLength, false, true))
+                    return NtStatus::InvalidImageFormat;
+            }
+        }
+        return NtStatus::Success;
+    }
+
+    ApiSetNamespaceV6 namespace_{};
+    std::unique_ptr<uint8_t[]> fileBytes_{};
+    const uint8_t* schemaBytes_{};
+    size_t schemaSize_{};
+    size_t namespaceSize_{};
+    std::array<char, 260> hostBuffer_{};
+    bool loadAttempted_{};
+    NtStatus loadStatus_{NtStatus::NotSupported};
+};
+
+NtStatus validateApiSetMapView(const mm::ProcessAddressSpace& addressSpace,
+                               uintptr_t address, size_t size) noexcept;
+
+NtStatus publishApiSetMap(mm::ProcessAddressSpace& addressSpace, uintptr_t pebAddress,
+                          uintptr_t& apiSetMapAddress, size_t& apiSetMapSize,
+                          ApiSetSchemaV6& schema) noexcept {
+    constexpr size_t pebApiSetMapOffset = 0x68; // ReactOS PEB64 / public AMD64 layout.
+    std::span<const uint8_t> namespaceBlob;
+    auto status = schema.namespaceBlob(namespaceBlob);
+    if (status != NtStatus::Success) return status;
+    if (!pebAddress || !hal::amd64::bootstrapUserRange(pebAddress + pebApiSetMapOffset,
+                                                         sizeof(uint64_t), false) ||
+        namespaceBlob.empty() || namespaceBlob.size() > SIZE_MAX - mm::PageMask4KB)
+        return NtStatus::InvalidImageFormat;
+    if (apiSetMapAddress) {
+        if (apiSetMapSize != namespaceBlob.size() || !hal::amd64::bootstrapUserRange(
+                apiSetMapAddress, apiSetMapSize, false))
+            return NtStatus::InvalidImageFormat;
+        status = validateApiSetMapView(addressSpace, apiSetMapAddress, apiSetMapSize);
+        if (status != NtStatus::Success) return status;
+        if (std::memcmp(reinterpret_cast<const void*>(apiSetMapAddress), namespaceBlob.data(),
+                        namespaceBlob.size()) == 0) {
+            *reinterpret_cast<uint64_t*>(pebAddress + pebApiSetMapOffset) = apiSetMapAddress;
+            return NtStatus::Success;
+        }
+    }
+    const size_t mapSize = (namespaceBlob.size() + mm::PageMask4KB) & ~mm::PageMask4KB;
+    uintptr_t mapped{};
+    status = addressSpace.allocate(mapped, mapSize, mm::MEM_RESERVE | mm::MEM_COMMIT,
+                                   mm::PAGE_READWRITE);
+    if (status != NtStatus::Success) return status;
+    std::memset(reinterpret_cast<void*>(mapped), 0, mapSize);
+    std::memcpy(reinterpret_cast<void*>(mapped), namespaceBlob.data(), namespaceBlob.size());
+    uint32_t previousProtection{};
+    status = addressSpace.protect(mapped, mapSize, mm::PAGE_READONLY, &previousProtection);
+    if (status != NtStatus::Success) {
+        const auto releaseStatus = addressSpace.free(mapped, 0, mm::MEM_RELEASE);
+        if (releaseStatus != NtStatus::Success) return releaseStatus;
+        return status;
+    }
+    const uintptr_t previousMap = apiSetMapAddress;
+    apiSetMapAddress = mapped;
+    apiSetMapSize = namespaceBlob.size();
+    *reinterpret_cast<uint64_t*>(pebAddress + pebApiSetMapOffset) = mapped;
+    if (previousMap && previousMap != mapped) {
+        // A replaced image may inherit an older API-set mapping. It is no
+        // longer reachable from the PEB, so release it after publication.
+        const auto releaseStatus = addressSpace.free(previousMap, 0, mm::MEM_RELEASE);
+        if (releaseStatus != NtStatus::Success) return releaseStatus;
+    }
+    return NtStatus::Success;
+}
+
+NtStatus validateApiSetMapView(const mm::ProcessAddressSpace& addressSpace,
+                               uintptr_t address, size_t size) noexcept {
+    if (!address || !size || size > SIZE_MAX - mm::PageMask4KB)
+        return NtStatus::InvalidImageFormat;
+    const auto* vad = addressSpace.findVad(address);
+    const size_t mappedSize = (size + mm::PageMask4KB) & ~mm::PageMask4KB;
+    if (!vad || vad->isSectionView || !vad->committed ||
+        vad->protection != mm::PAGE_READONLY || address < vad->startingAddress ||
+        address > vad->endingAddress ||
+        mappedSize > vad->endingAddress - address + 1)
+        return NtStatus::InvalidImageFormat;
+    const uint64_t firstVpn = address >> mm::PageShift4KB;
+    const uint64_t pageCount = mappedSize >> mm::PageShift4KB;
+    uint64_t committedPages{};
+    for (auto* page = vad->commitRanges.get(); page; page = page->next.get()) {
+        if (page->protection != mm::PAGE_READONLY || page->firstVpn < firstVpn ||
+            page->lastVpn < page->firstVpn || page->lastVpn - firstVpn >= pageCount)
+            return NtStatus::InvalidImageFormat;
+        const uint64_t rangePages = page->lastVpn - page->firstVpn + 1;
+        if (rangePages > pageCount - committedPages) return NtStatus::InvalidImageFormat;
+        committedPages += rangePages;
+    }
+    return committedPages == pageCount ? NtStatus::Success : NtStatus::InvalidImageFormat;
+}
+
+bool isApiSetContractName(std::string_view name) noexcept {
+    if (name.size() < 4) return false;
+    const auto lower = [](char value) noexcept {
+        return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
+    };
+    return ((lower(name[0]) == 'a' && lower(name[1]) == 'p' && lower(name[2]) == 'i') ||
+            (lower(name[0]) == 'e' && lower(name[1]) == 'x' && lower(name[2]) == 't')) &&
+           name[3] == '-';
+}
+
+struct ApiSetResolverDetach {
+    um::NativeUserImageSet64* images{};
+    ~ApiSetResolverDetach() {
+        if (images) images->setApiSetHostResolver(nullptr, nullptr);
+    }
+};
+
+NtStatus openSystemImageSection(std::u16string_view path, ScopedHandle& sectionHandle,
+                               ScopedObjectReference& sectionReference,
+                               section::SectionObject*& image) noexcept {
+    image = nullptr;
+    ScopedHandle fileHandle;
+    auto status = io::IoOpenBackendFile(&fileHandle.value, 0x0001, path);
+    if (status != NtStatus::Success) return status;
+    status = sys::NtCreateSectionFromKernel(&sectionHandle.value, section::SECTION_ALL_ACCESS,
+        nullptr, nullptr, mm::PAGE_EXECUTE_READ, section::SEC_FILE | section::SEC_IMAGE,
+        fileHandle.value);
+    const auto closeFileStatus = sys::NtClose(fileHandle.value);
+    if (closeFileStatus == NtStatus::Success) fileHandle.value = 0;
+    if (status != NtStatus::Success) return status;
+    if (closeFileStatus != NtStatus::Success) return closeFileStatus;
+    status = sys::referenceProcessImageSection(sectionHandle.value, sectionReference.value);
+    if (status != NtStatus::Success) return status;
+    image = sectionReference.value->as<section::SectionObject>();
+    return NtStatus::Success;
+}
+
+NtStatus mapFileImageAtAvailableBase(mm::ProcessAddressSpace& addressSpace,
+                                    section::SectionObject& image,
+                                    ob::ObjectHeader* sectionReference,
+                                    const pe::PeImageView64& view,
+                                    uintptr_t& mappedBase) noexcept {
+    mappedBase = image.getImageBase();
+    auto status = sys::mapBootstrapFileImageView(addressSpace, mappedBase,
+                                                 image, sectionReference);
+    const bool relocatedView = status == NtStatus::Conflict;
+    if (relocatedView) {
+        mappedBase = 0;
+        status = sys::mapBootstrapRelocatedFileImageView(addressSpace, mappedBase,
+                                                          image, sectionReference);
+    }
+    if (status != NtStatus::Success) return status;
+    const auto unmapOnFailure = [&](NtStatus failure) noexcept {
+        if (addressSpace.unmapSharedPages(mappedBase) != NtStatus::Success) __builtin_trap();
+        return failure;
+    };
+    if (!hal::amd64::bootstrapUserRange(mappedBase, image.getSize(), false))
+        return unmapOnFailure(NtStatus::InvalidImageFormat);
+    if (!relocatedView) return NtStatus::Success;
+
+    auto mappedImage = std::span<uint8_t>{reinterpret_cast<uint8_t*>(mappedBase), image.getSize()};
+    status = view.relocateMappedImage(mappedImage, mappedBase);
+    if (status != NtStatus::Success) return unmapOnFailure(status);
+    const size_t pageCount = (image.getSize() + mm::PageMask4KB) >> mm::PageShift4KB;
+    const auto* protections = image.getPageProtections();
+    if (!protections) return unmapOnFailure(NtStatus::InvalidImageFormat);
+    for (size_t first = 0; first < pageCount;) {
+        const uint32_t protection = protections[first];
+        size_t end = first + 1;
+        while (end < pageCount && protections[end] == protection) ++end;
+        uint32_t previousProtection{};
+        status = addressSpace.protect(mappedBase + first * mm::PageSize4KB,
+            (end - first) * mm::PageSize4KB, protection, &previousProtection);
+        if (status != NtStatus::Success) return unmapOnFailure(status);
+        first = end;
+    }
+    return NtStatus::Success;
+}
+}
+
 NtStatus EProcess::cloneNativeMetadata(const EProcess& source) noexcept {
     if (!source.images_) return NtStatus::Success;
     uintptr_t currentRoot{};
@@ -25,17 +559,23 @@ NtStatus EProcess::cloneNativeMetadata(const EProcess& source) noexcept {
         if (!module) return NtStatus::InvalidImageFormat;
         const auto file = module->view.fileBytes();
         const auto name = module->name;
+        const auto modulePath = source.nativeImagePaths_[i];
         if (file.empty() || name.empty() ||
             !hal::amd64::bootstrapUserRange(module->base, module->image.size(), false) ||
             !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(file.data()), file.size(), false) ||
-            !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(name.data()), name.size(), false))
+            !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(name.data()), name.size(), false) ||
+            (!modulePath.empty() && !hal::amd64::bootstrapKernelRange(
+                reinterpret_cast<uintptr_t>(modulePath.data()), modulePath.size() * sizeof(char16_t), false)))
             return NtStatus::NotImplemented;
         auto& owned = inputs[i];
         owned.bytes.reset(new (std::nothrow_t{}) uint8_t[file.size()]);
         owned.name.reset(new (std::nothrow_t{}) char[name.size()]);
-        if (!owned.bytes || !owned.name) return NtStatus::NoMemory;
+        if (!modulePath.empty())
+            owned.path.reset(new (std::nothrow_t{}) char16_t[modulePath.size()]);
+        if (!owned.bytes || !owned.name || (!modulePath.empty() && !owned.path)) return NtStatus::NoMemory;
         std::memcpy(owned.bytes.get(), file.data(), file.size());
         std::memcpy(owned.name.get(), name.data(), name.size());
+        if (!modulePath.empty()) std::memcpy(owned.path.get(), modulePath.data(), modulePath.size() * sizeof(char16_t));
         const auto status = imageSet->addClonedModule({owned.name.get(), name.size()},
             {owned.bytes.get(), file.size()},
             {reinterpret_cast<uint8_t*>(module->base), module->image.size()}, module->base);
@@ -53,6 +593,24 @@ NtStatus EProcess::cloneNativeMetadata(const EProcess& source) noexcept {
             tls[i] = layout;
         }
     }
+    std::unique_ptr<char16_t[]> processPath;
+    std::unique_ptr<char16_t[]> commandLine;
+    if (!source.processImagePath_.empty() && !hal::amd64::bootstrapKernelRange(
+            reinterpret_cast<uintptr_t>(source.processImagePath_.data()),
+            source.processImagePath_.size() * sizeof(char16_t), false)) return NtStatus::InvalidParameter;
+    if (!source.processCommandLine_.empty() && !hal::amd64::bootstrapKernelRange(
+            reinterpret_cast<uintptr_t>(source.processCommandLine_.data()),
+            source.processCommandLine_.size() * sizeof(char16_t), false)) return NtStatus::InvalidParameter;
+    if (!source.processImagePath_.empty()) {
+        processPath.reset(new (std::nothrow_t{}) char16_t[source.processImagePath_.size()]);
+        if (!processPath) return NtStatus::NoMemory;
+        std::memcpy(processPath.get(), source.processImagePath_.data(), source.processImagePath_.size() * sizeof(char16_t));
+    }
+    if (!source.processCommandLine_.empty()) {
+        commandLine.reset(new (std::nothrow_t{}) char16_t[source.processCommandLine_.size()]);
+        if (!commandLine) return NtStatus::NoMemory;
+        std::memcpy(commandLine.get(), source.processCommandLine_.data(), source.processCommandLine_.size() * sizeof(char16_t));
+    }
     imageSet->finishClonedModules();
     ownedImageInputs_ = std::move(inputs);
     images_ = std::move(imageSet);
@@ -61,7 +619,285 @@ NtStatus EProcess::cloneNativeMetadata(const EProcess& source) noexcept {
     userPeb_ = source.userPeb_;
     userLoaderData_ = source.userLoaderData_;
     userProcessParameters_ = source.userProcessParameters_;
+    userApiSetMap_ = source.userApiSetMap_;
+    userApiSetMapSize_ = source.userApiSetMapSize_;
+    ownedImagePath_ = std::move(processPath);
+    ownedCommandLine_ = std::move(commandLine);
+    processImagePath_ = {ownedImagePath_.get(), source.processImagePath_.size()};
+    processCommandLine_ = {ownedCommandLine_.get(), source.processCommandLine_.size()};
+    processParametersConfigured_ = source.processParametersConfigured_;
+    imageSectionBacked_ = source.imageSectionBacked_;
+    for (size_t i = 0; i < count; ++i)
+        nativeImagePaths_[i] = {ownedImageInputs_[i].path.get(), source.nativeImagePaths_[i].size()};
+    if (imageSectionBacked_ && !userApiSetMap_) {
+        ApiSetSchemaV6 apiSetSchema;
+        auto status = publishApiSetMap(addressSpace_, userPeb_, userApiSetMap_,
+                                       userApiSetMapSize_, apiSetSchema);
+        if (status != NtStatus::Success) return status;
+    }
+    if (userApiSetMap_) {
+        const auto status = validateApiSetMapView(addressSpace_, userApiSetMap_, userApiSetMapSize_);
+        if (status != NtStatus::Success) return status;
+        constexpr size_t pebApiSetMapOffset = 0x68;
+        if (!hal::amd64::bootstrapUserRange(userPeb_ + pebApiSetMapOffset,
+                                             sizeof(uint64_t), false) ||
+            !hal::amd64::bootstrapUserRange(userApiSetMap_, userApiSetMapSize_, false))
+            return NtStatus::InvalidImageFormat;
+        *reinterpret_cast<uint64_t*>(userPeb_ + pebApiSetMapOffset) = userApiSetMap_;
+    }
     imagesFinalized_ = true;
+    return NtStatus::Success;
+}
+
+NtStatus EProcess::replaceMainImageFromSection(section::SectionObject& image,
+                                                ob::ObjectHeader* sectionReference) noexcept {
+    uintptr_t activeRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(activeRoot));
+    // This replacement uses destructive VAD updates during dependency
+    // closure. It is valid only while NtCreateProcessEx still owns an
+    // unpublished, threadless child that will be destroyed on any failure.
+    if (activeRoot != getDirectoryTableBase() || terminating_ || processPublished_ ||
+        attachedThreads_ || threads_ ||
+        !imagesFinalized_ || !images_ ||
+        !ownedImageInputs_ || !sectionReference ||
+        (image.getAllocationAttributes() & (section::SEC_FILE | section::SEC_IMAGE)) !=
+            (section::SEC_FILE | section::SEC_IMAGE) ||
+        images_->size() == 0 || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    const auto* previous = images_->module(0);
+    if (!previous || !previous->base ||
+        image.getSize() > SIZE_MAX || !image.getFileSize() || image.getFileSize() > SIZE_MAX)
+        return NtStatus::NotSupported;
+    const size_t fileSize = static_cast<size_t>(image.getFileSize());
+    const auto fileName = image.getFileName();
+    if (fileName.empty() || fileName.size() > SIZE_MAX / sizeof(char16_t) - 1)
+        return NtStatus::BufferTooSmall;
+    char moduleNameStorage[260]{};
+    std::string_view moduleName;
+    auto status = buildImageModuleName(fileName, moduleNameStorage, moduleName);
+    if (status != NtStatus::Success) return status;
+    std::unique_ptr<uint8_t[]> bytes(new (std::nothrow_t{}) uint8_t[fileSize]);
+    std::unique_ptr<char[]> name(new (std::nothrow_t{}) char[moduleName.size()]);
+    std::unique_ptr<char16_t[]> path;
+    if (!fileName.empty()) path.reset(new (std::nothrow_t{}) char16_t[fileName.size() + 1]);
+    if (!bytes || !name || (!fileName.empty() && !path)) return NtStatus::NoMemory;
+    std::memcpy(name.get(), moduleName.data(), moduleName.size());
+    if (path) {
+        for (size_t i = 0; i < fileName.size(); ++i) path[i] = fileName[i];
+        path[fileName.size()] = 0;
+    }
+    size_t offset{};
+    while (offset < fileSize) {
+        size_t read{};
+        const auto status = image.readFile(offset, bytes.get() + offset, fileSize - offset, &read);
+        if (status != NtStatus::Success) return status;
+        if (!read || read > fileSize - offset) return NtStatus::EndOfFile;
+        offset += read;
+    }
+    pe::PeImageView64 view;
+    status = view.inspect({bytes.get(), fileSize});
+    if (status != NtStatus::Success || view.headers().optionalHeader.imageBase != image.getImageBase() ||
+        view.headers().optionalHeader.sizeOfImage != image.getSize() ||
+        !(view.headers().fileHeader.characteristics & pe::IMAGE_FILE_EXECUTABLE_IMAGE) ||
+        (view.headers().fileHeader.characteristics & pe::IMAGE_FILE_DLL))
+        return status == NtStatus::Success ? NtStatus::InvalidImageFormat : status;
+
+    std::unique_ptr<char16_t[]> commandCopy;
+    size_t commandLength{};
+    if (userProcessParameters_) {
+        auto* parameters = reinterpret_cast<detail::UserProcessParameters*>(userProcessParameters_);
+        const auto command = parameters->commandLine;
+        if ((command.length & 1) || command.length > command.maximumLength ||
+            (command.length && (!command.buffer || !hal::amd64::bootstrapUserRange(
+                command.buffer, command.length, false)))) return NtStatus::AccessViolation;
+        commandLength = command.length / sizeof(char16_t);
+        if (commandLength) {
+            commandCopy.reset(new (std::nothrow_t{}) char16_t[commandLength]);
+            if (!commandCopy) return NtStatus::NoMemory;
+            std::memcpy(commandCopy.get(), reinterpret_cast<const void*>(command.buffer), command.length);
+        }
+    }
+
+    const uintptr_t oldBase = previous->base;
+    status = addressSpace_.unmapSharedPages(oldBase);
+    if (status != NtStatus::Success) return status;
+    uintptr_t mappedBase{};
+    status = mapFileImageAtAvailableBase(addressSpace_, image, sectionReference, view, mappedBase);
+    if (status != NtStatus::Success) return status;
+    const size_t previousModuleCount = images_->size();
+    status = images_->replaceClonedModule(0, {name.get(), moduleName.size()},
+        {bytes.get(), fileSize},
+        {reinterpret_cast<uint8_t*>(mappedBase), image.getSize()}, mappedBase);
+    if (status != NtStatus::Success) {
+        if (addressSpace_.unmapSharedPages(mappedBase) != NtStatus::Success) __builtin_trap();
+        return status;
+    }
+
+    ApiSetSchemaV6 apiSetSchema;
+    images_->setApiSetHostResolver(&apiSetSchema,
+        [](void* context, std::string_view contract, std::string_view importingModule,
+           std::string_view& host) noexcept -> NtStatus {
+            return static_cast<ApiSetSchemaV6*>(context)->resolve(contract, importingModule, host);
+        });
+    ApiSetResolverDetach detachApiSetResolver{images_.get()};
+
+    const auto appendDependency = [&](std::string_view requestedLibrary,
+                                      std::string_view importingModule) noexcept -> NtStatus {
+        std::string_view canonical = requestedLibrary;
+        if (isApiSetContractName(requestedLibrary)) {
+            const auto apiStatus = apiSetSchema.resolve(requestedLibrary, importingModule, canonical);
+            if (apiStatus != NtStatus::Success) return apiStatus;
+        }
+        char canonicalStorage[132]{};
+        const bool hasDllSuffix = canonical.size() >= 4 && canonical[canonical.size() - 4] == '.' &&
+            (canonical[canonical.size() - 3] == 'd' || canonical[canonical.size() - 3] == 'D') &&
+            (canonical[canonical.size() - 2] == 'l' || canonical[canonical.size() - 2] == 'L') &&
+            (canonical[canonical.size() - 1] == 'l' || canonical[canonical.size() - 1] == 'L');
+        std::string_view library = canonical;
+        if (!hasDllSuffix) {
+            if (canonical.empty() || canonical.size() > sizeof(canonicalStorage) - 5)
+                return NtStatus::NotSupported;
+            std::memcpy(canonicalStorage, canonical.data(), canonical.size());
+            std::memcpy(canonicalStorage + canonical.size(), ".dll", 4);
+            library = {canonicalStorage, canonical.size() + 4};
+        }
+        if (images_->containsModule(library)) return NtStatus::Success;
+        if (images_->size() == 16) return NtStatus::InsufficientResources;
+        char16_t dependencyPathStorage[256]{};
+        size_t dependencyPathLength{};
+        auto dependencyStatus = buildSystemDllPath(library, dependencyPathStorage,
+                                                   dependencyPathLength);
+        if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+        const std::u16string_view dependencyPath{dependencyPathStorage, dependencyPathLength};
+        ScopedHandle dependencySectionHandle;
+        ScopedObjectReference dependencySectionReference;
+        section::SectionObject* dependencySection{};
+        dependencyStatus = openSystemImageSection(dependencyPath,
+            dependencySectionHandle, dependencySectionReference, dependencySection);
+        if (dependencyStatus == NtStatus::ObjectNameNotFound ||
+            dependencyStatus == NtStatus::NoSuchFile)
+            return NtStatus::NotSupported;
+        if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+        if (!dependencySection->getFileSize() || dependencySection->getFileSize() > SIZE_MAX ||
+            !dependencySection->getSize() || dependencySection->getSize() > SIZE_MAX)
+            return NtStatus::InvalidImageFormat;
+        const size_t rawSize = static_cast<size_t>(dependencySection->getFileSize());
+        auto rawBytes = std::unique_ptr<uint8_t[]>(new (std::nothrow_t{}) uint8_t[rawSize]);
+        auto nameCopy = std::unique_ptr<char[]>(new (std::nothrow_t{}) char[library.size()]);
+        auto pathCopy = std::unique_ptr<char16_t[]>(new (std::nothrow_t{}) char16_t[dependencyPath.size()]);
+        if (!rawBytes || !nameCopy || !pathCopy) return NtStatus::NoMemory;
+        size_t readOffset{};
+        while (readOffset < rawSize) {
+            size_t read{};
+            dependencyStatus = dependencySection->readFile(readOffset, rawBytes.get() + readOffset,
+                rawSize - readOffset, &read);
+            if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+            if (!read || read > rawSize - readOffset) return NtStatus::EndOfFile;
+            readOffset += read;
+        }
+        pe::PeImageView64 dependencyView;
+        dependencyStatus = dependencyView.inspect({rawBytes.get(), rawSize});
+        if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+        if (!(dependencyView.headers().fileHeader.characteristics & pe::IMAGE_FILE_DLL) ||
+            dependencyView.headers().optionalHeader.imageBase != dependencySection->getImageBase() ||
+            dependencyView.headers().optionalHeader.sizeOfImage != dependencySection->getSize())
+            return NtStatus::InvalidImageFormat;
+        if (dependencyView.headers().optionalHeader.numberOfRvaAndSizes >
+            pe::IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT) {
+            const auto delay = dependencyView.headers().optionalHeader.dataDirectory[
+                pe::IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
+            if (delay.virtualAddress || delay.size) return NtStatus::NotSupported;
+        }
+        std::memcpy(nameCopy.get(), library.data(), library.size());
+        std::memcpy(pathCopy.get(), dependencyPath.data(), dependencyPath.size() * sizeof(char16_t));
+        uintptr_t dependencyBase{};
+        dependencyStatus = mapFileImageAtAvailableBase(addressSpace_, *dependencySection,
+            dependencySectionReference.value, dependencyView, dependencyBase);
+        if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+        const size_t newIndex = images_->size();
+        dependencyStatus = images_->addClonedModule({nameCopy.get(), library.size()},
+            {rawBytes.get(), rawSize},
+            {reinterpret_cast<uint8_t*>(dependencyBase), dependencySection->getSize()}, dependencyBase);
+        if (dependencyStatus != NtStatus::Success) {
+            if (addressSpace_.unmapSharedPages(dependencyBase) != NtStatus::Success) __builtin_trap();
+            return dependencyStatus;
+        }
+        auto& owned = ownedImageInputs_[newIndex];
+        owned.bytes = std::move(rawBytes);
+        owned.name = std::move(nameCopy);
+        owned.path = std::move(pathCopy);
+        nativeImagePaths_[newIndex] = {owned.path.get(), dependencyPath.size()};
+        return NtStatus::Success;
+    };
+
+    for (;;) {
+        const size_t previousCount = images_->size();
+        for (size_t moduleIndex = 0; moduleIndex < images_->size(); ++moduleIndex) {
+            if (moduleIndex != 0 && moduleIndex < previousModuleCount) continue;
+            const auto* module = images_->module(moduleIndex);
+            if (!module) { status = NtStatus::InvalidImageFormat; break; }
+            status = module->view.forEachImportLibrary(module->image,
+                [&](std::string_view library) noexcept -> NtStatus {
+                    return appendDependency(library, module->name);
+                });
+            if (status != NtStatus::Success) break;
+        }
+        if (status != NtStatus::Success) break;
+        status = images_->forEachMissingForwarderLibrary(
+            [&](std::string_view library, std::string_view importingModule) noexcept -> NtStatus {
+                return appendDependency(library, importingModule);
+            }, 0, 1);
+        if (status == NtStatus::Success && images_->size() > previousModuleCount) {
+            status = images_->forEachMissingForwarderLibrary(
+                [&](std::string_view library, std::string_view importingModule) noexcept -> NtStatus {
+                    return appendDependency(library, importingModule);
+                }, previousModuleCount);
+        }
+        if (status != NtStatus::Success || images_->size() == previousCount) break;
+    }
+    // Rebind the complete module set: cloned DLLs may have imported symbols
+    // from the old executable, whose image was just removed from the child.
+    if (status == NtStatus::Success) status = images_->bindAll();
+    if (status != NtStatus::Success) {
+        if (addressSpace_.unmapSharedPages(mappedBase) != NtStatus::Success) __builtin_trap();
+        return status;
+    }
+    status = publishApiSetMap(addressSpace_, userPeb_, userApiSetMap_, userApiSetMapSize_,
+                              apiSetSchema);
+    if (status != NtStatus::Success) {
+        if (addressSpace_.unmapSharedPages(mappedBase) != NtStatus::Success) __builtin_trap();
+        return status;
+    }
+    if (userPeb_) {
+        // PEB.ImageBaseAddress is the first image-dependent field read by
+        // native startup code. The loader list and process parameters below
+        // are rebuilt for the replacement image as part of the same commit.
+        *reinterpret_cast<uint64_t*>(userPeb_ + 0x10) = mappedBase;
+    }
+    imageSectionBacked_ = true;
+    ownedImageInputs_[0].bytes = std::move(bytes);
+    ownedImageInputs_[0].name = std::move(name);
+    ownedImageInputs_[0].path = std::move(path);
+    nativeImagePaths_[0] = {ownedImageInputs_[0].path.get(), fileName.size()};
+    if (!fileName.empty()) {
+        processImagePath_ = nativeImagePaths_[0];
+        if (userLoaderData_ && !initializeLoaderMetadata(*images_, userLoaderData_,
+                std::span<const std::u16string_view>{nativeImagePaths_.data(), images_->size()}))
+            return NtStatus::BufferTooSmall;
+        if (userProcessParameters_) {
+            auto* parameters = reinterpret_cast<detail::UserProcessParameters*>(userProcessParameters_);
+            *parameters = {};
+            detail::UserMetadataWriter writer(
+                {reinterpret_cast<uint8_t*>(userProcessParameters_), mm::PageSize4KB},
+                userProcessParameters_, sizeof(*parameters));
+            if (!writer.append(processImagePath_, parameters->imagePathName) ||
+                !writer.append({commandCopy ? commandCopy.get() : u"", commandLength}, parameters->commandLine))
+                return NtStatus::BufferTooSmall;
+            ownedCommandLine_ = std::move(commandCopy);
+            processCommandLine_ = {ownedCommandLine_.get(), commandLength};
+            processParametersConfigured_ = true;
+        }
+    }
     return NtStatus::Success;
 }
 
@@ -184,6 +1020,9 @@ NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_
     if (status != NtStatus::Success) return status;
     status = validateProtectionLayout(view);
     if (status != NtStatus::Success) return status;
+    // Reject an existing module name before allocating/mapping section pages;
+    // addModule still performs the same check as a final invariant.
+    if (images_ && images_->containsModule(name)) return NtStatus::ObjectNameCollision;
     const uintptr_t base = view.headers().optionalHeader.imageBase;
     const size_t size = view.headers().optionalHeader.sizeOfImage;
     if (images_ && images_->size() == 16) return NtStatus::InsufficientResources;
@@ -268,8 +1107,6 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
         if (bytes > remaining) return NtStatus::BufferTooSmall;
         remaining -= bytes;
     }
-    const auto binding = images_->bindAll();
-    if (binding != NtStatus::Success) return binding;
     uintptr_t tlsIndexAddresses[16]{};
     size_t tlsCount = 0;
     size_t tlsOffset = 0x100;
@@ -317,7 +1154,12 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
         }
         if (selected != tlsCount) __builtin_trap();
     }
-    for (size_t i = 0; i < images_->size(); ++i) {
+    // Validate all currently rejectable TLS metadata before binding imports.
+    // A failed preflight must leave the IAT untouched so callers may correct
+    // image metadata or retry finalization without seeing already-patched RVAs.
+    const auto binding = images_->bindAll();
+    if (binding != NtStatus::Success) return binding;
+    for (size_t i = 0; i < images_->size() && !imageSectionBacked_; ++i) {
         const auto* module = images_->module(i);
         if (!module) __builtin_trap();
         uint32_t old{};
@@ -363,6 +1205,9 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
         if (!writer.append(processImagePath_, parameters->imagePathName) ||
             !writer.append(processCommandLine_, parameters->commandLine)) return NtStatus::BufferTooSmall;
     }
+    const auto* mainImage = images_->module(0);
+    if (!mainImage) return NtStatus::InvalidImageFormat;
+    *reinterpret_cast<uint64_t*>(userPeb_ + 0x10) = mainImage->base;
     *reinterpret_cast<uint64_t*>(userPeb_ + 0x18) = userLoaderData_;
     *reinterpret_cast<uint64_t*>(userPeb_ + 0x20) = userProcessParameters_;
     for (size_t i = 0; i < tlsCount; ++i) {
@@ -371,10 +1216,215 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
     }
     userTlsLayouts_ = std::move(selectedTls);
     userTlsCount_ = tlsCount;
-    nativeImagePaths_ = {};
     processImagePath_ = {};
     processCommandLine_ = {};
     imagesFinalized_ = true;
     return NtStatus::Success;
+}
+
+NtStatus EProcess::initializeMainImageFromSection(section::SectionObject& image,
+                                                   ob::ObjectHeader* sectionReference) noexcept {
+    if (!active(*this) || terminating_ || images_ || imagesFinalized_ || !sectionReference ||
+        (image.getAllocationAttributes() & (section::SEC_FILE | section::SEC_IMAGE)) !=
+            (section::SEC_FILE | section::SEC_IMAGE) ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    if (!image.getFileSize() || image.getFileSize() > SIZE_MAX || !image.getSize() ||
+        image.getSize() > SIZE_MAX || !image.getImageBase() || image.getFileName().empty())
+        return NtStatus::InvalidImageFormat;
+
+    const auto filePath = image.getFileName();
+    if (filePath.size() > (UINT16_MAX - sizeof(char16_t)) / sizeof(char16_t) ||
+        filePath.size() > mm::PageSize4KB / sizeof(char16_t) - 1 ||
+        !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(filePath.data()),
+                                           filePath.size() * sizeof(char16_t), false))
+        return NtStatus::BufferTooSmall;
+
+    std::unique_ptr<char16_t[]> commandLine(new (std::nothrow_t{}) char16_t[filePath.size()]);
+    std::unique_ptr<OwnedImageInput[]> inputs(new (std::nothrow_t{}) OwnedImageInput[16]);
+    auto imageSet = std::unique_ptr<um::NativeUserImageSet64>(
+        new (std::nothrow_t{}) um::NativeUserImageSet64{});
+    if (!commandLine || !inputs || !imageSet)
+        return NtStatus::NoMemory;
+    ApiSetSchemaV6 apiSetSchema;
+    imageSet->setApiSetHostResolver(&apiSetSchema,
+        [](void* context, std::string_view contract, std::string_view importingModule,
+           std::string_view& host) noexcept -> NtStatus {
+            return static_cast<ApiSetSchemaV6*>(context)->resolve(contract, importingModule, host);
+        });
+    ApiSetResolverDetach detachApiSetResolver{imageSet.get()};
+
+    for (size_t i = 0; i < filePath.size(); ++i) {
+        commandLine[i] = filePath[i];
+    }
+
+    const auto appendImage = [&](section::SectionObject& sectionImage,
+                                 ob::ObjectHeader* sectionObjectReference,
+                                 std::string_view moduleName,
+                                 std::u16string_view modulePath,
+                                 bool executable, size_t index) noexcept -> NtStatus {
+        if (!sectionObjectReference || moduleName.empty() || modulePath.empty() ||
+            sectionImage.getFileSize() == 0 || sectionImage.getFileSize() > SIZE_MAX ||
+            sectionImage.getSize() == 0 || !sectionImage.getImageBase() ||
+            modulePath.size() > SIZE_MAX / sizeof(char16_t) ||
+            !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(modulePath.data()),
+                                               modulePath.size() * sizeof(char16_t), false))
+            return NtStatus::InvalidImageFormat;
+        const size_t rawSize = static_cast<size_t>(sectionImage.getFileSize());
+        auto rawBytes = std::unique_ptr<uint8_t[]>(new (std::nothrow_t{}) uint8_t[rawSize]);
+        auto nameCopy = std::unique_ptr<char[]>(new (std::nothrow_t{}) char[moduleName.size()]);
+        auto pathCopy = std::unique_ptr<char16_t[]>(new (std::nothrow_t{}) char16_t[modulePath.size()]);
+        if (!rawBytes || !nameCopy || !pathCopy) return NtStatus::NoMemory;
+        size_t total{};
+        while (total < rawSize) {
+            size_t read{};
+            const auto readStatus = sectionImage.readFile(total, rawBytes.get() + total,
+                                                           rawSize - total, &read);
+            if (readStatus != NtStatus::Success) return readStatus;
+            if (!read || read > rawSize - total) return NtStatus::EndOfFile;
+            total += read;
+        }
+        pe::PeImageView64 view;
+        auto status = view.inspect({rawBytes.get(), rawSize});
+        if (status != NtStatus::Success) return status;
+        const auto& optional = view.headers().optionalHeader;
+        const uint16_t characteristics = view.headers().fileHeader.characteristics;
+        if (optional.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT) {
+            const auto delayImports = optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
+            if (delayImports.virtualAddress || delayImports.size) return NtStatus::NotSupported;
+        }
+        if (optional.imageBase != sectionImage.getImageBase() ||
+            optional.sizeOfImage != sectionImage.getSize() ||
+            !(characteristics & pe::IMAGE_FILE_EXECUTABLE_IMAGE) ||
+            static_cast<bool>(characteristics & pe::IMAGE_FILE_DLL) == executable ||
+            (executable && (!optional.addressOfEntryPoint ||
+                            !view.executableRva(optional.addressOfEntryPoint))))
+            return NtStatus::InvalidImageFormat;
+        std::memcpy(nameCopy.get(), moduleName.data(), moduleName.size());
+        std::memcpy(pathCopy.get(), modulePath.data(), modulePath.size() * sizeof(char16_t));
+        uintptr_t mappedBase{};
+        status = mapFileImageAtAvailableBase(addressSpace_, sectionImage,
+            sectionObjectReference, view, mappedBase);
+        if (status != NtStatus::Success) return status;
+        status = imageSet->addClonedModule({nameCopy.get(), moduleName.size()},
+            {rawBytes.get(), rawSize},
+            {reinterpret_cast<uint8_t*>(mappedBase), sectionImage.getSize()}, mappedBase);
+        if (status != NtStatus::Success) {
+            if (addressSpace_.unmapSharedPages(mappedBase) != NtStatus::Success) __builtin_trap();
+            return status;
+        }
+        inputs[index].bytes = std::move(rawBytes);
+        inputs[index].name = std::move(nameCopy);
+        inputs[index].path = std::move(pathCopy);
+        nativeImagePaths_[index] = {inputs[index].path.get(), modulePath.size()};
+        return NtStatus::Success;
+    };
+
+    const auto appendSystemDependency = [&](std::string_view requestedLibrary,
+                                            std::string_view importingModule) noexcept -> NtStatus {
+        std::string_view canonical = requestedLibrary;
+        if (isApiSetContractName(requestedLibrary)) {
+            const auto apiSetStatus = apiSetSchema.resolve(requestedLibrary, importingModule, canonical);
+            if (apiSetStatus != NtStatus::Success) return apiSetStatus;
+        }
+        char canonicalLibraryStorage[132]{};
+        std::string_view library = canonical;
+        const bool hasDllSuffix = canonical.size() >= 4 &&
+            canonical[canonical.size() - 4] == '.' &&
+            (canonical[canonical.size() - 3] == 'd' || canonical[canonical.size() - 3] == 'D') &&
+            (canonical[canonical.size() - 2] == 'l' || canonical[canonical.size() - 2] == 'L') &&
+            (canonical[canonical.size() - 1] == 'l' || canonical[canonical.size() - 1] == 'L');
+        if (!hasDllSuffix) {
+            if (canonical.empty() || canonical.size() > sizeof(canonicalLibraryStorage) - 5)
+                return NtStatus::NotSupported;
+            std::memcpy(canonicalLibraryStorage, canonical.data(), canonical.size());
+            std::memcpy(canonicalLibraryStorage + canonical.size(), ".dll", 4);
+            library = {canonicalLibraryStorage, canonical.size() + 4};
+        }
+        if (imageSet->containsModule(library)) return NtStatus::Success;
+        if (imageSet->size() == 16) return NtStatus::InsufficientResources;
+        char16_t dependencyPathStorage[256]{};
+        size_t dependencyPathLength{};
+        auto dependencyStatus = buildSystemDllPath(library, dependencyPathStorage,
+                                                   dependencyPathLength);
+        if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+        const std::u16string_view dependencyPath{dependencyPathStorage, dependencyPathLength};
+        ScopedHandle dependencySectionHandle;
+        ScopedObjectReference dependencySectionReference;
+        section::SectionObject* dependencySection{};
+        dependencyStatus = openSystemImageSection(dependencyPath,
+            dependencySectionHandle, dependencySectionReference, dependencySection);
+        if (dependencyStatus == NtStatus::ObjectNameNotFound ||
+            dependencyStatus == NtStatus::NoSuchFile)
+            return NtStatus::NotSupported;
+        if (dependencyStatus != NtStatus::Success) return dependencyStatus;
+        return appendImage(*dependencySection, dependencySectionReference.value,
+                           library, dependencyPath, false, imageSet->size());
+    };
+
+    char moduleNameStorage[260]{};
+    std::string_view moduleName;
+    NtStatus status = buildImageModuleName(filePath, moduleNameStorage, moduleName);
+    if (status != NtStatus::Success) return status;
+    status = appendImage(image, sectionReference, moduleName, filePath, true, 0);
+    if (status != NtStatus::Success) return status;
+
+    char16_t ntdllPathStorage[256]{};
+    size_t ntdllPathLength{};
+    status = buildNtdllPath(ntdllPathStorage, ntdllPathLength);
+    if (status != NtStatus::Success) return status;
+    const std::u16string_view ntdllPath{ntdllPathStorage, ntdllPathLength};
+    ScopedHandle ntdllSectionHandle;
+    ScopedObjectReference ntdllSectionReference;
+    section::SectionObject* ntdllSection{};
+    status = openSystemImageSection(ntdllPath, ntdllSectionHandle,
+                                    ntdllSectionReference, ntdllSection);
+    if (status != NtStatus::Success) return status;
+    status = appendImage(*ntdllSection, ntdllSectionReference.value, "ntdll.dll", ntdllPath,
+                         false, 1);
+    if (status != NtStatus::Success) return status;
+
+    for (size_t moduleIndex = 0; moduleIndex < imageSet->size(); ++moduleIndex) {
+        const auto* module = imageSet->module(moduleIndex);
+        if (!module) return NtStatus::InvalidImageFormat;
+        status = module->view.forEachImportLibrary(module->image,
+            [&](std::string_view library) noexcept -> NtStatus {
+                return appendSystemDependency(library, module->name);
+            });
+        if (status != NtStatus::Success) return status;
+    }
+
+    // Import resolution can discover another image only by following an
+    // export-forwarder string. Load those real file-backed modules too, then
+    // rescan because their own imports may add further dependencies.
+    for (;;) {
+        const size_t previousCount = imageSet->size();
+        status = imageSet->forEachMissingForwarderLibrary(
+            [&](std::string_view library, std::string_view importingModule) noexcept -> NtStatus {
+                return appendSystemDependency(library, importingModule);
+            });
+        if (status != NtStatus::Success) return status;
+        if (imageSet->size() == previousCount) break;
+    }
+
+    ownedImageInputs_ = std::move(inputs);
+    images_ = std::move(imageSet);
+    ownedCommandLine_ = std::move(commandLine);
+    processImagePath_ = {ownedImageInputs_[0].path.get(), filePath.size()};
+    processCommandLine_ = {ownedCommandLine_.get(), filePath.size()};
+    processParametersConfigured_ = true;
+    imageSectionBacked_ = true;
+
+    status = finalizeNativeImages();
+    if (status == NtStatus::NoSuchFile) return NtStatus::NotSupported;
+    if (status != NtStatus::Success) return status;
+    status = publishApiSetMap(addressSpace_, userPeb_, userApiSetMap_, userApiSetMapSize_,
+                              apiSetSchema);
+    if (status != NtStatus::Success) return status;
+    uint64_t routine{};
+    status = images_->resolve("ntdll.dll", "RtlUserThreadStart", 0, routine);
+    if (status == NtStatus::Success)
+        status = images_->resolve("ntdll.dll", "KiUserExceptionDispatcher", 0, routine);
+    return status;
 }
 }

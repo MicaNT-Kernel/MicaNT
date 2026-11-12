@@ -30,6 +30,7 @@ inline constexpr uint32_t SSN_NtCreateThreadEx           = 0x00BD;
 inline constexpr uint32_t SSN_NtTerminateThread          = 0x0053;
 inline constexpr uint32_t SSN_NtResumeThread             = 0x0052;
 inline constexpr uint32_t SSN_NtWaitForSingleObject      = 0x0004;
+inline constexpr uint32_t SSN_NtContinue                 = 0x0043;
 inline constexpr uint32_t SSN_NtQuerySystemInformation   = 0x0036;
 
 // Synchronization & IOCP SSNs
@@ -66,6 +67,8 @@ inline constexpr uint32_t SSN_NtSetValueKey              = 0x0060;
 
 // Security Reference Monitor SSNs
 inline constexpr uint32_t SSN_NtOpenProcessToken         = 0x00BE;
+// MicaNT profile slot for the standard NtQueueApcThread native service.
+inline constexpr uint32_t SSN_NtQueueApcThread            = 0x00BF;
 inline constexpr uint32_t SSN_NtAccessCheck              = 0x0182;
 
 // Advanced Local Procedure Call (ALPC) SSNs
@@ -222,6 +225,12 @@ NtStatus NtTerminateProcess(
 
 #if defined(MICANT_FREESTANDING)
 NtStatus NtTerminateThread(Handle threadHandle, NtStatus exitStatus);
+// Internal continuation adapter. The public native ABI remains
+// NtContinue(PCONTEXT, BOOLEAN); the bootstrap frame and XSAVE storage are
+// supplied by the syscall entry rather than exposed to user mode.
+NtStatus NtContinue(const void* context, bool testAlert, void* trapFrame,
+                    void* floatingState, size_t floatingStateSize,
+                    uint32_t xsaveMask);
 NtStatus NtResumeThread(Handle threadHandle, uint32_t* previousSuspendCount);
 NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
     ObjectAttributes* attributes, Handle processHandle, uintptr_t startRoutine,
@@ -234,6 +243,9 @@ NtStatus NtCreateEvent(Handle* eventHandle, uint32_t desiredAccess,
                        ObjectAttributes* objectAttributes, uint32_t eventType,
                        bool initialState);
 NtStatus NtSetEvent(Handle eventHandle, int32_t* previousState);
+NtStatus NtQueueApcThread(Handle threadHandle, uintptr_t apcRoutine,
+                          void* normalContext, void* systemArgument1,
+                          void* systemArgument2);
 #endif
 
 NtStatus NtWaitForSingleObject(
@@ -299,7 +311,32 @@ NtStatus NtCreateSection(
     Handle fileHandle
 );
 
+// Internal kernel callers pass kernel-resident structures. This entry point
+// bypasses user probing explicitly; syscall dispatch must call NtCreateSection.
+NtStatus NtCreateSectionFromKernel(
+    Handle* sectionHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    LargeInteger* maximumSize,
+    uint32_t sectionPageProtection,
+    uint32_t allocationAttributes,
+    Handle fileHandle
+);
+
 NtStatus NtMapViewOfSection(
+    Handle sectionHandle,
+    Handle processHandle,
+    uintptr_t* baseAddress,
+    uintptr_t zeroBits,
+    size_t commitSize,
+    LargeInteger* sectionOffset,
+    size_t* viewSize,
+    uint32_t inheritDisposition,
+    uint32_t allocationType,
+    uint32_t win32Protect
+);
+
+NtStatus NtMapViewOfSectionFromKernel(
     Handle sectionHandle,
     Handle processHandle,
     uintptr_t* baseAddress,

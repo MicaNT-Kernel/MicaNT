@@ -17,6 +17,7 @@ include_directories(
 set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ke/dispatcher.cpp
     kernel/ke/context_switch.cpp
+    kernel/ke/process.cpp
     kernel/ke/wait.cpp
     kernel/win32k/win32k.cpp
     kernel/win32k/win32k_wddm.cpp
@@ -231,6 +232,7 @@ if (MICANT_ENABLE_BAREMETAL)
         COMMAND "${CMAKE_CXX_COMPILER}" -std=c++23 -ffreestanding -fno-exceptions
             -fno-rtti -fno-stack-protector -shared -nostdlib -Wl,-e,DllMain
             -Wl,--subsystem,native -Wl,--image-base,0x400000020000 -O2
+            -I "${CMAKE_SOURCE_DIR}/include"
             "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" -o "${_ntdll_probe_dll}"
         DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" VERBATIM)
     add_custom_command(OUTPUT "${_ntdll_probe_header}"
@@ -244,6 +246,7 @@ if (MICANT_ENABLE_BAREMETAL)
         COMMAND "${CMAKE_CXX_COMPILER}" -std=c++23 -ffreestanding -fno-exceptions
             -fno-rtti -fno-stack-protector -shared -nostdlib -Wl,-e,DllMain
             -Wl,--subsystem,native -Wl,--image-base,0x400020f00000 -O2
+            -I "${CMAKE_SOURCE_DIR}/include"
             "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" -o "${_ntdll_process_dll}"
         DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" VERBATIM)
     add_custom_command(OUTPUT "${_ntdll_process_header}"
@@ -256,6 +259,7 @@ if (MICANT_ENABLE_BAREMETAL)
         "${_ntdll_process_header}"
         kernel/init/kiinit.cpp
         kernel/ke/context_switch.cpp
+        kernel/ke/process.cpp
         kernel/ke/event.cpp
         kernel/hal/amd64_bootstrap.cpp
         kernel/hal/amd64_firmware_interrupts.cpp
@@ -263,8 +267,12 @@ if (MICANT_ENABLE_BAREMETAL)
         kernel/ex/freestanding.cpp
         kernel/ex/libcpp_support.cpp
         kernel/ob/obref.cpp
+        kernel/io/file_object.cpp
+        kernel/io/ahci_file_provider.cpp
         kernel/mm/virtual.cpp
         kernel/ps/address_space.cpp
+        kernel/ps/apc.cpp
+        kernel/ps/exception.cpp
         kernel/ps/object.cpp
         kernel/ps/image.cpp
         test/kernel_context_canary.cpp
@@ -358,6 +366,24 @@ if (MICANT_ENABLE_BAREMETAL)
         OUTPUT_NAME "explorer"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
     )
+    add_library(ntdll_boot SHARED EXCLUDE_FROM_ALL
+        tools/dlls/ntdll.cpp
+    )
+    target_include_directories(ntdll_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_compile_options(ntdll_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(ntdll_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMain -Wl,--subsystem,native
+        -Wl,--image-base,0x400020f00000
+    )
+    set_target_properties(ntdll_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "ntdll"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
     add_library(kernel32_boot SHARED EXCLUDE_FROM_ALL
         kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp
     )
@@ -370,6 +396,7 @@ if (MICANT_ENABLE_BAREMETAL)
     target_link_options(kernel32_boot PRIVATE
         -nostdlib -Wl,--entry,DllMainCRTStartup
     )
+    target_link_libraries(kernel32_boot PRIVATE ntdll_boot)
     set_target_properties(kernel32_boot PROPERTIES
         PREFIX "" OUTPUT_NAME "kernel32"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
@@ -393,7 +420,7 @@ if (MICANT_ENABLE_BAREMETAL)
         ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
     )
     add_custom_target(explorer_runtime_boot
-        DEPENDS explorer_boot imm32_boot kernel32_boot ucrtbase_boot
+        DEPENDS explorer_boot imm32_boot kernel32_boot ntdll_boot ucrtbase_boot
     )
 
     add_executable(virtio_gpu_boot drivers/virtio_gpu/virtio_gpu.cpp)
@@ -410,7 +437,7 @@ if(WIN32 OR MICANT_ENABLE_BAREMETAL)
     add_custom_target(micant_user_mode_boundary_check)
     foreach(_user_mode_variant IN ITEMS
         micant_win32k micant_user32 micant_gdi32 micant_imm32
-        kernel32_boot ucrtbase_boot win32k_boot user32_boot gdi32_boot
+        kernel32_boot ntdll_boot ucrtbase_boot win32k_boot user32_boot gdi32_boot
         imm32_boot explorer_boot explorer_runtime_boot
     )
         add_custom_target(micant_boundary_${_user_mode_variant}

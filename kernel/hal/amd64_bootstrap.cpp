@@ -9,6 +9,8 @@
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/ke.hpp"
 
+extern "C" volatile bool g_ring3ProbeActive{};
+
 namespace {
 
 constexpr uint64_t kPresent = 1;
@@ -93,14 +95,7 @@ struct SyscallCpuState {
     uint64_t kernelRsp;
 };
 SyscallCpuState g_syscallCpu{};
-struct SyscallFrame {
-    uint64_t r15, r14, r13, r12, r10, r9, r8, rdx;
-    uint64_t rsi, rdi, rbp, rbx, rax;
-    uint64_t rip, cs, flags, rsp, ss;
-};
-static_assert(sizeof(SyscallFrame) == 144);
-static_assert(offsetof(SyscallFrame, rax) == 96);
-static_assert(offsetof(SyscallFrame, rip) == 104);
+using micant::hal::amd64::SyscallFrame;
 void (*g_log)(const char*) noexcept{};
 
 #pragma pack(push, 1)
@@ -345,6 +340,16 @@ void logTrapValue(const char* label, uint64_t value) noexcept {
 extern "C" {
 extern uint32_t MicantAmd64XsaveMask;
 extern uint32_t MicantAmd64ExtendedSize;
+// Private Ps hook; it must not enable interrupts, wait or switch threads:
+// the bootstrap page-fault gate currently uses a shared IST stack.
+uint32_t MicantPsResolveUserStackFault(uintptr_t address, uint64_t errorCode, uint64_t savedCs) noexcept;
+bool MicantPsPrepareUserException(uint32_t exceptionCode, uint32_t exceptionVector,
+                                  uintptr_t address,
+                                  uint64_t* hardwareFrame, uint64_t* savedRegisters,
+                                  const void* floatingState) noexcept;
+bool MicantPsPrepareUserApc(uint64_t* hardwareFrame, uint64_t* savedRegisters,
+                            const void* floatingState) noexcept;
+bool MicantPsTerminateFailedUserException(uint32_t exitStatus) noexcept;
 uintptr_t MicantBootstrapInterruptStackFloor{};
 uintptr_t MicantBootstrapExecutionStackTop{};
 uintptr_t MicantBootstrapUserInterruptStackFloor{};
@@ -373,11 +378,19 @@ void MicantBootstrapLeaveInterrupt(uint64_t previous) noexcept {
         thread->previousUserMode = previous != 0;
 }
 
-void MicantBootstrapInterruptExit(uint64_t savedFlags, uint64_t savedCs) noexcept {
+void MicantBootstrapInterruptExit(uint64_t* hardwareFrame, uint64_t* savedRegisters,
+                                  const void* floatingState) noexcept {
+    if (!hardwareFrame || !savedRegisters || !floatingState) return;
+    const uint64_t savedFlags = hardwareFrame[2];
+    const uint64_t savedCs = hardwareFrame[1];
     if (savedFlags & (uint64_t{1} << 9)) {
         micant::ke::detail::servicePendingDpcs();
         micant::ke::detail::servicePendingKernelApcs();
-        if ((savedCs & 3) == 3) micant::ke::detail::serviceUserReturnTermination();
+        if ((savedCs & 3) == 3) {
+            micant::ke::detail::serviceUserReturnTermination();
+            if (micant::ke::KeGetCurrentIrql() == micant::ke::PASSIVE_LEVEL)
+                (void)MicantPsPrepareUserApc(hardwareFrame, savedRegisters, floatingState);
+        }
     }
 }
 
@@ -440,7 +453,8 @@ __attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
         "1: fxsave64 64(%rsp)\n"
         "2: movq 128(%r12), %rcx\ncallq MicantBootstrapEnterInterrupt\n"
         "movq %rax, 40(%rsp)\ncallq MicantBootstrapTimerDispatch\n"
-        "movq 136(%r12), %rcx\nmovq 128(%r12), %rdx\ncallq MicantBootstrapInterruptExit\n"
+        "leaq 120(%r12), %rcx\nmovq %r12, %rdx\nleaq 64(%rsp), %r8\n"
+        "callq MicantBootstrapInterruptExit\n"
         "movq 40(%rsp), %rcx\ncallq MicantBootstrapLeaveInterrupt\n"
         "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
         "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
@@ -490,7 +504,8 @@ __attribute__((naked)) void MicantBootstrapPs2Interrupt() noexcept {
         "1: fxsave64 64(%rsp)\n"
         "2: movq 128(%r12), %rcx\ncallq MicantBootstrapEnterInterrupt\n"
         "movq %rax, 40(%rsp)\ncallq MicantBootstrapPs2Dispatch\n"
-        "movq 136(%r12), %rcx\nmovq 128(%r12), %rdx\ncallq MicantBootstrapInterruptExit\n"
+        "leaq 120(%r12), %rcx\nmovq %r12, %rdx\nleaq 64(%rsp), %r8\n"
+        "callq MicantBootstrapInterruptExit\n"
         "movq 40(%rsp), %rcx\ncallq MicantBootstrapLeaveInterrupt\n"
         "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
         "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
@@ -559,7 +574,7 @@ uint64_t MicantProbeUserRip = kUserBase;
 uint64_t MicantProbeUserRsp =
     kUserStackBase + sizeof(g_userStack) - 16;
 
-void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
+void MicantBootstrapDispatch(SyscallFrame* frame, const void* floatingState) noexcept {
     using micant::hal::amd64::bootstrapUserRange;
     if (!g_dispatch) {
         if (g_log) g_log("[MicaNT Hal] Bootstrap syscall dispatcher is unset\r\n");
@@ -574,12 +589,18 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
         stopOnTrap();
     }
     const micant::hal::amd64::UserServiceArguments args{
-        frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp
+        frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp,
+        frame, const_cast<void*>(floatingState), MicantAmd64ExtendedSize,
+        MicantAmd64XsaveMask
     };
     auto* syscallThread = micant::ke::KeGetCurrentThread();
     const bool previousUserMode = syscallThread && syscallThread->previousUserMode;
     if (syscallThread) syscallThread->previousUserMode = true;
-    frame->rax = g_dispatch(args);
+    const uint64_t serviceResult = g_dispatch(args);
+    const bool continuationApplied =
+        serviceResult == micant::hal::amd64::BootstrapNtContinueApplied;
+    if (!continuationApplied)
+        frame->rax = serviceResult;
     // Service routines can make a higher-priority thread ready while the
     // syscall entry has interrupts disabled. Dispatch after service cleanup.
     if (g_schedulerClockActive) {
@@ -590,8 +611,41 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
     // Even early bootstrap user contexts may return with IF clear. A pending
     // process termination must be serviced before any return to user mode.
     micant::ke::detail::serviceUserReturnTermination();
+    if ((frame->cs & 3) == 3 && (frame->flags & (uint64_t{1} << 9)) && floatingState &&
+        micant::ke::KeGetCurrentIrql() == micant::ke::PASSIVE_LEVEL) {
+        uint64_t hardwareFrame[5]{frame->rip, frame->cs, frame->flags, frame->rsp, frame->ss};
+        uint64_t savedRegisters[15]{
+            frame->r15, frame->r14, frame->r13, frame->r12, frame->r11, frame->r10,
+            frame->r9, frame->r8, frame->rdi, frame->rsi, frame->rbp, frame->rbx,
+            frame->rdx, frame->rcx, frame->rax
+        };
+        if (MicantPsPrepareUserApc(hardwareFrame, savedRegisters, floatingState)) {
+            frame->rip = hardwareFrame[0];
+            frame->cs = hardwareFrame[1];
+            frame->flags = hardwareFrame[2];
+            frame->rsp = hardwareFrame[3];
+            frame->ss = hardwareFrame[4];
+            frame->r15 = savedRegisters[0]; frame->r14 = savedRegisters[1];
+            frame->r13 = savedRegisters[2]; frame->r12 = savedRegisters[3];
+            frame->r11 = savedRegisters[4];
+            frame->r10 = savedRegisters[5]; frame->r9 = savedRegisters[6];
+            frame->r8 = savedRegisters[7]; frame->rdi = savedRegisters[8];
+            frame->rsi = savedRegisters[9]; frame->rbp = savedRegisters[10];
+            frame->rbx = savedRegisters[11]; frame->rdx = savedRegisters[12];
+            frame->rcx = savedRegisters[13];
+            frame->rax = savedRegisters[14];
+        }
+    }
     // Preserve user IF only after the BSP scheduler clock owns IRQ routing.
-    frame->flags = (frame->flags & (g_schedulerClockActive ? 0xED5 : 0xCD5)) | 2;
+    // NtContinue carries a validated user CONTEXT, including TF/RF/AC/ID.
+    constexpr uint64_t userRestorableFlags = 0x00250FD7;
+    if (continuationApplied) {
+        const uint64_t allowed = g_schedulerClockActive
+            ? userRestorableFlags : (userRestorableFlags & ~uint64_t{0x200});
+        frame->flags = (frame->flags & allowed) | 2;
+    } else {
+        frame->flags = (frame->flags & (g_schedulerClockActive ? 0xED5 : 0xCD5)) | 2;
+    }
     if (syscallThread) syscallThread->previousUserMode = previousUserMode;
 }
 
@@ -600,31 +654,33 @@ __attribute__((naked)) void MicantBootstrapSyscallEntry() {
         "swapgs\n"
         "movq %rsp, %gs:0\nmovq %gs:8, %rsp\n"
         "pushq $0x2b\npushq %gs:0\npushq %r11\npushq $0x33\npushq %rcx\n"
+        // SYSCALL consumes RCX/R11 for the architectural return RIP/flags.
+        // Reserve explicit user-RCX/R11 slots for NtContinue to populate.
+        "pushq $0\npushq $0\n"
         "pushq %rax\npushq %rbx\npushq %rbp\npushq %rdi\npushq %rsi\n"
         "pushq %rdx\npushq %r8\npushq %r9\npushq %r10\n"
         "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
-        "movq %rsp, %rcx\nsubq $288, %rsp\n"
-        "movdqu %xmm0, 32(%rsp)\nmovdqu %xmm1, 48(%rsp)\n"
-        "movdqu %xmm2, 64(%rsp)\nmovdqu %xmm3, 80(%rsp)\n"
-        "movdqu %xmm4, 96(%rsp)\nmovdqu %xmm5, 112(%rsp)\n"
-        "movdqu %xmm6, 128(%rsp)\nmovdqu %xmm7, 144(%rsp)\n"
-        "movdqu %xmm8, 160(%rsp)\nmovdqu %xmm9, 176(%rsp)\n"
-        "movdqu %xmm10, 192(%rsp)\nmovdqu %xmm11, 208(%rsp)\n"
-        "movdqu %xmm12, 224(%rsp)\nmovdqu %xmm13, 240(%rsp)\n"
-        "movdqu %xmm14, 256(%rsp)\nmovdqu %xmm15, 272(%rsp)\n"
+        "movq %rsp, %r12\nmovl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "addq $128, %rax\nsubq %rax, %rsp\nandq $-64, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 1f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xsave64 64(%rsp)\njmp 2f\n"
+        "1: fxsave64 64(%rsp)\n"
+        "2: movq %r12, %rcx\nleaq 64(%rsp), %rdx\n"
         "callq MicantBootstrapDispatch\n"
-        "movdqu 32(%rsp), %xmm0\nmovdqu 48(%rsp), %xmm1\n"
-        "movdqu 64(%rsp), %xmm2\nmovdqu 80(%rsp), %xmm3\n"
-        "movdqu 96(%rsp), %xmm4\nmovdqu 112(%rsp), %xmm5\n"
-        "movdqu 128(%rsp), %xmm6\nmovdqu 144(%rsp), %xmm7\n"
-        "movdqu 160(%rsp), %xmm8\nmovdqu 176(%rsp), %xmm9\n"
-        "movdqu 192(%rsp), %xmm10\nmovdqu 208(%rsp), %xmm11\n"
-        "movdqu 224(%rsp), %xmm12\nmovdqu 240(%rsp), %xmm13\n"
-        "movdqu 256(%rsp), %xmm14\nmovdqu 272(%rsp), %xmm15\n"
-        "addq $288, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
+        // Restore the legacy x87/SSE context separately. NtContinue may carry
+        // CONTEXT.FltSave with XSAVE header bits 0/1 clear, while XSAVE tail
+        // restoration intentionally covers only enabled extended components.
+        "fxrstor64 64(%rsp)\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nandl $-4, %eax\nxorl %edx, %edx\n"
+        "xrstor64 64(%rsp)\njmp 4f\n"
+        "3: fxrstor64 64(%rsp)\n"
+        "4: movq %r12, %rsp\n"
         "popq %r15\npopq %r14\npopq %r13\npopq %r12\n"
         "popq %r10\npopq %r9\npopq %r8\npopq %rdx\n"
         "popq %rsi\npopq %rdi\npopq %rbp\npopq %rbx\npopq %rax\n"
+        "popq %rcx\npopq %r11\n"
         "swapgs\niretq\n"
     );
 }
@@ -920,7 +976,7 @@ __attribute__((naked)) void MicantSyscallProbeProgram() {
         "addq $160, %rsp\n"
         "popq %r15\npopq %r14\npopq %r13\npopq %r12\n"
         "popq %rsi\npopq %rdi\npopq %rbp\npopq %rbx\n"
-        "retq\n"
+        "movb $0, g_ring3ProbeActive(%rip)\nretq\n"
     );
 }
 
@@ -991,6 +1047,112 @@ void MicantProbePageFault(const uint64_t* frame) noexcept {
     MicantProbeReturn();
 }
 
+// The hardware frame is error, RIP, CS, RFLAGS, RSP, SS. The active #PF
+// interrupt gate has IF clear. A handled stack guard is retried by IRETQ;
+// all other faults retain the existing bootstrap probe/fatal path.
+bool MicantDispatchBootstrapPageFault(uint64_t* frame, uint64_t* savedRegisters,
+                                      const void* floatingState) noexcept {
+    if (g_probeMode >= 1 && g_probeMode <= 4) return false;
+    if ((frame[2] & 3) != 3 || micant::ke::KeGetCurrentIrql() != micant::ke::PASSIVE_LEVEL)
+        return false;
+    uintptr_t address{};
+    __asm__ __volatile__("movq %%cr2, %0" : "=r"(address));
+    const auto resolved = static_cast<micant::NtStatus>(
+        MicantPsResolveUserStackFault(address, frame[0], frame[2]));
+    if (resolved == micant::NtStatus::Success) return true;
+    uint32_t exceptionCode{};
+    if (resolved == micant::NtStatus::AccessViolation) {
+        exceptionCode = static_cast<uint32_t>(micant::NtStatus::AccessViolation);
+    } else if (resolved == micant::NtStatus::GuardPageViolation) {
+        exceptionCode = static_cast<uint32_t>(micant::NtStatus::GuardPageViolation);
+    } else {
+        // The Ps resolver returns other failures only after recognizing the
+        // tracked guard and attempting to grow it (for example, commit could
+        // not obtain backing). That is exhausted stack growth, not an AV at
+        // an arbitrary user address. Keep the failure on the controlled
+        // STATUS_STACK_OVERFLOW delivery/termination path.
+        exceptionCode = static_cast<uint32_t>(micant::NtStatus::StackOverflow);
+    }
+    if (MicantPsPrepareUserException(exceptionCode, 14, address, frame, savedRegisters,
+                                      floatingState)) return true;
+    (void)MicantPsTerminateFailedUserException(exceptionCode);
+    return false;
+}
+
+uint32_t mapFloatingPointException(uint64_t vector, const void* floatingState) noexcept {
+    constexpr uint32_t FloatDivideByZero = 0xC000008Eu;
+    constexpr uint32_t FloatInexact = 0xC000008Fu;
+    constexpr uint32_t FloatInvalid = 0xC0000090u;
+    constexpr uint32_t FloatOverflow = 0xC0000091u;
+    constexpr uint32_t FloatUnderflow = 0xC0000093u;
+    constexpr uint32_t Unhandled = 0xC0000144u;
+    if (!floatingState) return Unhandled;
+
+    const auto* bytes = static_cast<const uint8_t*>(floatingState);
+    uint32_t pending{};
+    if (vector == 19) {
+        // FXSAVE/XSAVE legacy region: MXCSR at byte offset 24, status flags
+        // in bits 0..5 and corresponding exception masks in bits 7..12.
+        uint32_t mxcsr{};
+        for (unsigned i = 0; i < sizeof(mxcsr); ++i)
+            mxcsr |= static_cast<uint32_t>(bytes[24 + i]) << (i * 8);
+        constexpr uint32_t flags = 0x3Fu;
+        const uint32_t masks = (mxcsr >> 7) & flags;
+        pending = (mxcsr & flags) & ~masks;
+    } else if (vector == 16) {
+        // Deferred x87 exception: control word at 0, status word at 2.
+        const uint16_t control = static_cast<uint16_t>(bytes[0] | (bytes[1] << 8));
+        const uint16_t status = static_cast<uint16_t>(bytes[2] | (bytes[3] << 8));
+        pending = static_cast<uint32_t>(status & 0x3Fu) &
+                  ~static_cast<uint32_t>(control & 0x3Fu);
+    } else {
+        return Unhandled;
+    }
+
+    // Match the AMD64 kernel's documented exception priority. ReactOS also
+    // maps an unmasked denormal operand to STATUS_FLOAT_INVALID_OPERATION.
+    if (pending & (1u << 0)) return FloatInvalid;
+    if (pending & (1u << 1)) return FloatInvalid;
+    if (pending & (1u << 2)) return FloatDivideByZero;
+    if (pending & (1u << 3)) return FloatOverflow;
+    if (pending & (1u << 4)) return FloatUnderflow;
+    if (pending & (1u << 5)) return FloatInexact;
+    return Unhandled;
+}
+
+bool MicantDispatchBootstrapException(uint64_t* frame, uint64_t* savedRegisters,
+                                      const void* floatingState, uint64_t vector) noexcept {
+    if (vector == 3 && g_ring3ProbeActive) MicantProbeTrap(frame + 1);
+    if (g_probeMode || (frame[2] & 3) != 3 ||
+        micant::ke::KeGetCurrentIrql() != micant::ke::PASSIVE_LEVEL) return false;
+    uint32_t code{};
+    switch (vector) {
+        case 0:  code = 0xC0000094u; break; // STATUS_INTEGER_DIVIDE_BY_ZERO
+        case 1:  code = static_cast<uint32_t>(micant::NtStatus::SingleStep); break;
+        case 3:  code = static_cast<uint32_t>(micant::NtStatus::Breakpoint); break;
+        case 4:  code = 0xC0000095u; break; // STATUS_INTEGER_OVERFLOW
+        case 5:  code = 0xC000008Cu; break; // STATUS_ARRAY_BOUNDS_EXCEEDED
+        case 6:  code = static_cast<uint32_t>(micant::NtStatus::IllegalInstruction); break;
+        case 10: // #TS, #NP, #SS and #GP are selector/segment faults; their
+        case 11: // hardware error code is not a page-fault access descriptor.
+        case 12:
+        case 13: code = static_cast<uint32_t>(micant::NtStatus::AccessViolation); break;
+        case 16: // #MF: deferred unmasked x87 exception.
+        case 19: // #XM: unmasked SIMD exception described by MXCSR.
+            code = mapFloatingPointException(vector, floatingState);
+            break;
+        case 17: code = static_cast<uint32_t>(micant::NtStatus::DatatypeMisalignment); break;
+        case 21: code = 0xC000060Au; break; // STATUS_CONTROL_PROTECTION_VIOLATION
+        default: code = 0xC0000144u; break; // STATUS_UNHANDLED_EXCEPTION
+    }
+    const uintptr_t exceptionAddress = static_cast<uintptr_t>(frame[1]);
+    if (MicantPsPrepareUserException(code, static_cast<uint32_t>(vector),
+                                     exceptionAddress, frame,
+                                     savedRegisters, floatingState)) return true;
+    (void)MicantPsTerminateFailedUserException(code);
+    return false;
+}
+
 void MicantProbeUnexpectedInvalidOpcode(const uint64_t* frame) noexcept {
     if (g_log) {
         g_log("[MicaNT Hal] Unexpected bootstrap invalid opcode (#UD)\r\n");
@@ -1037,15 +1199,137 @@ void MicantProbeUnexpectedTrap() noexcept {
     stopOnTrap();
 }
 
+void MicantProbeUnexpectedException(const uint64_t* frame, uint64_t vector) noexcept {
+    logTrapValue("[MicaNT Hal] Unhandled exception vector=0x", vector);
+    if (frame) {
+        logTrapValue("[MicaNT Hal] Unhandled exception RIP=0x", frame[1]);
+        logTrapValue("[MicaNT Hal] Unhandled exception CS=0x", frame[2]);
+    }
+    stopOnTrap();
+}
+
 __attribute__((naked)) void MicantProbePageFaultEntry() {
     __asm__ __volatile__(
-        "cld\nmovq %rsp, %rcx\nandq $-16, %rsp\nsubq $32, %rsp\n"
-        "callq MicantProbePageFault\nud2\n"
+        // Save all interrupted integer registers and the configured x87,
+        // SSE and extended state before calling C++. Keep the error-code
+        // frame untouched until the final IRETQ.
+        "cld\npushq %rax\npushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
+        "pushq %rsi\npushq %rdi\npushq %r8\npushq %r9\npushq %r10\npushq %r11\n"
+        "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
+        "movq %rsp, %r12\nmovl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "cmpl $512, %eax\njae 6f\nmovl $512, %eax\n6:\n"
+        "addq $96, %rax\nsubq %rax, %rsp\nandq $-64, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 1f\n"
+        "leaq 64(%rsp), %r13\n"
+        "movq $0, 512(%r13)\nmovq $0, 520(%r13)\n"
+        "movq $0, 528(%r13)\nmovq $0, 536(%r13)\n"
+        "movq $0, 544(%r13)\nmovq $0, 552(%r13)\n"
+        "movq $0, 560(%r13)\nmovq $0, 568(%r13)\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xsave64 (%r13)\njmp 2f\n"
+        "1: fxsave64 64(%rsp)\n"
+        "2: leaq 120(%r12), %rcx\nmovq %r12, %rdx\nleaq 64(%rsp), %r8\n"
+        "callq MicantDispatchBootstrapPageFault\n"
+        "testb %al, %al\njnz 3f\n"
+        "leaq 120(%r12), %rcx\ncallq MicantProbePageFault\nud2\n"
+        "3: cmpl $0, MicantAmd64XsaveMask(%rip)\nje 4f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xrstor64 64(%rsp)\njmp 5f\n"
+        "4: fxrstor64 64(%rsp)\n"
+        "5: movq %r12, %rsp\n"
+        "popq %r15\npopq %r14\npopq %r13\npopq %r12\npopq %r11\npopq %r10\n"
+        "popq %r9\npopq %r8\npopq %rdi\npopq %rsi\npopq %rbp\npopq %rbx\n"
+        "popq %rdx\npopq %rcx\npopq %rax\naddq $8, %rsp\niretq\n"
     );
+}
+
+__attribute__((naked)) void MicantProbeUserInvalidOpcodeEntry() {
+    __asm__ __volatile__("pushq $0\npushq $6\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserDivideEntry() {
+    __asm__ __volatile__("pushq $0\npushq $0\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserOverflowEntry() {
+    __asm__ __volatile__("pushq $0\npushq $4\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserBoundsEntry() {
+    // #BR does not push a hardware error code.
+    __asm__ __volatile__("pushq $0\npushq $5\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserErrorCodeEntry() {
+    __asm__ __volatile__("pushq $13\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserTaskSegmentEntry() {
+    __asm__ __volatile__("pushq $10\njmp MicantProbeUserExceptionEntry\n");
+}
+__attribute__((naked)) void MicantProbeUserSegmentNotPresentEntry() {
+    __asm__ __volatile__("pushq $11\njmp MicantProbeUserExceptionEntry\n");
+}
+__attribute__((naked)) void MicantProbeUserStackSegmentEntry() {
+    __asm__ __volatile__("pushq $12\njmp MicantProbeUserExceptionEntry\n");
+}
+__attribute__((naked)) void MicantProbeUserAlignmentEntry() {
+    __asm__ __volatile__("pushq $17\njmp MicantProbeUserExceptionEntry\n");
+}
+__attribute__((naked)) void MicantProbeUserControlProtectionEntry() {
+    __asm__ __volatile__("pushq $21\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserFloatEntry() {
+    __asm__ __volatile__("pushq $0\npushq $16\njmp MicantProbeUserExceptionEntry\n");
+}
+__attribute__((naked)) void MicantProbeUserSimdFloatEntry() {
+    __asm__ __volatile__("pushq $0\npushq $19\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserBreakpointEntry() {
+    __asm__ __volatile__("pushq $0\npushq $3\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserSingleStepEntry() {
+    __asm__ __volatile__("pushq $0\npushq $1\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserGeneralProtectionEntry() {
+    __asm__ __volatile__("pushq $13\njmp MicantProbeUserExceptionEntry\n");
+}
+
+__attribute__((naked)) void MicantProbeUserExceptionEntry() {
+    __asm__ __volatile__(
+        "cld\npushq %rax\npushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
+        "pushq %rsi\npushq %rdi\npushq %r8\npushq %r9\npushq %r10\npushq %r11\n"
+        "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
+        "movq %rsp, %r12\nmovl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "cmpl $512, %eax\njae 6f\nmovl $512, %eax\n6:\n"
+        "addq $96, %rax\nsubq %rax, %rsp\nandq $-64, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 1f\n"
+        "leaq 64(%rsp), %r13\nmovq $0, 512(%r13)\nmovq $0, 520(%r13)\n"
+        "movq $0, 528(%r13)\nmovq $0, 536(%r13)\nmovq $0, 544(%r13)\n"
+        "movq $0, 552(%r13)\nmovq $0, 560(%r13)\nmovq $0, 568(%r13)\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\nxsave64 (%r13)\njmp 2f\n"
+        "1: fxsave64 64(%rsp)\n"
+        "2: leaq 128(%r12), %rcx\nmovq %r12, %rdx\nleaq 64(%rsp), %r8\n"
+        "movq 120(%r12), %r9\ncallq MicantDispatchBootstrapException\n"
+        "testb %al, %al\njnz 3f\n"
+        "movq 120(%r12), %rdx\nleaq 128(%r12), %rcx\n"
+        "callq MicantProbeUnexpectedException\nud2\n"
+        "3: cmpl $0, MicantAmd64XsaveMask(%rip)\nje 4f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\nxrstor64 64(%rsp)\njmp 5f\n"
+        "4: fxrstor64 64(%rsp)\n"
+        "5: movq %r12, %rsp\npopq %r15\npopq %r14\npopq %r13\npopq %r12\n"
+        "popq %r11\npopq %r10\npopq %r9\npopq %r8\npopq %rdi\npopq %rsi\n"
+        "popq %rbp\npopq %rbx\npopq %rdx\npopq %rcx\npopq %rax\n"
+        "addq $16, %rsp\niretq\n");
 }
 
 __attribute__((naked)) void MicantProbeEnter() {
     __asm__ __volatile__(
+        "movb $1, g_ring3ProbeActive(%rip)\n"
         "pushq %rbx\npushq %rbp\npushq %rdi\npushq %rsi\n"
         "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
         "subq $160, %rsp\n"
@@ -2494,12 +2778,28 @@ bool verifyRing3Transition() noexcept {
         : : "m"(gdtr) : "rax", "memory"
     );
     for (size_t vector = 0; vector < 256; ++vector) {
-        const uint64_t handler = vector == 3
-            ? reinterpret_cast<uint64_t>(MicantProbeTrapEntry)
+        const uint64_t handler = vector == 0
+            ? reinterpret_cast<uint64_t>(MicantProbeUserDivideEntry)
+            : vector == 1
+                ? reinterpret_cast<uint64_t>(MicantProbeUserSingleStepEntry)
+            : vector == 3
+            ? reinterpret_cast<uint64_t>(MicantProbeUserBreakpointEntry)
+            : vector == 4
+                ? reinterpret_cast<uint64_t>(MicantProbeUserOverflowEntry)
+            : vector == 5
+                ? reinterpret_cast<uint64_t>(MicantProbeUserBoundsEntry)
             : vector == 6
-                ? reinterpret_cast<uint64_t>(MicantProbeInvalidOpcodeEntry)
-            : vector == 13
-                ? reinterpret_cast<uint64_t>(MicantProbeGeneralProtectionEntry)
+                ? reinterpret_cast<uint64_t>(MicantProbeUserInvalidOpcodeEntry)
+            : vector == 10 ? reinterpret_cast<uint64_t>(MicantProbeUserTaskSegmentEntry)
+            : vector == 11 ? reinterpret_cast<uint64_t>(MicantProbeUserSegmentNotPresentEntry)
+            : vector == 12 ? reinterpret_cast<uint64_t>(MicantProbeUserStackSegmentEntry)
+            : vector == 13 ? reinterpret_cast<uint64_t>(MicantProbeUserGeneralProtectionEntry)
+            : vector == 17 ? reinterpret_cast<uint64_t>(MicantProbeUserAlignmentEntry)
+            : vector == 21 ? reinterpret_cast<uint64_t>(MicantProbeUserControlProtectionEntry)
+            : vector == 16
+                ? reinterpret_cast<uint64_t>(MicantProbeUserFloatEntry)
+            : vector == 19
+                ? reinterpret_cast<uint64_t>(MicantProbeUserSimdFloatEntry)
             : vector == 14 ? reinterpret_cast<uint64_t>(MicantProbePageFaultEntry)
                           : reinterpret_cast<uint64_t>(MicantProbeFaultEntry);
         g_idt[vector] = {

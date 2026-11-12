@@ -5,14 +5,14 @@
 // Description:
 //   Clean-room bare-metal AHCI 1.3.1 bus-master DMA driver for the Intel
 //   C230/C236 Chipset SATA Controller (0x8086:0xA102 at PCI 00:17.0).
-//   Enables direct physical sector reads and writes on SATA Port 1 (/dev/sdb,
+//   Enables direct physical sector reads and writes on an initialized SATA port,
 //   HGST Ultrastar 2.0 TB SATA Enterprise HDD) in pure Ring 0 Long Mode.
 //
 //   Features:
 //   - PCI Configuration Space discovery (BAR5 ABAR MMIO at 0xF7240000)
 //   - Bus Master & Memory Space enablement
 //   - Global Host Control (GHC.AE = 1, AHCI mode active)
-//   - Port 1 detection (SSTS.DET = 3 Gen 3 6Gbps, SIG = 0x00000101 ATA HDD)
+//   - ATA SATA disk detection across implemented AHCI ports
 //   - 1KB-aligned Command List & 256-byte aligned Received FIS DMA buffers
 //   - ATA-8 48-bit LBA DMA Read/Write (READ_DMA_EXT 0x25, WRITE_DMA_EXT 0x35)
 //   - Physical Region Descriptor Table (PRDT) multi-sector transfers (up to 64KB)
@@ -184,9 +184,13 @@ alignas(128)  static AhciCommandTable s_ahciCmdTable;      // Slot 0 Command Tab
 alignas(4096) static uint8_t s_ahciDmaBuffer[65536];       // 64 KB DMA Transfer Buffer
 
 /**
- * @brief Sovereign Bare-Metal AHCI SATA Controller & Port 1 Storage Engine.
+ * @brief Sovereign Bare-Metal AHCI SATA Controller & disk storage engine.
  */
 class BareMetalAhciController {
+public:
+    using MmioMapper = void* (*)(uint64_t physical, size_t size) noexcept;
+    using DmaTranslator = uint64_t (*)(const void* address) noexcept;
+
 private:
     uint8_t m_pciBus{0};
     uint8_t m_pciDevice{0};
@@ -195,7 +199,11 @@ private:
     volatile uint32_t* m_abar{nullptr};
     bool     m_initialized{false};
     bool     m_port1Online{false};
+    bool     m_supports64BitDma{false};
+    uint8_t  m_dataPort{0xFF};
     uint64_t m_port1TotalSectors{0};
+    MmioMapper m_mmioMapper{};
+    DmaTranslator m_dmaTranslator{};
     uint64_t m_micaSysLbaOffset{2099200}; // LBA of sdb2 (MICA_SYS 128 GB FAT32)
     uint64_t m_micaDataLbaOffset{270534656}; // LBA of sdb3 (MICA_DATA 1.7 TB FAT32)
     char     m_diskModel[41]{};
@@ -212,8 +220,12 @@ public:
     [[nodiscard]] uint64_t getPort1TotalSectors() const noexcept { return m_port1TotalSectors; }
     [[nodiscard]] const char* getDiskModel() const noexcept { return m_diskModel; }
 
-    /** Discover an AHCI PCI function and initialize SATA Port 1 (/dev/sdb). */
-    bool initialize() noexcept {
+    /** Discover and initialize an AHCI controller and its first SATA disk port. */
+    bool initialize(MmioMapper mmioMapper, DmaTranslator dmaTranslator) noexcept {
+        if (m_initialized) return true;
+        if (!mmioMapper || !dmaTranslator) return false;
+        m_mmioMapper = mmioMapper;
+        m_dmaTranslator = dmaTranslator;
         // Controller locations differ between the target C236 platform
         // (00:17.0) and Q35/ICH9 (00:1f.2), so select by PCI class instead
         // of assuming one chipset's BDF.
@@ -239,6 +251,7 @@ public:
 
         // Read BAR5 (ABAR MMIO) from the discovered controller.
         uint32_t bar5 = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x24);
+        if ((bar5 & 1u) != 0 || (bar5 & 6u) != 0) return false;
         m_abarPhys = bar5 & ~0xFULL;
         if (m_abarPhys == 0) {
             return false;
@@ -248,34 +261,45 @@ public:
         uint32_t pciCmd = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x04);
         pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x04, pciCmd | 0x07);
 
-        // 4. Map ABAR pointer
-        m_abar = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(m_abarPhys));
+        // Map the register window through the kernel's uncached MMIO mapper.
+        m_abar = static_cast<volatile uint32_t*>(
+            m_mmioMapper(m_abarPhys, 0x1100));
+        if (!m_abar) return false;
 
         // 5. Ensure AHCI Enable (GHC.AE = 1)
         uint32_t ghc = m_abar[AHCI_REG_GHC / 4];
         if ((ghc & AHCI_GHC_AE) == 0) {
             m_abar[AHCI_REG_GHC / 4] = ghc | AHCI_GHC_AE;
         }
+        m_supports64BitDma = (m_abar[AHCI_REG_CAP / 4] & (1u << 31)) != 0;
 
-        // 6. Check Ports Implemented (PI)
+        // Find the first implemented SATA disk port. Firmware and QEMU
+        // commonly attach the boot disk to port zero, while some systems use
+        // port one; do not assume a physical connector number.
         uint32_t pi = m_abar[AHCI_REG_PI / 4];
-        if ((pi & (1u << 1)) == 0) {
-            // Port 1 not implemented
-            return false;
-        }
-
-        // 7. Initialize Port 1 (sdb)
-        bool ok = initPort(1);
-        if (ok) {
-            m_initialized = true;
+        for (uint8_t port = 0; port < 32; ++port) {
+            if ((pi & (uint32_t{1} << port)) == 0) continue;
+            if (!initPort(port)) continue;
+            m_dataPort = port;
             m_port1Online = true;
-            readDiskIdentify();
+            if (readDiskIdentify()) {
+                m_initialized = true;
+                break;
+            }
+            m_port1Online = false;
+            m_dataPort = 0xFF;
         }
 
         return m_initialized;
     }
 
 private:
+    uint64_t dmaAddress(const void* address) const noexcept {
+        const uint64_t physical = m_dmaTranslator ? m_dmaTranslator(address) : 0;
+        if (!physical || (!m_supports64BitDma && physical > UINT32_MAX)) return 0;
+        return physical;
+    }
+
     volatile uint32_t* getPortRegs(uint8_t port) const noexcept {
         uintptr_t portBase = reinterpret_cast<uintptr_t>(m_abar) + 0x100 + port * 0x80;
         return reinterpret_cast<volatile uint32_t*>(portBase);
@@ -300,11 +324,17 @@ private:
 
     bool startPort(volatile uint32_t* pRegs) noexcept {
         // Wait until CR is clear before starting
-        while (pRegs[PORT_REG_CMD / 4] & PORT_CMD_CR) {
+        bool stopped = false;
+        for (uint32_t attempt = 0; attempt < 50000; ++attempt) {
+            if ((pRegs[PORT_REG_CMD / 4] & PORT_CMD_CR) == 0) {
+                stopped = true;
+                break;
+            }
 #if defined(__x86_64__)
             __asm__ __volatile__("pause");
 #endif
         }
+        if (!stopped) return false;
         pRegs[PORT_REG_CMD / 4] |= PORT_CMD_FRE;
         pRegs[PORT_REG_CMD / 4] |= PORT_CMD_ST;
         return true;
@@ -321,13 +351,13 @@ private:
         }
 
         uint32_t sig = pRegs[PORT_REG_SIG / 4];
-        if (sig != 0x00000101 && sig != 0) {
+        if (sig != 0x00000101) {
             // Not a SATA disk (e.g. ATAPI)
             return false;
         }
 
         // Stop port command engine
-        stopPort(pRegs);
+        if (!stopPort(pRegs)) return false;
 
         // Zero DMA work buffers
         std::memset(s_ahciCmdListMem, 0, sizeof(s_ahciCmdListMem));
@@ -335,8 +365,9 @@ private:
         std::memset(&s_ahciCmdTable, 0, sizeof(s_ahciCmdTable));
 
         // Program Command List and Received FIS Base
-        uint64_t clbPhys = reinterpret_cast<uint64_t>(s_ahciCmdListMem);
-        uint64_t fbPhys  = reinterpret_cast<uint64_t>(s_ahciRecvFisMem);
+        uint64_t clbPhys = dmaAddress(s_ahciCmdListMem);
+        uint64_t fbPhys  = dmaAddress(s_ahciRecvFisMem);
+        if (!clbPhys || !fbPhys) return false;
 
         pRegs[PORT_REG_CLB / 4]  = static_cast<uint32_t>(clbPhys & 0xFFFFFFFF);
         pRegs[PORT_REG_CLBU / 4] = static_cast<uint32_t>((clbPhys >> 32) & 0xFFFFFFFF);
@@ -345,7 +376,8 @@ private:
 
         // Setup Command Header 0 pointing to s_ahciCmdTable
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
-        uint64_t ctbaPhys = reinterpret_cast<uint64_t>(&s_ahciCmdTable);
+        uint64_t ctbaPhys = dmaAddress(&s_ahciCmdTable);
+        if (!ctbaPhys) return false;
         cmdHeaders[0].ctba  = static_cast<uint32_t>(ctbaPhys & 0xFFFFFFFF);
         cmdHeaders[0].ctbau = static_cast<uint32_t>((ctbaPhys >> 32) & 0xFFFFFFFF);
         cmdHeaders[0].prdtl = 1;
@@ -355,16 +387,16 @@ private:
         pRegs[PORT_REG_IS / 4]   = 0xFFFFFFFF;
 
         // Start port
-        startPort(pRegs);
+        if (!startPort(pRegs)) return false;
 
         return true;
     }
 
-    void readDiskIdentify() noexcept {
+    bool readDiskIdentify() noexcept {
         alignas(512) static uint8_t idBuf[512];
         std::memset(idBuf, 0, sizeof(idBuf));
 
-        volatile uint32_t* pRegs = getPortRegs(1);
+        volatile uint32_t* pRegs = getPortRegs(m_dataPort);
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
 
         cmdHeaders[0].cfl = sizeof(FisRegH2D) / sizeof(uint32_t);
@@ -373,7 +405,8 @@ private:
         cmdHeaders[0].prdbc = 0;
 
         // Setup PRDT 0
-        uint64_t bufPhys = reinterpret_cast<uint64_t>(idBuf);
+        uint64_t bufPhys = dmaAddress(idBuf);
+        if (!bufPhys) return false;
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbc  = 512 - 1;
@@ -391,14 +424,17 @@ private:
         pRegs[PORT_REG_CI / 4] = 1; // Issue slot 0
 
         // Wait for completion (timeout ~100ms)
+        bool completed = false;
         for (int i = 0; i < 100000; ++i) {
             if ((pRegs[PORT_REG_CI / 4] & 1) == 0) {
+                completed = true;
                 break;
             }
 #if defined(__x86_64__)
             __asm__ __volatile__("pause");
 #endif
         }
+        if (!completed || (pRegs[PORT_REG_TFD / 4] & 1u) != 0) return false;
 
         // Parse Model String (Words 27..46, bytes 54..93, byte-swapped)
         size_t idx = 0;
@@ -413,13 +449,18 @@ private:
         }
 
         // Total 48-bit LBA sectors (Words 100..103, bytes 200..207)
-        uint64_t sectors48 = 0;
-        std::memcpy(&sectors48, &idBuf[200], sizeof(uint64_t));
-        if (sectors48 > 0) {
-            m_port1TotalSectors = sectors48;
-        } else {
-            m_port1TotalSectors = 3907029168ULL; // 2TB default
+        const uint16_t commandSet83 = *reinterpret_cast<const uint16_t*>(&idBuf[166]);
+        uint64_t sectorCount{};
+        if ((commandSet83 & 0xC400u) == 0x4400u)
+            std::memcpy(&sectorCount, &idBuf[200], sizeof(sectorCount));
+        if (!sectorCount) {
+            sectorCount = *reinterpret_cast<const uint16_t*>(&idBuf[120]) |
+                (static_cast<uint64_t>(*reinterpret_cast<const uint16_t*>(&idBuf[122])) << 16);
+            sectorCount &= 0x0FFFFFFFu;
         }
+        if (!sectorCount) return false;
+        m_port1TotalSectors = sectorCount;
+        return true;
     }
 
 public:
@@ -431,11 +472,13 @@ public:
      * @return true on DMA transfer success, false on fault/timeout.
      */
     bool readSectors(uint64_t lba, uint16_t sectorCount, void* dest) noexcept {
-        if (!m_port1Online || !dest || sectorCount == 0 || sectorCount > 128) {
+        if (!m_port1Online || !dest || sectorCount == 0 || sectorCount > 128 ||
+            !m_port1TotalSectors || lba >= m_port1TotalSectors ||
+            sectorCount > m_port1TotalSectors - lba) {
             return false;
         }
 
-        volatile uint32_t* pRegs = getPortRegs(1);
+        volatile uint32_t* pRegs = getPortRegs(m_dataPort);
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
 
         cmdHeaders[0].cfl = sizeof(FisRegH2D) / sizeof(uint32_t);
@@ -443,7 +486,8 @@ public:
         cmdHeaders[0].prdtl = 1;
         cmdHeaders[0].prdbc = 0;
 
-        uint64_t bufPhys = reinterpret_cast<uint64_t>(dest);
+        uint64_t bufPhys = dmaAddress(dest);
+        if (!bufPhys) return false;
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbc  = (sectorCount * 512) - 1;
@@ -496,11 +540,13 @@ public:
      * @brief Direct 48-bit LBA Sector Write via AHCI Bus-Master DMA.
      */
     bool writeSectors(uint64_t lba, uint16_t sectorCount, const void* src) noexcept {
-        if (!m_port1Online || !src || sectorCount == 0 || sectorCount > 128) {
+        if (!m_port1Online || !src || sectorCount == 0 || sectorCount > 128 ||
+            !m_port1TotalSectors || lba >= m_port1TotalSectors ||
+            sectorCount > m_port1TotalSectors - lba) {
             return false;
         }
 
-        volatile uint32_t* pRegs = getPortRegs(1);
+        volatile uint32_t* pRegs = getPortRegs(m_dataPort);
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
 
         cmdHeaders[0].cfl = sizeof(FisRegH2D) / sizeof(uint32_t);
@@ -508,7 +554,8 @@ public:
         cmdHeaders[0].prdtl = 1;
         cmdHeaders[0].prdbc = 0;
 
-        uint64_t bufPhys = reinterpret_cast<uint64_t>(src);
+        uint64_t bufPhys = dmaAddress(src);
+        if (!bufPhys) return false;
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbc  = (sectorCount * 512) - 1;
@@ -681,7 +728,9 @@ public:
     [[nodiscard]] uint32_t getRootCluster() const noexcept { return m_rootClus; }
 
     bool readVolumeSectors(uint64_t relativeLba, uint16_t sectorCount, void* dest) noexcept {
-        if (!m_ahci) return false;
+        if (!m_ahci || !m_mounted || !dest || !sectorCount ||
+            relativeLba >= m_totalSectors || sectorCount > m_totalSectors - relativeLba ||
+            m_volumeLbaOffset > UINT64_MAX - relativeLba) return false;
         return m_ahci->readSectors(m_volumeLbaOffset + relativeLba, sectorCount, dest);
     }
 
@@ -695,7 +744,7 @@ public:
         m_volumeLbaOffset = lbaOffset;
         m_driveLetter = driveLetter;
         alignas(512) uint8_t bpb[512];
-        if (!readVolumeSectors(0, 1, bpb)) {
+        if (!m_ahci->readSectors(lbaOffset, 1, bpb)) {
             return false;
         }
         if (bpb[510] != 0x55 || bpb[511] != 0xAA) {
@@ -713,9 +762,17 @@ public:
         uint16_t totSec16 = *reinterpret_cast<const uint16_t*>(&bpb[19]);
         m_totalSectors = (totSec32 != 0) ? totSec32 : totSec16;
 
-        if (m_bytesPerSec != 512 || m_secPerClus == 0 || m_secPerFat == 0) {
+        if (m_bytesPerSec != 512 || m_secPerClus == 0 || m_secPerClus > 128 ||
+            (m_secPerClus & (m_secPerClus - 1)) != 0 || m_secPerFat == 0 ||
+            m_numFats == 0 || m_totalSectors == 0 ||
+            m_reservedSec >= m_totalSectors ||
+            static_cast<uint64_t>(m_reservedSec) +
+                static_cast<uint64_t>(m_numFats) * m_secPerFat >= m_totalSectors ||
+            m_rootClus < 2) {
             return false;
         }
+        if (lbaOffset >= ahci.getPort1TotalSectors() ||
+            m_totalSectors > ahci.getPort1TotalSectors() - lbaOffset) return false;
 
         std::memcpy(m_volumeLabel, &bpb[71], 11);
         m_volumeLabel[11] = '\0';
@@ -728,6 +785,11 @@ public:
         m_dataStartLba = m_reservedSec + (m_numFats * m_secPerFat);
         m_cachedFatSector = 0xFFFFFFFF;
         m_mounted = true;
+        const uint64_t dataClusters = (m_totalSectors - m_dataStartLba) / m_secPerClus;
+        if (static_cast<uint64_t>(m_rootClus - 2) >= dataClusters) {
+            m_mounted = false;
+            return false;
+        }
         return true;
     }
 
@@ -945,6 +1007,56 @@ public:
         }
 
         return (bytesRead > 0);
+    }
+
+    bool readFileAt(const char* path, uint64_t offset, void* outBuf,
+                    size_t length, size_t& bytesRead) noexcept {
+        bytesRead = 0;
+        Fat32DirEntry entry{};
+        if (!findPath(path, entry) || entry.isDirectory) return false;
+        return readFileEntryAt(entry, offset, outBuf, length, bytesRead);
+    }
+
+    bool readFileEntryAt(const Fat32DirEntry& entry, uint64_t offset, void* outBuf,
+                         size_t length, size_t& bytesRead) noexcept {
+        bytesRead = 0;
+        if (!m_mounted || entry.isDirectory || (!outBuf && length)) return false;
+        if (length == 0) return true;
+        if (offset >= entry.fileSize) return true;
+
+        const uint32_t clusterBytes = getBytesPerCluster();
+        const uint64_t available = static_cast<uint64_t>(entry.fileSize) - offset;
+        const size_t target = available < length ? static_cast<size_t>(available) : length;
+        const uint64_t skipClusters = offset / clusterBytes;
+        uint32_t cluster = entry.firstCluster;
+        const uint64_t maxClusters = m_totalSectors / m_secPerClus + 1;
+        if (skipClusters >= maxClusters) return false;
+        for (uint64_t skipped = 0; skipped < skipClusters; ++skipped) {
+            if (cluster < 2 || cluster >= 0x0FFFFFF8) return false;
+            cluster = getNextCluster(cluster);
+        }
+
+        size_t withinCluster = static_cast<size_t>(offset % clusterBytes);
+        auto* output = static_cast<uint8_t*>(outBuf);
+        uint64_t clustersRead{};
+        while (bytesRead < target) {
+            if (cluster < 2 || cluster >= 0x0FFFFFF8 || ++clustersRead > maxClusters)
+                return false;
+            const uint64_t clusterIndex = static_cast<uint64_t>(cluster - 2);
+            const uint64_t clusterCount = m_totalSectors > m_dataStartLba
+                ? (m_totalSectors - m_dataStartLba) / m_secPerClus : 0;
+            if (clusterIndex >= clusterCount) return false;
+
+            const uint32_t lba = clusterToLba(cluster);
+            if (!readVolumeSectors(lba, m_secPerClus, m_clusterBuf)) return false;
+            const size_t count = (target - bytesRead < clusterBytes - withinCluster)
+                ? target - bytesRead : clusterBytes - withinCluster;
+            std::memcpy(output + bytesRead, m_clusterBuf + withinCluster, count);
+            bytesRead += count;
+            withinCluster = 0;
+            if (bytesRead < target) cluster = getNextCluster(cluster);
+        }
+        return true;
     }
 
     bool writeFile(const char* path, const void* data, size_t sizeBytes, size_t& bytesWritten) noexcept {

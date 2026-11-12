@@ -41909,22 +41909,15 @@ void Test_Horizon207_Veh_Options89_Mmcss_And_SystemInterruptInfo_Suite() {
         TEST_ASSERT(ldr.getExport("avrt.dll", "AvQuerySystemResponsiveness") != nullptr, "avrt.dll exports AvQuerySystemResponsiveness");
         TEST_ASSERT(ldr.getExport("avrt.dll", "AvSetMmThreadPriority") != nullptr, "avrt.dll exports AvSetMmThreadPriority");
 
-        // kernel32.dll & api-ms-win-core-errorhandling VEH/VCH exports
-        TEST_ASSERT(ldr.getExport("kernel32.dll", "AddVectoredExceptionHandler") != nullptr, "kernel32.dll exports AddVectoredExceptionHandler");
-        TEST_ASSERT(ldr.getExport("kernel32.dll", "RemoveVectoredExceptionHandler") != nullptr, "kernel32.dll exports RemoveVectoredExceptionHandler");
-        TEST_ASSERT(ldr.getExport("kernel32.dll", "AddVectoredContinueHandler") != nullptr, "kernel32.dll exports AddVectoredContinueHandler");
-        TEST_ASSERT(ldr.getExport("kernel32.dll", "RemoveVectoredContinueHandler") != nullptr, "kernel32.dll exports RemoveVectoredContinueHandler");
-
-        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredExceptionHandler") != nullptr, "api-ms errorhandling exports AddVectoredExceptionHandler");
-        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredExceptionHandler") != nullptr, "api-ms errorhandling exports RemoveVectoredExceptionHandler");
-        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredContinueHandler") != nullptr, "api-ms errorhandling exports AddVectoredContinueHandler");
-        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredContinueHandler") != nullptr, "api-ms errorhandling exports RemoveVectoredContinueHandler");
-
-        // ntdll.dll RTL VEH/VCH exports
-        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlAddVectoredExceptionHandler") != nullptr, "ntdll.dll exports RtlAddVectoredExceptionHandler");
-        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlRemoveVectoredExceptionHandler") != nullptr, "ntdll.dll exports RtlRemoveVectoredExceptionHandler");
-        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlAddVectoredContinueHandler") != nullptr, "ntdll.dll exports RtlAddVectoredContinueHandler");
-        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlRemoveVectoredContinueHandler") != nullptr, "ntdll.dll exports RtlRemoveVectoredContinueHandler");
+        // The header-only hosted adapter's manager must not masquerade as the
+        // registry exported by the separately loaded canonical NTDLL image.
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "AddVectoredExceptionHandler") == nullptr, "host export map does not expose a disconnected VEH registry");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "RemoveVectoredExceptionHandler") == nullptr, "host export map does not expose a disconnected VEH registry");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "AddVectoredContinueHandler") == nullptr, "host export map does not expose a disconnected VCH registry");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "RemoveVectoredContinueHandler") == nullptr, "host export map does not expose a disconnected VCH registry");
+        TEST_ASSERT(ldr.getExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredExceptionHandler") == nullptr, "host API-set map does not expose a disconnected VEH registry");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlAddVectoredExceptionHandler") == nullptr, "host NTDLL map leaves canonical VEH exports to the DLL image");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlAddVectoredContinueHandler") == nullptr, "host NTDLL map leaves canonical VCH exports to the DLL image");
 
         std::cout << "[VERDICT] Vectored Exception Handling, Agility SDK Options 8/9, MMCSS Pacing & System Interrupt Info\n"
                   << "          operate 100% natively on MicaNT kernel and Win32 executive without satellite DLLs or driver shims!\n";

@@ -415,8 +415,10 @@ The Mm backend also has a private per-page guard transition and can release a
 guarded PTE; a sanitized hosted backend test covers its state changes and
 failure handling. Private address-space cloning preserves that guard state;
 the hosted clone test checks both copying and rollback after a target guard
-failure. It is not connected to user stack faults or user exception
-dispatch, and does not enable partially committed native thread stacks. Process
+failure. A bounded CPL3 guard-fault path now saves and restores GPR and
+extended state and advances the current thread's guard on the BSP; it does
+not implement user exception dispatch or enable partially committed native
+thread stacks. Process
 termination now schedules never-started threads before cancelling event waits,
 so a failed scheduling preflight cannot reorder the existing event waiters.
 After APC rundown has become irreversible, a missing successor or failed
@@ -434,6 +436,62 @@ A CPL3 fixture exercises those alignment failures during normal QEMU boot.
 reaper, input and five-second stability checks; the separate runtime-selftest
 mode passed the runtime teardown path. The latter
 halts before the Ps/Ke process diagnostics. Neither result completes M4.
+
+The subsequent image-section integration resolves a non-null process section
+handle using the canonical Ob section type and `SECTION_MAP_EXECUTE` before
+returning `STATUS_NOT_IMPLEMENTED` for the still-missing file-backed image
+path. QEMU exercises invalid handles, wrong object types and denied access,
+as well as the unsupported valid-section case. The freestanding kernel has
+no canonical file object/read backend or file-backed `SEC_IMAGE` yet; the
+private bootstrap image loader is not a substitute for those M6 dependencies.
+Internal partially committed thread stacks now create a non-present guard PTE
+immediately below the committed range and retain its address in the kernel.
+QEMU exercises creation, accessibility checks, two actual CPL3 guard faults,
+register preservation and cleanup. The hook runs with interrupts disabled on
+the shared bootstrap IST and must not wait or switch contexts. Native thread
+creation still rejects partial commitment until stack-overflow exception
+delivery and stack-guarantee semantics are integrated.
+
+The current unverified M4 work adds the AMD64 TEB deallocation-stack and
+guaranteed-stack fields and initializes the former from the kernel-owned stack
+reservation. It also records a failed pre-clock synchronous process cleanup
+so a later termination request can retry remaining resources, preserving the
+original exit status. Ob-backed processes also retain a reaper-queue reference
+until the runtime clock can service cleanup, or until a synchronous retry
+withdraws that reference. These changes have not been built or exercised in
+this work batch.
+
+Continuation: M4 is still partial. The next dependency for general stack
+overflow is a thread-owned AMD64 exception frame and user-mode exception
+dispatch/continuation; the current shared IST guard hook cannot wait or
+switch contexts, and its overflow branch intentionally remains unsupported.
+File-backed process creation separately needs the canonical freestanding Io
+file object/read path and Mm `SEC_IMAGE` ownership. Existing local changes
+to `ps.hpp`, `usermode.hpp`, Ps, Mm, HAL and the Ps fixtures must be kept.
+No build, tests, or QEMU were run after the TEB and cleanup-retry changes.
+
+Subsequent M4 work links the AMD64 exception frame producer to the NTDLL
+dispatcher and `NtContinue`, and adds an Ob file object, an AHCI/FAT32 read
+backend and a PE32+ `SEC_IMAGE` path through Mm and Ps. These paths are not yet
+verified end-to-end: the QEMU boot configuration reports that the file provider
+is unavailable, and the boot fixtures do not exercise user exception delivery
+or a file-backed process. FAT volume discovery still uses fixed partition offsets.
+Unsupported cases must therefore not be treated as general NT support.
+
+The modular bare-metal kernel, hosted `ntoskrnl_core`, NTDLL and Kernel32 boot
+targets linked after correcting hosted build regressions. The architecture and
+native DLL header-boundary checks passed. A direct QEMU boot with input checks
+passed the existing lifecycle, two- and three-thread, timer, reaper and runtime
+diagnostics. Its enlarged stack fixture exercised five successive guard faults.
+Private image-view pages are now freed individually during unmap; the existing
+PFN baseline checks pass after process cloning and teardown. These results do
+not establish exception delivery, stack-overflow handling or file-backed image
+startup. No physical hardware verification was performed.
+The seven bootstrap-runner Python tests also passed. A separate native macOS
+`micant_tests` build was attempted on the ARM64 host and failed on existing
+AMD64 inline assembly and Microsoft-specific integer syntax; it was not run.
+The stale pre-existing host CMake cache points to a different checkout, so the
+attempt used an isolated temporary build directory.
 
 The freestanding `KThread` now keeps resident APC objects in intrusive FIFO
 queues rather than constructing allocating `std::deque`s. QEMU verifies FIFO

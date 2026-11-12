@@ -13,10 +13,17 @@ class EThread;
 
 namespace detail {
 bool deferProcessObjectDelete(ob::ObjectHeader* header) noexcept;
-// Single-BSP internal helpers; the caller serializes access with interrupts
-// disabled. The process pointer returned by creation is borrowed from handle.
+// Single-BSP internal helpers. Handle-table operations serialize themselves;
+// expensive image and Mm work must run without a surrounding table guard.
 NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process,
                              uint32_t handleAttributes = 0) noexcept;
+// Build and initialize an unpublished process object. The returned Ob
+// reference pins it until `publishProcessHandle` or caller rollback.
+NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) noexcept;
+void inheritProcessSecurityContext(EProcess& child, const EProcess& parent) noexcept;
+NtStatus publishProcessHandle(EProcess& process, ob::ObjectHeader* reference,
+                              uint32_t access, uint32_t handleAttributes,
+                              Handle& handle) noexcept;
 NtStatus referenceProcessHandle(Handle handle, uint32_t access, EProcess*& process,
                                 ob::ObjectHeader*& reference) noexcept;
 struct BootstrapProcessImage {

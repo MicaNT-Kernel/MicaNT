@@ -17,20 +17,28 @@ public:
 
     ~BootstrapEvent() { if (head_) __builtin_trap(); }
 
-    [[nodiscard]] NtStatus wait(bool poll = false) noexcept {
+    [[nodiscard]] NtStatus wait(bool poll = false, bool alertable = false) noexcept {
         uint64_t flags{};
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
         NtStatus result = NtStatus::Unsuccessful;
         auto* current = ke::KeGetCurrentThread();
         if (current && current->state == ke::ThreadState::Running &&
             ke::KeGetCurrentIrql() <= ke::APC_LEVEL) {
+            current->alertable = alertable;
             if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL && !current->kernelApcList.empty()) {
                 if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
                 ke::KiDeliverApc(0);
                 __asm__ __volatile__("cli" : : : "memory");
             }
-            if (current->terminationRequested && current->eventWaitUserMode && current->eventWaitCanTerminate) {
-                result = NtStatus::Unsuccessful;
+            // Termination is completed by the owning Ke wait syscall after it
+            // has dropped the waited object's reference and cleared its wait
+            // registration. This event only unlinks and returns to that owner.
+            if (current->terminationRequested && current->eventWaitCanTerminate) {
+                result = NtStatus::UserApc;
+            } else if (alertable && current->userApcList.hasEnvironment(current->apcStateIndex)) {
+                current->userApcDeliveryPending = true;
+                current->userApcDrainOnReturn = true;
+                result = NtStatus::UserApc;
             } else if (signaled_) {
                 if (!notification_) signaled_ = false;
                 result = NtStatus::Success;
@@ -52,17 +60,26 @@ public:
                         unlink(waiter);
                         break;
                     }
-                    if (waiter.satisfied || waiter.cancelled) {
-                        result = waiter.cancelled ? NtStatus::Unsuccessful : NtStatus::Success;
+                    if (waiter.cancelled || waiter.satisfied) {
+                        result = waiter.cancelled ? NtStatus::UserApc : NtStatus::Success;
                         break;
                     }
                     if (!waiter.apcInterrupted) __builtin_trap();
                     waiter.apcInterrupted = false;
+                    if (alertable && current->userApcList.hasEnvironment(current->apcStateIndex)) {
+                        current->userApcDeliveryPending = true;
+                        current->userApcDrainOnReturn = true;
+                        result = NtStatus::UserApc;
+                        break;
+                    }
                     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
                     ke::KiDeliverApc(0);
                     __asm__ __volatile__("cli" : : : "memory");
                     if (waiter.cancelled || current->eventWaitCancelled ||
-                        (current->terminationRequested && current->eventWaitUserMode && current->eventWaitCanTerminate)) break;
+                        (current->terminationRequested && current->eventWaitCanTerminate)) {
+                        result = NtStatus::UserApc;
+                        break;
+                    }
                     // A signal may arrive while the waiter is detached for
                     // APC delivery; consume it before re-entering the queue.
                     if (signaled_) {
@@ -75,6 +92,11 @@ public:
                 current->eventWaitObject = nullptr;
                 current->eventWaitBlock = nullptr;
                 current->eventWaitCancelled = false;
+            }
+            current->alertable = false;
+            if (result != NtStatus::UserApc || current->terminationRequested) {
+                current->userApcDeliveryPending = false;
+                current->userApcDrainOnReturn = false;
             }
         }
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");

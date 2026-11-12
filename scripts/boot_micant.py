@@ -203,7 +203,10 @@ def run_qemu(
     kernel = ROOT / "build" / "baremetal" / "ntoskrnl.exe"
     bootloader = ROOT / "build" / "esp" / "EFI" / "BOOT" / "BOOTX64.EFI"
 
-    with tempfile.TemporaryDirectory(prefix="qemu-", dir=ROOT / "build") as temp_root:
+    # Keep QMP sockets in the platform temporary directory. Some sandboxed
+    # filesystems allow repository edits but deny AF_UNIX sockets under the
+    # checkout, even when ordinary files are writable there.
+    with tempfile.TemporaryDirectory(prefix="micant-qemu-") as temp_root:
         temp = Path(temp_root)
         esp = temp / "esp"
         boot_dir = esp / "EFI" / "BOOT"

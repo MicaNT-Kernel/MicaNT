@@ -43,6 +43,8 @@ int exerciseTable(size_t initialActive) noexcept {
     if (!overlap) return 1;
     if (tree.insert(std::move(overlap)) || tree.size() != 3 ||
         !tree.find(0x4000) || tree.find(0x3000)) return 4;
+    // Failed insertion leaves the candidate with the caller.
+    overlap.reset();
 #if defined(MICANT_FREESTANDING)
     if (database.getActiveCount() != activeWithThree) return 8;
 #endif

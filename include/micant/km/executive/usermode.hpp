@@ -160,9 +160,12 @@ struct Teb64 {
     uint32_t currentLocale{0x0409}; // en-US
     uint32_t fpSoftwareStatusRegister{0};
     uint64_t reservedForDebuggerInstrumentation[16]{0};
-    uint8_t reservedToTlsSlots[0x1480 - 0x18C]{};
+    uint8_t reservedToDeallocationStack[0x1478 - 0x18C]{};
+    uint64_t deallocationStack{0};
     uint64_t tlsSlots[64]{};
-    uint8_t reservedToTlsExpansionSlots[0x100]{};
+    uint8_t reservedToGuaranteedStackBytes[0x1748 - 0x1680]{};
+    uint32_t guaranteedStackBytes{0};
+    uint8_t reservedToTlsExpansionSlots[0x1780 - 0x174C]{};
     uint64_t tlsExpansionSlots{0};
 };
 
@@ -170,7 +173,9 @@ static_assert(offsetof(Teb64, processEnvironmentBlock) == 0x60);
 static_assert(offsetof(Teb64, uniqueProcessId) == 0x40);
 static_assert(offsetof(Teb64, uniqueThreadId) == 0x48);
 static_assert(offsetof(Teb64, lastErrorValue) == 0x68);
+static_assert(offsetof(Teb64, deallocationStack) == 0x1478);
 static_assert(offsetof(Teb64, tlsSlots) == 0x1480);
+static_assert(offsetof(Teb64, guaranteedStackBytes) == 0x1748);
 static_assert(offsetof(Teb64, tlsExpansionSlots) == 0x1780);
 
 #pragma pack(pop)
@@ -1450,6 +1455,9 @@ struct UserLoadedImageInfo {
 // Borrows boot-owned files and storage; never installs synthetic import targets.
 class NativeUserImageSet64 {
 public:
+    using ApiSetHostResolver = NtStatus (*)(void* context, std::string_view contract,
+                                            std::string_view importingModule,
+                                            std::string_view& host) noexcept;
     struct Module {
         std::string_view name{};
         pe::PeImageView64 view{};
@@ -1461,6 +1469,11 @@ public:
         std::string_view symbol{};
         uint16_t ordinal{};
     };
+
+    void setApiSetHostResolver(void* context, ApiSetHostResolver resolver) noexcept {
+        apiSetContext_ = context;
+        apiSetResolver_ = resolver;
+    }
 
     // Adopt pages already cloned by Mm without remapping or rebinding them.
     // The caller owns the copied file and name for this set's lifetime.
@@ -1481,6 +1494,47 @@ public:
     }
 
     void finishClonedModules() noexcept { bound_ = true; }
+
+    NtStatus replaceClonedModule(size_t index, std::string_view name,
+                                 std::span<const uint8_t> file,
+                                 std::span<uint8_t> image, uint64_t base) noexcept {
+        if (!bound_ || index >= count_ || name.empty() || !base) return NtStatus::InvalidParameter;
+        Module replacement;
+        replacement.name = name;
+        auto status = replacement.view.inspect(file);
+        if (status != NtStatus::Success) return status;
+        if (replacement.view.headers().optionalHeader.sizeOfImage != image.size() ||
+            reinterpret_cast<uintptr_t>(image.data()) != base)
+            return NtStatus::InvalidImageFormat;
+        replacement.image = image;
+        replacement.base = base;
+        for (size_t other = 0; other < count_; ++other) {
+            if (other == index || !equal(name, modules_[other].name, true)) continue;
+            return NtStatus::ObjectNameCollision;
+        }
+        modules_[index] = replacement;
+        bound_ = false;
+        return NtStatus::Success;
+    }
+
+    NtStatus bindModule(size_t index) noexcept {
+        if (bound_ || index >= count_) return NtStatus::InvalidParameter;
+        failure_ = {};
+        auto& current = modules_[index];
+        for (unsigned pass = 0; pass < 2; ++pass) {
+            const auto status = current.view.bindImports(current.image,
+                [&](std::string_view library, std::string_view name,
+                    uint16_t ordinal, uint64_t& address) {
+                    const NtStatus result = resolve(library, name, ordinal, address,
+                                                    nullptr, current.name);
+                    if (result != NtStatus::Success) failure_ = {library, name, ordinal};
+                    return result;
+                }, pass == 1);
+            if (status != NtStatus::Success) return status;
+        }
+        bound_ = true;
+        return NtStatus::Success;
+    }
 
     NtStatus addModule(std::string_view name, std::span<const uint8_t> file,
                        std::span<uint8_t> storage, uint64_t base) noexcept {
@@ -1531,7 +1585,8 @@ public:
                 const NtStatus status = current.view.bindImports(current.image,
                     [&](std::string_view library, std::string_view name,
                         uint16_t ordinal, uint64_t& address) {
-                        const NtStatus result = resolve(library, name, ordinal, address);
+                        const NtStatus result = resolve(library, name, ordinal, address,
+                                                        nullptr, current.name);
                         if (result != NtStatus::Success) failure_ = {library, name, ordinal};
                         return result;
                     }, pass == 1);
@@ -1543,8 +1598,11 @@ public:
     }
 
     NtStatus resolve(std::string_view library, std::string_view name,
-                     uint16_t ordinal, uint64_t& address) const noexcept {
+                     uint16_t ordinal, uint64_t& address,
+                     std::string_view* missingForwarderLibrary = nullptr,
+                     std::string_view importingModule = {}) const noexcept {
         address = 0;
+        if (missingForwarderLibrary) *missingForwarderLibrary = {};
         struct Visited {
             size_t module{};
             std::string_view symbol{};
@@ -1552,9 +1610,26 @@ public:
         };
         std::array<Visited, 64> visited{};
         size_t depth{};
+        size_t apiSetDepth{};
+        bool followedForwarder = false;
         for (;;) {
+            if (isApiSetName(library)) {
+                if (!apiSetResolver_ || apiSetDepth == 16) return NtStatus::NotSupported;
+                std::string_view host;
+                const auto apiSetStatus = apiSetResolver_(apiSetContext_, library,
+                                                          importingModule, host);
+                if (apiSetStatus != NtStatus::Success) return apiSetStatus;
+                if (host.empty() || equal(host, library, true)) return NtStatus::NotSupported;
+                library = host;
+                ++apiSetDepth;
+                continue;
+            }
             const size_t index = findModule(library);
-            if (index == count_) return NtStatus::NoSuchFile;
+            if (index == count_) {
+                if (followedForwarder && missingForwarderLibrary)
+                    *missingForwarderLibrary = library;
+                return NtStatus::NoSuchFile;
+            }
             for (size_t previous = 0; previous < depth; ++previous) {
                 const auto& key = visited[previous];
                 if (key.module == index && equal(key.symbol, name) && key.ordinal == ordinal) {
@@ -1582,6 +1657,11 @@ public:
             }
             library = {forwarder.data(), separator};
             name = {forwarder.data() + separator + 1, forwarder.size() - separator - 1};
+            // API-set aliases are selected for the module containing the
+            // forwarder, not the original importer's module. Keep that
+            // context while following an export chain.
+            importingModule = current.name;
+            followedForwarder = true;
             ordinal = 0;
             if (name[0] == '#') {
                 uint32_t value{};
@@ -1600,6 +1680,33 @@ public:
     }
 
     [[nodiscard]] size_t size() const noexcept { return count_; }
+    [[nodiscard]] bool containsModule(std::string_view name) const noexcept {
+        return findModule(name) != count_;
+    }
+    template <typename Visitor>
+    NtStatus forEachMissingForwarderLibrary(Visitor&& visitor,
+                                            size_t firstModule = 0,
+                                            size_t lastModule = SIZE_MAX) const noexcept {
+        if (firstModule > count_ || lastModule < firstModule) return NtStatus::InvalidParameter;
+        const size_t endModule = lastModule < count_ ? lastModule : count_;
+        for (size_t moduleIndex = firstModule; moduleIndex < endModule; ++moduleIndex) {
+            const auto& current = modules_[moduleIndex];
+            const auto status = current.view.forEachImportSymbol(current.image,
+                [&](std::string_view library, std::string_view name,
+                    uint16_t ordinal) noexcept -> NtStatus {
+                    uint64_t address{};
+                    std::string_view missingLibrary;
+                    const auto resolveStatus = resolve(library, name, ordinal, address,
+                                                       &missingLibrary, current.name);
+                    if (resolveStatus == NtStatus::Success) return NtStatus::Success;
+                    if (resolveStatus != NtStatus::NoSuchFile || missingLibrary.empty())
+                        return resolveStatus;
+                    return visitor(missingLibrary, current.name);
+                });
+            if (status != NtStatus::Success) return status;
+        }
+        return NtStatus::Success;
+    }
     [[nodiscard]] const Module* module(size_t index) const noexcept {
         return index < count_ ? &modules_[index] : nullptr;
     }
@@ -1607,6 +1714,13 @@ public:
     [[nodiscard]] const BindingFailure& bindingFailure() const noexcept { return failure_; }
 
 private:
+    static bool isApiSetName(std::string_view name) noexcept {
+        if (name.size() < 4) return false;
+        const auto starts = [&](std::string_view prefix) noexcept {
+            return equal(name.substr(0, prefix.size()), prefix, true);
+        };
+        return starts("api-") || starts("ext-");
+    }
     static char lower(char character) noexcept {
         return character >= 'A' && character <= 'Z'
             ? static_cast<char>(character + ('a' - 'A')) : character;
@@ -1621,11 +1735,6 @@ private:
         return true;
     }
     [[nodiscard]] size_t findModule(std::string_view name) const noexcept {
-        constexpr std::string_view crt = "api-ms-win-crt-";
-        if (name.size() > crt.size() &&
-            equal({name.data(), crt.size()}, crt, true)) {
-            name = {"ucrtbase.dll", sizeof("ucrtbase.dll") - 1};
-        }
         for (size_t index = 0; index < count_; ++index) {
             const auto candidate = modules_[index].name;
             if (equal(name, candidate, true) ||
@@ -1641,6 +1750,8 @@ private:
     size_t count_{};
     bool bound_{};
     BindingFailure failure_{};
+    void* apiSetContext_{};
+    ApiSetHostResolver apiSetResolver_{};
 };
 
 class UserImageLoader64 {
@@ -1670,18 +1781,6 @@ private:
             a++; b++;
         }
         return (*a == *b);
-    }
-
-    static bool startsWithCaseInsensitive(const char* value, const char* prefix) noexcept {
-        if (!value || !prefix) return false;
-        while (*prefix) {
-            char a = *value++;
-            char b = *prefix++;
-            if (a >= 'A' && a <= 'Z') a = static_cast<char>(a + ('a' - 'A'));
-            if (b >= 'A' && b <= 'Z') b = static_cast<char>(b + ('a' - 'A'));
-            if (a != b) return false;
-        }
-        return true;
     }
 
     static bool hasTerminator(const uint8_t* image, size_t imageSize, uint32_t rva) noexcept {
@@ -1755,9 +1854,7 @@ public:
         for (size_t d = 0; d < importDir.size / sizeof(pe::ImageImportDescriptor) && desc[d].name; ++d) {
             if (desc[d].name >= imageSize || !hasTerminator(image, imageSize, desc[d].name)) return false;
             const char* importedName = reinterpret_cast<const char*>(image + desc[d].name);
-            if (strcaseeq(importedName, moduleName) ||
-                (strcaseeq(moduleName, "ucrtbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-crt-")) ||
-                (strcaseeq(moduleName, "kernelbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-core-"))) return true;
+            if (strcaseeq(importedName, moduleName)) return true;
         }
         return false;
     }
@@ -1780,9 +1877,7 @@ public:
             auto& entry=desc[d];
             if (entry.name>=imageSize || !hasTerminator(image,imageSize,entry.name)) return false;
             const char* importedName = reinterpret_cast<const char*>(image + entry.name);
-            const bool matchesModule = strcaseeq(importedName, moduleName) ||
-                (strcaseeq(moduleName, "ucrtbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-crt-")) ||
-                (strcaseeq(moduleName, "kernelbase.dll") && startsWithCaseInsensitive(importedName, "api-ms-win-core-"));
+            const bool matchesModule = strcaseeq(importedName, moduleName);
             if (!matchesModule) continue;
             if (!entry.originalFirstThunk) return false;
             const uint32_t thunkRva=entry.originalFirstThunk;

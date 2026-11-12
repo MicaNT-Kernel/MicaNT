@@ -51,6 +51,7 @@ enum class NtStatus : uint32_t {
     InvalidCid                       = 0xC000000B,
     InvalidParameter                 = 0xC000000D,
     InvalidParameter4                = 0xC00000F2,
+    StackOverflow                    = 0xC00000FD,
     NoSuchDevice                     = 0xC000000E,
     NoSuchFile                       = 0xC000000F,
     InvalidDeviceRequest             = 0xC0000010,
@@ -60,6 +61,7 @@ enum class NtStatus : uint32_t {
     Conflict                         = 0xC0000018,
     NotMappedView                    = 0xC0000019,
     InvalidViewSize                  = 0xC000001F,
+    InvalidFileForSection            = 0xC0000020,
     InsufficientResources            = 0xC000009A,
     IllegalInstruction               = 0xC000001D,
     AccessDenied                     = 0xC0000022,
@@ -272,6 +274,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::Breakpoint: return "STATUS_BREAKPOINT";
         case NtStatus::SingleStep: return "STATUS_SINGLE_STEP";
         case NtStatus::DatatypeMisalignment: return "STATUS_DATATYPE_MISALIGNMENT";
+        case NtStatus::StackOverflow: return "STATUS_STACK_OVERFLOW";
         case NtStatus::BufferOverflow: return "STATUS_BUFFER_OVERFLOW";
         case NtStatus::NoMoreFiles: return "STATUS_NO_MORE_FILES";
         case NtStatus::Unsuccessful: return "STATUS_UNSUCCESSFUL";
@@ -294,6 +297,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::PortConnectionRefused: return "STATUS_PORT_CONNECTION_REFUSED";
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
         case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
+        case NtStatus::InvalidFileForSection: return "STATUS_INVALID_FILE_FOR_SECTION";
         case NtStatus::ProcessIsTerminating: return "STATUS_PROCESS_IS_TERMINATING";
         case NtStatus::ProcessAborted: return "STATUS_PROCESS_ABORTED";
         case NtStatus::DeviceNotReady: return "STATUS_DEVICE_NOT_READY";

@@ -405,6 +405,7 @@ inline constexpr DWORD PAGE_EXECUTE_READWRITE = 0x40;
 inline constexpr DWORD INFINITE     = 0xFFFFFFFF;
 inline constexpr DWORD WAIT_OBJECT_0= 0x00000000;
 inline constexpr DWORD WAIT_TIMEOUT = 0x00000102;
+inline constexpr DWORD WAIT_IO_COMPLETION = 0x000000C0;
 inline constexpr DWORD WAIT_FAILED  = 0xFFFFFFFF;
 
 // Move Method Constants for SetFilePointer
@@ -7483,16 +7484,49 @@ inline BOOL FindCloseChangeNotification(HANDLE /*hChangeHandle*/) noexcept {
     return TRUE;
 }
 
-inline DWORD SleepEx(DWORD dwMilliseconds, BOOL /*bAlertable*/) noexcept {
-    Sleep(dwMilliseconds);
-    return 0;
+inline DWORD SleepEx(DWORD dwMilliseconds, BOOL bAlertable) noexcept {
+    if (!bAlertable) {
+        Sleep(dwMilliseconds);
+        return 0;
+    }
+    if (dwMilliseconds == 0) {
+        LargeInteger zero{};
+        const auto status = ntdll::NtWaitForSingleObject(
+            static_cast<Handle>(-2), true, &zero);
+        if (status == NtStatus::UserApc) return WAIT_IO_COMPLETION;
+        if (status == NtStatus::Timeout || status == NtStatus::Success) return 0;
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return WAIT_FAILED;
+    }
+    // The native timer wait is not implemented yet. Do not report a completed
+    // alertable sleep when the kernel cannot honor its timeout/APC contract.
+    SetLastError(120); // ERROR_CALL_NOT_IMPLEMENTED
+    return WAIT_FAILED;
 }
 
-inline DWORD WaitForSingleObjectEx(HANDLE hHandle, DWORD dwMilliseconds, BOOL /*bAlertable*/) noexcept {
-    return WaitForSingleObject(hHandle, dwMilliseconds);
+inline DWORD WaitForSingleObjectEx(HANDLE hHandle, DWORD dwMilliseconds, BOOL bAlertable) noexcept {
+    if (!hHandle) return WAIT_FAILED;
+    LargeInteger timeout{};
+    LargeInteger* pTimeout = nullptr;
+    if (dwMilliseconds != INFINITE) {
+        timeout.quadPart = -static_cast<int64_t>(dwMilliseconds) * 10000;
+        pTimeout = &timeout;
+    }
+    const auto status = ntdll::NtWaitForSingleObject(
+        reinterpret_cast<Handle>(hHandle), bAlertable != FALSE, pTimeout);
+    if (status == NtStatus::Success) return WAIT_OBJECT_0;
+    if (status == NtStatus::Timeout) return WAIT_TIMEOUT;
+    if (status == NtStatus::UserApc) return WAIT_IO_COMPLETION;
+    SetLastError(ntdll::RtlNtStatusToDosError(status));
+    return WAIT_FAILED;
 }
 
-inline DWORD QueueUserAPC(PAPCFUNC /*pfnAPC*/, HANDLE /*hThread*/, ULONG_PTR /*dwData*/) noexcept { return 1; }
+inline DWORD QueueUserAPC(PAPCFUNC pfnAPC, HANDLE hThread, ULONG_PTR dwData) noexcept {
+    if (!pfnAPC || !hThread) return 0;
+    const auto status = ntdll::NtQueueApcThread(hThread,
+        reinterpret_cast<void*>(pfnAPC), reinterpret_cast<void*>(dwData), nullptr, nullptr);
+    return NT_SUCCESS(status) ? 1u : 0u;
+}
 inline BOOL CancelIo(HANDLE /*hFile*/) noexcept { return TRUE; }
 
 inline DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation) noexcept {
@@ -12407,10 +12441,6 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "SetProcessInformation", reinterpret_cast<void*>(SetProcessInformation));
     ldr.registerExport("kernel32.dll", "SetProcessShutdownParameters", reinterpret_cast<void*>(SetProcessShutdownParameters));
     ldr.registerExport("kernel32.dll", "UnmapViewOfFileEx", reinterpret_cast<void*>(UnmapViewOfFileEx));
-    ldr.registerExport("kernel32.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
-    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
-    ldr.registerExport("kernel32.dll", "RemoveVectoredContinueHandler", reinterpret_cast<void*>(RemoveVectoredContinueHandler));
-    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredContinueHandler", reinterpret_cast<void*>(RemoveVectoredContinueHandler));
     ldr.registerExport("kernel32.dll", "GetWindowsDirectoryW", reinterpret_cast<void*>(GetWindowsDirectoryW));
     ldr.registerExport("kernel32.dll", "GetDriveTypeW", reinterpret_cast<void*>(GetDriveTypeW));
     ldr.registerExport("kernel32.dll", "GetVolumeInformationW", reinterpret_cast<void*>(GetVolumeInformationW));
@@ -12479,10 +12509,6 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "OutputDebugStringA", reinterpret_cast<void*>(OutputDebugStringA));
     ldr.registerExport("kernel32.dll", "SetThreadExecutionState", reinterpret_cast<void*>(SetThreadExecutionState));
     ldr.registerExport("kernel32.dll", "DebugBreak", reinterpret_cast<void*>(DebugBreak));
-    ldr.registerExport("kernel32.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
-    ldr.registerExport("kernel32.dll", "AddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
-    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
-    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "AddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-0.dll", "SetUnhandledExceptionFilter", reinterpret_cast<void*>(SetUnhandledExceptionFilter));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-0.dll", "UnhandledExceptionFilter", reinterpret_cast<void*>(UnhandledExceptionFilter));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "SetUnhandledExceptionFilter", reinterpret_cast<void*>(SetUnhandledExceptionFilter));
@@ -13093,10 +13119,6 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQueryDirectoryFile", reinterpret_cast<void*>(ntdll::NtQueryDirectoryFile));
     ldr.registerExport("ntdll.dll", "NtQueryPerformanceCounter", reinterpret_cast<void*>(ntdll::NtQueryPerformanceCounter));
     ldr.registerExport("ntdll.dll", "NtYieldExecution", reinterpret_cast<void*>(ntdll::NtYieldExecution));
-    ldr.registerExport("ntdll.dll", "RtlAddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
-    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
-    ldr.registerExport("ntdll.dll", "RtlAddVectoredContinueHandler", reinterpret_cast<void*>(AddVectoredContinueHandler));
-    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredContinueHandler", reinterpret_cast<void*>(RemoveVectoredContinueHandler));
     ldr.registerExport("ntdll.dll", "NtQueryInformationProcess", reinterpret_cast<void*>(ntdll::NtQueryInformationProcess));
     ldr.registerExport("ntdll.dll", "NtCreateNamedPipeFile", reinterpret_cast<void*>(ntdll::NtCreateNamedPipeFile));
     ldr.registerExport("ntdll.dll", "NtCreateMailslotFile", reinterpret_cast<void*>(ntdll::NtCreateMailslotFile));

@@ -7,6 +7,36 @@ static_assert(sizeof(void*) == 8);
 
 extern "C" {
 
+using VectoredExceptionHandler = int32_t (__stdcall *)(void*);
+__declspec(dllimport) void* __stdcall RtlAddVectoredExceptionHandler(
+    uint32_t first, VectoredExceptionHandler handler) noexcept;
+__declspec(dllimport) unsigned long __stdcall RtlRemoveVectoredExceptionHandler(
+    void* cookie) noexcept;
+__declspec(dllimport) void* __stdcall RtlAddVectoredContinueHandler(
+    uint32_t first, VectoredExceptionHandler handler) noexcept;
+__declspec(dllimport) unsigned long __stdcall RtlRemoveVectoredContinueHandler(
+    void* cookie) noexcept;
+
+__declspec(dllexport) void* __stdcall AddVectoredExceptionHandler(
+    uint32_t first, VectoredExceptionHandler handler) noexcept {
+    return RtlAddVectoredExceptionHandler(first, handler);
+}
+
+__declspec(dllexport) unsigned long __stdcall RemoveVectoredExceptionHandler(
+    void* cookie) noexcept {
+    return RtlRemoveVectoredExceptionHandler(cookie);
+}
+
+__declspec(dllexport) void* __stdcall AddVectoredContinueHandler(
+    uint32_t first, VectoredExceptionHandler handler) noexcept {
+    return RtlAddVectoredContinueHandler(first, handler);
+}
+
+__declspec(dllexport) unsigned long __stdcall RemoveVectoredContinueHandler(
+    void* cookie) noexcept {
+    return RtlRemoveVectoredContinueHandler(cookie);
+}
+
 __declspec(dllexport) uint32_t __stdcall GetCurrentProcessId() noexcept {
     uint32_t processId = 0;
     __asm__ __volatile__("movl %%gs:0x40, %0" : "=r"(processId));

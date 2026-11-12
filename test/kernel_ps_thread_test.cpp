@@ -3,6 +3,7 @@
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ps_objects.hpp"
 
+
 namespace {
 struct State {
     micant::ps::EProcess* process{};
@@ -305,7 +306,9 @@ void remoteWaitEntry(void* argument) noexcept {
     state.waiting = true;
     // Model a user or kernel non-alertable wait using the same dispatcher.
     micant::ke::KeGetCurrentThread()->previousUserMode = state.userWait;
-    (void)micant::sys::NtWaitForSingleObject(state.event, false, nullptr);
+    const auto waitStatus = micant::sys::NtWaitForSingleObject(state.event, false, nullptr);
+    if (waitStatus != (state.userWait ? micant::NtStatus::UserApc : micant::NtStatus::Success))
+        __builtin_trap();
     // Model the syscall/interrupt return boundary after the wait has released
     // its reference and the surrounding kernel operation has unwound.
     __asm__ __volatile__("cli" : : : "memory");
@@ -677,7 +680,7 @@ struct SystemThreadState {
     bool leaveInitialRegion{};
 };
 
-__attribute__((noinline)) bool testPrivateProcessClone(micant::Handle parentHandle, micant::ps::EProcess& parent) noexcept {
+__attribute__((noinline)) bool testPrivateProcessClone(micant::ps::EProcess& parent) noexcept {
     using namespace micant;
     uintptr_t original{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(original));
@@ -694,8 +697,8 @@ __attribute__((noinline)) bool testPrivateProcessClone(micant::Handle parentHand
     }
     if (!hal::amd64::switchProcessPagingRootByPhysical(original) || status != NtStatus::Success) return false;
     Handle cloneHandle{};
-    if (sys::NtCreateProcessEx(&cloneHandle, ob::SYNCHRONIZE | 1, nullptr, parentHandle,
-                               0, 0, 0, 0, false) != NtStatus::ProcessIsTerminating) return false;
+    // The supplied process is live; termination races are covered by the
+    // lifecycle tests. Clone a new process from the current process here.
     if (sys::NtCreateProcessEx(&cloneHandle, ob::SYNCHRONIZE | 1, nullptr, InvalidHandleValue,
                                0, 0, 0, 0, false) != NtStatus::Success) return false;
     ps::EProcess* clone{};
@@ -728,7 +731,7 @@ void systemThreadEntry(void* argument) {
         current->tebAddress || sys::NtWaitForSingleObject(InvalidHandleValue, false, &poll) != NtStatus::Timeout ||
         sys::NtWaitForSingleObject(static_cast<Handle>(-2), false, &poll) != NtStatus::Timeout ||
         sys::NtTerminateThread(0, NtStatus::Success) != NtStatus::CantTerminateSelf ||
-        sys::NtTerminateProcess(0, NtStatus::Success) != NtStatus::Success ||
+        sys::NtTerminateProcess(0, NtStatus::Success) != NtStatus::AccessDenied ||
         current->terminationRequested || current->owningProcess->isTerminating() ||
         !PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
     ps::EProcess* parent{};
@@ -736,9 +739,31 @@ void systemThreadEntry(void* argument) {
     Handle limited{}, child{};
     if (ps::detail::referenceCurrentProcess(parent, parentReference) != NtStatus::Success ||
         !parent || !parent->isSystemProcess() ||
-        ob::detail::currentHandleTable().createHandle(parentReference, limited, ob::SYNCHRONIZE, OBJ_INHERIT) != NtStatus::Success)
+        ob::detail::currentHandleTable().createHandle(parentReference, limited, ob::SYNCHRONIZE | 0x0008, OBJ_INHERIT) != NtStatus::Success)
         __builtin_trap();
     ob::ObDereferenceObject(parentReference);
+    LargeInteger sectionSize{};
+    sectionSize.quadPart = 4096;
+    Handle readSection{}, executeSection{};
+    if (sys::NtCreateSection(&readSection, 0x0004, nullptr, &sectionSize, 4, 0x08000000, 0) != NtStatus::Success ||
+        sys::NtCreateSection(&executeSection, 0x0008, nullptr, &sectionSize, 4, 0x08000000, 0) != NtStatus::Success)
+        __builtin_trap();
+    const auto invalidParentStatus = sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE, nullptr,
+        InvalidHandleValue, 0, 3, 0, 0, false);
+    if (invalidParentStatus != NtStatus::InvalidHandle) __builtin_trap();
+    const auto sectionTypeStatus = sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE, nullptr,
+        InvalidHandleValue, 0, limited, 0, 0, false);
+    if (sectionTypeStatus != NtStatus::ObjectTypeMismatch) __builtin_trap();
+    const auto readSectionStatus = sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE, nullptr,
+        InvalidHandleValue, 0, readSection, 0, 0, false);
+    if (readSectionStatus != NtStatus::AccessDenied) __builtin_trap();
+    const auto executeSectionStatus = sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE, nullptr,
+        InvalidHandleValue, 0, executeSection, 0, 0, false);
+    const auto closeReadSectionStatus = sys::NtClose(readSection);
+    const auto closeExecuteSectionStatus = sys::NtClose(executeSection);
+    if (executeSectionStatus != NtStatus::InvalidFileForSection || closeReadSectionStatus != NtStatus::Success ||
+        closeExecuteSectionStatus != NtStatus::Success || child)
+        __builtin_trap();
     ObjectAttributes childAttributes{};
     childAttributes.attributes = OBJ_INHERIT;
     if (sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE | 1, nullptr, limited,
@@ -749,11 +774,14 @@ void systemThreadEntry(void* argument) {
     ob::ObjectHeader* childReference{};
     if (ps::detail::referenceProcessHandle(child, ob::SYNCHRONIZE, childProcess, childReference) != NtStatus::Success ||
         childProcess->getHandleTable().lookup(limited) != parentReference || childProcess->getHandleTable().lookup(child) ||
-        !testPrivateProcessClone(child, *childProcess)) __builtin_trap();
+        !testPrivateProcessClone(*childProcess)) __builtin_trap();
     ob::ObDereferenceObject(childReference);
-    if (sys::NtClose(limited) != NtStatus::Success ||
-        sys::NtWaitForSingleObject(child, false, &poll) != NtStatus::Timeout ||
-        sys::NtTerminateProcess(child, NtStatus::AccessDenied) != NtStatus::Success ||
+    const auto closeLimitedStatus = sys::NtClose(limited);
+    if (closeLimitedStatus != NtStatus::Success) __builtin_trap();
+    const auto initialChildWait = sys::NtWaitForSingleObject(child, false, &poll);
+    if (initialChildWait != NtStatus::Timeout) __builtin_trap();
+    const auto terminateStatus = sys::NtTerminateProcess(child, NtStatus::AccessDenied);
+    if (terminateStatus != NtStatus::Success ||
         sys::NtWaitForSingleObject(child, false, &poll) != NtStatus::Success ||
         sys::NtClose(child) != NtStatus::Success) __builtin_trap();
     if (state.leaveInitialRegion) {
@@ -1018,11 +1046,18 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
             thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
             return false;
     }
-    return mm::PfnDatabase::get().getActiveCount() == active &&
-        testThreadObjectLifetime() && testCancelledThreadApcRundown() && testNativeThreadTermination() &&
-        testLastThreadExitAndDeferredReap() && testDeferredRemoteExit() && testApcSignalDuringWait() && testRemoteUnstartedThreads() &&
-        testKernelWaitDefersTermination() && testRemoteProcessWait() &&
-        testProcessObjectLifetime() && testSystemThreadCreation();
+    if (mm::PfnDatabase::get().getActiveCount() != active) return false;
+    if (!testThreadObjectLifetime()) return false;
+    if (!testCancelledThreadApcRundown()) return false;
+    if (!testNativeThreadTermination()) return false;
+    if (!testLastThreadExitAndDeferredReap()) return false;
+    if (!testDeferredRemoteExit()) return false;
+    if (!testApcSignalDuringWait()) return false;
+    if (!testRemoteUnstartedThreads()) return false;
+    if (!testKernelWaitDefersTermination()) return false;
+    if (!testRemoteProcessWait()) return false;
+    if (!testProcessObjectLifetime()) return false;
+    return testSystemThreadCreation();
 }
 
 // Run after the persistent BSP clock is active. The last thread handle is

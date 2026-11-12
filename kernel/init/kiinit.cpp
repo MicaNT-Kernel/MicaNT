@@ -10,6 +10,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/executive/ps_objects.hpp"
 #include "micant/km/executive/section.hpp"
+#include "micant/km/executive/io_file.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/win32k/freestanding.hpp"
@@ -20,6 +21,7 @@
 #include "tools/explorer_shell/desktop.hpp"
 #include "tools/explorer_shell/taskbar.hpp"
 #include <cstring>
+#include <memory>
 #include <span>
 
 namespace micant::sys {
@@ -203,14 +205,14 @@ void firstContextEntry() noexcept {
         if (!g_firstContextThread.owningProcess ||
             micant::sys::NtAllocateVirtualMemory(micant::InvalidHandleValue, &privateAddress, 0, &privateSize,
                 micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
-            micant::sys::NtMapViewOfSection(g_firstContextSection, micant::InvalidHandleValue, &sharedAddress,
+            micant::sys::NtMapViewOfSectionFromKernel(g_firstContextSection, micant::InvalidHandleValue, &sharedAddress,
                 0, 0, nullptr, &viewSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success)
             stopWithError("[MicaNT Ps] First process mapping failed\r\n");
         *reinterpret_cast<volatile uint64_t*>(privateAddress) = 0x11111111;
         *reinterpret_cast<volatile uint64_t*>(sharedAddress) = 0x22222222;
         uintptr_t conflicting = sharedAddress;
         size_t conflictingSize = viewSize;
-        if (micant::sys::NtMapViewOfSection(g_firstContextSection, micant::InvalidHandleValue, &conflicting,
+        if (micant::sys::NtMapViewOfSectionFromKernel(g_firstContextSection, micant::InvalidHandleValue, &conflicting,
                 0, 0, nullptr, &conflictingSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Conflict ||
             conflicting != sharedAddress || *reinterpret_cast<volatile uint64_t*>(sharedAddress) != 0x22222222)
             stopWithError("[MicaNT Ps] Failed view rollback corrupted process state\r\n");
@@ -255,14 +257,14 @@ void secondContextEntry() noexcept {
         size_t privateSize = viewSize;
         uintptr_t forbiddenAddress{};
         size_t forbiddenSize = viewSize;
-        if (micant::sys::NtMapViewOfSection(g_firstOnlySection, micant::InvalidHandleValue, &forbiddenAddress,
+        if (micant::sys::NtMapViewOfSectionFromKernel(g_firstOnlySection, micant::InvalidHandleValue, &forbiddenAddress,
                 0, 0, nullptr, &forbiddenSize, 2, 0, micant::mm::PAGE_READONLY) != micant::NtStatus::InvalidHandle ||
             forbiddenAddress != 0)
             stopWithError("[MicaNT Ps] Handle table isolation failed\r\n");
         if (!g_secondContextThread.owningProcess ||
             micant::sys::NtAllocateVirtualMemory(micant::InvalidHandleValue, &privateAddress, 0, &privateSize,
                 micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
-            micant::sys::NtMapViewOfSection(g_secondContextSection, micant::InvalidHandleValue, &sharedAddress,
+            micant::sys::NtMapViewOfSectionFromKernel(g_secondContextSection, micant::InvalidHandleValue, &sharedAddress,
                 0, 0, nullptr, &viewSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
             *reinterpret_cast<volatile uint64_t*>(privateAddress) != 0 ||
             *reinterpret_cast<volatile uint64_t*>(sharedAddress) != 0x22222222)
@@ -372,7 +374,7 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
             stopWithError("[MicaNT Ps] Context ownership verification failed\r\n");
         micant::LargeInteger maximum{};
         maximum.quadPart = micant::mm::PageSize4KB;
-        if (micant::sys::NtCreateSection(&g_contextSection,
+        if (micant::sys::NtCreateSectionFromKernel(&g_contextSection,
                 micant::section::SECTION_MAP_READ | micant::section::SECTION_MAP_WRITE,
                 nullptr, &maximum, micant::mm::PAGE_READWRITE, micant::section::SEC_COMMIT, 0) != micant::NtStatus::Success)
             stopWithError("[MicaNT Ps] Shared section creation failed\r\n");
@@ -776,8 +778,150 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     using namespace micant;
     const auto number = args.number, first = args.first, second = args.second;
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
+    if (number == sys::SSN_NtContinue) {
+        const auto result = sys::NtContinue(reinterpret_cast<const void*>(first),
+            static_cast<uint8_t>(second) != 0, args.trapFrame, args.floatingState,
+            args.floatingStateSize, args.xsaveMask);
+        return result == NtStatus::Success
+            ? hal::amd64::BootstrapNtContinueApplied : status(result);
+    }
     if (number == sys::SSN_NtClose)
         return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtReadFile) {
+        uint64_t extra[5]{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        auto* ioStatusAddress = reinterpret_cast<IoStatusBlock*>(extra[0]);
+        auto* userBuffer = reinterpret_cast<void*>(extra[1]);
+        if (extra[2] > UINT32_MAX) return status(NtStatus::InvalidParameter);
+        const size_t length = static_cast<uint32_t>(extra[2]);
+        const auto* byteOffsetAddress = reinterpret_cast<const LargeInteger*>(extra[3]);
+        const auto* keyAddress = reinterpret_cast<const uint32_t*>(extra[4]);
+        if (!ioStatusAddress || (length && !userBuffer) || args.second || args.third || args.fourth ||
+            keyAddress)
+            return status(keyAddress || args.second || args.third || args.fourth
+                ? NtStatus::NotSupported : NtStatus::InvalidParameter);
+        if (ex::ProbeForWrite(ioStatusAddress, sizeof(IoStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success ||
+            ex::ProbeForWrite(userBuffer, length, 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        LargeInteger byteOffset{};
+        if (byteOffsetAddress && ex::ExSafeCopyFromUser(&byteOffset, byteOffsetAddress,
+                sizeof(byteOffset)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        constexpr int64_t fileUseCurrentPosition = -2;
+        const bool useCurrentOffset = !byteOffsetAddress || byteOffset.quadPart == fileUseCurrentPosition;
+        if (!useCurrentOffset && byteOffset.quadPart < 0) return status(NtStatus::InvalidParameter);
+
+        std::unique_ptr<uint8_t[]> staging;
+        if (length) {
+            staging.reset(new (std::nothrow_t{}) uint8_t[length]);
+            if (!staging) return status(NtStatus::NoMemory);
+        }
+        size_t bytesRead{};
+        const auto readStatus = io::IoReadFileHandle(static_cast<Handle>(first), useCurrentOffset,
+            useCurrentOffset ? 0 : static_cast<uint64_t>(byteOffset.quadPart),
+            staging.get(), length, &bytesRead);
+        IoStatusBlock ioStatus{readStatus, bytesRead};
+        NtStatus copyStatus = NtStatus::Success;
+        if (bytesRead)
+            copyStatus = ex::ExSafeCopyToUser(userBuffer, staging.get(), bytesRead);
+        if (copyStatus == NtStatus::Success)
+            copyStatus = ex::ExSafeCopyToUser(ioStatusAddress, &ioStatus, sizeof(ioStatus));
+        return status(copyStatus == NtStatus::Success ? readStatus : NtStatus::AccessViolation);
+    }
+    if (number == sys::SSN_NtCreateFile) {
+        uint64_t extra[7]{};
+        ObjectAttributes attributes{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third),
+                                   sizeof(attributes)) != NtStatus::Success ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(args.fourth), sizeof(IoStatusBlock),
+                              alignof(IoStatusBlock)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        constexpr uint32_t fileOpen = 1;
+        constexpr uint32_t allowedAttributes = OBJ_INHERIT | OBJ_CASE_INSENSITIVE;
+        constexpr uint32_t allowedShareAccess = 0x7;
+        constexpr uint32_t allowedOpenOptions = 0x20 | 0x40; // synchronous nonalert, non-directory
+        if (attributes.length != sizeof(ObjectAttributes) || !attributes.objectName ||
+            attributes.rootDirectory || (attributes.attributes & ~allowedAttributes) ||
+            attributes.securityDescriptor || attributes.securityQualityOfService ||
+            extra[0] > allowedShareAccess || !(extra[0] & 1) ||
+            (extra[1] & ~allowedOpenOptions) ||
+            extra[2] || extra[3] != fileOpen || extra[4] || extra[5] || extra[6])
+            return status(NtStatus::NotSupported);
+        UnicodeString name{};
+        if (ex::ExSafeCopyFromUser(&name, attributes.objectName, sizeof(name)) != NtStatus::Success ||
+            !name.length || (name.length & 1) || name.length > name.maximumLength || !name.buffer ||
+            name.length > 2048 * sizeof(char16_t)) return status(NtStatus::InvalidParameter);
+        char16_t path[2048]{};
+        if (ex::ExSafeCopyFromUser(path, name.buffer, name.length) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        Handle handle{};
+        IoStatusBlock ioStatus{};
+        ioStatus.status = io::IoOpenBackendFile(&handle, static_cast<uint32_t>(second),
+                                                {path, name.length / sizeof(char16_t)});
+        ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
+        if (ioStatus.status != NtStatus::Success) {
+            (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+            return status(ioStatus.status);
+        }
+        auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+        if (copy == NtStatus::Success)
+            copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
+            __builtin_trap();
+        return status(copy);
+    }
+    if (number == sys::SSN_NtOpenFile) {
+        uint64_t extra[2]{};
+        ObjectAttributes attributes{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third),
+                                   sizeof(attributes)) != NtStatus::Success ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), alignof(Handle)) != NtStatus::Success ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(args.fourth), sizeof(IoStatusBlock),
+                              alignof(IoStatusBlock)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        constexpr uint32_t allowedAttributes = OBJ_INHERIT | OBJ_CASE_INSENSITIVE;
+        constexpr uint32_t allowedShareAccess = 0x7;
+        constexpr uint32_t allowedOpenOptions = 0x20 | 0x40;
+        if (attributes.length != sizeof(ObjectAttributes) || !attributes.objectName ||
+            attributes.rootDirectory || (attributes.attributes & ~allowedAttributes) ||
+            attributes.securityDescriptor || attributes.securityQualityOfService ||
+            extra[0] > allowedShareAccess || !(extra[0] & 1) ||
+            (extra[1] & ~allowedOpenOptions))
+            return status(NtStatus::NotSupported);
+        UnicodeString name{};
+        if (ex::ExSafeCopyFromUser(&name, attributes.objectName, sizeof(name)) != NtStatus::Success ||
+            !name.length || (name.length & 1) || name.length > name.maximumLength || !name.buffer ||
+            name.length > 2048 * sizeof(char16_t))
+            return status(NtStatus::InvalidParameter);
+        char16_t path[2048]{};
+        if (ex::ExSafeCopyFromUser(path, name.buffer, name.length) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        Handle handle{};
+        IoStatusBlock ioStatus{};
+        ioStatus.status = io::IoOpenBackendFile(&handle, static_cast<uint32_t>(second),
+                                                {path, name.length / sizeof(char16_t)});
+        ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
+        if (ioStatus.status != NtStatus::Success) {
+            (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+            return status(ioStatus.status);
+        }
+        auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+        if (copy == NtStatus::Success)
+            copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
+            __builtin_trap();
+        return status(copy);
+    }
     if (number == sys::SSN_NtCreateThreadEx) {
         uint64_t extra[7]{};
         ObjectAttributes attributes{};
@@ -868,6 +1012,16 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         if (result != NtStatus::Success || !second) return status(result);
         return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &previous, sizeof(previous)));
     }
+    if (number == sys::SSN_NtQueueApcThread) {
+        uint64_t systemArgument2{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&systemArgument2,
+                reinterpret_cast<const void*>(args.userStack + 40), sizeof(systemArgument2)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        return status(sys::NtQueueApcThread(static_cast<Handle>(first),
+            static_cast<uintptr_t>(second), reinterpret_cast<void*>(args.third),
+            reinterpret_cast<void*>(args.fourth), reinterpret_cast<void*>(systemArgument2)));
+    }
     if (number == sys::SSN_NtCreateProcessEx) {
         uint64_t extra[5]{};
         ObjectAttributes attributes{};
@@ -886,7 +1040,8 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             static_cast<Handle>(extra[2]), static_cast<Handle>(extra[3]), (extra[4] & 0xff) != 0);
         if (result != NtStatus::Success) return status(result);
         const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
-        if (copy != NtStatus::Success) (void)sys::NtClose(handle);
+        if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
+            __builtin_trap();
         return status(copy);
     }
     if (number == sys::SSN_NtTerminateProcess || number == sys::SSN_NtTerminateThread) {
@@ -984,16 +1139,18 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             if (args.third && ex::ExSafeCopyFromUser(&attributes,
                     reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success)
                 return status(NtStatus::AccessViolation);
-            if (ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success ||
-                ex::ExSafeCopyFromUser(&maximum, reinterpret_cast<const void*>(args.fourth), sizeof(maximum)) != NtStatus::Success)
+            if (ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), alignof(Handle)) != NtStatus::Success ||
+                (args.fourth && ex::ExSafeCopyFromUser(&maximum,
+                    reinterpret_cast<const void*>(args.fourth), sizeof(maximum)) != NtStatus::Success))
                 return status(NtStatus::AccessViolation);
             Handle handle{};
-            const auto result = sys::NtCreateSection(&handle, static_cast<uint32_t>(second),
+            const auto result = sys::NtCreateSectionFromKernel(&handle, static_cast<uint32_t>(second),
                                                       args.third ? &attributes : nullptr, &maximum,
                                                       static_cast<uint32_t>(extra[0]), static_cast<uint32_t>(extra[1]), extra[2]);
             if (result != NtStatus::Success) return status(result);
             const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
-            if (copy != NtStatus::Success) sys::NtClose(handle);
+            if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
+                __builtin_trap();
             return status(copy);
         }
         uintptr_t base{};
@@ -1006,14 +1163,15 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             (extra[1] && (ex::ProbeForWrite(reinterpret_cast<void*>(extra[1]), sizeof(offset), 1) != NtStatus::Success ||
                           ex::ExSafeCopyFromUser(&offset, reinterpret_cast<const void*>(extra[1]), sizeof(offset)) != NtStatus::Success)))
             return status(NtStatus::AccessViolation);
-        const auto result = sys::NtMapViewOfSection(first, second, &base, args.fourth, extra[0],
+        const auto result = sys::NtMapViewOfSectionFromKernel(first, second, &base, args.fourth, extra[0],
             extra[1] ? &offset : nullptr, &size, static_cast<uint32_t>(extra[3]),
             static_cast<uint32_t>(extra[4]), static_cast<uint32_t>(extra[5]));
         if (result != NtStatus::Success) return status(result);
         if (ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.third), &base, sizeof(base)) != NtStatus::Success ||
             ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[2]), &size, sizeof(size)) != NtStatus::Success ||
             (extra[1] && ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[1]), &offset, sizeof(offset)) != NtStatus::Success)) {
-            sys::NtUnmapViewOfSection(second, base);
+            if (sys::NtUnmapViewOfSection(second, base) != NtStatus::Success)
+                __builtin_trap();
             return status(NtStatus::AccessViolation);
         }
         return status(NtStatus::Success);
@@ -1409,6 +1567,15 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Kernel C++ initialization failed\r\n");
     }
     serialWrite("[MicaNT Ex] Kernel C++ constructors dispatched\r\n");
+    if (micant::io::IoInitializeFileObjects() != micant::NtStatus::Success) {
+        stopWithError("[MicaNT Io] File object initialization failed\r\n");
+    }
+    const auto fileProviderStatus = micant::io::IoInitializeAhciFileProvider();
+    if (fileProviderStatus == micant::NtStatus::Success) {
+        serialWrite("[MicaNT Io] AHCI/FAT32 file-backed open provider registered\r\n");
+    } else {
+        serialWrite("[MicaNT Io] AHCI/FAT32 file provider unavailable; file opens fail explicitly\r\n");
+    }
     if (!micant::sys::initializeBootstrapSectionServices()) {
         stopWithError("[MicaNT Mm] Section service initialization failed\r\n");
     }

@@ -60,7 +60,7 @@ NtStatus NtSetEvent(Handle handle, int32_t* previousState) {
 }
 
 NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* timeout) {
-    if (alertable || (timeout && timeout->quadPart != 0)) return NtStatus::NotImplemented;
+    if (timeout && timeout->quadPart != 0) return NtStatus::NotImplemented;
     ob::ObjectHeader* header{};
     NtStatus status{};
     if (handle == InvalidHandleValue) {
@@ -96,13 +96,19 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
     current->eventWaitInProgress = true;
     current->eventWaitUserMode = current->previousUserMode;
     current->eventWaitCanTerminate = ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL;
-    const auto result = waitObject->wait(timeout != nullptr);
+    const auto result = waitObject->wait(timeout != nullptr, alertable);
+    // The wait object has unlinked its stack waiter before returning. Defer
+    // termination until this syscall has also cleared the thread's wait
+    // registration and released the Ob reference that pins the waited object.
+    const bool serviceTermination = current->terminationRequested &&
+        current->eventWaitCanTerminate && current->serviceTermination;
+    auto terminate = current->serviceTermination;
+    void* terminationContext = current->terminationContext;
     current->eventWaitInProgress = false;
     current->eventWaitUserMode = false;
     current->eventWaitCanTerminate = false;
     ob::ObDereferenceObject(header);
-    // A cancelled user wait unwinds through its caller before termination is
-    // serviced at the user-return boundary.
+    if (serviceTermination) terminate(terminationContext);
     return result;
 }
 }

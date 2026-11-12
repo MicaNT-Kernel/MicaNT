@@ -40,11 +40,14 @@ inline constexpr KIRQL CLOCK_LEVEL        = 28; // System clock timer
 inline constexpr KIRQL IPI_LEVEL          = 29; // Inter-Processor Interrupt
 inline constexpr KIRQL POWER_LEVEL        = 30; // Power failure interrupt
 inline constexpr KIRQL HIGH_LEVEL         = 31; // Mask all interrupts
+inline constexpr uint8_t KernelMode = 0;
+inline constexpr uint8_t UserMode = 1;
 
 // Forward declarations
 struct KThread;
 struct KDPC;
 struct KAPC;
+struct KAPC_STATE;
 
 // ============================================================================
 // 2. Processor Control Region (KPCR) & Processor Control Block (KPRCB)
@@ -156,6 +159,18 @@ inline void KeLowerIrql(KIRQL newIrql) noexcept {
 [[nodiscard]] inline KThread* KeGetCurrentThread() noexcept {
     return g_CurrentCpu.currentThread;
 }
+
+#if defined(MICANT_FREESTANDING)
+[[nodiscard]] ps::EProcess* KeGetCurrentProcess() noexcept;
+
+extern "C" __declspec(dllexport) void KeStackAttachProcess(
+    ps::EProcess* process, KAPC_STATE* apcState) noexcept;
+extern "C" __declspec(dllexport) void KeUnstackDetachProcess(
+    KAPC_STATE* apcState) noexcept;
+namespace detail {
+bool unwindCurrentProcessAttachments() noexcept;
+}
+#endif
 
 
 // ============================================================================
@@ -558,8 +573,14 @@ inline bool KeRemoveQueueDpc(KDPC* dpc) {
 enum class ApcEnvironment : uint8_t {
     OriginalApcEnvironment,
     AttachedApcEnvironment,
-    CurrentApcEnvironment
+    CurrentApcEnvironment,
+    InsertApcEnvironment
 };
+
+inline constexpr uint8_t ApcStateIndexOriginal = 0;
+inline constexpr uint8_t ApcStateIndexAttached = 1;
+inline constexpr uint8_t ApcStateIndexInsert = 0xFF;
+inline constexpr uint8_t ApcStateIndexInvalid = 0xFE;
 
 using PKNORMAL_ROUTINE = void (*)(void* normalContext, void* sysArg1, void* sysArg2);
 using PKKERNEL_ROUTINE = void (*)(KAPC* apc, PKNORMAL_ROUTINE* normalRoutine, void** normalContext, void** sysArg1, void** sysArg2);
@@ -567,6 +588,12 @@ using PKRUNDOWN_ROUTINE = void (*)(KAPC* apc);
 
 struct KAPC {
     Handle targetTid{0};
+    // The canonical initializer borrows this exact target until insertion;
+    // insertion converts it to a queue-owned pin. Legacy TID callers resolve
+    // by ID at insertion for compatibility.
+    KThread* targetThread{nullptr};
+    bool targetThreadBorrowed{false};
+    bool exactTargetRequired{false};
     PKKERNEL_ROUTINE kernelRoutine{nullptr};
     PKRUNDOWN_ROUTINE rundownRoutine{nullptr};
     PKNORMAL_ROUTINE normalRoutine{nullptr};
@@ -574,12 +601,31 @@ struct KAPC {
     void* systemArgument1{nullptr};
     void* systemArgument2{nullptr};
     uint8_t apcMode{0}; // 0 = KernelMode, 1 = UserMode
+    // Resolved APC-state index (Original/Attached) or Insert sentinel.
+    uint8_t apcStateIndex{ApcStateIndexInsert};
     bool inserted{false};
     bool isSpecialKernelApc{false};
+    bool targetReferenceHeld{false};
 #if defined(MICANT_FREESTANDING)
     KAPC* queueNext{nullptr};
 #endif
 };
+
+// WDK KAPC_STATE layout. The canonical APC queues remain in KThread; this
+// caller-owned state is the attach/detach token and preserves the public AMD64
+// size and alignment expected by driver stack allocations.
+struct KAPC_STATE_LIST_ENTRY {
+    KAPC_STATE_LIST_ENTRY* Flink{};
+    KAPC_STATE_LIST_ENTRY* Blink{};
+};
+struct KAPC_STATE {
+    KAPC_STATE_LIST_ENTRY ApcListHead[2]{};
+    void* Process{};
+    bool KernelApcInProgress{};
+    bool KernelApcPending{};
+    bool UserApcPending{};
+};
+static_assert(sizeof(KAPC_STATE) == 48 && alignof(KAPC_STATE) == 8);
 
 #if defined(MICANT_FREESTANDING)
 // Intrusive FIFO for resident APC objects; its owner serializes operations.
@@ -592,16 +638,10 @@ public:
         if (tail_) tail_->queueNext = apc; else head_ = apc;
         tail_ = apc;
     }
-    // Special kernel APCs precede normal APCs, preserving FIFO within each
-    // class. User APCs continue to use the ordinary FIFO insertion.
+    // Preserve one intrusive queue. Delivery selects only APCs associated
+    // with the target's active APC state and gives special APCs priority.
     void pushKernel(KAPC* apc) noexcept {
-        if (!apc->isSpecialKernelApc) { push_back(apc); return; }
-        KAPC* previous{};
-        auto* next = head_;
-        while (next && next->isSpecialKernelApc) { previous = next; next = next->queueNext; }
-        apc->queueNext = next;
-        if (previous) previous->queueNext = apc; else head_ = apc;
-        if (!next) tail_ = apc;
+        push_back(apc);
     }
     void pop_front() noexcept {
         if (!head_) return;
@@ -610,11 +650,68 @@ public:
         if (!head_) tail_ = nullptr;
         previous->queueNext = nullptr;
     }
-    // Special APCs are eligible even when normal APCs are disabled.
-    [[nodiscard]] KAPC* takeEligible(bool normalDisabled) noexcept {
+    [[nodiscard]] bool remove(KAPC* apc) noexcept {
+        KAPC* previous{};
+        for (auto* current = head_; current; current = current->queueNext) {
+            if (current != apc) { previous = current; continue; }
+            if (previous) previous->queueNext = current->queueNext;
+            else head_ = current->queueNext;
+            if (tail_ == current) tail_ = previous;
+            current->queueNext = nullptr;
+            return true;
+        }
+        return false;
+    }
+    [[nodiscard]] bool hasSpecial(uint8_t environmentIndex) const noexcept {
+        for (auto* apc = head_; apc; apc = apc->queueNext)
+            if (apc->apcStateIndex == environmentIndex && apc->isSpecialKernelApc) return true;
+        return false;
+    }
+    [[nodiscard]] bool hasEnvironment(uint8_t environmentIndex) const noexcept {
+        for (auto* apc = head_; apc; apc = apc->queueNext)
+            if (apc->apcStateIndex == environmentIndex) return true;
+        return false;
+    }
+    // Special APCs are eligible when normal APCs are disabled and take
+    // precedence over normal APCs within the selected environment.
+    [[nodiscard]] KAPC* takeEligible(bool normalDisabled, uint8_t environmentIndex) noexcept {
+        KAPC* special{};
+        KAPC* specialPrev{};
+        KAPC* normal{};
+        KAPC* normalPrev{};
         KAPC* previous{};
         for (auto* apc = head_; apc; apc = apc->queueNext) {
-            if (normalDisabled && !apc->isSpecialKernelApc) { previous = apc; continue; }
+            if (apc->apcStateIndex == environmentIndex) {
+                if (apc->isSpecialKernelApc && !special) { special = apc; specialPrev = previous; }
+                else if (!apc->isSpecialKernelApc && !normal) { normal = apc; normalPrev = previous; }
+            }
+            previous = apc;
+        }
+        auto* selected = special ? special : (!normalDisabled ? normal : nullptr);
+        auto* selectedPrevious = special ? specialPrev : normalPrev;
+        if (!selected) return nullptr;
+        if (selectedPrevious) selectedPrevious->queueNext = selected->queueNext;
+        else head_ = selected->queueNext;
+        if (tail_ == selected) tail_ = selectedPrevious;
+        selected->queueNext = nullptr;
+        return selected;
+    }
+    [[nodiscard]] KAPC* takeOtherEnvironment(uint8_t environmentIndex) noexcept {
+        KAPC* previous{};
+        for (auto* apc = head_; apc; apc = apc->queueNext) {
+            if (apc->apcStateIndex == environmentIndex) { previous = apc; continue; }
+            if (previous) previous->queueNext = apc->queueNext;
+            else head_ = apc->queueNext;
+            if (tail_ == apc) tail_ = previous;
+            apc->queueNext = nullptr;
+            return apc;
+        }
+        return nullptr;
+    }
+    [[nodiscard]] KAPC* takeEnvironment(uint8_t environmentIndex) noexcept {
+        KAPC* previous{};
+        for (auto* apc = head_; apc; apc = apc->queueNext) {
+            if (apc->apcStateIndex != environmentIndex) { previous = apc; continue; }
             if (previous) previous->queueNext = apc->queueNext;
             else head_ = apc->queueNext;
             if (tail_ == apc) tail_ = previous;
@@ -684,8 +781,24 @@ static_assert(offsetof(KThreadContext, extendedState) == 256);
 struct KThread {
     Handle tid{0};
     Handle pid{0};
+    // 0 is the original APC state; 1 is the attached APC state. The selector
+    // is per-thread, while both states share the canonical APC queues.
+    uint8_t apcStateIndex{ApcStateIndexOriginal};
 #if defined(MICANT_FREESTANDING)
     ps::EProcess* owningProcess{nullptr};
+    ps::EProcess* attachedProcess{nullptr};
+    struct ProcessAttachFrame {
+        KAPC_STATE* callerState{};
+        ps::EProcess* previousProcess{};
+        ps::EProcess* targetProcess{};
+        void* targetReference{};
+        uintptr_t previousRoot{};
+        uint8_t previousApcStateIndex{ApcStateIndexOriginal};
+        bool noOp{};
+    };
+    // Bounded storage avoids allocation while switching address spaces.
+    std::array<ProcessAttachFrame, 16> processAttachFrames{};
+    uint8_t processAttachDepth{};
     ps::EThread* owningThread{nullptr};
     KThread* processNext{nullptr};
     KThread* clientIdNext{nullptr};
@@ -748,6 +861,8 @@ struct KThread {
 #endif
     uint16_t kernelApcDisable{0};
     uint16_t specialApcDisable{0};
+    // Ke pins this thread once per queued APC until queue removal.
+    uint32_t queuedApcReferences{0};
 #if defined(MICANT_FREESTANDING)
     bool systemInitialRegionActive{false};
 #endif
@@ -761,18 +876,39 @@ struct KThread {
         void* context{};
         void* argument1{};
         void* argument2{};
+        uint8_t apcStateIndex{ApcStateIndexOriginal};
     };
     std::array<PendingNormalApc, 4> pendingNormalApcs{};
     size_t pendingNormalHead{0};
     size_t pendingNormalCount{0};
 #endif
     bool alertable{false};
-    bool alerted{false};
+    std::array<bool, 2> alerted{};
+    bool userApcDeliveryPending{false};
+    bool userApcDrainOnReturn{false};
 #if defined(MICANT_FREESTANDING)
     KThread* readyNext{nullptr};
     bool readyQueued{false};
 #endif
 };
+
+#if defined(MICANT_FREESTANDING)
+[[nodiscard]] inline ps::EProcess* KeGetCurrentProcess() noexcept {
+    auto* thread = KeGetCurrentThread();
+    return thread ? (thread->attachedProcess ? thread->attachedProcess : thread->owningProcess) : nullptr;
+}
+#endif
+
+// The caller must still hold the target's lifecycle protection. Release this
+// before invoking any APC callback, since it may destroy the KAPC itself.
+inline void releaseQueuedApcReference(KAPC& apc, KThread& target) noexcept {
+    if (!apc.targetReferenceHeld || apc.targetThread != &target ||
+        !target.queuedApcReferences) __builtin_trap();
+    apc.targetReferenceHeld = false;
+    apc.targetThread = nullptr;
+    apc.targetThreadBorrowed = false;
+    --target.queuedApcReferences;
+}
 
 #if defined(MICANT_FREESTANDING)
 namespace detail {
@@ -815,6 +951,7 @@ inline void unregisterClientThread(KThread& thread) noexcept {
         if (entry->tid == tid) return entry;
     return nullptr;
 }
+
 
 using BootstrapThreadEntry = void (*)(void*) noexcept;
 extern "C" void MicantAmd64BootstrapThread() noexcept;
@@ -1362,9 +1499,8 @@ inline bool blockCurrentThread() noexcept {
 // ============================================================================
 // 10. APC Delivery Engine (KiDeliverApc)
 // ============================================================================
-/**
- * @brief Initialize a Kernel Asynchronous Procedure Call (KeInitializeApc).
- */
+// Internal compatibility overload for existing TID-based callers. New Ke
+// code should use the canonical KThread plus ApcEnvironment overload below.
 inline void KeInitializeApc(
     KAPC* apc,
     Handle targetTid,
@@ -1374,8 +1510,23 @@ inline void KeInitializeApc(
     uint8_t apcMode,
     void* normalContext
 ) {
-    if (!apc) return;
+    // Reinitializing a queued APC would corrupt its queue and steal its target
+    // pin. KeInitializeApc has no status return, so leave it untouched.
+    if (!apc || apc->inserted || apc->targetReferenceHeld) return;
+    uint8_t environmentIndex = ApcStateIndexInsert;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (auto* target = detail::findClientThread(targetTid);
+        target && target->apcStateIndex <= ApcStateIndexAttached)
+        environmentIndex = target->apcStateIndex;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
     apc->targetTid = targetTid;
+    apc->targetThread = nullptr;
+    apc->targetThreadBorrowed = false;
+    apc->exactTargetRequired = false;
+    apc->apcStateIndex = environmentIndex;
     apc->kernelRoutine = kernelRoutine;
     apc->rundownRoutine = rundownRoutine;
     apc->normalRoutine = normalRoutine;
@@ -1383,6 +1534,65 @@ inline void KeInitializeApc(
     apc->normalContext = normalContext;
     apc->inserted = false;
     apc->isSpecialKernelApc = (normalRoutine == nullptr);
+    apc->targetReferenceHeld = false;
+}
+
+// Canonical KeInitializeApc form. Environment selection is stored on the APC
+// and resolved against the target's active state at insertion for the Insert
+// environment. The target is borrowed until insertion; insertion then pins it.
+inline void KeInitializeApc(
+    KAPC* apc,
+    KThread* targetThread,
+    ApcEnvironment targetEnvironment,
+    PKKERNEL_ROUTINE kernelRoutine,
+    PKRUNDOWN_ROUTINE rundownRoutine,
+    PKNORMAL_ROUTINE normalRoutine,
+    uint8_t apcMode,
+    void* normalContext
+) {
+    if (!apc || apc->inserted || apc->targetReferenceHeld) return;
+    uint8_t environmentIndex = ApcStateIndexInvalid;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+#endif
+    if (targetThread) {
+        switch (targetEnvironment) {
+        case ApcEnvironment::OriginalApcEnvironment:
+            environmentIndex = ApcStateIndexOriginal;
+            break;
+        case ApcEnvironment::AttachedApcEnvironment:
+            // The attached APC state is a distinct, dormant state even when
+            // the target currently executes in its original environment.
+            environmentIndex = ApcStateIndexAttached;
+            break;
+        case ApcEnvironment::CurrentApcEnvironment:
+            if (targetThread->apcStateIndex <= ApcStateIndexAttached)
+                environmentIndex = targetThread->apcStateIndex;
+            break;
+        case ApcEnvironment::InsertApcEnvironment:
+            environmentIndex = ApcStateIndexInsert;
+            break;
+        }
+    }
+    apc->targetTid = targetThread ? targetThread->tid : 0;
+    apc->targetThread = targetThread;
+    apc->targetThreadBorrowed = targetThread != nullptr;
+    apc->exactTargetRequired = true;
+    apc->apcStateIndex = environmentIndex;
+    apc->kernelRoutine = kernelRoutine;
+    apc->rundownRoutine = rundownRoutine;
+    apc->normalRoutine = normalRoutine;
+    // NT makes a null NormalRoutine a special kernel APC; mode and context
+    // have no meaning for that class.
+    apc->apcMode = normalRoutine ? apcMode : 0;
+    apc->normalContext = normalRoutine ? normalContext : nullptr;
+    apc->inserted = false;
+    apc->isSpecialKernelApc = normalRoutine == nullptr;
+    apc->targetReferenceHeld = false;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
 }
 
 /**
@@ -1393,30 +1603,68 @@ inline bool KeInsertQueueApc(KAPC* apc, void* sysArg1 = nullptr, void* sysArg2 =
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     auto* curr = g_CurrentCpu.currentThread;
-    auto* target = apc && curr && apc->targetTid == curr->tid ? curr :
-        apc ? detail::findClientThread(apc->targetTid) : nullptr;
-    if (!apc || apc->inserted || !target || !target->apcQueueable || target->terminationRequested ||
-        target->state == ThreadState::Terminated || target->state == ThreadState::Transition || apc->apcMode > 1) {
+    auto* target = !apc ? nullptr : apc->exactTargetRequired
+        ? (apc->targetThreadBorrowed ? apc->targetThread : nullptr)
+        : curr && apc->targetTid == curr->tid ? curr : detail::findClientThread(apc->targetTid);
+    if (!apc || apc->inserted || apc->targetReferenceHeld || !target || !target->apcQueueable ||
+        target->apcRundownActive || target->apcRundownComplete || target->terminationRequested ||
+        target->tid != apc->targetTid || target->state == ThreadState::Terminated ||
+        target->state == ThreadState::Transition || apc->apcMode > 1) {
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return false;
     }
+    const uint8_t environmentIndex = apc->apcStateIndex == ApcStateIndexInsert
+        ? target->apcStateIndex : apc->apcStateIndex;
+    if (environmentIndex > ApcStateIndexAttached || target->apcStateIndex > ApcStateIndexAttached) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    if (target->queuedApcReferences == UINT32_MAX) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    ++target->queuedApcReferences;
+    apc->targetThread = target;
+    apc->targetThreadBorrowed = false;
+    apc->targetReferenceHeld = true;
+    apc->apcStateIndex = environmentIndex;
     apc->systemArgument1 = sysArg1;
     apc->systemArgument2 = sysArg2;
     apc->inserted = true;
     if (apc->apcMode == 0) {
         target->kernelApcList.pushKernel(apc);
-        if (target != curr && target->interruptWaitForApc && !target->specialApcDisable &&
+        if (environmentIndex == target->apcStateIndex && target != curr && target->interruptWaitForApc && !target->specialApcDisable &&
             (apc->isSpecialKernelApc || (!target->kernelApcDisable && !target->normalKernelApcActive)))
             (void)target->interruptWaitForApc(*target);
-    } else target->userApcList.push_back(apc);
+    } else {
+        target->userApcList.push_back(apc);
+        if (environmentIndex == target->apcStateIndex && target->alertable) {
+            target->userApcDeliveryPending = true;
+            if (target != curr && target->interruptWaitForApc)
+                (void)target->interruptWaitForApc(*target);
+        }
+    }
     if (flags & (uint64_t{1} << 9)) {
-        if (target == curr) detail::servicePendingKernelApcs();
+        if (target == curr && environmentIndex == target->apcStateIndex) detail::servicePendingKernelApcs();
         __asm__ __volatile__("sti" : : : "memory");
     }
     return true;
 #else
     auto* curr = g_CurrentCpu.currentThread;
-    if (!apc || apc->inserted || !curr) return false;
+    auto* target = apc && apc->exactTargetRequired
+        ? (apc->targetThreadBorrowed ? apc->targetThread : nullptr)
+        : curr;
+    const uint8_t environmentIndex = apc && apc->apcStateIndex == ApcStateIndexInsert && curr
+        ? curr->apcStateIndex : apc ? apc->apcStateIndex : ApcStateIndexInvalid;
+    if (!apc || apc->inserted || apc->targetReferenceHeld || !curr || target != curr ||
+        target->tid != apc->targetTid || apc->apcMode > 1 ||
+        environmentIndex > ApcStateIndexAttached || curr->apcStateIndex > ApcStateIndexAttached ||
+        curr->queuedApcReferences == UINT32_MAX) return false;
+    ++curr->queuedApcReferences;
+    apc->targetThread = curr;
+    apc->targetThreadBorrowed = false;
+    apc->targetReferenceHeld = true;
+    apc->apcStateIndex = environmentIndex;
     apc->systemArgument1 = sysArg1;
     apc->systemArgument2 = sysArg2;
     apc->inserted = true;
@@ -1430,29 +1678,153 @@ inline bool KeInsertQueueApc(KAPC* apc, void* sysArg1 = nullptr, void* sysArg2 =
 #endif
 }
 
+// Remove an APC only while it is still linked. Once delivery or rundown has
+// dequeued it, the callback owns the next transition and this returns FALSE.
+inline bool KeRemoveQueueApc(KAPC* apc) noexcept {
+    if (!apc) return false;
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (!apc->inserted || !apc->targetReferenceHeld || !apc->targetThread) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    auto* target = apc->targetThread;
+    const bool removed = apc->apcMode == 0
+        ? target->kernelApcList.remove(apc)
+        : apc->apcMode == 1 ? target->userApcList.remove(apc) : false;
+    if (!removed) __builtin_trap();
+    apc->inserted = false;
+    releaseQueuedApcReference(*apc, *target);
+    if (apc->apcMode == 1 && !target->userApcList.hasEnvironment(target->apcStateIndex)) {
+        target->userApcDeliveryPending = false;
+        target->userApcDrainOnReturn = false;
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return true;
+#else
+    if (!apc->inserted || !apc->targetReferenceHeld || !apc->targetThread) return false;
+    auto* target = apc->targetThread;
+    auto& queue = apc->apcMode == 0 ? target->kernelApcList : target->userApcList;
+    const auto it = std::find(queue.begin(), queue.end(), apc);
+    if (it == queue.end()) __builtin_trap();
+    queue.erase(it);
+    apc->inserted = false;
+    releaseQueuedApcReference(*apc, *target);
+    return true;
+#endif
+}
+
+// Test and consume the current thread's alert state. ReactOS/NT also uses a
+// UserMode test to notice a user APC that was queued while the thread was not
+// alertable; mark that active APC environment pending for the next user return.
+inline bool KeTestAlertThread(uint8_t alertMode) noexcept {
+    if (alertMode > UserMode || KeGetCurrentIrql() > DISPATCH_LEVEL) return false;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+#endif
+    auto* thread = KeGetCurrentThread();
+    bool previousAlerted{};
+    if (thread) {
+#if defined(MICANT_FREESTANDING)
+        const bool userApcQueued = thread->userApcList.hasEnvironment(thread->apcStateIndex);
+#else
+        const bool userApcQueued = std::any_of(thread->userApcList.begin(), thread->userApcList.end(),
+            [thread](const KAPC* apc) { return apc && apc->apcStateIndex == thread->apcStateIndex; });
+#endif
+        previousAlerted = thread->alerted[alertMode];
+        if (previousAlerted) {
+            thread->alerted[alertMode] = false;
+        } else if (alertMode == UserMode &&
+                   thread->apcStateIndex <= ApcStateIndexAttached &&
+                   userApcQueued) {
+            thread->userApcDeliveryPending = true;
+            thread->userApcDrainOnReturn = true;
+        }
+    }
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#endif
+    return previousAlerted;
+}
+
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+inline void KiDeliverApc(uint8_t deliveryMode);
 namespace detail {
-// Run only on the terminating thread at PASSIVE_LEVEL. KAPCs are borrowed:
-// a null rundown leaves storage with its owner after removing the queue entry.
-inline bool rundownCurrentUserApcs() noexcept {
+// Run on the terminating thread at PASSIVE_LEVEL. Freeze queue insertion
+// before delivering kernel APCs, then rundown user APCs. KAPCs are borrowed:
+// dequeue and release target ownership before a callback can destroy storage.
+inline bool rundownCurrentApcs() noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     auto* thread = KeGetCurrentThread();
     if (!thread || thread->apcRundownActive || thread->apcRundownComplete ||
-        thread->state != ThreadState::Running || KeGetCurrentIrql() != PASSIVE_LEVEL || thread->kernelApcDisable || thread->specialApcDisable || thread->normalKernelApcActive ||
-        thread->pendingNormalCount || !thread->kernelApcList.empty()) {
+        thread->state != ThreadState::Running || KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        thread->apcStateIndex > ApcStateIndexAttached ||
+        thread->kernelApcDisable || thread->specialApcDisable || thread->normalKernelApcActive) {
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return false;
     }
+    const bool wasQueueable = thread->apcQueueable;
+    const bool callbacksMayEnableInterrupts =
+        (flags & (uint64_t{1} << 9)) || hal::amd64::bootstrapSchedulerClockActive();
     thread->apcQueueable = false;
     thread->apcRundownActive = true;
+
+    // A terminating thread must release every attached address-space pin
+    // before the process reaper can close those roots. The caller-owned state
+    // tokens remain on this thread's active kernel stack until rundown begins.
+    if (!unwindCurrentProcessAttachments()) {
+        thread->apcRundownActive = false;
+        thread->apcQueueable = wasQueueable;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+
+    // Special kernel APCs are delivered at APC_LEVEL even while normal kernel
+    // APCs are disabled; normal kernel APCs and their normal routines run only
+    // when APC disable state permits it. With the preconditions above,
+    // KiDeliverApc drains both classes and pending normal callbacks for the
+    // currently active APC state.
+    if (callbacksMayEnableInterrupts)
+        __asm__ __volatile__("sti" : : : "memory");
+    KiDeliverApc(0);
+    __asm__ __volatile__("cli" : : : "memory");
+    const uint8_t activeEnvironment = thread->apcStateIndex;
+    if (thread->kernelApcList.hasEnvironment(activeEnvironment) || thread->pendingNormalCount ||
+        thread->normalKernelApcActive) {
+        thread->apcRundownActive = false;
+        thread->apcQueueable = wasQueueable;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+
+    // APCs queued for a non-current attachment state cannot execute their
+    // kernel/normal routines in this process context. Termination removes
+    // them and invokes their optional rundown callback instead.
+    while (auto* apc = thread->kernelApcList.takeOtherEnvironment(activeEnvironment)) {
+        apc->inserted = false;
+        releaseQueuedApcReference(*apc, *thread);
+        auto rundown = apc->rundownRoutine;
+        if (rundown) {
+            if (callbacksMayEnableInterrupts) __asm__ __volatile__("sti" : : : "memory");
+            rundown(apc);
+            __asm__ __volatile__("cli" : : : "memory");
+        }
+    }
+
+    // User APC rundown callbacks execute at PASSIVE_LEVEL without queue or
+    // dispatcher locks held. Removing each entry first makes rundown exactly
+    // once even if its callback destroys or reuses the APC storage.
     while (!thread->userApcList.empty()) {
         auto* apc = thread->userApcList.front();
         thread->userApcList.pop_front();
         apc->inserted = false;
+        releaseQueuedApcReference(*apc, *thread);
         auto rundown = apc->rundownRoutine;
         if (rundown) {
-            if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+            if (callbacksMayEnableInterrupts) __asm__ __volatile__("sti" : : : "memory");
             rundown(apc); // The callback may destroy the APC.
             __asm__ __volatile__("cli" : : : "memory");
         }
@@ -1462,6 +1834,9 @@ inline bool rundownCurrentUserApcs() noexcept {
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     return true;
 }
+// Kept for existing internal callers; rundown now drains eligible kernel APC
+// work before applying the user APC rundown contract.
+inline bool rundownCurrentUserApcs() noexcept { return rundownCurrentApcs(); }
 }
 #endif
 
@@ -1475,18 +1850,40 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     auto* thread = KeGetCurrentThread();
-    if (!thread || KeGetCurrentIrql() != PASSIVE_LEVEL || thread->specialApcDisable) {
+    if (!thread || KeGetCurrentIrql() != PASSIVE_LEVEL || thread->specialApcDisable ||
+        thread->apcStateIndex > ApcStateIndexAttached) {
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return;
     }
     for (;;) {
         if (thread->specialApcDisable) break;
-        const bool specialQueued = thread->kernelApcList.front() &&
-            thread->kernelApcList.front()->isSpecialKernelApc;
-        if (!specialQueued && !thread->kernelApcDisable && !thread->normalKernelApcActive &&
-            thread->pendingNormalCount) {
-            const auto pending = thread->pendingNormalApcs[thread->pendingNormalHead];
-            thread->pendingNormalHead = (thread->pendingNormalHead + 1) % thread->pendingNormalApcs.size();
+        const uint8_t activeEnvironment = thread->apcStateIndex;
+        const bool specialQueued = thread->kernelApcList.hasSpecial(activeEnvironment);
+        size_t pendingOffset = thread->pendingNormalCount;
+        if (!specialQueued && !thread->kernelApcDisable && !thread->normalKernelApcActive) {
+            for (size_t offset = 0; offset < thread->pendingNormalCount; ++offset) {
+                const size_t index = (thread->pendingNormalHead + offset) % thread->pendingNormalApcs.size();
+                if (thread->pendingNormalApcs[index].apcStateIndex == activeEnvironment) {
+                    pendingOffset = offset;
+                    break;
+                }
+            }
+        }
+        if (pendingOffset < thread->pendingNormalCount) {
+            const size_t pendingIndex = (thread->pendingNormalHead + pendingOffset) %
+                                        thread->pendingNormalApcs.size();
+            const auto pending = thread->pendingNormalApcs[pendingIndex];
+            if (!pendingOffset) {
+                thread->pendingNormalHead = (thread->pendingNormalHead + 1) % thread->pendingNormalApcs.size();
+            } else {
+                for (size_t offset = pendingOffset; offset + 1 < thread->pendingNormalCount; ++offset) {
+                    const size_t destination = (thread->pendingNormalHead + offset) %
+                                               thread->pendingNormalApcs.size();
+                    const size_t source = (thread->pendingNormalHead + offset + 1) %
+                                          thread->pendingNormalApcs.size();
+                    thread->pendingNormalApcs[destination] = thread->pendingNormalApcs[source];
+                }
+            }
             --thread->pendingNormalCount;
             thread->normalKernelApcActive = true;
             if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
@@ -1500,10 +1897,12 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
         // so reserve a slot before invoking that routine.
         const bool normalDisabled = thread->kernelApcDisable || thread->normalKernelApcActive ||
             thread->pendingNormalCount == thread->pendingNormalApcs.size();
-        auto* apc = thread->kernelApcList.takeEligible(normalDisabled);
+        auto* apc = thread->kernelApcList.takeEligible(normalDisabled, activeEnvironment);
         if (!apc) break;
         const bool special = apc->isSpecialKernelApc;
+        const uint8_t apcEnvironment = apc->apcStateIndex;
         apc->inserted = false;
+        releaseQueuedApcReference(*apc, *thread);
         auto kernelRoutine = apc->kernelRoutine;
         PKNORMAL_ROUTINE normalRoutine = apc->normalRoutine;
         void* normalContext = apc->normalContext;
@@ -1518,13 +1917,13 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
         if (!special && normalRoutine) {
             const size_t tail = (thread->pendingNormalHead + thread->pendingNormalCount) %
                                 thread->pendingNormalApcs.size();
-            thread->pendingNormalApcs[tail] = {normalRoutine, normalContext, arg1, arg2};
+            thread->pendingNormalApcs[tail] = {normalRoutine, normalContext, arg1, arg2, apcEnvironment};
             ++thread->pendingNormalCount;
         }
         if (thread->specialApcDisable) break;
     }
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-#else
+#elif defined(MICANT_FREESTANDING)
     auto* thread = g_CurrentCpu.currentThread;
     if (!thread) return;
 
@@ -1534,6 +1933,7 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
             auto* apc = thread->kernelApcList.front();
             thread->kernelApcList.pop_front();
             apc->inserted = false;
+            releaseQueuedApcReference(*apc, *thread);
 
             PKNORMAL_ROUTINE normalRoutine = apc->normalRoutine;
             void* normalContext = apc->normalContext;
@@ -1555,31 +1955,124 @@ inline void KiDeliverApc(uint8_t deliveryMode) {
         }
     }
 
-    // 2. Deliver User-Mode APCs if thread is in an alertable wait at PASSIVE_LEVEL
-    if (deliveryMode == 1 || thread->alertable) {
-        if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
-            while (!thread->userApcList.empty()) {
-                auto* apc = thread->userApcList.front();
-                thread->userApcList.pop_front();
-                apc->inserted = false;
-
-                if (apc->kernelRoutine) {
-                    PKNORMAL_ROUTINE norm = apc->normalRoutine;
-                    void* ctx = apc->normalContext;
-                    void* a1 = apc->systemArgument1;
-                    void* a2 = apc->systemArgument2;
-                    apc->kernelRoutine(apc, &norm, &ctx, &a1, &a2);
-                }
-                if (apc->normalRoutine) {
-                    apc->normalRoutine(apc->normalContext, apc->systemArgument1, apc->systemArgument2);
-                }
-                g_CurrentCpu.apcCount++;
-            }
-            thread->alertable = false;
+    // User APC callbacks must never run on this kernel path. The canonical
+    // queue is drained into a checked CPL3 frame by KePrepareUserApcDelivery.
+#else
+    // Hosted Ke tests model user delivery with ordinary callbacks. This branch
+    // is excluded from the freestanding kernel and is not an NT execution path.
+    auto* thread = g_CurrentCpu.currentThread;
+    if (!thread || KeGetCurrentIrql() != PASSIVE_LEVEL) return;
+    if (deliveryMode == 0) {
+        while (!thread->kernelApcList.empty()) {
+            auto* apc = thread->kernelApcList.front();
+            thread->kernelApcList.pop_front();
+            apc->inserted = false;
+            releaseQueuedApcReference(*apc, *thread);
+            PKNORMAL_ROUTINE normalRoutine = apc->normalRoutine;
+            void* normalContext = apc->normalContext;
+            void* argument1 = apc->systemArgument1;
+            void* argument2 = apc->systemArgument2;
+            const KIRQL old = KfRaiseIrql(APC_LEVEL);
+            if (apc->kernelRoutine)
+                apc->kernelRoutine(apc, &normalRoutine, &normalContext, &argument1, &argument2);
+            KeLowerIrql(old);
+            if (normalRoutine && !thread->kernelApcDisable)
+                normalRoutine(normalContext, argument1, argument2);
+            ++g_CurrentCpu.apcCount;
         }
+    }
+    if ((deliveryMode == 1 || thread->alertable) && !thread->kernelApcDisable &&
+        !thread->specialApcDisable) {
+        while (!thread->userApcList.empty()) {
+            auto* apc = thread->userApcList.front();
+            thread->userApcList.pop_front();
+            apc->inserted = false;
+            releaseQueuedApcReference(*apc, *thread);
+            if (apc->kernelRoutine) {
+                PKNORMAL_ROUTINE normalRoutine = apc->normalRoutine;
+                void* normalContext = apc->normalContext;
+                void* argument1 = apc->systemArgument1;
+                void* argument2 = apc->systemArgument2;
+                apc->kernelRoutine(apc, &normalRoutine, &normalContext, &argument1, &argument2);
+                if (normalRoutine) normalRoutine(normalContext, argument1, argument2);
+            }
+            ++g_CurrentCpu.apcCount;
+        }
+        thread->alertable = false;
     }
 #endif
 }
+
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+struct UserApcDelivery {
+    uintptr_t routine{};
+    void* normalContext{};
+    void* systemArgument1{};
+    void* systemArgument2{};
+};
+inline constexpr size_t UserApcDeliveryBatchCapacity = 32;
+
+// Claim a bounded FIFO batch of user APCs for a checked user return. Queue
+// removal and target-pin release happen under BSP exclusion; kernel routines
+// execute afterward at APC_LEVEL without the queue lock held.
+inline bool KePrepareUserApcDelivery(UserApcDelivery* deliveries, size_t capacity,
+                                     size_t& deliveryCount) noexcept {
+    deliveryCount = 0;
+    if (!deliveries || !capacity) return false;
+    for (size_t i = 0; i < capacity; ++i) deliveries[i] = {};
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    auto* thread = KeGetCurrentThread();
+    if (!thread || KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        thread->kernelApcDisable || thread->specialApcDisable ||
+        thread->apcStateIndex > ApcStateIndexAttached ||
+        (!thread->alertable && !thread->userApcDrainOnReturn) ||
+        !thread->userApcList.hasEnvironment(thread->apcStateIndex)) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    const auto environment = thread->apcStateIndex;
+    thread->userApcDeliveryPending = false;
+    // An alertable wait has been interrupted and will complete with
+    // STATUS_USER_APC. Batch the already eligible queue so NTDLL can run it
+    // without recursively consuming kernel stack or retaining a stale wait.
+    thread->alertable = false;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+
+    size_t processedCount{};
+    while (processedCount < capacity) {
+        __asm__ __volatile__("cli" : : : "memory");
+        auto* apc = thread->userApcList.takeEnvironment(environment);
+        if (!apc) break;
+        if (!apc->inserted || !apc->targetReferenceHeld || apc->targetThread != thread ||
+            apc->apcMode != UserMode || !apc->normalRoutine) __builtin_trap();
+        apc->inserted = false;
+        releaseQueuedApcReference(*apc, *thread);
+        ++processedCount;
+        auto kernelRoutine = apc->kernelRoutine;
+        PKNORMAL_ROUTINE normalRoutine = apc->normalRoutine;
+        void* normalContext = apc->normalContext;
+        void* argument1 = apc->systemArgument1;
+        void* argument2 = apc->systemArgument2;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        if (kernelRoutine) {
+            const auto oldIrql = KfRaiseIrql(APC_LEVEL);
+            kernelRoutine(apc, &normalRoutine, &normalContext, &argument1, &argument2);
+            KeLowerIrql(oldIrql);
+        }
+        if (normalRoutine) {
+            deliveries[deliveryCount++] = {reinterpret_cast<uintptr_t>(normalRoutine),
+                                           normalContext, argument1, argument2};
+        }
+        __asm__ __volatile__("cli" : : : "memory");
+    }
+    __asm__ __volatile__("cli" : : : "memory");
+    const bool moreActive = thread->userApcList.hasEnvironment(environment);
+    thread->userApcDrainOnReturn = moreActive;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return deliveryCount != 0;
+}
+#endif
 
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
 namespace detail {

@@ -3,7 +3,9 @@
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/section.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/io_file.hpp"
 #include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/probe.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include <new>
@@ -26,10 +28,31 @@ bool acquireSectionView(void* owner) noexcept {
 void releaseSectionView(void* owner) noexcept {
     ob::ObDereferenceObject(static_cast<ob::ObjectHeader*>(owner));
 }
+bool acquireFileSection(void* context) noexcept {
+    if (!context) return false;
+    static_cast<ob::ObjectHeader*>(context)->addReference();
+    return true;
+}
+void releaseFileSection(void* context) noexcept {
+    ob::ObDereferenceObject(static_cast<ob::ObjectHeader*>(context));
+}
+NtStatus readSectionFile(void* context, uint64_t offset, void* buffer,
+                         size_t length, size_t* bytesRead) noexcept {
+    if (!context) return NtStatus::InvalidHandle;
+    auto* file = static_cast<ob::ObjectHeader*>(context)->as<io::FileObject>();
+    return file->read(offset, buffer, length, bytesRead);
+}
 }
 
 bool initializeBootstrapSectionServices() noexcept {
     sectionType.typeId = ob::ObjectTypeId::Section;
+    sectionType.validAccessMask = section::SECTION_ALL_ACCESS;
+    sectionType.genericMapping = {
+        ob::STANDARD_RIGHTS_READ | section::SECTION_MAP_READ | section::SECTION_QUERY,
+        ob::STANDARD_RIGHTS_WRITE | section::SECTION_MAP_WRITE,
+        ob::STANDARD_RIGHTS_EXECUTE | section::SECTION_MAP_EXECUTE,
+        section::SECTION_ALL_ACCESS
+    };
     sectionType.deleteProcedure = deleteSection;
     return addressSpace.configurePagingBackend(
         {nullptr, hal::amd64::mapBootstrapManagedPage, hal::amd64::unmapBootstrapManagedPage,
@@ -38,8 +61,56 @@ bool initializeBootstrapSectionServices() noexcept {
         hal::amd64::BootstrapManagedBase, hal::amd64::BootstrapManagedSize);
 }
 
-// Internal image view. The section and its PFNs remain owned by Ob until the
-// process unmaps the view. This is not the public SEC_IMAGE file contract.
+// Resolve a process image candidate using the canonical section type and
+// execute access. The caller owns the returned reference and must verify that
+// the section is a validated SEC_IMAGE object.
+NtStatus referenceProcessImageSection(Handle handle, ob::ObjectHeader*& reference) noexcept {
+    reference = nullptr;
+    ob::HandleTable* table{};
+    Handle raw{};
+    auto status = ob::detail::resolveHandle(handle, table, raw);
+    if (status != NtStatus::Success) return status;
+    status = ob::ObReferenceObjectByHandle(raw, *table, section::SECTION_MAP_EXECUTE, &sectionType, &reference);
+    if (status == NtStatus::Success &&
+        !(reference->as<section::SectionObject>()->getAllocationAttributes() & section::SEC_IMAGE)) {
+        ob::ObDereferenceObject(reference);
+        reference = nullptr;
+        return NtStatus::InvalidFileForSection;
+    }
+    return status;
+}
+
+NtStatus mapBootstrapFileImageView(mm::ProcessAddressSpace& space, uintptr_t& base,
+                                  section::SectionObject& object,
+                                  ob::ObjectHeader* sectionReference) noexcept {
+    if (!sectionReference || !(object.getAllocationAttributes() & section::SEC_IMAGE) ||
+        object.getImageBase() != base || !object.getPageProtections())
+        return NtStatus::InvalidImageFormat;
+    const auto backing = object.getBackingReference();
+    if (!backing.pfns || !backing.pageCount) return NtStatus::InvalidImageFormat;
+    const size_t size = object.getSize();
+    const auto status = space.mapSharedPages(base, size, mm::PAGE_EXECUTE_READ,
+        backing.pfns, backing.pageCount, sectionReference, acquireSectionView, releaseSectionView,
+        object.getMaximumImageProtection(), true, false, 0, object.getPageProtections());
+    return status;
+}
+
+NtStatus mapBootstrapRelocatedFileImageView(mm::ProcessAddressSpace& space, uintptr_t& base,
+                                            section::SectionObject& object,
+                                            ob::ObjectHeader* sectionReference) noexcept {
+    if (!sectionReference || !(object.getAllocationAttributes() & section::SEC_IMAGE) ||
+        !object.getPageProtections())
+        return NtStatus::InvalidImageFormat;
+    const auto backing = object.getBackingReference();
+    if (!backing.pfns || !backing.pageCount) return NtStatus::InvalidImageFormat;
+    return space.mapSharedPages(base, object.getSize(), mm::PAGE_READWRITE,
+        backing.pfns, backing.pageCount, sectionReference, acquireSectionView, releaseSectionView,
+        object.getMaximumImageProtection(), true, false, 0, nullptr, true,
+        object.getPageProtections());
+}
+
+// Ps maps the same validated section backing used by NtMapViewOfSection. The
+// VAD holds an Ob reference until the process unmaps the image.
 NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, size_t size) noexcept {
     if (sectionType.typeId != ob::ObjectTypeId::Section) return NtStatus::Unsuccessful;
     void* body{};
@@ -52,7 +123,8 @@ NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, 
     if (status == NtStatus::Success) {
         const auto backing = object->getBackingReference();
         status = space.mapSharedPages(base, size, mm::PAGE_READWRITE, backing.pfns, backing.pageCount,
-                                      header, acquireSectionView, releaseSectionView, mm::PAGE_READWRITE, true);
+                                      header, acquireSectionView, releaseSectionView, mm::PAGE_READWRITE,
+                                      true, false, 0, nullptr, true);
     }
     ob::ObDereferenceObject(header);
     return status;
@@ -102,57 +174,251 @@ NtStatus NtFreeVirtualMemory(Handle process, uintptr_t* base, size_t* regionSize
     return status;
 }
 
-NtStatus NtCreateSection(Handle* out, uint32_t access, ObjectAttributes* attributes,
-                         LargeInteger* maximum, uint32_t protect, uint32_t allocation,
-                         Handle file) {
-    if (!out || !maximum || maximum->quadPart <= 0) return NtStatus::InvalidParameter;
+static NtStatus createSection(Handle* out, uint32_t access, ObjectAttributes* attributes,
+                              LargeInteger* maximum, uint32_t protect, uint32_t allocation,
+                              Handle file, mm::KPROCESSOR_MODE callerMode) {
+    auto* current = ke::KeGetCurrentThread();
+    const auto withInterruptsDisabled = [](auto&& operation) noexcept {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        const auto status = operation();
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return status;
+    };
+    const auto copyIn = [&](void* destination, const void* source, size_t length,
+                            size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            if (length && alignment > 1 &&
+                (reinterpret_cast<uintptr_t>(source) & (alignment - 1)))
+                return NtStatus::DatatypeMisalignment;
+            return ex::ExSafeCopyFromUser(destination, source, length, callerMode);
+        });
+    };
+    const auto copyOut = [&](void* destination, const void* source, size_t length,
+                             size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            if (length && alignment > 1 &&
+                (reinterpret_cast<uintptr_t>(destination) & (alignment - 1)))
+                return NtStatus::DatatypeMisalignment;
+            return ex::ExSafeCopyToUser(destination, source, length, callerMode);
+        });
+    };
+
+    Handle* callerOutput = out;
+    if (callerMode == mm::UserMode) {
+        if (!out) return NtStatus::InvalidParameter;
+        const auto outputProbe = withInterruptsDisabled([&]() noexcept {
+            return ex::ProbeForWrite(out, sizeof(Handle), alignof(Handle), callerMode);
+        });
+        if (outputProbe != NtStatus::Success) return outputProbe;
+    } else if (!out) {
+        return NtStatus::InvalidParameter;
+    }
+
+    ObjectAttributes capturedAttributes{};
+    if (attributes) {
+        const auto captureStatus = copyIn(&capturedAttributes, attributes,
+                                          sizeof(capturedAttributes), alignof(ObjectAttributes));
+        if (captureStatus != NtStatus::Success) return captureStatus;
+        attributes = &capturedAttributes;
+    }
+    LargeInteger capturedMaximum{};
+    if (maximum) {
+        const auto captureStatus = copyIn(&capturedMaximum, maximum,
+                                          sizeof(capturedMaximum), alignof(LargeInteger));
+        if (captureStatus != NtStatus::Success) return captureStatus;
+        maximum = &capturedMaximum;
+    }
+
+    const bool imageSection = (allocation & section::SEC_IMAGE) != 0;
+    if (!out || (!imageSection && (!maximum || maximum->quadPart <= 0)) ||
+        (imageSection && (allocation & ~uint32_t{section::SEC_IMAGE | section::SEC_FILE})))
+        return NtStatus::InvalidParameter;
+    if (maximum && maximum->quadPart < 0) return NtStatus::InvalidParameter;
+    if constexpr (sizeof(size_t) < sizeof(uint64_t)) {
+        if (maximum && static_cast<uint64_t>(maximum->quadPart) > SIZE_MAX)
+            return NtStatus::SectionTooBig;
+    }
     if (attributes) {
         if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
         if (attributes->rootDirectory || attributes->objectName || attributes->attributes ||
             attributes->securityDescriptor || attributes->securityQualityOfService)
             return NtStatus::NotImplemented;
     }
-    if (file) return NtStatus::NotImplemented;
-    if (access & ~section::SECTION_ALL_ACCESS) return NtStatus::NotImplemented;
+    const uint32_t mappedAccess = ob::MapGenericAccess(access, sectionType.genericMapping);
+    if (mappedAccess & ~sectionType.validAccessMask) return NtStatus::NotImplemented;
+    if (imageSection && !file) return NtStatus::InvalidParameter;
+    if (!imageSection && file) return NtStatus::NotImplemented;
+    NtStatus status = NtStatus::Success;
+    ob::ObjectHeader* fileReference{};
+    io::FileObject* fileObject{};
+    if (imageSection) {
+        status = io::IoReferenceFileHandle(file, 0x0001, fileObject, fileReference);
+        if (status != NtStatus::Success) return status;
+    }
     void* body{};
     ob::ObjectHeader* header{};
-    NtStatus status = ob::ObCreateObject(ob::KernelMode, &sectionType, nullptr,
+    status = ob::ObCreateObject(ob::KernelMode, &sectionType, nullptr,
                                          sizeof(section::SectionObject), &body, &header);
-    if (status != NtStatus::Success) return status;
-    auto* object = new (body) section::SectionObject(static_cast<size_t>(maximum->quadPart), allocation, protect);
+    if (status != NtStatus::Success) {
+        if (fileReference) ob::ObDereferenceObject(fileReference);
+        return status;
+    }
+    const size_t maximumSize = maximum && maximum->quadPart > 0
+        ? static_cast<size_t>(maximum->quadPart) : 0;
+    section::SectionObject* object{};
+    if (imageSection) {
+        section::SectionFileBacking backing{fileReference, fileObject->size(), fileObject->name(), acquireFileSection,
+                                            releaseFileSection, readSectionFile};
+        object = new (body) section::SectionObject(maximumSize,
+            section::SEC_FILE | section::SEC_IMAGE, protect, backing);
+        ob::ObDereferenceObject(fileReference);
+    } else {
+        object = new (body) section::SectionObject(maximumSize, allocation, protect);
+    }
     status = object->getInitializationStatus();
+    Handle createdHandle{};
     if (status == NtStatus::Success)
-        status = ob::detail::currentHandleTable().createHandle(header, *out, access);
+        status = ob::detail::currentHandleTable().createHandle(header, createdHandle, mappedAccess);
     ob::ObDereferenceObject(header);
+    if (status != NtStatus::Success) return status;
+    status = copyOut(callerOutput, &createdHandle, sizeof(createdHandle), alignof(Handle));
+    if (status != NtStatus::Success) {
+        auto* removed = ob::detail::currentHandleTable().takeHandle(createdHandle);
+        if (!removed) __builtin_trap();
+        if (ob::ObFinishClose(removed, createdHandle) != NtStatus::Success) __builtin_trap();
+    }
     return status;
 }
 
-NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uintptr_t zeroBits,
-                            size_t commitSize, LargeInteger* offset, size_t* viewSize,
-                            uint32_t inherit, uint32_t allocation, uint32_t protection) {
+NtStatus NtCreateSection(Handle* out, uint32_t access, ObjectAttributes* attributes,
+                         LargeInteger* maximum, uint32_t protect, uint32_t allocation,
+                         Handle file) {
+    const auto* current = ke::KeGetCurrentThread();
+    const mm::KPROCESSOR_MODE callerMode = current && current->previousUserMode ? mm::UserMode : mm::KernelMode;
+    return createSection(out, access, attributes, maximum, protect, allocation, file, callerMode);
+}
+
+NtStatus NtCreateSectionFromKernel(Handle* out, uint32_t access,
+                                   ObjectAttributes* attributes, LargeInteger* maximum,
+                                   uint32_t protect, uint32_t allocation, Handle file) {
+    return createSection(out, access, attributes, maximum, protect, allocation, file, mm::KernelMode);
+}
+
+static NtStatus mapViewOfSection(Handle handle, Handle process, uintptr_t* base, uintptr_t zeroBits,
+                                 size_t commitSize, LargeInteger* offset, size_t* viewSize,
+                                 uint32_t inherit, uint32_t allocation, uint32_t protection,
+                                 mm::KPROCESSOR_MODE callerMode) {
+    const auto withInterruptsDisabled = [](auto&& operation) noexcept {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        const auto status = operation();
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return status;
+    };
+    const auto copyIn = [&](void* destination, const void* source, size_t length,
+                            size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            if (length && alignment > 1 &&
+                (reinterpret_cast<uintptr_t>(source) & (alignment - 1)))
+                return NtStatus::DatatypeMisalignment;
+            return ex::ExSafeCopyFromUser(destination, source, length, callerMode);
+        });
+    };
+    const auto copyOut = [&](void* destination, const void* source, size_t length,
+                             size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            if (length && alignment > 1 &&
+                (reinterpret_cast<uintptr_t>(destination) & (alignment - 1)))
+                return NtStatus::DatatypeMisalignment;
+            return ex::ExSafeCopyToUser(destination, source, length, callerMode);
+        });
+    };
+    const auto probeWrite = [&](void* destination, size_t length, size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ProbeForWrite(destination, length, alignment, callerMode);
+        });
+    };
     if (!base || !viewSize) return NtStatus::InvalidParameter;
+    uintptr_t capturedBase{};
+    size_t capturedViewSize{};
+    LargeInteger capturedOffset{};
+    auto status = copyIn(&capturedBase, base, sizeof(capturedBase), alignof(uintptr_t));
+    if (status != NtStatus::Success) return status;
+    status = copyIn(&capturedViewSize, viewSize, sizeof(capturedViewSize), alignof(size_t));
+    if (status != NtStatus::Success) return status;
+    if (offset) {
+        status = copyIn(&capturedOffset, offset, sizeof(capturedOffset), alignof(LargeInteger));
+        if (status != NtStatus::Success) return status;
+    }
+    status = probeWrite(base, sizeof(*base), alignof(uintptr_t));
+    if (status != NtStatus::Success) return status;
+    status = probeWrite(viewSize, sizeof(*viewSize), alignof(size_t));
+    if (status != NtStatus::Success) return status;
+    if (offset) {
+        status = probeWrite(offset, sizeof(*offset), alignof(LargeInteger));
+        if (status != NtStatus::Success) return status;
+    }
     if (process != InvalidHandleValue) return NtStatus::NotImplemented;
     if (inherit != 1 && inherit != 2) return NtStatus::InvalidParameter;
     if (zeroBits || commitSize || allocation)
         return NtStatus::NotImplemented;
-    if (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)
+    const bool executableProtection = protection == mm::PAGE_EXECUTE_READ;
+    if (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE &&
+        !executableProtection)
         return NtStatus::NotImplemented;
-    uint32_t desired = protection == mm::PAGE_READWRITE ? section::SECTION_MAP_WRITE : section::SECTION_MAP_READ;
+    const uint32_t desired = executableProtection
+        ? section::SECTION_MAP_EXECUTE | section::SECTION_MAP_READ :
+        protection == mm::PAGE_READWRITE ? section::SECTION_MAP_WRITE : section::SECTION_MAP_READ;
     ob::ObjectHeader* header{};
     ob::HandleTable* table{};
     Handle raw{};
-    NtStatus status = ob::detail::resolveHandle(handle, table, raw);
+    status = ob::detail::resolveHandle(handle, table, raw);
     if (status == NtStatus::Success)
         status = ob::ObReferenceObjectByHandle(raw, *table, desired, &sectionType, &header);
     if (status != NtStatus::Success) return status;
     auto* object = header->as<section::SectionObject>();
-    if (offset && offset->quadPart < 0) {
+    const bool imageView = object->getAllocationAttributes() & section::SEC_IMAGE;
+    if (imageView) {
+        const auto* pageProtections = object->getPageProtections();
+        if (!pageProtections) {
+            ob::ObDereferenceObject(header);
+            return NtStatus::InvalidImageFormat;
+        }
+        const size_t pageCount = (object->getSize() + mm::PageMask4KB) >> mm::PageShift4KB;
+        uint32_t imageAccess = desired | section::SECTION_MAP_READ;
+        for (size_t page = 0; page < pageCount; ++page) {
+            if (pageProtections[page] == mm::PAGE_EXECUTE_READ) {
+                imageAccess |= section::SECTION_MAP_EXECUTE;
+                break;
+            }
+        }
+        if (imageAccess != desired) {
+            ob::ObjectHeader* imageAccessReference{};
+            status = ob::ObReferenceObjectByHandle(raw, *table,
+                imageAccess, &sectionType, &imageAccessReference);
+            if (status != NtStatus::Success) {
+                ob::ObDereferenceObject(header);
+                return status;
+            }
+            ob::ObDereferenceObject(imageAccessReference);
+        }
+    }
+    if (!imageView && executableProtection) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::SectionProtection;
+    }
+    if (offset && capturedOffset.quadPart < 0) {
         ob::ObDereferenceObject(header);
         return NtStatus::InvalidParameter;
     }
-    const uint64_t sectionOffset = offset ? static_cast<uint64_t>(offset->quadPart) &
+    const uint64_t sectionOffset = offset ? static_cast<uint64_t>(capturedOffset.quadPart) &
         ~(static_cast<uint64_t>(mm::ProcessAddressSpace::AllocationGranularity) - 1) : 0;
-    if (protection == mm::PAGE_READWRITE && object->getPageProtection() != mm::PAGE_READWRITE) {
+    if (imageView && sectionOffset != 0) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidViewSize;
+    }
+    if (!imageView && protection == mm::PAGE_READWRITE && object->getPageProtection() != mm::PAGE_READWRITE) {
         ob::ObDereferenceObject(header);
         return NtStatus::SectionProtection;
     }
@@ -166,30 +432,75 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
         return NtStatus::InvalidViewSize;
     }
     const size_t remaining = sectionSize - static_cast<size_t>(sectionOffset);
-    size_t length = *viewSize ? *viewSize : remaining;
+    size_t length = capturedViewSize ? capturedViewSize : remaining;
+    if (imageView && length != remaining) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidViewSize;
+    }
     if (!length || length > remaining || length > SIZE_MAX - mm::PageMask4KB) {
         const auto failure = length > remaining ? NtStatus::InvalidViewSize : NtStatus::InvalidParameter;
         ob::ObDereferenceObject(header);
         return failure;
     }
     length = (length + mm::PageMask4KB) & ~mm::PageMask4KB;
-    uintptr_t target = *base ? *base & ~(static_cast<uintptr_t>(mm::ProcessAddressSpace::AllocationGranularity) - 1) : 0;
+    uintptr_t target = capturedBase ? capturedBase & ~(static_cast<uintptr_t>(mm::ProcessAddressSpace::AllocationGranularity) - 1)
+                             : imageView ? object->getImageBase() : 0;
+    if (imageView && target != object->getImageBase()) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::Conflict;
+    }
     const auto backing = object->getBackingReference();
     const size_t firstPage = static_cast<size_t>(sectionOffset) >> mm::PageShift4KB;
-    // Later protection changes must remain compatible with this view's
-    // original mapping protection, even if the section handle grants more.
-    const uint32_t maximumProtection = protection;
-    status = currentAddressSpace().mapSharedPages(target, length, protection, backing.pfns + firstPage,
-                                         backing.pageCount - firstPage,
-                                         header, acquireSectionView, releaseSectionView, maximumProtection,
-                                         false, inherit == 1, sectionOffset);
-    if (status == NtStatus::Success) {
-        *base = target;
-        *viewSize = length;
-        if (offset) offset->quadPart = static_cast<int64_t>(sectionOffset);
+    if (!backing.pfns || firstPage >= backing.pageCount ||
+        (length >> mm::PageShift4KB) > backing.pageCount - firstPage) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidImageFormat;
     }
+    const auto* imagePageProtections = imageView ? object->getPageProtections() : nullptr;
+    if (imageView && !imagePageProtections) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidImageFormat;
+    }
+    // SEC_IMAGE ignores Win32Protect for actual page permissions. Keep the
+    // PE subsection protections for every page, including when the caller
+    // requested PAGE_READONLY or PAGE_READWRITE.
+    const uint32_t maximumProtection = imageView
+        ? object->getMaximumImageProtection() : protection;
+    const uint32_t* pageProtections = imageView ? imagePageProtections + firstPage : nullptr;
+    status = currentAddressSpace().mapSharedPages(target, length, protection, backing.pfns + firstPage,
+        backing.pageCount - firstPage, header, acquireSectionView, releaseSectionView,
+        maximumProtection, imageView, inherit == 1, sectionOffset, pageProtections);
     ob::ObDereferenceObject(header);
+    if (status != NtStatus::Success) return status;
+
+    LargeInteger returnedOffset{};
+    returnedOffset.quadPart = static_cast<int64_t>(sectionOffset);
+    status = copyOut(base, &target, sizeof(target), alignof(uintptr_t));
+    if (status == NtStatus::Success)
+        status = copyOut(viewSize, &length, sizeof(length), alignof(size_t));
+    if (status == NtStatus::Success && offset)
+        status = copyOut(offset, &returnedOffset, sizeof(returnedOffset), alignof(LargeInteger));
+    if (status != NtStatus::Success) {
+        if (currentAddressSpace().unmapSharedPages(target) != NtStatus::Success) __builtin_trap();
+    }
     return status;
+}
+
+NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uintptr_t zeroBits,
+                            size_t commitSize, LargeInteger* offset, size_t* viewSize,
+                            uint32_t inherit, uint32_t allocation, uint32_t protection) {
+    const auto* current = ke::KeGetCurrentThread();
+    const mm::KPROCESSOR_MODE callerMode = current && current->previousUserMode ? mm::UserMode : mm::KernelMode;
+    return mapViewOfSection(handle, process, base, zeroBits, commitSize, offset, viewSize,
+                            inherit, allocation, protection, callerMode);
+}
+
+NtStatus NtMapViewOfSectionFromKernel(Handle handle, Handle process, uintptr_t* base,
+                                      uintptr_t zeroBits, size_t commitSize, LargeInteger* offset,
+                                      size_t* viewSize, uint32_t inherit, uint32_t allocation,
+                                      uint32_t protection) {
+    return mapViewOfSection(handle, process, base, zeroBits, commitSize, offset, viewSize,
+                            inherit, allocation, protection, mm::KernelMode);
 }
 
 NtStatus NtUnmapViewOfSection(Handle process, uintptr_t base) {
@@ -204,11 +515,11 @@ bool verifyBootstrapSectionOwnership() noexcept {
     LargeInteger maximum{};
     maximum.quadPart = mm::PageSize4KB;
     Handle handle{};
-    if (NtCreateSection(&handle, section::SECTION_MAP_READ, nullptr, &maximum,
+    if (NtCreateSectionFromKernel(&handle, section::SECTION_MAP_READ, nullptr, &maximum,
                         mm::PAGE_READONLY, section::SEC_COMMIT, 0) != NtStatus::Success) return false;
     uintptr_t base{};
     size_t size = mm::PageSize4KB;
-    const auto mapStatus = NtMapViewOfSection(handle, InvalidHandleValue, &base, 0, 0,
+    const auto mapStatus = NtMapViewOfSectionFromKernel(handle, InvalidHandleValue, &base, 0, 0,
                                                nullptr, &size, 2, 0, mm::PAGE_READONLY);
     if (mapStatus != NtStatus::Success) { NtClose(handle); return false; }
     if (NtClose(handle) != NtStatus::Success ||
@@ -342,8 +653,11 @@ NtStatus NtProtectVirtualMemory(
     const auto* vad = g_KernelAddressSpace.findVad(addr);
     if (!vad) return NtStatus::InvalidParameter;
     // The hosted fallback only supports changes to an entire committed VAD.
+    const bool imageExecuteProtection = vad->isImageView &&
+        newProtect == mm::PAGE_EXECUTE_READ;
     if (addr != vad->startingAddress || size != vad->endingAddress - vad->startingAddress + 1 ||
-        !vad->committed || (newProtect != mm::PAGE_READONLY && newProtect != mm::PAGE_READWRITE))
+        !vad->committed || (newProtect != mm::PAGE_READONLY && newProtect != mm::PAGE_READWRITE &&
+                            !imageExecuteProtection))
         return NtStatus::NotImplemented;
     uint32_t previous;
     const NtStatus status = g_KernelAddressSpace.protect(addr, size, newProtect, &previous);

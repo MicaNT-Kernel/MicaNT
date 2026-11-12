@@ -2,12 +2,33 @@
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/core/sync.hpp"
+#include "micant/km/hal/amd64_bootstrap.hpp"
 #include "micant/km/executive/usermode.hpp"
+#include "micant/km/executive/probe.hpp"
+#include "micant/km/executive/section.hpp"
 #include "micant/km/executive/ps_objects.hpp"
+#include "micant/shared/context.hpp"
+#include <algorithm>
 #include <cstring>
+#include <iterator>
+
+#if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+extern "C" uint32_t MicantAmd64XsaveMask;
+#endif
+
+namespace micant::sys {
+NtStatus referenceProcessImageSection(Handle handle, ob::ObjectHeader*& reference) noexcept;
+NtStatus mapBootstrapFileImageView(mm::ProcessAddressSpace& space, uintptr_t& base,
+                                   section::SectionObject& image,
+                                   ob::ObjectHeader* sectionReference) noexcept;
+}
 
 namespace micant::ps {
 namespace {
+constexpr size_t MinimumUserExceptionStackCommit = 24 * 1024;
+constexpr size_t MinimumUserExceptionStackReserve =
+    MinimumUserExceptionStackCommit + mm::PageSize4KB;
+
 // IDs share one namespace and are never reused by the bootstrap. Exhaustion
 // fails creation instead of wrapping onto an existing process or thread.
 std::atomic<uint32_t> nextClientId{4};
@@ -25,6 +46,17 @@ bool hasUsableIdleThread(const ke::KThread* current) noexcept {
     const auto* idle = ke::g_CurrentCpu.idleThread;
     return idle && idle != current && !idle->readyQueued &&
         (idle->state == ke::ThreadState::Initialized || idle->state == ke::ThreadState::Ready);
+}
+
+// The only freestanding dispatcher wait currently publishes this descriptor.
+// A system thread's bootstrap critical region is the one APC-disable nesting
+// level the termination callback can safely leave before exiting the thread.
+bool canTerminateEventWait(const ke::KThread& thread) noexcept {
+    const bool onlyInitialRegion = thread.systemInitialRegionActive && thread.kernelApcDisable == 1;
+    return thread.eventWaitInProgress && thread.eventWaitCanTerminate &&
+        thread.eventWaitObject && thread.eventWaitBlock && !thread.eventWaitCancelled &&
+        (!thread.kernelApcDisable || onlyInitialRegion) && !thread.specialApcDisable &&
+        !thread.normalKernelApcActive;
 }
 }
 
@@ -58,6 +90,21 @@ struct ThreadReaper {
         if (processTail) processTail->deferredNext_ = &process; else processHead = &process;
         processTail = &process;
     }
+    // The caller takes responsibility for the queue's reference after
+    // removing an item, and must dereference it outside BSP exclusion.
+    static bool removeProcess(EProcess& process) noexcept {
+        if (!process.deferredQueued_) return false;
+        EProcess* previous{};
+        for (auto* item = processHead; item; item = item->deferredNext_) {
+            if (item != &process) { previous = item; continue; }
+            if (previous) previous->deferredNext_ = item->deferredNext_; else processHead = item->deferredNext_;
+            if (processTail == item) processTail = previous;
+            item->deferredNext_ = nullptr;
+            item->deferredQueued_ = false;
+            return true;
+        }
+        __builtin_trap();
+    }
     static void enqueueDelete(ob::ObjectHeader& header) noexcept {
         header.deferredDeleteNext = nullptr;
         if (deleteTail) deleteTail->deferredDeleteNext = &header; else deleteHead = &header;
@@ -81,13 +128,16 @@ struct ThreadReaper {
         for (;;) {
             __asm__ __volatile__("cli" : : : "memory");
             bool retry = false;
-            while (head) {
+            size_t threadBudget{};
+            for (auto* item = head; item; item = item->deferredNext_) ++threadBudget;
+            while (head && threadBudget) {
+                --threadBudget;
                 auto* thread = head;
                 remove(*thread);
                 if (thread->thread_.get() == ke::KeGetCurrentThread()) {
                     enqueue(*thread);
                     retry = true;
-                    break;
+                    continue;
                 }
                 // Pin the object before enabling interrupts: another caller
                 // may race this worker and complete the reap first.
@@ -103,15 +153,19 @@ struct ThreadReaper {
                 __asm__ __volatile__("sti" : : : "memory");
                 ob::ObDereferenceObject(reference);
                 __asm__ __volatile__("cli" : : : "memory");
-                if (incomplete) { retry = true; break; }
+                if (incomplete) retry = true;
                 // The object may have been destroyed by the last dereference.
             }
-            while (!retry && processHead) {
+            size_t processBudget{};
+            for (auto* item = processHead; item; item = item->deferredNext_) ++processBudget;
+            while (processHead && processBudget) {
+                --processBudget;
                 auto* process = processHead;
                 processHead = process->deferredNext_;
                 if (!processHead) processTail = nullptr;
                 process->deferredNext_ = nullptr;
                 process->deferredQueued_ = false;
+                process->synchronousCleanupRetry_ = false;
                 auto* reference = process->objectHeader_;
                 if (!reference) __builtin_trap();
                 __asm__ __volatile__("sti" : : : "memory");
@@ -127,7 +181,10 @@ struct ThreadReaper {
                     __asm__ __volatile__("cli" : : : "memory");
                 }
             }
-            while (!retry && deleteHead) {
+            size_t deleteBudget{};
+            for (auto* item = deleteHead; item; item = item->deferredDeleteNext) ++deleteBudget;
+            while (deleteHead && deleteBudget) {
+                --deleteBudget;
                 auto* header = deleteHead;
                 deleteHead = header->deferredDeleteNext;
                 if (!deleteHead) deleteTail = nullptr;
@@ -208,7 +265,10 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
         return NtStatus::Unsuccessful;
     }
     processId_ = processId;
+    activeAttachReferences_ = 0;
     terminating_ = false;
+    processPublished_ = false;
+    synchronousCleanupRetry_ = false;
     exitStatus_ = NtStatus::Pending;
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     (void)terminationEvent_.reset();
@@ -217,10 +277,13 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     userPeb_ = 0;
     userLoaderData_ = 0;
     userProcessParameters_ = 0;
+    userApiSetMap_ = 0;
+    userApiSetMapSize_ = 0;
     nativeImagePaths_ = {};
     processImagePath_ = {};
     processCommandLine_ = {};
     processParametersConfigured_ = false;
+    imageSectionBacked_ = false;
     userTlsLayouts_.reset();
     userTlsCount_ = 0;
     return NtStatus::Success;
@@ -232,7 +295,8 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     uintptr_t observed{};
     __asm__ __volatile__("pushfq; popq %0; cli; movq %%cr3, %1"
                          : "=r"(entryFlags), "=r"(observed) : : "memory");
-    if (!root_.pfn || attachedThreads_ || addressSpaceClosing_ || observed == getDirectoryTableBase()) {
+    if (!root_.pfn || attachedThreads_ || activeAttachReferences_ || addressSpaceClosing_ ||
+        observed == getDirectoryTableBase()) {
         if (entryFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return NtStatus::InvalidParameter;
     }
@@ -256,7 +320,7 @@ NtStatus EProcess::closeAddressSpace() noexcept {
             if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
         }
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-        if (owner.release) owner.release(owner.context);
+        owner.releaseNow();
         if (status != NtStatus::Success) break;
     }
     if (status == NtStatus::Success) {
@@ -275,10 +339,13 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     userPeb_ = 0;
     userLoaderData_ = 0;
     userProcessParameters_ = 0;
+    userApiSetMap_ = 0;
+    userApiSetMapSize_ = 0;
     nativeImagePaths_ = {};
     processImagePath_ = {};
     processCommandLine_ = {};
     processParametersConfigured_ = false;
+    imageSectionBacked_ = false;
     userTlsLayouts_.reset();
     userTlsCount_ = 0;
     images_.reset();
@@ -304,6 +371,35 @@ NtStatus EProcess::attachThread(ke::KThread& thread) noexcept {
     return NtStatus::Success;
 }
 
+NtStatus EProcess::referenceAddressSpaceForAttach(uintptr_t& directoryTableBase,
+                                                   ob::ObjectHeader*& reference) noexcept {
+    reference = nullptr;
+    directoryTableBase = 0;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    NtStatus status = NtStatus::Success;
+    if (!root_.pfn || !objectHeader_ || terminating_ || addressSpaceClosing_ ||
+        activeAttachReferences_ == SIZE_MAX) {
+        status = NtStatus::InvalidParameter;
+    } else {
+        reference = objectHeader_;
+        reference->addReference();
+        ++activeAttachReferences_;
+        directoryTableBase = getDirectoryTableBase();
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return status;
+}
+
+void EProcess::releaseAddressSpaceAttachReference(ob::ObjectHeader* reference) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (!reference || !activeAttachReferences_) __builtin_trap();
+    --activeAttachReferences_;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    ob::ObDereferenceObject(reference);
+}
+
 void EProcess::onThreadTermination(NtStatus exitStatus) noexcept {
     if (!objectHeader_ || systemProcess_ || terminating_) return;
     for (auto* thread = threads_; thread; thread = thread->processNext)
@@ -325,14 +421,20 @@ NtStatus EProcess::requestTermination(NtStatus exitStatus, ke::KThread* callingT
         const bool unstarted = thread->owningThread && !thread->owningThread->started_ &&
             thread->state == ke::ThreadState::Initialized && !thread->readyQueued;
         if (!thread->owningThread || (!unstarted && !waiting && !ready)) return NtStatus::NotImplemented;
-        if (thread->owningThread->isSystemThread()) return NtStatus::AccessDenied;
+        // A never-started system thread is safe to queue for target-context
+        // cleanup: startThread observes terminationRequested and skips its
+        // driver routine. A started system thread is accepted below only when
+        // it is blocked in a cancellable Ke event wait.
         if (!thread->owningThread->started_ && (thread->kernelApcDisable ||
             thread->specialApcDisable || thread->normalKernelApcActive))
             return NtStatus::NotImplemented;
-        const bool cancellable = waiting && thread->eventWaitInProgress && thread->eventWaitUserMode &&
-            thread->eventWaitCanTerminate && thread->eventWaitObject &&
-            thread->eventWaitBlock && !thread->eventWaitCancelled && !thread->kernelApcDisable &&
-            !thread->specialApcDisable && !thread->normalKernelApcActive;
+        // A user-mode wait can be interrupted to deliver termination. A
+        // kernel-mode wait must first return normally so its syscall releases
+        // the waited object's reference before target-context rundown.
+        const bool cancellable = waiting && thread->eventWaitUserMode &&
+            canTerminateEventWait(*thread);
+        if (thread->owningThread->isSystemThread() && thread->owningThread->started_ && !cancellable)
+            return NtStatus::AccessDenied;
         if (cancellable && thread->readyQueued) return NtStatus::Unsuccessful;
         if (unstarted || ready || cancellable) willHaveNext = true;
     }
@@ -361,10 +463,7 @@ NtStatus EProcess::requestTermination(NtStatus exitStatus, ke::KThread* callingT
     // cancellation and ready insertion cannot fail without a broken invariant.
     for (auto* thread = threads_; thread; thread = thread->processNext) {
         if (thread == callingThread || thread->state != ke::ThreadState::Waiting ||
-            !thread->eventWaitInProgress || !thread->eventWaitUserMode || !thread->eventWaitCanTerminate ||
-            !thread->eventWaitObject || !thread->eventWaitBlock ||
-            thread->eventWaitCancelled || thread->kernelApcDisable || thread->specialApcDisable ||
-            thread->normalKernelApcActive) continue;
+            !thread->eventWaitUserMode || !canTerminateEventWait(*thread)) continue;
         if (!static_cast<sync::detail::BootstrapEvent*>(thread->eventWaitObject)->cancelWaitForTermination(*thread))
             __builtin_trap();
     }
@@ -415,21 +514,49 @@ NtStatus EProcess::terminateOther(NtStatus exitStatus) noexcept {
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     auto* current = ke::KeGetCurrentThread();
     NtStatus result{};
-    if (!root_.pfn || terminating_) result = NtStatus::ProcessIsTerminating;
+    if (!root_.pfn) result = NtStatus::ProcessIsTerminating;
     else if (!current || current->owningProcess == this || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
         result = NtStatus::InvalidParameter;
+    else if (terminating_ && synchronousCleanupRetry_ && !attachedThreads_ && !addressSpaceClosing_) {
+        // A prior synchronous cleanup may have removed some resources before
+        // failing. Retry the remaining teardown without undoing termination
+        // or replacing its original exit status.
+        synchronousCleanupRetry_ = false;
+        if (hal::amd64::bootstrapSchedulerClockActive() && objectHeader_) {
+            detail::ThreadReaper::enqueueProcess(*this);
+            if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+            return NtStatus::Success;
+        }
+        const bool queuedReference = detail::ThreadReaper::removeProcess(*this);
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        result = closeAddressSpace();
+        if (result != NtStatus::Success) {
+            ob::detail::HandleTableGuard guard;
+            synchronousCleanupRetry_ = true;
+            if (objectHeader_) detail::ThreadReaper::enqueueProcess(*this);
+        }
+        if (result == NtStatus::Success) (void)terminationEvent_.set();
+        if (queuedReference) ob::ObDereferenceObject(objectHeader_);
+        return result;
+    }
+    else if (terminating_) result = NtStatus::ProcessIsTerminating;
     else if (attachedThreads_) result = requestTermination(exitStatus, nullptr);
     else {
         terminating_ = true;
         exitStatus_ = exitStatus;
-        if (hal::amd64::bootstrapSchedulerClockActive()) {
+        if (hal::amd64::bootstrapSchedulerClockActive() && objectHeader_) {
             detail::ThreadReaper::enqueueProcess(*this);
             result = NtStatus::Success;
         } else {
-            // Early bootstrap has no worker; retain the caller's Ob reference
-            // and close synchronously after restoring the caller's IF state.
+            // Early bootstrap has no worker. A non-Ob bootstrap process also
+            // has no reference the worker could retain; close synchronously.
             if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
             result = closeAddressSpace();
+            if (result != NtStatus::Success) {
+                ob::detail::HandleTableGuard guard;
+                synchronousCleanupRetry_ = true;
+                if (objectHeader_) detail::ThreadReaper::enqueueProcess(*this);
+            }
             if (result == NtStatus::Success) (void)terminationEvent_.set();
             return result;
         }
@@ -613,11 +740,21 @@ NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size
             layout.zeroFill > mm::PageSize4KB - 0x100 - layout.initialData.size()) return NtStatus::NotImplemented;
     }
     const size_t stackSize = (userStackSize + mm::PageMask4KB) & ~mm::PageMask4KB;
-    if (!commitSize) commitSize = stackSize;
+    if (!commitSize) commitSize = stackSize - mm::PageSize4KB;
     if (commitSize > stackSize || commitSize > SIZE_MAX - mm::PageMask4KB)
         return NtStatus::InvalidParameter;
     commitSize = (commitSize + mm::PageMask4KB) & ~mm::PageMask4KB;
-    if (commitSize < mm::PageSize4KB || commitSize > stackSize) return NtStatus::InvalidParameter;
+    if (commitSize < mm::PageSize4KB || commitSize > stackSize - mm::PageSize4KB)
+        return NtStatus::InvalidParameter;
+    // The exception producer writes CONTEXT/CONTEXT_EX below the initial
+    // user SP, and NTDLL needs bounded stack for its handler snapshot. Commit
+    // that guarantee at thread creation so even a common 4/8 KiB StackCommit
+    // can deliver an exception. Larger reservations retain their moving guard
+    // below this initial commit; a smaller reserve cannot satisfy the ABI.
+    if (stackSize < MinimumUserExceptionStackReserve) return NtStatus::InvalidParameter;
+    if (commitSize < MinimumUserExceptionStackCommit)
+        commitSize = MinimumUserExceptionStackCommit;
+    if (commitSize > stackSize - mm::PageSize4KB) return NtStatus::InvalidParameter;
     auto status = initialize(process, kernelStackSize, startUser, this);
     if (status != NtStatus::Success) return status;
     auto& space = process.getAddressSpace();
@@ -625,6 +762,16 @@ NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size
     if (status == NtStatus::Success) {
         uintptr_t committed = userStack_ + stackSize - commitSize;
         status = space.allocate(committed, commitSize, mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    }
+    if (status == NtStatus::Success && commitSize < stackSize) {
+        uintptr_t guardPage = userStack_ + stackSize - commitSize - mm::PageSize4KB;
+        status = space.allocate(guardPage, mm::PageSize4KB, mm::MEM_COMMIT, mm::PAGE_READWRITE);
+        if (status == NtStatus::Success) status = space.setStackGuard(guardPage, true);
+        if (status == NtStatus::Success) userStackGuard_ = guardPage;
+    }
+    if (status == NtStatus::Success) {
+        userStackLimit_ = userStack_ + stackSize - commitSize;
+        userStackTop_ = userStack_ + stackSize;
     }
     if (status == NtStatus::Success)
         status = space.allocate(userTeb_, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
@@ -658,6 +805,8 @@ NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size
     teb->self = userTeb_;
     teb->stackBase = userStack_ + stackSize;
     teb->stackLimit = userStack_ + stackSize - commitSize;
+    teb->deallocationStack = userStack_;
+    teb->guaranteedStackBytes = static_cast<uint32_t>(mm::PageSize4KB);
     teb->threadLocalStoragePointer = userTls_;
     teb->processEnvironmentBlock = process.userPebAddress();
     teb->uniqueProcessId = process.processId();
@@ -693,6 +842,237 @@ NtStatus EThread::configureUserStart(uintptr_t routine, uintptr_t argument) noex
     return NtStatus::Success;
 }
 
+NtStatus EThread::resolveUserStackGuard(uintptr_t address) noexcept {
+    ob::detail::HandleTableGuard guard;
+    if (!userStackGuard_ ||
+        (address & ~static_cast<uintptr_t>(mm::PageMask4KB)) != userStackGuard_)
+        return NtStatus::AccessViolation;
+    uintptr_t currentRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    if (!thread_ || ke::KeGetCurrentThread() != thread_.get() || !process_ ||
+        thread_->owningProcess != process_ ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL || currentRoot != process_->getDirectoryTableBase() ||
+        !userStackGuard_)
+        return NtStatus::GuardPageViolation;
+    if (!hal::amd64::bootstrapUserRange(userTeb_, sizeof(um::Teb64), true)) return NtStatus::AccessViolation;
+    auto& space = process_->getAddressSpace();
+    if (userStackGuard_ < userStack_ + mm::PageSize4KB) return NtStatus::StackOverflow;
+    const uintptr_t next = userStackGuard_ - mm::PageSize4KB;
+    const auto* vad = space.findVad(next);
+    if (!vad || vad != space.findVad(userStackGuard_) || vad->startingAddress != userStack_ || vad->isSectionView)
+        return NtStatus::GuardPageViolation;
+    bool nextCommitted = false;
+    for (auto* page = vad->commitRanges.get(); page; page = page->next.get()) {
+        if (page->firstVpn != (next >> mm::PageShift4KB)) continue;
+        if (page->protection != mm::PAGE_READWRITE) return NtStatus::GuardPageViolation;
+        nextCommitted = true;
+        break;
+    }
+    const bool exhausted = userStackGuard_ - userStack_ <= 2 * mm::PageSize4KB;
+    if (nextCommitted && !exhausted) return NtStatus::GuardPageViolation;
+    uintptr_t target = next;
+    auto status = nextCommitted ? NtStatus::Success :
+        space.allocate(target, mm::PageSize4KB, mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (status != NtStatus::Success) return status;
+    if (!exhausted) status = space.setStackGuard(next, true);
+    if (status == NtStatus::Success) status = space.setStackGuard(userStackGuard_, false);
+    if (status != NtStatus::Success) {
+        if (!nextCommitted && space.free(next, mm::PageSize4KB, mm::MEM_DECOMMIT) != NtStatus::Success)
+            __builtin_trap();
+        return status;
+    }
+    userStackLimit_ = exhausted ? next : userStackGuard_;
+    reinterpret_cast<um::Teb64*>(userTeb_)->stackLimit = userStackLimit_;
+    userStackGuard_ = exhausted ? 0 : next;
+    return exhausted ? NtStatus::StackOverflow : NtStatus::Success;
+}
+
+NtStatus EThread::prepareUserException(uint32_t exceptionCode, uint32_t exceptionVector,
+                                       uintptr_t address,
+                                       uint64_t* hardwareFrame, uint64_t* savedRegisters,
+                                       const void* floatingState) noexcept {
+    ob::detail::HandleTableGuard guard;
+    if (!thread_ || ke::KeGetCurrentThread() != thread_.get() || !process_ ||
+        thread_->owningProcess != process_ || !hardwareFrame || !savedRegisters ||
+        !floatingState || (hardwareFrame[2] & 3) != 3 ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+
+    struct ExceptionRecord64 {
+        uint32_t code, flags;
+        uint64_t nestedRecord, exceptionAddress;
+        uint32_t parameterCount, alignment;
+        uint64_t information[15];
+    };
+    static_assert(sizeof(ExceptionRecord64) == 0x98);
+    static_assert(sizeof(micant::CONTEXT) == 0x4d0);
+    static_assert(sizeof(micant::CONTEXT_EX) == 0x20);
+    constexpr size_t contextOffset = (sizeof(ExceptionRecord64) + 15) & ~size_t{15};
+
+    uint32_t xsaveMask{};
+    uint32_t extendedSize{512};
+#if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+    xsaveMask = MicantAmd64XsaveMask;
+    extendedSize = ke::MicantAmd64ExtendedSize;
+#endif
+    const bool hasExtendedXstate = (xsaveMask & ~uint32_t{3}) != 0;
+    if (hasExtendedXstate && (extendedSize < 576 || extendedSize > 4096))
+        return NtStatus::NotSupported;
+
+    const auto* images = process_->nativeImages();
+    uint64_t dispatcher{};
+    if (!images || !process_->nativeImagesFinalized() ||
+        images->resolve("ntdll.dll", "KiUserExceptionDispatcher", 0, dispatcher) != NtStatus::Success ||
+        !hal::amd64::bootstrapUserRange(dispatcher, 1, false, true) ||
+        !hal::amd64::bootstrapUserRange(userTeb_, sizeof(um::Teb64), true))
+        return NtStatus::ProcedureNotFound;
+
+    const uintptr_t stackTop = static_cast<uintptr_t>(hardwareFrame[4]);
+    // NTDLL's frame walker keeps one CONTEXT_EX/XSTATE snapshot while running
+    // a language handler. Reserve bounded user stack for that snapshot plus
+    // the handler's ABI home space and ordinary dispatcher calls.
+    constexpr size_t dispatcherStackReserve = 16 * 1024;
+    constexpr size_t xstateAlignmentSlack = 63;
+    const size_t xstateLength = hasExtendedXstate ? extendedSize - 512 : 0;
+    const size_t xstateOffsetSlack = hasExtendedXstate ? xstateAlignmentSlack : 1;
+    const size_t fixedPayload = contextOffset + sizeof(micant::CONTEXT) +
+                                sizeof(micant::CONTEXT_EX) + xstateOffsetSlack +
+                                dispatcherStackReserve + 64;
+    if (xstateLength > SIZE_MAX - fixedPayload) return NtStatus::StackOverflow;
+    const size_t payloadSize = fixedPayload + xstateLength;
+    if (payloadSize > SIZE_MAX - mm::PageMask4KB) return NtStatus::StackOverflow;
+    const size_t guaranteeBytes = (payloadSize + mm::PageMask4KB) & ~mm::PageMask4KB;
+    if (!userStack_ || userStackTop_ <= userStackLimit_ ||
+        userStackLimit_ < userStack_ ||
+        userStackLimit_ > UINTPTR_MAX - guaranteeBytes ||
+        userStackTop_ - userStackLimit_ < guaranteeBytes || payloadSize > guaranteeBytes)
+        return NtStatus::StackOverflow;
+    const bool stackPointerInOwnedStack = stackTop >= userStackLimit_ && stackTop <= userStackTop_;
+    uintptr_t frameAddress = stackPointerInOwnedStack && stackTop >= payloadSize
+        ? (stackTop - payloadSize) & ~uintptr_t{15} : 0;
+    const bool needsGuarantee = exceptionCode == static_cast<uint32_t>(NtStatus::StackOverflow) ||
+        !frameAddress || frameAddress < userStackLimit_ ||
+        !hal::amd64::bootstrapUserRange(frameAddress, payloadSize, true);
+    if (needsGuarantee) {
+        // Use the kernel-tracked committed bottom page; user-writable TEB
+        // stack bounds and guaranteedStackBytes are advisory only.
+        frameAddress = (userStackLimit_ + guaranteeBytes - payloadSize) & ~uintptr_t{15};
+        if (frameAddress < userStackLimit_ || frameAddress > UINTPTR_MAX - payloadSize ||
+            !hal::amd64::bootstrapUserRange(frameAddress, payloadSize, true))
+            return NtStatus::StackOverflow;
+    }
+
+    auto* record = reinterpret_cast<ExceptionRecord64*>(frameAddress);
+    auto* context = reinterpret_cast<micant::CONTEXT*>(frameAddress + contextOffset);
+    auto* contextEx = reinterpret_cast<micant::CONTEXT_EX*>(
+        reinterpret_cast<uintptr_t>(context) + sizeof(*context));
+    *record = {};
+    *contextEx = {};
+    record->code = exceptionCode;
+    record->exceptionAddress = exceptionCode == static_cast<uint32_t>(NtStatus::Breakpoint) &&
+        hardwareFrame[1] ? hardwareFrame[1] - 1 : hardwareFrame[1];
+    if (exceptionCode == static_cast<uint32_t>(NtStatus::AccessViolation) &&
+        exceptionVector == 14) {
+        // Only #PF supplies the architectural access type and faulting data
+        // address. Other exceptions with STATUS_ACCESS_VIOLATION (for example
+        // #GP/#SS) carry selector/control error codes in hardwareFrame[0].
+        record->parameterCount = 2;
+        record->information[0] = (hardwareFrame[0] & 16) ? 8 :
+                                 (hardwareFrame[0] & 2) ? 1 : 0;
+        record->information[1] = address;
+    } else if (exceptionCode == static_cast<uint32_t>(NtStatus::GuardPageViolation)) {
+        record->parameterCount = 1;
+        record->information[0] = address;
+    }
+
+    *context = {};
+    // The interrupt wrapper preserves the architecturally enabled x87/SSE
+    // state in an XSAVE area. CONTEXT contains the legacy x87/SSE component;
+    // the upper AVX/AVX-512 components use the separate Windows XSTATE APIs.
+    // Do not advertise debug-register state here: the trap frame does not
+    // capture DR0-DR7 and restoring zeroes would silently change it.
+    context->ContextFlags = CONTEXT_FULL | CONTEXT_SEGMENTS |
+        (hasExtendedXstate ? CONTEXT_XSTATE : 0);
+    context->SegCs = static_cast<uint16_t>(hardwareFrame[2]);
+    context->SegSs = static_cast<uint16_t>(hardwareFrame[5]);
+    __asm__ __volatile__("movw %%ds, %0" : "=rm"(context->SegDs));
+    __asm__ __volatile__("movw %%es, %0" : "=rm"(context->SegEs));
+    __asm__ __volatile__("movw %%fs, %0" : "=rm"(context->SegFs));
+    __asm__ __volatile__("movw %%gs, %0" : "=rm"(context->SegGs));
+    context->EFlags = static_cast<uint32_t>(hardwareFrame[3]);
+    context->Rip = hardwareFrame[1];
+    context->Rsp = hardwareFrame[4];
+    context->R15 = savedRegisters[0]; context->R14 = savedRegisters[1];
+    context->R13 = savedRegisters[2]; context->R12 = savedRegisters[3];
+    context->R11 = savedRegisters[4]; context->R10 = savedRegisters[5];
+    context->R9 = savedRegisters[6];  context->R8 = savedRegisters[7];
+    context->Rdi = savedRegisters[8]; context->Rsi = savedRegisters[9];
+    context->Rbp = savedRegisters[10]; context->Rbx = savedRegisters[11];
+    context->Rdx = savedRegisters[12]; context->Rcx = savedRegisters[13];
+    context->Rax = savedRegisters[14];
+    std::memcpy(&context->FltSave, floatingState, sizeof(context->FltSave));
+    context->MxCsr = context->FltSave.MxCsr;
+
+    contextEx->All.Offset = -static_cast<int32_t>(sizeof(*context));
+    contextEx->All.Length = static_cast<uint32_t>(sizeof(*context) + sizeof(*contextEx));
+    contextEx->Legacy.Offset = -static_cast<int32_t>(sizeof(*context));
+    contextEx->Legacy.Length = sizeof(*context);
+    if (hasExtendedXstate) {
+        const uintptr_t contextExAddress = reinterpret_cast<uintptr_t>(contextEx);
+        const uintptr_t xstateAddress =
+            (contextExAddress + sizeof(*contextEx) + 63) & ~uintptr_t{63};
+        const size_t xstateOffset = xstateAddress - contextExAddress;
+        contextEx->XState.Offset = static_cast<int32_t>(xstateOffset);
+        contextEx->XState.Length = static_cast<uint32_t>(xstateLength);
+        contextEx->All.Length = static_cast<uint32_t>(sizeof(*context) + xstateOffset + xstateLength);
+        std::memcpy(reinterpret_cast<void*>(xstateAddress),
+                    static_cast<const uint8_t*>(floatingState) + 512, xstateLength);
+    } else {
+        // Public CONTEXT_EX convention for a context without an XState chunk.
+        contextEx->XState.Offset = static_cast<int32_t>(sizeof(*contextEx) + 1);
+    }
+
+    // KiUserExceptionDispatcher(Record, Context) receives the same two
+    // pointers as RCX/RDX and a Windows AMD64 entry stack alignment.
+    hardwareFrame[1] = dispatcher;
+    hardwareFrame[3] = (hardwareFrame[3] & ~uint64_t{0x3000}) | 2;
+    hardwareFrame[4] = frameAddress + payloadSize - 8;
+    savedRegisters[12] = reinterpret_cast<uintptr_t>(context);
+    savedRegisters[13] = reinterpret_cast<uintptr_t>(record);
+    savedRegisters[14] = 0;
+    return NtStatus::Success;
+}
+
+extern "C" uint32_t MicantPsResolveUserStackFault(uintptr_t address, uint64_t errorCode,
+                                                   uint64_t savedCs) noexcept {
+    // A stack guard is a non-present, user data access. Reserved-bit,
+    // instruction-fetch and supervisor faults belong to the normal trap path.
+    if ((savedCs & 3) != 3 || (errorCode & ~uint64_t{6}) || !(errorCode & 4))
+        return static_cast<uint32_t>(NtStatus::AccessViolation);
+    auto* thread = ke::KeGetCurrentThread();
+    return static_cast<uint32_t>(thread && thread->owningThread
+        ? thread->owningThread->resolveUserStackGuard(address) : NtStatus::AccessViolation);
+}
+
+extern "C" bool MicantPsPrepareUserException(uint32_t exceptionCode,
+                                              uint32_t exceptionVector,
+                                              uintptr_t address,
+                                              uint64_t* hardwareFrame,
+                                              uint64_t* savedRegisters,
+                                              const void* floatingState) noexcept {
+    auto* current = ke::KeGetCurrentThread();
+    return current && current->owningThread &&
+        current->owningThread->prepareUserException(exceptionCode, exceptionVector, address,
+                                                     hardwareFrame, savedRegisters,
+                                                     floatingState) == NtStatus::Success;
+}
+
+extern "C" bool MicantPsHandleUserStackFault(uintptr_t address, uint64_t errorCode,
+                                              uint64_t savedCs) noexcept {
+    return MicantPsResolveUserStackFault(address, errorCode, savedCs) ==
+        static_cast<uint32_t>(NtStatus::Success);
+}
+
 void EThread::startUser(void* argument) noexcept {
     auto* self = static_cast<EThread*>(argument);
     if (!self || !self->userEntry_ || !self->userStackPointer_) __builtin_trap();
@@ -720,6 +1100,8 @@ NtStatus EThread::releaseUserMemory() noexcept {
     if (previous != target && !hal::amd64::switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status == NtStatus::Success) {
         userEntry_ = userStackPointer_ = 0;
+        userStackGuard_ = 0;
+        userStackLimit_ = userStackTop_ = 0;
         userStartRoutine_ = userStartArgument_ = 0;
         userInterruptible_ = false;
         thread_->tebAddress = 0;
@@ -793,15 +1175,14 @@ NtStatus EThread::terminateOther(NtStatus status) noexcept {
         return NtStatus::InvalidParameter;
     if (!started_ && (thread_->kernelApcDisable || thread_->specialApcDisable ||
                       thread_->normalKernelApcActive)) return NtStatus::NotImplemented;
-    // Started kernel threads have no user-return boundary at which this
-    // bootstrap mechanism can safely deliver the termination request.
-    if (started_ && !userEntry_) return NtStatus::NotImplemented;
+    const bool cancellableWait = thread_->state == ke::ThreadState::Waiting &&
+        canTerminateEventWait(*thread_);
+    // A running kernel thread has no safe termination boundary. A thread
+    // blocked in the Ke event wait can exit in its own context after Ke has
+    // unlinked the waiter and released the waited object's Ob reference.
+    if (started_ && !userEntry_ && !cancellableWait) return NtStatus::NotImplemented;
     if (thread_->state == ke::ThreadState::Waiting) {
-        if (!thread_->eventWaitInProgress || !thread_->eventWaitUserMode ||
-            !thread_->eventWaitCanTerminate || !thread_->eventWaitObject ||
-            !thread_->eventWaitBlock || thread_->eventWaitCancelled ||
-            thread_->kernelApcDisable || thread_->specialApcDisable || thread_->normalKernelApcActive)
-            return NtStatus::NotImplemented;
+        if (!cancellableWait) return NtStatus::NotImplemented;
         auto* event = static_cast<sync::detail::BootstrapEvent*>(thread_->eventWaitObject);
         if (!event->cancelWaitForTermination(*thread_)) return NtStatus::Unsuccessful;
     } else if (thread_->state == ke::ThreadState::Initialized && !thread_->readyQueued) {
@@ -831,7 +1212,17 @@ void EThread::serviceTermination(void* argument) noexcept {
     auto* current = ke::KeGetCurrentThread();
     if (!self || current != self->thread_.get() || !self->process_ ||
         !current->terminationRequested || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return;
-    (void)self->exitCurrent(self->requestedExitStatus_);
+    // System threads start in a critical region to suppress ordinary APCs.
+    // The termination callback runs at a safe wait-return boundary, so leave
+    // that owned region before exitCurrent checks APC-disable state.
+    const bool leaveInitialRegion = current->systemInitialRegionActive;
+    if (leaveInitialRegion) ke::KeLeaveCriticalRegion();
+    const auto result = self->exitCurrent(self->requestedExitStatus_);
+    if (leaveInitialRegion && result != NtStatus::Success &&
+        current->state == ke::ThreadState::Running && !current->systemInitialRegionActive) {
+        ke::KeEnterCriticalRegion();
+        current->systemInitialRegionActive = true;
+    }
 #else
     (void)argument;
 #endif
@@ -888,8 +1279,7 @@ NtStatus EThread::exitCurrent(NtStatus status) noexcept {
     current->apcQueueable = false;
     if ((flags & (uint64_t{1} << 9)) || hal::amd64::bootstrapSchedulerClockActive())
         __asm__ __volatile__("sti" : : : "memory");
-    ke::KiDeliverApc(0);
-    const bool rundown = current->apcRundownComplete || ke::detail::rundownCurrentUserApcs();
+    const bool rundown = current->apcRundownComplete || ke::detail::rundownCurrentApcs();
     __asm__ __volatile__("cli" : : : "memory");
     if (!rundown) {
         // No rundown callback ran if the preconditions were not met. In
@@ -901,8 +1291,9 @@ NtStatus EThread::exitCurrent(NtStatus status) noexcept {
     }
     ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
     auto* next = ke::PriorityScheduler::get().selectNextThread();
-    if (next && current->kernelApcList.empty() && !current->pendingNormalCount &&
-        !current->normalKernelApcActive) {
+    if (next && current->kernelApcList.empty() && current->userApcList.empty() &&
+        !current->queuedApcReferences && !current->pendingNormalCount &&
+        !current->normalKernelApcActive && !current->apcRundownActive) {
         exitStatus_ = status;
         current->state = ke::ThreadState::Terminated;
         if (ke::KiSwapContext(current, next)) __builtin_trap();
@@ -927,6 +1318,7 @@ NtStatus EThread::reap() noexcept {
         return NtStatus::InvalidParameter;
     }
     if (!thread_->kernelApcList.empty() || !thread_->userApcList.empty() ||
+        thread_->queuedApcReferences ||
         thread_->pendingNormalCount || thread_->normalKernelApcActive || thread_->apcRundownActive) {
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return NtStatus::NotImplemented;
@@ -1002,36 +1394,300 @@ NtStatus EThread::reap() noexcept {
 }
 
 namespace micant::sys {
+NtStatus NtContinue(const void* contextAddress, bool testAlert, void* trapFrameAddress,
+                    void* floatingStateAddress, size_t floatingStateSize,
+                    uint32_t xsaveMask) {
+    using hal::amd64::SyscallFrame;
+    auto* current = ke::KeGetCurrentThread();
+    uintptr_t currentRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    if (!contextAddress || !trapFrameAddress || !floatingStateAddress || !current ||
+        !current->previousUserMode || !current->owningThread || !current->owningProcess ||
+        current->owningThread->kernelThread() != current ||
+        current->apcStateIndex != ke::ApcStateIndexOriginal || current->attachedProcess ||
+        currentRoot != current->owningProcess->getDirectoryTableBase() ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+
+    auto* frame = static_cast<SyscallFrame*>(trapFrameAddress);
+    if ((frame->cs & 3) != 3 || frame->cs != 0x33 || frame->ss != 0x2b)
+        return NtStatus::InvalidParameter;
+    if (floatingStateSize < 512 || floatingStateSize > 4096)
+        return NtStatus::NotSupported;
+
+    constexpr uint32_t ContextAmd64 = 0x00100000;
+    constexpr uint32_t ContextGroupMask = 0x0000ffff;
+    constexpr uint32_t ContextAllowedGroups = 0x0000005f;
+    alignas(64) micant::CONTEXT captured{};
+    auto copyStatus = ex::ExSafeCopyFromUser(&captured, contextAddress,
+                                              sizeof(captured), mm::UserMode);
+    if (copyStatus != NtStatus::Success) return copyStatus;
+    const uint32_t groups = captured.ContextFlags & ContextGroupMask;
+    // The architecture bit identifies the CONTEXT layout; it is not an
+    // exclusive tag in the upper half of ContextFlags. NT also carries
+    // exception/service state bits there, and KeContextToTrapFrame ignores
+    // those metadata bits while selecting the low-order register groups.
+    if (!(captured.ContextFlags & ContextAmd64) ||
+        (groups & ~ContextAllowedGroups))
+        return NtStatus::InvalidParameter;
+    if (groups & CONTEXT_DEBUG_REGISTERS) return NtStatus::NotSupported;
+
+    if (groups & CONTEXT_CONTROL) {
+        // KeContextToTrapFrame selects CS/SS with CONTROL and sanitizes
+        // privileged RFLAGS bits rather than trusting them.
+        if (captured.SegCs != 0x33 || captured.SegSs != 0x2b ||
+            captured.Rip < um::MM_LOWEST_USER_ADDRESS ||
+            captured.Rsp < um::MM_LOWEST_USER_ADDRESS + sizeof(uint64_t) ||
+            !hal::amd64::bootstrapUserRange(captured.Rip, 1, false, true) ||
+            !hal::amd64::bootstrapUserRange(captured.Rsp - sizeof(uint64_t),
+                                             sizeof(uint64_t), true))
+            return NtStatus::InvalidParameter;
+    }
+
+    if (groups & CONTEXT_SEGMENTS) {
+        uint16_t ds{}, es{}, fs{}, gs{};
+        __asm__ __volatile__("movw %%ds, %0" : "=rm"(ds));
+        __asm__ __volatile__("movw %%es, %0" : "=rm"(es));
+        __asm__ __volatile__("movw %%fs, %0" : "=rm"(fs));
+        __asm__ __volatile__("movw %%gs, %0" : "=rm"(gs));
+        if (captured.SegDs != ds || captured.SegEs != es ||
+            captured.SegFs != fs || captured.SegGs != gs)
+            return NtStatus::InvalidParameter;
+    }
+
+    alignas(64) uint8_t stagedXstate[4096]{};
+    std::memcpy(stagedXstate, floatingStateAddress, floatingStateSize);
+    uint32_t mxcsrMask{};
+    std::memcpy(&mxcsrMask, stagedXstate + offsetof(micant::XMM_SAVE_AREA32, MxCsr_Mask),
+                sizeof(mxcsrMask));
+    if (!mxcsrMask) mxcsrMask = 0x0000ffbfu;
+    if (groups & CONTEXT_FLOATING_POINT) {
+        if ((captured.MxCsr & ~mxcsrMask) ||
+            (captured.FltSave.ControlWord & ~uint16_t{0x1f3f}))
+            return NtStatus::InvalidParameter;
+        captured.FltSave.MxCsr = captured.MxCsr;
+    }
+    if (groups & CONTEXT_XSTATE) {
+        if (!(xsaveMask & ~uint32_t{3}) || floatingStateSize < 576)
+            return NtStatus::NotSupported;
+        const uintptr_t sourceAddress = reinterpret_cast<uintptr_t>(contextAddress);
+        if (sourceAddress > UINTPTR_MAX - sizeof(captured)) return NtStatus::AccessViolation;
+        const uintptr_t contextExAddress = sourceAddress + sizeof(captured);
+        micant::CONTEXT_EX contextEx{};
+        copyStatus = ex::ExSafeCopyFromUser(&contextEx,
+            reinterpret_cast<const void*>(contextExAddress), sizeof(contextEx), mm::UserMode);
+        if (copyStatus != NtStatus::Success) return copyStatus;
+        const int32_t expectedContextOffset = -static_cast<int32_t>(sizeof(captured));
+        const size_t maximumTail = floatingStateSize - 512;
+        const size_t xstateLength = contextEx.XState.Length;
+        if (contextEx.All.Length < sizeof(captured) + sizeof(contextEx) ||
+            contextEx.All.Offset != expectedContextOffset ||
+            contextEx.Legacy.Offset != expectedContextOffset ||
+            contextEx.Legacy.Length != sizeof(captured) ||
+            contextEx.XState.Offset < static_cast<int32_t>(sizeof(contextEx)) ||
+            xstateLength < sizeof(micant::XSTATE_HEADER) || xstateLength > maximumTail ||
+            static_cast<uint64_t>(contextEx.XState.Offset) + xstateLength >
+                contextEx.All.Length - sizeof(captured) ||
+            contextExAddress > UINTPTR_MAX - static_cast<uint32_t>(contextEx.XState.Offset))
+            return NtStatus::InvalidParameter;
+        const uintptr_t xstateAddress = contextExAddress +
+            static_cast<uint32_t>(contextEx.XState.Offset);
+        if (xstateAddress > UINTPTR_MAX - xstateLength || (xstateAddress & 63) ||
+            ex::ExSafeCopyFromUser(stagedXstate + 512,
+                reinterpret_cast<const void*>(xstateAddress), xstateLength, mm::UserMode) != NtStatus::Success)
+            return NtStatus::AccessViolation;
+        micant::XSTATE_HEADER xstateHeader{};
+        std::memcpy(&xstateHeader, stagedXstate + 512, sizeof(xstateHeader));
+        if (xstateHeader.Mask & ~static_cast<uint64_t>(xsaveMask))
+            return NtStatus::InvalidParameter;
+        if (xstateHeader.CompactionMask) {
+            constexpr uint64_t compactedLayout = uint64_t{1} << 63;
+            if (!(xstateHeader.CompactionMask & compactedLayout) ||
+                (xstateHeader.CompactionMask &
+                    ~(compactedLayout | static_cast<uint64_t>(xsaveMask))) ||
+                (xstateHeader.Mask &
+                    ~(xstateHeader.CompactionMask & ~compactedLayout)))
+                return NtStatus::InvalidParameter;
+            // The bootstrap XSAVE buffers and current feature walker use the
+            // standard CPUID offsets. A valid compacted context needs the
+            // compacted CPUID offsets and remains explicitly unsupported.
+            return NtStatus::NotSupported;
+        }
+        if (std::any_of(std::begin(xstateHeader.Reserved), std::end(xstateHeader.Reserved),
+                        [](uint64_t value) { return value != 0; }))
+            return NtStatus::InvalidParameter;
+        // In the standard, non-compacted XSAVE layout each feature retains its
+        // CPUID leaf 0xD subleaf offset. A subset context may end after its
+        // highest included feature; every component marked present in
+        // XSTATE_BV must still fit wholly inside that bounded prefix.
+        for (uint32_t feature = 2; feature < 32; ++feature) {
+            const uint32_t featureBit = uint32_t{1} << feature;
+            if (!(xstateHeader.Mask & featureBit)) continue;
+            uint32_t eax = 0x0d, ebx{}, ecx = feature, edx{};
+            __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+            const size_t componentSize = eax;
+            const size_t componentOffset = ebx;
+            if (!componentSize || componentOffset < 576 ||
+                componentOffset > floatingStateSize ||
+                componentSize > floatingStateSize - componentOffset ||
+                componentOffset - 512 > xstateLength ||
+                componentSize > xstateLength - (componentOffset - 512))
+                return NtStatus::InvalidParameter;
+        }
+    }
+
+    // All user data and control targets are validated before the live return
+    // frame or XSAVE image is changed. NtContinue success returns through this
+    // IRET frame instead of resuming after the syscall instruction.
+    SyscallFrame next = *frame;
+    if (groups & CONTEXT_INTEGER) {
+        next.r15 = captured.R15; next.r14 = captured.R14;
+        next.r13 = captured.R13; next.r12 = captured.R12;
+        next.r10 = captured.R10; next.r9 = captured.R9;
+        next.r8 = captured.R8; next.rdx = captured.Rdx;
+        next.rsi = captured.Rsi; next.rdi = captured.Rdi;
+        next.rbp = captured.Rbp; next.rbx = captured.Rbx;
+        next.rax = captured.Rax; next.rcx = captured.Rcx;
+        next.r11 = captured.R11;
+    }
+    if (groups & CONTEXT_CONTROL) {
+        next.rip = captured.Rip; next.rsp = captured.Rsp;
+        // KeContextToTrapFrame forces the architectural reserved bit and IF
+        // for user continuation; the syscall exit path still masks every
+        // user-unsafe flag before IRET.
+        next.flags = static_cast<uint64_t>(captured.EFlags) | 0x202;
+        next.cs = captured.SegCs;
+        next.ss = captured.SegSs;
+    }
+    if (groups & CONTEXT_FLOATING_POINT) {
+        std::memcpy(stagedXstate, &captured.FltSave, sizeof(captured.FltSave));
+        std::memcpy(stagedXstate + offsetof(micant::XMM_SAVE_AREA32, MxCsr_Mask),
+                    &mxcsrMask, sizeof(mxcsrMask));
+    }
+    if (groups & (CONTEXT_FLOATING_POINT | CONTEXT_XSTATE))
+        std::memcpy(floatingStateAddress, stagedXstate, floatingStateSize);
+    *frame = next;
+
+    if (testAlert) (void)ke::KeTestAlertThread(ke::UserMode);
+    return NtStatus::Success;
+}
+
 NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
     ObjectAttributes* attributes, Handle processHandle, uintptr_t startRoutine,
     uintptr_t argument, uint32_t flags, uintptr_t zeroBits, size_t stackSize,
     size_t maximumStackSize, void* attributeList) {
     if (!threadHandle || !startRoutine || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
         return NtStatus::InvalidParameter;
+    auto* caller = ke::KeGetCurrentThread();
+    const bool userCaller = caller && caller->previousUserMode;
+    const auto pointerMode = [userCaller, caller](const void* pointer, size_t length) noexcept {
+        if (!userCaller) return mm::KernelMode;
+        const auto address = reinterpret_cast<uintptr_t>(pointer);
+        const auto end = address + length;
+        const bool kernelStackBuffer = caller && caller->kernelStackBase &&
+            caller->kernelStackTop > caller->kernelStackBase && end >= address &&
+            address >= caller->kernelStackBase && end <= caller->kernelStackTop;
+        return kernelStackBuffer ? mm::KernelMode : mm::UserMode;
+    };
+    const auto withInterruptsDisabled = [](auto&& operation) noexcept {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        const auto status = operation();
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return status;
+    };
+    const auto safeCopyIn = [&pointerMode, &withInterruptsDisabled](void* destination, const void* source,
+                                           size_t length) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ExSafeCopyFromUser(destination, source, length, pointerMode(source, length));
+        });
+    };
+    const auto safeCopyOut = [&pointerMode, &withInterruptsDisabled](void* destination, const void* source,
+                                            size_t length) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ExSafeCopyToUser(destination, source, length, pointerMode(destination, length));
+        });
+    };
+    const auto probeRead = [&pointerMode, &withInterruptsDisabled](const void* address,
+        size_t size, size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ProbeForRead(address, size, alignment, pointerMode(address, size));
+        });
+    };
+    const auto probeWrite = [&pointerMode, &withInterruptsDisabled](void* address,
+        size_t size, size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ProbeForWrite(address, size, alignment, pointerMode(address, size));
+        });
+    };
+    struct CapturedAttribute {
+        uintptr_t attribute{};
+        uintptr_t output{};
+        size_t outputSize{};
+        size_t* returnLength{};
+        size_t returnedSize{};
+    };
+    std::array<CapturedAttribute, 2> capturedAttributes{};
+    size_t attributeCount{};
+    Handle capturedThreadHandle{};
+    bool threadHandleOutputAttempted{};
+    const auto threadHandleProbe = probeWrite(threadHandle, sizeof(*threadHandle), alignof(Handle));
+    if (threadHandleProbe != NtStatus::Success) return threadHandleProbe;
+    ObjectAttributes capturedObjectAttributes{};
     if (attributes) {
-        if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
-        if (attributes->rootDirectory || attributes->objectName || attributes->securityDescriptor ||
-            attributes->securityQualityOfService || (attributes->attributes & ~OBJ_INHERIT)) return NtStatus::NotImplemented;
+        const auto copyStatus = safeCopyIn(&capturedObjectAttributes, attributes, sizeof(capturedObjectAttributes));
+        if (copyStatus != NtStatus::Success) return copyStatus;
+        if (capturedObjectAttributes.length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
+        if (capturedObjectAttributes.rootDirectory || capturedObjectAttributes.objectName ||
+            capturedObjectAttributes.securityDescriptor || capturedObjectAttributes.securityQualityOfService ||
+            (capturedObjectAttributes.attributes & ~OBJ_INHERIT)) return NtStatus::NotImplemented;
     }
     if ((flags & ~uint32_t{1}) || zeroBits) return NtStatus::NotImplemented;
-    PsAttribute* clientAttribute{};
-    PsAttribute* tebAttribute{};
     if (attributeList) {
         constexpr size_t prefix = offsetof(PsAttributeList, attributes);
         size_t totalLength{};
-        std::memcpy(&totalLength, attributeList, sizeof(totalLength));
+        auto copyStatus = safeCopyIn(&totalLength, attributeList, sizeof(totalLength));
+        if (copyStatus != NtStatus::Success) return copyStatus;
         if (totalLength < prefix || (totalLength - prefix) % sizeof(PsAttribute) ||
-            (totalLength - prefix) / sizeof(PsAttribute) > 2) return NtStatus::InvalidParameter;
-        const size_t count = (totalLength - prefix) / sizeof(PsAttribute);
-        auto* entries = reinterpret_cast<PsAttribute*>(reinterpret_cast<uint8_t*>(attributeList) + prefix);
-        for (size_t index = 0; index < count; ++index) {
-            auto& item = entries[index];
+            (totalLength - prefix) / sizeof(PsAttribute) > capturedAttributes.size())
+            return NtStatus::InvalidParameter;
+        if (reinterpret_cast<uintptr_t>(attributeList) > UINTPTR_MAX - totalLength)
+            return NtStatus::AccessViolation;
+        const auto fullListProbe = probeRead(attributeList, totalLength, alignof(size_t));
+        if (fullListProbe != NtStatus::Success) return fullListProbe;
+        attributeCount = (totalLength - prefix) / sizeof(PsAttribute);
+        std::array<PsAttribute, 2> entries{};
+        bool clientIdSeen{};
+        bool tebSeen{};
+        if (attributeCount) {
+            const auto* entrySource = reinterpret_cast<const uint8_t*>(attributeList) + prefix;
+            copyStatus = safeCopyIn(entries.data(), entrySource, attributeCount * sizeof(PsAttribute));
+            if (copyStatus != NtStatus::Success) return copyStatus;
+        }
+        for (size_t index = 0; index < attributeCount; ++index) {
+            const auto& item = entries[index];
             if (!item.value) return NtStatus::InvalidParameter;
-            if (item.attribute == PS_ATTRIBUTE_CLIENT_ID && !clientAttribute && item.size == sizeof(ClientId))
-                clientAttribute = &item;
-            else if (item.attribute == PS_ATTRIBUTE_TEB_ADDRESS && !tebAttribute && item.size == sizeof(uintptr_t))
-                tebAttribute = &item;
-            else return NtStatus::NotImplemented;
+            auto& captured = capturedAttributes[index];
+            captured.attribute = item.attribute;
+            captured.output = item.value;
+            captured.outputSize = item.size;
+            captured.returnLength = item.returnLength;
+            if (item.attribute == PS_ATTRIBUTE_CLIENT_ID && item.size == sizeof(ClientId) && !clientIdSeen) {
+                captured.returnedSize = sizeof(ClientId);
+                clientIdSeen = true;
+            } else if (item.attribute == PS_ATTRIBUTE_TEB_ADDRESS && item.size == sizeof(uintptr_t) && !tebSeen) {
+                captured.returnedSize = sizeof(uintptr_t);
+                tebSeen = true;
+            } else if (item.attribute == PS_ATTRIBUTE_CLIENT_ID || item.attribute == PS_ATTRIBUTE_TEB_ADDRESS) {
+                return NtStatus::InvalidParameter;
+            } else return NtStatus::NotImplemented;
+            const auto valueProbe = probeWrite(reinterpret_cast<void*>(item.value), item.size,
+                alignof(uintptr_t));
+            if (valueProbe != NtStatus::Success) return valueProbe;
+            if (item.returnLength) {
+                const auto lengthProbe = probeWrite(item.returnLength, sizeof(size_t), alignof(size_t));
+                if (lengthProbe != NtStatus::Success) return lengthProbe;
+            }
         }
     }
     ps::EProcess* process{};
@@ -1069,28 +1725,55 @@ NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
                 const auto& optional = image->view.headers().optionalHeader;
                 if (!maximumStackSize) maximumStackSize = optional.sizeOfStackReserve;
                 if (!stackSize) stackSize = optional.sizeOfStackCommit;
+                const size_t roundedReserve = maximumStackSize <= SIZE_MAX - mm::PageMask4KB
+                    ? (maximumStackSize + mm::PageMask4KB) & ~mm::PageMask4KB : 0;
+                const size_t roundedCommit = stackSize <= SIZE_MAX - mm::PageMask4KB
+                    ? (stackSize + mm::PageMask4KB) & ~mm::PageMask4KB : SIZE_MAX;
                 if (!stackSize || !maximumStackSize || stackSize > maximumStackSize ||
                     maximumStackSize > 1024 * 1024 ||
-                    ((stackSize + mm::PageMask4KB) & ~mm::PageMask4KB) !=
-                        ((maximumStackSize + mm::PageMask4KB) & ~mm::PageMask4KB))
-                    result = NtStatus::NotImplemented;
+                    roundedReserve < ps::MinimumUserExceptionStackReserve ||
+                    roundedCommit > roundedReserve - mm::PageSize4KB)
+                    result = NtStatus::InvalidParameter;
                 else result = images->resolve("ntdll.dll", "RtlUserThreadStart", 0, entry);
             }
-            // Until user exception dispatch exists, an invalid start address
-            // would otherwise turn a thread fault into a kernel-wide trap.
+            // Reject a bad initial PC before publishing the thread; later
+            // user execution faults use the exception dispatcher.
             if (result == NtStatus::Success && (!hal::amd64::bootstrapUserRange(entry, 1, false, true) ||
                 !hal::amd64::bootstrapUserRange(startRoutine, 1, false, true)))
                 result = NtStatus::BadInitialPc;
             if (result == NtStatus::Success)
                 result = ps::detail::createUserThreadHandle(*process, entry, 32768, maximumStackSize,
                     hal::amd64::bootstrapSchedulerClockActive(), desiredAccess, handle, thread, stackSize,
-                    attributes ? attributes->attributes : 0);
+                    attributes ? capturedObjectAttributes.attributes : 0);
             if (result == NtStatus::Success) result = thread->configureUserStart(startRoutine, argument);
             if (result == NtStatus::Success && (flags & 1)) result = thread->suspendInitially();
         }
         if (switched && !hal::amd64::switchProcessPagingRootByPhysical(previousRoot)) __builtin_trap();
+        if (result == NtStatus::Success) {
+            const ClientId clientId{process->processId(), thread->kernelThread()->tid};
+            const uintptr_t teb = thread->userTebAddress();
+            for (size_t index = 0; index < attributeCount && result == NtStatus::Success; ++index) {
+                auto& captured = capturedAttributes[index];
+                const void* value = captured.attribute == PS_ATTRIBUTE_CLIENT_ID
+                    ? static_cast<const void*>(&clientId) : static_cast<const void*>(&teb);
+                result = safeCopyOut(reinterpret_cast<void*>(captured.output), value, captured.outputSize);
+                if (result == NtStatus::Success && captured.returnLength) {
+                    captured.returnedSize = captured.outputSize;
+                    result = safeCopyOut(captured.returnLength, &captured.returnedSize, sizeof(size_t));
+                }
+            }
+            if (result == NtStatus::Success) {
+                capturedThreadHandle = handle;
+                threadHandleOutputAttempted = true;
+                result = safeCopyOut(threadHandle, &capturedThreadHandle, sizeof(capturedThreadHandle));
+            }
+        }
         if (result == NtStatus::Success && !(flags & 1)) result = thread->ready();
         if (result != NtStatus::Success && thread) {
+            if (threadHandleOutputAttempted) {
+                const Handle invalidHandle{};
+                (void)safeCopyOut(threadHandle, &invalidHandle, sizeof(invalidHandle));
+            }
             auto* failedThread = thread->kernelThread();
             if (!failedThread || failedThread->state != ke::ThreadState::Initialized ||
                 failedThread->readyQueued || !failedThread->kernelApcList.empty() ||
@@ -1102,17 +1785,6 @@ NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
             failedThread->state = ke::ThreadState::Terminated;
             failedThreadHandle = ob::detail::currentHandleTable().takeHandle(handle);
             if (!failedThreadHandle) __builtin_trap();
-        }
-        if (result == NtStatus::Success) {
-            if (clientAttribute) {
-                *reinterpret_cast<ClientId*>(clientAttribute->value) = {process->processId(), thread->kernelThread()->tid};
-                if (clientAttribute->returnLength) *clientAttribute->returnLength = sizeof(ClientId);
-            }
-            if (tebAttribute) {
-                *reinterpret_cast<uintptr_t*>(tebAttribute->value) = thread->userTebAddress();
-                if (tebAttribute->returnLength) *tebAttribute->returnLength = sizeof(uintptr_t);
-            }
-            *threadHandle = handle;
         }
     }
     if (failedThreadHandle) {
@@ -1143,64 +1815,140 @@ NtStatus NtCreateProcessEx(Handle* processHandle, uint32_t desiredAccess,
     Handle section, Handle debugPort, Handle exceptionPort, bool inJob) {
     if (!processHandle || !parentProcess || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
         return NtStatus::InvalidParameter;
+    auto* caller = ke::KeGetCurrentThread();
+    const bool userCaller = caller && caller->previousUserMode;
+    const auto pointerMode = [userCaller, caller](const void* pointer, size_t length) noexcept {
+        if (!userCaller) return mm::KernelMode;
+        const auto address = reinterpret_cast<uintptr_t>(pointer);
+        const auto end = address + length;
+        const bool kernelStackBuffer = caller && caller->kernelStackBase &&
+            caller->kernelStackTop > caller->kernelStackBase && end >= address &&
+            address >= caller->kernelStackBase && end <= caller->kernelStackTop;
+        return kernelStackBuffer ? mm::KernelMode : mm::UserMode;
+    };
+    const auto withInterruptsDisabled = [](auto&& operation) noexcept {
+        uint64_t interruptFlags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(interruptFlags) : : "memory");
+        const auto status = operation();
+        if (interruptFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return status;
+    };
+    const auto safeCopyIn = [&](void* destination, const void* source, size_t length) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ExSafeCopyFromUser(destination, source, length, pointerMode(source, length));
+        });
+    };
+    const auto safeCopyOut = [&](void* destination, const void* source, size_t length) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ExSafeCopyToUser(destination, source, length, pointerMode(destination, length));
+        });
+    };
+    const auto probeWrite = [&](void* destination, size_t length, size_t alignment) noexcept {
+        return withInterruptsDisabled([&]() noexcept {
+            return ex::ProbeForWrite(destination, length, alignment, pointerMode(destination, length));
+        });
+    };
+    const auto outputProbe = probeWrite(processHandle, sizeof(*processHandle), alignof(Handle));
+    if (outputProbe != NtStatus::Success) return outputProbe;
+    ObjectAttributes capturedAttributes{};
     if (attributes) {
-        if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
-        if (attributes->rootDirectory || attributes->objectName || attributes->securityDescriptor ||
-            attributes->securityQualityOfService || (attributes->attributes & ~OBJ_INHERIT)) return NtStatus::NotImplemented;
+        const auto captureStatus = safeCopyIn(&capturedAttributes, attributes, sizeof(capturedAttributes));
+        if (captureStatus != NtStatus::Success) return captureStatus;
+        if (capturedAttributes.length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
+        if (capturedAttributes.rootDirectory || capturedAttributes.objectName ||
+            capturedAttributes.securityDescriptor || capturedAttributes.securityQualityOfService ||
+            (capturedAttributes.attributes & ~OBJ_INHERIT)) return NtStatus::NotImplemented;
+        attributes = &capturedAttributes;
     }
     constexpr uint32_t inheritHandles = 0x00000004;
-    if ((flags & ~inheritHandles) || section || debugPort || exceptionPort || inJob) return NtStatus::NotImplemented;
+    if ((flags & ~inheritHandles) || debugPort || exceptionPort || inJob) return NtStatus::NotImplemented;
     ps::EProcess* parent{};
     ob::ObjectHeader* parentReference{};
     const auto status = parentProcess == InvalidHandleValue
         ? ps::detail::referenceCurrentProcess(parent, parentReference)
         : ps::detail::referenceProcessHandle(parentProcess, 0x0080, parent, parentReference);
     if (status != NtStatus::Success) return status;
+    ob::ObjectHeader* imageSectionReference{};
+    section::SectionObject* imageSection{};
+    if (section) {
+        const auto sectionStatus = referenceProcessImageSection(section, imageSectionReference);
+        if (sectionStatus != NtStatus::Success) {
+            ob::ObDereferenceObject(parentReference);
+            return sectionStatus;
+        }
+        imageSection = imageSectionReference->as<section::SectionObject>();
+    }
     NtStatus result = NtStatus::NotImplemented;
-    ob::ObjectHeader* failedHandleObject{};
-    Handle failedHandle{};
     {
         ob::detail::HandleTableGuard guard;
         if (parent->isTerminating()) result = NtStatus::ProcessIsTerminating;
-        else if (!parent->isSystemProcess() && !parent->nativeImages()) {
-            // A non-system parent without an image section cannot supply the
-            // inherited image required by this native creation form.
-            result = NtStatus::ProcessIsTerminating;
-        } else {
-            ps::EProcess* child{};
-            Handle handle{};
-            // The child handle must not be inherited by the child itself.
-            // Publish its requested attributes only after copying the parent table.
-            result = ps::detail::createProcessHandle(desiredAccess, handle, child);
-            if (result == NtStatus::Success && !parent->isSystemProcess()) {
-                uintptr_t originalRoot{};
-                __asm__ __volatile__("movq %%cr3, %0" : "=r"(originalRoot));
-                result = parent->getAddressSpace().clonePrivateTo(child->getAddressSpace(),
-                    parent->getDirectoryTableBase(), child->getDirectoryTableBase(),
-                    hal::amd64::switchProcessPagingRootByPhysical);
-                if (result == NtStatus::Success) {
-                    if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase()))
-                        result = NtStatus::Unsuccessful;
-                    else result = child->cloneNativeMetadata(*parent);
-                }
-                if (!hal::amd64::switchProcessPagingRootByPhysical(originalRoot)) __builtin_trap();
-            }
-            if (result == NtStatus::Success && (flags & inheritHandles)) {
-                result = child->getHandleTable().inheritHandlesFrom(parent->getHandleTable());
-            }
-            if (result == NtStatus::Success && attributes && attributes->attributes)
-                result = ob::detail::currentHandleTable().setHandleAttributes(handle, attributes->attributes);
-            if (result != NtStatus::Success && handle) {
-                // Withdraw the unpublished handle under exclusion, then run
-                // close/delete callbacks only after leaving that exclusion.
-                failedHandleObject = ob::detail::currentHandleTable().takeHandle(handle);
-                if (!failedHandleObject) __builtin_trap();
-                failedHandle = handle;
-            }
-            if (result == NtStatus::Success) *processHandle = handle;
+        else result = NtStatus::Success;
+    }
+
+    struct ParentAddressSpacePin {
+        ps::EProcess* process{};
+        ob::ObjectHeader* reference{};
+        uintptr_t root{};
+        ~ParentAddressSpacePin() {
+            if (reference) process->releaseAddressSpaceAttachReference(reference);
+        }
+    } parentAddressSpace;
+    if (result == NtStatus::Success && !imageSection) {
+        parentAddressSpace.process = parent;
+        result = parent->referenceAddressSpaceForAttach(parentAddressSpace.root,
+                                                          parentAddressSpace.reference);
+        if (result != NtStatus::Success)
+            result = parent->isTerminating() ? NtStatus::ProcessIsTerminating : result;
+        // Keep the address space and optional image metadata pinned before
+        // reading either; kernel-only parents may legitimately have no image
+        // set, while their private address space can still be cloned.
+    }
+
+    ps::EProcess* child{};
+    ob::ObjectHeader* childReference{};
+    Handle handle{};
+    if (result == NtStatus::Success)
+        result = ps::detail::createProcessObject(child, childReference);
+    if (result == NtStatus::Success)
+        ps::detail::inheritProcessSecurityContext(*child, *parent);
+    if (result == NtStatus::Success && imageSection) {
+        uintptr_t originalRoot{};
+        __asm__ __volatile__("movq %%cr3, %0" : "=r"(originalRoot));
+        if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase()))
+            result = NtStatus::Unsuccessful;
+        else {
+            result = child->initializeMainImageFromSection(*imageSection, imageSectionReference);
+        }
+        if (!hal::amd64::switchProcessPagingRootByPhysical(originalRoot)) __builtin_trap();
+    } else if (result == NtStatus::Success) {
+        uintptr_t originalRoot{};
+        __asm__ __volatile__("movq %%cr3, %0" : "=r"(originalRoot));
+        result = parent->getAddressSpace().clonePrivateTo(child->getAddressSpace(),
+            parentAddressSpace.root, child->getDirectoryTableBase(),
+            hal::amd64::switchProcessPagingRootByPhysical);
+        if (result == NtStatus::Success) {
+            if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase()))
+                result = NtStatus::Unsuccessful;
+            else result = child->cloneNativeMetadata(*parent);
+        }
+        if (!hal::amd64::switchProcessPagingRootByPhysical(originalRoot)) __builtin_trap();
+    }
+    if (result == NtStatus::Success && (flags & inheritHandles))
+        result = child->getHandleTable().inheritHandlesFrom(parent->getHandleTable());
+    if (result == NtStatus::Success)
+        result = ps::detail::publishProcessHandle(*child, childReference, desiredAccess,
+            attributes ? attributes->attributes : 0, handle);
+    if (result == NtStatus::Success) {
+        result = safeCopyOut(processHandle, &handle, sizeof(handle));
+        if (result != NtStatus::Success) {
+            auto* removed = ob::detail::currentHandleTable().takeHandle(handle);
+            if (!removed) __builtin_trap();
+            const auto closeStatus = ob::ObFinishClose(removed, handle);
+            if (closeStatus != NtStatus::Success) __builtin_trap();
         }
     }
-    if (failedHandleObject) (void)ob::ObFinishClose(failedHandleObject, failedHandle);
+    if (childReference) ob::ObDereferenceObject(childReference);
+    if (imageSectionReference) ob::ObDereferenceObject(imageSectionReference);
     ob::ObDereferenceObject(parentReference);
     return result;
 }
@@ -1238,17 +1986,31 @@ NtStatus NtTerminateThread(Handle threadHandle, NtStatus exitStatus) {
     return result;
 }
 
+namespace {
+NtStatus terminateCurrentProcessPseudoHandle(NtStatus exitStatus) noexcept {
+    auto* current = ke::KeGetCurrentThread();
+    if (!current || !current->owningProcess ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    // The current-process pseudo-handle does not pass through a handle table.
+    // The running thread pins its owning process, including bootstrap process
+    // objects which have not been published through Ob.
+    auto* process = current->owningProcess;
+    if (process->isSystemProcess()) {
+        return NtStatus::AccessDenied;
+    }
+
+    // NULL and the current-process pseudo-handle identify the caller's own
+    // process. Ordinary handles still go through the PROCESS_TERMINATE check.
+    return process->terminateCurrent(exitStatus);
+}
+}
+
 NtStatus NtTerminateProcess(Handle processHandle, NtStatus exitStatus) {
     constexpr uint32_t ProcessTerminateAccess = 0x0001;
+    if (!processHandle || processHandle == InvalidHandleValue)
+        return terminateCurrentProcessPseudoHandle(exitStatus);
     auto* current = ke::KeGetCurrentThread();
-    if (processHandle == InvalidHandleValue) {
-        if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
-        return current->owningProcess->terminateCurrent(exitStatus);
-    }
-    if (!processHandle) {
-        if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
-        return current->owningProcess->terminateOtherThreads(exitStatus);
-    }
     ob::ObjectHeader* reference{};
     ps::EProcess* process{};
     const auto status = ps::detail::referenceProcessHandle(processHandle, ProcessTerminateAccess, process, reference);

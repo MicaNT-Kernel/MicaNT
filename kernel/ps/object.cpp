@@ -53,6 +53,7 @@ struct ProcessObjectFactory {
         process.objectHeader_ = header;
     }
     static void markSystem(EProcess& process) noexcept { process.systemProcess_ = true; }
+    static void markPublished(EProcess& process) noexcept { process.processPublished_ = true; }
     static ob::ObjectHeader* header(EProcess& process) noexcept { return process.objectHeader_; }
     template<typename T>
     static NtStatus capture(std::span<const T> source, std::unique_ptr<T[]>& storage) noexcept {
@@ -207,13 +208,10 @@ NtStatus createUserThreadHandle(EProcess& process, uintptr_t entry, size_t kerne
     return status;
 }
 
-NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process,
-                             uint32_t handleAttributes) noexcept {
-    ob::detail::HandleTableGuard guard;
+NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) noexcept {
     initializeProcessType();
     process = nullptr;
-    access = ob::MapGenericAccess(access, processType.genericMapping);
-    if (access & ~processType.validAccessMask) return NtStatus::NotImplemented;
+    reference = nullptr;
     void* body{};
     ob::ObjectHeader* header{};
     auto status = ob::ObCreateObject(ob::KernelMode, &processType, nullptr, sizeof(EProcess), &body, &header);
@@ -221,10 +219,44 @@ NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process
     auto* created = new (body) EProcess{};
     ProcessObjectFactory::bind(*created, header);
     status = created->initializeAddressSpace();
-    if (status == NtStatus::Success)
-        status = ob::detail::currentHandleTable().createHandle(header, handle, access, handleAttributes);
-    if (status == NtStatus::Success) process = created;
+    if (status == NtStatus::Success) {
+        process = created;
+        reference = header;
+        return NtStatus::Success;
+    }
     ob::ObDereferenceObject(header);
+    return status;
+}
+
+void inheritProcessSecurityContext(EProcess& child, const EProcess& parent) noexcept {
+    // The freestanding process object does not yet own a primary token object.
+    // Access checks are enforced by the captured caller mode and handle rights;
+    // do not attach a hosted shared_ptr token to the kernel object.
+    (void)child;
+    (void)parent;
+}
+
+NtStatus publishProcessHandle(EProcess& process, ob::ObjectHeader* reference,
+                              uint32_t access, uint32_t handleAttributes,
+                              Handle& handle) noexcept {
+    if (!reference || reference->type != &processType) return NtStatus::InvalidParameter;
+    access = ob::MapGenericAccess(access, processType.genericMapping);
+    if (access & ~processType.validAccessMask) return NtStatus::NotImplemented;
+    const auto status = ob::detail::currentHandleTable().createHandle(reference, handle,
+                                                                       access, handleAttributes);
+    if (status == NtStatus::Success) ProcessObjectFactory::markPublished(process);
+    return status;
+}
+
+NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process,
+                             uint32_t handleAttributes) noexcept {
+    process = nullptr;
+    ob::ObjectHeader* reference{};
+    auto status = createProcessObject(process, reference);
+    if (status != NtStatus::Success) return status;
+    status = publishProcessHandle(*process, reference, access, handleAttributes, handle);
+    if (status != NtStatus::Success) process = nullptr;
+    ob::ObDereferenceObject(reference);
     return status;
 }
 
@@ -323,8 +355,7 @@ NtStatus referenceThreadHandle(Handle handle, uint32_t access, EThread*& thread,
 
 NtStatus referenceCurrentProcess(EProcess*& process, ob::ObjectHeader*& reference) noexcept {
     ob::detail::HandleTableGuard guard;
-    auto* current = ke::KeGetCurrentThread();
-    process = current ? current->owningProcess : nullptr;
+    process = ke::KeGetCurrentProcess();
     reference = process ? ProcessObjectFactory::header(*process) : nullptr;
     if (!reference) { process = nullptr; return NtStatus::InvalidHandle; }
     reference->addReference();
@@ -378,8 +409,7 @@ extern "C" __declspec(dllexport) NtStatus PsCreateSystemThread(
     if (!processHandle) {
         status = detail::getSystemProcess(process);
     } else if (processHandle == InvalidHandleValue) {
-        auto* current = ke::KeGetCurrentThread();
-        process = current ? current->owningProcess : nullptr;
+        process = ke::KeGetCurrentProcess();
         status = process ? NtStatus::Success : detail::getSystemProcess(process);
     } else {
         ob::HandleTable* table{};

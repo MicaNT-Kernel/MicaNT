@@ -25,6 +25,10 @@ namespace micant {
 #define CONTEXT_DEBUG_REGISTERS (0x00100000L | 0x10L)
 #endif
 
+#ifndef CONTEXT_XSTATE
+#define CONTEXT_XSTATE (0x00100000L | 0x40L)
+#endif
+
 #ifndef CONTEXT_FULL
 #define CONTEXT_FULL (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT)
 #endif
@@ -151,9 +155,34 @@ struct alignas(16) CONTEXT {
 };
 #pragma pack(pop)
 
+// CONTEXT_EX immediately follows an AMD64 CONTEXT. Chunk offsets are signed
+// byte offsets relative to the CONTEXT_EX address, as in the public WDK ABI.
+struct CONTEXT_CHUNK {
+    int32_t Offset;
+    uint32_t Length;
+};
+
+struct alignas(8) CONTEXT_EX {
+    CONTEXT_CHUNK All;
+    CONTEXT_CHUNK Legacy;
+    CONTEXT_CHUNK XState;
+    uint64_t Alignment{};
+};
+
+struct alignas(64) XSTATE_HEADER {
+    uint64_t Mask{};
+    uint64_t CompactionMask{};
+    uint64_t Reserved[6]{};
+};
+
 using PCONTEXT = CONTEXT*;
 using LPCONTEXT = CONTEXT*;
 
 static_assert(sizeof(CONTEXT) == 1232, "sizeof(CONTEXT) on x64 Windows ABI must be exactly 1232 bytes");
+static_assert(sizeof(CONTEXT_CHUNK) == 8);
+static_assert(sizeof(CONTEXT_EX) == 32);
+static_assert(sizeof(XSTATE_HEADER) == 64);
+static_assert(offsetof(CONTEXT, ContextFlags) == 48);
+static_assert(offsetof(CONTEXT, FltSave) == 256);
 
 } // namespace micant

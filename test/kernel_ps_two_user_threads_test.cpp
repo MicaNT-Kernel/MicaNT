@@ -26,6 +26,7 @@ const uint8_t nativeDll[]{
 extern "C" {
 extern const uint8_t MicantTwoUserThreadsEnd[];
 extern const uint8_t MicantNativeThreadStart[];
+extern const uint8_t MicantGrowStackThreadStart[];
 __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexcept {
     __asm__ __volatile__(
         "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\nmovq 24(%r14), %r15\n"
@@ -80,7 +81,17 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "9: movl $0xc000000d, %edx\n"
         "8: movq $-1, %rcx\ncallq *24(%r15)\nud2\n"
         ".globl MicantNativeThreadStart\n"
-        "MicantNativeThreadStart: movq $0x12345678, (%rcx)\nmovl $0xc0000022, %eax\nretq\n");
+        "MicantNativeThreadStart: movq $0x12345678, (%rcx)\nmovl $0xc0000022, %eax\nretq\n"
+        ".globl MicantGrowStackThreadStart\n"
+        "MicantGrowStackThreadStart: movabsq $0x5a5a12345678abcd, %rax\nmovq %rax, %xmm0\n"
+        // Probe downward page by page through the initial commit and across
+        // multiple guard pages. A single 8 KiB frame remains inside the
+        // guaranteed exception-dispatch commit and does not exercise growth.
+        "movl $10, %r8d\n1: subq $4096, %rsp\nmovb %r8b, (%rsp)\n"
+        "decl %r8d\njnz 1b\naddq $40960, %rsp\n"
+        "movq %xmm0, %rdx\ncmpq %rax, %rdx\njne 13f\n"
+        "movq $0x12345678, (%rcx)\nmovl $0xc0000022, %eax\nretq\n"
+        "13: movl $0xc000000d, %eax\nretq\n");
 }
 __asm__(".section .uthreads$z,\"xr\"\n.globl MicantTwoUserThreadsEnd\n"
         "MicantTwoUserThreadsEnd:\n.text\n");
@@ -97,16 +108,20 @@ __attribute__((noinline)) bool testNativePeerThread(micant::Handle process, uint
         sizeof(Attributes), {{PS_ATTRIBUTE_CLIENT_ID, sizeof(client), reinterpret_cast<uintptr_t>(&client), &clientLength},
                              {PS_ATTRIBUTE_TEB_ADDRESS, sizeof(teb), reinterpret_cast<uintptr_t>(&teb), &tebLength}}};
     Handle restricted{};
-    if (ob::detail::currentHandleTable().duplicateHandle(process, ob::detail::currentHandleTable(),
-            restricted, ob::SYNCHRONIZE) != NtStatus::Success ||
-        sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, restricted,
-            entry, 0, 0, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::AccessDenied ||
-        sys::NtClose(restricted) != NtStatus::Success || peer ||
-        sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, process,
-            1, 0, 0, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::BadInitialPc || peer)
+    const auto duplicateStatus = ob::detail::currentHandleTable().duplicateHandle(process,
+        ob::detail::currentHandleTable(), restricted, ob::SYNCHRONIZE);
+    const auto restrictedCreateStatus = duplicateStatus == NtStatus::Success
+        ? sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, restricted,
+            entry, 0, 0, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr)
+        : duplicateStatus;
+    const auto restrictedCloseStatus = restricted ? sys::NtClose(restricted) : NtStatus::Success;
+    const auto invalidPcStatus = sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, process,
+        1, 0, 0, 0, mm::PageSize4KB, 32768, nullptr);
+    if (duplicateStatus != NtStatus::Success || restrictedCreateStatus != NtStatus::AccessDenied ||
+        restrictedCloseStatus != NtStatus::Success || peer || invalidPcStatus != NtStatus::BadInitialPc || peer)
         return false;
     if (sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE | 2, nullptr, process,
-            entry, 0x1234, 1, 0, mm::PageSize4KB, mm::PageSize4KB, &attrs) != NtStatus::Success)
+            entry, 0x1234, 1, 0, mm::PageSize4KB, 32768, &attrs) != NtStatus::Success)
         return false;
     ps::EThread* object{};
     ob::ObjectHeader* reference{};
@@ -143,7 +158,7 @@ __attribute__((noinline)) bool testClonedImageLifetime(micant::Handle process) n
     if (!hal::amd64::switchProcessPagingRootByPhysical(original)) return false;
     Handle threadHandle{};
     if (!valid || !entry || sys::NtCreateThreadEx(&threadHandle, ob::SYNCHRONIZE, nullptr, process,
-            entry, 0, 1, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::Success) return false;
+            entry, 0, 1, 0, mm::PageSize4KB, 32768, nullptr) != NtStatus::Success) return false;
     ps::EThread* thread{};
     ob::ObjectHeader* threadReference{};
     if (ps::detail::referenceThreadHandle(threadHandle, ob::SYNCHRONIZE, thread, threadReference) != NtStatus::Success ||
@@ -172,7 +187,8 @@ __attribute__((noinline)) bool testClonedImageLifetime(micant::Handle process) n
         const auto waited = sys::NtWaitForSingleObject(process, false, nullptr);
         if (!hal::amd64::switchProcessPagingRootByPhysical(original) || waited != NtStatus::Success) return false;
     }
-    return sys::NtClose(process) == NtStatus::Success;
+    const auto closeStatus = sys::NtClose(process);
+    return closeStatus == NtStatus::Success;
 }
 
 alignas(16) uint8_t launcherStack[16384]{};
@@ -190,7 +206,8 @@ void launch(void* argument) noexcept {
 }
 
 __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processHandle,
-    micant::Handle initialHandle, uintptr_t imageEntry, uintptr_t bootRoot, uintptr_t enclosingRoot) noexcept {
+    micant::Handle initialHandle, uintptr_t imageEntry, uintptr_t bootRoot, uintptr_t enclosingRoot,
+    bool growStack = false) noexcept {
     using namespace micant;
     using namespace micant::ke;
     ob::detail::HandleTableGuard interruptGuard;
@@ -207,11 +224,25 @@ __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processH
     const auto allocated = process->getAddressSpace().allocate(resultAddress, mm::PageSize4KB,
         mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
     if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot) || allocated != NtStatus::Success) return false;
-    const uintptr_t offset = reinterpret_cast<uintptr_t>(MicantNativeThreadStart) -
+    const uintptr_t offset = reinterpret_cast<uintptr_t>(growStack ? MicantGrowStackThreadStart : MicantNativeThreadStart) -
                              reinterpret_cast<uintptr_t>(MicantTwoUserThreads);
     Handle peer{};
-    if (sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE | 2, nullptr, processHandle, imageEntry + offset,
-            resultAddress, 1, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::Success) return false;
+    uintptr_t initialStackLimit{};
+    if (growStack) {
+        if (!hal::amd64::switchProcessPagingRootByPhysical(process->getDirectoryTableBase())) return false;
+        uint64_t thunk{};
+        auto result = process->nativeImages()->resolve("ntdll.dll", "RtlUserThreadStart", 0, thunk);
+        ps::EThread* created{};
+        if (result == NtStatus::Success)
+            result = ps::detail::createUserThreadHandle(*process, thunk, 32768, 16 * mm::PageSize4KB,
+                hal::amd64::bootstrapSchedulerClockActive(), ob::SYNCHRONIZE | 2, peer, created, mm::PageSize4KB);
+        if (result == NtStatus::Success) result = created->configureUserStart(imageEntry + offset, resultAddress);
+        if (result == NtStatus::Success) result = created->suspendInitially();
+        if (result == NtStatus::Success)
+            initialStackLimit = reinterpret_cast<const um::Teb64*>(created->userTebAddress())->stackLimit;
+        if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot) || result != NtStatus::Success) return false;
+    } else if (sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE | 2, nullptr, processHandle, imageEntry + offset,
+               resultAddress, 1, 0, mm::PageSize4KB, 8 * mm::PageSize4KB, nullptr) != NtStatus::Success) return false;
     ps::EThread* thread{};
     ob::ObjectHeader* reference{};
     if (ps::detail::referenceThreadHandle(peer, ob::SYNCHRONIZE, thread, reference) != NtStatus::Success ||
@@ -241,7 +272,11 @@ __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processH
     first->priority = firstPriority;
     if (!scheduler.readyKThread(first) || !hal::amd64::switchProcessPagingRootByPhysical(process->getDirectoryTableBase()))
         return false;
-    const bool called = *reinterpret_cast<const uint64_t*>(resultAddress) == 0x12345678;
+    const bool called = *reinterpret_cast<const uint64_t*>(resultAddress) == 0x12345678 &&
+        (!growStack || (reinterpret_cast<const um::Teb64*>(thread->userTebAddress())->stackLimit ==
+                            initialStackLimit - 5 * mm::PageSize4KB &&
+                        !hal::amd64::bootstrapUserRange(initialStackLimit - 6 * mm::PageSize4KB, 1, false) &&
+                        hal::amd64::bootstrapUserRange(initialStackLimit - 5 * mm::PageSize4KB, 1, true)));
     const auto freed = process->getAddressSpace().free(resultAddress, 0, mm::MEM_RELEASE);
     if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot)) return false;
     const auto reaped = thread->kernelThread() ? thread->reap() : NtStatus::Success;
@@ -380,14 +415,15 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         pe::PeImageView64 dll;
         if (dll.inspect(std::span<const uint8_t>{nativeDll}) != NtStatus::Success) return false;
         const size_t beforeDuplicate = mm::PfnDatabase::get().getActiveCount();
-        if (process.loadNativeImage("fixture.exe", std::span<const uint8_t>{nativeDll}) != NtStatus::ObjectNameCollision ||
+        const auto duplicateStatus = process.loadNativeImage("fixture.exe", std::span<const uint8_t>{nativeDll});
+        if (duplicateStatus != NtStatus::ObjectNameCollision ||
             mm::PfnDatabase::get().getActiveCount() != beforeDuplicate) return false;
         text.characteristics |= pe::IMAGE_SCN_MEM_WRITE;
         std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
         const auto wxStatus = process.loadNativeImage("wx.exe", std::span<const uint8_t>{file});
         text.characteristics &= ~pe::IMAGE_SCN_MEM_WRITE;
         std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
-        if (wxStatus != NtStatus::NotSupported || mm::PfnDatabase::get().getActiveCount() != beforeDuplicate)
+        if (wxStatus != NtStatus::InvalidImageFormat || mm::PfnDatabase::get().getActiveCount() != beforeDuplicate)
             return false;
         if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}, dllPath) != NtStatus::Success)
             return false;
@@ -439,11 +475,13 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         const auto callbackStatus = process.finalizeNativeImages();
         loadedTls->addressOfCallBacks = 0;
         callbacks[0] = 0;
-        if (callbackStatus != NtStatus::NotImplemented ||
-            *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != uninitializedTlsIndex ||
-            *reinterpret_cast<uint32_t*>(tlsDllBase + mm::PageSize4KB + 0x90) != uninitializedTlsIndex ||
-            process.finalizeNativeImages() != NtStatus::Success ||
-            process.userTlsLayouts().size() != 2 || *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != 0 ||
+        const bool callbackRejectedWithoutTlsMutation =
+            *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) == uninitializedTlsIndex &&
+            *reinterpret_cast<uint32_t*>(tlsDllBase + mm::PageSize4KB + 0x90) == uninitializedTlsIndex;
+        const auto finalizeStatus = process.finalizeNativeImages();
+        if (callbackStatus != NtStatus::NotImplemented || !callbackRejectedWithoutTlsMutation ||
+            finalizeStatus != NtStatus::Success || process.userTlsLayouts().size() != 2 ||
+            *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != 0 ||
             *reinterpret_cast<uint32_t*>(tlsDllBase + mm::PageSize4KB + 0x90) != 1 ||
             sys::bootstrapSectionObjectCount() != sectionsBefore + 3 ||
             hal::amd64::bootstrapUserRange(code, 1, true) ||
@@ -464,12 +502,21 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         auto invalidTls = tlsLayout;
         invalidTls.callbackCount = 1;
         const size_t beforeThread = mm::PfnDatabase::get().getActiveCount();
-        if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::NotImplemented ||
+        if (first.initializeUser(process, entry, 32768, 32768, &invalidTls) != NtStatus::NotImplemented ||
             mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
         invalidTls = tlsLayout;
         invalidTls.alignment = 3; // Fails after user pages were allocated; reap must roll them back.
-        if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::InvalidParameter ||
+        if (first.initializeUser(process, entry, 32768, 32768, &invalidTls) != NtStatus::InvalidParameter ||
             first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        // Reserve enough space for the user exception dispatcher while
+        // committing only its guaranteed initial stack area.
+        if (first.initializeUser(process, entry, 32768, 8 * mm::PageSize4KB,
+                                 mm::PageSize4KB, false) != NtStatus::Success) return false;
+        const auto* partialTeb = reinterpret_cast<const um::Teb64*>(first.userTebAddress());
+        if (!partialTeb || !hal::amd64::bootstrapUserRange(partialTeb->stackLimit, 1, true) ||
+            hal::amd64::bootstrapUserRange(partialTeb->stackLimit - mm::PageSize4KB, 1, false) ||
+            first.resolveUserStackGuard(partialTeb->stackLimit - mm::PageSize4KB) != NtStatus::GuardPageViolation ||
+            first.reap() != NtStatus::Success || mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
         // Compose a separate process and initial user thread through the
         // private Ps factory, then roll it back before its entry executes.
         Handle createdProcess{}, createdThread{};
@@ -478,45 +525,64 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             {"ntdll.dll", std::span<const uint8_t>{nativeDll}, dllPath},
             {"tls.dll", std::span<const uint8_t>{tlsDllFile}, tlsPath},
         };
-        if (ps::detail::createBootstrapUserProcess({}, executablePath, commandLine, 32768,
-                mm::PageSize4KB, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
-                createdProcess, createdThread) != NtStatus::InvalidParameter || createdProcess || createdThread ||
-            ps::detail::createBootstrapUserProcess(processImages, executablePath, commandLine, 32768,
-                mm::PageSize4KB, preemptive, ob::SYNCHRONIZE | 2 | 0x80, ob::SYNCHRONIZE,
-                createdProcess, createdThread) != NtStatus::Success) return false;
+        const auto invalidFactoryStatus = ps::detail::createBootstrapUserProcess({}, executablePath, commandLine, 32768,
+                32768, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
+                createdProcess, createdThread);
+        if (invalidFactoryStatus != NtStatus::InvalidParameter || createdProcess || createdThread) return false;
+        const auto factoryStatus = ps::detail::createBootstrapUserProcess(processImages, executablePath, commandLine, 32768,
+                32768, preemptive, ob::SYNCHRONIZE | 1 | 2 | 0x80, ob::SYNCHRONIZE,
+                createdProcess, createdThread);
+        if (factoryStatus != NtStatus::Success || !createdProcess || !createdThread) return false;
         if (!testNativePeerThread(createdProcess, entry)) return false;
         if (!testNativeThreadExecution(createdProcess, createdThread, entry, previous,
                                        process.getDirectoryTableBase())) return false;
+        if (!testNativeThreadExecution(createdProcess, createdThread, entry, previous,
+                                       process.getDirectoryTableBase(), true)) return false;
         Handle clonedProcess{};
-        if (sys::NtCreateProcessEx(&clonedProcess, ob::SYNCHRONIZE | 1 | 2, nullptr, createdProcess,
-                                   0, 0, 0, 0, false) != NtStatus::Success) return false;
+        const auto cloneStatus = sys::NtCreateProcessEx(&clonedProcess,
+            ob::SYNCHRONIZE | 1 | 2, nullptr, createdProcess, 0, 0, 0, 0, false);
+        if (cloneStatus != NtStatus::Success) return false;
         ps::EThread* createdThreadObject{};
         ob::ObjectHeader* createdThreadRef{};
         if (ps::detail::referenceThreadHandle(createdThread, ob::SYNCHRONIZE,
-                createdThreadObject, createdThreadRef) != NtStatus::Success || !createdThreadObject ||
-            createdThreadObject->cancelBeforeStart() != NtStatus::Success ||
-            createdThreadObject->reap() != NtStatus::Success) return false;
+                createdThreadObject, createdThreadRef) != NtStatus::Success || !createdThreadObject) return false;
+        const auto cancelStatus = createdThreadObject->cancelBeforeStart();
+        if (cancelStatus != NtStatus::Success) return false;
+        const auto reapStatus = createdThreadObject->reap();
+        if (reapStatus != NtStatus::Success) return false;
         ob::ObDereferenceObject(createdThreadRef);
-        if (sys::NtClose(createdThread) != NtStatus::Success) return false;
-        if (sys::NtClose(createdProcess) != NtStatus::Success) return false;
+        const auto closeThreadStatus = sys::NtClose(createdThread);
+        if (closeThreadStatus != NtStatus::Success) return false;
+        const auto parentTerminateStatus = sys::NtTerminateProcess(createdProcess, NtStatus::Success);
+        LargeInteger parentPoll{};
+        const auto parentWaitStatus = sys::NtWaitForSingleObject(createdProcess, false, &parentPoll);
+        if ((parentTerminateStatus != NtStatus::Success && parentTerminateStatus != NtStatus::ProcessIsTerminating) ||
+            parentWaitStatus != NtStatus::Success) return false;
+        const auto closeProcessStatus = sys::NtClose(createdProcess);
+        if (closeProcessStatus != NtStatus::Success) return false;
         if (!testClonedImageLifetime(clonedProcess)) return false;
         if (mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
         // Exercise Ob ownership for a user context before the real workers.
         Handle objectHandle{};
         ps::EThread* objectThread{};
-        if (ps::detail::createUserThreadHandle(process, entry, 32768, mm::PageSize4KB,
+        const auto objectCreateStatus = ps::detail::createUserThreadHandle(process, entry, 32768, 32768,
                                                preemptive, ob::SYNCHRONIZE,
-                                               objectHandle, objectThread) != NtStatus::Success ||
-            !objectThread || objectThread->cancelBeforeStart() != NtStatus::Success)
-            return false;
+                                               objectHandle, objectThread);
+        if (objectCreateStatus != NtStatus::Success || !objectThread) return false;
+        const auto objectCancelStatus = objectThread->cancelBeforeStart();
+        if (objectCancelStatus != NtStatus::Success) return false;
         LargeInteger objectPoll{};
-        if (sys::NtWaitForSingleObject(objectHandle, false, &objectPoll) != NtStatus::Success ||
-            objectThread->reap() != NtStatus::Success || sys::NtClose(objectHandle) != NtStatus::Success ||
-            mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        const auto objectWaitStatus = sys::NtWaitForSingleObject(objectHandle, false, &objectPoll);
+        const auto objectReapStatus = objectThread->reap();
+        const auto objectCloseStatus = sys::NtClose(objectHandle);
+        const auto objectPfnDelta = mm::PfnDatabase::get().getActiveCount() - beforeThread;
+        if (objectWaitStatus != NtStatus::Success || objectReapStatus != NtStatus::Success ||
+            objectCloseStatus != NtStatus::Success || objectPfnDelta != 0) return false;
         ps::EThread* threads[]{&first, &second, &third};
         uintptr_t tebs[3]{}, tlsBlocks[3]{}, tlsSecond[3]{};
         for (size_t i = 0; i < threadCount; ++i) {
-            if (threads[i]->initializeUser(process, entry, 32768, mm::PageSize4KB, preemptive) != NtStatus::Success)
+            if (threads[i]->initializeUser(process, entry, 32768, 8 * mm::PageSize4KB,
+                                           mm::PageSize4KB, preemptive) != NtStatus::Success)
                 return false;
             tebs[i] = threads[i]->userTebAddress();
             const auto* teb = reinterpret_cast<const um::Teb64*>(tebs[i]);
@@ -602,11 +668,13 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tls) return false;
         for (size_t i = 0; i < threadCount; ++i)
             if (threads[i]->reap() != NtStatus::Success) return false;
-        if (process.closeAddressSpace() != NtStatus::Success) return false;
+        const auto processCloseStatus = process.closeAddressSpace();
+        if (processCloseStatus != NtStatus::Success) return false;
     }
-    return mm::PfnDatabase::get().getActiveCount() == active &&
-        sys::bootstrapSectionObjectCount() == sectionsBefore &&
-        sys::bootstrapEventObjectCount() == eventsBefore;
+    const auto finalPfnCount = mm::PfnDatabase::get().getActiveCount();
+    const auto finalSectionCount = sys::bootstrapSectionObjectCount();
+    const auto finalEventCount = sys::bootstrapEventObjectCount();
+    return finalPfnCount == active && finalSectionCount == sectionsBefore && finalEventCount == eventsBefore;
 }
 
 extern "C" bool MicantTestPsTwoUserThreads() noexcept { return runUserThreads(false, 2); }

@@ -62,6 +62,9 @@ using PEXCEPTION_POINTERS = EXCEPTION_POINTERS*;
 
 using PVECTORED_EXCEPTION_HANDLER = int32_t (WINAPI *)(PEXCEPTION_POINTERS ExceptionInfo);
 
+// Header-local adapter for the hosted subsystem harness only. The canonical
+// freestanding NTDLL registry and dispatcher live together in tools/dlls/ntdll.cpp;
+// do not publish this per-image manager as a native DLL export.
 class VectoredHandlerManager {
 public:
     static VectoredHandlerManager& get() noexcept {
@@ -7166,8 +7169,21 @@ inline NtStatus WINAPI NtQueryVirtualMemory(HANDLE /*ProcessHandle*/, void* /*Ba
     return NtStatus::Success;
 }
 
-inline NtStatus WINAPI NtQueueApcThread(HANDLE /*ThreadHandle*/, void* /*ApcRoutine*/, void* /*ApcRoutineContext*/, void* /*ApcStatusBlock*/, void* /*ApcReserved*/) noexcept { return NtStatus::Success; }
-inline NtStatus WINAPI NtQueueApcThreadEx(HANDLE /*ThreadHandle*/, HANDLE /*UserApcReserveHandle*/, void* /*ApcRoutine*/, void* /*ApcRoutineContext*/, void* /*ApcStatusBlock*/, void* /*ApcReserved*/) noexcept { return NtStatus::Success; }
+inline NtStatus WINAPI NtQueueApcThread(HANDLE threadHandle, void* apcRoutine,
+    void* apcRoutineContext, void* systemArgument1, void* systemArgument2) noexcept {
+    uint64_t stackArgument = reinterpret_cast<uintptr_t>(systemArgument2);
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtQueueApcThread,
+        .arg1 = reinterpret_cast<uintptr_t>(threadHandle),
+        .arg2 = reinterpret_cast<uintptr_t>(apcRoutine),
+        .arg3 = reinterpret_cast<uintptr_t>(apcRoutineContext),
+        .arg4 = reinterpret_cast<uintptr_t>(systemArgument1),
+        .stackArgs = &stackArgument,
+        .stackArgCount = 1
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+inline NtStatus WINAPI NtQueueApcThreadEx(HANDLE /*ThreadHandle*/, HANDLE /*UserApcReserveHandle*/, void* /*ApcRoutine*/, void* /*ApcRoutineContext*/, void* /*ApcStatusBlock*/, void* /*ApcReserved*/) noexcept { return NtStatus::NotImplemented; }
 
 inline NtStatus WINAPI NtReadVirtualMemory(HANDLE /*ProcessHandle*/, void* /*BaseAddress*/, void* Buffer, size_t NumberOfBytesToRead, size_t* NumberOfBytesRead) noexcept {
     if (Buffer && NumberOfBytesToRead > 0) std::memset(Buffer, 0, NumberOfBytesToRead);
@@ -10410,10 +10426,6 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtWriteVirtualMemory", reinterpret_cast<void*>(NtWriteVirtualMemory));
 
     // RTL
-    ldr.registerExport("ntdll.dll", "RtlAddVectoredExceptionHandler", reinterpret_cast<void*>(RtlAddVectoredExceptionHandler));
-    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredExceptionHandler", reinterpret_cast<void*>(RtlRemoveVectoredExceptionHandler));
-    ldr.registerExport("ntdll.dll", "RtlAddVectoredContinueHandler", reinterpret_cast<void*>(RtlAddVectoredContinueHandler));
-    ldr.registerExport("ntdll.dll", "RtlRemoveVectoredContinueHandler", reinterpret_cast<void*>(RtlRemoveVectoredContinueHandler));
     ldr.registerExport("ntdll.dll", "RtlAbsoluteToSelfRelativeSD", reinterpret_cast<void*>(RtlAbsoluteToSelfRelativeSD));
     ldr.registerExport("ntdll.dll", "RtlAcquireSRWLockShared", reinterpret_cast<void*>(RtlAcquireSRWLockShared));
     ldr.registerExport("ntdll.dll", "RtlReleaseSRWLockShared", reinterpret_cast<void*>(RtlReleaseSRWLockShared));
