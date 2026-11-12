@@ -1,229 +1,61 @@
-# MicaNT Engineering Rules
-
-These rules apply to every change in this repository. Read them together with `README.md`, `CONTRIBUTING.md`, `docs/CLEAN_ROOM.md`, and `docs/LEGAL.md`; where a narrower subsystem specification exists, follow it as well.
-
-## Compatibility contract
-
-- Implement Windows compatibility from the externally visible Windows contract. Use Microsoft's official `win32metadata` as the primary source for Win32 declarations, and public Microsoft Learn / WDK documentation for contracts that metadata does not describe.
-- Match the declared Windows API names, exports, calling conventions, parameter and structure layouts, constants, return values, error behavior, and lifecycle semantics. Do not create MicaNT-only public APIs or invent Windows API names, signatures, flags, or behavior.
-- Before adding or changing an externally visible API, verify its declaration and contract in the approved references. If the contract cannot be established, do not guess: investigate the official references and document the unresolved requirement.
-- Keep private implementation details private. Internal helpers are allowed only when they do not alter or masquerade as the Windows ABI.
-- Treat compatibility as an implementation requirement to be verified, not as a claim that an unimplemented surface is already 100% compatible.
-
-## Research, reuse, rewrite, and integrate
-
-- Study public specifications, metadata, tests, and relevant open-source implementations (including ReactOS and Wine) when useful. Compare their behavior and architecture with the existing MicaNT implementation before changing code.
-- Reuse or adapt external code only when its license and required notices permit that use; otherwise use it as a technical reference and implement the required behavior in MicaNT. Preserve required attribution and notices. Do not copy leaked or confidential source, decompiled proprietary implementation, or proprietary assets.
-- Prefer preserving valid MicaNT code, then completing or correcting it. Rewrite only when technically justified. Rework adopted algorithms to fit MicaNT's C++23 conventions and canonical subsystem boundaries; do not disguise provenance by renaming or reformatting.
-- Do not add external runtime libraries or dependencies. Use the repository's existing code and approved toolchain. A proposed build-time tool or dependency must be justified against the project documentation before being introduced.
-- Do not use leaked or confidential source, or decompiled proprietary binaries. Do not add third-party code or assets without permission under their applicable terms. Follow `CONTRIBUTING.md` and `docs/CLEAN_ROOM.md`.
-
-## Architecture and implementation
-
-- Follow the subsystem boundaries, directory layout, naming, ABI, and design specified in `README.md`, `docs/KEY_PILLARS.md`, `docs/SOVEREIGN_TAXONOMY.md`, and subsystem-specific documentation.
-- Write code in clear, idiomatic C++23 that a human programmer can read and maintain. Prefer well-named functions and focused units over dense, monolithic, or opaque code blocks. Add concise comments to explain intent, non-obvious logic, and important constraints; do not use comments merely to restate the code.
-- Implement functionality in the canonical subsystem that owns the Windows contract. Avoid application-specific shims, satellite implementations, and workarounds that bypass the owning subsystem.
-- Preserve freestanding and supported-architecture constraints. Do not assume hosted operating-system services or introduce a dependency that breaks the kernel/user-mode build model.
-- Prefer RAII, bounded views such as `std::span`, explicit ownership, and the project's synchronization primitives. Validate sizes, state transitions, and failure paths.
-- Preserve zero-telemetry behavior and avoid unrelated changes.
-
-## Strict user-mode / kernel-mode boundary
-
-- Enforce strict separation between Ring 3 system DLLs and Ring 0 kernel implementation.
-- User-mode DLLs (`kernel32.dll`, `kernelbase.dll`, `ntdll.dll`, `advapi32.dll`, `user32.dll`, `gdi32.dll`, and other user-mode libraries) must not include or depend on private `micant/km/` implementation headers. Shared declarations may be included only through ABI-safe public or mode-neutral headers.
-- Access kernel services through the appropriate NTDLL native API, system-call interface, or documented user-mode subsystem mechanism.
-- User-mode libraries must not instantiate or manipulate kernel Executive objects, scheduler structures, process managers, memory managers, or driver objects.
-- Do not implement simulated kernel services in user-mode DLLs when the corresponding MicaNT kernel service exists.
-- Keep host-side test adapters separate from native user-mode DLL implementations.
-- The build system must check the actual transitive header dependencies of native user-mode targets and reject any dependency on private `micant/km/` headers.
-- Preserve legitimate user-mode operations, including TEB access, string conversion, loader bookkeeping, and other functionality that does not require a system call.
-
-## Change workflow
-
-- Read the relevant specification and existing implementation before editing. Identify the owning subsystem and the Windows contract first.
-- Make changes in coherent, reviewable steps. Update relevant documentation when behavior or interfaces change.
-- Build the affected targets and run the applicable existing checks when feasible. Do not claim a behavior is verified unless it was exercised; record environmental limits clearly.
-- Keep commits focused on one implementation step and do not include unrelated working-tree changes.
-
-# MicaNT — Continuous Execution Protocol
-
-## Scopo
-
-Questo protocollo governa il comportamento dell'agente durante incarichi che richiedono il completamento di una o più milestone.
-
-Il repository contiene un kernel NT modulare C++23 esclusivamente AMD64. Le milestone correnti sono definite in `docs/KERNEL_MILESTONES.md`.
-
-**Un batch completato non equivale a un incarico completato.**
-
-## 1. Priorità delle istruzioni operative
-
-Le richieste esplicite dell'utente per il mandato corrente prevalgono sulle preferenze generiche del workflow del repository, purché non violino vincoli tecnici o di sicurezza inderogabili.
-
-In particolare:
-
-- Se l'utente dice di non creare commit, non creare commit.
-- Se l'utente dice di non eseguire verifiche durante il batch, non lanciare build, test, QEMU, sanitizzatori o altri controlli eseguibili durante quel batch.
-- Non dichiarare verificato codice che non è stato verificato.
-- Se la richiesta è di implementare, non sostituire l'implementazione con un rapporto.
-- Non terminare volontariamente il mandato per applicare una consuetudine di reporting.
-- Non ripetere una richiesta di autorizzazione per passaggi già inclusi nel mandato.
-
-Una verifica differita deve essere segnalata come tale, non sostituita con una verifica fittizia.
-
-## 2. Gestione della milestone
-
-All'inizio dell'incarico:
-
-1. Leggi il codice direttamente pertinente.
-2. Leggi `docs/KERNEL_MILESTONES.md`.
-3. Identifica i requisiti incompleti della milestone richiesta.
-4. Ordinali per dipendenze tecniche.
-5. Inizia immediatamente il primo requisito realizzabile.
-
-Non creare una nuova roadmap generale.
-
-Non ripetere un audit completo del repository.
-
-La milestone corrente rimane attiva finché tutti i suoi criteri di accettazione non sono soddisfatti o finché interviene un vincolo reale che impedisce ogni ulteriore progresso.
-
-## 3. Ciclo di lavoro continuo
-
-Per ogni sottotask:
-
-**IMPLEMENT → INTEGRATE → UPDATE STATE → NEXT TASK**
-
-Questo ciclo non termina con un resoconto.
-
-Dopo ogni intervento:
-
-- Aggiorna il codice canonico.
-- Completa i caller e i percorsi dipendenti necessari.
-- Gestisci ownership, errori e cleanup.
-- Registra mentalmente o nel documento di stato ciò che rimane aperto.
-- Passa immediatamente al prossimo sottotask.
-
-Non considerare un commit, un test QEMU passato o un singolo bugfix come un motivo per concludere la sessione.
-
-Non utilizzare la complessità della milestone come motivo generico di arresto.
-
-## 4. Condizioni di arresto
-
-È consentito concludere volontariamente il mandato soltanto quando:
-
-A. Tutti i criteri richiesti sono implementati, indicando separatamente le verifiche effettuate e quelle differite.
-
-B. Esiste un blocco tecnico concreto, riproducibile e non risolvibile con le risorse disponibili, e nessun altro sottotask indipendente può proseguire.
-
-C. Serve una decisione dell'utente che non può essere ricavata dalle specifiche o dalle istruzioni già fornite.
-
-D. L'ambiente di esecuzione impone realmente la fine della sessione o non consente ulteriori operazioni.
-
-**Non sono condizioni di arresto:**
-
-- Un file modificato.
-- Una funzione completata.
-- Un test passato.
-- Un commit creato.
-- Un errore di compilazione ordinario.
-- Una dipendenza ancora da implementare.
-- Un problema complesso ma analizzabile.
-- La presenza di test da scrivere.
-- La necessità di leggere ReactOS.
-- Il raggiungimento di un checkpoint interno.
-- Il fatto di poter elencare il prossimo passo.
-
-Se esiste un prossimo intervento concreto e fattibile, continua.
-
-## 5. Gestione dei blocker
-
-Quando incontri un problema:
-
-1. Identifica precisamente la funzione, il contratto o l'invariante interessato.
-2. Studia il codice MicaNT coinvolto.
-3. Consulta ReactOS e Microsoft WDK quando necessario.
-4. Individua la dipendenza minima.
-5. Implementa la soluzione nel sottosistema canonico.
-6. Completa i caller e i cleanup.
-7. Riprendi la milestone.
-
-Se il problema non può essere risolto subito, affronta un sottotask indipendente.
-
-Non usare genericamente espressioni come "richiede attenzione", "è complesso" o "serve ulteriore studio" come giustificazione per fermarti.
-
-## 6. Modalità NO-COMMIT / NO-TEST
-
-Quando richiesta dall'utente:
-
-- Mantieni tutte le modifiche nel worktree.
-- Non creare commit Git, neppure WIP.
-- Non lanciare QEMU.
-- Non avviare build o test.
-- Non dichiarare superate verifiche non eseguite.
-- Continua comunque a leggere, modificare e integrare il codice.
-- Conserva i test esistenti.
-- Non disabilitare controlli per aggirare problemi.
-- Annota le verifiche che saranno necessarie alla fine del mandato.
-
-Questa modalità non giustifica un arresto anticipato.
-
-Quando l'utente autorizzerà le verifiche, esegui i controlli pertinenti all'intero batch, evitando test ripetitivi.
-
-
-## 9. Reporting senza interruzione
-
-Puoi inviare brevi aggiornamenti sul lavoro in corso, ma non trattarli come rapporti conclusivi.
-
-Un checkpoint deve indicare:
-
-- Cosa è stato implementato.
-- Cosa rimane.
-- Quale sottotask viene affrontato successivamente.
-
-Dopo il checkpoint continua a lavorare, se l'ambiente lo consente.
-
-Il rapporto finale è riservato al completamento effettivo del mandato o a un arresto imposto da una delle condizioni della sezione 4.
-
-## 10. Recupero della sessione
-
-Se la sessione termina per limiti dell'ambiente, lascia uno stato recuperabile:
-
-- Milestone corrente.
-- Ultimo sottotask completato.
-- Sottotask in corso.
-- File modificati.
-- Modifiche locali da preservare.
-- Test eseguiti o differiti.
-- Primo intervento concreto da riprendere.
-
-Non descrivere come completata una milestone parziale.
-
-Alla sessione successiva riparti direttamente dal sottotask in corso.
-
-## Regola conclusiva
-
-**Il mandato dell'utente è l'unità di completamento. Il batch è soltanto un'unità interna di organizzazione.**
-
-Non fermarti dopo il primo miglioramento.
-
-Non fermarti perché hai individuato il prossimo problema.
-
-Non fermarti perché hai scritto un resoconto.
-
-Continua a integrare il kernel canonico finché il mandato può effettivamente progredire.
-
-
-## Single modular kernel policy
-
-MicaNT has one canonical modular kernel. All kernel subsystem development must target the modular `ntoskrnl_core` architecture and its bare-metal entry point. The archived monolithic kernel under `old/` is historical reference only and must never be built, linked, staged, or used to satisfy missing symbols.
-
-## Evidence and status
-
-Use the Microsoft Windows contract as the compatibility requirement and official `win32metadata` plus Microsoft Learn/WDK as primary sources. Record unresolved contract details rather than guessing. Keep implementation status separate from declarations, compilation, host tests, QEMU results, and compatibility claims; use `docs/KERNEL_ARCHITECTURE.md` and the integration status documents as the evidence source.
-
-## Kernel verification and QEMU
-
-- From the repository root, run `python3 qemu.py --headless` for the normal modular kernel build and QEMU boot validation. This builds `ntoskrnl_core_baremetal`, `bootx64_efi`, and `virtio_gpu_boot`, validates the build manifest, and exercises boot milestones and input. It does not build Explorer; that is a separate `--check-explorer` operation.
-- Use `python3 qemu.py --headless --runtime-selftest` for the separate kernel C++ runtime construction/teardown path. This mode halts early and does not replace the normal boot or its Ps/Ke diagnostics. The runner accepts `--timeout` and `--stable-seconds` when needed.
-- QEMU uses a Unix QMP socket in a temporary directory under `build/`. If sandbox policy prevents binding that socket, rerun the authorized QEMU command with the required sandbox permissions; do not interpret that environmental failure as a kernel failure. Inspect the generated `serial.log` and the first missing milestone when diagnosing a failed boot.
-- Run `python3 scripts/verify_kernel_architecture.py` and the relevant focused host tests for the changed subsystems. The runner's Python tests use `python3 -m unittest discover -s test -p test_bootstrap_runtime_runner.py -v`; `test/mm_shared_backend_test.cpp` requires `-DMICANT_FREESTANDING`. Apply ASan/UBSan to compatible standalone host tests when available.
-- Report build, host tests, normal QEMU and runtime-selftest results separately, including failures and any checks explicitly deferred by the user. Do not rebuild Explorer unless the task authorizes it.
+MicaNT Engineering and Agent Execution Rules
+These repository instructions apply to coding agents working on MicaNT. Read the directly relevant implementation and specifications before changing code. docs/KERNEL_MILESTONES.md defines the current milestone IDs and acceptance scope; docs/KERNEL_INTEGRATION_STATUS.md records evidence and historical work, not a second milestone definition.
+1. Mission and architecture
+MicaNT is an AMD64/x86_64-only, C++23, NT-compatible operating system. The production target is the single canonical modular kernel (ntoskrnl_core and its ntoskrnl_core_baremetal build), started through UEFI. The monolithic implementation under old/ is archival and must never be built, linked, staged, or used to satisfy missing symbols.
+- Complete existing canonical modules (Ke, Mm, Ob, Ps, Io, Se, Cm, etc.) instead of introducing competing managers, tables, schedulers, or host-only substitutes.
+- Reuse working MicaNT code. Make changes in the subsystem that owns the functionality, including necessary caller, callee, ownership, failure, and cleanup paths.
+- Preserve the UEFI handoff, PFN allocator, AMD64 paging, CPL3 boundary, SYSCALL entry, kernel runtime, and functioning drivers/tests. Changes to these paths must not silently weaken existing invariants.
+- Do not introduce ARM64 or other architecture paths, arbitrary hosted dependencies, or a new kernel ABI.
+- Keep implementation readable and idiomatic C++23; use explicit resource ownership, bounded arithmetic, and synchronization appropriate to the current execution/IRQL context. Avoid cosmetic rewrites and unrelated features.
+- Preserve zero-telemetry behavior.
+2. Windows compatibility and references
+- Treat public Microsoft Windows/NT/WDK contracts as the required external behavior. Use official win32metadata for Win32 declarations where applicable and Microsoft Learn/WDK for documented NT behavior. Match public names, exports, calling conventions, structures, status codes, access checks, lifetimes, and error semantics. Never invent public Windows API names or return synthetic success for unimplemented behavior.
+- Study the corresponding ReactOS source from the local sibling repository ../reactos when it can resolve implementation details; Wine and other public implementations may help with user-mode behavior. Compare first with MicaNT's existing implementation, then integrate the relevant behavior into the canonical MicaNT design.
+- Respect third-party licenses, notices, and provenance. Do not import confidential or leaked code, or misrepresent borrowed code as original. Follow CONTRIBUTING.md, docs/CLEAN_ROOM.md, and docs/LEGAL.md for contribution requirements.
+- When a contract is uncertain, investigate the specific point rather than converting uncertainty into a general project-wide research phase. Unsupported variants must fail explicitly and correctly.
+3. Strict Ring 0 / Ring 3 separation
+- User-mode DLLs, including NTDLL, Kernel32, KernelBase, Advapi32, User32 and GDI32, must not depend on private micant/km/ headers or instantiate kernel Executive objects.
+- Place shared ABI declarations in mode-neutral micant/shared/ interfaces. Reach kernel services through the native syscall boundary or another established NT subsystem interface.
+- Hosted adapters are for isolated tests and must not masquerade as freestanding NT services. A host test passing is not proof of QEMU, Ring 3, process, or driver integration.
+- Preserve transitive include-boundary checks for native user-mode targets.
+4. Task completion is not batch completion
+The user's stated objective, not an individual patch, test, commit, or status message, defines when the coding task is complete. A functional batch is only an internal work unit.
+
+When assigned a milestone:
+1. Inspect the current worktree and preserve existing modifications. Read the current milestone row and only the sources needed for its open requirements; avoid repeated full-repository audits.
+2. Identify the shortest dependency chain to a real end-to-end implementation, including dependent work in another canonical subsystem when necessary.
+3. Implement that path, covering success, failure, rollback, access validation, state transitions, and cleanup. Do not replace a difficult core requirement with an easier adjacent microtask.
+4. Continue into the next unsatisfied acceptance requirement within the same run while execution remains available. Treat progress messages and local checkpoints as informational, not as completion events.
+5. State completion only if every required acceptance item is implemented. State verification separately; unexecuted tests mean implemented but unverified, never verified.
+Never stop solely because a small edit is finished, an issue is understood, a test passes, a commit is possible, a checkpoint was written, or the next dependency is complex. A missing dependency is normally the next implementation target, not a reason to stop.
+
+Do not claim that an instruction can override execution-environment limits. If the environment actually ends the run or genuinely blocks further work, preserve a precise resume point and report the concrete limitation. Do not mislabel an ordinary engineering problem as an environment limit.
+5. Blocker and dependency policy
+Before treating a requirement as blocked:
+- Identify the exact function/interface/invariant and why the current implementation cannot proceed.
+- Examine the existing MicaNT owner and its call sites; consult the narrow ReactOS/WDK reference if needed.
+- Implement the smallest real missing dependency within the requested scope and reconnect the original path.
+- If one dependency is genuinely blocked, move to another independent required part of the same milestone; do not switch to decorative features or unrelated tests.
+Avoid placeholder returns, hard-coded fake handles/PIDs/CR3, artificial success, or duplicate bootstrap-only implementations as substitutes for canonical integration. A bounded implementation may be useful, but must be described honestly and must not be called general NT support.
+6. Test, QEMU, and commit policy
+The current user's explicit instructions govern whether and when builds, tests, QEMU, documentation updates, and commits occur. Generic repository test recommendations are defaults, not permission to disregard a no tests, no QEMU, or no commits request.
+- When verification is explicitly deferred: do not execute build commands, test binaries, sanitizers, QEMU, or architecture verification; continue inspecting and editing code. Keep a short record of checks to run later. Do not report passed tests that were not executed.
+- When commits are explicitly deferred: keep all work in the existing worktree; do not create WIP or final commits, reset, clean, or overwrite unrelated local modifications. Do not use a missing commit as a reason to stop.
+- When verification is authorized: prefer incremental compilation and targeted tests; run integrated kernel/QEMU checks at meaningful integration boundaries, not after each small function. Reuse persistent CMake/Ninja build directories. Do not rebuild Explorer for unrelated Ke/Mm/Ps work.
+- Before calling a bare-metal milestone verified: link the actual ntoskrnl_core_baremetal target and exercise the required behavior in QEMU. A hosted simulation, mere compilation, diagnostic fixture, or log marker is insufficient proof of process/system integration.
+- When commits are authorized: commit coherent, attributable changes selectively; preserve user changes and never let a commit terminate the assigned milestone automatically.
+Relevant normal-mode commands, only when authorized, include python3 qemu.py --headless, python3 qemu.py --headless --runtime-selftest, python3 scripts/verify_kernel_architecture.py, and narrowly relevant host regressions. Inspect serial/QMP evidence and distinguish environmental failures from code failures.
+7. Milestones, status and reporting
+- Canonical milestone scope: docs/KERNEL_MILESTONES.md. Any older numbered milestone inventory inside docs/KERNEL_INTEGRATION_STATUS.md is historical; do not reinterpret current M4 as the old Io/syscall M4.
+- Evidence ledger: docs/KERNEL_INTEGRATION_STATUS.md. Update it at meaningful integration boundaries or when explicitly requested, not after every minor helper change. Do not use documentation updates as substitute deliverables for implementation.
+- A milestone's unfinished items are actionable work, not optional future suggestions. If M4 requires exception dispatch or file-backed SEC_IMAGE for its acceptance path, implement the necessary Ke/Mm/Io/Ob/Ps dependencies rather than declaring those parts out of scope solely because they cross subsystem boundaries.
+- Keep status reporting concise and accurate: implemented vs linked vs executed in QEMU vs fully supported, and verified vs unverified. Do not automatically end the task after a progress summary.
+- If a run is forcibly interrupted, record the exact in-progress function, files touched, pending worktree changes, known blockers, deferred checks, and the next concrete edit. On resumption, start there rather than repeating a repository-wide plan.
+8. End-of-task gate
+Before ending a milestone assignment, check all of the following:
+- Does the code implement the stated milestone requirements, including necessary dependencies and cleanup?
+- Is the production AMD64 modular kernel path connected, rather than only an isolated hosted or bootstrap simulation?
+- Are unsupported behaviors explicit, without fabricated success?
+- Were the user's restrictions on tests, QEMU, commits, and local changes respected?
+- Is the verification status truthful, including any deferred checks?
+If an acceptance item remains and a concrete edit can still advance it, continue implementing instead of presenting a final completion report. If an actual runtime limit interrupts the job, clearly report an interrupted task and a precise resume point; do not claim the milestone is finished.
