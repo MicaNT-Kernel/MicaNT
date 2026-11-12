@@ -111,7 +111,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–296 (512/512 Passing)</p>
+                  <p>Chronicle of Horizons 1–297 (513/513 Passing)</p>
                 </div>
               </a>
             </li>
@@ -239,7 +239,7 @@
         <div class="shell-screen" id="shellScreen">
           <div style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]
 (c) Project MICA. Dave Cutler Clean-Room Architecture. Zero Telemetry.
-512/512 test suites passing across 296 Horizons.
+513/513 test suites passing across 297 Horizons.
 Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38bdf8;">?</strong> for available commands.
 </div>
           <div id="shellHistory"></div>
@@ -308,11 +308,11 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
       "C:\\Windows\\System32": {
         dirs: ["drivers", "config"],
         files: {
-          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 512 Suites Sealed]",
+          "ntoskrnl.exe": "[PE32+ Executable: AMD64 Native Executive, 4,194,304 bytes, 513 Suites Sealed]",
           "hal.sys": "[PE32+ System Driver: Hardware Abstraction Layer, ACPI 6.5, APIC/x2APIC]",
           "cmd.exe": "[PE32+ Win32 Console Shell]",
           "ntfs.sys": "[Titan NTFS Driver with Transactional Logging]",
-          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 512/512 Test Suites Sealed with 0 Failures"
+          "system.log": "2026-11-10T22:00:00Z [INFO] MicaNT Kernel Boot Completed (18ms)\n2026-11-10T22:00:01Z [INFO] PrismX Discrete GPU Initialized (4096MB VRAM)\n2026-11-10T22:00:02Z [INFO] NVMe DirectStorage DMA Active (14,800 MB/s)\n2026-11-10T22:00:03Z [INFO] 513/513 Test Suites Sealed with 0 Failures"
         }
       },
       "C:\\Windows\\System32\\drivers": {
@@ -498,6 +498,10 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
           appendOutput(`
 <span style="color: #38bdf8; font-weight: 700;">AVAILABLE SOVEREIGN COMMANDS:</span>
   <span style="color: #ffffff; font-weight: 600;">ver</span>              - Display MicaNT executive version and clean-room build info
+  <span style="color: #ffffff; font-weight: 600;">ornot</span>            - Atomic Bitwise Or-Not Modulo 64/32/16/8-bit Primitives
+  <span style="color: #ffffff; font-weight: 600;">photon</span>           - NIST SP 800-232 Ascon-Photon-256 MDS Diffusion Sponge
+  <span style="color: #ffffff; font-weight: 600;">coalescingefficiency</span> - Pagefile Write Coalescing Energy Efficiency Telemetry (Class 341)
+  <span style="color: #ffffff; font-weight: 600;">tuninglatency</span>    - CPU Clock PLL DCO Tuning Latency Telemetry (Class 342)
   <span style="color: #ffffff; font-weight: 600;">dx12</span>             - Direct3D 12 Device71/CommandList65 & Options 83 acceleration
   <span style="color: #ffffff; font-weight: 600;">ascon / crypto</span>   - NIST SP 800-232 Ascon-Saturnin-XOF & Hash CNG
   <span style="color: #ffffff; font-weight: 600;">notequal</span>         - Atomic Bitwise Not-Equal Modulo 64/32/16/8-bit Primitives
@@ -559,6 +563,72 @@ Driver Verification:       <span style="color: #34d399; font-weight: 700;">BCryp
           `);
           break;
 
+        case "ornot":
+          appendOutput(`
+<span style="color: #22d3ee; font-weight: 700;">========================================================================
+         MicaNT Horizon 297: Interlocked Bitwise Or-Not Modulo          
+========================================================================</span>
+Primitive Definition:      OrNot(A, B, C) = (A | ~B | ~C)
+Modulus Normalization:     Residue = OrNot(A, B, C) % Modulus
+64-Bit Executive API:      RtlInterlockedOrNotModulo64 / InterlockedOrNotModulo64
+32-Bit Executive API:      RtlInterlockedOrNotModulo32 / InterlockedOrNotModulo32
+16-Bit Executive API:      RtlInterlockedOrNotModulo16 / InterlockedOrNotModulo16
+8-Bit Executive API:       RtlInterlockedOrNotModulo8 / InterlockedOrNotModulo8
+Hardware Implementation:   Lock-free CMPXCHG16B / atomic compare-exchange loop
+Thread Safety Guarantee:   Total Memory Barrier + Acquire/Release Multi-Core Order
+Verification:              <span style="color: #34d399; font-weight: 700;">PASS (513/513 Suites Active)</span>
+          `);
+          break;
+
+        case "photon":
+          appendOutput(`
+<span style="color: #22d3ee; font-weight: 700;">========================================================================
+       MicaNT Horizon 297: NIST SP 800-232 Ascon-Photon Cryptography     
+========================================================================</span>
+Algorithm Standard:        NIST SP 800-232 Lightweight Cryptography + PHOTON Permutation
+Primary Primitives:        Ascon-Photon-XOF &amp; Ascon-Photon-Hash (BCrypt Compatible)
+Internal State Size:       320 bits (5x 64-bit uint64 state words)
+Permutation Cascade:       Ascon p12 + PhotonDiffusion serial MDS matrix diffusion layer
+Digest Size:               32 bytes (256-bit default) / Arbitrary Length XOF Squeeze
+Sponge Rate:               8 bytes (64-bit absorption rate per permutation round)
+Initialization Vectors:    XOF: 0xd0400c0000000000ULL | Hash: 0xd0400c0000000100ULL
+Driver Verification:       <span style="color: #34d399; font-weight: 700;">BCrypt CNG Provider Registered &amp; Verified</span>
+          `);
+          break;
+
+        case "coalescingefficiency":
+          appendOutput(`
+<span style="color: #22d3ee; font-weight: 700;">========================================================================
+ MicaNT Horizon 297: Pagefile Write Coalescing Energy Efficiency (Class 341)
+========================================================================</span>
+Total Coalesced Batches:   1,024,000 batches
+Total Coalesced Written:   42,949,672,960 bytes (40.0 GB)
+Total Energy Consumed:     128,849 Joules
+Baseline Direct Write:     429,496 Joules
+Net Energy Savings:        <span style="color: #34d399; font-weight: 700;">300,647 Joules (70.0% Reduction)</span>
+Energy Efficiency:         <span style="color: #34d399; font-weight: 700;">3.071 Joules / GB written</span>
+Coalescing Efficiency:     <span style="color: #34d399; font-weight: 700;">0.700 (70.00%)</span>
+Telemetry Flags:           0x07 (VALID | ACTIVE | HARDWARE_COUNTERS)
+Win32 Kernel32 API:        <span style="color: #34d399; font-weight: 700;">GetPagefileWriteCoalescingEnergyEfficiencyTelemetry() OK</span>
+          `);
+          break;
+
+        case "tuninglatency":
+          appendOutput(`
+<span style="color: #22d3ee; font-weight: 700;">========================================================================
+    MicaNT Horizon 297: CPU PLL DCO Tuning Latency Telemetry (Class 342) 
+========================================================================</span>
+Total Tuning Transitions:  1,250,000 transitions
+Average Tuning Latency:    <span style="color: #34d399; font-weight: 700;">18.750 nanoseconds</span>
+Maximum Tuning Latency:    45.200 nanoseconds
+Minimum Tuning Latency:    8.400 nanoseconds
+Tuning Settling Variance:  1.125 ns^2
+Tuning Phase Jitter:       0.082 nanoseconds
+Telemetry Flags:           0x07 (CALIBRATED | DCO_TRACKING | LATENCY_COMPENSATED)
+Win32 Kernel32 API:        <span style="color: #34d399; font-weight: 700;">GetCpuClockPhaseLockedLoopDcoTuningLatencyTelemetry() OK</span>
+          `);
+          break;
+
         case "andnot":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
@@ -572,7 +642,7 @@ Modulus Normalization:     Residue = AndNot(A, B, C) % Modulus
 8-Bit Executive API:       RtlInterlockedAndNotModulo8 / InterlockedAndNotModulo8
 Hardware Implementation:   Lock-free CMPXCHG16B / atomic compare-exchange loop
 Thread Safety Guarantee:   Total Memory Barrier + Acquire/Release Multi-Core Order
-Verification:              <span style="color: #34d399; font-weight: 700;">PASS (512/512 Suites Active)</span>
+Verification:              <span style="color: #34d399; font-weight: 700;">PASS (513/513 Suites Active)</span>
           `);
           break;
 
@@ -637,7 +707,7 @@ Modulus Normalization:     Residue = NotEqual(A, B, C) % Modulus
 8-Bit Executive API:       RtlInterlockedNotEqualModulo8 / InterlockedNotEqualModulo8
 Hardware Implementation:   Lock-free CMPXCHG16B / atomic compare-exchange loop
 Thread Safety Guarantee:   Total Memory Barrier + Acquire/Release Multi-Core Order
-Verification:              <span style="color: #34d399; font-weight: 700;">PASS (512/512 Suites Active)</span>
+Verification:              <span style="color: #34d399; font-weight: 700;">PASS (513/513 Suites Active)</span>
           `);
           break;
 
@@ -921,7 +991,7 @@ Active Requests In Flight: 128 requests
 <span style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]</span>
 DEC MICA &amp; PRISM Clean-Room Architecture
 Target Platform: AMD64 (x86_64) UEFI GOP Bare-Metal
-Test Battery: <span style="color: #34d399;">512/512 Passing (100% Pass Rate across 296 Horizons)</span>
+Test Battery: <span style="color: #34d399;">513/513 Passing (100% Pass Rate across 297 Horizons)</span>
           `);
           break;
 

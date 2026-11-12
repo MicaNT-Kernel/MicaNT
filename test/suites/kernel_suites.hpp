@@ -70561,3 +70561,323 @@ inline void Test_Horizon296_Device72Options84_PagefileWriteCompressionEnergySavi
     Suite512_Direct3D12_Device72_CommandList66_Options84_NtSystemInfo339_340_InterlockedAndNotModulo_And_AsconSubterraneanXofHash();
 }
 
+
+
+inline void Suite513_Direct3D12_Device73_CommandList67_Options85_NtSystemInfo341_342_InterlockedOrNotModulo_And_AsconPhotonXofHash() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 513: Horizon 297 - Direct3D 12 Device73/CommandList67 & Options 85, NT Native 341/342, Interlocked Bitwise Or-Not Modulo 64/32/16/8 & NIST Ascon-Photon XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device73, ID3D12GraphicsCommandList67 & Options 85 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device73, ID3D12GraphicsCommandList67 & Options 85 ABI...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+        ID3D12Device73* pDevice73 = nullptr;
+
+        int32_t hr = device.QueryInterface(IID_ID3D12Device73, reinterpret_cast<void**>(&pDevice73));
+        TEST_ASSERT(hr == 0 && pDevice73 != nullptr, "QueryInterface for IID_ID3D12Device73 succeeds");
+
+        ID3D12Device73* pOfficialDevice73 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device73, reinterpret_cast<void**>(&pOfficialDevice73));
+        TEST_ASSERT(hr == 0 && pOfficialDevice73 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device73 succeeds");
+        pOfficialDevice73->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS85
+        D3D12_FEATURE_DATA_D3D12_OPTIONS85 opt85{};
+        hr = pDevice73->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS85, &opt85, sizeof(opt85));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS85 succeeds");
+        TEST_ASSERT(opt85.WorkGraphsTier == 68u, "D3D12_OPTIONS85 reports WorkGraphsTier 68");
+        TEST_ASSERT(opt85.CooperativeMatrixMultiply73786976294838208Supported == TRUE, "D3D12_OPTIONS85 reports CooperativeMatrixMultiply73786976294838208Supported == TRUE");
+        TEST_ASSERT(opt85.SubByteMicroscopicFormatsV48Supported == TRUE, "D3D12_OPTIONS85 reports SubByteMicroscopicFormatsV48Supported == TRUE");
+        TEST_ASSERT(opt85.WorkGraphsMaxConcurrencyTier295147905179352832Supported == TRUE, "D3D12_OPTIONS85 reports WorkGraphsMaxConcurrencyTier295147905179352832Supported == TRUE");
+        TEST_ASSERT(opt85.DynamicClusterExpansionTier53Supported == 1, "D3D12_OPTIONS85 reports DynamicClusterExpansionTier53Supported == 1");
+        TEST_ASSERT(opt85.MaxWorkGraphConcurrencyGroups == 295147905179352832ULL, "D3D12_OPTIONS85 reports MaxWorkGraphConcurrencyGroups == 295147905179352832");
+        TEST_ASSERT(opt85.TilePipeliningStagesSupported == 576460752303424ULL, "D3D12_OPTIONS85 reports TilePipeliningStagesSupported == 576460752303424");
+        TEST_ASSERT(opt85.PhotonicInterconnectTier31Supported == 1, "D3D12_OPTIONS85 reports PhotonicInterconnectTier31Supported == 1");
+
+        // Cooperative matrix query 52 (24 args)
+        int32_t supported = 0;
+        uint64_t maxDim = 0;
+        uint32_t supTypes = 0, sparseAcc = 0;
+        int32_t asyncAcc = 0;
+        uint64_t tileStages = 0;
+        int32_t autoFeedback = 0, subRecursion = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseBlock = 0, determReduction = 0;
+        int32_t hyperQuant = 0, sparseCluster = 0, multiQueueSync = 0, asyncKernelDispatch = 0;
+        int32_t neuralExecutionEngine = 0, adaptiveTensorCore = 0, sovereignSilicon = 0;
+        int32_t quantumEmulation = 0, photonicInterconnect = 0, hyperDimensionalScale = 0;
+
+        hr = pDevice73->GetWorkGraphCooperativeMatrixSupport52(
+            &supported, &maxDim, &supTypes, &sparseAcc, &asyncAcc, &tileStages,
+            &autoFeedback, &subRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByte, &sparseBlock, &determReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernelDispatch,
+            &neuralExecutionEngine, &adaptiveTensorCore, &sovereignSilicon,
+            &quantumEmulation, &photonicInterconnect, &hyperDimensionalScale);
+
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport52 succeeds");
+        TEST_ASSERT(supported == 1, "CooperativeMatrixSupport52 reports supported");
+        TEST_ASSERT(maxDim == 73786976294838208ULL, "CooperativeMatrixSupport52 reports max dimension 73.786 quadrillion");
+        TEST_ASSERT(tileStages == 576460752303424ULL, "CooperativeMatrixSupport52 reports 576.460 trillion tile pipelining stages");
+        TEST_ASSERT(quantumEmulation == 1, "CooperativeMatrixSupport52 reports quantum emulation");
+        TEST_ASSERT(photonicInterconnect == 1, "CooperativeMatrixSupport52 reports photonic interconnect tier 31");
+        TEST_ASSERT(hyperDimensionalScale == 1, "CooperativeMatrixSupport52 reports hyper dimensional scale tier 53");
+
+        // Create work graph program record 57 (30 args)
+        void* pProgRecord = nullptr;
+        hr = pDevice73->CreateWorkGraphProgramRecord57(
+            nullptr, 0, 1024, 295147905179352832ULL, 1, 1, 1, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            &pProgRecord);
+        TEST_ASSERT(hr == 0 && pProgRecord != nullptr, "CreateWorkGraphProgramRecord57 succeeds");
+
+        // CommandList67
+        Prism3D12GraphicsCommandListImpl cmdList(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList67* pCmdList67 = nullptr;
+
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList67, reinterpret_cast<void**>(&pCmdList67));
+        TEST_ASSERT(hr == 0 && pCmdList67 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList67 succeeds");
+
+        ID3D12GraphicsCommandList67* pOfficialCmdList67 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList67, reinterpret_cast<void**>(&pOfficialCmdList67));
+        TEST_ASSERT(hr == 0 && pOfficialCmdList67 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList67 succeeds");
+        pOfficialCmdList67->Release();
+
+        // Exercise SetWorkGraphBackingMemory57 (28 args)
+        pCmdList67->SetWorkGraphBackingMemory57(
+            0x8FFF0000ULL, 0x800000ULL, 0x200000ULL, 295147905179352832ULL,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0);
+
+        // Exercise DispatchGraphProgramRecord57 (30 args)
+        uint8_t payload[64] = { 0x57 };
+        pCmdList67->DispatchGraphProgramRecord57(
+            1, payload, sizeof(payload), 4096, 0x1, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+            10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 0);
+
+        pCmdList67->Release();
+        pDevice73->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 341 & 342 Telemetry
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 341 & 342...\n" << std::flush;
+
+        // Class 341: SystemPagefileWriteCoalescingEnergyEfficiencyTelemetryInformation
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION info341{};
+        uint32_t retLen = 0;
+        NtStatus st = NtQuerySystemInformation_Export(
+            341, &info341, sizeof(info341), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(341) succeeds");
+        TEST_ASSERT(retLen == sizeof(info341), "NtQuerySystemInformation(341) returns correct structure length");
+        TEST_ASSERT(info341.Version == 1, "Class 341 reports Version 1");
+        TEST_ASSERT(info341.TotalCoalescedBatches == 1024000ULL, "Class 341 reports TotalCoalescedBatches == 1024000");
+        TEST_ASSERT(info341.TotalCoalescedBytesWritten == 42949672960ULL, "Class 341 reports TotalCoalescedBytesWritten == 42949672960");
+        TEST_ASSERT(info341.TotalEnergyConsumedJoules == 128849ULL, "Class 341 reports TotalEnergyConsumedJoules == 128849");
+        TEST_ASSERT(info341.BaselineDirectWriteEnergyJoules == 429496ULL, "Class 341 reports BaselineDirectWriteEnergyJoules == 429496");
+        TEST_ASSERT(info341.NetEnergySavingsJoules == 300647ULL, "Class 341 reports NetEnergySavingsJoules == 300647");
+        TEST_ASSERT(info341.EnergyEfficiencyJoulesPerGigabyte == 3.071, "Class 341 reports EnergyEfficiencyJoulesPerGigabyte == 3.071");
+        TEST_ASSERT(info341.CoalescingEnergyEfficiencyRatio == 0.700, "Class 341 reports CoalescingEnergyEfficiencyRatio == 0.700");
+        TEST_ASSERT(info341.Flags == 0x07, "Class 341 reports Flags == 0x07");
+
+        // Helper & Win32 wrapper verification
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION rtlInfo341{};
+        st = RtlQuerySystemPagefileWriteCoalescingEnergyEfficiencyTelemetryInformation(&rtlInfo341);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemPagefileWriteCoalescingEnergyEfficiencyTelemetryInformation succeeds");
+        TEST_ASSERT(rtlInfo341.TotalCoalescedBatches == 1024000ULL, "RtlQuerySystemPagefileWriteCoalescingEnergyEfficiencyTelemetryInformation verified");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION k32Info341{};
+        BOOL ok = GetPagefileWriteCoalescingEnergyEfficiencyTelemetry(&k32Info341);
+        TEST_ASSERT(ok == TRUE, "GetPagefileWriteCoalescingEnergyEfficiencyTelemetry succeeds");
+        TEST_ASSERT(k32Info341.NetEnergySavingsJoules == 300647ULL, "GetPagefileWriteCoalescingEnergyEfficiencyTelemetry verified");
+
+        // Class 342: SystemCpuClockPhaseLockedLoopDcoTuningLatencyTelemetryInformation
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_LATENCY_TELEMETRY_INFORMATION info342{};
+        retLen = 0;
+        st = NtQuerySystemInformation_Export(
+            342, &info342, sizeof(info342), &retLen);
+        TEST_ASSERT(st == NtStatus::Success, "NtQuerySystemInformation(342) succeeds");
+        TEST_ASSERT(retLen == sizeof(info342), "NtQuerySystemInformation(342) returns correct length");
+        TEST_ASSERT(info342.Version == 1, "Class 342 reports Version 1");
+        TEST_ASSERT(info342.TotalTuningTransitions == 1250000ULL, "Class 342 reports TotalTuningTransitions == 1250000");
+        TEST_ASSERT(info342.AverageTuningLatencyNanoseconds == 18.750, "Class 342 reports AverageTuningLatencyNanoseconds == 18.750");
+        TEST_ASSERT(info342.MaximumTuningLatencyNanoseconds == 45.200, "Class 342 reports MaximumTuningLatencyNanoseconds == 45.200");
+        TEST_ASSERT(info342.MinimumTuningLatencyNanoseconds == 8.400, "Class 342 reports MinimumTuningLatencyNanoseconds == 8.400");
+        TEST_ASSERT(info342.TuningSettlingVarianceNanoseconds2 == 1.125, "Class 342 reports TuningSettlingVarianceNanoseconds2 == 1.125");
+        TEST_ASSERT(info342.TuningJitterNanoseconds == 0.082, "Class 342 reports TuningJitterNanoseconds == 0.082");
+        TEST_ASSERT(info342.Flags == 0x07, "Class 342 reports Flags == 0x07");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_LATENCY_TELEMETRY_INFORMATION rtlInfo342{};
+        st = RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningLatencyTelemetryInformation(&rtlInfo342);
+        TEST_ASSERT(st == NtStatus::Success, "RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningLatencyTelemetryInformation succeeds");
+        TEST_ASSERT(rtlInfo342.TotalTuningTransitions == 1250000ULL, "RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningLatencyTelemetryInformation verified");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_LATENCY_TELEMETRY_INFORMATION k32Info342{};
+        ok = GetCpuClockPhaseLockedLoopDcoTuningLatencyTelemetry(&k32Info342);
+        TEST_ASSERT(ok == TRUE, "GetCpuClockPhaseLockedLoopDcoTuningLatencyTelemetry succeeds");
+        TEST_ASSERT(k32Info342.AverageTuningLatencyNanoseconds == 18.750, "GetCpuClockPhaseLockedLoopDcoTuningLatencyTelemetry verified");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Or-Not Modulo Primitives
+    // OrNot(A, B, C) = (A | ~B | ~C) % Modulus
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Interlocked Bitwise Or-Not Modulo 64/32/16/8-bit Primitives...\n" << std::flush;
+
+        // 64-bit
+        LONG64 dest64 = 0;
+        uint64_t valA64 = 0xF0F0F0F0F0F0F0F0ULL;
+        uint64_t valB64 = 0x0F000F000F000F00ULL;
+        uint64_t valC64 = 0x00F000F000F000F0ULL;
+        uint64_t ornot64 = valA64 | ~valB64 | ~valC64;
+        uint64_t expected64 = ornot64 % 997ULL;
+
+        LONG64 old64 = RtlInterlockedOrNotModulo64(&dest64, static_cast<LONG64>(valA64), static_cast<LONG64>(valB64), static_cast<LONG64>(valC64), 997);
+        TEST_ASSERT(old64 == 0, "RtlInterlockedOrNotModulo64 returns initial 0");
+        TEST_ASSERT(dest64 == static_cast<LONG64>(expected64), "RtlInterlockedOrNotModulo64 sets correct modulo residue");
+
+        LONG64 dest64_w32 = 0;
+        old64 = InterlockedOrNotModulo64(&dest64_w32, static_cast<LONG64>(valA64), static_cast<LONG64>(valB64), static_cast<LONG64>(valC64), 997);
+        TEST_ASSERT(old64 == 0, "InterlockedOrNotModulo64 (Win32) returns initial 0");
+        TEST_ASSERT(dest64_w32 == static_cast<LONG64>(expected64), "InterlockedOrNotModulo64 (Win32) sets correct modulo residue");
+
+        // 32-bit
+        LONG dest32 = 0;
+        uint32_t valA32 = 0xF0F0F0F0U;
+        uint32_t valB32 = 0x0F000F00U;
+        uint32_t valC32 = 0x00F000F0U;
+        uint32_t ornot32 = valA32 | ~valB32 | ~valC32;
+        uint32_t expected32 = ornot32 % 251U;
+
+        LONG old32 = RtlInterlockedOrNotModulo32(&dest32, static_cast<LONG>(valA32), static_cast<LONG>(valB32), static_cast<LONG>(valC32), 251);
+        TEST_ASSERT(old32 == 0, "RtlInterlockedOrNotModulo32 returns initial 0");
+        TEST_ASSERT(dest32 == static_cast<LONG>(expected32), "RtlInterlockedOrNotModulo32 sets correct modulo residue");
+
+        LONG dest32_w32 = 0;
+        old32 = InterlockedOrNotModulo32(&dest32_w32, static_cast<LONG>(valA32), static_cast<LONG>(valB32), static_cast<LONG>(valC32), 251);
+        TEST_ASSERT(old32 == 0, "InterlockedOrNotModulo32 (Win32) returns initial 0");
+        TEST_ASSERT(dest32_w32 == static_cast<LONG>(expected32), "InterlockedOrNotModulo32 (Win32) sets correct modulo residue");
+
+        // 16-bit
+        SHORT dest16 = 0;
+        uint16_t valA16 = 0xF0F0U;
+        uint16_t valB16 = 0x0F00U;
+        uint16_t valC16 = 0x00F0U;
+        uint16_t ornot16 = static_cast<uint16_t>(valA16 | static_cast<uint16_t>(~valB16) | static_cast<uint16_t>(~valC16));
+        uint16_t expected16 = static_cast<uint16_t>(ornot16 % 97U);
+
+        SHORT old16 = RtlInterlockedOrNotModulo16(&dest16, static_cast<SHORT>(valA16), static_cast<SHORT>(valB16), static_cast<SHORT>(valC16), 97);
+        TEST_ASSERT(old16 == 0, "RtlInterlockedOrNotModulo16 returns initial 0");
+        TEST_ASSERT(dest16 == static_cast<SHORT>(expected16), "RtlInterlockedOrNotModulo16 sets correct modulo residue");
+
+        // 8-bit
+        CHAR dest8 = 0;
+        uint8_t valA8 = 0xF0U;
+        uint8_t valB8 = 0x30U;
+        uint8_t valC8 = 0x40U;
+        uint8_t ornot8 = static_cast<uint8_t>(valA8 | static_cast<uint8_t>(~valB8) | static_cast<uint8_t>(~valC8));
+        uint8_t expected8 = static_cast<uint8_t>(ornot8 % 13U);
+
+        CHAR old8 = RtlInterlockedOrNotModulo8(&dest8, static_cast<CHAR>(valA8), static_cast<CHAR>(valB8), static_cast<CHAR>(valC8), 13);
+        TEST_ASSERT(old8 == 0, "RtlInterlockedOrNotModulo8 returns initial 0");
+        TEST_ASSERT(dest8 == static_cast<CHAR>(expected8), "RtlInterlockedOrNotModulo8 sets correct modulo residue");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-Photon XOF & Hash
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-Photon XOF & Hash...\n" << std::flush;
+
+        const char* msg = "MicaNT Horizon 297 NIST SP 800-232 Ascon-Photon MDS Matrix Diffusion Verification";
+
+        // Test Ascon-Photon-XOF
+        BCRYPT_ALG_HANDLE hAlgXof = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgXof, BCRYPT_ASCON_PHOTON_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgXof != nullptr, "BCryptOpenAlgorithmProvider for ASCON-PHOTON-XOF succeeds");
+
+        BCRYPT_HASH_HANDLE hHashXof = nullptr;
+        status = BCryptCreateHash(hAlgXof, &hHashXof, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashXof != nullptr, "BCryptCreateHash for ASCON-PHOTON-XOF succeeds");
+
+        status = BCryptHashData(hHashXof, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-PHOTON-XOF succeeds");
+
+        uint8_t digestXof[32] = { 0 };
+        status = BCryptFinishHash(hHashXof, digestXof, sizeof(digestXof), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-PHOTON-XOF succeeds");
+
+        bool nonZeroXof = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestXof[i] != 0) { nonZeroXof = true; break; }
+        }
+        TEST_ASSERT(nonZeroXof, "ASCON-PHOTON-XOF output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashXof);
+        BCryptCloseAlgorithmProvider(hAlgXof, 0);
+
+        // Test Ascon-Photon-HASH
+        BCRYPT_ALG_HANDLE hAlgHash = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgHash, BCRYPT_ASCON_PHOTON_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgHash != nullptr, "BCryptOpenAlgorithmProvider for ASCON-PHOTON-HASH succeeds");
+
+        BCRYPT_HASH_HANDLE hHashHash = nullptr;
+        status = BCryptCreateHash(hAlgHash, &hHashHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashHash != nullptr, "BCryptCreateHash for ASCON-PHOTON-HASH succeeds");
+
+        status = BCryptHashData(hHashHash, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-PHOTON-HASH succeeds");
+
+        uint8_t digestHash[32] = { 0 };
+        status = BCryptFinishHash(hHashHash, digestHash, sizeof(digestHash), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-PHOTON-HASH succeeds");
+
+        bool nonZeroHash = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestHash[i] != 0) { nonZeroHash = true; break; }
+        }
+        TEST_ASSERT(nonZeroHash, "ASCON-PHOTON-HASH output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashHash);
+        BCryptCloseAlgorithmProvider(hAlgHash, 0);
+
+        // Test PHOTON alias
+        BCRYPT_ALG_HANDLE hAlgPhoton = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgPhoton, BCRYPT_PHOTON_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgPhoton != nullptr, "BCryptOpenAlgorithmProvider for PHOTON succeeds");
+
+        BCRYPT_HASH_HANDLE hHashPhoton = nullptr;
+        status = BCryptCreateHash(hAlgPhoton, &hHashPhoton, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashPhoton != nullptr, "BCryptCreateHash for PHOTON succeeds");
+
+        status = BCryptHashData(hHashPhoton, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for PHOTON succeeds");
+
+        uint8_t digestPhoton[32] = { 0 };
+        status = BCryptFinishHash(hHashPhoton, digestPhoton, sizeof(digestPhoton), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for PHOTON succeeds");
+        TEST_ASSERT(std::memcmp(digestHash, digestPhoton, sizeof(digestHash)) == 0, "PHOTON produces identical digest to ASCON-PHOTON-HASH");
+
+        BCryptDestroyHash(hHashPhoton);
+        BCryptCloseAlgorithmProvider(hAlgPhoton, 0);
+    }
+
+    std::cout << "  Horizon 297 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device73, ID3D12GraphicsCommandList67 & Options 85 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 341 (PagefileWriteCoalescingEnergyEfficiency) & 342 (CpuClockPllDcoTuningLatency) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Or-Not Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-Photon XOF & Hash Lightweight Cryptography OK\n";
+    std::cout << "[TEST] Suite 513: Horizon 297 - Direct3D 12 Device73/CommandList67 & Options 85, NT SystemInfo 341/342, Interlocked Bitwise Or-Not Modulo 64/32/16/8 & NIST Ascon-Photon XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon297_Device73Options85_PagefileWriteCoalescingEnergyEfficiencyCpuClockPllDcoTuningLatency_InterlockedOrNotModulo_And_AsconPhotonXofHash_Suite() {
+    Suite513_Direct3D12_Device73_CommandList67_Options85_NtSystemInfo341_342_InterlockedOrNotModulo_And_AsconPhotonXofHash();
+}

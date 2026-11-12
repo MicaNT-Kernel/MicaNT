@@ -140,6 +140,7 @@ inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_PRF_ALGORITHM         = L"AS
 inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_SIV_ALGORITHM         = L"ASCON-PHOTON-SIV";
 inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_XOF_ALGORITHM         = L"ASCON-PHOTON-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_HASH_ALGORITHM        = L"ASCON-PHOTON-HASH";
+inline constexpr const wchar_t* BCRYPT_PHOTON_ALGORITHM                    = L"PHOTON";
 inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_XOF_ALGORITHM         = L"ASCON-KECCAK-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_HASH_ALGORITHM        = L"ASCON-KECCAK-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM        = L"ASCON-XOODYAK-XOF";
@@ -14221,7 +14222,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_PHOTON_PRF_ALGORITHM || algId == L"ASCON-PHOTON-PRF" || algId == L"ascon-photon-prf" || algId == L"Ascon-Photon-Prf" || algId == L"ASCONPHOTON-PRF") return CryptoAlgorithm::AsconPhotonPrf;
     if (algId == BCRYPT_ASCON_PHOTON_SIV_ALGORITHM || algId == L"ASCON-PHOTON-SIV" || algId == L"ascon-photon-siv" || algId == L"Ascon-Photon-Siv" || algId == L"ASCONPHOTON-SIV") return CryptoAlgorithm::AsconPhotonSiv;
     if (algId == BCRYPT_ASCON_PHOTON_XOF_ALGORITHM || algId == L"ASCON-PHOTON-XOF" || algId == L"ascon-photon-xof" || algId == L"Ascon-Photon-Xof" || algId == L"ASCONPHOTON-XOF") return CryptoAlgorithm::AsconPhotonXof;
-    if (algId == BCRYPT_ASCON_PHOTON_HASH_ALGORITHM || algId == L"ASCON-PHOTON-HASH" || algId == L"ascon-photon-hash" || algId == L"Ascon-Photon-Hash" || algId == L"ASCONPHOTON-HASH") return CryptoAlgorithm::AsconPhotonHash;
+    if (algId == BCRYPT_ASCON_PHOTON_HASH_ALGORITHM || algId == L"ASCON-PHOTON-HASH" || algId == L"ascon-photon-hash" || algId == L"Ascon-Photon-Hash" || algId == L"ASCONPHOTON-HASH" || algId == BCRYPT_PHOTON_ALGORITHM || algId == L"PHOTON" || algId == L"photon") return CryptoAlgorithm::AsconPhotonHash;
     if (algId == BCRYPT_ASCON_KECCAK_XOF_ALGORITHM || algId == L"ASCON-KECCAK-XOF" || algId == L"ascon-keccak-xof" || algId == L"Ascon-Keccak-Xof" || algId == L"ASCONKECCAK-XOF") return CryptoAlgorithm::AsconKeccakXof;
     if (algId == BCRYPT_ASCON_KECCAK_HASH_ALGORITHM || algId == L"ASCON-KECCAK-HASH" || algId == L"ascon-keccak-hash" || algId == L"Ascon-Keccak-Hash" || algId == L"ASCONKECCAK-HASH") return CryptoAlgorithm::AsconKeccakHash;
     if (algId == BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM || algId == L"ASCON-XOODYAK-XOF" || algId == L"ascon-xoodyak-xof" || algId == L"Ascon-Xoodyak-Xof" || algId == L"ASCONXOODYAK-XOF") return CryptoAlgorithm::AsconXoodyakXof;

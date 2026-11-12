@@ -454,6 +454,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite513") {
+        RUN_TEST(Test_Horizon297_Device73Options85_PagefileWriteCoalescingEnergyEfficiencyCpuClockPllDcoTuningLatency_InterlockedOrNotModulo_And_AsconPhotonXofHash_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite512") {
         RUN_TEST(Test_Horizon296_Device72Options84_PagefileWriteCompressionEnergySavingsCpuClockPllDcoFrequencyDrift_InterlockedAndNotModulo_And_AsconSubterraneanXofHash_Suite);
         return g_FailedTests;
@@ -2567,6 +2571,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon294_Device70Options82_PagefileWriteCompressionEnergyEfficiencyCpuClockPllDcoTuning_InterlockedEqualModulo_And_AsconEschXofHash_Suite);
     RUN_TEST(Test_Horizon295_Device71Options83_PagefileWriteCoalescingEnergySavingsCpuClockPllDcoSettling_InterlockedNotEqualModulo_And_AsconWageXofHash_Suite);
     RUN_TEST(Test_Horizon296_Device72Options84_PagefileWriteCompressionEnergySavingsCpuClockPllDcoFrequencyDrift_InterlockedAndNotModulo_And_AsconSubterraneanXofHash_Suite);
+    RUN_TEST(Test_Horizon297_Device73Options85_PagefileWriteCoalescingEnergyEfficiencyCpuClockPllDcoTuningLatency_InterlockedOrNotModulo_And_AsconPhotonXofHash_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
