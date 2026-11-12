@@ -18,6 +18,7 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
     __asm__ __volatile__(
         "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\nmovq 24(%r14), %r15\n"
         "subq $0x60, %rsp\n"
+        "movq %gs:0x60, %rax\ntestq %rax, %rax\njz 9f\ncmpb $0, 2(%rax)\njne 9f\n"
         // Static PE TLS vector slot zero points to a private template copy.
         "movq %gs:0x58, %rax\ntestq %rax, %rax\njz 9f\nmovq (%rax), %rax\ntestq %rax, %rax\njz 9f\n"
         "movabsq $0x8877665544332211, %rdx\ncmpq %rdx, (%rax)\njne 9f\ncmpq $0, 8(%rax)\njne 9f\n"
@@ -237,7 +238,10 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             first.kernelThread()->state != ThreadState::Terminated ||
             second.kernelThread()->state != ThreadState::Terminated || scheduler.getReadyThreadCount() ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
-        const bool tls = reinterpret_cast<um::Teb64*>(tebs[0])->tlsSlots[0] == 0x1111222233334444ULL &&
+        const bool tls = process.userPebAddress() &&
+                         reinterpret_cast<um::Teb64*>(tebs[0])->processEnvironmentBlock == process.userPebAddress() &&
+                         reinterpret_cast<um::Teb64*>(tebs[1])->processEnvironmentBlock == process.userPebAddress() &&
+                         reinterpret_cast<um::Teb64*>(tebs[0])->tlsSlots[0] == 0x1111222233334444ULL &&
                          reinterpret_cast<um::Teb64*>(tebs[1])->tlsSlots[0] == 0xaaaabbbbccccddddULL &&
                          *reinterpret_cast<uint64_t*>(tlsBlocks[0]) == 0x1234 &&
                          *reinterpret_cast<uint64_t*>(tlsBlocks[1]) == 0x5678;

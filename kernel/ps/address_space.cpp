@@ -25,6 +25,7 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     terminating_ = false;
     exitStatus_ = NtStatus::Pending;
     imagesFinalized_ = false;
+    userPeb_ = 0;
     return NtStatus::Success;
 }
 
@@ -39,6 +40,7 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     const NtStatus status = addressSpace_.close();
     if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status != NtStatus::Success) return status;
+    userPeb_ = 0;
     images_.reset();
     if (!destroyProcessPagingRoot(root_)) return NtStatus::Unsuccessful;
     handles_.reset();
@@ -187,6 +189,7 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
     teb->stackBase = userStack_ + stackSize;
     teb->stackLimit = userStack_;
     teb->threadLocalStoragePointer = userTls_;
+    teb->processEnvironmentBlock = process.userPebAddress();
     userEntry_ = entry;
     userStackPointer_ = userStack_ + stackSize - 128;
     thread_->tebAddress = userTeb_;

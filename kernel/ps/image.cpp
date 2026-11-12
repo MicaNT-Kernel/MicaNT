@@ -79,6 +79,13 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
             if (status != NtStatus::Success) return status;
         }
     }
+    // A zeroed page provides the documented initial PEB fields. LoaderData,
+    // process parameters and other startup state are not initialized yet.
+    if (!userPeb_) {
+        auto status = addressSpace_.allocate(userPeb_, mm::PageSize4KB,
+            mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+        if (status != NtStatus::Success) return status;
+    }
     imagesFinalized_ = true;
     return NtStatus::Success;
 }

@@ -34,6 +34,7 @@ public:
     [[nodiscard]] mm::ProcessAddressSpace& getAddressSpace() noexcept { return addressSpace_; }
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
+    [[nodiscard]] uintptr_t userPebAddress() const noexcept { return userPeb_; }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
 private:
@@ -46,6 +47,7 @@ private:
     NtStatus exitStatus_{NtStatus::Pending};
     std::unique_ptr<um::NativeUserImageSet64> images_{};
     bool imagesFinalized_{false};
+    uintptr_t userPeb_{0};
 };
 
 // BSP bootstrap thread lifecycle; kernel stack and dispatcher context remain

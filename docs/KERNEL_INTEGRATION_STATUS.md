@@ -241,10 +241,20 @@ duplicate-name rollback with PFN accounting, and an unresolved import before
 loading the missing DLL. This loader borrows the names and source files, only
 supports contiguous page-aligned readable sections, and requires the active
 process root. The threads are still initiated by the kernel test; `SEC_IMAGE`,
-file-backed images, normal NTDLL startup, a PEB, TLS callbacks, native
+file-backed images, normal NTDLL startup, complete PEB loader and process
+parameters, TLS callbacks, native
 user-thread creation, normal preemption
 and general process termination remain outstanding. The test is not
 sufficient to declare M6 or M7 complete.
+
+Ps allocates a zeroed, process-owned PEB page after the images are finalized
+and links it from each user TEB. QEMU checks that both CPL3 threads read the
+same PEB pointer and the documented initial `BeingDebugged` byte, then frees
+the page with the process. LoaderData, process parameters and other process
+startup state are still absent. The limited layout follows the public
+[PEB](https://learn.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-peb)
+and [TEB](https://learn.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-teb)
+declarations; ReactOS `sdk/include/ndk/peb_teb.h` was consulted for context.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
 for user thread startup and context ownership.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
