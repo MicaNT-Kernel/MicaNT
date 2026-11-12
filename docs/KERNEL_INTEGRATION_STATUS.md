@@ -93,8 +93,13 @@ with the local APIC EOI register. The diagnostic masks other local sources and
 the legacy PIC, drains any pending test interrupt, restores the saved controller
 configuration and gates, and checks that IF remains disabled. The timer's
 frequency is not calibrated and its prior countdown phase is not preserved.
-This test does not enable interrupts in normal operation and does not yet
-connect clock ticks to Ke, implement hardware IRQL, or preempt threads.
+During the bounded QEMU diagnostic, clock ticks now select from the canonical
+Ke ready queue at quantum end and preempt two CPL0 kernel threads that never
+yield. Both workers advance, their GPR and XMM canaries survive, and their
+queued contexts are withdrawn before the timer is restored. The interrupt
+entry saves GPRs and FXSAVE state and sends EOI before switching. The test
+does not enable interrupts in normal operation, cover AVX/extended XSAVE or
+CPL3 interrupt entry, or establish a complete hardware IRQL implementation.
 On the bare-metal BSP, Ke spinlocks now mask interrupts on acquisition and
 restore the saved IF state on release. The same timer diagnostic verifies
 that no tick is delivered while nested locks are held and that interrupts
@@ -106,7 +111,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 
 | Check | Result |
 |---|---|
-| `python3 qemu.py --headless` | Passed; periodic LAPIC IRQ marker and existing boot, scanout and input checks |
+| `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
 
 ### Bootstrap VAD reserve, commit, protection and release

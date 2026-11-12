@@ -58,7 +58,19 @@ extern "C" bool MicantTestKeReadyQueue() noexcept {
     g_CurrentCpu.currentThread = &a;
     a.state = ThreadState::Ready;
     const bool currentRejected = !scheduler.readyKThread(&a);
+    a.state = ThreadState::Running;
+    a.priority = 12;
+    a.quantumRemaining = 2;
+    b.state = ThreadState::Waiting;
+    b.priority = 12;
+    const bool preemptionPrepared = scheduler.readyKThread(&b) &&
+        scheduler.selectOnQuantumEnd(&a) == nullptr && a.quantumRemaining == 1 &&
+        scheduler.selectOnQuantumEnd(&a) == &b && a.readyQueued &&
+        b.state == ThreadState::Standby && scheduler.getReadyThreadCount() == 1;
+    const bool rolledBack = preemptionPrepared && scheduler.cancelQuantumPreemption(&a, &b) &&
+        !a.readyQueued && b.readyQueued && b.state == ThreadState::Ready &&
+        scheduler.selectNextThread() == &b && scheduler.getReadyThreadCount() == 0;
     g_CurrentCpu.currentThread = saved;
-    return currentRejected && scheduler.getReadyThreadCount() == 0;
+    return currentRejected && rolledBack && scheduler.getReadyThreadCount() == 0;
 }
 #endif

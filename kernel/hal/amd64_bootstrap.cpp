@@ -303,14 +303,45 @@ void logTrapValue(const char* label, uint64_t value) noexcept {
 extern "C" {
 volatile uint64_t MicantTimerTicks{};
 volatile uint32_t* MicantTimerEoi{};
+volatile bool MicantTimerPreemptionEnabled{};
+volatile bool MicantTimerDispatchFailed{};
+micant::ke::KThread* MicantTimerBootThread{};
+bool MicantTimerBootQueued{};
+
+void MicantBootstrapTimerDispatch() noexcept {
+    MicantTimerTicks = MicantTimerTicks + 1;
+    *MicantTimerEoi = 0;
+    if (!MicantTimerPreemptionEnabled) return;
+    using namespace micant::ke;
+    const KIRQL previous = KeGetCurrentIrql();
+    if (previous >= DISPATCH_LEVEL) return;
+    g_CurrentCpu.currentIrql = DISPATCH_LEVEL;
+    auto* current = KeGetCurrentThread();
+    auto& scheduler = PriorityScheduler::get();
+    if (MicantTimerTicks >= 24 && !MicantTimerBootQueued) {
+        if (!scheduler.readyKThread(MicantTimerBootThread)) MicantTimerDispatchFailed = true;
+        else MicantTimerBootQueued = true;
+    }
+    auto* next = scheduler.selectOnQuantumEnd(current);
+    if (next && !KiSwapContext(current, next, true)) {
+        if (!scheduler.cancelQuantumPreemption(current, next)) __builtin_trap();
+        MicantTimerDispatchFailed = true;
+    }
+    g_CurrentCpu.currentIrql = previous;
+}
 
 __attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
     __asm__ __volatile__(
-        "pushq %rax\n"
-        "incq MicantTimerTicks(%rip)\n"
-        "movq MicantTimerEoi(%rip), %rax\n"
-        "movl $0, (%rax)\n"
-        "popq %rax\niretq\n");
+        "cld\n"
+        "pushq %rax\npushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
+        "pushq %rsi\npushq %rdi\npushq %r8\npushq %r9\npushq %r10\npushq %r11\n"
+        "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
+        "movq %rsp, %r12\nsubq $544, %rsp\nandq $-16, %rsp\n"
+        "fxsave64 32(%rsp)\ncallq MicantBootstrapTimerDispatch\n"
+        "fxrstor64 32(%rsp)\nmovq %r12, %rsp\n"
+        "popq %r15\npopq %r14\npopq %r13\npopq %r12\npopq %r11\npopq %r10\n"
+        "popq %r9\npopq %r8\npopq %rdi\npopq %rsi\npopq %rbp\npopq %rbx\n"
+        "popq %rdx\npopq %rcx\npopq %rax\niretq\n");
 }
 
 __attribute__((naked)) void MicantBootstrapSpuriousInterrupt() noexcept {
@@ -1507,6 +1538,63 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
     return reinterpret_cast<void*>(start + offset);
 }
 
+struct TimerWorkerState {
+    volatile uint64_t iterations{0};
+    uint64_t canary{0};
+    volatile uint64_t corrupted{0};
+};
+alignas(16) static uint8_t g_firstTimerWorkerStack[16384]{};
+alignas(16) static uint8_t g_secondTimerWorkerStack[16384]{};
+
+[[noreturn]] static void timerWorker(void* argument) noexcept {
+    auto* state = static_cast<TimerWorkerState*>(argument);
+    ke::g_CurrentCpu.currentIrql = ke::PASSIVE_LEVEL;
+    __asm__ __volatile__(
+        "movq 8(%%rcx), %%r12\nmovq %%r12, %%xmm6\nsti\n"
+        "1:\nmovq %%xmm6, %%rax\ncmpq %%r12, %%rax\njne 2f\n"
+        "cmpq 8(%%rcx), %%r12\njne 2f\nincq (%%rcx)\njmp 1b\n"
+        "2:\nmovq $1, 16(%%rcx)\njmp 1b\n"
+        : : "c"(state) : "rax", "r12", "xmm6", "memory", "cc");
+    __builtin_unreachable();
+}
+
+static bool verifyBootstrapPreemption() noexcept {
+    using namespace ke;
+    auto* boot = KeGetCurrentThread();
+    auto& scheduler = PriorityScheduler::get();
+    if (!boot || boot->state != ThreadState::Running || scheduler.getReadyThreadCount()) return false;
+    TimerWorkerState firstState{0, 0x12345678abcdef00ULL, 0};
+    TimerWorkerState secondState{0, 0xfedcba9876543210ULL, 0};
+    KThread first, second;
+    first.directoryTableBase = second.directoryTableBase = g_CurrentCpu.currentCr3;
+    first.priority = second.priority = PRIORITY_NORMAL;
+    first.quantumRemaining = second.quantumRemaining = 1;
+    if (!detail::prepareBootstrapThread(first, g_firstTimerWorkerStack, sizeof(g_firstTimerWorkerStack), timerWorker, &firstState) ||
+        !detail::prepareBootstrapThread(second, g_secondTimerWorkerStack, sizeof(g_secondTimerWorkerStack), timerWorker, &secondState) ||
+        !scheduler.readyKThread(&second)) return false;
+    const auto originalPriority = boot->priority;
+    const auto previous = KfRaiseIrql(DISPATCH_LEVEL);
+    const uint64_t switches = g_CurrentCpu.contextSwitches;
+    boot->priority = PRIORITY_REALTIME_MAX;
+    MicantTimerTicks = 0;
+    MicantTimerBootThread = boot;
+    MicantTimerBootQueued = false;
+    MicantTimerDispatchFailed = false;
+    MicantTimerPreemptionEnabled = true;
+    const bool switched = KiSwapContext(boot, &first);
+    MicantTimerPreemptionEnabled = false;
+    MicantTimerBootThread = nullptr;
+    boot->priority = originalPriority;
+    KeLowerIrql(previous);
+    const bool success = switched && MicantTimerBootQueued && !MicantTimerDispatchFailed &&
+        firstState.iterations && secondState.iterations && !firstState.corrupted && !secondState.corrupted &&
+        g_CurrentCpu.currentThread == boot && g_CurrentCpu.contextSwitches >= switches + 4;
+    const bool removedFirst = scheduler.removeReadyThread(&first);
+    const bool removedSecond = scheduler.removeReadyThread(&second);
+    first.state = second.state = ThreadState::Terminated;
+    return success && removedFirst && removedSecond && scheduler.getReadyThreadCount() == 0;
+}
+
 bool verifyBootstrapTimerInterrupt() noexcept {
     if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext()) return false;
     Idtr current{};
@@ -1584,6 +1672,8 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     for (size_t spin = 0; spin < 50000000 && MicantTimerTicks < 3; ++spin)
         __asm__ __volatile__("pause");
     __asm__ __volatile__("cli" : : : "memory");
+    const bool timerDelivered = MicantTimerTicks >= 3;
+    const bool preemptionVerified = timerDelivered && verifyBootstrapPreemption();
     apic[0x320 / 4] = savedLvt[0] | (1u << 16);
     apic[0x380 / 4] = 0;
     // Drain any timer already accepted into IRR before restoring the gate.
@@ -1596,7 +1686,7 @@ bool verifyBootstrapTimerInterrupt() noexcept {
         __asm__ __volatile__("cli" : : : "memory");
     }
     const bool success = lockMaskedInterrupts && (releasedFlags & (uint64_t{1} << 9)) &&
-        MicantTimerTicks >= 3 && !(apic[timerIrr] & timerBit);
+        timerDelivered && preemptionVerified && !(apic[timerIrr] & timerBit);
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
     apic[0x80 / 4] = savedTpr;

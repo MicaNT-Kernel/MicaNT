@@ -623,6 +623,66 @@ public:
         return nullptr;
     }
 
+    // Called on the BSP with hardware interrupts disabled. A non-null return
+    // reserves the next thread and queues the running thread for an immediate
+    // context switch; cancelQuantumPreemption reverses a rejected switch.
+    [[nodiscard]] KThread* selectOnQuantumEnd(KThread* current) noexcept {
+        if (!current || current != KeGetCurrentThread()) return nullptr;
+        SpinLockGuard guard(lock_);
+        if (current->state != ThreadState::Running || current->readyQueued) return nullptr;
+        if (current->quantumRemaining > 1) {
+            --current->quantumRemaining;
+            return nullptr;
+        }
+        current->quantumRemaining = DEFAULT_QUANTUM_WORKSTATION;
+        const uint32_t currentPriority = std::min(current->priority, PRIORITY_REALTIME_MAX);
+        for (int priority = PRIORITY_REALTIME_MAX; priority >= 0; --priority) {
+            auto& queue = runQueues_[static_cast<size_t>(priority)];
+            if (!queue.head) continue;
+            if (static_cast<uint32_t>(priority) < currentPriority) return nullptr;
+            KThread* next = queue.head;
+            queue.head = next->readyNext;
+            if (!queue.head) queue.tail = nullptr;
+            next->readyNext = nullptr;
+            next->readyQueued = false;
+            next->state = ThreadState::Standby;
+            auto& currentQueue = runQueues_[currentPriority];
+            current->readyNext = nullptr;
+            current->readyQueued = true;
+            if (currentQueue.tail) currentQueue.tail->readyNext = current;
+            else currentQueue.head = current;
+            currentQueue.tail = current;
+            return next;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool cancelQuantumPreemption(KThread* current, KThread* selected) noexcept {
+        if (!current || !selected || current != KeGetCurrentThread()) return false;
+        SpinLockGuard guard(lock_);
+        if (!current->readyQueued || current->state != ThreadState::Running ||
+            selected->readyQueued || selected->state != ThreadState::Standby) return false;
+        for (auto& queue : runQueues_) {
+            KThread* previous = nullptr;
+            for (auto* entry = queue.head; entry; entry = entry->readyNext) {
+                if (entry != current) { previous = entry; continue; }
+                if (previous) previous->readyNext = entry->readyNext;
+                else queue.head = entry->readyNext;
+                if (queue.tail == entry) queue.tail = previous;
+                current->readyNext = nullptr;
+                current->readyQueued = false;
+                auto& target = runQueues_[std::min(selected->priority, PRIORITY_REALTIME_MAX)];
+                selected->readyNext = target.head;
+                target.head = selected;
+                if (!target.tail) target.tail = selected;
+                selected->readyQueued = true;
+                selected->state = ThreadState::Ready;
+                return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] size_t getReadyThreadCount() noexcept {
         SpinLockGuard guard(lock_);
         return totalReadyThreads_;
@@ -767,12 +827,13 @@ private:
  * @param incoming Thread taking ownership of the processor
  * @return true if context switch completed successfully
  */
-inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
+inline bool KiSwapContext(KThread* outgoing, KThread* incoming, bool prequeued = false) {
     if (!incoming) return false;
 
 #if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
     if (!outgoing || outgoing == incoming ||
-        KeGetCurrentThread() != outgoing || outgoing->readyQueued ||
+        KeGetCurrentThread() != outgoing || outgoing->readyQueued != prequeued ||
+        (prequeued && outgoing->state != ThreadState::Running) ||
         (outgoing->state != ThreadState::Running &&
          outgoing->state != ThreadState::Terminated) ||
         g_CurrentCpu.currentIrql != DISPATCH_LEVEL ||
@@ -803,6 +864,7 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming) {
     incoming->state = ThreadState::Running;
     return MicantAmd64SwitchContext(&outgoing->context, &incoming->context);
 #else
+    (void)prequeued;
     // 1. In Windows NT, context switching occurs strictly at DISPATCH_LEVEL
     KIRQL currentIrql = KeGetCurrentIrql();
     bool raisedIrql = false;
