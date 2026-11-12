@@ -3,6 +3,7 @@
 #if defined(MICANT_FREESTANDING)
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/core/ke.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include <memory>
 
@@ -27,6 +28,28 @@ private:
     mm::ProcessAddressSpace addressSpace_{};
     std::unique_ptr<ob::HandleTable> handles_{};
     size_t attachedThreads_{0};
+};
+
+// BSP bootstrap thread lifecycle; kernel stack and dispatcher context remain
+// owned until the stopped thread is reaped from another context.
+class EThread {
+public:
+    using StartRoutine = void (*)(void*) noexcept;
+    EThread() = default;
+    ~EThread();
+    EThread(const EThread&) = delete;
+    EThread& operator=(const EThread&) = delete;
+    NtStatus initialize(EProcess& process, size_t stackSize, StartRoutine start, void* argument) noexcept;
+    NtStatus ready() noexcept;
+    NtStatus reap() noexcept;
+    [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
+private:
+    static void startThread(void* argument) noexcept;
+    EProcess* process_{nullptr};
+    std::unique_ptr<ke::KThread> thread_{};
+    std::unique_ptr<uint8_t[]> stack_{};
+    StartRoutine start_{nullptr};
+    void* argument_{nullptr};
 };
 }
 #else

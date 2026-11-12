@@ -109,6 +109,14 @@ The bootstrap dispatcher can also block the current kernel thread and wake it
 through the canonical ready queue. QEMU exercises two waiting/resuming threads,
 the no-runnable-thread case and rollback when a selected context is invalid.
 This is an internal primitive, not yet an NT event wait, timeout or APC path.
+
+Freestanding Ps now owns a bounded kernel-thread lifecycle: it allocates a
+resident kernel stack and Ke context, attaches the thread to its process root,
+queues and runs it, and reaps the terminated thread from another context before
+releasing the stack and address space. QEMU exercises this path, rejects
+premature cleanup and duplicate readying, and checks PFN accounting. This is
+not yet a waitable Ob thread object or an implementation of `NtCreateThreadEx`
+or process termination.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
 The local ReactOS `hal/halx86/generic/timer.c` and `ntoskrnl/ke/time.c`
 were consulted for clock interrupt and dispatch ordering, without copying code.

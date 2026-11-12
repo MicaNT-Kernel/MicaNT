@@ -42,6 +42,7 @@ EXPECTED_RUNTIME_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
 EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ke] Allocation-free ready queue selected cooperative contexts",
     "[MicaNT Ke] Kernel thread block and wake verified",
+    "[MicaNT Ps] Kernel thread lifecycle verified",
     "[MicaNT Display] virtio_gpu.sys: VirtIO 1.0 2D scanout initialized",
     "[MicaNT Display] Desktop presented through virtio_gpu.sys",
     "[MicaNT Explorer] Desktop and taskbar rendered",

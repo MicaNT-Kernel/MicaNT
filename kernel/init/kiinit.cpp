@@ -63,6 +63,7 @@ extern "C" bool MicantVerifyContextSwitch(
     micant::ke::KThread*, micant::ke::KThread*) noexcept;
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" bool MicantTestKeBlockWake() noexcept;
+extern "C" bool MicantTestPsThreadLifecycle() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int MicantTestMmManagedProtection() noexcept;
@@ -1100,6 +1101,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestKeBlockWake())
         stopWithError("[MicaNT Ke] Block and wake verification failed\r\n");
     serialWrite("[MicaNT Ke] Kernel thread block and wake verified\r\n");
+    if (!MicantTestPsThreadLifecycle())
+        stopWithError("[MicaNT Ps] Thread lifecycle verification failed\r\n");
+    serialWrite("[MicaNT Ps] Kernel thread lifecycle verified\r\n");
     initializeDisplay(handoff->displayDriver);
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
