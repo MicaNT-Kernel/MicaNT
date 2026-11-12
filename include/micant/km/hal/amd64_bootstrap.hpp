@@ -59,7 +59,8 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcep
 uintptr_t bootstrapThreadSyscallStack() noexcept;
 // Enter an already mapped user context in the current process. On success
 // this does not return; caller must provide a valid thread-owned kernel stack.
-[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack) noexcept;
+[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack,
+                                           bool interruptible = false) noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;
 bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept;

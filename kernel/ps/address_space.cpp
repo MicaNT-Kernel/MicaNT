@@ -156,7 +156,8 @@ NtStatus EThread::ready() noexcept {
 }
 
 NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
-                                 size_t userStackSize, const pe::PeImageView64::TlsLayout* tls) noexcept {
+                                 size_t userStackSize, const pe::PeImageView64::TlsLayout* tls,
+                                 bool interruptible) noexcept {
     uintptr_t currentRoot{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
     if (currentRoot != process.getDirectoryTableBase() || !entry || userStackSize < mm::PageSize4KB ||
@@ -191,6 +192,7 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
     teb->threadLocalStoragePointer = userTls_;
     teb->processEnvironmentBlock = process.userPebAddress();
     userEntry_ = entry;
+    userInterruptible_ = interruptible;
     userStackPointer_ = userStack_ + stackSize - 128;
     thread_->tebAddress = userTeb_;
     return NtStatus::Success;
@@ -199,7 +201,7 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
 void EThread::startUser(void* argument) noexcept {
     auto* self = static_cast<EThread*>(argument);
     if (!self || !self->userEntry_ || !self->userStackPointer_) __builtin_trap();
-    hal::amd64::enterBootstrapUserThread(self->userEntry_, self->userStackPointer_);
+    hal::amd64::enterBootstrapUserThread(self->userEntry_, self->userStackPointer_, self->userInterruptible_);
 }
 
 NtStatus EThread::releaseUserMemory() noexcept {
@@ -217,6 +219,7 @@ NtStatus EThread::releaseUserMemory() noexcept {
     if (previous != target && !hal::amd64::switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status == NtStatus::Success) {
         userEntry_ = userStackPointer_ = 0;
+        userInterruptible_ = false;
         thread_->tebAddress = 0;
     }
     return status;

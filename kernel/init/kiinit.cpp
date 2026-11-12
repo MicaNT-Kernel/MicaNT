@@ -1179,12 +1179,6 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!micant::hal::amd64::verifyManagedExecutablePage())
         stopWithError("[MicaNT Mm] Managed executable page verification failed\r\n");
     serialWrite("[MicaNT Mm] PFN-backed executable user page verified\r\n");
-    if (micant::hal::amd64::bootstrapQemuFaultTestsAvailable()) {
-        if (!micant::hal::amd64::verifyBootstrapTimerInterrupt())
-            stopWithError("[MicaNT Hal] Local APIC timer verification failed\r\n");
-        serialWrite("[MicaNT Hal] Local APIC periodic interrupts verified\r\n");
-        serialWrite("[MicaNT Ke] Timer-preempted kernel contexts verified\r\n");
-    }
     if (!micant::hal::amd64::initializeBootstrapSyscalls(dispatchBootstrapService)) {
         stopWithError("[MicaNT Ke] Syscall entry initialization failed\r\n");
     }
@@ -1205,6 +1199,13 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestPsTwoUserThreads())
         stopWithError("[MicaNT Ps] Two user threads verification failed\r\n");
     serialWrite("[MicaNT Ps] Two CPL3 threads, TLS slots and event waits verified\r\n");
+    if (micant::hal::amd64::bootstrapQemuFaultTestsAvailable()) {
+        if (!micant::hal::amd64::verifyBootstrapTimerInterrupt())
+            stopWithError("[MicaNT Hal] Local APIC timer verification failed\r\n");
+        serialWrite("[MicaNT Hal] Local APIC periodic interrupts verified\r\n");
+        serialWrite("[MicaNT Ke] Timer-preempted kernel contexts verified\r\n");
+        serialWrite("[MicaNT Ke] Timer-preempted CPL3 contexts verified\r\n");
+    }
     const auto probeTelemetry = micant::ex::ExQuerySyncTelemetry();
     if (!probeTelemetry.totalSafeCopiesCompleted ||
         !probeTelemetry.totalSafeCopyFaultsCaught ||

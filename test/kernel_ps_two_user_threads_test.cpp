@@ -28,7 +28,13 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "4: movq $0x5678, (%rax)\n5:\n"
         "movabsq $0x1111222233334444, %rax\ntestq %r13, %r13\njz 1f\n"
         "movabsq $0xaaaabbbbccccdddd, %rax\n"
-        "1: movq %rax, %gs:0x1480\ntestq %r13, %r13\njnz 3f\n"
+        "1: movq %rax, %gs:0x1480\nmovq 32(%r14), %rdx\ntestq %rdx, %rdx\njz 6f\n"
+        // Both contexts must advance before either makes a blocking syscall.
+        "movabsq $0x5a5a12345678abcd, %rdi\nxorq %r13, %rdi\nmovq %rdi, %xmm6\n"
+        "7: movq %xmm6, %rax\ncmpq %rdi, %rax\njne 9f\n"
+        "incq (%rdx,%r13,8)\ncmpq $0, (%rdx)\nje 7b\ncmpq $0, 8(%rdx)\nje 7b\n"
+        "movabsq $0x5a5a12345678abcd, %rax\nxorq %r13, %rax\ncmpq %rdi, %rax\njne 9f\n"
+        "6: testq %r13, %r13\njnz 3f\n"
         // Thread A allocates and checks a page through the native syscall.
         "movq $0, 64(%rsp)\nmovq $4096, 72(%rsp)\n"
         "movq $0x3000, 32(%rsp)\nmovq $4, 40(%rsp)\n"
@@ -71,7 +77,7 @@ void launch(void* argument) noexcept {
 }
 }
 
-extern "C" bool MicantTestPsTwoUserThreads() noexcept {
+static bool runTwoUserThreads(bool preemptive) noexcept {
     using namespace micant;
     using namespace micant::ke;
     auto& scheduler = PriorityScheduler::get();
@@ -201,6 +207,9 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             !hal::amd64::bootstrapUserRange(code + 2 * mm::PageSize4KB, 1, true) ||
             process.loadNativeImage("late.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::InvalidParameter)
             return false;
+        uintptr_t counters{};
+        if (preemptive && process.getAddressSpace().allocate(counters, mm::PageSize4KB,
+                mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success) return false;
         for (size_t i = 0; i < 4; ++i) {
             uint64_t address{};
             if (images->resolve("ntdll.dll", names[i], 0, address) != NtStatus::Success ||
@@ -216,8 +225,8 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
         invalidTls.alignment = 3; // Fails after user pages were allocated; reap must roll them back.
         if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::InvalidParameter ||
             first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread ||
-            first.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout) != NtStatus::Success ||
-            second.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout) != NtStatus::Success) return false;
+            first.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout, preemptive) != NtStatus::Success ||
+            second.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout, preemptive) != NtStatus::Success) return false;
         ps::EThread* threads[]{&first, &second};
         uintptr_t tebs[2]{}, tlsBlocks[2]{};
         for (size_t i = 0; i < 2; ++i) {
@@ -228,6 +237,7 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             arguments[1] = eventSecond;
             arguments[2] = i;
             arguments[3] = code + imports.firstThunk;
+            arguments[4] = counters;
         }
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
         first.kernelThread()->priority = second.kernelThread()->priority = boot->priority + 1;
@@ -249,7 +259,9 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
                          reinterpret_cast<um::Teb64*>(tebs[0])->tlsSlots[0] == 0x1111222233334444ULL &&
                          reinterpret_cast<um::Teb64*>(tebs[1])->tlsSlots[0] == 0xaaaabbbbccccddddULL &&
                          *reinterpret_cast<uint64_t*>(tlsBlocks[0]) == 0x1234 &&
-                         *reinterpret_cast<uint64_t*>(tlsBlocks[1]) == 0x5678;
+                         *reinterpret_cast<uint64_t*>(tlsBlocks[1]) == 0x5678 &&
+                         (!preemptive || (reinterpret_cast<volatile uint64_t*>(counters)[0] &&
+                                          reinterpret_cast<volatile uint64_t*>(counters)[1]));
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tls ||
             first.reap() != NtStatus::Success || second.reap() != NtStatus::Success ||
             process.closeAddressSpace() != NtStatus::Success) return false;
@@ -257,3 +269,6 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
     return mm::PfnDatabase::get().getActiveCount() == active &&
         sys::bootstrapSectionObjectCount() == sectionsBefore;
 }
+
+extern "C" bool MicantTestPsTwoUserThreads() noexcept { return runTwoUserThreads(false); }
+extern "C" bool MicantTestPsUserPreemption() noexcept { return runTwoUserThreads(true); }

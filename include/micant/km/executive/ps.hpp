@@ -63,7 +63,8 @@ public:
     // BSP-only, with the process root active. Supports one static TLS module
     // without callbacks; the image and TLS layout must remain valid during setup.
     NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
-                            size_t userStackSize, const pe::PeImageView64::TlsLayout* tls) noexcept;
+                            size_t userStackSize, const pe::PeImageView64::TlsLayout* tls,
+                            bool interruptible = false) noexcept;
     NtStatus ready() noexcept;
     // Roll back a thread that has not begun executing. BSP only, with
     // interrupts disabled; running and waiting threads cannot be cancelled.
@@ -88,6 +89,7 @@ private:
     uintptr_t userStackPointer_{0};
     uintptr_t userTeb_{0};
     uintptr_t userTls_{0};
+    bool userInterruptible_{false};
 };
 }
 #else

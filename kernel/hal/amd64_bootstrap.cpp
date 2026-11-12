@@ -322,7 +322,7 @@ void MicantBootstrapTimerDispatch() noexcept {
         g_syscallCpu.kernelRsp != current->kernelStackTop ||
         micant::cpu::CpuHardwareEngine::get().getTss().rsp0 != current->kernelStackTop)
         MicantTimerDispatchFailed = true;
-    if (MicantTimerTicks >= 24 && !MicantTimerBootQueued) {
+    if (MicantTimerBootThread && MicantTimerTicks >= 24 && !MicantTimerBootQueued) {
         if (!scheduler.readyKThread(MicantTimerBootThread)) MicantTimerDispatchFailed = true;
         else MicantTimerBootQueued = true;
     }
@@ -911,21 +911,23 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcep
 uintptr_t bootstrapThreadSyscallStack() noexcept { return g_syscallCpu.kernelRsp; }
 
 extern "C" __attribute__((naked, noreturn)) void MicantEnterBootstrapUserThread(
-    uintptr_t, uintptr_t) noexcept {
+    uintptr_t, uintptr_t, bool) noexcept {
     __asm__ __volatile__(
         "movw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
-        "pushq $0x2b\npushq %rdx\npushq $2\npushq $0x33\npushq %rcx\niretq\n");
+        "pushq $0x2b\npushq %rdx\nmovq $2, %rax\ntestb %r8b, %r8b\njz 1f\n"
+        "orq $0x200, %rax\n1: pushq %rax\npushq $0x33\npushq %rcx\niretq\n");
 }
 
-[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack) noexcept {
+[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack, bool interruptible) noexcept {
     const auto* thread = ke::KeGetCurrentThread();
-    if (!g_dispatch || !thread || !thread->owningProcess || !thread->kernelStackTop ||
+    if (!g_dispatch || (interruptible && !MicantTimerPreemptionEnabled) ||
+        !thread || !thread->owningProcess || !thread->kernelStackTop ||
         g_syscallCpu.kernelRsp != thread->kernelStackTop || userStack < 8 ||
         !bootstrapUserRange(entry, 1, false, true) || !bootstrapUserRange(userStack - 8, 8, true))
         __builtin_trap();
     if (thread->tebAddress && !bootstrapUserRange(thread->tebAddress, 1, true)) __builtin_trap();
     cpu::cpuWrmsr(cpu::MSR_GS_BASE, thread->tebAddress);
-    MicantEnterBootstrapUserThread(entry, userStack);
+    MicantEnterBootstrapUserThread(entry, userStack, interruptible);
 }
 
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept {
@@ -1720,6 +1722,8 @@ static bool verifyBootstrapPreemption() noexcept {
     return success && removedFirst && removedSecond && scheduler.getReadyThreadCount() == 0;
 }
 
+extern "C" bool MicantTestPsUserPreemption() noexcept;
+
 bool verifyBootstrapTimerInterrupt() noexcept {
     if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext()) return false;
     Idtr current{};
@@ -1799,6 +1803,13 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     __asm__ __volatile__("cli" : : : "memory");
     const bool timerDelivered = MicantTimerTicks >= 3;
     const bool preemptionVerified = timerDelivered && verifyBootstrapPreemption();
+    MicantTimerTicks = 0;
+    MicantTimerBootThread = nullptr;
+    MicantTimerDispatchFailed = false;
+    MicantTimerPreemptionEnabled = preemptionVerified;
+    const bool userPreemption = preemptionVerified && MicantTestPsUserPreemption() &&
+        MicantTimerTicks > 0 && !MicantTimerDispatchFailed;
+    MicantTimerPreemptionEnabled = false;
     apic[0x320 / 4] = savedLvt[0] | (1u << 16);
     apic[0x380 / 4] = 0;
     // Drain any timer already accepted into IRR before restoring the gate.
@@ -1811,7 +1822,7 @@ bool verifyBootstrapTimerInterrupt() noexcept {
         __asm__ __volatile__("cli" : : : "memory");
     }
     const bool success = lockMaskedInterrupts && (releasedFlags & (uint64_t{1} << 9)) &&
-        timerDelivered && preemptionVerified && !(apic[timerIrr] & timerBit);
+        timerDelivered && preemptionVerified && userPreemption && !(apic[timerIrr] & timerBit);
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
     apic[0x80 / 4] = savedTpr;

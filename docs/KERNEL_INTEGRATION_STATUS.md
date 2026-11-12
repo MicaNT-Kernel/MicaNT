@@ -115,9 +115,13 @@ During the bounded QEMU diagnostic, clock ticks now select from the canonical
 Ke ready queue at quantum end and preempt two CPL0 kernel threads that never
 yield. Both workers advance, their GPR and XMM canaries survive, and their
 queued contexts are withdrawn before the timer is restored. The interrupt
-entry saves GPRs and FXSAVE state and sends EOI before switching. The test
-does not enable interrupts in normal operation, cover AVX/extended XSAVE or
-CPL3 interrupt entry, or establish a complete hardware IRQL implementation.
+entry saves GPRs and FXSAVE state and sends EOI before switching. A second
+bounded test runs two process-owned CPL3 contexts with interrupts enabled:
+both must advance shared counters before either issues a syscall, so the
+second context can run only after timer preemption. It also checks GPR and
+XMM canaries, separate TLS, event synchronization, process exit and cleanup.
+Interrupts and timer preemption remain disabled in normal operation; AVX and
+other extended XSAVE state and full hardware IRQL are not implemented.
 On each diagnostic clock tick Ke now selects a higher-priority ready thread
 without waiting for quantum expiration; equal-priority threads rotate at the
 quantum boundary, and a lower-priority ready thread does not displace the
@@ -215,7 +219,7 @@ The test now allocates a minimal user TEB and the context switch sets the
 thread's GS base; CPL3 writes and reads its first TEB TLS slot, and the test
 checks the stored value and bootstrap GS restoration after exit. This is not
 static PE TLS initialization. The entry
-currently leaves interrupts disabled; the bootstrap syscall/GS handling is
+normally leaves interrupts disabled; the bootstrap syscall/GS handling is
 not a general user-thread context switch.
 
 A second QEMU test runs two Ps-owned CPL3 threads from one manually mapped
@@ -266,7 +270,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 
 | Check | Result |
 |---|---|
-| `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
+| `python3 qemu.py --headless` | Passed; LAPIC IRQ, timer-preempted kernel and CPL3 contexts, register canaries, existing boot, scanout and input checks |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
 | `python3 qemu.py --headless` | Passed; Ps image loading through Mm/Ob sections and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS rollback and PFN/Ob cleanup |
