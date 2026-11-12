@@ -4,6 +4,7 @@
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/sync.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include "micant/um/native/pe.hpp"
 #include <array>
@@ -49,6 +50,10 @@ public:
     }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    // The Ob reference held by a waiter keeps this resident until wait returns.
+    [[nodiscard]] sync::detail::BootstrapEvent& terminationEvent() noexcept { return terminationEvent_; }
+#endif
 private:
     friend struct detail::ProcessObjectFactory;
     friend class EThread;
@@ -60,6 +65,9 @@ private:
     ke::KThread* threads_{nullptr};
     bool terminating_{false};
     NtStatus exitStatus_{NtStatus::Pending};
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    sync::detail::BootstrapEvent terminationEvent_{true};
+#endif
     std::unique_ptr<um::NativeUserImageSet64> images_{};
     bool imagesFinalized_{false};
     uintptr_t userPeb_{0};

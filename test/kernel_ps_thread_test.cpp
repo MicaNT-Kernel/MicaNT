@@ -27,6 +27,18 @@ void threadEntry(void* argument) noexcept {
 
 void terminatingEntry(void* argument) noexcept {
     auto& state = *static_cast<State*>(argument);
+    using namespace micant::ke;
+    KeEnterCriticalRegion();
+    const auto criticalResult = micant::sys::NtTerminateProcess(
+        micant::InvalidHandleValue, micant::NtStatus::AccessDenied);
+    KeLeaveCriticalRegion();
+    KeEnterGuardedRegion();
+    const auto guardedResult = micant::sys::NtTerminateProcess(
+        micant::InvalidHandleValue, micant::NtStatus::AccessDenied);
+    KeLeaveGuardedRegion();
+    if (criticalResult != micant::NtStatus::NotImplemented ||
+        guardedResult != micant::NtStatus::NotImplemented || state.process->isTerminating())
+        __builtin_trap();
     uintptr_t address{};
     size_t size = micant::mm::PageSize4KB;
     if (!state.other ||
@@ -53,6 +65,15 @@ struct ObjectExitState {
 
 void objectTerminatingEntry(void* argument) noexcept {
     auto& state = *static_cast<ObjectExitState*>(argument);
+    auto* current = micant::ke::KeGetCurrentThread();
+    micant::ke::KAPC pending{};
+    micant::ke::KeInitializeApc(&pending, current->tid, nullptr, nullptr, nullptr, 1, nullptr);
+    if (!micant::ke::KeInsertQueueApc(&pending) ||
+        micant::sys::NtTerminateProcess(state.selfHandle, micant::NtStatus::AccessDenied) !=
+            micant::NtStatus::NotImplemented || !pending.inserted ||
+        current->userApcList.front() != &pending) __builtin_trap();
+    current->userApcList.pop_front();
+    pending.inserted = false;
     if (!micant::ke::PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
     state.ran = true;
     (void)micant::sys::NtTerminateProcess(state.selfHandle, micant::NtStatus::AccessDenied);
@@ -91,7 +112,9 @@ bool testProcessObjectLifetime() noexcept {
         sys::NtTerminateProcess(event, NtStatus::Success) != NtStatus::ObjectTypeMismatch ||
         sys::NtClose(event) != NtStatus::Success) return false;
     if (mm::PfnDatabase::get().getActiveCount() != active ||
-        ps::detail::createProcessHandle(1, handle, process) != NtStatus::Success) return false;
+        ps::detail::createProcessHandle(1 | ob::SYNCHRONIZE, handle, process) != NtStatus::Success) return false;
+    LargeInteger poll{};
+    if (sys::NtWaitForSingleObject(handle, false, &poll) != NtStatus::Timeout) return false;
     ObjectExitState state{ke::KeGetCurrentThread()};
     if (ob::detail::currentHandleTable().duplicateHandle(handle, process->getHandleTable(), state.selfHandle) !=
         NtStatus::Success) return false;
@@ -111,7 +134,9 @@ bool testProcessObjectLifetime() noexcept {
         ps::detail::referenceProcessHandle(handle, 0, resolved, reference) != NtStatus::Success ||
         resolved != process || resolved->exitStatus() != NtStatus::AccessDenied) return false;
     ob::ObDereferenceObject(reference);
-    return sys::NtClose(handle) == NtStatus::Success &&
+    return sys::NtWaitForSingleObject(handle, false, &poll) == NtStatus::Success &&
+        sys::NtWaitForSingleObject(handle, false, &poll) == NtStatus::Success &&
+        sys::NtClose(handle) == NtStatus::Success &&
         ps::detail::bootstrapProcessObjectCount() == objects &&
         mm::PfnDatabase::get().getActiveCount() == active;
 }

@@ -26,6 +26,9 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     }
     terminating_ = false;
     exitStatus_ = NtStatus::Pending;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    (void)terminationEvent_.reset();
+#endif
     imagesFinalized_ = false;
     userPeb_ = 0;
     userLoaderData_ = 0;
@@ -86,10 +89,28 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
     const auto previous = ke::KeGetCurrentIrql();
     if (current && current->owningProcess == this && current->state == ke::ThreadState::Running &&
         previous <= ke::APC_LEVEL) {
+        // Termination must not bypass a critical/guarded region or an active
+        // normal APC, and do not strand APCs that need rundown. This
+        // bootstrap path cannot defer the request or run APC rundown yet.
+        if (current->kernelApcDisable || current->specialApcDisable ||
+            current->normalKernelApcActive || current->pendingNormalCount ||
+            !current->kernelApcList.empty() || !current->userApcList.empty()) {
+            if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+            return NtStatus::NotImplemented;
+        }
         size_t otherActive = 0;
         bool supported = true;
         for (auto* thread = threads_; thread; thread = thread->processNext) {
             if (thread == current || thread->state == ke::ThreadState::Terminated) continue;
+            // A waiter in a critical or guarded region cannot be terminated
+            // until that region has ended. Deferred termination is not yet
+            // implemented, so leave the process and all waiters untouched.
+            if (thread->kernelApcDisable || thread->specialApcDisable ||
+                thread->normalKernelApcActive || thread->pendingNormalCount ||
+                !thread->kernelApcList.empty() || !thread->userApcList.empty()) {
+                supported = false;
+                break;
+            }
             const bool readyWaiter = thread->state == ke::ThreadState::Ready && thread->readyQueued;
             const bool blockedWaiter = !terminating_ && thread->state == ke::ThreadState::Waiting &&
                 thread->eventWaitObject && thread->eventWaitBlock;
@@ -354,6 +375,11 @@ NtStatus EThread::reap() noexcept {
         if (status != NtStatus::Success) return status;
         auto* reference = reapProcessReference_;
         reapProcessReference_ = nullptr;
+        // Signal only after the last attached thread and address space have
+        // been cleaned up; the reference protects the event while waking waiters.
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        (void)process_->terminationEvent().set();
+#endif
         process_ = nullptr;
         ob::ObDereferenceObject(reference);
     }

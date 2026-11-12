@@ -2,6 +2,7 @@
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/ps_objects.hpp"
 #include <new>
 
 namespace micant::sys {
@@ -59,15 +60,24 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
     if (alertable || (timeout && timeout->quadPart != 0)) return NtStatus::NotImplemented;
     ob::ObjectHeader* header{};
     const auto status = ob::ObReferenceObjectByHandle(handle, ob::detail::currentHandleTable(),
-                                                       ob::SYNCHRONIZE, &eventType, &header);
+                                                       ob::SYNCHRONIZE, nullptr, &header);
     if (status != NtStatus::Success) return status;
+    Event* waitObject{};
+    if (header->type == &eventType) {
+        waitObject = header->as<Event>();
+    } else if (ps::detail::isProcessObject(*header)) {
+        waitObject = &header->as<ps::EProcess>()->terminationEvent();
+    } else {
+        ob::ObDereferenceObject(header);
+        return NtStatus::ObjectTypeMismatch;
+    }
     auto* current = ke::KeGetCurrentThread();
     if (!current || current->eventWaitInProgress) {
         ob::ObDereferenceObject(header);
         return NtStatus::InvalidParameter;
     }
     current->eventWaitInProgress = true;
-    const auto result = header->as<Event>()->wait(timeout != nullptr);
+    const auto result = waitObject->wait(timeout != nullptr);
     current->eventWaitInProgress = false;
     ob::ObDereferenceObject(header);
     if (current->owningProcess && current->owningProcess->isTerminating()) {

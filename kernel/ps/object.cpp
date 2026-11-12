@@ -54,6 +54,10 @@ NtStatus referenceProcessHandle(Handle handle, uint32_t access, EProcess*& proce
     return status;
 }
 
+bool isProcessObject(const ob::ObjectHeader& header) noexcept {
+    return header.type == &processType;
+}
+
 uint32_t bootstrapProcessObjectCount() noexcept {
     return processType.totalNumberOfObjects.load(std::memory_order_relaxed);
 }

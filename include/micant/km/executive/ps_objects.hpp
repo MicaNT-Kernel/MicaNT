@@ -13,6 +13,7 @@ namespace detail {
 NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process) noexcept;
 NtStatus referenceProcessHandle(Handle handle, uint32_t access, EProcess*& process,
                                 ob::ObjectHeader*& reference) noexcept;
+bool isProcessObject(const ob::ObjectHeader& header) noexcept;
 uint32_t bootstrapProcessObjectCount() noexcept;
 }
 }

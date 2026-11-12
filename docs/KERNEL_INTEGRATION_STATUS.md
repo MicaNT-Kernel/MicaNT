@@ -95,7 +95,7 @@ differs from the historical integration inventory below.
 | M1: section mapping | Anonymous section mapping through Mm and Ob exercised in QEMU, including shared pages and cleanup. |
 | M2: independent address spaces | Bounded BSP acceptance path exercised through Ps, Ke, Mm and Ob in QEMU, including private pages, shared section, survivor and PFN rollback. General process creation and termination remain outstanding. |
 | M3: preemptive scheduler | Bootstrap acceptance criteria completed on the single BSP in QEMU: timer-preempted kernel threads without voluntary yield, block/wakeup and bounded cleanup. General lifecycle and APC rundown remain M4 work; this is not a claim of full NT scheduler compatibility. |
-| M4: process and thread lifecycle | Bounded Ps kernel thread creation, execution and reap verified in QEMU. Waitable process/thread objects, normal process termination and native creation services remain outstanding. |
+| M4: process and thread lifecycle | Bounded Ps kernel thread creation, execution and reap verified in QEMU. A subsequent QEMU-tested batch rejects current-process termination when any active thread has APCs disabled, a normal APC active or APCs awaiting delivery/rundown; deferred termination, automatic cleanup, waitable thread objects, normal process termination and native creation services remain outstanding. Process polling after explicit reap was exercised in QEMU; a blocked process waiter remains unverified. |
 | M5: NT system calls | Section, close and bounded current-process allocation/free calls exercised from CPL3. The services needed for native process/thread creation, synchronization and termination are incomplete. |
 | M6: first Ring 3 PE process | Not complete. The PE and CPL3 probes are diagnostics; image section mapping, process startup, PEB/TEB and termination are not integrated. |
 | M7: two threads, TLS and synchronization | Not complete. Two user threads in a real process, independent TLS, event synchronization and a verifiable exit status have not been exercised. |
@@ -279,6 +279,15 @@ releasing the stack and address space. QEMU exercises this path, rejects
 premature cleanup and duplicate readying, and checks PFN accounting. This is
 not yet a waitable Ob thread object or an implementation of `NtCreateThreadEx`
 or general process termination.
+A bounded M4 batch lets the existing non-alertable BSP
+`NtWaitForSingleObject` path wait on an Ob process handle with `SYNCHRONIZE`.
+The retained object reference protects its notification event; the event is
+signaled only after explicit reap of the last attached thread closes the
+address space. QEMU exercised zero-timeout polling before and after reap and repeat waits, plus rejection of termination with a queued user APC or disabled APC delivery. A blocked process waiter has not been independently exercised. There is no autonomous reaper yet, so a waiter
+alone cannot cause termination cleanup to finish. Thread handles, general
+process termination, alertable waits and timeouts remain incomplete. The
+process signaling requirement is documented in [Terminating a Process](https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process).
+
 The freestanding `KThread` now keeps resident APC objects in intrusive FIFO
 queues rather than constructing allocating `std::deque`s. QEMU verifies FIFO
 delivery for the current kernel thread and duplicate insertion rejection; Ps
