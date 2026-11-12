@@ -178,6 +178,7 @@ inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_BEETLE_XOF_ALGORITHM  = L"AS
 inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_BEETLE_HASH_ALGORITHM = L"ASCON-PHOTON-BEETLE-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_ELEPHANT_XOF_ALGORITHM = L"ASCON-ELEPHANT-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_ELEPHANT_HASH_ALGORITHM = L"ASCON-ELEPHANT-HASH";
+inline constexpr const wchar_t* BCRYPT_ELEPHANT_ALGORITHM             = L"ELEPHANT";
 inline constexpr const wchar_t* BCRYPT_ASCON_GIMLI_XOF_ALGORITHM  = L"ASCON-GIMLI-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_GIMLI_HASH_ALGORITHM = L"ASCON-GIMLI-HASH";
 inline constexpr const wchar_t* BCRYPT_GIMLI_ALGORITHM             = L"GIMLI";
@@ -14258,7 +14259,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_PHOTON_BEETLE_XOF_ALGORITHM || algId == L"ASCON-PHOTON-BEETLE-XOF" || algId == L"ascon-photon-beetle-xof" || algId == L"Ascon-Photon-Beetle-Xof" || algId == L"ASCONPHOTONBEETLE-XOF") return CryptoAlgorithm::AsconPhotonBeetleXof;
     if (algId == BCRYPT_ASCON_PHOTON_BEETLE_HASH_ALGORITHM || algId == L"ASCON-PHOTON-BEETLE-HASH" || algId == L"ascon-photon-beetle-hash" || algId == L"Ascon-Photon-Beetle-Hash" || algId == L"ASCONPHOTONBEETLE-HASH") return CryptoAlgorithm::AsconPhotonBeetleHash;
     if (algId == BCRYPT_ASCON_ELEPHANT_XOF_ALGORITHM || algId == L"ASCON-ELEPHANT-XOF" || algId == L"ascon-elephant-xof" || algId == L"Ascon-Elephant-Xof" || algId == L"ASCONELEPHANT-XOF") return CryptoAlgorithm::AsconElephantXof;
-    if (algId == BCRYPT_ASCON_ELEPHANT_HASH_ALGORITHM || algId == L"ASCON-ELEPHANT-HASH" || algId == L"ascon-elephant-hash" || algId == L"Ascon-Elephant-Hash" || algId == L"ASCONELEPHANT-HASH") return CryptoAlgorithm::AsconElephantHash;
+    if (algId == BCRYPT_ASCON_ELEPHANT_HASH_ALGORITHM || algId == L"ASCON-ELEPHANT-HASH" || algId == L"ascon-elephant-hash" || algId == L"Ascon-Elephant-Hash" || algId == L"ASCONELEPHANT-HASH" || algId == BCRYPT_ELEPHANT_ALGORITHM || algId == L"ELEPHANT" || algId == L"elephant") return CryptoAlgorithm::AsconElephantHash;
     if (algId == BCRYPT_ASCON_GRAIN128_XOF_ALGORITHM || algId == L"ASCON-GRAIN128-XOF" || algId == L"ascon-grain128-xof" || algId == L"Ascon-Grain128-Xof" || algId == L"ASCONGRAIN128-XOF") return CryptoAlgorithm::AsconGrain128Xof;
     if (algId == BCRYPT_ASCON_GRAIN128_HASH_ALGORITHM || algId == L"ASCON-GRAIN128-HASH" || algId == L"ascon-grain128-hash" || algId == L"Ascon-Grain128-Hash" || algId == L"ASCONGRAIN128-HASH") return CryptoAlgorithm::AsconGrain128Hash;
     if (algId == BCRYPT_ASCON_GIMLI_XOF_ALGORITHM || algId == L"ASCON-GIMLI-XOF" || algId == L"ascon-gimli-xof" || algId == L"Ascon-Gimli-Xof" || algId == L"ASCONGIMLI-XOF") return CryptoAlgorithm::AsconGimliXof;

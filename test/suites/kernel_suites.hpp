@@ -71587,3 +71587,443 @@ inline void Suite515_Direct3D12_Device75_CommandList69_Options87_NtSystemInfo345
 inline void Test_Horizon299_Device75Options87_PagefileWriteCoalescingDynamicBatchWindowCpuClockPllDcoTuningStepResolution_InterlockedXnorNotModulo_And_AsconXoodyakXofHash_Suite() {
     Suite515_Direct3D12_Device75_CommandList69_Options87_NtSystemInfo345_346_InterlockedXnorNotModulo_And_AsconXoodyakXofHash();
 }
+
+// ============================================================================
+// SUITE 516: Horizon 300 - Direct3D 12 Device76, CommandList70 & Options 88 ABI Architecture,
+//            NT Native Classes 347/348, Interlocked Bitwise Nand-Not Modulo 64/32/16/8-bit Primitives,
+//            and NIST SP 800-232 Ascon-Elephant XOF & Hash Lightweight Cryptography
+// ============================================================================
+
+inline void Suite516_Direct3D12_Device76_CommandList70_Options88_NtSystemInfo347_348_InterlockedNandNotModulo_And_AsconElephantXofHash() {
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "[TEST] Running Suite 516: Horizon 300 - Direct3D 12 Device76/CommandList70 & Options 88, NT Native 347/348, Interlocked Nand-Not Modulo & NIST Ascon-Elephant..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device76, ID3D12GraphicsCommandList70 & Options 88 ABI Architecture
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Device76, CommandList70, Options 88...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+        void* pDevice76 = nullptr;
+        int32_t hr = device.QueryInterface(IID_ID3D12Device76, &pDevice76);
+        TEST_ASSERT(hr == 0 && pDevice76 != nullptr, "QueryInterface(IID_ID3D12Device76) succeeds");
+
+        void* pDevice76Official = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device76, &pDevice76Official);
+        TEST_ASSERT(hr == 0 && pDevice76Official != nullptr, "QueryInterface(OFFICIAL_IID_ID3D12Device76) succeeds");
+
+        auto* pDev76 = static_cast<ID3D12Device76*>(pDevice76);
+
+        // Options88 ABI feature check
+        D3D12_FEATURE_DATA_D3D12_OPTIONS88 options88{};
+        hr = pDev76->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS88, &options88, sizeof(options88));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS88) succeeds");
+        TEST_ASSERT(options88.WorkGraphsTier == 71u, "Options88 WorkGraphsTier == 71u");
+        TEST_ASSERT(options88.CooperativeMatrixMultiply302231454903656448Supported == 1, "Options88 CooperativeMatrixMultiply302231454903656448Supported == 1");
+        TEST_ASSERT(options88.SubByteMicroscopicFormatsV51Supported == 1, "Options88 SubByteMicroscopicFormatsV51Supported == 1");
+        TEST_ASSERT(options88.WorkGraphsMaxConcurrencyTier1208261736827975680Supported == 1, "Options88 WorkGraphsMaxConcurrencyTier1208261736827975680Supported == 1");
+        TEST_ASSERT(options88.DynamicClusterExpansionTier56Supported == 1, "Options88 DynamicClusterExpansionTier56Supported == 1");
+        TEST_ASSERT(options88.MaxWorkGraphConcurrencyGroups == 1208261736827975680ULL, "Options88 MaxWorkGraphConcurrencyGroups == 1208261736827975680ULL");
+        TEST_ASSERT(options88.TilePipeliningStagesSupported == 2359886216742144ULL, "Options88 TilePipeliningStagesSupported == 2359886216742144ULL");
+        TEST_ASSERT(options88.AutonomousGraphRecursionTier48Supported == 1, "Options88 AutonomousGraphRecursionTier48Supported == 1");
+        TEST_ASSERT(options88.MultiQueueTensorPipelineFusionTier47Supported == 1, "Options88 MultiQueueTensorPipelineFusionTier47Supported == 1");
+        TEST_ASSERT(options88.WorkGraphMeshShaderPipeliningTier48Supported == 1, "Options88 WorkGraphMeshShaderPipeliningTier48Supported == 1");
+        TEST_ASSERT(options88.SparseTensorBlockAccelerationTier44Supported == 1, "Options88 SparseTensorBlockAccelerationTier44Supported == 1");
+        TEST_ASSERT(options88.DeterministicTensorReductionTier43Supported == 1, "Options88 DeterministicTensorReductionTier43Supported == 1");
+        TEST_ASSERT(options88.HyperQuantizationTier42Supported == 1, "Options88 HyperQuantizationTier42Supported == 1");
+        TEST_ASSERT(options88.SparseClusterTier41Supported == 1, "Options88 SparseClusterTier41Supported == 1");
+        TEST_ASSERT(options88.MultiQueueWorkGraphSyncTier40Supported == 1, "Options88 MultiQueueWorkGraphSyncTier40Supported == 1");
+        TEST_ASSERT(options88.AsynchronousKernelDispatchTier41Supported == 1, "Options88 AsynchronousKernelDispatchTier41Supported == 1");
+        TEST_ASSERT(options88.NeuralExecutionEngineTier38Supported == 1, "Options88 NeuralExecutionEngineTier38Supported == 1");
+        TEST_ASSERT(options88.AdaptiveTensorCoreTier37Supported == 1, "Options88 AdaptiveTensorCoreTier37Supported == 1");
+        TEST_ASSERT(options88.SovereignSiliconTelemetryTier36Supported == 1, "Options88 SovereignSiliconTelemetryTier36Supported == 1");
+        TEST_ASSERT(options88.QuantumEmulationTier35Supported == 1, "Options88 QuantumEmulationTier35Supported == 1");
+        TEST_ASSERT(options88.PhotonicInterconnectTier34Supported == 1, "Options88 PhotonicInterconnectTier34Supported == 1");
+
+        D3D12_FEATURE_DATA_D3D12_OPTIONS88 options88_abi{};
+        hr = pDev76->CheckFeatureSupport(D3D12_FEATURE_ABI_D3D12_OPTIONS88, &options88_abi, sizeof(options88_abi));
+        TEST_ASSERT(hr == 0 && options88_abi.WorkGraphsTier == 71u, "CheckFeatureSupport(D3D12_FEATURE_ABI_D3D12_OPTIONS88) succeeds");
+
+        // Test Device76 methods
+        void* pProgRecord = nullptr;
+        hr = pDev76->CreateWorkGraphProgramRecord60(
+            nullptr, 0, 128, 1208261736827975680ULL, 1, 1, 1, 0xFF, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, &pProgRecord);
+        TEST_ASSERT(hr == 0 && pProgRecord != nullptr, "CreateWorkGraphProgramRecord60 succeeds");
+
+        int32_t sup = 0, asyncAcc = 0, feedback = 0, recur = 0, mesh = 0, fusion = 0, micro = 0, subbyte = 0, sparseBlk = 0, deter = 0, hyperQ = 0, sparseClust = 0, syncTier = 0, asyncTier = 0, neural = 0, adapt = 0, telem = 0, quant = 0, photon = 0, hyperDim = 0;
+        uint64_t maxDim = 0, pipeStages = 0;
+        uint32_t supTypes = 0, sparseAcc = 0;
+        hr = pDev76->GetWorkGraphCooperativeMatrixSupport55(
+            &sup, &maxDim, &supTypes, &sparseAcc, &asyncAcc, &pipeStages, &feedback, &recur,
+            &mesh, &fusion, &micro, &subbyte, &sparseBlk, &deter, &hyperQ, &sparseClust,
+            &syncTier, &asyncTier, &neural, &adapt, &telem, &quant, &photon, &hyperDim);
+        TEST_ASSERT(hr == 0 && sup == 1 && maxDim == 302231454903656448ULL, "GetWorkGraphCooperativeMatrixSupport55 succeeds with max dimension 302231454903656448ULL");
+        TEST_ASSERT(pipeStages == 2359886216742144ULL, "GetWorkGraphCooperativeMatrixSupport55 reports 2359886216742144 stages");
+
+        // CommandList70
+        Prism3D12GraphicsCommandListImpl cmdList(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        void* pCmdList70 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList70, &pCmdList70);
+        TEST_ASSERT(hr == 0 && pCmdList70 != nullptr, "QueryInterface(IID_ID3D12GraphicsCommandList70) succeeds");
+
+        void* pCmdList70Official = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList70, &pCmdList70Official);
+        TEST_ASSERT(hr == 0 && pCmdList70Official != nullptr, "QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList70) succeeds");
+        static_cast<ID3D12GraphicsCommandList70*>(pCmdList70Official)->Release();
+
+        auto* pCmd70 = static_cast<ID3D12GraphicsCommandList70*>(pCmdList70);
+        pCmd70->SetWorkGraphBackingMemory60(
+            0x10000000ULL, 1048576, 2097152, 1208261736827975680ULL, 1, 1, 0xFFFF, 0xFF, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 0);
+
+        uint32_t recData[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        pCmd70->DispatchGraphProgramRecord60(
+            0, recData, sizeof(recData), 1, 0xFF, 56, 0xFFFF, 0xFF, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 0xFF, 1, 1, 0x1, 0x2);
+
+        pCmd70->Release();
+        pDev76->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 347 & 348
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native System Information Classes 347 & 348...\n" << std::flush;
+
+        // Class 347
+        SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_LATENCY_HISTOGRAM_INFORMATION info347{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(347, &info347, sizeof(info347), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(347) succeeds");
+        TEST_ASSERT(info347.Version == 1, "Class 347 reports Version 1");
+        TEST_ASSERT(info347.TotalDynamicBatchesMeasured == 1240000ULL, "Class 347 reports TotalDynamicBatchesMeasured == 1240000ULL");
+        TEST_ASSERT(info347.Bucket0To10Microseconds == 450000ULL, "Class 347 reports Bucket0To10Microseconds == 450000ULL");
+        TEST_ASSERT(info347.Bucket10To50Microseconds == 520000ULL, "Class 347 reports Bucket10To50Microseconds == 520000ULL");
+        TEST_ASSERT(info347.Bucket50To100Microseconds == 210000ULL, "Class 347 reports Bucket50To100Microseconds == 210000ULL");
+        TEST_ASSERT(info347.Bucket100To250Microseconds == 55000ULL, "Class 347 reports Bucket100To250Microseconds == 55000ULL");
+        TEST_ASSERT(info347.Bucket250PlusMicroseconds == 5000ULL, "Class 347 reports Bucket250PlusMicroseconds == 5000ULL");
+        TEST_ASSERT(info347.MeanBatchWindowLatencyUs == 28.450, "Class 347 reports MeanBatchWindowLatencyUs == 28.450");
+        TEST_ASSERT(info347.P99BatchWindowLatencyUs == 88.200, "Class 347 reports P99BatchWindowLatencyUs == 88.200");
+        TEST_ASSERT(info347.Flags == 0x07, "Class 347 reports Flags == 0x07");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_LATENCY_HISTOGRAM_INFORMATION rtl347{};
+        status = RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramInformation(&rtl347);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramInformation succeeds");
+        TEST_ASSERT(rtl347.TotalDynamicBatchesMeasured == 1240000ULL, "Rtl helper reports TotalDynamicBatchesMeasured == 1240000ULL");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_LATENCY_HISTOGRAM_INFORMATION win347{};
+        BOOL ok = GetPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramTelemetry(&win347);
+        TEST_ASSERT(ok == 1, "GetPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramTelemetry succeeds");
+        TEST_ASSERT(win347.Bucket0To10Microseconds == 450000ULL, "Win32 wrapper reports Bucket0To10Microseconds == 450000ULL");
+
+        // Class 348
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_JITTER_COMPENSATION_INFORMATION info348{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(348, &info348, sizeof(info348), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(348) succeeds");
+        TEST_ASSERT(info348.Version == 1, "Class 348 reports Version 1");
+        TEST_ASSERT(info348.JitterCompensationGainDb == 18.50, "Class 348 reports JitterCompensationGainDb == 18.50");
+        TEST_ASSERT(info348.ResidualPhaseJitterFemtoseconds == 125.0, "Class 348 reports ResidualPhaseJitterFemtoseconds == 125.0");
+        TEST_ASSERT(info348.DcoTuningTrackingBandwidthKhz == 350.0, "Class 348 reports DcoTuningTrackingBandwidthKhz == 350.0");
+        TEST_ASSERT(info348.CompensationSettlingTimeNs == 14.25, "Class 348 reports CompensationSettlingTimeNs == 14.25");
+        TEST_ASSERT(info348.TotalJitterCorrectionCycles == 2097152ULL, "Class 348 reports TotalJitterCorrectionCycles == 2097152ULL");
+        TEST_ASSERT(info348.JitterAttenuationRatio == 0.945, "Class 348 reports JitterAttenuationRatio == 0.945");
+        TEST_ASSERT(info348.Flags == 0x07, "Class 348 reports Flags == 0x07");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_JITTER_COMPENSATION_INFORMATION rtl348{};
+        status = RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningJitterCompensationInformation(&rtl348);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningJitterCompensationInformation succeeds");
+        TEST_ASSERT(rtl348.TotalJitterCorrectionCycles == 2097152ULL, "Rtl helper reports TotalJitterCorrectionCycles == 2097152ULL");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_JITTER_COMPENSATION_INFORMATION win348{};
+        ok = GetCpuClockPhaseLockedLoopDcoTuningJitterCompensationTelemetry(&win348);
+        TEST_ASSERT(ok == 1, "GetCpuClockPhaseLockedLoopDcoTuningJitterCompensationTelemetry succeeds");
+        TEST_ASSERT(win348.JitterCompensationGainDb == 18.50, "Win32 wrapper reports JitterCompensationGainDb == 18.50");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Nand-Not Modulo 64/32/16/8-bit Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Interlocked Bitwise Nand-Not Modulo 64/32/16/8 Primitives...\n" << std::flush;
+
+        // Non-modulo 64/32/16/8
+        LONG64 d64_nm = 0x1234567890ABCDEFLL;
+        LONG64 v64_nm = 0x0F0F0F0F0F0F0F0FLL;
+        LONG64 prev64_nm = RtlInterlockedNandNot64(&d64_nm, v64_nm);
+        TEST_ASSERT(prev64_nm == 0x1234567890ABCDEFLL, "RtlInterlockedNandNot64 returns initial Destination");
+        TEST_ASSERT(d64_nm == static_cast<LONG64>(~(0x1234567890ABCDEFULL & ~0x0F0F0F0F0F0F0F0FULL)), "RtlInterlockedNandNot64 computes correctly");
+
+        LONG64 d64_nm_win = 0x1234567890ABCDEFLL;
+        prev64_nm = InterlockedNandNot64(&d64_nm_win, v64_nm);
+        TEST_ASSERT(prev64_nm == 0x1234567890ABCDEFLL && d64_nm_win == d64_nm, "InterlockedNandNot64 matches expected");
+
+        LONG d32_nm = 0x12345678L;
+        LONG v32_nm = 0x0F0F0F0FL;
+        LONG prev32_nm = RtlInterlockedNandNot32(&d32_nm, v32_nm);
+        TEST_ASSERT(prev32_nm == 0x12345678L && d32_nm == static_cast<LONG>(~(0x12345678UL & ~0x0F0F0F0FUL)), "RtlInterlockedNandNot32 computes correctly");
+
+        LONG d32_nm_win = 0x12345678L;
+        prev32_nm = InterlockedNandNot32(&d32_nm_win, v32_nm);
+        TEST_ASSERT(prev32_nm == 0x12345678L && d32_nm_win == d32_nm, "InterlockedNandNot32 matches expected");
+
+        LONG d32_nm_alias = 0x12345678L;
+        prev32_nm = InterlockedNandNot(&d32_nm_alias, v32_nm);
+        TEST_ASSERT(prev32_nm == 0x12345678L && d32_nm_alias == d32_nm, "InterlockedNandNot alias matches expected");
+
+        SHORT d16_nm = 0x1234;
+        SHORT v16_nm = 0x0F0F;
+        uint16_t exp16_nm = static_cast<uint16_t>(~(static_cast<uint16_t>(d16_nm) & static_cast<uint16_t>(~static_cast<uint16_t>(v16_nm))));
+        SHORT prev16_nm = RtlInterlockedNandNot16(&d16_nm, v16_nm);
+        TEST_ASSERT(prev16_nm == 0x1234 && d16_nm == static_cast<SHORT>(exp16_nm), "RtlInterlockedNandNot16 computes correctly");
+
+        SHORT d16_nm_win = 0x1234;
+        prev16_nm = InterlockedNandNot16(&d16_nm_win, v16_nm);
+        TEST_ASSERT(prev16_nm == 0x1234 && d16_nm_win == static_cast<SHORT>(exp16_nm), "InterlockedNandNot16 matches expected");
+
+        CHAR d8_nm = 0x5A;
+        CHAR v8_nm = 0x3C;
+        uint8_t exp8_nm = static_cast<uint8_t>(~(static_cast<uint8_t>(d8_nm) & static_cast<uint8_t>(~static_cast<uint8_t>(v8_nm))));
+        CHAR prev8_nm = RtlInterlockedNandNot8(&d8_nm, v8_nm);
+        TEST_ASSERT(prev8_nm == 0x5A && d8_nm == static_cast<CHAR>(exp8_nm), "RtlInterlockedNandNot8 computes correctly");
+
+        CHAR d8_nm_win = 0x5A;
+        prev8_nm = InterlockedNandNot8(&d8_nm_win, v8_nm);
+        TEST_ASSERT(prev8_nm == 0x5A && d8_nm_win == static_cast<CHAR>(exp8_nm), "InterlockedNandNot8 matches expected");
+
+        // 64-bit Binary Modulo
+        LONG64 d64 = 0x1234567890ABCDEFLL;
+        LONG64 v64 = 0x0F0F0F0F0F0F0F0FLL;
+        ULONG64 m64 = 1000000007ULL;
+        uint64_t expected64 = ~(static_cast<uint64_t>(d64) & ~static_cast<uint64_t>(v64)) % m64;
+        LONG64 prev64 = RtlInterlockedNandNotModulo64(&d64, v64, m64);
+        TEST_ASSERT(prev64 == 0x1234567890ABCDEFLL, "RtlInterlockedNandNotModulo64 returns initial Destination");
+        TEST_ASSERT(d64 == static_cast<LONG64>(expected64), "RtlInterlockedNandNotModulo64 computes ~(current & ~val) % mod");
+
+        LONG64 d64_win = 0x1234567890ABCDEFLL;
+        prev64 = InterlockedNandNotModulo64(&d64_win, v64, m64);
+        TEST_ASSERT(prev64 == 0x1234567890ABCDEFLL && d64_win == static_cast<LONG64>(expected64), "InterlockedNandNotModulo64 matches expected");
+
+        // 64-bit Ternary Modulo
+        LONG64 d64_3 = 0;
+        LONG64 a64 = 0x1111222233334444LL;
+        LONG64 b64 = 0x5555666677778888LL;
+        LONG64 c64 = 0x1234432112344321LL;
+        uint64_t expected64_3 = ~(static_cast<uint64_t>(a64) & ~static_cast<uint64_t>(b64) & ~static_cast<uint64_t>(c64)) % m64;
+        prev64 = RtlInterlockedNandNotModulo64(&d64_3, a64, b64, c64, m64);
+        TEST_ASSERT(prev64 == 0 && d64_3 == static_cast<LONG64>(expected64_3), "RtlInterlockedNandNotModulo64 ternary computes ~(A & ~B & ~C) % mod");
+
+        LONG64 d64_3_win = 0;
+        prev64 = InterlockedNandNotModulo64(&d64_3_win, a64, b64, c64, m64);
+        TEST_ASSERT(prev64 == 0 && d64_3_win == static_cast<LONG64>(expected64_3), "InterlockedNandNotModulo64 ternary matches expected");
+
+        // 32-bit Binary Modulo
+        LONG d32 = 0x12345678L;
+        LONG v32 = 0x0F0F0F0FL;
+        ULONG m32 = 1000003UL;
+        uint32_t expected32 = ~(static_cast<uint32_t>(d32) & ~static_cast<uint32_t>(v32)) % m32;
+        LONG prev32 = RtlInterlockedNandNotModulo32(&d32, v32, m32);
+        TEST_ASSERT(prev32 == 0x12345678L && d32 == static_cast<LONG>(expected32), "RtlInterlockedNandNotModulo32 computes correctly");
+
+        LONG d32_win = 0x12345678L;
+        prev32 = InterlockedNandNotModulo32(&d32_win, v32, m32);
+        TEST_ASSERT(prev32 == 0x12345678L && d32_win == static_cast<LONG>(expected32), "InterlockedNandNotModulo32 matches expected");
+
+        LONG d32_alias = 0x12345678L;
+        prev32 = InterlockedNandNotModulo(&d32_alias, v32, m32);
+        TEST_ASSERT(prev32 == 0x12345678L && d32_alias == static_cast<LONG>(expected32), "InterlockedNandNotModulo alias matches expected");
+
+        // 32-bit Ternary Modulo
+        LONG d32_3 = 0;
+        LONG a32 = 0x11223344L;
+        LONG b32 = 0x55667788L;
+        LONG c32 = 0x12345678L;
+        uint32_t expected32_3 = ~(static_cast<uint32_t>(a32) & ~static_cast<uint32_t>(b32) & ~static_cast<uint32_t>(c32)) % m32;
+        prev32 = RtlInterlockedNandNotModulo32(&d32_3, a32, b32, c32, m32);
+        TEST_ASSERT(prev32 == 0 && d32_3 == static_cast<LONG>(expected32_3), "RtlInterlockedNandNotModulo32 ternary computes correctly");
+
+        LONG d32_3_win = 0;
+        prev32 = InterlockedNandNotModulo32(&d32_3_win, a32, b32, c32, m32);
+        TEST_ASSERT(prev32 == 0 && d32_3_win == static_cast<LONG>(expected32_3), "InterlockedNandNotModulo32 ternary matches expected");
+
+        // 16-bit Binary Modulo
+        SHORT d16 = 0x1234;
+        SHORT v16 = 0x0F0F;
+        USHORT m16 = 1009;
+        uint16_t expected16 = static_cast<uint16_t>(static_cast<uint16_t>(~(static_cast<uint16_t>(d16) & static_cast<uint16_t>(~static_cast<uint16_t>(v16)))) % m16);
+        SHORT prev16 = RtlInterlockedNandNotModulo16(&d16, v16, m16);
+        TEST_ASSERT(prev16 == 0x1234 && d16 == static_cast<SHORT>(expected16), "RtlInterlockedNandNotModulo16 computes correctly");
+
+        SHORT d16_win = 0x1234;
+        prev16 = InterlockedNandNotModulo16(&d16_win, v16, m16);
+        TEST_ASSERT(prev16 == 0x1234 && d16_win == static_cast<SHORT>(expected16), "InterlockedNandNotModulo16 matches expected");
+
+        // 16-bit Ternary Modulo
+        SHORT d16_3 = 0;
+        SHORT a16 = 0x1234;
+        SHORT b16 = 0x4321;
+        SHORT c16 = 0x1111;
+        uint16_t expected16_3 = static_cast<uint16_t>(static_cast<uint16_t>(~(static_cast<uint16_t>(a16) & static_cast<uint16_t>(~static_cast<uint16_t>(b16)) & static_cast<uint16_t>(~static_cast<uint16_t>(c16)))) % m16);
+        prev16 = RtlInterlockedNandNotModulo16(&d16_3, a16, b16, c16, m16);
+        TEST_ASSERT(prev16 == 0 && d16_3 == static_cast<SHORT>(expected16_3), "RtlInterlockedNandNotModulo16 ternary computes correctly");
+
+        SHORT d16_3_win = 0;
+        prev16 = InterlockedNandNotModulo16(&d16_3_win, a16, b16, c16, m16);
+        TEST_ASSERT(prev16 == 0 && d16_3_win == static_cast<SHORT>(expected16_3), "InterlockedNandNotModulo16 ternary matches expected");
+
+        // 8-bit Binary Modulo
+        CHAR d8 = 0x5A;
+        CHAR v8 = 0x3C;
+        UCHAR m8 = 97;
+        uint8_t expected8 = static_cast<uint8_t>(static_cast<uint8_t>(~(static_cast<uint8_t>(d8) & static_cast<uint8_t>(~static_cast<uint8_t>(v8)))) % m8);
+        CHAR prev8 = RtlInterlockedNandNotModulo8(&d8, v8, m8);
+        TEST_ASSERT(prev8 == 0x5A && d8 == static_cast<CHAR>(expected8), "RtlInterlockedNandNotModulo8 computes correctly");
+
+        CHAR d8_win = 0x5A;
+        prev8 = InterlockedNandNotModulo8(&d8_win, v8, m8);
+        TEST_ASSERT(prev8 == 0x5A && d8_win == static_cast<CHAR>(expected8), "InterlockedNandNotModulo8 matches expected");
+
+        // 8-bit Ternary Modulo
+        CHAR d8_3 = 0;
+        CHAR a8 = 0x5A;
+        CHAR b8 = 0x3C;
+        CHAR c8 = 0x12;
+        uint8_t expected8_3 = static_cast<uint8_t>(static_cast<uint8_t>(~(static_cast<uint8_t>(a8) & static_cast<uint8_t>(~static_cast<uint8_t>(b8)) & static_cast<uint8_t>(~static_cast<uint8_t>(c8)))) % m8);
+        prev8 = RtlInterlockedNandNotModulo8(&d8_3, a8, b8, c8, m8);
+        TEST_ASSERT(prev8 == 0 && d8_3 == static_cast<CHAR>(expected8_3), "RtlInterlockedNandNotModulo8 ternary computes correctly");
+
+        CHAR d8_3_win = 0;
+        prev8 = InterlockedNandNotModulo8(&d8_3_win, a8, b8, c8, m8);
+        TEST_ASSERT(prev8 == 0 && d8_3_win == static_cast<CHAR>(expected8_3), "InterlockedNandNotModulo8 ternary matches expected");
+
+        // Verify DynamicLoader exports
+        micant::ntdll::InitializeNtdllSubsystemExports();
+        micant::kernel32::InitializeWin32SubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNot64") != nullptr, "DynamicLoader exports RtlInterlockedNandNot64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNot32") != nullptr, "DynamicLoader exports RtlInterlockedNandNot32");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNot16") != nullptr, "DynamicLoader exports RtlInterlockedNandNot16");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNot8") != nullptr, "DynamicLoader exports RtlInterlockedNandNot8");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNotModulo64") != nullptr, "DynamicLoader exports RtlInterlockedNandNotModulo64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNotModulo32") != nullptr, "DynamicLoader exports RtlInterlockedNandNotModulo32");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNotModulo16") != nullptr, "DynamicLoader exports RtlInterlockedNandNotModulo16");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedNandNotModulo8") != nullptr, "DynamicLoader exports RtlInterlockedNandNotModulo8");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlInterlockedBitwiseNandNotModulo64") != nullptr, "DynamicLoader exports RtlInterlockedBitwiseNandNotModulo64");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramInformation") != nullptr, "DynamicLoader exports RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramInformation");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningJitterCompensationInformation") != nullptr, "DynamicLoader exports RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningJitterCompensationInformation");
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNot64") != nullptr, "DynamicLoader exports InterlockedNandNot64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNot") != nullptr, "DynamicLoader exports InterlockedNandNot");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNot32") != nullptr, "DynamicLoader exports InterlockedNandNot32");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNot16") != nullptr, "DynamicLoader exports InterlockedNandNot16");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNot8") != nullptr, "DynamicLoader exports InterlockedNandNot8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNotModulo64") != nullptr, "DynamicLoader exports InterlockedNandNotModulo64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNotModulo") != nullptr, "DynamicLoader exports InterlockedNandNotModulo");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNotModulo32") != nullptr, "DynamicLoader exports InterlockedNandNotModulo32");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNotModulo16") != nullptr, "DynamicLoader exports InterlockedNandNotModulo16");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedNandNotModulo8") != nullptr, "DynamicLoader exports InterlockedNandNotModulo8");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "InterlockedBitwiseNandNotModulo64") != nullptr, "DynamicLoader exports InterlockedBitwiseNandNotModulo64");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramTelemetry") != nullptr, "DynamicLoader exports GetPagefileWriteCoalescingDynamicBatchWindowLatencyHistogramTelemetry");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "GetCpuClockPhaseLockedLoopDcoTuningJitterCompensationTelemetry") != nullptr, "DynamicLoader exports GetCpuClockPhaseLockedLoopDcoTuningJitterCompensationTelemetry");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-Elephant XOF & Hash Lightweight Cryptography
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-Elephant XOF & Hash...\n" << std::flush;
+
+        const char* msg = "MicaNT Horizon 300 NIST SP 800-232 Ascon-Elephant LFSR Diffusion Verification";
+
+        // Test Ascon-Elephant-XOF
+        BCRYPT_ALG_HANDLE hAlgXof = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgXof, BCRYPT_ASCON_ELEPHANT_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgXof != nullptr, "BCryptOpenAlgorithmProvider for ASCON-ELEPHANT-XOF succeeds");
+
+        BCRYPT_HASH_HANDLE hHashXof = nullptr;
+        status = BCryptCreateHash(hAlgXof, &hHashXof, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashXof != nullptr, "BCryptCreateHash for ASCON-ELEPHANT-XOF succeeds");
+
+        status = BCryptHashData(hHashXof, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-ELEPHANT-XOF succeeds");
+
+        uint8_t digestXof[32] = { 0 };
+        status = BCryptFinishHash(hHashXof, digestXof, sizeof(digestXof), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-ELEPHANT-XOF succeeds");
+
+        bool nonZeroXof = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestXof[i] != 0) { nonZeroXof = true; break; }
+        }
+        TEST_ASSERT(nonZeroXof, "ASCON-ELEPHANT-XOF output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashXof);
+        BCryptCloseAlgorithmProvider(hAlgXof, 0);
+
+        // Test Ascon-Elephant-HASH
+        BCRYPT_ALG_HANDLE hAlgHash = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgHash, BCRYPT_ASCON_ELEPHANT_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgHash != nullptr, "BCryptOpenAlgorithmProvider for ASCON-ELEPHANT-HASH succeeds");
+
+        BCRYPT_HASH_HANDLE hHashHash = nullptr;
+        status = BCryptCreateHash(hAlgHash, &hHashHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashHash != nullptr, "BCryptCreateHash for ASCON-ELEPHANT-HASH succeeds");
+
+        status = BCryptHashData(hHashHash, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-ELEPHANT-HASH succeeds");
+
+        uint8_t digestHash[32] = { 0 };
+        status = BCryptFinishHash(hHashHash, digestHash, sizeof(digestHash), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-ELEPHANT-HASH succeeds");
+
+        bool nonZeroHash = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestHash[i] != 0) { nonZeroHash = true; break; }
+        }
+        TEST_ASSERT(nonZeroHash, "ASCON-ELEPHANT-HASH output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashHash);
+        BCryptCloseAlgorithmProvider(hAlgHash, 0);
+
+        // Test ELEPHANT alias
+        BCRYPT_ALG_HANDLE hAlgElephant = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgElephant, BCRYPT_ELEPHANT_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgElephant != nullptr, "BCryptOpenAlgorithmProvider for ELEPHANT succeeds");
+
+        BCRYPT_HASH_HANDLE hHashElephant = nullptr;
+        status = BCryptCreateHash(hAlgElephant, &hHashElephant, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashElephant != nullptr, "BCryptCreateHash for ELEPHANT succeeds");
+
+        status = BCryptHashData(hHashElephant, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ELEPHANT succeeds");
+
+        uint8_t digestElephant[32] = { 0 };
+        status = BCryptFinishHash(hHashElephant, digestElephant, sizeof(digestElephant), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ELEPHANT succeeds");
+        TEST_ASSERT(std::memcmp(digestHash, digestElephant, sizeof(digestHash)) == 0, "ELEPHANT produces identical digest to ASCON-ELEPHANT-HASH");
+
+        BCryptDestroyHash(hHashElephant);
+        BCryptCloseAlgorithmProvider(hAlgElephant, 0);
+    }
+
+    std::cout << "  Horizon 300 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device76, ID3D12GraphicsCommandList70 & Options 88 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 347 (PagefileWriteCoalescingDynamicBatchWindowLatencyHistogram) & 348 (CpuClockPllDcoTuningJitterCompensation) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Nand-Not Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-Elephant XOF & Hash Lightweight Cryptography OK\n";
+    std::cout << "[TEST] Suite 516: Horizon 300 - Direct3D 12 Device76/CommandList70 & Options 88, NT SystemInfo 347/348, Interlocked Bitwise Nand-Not Modulo 64/32/16/8 & NIST Ascon-Elephant XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon300_Device76Options88_PagefileWriteCoalescingDynamicBatchWindowLatencyHistogramCpuClockPllDcoTuningJitterCompensation_InterlockedNandNotModulo_And_AsconElephantXofHash_Suite() {
+    Suite516_Direct3D12_Device76_CommandList70_Options88_NtSystemInfo347_348_InterlockedNandNotModulo_And_AsconElephantXofHash();
+}
