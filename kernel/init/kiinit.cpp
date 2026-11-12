@@ -68,6 +68,7 @@ extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
 extern "C" bool MicantTestPsTwoUserThreads() noexcept;
+extern "C" bool MicantTestPsThreeUserThreads() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int MicantTestMmManagedProtection() noexcept;
@@ -1199,6 +1200,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestPsTwoUserThreads())
         stopWithError("[MicaNT Ps] Two user threads verification failed\r\n");
     serialWrite("[MicaNT Ps] Two CPL3 threads, TLS slots and event waits verified\r\n");
+    if (!MicantTestPsThreeUserThreads())
+        stopWithError("[MicaNT Ps] Multiple user thread termination failed\r\n");
+    serialWrite("[MicaNT Ps] Three CPL3 thread termination verified\r\n");
     if (micant::hal::amd64::bootstrapQemuFaultTestsAvailable()) {
         if (!micant::hal::amd64::verifyBootstrapTimerInterrupt())
             stopWithError("[MicaNT Hal] Local APIC timer verification failed\r\n");

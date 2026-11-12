@@ -6,7 +6,10 @@
 #include <cstring>
 #include <span>
 
-namespace micant::sys { uint32_t bootstrapSectionObjectCount() noexcept; }
+namespace micant::sys {
+uint32_t bootstrapSectionObjectCount() noexcept;
+uint32_t bootstrapEventObjectCount() noexcept;
+}
 
 namespace {
 const uint8_t nativeDll[]{
@@ -77,26 +80,29 @@ void launch(void* argument) noexcept {
 }
 }
 
-static bool runTwoUserThreads(bool preemptive) noexcept {
+static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
     using namespace micant;
     using namespace micant::ke;
     auto& scheduler = PriorityScheduler::get();
     auto* boot = KeGetCurrentThread();
-    if (!boot || scheduler.getReadyThreadCount()) return false;
+    if (!boot || scheduler.getReadyThreadCount() || threadCount < 2 || threadCount > 3 ||
+        (preemptive && threadCount != 2)) return false;
     const size_t active = mm::PfnDatabase::get().getActiveCount();
     const uint32_t sectionsBefore = sys::bootstrapSectionObjectCount();
+    const uint32_t eventsBefore = sys::bootstrapEventObjectCount();
     uintptr_t previous{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(previous));
     {
         ps::EProcess process;
         ps::EThread first;
         ps::EThread second;
+        ps::EThread third;
         if (process.initializeAddressSpace() != NtStatus::Success) return false;
         Handle sourceFirst{}, sourceSecond{}, eventFirst{}, eventSecond{};
         constexpr uint32_t access = ob::SYNCHRONIZE | 2;
         auto& source = ob::detail::currentHandleTable();
         if (sys::NtCreateEvent(&sourceFirst, access, nullptr, 1, false) != NtStatus::Success ||
-            sys::NtCreateEvent(&sourceSecond, access, nullptr, 1, false) != NtStatus::Success ||
+            sys::NtCreateEvent(&sourceSecond, access, nullptr, 0, false) != NtStatus::Success ||
             source.duplicateHandle(sourceFirst, process.getHandleTable(), eventFirst) != NtStatus::Success ||
             source.duplicateHandle(sourceSecond, process.getHandleTable(), eventSecond) != NtStatus::Success ||
             sys::NtClose(sourceFirst) != NtStatus::Success || sys::NtClose(sourceSecond) != NtStatus::Success ||
@@ -224,12 +230,12 @@ static bool runTwoUserThreads(bool preemptive) noexcept {
         invalidTls = tlsLayout;
         invalidTls.alignment = 3; // Fails after user pages were allocated; reap must roll them back.
         if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::InvalidParameter ||
-            first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread ||
-            first.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout, preemptive) != NtStatus::Success ||
-            second.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout, preemptive) != NtStatus::Success) return false;
-        ps::EThread* threads[]{&first, &second};
-        uintptr_t tebs[2]{}, tlsBlocks[2]{};
-        for (size_t i = 0; i < 2; ++i) {
+            first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        ps::EThread* threads[]{&first, &second, &third};
+        uintptr_t tebs[3]{}, tlsBlocks[3]{};
+        for (size_t i = 0; i < threadCount; ++i) {
+            if (threads[i]->initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout, preemptive) != NtStatus::Success)
+                return false;
             tebs[i] = threads[i]->userTebAddress();
             tlsBlocks[i] = threads[i]->userTlsStorage();
             auto* arguments = reinterpret_cast<uint64_t*>(threads[i]->userStackPointer());
@@ -240,9 +246,10 @@ static bool runTwoUserThreads(bool preemptive) noexcept {
             arguments[4] = counters;
         }
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
-        first.kernelThread()->priority = second.kernelThread()->priority = boot->priority + 1;
-        if (!first.kernelThread()->priority || first.ready() != NtStatus::Success ||
-            second.ready() != NtStatus::Success) return false;
+        for (size_t i = 0; i < threadCount; ++i) {
+            threads[i]->kernelThread()->priority = boot->priority + 1;
+            if (!threads[i]->kernelThread()->priority || threads[i]->ready() != NtStatus::Success) return false;
+        }
         KThread launcher;
         launcher.directoryTableBase = g_CurrentCpu.currentCr3;
         if (!detail::prepareBootstrapThread(launcher, launcherStack, sizeof(launcherStack), launch, boot)) return false;
@@ -250,25 +257,28 @@ static bool runTwoUserThreads(bool preemptive) noexcept {
         const bool switched = KiSwapContext(boot, &launcher);
         KeLowerIrql(oldIrql);
         if (!switched || !process.isTerminating() || process.exitStatus() != NtStatus::AccessDenied ||
-            first.kernelThread()->state != ThreadState::Terminated ||
-            second.kernelThread()->state != ThreadState::Terminated || scheduler.getReadyThreadCount() ||
+            scheduler.getReadyThreadCount() ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
-        const bool tls = process.userPebAddress() &&
-                         reinterpret_cast<um::Teb64*>(tebs[0])->processEnvironmentBlock == process.userPebAddress() &&
-                         reinterpret_cast<um::Teb64*>(tebs[1])->processEnvironmentBlock == process.userPebAddress() &&
-                         reinterpret_cast<um::Teb64*>(tebs[0])->tlsSlots[0] == 0x1111222233334444ULL &&
-                         reinterpret_cast<um::Teb64*>(tebs[1])->tlsSlots[0] == 0xaaaabbbbccccddddULL &&
-                         *reinterpret_cast<uint64_t*>(tlsBlocks[0]) == 0x1234 &&
-                         *reinterpret_cast<uint64_t*>(tlsBlocks[1]) == 0x5678 &&
-                         (!preemptive || (reinterpret_cast<volatile uint64_t*>(counters)[0] &&
-                                          reinterpret_cast<volatile uint64_t*>(counters)[1]));
-        if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tls ||
-            first.reap() != NtStatus::Success || second.reap() != NtStatus::Success ||
-            process.closeAddressSpace() != NtStatus::Success) return false;
+        bool tls = process.userPebAddress() != 0;
+        for (size_t i = 0; i < threadCount; ++i) {
+            const auto* teb = reinterpret_cast<um::Teb64*>(tebs[i]);
+            tls = tls && threads[i]->kernelThread()->state == ThreadState::Terminated &&
+                  teb->processEnvironmentBlock == process.userPebAddress() &&
+                  teb->tlsSlots[0] == (i == 0 ? 0x1111222233334444ULL : 0xaaaabbbbccccddddULL) &&
+                  *reinterpret_cast<uint64_t*>(tlsBlocks[i]) == (i == 0 ? 0x1234u : 0x5678u);
+        }
+        tls = tls && (!preemptive || (reinterpret_cast<volatile uint64_t*>(counters)[0] &&
+                                      reinterpret_cast<volatile uint64_t*>(counters)[1]));
+        if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tls) return false;
+        for (size_t i = 0; i < threadCount; ++i)
+            if (threads[i]->reap() != NtStatus::Success) return false;
+        if (process.closeAddressSpace() != NtStatus::Success) return false;
     }
     return mm::PfnDatabase::get().getActiveCount() == active &&
-        sys::bootstrapSectionObjectCount() == sectionsBefore;
+        sys::bootstrapSectionObjectCount() == sectionsBefore &&
+        sys::bootstrapEventObjectCount() == eventsBefore;
 }
 
-extern "C" bool MicantTestPsTwoUserThreads() noexcept { return runTwoUserThreads(false); }
-extern "C" bool MicantTestPsUserPreemption() noexcept { return runTwoUserThreads(true); }
+extern "C" bool MicantTestPsTwoUserThreads() noexcept { return runUserThreads(false, 2); }
+extern "C" bool MicantTestPsThreeUserThreads() noexcept { return runUserThreads(false, 3); }
+extern "C" bool MicantTestPsUserPreemption() noexcept { return runUserThreads(true, 2); }

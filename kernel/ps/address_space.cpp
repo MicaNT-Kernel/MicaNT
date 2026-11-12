@@ -67,16 +67,16 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
     const auto previous = ke::KeGetCurrentIrql();
     if (current && current->owningProcess == this && current->state == ke::ThreadState::Running &&
         previous <= ke::APC_LEVEL) {
-        ke::KThread* otherActive = nullptr;
+        size_t otherActive = 0;
         bool supported = true;
         for (auto* thread = threads_; thread; thread = thread->processNext) {
             if (thread == current || thread->state == ke::ThreadState::Terminated) continue;
-            if (otherActive || thread->state != ke::ThreadState::Ready ||
+            if (thread->state != ke::ThreadState::Ready ||
                 !thread->readyQueued || !thread->eventWaitInProgress) {
                 supported = false;
                 break;
             }
-            otherActive = thread;
+            ++otherActive;
         }
         if (!supported) {
             result = NtStatus::NotImplemented;
@@ -84,7 +84,7 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
             ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
             auto& scheduler = ke::PriorityScheduler::get();
             if (auto* next = scheduler.selectNextThread()) {
-                if (otherActive && next != otherActive) {
+                if (otherActive && (next->owningProcess != this || !next->eventWaitInProgress)) {
                     next->state = ke::ThreadState::Ready;
                     if (!scheduler.readyKThread(next)) __builtin_trap();
                     ke::KeLowerIrql(previous);

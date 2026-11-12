@@ -19,6 +19,10 @@ void initializeBootstrapEventServices() noexcept {
     eventType.deleteProcedure = deleteEvent;
 }
 
+uint32_t bootstrapEventObjectCount() noexcept {
+    return eventType.totalNumberOfObjects.load(std::memory_order_relaxed);
+}
+
 NtStatus NtCreateEvent(Handle* out, uint32_t access, ObjectAttributes* attributes,
                        uint32_t type, bool initialState) {
     if (!out) return NtStatus::InvalidParameter;
