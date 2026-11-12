@@ -195,6 +195,10 @@ public:
     SpinLock& operator=(const SpinLock&) = delete;
 
     KIRQL acquire() noexcept {
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+#endif
         KIRQL oldIrql = KfRaiseIrql(DISPATCH_LEVEL);
         while (lockFlag_.test_and_set(std::memory_order_acquire)) {
 #if defined(_M_X64) || defined(__x86_64__)
@@ -202,13 +206,22 @@ public:
 #endif
         }
         ownerCpu_ = g_CurrentCpu.processorNumber;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        restoreInterrupts_ = (flags & (uint64_t{1} << 9)) != 0;
+#endif
         return oldIrql;
     }
 
     void release(KIRQL oldIrql) noexcept {
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        const bool restoreInterrupts = restoreInterrupts_;
+#endif
         ownerCpu_ = 0xFFFFFFFF;
         lockFlag_.clear(std::memory_order_release);
         KeLowerIrql(oldIrql);
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+        if (restoreInterrupts) __asm__ __volatile__("sti" : : : "memory");
+#endif
     }
 
     [[nodiscard]] bool isLocked() const noexcept {
@@ -218,6 +231,9 @@ public:
 private:
     std::atomic_flag lockFlag_ = ATOMIC_FLAG_INIT;
     uint32_t ownerCpu_{0xFFFFFFFF};
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    bool restoreInterrupts_{false};
+#endif
 };
 
 /**

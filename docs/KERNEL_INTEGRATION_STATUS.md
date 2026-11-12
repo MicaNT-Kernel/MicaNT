@@ -95,6 +95,11 @@ configuration and gates, and checks that IF remains disabled. The timer's
 frequency is not calibrated and its prior countdown phase is not preserved.
 This test does not enable interrupts in normal operation and does not yet
 connect clock ticks to Ke, implement hardware IRQL, or preempt threads.
+On the bare-metal BSP, Ke spinlocks now mask interrupts on acquisition and
+restore the saved IF state on release. The same timer diagnostic verifies
+that no tick is delivered while nested locks are held and that interrupts
+resume after the outer lock is released. This all-interrupt masking is a
+bootstrap serialization measure, not the complete NT IRQL contract.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
 The local ReactOS `hal/halx86/generic/timer.c` and `ntoskrnl/ke/time.c`
 were consulted for clock interrupt and dispatch ordering, without copying code.

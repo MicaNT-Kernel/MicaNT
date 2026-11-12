@@ -5,6 +5,7 @@
 #include "micant/shared/win32k_client.h"
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/usermode.hpp"
+#include "micant/km/core/ke.hpp"
 
 namespace {
 
@@ -1566,6 +1567,20 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     apic[0x320 / 4] = 0xd1 | (1u << 17); // Periodic, unmasked.
     apic[0x380 / 4] = 100000;
     __asm__ __volatile__("sti" : : : "memory");
+    ke::SpinLock lock;
+    const ke::KIRQL oldIrql = lock.acquire();
+    ke::SpinLock nested;
+    const ke::KIRQL nestedIrql = nested.acquire();
+    nested.release(nestedIrql);
+    uint64_t lockedFlags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(lockedFlags));
+    const uint64_t beforeLockedWait = MicantTimerTicks;
+    for (size_t spin = 0; spin < 200000; ++spin) __asm__ __volatile__("pause");
+    const bool lockMaskedInterrupts = !(lockedFlags & (uint64_t{1} << 9)) &&
+        MicantTimerTicks == beforeLockedWait;
+    lock.release(oldIrql);
+    uint64_t releasedFlags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(releasedFlags));
     for (size_t spin = 0; spin < 50000000 && MicantTimerTicks < 3; ++spin)
         __asm__ __volatile__("pause");
     __asm__ __volatile__("cli" : : : "memory");
@@ -1580,7 +1595,8 @@ bool verifyBootstrapTimerInterrupt() noexcept {
             __asm__ __volatile__("pause");
         __asm__ __volatile__("cli" : : : "memory");
     }
-    const bool success = MicantTimerTicks >= 3 && !(apic[timerIrr] & timerBit);
+    const bool success = lockMaskedInterrupts && (releasedFlags & (uint64_t{1} << 9)) &&
+        MicantTimerTicks >= 3 && !(apic[timerIrr] & timerBit);
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
     apic[0x80 / 4] = savedTpr;

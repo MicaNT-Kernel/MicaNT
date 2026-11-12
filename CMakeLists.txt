@@ -263,7 +263,7 @@ if (MICANT_ENABLE_BAREMETAL)
         "${CMAKE_SOURCE_DIR}/tools"
         "${CMAKE_CURRENT_BINARY_DIR}"
     )
-    target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_FREESTANDING)
+    target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_FREESTANDING MICANT_BAREMETAL)
     if (MICANT_BOOTSTRAP_RUNTIME_SELFTEST)
         target_sources(ntoskrnl_core_baremetal PRIVATE test/kernel_cxx_lifecycle_fixture.cpp)
         target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
