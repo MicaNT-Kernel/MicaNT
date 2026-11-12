@@ -245,12 +245,16 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             arguments[2] = i;
             arguments[3] = code + imports.firstThunk;
             arguments[4] = counters;
-            arguments[5] = threadCount == 3 ? 1 : 0;
+            arguments[5] = threadCount == 3 || preemptive ? 1 : 0;
         }
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
         for (size_t i = 0; i < threadCount; ++i) {
             threads[i]->kernelThread()->priority = boot->priority + 1;
             if (!threads[i]->kernelThread()->priority || threads[i]->ready() != NtStatus::Success) return false;
+        }
+        if (preemptive) {
+            first.kernelThread()->quantumRemaining = 1;
+            second.kernelThread()->quantumRemaining = 1000;
         }
         KThread launcher;
         launcher.directoryTableBase = g_CurrentCpu.currentCr3;

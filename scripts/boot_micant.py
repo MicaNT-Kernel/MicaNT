@@ -65,6 +65,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ps] Bounded native PE mapping and compiled user entry verified",
     "[MicaNT Input] PS/2 mouse polling initialized",
     "[MicaNT Explorer] Shell idle loop entered",
+    "[MicaNT Ke] Runtime scheduler clock ticking",
 )
 
 def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:

@@ -1030,10 +1030,23 @@ bool pollMouseInput(MicaWin32kInputEvent& event) noexcept {
     return false;
 }
 
-[[noreturn]] void runMouseShell() noexcept {
+[[noreturn]] void runMouseShell(bool clockActive) noexcept {
     drawMouseCursor(g_mouseX, g_mouseY);
+    if (clockActive) {
+        const uint64_t initialTicks = micant::hal::amd64::bootstrapSchedulerClockTicks();
+        __asm__ __volatile__("sti" : : : "memory");
+        for (size_t spin = 0; spin < 50000000 &&
+             micant::hal::amd64::bootstrapSchedulerClockTicks() - initialTicks < 3; ++spin)
+            __asm__ __volatile__("pause");
+        if (micant::hal::amd64::bootstrapSchedulerClockTicks() - initialTicks < 3 ||
+            micant::hal::amd64::bootstrapSchedulerClockFailed())
+            stopWithError("[MicaNT Ke] Runtime scheduler clock failed\r\n");
+        serialWrite("[MicaNT Ke] Runtime scheduler clock ticking\r\n");
+    }
     uint32_t buttons{};
     for (;;) {
+        if (clockActive && micant::hal::amd64::bootstrapSchedulerClockFailed())
+            stopWithError("[MicaNT Ke] Runtime scheduler dispatch failed\r\n");
         MicaWin32kInputEvent event{};
         if (pollMouseInput(event)) {
             if ((event.buttons & 1) && !(buttons & 1)) {
@@ -1222,8 +1235,12 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Input] PS/2 mouse initialization failed\r\n");
     }
     serialWrite("[MicaNT Input] PS/2 mouse polling initialized\r\n");
+    const bool clockActive = micant::hal::amd64::startBootstrapSchedulerClock();
+    if (clockActive && !micant::hal::amd64::verifyBootstrapSchedulerClock())
+        stopWithError("[MicaNT Ke] Runtime scheduler preemption failed\r\n");
+    if (!clockActive) serialWrite("[MicaNT Ke] Runtime scheduler clock unavailable\r\n");
     serialWrite("[MicaNT Explorer] Shell idle loop entered\r\n");
-    runMouseShell();
+    runMouseShell(clockActive);
 }
 
 #else

@@ -48,6 +48,12 @@ bool verifyRing3Transition() noexcept;
 bool verifyManagedExecutablePage() noexcept;
 // Temporary BSP-only xAPIC timer diagnostic; leaves interrupts disabled.
 bool verifyBootstrapTimerInterrupt() noexcept;
+// Starts the bounded BSP xAPIC scheduler clock after the diagnostic restores
+// controller state. Legacy PIC and other local vectors remain masked.
+bool startBootstrapSchedulerClock() noexcept;
+bool verifyBootstrapSchedulerClock() noexcept;
+bool bootstrapSchedulerClockFailed() noexcept;
+uint64_t bootstrapSchedulerClockTicks() noexcept;
 
 struct UserServiceArguments {
     uint64_t number, first, second, third, fourth, userStack;

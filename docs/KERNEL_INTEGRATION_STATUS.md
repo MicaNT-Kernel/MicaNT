@@ -120,9 +120,16 @@ bounded test runs two process-owned CPL3 contexts with interrupts enabled:
 both must advance shared counters before either issues a syscall, so the
 second context can run only after timer preemption. It also checks GPR and
 XMM canaries, separate TLS, event synchronization, process exit and cleanup.
-Interrupts and timer preemption remain disabled in normal operation; AVX and
-other extended XSAVE state and full hardware IRQL are not implemented.
-On each diagnostic clock tick Ke now selects a higher-priority ready thread
+After the diagnostic restores the controller, the bootstrap can install a
+persistent BSP xAPIC scheduler clock. QEMU reruns the CPL3 preemption test
+with this clock active and user IF preserved across syscalls, then verifies
+ongoing ticks during the normal polling loop and PS/2 input. The interval is
+not calibrated, the legacy PIC and other local APIC vectors remain masked,
+and x2APIC is unsupported; if setup is unavailable the kernel logs that the
+clock is unavailable and keeps the previous interrupt-disabled loop. AVX and
+other extended XSAVE state, full hardware IRQL, calibrated time and general
+interrupt routing are not implemented.
+On each scheduler clock tick Ke now selects a higher-priority ready thread
 without waiting for quantum expiration; equal-priority threads rotate at the
 quantum boundary, and a lower-priority ready thread does not displace the
 running thread. The queue test checks these three cases and rejected-switch
@@ -223,7 +230,7 @@ The test now allocates a minimal user TEB and the context switch sets the
 thread's GS base; CPL3 writes and reads its first TEB TLS slot, and the test
 checks the stored value and bootstrap GS restoration after exit. This is not
 static PE TLS initialization. The entry
-normally leaves interrupts disabled; the bootstrap syscall/GS handling is
+ can enable interrupts when the scheduler clock owns the routing; the bootstrap syscall/GS handling is
 not a general user-thread context switch.
 
 A second QEMU test runs two Ps-owned CPL3 threads from one manually mapped
@@ -275,6 +282,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | Check | Result |
 |---|---|
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ, timer-preempted kernel and CPL3 contexts, register canaries, existing boot, scanout and input checks |
+| `python3 qemu.py --headless` | Passed; persistent BSP scheduler clock, CPL3 preemption with syscall IF preservation, idle ticks and polled PS/2 input |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
 | `python3 qemu.py --headless` | Passed; Ps image loading through Mm/Ob sections and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS rollback and PFN/Ob cleanup |

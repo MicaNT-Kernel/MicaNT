@@ -45,6 +45,7 @@ volatile bool g_probeSucceeded{};
 uint32_t g_probeMode{};
 uint64_t g_probeReturnRip{};
 micant::hal::amd64::UserServiceRoutine g_dispatch{};
+bool g_schedulerClockActive{};
 alignas(16) uint8_t g_syscallStack[65536]{};
 struct SyscallCpuState {
     uint64_t userRsp;
@@ -318,9 +319,12 @@ void MicantBootstrapTimerDispatch() noexcept {
     g_CurrentCpu.currentIrql = DISPATCH_LEVEL;
     auto* current = KeGetCurrentThread();
     auto& scheduler = PriorityScheduler::get();
-    if (!current || !current->kernelStackTop ||
-        g_syscallCpu.kernelRsp != current->kernelStackTop ||
-        micant::cpu::CpuHardwareEngine::get().getTss().rsp0 != current->kernelStackTop)
+    const uintptr_t expectedSyscallStack = current && current->kernelStackTop ? current->kernelStackTop :
+        reinterpret_cast<uintptr_t>(g_syscallStack + sizeof(g_syscallStack));
+    const uintptr_t expectedInterruptStack = current && current->kernelStackTop ? current->kernelStackTop :
+        reinterpret_cast<uintptr_t>(g_kernelStack + sizeof(g_kernelStack));
+    if (!current || g_syscallCpu.kernelRsp != expectedSyscallStack ||
+        micant::cpu::CpuHardwareEngine::get().getTss().rsp0 != expectedInterruptStack)
         MicantTimerDispatchFailed = true;
     if (MicantTimerBootThread && MicantTimerTicks >= 24 && !MicantTimerBootQueued) {
         if (!scheduler.readyKThread(MicantTimerBootThread)) MicantTimerDispatchFailed = true;
@@ -423,8 +427,8 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
         frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp
     };
     frame->rax = g_dispatch(args);
-    // Interrupts remain disabled until the bootstrap owns hardware IRQ routing.
-    frame->flags = (frame->flags & 0xCD5) | 2;
+    // Preserve user IF only after the BSP scheduler clock owns IRQ routing.
+    frame->flags = (frame->flags & (g_schedulerClockActive ? 0xED5 : 0xCD5)) | 2;
 }
 
 __attribute__((naked)) void MicantBootstrapSyscallEntry() {
@@ -1843,6 +1847,55 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     if (!restored && g_log) g_log("[MicaNT Hal] Timer state restoration failed\r\n");
     return success && restored;
 }
+
+bool startBootstrapSchedulerClock() noexcept {
+    if (g_schedulerClockActive || !g_dispatch || !bootstrapPagingContext() ||
+        !ke::KeGetCurrentThread()) return false;
+    uint64_t flags{};
+    Idtr current{};
+    __asm__ __volatile__("pushfq; popq %0; sidt %1" : "=r"(flags), "=m"(current));
+    if ((flags & (uint64_t{1} << 9)) || current.base != reinterpret_cast<uint64_t>(g_idt)) return false;
+    uint32_t eax = 1, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (!(edx & (1u << 9))) return false;
+    const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
+    if (!(apicBase & (1u << 11)) || (apicBase & (1u << 10))) return false;
+    auto* apic = static_cast<volatile uint32_t*>(mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
+    if (!apic || ((apic[0x30 / 4] >> 16) & 0xff) < 5 ||
+        !(apic[0x320 / 4] & (1u << 16))) return false;
+
+    // Only the clock vector is routed in this bootstrap configuration.
+    __asm__ __volatile__("outb %0, $0x21; outb %0, $0xa1" : : "a"(uint8_t{0xff}));
+    constexpr uint32_t localVectors[]{0x320, 0x330, 0x340, 0x350, 0x360, 0x370};
+    for (const auto offset : localVectors) apic[offset / 4] = apic[offset / 4] | (1u << 16);
+    const auto gate = [](uint64_t handler) noexcept {
+        return InterruptGate{static_cast<uint16_t>(handler), cpu::SELECTOR_KCODE64, 0, 0x8e,
+                             static_cast<uint16_t>(handler >> 16), static_cast<uint32_t>(handler >> 32), 0};
+    };
+    g_idt[0xd1] = gate(reinterpret_cast<uint64_t>(MicantBootstrapTimerInterrupt));
+    g_idt[0xff] = gate(reinterpret_cast<uint64_t>(MicantBootstrapSpuriousInterrupt));
+    MicantTimerTicks = 0;
+    MicantTimerEoi = apic + 0xb0 / 4;
+    MicantTimerBootThread = nullptr;
+    MicantTimerDispatchFailed = false;
+    MicantTimerPreemptionEnabled = true;
+    apic[0x80 / 4] = 0;
+    apic[0xf0 / 4] = (apic[0xf0 / 4] & ~0xffu) | 0x1ff;
+    apic[0x3e0 / 4] = 0xb;
+    apic[0x320 / 4] = 0xd1 | (1u << 17);
+    apic[0x380 / 4] = 100000; // Bootstrap interval; calibration remains outstanding.
+    g_schedulerClockActive = true;
+    return true;
+}
+
+bool verifyBootstrapSchedulerClock() noexcept {
+    if (!g_schedulerClockActive) return false;
+    const uint64_t before = MicantTimerTicks;
+    return MicantTestPsUserPreemption() && MicantTimerTicks > before && !MicantTimerDispatchFailed;
+}
+
+bool bootstrapSchedulerClockFailed() noexcept { return MicantTimerDispatchFailed; }
+uint64_t bootstrapSchedulerClockTicks() noexcept { return MicantTimerTicks; }
 
 bool verifyRing3Transition() noexcept {
     if (!g_addressSpaceReady ||
