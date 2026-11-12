@@ -137,6 +137,18 @@ The bootstrap dispatcher can also block the current kernel thread and wake it
 through the canonical ready queue. QEMU exercises two waiting/resuming threads,
 the no-runnable-thread case and rollback when a selected context is invalid.
 This is an internal primitive, not yet an NT event wait, timeout or APC path.
+The freestanding Ke synchronization implementation now has a BSP-only
+internal event wait queue built on that primitive. QEMU checks a pair of
+kernel contexts handing off through synchronization events, notification of
+two simultaneous waiters, retained notification state, auto-reset state and
+cleanup after a wait fails for lack of a runnable thread. Event storage must
+outlive its waiters; this is not yet an Ob event, exported KEVENT ABI, NT
+wait service, timed or alertable wait, priority boost, or SMP implementation.
+The event semantics were checked against
+[KeInitializeEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent)
+and [KeSetEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent);
+ReactOS `ntoskrnl/ke/eventobj.c` and `ntoskrnl/ke/wait.c` were consulted as
+architectural references, without copying code.
 
 Freestanding Ps now owns a bounded kernel-thread lifecycle: it allocates a
 resident kernel stack and Ke context, attaches the thread to its process root,
@@ -159,6 +171,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | Check | Result |
 |---|---|
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
+| `python3 qemu.py --headless` | Passed; internal Ke event wait/wake, two notification waiters and event-state checks |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
 
 ### Bootstrap VAD reserve, commit, protection and release

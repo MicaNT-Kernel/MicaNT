@@ -1,5 +1,8 @@
 #pragma once
 
+#if defined(MICANT_FREESTANDING)
+#include "micant/km/core/sync_baremetal.hpp"
+#else
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -993,3 +996,4 @@ namespace micant::ke {
     using sync::KeQueryDispatcherTelemetry;
     using sync::KeResetDispatcherTelemetryForTesting;
 } // namespace micant::ke
+#endif

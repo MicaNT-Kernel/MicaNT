@@ -6,4 +6,4 @@
 | M4 — Processi e thread | Parziale | Lifecycle limitato dei thread kernel Ps, rollback prima dell'avvio e rilascio stack verificati in QEMU. | Oggetti attendibili Ob, creazione e terminazione native di processi e thread. |
 | M5 — Syscall NT | Parziale | Section, close e allocazione/rilascio della memoria corrente esercitati da CPL3. | Servizi di processo, thread, attesa, sincronizzazione e terminazione. |
 | M6 — Processo PE Ring 3 | Non completata | Parser PE e protezione RX esercitati separatamente. | Image section, loader di processo, PEB/TEB, primo thread e terminazione integrati. |
-| M7 — Due thread, TLS e sincronizzazione | Non completata | Primitiva Ke block/wake kernel verificata. | Due thread utente reali, TLS indipendente, evento e status di uscita verificabile. |
+| M7 — Due thread, TLS e sincronizzazione | Non completata | Attesa e risveglio di thread kernel su eventi interni Ke verificati in QEMU. | Due thread utente reali, TLS indipendente, evento NT e status di uscita verificabile. |
