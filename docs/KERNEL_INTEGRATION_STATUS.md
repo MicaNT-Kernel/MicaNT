@@ -161,6 +161,17 @@ and [ZwWaitForSingleObject](https://learn.microsoft.com/en-us/windows-hardware/d
 ReactOS `ntoskrnl/ke/eventobj.c` and `ntoskrnl/ke/wait.c` were consulted as
 architectural references, without copying code.
 
+On the BSP, each Ke context switch now selects the incoming thread's resident
+kernel stack for syscall entry and updates `TSS.RSP0` after the TSS is active;
+the bootstrap thread uses its original fallback stacks. The QEMU Ps thread
+test checks the selected syscall stack and its restoration, while the timer
+preemption test checks both stack values on each worker interrupt and after
+return to bootstrap. No syscall was issued by those worker contexts: a real
+user-thread transition, per-thread GS/TEB state and blocking syscall still
+need integrated verification. ReactOS `ntoskrnl/ke/amd64/thrdini.c` was
+consulted for the TSS stack update; the hardware reference is the Intel SDM
+linked below.
+
 Freestanding Ps now owns a bounded kernel-thread lifecycle: it allocates a
 resident kernel stack and Ke context, attaches the thread to its process root,
 queues and runs it, and reaps the terminated thread from another context before

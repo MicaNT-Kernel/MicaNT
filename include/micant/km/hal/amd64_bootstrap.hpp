@@ -54,6 +54,9 @@ struct UserServiceArguments {
 };
 using UserServiceRoutine = uint64_t (*)(const UserServiceArguments&) noexcept;
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
+// Single-BSP context-switch hook; zero selects the bootstrap entry stacks.
+void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept;
+uintptr_t bootstrapThreadSyscallStack() noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;
 bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept;

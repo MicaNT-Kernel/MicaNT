@@ -262,6 +262,9 @@ public:
     }
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_initialized; }
+    // BSP context switch updates the privilege-transition stack. IST remains
+    // a separate fault stack and is not changed here.
+    void setKernelStack(uint64_t stackTop) noexcept { m_tss.rsp0 = stackTop; }
     [[nodiscard]] const GdtTable64& getGdt() const noexcept { return m_gdt; }
     [[nodiscard]] const TaskStateSegment64& getTss() const noexcept { return m_tss; }
     [[nodiscard]] const Gdtr64& getGdtr() const noexcept { return m_gdtr; }

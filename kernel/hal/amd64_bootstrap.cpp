@@ -318,6 +318,10 @@ void MicantBootstrapTimerDispatch() noexcept {
     g_CurrentCpu.currentIrql = DISPATCH_LEVEL;
     auto* current = KeGetCurrentThread();
     auto& scheduler = PriorityScheduler::get();
+    if (!current || !current->kernelStackTop ||
+        g_syscallCpu.kernelRsp != current->kernelStackTop ||
+        micant::cpu::CpuHardwareEngine::get().getTss().rsp0 != current->kernelStackTop)
+        MicantTimerDispatchFailed = true;
     if (MicantTimerTicks >= 24 && !MicantTimerBootQueued) {
         if (!scheduler.readyKThread(MicantTimerBootThread)) MicantTimerDispatchFailed = true;
         else MicantTimerBootQueued = true;
@@ -892,6 +896,18 @@ __attribute__((naked)) void MicantProbeEnter() {
 }
 
 namespace micant::hal::amd64 {
+
+void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept {
+    g_syscallCpu.kernelRsp = stackTop ? stackTop :
+        reinterpret_cast<uintptr_t>(g_syscallStack + sizeof(g_syscallStack));
+    auto& hardware = cpu::CpuHardwareEngine::get();
+    if (hardware.isInitialized()) {
+        hardware.setKernelStack(stackTop ? stackTop :
+            reinterpret_cast<uintptr_t>(g_kernelStack + sizeof(g_kernelStack)));
+    }
+}
+
+uintptr_t bootstrapThreadSyscallStack() noexcept { return g_syscallCpu.kernelRsp; }
 
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept {
     g_log = log;
@@ -1674,6 +1690,10 @@ static bool verifyBootstrapPreemption() noexcept {
     KeLowerIrql(previous);
     const bool success = switched && MicantTimerBootQueued && !MicantTimerDispatchFailed &&
         firstState.iterations && secondState.iterations && !firstState.corrupted && !secondState.corrupted &&
+        g_syscallCpu.kernelRsp == (boot->kernelStackTop ? boot->kernelStackTop :
+            reinterpret_cast<uintptr_t>(g_syscallStack + sizeof(g_syscallStack))) &&
+        cpu::CpuHardwareEngine::get().getTss().rsp0 == (boot->kernelStackTop ? boot->kernelStackTop :
+            reinterpret_cast<uintptr_t>(g_kernelStack + sizeof(g_kernelStack))) &&
         g_CurrentCpu.currentThread == boot && g_CurrentCpu.contextSwitches >= switches + 4;
     const bool removedFirst = scheduler.removeReadyThread(&first);
     const bool removedSecond = scheduler.removeReadyThread(&second);

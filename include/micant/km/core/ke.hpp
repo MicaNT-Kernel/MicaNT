@@ -855,6 +855,7 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming, bool prequeued =
     if (hardwareCr3 != incoming->directoryTableBase &&
         !hal::amd64::switchProcessPagingRootByPhysical(incoming->directoryTableBase)) return false;
     g_CurrentCpu.currentCr3 = incoming->directoryTableBase;
+    hal::amd64::setBootstrapThreadEntryStack(incoming->kernelStackTop);
 
     if (outgoing->state == ThreadState::Running) {
         outgoing->state = ThreadState::Ready;

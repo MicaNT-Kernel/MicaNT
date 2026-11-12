@@ -15,6 +15,7 @@ void threadEntry(void* argument) noexcept {
     uintptr_t cr3{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(cr3));
     if (!current || !state.owner || state.owner->cancelBeforeStart() != micant::NtStatus::InvalidParameter ||
+        micant::hal::amd64::bootstrapThreadSyscallStack() != current->kernelStackTop ||
         current->owningProcess != state.process ||
         cr3 != state.process->getDirectoryTableBase() ||
         !micant::ke::PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
@@ -29,6 +30,7 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
     auto* boot = KeGetCurrentThread();
     if (!boot || scheduler.getReadyThreadCount()) return false;
     const size_t active = mm::PfnDatabase::get().getActiveCount();
+    const uintptr_t bootEntryStack = hal::amd64::bootstrapThreadSyscallStack();
     {
         ps::EProcess process;
         ps::EThread thread;
@@ -58,6 +60,7 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
         const bool switched = KiSwapContext(boot, next);
         KeLowerIrql(previous);
         if (!switched || !state.ran || KeGetCurrentThread() != boot ||
+            hal::amd64::bootstrapThreadSyscallStack() != bootEntryStack ||
             next->state != ThreadState::Terminated || scheduler.getReadyThreadCount() ||
             thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
             return false;
