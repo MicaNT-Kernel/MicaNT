@@ -17,6 +17,7 @@ constexpr uint64_t kUser = 4;
 constexpr uint64_t kNoExecute = uint64_t{1} << 63;
 constexpr uint64_t kPhysicalMask = 0x000FFFFFFFFFF000ULL;
 constexpr uint64_t kOwnedTable = uint64_t{1} << 9;
+constexpr uint64_t kGuardLeaf = uint64_t{1} << 10;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
 constexpr uint64_t kUserTebBase = kUserBase + 0x8000;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
@@ -295,7 +296,7 @@ bool unmapPage(uint64_t address, bool user) noexcept {
         tables[level++] = table;
     }
     uint64_t& leaf = table[(address >> 12) & 511];
-    if (!(leaf & kPresent)) return false;
+    if (!(leaf & kPresent) && !(leaf & kGuardLeaf)) return false;
     leaf = 0;
     invalidatePage(address);
     auto& database = micant::mm::PfnDatabase::get();
@@ -782,9 +783,9 @@ void MicantSyscallClientProgram() {
         create(&section, 4, &attributes, &maximum, 4, 0x08000000, nullptr) ||
         map(section, current, &first, 0, 0, nullptr, &firstSize, 2, 0, 4) !=
             static_cast<int32_t>(0xc0000022u) ||
-        map(section, current, &first, 0, 0, nullptr, &firstSize, 1, 0, 2) !=
-            static_cast<int32_t>(0xc0000002u) ||
-        first || close(section)) __builtin_trap();
+        map(section, current, &first, 0, 0, nullptr, &firstSize, 1, 0, 2) ||
+        !first || unmap(current, first) || close(section)) __builtin_trap();
+    first = nullptr;
     section = nullptr;
     if (create(&section, 6, nullptr, &maximum, 4, 0x08000000, nullptr) ||
         map(section, current, &first, 0, 0, nullptr, &firstSize, 2, 0, 4) ||
@@ -1144,14 +1145,20 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb, bool sy
 uintptr_t bootstrapThreadSyscallStack() noexcept { return g_syscallCpu.kernelRsp; }
 
 extern "C" __attribute__((naked, noreturn)) void MicantEnterBootstrapUserThread(
-    uintptr_t, uintptr_t, bool) noexcept {
+    uintptr_t, uintptr_t, bool, uintptr_t, uintptr_t) noexcept {
     __asm__ __volatile__(
-        "movw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
+        "movq 40(%rsp), %r11\nmovw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
         "pushq $0x2b\npushq %rdx\nmovq $2, %rax\ntestb %r8b, %r8b\njz 1f\n"
-        "orq $0x200, %rax\n1: pushq %rax\npushq $0x33\npushq %rcx\niretq\n");
+        "orq $0x200, %rax\n1: pushq %rax\npushq $0x33\npushq %rcx\n"
+        "testq %r9, %r9\njz 2f\nmovq %r9, %rcx\nmovq %r11, %rdx\n"
+        "xorq %rax, %rax\nxorq %rbx, %rbx\nxorq %rbp, %rbp\n"
+        "xorq %rsi, %rsi\nxorq %rdi, %rdi\nxorq %r8, %r8\nxorq %r9, %r9\n"
+        "xorq %r10, %r10\nxorq %r11, %r11\nxorq %r12, %r12\nxorq %r13, %r13\n"
+        "xorq %r14, %r14\nxorq %r15, %r15\n2: iretq\n");
 }
 
-[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack, bool interruptible) noexcept {
+[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack, bool interruptible,
+                                            uintptr_t startRoutine, uintptr_t startArgument) noexcept {
     const auto* thread = ke::KeGetCurrentThread();
     if (!g_dispatch || (interruptible && !MicantTimerPreemptionEnabled) ||
         !thread || !thread->owningProcess || !thread->kernelStackTop ||
@@ -1160,7 +1167,7 @@ extern "C" __attribute__((naked, noreturn)) void MicantEnterBootstrapUserThread(
         __builtin_trap();
     if (thread->tebAddress && !bootstrapUserRange(thread->tebAddress, 1, true)) __builtin_trap();
     cpu::cpuWrmsr(cpu::MSR_GS_BASE, thread->tebAddress);
-    MicantEnterBootstrapUserThread(entry, userStack, interruptible);
+    MicantEnterBootstrapUserThread(entry, userStack, interruptible, startRoutine, startArgument);
 }
 
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept {
@@ -1527,6 +1534,28 @@ bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
     if (!(leaf & kPresent) || !(leaf & kUser)) return false;
     leaf = protection == mm::PAGE_READWRITE ? leaf | kWritable : leaf & ~kWritable;
     leaf = protection == mm::PAGE_EXECUTE_READ ? leaf & ~kNoExecute : leaf | kNoExecute;
+    invalidatePage(address);
+    return true;
+}
+
+bool mapBootstrapGuardManagedPage(void* context, uintptr_t address, bool guarded) noexcept {
+    if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
+        address - BootstrapManagedBase >= BootstrapManagedSize || (address & mm::PageMask4KB)) return false;
+    uint64_t* table = activePagingRoot();
+    for (int shift = 39; shift > 12; shift -= 9) {
+        const uint64_t entry = table[(address >> shift) & 511];
+        if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) || !(entry & kUser)) return false;
+        table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
+    }
+    uint64_t& leaf = table[(address >> 12) & 511];
+    if (!(leaf & kUser) || !(leaf & kWritable)) return false;
+    if (guarded) {
+        if (!(leaf & kPresent) || (leaf & kGuardLeaf)) return false;
+        leaf = (leaf & ~kPresent) | kGuardLeaf;
+    } else {
+        if ((leaf & kPresent) || !(leaf & kGuardLeaf)) return false;
+        leaf = (leaf | kPresent) & ~kGuardLeaf;
+    }
     invalidatePage(address);
     return true;
 }
@@ -2305,8 +2334,8 @@ bool startBootstrapSchedulerClock() noexcept {
         !(apic[0x320 / 4] & (1u << 16))) return false;
     uint32_t interval{};
     if (!calibrateBootstrapApic(apic, interval)) return false;
-    auto* currentThread = ke::KeGetCurrentThread();
-    g_bootstrapIdleThread.directoryTableBase = currentThread->directoryTableBase;
+    // Idle outlives every process; never retain the caller's disposable CR3.
+    g_bootstrapIdleThread.directoryTableBase = bootstrapKernelPagingRoot();
     g_bootstrapIdleThread.priority = ke::PRIORITY_IDLE;
     if (!ke::detail::prepareBootstrapThread(g_bootstrapIdleThread, g_bootstrapIdleStack,
             sizeof(g_bootstrapIdleStack), bootstrapIdle, nullptr)) return false;

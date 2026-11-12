@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string_view>
 #include <concepts>
 #include "micant/shared/ntstatus.hpp"
@@ -322,6 +323,22 @@ struct ClientId {
     Handle uniqueProcess{0};
     Handle uniqueThread{0};
 };
+
+// Native process/thread creation attribute ABI (AMD64).
+struct PsAttribute {
+    uintptr_t attribute{};
+    size_t size{};
+    uintptr_t value{};
+    size_t* returnLength{};
+};
+struct PsAttributeList {
+    size_t totalLength{};
+    PsAttribute attributes[1]{};
+};
+static_assert(sizeof(PsAttribute) == 4 * sizeof(uintptr_t));
+static_assert(offsetof(PsAttributeList, attributes) == sizeof(uintptr_t));
+inline constexpr uintptr_t PS_ATTRIBUTE_CLIENT_ID = 0x10003;
+inline constexpr uintptr_t PS_ATTRIBUTE_TEB_ADDRESS = 0x10004;
 
 inline constexpr uint32_t MAXIMUM_WAIT_OBJECTS = 64;
 

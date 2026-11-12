@@ -24,6 +24,7 @@ struct Mapper {
     int failUnmap{-1};
     int failProtect{-1};
     int failProtectRollback{-1};
+    bool failGuard{false};
     size_t maps{0};
     size_t unmaps{0};
 };
@@ -62,6 +63,16 @@ bool protect(void* context, uintptr_t va, uint32_t protection) noexcept {
     m.protection[index] = protection;
     return true;
 }
+
+bool guard(void* context, uintptr_t va, bool guarded) noexcept {
+    auto& m = *static_cast<Mapper*>(context);
+    if (va < Base || va >= Base + Pages * PageSize4KB || (va & PageMask4KB)) return false;
+    const auto index = (va - Base) / PageSize4KB;
+    if (m.failGuard || !m.frames[index] ||
+        m.protection[index] != (PAGE_READWRITE | (guarded ? 0 : PAGE_GUARD))) return false;
+    m.protection[index] = PAGE_READWRITE | (guarded ? PAGE_GUARD : 0);
+    return true;
+}
 }
 
 #if defined(MICANT_FREESTANDING)
@@ -73,7 +84,7 @@ int main() {
     PhysicalPageRange range{1, Pages};
     assert(db.initializeFromBootMemory(entries, {&range, 1}, zero) == NtStatus::Success);
     Mapper mapper;
-    const ProcessAddressSpace::PagingBackend backend{&mapper, map, unmap, protect};
+    const ProcessAddressSpace::PagingBackend backend{&mapper, map, unmap, protect, nullptr, nullptr, guard};
     {
         ProcessAddressSpace space;
         assert(!space.configurePagingBackend(backend, Base + 1, Pages * PageSize4KB));
@@ -131,6 +142,16 @@ int main() {
         assert(space.protect(Base + 2 * PageSize4KB, PageSize4KB, PAGE_READWRITE, &oldProtect)
                == NtStatus::Success);
         assert(oldProtect == PAGE_READONLY && mapper.protection[2] == PAGE_READWRITE);
+        assert(space.setStackGuard(Base + PageSize4KB + 1, true) == NtStatus::InvalidParameter);
+        mapper.failGuard = true;
+        assert(space.setStackGuard(Base + PageSize4KB, true) == NtStatus::Unsuccessful);
+        assert(mapper.protection[1] == PAGE_READWRITE);
+        mapper.failGuard = false;
+        assert(space.setStackGuard(Base + PageSize4KB, true) == NtStatus::Success);
+        assert(mapper.protection[1] == (PAGE_READWRITE | PAGE_GUARD));
+        assert(space.setStackGuard(Base + PageSize4KB, true) == NtStatus::InvalidParameter);
+        assert(space.setStackGuard(Base + PageSize4KB, false) == NtStatus::Success);
+        assert(mapper.protection[1] == PAGE_READWRITE);
         oldProtect = 123;
         assert(space.protect(Base, PageSize4KB, PAGE_READONLY, &oldProtect) == NtStatus::Conflict);
         assert(oldProtect == 123);

@@ -39,5 +39,18 @@ int main() {
     assert(table.getActiveHandleCount() == 0);
     assert(object.pointerCount == 1 && object.handleCount == 0);
     assert(object.handleInfo.handleCount == 0 && type.totalNumberOfHandles == 0);
+    ob::HandleTable parent, child;
+    Handle inherited{}, privateHandle{};
+    assert(parent.createHandle(&object, inherited, access) == NtStatus::Success);
+    assert(parent.setHandleAttributes(inherited, OBJ_INHERIT) == NtStatus::Success);
+    assert(parent.createHandle(&object, privateHandle, access) == NtStatus::Success);
+    assert(child.inheritHandlesFrom(parent) == NtStatus::Success);
+    assert(child.lookup(inherited, &granted) == &object && granted == access);
+    assert(child.lookup(privateHandle) == nullptr && object.handleCount == 3);
+    assert(child.inheritHandlesFrom(parent) == NtStatus::InvalidParameter);
+    assert(parent.closeHandle(inherited) == NtStatus::Success);
+    assert(parent.closeHandle(privateHandle) == NtStatus::Success);
+    assert(child.lookup(inherited) == &object && child.closeHandle(inherited) == NtStatus::Success);
+    assert(object.pointerCount == 1 && object.handleCount == 0);
     std::puts("Canonical object handle tests passed");
 }

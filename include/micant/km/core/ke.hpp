@@ -696,6 +696,9 @@ struct KThread {
     bool terminationRequested{false};
     bool terminationQueuedByProcess{false};
     bool terminationActive{false};
+    // Initial suspension is separate from a dispatcher wait: the thread has
+    // not executed yet and becomes runnable only when its count reaches zero.
+    uint8_t initialSuspendCount{0};
     void (*serviceTermination)(void*) noexcept{nullptr};
     void* eventWaitObject{nullptr};
     void* eventWaitBlock{nullptr};

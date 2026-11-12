@@ -361,6 +361,16 @@ seven bootstrap runner unit tests, architecture check, hosted Ke context and
 canonical Ob handle regressions also passed. These results cover the bounded paths exercised by
 those tests; they do not complete M4 or validate general native creation,
 SMP, arbitrary access checks or all APC interleavings.
+
+A subsequent unverified increment stores the requested exit status per Ps
+thread and adds an internal single-BSP request path for an unstarted thread,
+a ready user thread, or a user-mode event wait that can be cancelled. Target
+context performs APC rundown and exit at startup or at the user-return
+boundary. Started kernel threads and other wait types remain unsupported.
+This private mechanism is not wired to a native thread-termination API and
+does not establish its Windows contract. The bare-metal kernel and its
+lifecycle test translation unit compile and link; the new test has not been
+run in QEMU.
 The cross-toolchain `micant_tests` target compiled its test runner. Its first
 link exposed a duplicate UCRT `initializeOnExitTable` definition, corrected
 by making the header definition inline. A subsequent link passed that point
@@ -368,6 +378,62 @@ but still failed on three unresolved User32/GDI32/IMM32 coordinator and
 Executive initialization symbols. The general suite was therefore not run;
 the cross-toolchain `ntoskrnl_core` target itself linked successfully. The
 focused UCRT on-exit test and a two-translation-unit link/run check passed.
+
+An M4 increment adds bounded `NtTerminateThread`, `NtResumeThread`,
+`NtCreateThreadEx` and `NtCreateProcessEx` service routes and matching NTDLL
+exports. Thread creation resolves `RtlUserThreadStart` in the target process,
+captures its routine and parameter, reserves and commits a bounded stack,
+and can leave the initial thread suspended until resume. The client ID and TEB
+output attributes are captured and copied back through the syscall boundary.
+The distinct null-handle termination cases follow the documented last-thread
+and peer-thread rules; named process and thread handles require their terminate
+access rights.
+Process creation supports an empty address space with a system-process parent,
+eager cloning of private and loaded-image pages, independently captured loader
+metadata, shared `ViewShare` sections and inheritable Ob handles at their
+original values. Cloned image
+pages are privately owned rather than backed by a full file image section;
+file-backed image sections, security attributes and other creation flags are
+not implemented. Cloning currently holds single-BSP interrupt exclusion while
+copying the address space; it is not an SMP or low-latency snapshot mechanism.
+The exposed thread-creation path currently rejects a stack
+whose initial commit is smaller than its reservation, and rejects an invalid
+start address before execution because user exception dispatch is absent.
+Thread stack growth and guard-page fault
+delivery, other creation attributes, broader suspension and complete AMD64 context
+creation also remain outstanding. The normal QEMU run exercises the linked
+bootstrap tests for access checks, initial suspension, system-parent process
+creation, native thread execution, cloned image lifetime and deferred cleanup;
+this does not establish the unsupported general contracts. The current increment
+built and linked; the hosted Ob handle
+and sanitized Mm backend regressions passed. A hosted Mm clone test exercises
+sparse pages, protections, independent writes, image-page ownership, shared-view
+lifetime, reentrant section-owner release and allocation-failure cleanup with
+a simulated paging backend. The sanitized PE regression also checks that
+cloned loader metadata adopts existing image bytes without rewriting them.
+The Mm backend also has a private per-page guard transition and can release a
+guarded PTE; a sanitized hosted backend test covers its state changes and
+failure handling. Private address-space cloning preserves that guard state;
+the hosted clone test checks both copying and rollback after a target guard
+failure. It is not connected to user stack faults or user exception
+dispatch, and does not enable partially committed native thread stacks. Process
+termination now schedules never-started threads before cancelling event waits,
+so a failed scheduling preflight cannot reorder the existing event waiters.
+After APC rundown has become irreversible, a missing successor or failed
+context switch is treated as a kernel invariant failure; early bootstrap
+still cannot guarantee a successor if callbacks consume the only ready thread.
+The scheduler idle thread uses the permanent kernel paging root, and exit
+preflight checks that an idle candidate is actually selectable.
+Failed native process creation withdraws its unpublished handle before
+leaving exclusion and finishes close callbacks afterward. For failures after
+creation of an unpublished thread handle, the thread becomes terminal and
+nonqueueable under exclusion before its reap and close run outside it. The user-mode
+process-handle and resume-count probes also preserve alignment failures.
+A CPL3 fixture exercises those alignment failures during normal QEMU boot.
+`python3 qemu.py --headless` passed the modular boot, timer preemption,
+reaper, input and five-second stability checks; the separate runtime-selftest
+mode passed the runtime teardown path. The latter
+halts before the Ps/Ke process diagnostics. Neither result completes M4.
 
 The freestanding `KThread` now keeps resident APC objects in intrusive FIFO
 queues rather than constructing allocating `std::deque`s. QEMU verifies FIFO

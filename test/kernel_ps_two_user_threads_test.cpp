@@ -25,6 +25,7 @@ const uint8_t nativeDll[]{
 
 extern "C" {
 extern const uint8_t MicantTwoUserThreadsEnd[];
+extern const uint8_t MicantNativeThreadStart[];
 __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexcept {
     __asm__ __volatile__(
         "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\nmovq 24(%r14), %r15\n"
@@ -48,7 +49,13 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "7: movq %xmm6, %rax\ncmpq %rdi, %rax\njne 9f\n"
         "incq (%rdx,%r13,8)\ncmpq $0, (%rdx)\nje 7b\ncmpq $0, 8(%rdx)\nje 7b\n"
         "movabsq $0x5a5a12345678abcd, %rax\nxorq %r13, %rax\ncmpq %rdi, %rax\njne 9f\n"
-        "6: testq %r13, %r13\njnz 3f\n"
+        // The early diagnostic syscall path clears IF until the runtime
+        // clock is active, so exercise the output probes after preemption.
+        "6: movq $-2, %rcx\nleaq 49(%rsp), %rdx\nmovq %rcx, %r10\nmovl $0x52, %eax\nsyscall\n"
+        "cmpl $0x80000002, %eax\njne 9f\n"
+        "leaq 49(%rsp), %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\nmovq $-1, %r9\n"
+        "movq %rcx, %r10\nmovl $0xb4, %eax\nsyscall\ncmpl $0x80000002, %eax\njne 9f\n"
+        "testq %r13, %r13\njnz 3f\n"
         // Thread A allocates and checks a page through the native syscall.
         "movq $0, 64(%rsp)\nmovq $4096, 72(%rsp)\n"
         "movq $0x3000, 32(%rsp)\nmovq $4, 40(%rsp)\n"
@@ -71,13 +78,103 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "movq %r12, %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\ncallq *8(%r15)\n"
         "ud2\n"
         "9: movl $0xc000000d, %edx\n"
-        "8: movq $-1, %rcx\ncallq *24(%r15)\nud2\n");
+        "8: movq $-1, %rcx\ncallq *24(%r15)\nud2\n"
+        ".globl MicantNativeThreadStart\n"
+        "MicantNativeThreadStart: movq $0x12345678, (%rcx)\nmovl $0xc0000022, %eax\nretq\n");
 }
 __asm__(".section .uthreads$z,\"xr\"\n.globl MicantTwoUserThreadsEnd\n"
         "MicantTwoUserThreadsEnd:\n.text\n");
 }
 
 namespace {
+__attribute__((noinline)) bool testNativePeerThread(micant::Handle process, uintptr_t entry) noexcept {
+    using namespace micant;
+    Handle peer{};
+    ClientId client{};
+    uintptr_t teb{};
+    size_t clientLength{}, tebLength{};
+    struct Attributes { size_t totalLength; PsAttribute entries[2]; } attrs{
+        sizeof(Attributes), {{PS_ATTRIBUTE_CLIENT_ID, sizeof(client), reinterpret_cast<uintptr_t>(&client), &clientLength},
+                             {PS_ATTRIBUTE_TEB_ADDRESS, sizeof(teb), reinterpret_cast<uintptr_t>(&teb), &tebLength}}};
+    Handle restricted{};
+    if (ob::detail::currentHandleTable().duplicateHandle(process, ob::detail::currentHandleTable(),
+            restricted, ob::SYNCHRONIZE) != NtStatus::Success ||
+        sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, restricted,
+            entry, 0, 0, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::AccessDenied ||
+        sys::NtClose(restricted) != NtStatus::Success || peer ||
+        sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, process,
+            1, 0, 0, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::BadInitialPc || peer)
+        return false;
+    if (sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE | 2, nullptr, process,
+            entry, 0x1234, 1, 0, mm::PageSize4KB, mm::PageSize4KB, &attrs) != NtStatus::Success)
+        return false;
+    ps::EThread* object{};
+    ob::ObjectHeader* reference{};
+    uint32_t count{};
+    if (ps::detail::referenceThreadHandle(peer, ob::SYNCHRONIZE, object, reference) != NtStatus::Success ||
+        !object || object->kernelThread()->state != ke::ThreadState::Initialized ||
+        client.uniqueThread != object->kernelThread()->tid || !client.uniqueProcess ||
+        teb != object->userTebAddress() || clientLength != sizeof(client) || tebLength != sizeof(teb) ||
+        sys::NtResumeThread(peer, &count) != NtStatus::Success || count != 1 ||
+        sys::NtResumeThread(peer, &count) != NtStatus::Success || count != 0 ||
+        object->cancelBeforeStart() != NtStatus::Success || object->reap() != NtStatus::Success)
+        return false;
+    ob::ObDereferenceObject(reference);
+    return sys::NtClose(peer) == NtStatus::Success;
+}
+
+__attribute__((noinline)) bool testClonedImageLifetime(micant::Handle process) noexcept {
+    using namespace micant;
+    ob::detail::HandleTableGuard interruptGuard;
+    ps::EProcess* child{};
+    ob::ObjectHeader* reference{};
+    if (ps::detail::referenceProcessHandle(process, ob::SYNCHRONIZE, child, reference) != NtStatus::Success ||
+        !child || !child->nativeImagesFinalized() || !child->nativeImages()) return false;
+    uintptr_t original{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(original));
+    if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase())) return false;
+    uint64_t thunk{};
+    const bool valid = child->userPebAddress() &&
+        hal::amd64::bootstrapUserRange(child->userPebAddress(), 1, false) &&
+        child->nativeImages()->resolve("ntdll.dll", "RtlUserThreadStart", 0, thunk) == NtStatus::Success &&
+        hal::amd64::bootstrapUserRange(thunk, 1, false, true);
+    const auto* image = child->nativeImages()->module(0);
+    const uintptr_t entry = image ? image->base + image->view.headers().optionalHeader.addressOfEntryPoint : 0;
+    if (!hal::amd64::switchProcessPagingRootByPhysical(original)) return false;
+    Handle threadHandle{};
+    if (!valid || !entry || sys::NtCreateThreadEx(&threadHandle, ob::SYNCHRONIZE, nullptr, process,
+            entry, 0, 1, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::Success) return false;
+    ps::EThread* thread{};
+    ob::ObjectHeader* threadReference{};
+    if (ps::detail::referenceThreadHandle(threadHandle, ob::SYNCHRONIZE, thread, threadReference) != NtStatus::Success ||
+        !thread || !hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase())) return false;
+    const auto tls = thread->userTlsStorage();
+    const auto* teb = reinterpret_cast<const um::Teb64*>(thread->userTebAddress());
+    const auto* tlsVector = teb ? reinterpret_cast<const uint64_t*>(teb->threadLocalStoragePointer) : nullptr;
+    const bool threadValid = teb && teb->processEnvironmentBlock == child->userPebAddress() && tls &&
+        *reinterpret_cast<const uint64_t*>(tls) == 0x8877665544332211ULL && tlsVector && tlsVector[1] &&
+        *reinterpret_cast<const uint64_t*>(tlsVector[1]) == 0x1020304050607080ULL;
+    if (!hal::amd64::switchProcessPagingRootByPhysical(original)) return false;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const auto rolledBack = thread->rollbackBeforeStart();
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    ob::ObDereferenceObject(threadReference);
+    ob::ObDereferenceObject(reference);
+    if (!threadValid || rolledBack != NtStatus::Success || sys::NtClose(threadHandle) != NtStatus::Success ||
+        sys::NtTerminateProcess(process, NtStatus::Success) != NtStatus::Success) return false;
+    // Once the runtime clock is active process teardown is deferred to the
+    // reaper. Wait on the process object before checking the PFN baseline.
+    if (hal::amd64::bootstrapSchedulerClockActive()) {
+        auto* current = ke::KeGetCurrentThread();
+        if (!current || !hal::amd64::switchProcessPagingRootByPhysical(current->directoryTableBase)) return false;
+        if (ke::g_CurrentCpu.serviceDeferredCleanup) ke::g_CurrentCpu.serviceDeferredCleanup();
+        const auto waited = sys::NtWaitForSingleObject(process, false, nullptr);
+        if (!hal::amd64::switchProcessPagingRootByPhysical(original) || waited != NtStatus::Success) return false;
+    }
+    return sys::NtClose(process) == NtStatus::Success;
+}
+
 alignas(16) uint8_t launcherStack[16384]{};
 void launch(void* argument) noexcept {
     using namespace micant::ke;
@@ -90,6 +187,69 @@ void launch(void* argument) noexcept {
     auto* next = PriorityScheduler::get().selectNextThread();
     if (!next || !KiSwapContext(current, next)) __builtin_trap();
     __builtin_trap();
+}
+
+__attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processHandle,
+    micant::Handle initialHandle, uintptr_t imageEntry, uintptr_t bootRoot, uintptr_t enclosingRoot) noexcept {
+    using namespace micant;
+    using namespace micant::ke;
+    ob::detail::HandleTableGuard interruptGuard;
+    auto* boot = KeGetCurrentThread();
+    ps::EProcess* process{};
+    ob::ObjectHeader* processReference{};
+    ps::EThread* initial{};
+    ob::ObjectHeader* initialReference{};
+    if (!boot || ps::detail::referenceProcessHandle(processHandle, 0, process, processReference) != NtStatus::Success ||
+        ps::detail::referenceThreadHandle(initialHandle, 0, initial, initialReference) != NtStatus::Success ||
+        !process || !initial || !initial->kernelThread()) return false;
+    if (!hal::amd64::switchProcessPagingRootByPhysical(process->getDirectoryTableBase())) return false;
+    uintptr_t resultAddress{};
+    const auto allocated = process->getAddressSpace().allocate(resultAddress, mm::PageSize4KB,
+        mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot) || allocated != NtStatus::Success) return false;
+    const uintptr_t offset = reinterpret_cast<uintptr_t>(MicantNativeThreadStart) -
+                             reinterpret_cast<uintptr_t>(MicantTwoUserThreads);
+    Handle peer{};
+    if (sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE | 2, nullptr, processHandle, imageEntry + offset,
+            resultAddress, 1, 0, mm::PageSize4KB, mm::PageSize4KB, nullptr) != NtStatus::Success) return false;
+    ps::EThread* thread{};
+    ob::ObjectHeader* reference{};
+    if (ps::detail::referenceThreadHandle(peer, ob::SYNCHRONIZE, thread, reference) != NtStatus::Success ||
+        !thread || !thread->kernelThread()) return false;
+    auto& scheduler = PriorityScheduler::get();
+    auto* first = initial->kernelThread();
+    const auto firstPriority = first->priority;
+    if (!scheduler.removeReadyThread(first)) return false;
+    first->state = ThreadState::Ready;
+    first->priority = PRIORITY_IDLE;
+    if (!scheduler.readyKThread(first)) return false;
+    thread->kernelThread()->priority = boot->priority + 1;
+    uint32_t count{};
+    if (sys::NtResumeThread(peer, &count) != NtStatus::Success || count != 1 ||
+        !hal::amd64::switchProcessPagingRootByPhysical(bootRoot)) return false;
+    KThread launcher;
+    launcher.directoryTableBase = bootRoot;
+    if (!detail::prepareBootstrapThread(launcher, launcherStack, sizeof(launcherStack), launch, boot)) return false;
+    const auto old = KfRaiseIrql(DISPATCH_LEVEL);
+    const bool switched = KiSwapContext(boot, &launcher);
+    KeLowerIrql(old);
+    LargeInteger poll{};
+    const bool terminated = switched && thread->exitStatus() == NtStatus::AccessDenied &&
+        sys::NtWaitForSingleObject(peer, false, &poll) == NtStatus::Success;
+    if (!scheduler.removeReadyThread(first)) return false;
+    first->state = ThreadState::Ready;
+    first->priority = firstPriority;
+    if (!scheduler.readyKThread(first) || !hal::amd64::switchProcessPagingRootByPhysical(process->getDirectoryTableBase()))
+        return false;
+    const bool called = *reinterpret_cast<const uint64_t*>(resultAddress) == 0x12345678;
+    const auto freed = process->getAddressSpace().free(resultAddress, 0, mm::MEM_RELEASE);
+    if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot)) return false;
+    const auto reaped = thread->kernelThread() ? thread->reap() : NtStatus::Success;
+    ob::ObDereferenceObject(reference);
+    ob::ObDereferenceObject(initialReference);
+    ob::ObDereferenceObject(processReference);
+    return terminated && called && freed == NtStatus::Success && reaped == NtStatus::Success &&
+        sys::NtClose(peer) == NtStatus::Success;
 }
 }
 
@@ -106,7 +266,9 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
     uintptr_t previous{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(previous));
     {
-        ps::EProcess process;
+        auto processStorage = std::unique_ptr<ps::EProcess>(new (std::nothrow_t{}) ps::EProcess{});
+        if (!processStorage) return false;
+        auto& process = *processStorage;
         ps::EThread first;
         ps::EThread second;
         ps::EThread third;
@@ -192,7 +354,10 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             std::memcpy(rawData + 0x202 + i * 0x40, names[i], std::strlen(names[i]) + 1);
         }
         const size_t beforeImage = mm::PfnDatabase::get().getActiveCount();
+        static constexpr uint8_t invalidImage[]{0};
         if (process.loadNativeImage("bad.exe", {}) != NtStatus::InvalidImageFormat ||
+            process.loadNativeImage("bad.exe", invalidImage) != NtStatus::InvalidImageFormat ||
+            process.nativeImages() ||
             mm::PfnDatabase::get().getActiveCount() != beforeImage ||
             process.loadNativeImage("fixture.exe", std::span<const uint8_t>{file}, executablePath) != NtStatus::Success)
             return false;
@@ -200,6 +365,11 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         const auto* image = images ? images->module(0) : nullptr;
         const auto* imageVad = process.getAddressSpace().findVad(code);
         if (!image || !imageVad || !imageVad->isSectionView || !imageVad->isImageView) return false;
+        const uint8_t originalMagic = file[0];
+        file[0] = 0;
+        const bool ownsFile = image->view.fileBytes()[0] == originalMagic;
+        file[0] = originalMagic;
+        if (!ownsFile) return false;
         pe::PeImageView64::TlsLayout tlsLayout{};
         if (image->view.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
@@ -312,8 +482,14 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
                 mm::PageSize4KB, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
                 createdProcess, createdThread) != NtStatus::InvalidParameter || createdProcess || createdThread ||
             ps::detail::createBootstrapUserProcess(processImages, executablePath, commandLine, 32768,
-                mm::PageSize4KB, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
+                mm::PageSize4KB, preemptive, ob::SYNCHRONIZE | 2 | 0x80, ob::SYNCHRONIZE,
                 createdProcess, createdThread) != NtStatus::Success) return false;
+        if (!testNativePeerThread(createdProcess, entry)) return false;
+        if (!testNativeThreadExecution(createdProcess, createdThread, entry, previous,
+                                       process.getDirectoryTableBase())) return false;
+        Handle clonedProcess{};
+        if (sys::NtCreateProcessEx(&clonedProcess, ob::SYNCHRONIZE | 1 | 2, nullptr, createdProcess,
+                                   0, 0, 0, 0, false) != NtStatus::Success) return false;
         ps::EThread* createdThreadObject{};
         ob::ObjectHeader* createdThreadRef{};
         if (ps::detail::referenceThreadHandle(createdThread, ob::SYNCHRONIZE,
@@ -321,9 +497,10 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             createdThreadObject->cancelBeforeStart() != NtStatus::Success ||
             createdThreadObject->reap() != NtStatus::Success) return false;
         ob::ObDereferenceObject(createdThreadRef);
-        if (sys::NtClose(createdThread) != NtStatus::Success ||
-            sys::NtClose(createdProcess) != NtStatus::Success ||
-            mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        if (sys::NtClose(createdThread) != NtStatus::Success) return false;
+        if (sys::NtClose(createdProcess) != NtStatus::Success) return false;
+        if (!testClonedImageLifetime(clonedProcess)) return false;
+        if (mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
         // Exercise Ob ownership for a user context before the real workers.
         Handle objectHandle{};
         ps::EThread* objectThread{};

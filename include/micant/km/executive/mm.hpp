@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <span>
 #include <vector>
 #include <memory>
@@ -578,8 +579,11 @@ struct VirtualAddressDescriptor {
     bool      isGuardPage{false};
     bool      isSectionView{false};
     bool      isImageView{false};
+    bool      ownsImagePages{false};
+    bool      inheritView{false};
     uint32_t  sectionMaxProtection{PAGE_NOACCESS};
     void*     sectionContext{nullptr};
+    bool (*sectionAcquire)(void*) noexcept{nullptr};
     void (*sectionRelease)(void*) noexcept{nullptr};
 #if !defined(MICANT_FREESTANDING)
     std::shared_ptr<void> sectionOwner;
@@ -812,9 +816,12 @@ private:
             node->isGuardPage = temp->isGuardPage;
             node->isSectionView = temp->isSectionView;
             node->isImageView = temp->isImageView;
+            node->ownsImagePages = temp->ownsImagePages;
+            node->inheritView = temp->inheritView;
             node->sectionMaxProtection = temp->sectionMaxProtection;
             if (node->sectionRelease) node->sectionRelease(node->sectionContext);
             node->sectionContext = temp->sectionContext;
+            node->sectionAcquire = temp->sectionAcquire;
             node->sectionRelease = temp->sectionRelease;
             temp->sectionRelease = nullptr;
 #if !defined(MICANT_FREESTANDING)
@@ -986,6 +993,17 @@ public:
         return node ? node->startingAddress : 0;
     }
 
+    [[nodiscard]] uintptr_t nextAddress(uintptr_t current) const noexcept {
+        Guard lock(*this);
+        const VirtualAddressDescriptor* candidate{};
+        auto* node = root_.get();
+        while (node) {
+            if (node->startingAddress > current) { candidate = node; node = node->left.get(); }
+            else node = node->right.get();
+        }
+        return candidate ? candidate->startingAddress : 0;
+    }
+
     void clear() {
         Guard lock(*this);
         root_.reset();
@@ -1089,6 +1107,8 @@ public:
         bool (*mapBatch)(void*, uintptr_t, const uint64_t*, size_t, uint32_t) noexcept {nullptr};
         // Failure must leave the entire view mapped.
         bool (*unmapBatch)(void*, uintptr_t, size_t) noexcept {nullptr};
+        // Change only the hardware guard state of an already committed page.
+        bool (*guard)(void*, uintptr_t, bool) noexcept {nullptr};
     };
 
     ProcessAddressSpace() : nextFreeAddress_(0x0000000100000000ULL) {}
@@ -1301,7 +1321,8 @@ public:
                             bool (*acquire)(void*) noexcept,
                             void (*release)(void*) noexcept,
                             uint32_t maxProtection = PAGE_NOACCESS,
-                            bool imageView = false) noexcept {
+                            bool imageView = false, bool inheritView = false,
+                            uint64_t sectionOffset = 0) noexcept {
         Guard lock(*this);
         if (!backend_.map) return NtStatus::NotImplemented;
         if (!recoverFailedSectionMapping()) return NtStatus::Unsuccessful;
@@ -1326,6 +1347,7 @@ public:
         if (!node) return NtStatus::NoMemory;
         if (!acquire(owner)) return NtStatus::Unsuccessful;
         node->sectionContext = owner;
+        node->sectionAcquire = acquire;
         node->sectionRelease = release;
         node->startingAddress = start;
         node->endingAddress = start + length - 1;
@@ -1333,6 +1355,8 @@ public:
         node->allocationType = MEM_COMMIT;
         node->isSectionView = true;
         node->isImageView = imageView;
+        node->inheritView = inheritView;
+        node->sectionOffset = sectionOffset;
         node->sectionMaxProtection = maxProtection;
         auto* vad = node.get();
         if (!vadTree_.insert(std::move(node))) return NtStatus::Conflict;
@@ -1401,14 +1425,21 @@ public:
     }
 
     NtStatus unmapSharedPages(uintptr_t address) noexcept {
-        Guard lock(*this);
-        if (!backend_.map) return NtStatus::NotImplemented;
-        auto* vad = vadTree_.find(address);
-        if (!vad || !vad->isSectionView) return NtStatus::InvalidParameter;
-        const uintptr_t start = vad->startingAddress;
-        if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
-        if (!vadTree_.remove(start)) ownershipInvariantFailure();
-        if (rollbackPending_ == start) rollbackPending_ = 0;
+        DeferredOwnerRelease owner{};
+        {
+            Guard lock(*this);
+            if (!backend_.map) return NtStatus::NotImplemented;
+            auto* vad = vadTree_.find(address);
+            if (!vad || !vad->isSectionView) return NtStatus::InvalidParameter;
+            const uintptr_t start = vad->startingAddress;
+            if (!releaseBackendPages(*vad)) return NtStatus::Unsuccessful;
+            owner = {vad->sectionContext, vad->sectionRelease};
+            vad->sectionContext = nullptr;
+            vad->sectionRelease = nullptr;
+            if (!vadTree_.remove(start)) ownershipInvariantFailure();
+            if (rollbackPending_ == start) rollbackPending_ = 0;
+        }
+        if (owner.release) owner.release(owner.context);
         return NtStatus::Success;
     }
 
@@ -1520,6 +1551,139 @@ public:
 
     [[nodiscard]] const VirtualAddressDescriptor* findVad(uintptr_t addr) const noexcept {
         return vadTree_.find(addr);
+    }
+
+    NtStatus setStackGuard(uintptr_t address, bool guarded) noexcept {
+        Guard lock(*this);
+        if (!backend_.guard || (address & PageMask4KB)) return NtStatus::InvalidParameter;
+        auto* vad = vadTree_.find(address);
+        if (!vad || vad->isSectionView) return NtStatus::InvalidParameter;
+        auto* page = vad->commitRanges.get();
+        while (page && page->firstVpn != (address >> PageShift4KB)) page = page->next.get();
+        if (!page) return NtStatus::Conflict;
+        const uint32_t expected = PAGE_READWRITE | (guarded ? 0 : PAGE_GUARD);
+        if (page->protection != expected) return NtStatus::InvalidParameter;
+        if (!backend_.guard(backend_.context, address, guarded)) return NtStatus::Unsuccessful;
+        page->protection = PAGE_READWRITE | (guarded ? PAGE_GUARD : 0);
+        return NtStatus::Success;
+    }
+
+    // Clone private committed pages while the single BSP is excluded. The
+    // caller supplies root switches and restores its original root afterward.
+    // ViewShare sections retain their owner and PFNs, ViewUnmap sections are
+    // omitted. Image pages are copied eagerly with private PFN ownership.
+    NtStatus clonePrivateTo(ProcessAddressSpace& target, uintptr_t sourceRoot,
+                            uintptr_t targetRoot, bool (*switchRoot)(uintptr_t) noexcept) noexcept {
+        if (&target == this || !backend_.map || !target.backend_.map || !sourceRoot || !targetRoot || !switchRoot)
+            return NtStatus::InvalidParameter;
+        Guard sourceGuard(*this);
+        std::unique_ptr<uint8_t[]> page(new (std::nothrow_t{}) uint8_t[PageSize4KB]);
+        if (!page) return NtStatus::NoMemory;
+        for (uintptr_t address = vadTree_.firstAddress(); address; address = vadTree_.nextAddress(address)) {
+            const auto* vad = vadTree_.find(address);
+            if (!vad) return NtStatus::Unsuccessful;
+            if (vad->isSectionView && !vad->isImageView) {
+                if (!vad->inheritView) continue;
+                const size_t count = vad->pageCount();
+                std::unique_ptr<uint64_t[]> frames(new (std::nothrow_t{}) uint64_t[count]{});
+                std::unique_ptr<uint32_t[]> protections(new (std::nothrow_t{}) uint32_t[count]{});
+                if (!frames || !protections) return NtStatus::NoMemory;
+                const uint64_t firstVpn = vad->startingAddress >> PageShift4KB;
+                for (auto* committed = vad->commitRanges.get(); committed; committed = committed->next.get()) {
+                    if (committed->firstVpn < firstVpn || committed->firstVpn - firstVpn >= count)
+                        return NtStatus::Unsuccessful;
+                    frames[static_cast<size_t>(committed->firstVpn - firstVpn)] = committed->pfn;
+                    protections[static_cast<size_t>(committed->firstVpn - firstVpn)] = committed->protection;
+                }
+                for (size_t i = 0; i < count; ++i) if (!frames[i]) return NtStatus::Unsuccessful;
+                if (!switchRoot(targetRoot)) return NtStatus::Unsuccessful;
+                uintptr_t base = vad->startingAddress;
+                auto status = target.mapSharedPages(base, vad->size(), vad->protection, frames.get(), count,
+                    vad->sectionContext, vad->sectionAcquire, vad->sectionRelease,
+                    vad->sectionMaxProtection, false, true, vad->sectionOffset);
+                if (status != NtStatus::Success) return status;
+                for (size_t i = 0; i < count;) {
+                    const size_t start = i;
+                    const auto protection = protections[i++];
+                    while (i < count && protections[i] == protection) ++i;
+                    if (protection == vad->protection) continue;
+                    uint32_t old{};
+                    status = target.protect(base + start * PageSize4KB, (i - start) * PageSize4KB,
+                                            protection, &old);
+                    if (status != NtStatus::Success) return status;
+                }
+                continue;
+            }
+            if (!switchRoot(targetRoot)) return NtStatus::Unsuccessful;
+            uintptr_t base = vad->startingAddress;
+            auto status = target.allocate(base, vad->size(), MEM_RESERVE, vad->protection);
+            if (status != NtStatus::Success) return status;
+            const size_t pageCount = vad->pageCount();
+            std::unique_ptr<uint8_t[]> committedPages(new (std::nothrow_t{}) uint8_t[pageCount]{});
+            if (!committedPages) return NtStatus::NoMemory;
+            for (auto* committed = vad->commitRanges.get(); committed; committed = committed->next.get()) {
+                const uint64_t first = vad->startingAddress >> PageShift4KB;
+                if (committed->firstVpn < first || committed->firstVpn - first >= pageCount)
+                    return NtStatus::Unsuccessful;
+                uint8_t encoded{};
+                if (committed->protection == PAGE_READWRITE) encoded = 1;
+                else if (committed->protection == PAGE_READONLY) encoded = 2;
+                else if (committed->protection == PAGE_EXECUTE_READ) encoded = 3;
+                else if (committed->protection == (PAGE_READWRITE | PAGE_GUARD)) {
+                    if (!backend_.guard || !target.backend_.guard) return NtStatus::NotImplemented;
+                    encoded = 4;
+                }
+                else return NtStatus::NotImplemented;
+                committedPages[static_cast<size_t>(committed->firstVpn - first)] = encoded;
+            }
+            // Allocate adjacent pages together; in the common fully committed
+            // case this avoids repeatedly scanning an expanding commit list.
+            for (size_t i = 0; i < pageCount;) {
+                if (!committedPages[i]) { ++i; continue; }
+                const size_t start = i;
+                while (i < pageCount && committedPages[i]) ++i;
+                uintptr_t destination = base + start * PageSize4KB;
+                status = target.allocate(destination, (i - start) * PageSize4KB, MEM_COMMIT, PAGE_READWRITE);
+                if (status != NtStatus::Success) return status;
+            }
+            for (auto* committed = vad->commitRanges.get(); committed; committed = committed->next.get()) {
+                const uintptr_t va = committed->firstVpn << PageShift4KB;
+                if (!switchRoot(sourceRoot)) return NtStatus::Unsuccessful;
+                const bool guarded = committed->protection == (PAGE_READWRITE | PAGE_GUARD);
+                // The caller excludes interrupts on the BSP. Temporarily make
+                // the source guard readable, then restore it before changing
+                // roots; the source VAD never changes its visible protection.
+                if (guarded && !backend_.guard(backend_.context, va, false)) return NtStatus::Unsuccessful;
+                std::memcpy(page.get(), reinterpret_cast<const void*>(va), PageSize4KB);
+                if (guarded && !backend_.guard(backend_.context, va, true)) ownershipInvariantFailure();
+                if (!switchRoot(targetRoot)) return NtStatus::Unsuccessful;
+                std::memcpy(reinterpret_cast<void*>(va), page.get(), PageSize4KB);
+                if (guarded) {
+                    status = target.setStackGuard(va, true);
+                    if (status != NtStatus::Success) return status;
+                }
+            }
+            for (size_t i = 0; i < pageCount;) {
+                const uint8_t protection = committedPages[i];
+                const size_t start = i++;
+                while (i < pageCount && committedPages[i] == protection) ++i;
+                if (protection < 2 || protection == 4) continue;
+                uint32_t old{};
+                status = target.protect(base + start * PageSize4KB, (i - start) * PageSize4KB,
+                    protection == 2 ? PAGE_READONLY : PAGE_EXECUTE_READ, &old);
+                if (status != NtStatus::Success) return status;
+            }
+            if (vad->isImageView) {
+                Guard targetGuard(target);
+                auto* copied = target.vadTree_.find(base);
+                if (!copied) return NtStatus::Unsuccessful;
+                copied->isSectionView = true;
+                copied->isImageView = true;
+                copied->ownsImagePages = true;
+                copied->sectionMaxProtection = vad->sectionMaxProtection;
+            }
+        }
+        return NtStatus::Success;
     }
 
     /**
@@ -1693,7 +1857,7 @@ private:
         VirtualAddressDescriptor& vad, uint64_t firstVpn = 0,
         uint64_t lastVpn = std::numeric_limits<uint64_t>::max()) noexcept {
         auto& db = PfnDatabase::get();
-        if (vad.isSectionView && backend_.mapBatch && backend_.unmapBatch && firstVpn == 0 &&
+        if (vad.isSectionView && !vad.ownsImagePages && backend_.mapBatch && backend_.unmapBatch && firstVpn == 0 &&
             lastVpn == std::numeric_limits<uint64_t>::max() && vad.commitCharge) {
             if (!backend_.unmapBatch(backend_.context, vad.startingAddress, vad.pageCount()))
                 return false;
@@ -1721,7 +1885,7 @@ private:
             }
             if (!vad.commitCharge || !workingSet_.commitCharge || !workingSet_.residentPages)
                 ownershipInvariantFailure();
-            if (!vad.isSectionView) db.freePage(page.pfn);
+            if (!vad.isSectionView || vad.ownsImagePages) db.freePage(page.pfn);
             --vad.commitCharge;
             --workingSet_.commitCharge;
             --workingSet_.residentPages;
@@ -1766,22 +1930,20 @@ private:
             std::unique_ptr<Change> next;
         };
         std::unique_ptr<Change> changes;
-        for (uintptr_t va = start;; va += PageSize4KB) {
-            auto* page = vad->commitRanges.get();
-            const auto vpn = va >> PageShift4KB;
-            while (page && page->firstVpn != vpn) page = page->next.get();
-            if (!page) return NtStatus::Conflict;
+        const uint64_t firstVpn = start >> PageShift4KB;
+        const uint64_t lastVpn = end >> PageShift4KB;
+        size_t found{};
+        uint32_t firstProtection{};
+        for (auto* page = vad->commitRanges.get(); page; page = page->next.get()) {
+            if (page->firstVpn < firstVpn || page->firstVpn > lastVpn) continue;
+            if (page->firstVpn == firstVpn) firstProtection = page->protection;
             std::unique_ptr<Change> change(new (std::nothrow_t{}) Change{page, page->protection, {}});
             if (!change) return NtStatus::NoMemory;
             change->next = std::move(changes);
             changes = std::move(change);
-            if (va == (end & ~static_cast<uintptr_t>(PageMask4KB))) break;
+            ++found;
         }
-        const uint32_t firstProtection = changes ? [&] {
-            auto* first = changes.get();
-            while (first->next) first = first->next.get();
-            return first->oldProtection;
-        }() : 0;
+        if (found != lastVpn - firstVpn + 1) return NtStatus::Conflict;
         auto* change = changes.get();
         for (; change; change = change->next.get()) {
             const uintptr_t va = change->page->firstVpn << PageShift4KB;

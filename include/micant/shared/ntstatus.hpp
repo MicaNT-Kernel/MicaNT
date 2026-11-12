@@ -93,6 +93,8 @@ enum class NtStatus : uint32_t {
     DevicePowerFailure               = 0xC000009E,
     PowerStateInvalid                = 0xC00002D3,
     SuspendCountExceeded             = 0xC000004A,
+    ThreadIsTerminating              = 0xC000004B,
+    CantTerminateSelf                = 0xC00000DB,
     DeviceBusy                       = 0x80000011,
     SystemShutdown                   = 0xC000009F,
     MediaWriteProtected              = 0xC00000A2,

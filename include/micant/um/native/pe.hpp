@@ -397,6 +397,7 @@ public:
     }
 
     [[nodiscard]] const ImageNtHeaders64& headers() const noexcept { return headers_; }
+    [[nodiscard]] std::span<const uint8_t> fileBytes() const noexcept { return file_; }
     [[nodiscard]] ImageSectionHeader section(size_t index) const noexcept {
         ImageSectionHeader result{};
         if (index < headers_.fileHeader.numberOfSections) {

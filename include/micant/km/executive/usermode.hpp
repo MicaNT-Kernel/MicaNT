@@ -1462,6 +1462,26 @@ public:
         uint16_t ordinal{};
     };
 
+    // Adopt pages already cloned by Mm without remapping or rebinding them.
+    // The caller owns the copied file and name for this set's lifetime.
+    NtStatus addClonedModule(std::string_view name, std::span<const uint8_t> file,
+                             std::span<uint8_t> image, uint64_t base) noexcept {
+        if (bound_ || count_ == modules_.size() || name.empty()) return NtStatus::InvalidParameter;
+        Module candidate;
+        candidate.name = name;
+        const auto status = candidate.view.inspect(file);
+        if (status != NtStatus::Success) return status;
+        const size_t size = candidate.view.headers().optionalHeader.sizeOfImage;
+        if (!base || image.size() != size || reinterpret_cast<uintptr_t>(image.data()) != base)
+            return NtStatus::InvalidImageFormat;
+        candidate.image = image;
+        candidate.base = base;
+        modules_[count_++] = candidate;
+        return NtStatus::Success;
+    }
+
+    void finishClonedModules() noexcept { bound_ = true; }
+
     NtStatus addModule(std::string_view name, std::span<const uint8_t> file,
                        std::span<uint8_t> storage, uint64_t base) noexcept {
         if (bound_) return NtStatus::InvalidParameter;

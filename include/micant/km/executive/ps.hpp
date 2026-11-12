@@ -25,15 +25,16 @@ public:
     EProcess& operator=(const EProcess&) = delete;
     NtStatus initializeAddressSpace() noexcept;
     NtStatus closeAddressSpace() noexcept;
+    NtStatus cloneNativeMetadata(const EProcess& source) noexcept;
     NtStatus attachThread(ke::KThread& thread) noexcept;
     NtStatus detachThread(ke::KThread& thread) noexcept;
     // Bounded current-process termination; successful termination does not
     // return. The owning context performs deferred cleanup after switch.
     NtStatus terminateCurrent(NtStatus exitStatus) noexcept;
     NtStatus terminateOther(NtStatus exitStatus) noexcept;
+    NtStatus terminateOtherThreads(NtStatus exitStatus) noexcept;
     // Internal BSP image loader; caller holds the active process root and
-    // keeps the supplied name and file bytes alive until process teardown;
-    // fullPath is borrowed until image finalization.
+    // supplies kernel-resident inputs, which are captured by the process.
     NtStatus loadNativeImage(std::string_view name, std::span<const uint8_t> file,
                              std::u16string_view fullPath = {}) noexcept;
     // The supplied strings are borrowed until image finalization.
@@ -51,7 +52,9 @@ public:
         return {userTlsLayouts_.get(), userTlsCount_};
     }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
+    [[nodiscard]] bool isSystemProcess() const noexcept { return systemProcess_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
+    [[nodiscard]] size_t activeThreadCount() const noexcept;
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     // The Ob reference held by a waiter keeps this resident until wait returns.
     [[nodiscard]] sync::detail::BootstrapEvent& terminationEvent() noexcept { return terminationEvent_; }
@@ -61,7 +64,8 @@ private:
     friend struct detail::ThreadReaper;
     friend class EThread;
     void onThreadTermination(NtStatus exitStatus) noexcept;
-    NtStatus requestTermination(NtStatus exitStatus, ke::KThread* callingThread) noexcept;
+    NtStatus requestTermination(NtStatus exitStatus, ke::KThread* callingThread,
+                                bool terminateProcess = true) noexcept;
     ob::ObjectHeader* objectHeader_{nullptr};
     hal::amd64::ProcessPagingRoot root_{};
     Handle processId_{0};
@@ -125,18 +129,28 @@ public:
                             bool interruptible = false) noexcept;
     NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                             size_t userStackSize, bool interruptible = false) noexcept;
+    NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                            size_t reserveSize, size_t commitSize, bool interruptible) noexcept;
     NtStatus ready() noexcept;
+    NtStatus suspendInitially() noexcept;
+    NtStatus resumeInitial(uint32_t& previousCount) noexcept;
     // Roll back a thread that has not begun executing. BSP only, with
     // interrupts disabled; running and waiting threads cannot be cancelled.
     // A queued APC requires asynchronous target-context rundown before reap.
     NtStatus cancelBeforeStart() noexcept;
+    NtStatus rollbackBeforeStart() noexcept;
     // Successful current-thread exit never returns; stack release is deferred.
     NtStatus exitCurrent(NtStatus status) noexcept;
+    // Request target-context termination on the bootstrap processor. A
+    // blocked kernel-mode wait cannot yet be interrupted by this path.
+    NtStatus terminateOther(NtStatus status) noexcept;
     NtStatus reap() noexcept;
     [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
     [[nodiscard]] uintptr_t userStackPointer() const noexcept { return userStackPointer_; }
+    [[nodiscard]] bool isSystemThread() const noexcept { return systemThread_; }
     [[nodiscard]] uintptr_t userTebAddress() const noexcept { return userTeb_; }
+    NtStatus configureUserStart(uintptr_t routine, uintptr_t argument) noexcept;
     [[nodiscard]] uintptr_t userTlsStorage() const noexcept { return userTls_ ? userTls_ + 0x100 : 0; }
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     [[nodiscard]] sync::detail::BootstrapEvent& terminationEvent() noexcept { return terminationEvent_; }
@@ -152,7 +166,7 @@ private:
     static void startSystem(void* argument) noexcept;
     NtStatus initializeUserWithTls(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                    size_t userStackSize, std::span<const pe::PeImageView64::TlsLayout> tls,
-                                   bool interruptible) noexcept;
+                                   bool interruptible, size_t commitSize = 0) noexcept;
     NtStatus releaseUserMemory() noexcept;
     EProcess* process_{nullptr};
     // A factory-owned reference pins an Ob thread until deferred reap.
@@ -162,6 +176,7 @@ private:
     bool deferredQueued_{false};
     bool reapInProgress_{false};
     bool objectOwned_{false};
+    bool systemThread_{false};
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     sync::detail::BootstrapEvent terminationEvent_{true};
 #endif
@@ -174,7 +189,10 @@ private:
     void* systemArgument_{nullptr};
     bool started_{false};
     NtStatus exitStatus_{NtStatus::Pending};
+    NtStatus requestedExitStatus_{NtStatus::Success};
     uintptr_t userEntry_{0};
+    uintptr_t userStartRoutine_{0};
+    uintptr_t userStartArgument_{0};
     uintptr_t userStack_{0};
     uintptr_t userStackPointer_{0};
     uintptr_t userTeb_{0};

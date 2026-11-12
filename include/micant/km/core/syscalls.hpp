@@ -28,6 +28,7 @@ inline constexpr uint32_t SSN_NtCreateProcessEx          = 0x00B4;
 inline constexpr uint32_t SSN_NtTerminateProcess         = 0x002C;
 inline constexpr uint32_t SSN_NtCreateThreadEx           = 0x00BD;
 inline constexpr uint32_t SSN_NtTerminateThread          = 0x0053;
+inline constexpr uint32_t SSN_NtResumeThread             = 0x0052;
 inline constexpr uint32_t SSN_NtWaitForSingleObject      = 0x0004;
 inline constexpr uint32_t SSN_NtQuerySystemInformation   = 0x0036;
 
@@ -220,6 +221,15 @@ NtStatus NtTerminateProcess(
 );
 
 #if defined(MICANT_FREESTANDING)
+NtStatus NtTerminateThread(Handle threadHandle, NtStatus exitStatus);
+NtStatus NtResumeThread(Handle threadHandle, uint32_t* previousSuspendCount);
+NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
+    ObjectAttributes* attributes, Handle processHandle, uintptr_t startRoutine,
+    uintptr_t argument, uint32_t flags, uintptr_t zeroBits, size_t stackSize,
+    size_t maximumStackSize, void* attributeList);
+NtStatus NtCreateProcessEx(Handle* processHandle, uint32_t desiredAccess,
+    ObjectAttributes* attributes, Handle parentProcess, uint32_t flags,
+    Handle section, Handle debugPort, Handle exceptionPort, bool inJob);
 NtStatus NtCreateEvent(Handle* eventHandle, uint32_t desiredAccess,
                        ObjectAttributes* objectAttributes, uint32_t eventType,
                        bool initialState);

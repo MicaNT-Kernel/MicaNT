@@ -35,6 +35,7 @@ bool verifyBootstrapManagedViewRollback() noexcept;
 bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept;
 bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
                                     uint32_t protection) noexcept;
+bool mapBootstrapGuardManagedPage(void* context, uintptr_t address, bool guarded) noexcept;
 // Deliberate faults are restricted to the QEMU TCG bootstrap diagnostic.
 bool bootstrapQemuFaultTestsAvailable() noexcept;
 bool verifyBootstrapManagedPageFault(uintptr_t address, bool write,
@@ -82,7 +83,9 @@ uintptr_t bootstrapThreadSyscallStack() noexcept;
 // Enter an already mapped user context in the current process. On success
 // this does not return; caller must provide a valid thread-owned kernel stack.
 [[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack,
-                                           bool interruptible = false) noexcept;
+                                           bool interruptible = false,
+                                           uintptr_t startRoutine = 0,
+                                           uintptr_t startArgument = 0) noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;
 bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept;

@@ -15,7 +15,8 @@ namespace detail {
 bool deferProcessObjectDelete(ob::ObjectHeader* header) noexcept;
 // Single-BSP internal helpers; the caller serializes access with interrupts
 // disabled. The process pointer returned by creation is borrowed from handle.
-NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process) noexcept;
+NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process,
+                             uint32_t handleAttributes = 0) noexcept;
 NtStatus referenceProcessHandle(Handle handle, uint32_t access, EProcess*& process,
                                 ob::ObjectHeader*& reference) noexcept;
 struct BootstrapProcessImage {
@@ -37,7 +38,8 @@ NtStatus createThreadHandle(EProcess& process, size_t stackSize,
 // Caller holds the target process root and keeps the supplied process alive.
 NtStatus createUserThreadHandle(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                 size_t userStackSize, bool interruptible, uint32_t access,
-                                Handle& handle, EThread*& thread) noexcept;
+                                Handle& handle, EThread*& thread, size_t commitSize = 0,
+                                uint32_t handleAttributes = 0) noexcept;
 NtStatus referenceThreadHandle(Handle handle, uint32_t access, EThread*& thread,
                                ob::ObjectHeader*& reference) noexcept;
 NtStatus referenceCurrentProcess(EProcess*& process, ob::ObjectHeader*& reference) noexcept;

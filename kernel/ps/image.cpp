@@ -9,6 +9,62 @@ NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, 
 }
 
 namespace micant::ps {
+NtStatus EProcess::cloneNativeMetadata(const EProcess& source) noexcept {
+    if (!source.images_) return NtStatus::Success;
+    uintptr_t currentRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    if (currentRoot != getDirectoryTableBase() || images_ || !source.imagesFinalized_ || source.images_->size() > 16)
+        return NtStatus::NotImplemented;
+    const size_t count = source.images_->size();
+    if (!count) return NtStatus::InvalidImageFormat;
+    auto inputs = std::unique_ptr<OwnedImageInput[]>(new (std::nothrow_t{}) OwnedImageInput[count]);
+    auto imageSet = std::unique_ptr<um::NativeUserImageSet64>(new (std::nothrow_t{}) um::NativeUserImageSet64{});
+    if (!inputs || !imageSet) return NtStatus::NoMemory;
+    for (size_t i = 0; i < count; ++i) {
+        const auto* module = source.images_->module(i);
+        if (!module) return NtStatus::InvalidImageFormat;
+        const auto file = module->view.fileBytes();
+        const auto name = module->name;
+        if (file.empty() || name.empty() ||
+            !hal::amd64::bootstrapUserRange(module->base, module->image.size(), false) ||
+            !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(file.data()), file.size(), false) ||
+            !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(name.data()), name.size(), false))
+            return NtStatus::NotImplemented;
+        auto& owned = inputs[i];
+        owned.bytes.reset(new (std::nothrow_t{}) uint8_t[file.size()]);
+        owned.name.reset(new (std::nothrow_t{}) char[name.size()]);
+        if (!owned.bytes || !owned.name) return NtStatus::NoMemory;
+        std::memcpy(owned.bytes.get(), file.data(), file.size());
+        std::memcpy(owned.name.get(), name.data(), name.size());
+        const auto status = imageSet->addClonedModule({owned.name.get(), name.size()},
+            {owned.bytes.get(), file.size()},
+            {reinterpret_cast<uint8_t*>(module->base), module->image.size()}, module->base);
+        if (status != NtStatus::Success) return status;
+    }
+    std::unique_ptr<pe::PeImageView64::TlsLayout[]> tls;
+    if (source.userTlsCount_) {
+        tls.reset(new (std::nothrow_t{}) pe::PeImageView64::TlsLayout[source.userTlsCount_]);
+        if (!tls) return NtStatus::NoMemory;
+        for (size_t i = 0; i < source.userTlsCount_; ++i) {
+            const auto& layout = source.userTlsLayouts_[i];
+            if (!layout.initialData.empty() && !hal::amd64::bootstrapUserRange(
+                    reinterpret_cast<uintptr_t>(layout.initialData.data()), layout.initialData.size(), false))
+                return NtStatus::InvalidImageFormat;
+            tls[i] = layout;
+        }
+    }
+    imageSet->finishClonedModules();
+    ownedImageInputs_ = std::move(inputs);
+    images_ = std::move(imageSet);
+    userTlsLayouts_ = std::move(tls);
+    userTlsCount_ = source.userTlsCount_;
+    userPeb_ = source.userPeb_;
+    userLoaderData_ = source.userLoaderData_;
+    userProcessParameters_ = source.userProcessParameters_;
+    imagesFinalized_ = true;
+    return NtStatus::Success;
+}
+
 namespace {
 // Only public winternl.h fields are populated. Paths come from the caller;
 // the in-memory bootstrap has no filesystem from which to infer them.
@@ -113,9 +169,16 @@ NtStatus validateProtectionLayout(const pe::PeImageView64& view) noexcept {
 
 NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_t> file,
                                    std::u16string_view fullPath) noexcept {
+    ob::detail::HandleTableGuard guard;
     if (!active(*this) || terminating_ || imagesFinalized_) return NtStatus::InvalidParameter;
     if (fullPath.size() > (UINT16_MAX - sizeof(char16_t)) / sizeof(char16_t) ||
         fullPath.size() > mm::PageSize4KB / sizeof(char16_t) - 1) return NtStatus::BufferTooSmall;
+    if (file.empty()) return NtStatus::InvalidImageFormat;
+    if (name.empty() ||
+        !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(name.data()), name.size(), false) ||
+        !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(file.data()), file.size(), false) ||
+        (!fullPath.empty() && !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(fullPath.data()),
+                                        fullPath.size() * sizeof(char16_t), false))) return NtStatus::InvalidParameter;
     pe::PeImageView64 view;
     auto status = view.inspect(file);
     if (status != NtStatus::Success) return status;
@@ -123,19 +186,55 @@ NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_
     if (status != NtStatus::Success) return status;
     const uintptr_t base = view.headers().optionalHeader.imageBase;
     const size_t size = view.headers().optionalHeader.sizeOfImage;
+    if (images_ && images_->size() == 16) return NtStatus::InsufficientResources;
+    auto newImages = std::unique_ptr<um::NativeUserImageSet64>{};
     if (!images_) {
-        images_.reset(new (std::nothrow_t{}) um::NativeUserImageSet64{});
-        if (!images_) return NtStatus::NoMemory;
+        newImages.reset(new (std::nothrow_t{}) um::NativeUserImageSet64{});
+        if (!newImages) return NtStatus::NoMemory;
+    }
+    auto newInputs = std::unique_ptr<OwnedImageInput[]>{};
+    if (!ownedImageInputs_) {
+        newInputs.reset(new (std::nothrow_t{}) OwnedImageInput[16]);
+        if (!newInputs) return NtStatus::NoMemory;
+    }
+    auto* imageSet = images_ ? images_.get() : newImages.get();
+    auto* inputSet = ownedImageInputs_ ? ownedImageInputs_.get() : newInputs.get();
+    auto& owned = inputSet[imageSet->size()];
+    std::unique_ptr<uint8_t[]> copiedBytes;
+    std::unique_ptr<char[]> copiedName;
+    std::unique_ptr<char16_t[]> copiedPath;
+    if (owned.bytes.get() != file.data()) {
+        copiedBytes.reset(new (std::nothrow_t{}) uint8_t[file.size()]);
+        if (!copiedBytes) return NtStatus::NoMemory;
+        std::memcpy(copiedBytes.get(), file.data(), file.size());
+        file = {copiedBytes.get(), file.size()};
+    }
+    if (owned.name.get() != name.data()) {
+        copiedName.reset(new (std::nothrow_t{}) char[name.size()]);
+        if (!copiedName) return NtStatus::NoMemory;
+        std::memcpy(copiedName.get(), name.data(), name.size());
+        name = {copiedName.get(), name.size()};
+    }
+    if (!fullPath.empty() && owned.path.get() != fullPath.data()) {
+        copiedPath.reset(new (std::nothrow_t{}) char16_t[fullPath.size()]);
+        if (!copiedPath) return NtStatus::NoMemory;
+        std::memcpy(copiedPath.get(), fullPath.data(), fullPath.size() * sizeof(char16_t));
+        fullPath = {copiedPath.get(), fullPath.size()};
     }
     uintptr_t target = base;
     status = sys::mapBootstrapImageView(addressSpace_, target, size);
     if (status != NtStatus::Success) return status;
-    status = images_->addModule(name, file, {reinterpret_cast<uint8_t*>(target), size}, target);
+    status = imageSet->addModule(name, file, {reinterpret_cast<uint8_t*>(target), size}, target);
     if (status != NtStatus::Success) {
         if (addressSpace_.unmapSharedPages(target) != NtStatus::Success) __builtin_trap();
         return status;
     }
-    nativeImagePaths_[images_->size() - 1] = fullPath;
+    if (copiedBytes) owned.bytes = std::move(copiedBytes);
+    if (copiedName) owned.name = std::move(copiedName);
+    if (copiedPath) owned.path = std::move(copiedPath);
+    if (newInputs) ownedImageInputs_ = std::move(newInputs);
+    if (newImages) images_ = std::move(newImages);
+    nativeImagePaths_[imageSet->size() - 1] = fullPath;
     return NtStatus::Success;
 }
 

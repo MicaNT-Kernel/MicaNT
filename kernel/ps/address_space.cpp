@@ -4,6 +4,7 @@
 #include "micant/km/core/sync.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/executive/ps_objects.hpp"
+#include <cstring>
 
 namespace micant::ps {
 namespace {
@@ -17,6 +18,13 @@ Handle allocateClientId() noexcept {
             return static_cast<Handle>(value);
     }
     return 0;
+}
+
+// Caller holds BSP interrupt exclusion, as for selectNextThread().
+bool hasUsableIdleThread(const ke::KThread* current) noexcept {
+    const auto* idle = ke::g_CurrentCpu.idleThread;
+    return idle && idle != current && !idle->readyQueued &&
+        (idle->state == ke::ThreadState::Initialized || idle->state == ke::ThreadState::Ready);
 }
 }
 
@@ -173,6 +181,14 @@ bool deferProcessObjectDelete(ob::ObjectHeader* header) noexcept {
 EProcess::EProcess() = default;
 EProcess::~EProcess() = default;
 
+size_t EProcess::activeThreadCount() const noexcept {
+    ob::detail::HandleTableGuard guard;
+    size_t count{};
+    for (auto* thread = threads_; thread; thread = thread->processNext)
+        if (thread->state != ke::ThreadState::Terminated) ++count;
+    return count;
+}
+
 NtStatus EProcess::initializeAddressSpace() noexcept {
     using namespace hal::amd64;
     ke::g_CurrentCpu.serviceDeferredCleanup = detail::ThreadReaper::service;
@@ -184,7 +200,8 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     if (!createProcessPagingRoot(root_)) { handles_.reset(); return NtStatus::NoMemory; }
     const mm::ProcessAddressSpace::PagingBackend backend{
         &root_, mapBootstrapManagedPage, unmapBootstrapManagedPage,
-        mapBootstrapProtectManagedPage, mapBootstrapManagedView, unmapBootstrapManagedView};
+        mapBootstrapProtectManagedPage, mapBootstrapManagedView, unmapBootstrapManagedView,
+        mapBootstrapGuardManagedPage};
     if (!addressSpace_.configurePagingBackend(backend, BootstrapManagedBase, BootstrapManagedSize)) {
         if (!destroyProcessPagingRoot(root_)) __builtin_trap();
         handles_.reset();
@@ -295,10 +312,12 @@ void EProcess::onThreadTermination(NtStatus exitStatus) noexcept {
     exitStatus_ = exitStatus;
 }
 
-NtStatus EProcess::requestTermination(NtStatus exitStatus, ke::KThread* callingThread) noexcept {
+NtStatus EProcess::requestTermination(NtStatus exitStatus, ke::KThread* callingThread,
+                                      bool terminateProcess) noexcept {
     // Caller holds BSP interrupt exclusion throughout the preflight and commit.
     if (!root_.pfn || terminating_) return NtStatus::ProcessIsTerminating;
-    bool willHaveNext = ke::PriorityScheduler::get().getReadyThreadCount() || ke::g_CurrentCpu.idleThread;
+    bool willHaveNext = ke::PriorityScheduler::get().getReadyThreadCount() ||
+        hasUsableIdleThread(ke::KeGetCurrentThread());
     for (auto* thread = threads_; thread; thread = thread->processNext) {
         if (thread == callingThread || thread->state == ke::ThreadState::Terminated) continue;
         const bool waiting = thread->state == ke::ThreadState::Waiting;
@@ -306,39 +325,30 @@ NtStatus EProcess::requestTermination(NtStatus exitStatus, ke::KThread* callingT
         const bool unstarted = thread->owningThread && !thread->owningThread->started_ &&
             thread->state == ke::ThreadState::Initialized && !thread->readyQueued;
         if (!thread->owningThread || (!unstarted && !waiting && !ready)) return NtStatus::NotImplemented;
+        if (thread->owningThread->isSystemThread()) return NtStatus::AccessDenied;
+        if (!thread->owningThread->started_ && (thread->kernelApcDisable ||
+            thread->specialApcDisable || thread->normalKernelApcActive))
+            return NtStatus::NotImplemented;
         const bool cancellable = waiting && thread->eventWaitInProgress && thread->eventWaitUserMode &&
             thread->eventWaitCanTerminate && thread->eventWaitObject &&
             thread->eventWaitBlock && !thread->eventWaitCancelled && !thread->kernelApcDisable &&
             !thread->specialApcDisable && !thread->normalKernelApcActive;
+        if (cancellable && thread->readyQueued) return NtStatus::Unsuccessful;
         if (unstarted || ready || cancellable) willHaveNext = true;
     }
     // A self-termination cannot commit without a runnable replacement stack.
-    if (callingThread && !willHaveNext) return NtStatus::Unsuccessful;
+    if (terminateProcess && callingThread && !willHaveNext) return NtStatus::Unsuccessful;
+    // Queue never-started threads first. If that fails, rollback has not
+    // disturbed event wait queues or their FIFO ordering.
     bool success = true;
     for (auto* thread = threads_; thread; thread = thread->processNext) {
-        if (thread == callingThread || thread->state != ke::ThreadState::Waiting ||
-            !thread->eventWaitInProgress || !thread->eventWaitUserMode || !thread->eventWaitCanTerminate ||
-            !thread->eventWaitObject || !thread->eventWaitBlock ||
-            thread->eventWaitCancelled || thread->kernelApcDisable || thread->specialApcDisable ||
-            thread->normalKernelApcActive) continue;
-        if (!static_cast<sync::detail::BootstrapEvent*>(thread->eventWaitObject)->cancelWaitForTermination(*thread)) {
-            success = false;
-            break;
-        }
-    }
-    if (success) {
-        for (auto* thread = threads_; thread; thread = thread->processNext) {
-            if (thread == callingThread || thread->state != ke::ThreadState::Initialized) continue;
-            if (!ke::PriorityScheduler::get().readyKThread(thread)) { success = false; break; }
-            thread->terminationQueuedByProcess = true;
-        }
+        if (thread == callingThread || thread->state != ke::ThreadState::Initialized) continue;
+        if (!ke::PriorityScheduler::get().readyKThread(thread)) { success = false; break; }
+        thread->terminationQueuedByProcess = true;
     }
     if (!success) {
         for (auto* thread = threads_; thread; thread = thread->processNext) {
             if (thread == callingThread) continue;
-            if (thread->eventWaitCancelled &&
-                !static_cast<sync::detail::BootstrapEvent*>(thread->eventWaitObject)->restoreCancelledWait(*thread))
-                __builtin_trap();
             if (thread->terminationQueuedByProcess) {
                 if (!ke::PriorityScheduler::get().removeReadyThread(thread)) __builtin_trap();
                 thread->state = ke::ThreadState::Initialized;
@@ -347,13 +357,38 @@ NtStatus EProcess::requestTermination(NtStatus exitStatus, ke::KThread* callingT
         }
         return NtStatus::Unsuccessful;
     }
-    terminating_ = true;
-    exitStatus_ = exitStatus;
+    // Every eligible waiter was preflighted while interrupts were excluded;
+    // cancellation and ready insertion cannot fail without a broken invariant.
+    for (auto* thread = threads_; thread; thread = thread->processNext) {
+        if (thread == callingThread || thread->state != ke::ThreadState::Waiting ||
+            !thread->eventWaitInProgress || !thread->eventWaitUserMode || !thread->eventWaitCanTerminate ||
+            !thread->eventWaitObject || !thread->eventWaitBlock ||
+            thread->eventWaitCancelled || thread->kernelApcDisable || thread->specialApcDisable ||
+            thread->normalKernelApcActive) continue;
+        if (!static_cast<sync::detail::BootstrapEvent*>(thread->eventWaitObject)->cancelWaitForTermination(*thread))
+            __builtin_trap();
+    }
+    if (terminateProcess) {
+        terminating_ = true;
+        exitStatus_ = exitStatus;
+    }
     for (auto* thread = threads_; thread; thread = thread->processNext) {
         thread->terminationQueuedByProcess = false;
-        if (thread->state != ke::ThreadState::Terminated) thread->terminationRequested = true;
+        if (!terminateProcess && thread == callingThread) continue;
+        if (thread->state != ke::ThreadState::Terminated && !thread->terminationRequested) {
+            thread->owningThread->requestedExitStatus_ = exitStatus;
+            thread->terminationRequested = true;
+        }
     }
     return NtStatus::Success;
+}
+
+NtStatus EProcess::terminateOtherThreads(NtStatus exitStatus) noexcept {
+    ob::detail::HandleTableGuard guard;
+    auto* current = ke::KeGetCurrentThread();
+    if (!current || current->owningProcess != this || !current->owningThread ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidParameter;
+    return requestTermination(exitStatus, current, false);
 }
 
 NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
@@ -464,6 +499,8 @@ NtStatus EThread::initialize(EProcess& process, size_t stackSize,
     start_ = start;
     argument_ = argument;
     exitStatus_ = NtStatus::Pending;
+    requestedExitStatus_ = NtStatus::Success;
+    systemThread_ = false;
     return NtStatus::Success;
 }
 
@@ -473,6 +510,7 @@ NtStatus EThread::initializeSystem(EProcess& process, size_t stackSize,
     ob::detail::HandleTableGuard guard;
     const auto status = initialize(process, stackSize, startSystem, this);
     if (status == NtStatus::Success) {
+        systemThread_ = true;
         systemStart_ = start;
         systemArgument_ = argument;
     }
@@ -510,9 +548,43 @@ extern "C" __declspec(dllexport) NtStatus PsTerminateSystemThread(NtStatus exitS
 NtStatus EThread::ready() noexcept {
     ob::detail::HandleTableGuard guard;
     if (reapInProgress_ || !thread_ || thread_->terminationRequested ||
-        thread_->state != ke::ThreadState::Initialized) return NtStatus::InvalidParameter;
+        thread_->initialSuspendCount || thread_->state != ke::ThreadState::Initialized)
+        return NtStatus::InvalidParameter;
     return ke::PriorityScheduler::get().readyKThread(thread_.get())
         ? NtStatus::Success : NtStatus::Unsuccessful;
+}
+
+NtStatus EThread::suspendInitially() noexcept {
+    ob::detail::HandleTableGuard guard;
+    if (!thread_ || started_ || reapInProgress_ || thread_->readyQueued ||
+        thread_->terminationRequested || thread_->state != ke::ThreadState::Initialized ||
+        thread_->initialSuspendCount) return NtStatus::InvalidParameter;
+    thread_->initialSuspendCount = 1;
+    return NtStatus::Success;
+}
+
+NtStatus EThread::resumeInitial(uint32_t& previousCount) noexcept {
+    ob::detail::HandleTableGuard guard;
+    if (!thread_) {
+        if (!objectOwned_) return NtStatus::InvalidParameter;
+        previousCount = 0;
+        return NtStatus::Success;
+    }
+    if (reapInProgress_) return NtStatus::InvalidParameter;
+    previousCount = thread_->initialSuspendCount;
+    if (thread_->terminationRequested || thread_->state == ke::ThreadState::Terminated) {
+        thread_->initialSuspendCount = 0;
+        return NtStatus::Success;
+    }
+    if (!previousCount) return NtStatus::Success;
+    if (started_ || thread_->state != ke::ThreadState::Initialized || thread_->readyQueued)
+        return NtStatus::InvalidParameter;
+    thread_->initialSuspendCount = 0;
+    if (!ke::PriorityScheduler::get().readyKThread(thread_.get())) {
+        thread_->initialSuspendCount = 1;
+        return NtStatus::Unsuccessful;
+    }
+    return NtStatus::Success;
 }
 
 NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
@@ -525,7 +597,7 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
 
 NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                         size_t userStackSize, std::span<const pe::PeImageView64::TlsLayout> tls,
-                                        bool interruptible) noexcept {
+                                        bool interruptible, size_t commitSize) noexcept {
     // The target CR3 and the newly attached thread must remain stable until
     // its TEB, stack and startup state have all been installed.
     ob::detail::HandleTableGuard guard;
@@ -541,10 +613,19 @@ NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size
             layout.zeroFill > mm::PageSize4KB - 0x100 - layout.initialData.size()) return NtStatus::NotImplemented;
     }
     const size_t stackSize = (userStackSize + mm::PageMask4KB) & ~mm::PageMask4KB;
+    if (!commitSize) commitSize = stackSize;
+    if (commitSize > stackSize || commitSize > SIZE_MAX - mm::PageMask4KB)
+        return NtStatus::InvalidParameter;
+    commitSize = (commitSize + mm::PageMask4KB) & ~mm::PageMask4KB;
+    if (commitSize < mm::PageSize4KB || commitSize > stackSize) return NtStatus::InvalidParameter;
     auto status = initialize(process, kernelStackSize, startUser, this);
     if (status != NtStatus::Success) return status;
     auto& space = process.getAddressSpace();
-    status = space.allocate(userStack_, stackSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    status = space.allocate(userStack_, stackSize, mm::MEM_RESERVE, mm::PAGE_READWRITE);
+    if (status == NtStatus::Success) {
+        uintptr_t committed = userStack_ + stackSize - commitSize;
+        status = space.allocate(committed, commitSize, mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    }
     if (status == NtStatus::Success)
         status = space.allocate(userTeb_, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
     if (status == NtStatus::Success && !tls.empty())
@@ -576,7 +657,7 @@ NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size
     auto* teb = new (reinterpret_cast<void*>(userTeb_)) um::Teb64{};
     teb->self = userTeb_;
     teb->stackBase = userStack_ + stackSize;
-    teb->stackLimit = userStack_;
+    teb->stackLimit = userStack_ + stackSize - commitSize;
     teb->threadLocalStoragePointer = userTls_;
     teb->processEnvironmentBlock = process.userPebAddress();
     teb->uniqueProcessId = process.processId();
@@ -596,10 +677,27 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
                                  process.userTlsLayouts(), interruptible);
 }
 
+NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                                 size_t reserveSize, size_t commitSize, bool interruptible) noexcept {
+    if (!process.nativeImagesFinalized()) return NtStatus::InvalidParameter;
+    return initializeUserWithTls(process, entry, kernelStackSize, reserveSize,
+                                 process.userTlsLayouts(), interruptible, commitSize);
+}
+
+NtStatus EThread::configureUserStart(uintptr_t routine, uintptr_t argument) noexcept {
+    ob::detail::HandleTableGuard guard;
+    if (!thread_ || !userEntry_ || !routine || started_ || thread_->readyQueued || reapInProgress_ ||
+        thread_->state != ke::ThreadState::Initialized) return NtStatus::InvalidParameter;
+    userStartRoutine_ = routine;
+    userStartArgument_ = argument;
+    return NtStatus::Success;
+}
+
 void EThread::startUser(void* argument) noexcept {
     auto* self = static_cast<EThread*>(argument);
     if (!self || !self->userEntry_ || !self->userStackPointer_) __builtin_trap();
-    hal::amd64::enterBootstrapUserThread(self->userEntry_, self->userStackPointer_, self->userInterruptible_);
+    hal::amd64::enterBootstrapUserThread(self->userEntry_, self->userStackPointer_,
+        self->userInterruptible_, self->userStartRoutine_, self->userStartArgument_);
 }
 
 NtStatus EThread::releaseUserMemory() noexcept {
@@ -622,6 +720,7 @@ NtStatus EThread::releaseUserMemory() noexcept {
     if (previous != target && !hal::amd64::switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status == NtStatus::Success) {
         userEntry_ = userStackPointer_ = 0;
+        userStartRoutine_ = userStartArgument_ = 0;
         userInterruptible_ = false;
         thread_->tebAddress = 0;
     }
@@ -663,6 +762,58 @@ NtStatus EThread::cancelBeforeStart() noexcept {
     return NtStatus::Success;
 }
 
+NtStatus EThread::rollbackBeforeStart() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
+    // The syscall owns BSP exclusion through the subsequent reap. Refuse a
+    // caller that cannot provide that lifetime and scheduling guarantee.
+    if (flags & (uint64_t{1} << 9)) return NtStatus::InvalidParameter;
+    {
+        ob::detail::HandleTableGuard guard;
+        if (!thread_ || started_ || reapInProgress_ || thread_->terminationRequested ||
+            !thread_->kernelApcList.empty() || !thread_->userApcList.empty())
+            return NtStatus::InvalidParameter;
+        if (thread_->state == ke::ThreadState::Ready) {
+            if (!ke::PriorityScheduler::get().removeReadyThread(thread_.get()))
+                return NtStatus::InvalidParameter;
+            thread_->state = ke::ThreadState::Initialized;
+        } else if (thread_->state != ke::ThreadState::Initialized || thread_->readyQueued)
+            return NtStatus::InvalidParameter;
+    }
+    return reap();
+}
+
+NtStatus EThread::terminateOther(NtStatus status) noexcept {
+    ob::detail::HandleTableGuard guard;
+    if (!thread_) return objectOwned_ ? NtStatus::Success : NtStatus::InvalidParameter;
+    if (thread_->state == ke::ThreadState::Terminated || thread_->terminationRequested)
+        return NtStatus::Success;
+    if (!process_ || reapInProgress_ || thread_.get() == ke::KeGetCurrentThread() ||
+        ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    if (!started_ && (thread_->kernelApcDisable || thread_->specialApcDisable ||
+                      thread_->normalKernelApcActive)) return NtStatus::NotImplemented;
+    // Started kernel threads have no user-return boundary at which this
+    // bootstrap mechanism can safely deliver the termination request.
+    if (started_ && !userEntry_) return NtStatus::NotImplemented;
+    if (thread_->state == ke::ThreadState::Waiting) {
+        if (!thread_->eventWaitInProgress || !thread_->eventWaitUserMode ||
+            !thread_->eventWaitCanTerminate || !thread_->eventWaitObject ||
+            !thread_->eventWaitBlock || thread_->eventWaitCancelled ||
+            thread_->kernelApcDisable || thread_->specialApcDisable || thread_->normalKernelApcActive)
+            return NtStatus::NotImplemented;
+        auto* event = static_cast<sync::detail::BootstrapEvent*>(thread_->eventWaitObject);
+        if (!event->cancelWaitForTermination(*thread_)) return NtStatus::Unsuccessful;
+    } else if (thread_->state == ke::ThreadState::Initialized && !thread_->readyQueued) {
+        if (!ke::PriorityScheduler::get().readyKThread(thread_.get())) return NtStatus::Unsuccessful;
+    } else if (thread_->state != ke::ThreadState::Ready || !thread_->readyQueued) {
+        return NtStatus::NotImplemented;
+    }
+    requestedExitStatus_ = status;
+    thread_->terminationRequested = true;
+    return NtStatus::Success;
+}
+
 void EThread::signalTermination(void* argument) noexcept {
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     auto* self = static_cast<EThread*>(argument);
@@ -679,8 +830,8 @@ void EThread::serviceTermination(void* argument) noexcept {
     auto* self = static_cast<EThread*>(argument);
     auto* current = ke::KeGetCurrentThread();
     if (!self || current != self->thread_.get() || !self->process_ ||
-        !self->process_->isTerminating() || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return;
-    (void)self->exitCurrent(self->process_->exitStatus());
+        !current->terminationRequested || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return;
+    (void)self->exitCurrent(self->requestedExitStatus_);
 #else
     (void)argument;
 #endif
@@ -704,8 +855,8 @@ void EThread::startThread(void* argument) noexcept {
     // cleanup; its original start routine must not execute.
     if (!self->thread_->terminationRequested) self->start_(self->argument_);
     if (self->thread_->systemInitialRegionActive) ke::KeLeaveCriticalRegion();
-    const auto status = self->thread_->terminationRequested && self->process_->isTerminating()
-        ? self->process_->exitStatus() : NtStatus::Success;
+    const auto status = self->thread_->terminationRequested
+        ? self->requestedExitStatus_ : NtStatus::Success;
     (void)self->exitCurrent(status);
     __builtin_trap(); // A terminated thread may never resume.
 }
@@ -723,10 +874,11 @@ NtStatus EThread::exitCurrent(NtStatus status) noexcept {
         return NtStatus::InvalidParameter;
     }
     const bool alreadyActive = current->terminationActive;
+    const bool previouslyQueueable = current->apcQueueable;
     current->terminationActive = true;
     // Do not remove a runnable successor while APC callbacks run: those
     // callbacks may themselves wait for that thread.
-    if (!ke::PriorityScheduler::get().getReadyThreadCount() && !ke::g_CurrentCpu.idleThread) {
+    if (!ke::PriorityScheduler::get().getReadyThreadCount() && !hasUsableIdleThread(current)) {
         current->terminationActive = alreadyActive;
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return NtStatus::Unsuccessful;
@@ -739,26 +891,26 @@ NtStatus EThread::exitCurrent(NtStatus status) noexcept {
     ke::KiDeliverApc(0);
     const bool rundown = current->apcRundownComplete || ke::detail::rundownCurrentUserApcs();
     __asm__ __volatile__("cli" : : : "memory");
+    if (!rundown) {
+        // No rundown callback ran if the preconditions were not met. In
+        // particular, do not leave a live thread with its APC queue frozen.
+        current->apcQueueable = previouslyQueueable;
+        current->terminationActive = alreadyActive;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return NtStatus::NotImplemented;
+    }
     ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
     auto* next = ke::PriorityScheduler::get().selectNextThread();
-    const NtStatus previousStatus = exitStatus_;
-    if (next && rundown && current->kernelApcList.empty() && !current->pendingNormalCount &&
+    if (next && current->kernelApcList.empty() && !current->pendingNormalCount &&
         !current->normalKernelApcActive) {
         exitStatus_ = status;
         current->state = ke::ThreadState::Terminated;
         if (ke::KiSwapContext(current, next)) __builtin_trap();
-        current->state = ke::ThreadState::Running;
-        exitStatus_ = previousStatus;
     }
-    if (next) {
-        next->state = ke::ThreadState::Ready;
-        if (next != ke::g_CurrentCpu.idleThread && !ke::PriorityScheduler::get().readyKThread(next))
-            __builtin_trap();
-    }
-    ke::KeLowerIrql(ke::PASSIVE_LEVEL);
-    current->terminationActive = alreadyActive;
-    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-    return rundown ? NtStatus::Unsuccessful : NtStatus::NotImplemented;
+    // Rundown is irreversible: callbacks may have freed APC storage. A
+    // missing successor or rejected context switch is a scheduler invariant
+    // failure, not a recoverable exit that can return to the live thread.
+    __builtin_trap();
 #else
     (void)status;
     return NtStatus::NotImplemented;
@@ -850,6 +1002,242 @@ NtStatus EThread::reap() noexcept {
 }
 
 namespace micant::sys {
+NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
+    ObjectAttributes* attributes, Handle processHandle, uintptr_t startRoutine,
+    uintptr_t argument, uint32_t flags, uintptr_t zeroBits, size_t stackSize,
+    size_t maximumStackSize, void* attributeList) {
+    if (!threadHandle || !startRoutine || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    if (attributes) {
+        if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
+        if (attributes->rootDirectory || attributes->objectName || attributes->securityDescriptor ||
+            attributes->securityQualityOfService || (attributes->attributes & ~OBJ_INHERIT)) return NtStatus::NotImplemented;
+    }
+    if ((flags & ~uint32_t{1}) || zeroBits) return NtStatus::NotImplemented;
+    PsAttribute* clientAttribute{};
+    PsAttribute* tebAttribute{};
+    if (attributeList) {
+        constexpr size_t prefix = offsetof(PsAttributeList, attributes);
+        size_t totalLength{};
+        std::memcpy(&totalLength, attributeList, sizeof(totalLength));
+        if (totalLength < prefix || (totalLength - prefix) % sizeof(PsAttribute) ||
+            (totalLength - prefix) / sizeof(PsAttribute) > 2) return NtStatus::InvalidParameter;
+        const size_t count = (totalLength - prefix) / sizeof(PsAttribute);
+        auto* entries = reinterpret_cast<PsAttribute*>(reinterpret_cast<uint8_t*>(attributeList) + prefix);
+        for (size_t index = 0; index < count; ++index) {
+            auto& item = entries[index];
+            if (!item.value) return NtStatus::InvalidParameter;
+            if (item.attribute == PS_ATTRIBUTE_CLIENT_ID && !clientAttribute && item.size == sizeof(ClientId))
+                clientAttribute = &item;
+            else if (item.attribute == PS_ATTRIBUTE_TEB_ADDRESS && !tebAttribute && item.size == sizeof(uintptr_t))
+                tebAttribute = &item;
+            else return NtStatus::NotImplemented;
+        }
+    }
+    ps::EProcess* process{};
+    ob::ObjectHeader* reference{};
+    auto result = processHandle == InvalidHandleValue
+        ? ps::detail::referenceCurrentProcess(process, reference)
+        : ps::detail::referenceProcessHandle(processHandle, 0x0002, process, reference);
+    if (result != NtStatus::Success) return result;
+    Handle handle{};
+    ps::EThread* thread{};
+    ob::ObjectHeader* failedThreadHandle{};
+    {
+        ob::detail::HandleTableGuard guard;
+        uintptr_t previousRoot{};
+        __asm__ __volatile__("movq %%cr3, %0" : "=r"(previousRoot));
+        bool switched = false;
+        if (process->isTerminating()) result = NtStatus::ProcessIsTerminating;
+        else if (!process->nativeImagesFinalized() || !process->nativeImages()) result = NtStatus::InvalidParameter;
+        else if (!hal::amd64::switchProcessPagingRootByPhysical(process->getDirectoryTableBase()))
+            result = NtStatus::Unsuccessful;
+        else {
+            switched = true;
+            uint64_t entry{};
+            const auto* images = process->nativeImages();
+            for (size_t i = 0; i < images->size(); ++i) {
+                const auto* module = images->module(i);
+                if (!module || !hal::amd64::bootstrapUserRange(module->base, module->image.size(), false)) {
+                    result = NtStatus::InvalidImageFormat;
+                    break;
+                }
+            }
+            const auto* image = images->module(0);
+            if (!image) result = NtStatus::InvalidImageFormat;
+            else if (result == NtStatus::Success) {
+                const auto& optional = image->view.headers().optionalHeader;
+                if (!maximumStackSize) maximumStackSize = optional.sizeOfStackReserve;
+                if (!stackSize) stackSize = optional.sizeOfStackCommit;
+                if (!stackSize || !maximumStackSize || stackSize > maximumStackSize ||
+                    maximumStackSize > 1024 * 1024 ||
+                    ((stackSize + mm::PageMask4KB) & ~mm::PageMask4KB) !=
+                        ((maximumStackSize + mm::PageMask4KB) & ~mm::PageMask4KB))
+                    result = NtStatus::NotImplemented;
+                else result = images->resolve("ntdll.dll", "RtlUserThreadStart", 0, entry);
+            }
+            // Until user exception dispatch exists, an invalid start address
+            // would otherwise turn a thread fault into a kernel-wide trap.
+            if (result == NtStatus::Success && (!hal::amd64::bootstrapUserRange(entry, 1, false, true) ||
+                !hal::amd64::bootstrapUserRange(startRoutine, 1, false, true)))
+                result = NtStatus::BadInitialPc;
+            if (result == NtStatus::Success)
+                result = ps::detail::createUserThreadHandle(*process, entry, 32768, maximumStackSize,
+                    hal::amd64::bootstrapSchedulerClockActive(), desiredAccess, handle, thread, stackSize,
+                    attributes ? attributes->attributes : 0);
+            if (result == NtStatus::Success) result = thread->configureUserStart(startRoutine, argument);
+            if (result == NtStatus::Success && (flags & 1)) result = thread->suspendInitially();
+        }
+        if (switched && !hal::amd64::switchProcessPagingRootByPhysical(previousRoot)) __builtin_trap();
+        if (result == NtStatus::Success && !(flags & 1)) result = thread->ready();
+        if (result != NtStatus::Success && thread) {
+            auto* failedThread = thread->kernelThread();
+            if (!failedThread || failedThread->state != ke::ThreadState::Initialized ||
+                failedThread->readyQueued || !failedThread->kernelApcList.empty() ||
+                !failedThread->userApcList.empty()) __builtin_trap();
+            // This thread was never published or started. Make it ineligible
+            // for APC insertion and process termination before releasing BSP
+            // exclusion; its lifecycle reference pins it through reap.
+            failedThread->apcQueueable = false;
+            failedThread->state = ke::ThreadState::Terminated;
+            failedThreadHandle = ob::detail::currentHandleTable().takeHandle(handle);
+            if (!failedThreadHandle) __builtin_trap();
+        }
+        if (result == NtStatus::Success) {
+            if (clientAttribute) {
+                *reinterpret_cast<ClientId*>(clientAttribute->value) = {process->processId(), thread->kernelThread()->tid};
+                if (clientAttribute->returnLength) *clientAttribute->returnLength = sizeof(ClientId);
+            }
+            if (tebAttribute) {
+                *reinterpret_cast<uintptr_t*>(tebAttribute->value) = thread->userTebAddress();
+                if (tebAttribute->returnLength) *tebAttribute->returnLength = sizeof(uintptr_t);
+            }
+            *threadHandle = handle;
+        }
+    }
+    if (failedThreadHandle) {
+        if (thread->reap() != NtStatus::Success) __builtin_trap();
+        (void)ob::ObFinishClose(failedThreadHandle, handle);
+    }
+    ob::ObDereferenceObject(reference);
+    return result;
+}
+
+NtStatus NtResumeThread(Handle threadHandle, uint32_t* previousSuspendCount) {
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidParameter;
+    ps::EThread* thread{};
+    ob::ObjectHeader* reference{};
+    const auto status = threadHandle == static_cast<Handle>(-2)
+        ? ps::detail::referenceCurrentThread(thread, reference)
+        : ps::detail::referenceThreadHandle(threadHandle, 0x0002, thread, reference);
+    if (status != NtStatus::Success) return status;
+    uint32_t previous{};
+    const auto result = thread->resumeInitial(previous);
+    ob::ObDereferenceObject(reference);
+    if (result == NtStatus::Success && previousSuspendCount) *previousSuspendCount = previous;
+    return result;
+}
+
+NtStatus NtCreateProcessEx(Handle* processHandle, uint32_t desiredAccess,
+    ObjectAttributes* attributes, Handle parentProcess, uint32_t flags,
+    Handle section, Handle debugPort, Handle exceptionPort, bool inJob) {
+    if (!processHandle || !parentProcess || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    if (attributes) {
+        if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
+        if (attributes->rootDirectory || attributes->objectName || attributes->securityDescriptor ||
+            attributes->securityQualityOfService || (attributes->attributes & ~OBJ_INHERIT)) return NtStatus::NotImplemented;
+    }
+    constexpr uint32_t inheritHandles = 0x00000004;
+    if ((flags & ~inheritHandles) || section || debugPort || exceptionPort || inJob) return NtStatus::NotImplemented;
+    ps::EProcess* parent{};
+    ob::ObjectHeader* parentReference{};
+    const auto status = parentProcess == InvalidHandleValue
+        ? ps::detail::referenceCurrentProcess(parent, parentReference)
+        : ps::detail::referenceProcessHandle(parentProcess, 0x0080, parent, parentReference);
+    if (status != NtStatus::Success) return status;
+    NtStatus result = NtStatus::NotImplemented;
+    ob::ObjectHeader* failedHandleObject{};
+    Handle failedHandle{};
+    {
+        ob::detail::HandleTableGuard guard;
+        if (parent->isTerminating()) result = NtStatus::ProcessIsTerminating;
+        else if (!parent->isSystemProcess() && !parent->nativeImages()) {
+            // A non-system parent without an image section cannot supply the
+            // inherited image required by this native creation form.
+            result = NtStatus::ProcessIsTerminating;
+        } else {
+            ps::EProcess* child{};
+            Handle handle{};
+            // The child handle must not be inherited by the child itself.
+            // Publish its requested attributes only after copying the parent table.
+            result = ps::detail::createProcessHandle(desiredAccess, handle, child);
+            if (result == NtStatus::Success && !parent->isSystemProcess()) {
+                uintptr_t originalRoot{};
+                __asm__ __volatile__("movq %%cr3, %0" : "=r"(originalRoot));
+                result = parent->getAddressSpace().clonePrivateTo(child->getAddressSpace(),
+                    parent->getDirectoryTableBase(), child->getDirectoryTableBase(),
+                    hal::amd64::switchProcessPagingRootByPhysical);
+                if (result == NtStatus::Success) {
+                    if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase()))
+                        result = NtStatus::Unsuccessful;
+                    else result = child->cloneNativeMetadata(*parent);
+                }
+                if (!hal::amd64::switchProcessPagingRootByPhysical(originalRoot)) __builtin_trap();
+            }
+            if (result == NtStatus::Success && (flags & inheritHandles)) {
+                result = child->getHandleTable().inheritHandlesFrom(parent->getHandleTable());
+            }
+            if (result == NtStatus::Success && attributes && attributes->attributes)
+                result = ob::detail::currentHandleTable().setHandleAttributes(handle, attributes->attributes);
+            if (result != NtStatus::Success && handle) {
+                // Withdraw the unpublished handle under exclusion, then run
+                // close/delete callbacks only after leaving that exclusion.
+                failedHandleObject = ob::detail::currentHandleTable().takeHandle(handle);
+                if (!failedHandleObject) __builtin_trap();
+                failedHandle = handle;
+            }
+            if (result == NtStatus::Success) *processHandle = handle;
+        }
+    }
+    if (failedHandleObject) (void)ob::ObFinishClose(failedHandleObject, failedHandle);
+    ob::ObDereferenceObject(parentReference);
+    return result;
+}
+
+NtStatus NtTerminateThread(Handle threadHandle, NtStatus exitStatus) {
+    constexpr uint32_t ThreadTerminateAccess = 0x0001;
+    auto* current = ke::KeGetCurrentThread();
+    if (!threadHandle) {
+        if (!current || !current->owningThread) return NtStatus::InvalidHandle;
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        NtStatus result = NtStatus::CantTerminateSelf;
+        if (current->owningProcess && current->owningProcess->activeThreadCount() > 1)
+            result = current->owningThread->exitCurrent(exitStatus);
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return result;
+    }
+    if (threadHandle == static_cast<Handle>(-2)) {
+        if (!current || !current->owningThread) return NtStatus::InvalidHandle;
+        return current->owningThread->exitCurrent(exitStatus);
+    }
+    ob::ObjectHeader* reference{};
+    ps::EThread* target{};
+    const auto status = ps::detail::referenceThreadHandle(threadHandle, ThreadTerminateAccess,
+                                                           target, reference);
+    if (status != NtStatus::Success) return status;
+    const bool self = current && current->owningThread == target;
+    if (self) {
+        // A running thread's lifecycle reference pins it across self-exit.
+        ob::ObDereferenceObject(reference);
+        return target->exitCurrent(exitStatus);
+    }
+    const auto result = target->isSystemThread() ? NtStatus::AccessDenied : target->terminateOther(exitStatus);
+    ob::ObDereferenceObject(reference);
+    return result;
+}
+
 NtStatus NtTerminateProcess(Handle processHandle, NtStatus exitStatus) {
     constexpr uint32_t ProcessTerminateAccess = 0x0001;
     auto* current = ke::KeGetCurrentThread();
@@ -857,7 +1245,10 @@ NtStatus NtTerminateProcess(Handle processHandle, NtStatus exitStatus) {
         if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
         return current->owningProcess->terminateCurrent(exitStatus);
     }
-    if (!processHandle) return NtStatus::NotImplemented;
+    if (!processHandle) {
+        if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
+        return current->owningProcess->terminateOtherThreads(exitStatus);
+    }
     ob::ObjectHeader* reference{};
     ps::EProcess* process{};
     const auto status = ps::detail::referenceProcessHandle(processHandle, ProcessTerminateAccess, process, reference);

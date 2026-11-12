@@ -71,7 +71,7 @@ struct ProcessObjectFactory {
                                   std::array<BootstrapProcessImage, 16>& captured,
                                   std::u16string_view& capturedPath,
                                   std::u16string_view& capturedCommand) noexcept {
-        process.ownedImageInputs_.reset(new (std::nothrow_t{}) EProcess::OwnedImageInput[source.size()]);
+        process.ownedImageInputs_.reset(new (std::nothrow_t{}) EProcess::OwnedImageInput[16]);
         if (!process.ownedImageInputs_) return NtStatus::NoMemory;
         for (size_t i = 0; i < source.size(); ++i) {
             auto& storage = process.ownedImageInputs_[i];
@@ -181,7 +181,8 @@ NtStatus createThreadHandle(EProcess& process, size_t stackSize,
 
 NtStatus createUserThreadHandle(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                 size_t userStackSize, bool interruptible, uint32_t access,
-                                Handle& handle, EThread*& thread) noexcept {
+                                Handle& handle, EThread*& thread, size_t commitSize,
+                                uint32_t handleAttributes) noexcept {
     ob::detail::HandleTableGuard guard;
     initializeThreadType();
     thread = nullptr;
@@ -192,11 +193,13 @@ NtStatus createUserThreadHandle(EProcess& process, uintptr_t entry, size_t kerne
     auto status = ob::ObCreateObject(ob::KernelMode, &threadType, nullptr, sizeof(EThread), &body, &header);
     if (status != NtStatus::Success) return status;
     auto* created = new (body) EThread{};
-    status = created->initializeUser(process, entry, kernelStackSize, userStackSize, interruptible);
+    status = commitSize
+        ? created->initializeUser(process, entry, kernelStackSize, userStackSize, commitSize, interruptible)
+        : created->initializeUser(process, entry, kernelStackSize, userStackSize, interruptible);
     if (status == NtStatus::Success) {
         header->addReference();
         ThreadObjectFactory::bind(*created, header);
-        status = ob::detail::currentHandleTable().createHandle(header, handle, access);
+        status = ob::detail::currentHandleTable().createHandle(header, handle, access, handleAttributes);
         if (status == NtStatus::Success) thread = created;
         else if (created->reap() != NtStatus::Success) __builtin_trap();
     }
@@ -204,7 +207,8 @@ NtStatus createUserThreadHandle(EProcess& process, uintptr_t entry, size_t kerne
     return status;
 }
 
-NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process) noexcept {
+NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process,
+                             uint32_t handleAttributes) noexcept {
     ob::detail::HandleTableGuard guard;
     initializeProcessType();
     process = nullptr;
@@ -218,7 +222,7 @@ NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process
     ProcessObjectFactory::bind(*created, header);
     status = created->initializeAddressSpace();
     if (status == NtStatus::Success)
-        status = ob::detail::currentHandleTable().createHandle(header, handle, access);
+        status = ob::detail::currentHandleTable().createHandle(header, handle, access, handleAttributes);
     if (status == NtStatus::Success) process = created;
     ob::ObDereferenceObject(header);
     return status;

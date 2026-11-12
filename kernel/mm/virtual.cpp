@@ -133,9 +133,7 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
     if (!base || !viewSize) return NtStatus::InvalidParameter;
     if (process != InvalidHandleValue) return NtStatus::NotImplemented;
     if (inherit != 1 && inherit != 2) return NtStatus::InvalidParameter;
-    // ViewShare requires inheritance into future child address spaces, which
-    // the bootstrap process model does not yet provide.
-    if (inherit == 1 || zeroBits || commitSize || allocation)
+    if (zeroBits || commitSize || allocation)
         return NtStatus::NotImplemented;
     if (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)
         return NtStatus::NotImplemented;
@@ -183,7 +181,8 @@ NtStatus NtMapViewOfSection(Handle handle, Handle process, uintptr_t* base, uint
     const uint32_t maximumProtection = protection;
     status = currentAddressSpace().mapSharedPages(target, length, protection, backing.pfns + firstPage,
                                          backing.pageCount - firstPage,
-                                         header, acquireSectionView, releaseSectionView, maximumProtection);
+                                         header, acquireSectionView, releaseSectionView, maximumProtection,
+                                         false, inherit == 1, sectionOffset);
     if (status == NtStatus::Success) {
         *base = target;
         *viewSize = length;

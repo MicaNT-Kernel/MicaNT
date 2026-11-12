@@ -320,6 +320,20 @@ void checkNativeImageSet() {
     assert(modules.bindAll() == NtStatus::Success);
     assert(modules.addModule("extra.dll", runtime, images[5], kBase + 0x60000) ==
            NtStatus::InvalidParameter);
+
+    // Cloning metadata must adopt existing mapped bytes without rebinding or
+    // overwriting their mutable state.
+    auto clonedFile = runtime;
+    auto clonedImage = images[1];
+    clonedImage[0x1100] = 0x5a;
+    const auto clonedBase = reinterpret_cast<uintptr_t>(clonedImage.data());
+    um::NativeUserImageSet64 cloned;
+    assert(cloned.addClonedModule("kernel32.dll", clonedFile, clonedImage, clonedBase) == NtStatus::Success);
+    cloned.finishClonedModules();
+    assert(cloned.importsBound() && clonedImage[0x1100] == 0x5a);
+    assert(cloned.resolve("kernel32", "Example", 0, address) == NtStatus::Success &&
+           address == clonedBase + 0x1000);
+    assert(cloned.addClonedModule("again.dll", clonedFile, clonedImage, clonedBase) == NtStatus::InvalidParameter);
 }
 } // namespace
 

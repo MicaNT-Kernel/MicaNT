@@ -219,3 +219,11 @@ MicaNT has one canonical modular kernel. All kernel subsystem development must t
 ## Evidence and status
 
 Use the Microsoft Windows contract as the compatibility requirement and official `win32metadata` plus Microsoft Learn/WDK as primary sources. Record unresolved contract details rather than guessing. Keep implementation status separate from declarations, compilation, host tests, QEMU results, and compatibility claims; use `docs/KERNEL_ARCHITECTURE.md` and the integration status documents as the evidence source.
+
+## Kernel verification and QEMU
+
+- From the repository root, run `python3 qemu.py --headless` for the normal modular kernel build and QEMU boot validation. This builds `ntoskrnl_core_baremetal`, `bootx64_efi`, and `virtio_gpu_boot`, validates the build manifest, and exercises boot milestones and input. It does not build Explorer; that is a separate `--check-explorer` operation.
+- Use `python3 qemu.py --headless --runtime-selftest` for the separate kernel C++ runtime construction/teardown path. This mode halts early and does not replace the normal boot or its Ps/Ke diagnostics. The runner accepts `--timeout` and `--stable-seconds` when needed.
+- QEMU uses a Unix QMP socket in a temporary directory under `build/`. If sandbox policy prevents binding that socket, rerun the authorized QEMU command with the required sandbox permissions; do not interpret that environmental failure as a kernel failure. Inspect the generated `serial.log` and the first missing milestone when diagnosing a failed boot.
+- Run `python3 scripts/verify_kernel_architecture.py` and the relevant focused host tests for the changed subsystems. The runner's Python tests use `python3 -m unittest discover -s test -p test_bootstrap_runtime_runner.py -v`; `test/mm_shared_backend_test.cpp` requires `-DMICANT_FREESTANDING`. Apply ASan/UBSan to compatible standalone host tests when available.
+- Report build, host tests, normal QEMU and runtime-selftest results separately, including failures and any checks explicitly deferred by the user. Do not rebuild Explorer unless the task authorizes it.

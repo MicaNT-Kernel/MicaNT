@@ -173,6 +173,9 @@ bool testThreadObjectLifetime() noexcept {
     if (ps::detail::createThreadHandle(process, 16384, threadEntry, &state, ob::SYNCHRONIZE,
                                        handle, thread) != NtStatus::Success || !thread ||
         ps::detail::bootstrapThreadObjectCount() != objects + 1) return false;
+    if (sys::NtTerminateThread(handle, NtStatus::AccessDenied) != NtStatus::AccessDenied ||
+        sys::NtResumeThread(handle, nullptr) != NtStatus::AccessDenied ||
+        thread->kernelThread()->terminationRequested) return false;
     state.owner = thread;
     KeInitializeApc(&state.crossThreadApc, thread->kernelThread()->tid,
                     nullptr, rundownApc, nullptr, 1, &state);
@@ -357,6 +360,44 @@ bool testCancelledThreadApcRundown() noexcept {
         thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
         return false;
     return !scheduler.getReadyThreadCount() && mm::PfnDatabase::get().getActiveCount() == active;
+}
+
+bool testNativeThreadTermination() noexcept {
+    using namespace micant;
+    using namespace micant::ke;
+    auto* boot = KeGetCurrentThread();
+    if (!boot || PriorityScheduler::get().getReadyThreadCount()) return false;
+    const auto pages = mm::PfnDatabase::get().getActiveCount();
+    ps::EProcess process;
+    if (process.initializeAddressSpace() != NtStatus::Success) return false;
+    State state{&process, boot};
+    Handle handle{};
+    ps::EThread* thread{};
+    if (ps::detail::createThreadHandle(process, 16384, threadEntry, &state,
+            ob::SYNCHRONIZE | 1, handle, thread) != NtStatus::Success || !thread) return false;
+    state.owner = thread;
+    KeInitializeApc(&state.crossThreadApc, thread->kernelThread()->tid,
+                    nullptr, rundownApc, nullptr, 1, &state);
+    if (!KeInsertQueueApc(&state.crossThreadApc) ||
+        sys::NtTerminateThread(handle, NtStatus::AccessDenied) != NtStatus::Success ||
+        sys::NtTerminateThread(handle, NtStatus::Success) != NtStatus::Success ||
+        !thread->kernelThread()->readyQueued) return false;
+    KThread launcher;
+    launcher.directoryTableBase = g_CurrentCpu.currentCr3;
+    if (!detail::prepareBootstrapThread(launcher, remoteLauncherStack, sizeof(remoteLauncherStack),
+                                        remoteLauncher, boot)) return false;
+    const auto previous = KfRaiseIrql(DISPATCH_LEVEL);
+    const bool switched = KiSwapContext(boot, &launcher);
+    KeLowerIrql(previous);
+    LargeInteger poll{};
+    if (!switched || state.ran || state.rundownInvalid || state.rundownCount != 4 ||
+        thread->exitStatus() != NtStatus::AccessDenied ||
+        sys::NtWaitForSingleObject(handle, false, &poll) != NtStatus::Success ||
+        thread->reap() != NtStatus::Success ||
+        sys::NtTerminateThread(handle, NtStatus::Success) != NtStatus::Success ||
+        thread->exitStatus() != NtStatus::AccessDenied || sys::NtClose(handle) != NtStatus::Success ||
+        process.closeAddressSpace() != NtStatus::Success) return false;
+    return !PriorityScheduler::get().getReadyThreadCount() && mm::PfnDatabase::get().getActiveCount() == pages;
 }
 
 struct DeferredExitState {
@@ -636,6 +677,47 @@ struct SystemThreadState {
     bool leaveInitialRegion{};
 };
 
+__attribute__((noinline)) bool testPrivateProcessClone(micant::Handle parentHandle, micant::ps::EProcess& parent) noexcept {
+    using namespace micant;
+    uintptr_t original{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(original));
+    if (!hal::amd64::switchProcessPagingRootByPhysical(parent.getDirectoryTableBase())) return false;
+    uintptr_t base{};
+    auto status = parent.getAddressSpace().allocate(base, 2 * mm::PageSize4KB,
+        mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (status == NtStatus::Success) {
+        *reinterpret_cast<uint64_t*>(base) = 0x12345678;
+        *reinterpret_cast<uint64_t*>(base + mm::PageSize4KB) = 0x87654321;
+        uint32_t old{};
+        status = parent.getAddressSpace().protect(base + mm::PageSize4KB, mm::PageSize4KB,
+                                                  mm::PAGE_READONLY, &old);
+    }
+    if (!hal::amd64::switchProcessPagingRootByPhysical(original) || status != NtStatus::Success) return false;
+    Handle cloneHandle{};
+    if (sys::NtCreateProcessEx(&cloneHandle, ob::SYNCHRONIZE | 1, nullptr, parentHandle,
+                               0, 0, 0, 0, false) != NtStatus::ProcessIsTerminating) return false;
+    if (sys::NtCreateProcessEx(&cloneHandle, ob::SYNCHRONIZE | 1, nullptr, InvalidHandleValue,
+                               0, 0, 0, 0, false) != NtStatus::Success) return false;
+    ps::EProcess* clone{};
+    ob::ObjectHeader* reference{};
+    if (ps::detail::referenceProcessHandle(cloneHandle, ob::SYNCHRONIZE, clone, reference) != NtStatus::Success || !clone)
+        return false;
+    status = parent.getAddressSpace().clonePrivateTo(clone->getAddressSpace(), parent.getDirectoryTableBase(),
+        clone->getDirectoryTableBase(), hal::amd64::switchProcessPagingRootByPhysical);
+    if (status != NtStatus::Success || !hal::amd64::switchProcessPagingRootByPhysical(clone->getDirectoryTableBase()))
+        return false;
+    bool correct = *reinterpret_cast<uint64_t*>(base) == 0x12345678 &&
+        *reinterpret_cast<uint64_t*>(base + mm::PageSize4KB) == 0x87654321 &&
+        !hal::amd64::bootstrapUserRange(base + mm::PageSize4KB, 1, true);
+    *reinterpret_cast<uint64_t*>(base) = 0xabcdef;
+    if (!hal::amd64::switchProcessPagingRootByPhysical(parent.getDirectoryTableBase())) return false;
+    correct = correct && *reinterpret_cast<uint64_t*>(base) == 0x12345678;
+    if (!hal::amd64::switchProcessPagingRootByPhysical(original)) return false;
+    ob::ObDereferenceObject(reference);
+    return correct && sys::NtTerminateProcess(cloneHandle, NtStatus::Success) == NtStatus::Success &&
+        sys::NtClose(cloneHandle) == NtStatus::Success;
+}
+
 void systemThreadEntry(void* argument) {
     using namespace micant;
     using namespace micant::ke;
@@ -645,7 +727,35 @@ void systemThreadEntry(void* argument) {
     if (!current || KeGetCurrentIrql() != PASSIVE_LEVEL || current->kernelApcDisable != 1 ||
         current->tebAddress || sys::NtWaitForSingleObject(InvalidHandleValue, false, &poll) != NtStatus::Timeout ||
         sys::NtWaitForSingleObject(static_cast<Handle>(-2), false, &poll) != NtStatus::Timeout ||
+        sys::NtTerminateThread(0, NtStatus::Success) != NtStatus::CantTerminateSelf ||
+        sys::NtTerminateProcess(0, NtStatus::Success) != NtStatus::Success ||
+        current->terminationRequested || current->owningProcess->isTerminating() ||
         !PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
+    ps::EProcess* parent{};
+    ob::ObjectHeader* parentReference{};
+    Handle limited{}, child{};
+    if (ps::detail::referenceCurrentProcess(parent, parentReference) != NtStatus::Success ||
+        !parent || !parent->isSystemProcess() ||
+        ob::detail::currentHandleTable().createHandle(parentReference, limited, ob::SYNCHRONIZE, OBJ_INHERIT) != NtStatus::Success)
+        __builtin_trap();
+    ob::ObDereferenceObject(parentReference);
+    ObjectAttributes childAttributes{};
+    childAttributes.attributes = OBJ_INHERIT;
+    if (sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE | 1, nullptr, limited,
+            0, 0, 0, 0, false) != NtStatus::AccessDenied ||
+        sys::NtCreateProcessEx(&child, ob::SYNCHRONIZE | 1 | 0x80, &childAttributes, InvalidHandleValue,
+            4, 0, 0, 0, false) != NtStatus::Success) __builtin_trap();
+    ps::EProcess* childProcess{};
+    ob::ObjectHeader* childReference{};
+    if (ps::detail::referenceProcessHandle(child, ob::SYNCHRONIZE, childProcess, childReference) != NtStatus::Success ||
+        childProcess->getHandleTable().lookup(limited) != parentReference || childProcess->getHandleTable().lookup(child) ||
+        !testPrivateProcessClone(child, *childProcess)) __builtin_trap();
+    ob::ObDereferenceObject(childReference);
+    if (sys::NtClose(limited) != NtStatus::Success ||
+        sys::NtWaitForSingleObject(child, false, &poll) != NtStatus::Timeout ||
+        sys::NtTerminateProcess(child, NtStatus::AccessDenied) != NtStatus::Success ||
+        sys::NtWaitForSingleObject(child, false, &poll) != NtStatus::Success ||
+        sys::NtClose(child) != NtStatus::Success) __builtin_trap();
     if (state.leaveInitialRegion) {
         KeLeaveCriticalRegion();
         if (current->kernelApcDisable || current->systemInitialRegionActive) __builtin_trap();
@@ -689,6 +799,7 @@ bool testSystemThreadCreation() noexcept {
     if (userWait != NtStatus::InvalidHandle || userClose != NtStatus::InvalidHandle ||
         untaggedWait != NtStatus::InvalidHandle || untaggedClose != NtStatus::InvalidHandle ||
         previousModeClose != NtStatus::InvalidHandle ||
+        sys::NtTerminateThread(handle, NtStatus::Success) != NtStatus::AccessDenied ||
         sys::NtWaitForSingleObject(handle, false, &poll) != NtStatus::Timeout) return false;
     auto* next = scheduler.selectNextThread();
     const auto old = KfRaiseIrql(DISPATCH_LEVEL);
@@ -838,9 +949,34 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
             cancelled.cancelBeforeStart() != NtStatus::InvalidParameter ||
             cancelled.ready() != NtStatus::InvalidParameter || cancelled.reap() != NtStatus::Success ||
             state.ran) return false;
+        uint32_t previousSuspend{};
         if (cancelled.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
+            cancelled.suspendInitially() != NtStatus::Success ||
+            cancelled.ready() != NtStatus::InvalidParameter ||
+            cancelled.resumeInitial(previousSuspend) != NtStatus::Success || previousSuspend != 1 ||
+            cancelled.kernelThread()->state != ThreadState::Ready ||
             cancelled.cancelBeforeStart() != NtStatus::Success ||
             cancelled.reap() != NtStatus::Success) return false;
+        if (cancelled.initialize(process, 16384, threadEntry, &state) != NtStatus::Success)
+            return false;
+        cancelled.kernelThread()->kernelApcDisable = 1;
+        if (cancelled.terminateOther(NtStatus::AccessDenied) != NtStatus::NotImplemented ||
+            cancelled.kernelThread()->terminationRequested || cancelled.kernelThread()->readyQueued)
+            return false;
+        cancelled.kernelThread()->kernelApcDisable = 0;
+        if (cancelled.terminateOther(NtStatus::AccessDenied) != NtStatus::Success ||
+            cancelled.terminateOther(NtStatus::Success) != NtStatus::Success) return false;
+        auto* terminating = scheduler.selectNextThread();
+        if (terminating != cancelled.kernelThread()) return false;
+        auto* previousIdle = g_CurrentCpu.idleThread;
+        g_CurrentCpu.idleThread = boot;
+        const auto terminationIrql = KfRaiseIrql(DISPATCH_LEVEL);
+        const bool terminated = KiSwapContext(boot, terminating);
+        KeLowerIrql(terminationIrql);
+        g_CurrentCpu.idleThread = previousIdle;
+        if (!terminated || state.ran || cancelled.exitStatus() != NtStatus::AccessDenied ||
+            terminating->state != ThreadState::Terminated || cancelled.reap() != NtStatus::Success)
+            return false;
         if (thread.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
             process.closeAddressSpace() != NtStatus::InvalidParameter ||
             thread.ready() != NtStatus::Success || thread.ready() != NtStatus::InvalidParameter ||
@@ -883,7 +1019,7 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
             return false;
     }
     return mm::PfnDatabase::get().getActiveCount() == active &&
-        testThreadObjectLifetime() && testCancelledThreadApcRundown() &&
+        testThreadObjectLifetime() && testCancelledThreadApcRundown() && testNativeThreadTermination() &&
         testLastThreadExitAndDeferredReap() && testDeferredRemoteExit() && testApcSignalDuringWait() && testRemoteUnstartedThreads() &&
         testKernelWaitDefersTermination() && testRemoteProcessWait() &&
         testProcessObjectLifetime() && testSystemThreadCreation();

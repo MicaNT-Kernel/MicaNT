@@ -468,6 +468,14 @@ public:
         return &table_[index];
     }
 
+    NtStatus setHandleAttributes(Handle handle, uint32_t attributes) noexcept {
+        detail::HandleTableGuard guard;
+        const size_t index = static_cast<size_t>(handle) / 4;
+        if (index == 0 || index >= table_.size() || !table_[index].isValid()) return NtStatus::InvalidHandle;
+        table_[index].handleAttributes = attributes;
+        return NtStatus::Success;
+    }
+
     // Return a retained object acquired atomically with the table lookup.
     NtStatus referenceHandle(Handle handle, uint32_t desiredAccess, const ObjectType* expectedType,
                              ObjectHeader** outObject, uint32_t* outGrantedAccess = nullptr) const {
@@ -527,6 +535,29 @@ public:
             if (table_[i].isValid()) ++count;
         }
         return count;
+    }
+
+    // Preserve handle values in a newly created process. Only inheritable
+    // entries are copied, and each copied entry owns its own Ob reference.
+    NtStatus inheritHandlesFrom(const HandleTable& source) noexcept {
+        if (&source == this) return NtStatus::InvalidParameter;
+        detail::HandleTableGuard guard;
+        if (closing_ || source.closing_ || table_.size() != source.table_.size())
+            return NtStatus::InvalidParameter;
+        for (size_t i = 1; i < table_.size(); ++i)
+            if (table_[i].isValid()) return NtStatus::InvalidParameter;
+        for (size_t i = 1; i < table_.size(); ++i) {
+            const auto& entry = source.table_[i];
+            if (!entry.isValid() || !(entry.handleAttributes & OBJ_INHERIT)) continue;
+            auto* object = entry.object;
+            object->addReference();
+            object->handleCount.fetch_add(1, std::memory_order_relaxed);
+            object->handleInfo.handleCount = static_cast<uint32_t>(object->handleCount.load(std::memory_order_relaxed));
+            if (object->type)
+                const_cast<ObjectType*>(object->type)->totalNumberOfHandles.fetch_add(1, std::memory_order_relaxed);
+            table_[i] = entry;
+        }
+        return NtStatus::Success;
     }
 
     void closeAllHandles() {

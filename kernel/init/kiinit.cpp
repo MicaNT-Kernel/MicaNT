@@ -8,6 +8,7 @@
 #include "micant/km/executive/probe.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/ps_objects.hpp"
 #include "micant/km/executive/section.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
@@ -777,13 +778,127 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
     if (number == sys::SSN_NtClose)
         return status(sys::NtClose(static_cast<Handle>(first)));
-    if (number == sys::SSN_NtTerminateProcess) {
+    if (number == sys::SSN_NtCreateThreadEx) {
+        uint64_t extra[7]{};
+        ObjectAttributes attributes{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success ||
+            (args.third && ex::ExSafeCopyFromUser(&attributes,
+                reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success) ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        struct CapturedAttributes { size_t totalLength; PsAttribute attributes[2]; } captured{};
+        PsAttribute original[2]{};
+        ClientId clientId{};
+        uintptr_t teb{};
+        size_t returned[2]{};
+        size_t count{};
+        if (extra[6]) {
+            if (ex::ExSafeCopyFromUser(&captured.totalLength, reinterpret_cast<void*>(extra[6]),
+                                       sizeof(size_t)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            constexpr size_t prefix = offsetof(PsAttributeList, attributes);
+            if (captured.totalLength < prefix || (captured.totalLength - prefix) % sizeof(PsAttribute) ||
+                (captured.totalLength - prefix) / sizeof(PsAttribute) > 2 || extra[6] > UINT64_MAX - prefix)
+                return status(NtStatus::InvalidParameter);
+            count = (captured.totalLength - prefix) / sizeof(PsAttribute);
+            if (count && ex::ExSafeCopyFromUser(original, reinterpret_cast<void*>(extra[6] + prefix),
+                                                 count * sizeof(PsAttribute)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            for (size_t i = 0; i < count; ++i) {
+                captured.attributes[i] = original[i];
+                const size_t required = original[i].attribute == PS_ATTRIBUTE_CLIENT_ID ? sizeof(clientId) :
+                    original[i].attribute == PS_ATTRIBUTE_TEB_ADDRESS ? sizeof(teb) : 0;
+                if (!required) return status(NtStatus::NotImplemented);
+                if (original[i].size != required) return status(NtStatus::InvalidParameter);
+                if (ex::ProbeForWrite(reinterpret_cast<void*>(original[i].value), required, 1) != NtStatus::Success ||
+                    (original[i].returnLength && ex::ProbeForWrite(original[i].returnLength, sizeof(size_t), 1) != NtStatus::Success))
+                    return status(NtStatus::AccessViolation);
+                captured.attributes[i].value = original[i].attribute == PS_ATTRIBUTE_CLIENT_ID
+                    ? reinterpret_cast<uintptr_t>(&clientId) : reinterpret_cast<uintptr_t>(&teb);
+                captured.attributes[i].returnLength = original[i].returnLength ? &returned[i] : nullptr;
+            }
+        }
+        Handle handle{};
+        const auto result = sys::NtCreateThreadEx(&handle, static_cast<uint32_t>(second),
+            args.third ? &attributes : nullptr, static_cast<Handle>(args.fourth), extra[0], extra[1],
+            static_cast<uint32_t>(extra[2]) | 1u, extra[3], extra[4], extra[5], extra[6] ? &captured : nullptr);
+        if (result != NtStatus::Success) return status(result);
+        auto copy = NtStatus::Success;
+        for (size_t i = 0; i < count && copy == NtStatus::Success; ++i) {
+            const void* value = original[i].attribute == PS_ATTRIBUTE_CLIENT_ID
+                ? static_cast<const void*>(&clientId) : static_cast<const void*>(&teb);
+            copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(original[i].value), value, original[i].size);
+            if (copy == NtStatus::Success && original[i].returnLength)
+                copy = ex::ExSafeCopyToUser(original[i].returnLength, &returned[i], sizeof(size_t));
+        }
+        if (copy == NtStatus::Success)
+            copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        // Publish user outputs before the thread can run, even if future
+        // syscall implementations enable interrupts while copying buffers.
+        if (copy == NtStatus::Success && !(extra[2] & 1)) {
+            ps::EThread* thread{};
+            ob::ObjectHeader* reference{};
+            uint32_t previous{};
+            if (ps::detail::referenceThreadHandle(handle, 0, thread, reference) != NtStatus::Success)
+                __builtin_trap();
+            const auto resumed = thread->resumeInitial(previous);
+            ob::ObDereferenceObject(reference);
+            if (resumed != NtStatus::Success || previous != 1) __builtin_trap();
+        }
+        if (copy != NtStatus::Success) {
+            ps::EThread* thread{};
+            ob::ObjectHeader* reference{};
+            if (ps::detail::referenceThreadHandle(handle, 0, thread, reference) != NtStatus::Success ||
+                thread->rollbackBeforeStart() != NtStatus::Success)
+                __builtin_trap();
+            ob::ObDereferenceObject(reference);
+            (void)sys::NtClose(handle);
+        }
+        return status(copy);
+    }
+    if (number == sys::SSN_NtResumeThread) {
+        if (second) {
+            const auto probe = ex::ProbeForWrite(reinterpret_cast<void*>(second), sizeof(uint32_t), alignof(uint32_t));
+            if (probe != NtStatus::Success) return status(probe);
+        }
+        uint32_t previous{};
+        const auto result = sys::NtResumeThread(static_cast<Handle>(first), second ? &previous : nullptr);
+        if (result != NtStatus::Success || !second) return status(result);
+        return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &previous, sizeof(previous)));
+    }
+    if (number == sys::SSN_NtCreateProcessEx) {
+        uint64_t extra[5]{};
+        ObjectAttributes attributes{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success ||
+            (args.third && ex::ExSafeCopyFromUser(&attributes,
+                reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success))
+            return status(NtStatus::AccessViolation);
+        const auto probe = ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), alignof(Handle));
+        if (probe != NtStatus::Success) return status(probe);
+        Handle handle{};
+        const auto result = sys::NtCreateProcessEx(&handle, static_cast<uint32_t>(second),
+            args.third ? &attributes : nullptr, static_cast<Handle>(args.fourth),
+            static_cast<uint32_t>(extra[0]), static_cast<Handle>(extra[1]),
+            static_cast<Handle>(extra[2]), static_cast<Handle>(extra[3]), (extra[4] & 0xff) != 0);
+        if (result != NtStatus::Success) return status(result);
+        const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        if (copy != NtStatus::Success) (void)sys::NtClose(handle);
+        return status(copy);
+    }
+    if (number == sys::SSN_NtTerminateProcess || number == sys::SSN_NtTerminateThread) {
         // The syscall entry used SWAPGS; restore the bootstrap kernel's GS
         // convention before switching away. If termination fails, restore the
         // syscall entry convention before returning through its epilogue.
         __asm__ __volatile__("swapgs" : : : "memory");
         __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
-        const auto result = sys::NtTerminateProcess(first, static_cast<NtStatus>(static_cast<uint32_t>(second)));
+        const auto exitStatus = static_cast<NtStatus>(static_cast<uint32_t>(second));
+        const auto result = number == sys::SSN_NtTerminateProcess
+            ? sys::NtTerminateProcess(first, exitStatus)
+            : sys::NtTerminateThread(first, exitStatus);
         __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         __asm__ __volatile__("swapgs" : : : "memory");
         return status(result);

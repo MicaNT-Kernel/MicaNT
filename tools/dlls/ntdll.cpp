@@ -59,6 +59,41 @@ __attribute__((naked)) __declspec(dllexport) int32_t NtTerminateProcess(void* /*
 #endif
 }
 
+__attribute__((naked)) __declspec(dllexport) int32_t NtTerminateThread(void* /*threadHandle*/, int32_t /*exitStatus*/) noexcept {
+#if defined(__x86_64__)
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x53, %rax\n\tsyscall\n\tret\n\t");
+#else
+    return 0;
+#endif
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtResumeThread(void*, uint32_t*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x52, %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtCreateThreadEx(
+    void**, uint32_t, void*, void*, void*, void*, uint32_t, uintptr_t, size_t, size_t, void*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0xbd, %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtCreateProcessEx(
+    void**, uint32_t, void*, void*, uint32_t, void*, void*, void*, uint8_t) noexcept {
+#if defined(__x86_64__)
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0xb4, %rax\n\tsyscall\n\tret\n\t");
+#else
+    return 0;
+#endif
+}
+
+// Initial AMD64 thread entry receives the caller's routine and parameter in
+// RCX/RDX. Returning from the routine terminates this thread with its result.
+__attribute__((naked, noreturn)) __declspec(dllexport) void RtlUserThreadStart(void*, void*) noexcept {
+    __asm__ __volatile__(
+        "andq $-16, %rsp\nsubq $32, %rsp\nmovq %rcx, %rax\nmovq %rdx, %rcx\n"
+        "callq *%rax\nmovl %eax, %edx\nmovq $-2, %rcx\nmovq %rcx, %r10\n"
+        "movq $0x53, %rax\nsyscall\nud2\n");
+}
+
 __attribute__((naked)) __declspec(dllexport) uint64_t NtShutdownSystem(uint32_t /*action*/) noexcept {
 #if defined(__x86_64__)
     __asm__ __volatile__(
