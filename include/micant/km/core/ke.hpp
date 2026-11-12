@@ -835,6 +835,7 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming, bool prequeued =
         KeGetCurrentThread() != outgoing || outgoing->readyQueued != prequeued ||
         (prequeued && outgoing->state != ThreadState::Running) ||
         (outgoing->state != ThreadState::Running &&
+         outgoing->state != ThreadState::Waiting &&
          outgoing->state != ThreadState::Terminated) ||
         g_CurrentCpu.currentIrql != DISPATCH_LEVEL ||
         (incoming->state != ThreadState::Initialized &&
@@ -904,6 +905,36 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming, bool prequeued =
     return true;
 #endif
 }
+
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+namespace detail {
+// Bootstrap dispatcher primitive; callers arrange the wait condition and wake
+// the thread through the canonical ready queue. No timeout/APC semantics yet.
+inline bool blockCurrentThread() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    auto* current = KeGetCurrentThread();
+    const KIRQL previous = KeGetCurrentIrql();
+    bool result = false;
+    if (current && current->state == ThreadState::Running && previous <= APC_LEVEL) {
+        KfRaiseIrql(DISPATCH_LEVEL);
+        auto& scheduler = PriorityScheduler::get();
+        if (auto* next = scheduler.selectNextThread()) {
+            current->state = ThreadState::Waiting;
+            result = KiSwapContext(current, next);
+            if (!result) {
+                current->state = ThreadState::Running;
+                next->state = ThreadState::Ready;
+                if (!scheduler.readyKThread(next)) __builtin_trap();
+            }
+        }
+        KeLowerIrql(previous);
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return result;
+}
+}
+#endif
 
 // ============================================================================
 // 10. APC Delivery Engine (KiDeliverApc)

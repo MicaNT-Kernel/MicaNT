@@ -251,6 +251,7 @@ if (MICANT_ENABLE_BAREMETAL)
         kernel/ps/address_space.cpp
         test/kernel_context_canary.cpp
         test/kernel_ke_ready_queue_test.cpp
+        test/kernel_ke_block_wake_test.cpp
         test/kernel_mm_avl_test.cpp
         test/kernel_mm_process_test.cpp
         test/pe_tls_freestanding_test.cpp
