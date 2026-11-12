@@ -38,6 +38,46 @@ bool initializeBootstrapSectionServices() noexcept {
         hal::amd64::BootstrapManagedBase, hal::amd64::BootstrapManagedSize);
 }
 
+NtStatus NtAllocateVirtualMemory(Handle process, uintptr_t* base, uintptr_t zeroBits,
+                                 size_t* regionSize, uint32_t type, uint32_t protection) {
+    if (!base || !regionSize || !*regionSize) return NtStatus::InvalidParameter;
+    if (process != InvalidHandleValue) return NtStatus::NotImplemented;
+    if (zeroBits) return NtStatus::NotImplemented;
+    const size_t offset = *base & mm::PageMask4KB;
+    if (*regionSize > SIZE_MAX - offset || *regionSize + offset > SIZE_MAX - mm::PageMask4KB)
+        return NtStatus::InvalidParameter;
+    const size_t rounded = (*regionSize + offset + mm::PageMask4KB) & ~mm::PageMask4KB;
+    uintptr_t target = *base;
+    const auto status = currentAddressSpace().allocate(target, *regionSize, type, protection);
+    if (status == NtStatus::Success) { *base = target; *regionSize = rounded; }
+    return status;
+}
+
+NtStatus NtFreeVirtualMemory(Handle process, uintptr_t* base, size_t* regionSize, uint32_t type) {
+    if (!base || !regionSize || !*base) return NtStatus::InvalidParameter;
+    if (process != InvalidHandleValue) return NtStatus::NotImplemented;
+    if (type != mm::MEM_RELEASE && type != mm::MEM_DECOMMIT) return NtStatus::NotImplemented;
+    auto& space = currentAddressSpace();
+    const auto* vad = space.findVad(*base);
+    if (!vad) return NtStatus::InvalidParameter;
+    uintptr_t start = *base;
+    size_t length = *regionSize;
+    if (type == mm::MEM_RELEASE || !length) {
+        if (start != vad->startingAddress || (type == mm::MEM_RELEASE && length))
+            return NtStatus::InvalidParameter;
+        length = vad->size();
+    } else {
+        const size_t offset = start & mm::PageMask4KB;
+        if (length > SIZE_MAX - offset || length + offset > SIZE_MAX - mm::PageMask4KB)
+            return NtStatus::InvalidParameter;
+        length = (length + offset + mm::PageMask4KB) & ~mm::PageMask4KB;
+        start &= ~static_cast<uintptr_t>(mm::PageMask4KB);
+    }
+    const auto status = space.free(start, type == mm::MEM_RELEASE ? 0 : length, type);
+    if (status == NtStatus::Success) { *base = start; *regionSize = length; }
+    return status;
+}
+
 NtStatus NtCreateSection(Handle* out, uint32_t access, ObjectAttributes* attributes,
                          LargeInteger* maximum, uint32_t protect, uint32_t allocation,
                          Handle file) {

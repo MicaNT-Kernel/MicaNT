@@ -151,6 +151,7 @@ termination or arbitrary process-handle lookup. Those remain future work.
 | `python3 qemu.py --headless` | Passed; Ps-owned roots, Ke CR3 switches, isolated handles and pages, shared section, survivor after cleanup, injected root failures and PFN accounting |
 | `python3 qemu.py --headless --runtime-selftest` | Passed; bootstrap runtime teardown; this mode halts before the Ps/Ke process-context diagnostic |
 | `clang++ ... -fsanitize=address,undefined test/mm_process_backend_test.cpp` | Passed; backend rollback and teardown regression |
+| `python3 qemu.py --headless` | Passed; loaded NTDLL allocation/free, decommit/recommit, error cases and process-owned allocation paths |
 | `clang++ ... -fsanitize=address,undefined test/ke_context_hosted_test.cpp` | Passed; hosted context regression |
 | `python3 scripts/verify_kernel_architecture.py` | Passed; one active modular kernel |
 
@@ -169,8 +170,8 @@ its own IDT before restoring the previous state.
 Both the bootstrap and process tests use a bounded 16 MiB window; only the
 process-root path provides the isolation described above. The backend requires the BSP with interrupts
 disabled and has no SMP TLB shootdown. Commit eagerly allocates physical pages;
-only read-only and read-write protection are implemented. Sections, demand
-paging, process isolation and NT syscall integration remain unimplemented.
+only read-only and read-write protection are implemented. Demand paging and
+general NT syscall coverage remain unimplemented.
 Backend-chosen addresses are 64 KiB aligned; explicit native addresses are
 rounded to 4 KiB, independently of the Win32 reservation contract. A failed
 unmap retains its VAD/PFN state for an explicit, retryable `close()`; destroying
@@ -185,6 +186,14 @@ Structural comparison used ReactOS commit
 `8fe3cee05606aecd9442674e40038649f048d10d`, specifically
 `ntoskrnl/mm/ARM3/vadnode.c` and `ntoskrnl/mm/ARM3/virtual.c`; the MicaNT
 implementation is independent.
+
+The bootstrap syscall dispatcher now routes the current-process subset of
+`NtAllocateVirtualMemory` and `NtFreeVirtualMemory` to the owning address
+space. A CPL3 diagnostic calls the actual NTDLL exports and checks reserve,
+commit, decommit, recommit, release, invalid pointers and release-size errors;
+PFN accounting is checked after the diagnostic. Unsupported process handles,
+nonzero `ZeroBits` and unimplemented allocation/protection flags fail rather
+than simulating success. This does not establish the full native VM contract.
 
 #### Hosted virtual-memory service boundary
 

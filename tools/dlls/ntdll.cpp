@@ -93,7 +93,7 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtQuerySystemInformation(
 #endif
 }
 
-__attribute__((naked)) __declspec(dllexport) uint64_t NtAllocateVirtualMemory(
+__attribute__((naked)) __declspec(dllexport) int32_t NtAllocateVirtualMemory(
     void* /*processHandle*/,
     void** /*baseAddress*/,
     uint64_t /*zeroBits*/,
@@ -105,7 +105,6 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtAllocateVirtualMemory(
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
         "movq $0x18, %rax\n\t"
-        "movq %rdx, %r8\n\t"
         "syscall\n\t"
         "ret\n\t"
     );
@@ -114,7 +113,7 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtAllocateVirtualMemory(
 #endif
 }
 
-__attribute__((naked)) __declspec(dllexport) uint64_t NtFreeVirtualMemory(
+__attribute__((naked)) __declspec(dllexport) int32_t NtFreeVirtualMemory(
     void* /*processHandle*/,
     void** /*baseAddress*/,
     size_t* /*regionSize*/,
@@ -123,8 +122,7 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtFreeVirtualMemory(
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
-        "movq $0x1B, %rax\n\t"
-        "movq %rdx, %r8\n\t"
+        "movq $0x1E, %rax\n\t"
         "syscall\n\t"
         "ret\n\t"
     );

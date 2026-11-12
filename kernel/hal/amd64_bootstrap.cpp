@@ -553,10 +553,14 @@ void MicantSyscallClientProgram() {
     using Map = int32_t (*)(void*, void*, void**, uintptr_t, size_t, int64_t*, size_t*, uint32_t, uint32_t, uint32_t);
     using Unmap = int32_t (*)(void*, void*);
     using Close = int32_t (*)(void*);
+    using Allocate = int32_t (*)(void*, void**, uintptr_t, size_t*, uint32_t, uint32_t);
+    using Free = int32_t (*)(void*, void**, size_t*, uint32_t);
     auto create = reinterpret_cast<Create>(exports[0]);
     auto map = reinterpret_cast<Map>(exports[1]);
     auto unmap = reinterpret_cast<Unmap>(exports[2]);
     auto close = reinterpret_cast<Close>(exports[3]);
+    auto allocate = reinterpret_cast<Allocate>(exports[4]);
+    auto freeMemory = reinterpret_cast<Free>(exports[5]);
     void* section{};
     void* first{};
     void* second{};
@@ -564,6 +568,27 @@ void MicantSyscallClientProgram() {
     size_t firstSize = 4096, secondSize = 4096;
     micant::ObjectAttributes attributes{};
     auto* current = reinterpret_cast<void*>(~uint64_t{0});
+    void* privateMemory{};
+    size_t privateSize = 37;
+    if (allocate(current, nullptr, 0, &privateSize, 0x3000, 4) != static_cast<int32_t>(0xc0000005u) ||
+        allocate(current, &privateMemory, 0, &privateSize, 0x3000, 4) ||
+        !privateMemory || privateSize != 4096 ||
+        *static_cast<volatile uint64_t*>(privateMemory) != 0) __builtin_trap();
+    *static_cast<volatile uint64_t*>(privateMemory) = 0x123456789abcdef0ULL;
+    if (*static_cast<volatile uint64_t*>(privateMemory) != 0x123456789abcdef0ULL) __builtin_trap();
+    size_t invalidRelease = 1;
+    if (freeMemory(current, &privateMemory, &invalidRelease, 0x8000) != static_cast<int32_t>(0xc000000du) ||
+        invalidRelease != 1 || *static_cast<volatile uint64_t*>(privateMemory) != 0x123456789abcdef0ULL)
+        __builtin_trap();
+    size_t decommitSize = 1;
+    if (freeMemory(current, &privateMemory, &decommitSize, 0x4000) || decommitSize != 4096)
+        __builtin_trap();
+    size_t recommitSize = 4096;
+    if (allocate(current, &privateMemory, 0, &recommitSize, 0x1000, 4) ||
+        *static_cast<volatile uint64_t*>(privateMemory) != 0) __builtin_trap();
+    size_t releaseSize = 0;
+    if (freeMemory(current, &privateMemory, &releaseSize, 0x8000) || releaseSize != 4096)
+        __builtin_trap();
     if (create(nullptr, 4, nullptr, &maximum, 4, 0x08000000, nullptr) !=
             static_cast<int32_t>(0xc0000005u) ||
         create(&section, 4, &attributes, &maximum, 4, 0x08000000, nullptr) ||
@@ -1491,9 +1516,10 @@ bool verifyNativeImageLoading() noexcept {
                 (section.characteristics & IMAGE_SCN_MEM_WRITE) != 0,
                 (section.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)) return false;
     }
-    constexpr const char* names[]{"NtCreateSection", "NtMapViewOfSection", "NtUnmapViewOfSection", "NtClose"};
+    constexpr const char* names[]{"NtCreateSection", "NtMapViewOfSection", "NtUnmapViewOfSection", "NtClose",
+                                  "NtAllocateVirtualMemory", "NtFreeVirtualMemory"};
     auto* exports = reinterpret_cast<uint64_t*>(kUserBase + 4096 + 768);
-    for (size_t index = 0; index < 4; ++index) {
+    for (size_t index = 0; index < 6; ++index) {
         if (g_nativeProbeModules.resolve("ntdll.dll", names[index], 0, exports[index]) != micant::NtStatus::Success ||
             !bootstrapUserRange(exports[index], 1, false, true)) return false;
     }

@@ -115,8 +115,9 @@ void firstContextEntry() noexcept {
         uintptr_t privateAddress = micant::hal::amd64::BootstrapManagedBase;
         uintptr_t sharedAddress = privateAddress + micant::mm::ProcessAddressSpace::AllocationGranularity;
         size_t viewSize = micant::mm::PageSize4KB;
+        size_t privateSize = viewSize;
         if (!g_firstContextThread.owningProcess ||
-            g_firstContextThread.owningProcess->getAddressSpace().allocate(privateAddress, viewSize,
+            micant::sys::NtAllocateVirtualMemory(micant::InvalidHandleValue, &privateAddress, 0, &privateSize,
                 micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
             micant::sys::NtMapViewOfSection(g_firstContextSection, micant::InvalidHandleValue, &sharedAddress,
                 0, 0, nullptr, &viewSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success)
@@ -167,6 +168,7 @@ void secondContextEntry() noexcept {
         uintptr_t privateAddress = micant::hal::amd64::BootstrapManagedBase;
         uintptr_t sharedAddress = privateAddress + micant::mm::ProcessAddressSpace::AllocationGranularity;
         size_t viewSize = micant::mm::PageSize4KB;
+        size_t privateSize = viewSize;
         uintptr_t forbiddenAddress{};
         size_t forbiddenSize = viewSize;
         if (micant::sys::NtMapViewOfSection(g_firstOnlySection, micant::InvalidHandleValue, &forbiddenAddress,
@@ -174,7 +176,7 @@ void secondContextEntry() noexcept {
             forbiddenAddress != 0)
             stopWithError("[MicaNT Ps] Handle table isolation failed\r\n");
         if (!g_secondContextThread.owningProcess ||
-            g_secondContextThread.owningProcess->getAddressSpace().allocate(privateAddress, viewSize,
+            micant::sys::NtAllocateVirtualMemory(micant::InvalidHandleValue, &privateAddress, 0, &privateSize,
                 micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
             micant::sys::NtMapViewOfSection(g_secondContextSection, micant::InvalidHandleValue, &sharedAddress,
                 0, 0, nullptr, &viewSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
@@ -683,6 +685,33 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
     if (number == sys::SSN_NtClose)
         return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtAllocateVirtualMemory || number == sys::SSN_NtFreeVirtualMemory) {
+        const uint64_t sizePointer = number == sys::SSN_NtAllocateVirtualMemory ? args.fourth : args.third;
+        uintptr_t base{};
+        size_t size{};
+        if (ex::ProbeForWrite(reinterpret_cast<void*>(second), sizeof(base), 1) != NtStatus::Success ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(sizePointer), sizeof(size), 1) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(&base, reinterpret_cast<const void*>(second), sizeof(base)) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(&size, reinterpret_cast<const void*>(sizePointer), sizeof(size)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        NtStatus result{};
+        if (number == sys::SSN_NtAllocateVirtualMemory) {
+            uint64_t extra[2]{};
+            if (args.userStack > UINT64_MAX - 40 ||
+                ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40), sizeof(extra)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            result = sys::NtAllocateVirtualMemory(first, &base, args.third, &size,
+                                                  static_cast<uint32_t>(extra[0]), static_cast<uint32_t>(extra[1]));
+        } else {
+            result = sys::NtFreeVirtualMemory(first, &base, &size, static_cast<uint32_t>(args.fourth));
+        }
+        if (result != NtStatus::Success) return status(result);
+        if (ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &base, sizeof(base)) != NtStatus::Success ||
+            ex::ExSafeCopyToUser(reinterpret_cast<void*>(sizePointer), &size, sizeof(size)) != NtStatus::Success) {
+            return status(NtStatus::AccessViolation);
+        }
+        return status(NtStatus::Success);
+    }
     if (number == sys::SSN_NtCreateSection || number == sys::SSN_NtMapViewOfSection) {
         uint64_t extra[6]{};
         const size_t count = number == sys::SSN_NtCreateSection ? 3 : 6;
@@ -1101,6 +1130,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
     }
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
+    serialWrite("[MicaNT Mm] CPL3 native allocation and release verified\r\n");
     const auto probeTelemetry = micant::ex::ExQuerySyncTelemetry();
     if (!probeTelemetry.totalSafeCopiesCompleted ||
         !probeTelemetry.totalSafeCopyFaultsCaught ||
