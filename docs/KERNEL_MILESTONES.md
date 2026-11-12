@@ -5,5 +5,5 @@
 | M3 — Scheduling preemptive | Parziale | Clock BSP calibrato, preemption kernel/CPL3, idle block/wake e mascheramento IRQL del timer verificati in QEMU. | Precisione del tempo, dispatch immediato, IRQL generale, routing IRQ e stato esteso. |
 | M4 — Processi e thread | Parziale | Lifecycle Ps/Ob con handle processo, cleanup differito, terminazione di thread in attesa e coda APC verificati in QEMU. | Oggetti attendibili Ob, creazione nativa, terminazione di altri processi e rundown APC. |
 | M5 — Syscall NT | Parziale | Section, close, memoria, eventi con attesa bloccante e terminazione limitata esercitati da CPL3. | Creazione processo/thread, timeout/APC, terminazione generale e copertura restante. |
-| M6 — Processo PE Ring 3 | Parziale | Loader Ps, section Ob/Mm, import NTDLL e lista moduli PEB verificati in QEMU. | `SEC_IMAGE` file-backed, percorsi moduli, parametri di processo e startup completo. |
+| M6 — Processo PE Ring 3 | Parziale | Loader Ps, section Ob/Mm, import NTDLL, percorsi moduli e parametri essenziali PEB verificati in QEMU. | `SEC_IMAGE` file-backed, parametri completi e startup completo. |
 | M7 — Due thread, TLS e sincronizzazione | Parziale | Due thread Ps CPL3, TLS PE di due moduli, import NTDLL, eventi e status verificati in QEMU. | Callback TLS, creazione nativa thread e startup completo. |
