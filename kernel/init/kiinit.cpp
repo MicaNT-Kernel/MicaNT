@@ -22,6 +22,7 @@
 
 namespace micant::sys {
 bool initializeBootstrapSectionServices() noexcept;
+void initializeBootstrapEventServices() noexcept;
 bool verifyBootstrapSectionOwnership() noexcept;
 }
 
@@ -687,6 +688,38 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
     if (number == sys::SSN_NtClose)
         return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtCreateEvent) {
+        uint64_t initial{};
+        ObjectAttributes attributes{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&initial, reinterpret_cast<const void*>(args.userStack + 40), sizeof(initial)) != NtStatus::Success ||
+            (args.third && ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success) ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        Handle handle{};
+        const auto result = sys::NtCreateEvent(&handle, static_cast<uint32_t>(second),
+            args.third ? &attributes : nullptr, static_cast<uint32_t>(args.fourth), (initial & 0xff) != 0);
+        if (result != NtStatus::Success) return status(result);
+        const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        if (copy != NtStatus::Success) sys::NtClose(handle);
+        return status(copy);
+    }
+    if (number == sys::SSN_NtSetEvent) {
+        if (second && ex::ProbeForWrite(reinterpret_cast<void*>(second), sizeof(int32_t), 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        int32_t previous{};
+        const auto result = sys::NtSetEvent(first, second ? &previous : nullptr);
+        if (result != NtStatus::Success || !second) return status(result);
+        return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &previous, sizeof(previous)));
+    }
+    if (number == sys::SSN_NtWaitForSingleObject) {
+        // A blocking syscall requires a private kernel stack per user thread.
+        if (!args.third) return status(NtStatus::NotImplemented);
+        LargeInteger timeout{};
+        if (ex::ExSafeCopyFromUser(&timeout, reinterpret_cast<const void*>(args.third), sizeof(timeout)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        return status(sys::NtWaitForSingleObject(first, (second & 0xff) != 0, &timeout));
+    }
     if (number == sys::SSN_NtAllocateVirtualMemory || number == sys::SSN_NtFreeVirtualMemory) {
         const uint64_t sizePointer = number == sys::SSN_NtAllocateVirtualMemory ? args.fourth : args.third;
         uintptr_t base{};
@@ -1102,6 +1135,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestKeBlockWake())
         stopWithError("[MicaNT Ke] Block and wake verification failed\r\n");
     serialWrite("[MicaNT Ke] Kernel thread block and wake verified\r\n");
+    micant::sys::initializeBootstrapEventServices();
     if (!MicantTestKeEventWait())
         stopWithError("[MicaNT Ke] Event wait verification failed\r\n");
     serialWrite("[MicaNT Ke] Kernel event wait and wake verified\r\n");
@@ -1142,6 +1176,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     }
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
     serialWrite("[MicaNT Mm] CPL3 native allocation and release verified\r\n");
+    serialWrite("[MicaNT Ke] CPL3 native event polling verified\r\n");
     const auto probeTelemetry = micant::ex::ExQuerySyncTelemetry();
     if (!probeTelemetry.totalSafeCopiesCompleted ||
         !probeTelemetry.totalSafeCopyFaultsCaught ||

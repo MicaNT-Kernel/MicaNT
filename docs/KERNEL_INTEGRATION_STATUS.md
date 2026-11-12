@@ -142,11 +142,22 @@ internal event wait queue built on that primitive. QEMU checks a pair of
 kernel contexts handing off through synchronization events, notification of
 two simultaneous waiters, retained notification state, auto-reset state and
 cleanup after a wait fails for lack of a runnable thread. Event storage must
-outlive its waiters; this is not yet an Ob event, exported KEVENT ABI, NT
-wait service, timed or alertable wait, priority boost, or SMP implementation.
+outlive its waiters. The event now has a canonical Ob object and per-process
+handle: an in-kernel waiter retains an object reference across a context
+switch and another context closes a handle before signaling through a duplicate.
+The CPL3 diagnostic calls the actual NTDLL `NtCreateEvent`, `NtSetEvent`,
+`NtWaitForSingleObject` and `NtClose` exports, verifying zero-timeout polling,
+auto-reset, previous state and invalid pointer/handle cases. Kernel tests also
+check access rights and invalid event type. User-mode blocking waits are
+explicitly unsupported until syscall entry uses per-thread kernel stacks;
+timed and alertable waits, named events, public KEVENT ABI, priority boost and
+SMP remain unimplemented. These are diagnostics, not two user threads.
 The event semantics were checked against
 [KeInitializeEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent)
-and [KeSetEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent);
+and [KeSetEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent).
+Native service contracts are [ZwCreateEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwcreateevent),
+[ZwSetEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetevent)
+and [ZwWaitForSingleObject](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwwaitforsingleobject);
 ReactOS `ntoskrnl/ke/eventobj.c` and `ntoskrnl/ke/wait.c` were consulted as
 architectural references, without copying code.
 
@@ -171,7 +182,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | Check | Result |
 |---|---|
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
-| `python3 qemu.py --headless` | Passed; internal Ke event wait/wake, two notification waiters and event-state checks |
+| `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
 
 ### Bootstrap VAD reserve, commit, protection and release

@@ -17,7 +17,7 @@ public:
 
     ~BootstrapEvent() { if (head_) __builtin_trap(); }
 
-    [[nodiscard]] NtStatus wait() noexcept {
+    [[nodiscard]] NtStatus wait(bool poll = false) noexcept {
         uint64_t flags{};
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
         NtStatus result = NtStatus::Unsuccessful;
@@ -27,6 +27,8 @@ public:
             if (signaled_) {
                 if (!notification_) signaled_ = false;
                 result = NtStatus::Success;
+            } else if (poll) {
+                result = NtStatus::Timeout;
             } else {
                 Waiter waiter{current};
                 if (tail_) tail_->next = &waiter;

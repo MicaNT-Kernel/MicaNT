@@ -1,4 +1,6 @@
 #include "micant/km/core/sync.hpp"
+#include "micant/km/core/syscalls.hpp"
+#include "micant/km/executive/ob.hpp"
 
 namespace {
 using namespace micant;
@@ -9,8 +11,9 @@ KThread second;
 KThread* boot{};
 alignas(16) uint8_t firstStack[16384]{};
 alignas(16) uint8_t secondStack[16384]{};
-BootstrapEvent firstEvent{false};
-BootstrapEvent secondEvent{false};
+Handle firstEvent{};
+Handle firstEventDuplicate{};
+Handle secondEvent{};
 uint32_t stage{};
 KThread notificationFirst;
 KThread notificationSecond;
@@ -50,9 +53,9 @@ uint32_t broadcastStage{};
 [[noreturn]] void firstEntry(void*) noexcept {
     KeLowerIrql(PASSIVE_LEVEL);
     stage = 1;
-    if (firstEvent.wait() != NtStatus::Success || stage != 2) __builtin_trap();
+    if (sys::NtWaitForSingleObject(firstEvent, false, nullptr) != NtStatus::Success || stage != 2) __builtin_trap();
     stage = 3;
-    if (secondEvent.set()) __builtin_trap();
+    if (sys::NtSetEvent(secondEvent, nullptr) != NtStatus::Success) __builtin_trap();
     first.state = ThreadState::Terminated;
     KfRaiseIrql(DISPATCH_LEVEL);
     auto* next = PriorityScheduler::get().selectNextThread();
@@ -62,9 +65,11 @@ uint32_t broadcastStage{};
 
 [[noreturn]] void secondEntry(void*) noexcept {
     KeLowerIrql(PASSIVE_LEVEL);
-    if (stage != 1 || first.state != ThreadState::Waiting || firstEvent.set()) __builtin_trap();
+    if (stage != 1 || first.state != ThreadState::Waiting ||
+        sys::NtClose(firstEvent) != NtStatus::Success ||
+        sys::NtSetEvent(firstEventDuplicate, nullptr) != NtStatus::Success) __builtin_trap();
     stage = 2;
-    if (secondEvent.wait() != NtStatus::Success || stage != 3) __builtin_trap();
+    if (sys::NtWaitForSingleObject(secondEvent, false, nullptr) != NtStatus::Success || stage != 3) __builtin_trap();
     stage = 4;
     second.state = ThreadState::Terminated;
     KfRaiseIrql(DISPATCH_LEVEL);
@@ -78,7 +83,22 @@ extern "C" bool MicantTestKeEventWait() noexcept {
     using namespace micant::ke;
     auto& scheduler = PriorityScheduler::get();
     boot = KeGetCurrentThread();
-    if (!boot || scheduler.getReadyThreadCount() || firstEvent.wait() != NtStatus::Unsuccessful)
+    constexpr uint32_t eventAccess = ob::SYNCHRONIZE | 2;
+    LargeInteger poll{};
+    Handle limited{};
+    if (sys::NtCreateEvent(&limited, 1, nullptr, 0, false) != NtStatus::Success ||
+        sys::NtSetEvent(limited, nullptr) != NtStatus::AccessDenied ||
+        sys::NtWaitForSingleObject(limited, false, &poll) != NtStatus::AccessDenied ||
+        sys::NtClose(limited) != NtStatus::Success ||
+        sys::NtCreateEvent(&limited, eventAccess, nullptr, 2, false) != NtStatus::InvalidParameter4)
+        return false;
+    if (!boot || scheduler.getReadyThreadCount() ||
+        sys::NtCreateEvent(&firstEvent, eventAccess, nullptr, 1, false) != NtStatus::Success ||
+        sys::NtCreateEvent(&secondEvent, eventAccess, nullptr, 1, false) != NtStatus::Success ||
+        ob::detail::currentHandleTable().duplicateHandle(firstEvent, ob::detail::currentHandleTable(),
+                                                          firstEventDuplicate) != NtStatus::Success ||
+        sys::NtWaitForSingleObject(firstEvent, false, &poll) != NtStatus::Timeout ||
+        sys::NtWaitForSingleObject(firstEvent, false, nullptr) != NtStatus::Unsuccessful)
         return false;
     BootstrapEvent notification{true};
     BootstrapEvent synchronization{false};
@@ -95,7 +115,8 @@ extern "C" bool MicantTestKeEventWait() noexcept {
     KeLowerIrql(previous);
     if (!switched || stage != 4 || KeGetCurrentThread() != boot ||
         first.state != ThreadState::Terminated || second.state != ThreadState::Terminated ||
-        scheduler.getReadyThreadCount()) return false;
+        scheduler.getReadyThreadCount() || sys::NtClose(firstEventDuplicate) != NtStatus::Success ||
+        sys::NtClose(secondEvent) != NtStatus::Success) return false;
     notificationFirst.directoryTableBase = notificationSecond.directoryTableBase =
         notifier.directoryTableBase = g_CurrentCpu.currentCr3;
     if (!detail::prepareBootstrapThread(notificationFirst, notificationFirstStack,

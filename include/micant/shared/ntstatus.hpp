@@ -50,6 +50,7 @@ enum class NtStatus : uint32_t {
     BadInitialPc                     = 0xC000000A,
     InvalidCid                       = 0xC000000B,
     InvalidParameter                 = 0xC000000D,
+    InvalidParameter4                = 0xC00000F2,
     NoSuchDevice                     = 0xC000000E,
     NoSuchFile                       = 0xC000000F,
     InvalidDeviceRequest             = 0xC0000010,

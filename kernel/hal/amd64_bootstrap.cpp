@@ -555,12 +555,29 @@ void MicantSyscallClientProgram() {
     using Close = int32_t (*)(void*);
     using Allocate = int32_t (*)(void*, void**, uintptr_t, size_t*, uint32_t, uint32_t);
     using Free = int32_t (*)(void*, void**, size_t*, uint32_t);
+    using CreateEvent = int32_t (*)(void**, uint32_t, void*, uint32_t, uint8_t);
+    using SetEvent = int32_t (*)(void*, int32_t*);
+    using Wait = int32_t (*)(void*, uint8_t, int64_t*);
     auto create = reinterpret_cast<Create>(exports[0]);
     auto map = reinterpret_cast<Map>(exports[1]);
     auto unmap = reinterpret_cast<Unmap>(exports[2]);
     auto close = reinterpret_cast<Close>(exports[3]);
     auto allocate = reinterpret_cast<Allocate>(exports[4]);
     auto freeMemory = reinterpret_cast<Free>(exports[5]);
+    auto createEvent = reinterpret_cast<CreateEvent>(exports[6]);
+    auto setEvent = reinterpret_cast<SetEvent>(exports[7]);
+    auto wait = reinterpret_cast<Wait>(exports[8]);
+    void* event{};
+    int64_t poll = 0;
+    int32_t previous = -1;
+    if (createEvent(nullptr, 0x100002, nullptr, 1, 0) != static_cast<int32_t>(0xc0000005u) ||
+        createEvent(&event, 0x100002, nullptr, 1, 0) || !event ||
+        setEvent(event, reinterpret_cast<int32_t*>(1)) != static_cast<int32_t>(0xc0000005u) ||
+        wait(event, 0, reinterpret_cast<int64_t*>(1)) != static_cast<int32_t>(0xc0000005u) ||
+        wait(event, 0, nullptr) != static_cast<int32_t>(0xc0000002u) ||
+        wait(event, 0, &poll) != 0x102 || setEvent(event, &previous) || previous != 0 ||
+        wait(event, 0, &poll) || wait(event, 0, &poll) != 0x102 ||
+        close(event) || setEvent(event, nullptr) != static_cast<int32_t>(0xc0000008u)) __builtin_trap();
     void* section{};
     void* first{};
     void* second{};
@@ -1559,9 +1576,10 @@ bool verifyNativeImageLoading() noexcept {
                 (section.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)) return false;
     }
     constexpr const char* names[]{"NtCreateSection", "NtMapViewOfSection", "NtUnmapViewOfSection", "NtClose",
-                                  "NtAllocateVirtualMemory", "NtFreeVirtualMemory"};
+                                  "NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtCreateEvent", "NtSetEvent",
+                                  "NtWaitForSingleObject"};
     auto* exports = reinterpret_cast<uint64_t*>(kUserBase + 4096 + 768);
-    for (size_t index = 0; index < 6; ++index) {
+    for (size_t index = 0; index < 9; ++index) {
         if (g_nativeProbeModules.resolve("ntdll.dll", names[index], 0, exports[index]) != micant::NtStatus::Success ||
             !bootstrapUserRange(exports[index], 1, false, true)) return false;
     }

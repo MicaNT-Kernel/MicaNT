@@ -144,6 +144,21 @@ __attribute__((naked)) __declspec(dllexport) int32_t NtClose(void* /*handle*/) n
 #endif
 }
 
+__attribute__((naked)) __declspec(dllexport) int32_t NtCreateEvent(
+    void** /*handle*/, uint32_t /*access*/, void* /*attributes*/, uint32_t /*type*/, uint8_t /*initial*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x48, %eax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtSetEvent(
+    void* /*handle*/, int32_t* /*previous*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x4e, %eax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtWaitForSingleObject(
+    void* /*handle*/, uint8_t /*alertable*/, int64_t* /*timeout*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x04, %eax\n\tsyscall\n\tret\n\t");
+}
+
 // These service numbers are the MicaNT NTDLL/kernel profile, not a stable
 // Windows ABI. The x64 home area and arguments after the fourth stay on the
 // caller's stack for the kernel to capture.

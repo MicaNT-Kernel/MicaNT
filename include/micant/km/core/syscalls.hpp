@@ -216,6 +216,13 @@ NtStatus NtTerminateProcess(
     NtStatus exitStatus
 );
 
+#if defined(MICANT_FREESTANDING)
+NtStatus NtCreateEvent(Handle* eventHandle, uint32_t desiredAccess,
+                       ObjectAttributes* objectAttributes, uint32_t eventType,
+                       bool initialState);
+NtStatus NtSetEvent(Handle eventHandle, int32_t* previousState);
+#endif
+
 NtStatus NtWaitForSingleObject(
     Handle handle,
     bool alertable,
