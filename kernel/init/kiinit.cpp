@@ -1116,6 +1116,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ps] GS-based TEB TLS slot read/write verified\r\n");
     serialWrite("[MicaNT Mm] User/kernel isolation and read-only user code verified\r\n");
     serialWrite("[MicaNT Mm] Supervisor MMIO and non-executable user stack verified\r\n");
+    if (!micant::hal::amd64::verifyManagedExecutablePage())
+        stopWithError("[MicaNT Mm] Managed executable page verification failed\r\n");
+    serialWrite("[MicaNT Mm] PFN-backed executable user page verified\r\n");
     if (micant::hal::amd64::bootstrapQemuFaultTestsAvailable()) {
         if (!micant::hal::amd64::verifyBootstrapTimerInterrupt())
             stopWithError("[MicaNT Hal] Local APIC timer verification failed\r\n");

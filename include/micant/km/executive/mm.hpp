@@ -1694,12 +1694,13 @@ private:
                             uint32_t* oldProtection) noexcept {
         if (!backend_.protect) return NtStatus::NotImplemented;
         if (!oldProtection) return NtStatus::InvalidParameter;
-        if (protection != PAGE_READONLY && protection != PAGE_READWRITE)
+        if (protection != PAGE_READONLY && protection != PAGE_READWRITE && protection != PAGE_EXECUTE_READ)
             return NtStatus::NotImplemented;
         uintptr_t start{}, end{};
         if (!pageRange(address, size, start, end)) return NtStatus::InvalidParameter;
         auto* vad = vadTree_.find(start);
         if (!vad || end > vad->endingAddress) return NtStatus::Conflict;
+        if (vad->isSectionView && protection == PAGE_EXECUTE_READ) return NtStatus::NotImplemented;
         if (vad->isSectionView && protection == PAGE_READWRITE &&
             vad->sectionMaxProtection != PAGE_READWRITE) return NtStatus::SectionProtection;
 
@@ -1748,7 +1749,8 @@ private:
             return NtStatus::InvalidParameter;
         if ((type & ~(MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN)) ||
             !(type & (MEM_RESERVE | MEM_COMMIT))) return NtStatus::NotImplemented;
-        if (protect != PAGE_READONLY && protect != PAGE_READWRITE) return NtStatus::NotImplemented;
+        if (protect != PAGE_READONLY && protect != PAGE_READWRITE && protect != PAGE_EXECUTE_READ)
+            return NtStatus::NotImplemented;
 
         uintptr_t start = baseAddress;
         size_t length = size;

@@ -178,7 +178,7 @@ its own IDT before restoring the previous state.
 Both the bootstrap and process tests use a bounded 16 MiB window; only the
 process-root path provides the isolation described above. The backend requires the BSP with interrupts
 disabled and has no SMP TLB shootdown. Commit eagerly allocates physical pages;
-only read-only and read-write protection are implemented. Demand paging and
+private pages support read-only, read-write and execute/read protection. Demand paging and
 general NT syscall coverage remain unimplemented.
 Backend-chosen addresses are 64 KiB aligned; explicit native addresses are
 rounded to 4 KiB, independently of the Win32 reservation contract. A failed
@@ -194,6 +194,12 @@ Structural comparison used ReactOS commit
 `8fe3cee05606aecd9442674e40038649f048d10d`, specifically
 `ntoskrnl/mm/ARM3/vadnode.c` and `ntoskrnl/mm/ARM3/virtual.c`; the MicaNT
 implementation is independent.
+
+The bootstrap test writes a PFN-backed private page while it is read/write,
+changes it to execute/read, enters CPL3 at that page, and verifies the trap,
+write protection and PFN reclamation. This is an Mm execution/protection test,
+not an image-section mapper or a running PE process. The execute/read contract
+is documented in [Memory Protection Constants](https://learn.microsoft.com/en-us/windows/win32/memory/memory-protection-constants).
 
 The bootstrap syscall dispatcher now routes the current-process subset of
 `NtAllocateVirtualMemory` and `NtFreeVirtualMemory` to the owning address

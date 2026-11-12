@@ -67,6 +67,10 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
             !bootstrapUserRange(base, PageSize4KB, false) ||
             bootstrapUserRange(base, PageSize4KB, true) ||
             space.free(base, 0, MEM_RELEASE) != NtStatus::Success) return 10;
+        if (space.allocate(base, PageSize4KB, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READ) != NtStatus::Success ||
+            !bootstrapUserRange(base, PageSize4KB, false, true) ||
+            bootstrapUserRange(base, PageSize4KB, true) ||
+            space.free(base, 0, MEM_RELEASE) != NtStatus::Success) return 26;
         uintptr_t first = BootstrapManagedBase;
         uintptr_t second = first + PageSize4KB;
         {

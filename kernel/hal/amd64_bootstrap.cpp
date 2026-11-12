@@ -1063,11 +1063,13 @@ bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         (address & mm::PageMask4KB) || !pfn ||
         pfn > (kPhysicalMask >> mm::PageShift4KB) ||
-        (protection != mm::PAGE_READWRITE && protection != mm::PAGE_READONLY)) {
+        (protection != mm::PAGE_READWRITE && protection != mm::PAGE_READONLY &&
+         protection != mm::PAGE_EXECUTE_READ)) {
         return false;
     }
-    return mapPage(address, pfn << mm::PageShift4KB,
-                   kUser | kNoExecute | (protection == mm::PAGE_READWRITE ? kWritable : 0));
+    return mapPage(address, pfn << mm::PageShift4KB, kUser |
+                   (protection == mm::PAGE_EXECUTE_READ ? 0 : kNoExecute) |
+                   (protection == mm::PAGE_READWRITE ? kWritable : 0));
 }
 
 static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const uint64_t* pfns,
@@ -1221,7 +1223,8 @@ bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
     if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         (address & mm::PageMask4KB) ||
-        (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE)) {
+        (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE &&
+         protection != mm::PAGE_EXECUTE_READ)) {
         return false;
     }
     uint64_t* table = activePagingRoot();
@@ -1234,8 +1237,9 @@ bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
         table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
     }
     uint64_t& leaf = table[(address >> 12) & 511];
-    if (!(leaf & kPresent) || !(leaf & kUser) || !(leaf & kNoExecute)) return false;
+    if (!(leaf & kPresent) || !(leaf & kUser)) return false;
     leaf = protection == mm::PAGE_READWRITE ? leaf | kWritable : leaf & ~kWritable;
+    leaf = protection == mm::PAGE_EXECUTE_READ ? leaf & ~kNoExecute : leaf | kNoExecute;
     invalidatePage(address);
     return true;
 }
@@ -1443,6 +1447,44 @@ bool verifyBootstrapSyscalls() noexcept {
         : : : "rax", "memory"
     );
     return true;
+}
+
+bool verifyManagedExecutablePage() noexcept {
+    if (!g_probeSucceeded || !bootstrapPagingContext() || activePagingRoot() != g_pml4) return false;
+    auto& database = mm::PfnDatabase::get();
+    const size_t active = database.getActiveCount();
+    bool passed = false;
+    {
+        mm::ProcessAddressSpace space;
+        const mm::ProcessAddressSpace::PagingBackend backend{
+            nullptr, mapBootstrapManagedPage, unmapBootstrapManagedPage, mapBootstrapProtectManagedPage,
+            mapBootstrapManagedView, unmapBootstrapManagedView};
+        if (!space.configurePagingBackend(backend, BootstrapManagedBase, BootstrapManagedSize)) return false;
+        uintptr_t address = BootstrapManagedBase;
+        if (space.allocate(address, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
+                           mm::PAGE_READWRITE) != NtStatus::Success) return false;
+        *reinterpret_cast<volatile uint8_t*>(address) = 0xcc; // CPL3 breakpoint instruction.
+        uint32_t oldProtection{};
+        if (space.protect(address, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &oldProtection) != NtStatus::Success ||
+            oldProtection != mm::PAGE_READWRITE || !bootstrapUserRange(address, 1, false, true) ||
+            bootstrapUserRange(address, 1, true)) return false;
+        const uint32_t previousMode = g_probeMode;
+        const uint64_t previousRip = MicantProbeUserRip;
+        const uint64_t previousReturn = g_probeReturnRip;
+        g_probeMode = 0;
+        g_probeSucceeded = false;
+        MicantProbeUserRip = address;
+        g_probeReturnRip = address + 1;
+        MicantProbeEnter();
+        passed = g_probeSucceeded;
+        g_probeMode = previousMode;
+        MicantProbeUserRip = previousRip;
+        g_probeReturnRip = previousReturn;
+        __asm__ __volatile__("movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es"
+                             : : : "rax", "memory");
+        if (space.free(address, 0, mm::MEM_RELEASE) != NtStatus::Success) return false;
+    }
+    return passed && database.getActiveCount() == active;
 }
 
 bool verifyNativeImageLoading() noexcept {

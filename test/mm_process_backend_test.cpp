@@ -95,7 +95,7 @@ int main() {
         uintptr_t bad = Base;
         assert(space.allocate(bad, 0, MEM_RESERVE, PAGE_READWRITE) == NtStatus::InvalidParameter);
         assert(space.allocate(bad, std::numeric_limits<size_t>::max(), MEM_RESERVE, PAGE_READWRITE) == NtStatus::InvalidParameter);
-        assert(space.allocate(bad, PageSize4KB, MEM_RESERVE, PAGE_EXECUTE_READ) == NtStatus::NotImplemented);
+        assert(space.allocate(bad, PageSize4KB, MEM_RESERVE, PAGE_EXECUTE_READWRITE) == NtStatus::NotImplemented);
         uintptr_t outside = Base + Pages * PageSize4KB;
         assert(space.allocate(outside, PageSize4KB, MEM_RESERVE, PAGE_READWRITE) == NtStatus::InvalidParameter);
 

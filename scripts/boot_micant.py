@@ -50,6 +50,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ps] GS-based TEB TLS slot read/write verified",
     "[MicaNT Mm] User/kernel isolation and read-only user code verified",
     "[MicaNT Mm] Supervisor MMIO and non-executable user stack verified",
+    "[MicaNT Mm] PFN-backed executable user page verified",
     "[MicaNT Hal] Local APIC periodic interrupts verified",
     "[MicaNT Ke] Timer-preempted kernel contexts verified",
     "[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified",
