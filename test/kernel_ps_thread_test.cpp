@@ -1,5 +1,6 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/syscalls.hpp"
 
 namespace {
 struct State {
@@ -7,6 +8,7 @@ struct State {
     micant::ke::KThread* boot{};
     bool ran{};
     micant::ps::EThread* owner{};
+    micant::ps::EThread* other{};
 };
 
 void threadEntry(void* argument) noexcept {
@@ -20,6 +22,26 @@ void threadEntry(void* argument) noexcept {
         cr3 != state.process->getDirectoryTableBase() ||
         !micant::ke::PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
     state.ran = true;
+}
+
+void terminatingEntry(void* argument) noexcept {
+    auto& state = *static_cast<State*>(argument);
+    uintptr_t address{};
+    size_t size = micant::mm::PageSize4KB;
+    if (!state.other ||
+        micant::sys::NtTerminateProcess(micant::InvalidHandleValue, micant::NtStatus::AccessDenied) !=
+            micant::NtStatus::NotImplemented || state.process->isTerminating() ||
+        state.other->reap() != micant::NtStatus::Success ||
+        micant::sys::NtAllocateVirtualMemory(micant::InvalidHandleValue, &address, 0, &size,
+            micant::mm::MEM_RESERVE | micant::mm::MEM_COMMIT, micant::mm::PAGE_READWRITE) != micant::NtStatus::Success ||
+        !address ||
+        micant::sys::NtTerminateProcess(micant::InvalidHandleValue, micant::NtStatus::AccessDenied) !=
+            micant::NtStatus::Unsuccessful || state.process->isTerminating() ||
+        state.process->exitStatus() != micant::NtStatus::Pending ||
+        !micant::ke::PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
+    state.ran = true;
+    (void)micant::sys::NtTerminateProcess(micant::InvalidHandleValue, micant::NtStatus::AccessDenied);
+    __builtin_trap();
 }
 }
 
@@ -62,6 +84,28 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
         if (!switched || !state.ran || KeGetCurrentThread() != boot ||
             hal::amd64::bootstrapThreadSyscallStack() != bootEntryStack ||
             next->state != ThreadState::Terminated || scheduler.getReadyThreadCount() ||
+            thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
+            return false;
+    }
+    {
+        ps::EProcess process;
+        ps::EThread thread;
+        ps::EThread other;
+        if (process.initializeAddressSpace() != NtStatus::Success) return false;
+        State state{&process, boot, false, &thread, &other};
+        if (other.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
+            thread.initialize(process, 16384, terminatingEntry, &state) != NtStatus::Success ||
+            thread.ready() != NtStatus::Success) return false;
+        auto* next = scheduler.selectNextThread();
+        if (next != thread.kernelThread()) return false;
+        const KIRQL previous = KfRaiseIrql(DISPATCH_LEVEL);
+        const bool switched = KiSwapContext(boot, next);
+        KeLowerIrql(previous);
+        KThread late;
+        if (!switched || !state.ran || !process.isTerminating() ||
+            process.exitStatus() != NtStatus::AccessDenied || next->state != ThreadState::Terminated ||
+            process.attachThread(late) != NtStatus::InvalidParameter ||
+            process.closeAddressSpace() != NtStatus::InvalidParameter ||
             thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
             return false;
     }

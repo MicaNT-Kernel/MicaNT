@@ -186,6 +186,17 @@ baseline. This BSP-only internal operation is not arbitrary thread termination.
 The local ReactOS `ntoskrnl/ps/kill.c` was inspected for thread termination
 and deferred cleanup; the public self-termination contract is described by
 [PsTerminateSystemThread](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread).
+The freestanding `NtTerminateProcess` implementation now accepts the current
+process pseudo-handle for a process with exactly one attached thread. It
+records the exit status, marks the thread terminated and switches through Ke;
+another context reaps the stack and closes the address space. QEMU checks a
+no-runnable-thread failure without changing process state, rejects the
+multi-thread case, verifies the exit status and restores the PFN baseline
+after releasing a private allocation. This service is not yet routed from
+CPL3 and does not support process handles or coordinated termination of
+multiple threads. The contract is
+[ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntddk/nf-ntddk-zwterminateprocess);
+ReactOS `ntoskrnl/ps/kill.c` was consulted for termination and cleanup.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
 The local ReactOS `hal/halx86/generic/timer.c` and `ntoskrnl/ke/time.c`
 were consulted for clock interrupt and dispatch ordering, without copying code.

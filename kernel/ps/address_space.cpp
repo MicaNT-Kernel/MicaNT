@@ -1,5 +1,6 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/syscalls.hpp"
 
 namespace micant::ps {
 
@@ -17,6 +18,8 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
         handles_.reset();
         return NtStatus::Unsuccessful;
     }
+    terminating_ = false;
+    exitStatus_ = NtStatus::Pending;
     return NtStatus::Success;
 }
 
@@ -37,13 +40,45 @@ NtStatus EProcess::closeAddressSpace() noexcept {
 }
 
 NtStatus EProcess::attachThread(ke::KThread& thread) noexcept {
-    if (!root_.pfn || thread.owningProcess || thread.readyQueued ||
+    if (!root_.pfn || terminating_ || thread.owningProcess || thread.readyQueued ||
         (thread.state != ke::ThreadState::Initialized && thread.state != ke::ThreadState::Ready))
         return NtStatus::InvalidParameter;
     thread.owningProcess = this;
     thread.directoryTableBase = getDirectoryTableBase();
     ++attachedThreads_;
     return NtStatus::Success;
+}
+
+NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    auto* current = ke::KeGetCurrentThread();
+    NtStatus result = NtStatus::InvalidParameter;
+    const auto previous = ke::KeGetCurrentIrql();
+    if (current && current->owningProcess == this && current->state == ke::ThreadState::Running &&
+        previous <= ke::APC_LEVEL && !terminating_) {
+        if (attachedThreads_ != 1) {
+            result = NtStatus::NotImplemented;
+        } else {
+            ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+            auto& scheduler = ke::PriorityScheduler::get();
+            if (auto* next = scheduler.selectNextThread()) {
+                terminating_ = true;
+                exitStatus_ = exitStatus;
+                current->state = ke::ThreadState::Terminated;
+                if (ke::KiSwapContext(current, next)) __builtin_trap();
+                current->state = ke::ThreadState::Running;
+                terminating_ = false;
+                exitStatus_ = NtStatus::Pending;
+                next->state = ke::ThreadState::Ready;
+                if (!scheduler.readyKThread(next)) __builtin_trap();
+            }
+            ke::KeLowerIrql(previous);
+            result = NtStatus::Unsuccessful;
+        }
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return result;
 }
 
 NtStatus EProcess::detachThread(ke::KThread& thread) noexcept {
@@ -127,5 +162,14 @@ NtStatus EThread::reap() noexcept {
     argument_ = nullptr;
     started_ = false;
     return NtStatus::Success;
+}
+}
+
+namespace micant::sys {
+NtStatus NtTerminateProcess(Handle processHandle, NtStatus exitStatus) {
+    if (processHandle != InvalidHandleValue) return NtStatus::NotImplemented;
+    auto* current = ke::KeGetCurrentThread();
+    if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
+    return current->owningProcess->terminateCurrent(exitStatus);
 }
 }

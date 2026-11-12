@@ -20,14 +20,21 @@ public:
     NtStatus closeAddressSpace() noexcept;
     NtStatus attachThread(ke::KThread& thread) noexcept;
     NtStatus detachThread(ke::KThread& thread) noexcept;
+    // Initial single-thread process termination; successful termination does
+    // not return. The owning context performs deferred cleanup after switch.
+    NtStatus terminateCurrent(NtStatus exitStatus) noexcept;
     [[nodiscard]] mm::ProcessAddressSpace& getAddressSpace() noexcept { return addressSpace_; }
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
+    [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
+    [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
 private:
     hal::amd64::ProcessPagingRoot root_{};
     mm::ProcessAddressSpace addressSpace_{};
     std::unique_ptr<ob::HandleTable> handles_{};
     size_t attachedThreads_{0};
+    bool terminating_{false};
+    NtStatus exitStatus_{NtStatus::Pending};
 };
 
 // BSP bootstrap thread lifecycle; kernel stack and dispatcher context remain
