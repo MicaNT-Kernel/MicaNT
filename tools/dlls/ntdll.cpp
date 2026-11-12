@@ -46,12 +46,11 @@ bool DllMain(void*, unsigned long, void*) noexcept {
 // 1. Native NT Fast Syscall Trampolines (Ring 3 -> Ring 0)
 // ============================================================================
 
-__attribute__((naked)) __declspec(dllexport) uint64_t NtTerminateProcess(void* /*processHandle*/, uint64_t /*exitStatus*/) noexcept {
+__attribute__((naked)) __declspec(dllexport) int32_t NtTerminateProcess(void* /*processHandle*/, int32_t /*exitStatus*/) noexcept {
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
-        "movq $0x01, %rax\n\t"
-        "movq %rdx, %r8\n\t"
+        "movq $0x2c, %rax\n\t"
         "syscall\n\t"
         "ret\n\t"
     );

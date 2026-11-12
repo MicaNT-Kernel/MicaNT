@@ -238,8 +238,22 @@ if (MICANT_ENABLE_BAREMETAL)
             -P "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake"
         DEPENDS "${_ntdll_probe_dll}" "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake" VERBATIM)
 
+    set(_ntdll_process_dll "${CMAKE_CURRENT_BINARY_DIR}/ntdll-process.dll")
+    set(_ntdll_process_header "${CMAKE_CURRENT_BINARY_DIR}/ntdll-process.inc")
+    add_custom_command(OUTPUT "${_ntdll_process_dll}"
+        COMMAND "${CMAKE_CXX_COMPILER}" -std=c++23 -ffreestanding -fno-exceptions
+            -fno-rtti -fno-stack-protector -shared -nostdlib -Wl,-e,DllMain
+            -Wl,--subsystem,native -Wl,--image-base,0x400020f00000 -O2
+            "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" -o "${_ntdll_process_dll}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" VERBATIM)
+    add_custom_command(OUTPUT "${_ntdll_process_header}"
+        COMMAND "${CMAKE_COMMAND}" -DINPUT=${_ntdll_process_dll} -DOUTPUT=${_ntdll_process_header}
+            -P "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake"
+        DEPENDS "${_ntdll_process_dll}" "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake" VERBATIM)
+
     add_executable(ntoskrnl_core_baremetal
         "${_ntdll_probe_header}"
+        "${_ntdll_process_header}"
         kernel/init/kiinit.cpp
         kernel/ke/context_switch.cpp
         kernel/ke/event.cpp
