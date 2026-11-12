@@ -85,6 +85,24 @@ integration.
 
 ## Integration increments
 
+### Kernel completion sprint milestones
+
+These milestones use the numbering in the kernel completion sprint, which
+differs from the historical integration inventory below.
+
+| Milestone | Current evidence and remaining work |
+|---|---|
+| M1: section mapping | Anonymous section mapping through Mm and Ob exercised in QEMU, including shared pages and cleanup. |
+| M2: independent address spaces | Bounded BSP acceptance path exercised through Ps, Ke, Mm and Ob in QEMU, including private pages, shared section, survivor and PFN rollback. General process creation and termination remain outstanding. |
+| M3: preemptive scheduler | Timer-driven switching of two kernel contexts verified in an isolated QEMU diagnostic. Normal-operation preemption, full IRQL and user-mode interrupt context are not integrated. |
+| M4: process and thread lifecycle | Bounded Ps kernel thread creation, execution and reap verified in QEMU. Waitable process/thread objects, normal process termination and native creation services remain outstanding. |
+| M5: NT system calls | Section, close and bounded current-process allocation/free calls exercised from CPL3. The services needed for native process/thread creation, synchronization and termination are incomplete. |
+| M6: first Ring 3 PE process | Not complete. The PE and CPL3 probes are diagnostics; image section mapping, process startup, PEB/TEB and termination are not integrated. |
+| M7: two threads, TLS and synchronization | Not complete. Two user threads in a real process, independent TLS, event synchronization and a verifiable exit status have not been exercised. |
+
+The detailed increments and commands below record the checks actually run;
+an isolated diagnostic does not establish a complete milestone contract.
+
 ### Bootstrap local APIC timer diagnostic
 
 On QEMU TCG, a temporary BSP-only xAPIC setup delivers at least three periodic
@@ -842,7 +860,11 @@ bounded to 4096 initializers per table and 1024 destructor registrations,
 without C++ exceptions, arbitrary libc++ linkage, native TLS, thread-safe
 static guards or a general shutdown/session lifecycle.
 
-## Milestones
+## Historical integration inventory
+
+The following inventory uses an earlier, different milestone numbering and
+describes the state at that point in the integration record. For the kernel
+completion sprint use the current table above.
 
 | Milestone | State | Missing acceptance evidence |
 |---|---|---|
