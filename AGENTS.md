@@ -21,6 +21,7 @@ These rules apply to every change in this repository. Read them together with `R
 ## Architecture and implementation
 
 - Follow the subsystem boundaries, directory layout, naming, ABI, and design specified in `README.md`, `docs/KEY_PILLARS.md`, `docs/SOVEREIGN_TAXONOMY.md`, and subsystem-specific documentation.
+- Write code in clear, idiomatic C++23 that a human programmer can read and maintain. Prefer well-named functions and focused units over dense, monolithic, or opaque code blocks. Add concise comments to explain intent, non-obvious logic, and important constraints; do not use comments merely to restate the code.
 - Implement functionality in the canonical subsystem that owns the Windows contract. Avoid application-specific shims, satellite implementations, and workarounds that bypass the owning subsystem.
 - Preserve freestanding and supported-architecture constraints. Do not assume hosted operating-system services or introduce a dependency that breaks the kernel/user-mode build model.
 - Prefer RAII, bounded views such as `std::span`, explicit ownership, and the project's synchronization primitives. Validate sizes, state transitions, and failure paths.
