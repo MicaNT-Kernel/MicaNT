@@ -45,15 +45,189 @@ These rules apply to every change in this repository. Read them together with `R
 - Build the affected targets and run the applicable existing checks when feasible. Do not claim a behavior is verified unless it was exercised; record environmental limits clearly.
 - Keep commits focused on one implementation step and do not include unrelated working-tree changes.
 
-## Fast incremental development
+# MicaNT — Continuous Execution Protocol
 
-- Implement and verify coherent functional batches rather than rebuilding after each small change. During implementation, use code analysis, targeted type or syntax checks, and focused unit tests; do not start QEMU for every edit.
-- Reuse compatible, persistent CMake/Ninja build directories and artifacts. Keep host and cross-toolchain configurations separate; do not clean, recreate configurations, or rebuild everything without a technical reason. Prefer building only affected targets with appropriate parallelism.
-- After each batch, incrementally build and link affected targets, run relevant subsystem tests, and check new unresolved symbols. Do not repeat passing checks when their dependencies have not changed. Diagnose the first significant failure and fix related errors before rebuilding.
-- At milestone completion, perform the integrated build, PE/ABI checks, relevant regression tests, and QEMU smoke test. QEMU verification is mandatory before claiming changes to boot, paging, interrupts, syscalls, context switching, or memory protection are verified.
-- If parallel agents are used, isolate their work in separate worktrees and avoid concurrent full builds of the same repository; reserve integrated builds and QEMU for the integrator.
-- Consider supported compilation caches, debug builds, incremental linking, and selective tests where appropriate; do not change ABI or freestanding flags merely for speed. Never disable tests, hide build errors, replace real behavior with stubs, or weaken the user/kernel boundary.
-- Report implemented functionality, changed files, blockers, and focused tests concisely; update technical status at the end of each functional batch.
+## Scopo
+
+Questo protocollo governa il comportamento dell'agente durante incarichi che richiedono il completamento di una o più milestone.
+
+Il repository contiene un kernel NT modulare C++23 esclusivamente AMD64. Le milestone correnti sono definite in `docs/KERNEL_MILESTONES.md`.
+
+**Un batch completato non equivale a un incarico completato.**
+
+## 1. Priorità delle istruzioni operative
+
+Le richieste esplicite dell'utente per il mandato corrente prevalgono sulle preferenze generiche del workflow del repository, purché non violino vincoli tecnici o di sicurezza inderogabili.
+
+In particolare:
+
+- Se l'utente dice di non creare commit, non creare commit.
+- Se l'utente dice di non eseguire verifiche durante il batch, non lanciare build, test, QEMU, sanitizzatori o altri controlli eseguibili durante quel batch.
+- Non dichiarare verificato codice che non è stato verificato.
+- Se la richiesta è di implementare, non sostituire l'implementazione con un rapporto.
+- Non terminare volontariamente il mandato per applicare una consuetudine di reporting.
+- Non ripetere una richiesta di autorizzazione per passaggi già inclusi nel mandato.
+
+Una verifica differita deve essere segnalata come tale, non sostituita con una verifica fittizia.
+
+## 2. Gestione della milestone
+
+All'inizio dell'incarico:
+
+1. Leggi il codice direttamente pertinente.
+2. Leggi `docs/KERNEL_MILESTONES.md`.
+3. Identifica i requisiti incompleti della milestone richiesta.
+4. Ordinali per dipendenze tecniche.
+5. Inizia immediatamente il primo requisito realizzabile.
+
+Non creare una nuova roadmap generale.
+
+Non ripetere un audit completo del repository.
+
+La milestone corrente rimane attiva finché tutti i suoi criteri di accettazione non sono soddisfatti o finché interviene un vincolo reale che impedisce ogni ulteriore progresso.
+
+## 3. Ciclo di lavoro continuo
+
+Per ogni sottotask:
+
+**IMPLEMENT → INTEGRATE → UPDATE STATE → NEXT TASK**
+
+Questo ciclo non termina con un resoconto.
+
+Dopo ogni intervento:
+
+- Aggiorna il codice canonico.
+- Completa i caller e i percorsi dipendenti necessari.
+- Gestisci ownership, errori e cleanup.
+- Registra mentalmente o nel documento di stato ciò che rimane aperto.
+- Passa immediatamente al prossimo sottotask.
+
+Non considerare un commit, un test QEMU passato o un singolo bugfix come un motivo per concludere la sessione.
+
+Non utilizzare la complessità della milestone come motivo generico di arresto.
+
+## 4. Condizioni di arresto
+
+È consentito concludere volontariamente il mandato soltanto quando:
+
+A. Tutti i criteri richiesti sono implementati, indicando separatamente le verifiche effettuate e quelle differite.
+
+B. Esiste un blocco tecnico concreto, riproducibile e non risolvibile con le risorse disponibili, e nessun altro sottotask indipendente può proseguire.
+
+C. Serve una decisione dell'utente che non può essere ricavata dalle specifiche o dalle istruzioni già fornite.
+
+D. L'ambiente di esecuzione impone realmente la fine della sessione o non consente ulteriori operazioni.
+
+**Non sono condizioni di arresto:**
+
+- Un file modificato.
+- Una funzione completata.
+- Un test passato.
+- Un commit creato.
+- Un errore di compilazione ordinario.
+- Una dipendenza ancora da implementare.
+- Un problema complesso ma analizzabile.
+- La presenza di test da scrivere.
+- La necessità di leggere ReactOS.
+- Il raggiungimento di un checkpoint interno.
+- Il fatto di poter elencare il prossimo passo.
+
+Se esiste un prossimo intervento concreto e fattibile, continua.
+
+## 5. Gestione dei blocker
+
+Quando incontri un problema:
+
+1. Identifica precisamente la funzione, il contratto o l'invariante interessato.
+2. Studia il codice MicaNT coinvolto.
+3. Consulta ReactOS e Microsoft WDK quando necessario.
+4. Individua la dipendenza minima.
+5. Implementa la soluzione nel sottosistema canonico.
+6. Completa i caller e i cleanup.
+7. Riprendi la milestone.
+
+Se il problema non può essere risolto subito, affronta un sottotask indipendente.
+
+Non usare genericamente espressioni come "richiede attenzione", "è complesso" o "serve ulteriore studio" come giustificazione per fermarti.
+
+## 6. Modalità NO-COMMIT / NO-TEST
+
+Quando richiesta dall'utente:
+
+- Mantieni tutte le modifiche nel worktree.
+- Non creare commit Git, neppure WIP.
+- Non lanciare QEMU.
+- Non avviare build o test.
+- Non dichiarare superate verifiche non eseguite.
+- Continua comunque a leggere, modificare e integrare il codice.
+- Conserva i test esistenti.
+- Non disabilitare controlli per aggirare problemi.
+- Annota le verifiche che saranno necessarie alla fine del mandato.
+
+Questa modalità non giustifica un arresto anticipato.
+
+Quando l'utente autorizzerà le verifiche, esegui i controlli pertinenti all'intero batch, evitando test ripetitivi.
+
+
+## 8. Definition of Done
+
+M4 non è completata finché:
+
+- I processi e i thread hanno ownership e riferimenti corretti.
+- La terminazione gestisce thread pronti, in esecuzione, bloccati e con APC pendenti.
+- Il rundown APC è implementato.
+- Gli oggetti processo e thread supportano le attese previste.
+- I waiter ricevono la segnalazione di terminazione.
+- Gli handle non vengono invalidati prematuramente.
+- La terminazione di altri processi applica i controlli necessari.
+- I percorsi di creazione e distruzione sono collegati alle implementazioni canoniche.
+- Il cleanup Mm/Ob/Ke/Ps è coerente.
+- Le verifiche richieste sono state eseguite, oppure sono esplicitamente differite su istruzione dell'utente.
+
+Non presentare un sottoinsieme come M4 completata.
+
+## 9. Reporting senza interruzione
+
+Puoi inviare brevi aggiornamenti sul lavoro in corso, ma non trattarli come rapporti conclusivi.
+
+Un checkpoint deve indicare:
+
+- Cosa è stato implementato.
+- Cosa rimane.
+- Quale sottotask viene affrontato successivamente.
+
+Dopo il checkpoint continua a lavorare, se l'ambiente lo consente.
+
+Il rapporto finale è riservato al completamento effettivo del mandato o a un arresto imposto da una delle condizioni della sezione 4.
+
+## 10. Recupero della sessione
+
+Se la sessione termina per limiti dell'ambiente, lascia uno stato recuperabile:
+
+- Milestone corrente.
+- Ultimo sottotask completato.
+- Sottotask in corso.
+- File modificati.
+- Modifiche locali da preservare.
+- Test eseguiti o differiti.
+- Primo intervento concreto da riprendere.
+
+Non descrivere come completata una milestone parziale.
+
+Alla sessione successiva riparti direttamente dal sottotask in corso.
+
+## Regola conclusiva
+
+**Il mandato dell'utente è l'unità di completamento. Il batch è soltanto un'unità interna di organizzazione.**
+
+Non fermarti dopo il primo miglioramento.
+
+Non fermarti perché hai individuato il prossimo problema.
+
+Non fermarti perché hai scritto un resoconto.
+
+Continua a integrare il kernel canonico finché il mandato può effettivamente progredire.
+
 
 ## Single modular kernel policy
 
