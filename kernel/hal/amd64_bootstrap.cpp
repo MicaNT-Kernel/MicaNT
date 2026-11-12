@@ -1848,6 +1848,45 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     return success && restored;
 }
 
+// Measure one approximately 10 ms interval against PIT channel 2. The
+// speaker must be inactive; the port gate is restored after calibration.
+static bool calibrateBootstrapApic(volatile uint32_t* apic, uint32_t& period) noexcept {
+    const auto input = [](uint16_t port) noexcept {
+        uint8_t value{};
+        __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
+        return value;
+    };
+    const auto output = [](uint16_t port, uint8_t value) noexcept {
+        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
+    };
+    const uint8_t speaker = input(0x61);
+    if (speaker & 3) return false;
+    const uint32_t savedTimer = apic[0x320 / 4];
+    const uint32_t savedDivide = apic[0x3e0 / 4];
+    const uint32_t savedInitial = apic[0x380 / 4];
+    constexpr uint16_t pitInterval = 11932; // 8254 input clock: approximately 1.193182 MHz.
+    output(0x61, static_cast<uint8_t>(speaker & ~uint8_t{3}));
+    output(0x43, 0xb0); // Channel 2, low/high bytes, mode 0, binary.
+    output(0x42, static_cast<uint8_t>(pitInterval));
+    output(0x42, static_cast<uint8_t>(pitInterval >> 8));
+    apic[0x320 / 4] = (savedTimer | (1u << 16)) & ~(1u << 17);
+    apic[0x3e0 / 4] = 0xb; // Divide by one.
+    apic[0x380 / 4] = 0xffffffff;
+    output(0x61, static_cast<uint8_t>((speaker & ~uint8_t{2}) | 1));
+    size_t spin = 0;
+    while (!(input(0x61) & 0x20) && spin++ < 50000000) __asm__ __volatile__("pause");
+    const uint32_t remaining = apic[0x390 / 4];
+    output(0x61, speaker);
+    apic[0x380 / 4] = 0;
+    apic[0x3e0 / 4] = savedDivide;
+    apic[0x380 / 4] = savedInitial;
+    apic[0x320 / 4] = savedTimer;
+    const uint32_t elapsed = 0xffffffffu - remaining;
+    if (spin >= 50000000 || elapsed < 100 || remaining == 0) return false;
+    period = elapsed;
+    return true;
+}
+
 bool startBootstrapSchedulerClock() noexcept {
     if (g_schedulerClockActive || !g_dispatch || !bootstrapPagingContext() ||
         !ke::KeGetCurrentThread()) return false;
@@ -1871,6 +1910,8 @@ bool startBootstrapSchedulerClock() noexcept {
     auto* apic = static_cast<volatile uint32_t*>(mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
     if (!apic || ((apic[0x30 / 4] >> 16) & 0xff) < 5 ||
         !(apic[0x320 / 4] & (1u << 16))) return false;
+    uint32_t interval{};
+    if (!calibrateBootstrapApic(apic, interval)) return false;
 
     // Only the clock vector is routed in this bootstrap configuration.
     __asm__ __volatile__("outb %0, $0x21; outb %0, $0xa1" : : "a"(uint8_t{0xff}));
@@ -1891,7 +1932,7 @@ bool startBootstrapSchedulerClock() noexcept {
     apic[0xf0 / 4] = (apic[0xf0 / 4] & ~0xffu) | 0x1ff;
     apic[0x3e0 / 4] = 0xb;
     apic[0x320 / 4] = 0xd1 | (1u << 17);
-    apic[0x380 / 4] = 100000; // Bootstrap interval; calibration remains outstanding.
+    apic[0x380 / 4] = interval;
     g_schedulerClockActive = true;
     return true;
 }

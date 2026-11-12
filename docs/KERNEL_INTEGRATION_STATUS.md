@@ -123,15 +123,20 @@ XMM canaries, separate TLS, event synchronization, process exit and cleanup.
 After the diagnostic restores the controller, the bootstrap can install a
 persistent BSP xAPIC scheduler clock. QEMU reruns the CPL3 preemption test
 with this clock active and user IF preserved across syscalls, then verifies
-ongoing ticks during the normal polling loop and PS/2 input. The interval is
-not calibrated, the legacy PIC and other local APIC vectors remain masked,
-and x2APIC is unsupported; if setup is unavailable the kernel logs that the
+ongoing ticks during the normal polling loop and PS/2 input. The LAPIC period
+is measured against an approximately 10 ms PIT channel 2 interval at startup;
+calibration requires the speaker gate to be inactive, restores its port state,
+and leaves channel 2 programmed in mode 0. The legacy PIC and other local APIC
+vectors remain masked, and x2APIC is unsupported; if setup is unavailable the kernel logs that the
 clock is unavailable and keeps the previous interrupt-disabled loop. AVX and
-other extended XSAVE state, full hardware IRQL, calibrated time and general
+other extended XSAVE state, full hardware IRQL, system timekeeping and general
 interrupt routing are not implemented. Persistent preemption is rejected if
 OSXSAVE is enabled with XCR0 components beyond x87/SSE, because the switch
 currently saves only FXSAVE state. QEMU exercised the supported configuration;
 the rejection path has not been exercised with extended state enabled.
+PIT mode and gate behavior were checked against Intel's
+[I/O platform timer documentation](https://edc.intel.com/content/www/th/th/design/ipla/software-development-platforms/servers/platforms/intel-pentium-silver-and-intel-celeron-processors-datasheet-volume-1-of-2/001/timer-programming/);
+ReactOS `hal/halx86/generic/timer.c` was consulted for the PIT clock reference.
 On each scheduler clock tick Ke now selects a higher-priority ready thread
 without waiting for quantum expiration; equal-priority threads rotate at the
 quantum boundary, and a lower-priority ready thread does not displace the
@@ -290,6 +295,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 |---|---|
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ, timer-preempted kernel and CPL3 contexts, register canaries, existing boot, scanout and input checks |
 | `python3 qemu.py --headless` | Passed; persistent BSP scheduler clock, CPL3 preemption with syscall IF preservation, idle ticks and polled PS/2 input |
+| `python3 qemu.py --headless` | Passed; PIT-calibrated LAPIC period and persistent clock; no independent accuracy measurement was made |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
 | `python3 qemu.py --headless` | Passed; Ps image loading through Mm/Ob sections and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS rollback and PFN/Ob cleanup |
