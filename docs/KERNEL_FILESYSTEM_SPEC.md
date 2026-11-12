@@ -352,12 +352,12 @@ Document each capability as one of: **source present**, **object compiled**, **P
 
 Repository progress belongs in `docs/KERNEL_INTEGRATION_STATUS.md`; milestone acceptance belongs in `docs/KERNEL_MILESTONES.md`. This specification defines requirements rather than asserting those milestones have already passed.
 
-## 13. Work allocation and interaction with M4–M8
+## 13. Work allocation and interaction with M4, M6–M7 and M12
 
 - **Immediate kernel dependency:** F0.1 → F0.2 → F1.1 → F1.2 → F1.3. This unblocks the missing `SEC_IMAGE` file-backed process creation path.
-- **M4/M6 interaction:** keep process/thread ownership, exception dispatch and loader logic in Ps/Ke/Mm; filesystem code exposes an actual referenced file object and byte-range reads. Do not move process creation into ext4.
-- **M5 syscall work:** integrate `NtCreateFile`, `NtReadFile`, `NtClose`, section creation and process launch through their canonical dispatchers.
-- **M8 POSIX/VFS:** add a POSIX personality above the underlying Io/filesystem services; do not build another disk driver or file cache.
+- **M4/M7 interaction:** keep process/thread ownership, exception dispatch and loader logic in Ps/Ke/Mm; filesystem code exposes an actual referenced file object and byte-range reads. Do not move process creation into ext4.
+- **M6 syscall work:** integrate `NtCreateFile`, `NtReadFile`, `NtClose`, section creation and process launch through their canonical dispatchers.
+- **M12 POSIX/VFS:** add a POSIX personality above the underlying Io/filesystem services; do not build another disk driver or file cache.
 - **Later storage initiatives:** ext4 writes with JBD2, NTFS, exFAT and advanced filesystems should proceed after the first real disk-based native process launch.
 
 Recommended implementation ownership: Storage/HAL owns block devices; Io/Ob owns handles and IRPs; FsRtl/extfs owns ext4; Mm owns mapped image pages; Ps/Ke owns process execution; Se owns access policy. Each batch should complete end-to-end through the owning modules rather than terminate after an isolated hosted test.

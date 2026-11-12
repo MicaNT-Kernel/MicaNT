@@ -280,13 +280,13 @@ Se l'utente chiede di non eseguire test/commit per un batch, rispettare il vinco
 ## 15. Dipendenze e integrazione con le specifiche MicaNT
 
 - `docs/KERNEL_ARCHITECTURE.md`: un solo kernel modulare canonico.
-- `docs/KERNEL_INTEGRATION_STATUS.md` e `docs/KERNEL_MILESTONES.md`: stato **effettivo** e dipendenze M4–M7.
+- `docs/KERNEL_INTEGRATION_STATUS.md` e `docs/KERNEL_MILESTONES.md`: stato **effettivo** e dipendenze M4, M6–M8.
 - `docs/KERNEL_FILESYSTEM_SPEC.md` (se installato): Io, lettura file e sections data file-backed.
 - `docs/KERNEL_GPU_DRIVER_IMPLEMENTATION_SPEC.md` (se installato): miniport GPU/VRAM/compute.
 - `docs/KERNEL_SCHEDULING_RESPONSIVENESS_SPEC.md` (se installato): scheduling e policy desktop.
 - `AGENTS.md`: limiti freestanding, riuso del codice MicaNT e comportamento dell'agente.
 
-Questa specifica **non cambia l'ordine di priorità** di M4–M7 né giustifica sviluppare grandi nuove API AI prima che MicaNT possa avviare un PE user-mode da disco.
+Questa specifica **non cambia l'ordine di priorità** di M4, M6–M8 né giustifica sviluppare grandi nuove API AI prima che MicaNT possa avviare un PE user-mode da disco.
 
 ## 16. Riferimenti tecnici
 

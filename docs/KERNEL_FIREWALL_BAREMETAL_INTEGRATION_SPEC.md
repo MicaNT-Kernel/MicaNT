@@ -4,7 +4,7 @@
 **Target:** AMD64, C++23, kernel NT modulare canonico MicaNT  
 **Percorso proposto nel repository:** `docs/KERNEL_FIREWALL_BAREMETAL_INTEGRATION_SPEC.md`  
 **Ambito:** completare e integrare il firewall **WFP esistente** sul percorso dati reale della rete bare-metal.  
-**Dipendenze:** M9 Native Networking Stack (NIC/NDIS, TCP/IP, AFD), primitive Io/Ke/Mm/Ps/Se necessarie.
+**Dipendenze:** M10 Native Networking Stack (NIC/NDIS, TCP/IP, AFD), primitive Io/Ke/Mm/Ps/Se necessarie.
 
 ## 1. Obiettivo e vincoli non negoziabili
 
@@ -118,7 +118,7 @@ Il principio è: **un flusso non è attendibile perché è stato osservato; lo �
 4. Controllare overflow delle strutture, GUID/layer sconosciuti, range porte, CIDR, protocollo, dimensione delle regole e compatibilità ABI.
 5. Per regole per applicazione, usare metadati autorevoli Ps/Se del processo/endpoint; il path visualizzato non deve essere la fonte primaria di identità. Se non disponibili, rimandare le regole per processo anziché fidarsi di un campo caller-controlled.
 6. Rendere la GUI `firewall_app.cpp` un vero consumer delle query di stato e statistiche, oppure etichettarla diagnostica non funzionale. Non visualizzare “protected” o “running” basandosi su stringhe hardcoded.
-7. Persistenza regole rimandabile finché non è disponibile l'I/O persistente M13; nell'immediato usare policy bootstrap firmata/compiled e aggiornamenti non persistenti esplicitamente documentati.
+7. Persistenza regole rimandabile finché non è disponibile l'I/O persistente M14; nell'immediato usare policy bootstrap firmata/compiled e aggiornamenti non persistenti esplicitamente documentati.
 
 ### 7.1 Semantica minima policy
 
@@ -154,7 +154,7 @@ FW0–FW3 sono il percorso minimo per un firewall operativo; FW4 necessario prim
 
 ### 9.2 QEMU bare-metal (obbligatori)
 
-**Prerequisiti:** NIC emulata con RX/TX reale (es. VirtIO-net) collegata allo stack canonico, IP configurato, host collegato a una rete di test controllata. Se M9 non ha ancora connettività end-to-end, testare FW0 con fixture kernel e dichiarare FW1+ bloccati, non completati.
+**Prerequisiti:** NIC emulata con RX/TX reale (es. VirtIO-net) collegata allo stack canonico, IP configurato, host collegato a una rete di test controllata. Se M10 non ha ancora connettività end-to-end, testare FW0 con fixture kernel e dichiarare FW1+ bloccati, non completati.
 
 1. Verificare manifest/link WFP nel kernel che QEMU avvia, versione build e init logs.
 2. Avviare un listener TCP/UDP dove supportato e inviare da host un pacchetto/connessione su porta vietata: osservare drop e assenza consegna ad AFD; verificare che il counter BLOCK incrementi.
@@ -192,7 +192,7 @@ Non rientrano nel task: importare Netfilter, implementare CLI iptables/nftables,
 2. Prima verificare la revisione locale e gli eventuali cambiamenti non committati, poi compilare la baseline, così da non sovrascrivere lavoro in corso.
 3. Usare i sorgenti citati come base; rifattorizzare per arrivare a un solo `WfpKernelFilterEngine` reale. Non introdurre nuovi sistemi di policy paralleli.
 4. Per ogni fase produrre build bare-metal e test QEMU, mantenendo test hosted solo come supporto; evitare contatori o return success precompilati per fingere funzionamento.
-5. Documentare esattamente la feature verificata e ciò che ancora manca, con output riproducibile e dipendenze di M9 esplicite.
+5. Documentare esattamente la feature verificata e ciò che ancora manca, con output riproducibile e dipendenze di M10 esplicite.
 6. Preferire riuso di codice esistente; studiare WDK/ReactOS solo per contratti e comportamento dove serva. Rispettare licenze e separare materiale con vincoli incompatibili.
 7. Non fermarsi ai primi simboli linkati o alla comparsa di `WFP_READY`: la milestone richiede l'effetto **osservabile su pacchetti reali**.
 

@@ -1,7 +1,7 @@
 # MicaNT — Native Networking Stack: Reuse-First Implementation Specification
 
 **Document:** `docs/KERNEL_NETWORK_STACK_IMPLEMENTATION_SPEC.md`  
-**Milestone:** M8 — Native Networking Stack (proposed)  
+**Milestone:** M10 — Native Networking Stack (proposed)
 **Status:** Implementation specification; not evidence of completed networking  
 **Target:** MicaNT modular NT-compatible kernel, AMD64 only, C++23  
 **Primary objective:** A real QEMU network path from `virtio-net` through the canonical MicaNT kernel transport and Winsock to a certificate-validated HTTPS client.
@@ -164,7 +164,7 @@ After the synchronous path is stable, implement asynchronous overlapped I/O, can
 
 The project's existing TLS/WinHTTP structures are an implementation starting point, but they are not a substitute for a connected, authenticated, real network session.
 
-## 9. M8 milestones — end-to-end rather than header expansion
+## 9. M10 milestones — end-to-end rather than header expansion
 
 ### N0 — Network device foundation
 
@@ -238,7 +238,7 @@ For each N0–N6 milestone record in `docs/KERNEL_INTEGRATION_STATUS.md`:
 - Measured error handling and resource reclamation.
 - Unsupported features and next integration dependency.
 
-`docs/KERNEL_MILESTONES.md` should contain a concise M8 row pointing to this specification, not another competing milestone definition. Do not edit historical milestone meanings to make networking look completed.
+`docs/KERNEL_MILESTONES.md` should contain a concise M10 row pointing to this specification, not another competing milestone definition. Do not edit historical milestone meanings to make networking look completed.
 
 ## 13. Security and compatibility invariants
 
@@ -263,9 +263,9 @@ For each N0–N6 milestone record in `docs/KERNEL_INTEGRATION_STATUS.md`:
 - Microsoft WDK: NDIS miniport, AFD/WSK and native I/O documentation; Microsoft Learn Winsock/WinHTTP/Schannel references.
 - Protocol specifications: RFC 9293 (TCP), RFC 8200 (IPv6), RFC 768 (UDP), RFC 826 (ARP), RFC 2131 (DHCP), RFC 1034/1035 (DNS), RFC 8446 (TLS 1.3), RFC 9110/9112 (HTTP semantics / HTTP/1.1).
 
-## 15. Definition of done for M8
+## 15. Definition of done for M10
 
-M8's **initial functional closure (N0–N5)** requires one repeatable native QEMU scenario:
+M10's **initial functional closure (N0–N5)** requires one repeatable native QEMU scenario:
 
 1. Guest discovers and operates `virtio-net` through MicaNT NDIS.
 2. Guest receives DHCP settings and resolves a DNS name.

@@ -1,4 +1,4 @@
-# MicaNT — M8 USB Host, HID, Mass Storage & Live USB Implementation Specification
+# MicaNT — M9 USB Host, HID, Mass Storage & Live USB Implementation Specification
 
 **Status:** Proposed / not yet implemented end-to-end  
 **Architecture:** AMD64 (x86_64) only; C++23; UEFI; one canonical modular NT kernel  
@@ -9,7 +9,7 @@
 
 ## 1. Objective and acceptance boundary
 
-M8 delivers USB peripherals accessible by the **MicaNT kernel itself after `ExitBootServices`**, initially in QEMU and then on selected real UEFI AMD64 PCs. There are two independently demonstrable milestones:
+M9 delivers USB peripherals accessible by the **MicaNT kernel itself after `ExitBootServices`**, initially in QEMU and then on selected real UEFI AMD64 PCs. There are two independently demonstrable milestones:
 
 - **U1 — Hardware xHCI + HID:** enumerate an actual xHCI controller, keyboard and mouse; receive input through real xHCI event/transfer rings; deliver it through the canonical HID and input-class pipeline. The test must not succeed using UEFI input, host-simulated USB, or PS/2 fallback.
 - **U2 — USB Mass Storage:** enumerate a BOT-compatible USB drive, read actual SCSI sectors through xHCI bulk endpoints, expose a read-only block device, parse GPT and FAT32, and read a file **after** `ExitBootServices`. No UEFI Block I/O calls may service the runtime read.
