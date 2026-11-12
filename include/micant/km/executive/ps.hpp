@@ -36,8 +36,8 @@ public:
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
     [[nodiscard]] uintptr_t userPebAddress() const noexcept { return userPeb_; }
     [[nodiscard]] bool nativeImagesFinalized() const noexcept { return imagesFinalized_; }
-    [[nodiscard]] const pe::PeImageView64::TlsLayout* userTlsLayout() const noexcept {
-        return hasUserTls_ ? &userTlsLayout_ : nullptr;
+    [[nodiscard]] std::span<const pe::PeImageView64::TlsLayout> userTlsLayouts() const noexcept {
+        return {userTlsLayouts_.get(), userTlsCount_};
     }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
@@ -52,8 +52,8 @@ private:
     std::unique_ptr<um::NativeUserImageSet64> images_{};
     bool imagesFinalized_{false};
     uintptr_t userPeb_{0};
-    pe::PeImageView64::TlsLayout userTlsLayout_{};
-    bool hasUserTls_{false};
+    std::unique_ptr<pe::PeImageView64::TlsLayout[]> userTlsLayouts_{};
+    size_t userTlsCount_{0};
 };
 
 // BSP bootstrap thread lifecycle; kernel stack and dispatcher context remain
@@ -66,8 +66,8 @@ public:
     EThread(const EThread&) = delete;
     EThread& operator=(const EThread&) = delete;
     NtStatus initialize(EProcess& process, size_t stackSize, StartRoutine start, void* argument) noexcept;
-    // BSP-only, with the process root active. Supports one static TLS module
-    // without callbacks; the image and TLS layout must remain valid during setup.
+    // BSP-only, with the process root active. Static TLS callbacks are not yet
+    // supported; the image and TLS layouts must remain valid during setup.
     NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                             size_t userStackSize, const pe::PeImageView64::TlsLayout* tls,
                             bool interruptible = false) noexcept;
@@ -85,6 +85,9 @@ public:
 private:
     static void startThread(void* argument) noexcept;
     static void startUser(void* argument) noexcept;
+    NtStatus initializeUserWithTls(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                                   size_t userStackSize, std::span<const pe::PeImageView64::TlsLayout> tls,
+                                   bool interruptible) noexcept;
     NtStatus releaseUserMemory() noexcept;
     EProcess* process_{nullptr};
     std::unique_ptr<ke::KThread> thread_{};

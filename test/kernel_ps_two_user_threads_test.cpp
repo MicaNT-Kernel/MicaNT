@@ -29,6 +29,10 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "movabsq $0x8877665544332211, %rdx\ncmpq %rdx, (%rax)\njne 9f\ncmpq $0, 8(%rax)\njne 9f\n"
         "testq %r13, %r13\njnz 4f\nmovq $0x1234, (%rax)\njmp 5f\n"
         "4: movq $0x5678, (%rax)\n5:\n"
+        "movq %gs:0x58, %rax\nmovq 8(%rax), %rax\ntestq %rax, %rax\njz 9f\n"
+        "movabsq $0x1020304050607080, %rdx\ncmpq %rdx, (%rax)\njne 9f\n"
+        "cmpq $0, 8(%rax)\njne 9f\ntestq %r13, %r13\njnz 11f\n"
+        "movq $0xabcd, (%rax)\njmp 12f\n11: movq $0xdcba, (%rax)\n12:\n"
         "movabsq $0x1111222233334444, %rax\ntestq %r13, %r13\njz 1f\n"
         "movabsq $0xaaaabbbbccccdddd, %rax\n"
         "1: movq %rax, %gs:0x1480\nmovq 32(%r14), %rdx\ntestq %rdx, %rdx\njz 6f\n"
@@ -50,6 +54,7 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "testl %eax, %eax\njnz 9f\nmovabsq $0x1111222233334444, %rax\n"
         "cmpq %gs:0x1480, %rax\njne 9f\n"
         "movq %gs:0x58, %rax\nmovq (%rax), %rax\ncmpq $0x1234, (%rax)\njne 9f\n"
+        "movq %gs:0x58, %rax\nmovq 8(%rax), %rax\ncmpq $0xabcd, (%rax)\njne 9f\n"
         "cmpq $0, 40(%r14)\njne 10f\n"
         "movq %r12, %rcx\nxorl %edx, %edx\ncallq *16(%r15)\n"
         "testl %eax, %eax\njnz 9f\n10: movl $0xc0000022, %edx\njmp 8f\n"
@@ -208,6 +213,44 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             return false;
         if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::Success)
             return false;
+        static constinit uint8_t tlsDllFile[1024]{};
+        constexpr uintptr_t tlsDllBase = hal::amd64::BootstrapManagedBase + 0xe00000;
+        pe::ImageNtHeaders64 tlsNt{};
+        tlsNt.signature = pe::NT_SIGNATURE;
+        tlsNt.fileHeader.machine = pe::MACHINE_AMD64;
+        tlsNt.fileHeader.numberOfSections = 1;
+        tlsNt.fileHeader.sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+        tlsNt.fileHeader.characteristics = pe::IMAGE_FILE_EXECUTABLE_IMAGE | 0x2000;
+        tlsNt.optionalHeader.magic = pe::PE32PLUS_MAGIC;
+        tlsNt.optionalHeader.imageBase = tlsDllBase;
+        tlsNt.optionalHeader.sectionAlignment = mm::PageSize4KB;
+        tlsNt.optionalHeader.fileAlignment = 512;
+        tlsNt.optionalHeader.sizeOfImage = 2 * mm::PageSize4KB;
+        tlsNt.optionalHeader.sizeOfHeaders = 512;
+        tlsNt.optionalHeader.numberOfRvaAndSizes = 16;
+        tlsNt.optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_TLS] =
+            {mm::PageSize4KB, sizeof(pe::ImageTlsDirectory64)};
+        std::memcpy(tlsDllFile, &dos, sizeof(dos));
+        std::memcpy(tlsDllFile + 64, &tlsNt, sizeof(tlsNt));
+        pe::ImageSectionHeader tlsData{};
+        tlsData.virtualAddress = mm::PageSize4KB;
+        tlsData.misc.virtualSize = mm::PageSize4KB;
+        tlsData.pointerToRawData = 512;
+        tlsData.sizeOfRawData = 512;
+        tlsData.characteristics = pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_MEM_WRITE;
+        std::memcpy(tlsDllFile + 64 + sizeof(tlsNt), &tlsData, sizeof(tlsData));
+        pe::ImageTlsDirectory64 secondTls{};
+        secondTls.startAddressOfRawData = tlsDllBase + mm::PageSize4KB + 0x80;
+        secondTls.endAddressOfRawData = secondTls.startAddressOfRawData + 8;
+        secondTls.addressOfIndex = tlsDllBase + mm::PageSize4KB + 0x90;
+        secondTls.sizeOfZeroFill = 8;
+        secondTls.characteristics = 5u << 20;
+        std::memcpy(tlsDllFile + 512, &secondTls, sizeof(secondTls));
+        constexpr uint64_t secondSeed = 0x1020304050607080ULL;
+        std::memcpy(tlsDllFile + 512 + 0x80, &secondSeed, sizeof(secondSeed));
+        std::memcpy(tlsDllFile + 512 + 0x90, &uninitializedTlsIndex, sizeof(uninitializedTlsIndex));
+        if (process.loadNativeImage("tls.dll", std::span<const uint8_t>{tlsDllFile}) != NtStatus::Success)
+            return false;
         auto* loadedTls = reinterpret_cast<pe::ImageTlsDirectory64*>(code + 2 * mm::PageSize4KB);
         auto* callbacks = reinterpret_cast<uint64_t*>(code + 2 * mm::PageSize4KB + 0x68);
         loadedTls->addressOfCallBacks = reinterpret_cast<uintptr_t>(callbacks);
@@ -218,9 +261,11 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         callbacks[0] = 0;
         if (callbackStatus != NtStatus::NotImplemented ||
             *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != uninitializedTlsIndex ||
+            *reinterpret_cast<uint32_t*>(tlsDllBase + mm::PageSize4KB + 0x90) != uninitializedTlsIndex ||
             process.finalizeNativeImages() != NtStatus::Success ||
-            !process.userTlsLayout() || *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != 0 ||
-            sys::bootstrapSectionObjectCount() != sectionsBefore + 2 ||
+            process.userTlsLayouts().size() != 2 || *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != 0 ||
+            *reinterpret_cast<uint32_t*>(tlsDllBase + mm::PageSize4KB + 0x90) != 1 ||
+            sys::bootstrapSectionObjectCount() != sectionsBefore + 3 ||
             hal::amd64::bootstrapUserRange(code, 1, true) ||
             hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, true) ||
             !hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, false, true) ||
@@ -246,12 +291,14 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::InvalidParameter ||
             first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
         ps::EThread* threads[]{&first, &second, &third};
-        uintptr_t tebs[3]{}, tlsBlocks[3]{};
+        uintptr_t tebs[3]{}, tlsBlocks[3]{}, tlsSecond[3]{};
         for (size_t i = 0; i < threadCount; ++i) {
             if (threads[i]->initializeUser(process, entry, 32768, mm::PageSize4KB, preemptive) != NtStatus::Success)
                 return false;
             tebs[i] = threads[i]->userTebAddress();
             tlsBlocks[i] = threads[i]->userTlsStorage();
+            const auto* teb = reinterpret_cast<const um::Teb64*>(tebs[i]);
+            tlsSecond[i] = reinterpret_cast<const uint64_t*>(teb->threadLocalStoragePointer)[1];
             auto* arguments = reinterpret_cast<uint64_t*>(threads[i]->userStackPointer());
             arguments[0] = eventFirst;
             arguments[1] = eventSecond;
@@ -284,7 +331,8 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             tls = tls && threads[i]->kernelThread()->state == ThreadState::Terminated &&
                   teb->processEnvironmentBlock == process.userPebAddress() &&
                   teb->tlsSlots[0] == (i == 0 ? 0x1111222233334444ULL : 0xaaaabbbbccccddddULL) &&
-                  *reinterpret_cast<uint64_t*>(tlsBlocks[i]) == (i == 0 ? 0x1234u : 0x5678u);
+                  *reinterpret_cast<uint64_t*>(tlsBlocks[i]) == (i == 0 ? 0x1234u : 0x5678u) &&
+                  *reinterpret_cast<uint64_t*>(tlsSecond[i]) == (i == 0 ? 0xabcdu : 0xdcbau);
         }
         tls = tls && (!preemptive || (reinterpret_cast<volatile uint64_t*>(counters)[0] &&
                                       reinterpret_cast<volatile uint64_t*>(counters)[1]));

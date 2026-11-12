@@ -245,14 +245,17 @@ baseline are checked. Event handles belong to the process's Ob table and
 waits retain object references across Ke switches. The test maps an NTDLL PE
 into the same process, resolves its exports and calls its real allocation,
 event, wait and termination stubs. The fixture includes a PE TLS directory;
-the Ps loader reads its template through `PeImageView64`, validates a writable
-index and assigns index zero; the Ps user-thread initializer allocates separate
+the Ps loader reads templates through `PeImageView64`, validates writable
+indices and assigns distinct module indices; the Ps user-thread initializer allocates separate
 stacks, TEBs, TLS vectors and template copies.
 Both CPL3 threads verify and change their own copy. The Ps reaper releases
 those allocations from another context; an invalid TLS layout exercises
 post-allocation rollback with PFN accounting. QEMU checks that unsupported
-TLS callbacks are rejected before changing the index. This is one TLS module
-without callbacks, not full loader initialization. Ps now owns the bounded image-loading sequence: it allocates
+TLS callbacks are rejected before changing the index. QEMU exercises two PE
+TLS modules with different templates and checks the separate values in two
+and three user threads. This is bounded to sixteen modules and one page per
+thread, without callbacks, and is not full loader initialization. Ps now owns
+the bounded image-loading sequence: it allocates
 Mm section views backed by canonical Ob objects and PFNs, uses the existing
 `NativeUserImageSet64` loader to map both
 PE files and bind the fixture's imports to NTDLL, and applies RO/RW/RX section

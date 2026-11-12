@@ -27,8 +27,8 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     exitStatus_ = NtStatus::Pending;
     imagesFinalized_ = false;
     userPeb_ = 0;
-    userTlsLayout_ = {};
-    hasUserTls_ = false;
+    userTlsLayouts_.reset();
+    userTlsCount_ = 0;
     return NtStatus::Success;
 }
 
@@ -44,8 +44,8 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status != NtStatus::Success) return status;
     userPeb_ = 0;
-    userTlsLayout_ = {};
-    hasUserTls_ = false;
+    userTlsLayouts_.reset();
+    userTlsCount_ = 0;
     images_.reset();
     if (!destroyProcessPagingRoot(root_)) return NtStatus::Unsuccessful;
     handles_.reset();
@@ -180,14 +180,25 @@ NtStatus EThread::ready() noexcept {
 NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                  size_t userStackSize, const pe::PeImageView64::TlsLayout* tls,
                                  bool interruptible) noexcept {
+    return initializeUserWithTls(process, entry, kernelStackSize, userStackSize,
+        tls ? std::span<const pe::PeImageView64::TlsLayout>{tls, 1} : std::span<const pe::PeImageView64::TlsLayout>{},
+        interruptible);
+}
+
+NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                                        size_t userStackSize, std::span<const pe::PeImageView64::TlsLayout> tls,
+                                        bool interruptible) noexcept {
     uintptr_t currentRoot{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
     if (currentRoot != process.getDirectoryTableBase() || !entry || userStackSize < mm::PageSize4KB ||
         userStackSize > 1024 * 1024 || userStackSize > SIZE_MAX - mm::PageMask4KB ||
         !hal::amd64::bootstrapUserRange(entry, 1, false, true)) return NtStatus::InvalidParameter;
-    if (tls && (!tls->present || tls->callbackCount || !tls->alignment || tls->alignment > 256 ||
-        tls->initialData.size() > mm::PageSize4KB - 0x100 ||
-        tls->zeroFill > mm::PageSize4KB - 0x100 - tls->initialData.size())) return NtStatus::NotImplemented;
+    if (tls.size() > 16) return NtStatus::NotImplemented;
+    for (const auto& layout : tls) {
+        if (!layout.present || layout.callbackCount || !layout.alignment || layout.alignment > 256 ||
+            layout.initialData.size() > mm::PageSize4KB - 0x100 ||
+            layout.zeroFill > mm::PageSize4KB - 0x100 - layout.initialData.size()) return NtStatus::NotImplemented;
+    }
     const size_t stackSize = (userStackSize + mm::PageMask4KB) & ~mm::PageMask4KB;
     auto status = initialize(process, kernelStackSize, startUser, this);
     if (status != NtStatus::Success) return status;
@@ -195,12 +206,26 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
     status = space.allocate(userStack_, stackSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
     if (status == NtStatus::Success)
         status = space.allocate(userTeb_, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
-    if (status == NtStatus::Success && tls)
+    if (status == NtStatus::Success && !tls.empty())
         status = space.allocate(userTls_, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
-    if (status == NtStatus::Success && tls) {
-        *reinterpret_cast<uint64_t*>(userTls_) = userTls_ + 0x100;
-        status = pe::PeImageView64::initializeTlsData(*tls,
-            std::span<uint8_t>{reinterpret_cast<uint8_t*>(userTls_ + 0x100), mm::PageSize4KB - 0x100});
+    if (status == NtStatus::Success && !tls.empty()) {
+        size_t offset = 0x100;
+        auto* vector = reinterpret_cast<uint64_t*>(userTls_);
+        for (size_t i = 0; i < tls.size(); ++i) {
+            const auto& layout = tls[i];
+            if (layout.alignment & (layout.alignment - 1)) { status = NtStatus::InvalidParameter; break; }
+            offset = (offset + layout.alignment - 1) & ~(layout.alignment - 1);
+            const size_t length = layout.initialData.size() + layout.zeroFill;
+            if (offset > mm::PageSize4KB || length > mm::PageSize4KB - offset) {
+                status = NtStatus::NotImplemented;
+                break;
+            }
+            vector[i] = userTls_ + offset;
+            status = pe::PeImageView64::initializeTlsData(layout,
+                std::span<uint8_t>{reinterpret_cast<uint8_t*>(userTls_ + offset), length});
+            if (status != NtStatus::Success) break;
+            offset += length;
+        }
     }
     if (status != NtStatus::Success) {
         if (reap() != NtStatus::Success) return NtStatus::Unsuccessful;
@@ -223,8 +248,8 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
 NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                  size_t userStackSize, bool interruptible) noexcept {
     if (!process.nativeImagesFinalized()) return NtStatus::InvalidParameter;
-    return initializeUser(process, entry, kernelStackSize, userStackSize,
-                          process.userTlsLayout(), interruptible);
+    return initializeUserWithTls(process, entry, kernelStackSize, userStackSize,
+                                 process.userTlsLayouts(), interruptible);
 }
 
 void EThread::startUser(void* argument) noexcept {

@@ -66,8 +66,9 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
     if (imagesFinalized_) return NtStatus::Success;
     const auto binding = images_->bindAll();
     if (binding != NtStatus::Success) return binding;
-    pe::PeImageView64::TlsLayout selectedTls{};
-    uintptr_t tlsIndexAddress{};
+    uintptr_t tlsIndexAddresses[16]{};
+    size_t tlsCount = 0;
+    size_t tlsOffset = 0x100;
     for (size_t i = 0; i < images_->size(); ++i) {
         const auto* module = images_->module(i);
         if (!module) __builtin_trap();
@@ -75,10 +76,15 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
         const auto status = module->view.tlsLayout(module->image, module->base, candidate);
         if (status != NtStatus::Success) return status;
         if (!candidate.present) continue;
-        if (selectedTls.present || candidate.callbackCount || candidate.alignment > 256 ||
+        if (tlsCount == 16 || candidate.callbackCount || candidate.alignment > 256 ||
             candidate.initialData.size() > mm::PageSize4KB - 0x100 ||
             candidate.zeroFill > mm::PageSize4KB - 0x100 - candidate.initialData.size())
             return NtStatus::NotImplemented;
+        tlsOffset = (tlsOffset + candidate.alignment - 1) & ~(candidate.alignment - 1);
+        const size_t tlsLength = candidate.initialData.size() + candidate.zeroFill;
+        if (tlsOffset > mm::PageSize4KB || tlsLength > mm::PageSize4KB - tlsOffset)
+            return NtStatus::NotImplemented;
+        tlsOffset += tlsLength;
         bool writableIndex = false;
         for (size_t j = 0; j < module->view.headers().fileHeader.numberOfSections; ++j) {
             const auto section = module->view.section(j);
@@ -91,12 +97,21 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
             }
         }
         if (!writableIndex) return NtStatus::NotSupported;
-        selectedTls = candidate;
-        tlsIndexAddress = module->base + candidate.indexRva;
+        tlsIndexAddresses[tlsCount++] = module->base + candidate.indexRva;
     }
-    if (selectedTls.present) {
-        const uint32_t index = 0;
-        std::memcpy(reinterpret_cast<void*>(tlsIndexAddress), &index, sizeof(index));
+    std::unique_ptr<pe::PeImageView64::TlsLayout[]> selectedTls;
+    if (tlsCount) {
+        selectedTls.reset(new (std::nothrow_t{}) pe::PeImageView64::TlsLayout[tlsCount]);
+        if (!selectedTls) return NtStatus::NoMemory;
+        size_t selected = 0;
+        for (size_t i = 0; i < images_->size(); ++i) {
+            const auto* module = images_->module(i);
+            pe::PeImageView64::TlsLayout candidate{};
+            if (!module || module->view.tlsLayout(module->image, module->base, candidate) != NtStatus::Success)
+                __builtin_trap();
+            if (candidate.present) selectedTls[selected++] = candidate;
+        }
+        if (selected != tlsCount) __builtin_trap();
     }
     for (size_t i = 0; i < images_->size(); ++i) {
         const auto* module = images_->module(i);
@@ -123,8 +138,12 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
             mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
         if (status != NtStatus::Success) return status;
     }
-    userTlsLayout_ = selectedTls;
-    hasUserTls_ = selectedTls.present;
+    for (size_t i = 0; i < tlsCount; ++i) {
+        const auto index = static_cast<uint32_t>(i);
+        std::memcpy(reinterpret_cast<void*>(tlsIndexAddresses[i]), &index, sizeof(index));
+    }
+    userTlsLayouts_ = std::move(selectedTls);
+    userTlsCount_ = tlsCount;
     imagesFinalized_ = true;
     return NtStatus::Success;
 }
