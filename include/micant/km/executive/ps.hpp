@@ -5,6 +5,7 @@
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/um/native/pe.hpp"
 #include <memory>
 
 namespace micant::ke { struct KThread; }
@@ -48,20 +49,34 @@ public:
     EThread(const EThread&) = delete;
     EThread& operator=(const EThread&) = delete;
     NtStatus initialize(EProcess& process, size_t stackSize, StartRoutine start, void* argument) noexcept;
+    // BSP-only, with the process root active. Supports one static TLS module
+    // without callbacks; the image and TLS layout must remain valid during setup.
+    NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                            size_t userStackSize, const pe::PeImageView64::TlsLayout* tls) noexcept;
     NtStatus ready() noexcept;
     // Roll back a thread that has not begun executing. BSP only, with
     // interrupts disabled; running and waiting threads cannot be cancelled.
     NtStatus cancelBeforeStart() noexcept;
     NtStatus reap() noexcept;
     [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
+    [[nodiscard]] uintptr_t userStackPointer() const noexcept { return userStackPointer_; }
+    [[nodiscard]] uintptr_t userTebAddress() const noexcept { return userTeb_; }
+    [[nodiscard]] uintptr_t userTlsStorage() const noexcept { return userTls_ ? userTls_ + 0x100 : 0; }
 private:
     static void startThread(void* argument) noexcept;
+    static void startUser(void* argument) noexcept;
+    NtStatus releaseUserMemory() noexcept;
     EProcess* process_{nullptr};
     std::unique_ptr<ke::KThread> thread_{};
     std::unique_ptr<uint8_t[]> stack_{};
     StartRoutine start_{nullptr};
     void* argument_{nullptr};
     bool started_{false};
+    uintptr_t userEntry_{0};
+    uintptr_t userStack_{0};
+    uintptr_t userStackPointer_{0};
+    uintptr_t userTeb_{0};
+    uintptr_t userTls_{0};
 };
 }
 #else

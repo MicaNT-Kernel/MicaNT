@@ -6,4 +6,4 @@
 | M4 — Processi e thread | Parziale | Lifecycle Ps, stack kernel/TSS e terminazione limitata a due thread verificati in QEMU. | Oggetti attendibili Ob, creazione nativa e terminazione multi-thread generale. |
 | M5 — Syscall NT | Parziale | Section, close, memoria, eventi con attesa bloccante e terminazione limitata esercitati da CPL3. | Creazione processo/thread, timeout/APC, terminazione generale e copertura restante. |
 | M6 — Processo PE Ring 3 | Parziale | Fixture PE in processo Ps: entry CPL3, TEB minima, allocazione e terminazione verificati. | Image section, loader di processo, NTDLL, PEB e startup PE integrati. |
-| M7 — Due thread, TLS e sincronizzazione | Parziale | Due thread CPL3, template TLS PE distinti, NTDLL, eventi bloccanti e status verificati in QEMU. | Inizializzazione TLS nel loader, creazione nativa thread e startup completo. |
+| M7 — Due thread, TLS e sincronizzazione | Parziale | Due thread Ps CPL3 con stack, TEB e TLS PE distinti; NTDLL, eventi e status verificati in QEMU. | Inizializzazione TLS completa nel loader, creazione nativa thread e startup completo. |

@@ -53,16 +53,18 @@ __asm__(".section .uthreads$z,\"xr\"\n.globl MicantTwoUserThreadsEnd\n"
 }
 
 namespace {
-struct Start {
-    micant::ke::KThread* boot;
-    uintptr_t entry;
-    uintptr_t stack;
-    bool queueBoot;
-};
-void enter(void* argument) noexcept {
-    auto& start = *static_cast<Start*>(argument);
-    if (start.queueBoot && !micant::ke::PriorityScheduler::get().readyKThread(start.boot)) __builtin_trap();
-    micant::hal::amd64::enterBootstrapUserThread(start.entry, start.stack);
+alignas(16) uint8_t launcherStack[16384]{};
+void launch(void* argument) noexcept {
+    using namespace micant::ke;
+    auto* boot = static_cast<KThread*>(argument);
+    auto* current = KeGetCurrentThread();
+    KeLowerIrql(PASSIVE_LEVEL);
+    if (!PriorityScheduler::get().readyKThread(boot)) __builtin_trap();
+    current->state = ThreadState::Terminated;
+    KfRaiseIrql(DISPATCH_LEVEL);
+    auto* next = PriorityScheduler::get().selectNextThread();
+    if (!next || !KiSwapContext(current, next)) __builtin_trap();
+    __builtin_trap();
 }
 }
 
@@ -90,25 +92,9 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             sys::NtClose(sourceFirst) != NtStatus::Success || sys::NtClose(sourceSecond) != NtStatus::Success ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
         auto& space = process.getAddressSpace();
-        uintptr_t code{}, stacks[2]{}, tebs[2]{}, tlsBlocks[2]{};
+        uintptr_t code{};
         if (space.allocate(code, 3 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success)
             return false;
-        for (size_t i = 0; i < 2; ++i) {
-            if (space.allocate(stacks[i], mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success ||
-                space.allocate(tebs[i], 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success ||
-                space.allocate(tlsBlocks[i], mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success)
-                return false;
-            auto* teb = reinterpret_cast<um::Teb64*>(tebs[i]);
-            teb->self = tebs[i];
-            teb->stackBase = stacks[i] + mm::PageSize4KB;
-            teb->stackLimit = stacks[i];
-            teb->threadLocalStoragePointer = tlsBlocks[i];
-            *reinterpret_cast<uint64_t*>(tlsBlocks[i]) = tlsBlocks[i] + 0x100;
-            auto* arguments = reinterpret_cast<uint64_t*>(stacks[i] + mm::PageSize4KB - 128);
-            arguments[0] = eventFirst;
-            arguments[1] = eventSecond;
-            arguments[2] = i;
-        }
         const auto* program = reinterpret_cast<const uint8_t*>(MicantTwoUserThreads);
         const size_t programSize = reinterpret_cast<uintptr_t>(MicantTwoUserThreadsEnd) - reinterpret_cast<uintptr_t>(program);
         if (!programSize || programSize > mm::PageSize4KB) return false;
@@ -168,11 +154,6 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
             tlsLayout.indexRva != 2 * mm::PageSize4KB + 0x50) return false;
         *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) = 0;
-        for (const auto block : tlsBlocks) {
-            if (pe::PeImageView64::initializeTlsData(tlsLayout,
-                    std::span<uint8_t>{reinterpret_cast<uint8_t*>(block + 0x100), 16}) != NtStatus::Success)
-                return false;
-        }
         pe::PeImageView64 dll;
         if (dll.inspect(std::span<const uint8_t>{nativeDll}) != NtStatus::Success) return false;
         uintptr_t dllBase = dll.headers().optionalHeader.imageBase;
@@ -181,15 +162,13 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             dll.map(std::span<uint8_t>{reinterpret_cast<uint8_t*>(dllBase), dllSize}, dllBase) != NtStatus::Success)
             return false;
         constexpr const char* names[]{"NtAllocateVirtualMemory", "NtWaitForSingleObject", "NtSetEvent", "NtTerminateProcess"};
+        uintptr_t exports[4]{};
         for (size_t i = 0; i < 4; ++i) {
             pe::PeImageView64::ExportTarget target{};
             if (dll.findExport(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(dllBase), dllSize},
                                dllBase, names[i], 0, target) != NtStatus::Success || !target.address ||
                 !target.forwarder.empty()) return false;
-            for (size_t thread = 0; thread < 2; ++thread) {
-                auto* arguments = reinterpret_cast<uint64_t*>(stacks[thread] + mm::PageSize4KB - 128);
-                arguments[3 + i] = target.address;
-            }
+            exports[i] = target.address;
         }
         uint32_t old{};
         if (space.protect(dllBase, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success) return false;
@@ -204,22 +183,39 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
                               protection, &old) != NtStatus::Success) return false;
         }
         if (space.protect(code, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success ||
-            space.protect(code + mm::PageSize4KB, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success ||
-            !hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
+            space.protect(code + mm::PageSize4KB, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success) return false;
         const uintptr_t entry = code + nt.optionalHeader.addressOfEntryPoint;
-        Start starts[2]{{boot, entry, stacks[0] + mm::PageSize4KB - 128, true},
-                        {boot, entry, stacks[1] + mm::PageSize4KB - 128, false}};
-        if (first.initialize(process, 32768, enter, &starts[0]) != NtStatus::Success ||
-            second.initialize(process, 32768, enter, &starts[1]) != NtStatus::Success) return false;
-        first.kernelThread()->tebAddress = tebs[0];
-        second.kernelThread()->tebAddress = tebs[1];
+        auto invalidTls = tlsLayout;
+        invalidTls.callbackCount = 1;
+        const size_t beforeThread = mm::PfnDatabase::get().getActiveCount();
+        if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::NotImplemented ||
+            mm::PfnDatabase::get().getActiveCount() != beforeThread) return false;
+        invalidTls = tlsLayout;
+        invalidTls.alignment = 3; // Fails after user pages were allocated; reap must roll them back.
+        if (first.initializeUser(process, entry, 32768, mm::PageSize4KB, &invalidTls) != NtStatus::InvalidParameter ||
+            first.kernelThread() || mm::PfnDatabase::get().getActiveCount() != beforeThread ||
+            first.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout) != NtStatus::Success ||
+            second.initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout) != NtStatus::Success) return false;
+        ps::EThread* threads[]{&first, &second};
+        uintptr_t tebs[2]{}, tlsBlocks[2]{};
+        for (size_t i = 0; i < 2; ++i) {
+            tebs[i] = threads[i]->userTebAddress();
+            tlsBlocks[i] = threads[i]->userTlsStorage();
+            auto* arguments = reinterpret_cast<uint64_t*>(threads[i]->userStackPointer());
+            arguments[0] = eventFirst;
+            arguments[1] = eventSecond;
+            arguments[2] = i;
+            for (size_t j = 0; j < 4; ++j) arguments[3 + j] = exports[j];
+        }
+        if (!hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
         first.kernelThread()->priority = second.kernelThread()->priority = boot->priority + 1;
         if (!first.kernelThread()->priority || first.ready() != NtStatus::Success ||
             second.ready() != NtStatus::Success) return false;
-        auto* next = scheduler.selectNextThread();
-        if (next != first.kernelThread()) return false;
+        KThread launcher;
+        launcher.directoryTableBase = g_CurrentCpu.currentCr3;
+        if (!detail::prepareBootstrapThread(launcher, launcherStack, sizeof(launcherStack), launch, boot)) return false;
         const KIRQL oldIrql = KfRaiseIrql(DISPATCH_LEVEL);
-        const bool switched = KiSwapContext(boot, next);
+        const bool switched = KiSwapContext(boot, &launcher);
         KeLowerIrql(oldIrql);
         if (!switched || !process.isTerminating() || process.exitStatus() != NtStatus::AccessDenied ||
             first.kernelThread()->state != ThreadState::Terminated ||
@@ -227,8 +223,8 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
         const bool tls = reinterpret_cast<um::Teb64*>(tebs[0])->tlsSlots[0] == 0x1111222233334444ULL &&
                          reinterpret_cast<um::Teb64*>(tebs[1])->tlsSlots[0] == 0xaaaabbbbccccddddULL &&
-                         *reinterpret_cast<uint64_t*>(tlsBlocks[0] + 0x100) == 0x1234 &&
-                         *reinterpret_cast<uint64_t*>(tlsBlocks[1] + 0x100) == 0x5678;
+                         *reinterpret_cast<uint64_t*>(tlsBlocks[0]) == 0x1234 &&
+                         *reinterpret_cast<uint64_t*>(tlsBlocks[1]) == 0x5678;
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tls ||
             first.reap() != NtStatus::Success || second.reap() != NtStatus::Success ||
             process.closeAddressSpace() != NtStatus::Success) return false;

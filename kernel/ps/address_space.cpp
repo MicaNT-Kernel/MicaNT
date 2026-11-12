@@ -1,6 +1,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
+#include "micant/km/executive/usermode.hpp"
 
 namespace micant::ps {
 
@@ -147,6 +148,72 @@ NtStatus EThread::ready() noexcept {
         ? NtStatus::Success : NtStatus::Unsuccessful;
 }
 
+NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                                 size_t userStackSize, const pe::PeImageView64::TlsLayout* tls) noexcept {
+    uintptr_t currentRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    if (currentRoot != process.getDirectoryTableBase() || !entry || userStackSize < mm::PageSize4KB ||
+        userStackSize > 1024 * 1024 || userStackSize > SIZE_MAX - mm::PageMask4KB ||
+        !hal::amd64::bootstrapUserRange(entry, 1, false, true)) return NtStatus::InvalidParameter;
+    if (tls && (!tls->present || tls->callbackCount || !tls->alignment || tls->alignment > 256 ||
+        tls->initialData.size() > mm::PageSize4KB - 0x100 ||
+        tls->zeroFill > mm::PageSize4KB - 0x100 - tls->initialData.size())) return NtStatus::NotImplemented;
+    const size_t stackSize = (userStackSize + mm::PageMask4KB) & ~mm::PageMask4KB;
+    auto status = initialize(process, kernelStackSize, startUser, this);
+    if (status != NtStatus::Success) return status;
+    auto& space = process.getAddressSpace();
+    status = space.allocate(userStack_, stackSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (status == NtStatus::Success)
+        status = space.allocate(userTeb_, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (status == NtStatus::Success && tls)
+        status = space.allocate(userTls_, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (status == NtStatus::Success && tls) {
+        *reinterpret_cast<uint64_t*>(userTls_) = userTls_ + 0x100;
+        status = pe::PeImageView64::initializeTlsData(*tls,
+            std::span<uint8_t>{reinterpret_cast<uint8_t*>(userTls_ + 0x100), mm::PageSize4KB - 0x100});
+    }
+    if (status != NtStatus::Success) {
+        if (reap() != NtStatus::Success) return NtStatus::Unsuccessful;
+        return status;
+    }
+    static_assert(sizeof(um::Teb64) <= 2 * mm::PageSize4KB);
+    auto* teb = new (reinterpret_cast<void*>(userTeb_)) um::Teb64{};
+    teb->self = userTeb_;
+    teb->stackBase = userStack_ + stackSize;
+    teb->stackLimit = userStack_;
+    teb->threadLocalStoragePointer = userTls_;
+    userEntry_ = entry;
+    userStackPointer_ = userStack_ + stackSize - 128;
+    thread_->tebAddress = userTeb_;
+    return NtStatus::Success;
+}
+
+void EThread::startUser(void* argument) noexcept {
+    auto* self = static_cast<EThread*>(argument);
+    if (!self || !self->userEntry_ || !self->userStackPointer_) __builtin_trap();
+    hal::amd64::enterBootstrapUserThread(self->userEntry_, self->userStackPointer_);
+}
+
+NtStatus EThread::releaseUserMemory() noexcept {
+    if (!userStack_ && !userTeb_ && !userTls_) return NtStatus::Success;
+    uintptr_t previous{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(previous));
+    const uintptr_t target = process_->getDirectoryTableBase();
+    if (previous != target && !hal::amd64::switchProcessPagingRootByPhysical(target)) return NtStatus::Unsuccessful;
+    auto& space = process_->getAddressSpace();
+    NtStatus status = NtStatus::Success;
+    for (auto* address : {&userTls_, &userTeb_, &userStack_}) {
+        if (*address && (status = space.free(*address, 0, mm::MEM_RELEASE)) != NtStatus::Success) break;
+        *address = 0;
+    }
+    if (previous != target && !hal::amd64::switchProcessPagingRootByPhysical(previous)) __builtin_trap();
+    if (status == NtStatus::Success) {
+        userEntry_ = userStackPointer_ = 0;
+        thread_->tebAddress = 0;
+    }
+    return status;
+}
+
 NtStatus EThread::cancelBeforeStart() noexcept {
     if (!thread_ || started_ || thread_.get() == ke::KeGetCurrentThread())
         return NtStatus::InvalidParameter;
@@ -179,6 +246,8 @@ NtStatus EThread::reap() noexcept {
     if (!thread_ || !process_ || thread_->readyQueued || thread_.get() == ke::KeGetCurrentThread() ||
         (thread_->state != ke::ThreadState::Initialized && thread_->state != ke::ThreadState::Terminated))
         return NtStatus::InvalidParameter;
+    const auto cleanup = releaseUserMemory();
+    if (cleanup != NtStatus::Success) return cleanup;
     const auto status = process_->detachThread(*thread_);
     if (status != NtStatus::Success) return status;
     thread_.reset();
