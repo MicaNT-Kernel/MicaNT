@@ -232,12 +232,12 @@ it does not create a PEB or initialize static TLS, and does not complete M6 or M
 The test now allocates a minimal user TEB and the context switch sets the
 thread's GS base; CPL3 writes and reads its first TEB TLS slot, and the test
 checks the stored value and bootstrap GS restoration after exit. This is not
-static PE TLS initialization. The entry
- can enable interrupts when the scheduler clock owns the routing; the bootstrap syscall/GS handling is
+static PE TLS initialization. The entry can enable interrupts when the
+scheduler clock owns the routing; the bootstrap syscall/GS handling is
 not a general user-thread context switch.
 
-A second QEMU test runs two Ps-owned CPL3 threads from one manually mapped
-PE fixture. Thread A allocates and checks memory through a syscall, blocks on
+A second QEMU test runs two Ps-owned CPL3 threads from a PE fixture. Thread A
+allocates and checks memory through a syscall, blocks on
 an Ob event, resumes after thread B signals it, checks its GS-based TEB slot,
 signals B and terminates the process. B uses a different TEB slot and blocks
 on the second event; both slots, the exit status, deferred reaping and PFN
@@ -245,13 +245,14 @@ baseline are checked. Event handles belong to the process's Ob table and
 waits retain object references across Ke switches. The test maps an NTDLL PE
 into the same process, resolves its exports and calls its real allocation,
 event, wait and termination stubs. The fixture includes a PE TLS directory;
-the test reads its template through `PeImageView64` and the Ps user-thread
-initializer allocates separate stacks, TEBs, TLS vectors and template copies.
+the Ps loader reads its template through `PeImageView64`, validates a writable
+index and assigns index zero; the Ps user-thread initializer allocates separate
+stacks, TEBs, TLS vectors and template copies.
 Both CPL3 threads verify and change their own copy. The Ps reaper releases
 those allocations from another context; an invalid TLS layout exercises
-post-allocation rollback with PFN accounting. This is one TLS module without
-callbacks, with the image and index prepared by the test, not full loader
-initialization. Ps now owns the bounded image-loading sequence: it allocates
+post-allocation rollback with PFN accounting. QEMU checks that unsupported
+TLS callbacks are rejected before changing the index. This is one TLS module
+without callbacks, not full loader initialization. Ps now owns the bounded image-loading sequence: it allocates
 Mm section views backed by canonical Ob objects and PFNs, uses the existing
 `NativeUserImageSet64` loader to map both
 PE files and bind the fixture's imports to NTDLL, and applies RO/RW/RX section

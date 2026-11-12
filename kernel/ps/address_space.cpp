@@ -27,6 +27,8 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     exitStatus_ = NtStatus::Pending;
     imagesFinalized_ = false;
     userPeb_ = 0;
+    userTlsLayout_ = {};
+    hasUserTls_ = false;
     return NtStatus::Success;
 }
 
@@ -42,6 +44,8 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status != NtStatus::Success) return status;
     userPeb_ = 0;
+    userTlsLayout_ = {};
+    hasUserTls_ = false;
     images_.reset();
     if (!destroyProcessPagingRoot(root_)) return NtStatus::Unsuccessful;
     handles_.reset();
@@ -214,6 +218,13 @@ NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kern
     userStackPointer_ = userStack_ + stackSize - 128;
     thread_->tebAddress = userTeb_;
     return NtStatus::Success;
+}
+
+NtStatus EThread::initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                                 size_t userStackSize, bool interruptible) noexcept {
+    if (!process.nativeImagesFinalized()) return NtStatus::InvalidParameter;
+    return initializeUser(process, entry, kernelStackSize, userStackSize,
+                          process.userTlsLayout(), interruptible);
 }
 
 void EThread::startUser(void* argument) noexcept {

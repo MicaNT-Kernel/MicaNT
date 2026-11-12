@@ -35,6 +35,10 @@ public:
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
     [[nodiscard]] uintptr_t userPebAddress() const noexcept { return userPeb_; }
+    [[nodiscard]] bool nativeImagesFinalized() const noexcept { return imagesFinalized_; }
+    [[nodiscard]] const pe::PeImageView64::TlsLayout* userTlsLayout() const noexcept {
+        return hasUserTls_ ? &userTlsLayout_ : nullptr;
+    }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
 private:
@@ -48,6 +52,8 @@ private:
     std::unique_ptr<um::NativeUserImageSet64> images_{};
     bool imagesFinalized_{false};
     uintptr_t userPeb_{0};
+    pe::PeImageView64::TlsLayout userTlsLayout_{};
+    bool hasUserTls_{false};
 };
 
 // BSP bootstrap thread lifecycle; kernel stack and dispatcher context remain
@@ -65,6 +71,8 @@ public:
     NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                             size_t userStackSize, const pe::PeImageView64::TlsLayout* tls,
                             bool interruptible = false) noexcept;
+    NtStatus initializeUser(EProcess& process, uintptr_t entry, size_t kernelStackSize,
+                            size_t userStackSize, bool interruptible = false) noexcept;
     NtStatus ready() noexcept;
     // Roll back a thread that has not begun executing. BSP only, with
     // interrupts disabled; running and waiting threads cannot be cancelled.

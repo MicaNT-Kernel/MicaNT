@@ -1,6 +1,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include <new>
+#include <cstring>
 
 namespace micant::sys {
 NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, size_t size) noexcept;
@@ -65,6 +66,38 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
     if (imagesFinalized_) return NtStatus::Success;
     const auto binding = images_->bindAll();
     if (binding != NtStatus::Success) return binding;
+    pe::PeImageView64::TlsLayout selectedTls{};
+    uintptr_t tlsIndexAddress{};
+    for (size_t i = 0; i < images_->size(); ++i) {
+        const auto* module = images_->module(i);
+        if (!module) __builtin_trap();
+        pe::PeImageView64::TlsLayout candidate{};
+        const auto status = module->view.tlsLayout(module->image, module->base, candidate);
+        if (status != NtStatus::Success) return status;
+        if (!candidate.present) continue;
+        if (selectedTls.present || candidate.callbackCount || candidate.alignment > 256 ||
+            candidate.initialData.size() > mm::PageSize4KB - 0x100 ||
+            candidate.zeroFill > mm::PageSize4KB - 0x100 - candidate.initialData.size())
+            return NtStatus::NotImplemented;
+        bool writableIndex = false;
+        for (size_t j = 0; j < module->view.headers().fileHeader.numberOfSections; ++j) {
+            const auto section = module->view.section(j);
+            const size_t size = section.misc.virtualSize > section.sizeOfRawData ? section.misc.virtualSize : section.sizeOfRawData;
+            if ((section.characteristics & pe::IMAGE_SCN_MEM_WRITE) && candidate.indexRva >= section.virtualAddress &&
+                candidate.indexRva - section.virtualAddress <= size &&
+                sizeof(uint32_t) <= size - (candidate.indexRva - section.virtualAddress)) {
+                writableIndex = true;
+                break;
+            }
+        }
+        if (!writableIndex) return NtStatus::NotSupported;
+        selectedTls = candidate;
+        tlsIndexAddress = module->base + candidate.indexRva;
+    }
+    if (selectedTls.present) {
+        const uint32_t index = 0;
+        std::memcpy(reinterpret_cast<void*>(tlsIndexAddress), &index, sizeof(index));
+    }
     for (size_t i = 0; i < images_->size(); ++i) {
         const auto* module = images_->module(i);
         if (!module) __builtin_trap();
@@ -90,6 +123,8 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
             mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
         if (status != NtStatus::Success) return status;
     }
+    userTlsLayout_ = selectedTls;
+    hasUserTls_ = selectedTls.present;
     imagesFinalized_ = true;
     return NtStatus::Success;
 }

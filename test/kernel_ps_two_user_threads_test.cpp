@@ -161,6 +161,8 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         std::memcpy(file + 512 + mm::PageSize4KB, &tlsDirectory, sizeof(tlsDirectory));
         constexpr uint64_t seed = 0x8877665544332211ULL;
         std::memcpy(file + 512 + mm::PageSize4KB + 0x40, &seed, sizeof(seed));
+        constexpr uint32_t uninitializedTlsIndex = 0xdeadbeef;
+        std::memcpy(file + 512 + mm::PageSize4KB + 0x50, &uninitializedTlsIndex, sizeof(uninitializedTlsIndex));
         auto* rawData = file + 512 + mm::PageSize4KB;
         pe::ImageImportDescriptor imports{};
         imports.originalFirstThunk = 2 * mm::PageSize4KB + 0xe0;
@@ -189,7 +191,6 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         if (image->view.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
             tlsLayout.indexRva != 2 * mm::PageSize4KB + 0x50) return false;
-        *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) = 0;
         const auto unboundFirst = *reinterpret_cast<uint64_t*>(code + imports.firstThunk);
         if (process.finalizeNativeImages() != NtStatus::NoSuchFile ||
             *reinterpret_cast<uint64_t*>(code + imports.firstThunk) != unboundFirst) return false;
@@ -205,8 +206,20 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
         if (wxStatus != NtStatus::NotSupported || mm::PfnDatabase::get().getActiveCount() != beforeDuplicate)
             return false;
-        if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::Success ||
+        if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::Success)
+            return false;
+        auto* loadedTls = reinterpret_cast<pe::ImageTlsDirectory64*>(code + 2 * mm::PageSize4KB);
+        auto* callbacks = reinterpret_cast<uint64_t*>(code + 2 * mm::PageSize4KB + 0x68);
+        loadedTls->addressOfCallBacks = reinterpret_cast<uintptr_t>(callbacks);
+        callbacks[0] = code + mm::PageSize4KB;
+        callbacks[1] = 0;
+        const auto callbackStatus = process.finalizeNativeImages();
+        loadedTls->addressOfCallBacks = 0;
+        callbacks[0] = 0;
+        if (callbackStatus != NtStatus::NotImplemented ||
+            *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != uninitializedTlsIndex ||
             process.finalizeNativeImages() != NtStatus::Success ||
+            !process.userTlsLayout() || *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) != 0 ||
             sys::bootstrapSectionObjectCount() != sectionsBefore + 2 ||
             hal::amd64::bootstrapUserRange(code, 1, true) ||
             hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, true) ||
@@ -235,7 +248,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         ps::EThread* threads[]{&first, &second, &third};
         uintptr_t tebs[3]{}, tlsBlocks[3]{};
         for (size_t i = 0; i < threadCount; ++i) {
-            if (threads[i]->initializeUser(process, entry, 32768, mm::PageSize4KB, &tlsLayout, preemptive) != NtStatus::Success)
+            if (threads[i]->initializeUser(process, entry, 32768, mm::PageSize4KB, preemptive) != NtStatus::Success)
                 return false;
             tebs[i] = threads[i]->userTebAddress();
             tlsBlocks[i] = threads[i]->userTlsStorage();
