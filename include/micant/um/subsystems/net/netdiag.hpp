@@ -82,59 +82,34 @@ public:
         }
 
         if (lowerArgs == "/release") {
-            dhcpCli.releaseLease();
-            return "\r\nWindows IP Configuration\r\n\r\n"
-                   "Ethernet adapter Ethernet 0:\r\n\r\n"
-                   "   Connection-specific DNS Suffix  . : \r\n"
-                   "   IPv4 Address. . . . . . . . . . . : 0.0.0.0\r\n"
-                   "   Subnet Mask . . . . . . . . . . . : 0.0.0.0\r\n"
-                   "   Default Gateway . . . . . . . . . : \r\n";
+            return "\r\nDHCP release is not available.\r\n";
         }
 
         if (lowerArgs == "/renew") {
-            // Simulated DORA renewal
-            dhcpCli.performSimulatedDora(
-                tcpip::Ipv4Address(147, 135, 1, 229),
-                tcpip::Ipv4Address(255, 255, 255, 0),
-                tcpip::Ipv4Address(147, 135, 1, 1),
-                tcpip::Ipv4Address(8, 8, 8, 8),
-                86400
-            );
-            return execute("");
+            return "\r\nDHCP renewal is not available.\r\n";
         }
 
         auto adapter = net.getAdapter();
         std::string adapterName = "Ethernet 0";
-        std::string desc = adapter ? std::string(adapter->getFriendlyName().begin(), adapter->getFriendlyName().end()) : "Intel(R) I210 Gigabit Network Connection";
-        std::string macStr = adapter ? adapter->getMacAddress().toString() : "00-1B-21-99-88-77";
+        std::string desc = adapter ? std::string(adapter->getFriendlyName().begin(), adapter->getFriendlyName().end()) : "No network adapter";
+        std::string macStr = adapter ? adapter->getMacAddress().toString() : "";
 
         std::ostringstream oss;
         oss << "\r\nWindows IP Configuration\r\n\r\n";
 
         if (lowerArgs == "/all") {
-            oss << "   Host Name . . . . . . . . . . . . : MicaNT-Server\r\n"
-                << "   Primary Dns Suffix  . . . . . . . : micant.internal\r\n"
-                << "   Node Type . . . . . . . . . . . . : Broadcast\r\n"
-                << "   IP Routing Enabled. . . . . . . . : No\r\n"
-                << "   WINS Proxy Enabled. . . . . . . . : No\r\n\r\n"
-                << "Ethernet adapter " << adapterName << ":\r\n\r\n"
-                << "   Connection-specific DNS Suffix  . : micant.internal\r\n"
+            oss << "Ethernet adapter " << adapterName << ":\r\n\r\n"
                 << "   Description . . . . . . . . . . . : " << desc << "\r\n"
                 << "   Physical Address. . . . . . . . . : " << macStr << "\r\n"
                 << "   DHCP Enabled. . . . . . . . . . . : " << (dhcpCli.isDhcpEnabled() ? "Yes" : "No") << "\r\n"
-                << "   Autoconfiguration Enabled . . . . : Yes\r\n"
-                << "   Link-local IPv6 Address . . . . . : " << net.getLocalIpv6().toString() << "%1(Preferred)\r\n"
-                << "   IPv4 Address. . . . . . . . . . . : " << net.getLocalIp().toString() << "(Preferred)\r\n"
+                << "   IPv6 Address. . . . . . . . . . . : " << net.getLocalIpv6().toString() << "\r\n"
+                << "   IPv4 Address. . . . . . . . . . . : " << net.getLocalIp().toString() << "\r\n"
                 << "   Subnet Mask . . . . . . . . . . . : " << net.getSubnetMask().toString() << "\r\n"
-                << "   Lease Obtained. . . . . . . . . . : Thursday, October 29, 2026 10:00:00 AM\r\n"
-                << "   Lease Expires . . . . . . . . . . : Friday, October 30, 2026 10:00:00 AM\r\n"
                 << "   Default Gateway . . . . . . . . . : " << net.getGateway().toString() << "\r\n"
-                << "   DHCP Server . . . . . . . . . . . : " << (dhcpCli.getServerIdentifier().isZero() ? net.getGateway().toString() : dhcpCli.getServerIdentifier().toString()) << "\r\n"
-                << "   DNS Servers . . . . . . . . . . . : " << net.getDnsServer().toString() << "\r\n"
-                << "   NetBIOS over Tcpip. . . . . . . . : Enabled\r\n";
+                << "   DHCP Server . . . . . . . . . . . : " << (dhcpCli.getServerIdentifier().isZero() ? std::string{} : dhcpCli.getServerIdentifier().toString()) << "\r\n"
+                << "   DNS Servers . . . . . . . . . . . : " << net.getDnsServer().toString() << "\r\n";
         } else {
             oss << "Ethernet adapter " << adapterName << ":\r\n\r\n"
-                << "   Connection-specific DNS Suffix  . : micant.internal\r\n"
                 << "   Link-local IPv6 Address . . . . . : " << net.getLocalIpv6().toString() << "\r\n"
                 << "   IPv4 Address. . . . . . . . . . . : " << net.getLocalIp().toString() << "\r\n"
                 << "   Subnet Mask . . . . . . . . . . . : " << net.getSubnetMask().toString() << "\r\n"

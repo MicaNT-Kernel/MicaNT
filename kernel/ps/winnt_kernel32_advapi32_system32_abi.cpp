@@ -1,11 +1,204 @@
 #if defined(MICANT_FREESTANDING_KERNEL32)
 
 #include <cstdint>
+#include "micant/shared/system_time.hpp"
 #include "micant/um/subsystems/winbase/utf8_conversion.hpp"
 
 static_assert(sizeof(void*) == 8);
 
 extern "C" {
+
+__declspec(dllimport) int32_t __stdcall NtQuerySystemTime(int64_t* systemTime) noexcept;
+__declspec(dllimport) int32_t __stdcall NtQueryPerformanceCounter(
+    int64_t* performanceCounter, int64_t* performanceFrequency) noexcept;
+
+struct Kernel32SystemTime {
+    uint16_t year, month, dayOfWeek, day, hour, minute, second, milliseconds;
+};
+struct Kernel32FileTime { uint32_t low, high; };
+struct Kernel32TimeZoneInformation {
+    int32_t bias;
+    wchar_t standardName[32];
+    Kernel32SystemTime standardDate;
+    int32_t standardBias;
+    wchar_t daylightName[32];
+    Kernel32SystemTime daylightDate;
+    int32_t daylightBias;
+};
+static_assert(sizeof(Kernel32SystemTime) == 16);
+static_assert(sizeof(Kernel32FileTime) == 8);
+static_assert(sizeof(Kernel32TimeZoneInformation) == 172);
+
+static bool ReadSystemTimeZone(Kernel32TimeZoneInformation& zone,
+                               uint32_t& zoneId) noexcept {
+    const auto* base = reinterpret_cast<const volatile uint8_t*>(0x7FFE0000ULL);
+    const auto* low = reinterpret_cast<const volatile uint32_t*>(base + 0x20);
+    const auto* high1 = reinterpret_cast<const volatile int32_t*>(base + 0x24);
+    const auto* high2 = reinterpret_cast<const volatile int32_t*>(base + 0x28);
+    bool stable = false;
+    int32_t signedHigh{};
+    uint32_t lowValue{};
+    for (unsigned retry = 0; retry < 8; ++retry) {
+        const int32_t first = *high1;
+        const uint32_t middle = *low;
+        const int32_t second = *high2;
+        if (first == second) {
+            signedHigh = first;
+            lowValue = middle;
+            stable = true;
+            break;
+        }
+    }
+    if (!stable) return false;
+    const int64_t biasTicks = static_cast<int64_t>(
+        (static_cast<uint64_t>(static_cast<uint32_t>(signedHigh)) << 32) | lowValue);
+    if (biasTicks % static_cast<int64_t>(micant::shared::time::TicksPerMinute))
+        return false;
+    const int64_t bias = biasTicks /
+        static_cast<int64_t>(micant::shared::time::TicksPerMinute);
+    if (bias < -1440 || bias > 1440) return false;
+    zone = {};
+    zone.bias = static_cast<int32_t>(bias);
+    if (bias == 0) {
+        zone.standardName[0] = L'U'; zone.standardName[1] = L'T';
+        zone.standardName[2] = L'C';
+    } else {
+        zone.standardName[0] = L'M'; zone.standardName[1] = L'i';
+        zone.standardName[2] = L'c'; zone.standardName[3] = L'a';
+        zone.standardName[4] = L'N'; zone.standardName[5] = L'T';
+    }
+    zoneId = *reinterpret_cast<const volatile uint32_t*>(base + 0x240);
+    return zoneId <= 2;
+}
+
+static bool QueryUtcFields(micant::shared::time::SystemTimeFields& fields) noexcept {
+    int64_t ticks{};
+    if (NtQuerySystemTime(&ticks) < 0 ||
+        !micant::shared::time::fromSystemTime100ns(static_cast<uint64_t>(ticks), fields))
+        return false;
+    return true;
+}
+
+static bool ApplyTimeZone(const Kernel32TimeZoneInformation* zone,
+                          const Kernel32SystemTime* utc,
+                          Kernel32SystemTime* local) noexcept {
+    using namespace micant::shared::time;
+    if (!zone || !utc || !local || zone->bias < -1440 || zone->bias > 1440 ||
+        zone->standardBias < -1440 || zone->standardBias > 1440 ||
+        zone->daylightBias < -1440 || zone->daylightBias > 1440) return false;
+    SystemTimeFields civil{utc->year, utc->month, utc->day, utc->hour, utc->minute,
+        utc->second, utc->milliseconds, utc->dayOfWeek};
+    uint64_t utcTicks{};
+    if (!toSystemTime100ns(civil, utcTicks)) return false;
+    int64_t bias = static_cast<int64_t>(zone->bias) + zone->standardBias;
+
+    auto transition = [&](const Kernel32SystemTime& rule, uint16_t year,
+                          int32_t priorBias, uint64_t& instant) noexcept {
+        if (rule.month == 0) return false;
+        if (rule.year && rule.year != year) return false;
+        const uint16_t effectiveYear = rule.year ? rule.year : year;
+        uint32_t day = rule.day;
+        if (rule.year == 0) {
+            if (rule.month > 12 || rule.day < 1 || rule.day > 5 || rule.dayOfWeek > 6)
+                return false;
+            SystemTimeFields first{effectiveYear, rule.month, 1, 0, 0, 0, 0, 0};
+            uint64_t firstTicks{};
+            if (!toSystemTime100ns(first, firstTicks)) return false;
+            const uint32_t firstWeekday = fromSystemTime100ns(firstTicks, first)
+                ? first.weekday : 0;
+            day = 1 + (rule.dayOfWeek + 7 - firstWeekday) % 7 +
+                  (rule.day - 1) * 7;
+            const auto maxDay = daysInMonth(effectiveYear, rule.month);
+            if (day > maxDay) day -= 7;
+        }
+        SystemTimeFields localRule{effectiveYear, rule.month, static_cast<uint16_t>(day),
+            rule.hour, rule.minute, rule.second, rule.milliseconds, 0};
+        uint64_t localTicks{};
+        if (!toSystemTime100ns(localRule, localTicks)) return false;
+        const int64_t offset = priorBias * static_cast<int64_t>(TicksPerMinute);
+        if (offset >= 0) {
+            if (localTicks > UINT64_MAX - static_cast<uint64_t>(offset)) return false;
+            instant = localTicks + static_cast<uint64_t>(offset);
+        } else {
+            const auto add = static_cast<uint64_t>(-offset);
+            if (localTicks < add) return false;
+            instant = localTicks - add;
+        }
+        return true;
+    };
+
+    if ((zone->daylightDate.month == 0) != (zone->standardDate.month == 0))
+        return false;
+    if (zone->daylightDate.month != 0) {
+        uint64_t daylightStart{}, standardStart{};
+        const int64_t daylightTotal = static_cast<int64_t>(zone->bias) + zone->daylightBias;
+        if (!transition(zone->daylightDate, utc->year, static_cast<int32_t>(bias), daylightStart) ||
+            !transition(zone->standardDate, utc->year, static_cast<int32_t>(daylightTotal), standardStart))
+            return false;
+        const bool inDaylight = daylightStart < standardStart
+            ? utcTicks >= daylightStart && utcTicks < standardStart
+            : utcTicks >= daylightStart || utcTicks < standardStart;
+        if (inDaylight) bias = daylightTotal;
+    }
+    const int64_t delta = -bias * static_cast<int64_t>(TicksPerMinute);
+    uint64_t localTicks{};
+    if (delta >= 0) {
+        if (utcTicks > UINT64_MAX - static_cast<uint64_t>(delta)) return false;
+        localTicks = utcTicks + static_cast<uint64_t>(delta);
+    } else {
+        if (utcTicks < static_cast<uint64_t>(-delta)) return false;
+        localTicks = utcTicks - static_cast<uint64_t>(-delta);
+    }
+    if (!fromSystemTime100ns(localTicks, civil)) return false;
+    *local = {civil.year, civil.month, civil.weekday, civil.day, civil.hour,
+              civil.minute, civil.second, civil.milliseconds};
+    return true;
+}
+
+static bool LocalTimeToUtc(const Kernel32TimeZoneInformation* zone,
+                           const Kernel32SystemTime* local,
+                           Kernel32SystemTime* utc) noexcept {
+    using namespace micant::shared::time;
+    if (!zone || !local || !utc || zone->bias < -1440 || zone->bias > 1440 ||
+        zone->standardBias < -1440 || zone->standardBias > 1440 ||
+        zone->daylightBias < -1440 || zone->daylightBias > 1440) return false;
+    SystemTimeFields localFields{local->year, local->month, local->day, local->hour,
+        local->minute, local->second, local->milliseconds, local->dayOfWeek};
+    uint64_t localTicks{};
+    if (!toSystemTime100ns(localFields, localTicks)) return false;
+    const int64_t standardBias = static_cast<int64_t>(zone->bias) + zone->standardBias;
+    const int64_t daylightBias = static_cast<int64_t>(zone->bias) + zone->daylightBias;
+    auto candidateForBias = [&](int64_t bias, Kernel32SystemTime& result) noexcept {
+        if (bias < -2880 || bias > 2880) return false;
+        const int64_t delta = bias * static_cast<int64_t>(TicksPerMinute);
+        uint64_t candidate{};
+        if (delta >= 0) {
+            if (localTicks > UINT64_MAX - static_cast<uint64_t>(delta)) return false;
+            candidate = localTicks + static_cast<uint64_t>(delta);
+        } else {
+            if (localTicks < static_cast<uint64_t>(-delta)) return false;
+            candidate = localTicks - static_cast<uint64_t>(-delta);
+        }
+        SystemTimeFields fields{};
+        if (!fromSystemTime100ns(candidate, fields)) return false;
+        Kernel32SystemTime utcCandidate{fields.year, fields.month, fields.weekday,
+            fields.day, fields.hour, fields.minute, fields.second, fields.milliseconds};
+        Kernel32SystemTime roundTrip{};
+        if (!ApplyTimeZone(zone, &utcCandidate, &roundTrip) ||
+            roundTrip.year != local->year || roundTrip.month != local->month ||
+            roundTrip.day != local->day || roundTrip.hour != local->hour ||
+            roundTrip.minute != local->minute || roundTrip.second != local->second ||
+            roundTrip.milliseconds != local->milliseconds) return false;
+        result = utcCandidate;
+        return true;
+    };
+    Kernel32SystemTime result{};
+    if (!candidateForBias(standardBias, result) &&
+        (!zone->daylightDate.month || !zone->standardDate.month ||
+         !candidateForBias(daylightBias, result))) return false;
+    *utc = result;
+    return true;
+}
 
 using VectoredExceptionHandler = int32_t (__stdcall *)(void*);
 __declspec(dllimport) void* __stdcall RtlAddVectoredExceptionHandler(
@@ -112,6 +305,94 @@ int __stdcall DllMainCRTStartup(void*, unsigned long, void*) noexcept {
     return 1;
 }
 
+__declspec(dllexport) void __stdcall GetSystemTime(Kernel32SystemTime* output) noexcept {
+    if (!output) return;
+    micant::shared::time::SystemTimeFields value{};
+    if (!QueryUtcFields(value)) return;
+    *output = {value.year, value.month, value.weekday, value.day, value.hour,
+               value.minute, value.second, value.milliseconds};
+}
+
+// Convert UTC using the active bias shared by the kernel; explicit TZI rules
+// can be supplied through SystemTimeToTzSpecificLocalTime.
+__declspec(dllexport) void __stdcall GetLocalTime(Kernel32SystemTime* output) noexcept {
+    if (!output) return;
+    micant::shared::time::SystemTimeFields current{};
+    if (!QueryUtcFields(current)) return;
+    const Kernel32SystemTime utc{current.year, current.month, current.weekday,
+        current.day, current.hour, current.minute, current.second,
+        current.milliseconds};
+    Kernel32TimeZoneInformation zone{};
+    uint32_t zoneId{};
+    if (!ReadSystemTimeZone(zone, zoneId)) return;
+    Kernel32SystemTime local{};
+    if (ApplyTimeZone(&zone, &utc, &local)) *output = local;
+}
+
+__declspec(dllexport) uint32_t __stdcall GetTimeZoneInformation(
+    Kernel32TimeZoneInformation* zone) noexcept {
+    if (!zone) return 0xFFFFFFFFu;
+    uint32_t zoneId{};
+    if (!ReadSystemTimeZone(*zone, zoneId)) return 0xFFFFFFFFu;
+    return zoneId;
+}
+
+__declspec(dllexport) int32_t __stdcall SystemTimeToTzSpecificLocalTime(
+    const Kernel32TimeZoneInformation* zone, const Kernel32SystemTime* utc,
+    Kernel32SystemTime* local) noexcept {
+    if (!utc || !local) return 0;
+    Kernel32TimeZoneInformation configured{};
+    uint32_t zoneId{};
+    if (!zone) {
+        if (!ReadSystemTimeZone(configured, zoneId)) return 0;
+        zone = &configured;
+    }
+    return ApplyTimeZone(zone, utc, local) ? 1 : 0;
+}
+
+__declspec(dllexport) int32_t __stdcall TzSpecificLocalTimeToSystemTime(
+    const Kernel32TimeZoneInformation* zone, const Kernel32SystemTime* local,
+    Kernel32SystemTime* utc) noexcept {
+    if (!local || !utc) return 0;
+    Kernel32TimeZoneInformation configured{};
+    uint32_t zoneId{};
+    if (!zone) {
+        if (!ReadSystemTimeZone(configured, zoneId)) return 0;
+        zone = &configured;
+    }
+    return LocalTimeToUtc(zone, local, utc) ? 1 : 0;
+}
+
+__declspec(dllexport) void __stdcall GetSystemTimeAsFileTime(Kernel32FileTime* output) noexcept {
+    if (!output) return;
+    int64_t ticks{};
+    if (NtQuerySystemTime(&ticks) < 0) return;
+    const uint64_t value = static_cast<uint64_t>(ticks);
+    output->low = static_cast<uint32_t>(value);
+    output->high = static_cast<uint32_t>(value >> 32);
+}
+
+__declspec(dllexport) void __stdcall GetSystemTimePreciseAsFileTime(
+    Kernel32FileTime* output) noexcept {
+    GetSystemTimeAsFileTime(output);
+}
+
+__declspec(dllexport) int32_t __stdcall QueryPerformanceCounter(int64_t* value) noexcept {
+    if (!value) return 0;
+    return NtQueryPerformanceCounter(value, nullptr) >= 0 ? 1 : 0;
+}
+
+__declspec(dllexport) int32_t __stdcall QueryPerformanceFrequency(int64_t* value) noexcept {
+    if (!value) return 0;
+    int64_t counter{};
+    return NtQueryPerformanceCounter(&counter, value) >= 0 ? 1 : 0;
+}
+
+__declspec(dllexport) uint64_t __stdcall GetTickCount64() noexcept {
+    auto* shared = reinterpret_cast<volatile const uint64_t*>(0x7FFE0320ULL);
+    return *shared;
+}
+
 }
 
 #else
@@ -129,8 +410,6 @@ namespace micant::um::winnt_kernel32_advapi32_abi {
 
 namespace {
 uint32_t g_lastError = ERROR_SUCCESS_OFFICIAL;
-int64_t g_qpcTicks = 100'000'000LL;
-uint64_t g_tickCountMs = 10'000ULL;
 
 WinNtEventHandleObject g_eventPool[32]{};
 uint32_t g_eventPoolNext = 0;
@@ -154,20 +433,18 @@ inline void ByteZero(void* dst, size_t n) noexcept {
 
 int32_t Kernel32_QueryPerformanceCounter(int64_t* lpPerformanceCount) noexcept {
     if (!lpPerformanceCount) return 0;
-    g_qpcTicks += 166'667LL; // ~16.67ms delta at 10 MHz
-    *lpPerformanceCount = g_qpcTicks;
-    return 1;
+    return NtQueryPerformanceCounter(lpPerformanceCount, nullptr) >= 0 ? 1 : 0;
 }
 
 int32_t Kernel32_QueryPerformanceFrequency(int64_t* lpFrequency) noexcept {
     if (!lpFrequency) return 0;
-    *lpFrequency = 10'000'000LL; // 10 MHz KUSER_SHARED_DATA QPC frequency
-    return 1;
+    int64_t counter{};
+    return NtQueryPerformanceCounter(&counter, lpFrequency) >= 0 ? 1 : 0;
 }
 
 uint64_t Kernel32_GetTickCount64() noexcept {
-    g_tickCountMs += 16ULL;
-    return g_tickCountMs;
+    auto* shared = reinterpret_cast<volatile const uint64_t*>(0x7FFE0320ULL);
+    return *shared;
 }
 
 void* Kernel32_CreateEventExW(void* /*lpEventAttributes*/, const wchar_t* lpName, uint32_t dwFlags, uint32_t /*dwDesiredAccess*/) noexcept {

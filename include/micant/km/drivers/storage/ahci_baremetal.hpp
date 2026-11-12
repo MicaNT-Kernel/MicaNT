@@ -33,52 +33,6 @@
 
 namespace micant::km::ahci_baremetal {
 
-// --- Port I/O Primitives ---
-static inline void outb(uint16_t port, uint8_t val) noexcept {
-#if defined(__x86_64__)
-    __asm__ __volatile__("outb %0, %1" : : "a"(val), "Nd"(port));
-#endif
-}
-
-static inline uint8_t inb(uint16_t port) noexcept {
-    uint8_t ret = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("inb %1, %0" : "=a"(ret) : "Nd"(port));
-#endif
-    return ret;
-}
-
-static inline void outl(uint16_t port, uint32_t val) noexcept {
-#if defined(__x86_64__)
-    __asm__ __volatile__("outl %0, %1" : : "a"(val), "Nd"(port));
-#endif
-}
-
-static inline uint32_t inl(uint16_t port) noexcept {
-    uint32_t ret = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("inl %1, %0" : "=a"(ret) : "Nd"(port));
-#endif
-    return ret;
-}
-
-// --- PCI Configuration Space Access (Mechanism #1) ---
-static inline uint32_t pciRead32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) noexcept {
-    uint32_t address = (1u << 31) | (static_cast<uint32_t>(bus) << 16) |
-                       (static_cast<uint32_t>(dev) << 11) |
-                       (static_cast<uint32_t>(func) << 8) | (reg & 0xFC);
-    outl(0xCF8, address);
-    return inl(0xCFC);
-}
-
-static inline void pciWrite32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val) noexcept {
-    uint32_t address = (1u << 31) | (static_cast<uint32_t>(bus) << 16) |
-                       (static_cast<uint32_t>(dev) << 11) |
-                       (static_cast<uint32_t>(func) << 8) | (reg & 0xFC);
-    outl(0xCF8, address);
-    outl(0xCFC, val);
-}
-
 // --- AHCI Register Offsets ---
 inline constexpr uint32_t AHCI_REG_CAP  = 0x00; // Host Capabilities
 inline constexpr uint32_t AHCI_REG_GHC  = 0x04; // Global Host Control
@@ -189,13 +143,17 @@ alignas(4096) static uint8_t s_ahciDmaBuffer[65536];       // 64 KB DMA Transfer
 class BareMetalAhciController {
 public:
     using MmioMapper = void* (*)(uint64_t physical, size_t size) noexcept;
-    using DmaTranslator = uint64_t (*)(const void* address) noexcept;
+    using DmaTranslator = uint64_t (*)(const void* address, size_t length) noexcept;
+    using PciRead32 = bool (*)(uint8_t bus, uint8_t device, uint8_t function,
+                              uint8_t offset, uint32_t& value) noexcept;
+    using PciWrite32 = bool (*)(uint8_t bus, uint8_t device, uint8_t function,
+                               uint8_t offset, uint32_t value) noexcept;
 
 private:
     uint8_t m_pciBus{0};
     uint8_t m_pciDevice{0};
     uint8_t m_pciFunction{0};
-    uint32_t m_abarPhys{0};
+    uint64_t m_abarPhys{0};
     volatile uint32_t* m_abar{nullptr};
     bool     m_initialized{false};
     bool     m_port1Online{false};
@@ -204,8 +162,8 @@ private:
     uint64_t m_port1TotalSectors{0};
     MmioMapper m_mmioMapper{};
     DmaTranslator m_dmaTranslator{};
-    uint64_t m_micaSysLbaOffset{2099200}; // LBA of sdb2 (MICA_SYS 128 GB FAT32)
-    uint64_t m_micaDataLbaOffset{270534656}; // LBA of sdb3 (MICA_DATA 1.7 TB FAT32)
+    PciRead32 m_pciRead32{};
+    PciWrite32 m_pciWrite32{};
     char     m_diskModel[41]{};
 
 public:
@@ -216,50 +174,70 @@ public:
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_initialized; }
     [[nodiscard]] bool isPort1Online() const noexcept { return m_port1Online; }
-    [[nodiscard]] uint32_t getAbarPhysical() const noexcept { return m_abarPhys; }
+    [[nodiscard]] uint64_t getAbarPhysical() const noexcept { return m_abarPhys; }
     [[nodiscard]] uint64_t getPort1TotalSectors() const noexcept { return m_port1TotalSectors; }
     [[nodiscard]] const char* getDiskModel() const noexcept { return m_diskModel; }
 
     /** Discover and initialize an AHCI controller and its first SATA disk port. */
-    bool initialize(MmioMapper mmioMapper, DmaTranslator dmaTranslator) noexcept {
+    bool initialize(MmioMapper mmioMapper, DmaTranslator dmaTranslator,
+                    PciRead32 pciRead32, PciWrite32 pciWrite32) noexcept {
         if (m_initialized) return true;
-        if (!mmioMapper || !dmaTranslator) return false;
+        if (!mmioMapper || !dmaTranslator || !pciRead32 || !pciWrite32) return false;
         m_mmioMapper = mmioMapper;
         m_dmaTranslator = dmaTranslator;
+        m_pciRead32 = pciRead32;
+        m_pciWrite32 = pciWrite32;
         // Controller locations differ between the target C236 platform
         // (00:17.0) and Q35/ICH9 (00:1f.2), so select by PCI class instead
         // of assuming one chipset's BDF.
         bool foundController = false;
-        for (uint16_t device = 0; device < 32 && !foundController; ++device) {
+        for (uint16_t bus = 0; bus <= UINT8_MAX && !foundController; ++bus) {
+          for (uint16_t device = 0; device < 32 && !foundController; ++device) {
             for (uint8_t function = 0; function < 8; ++function) {
-                const uint32_t vendorDev = pciRead32(0, static_cast<uint8_t>(device), function, 0x00);
+                uint32_t vendorDev{};
+                if (!m_pciRead32(static_cast<uint8_t>(bus), static_cast<uint8_t>(device),
+                                 function, 0x00, vendorDev)) return false;
                 if (static_cast<uint16_t>(vendorDev) == 0xFFFF) continue;
-                const uint32_t classReg = pciRead32(0, static_cast<uint8_t>(device), function, 0x08);
+                uint32_t classReg{};
+                if (!m_pciRead32(static_cast<uint8_t>(bus), static_cast<uint8_t>(device),
+                                 function, 0x08, classReg)) return false;
                 const uint8_t programmingInterface = static_cast<uint8_t>((classReg >> 8) & 0xFF);
                 const uint8_t subclass = static_cast<uint8_t>((classReg >> 16) & 0xFF);
                 const uint8_t baseClass = static_cast<uint8_t>((classReg >> 24) & 0xFF);
                 if (baseClass == 0x01 && subclass == 0x06 && programmingInterface == 0x01) {
-                    m_pciBus = 0;
+                    m_pciBus = static_cast<uint8_t>(bus);
                     m_pciDevice = static_cast<uint8_t>(device);
                     m_pciFunction = function;
                     foundController = true;
                     break;
                 }
             }
+          }
         }
         if (!foundController) return false;
 
         // Read BAR5 (ABAR MMIO) from the discovered controller.
-        uint32_t bar5 = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x24);
-        if ((bar5 & 1u) != 0 || (bar5 & 6u) != 0) return false;
-        m_abarPhys = bar5 & ~0xFULL;
-        if (m_abarPhys == 0) {
+        uint32_t bar5{};
+        if (!m_pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x24, bar5)) return false;
+        const uint32_t barType = (bar5 >> 1) & 3u;
+        if ((bar5 & 1u) != 0 || barType == 1u || barType == 3u || (bar5 & 8u) != 0)
             return false;
+        uint64_t abarPhysical = bar5 & ~0xFULL;
+        if (barType == 2u) {
+            uint32_t bar6{};
+            if (!m_pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x28, bar6)) return false;
+            abarPhysical |= static_cast<uint64_t>(bar6) << 32;
         }
+        if (!abarPhysical || (abarPhysical & 0xF) != 0 || abarPhysical > UINT64_MAX - 0x1100)
+            return false;
+        m_abarPhys = abarPhysical;
 
         // Enable Bus Master, Memory Space, and I/O Space.
-        uint32_t pciCmd = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x04);
-        pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x04, pciCmd | 0x07);
+        uint32_t pciCmd{};
+        if (!m_pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x04, pciCmd) ||
+            !m_pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x04,
+                          (pciCmd & 0xFFFFu) | 0x0006u))
+            return false;
 
         // Map the register window through the kernel's uncached MMIO mapper.
         m_abar = static_cast<volatile uint32_t*>(
@@ -294,9 +272,10 @@ public:
     }
 
 private:
-    uint64_t dmaAddress(const void* address) const noexcept {
-        const uint64_t physical = m_dmaTranslator ? m_dmaTranslator(address) : 0;
+    uint64_t dmaAddress(const void* address, size_t length) const noexcept {
+        const uint64_t physical = m_dmaTranslator ? m_dmaTranslator(address, length) : 0;
         if (!physical || (!m_supports64BitDma && physical > UINT32_MAX)) return 0;
+        if (!m_supports64BitDma && length && length - 1 > UINT32_MAX - physical) return 0;
         return physical;
     }
 
@@ -365,8 +344,8 @@ private:
         std::memset(&s_ahciCmdTable, 0, sizeof(s_ahciCmdTable));
 
         // Program Command List and Received FIS Base
-        uint64_t clbPhys = dmaAddress(s_ahciCmdListMem);
-        uint64_t fbPhys  = dmaAddress(s_ahciRecvFisMem);
+        uint64_t clbPhys = dmaAddress(s_ahciCmdListMem, sizeof(s_ahciCmdListMem));
+        uint64_t fbPhys  = dmaAddress(s_ahciRecvFisMem, sizeof(s_ahciRecvFisMem));
         if (!clbPhys || !fbPhys) return false;
 
         pRegs[PORT_REG_CLB / 4]  = static_cast<uint32_t>(clbPhys & 0xFFFFFFFF);
@@ -376,7 +355,7 @@ private:
 
         // Setup Command Header 0 pointing to s_ahciCmdTable
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
-        uint64_t ctbaPhys = dmaAddress(&s_ahciCmdTable);
+        uint64_t ctbaPhys = dmaAddress(&s_ahciCmdTable, sizeof(s_ahciCmdTable));
         if (!ctbaPhys) return false;
         cmdHeaders[0].ctba  = static_cast<uint32_t>(ctbaPhys & 0xFFFFFFFF);
         cmdHeaders[0].ctbau = static_cast<uint32_t>((ctbaPhys >> 32) & 0xFFFFFFFF);
@@ -405,7 +384,7 @@ private:
         cmdHeaders[0].prdbc = 0;
 
         // Setup PRDT 0
-        uint64_t bufPhys = dmaAddress(idBuf);
+        uint64_t bufPhys = dmaAddress(idBuf, sizeof(idBuf));
         if (!bufPhys) return false;
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
@@ -486,11 +465,12 @@ public:
         cmdHeaders[0].prdtl = 1;
         cmdHeaders[0].prdbc = 0;
 
-        uint64_t bufPhys = dmaAddress(dest);
+        const size_t transferBytes = static_cast<size_t>(sectorCount) * 512;
+        uint64_t bufPhys = dmaAddress(dest, transferBytes);
         if (!bufPhys) return false;
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
-        s_ahciCmdTable.prdt[0].dbc  = (sectorCount * 512) - 1;
+        s_ahciCmdTable.prdt[0].dbc  = static_cast<uint32_t>(transferBytes - 1);
         s_ahciCmdTable.prdt[0].i    = 1;
 
         std::memset(&s_ahciCmdTable.cfis, 0, sizeof(s_ahciCmdTable.cfis));
@@ -554,11 +534,12 @@ public:
         cmdHeaders[0].prdtl = 1;
         cmdHeaders[0].prdbc = 0;
 
-        uint64_t bufPhys = dmaAddress(src);
+        const size_t transferBytes = static_cast<size_t>(sectorCount) * 512;
+        uint64_t bufPhys = dmaAddress(src, transferBytes);
         if (!bufPhys) return false;
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
-        s_ahciCmdTable.prdt[0].dbc  = (sectorCount * 512) - 1;
+        s_ahciCmdTable.prdt[0].dbc  = static_cast<uint32_t>(transferBytes - 1);
         s_ahciCmdTable.prdt[0].i    = 1;
 
         std::memset(&s_ahciCmdTable.cfis, 0, sizeof(s_ahciCmdTable.cfis));
@@ -599,36 +580,6 @@ public:
         return (tfd & (1 | 0x20)) == 0;
     }
 
-    /**
-     * @brief Read sectors relative to Partition 2 (MICA_SYS C:).
-     */
-    bool readSystemPartitionSectors(uint64_t relativeLba, uint16_t sectorCount, void* dest) noexcept {
-        return readSectors(m_micaSysLbaOffset + relativeLba, sectorCount, dest);
-    }
-
-    /**
-     * @brief Write sectors relative to Partition 2 (MICA_SYS C:).
-     */
-    bool writeSystemPartitionSectors(uint64_t relativeLba, uint16_t sectorCount, const void* src) noexcept {
-        return writeSectors(m_micaSysLbaOffset + relativeLba, sectorCount, src);
-    }
-
-    /**
-     * @brief Read sectors relative to Partition 3 (MICA_DATA D: 1.7 TB).
-     */
-    bool readDataPartitionSectors(uint64_t relativeLba, uint16_t sectorCount, void* dest) noexcept {
-        return readSectors(m_micaDataLbaOffset + relativeLba, sectorCount, dest);
-    }
-
-    /**
-     * @brief Write sectors relative to Partition 3 (MICA_DATA D: 1.7 TB).
-     */
-    bool writeDataPartitionSectors(uint64_t relativeLba, uint16_t sectorCount, const void* src) noexcept {
-        return writeSectors(m_micaDataLbaOffset + relativeLba, sectorCount, src);
-    }
-
-    [[nodiscard]] uint64_t getSysLbaOffset() const noexcept { return m_micaSysLbaOffset; }
-    [[nodiscard]] uint64_t getDataLbaOffset() const noexcept { return m_micaDataLbaOffset; }
 };
 
 // --- Helper String Primitives for Freestanding FAT32 ---
@@ -687,11 +638,22 @@ struct Fat32DirEntry {
     uint32_t firstCluster{0};
 };
 
+struct Fat32BlockAccess {
+    using Read = bool (*)(void* context, uint64_t lba, uint16_t sectorCount,
+                          void* buffer) noexcept;
+    using Write = bool (*)(void* context, uint64_t lba, uint16_t sectorCount,
+                           const void* buffer) noexcept;
+    void* context{};
+    uint64_t totalSectors{};
+    Read read{};
+    Write write{};
+};
+
 class Fat32Volume {
 private:
-    BareMetalAhciController* m_ahci{nullptr};
+    Fat32BlockAccess m_device{};
     bool     m_mounted{false};
-    uint64_t m_volumeLbaOffset{2099200ULL};
+    uint64_t m_volumeLbaOffset{};
     char     m_driveLetter{'C'};
     uint16_t m_bytesPerSec{512};
     uint8_t  m_secPerClus{8};
@@ -702,6 +664,7 @@ private:
     uint32_t m_fatStartLba{32};
     uint32_t m_dataStartLba{0};
     uint64_t m_totalSectors{0};
+    bool m_readOnly{};
     char     m_volumeLabel[12]{};
 
     // 1-sector cache for FAT lookups
@@ -722,29 +685,42 @@ public:
     [[nodiscard]] uint64_t getTotalCapacityBytes() const noexcept {
         return m_totalSectors * static_cast<uint64_t>(m_bytesPerSec);
     }
+    void unmount() noexcept {
+        m_mounted = false;
+        m_device = {};
+        m_totalSectors = 0;
+        m_cachedFatSector = 0xFFFFFFFF;
+    }
     [[nodiscard]] uint32_t getBytesPerCluster() const noexcept {
         return static_cast<uint32_t>(m_bytesPerSec) * m_secPerClus;
     }
     [[nodiscard]] uint32_t getRootCluster() const noexcept { return m_rootClus; }
 
     bool readVolumeSectors(uint64_t relativeLba, uint16_t sectorCount, void* dest) noexcept {
-        if (!m_ahci || !m_mounted || !dest || !sectorCount ||
+        if (!m_device.read || !m_mounted || !dest || !sectorCount ||
             relativeLba >= m_totalSectors || sectorCount > m_totalSectors - relativeLba ||
             m_volumeLbaOffset > UINT64_MAX - relativeLba) return false;
-        return m_ahci->readSectors(m_volumeLbaOffset + relativeLba, sectorCount, dest);
+        return m_device.read(m_device.context, m_volumeLbaOffset + relativeLba,
+                             sectorCount, dest);
     }
 
     bool writeVolumeSectors(uint64_t relativeLba, uint16_t sectorCount, const void* src) noexcept {
-        if (!m_ahci) return false;
-        return m_ahci->writeSectors(m_volumeLbaOffset + relativeLba, sectorCount, src);
+        if (m_readOnly || !m_device.write || !src || !sectorCount ||
+            relativeLba >= m_totalSectors || sectorCount > m_totalSectors - relativeLba ||
+            m_volumeLbaOffset > UINT64_MAX - relativeLba) return false;
+        return m_device.write(m_device.context, m_volumeLbaOffset + relativeLba,
+                              sectorCount, src);
     }
 
-    bool mount(BareMetalAhciController& ahci, uint64_t lbaOffset, char driveLetter) noexcept {
-        m_ahci = &ahci;
+    bool mount(Fat32BlockAccess device, uint64_t lbaOffset, char driveLetter,
+               uint64_t partitionSectors = 0, bool readOnly = false) noexcept {
+        m_mounted = false;
+        m_device = device;
         m_volumeLbaOffset = lbaOffset;
         m_driveLetter = driveLetter;
+        m_readOnly = readOnly;
         alignas(512) uint8_t bpb[512];
-        if (!m_ahci->readSectors(lbaOffset, 1, bpb)) {
+        if (!m_device.read || !m_device.read(m_device.context, lbaOffset, 1, bpb)) {
             return false;
         }
         if (bpb[510] != 0x55 || bpb[511] != 0xAA) {
@@ -771,8 +747,9 @@ public:
             m_rootClus < 2) {
             return false;
         }
-        if (lbaOffset >= ahci.getPort1TotalSectors() ||
-            m_totalSectors > ahci.getPort1TotalSectors() - lbaOffset) return false;
+        if (lbaOffset >= m_device.totalSectors ||
+            m_totalSectors > m_device.totalSectors - lbaOffset) return false;
+        if (partitionSectors != 0 && m_totalSectors > partitionSectors) return false;
 
         std::memcpy(m_volumeLabel, &bpb[71], 11);
         m_volumeLabel[11] = '\0';
@@ -793,6 +770,22 @@ public:
         return true;
     }
 
+    bool mount(BareMetalAhciController& ahci, uint64_t lbaOffset, char driveLetter,
+               uint64_t partitionSectors = 0, bool readOnly = false) noexcept {
+        Fat32BlockAccess device{
+            &ahci, ahci.getPort1TotalSectors(),
+            [](void* context, uint64_t lba, uint16_t count, void* buffer) noexcept {
+                return static_cast<BareMetalAhciController*>(context)->readSectors(
+                    lba, count, buffer);
+            },
+            [](void* context, uint64_t lba, uint16_t count, const void* buffer) noexcept {
+                return static_cast<BareMetalAhciController*>(context)->writeSectors(
+                    lba, count, buffer);
+            }
+        };
+        return mount(device, lbaOffset, driveLetter, partitionSectors, readOnly);
+    }
+
     bool mount(BareMetalAhciController& ahci) noexcept {
         return mount(ahci, m_volumeLbaOffset, m_driveLetter);
     }
@@ -802,7 +795,7 @@ public:
     }
 
     uint32_t getNextCluster(uint32_t clus) noexcept {
-        if (!m_ahci || clus < 2 || clus >= 0x0FFFFFF8) return 0x0FFFFFFF;
+        if (!m_mounted || !m_device.read || clus < 2 || clus >= 0x0FFFFFF8) return 0x0FFFFFFF;
         uint32_t fatByteOffset = clus * 4;
         uint32_t fatSector = m_fatStartLba + (fatByteOffset / m_bytesPerSec);
         uint32_t entryOffset = fatByteOffset % m_bytesPerSec;
@@ -820,7 +813,7 @@ public:
 
     template<typename Callback>
     bool iterateDirectory(uint32_t dirClus, Callback&& cb) noexcept {
-        if (!m_mounted || !m_ahci || dirClus < 2) return false;
+        if (!m_mounted || !m_device.read || dirClus < 2) return false;
 
         uint32_t currClus = dirClus;
         char lfnName[256]{};
@@ -1096,7 +1089,7 @@ public:
     }
 
     bool createFile(const char* path, const void* data, size_t sizeBytes) noexcept {
-        if (!m_mounted || !m_ahci || !path) return false;
+        if (!m_mounted || !m_device.read || !path) return false;
         Fat32DirEntry existing{};
         if (findPath(path, existing)) {
             size_t written = 0;
@@ -1215,7 +1208,7 @@ public:
     }
 
     bool createDirectory(const char* path) noexcept {
-        if (!m_mounted || !m_ahci || !path) return false;
+        if (!m_mounted || !m_device.read || !path) return false;
         Fat32DirEntry existing{};
         if (findPath(path, existing)) return false; // Already exists
 
@@ -1332,7 +1325,7 @@ public:
     }
 
     bool deleteFile(const char* path) noexcept {
-        if (!m_mounted || !m_ahci || !path) return false;
+        if (!m_mounted || !m_device.read || !path) return false;
         Fat32DirEntry entry{};
         if (!findPath(path, entry) || entry.isDirectory) return false;
 
@@ -1403,17 +1396,119 @@ public:
 };
 
 class Fat32FileSystem {
+    struct PartitionExtent {
+        uint64_t firstLba{};
+        uint64_t sectorCount{};
+        bool present{};
+    };
+
+    static uint32_t crc32(const uint8_t* bytes, size_t length,
+                          uint32_t crc = 0xFFFFFFFFu) noexcept {
+        for (size_t i = 0; i < length; ++i) {
+            crc ^= bytes[i];
+            for (unsigned bit = 0; bit < 8; ++bit)
+                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+        return crc;
+    }
+
+    static uint16_t readLe16(const uint8_t* p) noexcept {
+        return static_cast<uint16_t>(p[0]) |
+               (static_cast<uint16_t>(p[1]) << 8);
+    }
+    static uint32_t readLe32(const uint8_t* p) noexcept {
+        return static_cast<uint32_t>(p[0]) |
+               (static_cast<uint32_t>(p[1]) << 8) |
+               (static_cast<uint32_t>(p[2]) << 16) |
+               (static_cast<uint32_t>(p[3]) << 24);
+    }
+    static uint64_t readLe64(const uint8_t* p) noexcept {
+        return static_cast<uint64_t>(readLe32(p)) |
+               (static_cast<uint64_t>(readLe32(p + 4)) << 32);
+    }
+
+    static bool validGpt(const Fat32BlockAccess& device, uint8_t* sector,
+                         PartitionExtent (&partitions)[3]) noexcept {
+        if (!device.read || !device.read(device.context, 1, 1, sector) ||
+            std::memcmp(sector, "EFI PART", 8) != 0) return false;
+        const uint32_t headerSize = readLe32(sector + 12);
+        if (headerSize < 92 || headerSize > 512 || readLe64(sector + 24) != 1)
+            return false;
+        const uint64_t diskSectors = device.totalSectors;
+        const uint64_t firstUsable = readLe64(sector + 40);
+        const uint64_t lastUsable = readLe64(sector + 48);
+        const uint64_t entriesLba = readLe64(sector + 72);
+        const uint32_t entryCount = readLe32(sector + 80);
+        const uint32_t entrySize = readLe32(sector + 84);
+        const uint32_t expectedEntriesCrc = readLe32(sector + 88);
+        const uint32_t expectedHeaderCrc = readLe32(sector + 16);
+        uint8_t headerCopy[512];
+        std::memcpy(headerCopy, sector, sizeof(headerCopy));
+        std::memset(headerCopy + 16, 0, 4);
+        if ((crc32(headerCopy, headerSize) ^ 0xFFFFFFFFu) != expectedHeaderCrc ||
+            firstUsable > lastUsable || lastUsable >= diskSectors ||
+            entryCount == 0 || entrySize < 128 || (entrySize & 7u) != 0)
+            return false;
+
+        const uint64_t arrayBytes = static_cast<uint64_t>(entryCount) * entrySize;
+        if (arrayBytes == 0 || arrayBytes > 65536 || entriesLba >= diskSectors)
+            return false;
+        const uint64_t arraySectors = (arrayBytes + 511) / 512;
+        if (arraySectors > diskSectors - entriesLba) return false;
+
+        alignas(4096) static uint8_t entryBuffer[65536];
+        const uint16_t sectors = static_cast<uint16_t>(arraySectors);
+        if (!device.read(device.context, entriesLba, sectors, entryBuffer)) return false;
+        if ((crc32(entryBuffer, static_cast<size_t>(arrayBytes)) ^ 0xFFFFFFFFu) !=
+            expectedEntriesCrc) return false;
+
+        for (uint32_t i = 0; i < entryCount && i < 3; ++i) {
+            const uint8_t* entry = entryBuffer + static_cast<size_t>(i) * entrySize;
+            bool emptyType = true;
+            for (size_t b = 0; b < 16; ++b) emptyType &= entry[b] == 0;
+            if (emptyType) continue;
+            const uint64_t first = readLe64(entry + 32);
+            const uint64_t last = readLe64(entry + 40);
+            if (first < firstUsable || last > lastUsable || first > last) return false;
+            partitions[i] = {first, last - first + 1, true};
+        }
+        return true;
+    }
+
+    static bool discoverPartitions(const Fat32BlockAccess& device,
+                                   PartitionExtent (&partitions)[3],
+                                   bool& hasPartitionTable) noexcept {
+        alignas(4096) static uint8_t sector[512];
+        hasPartitionTable = false;
+        if (!device.read || !device.read(device.context, 0, 1, sector)) return false;
+        if (sector[510] != 0x55 || sector[511] != 0xAA) return true;
+        for (size_t i = 0; i < 4; ++i) {
+            const uint8_t* entry = sector + 446 + i * 16;
+            const uint8_t type = entry[4];
+            const uint64_t first = readLe32(entry + 8);
+            const uint64_t count = readLe32(entry + 12);
+            if (type == 0 || count == 0) continue;
+            hasPartitionTable = true;
+            if (type == 0xEE) return validGpt(device, sector, partitions);
+            if (i >= 3) continue;
+            if (type != 0x0B && type != 0x0C && type != 0xEF) continue;
+            if (first >= device.totalSectors || count > device.totalSectors - first) continue;
+            partitions[i] = {first, count, true};
+        }
+        return true;
+    }
+
 public:
     static Fat32Volume& getVolumeEsp() noexcept {
-        static Fat32Volume s_volEsp(2048ULL, 'S');
+        static Fat32Volume s_volEsp(0, 'S');
         return s_volEsp;
     }
     static Fat32Volume& getVolumeC() noexcept {
-        static Fat32Volume s_volC(2099200ULL, 'C');
+        static Fat32Volume s_volC(0, 'C');
         return s_volC;
     }
     static Fat32Volume& getVolumeD() noexcept {
-        static Fat32Volume s_volD(270534656ULL, 'D');
+        static Fat32Volume s_volD(0, 'D');
         return s_volD;
     }
     static Fat32Volume& get(char drive = 'C') noexcept {
@@ -1421,11 +1516,41 @@ public:
         if (drive == 'D' || drive == 'd') return getVolumeD();
         return getVolumeC();
     }
-    static bool mountAll(BareMetalAhciController& ahci) noexcept {
-        bool okEsp = getVolumeEsp().mount(ahci, 2048ULL, 'S');
-        bool okC = getVolumeC().mount(ahci, 2099200ULL, 'C');
-        bool okD = getVolumeD().mount(ahci, 270534656ULL, 'D');
+    static bool mountAll(const Fat32BlockAccess& device) noexcept {
+        PartitionExtent partitions[3]{};
+        bool hasPartitionTable{};
+        if (!device.read || !device.totalSectors ||
+            !discoverPartitions(device, partitions, hasPartitionTable)) return false;
+        if (!hasPartitionTable) {
+            // Accept a FAT32 superfloppy only when sector zero is not an MBR.
+            return getVolumeC().mount(device, 0, 'C', device.totalSectors, true);
+        }
+        const bool okEsp = partitions[0].present &&
+            getVolumeEsp().mount(device, partitions[0].firstLba, 'S', partitions[0].sectorCount, true);
+        const bool okC = partitions[1].present &&
+            getVolumeC().mount(device, partitions[1].firstLba, 'C', partitions[1].sectorCount, true);
+        const bool okD = partitions[2].present &&
+            getVolumeD().mount(device, partitions[2].firstLba, 'D', partitions[2].sectorCount, true);
         return okEsp || okC || okD;
+    }
+    static bool mountAll(BareMetalAhciController& ahci) noexcept {
+        const Fat32BlockAccess device{
+            &ahci, ahci.getPort1TotalSectors(),
+            [](void* context, uint64_t lba, uint16_t count, void* buffer) noexcept {
+                return static_cast<BareMetalAhciController*>(context)->readSectors(
+                    lba, count, buffer);
+            },
+            [](void* context, uint64_t lba, uint16_t count, const void* buffer) noexcept {
+                return static_cast<BareMetalAhciController*>(context)->writeSectors(
+                    lba, count, buffer);
+            }
+        };
+        return mountAll(device);
+    }
+    static void unmountAll() noexcept {
+        getVolumeEsp().unmount();
+        getVolumeC().unmount();
+        getVolumeD().unmount();
     }
     static bool copyFile(Fat32Volume& srcVol, const char* srcPath, Fat32Volume& dstVol, const char* dstPath) noexcept {
         alignas(4096) static uint8_t s_copyBuffer[262144];

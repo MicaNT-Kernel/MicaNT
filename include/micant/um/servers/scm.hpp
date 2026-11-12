@@ -25,8 +25,8 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/driver.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include "micant/km/drivers/fs/npfs.hpp"
-#include "micant/um/subsystems/winbase/kernel32.hpp"
 
 namespace micant::scm {
 

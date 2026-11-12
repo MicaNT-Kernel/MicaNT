@@ -20,7 +20,7 @@ NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process
 // Build and initialize an unpublished process object. The returned Ob
 // reference pins it until `publishProcessHandle` or caller rollback.
 NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) noexcept;
-void inheritProcessSecurityContext(EProcess& child, const EProcess& parent) noexcept;
+[[nodiscard]] NtStatus inheritProcessSecurityContext(EProcess& child, const EProcess& parent) noexcept;
 NtStatus publishProcessHandle(EProcess& process, ob::ObjectHeader* reference,
                               uint32_t access, uint32_t handleAttributes,
                               Handle& handle) noexcept;

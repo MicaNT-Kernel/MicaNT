@@ -404,7 +404,7 @@ struct KUserSharedData {
     volatile int32_t timeZoneBiasHigh2;
     uint16_t imageNumberLow;
     uint16_t imageNumberHigh;
-    wchar_t ntSystemRoot[260];
+    char16_t ntSystemRoot[260];
     uint32_t maxStackTraceDepth;
     uint32_t cryptoExponent;
     uint32_t timeZoneId;
@@ -418,10 +418,21 @@ struct KUserSharedData {
     uint32_t ntProductType;
     uint8_t productType;
     uint8_t nativeProcessorArchitecture;
-    uint16_t ntMajorVersion;
-    uint16_t ntMinorVersion;
+    uint32_t ntMajorVersion;
+    uint32_t ntMinorVersion;
     uint8_t processorFeatures[64];
+    // Pad from ProcessorFeatures (0x274..0x2b4) to the Windows ABI
+    // TickCountQuad location at 0x320.
+    uint8_t reservedToTickCount[108];
+    // Windows-compatible KUSER_SHARED_DATA tick count union at 0x320.
+    // This naturally aligned 64-bit value is published atomically by Ke.
+    volatile uint64_t tickCountQuad;
 };
+
+static_assert(offsetof(KUserSharedData, tickCountQuad) == 0x320);
+static_assert(offsetof(KUserSharedData, ntSystemRoot) == 0x30);
+static_assert(offsetof(KUserSharedData, systemTimeLow) == 0x14);
+static_assert(sizeof(KUserSharedData) == 0x328);
 
 inline constexpr uintptr_t UserSharedDataAddress = 0x7FFE0000ULL;
 

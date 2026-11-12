@@ -385,16 +385,20 @@ public:
         return NtStatus::Success;
     }
 
-    [[nodiscard]] uint64_t allocateContiguousPages(size_t pageCount) {
+    [[nodiscard]] uint64_t allocateContiguousPages(size_t pageCount,
+                                                    uint64_t highestPfn = UINT64_MAX,
+                                                    uint64_t alignmentPages = 1) {
         Guard guard(*this);
-        if (pageCount == 0 || pageCount > entries_.size()) return 0;
+        if (pageCount == 0 || pageCount > entries_.size() || !alignmentPages ||
+            (alignmentPages & (alignmentPages - 1))) return 0;
 
         size_t consecutive = 0;
         uint64_t candidateStart = 0;
 
-        for (uint64_t i = 1; i < entries_.size(); ++i) {
+        for (uint64_t i = 1; i < entries_.size() && i <= highestPfn; ++i) {
             if (entries_[i].location == PageLocation::FreePageList ||
                 entries_[i].location == PageLocation::ZeroedPageList) {
+                if (consecutive == 0 && (i & (alignmentPages - 1))) continue;
                 if (consecutive == 0) {
                     candidateStart = i;
                 }

@@ -3,6 +3,7 @@
 #if defined(MICANT_FREESTANDING)
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/se.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/sync.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
@@ -62,6 +63,7 @@ public:
     }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] bool isSystemProcess() const noexcept { return systemProcess_; }
+    [[nodiscard]] se::FreestandingAccessToken* primaryToken() const noexcept { return primaryToken_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
     [[nodiscard]] size_t activeThreadCount() const noexcept;
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
@@ -76,6 +78,8 @@ private:
     NtStatus requestTermination(NtStatus exitStatus, ke::KThread* callingThread,
                                 bool terminateProcess = true) noexcept;
     ob::ObjectHeader* objectHeader_{nullptr};
+    ob::ObjectHeader* primaryTokenReference_{nullptr};
+    se::FreestandingAccessToken* primaryToken_{nullptr};
     hal::amd64::ProcessPagingRoot root_{};
     Handle processId_{0};
     mm::ProcessAddressSpace addressSpace_{};
@@ -165,6 +169,17 @@ public:
     NtStatus terminateOther(NtStatus status) noexcept;
     NtStatus reap() noexcept;
     [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
+    [[nodiscard]] se::FreestandingAccessToken* impersonationToken() const noexcept { return impersonationToken_; }
+    [[nodiscard]] NtStatus setImpersonationToken(se::FreestandingAccessToken* token,
+                                                  ob::ObjectHeader* reference) noexcept {
+        if ((token == nullptr) != (reference == nullptr) || (token && token->IsPrimary))
+            return NtStatus::InvalidParameter;
+        auto* old = impersonationTokenReference_;
+        impersonationTokenReference_ = reference;
+        impersonationToken_ = token;
+        if (old) se::SeDereferenceFreestandingToken(old);
+        return NtStatus::Success;
+    }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
     [[nodiscard]] uintptr_t userStackPointer() const noexcept { return userStackPointer_; }
     [[nodiscard]] bool isSystemThread() const noexcept { return systemThread_; }
@@ -205,6 +220,8 @@ private:
     EProcess* process_{nullptr};
     // A factory-owned reference pins an Ob thread until deferred reap.
     ob::ObjectHeader* objectHeader_{nullptr};
+    ob::ObjectHeader* impersonationTokenReference_{nullptr};
+    se::FreestandingAccessToken* impersonationToken_{nullptr};
     ob::ObjectHeader* reapProcessReference_{nullptr};
     EThread* deferredNext_{nullptr};
     bool deferredQueued_{false};

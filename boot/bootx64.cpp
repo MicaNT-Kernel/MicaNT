@@ -19,12 +19,28 @@
 #include "micant/km/hal/smp.hpp"
 #include "micant/km/executive/ntoskrnl_loader.hpp"
 #include "../test/unmodified_fixture.hpp"
+#include <cstring>
+#include <iterator>
 #include <new>
 
 extern "C" void ___chkstk_ms() {}
 extern "C" void __chkstk() {}
 
 namespace micant::bootloader {
+
+// UEFI PCI I/O protocol prefix used only before ExitBootServices. The BAR
+// resource buffers belong to firmware and are freed after copying the POD.
+struct FirmwarePciIo {
+    void *pollMem, *pollIo, *memRead, *memWrite, *ioRead, *ioWrite, *pciRead, *pciWrite;
+    void *copyMem, *map, *unmap, *allocateBuffer, *freeBuffer, *flush;
+    uefi::EfiStatus (*getLocation)(FirmwarePciIo*, uint64_t*, uint64_t*, uint64_t*, uint64_t*);
+    void* attributes;
+    uefi::EfiStatus (*getBarAttributes)(FirmwarePciIo*, uint8_t, uint64_t*, void**);
+};
+static constexpr uefi::EfiGuid kPciIoGuid{0x4cf5b200, 0x68b8, 0x4ca5,
+    {0x9e, 0xec, 0xb2, 0x3e, 0x3f, 0x50, 0x02, 0x9a}};
+static_assert(offsetof(FirmwarePciIo, getLocation) == 112);
+static_assert(offsetof(FirmwarePciIo, getBarAttributes) == 128);
 
 static inline void outb(uint16_t port, uint8_t val) noexcept {
 #if defined(__x86_64__)
@@ -303,14 +319,50 @@ static inline void concatStr(char* dst, const char* src, size_t maxLen) noexcept
     dst[dLen + sIdx] = '\0';
 }
 
-static inline uint32_t measureTscFrequencyMHz(uefi::EfiBootServices* bs) noexcept {
-    if (!bs || !bs->stall) return 3800;
-    uint64_t t0 = rdtsc();
-    bs->stall(10000); // 10,000 us = 10 ms
-    uint64_t t1 = rdtsc();
-    uint64_t delta = (t1 > t0) ? (t1 - t0) : 0;
-    uint32_t mhz = static_cast<uint32_t>(delta / 10000);
-    return (mhz > 500 && mhz < 8000) ? mhz : 3800;
+static inline bool hasInvariantTsc() noexcept {
+    uint32_t eax = 0x80000000u, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (eax < 0x80000007u) return false;
+    eax = 0x80000007u;
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    return (edx & (1u << 8)) != 0;
+}
+
+static inline uint64_t readSerializedTsc() noexcept {
+    uint32_t low{}, high{};
+    __asm__ __volatile__("lfence; rdtsc; lfence"
+                         : "=a"(low), "=d"(high) : : "memory");
+    return (static_cast<uint64_t>(high) << 32) | low;
+}
+
+static inline uint64_t measureTscFrequencyHz(uefi::EfiBootServices* bs) noexcept {
+    if (!bs || !bs->stall || !hasInvariantTsc()) return 0;
+    constexpr uint64_t maximumFrequencyHz = 10'000'000'000ULL;
+    constexpr uint64_t minimumFrequencyHz = 1'000'000;
+    constexpr uint32_t intervalMicroseconds = 10'000;
+    uint64_t samples[5]{};
+    for (auto& sample : samples) {
+        const uint64_t start = readSerializedTsc();
+        if (bs->stall(intervalMicroseconds) != uefi::EFI_SUCCESS) return 0;
+        const uint64_t end = readSerializedTsc();
+        if (end <= start) return 0;
+        const uint64_t delta = end - start;
+        if (delta > UINT64_MAX / 100) return 0;
+        sample = delta * 100; // 10 ms interval.
+        if (sample < minimumFrequencyHz || sample > maximumFrequencyHz) return 0;
+    }
+    for (size_t i = 1; i < 5; ++i) {
+        const uint64_t value = samples[i];
+        size_t j = i;
+        while (j && samples[j - 1] > value) {
+            samples[j] = samples[j - 1];
+            --j;
+        }
+        samples[j] = value;
+    }
+    const uint64_t median = samples[2];
+    if (!median || samples[3] - samples[1] > median / 20) return 0;
+    return median;
 }
 
 /**
@@ -1315,11 +1367,11 @@ static bool s_ntoskrnlLoadedFromDisk = false;
 static uint64_t s_ntoskrnlEntryPoint = 0;
 static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedNtoskrnlInfo{};
 
-alignas(4096) static uint8_t s_virtioGpuFileBuffer[16777216];
-alignas(4096) static uint8_t s_virtioGpuImageBuffer[16777216];
-static size_t s_virtioGpuFileSize = 0;
-static uint64_t s_virtioGpuEntryPoint = 0;
-static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedVirtioGpuInfo{};
+constexpr size_t kMaxBootOemDriverImages = 4;
+constexpr size_t kMaxBootOemDriverImageBytes = 16777216;
+alignas(4096) static uint8_t s_bootOemDriverFileBuffer[kMaxBootOemDriverImageBytes];
+alignas(4096) static uint8_t
+    s_bootOemDriverImageBuffers[kMaxBootOemDriverImages][kMaxBootOemDriverImageBytes];
 
 extern "C" char* strstr(const char* haystack, const char* needle) {
     if (!haystack || !needle) return nullptr;
@@ -1415,7 +1467,7 @@ private:
     uefi::EfiSystemTable* m_systemTable{nullptr};
     uefi::EfiGraphicsOutputProtocol* m_gop{nullptr};
     boot::LoaderParameterBlock m_lpb{};
-    boot::UefiKernelHandoffV3 m_handoff{};
+    boot::UefiKernelHandoffV7 m_handoff{};
     bootvid::BootVideoDriver m_videoDriver{};
     uefi::EfiTime m_bootTime{};
     bool m_hasBootTime{false};
@@ -1452,8 +1504,15 @@ public:
         m_hw.probeLapicRing0();
 
         if (m_systemTable && m_systemTable->bootServices) {
-            m_hw.cpuMeasuredMHz = measureTscFrequencyMHz(m_systemTable->bootServices);
+            const uint64_t tscFrequencyHz =
+                measureTscFrequencyHz(m_systemTable->bootServices);
+            m_hw.cpuMeasuredMHz = static_cast<uint32_t>(tscFrequencyHz / 1'000'000);
             m_cpuFreqMHz = m_hw.cpuMeasuredMHz;
+            if (tscFrequencyHz) {
+                using micant::shared::boot_time::BootClockFlagsV1;
+                m_handoff.clock.clockCalibration.tscFrequencyHz = tscFrequencyHz;
+                m_handoff.clock.clockCalibration.flags = BootClockFlagsV1::InvariantTsc;
+            }
         }
 
         m_hw.scanPciBus();
@@ -1629,29 +1688,104 @@ public:
         }
     }
 
+    void captureBootTimeSample() noexcept {
+        using micant::shared::boot_time::SampleSource;
+        using micant::shared::boot_time::SampleStatus;
+        using micant::shared::time::EfiAdjustForDaylight;
+        using micant::shared::time::EfiInDaylight;
+        using micant::shared::time::EfiUnspecifiedTimeZone;
+        m_handoff.clock.time.systemTime = {};
+        m_hasBootTime = m_systemTable && m_systemTable->runtimeServices &&
+            m_systemTable->runtimeServices->getTime &&
+            m_systemTable->runtimeServices->getTime(&m_bootTime, nullptr) ==
+                uefi::EFI_SUCCESS;
+        if (!m_hasBootTime) return;
+
+        m_handoff.clock.time.systemTime.source = SampleSource::UefiRuntimeGetTime;
+        m_handoff.clock.time.systemTime.timeZoneMinutes = m_bootTime.TimeZone;
+        m_handoff.clock.time.systemTime.daylight = m_bootTime.Daylight;
+        micant::shared::time::SystemTimeFields fields{
+            m_bootTime.Year, m_bootTime.Month, m_bootTime.Day,
+            m_bootTime.Hour, m_bootTime.Minute, m_bootTime.Second,
+            static_cast<uint16_t>(m_bootTime.Nanosecond / 1'000'000), 0,
+            static_cast<uint16_t>((m_bootTime.Nanosecond / 100) % 10'000)};
+        const bool dateValid = m_bootTime.Year >= 1900 &&
+            m_bootTime.Nanosecond < 1'000'000'000 &&
+            micant::shared::time::isValid(fields);
+        if ((m_bootTime.Daylight & ~(EfiAdjustForDaylight | EfiInDaylight)) != 0 ||
+            !dateValid) {
+            m_handoff.clock.time.systemTime.status = SampleStatus::InvalidFirmwareData;
+        } else if (static_cast<uint16_t>(m_bootTime.TimeZone) == EfiUnspecifiedTimeZone) {
+            // EFI_TIME with an unspecified zone is local wall time. Preserve it
+            // as such; never silently label it UTC in the kernel.
+            m_handoff.clock.time.systemTime.status = SampleStatus::LocalTimeZoneUnspecified;
+        } else if (m_bootTime.TimeZone < -1440 || m_bootTime.TimeZone > 1440) {
+            m_handoff.clock.time.systemTime.status = SampleStatus::InvalidFirmwareData;
+        } else {
+            uint64_t utc{};
+            if (!micant::shared::time::toUtc100ns(fields, m_bootTime.TimeZone, utc)) {
+                m_handoff.clock.time.systemTime.status = SampleStatus::InvalidFirmwareData;
+            } else {
+                m_handoff.clock.time.systemTime.utcTime100ns = utc;
+                m_handoff.clock.time.systemTime.status = SampleStatus::UtcValid;
+            }
+        }
+    }
+
+    // Refresh immediately before ExitBootServices so the kernel receives the
+    // latest firmware time instead of the earlier boot-menu timestamp.
+    void refreshBootTimeSample() noexcept { captureBootTimeSample(); }
+
     /**
      * @brief Stage 4: Retrieve UEFI Memory Map and Build LPB
      */
     bool buildLoaderParameterBlock(std::span<const uefi::EfiMemoryDescriptor> memoryMap) {
         m_lpb = uefi::BuildLpbFromUefi(m_systemTable, m_gop, memoryMap);
-        m_handoff = uefi::BuildKernelHandoffFromUefi(m_systemTable, m_gop, memoryMap);
+        m_handoff.clock.time.oem.legacy = uefi::BuildKernelHandoffFromUefi(m_systemTable, m_gop, memoryMap);
+        m_handoff.clock.time.oem.legacy.version = boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES;
+        m_handoff.clock.time.oem.legacy.size = sizeof(m_handoff);
+        m_handoff.clock.time.oem.moduleCapacity = boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES;
+        captureBootTimeSample();
         return true;
     }
 
     void updateMemoryMap(const void* memoryMap, uint64_t memoryMapSize,
                          uint64_t descriptorSize, uint32_t descriptorVersion) noexcept {
-        m_handoff.memoryMapAddress = reinterpret_cast<uint64_t>(memoryMap);
-        m_handoff.memoryMapSize = memoryMapSize;
-        m_handoff.memoryMapDescriptorSize = static_cast<uint32_t>(descriptorSize);
-        m_handoff.memoryMapDescriptorVersion = descriptorVersion;
+        m_handoff.clock.time.oem.legacy.memoryMapAddress = reinterpret_cast<uint64_t>(memoryMap);
+        m_handoff.clock.time.oem.legacy.memoryMapSize = memoryMapSize;
+        m_handoff.clock.time.oem.legacy.memoryMapDescriptorSize = static_cast<uint32_t>(descriptorSize);
+        m_handoff.clock.time.oem.legacy.memoryMapDescriptorVersion = descriptorVersion;
     }
 
-    void setDisplayDriver(boot::KernelBootImageV1 image) noexcept {
-        m_handoff.displayDriver = image;
+    bool addBootDriverModule(const boot::KernelBootModuleV1& module,
+        const wchar_t* baseName, const wchar_t* fullName) {
+        if (!baseName || !fullName || m_handoff.clock.time.oem.moduleCount >= m_handoff.clock.time.oem.moduleCapacity ||
+            m_handoff.clock.time.oem.moduleCount >= boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES ||
+            module.image.base == 0 || module.image.size == 0 || module.image.entryPoint == 0)
+            return false;
+        const auto sameBaseName = [](const char* left, const char* right) noexcept {
+            if (!left || !right) return false;
+            while (*left && *right && *left == *right) { ++left; ++right; }
+            return *left == *right;
+        };
+        for (uint32_t i = 0; i < m_handoff.clock.time.oem.moduleCount; ++i) {
+            if (sameBaseName(m_handoff.clock.time.oem.modules[i].baseName, module.baseName))
+                return false;
+        }
+        m_handoff.clock.time.oem.modules[m_handoff.clock.time.oem.moduleCount++] = module;
+        m_lpb.bootModules.push_back({
+            .baseDllName = baseName,
+            .fullDllName = fullName,
+            .dllBase = static_cast<uintptr_t>(module.image.base),
+            .sizeOfImage = static_cast<size_t>(module.image.size),
+            .entryPoint = static_cast<uintptr_t>(module.image.entryPoint),
+            .moduleFlags = module.flags
+        });
+        return true;
     }
 
     void setUserImageFile(boot::KernelBootFileV1 image) noexcept {
-        m_handoff.userImageFile = image;
+        m_handoff.clock.time.oem.legacy.userImageFile = image;
     }
 
     /**
@@ -1916,9 +2050,76 @@ public:
         return 1;
     }
 
+    void collectFirmwarePciResources() noexcept {
+        auto& handoff = m_handoff;
+        handoff.pciBarCount = 0;
+        handoff.pciInventoryComplete = 0;
+        auto* bs = m_systemTable ? m_systemTable->bootServices : nullptr;
+        if (!bs || !bs->locateHandleBuffer || !bs->handleProtocol || !bs->freePool) return;
+        uint64_t count{};
+        uefi::EfiHandle* handles{};
+        if (bs->locateHandleBuffer(uefi::BY_PROTOCOL, &kPciIoGuid, nullptr, &count, &handles) != uefi::EFI_SUCCESS ||
+            !handles || count > 65536) return;
+        bool complete = true;
+        const auto read64 = [](const uint8_t* p) noexcept {
+            uint64_t value{}; std::memcpy(&value, p, sizeof(value)); return value;
+        };
+        for (uint64_t i = 0; i < count; ++i) {
+            FirmwarePciIo* pci{};
+            if (bs->handleProtocol(handles[i], &kPciIoGuid, reinterpret_cast<void**>(&pci)) != uefi::EFI_SUCCESS ||
+                !pci || !pci->getLocation || !pci->getBarAttributes) { complete = false; continue; }
+            uint64_t segment{}, bus{}, device{}, function{};
+            if (pci->getLocation(pci, &segment, &bus, &device, &function) != uefi::EFI_SUCCESS ||
+                segment || bus > 255 || device >= 32 || function >= 8) { complete = false; continue; }
+            for (uint8_t index = 0; index < 6; ++index) {
+                void* allocation{};
+                const auto status = pci->getBarAttributes(pci, index, nullptr, &allocation);
+                if (status != uefi::EFI_SUCCESS) { if (allocation) (void)bs->freePool(allocation); continue; }
+                if (!allocation) { complete = false; continue; }
+                const auto* descriptor = static_cast<const uint8_t*>(allocation);
+                if (descriptor[0] == 0x79) {
+                    if (bs->freePool(allocation) != uefi::EFI_SUCCESS) complete = false;
+                    continue;
+                }
+                if (descriptor[0] != 0x8a || descriptor[1] != 0x2b || descriptor[2] != 0) {
+                    complete = false;
+                    if (bs->freePool(allocation) != uefi::EFI_SUCCESS) complete = false;
+                    continue;
+                }
+                // The bounded importer accepts one QWORD descriptor followed
+                // by an ACPI end tag. Multiple ranges and translated buses
+                // remain untrusted and keep the inventory incomplete.
+                bool valid = descriptor[3] <= 1 && descriptor[46] == 0x79;
+                const uint64_t start = read64(descriptor + 14), end = read64(descriptor + 22);
+                const uint64_t translation = read64(descriptor + 30), length = read64(descriptor + 38);
+                valid = valid && !translation && start && length && !(length & (length - 1)) &&
+                    !(start & (length - 1)) && start <= UINT64_MAX - (length - 1) &&
+                    end == start + length - 1;
+                if (valid) {
+                    for (uint32_t n = 0; n < handoff.pciBarCount; ++n) {
+                        const auto& prior = handoff.pciBars[n];
+                        if (prior.segment == segment && prior.bus == bus && prior.device == device &&
+                            prior.function == function && prior.index == index) { valid = false; break; }
+                    }
+                }
+                if (!valid || handoff.pciBarCount == boot::UEFI_KERNEL_HANDOFF_MAX_PCI_BARS) {
+                    complete = false;
+                } else {
+                    auto& bar = handoff.pciBars[handoff.pciBarCount++];
+                    bar = {static_cast<uint16_t>(segment), static_cast<uint16_t>(bus),
+                           static_cast<uint8_t>(device), static_cast<uint8_t>(function), index,
+                           descriptor[3], start, length};
+                }
+                if (bs->freePool(allocation) != uefi::EFI_SUCCESS) complete = false;
+            }
+        }
+        if (bs->freePool(handles) != uefi::EFI_SUCCESS) complete = false;
+        handoff.pciInventoryComplete = complete ? 1 : 0;
+    }
+
     [[nodiscard]] const boot::LoaderParameterBlock& getLpb() const noexcept { return m_lpb; }
     [[nodiscard]] boot::LoaderParameterBlock& getLpb() noexcept { return m_lpb; }
-    [[nodiscard]] const boot::UefiKernelHandoffV3& getHandoff() const noexcept {
+    [[nodiscard]] const boot::UefiKernelHandoffV7& getHandoff() const noexcept {
         return m_handoff;
     }
     [[nodiscard]] bootvid::BootVideoDriver& getVideoDriver() noexcept { return m_videoDriver; }
@@ -2223,50 +2424,100 @@ extern "C" micant::uefi::EfiStatus EfiMain(
         }
     }
 
-    // Load the display miniport as a separate boot-start native .sys image.
-    // The kernel enters its DriverEntry only after paging and kernel services
-    // are available, just like a boot-start driver in an NT boot sequence.
+    // Stage bounded, separate OEM .sys images into independent mapped-image
+    // slots. Missing/invalid optional drivers are rolled back and skipped;
+    // nothing is linked into ntoskrnl_core_baremetal.
     if (systemTable->bootServices) {
-        size_t driverBytes = loadFileFromEfiSystemPartition(
-            imageHandle, systemTable->bootServices,
-            L"\\EFI\\MicaNT\\System32\\drivers\\virtio_gpu.sys",
-            micant::bootloader::s_virtioGpuFileBuffer,
-            sizeof(micant::bootloader::s_virtioGpuFileBuffer));
-        if (driverBytes == 0) {
-            driverBytes = loadFileFromEfiSystemPartition(
-                imageHandle, systemTable->bootServices,
-                L"\\EFI\\MicaNT\\virtio_gpu.sys",
-                micant::bootloader::s_virtioGpuFileBuffer,
-                sizeof(micant::bootloader::s_virtioGpuFileBuffer));
-        }
-        if (driverBytes != 0) {
-            micant::bootloader::s_virtioGpuFileSize = driverBytes;
-            std::span<const uint8_t> rawDriver(micant::bootloader::s_virtioGpuFileBuffer, driverBytes);
-            uint64_t targetBase = reinterpret_cast<uint64_t>(micant::bootloader::s_virtioGpuImageBuffer);
-            micant::NtStatus status = micant::km::executive::NtoskrnlImageLoader64::loadAndMapKernelImage(
-                rawDriver,
-                micant::bootloader::s_virtioGpuImageBuffer,
-                sizeof(micant::bootloader::s_virtioGpuImageBuffer),
-                targetBase,
-                micant::bootloader::s_loadedVirtioGpuInfo);
-            if (status == micant::NtStatus::Success && micant::bootloader::s_loadedVirtioGpuInfo.headersValid) {
-                micant::bootloader::s_virtioGpuEntryPoint = micant::bootloader::s_loadedVirtioGpuInfo.entryPointVa;
-                engine.getLpb().bootModules.push_back({
-                    .baseDllName = L"virtio_gpu.sys",
-                    .fullDllName = L"\\SystemRoot\\System32\\drivers\\virtio_gpu.sys",
-                    .dllBase = reinterpret_cast<uintptr_t>(micant::bootloader::s_virtioGpuImageBuffer),
-                    .sizeOfImage = static_cast<size_t>(micant::bootloader::s_loadedVirtioGpuInfo.sizeOfImage),
-                    .entryPoint = static_cast<uintptr_t>(micant::bootloader::s_virtioGpuEntryPoint),
-                    .moduleFlags = micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER
-                });
-                micant::bootloader::UartSerial::print("[MicaNT Boot] Loaded boot-start virtio_gpu.sys, DriverEntry=0x");
-                micant::bootloader::UartSerial::printHex64(micant::bootloader::s_virtioGpuEntryPoint);
-                micant::bootloader::UartSerial::print("\r\n");
-            } else {
-                micant::bootloader::UartSerial::print("[MicaNT Boot] virtio_gpu.sys PE load failed; GOP remains active.\r\n");
+        struct OemDriverCandidate {
+            const wchar_t* name;
+            const wchar_t* ntPath;
+            const wchar_t* fullPath;
+            const wchar_t* fallbackPath;
+            const char* baseName;
+            uint32_t flags;
+        };
+        constexpr OemDriverCandidate candidates[] = {
+            {L"virtio_gpu.sys", L"\\SystemRoot\\System32\\drivers\\virtio_gpu.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\virtio_gpu.sys",
+             L"\\EFI\\MicaNT\\virtio_gpu.sys", "virtio_gpu.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER |
+                 micant::boot::BOOT_MODULE_FLAG_DISPLAY_DRIVER},
+            {L"storahci.sys", L"\\SystemRoot\\System32\\drivers\\storahci.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\storahci.sys",
+             L"\\EFI\\MicaNT\\storahci.sys", "storahci.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"usbxhci.sys", L"\\SystemRoot\\System32\\drivers\\usbxhci.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\usbxhci.sys",
+             L"\\EFI\\MicaNT\\usbxhci.sys", "usbxhci.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"i210.sys", L"\\SystemRoot\\System32\\drivers\\i210.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\i210.sys",
+             L"\\EFI\\MicaNT\\i210.sys", "i210.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"virtio_net.sys", L"\\SystemRoot\\System32\\drivers\\virtio_net.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\virtio_net.sys",
+             L"\\EFI\\MicaNT\\virtio_net.sys", "virtio_net.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+        };
+        static_assert(std::size(candidates) <= micant::boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES);
+        size_t slot = 0;
+        for (const auto& candidate : candidates) {
+            if (slot >= micant::bootloader::kMaxBootOemDriverImages) break;
+            auto* mappedImage = micant::bootloader::s_bootOemDriverImageBuffers[slot];
+            std::memset(micant::bootloader::s_bootOemDriverFileBuffer, 0,
+                        sizeof(micant::bootloader::s_bootOemDriverFileBuffer));
+            size_t driverBytes = loadFileFromEfiSystemPartition(
+                imageHandle, systemTable->bootServices, candidate.fullPath,
+                micant::bootloader::s_bootOemDriverFileBuffer,
+                sizeof(micant::bootloader::s_bootOemDriverFileBuffer));
+            if (!driverBytes) {
+                driverBytes = loadFileFromEfiSystemPartition(
+                    imageHandle, systemTable->bootServices, candidate.fallbackPath,
+                    micant::bootloader::s_bootOemDriverFileBuffer,
+                    sizeof(micant::bootloader::s_bootOemDriverFileBuffer));
             }
-        } else {
-            micant::bootloader::UartSerial::print("[MicaNT Boot] virtio_gpu.sys absent; GOP fallback selected.\r\n");
+            if (!driverBytes) continue;
+
+            micant::km::executive::NtoskrnlLoadedImageInfo imageInfo{};
+            const std::span<const uint8_t> rawDriver(
+                micant::bootloader::s_bootOemDriverFileBuffer, driverBytes);
+            const uint64_t targetBase = reinterpret_cast<uint64_t>(mappedImage);
+            const micant::NtStatus status =
+                micant::km::executive::NtoskrnlImageLoader64::loadAndMapKernelImage(
+                    rawDriver, mappedImage, micant::bootloader::kMaxBootOemDriverImageBytes,
+                    targetBase, imageInfo);
+            if (status != micant::NtStatus::Success || !imageInfo.headersValid ||
+                imageInfo.sizeOfImage == 0 ||
+                imageInfo.sizeOfImage > micant::bootloader::kMaxBootOemDriverImageBytes ||
+                imageInfo.entryPointVa < targetBase ||
+                imageInfo.entryPointVa - targetBase >= imageInfo.sizeOfImage) {
+                std::memset(mappedImage, 0, micant::bootloader::kMaxBootOemDriverImageBytes);
+                micant::bootloader::UartSerial::print("[MicaNT Boot] Rejected OEM driver image: ");
+                micant::bootloader::UartSerial::print(candidate.baseName);
+                micant::bootloader::UartSerial::print("\r\n");
+                continue;
+            }
+
+            micant::boot::KernelBootModuleV1 module{};
+            module.image = {targetBase, imageInfo.sizeOfImage, imageInfo.entryPointVa};
+            module.flags = candidate.flags;
+            size_t nameOffset = 0;
+            while (candidate.baseName[nameOffset] && nameOffset + 1 < sizeof(module.baseName)) {
+                module.baseName[nameOffset] = candidate.baseName[nameOffset];
+                ++nameOffset;
+            }
+            module.baseName[nameOffset] = '\0';
+            if (!engine.addBootDriverModule(module, candidate.name, candidate.ntPath)) {
+                std::memset(mappedImage, 0, micant::bootloader::kMaxBootOemDriverImageBytes);
+                micant::bootloader::UartSerial::print("[MicaNT Boot] OEM module handoff capacity/name collision: ");
+                micant::bootloader::UartSerial::print(candidate.baseName);
+                micant::bootloader::UartSerial::print("\r\n");
+                continue;
+            }
+            micant::bootloader::UartSerial::print("[MicaNT Boot] Staged boot-start .sys: ");
+            micant::bootloader::UartSerial::print(candidate.baseName);
+            micant::bootloader::UartSerial::print("\r\n");
+            ++slot;
         }
     }
 
@@ -2393,18 +2644,12 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
     // 7. Clean exit from Boot Services: enter 64-bit Long Mode on bare metal
     // Keep driver ownership in the POD handoff, not in the bootloader's STL LPB.
-    if (micant::bootloader::s_virtioGpuEntryPoint != 0) {
-        engine.setDisplayDriver({
-            reinterpret_cast<uint64_t>(micant::bootloader::s_virtioGpuImageBuffer),
-            micant::bootloader::s_loadedVirtioGpuInfo.sizeOfImage,
-            micant::bootloader::s_virtioGpuEntryPoint,
-        });
-    }
     if (systemTable->conOut) {
         systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Exiting UEFI Boot Services and entering Long Mode...\r\n");
     }
     micant::bootloader::UartSerial::print("\r\n[MicaNT Boot] Calling ExitBootServices to terminate UEFI firmware...\r\n");
 
+    engine.collectFirmwarePciResources();
     memoryMapSize = sizeof(s_memoryMapBuffer);
     mapStatus = systemTable->bootServices->getMemoryMap(
         &memoryMapSize,
@@ -2423,6 +2668,7 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     engine.updateMemoryMap(s_memoryMapBuffer, memoryMapSize, descriptorSize,
                            descriptorVersion);
 
+    engine.refreshBootTimeSample();
     micant::uefi::EfiStatus exitStatus = engine.exitBootServices(mapKey);
     if (exitStatus != micant::uefi::EFI_SUCCESS) {
         memoryMapSize = sizeof(s_memoryMapBuffer);
@@ -2442,6 +2688,7 @@ extern "C" micant::uefi::EfiStatus EfiMain(
         }
         engine.updateMemoryMap(s_memoryMapBuffer, memoryMapSize, descriptorSize,
                                descriptorVersion);
+        engine.refreshBootTimeSample();
         exitStatus = engine.exitBootServices(mapKey);
     }
     if (exitStatus != micant::uefi::EFI_SUCCESS) {
@@ -2460,7 +2707,7 @@ extern "C" micant::uefi::EfiStatus EfiMain(
         const micant::boot::UefiKernelHandoffV3* handoff
     );
     auto pfnKernel = reinterpret_cast<PfnKiSystemStartup>(micant::bootloader::s_ntoskrnlEntryPoint);
-    pfnKernel(&engine.getHandoff());
+    pfnKernel(&engine.getHandoff().clock.time.oem.legacy);
 
     while (true) {
 #if defined(__x86_64__)

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
 project(MicaNT VERSION 0.1.0 LANGUAGES CXX C)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -12,6 +14,25 @@ include_directories(
     include
 )
 
+# The imported driver models remain opt-in libraries/tests. They are deliberately
+# not linked into ntoskrnl_core or ntoskrnl_core_baremetal.
+set(MICANT_IMPORTED_DRIVERS
+    acpi amx bluetooth bypassio cet cxl dsa graphics hdaudio hfi iommu ndis
+    npu nvme pci pluton pmem qat rdma sriov tee ucsi usb usb4 wdf wifi)
+foreach(_driver IN LISTS MICANT_IMPORTED_DRIVERS)
+    add_subdirectory("drivers/${_driver}" EXCLUDE_FROM_ALL)
+endforeach()
+
+set(_micant_driver_test_targets)
+foreach(_driver IN LISTS MICANT_IMPORTED_DRIVERS)
+    list(APPEND _micant_driver_test_targets "test_${_driver}")
+endforeach()
+add_custom_target(micant_drivers_check
+    COMMAND "${CMAKE_CTEST_COMMAND}" --output-on-failure -R "^DriverTest_"
+    DEPENDS ${_micant_driver_test_targets}
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    COMMENT "Building and running the imported driver hosted checks")
+
 # Explicit modular NT Kernel Executive & Microkernel source manifest.
 # Historical sources under old/ are never kernel or driver build inputs.
 set(NTOSKRNL_SUBSYSTEM_SOURCES
@@ -19,6 +40,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ke/context_switch.cpp
     kernel/ke/process.cpp
     kernel/ke/wait.cpp
+    kernel/ke/time.cpp
     kernel/win32k/win32k.cpp
     kernel/win32k/win32k_wddm.cpp
     kernel/mm/virtual.cpp
@@ -261,20 +283,27 @@ if (MICANT_ENABLE_BAREMETAL)
         kernel/ke/context_switch.cpp
         kernel/ke/process.cpp
         kernel/ke/event.cpp
+        kernel/ke/time.cpp
         kernel/hal/amd64_bootstrap.cpp
         kernel/hal/amd64_firmware_interrupts.cpp
         kernel/win32k/freestanding.cpp
+        kernel/ex/freestanding_memory.cpp
         kernel/ex/freestanding.cpp
         kernel/ex/libcpp_support.cpp
         kernel/ob/obref.cpp
         kernel/io/file_object.cpp
-        kernel/io/ahci_file_provider.cpp
+        kernel/io/afd_wsk.cpp
+        kernel/io/block_device.cpp
+        kernel/io/usb_host.cpp
+        kernel/io/hid_input.cpp
+        kernel/fsrtl/fat_boot.cpp
         kernel/mm/virtual.cpp
         kernel/ps/address_space.cpp
         kernel/ps/apc.cpp
         kernel/ps/exception.cpp
         kernel/ps/object.cpp
         kernel/ps/image.cpp
+        kernel/se/freestanding.cpp
         test/kernel_context_canary.cpp
         test/kernel_ke_ready_queue_test.cpp
         test/kernel_ke_block_wake_test.cpp
@@ -430,6 +459,26 @@ if (MICANT_ENABLE_BAREMETAL)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
         RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build"
     )
+    add_executable(ahci_oem_boot drivers/oem/ahci/ahci_file_provider.cpp
+                                   kernel/ex/freestanding_memory.cpp)
+    add_executable(xhci_oem_boot drivers/oem/xhci/xhci_driver.cpp
+                                   kernel/ex/freestanding_memory.cpp)
+    add_executable(i210_oem_boot drivers/oem/i210/i210_driver.cpp
+                                   kernel/ex/freestanding_memory.cpp)
+    add_executable(virtio_net_oem_boot drivers/oem/virtio_net/virtio_net_driver.cpp
+                                       kernel/ex/freestanding_memory.cpp)
+    set_target_properties(ahci_oem_boot PROPERTIES OUTPUT_NAME "storahci")
+    set_target_properties(xhci_oem_boot PROPERTIES OUTPUT_NAME "usbxhci")
+    set_target_properties(i210_oem_boot PROPERTIES OUTPUT_NAME "i210")
+    set_target_properties(virtio_net_oem_boot PROPERTIES OUTPUT_NAME "virtio_net")
+    foreach(_oem_driver_target IN ITEMS ahci_oem_boot xhci_oem_boot i210_oem_boot
+                                       virtio_net_oem_boot)
+        set_target_properties(${_oem_driver_target} PROPERTIES
+            SUFFIX ".sys"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
+            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build"
+        )
+    endforeach()
 endif()
 
 if(WIN32 OR MICANT_ENABLE_BAREMETAL)
@@ -468,7 +517,9 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(win32_app PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     target_compile_options(bootx64 PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     if (MICANT_ENABLE_BAREMETAL)
-        foreach(_target IN ITEMS ntoskrnl_core_baremetal bootx64_efi virtio_gpu_boot)
+        foreach(_target IN ITEMS ntoskrnl_core_baremetal bootx64_efi virtio_gpu_boot
+                                  ahci_oem_boot xhci_oem_boot i210_oem_boot
+                                  virtio_net_oem_boot)
             target_compile_options(${_target} PRIVATE
                 -ffreestanding
                 -fno-exceptions
@@ -496,6 +547,13 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_link_options(virtio_gpu_boot PRIVATE
             -nostdlib -Wl,--subsystem,native -Wl,-e,DriverEntry
         )
+        foreach(_oem_driver_target IN ITEMS ahci_oem_boot xhci_oem_boot i210_oem_boot
+                                            virtio_net_oem_boot)
+            target_compile_options(${_oem_driver_target} PRIVATE -fno-builtin)
+            target_link_options(${_oem_driver_target} PRIVATE
+                -nostdlib -Wl,--subsystem,native -Wl,-e,DriverEntry
+            )
+        endforeach()
     endif()
 elseif (MSVC)
     target_compile_options(ntoskrnl_core PRIVATE /W4 /permissive- /O2)

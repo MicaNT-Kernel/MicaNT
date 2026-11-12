@@ -46,9 +46,7 @@
 #include <algorithm>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/native/janusldr.hpp"
-#include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/winbase/version.hpp"
+#include "micant/shared/ndis_adapter_abi.hpp"
 #include "micant/km/hal/pci.hpp"
 
 #ifndef WINAPI
@@ -774,6 +772,25 @@ public:
     [[nodiscard]] virtual uint64_t getSpeedBps() const noexcept = 0;
     [[nodiscard]] virtual MediaConnectState getLinkState() const noexcept = 0;
     [[nodiscard]] virtual AdapterStatistics getStatistics() const noexcept = 0;
+    [[nodiscard]] virtual NtStatus pollReceive() noexcept { return NtStatus::NotSupported; }
+    [[nodiscard]] virtual uint32_t getLinkStateChangeCount() const noexcept { return 0; }
+    [[nodiscard]] virtual uint32_t getResetCount() const noexcept { return 0; }
+    virtual bool resetHardware() noexcept { return false; }
+    [[nodiscard]] virtual NtStatus sendNetBufferLists(std::shared_ptr<NetBufferList> list) {
+        if (!list) return NtStatus::InvalidParameter;
+        for (auto current = list; current; current = current->next) {
+            for (auto buffer = current->firstNetBuffer; buffer; buffer = buffer->next) {
+                if (buffer->data.empty()) continue;
+                const NtStatus status = sendPacket(buffer->data);
+                if (status != NtStatus::Success) {
+                    current->status = NDIS_STATUS_FAILURE;
+                    return status;
+                }
+            }
+            current->status = NDIS_STATUS_SUCCESS;
+        }
+        return NtStatus::Success;
+    }
 
     [[nodiscard]] virtual NtStatus sendPacket(std::span<const uint8_t> frame) = 0;
     virtual void registerReceiveHandler(ReceiveCallback callback) = 0;
@@ -818,7 +835,7 @@ public:
         linkStateChangeCount_++;
     }
 
-    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept {
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept override {
         return linkStateChangeCount_;
     }
 
@@ -974,11 +991,11 @@ public:
         writeMmio32(REG_STATUS, (state == MediaConnectState::Connected) ? 0x00000003 : 0x00000000);
     }
 
-    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept {
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept override {
         return linkStateChangeCount_;
     }
 
-    bool resetHardware() {
+    bool resetHardware() noexcept override {
         std::lock_guard<std::mutex> lock(mutex_);
         resetCount_++;
         writeMmio32(REG_CTRL, 0x04000000); // Master Reset
@@ -986,7 +1003,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] uint32_t getResetCount() const noexcept {
+    [[nodiscard]] uint32_t getResetCount() const noexcept override {
         return resetCount_;
     }
 
@@ -1065,7 +1082,7 @@ public:
     /**
      * @brief Send batch of NET_BUFFER_LIST structures.
      */
-    [[nodiscard]] NtStatus sendNetBufferLists(std::shared_ptr<NetBufferList> nblList) {
+    [[nodiscard]] NtStatus sendNetBufferLists(std::shared_ptr<NetBufferList> nblList) override {
         if (!nblList) return NtStatus::InvalidParameter;
 
         auto currNbl = nblList;
@@ -1448,9 +1465,9 @@ public:
         writeMmio32(REG_STATUS, (state == MediaConnectState::Connected) ? 0x8000000A : 0x00000000);
     }
 
-    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept { return linkStateChangeCount_; }
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept override { return linkStateChangeCount_; }
 
-    bool resetHardware() {
+    bool resetHardware() noexcept override {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         resetCount_++;
         rxHead_ = 0;
@@ -1470,7 +1487,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] uint32_t getResetCount() const noexcept { return resetCount_; }
+    [[nodiscard]] uint32_t getResetCount() const noexcept override { return resetCount_; }
 
     void registerReceiveHandler(ReceiveCallback callback) override {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -1634,7 +1651,7 @@ public:
     /**
      * @brief Send batch of NET_BUFFER_LIST structures.
      */
-    [[nodiscard]] NtStatus sendNetBufferLists(std::shared_ptr<NetBufferList> nblList) {
+    [[nodiscard]] NtStatus sendNetBufferLists(std::shared_ptr<NetBufferList> nblList) override {
         if (!nblList) return NtStatus::InvalidParameter;
 
         auto currNbl = nblList;
@@ -1972,7 +1989,7 @@ public:
         linkState_ = state;
         linkStateChangeCount_++;
     }
-    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept { return linkStateChangeCount_; }
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept override { return linkStateChangeCount_; }
 
     void registerReceiveHandler(ReceiveCallback callback) override {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -2200,6 +2217,11 @@ public:
     }
 
     void initialize() {
+#if defined(MICANT_FREESTANDING)
+        // Freestanding miniports register from their boot-driver service ABI.
+        // Never synthesize virtual/PCI adapters in the production kernel.
+        return;
+#else
         std::lock_guard<std::mutex> lock(mutex_);
         if (initialized_) return;
 
@@ -2254,6 +2276,7 @@ public:
         netAdapters_[L"netadapter0"] = netAdp0;
 
         initialized_ = true;
+#endif
     }
 
     void shutdown() {
@@ -2315,6 +2338,14 @@ public:
         if (!primaryAdapter_) primaryAdapter_ = adapter;
     }
 
+    void unregisterAdapter(std::wstring_view name, const INdisAdapter* expected) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = adapters_.find(std::wstring(name));
+        if (it == adapters_.end() || it->second.get() != expected) return;
+        adapters_.erase(it);
+        if (primaryAdapter_.get() == expected) primaryAdapter_.reset();
+    }
+
     // NetAdapterCx context management
     std::shared_ptr<NetAdapterContext> createNetAdapter(
         std::wstring_view name,
@@ -2371,32 +2402,16 @@ public:
         telem.totalAdaptersEnumerated = adapters_.size() + netAdapters_.size();
         for (const auto& [name, adp] : adapters_) {
             if (adp) {
-                auto stats = adp->getStatistics();
+                const auto stats = adp->getStatistics();
                 telem.totalPacketsTransmitted += stats.txPackets;
                 telem.totalBytesTransmitted += stats.txBytes;
                 telem.totalPacketsReceived += stats.rxPackets;
                 telem.totalBytesReceived += stats.rxBytes;
-
-                auto razzle = std::dynamic_pointer_cast<RazzleNetAdapter>(adp);
-                if (razzle) {
-                    telem.totalLinkStateChanges += razzle->getLinkStateChangeCount();
-                    telem.totalHardwareResets += razzle->getResetCount();
-                    telem.totalLsoSegmentsCreated += razzle->getStatistics().lsoPackets;
-                    telem.totalCsumTxOffloaded += razzle->getStatistics().csumOffloadTx;
-                    telem.totalCsumRxValidated += razzle->getStatistics().csumOffloadRx;
-                }
-                auto vnet = std::dynamic_pointer_cast<VirtualNetworkAdapter>(adp);
-                if (vnet) {
-                    telem.totalLinkStateChanges += vnet->getLinkStateChangeCount();
-                }
-                auto virtio = std::dynamic_pointer_cast<VirtIoNetAdapter>(adp);
-                if (virtio) {
-                    telem.totalLinkStateChanges += virtio->getLinkStateChangeCount();
-                }
-                auto e1000 = std::dynamic_pointer_cast<IntelE1000eAdapter>(adp);
-                if (e1000) {
-                    telem.totalLinkStateChanges += e1000->getLinkStateChangeCount();
-                }
+                telem.totalLinkStateChanges += adp->getLinkStateChangeCount();
+                telem.totalHardwareResets += adp->getResetCount();
+                telem.totalLsoSegmentsCreated += stats.lsoPackets;
+                telem.totalCsumTxOffloaded += stats.csumOffloadTx;
+                telem.totalCsumRxValidated += stats.csumOffloadRx;
             }
         }
         telem.totalLsoSegmentsCreated += totalLsoSegments_.load();
@@ -2600,12 +2615,8 @@ inline int32_t WINAPI NdisMResetMiniport(void* /*miniportAdapterHandle*/) {
     auto& ndis = TitanNdisSubsystem::Instance();
     if (!ndis.isInitialized()) ndis.initialize();
     auto adp = ndis.getPrimaryAdapter();
-    if (adp) {
-        auto razzle = std::dynamic_pointer_cast<RazzleNetAdapter>(adp);
-        if (razzle) {
-            razzle->resetHardware();
-        }
-    }
+    if (!adp) return static_cast<int32_t>(NDIS_STATUS_DEVICE_FAILED);
+    if (!adp->resetHardware()) return static_cast<int32_t>(NDIS_STATUS_NOT_SUPPORTED);
     return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
 }
 
@@ -2778,100 +2789,7 @@ inline void NdisResetTelemetryForTesting() {
 // ============================================================================
 
 inline void InitializeNdisSubsystem() {
-    // 1. Initialize Subsystem & Register Adapters
     TitanNdisSubsystem::Instance().initialize();
-
-    // 2. Register Driver Exports in JanusLDR Dynamic Loader
-    auto& ldr = ldr::DynamicLoader::get();
-    ldr.registerExport("ndis.sys", "NdisMRegisterMiniportDriver", reinterpret_cast<void*>(NdisMRegisterMiniportDriver));
-    ldr.registerExport("ndis.sys", "NdisMDeregisterMiniportDriver", reinterpret_cast<void*>(NdisMDeregisterMiniportDriver));
-    ldr.registerExport("ndis.sys", "NdisMSetMiniportAttributes", reinterpret_cast<void*>(NdisMSetMiniportAttributes));
-    ldr.registerExport("ndis.sys", "NdisAllocateNetBufferListPool", reinterpret_cast<void*>(NdisAllocateNetBufferListPool));
-    ldr.registerExport("ndis.sys", "NdisFreeNetBufferListPool", reinterpret_cast<void*>(NdisFreeNetBufferListPool));
-    ldr.registerExport("ndis.sys", "NdisAllocateNetBufferList", reinterpret_cast<void*>(NdisAllocateNetBufferList));
-    ldr.registerExport("ndis.sys", "NdisFreeNetBufferList", reinterpret_cast<void*>(NdisFreeNetBufferList));
-    ldr.registerExport("ndis.sys", "NdisMIndicateReceiveNetBufferLists", reinterpret_cast<void*>(NdisMIndicateReceiveNetBufferLists));
-    ldr.registerExport("ndis.sys", "NdisMSendNetBufferListsComplete", reinterpret_cast<void*>(NdisMSendNetBufferListsComplete));
-    ldr.registerExport("ndis.sys", "NdisQueryAdapterInformation", reinterpret_cast<void*>(NdisQueryAdapterInformation));
-    ldr.registerExport("ndis.sys", "NdisMResetMiniport", reinterpret_cast<void*>(NdisMResetMiniport));
-
-    ldr.registerExport("razzlenet.sys", "RazzleNetInitializeMiniport", reinterpret_cast<void*>(RazzleNetInitializeMiniport));
-    ldr.registerExport("razzlenet.sys", "RazzleNetTransmitPacket", reinterpret_cast<void*>(RazzleNetTransmitPacket));
-
-    ldr.registerExport("netadaptercx.sys", "NetAdapterCreate", reinterpret_cast<void*>(NetAdapterCreate));
-    ldr.registerExport("netadaptercx.sys", "NetAdapterStart", reinterpret_cast<void*>(NetAdapterStart));
-    ldr.registerExport("netadaptercx.sys", "NetAdapterStop", reinterpret_cast<void*>(NetAdapterStop));
-    ldr.registerExport("netadaptercx.sys", "NetTxQueueCreate", reinterpret_cast<void*>(NetTxQueueCreate));
-    ldr.registerExport("netadaptercx.sys", "NetRxQueueCreate", reinterpret_cast<void*>(NetRxQueueCreate));
-    ldr.registerExport("netadaptercx.sys", "NetTxQueueNotifyMoreCompletedPacketsAvailable", reinterpret_cast<void*>(NetTxQueueNotifyMoreCompletedPacketsAvailable));
-    ldr.registerExport("netadaptercx.sys", "NetRxQueueNotifyMoreReceivedPacketsAvailable", reinterpret_cast<void*>(NetRxQueueNotifyMoreReceivedPacketsAvailable));
-
-    ldr.registerExport("e1000e.sys", "E1000eInitializeMiniport", reinterpret_cast<void*>(E1000eInitializeMiniport));
-    ldr.registerExport("e1000e.sys", "E1000eSendNetBufferLists", reinterpret_cast<void*>(E1000eSendNetBufferLists));
-    ldr.registerExport("e1000e.sys", "E1000eReturnNetBufferLists", reinterpret_cast<void*>(E1000eReturnNetBufferLists));
-    ldr.registerExport("e1000e.sys", "E1000eOidRequest", reinterpret_cast<void*>(E1000eOidRequest));
-
-    ldr.registerExport("netio.sys", "NetioRegisterClient", reinterpret_cast<void*>(NetioRegisterClient));
-    ldr.registerExport("netio.sys", "NetioDeregisterClient", reinterpret_cast<void*>(NetioDeregisterClient));
-
-    // 3. Register Core Network Drivers in SCM
-    auto ndisSvc = std::make_shared<scm::ServiceRecord>();
-    ndisSvc->serviceName = L"ndis";
-    ndisSvc->displayName = L"Network Driver Interface Specification (NDIS 6.88)";
-    ndisSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    ndisSvc->startType = scm::SERVICE_BOOT_START;
-    ndisSvc->errorControl = scm::SERVICE_ERROR_CRITICAL;
-    ndisSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\ndis.sys";
-    ndisSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
-    scm::ServiceControlManager::get().registerServiceRecord(ndisSvc);
-
-    auto razzleSvc = std::make_shared<scm::ServiceRecord>();
-    razzleSvc->serviceName = L"razzlenet";
-    razzleSvc->displayName = L"RazzleNet 10GbE/100GbE PCIe Miniport Driver";
-    razzleSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    razzleSvc->startType = scm::SERVICE_SYSTEM_START;
-    razzleSvc->errorControl = scm::SERVICE_ERROR_NORMAL;
-    razzleSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\razzlenet.sys";
-    razzleSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
-    scm::ServiceControlManager::get().registerServiceRecord(razzleSvc);
-
-    auto netadapterSvc = std::make_shared<scm::ServiceRecord>();
-    netadapterSvc->serviceName = L"netadaptercx";
-    netadapterSvc->displayName = L"Network Adapter WDF Class Extension (NetAdapterCx)";
-    netadapterSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    netadapterSvc->startType = scm::SERVICE_BOOT_START;
-    netadapterSvc->errorControl = scm::SERVICE_ERROR_NORMAL;
-    netadapterSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\netadaptercx.sys";
-    netadapterSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
-    scm::ServiceControlManager::get().registerServiceRecord(netadapterSvc);
-
-    auto e1000Svc = std::make_shared<scm::ServiceRecord>();
-    e1000Svc->serviceName = L"e1000e";
-    e1000Svc->displayName = L"Intel PRO/1000 Gigabit PCIe Network Driver";
-    e1000Svc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    e1000Svc->startType = scm::SERVICE_BOOT_START;
-    e1000Svc->errorControl = scm::SERVICE_ERROR_NORMAL;
-    e1000Svc->binaryPath = L"C:\\Windows\\System32\\drivers\\e1000e.sys";
-    e1000Svc->status.dwCurrentState = scm::SERVICE_RUNNING;
-    scm::ServiceControlManager::get().registerServiceRecord(e1000Svc);
-
-    auto netioSvc = std::make_shared<scm::ServiceRecord>();
-    netioSvc->serviceName = L"netio";
-    netioSvc->displayName = L"Network I/O Subsystem Driver";
-    netioSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    netioSvc->startType = scm::SERVICE_BOOT_START;
-    netioSvc->errorControl = scm::SERVICE_ERROR_CRITICAL;
-    netioSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\netio.sys";
-    netioSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
-    scm::ServiceControlManager::get().registerServiceRecord(netioSvc);
-
-    // 4. Register Version Database Information
-    auto& verDb = version::VersionDatabase::Instance();
-    verDb.RegisterModule("ndis.sys", "10.0.22621.1", "MicaNT NDIS 6.88 Subsystem Driver");
-    verDb.RegisterModule("razzlenet.sys", "10.0.22621.1", "MicaNT RazzleNet 10GbE/100GbE PCIe Miniport Driver");
-    verDb.RegisterModule("netadaptercx.sys", "10.0.22621.1", "MicaNT NetAdapter WDF Class Extension");
-    verDb.RegisterModule("e1000e.sys", "10.0.22621.1", "MicaNT Intel Gigabit PCIe Miniport Driver");
-    verDb.RegisterModule("netio.sys", "10.0.22621.1", "MicaNT Network I/O Subsystem Driver");
 }
 
 } // namespace micant::ndis

@@ -17,6 +17,8 @@ namespace micant::sys {
 inline constexpr uint32_t SSN_NtCreateFile               = 0x0055;
 inline constexpr uint32_t SSN_NtOpenFile                 = 0x0033;
 inline constexpr uint32_t SSN_NtReadFile                 = 0x0006;
+// Windows 10 1803–1909 service profile; later Windows profiles vary.
+inline constexpr uint32_t SSN_NtCancelIoFileEx           = 0x0090;
 inline constexpr uint32_t SSN_NtWriteFile                = 0x0008;
 inline constexpr uint32_t SSN_NtDeviceIoControlFile       = 0x0007;
 inline constexpr uint32_t SSN_NtClose                    = 0x000F;
@@ -32,6 +34,7 @@ inline constexpr uint32_t SSN_NtResumeThread             = 0x0052;
 inline constexpr uint32_t SSN_NtWaitForSingleObject      = 0x0004;
 inline constexpr uint32_t SSN_NtContinue                 = 0x0043;
 inline constexpr uint32_t SSN_NtQuerySystemInformation   = 0x0036;
+inline constexpr uint32_t SSN_NtQuerySystemTime          = 0x0047;
 
 // Synchronization & IOCP SSNs
 inline constexpr uint32_t SSN_NtCreateEvent              = 0x0048;
@@ -386,6 +389,7 @@ NtStatus NtQueryDirectoryFile(
 );
 
 // Performance & Process Information
+NtStatus NtQuerySystemTime(LargeInteger* systemTime) noexcept;
 NtStatus NtQueryPerformanceCounter(
     LargeInteger* performanceCounter,
     LargeInteger* performanceFrequency

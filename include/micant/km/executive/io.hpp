@@ -15,9 +15,13 @@
 #include "micant/shared/wdm_resource.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/core/ke.hpp"
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+#include "micant/km/core/sync.hpp"
+#endif
 #include "micant/km/executive/mm.hpp"
 
 namespace micant::io {
+class FileObject;
 
 using micant::IoStatusBlock;
 using micant::LargeInteger;
@@ -118,15 +122,27 @@ struct IO_TELEMETRY {
 };
 
 inline IO_TELEMETRY g_IoTelemetry{};
-inline std::mutex g_IoTelemetryMutex{};
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+class IoTelemetryMutex {
+public:
+    void lock() noexcept { oldIrql_ = spin_.acquire(); }
+    void unlock() noexcept { spin_.release(oldIrql_); }
+private:
+    ke::SpinLock spin_{};
+    ke::KIRQL oldIrql_{};
+};
+#else
+using IoTelemetryMutex = std::mutex;
+#endif
+inline IoTelemetryMutex g_IoTelemetryMutex{};
 
 inline IO_TELEMETRY IoQueryTelemetry() {
-    std::lock_guard<std::mutex> lock(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lock(g_IoTelemetryMutex);
     return g_IoTelemetry;
 }
 
 inline void IoResetTelemetryForTesting() {
-    std::lock_guard<std::mutex> lock(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lock(g_IoTelemetryMutex);
     g_IoTelemetry = IO_TELEMETRY{};
 }
 
@@ -239,6 +255,7 @@ struct Irp {
     uint32_t flags{0};
     IoStatusBlock ioStatus{};
     DeviceObject* deviceObject{nullptr};
+    FileObject* fileObject{nullptr};
     void* userBuffer{nullptr};
     void* systemBuffer{nullptr};
     void* mdlAddress{nullptr};
@@ -254,6 +271,7 @@ struct Irp {
     int8_t stackCount{IRP_MAX_STACK_LOCATIONS};
     int8_t currentStackLocation{1};
     IoStackLocation stackLocations[IRP_MAX_STACK_LOCATIONS]{};
+    bool pendingReturned{false};
 
     [[nodiscard]] IoStackLocation* getCurrentStack() noexcept {
         int idx = currentStackLocation - 1;
@@ -373,14 +391,14 @@ inline bool IoCancelIrp(Irp* irp) noexcept {
     irp->cancelRoutine = nullptr;
 
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalIrpsCancelled++;
     }
 
     if (cancelRoutine) {
         irp->cancelIrql = oldIrql;
         {
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalCancelRoutinesInvoked++;
         }
         cancelRoutine(irp->deviceObject, irp);
@@ -401,15 +419,99 @@ struct CompletionPacket {
     uint64_t completionKey{0};
     uintptr_t overlapped{0};
     IoStatusBlock ioStatus{};
-    uint32_t bytesTransferred{0};
+    uintptr_t bytesTransferred{0};
 };
 
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+// Dispatcher-backed FIFO. Handles and waiters must each retain an Ob reference
+// until they finish; no caller may delete the port while a wait is active.
+class IoCompletionPort {
+public:
+    struct Node { CompletionPacket packet{}; Node* next{}; };
+    static Node* reserveCompletion() noexcept { return new (std::nothrow_t{}) Node{}; }
+    void postReservedCompletion(Node* node, uint64_t key, uintptr_t overlapped,
+                                NtStatus status, uintptr_t bytes) noexcept {
+        node->packet = {key, overlapped, {status, bytes}, bytes};
+        node->next = nullptr;
+        ke::SpinLockGuard guard(lock_);
+        if (tail_) tail_->next = node; else head_ = node;
+        tail_ = node; ++count_;
+        (void)ready_.set();
+    }
+    explicit IoCompletionPort(uint32_t maximum = 0) noexcept : maxConcurrentThreads_(maximum) {}
+    ~IoCompletionPort() {
+        while (head_) { auto* node = head_; head_ = node->next; delete node; }
+    }
+    IoCompletionPort(const IoCompletionPort&) = delete;
+    IoCompletionPort& operator=(const IoCompletionPort&) = delete;
+    NtStatus postCompletion(uint64_t key, uintptr_t overlapped, NtStatus status, uintptr_t bytes) {
+        if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidDeviceRequest;
+        auto* node = new (std::nothrow_t{}) Node{};
+        if (!node) return NtStatus::NoMemory;
+        postReservedCompletion(node, key, overlapped, status, bytes);
+        return NtStatus::Success;
+    }
+    NtStatus removeCompletion(uint64_t& key, uintptr_t& overlapped, IoStatusBlock& status,
+                              uint32_t timeoutMs = 0xffffffffu) {
+        return removeCompletionTimed(key, overlapped, status,
+            timeoutMs == 0xffffffffu ? UINT64_MAX : uint64_t{timeoutMs} * 10000u);
+    }
+    NtStatus removeCompletionTimed(uint64_t& key, uintptr_t& overlapped, IoStatusBlock& status,
+                                   uint64_t timeout100ns) {
+        if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidDeviceRequest;
+        uint64_t due{};
+        if (timeout100ns && timeout100ns != UINT64_MAX) {
+            uint64_t now{};
+            if (!ke::KeQueryUptime100ns(now) || timeout100ns > UINT64_MAX - now)
+                return NtStatus::NotSupported;
+            due = now + timeout100ns;
+        }
+        for (;;) {
+            Node* node{};
+            {
+                ke::SpinLockGuard guard(lock_);
+                node = head_;
+                if (node) {
+                    head_ = node->next;
+                    if (!head_) tail_ = nullptr;
+                    --count_;
+                }
+                if (!head_) (void)ready_.reset();
+            }
+            if (node) {
+                key = node->packet.completionKey; overlapped = node->packet.overlapped;
+                status = node->packet.ioStatus; delete node;
+                return NtStatus::Success;
+            }
+            if (!timeout100ns) return NtStatus::Timeout;
+            uint64_t remaining = 0;
+            if (timeout100ns != UINT64_MAX) {
+                uint64_t now{};
+                if (!ke::KeQueryUptime100ns(now)) return NtStatus::NotSupported;
+                if (now >= due) return NtStatus::Timeout;
+                remaining = due - now;
+            }
+            const auto waitStatus = ready_.wait(false, false, remaining);
+            if (waitStatus != NtStatus::Success) return waitStatus;
+        }
+    }
+    [[nodiscard]] size_t getQueuedCount() noexcept { ke::SpinLockGuard guard(lock_); return count_; }
+    [[nodiscard]] uint32_t getMaxConcurrentThreads() const noexcept { return maxConcurrentThreads_; }
+private:
+    uint32_t maxConcurrentThreads_{};
+    ke::SpinLock lock_{};
+    sync::detail::BootstrapEvent ready_{true, false};
+    Node* head_{};
+    Node* tail_{};
+    size_t count_{};
+};
+#else
 class IoCompletionPort {
 public:
     explicit IoCompletionPort(uint32_t maxConcurrentThreads = 0)
         : maxConcurrentThreads_(maxConcurrentThreads) {}
 
-    NtStatus postCompletion(uint64_t completionKey, uintptr_t overlapped, NtStatus status, uint32_t bytesTransferred) {
+    NtStatus postCompletion(uint64_t completionKey, uintptr_t overlapped, NtStatus status, uintptr_t bytesTransferred) {
         std::unique_lock<std::mutex> lock(mutex_);
         queue_.push(CompletionPacket{
             .completionKey = completionKey,
@@ -467,6 +569,7 @@ private:
     std::mutex mutex_;
     std::condition_variable cv_;
 };
+#endif
 
 // ============================================================================
 // 5. I/O Manager Central Engine
@@ -495,7 +598,7 @@ public:
         devices_[dev->deviceName] = dev;
 
         {
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalDevicesCreated++;
         }
 
@@ -540,7 +643,7 @@ public:
         devices_.erase(device->deviceName);
 
         {
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalDevicesDeleted++;
         }
     }
@@ -596,6 +699,11 @@ inline void IoCopyCurrentIrpStackLocationToNext(Irp* irp) noexcept {
     }
 }
 
+inline void IoMarkIrpPending(Irp* irp) noexcept {
+    if (!irp || irp->currentStackLocation < 1 || irp->currentStackLocation > irp->stackCount) return;
+    irp->stackLocations[irp->currentStackLocation - 1].control |= SL_PENDING_RETURNED;
+}
+
 inline void IoSetCompletionRoutine(
     Irp* irp,
     NtStatus (*routine)(DeviceObject*, Irp*, void*),
@@ -629,7 +737,7 @@ inline Irp* IoAllocateIrp(int8_t stackSize = IRP_MAX_STACK_LOCATIONS, bool charg
     if (irp) {
         irp->stackCount = (stackSize > 0 && stackSize <= IRP_MAX_STACK_LOCATIONS) ? stackSize : IRP_MAX_STACK_LOCATIONS;
         irp->currentStackLocation = irp->stackCount;
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalIrpsAllocated++;
     }
     return irp;
@@ -638,7 +746,7 @@ inline Irp* IoAllocateIrp(int8_t stackSize = IRP_MAX_STACK_LOCATIONS, bool charg
 inline void IoFreeIrp(Irp* irp) noexcept {
     if (!irp) return;
     delete irp;
-    std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
     g_IoTelemetry.totalIrpsFreed++;
 }
 
@@ -649,24 +757,26 @@ inline void IoFreeIrp(Irp* irp) noexcept {
 inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
     (void)priorityBoost;
     if (!irp) return NtStatus::InvalidParameter;
-
-    while (irp->currentStackLocation <= irp->stackCount) {
-        auto* stack = IoGetCurrentIrpStackLocation(irp);
-        if (stack && stack->completionRoutine) {
-            bool success = NT_SUCCESS(irp->ioStatus.status);
-            bool isCancel = (irp->ioStatus.status == NtStatus::Cancelled);
-            bool invoke = (success && (stack->control & SL_INVOKE_ON_SUCCESS)) ||
-                          (!success && !isCancel && (stack->control & SL_INVOKE_ON_ERROR)) ||
-                          (isCancel && (stack->control & SL_INVOKE_ON_CANCEL));
-            if (invoke) {
-                NtStatus st = stack->completionRoutine(stack->deviceObject, irp, stack->context);
-                if (st == NtStatus::MoreProcessingRequired) {
-                    return NtStatus::MoreProcessingRequired;
-                }
-            }
+    while (irp->currentStackLocation >= 1 && irp->currentStackLocation <= irp->stackCount) {
+        auto* stack = &irp->stackLocations[irp->currentStackLocation - 1];
+        irp->pendingReturned = (stack->control & SL_PENDING_RETURNED) != 0;
+        const bool success = NT_SUCCESS(irp->ioStatus.status);
+        const bool invoke = stack->completionRoutine &&
+            ((success && (stack->control & SL_INVOKE_ON_SUCCESS)) ||
+             (!success && (stack->control & SL_INVOKE_ON_ERROR)) ||
+             (irp->cancel && (stack->control & SL_INVOKE_ON_CANCEL)));
+        const auto routine = stack->completionRoutine;
+        auto* context = stack->context;
+        ++irp->currentStackLocation;
+        if (invoke) {
+            auto* device = irp->currentStackLocation <= irp->stackCount
+                ? irp->stackLocations[irp->currentStackLocation - 1].deviceObject : nullptr;
+            // The callback may dispose of the IRP when it stops unwinding.
+            if (routine(device, irp, context) == NtStatus::MoreProcessingRequired)
+                return NtStatus::MoreProcessingRequired;
+        } else if (irp->pendingReturned && irp->currentStackLocation <= irp->stackCount) {
+            irp->stackLocations[irp->currentStackLocation - 1].control |= SL_PENDING_RETURNED;
         }
-        if (irp->currentStackLocation >= irp->stackCount) break;
-        irp->currentStackLocation++;
     }
 
     // Handle Buffering Teardown
@@ -676,14 +786,18 @@ inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
                  irp->majorFunction == IRP_MJ_DEVICE_CONTROL ||
                  irp->majorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) &&
                 irp->systemBuffer && irp->userBuffer) {
-                size_t copyBytes = irp->ioStatus.information > 0 ? irp->ioStatus.information : irp->length;
-                std::memcpy(irp->userBuffer, irp->systemBuffer, copyBytes);
+                if (irp->ioStatus.information > irp->length) {
+                    irp->ioStatus.status = NtStatus::InvalidParameter;
+                    irp->ioStatus.information = 0;
+                } else if (irp->ioStatus.information) {
+                    std::memcpy(irp->userBuffer, irp->systemBuffer, irp->ioStatus.information);
+                }
             }
             if (irp->systemBuffer) {
                 std::free(irp->systemBuffer);
                 irp->systemBuffer = nullptr;
             }
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalBufferedIoBytes += irp->ioStatus.information;
         } else if (irp->deviceObject->flags & DO_DIRECT_IO) {
             if (irp->mdlAddress) {
@@ -692,16 +806,16 @@ inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
                 mm::IoFreeMdl(mdl);
                 irp->mdlAddress = nullptr;
             }
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalDirectIoBytes += irp->ioStatus.information;
         } else {
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalNeitherIoBytes += irp->ioStatus.information;
         }
     }
 
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalIrpsCompleted++;
     }
 
@@ -734,7 +848,7 @@ inline NtStatus IoCallDriver(DeviceObject* device, Irp* irp) {
     irp->deviceObject = target;
 
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalIrpsDispatched++;
     }
 
@@ -904,7 +1018,7 @@ inline void IoStartPacket(
         IoReleaseCancelSpinLock(oldIrql);
 
         {
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalDeviceQueuePacketsStarted++;
         }
 
@@ -916,7 +1030,7 @@ inline void IoStartPacket(
         IoReleaseCancelSpinLock(oldIrql);
 
         {
-            std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+            std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
             g_IoTelemetry.totalDeviceQueuePacketsQueued++;
         }
     }
@@ -945,7 +1059,7 @@ inline void IoStartNextPacket(DeviceObject* device, bool cancelable = false) {
     IoReleaseCancelSpinLock(oldIrql);
 
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalDeviceQueuePacketsStarted++;
     }
 
@@ -967,28 +1081,28 @@ inline bool IoFastRead(
     IoStatusBlock* ioStatus
 ) {
     if (!device || !device->driverObject || !device->driverObject->fastIoDispatch) {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoBypasses++;
         return false;
     }
     auto* fastIo = device->driverObject->fastIoDispatch;
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoReads++;
     }
     if (fastIo->fastIoReadEx) {
         bool res = fastIo->fastIoReadEx(fileObject, offset, length, wait, 0, buffer, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
     if (fastIo->fastIoRead) {
         bool res = fastIo->fastIoRead(fileObject, offset, length, wait, buffer, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
-    std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
     g_IoTelemetry.totalFastIoBypasses++;
     return false;
 }
@@ -1004,28 +1118,28 @@ inline bool IoFastRead(
     IoStatusBlock* ioStatus
 ) {
     if (!device || !device->driverObject || !device->driverObject->fastIoDispatch) {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoBypasses++;
         return false;
     }
     auto* fastIo = device->driverObject->fastIoDispatch;
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoReads++;
     }
     if (fastIo->fastIoReadEx) {
         bool res = fastIo->fastIoReadEx(fileObject, offset, length, wait, lockKey, buffer, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
     if (fastIo->fastIoRead) {
         bool res = fastIo->fastIoRead(fileObject, offset, length, wait, buffer, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
-    std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
     g_IoTelemetry.totalFastIoBypasses++;
     return false;
 }
@@ -1040,28 +1154,28 @@ inline bool IoFastWrite(
     IoStatusBlock* ioStatus
 ) {
     if (!device || !device->driverObject || !device->driverObject->fastIoDispatch) {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoBypasses++;
         return false;
     }
     auto* fastIo = device->driverObject->fastIoDispatch;
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoWrites++;
     }
     if (fastIo->fastIoWriteEx) {
         bool res = fastIo->fastIoWriteEx(fileObject, offset, length, wait, 0, buffer, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
     if (fastIo->fastIoWrite) {
         bool res = fastIo->fastIoWrite(fileObject, offset, length, wait, buffer, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
-    std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
     g_IoTelemetry.totalFastIoBypasses++;
     return false;
 }
@@ -1078,22 +1192,22 @@ inline bool IoFastDeviceControl(
     IoStatusBlock* ioStatus
 ) {
     if (!device || !device->driverObject || !device->driverObject->fastIoDispatch) {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoBypasses++;
         return false;
     }
     auto* fastIo = device->driverObject->fastIoDispatch;
     {
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         g_IoTelemetry.totalFastIoDeviceControls++;
     }
     if (fastIo->fastIoDeviceControl) {
         bool res = fastIo->fastIoDeviceControl(fileObject, wait, inBuf, inLen, outBuf, outLen, ioctl, ioStatus, device);
-        std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+        std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
         if (res) g_IoTelemetry.totalFastIoSuccesses++; else g_IoTelemetry.totalFastIoBypasses++;
         return res;
     }
-    std::lock_guard<std::mutex> lk(g_IoTelemetryMutex);
+    std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
     g_IoTelemetry.totalFastIoBypasses++;
     return false;
 }

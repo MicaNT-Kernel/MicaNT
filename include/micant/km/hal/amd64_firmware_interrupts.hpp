@@ -30,6 +30,16 @@ struct BootstrapInterruptTopology {
 [[nodiscard]] bool discoverBootstrapInterruptTopology(
     const boot::UefiKernelHandoffV3& handoff, BootstrapInterruptTopology& output) noexcept;
 [[nodiscard]] const BootstrapInterruptTopology* bootstrapInterruptTopology() noexcept;
+// Conservative Intel VT-d inventory. Direct DMA is enabled only if firmware
+// describes an include-all DRHD for segment 0 and every unit has translation
+// disabled; unknown or unsupported topologies remain unavailable.
+[[nodiscard]] bool initializeBootstrapDmaTranslationState(
+    const boot::UefiKernelHandoffV3& handoff) noexcept;
+[[nodiscard]] bool bootstrapDirectDmaAvailable() noexcept;
+[[nodiscard]] bool acquireBootstrapDirectDmaLease() noexcept;
+void releaseBootstrapDirectDmaLease() noexcept;
+[[nodiscard]] bool beginBootstrapIommuTransition() noexcept;
+void endBootstrapIommuTransition() noexcept;
 
 } // namespace micant::hal::amd64
 

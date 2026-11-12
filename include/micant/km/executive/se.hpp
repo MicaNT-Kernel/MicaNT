@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -17,6 +19,56 @@
 #include "micant/km/executive/ob.hpp"
 
 namespace micant::se {
+
+#if defined(MICANT_FREESTANDING)
+// Fixed-capacity primary token body for the canonical freestanding Ps path.
+// It stores binary SIDs and enabled group attributes without hosted STL or
+// parallel identity tables. Ob owns its lifetime through ObjectHeader.
+struct SidValue {
+    uint8_t Revision{1};
+    uint8_t SubAuthorityCount{};
+    uint8_t IdentifierAuthority[6]{};
+    uint32_t SubAuthority[8]{};
+    [[nodiscard]] bool equals(const SidValue& other) const noexcept;
+};
+struct TokenGroupValue {
+    SidValue Sid{};
+    uint32_t Attributes{};
+};
+struct FreestandingAccessToken {
+    static constexpr size_t MaximumGroups = 16;
+    SidValue UserSid{};
+    std::array<TokenGroupValue, MaximumGroups> Groups{};
+    uint32_t GroupCount{};
+    uint32_t IntegrityLevel{};
+    uint64_t EnabledPrivileges{};
+    bool IsPrimary{true};
+    bool IsSystem{};
+    [[nodiscard]] bool hasEnabledGroup(const SidValue& sid) const noexcept;
+    [[nodiscard]] bool matchesSid(const SidValue& sid, bool includeDenyOnly) const noexcept;
+};
+inline constexpr uint32_t SE_NETWORK_CONFIG_WRITE = 0x00000001;
+enum class FreestandingAceType : uint8_t { Deny = 0, Allow = 1 };
+struct FreestandingAce {
+    SidValue Sid{};
+    uint32_t AccessMask{};
+    FreestandingAceType Type{FreestandingAceType::Allow};
+};
+struct FreestandingSecurityDescriptor {
+    SidValue Owner{};
+    std::array<FreestandingAce, 16> Dacl{};
+    uint8_t AceCount{};
+};
+[[nodiscard]] NtStatus SeCreateFreestandingPrimaryToken(bool system,
+    FreestandingAccessToken*& token, ob::ObjectHeader*& reference) noexcept;
+void SeDereferenceFreestandingToken(ob::ObjectHeader* reference) noexcept;
+[[nodiscard]] const FreestandingAccessToken* SeGetEffectiveFreestandingToken(
+    const FreestandingAccessToken* primary, const FreestandingAccessToken* impersonation) noexcept;
+[[nodiscard]] bool SeAccessCheckFreestanding(const FreestandingAccessToken* token,
+    const FreestandingSecurityDescriptor& descriptor, uint32_t desiredAccess,
+    uint32_t& grantedAccess) noexcept;
+void SeInitializeNetworkConfigurationAcl(FreestandingSecurityDescriptor& descriptor) noexcept;
+#endif
 
 // ============================================================================
 // Standard Access Rights & Masks (aligned with Win32/NT security model)

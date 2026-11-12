@@ -236,7 +236,13 @@ bool deferProcessObjectDelete(ob::ObjectHeader* header) noexcept {
 }
 
 EProcess::EProcess() = default;
-EProcess::~EProcess() = default;
+EProcess::~EProcess() {
+    if (primaryTokenReference_) {
+        se::SeDereferenceFreestandingToken(primaryTokenReference_);
+        primaryTokenReference_ = nullptr;
+        primaryToken_ = nullptr;
+    }
+}
 
 size_t EProcess::activeThreadCount() const noexcept {
     ob::detail::HandleTableGuard guard;
@@ -590,6 +596,11 @@ NtStatus EProcess::detachThread(ke::KThread& thread) noexcept {
 }
 
 EThread::~EThread() {
+    if (impersonationTokenReference_) {
+        se::SeDereferenceFreestandingToken(impersonationTokenReference_);
+        impersonationTokenReference_ = nullptr;
+        impersonationToken_ = nullptr;
+    }
     if (thread_ || stack_ || process_ || reapProcessReference_ || processDetached_) __builtin_trap();
 }
 
@@ -1910,7 +1921,7 @@ NtStatus NtCreateProcessEx(Handle* processHandle, uint32_t desiredAccess,
     if (result == NtStatus::Success)
         result = ps::detail::createProcessObject(child, childReference);
     if (result == NtStatus::Success)
-        ps::detail::inheritProcessSecurityContext(*child, *parent);
+        result = ps::detail::inheritProcessSecurityContext(*child, *parent);
     if (result == NtStatus::Success && imageSection) {
         uintptr_t originalRoot{};
         __asm__ __volatile__("movq %%cr3, %0" : "=r"(originalRoot));

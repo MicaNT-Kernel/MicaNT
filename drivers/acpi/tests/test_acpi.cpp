@@ -137,7 +137,7 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
     // Stage 9: Thermal Zone (_TMP, _CRT, _AC0) Telemetry
     uint32_t tenthsK = 0;
     auto bTmp = acpi::AcpiGetThermalZoneTemp(&tenthsK);
-    TEST_ASSERT(bTmp == win32::TRUE, "AcpiGetThermalZoneTemp must succeed");
+    TEST_ASSERT(bTmp == TRUE, "AcpiGetThermalZoneTemp must succeed");
     TEST_ASSERT(tenthsK == 3182, "_TMP must return 3182 (318.2 K = 45.0 C)");
 
     auto crtVal = ns.evaluate("\\_TZ.TZ00._CRT");
@@ -149,7 +149,7 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
     // Stage 10: Smart Battery Subsystem (_BST & _BIF)
     uint32_t bState = 0, bRate = 0, bCap = 0, bVolt = 0;
     auto bBat = acpi::AcpiGetBatteryStatus(&bState, &bRate, &bCap, &bVolt);
-    TEST_ASSERT(bBat == win32::TRUE, "AcpiGetBatteryStatus must succeed");
+    TEST_ASSERT(bBat == TRUE, "AcpiGetBatteryStatus must succeed");
     TEST_ASSERT(bCap == 75000, "Battery remaining capacity must report 75000 mWh");
     TEST_ASSERT(bVolt == 15400, "Battery voltage must report 15400 mV (15.4V)");
 
@@ -159,7 +159,7 @@ void Test_ACPI_Platform_And_AML_Interpreter_Subsystem() {
     TEST_ASSERT(pState == 0, "Initial power state must be S0 (Working)");
 
     auto bSleep = acpi::AcpiSetSystemPowerState(3); // Transition S3
-    TEST_ASSERT(bSleep == win32::TRUE, "Transition to S3 Suspend-to-RAM must succeed");
+    TEST_ASSERT(bSleep == TRUE, "Transition to S3 Suspend-to-RAM must succeed");
     acpi::AcpiGetSystemPowerState(&pState);
     TEST_ASSERT(pState == 0, "Power state must return to S0 after wake handshake");
 

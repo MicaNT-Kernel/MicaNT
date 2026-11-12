@@ -1,5 +1,6 @@
 #include "micant/km/hal/amd64_firmware_interrupts.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/km/executive/arbiter.hpp"
 #include <cstring>
 
 namespace micant::hal::amd64 {
@@ -156,6 +157,145 @@ bool discoverBootstrapInterruptTopology(const boot::UefiKernelHandoffV3& handoff
 }
 const BootstrapInterruptTopology* bootstrapInterruptTopology() noexcept {
     return g_topologyAvailable ? &g_topology : nullptr;
+}
+
+namespace {
+volatile uint32_t* g_dmaRemappingUnits[16]{};
+size_t g_dmaRemappingUnitCount{};
+bool g_directDmaInventoryReady{};
+uint32_t g_directDmaLeases{};
+bool g_iommuTransitionPending{};
+}
+
+bool initializeBootstrapDmaTranslationState(const boot::UefiKernelHandoffV3& handoff) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    bool success = false;
+    do {
+        if (g_directDmaInventoryReady || g_dmaRemappingUnitCount ||
+            handoff.memoryMapDescriptorSize < sizeof(uefi::EfiMemoryDescriptor) ||
+            !handoff.memoryMapSize || handoff.memoryMapSize % handoff.memoryMapDescriptorSize ||
+            handoff.memoryMapSize > UINT64_MAX - handoff.memoryMapAddress ||
+            !bootstrapKernelRange(handoff.memoryMapAddress, handoff.memoryMapSize, false)) break;
+        uint32_t eax{}, ebx{}, ecx{}, edx{};
+        __asm__ __volatile__("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0), "c"(0));
+        if (ebx != 0x756e6547u || edx != 0x49656e69u || ecx != 0x6c65746eu) break;
+        const uint64_t rsdpPhysical = handoff.acpiTablePhysicalAddress;
+        if (!copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, 20) ||
+            std::memcmp(g_rsdpBuffer, "RSD PTR ", 8) || !checksum(g_rsdpBuffer, 20)) break;
+        uint64_t root = read<uint32_t>(g_rsdpBuffer + 16);
+        bool xsdt = false;
+        if (g_rsdpBuffer[15] >= 2) {
+            if (!copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, 36)) break;
+            const size_t length = read<uint32_t>(g_rsdpBuffer + 20);
+            if (length < 36 || length > sizeof(g_rsdpBuffer) ||
+                !copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, length) ||
+                !checksum(g_rsdpBuffer, length)) break;
+            const auto candidate = read<uint64_t>(g_rsdpBuffer + 24);
+            if (candidate) { root = candidate; xsdt = true; }
+        }
+        size_t rootSize{};
+        const auto* entries = table(handoff, root, xsdt ? "XSDT" : "RSDT", rootSize);
+        const size_t stride = xsdt ? 8 : 4;
+        if (!entries || (rootSize - headerSize) % stride) break;
+        uint64_t dmarPhysical{};
+        bool invalid = false;
+        for (size_t offset = headerSize; offset < rootSize; offset += stride) {
+            const auto physical = xsdt ? read<uint64_t>(entries + offset) : read<uint32_t>(entries + offset);
+            uint8_t signature[4]{};
+            if (!copyFirmware(handoff, physical, signature, sizeof(signature))) { invalid = true; break; }
+            if (!std::memcmp(signature, "IVRS", 4)) { invalid = true; break; }
+            if (!std::memcmp(signature, "DMAR", 4)) {
+                if (dmarPhysical) { invalid = true; break; }
+                dmarPhysical = physical;
+            }
+        }
+        if (invalid || !dmarPhysical) break;
+        size_t length{};
+        const auto* dmar = table(handoff, dmarPhysical, "DMAR", length);
+        if (!dmar || length < 48) break;
+        bool includeAll = false;
+        for (size_t offset = 48; offset < length;) {
+            if (length - offset < 4) { invalid = true; break; }
+            const uint16_t kind = read<uint16_t>(dmar + offset);
+            const uint16_t size = read<uint16_t>(dmar + offset + 2);
+            if (size < 4 || size > length - offset) { invalid = true; break; }
+            // Other DMAR structures can impose reserved ranges or remapping
+            // semantics not yet represented by the bootstrap DMA owner.
+            if (kind != 0) { invalid = true; break; }
+            if (kind == 0) {
+                if (size < 16 || read<uint16_t>(dmar + offset + 6) != 0 ||
+                    g_dmaRemappingUnitCount == 16) { invalid = true; break; }
+                const auto physical = read<uint64_t>(dmar + offset + 8);
+                if (!physical || (physical & 4095)) { invalid = true; break; }
+                // The root arbiter retains each remapping register range for
+                // the kernel IOMMU owner throughout the direct DMA lifetime.
+                if (!km::arb::reservePhysicalRange(physical, 4096)) { invalid = true; break; }
+                auto* unit = static_cast<volatile uint32_t*>(mapBootstrapDeviceMemory(physical, 4096));
+                if (!unit) { invalid = true; break; }
+                g_dmaRemappingUnits[g_dmaRemappingUnitCount++] = unit;
+                if (!protectBootstrapIommuRegisters(physical, 4096, const_cast<uint32_t*>(unit))) { invalid = true; break; }
+                if (!unit[0] || unit[0] == UINT32_MAX || (unit[0x1c / 4] & (1u << 31))) {
+                    invalid = true; break;
+                }
+                includeAll |= (dmar[offset + 4] & 1u) != 0;
+            }
+            offset += size;
+        }
+        if (invalid || !includeAll || !g_dmaRemappingUnitCount) break;
+        commitBootstrapIommuProtection();
+        g_directDmaInventoryReady = true;
+        success = true;
+    } while (false);
+    if (!success) {
+        while (g_dmaRemappingUnitCount) {
+            auto* unit = g_dmaRemappingUnits[--g_dmaRemappingUnitCount];
+            if (!releaseBootstrapDeviceMemory(const_cast<uint32_t*>(unit), 4096)) __builtin_trap();
+            g_dmaRemappingUnits[g_dmaRemappingUnitCount] = nullptr;
+        }
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return success;
+}
+
+bool bootstrapDirectDmaAvailable() noexcept {
+    if (!g_directDmaInventoryReady || !g_dmaRemappingUnitCount) return false;
+    for (size_t i = 0; i < g_dmaRemappingUnitCount; ++i)
+        if (!g_dmaRemappingUnits[i] || (g_dmaRemappingUnits[i][0x1c / 4] & (1u << 31)))
+            return false;
+    return true;
+}
+
+bool acquireBootstrapDirectDmaLease() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const bool ok = !g_iommuTransitionPending && bootstrapDirectDmaAvailable() &&
+        g_directDmaLeases != UINT32_MAX;
+    if (ok) ++g_directDmaLeases;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return ok;
+}
+void releaseBootstrapDirectDmaLease() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (!g_directDmaLeases) __builtin_trap();
+    --g_directDmaLeases;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+}
+bool beginBootstrapIommuTransition() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const bool ok = !g_iommuTransitionPending && !g_directDmaLeases;
+    if (ok) g_iommuTransitionPending = true;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return ok;
+}
+void endBootstrapIommuTransition() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (!g_iommuTransitionPending) __builtin_trap();
+    g_iommuTransitionPending = false;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
 }
 } // namespace micant::hal::amd64
 

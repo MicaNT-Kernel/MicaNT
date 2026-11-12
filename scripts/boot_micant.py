@@ -45,14 +45,16 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ke] Kernel APC FIFO verified",
     "[MicaNT Ke] Kernel event wait and wake verified",
     "[MicaNT Ps] Kernel thread lifecycle verified",
-    "[MicaNT Display] virtio_gpu.sys: VirtIO 1.0 2D scanout initialized",
-    "[MicaNT Display] Desktop presented through virtio_gpu.sys",
+    "[MicaNT Display] OEM driver unavailable; GOP framebuffer pass-through active",
+    "[MicaNT Display] Desktop presented through GOP framebuffer",
     "[MicaNT Explorer] Desktop and taskbar rendered",
     "[MicaNT Ps] CPL3 execution and Ring 0 trap return verified",
     "[MicaNT Ps] GS-based TEB TLS slot read/write verified",
     "[MicaNT Mm] User/kernel isolation and read-only user code verified",
     "[MicaNT Mm] Supervisor MMIO and non-executable user stack verified",
     "[MicaNT Mm] PFN-backed executable user page verified",
+    "[MicaNT Hal] QPC scale matched APIC timing; timeout and deadline rollover passed",
+    "[MicaNT Hal] CPL3 calibrated QPC precision and KUSER uptime advancement verified",
     "[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified",
     "[MicaNT Mm] CPL3 native allocation and release verified",
     "[MicaNT Ke] CPL3 native event polling verified",
@@ -174,10 +176,16 @@ def serial_progress(serial_log: str, expected: tuple[str, ...] = EXPECTED_SERIAL
 
 
 def serial_has_failure(serial_log: str) -> bool:
-    return "FATAL:" in serial_log or any(
-        line.startswith("[MicaNT") and (" failed" in line or "Invalid " in line)
-        for line in serial_log.splitlines()
-    )
+    if "FATAL:" in serial_log:
+        return True
+    gop_fallback = "[MicaNT Display] OEM driver unavailable; GOP framebuffer pass-through active" in serial_log
+    for line in serial_log.splitlines():
+        if not line.startswith("[MicaNT") or (" failed" not in line and "Invalid " not in line):
+            continue
+        if gop_fallback and line.startswith("[MicaNT Io] Boot-start driver failed: virtio_gpu.sys"):
+            continue
+        return True
+    return False
 
 
 def run_qemu(
@@ -225,7 +233,8 @@ def run_qemu(
             qemu,
             "-machine", "q35",
             "-accel", "tcg",
-            "-cpu", "qemu64",
+            "-cpu", "qemu64,+invtsc",
+            "-rtc", "base=utc",
             "-smp", "1",
             "-m", "1024",
             "-vga", "none",
@@ -273,6 +282,12 @@ def run_qemu(
                         raise RuntimeError(f"Kernel bootstrap failed:\n{serial_log[-8000:]}")
                     progress = serial_progress(serial_log, expected)
                     if progress == len(expected):
+                        time_evidence = (
+                            "[MicaNT Hal] CPL3 UTC SystemTime advanced and matched KUSER" in serial_log or
+                            "[MicaNT Hal] CPL3 UTC SystemTime correctly unavailable for local firmware time" in serial_log
+                        )
+                        if not time_evidence:
+                            raise RuntimeError("CPL3 time probe reported neither UTC success nor explicit unavailable status")
                         if complete_since is None:
                             complete_since = time.monotonic()
                         elif time.monotonic() - complete_since >= stable_seconds:

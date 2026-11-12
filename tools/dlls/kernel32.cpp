@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "micant/shared/system_time.hpp"
 
 extern "C" {
 
@@ -34,6 +35,98 @@ static inline uint64_t SyscallDispatch(uint64_t ssn, uint64_t arg1 = 0, uint64_t
     );
 #endif
     return res;
+}
+
+struct SystemTime {
+    uint16_t year, month, dayOfWeek, day, hour, minute, second, milliseconds;
+};
+struct FileTime { uint32_t low, high; };
+static_assert(sizeof(SystemTime) == 16 && sizeof(FileTime) == 8);
+
+static bool querySystemTimeFields(micant::shared::time::SystemTimeFields& fields) noexcept {
+    int64_t ticks{};
+    if (static_cast<int64_t>(SyscallDispatch(0x47,
+            reinterpret_cast<uint64_t>(&ticks))) < 0) return false;
+    return micant::shared::time::fromSystemTime100ns(static_cast<uint64_t>(ticks), fields);
+}
+
+__declspec(dllexport) void GetSystemTime(SystemTime* output) noexcept {
+    if (!output) return;
+    micant::shared::time::SystemTimeFields value{};
+    if (!querySystemTimeFields(value)) return;
+    *output = {value.year, value.month, value.weekday, value.day, value.hour,
+        value.minute, value.second, value.milliseconds};
+}
+
+__declspec(dllexport) void GetLocalTime(SystemTime* output) noexcept {
+    if (!output) return;
+    micant::shared::time::SystemTimeFields current{};
+    if (!querySystemTimeFields(current)) return;
+    const SystemTime utc{current.year, current.month, current.weekday, current.day,
+        current.hour, current.minute, current.second, current.milliseconds};
+    const auto* shared = reinterpret_cast<const volatile uint8_t*>(0x7FFE0000ULL);
+    const volatile int32_t* high1 = reinterpret_cast<const volatile int32_t*>(shared + 0x24);
+    const volatile uint32_t* low = reinterpret_cast<const volatile uint32_t*>(shared + 0x20);
+    const volatile int32_t* high2 = reinterpret_cast<const volatile int32_t*>(shared + 0x28);
+    int64_t biasTicks{};
+    bool stable = false;
+    for (unsigned retry = 0; retry < 8; ++retry) {
+        const int32_t first = *high1;
+        const uint32_t middle = *low;
+        const int32_t second = *high2;
+        if (first == second) {
+            biasTicks = static_cast<int64_t>(
+                (static_cast<uint64_t>(static_cast<uint32_t>(first)) << 32) | middle);
+            stable = true;
+            break;
+        }
+    }
+    if (!stable || biasTicks % static_cast<int64_t>(micant::shared::time::TicksPerMinute))
+        return;
+    micant::shared::time::SystemTimeFields fields{
+        utc.year, utc.month, utc.day, utc.hour, utc.minute, utc.second,
+        utc.milliseconds, utc.dayOfWeek, 0};
+    uint64_t localTicks{};
+    if (!micant::shared::time::toSystemTime100ns(fields, localTicks)) return;
+    const int64_t delta = -(biasTicks / static_cast<int64_t>(
+        micant::shared::time::TicksPerMinute)) * static_cast<int64_t>(
+        micant::shared::time::TicksPerMinute);
+    if (delta >= 0) {
+        if (localTicks > UINT64_MAX - static_cast<uint64_t>(delta)) return;
+        localTicks += static_cast<uint64_t>(delta);
+    } else {
+        if (localTicks < static_cast<uint64_t>(-delta)) return;
+        localTicks -= static_cast<uint64_t>(-delta);
+    }
+    if (!micant::shared::time::fromSystemTime100ns(localTicks, fields)) return;
+    *output = {fields.year, fields.month, fields.weekday, fields.day, fields.hour,
+        fields.minute, fields.second, fields.milliseconds};
+}
+
+__declspec(dllexport) void GetSystemTimeAsFileTime(FileTime* output) noexcept {
+    if (!output) return;
+    int64_t ticks{};
+    if (static_cast<int64_t>(SyscallDispatch(0x47,
+            reinterpret_cast<uint64_t>(&ticks))) < 0) return;
+    const uint64_t value = static_cast<uint64_t>(ticks);
+    *output = {static_cast<uint32_t>(value), static_cast<uint32_t>(value >> 32)};
+}
+
+__declspec(dllexport) void GetSystemTimePreciseAsFileTime(FileTime* output) noexcept {
+    GetSystemTimeAsFileTime(output);
+}
+
+__declspec(dllexport) bool QueryPerformanceCounter(int64_t* value) noexcept {
+    if (!value) return false;
+    return static_cast<int64_t>(SyscallDispatch(0x31,
+        reinterpret_cast<uint64_t>(value))) >= 0;
+}
+
+__declspec(dllexport) bool QueryPerformanceFrequency(int64_t* value) noexcept {
+    if (!value) return false;
+    int64_t counter{};
+    return static_cast<int64_t>(SyscallDispatch(0x31,
+        reinterpret_cast<uint64_t>(&counter), reinterpret_cast<uint64_t>(value))) >= 0;
 }
 
 // ============================================================================
@@ -214,7 +307,7 @@ __declspec(dllexport) void GetSystemInfo(void* lpSystemInfo) noexcept {
 }
 
 __declspec(dllexport) uint64_t GetTickCount64() noexcept {
-    // Ring 0 KUSER_SHARED_DATA TickCountLowDeprecated at 0x7FFE0320
+    // KUSER_SHARED_DATA TickCountQuad is the monotonic millisecond count.
     const volatile auto* pTick = reinterpret_cast<const volatile uint64_t*>(0x7FFE0320);
     return *pTick;
 }

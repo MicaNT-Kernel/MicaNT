@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(MICANT_BAREMETAL) && defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+#include "micant/km/core/timer_baremetal.hpp"
+#else
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -15,6 +19,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/clock_timer.hpp"
 #include "micant/km/core/sync.hpp"
 #include "micant/km/executive/ob.hpp"
 
@@ -566,3 +571,4 @@ inline void ExDeleteTimer(EX_TIMER* timer) {
 }
 
 } // namespace micant::timer
+#endif

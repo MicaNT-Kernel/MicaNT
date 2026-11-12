@@ -428,7 +428,7 @@
 
 
     void cmdPci(const std::vector<std::string>& tokens, std::ostream& out) {
-        pci::InitializePciSubsystem();
+        pci::InitializePciHostedAdapter();
         auto& sub = pci::TitanPciSubsystem::Instance();
 
         if (tokens.size() > 1 && tokens[1] == "test") {
@@ -1380,7 +1380,7 @@
     void cmdNdis(const std::vector<std::string>& tokens, std::ostream& out) {
         auto& ndisSub = ndis::TitanNdisSubsystem::Instance();
         if (!ndisSub.isInitialized()) {
-            ndis::InitializeNdisSubsystem();
+            ndis::InitializeNdisHostedAdapter();
         }
 
         std::string sub = (tokens.size() > 1) ? tokens[1] : "status";

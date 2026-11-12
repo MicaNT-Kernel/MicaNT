@@ -28,7 +28,6 @@
 #include <atomic>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/km/drivers/storage/ahci_baremetal.hpp"
 
 namespace micant::km::hmb_pagefile {
 
@@ -41,9 +40,6 @@ inline constexpr uint32_t HMB_SECTORS_PER_PAGE  = 8;  // 4096 / 512 = 8
 inline constexpr uint32_t HMB_PAGE_SHIFT        = 12; // 2^12 = 4096
 inline constexpr uint32_t HMB_SECTOR_SHIFT      = 3;  // Page -> Sectors (<< 3)
 
-// Default Pagefile Disk Geometry on Partition 2 (MICA_SYS FAT32)
-// Placed at relative LBA 1,048,576 (512 MB offset into volume)
-inline constexpr uint64_t HMB_DEFAULT_BASE_LBA  = 1048576ULL;
 inline constexpr size_t   HMB_MAX_PAGES         = 65536; // 65,536 pages * 4KB = 256 MB Pagefile
 inline constexpr size_t   HMB_BITMAP_WORDS      = HMB_MAX_PAGES / 64; // 1,024 x 64-bit quadwords
 
@@ -225,13 +221,12 @@ struct HmbTelemetry {
 
 class HmbPagefileManager {
 private:
-    uint64_t     m_baseLba{HMB_DEFAULT_BASE_LBA};
+    uint64_t     m_baseLba{};
     size_t       m_totalSlots{HMB_MAX_PAGES};
     uint64_t     m_bitmap[HMB_BITMAP_WORDS]{0};
     size_t       m_allocatedSlots{0};
     HmbTelemetry m_telemetry{};
     bool         m_initialized{false};
-    bool         m_ahciAvailable{false};
 
 public:
     static HmbPagefileManager& get() noexcept {
@@ -239,7 +234,7 @@ public:
         return instance;
     }
 
-    void initialize(uint64_t baseLba = HMB_DEFAULT_BASE_LBA, size_t totalSlots = HMB_MAX_PAGES) noexcept {
+    void initialize(uint64_t baseLba = 0, size_t totalSlots = HMB_MAX_PAGES) noexcept {
         m_baseLba = baseLba;
         m_totalSlots = (totalSlots <= HMB_MAX_PAGES) ? totalSlots : HMB_MAX_PAGES;
         for (size_t i = 0; i < HMB_BITMAP_WORDS; ++i) {
@@ -248,10 +243,6 @@ public:
         m_allocatedSlots = 0;
         m_telemetry = HmbTelemetry{};
         HmbZSwapEngine::get().initialize();
-
-        // Check if AHCI controller is online
-        auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
-        m_ahciAvailable = ahci.isPort1Online();
 
         m_initialized = true;
     }
@@ -308,8 +299,8 @@ public:
     }
 
     /**
-     * @brief Write an evicted memory page into the HMB backing store.
-     * Evaluates Tier 2 in-RAM compression first; falls back to direct AHCI DMA write.
+     * @brief Write an evicted memory page into the optional in-RAM z-swap tier.
+     * Disk backing is supplied by a storage driver through Io when implemented.
      */
     bool writePage(uint64_t slotIndex, const void* srcPage, HmbTier tier = HmbTier::DirtyHeap) noexcept {
         if (slotIndex >= m_totalSlots || !srcPage) return false;
@@ -326,23 +317,12 @@ public:
             }
         }
 
-        // 2. Direct AHCI SATA DMA Write (8 Sectors = 4KB)
-        if (m_ahciAvailable) {
-            uint64_t lba = slotToLba(slotIndex);
-            auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
-            bool ok = ahci.writeSystemPartitionSectors(lba, HMB_SECTORS_PER_PAGE, srcPage);
-            if (ok) {
-                m_telemetry.totalSectorsWritten += HMB_SECTORS_PER_PAGE;
-                return true;
-            }
-        }
-
-        return true; // Simulated success if AHCI not initialized in test harness
+        return false;
     }
 
     /**
-     * @brief Read a paged-out memory page from the HMB backing store.
-     * Checks Tier 2 z-Swap in RAM first; falls back to direct AHCI DMA read.
+     * @brief Read a page from the optional in-RAM z-swap tier.
+     * Disk-backed page-ins fail until an Io-owned writable pagefile exists.
      */
     bool readPage(uint64_t slotIndex, void* dstPage) noexcept {
         if (slotIndex >= m_totalSlots || !dstPage) return false;
@@ -354,18 +334,7 @@ public:
             return true; // Sub-microsecond register decompression with ZERO DISK I/O!
         }
 
-        // 2. Direct AHCI SATA DMA Read (8 Sectors = 4KB)
-        if (m_ahciAvailable) {
-            uint64_t lba = slotToLba(slotIndex);
-            auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
-            bool ok = ahci.readSystemPartitionSectors(lba, HMB_SECTORS_PER_PAGE, dstPage);
-            if (ok) {
-                m_telemetry.totalSectorsRead += HMB_SECTORS_PER_PAGE;
-                return true;
-            }
-        }
-
-        return true;
+        return false;
     }
 
     /**
@@ -374,19 +343,9 @@ public:
      */
     bool readCluster(uint64_t startSlotIndex, void* dstClusterBuffer, size_t clusterPages = 8) noexcept {
         if (startSlotIndex + clusterPages > m_totalSlots || !dstClusterBuffer) return false;
-        m_telemetry.dmaBurstCount++;
-
-        uint16_t totalSectors = static_cast<uint16_t>(clusterPages * HMB_SECTORS_PER_PAGE);
-        if (m_ahciAvailable) {
-            uint64_t lba = slotToLba(startSlotIndex);
-            auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
-            bool ok = ahci.readSystemPartitionSectors(lba, totalSectors, dstClusterBuffer);
-            if (ok) {
-                m_telemetry.totalSectorsRead += totalSectors;
-                return true;
-            }
-        }
-        return true;
+        (void)dstClusterBuffer;
+        (void)clusterPages;
+        return false;
     }
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_initialized; }

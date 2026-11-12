@@ -8,10 +8,62 @@
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/clock_timer.hpp"
+#include <atomic>
 
 extern "C" volatile bool g_ring3ProbeActive{};
 
 namespace {
+
+#if defined(__x86_64__) || defined(_M_X64)
+std::atomic_flag g_pciConfigLock = ATOMIC_FLAG_INIT;
+
+class PciConfigLockGuard {
+public:
+    PciConfigLockGuard() noexcept {
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(savedFlags_) : : "memory");
+        while (g_pciConfigLock.test_and_set(std::memory_order_acquire))
+            __asm__ __volatile__("pause" : : : "memory");
+    }
+
+    ~PciConfigLockGuard() noexcept {
+        g_pciConfigLock.clear(std::memory_order_release);
+        if (savedFlags_ & (uint64_t{1} << 9))
+            __asm__ __volatile__("sti" : : : "memory");
+    }
+
+    PciConfigLockGuard(const PciConfigLockGuard&) = delete;
+    PciConfigLockGuard& operator=(const PciConfigLockGuard&) = delete;
+
+private:
+    uint64_t savedFlags_{};
+};
+
+void writePciConfigAddress(uint8_t bus, uint8_t device, uint8_t function,
+                           uint8_t registerOffset) noexcept {
+    const uint32_t address = (uint32_t{1} << 31) |
+        (static_cast<uint32_t>(bus) << 16) |
+        (static_cast<uint32_t>(device) << 11) |
+        (static_cast<uint32_t>(function) << 8) | registerOffset;
+    __asm__ __volatile__("outl %0, %w1" : : "a"(address), "Nd"(uint16_t{0xCF8}) : "memory");
+}
+
+uint32_t readPciConfigData() noexcept {
+    uint32_t value{};
+    __asm__ __volatile__("inl %w1, %0" : "=a"(value) : "Nd"(uint16_t{0xCFC}) : "memory");
+    return value;
+}
+
+void writePciConfigData(uint32_t value) noexcept {
+    __asm__ __volatile__("outl %0, %w1" : : "a"(value), "Nd"(uint16_t{0xCFC}) : "memory");
+}
+#endif
+
+bool validPciConfigAddress(uint16_t bus, uint16_t device, uint16_t function,
+                           uint16_t registerOffset) noexcept {
+    return bus <= 0xFF && device <= 31 && function <= 7 &&
+           registerOffset <= 0xFC && (registerOffset & 3) == 0;
+}
 
 constexpr uint64_t kPresent = 1;
 constexpr uint64_t kWritable = 2;
@@ -23,13 +75,26 @@ constexpr uint64_t kGuardLeaf = uint64_t{1} << 10;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
 constexpr uint64_t kUserTebBase = kUserBase + 0x8000;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
+constexpr uint64_t kDeviceMappingWindowSize = 16 * 1024 * 1024;
 constexpr uint64_t kTestBase = uint64_t{130} << 39;
 constexpr uint64_t kUserStackBase = kUserBase + 4096;
 alignas(4096) uint64_t g_pml4[512]{};
 uint64_t g_deviceNext = kDeviceBase;
+struct BootstrapProtectedMmio { uint64_t first{}, last{}, owner{}; };
+BootstrapProtectedMmio g_protectedIommuMmio[16]{};
+size_t g_protectedIommuMmioCount{};
+bool g_iommuProtectionCommitted{};
+bool isProtectedIommuPhysicalPage(uint64_t physical) noexcept {
+    for (size_t i = 0; i < g_protectedIommuMmioCount; ++i)
+        if (physical <= g_protectedIommuMmio[i].last &&
+            g_protectedIommuMmio[i].first <= physical + 4095) return true;
+    return false;
+}
 bool g_addressSpaceReady{};
 micant::hal::amd64::ProcessPagingRoot* g_processPagingRoots{};
 bool g_ownedSharedRootSlots[2]{};
+alignas(4096) uint8_t g_kuserSharedPage[4096]{};
+bool g_kuserSharedMappingReady{};
 alignas(4096) uint8_t g_userCode[4096]{};
 alignas(4096) uint8_t g_userStack[4 * 4096]{};
 struct alignas(4096) BootstrapTebStorage {
@@ -52,6 +117,24 @@ uint64_t g_probeReturnRip{};
 micant::hal::amd64::UserServiceRoutine g_dispatch{};
 bool g_schedulerClockActive{};
 bool g_clockIrqlMaskReady{};
+uint32_t g_schedulerTimerPeriod{};
+std::atomic<uint64_t> g_bootstrapApicClockTicks{};
+uint64_t g_bootstrapApicClockTickOrigin{};
+std::atomic<uint64_t> g_bootstrapApicClockLastCounter{};
+std::atomic<uint8_t> g_bootstrapTscState{}; // 0=uninitialized, 1=calibrating, 2=ready
+uint64_t g_bootstrapTscFrequency{};
+std::atomic<uint64_t> g_bootstrapTscFrequencyHint{};
+enum class BootstrapTscCalibrationSource : uint8_t { None, Cpuid15, PitChannel2, UefiStall };
+std::atomic<BootstrapTscCalibrationSource> g_bootstrapTscCalibrationSource{
+    BootstrapTscCalibrationSource::None};
+std::atomic<uint8_t> g_bootstrapSystemTimeState{}; // 0=unset, 1=initializing, 2=ready
+uint64_t g_bootstrapSystemTime100ns{};
+uint64_t g_bootstrapSystemTimeCounter{};
+uint64_t g_bootstrapSystemTimeFrequency{};
+uint64_t g_bootstrapMonotonicCounter{};
+uint64_t g_bootstrapMonotonicFrequency{};
+std::atomic<uint8_t> g_bootstrapMonotonicState{}; // 0=unset, 2=ready
+std::atomic_flag g_cmosRtcLock = ATOMIC_FLAG_INIT;
 // The firmware selects the APIC mode before boot. Do not change modes while
 // other processors or interrupt sources may be using the controller.
 class BootstrapLocalApic {
@@ -64,6 +147,17 @@ public:
     };
     void initialize(volatile uint32_t* mapping, bool x2) noexcept { mmio_ = mapping; x2_ = x2; }
     [[nodiscard]] bool available() const noexcept { return x2_ || mmio_; }
+    [[nodiscard]] bool readCurrentCount(uint32_t& value) const noexcept {
+        if (!mmio_) return false;
+        value = mmio_[0x390 / 4];
+        return true;
+    }
+    [[nodiscard]] bool timerInterruptPending() const noexcept {
+        if (!mmio_) return true;
+        constexpr uint32_t vector = 0xd1;
+        constexpr uint32_t irrRegister = 0x200 + (vector / 32) * 0x10;
+        return (mmio_[irrRegister / 4] & (uint32_t{1} << (vector % 32))) != 0;
+    }
     [[nodiscard]] Register operator[](size_t index) noexcept { return {*this, index}; }
     uint32_t read(size_t index) const noexcept {
         return x2_ ? static_cast<uint32_t>(micant::cpu::cpuRdmsr(0x800u + static_cast<uint32_t>(index / 4)))
@@ -225,6 +319,7 @@ bool mapPage(uint64_t address, uint64_t physical, uint64_t flags,
         physical > kPhysicalMask || !ownedAddress(address, (flags & kUser) != 0)) {
         return false;
     }
+    if (isProtectedIommuPhysicalPage(physical)) return false;
     auto& database = micant::mm::PfnDatabase::get();
     uint64_t* createdEntries[3]{};
     uint64_t createdPfns[3]{};
@@ -274,6 +369,145 @@ rollback:
     return false;
 }
 
+class KuserPageTableEdit {
+public:
+    ~KuserPageTableEdit() noexcept {
+        if (committed_) return;
+        while (editCount_) {
+            --editCount_;
+            *entries_[editCount_] = original_[editCount_];
+        }
+        for (size_t index = 0; index < allocatedCount_; ++index)
+            micant::mm::PfnDatabase::get().freePage(allocatedPfns_[index]);
+    }
+
+    bool set(uint64_t& entry, uint64_t value) noexcept {
+        if (entry == value) return true;
+        if (editCount_ == sizeof(entries_) / sizeof(entries_[0])) return false;
+        entries_[editCount_] = &entry;
+        original_[editCount_++] = entry;
+        entry = value;
+        return true;
+    }
+
+    uint64_t allocateTable() noexcept {
+        if (allocatedCount_ == sizeof(allocatedPfns_) / sizeof(allocatedPfns_[0])) return 0;
+        auto& database = micant::mm::PfnDatabase::get();
+        const uint64_t pfn = database.allocatePage(false);
+        if (!pfn || pfn > (kPhysicalMask >> 12)) {
+            if (pfn) database.freePage(pfn);
+            return 0;
+        }
+        const uint64_t physical = pfn << 12;
+        if (!mappedRange(physical, 4096, false, true, false) ||
+            walk(reinterpret_cast<uint64_t>(activePagingRoot()), physical) != physical) {
+            database.freePage(pfn);
+            return 0;
+        }
+        database.zeroPage(pfn);
+        allocatedPfns_[allocatedCount_++] = pfn;
+        return physical;
+    }
+
+    void commit() noexcept { committed_ = true; }
+
+private:
+    uint64_t* entries_[8]{};
+    uint64_t original_[8]{};
+    uint64_t allocatedPfns_[4]{};
+    size_t editCount_{};
+    size_t allocatedCount_{};
+    bool committed_{};
+};
+
+bool splitOneGiBMapping(KuserPageTableEdit& edit, uint64_t& entry) noexcept {
+    constexpr uint64_t physicalMask1GiB = 0x000fffffc0000000ULL;
+    const uint64_t old = entry;
+    if (!(old & kPresent) || !(old & 128)) return false;
+    const uint64_t tablePhysical = edit.allocateTable();
+    if (!tablePhysical) return false;
+    const uint64_t physicalBase = old & physicalMask1GiB;
+    const uint64_t flags = old & (kPresent | kWritable | kUser | 0x18ULL |
+        (uint64_t{1} << 5) | (uint64_t{1} << 6) | 128ULL | 0x1800ULL | kNoExecute);
+    auto* table = reinterpret_cast<uint64_t*>(tablePhysical);
+    for (size_t index = 0; index < 512; ++index)
+        table[index] = physicalBase + index * 0x200000ULL | flags;
+    return edit.set(entry, tablePhysical | kPresent | kWritable | kUser | kOwnedTable);
+}
+
+bool splitTwoMiBMapping(KuserPageTableEdit& edit, uint64_t& entry) noexcept {
+    constexpr uint64_t physicalMask2MiB = 0x000fffffffe00000ULL;
+    const uint64_t old = entry;
+    if (!(old & kPresent) || !(old & 128)) return false;
+    const uint64_t tablePhysical = edit.allocateTable();
+    if (!tablePhysical) return false;
+    const uint64_t physicalBase = old & physicalMask2MiB;
+    uint64_t flags = old & (kPresent | kWritable | kUser | 0x18ULL |
+        (uint64_t{1} << 5) | (uint64_t{1} << 6) | (uint64_t{1} << 8) |
+        0x0e00ULL | kNoExecute);
+    flags &= ~uint64_t{128}; // PS becomes PAT only when the old large-page PAT was set.
+    if (old & (uint64_t{1} << 12)) flags |= uint64_t{128};
+    flags &= ~(uint64_t{1} << 9); // reserve software bit 9 for owned table links.
+    auto* table = reinterpret_cast<uint64_t*>(tablePhysical);
+    for (size_t index = 0; index < 512; ++index)
+        table[index] = physicalBase + index * 4096ULL | flags;
+    return edit.set(entry, tablePhysical | kPresent | kWritable | kUser | kOwnedTable);
+}
+
+bool installKuserUserMapping(uint64_t physical) noexcept {
+    constexpr uint64_t address = micant::UserSharedDataAddress;
+    if (!bootstrapPagingContext() || (physical & 4095) ||
+        physical > kPhysicalMask || !physical || isProtectedIommuPhysicalPage(physical) ||
+        reinterpret_cast<uint64_t>(activePagingRoot()) != reinterpret_cast<uint64_t>(g_pml4))
+        return false;
+
+    KuserPageTableEdit edit;
+    uint64_t& pml4Entry = g_pml4[(address >> 39) & 511];
+    if (!(pml4Entry & kPresent)) {
+        const uint64_t table = edit.allocateTable();
+        if (!table || !edit.set(pml4Entry,
+                table | kPresent | kWritable | kUser | kOwnedTable)) return false;
+    } else if (pml4Entry & 128) {
+        return false;
+    } else if (!edit.set(pml4Entry, pml4Entry | kUser | kWritable)) {
+        return false;
+    }
+
+    auto* pdpt = reinterpret_cast<uint64_t*>(pml4Entry & kPhysicalMask);
+    uint64_t& pdptEntry = pdpt[(address >> 30) & 511];
+    if (!(pdptEntry & kPresent)) {
+        const uint64_t table = edit.allocateTable();
+        if (!table || !edit.set(pdptEntry,
+                table | kPresent | kWritable | kUser | kOwnedTable)) return false;
+    } else if (pdptEntry & 128) {
+        if (!splitOneGiBMapping(edit, pdptEntry)) return false;
+    } else if (!edit.set(pdptEntry, pdptEntry | kUser | kWritable)) {
+        return false;
+    }
+
+    auto* pd = reinterpret_cast<uint64_t*>(pdptEntry & kPhysicalMask);
+    uint64_t& pdEntry = pd[(address >> 21) & 511];
+    if (!(pdEntry & kPresent)) {
+        const uint64_t table = edit.allocateTable();
+        if (!table || !edit.set(pdEntry,
+                table | kPresent | kWritable | kUser | kOwnedTable)) return false;
+    } else if (pdEntry & 128) {
+        if (!splitTwoMiBMapping(edit, pdEntry)) return false;
+    } else if (!edit.set(pdEntry, pdEntry | kUser | kWritable)) {
+        return false;
+    }
+
+    auto* pt = reinterpret_cast<uint64_t*>(pdEntry & kPhysicalMask);
+    uint64_t& leaf = pt[(address >> 12) & 511];
+    const uint64_t userReadOnlyNoExecute = physical | kPresent | kUser | kNoExecute;
+    if (!edit.set(leaf, userReadOnlyNoExecute)) return false;
+    edit.commit();
+    invalidatePage(address);
+    uint64_t root = reinterpret_cast<uint64_t>(g_pml4);
+    __asm__ __volatile__("movq %0, %%cr3" : : "r"(root) : "memory");
+    return true;
+}
+
 bool unmapPage(uint64_t address, bool user) noexcept {
     if (!bootstrapPagingContext() || (address & 4095) || !ownedAddress(address, user)) {
         return false;
@@ -306,6 +540,75 @@ bool unmapPage(uint64_t address, bool user) noexcept {
         invalidatePage(address);
         database.freePage(pfn);
     }
+    return true;
+}
+
+bool scaleTscDelta100ns(uint64_t delta, uint64_t frequency,
+                        uint64_t& ticks) noexcept {
+    if (!frequency) return false;
+    const uint64_t whole = delta / frequency;
+    const uint64_t remainder = delta % frequency;
+    if (whole > UINT64_MAX / micant::shared::time::TicksPerSecond ||
+        remainder > UINT64_MAX / micant::shared::time::TicksPerSecond)
+        return false;
+    const uint64_t wholeTicks = whole * micant::shared::time::TicksPerSecond;
+    const uint64_t fractionalTicks =
+        (remainder * micant::shared::time::TicksPerSecond) / frequency;
+    if (fractionalTicks > UINT64_MAX - wholeTicks) return false;
+    ticks = wholeTicks + fractionalTicks;
+    return true;
+}
+
+uint8_t readCmosRegister(uint8_t reg, uint8_t nmiMask) noexcept {
+    const uint8_t index = static_cast<uint8_t>((reg & 0x7f) | nmiMask);
+    uint8_t value{};
+    __asm__ __volatile__("outb %0, $0x70; inb $0x71, %0"
+                         : "=a"(value) : "0"(index) : "memory");
+    return value;
+}
+
+bool waitForRtcUpdateClear(uint8_t nmiMask) noexcept {
+    // CMOS status-A UIP is the only hardware timeout source before the TSC
+    // calibration has completed. The iteration cap keeps a missing/broken
+    // RTC from hanging boot indefinitely.
+    for (uint32_t attempt = 0; attempt < 1'000'000; ++attempt) {
+        if ((readCmosRegister(0x0A, nmiMask) & 0x80) == 0) return true;
+        __asm__ __volatile__("pause" : : : "memory");
+    }
+    return false;
+}
+
+struct CmosSnapshot {
+    uint8_t second{}, minute{}, hour{}, day{}, month{}, year{}, century{}, statusB{}, statusD{};
+};
+
+bool readCmosSnapshot(uint8_t nmiMask, CmosSnapshot& snapshot) noexcept {
+    if (!waitForRtcUpdateClear(nmiMask)) return false;
+    snapshot.second = readCmosRegister(0x00, nmiMask);
+    snapshot.minute = readCmosRegister(0x02, nmiMask);
+    snapshot.hour = readCmosRegister(0x04, nmiMask);
+    snapshot.day = readCmosRegister(0x07, nmiMask);
+    snapshot.month = readCmosRegister(0x08, nmiMask);
+    snapshot.year = readCmosRegister(0x09, nmiMask);
+    snapshot.century = readCmosRegister(0x32, nmiMask);
+    snapshot.statusB = readCmosRegister(0x0B, nmiMask);
+    snapshot.statusD = readCmosRegister(0x0D, nmiMask);
+    return (snapshot.statusD & 0x80) != 0;
+}
+
+bool sameCmosTime(const CmosSnapshot& left, const CmosSnapshot& right) noexcept {
+    return left.second == right.second && left.minute == right.minute &&
+        left.hour == right.hour && left.day == right.day && left.month == right.month &&
+        left.year == right.year && left.century == right.century &&
+        left.statusB == right.statusB && left.statusD == right.statusD;
+}
+
+bool decodeCmosValue(uint8_t raw, bool binary, uint8_t& value) noexcept {
+    if (binary) { value = raw; return true; }
+    const uint8_t low = raw & 0x0f;
+    const uint8_t high = raw >> 4;
+    if (low > 9 || high > 9) return false;
+    value = static_cast<uint8_t>(high * 10 + low);
     return true;
 }
 
@@ -396,7 +699,17 @@ void MicantBootstrapInterruptExit(uint64_t* hardwareFrame, uint64_t* savedRegist
 
 void MicantBootstrapTimerDispatch() noexcept {
     MicantTimerTicks = MicantTimerTicks + 1;
+    // This clock-source count is monotonic across scheduler/test counters,
+    // which intentionally reset while validating interrupt behavior.
+    g_bootstrapApicClockTicks.fetch_add(1, std::memory_order_release);
     g_timerApic.write(0xb0 / 4, 0);
+    if (g_kuserSharedMappingReady &&
+        micant::hal::amd64::updateBootstrapKuserSharedData() !=
+            micant::hal::amd64::BootstrapClockStatus::Success)
+        MicantTimerDispatchFailed = true;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    micant::ke::clock_timer::onClockInterrupt();
+#endif
     if (!MicantTimerPreemptionEnabled) return;
     using namespace micant::ke;
     const KIRQL previous = KeGetCurrentIrql();
@@ -691,6 +1004,82 @@ extern const uint8_t MicantSyscallClientBreakpoint[];
 
 __attribute__((noinline, section(".uclient$a")))
 void MicantSyscallClientProgram() {
+    auto* clockData = reinterpret_cast<volatile uint64_t*>(kUserBase + 4096 + 512);
+    auto* systemTime = reinterpret_cast<volatile int64_t*>(clockData);
+    auto* qpcCounter = reinterpret_cast<volatile int64_t*>(clockData + 1);
+    auto* qpcFrequency = reinterpret_cast<volatile int64_t*>(clockData + 2);
+    const uint64_t firstTimeStatus = micant::sys::invokeUserService(0x47,
+        reinterpret_cast<uint64_t>(systemTime));
+    const bool systemTimeReady = firstTimeStatus == 0;
+    if ((!systemTimeReady && firstTimeStatus != 0xC00000A3ULL) ||
+        (systemTimeReady && *systemTime <= 0) ||
+        micant::sys::invokeUserService(0x31,
+            reinterpret_cast<uint64_t>(qpcCounter),
+            reinterpret_cast<uint64_t>(qpcFrequency)) != 0 ||
+        *qpcCounter <= 0 || *qpcFrequency < 1'000'000 ||
+        *qpcFrequency > 1'000'000'000'000LL) __builtin_trap();
+    const int64_t firstSystemTime = *systemTime;
+    const int64_t firstQpc = *qpcCounter;
+    const int64_t calibratedFrequency = *qpcFrequency;
+    auto* sharedTimeLow = reinterpret_cast<volatile const uint32_t*>(0x7FFE0014ULL);
+    auto* sharedTimeHigh1 = reinterpret_cast<volatile const int32_t*>(0x7FFE0018ULL);
+    auto* sharedTimeHigh2 = reinterpret_cast<volatile const int32_t*>(0x7FFE001cULL);
+    auto* sharedTickCount = reinterpret_cast<volatile const uint64_t*>(0x7FFE0320ULL);
+    uint64_t sharedSystemTime{};
+    bool sharedTimeStable = false;
+    for (unsigned retry = 0; retry < 16; ++retry) {
+        const int32_t high1 = *sharedTimeHigh1;
+        const uint32_t low = *sharedTimeLow;
+        const int32_t high2 = *sharedTimeHigh2;
+        if (high1 == high2) {
+            sharedSystemTime = (static_cast<uint64_t>(static_cast<uint32_t>(high1)) << 32) | low;
+            sharedTimeStable = true;
+            break;
+        }
+    }
+    const uint64_t firstTickCount = *sharedTickCount;
+    if (!sharedTimeStable) __builtin_trap();
+    if (systemTimeReady) {
+        const uint64_t firstSystemTimeBits = static_cast<uint64_t>(firstSystemTime);
+        const uint64_t sharedDifference = sharedSystemTime > firstSystemTimeBits
+            ? sharedSystemTime - firstSystemTimeBits : firstSystemTimeBits - sharedSystemTime;
+        if (!sharedSystemTime || sharedDifference > micant::shared::time::TicksPerSecond)
+            __builtin_trap();
+    } else if (sharedSystemTime) {
+        __builtin_trap(); // Never publish an unknown/local wall clock as UTC.
+    }
+    for (uint32_t spin = 0; spin < 2'000'000; ++spin)
+        __asm__ __volatile__("pause" : : : "memory");
+    if (firstTickCount > UINT64_MAX - 50) __builtin_trap();
+    const uint64_t targetTickCount = firstTickCount + 50;
+    for (uint32_t spin = 0; spin < 40'000'000 && *sharedTickCount < targetTickCount; ++spin)
+        __asm__ __volatile__("pause" : : : "memory");
+    const uint64_t secondTimeStatus = micant::sys::invokeUserService(0x47,
+        reinterpret_cast<uint64_t>(systemTime));
+    if ((systemTimeReady && (secondTimeStatus != 0 || *systemTime <= firstSystemTime)) ||
+        (!systemTimeReady && secondTimeStatus != 0xC00000A3ULL) ||
+        micant::sys::invokeUserService(0x31,
+            reinterpret_cast<uint64_t>(qpcCounter),
+            reinterpret_cast<uint64_t>(qpcFrequency)) != 0 ||
+        *qpcCounter <= firstQpc ||
+        *qpcFrequency != calibratedFrequency || *sharedTickCount < targetTickCount)
+        __builtin_trap();
+    const uint64_t secondQpc = static_cast<uint64_t>(*qpcCounter);
+    if (systemTimeReady) {
+        const uint64_t firstUtc = static_cast<uint64_t>(firstSystemTime);
+        const uint64_t secondUtc = static_cast<uint64_t>(*systemTime);
+        const uint64_t qpcElapsed = secondQpc - static_cast<uint64_t>(firstQpc);
+        if (qpcElapsed > UINT64_MAX / micant::shared::time::TicksPerSecond)
+            __builtin_trap();
+        const uint64_t expected100ns =
+            (qpcElapsed * micant::shared::time::TicksPerSecond) /
+            static_cast<uint64_t>(calibratedFrequency);
+        const uint64_t actual100ns = secondUtc - firstUtc;
+        const uint64_t error100ns = actual100ns > expected100ns
+            ? actual100ns - expected100ns : expected100ns - actual100ns;
+        if (error100ns > expected100ns / 20 + 50'000) __builtin_trap();
+    }
+
     auto* video = reinterpret_cast<micant::um::UserVideoInfo64*>(kUserBase + 4096);
     auto* message = reinterpret_cast<char*>(kUserBase + 4096 + 64);
     if (micant::sys::invokeUserService(0x80, reinterpret_cast<uint64_t>(video)) ||
@@ -1350,6 +1739,106 @@ __attribute__((naked)) void MicantProbeEnter() {
 
 namespace micant::hal::amd64 {
 
+PciBarProbeResult probeQuiescentPciBar(uint16_t bus, uint16_t device,
+                                      uint16_t function, uint8_t index,
+                                      PciBarInfo& bar) noexcept {
+    bar = {};
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    if (!validPciConfigAddress(bus, device, function, 0) || index >= 6)
+        return PciBarProbeResult::Invalid;
+    PciConfigLockGuard guard;
+    auto read = [&](uint16_t offset) noexcept {
+        writePciConfigAddress(static_cast<uint8_t>(bus), static_cast<uint8_t>(device),
+                              static_cast<uint8_t>(function), offset);
+        return readPciConfigData();
+    };
+    auto write = [&](uint16_t offset, uint32_t value) noexcept {
+        writePciConfigAddress(static_cast<uint8_t>(bus), static_cast<uint8_t>(device),
+                              static_cast<uint8_t>(function), offset);
+        writePciConfigData(value);
+    };
+    if ((read(0) & 0xffffu) == 0xffffu) return PciBarProbeResult::Absent;
+    if (read(4) & 7u) return PciBarProbeResult::Active;
+    const auto header = (read(0x0c) >> 16) & 0x7fu;
+    const unsigned count = header == 0 ? 6 : header == 1 ? 2 : 0;
+    if (index >= count) return PciBarProbeResult::Invalid;
+    for (uint8_t i = 0; i < index; ++i) {
+        const uint32_t value = read(static_cast<uint16_t>(0x10 + i * 4));
+        if (!(value & 1u) && ((value >> 1) & 3u) == 2) {
+            if (i + 1 == index) return PciBarProbeResult::Invalid;
+            ++i;
+        }
+    }
+    const uint16_t offset = static_cast<uint16_t>(0x10 + index * 4);
+    const uint32_t low = read(offset);
+    const bool io = low & 1u;
+    const uint32_t memoryType = (low >> 1) & 3u;
+    if (!io && memoryType != 0 && memoryType != 2) return PciBarProbeResult::Invalid;
+    const bool wide = !io && memoryType == 2;
+    if (wide && index + 1 >= count) return PciBarProbeResult::Invalid;
+    const uint32_t high = wide ? read(offset + 4) : 0;
+    write(offset, UINT32_MAX);
+    if (wide) write(offset + 4, UINT32_MAX);
+    const uint32_t maskLow = read(offset);
+    const uint32_t maskHigh = wide ? read(offset + 4) : 0;
+    if (wide) write(offset + 4, high);
+    write(offset, low);
+    if (read(offset) != low || (wide && read(offset + 4) != high))
+        return PciBarProbeResult::RestoreFailed;
+    const uint32_t addressMask = io ? ~uint32_t{3} : ~uint32_t{15};
+    const uint32_t cleanMask = maskLow & addressMask;
+    if (!cleanMask && (!wide || !maskHigh)) return PciBarProbeResult::Absent;
+    bar.address = static_cast<uint64_t>(low & addressMask) | (uint64_t{high} << 32);
+    bar.ioSpace = io;
+    if (wide) {
+        const uint64_t mask = (uint64_t{maskHigh} << 32) | cleanMask;
+        bar.length = ~mask + 1;
+    } else {
+        bar.length = static_cast<uint32_t>(~cleanMask + 1u);
+    }
+    if (!bar.length || (bar.length & (bar.length - 1)) ||
+        (bar.address & (bar.length - 1))) return PciBarProbeResult::Invalid;
+    return PciBarProbeResult::Success;
+#else
+    (void)bus; (void)device; (void)function; (void)index;
+    return PciBarProbeResult::Invalid;
+#endif
+}
+
+PciConfigAccessResult readPciConfig32(uint16_t bus, uint16_t device,
+                                     uint16_t function, uint16_t registerOffset,
+                                     uint32_t& value) noexcept {
+    if (!validPciConfigAddress(bus, device, function, registerOffset))
+        return PciConfigAccessResult::InvalidParameter;
+#if defined(__x86_64__) || defined(_M_X64)
+    PciConfigLockGuard guard;
+    writePciConfigAddress(static_cast<uint8_t>(bus), static_cast<uint8_t>(device),
+                          static_cast<uint8_t>(function), static_cast<uint8_t>(registerOffset));
+    value = readPciConfigData();
+    return PciConfigAccessResult::Success;
+#else
+    (void)value;
+    return PciConfigAccessResult::UnsupportedPlatform;
+#endif
+}
+
+PciConfigAccessResult writePciConfig32(uint16_t bus, uint16_t device,
+                                      uint16_t function, uint16_t registerOffset,
+                                      uint32_t value) noexcept {
+    if (!validPciConfigAddress(bus, device, function, registerOffset))
+        return PciConfigAccessResult::InvalidParameter;
+#if defined(__x86_64__) || defined(_M_X64)
+    PciConfigLockGuard guard;
+    writePciConfigAddress(static_cast<uint8_t>(bus), static_cast<uint8_t>(device),
+                          static_cast<uint8_t>(function), static_cast<uint8_t>(registerOffset));
+    writePciConfigData(value);
+    return PciConfigAccessResult::Success;
+#else
+    (void)value;
+    return PciConfigAccessResult::UnsupportedPlatform;
+#endif
+}
+
 void setBootstrapClockIrqlMask(uint8_t irql) noexcept {
     if (!g_clockIrqlMaskReady) return;
     const uint64_t priority = detail::bootstrapHardwarePriority(irql);
@@ -1544,7 +2033,13 @@ static bool createProcessPagingRootImpl(ProcessPagingRoot& root, int failAfter) 
     }
     database.zeroPage(pfn);
     auto* table = reinterpret_cast<uint64_t*>(physical);
-    for (size_t i = 0; i < 512; ++i) table[i] = i == 128 ? 0 : g_pml4[i] & ~kUser;
+    for (size_t i = 0; i < 512; ++i) {
+        table[i] = i == 128 ? 0 : g_pml4[i] & ~kUser;
+        // PML4[0] carries the read-only KUSER_SHARED_DATA alias at 0x7FFE0000.
+        // Only that leaf and the clock shared page tables beneath it have U/S
+        // set; all other low identity mappings remain supervisor-only.
+        if (i == 0 && g_kuserSharedMappingReady) table[i] |= kUser;
+    }
     root.pfn = pfn;
     root.next = g_processPagingRoots;
     g_processPagingRoots = &root;
@@ -1621,9 +2116,47 @@ uint64_t translateBootstrapAddress(const void* address) noexcept {
                 reinterpret_cast<uint64_t>(address));
 }
 
+uint64_t translateBootstrapDmaRange(const void* address, size_t size) noexcept {
+    if (!g_addressSpaceReady || !address || !size) return 0;
+    const uint64_t virtualStart = reinterpret_cast<uintptr_t>(address);
+    if (size - 1 > UINT64_MAX - virtualStart) return 0;
+    const uint64_t virtualEnd = virtualStart + size - 1;
+    const uint64_t virtualRegion = virtualStart >> 47;
+    if ((virtualRegion != 0 && virtualRegion != 0x1FFFF) ||
+        (virtualEnd >> 47) != virtualRegion) return 0;
+
+    const uint64_t physicalStart = translateBootstrapAddress(address);
+    if (!physicalStart || size - 1 > UINT64_MAX - physicalStart) return 0;
+    const uint64_t physicalEnd = physicalStart + size - 1;
+    if ((physicalEnd & ~uint64_t{4095}) > kPhysicalMask) return 0;
+
+    uint64_t virtualCursor = virtualStart;
+    size_t bytesChecked = 0;
+    while (bytesChecked < size) {
+        const uint64_t physical = translateBootstrapAddress(
+            reinterpret_cast<const void*>(static_cast<uintptr_t>(virtualCursor)));
+        if (!physical || physical != physicalStart + bytesChecked) return 0;
+
+        const size_t pageOffset = static_cast<size_t>(virtualCursor & 4095);
+        const size_t pageBytes = 4096 - pageOffset;
+        const size_t remaining = size - bytesChecked;
+        const size_t step = remaining < pageBytes ? remaining : pageBytes;
+        bytesChecked += step;
+        if (bytesChecked < size) virtualCursor += step;
+    }
+    return physicalStart;
+}
+
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable) noexcept {
-    if (!g_addressSpaceReady || size == 0 || address < kUserBase ||
+    if (!g_addressSpaceReady || size == 0) return false;
+    if (address >= micant::UserSharedDataAddress &&
+        address <= micant::UserSharedDataAddress + 4096 &&
+        size <= 4096 - (address - micant::UserSharedDataAddress)) {
+        if (writable || executable) return false;
+        return mappedRange(address, size, true, false, false);
+    }
+    if (address < kUserBase ||
         address >= kUserBase + (uint64_t{1} << 39) ||
         size > kUserBase + (uint64_t{1} << 39) - address) {
         return false;
@@ -1666,7 +2199,8 @@ static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const 
     auto& database = mm::PfnDatabase::get();
     bool prepared = true;
     for (size_t i = 0; i < count && prepared; ++i) {
-        if (!pfns[i] || pfns[i] > (kPhysicalMask >> mm::PageShift4KB)) {
+        if (!pfns[i] || pfns[i] > (kPhysicalMask >> mm::PageShift4KB) ||
+            isProtectedIommuPhysicalPage(pfns[i] << mm::PageShift4KB)) {
             prepared = false;
             break;
         }
@@ -2181,21 +2715,78 @@ bool verifyNativeImageLoading() noexcept {
     return g_probeSucceeded && mm::PfnDatabase::get().getActiveCount() == activeBefore;
 }
 
-void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
-    if (!g_addressSpaceReady || size == 0 || size > 1024 * 1024 ||
+// Walk every existing leaf, including large pages, before making the IOMMU
+// owner's mapping exclusive. Missing/inaccessible page tables fail closed.
+static bool hasOnlyOwnerIommuMapping(uint64_t root, uint64_t tablePhysical,
+                                     unsigned level, uint64_t virtualBase,
+                                     uint64_t first, uint64_t last, uint64_t ownerPage) noexcept {
+    if (!tablePhysical || walk(root, tablePhysical) != tablePhysical ||
+        !mappedRange(tablePhysical, 4096, false, false, false)) return false;
+    const auto* table = reinterpret_cast<const uint64_t*>(tablePhysical);
+    const unsigned shift = 12 + 9 * (level - 1);
+    for (uint64_t i = 0; i < 512; ++i) {
+        const uint64_t entry = table[i];
+        if (!(entry & kPresent)) continue;
+        uint64_t va = virtualBase | (i << shift);
+        if (level == 4 && (i & 0x100u)) va |= 0xffff000000000000ull;
+        const bool large = (level == 2 || level == 3) && (entry & 128u);
+        if (level == 1 || large) {
+            const uint64_t span = uint64_t{1} << shift;
+            const uint64_t base = (entry & kPhysicalMask) & ~(span - 1);
+            if (base <= last && first <= base + span - 1 &&
+                (level != 1 || va != ownerPage || base != first || last != first + 4095))
+                return false;
+        } else {
+            if ((entry & 128u) || !hasOnlyOwnerIommuMapping(root, entry & kPhysicalMask,
+                level - 1, va, first, last, ownerPage)) return false;
+        }
+    }
+    return true;
+}
+
+bool protectBootstrapIommuRegisters(uint64_t physical, size_t size,
+                                    const void* ownerMapping) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
+    if ((flags & (uint64_t{1} << 9)) || !bootstrapPagingContext() || !ownerMapping ||
+        (physical & 4095) || size != 4096 || physical > UINT64_MAX - 4095 ||
+        (reinterpret_cast<uint64_t>(ownerMapping) & 4095) || g_protectedIommuMmioCount == 16)
+        return false;
+    const auto owner = reinterpret_cast<uint64_t>(ownerMapping);
+    if (walk(reinterpret_cast<uint64_t>(g_pml4), owner) != physical ||
+        !hasOnlyOwnerIommuMapping(reinterpret_cast<uint64_t>(g_pml4),
+                                  reinterpret_cast<uint64_t>(g_pml4), 4, 0,
+                                  physical, physical + 4095, owner)) return false;
+    for (const auto* root = g_processPagingRoots; root; root = root->next) {
+        const uint64_t table = root->pfn << 12;
+        if (!hasOnlyOwnerIommuMapping(table, table, 4, 0, physical, physical + 4095, owner))
+            return false;
+    }
+    g_protectedIommuMmio[g_protectedIommuMmioCount++] = {physical, physical + size - 1, owner};
+    return true;
+}
+
+void commitBootstrapIommuProtection() noexcept { g_iommuProtectionCommitted = true; }
+
+static void* mapBootstrapPhysicalWindow(uint64_t physical, size_t size, bool device) noexcept {
+    if (!g_addressSpaceReady || size == 0 || size > kDeviceMappingWindowSize ||
         physical > kPhysicalMask || size > kPhysicalMask - physical) {
         return nullptr;
     }
+    for (size_t i = 0; i < g_protectedIommuMmioCount; ++i)
+        if (physical <= g_protectedIommuMmio[i].last &&
+            g_protectedIommuMmio[i].first <= physical + size - 1) return nullptr;
     const uint64_t offset = physical & 4095;
     const uint64_t length = (size + offset + 4095) & ~uint64_t{4095};
     const uint64_t start = g_deviceNext;
-    if (length > 16 * 1024 * 1024 - (start - kDeviceBase)) {
+    if (start < kDeviceBase || start - kDeviceBase > kDeviceMappingWindowSize ||
+        length > kDeviceMappingWindowSize - (start - kDeviceBase)) {
         return nullptr;
     }
     for (uint64_t page = 0; page < length; page += 4096) {
-        // PWT/PCD avoid caching device registers; no user-accessible MMIO.
+        // MMIO is uncached; RAM DMA uses the firmware-validated WB policy.
         if (!mapPage(start + page, (physical & ~uint64_t{4095}) + page,
-                     kWritable | kNoExecute | 0x18)) {
+                     kWritable | kNoExecute | (device ? 0x18 : 0))) {
             while (page) {
                 page -= 4096;
                 if (!unmapPage(start + page, false)) __builtin_trap();
@@ -2207,9 +2798,20 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
     return reinterpret_cast<void*>(start + offset);
 }
 
+void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
+    return mapBootstrapPhysicalWindow(physical, size, true);
+}
+
+void* mapBootstrapDmaMemory(uint64_t physical, size_t size) noexcept {
+    return mapBootstrapPhysicalWindow(physical, size, false);
+}
+
 bool releaseBootstrapDeviceMemory(void* mapping, size_t size) noexcept {
     const uint64_t address = reinterpret_cast<uintptr_t>(mapping);
-    if (!mapping || !size || size > 1024 * 1024 || !pagingContextMatches(nullptr) ||
+    if (g_iommuProtectionCommitted)
+        for (size_t i = 0; i < g_protectedIommuMmioCount; ++i)
+            if (address == g_protectedIommuMmio[i].owner) return false;
+    if (!mapping || !size || size > kDeviceMappingWindowSize || !pagingContextMatches(nullptr) ||
         address < kDeviceBase || address >= g_deviceNext) return false;
     const uint64_t offset = address & 4095;
     const uint64_t start = address & ~uint64_t{4095};
@@ -2524,6 +3126,114 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     return success && restored;
 }
 
+static uint64_t readSerializedTsc() noexcept {
+    uint32_t low{}, high{};
+    __asm__ __volatile__("lfence; rdtsc; lfence"
+                         : "=a"(low), "=d"(high) : : "memory");
+    return (static_cast<uint64_t>(high) << 32) | low;
+}
+
+static bool hasInvariantTsc() noexcept {
+    uint32_t eax = 0x80000000u, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (eax < 0x80000007u) return false;
+    eax = 0x80000007u;
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    return (edx & (1u << 8)) != 0;
+}
+
+// Calibrate invariant TSC against PIT channel 2 without relying on a nominal
+// CPU frequency. The speaker must be inactive; its gate and APIC state are
+// restored. The measured source is BSP-only and can fail on platforms where
+// channel 2 is unavailable or samples are unstable.
+static bool calibrateBootstrapTsc(uint64_t& frequencyHz) noexcept {
+    const auto useFirmwareCalibration = [&]() noexcept {
+        const uint64_t hintedFrequency =
+            g_bootstrapTscFrequencyHint.load(std::memory_order_acquire);
+        if (hintedFrequency < 1'000'000 || hintedFrequency > 10'000'000'000ULL)
+            return false;
+        frequencyHz = hintedFrequency;
+        g_bootstrapTscCalibrationSource.store(
+            BootstrapTscCalibrationSource::UefiStall, std::memory_order_release);
+        return true;
+    };
+    uint32_t maxBasic = 0, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(maxBasic), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (maxBasic >= 0x15) {
+        uint32_t denominator = 0x15, numerator{}, crystalHz{}, reserved{};
+        __asm__ __volatile__("cpuid" : "+a"(denominator), "=b"(numerator),
+                             "=c"(crystalHz), "=d"(reserved));
+        if (denominator && numerator && crystalHz) {
+            const uint64_t scaled = static_cast<uint64_t>(crystalHz) * numerator;
+            const uint64_t frequency = scaled / denominator;
+            if (frequency >= 1'000'000 && frequency <= 10'000'000'000ULL) {
+                // CPUID.15H reports the architectural TSC/crystal ratio and
+                // the crystal frequency; unlike leaf 16H this is not a
+                // nominal marketing frequency. The invariant flag is still
+                // required so the calibrated scale remains stable at runtime.
+                if (!hasInvariantTsc()) return false;
+                frequencyHz = frequency;
+                g_bootstrapTscCalibrationSource.store(
+                    BootstrapTscCalibrationSource::Cpuid15, std::memory_order_release);
+                return true;
+            }
+        }
+    }
+    if (!hasInvariantTsc()) return false;
+    const auto input = [](uint16_t port) noexcept {
+        uint8_t value{};
+        __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
+        return value;
+    };
+    const auto output = [](uint16_t port, uint8_t value) noexcept {
+        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
+    };
+    const uint8_t speaker = input(0x61);
+    if (speaker & 3) return useFirmwareCalibration();
+
+    constexpr uint16_t pitInterval = 11932;
+    constexpr uint64_t pitFrequency = 1193182;
+    uint64_t samples[5]{};
+    for (auto& sample : samples) {
+        output(0x61, static_cast<uint8_t>(speaker & ~uint8_t{3}));
+        output(0x43, 0xb0); // Channel 2, low/high bytes, one-shot mode 0.
+        output(0x42, static_cast<uint8_t>(pitInterval));
+        output(0x42, static_cast<uint8_t>(pitInterval >> 8));
+        const uint64_t start = readSerializedTsc();
+        output(0x61, static_cast<uint8_t>((speaker & ~uint8_t{2}) | 1));
+        size_t spin = 0;
+        while (!(input(0x61) & 0x20) && spin++ < 50000000)
+            __asm__ __volatile__("pause");
+        const uint64_t end = readSerializedTsc();
+        output(0x61, speaker);
+        if (spin >= 50000000 || end <= start)
+            return useFirmwareCalibration();
+        sample = end - start;
+    }
+
+    for (size_t i = 1; i < 5; ++i) {
+        const uint64_t sample = samples[i];
+        size_t j = i;
+        while (j && samples[j - 1] > sample) {
+            samples[j] = samples[j - 1];
+            --j;
+        }
+        samples[j] = sample;
+    }
+    const uint64_t median = samples[2];
+    if (!median || samples[3] - samples[1] > median / 20)
+        return useFirmwareCalibration();
+    if (median > (UINT64_MAX - pitInterval / 2) / pitFrequency)
+        return useFirmwareCalibration();
+    const uint64_t scaled = (median * pitFrequency + pitInterval / 2) / pitInterval;
+    if (scaled < 1000000 || scaled > 10000000000ULL)
+        return useFirmwareCalibration();
+    frequencyHz = scaled;
+    g_bootstrapTscCalibrationSource.store(
+        BootstrapTscCalibrationSource::PitChannel2, std::memory_order_release);
+    return true;
+}
+
 // Measure one approximately 10 ms interval against PIT channel 2. The
 // speaker must be inactive; the port gate is restored after calibration.
 static bool measureBootstrapApic(BootstrapLocalApic& apic, uint32_t& elapsed) noexcept {
@@ -2604,6 +3314,9 @@ bool startBootstrapSchedulerClock() noexcept {
                          : "=r"(flags), "=m"(current));
     if ((flags & (uint64_t{1} << 9)) || current.base != reinterpret_cast<uint64_t>(g_idt) ||
         !ke::MicantAmd64ConfigureExtendedState()) return false;
+    // Prefer invariant TSC when the platform supplies one. The calibrated
+    // APIC timer below remains a real monotonic clock source if it does not.
+    (void)initializeBootstrapHighResolutionClock();
     uint32_t eax = 1, ebx{}, ecx{}, edx{};
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
     if (!(edx & (1u << 9))) return false;
@@ -2618,6 +3331,7 @@ bool startBootstrapSchedulerClock() noexcept {
         !(apic[0x320 / 4] & (1u << 16))) return false;
     uint32_t interval{};
     if (!calibrateBootstrapApic(apic, interval)) return false;
+    g_schedulerTimerPeriod = interval;
     // Idle outlives every process; never retain the caller's disposable CR3.
     g_bootstrapIdleThread.directoryTableBase = bootstrapKernelPagingRoot();
     g_bootstrapIdleThread.priority = ke::PRIORITY_IDLE;
@@ -2645,7 +3359,20 @@ bool startBootstrapSchedulerClock() noexcept {
     apic[0x320 / 4] = 0xd1 | (1u << 17);
     apic[0x380 / 4] = interval;
     ke::g_CurrentCpu.idleThread = &g_bootstrapIdleThread;
+    g_bootstrapApicClockTickOrigin =
+        g_bootstrapApicClockTicks.load(std::memory_order_acquire);
+    g_bootstrapApicClockLastCounter.store(0, std::memory_order_release);
     g_schedulerClockActive = true;
+    if (g_bootstrapTscState.load(std::memory_order_acquire) != 2) {
+        g_bootstrapMonotonicCounter = 0;
+        g_bootstrapMonotonicFrequency = static_cast<uint64_t>(interval) * 100;
+        g_bootstrapMonotonicState.store(2, std::memory_order_release);
+        uint32_t currentCount{};
+        if (g_log && g_timerApic.readCurrentCount(currentCount))
+            g_log("[MicaNT Hal] Invariant TSC unavailable; using calibrated APIC current-count QPC\r\n");
+        else if (g_log)
+            g_log("[MicaNT Hal] Invariant TSC unavailable; using calibrated APIC ticks (10 ms resolution)\r\n");
+    }
     return true;
 }
 
@@ -2720,6 +3447,459 @@ bool bootstrapSchedulerClockFailed() noexcept { return MicantTimerDispatchFailed
 bool bootstrapSchedulerClockActive() noexcept { return g_schedulerClockActive; }
 uintptr_t bootstrapKernelPagingRoot() noexcept { return reinterpret_cast<uintptr_t>(g_pml4); }
 uint64_t bootstrapSchedulerClockTicks() noexcept { return MicantTimerTicks; }
+
+BootstrapClockStatus setBootstrapTscCalibrationHint(uint64_t frequencyHz) noexcept {
+    if (ke::g_CurrentCpu.processorNumber != 0)
+        return BootstrapClockStatus::NotBootstrapProcessor;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return BootstrapClockStatus::InvalidIrql;
+    if (frequencyHz < 1'000'000 || frequencyHz > 10'000'000'000ULL)
+        return BootstrapClockStatus::InvalidParameter;
+    if (!hasInvariantTsc()) return BootstrapClockStatus::UnsupportedPlatform;
+    if (g_bootstrapTscState.load(std::memory_order_acquire) != 0)
+        return BootstrapClockStatus::InvalidParameter;
+    uint64_t expected = 0;
+    if (!g_bootstrapTscFrequencyHint.compare_exchange_strong(
+            expected, frequencyHz, std::memory_order_acq_rel,
+            std::memory_order_acquire) && expected != frequencyHz)
+        return BootstrapClockStatus::InvalidParameter;
+    return BootstrapClockStatus::Success;
+}
+
+BootstrapClockStatus initializeBootstrapHighResolutionClock() noexcept {
+    if (ke::g_CurrentCpu.processorNumber != 0)
+        return BootstrapClockStatus::NotBootstrapProcessor;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return BootstrapClockStatus::InvalidIrql;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
+    if (flags & (uint64_t{1} << 9)) return BootstrapClockStatus::InvalidIrql;
+
+    uint8_t expected = 0;
+    if (!g_bootstrapTscState.compare_exchange_strong(
+            expected, 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (expected == 2) return BootstrapClockStatus::Success;
+        return BootstrapClockStatus::ClockUnavailable;
+    }
+
+    uint64_t frequency{};
+    if (!calibrateBootstrapTsc(frequency)) {
+        g_bootstrapTscState.store(0, std::memory_order_release);
+        return BootstrapClockStatus::CalibrationFailed;
+    }
+    if (g_log) {
+        switch (g_bootstrapTscCalibrationSource.load(std::memory_order_acquire)) {
+        case BootstrapTscCalibrationSource::Cpuid15:
+            g_log("[MicaNT Hal] TSC frequency source: CPUID.15H\r\n");
+            break;
+        case BootstrapTscCalibrationSource::PitChannel2:
+            g_log("[MicaNT Hal] TSC frequency source: PIT channel 2\r\n");
+            break;
+        case BootstrapTscCalibrationSource::UefiStall:
+            g_log("[MicaNT Hal] TSC frequency source: validated UEFI Stall hint\r\n");
+            break;
+        default:
+            g_log("[MicaNT Hal] TSC frequency source is invalid\r\n");
+            g_bootstrapTscState.store(0, std::memory_order_release);
+            return BootstrapClockStatus::CalibrationFailed;
+        }
+    }
+    g_bootstrapTscFrequency = frequency;
+    g_bootstrapTscState.store(2, std::memory_order_release);
+    g_bootstrapMonotonicCounter = readSerializedTsc();
+    g_bootstrapMonotonicFrequency = frequency;
+    g_bootstrapMonotonicState.store(2, std::memory_order_release);
+    return BootstrapClockStatus::Success;
+}
+
+namespace {
+uint64_t publishMonotonicApicCounter(uint64_t candidate) noexcept {
+    uint64_t observed = g_bootstrapApicClockLastCounter.load(std::memory_order_acquire);
+    while (candidate > observed &&
+           !g_bootstrapApicClockLastCounter.compare_exchange_weak(
+               observed, candidate, std::memory_order_acq_rel,
+               std::memory_order_acquire)) {}
+    return candidate > observed ? candidate : observed;
+}
+
+BootstrapClockStatus queryBootstrapApicClock(uint64_t& counter,
+                                             uint64_t& frequency) noexcept {
+    if (!g_schedulerClockActive || !g_schedulerTimerPeriod)
+        return BootstrapClockStatus::ClockUnavailable;
+    const uint64_t calibratedFrequency =
+        static_cast<uint64_t>(g_schedulerTimerPeriod) * 100;
+    if (!calibratedFrequency) return BootstrapClockStatus::ClockUnavailable;
+
+    const uint64_t totalTicks = g_bootstrapApicClockTicks.load(std::memory_order_acquire);
+    if (totalTicks < g_bootstrapApicClockTickOrigin)
+        return BootstrapClockStatus::ClockUnavailable;
+    const uint64_t elapsedTicks = totalTicks - g_bootstrapApicClockTickOrigin;
+    if (elapsedTicks > UINT64_MAX / g_schedulerTimerPeriod)
+        return BootstrapClockStatus::CounterOverflow;
+    uint64_t candidate = elapsedTicks * g_schedulerTimerPeriod;
+
+    // xAPIC exposes its calibrated down-counter. Interpolate only while the
+    // timer IRR is clear and the monotonically increasing interrupt count is
+    // unchanged across the sample; otherwise retain the safe 100-Hz tick.
+    // The atomic high-water mark prevents a pending/masked interrupt race from
+    // making QPC regress even when the hardware count has already reloaded.
+    uint32_t currentCount{};
+    if (g_timerApic.readCurrentCount(currentCount) && currentCount != 0 &&
+        currentCount <= g_schedulerTimerPeriod && !g_timerApic.timerInterruptPending()) {
+        const uint64_t confirmedTicks =
+            g_bootstrapApicClockTicks.load(std::memory_order_acquire);
+        if (confirmedTicks == totalTicks && !g_timerApic.timerInterruptPending()) {
+            const uint64_t elapsedInPeriod = g_schedulerTimerPeriod - currentCount;
+            if (elapsedInPeriod <= UINT64_MAX - candidate)
+                candidate += elapsedInPeriod;
+        }
+    }
+    counter = publishMonotonicApicCounter(candidate);
+    frequency = calibratedFrequency;
+    return BootstrapClockStatus::Success;
+}
+} // namespace
+
+BootstrapClockStatus queryBootstrapClock(uint64_t& counter,
+                                         uint64_t& frequency) noexcept {
+    if (ke::g_CurrentCpu.processorNumber != 0)
+        return BootstrapClockStatus::NotBootstrapProcessor;
+    if (g_bootstrapTscState.load(std::memory_order_acquire) == 2 &&
+        g_bootstrapTscFrequency) {
+        counter = readSerializedTsc();
+        frequency = g_bootstrapTscFrequency;
+        return BootstrapClockStatus::Success;
+    }
+    return queryBootstrapApicClock(counter, frequency);
+}
+
+BootstrapClockStatus initializeBootstrapSystemTime(uint64_t utcTime100ns) noexcept {
+    if (ke::g_CurrentCpu.processorNumber != 0)
+        return BootstrapClockStatus::NotBootstrapProcessor;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return BootstrapClockStatus::InvalidIrql;
+    micant::shared::time::SystemTimeFields check{};
+    if (!micant::shared::time::fromSystemTime100ns(utcTime100ns, check))
+        return BootstrapClockStatus::InvalidParameter;
+
+    uint8_t expected = 0;
+    if (!g_bootstrapSystemTimeState.compare_exchange_strong(
+            expected, 1, std::memory_order_acq_rel, std::memory_order_acquire))
+        return expected == 2 ? BootstrapClockStatus::InvalidParameter
+                             : BootstrapClockStatus::ClockUnavailable;
+
+    uint64_t counter{}, frequency{};
+    const auto clockStatus = queryBootstrapClock(counter, frequency);
+    if (clockStatus != BootstrapClockStatus::Success) {
+        g_bootstrapSystemTimeState.store(0, std::memory_order_release);
+        return clockStatus;
+    }
+    g_bootstrapSystemTime100ns = utcTime100ns;
+    g_bootstrapSystemTimeCounter = counter;
+    g_bootstrapSystemTimeFrequency = frequency;
+    g_bootstrapSystemTimeState.store(2, std::memory_order_release);
+    return BootstrapClockStatus::Success;
+}
+
+BootstrapClockStatus queryBootstrapUptime(uint64_t& uptime100ns) noexcept {
+    if (g_bootstrapMonotonicState.load(std::memory_order_acquire) != 2)
+        return BootstrapClockStatus::ClockUnavailable;
+    uint64_t now{}, frequency{};
+    const auto status = queryBootstrapClock(now, frequency);
+    if (status != BootstrapClockStatus::Success) return status;
+    if (frequency != g_bootstrapMonotonicFrequency ||
+        now < g_bootstrapMonotonicCounter)
+        return BootstrapClockStatus::ClockUnavailable;
+    return scaleTscDelta100ns(now - g_bootstrapMonotonicCounter,
+                              frequency, uptime100ns)
+        ? BootstrapClockStatus::Success : BootstrapClockStatus::CounterOverflow;
+}
+
+BootstrapClockStatus queryBootstrapSystemTime(uint64_t& utcTime100ns) noexcept {
+    if (g_bootstrapSystemTimeState.load(std::memory_order_acquire) != 2)
+        return BootstrapClockStatus::ClockUnavailable;
+    uint64_t now{}, frequency{};
+    const auto status = queryBootstrapClock(now, frequency);
+    if (status != BootstrapClockStatus::Success) return status;
+    if (frequency != g_bootstrapSystemTimeFrequency ||
+        now < g_bootstrapSystemTimeCounter)
+        return BootstrapClockStatus::ClockUnavailable;
+    uint64_t elapsed{};
+    if (!scaleTscDelta100ns(now - g_bootstrapSystemTimeCounter,
+                            frequency, elapsed) ||
+        elapsed > UINT64_MAX - g_bootstrapSystemTime100ns)
+        return BootstrapClockStatus::CounterOverflow;
+    utcTime100ns = g_bootstrapSystemTime100ns + elapsed;
+    return BootstrapClockStatus::Success;
+}
+
+BootstrapClockStatus queryBootstrapPerformanceCounter(
+    uint64_t& counter, uint64_t& frequency) noexcept {
+    return queryBootstrapClock(counter, frequency);
+}
+
+BootstrapRtcStatus readBootstrapRtc(
+    micant::shared::time::SystemTimeFields& fields) noexcept {
+#if defined(__x86_64__) || defined(_M_X64)
+    if (ke::g_CurrentCpu.processorNumber != 0)
+        return BootstrapRtcStatus::UnsupportedPlatform;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return BootstrapRtcStatus::InvalidIrql;
+
+    uint64_t flags{};
+    uint8_t priorIndex{};
+    __asm__ __volatile__("pushfq; popq %0; cli; inb $0x70, %1"
+                         : "=r"(flags), "=a"(priorIndex) : : "memory");
+    while (g_cmosRtcLock.test_and_set(std::memory_order_acquire))
+        __asm__ __volatile__("pause" : : : "memory");
+    const uint8_t nmiMask = priorIndex & 0x80;
+    CmosSnapshot first{}, second{};
+    bool stable = false;
+    bool invalidRtc = false;
+    bool timedOut = false;
+    for (uint32_t attempt = 0; attempt < 8; ++attempt) {
+        if (!waitForRtcUpdateClear(nmiMask)) { timedOut = true; break; }
+        if (!readCmosSnapshot(nmiMask, first)) { invalidRtc = true; break; }
+        if (!readCmosSnapshot(nmiMask, second)) { invalidRtc = true; break; }
+        if (sameCmosTime(first, second)) { stable = true; break; }
+    }
+    __asm__ __volatile__("outb %0, $0x70" : : "a"(priorIndex) : "memory");
+    g_cmosRtcLock.clear(std::memory_order_release);
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    if (!stable) return timedOut ? BootstrapRtcStatus::Timeout
+                                 : (invalidRtc ? BootstrapRtcStatus::InvalidData
+                                               : BootstrapRtcStatus::Timeout);
+
+    const bool binary = (first.statusB & 0x04) != 0;
+    const bool twentyFourHour = (first.statusB & 0x02) != 0;
+    const bool pm = (first.hour & 0x80) != 0;
+    uint8_t secondValue{}, minuteValue{}, hourValue{}, dayValue{}, monthValue{};
+    uint8_t yearValue{}, centuryValue{};
+    if (!decodeCmosValue(first.second, binary, secondValue) ||
+        !decodeCmosValue(first.minute, binary, minuteValue) ||
+        !decodeCmosValue(static_cast<uint8_t>(first.hour & 0x7f), binary, hourValue) ||
+        !decodeCmosValue(first.day, binary, dayValue) ||
+        !decodeCmosValue(first.month, binary, monthValue) ||
+        !decodeCmosValue(first.year, binary, yearValue))
+        return BootstrapRtcStatus::InvalidData;
+    if (twentyFourHour) {
+        if (pm) return BootstrapRtcStatus::InvalidData;
+    } else {
+        if (hourValue < 1 || hourValue > 12) return BootstrapRtcStatus::InvalidData;
+        hourValue = static_cast<uint8_t>((hourValue % 12) + (pm ? 12 : 0));
+    }
+
+    uint16_t fullYear{};
+    if (decodeCmosValue(first.century, binary, centuryValue) &&
+        centuryValue >= 19 && centuryValue <= 99) {
+        fullYear = static_cast<uint16_t>(centuryValue * 100 + yearValue);
+    } else {
+        // Explicit no-century-register policy: DOS-compatible pivot, 00..69
+        // maps to 2000..2069 and 70..99 maps to 1970..1999. The read status
+        // does not claim the century register was valid.
+        fullYear = static_cast<uint16_t>(yearValue >= 70
+            ? 1900 + yearValue : 2000 + yearValue);
+    }
+    micant::shared::time::SystemTimeFields decoded{
+        fullYear, monthValue, dayValue, hourValue, minuteValue, secondValue, 0, 0};
+    if (!micant::shared::time::isValid(decoded))
+        return BootstrapRtcStatus::InvalidData;
+    decoded.weekday = static_cast<uint16_t>(
+        (micant::shared::time::daysSince1601(decoded.year, decoded.month, decoded.day) + 1) % 7);
+    fields = decoded;
+    return BootstrapRtcStatus::Success;
+#else
+    (void)fields;
+    return BootstrapRtcStatus::UnsupportedPlatform;
+#endif
+}
+
+micant::KUserSharedData* bootstrapKuserSharedData() noexcept {
+    return reinterpret_cast<micant::KUserSharedData*>(g_kuserSharedPage);
+}
+
+BootstrapClockStatus updateBootstrapKuserSharedData() noexcept {
+    if (!g_kuserSharedMappingReady) return BootstrapClockStatus::ClockUnavailable;
+    uint64_t uptime{}, systemTime{};
+    const auto uptimeStatus = queryBootstrapUptime(uptime);
+    if (uptimeStatus != BootstrapClockStatus::Success) return uptimeStatus;
+    const auto timeStatus = queryBootstrapSystemTime(systemTime);
+    auto* shared = bootstrapKuserSharedData();
+    if (timeStatus == BootstrapClockStatus::Success) {
+        const uint32_t high = static_cast<uint32_t>(systemTime >> 32);
+        // KSYSTEM_TIME readers sample High1, Low, High2 and retry on a
+        // mismatch. Publish High2 first and High1 last around the low word.
+        shared->systemTimeHigh2 = static_cast<int32_t>(high);
+        std::atomic_thread_fence(std::memory_order_release);
+        shared->systemTimeLow = static_cast<uint32_t>(systemTime);
+        std::atomic_thread_fence(std::memory_order_release);
+        shared->systemTimeHigh1 = static_cast<int32_t>(high);
+    }
+    const uint32_t interruptHigh = static_cast<uint32_t>(uptime >> 32);
+    shared->interruptTimeHigh2 = static_cast<int32_t>(interruptHigh);
+    std::atomic_thread_fence(std::memory_order_release);
+    shared->interruptTimeLow = static_cast<uint32_t>(uptime);
+    std::atomic_thread_fence(std::memory_order_release);
+    shared->interruptTimeHigh1 = static_cast<int32_t>(interruptHigh);
+    shared->tickCountLowDeprecated = static_cast<uint32_t>(uptime / 10'000);
+    shared->tickCountQuad = uptime / 10'000;
+    std::atomic_thread_fence(std::memory_order_release);
+    return timeStatus == BootstrapClockStatus::Success ||
+        timeStatus == BootstrapClockStatus::ClockUnavailable
+        ? BootstrapClockStatus::Success : timeStatus;
+}
+
+BootstrapClockStatus initializeBootstrapKuserSharedData() noexcept {
+    if (ke::g_CurrentCpu.processorNumber != 0)
+        return BootstrapClockStatus::NotBootstrapProcessor;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return BootstrapClockStatus::InvalidIrql;
+    if (g_kuserSharedMappingReady) return updateBootstrapKuserSharedData();
+    if (g_bootstrapMonotonicState.load(std::memory_order_acquire) != 2) {
+        if (g_log) g_log("[MicaNT Hal] KUSER monotonic calibration unavailable\r\n");
+        return BootstrapClockStatus::ClockUnavailable;
+    }
+
+    const uint64_t virtualPage = reinterpret_cast<uint64_t>(g_kuserSharedPage);
+    const uint64_t physicalPage = walk(reinterpret_cast<uint64_t>(g_pml4), virtualPage);
+    if (!physicalPage || (physicalPage & 4095) || physicalPage > kPhysicalMask) {
+        if (g_log) g_log("[MicaNT Hal] KUSER backing page translation failed\r\n");
+        return BootstrapClockStatus::ClockUnavailable;
+    }
+    if (!installKuserUserMapping(physicalPage)) {
+        if (g_log) g_log("[MicaNT Hal] KUSER user mapping transaction failed\r\n");
+        return BootstrapClockStatus::ClockUnavailable;
+    }
+    g_kuserSharedMappingReady = true;
+    auto* shared = bootstrapKuserSharedData();
+    shared->tickCountMultiplier = 0xFA000000u;
+    shared->timeZoneBiasHigh1 = 0;
+    shared->timeZoneBiasLow = 0;
+    shared->timeZoneBiasHigh2 = 0;
+    shared->timeZoneId = 1; // UTC standard time until a zone provider is configured.
+    return updateBootstrapKuserSharedData();
+}
+
+static BootstrapClockStatus deadlineFromCounter(uint64_t now, uint64_t frequency,
+                                                 uint32_t timeoutMilliseconds,
+                                                 BootstrapDeadline& deadline) noexcept {
+    if (!timeoutMilliseconds || timeoutMilliseconds > 10000)
+        return BootstrapClockStatus::InvalidParameter;
+    if (!frequency) return BootstrapClockStatus::ClockUnavailable;
+    if (frequency > UINT64_MAX / timeoutMilliseconds)
+        return BootstrapClockStatus::CounterOverflow;
+    const uint64_t product = frequency * timeoutMilliseconds;
+    const uint64_t ticks = product / 1000 + (product % 1000 != 0);
+    if (!ticks || now > UINT64_MAX - ticks)
+        return BootstrapClockStatus::CounterOverflow;
+    deadline.counter = now + ticks;
+    return BootstrapClockStatus::Success;
+}
+
+BootstrapClockStatus makeBootstrapDeadline(uint32_t timeoutMilliseconds,
+                                           BootstrapDeadline& deadline) noexcept {
+    uint64_t now{}, frequency{};
+    const auto status = queryBootstrapClock(now, frequency);
+    if (status != BootstrapClockStatus::Success) return status;
+    return deadlineFromCounter(now, frequency, timeoutMilliseconds, deadline);
+}
+
+BootstrapClockStatus isBootstrapDeadlineExpired(const BootstrapDeadline& deadline,
+                                                bool& expired) noexcept {
+    if (!deadline.counter) return BootstrapClockStatus::InvalidParameter;
+    uint64_t now{}, frequency{};
+    const auto status = queryBootstrapClock(now, frequency);
+    if (status != BootstrapClockStatus::Success) return status;
+    expired = now >= deadline.counter;
+    return BootstrapClockStatus::Success;
+}
+
+BootstrapClockStatus delayBootstrapMilliseconds(uint32_t milliseconds) noexcept {
+    if (!milliseconds) return BootstrapClockStatus::Success;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return BootstrapClockStatus::InvalidIrql;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
+    if (!(flags & (uint64_t{1} << 9))) return BootstrapClockStatus::InvalidIrql;
+
+    BootstrapDeadline deadline{};
+    const auto status = makeBootstrapDeadline(milliseconds, deadline);
+    if (status != BootstrapClockStatus::Success) return status;
+    for (;;) {
+        uint64_t counter{}, frequency{};
+        const auto queryStatus = queryBootstrapClock(counter, frequency);
+        if (queryStatus != BootstrapClockStatus::Success) return queryStatus;
+        if (counter >= deadline.counter) break;
+        __asm__ __volatile__("pause" : : : "memory");
+    }
+    return BootstrapClockStatus::Success;
+}
+
+bool verifyBootstrapClockTimeouts() noexcept {
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return false;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
+    const bool restoreDisabledInterrupts = !(flags & (uint64_t{1} << 9));
+    struct InterruptStateRestore {
+        bool disabled;
+        ~InterruptStateRestore() noexcept {
+            if (disabled) __asm__ __volatile__("cli" : : : "memory");
+        }
+    } restore{restoreDisabledInterrupts};
+    if (restoreDisabledInterrupts) __asm__ __volatile__("sti" : : : "memory");
+    BootstrapDeadline deadline{};
+    if (makeBootstrapDeadline(0, deadline) != BootstrapClockStatus::InvalidParameter ||
+        makeBootstrapDeadline(10001, deadline) != BootstrapClockStatus::InvalidParameter ||
+        deadlineFromCounter(UINT64_MAX - 999999, 1'000'000'000, 1, deadline) !=
+            BootstrapClockStatus::CounterOverflow ||
+        deadlineFromCounter(UINT64_MAX - 1, 1000, 1, deadline) !=
+            BootstrapClockStatus::Success || deadline.counter != UINT64_MAX ||
+        makeBootstrapDeadline(20, deadline) != BootstrapClockStatus::Success)
+        return false;
+    bool expired = true;
+    if (isBootstrapDeadlineExpired(deadline, expired) != BootstrapClockStatus::Success || expired)
+        return false;
+
+    const uint64_t ticksBefore =
+        g_bootstrapApicClockTicks.load(std::memory_order_acquire);
+    if (delayBootstrapMilliseconds(20) != BootstrapClockStatus::Success ||
+        isBootstrapDeadlineExpired(deadline, expired) != BootstrapClockStatus::Success ||
+        !expired)
+        return false;
+    // Check the TSC scale against the independent 100-Hz APIC clock. A full
+    // second reduces quantization error from its 10-ms timer interval.
+    const uint64_t calibrationStartTicks =
+        g_bootstrapApicClockTicks.load(std::memory_order_acquire);
+    if (delayBootstrapMilliseconds(1000) != BootstrapClockStatus::Success)
+        return false;
+    const uint64_t finalApicTicks =
+        g_bootstrapApicClockTicks.load(std::memory_order_acquire);
+    const uint64_t elapsedApicTicks = finalApicTicks - calibrationStartTicks;
+    return finalApicTicks > ticksBefore && elapsedApicTicks >= 90 &&
+        elapsedApicTicks <= 110;
+}
+
+BootstrapClockStatus delayBootstrapMicroseconds(uint32_t microseconds) noexcept {
+    if (!microseconds) return BootstrapClockStatus::Success;
+    if (microseconds > 50)
+        return BootstrapClockStatus::InvalidParameter;
+    if (ke::KeGetCurrentIrql() > ke::DISPATCH_LEVEL)
+        return BootstrapClockStatus::InvalidIrql;
+
+    uint64_t now{}, frequency{};
+    const auto status = queryBootstrapClock(now, frequency);
+    if (status != BootstrapClockStatus::Success) return status;
+    if (frequency > UINT64_MAX / microseconds)
+        return BootstrapClockStatus::CounterOverflow;
+    const uint64_t product = frequency * microseconds;
+    const uint64_t ticks = product / 1000000 + (product % 1000000 != 0);
+    if (!ticks || now > UINT64_MAX - ticks)
+        return BootstrapClockStatus::CounterOverflow;
+    const uint64_t deadline = now + ticks;
+    while (readSerializedTsc() < deadline)
+        __asm__ __volatile__("pause" : : : "memory");
+    return BootstrapClockStatus::Success;
+}
 
 bool verifyRing3Transition() noexcept {
     if (!g_addressSpaceReady ||
@@ -2823,7 +4003,18 @@ bool verifyRing3Transition() noexcept {
         return false;
     }
     // User accesses must fault: kernel/MMIO reads, code writes, stack execution.
-    for (uint32_t mode = 1; mode <= 4; ++mode) {
+    const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
+    const bool x2Apic = (apicBase & (uint64_t{1} << 10)) != 0;
+    bool apicMmioMapped = false;
+    if (!x2Apic && (apicBase & (uint64_t{1} << 11))) {
+        const uint64_t physicalApicPage = apicBase & kPhysicalMask;
+        apicMmioMapped = physicalApicPage &&
+            mapPage(kDeviceBase, physicalApicPage,
+                    kWritable | kNoExecute | 0x18ULL);
+        if (!apicMmioMapped) return false;
+    }
+    const uint32_t lastMode = apicMmioMapped ? 4 : 3;
+    for (uint32_t mode = 1; mode <= lastMode; ++mode) {
         g_probeMode = mode;
         g_probeSucceeded = false;
         g_userCode[0] = 0x48;
@@ -2841,8 +4032,15 @@ bool verifyRing3Transition() noexcept {
         g_userCode[13] = 0x0B; // ud2 if protection was bypassed
         MicantProbeEnter();
         if (!g_probeSucceeded) {
+            if (apicMmioMapped) (void)unmapPage(kDeviceBase, false);
             return false;
         }
+    }
+    if (apicMmioMapped) {
+        if (!unmapPage(kDeviceBase, false)) return false;
+        if (g_log) g_log("[MicaNT Mm] Supervisor APIC MMIO page blocked at CPL3\r\n");
+    } else if (g_log) {
+        g_log("[MicaNT Mm] APIC MMIO CPL3 probe skipped: x2APIC mode\r\n");
     }
     constexpr uint8_t tebCode[]{
         0x65, 0xC7, 0x04, 0x25, 0x68, 0x00, 0x00, 0x00,

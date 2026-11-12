@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include "micant/shared/system_time.hpp"
 
 namespace micant::uefi {
 
@@ -45,6 +46,14 @@ namespace micant::boot {
 
 inline constexpr uint64_t UEFI_KERNEL_HANDOFF_SIGNATURE = 0x4D4943414E54424FULL;
 inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION = 3;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION_OEM_MODULES = 4;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME = 5;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION = 6;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES = 7;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_MAX_PCI_BARS = 256;
+inline constexpr uint32_t UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES = 8;
+inline constexpr uint32_t BOOT_MODULE_FLAG_BOOT_START_DRIVER = 0x00000001;
+inline constexpr uint32_t BOOT_MODULE_FLAG_DISPLAY_DRIVER = 0x00000002;
 
 struct KernelFramebufferV1 {
     uint64_t physicalBase;
@@ -80,10 +89,72 @@ struct UefiKernelHandoffV3 {
     KernelBootFileV1 userImageFile;
 };
 
+struct KernelBootModuleV1 {
+    KernelBootImageV1 image{};
+    uint32_t flags{};
+    uint32_t reserved{};
+    char baseName[32]{}; // NUL-terminated ASCII basename, e.g. "xhci.sys".
+};
+
+struct UefiKernelHandoffV4 {
+    // Keep V3 as the first member: V3 startup consumers can safely inspect the
+    // common prefix, while version-aware consumers validate and read modules.
+    UefiKernelHandoffV3 legacy{};
+    uint32_t moduleCount{};
+    uint32_t moduleCapacity{UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES};
+    KernelBootModuleV1 modules[UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES]{};
+};
+
+struct UefiKernelHandoffV5 {
+    // Preserve the complete V4 OEM module prefix and append a validated clock
+    // sample; V3/V4 consumers can still inspect their original prefixes.
+    UefiKernelHandoffV4 oem{};
+    micant::shared::boot_time::BootTimeSampleV1 systemTime{};
+};
+
+struct UefiKernelHandoffV6 {
+    // V5 remains an unchanged prefix; calibration is an append-only extension.
+    UefiKernelHandoffV5 time{};
+    micant::shared::boot_time::BootClockCalibrationV1 clockCalibration{};
+};
+
+struct FirmwarePciBarV1 {
+    uint16_t segment{}, bus{};
+    uint8_t device{}, function{}, index{}, type{}; // type 0 memory, 1 I/O
+    uint64_t address{}, length{};
+};
+struct UefiKernelHandoffV7 {
+    UefiKernelHandoffV6 clock{};
+    uint32_t pciBarCount{}, pciBarCapacity{UEFI_KERNEL_HANDOFF_MAX_PCI_BARS};
+    uint32_t pciInventoryComplete{}, reserved{};
+    FirmwarePciBarV1 pciBars[UEFI_KERNEL_HANDOFF_MAX_PCI_BARS]{};
+};
+static_assert(sizeof(FirmwarePciBarV1) == 24);
+static_assert(offsetof(UefiKernelHandoffV7, clock) == 0);
+
 static_assert(std::is_standard_layout_v<UefiKernelHandoffV3>);
 static_assert(std::is_trivially_copyable_v<UefiKernelHandoffV3>);
 static_assert(sizeof(UefiKernelHandoffV3) == 120);
 static_assert(offsetof(UefiKernelHandoffV3, displayDriver) == 80);
 static_assert(offsetof(UefiKernelHandoffV3, userImageFile) == 104);
+static_assert(std::is_standard_layout_v<KernelBootModuleV1>);
+static_assert(std::is_trivially_copyable_v<KernelBootModuleV1>);
+static_assert(sizeof(KernelBootModuleV1) == 64);
+static_assert(std::is_standard_layout_v<UefiKernelHandoffV4>);
+static_assert(std::is_trivially_copyable_v<UefiKernelHandoffV4>);
+static_assert(offsetof(UefiKernelHandoffV4, legacy) == 0);
+static_assert(offsetof(UefiKernelHandoffV4, moduleCount) == sizeof(UefiKernelHandoffV3));
+static_assert(offsetof(UefiKernelHandoffV4, modules) == 128);
+static_assert(sizeof(UefiKernelHandoffV4) == 640);
+static_assert(std::is_standard_layout_v<UefiKernelHandoffV5>);
+static_assert(std::is_trivially_copyable_v<UefiKernelHandoffV5>);
+static_assert(offsetof(UefiKernelHandoffV5, oem) == 0);
+static_assert(offsetof(UefiKernelHandoffV5, systemTime) == sizeof(UefiKernelHandoffV4));
+static_assert(sizeof(UefiKernelHandoffV5) == 664);
+static_assert(std::is_standard_layout_v<UefiKernelHandoffV6>);
+static_assert(std::is_trivially_copyable_v<UefiKernelHandoffV6>);
+static_assert(offsetof(UefiKernelHandoffV6, time) == 0);
+static_assert(offsetof(UefiKernelHandoffV6, clockCalibration) == sizeof(UefiKernelHandoffV5));
+static_assert(sizeof(UefiKernelHandoffV6) == 680);
 
 } // namespace micant::boot

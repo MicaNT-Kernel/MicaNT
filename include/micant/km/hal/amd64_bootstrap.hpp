@@ -2,8 +2,30 @@
 
 #include <cstddef>
 #include <cstdint>
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/system_time.hpp"
 
 namespace micant::hal::amd64 {
+
+// Serialized PCI Configuration Mechanism #1 access. These primitives only
+// read or write configuration space; they do not claim devices or reserve
+// BAR/IRQ/DMA resources. A failed parameter check performs no port I/O.
+enum class PciConfigAccessResult : uint8_t {
+    Success,
+    InvalidParameter,
+    UnsupportedPlatform,
+};
+enum class PciBarProbeResult : uint8_t { Success, Invalid, Absent, Active, RestoreFailed };
+struct PciBarInfo { uint64_t address{}, length{}; bool ioSpace{}; };
+// Probe only a quiescent function. The config lock covers sizing and restore.
+[[nodiscard]] PciBarProbeResult probeQuiescentPciBar(
+    uint16_t bus, uint16_t device, uint16_t function, uint8_t index, PciBarInfo& bar) noexcept;
+[[nodiscard]] PciConfigAccessResult readPciConfig32(
+    uint16_t bus, uint16_t device, uint16_t function, uint16_t registerOffset,
+    uint32_t& value) noexcept;
+[[nodiscard]] PciConfigAccessResult writePciConfig32(
+    uint16_t bus, uint16_t device, uint16_t function, uint16_t registerOffset,
+    uint32_t value) noexcept;
 
 // Layout of the bootstrap SYSCALL entry's saved user register frame. The
 // syscall continuation service updates this frame before the common IRETQ.
@@ -55,7 +77,18 @@ bool bootstrapQemuFaultTestsAvailable() noexcept;
 bool verifyBootstrapManagedPageFault(uintptr_t address, bool write,
                                      bool present) noexcept;
 uint64_t translateBootstrapAddress(const void* address) noexcept;
+// Returns the first physical byte only when the complete non-empty range is
+// mapped by the bootstrap page tables to contiguous physical pages within the
+// bootstrap physical-address mask. The caller must keep the kernel-owned
+// buffer alive and stable for the transfer; this does not pin pages, allocate
+// DMA memory, create an IOMMU mapping, or make arbitrary user buffers safe.
+// Zero means invalid, unmapped, non-contiguous, overflowing, or unsupported.
+uint64_t translateBootstrapDmaRange(const void* address, size_t size) noexcept;
 void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept;
+void* mapBootstrapDmaMemory(uint64_t physical, size_t size) noexcept;
+[[nodiscard]] bool protectBootstrapIommuRegisters(uint64_t physical, size_t size,
+                                                   const void* ownerMapping) noexcept;
+void commitBootstrapIommuProtection() noexcept;
 // Release the most recent bootstrap MMIO mapping; callers serialize with IRQs disabled.
 bool releaseBootstrapDeviceMemory(void* mapping, size_t size) noexcept;
 // Caller validates the firmware memory type; the temporary mapping is removed
@@ -80,6 +113,78 @@ bool prepareBootstrapPs2Interrupt(uint32_t& gsi) noexcept;
 // Synchronize the BSP's Ke IRQL with the local APIC priority classes.
 void setBootstrapClockIrqlMask(uint8_t irql) noexcept;
 uint64_t bootstrapSchedulerClockTicks() noexcept;
+
+enum class BootstrapClockStatus : uint8_t {
+    Success,
+    ClockUnavailable,
+    CalibrationFailed,
+    NotBootstrapProcessor,
+    InvalidIrql,
+    InvalidParameter,
+    CounterOverflow,
+    UnsupportedPlatform,
+};
+struct BootstrapDeadline {
+    uint64_t counter{};
+};
+// Calibrates invariant TSC from CPUID.15H or five PIT channel-2 intervals.
+// A validated firmware Stall calibration may be installed first as fallback.
+// Call at PASSIVE_LEVEL on the BSP with interrupts disabled. The PIT path
+// restores the speaker gate but reprograms channel 2; callers must reserve it
+// for bootstrap calibration. The scheduler/APIC clock is not changed.
+[[nodiscard]] BootstrapClockStatus initializeBootstrapHighResolutionClock() noexcept;
+[[nodiscard]] BootstrapClockStatus setBootstrapTscCalibrationHint(
+    uint64_t frequencyHz) noexcept;
+// Returns the calibrated BSP invariant-TSC counter/frequency. Query is
+// non-blocking and usable at any IRQL on the BSP after successful calibration.
+[[nodiscard]] BootstrapClockStatus queryBootstrapClock(
+    uint64_t& counter, uint64_t& frequency) noexcept;
+// Installs a UTC FILETIME value against the calibrated monotonic counter.
+// The system clock is initialized once; an unknown/local firmware time must
+// not be passed as UTC. Queries fail until both a calibrated counter and a
+// validated UTC seed are available.
+[[nodiscard]] BootstrapClockStatus initializeBootstrapSystemTime(
+    uint64_t utcTime100ns) noexcept;
+[[nodiscard]] BootstrapClockStatus queryBootstrapSystemTime(
+    uint64_t& utcTime100ns) noexcept;
+[[nodiscard]] BootstrapClockStatus queryBootstrapUptime(
+    uint64_t& uptime100ns) noexcept;
+[[nodiscard]] BootstrapClockStatus queryBootstrapPerformanceCounter(
+    uint64_t& counter, uint64_t& frequency) noexcept;
+[[nodiscard]] BootstrapClockStatus initializeBootstrapKuserSharedData() noexcept;
+[[nodiscard]] BootstrapClockStatus updateBootstrapKuserSharedData() noexcept;
+[[nodiscard]] micant::KUserSharedData* bootstrapKuserSharedData() noexcept;
+
+enum class BootstrapRtcStatus : uint8_t {
+    Success,
+    Timeout,
+    InvalidData,
+    UnsupportedPlatform,
+    InvalidIrql,
+};
+// Reads a stable CMOS RTC sample. The RTC does not carry a UTC offset, so this
+// API returns civil fields only and never labels the result UTC.
+[[nodiscard]] BootstrapRtcStatus readBootstrapRtc(
+    micant::shared::time::SystemTimeFields& fields) noexcept;
+// Creates a bounded absolute deadline on the calibrated TSC timebase. Timeout
+// must be 1..10,000 ms; the deadline is rejected if its addition overflows.
+[[nodiscard]] BootstrapClockStatus makeBootstrapDeadline(
+    uint32_t timeoutMilliseconds, BootstrapDeadline& deadline) noexcept;
+// Reports whether an absolute deadline has expired. A deadline remains valid
+// only on the BSP and calibration instance that created it.
+[[nodiscard]] BootstrapClockStatus isBootstrapDeadlineExpired(
+    const BootstrapDeadline& deadline, bool& expired) noexcept;
+// Busy-waits to an absolute deadline; no scheduler wait or yield occurs.
+// Millisecond waits require PASSIVE_LEVEL. This has no independent watchdog
+// if TSC stops or the CPU is suspended after the initial query.
+[[nodiscard]] BootstrapClockStatus delayBootstrapMilliseconds(
+    uint32_t milliseconds) noexcept;
+[[nodiscard]] bool verifyBootstrapClockTimeouts() noexcept;
+// KeStallExecutionProcessor-like bounded busy stall: at most 50 microseconds,
+// callable through DISPATCH_LEVEL on the calibrated BSP. It does not promise
+// precision better than the calibrated TSC/virtual-machine time source.
+[[nodiscard]] BootstrapClockStatus delayBootstrapMicroseconds(
+    uint32_t microseconds) noexcept;
 
 struct UserServiceArguments {
     uint64_t number, first, second, third, fourth, userStack;

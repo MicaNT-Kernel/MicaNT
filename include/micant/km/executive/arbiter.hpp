@@ -1,4 +1,7 @@
 #pragma once
+#if defined(MICANT_BAREMETAL) && defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+#include "micant/km/executive/arbiter_baremetal.hpp"
+#else
 /**
  * @file arbiter.hpp
  * @brief Horizon 47: Sovereign NT Hardware Resource Arbiter (Arb* / Rtl*RangeList — base/ntos/arb),
@@ -1220,3 +1223,4 @@ namespace micant {
     using km::arb::PnpStageAndInstallInfDriverPackage;
     using km::arb::InitializeArbiterSubsystemExports;
 } // namespace micant
+#endif

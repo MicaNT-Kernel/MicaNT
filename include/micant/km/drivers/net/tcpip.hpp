@@ -24,18 +24,120 @@
 #include <span>
 #include <cstring>
 #include <array>
-#include <unordered_map>
 #include <deque>
 #include <chrono>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
 #include <functional>
+#include <atomic>
+#include <iterator>
+#include <type_traits>
+#include <utility>
+#if defined(MICANT_FREESTANDING)
+#include "micant/km/core/ke.hpp"
+#include "micant/km/core/passive_work.hpp"
+#include "micant/km/core/sync_baremetal.hpp"
+#if defined(MICANT_BAREMETAL)
+#include "micant/km/core/timer_baremetal.hpp"
+#endif
+#endif
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/ndis_adapter_abi.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
 
 namespace micant::tcpip {
+
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+// PASSIVE-only mutex backed by the canonical thread wait/wake scheduler. It
+// avoids pulling hosted Mutex runtime symbols into the bare-metal image.
+class KernelMutex {
+public:
+    void lock() noexcept {
+        auto* current = ke::KeGetCurrentThread();
+        if (!current || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) __builtin_trap();
+        Waiter waiter{current};
+        {
+            ke::SpinLockGuard guard(lock_);
+            if (!owner_) { owner_ = current; return; }
+            if (owner_ == current) __builtin_trap();
+            if (tail_) tail_->next = &waiter;
+            else head_ = &waiter;
+            tail_ = &waiter;
+        }
+        if (waiter.event.wait() != NtStatus::Success) __builtin_trap();
+        if (!waiter.granted) __builtin_trap();
+    }
+    [[nodiscard]] bool try_lock() noexcept {
+        auto* current = ke::KeGetCurrentThread();
+        if (!current || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return false;
+        ke::SpinLockGuard guard(lock_);
+        if (owner_) return false;
+        owner_ = current;
+        return true;
+    }
+    void unlock() noexcept {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        auto* current = ke::KeGetCurrentThread();
+        Waiter* wake{};
+        {
+            ke::SpinLockGuard guard(lock_);
+            if (!current || owner_ != current) __builtin_trap();
+            wake = head_;
+            if (wake) {
+                head_ = wake->next;
+                if (!head_) tail_ = nullptr;
+                wake->next = nullptr;
+                owner_ = wake->thread;
+                wake->granted = true;
+            } else owner_ = nullptr;
+        }
+        // Complete the event's memory accesses while dispatch is excluded.
+        // BootstrapEvent::set may synchronously dispatch a higher-priority
+        // waiter when IF is set; that waiter owns this stack waiter and may
+        // destroy the event as soon as set returns to it.
+        if (wake) (void)wake->event.set();
+        if (flags & (uint64_t{1} << 9)) {
+            ke::detail::dispatchHigherPriority();
+            __asm__ __volatile__("sti" : : : "memory");
+        }
+    }
+private:
+    struct Waiter {
+        explicit Waiter(ke::KThread* t) noexcept : thread(t) {}
+        ke::KThread* thread{};
+        Waiter* next{};
+        bool granted{};
+        sync::detail::BootstrapEvent event{false, false};
+    };
+    ke::SpinLock lock_{};
+    ke::KThread* owner_{};
+    Waiter* head_{};
+    Waiter* tail_{};
+};
+using Mutex = KernelMutex;
+#else
+using Mutex = std::mutex;
+#endif
+
+inline bool queryTcpClock100ns(uint64_t& now) noexcept {
+#if defined(MICANT_FREESTANDING)
+    return ke::KeQueryUptime100ns(now);
+#else
+    const auto ticks = std::chrono::steady_clock::now().time_since_epoch();
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(ticks).count();
+    if (ns < 0) return false;
+    now = static_cast<uint64_t>(ns) / 100;
+    return true;
+#endif
+}
+
+inline constexpr size_t TCP_MAX_SEGMENT_PAYLOAD = 1460;
+inline constexpr size_t TCP_MAX_RX_BUFFER = 64 * 1024;
+inline constexpr uint8_t TCP_MAX_RETRIES = 5;
+inline std::atomic<uint32_t> g_tcpInitialSequence{0x4D494341u};
 
 // Byte Order Translation Primitives
 [[nodiscard]] constexpr uint16_t htons(uint16_t hostshort) noexcept {
@@ -161,6 +263,20 @@ struct Ipv4Hasher {
         return std::hash<uint32_t>{}(a.addr);
     }
 };
+
+namespace kernel_api {
+int createSocket(int addressFamily, int socketType, int protocol) noexcept;
+void closeSocket(int socketId) noexcept;
+bool bindSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
+bool connectSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
+bool listenSocket(int socketId, int backlog) noexcept;
+int sendSocket(int socketId, const void* data, size_t length) noexcept;
+int sendToSocket(int socketId, const void* data, size_t length,
+                 uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
+int recvSocket(int socketId, void* buffer, size_t capacity) noexcept;
+int recvFromSocket(int socketId, void* buffer, size_t capacity,
+                   uint32_t* sourceIpv4NetworkOrder, uint16_t* sourcePort) noexcept;
+} // namespace kernel_api
 
 /**
  * @brief 128-bit IPv6 Address.
@@ -398,16 +514,19 @@ struct QuicShortHeader {
  * @brief Computes standard 16-bit One's Complement Internet Checksum (RFC 1071).
  */
 inline uint16_t calculateInternetChecksum(const void* data, size_t length) noexcept {
-    const auto* words = reinterpret_cast<const uint16_t*>(data);
+    const auto* bytes = static_cast<const uint8_t*>(data);
     uint32_t sum = 0;
 
     while (length > 1) {
-        sum += *words++;
+        uint16_t word{};
+        std::memcpy(&word, bytes, sizeof(word));
+        sum += word;
+        bytes += sizeof(word);
         length -= 2;
     }
 
     if (length == 1) {
-        sum += *reinterpret_cast<const uint8_t*>(words);
+        sum += *bytes;
     }
 
     while (sum >> 16) {
@@ -555,6 +674,11 @@ struct NdpCacheEntry {
  * @brief Kernel Socket Descriptor Structure.
  */
 struct SocketEndpoint {
+    struct ReceivedDatagram {
+        std::vector<uint8_t> bytes;
+        Ipv4Address sourceIp{};
+        uint16_t sourcePort{};
+    };
     int id{0};
     int family{AF_INET};
     int type{SOCK_STREAM};
@@ -569,6 +693,12 @@ struct SocketEndpoint {
     TcpState tcpState{TcpState::Closed};
     uint32_t seqNum{1000};
     uint32_t ackNum{0};
+    uint32_t sndUna{1000};
+    uint32_t peerInitialSequence{0};
+    std::vector<uint8_t> pendingSegment{};
+    uint64_t retransmitDeadline100ns{0};
+    uint8_t retransmitCount{0};
+    bool retransmitPending{false};
 
     // RFC 7323 High Performance Window Scale
     uint8_t sndWndScale{0}; // Shift count (0..14)
@@ -584,10 +714,41 @@ struct SocketEndpoint {
     std::vector<SackBlock> sackBlocks;
 
     std::deque<uint8_t> rxStream;
-    std::deque<std::vector<uint8_t>> rxDatagrams;
-    std::mutex socketMutex;
+    std::deque<ReceivedDatagram> rxDatagrams;
+    size_t rxQueuedDatagramBytes{};
+    Mutex socketMutex;
+    std::atomic<uint32_t> references{1};
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    sync::detail::BootstrapEvent receiveEvent{true, false};
+    timer::KTIMER receiveTimer{};
+    ke::KDPC receiveTimeoutDpc{};
+    std::atomic<bool> receiveWaitActive{false};
+    std::atomic<bool> closed{false};
+#endif
     bool isBound{false};
     bool isListening{false};
+    bool acceptReturned{false};
+    int listenSocketId{0};
+    uint16_t listenBacklog{16};
+
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    void signalReceiveEvent() noexcept {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        (void)receiveEvent.set();
+        if (flags & (uint64_t{1} << 9)) {
+            if (ke::KeGetCurrentIrql() <= ke::APC_LEVEL) ke::detail::dispatchHigherPriority();
+            __asm__ __volatile__("sti" : : : "memory");
+        }
+    }
+    void initializeReceiveWait() noexcept {
+        timer::KeInitializeTimer(&receiveTimer);
+        ke::KeInitializeDpc(&receiveTimeoutDpc, [](ke::KDPC*, void* context, void*, void*) {
+            auto* endpoint = static_cast<SocketEndpoint*>(context);
+            endpoint->signalReceiveEvent();
+        }, this);
+    }
+#endif
 
     bool transitionTo(TcpState newState) {
         if (!isValidTcpTransition(tcpState, newState)) {
@@ -640,6 +801,122 @@ struct SocketEndpoint {
     }
 };
 
+template <typename T>
+class IntrusivePtr {
+public:
+    IntrusivePtr() noexcept = default;
+    explicit IntrusivePtr(T* pointer) noexcept : pointer_(pointer) {}
+    IntrusivePtr(const IntrusivePtr& other) noexcept : pointer_(other.pointer_) { retain(); }
+    IntrusivePtr(IntrusivePtr&& other) noexcept : pointer_(other.pointer_) { other.pointer_ = nullptr; }
+    ~IntrusivePtr() { release(); }
+    IntrusivePtr& operator=(const IntrusivePtr& other) noexcept {
+        if (this == &other) return *this;
+        T* replacement = other.pointer_;
+        if (replacement) replacement->references.fetch_add(1, std::memory_order_relaxed);
+        release(); pointer_ = replacement; return *this;
+    }
+    IntrusivePtr& operator=(IntrusivePtr&& other) noexcept {
+        if (this == &other) return *this;
+        release(); pointer_ = other.pointer_; other.pointer_ = nullptr; return *this;
+    }
+    [[nodiscard]] T* get() const noexcept { return pointer_; }
+    [[nodiscard]] T* detach() noexcept { T* value=pointer_; pointer_=nullptr; return value; }
+    [[nodiscard]] T* operator->() const noexcept { return pointer_; }
+    [[nodiscard]] T& operator*() const noexcept { return *pointer_; }
+    explicit operator bool() const noexcept { return pointer_ != nullptr; }
+    void reset() noexcept { release(); pointer_ = nullptr; }
+private:
+    void retain() noexcept {
+        if (pointer_) pointer_->references.fetch_add(1, std::memory_order_relaxed);
+    }
+    void release() noexcept {
+        if (pointer_ && pointer_->references.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            delete pointer_;
+    }
+    T* pointer_{};
+};
+
+template <typename Key, typename Value, size_t Capacity>
+class FixedMap {
+    using Pair = std::pair<Key, Value>;
+    struct Entry { bool used{}; Pair value{}; };
+public:
+    template <bool IsConst>
+    class Iterator {
+        using Owner = std::conditional_t<IsConst, const FixedMap, FixedMap>;
+        friend class FixedMap;
+        Iterator(Owner* owner, size_t index) noexcept : owner_(owner), index_(index) { advance(); }
+    public:
+        using difference_type = std::ptrdiff_t;
+        using value_type = Pair;
+        using iterator_category = std::forward_iterator_tag;
+        using reference = std::conditional_t<IsConst, const Pair&, Pair&>;
+        using pointer = std::conditional_t<IsConst, const Pair*, Pair*>;
+        Iterator() noexcept = default;
+        reference operator*() const noexcept { return owner_->entries_[index_].value; }
+        pointer operator->() const noexcept { return &owner_->entries_[index_].value; }
+        Iterator& operator++() noexcept { ++index_; advance(); return *this; }
+        Iterator operator++(int) noexcept { Iterator old=*this; ++*this; return old; }
+        friend bool operator==(const Iterator& a, const Iterator& b) noexcept {
+            return a.owner_ == b.owner_ && a.index_ == b.index_;
+        }
+        friend bool operator!=(const Iterator& a, const Iterator& b) noexcept { return !(a==b); }
+    private:
+        void advance() noexcept {
+            while (owner_ && index_ < Capacity && !owner_->entries_[index_].used) ++index_;
+        }
+        Owner* owner_{};
+        size_t index_{Capacity};
+    };
+    using iterator = Iterator<false>;
+    using const_iterator = Iterator<true>;
+
+    [[nodiscard]] iterator begin() noexcept { return iterator(this, 0); }
+    [[nodiscard]] iterator end() noexcept { return iterator(this, Capacity); }
+    [[nodiscard]] const_iterator begin() const noexcept { return const_iterator(this, 0); }
+    [[nodiscard]] const_iterator end() const noexcept { return const_iterator(this, Capacity); }
+    [[nodiscard]] iterator find(const Key& key) noexcept {
+        for (size_t i=0;i<Capacity;++i) if (entries_[i].used && entries_[i].value.first==key) return iterator(this,i);
+        return end();
+    }
+    [[nodiscard]] const_iterator find(const Key& key) const noexcept {
+        for (size_t i=0;i<Capacity;++i) if (entries_[i].used && entries_[i].value.first==key) return const_iterator(this,i);
+        return end();
+    }
+    [[nodiscard]] size_t size() const noexcept { return size_; }
+    void clear() noexcept {
+        for (auto& entry : entries_) if (entry.used) { entry.value = Pair{}; entry.used=false; }
+        size_=0;
+    }
+    void reserve(size_t) noexcept {}
+    [[nodiscard]] bool insert_or_assign(const Key& key, Value value) noexcept {
+        auto it=find(key);
+        if (it!=end()) { it->second=std::move(value); return true; }
+        for (size_t i=0;i<Capacity;++i) if (!entries_[i].used) {
+            entries_[i].value=Pair{key,std::move(value)}; entries_[i].used=true; ++size_; return true;
+        }
+        return false;
+    }
+    [[nodiscard]] std::pair<iterator,bool> emplace(const Key& key, Value value) noexcept {
+        auto it=find(key); if (it!=end()) return {it,false};
+        for (size_t i=0;i<Capacity;++i) if (!entries_[i].used) {
+            entries_[i].value=Pair{key,std::move(value)}; entries_[i].used=true; ++size_;
+            return {iterator(this,i),true};
+        }
+        return {end(),false};
+    }
+    iterator erase(iterator it) noexcept {
+        if (it.owner_!=this || it.index_>=Capacity || !entries_[it.index_].used) return end();
+        const size_t next=it.index_+1;
+        entries_[it.index_].value=Pair{}; entries_[it.index_].used=false; --size_;
+        return iterator(this,next);
+    }
+    size_t erase(const Key& key) noexcept { auto it=find(key); if(it==end())return 0; erase(it); return 1; }
+private:
+    std::array<Entry,Capacity> entries_{};
+    size_t size_{};
+};
+
 /**
  * @brief Clean-Room Kernel TCP/IP & Network Protocol Stack Engine.
  */
@@ -650,15 +927,195 @@ public:
         return instance;
     }
 
-    using PacketFilterCallback = std::function<bool(bool inbound, Ipv4Address srcIp, Ipv4Address dstIp, uint8_t proto, std::span<const uint8_t> transportData)>;
-    void setPacketFilterCallback(PacketFilterCallback cb) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        packetFilterCallback_ = std::move(cb);
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    // Called at PASSIVE_LEVEL once the adapter and scheduler are available.
+    // The singleton and periodic item remain resident until stop succeeds.
+    [[nodiscard]] bool startRetransmitWorker() noexcept {
+        if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return false;
+        rxWork_.routine = &NetworkStack::drainRxFrames;
+        rxWork_.context = this;
+        return ke::passive_work::startPeriodic(retransmitWork_, [](void* context) noexcept {
+            static_cast<NetworkStack*>(context)->pollNetwork();
+        }, this, 1'000'000); // 100 ms
     }
 
+    [[nodiscard]] bool stopRetransmitWorker() noexcept {
+        return ke::passive_work::stopPeriodic(retransmitWork_);
+    }
+
+#if !defined(MICANT_FREESTANDING)
+    [[nodiscard]] bool unbindAdapter(const ndis::INdisAdapter* adapter) noexcept {
+        if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return false;
+        std::shared_ptr<ndis::INdisAdapter> current;
+        {
+            std::lock_guard<Mutex> guard(mutex_);
+            current = adapter_;
+            if (!current || current.get() != adapter) return true;
+        }
+        if (retransmitWork_.deadline.inserted && !stopRetransmitWorker()) return false;
+        current->registerReceiveHandler({});
+        {
+            std::lock_guard<Mutex> guard(mutex_);
+            if (adapter_.get() != adapter) return true;
+            adapter_.reset();
+            initialized_ = false;
+        }
+        return true;
+    }
+#else
+    [[nodiscard]] bool bindAdapterServices(
+        const micant::shared::ndis::AdapterServicesV1* services) noexcept {
+        if (!services || services->Size < sizeof(*services) ||
+            services->Version != micant::shared::ndis::AdapterServicesVersion ||
+            !services->Context || !services->SendPacket || !services->SetReceiveHandler ||
+            !services->PollReceive || !services->Stop || services->Mtu < 576 ||
+            services->LinkState > 1 || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+            return false;
+        {
+            std::lock_guard<Mutex> guard(mutex_);
+            auto* current = adapterServices_.load(std::memory_order_acquire);
+            if (current && current != services) return false;
+            adapterServices_.store(services, std::memory_order_release);
+            localMac_ = ndis::MacAddress(services->MacAddress[0], services->MacAddress[1],
+                services->MacAddress[2], services->MacAddress[3],
+                services->MacAddress[4], services->MacAddress[5]);
+        }
+        if (!startRetransmitWorker()) {
+            std::lock_guard<Mutex> guard(mutex_);
+            if (adapterServices_.load(std::memory_order_acquire) == services)
+                adapterServices_.store(nullptr, std::memory_order_release);
+            initialized_ = false;
+            return false;
+        }
+        if (services->SetReceiveHandler(services->Context,
+                &NetworkStack::receiveIndication, this) != static_cast<int32_t>(NtStatus::Success)) {
+            (void)stopRetransmitWorker();
+            std::lock_guard<Mutex> guard(mutex_);
+            adapterServices_.store(nullptr, std::memory_order_release);
+            return false;
+        }
+        std::lock_guard<Mutex> guard(mutex_);
+        if (!localIp_.isZero()) (void)arpCache_.insert_or_assign(localIp_, ArpCacheEntry(localMac_, 0, true));
+        initialized_ = true;
+        return true;
+    }
+
+    [[nodiscard]] bool unbindAdapterServices(
+        const micant::shared::ndis::AdapterServicesV1* services) noexcept {
+        if (!services || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return false;
+        {
+            std::lock_guard<Mutex> guard(mutex_);
+            if (adapterServices_.load(std::memory_order_acquire) != services) return true;
+        }
+        if (retransmitWork_.deadline.inserted && !stopRetransmitWorker()) return false;
+        if (services->SetReceiveHandler(services->Context, nullptr, nullptr) !=
+            static_cast<int32_t>(NtStatus::Success)) return false;
+        std::lock_guard<Mutex> guard(mutex_);
+        if (adapterServices_.load(std::memory_order_acquire) == services) {
+            adapterServices_.store(nullptr, std::memory_order_release);
+            initialized_ = false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool isBoundToAdapterServices(
+        const micant::shared::ndis::AdapterServicesV1* services) const noexcept {
+        return services && adapterServices_.load(std::memory_order_acquire) == services;
+    }
+
+    void initialize() noexcept {
+        std::lock_guard<Mutex> guard(mutex_);
+        initialized_ = adapterServices_.load(std::memory_order_acquire) != nullptr &&
+                       retransmitWork_.deadline.inserted;
+    }
+#endif
+
+    void pollNetwork() noexcept {
+#if defined(MICANT_FREESTANDING)
+        const auto* services = adapterServices_.load(std::memory_order_acquire);
+        if (services && services->PollReceive)
+            (void)services->PollReceive(services->Context);
+#else
+        std::shared_ptr<ndis::INdisAdapter> adapter;
+        {
+            std::lock_guard<Mutex> guard(mutex_);
+            adapter = adapter_;
+        }
+        if (adapter) (void)adapter->pollReceive();
+#endif
+        pollTcpTimers();
+    }
+
+#if defined(MICANT_FREESTANDING)
+    static void receiveIndication(void* context, const uint8_t* frame, size_t length) noexcept {
+        auto* stack = static_cast<NetworkStack*>(context);
+        if (stack && frame) stack->receiveAdapterFrame(std::span<const uint8_t>(frame, length));
+    }
+#endif
+
+    // NDIS may invoke a receive indication at DISPATCH_LEVEL. The parser and
+    // transport paths allocate and use PASSIVE-only synchronization, so retain
+    // the packet in a bounded resident ring and parse it on the existing
+    // canonical passive worker. This also prevents receive callback reentrancy
+    // into a miniport PollReceive/TX critical section. Queue exhaustion drops.
+    void receiveAdapterFrame(std::span<const uint8_t> frame) noexcept {
+        if (frame.empty() || frame.size() > RxFrameCapacity) return;
+        bool queued = false;
+        {
+            ke::SpinLockGuard guard(rxQueueLock_);
+            if (rxQueueCount_ < RxQueueSlots) {
+                auto& slot = rxQueue_[rxQueueTail_];
+                std::memcpy(slot.bytes.data(), frame.data(), frame.size());
+                slot.length = frame.size();
+                rxQueueTail_ = (rxQueueTail_ + 1) % RxQueueSlots;
+                ++rxQueueCount_;
+                queued = true;
+            }
+        }
+        if (queued) (void)ke::passive_work::queue(rxWork_);
+    }
+
+    static constexpr size_t RxQueueSlots = 32;
+    static constexpr size_t RxFrameCapacity = 2048;
+    struct RxFrameSlot {
+        std::array<uint8_t, RxFrameCapacity> bytes{};
+        size_t length{};
+    };
+
+    static void drainRxFrames(void* context) noexcept {
+        auto* stack = static_cast<NetworkStack*>(context);
+        if (!stack) return;
+        std::array<uint8_t, RxFrameCapacity> frame{};
+        for (;;) {
+            size_t length = 0;
+            {
+                ke::SpinLockGuard guard(stack->rxQueueLock_);
+                if (!stack->rxQueueCount_) return;
+                auto& slot = stack->rxQueue_[stack->rxQueueHead_];
+                length = slot.length;
+                if (length) std::memcpy(frame.data(), slot.bytes.data(), length);
+                slot.length = 0;
+                stack->rxQueueHead_ = (stack->rxQueueHead_ + 1) % RxQueueSlots;
+                --stack->rxQueueCount_;
+            }
+            if (length) stack->onEthernetFrameReceived(
+                std::span<const uint8_t>(frame.data(), length));
+        }
+    }
+#endif
+
+#if !defined(MICANT_FREESTANDING)
+    using PacketFilterCallback = std::function<bool(bool inbound, Ipv4Address srcIp, Ipv4Address dstIp, uint8_t proto, std::span<const uint8_t> transportData)>;
+    void setPacketFilterCallback(PacketFilterCallback cb) {
+        std::lock_guard<Mutex> lock(mutex_);
+        packetFilterCallback_ = std::move(cb);
+    }
+#endif
+
+#if !defined(MICANT_FREESTANDING)
     void resetForTest() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::lock_guard<std::mutex> sockLock(socketMutex_);
+        std::lock_guard<Mutex> lock(mutex_);
+        std::lock_guard<Mutex> sockLock(socketMutex_);
         initialized_ = false;
         adapter_ = nullptr;
         localIp_ = Ipv4Address::any();
@@ -672,48 +1129,31 @@ public:
         sockets_.clear();
         nextSocketId_ = 100;
         nextDynamicPort_ = 49152;
+#if !defined(MICANT_FREESTANDING)
         packetFilterCallback_ = nullptr;
+#endif
     }
 
     void initialize(std::shared_ptr<ndis::INdisAdapter> adapter = nullptr) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         if (initialized_) return;
 
         if (adapter) {
             adapter_ = adapter;
         } else if (!adapter_) {
-            auto virtNic = std::make_shared<ndis::VirtualNetworkAdapter>(
-                L"\\Device\\NdisMicaNic0",
-                L"MicaNT Virtual 10-Gigabit Network Adapter"
-            );
-            adapter_ = virtNic;
+            adapter_ = ndis::TitanNdisSubsystem::Instance().getPrimaryAdapter();
         }
+        if (!adapter_) return;
 
         // Register incoming packet handler on adapter
-        if (adapter_) {
-            adapter_->registerReceiveHandler([this](std::span<const uint8_t> frame) {
-                onEthernetFrameReceived(frame);
-            });
-            localMac_ = adapter_->getMacAddress();
-        }
+        adapter_->registerReceiveHandler([this](std::span<const uint8_t> frame) {
+            onEthernetFrameReceived(frame);
+        });
+        localMac_ = adapter_->getMacAddress();
 
-        // Set default local network configuration if not already configured
-        if (localIp_.isZero()) {
-            localIp_ = Ipv4Address(192, 168, 1, 100);
-            subnetMask_ = Ipv4Address(255, 255, 255, 0);
-            gatewayIp_ = Ipv4Address(192, 168, 1, 1);
-            dnsServer_ = Ipv4Address(8, 8, 8, 8);
-        }
-
-        // Seed ARP cache with gateway, broadcast, and local IP
-        arpCache_[gatewayIp_] = ArpCacheEntry(ndis::MacAddress(0x00, 0x15, 0x5D, 0x01, 0x02, 0x03), 0, true);
-        arpCache_[Ipv4Address::broadcast()] = ArpCacheEntry(ndis::MacAddress::broadcast(), 0, true);
-        arpCache_[localIp_] = ArpCacheEntry(localMac_, 0, true);
-
-        // Compute SLAAC address from hardware MAC
-        if (localIpv6_.isZero()) {
-            localIpv6_ = Ipv6Address::generateSlaac(localMac_);
-        }
+        // IP configuration is installed only by an explicit configuration path.
+        // DHCP/SLAAC are not fabricated by adapter initialization.
+        if (!localIp_.isZero()) (void)arpCache_.insert_or_assign(localIp_, ArpCacheEntry(localMac_, 0, true));
 
         initialized_ = true;
     }
@@ -722,7 +1162,7 @@ public:
      * @brief Dynamically binds an NDIS miniport adapter (e.g. Intel I210 hardware).
      */
     void bindAdapter(std::shared_ptr<ndis::INdisAdapter> adapter) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         if (!adapter) return;
         adapter_ = adapter;
         localMac_ = adapter_->getMacAddress();
@@ -732,83 +1172,138 @@ public:
             onEthernetFrameReceived(frame);
         });
 
-        // Update ARP cache with local IP and adapter MAC
-        arpCache_[localIp_] = ArpCacheEntry(localMac_, 0, true);
-
-        // Generate and set local IPv6 address via SLAAC (EUI-64)
-        localIpv6_ = Ipv6Address::generateSlaac(localMac_);
+        if (!localIp_.isZero()) (void)arpCache_.insert_or_assign(localIp_, ArpCacheEntry(localMac_, 0, true));
         initialized_ = true;
     }
 
     [[nodiscard]] std::shared_ptr<ndis::INdisAdapter> getAdapter() const noexcept { return adapter_; }
+#endif
     [[nodiscard]] ndis::MacAddress getMacAddress() const noexcept {
+#if defined(MICANT_FREESTANDING)
+        return localMac_;
+#else
         return adapter_ ? adapter_->getMacAddress() : localMac_;
+#endif
     }
     [[nodiscard]] bool isLinkUp() const noexcept {
+#if defined(MICANT_FREESTANDING)
+        const auto* services = adapterServices_.load(std::memory_order_acquire);
+        return services && services->LinkState == 1;
+#else
         return adapter_ && adapter_->getLinkState() == ndis::MediaConnectState::Connected;
+#endif
     }
     [[nodiscard]] uint64_t getLinkSpeedMbps() const noexcept {
+#if defined(MICANT_FREESTANDING)
+        const auto* services = adapterServices_.load(std::memory_order_acquire);
+        return services ? services->SpeedBps / 1000000ULL : 0;
+#else
         return adapter_ ? (adapter_->getSpeedBps() / 1000000ULL) : 0;
+#endif
+    }
+    [[nodiscard]] bool hasAdapter() const noexcept {
+#if defined(MICANT_FREESTANDING)
+        return adapterServices_.load(std::memory_order_acquire) != nullptr;
+#else
+        return static_cast<bool>(adapter_);
+#endif
+    }
+    [[nodiscard]] uint32_t adapterMtu() const noexcept {
+#if defined(MICANT_FREESTANDING)
+        const auto* services = adapterServices_.load(std::memory_order_acquire);
+        return services ? services->Mtu : 0;
+#else
+        return adapter_ ? adapter_->getMtu() : 0;
+#endif
+    }
+    [[nodiscard]] NtStatus sendFrame(std::span<const uint8_t> frame) noexcept {
+#if defined(MICANT_FREESTANDING)
+        const auto* services = adapterServices_.load(std::memory_order_acquire);
+        if (!services || !services->SendPacket) return NtStatus::DeviceNotReady;
+        return static_cast<NtStatus>(services->SendPacket(services->Context, frame.data(), frame.size()));
+#else
+        return adapter_ ? adapter_->sendPacket(frame) : NtStatus::DeviceNotReady;
+#endif
     }
     [[nodiscard]] Ipv4Address getLocalIp() const noexcept { return localIp_; }
+    void queryNetworkConfiguration(Ipv4Address& ip, Ipv4Address& mask,
+        Ipv4Address& gateway, Ipv4Address& dns, ndis::MacAddress& mac) const noexcept {
+        std::lock_guard<Mutex> guard(mutex_);
+        ip = localIp_; mask = subnetMask_; gateway = gatewayIp_; dns = dnsServer_; mac = localMac_;
+    }
+    [[nodiscard]] bool applyNetworkConfiguration(Ipv4Address ip, Ipv4Address mask,
+        Ipv4Address gateway, Ipv4Address dns) noexcept {
+        const uint32_t hostMask = ntohl(mask.addr);
+        const uint32_t inverseMask = ~hostMask;
+        if ((!ip.isZero() && (hostMask == 0 || (inverseMask & (inverseMask + 1)) != 0)) ||
+            (ip.isZero() && (!gateway.isZero() || !dns.isZero())) ||
+            (!gateway.isZero() && ((ntohl(gateway.addr) & hostMask) != (ntohl(ip.addr) & hostMask))))
+            return false;
+        std::lock_guard<Mutex> guard(mutex_);
+        const Ipv4Address oldIp = localIp_;
+        if (oldIp != ip && !oldIp.isZero()) (void)arpCache_.erase(oldIp);
+        if (!ip.isZero() && !arpCache_.insert_or_assign(ip, ArpCacheEntry(localMac_, 0, true))) {
+            if (!oldIp.isZero()) (void)arpCache_.insert_or_assign(oldIp, ArpCacheEntry(localMac_, 0, true));
+            return false;
+        }
+        localIp_ = ip;
+        subnetMask_ = mask;
+        gatewayIp_ = gateway;
+        dnsServer_ = dns;
+        return true;
+    }
+    [[nodiscard]] bool isInitialized() const noexcept {
+        std::lock_guard<Mutex> guard(mutex_);
+        return initialized_;
+    }
     [[nodiscard]] Ipv4Address getSubnetMask() const noexcept { return subnetMask_; }
     [[nodiscard]] Ipv4Address getGateway() const noexcept { return gatewayIp_; }
     [[nodiscard]] Ipv4Address getDnsServer() const noexcept { return dnsServer_; }
     [[nodiscard]] Ipv6Address getLocalIpv6() const noexcept { return localIpv6_; }
 
     void setLocalIp(Ipv4Address ip, Ipv4Address mask = Ipv4Address(255, 255, 255, 0), Ipv4Address gw = Ipv4Address::any()) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         localIp_ = ip;
         subnetMask_ = mask;
         if (!gw.isZero()) gatewayIp_ = gw;
-        arpCache_[localIp_] = ArpCacheEntry(localMac_, 0, true);
+        (void)arpCache_.insert_or_assign(localIp_, ArpCacheEntry(localMac_, 0, true));
     }
 
     void setLocalIpv6(Ipv6Address ip6) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         localIpv6_ = ip6;
     }
 
     void setDnsServer(Ipv4Address dns) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         dnsServer_ = dns;
     }
 
-    /**
-     * @brief Zero-Copy Transmit of NDIS 6.x NET_BUFFER_LIST packet chains.
-     */
+#if !defined(MICANT_FREESTANDING)
+    /** @brief Hosted adapter-only NET_BUFFER_LIST compatibility path. */
     NtStatus sendNetBufferLists(std::shared_ptr<ndis::NetBufferList> nblList) {
         if (!adapter_) return NtStatus::DeviceNotReady;
         if (!nblList) return NtStatus::InvalidParameter;
 
-        auto* e1000 = dynamic_cast<ndis::IntelE1000eAdapter*>(adapter_.get());
-        if (e1000) {
-            return e1000->sendNetBufferLists(nblList);
-        }
-        for (auto curr = nblList; curr; curr = curr->next) {
-            for (auto nb = curr->firstNetBuffer; nb; nb = nb->next) {
-                auto st = adapter_->sendPacket(nb->data);
-                if (!NT_SUCCESS(st)) return st;
-            }
-        }
-        return NtStatus::Success;
+        return adapter_->sendNetBufferLists(std::move(nblList));
     }
+#endif
 
     /**
      * @brief Adds or updates an ARP cache entry with TTL.
      */
     void addArpEntry(Ipv4Address ip, ndis::MacAddress mac, uint32_t ttlSeconds = 300, bool isStatic = false) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        arpCache_[ip] = ArpCacheEntry(mac, ttlSeconds, isStatic);
+        std::lock_guard<Mutex> lock(mutex_);
+        (void)arpCache_.insert_or_assign(ip, ArpCacheEntry(mac, ttlSeconds, isStatic));
     }
 
     /**
      * @brief Resolves MAC address via ARP cache.
      */
     [[nodiscard]] bool lookupArp(Ipv4Address ip, ndis::MacAddress& outMac) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         if (ip == localIp_ || ip.isLoopback()) {
-            outMac = adapter_ ? adapter_->getMacAddress() : localMac_;
+            outMac = getMacAddress();
             return true;
         }
         auto it = arpCache_.find(ip);
@@ -833,7 +1328,7 @@ public:
      * @brief Ages the dynamic ARP table, purging expired entries.
      */
     size_t ageArpTable(uint32_t elapsedSeconds) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         size_t expired = 0;
         for (auto it = arpCache_.begin(); it != arpCache_.end(); ) {
             if (!it->second.isStatic) {
@@ -851,7 +1346,7 @@ public:
     }
 
     [[nodiscard]] size_t getArpTableSize() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         return arpCache_.size();
     }
 
@@ -859,42 +1354,42 @@ public:
      * @brief Broadcasts a Gratuitous ARP to announce IP/MAC mapping.
      */
     NtStatus sendGratuitousArp() {
-        if (!adapter_) return NtStatus::DeviceNotReady;
+        if (!hasAdapter()) return NtStatus::DeviceNotReady;
         ArpPacket garp{};
         garp.hardwareType = htons(1);
         garp.protocolType = htons(ndis::ETHERTYPE_IPV4);
         garp.hardwareSize = 6;
         garp.protocolSize = 4;
         garp.setOpcode(1); // Request
-        garp.senderMac = adapter_->getMacAddress();
+        garp.senderMac = getMacAddress();
         garp.senderIp = localIp_;
         garp.targetMac = ndis::MacAddress::broadcast();
         garp.targetIp = localIp_;
 
         auto ethFrame = ndis::buildEthernetFrame(
             ndis::MacAddress::broadcast(),
-            adapter_->getMacAddress(),
+            getMacAddress(),
             ndis::ETHERTYPE_ARP,
             std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&garp), sizeof(garp))
         );
-        return adapter_->sendPacket(ethFrame);
+        return sendFrame(ethFrame);
     }
 
     /**
      * @brief Adds or updates an IPv6 NDP cache entry.
      */
     void addNdpEntry(Ipv6Address ip6, ndis::MacAddress mac, uint32_t ttlSeconds = 300, bool isStatic = false) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ndpCache_[ip6.toString()] = NdpCacheEntry(mac, ttlSeconds, isStatic);
+        std::lock_guard<Mutex> lock(mutex_);
+        (void)ndpCache_.insert_or_assign(ip6, NdpCacheEntry(mac, ttlSeconds, isStatic));
     }
 
     [[nodiscard]] bool lookupNdp(Ipv6Address ip6, ndis::MacAddress& outMac) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         if (ip6 == localIpv6_ || ip6.isLoopback()) {
-            outMac = adapter_ ? adapter_->getMacAddress() : localMac_;
+            outMac = getMacAddress();
             return true;
         }
-        auto it = ndpCache_.find(ip6.toString());
+        auto it = ndpCache_.find(ip6);
         if (it != ndpCache_.end()) {
             outMac = it->second.mac;
             return true;
@@ -903,7 +1398,7 @@ public:
     }
 
     size_t ageNdpTable(uint32_t elapsedSeconds) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         size_t expired = 0;
         for (auto it = ndpCache_.begin(); it != ndpCache_.end(); ) {
             if (!it->second.isStatic) {
@@ -921,7 +1416,7 @@ public:
     }
 
     NtStatus sendNeighborSolicitation(Ipv6Address targetIp) {
-        if (!adapter_) return NtStatus::DeviceNotReady;
+        if (!hasAdapter()) return NtStatus::DeviceNotReady;
         #pragma pack(push, 1)
         struct NdpNeighborSolicitation {
             uint8_t  type{135}; // Neighbor Solicitation
@@ -937,7 +1432,7 @@ public:
     }
 
     NtStatus sendNeighborAdvertisement(Ipv6Address targetIp) {
-        if (!adapter_) return NtStatus::DeviceNotReady;
+        if (!hasAdapter()) return NtStatus::DeviceNotReady;
         #pragma pack(push, 1)
         struct NdpNeighborAdvertisement {
             uint8_t  type{136}; // Neighbor Advertisement
@@ -960,7 +1455,7 @@ public:
      * @brief Transmits an ICMP Echo Request (ping).
      */
     NtStatus sendIcmpEchoRequest(Ipv4Address targetIp, uint16_t id, uint16_t seq, std::span<const uint8_t> payload = {}) {
-        if (!adapter_) return NtStatus::DeviceNotReady;
+        if (!hasAdapter()) return NtStatus::DeviceNotReady;
 
         ndis::MacAddress destMac;
         if (!resolveArp(targetIp, destMac)) return NtStatus::NoSuchDevice;
@@ -1004,17 +1499,19 @@ public:
         ip->dstIp = dstIp;
         ip->checksum = calculateInternetChecksum(ip, sizeof(Ipv4Header));
 
+#if !defined(MICANT_FREESTANDING)
         if (packetFilterCallback_) {
             if (!packetFilterCallback_(false, localIp_, dstIp, protocol, payload)) {
                 return NtStatus::AccessDenied;
             }
         }
+#endif
 
         std::memcpy(ipBuf.data() + sizeof(Ipv4Header), payload.data(), payload.size());
 
         auto ethFrame = ndis::buildEthernetFrame(
             destMac,
-            adapter_->getMacAddress(),
+            getMacAddress(),
             ndis::ETHERTYPE_IPV4,
             ipBuf
         );
@@ -1025,7 +1522,7 @@ public:
             return NtStatus::Success;
         }
 
-        return adapter_->sendPacket(ethFrame);
+        return sendFrame(ethFrame);
     }
 
     /**
@@ -1052,7 +1549,7 @@ public:
 
         auto ethFrame = ndis::buildEthernetFrame(
             destMac,
-            adapter_->getMacAddress(),
+            getMacAddress(),
             ndis::ETHERTYPE_IPV6,
             v6Buf
         );
@@ -1062,7 +1559,7 @@ public:
             return NtStatus::Success;
         }
 
-        return adapter_->sendPacket(ethFrame);
+        return sendFrame(ethFrame);
     }
 
     // ========================================================================
@@ -1070,250 +1567,155 @@ public:
     // ========================================================================
 
     int createSocket(int af, int type, int protocol) {
-        std::lock_guard<std::mutex> lock(socketMutex_);
+        std::lock_guard<Mutex> lock(socketMutex_);
+        if (sockets_.size() >= MaxSocketEndpoints) return -1;
         int sockId = nextSocketId_++;
-        auto ep = std::make_shared<SocketEndpoint>();
+        auto ep = IntrusivePtr<SocketEndpoint>(new (std::nothrow_t{}) SocketEndpoint{});
+        if (!ep) return -1;
         ep->id = sockId;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        ep->initializeReceiveWait();
+#endif
         ep->family = af;
         ep->type = type;
         ep->protocol = (protocol == 0) ? ((type == SOCK_STREAM) ? IPPROTO_TCP : IPPROTO_UDP) : protocol;
-        sockets_[sockId] = ep;
+        if (!sockets_.insert_or_assign(sockId, ep)) return -1;
         return sockId;
     }
 
     bool bindSocket(int sockId, Ipv4Address ip, uint16_t port) {
-        std::lock_guard<std::mutex> lock(socketMutex_);
+        std::lock_guard<Mutex> configLock(mutex_);
+        std::lock_guard<Mutex> lock(socketMutex_);
         auto it = sockets_.find(sockId);
         if (it == sockets_.end()) return false;
         auto ep = it->second;
-        std::lock_guard<std::mutex> sLock(ep->socketMutex);
+        std::lock_guard<Mutex> sLock(ep->socketMutex);
+        // DHCP's initial lease exchange is the one supported unconfigured
+        // bind: 0.0.0.0:68 while the interface itself has no IPv4 address.
+        const bool dhcpBootstrapBind = ep->type == SOCK_DGRAM && ip.isZero() &&
+            localIp_.isZero() && (port == 0 || port == 68);
+        if (ip.isZero() && localIp_.isZero() && !dhcpBootstrapBind) return false;
         ep->localIp = (ip.isZero()) ? localIp_ : ip;
         ep->localPort = (port == 0) ? nextDynamicPort_++ : port;
         ep->isBound = true;
         return true;
     }
 
-    bool listenSocket(int sockId, int /*backlog*/) {
-        std::lock_guard<std::mutex> lock(socketMutex_);
+    bool listenSocket(int sockId, int backlog) {
+        std::lock_guard<Mutex> lock(socketMutex_);
         auto it = sockets_.find(sockId);
         if (it == sockets_.end()) return false;
         auto ep = it->second;
-        std::lock_guard<std::mutex> sLock(ep->socketMutex);
+        std::lock_guard<Mutex> sLock(ep->socketMutex);
+        if (!ep->isBound || ep->localIp.isZero() || ep->localPort == 0) return false;
         ep->isListening = true;
         ep->tcpState = TcpState::Listen;
+        ep->listenBacklog = static_cast<uint16_t>(std::clamp(backlog, 1, 128));
         return true;
     }
 
     int acceptSocket(int listenSockId, Ipv4Address& outRemoteIp, uint16_t& outRemotePort) {
-        std::lock_guard<std::mutex> lock(socketMutex_);
+        pollTcpTimers();
+        std::lock_guard<Mutex> lock(socketMutex_);
         auto it = sockets_.find(listenSockId);
         if (it == sockets_.end()) return -1;
         auto listenEp = it->second;
-
-        // Check if there is an established client connection targeting this listening socket's port
+        std::lock_guard<Mutex> listenerLock(listenEp->socketMutex);
+        if (!listenEp->isListening) return -1;
         for (const auto& [id, ep] : sockets_) {
-            if (id != listenSockId && ep->remotePort == listenEp->localPort && ep->tcpState == TcpState::Established) {
-                // Check if we already created an accepted peer endpoint for this client
-                bool alreadyAccepted = false;
-                for (const auto& [peerId, peerEp] : sockets_) {
-                    if (peerEp->localPort == listenEp->localPort && peerEp->remotePort == ep->localPort && peerEp->id != listenSockId) {
-                        alreadyAccepted = true;
-                        outRemoteIp = peerEp->remoteIp;
-                        outRemotePort = peerEp->remotePort;
-                        return peerId;
-                    }
-                }
-
-                if (!alreadyAccepted) {
-                    int newId = nextSocketId_++;
-                    auto newEp = std::make_shared<SocketEndpoint>();
-                    newEp->id = newId;
-                    newEp->family = listenEp->family;
-                    newEp->type = listenEp->type;
-                    newEp->protocol = listenEp->protocol;
-                    newEp->localIp = listenEp->localIp;
-                    newEp->localPort = listenEp->localPort;
-                    newEp->remoteIp = ep->localIp;
-                    newEp->remotePort = ep->localPort;
-                    newEp->tcpState = TcpState::Established;
-                    newEp->isBound = true;
-
-                    {
-                        std::lock_guard<std::mutex> lLock(listenEp->socketMutex);
-                        if (!listenEp->rxStream.empty()) {
-                            newEp->rxStream.insert(newEp->rxStream.end(),
-                                                   listenEp->rxStream.begin(),
-                                                   listenEp->rxStream.end());
-                            listenEp->rxStream.clear();
-                        }
-                    }
-                    sockets_[newId] = newEp;
-                    outRemoteIp = newEp->remoteIp;
-                    outRemotePort = newEp->remotePort;
-                    return newId;
-                }
+            if (id == listenSockId) continue;
+            std::lock_guard<Mutex> childLock(ep->socketMutex);
+            if (ep->listenSocketId == listenSockId &&
+                ep->tcpState == TcpState::Established && !ep->acceptReturned) {
+                ep->acceptReturned = true;
+                outRemoteIp = ep->remoteIp;
+                outRemotePort = ep->remotePort;
+                return id;
             }
         }
-
-        // Fallback: create a mock connected server-side endpoint for loopback simulation
-        int newId = nextSocketId_++;
-        auto newEp = std::make_shared<SocketEndpoint>();
-        newEp->id = newId;
-        newEp->family = listenEp->family;
-        newEp->type = listenEp->type;
-        newEp->protocol = listenEp->protocol;
-        newEp->localIp = listenEp->localIp;
-        newEp->localPort = listenEp->localPort;
-        newEp->remoteIp = Ipv4Address::loopback();
-        newEp->remotePort = 54321;
-        newEp->tcpState = TcpState::Established;
-        newEp->isBound = true;
-
-        sockets_[newId] = newEp;
-        outRemoteIp = newEp->remoteIp;
-        outRemotePort = newEp->remotePort;
-        return newId;
+        return -1;
     }
 
     bool connectSocket(int sockId, Ipv4Address remoteIp, uint16_t remotePort) {
-        std::shared_ptr<SocketEndpoint> ep;
+        pollTcpTimers();
+        IntrusivePtr<SocketEndpoint> ep;
         {
-            std::lock_guard<std::mutex> lock(socketMutex_);
+            std::lock_guard<Mutex> lock(socketMutex_);
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return false;
             ep = it->second;
         }
 
-        std::lock_guard<std::mutex> sLock(ep->socketMutex);
-        if (!ep->isBound) {
-            ep->localIp = remoteIp.isLoopback() ? Ipv4Address::loopback() : localIp_;
-            ep->localPort = nextDynamicPort_++;
-            ep->isBound = true;
-        }
-        ep->remoteIp = remoteIp;
-        ep->remotePort = remotePort;
-
-        if (ep->type == SOCK_STREAM) {
-            // Perform 3-way TCP handshake (SYN -> SYN-ACK -> ACK)
+        {
+            std::lock_guard<Mutex> sLock(ep->socketMutex);
+            if (remoteIp.isZero() || localIp_.isZero() || remotePort == 0 || ep->type != SOCK_STREAM ||
+                ep->tcpState != TcpState::Closed) return false;
+            if (!ep->isBound) {
+                ep->localIp = localIp_;
+                ep->localPort = nextDynamicPort_++;
+                ep->isBound = true;
+            }
+            ep->remoteIp = remoteIp;
+            ep->remotePort = remotePort;
             ep->tcpState = TcpState::SynSent;
-            ep->seqNum = 1000;
-
-            // In loopback/virtual network, immediately transition to Established
-            ep->tcpState = TcpState::Established;
-            ep->ackNum = 1;
+            ep->peerInitialSequence = 0;
+            ep->ackNum = 0;
+            ep->sndUna = ep->seqNum;
         }
-        return true;
+        const uint32_t initial = g_tcpInitialSequence.fetch_add(0x10001u, std::memory_order_relaxed);
+        { std::lock_guard<Mutex> sLock(ep->socketMutex); ep->seqNum = initial; ep->sndUna = initial; }
+        if (sendTcpSegment(ep, TCP_FLAG_SYN, {}, true) == NtStatus::Success) return true;
+        std::lock_guard<Mutex> sLock(ep->socketMutex);
+        ep->tcpState = TcpState::Closed;
+        ep->retransmitPending = false;
+        ep->pendingSegment.clear();
+        return false;
     }
 
     int sendSocket(int sockId, const void* data, size_t length) {
+        pollTcpTimers();
+        if ((!data && length) || length > TCP_MAX_SEGMENT_PAYLOAD) return -1;
         int epType = 0;
         TcpState epState = TcpState::Closed;
-        uint16_t epLocalPort = 0;
-        uint16_t epRemotePort = 0;
-        Ipv4Address epLocalIp{};
-        Ipv4Address epRemoteIp{};
-        uint32_t epSeqNum = 0;
-        uint32_t epAckNum = 0;
+        Ipv4Address remoteIp{};
+        uint16_t remotePort{};
+        IntrusivePtr<SocketEndpoint> endpoint;
 
         {
-            std::lock_guard<std::mutex> lock(socketMutex_);
+            std::lock_guard<Mutex> lock(socketMutex_);
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return -1;
-            auto ep = it->second;
-            std::lock_guard<std::mutex> sLock(ep->socketMutex);
-            epType = ep->type;
-            epState = ep->tcpState;
-            epLocalPort = ep->localPort;
-            epRemotePort = ep->remotePort;
-            epLocalIp = ep->localIp;
-            epRemoteIp = ep->remoteIp;
-            epSeqNum = ep->seqNum;
-            epAckNum = ep->ackNum;
+            endpoint = it->second;
+            std::lock_guard<Mutex> sLock(endpoint->socketMutex);
+            epType = endpoint->type;
+            epState = endpoint->tcpState;
+            remoteIp = endpoint->remoteIp;
+            remotePort = endpoint->remotePort;
         }
 
         if (epType == SOCK_STREAM) {
             if (epState != TcpState::Established) return -1;
-
-            // Loopback dispatch: route bytes directly to matching remote endpoint if local
-            bool delivered = false;
-            {
-                std::lock_guard<std::mutex> globalLock(socketMutex_);
-                // First pass: established peer socket matching peer port
-                for (const auto& [id, target] : sockets_) {
-                    if (id != sockId && target->localPort == epRemotePort &&
-                        target->tcpState == TcpState::Established &&
-                        (target->remotePort == 0 || target->remotePort == epLocalPort)) {
-                        std::lock_guard<std::mutex> tLock(target->socketMutex);
-                        const auto* b = static_cast<const uint8_t*>(data);
-                        target->rxStream.insert(target->rxStream.end(), b, b + length);
-                        delivered = true;
-                        break;
-                    }
-                }
-                // Second pass: any established socket on that port
-                if (!delivered) {
-                    for (const auto& [id, target] : sockets_) {
-                        if (id != sockId && target->localPort == epRemotePort &&
-                            target->tcpState == TcpState::Established) {
-                            std::lock_guard<std::mutex> tLock(target->socketMutex);
-                            const auto* b = static_cast<const uint8_t*>(data);
-                            target->rxStream.insert(target->rxStream.end(), b, b + length);
-                            delivered = true;
-                            break;
-                        }
-                    }
-                }
-                // Third pass: listening socket
-                if (!delivered) {
-                    for (const auto& [id, target] : sockets_) {
-                        if (id != sockId && target->localPort == epRemotePort &&
-                            target->tcpState == TcpState::Listen) {
-                            std::lock_guard<std::mutex> tLock(target->socketMutex);
-                            const auto* b = static_cast<const uint8_t*>(data);
-                            target->rxStream.insert(target->rxStream.end(), b, b + length);
-                            delivered = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!delivered) {
-                // Transmit real TCP packet through NDIS adapter
-                ndis::MacAddress dstMac;
-                (void)resolveArp(epRemoteIp, dstMac);
-
-                size_t tcpLen = sizeof(TcpHeader) + length;
-                std::vector<uint8_t> tcpBuf(tcpLen, 0);
-                auto* tcp = reinterpret_cast<TcpHeader*>(tcpBuf.data());
-                tcp->setSrcPort(epLocalPort);
-                tcp->setDstPort(epRemotePort);
-                tcp->setSeqNum(epSeqNum);
-                tcp->setAckNum(epAckNum);
-                tcp->setFlags(sizeof(TcpHeader), TCP_FLAG_ACK | TCP_FLAG_PSH);
-                tcp->windowSize = htons(65535);
-                std::memcpy(tcpBuf.data() + sizeof(TcpHeader), data, length);
-                tcp->checksum = calculateTransportChecksum(epLocalIp, epRemoteIp, IPPROTO_TCP, tcpBuf.data(), tcpLen);
-
-                (void)sendIpv4Packet(dstMac, epRemoteIp, IPPROTO_TCP, tcpBuf);
-            }
-            return static_cast<int>(length);
+            if (length == 0) return 0;
+            const auto bytes = std::span<const uint8_t>(static_cast<const uint8_t*>(data), length);
+            return sendTcpSegment(endpoint, TCP_FLAG_ACK | TCP_FLAG_PSH, bytes, true) == NtStatus::Success
+                ? static_cast<int>(length) : -1;
         } else if (epType == SOCK_DGRAM) {
             // UDP Datagram send
-            return sendToSocket(sockId, data, length, epRemoteIp, epRemotePort);
+            return sendToSocket(sockId, data, length, remoteIp, remotePort);
         }
         return -1;
     }
 
     int sendToSocket(int sockId, const void* data, size_t length, Ipv4Address dstIp, uint16_t dstPort) {
+        if ((!data && length) || length > 65507 || dstIp.isZero() || dstPort == 0) return -1;
         uint16_t epLocalPort = 0;
         Ipv4Address epLocalIp{};
         {
-            std::lock_guard<std::mutex> lock(socketMutex_);
+            std::lock_guard<Mutex> lock(socketMutex_);
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return -1;
             auto ep = it->second;
-            std::lock_guard<std::mutex> sLock(ep->socketMutex);
+            std::lock_guard<Mutex> sLock(ep->socketMutex);
             if (!ep->isBound) {
                 ep->localIp = dstIp.isLoopback() ? Ipv4Address::loopback() : localIp_;
                 ep->localPort = nextDynamicPort_++;
@@ -1325,12 +1727,17 @@ public:
 
         // Loopback dispatch to local socket
         {
-            std::lock_guard<std::mutex> globalLock(socketMutex_);
+            std::lock_guard<Mutex> globalLock(socketMutex_);
             for (const auto& [id, target] : sockets_) {
                 if (target->type == SOCK_DGRAM && target->localPort == dstPort) {
-                    std::lock_guard<std::mutex> tLock(target->socketMutex);
+                    std::lock_guard<Mutex> tLock(target->socketMutex);
                     const auto* b = static_cast<const uint8_t*>(data);
-                    target->rxDatagrams.emplace_back(b, b + length);
+                    if (target->rxDatagrams.size() >= 64 ||
+                        length > 256 * 1024 - std::min<size_t>(target->rxQueuedDatagramBytes, 256 * 1024))
+                        return -1;
+                    target->rxDatagrams.push_back(SocketEndpoint::ReceivedDatagram{
+                        std::vector<uint8_t>(b, b + length), epLocalIp, epLocalPort});
+                    target->rxQueuedDatagramBytes += length;
                     return static_cast<int>(length);
                 }
             }
@@ -1338,7 +1745,10 @@ public:
 
         // Transmit UDP packet over NDIS adapter
         ndis::MacAddress dstMac;
-        (void)resolveArp(dstIp, dstMac);
+        if (dstIp.isBroadcast() || (epLocalIp.isZero() && dstIp.addr == 0xFFFFFFFF))
+            dstMac = ndis::MacAddress::broadcast();
+        else if (!resolveArp(dstIp, dstMac))
+            return -1;
 
         size_t udpLen = sizeof(UdpHeader) + length;
         std::vector<uint8_t> udpBuf(udpLen, 0);
@@ -1354,15 +1764,16 @@ public:
     }
 
     int recvSocket(int sockId, void* buffer, size_t maxLen) {
-        std::shared_ptr<SocketEndpoint> ep;
+        pollTcpTimers();
+        IntrusivePtr<SocketEndpoint> ep;
         {
-            std::lock_guard<std::mutex> lock(socketMutex_);
+            std::lock_guard<Mutex> lock(socketMutex_);
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return -1;
             ep = it->second;
         }
 
-        std::lock_guard<std::mutex> sLock(ep->socketMutex);
+        std::lock_guard<Mutex> sLock(ep->socketMutex);
         if (ep->type == SOCK_STREAM) {
             if (ep->rxStream.empty()) return 0;
             size_t bytesToRead = std::min<size_t>(maxLen, ep->rxStream.size());
@@ -1374,33 +1785,168 @@ public:
             return static_cast<int>(bytesToRead);
         } else if (ep->type == SOCK_DGRAM) {
             if (ep->rxDatagrams.empty()) return 0;
-            const auto& dgram = ep->rxDatagrams.front();
-            size_t bytesToRead = std::min<size_t>(maxLen, dgram.size());
-            std::memcpy(buffer, dgram.data(), bytesToRead);
+            auto& dgram = ep->rxDatagrams.front();
+            size_t bytesToRead = std::min<size_t>(maxLen, dgram.bytes.size());
+            std::memcpy(buffer, dgram.bytes.data(), bytesToRead);
+            ep->rxQueuedDatagramBytes -= dgram.bytes.size();
             ep->rxDatagrams.pop_front();
             return static_cast<int>(bytesToRead);
         }
         return -1;
     }
 
+    int recvFromSocket(int sockId, void* buffer, size_t maxLen,
+                       Ipv4Address& sourceIp, uint16_t& sourcePort) {
+        if ((!buffer && maxLen) || maxLen > TCP_MAX_RX_BUFFER) return -1;
+        IntrusivePtr<SocketEndpoint> ep;
+        {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            auto it = sockets_.find(sockId);
+            if (it == sockets_.end()) return -1;
+            ep = it->second;
+        }
+        if (ep->type != SOCK_DGRAM) return -1;
+        std::lock_guard<Mutex> lock(ep->socketMutex);
+        if (ep->rxDatagrams.empty()) return -1;
+        auto& datagram = ep->rxDatagrams.front();
+        const size_t copied = std::min(maxLen, datagram.bytes.size());
+        if (copied) std::memcpy(buffer, datagram.bytes.data(), copied);
+        sourceIp = datagram.sourceIp;
+        sourcePort = datagram.sourcePort;
+        ep->rxQueuedDatagramBytes -= datagram.bytes.size();
+        ep->rxDatagrams.pop_front(); // UDP truncation discards the rest.
+        return static_cast<int>(copied);
+    }
+
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    [[nodiscard]] void* referenceSocketWaitObject(int socketId) noexcept {
+        std::lock_guard<Mutex> lock(socketMutex_);
+        auto it = sockets_.find(socketId);
+        if (it == sockets_.end()) return nullptr;
+        IntrusivePtr<SocketEndpoint> pin = it->second;
+        return pin.detach();
+    }
+    void releaseSocketWaitObject(void* waitObject) noexcept {
+        if (waitObject) {
+            IntrusivePtr<SocketEndpoint> pin(static_cast<SocketEndpoint*>(waitObject));
+        }
+    }
+    void cancelSocketWaitObject(void* waitObject) noexcept {
+        auto* endpoint = static_cast<SocketEndpoint*>(waitObject);
+        if (endpoint) {
+            endpoint->closed.store(true, std::memory_order_release);
+            endpoint->signalReceiveEvent();
+        }
+    }
+    [[nodiscard]] NtStatus waitSocketData(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
+        auto* endpoint = static_cast<SocketEndpoint*>(waitObject);
+        if (!endpoint || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+            return NtStatus::InvalidDeviceState;
+        bool expected = false;
+        if (!endpoint->receiveWaitActive.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+            return NtStatus::DeviceBusy;
+        struct WaitRelease {
+            SocketEndpoint* endpoint;
+            ~WaitRelease() { endpoint->receiveWaitActive.store(false, std::memory_order_release); }
+        } release{endpoint};
+
+        bool previous{};
+        if (timeoutMilliseconds) {
+            LargeInteger due{};
+            due.quadPart = -static_cast<int64_t>(timeoutMilliseconds) * 10'000;
+            const auto timerStatus = timer::KiSetTimerChecked(&endpoint->receiveTimer, due, 0,
+                &endpoint->receiveTimeoutDpc, previous);
+            if (timerStatus != NtStatus::Success) return timerStatus;
+        }
+        NtStatus result = NtStatus::Success;
+        for (;;) {
+            (void)endpoint->receiveEvent.reset();
+            bool ready = false;
+            {
+                std::lock_guard<Mutex> lock(endpoint->socketMutex);
+                if (endpoint->closed.load(std::memory_order_acquire)) {
+                    result = NtStatus::Cancelled;
+                    break;
+                }
+                ready = !endpoint->rxStream.empty() || !endpoint->rxDatagrams.empty() ||
+                    endpoint->tcpState == TcpState::CloseWait || endpoint->tcpState == TcpState::Closed;
+            }
+            if (ready) break;
+            if (timeoutMilliseconds && endpoint->receiveTimer.event.readState()) {
+                result = NtStatus::Timeout;
+                break;
+            }
+            const NtStatus waitStatus = endpoint->receiveEvent.wait();
+            if (waitStatus != NtStatus::Success) { result = waitStatus; break; }
+            if (timeoutMilliseconds && endpoint->receiveTimer.event.readState()) {
+                result = NtStatus::Timeout;
+                break;
+            }
+        }
+        if (timeoutMilliseconds) {
+            (void)timer::KeCancelTimer(&endpoint->receiveTimer);
+            (void)ke::KeRemoveQueueDpc(&endpoint->receiveTimer.timerDpc);
+            (void)ke::KeRemoveQueueDpc(&endpoint->receiveTimeoutDpc);
+        }
+        return result;
+    }
+#endif
+
     bool injectRxStream(int sockId, const void* data, size_t length) {
-        std::lock_guard<std::mutex> lock(socketMutex_);
+        std::lock_guard<Mutex> lock(socketMutex_);
         auto it = sockets_.find(sockId);
         if (it == sockets_.end()) return false;
-        std::lock_guard<std::mutex> sLock(it->second->socketMutex);
+        std::lock_guard<Mutex> sLock(it->second->socketMutex);
         const auto* b = static_cast<const uint8_t*>(data);
         it->second->rxStream.insert(it->second->rxStream.end(), b, b + length);
         return true;
     }
 
     void closeSocket(int sockId) {
-        std::lock_guard<std::mutex> lock(socketMutex_);
-        auto it = sockets_.find(sockId);
-        if (it != sockets_.end()) {
-            std::lock_guard<std::mutex> sLock(it->second->socketMutex);
-            it->second->tcpState = TcpState::Closed;
+        pollTcpTimers();
+        IntrusivePtr<SocketEndpoint> endpoint;
+        std::vector<IntrusivePtr<SocketEndpoint>> resetEndpoints;
+        {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            auto it = sockets_.find(sockId);
+            if (it == sockets_.end()) return;
+            endpoint = it->second;
+            std::lock_guard<Mutex> sLock(endpoint->socketMutex);
+            if (endpoint->type == SOCK_STREAM && endpoint->tcpState != TcpState::Closed &&
+                endpoint->tcpState != TcpState::Listen) resetEndpoints.push_back(endpoint);
+            endpoint->tcpState = TcpState::Closed;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+            endpoint->closed.store(true, std::memory_order_release);
+#endif
+            endpoint->retransmitPending = false;
+            endpoint->pendingSegment.clear();
             sockets_.erase(it);
+            if (endpoint->isListening) {
+                for (auto child = sockets_.begin(); child != sockets_.end();) {
+                    auto childEndpoint = child->second;
+                    std::lock_guard<Mutex> childLock(childEndpoint->socketMutex);
+                    if (childEndpoint->listenSocketId != sockId) {
+                        ++child;
+                        continue;
+                    }
+                    if (childEndpoint->tcpState != TcpState::Closed)
+                        resetEndpoints.push_back(childEndpoint);
+                    childEndpoint->tcpState = TcpState::Closed;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+                    childEndpoint->closed.store(true, std::memory_order_release);
+#endif
+                    childEndpoint->retransmitPending = false;
+                    childEndpoint->pendingSegment.clear();
+                    child = sockets_.erase(child);
+                }
+            }
         }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        endpoint->signalReceiveEvent();
+        for (const auto& resetEndpoint : resetEndpoints) resetEndpoint->signalReceiveEvent();
+#endif
+        for (const auto& resetEndpoint : resetEndpoints)
+            (void)sendTcpSegment(resetEndpoint, TCP_FLAG_RST | TCP_FLAG_ACK);
     }
 
     struct EndpointInfo {
@@ -1418,10 +1964,10 @@ public:
     }
 
     [[nodiscard]] std::vector<EndpointInfo> getActiveEndpoints() {
-        std::lock_guard<std::mutex> lock(socketMutex_);
+        std::lock_guard<Mutex> lock(socketMutex_);
         std::vector<EndpointInfo> list;
         for (const auto& [id, ep] : sockets_) {
-            std::lock_guard<std::mutex> sLock(ep->socketMutex);
+            std::lock_guard<Mutex> sLock(ep->socketMutex);
             list.push_back(EndpointInfo{
                 .socketId = static_cast<uint32_t>(ep->id),
                 .type = ep->type,
@@ -1445,32 +1991,179 @@ public:
 
     PingResult ping(Ipv4Address target, uint32_t timeoutMs = 1000) {
         (void)timeoutMs;
-        auto start = std::chrono::steady_clock::now();
+        uint64_t start100ns{};
+        const bool clockAvailable = queryTcpClock100ns(start100ns);
         static const uint8_t pingPayload[4] = {0x41, 0x42, 0x43, 0x44};
-        (void)sendIcmpEchoRequest(target, 0x1234, 1, std::span<const uint8_t>(pingPayload, sizeof(pingPayload)));
-        auto end = std::chrono::steady_clock::now();
-        uint32_t rtt = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
-        if (rtt == 0) rtt = 1; // <1ms round-trip in-memory loopback
+        (void)sendIcmpEchoRequest(
+            target, 0x1234, 1, std::span<const uint8_t>(pingPayload, sizeof(pingPayload)));
+        uint64_t end100ns{};
+        const bool endAvailable = queryTcpClock100ns(end100ns);
 
         PingResult res;
-        res.success = true;
-        res.rttMs = rtt;
-        res.ttl = 64;
-        res.bytesReceived = 32;
+        // Sending a request does not prove an echo reply arrived. Until a
+        // matching response is observed this helper reports no reply.
+        res.success = false;
+        if (clockAvailable && endAvailable && end100ns >= start100ns)
+            res.rttMs = static_cast<uint32_t>((end100ns - start100ns) / 10000);
+        res.ttl = 0;
+        res.bytesReceived = 0;
         return res;
     }
 
 private:
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    ke::passive_work::PeriodicItem retransmitWork_{};
+    ke::SpinLock rxQueueLock_{};
+    std::array<RxFrameSlot, RxQueueSlots> rxQueue_{};
+    size_t rxQueueHead_{};
+    size_t rxQueueTail_{};
+    size_t rxQueueCount_{};
+    ke::passive_work::Item rxWork_{};
+#endif
     NetworkStack() = default;
 
+    [[nodiscard]] static bool tcpAckInRange(uint32_t ack, uint32_t first,
+                                             uint32_t last) noexcept {
+        return static_cast<int32_t>(ack - first) >= 0 &&
+               static_cast<int32_t>(last - ack) >= 0;
+    }
+
+    NtStatus emitTcpSegment(Ipv4Address srcIp, Ipv4Address dstIp,
+                            uint16_t srcPort, uint16_t dstPort,
+                            uint32_t sequence, uint32_t acknowledgement,
+                            uint8_t flags, std::span<const uint8_t> data) {
+        if (data.size() > TCP_MAX_SEGMENT_PAYLOAD ||
+            data.size() > UINT16_MAX - sizeof(TcpHeader)) return NtStatus::BufferOverflow;
+        ndis::MacAddress destination{};
+        if (!resolveArp(dstIp, destination)) return NtStatus::DeviceNotReady;
+        std::vector<uint8_t> segment(sizeof(TcpHeader) + data.size(), 0);
+        auto* tcp = reinterpret_cast<TcpHeader*>(segment.data());
+        tcp->setSrcPort(srcPort);
+        tcp->setDstPort(dstPort);
+        tcp->setSeqNum(sequence);
+        tcp->setAckNum(acknowledgement);
+        tcp->setFlags(sizeof(TcpHeader), flags);
+        tcp->windowSize = htons(65535);
+        if (!data.empty()) std::memcpy(segment.data() + sizeof(TcpHeader), data.data(), data.size());
+        tcp->checksum = calculateTransportChecksum(srcIp, dstIp, IPPROTO_TCP,
+                                                    segment.data(), segment.size());
+        return sendIpv4Packet(destination, dstIp, IPPROTO_TCP, segment);
+    }
+
+    NtStatus sendTcpSegment(const IntrusivePtr<SocketEndpoint>& endpoint,
+                            uint8_t flags, std::span<const uint8_t> data = {},
+                            bool trackForRetransmit = false) {
+        if (!endpoint) return NtStatus::InvalidParameter;
+        if (data.size() > TCP_MAX_SEGMENT_PAYLOAD) return NtStatus::BufferOverflow;
+        uint64_t now{};
+        if (trackForRetransmit && !queryTcpClock100ns(now)) return NtStatus::DeviceNotReady;
+
+        std::vector<uint8_t> segment(sizeof(TcpHeader) + data.size(), 0);
+        Ipv4Address srcIp{}, dstIp{};
+        uint16_t srcPort{}, dstPort{};
+        uint32_t sequence{}, acknowledgement{};
+        {
+            std::lock_guard<Mutex> lock(endpoint->socketMutex);
+            if (endpoint->type != SOCK_STREAM || endpoint->remoteIp.isZero() ||
+                endpoint->remotePort == 0 || endpoint->localPort == 0)
+                return NtStatus::InvalidParameter;
+            if (trackForRetransmit && endpoint->retransmitPending)
+                return NtStatus::DeviceNotReady;
+            srcIp = endpoint->localIp;
+            dstIp = endpoint->remoteIp;
+            srcPort = endpoint->localPort;
+            dstPort = endpoint->remotePort;
+            sequence = endpoint->seqNum;
+            acknowledgement = endpoint->ackNum;
+            auto* tcp = reinterpret_cast<TcpHeader*>(segment.data());
+            tcp->setSrcPort(srcPort);
+            tcp->setDstPort(dstPort);
+            tcp->setSeqNum(sequence);
+            tcp->setAckNum(acknowledgement);
+            tcp->setFlags(sizeof(TcpHeader), flags);
+            tcp->windowSize = htons(65535);
+            if (!data.empty()) std::memcpy(segment.data() + sizeof(TcpHeader), data.data(), data.size());
+            tcp->checksum = calculateTransportChecksum(srcIp, dstIp, IPPROTO_TCP,
+                                                        segment.data(), segment.size());
+
+            if (trackForRetransmit) {
+                endpoint->pendingSegment = segment;
+                endpoint->retransmitPending = true;
+                endpoint->retransmitCount = 0;
+                const uint64_t delay = static_cast<uint64_t>(endpoint->rtoMs) * 10'000u;
+                endpoint->retransmitDeadline100ns = now > UINT64_MAX - delay
+                    ? UINT64_MAX : now + delay;
+                const uint32_t sequenceSpace = static_cast<uint32_t>(data.size()) +
+                    ((flags & TCP_FLAG_SYN) ? 1u : 0u) +
+                    ((flags & TCP_FLAG_FIN) ? 1u : 0u);
+                endpoint->seqNum += sequenceSpace;
+            }
+        }
+        ndis::MacAddress destination{};
+        if (!resolveArp(dstIp, destination)) return NtStatus::DeviceNotReady;
+        return sendIpv4Packet(destination, dstIp, IPPROTO_TCP, segment);
+    }
+
+    void pollTcpTimers() {
+        // Ke supplies monotonic time. The freestanding periodic worker must be
+        // started by the adapter owner after the scheduler is initialized.
+        uint64_t now{};
+        if (!queryTcpClock100ns(now)) return;
+        struct RetryWork {
+            Ipv4Address srcIp{}, dstIp{};
+            uint16_t srcPort{}, dstPort{};
+            std::vector<uint8_t> segment{};
+        };
+        std::vector<RetryWork> retry;
+        std::vector<int> expired;
+        {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            for (auto& [id, endpoint] : sockets_) {
+                (void)id;
+                std::lock_guard<Mutex> endpointLock(endpoint->socketMutex);
+                if (!endpoint->retransmitPending || now < endpoint->retransmitDeadline100ns)
+                    continue;
+                if (endpoint->retransmitCount >= TCP_MAX_RETRIES) {
+                    endpoint->retransmitPending = false;
+                    endpoint->pendingSegment.clear();
+                    endpoint->tcpState = TcpState::Closed;
+                    expired.push_back(endpoint->id);
+                    continue;
+                }
+                ++endpoint->retransmitCount;
+                endpoint->rtoMs = std::min<uint32_t>(endpoint->rtoMs * 2u, 60'000u);
+                const uint64_t delay = static_cast<uint64_t>(endpoint->rtoMs) * 10'000u;
+                endpoint->retransmitDeadline100ns = now > UINT64_MAX - delay
+                    ? UINT64_MAX : now + delay;
+                retry.push_back({endpoint->localIp, endpoint->remoteIp,
+                    endpoint->localPort, endpoint->remotePort, endpoint->pendingSegment});
+            }
+            for (int id : expired) sockets_.erase(id);
+        }
+        for (const auto& work : retry) {
+            ndis::MacAddress destination{};
+            if (!resolveArp(work.dstIp, destination)) continue;
+            (void)sendIpv4Packet(destination, work.dstIp, IPPROTO_TCP, work.segment);
+        }
+    }
+
     void onEthernetFrameReceived(std::span<const uint8_t> frame) {
+#if defined(MICANT_FREESTANDING)
+        // Parser and transport processing is restricted to PASSIVE_LEVEL;
+        // adapter indications above DISPATCH_LEVEL are copied to rxWork_.
+        if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return;
+#endif
         if (frame.size() < ndis::ETH_HLEN) return;
+        if (!hasAdapter() || frame.size() > adapterMtu() + ndis::ETH_HLEN) return;
         const auto* eth = reinterpret_cast<const ndis::EthernetHeader*>(frame.data());
+        const ndis::MacAddress localMac = getMacAddress();
+        if ((eth->destMac != localMac && !eth->destMac.isBroadcast()) ||
+            eth->srcMac.isZero() || eth->srcMac.isMulticast()) return;
         uint16_t etherType = eth->getEtherType();
         std::span<const uint8_t> ethPayload = frame.subspan(ndis::ETH_HLEN);
 
         if (etherType == ndis::ETHERTYPE_ARP) {
-            handleArp(ethPayload);
+            handleArp(ethPayload, eth->srcMac);
         } else if (etherType == ndis::ETHERTYPE_IPV4) {
             handleIpv4(ethPayload);
         } else if (etherType == ndis::ETHERTYPE_IPV6) {
@@ -1478,35 +2171,47 @@ private:
         }
     }
 
-    void handleArp(std::span<const uint8_t> payload) {
+    void handleArp(std::span<const uint8_t> payload,
+                   const ndis::MacAddress& ethernetSource) {
         if (payload.size() < sizeof(ArpPacket)) return;
         const auto* arp = reinterpret_cast<const ArpPacket*>(payload.data());
-        if (ntohs(arp->hardwareType) != 1 || ntohs(arp->protocolType) != ndis::ETHERTYPE_IPV4) return;
+        const uint16_t opcode = arp->getOpcode();
+        if (ntohs(arp->hardwareType) != 1 ||
+            ntohs(arp->protocolType) != ndis::ETHERTYPE_IPV4 ||
+            arp->hardwareSize != ndis::ETH_ALEN || arp->protocolSize != sizeof(Ipv4Address) ||
+            (opcode != 1 && opcode != 2) || arp->senderMac != ethernetSource ||
+            ethernetSource.isZero() || ethernetSource.isMulticast() || arp->senderIp.isZero()) return;
 
-        std::lock_guard<std::mutex> lock(mutex_);
-        arpCache_[arp->senderIp] = ArpCacheEntry(arp->senderMac, 300, false);
-
-        if (arp->getOpcode() == 1 && arp->targetIp == localIp_) {
-            // ARP Request for us: Transmit ARP Reply
-            ArpPacket reply{};
-            reply.hardwareType = htons(1);
-            reply.protocolType = htons(ndis::ETHERTYPE_IPV4);
-            reply.hardwareSize = 6;
-            reply.protocolSize = 4;
-            reply.setOpcode(2); // Reply
-            reply.senderMac = adapter_->getMacAddress();
-            reply.senderIp = localIp_;
-            reply.targetMac = arp->senderMac;
-            reply.targetIp = arp->senderIp;
-
-            auto ethFrame = ndis::buildEthernetFrame(
-                arp->senderMac,
-                adapter_->getMacAddress(),
-                ndis::ETHERTYPE_ARP,
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&reply), sizeof(reply))
-            );
-            (void)adapter_->sendPacket(ethFrame);
+        Ipv4Address localIp{};
+        {
+            std::lock_guard<Mutex> lock(mutex_);
+            localIp = localIp_;
         }
+        if (!hasAdapter() || arp->targetIp != localIp) return;
+        const auto localMac = getMacAddress();
+        if (opcode == 2 && arp->targetMac != localMac) return;
+        {
+            std::lock_guard<Mutex> lock(mutex_);
+            (void)arpCache_.insert_or_assign(arp->senderIp, ArpCacheEntry(arp->senderMac, 300, false));
+        }
+        if (opcode != 1) return;
+
+        // Construct and send outside the network lock: adapters may synchronously
+        // deliver a peer frame back into this receive path.
+        ArpPacket reply{};
+        reply.hardwareType = htons(1);
+        reply.protocolType = htons(ndis::ETHERTYPE_IPV4);
+        reply.hardwareSize = static_cast<uint8_t>(ndis::ETH_ALEN);
+        reply.protocolSize = static_cast<uint8_t>(sizeof(Ipv4Address));
+        reply.setOpcode(2);
+        reply.senderMac = localMac;
+        reply.senderIp = localIp;
+        reply.targetMac = arp->senderMac;
+        reply.targetIp = arp->senderIp;
+        auto ethFrame = ndis::buildEthernetFrame(
+            arp->senderMac, localMac, ndis::ETHERTYPE_ARP,
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&reply), sizeof(reply)));
+        (void)sendFrame(ethFrame);
     }
 
     void handleIpv4(std::span<const uint8_t> payload) {
@@ -1515,14 +2220,25 @@ private:
         if (ip->getVersion() != 4) return;
 
         uint8_t ihl = ip->getHeaderLength();
-        if (payload.size() < ihl) return;
-        std::span<const uint8_t> ipData = payload.subspan(ihl);
+        const uint16_t totalLength = ip->getTotalLength();
+        const uint16_t fragment = ntohs(ip->flagsOffset);
+        if (ihl < sizeof(Ipv4Header) || ihl > 60 || ihl > payload.size() ||
+            totalLength < ihl || totalLength > payload.size() || ip->ttl == 0 ||
+            calculateInternetChecksum(payload.data(), ihl) != 0 ||
+            (fragment & 0xBFFFu) != 0) return;
+        // Fragment reassembly is not implemented. Drop MF/offset and the
+        // reserved flag instead of passing partial transport data upward.
+        std::span<const uint8_t> ipData = payload.subspan(ihl, totalLength - ihl);
 
-        if (packetFilterCallback_) {
-            if (!packetFilterCallback_(true, ip->srcIp, ip->dstIp, ip->protocol, ipData)) {
-                return;
-            }
+#if !defined(MICANT_FREESTANDING)
+        PacketFilterCallback packetFilter;
+        {
+            std::lock_guard<Mutex> lock(mutex_);
+            packetFilter = packetFilterCallback_;
         }
+        if (packetFilter && !packetFilter(true, ip->srcIp, ip->dstIp,
+                                          ip->protocol, ipData)) return;
+#endif
 
         if (ip->protocol == IPPROTO_ICMP) {
             handleIcmp(ip->srcIp, ipData);
@@ -1543,8 +2259,9 @@ private:
     void handleIcmp(Ipv4Address srcIp, std::span<const uint8_t> payload) {
         if (payload.size() < sizeof(IcmpHeader)) return;
         const auto* icmp = reinterpret_cast<const IcmpHeader*>(payload.data());
+        if (calculateInternetChecksum(payload.data(), payload.size()) != 0) return;
 
-        if (icmp->type == 8) { // Echo Request
+        if (icmp->type == 8 && icmp->code == 0) { // Echo Request
             // Automatically craft and transmit Echo Reply
             std::vector<uint8_t> replyBuf(payload.begin(), payload.end());
             auto* reply = reinterpret_cast<IcmpHeader*>(replyBuf.data());
@@ -1554,7 +2271,7 @@ private:
             reply->checksum = calculateInternetChecksum(replyBuf.data(), replyBuf.size());
 
             ndis::MacAddress dstMac;
-            (void)resolveArp(srcIp, dstMac);
+            if (!resolveArp(srcIp, dstMac)) return;
             (void)sendIpv4Packet(dstMac, srcIp, IPPROTO_ICMP, replyBuf);
         }
     }
@@ -1563,67 +2280,241 @@ private:
         (void)srcIp; (void)dstIp;
         if (payload.size() < sizeof(UdpHeader)) return;
         const auto* udp = reinterpret_cast<const UdpHeader*>(payload.data());
+        const uint16_t udpLength = udp->getLength();
+        if (udpLength < sizeof(UdpHeader) || udpLength > payload.size()) return;
+        if (udp->checksum != 0 &&
+            calculateTransportChecksum(srcIp, dstIp, IPPROTO_UDP,
+                                       payload.data(), udpLength) != 0) return;
         uint16_t dPort = udp->getDstPort();
-        std::span<const uint8_t> udpData = payload.subspan(sizeof(UdpHeader));
+        std::span<const uint8_t> udpData = payload.subspan(
+            sizeof(UdpHeader), udpLength - sizeof(UdpHeader));
 
-        std::lock_guard<std::mutex> lock(socketMutex_);
-        for (const auto& [id, ep] : sockets_) {
-            if (ep->type == SOCK_DGRAM && ep->localPort == dPort) {
-                std::lock_guard<std::mutex> sLock(ep->socketMutex);
-                ep->rxDatagrams.emplace_back(udpData.begin(), udpData.end());
-                break;
+        IntrusivePtr<SocketEndpoint> notify;
+        {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            for (const auto& [id, ep] : sockets_) {
+                (void)id;
+                if (ep->type == SOCK_DGRAM && ep->localPort == dPort) {
+                    std::lock_guard<Mutex> sLock(ep->socketMutex);
+                    if (ep->rxDatagrams.size() >= 64 ||
+                        udpData.size() > 256 * 1024 - std::min<size_t>(ep->rxQueuedDatagramBytes, 256 * 1024))
+                        continue;
+                    ep->rxDatagrams.push_back(SocketEndpoint::ReceivedDatagram{
+                        std::vector<uint8_t>(udpData.begin(), udpData.end()), srcIp, udp->getSrcPort()});
+                    ep->rxQueuedDatagramBytes += udpData.size();
+                    notify = ep;
+                    break;
+                }
             }
         }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        if (notify) notify->signalReceiveEvent();
+#endif
     }
 
     void handleTcp(Ipv4Address srcIp, Ipv4Address dstIp, std::span<const uint8_t> payload) {
-        (void)srcIp; (void)dstIp;
         if (payload.size() < sizeof(TcpHeader)) return;
         const auto* tcp = reinterpret_cast<const TcpHeader*>(payload.data());
-        uint16_t dPort = tcp->getDstPort();
+        const uint8_t offset = tcp->getDataOffset();
+        if (offset < sizeof(TcpHeader) || offset > payload.size() ||
+            calculateTransportChecksum(srcIp, dstIp, IPPROTO_TCP,
+                                       payload.data(), payload.size()) != 0) return;
+        const uint16_t srcPort = tcp->getSrcPort();
+        const uint16_t dstPort = tcp->getDstPort();
         uint8_t flags = tcp->getFlags();
-        uint8_t offset = tcp->getDataOffset();
-        std::span<const uint8_t> tcpData = (payload.size() > offset) ? payload.subspan(offset) : std::span<const uint8_t>{};
-
-        std::lock_guard<std::mutex> lock(socketMutex_);
-        for (const auto& [id, ep] : sockets_) {
-            if (ep->type == SOCK_STREAM && ep->localPort == dPort) {
-                std::lock_guard<std::mutex> sLock(ep->socketMutex);
-                if (flags & TCP_FLAG_SYN) {
-                    ep->tcpState = TcpState::Established;
-                    ep->ackNum = tcp->getSeqNum() + 1;
+        const uint32_t sequence = tcp->getSeqNum();
+        const uint32_t acknowledgement = tcp->getAckNum();
+        std::span<const uint8_t> tcpData = payload.subspan(offset);
+        IntrusivePtr<SocketEndpoint> endpoint;
+        bool sendSynAck = false;
+        bool resendSynAck = false;
+        bool sendAck = false;
+        bool sendReset = false;
+        bool removeEndpoint = false;
+        bool notifyReceiver = false;
+        Ipv4Address resendDst{};
+        std::vector<uint8_t> duplicateSynAck;
+        {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            // Avoid invalidating listener iterators when inserting a passive child.
+            sockets_.reserve(sockets_.size() + 1);
+            for (auto& [id, candidate] : sockets_) {
+                (void)id;
+                std::lock_guard<Mutex> endpointLock(candidate->socketMutex);
+                if (candidate->type != SOCK_STREAM || candidate->localIp != dstIp ||
+                    candidate->localPort != dstPort) continue;
+                if (candidate->tcpState == TcpState::Listen) {
+                    if (!(flags & TCP_FLAG_SYN) || (flags & (TCP_FLAG_ACK | TCP_FLAG_RST)) ||
+                        !tcpData.empty()) continue;
+                    size_t pending = 0;
+                    for (const auto& [childId, child] : sockets_) {
+                        if (childId == candidate->id) continue;
+                        std::lock_guard<Mutex> childLock(child->socketMutex);
+                        if (child->listenSocketId == candidate->id &&
+                            child->remoteIp == srcIp && child->remotePort == srcPort &&
+                            child->tcpState == TcpState::SynReceived) {
+                            endpoint = child;
+                            if (child->retransmitPending) {
+                                duplicateSynAck = child->pendingSegment;
+                                resendDst = child->remoteIp;
+                                resendSynAck = true;
+                            }
+                            break;
+                        }
+                        if (child->listenSocketId == candidate->id &&
+                            child->tcpState != TcpState::Closed) ++pending;
+                    }
+                    if (endpoint) break;
+                    if (pending >= candidate->listenBacklog || sockets_.size() >= MaxSocketEndpoints) {
+                        sendReset = true; break;
+                    }
+                    auto child = IntrusivePtr<SocketEndpoint>(new (std::nothrow_t{}) SocketEndpoint{});
+                    if (!child) { sendReset = true; break; }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+                    child->initializeReceiveWait();
+#endif
+                    child->id = nextSocketId_++;
+                    child->family = candidate->family;
+                    child->type = SOCK_STREAM;
+                    child->protocol = IPPROTO_TCP;
+                    child->localIp = dstIp;
+                    child->localPort = dstPort;
+                    child->remoteIp = srcIp;
+                    child->remotePort = srcPort;
+                    child->isBound = true;
+                    child->listenSocketId = candidate->id;
+                    child->tcpState = TcpState::SynReceived;
+                    child->ackNum = sequence + 1;
+                    child->peerInitialSequence = sequence;
+                    child->seqNum = g_tcpInitialSequence.fetch_add(0x10001u, std::memory_order_relaxed);
+                    child->sndUna = child->seqNum;
+                    if (!sockets_.emplace(child->id, child).second) { sendReset = true; break; }
+                    endpoint = std::move(child);
+                    sendSynAck = true;
+                    break;
+                }
+                if (candidate->remoteIp != srcIp || candidate->remotePort != srcPort) continue;
+                endpoint = candidate;
+                if (flags & TCP_FLAG_RST) {
+                    endpoint->tcpState = TcpState::Closed;
+                    endpoint->retransmitPending = false;
+                    endpoint->pendingSegment.clear();
+                    removeEndpoint = true;
+                    notifyReceiver = true;
+                    break;
+                }
+                if (endpoint->tcpState == TcpState::SynSent) {
+                    if ((flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) != (TCP_FLAG_SYN | TCP_FLAG_ACK) ||
+                        acknowledgement != endpoint->seqNum) { endpoint.reset(); break; }
+                    endpoint->sndUna = acknowledgement;
+                    endpoint->ackNum = sequence + 1;
+                    endpoint->peerInitialSequence = sequence;
+                    endpoint->retransmitPending = false;
+                    endpoint->pendingSegment.clear();
+                    endpoint->tcpState = TcpState::Established;
+                    notifyReceiver = true;
+                    sendAck = true;
+                    break;
+                }
+                if (endpoint->tcpState == TcpState::SynReceived) {
+                    if (!(flags & TCP_FLAG_ACK) || acknowledgement != endpoint->seqNum ||
+                        sequence != endpoint->ackNum) { endpoint.reset(); break; }
+                    endpoint->sndUna = acknowledgement;
+                    endpoint->retransmitPending = false;
+                    endpoint->pendingSegment.clear();
+                    endpoint->tcpState = TcpState::Established;
+                    notifyReceiver = true;
+                } else if (endpoint->tcpState != TcpState::Established &&
+                           endpoint->tcpState != TcpState::CloseWait) {
+                    endpoint.reset();
+                    break;
+                }
+                // Sequence validation precedes ACK processing so a forged or
+                // out-of-window segment cannot retire the outstanding send.
+                if (sequence != endpoint->ackNum) { sendAck = true; break; }
+                if ((flags & TCP_FLAG_ACK) && !tcpAckInRange(acknowledgement,
+                                                              endpoint->sndUna,
+                                                              endpoint->seqNum)) {
+                    endpoint.reset();
+                    break;
+                }
+                if (flags & TCP_FLAG_ACK) {
+                    endpoint->sndUna = acknowledgement;
+                    if (endpoint->retransmitPending && acknowledgement == endpoint->seqNum) {
+                        endpoint->retransmitPending = false;
+                        endpoint->pendingSegment.clear();
+                        endpoint->retransmitCount = 0;
+                    }
+                }
+                if (tcpData.size() > TCP_MAX_RX_BUFFER -
+                    std::min(endpoint->rxStream.size(), TCP_MAX_RX_BUFFER)) {
+                    sendAck = true;
+                    break;
                 }
                 if (!tcpData.empty()) {
-                    ep->rxStream.insert(ep->rxStream.end(), tcpData.begin(), tcpData.end());
-                    ep->ackNum += static_cast<uint32_t>(tcpData.size());
+                    endpoint->rxStream.insert(endpoint->rxStream.end(), tcpData.begin(), tcpData.end());
+                    endpoint->ackNum += static_cast<uint32_t>(tcpData.size());
+                    notifyReceiver = true;
+                    sendAck = true;
                 }
                 if (flags & TCP_FLAG_FIN) {
-                    ep->tcpState = TcpState::CloseWait;
+                    ++endpoint->ackNum;
+                    endpoint->tcpState = TcpState::CloseWait;
+                    notifyReceiver = true;
+                    sendAck = true;
                 }
                 break;
             }
+        }
+        if (removeEndpoint && endpoint) {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            sockets_.erase(endpoint->id);
+        }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        if (endpoint && notifyReceiver) endpoint->signalReceiveEvent();
+#endif
+        if (sendReset) {
+            (void)emitTcpSegment(dstIp, srcIp, dstPort, srcPort, 0,
+                                 sequence + 1, TCP_FLAG_RST | TCP_FLAG_ACK, {});
+        } else if (endpoint && sendSynAck) {
+            // Keep the half-open TCB when ARP/transmit is unavailable; the
+            // bounded retry path owns its lifetime and eventual expiry.
+            (void)sendTcpSegment(endpoint, TCP_FLAG_SYN | TCP_FLAG_ACK, {}, true);
+        } else if (resendSynAck) {
+            ndis::MacAddress destination{};
+            if (resolveArp(resendDst, destination))
+                (void)sendIpv4Packet(destination, resendDst, IPPROTO_TCP, duplicateSynAck);
+        } else if (endpoint && sendAck) {
+            (void)sendTcpSegment(endpoint, TCP_FLAG_ACK);
         }
     }
 
     bool initialized_{false};
-    mutable std::mutex mutex_;
-    mutable std::mutex socketMutex_;
+    mutable Mutex mutex_;
+    mutable Mutex socketMutex_;
+#if defined(MICANT_FREESTANDING)
+    std::atomic<const micant::shared::ndis::AdapterServicesV1*> adapterServices_{nullptr};
+#else
     std::shared_ptr<ndis::INdisAdapter> adapter_;
-    Ipv4Address localIp_{192, 168, 1, 100};
-    Ipv4Address subnetMask_{255, 255, 255, 0};
-    Ipv4Address gatewayIp_{192, 168, 1, 1};
-    Ipv4Address dnsServer_{8, 8, 8, 8};
+#endif
+    Ipv4Address localIp_{Ipv4Address::any()};
+    Ipv4Address subnetMask_{Ipv4Address::any()};
+    Ipv4Address gatewayIp_{Ipv4Address::any()};
+    Ipv4Address dnsServer_{Ipv4Address::any()};
     Ipv6Address localIpv6_{};
 
-    ndis::MacAddress localMac_{0x00, 0x15, 0x5D, 0x01, 0x02, 0x03};
-    std::unordered_map<Ipv4Address, ArpCacheEntry, Ipv4Hasher> arpCache_;
-    std::unordered_map<std::string, NdpCacheEntry> ndpCache_;
-    std::unordered_map<int, std::shared_ptr<SocketEndpoint>> sockets_;
+    ndis::MacAddress localMac_{};
+    static constexpr size_t MaxSocketEndpoints = 64;
+    FixedMap<Ipv4Address, ArpCacheEntry, 256> arpCache_;
+    FixedMap<Ipv6Address, NdpCacheEntry, 64> ndpCache_;
+    FixedMap<int, IntrusivePtr<SocketEndpoint>, MaxSocketEndpoints> sockets_;
 
     uint16_t packetIdCounter_{100};
     int nextSocketId_{1};
     uint16_t nextDynamicPort_{49152};
+#if !defined(MICANT_FREESTANDING)
     PacketFilterCallback packetFilterCallback_{nullptr};
+#endif
 };
 
 /**
@@ -1677,16 +2568,15 @@ public:
                    "  Partitions: C: (NTFS System, 256 GB), D: (ReFS Data, 768 GB)\r\n";
         } else if (cmd == "net") {
             auto& net = NetworkStack::get();
-            auto adapter = net.getAdapter();
             std::ostringstream oss;
             oss << "NDIS Network Subsystem:\r\n";
-            if (adapter) {
-                oss << "  Adapter: " << std::string(adapter->getFriendlyName().begin(), adapter->getFriendlyName().end()) << "\r\n";
-                oss << "  MAC:     " << adapter->getMacAddress().toString() << "\r\n";
-                oss << "  Speed:   " << (adapter->getSpeedBps() / 1000000ULL) << " Mbps (Full Duplex)\r\n";
-                oss << "  State:   " << (adapter->getLinkState() == ndis::MediaConnectState::Connected ? "Connected" : "Disconnected") << "\r\n";
-                auto stats = adapter->getStatistics();
-                oss << "  TX Packets: " << stats.txPackets << ", RX Packets: " << stats.rxPackets << "\r\n";
+            if (net.hasAdapter()) {
+                oss << "  MAC:   " << net.getMacAddress().toString() << "\r\n";
+                oss << "  Speed: " << net.getLinkSpeedMbps() << " Mbps\r\n";
+                oss << "  State: " << (net.isLinkUp() ? "Connected" : "Disconnected") << "\r\n";
+                oss << "  MTU:   " << net.adapterMtu() << "\r\n";
+            } else {
+                oss << "  No active NDIS miniport adapter.\r\n";
             }
             oss << "  IPv4 Address: " << net.getLocalIp().toString() << " / " << net.getSubnetMask().toString() << "\r\n";
             oss << "  Gateway:      " << net.getGateway().toString() << "\r\n";
@@ -1706,7 +2596,7 @@ public:
     }
 
     void startConsoleServer(uint16_t port = 23) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         if (running_) return;
         port_ = port;
         serverSock_ = NetworkStack::get().createSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -1718,7 +2608,7 @@ public:
     }
 
     void stopConsoleServer() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<Mutex> lock(mutex_);
         if (!running_) return;
         if (serverSock_ > 0) {
             NetworkStack::get().closeSocket(serverSock_);
@@ -1751,7 +2641,7 @@ public:
 
 private:
     RemoteExecutiveConsole() = default;
-    std::mutex mutex_;
+    Mutex mutex_;
     bool running_{false};
     uint16_t port_{23};
     int serverSock_{-1};
@@ -1762,26 +2652,6 @@ private:
  */
 inline void InitializeTcpipSubsystem() {
     NetworkStack::get().initialize();
-
-    // 1. Register SCM Driver Record
-    auto& scm = scm::ServiceControlManager::get();
-    auto tcpipSvc = std::make_shared<scm::ServiceRecord>();
-    tcpipSvc->serviceName = L"tcpip";
-    tcpipSvc->displayName = L"TCP/IP Protocol Driver";
-    tcpipSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
-    tcpipSvc->startType = scm::SERVICE_BOOT_START;
-    tcpipSvc->errorControl = scm::SERVICE_ERROR_CRITICAL;
-    tcpipSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\tcpip.sys";
-    tcpipSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
-    scm.registerServiceRecord(tcpipSvc);
-
-    // 2. Register Version Database Record
-    auto& verDb = version::VersionDatabase::Instance();
-    verDb.RegisterModule("tcpip.sys", "10.0.26100.5900", "MicaNT Clean-Room TCP/IP Dual-Stack Protocol Driver");
-
-    // 3. Register JanusLDR Dynamic Exports
-    auto& ldr = ldr::DynamicLoader::get();
-    ldr.registerExport("tcpip.sys", "TcpipInitialize", reinterpret_cast<void*>(InitializeTcpipSubsystem));
 }
 
 } // namespace micant::tcpip

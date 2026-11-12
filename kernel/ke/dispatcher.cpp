@@ -476,6 +476,11 @@ void SyscallDispatcher::initializeStandardTable() {
         return NtQueryPerformanceCounter(counter, freq);
     });
 
+    registerSyscall(SSN_NtQuerySystemTime, "NtQuerySystemTime", 1,
+        [](const SyscallFrame& f) -> NtStatus {
+            return NtQuerySystemTime(reinterpret_cast<LargeInteger*>(f.arg1));
+        });
+
     // 41. NtYieldExecution (SSN: 0x0046)
     registerSyscall(SSN_NtYieldExecution, "NtYieldExecution", 0, [](const SyscallFrame& /*f*/) -> NtStatus {
         return NtYieldExecution();

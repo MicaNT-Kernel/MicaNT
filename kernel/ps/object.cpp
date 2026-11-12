@@ -53,6 +53,24 @@ struct ProcessObjectFactory {
         process.objectHeader_ = header;
     }
     static void markSystem(EProcess& process) noexcept { process.systemProcess_ = true; }
+    static NtStatus assignToken(EProcess& process, bool system) noexcept {
+        se::FreestandingAccessToken* token{};
+        ob::ObjectHeader* reference{};
+        const auto status = se::SeCreateFreestandingPrimaryToken(system, token, reference);
+        if (status != NtStatus::Success) return status;
+        if (process.primaryTokenReference_) se::SeDereferenceFreestandingToken(process.primaryTokenReference_);
+        process.primaryTokenReference_ = reference;
+        process.primaryToken_ = token;
+        return NtStatus::Success;
+    }
+    static NtStatus inheritToken(EProcess& child, const EProcess& parent) noexcept {
+        if (!parent.primaryTokenReference_ || !parent.primaryToken_) return NtStatus::AccessDenied;
+        parent.primaryTokenReference_->addReference();
+        if (child.primaryTokenReference_) se::SeDereferenceFreestandingToken(child.primaryTokenReference_);
+        child.primaryTokenReference_ = parent.primaryTokenReference_;
+        child.primaryToken_ = parent.primaryToken_;
+        return NtStatus::Success;
+    }
     static void markPublished(EProcess& process) noexcept { process.processPublished_ = true; }
     static ob::ObjectHeader* header(EProcess& process) noexcept { return process.objectHeader_; }
     template<typename T>
@@ -118,6 +136,8 @@ NtStatus getSystemProcess(EProcess*& process) noexcept {
     auto* created = new (body) EProcess{};
     ProcessObjectFactory::bind(*created, header);
     ProcessObjectFactory::markSystem(*created);
+    status = ProcessObjectFactory::assignToken(*created, true);
+    if (status != NtStatus::Success) { ob::ObDereferenceObject(header); return status; }
     status = created->initializeAddressSpace();
     if (status != NtStatus::Success) { ob::ObDereferenceObject(header); return status; }
     // The system process and its initial reference live for the kernel lifetime.
@@ -218,7 +238,8 @@ NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) n
     if (status != NtStatus::Success) return status;
     auto* created = new (body) EProcess{};
     ProcessObjectFactory::bind(*created, header);
-    status = created->initializeAddressSpace();
+    status = ProcessObjectFactory::assignToken(*created, false);
+    if (status == NtStatus::Success) status = created->initializeAddressSpace();
     if (status == NtStatus::Success) {
         process = created;
         reference = header;
@@ -228,12 +249,8 @@ NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) n
     return status;
 }
 
-void inheritProcessSecurityContext(EProcess& child, const EProcess& parent) noexcept {
-    // The freestanding process object does not yet own a primary token object.
-    // Access checks are enforced by the captured caller mode and handle rights;
-    // do not attach a hosted shared_ptr token to the kernel object.
-    (void)child;
-    (void)parent;
+NtStatus inheritProcessSecurityContext(EProcess& child, const EProcess& parent) noexcept {
+    return ProcessObjectFactory::inheritToken(child, parent);
 }
 
 NtStatus publishProcessHandle(EProcess& process, ob::ObjectHeader* reference,

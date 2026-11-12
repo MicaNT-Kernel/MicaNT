@@ -3,12 +3,18 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace micant::shared::usb { struct HostServicesV1; }
+#include "micant/shared/ndis_adapter_abi.hpp"
+
 // MicaNT's boot-start driver ABI. Images are ordinary PE32+ native .sys files
 // loaded by BOOTX64.EFI and entered by the kernel after paging is established.
 // Keep this contract POD-only so a driver never depends on the kernel's STL.
 namespace micant::boot_driver {
 
 inline constexpr uint32_t DRIVER_ABI_VERSION = 1;
+inline constexpr uint32_t KERNEL_SERVICES_VERSION = 2;
+inline constexpr uint32_t DMA_SERVICES_VERSION = 1;
+inline constexpr uint32_t NETWORK_ADAPTER_SERVICES_VERSION = 1;
 inline constexpr uint32_t DRIVER_FLAG_BOOT_START = 0x00000001;
 inline constexpr uint32_t DRIVER_FLAG_DISPLAY = 0x00000002;
 
@@ -22,6 +28,23 @@ struct DriverObject;
 using DriverEntryRoutine = int32_t (*)(DriverObject*, const UnicodeString*);
 using DriverUnloadRoutine = void (*)(DriverObject*);
 
+struct PciBarRequestV1 {
+    uint8_t BarIndex;
+    uint8_t Flags;
+    uint16_t Reserved;
+    uint64_t MinimumLength;
+};
+struct PciBarResourceV1 {
+    uint8_t BarIndex;
+    uint8_t Reserved0[3];
+    uint32_t Flags;
+    uint32_t Reserved1;
+    uint64_t PhysicalAddress;
+    uint64_t Length;
+};
+
+struct FileBackendV1;
+
 struct KernelServices {
     uint32_t Size;
     uint32_t Version;
@@ -31,6 +54,63 @@ struct KernelServices {
     uint64_t (*TranslateVirtualAddress)(void*, const void*);
     void* (*MapDeviceMemory)(void*, uint64_t, size_t);
     void (*Log)(void*, const char*);
+    // Version 2 append-only generic HAL/Io services. Return an NTSTATUS value
+    // as int32_t; absent hardware ownership/allocation support must fail.
+    int32_t (*PciReadConfig32)(void*, uint16_t, uint16_t, uint16_t, uint16_t,
+                               uint32_t*);
+    int32_t (*PciWriteConfig32)(void*, uint16_t, uint16_t, uint16_t, uint16_t,
+                                uint32_t);
+    bool (*ReleaseDeviceMemory)(void*, void*, size_t);
+    int32_t (*TranslateDmaRange)(void*, const void*, size_t, uint64_t*);
+    int32_t (*QueryMonotonicClock)(void*, uint64_t*, uint64_t*);
+    int32_t (*DelayMilliseconds)(void*, uint32_t);
+    int32_t (*DelayMicroseconds)(void*, uint32_t);
+    int32_t (*ClaimPciDevice)(void*, uint16_t, uint16_t, uint16_t, uint16_t,
+        const PciBarRequestV1*, size_t, uint64_t*, PciBarResourceV1*, size_t*);
+    int32_t (*ReleasePciDevice)(void*, uint64_t);
+    int32_t (*CreateReadOnlyBlockDevice)(void*, uint64_t, uint32_t, void*,
+        int32_t (*)(void*, uint64_t, uint32_t, void*, uint32_t*),
+        void (*)(void*), uint32_t, uint64_t*);
+    int32_t (*ReadBlockDevice)(void*, uint64_t, uint64_t, uint32_t, void*, uint32_t*);
+    int32_t (*RegisterFileOpenRoutine)(void*,
+        int32_t (*)(void*, const char16_t*, size_t, FileBackendV1*), void*);
+    int32_t (*UnregisterFileOpenRoutine)(void*,
+        int32_t (*)(void*, const char16_t*, size_t, FileBackendV1*), void*);
+    int32_t (*OpenBackendFile)(void*, uint64_t*, uint32_t, const char16_t*, size_t);
+    int32_t (*CreateBackendFile)(void*, uint64_t*, uint32_t, const FileBackendV1*);
+    int32_t (*ReadFile)(void*, uint64_t, bool, uint64_t, void*, size_t, size_t*);
+    int32_t (*CloseHandle)(void*, uint64_t);
+    int32_t (*CloseBlockDevice)(void*, uint64_t);
+    int32_t (*CloseFile)(void*, uint64_t);
+    // Size-gated extension of V2. Its independent version permits older V2
+    // images to keep using their unchanged prefix and version comparison.
+    uint32_t DmaVersion;
+    int32_t (*AllocateDmaBuffer)(void*, uint64_t, size_t, size_t, uint64_t,
+                                 void**, uint64_t*, uint64_t*);
+    int32_t (*FreeDmaBuffer)(void*, uint64_t);
+    // Versioned boot-driver adapter registration. Handles are owned by the
+    // registering driver context and must be released before driver unload.
+    uint32_t NetworkAdapterVersion;
+    int32_t (*RegisterNetworkAdapter)(void*, const shared::ndis::AdapterServicesV1*, uint64_t*);
+    int32_t (*UnregisterNetworkAdapter)(void*, uint64_t);
+    uint32_t UsbHostVersion;
+    int32_t (*RegisterUsbHost)(void*, const shared::usb::HostServicesV1*, uint64_t*);
+    int32_t (*UnregisterUsbHost)(void*, uint64_t);
+    uint32_t FatFilesystemVersion;
+    int32_t (*MountFatBlockDevice)(void*, uint64_t, uint64_t*);
+    int32_t (*UnmountFatBlockDevice)(void*, uint64_t);
+};
+
+inline constexpr size_t KERNEL_SERVICES_V1_SIZE = offsetof(KernelServices, PciReadConfig32);
+inline constexpr size_t KERNEL_SERVICES_V2_SIZE = offsetof(KernelServices, DmaVersion);
+
+struct FileBackendV1 {
+    void* Context;
+    uint64_t Size;
+    const char16_t* Name;
+    size_t NameLength;
+    int32_t (*Read)(void*, uint64_t, void*, size_t, size_t*);
+    void (*Release)(void*);
 };
 
 using PresentFrameRoutine = bool (*)(void*, const uint32_t*, uint32_t, uint32_t,

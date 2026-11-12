@@ -1,13 +1,14 @@
 #pragma once
 
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/clock_timer.hpp"
 
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
 namespace micant::sync::detail {
 
 // Single-BSP dispatcher building block. This is not a public KEVENT or a
-// Windows wait API: object references, APCs, timeouts, boosts and SMP are not
-// implemented yet. The owner must keep the event alive until all waits end.
+// Windows wait API: object references, priority boosts and SMP are not
+// implemented here. The owner must keep the event alive until all waits end.
 class BootstrapEvent {
 public:
     explicit BootstrapEvent(bool notification, bool signaled = false) noexcept
@@ -17,13 +18,30 @@ public:
 
     ~BootstrapEvent() { if (head_) __builtin_trap(); }
 
-    [[nodiscard]] NtStatus wait(bool poll = false, bool alertable = false) noexcept {
+    // Reinitialization requires the caller to exclude interrupts and waiters.
+    void initialize(bool notification, bool signaled = false) noexcept {
+        if (head_) __builtin_trap();
+        notification_ = notification;
+        signaled_ = signaled;
+    }
+
+    [[nodiscard]] bool readState() const noexcept {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        const bool state = signaled_;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return state;
+    }
+
+    [[nodiscard]] NtStatus wait(bool poll = false, bool alertable = false,
+                                uint64_t timeout100ns = 0) noexcept {
         uint64_t flags{};
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
         NtStatus result = NtStatus::Unsuccessful;
         auto* current = ke::KeGetCurrentThread();
         if (current && current->state == ke::ThreadState::Running &&
-            ke::KeGetCurrentIrql() <= ke::APC_LEVEL) {
+            ke::KeGetCurrentIrql() <= ke::APC_LEVEL &&
+            (!timeout100ns || ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL)) {
             current->alertable = alertable;
             if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL && !current->kernelApcList.empty()) {
                 if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
@@ -46,13 +64,21 @@ public:
                 result = NtStatus::Timeout;
             } else {
                 Waiter waiter{current};
+                waiter.event = this;
+                ke::KDPC timeoutDpc{};
+                ke::clock_timer::Deadline deadline{};
+                bool timerArmed = false;
+                if (timeout100ns) {
+                    ke::KeInitializeDpc(&timeoutDpc, timeoutWaiter, &waiter);
+                    timerArmed = ke::clock_timer::arm(deadline, timeoutDpc, timeout100ns);
+                }
                 current->eventWaitObject = this;
                 current->eventWaitBlock = &waiter;
                 // A kernel APC interrupts the wait only to run its callback;
                 // the original wait resumes unless it was signaled/cancelled.
                 if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL)
                     current->interruptWaitForApc = interruptForKernelApc;
-                for (;;) {
+                while (!timeout100ns || timerArmed) {
                     waiter.next = nullptr;
                     if (tail_) tail_->next = &waiter; else head_ = &waiter;
                     tail_ = &waiter;
@@ -60,8 +86,9 @@ public:
                         unlink(waiter);
                         break;
                     }
-                    if (waiter.cancelled || waiter.satisfied) {
-                        result = waiter.cancelled ? NtStatus::UserApc : NtStatus::Success;
+                    if (waiter.cancelled || waiter.satisfied || waiter.timedOut) {
+                        result = waiter.cancelled ? NtStatus::UserApc :
+                                 waiter.timedOut ? NtStatus::Timeout : NtStatus::Success;
                         break;
                     }
                     if (!waiter.apcInterrupted) __builtin_trap();
@@ -80,6 +107,8 @@ public:
                         result = NtStatus::UserApc;
                         break;
                     }
+                    if (waiter.satisfied) { result = NtStatus::Success; break; }
+                    if (waiter.timedOut) { result = NtStatus::Timeout; break; }
                     // A signal may arrive while the waiter is detached for
                     // APC delivery; consume it before re-entering the queue.
                     if (signaled_) {
@@ -88,6 +117,7 @@ public:
                         break;
                     }
                 }
+                if (timerArmed && !ke::clock_timer::cancelAndRemoveDpc(deadline)) __builtin_trap();
                 current->interruptWaitForApc = nullptr;
                 current->eventWaitObject = nullptr;
                 current->eventWaitBlock = nullptr;
@@ -168,7 +198,25 @@ private:
         bool satisfied{false};
         bool cancelled{false};
         bool apcInterrupted{false};
+        bool timedOut{false};
+        BootstrapEvent* event{};
     };
+    static void timeoutWaiter(ke::KDPC*, void* context, void*, void*) {
+        auto& waiter = *static_cast<Waiter*>(context);
+        if (waiter.cancelled || waiter.satisfied || waiter.timedOut) return;
+        auto* event = waiter.event;
+        auto* thread = waiter.thread;
+        if (waiter.apcInterrupted && event->signaled_) {
+            if (!event->notification_) event->signaled_ = false;
+            waiter.satisfied = true;
+            return;
+        }
+        waiter.timedOut = true;
+        if (thread->state == ke::ThreadState::Waiting && thread->eventWaitBlock == &waiter) {
+            event->unlink(waiter);
+            if (!ke::PriorityScheduler::get().readyKThread(thread)) __builtin_trap();
+        }
+    }
     static bool interruptForKernelApc(ke::KThread& thread) noexcept {
         if (!thread.eventWaitObject || !thread.eventWaitBlock ||
             thread.state != ke::ThreadState::Waiting || thread.eventWaitCancelled) return false;

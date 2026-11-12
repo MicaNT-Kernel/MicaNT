@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <array>
 #include <vector>
 #include <string>
 #include <span>
@@ -22,7 +23,8 @@
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/kernel32.hpp"
-#include "micant/km/drivers/net/tcpip.hpp"
+#include "micant/um/subsystems/net/ws2_32.hpp"
+#include "micant/shared/afd_socket_abi.hpp"
 
 namespace micant::dhcp {
 
@@ -65,6 +67,25 @@ inline constexpr uint8_t DHCPRELEASE  = 7;
 inline constexpr uint8_t DHCPINFORM   = 8;
 #endif
 
+struct DhcpIpv4Address {
+    uint32_t addr{};
+    constexpr DhcpIpv4Address() noexcept = default;
+    constexpr explicit DhcpIpv4Address(uint32_t value) noexcept : addr(value) {}
+    [[nodiscard]] constexpr bool isZero() const noexcept { return addr == 0; }
+    [[nodiscard]] static constexpr DhcpIpv4Address any() noexcept { return {}; }
+    friend constexpr bool operator==(DhcpIpv4Address, DhcpIpv4Address) noexcept = default;
+};
+struct DhcpMacAddress { uint8_t bytes[6]{}; };
+[[nodiscard]] constexpr uint16_t dhcpHtons(uint16_t value) noexcept {
+    return static_cast<uint16_t>((value << 8) | (value >> 8));
+}
+[[nodiscard]] constexpr uint32_t dhcpHtonl(uint32_t value) noexcept {
+    return __builtin_bswap32(value);
+}
+[[nodiscard]] constexpr uint32_t dhcpNtohl(uint32_t value) noexcept {
+    return dhcpHtonl(value);
+}
+
 enum class DhcpState {
     Init,
     Selecting,
@@ -106,7 +127,7 @@ struct DhcpRawHeader {
     uint8_t  chaddr[16]{0};
     char     sname[64]{0};
     char     file[128]{0};
-    uint32_t magicCookie{tcpip::htonl(DHCP_MAGIC_COOKIE)};
+    uint32_t magicCookie{dhcpHtonl(DHCP_MAGIC_COOKIE)};
 };
 
 #pragma pack(pop)
@@ -114,19 +135,19 @@ struct DhcpRawHeader {
 struct ParsedDhcpMessage {
     uint8_t op{0};
     uint32_t xid{0};
-    ndis::MacAddress clientMac{};
-    tcpip::Ipv4Address clientIp{};
-    tcpip::Ipv4Address yourIp{};
-    tcpip::Ipv4Address yiaddr{};
-    tcpip::Ipv4Address requestedIp{};
-    tcpip::Ipv4Address serverIp{};
+    DhcpMacAddress clientMac{};
+    DhcpIpv4Address clientIp{};
+    DhcpIpv4Address yourIp{};
+    DhcpIpv4Address yiaddr{};
+    DhcpIpv4Address requestedIp{};
+    DhcpIpv4Address serverIp{};
     uint8_t messageType{0};
-    tcpip::Ipv4Address subnetMask{};
-    tcpip::Ipv4Address router{};
-    std::vector<tcpip::Ipv4Address> dnsServers;
-    tcpip::Ipv4Address dnsServer{};
+    DhcpIpv4Address subnetMask{};
+    DhcpIpv4Address router{};
+    std::vector<DhcpIpv4Address> dnsServers;
+    DhcpIpv4Address dnsServer{};
     uint32_t leaseTimeSeconds{86400};
-    tcpip::Ipv4Address serverIdentifier{};
+    DhcpIpv4Address serverIdentifier{};
 };
 
 /**
@@ -141,26 +162,31 @@ public:
 
     void resetForTest() {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (configurationSocket_ != ws2_32::INVALID_SOCKET)
+            (void)ws2_32::closesocket(configurationSocket_);
+        configurationSocket_ = ws2_32::INVALID_SOCKET;
         state_ = DhcpState::Init;
         dhcpEnabled_ = false;
         currentXid_ = 0x12345678;
-        assignedIp_ = tcpip::Ipv4Address::any();
-        subnetMask_ = tcpip::Ipv4Address::any();
-        gateway_ = tcpip::Ipv4Address::any();
-        serverIdentifier_ = tcpip::Ipv4Address::any();
+        assignedIp_ = DhcpIpv4Address::any();
+        subnetMask_ = DhcpIpv4Address::any();
+        gateway_ = DhcpIpv4Address::any();
+        serverIdentifier_ = DhcpIpv4Address::any();
         leaseDurationSeconds_ = 0;
         leaseObtainedTime_ = 0;
         leaseExpiresTime_ = 0;
+        hardwareAddress_ = {};
+        ackDnsServer_ = {};
     }
 
     [[nodiscard]] bool isDhcpEnabled() const noexcept { return dhcpEnabled_; }
-    void setDhcpEnabled(bool enabled) noexcept { dhcpEnabled_ = enabled; }
 
     [[nodiscard]] DhcpState getState() const noexcept { return state_; }
-    [[nodiscard]] tcpip::Ipv4Address getAssignedIp() const noexcept { return assignedIp_; }
-    [[nodiscard]] tcpip::Ipv4Address getSubnetMask() const noexcept { return subnetMask_; }
-    [[nodiscard]] tcpip::Ipv4Address getGateway() const noexcept { return gateway_; }
-    [[nodiscard]] tcpip::Ipv4Address getServerIdentifier() const noexcept { return serverIdentifier_; }
+    [[nodiscard]] DhcpIpv4Address getAssignedIp() const noexcept { return assignedIp_; }
+    [[nodiscard]] DhcpIpv4Address getSubnetMask() const noexcept { return subnetMask_; }
+    [[nodiscard]] DhcpIpv4Address getGateway() const noexcept { return gateway_; }
+    [[nodiscard]] DhcpIpv4Address getServerIdentifier() const noexcept { return serverIdentifier_; }
+    [[nodiscard]] DhcpIpv4Address getDnsServer() const noexcept { return ackDnsServer_; }
     [[nodiscard]] uint32_t getLeaseDuration() const noexcept { return leaseDurationSeconds_; }
     [[nodiscard]] int64_t getLeaseObtainedTime() const noexcept { return leaseObtainedTime_; }
     [[nodiscard]] int64_t getLeaseExpiresTime() const noexcept { return leaseExpiresTime_; }
@@ -168,16 +194,16 @@ public:
     /**
      * @brief Crafts an RFC 2131 DHCPDISCOVER packet.
      */
-    std::vector<uint8_t> buildDiscover(uint32_t xid, ndis::MacAddress mac) {
+    std::vector<uint8_t> buildDiscover(uint32_t xid, DhcpMacAddress mac) {
         std::vector<uint8_t> packet(sizeof(DhcpRawHeader), 0);
         auto* hdr = reinterpret_cast<DhcpRawHeader*>(packet.data());
         hdr->op = BOOTREQUEST;
         hdr->htype = HTYPE_ETHERNET;
         hdr->hlen = 6;
-        hdr->xid = tcpip::htonl(xid);
-        hdr->flags = tcpip::htons(0x8000); // Broadcast
+        hdr->xid = dhcpHtonl(xid);
+        hdr->flags = dhcpHtons(0x8000); // Broadcast
         std::memcpy(hdr->chaddr, mac.bytes, 6);
-        hdr->magicCookie = tcpip::htonl(DHCP_MAGIC_COOKIE);
+        hdr->magicCookie = dhcpHtonl(DHCP_MAGIC_COOKIE);
 
         // Options:
         // 53 (Message Type): 1 (DHCPDISCOVER)
@@ -206,19 +232,19 @@ public:
      */
     std::vector<uint8_t> buildRequest(
         uint32_t xid,
-        ndis::MacAddress mac,
-        tcpip::Ipv4Address requestedIp,
-        tcpip::Ipv4Address serverId
+        DhcpMacAddress mac,
+        DhcpIpv4Address requestedIp,
+        DhcpIpv4Address serverId
     ) {
         std::vector<uint8_t> packet(sizeof(DhcpRawHeader), 0);
         auto* hdr = reinterpret_cast<DhcpRawHeader*>(packet.data());
         hdr->op = BOOTREQUEST;
         hdr->htype = HTYPE_ETHERNET;
         hdr->hlen = 6;
-        hdr->xid = tcpip::htonl(xid);
-        hdr->flags = tcpip::htons(0x8000);
+        hdr->xid = dhcpHtonl(xid);
+        hdr->flags = dhcpHtons(0x8000);
         std::memcpy(hdr->chaddr, mac.bytes, 6);
-        hdr->magicCookie = tcpip::htonl(DHCP_MAGIC_COOKIE);
+        hdr->magicCookie = dhcpHtonl(DHCP_MAGIC_COOKIE);
 
         // Options:
         // 53 (Message Type): 3 (DHCPREQUEST)
@@ -249,19 +275,19 @@ public:
      */
     std::vector<uint8_t> buildRelease(
         uint32_t xid,
-        ndis::MacAddress mac,
-        tcpip::Ipv4Address clientIp,
-        tcpip::Ipv4Address serverId
+        DhcpMacAddress mac,
+        DhcpIpv4Address clientIp,
+        DhcpIpv4Address serverId
     ) {
         std::vector<uint8_t> packet(sizeof(DhcpRawHeader), 0);
         auto* hdr = reinterpret_cast<DhcpRawHeader*>(packet.data());
         hdr->op = BOOTREQUEST;
         hdr->htype = HTYPE_ETHERNET;
         hdr->hlen = 6;
-        hdr->xid = tcpip::htonl(xid);
+        hdr->xid = dhcpHtonl(xid);
         hdr->ciaddr = clientIp.addr;
         std::memcpy(hdr->chaddr, mac.bytes, 6);
-        hdr->magicCookie = tcpip::htonl(DHCP_MAGIC_COOKIE);
+        hdr->magicCookie = dhcpHtonl(DHCP_MAGIC_COOKIE);
 
         // 53 (Message Type): 7 (DHCPRELEASE)
         packet.push_back(DHCP_OPT_MESSAGE_TYPE);
@@ -276,7 +302,6 @@ public:
 
         packet.push_back(DHCP_OPT_END);
 
-        state_ = DhcpState::Init;
         return packet;
     }
 
@@ -285,59 +310,75 @@ public:
      */
     static bool parseMessage(std::span<const uint8_t> data, ParsedDhcpMessage& out) {
         if (data.size() < sizeof(DhcpRawHeader)) return false;
-        const auto* hdr = reinterpret_cast<const DhcpRawHeader*>(data.data());
-        if (tcpip::ntohl(hdr->magicCookie) != DHCP_MAGIC_COOKIE) return false;
+        DhcpRawHeader header{};
+        std::memcpy(&header, data.data(), sizeof(header));
+        const auto* hdr = &header;
+        if (dhcpNtohl(hdr->magicCookie) != DHCP_MAGIC_COOKIE) return false;
+        if ((hdr->op != BOOTREQUEST && hdr->op != BOOTREPLY) ||
+            hdr->htype != HTYPE_ETHERNET || hdr->hlen != 6) return false;
 
-        out.op = hdr->op;
-        out.xid = tcpip::ntohl(hdr->xid);
-        std::memcpy(out.clientMac.bytes, hdr->chaddr, 6);
-        out.clientIp = tcpip::Ipv4Address(hdr->ciaddr);
-        out.yourIp = tcpip::Ipv4Address(hdr->yiaddr);
-        out.yiaddr = out.yourIp;
-        out.serverIp = tcpip::Ipv4Address(hdr->siaddr);
+        ParsedDhcpMessage parsed{};
+        parsed.op = hdr->op;
+        parsed.xid = dhcpNtohl(hdr->xid);
+        std::memcpy(parsed.clientMac.bytes, hdr->chaddr, 6);
+        parsed.clientIp = DhcpIpv4Address(hdr->ciaddr);
+        parsed.yourIp = DhcpIpv4Address(hdr->yiaddr);
+        parsed.yiaddr = parsed.yourIp;
+        parsed.serverIp = DhcpIpv4Address(hdr->siaddr);
 
         size_t offset = sizeof(DhcpRawHeader);
+        bool ended = false;
+        bool seenType = false;
         while (offset < data.size()) {
             uint8_t opt = data[offset++];
             if (opt == DHCP_OPT_PAD) continue;
-            if (opt == DHCP_OPT_END) break;
-            if (offset >= data.size()) break;
+            if (opt == DHCP_OPT_END) { ended = true; break; }
+            if (offset >= data.size()) return false;
             uint8_t len = data[offset++];
-            if (offset + len > data.size()) break;
+            if (len > data.size() - offset) return false;
+
+            if ((opt == DHCP_OPT_MESSAGE_TYPE && (len != 1 || seenType)) ||
+                ((opt == DHCP_OPT_REQUESTED_IP || opt == DHCP_OPT_SUBNET_MASK ||
+                  opt == DHCP_OPT_SERVER_ID || opt == DHCP_OPT_LEASE_TIME) && len != 4) ||
+                ((opt == DHCP_OPT_ROUTER || opt == DHCP_OPT_DNS_SERVER) &&
+                 (len == 0 || len % 4 != 0))) return false;
 
             const uint8_t* val = data.data() + offset;
             if (opt == DHCP_OPT_REQUESTED_IP && len >= 4) {
                 uint32_t req = 0;
                 std::memcpy(&req, val, 4);
-                out.requestedIp = tcpip::Ipv4Address(req);
+                parsed.requestedIp = DhcpIpv4Address(req);
             } else if (opt == DHCP_OPT_MESSAGE_TYPE && len >= 1) {
-                out.messageType = val[0];
+                seenType = true;
+                parsed.messageType = val[0];
             } else if (opt == DHCP_OPT_SUBNET_MASK && len >= 4) {
                 uint32_t mask = 0;
                 std::memcpy(&mask, val, 4);
-                out.subnetMask = tcpip::Ipv4Address(mask);
+                parsed.subnetMask = DhcpIpv4Address(mask);
             } else if (opt == DHCP_OPT_ROUTER && len >= 4) {
                 uint32_t gw = 0;
                 std::memcpy(&gw, val, 4);
-                out.router = tcpip::Ipv4Address(gw);
+                parsed.router = DhcpIpv4Address(gw);
             } else if (opt == DHCP_OPT_SERVER_ID && len >= 4) {
                 uint32_t srv = 0;
                 std::memcpy(&srv, val, 4);
-                out.serverIdentifier = tcpip::Ipv4Address(srv);
+                parsed.serverIdentifier = DhcpIpv4Address(srv);
             } else if (opt == DHCP_OPT_LEASE_TIME && len >= 4) {
                 uint32_t lt = 0;
                 std::memcpy(&lt, val, 4);
-                out.leaseTimeSeconds = tcpip::ntohl(lt);
+                parsed.leaseTimeSeconds = dhcpNtohl(lt);
             } else if (opt == DHCP_OPT_DNS_SERVER) {
                 for (size_t i = 0; i + 4 <= len; i += 4) {
                     uint32_t dns = 0;
                     std::memcpy(&dns, val + i, 4);
-                    out.dnsServers.push_back(tcpip::Ipv4Address(dns));
+                    parsed.dnsServers.push_back(DhcpIpv4Address(dns));
                 }
             }
             offset += len;
         }
 
+        if (!ended || !seenType) return false;
+        out = std::move(parsed);
         return true;
     }
 
@@ -346,7 +387,12 @@ public:
      */
     bool handleOffer(const ParsedDhcpMessage& offer, std::vector<uint8_t>& outRequestPacket) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (offer.messageType != DHCPOFFER || offer.xid != currentXid_) return false;
+        const auto myMac = hardwareAddress_;
+        if (state_ != DhcpState::Selecting || offer.op != BOOTREPLY ||
+            offer.messageType != DHCPOFFER || offer.xid != currentXid_ ||
+            std::memcmp(offer.clientMac.bytes, myMac.bytes, 6) != 0 ||
+            (offer.yourIp.isZero() && offer.yiaddr.isZero()) ||
+            offer.serverIdentifier.isZero()) return false;
 
         assignedIp_ = (!offer.yourIp.isZero()) ? offer.yourIp : offer.yiaddr;
         subnetMask_ = offer.subnetMask;
@@ -354,7 +400,6 @@ public:
         serverIdentifier_ = offer.serverIdentifier;
         leaseDurationSeconds_ = offer.leaseTimeSeconds;
 
-        auto myMac = tcpip::NetworkStack::get().getMacAddress();
         outRequestPacket = buildRequest(currentXid_, myMac, assignedIp_, serverIdentifier_);
         return true;
     }
@@ -364,87 +409,184 @@ public:
      */
     bool handleAck(const ParsedDhcpMessage& ack) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (ack.messageType != DHCPACK || ack.xid != currentXid_) return false;
+        const auto myMac = hardwareAddress_;
+        const auto acknowledgedIp = ack.yourIp.isZero() ? ack.yiaddr : ack.yourIp;
+        if (state_ != DhcpState::Requesting || ack.op != BOOTREPLY ||
+            ack.messageType != DHCPACK || ack.xid != currentXid_ ||
+            std::memcmp(ack.clientMac.bytes, myMac.bytes, 6) != 0 ||
+            ack.serverIdentifier.isZero() || ack.serverIdentifier != serverIdentifier_ ||
+            !ack.leaseTimeSeconds || acknowledgedIp.isZero() ||
+            acknowledgedIp != assignedIp_) return false;
 
-        assignedIp_ = (!ack.yourIp.isZero()) ? ack.yourIp : ack.yiaddr;
-        if (!ack.subnetMask.isZero()) subnetMask_ = ack.subnetMask;
-        if (!ack.router.isZero()) gateway_ = ack.router;
-        if (!ack.serverIdentifier.isZero()) serverIdentifier_ = ack.serverIdentifier;
-        if (ack.leaseTimeSeconds > 0) leaseDurationSeconds_ = ack.leaseTimeSeconds;
+        if (configurationSocket_ == ws2_32::INVALID_SOCKET) return false;
+        shared::afd::NetworkConfigurationV1 configuration{};
+        if (ws2_32::queryNetworkConfiguration(configurationSocket_, configuration) != NtStatus::Success)
+            return false;
+        const auto nextMask = ack.subnetMask.isZero() ? subnetMask_ : ack.subnetMask;
+        const auto nextGateway = ack.router.isZero() ? gateway_ : ack.router;
+        const auto nextDns = ack.dnsServers.empty()
+            ? DhcpIpv4Address(configuration.DnsServerNetworkOrder) : ack.dnsServers.front();
+        configuration.Flags = shared::afd::NetworkConfigurationSet;
+        configuration.Ipv4AddressNetworkOrder = acknowledgedIp.addr;
+        configuration.SubnetMaskNetworkOrder = nextMask.addr;
+        configuration.GatewayNetworkOrder = nextGateway.addr;
+        configuration.DnsServerNetworkOrder = nextDns.addr;
+        if (ws2_32::setNetworkConfiguration(configurationSocket_, configuration) != NtStatus::Success)
+            return false;
 
-        auto now = std::chrono::system_clock::now();
+        assignedIp_ = acknowledgedIp;
+        subnetMask_ = nextMask;
+        gateway_ = nextGateway;
+        serverIdentifier_ = ack.serverIdentifier;
+        leaseDurationSeconds_ = ack.leaseTimeSeconds;
+        ackDnsServer_ = nextDns;
+        const auto now = std::chrono::system_clock::now();
         leaseObtainedTime_ = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
         leaseExpiresTime_ = leaseObtainedTime_ + leaseDurationSeconds_;
 
         state_ = DhcpState::Bound;
         dhcpEnabled_ = true;
 
-        // Commit configuration to NetworkStack
-        auto& net = tcpip::NetworkStack::get();
-        net.setLocalIp(assignedIp_, subnetMask_, gateway_);
-        if (!ack.dnsServers.empty()) {
-            net.setDnsServer(ack.dnsServers.front());
-        }
-
         return true;
     }
 
-    /**
-     * @brief Simulates an autonomous complete DORA cycle for test harness or loopback.
-     */
-    bool performSimulatedDora(
-        tcpip::Ipv4Address offerIp,
-        tcpip::Ipv4Address subnet,
-        tcpip::Ipv4Address router,
-        tcpip::Ipv4Address dnsServer,
-        uint32_t leaseSeconds = 86400
-    ) {
-        auto mac = tcpip::NetworkStack::get().getMacAddress();
-        uint32_t xid = 0x54455354; // 'TEST'
+    // Performs the actual Ring 3 DHCP DORA exchange over the canonical AFD
+    // socket boundary. Each response is accepted only from UDP/67 and must
+    // match the transaction ID, client hardware address and server ID.
+    bool acquireLease(uint32_t retryCount = 3) noexcept {
+        if (!retryCount || retryCount > 5) return false;
+        ws2_32::WSADATA data{};
+        if (ws2_32::WSAStartup(0x0202, &data) != 0) return false;
+        const auto socket = ws2_32::socket(ws2_32::AF_INET, ws2_32::SOCK_DGRAM, ws2_32::IPPROTO_UDP);
+        if (socket == ws2_32::INVALID_SOCKET) return false;
+        configurationSocket_ = socket;
+        auto closeOnExit = [this]() noexcept {
+            if (configurationSocket_ != ws2_32::INVALID_SOCKET) {
+                (void)ws2_32::closesocket(configurationSocket_);
+                configurationSocket_ = ws2_32::INVALID_SOCKET;
+            }
+        };
+        try {
+        uint32_t timeout = 1000;
+        if (ws2_32::setsockopt(socket, ws2_32::SOL_SOCKET, ws2_32::SO_RCVTIMEO,
+                               reinterpret_cast<const char*>(&timeout), sizeof(timeout)) == ws2_32::SOCKET_ERROR) {
+            closeOnExit(); return false;
+        }
+        ws2_32::sockaddr_in local{};
+        local.sin_family = ws2_32::AF_INET;
+        local.sin_port = ws2_32::htons(68);
+        local.sin_addr.S_un.S_addr = ws2_32::htonl(0);
+        if (ws2_32::bind(socket, reinterpret_cast<const ws2_32::sockaddr*>(&local), sizeof(local)) == ws2_32::SOCKET_ERROR) {
+            closeOnExit(); return false;
+        }
+        shared::afd::NetworkConfigurationV1 current{};
+        if (ws2_32::queryNetworkConfiguration(socket, current) != NtStatus::Success) {
+            closeOnExit(); return false;
+        }
+        std::memcpy(hardwareAddress_.bytes, current.MacAddress, sizeof(hardwareAddress_.bytes));
+        uint8_t macOr = 0;
+        for (uint8_t byte : hardwareAddress_.bytes) macOr |= byte;
+        if (!macOr || (hardwareAddress_.bytes[0] & 1)) { closeOnExit(); return false; }
 
-        // 1. Discover
-        auto discoverPkt = buildDiscover(xid, mac);
-        if (discoverPkt.empty()) return false;
+        ws2_32::sockaddr_in server{};
+        server.sin_family = ws2_32::AF_INET;
+        server.sin_port = ws2_32::htons(67);
+        server.sin_addr.S_un.S_addr = ws2_32::htonl(0xFFFFFFFFu);
+        std::array<uint8_t, 1500> receiveBuffer{};
+        for (uint32_t attempt = 0; attempt < retryCount; ++attempt) {
+            const uint32_t xid = static_cast<uint32_t>(win32::GetTickCount64()) ^
+                (static_cast<uint32_t>(hardwareAddress_.bytes[2]) << 24) ^
+                (static_cast<uint32_t>(hardwareAddress_.bytes[4]) << 8) ^ attempt;
+            auto discover = buildDiscover(xid, hardwareAddress_);
+            if (ws2_32::sendto(socket, reinterpret_cast<const char*>(discover.data()),
+                    static_cast<int>(discover.size()), 0,
+                    reinterpret_cast<const ws2_32::sockaddr*>(&server), sizeof(server)) !=
+                static_cast<int>(discover.size())) continue;
 
-        // 2. Synthesize Offer
-        ParsedDhcpMessage offer{};
-        offer.op = BOOTREPLY;
-        offer.xid = xid;
-        offer.clientMac = mac;
-        offer.yourIp = offerIp;
-        offer.subnetMask = subnet;
-        offer.router = router;
-        offer.serverIdentifier = router;
-        offer.leaseTimeSeconds = leaseSeconds;
-        offer.messageType = DHCPOFFER;
-        offer.dnsServers.push_back(dnsServer);
+            ws2_32::sockaddr_in source{};
+            int sourceLength = sizeof(source);
+            int received = ws2_32::recvfrom(socket, reinterpret_cast<char*>(receiveBuffer.data()),
+                receiveBuffer.size(), 0, reinterpret_cast<ws2_32::sockaddr*>(&source), &sourceLength);
+            if (received <= 0 || sourceLength < static_cast<int>(sizeof(source)) ||
+                source.sin_family != ws2_32::AF_INET || ws2_32::ntohs(source.sin_port) != 67 ||
+                !source.sin_addr.S_un.S_addr) continue;
+            ParsedDhcpMessage offer{};
+            if (!parseMessage(std::span<const uint8_t>(receiveBuffer.data(), static_cast<size_t>(received)), offer) ||
+                offer.xid != xid || offer.messageType != DHCPOFFER || offer.op != BOOTREPLY) continue;
+            std::vector<uint8_t> request;
+            if (!handleOffer(offer, request) || request.empty()) continue;
+            if (ws2_32::sendto(socket, reinterpret_cast<const char*>(request.data()),
+                    static_cast<int>(request.size()), 0,
+                    reinterpret_cast<const ws2_32::sockaddr*>(&server), sizeof(server)) !=
+                static_cast<int>(request.size())) continue;
 
-        std::vector<uint8_t> reqPkt;
-        if (!handleOffer(offer, reqPkt)) return false;
-
-        // 3. Synthesize Ack
-        ParsedDhcpMessage ack = offer;
-        ack.messageType = DHCPACK;
-
-        return handleAck(ack);
+            source = {};
+            sourceLength = sizeof(source);
+            received = ws2_32::recvfrom(socket, reinterpret_cast<char*>(receiveBuffer.data()),
+                receiveBuffer.size(), 0, reinterpret_cast<ws2_32::sockaddr*>(&source), &sourceLength);
+            if (received <= 0 || sourceLength < static_cast<int>(sizeof(source)) ||
+                source.sin_family != ws2_32::AF_INET || ws2_32::ntohs(source.sin_port) != 67 ||
+                !source.sin_addr.S_un.S_addr) continue;
+            ParsedDhcpMessage ack{};
+            if (!parseMessage(std::span<const uint8_t>(receiveBuffer.data(), static_cast<size_t>(received)), ack) ||
+                ack.xid != xid || ack.messageType != DHCPACK || ack.op != BOOTREPLY ||
+                ack.serverIdentifier != serverIdentifier_) continue;
+            const bool committed = handleAck(ack);
+            closeOnExit();
+            return committed;
+        }
+        closeOnExit();
+        return false;
+        } catch (...) {
+            closeOnExit();
+            return false;
+        }
     }
 
     /**
      * @brief Releases the currently assigned DHCP lease.
      */
-    void releaseLease() {
+    bool releaseLease() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (state_ == DhcpState::Bound) {
-            auto mac = tcpip::NetworkStack::get().getMacAddress();
-            (void)buildRelease(currentXid_, mac, assignedIp_, serverIdentifier_);
+        auto socket = configurationSocket_;
+        if (socket == ws2_32::INVALID_SOCKET && state_ == DhcpState::Bound) {
+            socket = ws2_32::socket(ws2_32::AF_INET, ws2_32::SOCK_DGRAM, ws2_32::IPPROTO_UDP);
+        }
+        if (state_ == DhcpState::Bound && socket == ws2_32::INVALID_SOCKET) return false;
+        if (socket != ws2_32::INVALID_SOCKET && state_ == DhcpState::Bound) {
+            const auto packet = buildRelease(currentXid_, hardwareAddress_, assignedIp_, serverIdentifier_);
+            ws2_32::sockaddr_in server{};
+            server.sin_family = ws2_32::AF_INET;
+            server.sin_port = ws2_32::htons(67);
+            server.sin_addr.S_un.S_addr = serverIdentifier_.addr;
+            (void)ws2_32::sendto(socket, reinterpret_cast<const char*>(packet.data()),
+                static_cast<int>(packet.size()), 0,
+                reinterpret_cast<const ws2_32::sockaddr*>(&server), sizeof(server));
+            shared::afd::NetworkConfigurationV1 configuration{};
+            if (ws2_32::queryNetworkConfiguration(socket, configuration) != NtStatus::Success) {
+                (void)ws2_32::closesocket(socket);
+                return false;
+            }
+            configuration.Flags = shared::afd::NetworkConfigurationSet;
+            configuration.Ipv4AddressNetworkOrder = 0;
+            configuration.SubnetMaskNetworkOrder = 0;
+            configuration.GatewayNetworkOrder = 0;
+            configuration.DnsServerNetworkOrder = 0;
+            if (ws2_32::setNetworkConfiguration(socket, configuration) != NtStatus::Success) {
+                (void)ws2_32::closesocket(socket);
+                return false;
+            }
+            (void)ws2_32::closesocket(socket);
         }
         state_ = DhcpState::Init;
         dhcpEnabled_ = false;
-        assignedIp_ = tcpip::Ipv4Address::any();
-        subnetMask_ = tcpip::Ipv4Address::any();
-        gateway_ = tcpip::Ipv4Address::any();
-        auto& net = tcpip::NetworkStack::get();
-        net.setLocalIp(tcpip::Ipv4Address::any(), tcpip::Ipv4Address::any(), tcpip::Ipv4Address::any());
+        configurationSocket_ = ws2_32::INVALID_SOCKET;
+        assignedIp_ = DhcpIpv4Address::any();
+        subnetMask_ = DhcpIpv4Address::any();
+        gateway_ = DhcpIpv4Address::any();
+        serverIdentifier_ = DhcpIpv4Address::any();
+        ackDnsServer_ = DhcpIpv4Address::any();
+        return true;
     }
 
 private:
@@ -454,13 +596,16 @@ private:
     DhcpState state_{DhcpState::Init};
     bool dhcpEnabled_{false};
     uint32_t currentXid_{0x12345678};
-    tcpip::Ipv4Address assignedIp_{};
-    tcpip::Ipv4Address subnetMask_{};
-    tcpip::Ipv4Address gateway_{};
-    tcpip::Ipv4Address serverIdentifier_{};
+    DhcpIpv4Address assignedIp_{};
+    DhcpIpv4Address subnetMask_{};
+    DhcpIpv4Address gateway_{};
+    DhcpIpv4Address serverIdentifier_{};
     uint32_t leaseDurationSeconds_{86400};
     int64_t leaseObtainedTime_{0};
     int64_t leaseExpiresTime_{0};
+    DhcpMacAddress hardwareAddress_{};
+    DhcpIpv4Address ackDnsServer_{};
+    ws2_32::SOCKET configurationSocket_{ws2_32::INVALID_SOCKET};
 };
 
 /**

@@ -29,6 +29,7 @@
 #include <atomic>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/shared/system_time.hpp"
 #include "micant/um/native/ntdll.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/servers/csrss.hpp"
@@ -491,14 +492,14 @@ struct WIN32_FIND_DATAW {
 };
 
 struct SYSTEMTIME {
-    uint16_t wYear{2026};
-    uint16_t wMonth{10};
-    uint16_t wDayOfWeek{4}; // Thursday
-    uint16_t wDay{1};
-    uint16_t wHour{9};
-    uint16_t wMinute{0};
-    uint16_t wSecond{0};
-    uint16_t wMilliseconds{0};
+    uint16_t wYear{};
+    uint16_t wMonth{};
+    uint16_t wDayOfWeek{};
+    uint16_t wDay{};
+    uint16_t wHour{};
+    uint16_t wMinute{};
+    uint16_t wSecond{};
+    uint16_t wMilliseconds{};
 };
 
 struct TIME_ZONE_INFORMATION {
@@ -511,6 +512,11 @@ struct TIME_ZONE_INFORMATION {
     LONG DaylightBias{0};
 };
 using LPTIME_ZONE_INFORMATION = TIME_ZONE_INFORMATION*;
+
+inline BOOL SystemTimeToTzSpecificLocalTime(const TIME_ZONE_INFORMATION*,
+    const SYSTEMTIME*, SYSTEMTIME*) noexcept;
+inline BOOL TzSpecificLocalTimeToSystemTime(const TIME_ZONE_INFORMATION*,
+    const SYSTEMTIME*, SYSTEMTIME*) noexcept;
 
 
 // ============================================================================
@@ -1808,9 +1814,9 @@ inline void Sleep(DWORD dwMilliseconds) noexcept {
  * @brief Retrieves the number of milliseconds that have elapsed since the system was started.
  */
 inline uint64_t GetTickCount64() noexcept {
-    LargeInteger perf{};
-    hal::HardwareAbstractionLayer::get().queryPerformanceCounter(perf);
-    return static_cast<uint64_t>(perf.quadPart / 1000000ULL);
+    auto* shared = reinterpret_cast<volatile const uint64_t*>(
+        micant::UserSharedDataAddress + offsetof(micant::KUserSharedData, tickCountQuad));
+    return *shared;
 }
 
 /**
@@ -2490,26 +2496,44 @@ inline BOOL FindClose(HANDLE hFindFile) noexcept {
 
 inline BOOL QueryPerformanceCounter(LargeInteger* lpPerformanceCount) noexcept {
     if (!lpPerformanceCount) return FALSE;
-    static const auto s_qpcBoot = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now - s_qpcBoot).count();
-    lpPerformanceCount->quadPart = static_cast<int64_t>(nanos / 100) + 10000000LL;
-    return TRUE;
+    return NT_SUCCESS(ntdll::NtQueryPerformanceCounter(lpPerformanceCount, nullptr))
+        ? TRUE : FALSE;
 }
 
 inline BOOL QueryPerformanceFrequency(LargeInteger* lpFrequency) noexcept {
     if (!lpFrequency) return FALSE;
-    lpFrequency->quadPart = 10000000LL;
-    return TRUE;
+    LargeInteger counter{};
+    return NT_SUCCESS(ntdll::NtQueryPerformanceCounter(&counter, lpFrequency))
+        ? TRUE : FALSE;
+}
+
+inline bool queryCurrentUtcSystemTime(SYSTEMTIME* lpSystemTime) noexcept {
+    if (!lpSystemTime) return false;
+    LargeInteger ticks{};
+    if (!NT_SUCCESS(ntdll::NtQuerySystemTime(&ticks))) return false;
+    micant::shared::time::SystemTimeFields value{};
+    if (!micant::shared::time::fromSystemTime100ns(
+            static_cast<uint64_t>(ticks.quadPart), value)) return false;
+    lpSystemTime->wYear = value.year;
+    lpSystemTime->wMonth = value.month;
+    lpSystemTime->wDayOfWeek = value.weekday;
+    lpSystemTime->wDay = value.day;
+    lpSystemTime->wHour = value.hour;
+    lpSystemTime->wMinute = value.minute;
+    lpSystemTime->wSecond = value.second;
+    lpSystemTime->wMilliseconds = value.milliseconds;
+    return true;
 }
 
 inline void GetSystemTime(SYSTEMTIME* lpSystemTime) noexcept {
-    if (!lpSystemTime) return;
-    *lpSystemTime = SYSTEMTIME{};
+    (void)queryCurrentUtcSystemTime(lpSystemTime);
 }
 
 inline void GetLocalTime(SYSTEMTIME* lpSystemTime) noexcept {
-    GetSystemTime(lpSystemTime);
+    if (!lpSystemTime) return;
+    SYSTEMTIME utc{};
+    if (!queryCurrentUtcSystemTime(&utc)) return;
+    (void)SystemTimeToTzSpecificLocalTime(nullptr, &utc, lpSystemTime);
 }
 
 // ============================================================================
@@ -3335,12 +3359,15 @@ struct FILETIME {
 };
 using PFILETIME = FILETIME*;
 using LPFILETIME = FILETIME*;
+inline BOOL WINAPI SystemTimeToFileTime(const void*, void*) noexcept;
 
 inline void GetSystemTimeAsFileTime(FILETIME* lpTime) noexcept {
     if (!lpTime) return;
-    uint64_t ft = 133500000000000000ULL + GetTickCount64() * 10000ULL;
-    lpTime->dwLowDateTime = static_cast<DWORD>(ft & 0xFFFFFFFF);
-    lpTime->dwHighDateTime = static_cast<DWORD>(ft >> 32);
+    LargeInteger value{};
+    if (!NT_SUCCESS(ntdll::NtQuerySystemTime(&value))) return;
+    const uint64_t ticks = static_cast<uint64_t>(value.quadPart);
+    lpTime->dwLowDateTime = static_cast<DWORD>(ticks);
+    lpTime->dwHighDateTime = static_cast<DWORD>(ticks >> 32);
 }
 
 inline void WINAPI InitializeSListHead(void* ListHead) noexcept {
@@ -4210,31 +4237,27 @@ inline LONG CompareFileTime(const FILETIME* lpFileTime1, const FILETIME* lpFileT
 
 inline BOOL FileTimeToSystemTime(const FILETIME* lpFileTime, LPSYSTEMTIME lpSystemTime) noexcept {
     if (!lpFileTime || !lpSystemTime) return FALSE;
-    uint64_t ft = (static_cast<uint64_t>(lpFileTime->dwHighDateTime) << 32) | lpFileTime->dwLowDateTime;
-    int64_t secs = static_cast<int64_t>(ft / 10000000ULL) - 11644473600ULL;
-    if (secs < 0) secs = 0;
-    std::time_t t = static_cast<std::time_t>(secs);
-    std::tm tmVal{};
-#if defined(_WIN32)
-    gmtime_s(&tmVal, &t);
-#else
-    gmtime_r(&t, &tmVal);
-#endif
-    lpSystemTime->wYear = static_cast<WORD>(tmVal.tm_year + 1900);
-    lpSystemTime->wMonth = static_cast<WORD>(tmVal.tm_mon + 1);
-    lpSystemTime->wDayOfWeek = static_cast<WORD>(tmVal.tm_wday);
-    lpSystemTime->wDay = static_cast<WORD>(tmVal.tm_mday);
-    lpSystemTime->wHour = static_cast<WORD>(tmVal.tm_hour);
-    lpSystemTime->wMinute = static_cast<WORD>(tmVal.tm_min);
-    lpSystemTime->wSecond = static_cast<WORD>(tmVal.tm_sec);
-    lpSystemTime->wMilliseconds = static_cast<WORD>((ft % 10000000ULL) / 10000ULL);
+    const uint64_t ticks = (static_cast<uint64_t>(lpFileTime->dwHighDateTime) << 32) |
+                           lpFileTime->dwLowDateTime;
+    micant::shared::time::SystemTimeFields fields{};
+    if (!micant::shared::time::fromSystemTime100ns(ticks, fields)) return FALSE;
+    lpSystemTime->wYear = fields.year;
+    lpSystemTime->wMonth = fields.month;
+    lpSystemTime->wDayOfWeek = fields.weekday;
+    lpSystemTime->wDay = fields.day;
+    lpSystemTime->wHour = fields.hour;
+    lpSystemTime->wMinute = fields.minute;
+    lpSystemTime->wSecond = fields.second;
+    lpSystemTime->wMilliseconds = fields.milliseconds;
     return TRUE;
 }
 
 inline BOOL FileTimeToLocalFileTime(const FILETIME* lpFileTime, LPFILETIME lpLocalFileTime) noexcept {
     if (!lpFileTime || !lpLocalFileTime) return FALSE;
-    *lpLocalFileTime = *lpFileTime;
-    return TRUE;
+    SYSTEMTIME utc{}, local{};
+    if (!FileTimeToSystemTime(lpFileTime, &utc) ||
+        !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return FALSE;
+    return SystemTimeToFileTime(&local, lpLocalFileTime);
 }
 
 inline BOOL FileTimeToDosDateTime(const FILETIME* lpFileTime, WORD* lpFatDate, WORD* lpFatTime) noexcept {
@@ -7530,17 +7553,171 @@ inline DWORD QueueUserAPC(PAPCFUNC pfnAPC, HANDLE hThread, ULONG_PTR dwData) noe
 inline BOOL CancelIo(HANDLE /*hFile*/) noexcept { return TRUE; }
 
 inline DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation) noexcept {
-    if (lpTimeZoneInformation) {
-        memset(lpTimeZoneInformation, 0, sizeof(*lpTimeZoneInformation));
-        lpTimeZoneInformation->Bias = 0;
-        wcscpy(lpTimeZoneInformation->StandardName, L"UTC");
+    if (!lpTimeZoneInformation) return 0xFFFFFFFFu;
+    auto* shared = reinterpret_cast<volatile const KUserSharedData*>(
+        UserSharedDataAddress);
+    int32_t high1{}, high2{};
+    uint32_t low{};
+    bool stable = false;
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        high1 = shared->timeZoneBiasHigh1;
+        low = shared->timeZoneBiasLow;
+        high2 = shared->timeZoneBiasHigh2;
+        if (high1 == high2) { stable = true; break; }
     }
-    return 1; // TIME_ZONE_ID_STANDARD
+    if (!stable) return 0xFFFFFFFFu;
+    const int64_t biasTicks = static_cast<int64_t>(
+        (static_cast<uint64_t>(static_cast<uint32_t>(high1)) << 32) | low);
+    if (biasTicks % static_cast<int64_t>(micant::shared::time::TicksPerMinute) != 0)
+        return 0xFFFFFFFFu;
+    const int64_t bias = biasTicks /
+        static_cast<int64_t>(micant::shared::time::TicksPerMinute);
+    if (bias < INT32_MIN || bias > INT32_MAX) return 0xFFFFFFFFu;
+    *lpTimeZoneInformation = {};
+    lpTimeZoneInformation->Bias = static_cast<LONG>(bias);
+    std::wcscpy(lpTimeZoneInformation->StandardName,
+        bias == 0 ? L"UTC" : L"MicaNT");
+    return shared->timeZoneId <= 2 ? shared->timeZoneId : 0xFFFFFFFFu;
 }
 
-inline BOOL SystemTimeToTzSpecificLocalTime(const TIME_ZONE_INFORMATION*, const SYSTEMTIME* u, LPSYSTEMTIME l) noexcept {
-    if (!u || !l) return FALSE;
-    *l = *u;
+namespace time_detail {
+inline bool toTicks(const SYSTEMTIME& value, uint64_t& ticks) noexcept {
+    micant::shared::time::SystemTimeFields fields{
+        value.wYear, value.wMonth, value.wDay, value.wHour, value.wMinute,
+        value.wSecond, value.wMilliseconds, value.wDayOfWeek, 0};
+    return micant::shared::time::toSystemTime100ns(fields, ticks);
+}
+
+inline bool ruleUtc(const SYSTEMTIME& rule, uint16_t year, LONG priorBias,
+                    uint64_t& utc) noexcept {
+    if (!rule.wMonth || rule.wMonth > 12 || priorBias < -2880 || priorBias > 2880)
+        return false;
+    if (rule.wYear && rule.wYear != year) return false;
+    const uint16_t effectiveYear = rule.wYear ? rule.wYear : year;
+    uint32_t day = rule.wDay;
+    if (!rule.wYear) {
+        if (rule.wDay < 1 || rule.wDay > 5 || rule.wDayOfWeek > 6) return false;
+        micant::shared::time::SystemTimeFields first{
+            effectiveYear, rule.wMonth, 1, 0, 0, 0, 0, 0, 0};
+        uint64_t firstTicks{};
+        if (!micant::shared::time::toSystemTime100ns(first, firstTicks) ||
+            !micant::shared::time::fromSystemTime100ns(firstTicks, first)) return false;
+        day = 1 + (rule.wDayOfWeek + 7 - first.weekday) % 7 + (rule.wDay - 1) * 7;
+        if (day > micant::shared::time::daysInMonth(effectiveYear, rule.wMonth)) day -= 7;
+    }
+    SYSTEMTIME local{effectiveYear, rule.wMonth, rule.wDayOfWeek, static_cast<uint16_t>(day),
+        rule.wHour, rule.wMinute, rule.wSecond, rule.wMilliseconds};
+    uint64_t localTicks{};
+    if (!toTicks(local, localTicks)) return false;
+    const int64_t adjustment = static_cast<int64_t>(priorBias) *
+        static_cast<int64_t>(micant::shared::time::TicksPerMinute);
+    if (adjustment >= 0) {
+        if (localTicks > UINT64_MAX - static_cast<uint64_t>(adjustment)) return false;
+        utc = localTicks + static_cast<uint64_t>(adjustment);
+    } else {
+        if (localTicks < static_cast<uint64_t>(-adjustment)) return false;
+        utc = localTicks - static_cast<uint64_t>(-adjustment);
+    }
+    return true;
+}
+
+inline bool utcToLocal(const TIME_ZONE_INFORMATION& zone, const SYSTEMTIME& utc,
+                       SYSTEMTIME& local) noexcept {
+    uint64_t utcTicks{};
+    if (!toTicks(utc, utcTicks) || zone.Bias < -1440 || zone.Bias > 1440 ||
+        zone.StandardBias < -1440 || zone.StandardBias > 1440 ||
+        zone.DaylightBias < -1440 || zone.DaylightBias > 1440) return false;
+    int64_t bias = static_cast<int64_t>(zone.Bias) + zone.StandardBias;
+    if ((zone.DaylightDate.wMonth == 0) != (zone.StandardDate.wMonth == 0))
+        return false;
+    if (zone.DaylightDate.wMonth && zone.StandardDate.wMonth) {
+        uint64_t daylightStart{}, standardStart{};
+        const int64_t daylightBias = static_cast<int64_t>(zone.Bias) + zone.DaylightBias;
+        if (!ruleUtc(zone.DaylightDate, utc.wYear, static_cast<LONG>(bias), daylightStart) ||
+            !ruleUtc(zone.StandardDate, utc.wYear, static_cast<LONG>(daylightBias), standardStart))
+            return false;
+        const bool daylight = daylightStart < standardStart
+            ? utcTicks >= daylightStart && utcTicks < standardStart
+            : utcTicks >= daylightStart || utcTicks < standardStart;
+        if (daylight) bias = daylightBias;
+    }
+    const int64_t delta = -bias *
+        static_cast<int64_t>(micant::shared::time::TicksPerMinute);
+    uint64_t localTicks{};
+    if (delta >= 0) {
+        if (utcTicks > UINT64_MAX - static_cast<uint64_t>(delta)) return false;
+        localTicks = utcTicks + static_cast<uint64_t>(delta);
+    } else {
+        if (utcTicks < static_cast<uint64_t>(-delta)) return false;
+        localTicks = utcTicks - static_cast<uint64_t>(-delta);
+    }
+    micant::shared::time::SystemTimeFields fields{};
+    if (!micant::shared::time::fromSystemTime100ns(localTicks, fields)) return false;
+    local = {fields.year, fields.month, fields.weekday, fields.day, fields.hour,
+        fields.minute, fields.second, fields.milliseconds};
+    return true;
+}
+
+inline bool sameCivil(const SYSTEMTIME& a, const SYSTEMTIME& b) noexcept {
+    return a.wYear == b.wYear && a.wMonth == b.wMonth && a.wDay == b.wDay &&
+        a.wHour == b.wHour && a.wMinute == b.wMinute && a.wSecond == b.wSecond &&
+        a.wMilliseconds == b.wMilliseconds;
+}
+} // namespace time_detail
+
+inline BOOL SystemTimeToTzSpecificLocalTime(const TIME_ZONE_INFORMATION* zone,
+    const SYSTEMTIME* utc, LPSYSTEMTIME local) noexcept {
+    if (!utc || !local) return FALSE;
+    TIME_ZONE_INFORMATION systemZone{};
+    if (!zone) {
+        if (GetTimeZoneInformation(&systemZone) == 0xFFFFFFFFu) return FALSE;
+        zone = &systemZone;
+    }
+    SYSTEMTIME result{};
+    if (!time_detail::utcToLocal(*zone, *utc, result)) return FALSE;
+    *local = result;
+    return TRUE;
+}
+
+inline BOOL TzSpecificLocalTimeToSystemTime(const TIME_ZONE_INFORMATION* zone,
+    const SYSTEMTIME* local, LPSYSTEMTIME utc) noexcept {
+    if (!local || !utc) return FALSE;
+    TIME_ZONE_INFORMATION systemZone{};
+    if (!zone) {
+        if (GetTimeZoneInformation(&systemZone) == 0xFFFFFFFFu) return FALSE;
+        zone = &systemZone;
+    }
+    uint64_t localTicks{};
+    if (!time_detail::toTicks(*local, localTicks)) return FALSE;
+    const int64_t standardBias = static_cast<int64_t>(zone->Bias) + zone->StandardBias;
+    const int64_t daylightBias = static_cast<int64_t>(zone->Bias) + zone->DaylightBias;
+    auto tryBias = [&](int64_t bias, SYSTEMTIME& result) noexcept {
+        if (bias < -2880 || bias > 2880) return false;
+        const int64_t delta = bias *
+            static_cast<int64_t>(micant::shared::time::TicksPerMinute);
+        uint64_t candidate{};
+        if (delta >= 0) {
+            if (localTicks > UINT64_MAX - static_cast<uint64_t>(delta)) return false;
+            candidate = localTicks + static_cast<uint64_t>(delta);
+        } else {
+            if (localTicks < static_cast<uint64_t>(-delta)) return false;
+            candidate = localTicks - static_cast<uint64_t>(-delta);
+        }
+        micant::shared::time::SystemTimeFields fields{};
+        if (!micant::shared::time::fromSystemTime100ns(candidate, fields)) return false;
+        SYSTEMTIME utcCandidate{fields.year, fields.month, fields.weekday, fields.day,
+            fields.hour, fields.minute, fields.second, fields.milliseconds};
+        SYSTEMTIME roundTrip{};
+        if (!time_detail::utcToLocal(*zone, utcCandidate, roundTrip) ||
+            !time_detail::sameCivil(roundTrip, *local)) return false;
+        result = utcCandidate;
+        return true;
+    };
+    SYSTEMTIME result{};
+    if (!tryBias(standardBias, result) &&
+        (!zone->DaylightDate.wMonth || !zone->StandardDate.wMonth ||
+         !tryBias(daylightBias, result))) return FALSE;
+    *utc = result;
     return TRUE;
 }
 
@@ -8226,25 +8403,21 @@ inline BOOL WINAPI DosDateTimeToFileTime(uint16_t wFatDate, uint16_t wFatTime, v
 
 inline BOOL WINAPI SystemTimeToFileTime(const void* lpSystemTime, void* lpFileTime) noexcept {
     if (!lpSystemTime || !lpFileTime) return FALSE;
-    auto* st = reinterpret_cast<const uint16_t*>(lpSystemTime);
-    auto* ft = reinterpret_cast<uint64_t*>(lpFileTime);
-    uint16_t year = st[0];
-    uint16_t month = st[1];
-    uint16_t day = st[3];
-    uint16_t hour = st[4];
-    uint16_t min = st[5];
-    uint16_t sec = st[6];
-    uint64_t totalSeconds = static_cast<uint64_t>(year > 1601 ? year - 1601 : 0) * 31536000ULL +
-                            static_cast<uint64_t>(month * 30 + day) * 86400ULL +
-                            static_cast<uint64_t>(hour * 3600 + min * 60 + sec);
-    *ft = totalSeconds * 10000000ULL;
+    uint64_t ticks{};
+    if (!time_detail::toTicks(*static_cast<const SYSTEMTIME*>(lpSystemTime), ticks))
+        return FALSE;
+    auto* ft = static_cast<FILETIME*>(lpFileTime);
+    ft->dwLowDateTime = static_cast<DWORD>(ticks);
+    ft->dwHighDateTime = static_cast<DWORD>(ticks >> 32);
     return TRUE;
 }
 
 inline BOOL WINAPI TzSpecificLocalTimeToSystemTime([[maybe_unused]] const void* lpTimeZoneInformation, const void* lpLocalTime, void* lpUniversalTime) noexcept {
     if (!lpLocalTime || !lpUniversalTime) return FALSE;
-    std::memcpy(lpUniversalTime, lpLocalTime, 16);
-    return TRUE;
+    return TzSpecificLocalTimeToSystemTime(
+        static_cast<const TIME_ZONE_INFORMATION*>(lpTimeZoneInformation),
+        static_cast<const SYSTEMTIME*>(lpLocalTime),
+        static_cast<SYSTEMTIME*>(lpUniversalTime));
 }
 
 inline BOOL WINAPI GetFileTime([[maybe_unused]] HANDLE hFile, void* lpCreationTime, void* lpLastAccessTime, void* lpLastWriteTime) noexcept {
@@ -12493,7 +12666,9 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetThreadGroupAffinity", reinterpret_cast<void*>(GetThreadGroupAffinity));
     ldr.registerExport("kernel32.dll", "DosDateTimeToFileTime", reinterpret_cast<void*>(DosDateTimeToFileTime));
     ldr.registerExport("kernel32.dll", "SystemTimeToFileTime", reinterpret_cast<void*>(SystemTimeToFileTime));
-    ldr.registerExport("kernel32.dll", "TzSpecificLocalTimeToSystemTime", reinterpret_cast<void*>(TzSpecificLocalTimeToSystemTime));
+    ldr.registerExport("kernel32.dll", "TzSpecificLocalTimeToSystemTime",
+        reinterpret_cast<void*>(static_cast<BOOL (WINAPI*)(const void*, const void*, void*)>(
+            TzSpecificLocalTimeToSystemTime)));
     ldr.registerExport("kernel32.dll", "GetFileTime", reinterpret_cast<void*>(GetFileTime));
     ldr.registerExport("kernel32.dll", "GetLogicalDrives", reinterpret_cast<void*>(GetLogicalDrives));
     ldr.registerExport("kernel32.dll", "GetVolumePathNameW", reinterpret_cast<void*>(GetVolumePathNameW));

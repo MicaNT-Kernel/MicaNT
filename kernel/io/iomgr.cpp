@@ -1,5 +1,9 @@
 #include "micant/km/core/ntos_internal.hpp"
 #include "micant/km/executive/io.hpp"
+#include "micant/km/executive/io_file.hpp"
+#include "micant/km/executive/afd_io.hpp"
+#include "micant/km/executive/probe.hpp"
+#include "micant/shared/afd_socket_abi.hpp"
 #include "micant/km/drivers/fs/fs.hpp"
 #include "micant/km/drivers/fs/npfs.hpp"
 #include <unordered_map>
@@ -7,6 +11,7 @@
 #include <vector>
 #include <iostream>
 #include <cwchar>
+#include <array>
 
 namespace micant::sys {
 
@@ -14,14 +19,27 @@ static std::unordered_map<Handle, std::shared_ptr<fs::FileObject>> g_KernelFiles
 static std::unordered_map<Handle, std::shared_ptr<io::IoCompletionPort>> g_KernelIocpPorts;
 static Handle g_NextFileHandle = 0x200;
 
+static std::shared_ptr<fs::FileObject> ReferenceKernelFile(Handle handle) {
+    const auto it = g_KernelFiles.find(handle);
+    return it == g_KernelFiles.end() ? nullptr : it->second;
+}
+
+static Handle InsertKernelFile(std::shared_ptr<fs::FileObject> file) {
+    const Handle handle = g_NextFileHandle;
+    g_NextFileHandle += 4;
+    g_KernelFiles.emplace(handle, std::move(file));
+    return handle;
+}
+
 namespace internal {
 
 bool IoCloseKernelHandle(Handle h) {
     bool hadIocp = g_KernelIocpPorts.erase(h) > 0;
+    std::shared_ptr<fs::FileObject> file;
     auto it = g_KernelFiles.find(h);
-    if (it != g_KernelFiles.end()) {
-        fs::VirtualFileSystem::get().closeFile(it->second.get());
-        g_KernelFiles.erase(it);
+    if (it != g_KernelFiles.end()) { file = std::move(it->second); g_KernelFiles.erase(it); }
+    if (file) {
+        fs::VirtualFileSystem::get().closeFile(file.get());
         return true;
     }
     return hadIocp;
@@ -79,11 +97,8 @@ NtStatus NtRemoveIoCompletionSys(const SyscallFrame& f) {
 } // namespace internal
 
 fs::FileObject* LookupKernelFileObject(Handle handle) {
-    auto it = g_KernelFiles.find(handle);
-    if (it != g_KernelFiles.end()) {
-        return it->second.get();
-    }
-    return nullptr;
+    const auto it = g_KernelFiles.find(handle);
+    return it == g_KernelFiles.end() ? nullptr : it->second.get();
 }
 
 NtStatus NtCreateFile(
@@ -92,20 +107,66 @@ NtStatus NtCreateFile(
     ObjectAttributes* objectAttributes,
     IoStatusBlock* ioStatusBlock,
     LargeInteger* /*allocationSize*/,
-    uint32_t /*fileAttributes*/,
-    uint32_t /*shareAccess*/,
+    uint32_t fileAttributes,
+    uint32_t shareAccess,
     uint32_t createDisposition,
     uint32_t /*createOptions*/,
-    void* /*eaBuffer*/,
-    uint32_t /*eaLength*/
+    void* eaBuffer,
+    uint32_t eaLength
 ) {
-    if (!fileHandle || !objectAttributes || !objectAttributes->objectName) {
+    if (!fileHandle || !objectAttributes) {
         return NtStatus::InvalidParameter;
     }
+    if (ex::ProbeForWrite(fileHandle, sizeof(*fileHandle), alignof(Handle)) != NtStatus::Success ||
+        (ioStatusBlock && ex::ProbeForWrite(ioStatusBlock, sizeof(*ioStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success))
+        return NtStatus::AccessViolation;
+
+    // AFD endpoints are opened through the standard file syscall and EA path;
+    // keep their ownership in the same kernel file-handle table as VFS files.
+    ObjectAttributes capturedAttributes{};
+    UnicodeString capturedName{};
+    std::array<wchar_t, 260> pathBuffer{};
+    if (ex::ExSafeCopyFromUser(&capturedAttributes, objectAttributes, sizeof(capturedAttributes)) != NtStatus::Success ||
+        !capturedAttributes.objectName || capturedAttributes.rootDirectory != 0) return NtStatus::AccessViolation;
+    if (ex::ExSafeCopyFromUser(&capturedName, capturedAttributes.objectName, sizeof(capturedName)) != NtStatus::Success ||
+        !capturedName.buffer || (capturedName.length % sizeof(wchar_t)) != 0 ||
+        capturedName.length == 0 || capturedName.length > (pathBuffer.size() - 1) * sizeof(wchar_t)) return NtStatus::InvalidParameter;
+    const size_t pathChars = capturedName.length / sizeof(wchar_t);
+    if (ex::ExSafeCopyFromUser(pathBuffer.data(), capturedName.buffer, capturedName.length) != NtStatus::Success)
+        return NtStatus::AccessViolation;
+    pathBuffer[pathChars] = L'\0';
 
     std::shared_ptr<fs::FileObject> fileObj;
+    const std::wstring_view path(pathBuffer.data(), pathChars);
+    if (path == std::wstring_view(L"\\Device\\Afd\\Endpoint")) {
+        if (createDisposition != fs::FILE_OPEN || fileAttributes != 0 || shareAccess != 0 ||
+            capturedAttributes.securityDescriptor || capturedAttributes.securityQualityOfService ||
+            (capturedAttributes.attributes & ~OBJ_CASE_INSENSITIVE) != 0) return NtStatus::NotSupported;
+        if (!eaBuffer || eaLength == 0 || eaLength > 256) return NtStatus::InvalidParameter;
+        std::array<uint8_t, 256> capturedEa{};
+        if (ex::ExSafeCopyFromUser(capturedEa.data(), eaBuffer, eaLength) != NtStatus::Success)
+            return NtStatus::AccessViolation;
+        Handle handle{};
+        NtStatus status = micant::km::afdwsk::IoAfdCreateEndpointHandle(&handle, path,
+            desiredAccess, capturedEa.data(), eaLength);
+        if (status != NtStatus::Success) return status;
+        if (ex::ExSafeCopyToUser(fileHandle, &handle, sizeof(handle)) != NtStatus::Success) {
+            ob::HandleTable* table{}; Handle raw{};
+            if (ob::detail::resolveHandle(handle, table, raw) == NtStatus::Success) (void)table->closeHandle(raw);
+            return NtStatus::AccessViolation;
+        }
+        if (ioStatusBlock) {
+            IoStatusBlock iosb{NtStatus::Success, 2u};
+            if (ex::ExSafeCopyToUser(ioStatusBlock, &iosb, sizeof(iosb)) != NtStatus::Success) {
+                ob::HandleTable* table{}; Handle raw{};
+                if (ob::detail::resolveHandle(handle, table, raw) == NtStatus::Success) (void)table->closeHandle(raw);
+                return NtStatus::AccessViolation;
+            }
+        }
+        return NtStatus::Success;
+    } else {
     NtStatus status = fs::VirtualFileSystem::get().createOrOpenFile(
-        objectAttributes->objectName->view(),
+        path,
         desiredAccess,
         createDisposition,
         fileObj
@@ -118,15 +179,18 @@ NtStatus NtCreateFile(
         }
         return status;
     }
+    }
 
-    Handle h = g_NextFileHandle;
-    g_NextFileHandle += 4;
-    g_KernelFiles[h] = fileObj;
-    *fileHandle = h;
+    const Handle h = InsertKernelFile(fileObj);
+    if (ex::ExSafeCopyToUser(fileHandle, &h, sizeof(h)) != NtStatus::Success) {
+        g_KernelFiles.erase(h);
+        fs::VirtualFileSystem::get().closeFile(fileObj.get());
+        return NtStatus::AccessViolation;
+    }
 
     if (ioStatusBlock) {
-        ioStatusBlock->status = NtStatus::Success;
-        ioStatusBlock->information = (createDisposition == fs::FILE_CREATE) ? 2 : 1; // FILE_CREATED / FILE_OPENED
+        IoStatusBlock iosb{NtStatus::Success, (path == std::wstring_view(L"\\Device\\Afd\\Endpoint") || createDisposition == fs::FILE_CREATE) ? 2u : 1u};
+        if (ex::ExSafeCopyToUser(ioStatusBlock, &iosb, sizeof(iosb)) != NtStatus::Success) return NtStatus::AccessViolation;
     }
     return NtStatus::Success;
 }
@@ -201,9 +265,7 @@ NtStatus NtCreateNamedPipeFile(
     }
 
     auto fileObj = fs::VirtualFileSystem::get().registerServerPipe(pipeInst, desiredAccess);
-    Handle h = g_NextFileHandle;
-    g_NextFileHandle += 4;
-    g_KernelFiles[h] = fileObj;
+    Handle h = InsertKernelFile(fileObj);
     *fileHandle = h;
 
     if (ioStatusBlock) {
@@ -249,9 +311,7 @@ NtStatus NtCreateMailslotFile(
     }
 
     auto fileObj = fs::VirtualFileSystem::get().registerServerMailslot(slot);
-    Handle h = g_NextFileHandle;
-    g_NextFileHandle += 4;
-    g_KernelFiles[h] = fileObj;
+    const Handle h = InsertKernelFile(fileObj);
     *fileHandle = h;
 
     if (ioStatusBlock) {
@@ -272,14 +332,12 @@ NtStatus NtReadFile(
     LargeInteger* byteOffset,
     uint32_t* /*key*/
 ) {
-    auto it = g_KernelFiles.find(fileHandle);
-    if (it == g_KernelFiles.end()) {
-        return NtStatus::InvalidHandle;
-    }
+    auto fileObj = ReferenceKernelFile(fileHandle);
+    if (!fileObj) return NtStatus::InvalidHandle;
 
     uint32_t bytesRead = 0;
     NtStatus status = fs::VirtualFileSystem::get().readFile(
-        it->second.get(),
+        fileObj.get(),
         buffer,
         length,
         byteOffset,
@@ -316,14 +374,12 @@ NtStatus NtWriteFile(
         return NtStatus::Success;
     }
 
-    auto it = g_KernelFiles.find(fileHandle);
-    if (it == g_KernelFiles.end()) {
-        return NtStatus::InvalidHandle;
-    }
+    auto fileObj = ReferenceKernelFile(fileHandle);
+    if (!fileObj) return NtStatus::InvalidHandle;
 
     uint32_t bytesWritten = 0;
     NtStatus status = fs::VirtualFileSystem::get().writeFile(
-        it->second.get(),
+        fileObj.get(),
         buffer,
         length,
         byteOffset,
@@ -339,9 +395,9 @@ NtStatus NtWriteFile(
 
 NtStatus NtDeviceIoControlFile(
     Handle fileHandle,
-    Handle /*event*/,
-    void* /*apcRoutine*/,
-    void* /*apcContext*/,
+    Handle event,
+    void* apcRoutine,
+    void* apcContext,
     IoStatusBlock* ioStatusBlock,
     uint32_t ioControlCode,
     const void* inputBuffer,
@@ -349,17 +405,75 @@ NtStatus NtDeviceIoControlFile(
     void* outputBuffer,
     uint32_t outputBufferLength
 ) {
-    auto it = g_KernelFiles.find(fileHandle);
-    if (it == g_KernelFiles.end() || !it->second) {
-        return NtStatus::InvalidHandle;
+    // Native Io file handles live in the current process Ob table. Reference
+    // them before touching a device so concurrent NtClose cannot free the file.
+    io::FileObject* deviceFile{};
+    ob::ObjectHeader* deviceReference{};
+    uint32_t requiredAccess = 0;
+    if (ioControlCode == micant::shared::afd::IoctlReceive) requiredAccess = 0x0001;
+    else if (ioControlCode == micant::shared::afd::IoctlBind ||
+             ioControlCode == micant::shared::afd::IoctlConnect ||
+             ioControlCode == micant::shared::afd::IoctlListen ||
+             ioControlCode == micant::shared::afd::IoctlSend ||
+             ioControlCode == micant::shared::afd::IoctlSendTo) requiredAccess = 0x0002;
+    NtStatus referenceStatus = io::IoReferenceFileHandle(fileHandle, requiredAccess, deviceFile, deviceReference);
+    if (referenceStatus == NtStatus::Success && micant::km::afdwsk::IoAfdIsEndpointFile(deviceFile)) {
+        NtStatus afdStatus = NtStatus::InvalidParameter;
+        if (event || apcRoutine || apcContext) {
+            ob::ObDereferenceObject(deviceReference);
+            return NtStatus::NotSupported;
+        }
+        using namespace micant::shared::afd;
+        if (inputBufferLength <= MaximumControlBuffer && outputBufferLength <= MaximumControlBuffer &&
+            (!inputBufferLength || inputBuffer) && (!outputBufferLength || outputBuffer)) {
+            if ((inputBufferLength && ex::ProbeForRead(inputBuffer, inputBufferLength, 1) != NtStatus::Success) ||
+                (outputBufferLength && ex::ProbeForWrite(outputBuffer, outputBufferLength, 1) != NtStatus::Success) ||
+                (ioStatusBlock && ex::ProbeForWrite(ioStatusBlock, sizeof(*ioStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success)) {
+                afdStatus = NtStatus::AccessViolation;
+            } else {
+                try {
+                    std::vector<uint8_t> input(inputBufferLength);
+                    std::vector<uint8_t> output(outputBufferLength);
+                    if (inputBufferLength && ex::ExSafeCopyFromUser(input.data(), inputBuffer, inputBufferLength) != NtStatus::Success) {
+                        afdStatus = NtStatus::AccessViolation;
+                    } else {
+                        io::Irp afdIrp{};
+                        afdIrp.majorFunction = io::IRP_MJ_DEVICE_CONTROL;
+                        afdIrp.deviceObject = deviceFile->deviceObject();
+                        afdIrp.fileObject = deviceFile;
+                        afdIrp.systemBuffer = input.data();
+                        afdIrp.userBuffer = output.data();
+                        afdIrp.length = outputBufferLength;
+                        afdIrp.byteOffset.lowPart = ioControlCode;
+                        afdIrp.byteOffset.highPart = static_cast<int32_t>(inputBufferLength);
+                        afdStatus = io::IoCallDriver(afdIrp.deviceObject, &afdIrp);
+                        if (ioControlCode == micant::shared::afd::IoctlReceive &&
+                            afdIrp.ioStatus.information > outputBufferLength) afdStatus = NtStatus::Unsuccessful;
+                        else if (ioControlCode == micant::shared::afd::IoctlReceive && afdIrp.ioStatus.information &&
+                            ex::ExSafeCopyToUser(outputBuffer, output.data(), afdIrp.ioStatus.information) != NtStatus::Success)
+                            afdStatus = NtStatus::AccessViolation;
+                        if (ioStatusBlock && ex::ExSafeCopyToUser(ioStatusBlock, &afdIrp.ioStatus, sizeof(afdIrp.ioStatus)) != NtStatus::Success)
+                            afdStatus = NtStatus::AccessViolation;
+                    }
+                } catch (...) {
+                    afdStatus = NtStatus::InsufficientResources;
+                }
+            }
+        }
+        ob::ObDereferenceObject(deviceReference);
+        return afdStatus;
     }
-
-    auto* devObj = it->second->getDeviceObject();
+    if (deviceReference) ob::ObDereferenceObject(deviceReference);
+    auto fileObj = ReferenceKernelFile(fileHandle);
+    if (!fileObj) return NtStatus::InvalidHandle;
+    auto* devObj = fileObj->getDeviceObject();
     if (!devObj || !devObj->driverObject) {
         return NtStatus::InvalidDeviceRequest;
     }
 
+
     io::Irp irp{};
+    irp.fileObject = fileObj.get();
     irp.majorFunction = io::IRP_MJ_DEVICE_CONTROL;
     irp.deviceObject = devObj;
     irp.systemBuffer = const_cast<void*>(inputBuffer);
@@ -384,9 +498,8 @@ NtStatus NtQueryInformationFile(
     FileInformationClass fileInformationClass
 ) {
     if (!fileInformation) return NtStatus::InvalidParameter;
-    auto it = g_KernelFiles.find(fileHandle);
-    if (it == g_KernelFiles.end() || !it->second) return NtStatus::InvalidHandle;
-    auto fileObj = it->second;
+    auto fileObj = ReferenceKernelFile(fileHandle);
+    if (!fileObj) return NtStatus::InvalidHandle;
 
     switch (fileInformationClass) {
         case FileInformationClass::FileStandardInformation: {
@@ -436,9 +549,8 @@ NtStatus NtSetInformationFile(
     FileInformationClass fileInformationClass
 ) {
     if (!fileInformation) return NtStatus::InvalidParameter;
-    auto it = g_KernelFiles.find(fileHandle);
-    if (it == g_KernelFiles.end() || !it->second) return NtStatus::InvalidHandle;
-    auto fileObj = it->second;
+    auto fileObj = ReferenceKernelFile(fileHandle);
+    if (!fileObj) return NtStatus::InvalidHandle;
 
     switch (fileInformationClass) {
         case FileInformationClass::FilePositionInformation: {
@@ -480,9 +592,8 @@ NtStatus NtQueryDirectoryFile(
     bool /*restartScan*/
 ) {
     if (!fileInformation || length < sizeof(FileBothDirInformation)) return NtStatus::InvalidParameter;
-    auto it = g_KernelFiles.find(fileHandle);
-    if (it == g_KernelFiles.end() || !it->second) return NtStatus::InvalidHandle;
-    auto fileObj = it->second;
+    auto fileObj = ReferenceKernelFile(fileHandle);
+    if (!fileObj) return NtStatus::InvalidHandle;
 
     std::vector<fs::VirtualFileSystem::DirectoryEntry> entries;
     NtStatus status = fs::VirtualFileSystem::get().queryDirectory(fileObj->getFileName(), entries);

@@ -11,18 +11,93 @@
 #include "micant/km/executive/ps_objects.hpp"
 #include "micant/km/executive/section.hpp"
 #include "micant/km/executive/io_file.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/afd_io.hpp"
+#include "micant/shared/afd_socket_abi.hpp"
+#include "micant/km/executive/io_block_device.hpp"
+#include "micant/km/executive/arbiter.hpp"
+#include "micant/km/executive/dma_baremetal.hpp"
 #include "micant/km/core/ke.hpp"
+#include "micant/km/core/passive_work.hpp"
+#include "micant/km/drivers/usb/usb_host_baremetal.hpp"
+#include "micant/km/drivers/input/input_device_baremetal.hpp"
+#include "micant/km/fsrtl/fat_boot.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/win32k/freestanding.hpp"
 #include "micant/shared/boot_driver.hpp"
+#include "micant/km/drivers/net/ndis.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
+#include "micant/km/drivers/net/tcpip_kernel_api.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/win32k_client.h"
 #include "tools/explorer_shell/desktop.hpp"
 #include "tools/explorer_shell/taskbar.hpp"
 #include <cstring>
+#include <array>
+#include <atomic>
 #include <memory>
+#include <new>
 #include <span>
+
+namespace micant::tcpip::kernel_api {
+bool hasAdapter() noexcept { return NetworkStack::get().hasAdapter(); }
+bool isInitialized() noexcept { return NetworkStack::get().isInitialized(); }
+void* referenceSocketWaitObject(int id) noexcept {
+    return NetworkStack::get().referenceSocketWaitObject(id);
+}
+void releaseSocketWaitObject(void* object) noexcept {
+    NetworkStack::get().releaseSocketWaitObject(object);
+}
+void cancelSocketWaitObject(void* object) noexcept {
+    NetworkStack::get().cancelSocketWaitObject(object);
+}
+int32_t waitSocketData(void* object, uint32_t timeoutMilliseconds) noexcept {
+    return static_cast<int32_t>(NetworkStack::get().waitSocketData(object, timeoutMilliseconds));
+}
+int createSocket(int af, int type, int protocol) noexcept {
+    return NetworkStack::get().createSocket(af, type, protocol);
+}
+void closeSocket(int id) noexcept { NetworkStack::get().closeSocket(id); }
+bool bindSocket(int id, uint32_t ip, uint16_t port) noexcept {
+    return NetworkStack::get().bindSocket(id, Ipv4Address(ip), port);
+}
+bool connectSocket(int id, uint32_t ip, uint16_t port) noexcept {
+    return NetworkStack::get().connectSocket(id, Ipv4Address(ip), port);
+}
+bool listenSocket(int id, int backlog) noexcept {
+    return NetworkStack::get().listenSocket(id, backlog);
+}
+int sendSocket(int id, const void* data, size_t length) noexcept {
+    return NetworkStack::get().sendSocket(id, data, length);
+}
+int sendToSocket(int id, const void* data, size_t length, uint32_t ip, uint16_t port) noexcept {
+    return NetworkStack::get().sendToSocket(id, data, length, Ipv4Address(ip), port);
+}
+int recvSocket(int id, void* buffer, size_t capacity) noexcept {
+    return NetworkStack::get().recvSocket(id, buffer, capacity);
+}
+int recvFromSocket(int id, void* buffer, size_t capacity, uint32_t* ip, uint16_t* port) noexcept {
+    if (!ip || !port) return -1;
+    Ipv4Address source{};
+    const int received = NetworkStack::get().recvFromSocket(id, buffer, capacity, source, *port);
+    if (received >= 0) *ip = source.addr;
+    return received;
+}
+void queryNetworkConfiguration(uint32_t* ip, uint32_t* mask, uint32_t* gateway,
+                               uint32_t* dns, uint8_t* mac) noexcept {
+    if (!ip || !mask || !gateway || !dns || !mac) return;
+    Ipv4Address address{}, subnet{}, router{}, resolver{};
+    ndis::MacAddress hardware{};
+    NetworkStack::get().queryNetworkConfiguration(address, subnet, router, resolver, hardware);
+    *ip = address.addr; *mask = subnet.addr; *gateway = router.addr; *dns = resolver.addr;
+    std::memcpy(mac, hardware.bytes, sizeof(hardware.bytes));
+}
+bool setNetworkConfiguration(uint32_t ip, uint32_t mask, uint32_t gateway, uint32_t dns) noexcept {
+    return NetworkStack::get().applyNetworkConfiguration(
+        Ipv4Address(ip), Ipv4Address(mask), Ipv4Address(gateway), Ipv4Address(dns));
+}
+} // namespace micant::tcpip::kernel_api
 
 namespace micant::sys {
 bool initializeBootstrapSectionServices() noexcept;
@@ -48,12 +123,59 @@ constexpr size_t kBootstrapPfnCount = 65536;
 constexpr size_t kMaximumMemoryDescriptors = 1024;
 alignas(4096) micant::mm::Mmpfn g_bootPfnMetadata[kBootstrapPfnCount]{};
 micant::uefi::EfiMemoryDescriptor g_bootMemoryDescriptors[kMaximumMemoryDescriptors]{};
-micant::mm::PhysicalPageRange g_bootAvailableRanges[kMaximumMemoryDescriptors]{};
+micant::mm::PhysicalPageRange g_bootAvailableRanges[kMaximumMemoryDescriptors + 1]{};
 alignas(16) uint32_t g_explorerSurface[kWidth * kHeight]{};
 uint32_t g_cursorFrame[kCursorSize * kCursorSize]{};
 micant::boot_driver::KernelServices g_displayServices{};
 micant::boot_driver::DisplayDevice g_display{};
 micant::boot_driver::DriverObject g_displayDriver{};
+micant::boot::KernelFramebufferV1 g_bootFramebufferInfo{};
+struct GopDisplayContext {
+    volatile uint32_t* Pixels{};
+    uint32_t Width{};
+    uint32_t Height{};
+    uint32_t Pitch{};
+    uint32_t PixelFormat{};
+    uint64_t ByteSize{};
+};
+GopDisplayContext g_gopDisplayContext{};
+bool g_displayUsingGopFallback{};
+constexpr size_t kMaxBootStartDrivers = micant::boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES;
+micant::boot_driver::KernelServices g_bootDriverServices[kMaxBootStartDrivers]{};
+micant::boot_driver::DriverObject g_bootDriverObjects[kMaxBootStartDrivers]{};
+micant::boot_driver::DisplayDevice g_bootDriverDisplays[kMaxBootStartDrivers]{};
+struct BootFileProvider {
+    int32_t (*Open)(void*, const char16_t*, size_t, micant::boot_driver::FileBackendV1*);
+    void* Context;
+    size_t OwnerIndex;
+    size_t ActiveBackends;
+    bool Used;
+};
+struct BootDriverServiceContext { size_t Index{}; };
+int32_t bootRegisterNetworkAdapter(void*,
+    const micant::shared::ndis::AdapterServicesV1*, uint64_t*) noexcept;
+int32_t bootUnregisterNetworkAdapter(void*, uint64_t) noexcept;
+struct BootOwnedHandle { uint64_t Value{}; bool Used{}; };
+constexpr size_t kMaxBootDriverHandles = 32;
+BootDriverServiceContext g_bootDriverContexts[kMaxBootStartDrivers]{};
+struct BootNdisAdapterRegistration {
+    uint64_t Cookie{};
+    BootDriverServiceContext* Owner{};
+    micant::shared::ndis::AdapterServicesV1 DriverServices{};
+    micant::shared::ndis::AdapterServicesV1 KernelServices{};
+    std::atomic<uint32_t> ActiveCalls{};
+    std::atomic<bool> Stopping{};
+    std::atomic<micant::shared::ndis::ReceivePacketRoutine> ReceiveRoutine{};
+    std::atomic<void*> ReceiveContext{};
+    bool Used{};
+};
+constexpr size_t kMaxBootNdisAdapters = 4;
+BootNdisAdapterRegistration g_bootNdisAdapters[kMaxBootNdisAdapters]{};
+uint64_t g_nextBootNdisCookie{1};
+BootOwnedHandle g_bootDriverHandles[kMaxBootStartDrivers][kMaxBootDriverHandles]{};
+BootFileProvider g_bootFileProviders[kMaxBootStartDrivers]{};
+size_t g_bootFileProviderCount{};
+bool g_bootFileOpenRouterInstalled{};
 uint32_t g_mouseX = (kWidth - kCursorSize) / 2;
 uint32_t g_mouseY = (kHeight - kCursorSize) / 2;
 uint32_t g_mouseButtons{};
@@ -182,6 +304,14 @@ void serialWrite(const char* text) noexcept {
         }
         writePort(0x3F8, static_cast<uint8_t>(text[i]));
     }
+}
+
+void serialWriteChar(char value) noexcept {
+    for (uint32_t wait = 0; wait < 1000000; ++wait) {
+        if (readPort(0x3FD) & 0x20) break;
+        __asm__ __volatile__("pause");
+    }
+    writePort(0x3F8, static_cast<uint8_t>(value));
 }
 
 [[noreturn]] void stopWithError(const char* message) noexcept {
@@ -587,8 +717,26 @@ void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV3& handoff) 
             if (first < 256) first = 256;
             if (last > kBootstrapPfnCount) last = kBootstrapPfnCount;
             if (first < last) {
-                enrolled = last - first;
-                g_bootAvailableRanges[rangeCount++] = {first, enrolled};
+                // The standard KUSER_SHARED_DATA VA overlays the low identity
+                // map. Its displaced physical page must stay out of the PFN
+                // free list, or a later allocation could alias the shared RO
+                // user page and become visible through 0x7FFE0000.
+                constexpr uint64_t displacedPfn = micant::UserSharedDataAddress / 4096;
+                if (displacedPfn >= first && displacedPfn < last) {
+                    if (first < displacedPfn) {
+                        const uint64_t count = displacedPfn - first;
+                        g_bootAvailableRanges[rangeCount++] = {first, count};
+                        enrolled += count;
+                    }
+                    if (displacedPfn + 1 < last) {
+                        const uint64_t count = last - (displacedPfn + 1);
+                        g_bootAvailableRanges[rangeCount++] = {displacedPfn + 1, count};
+                        enrolled += count;
+                    }
+                } else {
+                    enrolled = last - first;
+                    g_bootAvailableRanges[rangeCount++] = {first, enrolled};
+                }
             }
         }
         deferredPages += descriptor.numberOfPages - enrolled;
@@ -646,29 +794,741 @@ void initializePhysicalMemory(const micant::boot::UefiKernelHandoffV3& handoff) 
     serialWrite("[MicaNT Mm] Canonical physical allocation, zeroing and release verified\r\n");
 }
 
-void initializeDisplay(const micant::boot::KernelBootImageV1& image) noexcept {
+int32_t bootStatus(micant::NtStatus status) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(status));
+}
+
+bool trackBootDriverHandle(void* context, uint64_t handle) noexcept {
+    auto* owner = static_cast<BootDriverServiceContext*>(context);
+    if (!owner || owner->Index >= kMaxBootStartDrivers || !handle) return false;
+    for (auto& record : g_bootDriverHandles[owner->Index]) {
+        if (!record.Used) { record = {handle, true}; return true; }
+    }
+    return false;
+}
+
+void forgetBootDriverHandle(void* context, uint64_t handle) noexcept {
+    auto* owner = static_cast<BootDriverServiceContext*>(context);
+    if (!owner || owner->Index >= kMaxBootStartDrivers) return;
+    for (auto& record : g_bootDriverHandles[owner->Index]) {
+        if (record.Used && record.Value == handle) { record = {}; return; }
+    }
+}
+
+int32_t bootCloseHandle(void* context, uint64_t handle) noexcept {
+    if (!handle) return bootStatus(micant::NtStatus::InvalidHandle);
+    const auto status = micant::sys::NtClose(static_cast<micant::Handle>(handle));
+    if (status == micant::NtStatus::Success) forgetBootDriverHandle(context, handle);
+    return bootStatus(status);
+}
+
+int32_t bootCloseBlockDevice(void* context, uint64_t handle) noexcept {
+    micant::io::BlockDeviceObject* device{};
+    micant::ob::ObjectHeader* reference{};
+    const auto status = micant::io::IoReferenceBlockDeviceHandle(
+        static_cast<micant::Handle>(handle), 0, device, reference);
+    if (status != micant::NtStatus::Success) return bootStatus(status);
+    micant::ob::ObDereferenceObject(reference);
+    return bootCloseHandle(context, handle);
+}
+
+int32_t bootCloseFile(void* context, uint64_t handle) noexcept {
+    micant::io::FileObject* file{};
+    micant::ob::ObjectHeader* reference{};
+    const auto status = micant::io::IoReferenceFileHandle(
+        static_cast<micant::Handle>(handle), 0, file, reference);
+    if (status != micant::NtStatus::Success) return bootStatus(status);
+    micant::ob::ObDereferenceObject(reference);
+    return bootCloseHandle(context, handle);
+}
+
+void rollbackBootDriverResources(size_t ownerIndex) noexcept {
+    if (ownerIndex >= kMaxBootStartDrivers) return;
+    for (auto& record : g_bootDriverHandles[ownerIndex]) {
+        if (record.Used) {
+            (void)micant::sys::NtClose(static_cast<micant::Handle>(record.Value));
+            record = {};
+        }
+    }
+    for (auto& provider : g_bootFileProviders) {
+        if (!provider.Used || provider.OwnerIndex != ownerIndex) continue;
+        if (provider.ActiveBackends)
+            stopWithError("[MicaNT Io] Failed driver has active file backend references\r\n");
+        provider = {};
+        --g_bootFileProviderCount;
+    }
+}
+
+int32_t bootPciRead(void*, uint16_t bus, uint16_t device, uint16_t function,
+                    uint16_t offset, uint32_t* value) noexcept {
+    if (!value) return bootStatus(micant::NtStatus::InvalidParameter);
+    *value = 0;
+    const auto result = micant::hal::amd64::readPciConfig32(
+        bus, device, function, offset, *value);
+    if (result == micant::hal::amd64::PciConfigAccessResult::Success)
+        return bootStatus(micant::NtStatus::Success);
+    return bootStatus(result == micant::hal::amd64::PciConfigAccessResult::InvalidParameter
+        ? micant::NtStatus::InvalidParameter : micant::NtStatus::NotSupported);
+}
+
+int32_t bootPciWrite(void* owner, uint16_t bus, uint16_t device, uint16_t function,
+                     uint16_t offset, uint32_t value) noexcept {
+    struct ExcludeInterrupts {
+        uint64_t flags{};
+        ExcludeInterrupts() noexcept { __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory"); }
+        ~ExcludeInterrupts() { if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory"); }
+    } exclusion;
+    if (!micant::km::arb::ownsDevice(owner, bus, device, function))
+        return bootStatus(micant::NtStatus::AccessDenied);
+    // BARs remain under PnP ownership; command writes must not echo W1C
+    // status and bus mastering requires an owned pinned DMA allocation.
+    if ((offset >= 0x10 && offset <= 0x24) || offset == 0x30 ||
+        (offset == 4 && ((value & 0xffff0000u) ||
+         ((value & 4u) && !micant::km::arb::hasDma(owner, bus, device, function)))))
+        return bootStatus(micant::NtStatus::AccessDenied);
+    const auto result = micant::hal::amd64::writePciConfig32(
+        bus, device, function, offset, value);
+    if (result == micant::hal::amd64::PciConfigAccessResult::Success)
+        return bootStatus(micant::NtStatus::Success);
+    return bootStatus(result == micant::hal::amd64::PciConfigAccessResult::InvalidParameter
+        ? micant::NtStatus::InvalidParameter : micant::NtStatus::NotSupported);
+}
+
+struct BootPciMapping {
+    void* owner{};
+    void* address{};
+    size_t size{};
+    uint64_t claim{};
+};
+micant::ke::SpinLock g_bootPciMappingLock{};
+BootPciMapping g_bootPciMappings[64]{};
+
+void* bootMapDeviceMemory(void* owner, uint64_t physical, size_t size) noexcept {
+    micant::ke::SpinLockGuard guard(g_bootPciMappingLock);
+    BootPciMapping* freeMapping{};
+    for (auto& mapping : g_bootPciMappings) if (!mapping.address) { freeMapping = &mapping; break; }
+    if (!freeMapping) return nullptr;
+    const auto claim = micant::km::arb::retainMapping(owner, physical, size);
+    if (!claim) return nullptr;
+    auto* address = micant::hal::amd64::mapBootstrapDeviceMemory(physical, size);
+    if (!address) {
+        if (!micant::km::arb::releaseMapping(owner, claim)) __builtin_trap();
+        return nullptr;
+    }
+    *freeMapping = {owner, address, size, claim};
+    return address;
+}
+
+bool bootReleaseDeviceMemory(void* owner, void* address, size_t size) noexcept {
+    micant::ke::SpinLockGuard guard(g_bootPciMappingLock);
+    for (auto& mapping : g_bootPciMappings) {
+        if (mapping.owner != owner || mapping.address != address || mapping.size != size) continue;
+        if (!micant::hal::amd64::releaseBootstrapDeviceMemory(address, size)) return false;
+        if (!micant::km::arb::releaseMapping(owner, mapping.claim)) __builtin_trap();
+        mapping = {};
+        return true;
+    }
+    return false;
+}
+
+int32_t bootTranslateDmaRange(void*, const void* address, size_t size,
+                              uint64_t* physical) noexcept {
+    if (!physical) return bootStatus(micant::NtStatus::InvalidParameter);
+    *physical = micant::hal::amd64::translateBootstrapDmaRange(address, size);
+    return bootStatus(*physical ? micant::NtStatus::Success : micant::NtStatus::NotSupported);
+}
+
+int32_t bootQueryMonotonicClock(void*, uint64_t* counter, uint64_t* frequency) noexcept {
+    if (!counter || !frequency) return bootStatus(micant::NtStatus::InvalidParameter);
+    *counter = *frequency = 0;
+    const auto status = micant::hal::amd64::queryBootstrapClock(*counter, *frequency);
+    return bootStatus(status == micant::hal::amd64::BootstrapClockStatus::Success
+        ? micant::NtStatus::Success : micant::NtStatus::DeviceNotReady);
+}
+
+int32_t bootDelayMilliseconds(void*, uint32_t milliseconds) noexcept {
+    const auto status = micant::hal::amd64::delayBootstrapMilliseconds(milliseconds);
+    return bootStatus(status == micant::hal::amd64::BootstrapClockStatus::Success
+        ? micant::NtStatus::Success : micant::NtStatus::DeviceNotReady);
+}
+
+int32_t bootDelayMicroseconds(void*, uint32_t microseconds) noexcept {
+    const auto status = micant::hal::amd64::delayBootstrapMicroseconds(microseconds);
+    return bootStatus(status == micant::hal::amd64::BootstrapClockStatus::Success
+        ? micant::NtStatus::Success : micant::NtStatus::DeviceNotReady);
+}
+
+micant::NtStatus bootProbePciBar(uint16_t bus, uint16_t device, uint16_t function,
+    uint8_t index, micant::boot_driver::PciBarResourceV1& resource) noexcept {
+    for (size_t i = 0; i < micant::km::arb::firmwareBarCount; ++i) {
+        const auto& recorded = micant::km::arb::firmwareBars[i];
+        if (recorded.bus != bus || recorded.device != device || recorded.function != function ||
+            recorded.index != index) continue;
+        if (!recorded.length || recorded.ioSpace) return micant::NtStatus::DeviceNotReady;
+        uint32_t command{}, low{}, high{};
+        using micant::hal::amd64::PciConfigAccessResult;
+        if (micant::hal::amd64::readPciConfig32(bus, device, function, 4, command) != PciConfigAccessResult::Success ||
+            micant::hal::amd64::readPciConfig32(bus, device, function, 0x10 + index * 4, low) != PciConfigAccessResult::Success)
+            return micant::NtStatus::DeviceNotReady;
+        if (command & 7u) return micant::NtStatus::DeviceBusy;
+        if (low & 1u) return micant::NtStatus::DeviceNotReady;
+        if (((low >> 1) & 3u) == 2 &&
+            (index == 5 || micant::hal::amd64::readPciConfig32(bus, device, function,
+                0x14 + index * 4, high) != PciConfigAccessResult::Success)) return micant::NtStatus::DeviceNotReady;
+        const uint64_t address = uint64_t{low & ~uint32_t{15}} | (uint64_t{high} << 32);
+        if (address != recorded.address) return micant::NtStatus::DeviceNotReady;
+        resource = {};
+        resource.BarIndex = index; resource.PhysicalAddress = address; resource.Length = recorded.length;
+        return micant::NtStatus::Success;
+    }
+    micant::hal::amd64::PciBarInfo bar{};
+    const auto result = micant::hal::amd64::probeQuiescentPciBar(bus, device, function, index, bar);
+    if (result == micant::hal::amd64::PciBarProbeResult::Active) return micant::NtStatus::DeviceBusy;
+    if (result != micant::hal::amd64::PciBarProbeResult::Success || bar.ioSpace)
+        return micant::NtStatus::DeviceNotReady;
+    resource = {};
+    resource.BarIndex = index;
+    resource.PhysicalAddress = bar.address;
+    resource.Length = bar.length;
+    return micant::NtStatus::Success;
+}
+
+int32_t bootClaimPciDevice(void* owner, uint16_t segment, uint16_t bus, uint16_t device,
+    uint16_t function, const micant::boot_driver::PciBarRequestV1* requests,
+    size_t requestCount, uint64_t* token,
+    micant::boot_driver::PciBarResourceV1* resources, size_t* resourceCount) noexcept {
+    return bootStatus(micant::km::arb::claim(owner, segment, bus, device, function,
+        requests, requestCount, token, resources, resourceCount, bootProbePciBar));
+}
+
+bool bootPciDeviceQuiescent(uint16_t bus, uint16_t device, uint16_t function) noexcept {
+    uint32_t command{};
+    return micant::hal::amd64::readPciConfig32(bus, device, function, 4, command) ==
+        micant::hal::amd64::PciConfigAccessResult::Success && !(command & 7u);
+}
+
+int32_t bootReleasePciDevice(void* owner, uint64_t token) noexcept {
+    return bootStatus(micant::km::arb::release(owner, token, bootPciDeviceQuiescent));
+}
+
+int32_t bootAllocateDmaBuffer(void* owner, uint64_t claim, size_t bytes, size_t alignment,
+                              uint64_t highestAddress, void** virtualAddress,
+                              uint64_t* deviceAddress, uint64_t* token) noexcept {
+    return bootStatus(micant::io::dma::allocate(owner, claim, bytes, alignment,
+                                                highestAddress, virtualAddress, deviceAddress, token));
+}
+int32_t bootFreeDmaBuffer(void* owner, uint64_t token) noexcept {
+    return bootStatus(micant::io::dma::release(owner, token, bootPciDeviceQuiescent));
+}
+
+int32_t bootRegisterUsbHost(void* owner, const micant::shared::usb::HostServicesV1* services,
+                            uint64_t* token) noexcept {
+    if (!services || !token) return bootStatus(micant::NtStatus::InvalidParameter);
+    return bootStatus(micant::usb::baremetal::registerHost(owner, *services, *token));
+}
+int32_t bootUnregisterUsbHost(void* owner, uint64_t token) noexcept {
+    return bootStatus(micant::usb::baremetal::unregisterHost(owner, token));
+}
+int32_t bootMountFat(void* owner, uint64_t handle, uint64_t* token) noexcept {
+    if (!token) return bootStatus(micant::NtStatus::InvalidParameter);
+    return bootStatus(micant::fsrtl::fat::mount(owner, static_cast<micant::Handle>(handle), *token));
+}
+int32_t bootUnmountFat(void* owner, uint64_t token) noexcept {
+    return bootStatus(micant::fsrtl::fat::unmount(owner, token));
+}
+
+struct BootBlockBackendAdapter {
+    void* Context{};
+    int32_t (*Read)(void*, uint64_t, uint32_t, void*, uint32_t*){};
+    void (*Release)(void*){};
+};
+
+micant::NtStatus bootBlockReadAdapter(void* context, uint64_t lba,
+    uint32_t count, void* buffer, uint32_t* blocksRead) noexcept {
+    auto* adapter = static_cast<BootBlockBackendAdapter*>(context);
+    if (!adapter || !adapter->Read) return micant::NtStatus::InvalidParameter;
+    return static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Read(
+        adapter->Context, lba, count, buffer, blocksRead)));
+}
+
+void bootBlockReleaseAdapter(void* context) noexcept {
+    auto* adapter = static_cast<BootBlockBackendAdapter*>(context);
+    if (!adapter) return;
+    if (adapter->Release) adapter->Release(adapter->Context);
+    delete adapter;
+}
+
+int32_t bootCreateReadOnlyBlockDevice(void* driverContext, uint64_t totalBlocks,
+    uint32_t blockSize, void* backendContext,
+    int32_t (*read)(void*, uint64_t, uint32_t, void*, uint32_t*),
+    void (*release)(void*), uint32_t desiredAccess, uint64_t* handle) noexcept {
+    if (handle) *handle = 0;
+    if (!handle || !read || !release) return bootStatus(micant::NtStatus::InvalidParameter);
+    auto* adapter = new (std::nothrow_t{}) BootBlockBackendAdapter{backendContext, read, release};
+    if (!adapter) { release(backendContext); return bootStatus(micant::NtStatus::NoMemory); }
+    micant::io::BlockDeviceBackend backend{
+        adapter, totalBlocks, blockSize, bootBlockReadAdapter, bootBlockReleaseAdapter};
+    micant::Handle nativeHandle{};
+    const auto status = micant::io::IoCreateBlockDevice(&nativeHandle, desiredAccess, backend);
+    *handle = static_cast<uint64_t>(nativeHandle);
+    if (status == micant::NtStatus::Success && !trackBootDriverHandle(driverContext, *handle)) {
+        (void)micant::sys::NtClose(nativeHandle);
+        *handle = 0;
+        return bootStatus(micant::NtStatus::InsufficientResources);
+    }
+    return bootStatus(status);
+}
+
+int32_t bootReadBlockDevice(void*, uint64_t handle, uint64_t lba,
+    uint32_t blockCount, void* buffer, uint32_t* blocksRead) noexcept {
+    return bootStatus(micant::io::IoReadBlockDeviceHandle(
+        static_cast<micant::Handle>(handle), lba, blockCount, buffer, blocksRead));
+}
+
+struct BootFileBackendAdapter {
+    micant::boot_driver::FileBackendV1 Backend{};
+    size_t ProviderIndex{};
+};
+
+micant::NtStatus bootFileReadAdapter(void* context, uint64_t offset, void* buffer,
+    size_t length, size_t* bytesRead) noexcept {
+    auto* adapter = static_cast<BootFileBackendAdapter*>(context);
+    if (!adapter || !adapter->Backend.Read) return micant::NtStatus::InvalidParameter;
+    return static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Backend.Read(
+        adapter->Backend.Context, offset, buffer, length, bytesRead)));
+}
+
+void bootFileReleaseAdapter(void* context) noexcept {
+    auto* adapter = static_cast<BootFileBackendAdapter*>(context);
+    if (!adapter) return;
+    if (adapter->Backend.Release) adapter->Backend.Release(adapter->Backend.Context);
+    if (adapter->ProviderIndex < kMaxBootStartDrivers &&
+        g_bootFileProviders[adapter->ProviderIndex].ActiveBackends)
+        --g_bootFileProviders[adapter->ProviderIndex].ActiveBackends;
+    delete adapter;
+}
+
+micant::NtStatus bootFileOpenRouter(void*, std::u16string_view name,
+    micant::io::FileBackend& output) noexcept {
+    if (name.empty() || name.size() > 1024) return micant::NtStatus::InvalidParameter;
+    const auto fatStatus = micant::fsrtl::fat::open(name, output);
+    if (fatStatus != micant::NtStatus::ObjectPathNotFound) return fatStatus;
+    for (size_t i = 0; i < kMaxBootStartDrivers; ++i) {
+        if (!g_bootFileProviders[i].Used) continue;
+        micant::boot_driver::FileBackendV1 candidate{};
+        const auto status = g_bootFileProviders[i].Open(
+            g_bootFileProviders[i].Context, name.data(), name.size(), &candidate);
+        if (status == bootStatus(micant::NtStatus::ObjectNameNotFound) ||
+            status == bootStatus(micant::NtStatus::NoSuchFile)) {
+            if (candidate.Release) candidate.Release(candidate.Context);
+            continue;
+        }
+        if (status != bootStatus(micant::NtStatus::Success)) {
+            if (candidate.Release) candidate.Release(candidate.Context);
+            return static_cast<micant::NtStatus>(static_cast<uint32_t>(status));
+        }
+        if (!candidate.Read || !candidate.Release || !candidate.Size ||
+            candidate.NameLength > 1024 || (!candidate.Name && candidate.NameLength)) {
+            if (candidate.Release) candidate.Release(candidate.Context);
+            return micant::NtStatus::InvalidParameter;
+        }
+    auto* adapter = new (std::nothrow_t{}) BootFileBackendAdapter{candidate, i};
+        if (!adapter) {
+            candidate.Release(candidate.Context);
+            return micant::NtStatus::NoMemory;
+        }
+        ++g_bootFileProviders[i].ActiveBackends;
+        output = {adapter, candidate.Size,
+            candidate.Name && candidate.NameLength
+                ? std::u16string_view(candidate.Name, candidate.NameLength) : name,
+            bootFileReadAdapter, bootFileReleaseAdapter};
+        return micant::NtStatus::Success;
+    }
+    return micant::NtStatus::NoSuchFile;
+}
+
+int32_t bootRegisterFileOpenRoutine(void* serviceContext,
+    int32_t (*open)(void*, const char16_t*, size_t,
+                    micant::boot_driver::FileBackendV1*), void* context) noexcept {
+    auto* owner = static_cast<BootDriverServiceContext*>(serviceContext);
+    if (!open) return bootStatus(micant::NtStatus::InvalidParameter);
+    if (!owner || owner->Index >= kMaxBootStartDrivers)
+        return bootStatus(micant::NtStatus::InvalidParameter);
+    size_t slot = 0;
+    while (slot < kMaxBootStartDrivers && g_bootFileProviders[slot].Used) ++slot;
+    if (slot == kMaxBootStartDrivers)
+        return bootStatus(micant::NtStatus::InsufficientResources);
+    if (!g_bootFileOpenRouterInstalled) {
+        const auto status = micant::io::IoRegisterFileOpenRoutine(bootFileOpenRouter, nullptr);
+        if (status != micant::NtStatus::Success) return bootStatus(status);
+        g_bootFileOpenRouterInstalled = true;
+    }
+    g_bootFileProviders[slot] = {open, context, owner->Index, 0, true};
+    ++g_bootFileProviderCount;
+    return bootStatus(micant::NtStatus::Success);
+}
+
+int32_t bootUnregisterFileOpenRoutine(void* serviceContext,
+    int32_t (*open)(void*, const char16_t*, size_t,
+                    micant::boot_driver::FileBackendV1*), void* context) noexcept {
+    auto* owner = static_cast<BootDriverServiceContext*>(serviceContext);
+    if (!owner || owner->Index >= kMaxBootStartDrivers || !open)
+        return bootStatus(micant::NtStatus::InvalidParameter);
+    for (size_t i = 0; i < kMaxBootStartDrivers; ++i) {
+        auto& provider = g_bootFileProviders[i];
+        if (!provider.Used || provider.OwnerIndex != owner->Index || provider.Open != open ||
+            provider.Context != context) continue;
+        if (provider.ActiveBackends) return bootStatus(micant::NtStatus::DeviceBusy);
+        provider = {};
+        --g_bootFileProviderCount;
+        return bootStatus(micant::NtStatus::Success);
+    }
+    return bootStatus(micant::NtStatus::ObjectNameNotFound);
+}
+
+int32_t bootOpenBackendFile(void* context, uint64_t* handle, uint32_t access,
+    const char16_t* name, size_t nameLength) noexcept {
+    if (!handle) return bootStatus(micant::NtStatus::InvalidParameter);
+    *handle = 0;
+    if (!name || !nameLength || nameLength > 1024)
+        return bootStatus(micant::NtStatus::InvalidParameter);
+    micant::Handle nativeHandle{};
+    const auto status = micant::io::IoOpenBackendFile(
+        &nativeHandle, access, {name, nameLength});
+    *handle = static_cast<uint64_t>(nativeHandle);
+    if (status == micant::NtStatus::Success && !trackBootDriverHandle(context, *handle)) {
+        (void)micant::sys::NtClose(nativeHandle);
+        *handle = 0;
+        return bootStatus(micant::NtStatus::InsufficientResources);
+    }
+    return bootStatus(status);
+}
+
+int32_t bootCreateBackendFile(void* context, uint64_t* handle, uint32_t access,
+    const micant::boot_driver::FileBackendV1* backend) noexcept {
+    if (handle) *handle = 0;
+    if (!handle || !backend || !backend->Read || !backend->Release || !backend->Size ||
+        backend->NameLength > 1024 ||
+        (!backend->Name && backend->NameLength))
+        return bootStatus(micant::NtStatus::InvalidParameter);
+    auto* adapter = new (std::nothrow_t{}) BootFileBackendAdapter{*backend};
+    if (!adapter) {
+        backend->Release(backend->Context);
+        return bootStatus(micant::NtStatus::NoMemory);
+    }
+    micant::io::FileBackend nativeBackend{
+        adapter, backend->Size,
+        backend->Name ? std::u16string_view(backend->Name, backend->NameLength)
+                      : std::u16string_view{},
+        bootFileReadAdapter, bootFileReleaseAdapter};
+    micant::Handle nativeHandle{};
+    const auto status = micant::io::IoCreateBackendFile(
+        &nativeHandle, access, nativeBackend);
+    *handle = static_cast<uint64_t>(nativeHandle);
+    if (status == micant::NtStatus::Success && !trackBootDriverHandle(context, *handle)) {
+        (void)micant::sys::NtClose(nativeHandle);
+        *handle = 0;
+        return bootStatus(micant::NtStatus::InsufficientResources);
+    }
+    return bootStatus(status);
+}
+
+int32_t bootReadFile(void*, uint64_t handle, bool useCurrentOffset, uint64_t offset,
+    void* buffer, size_t length, size_t* bytesRead) noexcept {
+    return bootStatus(micant::io::IoReadFileHandle(
+        static_cast<micant::Handle>(handle), useCurrentOffset, offset, buffer, length, bytesRead));
+}
+
+void initializeKernelServices(micant::boot_driver::KernelServices& services,
+                              size_t ownerIndex = 0) noexcept {
+    using namespace micant::boot_driver;
+    services = {};
+    services.Size = sizeof(services);
+    services.Version = KERNEL_SERVICES_VERSION;
+    if (ownerIndex >= kMaxBootStartDrivers) ownerIndex = 0;
+    g_bootDriverContexts[ownerIndex].Index = ownerIndex;
+    services.Context = &g_bootDriverContexts[ownerIndex];
+    services.BootWidth = kWidth;
+    services.BootHeight = kHeight;
+    services.TranslateVirtualAddress = [](void*, const void* address) {
+        return micant::hal::amd64::translateBootstrapAddress(address);
+    };
+    services.MapDeviceMemory = bootMapDeviceMemory;
+    services.Log = [](void*, const char* text) {
+        serialWrite("[MicaNT OEM] ");
+        serialWrite(text);
+        serialWrite("\r\n");
+    };
+    services.PciReadConfig32 = bootPciRead;
+    services.PciWriteConfig32 = bootPciWrite;
+    services.ReleaseDeviceMemory = bootReleaseDeviceMemory;
+    services.TranslateDmaRange = bootTranslateDmaRange;
+    services.QueryMonotonicClock = bootQueryMonotonicClock;
+    services.DelayMilliseconds = bootDelayMilliseconds;
+    services.DelayMicroseconds = bootDelayMicroseconds;
+    services.ClaimPciDevice = bootClaimPciDevice;
+    services.ReleasePciDevice = bootReleasePciDevice;
+    services.DmaVersion = DMA_SERVICES_VERSION;
+    services.AllocateDmaBuffer = bootAllocateDmaBuffer;
+    services.FreeDmaBuffer = bootFreeDmaBuffer;
+    services.UsbHostVersion = micant::shared::usb::HostServicesVersion;
+    services.RegisterUsbHost = bootRegisterUsbHost;
+    services.UnregisterUsbHost = bootUnregisterUsbHost;
+    services.FatFilesystemVersion = 1;
+    services.MountFatBlockDevice = bootMountFat;
+    services.UnmountFatBlockDevice = bootUnmountFat;
+    services.NetworkAdapterVersion = NETWORK_ADAPTER_SERVICES_VERSION;
+    services.RegisterNetworkAdapter = bootRegisterNetworkAdapter;
+    services.UnregisterNetworkAdapter = bootUnregisterNetworkAdapter;
+    services.CreateReadOnlyBlockDevice = bootCreateReadOnlyBlockDevice;
+    services.ReadBlockDevice = bootReadBlockDevice;
+    services.RegisterFileOpenRoutine = bootRegisterFileOpenRoutine;
+    services.UnregisterFileOpenRoutine = bootUnregisterFileOpenRoutine;
+    services.OpenBackendFile = bootOpenBackendFile;
+    services.CreateBackendFile = bootCreateBackendFile;
+    services.ReadFile = bootReadFile;
+    services.CloseHandle = bootCloseHandle;
+    services.CloseBlockDevice = bootCloseBlockDevice;
+    services.CloseFile = bootCloseFile;
+}
+
+namespace {
+using BootAdapterSlot = BootNdisAdapterRegistration;
+bool beginBootAdapterCall(BootAdapterSlot& slot) noexcept {
+    if (!slot.Used || slot.Stopping.load(std::memory_order_acquire)) return false;
+    slot.ActiveCalls.fetch_add(1, std::memory_order_acq_rel);
+    if (slot.Stopping.load(std::memory_order_acquire)) {
+        slot.ActiveCalls.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    }
+    return true;
+}
+void endBootAdapterCall(BootAdapterSlot& slot) noexcept {
+    slot.ActiveCalls.fetch_sub(1, std::memory_order_acq_rel);
+}
+int32_t bootAdapterSend(void* context, const uint8_t* frame, size_t length) noexcept {
+    auto* slot = static_cast<BootAdapterSlot*>(context);
+    if (!slot || !frame || !length || !beginBootAdapterCall(*slot))
+        return bootStatus(micant::NtStatus::DeviceBusy);
+    const auto status = slot->DriverServices.SendPacket(
+        slot->DriverServices.Context, frame, length);
+    endBootAdapterCall(*slot);
+    return status;
+}
+int32_t bootAdapterPoll(void* context) noexcept {
+    auto* slot = static_cast<BootAdapterSlot*>(context);
+    if (!slot || !beginBootAdapterCall(*slot))
+        return bootStatus(micant::NtStatus::DeviceBusy);
+    const auto status = slot->DriverServices.PollReceive(slot->DriverServices.Context);
+    endBootAdapterCall(*slot);
+    return status;
+}
+void bootAdapterReceive(void* context, const uint8_t* frame, size_t length) noexcept {
+    auto* slot = static_cast<BootAdapterSlot*>(context);
+    if (!slot || !frame || !beginBootAdapterCall(*slot)) return;
+    const auto routine = slot->ReceiveRoutine.load(std::memory_order_acquire);
+    void* receiveContext = slot->ReceiveContext.load(std::memory_order_acquire);
+    if (routine) routine(receiveContext, frame, length);
+    endBootAdapterCall(*slot);
+}
+int32_t bootAdapterSetReceive(void* context,
+    micant::shared::ndis::ReceivePacketRoutine routine, void* receiveContext) noexcept {
+    auto* slot = static_cast<BootAdapterSlot*>(context);
+    if (!slot || (routine && slot->Stopping.load(std::memory_order_acquire)))
+        return bootStatus(micant::NtStatus::DeviceBusy);
+    const auto previousRoutine = slot->ReceiveRoutine.exchange(routine, std::memory_order_acq_rel);
+    void* previousContext = slot->ReceiveContext.exchange(receiveContext, std::memory_order_acq_rel);
+    const auto status = slot->DriverServices.SetReceiveHandler(slot->DriverServices.Context,
+        routine ? bootAdapterReceive : nullptr, routine ? slot : nullptr);
+    if (status != bootStatus(micant::NtStatus::Success)) {
+        slot->ReceiveRoutine.store(previousRoutine, std::memory_order_release);
+        slot->ReceiveContext.store(previousContext, std::memory_order_release);
+    }
+    return status;
+}
+int32_t bootAdapterStop(void* context) noexcept {
+    auto* slot = static_cast<BootAdapterSlot*>(context);
+    if (!slot) return bootStatus(micant::NtStatus::InvalidParameter);
+    slot->Stopping.store(true, std::memory_order_release);
+    const auto detach = bootAdapterSetReceive(slot, nullptr, nullptr);
+    if (detach != bootStatus(micant::NtStatus::Success)) return detach;
+    while (slot->ActiveCalls.load(std::memory_order_acquire) != 0)
+        __asm__ __volatile__("pause" : : : "memory");
+    return slot->DriverServices.Stop(slot->DriverServices.Context);
+}
+}
+
+int32_t bootRegisterNetworkAdapter(void* owner,
+    const micant::shared::ndis::AdapterServicesV1* adapterServices,
+    uint64_t* cookie) noexcept {
+    using micant::NtStatus;
+    using micant::shared::ndis::AdapterServicesV1;
+    if (!owner || !adapterServices || !cookie || adapterServices->Size < sizeof(AdapterServicesV1) ||
+        adapterServices->Version != micant::shared::ndis::AdapterServicesVersion ||
+        !adapterServices->Context || adapterServices->Mtu < 576 || adapterServices->Mtu > 9000 ||
+        !adapterServices->SpeedBps || adapterServices->LinkState > 1 ||
+        !adapterServices->SendPacket || !adapterServices->SetReceiveHandler ||
+        !adapterServices->PollReceive || !adapterServices->Stop)
+        return bootStatus(NtStatus::InvalidParameter);
+    bool macZero = true;
+    for (uint8_t byte : adapterServices->MacAddress) macZero &= byte == 0;
+    if (macZero || (adapterServices->MacAddress[0] & 1))
+        return bootStatus(NtStatus::InvalidParameter);
+
+    auto* driverOwner = static_cast<BootDriverServiceContext*>(owner);
+    bool knownOwner = false;
+    for (auto& candidate : g_bootDriverContexts) knownOwner |= &candidate == driverOwner;
+    if (!knownOwner) return bootStatus(NtStatus::AccessDenied);
+    size_t index = kMaxBootNdisAdapters;
+    for (size_t i = 0; i < kMaxBootNdisAdapters; ++i) {
+        if (g_bootNdisAdapters[i].Owner == driverOwner && g_bootNdisAdapters[i].Used)
+            return bootStatus(NtStatus::Conflict);
+        if (!g_bootNdisAdapters[i].Used && index == kMaxBootNdisAdapters) index = i;
+    }
+    if (index == kMaxBootNdisAdapters) return bootStatus(NtStatus::InsufficientResources);
+
+    auto& slot = g_bootNdisAdapters[index];
+    slot.DriverServices = *adapterServices;
+    slot.Owner = driverOwner;
+    slot.Stopping.store(false, std::memory_order_relaxed);
+    slot.ActiveCalls.store(0, std::memory_order_relaxed);
+    slot.ReceiveRoutine.store(nullptr, std::memory_order_relaxed);
+    slot.ReceiveContext.store(nullptr, std::memory_order_relaxed);
+    slot.KernelServices = *adapterServices;
+    slot.KernelServices.Context = &slot;
+    slot.KernelServices.SendPacket = bootAdapterSend;
+    slot.KernelServices.SetReceiveHandler = bootAdapterSetReceive;
+    slot.KernelServices.PollReceive = bootAdapterPoll;
+    slot.KernelServices.Stop = bootAdapterStop;
+    uint64_t next = g_nextBootNdisCookie++;
+    if (!next) next = g_nextBootNdisCookie++;
+    slot.Cookie = next;
+    slot.Used = true;
+    if (!micant::tcpip::NetworkStack::get().bindAdapterServices(&slot.KernelServices)) {
+        slot.Used = false;
+        slot.Cookie = 0;
+        slot.Owner = nullptr;
+        return bootStatus(NtStatus::DeviceBusy);
+    }
+    *cookie = next;
+    return bootStatus(NtStatus::Success);
+}
+
+int32_t bootUnregisterNetworkAdapter(void* owner, uint64_t cookie) noexcept {
+    using micant::NtStatus;
+    if (!owner || !cookie) return bootStatus(NtStatus::InvalidParameter);
+    auto* driverOwner = static_cast<BootDriverServiceContext*>(owner);
+    bool knownOwner = false;
+    for (auto& candidate : g_bootDriverContexts) knownOwner |= &candidate == driverOwner;
+    if (!knownOwner) return bootStatus(NtStatus::AccessDenied);
+    for (auto& slot : g_bootNdisAdapters) {
+        if (!slot.Used || slot.Cookie != cookie || slot.Owner != driverOwner) continue;
+        if (!micant::tcpip::NetworkStack::get().unbindAdapterServices(&slot.KernelServices))
+            return bootStatus(NtStatus::DeviceBusy);
+        const auto status = bootAdapterStop(&slot);
+        if (status != bootStatus(NtStatus::Success)) return status;
+        slot.Used = false;
+        slot.Cookie = 0;
+        slot.Owner = nullptr;
+        slot.DriverServices = {};
+        slot.KernelServices = {};
+        return bootStatus(NtStatus::Success);
+    }
+    return bootStatus(NtStatus::InvalidHandle);
+}
+
+bool fallbackPresentFrame(void* context, const uint32_t* pixels, uint32_t width,
+    uint32_t height, uint32_t pitch, int32_t dstX, int32_t dstY) noexcept {
+    auto* target = static_cast<GopDisplayContext*>(context);
+    if (!target || !target->Pixels || !pixels || !width || !height || pitch < width ||
+        !target->Width || !target->Height || target->Pitch < target->Width) return false;
+    if (target->Pitch > UINT64_MAX / sizeof(uint32_t) ||
+        target->Height > UINT64_MAX / (static_cast<uint64_t>(target->Pitch) * sizeof(uint32_t)) ||
+        static_cast<uint64_t>(target->Height) * target->Pitch * sizeof(uint32_t) >
+            target->ByteSize) return false;
+    const int64_t srcLeft = dstX < 0 ? -static_cast<int64_t>(dstX) : 0;
+    const int64_t srcTop = dstY < 0 ? -static_cast<int64_t>(dstY) : 0;
+    const int64_t left = dstX > 0 ? dstX : 0;
+    const int64_t top = dstY > 0 ? dstY : 0;
+    int64_t copyWidth = static_cast<int64_t>(width) - srcLeft;
+    int64_t copyHeight = static_cast<int64_t>(height) - srcTop;
+    if (left >= target->Width || top >= target->Height) return true;
+    if (left + copyWidth > target->Width) copyWidth = target->Width - left;
+    if (top + copyHeight > target->Height) copyHeight = target->Height - top;
+    if (copyWidth <= 0 || copyHeight <= 0) return true;
+    for (int64_t row = 0; row < copyHeight; ++row) {
+        const uint32_t* source = pixels + (srcTop + row) * pitch + srcLeft;
+        volatile uint32_t* destination = target->Pixels +
+            (top + row) * target->Pitch + left;
+        for (int64_t column = 0; column < copyWidth; ++column) {
+            uint32_t value = source[column];
+            if (target->PixelFormat == 0) {
+                value = (value & 0xFF00FF00u) | ((value & 0x00FF0000u) >> 16) |
+                    ((value & 0x000000FFu) << 16);
+            }
+            destination[column] = value;
+        }
+    }
+    __asm__ __volatile__("sfence" ::: "memory");
+    return true;
+}
+
+bool initializeGopFramebuffer(const micant::boot::KernelFramebufferV1& framebuffer,
+                              bool logFallback = true) noexcept {
+    if (!framebuffer.physicalBase || !framebuffer.size ||
+        framebuffer.size > 16 * 1024 * 1024 ||
+        framebuffer.size > SIZE_MAX || framebuffer.width < 320 ||
+        framebuffer.height < 200 || framebuffer.pixelsPerScanLine < framebuffer.width ||
+        framebuffer.pixelFormat > 1 || (framebuffer.physicalBase & 3)) return false;
+    if (g_displayUsingGopFallback && g_display.PresentFrame == fallbackPresentFrame &&
+        g_display.Width == framebuffer.width && g_display.Height == framebuffer.height &&
+        g_display.Pitch == framebuffer.pixelsPerScanLine &&
+        g_gopDisplayContext.Pixels) {
+        if (logFallback)
+            serialWrite("[MicaNT Display] OEM driver unavailable; GOP framebuffer pass-through active\r\n");
+        return true;
+    }
+    const uint64_t rowBytes = static_cast<uint64_t>(framebuffer.pixelsPerScanLine) * 4;
+    if (rowBytes > framebuffer.size || framebuffer.height > framebuffer.size / rowBytes)
+        return false;
+
+    void* mapping = micant::hal::amd64::mapBootstrapDeviceMemory(
+        framebuffer.physicalBase, static_cast<size_t>(framebuffer.size));
+    if (!mapping && micant::hal::amd64::bootstrapKernelRange(
+            framebuffer.physicalBase, static_cast<size_t>(framebuffer.size), true)) {
+        mapping = reinterpret_cast<void*>(framebuffer.physicalBase);
+    }
+    if (!mapping) return false;
+
+    g_gopDisplayContext = {
+        static_cast<volatile uint32_t*>(mapping), framebuffer.width, framebuffer.height,
+        framebuffer.pixelsPerScanLine, framebuffer.pixelFormat, framebuffer.size};
+    g_display = {};
+    g_display.Size = sizeof(g_display);
+    g_display.Version = micant::boot_driver::DRIVER_ABI_VERSION;
+    g_display.Width = framebuffer.width;
+    g_display.Height = framebuffer.height;
+    g_display.Pitch = framebuffer.pixelsPerScanLine;
+    g_display.PixelFormat = framebuffer.pixelFormat;
+    g_display.Context = &g_gopDisplayContext;
+    g_display.PresentFrame = fallbackPresentFrame;
+    g_display.PresentComposition = nullptr;
+    g_displayDriver = {};
+    g_displayUsingGopFallback = true;
+    if (logFallback)
+        serialWrite("[MicaNT Display] OEM driver unavailable; GOP framebuffer pass-through active\r\n");
+    return true;
+}
+
+bool initializeDisplay(const micant::boot::KernelBootImageV1& image) noexcept {
     if (image.base == 0 || image.size == 0 ||
         image.size > UINT64_MAX - image.base ||
         image.entryPoint < image.base ||
         image.entryPoint - image.base >= image.size) {
-        stopWithError("[MicaNT Display] Invalid or missing boot-start driver\r\n");
+        return false;
     }
     using namespace micant::boot_driver;
-    g_displayServices.Size = sizeof(g_displayServices);
-    g_displayServices.Version = DRIVER_ABI_VERSION;
-    g_displayServices.BootWidth = kWidth;
-    g_displayServices.BootHeight = kHeight;
-    g_displayServices.TranslateVirtualAddress = [](void*, const void* address) {
-        return micant::hal::amd64::translateBootstrapAddress(address);
-    };
-    g_displayServices.MapDeviceMemory = [](void*, uint64_t address, size_t size) {
-        return micant::hal::amd64::mapBootstrapDeviceMemory(address, size);
-    };
-    g_displayServices.Log = [](void*, const char* text) {
-        serialWrite("[MicaNT Display] ");
-        serialWrite(text);
-        serialWrite("\r\n");
-    };
+    initializeKernelServices(g_displayServices);
     g_displayDriver.Size = sizeof(g_displayDriver);
     g_displayDriver.Version = DRIVER_ABI_VERSION;
     g_displayDriver.Flags = DRIVER_FLAG_BOOT_START;
@@ -680,11 +1540,15 @@ void initializeDisplay(const micant::boot::KernelBootImageV1& image) noexcept {
     if (entry(&g_displayDriver, nullptr) != STATUS_SUCCESS ||
         !g_display.PresentFrame || g_display.Width != kWidth ||
         g_display.Height != kHeight) {
-        stopWithError("[MicaNT Display] Boot-start driver initialization failed\r\n");
+        if (g_displayDriver.DriverUnload) g_displayDriver.DriverUnload(&g_displayDriver);
+        rollbackBootDriverResources(0);
+        return false;
     }
+    g_displayUsingGopFallback = false;
     serialWrite(g_display.PresentComposition
         ? "[MicaNT Display] VirGL composition available\r\n"
         : "[MicaNT Display] VirtIO 2D active; GPU composition unavailable\r\n");
+    return true;
 }
 
 void presentCursorRect(uint32_t x, uint32_t y) noexcept {
@@ -696,9 +1560,12 @@ void presentCursorRect(uint32_t x, uint32_t y) noexcept {
 }
 
 bool validHandoff(const micant::boot::UefiKernelHandoffV3* handoff) noexcept {
-    if (!handoff ||
-        handoff->signature != micant::boot::UEFI_KERNEL_HANDOFF_SIGNATURE ||
-        handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION ||
+    if (!handoff || handoff->signature != micant::boot::UEFI_KERNEL_HANDOFF_SIGNATURE ||
+        (handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION &&
+         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION_OEM_MODULES &&
+         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME &&
+         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION &&
+         handoff->version != micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES) ||
         handoff->size < sizeof(*handoff) ||
         handoff->memoryMapAddress == 0 ||
         handoff->memoryMapSize > UINT64_MAX - handoff->memoryMapAddress ||
@@ -711,6 +1578,136 @@ bool validHandoff(const micant::boot::UefiKernelHandoffV3* handoff) noexcept {
         userImage.size > 16 * 1024 * 1024 ||
         userImage.size > UINT64_MAX - userImage.base) {
         return false;
+    }
+
+    if (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_OEM_MODULES ||
+        handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME ||
+        handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION ||
+        handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES) {
+        const micant::boot::UefiKernelHandoffV4* extendedV4{};
+        if (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME ||
+            handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION ||
+            handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES) {
+            const bool hasCalibration = handoff->version ==
+                    micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION ||
+                handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES;
+            const bool hasPciInventory = handoff->version ==
+                micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES;
+            if (handoff->size < (hasCalibration
+                    ? (hasPciInventory ? sizeof(micant::boot::UefiKernelHandoffV7)
+                                       : sizeof(micant::boot::UefiKernelHandoffV6))
+                    : sizeof(micant::boot::UefiKernelHandoffV5))) return false;
+            const auto& sample = hasCalibration
+                ? (hasPciInventory
+                    ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.time.systemTime
+                    : reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->time.systemTime)
+                : reinterpret_cast<const micant::boot::UefiKernelHandoffV5*>(handoff)->systemTime;
+            const micant::shared::boot_time::BootClockCalibrationV1 noCalibration{};
+            const auto& calibration = hasCalibration
+                ? (hasPciInventory
+                    ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.clockCalibration
+                    : reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->clockCalibration)
+                : noCalibration;
+            using micant::shared::boot_time::SampleSource;
+            using micant::shared::boot_time::SampleStatus;
+            using micant::shared::boot_time::BootClockFlagsV1;
+            using micant::shared::time::EfiAdjustForDaylight;
+            using micant::shared::time::EfiInDaylight;
+            using micant::shared::time::EfiUnspecifiedTimeZone;
+            if (sample.size != sizeof(sample) || sample.version != 1 || sample.reserved ||
+                static_cast<uint32_t>(sample.status) >
+                    static_cast<uint32_t>(SampleStatus::InvalidFirmwareData) ||
+                (sample.daylight & ~(EfiAdjustForDaylight | EfiInDaylight)) != 0)
+                return false;
+            if (hasCalibration) {
+                const auto calibrationFlags = static_cast<uint16_t>(calibration.flags);
+                if (calibration.size != sizeof(calibration) || calibration.version != 1 ||
+                    (calibrationFlags & ~static_cast<uint16_t>(BootClockFlagsV1::InvariantTsc)) ||
+                    (calibration.tscFrequencyHz &&
+                     (calibration.flags != BootClockFlagsV1::InvariantTsc ||
+                      calibration.tscFrequencyHz < 1'000'000 ||
+                      calibration.tscFrequencyHz > 10'000'000'000ULL)) ||
+                    (!calibration.tscFrequencyHz &&
+                     calibration.flags != BootClockFlagsV1::None)) return false;
+            }
+            if (sample.status == SampleStatus::UtcValid) {
+                micant::shared::time::SystemTimeFields utcFields{};
+                if (sample.source != SampleSource::UefiRuntimeGetTime ||
+                    sample.timeZoneMinutes < -1440 || sample.timeZoneMinutes > 1440 ||
+                    !micant::shared::time::fromSystemTime100ns(
+                        sample.utcTime100ns, utcFields)) return false;
+            } else if (sample.status == SampleStatus::LocalTimeZoneUnspecified) {
+                if (sample.source != SampleSource::UefiRuntimeGetTime ||
+                    static_cast<uint16_t>(sample.timeZoneMinutes) !=
+                        EfiUnspecifiedTimeZone || sample.utcTime100ns) return false;
+            } else if (sample.utcTime100ns) {
+                return false;
+            }
+            extendedV4 = hasPciInventory
+                ? &reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.time.oem
+                : (hasCalibration
+                    ? &reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->time.oem
+                    : &reinterpret_cast<const micant::boot::UefiKernelHandoffV5*>(handoff)->oem);
+            if (hasPciInventory) {
+                const auto& v7 = *reinterpret_cast<const
+                    micant::boot::UefiKernelHandoffV7*>(handoff);
+                if (v7.pciBarCapacity != micant::boot::UEFI_KERNEL_HANDOFF_MAX_PCI_BARS ||
+                    v7.pciBarCount > v7.pciBarCapacity || v7.pciInventoryComplete > 1 ||
+                    v7.reserved != 0) return false;
+                for (uint32_t i = 0; i < v7.pciBarCount; ++i) {
+                    const auto& bar = v7.pciBars[i];
+                    if (bar.segment != 0 || bar.bus > 0xff || bar.device >= 32 ||
+                        bar.function >= 8 || bar.index >= 6 || bar.type > 1 ||
+                        !bar.address || !bar.length || (bar.length & (bar.length - 1)) ||
+                        (bar.address & (bar.length - 1)) ||
+                        bar.address > UINT64_MAX - bar.length) return false;
+                    for (uint32_t j = 0; j < i; ++j) {
+                        const auto& previous = v7.pciBars[j];
+                        if (bar.segment == previous.segment && bar.bus == previous.bus &&
+                            bar.device == previous.device && bar.function == previous.function &&
+                            bar.index == previous.index) return false;
+                    }
+                }
+            }
+        } else {
+            if (handoff->size < sizeof(micant::boot::UefiKernelHandoffV4)) return false;
+            extendedV4 = reinterpret_cast<const micant::boot::UefiKernelHandoffV4*>(handoff);
+        }
+        const auto& extended = *extendedV4;
+        if (extended.moduleCapacity == 0 ||
+            extended.moduleCapacity > micant::boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES ||
+            extended.moduleCount > extended.moduleCapacity ||
+            extended.moduleCapacity != micant::boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES)
+            return false;
+        uint32_t displayModules = 0;
+        for (uint32_t i = 0; i < extended.moduleCount; ++i) {
+            const auto& module = extended.modules[i];
+            const auto& image = module.image;
+            size_t nameLength = 0;
+            while (nameLength < sizeof(module.baseName) && module.baseName[nameLength])
+                ++nameLength;
+            if (!nameLength || nameLength == sizeof(module.baseName) ||
+                image.base == 0 || image.size == 0 || image.size > 16 * 1024 * 1024 ||
+                image.size > UINT64_MAX - image.base || image.entryPoint < image.base ||
+                image.entryPoint - image.base >= image.size ||
+                (module.flags & micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER) == 0 ||
+                (module.flags & ~(micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER |
+                                  micant::boot::BOOT_MODULE_FLAG_DISPLAY_DRIVER)) != 0)
+                return false;
+            if (module.flags & micant::boot::BOOT_MODULE_FLAG_DISPLAY_DRIVER) ++displayModules;
+            for (uint32_t j = 0; j < i; ++j) {
+                const auto& other = extended.modules[j];
+                if (image.base < other.image.base + other.image.size &&
+                    other.image.base < image.base + image.size) return false;
+                size_t otherLength = 0;
+                while (otherLength < sizeof(other.baseName) && other.baseName[otherLength])
+                    ++otherLength;
+                if (nameLength == otherLength &&
+                    std::memcmp(module.baseName, other.baseName, nameLength) == 0)
+                    return false;
+            }
+        }
+        if (displayModules > 1) return false;
     }
 
     const auto& framebuffer = handoff->framebuffer;
@@ -727,6 +1724,173 @@ bool validHandoff(const micant::boot::UefiKernelHandoffV3* handoff) noexcept {
            handoff->memoryMapSize % handoff->memoryMapDescriptorSize == 0;
 }
 
+bool inventoryFirmwarePciBars(const micant::boot::UefiKernelHandoffV3& handoff) noexcept {
+    using micant::hal::amd64::PciConfigAccessResult;
+    auto read = [](uint16_t bus, uint16_t device, uint16_t function,
+                   uint16_t offset, uint32_t& value) noexcept {
+        return micant::hal::amd64::readPciConfig32(bus, device, function, offset, value) ==
+            PciConfigAccessResult::Success;
+    };
+    const auto* snapshot = handoff.version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES
+        ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(&handoff) : nullptr;
+    bool matched[micant::boot::UEFI_KERNEL_HANDOFF_MAX_PCI_BARS]{};
+    bool complete = snapshot && snapshot->pciInventoryComplete == 1;
+    for (uint16_t bus = 0; bus < 256; ++bus) for (uint16_t device = 0; device < 32; ++device) {
+        uint32_t id{}, header{};
+        if (!read(bus, device, 0, 0, id)) return false;
+        if ((id & 0xffffu) == 0xffffu) continue;
+        if (!read(bus, device, 0, 0x0c, header)) return false;
+        const unsigned functions = (header & 0x00800000u) ? 8 : 1;
+        for (uint16_t function = 0; function < functions; ++function) {
+            uint32_t command{};
+            if (!read(bus, device, function, 0, id)) return false;
+            if ((id & 0xffffu) == 0xffffu) continue;
+            if (!read(bus, device, function, 0x0c, header) ||
+                !read(bus, device, function, 4, command)) return false;
+            const auto type = (header >> 16) & 0x7f;
+            const unsigned barCount = type == 0 ? 6 : type == 1 ? 2 : 0;
+            if (type > 1) complete = false;
+            for (uint8_t index = 0; index < barCount; ++index) {
+                uint32_t low{};
+                if (!read(bus, device, function, static_cast<uint16_t>(0x10 + index * 4), low)) return false;
+                const bool io = low & 1u;
+                const bool wide = !io && ((low >> 1) & 3u) == 2;
+                uint64_t address = low & (io ? ~uint32_t{3} : ~uint32_t{15});
+                const uint8_t originalIndex = index;
+                if (wide) {
+                    if (++index >= barCount) return false;
+                    uint32_t high{};
+                    if (!read(bus, device, function, static_cast<uint16_t>(0x10 + index * 4), high)) return false;
+                    address |= uint64_t{high} << 32;
+                }
+                if (!address) continue;
+                const bool active = (command & (io ? 1u : 2u)) != 0 || (command & 4u) != 0;
+                const micant::boot::FirmwarePciBarV1* firmware{};
+                if (snapshot) for (uint32_t n = 0; n < snapshot->pciBarCount; ++n) {
+                    const auto& candidate = snapshot->pciBars[n];
+                    if (candidate.bus == bus && candidate.device == device && candidate.function == function &&
+                        candidate.index == originalIndex) { firmware = &candidate; matched[n] = true; break; }
+                }
+                if (firmware && firmware->address == address && firmware->type == static_cast<uint8_t>(io)) {
+                    if (!micant::km::arb::recordMeasuredBar({address, firmware->length, bus, device,
+                                                              function, originalIndex, io, active})) return false;
+                    continue;
+                }
+                if (firmware) complete = false;
+                micant::hal::amd64::PciBarInfo info{};
+                const auto result = micant::hal::amd64::probeQuiescentPciBar(
+                    bus, device, function, originalIndex, info);
+                if (result == micant::hal::amd64::PciBarProbeResult::RestoreFailed) return false;
+                if (result == micant::hal::amd64::PciBarProbeResult::Success &&
+                    info.address == address && info.ioSpace == io) {
+                    if (!micant::km::arb::recordMeasuredBar({address, info.length, bus, device,
+                                                              function, originalIndex, io, active})) return false;
+                } else {
+                    if (!micant::km::arb::recordUnmeasuredBar({address, 0, bus, device, function,
+                                                                originalIndex, io, active})) return false;
+                    complete = false;
+                }
+            }
+        }
+    }
+    if (snapshot) for (uint32_t i = 0; i < snapshot->pciBarCount; ++i)
+        if (!matched[i]) complete = false;
+    micant::km::arb::setPciInventoryComplete(complete);
+    return true;
+}
+
+bool initializeFirmwareResourceReservations(const micant::boot::UefiKernelHandoffV3& handoff) noexcept {
+    const size_t count = handoff.memoryMapSize / handoff.memoryMapDescriptorSize;
+    for (size_t i = 0; i < count; ++i) {
+        const auto& d = g_bootMemoryDescriptors[i];
+        if (d.type == static_cast<uint32_t>(micant::uefi::EfiMemoryType::EfiMemoryMappedIO) ||
+            d.type == static_cast<uint32_t>(micant::uefi::EfiMemoryType::EfiMemoryMappedIOPortSpace))
+            continue;
+        if (d.type == static_cast<uint32_t>(micant::uefi::EfiMemoryType::EfiConventionalMemory) &&
+            (d.attribute & 8u) && !micant::io::dma::registerWriteBackRam(
+                d.physicalStart, d.numberOfPages * 4096)) return false;
+        if (!micant::km::arb::reservePhysicalRange(d.physicalStart, d.numberOfPages * 4096))
+            return false;
+    }
+    if (handoff.framebuffer.size && !micant::km::arb::reservePhysicalRange(
+        handoff.framebuffer.physicalBase, handoff.framebuffer.size)) return false;
+    return inventoryFirmwarePciBars(handoff);
+}
+
+void initializeBootStartDrivers(const micant::boot::UefiKernelHandoffV3* handoff) noexcept {
+    if (!initializeFirmwareResourceReservations(*handoff)) {
+        serialWrite("[MicaNT PnP] Firmware resource reservations failed\r\n");
+        if (!initializeGopFramebuffer(handoff->framebuffer))
+            stopWithError("[MicaNT Display] GOP display unavailable\r\n");
+        return;
+    }
+    if (micant::hal::amd64::initializeBootstrapDmaTranslationState(*handoff))
+        (void)micant::io::dma::initializeDirectProvider();
+    if (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION) {
+        if (!initializeDisplay(handoff->displayDriver) &&
+            !initializeGopFramebuffer(handoff->framebuffer))
+            stopWithError("[MicaNT Display] OEM and GOP display paths unavailable\r\n");
+        return;
+    }
+    const auto& extended = handoff->version ==
+            micant::boot::UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME
+        ? reinterpret_cast<const micant::boot::UefiKernelHandoffV5*>(handoff)->oem
+        : (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION
+            ? reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->time.oem
+            : (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES
+                ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.time.oem
+                : *reinterpret_cast<const micant::boot::UefiKernelHandoffV4*>(handoff)));
+    bool displayReady = false;
+    for (uint32_t i = 0; i < extended.moduleCount; ++i) {
+        const auto& module = extended.modules[i];
+        auto& driver = g_bootDriverObjects[i];
+        auto& services = g_bootDriverServices[i];
+        auto& display = g_bootDriverDisplays[i];
+        initializeKernelServices(services, i);
+        driver.Size = sizeof(driver);
+        driver.Version = micant::boot_driver::DRIVER_ABI_VERSION;
+        driver.Flags = module.flags;
+        driver.DriverStart = reinterpret_cast<void*>(module.image.base);
+        driver.DriverSize = static_cast<size_t>(module.image.size);
+        driver.HardwareResources = &services;
+        driver.Display = (module.flags & micant::boot::BOOT_MODULE_FLAG_DISPLAY_DRIVER)
+            ? &display : nullptr;
+
+        const auto entry = reinterpret_cast<micant::boot_driver::DriverEntryRoutine>(
+            module.image.entryPoint);
+        const int32_t status = entry(&driver, nullptr);
+        if (status != micant::boot_driver::STATUS_SUCCESS) {
+            serialWrite("[MicaNT Io] Boot-start driver failed: ");
+            for (size_t n = 0; n < sizeof(module.baseName) && module.baseName[n]; ++n)
+                serialWriteChar(module.baseName[n]);
+            serialWrite(" status=");
+            serialWriteNumber(static_cast<uint32_t>(status));
+            serialWrite("\r\n");
+            if (driver.DriverUnload) driver.DriverUnload(&driver);
+            rollbackBootDriverResources(i);
+            continue;
+        }
+
+        serialWrite("[MicaNT Io] Boot-start .sys DriverEntry succeeded: ");
+        for (size_t n = 0; n < sizeof(module.baseName) && module.baseName[n]; ++n)
+            serialWriteChar(module.baseName[n]);
+        serialWrite("\r\n");
+        if (module.flags & micant::boot::BOOT_MODULE_FLAG_DISPLAY_DRIVER) {
+            if (!display.PresentFrame || display.Width != kWidth || display.Height != kHeight) {
+                if (driver.DriverUnload) driver.DriverUnload(&driver);
+                rollbackBootDriverResources(i);
+                continue;
+            }
+            g_display = display;
+            g_displayDriver = driver;
+            g_displayUsingGopFallback = false;
+            displayReady = true;
+        }
+    }
+    if (!displayReady && !initializeGopFramebuffer(handoff->framebuffer))
+        stopWithError("[MicaNT Display] OEM and GOP display paths unavailable\r\n");
+}
+
 void drawExplorerDesktop() noexcept {
     micant::explorer::DrawDesktop(
         g_explorerSurface, kWidth, kHeight - kTaskbarHeight
@@ -738,7 +1902,9 @@ void drawExplorerDesktop() noexcept {
                                kWidth, kHeight, kWidth, 0, 0)) {
         stopWithError("[MicaNT Display] Desktop presentation failed\r\n");
     }
-    serialWrite("[MicaNT Display] Desktop presented through virtio_gpu.sys\r\n");
+    serialWrite(g_displayUsingGopFallback
+        ? "[MicaNT Display] Desktop presented through GOP framebuffer\r\n"
+        : "[MicaNT Display] Desktop presented through boot-start display .sys\r\n");
 }
 
 void restoreCursorBackground(uint32_t x, uint32_t y) noexcept {
@@ -778,6 +1944,12 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     using namespace micant;
     const auto number = args.number, first = args.first, second = args.second;
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
+    if (number == sys::SSN_NtQuerySystemTime)
+        return status(sys::NtQuerySystemTime(reinterpret_cast<LargeInteger*>(first)));
+    if (number == sys::SSN_NtQueryPerformanceCounter)
+        return status(sys::NtQueryPerformanceCounter(
+            reinterpret_cast<LargeInteger*>(first),
+            reinterpret_cast<LargeInteger*>(second)));
     if (number == sys::SSN_NtContinue) {
         const auto result = sys::NtContinue(reinterpret_cast<const void*>(first),
             static_cast<uint8_t>(second) != 0, args.trapFrame, args.floatingState,
@@ -787,6 +1959,117 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     }
     if (number == sys::SSN_NtClose)
         return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtCreateIoCompletion) {
+        auto* destination = reinterpret_cast<Handle*>(first);
+        if (!destination || ex::ProbeForWrite(destination, sizeof(Handle), alignof(Handle)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        if (args.third) {
+            ObjectAttributes attributes{};
+            if (ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            if (attributes.length != sizeof(attributes)) return status(NtStatus::InvalidParameter);
+            if (attributes.rootDirectory || attributes.objectName || attributes.attributes ||
+                attributes.securityDescriptor || attributes.securityQualityOfService) return status(NtStatus::NotSupported);
+        }
+        Handle handle{};
+        auto result = io::IoCreateCompletionPort(&handle, static_cast<uint32_t>(second), static_cast<uint32_t>(args.fourth));
+        if (result == NtStatus::Success && ex::ExSafeCopyToUser(destination, &handle, sizeof(handle)) != NtStatus::Success) {
+            (void)sys::NtClose(handle); result = NtStatus::AccessViolation;
+        }
+        return status(result);
+    }
+    if (number == sys::SSN_NtSetIoCompletion) {
+        uint64_t information{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&information, reinterpret_cast<const void*>(args.userStack + 40), sizeof(information)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        return status(io::IoPostCompletion(static_cast<Handle>(first), second, args.third,
+                                          static_cast<NtStatus>(static_cast<uint32_t>(args.fourth)), information));
+    }
+    if (number == sys::SSN_NtRemoveIoCompletion) {
+        uint64_t timeoutAddress{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&timeoutAddress, reinterpret_cast<const void*>(args.userStack + 40), sizeof(timeoutAddress)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        auto* keyOut = reinterpret_cast<uintptr_t*>(second);
+        auto* contextOut = reinterpret_cast<uintptr_t*>(args.third);
+        auto* ioOut = reinterpret_cast<IoStatusBlock*>(args.fourth);
+        if (!keyOut || !contextOut || !ioOut ||
+            ex::ProbeForWrite(keyOut, sizeof(*keyOut), alignof(uintptr_t)) != NtStatus::Success ||
+            ex::ProbeForWrite(contextOut, sizeof(*contextOut), alignof(uintptr_t)) != NtStatus::Success ||
+            ex::ProbeForWrite(ioOut, sizeof(*ioOut), alignof(IoStatusBlock)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        uint64_t timeout100ns = UINT64_MAX;
+        if (timeoutAddress) {
+            LargeInteger timeout{};
+            if (ex::ExSafeCopyFromUser(&timeout, reinterpret_cast<const void*>(timeoutAddress), sizeof(timeout)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            if (timeout.quadPart == 0) {
+                timeout100ns = 0;
+            } else if (timeout.quadPart < 0) {
+                timeout100ns = static_cast<uint64_t>(-(timeout.quadPart + 1)) + 1;
+            } else {
+                uint64_t now{};
+                if (!ke::KeQuerySystemTime100ns(now)) return status(NtStatus::NotSupported);
+                const auto absolute = static_cast<uint64_t>(timeout.quadPart);
+                timeout100ns = absolute > now ? absolute - now : 0;
+            }
+        }
+        auto* current = ke::KeGetCurrentThread();
+        if (timeout100ns && (!current || !current->owningProcess || !current->kernelStackTop)) return status(NtStatus::NotSupported);
+        if (timeout100ns) {
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        }
+        uintptr_t key{}, context{}; IoStatusBlock result{};
+        const auto removeStatus = io::IoRemoveCompletion(static_cast<Handle>(first), key, context, result, timeout100ns);
+        if (timeout100ns && current->terminationRequested && current->serviceTermination)
+            current->serviceTermination(current->terminationContext);
+        if (timeout100ns) {
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+        }
+        if (removeStatus != NtStatus::Success) return status(removeStatus);
+        if (ex::ExSafeCopyToUser(keyOut, &key, sizeof(key)) != NtStatus::Success ||
+            ex::ExSafeCopyToUser(contextOut, &context, sizeof(context)) != NtStatus::Success ||
+            ex::ExSafeCopyToUser(ioOut, &result, sizeof(result)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        return status(NtStatus::Success);
+    }
+    if (number == sys::SSN_NtSetInformationFile) {
+        uint64_t informationClass{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&informationClass, reinterpret_cast<const void*>(args.userStack + 40), sizeof(informationClass)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        if (informationClass != 30) return status(NtStatus::NotSupported); // FileCompletionInformation
+        struct CompletionInformation { Handle port; uintptr_t key; } information{};
+        auto* ioOut = reinterpret_cast<IoStatusBlock*>(second);
+        if (!ioOut || ex::ProbeForWrite(ioOut, sizeof(*ioOut), alignof(IoStatusBlock)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        if (args.fourth != sizeof(information)) return status(NtStatus::InvalidParameter);
+        if (ex::ExSafeCopyFromUser(&information, reinterpret_cast<const void*>(args.third), sizeof(information)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        const auto association = io::IoAssociateCompletionPort(static_cast<Handle>(first), information.port, information.key);
+        const IoStatusBlock result{association, 0};
+        if (ex::ExSafeCopyToUser(ioOut, &result, sizeof(result)) != NtStatus::Success) return status(NtStatus::AccessViolation);
+        return status(association);
+    }
+    if (number == sys::SSN_NtCancelIoFileEx) {
+        auto* resultAddress = reinterpret_cast<IoStatusBlock*>(args.third);
+        if (!resultAddress || ex::ProbeForWrite(resultAddress, sizeof(*resultAddress),
+                                                alignof(IoStatusBlock)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        __asm__ __volatile__("swapgs" : : : "memory");
+        const auto cancelStatus = io::IoCancelFileReads(static_cast<Handle>(first),
+                                                         reinterpret_cast<const void*>(args.second));
+        __asm__ __volatile__("swapgs" : : : "memory");
+        if (cancelStatus == NtStatus::Success) {
+            const IoStatusBlock result{NtStatus::Success, 0};
+            if (ex::ExSafeCopyToUser(resultAddress, &result, sizeof(result)) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+        }
+        return status(cancelStatus);
+    }
     if (number == sys::SSN_NtReadFile) {
         uint64_t extra[5]{};
         if (args.userStack > UINT64_MAX - 40 ||
@@ -799,10 +2082,8 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         const size_t length = static_cast<uint32_t>(extra[2]);
         const auto* byteOffsetAddress = reinterpret_cast<const LargeInteger*>(extra[3]);
         const auto* keyAddress = reinterpret_cast<const uint32_t*>(extra[4]);
-        if (!ioStatusAddress || (length && !userBuffer) || args.second || args.third || args.fourth ||
-            keyAddress)
-            return status(keyAddress || args.second || args.third || args.fourth
-                ? NtStatus::NotSupported : NtStatus::InvalidParameter);
+        if (!ioStatusAddress || (length && !userBuffer) || keyAddress)
+            return status(keyAddress ? NtStatus::NotSupported : NtStatus::InvalidParameter);
         if (ex::ProbeForWrite(ioStatusAddress, sizeof(IoStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success ||
             ex::ProbeForWrite(userBuffer, length, 1) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
@@ -813,6 +2094,24 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         constexpr int64_t fileUseCurrentPosition = -2;
         const bool useCurrentOffset = !byteOffsetAddress || byteOffset.quadPart == fileUseCurrentPosition;
         if (!useCurrentOffset && byteOffset.quadPart < 0) return status(NtStatus::InvalidParameter);
+        bool completionAssociated = false;
+        if (!args.second && !args.third && args.fourth) {
+            const auto lookup = io::IoHasCompletionPort(static_cast<Handle>(first), completionAssociated);
+            if (lookup != NtStatus::Success) return status(lookup);
+            if (!completionAssociated) return status(NtStatus::NotSupported);
+        }
+        if (args.second || args.third || completionAssociated) {
+            auto* issuingThread = ke::KeGetCurrentThread();
+            if (!useCurrentOffset || !issuingThread || !issuingThread->owningProcess || !issuingThread->kernelStackTop)
+                return status(NtStatus::NotSupported);
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            const auto asyncStatus = io::IoSubmitAsyncRead(static_cast<Handle>(first), static_cast<Handle>(args.second), args.third, args.fourth,
+                                                           userBuffer, length, ioStatusAddress);
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+            return status(asyncStatus);
+        }
 
         std::unique_ptr<uint8_t[]> staging;
         if (length) {
@@ -820,9 +2119,32 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             if (!staging) return status(NtStatus::NoMemory);
         }
         size_t bytesRead{};
+        const auto* readThread = ke::KeGetCurrentThread();
+        const bool canBlock = readThread && readThread->owningProcess && readThread->kernelStackTop;
+        if (!canBlock) {
+            io::FileObject* file{}; ob::ObjectHeader* reference{};
+            const auto lookup = io::IoReferenceFileHandle(static_cast<Handle>(first), 1, file, reference);
+            if (lookup != NtStatus::Success) return status(lookup);
+            const bool stream = file->isStream();
+            ob::ObDereferenceObject(reference);
+            if (stream) return status(NtStatus::NotImplemented);
+        } else {
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        }
         const auto readStatus = io::IoReadFileHandle(static_cast<Handle>(first), useCurrentOffset,
             useCurrentOffset ? 0 : static_cast<uint64_t>(byteOffset.quadPart),
-            staging.get(), length, &bytesRead);
+            staging.get(), length, &bytesRead, ioStatusAddress);
+        if (canBlock && readThread->terminationRequested && readThread->serviceTermination) {
+            auto terminate = readThread->serviceTermination;
+            void* terminationContext = readThread->terminationContext;
+            staging.reset();
+            terminate(terminationContext);
+        }
+        if (canBlock) {
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+        }
         IoStatusBlock ioStatus{readStatus, bytesRead};
         NtStatus copyStatus = NtStatus::Success;
         if (bytesRead)
@@ -846,13 +2168,12 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         constexpr uint32_t fileOpen = 1;
         constexpr uint32_t allowedAttributes = OBJ_INHERIT | OBJ_CASE_INSENSITIVE;
         constexpr uint32_t allowedShareAccess = 0x7;
-        constexpr uint32_t allowedOpenOptions = 0x20 | 0x40; // synchronous nonalert, non-directory
+        constexpr uint32_t allowedOpenOptions = 0x20 | 0x40;
         if (attributes.length != sizeof(ObjectAttributes) || !attributes.objectName ||
             attributes.rootDirectory || (attributes.attributes & ~allowedAttributes) ||
             attributes.securityDescriptor || attributes.securityQualityOfService ||
-            extra[0] > allowedShareAccess || !(extra[0] & 1) ||
-            (extra[1] & ~allowedOpenOptions) ||
-            extra[2] || extra[3] != fileOpen || extra[4] || extra[5] || extra[6])
+            extra[0] || extra[2] > allowedShareAccess || extra[3] != fileOpen ||
+            (extra[4] & ~allowedOpenOptions))
             return status(NtStatus::NotSupported);
         UnicodeString name{};
         if (ex::ExSafeCopyFromUser(&name, attributes.objectName, sizeof(name)) != NtStatus::Success ||
@@ -861,21 +2182,131 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         char16_t path[2048]{};
         if (ex::ExSafeCopyFromUser(path, name.buffer, name.length) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
+        const std::u16string_view pathView(path, name.length / sizeof(char16_t));
+        constexpr std::u16string_view afdPath(u"\\Device\\Afd\\Endpoint");
         Handle handle{};
         IoStatusBlock ioStatus{};
-        ioStatus.status = io::IoOpenBackendFile(&handle, static_cast<uint32_t>(second),
-                                                {path, name.length / sizeof(char16_t)});
-        ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
-        if (ioStatus.status != NtStatus::Success) {
-            (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
-            return status(ioStatus.status);
+        if (pathView == afdPath) {
+            if (extra[1] || extra[4] || !extra[5] || !extra[6] || extra[6] > 256)
+                return status(NtStatus::NotSupported);
+            std::array<uint8_t, 256> ea{};
+            if (ex::ExSafeCopyFromUser(ea.data(), reinterpret_cast<const void*>(extra[5]),
+                                       static_cast<size_t>(extra[6])) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+            const auto createStatus = micant::km::afdwsk::IoAfdCreateEndpointHandle(
+                &handle, std::wstring_view(reinterpret_cast<const wchar_t*>(pathView.data()), pathView.size()),
+                static_cast<uint32_t>(second), ea.data(), static_cast<size_t>(extra[6]));
+            if (createStatus != NtStatus::Success) return status(createStatus);
+            ioStatus.status = NtStatus::Success;
+            ioStatus.information = 1; // FILE_OPENED
+        } else if (micant::km::hid::isInputDeviceName(pathView)) {
+            if (extra[1] || extra[5] || extra[6]) return status(NtStatus::NotSupported);
+            ioStatus.status = micant::km::hid::openInputDevice(&handle, static_cast<uint32_t>(second), pathView,
+                                                               (extra[4] & 0x20u) != 0);
+            ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
+            if (ioStatus.status != NtStatus::Success) {
+                (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+                return status(ioStatus.status);
+            }
+        } else {
+            if (extra[1] || extra[5] || extra[6]) return status(NtStatus::NotSupported);
+            ioStatus.status = io::IoOpenBackendFile(&handle, static_cast<uint32_t>(second), pathView);
+            ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
+            if (ioStatus.status != NtStatus::Success) {
+                (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+                return status(ioStatus.status);
+            }
         }
         auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
         if (copy == NtStatus::Success)
             copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
-        if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
-            __builtin_trap();
+        if (copy != NtStatus::Success) {
+            ob::HandleTable* table{}; Handle raw{};
+            if (ob::detail::resolveHandle(handle, table, raw) != NtStatus::Success ||
+                table->closeHandle(raw) != NtStatus::Success) __builtin_trap();
+        }
         return status(copy);
+    }
+    if (number == sys::SSN_NtDeviceIoControlFile) {
+        uint64_t extra[6]{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        if (second || args.third || args.fourth) return status(NtStatus::NotSupported);
+        if (!extra[0] || extra[1] > UINT32_MAX || extra[3] > micant::shared::afd::MaximumControlBuffer ||
+            extra[5] > micant::shared::afd::MaximumControlBuffer)
+            return status(NtStatus::InvalidParameter);
+        const uint32_t ioctl = static_cast<uint32_t>(extra[1]);
+        const uint32_t inputLength = static_cast<uint32_t>(extra[3]);
+        const uint32_t outputLength = static_cast<uint32_t>(extra[5]);
+        const void* inputBuffer = reinterpret_cast<const void*>(extra[2]);
+        void* outputBuffer = reinterpret_cast<void*>(extra[4]);
+        auto* ioStatusAddress = reinterpret_cast<IoStatusBlock*>(extra[0]);
+        if ((inputLength && !inputBuffer) || (outputLength && !outputBuffer) ||
+            ex::ProbeForWrite(ioStatusAddress, sizeof(IoStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success ||
+            (inputLength && ex::ProbeForRead(inputBuffer, inputLength, 1) != NtStatus::Success) ||
+            (outputLength && ex::ProbeForWrite(outputBuffer, outputLength, 1) != NtStatus::Success))
+            return status(NtStatus::AccessViolation);
+
+        uint32_t requiredAccess = 0;
+        if (ioctl == micant::shared::afd::IoctlReceive ||
+            ioctl == micant::shared::afd::IoctlReceiveFrom ||
+            ioctl == micant::shared::afd::IoctlQueryNetworkConfiguration) requiredAccess = 0x0001;
+        else if (ioctl == micant::shared::afd::IoctlBind || ioctl == micant::shared::afd::IoctlConnect ||
+                 ioctl == micant::shared::afd::IoctlListen || ioctl == micant::shared::afd::IoctlSend ||
+                 ioctl == micant::shared::afd::IoctlSendTo ||
+                 ioctl == micant::shared::afd::IoctlSetReceiveTimeout ||
+                 ioctl == micant::shared::afd::IoctlSetNetworkConfiguration) requiredAccess = 0x0002;
+        io::FileObject* file{};
+        ob::ObjectHeader* reference{};
+        NtStatus ioStatus = io::IoReferenceFileHandle(static_cast<Handle>(first), requiredAccess, file, reference);
+        if (ioStatus != NtStatus::Success) return status(ioStatus);
+        if (!micant::km::afdwsk::IoAfdIsEndpointFile(file)) {
+            ob::ObDereferenceObject(reference);
+            return status(NtStatus::NotSupported);
+        }
+
+        std::unique_ptr<uint8_t[]> input;
+        std::unique_ptr<uint8_t[]> output;
+        if (inputLength) input.reset(new (std::nothrow_t{}) uint8_t[inputLength]);
+        if (outputLength) output.reset(new (std::nothrow_t{}) uint8_t[outputLength]);
+        if ((inputLength && !input) || (outputLength && !output)) {
+            ob::ObDereferenceObject(reference);
+            return status(NtStatus::NoMemory);
+        }
+        if (inputLength && ex::ExSafeCopyFromUser(input.get(), inputBuffer, inputLength) != NtStatus::Success) {
+            ob::ObDereferenceObject(reference);
+            return status(NtStatus::AccessViolation);
+        }
+        io::Irp irp{};
+        irp.majorFunction = io::IRP_MJ_DEVICE_CONTROL;
+        irp.deviceObject = file->deviceObject();
+        irp.fileObject = file;
+        irp.systemBuffer = input.get();
+        irp.userBuffer = output.get();
+        irp.length = outputLength;
+        irp.byteOffset.lowPart = ioctl;
+        irp.byteOffset.highPart = static_cast<int32_t>(inputLength);
+        ioStatus = io::IoCallDriver(irp.deviceObject, &irp);
+        const bool outputIoctl = ioctl == micant::shared::afd::IoctlReceive ||
+                                 ioctl == micant::shared::afd::IoctlReceiveFrom ||
+                                 ioctl == micant::shared::afd::IoctlQueryNetworkConfiguration;
+        if (outputIoctl && irp.ioStatus.information > outputLength) {
+            ioStatus = NtStatus::Unsuccessful;
+            irp.ioStatus.status = ioStatus;
+            irp.ioStatus.information = 0;
+        }
+        else if (outputIoctl && irp.ioStatus.information &&
+                 ex::ExSafeCopyToUser(outputBuffer, output.get(), irp.ioStatus.information) != NtStatus::Success) {
+            ioStatus = NtStatus::AccessViolation;
+            irp.ioStatus.status = ioStatus;
+            irp.ioStatus.information = 0;
+        }
+        if (ex::ExSafeCopyToUser(ioStatusAddress, &irp.ioStatus, sizeof(irp.ioStatus)) != NtStatus::Success)
+            ioStatus = NtStatus::AccessViolation;
+        ob::ObDereferenceObject(reference);
+        return status(ioStatus);
     }
     if (number == sys::SSN_NtOpenFile) {
         uint64_t extra[2]{};
@@ -1058,6 +2489,41 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         __asm__ __volatile__("swapgs" : : : "memory");
         return status(result);
     }
+    if (number == sys::SSN_NtCreateTimer) {
+        ObjectAttributes attributes{};
+        if ((args.third && ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success) ||
+            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        Handle handle{};
+        const auto result = sys::NtCreateTimer(&handle, static_cast<uint32_t>(second),
+            args.third ? &attributes : nullptr, static_cast<uint32_t>(args.fourth));
+        if (result != NtStatus::Success) return status(result);
+        const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success) __builtin_trap();
+        return status(copy);
+    }
+    if (number == sys::SSN_NtSetTimer) {
+        LargeInteger due{}; uint64_t extra[3]{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&due, reinterpret_cast<const void*>(second), sizeof(due)) != NtStatus::Success ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40), sizeof(extra)) != NtStatus::Success ||
+            (extra[2] && ex::ProbeForWrite(reinterpret_cast<void*>(extra[2]), sizeof(bool), 1) != NtStatus::Success))
+            return status(NtStatus::AccessViolation);
+        bool previous{};
+        const auto result = sys::NtSetTimer(first, &due, reinterpret_cast<void*>(args.third),
+            reinterpret_cast<void*>(args.fourth), (extra[0] & 0xff) != 0,
+            static_cast<uint32_t>(extra[1]), extra[2] ? &previous : nullptr);
+        if (result != NtStatus::Success || !extra[2]) return status(result);
+        return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[2]), &previous, sizeof(previous)));
+    }
+    if (number == sys::SSN_NtCancelTimer) {
+        if (second && ex::ProbeForWrite(reinterpret_cast<void*>(second), sizeof(bool), 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        bool state{};
+        const auto result = sys::NtCancelTimer(first, second ? &state : nullptr);
+        if (result != NtStatus::Success || !second) return status(result);
+        return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &state, sizeof(state)));
+    }
     if (number == sys::SSN_NtCreateEvent) {
         uint64_t initial{};
         ObjectAttributes attributes{};
@@ -1179,8 +2645,13 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     if (number == sys::SSN_NtUnmapViewOfSection)
         return status(sys::NtUnmapViewOfSection(first, second));
     if (number == 0x80) {
-        const um::UserVideoInfo64 info{g_display.Width, g_display.Height, g_display.Pitch,
-                                       32, g_display.PixelFormat, 0, 0};
+        const uint32_t width = g_display.Width ? g_display.Width : g_bootFramebufferInfo.width;
+        const uint32_t height = g_display.Height ? g_display.Height : g_bootFramebufferInfo.height;
+        const uint32_t pitch = g_display.Pitch ? g_display.Pitch :
+            g_bootFramebufferInfo.pixelsPerScanLine;
+        const uint32_t pixelFormat = g_display.Width ? g_display.PixelFormat :
+            g_bootFramebufferInfo.pixelFormat;
+        const um::UserVideoInfo64 info{width, height, pitch, 32, pixelFormat, 0, 0};
         return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(first),
                                            &info, sizeof(info)));
     }
@@ -1201,6 +2672,7 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         const NtStatus probeStatus = ex::ProbeForRead(
             reinterpret_cast<const void*>(params.surfaceBufferVa), bytes, 1);
         if (probeStatus != NtStatus::Success) return status(probeStatus);
+        if (!g_display.PresentFrame) return status(NtStatus::DeviceNotReady);
         const auto* pixels = reinterpret_cast<const uint32_t*>(params.surfaceBufferVa);
         for (uint32_t row = 0; row < params.height; ++row) {
             const NtStatus rowStatus = ex::ExSafeCopyFromUser(
@@ -1501,6 +2973,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!validHandoff(handoff)) {
         stopWithError("[MicaNT] Invalid UEFI kernel handoff\r\n");
     }
+    g_bootFramebufferInfo = handoff->framebuffer;
 
     if (!micant::hal::amd64::initializeBootstrapAddressSpace(serialWrite)) {
         stopWithError("[MicaNT] Bootstrap address-space initialization failed\r\n");
@@ -1570,12 +3043,16 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (micant::io::IoInitializeFileObjects() != micant::NtStatus::Success) {
         stopWithError("[MicaNT Io] File object initialization failed\r\n");
     }
-    const auto fileProviderStatus = micant::io::IoInitializeAhciFileProvider();
-    if (fileProviderStatus == micant::NtStatus::Success) {
-        serialWrite("[MicaNT Io] AHCI/FAT32 file-backed open provider registered\r\n");
-    } else {
-        serialWrite("[MicaNT Io] AHCI/FAT32 file provider unavailable; file opens fail explicitly\r\n");
+    if (micant::io::IoInitializeBlockDevices() != micant::NtStatus::Success) {
+        stopWithError("[MicaNT Io] Block-device object initialization failed\r\n");
     }
+    if (micant::km::hid::initializeInputDevices() != micant::NtStatus::Success)
+        stopWithError("[MicaNT Io] Input device object initialization failed\r\n");
+    if (micant::fsrtl::fat::initialize() != micant::NtStatus::Success)
+        stopWithError("[MicaNT FsRtl] FAT provider initialization failed\r\n");
+    if (micant::io::IoRegisterFileOpenRoutine(bootFileOpenRouter, nullptr) != micant::NtStatus::Success)
+        stopWithError("[MicaNT Io] File provider router initialization failed\r\n");
+    g_bootFileOpenRouterInstalled = true;
     if (!micant::sys::initializeBootstrapSectionServices()) {
         stopWithError("[MicaNT Mm] Section service initialization failed\r\n");
     }
@@ -1625,9 +3102,6 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestPsThreadLifecycle())
         stopWithError("[MicaNT Ps] Thread lifecycle verification failed\r\n");
     serialWrite("[MicaNT Ps] Kernel thread lifecycle verified\r\n");
-    initializeDisplay(handoff->displayDriver);
-    drawExplorerDesktop();
-    serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
     serialWrite("[MicaNT Ps] Entering isolated CPL3 probe\r\n");
     if (!micant::hal::amd64::verifyRing3Transition()) {
         stopWithError("[MicaNT Ps] Ring 3 transition failed\r\n");
@@ -1636,7 +3110,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ps] GS-based TEB LastErrorValue read/write verified\r\n");
     serialWrite("[MicaNT Ps] GS-based TEB TLS slot read/write verified\r\n");
     serialWrite("[MicaNT Mm] User/kernel isolation and read-only user code verified\r\n");
-    serialWrite("[MicaNT Mm] Supervisor MMIO and non-executable user stack verified\r\n");
+    serialWrite("[MicaNT Mm] Supervisor access checks and non-executable user stack verified\r\n");
     if (!micant::hal::amd64::verifyManagedExecutablePage())
         stopWithError("[MicaNT Mm] Managed executable page verification failed\r\n");
     serialWrite("[MicaNT Mm] PFN-backed executable user page verified\r\n");
@@ -1644,13 +3118,102 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ke] Syscall entry initialization failed\r\n");
     }
     serialWrite("[MicaNT Ke] Bootstrap syscall entry initialized\r\n");
+    // The early CPL3 syscall probe includes a valid presentation request. Give
+    // it a real, supervisor-only GOP backend after the APIC access probes; a
+    // later boot-start display driver may replace this fallback.
+    if (!initializeGopFramebuffer(handoff->framebuffer, false))
+        stopWithError("[MicaNT Display] GOP framebuffer unavailable for syscall probe\r\n");
     if (!micant::hal::amd64::verifyBootstrapSyscalls()) {
         stopWithError("[MicaNT Ke] Syscall entry verification failed\r\n");
     }
     serialWrite("[MicaNT Ke] Bootstrap syscall service probes passed\r\n");
+    // Enable the canonical clock and its shared user view before the real
+    // CPL3 native-image probe executes time syscalls and reads KUSER data.
+    if (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION ||
+        handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES) {
+        const auto& calibration = handoff->version ==
+                micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES
+            ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.clockCalibration
+            : reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->clockCalibration;
+        using micant::shared::boot_time::BootClockFlagsV1;
+        if (calibration.flags == BootClockFlagsV1::InvariantTsc &&
+            micant::hal::amd64::setBootstrapTscCalibrationHint(
+                calibration.tscFrequencyHz) !=
+                micant::hal::amd64::BootstrapClockStatus::Success)
+            serialWrite("[MicaNT Hal] UEFI TSC calibration rejected\r\n");
+    }
+    const bool clockActive = micant::hal::amd64::startBootstrapSchedulerClock();
+    if (!clockActive) stopWithError("[MicaNT Hal] Bootstrap clock unavailable\r\n");
+    if (micant::hal::amd64::verifyBootstrapClockTimeouts())
+        serialWrite("[MicaNT Hal] QPC scale matched APIC timing; timeout and deadline rollover passed\r\n");
+    else
+        serialWrite("[MicaNT Hal] Calibrated monotonic timeout checks failed\r\n");
+    if (!micant::ke::passive_work::initialize())
+        stopWithError("[MicaNT Ke] Passive worker initialization failed\r\n");
+    initializeBootStartDrivers(handoff);
+    auto& bootNetworkStack = micant::tcpip::NetworkStack::get();
+    bootNetworkStack.initialize();
+    if (bootNetworkStack.isInitialized())
+        serialWrite("[MicaNT NDIS/TCPIP] Boot-start network adapter attached to canonical transport\r\n");
+    else
+        serialWrite("[MicaNT NDIS/TCPIP] No boot-start network adapter registered\r\n");
+    drawExplorerDesktop();
+    serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
+    bool utcSeeded = false;
+    if (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME ||
+        handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION ||
+        handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES) {
+        const auto& sample = handoff->version ==
+                micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES
+            ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.time.systemTime
+            : (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION
+                ? reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->time.systemTime
+                : reinterpret_cast<const micant::boot::UefiKernelHandoffV5*>(handoff)->systemTime);
+        if (sample.status == micant::shared::boot_time::SampleStatus::UtcValid) {
+            const auto status = micant::hal::amd64::initializeBootstrapSystemTime(
+                sample.utcTime100ns);
+            utcSeeded = status == micant::hal::amd64::BootstrapClockStatus::Success;
+            if (!utcSeeded)
+                serialWrite("[MicaNT Hal] UEFI UTC time rejected by calibrated clock\r\n");
+        }
+    }
+    if (utcSeeded) {
+        serialWrite("[MicaNT Hal] UTC SystemTime seeded from validated UEFI GetTime\r\n");
+    } else {
+        if ((handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_SYSTEM_TIME ||
+             handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION ||
+             handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES) &&
+            (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_PCI_RESOURCES
+                ? reinterpret_cast<const micant::boot::UefiKernelHandoffV7*>(handoff)->clock.time.systemTime.status
+                : (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION_CLOCK_CALIBRATION
+                    ? reinterpret_cast<const micant::boot::UefiKernelHandoffV6*>(handoff)->time.systemTime.status
+                    : reinterpret_cast<const micant::boot::UefiKernelHandoffV5*>(handoff)->systemTime.status)) ==
+                micant::shared::boot_time::SampleStatus::LocalTimeZoneUnspecified)
+            serialWrite("[MicaNT Hal] UEFI GetTime timezone unspecified; UTC SystemTime unavailable\r\n");
+        micant::shared::time::SystemTimeFields rtc{};
+        const auto rtcStatus = micant::hal::amd64::readBootstrapRtc(rtc);
+        if (rtcStatus == micant::hal::amd64::BootstrapRtcStatus::Success)
+            serialWrite("[MicaNT Hal] Stable CMOS RTC sample read; UTC offset unknown\r\n");
+        else if (rtcStatus == micant::hal::amd64::BootstrapRtcStatus::Timeout)
+            serialWrite("[MicaNT Hal] CMOS RTC update timeout; no UTC seed\r\n");
+        else
+            serialWrite("[MicaNT Hal] CMOS RTC unavailable/invalid; no UTC seed\r\n");
+    }
+    const auto kuserStatus = micant::hal::amd64::initializeBootstrapKuserSharedData();
+    if (kuserStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+        serialWrite("[MicaNT Hal] KUSER status=");
+        serialWriteNumber(static_cast<uint32_t>(kuserStatus));
+        serialWrite("\r\n");
+        stopWithError("[MicaNT Hal] KUSER_SHARED_DATA mapping failed\r\n");
+    }
+    serialWrite("[MicaNT Hal] KUSER_SHARED_DATA kernel RW/user RO mapping active\r\n");
     if (!micant::hal::amd64::verifyNativeImageLoading()) {
         stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
     }
+    serialWrite("[MicaNT Hal] CPL3 calibrated QPC precision and KUSER uptime advancement verified\r\n");
+    serialWrite(utcSeeded
+        ? "[MicaNT Hal] CPL3 UTC SystemTime advanced and matched KUSER\r\n"
+        : "[MicaNT Hal] CPL3 UTC SystemTime correctly unavailable for local firmware time\r\n");
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
     serialWrite("[MicaNT Mm] CPL3 native allocation and release verified\r\n");
     serialWrite("[MicaNT Ke] CPL3 native event polling verified\r\n");
@@ -1688,7 +3251,6 @@ extern "C" micant::NtStatus KiSystemStartup(
         else
             serialWrite("[MicaNT Hal] Firmware IOAPIC ranges unavailable\r\n");
     }
-    const bool clockActive = micant::hal::amd64::startBootstrapSchedulerClock();
     if (clockActive && !micant::hal::amd64::verifyBootstrapSchedulerClock())
         stopWithError("[MicaNT Ke] Runtime scheduler preemption failed\r\n");
     if (clockActive) serialWrite("[MicaNT Ke] Runtime idle wait and wake verified\r\n");

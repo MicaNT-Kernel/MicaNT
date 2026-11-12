@@ -81,7 +81,9 @@ enum class ObjectTypeId : uint32_t {
     Key,
     IoCompletion,
     Job,
-    Timer
+    Timer,
+    BlockDevice,
+    Token
 };
 
 struct ObjectHeader;

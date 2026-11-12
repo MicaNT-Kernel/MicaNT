@@ -794,7 +794,8 @@ public:
 
                     bool readOk = micant::km::hmb_pagefile::HmbPagefileManager::get().readPage(slotId, reinterpret_cast<void*>(phys));
                     if (!readOk) {
-                        std::memset(reinterpret_cast<void*>(phys), 0, PAGE_SIZE_4KB);
+                        BareMetalPfnAllocator::get().freePage(phys);
+                        return false;
                     }
                     micant::km::hmb_pagefile::HmbPagefileManager::get().freeSlot(slotId);
                 } else {

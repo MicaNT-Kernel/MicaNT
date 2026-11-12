@@ -291,15 +291,6 @@ NtStatus NtCancelTimer(Handle timerHandle, bool* currentSignaledState) {
     return NtStatus::Success;
 }
 
-NtStatus NtQueryPerformanceCounter(
-    LargeInteger* performanceCounter,
-    LargeInteger* performanceFrequency
-) {
-    if (!performanceCounter) return NtStatus::InvalidParameter;
-    hal::KeQueryPerformanceCounter(*performanceCounter, performanceFrequency);
-    return NtStatus::Success;
-}
-
 NtStatus NtYieldExecution() {
     std::this_thread::yield();
     return NtStatus::Success;

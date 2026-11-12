@@ -17,8 +17,6 @@ namespace {
 
 using namespace micant::boot_driver;
 
-constexpr uint16_t kPciConfigAddress = 0x0CF8;
-constexpr uint16_t kPciConfigData = 0x0CFC;
 constexpr uint16_t kVirtioVendor = 0x1AF4;
 constexpr uint16_t kVirtioGpuDevice = 0x1050;
 constexpr uint8_t kPciCapabilityVendor = 0x09;
@@ -65,38 +63,22 @@ constexpr uint32_t kVirglOutputResourceId = 2;
 constexpr uint32_t kMaxCompositionLayers = 32;
 
 struct PciLocation { uint8_t bus, device, function; };
-struct PciRegion { uint8_t bar; uint32_t offset, length, notifyMultiplier; };
+struct PciRegion { uint8_t bar; uint32_t offset, length, notifyMultiplier; uint64_t physicalBase; };
 struct PciCaps { PciRegion common{}, notify{}, device{}; bool hasCommon{}, hasNotify{}, hasDevice{}; };
+const KernelServices* g_activeServices{};
+bool g_pciAccessFailed{};
+uint64_t g_pciClaimToken{};
 
-static inline void out32(uint16_t port, uint32_t value) {
-    __asm__ __volatile__("outl %0, %1" : : "a"(value), "Nd"(port));
-}
-static inline uint32_t in32(uint16_t port) {
-    uint32_t value;
-    __asm__ __volatile__("inl %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
 static inline void ioBarrier() { __asm__ __volatile__("mfence" : : : "memory"); }
 static inline void cpuRelax() { __asm__ __volatile__("pause"); }
 
 uint32_t pciRead(const PciLocation& loc, uint8_t offset) {
-    const uint32_t address = 0x80000000u |
-        (static_cast<uint32_t>(loc.bus) << 16) |
-        (static_cast<uint32_t>(loc.device) << 11) |
-        (static_cast<uint32_t>(loc.function) << 8) |
-        (offset & 0xFCu);
-    out32(kPciConfigAddress, address);
-    return in32(kPciConfigData);
-}
-
-void pciWrite(const PciLocation& loc, uint8_t offset, uint32_t value) {
-    const uint32_t address = 0x80000000u |
-        (static_cast<uint32_t>(loc.bus) << 16) |
-        (static_cast<uint32_t>(loc.device) << 11) |
-        (static_cast<uint32_t>(loc.function) << 8) |
-        (offset & 0xFCu);
-    out32(kPciConfigAddress, address);
-    out32(kPciConfigData, value);
+    uint32_t value = UINT32_MAX;
+    if (!g_activeServices || !g_activeServices->PciReadConfig32 ||
+        g_activeServices->PciReadConfig32(g_activeServices->Context, loc.bus,
+            loc.device, loc.function, static_cast<uint16_t>(offset & 0xFCu), &value) != STATUS_SUCCESS)
+        g_pciAccessFailed = true;
+    return value;
 }
 
 void logHex(const KernelServices& services, const char* label, uint32_t value) {
@@ -122,18 +104,15 @@ uint64_t pciBar(const PciLocation& loc, uint8_t barIndex) {
 }
 
 bool findGpu(PciLocation& result, PciCaps& caps, const KernelServices& services) {
+    g_activeServices = &services;
+    g_pciAccessFailed = false;
+    g_pciClaimToken = 0;
     for (uint32_t bus = 0; bus < 256; ++bus) {
         for (uint32_t dev = 0; dev < 32; ++dev) {
             PciLocation loc{static_cast<uint8_t>(bus), static_cast<uint8_t>(dev), 0};
             if ((pciRead(loc, 0) & 0xFFFFu) != kVirtioVendor) continue;
             if ((pciRead(loc, 0) >> 16) != kVirtioGpuDevice) continue;
             if (services.Log) services.Log(services.Context, "virtio_gpu.sys: matched PCI vendor/device 1AF4:1050");
-
-            uint16_t command = static_cast<uint16_t>(pciRead(loc, 4));
-            command = static_cast<uint16_t>(command | 0x0006u); // memory decode + bus master
-            uint32_t commandStatus = pciRead(loc, 4);
-            commandStatus = (commandStatus & 0xFFFF0000u) | command;
-            pciWrite(loc, 4, commandStatus);
 
             result = loc;
             if ((pciRead(loc, 6) & (1u << 20)) == 0) {
@@ -169,7 +148,62 @@ bool findGpu(PciLocation& result, PciCaps& caps, const KernelServices& services)
                 cap = next;
                 (void)type;
             }
-            return true;
+            if (g_pciAccessFailed || !caps.hasCommon || !caps.hasNotify) return false;
+
+            PciBarRequestV1 requests[2]{};
+            size_t requestCount = 0;
+            const PciRegion* regions[] = {&caps.common, &caps.notify};
+            for (const auto* region : regions) {
+                const uint64_t required = static_cast<uint64_t>(region->offset) + region->length;
+                if (!region->length || required > UINT32_MAX) return false;
+                size_t index = 0;
+                while (index < requestCount && requests[index].BarIndex != region->bar) ++index;
+                if (index == requestCount) {
+                    requests[requestCount++] = {region->bar, 0, 0, required};
+                } else if (required > requests[index].MinimumLength) {
+                    requests[index].MinimumLength = required;
+                }
+            }
+            PciBarResourceV1 resources[2]{};
+            size_t resourceCount = requestCount;
+            if (!services.ClaimPciDevice) return false;
+            const int32_t claimStatus = services.ClaimPciDevice(services.Context,
+                0, loc.bus, loc.device, loc.function, requests, requestCount,
+                &g_pciClaimToken, resources, &resourceCount);
+            if (claimStatus != STATUS_SUCCESS) {
+                g_pciClaimToken = 0;
+                if (services.Log) services.Log(services.Context,
+                    "virtio_gpu.sys: PCI PnP claim unavailable; controller left untouched");
+                return false;
+            }
+            if (!g_pciClaimToken || resourceCount != requestCount) {
+                if (g_pciClaimToken) (void)services.ReleasePciDevice(
+                    services.Context, g_pciClaimToken);
+                g_pciClaimToken = 0;
+                return false;
+            }
+            for (size_t i = 0; i < requestCount; ++i) {
+                if (resources[i].BarIndex != requests[i].BarIndex ||
+                    !resources[i].PhysicalAddress ||
+                    resources[i].Length < requests[i].MinimumLength) {
+                    (void)services.ReleasePciDevice(services.Context, g_pciClaimToken);
+                    g_pciClaimToken = 0;
+                    return false;
+                }
+                PciRegion* resourceRegions[] = {&caps.common, &caps.notify};
+                for (auto* target : resourceRegions) {
+                    if (target->bar == resources[i].BarIndex)
+                        target->physicalBase = resources[i].PhysicalAddress;
+                }
+            }
+
+            // PCI ownership exists, but this kernel ABI has no safe DMA-buffer
+            // allocator/IOMMU mapping yet. Do not set Command or touch BARs.
+            (void)services.ReleasePciDevice(services.Context, g_pciClaimToken);
+            g_pciClaimToken = 0;
+            if (services.Log) services.Log(services.Context,
+                "virtio_gpu.sys: safe DMA allocator unavailable; startup declined");
+            return false;
         }
     }
     return false;
@@ -255,17 +289,19 @@ template <typename T> void mmioWrite(volatile uint8_t* base, size_t offset, T va
     *reinterpret_cast<volatile T*>(base + offset) = value;
 }
 
-uint64_t physicalAddress(const void* address) {
-    return g_device.services && g_device.services->TranslateVirtualAddress
-        ? g_device.services->TranslateVirtualAddress(g_device.services->Context, address) : 0;
+uint64_t physicalAddress(const void* address, size_t length) {
+    uint64_t physical{};
+    return g_device.services && g_device.services->TranslateDmaRange &&
+        g_device.services->TranslateDmaRange(g_device.services->Context, address,
+            length, &physical) == STATUS_SUCCESS ? physical : 0;
 }
 
 bool runCommand(const void* request, uint32_t requestBytes, ResponseHeader* response,
                 uint32_t responseBytes, uint32_t expectedResponse) {
     if (!g_device.initialized && !g_device.common) return false;
     while (__atomic_exchange_n(&g_device.queueLock, 1u, __ATOMIC_ACQUIRE) != 0) cpuRelax();
-    const uint64_t requestPa = physicalAddress(request);
-    const uint64_t responsePa = physicalAddress(response);
+    const uint64_t requestPa = physicalAddress(request, requestBytes);
+    const uint64_t responsePa = physicalAddress(response, responseBytes);
     if (!requestPa || !responsePa || requestBytes == 0 || responseBytes == 0) {
         __atomic_store_n(&g_device.queueLock, 0u, __ATOMIC_RELEASE);
         return false;
@@ -276,9 +312,9 @@ bool runCommand(const void* request, uint32_t requestBytes, ResponseHeader* resp
     const uint16_t second = 1;
     g_device.descriptors[first] = {requestPa, requestBytes, kDescNext, second};
     g_device.descriptors[second] = {responsePa, responseBytes, kDescWrite, 0};
-    const uint64_t descPa = physicalAddress(g_device.descriptors);
-    const uint64_t availPa = physicalAddress(&g_device.available);
-    const uint64_t usedPa = physicalAddress(&g_device.used);
+    const uint64_t descPa = physicalAddress(g_device.descriptors, sizeof(g_device.descriptors));
+    const uint64_t availPa = physicalAddress(&g_device.available, sizeof(g_device.available));
+    const uint64_t usedPa = physicalAddress(&g_device.used, sizeof(g_device.used));
     if (!descPa || !availPa || !usedPa) {
         __atomic_store_n(&g_device.queueLock, 0u, __ATOMIC_RELEASE);
         return false;
@@ -320,8 +356,8 @@ bool sendNoData(const void* request, uint32_t requestSize) {
 
 bool initializeQueue(const PciLocation& location, const PciCaps& caps,
                      const KernelServices& services) {
-    const uint64_t commonPhysical = pciBar(location, caps.common.bar) + caps.common.offset;
-    const uint64_t notifyPhysical = pciBar(location, caps.notify.bar) + caps.notify.offset;
+    const uint64_t commonPhysical = caps.common.physicalBase + caps.common.offset;
+    const uint64_t notifyPhysical = caps.notify.physicalBase + caps.notify.offset;
     g_device.common = static_cast<volatile uint8_t*>(services.MapDeviceMemory(
         services.Context, commonPhysical, caps.common.length));
     g_device.notify = static_cast<volatile uint8_t*>(services.MapDeviceMemory(
@@ -375,9 +411,9 @@ bool initializeQueue(const PciLocation& location, const PciCaps& caps,
     g_device.notifyOffset = mmioRead<uint16_t>(g_device.common, 30);
     g_device.notifyMultiplier = caps.notify.notifyMultiplier;
 
-    const uint64_t descPa = physicalAddress(g_device.descriptors);
-    const uint64_t availPa = physicalAddress(&g_device.available);
-    const uint64_t usedPa = physicalAddress(&g_device.used);
+    const uint64_t descPa = physicalAddress(g_device.descriptors, sizeof(g_device.descriptors));
+    const uint64_t availPa = physicalAddress(&g_device.available, sizeof(g_device.available));
+    const uint64_t usedPa = physicalAddress(&g_device.used, sizeof(g_device.used));
     if (!descPa || !availPa || !usedPa) {
         if (services.Log) services.Log(services.Context, "virtio_gpu.sys: queue ring address translation failed");
         return false;
@@ -421,7 +457,7 @@ bool createScanout(uint32_t width, uint32_t height) {
     if (g_device.pages > kMaxBackingPages) return false;
 
     for (uint32_t page = 0; page < g_device.pages; ++page) {
-        const uint64_t pa = physicalAddress(g_device.frame + static_cast<size_t>(page) * 4096);
+        const uint64_t pa = physicalAddress(g_device.frame + static_cast<size_t>(page) * 4096, 4096);
         if (!pa) return false;
         g_device.framePhysicalPages[page] = pa & ~0xFFFULL;
     }
@@ -489,7 +525,7 @@ bool attachResourceBacking(uint32_t resourceId, const uint32_t* pixels,
     auto* entries = reinterpret_cast<MemoryEntry*>(g_device.command + sizeof(CommandAttachPrefix));
     for (uint32_t page = 0; page < pageCount; ++page) {
         const auto* va = reinterpret_cast<const void*>(firstPageVa + static_cast<uint64_t>(page) * 4096);
-        const uint64_t pa = physicalAddress(va);
+        const uint64_t pa = physicalAddress(va, 4096);
         if (!pa) return false;
         entries[page] = {pa & ~0xFFFULL, 4096, 0};
     }
@@ -733,13 +769,18 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
         return STATUS_INVALID_PARAMETER;
     }
     const auto& services = *static_cast<const KernelServices*>(driver->HardwareResources);
-    if (services.Size < sizeof(KernelServices) || services.Version != DRIVER_ABI_VERSION ||
-        !services.TranslateVirtualAddress || !services.MapDeviceMemory) return STATUS_INVALID_PARAMETER;
+    if (services.Size < sizeof(KernelServices) ||
+        services.Version != KERNEL_SERVICES_VERSION || !services.PciReadConfig32 ||
+        !services.PciWriteConfig32 || !services.ClaimPciDevice ||
+        !services.ReleasePciDevice || !services.TranslateDmaRange ||
+        !services.MapDeviceMemory || !services.ReleaseDeviceMemory)
+        return STATUS_INVALID_PARAMETER;
     g_device.services = &services;
     PciLocation location{};
     PciCaps caps{};
     if (!findGpu(location, caps, services)) {
-        if (services.Log) services.Log(services.Context, "virtio_gpu.sys: modern VirtIO-GPU PCI device not found");
+        if (services.Log) services.Log(services.Context,
+            "virtio_gpu.sys: no safe controller start; PCI claim/DMA backend unavailable or no GPU");
         return STATUS_NOT_SUPPORTED;
     }
     if (!caps.hasCommon || !caps.hasNotify || !caps.hasDevice || !services.MapDeviceMemory) {

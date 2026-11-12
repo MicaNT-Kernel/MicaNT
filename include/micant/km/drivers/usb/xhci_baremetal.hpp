@@ -3,10 +3,9 @@
 // (xhci_baremetal.hpp)
 //
 // Description:
-//   Clean-room bare-metal driver for the Intel 100/C230 Series Chipset Family
-//   USB 3.0 xHCI Controller (0x8086:0xA12F at PCI 00:14.0, MMIO 0xA2D00000).
-//   Enables direct hardware input from the American Megatrends (AMI) Virtual
-//   Keyboard and Mouse (0x046B:0xFF10) over ASPEED AST2400 BMC JViewer KVM.
+//   Reusable xHCI transport implementation intended for a standalone OEM .sys
+//   driver. The current endpoint setup remains a narrow legacy HID prototype;
+//   it is not connected to the production USB/PnP/DMA lifecycle yet.
 //
 //   Features:
 //   - USBLEGSUP BIOS-to-OS semaphore handoff
@@ -16,7 +15,7 @@
 //   - Root Hub Port 1 detection & reset (Full-Speed 12M)
 //   - Slot enablement, device addressing, and Endpoint 1 (Interrupt IN) config
 //   - Asynchronous interrupt transfer queueing and Event Ring completion polling
-//   - USB HID Usage Table keycode to ASCII / Scancode conversion (TAB, ENTER, 'r', text)
+//   - Bounded raw HID report completion handoff for a canonical HID consumer
 //
 // Clean-Room ISO C++23. Zero proprietary Microsoft code.
 // ============================================================================
@@ -28,6 +27,8 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/hal/highhalf.hpp"
+#include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/km/core/ke.hpp"
 
 namespace micant::km::xhci_baremetal {
 
@@ -46,54 +47,49 @@ static inline uint8_t inb(uint16_t port) noexcept {
     return ret;
 }
 
-static inline void outl(uint16_t port, uint32_t val) noexcept {
-#if defined(__x86_64__)
-    __asm__ __volatile__("outl %0, %1" : : "a"(val), "Nd"(port));
-#endif
-}
-
-static inline uint32_t inl(uint16_t port) noexcept {
-    uint32_t ret = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("inl %1, %0" : "=a"(ret) : "Nd"(port));
-#endif
-    return ret;
-}
-
-static inline uint64_t rdtsc() noexcept {
-    uint32_t low = 0, high = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
-#endif
-    return (static_cast<uint64_t>(high) << 32) | low;
-}
-
-static inline void delayMs(uint32_t ms) noexcept {
-    uint64_t start = rdtsc();
-    // 3.80 GHz = ~3,800,000 cycles per millisecond
-    uint64_t target = static_cast<uint64_t>(ms) * 3800000ULL;
-    while ((rdtsc() - start) < target) {
-#if defined(__x86_64__)
-        __asm__ __volatile__("pause");
-#endif
+static inline micant::hal::amd64::BootstrapClockStatus waitForMilliseconds(uint32_t ms) noexcept {
+    using namespace micant::hal::amd64;
+    BootstrapDeadline deadline{};
+    BootstrapClockStatus status = makeBootstrapDeadline(ms, deadline);
+    if (status != BootstrapClockStatus::Success) return status;
+    for (;;) {
+        bool expired = false;
+        status = isBootstrapDeadlineExpired(deadline, expired);
+        if (status != BootstrapClockStatus::Success || expired) return status;
+        status = delayBootstrapMicroseconds(50);
+        if (status != BootstrapClockStatus::Success) return status;
     }
 }
 
-// --- PCI Configuration Space Helpers ---
-static inline uint32_t pciRead32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) noexcept {
-    uint32_t address = (1u << 31) | (static_cast<uint32_t>(bus) << 16) |
-                       (static_cast<uint32_t>(dev) << 11) |
-                       (static_cast<uint32_t>(func) << 8) | (reg & 0xFC);
-    outl(0xCF8, address);
-    return inl(0xCFC);
+static inline bool bootstrapWaitContextReady() noexcept {
+    if (micant::ke::KeGetCurrentIrql() != micant::ke::PASSIVE_LEVEL) return false;
+#if defined(__x86_64__)
+    uintptr_t flags = 0;
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) :: "memory");
+    if ((flags & (1ULL << 9)) == 0) return false;
+#else
+    return false;
+#endif
+    uint64_t counter = 0, frequency = 0;
+    return micant::hal::amd64::queryBootstrapClock(counter, frequency) ==
+               micant::hal::amd64::BootstrapClockStatus::Success && frequency != 0;
 }
 
-static inline void pciWrite32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg, uint32_t val) noexcept {
-    uint32_t address = (1u << 31) | (static_cast<uint32_t>(bus) << 16) |
-                       (static_cast<uint32_t>(dev) << 11) |
-                       (static_cast<uint32_t>(func) << 8) | (reg & 0xFC);
-    outl(0xCF8, address);
-    outl(0xCFC, val);
+template <typename Predicate>
+static inline bool pollUntilDeadline(uint32_t timeoutMs, Predicate&& predicate,
+                                    micant::hal::amd64::BootstrapClockStatus& status) noexcept {
+    using namespace micant::hal::amd64;
+    BootstrapDeadline deadline{};
+    status = makeBootstrapDeadline(timeoutMs, deadline);
+    if (status != BootstrapClockStatus::Success) return false;
+    for (;;) {
+        if (predicate()) return true;
+        bool expired = false;
+        status = isBootstrapDeadlineExpired(deadline, expired);
+        if (status != BootstrapClockStatus::Success || expired) return false;
+        status = delayBootstrapMicroseconds(50);
+        if (status != BootstrapClockStatus::Success) return false;
+    }
 }
 
 // --- MMIO Access Helpers ---
@@ -208,6 +204,17 @@ alignas(64) static volatile XhciTrb  s_ep0Ring[32]{};
 alignas(64) static volatile XhciTrb  s_ep1Ring[32]{};
 alignas(64) static volatile uint8_t  s_kbdReport[8]{};
 
+// A completed controller transfer is transport data, not yet a keyboard or
+// mouse input packet. The USB/HID stack must parse the device's real report
+// descriptor before passing this payload to KbdHid/MouHid.
+struct XhciHidReportCompletion {
+    uint8_t slotId{0};
+    uint8_t endpointId{0};
+    uint8_t completionCode{0};
+    uint8_t reserved{0};
+    size_t bytesTransferred{0};
+};
+
 // ============================================================================
 // Bare-Metal xHCI Engine
 // ============================================================================
@@ -215,10 +222,15 @@ alignas(64) static volatile uint8_t  s_kbdReport[8]{};
 class XhciBareMetalEngine {
 private:
     uint64_t m_mmioBase{0};
+    uint64_t m_mmioPhysical{0};
+    uint64_t m_mmioSize{0};
     uint64_t m_opBase{0};
     uint64_t m_rtBase{0};
     uint64_t m_dbBase{0};
     uint32_t m_slotId{0};
+    uint8_t  m_pciBus{0};
+    uint8_t  m_pciDevice{0};
+    uint8_t  m_pciFunction{0};
     uint32_t m_targetPort{1};
     size_t   m_ctxDwords{8}; // 8 for 32-byte contexts, 16 for 64-byte contexts
     uint8_t  m_cmdEnqueue{0};
@@ -232,8 +244,24 @@ private:
     uint32_t m_transferEventsCount{0};
     bool     m_initialized{false};
     bool     m_keyboardReady{false};
-    uint8_t  m_lastKeyCode{0};
+    bool     m_pciAccessFailed{false};
     char     m_statusStr[64]{"xHCI: Uninitialized"};
+
+    bool pciRead32(uint16_t bus, uint16_t dev, uint16_t func,
+                   uint16_t reg, uint32_t& value) noexcept {
+        if (micant::hal::amd64::readPciConfig32(bus, dev, func, reg, value) ==
+            micant::hal::amd64::PciConfigAccessResult::Success) return true;
+        m_pciAccessFailed = true;
+        return false;
+    }
+
+    bool pciWrite32(uint16_t bus, uint16_t dev, uint16_t func,
+                    uint16_t reg, uint32_t value) noexcept {
+        if (micant::hal::amd64::writePciConfig32(bus, dev, func, reg, value) ==
+            micant::hal::amd64::PciConfigAccessResult::Success) return true;
+        m_pciAccessFailed = true;
+        return false;
+    }
 
     [[nodiscard]] static uint64_t toPhys(const volatile void* ptr) noexcept {
         uint64_t va = reinterpret_cast<uint64_t>(const_cast<const void*>(ptr));
@@ -266,9 +294,9 @@ private:
     }
 
     bool waitForCmdComplete(uint32_t& outSlotId) noexcept {
-        uint64_t start = rdtsc();
-        // Wait up to 1000ms
-        while ((rdtsc() - start) < 1000ULL * 3800000ULL) {
+        bool commandSucceeded = false;
+        micant::hal::amd64::BootstrapClockStatus clockStatus{};
+        const bool completed = pollUntilDeadline(1000, [&]() noexcept {
             volatile XhciTrb* trb = &s_evtRing[m_evtDequeue];
             uint32_t ctrl = trb->control;
             if ((ctrl & 1) == m_evtCycle) {
@@ -294,12 +322,19 @@ private:
                         err[el++] = '0' + static_cast<char>(code % 10);
                         err[el] = '\0';
                         setStatus(err);
-                        return false;
+                        commandSucceeded = false;
+                        return true;
                     }
+                    commandSucceeded = true;
                     return true;
                 }
             }
-            delayMs(1);
+            return false;
+        }, clockStatus);
+        if (completed) return commandSucceeded;
+        if (clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during command wait");
+            return false;
         }
         uint32_t sts = mmioRead32(m_opBase + 0x04);
         KernelLogSink::print("[xHCI] Cmd timed out! USBSTS=0x");
@@ -381,9 +416,10 @@ private:
         // Ring Doorbell for Slot ID, Target = 1 (Control Endpoint 0, DCI 1)
         mmioWrite32(m_dbBase + m_slotId * 4, 1);
 
-        // Wait for Transfer Event on Primary Event Ring (ep == 1)
-        uint64_t start = rdtsc();
-        while ((rdtsc() - start) < 300ULL * 3800000ULL) { // 300ms timeout
+        // Wait for Transfer Event on Primary Event Ring (ep == 1).
+        bool transferSucceeded = false;
+        micant::hal::amd64::BootstrapClockStatus clockStatus{};
+        const bool completed = pollUntilDeadline(300, [&]() noexcept {
             volatile XhciTrb* trb = &s_evtRing[m_evtDequeue];
             uint32_t ctrl = trb->control;
             if ((ctrl & 1) == m_evtCycle) {
@@ -398,15 +434,22 @@ private:
 
                 if (type == TRB_TRANSFER_EVENT && slot == m_slotId && ep == 1) {
                     if (comp == 1 || comp == 13) {
+                        transferSucceeded = true;
                         return true;
                     }
                     KernelLogSink::print("[xHCI] Control transfer comp code: ");
                     KernelLogSink::printDec(comp);
                     KernelLogSink::print("\r\n");
-                    return false;
+                    transferSucceeded = false;
+                    return true;
                 }
             }
-            delayMs(1);
+            return false;
+        }, clockStatus);
+        if (completed) return transferSucceeded;
+        if (clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during transfer wait");
+            return false;
         }
         KernelLogSink::print("[xHCI] Control transfer timed out!\r\n");
         return false;
@@ -434,6 +477,106 @@ private:
         mmioWrite32(m_dbBase + m_slotId * 4, 3);
     }
 
+    bool findController() noexcept {
+        m_pciAccessFailed = false;
+        for (uint16_t bus = 0; bus <= UINT8_MAX; ++bus) {
+            for (uint8_t device = 0; device < 32; ++device) {
+                uint32_t id0{};
+                if (!pciRead32(bus, device, 0, 0x00, id0)) return false;
+                if (static_cast<uint16_t>(id0) == UINT16_MAX) continue;
+                uint32_t headerReg{};
+                if (!pciRead32(bus, device, 0, 0x0C, headerReg)) return false;
+                const uint8_t headerType = static_cast<uint8_t>(headerReg >> 16);
+                const uint8_t functions = (headerType & 0x80) ? 8 : 1;
+                for (uint8_t function = 0; function < functions; ++function) {
+                    uint32_t id = id0;
+                    if (function != 0 && !pciRead32(bus, device, function, 0x00, id))
+                        return false;
+                    if (static_cast<uint16_t>(id) == UINT16_MAX) continue;
+                    uint32_t classReg{};
+                    if (!pciRead32(bus, device, function, 0x08, classReg)) return false;
+                    const uint8_t baseClass = static_cast<uint8_t>(classReg >> 24);
+                    const uint8_t subClass = static_cast<uint8_t>(classReg >> 16);
+                    const uint8_t progIf = static_cast<uint8_t>(classReg >> 8);
+                    if (baseClass != 0x0C || subClass != 0x03 || progIf != 0x30) continue;
+                    m_pciBus = static_cast<uint8_t>(bus);
+                    m_pciDevice = device;
+                    m_pciFunction = function;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool mapControllerRegisters() noexcept {
+        uint32_t barLow{};
+        if (!pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x10, barLow)) return false;
+        if ((barLow & 1U) || ((barLow >> 1) & 3U) == 1U ||
+            ((barLow >> 1) & 3U) == 3U || (barLow & (1U << 3))) return false;
+
+        const bool is64Bit = ((barLow >> 1) & 3U) == 2U;
+        uint32_t barHigh{};
+        if (is64Bit && !pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x14, barHigh))
+            return false;
+        const uint64_t physical = (static_cast<uint64_t>(barHigh) << 32) |
+                                  static_cast<uint64_t>(barLow & ~0x0FU);
+        if (!physical) return false;
+
+        // Probe BAR aperture size with memory decode disabled, then restore
+        // the exact command and BAR values before mapping any register.
+        uint32_t command{};
+        if (!pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x04, command)) return false;
+        if (!pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x04,
+                        (command & 0xFFFFU) & ~0x0002U)) return false;
+
+        bool probeOk = pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x10, UINT32_MAX);
+        if (probeOk && is64Bit)
+            probeOk = pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x14, UINT32_MAX);
+        uint32_t maskLow{}, maskHigh{};
+        if (probeOk) probeOk = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x10, maskLow);
+        if (probeOk && is64Bit)
+            probeOk = pciRead32(m_pciBus, m_pciDevice, m_pciFunction, 0x14, maskHigh);
+
+        // Always restore the original BAR contents and command register after
+        // a probe has started, including every HAL access-error path.
+        bool restored = true;
+        if (is64Bit)
+            restored = pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x14, barHigh) && restored;
+        restored = pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x10, barLow) && restored;
+        restored = pciWrite32(m_pciBus, m_pciDevice, m_pciFunction, 0x04,
+                              command & 0xFFFFU) && restored;
+        if (!probeOk || !restored) return false;
+
+        const uint64_t mask = is64Bit
+            ? (static_cast<uint64_t>(maskHigh) << 32) |
+                  static_cast<uint64_t>(maskLow & ~0x0FU)
+            : static_cast<uint64_t>(maskLow & ~0x0FU);
+        if (!mask) return false;
+        const uint64_t size = is64Bit
+            ? (~mask) + 1
+            : static_cast<uint32_t>(~static_cast<uint32_t>(mask)) + 1U;
+        if (size < 0x1000 || size > 0x100000 || (size & (size - 1)) != 0 ||
+            physical > UINT64_MAX - size) return false;
+
+        // Keep one mapping across failed initialization retries. Bootstrap MM
+        // maps it uncached and returns null if the physical range is invalid.
+        if (m_mmioBase && m_mmioPhysical == physical && m_mmioSize == size) return true;
+        void* mapping = micant::hal::amd64::mapBootstrapDeviceMemory(
+            physical, static_cast<size_t>(size));
+        if (!mapping) return false;
+        const uint64_t virtualBase = reinterpret_cast<uintptr_t>(mapping);
+        if (virtualBase > UINT64_MAX - size) {
+            (void)micant::hal::amd64::releaseBootstrapDeviceMemory(
+                mapping, static_cast<size_t>(size));
+            return false;
+        }
+        m_mmioPhysical = physical;
+        m_mmioSize = size;
+        m_mmioBase = virtualBase;
+        return true;
+    }
+
 public:
     static XhciBareMetalEngine& get() noexcept {
         static XhciBareMetalEngine instance;
@@ -447,47 +590,36 @@ public:
     bool initialize() noexcept {
         if (m_initialized) return true;
 
-        KernelLogSink::print("\r\n[xHCI] Scanning PCI Bus for Intel xHCI Controller...\r\n");
-
-        // 1. Probe PCI 00:14.0 (Intel Sunrise Point / C230 Series xHCI)
-        uint32_t devVen = pciRead32(0, 20, 0, 0x00);
-        uint16_t vendor = devVen & 0xFFFF;
-        uint16_t device = (devVen >> 16) & 0xFFFF;
-
-        if (vendor != 0x8086 || device != 0xA12F) {
-            KernelLogSink::print("[xHCI] Note: PCI 00:14.0 vendor/device (0x");
-            KernelLogSink::printHex(devVen);
-            KernelLogSink::print(") did not match default, searching bus...\r\n");
-            bool found = false;
-            for (uint8_t d = 0; d < 32; ++d) {
-                uint32_t id = pciRead32(0, d, 0, 0x00);
-                uint32_t cl = pciRead32(0, d, 0, 0x08);
-                if ((cl >> 16) == 0x0C03) { // Serial Bus / USB xHCI
-                    vendor = id & 0xFFFF;
-                    device = (id >> 16) & 0xFFFF;
-                    found = true;
-                    KernelLogSink::print("[xHCI] Found xHCI Controller at PCI 00:");
-                    KernelLogSink::printDec(d);
-                    KernelLogSink::print(".0 (Vendor=0x8086)\r\n");
-                    break;
-                }
-            }
-            if (!found) {
-                KernelLogSink::print("[xHCI] ERROR: No xHCI Host Controller detected on PCI bus!\r\n");
-                setStatus("xHCI: No Controller Found");
-                return false;
-            }
+        // Fail before PCI/MMIO access or controller state changes if calibrated
+        // BSP timing or the legal initialization context is unavailable.
+        if (!bootstrapWaitContextReady()) {
+            setStatus("xHCI: Calibrated BSP clock/context unavailable");
+            return false;
         }
 
-        // Enable Bus Master + Memory Space
-        uint32_t pciCmd = pciRead32(0, 20, 0, 0x04);
-        pciWrite32(0, 20, 0, 0x04, pciCmd | 0x0006);
+        // This legacy engine still has no canonical HAL PCI resource claim or
+        // device-safe DMA allocator. Do not touch PCI configuration, reset the
+        // controller, or start bus mastering until those owners are connected.
+        setStatus("xHCI: HAL/Io resource and DMA services unavailable");
+        return false;
 
-        // Read BAR0 (MMIO Base)
-        uint32_t bar0 = pciRead32(0, 20, 0, 0x10) & ~0xFULL;
-        if (bar0 == 0) bar0 = 0xA2D00000; // Physical hardware default on Supermicro X11SSH-F
+        KernelLogSink::print("\r\n[xHCI] Scanning PCI hierarchy for xHCI controllers...\r\n");
+        if (!findController()) {
+            if (m_pciAccessFailed) {
+                setStatus("xHCI: HAL PCI config read failed");
+            } else {
+                KernelLogSink::print("[xHCI] ERROR: No PCI class 0C/03/30 controller found.\r\n");
+                setStatus("xHCI: No Controller Found");
+            }
+            return false;
+        }
 
-        m_mmioBase = micant::hal::highhalf::toHighCanonical(bar0);
+        if (!mapControllerRegisters()) {
+            setStatus(m_pciAccessFailed ? "xHCI: HAL PCI config access failed" :
+                                          "xHCI: Invalid MMIO BAR");
+            return false;
+        }
+        const uint64_t bar0 = m_mmioPhysical;
 
         KernelLogSink::print("[xHCI] MMIO Base: Phys=0x");
         KernelLogSink::printHex(bar0);
@@ -503,7 +635,14 @@ public:
         uint32_t rtsoff = mmioRead32(m_mmioBase + 0x18);
 
         uint32_t maxPorts = (hcsparams1 >> 24) & 0xFF;
-        if (maxPorts == 0 || maxPorts > 64) maxPorts = 26; // Intel C230 standard default
+        if (capLength < 0x20 || maxPorts == 0 || maxPorts > 64 ||
+            capLength >= m_mmioSize || dboff >= m_mmioSize || rtsoff >= m_mmioSize ||
+            static_cast<uint64_t>(capLength) + 0x400 + static_cast<uint64_t>(maxPorts) * 0x10 >
+                m_mmioSize || static_cast<uint64_t>(dboff & ~0x03U) + 0x10 > m_mmioSize ||
+            static_cast<uint64_t>(rtsoff & ~0x1FU) + 0x40 > m_mmioSize) {
+            setStatus("xHCI: Invalid capability registers");
+            return false;
+        }
 
         // Context Size: Bit 2 of HCCPARAMS1 (0 = 32-byte contexts, 1 = 64-byte contexts)
         m_ctxDwords = (hccparams1 & (1U << 2)) ? 16 : 8;
@@ -524,52 +663,97 @@ public:
 
         // 2. BIOS / OS Ownership Handoff via USBLEGSUP
         uint32_t xecp = (hccparams1 >> 16) << 2;
+        if (xecp != 0 && static_cast<uint64_t>(xecp) + 4 > m_mmioSize) {
+            setStatus("xHCI: Invalid extended capability offset");
+            return false;
+        }
         if (xecp != 0) {
-            uint64_t currCap = m_mmioBase + xecp;
+            uint64_t capOffset = xecp;
+            bool ownershipCapabilityFound = false;
+            bool ownershipReleased = false;
+            bool capabilitiesValid = false;
             for (int step = 0; step < 16; ++step) {
+                if (capOffset > m_mmioSize - 4 || m_mmioBase > UINT64_MAX - capOffset) break;
+                const uint64_t currCap = m_mmioBase + capOffset;
                 uint32_t capVal = mmioRead32(currCap);
                 uint8_t capId = capVal & 0xFF;
                 uint8_t nextPtr = (capVal >> 8) & 0xFF;
                 if (capId == 1) { // USB Legacy Support
+                    ownershipCapabilityFound = true;
                     KernelLogSink::print("[xHCI] Claiming OS Ownership in USBLEGSUP (Offset 0x");
                     KernelLogSink::printHex(currCap - m_mmioBase);
                     KernelLogSink::print(")...\r\n");
                     mmioWrite32(currCap, capVal | (1 << 24)); // Set OS Owned Semaphore
-                    uint64_t waitStart = rdtsc();
-                    while ((rdtsc() - waitStart) < 50ULL * 3800000ULL) {
-                        if ((mmioRead32(currCap) & (1 << 16)) == 0) break; // BIOS cleared ownership
-                        delayMs(2);
+                    micant::hal::amd64::BootstrapClockStatus clockStatus{};
+                    ownershipReleased = pollUntilDeadline(50, [&]() noexcept {
+                        return (mmioRead32(currCap) & (1 << 16)) == 0;
+                    }, clockStatus);
+                    if (!ownershipReleased && clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+                        setStatus("xHCI: HAL clock unavailable during ownership handoff");
+                        return false;
                     }
-                    KernelLogSink::print("[xHCI] USBLEGSUP handoff complete.\r\n");
+                    capabilitiesValid = true;
                     break;
                 }
-                if (nextPtr == 0) break;
-                currCap += (static_cast<uint64_t>(nextPtr) << 2);
+                if (nextPtr == 0) {
+                    capabilitiesValid = true;
+                    break;
+                }
+                const uint64_t advance = static_cast<uint64_t>(nextPtr) << 2;
+                if (advance > m_mmioSize - capOffset) break;
+                capOffset += advance;
             }
+            if (!capabilitiesValid || (ownershipCapabilityFound && !ownershipReleased)) {
+                if (!capabilitiesValid) {
+                    KernelLogSink::print("[xHCI] Invalid extended capability chain; controller left untouched.\r\n");
+                    setStatus("xHCI: Invalid extended capabilities");
+                } else {
+                    KernelLogSink::print("[xHCI] Firmware ownership handoff timed out; controller left untouched.\r\n");
+                    setStatus("xHCI: Firmware ownership timeout");
+                }
+                return false;
+            }
+            if (ownershipCapabilityFound)
+                KernelLogSink::print("[xHCI] USBLEGSUP handoff complete.\r\n");
         }
 
         // 3. Controller Stop & Reset
         uint32_t usbCmd = mmioRead32(m_opBase + 0x00);
         if ((usbCmd & 1) != 0) {
             mmioWrite32(m_opBase + 0x00, usbCmd & ~1U); // Stop
-            uint64_t ws = rdtsc();
-            while ((rdtsc() - ws) < 32ULL * 3800000ULL) {
-                if ((mmioRead32(m_opBase + 0x04) & 1) != 0) break; // Halted
+            micant::hal::amd64::BootstrapClockStatus clockStatus{};
+            const bool halted = pollUntilDeadline(40, [&]() noexcept {
+                return (mmioRead32(m_opBase + 0x04) & 1) != 0;
+            }, clockStatus);
+            if (!halted && clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+                setStatus("xHCI: HAL clock unavailable during stop");
+                return false;
+            }
+            if (!halted) {
+                setStatus("xHCI: Stop timeout");
+                return false;
             }
         }
 
         mmioWrite32(m_opBase + 0x00, 2); // Issue HCRST
-        uint64_t rstStart = rdtsc();
-        while ((rdtsc() - rstStart) < 100ULL * 3800000ULL) {
-            uint32_t cmdNow = mmioRead32(m_opBase + 0x00);
-            uint32_t stsNow = mmioRead32(m_opBase + 0x04);
-            if ((cmdNow & 2) == 0 && (stsNow & (1 << 11)) == 0) break; // Reset done & CNR==0
-            delayMs(1);
+        micant::hal::amd64::BootstrapClockStatus clockStatus{};
+        const bool resetComplete = pollUntilDeadline(100, [&]() noexcept {
+            const uint32_t cmdNow = mmioRead32(m_opBase + 0x00);
+            const uint32_t stsNow = mmioRead32(m_opBase + 0x04);
+            return (cmdNow & 2) == 0 && (stsNow & (1 << 11)) == 0;
+        }, clockStatus);
+        if (!resetComplete && clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during reset");
+            return false;
+        }
+        if (!resetComplete) {
+            setStatus("xHCI: Reset timeout");
+            return false;
         }
         KernelLogSink::print("[xHCI] Host controller reset complete.\r\n");
 
-        // Re-assert Bus Master and Memory Space after HCRST
-        pciWrite32(0, 20, 0, 0x04, pciRead32(0, 20, 0, 0x04) | 0x0006);
+        // HAL/Io owns command-register transitions after reset. This legacy
+        // body is unreachable until resource and DMA services are integrated.
 
         // 4. Configure Controller (Scratchpad, DCBAA, Command Ring, Event Ring)
         uint32_t hcsparams2 = mmioRead32(m_mmioBase + 0x08);
@@ -625,9 +809,17 @@ public:
 
         // Start Controller
         mmioWrite32(m_opBase + 0x00, 1); // USBCMD: Run/Stop = 1
-        uint64_t runStart = rdtsc();
-        while ((rdtsc() - runStart) < 50ULL * 3800000ULL) {
-            if ((mmioRead32(m_opBase + 0x04) & 1) == 0) break; // HCH == 0
+        micant::hal::amd64::BootstrapClockStatus clockStatus{};
+        const bool controllerStarted = pollUntilDeadline(50, [&]() noexcept {
+            return (mmioRead32(m_opBase + 0x04) & 1) == 0; // HCH == 0
+        }, clockStatus);
+        if (!controllerStarted && clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during start");
+            return false;
+        }
+        if (!controllerStarted) {
+            setStatus("xHCI: Start timeout");
+            return false;
         }
         KernelLogSink::print("[xHCI] Controller started (USBCMD=1, USBSTS=0).\r\n");
 
@@ -646,15 +838,17 @@ public:
         }
 
         // Wait 200ms for power stabilization and device pull-up debounce
-        delayMs(200);
+        if (waitForMilliseconds(200) != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during port power-up");
+            return false;
+        }
 
         uint32_t targetPort = 0;
         uint64_t targetPortAddr = 0;
         uint32_t targetPortSC = 0;
 
-        // Scan ports for connected device (CCS bit 0 == 1) with up to 2.0s timeout
-        for (int retry = 0; retry < 40 && targetPort == 0; ++retry) {
-            if (retry > 0) delayMs(50);
+        // Scan ports with one calibrated absolute 2-second deadline.
+        const bool foundPort = pollUntilDeadline(2000, [&]() noexcept {
             for (uint32_t p = 1; p <= maxPorts; ++p) {
                 uint64_t pAddr = m_opBase + 0x400 + (static_cast<uint64_t>(p - 1) * 0x10);
                 uint32_t sc = mmioRead32(pAddr);
@@ -670,6 +864,11 @@ public:
                     break;
                 }
             }
+            return targetPort != 0;
+        }, clockStatus);
+        if (!foundPort && clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during port debounce");
+            return false;
         }
 
         if (targetPort == 0) {
@@ -678,19 +877,39 @@ public:
             return false;
         }
 
+        // Require the selected connection to survive the debounce interval
+        // before issuing the port reset.
+        if (waitForMilliseconds(50) != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during port debounce");
+            return false;
+        }
+        targetPortSC = mmioRead32(targetPortAddr);
+        if ((targetPortSC & 1U) == 0) {
+            setStatus("xHCI: Port disconnected during debounce");
+            return false;
+        }
+
         m_targetPort = targetPort;
 
         // Reset Target Port (Port Reset bit 4, Port Power bit 9)
         mmioWrite32(targetPortAddr, (targetPortSC & ~0x00FE1E00U) | (1 << 4) | (1 << 9));
-        delayMs(50);
-        uint64_t portWait = rdtsc();
-        while ((rdtsc() - portWait) < 150ULL * 3800000ULL) {
+        const bool portResetComplete = pollUntilDeadline(150, [&]() noexcept {
             uint32_t sc = mmioRead32(targetPortAddr);
-            if ((sc & (1 << 4)) == 0 && (sc & (1 << 1)) != 0) break; // PR==0, PED==1
-            delayMs(2);
+            if ((sc & (1 << 4)) == 0 && (sc & (1 << 1)) != 0) {
+                return true;
+            }
+            return false;
+        }, clockStatus);
+        if (!portResetComplete && clockStatus != micant::hal::amd64::BootstrapClockStatus::Success) {
+            setStatus("xHCI: HAL clock unavailable during port reset");
+            return false;
         }
 
         uint32_t finalPortSC = mmioRead32(targetPortAddr);
+        if (!portResetComplete) {
+            setStatus("xHCI: Port reset timeout");
+            return false;
+        }
         uint8_t speed = static_cast<uint8_t>((finalPortSC >> 10) & 0x0F);
         KernelLogSink::print("[xHCI] Port ");
         KernelLogSink::printDec(targetPort);
@@ -846,181 +1065,66 @@ public:
         return m_transferEventsCount;
     }
 
-    [[nodiscard]] uint8_t getLastKeyCode() const noexcept {
-        return m_lastKeyCode;
-    }
+    // Non-blocking keyboard transport contract for the canonical USB/HID consumer.
+    // This deliberately does not translate boot-report bytes into key events:
+    // the caller must parse the real keyboard HID descriptor and invoke
+    // HIDClass/KbdHid. This prototype does not configure a mouse endpoint.
+    // STATUS_PENDING means no matching transfer is complete.
+    [[nodiscard]] micant::NtStatus tryDequeueKeyboardReport(
+        uint8_t* report, size_t reportCapacity, XhciHidReportCompletion& completion) noexcept {
+        completion = {};
+        if (!report || reportCapacity == 0)
+            return micant::NtStatus::InvalidParameter;
+        if (!m_initialized || !m_keyboardReady)
+            return micant::NtStatus::DeviceNotReady;
+        if (reportCapacity < sizeof(s_kbdReport))
+            return micant::NtStatus::BufferTooSmall;
 
-    /**
-     * @brief Non-blocking poll for incoming USB HID keyboard events from JViewer KVM.
-     */
-    bool tryGetKeystroke(char& outChar, bool& outTab, bool& outEsc, bool& outEnter) noexcept {
-        outChar = 0;
-        outTab = false;
-        outEsc = false;
-        outEnter = false;
+        // Consume unrelated controller events without claiming them as input.
+        for (size_t scanned = 0; scanned < 64; ++scanned) {
+            volatile XhciTrb* trb = &s_evtRing[m_evtDequeue];
+            const uint32_t control = trb->control;
+            if ((control & 1) != m_evtCycle) return micant::NtStatus::Pending;
 
-        if (!m_keyboardReady) {
-            static uint64_t s_lastInitRetryTsc = 0;
-            uint64_t now = rdtsc();
-            if (now - s_lastInitRetryTsc > 2000ULL * 3800000ULL) {
-                s_lastInitRetryTsc = now;
-                initialize();
-            }
-            return false;
-        }
+            const uint32_t type = (control >> 10) & 0x3F;
+            const uint32_t slot = (control >> 24) & 0xFF;
+            const uint32_t endpoint = (control >> 16) & 0x1F;
+            const uint32_t status = trb->status;
+            const uint32_t completionCode = (status >> 24) & 0xFF;
+            const uint32_t residual = status & 0x00FFFFFF;
 
-        volatile XhciTrb* trb = &s_evtRing[m_evtDequeue];
-        uint32_t ctrl = trb->control;
+            m_evtDequeue = (m_evtDequeue + 1) % 64;
+            if (m_evtDequeue == 0) m_evtCycle ^= 1;
+            mmioWrite64(m_rtBase + 0x38, toPhys(&s_evtRing[m_evtDequeue]) | (1ULL << 3));
 
-        if ((ctrl & 1) != m_evtCycle) {
-            return false; // No new event in ring
-        }
+            if (type != TRB_TRANSFER_EVENT || slot != m_slotId || endpoint != 3)
+                continue;
 
-        uint32_t type = (ctrl >> 10) & 0x3F;
-        uint32_t slot = (ctrl >> 24) & 0xFF;
-        uint32_t ep   = (ctrl >> 16) & 0x1F;
+            ++m_transferEventsCount;
+            completion.slotId = static_cast<uint8_t>(slot);
+            completion.endpointId = static_cast<uint8_t>(endpoint);
+            completion.completionCode = static_cast<uint8_t>(completionCode);
 
-        // Advance Event Ring Dequeue Pointer
-        m_evtDequeue = (m_evtDequeue + 1) % 64;
-        if (m_evtDequeue == 0) m_evtCycle ^= 1;
-        mmioWrite64(m_rtBase + 0x38, toPhys(&s_evtRing[m_evtDequeue]) | (1ULL << 3));
+            // A transfer event reports residual bytes, not bytes completed.
+            // Success and Short Packet are the only report-bearing completions.
+            if ((completionCode != 1 && completionCode != 13) || residual > sizeof(s_kbdReport))
+                return micant::NtStatus::Unsuccessful;
+            const size_t transferred = sizeof(s_kbdReport) - residual;
+            if (transferred == 0) return micant::NtStatus::Unsuccessful;
 
-        if (type == TRB_TRANSFER_EVENT && slot == m_slotId && ep == 3) {
-            m_transferEventsCount++;
 #if defined(__x86_64__)
             __asm__ __volatile__("mfence" ::: "memory");
 #endif
-            uint8_t modifiers = s_kbdReport[0];
+            for (size_t i = 0; i < transferred; ++i)
+                report[i] = s_kbdReport[i];
+            completion.bytesTransferred = transferred;
 
-            // Scan bytes 2..7 for pressed key
-            uint8_t keycode = 0;
-            for (int i = 2; i < 8; ++i) {
-                if (s_kbdReport[i] != 0) {
-                    keycode = s_kbdReport[i];
-                    break;
-                }
-            }
-
-            // Re-arm Transfer Ring for next keypress immediately
+            // Re-arm only a report-bearing completion. Error/stall paths need
+            // endpoint recovery by the eventual USBD owner before resubmission.
             queueKeyboardTransfer();
-
-            // Real-time visual telemetry for bare-metal screen
-            char statusBuf[64];
-            copyStr(statusBuf, "USB: AMI Kbd (E:", sizeof(statusBuf));
-            size_t sbl = strLen(statusBuf);
-            if (m_transferEventsCount >= 100) statusBuf[sbl++] = '0' + static_cast<char>((m_transferEventsCount / 100) % 10);
-            if (m_transferEventsCount >= 10) statusBuf[sbl++] = '0' + static_cast<char>((m_transferEventsCount / 10) % 10);
-            statusBuf[sbl++] = '0' + static_cast<char>(m_transferEventsCount % 10);
-            statusBuf[sbl++] = ' ';
-            statusBuf[sbl++] = 'K';
-            statusBuf[sbl++] = ':';
-            const char hexChars[] = "0123456789ABCDEF";
-            statusBuf[sbl++] = hexChars[(keycode >> 4) & 0xF];
-            statusBuf[sbl++] = hexChars[keycode & 0xF];
-            statusBuf[sbl++] = ')';
-            statusBuf[sbl] = '\0';
-            setStatus(statusBuf);
-
-            if (keycode == 0) {
-                // Key-up event (all keys released)
-                m_lastKeyCode = 0;
-                return false;
-            }
-
-            // Debounce
-            if (keycode == m_lastKeyCode) {
-                return false;
-            }
-            m_lastKeyCode = keycode;
-
-            bool isShift = (modifiers & 0x22) != 0; // Left Shift (0x02) or Right Shift (0x20)
-
-            // Standard USB HID Usage Page 7 Decoding
-            // Hardware Reboot detection: Ctrl+Alt+Del (JViewer macro / physical keyboard)
-            bool isCtrl = (modifiers & 0x11) != 0; // Left Ctrl (0x01) or Right Ctrl (0x10)
-            bool isAlt  = (modifiers & 0x44) != 0; // Left Alt (0x04) or Right Alt (0x40)
-            if (isCtrl && isAlt && (keycode == 0x4C || keycode == 0x63)) {
-                outEsc = true;
-                outChar = 27;
-                return true;
-            }
-
-            // Function Keys F1-F12 (USB HID Usage 0x3A - 0x45)
-            // F1=0x3A, F2=0x3B, F3=0x3C ... F12=0x45
-            if (keycode >= 0x3A && keycode <= 0x45) {
-                outChar = static_cast<char>(0x80 + (keycode - 0x3A + 1)); // 0x81 .. 0x8C
-                return true;
-            }
-
-            // Ctrl combinations (e.g. Ctrl+S = 19, Ctrl+C = 3)
-            if (isCtrl && (keycode >= 0x04 && keycode <= 0x1D)) {
-                outChar = static_cast<char>(1 + (keycode - 0x04));
-                return true;
-            }
-
-            if (keycode == 0x2B) { // TAB
-                outTab = true;
-                outChar = '\t';
-                return true;
-            }
-            if (keycode == 0x28) { // ENTER
-                outEnter = true;
-                outChar = '\r';
-                return true;
-            }
-            if (keycode == 0x29) { // ESC
-                outEsc = true;
-                outChar = 27;
-                return true;
-            }
-            if (keycode == 0x2A) { // BACKSPACE
-                outChar = '\b';
-                return true;
-            }
-            if (keycode == 0x2C) { // SPACE
-                outChar = ' ';
-                return true;
-            }
-
-            // Letters a-z (0x04 to 0x1D)
-            if (keycode >= 0x04 && keycode <= 0x1D) {
-                char baseChar = static_cast<char>('a' + (keycode - 0x04));
-                if (isShift) {
-                    baseChar = static_cast<char>('A' + (keycode - 0x04));
-                }
-                outChar = baseChar;
-                return true;
-            }
-
-            // Numbers 1-9, 0 (0x1E to 0x27)
-            if (keycode >= 0x1E && keycode <= 0x26) {
-                if (!isShift) {
-                    outChar = static_cast<char>('1' + (keycode - 0x1E));
-                } else {
-                    const char shiftNums[] = "!@#$%^&*";
-                    outChar = shiftNums[keycode - 0x1E];
-                }
-                return true;
-            }
-            if (keycode == 0x27) { // '0'
-                outChar = isShift ? ')' : '0';
-                return true;
-            }
-
-            // Symbols
-            if (keycode == 0x2D) { outChar = isShift ? '_' : '-'; return true; }
-            if (keycode == 0x2E) { outChar = isShift ? '+' : '='; return true; }
-            if (keycode == 0x2F) { outChar = isShift ? '{' : '['; return true; }
-            if (keycode == 0x30) { outChar = isShift ? '}' : ']'; return true; }
-            if (keycode == 0x31) { outChar = isShift ? '|' : '\\'; return true; }
-            if (keycode == 0x33) { outChar = isShift ? ':' : ';'; return true; }
-            if (keycode == 0x34) { outChar = isShift ? '"' : '\''; return true; }
-            if (keycode == 0x36) { outChar = isShift ? '<' : ','; return true; }
-            if (keycode == 0x37) { outChar = isShift ? '>' : '.'; return true; }
-            if (keycode == 0x38) { outChar = isShift ? '?' : '/'; return true; }
+            return micant::NtStatus::Success;
         }
-
-        return false;
+        return micant::NtStatus::Pending;
     }
 };
 

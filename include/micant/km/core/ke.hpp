@@ -156,6 +156,13 @@ inline void KeLowerIrql(KIRQL newIrql) noexcept {
     return g_CurrentCpu.processorNumber;
 }
 
+// Executive-facing clock queries. These return false when the bare-metal HAL
+// has no calibrated counter or UTC seed; callers must propagate that failure.
+[[nodiscard]] bool KeQuerySystemTime100ns(uint64_t& systemTime100ns) noexcept;
+[[nodiscard]] bool KeQueryUptime100ns(uint64_t& uptime100ns) noexcept;
+[[nodiscard]] bool KeQueryPerformanceCounterValue(
+    uint64_t& counter, uint64_t& frequency) noexcept;
+
 [[nodiscard]] inline KThread* KeGetCurrentThread() noexcept {
     return g_CurrentCpu.currentThread;
 }

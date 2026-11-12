@@ -7124,9 +7124,13 @@ inline NtStatus WINAPI NtQuerySystemInformationEx(uint32_t /*SystemInformationCl
     return NtStatus::Success;
 }
 
-inline NtStatus WINAPI NtQuerySystemTime(int64_t* SystemTime) noexcept {
-    if (SystemTime) *SystemTime = 133500000000000000LL;
-    return NtStatus::Success;
+inline NtStatus WINAPI NtQuerySystemTime(LargeInteger* SystemTime) noexcept {
+    if (!SystemTime) return NtStatus::AccessViolation;
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtQuerySystemTime,
+        .arg1 = reinterpret_cast<uint64_t>(SystemTime)
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
 }
 
 inline NtStatus WINAPI NtQueryTimer(HANDLE /*TimerHandle*/, uint32_t /*TimerInformationClass*/, void* /*TimerInformation*/, ULONG /*TimerInformationLength*/, ULONG* ReturnLength) noexcept {
@@ -8338,9 +8342,9 @@ inline LONG64 WINAPI RtlInterlockedExpModulo64(LONG64 volatile* Destination, LON
         LONG64 e = Exponent;
         while (e > 0) {
             if (e & 1) {
-                res = static_cast<LONG64>((static_cast<unsigned __int64>(res) * static_cast<unsigned __int64>(b)) % static_cast<unsigned __int64>(Modulus));
+                res = static_cast<LONG64>((static_cast<uint64_t>(res) * static_cast<uint64_t>(b)) % static_cast<uint64_t>(Modulus));
             }
-            b = static_cast<LONG64>((static_cast<unsigned __int64>(b) * static_cast<unsigned __int64>(b)) % static_cast<unsigned __int64>(Modulus));
+            b = static_cast<LONG64>((static_cast<uint64_t>(b) * static_cast<uint64_t>(b)) % static_cast<uint64_t>(Modulus));
             e >>= 1;
         }
         if (atomicDest->compare_exchange_weak(current, res, std::memory_order_seq_cst, std::memory_order_relaxed)) {

@@ -12,6 +12,18 @@
 
 extern "C" {
 
+// System time services use the same AMD64 syscall ABI as the rest of NTDLL.
+// SSNs match the canonical Ke service table consumed by the bare-metal path.
+__attribute__((naked)) __declspec(dllexport) int32_t NtQuerySystemTime(
+    int64_t* /*systemTime*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x47, %eax\n\tsyscall\n\tretq\n");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtQueryPerformanceCounter(
+    int64_t* /*performanceCounter*/, int64_t* /*performanceFrequency*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x31, %eax\n\tsyscall\n\tretq\n");
+}
+
 // Local freestanding runtime primitives. They satisfy this DLL's compiler
 // calls and are not additional public NTDLL exports.
 void* memset(void* dest, int c, size_t n) {
@@ -1443,6 +1455,13 @@ __attribute__((naked)) __declspec(dllexport) int32_t NtCreateFile(
     __asm__ __volatile__("movq %rcx, %r10\nmovl $0x55, %eax\nsyscall\nretq\n");
 }
 
+__attribute__((naked)) __declspec(dllexport) int32_t NtDeviceIoControlFile(
+    void* /*fileHandle*/, void* /*event*/, void* /*apcRoutine*/, void* /*apcContext*/,
+    void* /*ioStatusBlock*/, uint32_t /*ioControlCode*/, const void* /*inputBuffer*/,
+    uint32_t /*inputBufferLength*/, void* /*outputBuffer*/, uint32_t /*outputBufferLength*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\nmovl $0x07, %eax\nsyscall\nretq\n");
+}
+
 __attribute__((naked)) __declspec(dllexport) int32_t NtMapViewOfSection(
     void* /*sectionHandle*/, void* /*processHandle*/, void** /*baseAddress*/,
     uintptr_t /*zeroBits*/, size_t /*commitSize*/, int64_t* /*sectionOffset*/,
@@ -1470,14 +1489,35 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtReadFile(
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
-        "movq $0x24, %rax\n\t"
-        "movq %rdx, %r8\n\t"
+        "movq $0x06, %rax\n\t"
         "syscall\n\t"
         "ret\n\t"
     );
 #else
     return 0;
 #endif
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtSetInformationFile(
+    void* /*handle*/, void* /*status*/, void* /*information*/, uint32_t /*length*/, uint32_t /*class*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x27, %eax\n\tsyscall\n\tretq\n");
+}
+__attribute__((naked)) __declspec(dllexport) int32_t NtCreateIoCompletion(
+    void** /*handle*/, uint32_t /*access*/, void* /*attributes*/, uint32_t /*concurrency*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x164, %eax\n\tsyscall\n\tretq\n");
+}
+__attribute__((naked)) __declspec(dllexport) int32_t NtSetIoCompletion(
+    void* /*handle*/, uintptr_t /*key*/, uintptr_t /*context*/, int32_t /*status*/, uintptr_t /*information*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x165, %eax\n\tsyscall\n\tretq\n");
+}
+__attribute__((naked)) __declspec(dllexport) int32_t NtRemoveIoCompletion(
+    void* /*handle*/, uintptr_t* /*key*/, uintptr_t* /*context*/, void* /*status*/, int64_t* /*timeout*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x09, %eax\n\tsyscall\n\tretq\n");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtCancelIoFileEx(
+    void* /*fileHandle*/, void* /*requestStatus*/, void* /*ioStatus*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x90, %eax\n\tsyscall\n\tretq\n");
 }
 
 __attribute__((naked)) __declspec(dllexport) uint64_t NtWriteFile(

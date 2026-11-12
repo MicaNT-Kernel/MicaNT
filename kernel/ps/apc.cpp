@@ -6,15 +6,13 @@
 #include <new>
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ps_objects.hpp"
+#include "micant/km/core/passive_work.hpp"
 
 extern "C" uint32_t MicantAmd64XsaveMask;
 
 namespace {
 constexpr uint32_t ThreadSetContext = 0x0010;
 
-void releaseQueuedUserApc(micant::ke::KAPC* apc) noexcept {
-    delete apc;
-}
 }
 
 namespace micant::sys {
@@ -55,7 +53,7 @@ NtStatus NtQueueApcThread(Handle threadHandle, uintptr_t apcRoutine,
             status = NtStatus::NoMemory;
         } else {
             ke::KeInitializeApc(apc, kernelThread, ke::ApcEnvironment::OriginalApcEnvironment,
-                nullptr, releaseQueuedUserApc,
+                ke::passive_work::ownedUserApcKernel, ke::passive_work::ownedUserApcRundown,
                 reinterpret_cast<ke::PKNORMAL_ROUTINE>(apcRoutine), ke::UserMode, normalContext);
             if (!ke::KeInsertQueueApc(apc, systemArgument1, systemArgument2)) {
                 delete apc;

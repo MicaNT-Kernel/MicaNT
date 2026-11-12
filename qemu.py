@@ -223,6 +223,10 @@ def write_manifest(cxx: Path, *, runtime_selftest: bool = False) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", help="LLVM-MinGW x86_64-w64-mingw32-clang++ path")
+    parser.add_argument(
+        "--cmake-build-dir", type=Path,
+        help="use a separate CMake build directory while sharing boot artifact output paths",
+    )
     parser.add_argument("--ovmf-code", type=Path, help="OVMF x86_64 code firmware image")
     parser.add_argument("--display", help="QEMU display backend (auto-detected by default)")
     parser.add_argument("--timeout", type=int, default=90, help="boot milestone timeout")
@@ -244,6 +248,11 @@ def main() -> int:
         help="verify real kernel C++ construction/teardown, then halt instead of booting the desktop",
     )
     args = parser.parse_args()
+    global BUILD_DIR
+    if args.cmake_build_dir:
+        BUILD_DIR = args.cmake_build_dir.expanduser()
+        if not BUILD_DIR.is_absolute():
+            BUILD_DIR = ROOT / BUILD_DIR
 
     if args.timeout <= 0 or args.stable_seconds <= 0:
         parser.error("--timeout and --stable-seconds must be positive")
@@ -277,12 +286,12 @@ def main() -> int:
                 str(BUILD_DIR),
                 "-G",
                 "Ninja",
-                "-DCMAKE_SYSTEM_NAME=Windows",
+                f"-DCMAKE_TOOLCHAIN_FILE={ROOT / 'cmake' / 'toolchains' / 'llvm-mingw.cmake'}",
                 f"-DCMAKE_C_COMPILER={cc}",
                 f"-DCMAKE_CXX_COMPILER={cxx}",
                 "-DCMAKE_BUILD_TYPE=Release",
-                "-DMICANT_ENABLE_BAREMETAL=ON",
-                f"-DMICANT_BOOTSTRAP_RUNTIME_SELFTEST={'ON' if args.runtime_selftest else 'OFF'}",
+                "-DMICANT_ENABLE_BAREMETAL:BOOL=ON",
+                f"-DMICANT_BOOTSTRAP_RUNTIME_SELFTEST:BOOL={'ON' if args.runtime_selftest else 'OFF'}",
             ]
         )
         if args.check_explorer:
@@ -303,6 +312,10 @@ def main() -> int:
                 "ntoskrnl_core_baremetal",
                 "bootx64_efi",
                 "virtio_gpu_boot",
+                "ahci_oem_boot",
+                "xhci_oem_boot",
+                "i210_oem_boot",
+                "virtio_net_oem_boot",
             ]
         )
         write_manifest(cxx, runtime_selftest=args.runtime_selftest)

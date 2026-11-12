@@ -1,4 +1,5 @@
 #include "micant/km/core/sync.hpp"
+#include "micant/km/core/timer.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ob.hpp"
 #include "micant/km/executive/ps.hpp"
@@ -10,14 +11,113 @@ namespace {
 constexpr uint32_t EventModifyState = 0x0002;
 constexpr uint32_t EventAllAccess = 0x001F0003;
 ob::ObjectType eventType;
+ob::ObjectType timerType;
 using Event = sync::detail::BootstrapEvent;
 
 void deleteEvent(ob::ObjectHeader* header) { header->as<Event>()->~Event(); }
+void deleteTimer(ob::ObjectHeader* header) {
+    auto* timer = header->as<timer::KTIMER>();
+    if (!ke::clock_timer::cancelAndRemoveDpc(timer->deadline)) __builtin_trap();
+    timer->~KTIMER();
+}
+ob::ObjectHeader* deferredTimers{};
+ke::passive_work::Item timerDeleteWork{};
+void finishDeferredTimers(void*) noexcept {
+    for (;;) {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        auto* header = deferredTimers;
+        if (header) deferredTimers = header->deferredDeleteNext;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        if (!header) return;
+        header->deferredDeleteNext = nullptr;
+        ob::ObFinishDelete(header);
+    }
+}
+bool deferTimerDelete(ob::ObjectHeader* header) noexcept {
+    if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL && !ke::g_CurrentCpu.dpcRoutineActive)
+        return false;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    header->deferredDeleteNext = deferredTimers;
+    deferredTimers = header;
+    timerDeleteWork.routine = finishDeferredTimers;
+    if (!timerDeleteWork.queued && !ke::passive_work::queue(timerDeleteWork)) __builtin_trap();
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return true;
+}
 }
 
 void initializeBootstrapEventServices() noexcept {
     eventType.typeId = ob::ObjectTypeId::Event;
     eventType.deleteProcedure = deleteEvent;
+    timerType.typeId = ob::ObjectTypeId::Timer;
+    timerType.deleteProcedure = deleteTimer;
+    timerType.deferDelete = deferTimerDelete;
+}
+
+NtStatus NtCreateTimer(Handle* out, uint32_t access, ObjectAttributes* attributes, uint32_t type) {
+    constexpr uint32_t TimerAllAccess = 0x001F0003;
+    if (!out || type > 1) return NtStatus::InvalidParameter;
+    if (attributes) {
+        if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
+        if (attributes->rootDirectory || attributes->objectName || attributes->attributes ||
+            attributes->securityDescriptor || attributes->securityQualityOfService)
+            return NtStatus::NotImplemented;
+    }
+    if (access & ~TimerAllAccess) return NtStatus::NotImplemented;
+    void* body{};
+    ob::ObjectHeader* header{};
+    auto status = ob::ObCreateObject(ob::KernelMode, &timerType, nullptr, sizeof(timer::KTIMER), &body, &header);
+    if (status != NtStatus::Success) return status;
+    auto* object = new (body) timer::KTIMER{};
+    timer::KeInitializeTimerEx(object, static_cast<timer::TimerType>(type));
+    status = ob::detail::currentHandleTable().createHandle(header, *out, access);
+    ob::ObDereferenceObject(header);
+    return status;
+}
+
+NtStatus NtSetTimer(Handle handle, LargeInteger* dueTime, void* apc, void* context,
+                    bool resume, uint32_t period, bool* previousState) {
+    if (!dueTime) return NtStatus::InvalidParameter;
+    if (apc || context || resume || period > INT32_MAX) return NtStatus::NotImplemented;
+    ob::HandleTable* table{}; Handle raw{}; ob::ObjectHeader* header{};
+    auto status = ob::detail::resolveHandle(handle, table, raw);
+    if (status == NtStatus::Success)
+        status = ob::ObReferenceObjectByHandle(raw, *table, 0x0002, &timerType, &header);
+    if (status != NtStatus::Success) return status;
+    auto* object = header->as<timer::KTIMER>();
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const bool priorState = timer::KeReadStateTimer(object);
+    bool previousInsertion{};
+    status = timer::KiSetTimerChecked(object, *dueTime, period, nullptr, previousInsertion);
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    if (status == NtStatus::Success && previousState) *previousState = priorState;
+    ob::ObDereferenceObject(header);
+    return status;
+}
+
+NtStatus NtCancelTimer(Handle handle, bool* currentState) {
+    ob::HandleTable* table{}; Handle raw{}; ob::ObjectHeader* header{};
+    auto status = ob::detail::resolveHandle(handle, table, raw);
+    if (status == NtStatus::Success)
+        status = ob::ObReferenceObjectByHandle(raw, *table, 0x0002, &timerType, &header);
+    if (status != NtStatus::Success) return status;
+    auto* object = header->as<timer::KTIMER>();
+    if (currentState) *currentState = timer::KeReadStateTimer(object);
+    (void)timer::KeCancelTimer(object);
+    ob::ObDereferenceObject(header);
+    return NtStatus::Success;
+}
+
+NtStatus referenceBootstrapEventForIo(Handle handle, ob::ObjectHeader*& header) noexcept {
+    header = nullptr;
+    ob::HandleTable* table{}; Handle raw{};
+    auto status = ob::detail::resolveHandle(handle, table, raw);
+    if (status == NtStatus::Success)
+        status = ob::ObReferenceObjectByHandle(raw, *table, EventModifyState, &eventType, &header);
+    return status;
 }
 
 uint32_t bootstrapEventObjectCount() noexcept {
@@ -80,6 +180,8 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
     Event* waitObject{};
     if (header->type == &eventType) {
         waitObject = header->as<Event>();
+    } else if (header->type == &timerType) {
+        waitObject = &header->as<timer::KTIMER>()->event;
     } else if (ps::detail::isProcessObject(*header)) {
         waitObject = &header->as<ps::EProcess>()->terminationEvent();
     } else if (ps::detail::isThreadObject(*header)) {
