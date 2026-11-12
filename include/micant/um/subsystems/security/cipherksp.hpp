@@ -143,6 +143,7 @@ inline constexpr const wchar_t* BCRYPT_ASCON_PHOTON_HASH_ALGORITHM        = L"AS
 inline constexpr const wchar_t* BCRYPT_PHOTON_ALGORITHM                    = L"PHOTON";
 inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_XOF_ALGORITHM         = L"ASCON-KECCAK-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_HASH_ALGORITHM        = L"ASCON-KECCAK-HASH";
+inline constexpr const wchar_t* BCRYPT_KECCAK_ALGORITHM                   = L"KECCAK";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM        = L"ASCON-XOODYAK-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM       = L"ASCON-XOODYAK-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM  = L"ASCON-KANGAROOTWELVE-XOF";
@@ -14224,7 +14225,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_PHOTON_XOF_ALGORITHM || algId == L"ASCON-PHOTON-XOF" || algId == L"ascon-photon-xof" || algId == L"Ascon-Photon-Xof" || algId == L"ASCONPHOTON-XOF") return CryptoAlgorithm::AsconPhotonXof;
     if (algId == BCRYPT_ASCON_PHOTON_HASH_ALGORITHM || algId == L"ASCON-PHOTON-HASH" || algId == L"ascon-photon-hash" || algId == L"Ascon-Photon-Hash" || algId == L"ASCONPHOTON-HASH" || algId == BCRYPT_PHOTON_ALGORITHM || algId == L"PHOTON" || algId == L"photon") return CryptoAlgorithm::AsconPhotonHash;
     if (algId == BCRYPT_ASCON_KECCAK_XOF_ALGORITHM || algId == L"ASCON-KECCAK-XOF" || algId == L"ascon-keccak-xof" || algId == L"Ascon-Keccak-Xof" || algId == L"ASCONKECCAK-XOF") return CryptoAlgorithm::AsconKeccakXof;
-    if (algId == BCRYPT_ASCON_KECCAK_HASH_ALGORITHM || algId == L"ASCON-KECCAK-HASH" || algId == L"ascon-keccak-hash" || algId == L"Ascon-Keccak-Hash" || algId == L"ASCONKECCAK-HASH") return CryptoAlgorithm::AsconKeccakHash;
+    if (algId == BCRYPT_ASCON_KECCAK_HASH_ALGORITHM || algId == L"ASCON-KECCAK-HASH" || algId == L"ascon-keccak-hash" || algId == L"Ascon-Keccak-Hash" || algId == L"ASCONKECCAK-HASH" || algId == BCRYPT_KECCAK_ALGORITHM || algId == L"KECCAK" || algId == L"keccak") return CryptoAlgorithm::AsconKeccakHash;
     if (algId == BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM || algId == L"ASCON-XOODYAK-XOF" || algId == L"ascon-xoodyak-xof" || algId == L"Ascon-Xoodyak-Xof" || algId == L"ASCONXOODYAK-XOF") return CryptoAlgorithm::AsconXoodyakXof;
     if (algId == BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM || algId == L"ASCON-XOODYAK-HASH" || algId == L"ascon-xoodyak-hash" || algId == L"Ascon-Xoodyak-Hash" || algId == L"ASCONXOODYAK-HASH") return CryptoAlgorithm::AsconXoodyakHash;
     if (algId == BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM || algId == L"ASCON-KANGAROOTWELVE-XOF" || algId == L"ascon-kangarootwelve-xof" || algId == L"Ascon-KangarooTwelve-Xof" || algId == L"ASCONKANGAROOTWELVE-XOF") return CryptoAlgorithm::AsconKangarooTwelveXof;

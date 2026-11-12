@@ -9890,6 +9890,26 @@ inline CHAR WINAPI InterlockedAndNotModulo8(CHAR volatile* Destination, CHAR Val
     return ntdll::RtlInterlockedAndNotModulo8(Destination, Value, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedXorNotModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo64(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedXorNotModulo(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo32(Destination, Value, Modulus);
+}
+
+inline LONG WINAPI InterlockedXorNotModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo32(Destination, Value, Modulus);
+}
+
+inline SHORT WINAPI InterlockedXorNotModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo16(Destination, Value, Modulus);
+}
+
+inline CHAR WINAPI InterlockedXorNotModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo8(Destination, Value, Modulus);
+}
+
 inline LONG64 WINAPI InterlockedOrNotModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedOrNotModulo64(Destination, Value, Modulus);
 }
@@ -10138,6 +10158,26 @@ inline CHAR WINAPI InterlockedAndNotModulo8(CHAR volatile* Destination, CHAR Val
     return ntdll::RtlInterlockedAndNotModulo8(Destination, ValA, ValB, ValC, Modulus);
 }
 
+inline LONG64 WINAPI InterlockedXorNotModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo64(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline LONG WINAPI InterlockedXorNotModulo(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo32(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline LONG WINAPI InterlockedXorNotModulo32(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo32(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline SHORT WINAPI InterlockedXorNotModulo16(SHORT volatile* Destination, SHORT ValA, SHORT ValB, SHORT ValC, USHORT Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo16(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline CHAR WINAPI InterlockedXorNotModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
+    return ntdll::RtlInterlockedXorNotModulo8(Destination, ValA, ValB, ValC, Modulus);
+}
+
 inline LONG64 WINAPI InterlockedOrNotModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
     return ntdll::RtlInterlockedOrNotModulo64(Destination, ValA, ValB, ValC, Modulus);
 }
@@ -10156,6 +10196,16 @@ inline SHORT WINAPI InterlockedOrNotModulo16(SHORT volatile* Destination, SHORT 
 
 inline CHAR WINAPI InterlockedOrNotModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
     return ntdll::RtlInterlockedOrNotModulo8(Destination, ValA, ValB, ValC, Modulus);
+}
+
+inline BOOL WINAPI GetPagefileWriteCoalescingAdaptiveBatchPacingTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COALESCING_ADAPTIVE_BATCH_PACING_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation(Info)) ? TRUE : FALSE;
+}
+
+inline BOOL WINAPI GetCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetry(ntdll::SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return FALSE;
+    return NT_SUCCESS(ntdll::RtlQuerySystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation(Info)) ? TRUE : FALSE;
 }
 
 inline BOOL WINAPI GetPagefileWriteCoalescingEnergyEfficiencyTelemetry(ntdll::SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION* Info) noexcept {
@@ -13003,6 +13053,17 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "InterlockedAndNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(InterlockedAndNotModulo32)));
     ldr.registerExport("kernel32.dll", "InterlockedAndNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, USHORT) noexcept>(InterlockedAndNotModulo16)));
     ldr.registerExport("kernel32.dll", "InterlockedAndNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, UCHAR) noexcept>(InterlockedAndNotModulo8)));
+    ldr.registerExport("kernel32.dll", "InterlockedXorNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, ULONG64) noexcept>(InterlockedXorNotModulo64)));
+    ldr.registerExport("kernel32.dll", "InterlockedXorNotModulo", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(InterlockedXorNotModulo)));
+    ldr.registerExport("kernel32.dll", "InterlockedXorNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(InterlockedXorNotModulo32)));
+    ldr.registerExport("kernel32.dll", "InterlockedXorNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, USHORT) noexcept>(InterlockedXorNotModulo16)));
+    ldr.registerExport("kernel32.dll", "InterlockedXorNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, UCHAR) noexcept>(InterlockedXorNotModulo8)));
+    ldr.registerExport("kernel32.dll", "InterlockedBitwiseXorNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, LONG64, LONG64, ULONG64) noexcept>(InterlockedXorNotModulo64)));
+    ldr.registerExport("kernel32.dll", "InterlockedBitwiseXorNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, LONG, LONG, ULONG) noexcept>(InterlockedXorNotModulo32)));
+    ldr.registerExport("kernel32.dll", "InterlockedBitwiseXorNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, SHORT, SHORT, USHORT) noexcept>(InterlockedXorNotModulo16)));
+    ldr.registerExport("kernel32.dll", "InterlockedBitwiseXorNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, CHAR, CHAR, UCHAR) noexcept>(InterlockedXorNotModulo8)));
+    ldr.registerExport("kernel32.dll", "GetPagefileWriteCoalescingAdaptiveBatchPacingTelemetry", reinterpret_cast<void*>(GetPagefileWriteCoalescingAdaptiveBatchPacingTelemetry));
+    ldr.registerExport("kernel32.dll", "GetCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetry", reinterpret_cast<void*>(GetCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetry));
     ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, ULONG64) noexcept>(InterlockedOrNotModulo64)));
     ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(InterlockedOrNotModulo)));
     ldr.registerExport("kernel32.dll", "InterlockedOrNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(InterlockedOrNotModulo32)));

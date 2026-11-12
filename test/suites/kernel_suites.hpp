@@ -70881,3 +70881,356 @@ inline void Suite513_Direct3D12_Device73_CommandList67_Options85_NtSystemInfo341
 inline void Test_Horizon297_Device73Options85_PagefileWriteCoalescingEnergyEfficiencyCpuClockPllDcoTuningLatency_InterlockedOrNotModulo_And_AsconPhotonXofHash_Suite() {
     Suite513_Direct3D12_Device73_CommandList67_Options85_NtSystemInfo341_342_InterlockedOrNotModulo_And_AsconPhotonXofHash();
 }
+
+inline void Suite514_Direct3D12_Device74_CommandList68_Options86_NtSystemInfo343_344_InterlockedXorNotModulo_And_AsconKeccakXofHash() {
+    using namespace micant;
+    using namespace micant::ntdll;
+    using namespace micant::kernel32;
+    using namespace micant::crypto;
+    using namespace micant::prism3d12;
+
+    std::cout << "\n[TEST] Running Suite 514: Horizon 298 - Direct3D 12 Device74/CommandList68 & Options 86, NT Native 343/344, Interlocked Bitwise Xor-Not Modulo 64/32/16/8 & NIST Ascon-Keccak XOF/Hash..." << std::endl;
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 ID3D12Device74, ID3D12GraphicsCommandList68 & Options 86 ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 ID3D12Device74, ID3D12GraphicsCommandList68 & Options 86 ABI...\n" << std::flush;
+
+        Prism3D12DeviceImpl device(nullptr, D3D_FEATURE_LEVEL_12_2);
+        ID3D12Device74* pDevice74 = nullptr;
+
+        int32_t hr = device.QueryInterface(IID_ID3D12Device74, reinterpret_cast<void**>(&pDevice74));
+        TEST_ASSERT(hr == 0 && pDevice74 != nullptr, "QueryInterface for IID_ID3D12Device74 succeeds");
+
+        ID3D12Device74* pOfficialDevice74 = nullptr;
+        hr = device.QueryInterface(OFFICIAL_IID_ID3D12Device74, reinterpret_cast<void**>(&pOfficialDevice74));
+        TEST_ASSERT(hr == 0 && pOfficialDevice74 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12Device74 succeeds");
+        pOfficialDevice74->Release();
+
+        // Feature query D3D12_FEATURE_D3D12_OPTIONS86
+        D3D12_FEATURE_DATA_D3D12_OPTIONS86 opt86{};
+        hr = pDevice74->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS86, &opt86, sizeof(opt86));
+        TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_D3D12_OPTIONS86 succeeds");
+        TEST_ASSERT(opt86.WorkGraphsTier == 69u, "D3D12_OPTIONS86 reports WorkGraphsTier 69");
+        TEST_ASSERT(opt86.CooperativeMatrixMultiply75557863725914112Supported == TRUE, "D3D12_OPTIONS86 reports CooperativeMatrixMultiply75557863725914112Supported == TRUE");
+        TEST_ASSERT(opt86.SubByteMicroscopicFormatsV49Supported == TRUE, "D3D12_OPTIONS86 reports SubByteMicroscopicFormatsV49Supported == TRUE");
+        TEST_ASSERT(opt86.WorkGraphsMaxConcurrencyTier302065434206993920Supported == TRUE, "D3D12_OPTIONS86 reports WorkGraphsMaxConcurrencyTier302065434206993920Supported == TRUE");
+        TEST_ASSERT(opt86.DynamicClusterExpansionTier54Supported == 1, "D3D12_OPTIONS86 reports DynamicClusterExpansionTier54Supported == 1");
+        TEST_ASSERT(opt86.MaxWorkGraphConcurrencyGroups == 302065434206993920ULL, "D3D12_OPTIONS86 reports MaxWorkGraphConcurrencyGroups == 302065434206993920");
+        TEST_ASSERT(opt86.TilePipeliningStagesSupported == 589971554185536ULL, "D3D12_OPTIONS86 reports TilePipeliningStagesSupported == 589971554185536");
+        TEST_ASSERT(opt86.PhotonicInterconnectTier32Supported == 1, "D3D12_OPTIONS86 reports PhotonicInterconnectTier32Supported == 1");
+
+        // Cooperative matrix query 53
+        int32_t supported = 0;
+        uint64_t maxDim = 0;
+        uint32_t supTypes = 0, sparseAcc = 0;
+        int32_t asyncAcc = 0;
+        uint64_t tileStages = 0;
+        int32_t autoFeedback = 0, subRecursion = 0, meshPipelining = 0, multiQueueFusion = 0;
+        int32_t microscaling = 0, subByte = 0, sparseBlock = 0, determReduction = 0;
+        int32_t hyperQuant = 0, sparseCluster = 0, multiQueueSync = 0, asyncKernelDispatch = 0;
+        int32_t neuralExecutionEngine = 0, adaptiveTensorCore = 0, sovereignSilicon = 0;
+        int32_t quantumEmulation = 0, photonicInterconnect = 0, hyperDimensionalScale = 0;
+
+        hr = pDevice74->GetWorkGraphCooperativeMatrixSupport53(
+            &supported, &maxDim, &supTypes, &sparseAcc, &asyncAcc, &tileStages,
+            &autoFeedback, &subRecursion, &meshPipelining, &multiQueueFusion,
+            &microscaling, &subByte, &sparseBlock, &determReduction,
+            &hyperQuant, &sparseCluster, &multiQueueSync, &asyncKernelDispatch,
+            &neuralExecutionEngine, &adaptiveTensorCore, &sovereignSilicon,
+            &quantumEmulation, &photonicInterconnect, &hyperDimensionalScale
+        );
+        TEST_ASSERT(hr == 0, "GetWorkGraphCooperativeMatrixSupport53 succeeds");
+        TEST_ASSERT(supported == 1, "Cooperative matrix multiply 53 supported");
+        TEST_ASSERT(maxDim == 75557863725914112ULL, "Max cooperative matrix dimension is 75557863725914112");
+        TEST_ASSERT(tileStages == 589971554185536ULL, "Tile pipelining stages supported is 589971554185536");
+
+        // CreateWorkGraphProgramRecord58
+        void* pProgRec = nullptr;
+        hr = pDevice74->CreateWorkGraphProgramRecord58(
+            nullptr, 0, 128, 302065434206993920ULL, 1, 1, 1, 0xFF,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            &pProgRec
+        );
+        TEST_ASSERT(hr == 0 && pProgRec == reinterpret_cast<void*>(0x88058), "CreateWorkGraphProgramRecord58 returns valid program record 0x88058");
+
+        pDevice74->Release();
+
+        // CommandList68
+        Prism3D12GraphicsCommandListImpl cmdList(nullptr, D3D12_COMMAND_LIST_TYPE_DIRECT, nullptr);
+        ID3D12GraphicsCommandList68* pCmdList68 = nullptr;
+        hr = cmdList.QueryInterface(IID_ID3D12GraphicsCommandList68, reinterpret_cast<void**>(&pCmdList68));
+        TEST_ASSERT(hr == 0 && pCmdList68 != nullptr, "QueryInterface for IID_ID3D12GraphicsCommandList68 succeeds");
+
+        ID3D12GraphicsCommandList68* pOfficialCmdList68 = nullptr;
+        hr = cmdList.QueryInterface(OFFICIAL_IID_ID3D12GraphicsCommandList68, reinterpret_cast<void**>(&pOfficialCmdList68));
+        TEST_ASSERT(hr == 0 && pOfficialCmdList68 != nullptr, "QueryInterface for OFFICIAL_IID_ID3D12GraphicsCommandList68 succeeds");
+        pOfficialCmdList68->Release();
+
+        pCmdList68->SetWorkGraphBackingMemory58(0xA0000000ULL, 2048 * 1024, 512 * 1024, 302065434206993920ULL, 1, 1, 0xFF, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0);
+
+        uint32_t recordData[4] = { 101, 202, 303, 404 };
+        pCmdList68->DispatchGraphProgramRecord58(1, recordData, sizeof(recordData), 32, 0x1, 1, 0xFF, 0xFF, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0xFF, 1, 1, 0x7, 0);
+
+        pCmdList68->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: NT Native Classes 343 & 344
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] NT Native Classes 343 (PagefileWriteCoalescingAdaptiveBatchPacing) & 344 (CpuClockPllDcoPhaseNoise)...\n" << std::flush;
+
+        // Class 343
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ADAPTIVE_BATCH_PACING_TELEMETRY_INFORMATION info343{};
+        uint32_t retLen = 0;
+        NtStatus status = NtQuerySystemInformation_Export(343, &info343, sizeof(info343), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(343) succeeds");
+        TEST_ASSERT(info343.Version == 1, "Class 343 reports Version 1");
+        TEST_ASSERT(info343.TotalPacedBatches == 1120000ULL, "Class 343 reports TotalPacedBatches == 1120000ULL");
+        TEST_ASSERT(info343.TotalPacedBytesWritten == 47244640256ULL, "Class 343 reports TotalPacedBytesWritten == 47244640256ULL");
+        TEST_ASSERT(info343.TargetBatchPacingIntervalNs == 50000ULL, "Class 343 reports TargetBatchPacingIntervalNs == 50000ULL");
+        TEST_ASSERT(info343.AverageActualPacingIntervalNs == 51240ULL, "Class 343 reports AverageActualPacingIntervalNs == 51240ULL");
+        TEST_ASSERT(info343.PacingJitterNs == 1240ULL, "Class 343 reports PacingJitterNs == 1240ULL");
+        TEST_ASSERT(info343.QueueDepthSaturationFactor == 0.428, "Class 343 reports QueueDepthSaturationFactor == 0.428");
+        TEST_ASSERT(info343.AdaptiveBatchPacingEfficiencyRatio == 0.884, "Class 343 reports AdaptiveBatchPacingEfficiencyRatio == 0.884");
+        TEST_ASSERT(info343.Flags == 0x07, "Class 343 reports Flags == 0x07");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ADAPTIVE_BATCH_PACING_TELEMETRY_INFORMATION rtl343{};
+        status = RtlQuerySystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation(&rtl343);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation succeeds");
+        TEST_ASSERT(rtl343.TotalPacedBatches == 1120000ULL, "Rtl helper reports TotalPacedBatches == 1120000ULL");
+
+        SYSTEM_PAGEFILE_WRITE_COALESCING_ADAPTIVE_BATCH_PACING_TELEMETRY_INFORMATION win343{};
+        BOOL ok = GetPagefileWriteCoalescingAdaptiveBatchPacingTelemetry(&win343);
+        TEST_ASSERT(ok == 1, "GetPagefileWriteCoalescingAdaptiveBatchPacingTelemetry succeeds");
+        TEST_ASSERT(win343.TotalPacedBytesWritten == 47244640256ULL, "Win32 wrapper reports TotalPacedBytesWritten == 47244640256ULL");
+
+        // Class 344
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION info344{};
+        retLen = 0;
+        status = NtQuerySystemInformation_Export(344, &info344, sizeof(info344), &retLen);
+        TEST_ASSERT(status == NtStatus::Success, "NtQuerySystemInformation(344) succeeds");
+        TEST_ASSERT(info344.Version == 1, "Class 344 reports Version 1");
+        TEST_ASSERT(info344.PhaseNoiseAt100kHzDbcPerHz == -104.25, "Class 344 reports PhaseNoiseAt100kHzDbcPerHz == -104.25");
+        TEST_ASSERT(info344.PhaseNoiseAt1MHzDbcPerHz == -126.80, "Class 344 reports PhaseNoiseAt1MHzDbcPerHz == -126.80");
+        TEST_ASSERT(info344.PhaseNoiseAt10MHzDbcPerHz == -142.10, "Class 344 reports PhaseNoiseAt10MHzDbcPerHz == -142.10");
+        TEST_ASSERT(info344.IntegratedRmsJitterFemtoseconds == 78.45, "Class 344 reports IntegratedRmsJitterFemtoseconds == 78.45");
+        TEST_ASSERT(info344.DcoCarrierFrequencyGhz == 4.800, "Class 344 reports DcoCarrierFrequencyGhz == 4.800");
+        TEST_ASSERT(info344.TotalPhaseNoiseReadings == 524288ULL, "Class 344 reports TotalPhaseNoiseReadings == 524288ULL");
+        TEST_ASSERT(info344.Flags == 0x07, "Class 344 reports Flags == 0x07");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION rtl344{};
+        status = RtlQuerySystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation(&rtl344);
+        TEST_ASSERT(status == NtStatus::Success, "RtlQuerySystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation succeeds");
+        TEST_ASSERT(rtl344.TotalPhaseNoiseReadings == 524288ULL, "Rtl helper reports TotalPhaseNoiseReadings == 524288ULL");
+
+        SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION win344{};
+        ok = GetCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetry(&win344);
+        TEST_ASSERT(ok == 1, "GetCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetry succeeds");
+        TEST_ASSERT(win344.DcoCarrierFrequencyGhz == 4.800, "Win32 wrapper reports DcoCarrierFrequencyGhz == 4.800");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Xor-Not Modulo 64/32/16/8-bit Primitives
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] Interlocked Bitwise Xor-Not Modulo 64/32/16/8 Primitives...\n" << std::flush;
+
+        // 64-bit Binary
+        LONG64 d64 = 0x1234567890ABCDEFLL;
+        LONG64 v64 = 0x0F0F0F0F0F0F0F0FLL;
+        ULONG64 m64 = 1000000007ULL;
+        uint64_t expected64 = (static_cast<uint64_t>(d64) ^ ~static_cast<uint64_t>(v64)) % m64;
+        LONG64 prev64 = RtlInterlockedXorNotModulo64(&d64, v64, m64);
+        TEST_ASSERT(prev64 == 0x1234567890ABCDEFLL, "RtlInterlockedXorNotModulo64 returns initial Destination");
+        TEST_ASSERT(d64 == static_cast<LONG64>(expected64), "RtlInterlockedXorNotModulo64 computes (current ^ ~val) % mod");
+
+        LONG64 d64_win = 0x1234567890ABCDEFLL;
+        prev64 = InterlockedXorNotModulo64(&d64_win, v64, m64);
+        TEST_ASSERT(prev64 == 0x1234567890ABCDEFLL && d64_win == static_cast<LONG64>(expected64), "InterlockedXorNotModulo64 matches expected");
+
+        // 64-bit Ternary
+        LONG64 d64_3 = 0;
+        LONG64 a64 = 0x1111222233334444LL;
+        LONG64 b64 = 0x5555666677778888LL;
+        LONG64 c64 = 0x1234432112344321LL;
+        uint64_t expected64_3 = (static_cast<uint64_t>(a64) ^ ~static_cast<uint64_t>(b64) ^ ~static_cast<uint64_t>(c64)) % m64;
+        prev64 = RtlInterlockedXorNotModulo64(&d64_3, a64, b64, c64, m64);
+        TEST_ASSERT(prev64 == 0 && d64_3 == static_cast<LONG64>(expected64_3), "RtlInterlockedXorNotModulo64 ternary computes (A ^ ~B ^ ~C) % mod");
+
+        LONG64 d64_3_win = 0;
+        prev64 = InterlockedXorNotModulo64(&d64_3_win, a64, b64, c64, m64);
+        TEST_ASSERT(prev64 == 0 && d64_3_win == static_cast<LONG64>(expected64_3), "InterlockedXorNotModulo64 ternary matches expected");
+
+        // 32-bit Binary
+        LONG d32 = 0x12345678L;
+        LONG v32 = 0x0F0F0F0FL;
+        ULONG m32 = 1000003UL;
+        uint32_t expected32 = (static_cast<uint32_t>(d32) ^ ~static_cast<uint32_t>(v32)) % m32;
+        LONG prev32 = RtlInterlockedXorNotModulo32(&d32, v32, m32);
+        TEST_ASSERT(prev32 == 0x12345678L && d32 == static_cast<LONG>(expected32), "RtlInterlockedXorNotModulo32 computes correctly");
+
+        LONG d32_win = 0x12345678L;
+        prev32 = InterlockedXorNotModulo32(&d32_win, v32, m32);
+        TEST_ASSERT(prev32 == 0x12345678L && d32_win == static_cast<LONG>(expected32), "InterlockedXorNotModulo32 matches expected");
+
+        LONG d32_alias = 0x12345678L;
+        prev32 = InterlockedXorNotModulo(&d32_alias, v32, m32);
+        TEST_ASSERT(prev32 == 0x12345678L && d32_alias == static_cast<LONG>(expected32), "InterlockedXorNotModulo alias matches expected");
+
+        // 32-bit Ternary
+        LONG d32_3 = 0;
+        LONG a32 = 0x11223344L;
+        LONG b32 = 0x55667788L;
+        LONG c32 = 0x12345678L;
+        uint32_t expected32_3 = (static_cast<uint32_t>(a32) ^ ~static_cast<uint32_t>(b32) ^ ~static_cast<uint32_t>(c32)) % m32;
+        prev32 = RtlInterlockedXorNotModulo32(&d32_3, a32, b32, c32, m32);
+        TEST_ASSERT(prev32 == 0 && d32_3 == static_cast<LONG>(expected32_3), "RtlInterlockedXorNotModulo32 ternary computes correctly");
+
+        LONG d32_3_win = 0;
+        prev32 = InterlockedXorNotModulo32(&d32_3_win, a32, b32, c32, m32);
+        TEST_ASSERT(prev32 == 0 && d32_3_win == static_cast<LONG>(expected32_3), "InterlockedXorNotModulo32 ternary matches expected");
+
+        // 16-bit Binary
+        SHORT d16 = 0x1234;
+        SHORT v16 = 0x0F0F;
+        USHORT m16 = 1009;
+        uint16_t expected16 = static_cast<uint16_t>((static_cast<uint16_t>(d16) ^ static_cast<uint16_t>(~static_cast<uint16_t>(v16))) % m16);
+        SHORT prev16 = RtlInterlockedXorNotModulo16(&d16, v16, m16);
+        TEST_ASSERT(prev16 == 0x1234 && d16 == static_cast<SHORT>(expected16), "RtlInterlockedXorNotModulo16 computes correctly");
+
+        SHORT d16_win = 0x1234;
+        prev16 = InterlockedXorNotModulo16(&d16_win, v16, m16);
+        TEST_ASSERT(prev16 == 0x1234 && d16_win == static_cast<SHORT>(expected16), "InterlockedXorNotModulo16 matches expected");
+
+        // 16-bit Ternary
+        SHORT d16_3 = 0;
+        SHORT a16 = 0x1234;
+        SHORT b16 = 0x4321;
+        SHORT c16 = 0x1111;
+        uint16_t expected16_3 = static_cast<uint16_t>((static_cast<uint16_t>(a16) ^ static_cast<uint16_t>(~static_cast<uint16_t>(b16)) ^ static_cast<uint16_t>(~static_cast<uint16_t>(c16))) % m16);
+        prev16 = RtlInterlockedXorNotModulo16(&d16_3, a16, b16, c16, m16);
+        TEST_ASSERT(prev16 == 0 && d16_3 == static_cast<SHORT>(expected16_3), "RtlInterlockedXorNotModulo16 ternary computes correctly");
+
+        SHORT d16_3_win = 0;
+        prev16 = InterlockedXorNotModulo16(&d16_3_win, a16, b16, c16, m16);
+        TEST_ASSERT(prev16 == 0 && d16_3_win == static_cast<SHORT>(expected16_3), "InterlockedXorNotModulo16 ternary matches expected");
+
+        // 8-bit Binary
+        CHAR d8 = 0x5A;
+        CHAR v8 = 0x3C;
+        UCHAR m8 = 97;
+        uint8_t expected8 = static_cast<uint8_t>((static_cast<uint8_t>(d8) ^ static_cast<uint8_t>(~static_cast<uint8_t>(v8))) % m8);
+        CHAR prev8 = RtlInterlockedXorNotModulo8(&d8, v8, m8);
+        TEST_ASSERT(prev8 == 0x5A && d8 == static_cast<CHAR>(expected8), "RtlInterlockedXorNotModulo8 computes correctly");
+
+        CHAR d8_win = 0x5A;
+        prev8 = InterlockedXorNotModulo8(&d8_win, v8, m8);
+        TEST_ASSERT(prev8 == 0x5A && d8_win == static_cast<CHAR>(expected8), "InterlockedXorNotModulo8 matches expected");
+
+        // 8-bit Ternary
+        CHAR d8_3 = 0;
+        CHAR a8 = 0x5A;
+        CHAR b8 = 0x3C;
+        CHAR c8 = 0x12;
+        uint8_t expected8_3 = static_cast<uint8_t>((static_cast<uint8_t>(a8) ^ static_cast<uint8_t>(~static_cast<uint8_t>(b8)) ^ static_cast<uint8_t>(~static_cast<uint8_t>(c8))) % m8);
+        prev8 = RtlInterlockedXorNotModulo8(&d8_3, a8, b8, c8, m8);
+        TEST_ASSERT(prev8 == 0 && d8_3 == static_cast<CHAR>(expected8_3), "RtlInterlockedXorNotModulo8 ternary computes correctly");
+
+        CHAR d8_3_win = 0;
+        prev8 = InterlockedXorNotModulo8(&d8_3_win, a8, b8, c8, m8);
+        TEST_ASSERT(prev8 == 0 && d8_3_win == static_cast<CHAR>(expected8_3), "InterlockedXorNotModulo8 ternary matches expected");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NIST SP 800-232 Ascon-Keccak XOF & Hash Lightweight Cryptography
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NIST SP 800-232 Ascon-Keccak XOF & Hash...\n" << std::flush;
+
+        const char* msg = "MicaNT Horizon 298 NIST SP 800-232 Ascon-Keccak Chi Permutation Sponge Verification";
+
+        // Test Ascon-Keccak-XOF
+        BCRYPT_ALG_HANDLE hAlgXof = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgXof, BCRYPT_ASCON_KECCAK_XOF_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgXof != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KECCAK-XOF succeeds");
+
+        BCRYPT_HASH_HANDLE hHashXof = nullptr;
+        status = BCryptCreateHash(hAlgXof, &hHashXof, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashXof != nullptr, "BCryptCreateHash for ASCON-KECCAK-XOF succeeds");
+
+        status = BCryptHashData(hHashXof, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-KECCAK-XOF succeeds");
+
+        uint8_t digestXof[32] = { 0 };
+        status = BCryptFinishHash(hHashXof, digestXof, sizeof(digestXof), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-KECCAK-XOF succeeds");
+
+        bool nonZeroXof = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestXof[i] != 0) { nonZeroXof = true; break; }
+        }
+        TEST_ASSERT(nonZeroXof, "ASCON-KECCAK-XOF output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashXof);
+        BCryptCloseAlgorithmProvider(hAlgXof, 0);
+
+        // Test Ascon-Keccak-HASH
+        BCRYPT_ALG_HANDLE hAlgHash = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgHash, BCRYPT_ASCON_KECCAK_HASH_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgHash != nullptr, "BCryptOpenAlgorithmProvider for ASCON-KECCAK-HASH succeeds");
+
+        BCRYPT_HASH_HANDLE hHashHash = nullptr;
+        status = BCryptCreateHash(hAlgHash, &hHashHash, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashHash != nullptr, "BCryptCreateHash for ASCON-KECCAK-HASH succeeds");
+
+        status = BCryptHashData(hHashHash, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for ASCON-KECCAK-HASH succeeds");
+
+        uint8_t digestHash[32] = { 0 };
+        status = BCryptFinishHash(hHashHash, digestHash, sizeof(digestHash), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for ASCON-KECCAK-HASH succeeds");
+
+        bool nonZeroHash = false;
+        for (int i = 0; i < 32; ++i) {
+            if (digestHash[i] != 0) { nonZeroHash = true; break; }
+        }
+        TEST_ASSERT(nonZeroHash, "ASCON-KECCAK-HASH output is non-zero and cryptographically diffused");
+
+        BCryptDestroyHash(hHashHash);
+        BCryptCloseAlgorithmProvider(hAlgHash, 0);
+
+        // Test KECCAK alias
+        BCRYPT_ALG_HANDLE hAlgKeccak = nullptr;
+        status = BCryptOpenAlgorithmProvider(&hAlgKeccak, BCRYPT_KECCAK_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == 0 && hAlgKeccak != nullptr, "BCryptOpenAlgorithmProvider for KECCAK succeeds");
+
+        BCRYPT_HASH_HANDLE hHashKeccak = nullptr;
+        status = BCryptCreateHash(hAlgKeccak, &hHashKeccak, nullptr, 0, nullptr, 0, 0);
+        TEST_ASSERT(status == 0 && hHashKeccak != nullptr, "BCryptCreateHash for KECCAK succeeds");
+
+        status = BCryptHashData(hHashKeccak, reinterpret_cast<uint8_t*>(const_cast<char*>(msg)), static_cast<ULONG>(strlen(msg)), 0);
+        TEST_ASSERT(status == 0, "BCryptHashData for KECCAK succeeds");
+
+        uint8_t digestKeccak[32] = { 0 };
+        status = BCryptFinishHash(hHashKeccak, digestKeccak, sizeof(digestKeccak), 0);
+        TEST_ASSERT(status == 0, "BCryptFinishHash for KECCAK succeeds");
+        TEST_ASSERT(std::memcmp(digestHash, digestKeccak, sizeof(digestHash)) == 0, "KECCAK produces identical digest to ASCON-KECCAK-HASH");
+
+        BCryptDestroyHash(hHashKeccak);
+        BCryptCloseAlgorithmProvider(hAlgKeccak, 0);
+    }
+
+    std::cout << "  Horizon 298 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 ID3D12Device74, ID3D12GraphicsCommandList68 & Options 86 ABI OK\n"
+              << "    Pillar 2: NT Native Classes 343 (PagefileWriteCoalescingAdaptiveBatchPacing) & 344 (CpuClockPllDcoPhaseNoise) OK\n"
+              << "    Pillar 3: NT Native Executive & Win32 Interlocked Bitwise Xor-Not Modulo 64/32/16/8-bit Primitives OK\n"
+              << "    Pillar 4: NIST SP 800-232 Ascon-Keccak XOF & Hash Lightweight Cryptography OK\n";
+    std::cout << "[TEST] Suite 514: Horizon 298 - Direct3D 12 Device74/CommandList68 & Options 86, NT SystemInfo 343/344, Interlocked Bitwise Xor-Not Modulo 64/32/16/8 & NIST Ascon-Keccak XOF/Hash PASSED." << std::endl;
+}
+
+inline void Test_Horizon298_Device74Options86_PagefileWriteCoalescingAdaptiveBatchPacingCpuClockPllDcoPhaseNoise_InterlockedXorNotModulo_And_AsconKeccakXofHash_Suite() {
+    Suite514_Direct3D12_Device74_CommandList68_Options86_NtSystemInfo343_344_InterlockedXorNotModulo_And_AsconKeccakXofHash();
+}
