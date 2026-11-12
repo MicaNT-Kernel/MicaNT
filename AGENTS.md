@@ -169,23 +169,6 @@ Questa modalità non giustifica un arresto anticipato.
 Quando l'utente autorizzerà le verifiche, esegui i controlli pertinenti all'intero batch, evitando test ripetitivi.
 
 
-## 8. Definition of Done
-
-M4 non è completata finché:
-
-- I processi e i thread hanno ownership e riferimenti corretti.
-- La terminazione gestisce thread pronti, in esecuzione, bloccati e con APC pendenti.
-- Il rundown APC è implementato.
-- Gli oggetti processo e thread supportano le attese previste.
-- I waiter ricevono la segnalazione di terminazione.
-- Gli handle non vengono invalidati prematuramente.
-- La terminazione di altri processi applica i controlli necessari.
-- I percorsi di creazione e distruzione sono collegati alle implementazioni canoniche.
-- Il cleanup Mm/Ob/Ke/Ps è coerente.
-- Le verifiche richieste sono state eseguite, oppure sono esplicitamente differite su istruzione dell'utente.
-
-Non presentare un sottoinsieme come M4 completata.
-
 ## 9. Reporting senza interruzione
 
 Puoi inviare brevi aggiornamenti sul lavoro in corso, ma non trattarli come rapporti conclusivi.
