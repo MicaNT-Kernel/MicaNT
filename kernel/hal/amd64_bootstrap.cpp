@@ -1851,10 +1851,18 @@ bool verifyBootstrapTimerInterrupt() noexcept {
 bool startBootstrapSchedulerClock() noexcept {
     if (g_schedulerClockActive || !g_dispatch || !bootstrapPagingContext() ||
         !ke::KeGetCurrentThread()) return false;
-    uint64_t flags{};
+    uint64_t flags{}, cr4{};
     Idtr current{};
-    __asm__ __volatile__("pushfq; popq %0; sidt %1" : "=r"(flags), "=m"(current));
+    __asm__ __volatile__("pushfq; popq %0; sidt %1; movq %%cr4, %2"
+                         : "=r"(flags), "=m"(current), "=r"(cr4));
     if ((flags & (uint64_t{1} << 9)) || current.base != reinterpret_cast<uint64_t>(g_idt)) return false;
+    // The IRQ switch saves x87/SSE with FXSAVE, not AVX or other XSTATE.
+    // Do not enable persistent preemption while an unsaved component is active.
+    if (cr4 & (uint64_t{1} << 18)) {
+        uint32_t low{}, high{};
+        __asm__ __volatile__("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
+        if ((uint64_t{high} << 32 | low) & ~uint64_t{3}) return false;
+    }
     uint32_t eax = 1, ebx{}, ecx{}, edx{};
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
     if (!(edx & (1u << 9))) return false;

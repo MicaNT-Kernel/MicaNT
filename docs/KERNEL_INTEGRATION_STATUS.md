@@ -128,7 +128,10 @@ not calibrated, the legacy PIC and other local APIC vectors remain masked,
 and x2APIC is unsupported; if setup is unavailable the kernel logs that the
 clock is unavailable and keeps the previous interrupt-disabled loop. AVX and
 other extended XSAVE state, full hardware IRQL, calibrated time and general
-interrupt routing are not implemented.
+interrupt routing are not implemented. Persistent preemption is rejected if
+OSXSAVE is enabled with XCR0 components beyond x87/SSE, because the switch
+currently saves only FXSAVE state. QEMU exercised the supported configuration;
+the rejection path has not been exercised with extended state enabled.
 On each scheduler clock tick Ke now selects a higher-priority ready thread
 without waiting for quantum expiration; equal-priority threads rotate at the
 quantum boundary, and a lower-priority ready thread does not displace the
