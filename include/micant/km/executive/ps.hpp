@@ -9,21 +9,28 @@
 #include <memory>
 
 namespace micant::ke { struct KThread; }
+namespace micant::um { class NativeUserImageSet64; }
 namespace micant::ps {
 // Process-owned bootstrap address space. Lifecycle operations require the
 // single BSP with interrupts disabled; this is not yet NtCreateProcessEx.
 class EProcess {
 public:
-    EProcess() = default;
+    EProcess();
+    ~EProcess();
     EProcess(const EProcess&) = delete;
     EProcess& operator=(const EProcess&) = delete;
     NtStatus initializeAddressSpace() noexcept;
     NtStatus closeAddressSpace() noexcept;
     NtStatus attachThread(ke::KThread& thread) noexcept;
     NtStatus detachThread(ke::KThread& thread) noexcept;
-    // Initial single-thread process termination; successful termination does
-    // not return. The owning context performs deferred cleanup after switch.
+    // Bounded current-process termination; successful termination does not
+    // return. The owning context performs deferred cleanup after switch.
     NtStatus terminateCurrent(NtStatus exitStatus) noexcept;
+    // Internal BSP image loader; caller holds the active process root and
+    // keeps the supplied name and file bytes alive until process teardown.
+    NtStatus loadNativeImage(std::string_view name, std::span<const uint8_t> file) noexcept;
+    NtStatus finalizeNativeImages() noexcept;
+    [[nodiscard]] const um::NativeUserImageSet64* nativeImages() const noexcept { return images_.get(); }
     [[nodiscard]] mm::ProcessAddressSpace& getAddressSpace() noexcept { return addressSpace_; }
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
@@ -37,6 +44,8 @@ private:
     ke::KThread* threads_{nullptr};
     bool terminating_{false};
     NtStatus exitStatus_{NtStatus::Pending};
+    std::unique_ptr<um::NativeUserImageSet64> images_{};
+    bool imagesFinalized_{false};
 };
 
 // BSP bootstrap thread lifecycle; kernel stack and dispatcher context remain

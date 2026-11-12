@@ -233,11 +233,16 @@ Both CPL3 threads verify and change their own copy. The Ps reaper releases
 those allocations from another context; an invalid TLS layout exercises
 post-allocation rollback with PFN accounting. This is one TLS module without
 callbacks, with the image and index prepared by the test, not full loader
-initialization. The fixture's PE import directory is bound to NTDLL exports by
-the existing `NativeUserImageSet64` loader and the user code calls its IAT.
-The threads are created by the kernel test and both PE files are mapped into
-anonymous private pages by test orchestration: `SEC_IMAGE`, normal NTDLL startup,
-general process loader orchestration, TLS callbacks, native user-thread creation, normal preemption
+initialization. Ps now owns the bounded image-loading sequence: it allocates
+private Mm pages, uses the existing `NativeUserImageSet64` loader to map both
+PE files and bind the fixture's imports to NTDLL, and applies RO/RW/RX section
+protections before the user code calls its IAT. QEMU checks rejection of W+X,
+duplicate-name rollback with PFN accounting, and an unresolved import before
+loading the missing DLL. This loader borrows the names and source files, only
+supports contiguous page-aligned readable sections, and requires the active
+process root. The threads are still initiated by the kernel test; `SEC_IMAGE`,
+file-backed images, normal NTDLL startup, a PEB, TLS callbacks, native
+user-thread creation, normal preemption
 and general process termination remain outstanding. The test is not
 sufficient to declare M6 or M7 complete.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
@@ -251,7 +256,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
-| `python3 qemu.py --headless` | Passed; two Ps CPL3 contexts, manually mapped PE and NTDLL, Ps-created TLS templates and stacks, blocking events, exit status, failed-TLS rollback and PFN cleanup |
+| `python3 qemu.py --headless` | Passed; Ps image loading and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS failure rollback and PFN cleanup |
 | `llvm-readobj --coff-imports build/qemu-cmake-mingw/ntdll-process.dll` | Passed; no external PE imports |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
 

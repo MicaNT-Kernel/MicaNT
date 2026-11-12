@@ -5,6 +5,9 @@
 
 namespace micant::ps {
 
+EProcess::EProcess() = default;
+EProcess::~EProcess() = default;
+
 NtStatus EProcess::initializeAddressSpace() noexcept {
     using namespace hal::amd64;
     if (root_.pfn) return NtStatus::InvalidParameter;
@@ -21,6 +24,7 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     }
     terminating_ = false;
     exitStatus_ = NtStatus::Pending;
+    imagesFinalized_ = false;
     return NtStatus::Success;
 }
 
@@ -35,6 +39,7 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     const NtStatus status = addressSpace_.close();
     if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status != NtStatus::Success) return status;
+    images_.reset();
     if (!destroyProcessPagingRoot(root_)) return NtStatus::Unsuccessful;
     handles_.reset();
     return NtStatus::Success;

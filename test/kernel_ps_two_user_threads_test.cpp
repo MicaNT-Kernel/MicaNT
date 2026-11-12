@@ -91,10 +91,7 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             source.duplicateHandle(sourceSecond, process.getHandleTable(), eventSecond) != NtStatus::Success ||
             sys::NtClose(sourceFirst) != NtStatus::Success || sys::NtClose(sourceSecond) != NtStatus::Success ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
-        auto& space = process.getAddressSpace();
-        uintptr_t code{};
-        if (space.allocate(code, 3 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success)
-            return false;
+        const uintptr_t code = hal::amd64::BootstrapManagedBase;
         const auto* program = reinterpret_cast<const uint8_t*>(MicantTwoUserThreads);
         const size_t programSize = reinterpret_cast<uintptr_t>(MicantTwoUserThreadsEnd) - reinterpret_cast<uintptr_t>(program);
         if (!programSize || programSize > mm::PageSize4KB) return false;
@@ -162,45 +159,47 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             std::memcpy(rawData + 0x120 + i * 8, &rva, sizeof(rva));
             std::memcpy(rawData + 0x202 + i * 0x40, names[i], std::strlen(names[i]) + 1);
         }
-        static constinit um::NativeUserImageSet64 images{};
-        if (images.addModule("fixture.exe", std::span<const uint8_t>{file},
-                std::span<uint8_t>{reinterpret_cast<uint8_t*>(code), 3 * mm::PageSize4KB}, code) != NtStatus::Success)
+        const size_t beforeImage = mm::PfnDatabase::get().getActiveCount();
+        if (process.loadNativeImage("bad.exe", {}) != NtStatus::InvalidImageFormat ||
+            mm::PfnDatabase::get().getActiveCount() != beforeImage ||
+            process.loadNativeImage("fixture.exe", std::span<const uint8_t>{file}) != NtStatus::Success)
             return false;
-        const auto* image = images.module(0);
+        const auto* images = process.nativeImages();
+        const auto* image = images ? images->module(0) : nullptr;
         if (!image) return false;
         pe::PeImageView64::TlsLayout tlsLayout{};
         if (image->view.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
             tlsLayout.indexRva != 2 * mm::PageSize4KB + 0x50) return false;
         *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) = 0;
+        const auto unboundFirst = *reinterpret_cast<uint64_t*>(code + imports.firstThunk);
+        if (process.finalizeNativeImages() != NtStatus::NoSuchFile ||
+            *reinterpret_cast<uint64_t*>(code + imports.firstThunk) != unboundFirst) return false;
         pe::PeImageView64 dll;
         if (dll.inspect(std::span<const uint8_t>{nativeDll}) != NtStatus::Success) return false;
-        uintptr_t dllBase = dll.headers().optionalHeader.imageBase;
-        const size_t dllSize = dll.headers().optionalHeader.sizeOfImage;
-        if (space.allocate(dllBase, dllSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success ||
-            images.addModule("ntdll.dll", std::span<const uint8_t>{nativeDll},
-                std::span<uint8_t>{reinterpret_cast<uint8_t*>(dllBase), dllSize}, dllBase) != NtStatus::Success ||
-            images.bindAll() != NtStatus::Success)
+        const size_t beforeDuplicate = mm::PfnDatabase::get().getActiveCount();
+        if (process.loadNativeImage("fixture.exe", std::span<const uint8_t>{nativeDll}) != NtStatus::ObjectNameCollision ||
+            mm::PfnDatabase::get().getActiveCount() != beforeDuplicate) return false;
+        text.characteristics |= pe::IMAGE_SCN_MEM_WRITE;
+        std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
+        const auto wxStatus = process.loadNativeImage("wx.exe", std::span<const uint8_t>{file});
+        text.characteristics &= ~pe::IMAGE_SCN_MEM_WRITE;
+        std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
+        if (wxStatus != NtStatus::NotSupported || mm::PfnDatabase::get().getActiveCount() != beforeDuplicate)
+            return false;
+        if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::Success ||
+            process.finalizeNativeImages() != NtStatus::Success ||
+            hal::amd64::bootstrapUserRange(code, 1, true) ||
+            hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, true) ||
+            !hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, false, true) ||
+            !hal::amd64::bootstrapUserRange(code + 2 * mm::PageSize4KB, 1, true) ||
+            process.loadNativeImage("late.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::InvalidParameter)
             return false;
         for (size_t i = 0; i < 4; ++i) {
             uint64_t address{};
-            if (images.resolve("ntdll.dll", names[i], 0, address) != NtStatus::Success ||
+            if (images->resolve("ntdll.dll", names[i], 0, address) != NtStatus::Success ||
                 *reinterpret_cast<uint64_t*>(code + imports.firstThunk + i * 8) != address) return false;
         }
-        uint32_t old{};
-        if (space.protect(dllBase, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success) return false;
-        for (size_t i = 0; i < dll.headers().fileHeader.numberOfSections; ++i) {
-            const auto section = dll.section(i);
-            const size_t size = section.misc.virtualSize > section.sizeOfRawData ? section.misc.virtualSize : section.sizeOfRawData;
-            if (!size) continue;
-            if ((section.virtualAddress & mm::PageMask4KB) || size > SIZE_MAX - mm::PageMask4KB) return false;
-            const auto protection = (section.characteristics & pe::IMAGE_SCN_MEM_EXECUTE) ? mm::PAGE_EXECUTE_READ :
-                (section.characteristics & pe::IMAGE_SCN_MEM_WRITE) ? mm::PAGE_READWRITE : mm::PAGE_READONLY;
-            if (space.protect(dllBase + section.virtualAddress, (size + mm::PageMask4KB) & ~mm::PageMask4KB,
-                              protection, &old) != NtStatus::Success) return false;
-        }
-        if (space.protect(code, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success ||
-            space.protect(code + mm::PageSize4KB, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success) return false;
         const uintptr_t entry = code + nt.optionalHeader.addressOfEntryPoint;
         auto invalidTls = tlsLayout;
         invalidTls.callbackCount = 1;
