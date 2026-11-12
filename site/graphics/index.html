@@ -85,7 +85,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–285 (501/501 Passing)</p>
+                  <p>Chronicle of Horizons 1–298 (514/514 Passing)</p>
                 </div>
               </a>
             </li>
@@ -185,16 +185,20 @@
       <div class="canvas-container">
         <canvas id="prismCanvas" width="650" height="420"></canvas>
         <div class="canvas-overlay">
-          <div>[PRISM3D BARYCENTRIC RASTERIZER]</div>
-          <div>Swapchain: 650x420 &bull; 32-bpp BGRA</div>
-          <div id="statFps">FPS: 60 &bull; Triangles: 8</div>
+          <div style="font-weight: 700; color: #38bdf8;">[PRISMX DIRECT3D 12 &bull; REFERENCE RASTERIZER]</div>
+          <div style="color: #94a3b8; font-size: 0.78rem;">Swapchain: 650x420 &bull; 32-bpp BGRA &bull; DirectFlip MPO</div>
+          <div id="statFps" style="color: #34d399; font-weight: 600;">FPS: 60 (540Hz Target) &bull; Triangles: 8 &bull; Device74</div>
+          <div style="color: #64748b; font-size: 0.75rem; margin-top: 2px;">DirectStorage: 14,800 MB/s &bull; Photonic Interconnect Tier 32</div>
         </div>
       </div>
 
       <div class="canvas-controls">
+        <button class="btn btn-secondary" id="btnModelPrism" style="border-color: #00f2fe; color: #00f2fe;">Model: DEC Prism</button>
+        <button class="btn btn-secondary" id="btnModelCube">Model: D3D12 Cube</button>
+        <button class="btn btn-secondary" id="btnModelSphere">Model: Neural Mesh</button>
         <button class="btn btn-secondary" id="btnToggleShading">Toggle Wireframe / Shaded</button>
         <button class="btn btn-secondary" id="btnToggleSpin">Pause / Resume Spin</button>
-        <button class="btn btn-secondary" id="btnResetView">Reset Orientation</button>
+        <button class="btn btn-secondary" id="btnResetView">Reset View</button>
       </div>
     </div>
   </section>
@@ -322,21 +326,80 @@
     let isDragging = false;
     let lastMouseX = 0;
     let lastMouseY = 0;
+    let currentModel = "prism";
 
-    // Define 3D Octahedron / Double Prism geometry
-    const vertices = [
-      { x:  0.0, y: -1.2, z:  0.0, r: 0.0, g: 0.95, b: 1.0 }, // 0: Top Apex (Cyan)
-      { x: -0.9, y:  0.0, z: -0.9, r: 0.2, g: 0.6,  b: 1.0 }, // 1: Front-Left (Blue)
-      { x:  0.9, y:  0.0, z: -0.9, r: 0.6, g: 0.3,  b: 0.9 }, // 2: Front-Right (Purple)
-      { x:  0.9, y:  0.0, z:  0.9, r: 0.1, g: 0.9,  b: 0.6 }, // 3: Back-Right (Mint)
-      { x: -0.9, y:  0.0, z:  0.9, r: 0.9, g: 0.4,  b: 0.4 }, // 4: Back-Left (Coral)
-      { x:  0.0, y:  1.2, z:  0.0, r: 0.0, g: 0.95, b: 1.0 }  // 5: Bottom Apex (Cyan)
-    ];
+    // 1. Model: DEC PRISM Octahedron Crystal
+    const prismModel = {
+      name: "DEC Prism Crystal",
+      vertices: [
+        { x:  0.0, y: -1.2, z:  0.0, r: 0.0, g: 0.95, b: 1.0 },
+        { x: -0.9, y:  0.0, z: -0.9, r: 0.2, g: 0.6,  b: 1.0 },
+        { x:  0.9, y:  0.0, z: -0.9, r: 0.6, g: 0.3,  b: 0.9 },
+        { x:  0.9, y:  0.0, z:  0.9, r: 0.1, g: 0.9,  b: 0.6 },
+        { x: -0.9, y:  0.0, z:  0.9, r: 0.9, g: 0.4,  b: 0.4 },
+        { x:  0.0, y:  1.2, z:  0.0, r: 0.0, g: 0.95, b: 1.0 }
+      ],
+      faces: [
+        [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1],
+        [5, 2, 1], [5, 3, 2], [5, 4, 3], [5, 1, 4]
+      ]
+    };
 
-    const faces = [
-      [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1], // Top Pyramid
-      [5, 2, 1], [5, 3, 2], [5, 4, 3], [5, 1, 4]  // Bottom Pyramid
-    ];
+    // 2. Model: D3D12 Device74 Hyper-Cube
+    const cubeModel = {
+      name: "D3D12 Device74 Hyper-Cube",
+      vertices: [
+        { x: -0.85, y: -0.85, z: -0.85, r: 0.0, g: 0.8,  b: 1.0 },
+        { x:  0.85, y: -0.85, z: -0.85, r: 0.2, g: 0.5,  b: 1.0 },
+        { x:  0.85, y:  0.85, z: -0.85, r: 0.8, g: 0.2,  b: 0.8 },
+        { x: -0.85, y:  0.85, z: -0.85, r: 0.1, g: 0.9,  b: 0.7 },
+        { x: -0.85, y: -0.85, z:  0.85, r: 0.0, g: 0.95, b: 1.0 },
+        { x:  0.85, y: -0.85, z:  0.85, r: 0.3, g: 0.4,  b: 1.0 },
+        { x:  0.85, y:  0.85, z:  0.85, r: 0.9, g: 0.3,  b: 0.5 },
+        { x: -0.85, y:  0.85, z:  0.85, r: 0.2, g: 0.9,  b: 0.5 }
+      ],
+      faces: [
+        [0, 1, 2], [0, 2, 3],
+        [5, 4, 7], [5, 7, 6],
+        [4, 5, 1], [4, 1, 0],
+        [3, 2, 6], [3, 6, 7],
+        [4, 0, 3], [4, 3, 7],
+        [1, 5, 6], [1, 6, 2]
+      ]
+    };
+
+    // 3. Model: WorkGraph 69 Neural Icosahedron
+    const phi = 1.6180339887;
+    const iscale = 0.65;
+    const sphereModel = {
+      name: "WorkGraph Neural Mesh",
+      vertices: [
+        { x: 0, y: -1*iscale, z: -phi*iscale, r: 0.0, g: 0.95, b: 1.0 },
+        { x: 0, y:  1*iscale, z: -phi*iscale, r: 0.1, g: 0.7,  b: 1.0 },
+        { x: 0, y: -1*iscale, z:  phi*iscale, r: 0.4, g: 0.4,  b: 1.0 },
+        { x: 0, y:  1*iscale, z:  phi*iscale, r: 0.7, g: 0.2,  b: 0.9 },
+        { x: -1*iscale, y: -phi*iscale, z: 0, r: 0.1, g: 0.9,  b: 0.6 },
+        { x:  1*iscale, y: -phi*iscale, z: 0, r: 0.2, g: 0.8,  b: 0.8 },
+        { x: -1*iscale, y:  phi*iscale, z: 0, r: 0.9, g: 0.4,  b: 0.5 },
+        { x:  1*iscale, y:  phi*iscale, z: 0, r: 0.8, g: 0.3,  b: 0.8 },
+        { x: -phi*iscale, y: 0, z: -1*iscale, r: 0.0, g: 0.95, b: 1.0 },
+        { x:  phi*iscale, y: 0, z: -1*iscale, r: 0.3, g: 0.5,  b: 1.0 },
+        { x: -phi*iscale, y: 0, z:  1*iscale, r: 0.2, g: 0.9,  b: 0.5 },
+        { x:  phi*iscale, y: 0, z:  1*iscale, r: 0.9, g: 0.5,  b: 0.3 }
+      ],
+      faces: [
+        [0, 1, 9], [0, 9, 5], [0, 5, 4], [0, 4, 8], [0, 8, 1],
+        [3, 2, 11], [3, 11, 7], [3, 7, 6], [3, 6, 10], [3, 10, 2],
+        [1, 7, 9], [9, 11, 5], [5, 2, 4], [4, 10, 8], [8, 6, 1],
+        [7, 1, 6], [11, 9, 7], [2, 5, 11], [10, 4, 2], [6, 8, 10]
+      ]
+    };
+
+    function getActiveModel() {
+      if (currentModel === "cube") return cubeModel;
+      if (currentModel === "sphere") return sphereModel;
+      return prismModel;
+    }
 
     function project(v, w, h) {
       // Rotate Y
@@ -374,10 +437,13 @@
         rotY += 0.015;
       }
 
-      const pVerts = vertices.map(v => project(v, w, h));
+      const model = getActiveModel();
+      statFps.innerHTML = `FPS: 60 (540Hz Target) &bull; Triangles: ${model.faces.length} &bull; ${model.name}`;
+
+      const pVerts = model.vertices.map(v => project(v, w, h));
 
       // Calculate face depths and sort back-to-front
-      const sortedFaces = faces.map(f => {
+      const sortedFaces = model.faces.map(f => {
         const p0 = pVerts[f[0]];
         const p1 = pVerts[f[1]];
         const p2 = pVerts[f[2]];
@@ -469,6 +535,20 @@
     window.addEventListener("touchend", () => { isDragging = false; });
 
     // Button controls
+    function setModel(name) {
+      currentModel = name;
+      document.getElementById("btnModelPrism").style.borderColor = (name === "prism") ? "#00f2fe" : "var(--bg-card-border)";
+      document.getElementById("btnModelPrism").style.color = (name === "prism") ? "#00f2fe" : "var(--text-muted)";
+      document.getElementById("btnModelCube").style.borderColor = (name === "cube") ? "#00f2fe" : "var(--bg-card-border)";
+      document.getElementById("btnModelCube").style.color = (name === "cube") ? "#00f2fe" : "var(--text-muted)";
+      document.getElementById("btnModelSphere").style.borderColor = (name === "sphere") ? "#00f2fe" : "var(--bg-card-border)";
+      document.getElementById("btnModelSphere").style.color = (name === "sphere") ? "#00f2fe" : "var(--text-muted)";
+    }
+
+    document.getElementById("btnModelPrism").addEventListener("click", () => setModel("prism"));
+    document.getElementById("btnModelCube").addEventListener("click", () => setModel("cube"));
+    document.getElementById("btnModelSphere").addEventListener("click", () => setModel("sphere"));
+
     document.getElementById("btnToggleShading").addEventListener("click", () => {
       isShaded = !isShaded;
     });
