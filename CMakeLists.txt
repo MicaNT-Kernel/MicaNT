@@ -210,3 +210,40 @@ set_target_properties(win32_app PROPERTIES
 set_target_properties(prismx_3d_cube_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# ==============================================================================
+# Authentic Modular Windows NT Sysroot Assembly
+# Assembles the true freestanding PE32+ OS tree:
+#   - EFI/BOOT/BOOTX64.EFI          (Freestanding UEFI Boot Application)
+#   - Windows/System32/ntoskrnl.exe  (Native Ring 0 Microkernel Executive)
+#   - Windows/System32/*.dll        (Known DLLs: ntdll, kernel32, user32, etc.)
+#   - Windows/System32/drivers/*.sys(Kernel Drivers: AHCI, I210, TCP/IP, FS)
+#   - Windows/System32/*.exe        (Subsystem Services & Shell utilities)
+#   - Windows/System32/config/*     (Registry Hives: SYSTEM, SOFTWARE, SAM)
+#   - Windows/System32/drivers/etc/*(Network configuration databases)
+# ==============================================================================
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_FOUND)
+    add_custom_target(sysroot
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_sysroot.py"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Assembling authentic modular NT sysroot in build/sysroot"
+    )
+else()
+    add_custom_target(sysroot
+        COMMAND ${CMAKE_COMMAND} -E echo "Error: Python 3 is required to assemble the authentic modular sysroot."
+        COMMAND ${CMAKE_COMMAND} -E false
+        COMMENT "Python 3 required for sysroot target"
+    )
+endif()
+
+# Clean-Room Sentinel Audit Target
+find_program(NODE_EXECUTABLE node)
+if (NODE_EXECUTABLE)
+    add_custom_target(sentinel
+        COMMAND ${NODE_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/clean_room_sentinel.js"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Executing clean-room sentinel compliance and directory architecture audit"
+    )
+endif()
+

@@ -327,40 +327,71 @@ MicaNT/
 │   │   └── subsystems/         # Win32 Domains: winbase/, winuser/, graphics/, media/, net/, com/, security/, mgmt/
 │   └── ucrt/                   # Sovereign Universal C/C++ Runtime & SEH unwind engine
 └── test/
-    ├── test_runner.cpp         # 258-Suite Verification Runner
+    ├── test_runner.cpp         # 516-Suite Verification Runner
     └── suites/                 # Modular verification suites (kernel, drivers, subsystems, apps)
 ```
 
-### Prerequisites
-- Modern C++23 compiler: **LLVM Clang 17+**, **Visual Studio 2022/2026** (MSVC `/std:c++latest`), or **GCC 13+**
-- **CMake 3.25+** (or Ninja)
-- **Node.js** (for `tools/codegen/generate_syscalls.js` and `scripts/clean_room_sentinel.js`)
+For complete compilation flags, compiler prerequisites, and bare-metal deployment details, see the **[MicaNT Build & Architecture Guide (docs/BUILD.md)](docs/BUILD.md)**.
 
-### Build with CMake (Recommended)
+### Prerequisites
+- Modern C++23 compiler: **LLVM Clang 17+** (with `x86_64-w64-mingw32` target), **Visual Studio 2022/2026** (MSVC `/std:c++latest`), or **GCC 13+**
+- **CMake 3.25+** (or Ninja)
+- **Python 3.10+** (for sysroot assembly and QEMU orchestration)
+- **Node.js** (for `tools/codegen/generate_syscalls.js` and `scripts/clean_room_sentinel.js`)
+- **QEMU 8.0+** *(Optional)*: for bare-metal UEFI emulation
+
+### 1. Build Mode 1: Host Simulation & Test Battery
+Fast iterative developer harness that compiles the kernel executive in-process:
 ```bash
 cmake -B build -G Ninja
 cmake --build build
 ```
 
-### Run the 258-Suite Verification Battery & Clean-Room Sentinel
+Run all 516 Test Suites (100% Pass Rate Required):
 ```powershell
-# Run all 258 Test Suites (100% Pass Rate Required):
 .\build\bin\micant_tests.exe
 
-# Run the latest Horizon suite only:
+# Or run the latest Horizon suite only:
 .\build\bin\micant_tests.exe --last
-
-# Run Clean-Room & Directory Architecture Sentinel Audit:
-node scripts/clean_room_sentinel.js
 ```
 
-### Boot the Executive & Interactive Shell
+Boot the Executive & Interactive Command Prompt Shell:
 ```powershell
-# Boot the MicaNT Executive:
-.\build\bin\micant_kernel.exe
-
-# Or boot directly into the interactive MicaNT Command Prompt Shell:
 .\build\bin\micant_kernel.exe --shell
+```
+
+Run the PrismX Direct3D 12 Hardware Verification (DXR Raytracing & DirectML):
+```powershell
+.\build\bin\prismx_3d_cube_app.exe
+```
+
+### 2. Build Mode 2: Authentic Modular Kernel Sysroot
+Compiles the genuine freestanding PE32+ operating system tree with zero C runtime (`-nostdlib`) into `build/sysroot/`:
+```bash
+cmake --build build --target sysroot
+
+# Or directly:
+python scripts/build_sysroot.py
+```
+
+This populates the complete Windows NT disk hierarchy:
+- `build/sysroot/EFI/BOOT/BOOTX64.EFI` (Freestanding UEFI Boot Application)
+- `build/sysroot/Windows/System32/ntoskrnl.exe` (Ring 0 Native Kernel Executive)
+- `build/sysroot/Windows/System32/*.dll` (12 Known DLLs: ntdll, kernel32, user32, etc.)
+- `build/sysroot/Windows/System32/drivers/*.sys` (15 Kernel Drivers: AHCI, I210, TCP/IP, NTFS, ZFS)
+- `build/sysroot/Windows/System32/*.exe` (22 Subsystem Daemons & Tools: smss, csrss, cmd, explorer)
+- `build/sysroot/Windows/System32/config/` (Registry Hives: SYSTEM, SOFTWARE, SAM, SECURITY, DEFAULT)
+- `build/sysroot/Windows/System32/drivers/etc/` (Network databases: hosts, services, protocol)
+
+### 3. Booting in QEMU (UEFI)
+```powershell
+python scripts/run_qemu.py
+```
+
+### 4. Clean-Room Sentinel Audit
+```powershell
+cmake --build build --target sentinel
+# Or directly: node scripts/clean_room_sentinel.js
 ```
 
 ---
