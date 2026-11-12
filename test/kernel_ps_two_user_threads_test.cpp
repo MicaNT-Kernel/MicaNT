@@ -16,7 +16,7 @@ extern "C" {
 extern const uint8_t MicantTwoUserThreadsEnd[];
 __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexcept {
     __asm__ __volatile__(
-        "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\n"
+        "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\nmovq 24(%r14), %r15\n"
         "subq $0x60, %rsp\n"
         // Static PE TLS vector slot zero points to a private template copy.
         "movq %gs:0x58, %rax\ntestq %rax, %rax\njz 9f\nmovq (%rax), %rax\ntestq %rax, %rax\njz 9f\n"
@@ -30,23 +30,23 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "movq $0, 64(%rsp)\nmovq $4096, 72(%rsp)\n"
         "movq $0x3000, 32(%rsp)\nmovq $4, 40(%rsp)\n"
         "movq $-1, %rcx\nleaq 64(%rsp), %rdx\nxorl %r8d, %r8d\n"
-        "leaq 72(%rsp), %r9\ncallq *24(%r14)\n"
+        "leaq 72(%rsp), %r9\ncallq *0(%r15)\n"
         "testl %eax, %eax\njnz 9f\nmovq 64(%rsp), %rax\ntestq %rax, %rax\njz 9f\n"
         "movq $0x12345678, (%rax)\ncmpq $0x12345678, (%rax)\njne 9f\n"
         // Thread A blocks on the first event and later wakes thread B.
-        "movq %rbx, %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\ncallq *32(%r14)\n"
+        "movq %rbx, %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\ncallq *8(%r15)\n"
         "testl %eax, %eax\njnz 9f\nmovabsq $0x1111222233334444, %rax\n"
         "cmpq %gs:0x1480, %rax\njne 9f\n"
         "movq %gs:0x58, %rax\nmovq (%rax), %rax\ncmpq $0x1234, (%rax)\njne 9f\n"
-        "movq %r12, %rcx\nxorl %edx, %edx\ncallq *40(%r14)\n"
+        "movq %r12, %rcx\nxorl %edx, %edx\ncallq *16(%r15)\n"
         "testl %eax, %eax\njnz 9f\nmovl $0xc0000022, %edx\njmp 8f\n"
         // Thread B signals A, then blocks until A signals its event.
-        "3: movq %rbx, %rcx\nxorl %edx, %edx\ncallq *40(%r14)\n"
+        "3: movq %rbx, %rcx\nxorl %edx, %edx\ncallq *16(%r15)\n"
         "testl %eax, %eax\njnz 9f\n"
-        "movq %r12, %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\ncallq *32(%r14)\n"
+        "movq %r12, %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\ncallq *8(%r15)\n"
         "ud2\n"
         "9: movl $0xc000000d, %edx\n"
-        "8: movq $-1, %rcx\ncallq *48(%r14)\nud2\n");
+        "8: movq $-1, %rcx\ncallq *24(%r15)\nud2\n");
 }
 __asm__(".section .uthreads$z,\"xr\"\n.globl MicantTwoUserThreadsEnd\n"
         "MicantTwoUserThreadsEnd:\n.text\n");
@@ -120,6 +120,8 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
         nt.optionalHeader.numberOfRvaAndSizes = 16;
         nt.optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_TLS] =
             {2 * mm::PageSize4KB, sizeof(pe::ImageTlsDirectory64)};
+        nt.optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT] =
+            {2 * mm::PageSize4KB + 0x80, 2 * sizeof(pe::ImageImportDescriptor)};
         std::memcpy(file + 64, &nt, sizeof(nt));
         pe::ImageSectionHeader text{};
         text.virtualAddress = mm::PageSize4KB;
@@ -145,12 +147,29 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
         std::memcpy(file + 512 + mm::PageSize4KB, &tlsDirectory, sizeof(tlsDirectory));
         constexpr uint64_t seed = 0x8877665544332211ULL;
         std::memcpy(file + 512 + mm::PageSize4KB + 0x40, &seed, sizeof(seed));
-        pe::PeImageView64 image;
-        if (image.inspect(std::span<const uint8_t>{file}) != NtStatus::Success ||
-            image.map(std::span<uint8_t>{reinterpret_cast<uint8_t*>(code), 3 * mm::PageSize4KB}, code) != NtStatus::Success)
+        auto* rawData = file + 512 + mm::PageSize4KB;
+        pe::ImageImportDescriptor imports{};
+        imports.originalFirstThunk = 2 * mm::PageSize4KB + 0xe0;
+        imports.name = 2 * mm::PageSize4KB + 0xc0;
+        imports.firstThunk = 2 * mm::PageSize4KB + 0x120;
+        std::memcpy(rawData + 0x80, &imports, sizeof(imports));
+        constexpr char dllName[] = "ntdll.dll";
+        std::memcpy(rawData + 0xc0, dllName, sizeof(dllName));
+        constexpr const char* names[]{"NtAllocateVirtualMemory", "NtWaitForSingleObject", "NtSetEvent", "NtTerminateProcess"};
+        for (size_t i = 0; i < 4; ++i) {
+            const uint64_t rva = 2 * mm::PageSize4KB + 0x200 + i * 0x40;
+            std::memcpy(rawData + 0xe0 + i * 8, &rva, sizeof(rva));
+            std::memcpy(rawData + 0x120 + i * 8, &rva, sizeof(rva));
+            std::memcpy(rawData + 0x202 + i * 0x40, names[i], std::strlen(names[i]) + 1);
+        }
+        static constinit um::NativeUserImageSet64 images{};
+        if (images.addModule("fixture.exe", std::span<const uint8_t>{file},
+                std::span<uint8_t>{reinterpret_cast<uint8_t*>(code), 3 * mm::PageSize4KB}, code) != NtStatus::Success)
             return false;
+        const auto* image = images.module(0);
+        if (!image) return false;
         pe::PeImageView64::TlsLayout tlsLayout{};
-        if (image.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
+        if (image->view.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
             tlsLayout.indexRva != 2 * mm::PageSize4KB + 0x50) return false;
         *reinterpret_cast<uint32_t*>(code + tlsLayout.indexRva) = 0;
@@ -159,16 +178,14 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
         uintptr_t dllBase = dll.headers().optionalHeader.imageBase;
         const size_t dllSize = dll.headers().optionalHeader.sizeOfImage;
         if (space.allocate(dllBase, dllSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success ||
-            dll.map(std::span<uint8_t>{reinterpret_cast<uint8_t*>(dllBase), dllSize}, dllBase) != NtStatus::Success)
+            images.addModule("ntdll.dll", std::span<const uint8_t>{nativeDll},
+                std::span<uint8_t>{reinterpret_cast<uint8_t*>(dllBase), dllSize}, dllBase) != NtStatus::Success ||
+            images.bindAll() != NtStatus::Success)
             return false;
-        constexpr const char* names[]{"NtAllocateVirtualMemory", "NtWaitForSingleObject", "NtSetEvent", "NtTerminateProcess"};
-        uintptr_t exports[4]{};
         for (size_t i = 0; i < 4; ++i) {
-            pe::PeImageView64::ExportTarget target{};
-            if (dll.findExport(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(dllBase), dllSize},
-                               dllBase, names[i], 0, target) != NtStatus::Success || !target.address ||
-                !target.forwarder.empty()) return false;
-            exports[i] = target.address;
+            uint64_t address{};
+            if (images.resolve("ntdll.dll", names[i], 0, address) != NtStatus::Success ||
+                *reinterpret_cast<uint64_t*>(code + imports.firstThunk + i * 8) != address) return false;
         }
         uint32_t old{};
         if (space.protect(dllBase, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success) return false;
@@ -205,7 +222,7 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             arguments[0] = eventFirst;
             arguments[1] = eventSecond;
             arguments[2] = i;
-            for (size_t j = 0; j < 4; ++j) arguments[3 + j] = exports[j];
+            arguments[3] = code + imports.firstThunk;
         }
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
         first.kernelThread()->priority = second.kernelThread()->priority = boot->priority + 1;

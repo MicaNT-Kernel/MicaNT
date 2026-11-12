@@ -233,9 +233,11 @@ Both CPL3 threads verify and change their own copy. The Ps reaper releases
 those allocations from another context; an invalid TLS layout exercises
 post-allocation rollback with PFN accounting. This is one TLS module without
 callbacks, with the image and index prepared by the test, not full loader
-initialization. The threads are created by the kernel test and both PE files are manually
-mapped into anonymous private pages: `SEC_IMAGE`, normal NTDLL startup and
-import binding, TLS callbacks, native user-thread creation, normal preemption
+initialization. The fixture's PE import directory is bound to NTDLL exports by
+the existing `NativeUserImageSet64` loader and the user code calls its IAT.
+The threads are created by the kernel test and both PE files are mapped into
+anonymous private pages by test orchestration: `SEC_IMAGE`, normal NTDLL startup,
+general process loader orchestration, TLS callbacks, native user-thread creation, normal preemption
 and general process termination remain outstanding. The test is not
 sufficient to declare M6 or M7 complete.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
