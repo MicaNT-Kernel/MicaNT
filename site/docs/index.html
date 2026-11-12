@@ -155,7 +155,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–298 (514/514 Passing)</p>
+                  <p>Chronicle of Horizons 1–299 (515/515 Passing)</p>
                 </div>
               </a>
             </li>
@@ -235,7 +235,7 @@
   <section class="hero" style="padding: 70px 0 35px;">
     <div class="container">
       <div class="badge-row">
-        <div class="badge-pill highlight">514/514 Test Suites Passing (100%)</div>
+        <div class="badge-pill highlight">515/515 Test Suites Passing (100%)</div>
         <div class="badge-pill">ISO C++23 Clean-Room</div>
         <div class="badge-pill">Zero Telemetry</div>
       </div>
@@ -256,7 +256,7 @@
           <div class="docs-nav-title">Getting Started</div>
           <ul class="docs-nav-links">
             <li><a href="#quickstart">Quickstart &amp; Build</a></li>
-            <li><a href="#running-tests">Running 514 Suites</a></li>
+            <li><a href="#running-tests">Running 515 Suites</a></li>
             <li><a href="#qemu-boot">QEMU Bare-Metal Boot</a></li>
           </ul>
         </div>
@@ -320,21 +320,21 @@ cmake --build build --config Release</code></pre>
         <!-- Running Test Battery -->
         <section id="running-tests">
           <div class="docs-card">
-            <h2>Running the 514 Test Battery</h2>
+            <h2>Running the 515 Test Battery</h2>
             <p>
-              Every commit to MicaNT is validated against 514 comprehensive kernel test suites covering every layer from Ring 0 trap handling to Ring 3 Direct3D 12 Device74 command queues.
+              Every commit to MicaNT is validated against 515 comprehensive kernel test suites covering every layer from Ring 0 trap handling to Ring 3 Direct3D 12 Device75 command queues.
             </p>
-            <pre><code># Run all 514 test suites
+            <pre><code># Run all 515 test suites
 cd build
 .\bin\micant_tests.exe
 
-# Target specific Horizon suites (e.g. Suite 514)
-.\bin\micant_tests.exe --suite514
+# Target specific Horizon suites (e.g. Suite 515)
+.\bin\micant_tests.exe --suite515
 
 # Output:
-# [TEST] Suite 514: Horizon 298 - Direct3D 12 Device74/CommandList68 &amp; Options 86,
-# NT SystemInfo 343/344, Interlocked Bitwise Xor-Not Modulo 64/32/16/8 &amp; NIST Ascon-Keccak XOF/Hash PASSED.
-# Summary: 514 Passed, 0 Failed (100% Pass Rate)</code></pre>
+# [TEST] Suite 515: Horizon 299 - Direct3D 12 Device75/CommandList69 &amp; Options 87,
+# NT SystemInfo 345/346, Interlocked Bitwise Xnor-Not Modulo 64/32/16/8 &amp; NIST Ascon-Xoodyak XOF/Hash PASSED.
+# Summary: 515 Passed, 0 Failed (100% Pass Rate)</code></pre>
           </div>
         </section>
 
@@ -423,15 +423,15 @@ uint64_t interruptTime = pKUser-&gt;InterruptTime.QuadPart; // 0 Syscalls (0 ns 
         <!-- PrismX Direct3D 12 -->
         <section id="prismx-d3d12">
           <div class="docs-card">
-            <h2>PrismX Direct3D 12 Acceleration (Device74 &amp; Options 86)</h2>
+            <h2>PrismX Direct3D 12 Acceleration (Device75 &amp; Options 87)</h2>
             <p>
-              Horizon 298 advances MicaNT's graphics infrastructure to <code>ID3D12Device74</code>, <code>ID3D12GraphicsCommandList68</code>, and <code>D3D12_FEATURE_DATA_D3D12_OPTIONS86</code>:
+              Horizon 299 advances MicaNT's graphics infrastructure to <code>ID3D12Device75</code>, <code>ID3D12GraphicsCommandList69</code>, and <code>D3D12_FEATURE_DATA_D3D12_OPTIONS87</code>:
             </p>
             <ul style="color: var(--text-muted); line-height: 1.8; margin-left: 20px;">
-              <li><strong>Work Graphs Tier 69:</strong> Up to 302.065 Quadrillion max concurrency groups with asynchronous autonomous node scheduling.</li>
-              <li><strong>Cooperative Matrix Multiply:</strong> 75.558 Quadrillion parameter hyper-dimensional matrix acceleration.</li>
-              <li><strong>Tile Pipelining:</strong> 589.972 Trillion dynamic stages for sub-pixel geometry scan conversion.</li>
-              <li><strong>Photonic Interconnect Tier 32:</strong> Coherent optical interconnect simulation across multi-GPU fabrics.</li>
+              <li><strong>Work Graphs Tier 70:</strong> Up to 604.130 Quadrillion max concurrency groups with asynchronous autonomous node scheduling.</li>
+              <li><strong>Cooperative Matrix Multiply:</strong> 151.115 Quadrillion parameter hyper-dimensional matrix acceleration.</li>
+              <li><strong>Tile Pipelining:</strong> 1.179 Quadrillion dynamic stages for sub-pixel geometry scan conversion.</li>
+              <li><strong>Photonic Interconnect Tier 33:</strong> Coherent optical interconnect simulation across multi-GPU fabrics.</li>
             </ul>
           </div>
         </section>
@@ -444,6 +444,7 @@ uint64_t interruptTime = pKUser-&gt;InterruptTime.QuadPart; // 0 Syscalls (0 ns 
               MicaNT embeds post-quantum lightweight cryptographic suites directly into BCrypt CNG (<code>cipherksp.hpp</code>):
             </p>
             <ul style="color: var(--text-muted); line-height: 1.8; margin-left: 20px;">
+              <li><strong>Ascon-Xoodyak:</strong> 384-bit internal state words with Xoodyak non-linear cyclical shift permutation layer.</li>
               <li><strong>Ascon-Keccak:</strong> 320-bit internal state words with Keccak $\chi$ non-linear permutation layer.</li>
               <li><strong>Ascon-Photon:</strong> MDS branch number 8 matrix diffusion over $\mathbb{F}_{2^8}$.</li>
               <li><strong>Ascon-Subterranean, WAGE &amp; Esch:</strong> Sponge-based arbitrary output squeeze (XOF) and 256-bit digests.</li>

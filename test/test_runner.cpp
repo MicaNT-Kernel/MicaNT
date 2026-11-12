@@ -454,6 +454,10 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
+    if (argc > 1 && std::string(argv[1]) == "--suite515") {
+        RUN_TEST(Test_Horizon299_Device75Options87_PagefileWriteCoalescingDynamicBatchWindowCpuClockPllDcoTuningStepResolution_InterlockedXnorNotModulo_And_AsconXoodyakXofHash_Suite);
+        return g_FailedTests;
+    }
     if (argc > 1 && std::string(argv[1]) == "--suite514") {
         RUN_TEST(Test_Horizon298_Device74Options86_PagefileWriteCoalescingAdaptiveBatchPacingCpuClockPllDcoPhaseNoise_InterlockedXorNotModulo_And_AsconKeccakXofHash_Suite);
         return g_FailedTests;
@@ -2577,6 +2581,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon296_Device72Options84_PagefileWriteCompressionEnergySavingsCpuClockPllDcoFrequencyDrift_InterlockedAndNotModulo_And_AsconSubterraneanXofHash_Suite);
     RUN_TEST(Test_Horizon297_Device73Options85_PagefileWriteCoalescingEnergyEfficiencyCpuClockPllDcoTuningLatency_InterlockedOrNotModulo_And_AsconPhotonXofHash_Suite);
     RUN_TEST(Test_Horizon298_Device74Options86_PagefileWriteCoalescingAdaptiveBatchPacingCpuClockPllDcoPhaseNoise_InterlockedXorNotModulo_And_AsconKeccakXofHash_Suite);
+    RUN_TEST(Test_Horizon299_Device75Options87_PagefileWriteCoalescingDynamicBatchWindowCpuClockPllDcoTuningStepResolution_InterlockedXnorNotModulo_And_AsconXoodyakXofHash_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

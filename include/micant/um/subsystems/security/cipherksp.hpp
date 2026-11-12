@@ -146,6 +146,7 @@ inline constexpr const wchar_t* BCRYPT_ASCON_KECCAK_HASH_ALGORITHM        = L"AS
 inline constexpr const wchar_t* BCRYPT_KECCAK_ALGORITHM                   = L"KECCAK";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM        = L"ASCON-XOODYAK-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM       = L"ASCON-XOODYAK-HASH";
+inline constexpr const wchar_t* BCRYPT_XOODYAK_ALGORITHM                   = L"XOODYAK";
 inline constexpr const wchar_t* BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM  = L"ASCON-KANGAROOTWELVE-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_KANGAROOTWELVE_HASH_ALGORITHM = L"ASCON-KANGAROOTWELVE-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_MARS_XOF_ALGORITHM            = L"ASCON-MARS-XOF";
@@ -14227,7 +14228,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_KECCAK_XOF_ALGORITHM || algId == L"ASCON-KECCAK-XOF" || algId == L"ascon-keccak-xof" || algId == L"Ascon-Keccak-Xof" || algId == L"ASCONKECCAK-XOF") return CryptoAlgorithm::AsconKeccakXof;
     if (algId == BCRYPT_ASCON_KECCAK_HASH_ALGORITHM || algId == L"ASCON-KECCAK-HASH" || algId == L"ascon-keccak-hash" || algId == L"Ascon-Keccak-Hash" || algId == L"ASCONKECCAK-HASH" || algId == BCRYPT_KECCAK_ALGORITHM || algId == L"KECCAK" || algId == L"keccak") return CryptoAlgorithm::AsconKeccakHash;
     if (algId == BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM || algId == L"ASCON-XOODYAK-XOF" || algId == L"ascon-xoodyak-xof" || algId == L"Ascon-Xoodyak-Xof" || algId == L"ASCONXOODYAK-XOF") return CryptoAlgorithm::AsconXoodyakXof;
-    if (algId == BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM || algId == L"ASCON-XOODYAK-HASH" || algId == L"ascon-xoodyak-hash" || algId == L"Ascon-Xoodyak-Hash" || algId == L"ASCONXOODYAK-HASH") return CryptoAlgorithm::AsconXoodyakHash;
+    if (algId == BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM || algId == L"ASCON-XOODYAK-HASH" || algId == L"ascon-xoodyak-hash" || algId == L"Ascon-Xoodyak-Hash" || algId == L"ASCONXOODYAK-HASH" || algId == BCRYPT_XOODYAK_ALGORITHM || algId == L"XOODYAK" || algId == L"xoodyak") return CryptoAlgorithm::AsconXoodyakHash;
     if (algId == BCRYPT_ASCON_KANGAROOTWELVE_XOF_ALGORITHM || algId == L"ASCON-KANGAROOTWELVE-XOF" || algId == L"ascon-kangarootwelve-xof" || algId == L"Ascon-KangarooTwelve-Xof" || algId == L"ASCONKANGAROOTWELVE-XOF") return CryptoAlgorithm::AsconKangarooTwelveXof;
     if (algId == BCRYPT_ASCON_KANGAROOTWELVE_HASH_ALGORITHM || algId == L"ASCON-KANGAROOTWELVE-HASH" || algId == L"ascon-kangarootwelve-hash" || algId == L"Ascon-KangarooTwelve-Hash" || algId == L"ASCONKANGAROOTWELVE-HASH") return CryptoAlgorithm::AsconKangarooTwelveHash;
     if (algId == BCRYPT_ASCON_MARS_XOF_ALGORITHM || algId == L"ASCON-MARS-XOF" || algId == L"ascon-mars-xof" || algId == L"Ascon-Mars-Xof" || algId == L"ASCONMARS-XOF") return CryptoAlgorithm::AsconMarsXof;

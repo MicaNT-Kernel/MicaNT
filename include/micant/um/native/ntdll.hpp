@@ -3453,6 +3453,37 @@ struct SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION 
 };
 using PSYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION = SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION*;
 
+// Class 345: SystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation
+struct SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // 0
+    ULONG64  TotalDynamicWindowBatches;            // 1180000ULL
+    ULONG64  TotalDynamicBytesWritten;             // 49561600000ULL
+    ULONG64  CurrentBatchWindowNs;                 // 65000ULL
+    ULONG64  MinBatchWindowNs;                     // 20000ULL
+    ULONG64  MaxBatchWindowNs;                     // 150000ULL
+    double   WindowAdaptationVelocity;             // 1.250
+    double   DynamicWindowEfficiencyRatio;         // 0.912
+    ULONG    Flags;                                // 0x07
+};
+using PSYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION*;
+
+// Class 346: SystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation
+struct SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // 1
+    ULONG    Reserved;                             // 0
+    ULONG    CpuIndex;                             // 0
+    double   CoarseTuningStepResolutionMhz;        // 12.50
+    double   MediumTuningStepResolutionKhz;        // 125.0
+    double   FineTuningStepResolutionHz;           // 250.0
+    double   UltraFineTuningStepResolutionMilliHz; // 15.625
+    ULONG64  TotalTuningStepTransitions;           // 1048576ULL
+    double   DcoCarrierFrequencyGhz;               // 4.800
+    ULONG    Flags;                                // 0x07
+};
+using PSYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION = SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION*;
+
 
 // Class 325: SystemPagefileWriteBandwidthThrottlingTelemetryInformation
 struct SYSTEM_PAGEFILE_WRITE_BANDWIDTH_THROTTLING_TELEMETRY_INFORMATION {
@@ -7500,6 +7531,49 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             return NtStatus::Success;
         }
 
+        case 345: { // SystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation (Class 345)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->TotalDynamicWindowBatches = 1180000ULL;
+            pInfo->TotalDynamicBytesWritten = 49561600000ULL;
+            pInfo->CurrentBatchWindowNs = 65000ULL;
+            pInfo->MinBatchWindowNs = 20000ULL;
+            pInfo->MaxBatchWindowNs = 150000ULL;
+            pInfo->WindowAdaptationVelocity = 1.250;
+            pInfo->DynamicWindowEfficiencyRatio = 0.912;
+            pInfo->Flags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+
+        case 346: { // SystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation (Class 346)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->CpuIndex = 0;
+            pInfo->CoarseTuningStepResolutionMhz = 12.50;
+            pInfo->MediumTuningStepResolutionKhz = 125.0;
+            pInfo->FineTuningStepResolutionHz = 250.0;
+            pInfo->UltraFineTuningStepResolutionMilliHz = 15.625;
+            pInfo->TotalTuningStepTransitions = 1048576ULL;
+            pInfo->DcoCarrierFrequencyGhz = 4.800;
+            pInfo->Flags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+
         case 341: { // SystemPagefileWriteCoalescingEnergyEfficiencyTelemetryInformation (Class 341)
             if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION)) {
                 if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION);
@@ -8944,6 +9018,38 @@ inline CHAR WINAPI RtlInterlockedXnor8(CHAR volatile* Destination, CHAR Value) n
     return current;
 }
 
+inline LONG64 WINAPI RtlInterlockedXnorNot64(LONG64 volatile* Destination, LONG64 Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<LONG64>(~(current ^ ~Value)), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline LONG WINAPI RtlInterlockedXnorNot32(LONG volatile* Destination, LONG Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<LONG>(~(current ^ ~Value)), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline SHORT WINAPI RtlInterlockedXnorNot16(SHORT volatile* Destination, SHORT Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<SHORT>(~(current ^ static_cast<SHORT>(~Value))), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
+inline CHAR WINAPI RtlInterlockedXnorNot8(CHAR volatile* Destination, CHAR Value) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    while (!atomicDest->compare_exchange_weak(current, static_cast<CHAR>(~(current ^ static_cast<CHAR>(~Value))), std::memory_order_seq_cst, std::memory_order_relaxed)) {}
+    return current;
+}
+
 inline LONG64 WINAPI RtlInterlockedMin64(LONG64 volatile* Destination, LONG64 Value) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
@@ -9987,6 +10093,66 @@ inline CHAR WINAPI RtlInterlockedXorNotModulo8(CHAR volatile* Destination, CHAR 
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedXnorNotModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint64_t xnornot_val = ~(static_cast<uint64_t>(current) ^ ~static_cast<uint64_t>(Value));
+        uint64_t res = xnornot_val % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedXnorNotModulo32(LONG volatile* Destination, LONG Value, ULONG Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint32_t xnornot_val = ~(static_cast<uint32_t>(current) ^ ~static_cast<uint32_t>(Value));
+        uint32_t res = xnornot_val % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedXnorNotModulo16(SHORT volatile* Destination, SHORT Value, USHORT Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint16_t xnornot_val = static_cast<uint16_t>(~(static_cast<uint16_t>(current) ^ static_cast<uint16_t>(~static_cast<uint16_t>(Value))));
+        uint16_t res = static_cast<uint16_t>(xnornot_val % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedXnorNotModulo8(CHAR volatile* Destination, CHAR Value, UCHAR Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint8_t xnornot_val = static_cast<uint8_t>(~(static_cast<uint8_t>(current) ^ static_cast<uint8_t>(~static_cast<uint8_t>(Value))));
+        uint8_t res = static_cast<uint8_t>(xnornot_val % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline LONG64 WINAPI RtlInterlockedOrNotModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
@@ -10741,6 +10907,78 @@ inline CHAR WINAPI RtlInterlockedXorNotModulo8(CHAR volatile* Destination, CHAR 
         uint8_t c = static_cast<uint8_t>(ValC);
         uint8_t xornot = static_cast<uint8_t>(a ^ static_cast<uint8_t>(~b) ^ static_cast<uint8_t>(~c));
         uint8_t res = static_cast<uint8_t>(xornot % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG64 WINAPI RtlInterlockedXnorNotModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint64_t a = static_cast<uint64_t>(ValA);
+        uint64_t b = static_cast<uint64_t>(ValB);
+        uint64_t c = static_cast<uint64_t>(ValC);
+        uint64_t xnornot = ~(a ^ ~b ^ ~c);
+        uint64_t res = xnornot % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedXnorNotModulo32(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint32_t a = static_cast<uint32_t>(ValA);
+        uint32_t b = static_cast<uint32_t>(ValB);
+        uint32_t c = static_cast<uint32_t>(ValC);
+        uint32_t xnornot = ~(a ^ ~b ^ ~c);
+        uint32_t res = xnornot % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedXnorNotModulo16(SHORT volatile* Destination, SHORT ValA, SHORT ValB, SHORT ValC, USHORT Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint16_t a = static_cast<uint16_t>(ValA);
+        uint16_t b = static_cast<uint16_t>(ValB);
+        uint16_t c = static_cast<uint16_t>(ValC);
+        uint16_t xnornot = static_cast<uint16_t>(~(a ^ static_cast<uint16_t>(~b) ^ static_cast<uint16_t>(~c)));
+        uint16_t res = static_cast<uint16_t>(xnornot % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedXnorNotModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint8_t a = static_cast<uint8_t>(ValA);
+        uint8_t b = static_cast<uint8_t>(ValB);
+        uint8_t c = static_cast<uint8_t>(ValC);
+        uint8_t xnornot = static_cast<uint8_t>(~(a ^ static_cast<uint8_t>(~b) ^ static_cast<uint8_t>(~c)));
+        uint8_t res = static_cast<uint8_t>(xnornot % Modulus);
         CHAR next = static_cast<CHAR>(res);
         if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
             return current;
@@ -12078,6 +12316,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemet
     return NtQuerySystemInformation_Export(344, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation(SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(345, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(346, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileWriteCoalescingEnergyEfficiencyTelemetryInformation(SYSTEM_PAGEFILE_WRITE_COALESCING_ENERGY_EFFICIENCY_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -12668,6 +12918,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnor32", reinterpret_cast<void*>(RtlInterlockedXnor32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnor16", reinterpret_cast<void*>(RtlInterlockedXnor16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnor8", reinterpret_cast<void*>(RtlInterlockedXnor8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNot64", reinterpret_cast<void*>(RtlInterlockedXnorNot64));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNot32", reinterpret_cast<void*>(RtlInterlockedXnorNot32));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNot16", reinterpret_cast<void*>(RtlInterlockedXnorNot16));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNot8", reinterpret_cast<void*>(RtlInterlockedXnorNot8));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMin64", reinterpret_cast<void*>(RtlInterlockedMin64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMin32", reinterpret_cast<void*>(RtlInterlockedMin32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedMin16", reinterpret_cast<void*>(RtlInterlockedMin16));
@@ -12854,6 +13108,16 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseXorNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, CHAR, CHAR, UCHAR) noexcept>(RtlInterlockedXorNotModulo8)));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, ULONG64) noexcept>(RtlInterlockedXnorNotModulo64)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(RtlInterlockedXnorNotModulo32)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, USHORT) noexcept>(RtlInterlockedXnorNotModulo16)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedXnorNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, UCHAR) noexcept>(RtlInterlockedXnorNotModulo8)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseXnorNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, LONG64, LONG64, ULONG64) noexcept>(RtlInterlockedXnorNotModulo64)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseXnorNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, LONG, LONG, ULONG) noexcept>(RtlInterlockedXnorNotModulo32)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseXnorNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, SHORT, SHORT, USHORT) noexcept>(RtlInterlockedXnorNotModulo16)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseXnorNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, CHAR, CHAR, UCHAR) noexcept>(RtlInterlockedXnorNotModulo8)));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOrNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, ULONG64) noexcept>(RtlInterlockedOrNotModulo64)));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOrNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(RtlInterlockedOrNotModulo32)));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOrNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, USHORT) noexcept>(RtlInterlockedOrNotModulo16)));

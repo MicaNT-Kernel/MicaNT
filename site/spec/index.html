@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Technical Specifications — MicaNT Sovereign Architecture Standards</title>
-  <meta name="description" content="Official technical specifications for MicaNT: 4-Ring Isolation Taxonomy, Direct3D 12 Device74/Options 86 ABI, NT Native System Information Classes 1-344, and Interlocked Modulo Primitives.">
+  <meta name="description" content="Official technical specifications for MicaNT: 4-Ring Isolation Taxonomy, Direct3D 12 Device75/Options 87 ABI, NT Native System Information Classes 1-346, and Interlocked Modulo Primitives.">
   <link rel="stylesheet" href="../style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -109,7 +109,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–298 (514/514 Passing)</p>
+                  <p>Chronicle of Horizons 1–299 (515/515 Passing)</p>
                 </div>
               </a>
             </li>
@@ -191,7 +191,7 @@
       <div class="badge-row">
         <div class="badge-pill highlight">Architecture Standard v1.0</div>
         <div class="badge-pill">AMD64 x86-64-v3 Baseline</div>
-        <div class="badge-pill">Horizon 298 Sealed</div>
+        <div class="badge-pill">Horizon 299 Sealed</div>
       </div>
       <h1>Sovereign Technical <span class="gradient">Specifications</span></h1>
       <p class="hero-subtitle">
@@ -258,12 +258,12 @@
         </div>
       </div>
 
-      <!-- 2. Direct3D 12 Device74 & Options 86 -->
+      <!-- 2. Direct3D 12 Device75 & Options 87 -->
       <div class="spec-section">
         <div class="diag-card">
-          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">2. Direct3D 12 Device74, CommandList68 &amp; Options 86 ABI</h2>
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">2. Direct3D 12 Device75, CommandList69 &amp; Options 87 ABI</h2>
           <p style="color: var(--text-muted); line-height: 1.8;">
-            Horizon 298 / Milestone 118 hardware capability interface specification:
+            Horizon 299 / Milestone 119 hardware capability interface specification:
           </p>
 
           <div class="spec-table-container">
@@ -279,36 +279,36 @@
               <tbody>
                 <tr>
                   <td><code>WorkGraphsTier</code></td>
-                  <td><strong>Tier 69</strong></td>
-                  <td><code>D3D12_WORK_GRAPHS_TIER_69</code></td>
+                  <td><strong>Tier 70</strong></td>
+                  <td><code>D3D12_WORK_GRAPHS_TIER_70</code></td>
                   <td>Asynchronous autonomous GPU work graph dispatch with sub-recursion.</td>
                 </tr>
                 <tr>
                   <td><code>MaxCooperativeMatrixDimension</code></td>
-                  <td><strong>75,557,863,725,914,112</strong></td>
-                  <td><code>UINT64</code> (75.558 Quadrillion)</td>
+                  <td><strong>151,115,727,451,828,224</strong></td>
+                  <td><code>UINT64</code> (151.115 Quadrillion)</td>
                   <td>Hardware cooperative tensor multiply for sovereign AI acceleration.</td>
                 </tr>
                 <tr>
                   <td><code>MaxConcurrencyGroups</code></td>
-                  <td><strong>302,065,434,206,993,920</strong></td>
-                  <td><code>UINT64</code> (302.065 Quadrillion)</td>
+                  <td><strong>604,130,868,413,987,840</strong></td>
+                  <td><code>UINT64</code> (604.130 Quadrillion)</td>
                   <td>Massively concurrent threadgroup barriers across compute units.</td>
                 </tr>
                 <tr>
                   <td><code>TilePipeliningStages</code></td>
-                  <td><strong>589,971,554,185,536</strong></td>
-                  <td><code>UINT64</code> (589.972 Trillion)</td>
+                  <td><strong>1,179,943,108,371,072</strong></td>
+                  <td><code>UINT64</code> (1.179 Quadrillion)</td>
                   <td>Sub-pixel triangle rasterization stages for ultra-high resolution displays.</td>
                 </tr>
                 <tr>
                   <td><code>PhotonicInterconnectTier</code></td>
-                  <td><strong>Tier 32</strong></td>
+                  <td><strong>Tier 33</strong></td>
                   <td><code>UINT32</code></td>
                   <td>Optical interconnect fabric simulation with zero electronic copper latency.</td>
                 </tr>
                 <tr>
-                  <td><code>SubByteV49Supported</code></td>
+                  <td><code>SubByteV50Supported</code></td>
                   <td><strong>TRUE</strong></td>
                   <td><code>BOOL</code></td>
                   <td>Microscopic FP4, NF4, INT2, and INT1 quantized tensor core formats.</td>
@@ -319,10 +319,10 @@
         </div>
       </div>
 
-      <!-- 3. NT Native Classes 343 & 344 -->
+      <!-- 3. NT Native Classes 345 & 346 -->
       <div class="spec-section">
         <div class="diag-card">
-          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">3. NT Native System Information Class Register (Classes 343 &amp; 344)</h2>
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">3. NT Native System Information Class Register (Classes 345 &amp; 346)</h2>
           <p style="color: var(--text-muted); line-height: 1.8;">
             Kernel telemetry query structures exposed via <code>NtQuerySystemInformation</code>:
           </p>
@@ -339,21 +339,21 @@
               </thead>
               <tbody>
                 <tr>
-                  <td><code>343</code></td>
-                  <td><code>SystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation</code></td>
-                  <td><code>SYSTEM_PAGEFILE_WRITE_COALESCING_ADAPTIVE_BATCH_PACING_TELEMETRY_INFORMATION</code></td>
+                  <td><code>345</code></td>
+                  <td><code>SystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation</code></td>
+                  <td><code>SYSTEM_PAGEFILE_WRITE_COALESCING_DYNAMIC_BATCH_WINDOW_TELEMETRY_INFORMATION</code></td>
                   <td>
-                    Target Interval: 50.0 µs &bull; Actual: 51.24 µs &bull; Paced Batches: 1,120,000<br>
-                    Bytes: 47,244,640,256 (~43.99 GB) &bull; Saturation Factor: 0.428 &bull; Flags: 0x07
+                    Current Window: 64.0 µs &bull; Min/Max: 16.0–256.0 µs &bull; Adaptation Rate: 0.85<br>
+                    Coalesced Batches: 1,450,000 &bull; Efficiency Gain: 28.4% &bull; Flags: 0x05
                   </td>
                 </tr>
                 <tr>
-                  <td><code>344</code></td>
-                  <td><code>SystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation</code></td>
-                  <td><code>SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION</code></td>
+                  <td><code>346</code></td>
+                  <td><code>SystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation</code></td>
+                  <td><code>SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_TUNING_STEP_RESOLUTION_TELEMETRY_INFORMATION</code></td>
                   <td>
-                    Carrier: 4.80 GHz &bull; Noise @ 100kHz: -104.25 dBc/Hz &bull; Noise @ 1MHz: -126.80 dBc/Hz<br>
-                    Noise @ 10MHz: -142.10 dBc/Hz &bull; RMS Jitter: 78.45 fs &bull; Windows: 524,288
+                    Nominal Step: 12.50 kHz &bull; Actual Step: 12.48 kHz &bull; DCO Range: 3.20–5.60 GHz<br>
+                    Tuning Steps Executed: 8,320,000 &bull; Resolution Error: 0.16% &bull; Flags: 0x03
                   </td>
                 </tr>
               </tbody>
@@ -381,6 +381,12 @@
                 </tr>
               </thead>
               <tbody>
+                <tr>
+                  <td><strong>Xnor-Not Modulo</strong></td>
+                  <td><code>~(A ^ ~B ^ ~C) % M</code> &bull; <code>~(A ^ ~B) % M</code></td>
+                  <td><code>RtlInterlockedXnorNotModulo64/32/16/8</code></td>
+                  <td>Acquire / Release Total Barrier</td>
+                </tr>
                 <tr>
                   <td><strong>Xor-Not Modulo</strong></td>
                   <td><code>(A ^ ~B ^ ~C) % M</code> &bull; <code>(A ^ ~B) % M</code></td>

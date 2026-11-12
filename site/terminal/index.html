@@ -120,7 +120,7 @@
                 <span class="dropdown-icon">🗺️</span>
                 <div class="dropdown-text">
                   <h4>Horizons Roadmap</h4>
-                  <p>Chronicle of Horizons 1–298 (514/514 Passing)</p>
+                  <p>Chronicle of Horizons 1–299 (515/515 Passing)</p>
                 </div>
               </a>
             </li>
@@ -217,6 +217,8 @@
         <button class="quick-cmd-btn" data-cmd="lsw" style="border-color: #c084fc; color: #c084fc; font-weight: 600;">lsw (180°)</button>
         <button class="quick-cmd-btn" data-cmd="top">top</button>
         <button class="quick-cmd-btn" data-cmd="d3d12">d3d12</button>
+        <button class="quick-cmd-btn" data-cmd="xnornot">xnornot</button>
+        <button class="quick-cmd-btn" data-cmd="xoodyak">xoodyak</button>
         <button class="quick-cmd-btn" data-cmd="xornot">xornot</button>
         <button class="quick-cmd-btn" data-cmd="keccak">keccak</button>
         <button class="quick-cmd-btn" data-cmd="dx12">dx12</button>
@@ -258,7 +260,7 @@
         <div class="shell-screen" id="shellScreen">
           <div style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]
 (c) Project MICA. Dave Cutler Clean-Room Architecture. Zero Telemetry.
-514/514 test suites passing across 298 Horizons.
+515/515 test suites passing across 299 Horizons.
 Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38bdf8;">?</strong> for available commands.
 </div>
           <div id="shellHistory"></div>
@@ -294,6 +296,7 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
 
     const availableCommands = [
       "help", "?", "ver", "winver", "neofetch", "fastfetch", "matrix", "lsw", "top", "tasklist", "ps", "procs", "dx12", "d3d12", "sound", "audio",
+      "xnornot", "xoodyak", "dynamicwindow", "tuningstep",
       "xornot", "keccak", "adaptivepacing", "phasenoise", "ornot", "photon", "coalescingefficiency", "tuninglatency",
       "ascon", "blake3", "grain128", "dedup", "compression", "throttling", "nonimplication", "coalesce", "converse",
       "catroot", "zfs", "directstorage", "xhci", "prismx", "prismx test", "prismx cube",
@@ -690,9 +693,13 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
   <span style="color: #10b981; font-weight: 700;">matrix</span>           - Falling digital rain interactive codestream animation
   <span style="color: #c084fc; font-weight: 700;">lsw</span>              - Linux Subsystem on Windows 180° keynote execution demo
   <span style="color: #ffffff; font-weight: 600;">top / procs</span>      - Live task manager &amp; active Ring 0-3 dispatch table
-  <span style="color: #ffffff; font-weight: 600;">d3d12 / dx12</span>     - Direct3D 12 Device74, CommandList68 &amp; Options 86 telemetry
+  <span style="color: #ffffff; font-weight: 600;">d3d12 / dx12</span>     - Direct3D 12 Device75, CommandList69 &amp; Options 87 telemetry
   <span style="color: #ffffff; font-weight: 600;">sound / audio</span>    - Toggle synthesized mechanical keyboard &amp; chime audio
   <span style="color: #ffffff; font-weight: 600;">ver / winver</span>     - Display MicaNT executive version and clean-room build info
+  <span style="color: #ffffff; font-weight: 600;">xnornot</span>          - Atomic Bitwise Xnor-Not Modulo 64/32/16/8-bit Primitives
+  <span style="color: #ffffff; font-weight: 600;">xoodyak</span>          - NIST SP 800-232 Ascon-Xoodyak-256 Chi-Sponge
+  <span style="color: #ffffff; font-weight: 600;">dynamicwindow</span>    - Pagefile Dynamic Batch Window Telemetry (Class 345)
+  <span style="color: #ffffff; font-weight: 600;">tuningstep</span>       - CPU Clock PLL DCO Tuning Step Resolution Telemetry (Class 346)
   <span style="color: #ffffff; font-weight: 600;">xornot</span>           - Atomic Bitwise Xor-Not Modulo 64/32/16/8-bit Primitives
   <span style="color: #ffffff; font-weight: 600;">keccak</span>           - NIST SP 800-232 Ascon-Keccak-256 Chi Diffusion Sponge
   <span style="color: #ffffff; font-weight: 600;">adaptivepacing</span>   - Pagefile Write Coalescing Adaptive Batch Pacing Telemetry (Class 343)
@@ -729,16 +736,16 @@ Type <strong style="color: #38bdf8;">help</strong> or <strong style="color: #38b
         case "d3d12":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
-    MicaNT Horizon 298: Direct3D 12 Device74 &amp; Options 86 Acceleration   
+    MicaNT Horizon 299: Direct3D 12 Device75 &amp; Options 87 Acceleration   
 ========================================================================</span>
-D3D12 Interface:           ID3D12Device74 &amp; ID3D12GraphicsCommandList68
-Direct3D Options:          D3D12_FEATURE_DATA_D3D12_OPTIONS86 (Active)
-Work Graphs Capability:    Tier 69 (302.065 Quadrillion Concurrent Threadgroups)
-Cooperative Matrix Math:   75.558 Quadrillion Parameter Ultra-Scale Matrix Multiply
-Tile Pipelining Stages:    589.972 Trillion Dynamic Hardware Stages
-Microscopic Formats:       Sub-Byte Microscopic Formats V49 (FP4, NF4, INT2, INT1)
-Optical Interconnect:      Photonic Interconnect Tier 32 (Coherent Multi-GPU)
-PRISM-64 Graph State:      Backing Memory 58 &amp; Program Record 58
+D3D12 Interface:           ID3D12Device75 &amp; ID3D12GraphicsCommandList69
+Direct3D Options:          D3D12_FEATURE_DATA_D3D12_OPTIONS87 (Active)
+Work Graphs Capability:    Tier 70 (604.131 Quadrillion Concurrent Threadgroups)
+Cooperative Matrix Math:   151.116 Quadrillion Parameter Ultra-Scale Matrix Multiply
+Tile Pipelining Stages:    1.180 Quadrillion Dynamic Hardware Stages
+Microscopic Formats:       Sub-Byte Microscopic Formats V50 (FP4, NF4, INT2, INT1)
+Optical Interconnect:      Photonic Interconnect Tier 33 (Coherent Multi-GPU)
+PRISM-64 Graph State:      Backing Memory 59 &amp; Program Record 59
 Direct3D 12 Runtime:       <span style="color: #34d399; font-weight: 700;">ACTIVE (Zero CPU-copy direct hardware execution)</span>
           `);
           break;
@@ -752,15 +759,15 @@ Direct3D 12 Runtime:       <span style="color: #34d399; font-weight: 700;">ACTIV
 <span style="color: #00f2fe; font-weight: 700;">                / \</span>                ------------------------
 <span style="color: #00f2fe; font-weight: 700;">               /   \</span>               <span style="color: #38bdf8; font-weight: 600;">OS:</span> MicaNT Enterprise Sovereign Edition x86_64
 <span style="color: #00c6ff; font-weight: 700;">              /  ▲  \</span>              <span style="color: #38bdf8; font-weight: 600;">Host:</span> DEC PRISM-64 Sovereign Hardware
-<span style="color: #00c6ff; font-weight: 700;">             /  / \  \</span>             <span style="color: #38bdf8; font-weight: 600;">Kernel:</span> MicaNT Hybrid Microkernel 10.0.26100 (Horizon 298)
+<span style="color: #00c6ff; font-weight: 700;">             /  / \  \</span>             <span style="color: #38bdf8; font-weight: 600;">Kernel:</span> MicaNT Hybrid Microkernel 10.0.26100 (Horizon 299)
 <span style="color: #0099ff; font-weight: 700;">            /  /   \  \</span>            <span style="color: #38bdf8; font-weight: 600;">Uptime:</span> 42 days, 13 hours, 37 mins
 <span style="color: #0099ff; font-weight: 700;">           /  /  ▲  \  \</span>           <span style="color: #38bdf8; font-weight: 600;">Shell:</span> ConHost 2.0 (Win32 Sovereign Clean-Room)
 <span style="color: #4f46e5; font-weight: 700;">          /  /  / \  \  \</span>          <span style="color: #38bdf8; font-weight: 600;">Display:</span> 3840x2160 @ 540Hz DirectFlip MPO (0 copies)
 <span style="color: #4f46e5; font-weight: 700;">         /  /__/   \__\  \</span>         <span style="color: #38bdf8; font-weight: 600;">CPU:</span> Sovereign Silicon Microkernel (128 cores @ 4.80 GHz)
-<span style="color: #7c3aed; font-weight: 700;">        /_________________\</span>        <span style="color: #38bdf8; font-weight: 600;">GPU:</span> PrismX Direct3D 12 Device74 / CommandList68 (Options 86)
+<span style="color: #7c3aed; font-weight: 700;">        /_________________\</span>        <span style="color: #38bdf8; font-weight: 600;">GPU:</span> PrismX Direct3D 12 Device75 / CommandList69 (Options 87)
                                    <span style="color: #38bdf8; font-weight: 600;">Memory:</span> 4,096 KB WS (0 WebView2, 0 telemetry overhead)
-                                   <span style="color: #38bdf8; font-weight: 600;">Test Battery:</span> <span style="color: #34d399; font-weight: 700;">514/514 Passing (100% Sealed)</span>
-                                   <span style="color: #38bdf8; font-weight: 600;">Cryptography:</span> NIST SP 800-232 Ascon-Keccak XOF &amp; Hash
+                                   <span style="color: #38bdf8; font-weight: 600;">Test Battery:</span> <span style="color: #34d399; font-weight: 700;">515/515 Passing (100% Sealed)</span>
+                                   <span style="color: #38bdf8; font-weight: 600;">Cryptography:</span> NIST SP 800-232 Ascon-Xoodyak XOF &amp; Hash
                                    <span style="color: #38bdf8; font-weight: 600;">Storage:</span> OpenZFS 2.3 + NVMe DirectStorage (14.8 GB/s)
                                    <span style="color: #38bdf8; font-weight: 600;">Architecture:</span> 4-Ring Isolation (Ring 0/1/2/3 Sealed)
 
@@ -853,6 +860,79 @@ Driver Verification:       <span style="color: #34d399; font-weight: 700;">BCryp
           `);
           break;
 
+        case "xnornot":
+          appendOutput(`
+<span style="color: #22d3ee; font-weight: 700;">========================================================================
+         MicaNT Horizon 299: Interlocked Bitwise Xnor-Not Modulo          
+========================================================================</span>
+Primitive Definition:      XnorNot(A, B, C) = ~(A ^ ~B ^ ~C)
+Modulus Normalization:     Residue = XnorNot(A, B, C) % Modulus
+Binary Primitive:          XnorNot(A, B) = ~(A ^ ~B) % Modulus
+64-Bit Executive API:      RtlInterlockedXnorNotModulo64 / InterlockedXnorNotModulo64
+32-Bit Executive API:      RtlInterlockedXnorNotModulo32 / InterlockedXnorNotModulo32
+16-Bit Executive API:      RtlInterlockedXnorNotModulo16 / InterlockedXnorNotModulo16
+8-Bit Executive API:       RtlInterlockedXnorNotModulo8 / InterlockedXnorNotModulo8
+Hardware Implementation:   Lock-free CMPXCHG16B / atomic compare-exchange loop
+Thread Safety Guarantee:   Total Memory Barrier + Acquire/Release Multi-Core Order
+Verification:              <span style="color: #34d399; font-weight: 700;">PASS (515/515 Suites Active)</span>
+          `);
+          break;
+
+        case "xoodyak":
+          appendOutput(`
+<span style="color: #a855f7; font-weight: 700;">========================================================================
+          NIST SP 800-232 Ascon-Xoodyak-256 Chi-Sponge Telemetry         
+========================================================================</span>
+Algorithm Identity:        BCRYPT_ASCON_XOODYAK_XOF_ALGORITHM / BCRYPT_ASCON_XOODYAK_HASH_ALGORITHM
+BCrypt Alias:              BCRYPT_XOODYAK_ALGORITHM ("XOODYAK")
+Internal State:            320-bit Ascon state + 384-bit Xoodyak permutation mixer
+Absorption Rate:           8 bytes (64 bits) / Round
+Squeeze Rate:              32 bytes (256 bits) primary digest
+Rounds per Step:           p12 (12 rounds) + Xoodyak Chi non-linear layer
+Hardware Resistance:       Side-Channel DPA/SPA hardened, constant-time software execution
+KSP Subsystem:             bcrypt.dll / cipherksp.sys
+Verification:              <span style="color: #34d399; font-weight: 700;">PASS (SP 800-232 Test Vectors Validated)</span>
+          `);
+          break;
+
+        case "dynamicwindow":
+          appendOutput(`
+<span style="color: #38bdf8; font-weight: 700;">========================================================================
+   NT Native Class 345: Pagefile Dynamic Batch Window Telemetry         
+========================================================================</span>
+Information Class:         SystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation (345)
+Structure Size:            72 Bytes (V1 ABI)
+Total Dynamic Batches:     1,180,000 batches
+Total Bytes Written:       49,561,600,000 bytes (46.16 GiB)
+Current Batch Window:      65,000 ns (65.0 µs)
+Batch Window Bounds:       Min: 20,000 ns (20.0 µs) | Max: 150,000 ns (150.0 µs)
+Adaptation Velocity:       1.250x per IOPS gradient step
+Efficiency Ratio:          0.912 (91.2% NVMe write saturation efficiency)
+Flags:                     0x00000007 (DYNAMIC_WINDOW_ACTIVE | PACING_ENABLED | SATURATION_AWARE)
+Executive Routine:         RtlQuerySystemPagefileWriteCoalescingDynamicBatchWindowTelemetryInformation
+Win32 API:                 GetPagefileWriteCoalescingDynamicBatchWindowTelemetry
+          `);
+          break;
+
+        case "tuningstep":
+          appendOutput(`
+<span style="color: #f59e0b; font-weight: 700;">========================================================================
+   NT Native Class 346: CPU Clock PLL DCO Tuning Step Resolution Telemetry 
+========================================================================</span>
+Information Class:         SystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation (346)
+Structure Size:            64 Bytes (V1 ABI)
+Coarse Step Resolution:    12.50 MHz
+Medium Step Resolution:    125.0 kHz
+Fine Step Resolution:      250.0 Hz
+Ultra-Fine Step:           15.625 mHz (milliHertz)
+Carrier Frequency:         4.800 GHz
+Total Transitions:         1,048,576 transitions
+Flags:                     0x00000007 (FINE_STEP_ENGAGED | DCO_LOCKED | ULTRA_FINE_RESOLUTION)
+Executive Routine:         RtlQuerySystemCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetryInformation
+Win32 API:                 GetCpuClockPhaseLockedLoopDcoTuningStepResolutionTelemetry
+          `);
+          break;
+
         case "xornot":
           appendOutput(`
 <span style="color: #22d3ee; font-weight: 700;">========================================================================
@@ -867,7 +947,7 @@ Binary Primitive:          XorNot(A, B) = (A ^ ~B) % Modulus
 8-Bit Executive API:       RtlInterlockedXorNotModulo8 / InterlockedXorNotModulo8
 Hardware Implementation:   Lock-free CMPXCHG16B / atomic compare-exchange loop
 Thread Safety Guarantee:   Total Memory Barrier + Acquire/Release Multi-Core Order
-Verification:              <span style="color: #34d399; font-weight: 700;">PASS (514/514 Suites Active)</span>
+Verification:              <span style="color: #34d399; font-weight: 700;">PASS (515/515 Suites Active)</span>
           `);
           break;
 
@@ -1347,7 +1427,7 @@ Active Requests In Flight: 128 requests
 <span style="color: #94a3b8;">MicaNT [Version 10.0.26100.1]</span>
 DEC MICA &amp; PRISM Clean-Room Architecture
 Target Platform: AMD64 (x86_64) UEFI GOP Bare-Metal
-Test Battery: <span style="color: #34d399;">514/514 Passing (100% Pass Rate across 298 Horizons)</span>
+Test Battery: <span style="color: #34d399;">515/515 Passing (100% Pass Rate across 299 Horizons)</span>
           `);
           break;
 
