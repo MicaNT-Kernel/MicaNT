@@ -55,7 +55,7 @@ struct UserServiceArguments {
 using UserServiceRoutine = uint64_t (*)(const UserServiceArguments&) noexcept;
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
 // Single-BSP context-switch hook; zero selects the bootstrap entry stacks.
-void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept;
+void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcept;
 uintptr_t bootstrapThreadSyscallStack() noexcept;
 // Enter an already mapped user context in the current process. On success
 // this does not return; caller must provide a valid thread-owned kernel stack.

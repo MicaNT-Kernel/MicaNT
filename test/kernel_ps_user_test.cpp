@@ -1,6 +1,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/km/executive/usermode.hpp"
 #include "micant/um/native/pe.hpp"
 #include <cstring>
 #include <span>
@@ -10,6 +11,8 @@ extern const uint8_t MicantPsUserProgramEnd[];
 __attribute__((naked, section(".uproc$a"))) void MicantPsUserProgram() noexcept {
     __asm__ __volatile__(
         "subq $0x60, %rsp\n"
+        "movabsq $0x123456789abcdef0, %rax\nmovq %rax, %gs:0x1480\n"
+        "cmpq %gs:0x1480, %rax\njne 1f\n"
         "movq $0, 64(%rsp)\nmovq $4096, 72(%rsp)\n"
         "movq $0x3000, 40(%rsp)\nmovq $4, 48(%rsp)\n"
         "movq $-1, %r10\nleaq 64(%rsp), %rdx\nxorq %r8, %r8\n"
@@ -54,11 +57,18 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
         uintptr_t code{};
         uintptr_t stack{};
+        uintptr_t teb{};
         auto& space = process.getAddressSpace();
         if (space.allocate(code, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
                            mm::PAGE_READWRITE) != NtStatus::Success ||
             space.allocate(stack, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
+                           mm::PAGE_READWRITE) != NtStatus::Success ||
+            space.allocate(teb, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
                            mm::PAGE_READWRITE) != NtStatus::Success) return false;
+        auto* userTeb = reinterpret_cast<um::Teb64*>(teb);
+        userTeb->self = teb;
+        userTeb->stackBase = stack + mm::PageSize4KB;
+        userTeb->stackLimit = stack;
         const auto* program = reinterpret_cast<const uint8_t*>(MicantPsUserProgram);
         const size_t programSize = reinterpret_cast<uintptr_t>(MicantPsUserProgramEnd) -
                                    reinterpret_cast<uintptr_t>(program);
@@ -101,8 +111,9 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
             space.protect(code + mm::PageSize4KB, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success ||
             old != mm::PAGE_READWRITE || !hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
         UserStart start{boot, code + nt.optionalHeader.addressOfEntryPoint, stack + mm::PageSize4KB - 16};
-        if (thread.initialize(process, 32768, enterUser, &start) != NtStatus::Success ||
-            thread.ready() != NtStatus::Success) return false;
+        if (thread.initialize(process, 32768, enterUser, &start) != NtStatus::Success) return false;
+        thread.kernelThread()->tebAddress = teb;
+        if (thread.ready() != NtStatus::Success) return false;
         auto* next = scheduler.selectNextThread();
         if (next != thread.kernelThread()) return false;
         const KIRQL oldIrql = KfRaiseIrql(DISPATCH_LEVEL);
@@ -110,7 +121,12 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
         KeLowerIrql(oldIrql);
         if (!switched || KeGetCurrentThread() != boot || !process.isTerminating() ||
             process.exitStatus() != NtStatus::AccessDenied || next->state != ThreadState::Terminated ||
-            scheduler.getReadyThreadCount() || thread.reap() != NtStatus::Success ||
+            cpu::cpuRdmsr(cpu::MSR_GS_BASE) != boot->tebAddress ||
+            scheduler.getReadyThreadCount() ||
+            !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
+        const bool tlsValue = userTeb->tlsSlots[0] == 0x123456789abcdef0ULL;
+        if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tlsValue ||
+            thread.reap() != NtStatus::Success ||
             process.closeAddressSpace() != NtStatus::Success) return false;
     }
     return mm::PfnDatabase::get().getActiveCount() == active;

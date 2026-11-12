@@ -208,10 +208,14 @@ minimal PE32+ fixture and uses the existing `PeImageView64` parser and mapper
 to copy it into private Mm pages, then makes its headers read-only and code
 execute/read before entering its PE entry point. This is not `SEC_IMAGE`, a
 file-backed image section, the production process loader or an NTDLL startup;
-it does not create a PEB, TEB, TLS, or a second user thread, and does not
-complete M6 or M7.
-The entry currently leaves interrupts disabled and uses GS base zero; the
-bootstrap syscall/GS handling is not a general user-thread context switch.
+it does not create a PEB, initialize static TLS, or run a second user thread,
+and does not complete M6 or M7.
+The test now allocates a minimal user TEB and the context switch sets the
+thread's GS base; CPL3 writes and reads its first TEB TLS slot, and the test
+checks the stored value and bootstrap GS restoration after exit. This is not
+static PE TLS initialization or a two-thread isolation test. The entry
+currently leaves interrupts disabled; the bootstrap syscall/GS handling is
+not a general user-thread context switch.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
 for user thread startup and context ownership.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).

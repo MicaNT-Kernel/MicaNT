@@ -897,7 +897,7 @@ __attribute__((naked)) void MicantProbeEnter() {
 
 namespace micant::hal::amd64 {
 
-void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept {
+void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcept {
     g_syscallCpu.kernelRsp = stackTop ? stackTop :
         reinterpret_cast<uintptr_t>(g_syscallStack + sizeof(g_syscallStack));
     auto& hardware = cpu::CpuHardwareEngine::get();
@@ -905,6 +905,7 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept {
         hardware.setKernelStack(stackTop ? stackTop :
             reinterpret_cast<uintptr_t>(g_kernelStack + sizeof(g_kernelStack)));
     }
+    cpu::cpuWrmsr(cpu::MSR_GS_BASE, userTeb);
 }
 
 uintptr_t bootstrapThreadSyscallStack() noexcept { return g_syscallCpu.kernelRsp; }
@@ -922,7 +923,8 @@ extern "C" __attribute__((naked, noreturn)) void MicantEnterBootstrapUserThread(
         g_syscallCpu.kernelRsp != thread->kernelStackTop || userStack < 8 ||
         !bootstrapUserRange(entry, 1, false, true) || !bootstrapUserRange(userStack - 8, 8, true))
         __builtin_trap();
-    cpu::cpuWrmsr(cpu::MSR_GS_BASE, 0);
+    if (thread->tebAddress && !bootstrapUserRange(thread->tebAddress, 1, true)) __builtin_trap();
+    cpu::cpuWrmsr(cpu::MSR_GS_BASE, thread->tebAddress);
     MicantEnterBootstrapUserThread(entry, userStack);
 }
 
