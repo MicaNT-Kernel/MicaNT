@@ -208,6 +208,12 @@ rollback itself fails; the tracked page protections retain the actual state.
 The relevant public contracts are
 [NtAllocateVirtualMemory](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntallocatevirtualmemory)
 and [NtFreeVirtualMemory](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntfreevirtualmemory).
+The freestanding `NtProtectVirtualMemory` service is not yet routed. Its
+native declaration and complete error and capture semantics still require an
+approved Microsoft contract; the Microsoft WDK metadata project tracks the
+absence of NTDLL declarations in [issue 58](https://github.com/microsoft/wdkmetadata/issues/58).
+The local ReactOS `ntoskrnl/mm/ARM3/virtual.c` implementation was inspected as
+a reference, but is not by itself the required compatibility contract.
 Structural comparison used ReactOS commit
 `8fe3cee05606aecd9442674e40038649f048d10d`, specifically
 `ntoskrnl/mm/ARM3/vadnode.c` and `ntoskrnl/mm/ARM3/virtual.c`; the MicaNT
