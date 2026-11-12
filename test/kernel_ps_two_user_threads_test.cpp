@@ -325,11 +325,12 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             first.kernelThread()->quantumRemaining = 1;
             second.kernelThread()->quantumRemaining = 1000;
         }
-        KThread launcher;
-        launcher.directoryTableBase = g_CurrentCpu.currentCr3;
-        if (!detail::prepareBootstrapThread(launcher, launcherStack, sizeof(launcherStack), launch, boot)) return false;
+        auto launcher = std::unique_ptr<KThread>(new (std::nothrow_t{}) KThread{});
+        if (!launcher) return false;
+        launcher->directoryTableBase = g_CurrentCpu.currentCr3;
+        if (!detail::prepareBootstrapThread(*launcher, launcherStack, sizeof(launcherStack), launch, boot)) return false;
         const KIRQL oldIrql = KfRaiseIrql(DISPATCH_LEVEL);
-        const bool switched = KiSwapContext(boot, &launcher);
+        const bool switched = KiSwapContext(boot, launcher.get());
         KeLowerIrql(oldIrql);
         if (!switched || !process.isTerminating() || process.exitStatus() != NtStatus::AccessDenied ||
             scheduler.getReadyThreadCount() ||

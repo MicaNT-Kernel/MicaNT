@@ -170,7 +170,7 @@ EThread::~EThread() {
 
 NtStatus EThread::initialize(EProcess& process, size_t stackSize,
                              StartRoutine start, void* argument) noexcept {
-    if (thread_ || stack_ || process_ || !start || stackSize < 4096 || stackSize > 1024 * 1024)
+    if (thread_ || stack_ || process_ || !start || stackSize < 8192 || stackSize > 1024 * 1024)
         return NtStatus::InvalidParameter;
     std::unique_ptr<ke::KThread> thread(new (std::nothrow_t{}) ke::KThread{});
     std::unique_ptr<uint8_t[]> stack(new (std::nothrow_t{}) uint8_t[stackSize]);
@@ -327,7 +327,8 @@ NtStatus EThread::reap() noexcept {
     if (!thread_ || !process_ || thread_->readyQueued || thread_.get() == ke::KeGetCurrentThread() ||
         (thread_->state != ke::ThreadState::Initialized && thread_->state != ke::ThreadState::Terminated))
         return NtStatus::InvalidParameter;
-    if (!thread_->kernelApcList.empty() || !thread_->userApcList.empty()) return NtStatus::NotImplemented;
+    if (!thread_->kernelApcList.empty() || !thread_->userApcList.empty() ||
+        thread_->pendingNormalCount || thread_->normalKernelApcActive) return NtStatus::NotImplemented;
     if (!processDetached_) {
         const auto cleanup = releaseUserMemory();
         if (cleanup != NtStatus::Success) return cleanup;

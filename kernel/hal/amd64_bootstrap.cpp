@@ -1,4 +1,6 @@
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/km/hal/amd64_firmware_interrupts.hpp"
+#include "micant/km/hal/amd64_irql.hpp"
 #include "micant/km/hal/cpu.hpp"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
@@ -47,6 +49,34 @@ uint64_t g_probeReturnRip{};
 micant::hal::amd64::UserServiceRoutine g_dispatch{};
 bool g_schedulerClockActive{};
 bool g_clockIrqlMaskReady{};
+// The firmware selects the APIC mode before boot. Do not change modes while
+// other processors or interrupt sources may be using the controller.
+class BootstrapLocalApic {
+public:
+    struct Register {
+        BootstrapLocalApic& apic;
+        size_t index;
+        operator uint32_t() const noexcept { return apic.read(index); }
+        Register& operator=(uint32_t value) noexcept { apic.write(index, value); return *this; }
+    };
+    void initialize(volatile uint32_t* mapping, bool x2) noexcept { mmio_ = mapping; x2_ = x2; }
+    [[nodiscard]] bool available() const noexcept { return x2_ || mmio_; }
+    [[nodiscard]] Register operator[](size_t index) noexcept { return {*this, index}; }
+    uint32_t read(size_t index) const noexcept {
+        return x2_ ? static_cast<uint32_t>(micant::cpu::cpuRdmsr(0x800u + static_cast<uint32_t>(index / 4)))
+                   : mmio_[index];
+    }
+    void write(size_t index, uint32_t value) const noexcept {
+        __asm__ __volatile__("" : : : "memory");
+        if (x2_) micant::cpu::cpuWrmsr(0x800u + static_cast<uint32_t>(index / 4), value);
+        else mmio_[index] = value;
+        __asm__ __volatile__("" : : : "memory");
+    }
+private:
+    volatile uint32_t* mmio_{};
+    bool x2_{};
+};
+BootstrapLocalApic g_timerApic{};
 micant::ke::KThread g_bootstrapIdleThread{};
 alignas(16) uint8_t g_bootstrapIdleStack[32768]{};
 alignas(16) uint8_t g_syscallStack[65536]{};
@@ -305,17 +335,33 @@ void logTrapValue(const char* label, uint64_t value) noexcept {
 } // namespace
 
 extern "C" {
+extern uint32_t MicantAmd64XsaveMask;
+extern uint32_t MicantAmd64ExtendedSize;
+uintptr_t MicantBootstrapInterruptStackFloor{};
+uintptr_t MicantBootstrapExecutionStackTop{};
+uintptr_t MicantBootstrapUserInterruptStackFloor{};
+uintptr_t MicantBootstrapUserInterruptStackBase{};
+uintptr_t MicantBootstrapUserInterruptStackTop{};
+uintptr_t MicantBootstrapSyscallStackBase{};
+uintptr_t MicantBootstrapSyscallStackTop{};
+uintptr_t MicantBootstrapSyscallStackFloor{};
 volatile uint64_t MicantTimerTicks{};
-volatile uint32_t* MicantTimerEoi{};
 volatile bool MicantTimerPreemptionEnabled{};
 volatile bool MicantTimerDispatchFailed{};
 micant::ke::KThread* MicantTimerBootThread{};
 bool MicantTimerBootQueued{};
 uint64_t MicantTimerBootDeadline{24};
 
+void MicantBootstrapInterruptExit(uint64_t savedFlags) noexcept {
+    if (savedFlags & (uint64_t{1} << 9)) {
+        micant::ke::detail::servicePendingDpcs();
+        micant::ke::detail::servicePendingKernelApcs();
+    }
+}
+
 void MicantBootstrapTimerDispatch() noexcept {
     MicantTimerTicks = MicantTimerTicks + 1;
-    *MicantTimerEoi = 0;
+    g_timerApic.write(0xb0 / 4, 0);
     if (!MicantTimerPreemptionEnabled) return;
     using namespace micant::ke;
     const KIRQL previous = KeGetCurrentIrql();
@@ -335,7 +381,7 @@ void MicantBootstrapTimerDispatch() noexcept {
         else MicantTimerBootQueued = true;
     }
     auto* next = scheduler.selectOnClockTick(current);
-    if (next && !KiSwapContext(current, next, true)) {
+    if (next && !KiSwapContext(current, next, current != g_CurrentCpu.idleThread)) {
         if (!scheduler.cancelQuantumPreemption(current, next)) __builtin_trap();
         MicantTimerDispatchFailed = true;
     }
@@ -344,13 +390,87 @@ void MicantBootstrapTimerDispatch() noexcept {
 
 __attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
     __asm__ __volatile__(
+        // A thread-owned stack must have space for the interrupt frame and
+        // dispatcher. Stop before overwriting its allocation on overflow.
+        "pushq %rax\nleaq 8(%rsp), %rax\n"
+        "cmpq MicantBootstrapUserInterruptStackBase(%rip), %rax\njb 5f\n"
+        "cmpq MicantBootstrapUserInterruptStackTop(%rip), %rax\njae 5f\n"
+        "cmpq MicantBootstrapUserInterruptStackFloor(%rip), %rax\njae 6f\nud2\n"
+        "5: cmpq MicantBootstrapSyscallStackBase(%rip), %rax\njb 7f\n"
+        "cmpq MicantBootstrapSyscallStackTop(%rip), %rax\njae 7f\n"
+        "cmpq MicantBootstrapSyscallStackFloor(%rip), %rax\njae 6f\nud2\n"
+        "7: cmpq MicantBootstrapExecutionStackTop(%rip), %rax\njae 8f\n"
+        "cmpq MicantBootstrapInterruptStackFloor(%rip), %rax\njae 6f\n8: ud2\n6:\n"
         "cld\n"
-        "pushq %rax\npushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
+        "pushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
         "pushq %rsi\npushq %rdi\npushq %r8\npushq %r9\npushq %r10\npushq %r11\n"
         "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
-        "movq %rsp, %r12\nsubq $544, %rsp\nandq $-16, %rsp\n"
-        "fxsave64 32(%rsp)\ncallq MicantBootstrapTimerDispatch\n"
-        "fxrstor64 32(%rsp)\nmovq %r12, %rsp\n"
+        "movq %rsp, %r12\nmovl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "addq $96, %rax\nsubq %rax, %rsp\nandq $-64, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 1f\n"
+        "leaq 64(%rsp), %r13\n"
+        "movq $0, 512(%r13)\nmovq $0, 520(%r13)\n"
+        "movq $0, 528(%r13)\nmovq $0, 536(%r13)\n"
+        "movq $0, 544(%r13)\nmovq $0, 552(%r13)\n"
+        "movq $0, 560(%r13)\nmovq $0, 568(%r13)\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xsave64 (%r13)\njmp 2f\n"
+        "1: fxsave64 64(%rsp)\n"
+        "2: callq MicantBootstrapTimerDispatch\n"
+        "movq 136(%r12), %rcx\ncallq MicantBootstrapInterruptExit\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xrstor64 64(%rsp)\njmp 4f\n"
+        "3: fxrstor64 64(%rsp)\n"
+        "4: movq %r12, %rsp\n"
+        "popq %r15\npopq %r14\npopq %r13\npopq %r12\npopq %r11\npopq %r10\n"
+        "popq %r9\npopq %r8\npopq %rdi\npopq %rsi\npopq %rbp\npopq %rbx\n"
+        "popq %rdx\npopq %rcx\npopq %rax\niretq\n");
+}
+
+void MicantBootstrapPs2Dispatch() noexcept {
+    using namespace micant::ke;
+    const auto previous = KfRaiseIrql(DIRQL_MIN);
+    micant::hal::amd64::captureBootstrapPs2Interrupt();
+    g_timerApic.write(0xb0 / 4, 0);
+    KeLowerIrql(previous);
+}
+
+__attribute__((naked)) void MicantBootstrapPs2Interrupt() noexcept {
+    __asm__ __volatile__(
+        // A thread-owned stack must have space for the interrupt frame and
+        // dispatcher. Stop before overwriting its allocation on overflow.
+        "pushq %rax\nleaq 8(%rsp), %rax\n"
+        "cmpq MicantBootstrapUserInterruptStackBase(%rip), %rax\njb 5f\n"
+        "cmpq MicantBootstrapUserInterruptStackTop(%rip), %rax\njae 5f\n"
+        "cmpq MicantBootstrapUserInterruptStackFloor(%rip), %rax\njae 6f\nud2\n"
+        "5: cmpq MicantBootstrapSyscallStackBase(%rip), %rax\njb 7f\n"
+        "cmpq MicantBootstrapSyscallStackTop(%rip), %rax\njae 7f\n"
+        "cmpq MicantBootstrapSyscallStackFloor(%rip), %rax\njae 6f\nud2\n"
+        "7: cmpq MicantBootstrapExecutionStackTop(%rip), %rax\njae 8f\n"
+        "cmpq MicantBootstrapInterruptStackFloor(%rip), %rax\njae 6f\n8: ud2\n6:\n"
+        "cld\n"
+        "pushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
+        "pushq %rsi\npushq %rdi\npushq %r8\npushq %r9\npushq %r10\npushq %r11\n"
+        "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
+        "movq %rsp, %r12\nmovl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "addq $96, %rax\nsubq %rax, %rsp\nandq $-64, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 1f\n"
+        "leaq 64(%rsp), %r13\n"
+        "movq $0, 512(%r13)\nmovq $0, 520(%r13)\n"
+        "movq $0, 528(%r13)\nmovq $0, 536(%r13)\n"
+        "movq $0, 544(%r13)\nmovq $0, 552(%r13)\n"
+        "movq $0, 560(%r13)\nmovq $0, 568(%r13)\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xsave64 (%r13)\njmp 2f\n"
+        "1: fxsave64 64(%rsp)\n"
+        "2: callq MicantBootstrapPs2Dispatch\n"
+        "movq 136(%r12), %rcx\ncallq MicantBootstrapInterruptExit\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xrstor64 64(%rsp)\njmp 4f\n"
+        "3: fxrstor64 64(%rsp)\n"
+        "4: movq %r12, %rsp\n"
         "popq %r15\npopq %r14\npopq %r13\npopq %r12\npopq %r11\npopq %r10\n"
         "popq %r9\npopq %r8\npopq %rdi\npopq %rsi\npopq %rbp\npopq %rbx\n"
         "popq %rdx\npopq %rcx\npopq %rax\niretq\n");
@@ -431,6 +551,13 @@ void MicantBootstrapDispatch(SyscallFrame* frame) noexcept {
         frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp
     };
     frame->rax = g_dispatch(args);
+    // Service routines can make a higher-priority thread ready while the
+    // syscall entry has interrupts disabled. Dispatch after service cleanup.
+    if (g_schedulerClockActive) {
+        if (frame->flags & (uint64_t{1} << 9)) micant::ke::detail::servicePendingDpcs();
+        micant::ke::detail::dispatchHigherPriority();
+        if (frame->flags & (uint64_t{1} << 9)) micant::ke::detail::servicePendingKernelApcs();
+    }
     // Preserve user IF only after the BSP scheduler clock owns IRQ routing.
     frame->flags = (frame->flags & (g_schedulerClockActive ? 0xED5 : 0xCD5)) | 2;
 }
@@ -907,13 +1034,64 @@ namespace micant::hal::amd64 {
 
 void setBootstrapClockIrqlMask(uint8_t irql) noexcept {
     if (!g_clockIrqlMaskReady) return;
-    // Only vector 0xd1 (APIC priority class 13) is routed at present.
-    const uint64_t priority = irql >= ke::HIGH_LEVEL ? 15 :
-        irql >= ke::CLOCK_LEVEL ? 13 : 0;
+    const uint64_t priority = detail::bootstrapHardwarePriority(irql);
     __asm__ __volatile__("movq %0, %%cr8" : : "r"(priority) : "memory");
 }
 
-void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcept {
+bool prepareBootstrapPs2Interrupt(uint32_t& gsi) noexcept {
+    if (!g_schedulerClockActive || !g_timerApic.available()) return false;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
+    if (flags & (uint64_t{1} << 9)) return false;
+    bool low{}, level{};
+    uint32_t resolved{};
+    if (!resolveBootstrapIsaInterrupt(12, resolved, low, level)) return false;
+    const uint32_t rawId = g_timerApic.read(0x20 / 4);
+    const uint32_t id = (cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE) & (1u << 10)) ? rawId : rawId >> 24;
+    if (id > 255 || !prepareBootstrapIoApicRoute(resolved, 0x21, static_cast<uint8_t>(id), low, level)) return false;
+    const uint64_t handler = reinterpret_cast<uint64_t>(MicantBootstrapPs2Interrupt);
+    g_idt[0x21] = InterruptGate{static_cast<uint16_t>(handler), cpu::SELECTOR_KCODE64, 0, 0x8e,
+        static_cast<uint16_t>(handler >> 16), static_cast<uint32_t>(handler >> 32), 0};
+    gsi = resolved;
+    return true;
+}
+
+bool bootstrapSyscallGsActive() noexcept {
+    return g_dispatch && cpu::cpuRdmsr(cpu::MSR_GS_BASE) == reinterpret_cast<uintptr_t>(&g_syscallCpu);
+}
+
+bool bootstrapStackHasHeadroom(uintptr_t stackPointer, uintptr_t threadBase,
+                               uintptr_t threadTop, size_t required) noexcept {
+    uintptr_t base = threadBase;
+    uintptr_t top = threadTop;
+    if (stackPointer >= MicantBootstrapUserInterruptStackBase &&
+        stackPointer < MicantBootstrapUserInterruptStackTop) {
+        base = MicantBootstrapUserInterruptStackBase;
+        top = MicantBootstrapUserInterruptStackTop;
+    }
+    else if (stackPointer >= MicantBootstrapSyscallStackBase &&
+             stackPointer < MicantBootstrapSyscallStackTop) {
+        base = MicantBootstrapSyscallStackBase;
+        top = MicantBootstrapSyscallStackTop;
+    }
+    return base && top > base && stackPointer >= base && stackPointer < top &&
+        stackPointer - base >= required;
+}
+
+void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb, bool syscallGsActive,
+                                  uintptr_t stackBase, uintptr_t executionStackTop) noexcept {
+    // A clock IRQ may switch context while its own XSAVE frame is resident.
+    MicantBootstrapInterruptStackFloor = stackBase ? stackBase + 4096 + 2 * MicantAmd64ExtendedSize : 0;
+    MicantBootstrapExecutionStackTop = executionStackTop;
+    const uintptr_t userEntryBase = stackTop ? stackBase : reinterpret_cast<uintptr_t>(g_kernelStack);
+    MicantBootstrapUserInterruptStackBase = userEntryBase;
+    MicantBootstrapUserInterruptStackTop = stackTop ? stackTop :
+        reinterpret_cast<uintptr_t>(g_kernelStack + sizeof(g_kernelStack));
+    MicantBootstrapUserInterruptStackFloor = userEntryBase + 4096 + 2 * MicantAmd64ExtendedSize;
+    MicantBootstrapSyscallStackBase = stackTop ? stackBase : reinterpret_cast<uintptr_t>(g_syscallStack);
+    MicantBootstrapSyscallStackTop = stackTop ? stackTop :
+        reinterpret_cast<uintptr_t>(g_syscallStack + sizeof(g_syscallStack));
+    MicantBootstrapSyscallStackFloor = MicantBootstrapSyscallStackBase + 4096 + 2 * MicantAmd64ExtendedSize;
     g_syscallCpu.kernelRsp = stackTop ? stackTop :
         reinterpret_cast<uintptr_t>(g_syscallStack + sizeof(g_syscallStack));
     auto& hardware = cpu::CpuHardwareEngine::get();
@@ -921,7 +1099,13 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcep
         hardware.setKernelStack(stackTop ? stackTop :
             reinterpret_cast<uintptr_t>(g_kernelStack + sizeof(g_kernelStack)));
     }
-    cpu::cpuWrmsr(cpu::MSR_GS_BASE, userTeb);
+    if (g_dispatch) {
+        const uintptr_t kernelGs = reinterpret_cast<uintptr_t>(&g_syscallCpu);
+        cpu::cpuWrmsr(cpu::MSR_GS_BASE, syscallGsActive ? kernelGs : userTeb);
+        cpu::cpuWrmsr(cpu::MSR_KERNEL_GS_BASE, syscallGsActive ? userTeb : kernelGs);
+    } else {
+        cpu::cpuWrmsr(cpu::MSR_GS_BASE, userTeb);
+    }
 }
 
 uintptr_t bootstrapThreadSyscallStack() noexcept { return g_syscallCpu.kernelRsp; }
@@ -1668,13 +1852,49 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
                      kWritable | kNoExecute | 0x18)) {
             while (page) {
                 page -= 4096;
-                (void)unmapPage(start + page, false);
+                if (!unmapPage(start + page, false)) __builtin_trap();
             }
             return nullptr;
         }
     }
     g_deviceNext += length;
     return reinterpret_cast<void*>(start + offset);
+}
+
+bool releaseBootstrapDeviceMemory(void* mapping, size_t size) noexcept {
+    const uint64_t address = reinterpret_cast<uintptr_t>(mapping);
+    if (!mapping || !size || size > 1024 * 1024 || !pagingContextMatches(nullptr) ||
+        address < kDeviceBase || address >= g_deviceNext) return false;
+    const uint64_t offset = address & 4095;
+    const uint64_t start = address & ~uint64_t{4095};
+    const uint64_t length = (size + offset + 4095) & ~uint64_t{4095};
+    if (start > UINT64_MAX - length || start + length != g_deviceNext) return false;
+    for (uint64_t page = 0; page < length; page += 4096)
+        if (!unmapPage(start + page, false)) __builtin_trap();
+    g_deviceNext = start;
+    return true;
+}
+
+bool copyBootstrapFirmwareMemory(uint64_t physical, void* destination, size_t size) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
+    if (flags & (uint64_t{1} << 9)) return false;
+    constexpr uint64_t scratch = kDeviceBase + 16 * 1024 * 1024;
+    if (!destination || !size || physical > kPhysicalMask + 4095 ||
+        size - 1 > kPhysicalMask + 4095 - physical || !pagingContextMatches(nullptr)) return false;
+    auto* out = static_cast<uint8_t*>(destination);
+    while (size) {
+        const size_t offset = static_cast<size_t>(physical & 4095);
+        const size_t count = size < 4096 - offset ? size : 4096 - offset;
+        if (!mapPage(scratch, physical & ~uint64_t{4095}, kNoExecute)) return false;
+        for (size_t i = 0; i < count; ++i)
+            out[i] = reinterpret_cast<const volatile uint8_t*>(scratch + offset)[i];
+        if (!unmapPage(scratch, false)) __builtin_trap();
+        physical += count;
+        out += count;
+        size -= count;
+    }
+    return true;
 }
 
 struct TimerWorkerState {
@@ -1708,8 +1928,8 @@ static bool verifyBootstrapPreemption() noexcept {
     first.directoryTableBase = second.directoryTableBase = g_CurrentCpu.currentCr3;
     first.priority = second.priority = PRIORITY_NORMAL;
     first.quantumRemaining = second.quantumRemaining = 1;
-    if (!detail::prepareBootstrapThread(first, g_firstTimerWorkerStack, sizeof(g_firstTimerWorkerStack), timerWorker, &firstState) ||
-        !detail::prepareBootstrapThread(second, g_secondTimerWorkerStack, sizeof(g_secondTimerWorkerStack), timerWorker, &secondState) ||
+    if (!ke::detail::prepareBootstrapThread(first, g_firstTimerWorkerStack, sizeof(g_firstTimerWorkerStack), timerWorker, &firstState) ||
+        !ke::detail::prepareBootstrapThread(second, g_secondTimerWorkerStack, sizeof(g_secondTimerWorkerStack), timerWorker, &secondState) ||
         !scheduler.readyKThread(&second)) return false;
     const auto originalPriority = boot->priority;
     const auto previous = KfRaiseIrql(DISPATCH_LEVEL);
@@ -1743,7 +1963,7 @@ extern "C" bool MicantTestPsUserPreemption() noexcept;
 
 // Verify the one routed hardware priority with IF still enabled. A pending
 // clock interrupt must become deliverable after the original IRQL is restored.
-static bool verifyClockIrqlMask(volatile uint32_t* apic) noexcept {
+static bool verifyClockIrqlMask(BootstrapLocalApic& apic) noexcept {
     const auto previous = ke::KfRaiseIrql(ke::CLOCK_LEVEL);
     const auto nested = ke::KfRaiseIrql(ke::HIGH_LEVEL);
     uint64_t highPriority{};
@@ -1767,7 +1987,8 @@ static bool verifyClockIrqlMask(volatile uint32_t* apic) noexcept {
 }
 
 bool verifyBootstrapTimerInterrupt() noexcept {
-    if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext()) return false;
+    if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext() ||
+        !ke::MicantAmd64ConfigureExtendedState()) return false;
     Idtr current{};
     __asm__ __volatile__("sidt %0" : "=m"(current));
     if (current.base != reinterpret_cast<uint64_t>(g_idt) || current.limit != sizeof(g_idt) - 1)
@@ -1776,13 +1997,16 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
     if (!(edx & (1u << 9))) return false;
     const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
-    if (!(apicBase & (1u << 11)) || (apicBase & (1u << 10))) {
+    const bool x2 = (apicBase & (1u << 10)) != 0;
+    if (!(apicBase & (1u << 11)) || (x2 && !(ecx & (1u << 21)))) {
         logTrapValue("[MicaNT Hal] APIC base=0x", apicBase);
         return false;
     }
-    auto* const apic = static_cast<volatile uint32_t*>(
+    auto* mapping = x2 ? nullptr : static_cast<volatile uint32_t*>(
         mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
-    if (!apic) { if (g_log) g_log("[MicaNT Hal] APIC MMIO mapping failed\r\n"); return false; }
+    g_timerApic.initialize(mapping, x2);
+    auto& apic = g_timerApic;
+    if (!apic.available()) { if (g_log) g_log("[MicaNT Hal] APIC MMIO mapping failed\r\n"); return false; }
     if (((apic[0x30 / 4] >> 16) & 0xff) < 5 || !(apic[0x320 / 4] & (1u << 16))) {
         logTrapValue("[MicaNT Hal] APIC version=0x", apic[0x30 / 4]);
         logTrapValue("[MicaNT Hal] APIC timer initial=0x", apic[0x380 / 4]);
@@ -1819,7 +2043,6 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     g_idt[0xd1] = gate(reinterpret_cast<uint64_t>(MicantBootstrapTimerInterrupt));
     g_idt[0xff] = gate(reinterpret_cast<uint64_t>(MicantBootstrapSpuriousInterrupt));
     MicantTimerTicks = 0;
-    MicantTimerEoi = apic + 0xb0 / 4;
     apic[0x80 / 4] = 0;
     g_clockIrqlMaskReady = true;
     setBootstrapClockIrqlMask(ke::KeGetCurrentIrql());
@@ -1879,13 +2102,13 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     g_idt[0xff] = savedSpurious;
     output(0x21, masterMask);
     output(0xa1, slaveMask);
-    MicantTimerEoi = nullptr;
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
     const bool restored = !(flags & (uint64_t{1} << 9)) &&
         input(0x21) == masterMask && input(0xa1) == slaveMask &&
         apic[0x80 / 4] == savedTpr && apic[0xf0 / 4] == savedSvr &&
         apic[0x3e0 / 4] == savedDivide && apic[0x380 / 4] == savedInitial;
+    g_timerApic.initialize(nullptr, false);
     if (!success) logTrapValue("[MicaNT Hal] Timer ticks=0x", MicantTimerTicks);
     if (!restored && g_log) g_log("[MicaNT Hal] Timer state restoration failed\r\n");
     return success && restored;
@@ -1893,7 +2116,7 @@ bool verifyBootstrapTimerInterrupt() noexcept {
 
 // Measure one approximately 10 ms interval against PIT channel 2. The
 // speaker must be inactive; the port gate is restored after calibration.
-static bool calibrateBootstrapApic(volatile uint32_t* apic, uint32_t& period) noexcept {
+static bool measureBootstrapApic(BootstrapLocalApic& apic, uint32_t& elapsed) noexcept {
     const auto input = [](uint16_t port) noexcept {
         uint8_t value{};
         __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
@@ -1924,9 +2147,36 @@ static bool calibrateBootstrapApic(volatile uint32_t* apic, uint32_t& period) no
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
     apic[0x320 / 4] = savedTimer;
-    const uint32_t elapsed = 0xffffffffu - remaining;
+    elapsed = 0xffffffffu - remaining;
     if (spin >= 50000000 || elapsed < 100 || remaining == 0) return false;
-    period = elapsed;
+    return true;
+}
+
+// A median suppresses isolated VM scheduling pauses and port-I/O latency.
+// The PIT count is not exactly 10 ms, so scale it to the requested period.
+// Reject unstable measurements instead of silently programming a bad clock.
+static bool calibrateBootstrapApic(BootstrapLocalApic& apic, uint32_t& period) noexcept {
+    constexpr uint64_t pitFrequency = 1193182;
+    constexpr uint64_t pitInterval = 11932;
+    uint32_t samples[5]{};
+    for (auto& sample : samples) {
+        if (!measureBootstrapApic(apic, sample)) return false;
+    }
+    for (size_t i = 1; i < 5; ++i) {
+        const auto sample = samples[i];
+        size_t j = i;
+        while (j && samples[j - 1] > sample) {
+            samples[j] = samples[j - 1];
+            --j;
+        }
+        samples[j] = sample;
+    }
+    const uint64_t median = samples[2];
+    if (uint64_t{samples[3] - samples[1]} * 20 > median) return false;
+    constexpr uint64_t denominator = pitInterval * 100;
+    const uint64_t scaled = (median * pitFrequency + denominator / 2) / denominator;
+    if (scaled < 100 || scaled > UINT32_MAX) return false;
+    period = static_cast<uint32_t>(scaled);
     return true;
 }
 
@@ -1938,25 +2188,23 @@ static bool calibrateBootstrapApic(volatile uint32_t* apic, uint32_t& period) no
 bool startBootstrapSchedulerClock() noexcept {
     if (g_schedulerClockActive || !g_dispatch || !bootstrapPagingContext() ||
         !ke::KeGetCurrentThread()) return false;
-    uint64_t flags{}, cr4{};
+    uint64_t flags{};
     Idtr current{};
-    __asm__ __volatile__("pushfq; popq %0; sidt %1; movq %%cr4, %2"
-                         : "=r"(flags), "=m"(current), "=r"(cr4));
-    if ((flags & (uint64_t{1} << 9)) || current.base != reinterpret_cast<uint64_t>(g_idt)) return false;
-    // The IRQ switch saves x87/SSE with FXSAVE, not AVX or other XSTATE.
-    // Do not enable persistent preemption while an unsaved component is active.
-    if (cr4 & (uint64_t{1} << 18)) {
-        uint32_t low{}, high{};
-        __asm__ __volatile__("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
-        if ((uint64_t{high} << 32 | low) & ~uint64_t{3}) return false;
-    }
+    __asm__ __volatile__("pushfq; popq %0; sidt %1"
+                         : "=r"(flags), "=m"(current));
+    if ((flags & (uint64_t{1} << 9)) || current.base != reinterpret_cast<uint64_t>(g_idt) ||
+        !ke::MicantAmd64ConfigureExtendedState()) return false;
     uint32_t eax = 1, ebx{}, ecx{}, edx{};
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
     if (!(edx & (1u << 9))) return false;
     const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
-    if (!(apicBase & (1u << 11)) || (apicBase & (1u << 10))) return false;
-    auto* apic = static_cast<volatile uint32_t*>(mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
-    if (!apic || ((apic[0x30 / 4] >> 16) & 0xff) < 5 ||
+    const bool x2 = (apicBase & (1u << 10)) != 0;
+    if (!(apicBase & (1u << 11)) || (x2 && !(ecx & (1u << 21)))) return false;
+    auto* mapping = x2 ? nullptr : static_cast<volatile uint32_t*>(
+        mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
+    g_timerApic.initialize(mapping, x2);
+    auto& apic = g_timerApic;
+    if (!apic.available() || ((apic[0x30 / 4] >> 16) & 0xff) < 5 ||
         !(apic[0x320 / 4] & (1u << 16))) return false;
     uint32_t interval{};
     if (!calibrateBootstrapApic(apic, interval)) return false;
@@ -1977,7 +2225,6 @@ bool startBootstrapSchedulerClock() noexcept {
     g_idt[0xd1] = gate(reinterpret_cast<uint64_t>(MicantBootstrapTimerInterrupt));
     g_idt[0xff] = gate(reinterpret_cast<uint64_t>(MicantBootstrapSpuriousInterrupt));
     MicantTimerTicks = 0;
-    MicantTimerEoi = apic + 0xb0 / 4;
     MicantTimerBootThread = nullptr;
     MicantTimerDispatchFailed = false;
     MicantTimerPreemptionEnabled = true;
@@ -2036,7 +2283,7 @@ bool verifyIdleWaitAndWake() noexcept {
     ke::KeLowerIrql(previousIrql);
     MicantTimerBootThread = nullptr;
     if (!firstSwitch || !MicantTimerBootQueued || probe.stage != 1 ||
-        waiter.state != ke::ThreadState::Waiting || !g_bootstrapIdleThread.readyQueued ||
+        waiter.state != ke::ThreadState::Waiting || g_bootstrapIdleThread.readyQueued ||
         !scheduler.readyKThread(&waiter)) return false;
     probe.stage = 2;
     auto* next = scheduler.selectNextThread();
@@ -2044,10 +2291,10 @@ bool verifyIdleWaitAndWake() noexcept {
     const auto secondIrql = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
     const bool secondSwitch = ke::KiSwapContext(boot, next);
     ke::KeLowerIrql(secondIrql);
-    const bool idleRemoved = scheduler.removeReadyThread(&g_bootstrapIdleThread);
-    if (idleRemoved) g_bootstrapIdleThread.state = ke::ThreadState::Ready;
+    const bool idleReady = g_bootstrapIdleThread.state == ke::ThreadState::Ready &&
+        !g_bootstrapIdleThread.readyQueued;
     boot->priority = originalPriority;
-    return secondSwitch && idleRemoved && probe.stage == 3 &&
+    return secondSwitch && idleReady && probe.stage == 3 &&
         waiter.state == ke::ThreadState::Terminated && !scheduler.getReadyThreadCount() &&
         !MicantTimerDispatchFailed;
 }

@@ -41,6 +41,11 @@ bool verifyBootstrapManagedPageFault(uintptr_t address, bool write,
                                      bool present) noexcept;
 uint64_t translateBootstrapAddress(const void* address) noexcept;
 void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept;
+// Release the most recent bootstrap MMIO mapping; callers serialize with IRQs disabled.
+bool releaseBootstrapDeviceMemory(void* mapping, size_t size) noexcept;
+// Caller validates the firmware memory type; the temporary mapping is removed
+// before returning and requires the bootstrap paging root with IRQs disabled.
+bool copyBootstrapFirmwareMemory(uint64_t physical, void* destination, size_t size) noexcept;
 
 // Runs isolated CPL=3 probes with checked #BP/#PF returns and page protections.
 // This validates privilege transitions, not a process loader or Win32 session.
@@ -48,12 +53,14 @@ bool verifyRing3Transition() noexcept;
 bool verifyManagedExecutablePage() noexcept;
 // Temporary BSP-only xAPIC timer diagnostic; leaves interrupts disabled.
 bool verifyBootstrapTimerInterrupt() noexcept;
-// Starts the bounded BSP xAPIC scheduler clock after the diagnostic restores
+// Starts the bounded BSP local-APIC scheduler clock after the diagnostic restores
 // controller state. Legacy PIC and other local vectors remain masked.
 bool startBootstrapSchedulerClock() noexcept;
 bool verifyBootstrapSchedulerClock() noexcept;
 bool bootstrapSchedulerClockFailed() noexcept;
-// BSP xAPIC clock priority mask; no other interrupt vectors are routed yet.
+// Installs the BSP IRQ12 gate and leaves the IOAPIC route masked.
+bool prepareBootstrapPs2Interrupt(uint32_t& gsi) noexcept;
+// Synchronize the BSP's Ke IRQL with the local APIC priority classes.
 void setBootstrapClockIrqlMask(uint8_t irql) noexcept;
 uint64_t bootstrapSchedulerClockTicks() noexcept;
 
@@ -63,7 +70,12 @@ struct UserServiceArguments {
 using UserServiceRoutine = uint64_t (*)(const UserServiceArguments&) noexcept;
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
 // Single-BSP context-switch hook; zero selects the bootstrap entry stacks.
-void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcept;
+void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb,
+                                  bool syscallGsActive = false, uintptr_t stackBase = 0,
+                                  uintptr_t executionStackTop = 0) noexcept;
+bool bootstrapSyscallGsActive() noexcept;
+bool bootstrapStackHasHeadroom(uintptr_t stackPointer, uintptr_t threadBase,
+                               uintptr_t threadTop, size_t required) noexcept;
 uintptr_t bootstrapThreadSyscallStack() noexcept;
 // Enter an already mapped user context in the current process. On success
 // this does not return; caller must provide a valid thread-owned kernel stack.

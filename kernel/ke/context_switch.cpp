@@ -1,6 +1,49 @@
 #include "micant/km/core/ke.hpp"
 
 #if defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
+// Standard XSAVE layout, limited to x87/SSE/AVX/AVX-512 and 4096 bytes.
+// Frames use the CPUID size. A zero XSAVE header restores architectural init
+// state for a new thread. The FXSAVE fallback needs explicit x87/MXCSR defaults.
+struct alignas(64) InitialExtendedState {
+    uint16_t controlWord{0x037f};
+    uint8_t reserved[22]{};
+    uint32_t mxcsr{0x1f80};
+    uint8_t remaining[4096 - 28]{};
+};
+static_assert(offsetof(InitialExtendedState, mxcsr) == 24);
+static_assert(sizeof(InitialExtendedState) == 4096);
+extern "C" {
+uint32_t MicantAmd64XsaveMask{};
+uint32_t MicantAmd64ExtendedSize{512};
+constinit InitialExtendedState MicantAmd64InitialState{};
+}
+
+extern "C" bool MicantAmd64ConfigureExtendedState() noexcept {
+    static uint64_t configuredMask = ~uint64_t{0};
+    uint64_t cr4{};
+    __asm__ __volatile__("movq %%cr4, %0" : "=r"(cr4));
+    uint64_t mask = 0;
+    uint32_t stateSize = 512;
+    if (cr4 & (uint64_t{1} << 18)) {
+        uint32_t low{}, high{};
+        __asm__ __volatile__("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
+        mask = uint64_t{low} | (uint64_t{high} << 32);
+        if ((mask & 3) != 3 || (mask & ~uint64_t{0xe7})) return false;
+        uint32_t eax = 0, ebx{}, ecx{}, edx{};
+        __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+        if (eax < 0x0d) return false;
+        eax = 0x0d; ecx = 0;
+        __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+        if ((mask & ~(uint64_t{edx} << 32 | eax)) || ebx < 576 || ebx > 4096) return false;
+        stateSize = ebx;
+    }
+    if (configuredMask != ~uint64_t{0}) return configuredMask == mask;
+    MicantAmd64ExtendedSize = stateSize;
+    MicantAmd64XsaveMask = static_cast<uint32_t>(mask);
+    configuredMask = mask;
+    return true;
+}
+
 extern "C" __attribute__((naked)) void MicantAmd64BootstrapThread() noexcept {
     __asm__ __volatile__(
         "movq %r13, %rcx\n"
@@ -26,31 +69,31 @@ extern "C" __attribute__((naked)) bool MicantAmd64SwitchContext(
         "pushfq\n"
         "popq %rax\n"
         "movq %rax, 16(%rcx)\n"
-        "stmxcsr 88(%rcx)\n"
-        "fnstcw 92(%rcx)\n"
-        "movdqu %xmm6, 96(%rcx)\n"
-        "movdqu %xmm7, 112(%rcx)\n"
-        "movdqu %xmm8, 128(%rcx)\n"
-        "movdqu %xmm9, 144(%rcx)\n"
-        "movdqu %xmm10, 160(%rcx)\n"
-        "movdqu %xmm11, 176(%rcx)\n"
-        "movdqu %xmm12, 192(%rcx)\n"
-        "movdqu %xmm13, 208(%rcx)\n"
-        "movdqu %xmm14, 224(%rcx)\n"
-        "movdqu %xmm15, 240(%rcx)\n"
-        "movq %rdx, %rax\n"
-        "ldmxcsr 88(%rax)\n"
-        "fldcw 92(%rax)\n"
-        "movdqu 96(%rax), %xmm6\n"
-        "movdqu 112(%rax), %xmm7\n"
-        "movdqu 128(%rax), %xmm8\n"
-        "movdqu 144(%rax), %xmm9\n"
-        "movdqu 160(%rax), %xmm10\n"
-        "movdqu 176(%rax), %xmm11\n"
-        "movdqu 192(%rax), %xmm12\n"
-        "movdqu 208(%rax), %xmm13\n"
-        "movdqu 224(%rax), %xmm14\n"
-        "movdqu 240(%rax), %xmm15\n"
+        // The old stack pointer is already saved above. Reserve an aligned
+        // frame below it; it stays resident until this thread is resumed.
+        "movl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "addq $64, %rax\n"
+        "subq %rax, %rsp\n"
+        "andq $-64, %rsp\n"
+        "movq %rsp, 256(%rcx)\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 2f\n"
+        "movq $0, 512(%rsp)\nmovq $0, 520(%rsp)\n"
+        "movq $0, 528(%rsp)\nmovq $0, 536(%rsp)\n"
+        "movq $0, 544(%rsp)\nmovq $0, 552(%rsp)\n"
+        "movq $0, 560(%rsp)\nmovq $0, 568(%rsp)\n"
+        "movq %rdx, %r10\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xsave64 (%rsp)\nmovq %r10, %rdx\njmp 3f\n"
+        "2: fxsave64 (%rsp)\n"
+        "3: movq %rdx, %r11\n"
+        "movq 256(%r11), %r10\n"
+        "testq %r10, %r10\njnz 4f\n"
+        "leaq MicantAmd64InitialState(%rip), %r10\n"
+        "4: cmpl $0, MicantAmd64XsaveMask(%rip)\nje 5f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xrstor64 (%r10)\njmp 6f\n"
+        "5: fxrstor64 (%r10)\n"
+        "6: movq %r11, %rax\n"
         "movq 24(%rax), %rbx\n"
         "movq 32(%rax), %rbp\n"
         "movq 40(%rax), %rsi\n"

@@ -2,6 +2,7 @@
 
 #include "micant/km/hal/boot_contract.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/km/hal/amd64_firmware_interrupts.hpp"
 #include "micant/km/executive/mm.hpp"
 #include "micant/km/executive/freestanding.hpp"
 #include "micant/km/executive/probe.hpp"
@@ -25,6 +26,14 @@ bool initializeBootstrapSectionServices() noexcept;
 void initializeBootstrapEventServices() noexcept;
 bool verifyBootstrapSectionOwnership() noexcept;
 }
+
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+// The loader's call stack is not a kernel-owned scheduling resource. Keep the
+// bootstrap context on a resident stack for its full lifetime.
+extern "C" {
+alignas(4096) uint8_t MicantBootstrapMainStack[131072]{};
+}
+#endif
 
 namespace {
 
@@ -83,6 +92,66 @@ uint8_t readPort(uint16_t port) noexcept {
     uint8_t value{};
     __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
     return value;
+}
+
+// Bytes are captured at interrupt level, while packet decoding and rendering
+// remain in the shell. All accesses hold BSP interrupt exclusion. Keyboard
+// and auxiliary bytes have separate rings so one source cannot consume the
+// other's pending input.
+struct Ps2ByteRing {
+    uint8_t bytes[128]{};
+    uint8_t read{};
+    uint8_t write{};
+    bool lost{};
+};
+Ps2ByteRing g_ps2MouseRing{};
+Ps2ByteRing g_ps2KeyboardRing{};
+bool g_ps2InterruptMode{};
+uint8_t g_ps2Configuration{};
+
+void pushPs2Byte(Ps2ByteRing& ring, uint8_t data) noexcept {
+    const uint8_t next = static_cast<uint8_t>((ring.write + 1) & 127);
+    if (next == ring.read) { ring.lost = true; ring.read = ring.write; }
+    ring.bytes[ring.write] = data;
+    ring.write = next;
+}
+
+bool popPs2Byte(Ps2ByteRing& ring, uint8_t& data, bool& lost) noexcept {
+    lost = ring.lost;
+    ring.lost = false;
+    if (ring.read == ring.write) return false;
+    data = ring.bytes[ring.read];
+    ring.read = static_cast<uint8_t>((ring.read + 1) & 127);
+    return true;
+}
+
+void capturePs2Bytes() noexcept {
+    for (unsigned count = 0; count < 64; ++count) {
+        const uint8_t status = readPort(0x64);
+        if (!(status & 1)) break;
+        const uint8_t data = readPort(0x60);
+        auto& ring = (status & 0x20) ? g_ps2MouseRing : g_ps2KeyboardRing;
+        if (status & 0xc0) { ring.lost = true; ring.read = ring.write; continue; }
+        pushPs2Byte(ring, data);
+    }
+}
+
+bool nextMouseByte(uint8_t& status, uint8_t& data, bool& lost) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    bool result{};
+    if (g_ps2InterruptMode) {
+        capturePs2Bytes(); // Also recover an edge received while the route was masked.
+        status = 0x20;
+        result = popPs2Byte(g_ps2MouseRing, data, lost);
+    } else {
+        lost = false;
+        status = readPort(0x64);
+        result = (status & 1) != 0;
+        if (result) data = readPort(0x60);
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return result;
 }
 
 void serialInitialize() noexcept {
@@ -246,6 +315,7 @@ void initializeContextThread(
 
     thread.kernelStackBase = stackBase;
     thread.kernelStackTop = stackTop;
+    thread.kernelExecutionStackTop = stackTop;
     thread.directoryTableBase = g_bootContextThread.directoryTableBase;
     thread.context = micant::ke::KThreadContext{};
     thread.context.rip = reinterpret_cast<uintptr_t>(entry);
@@ -271,6 +341,14 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
     const uint64_t initialSwitchCount = g_CurrentCpu.contextSwitches;
 
     g_bootContextThread.state = ThreadState::Running;
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+    g_bootContextThread.kernelStackBase = reinterpret_cast<uintptr_t>(MicantBootstrapMainStack);
+    g_bootContextThread.kernelExecutionStackTop =
+        reinterpret_cast<uintptr_t>(MicantBootstrapMainStack + sizeof(MicantBootstrapMainStack));
+    // Ring-3 entry uses HAL's separate bootstrap stack; it must not overwrite
+    // frames suspended on the boot thread's resident execution stack.
+    g_bootContextThread.kernelStackTop = 0;
+#endif
     g_bootContextThread.directoryTableBase = activeCr3;
     g_CurrentCpu.currentThread = &g_bootContextThread;
     initializeContextThread(
@@ -962,6 +1040,7 @@ bool initializeMouse() noexcept {
     }
     uint8_t configuration = readPort(0x60);
     configuration = static_cast<uint8_t>(configuration & ~0x22u);
+    g_ps2Configuration = configuration;
     if (!waitForControllerInput()) {
         return false;
     }
@@ -973,15 +1052,42 @@ bool initializeMouse() noexcept {
     return sendMouseCommand(0xF6) && sendMouseCommand(0xF4);
 }
 
+bool startMouseInterrupt() noexcept {
+    uint32_t gsi{};
+    if (!micant::hal::amd64::prepareBootstrapPs2Interrupt(gsi)) return false;
+    // The value was captured before streaming was enabled. Reading the
+    // controller output now could consume a mouse byte instead of a reply.
+    const uint8_t oldConfiguration = g_ps2Configuration;
+    if (!waitForControllerInput()) return false;
+    writePort(0x64, 0x60);
+    // Once command 0x60 is accepted the next byte is configuration data;
+    // falling back while the controller still expects it is unsafe.
+    if (!waitForControllerInput())
+        stopWithError("[MicaNT Input] i8042 configuration timed out\r\n");
+    micant::hal::amd64::setBootstrapPs2InterruptMode(true);
+    writePort(0x60, oldConfiguration | 0x02);
+    if (!micant::hal::amd64::unmaskBootstrapIoApicRoute(gsi, 0x21)) {
+        if (!waitForControllerInput())
+            stopWithError("[MicaNT Input] i8042 rollback timed out\r\n");
+        writePort(0x64, 0x60);
+        if (!waitForControllerInput())
+            stopWithError("[MicaNT Input] i8042 rollback timed out\r\n");
+        writePort(0x60, oldConfiguration);
+        micant::hal::amd64::setBootstrapPs2InterruptMode(false);
+        return false;
+    }
+    return true;
+}
+
 bool pollMouseInput(MicaWin32kInputEvent& event) noexcept {
     static uint8_t packet[3]{};
     static uint32_t packetIndex = 0;
     for (unsigned count = 0; count < 64; ++count) {
-        const uint8_t status = readPort(0x64);
-        if ((status & 0x01) == 0) {
-            return false;
-        }
-        const uint8_t data = readPort(0x60);
+        uint8_t status{}, data{};
+        bool lost{};
+        const bool available = nextMouseByte(status, data, lost);
+        if (lost) packetIndex = 0;
+        if (!available) return false;
         if ((status & 0x20) == 0) {
             continue;
         }
@@ -1061,7 +1167,44 @@ bool pollMouseInput(MicaWin32kInputEvent& event) noexcept {
 
 } // namespace
 
+namespace micant::hal::amd64 {
+void setBootstrapPs2InterruptMode(bool active) noexcept {
+    // The caller serializes with interrupts disabled and masks the source.
+    if (active && !g_ps2InterruptMode) {
+        g_ps2MouseRing = {};
+        g_ps2KeyboardRing = {};
+        g_ps2InterruptMode = true;
+        capturePs2Bytes();
+    } else if (!active) {
+        g_ps2InterruptMode = false;
+    }
+}
+
+void captureBootstrapPs2Interrupt() noexcept {
+    if (g_ps2InterruptMode) capturePs2Bytes();
+}
+
+bool popBootstrapPs2KeyboardByte(uint8_t& byte, bool& lost) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const bool result = popPs2Byte(g_ps2KeyboardRing, byte, lost);
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return result;
+}
+}
+
+#if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+extern "C" __attribute__((naked)) micant::NtStatus KiSystemStartup(
+    const micant::boot::UefiKernelHandoffV3*) noexcept {
+    __asm__ __volatile__(
+        "cli\nleaq MicantBootstrapMainStack+131072(%rip), %rsp\n"
+        "andq $-16, %rsp\nsubq $32, %rsp\ncallq MicantKiSystemStartupBody\n"
+        "1: cli\nhlt\njmp 1b\n");
+}
+extern "C" micant::NtStatus MicantKiSystemStartupBody(
+#else
 extern "C" micant::NtStatus KiSystemStartup(
+#endif
     const micant::boot::UefiKernelHandoffV3* handoff
 ) noexcept {
     __asm__ __volatile__("cli");
@@ -1086,6 +1229,11 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Bootstrap probe binding failed\r\n");
     }
     initializePhysicalMemory(*handoff);
+    static micant::hal::amd64::BootstrapInterruptTopology interruptTopology{};
+    if (micant::hal::amd64::discoverBootstrapInterruptTopology(*handoff, interruptTopology))
+        serialWrite("[MicaNT Hal] ACPI interrupt topology discovered\r\n");
+    else
+        serialWrite("[MicaNT Hal] ACPI interrupt topology unavailable\r\n");
     if (!micant::hal::amd64::verifyBootstrapPageTables()) {
         stopWithError("[MicaNT Mm] PFN-backed page-table verification failed\r\n");
     }
@@ -1239,10 +1387,18 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Input] PS/2 mouse initialization failed\r\n");
     }
     serialWrite("[MicaNT Input] PS/2 mouse polling initialized\r\n");
+    if (micant::hal::amd64::bootstrapInterruptTopology()) {
+        if (micant::hal::amd64::initializeBootstrapIoApics())
+            serialWrite("[MicaNT Hal] Firmware IOAPIC ranges mapped; no routes enabled\r\n");
+        else
+            serialWrite("[MicaNT Hal] Firmware IOAPIC ranges unavailable\r\n");
+    }
     const bool clockActive = micant::hal::amd64::startBootstrapSchedulerClock();
     if (clockActive && !micant::hal::amd64::verifyBootstrapSchedulerClock())
         stopWithError("[MicaNT Ke] Runtime scheduler preemption failed\r\n");
     if (clockActive) serialWrite("[MicaNT Ke] Runtime idle wait and wake verified\r\n");
+    if (clockActive && startMouseInterrupt())
+        serialWrite("[MicaNT Input] PS/2 mouse interrupt routing active\r\n");
     if (!clockActive) serialWrite("[MicaNT Ke] Runtime scheduler clock unavailable\r\n");
     serialWrite("[MicaNT Explorer] Shell idle loop entered\r\n");
     runMouseShell(clockActive);

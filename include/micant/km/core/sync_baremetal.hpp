@@ -65,7 +65,12 @@ public:
             if (!ke::PriorityScheduler::get().readyKThread(waiter->thread)) __builtin_trap();
             if (!notification_) { signaled_ = false; break; }
         }
-        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        if (flags & (uint64_t{1} << 9)) {
+            ke::detail::servicePendingDpcs();
+            ke::detail::dispatchHigherPriority();
+            ke::detail::servicePendingKernelApcs();
+            __asm__ __volatile__("sti" : : : "memory");
+        }
         return previous;
     }
 
