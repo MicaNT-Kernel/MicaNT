@@ -85,6 +85,25 @@ integration.
 
 ## Integration increments
 
+### Bootstrap local APIC timer diagnostic
+
+On QEMU TCG, a temporary BSP-only xAPIC setup delivers at least three periodic
+timer interrupts through an IST-free interrupt gate and acknowledges them
+with the local APIC EOI register. The diagnostic masks other local sources and
+the legacy PIC, drains any pending test interrupt, restores the saved controller
+configuration and gates, and checks that IF remains disabled. The timer's
+frequency is not calibrated and its prior countdown phase is not preserved.
+This test does not enable interrupts in normal operation and does not yet
+connect clock ticks to Ke, implement hardware IRQL, or preempt threads.
+Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
+The local ReactOS `hal/halx86/generic/timer.c` and `ntoskrnl/ke/time.c`
+were consulted for clock interrupt and dispatch ordering, without copying code.
+
+| Check | Result |
+|---|---|
+| `python3 qemu.py --headless` | Passed; periodic LAPIC IRQ marker and existing boot, scanout and input checks |
+| `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
+
 ### Bootstrap VAD reserve, commit, protection and release
 
 The cooperative Ke bootstrap now initializes its thread and processor CR3

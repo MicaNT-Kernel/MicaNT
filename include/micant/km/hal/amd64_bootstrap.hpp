@@ -45,6 +45,8 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept;
 // Runs isolated CPL=3 probes with checked #BP/#PF returns and page protections.
 // This validates privilege transitions, not a process loader or Win32 session.
 bool verifyRing3Transition() noexcept;
+// Temporary BSP-only xAPIC timer diagnostic; leaves interrupts disabled.
+bool verifyBootstrapTimerInterrupt() noexcept;
 
 struct UserServiceArguments {
     uint64_t number, first, second, third, fourth, userStack;

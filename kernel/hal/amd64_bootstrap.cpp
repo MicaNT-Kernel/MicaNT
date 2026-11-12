@@ -300,6 +300,22 @@ void logTrapValue(const char* label, uint64_t value) noexcept {
 } // namespace
 
 extern "C" {
+volatile uint64_t MicantTimerTicks{};
+volatile uint32_t* MicantTimerEoi{};
+
+__attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
+    __asm__ __volatile__(
+        "pushq %rax\n"
+        "incq MicantTimerTicks(%rip)\n"
+        "movq MicantTimerEoi(%rip), %rax\n"
+        "movl $0, (%rax)\n"
+        "popq %rax\niretq\n");
+}
+
+__attribute__((naked)) void MicantBootstrapSpuriousInterrupt() noexcept {
+    __asm__ __volatile__("iretq\n");
+}
+
 extern char MicantManagedReadFault[], MicantManagedReadResume[];
 extern char MicantManagedWriteFault[], MicantManagedWriteResume[];
 
@@ -1488,6 +1504,102 @@ void* mapBootstrapDeviceMemory(uint64_t physical, size_t size) noexcept {
     }
     g_deviceNext += length;
     return reinterpret_cast<void*>(start + offset);
+}
+
+bool verifyBootstrapTimerInterrupt() noexcept {
+    if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext()) return false;
+    Idtr current{};
+    __asm__ __volatile__("sidt %0" : "=m"(current));
+    if (current.base != reinterpret_cast<uint64_t>(g_idt) || current.limit != sizeof(g_idt) - 1)
+        return false;
+    uint32_t eax = 1, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (!(edx & (1u << 9))) return false;
+    const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
+    if (!(apicBase & (1u << 11)) || (apicBase & (1u << 10))) {
+        logTrapValue("[MicaNT Hal] APIC base=0x", apicBase);
+        return false;
+    }
+    auto* const apic = static_cast<volatile uint32_t*>(
+        mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
+    if (!apic) { if (g_log) g_log("[MicaNT Hal] APIC MMIO mapping failed\r\n"); return false; }
+    if (((apic[0x30 / 4] >> 16) & 0xff) < 5 || !(apic[0x320 / 4] & (1u << 16))) {
+        logTrapValue("[MicaNT Hal] APIC version=0x", apic[0x30 / 4]);
+        logTrapValue("[MicaNT Hal] APIC timer initial=0x", apic[0x380 / 4]);
+        logTrapValue("[MicaNT Hal] APIC timer LVT=0x", apic[0x320 / 4]);
+        return false;
+    }
+
+    const auto input = [](uint16_t port) noexcept {
+        uint8_t value{};
+        __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
+        return value;
+    };
+    const auto output = [](uint16_t port, uint8_t value) noexcept {
+        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
+    };
+    const uint8_t masterMask = input(0x21), slaveMask = input(0xa1);
+    output(0x21, 0xff);
+    output(0xa1, 0xff);
+    constexpr uint32_t offsets[]{0x320, 0x330, 0x340, 0x350, 0x360, 0x370};
+    uint32_t savedLvt[6]{};
+    for (size_t i = 0; i < 6; ++i) {
+        savedLvt[i] = apic[offsets[i] / 4];
+        apic[offsets[i] / 4] = savedLvt[i] | (1u << 16);
+    }
+    const uint32_t savedTpr = apic[0x80 / 4];
+    const uint32_t savedSvr = apic[0xf0 / 4];
+    const uint32_t savedDivide = apic[0x3e0 / 4];
+    const uint32_t savedInitial = apic[0x380 / 4];
+    const InterruptGate savedTimer = g_idt[0xd1], savedSpurious = g_idt[0xff];
+    const auto gate = [](uint64_t handler) noexcept {
+        return InterruptGate{static_cast<uint16_t>(handler), cpu::SELECTOR_KCODE64, 0, 0x8e,
+                             static_cast<uint16_t>(handler >> 16), static_cast<uint32_t>(handler >> 32), 0};
+    };
+    g_idt[0xd1] = gate(reinterpret_cast<uint64_t>(MicantBootstrapTimerInterrupt));
+    g_idt[0xff] = gate(reinterpret_cast<uint64_t>(MicantBootstrapSpuriousInterrupt));
+    MicantTimerTicks = 0;
+    MicantTimerEoi = apic + 0xb0 / 4;
+    apic[0x80 / 4] = 0;
+    apic[0xf0 / 4] = (savedSvr & ~0xffu) | 0x1ff;
+    apic[0x3e0 / 4] = 0xb; // Divide by one; the test does not infer a frequency.
+    apic[0x320 / 4] = 0xd1 | (1u << 17); // Periodic, unmasked.
+    apic[0x380 / 4] = 100000;
+    __asm__ __volatile__("sti" : : : "memory");
+    for (size_t spin = 0; spin < 50000000 && MicantTimerTicks < 3; ++spin)
+        __asm__ __volatile__("pause");
+    __asm__ __volatile__("cli" : : : "memory");
+    apic[0x320 / 4] = savedLvt[0] | (1u << 16);
+    apic[0x380 / 4] = 0;
+    // Drain any timer already accepted into IRR before restoring the gate.
+    constexpr uint32_t timerBit = 1u << (0xd1 % 32);
+    constexpr size_t timerIrr = (0x200 + (0xd1 / 32) * 0x10) / 4;
+    if (apic[timerIrr] & timerBit) {
+        __asm__ __volatile__("sti" : : : "memory");
+        for (size_t spin = 0; spin < 1000000 && (apic[timerIrr] & timerBit); ++spin)
+            __asm__ __volatile__("pause");
+        __asm__ __volatile__("cli" : : : "memory");
+    }
+    const bool success = MicantTimerTicks >= 3 && !(apic[timerIrr] & timerBit);
+    apic[0x3e0 / 4] = savedDivide;
+    apic[0x380 / 4] = savedInitial;
+    apic[0x80 / 4] = savedTpr;
+    apic[0xf0 / 4] = savedSvr;
+    for (size_t i = 0; i < 6; ++i) apic[offsets[i] / 4] = savedLvt[i];
+    g_idt[0xd1] = savedTimer;
+    g_idt[0xff] = savedSpurious;
+    output(0x21, masterMask);
+    output(0xa1, slaveMask);
+    MicantTimerEoi = nullptr;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
+    const bool restored = !(flags & (uint64_t{1} << 9)) &&
+        input(0x21) == masterMask && input(0xa1) == slaveMask &&
+        apic[0x80 / 4] == savedTpr && apic[0xf0 / 4] == savedSvr &&
+        apic[0x3e0 / 4] == savedDivide && apic[0x380 / 4] == savedInitial;
+    if (!success) logTrapValue("[MicaNT Hal] Timer ticks=0x", MicantTimerTicks);
+    if (!restored && g_log) g_log("[MicaNT Hal] Timer state restoration failed\r\n");
+    return success && restored;
 }
 
 bool verifyRing3Transition() noexcept {
