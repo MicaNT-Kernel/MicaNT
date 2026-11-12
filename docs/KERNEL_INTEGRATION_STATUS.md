@@ -135,6 +135,13 @@ releasing the stack and address space. QEMU exercises this path, rejects
 premature cleanup and duplicate readying, and checks PFN accounting. This is
 not yet a waitable Ob thread object or an implementation of `NtCreateThreadEx`
 or process termination.
+Ps can also roll back a not-yet-started thread, withdrawing it from the Ke
+ready queue before it is reaped. QEMU checks cancellation both before and
+after queueing, rejection after selection or while running, and a clean PFN
+baseline. This BSP-only internal operation is not arbitrary thread termination.
+The local ReactOS `ntoskrnl/ps/kill.c` was inspected for thread termination
+and deferred cleanup; the public self-termination contract is described by
+[PsTerminateSystemThread](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread).
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
 The local ReactOS `hal/halx86/generic/timer.c` and `ntoskrnl/ke/time.c`
 were consulted for clock interrupt and dispatch ordering, without copying code.

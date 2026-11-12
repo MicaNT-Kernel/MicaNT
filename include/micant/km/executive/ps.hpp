@@ -41,6 +41,9 @@ public:
     EThread& operator=(const EThread&) = delete;
     NtStatus initialize(EProcess& process, size_t stackSize, StartRoutine start, void* argument) noexcept;
     NtStatus ready() noexcept;
+    // Roll back a thread that has not begun executing. BSP only, with
+    // interrupts disabled; running and waiting threads cannot be cancelled.
+    NtStatus cancelBeforeStart() noexcept;
     NtStatus reap() noexcept;
     [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
 private:
@@ -50,6 +53,7 @@ private:
     std::unique_ptr<uint8_t[]> stack_{};
     StartRoutine start_{nullptr};
     void* argument_{nullptr};
+    bool started_{false};
 };
 }
 #else

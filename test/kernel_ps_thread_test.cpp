@@ -6,6 +6,7 @@ struct State {
     micant::ps::EProcess* process{};
     micant::ke::KThread* boot{};
     bool ran{};
+    micant::ps::EThread* owner{};
 };
 
 void threadEntry(void* argument) noexcept {
@@ -13,7 +14,8 @@ void threadEntry(void* argument) noexcept {
     auto* current = micant::ke::KeGetCurrentThread();
     uintptr_t cr3{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(cr3));
-    if (!current || current->owningProcess != state.process ||
+    if (!current || !state.owner || state.owner->cancelBeforeStart() != micant::NtStatus::InvalidParameter ||
+        current->owningProcess != state.process ||
         cr3 != state.process->getDirectoryTableBase() ||
         !micant::ke::PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
     state.ran = true;
@@ -33,13 +35,25 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
         if (thread.initialize(process, 1, threadEntry, nullptr) != NtStatus::InvalidParameter ||
             thread.initialize(process, 16384, threadEntry, nullptr) != NtStatus::InvalidParameter ||
             process.initializeAddressSpace() != NtStatus::Success) return false;
-        State state{&process, boot, false};
+        State state{&process, boot, false, &thread};
+        ps::EThread cancelled;
+        if (cancelled.cancelBeforeStart() != NtStatus::InvalidParameter ||
+            cancelled.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
+            cancelled.ready() != NtStatus::Success || scheduler.getReadyThreadCount() != 1 ||
+            cancelled.cancelBeforeStart() != NtStatus::Success || scheduler.getReadyThreadCount() ||
+            cancelled.cancelBeforeStart() != NtStatus::InvalidParameter ||
+            cancelled.ready() != NtStatus::InvalidParameter || cancelled.reap() != NtStatus::Success ||
+            state.ran) return false;
+        if (cancelled.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
+            cancelled.cancelBeforeStart() != NtStatus::Success ||
+            cancelled.reap() != NtStatus::Success) return false;
         if (thread.initialize(process, 16384, threadEntry, &state) != NtStatus::Success ||
             process.closeAddressSpace() != NtStatus::InvalidParameter ||
             thread.ready() != NtStatus::Success || thread.ready() != NtStatus::InvalidParameter ||
             thread.reap() != NtStatus::InvalidParameter) return false;
         auto* next = scheduler.selectNextThread();
-        if (next != thread.kernelThread()) return false;
+        if (next != thread.kernelThread() || thread.cancelBeforeStart() != NtStatus::InvalidParameter)
+            return false;
         const KIRQL previous = KfRaiseIrql(DISPATCH_LEVEL);
         const bool switched = KiSwapContext(boot, next);
         KeLowerIrql(previous);

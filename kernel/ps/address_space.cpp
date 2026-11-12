@@ -86,9 +86,23 @@ NtStatus EThread::ready() noexcept {
         ? NtStatus::Success : NtStatus::Unsuccessful;
 }
 
+NtStatus EThread::cancelBeforeStart() noexcept {
+    if (!thread_ || started_ || thread_.get() == ke::KeGetCurrentThread())
+        return NtStatus::InvalidParameter;
+    if (thread_->state == ke::ThreadState::Ready) {
+        if (!ke::PriorityScheduler::get().removeReadyThread(thread_.get()))
+            return NtStatus::InvalidParameter;
+    } else if (thread_->state != ke::ThreadState::Initialized || thread_->readyQueued) {
+        return NtStatus::InvalidParameter;
+    }
+    thread_->state = ke::ThreadState::Terminated;
+    return NtStatus::Success;
+}
+
 void EThread::startThread(void* argument) noexcept {
     auto* self = static_cast<EThread*>(argument);
     if (!self || !self->thread_ || ke::KeGetCurrentThread() != self->thread_.get()) __builtin_trap();
+    self->started_ = true;
     ke::KeLowerIrql(ke::PASSIVE_LEVEL);
     self->start_(self->argument_);
     __asm__ __volatile__("cli" : : : "memory");
@@ -111,6 +125,7 @@ NtStatus EThread::reap() noexcept {
     process_ = nullptr;
     start_ = nullptr;
     argument_ = nullptr;
+    started_ = false;
     return NtStatus::Success;
 }
 }
