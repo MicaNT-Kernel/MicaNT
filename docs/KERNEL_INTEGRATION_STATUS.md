@@ -116,6 +116,7 @@ termination or arbitrary process-handle lookup. Those remain future work.
 | Check | Result |
 |---|---|
 | `python3 qemu.py --headless` | Passed; Ps-owned roots, Ke CR3 switches, isolated handles and pages, shared section, survivor after cleanup, injected root failures and PFN accounting |
+| `python3 qemu.py --headless --runtime-selftest` | Passed; bootstrap runtime teardown; this mode halts before the Ps/Ke process-context diagnostic |
 | `clang++ ... -fsanitize=address,undefined test/mm_process_backend_test.cpp` | Passed; backend rollback and teardown regression |
 | `clang++ ... -fsanitize=address,undefined test/ke_context_hosted_test.cpp` | Passed; hosted context regression |
 | `python3 scripts/verify_kernel_architecture.py` | Passed; one active modular kernel |
