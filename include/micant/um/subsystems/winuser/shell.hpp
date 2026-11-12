@@ -341,7 +341,7 @@ public:
         out << "\n";
         out << "MicaNT [Version 10.0.26100.1]\n";
         out << "(c) Project MICA. Dave Cutler Clean-Room Architecture. Zero Telemetry.\n";
-        out << "Type 'help' or '?' for available shell commands.\n\n";
+        out << "Type 'mica' for the MICA architectural tour, or 'help' for commands.\n\n";
     }
 
     std::string getCurrentDirectory() {
@@ -416,6 +416,7 @@ public:
 
         // Check MicaNT executive test & diagnostic commands
         if (!hasCompound || cmd == "sapi" || cmd == "speech" || cmd == "voice" || cmd == "tts") {
+            if (cmd == "mica" || cmd == "tour" || cmd == "about" || cmd == "cutler") { cmdMica(tokens, out); return 0; }
             if (cmd == "mem") { cmdMem(out); return 0; }
             if (cmd == "systeminfo") { cmdSystemInfo(out); return 0; }
             if (cmd == "ping") { cmdPing(tokens, out); return 0; }
