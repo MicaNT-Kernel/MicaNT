@@ -264,6 +264,7 @@ if (MICANT_ENABLE_BAREMETAL)
         kernel/ob/obref.cpp
         kernel/mm/virtual.cpp
         kernel/ps/address_space.cpp
+        kernel/ps/object.cpp
         kernel/ps/image.cpp
         test/kernel_context_canary.cpp
         test/kernel_ke_ready_queue_test.cpp

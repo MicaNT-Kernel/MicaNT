@@ -103,6 +103,14 @@ differs from the historical integration inventory below.
 The detailed increments and commands below record the checks actually run;
 an isolated diagnostic does not establish a complete milestone contract.
 
+Ps process objects now use Ob handles and references: attached threads pin
+their process, and the final terminated thread's reap closes the address space
+even when an external handle remains. The bootstrap test covers a self-handle,
+access and object-type checks, exit status, object counts and PFN recovery.
+`NtTerminateProcess` for another process remains unimplemented; native process
+creation and waitable process objects are also outstanding. The contract was
+checked against [ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwterminateprocess).
+
 The BSP clock vector is masked through CR8 when Ke raises IRQL to CLOCK_LEVEL;
 HIGH_LEVEL masks all priority classes. The QEMU diagnostic checks nested
 raising, preserved interrupt enable state, a pending clock interrupt and its
@@ -325,6 +333,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | `python3 qemu.py --headless` | Passed; persistent BSP scheduler clock, CPL3 preemption with syscall IF preservation, idle ticks and polled PS/2 input |
 | `python3 qemu.py --headless` | Passed; Ke idle context selected for an empty ready queue, timer wake and waiting-thread resumption |
 | `python3 qemu.py --headless` | Passed; clock IRQL masking and deferred IRQ delivery together with idle and preemption regression |
+| `python3 qemu.py --headless` | Passed; Ps/Ob process handle lifetime, self-handle termination, delayed reap and PFN/object counts |
 | `clang++ ... -fsanitize=address,undefined test/ke_freestanding_ready_queue_test.cpp test/kernel_ke_ready_queue_test.cpp` | Passed; ready-queue regression before idle initialization |
 | `python3 qemu.py --headless` | Passed; PIT-calibrated LAPIC period and persistent clock; no independent accuracy measurement was made |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |

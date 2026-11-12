@@ -11,6 +11,7 @@
 namespace micant::ke { struct KThread; }
 namespace micant::um { class NativeUserImageSet64; }
 namespace micant::ps {
+namespace detail { struct ProcessObjectFactory; }
 // Process-owned bootstrap address space. Lifecycle operations require the
 // single BSP with interrupts disabled; this is not yet NtCreateProcessEx.
 class EProcess {
@@ -42,6 +43,9 @@ public:
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
 private:
+    friend struct detail::ProcessObjectFactory;
+    friend class EThread;
+    ob::ObjectHeader* objectHeader_{nullptr};
     hal::amd64::ProcessPagingRoot root_{};
     mm::ProcessAddressSpace addressSpace_{};
     std::unique_ptr<ob::HandleTable> handles_{};
@@ -91,6 +95,8 @@ private:
                                    bool interruptible) noexcept;
     NtStatus releaseUserMemory() noexcept;
     EProcess* process_{nullptr};
+    ob::ObjectHeader* reapProcessReference_{nullptr};
+    bool processDetached_{false};
     std::unique_ptr<ke::KThread> thread_{};
     std::unique_ptr<uint8_t[]> stack_{};
     StartRoutine start_{nullptr};

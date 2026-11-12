@@ -3,6 +3,7 @@
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/core/sync.hpp"
 #include "micant/km/executive/usermode.hpp"
+#include "micant/km/executive/ps_objects.hpp"
 
 namespace micant::ps {
 
@@ -63,6 +64,7 @@ NtStatus EProcess::attachThread(ke::KThread& thread) noexcept {
     thread.processNext = threads_;
     threads_ = &thread;
     ++attachedThreads_;
+    if (objectHeader_) objectHeader_->addReference();
     return NtStatus::Success;
 }
 
@@ -145,13 +147,15 @@ NtStatus EProcess::detachThread(ke::KThread& thread) noexcept {
     *link = thread.processNext;
     thread.processNext = nullptr;
     --attachedThreads_;
+    auto* owner = objectHeader_;
     thread.owningProcess = nullptr;
     thread.directoryTableBase = 0;
+    if (owner) ob::ObDereferenceObject(owner);
     return NtStatus::Success;
 }
 
 EThread::~EThread() {
-    if (thread_ || stack_ || process_) __builtin_trap();
+    if (thread_ || stack_ || process_ || reapProcessReference_ || processDetached_) __builtin_trap();
 }
 
 NtStatus EThread::initialize(EProcess& process, size_t stackSize,
@@ -314,25 +318,61 @@ NtStatus EThread::reap() noexcept {
         (thread_->state != ke::ThreadState::Initialized && thread_->state != ke::ThreadState::Terminated))
         return NtStatus::InvalidParameter;
     if (!thread_->kernelApcList.empty() || !thread_->userApcList.empty()) return NtStatus::NotImplemented;
-    const auto cleanup = releaseUserMemory();
-    if (cleanup != NtStatus::Success) return cleanup;
-    const auto status = process_->detachThread(*thread_);
-    if (status != NtStatus::Success) return status;
+    if (!processDetached_) {
+        const auto cleanup = releaseUserMemory();
+        if (cleanup != NtStatus::Success) return cleanup;
+        // Keep the process alive while closing its own handle table, which may
+        // itself contain the last ordinary reference to the process object.
+        if (process_->objectHeader_ && process_->isTerminating() && process_->attachedThreads_ == 1) {
+            reapProcessReference_ = process_->objectHeader_;
+            reapProcessReference_->addReference();
+        }
+        const auto status = process_->detachThread(*thread_);
+        if (status != NtStatus::Success) {
+            if (reapProcessReference_) {
+                auto* reference = reapProcessReference_;
+                reapProcessReference_ = nullptr;
+                ob::ObDereferenceObject(reference);
+            }
+            return status;
+        }
+        processDetached_ = true;
+    }
+    if (reapProcessReference_) {
+        const auto status = process_->closeAddressSpace();
+        if (status != NtStatus::Success) return status;
+        auto* reference = reapProcessReference_;
+        reapProcessReference_ = nullptr;
+        process_ = nullptr;
+        ob::ObDereferenceObject(reference);
+    }
     thread_.reset();
     stack_.reset();
     process_ = nullptr;
     start_ = nullptr;
     argument_ = nullptr;
     started_ = false;
+    processDetached_ = false;
     return NtStatus::Success;
 }
 }
 
 namespace micant::sys {
 NtStatus NtTerminateProcess(Handle processHandle, NtStatus exitStatus) {
-    if (processHandle != InvalidHandleValue) return NtStatus::NotImplemented;
+    constexpr uint32_t ProcessTerminateAccess = 0x0001;
     auto* current = ke::KeGetCurrentThread();
-    if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
-    return current->owningProcess->terminateCurrent(exitStatus);
+    if (processHandle == InvalidHandleValue) {
+        if (!current || !current->owningProcess) return NtStatus::InvalidParameter;
+        return current->owningProcess->terminateCurrent(exitStatus);
+    }
+    if (!processHandle) return NtStatus::NotImplemented;
+    ob::ObjectHeader* reference{};
+    ps::EProcess* process{};
+    const auto status = ps::detail::referenceProcessHandle(processHandle, ProcessTerminateAccess, process, reference);
+    if (status != NtStatus::Success) return status;
+    const bool isCurrent = current && current->owningProcess == process;
+    ob::ObDereferenceObject(reference);
+    // The attached current thread pins its process object until it is reaped.
+    return isCurrent ? process->terminateCurrent(exitStatus) : NtStatus::NotImplemented;
 }
 }

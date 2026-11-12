@@ -1,6 +1,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
+#include "micant/km/executive/ps_objects.hpp"
 
 namespace {
 struct State {
@@ -42,6 +43,77 @@ void terminatingEntry(void* argument) noexcept {
     state.ran = true;
     (void)micant::sys::NtTerminateProcess(micant::InvalidHandleValue, micant::NtStatus::AccessDenied);
     __builtin_trap();
+}
+
+struct ObjectExitState {
+    micant::ke::KThread* boot{};
+    micant::Handle selfHandle{};
+    bool ran{};
+};
+
+void objectTerminatingEntry(void* argument) noexcept {
+    auto& state = *static_cast<ObjectExitState*>(argument);
+    if (!micant::ke::PriorityScheduler::get().readyKThread(state.boot)) __builtin_trap();
+    state.ran = true;
+    (void)micant::sys::NtTerminateProcess(state.selfHandle, micant::NtStatus::AccessDenied);
+    __builtin_trap();
+}
+
+bool testProcessObjectLifetime() noexcept {
+    using namespace micant;
+    const size_t active = mm::PfnDatabase::get().getActiveCount();
+    const uint32_t objects = ps::detail::bootstrapProcessObjectCount();
+    Handle handle{};
+    ps::EProcess* process{};
+    if (ps::detail::createProcessHandle(0, handle, process) != NtStatus::Success || !process ||
+        ps::detail::bootstrapProcessObjectCount() != objects + 1 ||
+        sys::NtTerminateProcess(handle, NtStatus::Success) != NtStatus::AccessDenied) return false;
+    ob::ObjectHeader* reference{};
+    ps::EProcess* resolved{};
+    if (ps::detail::referenceProcessHandle(handle, 0, resolved, reference) != NtStatus::Success ||
+        resolved != process || !reference) return false;
+    ob::ObDereferenceObject(reference);
+    ke::KThread pinned;
+    if (process->attachThread(pinned) != NtStatus::Success || sys::NtClose(handle) != NtStatus::Success ||
+        ps::detail::bootstrapProcessObjectCount() != objects + 1 ||
+        process->closeAddressSpace() != NtStatus::InvalidParameter ||
+        process->detachThread(pinned) != NtStatus::Success ||
+        ps::detail::bootstrapProcessObjectCount() != objects ||
+        mm::PfnDatabase::get().getActiveCount() != active) return false;
+
+    if (ps::detail::createProcessHandle(1, handle, process) != NtStatus::Success ||
+        sys::NtTerminateProcess(handle, NtStatus::Success) != NtStatus::NotImplemented ||
+        sys::NtClose(handle) != NtStatus::Success ||
+        sys::NtTerminateProcess(handle, NtStatus::Success) != NtStatus::InvalidHandle ||
+        ps::detail::bootstrapProcessObjectCount() != objects) return false;
+    Handle event{};
+    if (sys::NtCreateEvent(&event, 1, nullptr, 0, false) != NtStatus::Success ||
+        sys::NtTerminateProcess(event, NtStatus::Success) != NtStatus::ObjectTypeMismatch ||
+        sys::NtClose(event) != NtStatus::Success) return false;
+    if (mm::PfnDatabase::get().getActiveCount() != active ||
+        ps::detail::createProcessHandle(1, handle, process) != NtStatus::Success) return false;
+    ObjectExitState state{ke::KeGetCurrentThread()};
+    if (ob::detail::currentHandleTable().duplicateHandle(handle, process->getHandleTable(), state.selfHandle) !=
+        NtStatus::Success) return false;
+    ps::EThread thread;
+    auto& scheduler = ke::PriorityScheduler::get();
+    if (thread.initialize(*process, 16384, objectTerminatingEntry, &state) != NtStatus::Success ||
+        thread.ready() != NtStatus::Success) return false;
+    auto* next = scheduler.selectNextThread();
+    if (next != thread.kernelThread()) return false;
+    const auto previous = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    const bool switched = ke::KiSwapContext(state.boot, next);
+    ke::KeLowerIrql(previous);
+    if (!switched || !state.ran || !process->isTerminating() ||
+        process->exitStatus() != NtStatus::AccessDenied || next->state != ke::ThreadState::Terminated ||
+        thread.reap() != NtStatus::Success || process->getDirectoryTableBase() ||
+        ps::detail::bootstrapProcessObjectCount() != objects + 1 ||
+        ps::detail::referenceProcessHandle(handle, 0, resolved, reference) != NtStatus::Success ||
+        resolved != process || resolved->exitStatus() != NtStatus::AccessDenied) return false;
+    ob::ObDereferenceObject(reference);
+    return sys::NtClose(handle) == NtStatus::Success &&
+        ps::detail::bootstrapProcessObjectCount() == objects &&
+        mm::PfnDatabase::get().getActiveCount() == active;
 }
 }
 
@@ -115,5 +187,5 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
             thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
             return false;
     }
-    return mm::PfnDatabase::get().getActiveCount() == active;
+    return mm::PfnDatabase::get().getActiveCount() == active && testProcessObjectLifetime();
 }
