@@ -77,6 +77,13 @@ private:
     bool x2_{};
 };
 BootstrapLocalApic g_timerApic{};
+
+// Serialize the transition between CR8 and APIC TPR access during the
+// diagnostic's save/restore; the runtime path updates priority through CR8.
+void serializeApicPriorityAccess() noexcept {
+    uint32_t eax = 0, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : : "memory");
+}
 micant::ke::KThread g_bootstrapIdleThread{};
 alignas(16) uint8_t g_bootstrapIdleStack[32768]{};
 alignas(16) uint8_t g_syscallStack[65536]{};
@@ -1901,13 +1908,66 @@ struct TimerWorkerState {
     volatile uint64_t iterations{0};
     uint64_t canary{0};
     volatile uint64_t corrupted{0};
+    uint64_t expected[8]{};
+    uint64_t observed[8]{};
 };
+static_assert(offsetof(TimerWorkerState, expected) == 24);
+static_assert(offsetof(TimerWorkerState, observed) == 88);
 alignas(16) static uint8_t g_firstTimerWorkerStack[16384]{};
 alignas(16) static uint8_t g_secondTimerWorkerStack[16384]{};
+static TimerWorkerState g_firstTimerWorkerState{};
+static TimerWorkerState g_secondTimerWorkerState{};
+
+// These loops make no calls after loading their canaries: a timer interrupt
+// must save and restore the entire vector register before the next comparison.
+// They are reached only after checking CPUID and XCR0, so unsupported vector
+// instructions are never executed.
+extern "C" [[noreturn]] __attribute__((naked)) void MicantTimerAvxCanary(TimerWorkerState*) noexcept {
+    __asm__ __volatile__(
+        "vmovdqu 24(%rcx), %ymm6\nsti\n"
+        "1: vmovdqu %ymm6, 88(%rcx)\n"
+        "xorl %edx, %edx\n"
+        "2: movq 24(%rcx,%rdx,8), %rax\n"
+        "cmpq %rax, 88(%rcx,%rdx,8)\njne 3f\n"
+        "incq %rdx\ncmpq $4, %rdx\njne 2b\n"
+        "incq (%rcx)\njmp 1b\n"
+        "3: movq $1, 16(%rcx)\njmp 1b\n");
+}
+
+extern "C" [[noreturn]] __attribute__((naked)) void MicantTimerAvx512Canary(TimerWorkerState*) noexcept {
+    __asm__ __volatile__(
+        "vmovdqu64 24(%rcx), %zmm6\n"
+        "vmovdqu64 24(%rcx), %zmm31\nsti\n"
+        "1: vmovdqu64 %zmm6, 88(%rcx)\ncallq 4f\n"
+        "vmovdqu64 %zmm31, 88(%rcx)\ncallq 4f\n"
+        "incq (%rcx)\njmp 1b\n"
+        "4: xorl %edx, %edx\n"
+        "2: movq 24(%rcx,%rdx,8), %rax\n"
+        "cmpq %rax, 88(%rcx,%rdx,8)\njne 3f\n"
+        "incq %rdx\ncmpq $8, %rdx\njne 2b\nretq\n"
+        "3: movq $1, 16(%rcx)\nretq\n");
+}
+
+static unsigned timerVectorCanaryMode() noexcept {
+    if ((MicantAmd64XsaveMask & 7u) != 7u) return 0;
+    uint32_t eax = 1, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if ((ecx & ((1u << 27) | (1u << 28))) != ((1u << 27) | (1u << 28))) return 0;
+    if ((MicantAmd64XsaveMask & 0xe0u) != 0xe0u) return 1;
+    eax = 0;
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if (eax < 7) return 1;
+    eax = 7; ecx = 0;
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+    return (ebx & (1u << 16)) ? 2 : 1;
+}
 
 [[noreturn]] static void timerWorker(void* argument) noexcept {
     auto* state = static_cast<TimerWorkerState*>(argument);
     ke::KeLowerIrql(ke::PASSIVE_LEVEL);
+    const auto mode = timerVectorCanaryMode();
+    if (mode == 2) MicantTimerAvx512Canary(state);
+    if (mode == 1) MicantTimerAvxCanary(state);
     __asm__ __volatile__(
         "movq 8(%%rcx), %%r12\nmovq %%r12, %%xmm6\nsti\n"
         "1:\nmovq %%xmm6, %%rax\ncmpq %%r12, %%rax\njne 2f\n"
@@ -1922,8 +1982,18 @@ static bool verifyBootstrapPreemption() noexcept {
     auto* boot = KeGetCurrentThread();
     auto& scheduler = PriorityScheduler::get();
     if (!boot || boot->state != ThreadState::Running || scheduler.getReadyThreadCount()) return false;
-    TimerWorkerState firstState{0, 0x12345678abcdef00ULL, 0};
-    TimerWorkerState secondState{0, 0xfedcba9876543210ULL, 0};
+    auto& firstState = g_firstTimerWorkerState;
+    auto& secondState = g_secondTimerWorkerState;
+    firstState.iterations = 0;
+    secondState.iterations = 0;
+    firstState.corrupted = 0;
+    secondState.corrupted = 0;
+    firstState.canary = 0x12345678abcdef00ULL;
+    secondState.canary = 0xfedcba9876543210ULL;
+    for (size_t i = 0; i < 8; ++i) {
+        firstState.expected[i] = firstState.canary ^ (0x0101010101010101ULL * (i + 1));
+        secondState.expected[i] = secondState.canary ^ (0x1010101010101010ULL * (i + 1));
+    }
     KThread first, second;
     first.directoryTableBase = second.directoryTableBase = g_CurrentCpu.currentCr3;
     first.priority = second.priority = PRIORITY_NORMAL;
@@ -2043,7 +2113,6 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     g_idt[0xd1] = gate(reinterpret_cast<uint64_t>(MicantBootstrapTimerInterrupt));
     g_idt[0xff] = gate(reinterpret_cast<uint64_t>(MicantBootstrapSpuriousInterrupt));
     MicantTimerTicks = 0;
-    apic[0x80 / 4] = 0;
     g_clockIrqlMaskReady = true;
     setBootstrapClockIrqlMask(ke::KeGetCurrentIrql());
     apic[0xf0 / 4] = (savedSvr & ~0xffu) | 0x1ff;
@@ -2095,7 +2164,9 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
     g_clockIrqlMaskReady = false;
+    serializeApicPriorityAccess();
     apic[0x80 / 4] = savedTpr;
+    serializeApicPriorityAccess();
     apic[0xf0 / 4] = savedSvr;
     for (size_t i = 0; i < 6; ++i) apic[offsets[i] / 4] = savedLvt[i];
     g_idt[0xd1] = savedTimer;
@@ -2228,7 +2299,6 @@ bool startBootstrapSchedulerClock() noexcept {
     MicantTimerBootThread = nullptr;
     MicantTimerDispatchFailed = false;
     MicantTimerPreemptionEnabled = true;
-    apic[0x80 / 4] = 0;
     g_clockIrqlMaskReady = true;
     setBootstrapClockIrqlMask(ke::KeGetCurrentIrql());
     apic[0xf0 / 4] = (apic[0xf0 / 4] & ~0xffu) | 0x1ff;

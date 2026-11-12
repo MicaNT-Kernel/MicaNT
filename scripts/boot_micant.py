@@ -66,6 +66,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ps] Bounded native PE mapping and compiled user entry verified",
     "[MicaNT Input] PS/2 mouse polling initialized",
     "[MicaNT Ke] Runtime idle wait and wake verified",
+    "[MicaNT Ke] Runtime DPC/APC delivery verified",
     "[MicaNT Explorer] Shell idle loop entered",
     "[MicaNT Ke] Runtime scheduler clock ticking",
 )
@@ -111,6 +112,8 @@ def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
                 return pixels
 
             execute("qmp_capabilities")
+            startup_serial = serial_path.read_text(encoding="utf-8", errors="replace")
+            irq_enabled = "[MicaNT Input] PS/2 mouse interrupt routing active" in startup_serial
             before = screen("before.ppm")
             for y in range(2):
                 for x in range(2):
@@ -148,9 +151,13 @@ def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 serial = serial_path.read_text(encoding="utf-8", errors="replace")
-                if "[MicaNT Input] Left button pressed; user-mode shell not started" in serial:
+                click_seen = "[MicaNT Input] Left button pressed; user-mode shell not started" in serial
+                irq_seen = "[MicaNT Input] PS/2 mouse IRQ byte consumed" in serial
+                if click_seen and (not irq_enabled or irq_seen):
                     return
                 time.sleep(0.1)
+            if irq_enabled and "[MicaNT Input] PS/2 mouse IRQ byte consumed" not in serial:
+                raise RuntimeError("PS/2 IRQ route was enabled but no ISR byte reached the consumer")
             raise RuntimeError("PS/2 left click did not reach the kernel input loop")
 
 

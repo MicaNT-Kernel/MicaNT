@@ -94,7 +94,7 @@ differs from the historical integration inventory below.
 |---|---|
 | M1: section mapping | Anonymous section mapping through Mm and Ob exercised in QEMU, including shared pages and cleanup. |
 | M2: independent address spaces | Bounded BSP acceptance path exercised through Ps, Ke, Mm and Ob in QEMU, including private pages, shared section, survivor and PFN rollback. General process creation and termination remain outstanding. |
-| M3: preemptive scheduler | Earlier QEMU runs exercised persistent BSP timer preemption, kernel and CPL3 contexts, blocking and idle. The current larger scheduler/IRQ batch is implemented only in part and has not been built or tested. |
+| M3: preemptive scheduler | Bootstrap acceptance criteria completed on the single BSP in QEMU: timer-preempted kernel threads without voluntary yield, block/wakeup and bounded cleanup. General lifecycle and APC rundown remain M4 work; this is not a claim of full NT scheduler compatibility. |
 | M4: process and thread lifecycle | Bounded Ps kernel thread creation, execution and reap verified in QEMU. Waitable process/thread objects, normal process termination and native creation services remain outstanding. |
 | M5: NT system calls | Section, close and bounded current-process allocation/free calls exercised from CPL3. The services needed for native process/thread creation, synchronization and termination are incomplete. |
 | M6: first Ring 3 PE process | Not complete. The PE and CPL3 probes are diagnostics; image section mapping, process startup, PEB/TEB and termination are not integrated. |
@@ -150,6 +150,12 @@ mapping and PS/2 route activation, and passed input/scanout checks. The input
 consumer also polls the controller, so these observations alone do not prove
 interrupt delivery. x2APIC, AVX-512, pending runtime DPC/APC delivery and
 clock accuracy have not been independently exercised.
+
+After commit `46c0d21`, a further M3 batch adds CR8/APIC priority-transition
+serialization and boot diagnostics for DPC/APC delivery and AVX/AVX-512
+register preservation. PS/2 input now records whether a consumed byte came
+from the ISR; the runner requires such a byte when the IRQ route is active,
+while preserving polling as recovery for missed edges. The combined batch was incrementally built and passed `python3 qemu.py --headless`: the timer, two non-yielding workers, block/wakeup, queue withdrawal, bounded Ps cleanup, clock IRQL and runtime DPC/APC diagnostics all passed. The runner also passed its input and scanout checks; an ISR byte is required if the PS/2 route is active. The QEMU default CPU run does not establish AVX, AVX-512 or x2APIC coverage. The architecture check, seven bootstrap-runner tests, sanitized host ready-queue regression and undefined-symbol check passed. No physical hardware or independent timer accuracy validation was performed.
 The Intel [system programming manual](https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf)
 was consulted for x2APIC register access.
 

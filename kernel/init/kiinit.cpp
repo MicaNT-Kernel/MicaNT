@@ -74,6 +74,7 @@ extern "C" bool MicantVerifyContextSwitch(
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" bool MicantTestKeBlockWake() noexcept;
 extern "C" bool MicantTestKeApcFifo() noexcept;
+extern "C" bool MicantTestKeDeferredDelivery() noexcept;
 extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
@@ -100,6 +101,7 @@ uint8_t readPort(uint16_t port) noexcept {
 // other's pending input.
 struct Ps2ByteRing {
     uint8_t bytes[128]{};
+    bool fromInterrupt[128]{};
     uint8_t read{};
     uint8_t write{};
     bool lost{};
@@ -109,43 +111,47 @@ Ps2ByteRing g_ps2KeyboardRing{};
 bool g_ps2InterruptMode{};
 uint8_t g_ps2Configuration{};
 
-void pushPs2Byte(Ps2ByteRing& ring, uint8_t data) noexcept {
+void pushPs2Byte(Ps2ByteRing& ring, uint8_t data, bool fromInterrupt) noexcept {
     const uint8_t next = static_cast<uint8_t>((ring.write + 1) & 127);
     if (next == ring.read) { ring.lost = true; ring.read = ring.write; }
     ring.bytes[ring.write] = data;
+    ring.fromInterrupt[ring.write] = fromInterrupt;
     ring.write = next;
 }
 
-bool popPs2Byte(Ps2ByteRing& ring, uint8_t& data, bool& lost) noexcept {
+bool popPs2Byte(Ps2ByteRing& ring, uint8_t& data, bool& lost, bool& fromInterrupt) noexcept {
     lost = ring.lost;
     ring.lost = false;
     if (ring.read == ring.write) return false;
     data = ring.bytes[ring.read];
+    fromInterrupt = ring.fromInterrupt[ring.read];
     ring.read = static_cast<uint8_t>((ring.read + 1) & 127);
     return true;
 }
 
-void capturePs2Bytes() noexcept {
+void capturePs2Bytes(bool fromInterrupt) noexcept {
     for (unsigned count = 0; count < 64; ++count) {
         const uint8_t status = readPort(0x64);
         if (!(status & 1)) break;
         const uint8_t data = readPort(0x60);
         auto& ring = (status & 0x20) ? g_ps2MouseRing : g_ps2KeyboardRing;
         if (status & 0xc0) { ring.lost = true; ring.read = ring.write; continue; }
-        pushPs2Byte(ring, data);
+        pushPs2Byte(ring, data, fromInterrupt);
     }
 }
 
-bool nextMouseByte(uint8_t& status, uint8_t& data, bool& lost) noexcept {
+bool nextMouseByte(uint8_t& status, uint8_t& data, bool& lost, bool& fromInterrupt) noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     bool result{};
     if (g_ps2InterruptMode) {
-        capturePs2Bytes(); // Also recover an edge received while the route was masked.
+        // Recover a missed edge without marking polled bytes as ISR delivery.
+        capturePs2Bytes(false);
         status = 0x20;
-        result = popPs2Byte(g_ps2MouseRing, data, lost);
+        result = popPs2Byte(g_ps2MouseRing, data, lost, fromInterrupt);
     } else {
         lost = false;
+        fromInterrupt = false;
         status = readPort(0x64);
         result = (status & 1) != 0;
         if (result) data = readPort(0x60);
@@ -1082,10 +1088,15 @@ bool startMouseInterrupt() noexcept {
 bool pollMouseInput(MicaWin32kInputEvent& event) noexcept {
     static uint8_t packet[3]{};
     static uint32_t packetIndex = 0;
+    static bool interruptObserved = false;
     for (unsigned count = 0; count < 64; ++count) {
         uint8_t status{}, data{};
-        bool lost{};
-        const bool available = nextMouseByte(status, data, lost);
+        bool lost{}, fromInterrupt{};
+        const bool available = nextMouseByte(status, data, lost, fromInterrupt);
+        if (available && fromInterrupt && !interruptObserved) {
+            interruptObserved = true;
+            serialWrite("[MicaNT Input] PS/2 mouse IRQ byte consumed\r\n");
+        }
         if (lost) packetIndex = 0;
         if (!available) return false;
         if ((status & 0x20) == 0) {
@@ -1174,20 +1185,21 @@ void setBootstrapPs2InterruptMode(bool active) noexcept {
         g_ps2MouseRing = {};
         g_ps2KeyboardRing = {};
         g_ps2InterruptMode = true;
-        capturePs2Bytes();
+        capturePs2Bytes(false);
     } else if (!active) {
         g_ps2InterruptMode = false;
     }
 }
 
 void captureBootstrapPs2Interrupt() noexcept {
-    if (g_ps2InterruptMode) capturePs2Bytes();
+    if (g_ps2InterruptMode) capturePs2Bytes(true);
 }
 
 bool popBootstrapPs2KeyboardByte(uint8_t& byte, bool& lost) noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
-    const bool result = popPs2Byte(g_ps2KeyboardRing, byte, lost);
+    bool fromInterrupt{};
+    const bool result = popPs2Byte(g_ps2KeyboardRing, byte, lost, fromInterrupt);
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     return result;
 }
@@ -1397,6 +1409,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (clockActive && !micant::hal::amd64::verifyBootstrapSchedulerClock())
         stopWithError("[MicaNT Ke] Runtime scheduler preemption failed\r\n");
     if (clockActive) serialWrite("[MicaNT Ke] Runtime idle wait and wake verified\r\n");
+    if (clockActive && !MicantTestKeDeferredDelivery())
+        stopWithError("[MicaNT Ke] Runtime DPC/APC delivery failed\r\n");
+    if (clockActive) serialWrite("[MicaNT Ke] Runtime DPC/APC delivery verified\r\n");
     if (clockActive && startMouseInterrupt())
         serialWrite("[MicaNT Input] PS/2 mouse interrupt routing active\r\n");
     if (!clockActive) serialWrite("[MicaNT Ke] Runtime scheduler clock unavailable\r\n");
