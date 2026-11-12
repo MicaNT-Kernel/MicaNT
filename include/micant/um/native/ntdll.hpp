@@ -3359,6 +3359,37 @@ struct SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMA
 };
 using PSYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMATION = SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_SETTLING_LATENCY_TELEMETRY_INFORMATION*;
 
+// Class 339: SystemPagefileWriteCompressionEnergySavingsRatioTelemetryInformation
+struct SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // 1
+    ULONG    Reserved;                             // 0
+    ULONG    PagefileIndex;                        // 0
+    ULONG64  TotalCompressedBatches;               // 980000ULL
+    ULONG64  TotalUncompressedEnergyJoules;        // 294000ULL
+    ULONG64  TotalCompressedEnergyJoules;          // 79380ULL
+    ULONG64  EnergyJoulesSaved;                    // 214620ULL
+    double   EnergySavingsRatio;                   // 0.730 (73.0% saved)
+    double   JoulesSavedPerBatch;                  // 0.219
+    ULONG    Flags;                                // 0x07
+};
+using PSYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION = SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION*;
+
+// Class 340: SystemCpuClockPhaseLockedLoopDcoFrequencyDriftTelemetryInformation
+struct SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION {
+    ULONG    Version;                              // 1
+    ULONG    Reserved;                             // 0
+    ULONG    PackageIndex;                         // 0
+    ULONG    CoreIndex;                            // 0
+    ULONG64  TotalDriftObservations;               // 1500000ULL
+    double   FrequencyDriftRateHzPerSec;           // 0.045
+    double   PeakFrequencyDriftHz;                 // 1.250
+    double   DriftVarianceHz2;                     // 0.008
+    double   ThermalDriftSensitivityHzPerDegC;     // 12.500
+    double   SupplyVoltageDriftSensitivityHzPerMv; // 4.200
+    ULONG    Flags;                                // 0x07
+};
+using PSYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION = SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION*;
+
 // Class 325: SystemPagefileWriteBandwidthThrottlingTelemetryInformation
 struct SYSTEM_PAGEFILE_WRITE_BANDWIDTH_THROTTLING_TELEMETRY_INFORMATION {
     ULONG    Version;                              // e.g. 1
@@ -7319,6 +7350,49 @@ inline NtStatus WINAPI NtQuerySystemInformation_Export(
             return NtStatus::Success;
         }
 
+        case 339: { // SystemPagefileWriteCompressionEnergySavingsRatioTelemetryInformation (Class 339)
+            if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PagefileIndex = 0;
+            pInfo->TotalCompressedBatches = 980000ULL;
+            pInfo->TotalUncompressedEnergyJoules = 294000ULL;
+            pInfo->TotalCompressedEnergyJoules = 79380ULL;
+            pInfo->EnergyJoulesSaved = 214620ULL;
+            pInfo->EnergySavingsRatio = 0.730;
+            pInfo->JoulesSavedPerBatch = 0.219;
+            pInfo->Flags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+
+        case 340: { // SystemCpuClockPhaseLockedLoopDcoFrequencyDriftTelemetryInformation (Class 340)
+            if (SystemInformationLength < sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION)) {
+                if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION);
+                return NtStatus::InfoLengthMismatch;
+            }
+            auto* pInfo = reinterpret_cast<SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION*>(SystemInformation);
+            std::memset(pInfo, 0, sizeof(*pInfo));
+            pInfo->Version = 1;
+            pInfo->Reserved = 0;
+            pInfo->PackageIndex = 0;
+            pInfo->CoreIndex = 0;
+            pInfo->TotalDriftObservations = 1500000ULL;
+            pInfo->FrequencyDriftRateHzPerSec = 0.045;
+            pInfo->PeakFrequencyDriftHz = 1.250;
+            pInfo->DriftVarianceHz2 = 0.008;
+            pInfo->ThermalDriftSensitivityHzPerDegC = 12.500;
+            pInfo->SupplyVoltageDriftSensitivityHzPerMv = 4.200;
+            pInfo->Flags = 0x07;
+            if (ReturnLength) *ReturnLength = sizeof(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION);
+            return NtStatus::Success;
+        }
+
         case 325: { // SystemPagefileWriteBandwidthThrottlingTelemetryInformation (Class 325)
             if (SystemInformationLength < sizeof(SYSTEM_PAGEFILE_WRITE_BANDWIDTH_THROTTLING_TELEMETRY_INFORMATION)) {
                 if (ReturnLength) *ReturnLength = sizeof(SYSTEM_PAGEFILE_WRITE_BANDWIDTH_THROTTLING_TELEMETRY_INFORMATION);
@@ -10319,6 +10393,78 @@ inline CHAR WINAPI RtlInterlockedNotEqualModulo8(CHAR volatile* Destination, CHA
     }
 }
 
+inline LONG64 WINAPI RtlInterlockedAndNotModulo64(LONG64 volatile* Destination, LONG64 ValA, LONG64 ValB, LONG64 ValC, ULONG64 Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
+    LONG64 current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint64_t a = static_cast<uint64_t>(ValA);
+        uint64_t b = static_cast<uint64_t>(ValB);
+        uint64_t c = static_cast<uint64_t>(ValC);
+        uint64_t andnot = a & ~b & ~c;
+        uint64_t res = andnot % Modulus;
+        LONG64 next = static_cast<LONG64>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline LONG WINAPI RtlInterlockedAndNotModulo32(LONG volatile* Destination, LONG ValA, LONG ValB, LONG ValC, ULONG Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<LONG> volatile*>(Destination);
+    LONG current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint32_t a = static_cast<uint32_t>(ValA);
+        uint32_t b = static_cast<uint32_t>(ValB);
+        uint32_t c = static_cast<uint32_t>(ValC);
+        uint32_t andnot = a & ~b & ~c;
+        uint32_t res = andnot % Modulus;
+        LONG next = static_cast<LONG>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline SHORT WINAPI RtlInterlockedAndNotModulo16(SHORT volatile* Destination, SHORT ValA, SHORT ValB, SHORT ValC, USHORT Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<SHORT> volatile*>(Destination);
+    SHORT current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint16_t a = static_cast<uint16_t>(ValA);
+        uint16_t b = static_cast<uint16_t>(ValB);
+        uint16_t c = static_cast<uint16_t>(ValC);
+        uint16_t andnot = static_cast<uint16_t>(a & static_cast<uint16_t>(~b) & static_cast<uint16_t>(~c));
+        uint16_t res = static_cast<uint16_t>(andnot % Modulus);
+        SHORT next = static_cast<SHORT>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
+inline CHAR WINAPI RtlInterlockedAndNotModulo8(CHAR volatile* Destination, CHAR ValA, CHAR ValB, CHAR ValC, UCHAR Modulus) noexcept {
+    if (!Destination) return 0;
+    auto* atomicDest = reinterpret_cast<std::atomic<CHAR> volatile*>(Destination);
+    CHAR current = atomicDest->load(std::memory_order_relaxed);
+    if (Modulus == 0) return current;
+    while (true) {
+        uint8_t a = static_cast<uint8_t>(ValA);
+        uint8_t b = static_cast<uint8_t>(ValB);
+        uint8_t c = static_cast<uint8_t>(ValC);
+        uint8_t andnot = static_cast<uint8_t>(a & static_cast<uint8_t>(~b) & static_cast<uint8_t>(~c));
+        uint8_t res = static_cast<uint8_t>(andnot % Modulus);
+        CHAR next = static_cast<CHAR>(res);
+        if (atomicDest->compare_exchange_weak(current, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
+
 inline LONG64 WINAPI RtlInterlockedNonImplicationModulo64(LONG64 volatile* Destination, LONG64 Value, ULONG64 Modulus) noexcept {
     if (!Destination) return 0;
     auto* atomicDest = reinterpret_cast<std::atomic<LONG64> volatile*>(Destination);
@@ -11553,6 +11699,18 @@ inline NtStatus WINAPI RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTe
     return NtQuerySystemInformation_Export(338, Info, sizeof(*Info), &retLen);
 }
 
+inline NtStatus WINAPI RtlQuerySystemPagefileWriteCompressionEnergySavingsRatioTelemetryInformation(SYSTEM_PAGEFILE_WRITE_COMPRESSION_ENERGY_SAVINGS_RATIO_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(339, Info, sizeof(*Info), &retLen);
+}
+
+inline NtStatus WINAPI RtlQuerySystemCpuClockPhaseLockedLoopDcoFrequencyDriftTelemetryInformation(SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_FREQUENCY_DRIFT_TELEMETRY_INFORMATION* Info) noexcept {
+    if (!Info) return NtStatus::InvalidParameter;
+    uint32_t retLen = 0;
+    return NtQuerySystemInformation_Export(340, Info, sizeof(*Info), &retLen);
+}
+
 inline NtStatus WINAPI RtlQuerySystemPagefileWriteBandwidthThrottlingTelemetryInformation(SYSTEM_PAGEFILE_WRITE_BANDWIDTH_THROTTLING_TELEMETRY_INFORMATION* Info) noexcept {
     if (!Info) return NtStatus::InvalidParameter;
     uint32_t retLen = 0;
@@ -12303,10 +12461,10 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnorModulo32", reinterpret_cast<void*>(RtlInterlockedXnorModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnorModulo16", reinterpret_cast<void*>(RtlInterlockedXnorModulo16));
     ldr.registerExport("ntdll.dll", "RtlInterlockedXnorModulo8", reinterpret_cast<void*>(RtlInterlockedXnorModulo8));
-    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo64", reinterpret_cast<void*>(RtlInterlockedAndNotModulo64));
-    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo32", reinterpret_cast<void*>(RtlInterlockedAndNotModulo32));
-    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo16", reinterpret_cast<void*>(RtlInterlockedAndNotModulo16));
-    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo8", reinterpret_cast<void*>(RtlInterlockedAndNotModulo8));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, ULONG64) noexcept>(RtlInterlockedAndNotModulo64)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, ULONG) noexcept>(RtlInterlockedAndNotModulo32)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, USHORT) noexcept>(RtlInterlockedAndNotModulo16)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedAndNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, UCHAR) noexcept>(RtlInterlockedAndNotModulo8)));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOrNotModulo64", reinterpret_cast<void*>(RtlInterlockedOrNotModulo64));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOrNotModulo32", reinterpret_cast<void*>(RtlInterlockedOrNotModulo32));
     ldr.registerExport("ntdll.dll", "RtlInterlockedOrNotModulo16", reinterpret_cast<void*>(RtlInterlockedOrNotModulo16));
@@ -12363,6 +12521,12 @@ inline void InitializeNtdllSubsystemExports() {
     ldr.registerExport("ntdll.dll", "RtlInterlockedNotEqualModulo8", reinterpret_cast<void*>(RtlInterlockedNotEqualModulo8));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCoalescingEnergySavingsRatioTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockPhaseLockedLoopDcoSettlingLatencyTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseAndNotModulo64", reinterpret_cast<void*>(static_cast<LONG64(*)(LONG64 volatile*, LONG64, LONG64, LONG64, ULONG64) noexcept>(RtlInterlockedAndNotModulo64)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseAndNotModulo32", reinterpret_cast<void*>(static_cast<LONG(*)(LONG volatile*, LONG, LONG, LONG, ULONG) noexcept>(RtlInterlockedAndNotModulo32)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseAndNotModulo16", reinterpret_cast<void*>(static_cast<SHORT(*)(SHORT volatile*, SHORT, SHORT, SHORT, USHORT) noexcept>(RtlInterlockedAndNotModulo16)));
+    ldr.registerExport("ntdll.dll", "RtlInterlockedBitwiseAndNotModulo8", reinterpret_cast<void*>(static_cast<CHAR(*)(CHAR volatile*, CHAR, CHAR, CHAR, UCHAR) noexcept>(RtlInterlockedAndNotModulo8)));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteCompressionEnergySavingsRatioTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteCompressionEnergySavingsRatioTelemetryInformation));
+    ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockPhaseLockedLoopDcoFrequencyDriftTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockPhaseLockedLoopDcoFrequencyDriftTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemPagefileWriteLatencySpikeHistogramTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemPagefileWriteLatencySpikeHistogramTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlQuerySystemCpuClockSpreadSpectrumModulationProfileTelemetryInformation", reinterpret_cast<void*>(RtlQuerySystemCpuClockSpreadSpectrumModulationProfileTelemetryInformation));
     ldr.registerExport("ntdll.dll", "RtlInterlockedNonImplicationModulo64", reinterpret_cast<void*>(RtlInterlockedNonImplicationModulo64));

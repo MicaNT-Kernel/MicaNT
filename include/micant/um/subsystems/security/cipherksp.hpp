@@ -166,6 +166,7 @@ inline constexpr const wchar_t* BCRYPT_ASCON_ISAP_XOF_ALGORITHM            = L"A
 inline constexpr const wchar_t* BCRYPT_ASCON_ISAP_HASH_ALGORITHM           = L"ASCON-ISAP-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_SUBTERRANEAN_XOF_ALGORITHM     = L"ASCON-SUBTERRANEAN-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_SUBTERRANEAN_HASH_ALGORITHM    = L"ASCON-SUBTERRANEAN-HASH";
+inline constexpr const wchar_t* BCRYPT_SUBTERRANEAN_ALGORITHM               = L"SUBTERRANEAN";
 inline constexpr const wchar_t* BCRYPT_ASCON_TINYJAMBU_XOF_ALGORITHM       = L"ASCON-TINYJAMBU-XOF";
 inline constexpr const wchar_t* BCRYPT_ASCON_TINYJAMBU_HASH_ALGORITHM      = L"ASCON-TINYJAMBU-HASH";
 inline constexpr const wchar_t* BCRYPT_ASCON_ROMULUS_XOF_ALGORITHM         = L"ASCON-ROMULUS-XOF";
@@ -9341,6 +9342,10 @@ public:
             x4 ^= ((parity << 11) | (parity >> 53));
         }
     }
+
+    static void permute(uint64_t state[5]) noexcept {
+        mix(state[0], state[1], state[2], state[3], state[4]);
+    }
 };
 
 class AsconSubterraneanXof {
@@ -14242,7 +14247,7 @@ inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
     if (algId == BCRYPT_ASCON_ISAP_XOF_ALGORITHM || algId == L"ASCON-ISAP-XOF" || algId == L"ascon-isap-xof" || algId == L"Ascon-Isap-Xof" || algId == L"ASCONISAP-XOF") return CryptoAlgorithm::AsconIsapXof;
     if (algId == BCRYPT_ASCON_ISAP_HASH_ALGORITHM || algId == L"ASCON-ISAP-HASH" || algId == L"ascon-isap-hash" || algId == L"Ascon-Isap-Hash" || algId == L"ASCONISAP-HASH") return CryptoAlgorithm::AsconIsapHash;
     if (algId == BCRYPT_ASCON_SUBTERRANEAN_XOF_ALGORITHM || algId == L"ASCON-SUBTERRANEAN-XOF" || algId == L"ascon-subterranean-xof" || algId == L"Ascon-Subterranean-Xof" || algId == L"ASCONSUBTERRANEAN-XOF") return CryptoAlgorithm::AsconSubterraneanXof;
-    if (algId == BCRYPT_ASCON_SUBTERRANEAN_HASH_ALGORITHM || algId == L"ASCON-SUBTERRANEAN-HASH" || algId == L"ascon-subterranean-hash" || algId == L"Ascon-Subterranean-Hash" || algId == L"ASCONSUBTERRANEAN-HASH") return CryptoAlgorithm::AsconSubterraneanHash;
+    if (algId == BCRYPT_ASCON_SUBTERRANEAN_HASH_ALGORITHM || algId == L"ASCON-SUBTERRANEAN-HASH" || algId == L"ascon-subterranean-hash" || algId == L"Ascon-Subterranean-Hash" || algId == L"ASCONSUBTERRANEAN-HASH" || algId == BCRYPT_SUBTERRANEAN_ALGORITHM || algId == L"SUBTERRANEAN" || algId == L"subterranean") return CryptoAlgorithm::AsconSubterraneanHash;
     if (algId == BCRYPT_ASCON_TINYJAMBU_XOF_ALGORITHM || algId == L"ASCON-TINYJAMBU-XOF" || algId == L"ascon-tinyjambu-xof" || algId == L"Ascon-TinyJambu-Xof" || algId == L"ASCONTINYJAMBU-XOF") return CryptoAlgorithm::AsconTinyJambuXof;
     if (algId == BCRYPT_ASCON_TINYJAMBU_HASH_ALGORITHM || algId == L"ASCON-TINYJAMBU-HASH" || algId == L"ascon-tinyjambu-hash" || algId == L"Ascon-TinyJambu-Hash" || algId == L"ASCONTINYJAMBU-HASH") return CryptoAlgorithm::AsconTinyJambuHash;
     if (algId == BCRYPT_ASCON_ROMULUS_XOF_ALGORITHM || algId == L"ASCON-ROMULUS-XOF" || algId == L"ascon-romulus-xof" || algId == L"Ascon-Romulus-Xof" || algId == L"ASCONROMULUS-XOF") return CryptoAlgorithm::AsconRomulusXof;
