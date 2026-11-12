@@ -14,7 +14,7 @@ struct OnExitTable {
     OnExitRoutine* _end{};
 };
 
-[[nodiscard]] int32_t initializeOnExitTable(OnExitTable* table) noexcept {
+[[nodiscard]] inline int32_t initializeOnExitTable(OnExitTable* table) noexcept {
     if (!table) {
         return -1;
     }

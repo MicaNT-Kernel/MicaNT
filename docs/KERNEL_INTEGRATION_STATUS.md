@@ -361,10 +361,13 @@ seven bootstrap runner unit tests, architecture check, hosted Ke context and
 canonical Ob handle regressions also passed. These results cover the bounded paths exercised by
 those tests; they do not complete M4 or validate general native creation,
 SMP, arbitrary access checks or all APC interleavings.
-The cross-toolchain `micant_tests` target compiled its test runner but did not
-link: the existing UCRT `initializeOnExitTable` definition is duplicated in
-the runner and `ntoskrnl_core`, so that general suite was not executed. The
-cross-toolchain `ntoskrnl_core` target itself linked successfully.
+The cross-toolchain `micant_tests` target compiled its test runner. Its first
+link exposed a duplicate UCRT `initializeOnExitTable` definition, corrected
+by making the header definition inline. A subsequent link passed that point
+but still failed on three unresolved User32/GDI32/IMM32 coordinator and
+Executive initialization symbols. The general suite was therefore not run;
+the cross-toolchain `ntoskrnl_core` target itself linked successfully. The
+focused UCRT on-exit test and a two-translation-unit link/run check passed.
 
 The freestanding `KThread` now keeps resident APC objects in intrusive FIFO
 queues rather than constructing allocating `std::deque`s. QEMU verifies FIFO
