@@ -27,6 +27,7 @@ extern "C" int MicantTestMmProcessAddressSpace() noexcept {
     const size_t available = database.getFreeCount() + database.getZeroedCount() +
                              database.getStandbyCount();
     if (!verifyBootstrapManagedViewRollback()) return 21;
+    if (!verifyProcessPagingRootRollback()) return 25;
     {
         ProcessAddressSpace space;
         const ProcessAddressSpace::PagingBackend backend{

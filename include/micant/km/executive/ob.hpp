@@ -367,7 +367,9 @@ public:
     static constexpr size_t MaxHandles = 4096;
 
     HandleTable() {
+#if !defined(MICANT_FREESTANDING)
         table_.resize(MaxHandles);
+#endif
     }
 
     NtStatus createHandle(
@@ -473,7 +475,11 @@ public:
     }
 
 private:
+#if defined(MICANT_FREESTANDING)
+    std::array<HandleTableEntry, MaxHandles> table_{};
+#else
     std::vector<HandleTableEntry> table_;
+#endif
 };
 
 namespace detail {

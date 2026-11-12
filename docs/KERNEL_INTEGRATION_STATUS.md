@@ -101,8 +101,24 @@ reloads CR3 when switching roots. QEMU maps distinct private pages at the same
 virtual address in two roots and maps one section into both; it verifies the
 private values, shared updates, user/kernel access checks, independent
 teardown and PFN accounting. The roots are currently exercised directly by
-the diagnostic: Ps ownership and process handles remain unintegrated, so M2
-is not complete.
+the diagnostic. Freestanding `EProcess` now owns its root, VAD space and Ob
+handle table, binds threads to its CR3 and closes those resources after its
+threads detach. The current-process section operations and `NtClose` use the
+owning thread's address space and handle table. QEMU runs two Ke contexts
+owned by different Ps objects, exercises shared sections and distinct private
+pages through Ps, Ke, Mm and Ob, rejects an absent per-process handle and a
+conflicting view, and resumes the second context after the first process's
+cleanup. The PFN count returns to baseline; injected root-allocation failures
+also leave the count and shared root slots unchanged. This completes the
+bounded bootstrap M2 acceptance path, not `NtCreateProcessEx`, normal process
+termination or arbitrary process-handle lookup. Those remain future work.
+
+| Check | Result |
+|---|---|
+| `python3 qemu.py --headless` | Passed; Ps-owned roots, Ke CR3 switches, isolated handles and pages, shared section, survivor after cleanup, injected root failures and PFN accounting |
+| `clang++ ... -fsanitize=address,undefined test/mm_process_backend_test.cpp` | Passed; backend rollback and teardown regression |
+| `clang++ ... -fsanitize=address,undefined test/ke_context_hosted_test.cpp` | Passed; hosted context regression |
+| `python3 scripts/verify_kernel_architecture.py` | Passed; one active modular kernel |
 
 The canonical `ProcessAddressSpace` can use the AMD64 bootstrap paging backend
 and the UEFI-derived PFN database. The boot test reserves an unmapped VAD,
@@ -116,8 +132,8 @@ a read-only page and a decommitted page, checking the fault address and error
 code. The diagnostic temporarily enables supervisor write protection and uses
 its own IDT before restoring the previous state.
 
-This is a bounded 16 MiB window in the active bootstrap CR3, not an isolated
-per-process address space. The backend requires the BSP with interrupts
+Both the bootstrap and process tests use a bounded 16 MiB window; only the
+process-root path provides the isolation described above. The backend requires the BSP with interrupts
 disabled and has no SMP TLB shootdown. Commit eagerly allocates physical pages;
 only read-only and read-write protection are implemented. Sections, demand
 paging, process isolation and NT syscall integration remain unimplemented.

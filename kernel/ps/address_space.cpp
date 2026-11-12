@@ -26,8 +26,8 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     uintptr_t previous{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(previous));
     if (previous == getDirectoryTableBase()) return NtStatus::InvalidParameter;
-    handles_->closeAllHandles();
     if (!switchProcessPagingRoot(&root_)) return NtStatus::Unsuccessful;
+    handles_->closeAllHandles();
     const NtStatus status = addressSpace_.close();
     if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status != NtStatus::Success) return status;

@@ -17,6 +17,7 @@ struct ProcessPagingRoot {
     ProcessPagingRoot& operator=(const ProcessPagingRoot&) = delete;
 };
 bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept;
+bool verifyProcessPagingRootRollback() noexcept;
 bool switchProcessPagingRoot(const ProcessPagingRoot* root) noexcept;
 bool switchProcessPagingRootByPhysical(uintptr_t physicalRoot) noexcept;
 bool destroyProcessPagingRoot(ProcessPagingRoot& root) noexcept;

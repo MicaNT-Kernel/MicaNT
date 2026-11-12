@@ -853,7 +853,7 @@ static void reclaimUnusedSharedRootSlots() noexcept {
     }
 }
 
-bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept {
+static bool createProcessPagingRootImpl(ProcessPagingRoot& root, int failAfter) noexcept {
     if (!bootstrapPagingContext() || root.pfn || root.next) return false;
     uint64_t cr4{};
     __asm__ __volatile__("movq %%cr4, %0" : "=r"(cr4));
@@ -862,8 +862,9 @@ bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept {
     for (size_t index = 0; index < 2; ++index) {
         uint64_t& entry = g_pml4[129 + index];
         if (!entry) {
-            const uint64_t pfn = database.allocatePage();
+            const uint64_t pfn = failAfter == 0 ? 0 : database.allocatePage();
             if (!pfn) { reclaimUnusedSharedRootSlots(); return false; }
+            if (failAfter > 0) --failAfter;
             const uint64_t physical = pfn << mm::PageShift4KB;
             if (physical > kPhysicalMask || !mappedRange(physical, 4096, false, true, false) ||
                 walk(reinterpret_cast<uint64_t>(g_pml4), physical) != physical) {
@@ -881,7 +882,7 @@ bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept {
             return false;
         }
     }
-    const uint64_t pfn = database.allocatePage();
+    const uint64_t pfn = failAfter == 0 ? 0 : database.allocatePage();
     if (!pfn) { reclaimUnusedSharedRootSlots(); return false; }
     const uint64_t physical = pfn << mm::PageShift4KB;
     if (physical > kPhysicalMask || !mappedRange(physical, 4096, false, true, false) ||
@@ -896,6 +897,23 @@ bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept {
     root.pfn = pfn;
     root.next = g_processPagingRoots;
     g_processPagingRoots = &root;
+    return true;
+}
+
+bool createProcessPagingRoot(ProcessPagingRoot& root) noexcept {
+    return createProcessPagingRootImpl(root, -1);
+}
+
+bool verifyProcessPagingRootRollback() noexcept {
+    if (!bootstrapPagingContext() || g_processPagingRoots || g_pml4[129] || g_pml4[130])
+        return false;
+    const size_t active = mm::PfnDatabase::get().getActiveCount();
+    for (int failure = 0; failure < 3; ++failure) {
+        ProcessPagingRoot root;
+        if (createProcessPagingRootImpl(root, failure) || root.pfn || root.next ||
+            g_pml4[129] || g_pml4[130] || mm::PfnDatabase::get().getActiveCount() != active)
+            return false;
+    }
     return true;
 }
 

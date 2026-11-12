@@ -122,6 +122,12 @@ void firstContextEntry() noexcept {
             stopWithError("[MicaNT Ps] First process mapping failed\r\n");
         *reinterpret_cast<volatile uint64_t*>(privateAddress) = 0x11111111;
         *reinterpret_cast<volatile uint64_t*>(sharedAddress) = 0x22222222;
+        uintptr_t conflicting = sharedAddress;
+        size_t conflictingSize = viewSize;
+        if (micant::sys::NtMapViewOfSection(g_firstContextSection, micant::InvalidHandleValue, &conflicting,
+                0, 0, nullptr, &conflictingSize, 2, 0, micant::mm::PAGE_READWRITE) != micant::NtStatus::Conflict ||
+            conflicting != sharedAddress || *reinterpret_cast<volatile uint64_t*>(sharedAddress) != 0x22222222)
+            stopWithError("[MicaNT Ps] Failed view rollback corrupted process state\r\n");
     }
     volatile uint64_t pattern[16]{};
     for (size_t index = 0; index < 16; ++index) pattern[index] = 0xA100 + index;
@@ -197,6 +203,13 @@ void secondContextEntry() noexcept {
         }
     }
     g_contextOrder = g_contextOrder * 10 + 2;
+    if (g_contextSection) {
+        if (!MicantVerifyContextSwitch(&g_secondContextThread, &g_bootContextThread) ||
+            *reinterpret_cast<volatile uint64_t*>(micant::hal::amd64::BootstrapManagedBase) != 0x44444444 ||
+            *reinterpret_cast<volatile uint64_t*>(micant::hal::amd64::BootstrapManagedBase +
+                micant::mm::ProcessAddressSpace::AllocationGranularity) != 0x33333333)
+            stopWithError("[MicaNT Ps] Surviving process changed after cleanup\r\n");
+    }
     g_secondContextThread.state = micant::ke::ThreadState::Terminated;
     (void)MicantVerifyContextSwitch(&g_secondContextThread, &g_bootContextThread);
     stopWithError("[MicaNT Ke] Terminated second context resumed\r\n");
@@ -298,6 +311,15 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
     if (!KiSwapContext(&g_bootContextThread, first)) {
         stopWithError("[MicaNT Ke] Initial AMD64 context switch failed\r\n");
     }
+    if (separateRoots) {
+        if (g_firstContextThread.state != ThreadState::Terminated ||
+            g_secondContextThread.state != ThreadState::Ready ||
+            firstProcess.detachThread(g_firstContextThread) != micant::NtStatus::Success ||
+            micant::sys::NtClose(g_contextSection) != micant::NtStatus::Success ||
+            firstProcess.closeAddressSpace() != micant::NtStatus::Success ||
+            !KiSwapContext(&g_bootContextThread, &g_secondContextThread))
+            stopWithError("[MicaNT Ps] Independent process cleanup failed\r\n");
+    }
     KeLowerIrql(previousIrql);
 
     const uintptr_t firstStack = reinterpret_cast<uintptr_t>(g_firstContextStack);
@@ -321,7 +343,7 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
         serialWrite("\r\n");
         stopWithError("[MicaNT Ke] Context address-space verification failed\r\n");
     }
-    if (g_CurrentCpu.contextSwitches != initialSwitchCount + 5) {
+    if (g_CurrentCpu.contextSwitches != initialSwitchCount + (separateRoots ? 7 : 5)) {
         stopWithError("[MicaNT Ke] Context switch count verification failed\r\n");
     }
     if (g_firstContextLocal < firstStack ||
@@ -331,13 +353,11 @@ void verifyKernelContextSwitch(bool separateRoots) noexcept {
         g_firstContextLocal == g_secondContextLocal) {
         stopWithError("[MicaNT Ke] Context stack ownership verification failed\r\n");
     }
-    if (separateRoots &&
-        (firstProcess.detachThread(g_firstContextThread) != micant::NtStatus::Success ||
-         secondProcess.detachThread(g_secondContextThread) != micant::NtStatus::Success ||
-         micant::sys::NtClose(g_contextSection) != micant::NtStatus::Success ||
-         firstProcess.closeAddressSpace() != micant::NtStatus::Success ||
-         secondProcess.closeAddressSpace() != micant::NtStatus::Success))
-        stopWithError("[MicaNT Ps] Context address spaces were not reclaimed\r\n");
+    if (separateRoots) {
+        if (secondProcess.detachThread(g_secondContextThread) != micant::NtStatus::Success ||
+            secondProcess.closeAddressSpace() != micant::NtStatus::Success)
+            stopWithError("[MicaNT Ps] Surviving process cleanup failed\r\n");
+    }
     g_contextSection = 0;
     g_firstContextSection = 0;
     g_secondContextSection = 0;
