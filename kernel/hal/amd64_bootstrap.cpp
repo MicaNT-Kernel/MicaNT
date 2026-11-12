@@ -909,6 +909,23 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept {
 
 uintptr_t bootstrapThreadSyscallStack() noexcept { return g_syscallCpu.kernelRsp; }
 
+extern "C" __attribute__((naked, noreturn)) void MicantEnterBootstrapUserThread(
+    uintptr_t, uintptr_t) noexcept {
+    __asm__ __volatile__(
+        "movw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
+        "pushq $0x2b\npushq %rdx\npushq $2\npushq $0x33\npushq %rcx\niretq\n");
+}
+
+[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack) noexcept {
+    const auto* thread = ke::KeGetCurrentThread();
+    if (!g_dispatch || !thread || !thread->owningProcess || !thread->kernelStackTop ||
+        g_syscallCpu.kernelRsp != thread->kernelStackTop || userStack < 8 ||
+        !bootstrapUserRange(entry, 1, false, true) || !bootstrapUserRange(userStack - 8, 8, true))
+        __builtin_trap();
+    cpu::cpuWrmsr(cpu::MSR_GS_BASE, 0);
+    MicantEnterBootstrapUserThread(entry, userStack);
+}
+
 bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept {
     g_log = log;
     if (g_addressSpaceReady) {

@@ -66,6 +66,7 @@ extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" bool MicantTestKeBlockWake() noexcept;
 extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
+extern "C" bool MicantTestPsUserProcess() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int MicantTestMmManagedProtection() noexcept;
@@ -688,6 +689,17 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
     if (number == sys::SSN_NtClose)
         return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtTerminateProcess) {
+        // The syscall entry used SWAPGS; restore the bootstrap kernel's GS
+        // convention before switching away. If termination fails, restore the
+        // syscall entry convention before returning through its epilogue.
+        __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        const auto result = sys::NtTerminateProcess(first, static_cast<NtStatus>(static_cast<uint32_t>(second)));
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        __asm__ __volatile__("swapgs" : : : "memory");
+        return status(result);
+    }
     if (number == sys::SSN_NtCreateEvent) {
         uint64_t initial{};
         ObjectAttributes attributes{};
@@ -1177,6 +1189,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
     serialWrite("[MicaNT Mm] CPL3 native allocation and release verified\r\n");
     serialWrite("[MicaNT Ke] CPL3 native event polling verified\r\n");
+    if (!MicantTestPsUserProcess())
+        stopWithError("[MicaNT Ps] User process lifecycle verification failed\r\n");
+    serialWrite("[MicaNT Ps] Process-owned CPL3 context and termination verified\r\n");
     const auto probeTelemetry = micant::ex::ExQuerySyncTelemetry();
     if (!probeTelemetry.totalSafeCopiesCompleted ||
         !probeTelemetry.totalSafeCopyFaultsCaught ||

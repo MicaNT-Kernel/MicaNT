@@ -57,6 +57,9 @@ bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
 // Single-BSP context-switch hook; zero selects the bootstrap entry stacks.
 void setBootstrapThreadEntryStack(uintptr_t stackTop) noexcept;
 uintptr_t bootstrapThreadSyscallStack() noexcept;
+// Enter an already mapped user context in the current process. On success
+// this does not return; caller must provide a valid thread-owned kernel stack.
+[[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack) noexcept;
 bool bootstrapUserRange(uint64_t address, size_t size, bool writable,
                         bool executable = false) noexcept;
 bool bootstrapKernelRange(uint64_t address, size_t size, bool writable) noexcept;

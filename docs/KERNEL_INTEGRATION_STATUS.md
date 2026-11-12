@@ -197,6 +197,19 @@ CPL3 and does not support process handles or coordinated termination of
 multiple threads. The contract is
 [ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntddk/nf-ntddk-zwterminateprocess);
 ReactOS `ntoskrnl/ps/kill.c` was consulted for termination and cleanup.
+
+An additional QEMU test now creates a real Ps process and Ke thread with a
+private CR3, PFN-backed user stack and executable page, enters CPL3, performs
+`NtAllocateVirtualMemory`, writes and reads the allocation, and exits through
+`NtTerminateProcess`. A separate context checks the exit status, reaps the
+thread, closes the process and checks the PFN baseline. The termination syscall
+is routed for this single-thread current-process case. This test uses a small
+embedded instruction sequence rather than a PE image or NTDLL and does not
+create a PEB, TEB, TLS, or a second user thread; it does not complete M6 or M7.
+The entry currently leaves interrupts disabled and uses GS base zero; the
+bootstrap syscall/GS handling is not a general user-thread context switch.
+ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
+for user thread startup and context ownership.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
 The local ReactOS `hal/halx86/generic/timer.c` and `ntoskrnl/ke/time.c`
 were consulted for clock interrupt and dispatch ordering, without copying code.
@@ -205,6 +218,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 |---|---|
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
+| `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
 
 ### Bootstrap VAD reserve, commit, protection and release
