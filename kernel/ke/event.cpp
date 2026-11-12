@@ -1,6 +1,7 @@
 #include "micant/km/core/sync.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/ps.hpp"
 #include <new>
 
 namespace micant::sys {
@@ -56,8 +57,19 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
     const auto status = ob::ObReferenceObjectByHandle(handle, ob::detail::currentHandleTable(),
                                                        ob::SYNCHRONIZE, &eventType, &header);
     if (status != NtStatus::Success) return status;
+    auto* current = ke::KeGetCurrentThread();
+    if (!current || current->eventWaitInProgress) {
+        ob::ObDereferenceObject(header);
+        return NtStatus::InvalidParameter;
+    }
+    current->eventWaitInProgress = true;
     const auto result = header->as<Event>()->wait(timeout != nullptr);
+    current->eventWaitInProgress = false;
     ob::ObDereferenceObject(header);
+    if (current->owningProcess && current->owningProcess->isTerminating()) {
+        (void)current->owningProcess->terminateCurrent(current->owningProcess->exitStatus());
+        __builtin_trap();
+    }
     return result;
 }
 }

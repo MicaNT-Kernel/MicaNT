@@ -45,6 +45,8 @@ NtStatus EProcess::attachThread(ke::KThread& thread) noexcept {
         return NtStatus::InvalidParameter;
     thread.owningProcess = this;
     thread.directoryTableBase = getDirectoryTableBase();
+    thread.processNext = threads_;
+    threads_ = &thread;
     ++attachedThreads_;
     return NtStatus::Success;
 }
@@ -56,20 +58,39 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
     NtStatus result = NtStatus::InvalidParameter;
     const auto previous = ke::KeGetCurrentIrql();
     if (current && current->owningProcess == this && current->state == ke::ThreadState::Running &&
-        previous <= ke::APC_LEVEL && !terminating_) {
-        if (attachedThreads_ != 1) {
+        previous <= ke::APC_LEVEL) {
+        ke::KThread* otherActive = nullptr;
+        bool supported = true;
+        for (auto* thread = threads_; thread; thread = thread->processNext) {
+            if (thread == current || thread->state == ke::ThreadState::Terminated) continue;
+            if (otherActive || thread->state != ke::ThreadState::Ready ||
+                !thread->readyQueued || !thread->eventWaitInProgress) {
+                supported = false;
+                break;
+            }
+            otherActive = thread;
+        }
+        if (!supported) {
             result = NtStatus::NotImplemented;
         } else {
             ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
             auto& scheduler = ke::PriorityScheduler::get();
             if (auto* next = scheduler.selectNextThread()) {
-                terminating_ = true;
-                exitStatus_ = exitStatus;
+                if (otherActive && next != otherActive) {
+                    next->state = ke::ThreadState::Ready;
+                    if (!scheduler.readyKThread(next)) __builtin_trap();
+                    ke::KeLowerIrql(previous);
+                    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+                    return NtStatus::NotImplemented;
+                }
+                const bool wasTerminating = terminating_;
+                const NtStatus oldStatus = exitStatus_;
+                if (!terminating_) { terminating_ = true; exitStatus_ = exitStatus; }
                 current->state = ke::ThreadState::Terminated;
                 if (ke::KiSwapContext(current, next)) __builtin_trap();
                 current->state = ke::ThreadState::Running;
-                terminating_ = false;
-                exitStatus_ = NtStatus::Pending;
+                terminating_ = wasTerminating;
+                exitStatus_ = oldStatus;
                 next->state = ke::ThreadState::Ready;
                 if (!scheduler.readyKThread(next)) __builtin_trap();
             }
@@ -86,6 +107,11 @@ NtStatus EProcess::detachThread(ke::KThread& thread) noexcept {
         (thread.state != ke::ThreadState::Initialized && thread.state != ke::ThreadState::Terminated))
         return NtStatus::InvalidParameter;
     if (!attachedThreads_) __builtin_trap();
+    ke::KThread** link = &threads_;
+    while (*link && *link != &thread) link = &(*link)->processNext;
+    if (!*link) __builtin_trap();
+    *link = thread.processNext;
+    thread.processNext = nullptr;
     --attachedThreads_;
     thread.owningProcess = nullptr;
     thread.directoryTableBase = 0;

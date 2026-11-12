@@ -67,6 +67,7 @@ extern "C" bool MicantTestKeBlockWake() noexcept;
 extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
+extern "C" bool MicantTestPsTwoUserThreads() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int MicantTestMmManagedProtection() noexcept;
@@ -725,8 +726,17 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &previous, sizeof(previous)));
     }
     if (number == sys::SSN_NtWaitForSingleObject) {
-        // A blocking syscall requires a private kernel stack per user thread.
-        if (!args.third) return status(NtStatus::NotImplemented);
+        if (!args.third) {
+            const auto* thread = ke::KeGetCurrentThread();
+            if (!thread || !thread->owningProcess || !thread->kernelStackTop)
+                return status(NtStatus::NotImplemented);
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            const auto result = sys::NtWaitForSingleObject(first, (second & 0xff) != 0, nullptr);
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+            return status(result);
+        }
         LargeInteger timeout{};
         if (ex::ExSafeCopyFromUser(&timeout, reinterpret_cast<const void*>(args.third), sizeof(timeout)) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
@@ -1192,6 +1202,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestPsUserProcess())
         stopWithError("[MicaNT Ps] User process lifecycle verification failed\r\n");
     serialWrite("[MicaNT Ps] Process-owned CPL3 context and termination verified\r\n");
+    if (!MicantTestPsTwoUserThreads())
+        stopWithError("[MicaNT Ps] Two user threads verification failed\r\n");
+    serialWrite("[MicaNT Ps] Two CPL3 threads, TLS slots and event waits verified\r\n");
     const auto probeTelemetry = micant::ex::ExQuerySyncTelemetry();
     if (!probeTelemetry.totalSafeCopiesCompleted ||
         !probeTelemetry.totalSafeCopyFaultsCaught ||

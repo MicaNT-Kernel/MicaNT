@@ -449,6 +449,8 @@ struct KThread {
     Handle pid{0};
 #if defined(MICANT_FREESTANDING)
     ps::EProcess* owningProcess{nullptr};
+    KThread* processNext{nullptr};
+    bool eventWaitInProgress{false};
 #endif
     ThreadState state{ThreadState::Initialized};
     uint32_t basePriority{8};

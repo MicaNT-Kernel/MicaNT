@@ -58,6 +58,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Mm] CPL3 native allocation and release verified",
     "[MicaNT Ke] CPL3 native event polling verified",
     "[MicaNT Ps] Process-owned CPL3 context and termination verified",
+    "[MicaNT Ps] Two CPL3 threads, TLS slots and event waits verified",
     "[MicaNT Ex] Canonical checked user copies verified at CPL3 boundary",
     "[MicaNT Ps] Bounded native PE mapping and compiled user entry verified",
     "[MicaNT Input] PS/2 mouse polling initialized",

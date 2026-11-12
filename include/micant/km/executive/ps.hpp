@@ -33,6 +33,7 @@ private:
     mm::ProcessAddressSpace addressSpace_{};
     std::unique_ptr<ob::HandleTable> handles_{};
     size_t attachedThreads_{0};
+    ke::KThread* threads_{nullptr};
     bool terminating_{false};
     NtStatus exitStatus_{NtStatus::Pending};
 };

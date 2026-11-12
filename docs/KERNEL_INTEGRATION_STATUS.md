@@ -148,10 +148,10 @@ switch and another context closes a handle before signaling through a duplicate.
 The CPL3 diagnostic calls the actual NTDLL `NtCreateEvent`, `NtSetEvent`,
 `NtWaitForSingleObject` and `NtClose` exports, verifying zero-timeout polling,
 auto-reset, previous state and invalid pointer/handle cases. Kernel tests also
-check access rights and invalid event type. User-mode blocking waits are
-explicitly unsupported until syscall entry uses per-thread kernel stacks;
-timed and alertable waits, named events, public KEVENT ABI, priority boost and
-SMP remain unimplemented. These are diagnostics, not two user threads.
+check access rights and invalid event type. The bounded BSP path now supports
+non-alertable, infinite event waits from process-owned CPL3 threads with their
+own kernel stacks; timed and alertable waits, named events, public KEVENT ABI,
+priority boost, an idle thread and SMP remain unimplemented.
 The event semantics were checked against
 [KeInitializeEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent)
 and [KeSetEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent).
@@ -186,15 +186,17 @@ baseline. This BSP-only internal operation is not arbitrary thread termination.
 The local ReactOS `ntoskrnl/ps/kill.c` was inspected for thread termination
 and deferred cleanup; the public self-termination contract is described by
 [PsTerminateSystemThread](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread).
-The freestanding `NtTerminateProcess` implementation now accepts the current
-process pseudo-handle for a process with exactly one attached thread. It
+The freestanding `NtTerminateProcess` implementation accepts the current
+process pseudo-handle for a process with one active thread. It
 records the exit status, marks the thread terminated and switches through Ke;
 another context reaps the stack and closes the address space. QEMU checks a
 no-runnable-thread failure without changing process state, rejects the
-multi-thread case, verifies the exit status and restores the PFN baseline
-after releasing a private allocation. This service is not yet routed from
-CPL3 and does not support process handles or coordinated termination of
-multiple threads. The contract is
+unsupported multi-thread cases, verifies the exit status and restores the PFN baseline
+after releasing a private allocation. A bounded two-thread case also permits
+termination when the other thread is ready after an event wait: it resumes in
+the kernel, releases its retained event reference and terminates before it can
+return to user mode. Arbitrary process handles, other thread states, APCs and
+general multi-thread termination remain unsupported. The contract is
 [ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntddk/nf-ntddk-zwterminateprocess);
 ReactOS `ntoskrnl/ps/kill.c` was consulted for termination and cleanup.
 
@@ -203,19 +205,30 @@ private CR3, PFN-backed user stack and executable page, enters CPL3, performs
 `NtAllocateVirtualMemory`, writes and reads the allocation, and exits through
 `NtTerminateProcess`. A separate context checks the exit status, reaps the
 thread, closes the process and checks the PFN baseline. The termination syscall
-is routed for this single-thread current-process case. The test constructs a
+is routed for this current-process case. The test constructs a
 minimal PE32+ fixture and uses the existing `PeImageView64` parser and mapper
 to copy it into private Mm pages, then makes its headers read-only and code
 execute/read before entering its PE entry point. This is not `SEC_IMAGE`, a
 file-backed image section, the production process loader or an NTDLL startup;
-it does not create a PEB, initialize static TLS, or run a second user thread,
-and does not complete M6 or M7.
+it does not create a PEB or initialize static TLS, and does not complete M6 or M7.
 The test now allocates a minimal user TEB and the context switch sets the
 thread's GS base; CPL3 writes and reads its first TEB TLS slot, and the test
 checks the stored value and bootstrap GS restoration after exit. This is not
-static PE TLS initialization or a two-thread isolation test. The entry
+static PE TLS initialization. The entry
 currently leaves interrupts disabled; the bootstrap syscall/GS handling is
 not a general user-thread context switch.
+
+A second QEMU test runs two Ps-owned CPL3 threads from one manually mapped
+PE fixture. Thread A allocates and checks memory through a syscall, blocks on
+an Ob event, resumes after thread B signals it, checks its GS-based TEB slot,
+signals B and terminates the process. B uses a different TEB slot and blocks
+on the second event; both slots, the exit status, deferred reaping and PFN
+baseline are checked. Event handles belong to the process's Ob table and
+waits retain object references across Ke switches. The threads are created by
+the kernel test, the PE is manually mapped into anonymous private pages, and
+the code invokes syscalls directly: `SEC_IMAGE`, NTDLL startup, static PE TLS,
+native user-thread creation, normal preemption and general process termination
+remain outstanding. The test is not sufficient to declare M6 or M7 complete.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
 for user thread startup and context ownership.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).
