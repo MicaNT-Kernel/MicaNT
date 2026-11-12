@@ -65,6 +65,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ex] Canonical checked user copies verified at CPL3 boundary",
     "[MicaNT Ps] Bounded native PE mapping and compiled user entry verified",
     "[MicaNT Input] PS/2 mouse polling initialized",
+    "[MicaNT Ke] Runtime idle wait and wake verified",
     "[MicaNT Explorer] Shell idle loop entered",
     "[MicaNT Ke] Runtime scheduler clock ticking",
 )

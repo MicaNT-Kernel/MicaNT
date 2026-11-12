@@ -103,6 +103,16 @@ differs from the historical integration inventory below.
 The detailed increments and commands below record the checks actually run;
 an isolated diagnostic does not establish a complete milestone contract.
 
+The BSP clock vector is masked through CR8 when Ke raises IRQL to CLOCK_LEVEL;
+HIGH_LEVEL masks all priority classes. The QEMU diagnostic checks nested
+raising, preserved interrupt enable state, a pending clock interrupt and its
+delivery after lowering IRQL. This covers the routed xAPIC clock only, not
+general DIRQL, software interrupts, x2APIC or SMP. The contracts consulted were
+[KeRaiseIrql](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keraiseirql),
+[KeLowerIrql](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kelowerirql)
+and [hardware priorities](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/managing-hardware-priorities).
+ReactOS `hal/halx86/mp/mpsirql.c` was consulted as an architectural reference.
+
 ### Bootstrap local APIC timer diagnostic
 
 On QEMU TCG, a temporary BSP-only xAPIC setup delivers at least three periodic
@@ -154,8 +164,15 @@ resume after the outer lock is released. This all-interrupt masking is a
 bootstrap serialization measure, not the complete NT IRQL contract.
 The bootstrap dispatcher can also block the current kernel thread and wake it
 through the canonical ready queue. QEMU exercises two waiting/resuming threads,
-the no-runnable-thread case and rollback when a selected context is invalid.
+the pre-clock no-runnable-thread case and rollback when a selected context is invalid.
 This is an internal primitive, not yet an NT event wait, timeout or APC path.
+After the BSP scheduler clock starts, Ke can select a resident idle context
+when no thread is ready. The idle context halts until an interrupt; QEMU
+exercises a blocked thread, timer wake of another context, resumption and
+cleanup of the original waiter. This is a single-CPU bootstrap idle path,
+not SMP idle scheduling or power management. ReactOS
+`ntoskrnl/ke/amd64/kiinit.c` and `ntoskrnl/ke/amd64/stubs.c` were consulted
+for idle-thread ownership and loop structure.
 The freestanding Ke synchronization implementation now has a BSP-only
 internal event wait queue built on that primitive. QEMU checks a pair of
 kernel contexts handing off through synchronization events, notification of
@@ -170,7 +187,7 @@ auto-reset, previous state and invalid pointer/handle cases. Kernel tests also
 check access rights and invalid event type. The bounded BSP path now supports
 non-alertable, infinite event waits from process-owned CPL3 threads with their
 own kernel stacks; timed and alertable waits, named events, public KEVENT ABI,
-priority boost, an idle thread and SMP remain unimplemented.
+priority boost and SMP remain unimplemented.
 The event semantics were checked against
 [KeInitializeEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent)
 and [KeSetEvent](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent).
@@ -306,6 +323,9 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 |---|---|
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ, timer-preempted kernel and CPL3 contexts, register canaries, existing boot, scanout and input checks |
 | `python3 qemu.py --headless` | Passed; persistent BSP scheduler clock, CPL3 preemption with syscall IF preservation, idle ticks and polled PS/2 input |
+| `python3 qemu.py --headless` | Passed; Ke idle context selected for an empty ready queue, timer wake and waiting-thread resumption |
+| `python3 qemu.py --headless` | Passed; clock IRQL masking and deferred IRQ delivery together with idle and preemption regression |
+| `clang++ ... -fsanitize=address,undefined test/ke_freestanding_ready_queue_test.cpp test/kernel_ke_ready_queue_test.cpp` | Passed; ready-queue regression before idle initialization |
 | `python3 qemu.py --headless` | Passed; PIT-calibrated LAPIC period and persistent clock; no independent accuracy measurement was made |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |

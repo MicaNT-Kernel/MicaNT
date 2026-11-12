@@ -46,6 +46,9 @@ uint32_t g_probeMode{};
 uint64_t g_probeReturnRip{};
 micant::hal::amd64::UserServiceRoutine g_dispatch{};
 bool g_schedulerClockActive{};
+bool g_clockIrqlMaskReady{};
+micant::ke::KThread g_bootstrapIdleThread{};
+alignas(16) uint8_t g_bootstrapIdleStack[32768]{};
 alignas(16) uint8_t g_syscallStack[65536]{};
 struct SyscallCpuState {
     uint64_t userRsp;
@@ -308,6 +311,7 @@ volatile bool MicantTimerPreemptionEnabled{};
 volatile bool MicantTimerDispatchFailed{};
 micant::ke::KThread* MicantTimerBootThread{};
 bool MicantTimerBootQueued{};
+uint64_t MicantTimerBootDeadline{24};
 
 void MicantBootstrapTimerDispatch() noexcept {
     MicantTimerTicks = MicantTimerTicks + 1;
@@ -316,7 +320,7 @@ void MicantBootstrapTimerDispatch() noexcept {
     using namespace micant::ke;
     const KIRQL previous = KeGetCurrentIrql();
     if (previous >= DISPATCH_LEVEL) return;
-    g_CurrentCpu.currentIrql = DISPATCH_LEVEL;
+    KfRaiseIrql(DISPATCH_LEVEL);
     auto* current = KeGetCurrentThread();
     auto& scheduler = PriorityScheduler::get();
     const uintptr_t expectedSyscallStack = current && current->kernelStackTop ? current->kernelStackTop :
@@ -326,7 +330,7 @@ void MicantBootstrapTimerDispatch() noexcept {
     if (!current || g_syscallCpu.kernelRsp != expectedSyscallStack ||
         micant::cpu::CpuHardwareEngine::get().getTss().rsp0 != expectedInterruptStack)
         MicantTimerDispatchFailed = true;
-    if (MicantTimerBootThread && MicantTimerTicks >= 24 && !MicantTimerBootQueued) {
+    if (MicantTimerBootThread && MicantTimerTicks >= MicantTimerBootDeadline && !MicantTimerBootQueued) {
         if (!scheduler.readyKThread(MicantTimerBootThread)) MicantTimerDispatchFailed = true;
         else MicantTimerBootQueued = true;
     }
@@ -335,7 +339,7 @@ void MicantBootstrapTimerDispatch() noexcept {
         if (!scheduler.cancelQuantumPreemption(current, next)) __builtin_trap();
         MicantTimerDispatchFailed = true;
     }
-    g_CurrentCpu.currentIrql = previous;
+    KeLowerIrql(previous);
 }
 
 __attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
@@ -900,6 +904,14 @@ __attribute__((naked)) void MicantProbeEnter() {
 }
 
 namespace micant::hal::amd64 {
+
+void setBootstrapClockIrqlMask(uint8_t irql) noexcept {
+    if (!g_clockIrqlMaskReady) return;
+    // Only vector 0xd1 (APIC priority class 13) is routed at present.
+    const uint64_t priority = irql >= ke::HIGH_LEVEL ? 15 :
+        irql >= ke::CLOCK_LEVEL ? 13 : 0;
+    __asm__ __volatile__("movq %0, %%cr8" : : "r"(priority) : "memory");
+}
 
 void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb) noexcept {
     g_syscallCpu.kernelRsp = stackTop ? stackTop :
@@ -1675,7 +1687,7 @@ alignas(16) static uint8_t g_secondTimerWorkerStack[16384]{};
 
 [[noreturn]] static void timerWorker(void* argument) noexcept {
     auto* state = static_cast<TimerWorkerState*>(argument);
-    ke::g_CurrentCpu.currentIrql = ke::PASSIVE_LEVEL;
+    ke::KeLowerIrql(ke::PASSIVE_LEVEL);
     __asm__ __volatile__(
         "movq 8(%%rcx), %%r12\nmovq %%r12, %%xmm6\nsti\n"
         "1:\nmovq %%xmm6, %%rax\ncmpq %%r12, %%rax\njne 2f\n"
@@ -1706,6 +1718,7 @@ static bool verifyBootstrapPreemption() noexcept {
     MicantTimerTicks = 0;
     MicantTimerBootThread = boot;
     MicantTimerBootQueued = false;
+    MicantTimerBootDeadline = 24;
     MicantTimerDispatchFailed = false;
     MicantTimerPreemptionEnabled = true;
     const bool switched = KiSwapContext(boot, &first);
@@ -1727,6 +1740,31 @@ static bool verifyBootstrapPreemption() noexcept {
 }
 
 extern "C" bool MicantTestPsUserPreemption() noexcept;
+
+// Verify the one routed hardware priority with IF still enabled. A pending
+// clock interrupt must become deliverable after the original IRQL is restored.
+static bool verifyClockIrqlMask(volatile uint32_t* apic) noexcept {
+    const auto previous = ke::KfRaiseIrql(ke::CLOCK_LEVEL);
+    const auto nested = ke::KfRaiseIrql(ke::HIGH_LEVEL);
+    uint64_t highPriority{};
+    __asm__ __volatile__("movq %%cr8, %0" : "=r"(highPriority));
+    ke::KeLowerIrql(nested);
+    uint64_t clockPriority{}, flags{};
+    __asm__ __volatile__("movq %%cr8, %0; pushfq; popq %1"
+                         : "=r"(clockPriority), "=r"(flags));
+    const uint64_t before = MicantTimerTicks;
+    constexpr uint32_t timerBit = 1u << (0xd1 % 32);
+    constexpr size_t timerIrr = (0x200 + (0xd1 / 32) * 0x10) / 4;
+    for (size_t spin = 0; spin < 50000000 && !(apic[timerIrr] & timerBit); ++spin)
+        __asm__ __volatile__("pause");
+    const bool blocked = (apic[timerIrr] & timerBit) && MicantTimerTicks == before;
+    ke::KeLowerIrql(previous);
+    for (size_t spin = 0; spin < 50000000 && MicantTimerTicks == before; ++spin)
+        __asm__ __volatile__("pause");
+    return previous == ke::PASSIVE_LEVEL && nested == ke::CLOCK_LEVEL &&
+        highPriority == 15 && clockPriority == 13 && (flags & (uint64_t{1} << 9)) &&
+        blocked && MicantTimerTicks > before;
+}
 
 bool verifyBootstrapTimerInterrupt() noexcept {
     if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext()) return false;
@@ -1783,6 +1821,8 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     MicantTimerTicks = 0;
     MicantTimerEoi = apic + 0xb0 / 4;
     apic[0x80 / 4] = 0;
+    g_clockIrqlMaskReady = true;
+    setBootstrapClockIrqlMask(ke::KeGetCurrentIrql());
     apic[0xf0 / 4] = (savedSvr & ~0xffu) | 0x1ff;
     apic[0x3e0 / 4] = 0xb; // Divide by one; the test does not infer a frequency.
     apic[0x320 / 4] = 0xd1 | (1u << 17); // Periodic, unmasked.
@@ -1802,6 +1842,7 @@ bool verifyBootstrapTimerInterrupt() noexcept {
     lock.release(oldIrql);
     uint64_t releasedFlags{};
     __asm__ __volatile__("pushfq; popq %0" : "=r"(releasedFlags));
+    const bool irqlMaskedClock = verifyClockIrqlMask(apic);
     for (size_t spin = 0; spin < 50000000 && MicantTimerTicks < 3; ++spin)
         __asm__ __volatile__("pause");
     __asm__ __volatile__("cli" : : : "memory");
@@ -1825,10 +1866,12 @@ bool verifyBootstrapTimerInterrupt() noexcept {
             __asm__ __volatile__("pause");
         __asm__ __volatile__("cli" : : : "memory");
     }
-    const bool success = lockMaskedInterrupts && (releasedFlags & (uint64_t{1} << 9)) &&
-        timerDelivered && preemptionVerified && userPreemption && !(apic[timerIrr] & timerBit);
+    const bool success = lockMaskedInterrupts && irqlMaskedClock &&
+        (releasedFlags & (uint64_t{1} << 9)) && timerDelivered && preemptionVerified &&
+        userPreemption && !(apic[timerIrr] & timerBit);
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
+    g_clockIrqlMaskReady = false;
     apic[0x80 / 4] = savedTpr;
     apic[0xf0 / 4] = savedSvr;
     for (size_t i = 0; i < 6; ++i) apic[offsets[i] / 4] = savedLvt[i];
@@ -1887,6 +1930,11 @@ static bool calibrateBootstrapApic(volatile uint32_t* apic, uint32_t& period) no
     return true;
 }
 
+[[noreturn]] static void bootstrapIdle(void*) noexcept {
+    ke::KeLowerIrql(ke::PASSIVE_LEVEL);
+    for (;;) __asm__ __volatile__("sti; hlt; cli" : : : "memory");
+}
+
 bool startBootstrapSchedulerClock() noexcept {
     if (g_schedulerClockActive || !g_dispatch || !bootstrapPagingContext() ||
         !ke::KeGetCurrentThread()) return false;
@@ -1912,6 +1960,11 @@ bool startBootstrapSchedulerClock() noexcept {
         !(apic[0x320 / 4] & (1u << 16))) return false;
     uint32_t interval{};
     if (!calibrateBootstrapApic(apic, interval)) return false;
+    auto* currentThread = ke::KeGetCurrentThread();
+    g_bootstrapIdleThread.directoryTableBase = currentThread->directoryTableBase;
+    g_bootstrapIdleThread.priority = ke::PRIORITY_IDLE;
+    if (!ke::detail::prepareBootstrapThread(g_bootstrapIdleThread, g_bootstrapIdleStack,
+            sizeof(g_bootstrapIdleStack), bootstrapIdle, nullptr)) return false;
 
     // Only the clock vector is routed in this bootstrap configuration.
     __asm__ __volatile__("outb %0, $0x21; outb %0, $0xa1" : : "a"(uint8_t{0xff}));
@@ -1929,18 +1982,82 @@ bool startBootstrapSchedulerClock() noexcept {
     MicantTimerDispatchFailed = false;
     MicantTimerPreemptionEnabled = true;
     apic[0x80 / 4] = 0;
+    g_clockIrqlMaskReady = true;
+    setBootstrapClockIrqlMask(ke::KeGetCurrentIrql());
     apic[0xf0 / 4] = (apic[0xf0 / 4] & ~0xffu) | 0x1ff;
     apic[0x3e0 / 4] = 0xb;
     apic[0x320 / 4] = 0xd1 | (1u << 17);
     apic[0x380 / 4] = interval;
+    ke::g_CurrentCpu.idleThread = &g_bootstrapIdleThread;
     g_schedulerClockActive = true;
     return true;
+}
+
+namespace {
+struct IdleWaitProbe {
+    ke::KThread* boot;
+    uint32_t stage{0};
+};
+
+alignas(16) uint8_t g_idleWaitProbeStack[16384]{};
+
+[[noreturn]] void runIdleWaitProbe(void* argument) noexcept {
+    auto& probe = *static_cast<IdleWaitProbe*>(argument);
+    auto* current = ke::KeGetCurrentThread();
+    ke::KeLowerIrql(ke::PASSIVE_LEVEL);
+    probe.stage = 1;
+    if (!ke::detail::blockCurrentThread() || probe.stage != 2 ||
+        !ke::PriorityScheduler::get().readyKThread(probe.boot)) __builtin_trap();
+    probe.stage = 3;
+    current->state = ke::ThreadState::Terminated;
+    ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    auto* next = ke::PriorityScheduler::get().selectNextThread();
+    if (next != probe.boot || !ke::KiSwapContext(current, next)) __builtin_trap();
+    __builtin_trap();
+}
+
+bool verifyIdleWaitAndWake() noexcept {
+    auto& scheduler = ke::PriorityScheduler::get();
+    auto* boot = ke::KeGetCurrentThread();
+    if (!boot || scheduler.getReadyThreadCount() ||
+        ke::g_CurrentCpu.idleThread != &g_bootstrapIdleThread) return false;
+    ke::KThread waiter;
+    waiter.directoryTableBase = ke::g_CurrentCpu.currentCr3;
+    IdleWaitProbe probe{boot};
+    if (!ke::detail::prepareBootstrapThread(waiter, g_idleWaitProbeStack,
+            sizeof(g_idleWaitProbeStack), runIdleWaitProbe, &probe)) return false;
+    const auto originalPriority = boot->priority;
+    boot->priority = ke::PRIORITY_REALTIME_MAX;
+    MicantTimerBootThread = boot;
+    MicantTimerBootQueued = false;
+    MicantTimerBootDeadline = MicantTimerTicks + 3;
+    const auto previousIrql = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    const bool firstSwitch = ke::KiSwapContext(boot, &waiter);
+    ke::KeLowerIrql(previousIrql);
+    MicantTimerBootThread = nullptr;
+    if (!firstSwitch || !MicantTimerBootQueued || probe.stage != 1 ||
+        waiter.state != ke::ThreadState::Waiting || !g_bootstrapIdleThread.readyQueued ||
+        !scheduler.readyKThread(&waiter)) return false;
+    probe.stage = 2;
+    auto* next = scheduler.selectNextThread();
+    if (next != &waiter) return false;
+    const auto secondIrql = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    const bool secondSwitch = ke::KiSwapContext(boot, next);
+    ke::KeLowerIrql(secondIrql);
+    const bool idleRemoved = scheduler.removeReadyThread(&g_bootstrapIdleThread);
+    if (idleRemoved) g_bootstrapIdleThread.state = ke::ThreadState::Ready;
+    boot->priority = originalPriority;
+    return secondSwitch && idleRemoved && probe.stage == 3 &&
+        waiter.state == ke::ThreadState::Terminated && !scheduler.getReadyThreadCount() &&
+        !MicantTimerDispatchFailed;
+}
 }
 
 bool verifyBootstrapSchedulerClock() noexcept {
     if (!g_schedulerClockActive) return false;
     const uint64_t before = MicantTimerTicks;
-    return MicantTestPsUserPreemption() && MicantTimerTicks > before && !MicantTimerDispatchFailed;
+    return MicantTestPsUserPreemption() && MicantTimerTicks > before && !MicantTimerDispatchFailed &&
+        verifyIdleWaitAndWake();
 }
 
 bool bootstrapSchedulerClockFailed() noexcept { return MicantTimerDispatchFailed; }

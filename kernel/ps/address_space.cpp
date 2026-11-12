@@ -116,7 +116,7 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
                     terminating_ = wasTerminating;
                     exitStatus_ = oldStatus;
                     next->state = ke::ThreadState::Ready;
-                    if (!scheduler.readyKThread(next)) __builtin_trap();
+                    if (next != ke::g_CurrentCpu.idleThread && !scheduler.readyKThread(next)) __builtin_trap();
                 }
             }
             if (!wasTerminating) {

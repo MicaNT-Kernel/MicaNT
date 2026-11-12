@@ -1242,6 +1242,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     const bool clockActive = micant::hal::amd64::startBootstrapSchedulerClock();
     if (clockActive && !micant::hal::amd64::verifyBootstrapSchedulerClock())
         stopWithError("[MicaNT Ke] Runtime scheduler preemption failed\r\n");
+    if (clockActive) serialWrite("[MicaNT Ke] Runtime idle wait and wake verified\r\n");
     if (!clockActive) serialWrite("[MicaNT Ke] Runtime scheduler clock unavailable\r\n");
     serialWrite("[MicaNT Explorer] Shell idle loop entered\r\n");
     runMouseShell(clockActive);
