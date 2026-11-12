@@ -9,6 +9,64 @@ NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, 
 
 namespace micant::ps {
 namespace {
+// Only the public winternl.h fields are populated. Names remain empty until
+// the loader receives verified full image paths from a file-backed source.
+struct UserListEntry { uint64_t next; uint64_t previous; };
+struct UserUnicodeString { uint16_t length; uint16_t maximumLength; uint32_t padding; uint64_t buffer; };
+struct UserLoaderData { uint8_t reserved1[8]; uint64_t reserved2[3]; UserListEntry memoryOrder; };
+struct UserLoaderEntry {
+    uint64_t reserved1[2];
+    UserListEntry memoryOrder;
+    uint64_t reserved2[2];
+    uint64_t dllBase;
+    uint64_t reserved3[2];
+    UserUnicodeString fullDllName;
+    uint8_t reserved4[8];
+    uint64_t reserved5[3];
+    uint64_t checksum;
+    uint32_t timestamp;
+};
+static_assert(offsetof(UserLoaderData, memoryOrder) == 0x20);
+static_assert(offsetof(UserLoaderEntry, memoryOrder) == 0x10);
+static_assert(offsetof(UserLoaderEntry, dllBase) == 0x30);
+static_assert(offsetof(UserLoaderEntry, fullDllName) == 0x48);
+
+bool initializeLoaderMetadata(const um::NativeUserImageSet64& images, uintptr_t address) noexcept {
+    constexpr size_t entriesOffset = 0x40;
+    if (images.size() > 16 || entriesOffset + images.size() * sizeof(UserLoaderEntry) > mm::PageSize4KB)
+        return false;
+    auto* loader = reinterpret_cast<UserLoaderData*>(address);
+    auto* entries = reinterpret_cast<UserLoaderEntry*>(address + entriesOffset);
+    const uintptr_t head = address + offsetof(UserLoaderData, memoryOrder);
+    size_t order[16]{};
+    for (size_t i = 0; i < images.size(); ++i) {
+        const auto* module = images.module(i);
+        if (!module) return false;
+        entries[i] = {};
+        entries[i].dllBase = module->base;
+        entries[i].checksum = module->view.headers().optionalHeader.checkSum;
+        entries[i].timestamp = module->view.headers().fileHeader.timeDateStamp;
+        order[i] = i;
+        size_t position = i;
+        while (position && images.module(order[position - 1])->base > module->base) {
+            order[position] = order[position - 1];
+            --position;
+        }
+        order[position] = i;
+    }
+    const auto linkAddress = [&](size_t index) {
+        return address + entriesOffset + index * sizeof(UserLoaderEntry) + offsetof(UserLoaderEntry, memoryOrder);
+    };
+    loader->memoryOrder.next = images.size() ? linkAddress(order[0]) : head;
+    loader->memoryOrder.previous = images.size() ? linkAddress(order[images.size() - 1]) : head;
+    for (size_t i = 0; i < images.size(); ++i) {
+        auto& link = entries[order[i]].memoryOrder;
+        link.previous = i ? linkAddress(order[i - 1]) : head;
+        link.next = i + 1 < images.size() ? linkAddress(order[i + 1]) : head;
+    }
+    return true;
+}
+
 bool active(const EProcess& process) noexcept {
     uintptr_t root{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(root));
@@ -131,13 +189,19 @@ NtStatus EProcess::finalizeNativeImages() noexcept {
             if (status != NtStatus::Success) return status;
         }
     }
-    // A zeroed page provides the documented initial PEB fields. LoaderData,
-    // process parameters and other startup state are not initialized yet.
+    // Process parameters and other startup state remain uninitialized.
     if (!userPeb_) {
         auto status = addressSpace_.allocate(userPeb_, mm::PageSize4KB,
             mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
         if (status != NtStatus::Success) return status;
     }
+    if (!userLoaderData_) {
+        auto status = addressSpace_.allocate(userLoaderData_, mm::PageSize4KB,
+            mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+        if (status != NtStatus::Success) return status;
+    }
+    if (!initializeLoaderMetadata(*images_, userLoaderData_)) return NtStatus::Unsuccessful;
+    *reinterpret_cast<uint64_t*>(userPeb_ + 0x18) = userLoaderData_;
     for (size_t i = 0; i < tlsCount; ++i) {
         const auto index = static_cast<uint32_t>(i);
         std::memcpy(reinterpret_cast<void*>(tlsIndexAddresses[i]), &index, sizeof(index));

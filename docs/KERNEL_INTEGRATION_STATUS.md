@@ -277,14 +277,18 @@ user-thread creation, normal preemption
 and general process termination remain outstanding. The test is not
 sufficient to declare M6 or M7 complete.
 
-Ps allocates a zeroed, process-owned PEB page after the images are finalized
-and links it from each user TEB. QEMU checks that both CPL3 threads read the
-same PEB pointer and the documented initial `BeingDebugged` byte, then frees
-the page with the process. LoaderData, process parameters and other process
-startup state are still absent. The limited layout follows the public
+Ps allocates a process-owned PEB and loader-data page after the images are
+finalized and links the PEB from each user TEB. Its public memory-order module
+list contains the mapped image bases and corresponding PE checksum and
+timestamp; entries are linked in address order. QEMU checks the shared PEB,
+the documented initial `BeingDebugged` byte, the list links and all three
+module bases, then frees both pages with the process. Full DLL names remain
+empty because the bootstrap sources have no verified file paths; process
+parameters and other startup state remain absent. The limited layout follows the public
 [PEB](https://learn.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-peb)
 and [TEB](https://learn.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-teb)
-declarations; ReactOS `sdk/include/ndk/peb_teb.h` was consulted for context.
+declarations and [PEB_LDR_DATA](https://learn.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-peb_ldr_data);
+ReactOS `sdk/include/ndk/peb_teb.h` was consulted for context.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted
 for user thread startup and context ownership.
 Hardware reference: [Intel 64 and IA-32 SDM, volume 3A](https://cdrdv2-public.intel.com/812386/253668-sdm-vol-3a.pdf).

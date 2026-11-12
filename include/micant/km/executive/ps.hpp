@@ -52,6 +52,7 @@ private:
     std::unique_ptr<um::NativeUserImageSet64> images_{};
     bool imagesFinalized_{false};
     uintptr_t userPeb_{0};
+    uintptr_t userLoaderData_{0};
     std::unique_ptr<pe::PeImageView64::TlsLayout[]> userTlsLayouts_{};
     size_t userTlsCount_{0};
 };

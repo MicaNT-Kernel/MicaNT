@@ -24,6 +24,7 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\nmovq 24(%r14), %r15\n"
         "subq $0x60, %rsp\n"
         "movq %gs:0x60, %rax\ntestq %rax, %rax\njz 9f\ncmpb $0, 2(%rax)\njne 9f\n"
+        "movq 24(%rax), %rax\ntestq %rax, %rax\njz 9f\ncmpq $0, 32(%rax)\nje 9f\n"
         // Static PE TLS vector slot zero points to a private template copy.
         "movq %gs:0x58, %rax\ntestq %rax, %rax\njz 9f\nmovq (%rax), %rax\ntestq %rax, %rax\njz 9f\n"
         "movabsq $0x8877665544332211, %rdx\ncmpq %rdx, (%rax)\njne 9f\ncmpq $0, 8(%rax)\njne 9f\n"
@@ -326,6 +327,27 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             scheduler.getReadyThreadCount() ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
         bool tls = process.userPebAddress() != 0;
+        const uintptr_t loaderAddress = *reinterpret_cast<const uint64_t*>(process.userPebAddress() + 0x18);
+        if (!hal::amd64::bootstrapUserRange(loaderAddress, mm::PageSize4KB, false)) return false;
+        const uintptr_t listHead = loaderAddress + 0x20;
+        const auto* head = reinterpret_cast<const uint64_t*>(listHead);
+        uintptr_t link = head[0];
+        uintptr_t previousLink = listHead;
+        const uintptr_t expectedBases[]{code, tlsDllBase, dll.headers().optionalHeader.imageBase};
+        for (const auto expectedBase : expectedBases) {
+            if (link == listHead || !hal::amd64::bootstrapUserRange(link, 40, false)) {
+                tls = false;
+                break;
+            }
+            const auto* entry = reinterpret_cast<const uint64_t*>(link);
+            if (entry[1] != previousLink || entry[4] != expectedBase) {
+                tls = false;
+                break;
+            }
+            previousLink = link;
+            link = entry[0];
+        }
+        tls = tls && link == listHead && head[1] == previousLink;
         for (size_t i = 0; i < threadCount; ++i) {
             const auto* teb = reinterpret_cast<um::Teb64*>(tebs[i]);
             tls = tls && threads[i]->kernelThread()->state == ThreadState::Terminated &&

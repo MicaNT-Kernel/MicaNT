@@ -27,6 +27,7 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     exitStatus_ = NtStatus::Pending;
     imagesFinalized_ = false;
     userPeb_ = 0;
+    userLoaderData_ = 0;
     userTlsLayouts_.reset();
     userTlsCount_ = 0;
     return NtStatus::Success;
@@ -44,6 +45,7 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
     if (status != NtStatus::Success) return status;
     userPeb_ = 0;
+    userLoaderData_ = 0;
     userTlsLayouts_.reset();
     userTlsCount_ = 0;
     images_.reset();
