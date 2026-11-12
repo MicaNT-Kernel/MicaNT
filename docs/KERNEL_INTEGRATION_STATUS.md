@@ -203,9 +203,13 @@ private CR3, PFN-backed user stack and executable page, enters CPL3, performs
 `NtAllocateVirtualMemory`, writes and reads the allocation, and exits through
 `NtTerminateProcess`. A separate context checks the exit status, reaps the
 thread, closes the process and checks the PFN baseline. The termination syscall
-is routed for this single-thread current-process case. This test uses a small
-embedded instruction sequence rather than a PE image or NTDLL and does not
-create a PEB, TEB, TLS, or a second user thread; it does not complete M6 or M7.
+is routed for this single-thread current-process case. The test constructs a
+minimal PE32+ fixture and uses the existing `PeImageView64` parser and mapper
+to copy it into private Mm pages, then makes its headers read-only and code
+execute/read before entering its PE entry point. This is not `SEC_IMAGE`, a
+file-backed image section, the production process loader or an NTDLL startup;
+it does not create a PEB, TEB, TLS, or a second user thread, and does not
+complete M6 or M7.
 The entry currently leaves interrupts disabled and uses GS base zero; the
 bootstrap syscall/GS handling is not a general user-thread context switch.
 ReactOS `ntoskrnl/ke/amd64/thrdini.c` and `ntoskrnl/ps/thread.c` were consulted

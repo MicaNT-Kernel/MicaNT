@@ -1,6 +1,9 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
+#include "micant/um/native/pe.hpp"
+#include <cstring>
+#include <span>
 
 extern "C" {
 extern const uint8_t MicantPsUserProgramEnd[];
@@ -52,7 +55,7 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
         uintptr_t code{};
         uintptr_t stack{};
         auto& space = process.getAddressSpace();
-        if (space.allocate(code, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
+        if (space.allocate(code, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
                            mm::PAGE_READWRITE) != NtStatus::Success ||
             space.allocate(stack, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
                            mm::PAGE_READWRITE) != NtStatus::Success) return false;
@@ -60,12 +63,44 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
         const size_t programSize = reinterpret_cast<uintptr_t>(MicantPsUserProgramEnd) -
                                    reinterpret_cast<uintptr_t>(program);
         if (!programSize || programSize > mm::PageSize4KB) return false;
-        auto* destination = reinterpret_cast<uint8_t*>(code);
-        for (size_t i = 0; i < programSize; ++i) destination[i] = program[i];
+        static constinit uint8_t file[512 + mm::PageSize4KB]{};
+        pe::ImageDosHeader dos{};
+        dos.e_magic = pe::DOS_MAGIC;
+        dos.e_lfanew = 64;
+        std::memcpy(file, &dos, sizeof(dos));
+        pe::ImageNtHeaders64 nt{};
+        nt.signature = pe::NT_SIGNATURE;
+        nt.fileHeader.machine = pe::MACHINE_AMD64;
+        nt.fileHeader.numberOfSections = 1;
+        nt.fileHeader.sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+        nt.fileHeader.characteristics = pe::IMAGE_FILE_EXECUTABLE_IMAGE;
+        nt.optionalHeader.magic = pe::PE32PLUS_MAGIC;
+        nt.optionalHeader.imageBase = code;
+        nt.optionalHeader.addressOfEntryPoint = mm::PageSize4KB;
+        nt.optionalHeader.sectionAlignment = mm::PageSize4KB;
+        nt.optionalHeader.fileAlignment = 512;
+        nt.optionalHeader.sizeOfImage = 2 * mm::PageSize4KB;
+        nt.optionalHeader.sizeOfHeaders = 512;
+        nt.optionalHeader.subsystem = pe::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+        std::memcpy(file + 64, &nt, sizeof(nt));
+        pe::ImageSectionHeader text{};
+        text.virtualAddress = mm::PageSize4KB;
+        text.misc.virtualSize = mm::PageSize4KB;
+        text.pointerToRawData = 512;
+        text.sizeOfRawData = mm::PageSize4KB;
+        text.characteristics = pe::IMAGE_SCN_MEM_EXECUTE | pe::IMAGE_SCN_MEM_READ;
+        std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
+        std::memcpy(file + 512, program, programSize);
+        pe::PeImageView64 image;
+        if (image.inspect(std::span<const uint8_t>{file}) != NtStatus::Success ||
+            image.map(std::span<uint8_t>{reinterpret_cast<uint8_t*>(code), 2 * mm::PageSize4KB}, code) !=
+                NtStatus::Success) return false;
         uint32_t old{};
-        if (space.protect(code, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success ||
+        if (space.protect(code, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success ||
+            old != mm::PAGE_READWRITE ||
+            space.protect(code + mm::PageSize4KB, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success ||
             old != mm::PAGE_READWRITE || !hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
-        UserStart start{boot, code, stack + mm::PageSize4KB - 16};
+        UserStart start{boot, code + nt.optionalHeader.addressOfEntryPoint, stack + mm::PageSize4KB - 16};
         if (thread.initialize(process, 32768, enterUser, &start) != NtStatus::Success ||
             thread.ready() != NtStatus::Success) return false;
         auto* next = scheduler.selectNextThread();
