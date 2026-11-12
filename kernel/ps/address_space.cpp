@@ -1,6 +1,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
+#include "micant/km/core/sync.hpp"
 #include "micant/km/executive/usermode.hpp"
 
 namespace micant::ps {
@@ -71,8 +72,10 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
         bool supported = true;
         for (auto* thread = threads_; thread; thread = thread->processNext) {
             if (thread == current || thread->state == ke::ThreadState::Terminated) continue;
-            if (thread->state != ke::ThreadState::Ready ||
-                !thread->readyQueued || !thread->eventWaitInProgress) {
+            const bool readyWaiter = thread->state == ke::ThreadState::Ready && thread->readyQueued;
+            const bool blockedWaiter = !terminating_ && thread->state == ke::ThreadState::Waiting &&
+                thread->eventWaitObject && thread->eventWaitBlock;
+            if (!thread->eventWaitInProgress || (!readyWaiter && !blockedWaiter)) {
                 supported = false;
                 break;
             }
@@ -83,27 +86,42 @@ NtStatus EProcess::terminateCurrent(NtStatus exitStatus) noexcept {
         } else {
             ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
             auto& scheduler = ke::PriorityScheduler::get();
-            if (auto* next = scheduler.selectNextThread()) {
+            const bool wasTerminating = terminating_;
+            const NtStatus oldStatus = exitStatus_;
+            bool cancelled = true;
+            for (auto* thread = threads_; thread; thread = thread->processNext) {
+                if (thread != current && thread->state == ke::ThreadState::Waiting &&
+                    !static_cast<sync::detail::BootstrapEvent*>(thread->eventWaitObject)->cancelWaitForTermination(*thread)) {
+                    cancelled = false;
+                    break;
+                }
+            }
+            auto* next = cancelled ? scheduler.selectNextThread() : nullptr;
+            if (next) {
                 if (otherActive && (next->owningProcess != this || !next->eventWaitInProgress)) {
                     next->state = ke::ThreadState::Ready;
                     if (!scheduler.readyKThread(next)) __builtin_trap();
-                    ke::KeLowerIrql(previous);
-                    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-                    return NtStatus::NotImplemented;
+                    result = NtStatus::NotImplemented;
+                } else {
+                    if (!terminating_) { terminating_ = true; exitStatus_ = exitStatus; }
+                    current->state = ke::ThreadState::Terminated;
+                    if (ke::KiSwapContext(current, next)) __builtin_trap();
+                    current->state = ke::ThreadState::Running;
+                    terminating_ = wasTerminating;
+                    exitStatus_ = oldStatus;
+                    next->state = ke::ThreadState::Ready;
+                    if (!scheduler.readyKThread(next)) __builtin_trap();
                 }
-                const bool wasTerminating = terminating_;
-                const NtStatus oldStatus = exitStatus_;
-                if (!terminating_) { terminating_ = true; exitStatus_ = exitStatus; }
-                current->state = ke::ThreadState::Terminated;
-                if (ke::KiSwapContext(current, next)) __builtin_trap();
-                current->state = ke::ThreadState::Running;
-                terminating_ = wasTerminating;
-                exitStatus_ = oldStatus;
-                next->state = ke::ThreadState::Ready;
-                if (!scheduler.readyKThread(next)) __builtin_trap();
+            }
+            if (!wasTerminating) {
+                for (auto* thread = threads_; thread; thread = thread->processNext) {
+                    if (thread->eventWaitCancelled &&
+                        !static_cast<sync::detail::BootstrapEvent*>(thread->eventWaitObject)->restoreCancelledWait(*thread))
+                        __builtin_trap();
+                }
             }
             ke::KeLowerIrql(previous);
-            result = NtStatus::Unsuccessful;
+            if (result != NtStatus::NotImplemented) result = NtStatus::Unsuccessful;
         }
     }
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");

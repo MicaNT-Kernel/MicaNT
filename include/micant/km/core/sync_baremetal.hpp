@@ -31,15 +31,20 @@ public:
                 result = NtStatus::Timeout;
             } else {
                 Waiter waiter{current};
+                current->eventWaitObject = this;
+                current->eventWaitBlock = &waiter;
                 if (tail_) tail_->next = &waiter;
                 else head_ = &waiter;
                 tail_ = &waiter;
                 if (ke::detail::blockCurrentThread()) {
-                    if (!waiter.satisfied) __builtin_trap();
-                    result = NtStatus::Success;
+                    if (!waiter.satisfied && !waiter.cancelled) __builtin_trap();
+                    result = waiter.cancelled ? NtStatus::Unsuccessful : NtStatus::Success;
                 } else {
                     unlink(waiter);
                 }
+                current->eventWaitObject = nullptr;
+                current->eventWaitBlock = nullptr;
+                current->eventWaitCancelled = false;
             }
         }
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
@@ -73,8 +78,39 @@ public:
         return previous;
     }
 
+    // Caller holds the BSP dispatcher exclusion (interrupts disabled).
+    [[nodiscard]] bool cancelWaitForTermination(ke::KThread& thread) noexcept {
+        if (thread.eventWaitObject != this || !thread.eventWaitBlock ||
+            thread.state != ke::ThreadState::Waiting || thread.eventWaitCancelled) return false;
+        auto& waiter = *static_cast<Waiter*>(thread.eventWaitBlock);
+        unlink(waiter);
+        waiter.cancelled = true;
+        thread.eventWaitCancelled = true;
+        if (!ke::PriorityScheduler::get().readyKThread(&thread)) __builtin_trap();
+        return true;
+    }
+
+    // Reinsert a cancelled wait if the terminating thread could not switch.
+    [[nodiscard]] bool restoreCancelledWait(ke::KThread& thread) noexcept {
+        if (thread.eventWaitObject != this || !thread.eventWaitBlock || !thread.eventWaitCancelled ||
+            !ke::PriorityScheduler::get().removeReadyThread(&thread)) return false;
+        auto& waiter = *static_cast<Waiter*>(thread.eventWaitBlock);
+        waiter.cancelled = false;
+        waiter.next = nullptr;
+        if (tail_) tail_->next = &waiter; else head_ = &waiter;
+        tail_ = &waiter;
+        thread.eventWaitCancelled = false;
+        thread.state = ke::ThreadState::Waiting;
+        return true;
+    }
+
 private:
-    struct Waiter { ke::KThread* thread; Waiter* next{nullptr}; bool satisfied{false}; };
+    struct Waiter {
+        ke::KThread* thread;
+        Waiter* next{nullptr};
+        bool satisfied{false};
+        bool cancelled{false};
+    };
     void unlink(Waiter& waiter) noexcept {
         Waiter* previous = nullptr;
         for (Waiter* item = head_; item; item = item->next) {

@@ -50,8 +50,9 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "testl %eax, %eax\njnz 9f\nmovabsq $0x1111222233334444, %rax\n"
         "cmpq %gs:0x1480, %rax\njne 9f\n"
         "movq %gs:0x58, %rax\nmovq (%rax), %rax\ncmpq $0x1234, (%rax)\njne 9f\n"
+        "cmpq $0, 40(%r14)\njne 10f\n"
         "movq %r12, %rcx\nxorl %edx, %edx\ncallq *16(%r15)\n"
-        "testl %eax, %eax\njnz 9f\nmovl $0xc0000022, %edx\njmp 8f\n"
+        "testl %eax, %eax\njnz 9f\n10: movl $0xc0000022, %edx\njmp 8f\n"
         // Thread B signals A, then blocks until A signals its event.
         "3: movq %rbx, %rcx\nxorl %edx, %edx\ncallq *16(%r15)\n"
         "testl %eax, %eax\njnz 9f\n"
@@ -244,6 +245,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             arguments[2] = i;
             arguments[3] = code + imports.firstThunk;
             arguments[4] = counters;
+            arguments[5] = threadCount == 3 ? 1 : 0;
         }
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
         for (size_t i = 0; i < threadCount; ++i) {

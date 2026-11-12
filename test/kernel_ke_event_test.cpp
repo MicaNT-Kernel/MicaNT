@@ -65,8 +65,17 @@ uint32_t broadcastStage{};
 
 [[noreturn]] void secondEntry(void*) noexcept {
     KeLowerIrql(PASSIVE_LEVEL);
+    ob::ObjectHeader* header{};
     if (stage != 1 || first.state != ThreadState::Waiting ||
-        sys::NtClose(firstEvent) != NtStatus::Success ||
+        ob::ObReferenceObjectByHandle(firstEvent, ob::detail::currentHandleTable(), ob::SYNCHRONIZE,
+                                      nullptr, &header) != NtStatus::Success) __builtin_trap();
+    auto* event = header->as<BootstrapEvent>();
+    if (!event->cancelWaitForTermination(first) || first.state != ThreadState::Ready ||
+        PriorityScheduler::get().getReadyThreadCount() != 1 ||
+        !event->restoreCancelledWait(first) || first.state != ThreadState::Waiting ||
+        PriorityScheduler::get().getReadyThreadCount()) __builtin_trap();
+    ob::ObDereferenceObject(header);
+    if (sys::NtClose(firstEvent) != NtStatus::Success ||
         sys::NtSetEvent(firstEventDuplicate, nullptr) != NtStatus::Success) __builtin_trap();
     stage = 2;
     if (sys::NtWaitForSingleObject(secondEvent, false, nullptr) != NtStatus::Success || stage != 3) __builtin_trap();

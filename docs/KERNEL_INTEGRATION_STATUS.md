@@ -197,11 +197,13 @@ another context reaps the stack and closes the address space. QEMU checks a
 no-runnable-thread failure without changing process state, rejects the
 unsupported multi-thread cases, verifies the exit status and restores the PFN baseline
 after releasing a private allocation. A bounded multi-thread case also permits
-termination when the other threads are ready after event waits: each resumes
-in the kernel, releases its retained event reference and terminates before it
-can return to user mode. QEMU verifies this with three CPL3 threads, including
-the event and section Ob object counts and PFN cleanup. Arbitrary process
-handles, other thread states, APCs and
+termination when the other threads are blocked on events or ready after an
+event wait: blocked waits are removed from the event and readied, and each
+thread resumes in the kernel, releases its retained event reference and
+terminates before returning to user mode. QEMU verifies this with three CPL3
+threads blocked on an unsignaled event, the event and section Ob object counts,
+and PFN cleanup. The Ke test also cancels and restores a wait before signaling
+it. Arbitrary process handles, other thread states, APCs and
 general multi-thread termination remain unsupported. The contract is
 [ZwTerminateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntddk/nf-ntddk-zwterminateprocess);
 ReactOS `ntoskrnl/ps/kill.c` was consulted for termination and cleanup.
@@ -276,7 +278,7 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
 | `python3 qemu.py --headless` | Passed; Ps image loading through Mm/Ob sections and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS rollback and PFN/Ob cleanup |
-| `python3 qemu.py --headless` | Passed; three CPL3 threads, coordinated process termination and event/section object reclamation |
+| `python3 qemu.py --headless` | Passed; three CPL3 threads, cancellation of unsignaled event waits, wait restoration, process termination and event/section object reclamation |
 | `clang++ ... -fsanitize=address,undefined test/mm_process_backend_test.cpp` | Passed; ordinary section protection and backend regression |
 | `llvm-readobj --coff-imports build/qemu-cmake-mingw/ntdll-process.dll` | Passed; no external PE imports |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |

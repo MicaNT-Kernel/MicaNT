@@ -451,6 +451,9 @@ struct KThread {
     ps::EProcess* owningProcess{nullptr};
     KThread* processNext{nullptr};
     bool eventWaitInProgress{false};
+    bool eventWaitCancelled{false};
+    void* eventWaitObject{nullptr};
+    void* eventWaitBlock{nullptr};
 #endif
     ThreadState state{ThreadState::Initialized};
     uint32_t basePriority{8};
