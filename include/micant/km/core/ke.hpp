@@ -623,23 +623,22 @@ public:
         return nullptr;
     }
 
-    // Called on the BSP with hardware interrupts disabled. A non-null return
-    // reserves the next thread and queues the running thread for an immediate
-    // context switch; cancelQuantumPreemption reverses a rejected switch.
-    [[nodiscard]] KThread* selectOnQuantumEnd(KThread* current) noexcept {
+    // Called on the BSP at each clock tick with interrupts disabled. Higher
+    // priorities preempt at the tick; equal priorities rotate at quantum end.
+    // cancelQuantumPreemption reverses a rejected context switch.
+    [[nodiscard]] KThread* selectOnClockTick(KThread* current) noexcept {
         if (!current || current != KeGetCurrentThread()) return nullptr;
         SpinLockGuard guard(lock_);
         if (current->state != ThreadState::Running || current->readyQueued) return nullptr;
-        if (current->quantumRemaining > 1) {
-            --current->quantumRemaining;
-            return nullptr;
-        }
-        current->quantumRemaining = DEFAULT_QUANTUM_WORKSTATION;
+        const bool expired = current->quantumRemaining <= 1;
+        if (expired) current->quantumRemaining = DEFAULT_QUANTUM_WORKSTATION;
+        else --current->quantumRemaining;
         const uint32_t currentPriority = std::min(current->priority, PRIORITY_REALTIME_MAX);
         for (int priority = PRIORITY_REALTIME_MAX; priority >= 0; --priority) {
             auto& queue = runQueues_[static_cast<size_t>(priority)];
             if (!queue.head) continue;
-            if (static_cast<uint32_t>(priority) < currentPriority) return nullptr;
+            if (static_cast<uint32_t>(priority) < currentPriority ||
+                (static_cast<uint32_t>(priority) == currentPriority && !expired)) return nullptr;
             KThread* next = queue.head;
             queue.head = next->readyNext;
             if (!queue.head) queue.tail = nullptr;

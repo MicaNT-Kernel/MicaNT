@@ -64,13 +64,26 @@ extern "C" bool MicantTestKeReadyQueue() noexcept {
     b.state = ThreadState::Waiting;
     b.priority = 12;
     const bool preemptionPrepared = scheduler.readyKThread(&b) &&
-        scheduler.selectOnQuantumEnd(&a) == nullptr && a.quantumRemaining == 1 &&
-        scheduler.selectOnQuantumEnd(&a) == &b && a.readyQueued &&
+        scheduler.selectOnClockTick(&a) == nullptr && a.quantumRemaining == 1 &&
+        scheduler.selectOnClockTick(&a) == &b && a.readyQueued &&
         b.state == ThreadState::Standby && scheduler.getReadyThreadCount() == 1;
     const bool rolledBack = preemptionPrepared && scheduler.cancelQuantumPreemption(&a, &b) &&
         !a.readyQueued && b.readyQueued && b.state == ThreadState::Ready &&
         scheduler.selectNextThread() == &b && scheduler.getReadyThreadCount() == 0;
+    b.state = ThreadState::Waiting;
+    b.priority = 13;
+    a.quantumRemaining = 5;
+    const bool higherPriority = scheduler.readyKThread(&b) &&
+        scheduler.selectOnClockTick(&a) == &b && a.quantumRemaining == 4 && a.readyQueued &&
+        scheduler.cancelQuantumPreemption(&a, &b) && scheduler.selectNextThread() == &b;
+    b.state = ThreadState::Waiting;
+    b.priority = 11;
+    a.quantumRemaining = 1;
+    const bool lowerPriority = scheduler.readyKThread(&b) &&
+        scheduler.selectOnClockTick(&a) == nullptr && !a.readyQueued &&
+        scheduler.selectNextThread() == &b;
     g_CurrentCpu.currentThread = saved;
-    return currentRejected && rolledBack && scheduler.getReadyThreadCount() == 0;
+    return currentRejected && rolledBack && higherPriority && lowerPriority &&
+        scheduler.getReadyThreadCount() == 0;
 }
 #endif

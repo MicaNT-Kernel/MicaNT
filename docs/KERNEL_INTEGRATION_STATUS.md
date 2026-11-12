@@ -118,6 +118,16 @@ queued contexts are withdrawn before the timer is restored. The interrupt
 entry saves GPRs and FXSAVE state and sends EOI before switching. The test
 does not enable interrupts in normal operation, cover AVX/extended XSAVE or
 CPL3 interrupt entry, or establish a complete hardware IRQL implementation.
+On each diagnostic clock tick Ke now selects a higher-priority ready thread
+without waiting for quantum expiration; equal-priority threads rotate at the
+quantum boundary, and a lower-priority ready thread does not displace the
+running thread. The queue test checks these three cases and rejected-switch
+rollback in the QEMU boot and under host ASan/UBSan. Preemption on the tick
+does not yet provide the immediate dispatch required when a higher-priority
+thread becomes ready. See Microsoft's
+[scheduling priorities](https://learn.microsoft.com/en-us/windows/win32/procthread/scheduling-priorities);
+ReactOS `ntoskrnl/ke/dpc.c` and `ntoskrnl/ke/time.c` were consulted for
+quantum-end dispatch.
 On the bare-metal BSP, Ke spinlocks now mask interrupts on acquisition and
 restore the saved IF state on release. The same timer diagnostic verifies
 that no tick is delivered while nested locks are held and that interrupts

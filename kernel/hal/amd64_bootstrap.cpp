@@ -322,7 +322,7 @@ void MicantBootstrapTimerDispatch() noexcept {
         if (!scheduler.readyKThread(MicantTimerBootThread)) MicantTimerDispatchFailed = true;
         else MicantTimerBootQueued = true;
     }
-    auto* next = scheduler.selectOnQuantumEnd(current);
+    auto* next = scheduler.selectOnClockTick(current);
     if (next && !KiSwapContext(current, next, true)) {
         if (!scheduler.cancelQuantumPreemption(current, next)) __builtin_trap();
         MicantTimerDispatchFailed = true;
