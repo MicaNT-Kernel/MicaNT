@@ -178,7 +178,7 @@ queues and runs it, and reaps the terminated thread from another context before
 releasing the stack and address space. QEMU exercises this path, rejects
 premature cleanup and duplicate readying, and checks PFN accounting. This is
 not yet a waitable Ob thread object or an implementation of `NtCreateThreadEx`
-or process termination.
+or general process termination.
 Ps can also roll back a not-yet-started thread, withdrawing it from the Ke
 ready queue before it is reaped. QEMU checks cancellation both before and
 after queueing, rejection after selection or while running, and a clean PFN
@@ -234,14 +234,17 @@ those allocations from another context; an invalid TLS layout exercises
 post-allocation rollback with PFN accounting. This is one TLS module without
 callbacks, with the image and index prepared by the test, not full loader
 initialization. Ps now owns the bounded image-loading sequence: it allocates
-private Mm pages, uses the existing `NativeUserImageSet64` loader to map both
+Mm section views backed by canonical Ob objects and PFNs, uses the existing
+`NativeUserImageSet64` loader to map both
 PE files and bind the fixture's imports to NTDLL, and applies RO/RW/RX section
 protections before the user code calls its IAT. QEMU checks rejection of W+X,
 duplicate-name rollback with PFN accounting, and an unresolved import before
-loading the missing DLL. This loader borrows the names and source files, only
+loading the missing DLL. QEMU verifies that both images are section views and
+that their Ob object count and PFNs return to baseline on process teardown.
+This loader borrows the names and source files, only
 supports contiguous page-aligned readable sections, and requires the active
-process root. The threads are still initiated by the kernel test; `SEC_IMAGE`,
-file-backed images, normal NTDLL startup, complete PEB loader and process
+process root. The threads are still initiated by the kernel test; file-backed
+`SEC_IMAGE` semantics, normal NTDLL startup, complete PEB loader and process
 parameters, TLS callbacks, native
 user-thread creation, normal preemption
 and general process termination remain outstanding. The test is not
@@ -266,7 +269,8 @@ were consulted for clock interrupt and dispatch ordering, without copying code.
 | `python3 qemu.py --headless` | Passed; LAPIC IRQ and timer-preempted kernel context markers, existing boot, scanout and input checks |
 | `python3 qemu.py --headless` | Passed; Ob event references and access, Ke wait/wake, two notification waiters, CPL3 NTDLL event polling and error checks |
 | `python3 qemu.py --headless` | Passed; Ps-owned CPL3 context, native allocation, current-process termination, exit status and PFN cleanup |
-| `python3 qemu.py --headless` | Passed; Ps image loading and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS failure rollback and PFN cleanup |
+| `python3 qemu.py --headless` | Passed; Ps image loading through Mm/Ob sections and PE import binding, two CPL3 threads, NTDLL, Ps-created TLS and stacks, blocking events, exit status, image/TLS rollback and PFN/Ob cleanup |
+| `clang++ ... -fsanitize=address,undefined test/mm_process_backend_test.cpp` | Passed; ordinary section protection and backend regression |
 | `llvm-readobj --coff-imports build/qemu-cmake-mingw/ntdll-process.dll` | Passed; no external PE imports |
 | `python3 -m unittest discover -s test -p 'test_bootstrap_runtime_runner.py' -v` | 7 passed; ordered markers and runtime mode checks |
 

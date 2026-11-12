@@ -38,6 +38,30 @@ bool initializeBootstrapSectionServices() noexcept {
         hal::amd64::BootstrapManagedBase, hal::amd64::BootstrapManagedSize);
 }
 
+// Internal image view. The section and its PFNs remain owned by Ob until the
+// process unmaps the view. This is not the public SEC_IMAGE file contract.
+NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, size_t size) noexcept {
+    if (sectionType.typeId != ob::ObjectTypeId::Section) return NtStatus::Unsuccessful;
+    void* body{};
+    ob::ObjectHeader* header{};
+    auto status = ob::ObCreateObject(ob::KernelMode, &sectionType, nullptr,
+                                     sizeof(section::SectionObject), &body, &header);
+    if (status != NtStatus::Success) return status;
+    auto* object = new (body) section::SectionObject(size, section::SEC_COMMIT, mm::PAGE_READWRITE);
+    status = object->getInitializationStatus();
+    if (status == NtStatus::Success) {
+        const auto backing = object->getBackingReference();
+        status = space.mapSharedPages(base, size, mm::PAGE_READWRITE, backing.pfns, backing.pageCount,
+                                      header, acquireSectionView, releaseSectionView, mm::PAGE_READWRITE, true);
+    }
+    ob::ObDereferenceObject(header);
+    return status;
+}
+
+uint32_t bootstrapSectionObjectCount() noexcept {
+    return sectionType.totalNumberOfObjects.load(std::memory_order_relaxed);
+}
+
 NtStatus NtAllocateVirtualMemory(Handle process, uintptr_t* base, uintptr_t zeroBits,
                                  size_t* regionSize, uint32_t type, uint32_t protection) {
     if (!base || !regionSize || !*regionSize) return NtStatus::InvalidParameter;

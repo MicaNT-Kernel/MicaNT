@@ -2,6 +2,10 @@
 #include "micant/km/executive/usermode.hpp"
 #include <new>
 
+namespace micant::sys {
+NtStatus mapBootstrapImageView(mm::ProcessAddressSpace& space, uintptr_t& base, size_t size) noexcept;
+}
+
 namespace micant::ps {
 namespace {
 bool active(const EProcess& process) noexcept {
@@ -46,11 +50,11 @@ NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_
         if (!images_) return NtStatus::NoMemory;
     }
     uintptr_t target = base;
-    status = addressSpace_.allocate(target, size, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    status = sys::mapBootstrapImageView(addressSpace_, target, size);
     if (status != NtStatus::Success) return status;
     status = images_->addModule(name, file, {reinterpret_cast<uint8_t*>(target), size}, target);
     if (status != NtStatus::Success) {
-        if (addressSpace_.free(target, 0, mm::MEM_RELEASE) != NtStatus::Success) __builtin_trap();
+        if (addressSpace_.unmapSharedPages(target) != NtStatus::Success) __builtin_trap();
         return status;
     }
     return NtStatus::Success;

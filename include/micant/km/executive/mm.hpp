@@ -569,6 +569,7 @@ struct VirtualAddressDescriptor {
     bool      isCopyOnWrite{false};
     bool      isGuardPage{false};
     bool      isSectionView{false};
+    bool      isImageView{false};
     uint32_t  sectionMaxProtection{PAGE_NOACCESS};
     void*     sectionContext{nullptr};
     void (*sectionRelease)(void*) noexcept{nullptr};
@@ -794,6 +795,7 @@ private:
             node->isCopyOnWrite = temp->isCopyOnWrite;
             node->isGuardPage = temp->isGuardPage;
             node->isSectionView = temp->isSectionView;
+            node->isImageView = temp->isImageView;
             node->sectionMaxProtection = temp->sectionMaxProtection;
             if (node->sectionRelease) node->sectionRelease(node->sectionContext);
             node->sectionContext = temp->sectionContext;
@@ -1255,7 +1257,8 @@ public:
                             const uint64_t* pfns, size_t pageCount, void* owner,
                             bool (*acquire)(void*) noexcept,
                             void (*release)(void*) noexcept,
-                            uint32_t maxProtection = PAGE_NOACCESS) noexcept {
+                            uint32_t maxProtection = PAGE_NOACCESS,
+                            bool imageView = false) noexcept {
         Guard lock(*this);
         if (!backend_.map) return NtStatus::NotImplemented;
         if (!recoverFailedSectionMapping()) return NtStatus::Unsuccessful;
@@ -1286,6 +1289,7 @@ public:
         node->protection = protect;
         node->allocationType = MEM_COMMIT;
         node->isSectionView = true;
+        node->isImageView = imageView;
         node->sectionMaxProtection = maxProtection;
         auto* vad = node.get();
         if (!vadTree_.insert(std::move(node))) return NtStatus::Conflict;
@@ -1700,7 +1704,8 @@ private:
         if (!pageRange(address, size, start, end)) return NtStatus::InvalidParameter;
         auto* vad = vadTree_.find(start);
         if (!vad || end > vad->endingAddress) return NtStatus::Conflict;
-        if (vad->isSectionView && protection == PAGE_EXECUTE_READ) return NtStatus::NotImplemented;
+        if (vad->isSectionView && !vad->isImageView && protection == PAGE_EXECUTE_READ)
+            return NtStatus::NotImplemented;
         if (vad->isSectionView && protection == PAGE_READWRITE &&
             vad->sectionMaxProtection != PAGE_READWRITE) return NtStatus::SectionProtection;
 

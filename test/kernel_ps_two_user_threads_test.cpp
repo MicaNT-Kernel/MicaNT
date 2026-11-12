@@ -6,6 +6,8 @@
 #include <cstring>
 #include <span>
 
+namespace micant::sys { uint32_t bootstrapSectionObjectCount() noexcept; }
+
 namespace {
 const uint8_t nativeDll[]{
 #include "ntdll-process.inc"
@@ -76,6 +78,7 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
     auto* boot = KeGetCurrentThread();
     if (!boot || scheduler.getReadyThreadCount()) return false;
     const size_t active = mm::PfnDatabase::get().getActiveCount();
+    const uint32_t sectionsBefore = sys::bootstrapSectionObjectCount();
     uintptr_t previous{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(previous));
     {
@@ -167,7 +170,8 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             return false;
         const auto* images = process.nativeImages();
         const auto* image = images ? images->module(0) : nullptr;
-        if (!image) return false;
+        const auto* imageVad = process.getAddressSpace().findVad(code);
+        if (!image || !imageVad || !imageVad->isSectionView || !imageVad->isImageView) return false;
         pe::PeImageView64::TlsLayout tlsLayout{};
         if (image->view.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
@@ -190,6 +194,7 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             return false;
         if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}) != NtStatus::Success ||
             process.finalizeNativeImages() != NtStatus::Success ||
+            sys::bootstrapSectionObjectCount() != sectionsBefore + 2 ||
             hal::amd64::bootstrapUserRange(code, 1, true) ||
             hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, true) ||
             !hal::amd64::bootstrapUserRange(code + mm::PageSize4KB, 1, false, true) ||
@@ -249,5 +254,6 @@ extern "C" bool MicantTestPsTwoUserThreads() noexcept {
             first.reap() != NtStatus::Success || second.reap() != NtStatus::Success ||
             process.closeAddressSpace() != NtStatus::Success) return false;
     }
-    return mm::PfnDatabase::get().getActiveCount() == active;
+    return mm::PfnDatabase::get().getActiveCount() == active &&
+        sys::bootstrapSectionObjectCount() == sectionsBefore;
 }
