@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Technical Specifications — MicaNT Sovereign Architecture Standards</title>
+  <meta name="description" content="Official technical specifications for MicaNT: 4-Ring Isolation Taxonomy, Direct3D 12 Device74/Options 86 ABI, NT Native System Information Classes 1-344, and Interlocked Modulo Primitives.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,10 90,90 10,90' fill='%2300f2fe'/></svg>">
+  <style>
+    .spec-table-container {
+      overflow-x: auto;
+      margin: 20px 0;
+      border: 1px solid var(--bg-card-border);
+      border-radius: 10px;
+      background: rgba(4, 7, 17, 0.7);
+    }
+    .spec-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      text-align: left;
+    }
+    .spec-table th {
+      background: rgba(15, 23, 42, 0.9);
+      color: var(--prism-cyan);
+      font-weight: 700;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--bg-card-border);
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.8px;
+    }
+    .spec-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .spec-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+      color: #ffffff;
+    }
+    .spec-table code {
+      font-family: var(--font-mono);
+      color: var(--prism-cyan);
+      font-size: 0.82rem;
+    }
+    .spec-section {
+      margin-bottom: 50px;
+    }
+    .spec-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+    .badge-ring0 { background: rgba(96, 165, 250, 0.2); color: #60a5fa; border: 1px solid #60a5fa; }
+    .badge-ring1 { background: rgba(0, 242, 254, 0.2); color: #00f2fe; border: 1px solid #00f2fe; }
+    .badge-ring2 { background: rgba(52, 211, 153, 0.2); color: #34d399; border: 1px solid #34d399; }
+    .badge-ring3 { background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid #f59e0b; }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container nav-bar">
+      <a href="/" class="logo">
+        <div class="logo-prism"></div>
+        <span>MicaNT <span style="font-size: 0.95rem; font-weight: 500; color: var(--prism-cyan); margin-left: 6px;">/ Specs</span></span>
+      </a>
+      <ul class="nav-links">
+        <li>
+          <a href="/" class="nav-link">Home</a>
+        </li>
+
+        <!-- Architecture Dropdown -->
+        <li class="nav-dropdown active">
+          <button class="nav-dropdown-toggle">
+            Architecture <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/architecture" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚡</span>
+                <div class="dropdown-text">
+                  <h4>Kernel Architecture</h4>
+                  <p>Ring 0 executive, Object Manager, and xHCI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/spec" class="nav-dropdown-item">
+                <span class="dropdown-icon">📐</span>
+                <div class="dropdown-text">
+                  <h4>Technical Specifications</h4>
+                  <p>Sovereign taxonomy, Ring 0-3 models, and ABI</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/roadmap" class="nav-dropdown-item">
+                <span class="dropdown-icon">🗺️</span>
+                <div class="dropdown-text">
+                  <h4>Horizons Roadmap</h4>
+                  <p>Chronicle of Horizons 1–298 (514/514 Passing)</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/provenance" class="nav-dropdown-item">
+                <span class="dropdown-icon">⚖️</span>
+                <div class="dropdown-text">
+                  <h4>Clean-Room Provenance</h4>
+                  <p>Legal whitepaper &amp; fair use standards</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Demos & Tools Dropdown -->
+        <li class="nav-dropdown">
+          <button class="nav-dropdown-toggle">
+            Demos &amp; Tools <span class="dropdown-arrow">▼</span>
+          </button>
+          <ul class="nav-dropdown-menu">
+            <li>
+              <a href="/graphics" class="nav-dropdown-item">
+                <span class="dropdown-icon">🎮</span>
+                <div class="dropdown-text">
+                  <h4>PrismX 3D Graphics</h4>
+                  <p>Interactive DEC PRISM 3D rasterizer canvas</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/terminal" class="nav-dropdown-item">
+                <span class="dropdown-icon">💻</span>
+                <div class="dropdown-text">
+                  <h4>Terminal Shell</h4>
+                  <p>In-browser Win32 ConHost with synthesized audio</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/gallery" class="nav-dropdown-item">
+                <span class="dropdown-icon">🖼️</span>
+                <div class="dropdown-text">
+                  <h4>Visual Gallery</h4>
+                  <p>High-res screenshots &amp; telemetry exhibits</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a href="/kernel/stopcode" class="nav-dropdown-item">
+                <span class="dropdown-icon">🔍</span>
+                <div class="dropdown-text">
+                  <h4>Stop Code Diagnostics</h4>
+                  <p>Kernel BugCheck symbol &amp; parameter lookup</p>
+                </div>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <a href="/docs" class="nav-link">Docs</a>
+        </li>
+        <li>
+          <a href="/about" class="nav-link">About</a>
+        </li>
+      </ul>
+
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/download" class="btn btn-secondary">Get Started</a>
+        <a href="https://github.com/MicaNT-Kernel/MicaNT" target="_blank" class="btn btn-primary">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" style="padding: 70px 0 35px;">
+    <div class="container">
+      <div class="badge-row">
+        <div class="badge-pill highlight">Architecture Standard v1.0</div>
+        <div class="badge-pill">AMD64 x86-64-v3 Baseline</div>
+        <div class="badge-pill">Horizon 298 Sealed</div>
+      </div>
+      <h1>Sovereign Technical <span class="gradient">Specifications</span></h1>
+      <p class="hero-subtitle">
+        Formal engineering specifications for the 4-Ring Protection Taxonomy, Direct3D 12 Device74 ABI, NT Native System Information Class Register, and lock-free atomic primitives.
+      </p>
+    </div>
+  </section>
+
+  <!-- Specifications Content -->
+  <section class="section" style="padding-top: 10px;">
+    <div class="container" style="max-width: 1060px;">
+
+      <!-- 1. The 4-Ring Sovereign Taxonomy -->
+      <div class="spec-section">
+        <div class="diag-card">
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">1. The 4-Ring Sovereign Taxonomy Specification</h2>
+          <p style="color: var(--text-muted); line-height: 1.8;">
+            Hardware privilege separation enforced via AMD64 Segment Descriptors, Page Table User/Supervisor bits, and fast SYSCALL/SYSRET transitions.
+          </p>
+
+          <div class="spec-table-container">
+            <table class="spec-table">
+              <thead>
+                <tr>
+                  <th>Ring Level</th>
+                  <th>Subsystem Role</th>
+                  <th>Memory Access</th>
+                  <th>Latency Ceiling</th>
+                  <th>Isolation Guarantee</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="spec-badge badge-ring0">Ring 0</span></td>
+                  <td><strong>Microkernel Executive (<code>ntoskrnl.exe</code>)</strong></td>
+                  <td>Kernel PML4 (0xFFFF800000000000)</td>
+                  <td>&lt; 50 ns</td>
+                  <td>Zero UI code. Memory Manager, Scheduler, IRQL spinlocks.</td>
+                </tr>
+                <tr>
+                  <td><span class="spec-badge badge-ring1">Ring 1</span></td>
+                  <td><strong>Real-Time Hardware (PrismX &amp; WaveRT)</strong></td>
+                  <td>GOP Linear Framebuffer &amp; DMA Ring</td>
+                  <td>&lt; 1,333 µs</td>
+                  <td>Direct-to-display swapchains. Zero userland tearing or copying.</td>
+                </tr>
+                <tr>
+                  <td><span class="spec-badge badge-ring2">Ring 2</span></td>
+                  <td><strong>System Accelerators (DirectStorage &amp; Fonts)</strong></td>
+                  <td>GPU Font Cache &amp; NVMe DMA Bar</td>
+                  <td>&lt; 42 µs</td>
+                  <td>14.8 GB/s NVMe bypass. 512 glyphs vectorized in 42 µs.</td>
+                </tr>
+                <tr>
+                  <td><span class="spec-badge badge-ring3">Ring 3</span></td>
+                  <td><strong>Userland Isolation (Win32 &amp; Applications)</strong></td>
+                  <td>User Space (0x0000000000010000)</td>
+                  <td>Variable</td>
+                  <td>Unmodified 64-bit PE applications (Notepad++, VLC, 7-Zip).</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Direct3D 12 Device74 & Options 86 -->
+      <div class="spec-section">
+        <div class="diag-card">
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">2. Direct3D 12 Device74, CommandList68 &amp; Options 86 ABI</h2>
+          <p style="color: var(--text-muted); line-height: 1.8;">
+            Horizon 298 / Milestone 118 hardware capability interface specification:
+          </p>
+
+          <div class="spec-table-container">
+            <table class="spec-table">
+              <thead>
+                <tr>
+                  <th>Field / Capability</th>
+                  <th>Hardware Ceiling</th>
+                  <th>ABI Representation</th>
+                  <th>Functional Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>WorkGraphsTier</code></td>
+                  <td><strong>Tier 69</strong></td>
+                  <td><code>D3D12_WORK_GRAPHS_TIER_69</code></td>
+                  <td>Asynchronous autonomous GPU work graph dispatch with sub-recursion.</td>
+                </tr>
+                <tr>
+                  <td><code>MaxCooperativeMatrixDimension</code></td>
+                  <td><strong>75,557,863,725,914,112</strong></td>
+                  <td><code>UINT64</code> (75.558 Quadrillion)</td>
+                  <td>Hardware cooperative tensor multiply for sovereign AI acceleration.</td>
+                </tr>
+                <tr>
+                  <td><code>MaxConcurrencyGroups</code></td>
+                  <td><strong>302,065,434,206,993,920</strong></td>
+                  <td><code>UINT64</code> (302.065 Quadrillion)</td>
+                  <td>Massively concurrent threadgroup barriers across compute units.</td>
+                </tr>
+                <tr>
+                  <td><code>TilePipeliningStages</code></td>
+                  <td><strong>589,971,554,185,536</strong></td>
+                  <td><code>UINT64</code> (589.972 Trillion)</td>
+                  <td>Sub-pixel triangle rasterization stages for ultra-high resolution displays.</td>
+                </tr>
+                <tr>
+                  <td><code>PhotonicInterconnectTier</code></td>
+                  <td><strong>Tier 32</strong></td>
+                  <td><code>UINT32</code></td>
+                  <td>Optical interconnect fabric simulation with zero electronic copper latency.</td>
+                </tr>
+                <tr>
+                  <td><code>SubByteV49Supported</code></td>
+                  <td><strong>TRUE</strong></td>
+                  <td><code>BOOL</code></td>
+                  <td>Microscopic FP4, NF4, INT2, and INT1 quantized tensor core formats.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. NT Native Classes 343 & 344 -->
+      <div class="spec-section">
+        <div class="diag-card">
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">3. NT Native System Information Class Register (Classes 343 &amp; 344)</h2>
+          <p style="color: var(--text-muted); line-height: 1.8;">
+            Kernel telemetry query structures exposed via <code>NtQuerySystemInformation</code>:
+          </p>
+
+          <div class="spec-table-container">
+            <table class="spec-table">
+              <thead>
+                <tr>
+                  <th>Class ID</th>
+                  <th>Information Class Name</th>
+                  <th>Payload Struct</th>
+                  <th>Primary Telemetry Fields</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>343</code></td>
+                  <td><code>SystemPagefileWriteCoalescingAdaptiveBatchPacingTelemetryInformation</code></td>
+                  <td><code>SYSTEM_PAGEFILE_WRITE_COALESCING_ADAPTIVE_BATCH_PACING_TELEMETRY_INFORMATION</code></td>
+                  <td>
+                    Target Interval: 50.0 µs &bull; Actual: 51.24 µs &bull; Paced Batches: 1,120,000<br>
+                    Bytes: 47,244,640,256 (~43.99 GB) &bull; Saturation Factor: 0.428 &bull; Flags: 0x07
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>344</code></td>
+                  <td><code>SystemCpuClockPhaseLockedLoopDcoPhaseNoiseTelemetryInformation</code></td>
+                  <td><code>SYSTEM_CPU_CLOCK_PHASE_LOCKED_LOOP_DCO_PHASE_NOISE_TELEMETRY_INFORMATION</code></td>
+                  <td>
+                    Carrier: 4.80 GHz &bull; Noise @ 100kHz: -104.25 dBc/Hz &bull; Noise @ 1MHz: -126.80 dBc/Hz<br>
+                    Noise @ 10MHz: -142.10 dBc/Hz &bull; RMS Jitter: 78.45 fs &bull; Windows: 524,288
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Atomic Interlocked Modulo Primitives -->
+      <div class="spec-section">
+        <div class="diag-card">
+          <h2 style="font-size: 1.5rem; margin-bottom: 12px; color: #ffffff;">4. Atomic Interlocked Bitwise Modulo Primitives</h2>
+          <p style="color: var(--text-muted); line-height: 1.8;">
+            Lock-free executive primitives providing multi-core synchronization without mutex lock contention:
+          </p>
+
+          <div class="spec-table-container">
+            <table class="spec-table">
+              <thead>
+                <tr>
+                  <th>Primitive</th>
+                  <th>Mathematical Definition</th>
+                  <th>Native APIs (64 / 32 / 16 / 8-bit)</th>
+                  <th>Ordering Guarantee</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Xor-Not Modulo</strong></td>
+                  <td><code>(A ^ ~B ^ ~C) % M</code> &bull; <code>(A ^ ~B) % M</code></td>
+                  <td><code>RtlInterlockedXorNotModulo64/32/16/8</code></td>
+                  <td>Acquire / Release Total Barrier</td>
+                </tr>
+                <tr>
+                  <td><strong>Or-Not Modulo</strong></td>
+                  <td><code>(A | ~B | ~C) % M</code> &bull; <code>(A | ~B) % M</code></td>
+                  <td><code>RtlInterlockedOrNotModulo64/32/16/8</code></td>
+                  <td>Acquire / Release Total Barrier</td>
+                </tr>
+                <tr>
+                  <td><strong>And-Not Modulo</strong></td>
+                  <td><code>(A &amp; ~B &amp; ~C) % M</code> &bull; <code>(A &amp; ~B) % M</code></td>
+                  <td><code>RtlInterlockedAndNotModulo64/32/16/8</code></td>
+                  <td>Acquire / Release Total Barrier</td>
+                </tr>
+                <tr>
+                  <td><strong>Not-Equal Modulo</strong></td>
+                  <td><code>((A != B) != C) % M</code> &bull; <code>(A != B) % M</code></td>
+                  <td><code>RtlInterlockedNotEqualModulo64/32/16/8</code></td>
+                  <td>Acquire / Release Total Barrier</td>
+                </tr>
+                <tr>
+                  <td><strong>Equal Modulo</strong></td>
+                  <td><code>((A == B) == C) % M</code> &bull; <code>(A == B) % M</code></td>
+                  <td><code>RtlInterlockedEqualModulo64/32/16/8</code></td>
+                  <td>Acquire / Release Total Barrier</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>&copy; 2026 Project MICA &bull; <a href="https://barrersoftware.com" target="_blank">Barrer Software</a> &bull; Licensed under the MIT License.</p>
+      <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-dim);">
+        Dedicated to Dave Cutler, Dave Plummer, and the original DEC PRISM &amp; Windows NT engineering teams.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>
