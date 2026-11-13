@@ -233,6 +233,8 @@ def main() -> int:
     parser.add_argument("--ovmf-code", type=Path, help="OVMF x86_64 code firmware image")
     parser.add_argument("--display", help="QEMU display backend (auto-detected by default)")
     parser.add_argument("--timeout", type=int, default=90, help="boot milestone timeout")
+    parser.add_argument("--diagnostics-dir", type=Path,
+                        help="new directory retaining serial/QEMU logs and the exact kernel/manifest")
     parser.add_argument(
         "--stable-seconds", type=int, default=5, help="required shell idle duration"
     )
@@ -323,6 +325,8 @@ def main() -> int:
                 "bootx64_efi",
                 "virtio_gpu_boot",
                 "ahci_oem_boot",
+                "hidusb_oem_boot",
+                "usbstor_oem_boot",
                 "xhci_oem_boot",
                 "i210_oem_boot",
                 "virtio_net_oem_boot",
@@ -357,6 +361,8 @@ def main() -> int:
             "--display",
             "none" if args.headless else display,
         ]
+        if args.diagnostics_dir:
+            boot_command.extend(["--diagnostics-dir", str(args.diagnostics_dir.resolve())])
         if args.runtime_selftest:
             boot_command.append("--runtime-selftest")
         elif args.timer_selftest:

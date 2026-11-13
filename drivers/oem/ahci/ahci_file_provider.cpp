@@ -16,14 +16,19 @@ constexpr int32_t STATUS_OBJECT_NAME_NOT_FOUND = static_cast<int32_t>(0xC0000034
 constexpr int32_t STATUS_OBJECT_PATH_NOT_FOUND = static_cast<int32_t>(0xC000003Au);
 constexpr int32_t STATUS_UNRECOGNIZED_VOLUME = static_cast<int32_t>(0xC000014Fu);
 constexpr int32_t STATUS_DEVICE_DATA_ERROR = static_cast<int32_t>(0xC000009Cu);
+constexpr int32_t STATUS_DEVICE_BUSY = static_cast<int32_t>(0x80000011u);
 constexpr int32_t STATUS_INVALID_DEVICE_REQUEST = static_cast<int32_t>(0xC0000010u);
 constexpr int32_t STATUS_FILE_IS_A_DIRECTORY = static_cast<int32_t>(0xC00000BAu);
 
 constexpr uint32_t kSectorSize = 512;
+constexpr uint64_t kMinimumHbaRegistersSize = 0x100;
+constexpr uint64_t kMaximumHbaRegistersSize = 0x1100;
 constexpr uint32_t kMaximumSectorsPerCommand = 128;
 constexpr size_t kFileContextCount = 32;
 constexpr size_t kMaximumPath = 256;
 constexpr uint32_t kFileReadData = 0x00000001;
+constexpr uint32_t kFileWriteData = 0x00000002;
+constexpr uint32_t kFileSynchronize = 0x00100000;
 
 struct __attribute__((packed)) FisRegH2D {
     uint8_t Type, Flags, Command, FeatureLow;
@@ -74,13 +79,16 @@ struct DriverState {
     uint16_t Function{};
     uint32_t OriginalPciCommand{};
     bool PciCommandChanged{};
+    bool ControllerQuiesced{};
     uint32_t OriginalGhc{};
     bool GhcChanged{};
     PciBarResourceV1 Bar{};
     volatile uint32_t* Hba{};
+    uint64_t HbaMappedLength{};
     volatile uint32_t* Port{};
     uint8_t PortNumber{0xFF};
     uint64_t DiskSectors{};
+    uint8_t FlushCommand{};
     uint64_t CommandListDma{};
     uint64_t ReceivedFisDma{};
     uint64_t CommandTableDma{};
@@ -183,20 +191,23 @@ bool startPort(volatile uint32_t* port) noexcept {
 }
 
 bool executeCommand(uint8_t command, uint64_t lba, uint16_t sectors) noexcept {
-    if (!g_state.Port || !sectors || sectors > kMaximumSectorsPerCommand) return false;
-    const size_t bytes = static_cast<size_t>(sectors) * kSectorSize;
+    const bool flush = command == 0xE7 || command == 0xEA;
+    if (!g_state.Port || (!sectors && !flush) || sectors > kMaximumSectorsPerCommand) return false;
     auto& header = g_dma->commandList[0];
     header = {};
-    header.Flags = 5;
-    header.PrdtLength = 1;
+    header.Flags = static_cast<uint16_t>(5 | (command == 0x35 ? (1u << 6) : 0u));
+    header.PrdtLength = sectors ? 1 : 0;
     header.TableBase = static_cast<uint32_t>(g_state.CommandTableDma);
     header.TableBaseUpper = static_cast<uint32_t>(g_state.CommandTableDma >> 32);
 
     g_dma->commandTable = {};
     auto& prdt = g_dma->commandTable.Prdt;
-    prdt.Dba = static_cast<uint32_t>(g_state.DataBufferDma);
-    prdt.Dbau = static_cast<uint32_t>(g_state.DataBufferDma >> 32);
-    prdt.ByteCountAndInterrupt = static_cast<uint32_t>(bytes - 1) | (uint32_t{1} << 31);
+    if (sectors) {
+        const size_t bytes = static_cast<size_t>(sectors) * kSectorSize;
+        prdt.Dba = static_cast<uint32_t>(g_state.DataBufferDma);
+        prdt.Dbau = static_cast<uint32_t>(g_state.DataBufferDma >> 32);
+        prdt.ByteCountAndInterrupt = static_cast<uint32_t>(bytes - 1) | (uint32_t{1} << 31);
+    }
 
     auto* fis = reinterpret_cast<FisRegH2D*>(g_dma->commandTable.CommandFis);
     fis->Type = 0x27;
@@ -232,13 +243,43 @@ bool readSectors(uint64_t lba, uint16_t count, void* destination) noexcept {
     return true;
 }
 
+bool hasFat32BootSector() noexcept {
+    const auto* boot = g_dma->data;
+    const uint16_t bytesPerSector = loadLe16(boot + 11);
+    const uint8_t sectorsPerCluster = boot[13];
+    const uint16_t reservedSectors = loadLe16(boot + 14);
+    const uint8_t fatCount = boot[16];
+    const uint32_t totalSectors = loadLe32(boot + 32);
+    const uint32_t fatSectors = loadLe32(boot + 36);
+    const uint32_t rootCluster = loadLe32(boot + 44);
+    return boot[510] == 0x55 && boot[511] == 0xAA &&
+        bytesPerSector == kSectorSize && sectorsPerCluster &&
+        (sectorsPerCluster & (sectorsPerCluster - 1)) == 0 &&
+        reservedSectors && fatCount && fatCount <= 2 &&
+        !loadLe16(boot + 22) && totalSectors && fatSectors &&
+        rootCluster >= 2 && totalSectors <= g_state.DiskSectors;
+}
+
+bool writeSectors(uint64_t lba, uint16_t count, const void* source) noexcept {
+    if (!source || !count || count > kMaximumSectorsPerCommand ||
+        lba >= g_state.DiskSectors || count > g_state.DiskSectors - lba) return false;
+    if (source != g_dma->data)
+        std::memcpy(g_dma->data, source, static_cast<size_t>(count) * kSectorSize);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    return executeCommand(0x35, lba, count); // WRITE DMA EXT
+}
+
 bool identifyDisk(uint64_t& sectors) noexcept {
     std::memset(g_dma->data, 0, kSectorSize);
     if (!executeCommand(0xEC, 0, 1)) return false;
     const uint16_t commandSet = loadLe16(g_dma->data + 166);
-    // The provider issues READ DMA EXT only. Do not publish an ATA disk whose
-    // IDENTIFY data does not advertise valid 48-bit LBA support.
+    // The provider uses 48-bit LBA DMA reads and writes. Refuse devices that
+    // do not advertise valid 48-bit LBA support.
     if ((commandSet & 0xC400u) != 0x4400u) return false;
+    const uint16_t legacyCommands = loadLe16(g_dma->data + 164);
+    if (commandSet & (1u << 13)) g_state.FlushCommand = 0xEA;
+    else if (legacyCommands & (1u << 5)) g_state.FlushCommand = 0xE7;
+    else return false;
     sectors = loadLe64(g_dma->data + 200);
     return sectors != 0 && sectors <= (uint64_t{1} << 48);
 }
@@ -270,7 +311,7 @@ bool initializeController() noexcept {
             const uint8_t baseClass = static_cast<uint8_t>((classCode >> 24) & 0xFF);
             if (baseClass != 1 || subclass != 6 || progIf != 1) continue;
 
-            PciBarRequestV1 request{5, 0, 0, 0x1100};
+            PciBarRequestV1 request{5, 0, 0, kMinimumHbaRegistersSize};
             size_t resourceCount = 1;
             uint64_t token{};
             PciBarResourceV1 resource{};
@@ -278,6 +319,17 @@ bool initializeController() noexcept {
                 services->Context, 0, bus, device, function, &request, 1,
                 &token, &resource, &resourceCount);
             if (claimStatus != STATUS_SUCCESS) {
+                services->Log(services->Context,
+                    "AHCI initialization skipped: canonical PCI resource claim rejected the controller");
+                if (claimStatus == STATUS_DEVICE_BUSY)
+                    services->Log(services->Context,
+                        "AHCI PCI claim failed: BAR overlaps a reserved or claimed range");
+                else if (claimStatus == STATUS_DEVICE_NOT_READY)
+                    services->Log(services->Context,
+                        "AHCI PCI claim failed: inventory or BAR length is unavailable");
+                else if (claimStatus == STATUS_INVALID_PARAMETER)
+                    services->Log(services->Context,
+                        "AHCI PCI claim failed: BAR request was rejected as invalid");
                 lastClaimFailure = claimStatus;
                 if (claimStatus == STATUS_NOT_SUPPORTED) {
                     g_controllerStatus = claimStatus;
@@ -297,7 +349,8 @@ bool initializeController() noexcept {
                 return false;
             }
             if (resource.BarIndex != 5 || resource.PhysicalAddress == 0 ||
-                resource.Length < 0x1100 || resource.PhysicalAddress > UINT64_MAX - 0x1100) {
+                resource.Length < kMinimumHbaRegistersSize ||
+                resource.PhysicalAddress > UINT64_MAX - kMinimumHbaRegistersSize) {
                 g_controllerStatus = STATUS_INVALID_PARAMETER;
                 return false;
             }
@@ -317,20 +370,61 @@ bool initializeController() noexcept {
         g_controllerStatus = STATUS_DEVICE_DATA_ERROR;
         return false;
     }
-    if (g_state.OriginalPciCommand & 7u) {
+    const uint32_t memoryEnabledCommand =
+        (g_state.OriginalPciCommand & 0x0000FFFFu) | 2u;
+    if ((g_state.OriginalPciCommand & 0x0000FFFFu) != memoryEnabledCommand) {
+        if (!pciWrite(g_state.Bus, g_state.Device, g_state.Function, 0x04,
+                      memoryEnabledCommand)) {
+            g_controllerStatus = STATUS_DEVICE_DATA_ERROR;
+            return false;
+        }
+        g_state.PciCommandChanged = true;
+    }
+
+    const uint64_t mappedLength = g_state.Bar.Length < kMaximumHbaRegistersSize
+        ? g_state.Bar.Length : kMaximumHbaRegistersSize;
+    g_state.Hba = static_cast<volatile uint32_t*>(services->MapDeviceMemory(
+        services->Context, g_state.Bar.PhysicalAddress, mappedLength));
+    if (!g_state.Hba) {
+        services->Log(services->Context, "AHCI initialization stopped: BAR5 MMIO mapping failed");
         g_controllerStatus = STATUS_DEVICE_NOT_READY;
         return false;
     }
-    if (!pciWrite(g_state.Bus, g_state.Device, g_state.Function, 0x04,
-                  (g_state.OriginalPciCommand & 0x0000FFFFu & ~4u) | 2u)) {
-        g_controllerStatus = STATUS_DEVICE_DATA_ERROR;
-        return false;
-    }
-    g_state.PciCommandChanged = true;
+    g_state.HbaMappedLength = mappedLength;
 
-    g_state.Hba = static_cast<volatile uint32_t*>(services->MapDeviceMemory(
-        services->Context, g_state.Bar.PhysicalAddress, 0x1100));
-    if (!g_state.Hba) { g_controllerStatus = STATUS_DEVICE_NOT_READY; return false; }
+    const uint32_t portsImplemented = g_state.Hba[3];
+    for (uint8_t portIndex = 0; portIndex < 32; ++portIndex) {
+        if ((portsImplemented & (uint32_t{1} << portIndex)) == 0) continue;
+        const uint64_t requiredLength = 0x100 + (static_cast<uint64_t>(portIndex) + 1) * 0x80;
+        if (requiredLength > mappedLength) {
+            services->Log(services->Context,
+                "AHCI initialization stopped: BAR5 is too small for implemented ports");
+            g_controllerStatus = STATUS_DEVICE_NOT_READY;
+            return false;
+        }
+    }
+
+    for (uint8_t portIndex = 0; portIndex < 32; ++portIndex) {
+        if ((portsImplemented & (uint32_t{1} << portIndex)) == 0) continue;
+        auto* port = reinterpret_cast<volatile uint32_t*>(
+            reinterpret_cast<uintptr_t>(g_state.Hba) + 0x100 + portIndex * 0x80);
+        if (!stopPort(port)) {
+            services->Log(services->Context,
+                "AHCI takeover stopped: an implemented port engine did not quiesce");
+            g_controllerStatus = STATUS_DEVICE_NOT_READY;
+            return false;
+        }
+    }
+    g_state.ControllerQuiesced = true;
+    const uint32_t quiescedCommand = memoryEnabledCommand & ~uint32_t{4};
+    if (quiescedCommand != memoryEnabledCommand) {
+        if (!pciWrite(g_state.Bus, g_state.Device, g_state.Function, 0x04,
+                      quiescedCommand)) {
+            g_controllerStatus = STATUS_DEVICE_DATA_ERROR;
+            return false;
+        }
+        g_state.PciCommandChanged = true;
+    }
 
     const bool supports64 = (g_state.Hba[0] & (uint32_t{1} << 31)) != 0;
     void* cpu{};
@@ -355,13 +449,13 @@ bool initializeController() noexcept {
         g_controllerStatus = STATUS_DEVICE_DATA_ERROR;
         return false;
     }
+    g_state.PciCommandChanged = true;
 
     g_state.OriginalGhc = g_state.Hba[1];
     if ((g_state.OriginalGhc & (1u << 31)) == 0) {
         g_state.Hba[1] = g_state.OriginalGhc | (1u << 31);
         g_state.GhcChanged = true;
     }
-    const uint32_t portsImplemented = g_state.Hba[3];
     for (uint8_t portIndex = 0; portIndex < 32; ++portIndex) {
         if ((portsImplemented & (uint32_t{1} << portIndex)) == 0) continue;
         auto* port = reinterpret_cast<volatile uint32_t*>(
@@ -369,7 +463,6 @@ bool initializeController() noexcept {
         const uint32_t ssts = port[0x28 / 4];
         if ((ssts & 0x0Fu) != 3 || ((ssts >> 8) & 0x0Fu) != 1 ||
             port[0x24 / 4] != 0x00000101u) continue;
-        if (!stopPort(port)) continue;
         g_dma->commandList[0] = {};
         port[0x00 / 4] = static_cast<uint32_t>(g_state.CommandListDma);
         port[0x04 / 4] = static_cast<uint32_t>(g_state.CommandListDma >> 32);
@@ -378,19 +471,33 @@ bool initializeController() noexcept {
         port[0x10 / 4] = 0xFFFFFFFFu;
         port[0x30 / 4] = 0xFFFFFFFFu;
         g_state.Port = port;
-        if (!startPort(port)) return false;
+        if (!startPort(port)) {
+            services->Log(services->Context, "AHCI initialization stopped: SATA port could not be started");
+            return false;
+        }
         uint64_t sectors{};
         if (!identifyDisk(sectors)) {
+            services->Log(services->Context,
+                "AHCI initialization stopped: SATA IDENTIFY failed or disk lacks required LBA48/flush support");
             if (!stopPort(port)) return false;
             g_state.Port = nullptr;
             continue;
         }
         g_state.DiskSectors = sectors;
+        if (!readSectors(0, 1, g_dma->data) || !hasFat32BootSector()) {
+            services->Log(services->Context,
+                "AHCI skipped SATA disk: sector zero is not a supported FAT32 boot sector");
+            if (!stopPort(port)) return false;
+            g_state.Port = nullptr;
+            g_state.DiskSectors = 0;
+            continue;
+        }
         g_state.PortNumber = portIndex;
         g_state.Initialized = true;
         g_controllerStatus = STATUS_SUCCESS;
         return true;
     }
+    services->Log(services->Context, "AHCI initialization stopped: no implemented port matched SATA link/signature");
     g_controllerStatus = STATUS_DEVICE_NOT_READY;
     return false;
 }
@@ -452,11 +559,13 @@ bool cleanupController() noexcept {
         g_state.GhcChanged = false;
     }
     if (g_state.PciCommandChanged) {
+        uint32_t restoreCommand = g_state.OriginalPciCommand & 0x0000FFFFu;
+        if (g_state.ControllerQuiesced) restoreCommand &= ~uint32_t{7};
         if (!pciWrite(g_state.Bus, g_state.Device, g_state.Function, 0x04,
-                      (g_state.OriginalPciCommand & 0x0000FFFFu) & ~4u)) return false;
+                      restoreCommand)) return false;
         uint32_t command{};
         if (!pciRead(g_state.Bus, g_state.Device, g_state.Function, 0x04, command) ||
-            (command & 4u)) return false;
+            (command & 0x0000FFFFu) != restoreCommand) return false;
         if (g_state.DmaToken && !drainPciTransactions()) return false;
         g_state.PciCommandChanged = false;
     }
@@ -468,8 +577,10 @@ bool cleanupController() noexcept {
     }
     if (g_state.Hba && g_state.Services->ReleaseDeviceMemory) {
         if (!g_state.Services->ReleaseDeviceMemory(g_state.Services->Context,
-                const_cast<uint32_t*>(g_state.Hba), 0x1100)) return false;
+                const_cast<uint32_t*>(g_state.Hba),
+                static_cast<size_t>(g_state.HbaMappedLength))) return false;
         g_state.Hba = nullptr;
+        g_state.HbaMappedLength = 0;
     }
     if (g_state.Claimed && g_state.Services->ReleasePciDevice) {
         if (g_state.Services->ReleasePciDevice(g_state.Services->Context,
@@ -517,6 +628,34 @@ int32_t readDiskBlocks(void* context, uint64_t lba, uint32_t count,
     return STATUS_SUCCESS;
 }
 
+int32_t writeDiskBlocks(void* context, uint64_t lba, uint32_t count,
+                        const void* buffer, uint32_t* blocksWritten) noexcept {
+    if (!blocksWritten) return STATUS_INVALID_PARAMETER;
+    *blocksWritten = 0;
+    if (!context || !buffer || count == 0) return STATUS_INVALID_PARAMETER;
+    auto& state = *static_cast<DriverState*>(context);
+    if (!state.Initialized || lba >= state.DiskSectors || count > state.DiskSectors - lba)
+        return STATUS_END_OF_FILE;
+    auto* input = static_cast<const uint8_t*>(buffer);
+    spinLock(g_ioLock);
+    while (*blocksWritten < count) {
+        const uint32_t batch = (count - *blocksWritten) > kMaximumSectorsPerCommand
+            ? kMaximumSectorsPerCommand : (count - *blocksWritten);
+        if (!writeSectors(lba + *blocksWritten, static_cast<uint16_t>(batch),
+                input + static_cast<size_t>(*blocksWritten) * kSectorSize)) {
+            spinUnlock(g_ioLock);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+        *blocksWritten += batch;
+    }
+    if (!g_state.FlushCommand || !executeCommand(g_state.FlushCommand, 0, 0)) {
+        spinUnlock(g_ioLock);
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+    spinUnlock(g_ioLock);
+    return STATUS_SUCCESS;
+}
+
 void releaseBlockContext(void*) noexcept {
     // The backend context is static image state, so the generic Io object has
     // no allocation to release here. Published callbacks pin this boot image.
@@ -530,7 +669,8 @@ bool validServices(const KernelServices* services) noexcept {
         services->DmaVersion == 1 && services->AllocateDmaBuffer && services->FreeDmaBuffer &&
         services->QueryMonotonicClock &&
         services->DelayMicroseconds && services->ClaimPciDevice &&
-        services->ReleasePciDevice && services->CreateReadOnlyBlockDevice &&
+        services->ReleasePciDevice && services->WritableBlockDeviceVersion == 1 &&
+        services->CreateWritableBlockDevice && services->WriteBlockDevice &&
         services->ReadBlockDevice && services->FatFilesystemVersion == 1 &&
         services->MountFatBlockDevice && services->UnmountFatBlockDevice && services->CloseHandle;
 }
@@ -558,10 +698,10 @@ extern "C" int32_t DriverEntry(DriverObject* driverObject,
         services->Log(services->Context, "AHCI claim, BAR, DMA or SATA initialization failed");
         return g_controllerStatus;
     }
-
-    const int32_t blockStatus = services->CreateReadOnlyBlockDevice(
+    const int32_t blockStatus = services->CreateWritableBlockDevice(
         services->Context, g_state.DiskSectors, kSectorSize, &g_state,
-        &readDiskBlocks, &releaseBlockContext, kFileReadData,
+        &readDiskBlocks, &writeDiskBlocks, &releaseBlockContext,
+        kFileReadData | kFileWriteData | kFileSynchronize,
         &g_state.BlockDeviceHandle);
     if (blockStatus != STATUS_SUCCESS || !g_state.BlockDeviceHandle) {
         const int32_t failureStatus = blockStatus == STATUS_SUCCESS
@@ -587,6 +727,6 @@ extern "C" int32_t DriverEntry(DriverObject* driverObject,
     g_state.Published = true;
     driverObject->DeviceExtension = &g_state;
     driverObject->DriverUnload = &unloadFailedDriver;
-    services->Log(services->Context, "AHCI read-only block device mounted by FsRtl");
+    services->Log(services->Context, "AHCI writable block device mounted by FsRtl");
     return STATUS_SUCCESS;
 }

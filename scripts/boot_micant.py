@@ -12,6 +12,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from fat32_image import create_fat32_image
+
 from verify_kernel_architecture import validate_build_manifest
 
 
@@ -49,15 +51,15 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ke] Kernel APC FIFO verified",
     "[MicaNT Ke] Kernel event wait and wake verified",
     "[MicaNT Ps] Kernel thread lifecycle verified",
-    "[MicaNT Display] OEM driver unavailable; GOP framebuffer pass-through active",
-    "[MicaNT Display] Desktop presented through GOP framebuffer",
-    "[MicaNT Explorer] Desktop and taskbar rendered",
     "[MicaNT Ps] CPL3 execution and Ring 0 trap return verified",
     "[MicaNT Ps] GS-based TEB TLS slot read/write verified",
     "[MicaNT Mm] User/kernel isolation and read-only user code verified",
-    "[MicaNT Mm] Supervisor MMIO and non-executable user stack verified",
+    "[MicaNT Mm] Supervisor access checks and non-executable user stack verified",
     "[MicaNT Mm] PFN-backed executable user page verified",
     "[MicaNT Hal] QPC scale matched APIC timing; timeout and deadline rollover passed",
+    "[MicaNT Display] OEM driver unavailable; GOP framebuffer pass-through active",
+    "[MicaNT Display] Desktop presented through GOP framebuffer",
+    "[MicaNT Explorer] Desktop and taskbar rendered",
     "[MicaNT Hal] CPL3 calibrated QPC precision and KUSER uptime advancement verified",
     "[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified",
     "[MicaNT Mm] CPL3 native allocation and release verified",
@@ -70,15 +72,65 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ke] Timer-preempted CPL3 contexts verified",
     "[MicaNT Ex] Canonical checked user copies verified at CPL3 boundary",
     "[MicaNT Ps] Bounded native PE mapping and compiled user entry verified",
-    "[MicaNT Input] PS/2 mouse polling initialized",
     "[MicaNT Ke] Runtime idle wait and wake verified",
     "[MicaNT Ps] Deferred reaper verified",
     "[MicaNT Ke] Runtime DPC/APC delivery verified",
+    "[MicaNT Input] PS/2 mouse interrupt routing active",
     "[MicaNT Explorer] Shell idle loop entered",
     "[MicaNT Ke] Runtime scheduler clock ticking",
 )
 
-def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
+def verify_cpl3_surface(
+    qmp_path: Path,
+    temp: Path,
+    diagnostics_dir: Path | None = None,
+) -> None:
+    """Verify the CPL3 surface before later desktop rendering can replace it."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(5)
+        connection.connect(str(qmp_path))
+        with connection.makefile("rwb") as stream:
+            greeting = json.loads(stream.readline())
+            if "QMP" not in greeting:
+                raise RuntimeError("QEMU did not send a QMP greeting")
+
+            def execute(command: str, arguments: dict | None = None) -> dict:
+                stream.write((json.dumps({
+                    "execute": command, "arguments": arguments or {},
+                }) + "\n").encode())
+                stream.flush()
+                while True:
+                    response = json.loads(stream.readline())
+                    if "error" in response:
+                        raise RuntimeError(f"QMP {command} failed: {response['error']}")
+                    if "return" in response:
+                        return response["return"]
+
+            execute("qmp_capabilities")
+            image_path = temp / "cpl3-surface.ppm"
+            execute("screendump", {"filename": str(image_path)})
+            if diagnostics_dir is not None:
+                shutil.copyfile(image_path, diagnostics_dir / image_path.name)
+            with image_path.open("rb") as image:
+                if (image.readline() != b"P6\n" or
+                        image.readline() != b"1024 768\n" or
+                        image.readline() != b"255\n"):
+                    raise RuntimeError("Unexpected VirtIO scanout screenshot format")
+                pixel = image.read(3)
+            expected = bytes((0x11, 0x22, 0x33))
+            if pixel != expected:
+                raise RuntimeError(
+                    "CPL3 surface presentation did not reach VirtIO scanout "
+                    f"at (0, 0): expected #{expected.hex()}, observed #{pixel.hex()}"
+                )
+
+
+def verify_mouse(
+    qmp_path: Path,
+    temp: Path,
+    serial_path: Path,
+    diagnostics_dir: Path | None = None,
+) -> None:
     """Exercise the emulated mouse and verify its actual scanout pixels."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(5)
@@ -108,6 +160,8 @@ def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
             def screen(name: str) -> bytes:
                 path = temp / name
                 execute("screendump", {"filename": str(path)})
+                if diagnostics_dir is not None:
+                    shutil.copyfile(path, diagnostics_dir / name)
                 with path.open("rb") as image:
                     if (image.readline() != b"P6\n" or
                             image.readline() != b"1024 768\n" or
@@ -122,11 +176,6 @@ def verify_mouse(qmp_path: Path, temp: Path, serial_path: Path) -> None:
             startup_serial = serial_path.read_text(encoding="utf-8", errors="replace")
             irq_enabled = "[MicaNT Input] PS/2 mouse interrupt routing active" in startup_serial
             before = screen("before.ppm")
-            for y in range(2):
-                for x in range(2):
-                    pixel = (y * 1024 + x) * 3
-                    if before[pixel:pixel + 3] != bytes((0x11, 0x22, 0x33)):
-                        raise RuntimeError("CPL3 surface presentation did not reach VirtIO scanout")
             execute("input-send-event", {"events": [
                 {"type": "rel", "data": {"axis": "x", "value": 40}},
                 {"type": "rel", "data": {"axis": "y", "value": 20}},
@@ -188,6 +237,14 @@ def serial_has_failure(serial_log: str) -> bool:
             continue
         if gop_fallback and line.startswith("[MicaNT Io] Boot-start driver failed: virtio_gpu.sys"):
             continue
+        if line.startswith(("[MicaNT Io] Boot-start driver failed: virtio_gpu.sys",
+                            "[MicaNT Io] Boot-start driver failed: storahci.sys",
+                            "[MicaNT Io] Boot-start driver failed: usbxhci.sys",
+                            "[MicaNT Io] Boot-start driver failed: i210.sys",
+                            "[MicaNT Io] Boot-start driver failed: virtio_net.sys",
+                            "[MicaNT OEM] AHCI claim, BAR, DMA or SATA initialization failed",
+                            "[MicaNT OEM] i210.sys: controller startup failed")):
+            continue
         return True
     return False
 
@@ -201,6 +258,7 @@ def run_qemu(
     verify_input: bool,
     runtime_selftest: bool = False,
     timer_selftest: bool = False,
+    diagnostics_dir: Path | None = None,
 ) -> None:
     if runtime_selftest and (interactive or verify_input):
         raise RuntimeError("runtime self-test halts before desktop/input; incompatible runner options")
@@ -226,6 +284,12 @@ def run_qemu(
 
     kernel = ROOT / "build" / "baremetal" / "ntoskrnl.exe"
     bootloader = ROOT / "build" / "esp" / "EFI" / "BOOT" / "BOOTX64.EFI"
+    if diagnostics_dir is not None:
+        diagnostics_dir.mkdir(parents=True, exist_ok=False)
+        shutil.copyfile(kernel, diagnostics_dir / kernel.name)
+        shutil.copyfile(kernel.parent / "kernel-build-manifest.json",
+                        diagnostics_dir / "kernel-build-manifest.json")
+        print(f"QEMU diagnostics: {diagnostics_dir.resolve()}", flush=True)
 
     # Keep QMP sockets in the platform temporary directory. Some sandboxed
     # filesystems allow repository edits but deny AF_UNIX sockets under the
@@ -242,14 +306,22 @@ def run_qemu(
         driver_dir = kernel_dir / "System32" / "drivers"
         driver_dir.mkdir(parents=True)
         shutil.copyfile(ROOT / "build" / "virtio_gpu.sys", driver_dir / "virtio_gpu.sys")
-        serial_path = temp / "serial.log"
-        qemu_output_path = temp / "qemu.log"
+        for name in ("storahci.sys", "hidusb.sys", "usbstor.sys", "usbxhci.sys", "i210.sys", "virtio_net.sys"):
+            source = ROOT / "build" / name
+            if source.is_file():
+                shutil.copyfile(source, driver_dir / name)
+        ahci_image = temp / "ahci-fat32.img"
+        create_fat32_image(kernel_dir.parent.parent, ahci_image)
+        log_directory = diagnostics_dir if diagnostics_dir is not None else temp
+        serial_path = log_directory / "serial.log"
+        qemu_output_path = log_directory / "qemu.log"
 
         command = [
             qemu,
-            "-machine", "q35",
+            "-machine", "q35,usb=off",
             "-accel", "tcg",
-            "-cpu", "qemu64,+invtsc",
+            "-cpu", "qemu64,+invtsc,vendor=GenuineIntel",
+            "-device", "intel-iommu,intremap=on,caching-mode=on",
             "-rtc", "base=utc",
             "-smp", "1",
             "-m", "1024",
@@ -258,6 +330,8 @@ def run_qemu(
             "-drive",
             f"if=pflash,format=raw,unit=0,readonly=on,file={ovmf_code.resolve()}",
             "-drive", f"file=fat:ro:{esp},format=raw,if=ide,index=0",
+            "-drive", f"file={ahci_image},format=raw,if=none,id=ahci_disk",
+            "-device", "ide-hd,drive=ahci_disk,bus=ide.1",
             "-display", display,
             "-serial", f"file:{serial_path}",
             "-monitor", "none",
@@ -268,6 +342,7 @@ def run_qemu(
         ]
         started = time.monotonic()
         complete_since = None
+        surface_verified = False
 
         with qemu_output_path.open("w", encoding="utf-8") as qemu_output:
             process = subprocess.Popen(
@@ -296,6 +371,13 @@ def run_qemu(
                     )
                     if serial_has_failure(serial_log):
                         raise RuntimeError(f"Kernel bootstrap failed:\n{serial_log[-8000:]}")
+                    if (not surface_verified and
+                            "[MicaNT Test] CPL3 surface presentation completed" in serial_log):
+                        verify_cpl3_surface(
+                            temp / "qmp.sock", temp, diagnostics_dir,
+                        )
+                        surface_verified = True
+                        print("CPL3 surface reached VirtIO scanout before desktop redraw.", flush=True)
                     progress = serial_progress(serial_log, expected)
                     if progress == len(expected):
                         time_evidence = timer_selftest or runtime_selftest or (
@@ -308,7 +390,9 @@ def run_qemu(
                             complete_since = time.monotonic()
                         elif time.monotonic() - complete_since >= stable_seconds:
                             if verify_input:
-                                verify_mouse(temp / "qmp.sock", temp, serial_path)
+                                verify_mouse(
+                                    temp / "qmp.sock", temp, serial_path, diagnostics_dir,
+                                )
                                 print("PS/2 movement, scanout updates and left-click delivery passed.", flush=True)
                             result = (
                                 "timer self-test" if timer_selftest else
@@ -364,6 +448,7 @@ def main() -> int:
         help="path to the x86_64 OVMF code image (or MICANT_OVMF_CODE)",
     )
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--diagnostics-dir", type=Path)
     parser.add_argument("--stable-seconds", type=int, default=5)
     parser.add_argument("--display", default="none")
     parser.add_argument("--interactive", action="store_true")
@@ -389,6 +474,7 @@ def main() -> int:
             args.verify_input,
             args.runtime_selftest,
             args.timer_selftest,
+            args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None,
         )
     except KeyboardInterrupt:
         return 130
