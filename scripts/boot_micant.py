@@ -438,8 +438,9 @@ def run_qemu(
             command.extend([
                 "-drive", f"file={ahci_image},format=raw,if=none,id=usb_disk,readonly=on",
                 "-device", "qemu-xhci,id=xhci",
-                "-device", "usb-kbd,id=usb_keyboard,bus=xhci.0",
-                "-device", "usb-mouse,id=usb_mouse,bus=xhci.0",
+                "-device", "usb-hub,id=usb_hub,bus=xhci.0,port=1",
+                "-device", "usb-kbd,id=usb_keyboard,bus=xhci.0,port=1.1",
+                "-device", "usb-mouse,id=usb_mouse,bus=xhci.0,port=1.2",
                 "-device", "usb-storage,id=usb_storage,drive=usb_disk,bus=xhci.0",
             ])
         started = time.monotonic()

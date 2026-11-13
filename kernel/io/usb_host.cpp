@@ -445,12 +445,12 @@ void process(Device& d) noexcept {
                 if (child->phase == Phase::WaitEnable) child->removing = true;
                 else if (child->phase != Phase::Quarantined && child->phase != Phase::ClassRemoved && child->phase != Phase::NeedDisable &&
                          child->phase != Phase::WaitDisable && child->phase != Phase::DrainDisabled)
-                    child->phase = Phase::Disconnect;
+                    markDisconnected(*child);
                 if (d.hubResetPort == d.hubPort) d.hubResetPort = 0;
             } else if (!(state & 1u) || (state & 8u)) {
                 if (child && child->phase == Phase::WaitEnable) child->removing = true;
                 else if (child && child->phase != Phase::Quarantined && child->phase != Phase::ClassRemoved && child->phase != Phase::NeedDisable &&
-                         child->phase != Phase::WaitDisable && child->phase != Phase::DrainDisabled) child->phase = Phase::Disconnect;
+                         child->phase != Phase::WaitDisable && child->phase != Phase::DrainDisabled) markDisconnected(*child);
                 if (d.hubResetPort == d.hubPort) d.hubResetPort = 0;
                 if (!(state & 8u) && !(state & (d.speed == 4 ? 0x200u : 0x100u))) {
                     if (!beginControl(d, 0x23, 3, 8, d.hubPort, 0, Phase::HubRePower)) d.phase = Phase::Disconnect;
