@@ -1,6 +1,6 @@
 # MicaNT — M9 USB Host, HID, Mass Storage & Live USB Implementation Specification
 
-**Status:** Proposed / not yet implemented end-to-end  
+**Status:** U1/U2 verified in QEMU (2026-11-13); broad physical-hardware support and full live USB remain unverified  
 **Architecture:** AMD64 (x86_64) only; C++23; UEFI; one canonical modular NT kernel  
 **Target:** `ntoskrnl_core_baremetal`; real Ring 0 hardware paths, not hosted simulations  
 **Repository:** `luca-saggese/MicaNT`  
