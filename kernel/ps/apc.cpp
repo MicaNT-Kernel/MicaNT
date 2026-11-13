@@ -179,10 +179,13 @@ NtStatus EThread::prepareUserApc(const ke::UserApcDelivery* deliveries,
     context->P4Home = deliveries[0].routine;
     context->SegCs = static_cast<uint16_t>(hardwareFrame[1]);
     context->SegSs = static_cast<uint16_t>(hardwareFrame[4]);
-    __asm__ __volatile__("movw %%ds, %0" : "=rm"(context->SegDs));
-    __asm__ __volatile__("movw %%es, %0" : "=rm"(context->SegEs));
-    __asm__ __volatile__("movw %%fs, %0" : "=rm"(context->SegFs));
-    __asm__ __volatile__("movw %%gs, %0" : "=rm"(context->SegGs));
+    // APC delivery is prepared on the syscall return path, after DS/ES have
+    // been switched to the kernel data selector. Preserve the user ABI's
+    // flat selectors; FS/GS bases are maintained separately by Ke.
+    context->SegDs = 0x2b;
+    context->SegEs = 0x2b;
+    context->SegFs = 0;
+    context->SegGs = 0;
     context->EFlags = static_cast<uint32_t>(hardwareFrame[2]);
     context->Rip = hardwareFrame[0];
     context->Rsp = userStackTop;

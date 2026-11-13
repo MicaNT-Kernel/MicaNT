@@ -1705,7 +1705,7 @@ NtStatus NtContinue(const void* contextAddress, bool testAlert, void* trapFrameA
     if (!mxcsrMask) mxcsrMask = 0x0000ffbfu;
     if (groups & CONTEXT_FLOATING_POINT) {
         if ((captured.MxCsr & ~mxcsrMask) ||
-            (captured.FltSave.ControlWord & ~uint16_t{0x1f3f}))
+            (captured.FltSave.ControlWord & ~uint16_t{0x1f7f}))
             return NtStatus::InvalidParameter;
         captured.FltSave.MxCsr = captured.MxCsr;
     }
