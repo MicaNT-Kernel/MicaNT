@@ -980,6 +980,46 @@ __attribute__((naked)) void MicantBootstrapTimerInterrupt() noexcept {
         "popq %rdx\npopq %rcx\npopq %rax\niretq\n");
 }
 
+__attribute__((naked)) void MicantBootstrapMsiInterrupt() noexcept {
+    __asm__ __volatile__(
+        "pushq %rax\nleaq 8(%rsp), %rax\n"
+        "cmpq MicantBootstrapUserInterruptStackBase(%rip), %rax\njb 5f\n"
+        "cmpq MicantBootstrapUserInterruptStackTop(%rip), %rax\njae 5f\n"
+        "cmpq MicantBootstrapUserInterruptStackFloor(%rip), %rax\njae 6f\nud2\n"
+        "5: cmpq MicantBootstrapSyscallStackBase(%rip), %rax\njb 7f\n"
+        "cmpq MicantBootstrapSyscallStackTop(%rip), %rax\njae 7f\n"
+        "cmpq MicantBootstrapSyscallStackFloor(%rip), %rax\njae 6f\nud2\n"
+        "7: cmpq MicantBootstrapExecutionStackTop(%rip), %rax\njae 8f\n"
+        "cmpq MicantBootstrapInterruptStackFloor(%rip), %rax\njae 6f\n8: ud2\n6:\n"
+        "cld\npushq %rcx\npushq %rdx\npushq %rbx\npushq %rbp\n"
+        "pushq %rsi\npushq %rdi\npushq %r8\npushq %r9\npushq %r10\npushq %r11\n"
+        "pushq %r12\npushq %r13\npushq %r14\npushq %r15\n"
+        "movq %rsp, %r12\nmovl MicantAmd64ExtendedSize(%rip), %eax\n"
+        "addq $96, %rax\nsubq %rax, %rsp\nandq $-64, %rsp\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 1f\n"
+        "leaq 64(%rsp), %r13\n"
+        "movq $0, 512(%r13)\nmovq $0, 520(%r13)\n"
+        "movq $0, 528(%r13)\nmovq $0, 536(%r13)\n"
+        "movq $0, 544(%r13)\nmovq $0, 552(%r13)\n"
+        "movq $0, 560(%r13)\nmovq $0, 568(%r13)\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xsave64 (%r13)\njmp 2f\n"
+        "1: fxsave64 64(%rsp)\n"
+        "2: movq 128(%r12), %rcx\ncallq MicantBootstrapEnterInterrupt\n"
+        "movq %rax, 40(%rsp)\ncallq MicantBootstrapMsiDispatch\n"
+        "leaq 120(%r12), %rcx\nmovq %r12, %rdx\nleaq 64(%rsp), %r8\n"
+        "callq MicantBootstrapInterruptExit\n"
+        "movq 40(%rsp), %rcx\ncallq MicantBootstrapLeaveInterrupt\n"
+        "cmpl $0, MicantAmd64XsaveMask(%rip)\nje 3f\n"
+        "movl MicantAmd64XsaveMask(%rip), %eax\nxorl %edx, %edx\n"
+        "xrstor64 64(%rsp)\njmp 4f\n"
+        "3: fxrstor64 64(%rsp)\n"
+        "4: movq %r12, %rsp\n"
+        "popq %r15\npopq %r14\npopq %r13\npopq %r12\npopq %r11\npopq %r10\n"
+        "popq %r9\npopq %r8\npopq %rdi\npopq %rsi\npopq %rbp\npopq %rbx\n"
+        "popq %rdx\npopq %rcx\npopq %rax\niretq\n");
+}
+
 void MicantBootstrapPs2Dispatch() noexcept {
     using namespace micant::ke;
     const auto previous = KfRaiseIrql(DIRQL_MIN);
