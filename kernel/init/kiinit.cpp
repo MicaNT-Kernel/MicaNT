@@ -2160,15 +2160,6 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     using namespace micant;
     const auto number = args.number, first = args.first, second = args.second;
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
-    if (number == sys::SSN_NtAllocateVirtualMemory || number == sys::SSN_NtFreeVirtualMemory ||
-        number == sys::SSN_NtCreateSection || number == sys::SSN_NtMapViewOfSection ||
-        number == sys::SSN_NtUnmapViewOfSection || number == sys::SSN_NtClose) {
-        serialWrite("[MicaNT DBG] syscall=");
-        serialWriteNumber(number);
-        serialWrite(" pfn=");
-        serialWriteNumber(mm::PfnDatabase::get().getActiveCount());
-        serialWrite("\r\n");
-    }
     if (number == sys::SSN_NtQuerySystemTime) {
         const auto result = sys::NtQuerySystemTime(reinterpret_cast<LargeInteger*>(first));
         return status(result);

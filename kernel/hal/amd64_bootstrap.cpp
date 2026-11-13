@@ -7,7 +7,6 @@
 #include "micant/shared/syscall_numbers.hpp"
 #include "micant/shared/win32k_client.h"
 #include "micant/km/executive/mm.hpp"
-#include "micant/km/executive/io_file.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/clock_timer.hpp"
@@ -1750,21 +1749,6 @@ uint32_t mapFloatingPointException(uint64_t vector, const void* floatingState) n
 bool MicantDispatchBootstrapException(uint64_t* frame, uint64_t* savedRegisters,
                                       const void* floatingState, uint64_t vector) noexcept {
     if (vector == 3 && g_ring3ProbeActive) MicantProbeTrap(frame + 1);
-    if (vector == 6 && g_probeMode == 6) {
-        const auto* data = reinterpret_cast<volatile const uint64_t*>(kUserBase + 4096 + 512);
-        logTrapValue("[MicaNT DBG] time status=0x", data[3]);
-        logTrapValue("[MicaNT DBG] qpc status=0x", data[4]);
-        logTrapValue("[MicaNT DBG] r8=0x", savedRegisters[7]);
-        logTrapValue("[MicaNT DBG] rax=0x", savedRegisters[14]);
-        logTrapValue("[MicaNT DBG] rcx=0x", savedRegisters[13]);
-        logTrapValue("[MicaNT DBG] rsi=0x", savedRegisters[9]);
-        logTrapValue("[MicaNT DBG] flags=0x", frame[3]);
-        logTrapValue("[MicaNT DBG] r8 before qpc=0x", data[5]);
-        logTrapValue("[MicaNT DBG] r8 after qpc=0x", data[6]);
-        logTrapValue("[MicaNT DBG] time=0x", data[0]);
-        logTrapValue("[MicaNT DBG] qpc=0x", data[1]);
-        logTrapValue("[MicaNT DBG] frequency=0x", data[2]);
-    }
     if (g_probeMode || (frame[2] & 3) != 3 ||
         micant::ke::KeGetCurrentIrql() != micant::ke::PASSIVE_LEVEL) return false;
     uint32_t code{};
@@ -2264,36 +2248,8 @@ bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept
     return true;
 }
 
-namespace {
-inline void dbgSerialWrite(const char* text) noexcept {
-    for (size_t i = 0; text[i] != '\0'; ++i) {
-        uint8_t status{};
-        for (uint32_t wait = 0; wait < 1000000; ++wait) {
-            __asm__ __volatile__("inb %1, %0" : "=a"(status) : "Nd"(uint16_t{0x3FD}) : "memory");
-            if (status & 0x20) break;
-            __asm__ __volatile__("pause");
-        }
-        uint8_t value = static_cast<uint8_t>(text[i]);
-        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(uint16_t{0x3F8}) : "memory");
-    }
-}
-inline void dbgSerialWriteHexU64(uint64_t value) noexcept {
-    constexpr char kHex[] = "0123456789ABCDEF";
-    char buffer[17]{};
-    for (int i = 15; i >= 0; --i) { buffer[i] = kHex[value & 0xF]; value >>= 4; }
-    dbgSerialWrite(buffer);
-}
-}
-
 ProcessPagingRoot::~ProcessPagingRoot() {
-    if (pfn || next) {
-        dbgSerialWrite("[MicaNT DBG] ~ProcessPagingRoot trap this=");
-        dbgSerialWriteHexU64(reinterpret_cast<uintptr_t>(this));
-        dbgSerialWrite(" pfn=");
-        dbgSerialWriteHexU64(pfn);
-        dbgSerialWrite("\r\n");
-        __builtin_trap();
-    }
+    if (pfn || next) __builtin_trap();
 }
 
 static void reclaimUnusedSharedRootSlots() noexcept {
@@ -3080,18 +3036,7 @@ bool verifyNativeImageLoading() noexcept {
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
         : : : "rax", "memory"
     );
-    uint64_t savedFlags{};
-    __asm__ __volatile__("pushfq; popq %0; sti" : "=r"(savedFlags) : : "memory");
-    const uint64_t cleanupStart = bootstrapSchedulerClockTicks();
-    for (size_t spin = 0; spin < 50000000 && io::IoDeferredFileDeletesPending() &&
-         bootstrapSchedulerClockTicks() - cleanupStart < 100; ++spin)
-        __asm__ __volatile__("pause");
-    __asm__ __volatile__("cli" : : : "memory");
-    const bool cleanupPending = io::IoDeferredFileDeletesPending();
-    if (savedFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-    logTrapValue("[MicaNT DBG] native PFN before=0x", activeBefore);
-    logTrapValue("[MicaNT DBG] native PFN after=0x", mm::PfnDatabase::get().getActiveCount());
-    return g_probeSucceeded && !cleanupPending && mm::PfnDatabase::get().getActiveCount() == activeBefore;
+    return g_probeSucceeded && mm::PfnDatabase::get().getActiveCount() == activeBefore;
 }
 
 // Walk every existing leaf, including large pages, before making the IOMMU

@@ -302,43 +302,12 @@ bool deferThreadObjectDelete(ob::ObjectHeader* header) noexcept {
 }
 
 EProcess::EProcess() = default;
-namespace {
-inline void dbgProcSerialWrite(const char* text) noexcept {
-    for (size_t i = 0; text[i] != '\0'; ++i) {
-        uint8_t status{};
-        for (uint32_t wait = 0; wait < 1000000; ++wait) {
-            __asm__ __volatile__("inb %1, %0" : "=a"(status) : "Nd"(uint16_t{0x3FD}) : "memory");
-            if (status & 0x20) break;
-            __asm__ __volatile__("pause");
-        }
-        uint8_t value = static_cast<uint8_t>(text[i]);
-        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(uint16_t{0x3F8}) : "memory");
-    }
-}
-inline void dbgProcSerialWriteHex64(uint64_t value) noexcept {
-    constexpr char kHex[] = "0123456789ABCDEF";
-    char buffer[17]{};
-    for (int i = 15; i >= 0; --i) { buffer[i] = kHex[value & 0xF]; value >>= 4; }
-    dbgProcSerialWrite(buffer);
-}
-}
 
 EProcess::~EProcess() {
     if (primaryTokenReference_) {
         se::SeDereferenceFreestandingToken(primaryTokenReference_);
         primaryTokenReference_ = nullptr;
         primaryToken_ = nullptr;
-    }
-    if (root_.pfn || root_.next) {
-        dbgProcSerialWrite("[MicaNT DBG] ~EProcess with live root this=");
-        dbgProcSerialWriteHex64(reinterpret_cast<uintptr_t>(this));
-        dbgProcSerialWrite(" processId=");
-        dbgProcSerialWriteHex64(static_cast<uint64_t>(processId_));
-        dbgProcSerialWrite(" pidSet=");
-        dbgProcSerialWriteHex64(processId_ ? 1u : 0u);
-        dbgProcSerialWrite(" objHdr=");
-        dbgProcSerialWriteHex64(reinterpret_cast<uintptr_t>(objectHeader_));
-        dbgProcSerialWrite("\r\n");
     }
 }
 
@@ -356,15 +325,6 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     if (root_.pfn || addressSpaceClosing_ || (objectHeader_ && processId_)) return NtStatus::InvalidParameter;
     const Handle processId = allocateClientId();
     if (!processId) return NtStatus::InsufficientResources;
-    if (processId >= 0xD && processId <= 0xF) {
-        dbgProcSerialWrite("[MicaNT DBG] initializeAddressSpace this=");
-        dbgProcSerialWriteHex64(reinterpret_cast<uintptr_t>(this));
-        dbgProcSerialWrite(" pid=");
-        dbgProcSerialWriteHex64(static_cast<uint64_t>(processId));
-        dbgProcSerialWrite(" ret=");
-        dbgProcSerialWriteHex64(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
-        dbgProcSerialWrite("\r\n");
-    }
     handles_.reset(new (std::nothrow_t{}) ob::HandleTable{});
     if (!handles_) return NtStatus::NoMemory;
     if (!createProcessPagingRoot(root_)) { handles_.reset(); return NtStatus::NoMemory; }
@@ -413,22 +373,13 @@ NtStatus EProcess::closeAddressSpace() noexcept {
         if (entryFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return NtStatus::InvalidParameter;
     }
-    dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace process/pfn=");
-    dbgProcSerialWriteHex64(processId_);
-    dbgProcSerialWrite("/");
-    dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-    dbgProcSerialWrite("\r\n");
     addressSpaceClosing_ = true;
     if (entryFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     // Handle deletion may invoke arbitrary object callbacks. Do it in the
     // caller's address space, before changing CR3 and outside Mm locks.
     handles_->closeAllHandles();
-    dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace handles/pfn=");
-    dbgProcSerialWriteHex64(static_cast<uint32_t>(mm::PfnDatabase::get().getActiveCount()));
-    dbgProcSerialWrite("\r\n");
     NtStatus status = NtStatus::Success;
     bool done = false;
-    uint32_t closedVads{};
     while (!done) {
         uint64_t flags{};
         uintptr_t previous{};
@@ -442,35 +393,13 @@ NtStatus EProcess::closeAddressSpace() noexcept {
             if (!switchProcessPagingRootByPhysical(previous)) __builtin_trap();
         }
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-        dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace owner/base/context=");
-        dbgProcSerialWriteHex64(owner.startingAddress);
-        dbgProcSerialWrite("/");
-        dbgProcSerialWriteHex64(reinterpret_cast<uintptr_t>(owner.context));
-        dbgProcSerialWrite("\r\n");
         owner.releaseNow();
-        dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace VAD/pfn/status=");
-        dbgProcSerialWriteHex64(++closedVads);
-        dbgProcSerialWrite("/");
-        dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-        dbgProcSerialWrite("/");
-        dbgProcSerialWriteHex64(static_cast<uint32_t>(status));
-        dbgProcSerialWrite("\r\n");
         if (status != NtStatus::Success) break;
     }
     if (status == NtStatus::Success) {
         uint64_t flags{};
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
-        dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace root before=");
-        dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-        dbgProcSerialWrite("/");
-        dbgProcSerialWriteHex64(root_.pfn);
-        dbgProcSerialWrite("\r\n");
         if (!destroyProcessPagingRoot(root_)) status = NtStatus::Unsuccessful;
-        dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace root after/status=");
-        dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-        dbgProcSerialWrite("/");
-        dbgProcSerialWriteHex64(static_cast<uint32_t>(status));
-        dbgProcSerialWrite("\r\n");
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     }
     if (status != NtStatus::Success) {
@@ -493,16 +422,10 @@ NtStatus EProcess::closeAddressSpace() noexcept {
     userTlsLayouts_.reset();
     userTlsCount_ = 0;
     images_.reset();
-    dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace images reset PFN=");
-    dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-    dbgProcSerialWrite("\r\n");
     ownedImageInputs_.reset();
     ownedImagePath_.reset();
     ownedCommandLine_.reset();
     handles_.reset();
-    dbgProcSerialWrite("[MicaNT DBG] closeAddressSpace complete PFN=");
-    dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-    dbgProcSerialWrite("\r\n");
     addressSpaceClosing_ = false;
     return NtStatus::Success;
 }
@@ -746,11 +669,6 @@ NtStatus EProcess::detachThread(ke::KThread& thread) noexcept {
 }
 
 EThread::~EThread() {
-    if (objectOwned_) {
-        dbgProcSerialWrite("[MicaNT DBG] ~EThread active PFN=");
-        dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-        dbgProcSerialWrite("\r\n");
-    }
     if (impersonationTokenReference_) {
         se::SeDereferenceFreestandingToken(impersonationTokenReference_);
         impersonationTokenReference_ = nullptr;
@@ -765,11 +683,6 @@ EThread::~EThread() {
         // resident until this final deletion removes its entry.
         if (objectOwned_) ke::detail::unregisterClientThread(*thread);
         delete thread;
-        if (objectOwned_) {
-            dbgProcSerialWrite("[MicaNT DBG] retired KThread released active PFN=");
-            dbgProcSerialWriteHex64(mm::PfnDatabase::get().getActiveCount());
-            dbgProcSerialWrite("\r\n");
-        }
     }
     if (retiredProcessReference_) {
         auto* reference = retiredProcessReference_;
@@ -1318,25 +1231,7 @@ extern "C" uint32_t MicantPsResolveUserCopyOnWrite(uintptr_t address) noexcept {
     auto* process = ke::KeGetCurrentProcess();
     if (!thread || !process || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
         return static_cast<uint32_t>(NtStatus::AccessViolation);
-    const auto status = process->getAddressSpace().handlePageFault(address, true, true, false);
-    auto* vad = process->getAddressSpace().findVad(address);
-    if (status == NtStatus::Success && vad) {
-        const auto vpn = address >> mm::PageShift4KB;
-        for (auto* page = vad->commitRanges.get(); page; page = page->next.get()) {
-            if (page->firstVpn != vpn) continue;
-            dbgProcSerialWrite("[MicaNT DBG] COW VA/PFN/owned/shared=");
-            dbgProcSerialWriteHex64(address);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->pfn);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->ownsPfn);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->sharedImagePage);
-            dbgProcSerialWrite("\r\n");
-            break;
-        }
-    }
-    return static_cast<uint32_t>(status);
+    return static_cast<uint32_t>(process->getAddressSpace().handlePageFault(address, true, true, false));
 }
 
 extern "C" bool MicantPsPrepareUserException(uint32_t exceptionCode,
@@ -1379,40 +1274,7 @@ NtStatus EThread::releaseUserMemory() noexcept {
     auto& space = process_->getAddressSpace();
     NtStatus status = NtStatus::Success;
     for (auto* address : {&userTls_, &userTeb_, &userStack_}) {
-        const uintptr_t releasingAddress = *address;
-        auto* vad = releasingAddress ? space.findVad(releasingAddress) : nullptr;
-        for (auto* page = vad ? vad->commitRanges.get() : nullptr; page; page = page->next.get()) {
-            if (page->pfn != 0x1A8 && page->sharedImagePfn != 0x1A8 &&
-                page->pfn != 0x1C9 && page->sharedImagePfn != 0x1C9) continue;
-            dbgProcSerialWrite("[MicaNT DBG] user release address/VPN/PFN/owned/shared/shared-PFN=");
-            dbgProcSerialWriteHex64(releasingAddress);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->firstVpn);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->pfn);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->ownsPfn);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->sharedImagePage);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(page->sharedImagePfn);
-            dbgProcSerialWrite("\r\n");
-        }
-        const auto activeBefore = objectOwned_ ? mm::PfnDatabase::get().getActiveCount() : 0;
-        if (*address) status = space.free(*address, 0, mm::MEM_RELEASE);
-        if (objectOwned_) {
-            dbgProcSerialWrite("[MicaNT DBG] user allocation address/status/PFN before/after=");
-            const auto activeAfter = mm::PfnDatabase::get().getActiveCount();
-            dbgProcSerialWriteHex64(releasingAddress);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(static_cast<uint32_t>(status));
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(activeBefore);
-            dbgProcSerialWrite("/");
-            dbgProcSerialWriteHex64(activeAfter);
-            dbgProcSerialWrite("\r\n");
-        }
-        if (status != NtStatus::Success) break;
+        if (*address && (status = space.free(*address, 0, mm::MEM_RELEASE)) != NtStatus::Success) break;
         *address = 0;
     }
     if (previous != target && !hal::amd64::switchProcessPagingRootByPhysical(previous)) __builtin_trap();
