@@ -190,6 +190,9 @@ void unloadHost(DriverObject* driver) noexcept {
 void log(const KernelServices& services, const char* message) noexcept {
     if (services.Log) services.Log(services.Context, message);
 }
+void logHost(void*, const char* message) noexcept {
+    if (g_services && message) log(*g_services, message);
+}
 
 bool readConfig(const KernelServices& services, uint8_t bus, uint8_t device,
                 uint8_t function, uint16_t offset, uint32_t& value) noexcept {
@@ -328,6 +331,7 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     g_host.PrepareSuperSpeedHubEndpoint = prepareSuperSpeedHub;
     g_host.BeginRootPortReset = beginRootReset; g_host.PollRootPortReset = pollRootReset;
     g_host.AcknowledgeRootConnectionChange = acknowledgeRootChange;
+    g_host.Log = logHost;
     const auto result = services.RegisterUsbHost(services.Context, &g_host, &g_hostToken);
     if (result != STATUS_SUCCESS || !g_hostToken) {
         unloadHost(driver);

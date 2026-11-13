@@ -87,7 +87,11 @@ int32_t start(void* context) {
         const BulkTransport transport{d, transfer, reset, 4096, begin, end};
         const auto result = d->storage.initialize(transport, d->interface.InterfaceNumber,
                                                    d->interface.InEndpoint, d->interface.OutEndpoint);
-        if (result != NtStatus::Success) return static_cast<int32_t>(static_cast<uint32_t>(result));
+        if (result != NtStatus::Success) {
+            if (services->Log) services->Log(services->Context,
+                "usbstor.sys: BOT/SCSI probe or READ CAPACITY failed");
+            return static_cast<int32_t>(static_cast<uint32_t>(result));
+        }
         d->initialized = true;
     }
     if (!d->block) {
@@ -95,11 +99,19 @@ int32_t start(void* context) {
         if (!d->storage.retainBackend(sectors, sectorSize)) return kBusy;
         const auto result = services->CreateReadOnlyBlockDevice(services->Context, sectors, sectorSize,
             d, read, release, 0x00120089, &d->block);
-        if (result != micant::boot_driver::STATUS_SUCCESS) return result;
+        if (result != micant::boot_driver::STATUS_SUCCESS) {
+            if (services->Log) services->Log(services->Context,
+                "usbstor.sys: canonical read-only block publication failed");
+            return result;
+        }
     }
     if (!d->mount) {
         const auto result = services->MountFatBlockDevice(services->Context, d->block, &d->mount);
-        if (result != micant::boot_driver::STATUS_SUCCESS) return result;
+        if (result != micant::boot_driver::STATUS_SUCCESS) {
+            if (services->Log) services->Log(services->Context,
+                "usbstor.sys: canonical FAT32 mount failed");
+            return result;
+        }
     }
     if (!d->published && services->Log) {
         services->Log(services->Context,
@@ -118,6 +130,9 @@ int32_t start(void* context) {
             d->fileVerified = true;
             if (services->Log) services->Log(services->Context,
                 "usbstor.sys: verified known file bytes through USB block device and FAT32");
+        } else if (services->Log) {
+            services->Log(services->Context,
+                "usbstor.sys: known FAT32 file read did not match the QEMU fixture");
         }
     }
     return micant::boot_driver::STATUS_SUCCESS;

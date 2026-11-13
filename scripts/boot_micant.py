@@ -415,6 +415,7 @@ def run_qemu(
         started = time.monotonic()
         complete_since = None
         surface_verified = False
+        usb_input_sent = False
 
         with qemu_output_path.open("w", encoding="utf-8") as qemu_output:
             process = subprocess.Popen(
@@ -441,6 +442,15 @@ def run_qemu(
                         if serial_path.exists()
                         else ""
                     )
+                    if (verify_usb_input and not usb_input_sent and
+                            "usbxhci.sys: native host registered" in serial_log):
+                        # Inject as soon as the kernel has claimed the real
+                        # controller, before later, unrelated boot probes can
+                        # halt the guest. The HID service verifies the report
+                        # and release from actual xHCI transfer completions.
+                        time.sleep(0.5)
+                        inject_usb_keyboard(temp / "qmp.sock")
+                        usb_input_sent = True
                     if serial_has_failure(serial_log):
                         raise RuntimeError(f"Kernel bootstrap failed:\n{serial_log[-8000:]}")
                     if (not surface_verified and
@@ -462,7 +472,8 @@ def run_qemu(
                             complete_since = time.monotonic()
                         elif time.monotonic() - complete_since >= stable_seconds:
                             if verify_usb_input:
-                                inject_usb_keyboard(temp / "qmp.sock")
+                                if not usb_input_sent:
+                                    inject_usb_keyboard(temp / "qmp.sock")
                                 deadline = time.monotonic() + 10
                                 while time.monotonic() < deadline:
                                     usb_serial = serial_path.read_text(

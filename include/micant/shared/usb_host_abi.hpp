@@ -48,5 +48,7 @@ struct HostServicesV1 {
     int32_t (*BeginRootPortReset)(void*, uint8_t);
     int32_t (*PollRootPortReset)(void*, uint8_t, uint8_t*);
     int32_t (*AcknowledgeRootConnectionChange)(void*, uint8_t);
+    // Optional diagnostic sink for bounded controller/bus lifecycle markers.
+    void (*Log)(void*, const char*);
 };
 }

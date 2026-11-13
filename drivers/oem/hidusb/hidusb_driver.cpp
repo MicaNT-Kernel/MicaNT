@@ -77,7 +77,11 @@ int32_t match(void*, const uint8_t* bytes, size_t size, InterfaceV1* output) {
     if (!output) return micant::boot_driver::STATUS_INVALID_PARAMETER;
     micant::usb::baremetal::HidInterface hid{};
     if (!micant::usb::baremetal::findBootHid(bytes, size, hid) || hid.alternate ||
-        !hid.reportDescriptorLength || hid.reportDescriptorLength > 4096) return micant::boot_driver::STATUS_NOT_SUPPORTED;
+        !hid.reportDescriptorLength || hid.reportDescriptorLength > 4096) {
+        if (services && services->Log)
+            services->Log(services->Context, "hidusb.sys: configuration has no supported boot HID interface");
+        return micant::boot_driver::STATUS_NOT_SUPPORTED;
+    }
     *output = {};
     output->Size = sizeof(*output); output->Kind = TransferKind::InterruptIn;
     output->Configuration = hid.configuration; output->InterfaceNumber = hid.interfaceNumber;

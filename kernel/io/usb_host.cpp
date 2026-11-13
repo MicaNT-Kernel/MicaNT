@@ -55,6 +55,9 @@ struct Bus {
 };
 Bus bus{};
 ClassSlot classes[4]{};
+void hostLog(const char* message) noexcept {
+    if (bus.host.Log) bus.host.Log(bus.host.Context, message);
+}
 uint64_t nextToken{1}, nextClassToken{1};
 struct HostGuard {
     bool held{!bus.hostGate.test_and_set(std::memory_order_acquire)};
@@ -140,6 +143,9 @@ bool selectClass(Device& d, const uint8_t* bytes, size_t length) noexcept {
         if (instance) { d.classSlot = &slot; d.classInstance = instance; d.interface = info; }
         if (created != success || !instance) return false;
         d.bulkDevice = info.Kind == TransferKind::BulkPair;
+        hostLog(info.Kind == TransferKind::InterruptIn
+            ? "USB host: matched HID interrupt interface"
+            : "USB host: matched mass-storage bulk interface");
         return true;
     }
     return false;
@@ -215,6 +221,7 @@ void process(Device& d) noexcept {
         if (result == busy) return;
         if (result != success) { d.phase = Phase::Disconnect; return; }
         d.speed = speed;
+        hostLog("USB host: root-port reset completed");
         d.phase = armDeadline(d) ? Phase::NeedEnable : Phase::Quarantined;
     }
     if (d.phase == Phase::Disconnect) {
@@ -545,6 +552,7 @@ void service(void*) noexcept {
                     bus.host.ResetPort(bus.host.Context, static_cast<uint8_t>(port), &speed) != success) continue;
                 free->port = static_cast<uint8_t>(port); free->speed = speed;
                 free->phase = armDeadline(*free) ? (asyncReset ? Phase::RootReset : Phase::NeedEnable) : Phase::Quarantined;
+                hostLog("USB host: connected root port reset started");
                 break;
             }
         }
