@@ -520,8 +520,19 @@ def run_qemu(
                                                 encoding="utf-8", errors="replace")
                                             if usb_serial.count(
                                                     "USB host: disconnect cleanup completed") > prior_cleanups:
-                                                print("USB xHCI HID press/release, detach cleanup and BOT/FAT mount evidence passed.", flush=True)
-                                                return
+                                                storage_cleanups = usb_serial.count(
+                                                    "USB host: disconnect cleanup completed")
+                                                detach_usb_device(temp / "qmp.sock", "usb_storage")
+                                                storage_deadline = time.monotonic() + 10
+                                                while time.monotonic() < storage_deadline:
+                                                    usb_serial = serial_path.read_text(
+                                                        encoding="utf-8", errors="replace")
+                                                    if usb_serial.count(
+                                                            "USB host: disconnect cleanup completed") > storage_cleanups:
+                                                        print("USB xHCI HID press/release, HID and storage detach cleanup, and BOT/FAT evidence passed.", flush=True)
+                                                        return
+                                                    time.sleep(0.1)
+                                                raise RuntimeError("USB storage detached but xHCI cleanup did not complete")
                                             time.sleep(0.1)
                                         raise RuntimeError("USB keyboard detached but xHCI cleanup did not complete")
                                     time.sleep(0.1)
