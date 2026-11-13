@@ -15,125 +15,24 @@
 #include <string_view>
 #include <vector>
 #include <array>
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
+#include <cctype>
 
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/drivers/security/cng.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/shared/x509_profile.hpp"
 
 namespace micant::km::crypto {
 
-// ============================================================================
-// 1. ASN.1 DER Universal Tags & OID Definitions
-// ============================================================================
-
-namespace asn1 {
-
-inline constexpr uint8_t TAG_BOOLEAN           = 0x01;
-inline constexpr uint8_t TAG_INTEGER           = 0x02;
-inline constexpr uint8_t TAG_BIT_STRING         = 0x03;
-inline constexpr uint8_t TAG_OCTET_STRING       = 0x04;
-inline constexpr uint8_t TAG_NULL               = 0x05;
-inline constexpr uint8_t TAG_OID                = 0x06;
-inline constexpr uint8_t TAG_UTF8_STRING        = 0x0C;
-inline constexpr uint8_t TAG_PRINTABLE_STRING   = 0x13;
-inline constexpr uint8_t TAG_IA5_STRING         = 0x16;
-inline constexpr uint8_t TAG_UTC_TIME           = 0x17;
-inline constexpr uint8_t TAG_GENERALIZED_TIME   = 0x18;
-inline constexpr uint8_t TAG_SEQUENCE           = 0x30;
-inline constexpr uint8_t TAG_SET                = 0x31;
-inline constexpr uint8_t TAG_CONTEXT_0          = 0xA0;
-inline constexpr uint8_t TAG_CONTEXT_3          = 0xA3;
-
-// Helper to write ASN.1 length
-inline void writeLength(std::vector<uint8_t>& buf, size_t len) {
-    if (len < 128) {
-        buf.push_back(static_cast<uint8_t>(len));
-    } else if (len <= 0xFF) {
-        buf.push_back(0x81);
-        buf.push_back(static_cast<uint8_t>(len));
-    } else if (len <= 0xFFFF) {
-        buf.push_back(0x82);
-        buf.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
-        buf.push_back(static_cast<uint8_t>(len & 0xFF));
-    } else {
-        buf.push_back(0x84);
-        buf.push_back(static_cast<uint8_t>((len >> 24) & 0xFF));
-        buf.push_back(static_cast<uint8_t>((len >> 16) & 0xFF));
-        buf.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
-        buf.push_back(static_cast<uint8_t>(len & 0xFF));
-    }
-}
-
-// Helper to write TLV element
-inline void writeTLV(std::vector<uint8_t>& buf, uint8_t tag, std::span<const uint8_t> value) {
-    buf.push_back(tag);
-    writeLength(buf, value.size());
-    buf.insert(buf.end(), value.begin(), value.end());
-}
-
-inline void writeSequence(std::vector<uint8_t>& buf, std::span<const uint8_t> inner) {
-    writeTLV(buf, TAG_SEQUENCE, inner);
-}
-
-inline void writeInteger(std::vector<uint8_t>& buf, uint64_t val) {
-    std::vector<uint8_t> bytes;
-    for (int i = 7; i >= 0; --i) {
-        uint8_t b = static_cast<uint8_t>((val >> (i * 8)) & 0xFF);
-        if (!bytes.empty() || b != 0) bytes.push_back(b);
-    }
-    if (bytes.empty()) bytes.push_back(0);
-    // If MSB is set, prepend 0x00 to denote positive signed integer
-    if (bytes[0] & 0x80) bytes.insert(bytes.begin(), 0x00);
-    writeTLV(buf, TAG_INTEGER, bytes);
-}
-
-inline void writeOid(std::vector<uint8_t>& buf, std::span<const uint8_t> oidBytes) {
-    writeTLV(buf, TAG_OID, oidBytes);
-}
-
-inline void writePrintableString(std::vector<uint8_t>& buf, std::string_view str) {
-    writeTLV(buf, TAG_PRINTABLE_STRING, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(str.data()), str.size()));
-}
-
-inline void writeUtcTime(std::vector<uint8_t>& buf, std::string_view utcStr) {
-    writeTLV(buf, TAG_UTC_TIME, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(utcStr.data()), utcStr.size()));
-}
-
-} // namespace asn1
-
-// ============================================================================
-// 2. Sovereign X.509 Certificate Representation
-// ============================================================================
-
-struct X509Certificate {
-    uint64_t serialNumber{1};
-    std::string subjectCommonName;
-    std::string issuerCommonName;
-    std::string validNotBefore; // YYMMDDHHMMSSZ
-    std::string validNotAfter;
-    std::vector<std::string> dnsNames;
-    std::vector<std::string> ipAddresses;
-    std::vector<uint8_t> publicKey;
-    std::vector<uint8_t> signature;
-    std::vector<uint8_t> rawDer;
-    std::array<uint8_t, 32> fingerprintSha256{};
-
-    [[nodiscard]] bool matchesHost(std::string_view hostOrIp) const noexcept {
-        if (subjectCommonName == hostOrIp) return true;
-        for (const auto& dns : dnsNames) {
-            if (dns == hostOrIp) return true;
-        }
-        for (const auto& ip : ipAddresses) {
-            if (ip == hostOrIp) return true;
-        }
-        return false;
-    }
-};
+using micant::shared::crypto::X509Certificate;
+namespace asn1 = micant::shared::crypto::asn1;
 
 // ============================================================================
 // 3. Sovereign Self-Signed Machine Certificate Generator
@@ -296,15 +195,36 @@ public:
 
     bool verifyCertificateChain(const X509Certificate& cert) {
         std::lock_guard<std::mutex> lock(mutex_);
-        // If issuer equals subject, check if present in root store
-        if (cert.issuerCommonName == cert.subjectCommonName) {
-            for (const auto& r : rootStore_) {
-                if (r.fingerprintSha256 == cert.fingerprintSha256) {
-                    return true;
-                }
-            }
-        }
+        (void)cert;
+        // This certificate model has no remote DER parser or issuer-signature
+        // verifier. A matching subject/fingerprint is not proof of a valid
+        // chain, so it must never authorize TLS or code-signing decisions.
         return false;
+    }
+
+    // Validate an ordered TLS server chain against explicitly installed ROOT
+    // certificates. `nowUnixSeconds` must come from the kernel's authoritative
+    // UTC clock; no local wall-clock fallback is permitted here.
+    bool verifyTlsServerChain(std::span<const X509Certificate> presented,
+                              std::string_view hostname,
+                              int64_t nowUnixSeconds) {
+        std::vector<X509Certificate> roots;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            roots = rootStore_;
+        }
+        return micant::shared::crypto::verifyTlsServerCertificateChain(
+            presented, roots, hostname, nowUnixSeconds);
+    }
+
+    bool verifyTlsServerChainAtSystemTime(std::span<const X509Certificate> presented,
+                                          std::string_view hostname) {
+        uint64_t systemTime100ns = 0;
+        if (!ke::KeQuerySystemTime100ns(systemTime100ns) ||
+            systemTime100ns < 116444736000000000ULL) return false;
+        const uint64_t unixSeconds = (systemTime100ns - 116444736000000000ULL) / 10000000ULL;
+        if (unixSeconds > static_cast<uint64_t>(INT64_MAX)) return false;
+        return verifyTlsServerChain(presented, hostname, static_cast<int64_t>(unixSeconds));
     }
 
     void resetForTest() {
@@ -321,11 +241,7 @@ private:
 
     void initializeDefaultStoresLocked() {
         if (initialized_) return;
-        auto machineCert = MachineCertificateGenerator::generateSelfSignedMachineCert(
-            "MicaNT-Server-147.135.1.229", "147.135.1.229"
-        );
-        myStore_.push_back(machineCert);
-        rootStore_.push_back(machineCert);
+        // No built-in self-signed placeholder is a system trust anchor.
         initialized_ = true;
     }
 

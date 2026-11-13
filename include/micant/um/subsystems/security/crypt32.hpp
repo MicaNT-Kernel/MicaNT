@@ -686,31 +686,7 @@ public:
     std::vector<std::shared_ptr<InternalCert>> certs;
     std::mutex mutex;
 
-    explicit MemoryCertStore(std::wstring_view name) : storeName(name) {
-        // Pre-populate ROOT store with MicaNT sovereign root CA certificate
-        if (storeName == L"ROOT" || storeName == L"Root") {
-            auto ca = std::make_shared<InternalCert>();
-            ca->subject = L"CN=MicaNT Sovereign Root Certification Authority, O=MicaNT Project, C=US";
-            ca->issuer  = ca->subject;
-            ca->friendlyName = L"MicaNT Sovereign Root CA";
-            ca->serialNumber = { 0x01, 0x19, 0x88, 0xDE, 0xC0 };
-
-            // Generate deterministic SHA1 thumbprint
-            std::string ident = "MicaNT Sovereign Root CA 2026";
-            ca->sha1Hash = crypto::Sha1::hash(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(ident.data()), ident.size()));
-
-            ca->rawEncoded = {
-                0x30, 0x82, 0x01, 0x0A, 0x30, 0x81, 0xB1, 0xA0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x05, 0x01, 0x19,
-                0x88, 0xDE, 0xC0, 0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B
-            };
-            ca->notBefore.dwLowDateTime  = 0x00000000;
-            ca->notBefore.dwHighDateTime = 0x01DA6000;
-            ca->notAfter.dwLowDateTime   = 0xFFFFFFFF;
-            ca->notAfter.dwHighDateTime  = 0x01E00000;
-
-            certs.push_back(ca);
-        }
-    }
+    explicit MemoryCertStore(std::wstring_view name) : storeName(name) {}
 };
 
 class CertStoreRegistry {
@@ -1139,8 +1115,9 @@ inline win32::BOOL CryptProtectMemory(void* /*pData*/, uint32_t /*cbData*/, uint
 }
 
 inline win32::BOOL CertCreateCertificateChainEngine(void* /*pConfig*/, void** phChainEngine) noexcept {
-    if (phChainEngine) *phChainEngine = reinterpret_cast<void*>(0xCCA0);
-    return win32::TRUE;
+    if (phChainEngine) *phChainEngine = nullptr;
+    win32::SetLastError(50); // ERROR_NOT_SUPPORTED
+    return win32::FALSE;
 }
 
 inline void CertFreeCertificateChainEngine(void* /*hChainEngine*/) noexcept {}
@@ -1149,9 +1126,10 @@ inline win32::BOOL CertVerifyCertificateChainPolicy(void* /*pszPolicyOID*/, void
     if (pPolicyStatus) {
         struct CERT_CHAIN_POLICY_STATUS { uint32_t cbSize; uint32_t dwError; void* lpvExtraPolicyStatus; };
         auto* ps = static_cast<CERT_CHAIN_POLICY_STATUS*>(pPolicyStatus);
-        ps->dwError = 0; // S_OK / Valid chain
+        ps->dwError = 50; // ERROR_NOT_SUPPORTED: policy verification is not implemented.
     }
-    return win32::TRUE;
+    win32::SetLastError(50);
+    return win32::FALSE;
 }
 
 inline win32::BOOL WINAPI CertGetCertificateChain(
@@ -1164,11 +1142,9 @@ inline win32::BOOL WINAPI CertGetCertificateChain(
     void* /*pvReserved*/,
     void** ppChainContext
 ) noexcept {
-    if (ppChainContext) {
-        static uint8_t dummyChain[64] = { 0 };
-        *ppChainContext = dummyChain;
-    }
-    return win32::TRUE;
+    if (ppChainContext) *ppChainContext = nullptr;
+    win32::SetLastError(50); // ERROR_NOT_SUPPORTED
+    return win32::FALSE;
 }
 
 inline win32::BOOL WINAPI CryptDecodeObjectEx(
