@@ -10,8 +10,12 @@
 #include <cstdint>
 #include <cstddef>
 
+extern "C" __declspec(dllimport) int32_t NtTerminateProcess(void* processHandle,
+                                                               int32_t exitStatus) noexcept;
+
 namespace micant::services::dhcp {
 uint32_t acquireLease(uint32_t timeoutMilliseconds, uint32_t* leaseSeconds) noexcept;
+uint32_t resolveBootHost() noexcept;
 }
 
 namespace {
@@ -66,6 +70,7 @@ void PrintStatus(uint32_t status) noexcept {
 } // namespace
 
 extern "C" void _start(const char* cmdLine = nullptr) {
+    uint32_t serviceExitStatus{};
     uint16_t csVal = 0;
 #if defined(__x86_64__)
     __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
@@ -79,14 +84,28 @@ extern "C" void _start(const char* cmdLine = nullptr) {
     } else {
         PrintLine("Group Parameter:    -k netsvcs (Network Services Container)");
     }
-    if (Contains(cmdLine, "netsvcs") || Contains(cmdLine, "LocalServiceNetworkRestricted")) {
+    if (!cmdLine || Contains(cmdLine, "netsvcs") ||
+        Contains(cmdLine, "LocalServiceNetworkRestricted")) {
         uint32_t leaseSeconds{};
         const uint32_t status = micant::services::dhcp::acquireLease(2500, &leaseSeconds);
-        if (status == 0) PrintLine("DHCP lease committed through AFD.");
-        else PrintStatus(status);
+        if (status == 0) {
+            PrintLine("DHCP lease committed through AFD.");
+            if (cmdLine && Contains(cmdLine, "m10-test")) {
+                const uint32_t dnsStatus = micant::services::dhcp::resolveBootHost();
+                if (dnsStatus == 0) PrintLine("DNS A record for QEMU host resolved through Winsock/AFD.");
+                else {
+                    serviceExitStatus = dnsStatus;
+                    PrintLine("DNS A resolution failed through Winsock/AFD.");
+                }
+            }
+        } else {
+            serviceExitStatus = status;
+            PrintStatus(status);
+        }
     }
 
-    DoSyscall(0x01, 0, 0);
+    (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
+                             static_cast<int32_t>(serviceExitStatus));
 
     while (true) {
 #if defined(__x86_64__)

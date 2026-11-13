@@ -540,7 +540,8 @@ NtStatus createBootstrapUserProcess(std::span<const BootstrapProcessImage> image
                                     std::u16string_view imagePath, std::u16string_view commandLine,
                                     size_t kernelStackSize, size_t userStackSize, bool interruptible,
                                     uint32_t processAccess, uint32_t threadAccess,
-                                    Handle& processHandle, Handle& threadHandle) noexcept {
+                                    Handle& processHandle, Handle& threadHandle,
+                                    bool systemToken) noexcept {
     processHandle = threadHandle = 0;
     if (images.empty() || images.size() > 16 ||
         !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(images.data()),
@@ -554,6 +555,10 @@ NtStatus createBootstrapUserProcess(std::span<const BootstrapProcessImage> image
     EProcess* process{};
     EThread* thread{};
     auto status = createProcessHandle(processAccess, processResult, process);
+    // Kernel-composed boot services can request the System identity explicitly;
+    // ordinary bootstrap user processes keep the unprivileged construction token.
+    if (status == NtStatus::Success && systemToken)
+        status = ProcessObjectFactory::assignToken(*process, true);
     std::array<BootstrapProcessImage, 16> captured{};
     std::u16string_view capturedPath, capturedCommand;
     if (status == NtStatus::Success)

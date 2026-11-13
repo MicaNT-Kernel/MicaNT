@@ -8,7 +8,6 @@
 extern "C" __declspec(dllimport) uintptr_t socket(int,int,int) noexcept;
 extern "C" __declspec(dllimport) int closesocket(uintptr_t) noexcept;
 extern "C" __declspec(dllimport) int bind(uintptr_t,const void*,int) noexcept;
-extern "C" __declspec(dllimport) int setsockopt(uintptr_t,int,int,const char*,int) noexcept;
 extern "C" __declspec(dllimport) int sendto(uintptr_t,const char*,int,int,const void*,int) noexcept;
 extern "C" __declspec(dllimport) int recvfrom(uintptr_t,char*,int,int,void*,int*) noexcept;
 extern "C" __declspec(dllimport) int WSAGetLastError() noexcept;
@@ -18,10 +17,37 @@ using namespace micant;
 using namespace micant::shared::afd;
 constexpr uint32_t StatusSuccess=0, StatusInvalidParameter=0xc000000d, StatusAccessDenied=0xc0000022;
 constexpr uint32_t StatusTimeout=0x00000102, StatusNetworkUnreachable=0xc000023c;
+constexpr uint32_t StatusInvalidHandle=0xc0000008, StatusDeviceNotReady=0xc00000a3;
 constexpr uint32_t DhcpIoctlQuery=IoctlQueryNetworkConfiguration, DhcpIoctlSet=IoctlSetNetworkConfiguration;
 constexpr uintptr_t InvalidSocket=~uintptr_t{0};
-constexpr int AfInet=2,SockDgram=2,IpProtoUdp=17,SolSocket=0xffff,SoReceiveTimeout=0x1006;
+constexpr int AfInet=2,SockDgram=2,IpProtoUdp=17;
+constexpr int WsaInvalidArgument=10022,WsaNotSocket=10038,WsaNotInitialised=10093;
+constexpr int WsaAddressFamilyNotSupported=10047;
+constexpr int WsaFault=10014;
 constexpr int WsaTimedOut=10060,SocketError=-1;
+struct Wsadata {
+    uint16_t version, highVersion;
+    uint16_t maxSockets, maxUdpDatagram;
+    char* vendorInfo;
+    char description[257];
+    char status[129];
+};
+extern "C" __declspec(dllimport) int WSAStartup(uint16_t requestedVersion, Wsadata* data) noexcept;
+extern "C" __declspec(dllimport) int WSACleanup() noexcept;
+struct DnsRecordA {
+    DnsRecordA* next;
+    const char* name;
+    uint16_t type, dataLength;
+    uint32_t flags;
+    uint32_t ttl, reserved;
+    uint32_t ipv4Address;
+};
+extern "C" __declspec(dllimport) uint32_t MicantDnsQueryWithTimeout(
+    const char* name, uint16_t type, uint32_t timeoutMilliseconds, DnsRecordA** result) noexcept;
+extern "C" __declspec(dllimport) void DnsRecordListFree(void* records, uint32_t freeType) noexcept;
+struct WinsockCleanup {
+    ~WinsockCleanup() { (void)WSACleanup(); }
+};
 struct SockaddrIn{int16_t family;uint16_t port;uint32_t address;uint8_t zero[8];};
 volatile uint32_t g_xid{0x4d4e5401};
 uint16_t read16(const uint8_t*p){return uint16_t((uint16_t(p[0])<<8)|p[1]);}
@@ -103,18 +129,46 @@ uint32_t transact(uintptr_t socketHandle,const SockaddrIn& broadcast,const uint8
 namespace micant::services::dhcp {
 uint32_t acquireLease(uint32_t timeoutMilliseconds,uint32_t* leaseSeconds) noexcept {
     if(timeoutMilliseconds==0||timeoutMilliseconds>60000)return StatusInvalidParameter;
+    Wsadata startupData{};
+    if (WSAStartup(0x0202, &startupData) != 0) return StatusNetworkUnreachable;
+    WinsockCleanup cleanup{};
     uintptr_t endpoint=socket(AfInet,SockDgram,IpProtoUdp);if(endpoint==InvalidSocket)return StatusNetworkUnreachable;
     NetworkConfigurationV1 config{};IoStatusBlock iosb{};
     auto status=native_nt::NtDeviceIoControlFile(static_cast<Handle>(endpoint),0,nullptr,nullptr,&iosb,
         DhcpIoctlQuery,nullptr,0,&config,sizeof(config));
     if(status!=NtStatus::Success||iosb.information!=sizeof(config)||config.Size!=sizeof(config)||
        config.Version!=EndpointAbiVersion){closesocket(endpoint);return static_cast<uint32_t>(status==NtStatus::Success?NtStatus::Unsuccessful:status);}
-    SockaddrIn any{AfInet,hostToNetwork16(68),0,{}};if(bind(endpoint,&any,sizeof(any))==SocketError){closesocket(endpoint);return StatusNetworkUnreachable;}
+    SockaddrIn any{AfInet,hostToNetwork16(68),0,{}};
+    if(bind(endpoint,&any,sizeof(any))==SocketError){
+        const int error=WSAGetLastError();
+        closesocket(endpoint);
+        if(error==WsaInvalidArgument)return StatusInvalidParameter;
+        if(error==WsaFault)return 0xc0000005u;
+        if(error==WsaAddressFamilyNotSupported)return 0xc00000bbu;
+        if(error==WsaNotSocket)return StatusInvalidHandle;
+        if(error==WsaNotInitialised)return StatusDeviceNotReady;
+        return StatusNetworkUnreachable;
+    }
     uint32_t timeout=timeoutMilliseconds;
-    if(setsockopt(endpoint,SolSocket,SoReceiveTimeout,reinterpret_cast<const char*>(&timeout),sizeof(timeout))==SocketError){closesocket(endpoint);return StatusNetworkUnreachable;}
+    status=native_nt::NtDeviceIoControlFile(static_cast<Handle>(endpoint),0,nullptr,nullptr,&iosb,
+        shared::afd::IoctlSetReceiveTimeout,&timeout,sizeof(timeout),nullptr,0);
+    if(status!=NtStatus::Success){closesocket(endpoint);return static_cast<uint32_t>(status);}
     SockaddrIn broadcast{AfInet,hostToNetwork16(67),0xffffffffu,{}};
     uint32_t lease=0;uint32_t result=StatusTimeout;
     for(unsigned attempt=0;attempt<3;++attempt){result=transact(endpoint,broadcast,config.MacAddress,attempt,config,&lease);if(result==StatusSuccess||result==StatusAccessDenied)break;}
     closesocket(endpoint);if(result==StatusSuccess&&leaseSeconds)*leaseSeconds=lease;return result;
 }
+
+uint32_t resolveBootHost() noexcept {
+    DnsRecordA* records{};
+    const uint32_t status = MicantDnsQueryWithTimeout("host", 1, 5000, &records);
+    bool found = false;
+    for (auto* record = records; record; record = record->next) {
+        if (record->type == 1 && record->dataLength == sizeof(uint32_t) && record->ipv4Address)
+            found = true;
+    }
+    DnsRecordListFree(records, 0);
+    return status == 0 && found ? StatusSuccess : StatusNetworkUnreachable;
+}
+
 }

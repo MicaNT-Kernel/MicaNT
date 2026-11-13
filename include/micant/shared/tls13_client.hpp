@@ -982,6 +982,7 @@ private:
     std::array<uint8_t, 32> clientPublicKey_{};
     std::array<uint8_t, 32> serverPublicKey_{};
     std::array<uint8_t, 32> sharedSecret_{};
+    std::array<uint8_t, 32> transcriptHash_{};
     micant::shared::BoundedVector<uint8_t> lastClientHello_;
     micant::shared::BoundedVector<uint8_t> transcript_;
     micant::shared::BoundedVector<uint8_t> pendingHandshake_;

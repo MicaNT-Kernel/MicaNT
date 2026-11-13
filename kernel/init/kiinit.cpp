@@ -61,6 +61,9 @@ int32_t waitSocketConnected(void* object, uint32_t timeoutMilliseconds) noexcept
 int32_t waitSocketWritable(void* object, uint32_t timeoutMilliseconds) noexcept {
     return static_cast<int32_t>(NetworkStack::get().waitSocketWritable(object, timeoutMilliseconds));
 }
+int32_t waitSocketAccept(void* object, uint32_t timeoutMilliseconds) noexcept {
+    return static_cast<int32_t>(NetworkStack::get().waitSocketAccept(object, timeoutMilliseconds));
+}
 int createSocket(int af, int type, int protocol) noexcept {
     return NetworkStack::get().createSocket(af, type, protocol);
 }
@@ -73,6 +76,13 @@ bool connectSocket(int id, uint32_t ip, uint16_t port, uint64_t deadline100ns) n
 }
 bool listenSocket(int id, int backlog) noexcept {
     return NetworkStack::get().listenSocket(id, backlog);
+}
+int acceptSocket(int id, uint32_t* remoteIp, uint16_t* remotePort) noexcept {
+    if (!remoteIp || !remotePort) return -1;
+    Ipv4Address address{};
+    const int accepted = NetworkStack::get().acceptSocket(id, address, *remotePort);
+    if (accepted >= 0) *remoteIp = address.addr;
+    return accepted;
 }
 int sendSocket(int id, const void* data, size_t length, uint64_t deadline100ns) noexcept {
     return NetworkStack::get().sendSocket(id, data, length, deadline100ns);
@@ -110,6 +120,9 @@ bool initializeBootstrapSectionServices() noexcept;
 void initializeBootstrapEventServices() noexcept;
 void scheduleDeferredTimerDeletes() noexcept;
 bool verifyBootstrapSectionOwnership() noexcept;
+}
+namespace micant::netboot {
+micant::NtStatus acquireBootDhcpLease() noexcept;
 }
 
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
@@ -2238,8 +2251,10 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         return result == NtStatus::Success
             ? hal::amd64::BootstrapNtContinueApplied : status(result);
     }
-    if (number == sys::SSN_NtClose)
-        return status(sys::NtClose(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtClose) {
+        const auto closeStatus = sys::NtClose(static_cast<Handle>(first));
+        return status(closeStatus);
+    }
     if (number == sys::SSN_NtCreateIoCompletion) {
         auto* destination = reinterpret_cast<Handle*>(first);
         if (!destination || ex::ProbeForWrite(destination, sizeof(Handle), alignof(Handle)) != NtStatus::Success)
@@ -2631,21 +2646,25 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
                                    sizeof(extra)) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
-        if (second || args.third || args.fourth) return status(NtStatus::NotSupported);
-        if (!extra[0] || extra[1] > UINT32_MAX || extra[3] > micant::shared::afd::MaximumControlBuffer ||
-            extra[5] > micant::shared::afd::MaximumControlBuffer)
-            return status(NtStatus::InvalidParameter);
-        const uint32_t ioctl = static_cast<uint32_t>(extra[1]);
+        if (second || args.third || args.fourth) {
+            return status(NtStatus::NotSupported);
+        }
         const uint32_t inputLength = static_cast<uint32_t>(extra[3]);
         const uint32_t outputLength = static_cast<uint32_t>(extra[5]);
+        if (!extra[0] || inputLength > micant::shared::afd::MaximumControlBuffer ||
+            outputLength > micant::shared::afd::MaximumControlBuffer) {
+            return status(NtStatus::InvalidParameter);
+        }
+        const uint32_t ioctl = static_cast<uint32_t>(extra[1]);
         const void* inputBuffer = reinterpret_cast<const void*>(extra[2]);
         void* outputBuffer = reinterpret_cast<void*>(extra[4]);
         auto* ioStatusAddress = reinterpret_cast<IoStatusBlock*>(extra[0]);
         if ((inputLength && !inputBuffer) || (outputLength && !outputBuffer) ||
             ex::ProbeForWrite(ioStatusAddress, sizeof(IoStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success ||
             (inputLength && ex::ProbeForRead(inputBuffer, inputLength, 1) != NtStatus::Success) ||
-            (outputLength && ex::ProbeForWrite(outputBuffer, outputLength, 1) != NtStatus::Success))
+            (outputLength && ex::ProbeForWrite(outputBuffer, outputLength, 1) != NtStatus::Success)) {
             return status(NtStatus::AccessViolation);
+        }
 
         uint32_t requiredAccess = 0;
         if (ioctl == micant::shared::afd::IoctlReceive ||
@@ -3717,9 +3736,17 @@ extern "C" micant::NtStatus KiSystemStartup(
     initializeBootStartDrivers(handoff);
     auto& bootNetworkStack = micant::tcpip::NetworkStack::get();
     bootNetworkStack.initialize();
-    if (bootNetworkStack.isInitialized())
+    if (bootNetworkStack.isInitialized()) {
         serialWrite("[MicaNT NDIS/TCPIP] Boot-start network adapter attached to canonical transport\r\n");
-    else
+        const auto dhcpStatus = micant::netboot::acquireBootDhcpLease();
+        if (dhcpStatus == micant::NtStatus::Success)
+            serialWrite("[MicaNT DHCP] Ring 3 DORA lease acquired through Winsock/AFD\r\n");
+        else {
+            serialWrite("[MicaNT DHCP] Ring 3 lease acquisition failed status=");
+            serialWriteNumber(static_cast<uint32_t>(dhcpStatus));
+            serialWrite("\r\n");
+        }
+    } else
         serialWrite("[MicaNT NDIS/TCPIP] No boot-start network adapter registered\r\n");
     drawExplorerDesktop();
     serialWrite("[MicaNT Explorer] Desktop and taskbar rendered\r\n");
@@ -3754,14 +3781,21 @@ extern "C" micant::NtStatus KiSystemStartup(
                     : reinterpret_cast<const micant::boot::UefiKernelHandoffV5*>(handoff)->systemTime.status)) ==
                 micant::shared::boot_time::SampleStatus::LocalTimeZoneUnspecified)
             serialWrite("[MicaNT Hal] UEFI GetTime timezone unspecified; UTC SystemTime unavailable\r\n");
-        micant::shared::time::SystemTimeFields rtc{};
-        const auto rtcStatus = micant::hal::amd64::readBootstrapRtc(rtc);
-        if (rtcStatus == micant::hal::amd64::BootstrapRtcStatus::Success)
-            serialWrite("[MicaNT Hal] Stable CMOS RTC sample read; UTC offset unknown\r\n");
-        else if (rtcStatus == micant::hal::amd64::BootstrapRtcStatus::Timeout)
-            serialWrite("[MicaNT Hal] CMOS RTC update timeout; no UTC seed\r\n");
-        else
-            serialWrite("[MicaNT Hal] CMOS RTC unavailable/invalid; no UTC seed\r\n");
+        uint64_t configuredUtc{};
+        utcSeeded = micant::hal::amd64::queryBootstrapSystemTime(configuredUtc) ==
+            micant::hal::amd64::BootstrapClockStatus::Success;
+        if (utcSeeded) {
+            serialWrite("[MicaNT Hal] UTC SystemTime seeded from configured QEMU UTC RTC\r\n");
+        } else {
+            micant::shared::time::SystemTimeFields rtc{};
+            const auto rtcStatus = micant::hal::amd64::readBootstrapRtc(rtc);
+            if (rtcStatus == micant::hal::amd64::BootstrapRtcStatus::Success)
+                serialWrite("[MicaNT Hal] Stable CMOS RTC sample read; UTC offset unknown\r\n");
+            else if (rtcStatus == micant::hal::amd64::BootstrapRtcStatus::Timeout)
+                serialWrite("[MicaNT Hal] CMOS RTC update timeout; no UTC seed\r\n");
+            else
+                serialWrite("[MicaNT Hal] CMOS RTC unavailable/invalid; no UTC seed\r\n");
+        }
     }
     const auto kuserStatus = micant::hal::amd64::initializeBootstrapKuserSharedData();
     if (kuserStatus != micant::hal::amd64::BootstrapClockStatus::Success) {

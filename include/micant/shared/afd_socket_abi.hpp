@@ -69,6 +69,12 @@ struct SocketAddressV1 {
     uint16_t Reserved;
 };
 
+struct AcceptResultV1 {
+    uint32_t Size;
+    uintptr_t SocketHandle;
+    SocketAddressV1 Remote;
+};
+
 struct DataRequestV1 {
     uint32_t Size;
     uint32_t Flags;

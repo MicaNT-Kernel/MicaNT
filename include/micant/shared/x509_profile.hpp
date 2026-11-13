@@ -436,7 +436,7 @@ struct X509Certificate {
                             parsed.dnsNames.push_back(std::move(dns));
                         } else if (name.tag == 0x87) {
                             if (name.value.size() == 4) {
-                                auto ipv4 = formatIpv4Address(name.value);
+                                auto ipv4 = asn1::formatIpv4Address(name.value);
                                 if (!ipv4.good() || ipv4.empty() || !parsed.ipAddresses.push_back(std::move(ipv4)))
                                     return false;
                             }

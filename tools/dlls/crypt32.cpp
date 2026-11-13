@@ -65,11 +65,11 @@ bool ensureBundleCapacity(size_t required, size_t preserved) noexcept {
     void* allocation{};
     size_t region = capacity;
     const auto status = native_nt::NtAllocateVirtualMemory(
-        reinterpret_cast<Handle>(~uintptr_t{0}), &allocation, 0, &region, 0x3000, 0x04);
+        static_cast<Handle>(-1), &allocation, 0, &region, 0x3000, 0x04);
     if (status != NtStatus::Success || !allocation) return false;
     if (region < required) {
         size_t cleanupSize{};
-        (void)native_nt::NtFreeVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+        (void)native_nt::NtFreeVirtualMemory(static_cast<Handle>(-1),
                                              &allocation, &cleanupSize, 0x8000);
         return false;
     }
@@ -77,10 +77,10 @@ bool ensureBundleCapacity(size_t required, size_t preserved) noexcept {
     if (g_bundle) {
         void* old = g_bundle;
         size_t releaseSize{};
-        if (native_nt::NtFreeVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+        if (native_nt::NtFreeVirtualMemory(static_cast<Handle>(-1),
                                             &old, &releaseSize, 0x8000) != NtStatus::Success) {
             size_t cleanupSize{};
-            (void)native_nt::NtFreeVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+            (void)native_nt::NtFreeVirtualMemory(static_cast<Handle>(-1),
                                                  &allocation, &cleanupSize, 0x8000);
             return false;
         }
@@ -358,7 +358,7 @@ int DllMain(void*, uint32_t reason, void*) noexcept {
     if (reason == 0 && g_bundle) { // DLL_PROCESS_DETACH
         void* allocation = g_bundle;
         size_t releaseSize{};
-        if (native_nt::NtFreeVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+        if (native_nt::NtFreeVirtualMemory(static_cast<Handle>(-1),
                                            &allocation, &releaseSize, 0x8000) == NtStatus::Success) {
             g_bundle = nullptr;
             g_bundleCapacity = g_bundleLength = g_recordCount = 0;

@@ -262,7 +262,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--network-test", action="store_true",
-        help="attach a QEMU virtio-net device and require successful miniport registration",
+        help="verify Ring 3 DHCP, DNS, TCP and certificate-validated HTTPS over QEMU virtio-net",
     )
     args = parser.parse_args()
     global BUILD_DIR
@@ -340,6 +340,13 @@ def main() -> int:
                 "xhci_oem_boot",
                 "i210_oem_boot",
                 "virtio_net_oem_boot",
+                "ws2_32_service_boot",
+                "dnsapi_service_boot",
+                "crypt32_service_boot",
+                "winhttp_service_boot",
+                "svchost_boot",
+                "network_probe_boot",
+                "https_probe_boot",
                 "file_image_boot",
             ]
         )

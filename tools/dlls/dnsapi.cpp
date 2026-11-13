@@ -128,6 +128,16 @@ bool decodeName(const uint8_t* packet,size_t packetSize,size_t& offset,char* out
     }
     return false;
 }
+bool validateQuestion(const uint8_t* packet, size_t packetSize, const char* name,
+                      uint16_t qtype) noexcept {
+    if (!packet || packetSize < 12 || read16(packet + 4) != 1) return false;
+    size_t offset = 12;
+    char question[256]{};
+    return decodeName(packet, packetSize, offset, question, sizeof(question)) &&
+        offset <= packetSize && packetSize - offset >= 4 &&
+        read16(packet + offset) == qtype && read16(packet + offset + 2) == DnsIn &&
+        equalNoCase(question, name);
+}
 bool acquire(volatile uint8_t* lock) noexcept { uint8_t expected=0;return __atomic_compare_exchange_n(lock,&expected,1,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED); }
 void release(volatile uint8_t* lock) noexcept { __atomic_store_n(lock,0,__ATOMIC_RELEASE); }
 
@@ -189,7 +199,10 @@ uint32_t performQuery(const char* name,uint16_t qtype,uint8_t* packet,size_t& pa
         closesocket(tcp);
         packetSize=message;
     }
-    if(read16(packet)!=id||(read16(packet+2)&0x8000)==0||(read16(packet+2)&0x7a00)!=0||read16(packet+4)!=1){return DnsServerFailure;}
+    const uint16_t responseFlags = read16(packet + 2);
+    if (read16(packet) != id || (responseFlags & 0x8000) == 0 ||
+        (responseFlags & 0x7a00) != 0 || (responseFlags & 0x0040) != 0 ||
+        !validateQuestion(packet, packetSize, name, qtype)) return DnsServerFailure;
     uint8_t rcode=read16(packet+2)&0xf;
     if(rcode==3){return DnsNameError;}
     if(rcode){return DnsServerFailure;}
@@ -308,8 +321,9 @@ uint32_t query(const char* name,uint16_t qtype,bool wide,void** output,Deadline*
         }
         if (status || !head) {
             for (Slot* slot = head; slot;) {
-                void* next = wide ? reinterpret_cast<RecordW*>(slot->publicRecord)->next :
-                                    reinterpret_cast<RecordA*>(slot->publicRecord)->next;
+                void* next = wide
+                    ? static_cast<void*>(reinterpret_cast<RecordW*>(slot->publicRecord)->next)
+                    : static_cast<void*>(reinterpret_cast<RecordA*>(slot->publicRecord)->next);
                 releaseSlot(slot);
                 slot = nullptr;
                 if (next) for (auto& candidate : g_slots)

@@ -740,7 +740,7 @@ struct SocketEndpoint {
     // Each blocking operation owns its timer/DPC. Multiple readers or writers
     // must not overwrite one another's timeout or consume their notification.
     static constexpr size_t WaitersPerKind = 4;
-    std::array<WaitSlot, 3 * WaitersPerKind> waitSlots{};
+    std::array<WaitSlot, 4 * WaitersPerKind> waitSlots{};
     std::atomic<bool> closed{false};
 #endif
     bool isBound{false};
@@ -748,6 +748,7 @@ struct SocketEndpoint {
     bool acceptReturned{false};
     int listenSocketId{0};
     uint16_t listenBacklog{16};
+    std::atomic<uint32_t> establishedAccepts{0};
 
 #if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
     void signalReceiveEvent() noexcept {
@@ -1725,6 +1726,9 @@ public:
             if (ep->listenSocketId == listenSockId &&
                 ep->tcpState == TcpState::Established && !ep->acceptReturned) {
                 ep->acceptReturned = true;
+                const auto ready = listenEp->establishedAccepts.load(std::memory_order_acquire);
+                if (!ready) __builtin_trap();
+                listenEp->establishedAccepts.fetch_sub(1, std::memory_order_acq_rel);
                 outRemoteIp = ep->remoteIp;
                 outRemotePort = ep->remotePort;
                 return id;
@@ -2040,7 +2044,7 @@ public:
             endpoint->signalReceiveEvent();
         }
     }
-    enum class SocketWaitKind : uint8_t { Receive, Connected, Writable };
+    enum class SocketWaitKind : uint8_t { Receive, Connected, Writable, Accept };
     [[nodiscard]] NtStatus waitSocketCondition(void* waitObject, uint32_t timeoutMilliseconds,
                                                 SocketWaitKind kind) noexcept {
         auto* endpoint = static_cast<SocketEndpoint*>(waitObject);
@@ -2097,11 +2101,11 @@ public:
                     break;
                 } else if (kind == SocketWaitKind::Connected) {
                     ready = endpoint->tcpState == TcpState::Established;
-                } else {
+                } else if (kind == SocketWaitKind::Writable) {
                     ready = (endpoint->tcpState == TcpState::Established ||
                              endpoint->tcpState == TcpState::CloseWait) &&
                             !endpoint->retransmitPending && endpoint->peerWindow != 0;
-                }
+                } else ready = endpoint->establishedAccepts.load(std::memory_order_acquire) != 0;
             }
             if (ready) break;
             if (timeoutMilliseconds && slot.timer.event.readState()) {
@@ -2130,6 +2134,9 @@ public:
     }
     [[nodiscard]] NtStatus waitSocketWritable(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
         return waitSocketCondition(waitObject, timeoutMilliseconds, SocketWaitKind::Writable);
+    }
+    [[nodiscard]] NtStatus waitSocketAccept(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
+        return waitSocketCondition(waitObject, timeoutMilliseconds, SocketWaitKind::Accept);
     }
 #endif
 
@@ -2765,6 +2772,7 @@ private:
         bool removeClosed = false;
         bool sendReset = false;
         bool notifyReceiver = false;
+        IntrusivePtr<SocketEndpoint> notifyListener;
         Ipv4Address resendDst{};
         std::vector<uint8_t> duplicateSynAck;
         {
@@ -2872,6 +2880,13 @@ private:
                     endpoint->pendingSegment.clear();
                     endpoint->tcpState = TcpState::Established;
                     notifyReceiver = true;
+                    if (endpoint->listenSocketId) {
+                        const auto listener = sockets_.find(endpoint->listenSocketId);
+                        if (listener != sockets_.end()) {
+                            listener->second->establishedAccepts.fetch_add(1, std::memory_order_acq_rel);
+                            notifyListener = listener->second;
+                        }
+                    }
                 } else if (endpoint->tcpState != TcpState::Established &&
                            endpoint->tcpState != TcpState::CloseWait &&
                            endpoint->tcpState != TcpState::FinWait1 &&
@@ -3002,6 +3017,7 @@ private:
         }
 #if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
         if (endpoint && notifyReceiver) endpoint->signalReceiveEvent();
+        if (notifyListener) notifyListener->signalReceiveEvent();
 #endif
         if (sendReset) {
             (void)emitTcpSegment(dstIp, srcIp, dstPort, srcPort, 0,

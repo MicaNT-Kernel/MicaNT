@@ -148,7 +148,7 @@ public:
         size_t region = bytes;
         constexpr uint32_t MEM_COMMIT_RESERVE = 0x3000;
         constexpr uint32_t PAGE_READWRITE = 0x04;
-        if (native_nt::NtAllocateVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+        if (native_nt::NtAllocateVirtualMemory(static_cast<Handle>(-1),
                 &base, 0, &region, MEM_COMMIT_RESERVE, PAGE_READWRITE) != NtStatus::Success || !base)
             return fail();
         auto* replacement = static_cast<T*>(base);
@@ -161,7 +161,7 @@ public:
                     void* failedBase = replacement;
                     size_t failedRegion = 0;
                     constexpr uint32_t MEM_RELEASE = 0x8000;
-                    (void)native_nt::NtFreeVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+                    (void)native_nt::NtFreeVirtualMemory(static_cast<Handle>(-1),
                         &failedBase, &failedRegion, MEM_RELEASE);
                     return fail();
                 }
@@ -304,7 +304,7 @@ private:
         size_t region = 0;
         void* base = p;
         constexpr uint32_t MEM_RELEASE = 0x8000;
-        return native_nt::NtFreeVirtualMemory(reinterpret_cast<Handle>(~uintptr_t{0}),
+        return native_nt::NtFreeVirtualMemory(static_cast<Handle>(-1),
             &base, &region, MEM_RELEASE) == NtStatus::Success;
     }
     bool fail() noexcept { good_ = false; return false; }
@@ -382,6 +382,13 @@ public:
         if (!text) return *this;
         return append(std::basic_string_view<CharT>(text, count));
     }
+    NativeBoundedString& append(const CharT* text) noexcept {
+        if (!text) return *this;
+        size_t count{};
+        while (count <= MaximumCharacters && text[count]) ++count;
+        if (count > MaximumCharacters) { markFailure(); return *this; }
+        return append(std::basic_string_view<CharT>(text, count));
+    }
     NativeBoundedString& append(const NativeBoundedString& text) noexcept { return append(text.view()); }
     void assign(std::basic_string_view<CharT> text) noexcept {
         storage_.clear();
@@ -440,6 +447,13 @@ public:
     [[nodiscard]] bool ends_with(std::basic_string_view<CharT> suffix) const noexcept { return view().ends_with(suffix); }
     friend bool operator==(const NativeBoundedString& a, std::basic_string_view<CharT> b) noexcept { return a.view() == b; }
     friend bool operator==(std::basic_string_view<CharT> a, const NativeBoundedString& b) noexcept { return a == b.view(); }
+    friend bool operator==(const NativeBoundedString& a, const CharT* b) noexcept {
+        if (!b) return a.empty();
+        size_t count{};
+        while (count <= MaximumCharacters && b[count]) ++count;
+        return count <= MaximumCharacters && a.view() == std::basic_string_view<CharT>(b, count);
+    }
+    friend bool operator==(const CharT* a, const NativeBoundedString& b) noexcept { return b == a; }
     friend bool operator==(const NativeBoundedString& a, const NativeBoundedString& b) noexcept { return a.view() == b.view(); }
 
 private:

@@ -15,11 +15,13 @@ void cancelSocketWaitObject(void* waitObject) noexcept;
 int32_t waitSocketData(void* waitObject, uint32_t timeoutMilliseconds) noexcept;
 int32_t waitSocketConnected(void* waitObject, uint32_t timeoutMilliseconds) noexcept;
 int32_t waitSocketWritable(void* waitObject, uint32_t timeoutMilliseconds) noexcept;
+int32_t waitSocketAccept(void* waitObject, uint32_t timeoutMilliseconds) noexcept;
 int createSocket(int addressFamily, int socketType, int protocol) noexcept;
 void closeSocket(int socketId) noexcept;
 bool bindSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
 bool connectSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port, uint64_t deadline100ns) noexcept;
 bool listenSocket(int socketId, int backlog) noexcept;
+int acceptSocket(int socketId, uint32_t* remoteIpv4NetworkOrder, uint16_t* remotePort) noexcept;
 int sendSocket(int socketId, const void* data, size_t length, uint64_t deadline100ns) noexcept;
 int sendToSocket(int socketId, const void* data, size_t length,
                  uint32_t ipv4NetworkOrder, uint16_t port, uint64_t deadline100ns) noexcept;

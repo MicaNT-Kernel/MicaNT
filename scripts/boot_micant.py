@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from fat32_image import create_fat32_image, create_gpt_disk_image
+from m10_tls_peer import M10TlsPeer
 
 from verify_kernel_architecture import validate_build_manifest
 
@@ -388,8 +389,21 @@ def run_qemu(
         # loader opens the real DLLs from there for file-backed SEC_IMAGE.
         system32_dir = esp / "MicaNT" / "System32"
         system32_dir.mkdir(parents=True)
+        service_host = ROOT / "build" / "svchost.exe"
+        shutil.copyfile(service_host, system32_dir / service_host.name)
+        if network_test:
+            shutil.copyfile(ROOT / "build" / "network-probe.exe", system32_dir / "network-probe.exe")
+            shutil.copyfile(ROOT / "build" / "https-probe.exe", system32_dir / "https-probe.exe")
+            (system32_dir / "m10-network-test.flag").write_bytes(b"M10\n")
         for source in sorted((ROOT / "build" / "system32").glob("*.dll")):
             shutil.copyfile(source, system32_dir / source.name)
+        shutil.copyfile(ROOT / "build" / "network-system32" / "ws2_32.dll",
+                        system32_dir / "ws2_32.dll")
+        shutil.copyfile(ROOT / "build" / "network-system32" / "dnsapi.dll",
+                        system32_dir / "dnsapi.dll")
+        for service_dll in ("crypt32.dll", "winhttp.dll"):
+            shutil.copyfile(ROOT / "build" / "network-system32" / service_dll,
+                            system32_dir / service_dll)
         # The Ps loader rejects a DLL with a DllMain entry point because DLL
         # initializers are not part of M4. Use the entry-point-free NTDLL
         # build for the file-backed image verification volume.
@@ -402,6 +416,7 @@ def run_qemu(
             shutil.copyfile(image_exe, system32_dir / "fileimage.exe")
         usb_proof = system32_dir / "micant-usb-proof.txt"
         usb_proof.write_bytes(b"MicaNT USB mass-storage FAT32 post-EBS proof v1\n")
+        tls_peer = M10TlsPeer(esp).start() if network_test else None
         fat_volume = temp / "ahci-fat32-volume.img"
         ahci_image = temp / "ahci-gpt-fat32.img"
         create_fat32_image(esp, fat_volume)
@@ -409,6 +424,7 @@ def run_qemu(
         log_directory = diagnostics_dir if diagnostics_dir is not None else temp
         serial_path = log_directory / "serial.log"
         qemu_output_path = log_directory / "qemu.log"
+        network_capture_path = log_directory / "network.pcap"
 
         command = [
             qemu,
@@ -434,10 +450,30 @@ def run_qemu(
             "-no-reboot",
             "-no-shutdown",
         ]
+        network_peer = None
+        network_inbound_port = None
         if network_test:
+            network_peer = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            network_peer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                network_peer.bind(("0.0.0.0", 18080))
+                network_peer.listen(1)
+                network_peer.setblocking(False)
+            except OSError as error:
+                network_peer.close()
+                raise RuntimeError(f"Cannot bind controlled TCP peer on port 18080: {error}") from error
+            port_probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                port_probe.bind(("127.0.0.1", 0))
+                network_inbound_port = port_probe.getsockname()[1]
+            finally:
+                port_probe.close()
             command.extend([
-                "-netdev", "user,id=micant_net,restrict=on",
+                "-netdev",
+                f"user,id=micant_net,restrict=on,hostfwd=tcp:127.0.0.1:{network_inbound_port}-:18081",
                 "-device", "virtio-net-pci,netdev=micant_net,disable-legacy=on",
+                "-object",
+                f"filter-dump,id=micant_net_capture,netdev=micant_net,file={network_capture_path}",
             ])
         if usb_test:
             # Exercise the native controller and class drivers after
@@ -455,6 +491,8 @@ def run_qemu(
         complete_since = None
         surface_verified = False
         usb_input_sent = False
+        network_outbound_peer_done = False
+        network_inbound_peer_done = False
 
         with qemu_output_path.open("w", encoding="utf-8") as qemu_output:
             process = subprocess.Popen(
@@ -481,13 +519,75 @@ def run_qemu(
                         if serial_path.exists()
                         else ""
                     )
+                    if network_test and network_peer is not None and not network_outbound_peer_done:
+                        try:
+                            peer_connection, _ = network_peer.accept()
+                        except BlockingIOError:
+                            peer_connection = None
+                        if peer_connection is not None:
+                            with peer_connection:
+                                peer_connection.settimeout(5)
+                                expected = b"MICANT-M10-PING"
+                                received = bytearray()
+                                while len(received) < len(expected):
+                                    block = peer_connection.recv(len(expected) - len(received))
+                                    if not block:
+                                        break
+                                    received.extend(block)
+                                if bytes(received) != expected:
+                                    raise RuntimeError("Ring 3 TCP probe sent an unexpected payload")
+                                peer_connection.sendall(b"MICANT-M10-PONG")
+                            network_outbound_peer_done = True
+                    if (network_test and not network_inbound_peer_done and network_inbound_port and
+                            "MicaNT guest TCP listener ready." in serial_log):
+                        try:
+                            with socket.create_connection(("127.0.0.1", network_inbound_port), timeout=0.5) as peer:
+                                peer.settimeout(5)
+                                peer.sendall(b"MICA-ACCEPT-PING\n")
+                                expected = b"MICA-ACCEPT-PONG\n"
+                                received = bytearray()
+                                while len(received) < len(expected):
+                                    block = peer.recv(len(expected) - len(received))
+                                    if not block:
+                                        break
+                                    received.extend(block)
+                                if bytes(received) != expected:
+                                    raise RuntimeError("Ring 3 TCP accept path returned an unexpected payload")
+                            network_inbound_peer_done = True
+                        except (ConnectionRefusedError, TimeoutError, OSError):
+                            pass
                     if network_test and "Boot-start driver failed: virtio_net.sys" in serial_log:
                         failure = next((line for line in serial_log.splitlines()
                                         if "Boot-start driver failed: virtio_net.sys" in line),
                                        "VirtIO-net DriverEntry failed")
                         raise RuntimeError(f"QEMU virtio-net miniport failed: {failure}")
-                    if network_test and "Boot-start .sys DriverEntry succeeded: virtio_net.sys" in serial_log:
-                        print("QEMU virtio-net miniport registered successfully.", flush=True)
+                    if network_test and "[MicaNT DHCP] Ring 3 lease acquisition failed status=" in serial_log:
+                        failure = next((line for line in serial_log.splitlines()
+                                        if "[MicaNT DHCP] Ring 3 lease acquisition failed status=" in line),
+                                       "Ring 3 DHCP client failed")
+                        raise RuntimeError(f"QEMU DHCP integration failed: {failure}")
+                    if network_test and "DNS A resolution failed through Winsock/AFD." in serial_log:
+                        raise RuntimeError("QEMU Ring 3 DNS A resolution failed")
+                    if network_test and "M10 TCP client or listen/accept payload validation failed" in serial_log:
+                        raise RuntimeError("QEMU Ring 3 TCP exchange failed")
+                    if network_test and "M10 HTTPS probe failed:" in serial_log:
+                        raise RuntimeError("QEMU Ring 3 HTTPS validation or hostname rejection failed")
+                    if network_test and tls_peer is not None and tls_peer.error is not None:
+                        raise RuntimeError(f"Controlled M10 TLS peer failed: {tls_peer.error}")
+                    if (network_test and
+                            "[MicaNT DHCP] Ring 3 DORA lease acquired through Winsock/AFD" in serial_log and
+                            "DNS A record for QEMU host resolved through Winsock/AFD." in serial_log and
+                            "M10 TCP client exchange passed" in serial_log and
+                            "M10 TCP listen/accept exchange passed" in serial_log and
+                            "M10 HTTPS trusted payload passed" in serial_log and
+                            "M10 HTTPS mismatched host rejected" in serial_log and
+                            "M10 HTTPS unknown issuer rejected" in serial_log and
+                            "M10 HTTPS expired certificate rejected" in serial_log and
+                            "M10 HTTPS probe passed" in serial_log and
+                            network_outbound_peer_done and network_inbound_peer_done):
+                        if not network_capture_path.is_file() or network_capture_path.stat().st_size <= 24:
+                            raise RuntimeError("QEMU M10 test completed without captured NIC packets")
+                        print("QEMU Ring 3 DHCP, DNS, TCP Winsock/AFD and HTTPS certificate validation passed.", flush=True)
                         return
                     if (verify_usb_input and not usb_input_sent and
                             "USB host: matched HID interrupt interface" in serial_log):
@@ -603,6 +703,10 @@ def run_qemu(
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait()
+                if network_peer is not None:
+                    network_peer.close()
+                if tls_peer is not None:
+                    tls_peer.close()
 
 
 def main() -> int:

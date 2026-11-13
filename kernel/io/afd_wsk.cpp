@@ -22,6 +22,7 @@ struct Endpoint {
     std::atomic<uint32_t> receiveTimeoutMilliseconds{0};
     std::atomic<uint32_t> sendTimeoutMilliseconds{0};
     std::atomic<uint32_t> connectTimeoutMilliseconds{30000};
+    std::atomic<bool> listening{false};
     std::atomic<bool> closing{false};
     std::atomic<bool> socketClosed{false};
     void* socketWaitObject{};
@@ -75,6 +76,37 @@ Endpoint* endpointFor(const io::FileObject* file) noexcept {
     auto* endpoint = static_cast<Endpoint*>(file->context());
     return endpoint->magic == EndpointMagic && endpoint->family == AddressFamilyInet &&
         !endpoint->closing.load(std::memory_order_acquire) ? endpoint : nullptr;
+}
+
+NtStatus createEndpointForSocket(int socketId, uint32_t family, uint32_t type,
+                                 uint32_t protocol, uint32_t desiredAccess,
+                                 Handle* handle) noexcept {
+    if (!handle || socketId <= 0) {
+        if (socketId > 0) tcpip::kernel_api::closeSocket(socketId);
+        return NtStatus::InvalidParameter;
+    }
+    void* waitObject = tcpip::kernel_api::referenceSocketWaitObject(socketId);
+    if (!waitObject) {
+        tcpip::kernel_api::closeSocket(socketId);
+        return NtStatus::DeviceNotReady;
+    }
+    auto* state = new (std::nothrow_t{}) Endpoint{};
+    if (!state) {
+        tcpip::kernel_api::releaseSocketWaitObject(waitObject);
+        tcpip::kernel_api::closeSocket(socketId);
+        return NtStatus::NoMemory;
+    }
+    state->socketWaitObject = waitObject;
+    state->socketId = socketId;
+    state->family = family;
+    state->type = type;
+    state->protocol = protocol;
+    static constexpr char16_t name[] = u"\\Device\\Afd\\Endpoint";
+    io::FileBackend backend{state, 1, std::u16string_view(name, (sizeof(name) / sizeof(name[0])) - 1),
+        endpointRead, endpointRelease, false, endpointLastHandleClosed};
+    const NtStatus status = io::IoCreateDeviceFile(handle, desiredAccess, &g_AfdDevice, backend);
+    if (status != NtStatus::Success) endpointRelease(state);
+    return status;
 }
 
 NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
@@ -131,8 +163,51 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
         if (inputLength != sizeof(uint32_t)) status = NtStatus::InfoLengthMismatch;
         else { int32_t backlog{}; std::memcpy(&backlog, input, sizeof(backlog));
             if (endpoint->type != SocketStream || backlog < 0) status = NtStatus::InvalidParameter;
-            else status = tcpip::kernel_api::listenSocket(endpoint->socketId, backlog)
-                ? NtStatus::Success : NtStatus::Unsuccessful; }
+            else {
+                const bool started = tcpip::kernel_api::listenSocket(endpoint->socketId, backlog);
+                status = started ? NtStatus::Success : NtStatus::Unsuccessful;
+                if (started) endpoint->listening.store(true, std::memory_order_release);
+            } }
+    } else if (code == IoctlAccept) {
+        if (inputLength != sizeof(uint32_t) || outputLength != sizeof(AcceptResultV1) || !output) {
+            status = NtStatus::InfoLengthMismatch;
+        } else if (endpoint->type != SocketStream ||
+                   !endpoint->listening.load(std::memory_order_acquire)) {
+            status = NtStatus::InvalidParameter;
+        } else {
+            uint32_t timeout{};
+            std::memcpy(&timeout, input, sizeof(timeout));
+            uint64_t deadline{};
+            if (!makeDeadline(timeout, deadline)) status = NtStatus::DeviceNotReady;
+            else for (;;) {
+                uint32_t remaining{};
+                status = remainingDeadline(deadline, remaining);
+                if (status != NtStatus::Success && deadline) break;
+                const auto ready = static_cast<NtStatus>(tcpip::kernel_api::waitSocketAccept(
+                    endpoint->socketWaitObject, remaining));
+                if (ready != NtStatus::Success) { status = ready; break; }
+                uint32_t remoteIp{};
+                uint16_t remotePort{};
+                const int accepted = tcpip::kernel_api::acceptSocket(endpoint->socketId,
+                    &remoteIp, &remotePort);
+                if (accepted < 0) continue; // another waiter consumed the ready child
+                {
+                    Handle acceptedHandle{};
+                    status = createEndpointForSocket(accepted, AddressFamilyInet,
+                        SocketStream, ProtocolTcp, 0x00100003u, &acceptedHandle);
+                    if (status == NtStatus::Success) {
+                        AcceptResultV1 result{};
+                        result.Size = sizeof(result);
+                        result.SocketHandle = static_cast<uintptr_t>(acceptedHandle);
+                        result.Remote = {sizeof(SocketAddressV1), AddressFamilyInet,
+                            remoteIp, remotePort, 0};
+                        std::memcpy(output, &result, sizeof(result));
+                        information = sizeof(result);
+                    }
+                }
+                break;
+            }
+        }
     } else if (code == IoctlSend || code == IoctlSendTo) {
         if (inputLength < sizeof(DataRequestV1)) status = NtStatus::InfoLengthMismatch;
         else {
@@ -387,20 +462,9 @@ NtStatus IoAfdCreateEndpointHandle(Handle* handle, std::wstring_view path, uint3
     if (!tcpip::kernel_api::isInitialized()) return NtStatus::DeviceNotReady;
     const int id = tcpip::kernel_api::createSocket(request.AddressFamily, request.SocketType, request.Protocol);
     if (id <= 0) return NtStatus::InsufficientResources;
-    void* waitObject = tcpip::kernel_api::referenceSocketWaitObject(id);
-    if (!waitObject) { tcpip::kernel_api::closeSocket(id); return NtStatus::DeviceNotReady; }
-    auto* state = new (std::nothrow_t{}) Endpoint{};
-    if (!state) {
-        tcpip::kernel_api::closeSocket(id);
-        tcpip::kernel_api::releaseSocketWaitObject(waitObject);
-        return NtStatus::NoMemory;
-    }
-    state->socketWaitObject = waitObject;
-    state->socketId = id; state->family = request.AddressFamily; state->type = request.SocketType; state->protocol = request.Protocol;
-    static constexpr char16_t name[] = u"\\Device\\Afd\\Endpoint";
-    io::FileBackend backend{state, 1, std::u16string_view(name, (sizeof(name) / sizeof(name[0])) - 1),
-        endpointRead, endpointRelease, false, endpointLastHandleClosed};
-    return io::IoCreateDeviceFile(handle, desiredAccess, &g_AfdDevice, backend);
+    const auto createStatus = createEndpointForSocket(id, request.AddressFamily,
+        request.SocketType, request.Protocol, desiredAccess, handle);
+    return createStatus;
 }
 
 bool IoAfdIsEndpointFile(const io::FileObject* fileObject) noexcept { return endpointFor(fileObject) != nullptr; }

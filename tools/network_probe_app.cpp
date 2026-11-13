@@ -89,7 +89,7 @@ bool parseEndpoint(const char* command, uint32_t& address, uint16_t& port) noexc
 }
 
 [[noreturn]] void finish(uint32_t status) noexcept {
-    (void)syscall(0x01, 0, status);
+    (void)syscall(0x2c, ~uint64_t{0}, status);
     for (;;) __asm__ __volatile__("pause");
 }
 }

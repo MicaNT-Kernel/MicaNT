@@ -71,9 +71,11 @@ bool validSocket(uintptr_t socket) noexcept {
     return true;
 }
 bool validAddress(const sockaddr_in* address, int length) noexcept {
-    if (!address || length < static_cast<int>(sizeof(sockaddr_in)) || address->family != 2) {
+    if (!address) { lastError() = 10014; return false; }
+    if (length < static_cast<int>(sizeof(sockaddr_in))) {
         lastError() = WsaInvalidArgument; return false;
     }
+    if (address->family != 2) { lastError() = 10047; return false; }
     return true;
 }
 }
@@ -215,6 +217,82 @@ __declspec(dllexport) int connect(uintptr_t socketHandle, const sockaddr_in* add
         static_cast<uint16_t>((address->port << 8) | (address->port >> 8)), 0};
     const auto status = control(static_cast<Handle>(socketHandle), IoctlConnect, &request, sizeof(request), nullptr, 0);
     return status == NtStatus::Success ? 0 : setError(status);
+}
+
+__declspec(dllexport) int listen(uintptr_t socketHandle, int backlog) noexcept {
+    if (!validSocket(socketHandle)) return SocketError;
+    if (backlog < 0) { lastError() = WsaInvalidArgument; return SocketError; }
+    if (backlog > 128) backlog = 128;
+    const auto status = control(static_cast<Handle>(socketHandle), IoctlListen,
+        &backlog, sizeof(backlog), nullptr, 0);
+    return status == NtStatus::Success ? 0 : setError(status);
+}
+
+__declspec(dllexport) uintptr_t accept(uintptr_t socketHandle, sockaddr_in* remote,
+                                        int* remoteLength) noexcept {
+    if (!validSocket(socketHandle)) return InvalidSocket;
+    if ((remote && !remoteLength) || (remote && *remoteLength < static_cast<int>(sizeof(*remote)))) {
+        lastError() = WsaInvalidArgument;
+        return InvalidSocket;
+    }
+    size_t slotIndex = 64;
+    uint64_t generation{};
+    lockSocketTable();
+    if (!startupReferences) {
+        unlockSocketTable();
+        lastError() = WsaNotInitialised;
+        return InvalidSocket;
+    }
+    for (size_t i = 0; i < 64; ++i) {
+        if (!socketSlots[i].pending && !socketSlots[i].handle) {
+            slotIndex = i;
+            socketSlots[i].pending = true;
+            generation = startupGeneration;
+            socketSlots[i].generation = generation;
+            break;
+        }
+    }
+    unlockSocketTable();
+    if (slotIndex == 64) { lastError() = WsaNoBuffers; return InvalidSocket; }
+    const auto abandon = [slotIndex]() noexcept {
+        lockSocketTable(); socketSlots[slotIndex] = {}; unlockSocketTable();
+    };
+    const uint32_t timeout = 0;
+    AcceptResultV1 result{};
+    IoStatusBlock iosb{};
+    const auto status = control(static_cast<Handle>(socketHandle), IoctlAccept,
+        &timeout, sizeof(timeout), &result, sizeof(result), &iosb);
+    if (status != NtStatus::Success || iosb.information != sizeof(result) ||
+        result.Size != sizeof(result) || !result.SocketHandle ||
+        result.Remote.Size != sizeof(SocketAddressV1) ||
+        result.Remote.AddressFamily != AddressFamilyInet) {
+        abandon();
+        if (status != NtStatus::Success) setError(status);
+        else lastError() = WsaConnectionReset;
+        return InvalidSocket;
+    }
+    lockSocketTable();
+    const bool stillActive = startupReferences && startupGeneration == generation;
+    if (stillActive) {
+        socketSlots[slotIndex].handle = result.SocketHandle;
+        socketSlots[slotIndex].type = SocketStream;
+        socketSlots[slotIndex].pending = false;
+    } else socketSlots[slotIndex] = {};
+    unlockSocketTable();
+    if (!stillActive) {
+        (void)native_nt::NtClose(static_cast<Handle>(result.SocketHandle));
+        lastError() = WsaNotInitialised;
+        return InvalidSocket;
+    }
+    if (remote) {
+        std::memset(remote, 0, sizeof(*remote));
+        remote->family = static_cast<int16_t>(result.Remote.AddressFamily);
+        remote->address = result.Remote.Ipv4AddressNetworkOrder;
+        remote->port = static_cast<uint16_t>((result.Remote.PortHostOrder << 8) |
+                                             (result.Remote.PortHostOrder >> 8));
+        *remoteLength = sizeof(*remote);
+    } else if (remoteLength) *remoteLength = 0;
+    return result.SocketHandle;
 }
 
 __declspec(dllexport) int send(uintptr_t socketHandle, const char* buffer, int length, int flags) noexcept {

@@ -1041,7 +1041,6 @@ inline BOOL WINAPI WinHttpSendRequest(
     if (hasContentLength && chunked) return 0;
     const size_t bodyStart = headerEnd + 4;
     const size_t wireBodyLength = rawResponse.size() - bodyStart;
-    constexpr size_t MaximumResponseBytes = 8 * 1024 * 1024;
     // HEAD, 204 and 304 responses have no message body. In particular the
     // Content-Length of a HEAD/304 response describes a hypothetical GET,
     // not bytes that must be present on this connection.
@@ -1068,13 +1067,13 @@ inline BOOL WINAPI WinHttpSendRequest(
             cursor = lineEnd + 2;
             if (!chunkLength) {
                 const size_t trailerEnd = rawResponse.find("\r\n\r\n", cursor);
-                if (cursor + 2 == rawResponse.size() && rawResponse.compare(cursor, 2, "\r\n") == 0) break;
+                if (cursor + 2 == rawResponse.size() && std::memcmp(rawResponse.data() + cursor, "\r\n", 2) == 0) break;
                 if (trailerEnd == micant::shared::AnsiString::npos || trailerEnd + 4 != rawResponse.size()) return 0;
                 break;
             }
             if (chunkLength > MaximumResponseBytes - req->responseBody.size() ||
                 chunkLength > rawResponse.size() - cursor || rawResponse.size() - cursor - chunkLength < 2 ||
-                rawResponse.compare(cursor + chunkLength, 2, "\r\n") != 0) return 0;
+                std::memcmp(rawResponse.data() + cursor + chunkLength, "\r\n", 2) != 0) return 0;
             req->responseBody.insert(req->responseBody.end(), rawResponse.data() + cursor,
                 rawResponse.data() + cursor + chunkLength);
             if (!req->responseBody.good()) return 0;
