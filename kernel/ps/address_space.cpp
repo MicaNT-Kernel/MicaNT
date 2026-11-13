@@ -925,7 +925,10 @@ NtStatus EThread::initializeUserWithTls(EProcess& process, uintptr_t entry, size
     teb->uniqueThreadId = thread_->tid;
     userEntry_ = entry;
     userInterruptible_ = interruptible;
-    userStackPointer_ = userStack_ + stackSize - 128;
+    // Entering a PE image is ABI-equivalent to a call target: RSP is 8 mod 16
+    // after the caller's return address. The bootstrap iret does not push that
+    // return address, so reserve 136 bytes from the aligned stack top.
+    userStackPointer_ = userStack_ + stackSize - 136;
     thread_->tebAddress = userTeb_;
     thread_->previousUserMode = true;
     return NtStatus::Success;

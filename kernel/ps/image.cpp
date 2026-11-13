@@ -1113,7 +1113,9 @@ NtStatus validateProtectionLayout(const pe::PeImageView64& view) noexcept {
 NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_t> file,
                                    std::u16string_view fullPath) noexcept {
     ob::detail::HandleTableGuard guard;
-    if (!active(*this) || terminating_ || imagesFinalized_) return NtStatus::InvalidParameter;
+    if (!active(*this) || terminating_ || imagesFinalized_) {
+        return NtStatus::InvalidParameter;
+    }
     if (fullPath.size() > (UINT16_MAX - sizeof(char16_t)) / sizeof(char16_t) ||
         fullPath.size() > mm::PageSize4KB / sizeof(char16_t) - 1) return NtStatus::BufferTooSmall;
     if (file.empty()) return NtStatus::InvalidImageFormat;
@@ -1121,7 +1123,9 @@ NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_
         !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(name.data()), name.size(), false) ||
         !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(file.data()), file.size(), false) ||
         (!fullPath.empty() && !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(fullPath.data()),
-                                        fullPath.size() * sizeof(char16_t), false))) return NtStatus::InvalidParameter;
+                                        fullPath.size() * sizeof(char16_t), false))) {
+        return NtStatus::InvalidParameter;
+    }
     pe::PeImageView64 view;
     auto status = view.inspect(file);
     if (status != NtStatus::Success) return status;
@@ -1170,8 +1174,27 @@ NtStatus EProcess::loadNativeImage(std::string_view name, std::span<const uint8_
         fullPath = {copiedPath.get(), fullPath.size()};
     }
     uintptr_t target = base;
-    status = sys::mapBootstrapImageView(addressSpace_, target, size);
+    const bool preferredInWindow = target >= hal::amd64::BootstrapManagedBase &&
+        target - hal::amd64::BootstrapManagedBase < hal::amd64::BootstrapManagedSize &&
+        size <= hal::amd64::BootstrapManagedSize -
+            (target - hal::amd64::BootstrapManagedBase);
+    status = preferredInWindow
+        ? sys::mapBootstrapImageView(addressSpace_, target, size)
+        : NtStatus::Conflict;
+    const bool relocatedView = status == NtStatus::Conflict;
+    if (relocatedView) {
+        target = 0;
+        status = sys::mapBootstrapImageView(addressSpace_, target, size);
+    }
     if (status != NtStatus::Success) return status;
+    if (!hal::amd64::bootstrapUserRange(target, size, false)) {
+        (void)addressSpace_.unmapSharedPages(target, true);
+        return NtStatus::InvalidImageFormat;
+    }
+    // addModule maps the PE bytes into the user VAD and applies base
+    // relocations as one operation. At this point the Mm staging view is
+    // still zero-filled; relocating it before that copy would parse an empty
+    // relocation block and reject otherwise valid images.
     status = imageSet->addModule(name, file, {reinterpret_cast<uint8_t*>(target), size}, target);
     if (status != NtStatus::Success) {
         (void)addressSpace_.unmapSharedPages(target, true);

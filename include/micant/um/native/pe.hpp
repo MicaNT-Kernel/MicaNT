@@ -29,6 +29,7 @@ inline constexpr uint16_t IMAGE_FILE_EXECUTABLE_IMAGE   = 0x0002;
 inline constexpr uint16_t IMAGE_FILE_DLL                = 0x2000;
 inline constexpr uint16_t IMAGE_FILE_RELOCS_STRIPPED    = 0x0001;
 inline constexpr uint16_t IMAGE_FILE_LARGE_ADDRESS_AWARE = 0x0020;
+inline constexpr uint16_t IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 0x0040;
 inline constexpr uint16_t IMAGE_SUBSYSTEM_WINDOWS_GUI   = 2;
 inline constexpr uint16_t IMAGE_SUBSYSTEM_WINDOWS_CUI   = 3;
 inline constexpr uint32_t IMAGE_NUMBEROF_DIRECTORY_ENTRIES = 16;
@@ -461,8 +462,15 @@ public:
             return NtStatus::InvalidParameter;
         const bool atPreferredBase = actualBase == preferredBase;
         const auto dir = directory(IMAGE_DIRECTORY_ENTRY_BASERELOC);
-        if (!dir.virtualAddress && !dir.size)
-            return atPreferredBase ? NtStatus::Success : NtStatus::Conflict;
+        if (!dir.virtualAddress && !dir.size) {
+            if (atPreferredBase) return NtStatus::Success;
+            // A dynamic-base image with no absolute-address fixups is position
+            // independent and needs no relocation records. Stripped images do
+            // not carry that guarantee and remain pinned to their preferred base.
+            return (headers_.optionalHeader.dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) &&
+                !(headers_.fileHeader.characteristics & IMAGE_FILE_RELOCS_STRIPPED)
+                ? NtStatus::Success : NtStatus::Conflict;
+        }
         if (!dir.virtualAddress || !dir.size ||
             (headers_.fileHeader.characteristics & IMAGE_FILE_RELOCS_STRIPPED))
             return NtStatus::InvalidImageFormat;

@@ -1,5 +1,6 @@
 #include "micant/km/executive/ps_objects.hpp"
 #include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include <new>
 #include <cstring>
@@ -543,8 +544,9 @@ NtStatus createBootstrapUserProcess(std::span<const BootstrapProcessImage> image
     processHandle = threadHandle = 0;
     if (images.empty() || images.size() > 16 ||
         !hal::amd64::bootstrapKernelRange(reinterpret_cast<uintptr_t>(images.data()),
-                                          images.size_bytes(), false))
+                                          images.size_bytes(), false)) {
         return NtStatus::InvalidParameter;
+    }
     uint64_t flags{}, previousRoot{};
     __asm__ __volatile__("pushfq; popq %0; cli; movq %%cr3, %1"
                          : "=r"(flags), "=r"(previousRoot) : : "memory");
@@ -578,13 +580,28 @@ NtStatus createBootstrapUserProcess(std::span<const BootstrapProcessImage> image
             if (status != NtStatus::Success) break;
         }
     }
+    if (status == NtStatus::Success) {
+        const auto* imageSet = process->nativeImages();
+        const auto* mainImage = imageSet ? imageSet->module(0) : nullptr;
+        const auto entryRva = executable.headers().optionalHeader.addressOfEntryPoint;
+        if (!mainImage || entryRva >= mainImage->image.size() ||
+            mainImage->base > UINTPTR_MAX - entryRva) {
+            status = NtStatus::InvalidImageFormat;
+        } else {
+            // Relocatable bootstrap images may not reside at their PE preferred
+            // base; enter at the actual mapped base plus the validated RVA.
+            entry = mainImage->base + entryRva;
+        }
+    }
     if (status == NtStatus::Success) status = process->setNativeProcessParameters(capturedPath, capturedCommand);
     if (status == NtStatus::Success) status = process->finalizeNativeImages();
     if (status == NtStatus::Success)
         status = createUserThreadHandle(*process, entry, kernelStackSize, userStackSize,
                                         interruptible, threadAccess, threadResult, thread);
     if (targetActive && !hal::amd64::switchProcessPagingRootByPhysical(previousRoot)) __builtin_trap();
-    if (status == NtStatus::Success) status = thread->ready();
+    if (status == NtStatus::Success) {
+        status = thread->ready();
+    }
     if (status != NtStatus::Success) {
         if (thread) {
             if (thread->cancelBeforeStart() != NtStatus::Success) __builtin_trap();
