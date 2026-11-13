@@ -2727,18 +2727,22 @@ static bool hasOnlyOwnerIommuMapping(uint64_t root, uint64_t tablePhysical,
     for (uint64_t i = 0; i < 512; ++i) {
         const uint64_t entry = table[i];
         if (!(entry & kPresent)) continue;
+        const bool childUserAccessible = userAccessible && (entry & kUser);
         uint64_t va = virtualBase | (i << shift);
         if (level == 4 && (i & 0x100u)) va |= 0xffff000000000000ull;
         const bool large = (level == 2 || level == 3) && (entry & 128u);
         if (level == 1 || large) {
             const uint64_t span = uint64_t{1} << shift;
             const uint64_t base = (entry & kPhysicalMask) & ~(span - 1);
+            const bool ownerMapping = level == 1 && va == ownerPage && base == first &&
+                                      last == first + 4095;
+            const bool supervisorIdentityMapping = !childUserAccessible && va == base;
             if (base <= last && first <= base + span - 1 &&
-                (level != 1 || va != ownerPage || base != first || last != first + 4095))
+                !ownerMapping && !supervisorIdentityMapping)
                 return false;
         } else {
             if ((entry & 128u) || !hasOnlyOwnerIommuMapping(root, entry & kPhysicalMask,
-                level - 1, va, first, last, ownerPage)) return false;
+                level - 1, va, first, last, ownerPage, childUserAccessible)) return false;
         }
     }
     return true;
