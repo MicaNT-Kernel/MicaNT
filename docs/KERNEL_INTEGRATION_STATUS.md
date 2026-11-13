@@ -324,6 +324,15 @@ its current-thread rundown and kernel-queue exit handling; Microsoft documents
 [APC types](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/types-of-apcs)
 and [waits and termination](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/waits-and-apcs).
 
+The later Ring 3 APC continuation test exposed `NtContinue` rejecting the x87
+default control word (`0x037f`) because its accepted-bit mask omitted bit 6;
+the mask now accepts that architecturally valid value. APC continuation
+contexts also use flat user DS/ES selectors instead of the kernel selectors
+active at syscall return. Commit `cf1f4d9` fixes both and QEMU now advances past
+the prior `STATUS_INVALID_PARAMETER`/`#UD`. The current expanded callback test
+still exits with `STATUS_ACCESS_DENIED` before its callback marker is set, so
+normal user-APC dispatch remains unverified and M4 is not complete.
+
 A bounded internal Ps factory now creates Ob-backed thread objects. A lifecycle
 reference keeps each object alive if its last handle closes before reap. The
 Ke switch commit signals thread termination before the outgoing stack is
