@@ -22,6 +22,8 @@
 #include <string_view>
 #include <array>
 #include <span>
+#include <memory>
+#include <new>
 
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
@@ -1463,6 +1465,10 @@ public:
         pe::PeImageView64 view{};
         std::span<uint8_t> image{};
         uint64_t base{};
+        std::unique_ptr<uint8_t[]> metadata{};
+        [[nodiscard]] std::span<const uint8_t> immutableImage() const noexcept {
+            return {metadata.get(), image.size()};
+        }
     };
     struct BindingFailure {
         std::string_view library{};
@@ -1489,7 +1495,11 @@ public:
             return NtStatus::InvalidImageFormat;
         candidate.image = image;
         candidate.base = base;
-        modules_[count_++] = candidate;
+        candidate.metadata.reset(new (std::nothrow_t{}) uint8_t[size]);
+        if (!candidate.metadata) return NtStatus::NoMemory;
+        const auto mapStatus = candidate.view.map({candidate.metadata.get(), size}, base);
+        if (mapStatus != NtStatus::Success) return mapStatus;
+        modules_[count_++] = std::move(candidate);
         return NtStatus::Success;
     }
 
@@ -1512,7 +1522,11 @@ public:
             if (other == index || !equal(name, modules_[other].name, true)) continue;
             return NtStatus::ObjectNameCollision;
         }
-        modules_[index] = replacement;
+        replacement.metadata.reset(new (std::nothrow_t{}) uint8_t[image.size()]);
+        if (!replacement.metadata) return NtStatus::NoMemory;
+        status = replacement.view.map({replacement.metadata.get(), image.size()}, base);
+        if (status != NtStatus::Success) return status;
+        modules_[index] = std::move(replacement);
         bound_ = false;
         return NtStatus::Success;
     }
@@ -1529,7 +1543,7 @@ public:
                                                     nullptr, current.name);
                     if (result != NtStatus::Success) failure_ = {library, name, ordinal};
                     return result;
-                }, pass == 1);
+                }, pass == 1, current.immutableImage());
             if (status != NtStatus::Success) return status;
         }
         bound_ = true;
@@ -1569,7 +1583,11 @@ public:
         if (status != NtStatus::Success) return status;
         candidate.image = storage.first(static_cast<size_t>(size));
         candidate.base = base;
-        modules_[count_++] = candidate;
+        candidate.metadata.reset(new (std::nothrow_t{}) uint8_t[static_cast<size_t>(size)]);
+        if (!candidate.metadata) return NtStatus::NoMemory;
+        status = candidate.view.map({candidate.metadata.get(), static_cast<size_t>(size)}, base);
+        if (status != NtStatus::Success) return status;
+        modules_[count_++] = std::move(candidate);
         bound_ = false;
         return NtStatus::Success;
     }
@@ -1589,7 +1607,7 @@ public:
                                                         nullptr, current.name);
                         if (result != NtStatus::Success) failure_ = {library, name, ordinal};
                         return result;
-                    }, pass == 1);
+                    }, pass == 1, current.immutableImage());
                 if (status != NtStatus::Success) return status;
             }
         }
@@ -1640,7 +1658,7 @@ public:
             visited[depth++] = {index, name, ordinal};
             const auto& current = modules_[index];
             pe::PeImageView64::ExportTarget target;
-            const NtStatus status = current.view.findExport(current.image, current.base,
+            const NtStatus status = current.view.findExport(current.immutableImage(), current.base,
                                                            name, ordinal, target);
             if (status != NtStatus::Success) return status;
             if (target.address) {
@@ -1691,7 +1709,7 @@ public:
         const size_t endModule = lastModule < count_ ? lastModule : count_;
         for (size_t moduleIndex = firstModule; moduleIndex < endModule; ++moduleIndex) {
             const auto& current = modules_[moduleIndex];
-            const auto status = current.view.forEachImportSymbol(current.image,
+            const auto status = current.view.forEachImportSymbol(current.immutableImage(),
                 [&](std::string_view library, std::string_view name,
                     uint16_t ordinal) noexcept -> NtStatus {
                     uint64_t address{};

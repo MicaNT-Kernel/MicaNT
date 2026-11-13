@@ -58,7 +58,7 @@ int exerciseTable(size_t initialActive) noexcept {
     if (!successor) return 3;
     successor->sectionOffset = PageSize4KB;
     if (!tree.remove(0x4000) || tree.remove(0x4000) || tree.size() != 2 ||
-        tree.find(0x4000) || !tree.find(0x6000) ||
+        tree.find(0x4000) || tree.find(0x6000) != successor ||
         tree.find(0x6000)->sectionOffset != PageSize4KB ||
         tree.findFreeRange(2 * PageSize4KB, PageSize4KB, false, 0x2000, 0x6fff) != 0x3000)
         return 6;

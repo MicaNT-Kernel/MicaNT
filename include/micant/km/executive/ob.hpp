@@ -231,6 +231,7 @@ struct ObjectHeader {
     bool dynamicallyAllocated{false};
 #if defined(MICANT_FREESTANDING)
     ObjectHeader* deferredDeleteNext{nullptr};
+    void (*releaseSecurityDescriptor)(void*) noexcept{nullptr};
 #endif
 
     [[nodiscard]] void* getBody() noexcept {
@@ -244,6 +245,18 @@ struct ObjectHeader {
 
     void addReference() noexcept {
         pointerCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Used by weak object registries while their lock/exclusion is held.
+    // A zero-reference object may be awaiting deferred deletion and must
+    // never be resurrected.
+    [[nodiscard]] bool tryAddReference() noexcept {
+        int32_t count = pointerCount.load(std::memory_order_relaxed);
+        while (count > 0 && count < INT32_MAX) {
+            if (pointerCount.compare_exchange_weak(count, count + 1,
+                    std::memory_order_acquire, std::memory_order_relaxed)) return true;
+        }
+        return false;
     }
 
     bool releaseReference() noexcept {
@@ -508,26 +521,45 @@ public:
 
     NtStatus duplicateHandle(
         Handle sourceHandle, HandleTable& targetTable, Handle& targetHandle,
-        uint32_t desiredAccess = 0, bool inherit = false, uint32_t options = 0
+        uint32_t desiredAccess, bool inherit = false, uint32_t options = 0
     ) {
-        if (options & ~uint32_t{3}) return NtStatus::InvalidParameter;
         ObjectHeader* removed{};
+        if (options & ~uint32_t{7}) {
+            // DUPLICATE_CLOSE_SOURCE applies even when duplication fails.
+            if (options & 1) {
+                detail::HandleTableGuard guard;
+                removed = takeHandleLocked(sourceHandle);
+            }
+            if (removed) (void)ObFinishClose(removed, sourceHandle);
+            return NtStatus::InvalidParameter;
+        }
         NtStatus status = NtStatus::InvalidHandle;
         {
             detail::HandleTableGuard guard;
             uint32_t granted{};
             auto* object = lookup(sourceHandle, &granted);
             if (object) {
+                const auto* sourceEntry = getEntry(sourceHandle);
+                if (!sourceEntry) __builtin_trap();
                 const uint32_t requested = object->type ? MapGenericAccess(desiredAccess, object->type->genericMapping)
                                                         : desiredAccess;
-                const uint32_t access = (options & 2) || !desiredAccess ? granted : requested;
+                const uint32_t access = (options & 2) ? granted : requested;
+                const uint32_t attributes = (options & 4) ? sourceEntry->handleAttributes :
+                                            (inherit ? OBJ_INHERIT : 0);
                 if ((access & ~granted) != 0) status = NtStatus::AccessDenied;
-                else status = targetTable.createHandle(object, targetHandle, access, inherit ? OBJ_INHERIT : 0);
+                else status = targetTable.createHandle(object, targetHandle, access, attributes);
                 if (options & 1) removed = takeHandleLocked(sourceHandle);
             }
         }
         if (removed) (void)ObFinishClose(removed, sourceHandle);
         return status;
+    }
+
+    // Internal convenience: callers omitting an access mask explicitly ask
+    // for a same-access duplicate. An explicit zero mask grants no rights.
+    NtStatus duplicateHandle(Handle sourceHandle, HandleTable& targetTable,
+                             Handle& targetHandle) {
+        return duplicateHandle(sourceHandle, targetTable, targetHandle, 0, false, 2);
     }
 
     [[nodiscard]] size_t getActiveHandleCount() const noexcept {
@@ -1158,6 +1190,12 @@ inline void ObFinishDelete(ObjectHeader* object) {
         if (object->type && object->type->deleteProcedure) {
             object->type->deleteProcedure(object);
         }
+#if defined(MICANT_FREESTANDING)
+        if (object->releaseSecurityDescriptor)
+            object->releaseSecurityDescriptor(object->securityDescriptor);
+        object->securityDescriptor = nullptr;
+        object->releaseSecurityDescriptor = nullptr;
+#endif
         if (object->type) {
             const_cast<ObjectType*>(object->type)->totalNumberOfObjects.fetch_sub(1, std::memory_order_relaxed);
         }

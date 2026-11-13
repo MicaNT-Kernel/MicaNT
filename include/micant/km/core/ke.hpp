@@ -103,11 +103,29 @@ inline thread_local ProcessorControlBlock g_CurrentCpu{
 
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
 namespace detail {
+// Return paths enter with IF clear and may still carry the temporary SYSCALL
+// GS base and user data selectors. Deferred kernel callbacks must see the
+// same thread GS and segments as ordinary kernel execution.
+struct ReturnKernelContext {
+    uint16_t ds{}, es{};
+    bool swapped{};
+    ReturnKernelContext() noexcept {
+        __asm__ __volatile__("movw %%ds, %0; movw %%es, %1" : "=rm"(ds), "=rm"(es));
+        swapped = hal::amd64::bootstrapSyscallGsActive();
+        if (swapped) __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es"
+                             : : : "rax", "memory");
+    }
+    ~ReturnKernelContext() noexcept {
+        __asm__ __volatile__("movw %0, %%ds; movw %1, %%es" : : "rm"(ds), "rm"(es) : "memory");
+        if (swapped) __asm__ __volatile__("swapgs" : : : "memory");
+    }
+};
 // Dispatch only at a boundary where the caller has finished changing state.
 void dispatchHigherPriority() noexcept;
 // Caller has interrupts disabled and may safely allow deferred work to run.
 void servicePendingDpcs() noexcept;
-void servicePendingKernelApcs() noexcept;
+void servicePendingKernelApcs(bool callerHadInterrupts = false) noexcept;
 }
 #endif
 
@@ -145,7 +163,7 @@ inline void KeLowerIrql(KIRQL newIrql) noexcept {
         if (newIrql <= APC_LEVEL) {
             detail::servicePendingDpcs();
             detail::dispatchHigherPriority();
-            if (newIrql == PASSIVE_LEVEL) detail::servicePendingKernelApcs();
+            if (newIrql == PASSIVE_LEVEL) detail::servicePendingKernelApcs(true);
         }
         __asm__ __volatile__("sti" : : : "memory");
     }
@@ -284,7 +302,7 @@ public:
             if (oldIrql <= APC_LEVEL) {
                 detail::servicePendingDpcs();
                 detail::dispatchHigherPriority();
-                if (oldIrql == PASSIVE_LEVEL) detail::servicePendingKernelApcs();
+                if (oldIrql == PASSIVE_LEVEL) detail::servicePendingKernelApcs(true);
             }
             __asm__ __volatile__("sti" : : : "memory");
         }
@@ -545,8 +563,10 @@ inline void KiRetireDpcList() {
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
 namespace detail {
 inline void servicePendingDpcs() noexcept {
-    if (KeGetCurrentIrql() <= APC_LEVEL && !g_CurrentCpu.dpcRoutineActive)
+    if (KeGetCurrentIrql() <= APC_LEVEL && !g_CurrentCpu.dpcRoutineActive) {
+        ReturnKernelContext kernelContext;
         DpcQueue::get().drainDpcs(true);
+    }
 }
 }
 #endif
@@ -809,6 +829,9 @@ struct KThread {
     ps::EThread* owningThread{nullptr};
     KThread* processNext{nullptr};
     KThread* clientIdNext{nullptr};
+    // Owned by EThread after reap until that object's lifetime ends. A
+    // detached KAPC may still hold a borrowed exact-target pointer.
+    KThread* retiredNext{nullptr};
     bool eventWaitInProgress{false};
     bool eventWaitUserMode{false};
     bool eventWaitCanTerminate{false};
@@ -852,6 +875,7 @@ struct KThread {
     // A suspended SYSCALL has already exchanged user and kernel GS bases.
     bool syscallGsActive{false};
     bool previousUserMode{false};
+    hal::amd64::ThreadSegmentState segments{};
 #endif
 
     // Registers & Trap Frame
@@ -894,6 +918,14 @@ struct KThread {
     bool userApcDeliveryPending{false};
     bool userApcDrainOnReturn{false};
 #if defined(MICANT_FREESTANDING)
+    // A user normal routine is active until its dispatcher continues the
+    // interrupted context or an unwind leaves that callback's stack.
+    uint8_t userApcInFlightDepth{0};
+    std::array<uintptr_t, 16> userApcInterruptedRsp{};
+    uint8_t userRaiseDepth{0};
+    std::array<uintptr_t, 16> userRaiseStack{};
+#endif
+#if defined(MICANT_FREESTANDING)
     KThread* readyNext{nullptr};
     bool readyQueued{false};
 #endif
@@ -912,16 +944,24 @@ inline void releaseQueuedApcReference(KAPC& apc, KThread& target) noexcept {
     if (!apc.targetReferenceHeld || apc.targetThread != &target ||
         !target.queuedApcReferences) __builtin_trap();
     apc.targetReferenceHeld = false;
-    apc.targetThread = nullptr;
-    apc.targetThreadBorrowed = false;
+    // A removed APC may be queued again. As with KeInitializeApc, the
+    // caller owns the thread lifetime whenever the APC is not queued.
+    if (apc.exactTargetRequired) {
+        apc.targetThread = &target;
+        apc.targetThreadBorrowed = true;
+    } else {
+        apc.targetThread = nullptr;
+        apc.targetThreadBorrowed = false;
+    }
     --target.queuedApcReferences;
 }
 
 #if defined(MICANT_FREESTANDING)
 namespace detail {
 
-// BSP-only registry of process-owned contexts. Its entries remain resident
-// until Ps detaches and reaps the thread; all operations exclude interrupts.
+// BSP-only registry of process-owned contexts. Ob-backed terminated threads
+// retain their CID until their thread object is deleted; bootstrap-only
+// contexts leave the registry at reap. All operations exclude interrupts.
 inline KThread* clientIdThreads{};
 inline void registerClientThread(KThread& thread) noexcept {
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
@@ -1398,7 +1438,11 @@ inline bool KiSwapContext(KThread* outgoing, KThread* incoming, bool prequeued =
         !hal::amd64::switchProcessPagingRootByPhysical(incoming->directoryTableBase)) return false;
     g_CurrentCpu.currentCr3 = incoming->directoryTableBase;
     outgoing->syscallGsActive = hal::amd64::bootstrapSyscallGsActive();
-    hal::amd64::setBootstrapThreadEntryStack(incoming->kernelStackTop, incoming->tebAddress,
+    hal::amd64::saveBootstrapThreadSegments(outgoing->segments, outgoing->syscallGsActive);
+    hal::amd64::restoreBootstrapThreadSegments(incoming->segments);
+    const uintptr_t incomingUserGs = incoming->segments.saved
+        ? incoming->segments.userGsBase : incoming->tebAddress;
+    hal::amd64::setBootstrapThreadEntryStack(incoming->kernelStackTop, incomingUserGs,
                                             incoming->syscallGsActive, incoming->kernelStackBase,
                                             incoming->kernelExecutionStackTop);
 
@@ -1495,7 +1539,7 @@ inline bool blockCurrentThread() noexcept {
     if (flags & (uint64_t{1} << 9)) {
         servicePendingDpcs();
         dispatchHigherPriority();
-        servicePendingKernelApcs();
+        servicePendingKernelApcs(true);
         __asm__ __volatile__("sti" : : : "memory");
     }
     return result;
@@ -1652,7 +1696,7 @@ inline bool KeInsertQueueApc(KAPC* apc, void* sysArg1 = nullptr, void* sysArg2 =
         }
     }
     if (flags & (uint64_t{1} << 9)) {
-        if (target == curr && environmentIndex == target->apcStateIndex) detail::servicePendingKernelApcs();
+        if (target == curr && environmentIndex == target->apcStateIndex) detail::servicePendingKernelApcs(true);
         __asm__ __volatile__("sti" : : : "memory");
     }
     return true;
@@ -2039,15 +2083,22 @@ inline bool KePrepareUserApcDelivery(UserApcDelivery* deliveries, size_t capacit
         return false;
     }
     const auto environment = thread->apcStateIndex;
+    // Trap/syscall exits enter with IF clear even though the interrupted user
+    // context normally had interrupts enabled. Once the clock owns IRQ
+    // routing, user-APC kernel routines must run with interrupts enabled at
+    // APC_LEVEL; otherwise a routine that relies on hardware progress can
+    // deadlock the entire processor.
+    const bool callbacksMayEnableInterrupts =
+        (flags & (uint64_t{1} << 9)) || hal::amd64::bootstrapSchedulerClockActive();
     thread->userApcDeliveryPending = false;
     // An alertable wait has been interrupted and will complete with
-    // STATUS_USER_APC. Batch the already eligible queue so NTDLL can run it
-    // without recursively consuming kernel stack or retaining a stale wait.
+    // STATUS_USER_APC. Claim callbacks only as they are delivered to user
+    // mode; later APCs must remain queued if this callback faults or exits.
     thread->alertable = false;
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
 
     size_t processedCount{};
-    while (processedCount < capacity) {
+    while (processedCount < UserApcDeliveryBatchCapacity && deliveryCount < capacity) {
         __asm__ __volatile__("cli" : : : "memory");
         auto* apc = thread->userApcList.takeEnvironment(environment);
         if (!apc) break;
@@ -2061,10 +2112,27 @@ inline bool KePrepareUserApcDelivery(UserApcDelivery* deliveries, size_t capacit
         void* normalContext = apc->normalContext;
         void* argument1 = apc->systemArgument1;
         void* argument2 = apc->systemArgument2;
-        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         if (kernelRoutine) {
             const auto oldIrql = KfRaiseIrql(APC_LEVEL);
+            // The syscall entry temporarily uses the bootstrap syscall GS
+            // base. As in the schedulable syscall paths, callbacks must use
+            // the ordinary thread GS convention instead, and restore the
+            // entry convention before returning through the syscall epilogue.
+            const bool swapToKernelGs = hal::amd64::bootstrapSyscallGsActive();
+            uint16_t previousDs{}, previousEs{};
+            __asm__ __volatile__("movw %%ds, %0; movw %%es, %1"
+                                 : "=rm"(previousDs), "=rm"(previousEs));
+            if (swapToKernelGs) __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es"
+                                 : : : "rax", "memory");
+            if (callbacksMayEnableInterrupts) __asm__ __volatile__("sti" : : : "memory");
             kernelRoutine(apc, &normalRoutine, &normalContext, &argument1, &argument2);
+            // Do not allow lowering IRQL to dispatch a nested return path
+            // before this APC's saved callback parameters are committed.
+            __asm__ __volatile__("cli" : : : "memory");
+            __asm__ __volatile__("movw %0, %%ds; movw %1, %%es"
+                                 : : "rm"(previousDs), "rm"(previousEs) : "memory");
+            if (swapToKernelGs) __asm__ __volatile__("swapgs" : : : "memory");
             KeLowerIrql(oldIrql);
         }
         if (normalRoutine) {
@@ -2084,9 +2152,11 @@ inline bool KePrepareUserApcDelivery(UserApcDelivery* deliveries, size_t capacit
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
 namespace detail {
 // IF is disabled by the caller; enable it for callbacks and restore it on exit.
-inline void servicePendingKernelApcs() noexcept {
+inline void servicePendingKernelApcs(bool callerHadInterrupts) noexcept {
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) return;
-    __asm__ __volatile__("sti" : : : "memory");
+    ReturnKernelContext kernelContext;
+    if (callerHadInterrupts || hal::amd64::bootstrapSchedulerClockActive())
+        __asm__ __volatile__("sti" : : : "memory");
     KiDeliverApc(0);
     __asm__ __volatile__("cli" : : : "memory");
     if (g_CurrentCpu.serviceDeferredCleanup) g_CurrentCpu.serviceDeferredCleanup();
@@ -2102,7 +2172,9 @@ inline void serviceUserReturnTermination() noexcept {
         current->kernelApcDisable || current->specialApcDisable || current->normalKernelApcActive ||
         g_CurrentCpu.dpcRoutineActive) return;
     current->terminationActive = true;
-    __asm__ __volatile__("sti" : : : "memory");
+    ReturnKernelContext kernelContext;
+    if (hal::amd64::bootstrapSchedulerClockActive())
+        __asm__ __volatile__("sti" : : : "memory");
     current->serviceTermination(current->terminationContext);
     __asm__ __volatile__("cli" : : : "memory");
     current->terminationActive = false;
@@ -2162,7 +2234,7 @@ inline void KeLeaveCriticalRegion() noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     if (flags & (uint64_t{1} << 9)) {
-        detail::servicePendingKernelApcs();
+        detail::servicePendingKernelApcs(true);
         __asm__ __volatile__("sti" : : : "memory");
     }
 #endif
@@ -2196,7 +2268,7 @@ inline void KeLeaveGuardedRegion() noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     if (flags & (uint64_t{1} << 9)) {
-        detail::servicePendingKernelApcs();
+        detail::servicePendingKernelApcs(true);
         __asm__ __volatile__("sti" : : : "memory");
     }
 #endif

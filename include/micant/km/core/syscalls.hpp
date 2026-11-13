@@ -5,10 +5,12 @@
 #include <string_view>
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/ntdef.hpp"
+#include "micant/shared/syscall_numbers.hpp"
 
 namespace micant::fs {
 class FileObject;
 }
+namespace micant::hal::amd64 { struct UserSegmentState; }
 
 namespace micant::sys {
 
@@ -25,6 +27,7 @@ inline constexpr uint32_t SSN_NtClose                    = 0x000F;
 inline constexpr uint32_t SSN_NtAllocateVirtualMemory    = 0x0018;
 inline constexpr uint32_t SSN_NtFreeVirtualMemory        = 0x001E;
 inline constexpr uint32_t SSN_NtProtectVirtualMemory     = 0x0050;
+inline constexpr uint32_t SSN_NtFlushInstructionCache     = MICANT_SSN_NT_FLUSH_INSTRUCTION_CACHE;
 inline constexpr uint32_t SSN_NtQueryVirtualMemory       = 0x0023;
 inline constexpr uint32_t SSN_NtCreateProcessEx          = 0x00B4;
 inline constexpr uint32_t SSN_NtTerminateProcess         = 0x002C;
@@ -33,6 +36,11 @@ inline constexpr uint32_t SSN_NtTerminateThread          = 0x0053;
 inline constexpr uint32_t SSN_NtResumeThread             = 0x0052;
 inline constexpr uint32_t SSN_NtWaitForSingleObject      = 0x0004;
 inline constexpr uint32_t SSN_NtContinue                 = 0x0043;
+// Windows 10 1803–1909 service profile.
+inline constexpr uint32_t SSN_NtOpenProcess = MICANT_SSN_NT_OPEN_PROCESS;
+inline constexpr uint32_t SSN_NtOpenThread = MICANT_SSN_NT_OPEN_THREAD;
+inline constexpr uint32_t SSN_NtReadVirtualMemory = MICANT_SSN_NT_READ_VIRTUAL_MEMORY;
+inline constexpr uint32_t SSN_NtRaiseException           = MICANT_SSN_NT_RAISE_EXCEPTION;
 inline constexpr uint32_t SSN_NtQuerySystemInformation   = 0x0036;
 inline constexpr uint32_t SSN_NtQuerySystemTime          = 0x0047;
 
@@ -123,6 +131,8 @@ NtStatus NtProtectVirtualMemory(
     uint32_t newProtect,
     uint32_t* oldProtect
 );
+
+NtStatus NtFlushInstructionCache(Handle processHandle, const void* baseAddress, size_t size);
 
 // File & I/O
 NtStatus NtCreateFile(
@@ -233,14 +243,35 @@ NtStatus NtTerminateThread(Handle threadHandle, NtStatus exitStatus);
 // supplied by the syscall entry rather than exposed to user mode.
 NtStatus NtContinue(const void* context, bool testAlert, void* trapFrame,
                     void* floatingState, size_t floatingStateSize,
-                    uint32_t xsaveMask);
+                    uint32_t xsaveMask, bool forExceptionRaise = false,
+                    hal::amd64::UserSegmentState* userSegments = nullptr);
+NtStatus NtRaiseException(const void* record, const void* context, bool firstChance,
+                          void* trapFrame, void* floatingState, size_t floatingStateSize,
+                          uint32_t xsaveMask, hal::amd64::UserSegmentState* userSegments = nullptr);
 NtStatus NtResumeThread(Handle threadHandle, uint32_t* previousSuspendCount);
+NtStatus NtOpenProcess(Handle*, uint32_t, ObjectAttributes*, ClientId*);
+NtStatus NtOpenThread(Handle*, uint32_t, ObjectAttributes*, ClientId*);
 NtStatus NtCreateThreadEx(Handle* threadHandle, uint32_t desiredAccess,
+    ObjectAttributes* attributes, Handle processHandle, uintptr_t startRoutine,
+    uintptr_t argument, uint32_t flags, uintptr_t zeroBits, size_t stackSize,
+    size_t maximumStackSize, void* attributeList);
+// Dispatcher-only entry: the outer structures and attribute outputs have
+// been captured in kernel storage; any nested security descriptor still
+// belongs to user mode. Handle access uses the calling thread's previous mode.
+NtStatus NtCreateThreadExFromKernel(Handle* threadHandle, uint32_t desiredAccess,
     ObjectAttributes* attributes, Handle processHandle, uintptr_t startRoutine,
     uintptr_t argument, uint32_t flags, uintptr_t zeroBits, size_t stackSize,
     size_t maximumStackSize, void* attributeList);
 NtStatus NtCreateProcessEx(Handle* processHandle, uint32_t desiredAccess,
     ObjectAttributes* attributes, Handle parentProcess, uint32_t flags,
+    Handle section, Handle debugPort, Handle exceptionPort, bool inJob);
+NtStatus NtCreateProcessExFromKernel(Handle* processHandle, uint32_t desiredAccess,
+    ObjectAttributes* attributes, Handle parentProcess, uint32_t flags,
+    Handle section, Handle debugPort, Handle exceptionPort, bool inJob);
+// The process syscall keeps its output in user memory while using captured
+// attributes, so handle publication and copyout share one exclusion window.
+NtStatus NtCreateProcessExCaptured(Handle* userProcessHandle, uint32_t desiredAccess,
+    ObjectAttributes* capturedAttributes, Handle parentProcess, uint32_t flags,
     Handle section, Handle debugPort, Handle exceptionPort, bool inJob);
 NtStatus NtCreateEvent(Handle* eventHandle, uint32_t desiredAccess,
                        ObjectAttributes* objectAttributes, uint32_t eventType,
@@ -315,7 +346,7 @@ NtStatus NtCreateSection(
 );
 
 // Internal kernel callers pass kernel-resident structures. This entry point
-// bypasses user probing explicitly; syscall dispatch must call NtCreateSection.
+// bypasses user probing explicitly.
 NtStatus NtCreateSectionFromKernel(
     Handle* sectionHandle,
     uint32_t desiredAccess,
@@ -325,6 +356,13 @@ NtStatus NtCreateSectionFromKernel(
     uint32_t allocationAttributes,
     Handle fileHandle
 );
+
+// Syscall dispatch has captured inputs in kernel storage, but output remains
+// in user space and is published atomically with the handle-table entry.
+NtStatus NtCreateSectionCaptured(
+    Handle* userSectionHandle, uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes, LargeInteger* maximumSize,
+    uint32_t sectionPageProtection, uint32_t allocationAttributes, Handle fileHandle);
 
 NtStatus NtMapViewOfSection(
     Handle sectionHandle,
@@ -356,6 +394,9 @@ NtStatus NtUnmapViewOfSection(
     Handle processHandle,
     uintptr_t baseAddress
 );
+
+// Internal failed-copyout rollback; a failed unmap remains pinned for retry.
+NtStatus rollbackMappedViewFromKernel(Handle processHandle, uintptr_t baseAddress) noexcept;
 
 // File Information & Directory Queries
 NtStatus NtQueryInformationFile(
@@ -396,6 +437,9 @@ NtStatus NtQueryPerformanceCounter(
 );
 
 NtStatus NtYieldExecution();
+
+NtStatus NtReadVirtualMemory(Handle processHandle, const void* baseAddress, void* buffer,
+                             size_t length, size_t* bytesRead);
 
 NtStatus NtQueryInformationProcess(
     Handle processHandle,

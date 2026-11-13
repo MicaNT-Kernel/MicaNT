@@ -4,8 +4,8 @@
 #include "micant/km/core/clock_timer.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 
-// Resident, single-BSP passive worker. Items and their contexts must remain
-// resident until their callback returns. A callback may queue itself again.
+// Resident single-BSP passive work queue. Items and contexts remain resident
+// until the callback returns. Requeued items never run concurrently with themselves.
 #if defined(MICANT_BAREMETAL) && defined(MICANT_FREESTANDING) && (defined(_M_X64) || defined(__x86_64__))
 namespace micant::ke::passive_work {
 using Routine = void (*)(void*) noexcept;
@@ -18,25 +18,42 @@ struct Item {
 };
 
 namespace detail {
-inline KThread worker{};
-alignas(16) inline uint8_t stack[65536]{};
+inline constexpr size_t WorkerCount = 2;
+inline KThread workers[WorkerCount]{};
+alignas(16) inline uint8_t stacks[WorkerCount][65536]{};
 inline Item* head{};
 inline Item* tail{};
+inline size_t initializedWorkers{};
 inline bool initialized{};
+
+// Caller holds BSP interrupt exclusion.
+inline void wakeAvailableWorker() noexcept {
+    auto* current = KeGetCurrentThread();
+    for (auto& worker : workers) {
+        if (&worker != current && !worker.readyQueued &&
+            (worker.state == ThreadState::Initialized || worker.state == ThreadState::Waiting)) {
+            if (!PriorityScheduler::get().readyKThread(&worker)) __builtin_trap();
+            break;
+        }
+    }
+}
 
 [[noreturn]] inline void run(void*) noexcept {
     __asm__ __volatile__("cli" : : : "memory");
+    KeLowerIrql(PASSIVE_LEVEL);
     for (;;) {
-        if (!head) {
-            // Both the empty check and the transition to Waiting occur with
-            // interrupts disabled, so a producer cannot lose a wakeup.
+        Item* previous = nullptr;
+        Item* item = head;
+        while (item && item->running) { previous = item; item = item->next; }
+        if (!item) {
+            // Queue inspection and the transition to Waiting share the BSP
+            // exclusion, including when only a running item is requeued.
             if (!ke::detail::blockCurrentThread())
                 __asm__ __volatile__("sti; hlt; cli" : : : "memory");
             continue;
         }
-        Item* item = head;
-        head = item->next;
-        if (!head) tail = nullptr;
+        if (previous) previous->next = item->next; else head = item->next;
+        if (tail == item) tail = previous;
         item->next = nullptr;
         item->queued = false;
         item->running = true;
@@ -46,6 +63,7 @@ inline bool initialized{};
         routine(context);
         __asm__ __volatile__("cli" : : : "memory");
         item->running = false;
+        if (head) wakeAvailableWorker();
     }
 }
 
@@ -72,6 +90,8 @@ inline bool initialized{};
 }
 }
 
+inline void scheduleRetiredApcs() noexcept;
+
 // Initialize after the scheduler clock and idle thread have been installed.
 // The worker and stack are kernel-resident for the life of the system.
 [[nodiscard]] inline bool initialize() noexcept {
@@ -80,15 +100,30 @@ inline bool initialized{};
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     if (!detail::initialized) {
-        detail::worker.directoryTableBase = hal::amd64::bootstrapKernelPagingRoot();
-        detail::worker.priority = PRIORITY_NORMAL;
-        detail::initialized = detail::worker.directoryTableBase &&
-            ke::detail::prepareBootstrapThread(detail::worker, detail::stack,
-                sizeof(detail::stack), detail::run, nullptr);
+        const uintptr_t root = hal::amd64::bootstrapKernelPagingRoot();
+        while (root && detail::initializedWorkers < detail::WorkerCount) {
+            const auto index = detail::initializedWorkers;
+            auto& worker = detail::workers[index];
+            worker.directoryTableBase = root;
+            worker.priority = PRIORITY_NORMAL;
+            if (!ke::detail::prepareBootstrapThread(worker, detail::stacks[index],
+                    sizeof(detail::stacks[index]), detail::run, nullptr)) break;
+            ++detail::initializedWorkers;
+        }
+        detail::initialized = detail::initializedWorkers == detail::WorkerCount;
     }
     const bool result = detail::initialized;
+    if (result) scheduleRetiredApcs();
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     return result;
+}
+
+[[nodiscard]] inline bool isInitialized() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const bool ready = detail::initialized;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return ready;
 }
 
 // The caller owns the item and serializes changes to its routine and context.
@@ -103,11 +138,7 @@ inline bool initialized{};
         if (detail::tail) detail::tail->next = &item;
         else detail::head = &item;
         detail::tail = &item;
-        if (&detail::worker != KeGetCurrentThread() && !detail::worker.readyQueued &&
-            (detail::worker.state == ThreadState::Initialized ||
-             detail::worker.state == ThreadState::Waiting)) {
-            if (!PriorityScheduler::get().readyKThread(&detail::worker)) __builtin_trap();
-        }
+        detail::wakeAvailableWorker();
         result = true;
     }
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
@@ -131,14 +162,20 @@ inline void freeRetiredApcs(void*) noexcept {
         delete apc;
     }
 }
+inline void scheduleRetiredApcs() noexcept {
+    // A callback can run before the resident workers have started. Keep the
+    // APC on the retired list until initialization makes PASSIVE cleanup safe.
+    if (!detail::initialized || !retiredApcs || retiredApcWork.queued) return;
+    retiredApcWork.routine = freeRetiredApcs;
+    if (!queue(retiredApcWork)) __builtin_trap();
+}
 inline void retireOwnedUserApc(KAPC* apc) noexcept {
     if (!apc) return;
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     apc->queueNext = retiredApcs;
     retiredApcs = apc;
-    retiredApcWork.routine = freeRetiredApcs;
-    if (!retiredApcWork.queued && !queue(retiredApcWork)) __builtin_trap();
+    scheduleRetiredApcs();
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
 }
 inline void ownedUserApcKernel(KAPC* apc, PKNORMAL_ROUTINE*, void**, void**, void**) {

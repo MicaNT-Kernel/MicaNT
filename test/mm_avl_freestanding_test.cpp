@@ -45,7 +45,7 @@ extern "C" int mm_avl_freestanding_test() {
     successor->physicalPages.emplace(5, 42);
 #endif
     CHECK(tree.remove(0x4000));
-    CHECK(!tree.find(0x4000) && tree.find(0x5000));
+    CHECK(!tree.find(0x4000) && tree.find(0x5000) == successor);
     successor = tree.find(0x5000);
     CHECK(successor->isSectionView && successor->sectionContext == &tree &&
           successor->sectionOffset == 0x2000);
@@ -65,6 +65,7 @@ extern "C" int mm_avl_freestanding_test() {
     constexpr uintptr_t base = 0x10000;
     constexpr unsigned pages = 32;
     bool occupied[pages]{};
+    VirtualAddressDescriptor* identities[pages]{};
     uint32_t random = 1;
     for (unsigned iteration = 0; iteration < 1000; ++iteration) {
         random = random * 1664525u + 1013904223u;
@@ -74,8 +75,13 @@ extern "C" int mm_avl_freestanding_test() {
             CHECK(tree.remove(address));
         } else {
             CHECK(tree.insert(descriptor(address, address + PageMask4KB)));
+            identities[page] = tree.find(address);
         }
         occupied[page] = !occupied[page];
+        for (unsigned index = 0; index < pages; ++index) {
+            CHECK(tree.find(base + index * PageSize4KB) ==
+                  (occupied[index] ? identities[index] : nullptr));
+        }
         for (unsigned length = 1; length <= 4; ++length) {
             for (unsigned alignmentPages : {1u, 2u, 4u}) {
                 uintptr_t first = 0, last = 0;

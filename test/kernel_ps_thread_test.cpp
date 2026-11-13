@@ -1094,7 +1094,20 @@ extern "C" bool MicantTestPsDeferredReaper() noexcept {
     if (sys::NtWaitForSingleObject(processHandle, false, nullptr) != NtStatus::Success ||
         process->getDirectoryTableBase() || process->exitStatus() != NtStatus::Success ||
         sys::NtClose(processHandle) != NtStatus::Success) return false;
-    return ps::detail::bootstrapProcessObjectCount() == processes &&
+    const uint64_t start = hal::amd64::bootstrapSchedulerClockTicks();
+    bool drained{};
+    __asm__ __volatile__("sti" : : : "memory");
+    for (size_t spin = 0; spin < 50000000 &&
+         hal::amd64::bootstrapSchedulerClockTicks() - start < 100; ++spin) {
+        if (!ps::detail::deferredCleanupPending()) {
+            drained = true;
+            break;
+        }
+        __asm__ __volatile__("pause");
+    }
+    __asm__ __volatile__("cli" : : : "memory");
+    return drained &&
+        ps::detail::bootstrapProcessObjectCount() == processes &&
         ps::detail::bootstrapThreadObjectCount() == threads &&
         mm::PfnDatabase::get().getActiveCount() == pages;
 }

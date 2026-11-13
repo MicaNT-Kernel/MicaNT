@@ -86,6 +86,6 @@ int main() {
     std::cout << "[Userland App] [Heap] RtlFreeHeap returned: " << (freeOk ? "SUCCESS" : "FAILED") << "\n";
 
     std::cout << "\n[Userland App] Exiting cleanly with status code 42.\n";
-    ntdll::NtTerminateProcess(0, static_cast<NtStatus>(42));
+    ntdll::NtTerminateProcess(InvalidHandleValue, static_cast<NtStatus>(42));
     return 42;
 }

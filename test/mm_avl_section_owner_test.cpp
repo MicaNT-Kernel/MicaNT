@@ -23,11 +23,13 @@ int main() {
         !insert(0x30000, successor)) return 1;
     first.reset();
     successor.reset();
+    const auto* successorIdentity = table.find(0x30000);
     if (firstWeak.expired() || successorWeak.expired()) return 2;
     if (!table.remove(0x20000) || !firstWeak.expired() || successorWeak.expired())
         return 3;
     const auto* moved = table.find(0x30000);
-    if (!moved || moved->sectionContext != successorWeak.lock().get() ||
+    if (!moved || moved != successorIdentity ||
+        moved->sectionContext != successorWeak.lock().get() ||
         moved->sectionOwner.get() != moved->sectionContext) return 4;
     if (!table.remove(0x30000) || !successorWeak.expired()) return 5;
     return 0;

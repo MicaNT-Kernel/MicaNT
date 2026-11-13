@@ -55,6 +55,12 @@ void cancelSocketWaitObject(void* object) noexcept {
 int32_t waitSocketData(void* object, uint32_t timeoutMilliseconds) noexcept {
     return static_cast<int32_t>(NetworkStack::get().waitSocketData(object, timeoutMilliseconds));
 }
+int32_t waitSocketConnected(void* object, uint32_t timeoutMilliseconds) noexcept {
+    return static_cast<int32_t>(NetworkStack::get().waitSocketConnected(object, timeoutMilliseconds));
+}
+int32_t waitSocketWritable(void* object, uint32_t timeoutMilliseconds) noexcept {
+    return static_cast<int32_t>(NetworkStack::get().waitSocketWritable(object, timeoutMilliseconds));
+}
 int createSocket(int af, int type, int protocol) noexcept {
     return NetworkStack::get().createSocket(af, type, protocol);
 }
@@ -62,25 +68,25 @@ void closeSocket(int id) noexcept { NetworkStack::get().closeSocket(id); }
 bool bindSocket(int id, uint32_t ip, uint16_t port) noexcept {
     return NetworkStack::get().bindSocket(id, Ipv4Address(ip), port);
 }
-bool connectSocket(int id, uint32_t ip, uint16_t port) noexcept {
-    return NetworkStack::get().connectSocket(id, Ipv4Address(ip), port);
+bool connectSocket(int id, uint32_t ip, uint16_t port, uint64_t deadline100ns) noexcept {
+    return NetworkStack::get().connectSocket(id, Ipv4Address(ip), port, deadline100ns);
 }
 bool listenSocket(int id, int backlog) noexcept {
     return NetworkStack::get().listenSocket(id, backlog);
 }
-int sendSocket(int id, const void* data, size_t length) noexcept {
-    return NetworkStack::get().sendSocket(id, data, length);
+int sendSocket(int id, const void* data, size_t length, uint64_t deadline100ns) noexcept {
+    return NetworkStack::get().sendSocket(id, data, length, deadline100ns);
 }
-int sendToSocket(int id, const void* data, size_t length, uint32_t ip, uint16_t port) noexcept {
-    return NetworkStack::get().sendToSocket(id, data, length, Ipv4Address(ip), port);
+int sendToSocket(int id, const void* data, size_t length, uint32_t ip, uint16_t port, uint64_t deadline100ns) noexcept {
+    return NetworkStack::get().sendToSocket(id, data, length, Ipv4Address(ip), port, deadline100ns);
 }
-int recvSocket(int id, void* buffer, size_t capacity) noexcept {
-    return NetworkStack::get().recvSocket(id, buffer, capacity);
+int recvSocket(int id, void* buffer, size_t capacity, bool* truncated) noexcept {
+    return NetworkStack::get().recvSocket(id, buffer, capacity, truncated);
 }
-int recvFromSocket(int id, void* buffer, size_t capacity, uint32_t* ip, uint16_t* port) noexcept {
+int recvFromSocket(int id, void* buffer, size_t capacity, uint32_t* ip, uint16_t* port, bool* truncated) noexcept {
     if (!ip || !port) return -1;
     Ipv4Address source{};
-    const int received = NetworkStack::get().recvFromSocket(id, buffer, capacity, source, *port);
+    const int received = NetworkStack::get().recvFromSocket(id, buffer, capacity, source, *port, truncated);
     if (received >= 0) *ip = source.addr;
     return received;
 }
@@ -102,6 +108,7 @@ bool setNetworkConfiguration(uint32_t ip, uint32_t mask, uint32_t gateway, uint3
 namespace micant::sys {
 bool initializeBootstrapSectionServices() noexcept;
 void initializeBootstrapEventServices() noexcept;
+void scheduleDeferredTimerDeletes() noexcept;
 bool verifyBootstrapSectionOwnership() noexcept;
 }
 
@@ -633,16 +640,35 @@ void* mapBootstrapHeapPages(uint64_t firstPfn, size_t pageCount) noexcept {
     return reinterpret_cast<void*>(firstPfn * 4096);
 }
 
-bool probeBootstrapRange(uintptr_t address, size_t size, bool writable,
-                         micant::mm::KPROCESSOR_MODE mode) noexcept {
+micant::NtStatus probeBootstrapRange(uintptr_t address, size_t size, bool writable,
+                                     micant::mm::KPROCESSOR_MODE mode) noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0" : "=r"(flags) : : "memory");
-    if (flags & (uint64_t{1} << 9)) return false;
+    if (flags & (uint64_t{1} << 9)) return micant::NtStatus::AccessViolation;
     if (mode == micant::mm::UserMode) {
-        return micant::hal::amd64::bootstrapUserRange(address, size, writable);
+        if (micant::hal::amd64::bootstrapUserRange(address, size, writable)) return micant::NtStatus::Success;
+        if (!writable || !size || address > UINTPTR_MAX - (size - 1) ||
+            micant::ke::KeGetCurrentIrql() != micant::ke::PASSIVE_LEVEL) return micant::NtStatus::AccessViolation;
+        auto* process = micant::ke::KeGetCurrentProcess();
+        if (!process) return micant::NtStatus::AccessViolation;
+        size_t checked{};
+        while (checked < size) {
+            const uintptr_t cursor = address + checked;
+            const size_t pageRemaining = micant::mm::PageSize4KB - (cursor & micant::mm::PageMask4KB);
+            const size_t step = size - checked < pageRemaining ? size - checked : pageRemaining;
+            if (!micant::hal::amd64::bootstrapUserRange(cursor, step, true)) {
+                const auto resolved = process->getAddressSpace().tryResolveCopyOnWriteForProbe(cursor);
+                if (resolved != micant::NtStatus::Success) return resolved;
+                if (!micant::hal::amd64::bootstrapUserRange(cursor, step, true))
+                    return micant::NtStatus::AccessViolation;
+            }
+            checked += step;
+        }
+        return micant::NtStatus::Success;
     }
     return mode == micant::mm::KernelMode &&
-           micant::hal::amd64::bootstrapKernelRange(address, size, writable);
+           micant::hal::amd64::bootstrapKernelRange(address, size, writable)
+        ? micant::NtStatus::Success : micant::NtStatus::AccessViolation;
 }
 
 bool verifyKernelObjectHandles() noexcept {
@@ -659,7 +685,7 @@ bool verifyKernelObjectHandles() noexcept {
         !first || handles.lookup(first, &granted) != &object || granted != access ||
         object.pointerCount != 2 || object.handleCount != 1 ||
         type.totalNumberOfHandles != 1 ||
-        handles.duplicateHandle(first, handles, second, 0, true) != NtStatus::Success ||
+        handles.duplicateHandle(first, handles, second, 0, true, 2) != NtStatus::Success ||
         first == second || handles.lookup(second, &granted) != &object ||
         granted != access || handles.getActiveHandleCount() != 2 ||
         !handles.getEntry(second) ||
@@ -844,6 +870,8 @@ int32_t bootCloseFile(void* context, uint64_t handle) noexcept {
 
 void rollbackBootDriverResources(size_t ownerIndex) noexcept {
     if (ownerIndex >= kMaxBootStartDrivers) return;
+    if (micant::usb::baremetal::unregisterClassesForOwner(&g_bootDriverContexts[ownerIndex]) != micant::NtStatus::Success)
+        stopWithError("[MicaNT Io] Failed driver retains active USB class instances\r\n");
     for (auto& record : g_bootDriverHandles[ownerIndex]) {
         if (record.Used) {
             (void)micant::sys::NtClose(static_cast<micant::Handle>(record.Value));
@@ -965,12 +993,11 @@ micant::NtStatus bootProbePciBar(uint16_t bus, uint16_t device, uint16_t functio
         if (recorded.bus != bus || recorded.device != device || recorded.function != function ||
             recorded.index != index) continue;
         if (!recorded.length || recorded.ioSpace) return micant::NtStatus::DeviceNotReady;
-        uint32_t command{}, low{}, high{};
+        uint32_t low{}, high{};
         using micant::hal::amd64::PciConfigAccessResult;
-        if (micant::hal::amd64::readPciConfig32(bus, device, function, 4, command) != PciConfigAccessResult::Success ||
-            micant::hal::amd64::readPciConfig32(bus, device, function, 0x10 + index * 4, low) != PciConfigAccessResult::Success)
+        if (micant::hal::amd64::readPciConfig32(bus, device, function,
+                0x10 + index * 4, low) != PciConfigAccessResult::Success)
             return micant::NtStatus::DeviceNotReady;
-        if (command & 7u) return micant::NtStatus::DeviceBusy;
         if (low & 1u) return micant::NtStatus::DeviceNotReady;
         if (((low >> 1) & 3u) == 2 &&
             (index == 5 || micant::hal::amd64::readPciConfig32(bus, device, function,
@@ -983,7 +1010,18 @@ micant::NtStatus bootProbePciBar(uint16_t bus, uint16_t device, uint16_t functio
     }
     micant::hal::amd64::PciBarInfo bar{};
     const auto result = micant::hal::amd64::probeQuiescentPciBar(bus, device, function, index, bar);
-    if (result == micant::hal::amd64::PciBarProbeResult::Active) return micant::NtStatus::DeviceBusy;
+    if (result == micant::hal::amd64::PciBarProbeResult::Active) {
+        serialWrite("[MicaNT PCI] BAR probe rejected: active decode BDF=");
+        serialWriteNumber(bus);
+        serialWrite(":");
+        serialWriteNumber(device);
+        serialWrite(".");
+        serialWriteNumber(function);
+        serialWrite(" BAR=");
+        serialWriteNumber(index);
+        serialWrite("\r\n");
+        return micant::NtStatus::DeviceBusy;
+    }
     if (result != micant::hal::amd64::PciBarProbeResult::Success || bar.ioSpace)
         return micant::NtStatus::DeviceNotReady;
     resource = {};
@@ -997,8 +1035,40 @@ int32_t bootClaimPciDevice(void* owner, uint16_t segment, uint16_t bus, uint16_t
     uint16_t function, const micant::boot_driver::PciBarRequestV1* requests,
     size_t requestCount, uint64_t* token,
     micant::boot_driver::PciBarResourceV1* resources, size_t* resourceCount) noexcept {
-    return bootStatus(micant::km::arb::claim(owner, segment, bus, device, function,
-        requests, requestCount, token, resources, resourceCount, bootProbePciBar));
+    uint64_t conflictAddress{};
+    uint64_t conflictLength{};
+    uint64_t requestedAddress{};
+    uint64_t requestedLength{};
+    uint64_t existingToken{};
+    bool sameOwner{};
+    const auto status = micant::km::arb::claim(owner, segment, bus, device, function,
+        requests, requestCount, token, resources, resourceCount, bootProbePciBar,
+        &conflictAddress, &conflictLength, &requestedAddress, &requestedLength,
+        &existingToken, &sameOwner);
+    if (status == micant::NtStatus::DeviceBusy && conflictLength) {
+        serialWrite("[MicaNT PCI] claim overlap requested=");
+        serialWriteNumber(requests[0].BarIndex);
+        serialWrite(" @");
+        serialWriteNumber(requestedAddress);
+        serialWrite("/");
+        serialWriteNumber(requestedLength);
+        serialWrite(" conflict=");
+        serialWriteNumber(conflictAddress);
+        serialWrite("/");
+        serialWriteNumber(conflictLength);
+        serialWrite("\r\n");
+    } else if (status == micant::NtStatus::DeviceBusy) {
+        serialWrite("[MicaNT PCI] claim busy without interval conflict BDF=");
+        serialWriteNumber(bus);
+        serialWrite(":");
+        serialWriteNumber(device);
+        serialWrite(".");
+        serialWriteNumber(function);
+        serialWrite(" existing-token=");
+        serialWriteNumber(existingToken);
+        serialWrite(sameOwner ? " same-owner\r\n" : " different-owner\r\n");
+    }
+    return bootStatus(status);
 }
 
 bool bootPciDeviceQuiescent(uint16_t bus, uint16_t device, uint16_t function) noexcept {
@@ -1026,12 +1096,29 @@ int32_t bootRegisterUsbHost(void* owner, const micant::shared::usb::HostServices
     if (!services || !token) return bootStatus(micant::NtStatus::InvalidParameter);
     return bootStatus(micant::usb::baremetal::registerHost(owner, *services, *token));
 }
+int32_t bootRegisterUsbClass(void* owner, const micant::shared::usb::ClassServicesV1* services,
+                             uint64_t* token) noexcept {
+    if (!services || !token) return bootStatus(micant::NtStatus::InvalidParameter);
+    return bootStatus(micant::usb::baremetal::registerClass(owner, *services, *token));
+}
+int32_t bootUnregisterUsbClass(void* owner, uint64_t token) noexcept {
+    return bootStatus(micant::usb::baremetal::unregisterClass(owner, token));
+}
 int32_t bootUnregisterUsbHost(void* owner, uint64_t token) noexcept {
     return bootStatus(micant::usb::baremetal::unregisterHost(owner, token));
 }
 int32_t bootMountFat(void* owner, uint64_t handle, uint64_t* token) noexcept {
     if (!token) return bootStatus(micant::NtStatus::InvalidParameter);
-    return bootStatus(micant::fsrtl::fat::mount(owner, static_cast<micant::Handle>(handle), *token));
+    const auto status = micant::fsrtl::fat::mount(
+        owner, static_cast<micant::Handle>(handle), *token);
+    if (status != micant::NtStatus::Success) {
+        serialWrite("[MicaNT FsRtl] FAT mount failed handle=");
+        serialWriteNumber(handle);
+        serialWrite(" status=");
+        serialWriteNumber(static_cast<uint32_t>(status));
+        serialWrite("\r\n");
+    }
+    return bootStatus(status);
 }
 int32_t bootUnmountFat(void* owner, uint64_t token) noexcept {
     return bootStatus(micant::fsrtl::fat::unmount(owner, token));
@@ -1041,14 +1128,25 @@ struct BootBlockBackendAdapter {
     void* Context{};
     int32_t (*Read)(void*, uint64_t, uint32_t, void*, uint32_t*){};
     void (*Release)(void*){};
+    int32_t (*Write)(void*, uint64_t, uint32_t, const void*, uint32_t*){};
 };
 
 micant::NtStatus bootBlockReadAdapter(void* context, uint64_t lba,
     uint32_t count, void* buffer, uint32_t* blocksRead) noexcept {
     auto* adapter = static_cast<BootBlockBackendAdapter*>(context);
     if (!adapter || !adapter->Read) return micant::NtStatus::InvalidParameter;
-    return static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Read(
+    const auto status = static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Read(
         adapter->Context, lba, count, buffer, blocksRead)));
+    if (status != micant::NtStatus::Success) {
+        serialWrite("[MicaNT Io] Block read failed LBA=");
+        serialWriteNumber(lba);
+        serialWrite(" count=");
+        serialWriteNumber(count);
+        serialWrite(" status=");
+        serialWriteNumber(static_cast<uint32_t>(status));
+        serialWrite("\r\n");
+    }
+    return status;
 }
 
 void bootBlockReleaseAdapter(void* context) noexcept {
@@ -1056,6 +1154,14 @@ void bootBlockReleaseAdapter(void* context) noexcept {
     if (!adapter) return;
     if (adapter->Release) adapter->Release(adapter->Context);
     delete adapter;
+}
+
+micant::NtStatus bootBlockWriteAdapter(void* context, uint64_t lba,
+    uint32_t count, const void* buffer, uint32_t* blocksWritten) noexcept {
+    auto* adapter = static_cast<BootBlockBackendAdapter*>(context);
+    if (!adapter || !adapter->Write) return micant::NtStatus::MediaWriteProtected;
+    return static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Write(
+        adapter->Context, lba, count, buffer, blocksWritten)));
 }
 
 int32_t bootCreateReadOnlyBlockDevice(void* driverContext, uint64_t totalBlocks,
@@ -1085,9 +1191,40 @@ int32_t bootReadBlockDevice(void*, uint64_t handle, uint64_t lba,
         static_cast<micant::Handle>(handle), lba, blockCount, buffer, blocksRead));
 }
 
+int32_t bootWriteBlockDevice(void*, uint64_t handle, uint64_t lba,
+    uint32_t blockCount, const void* buffer, uint32_t* blocksWritten) noexcept {
+    return bootStatus(micant::io::IoWriteBlockDeviceHandle(
+        static_cast<micant::Handle>(handle), lba, blockCount, buffer, blocksWritten));
+}
+
+int32_t bootCreateWritableBlockDevice(void* driverContext, uint64_t totalBlocks,
+    uint32_t blockSize, void* backendContext,
+    int32_t (*read)(void*, uint64_t, uint32_t, void*, uint32_t*),
+    int32_t (*write)(void*, uint64_t, uint32_t, const void*, uint32_t*),
+    void (*release)(void*), uint32_t desiredAccess, uint64_t* handle) noexcept {
+    if (handle) *handle = 0;
+    if (!handle || !read || !write || !release)
+        return bootStatus(micant::NtStatus::InvalidParameter);
+    auto* adapter = new (std::nothrow_t{}) BootBlockBackendAdapter{
+        backendContext, read, release, write};
+    if (!adapter) { release(backendContext); return bootStatus(micant::NtStatus::NoMemory); }
+    micant::io::BlockDeviceBackend backend{
+        adapter, totalBlocks, blockSize, bootBlockReadAdapter,
+        bootBlockReleaseAdapter, bootBlockWriteAdapter};
+    micant::Handle nativeHandle{};
+    const auto status = micant::io::IoCreateBlockDevice(&nativeHandle, desiredAccess, backend);
+    *handle = static_cast<uint64_t>(nativeHandle);
+    if (status == micant::NtStatus::Success && !trackBootDriverHandle(driverContext, *handle)) {
+        (void)micant::sys::NtClose(nativeHandle);
+        *handle = 0;
+        return bootStatus(micant::NtStatus::InsufficientResources);
+    }
+    return bootStatus(status);
+}
+
 struct BootFileBackendAdapter {
     micant::boot_driver::FileBackendV1 Backend{};
-    size_t ProviderIndex{};
+    size_t ProviderIndex{kMaxBootStartDrivers};
 };
 
 micant::NtStatus bootFileReadAdapter(void* context, uint64_t offset, void* buffer,
@@ -1096,6 +1233,14 @@ micant::NtStatus bootFileReadAdapter(void* context, uint64_t offset, void* buffe
     if (!adapter || !adapter->Backend.Read) return micant::NtStatus::InvalidParameter;
     return static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Backend.Read(
         adapter->Backend.Context, offset, buffer, length, bytesRead)));
+}
+
+micant::NtStatus bootFileWriteAdapter(void* context, uint64_t offset, const void* buffer,
+    size_t length, size_t* bytesWritten) noexcept {
+    auto* adapter = static_cast<BootFileBackendAdapter*>(context);
+    if (!adapter || !adapter->Backend.Write) return micant::NtStatus::MediaWriteProtected;
+    return static_cast<micant::NtStatus>(static_cast<uint32_t>(adapter->Backend.Write(
+        adapter->Backend.Context, offset, buffer, length, bytesWritten)));
 }
 
 void bootFileReleaseAdapter(void* context) noexcept {
@@ -1108,10 +1253,11 @@ void bootFileReleaseAdapter(void* context) noexcept {
     delete adapter;
 }
 
-micant::NtStatus bootFileOpenRouter(void*, std::u16string_view name,
+micant::NtStatus bootFileOpenRouter(void*, std::u16string_view name, bool openIf,
+    uint32_t desiredAccess,
     micant::io::FileBackend& output) noexcept {
     if (name.empty() || name.size() > 1024) return micant::NtStatus::InvalidParameter;
-    const auto fatStatus = micant::fsrtl::fat::open(name, output);
+    const auto fatStatus = micant::fsrtl::fat::open(name, openIf, desiredAccess, output);
     if (fatStatus != micant::NtStatus::ObjectPathNotFound) return fatStatus;
     for (size_t i = 0; i < kMaxBootStartDrivers; ++i) {
         if (!g_bootFileProviders[i].Used) continue;
@@ -1142,6 +1288,7 @@ micant::NtStatus bootFileOpenRouter(void*, std::u16string_view name,
             candidate.Name && candidate.NameLength
                 ? std::u16string_view(candidate.Name, candidate.NameLength) : name,
             bootFileReadAdapter, bootFileReleaseAdapter};
+        output.write = candidate.Write ? bootFileWriteAdapter : nullptr;
         return micant::NtStatus::Success;
     }
     return micant::NtStatus::NoSuchFile;
@@ -1211,7 +1358,7 @@ int32_t bootCreateBackendFile(void* context, uint64_t* handle, uint32_t access,
         backend->NameLength > 1024 ||
         (!backend->Name && backend->NameLength))
         return bootStatus(micant::NtStatus::InvalidParameter);
-    auto* adapter = new (std::nothrow_t{}) BootFileBackendAdapter{*backend};
+    auto* adapter = new (std::nothrow_t{}) BootFileBackendAdapter{*backend, kMaxBootStartDrivers};
     if (!adapter) {
         backend->Release(backend->Context);
         return bootStatus(micant::NtStatus::NoMemory);
@@ -1221,6 +1368,7 @@ int32_t bootCreateBackendFile(void* context, uint64_t* handle, uint32_t access,
         backend->Name ? std::u16string_view(backend->Name, backend->NameLength)
                       : std::u16string_view{},
         bootFileReadAdapter, bootFileReleaseAdapter};
+    nativeBackend.write = backend->Write ? bootFileWriteAdapter : nullptr;
     micant::Handle nativeHandle{};
     const auto status = micant::io::IoCreateBackendFile(
         &nativeHandle, access, nativeBackend);
@@ -1274,6 +1422,9 @@ void initializeKernelServices(micant::boot_driver::KernelServices& services,
     services.UsbHostVersion = micant::shared::usb::HostServicesVersion;
     services.RegisterUsbHost = bootRegisterUsbHost;
     services.UnregisterUsbHost = bootUnregisterUsbHost;
+    services.UsbClassVersion = micant::shared::usb::ClassServicesVersion;
+    services.RegisterUsbClass = bootRegisterUsbClass;
+    services.UnregisterUsbClass = bootUnregisterUsbClass;
     services.FatFilesystemVersion = 1;
     services.MountFatBlockDevice = bootMountFat;
     services.UnmountFatBlockDevice = bootUnmountFat;
@@ -1282,6 +1433,9 @@ void initializeKernelServices(micant::boot_driver::KernelServices& services,
     services.UnregisterNetworkAdapter = bootUnregisterNetworkAdapter;
     services.CreateReadOnlyBlockDevice = bootCreateReadOnlyBlockDevice;
     services.ReadBlockDevice = bootReadBlockDevice;
+    services.WritableBlockDeviceVersion = 1;
+    services.CreateWritableBlockDevice = bootCreateWritableBlockDevice;
+    services.WriteBlockDevice = bootWriteBlockDevice;
     services.RegisterFileOpenRoutine = bootRegisterFileOpenRoutine;
     services.UnregisterFileOpenRoutine = bootUnregisterFileOpenRoutine;
     services.OpenBackendFile = bootOpenBackendFile;
@@ -1749,7 +1903,10 @@ bool inventoryFirmwarePciBars(const micant::boot::UefiKernelHandoffV3& handoff) 
                 !read(bus, device, function, 4, command)) return false;
             const auto type = (header >> 16) & 0x7f;
             const unsigned barCount = type == 0 ? 6 : type == 1 ? 2 : 0;
-            if (type > 1) complete = false;
+            if (type > 1) {
+                serialWrite("[MicaNT PnP] Unsupported PCI header type\r\n");
+                complete = false;
+            }
             for (uint8_t index = 0; index < barCount; ++index) {
                 uint32_t low{};
                 if (!read(bus, device, function, static_cast<uint16_t>(0x10 + index * 4), low)) return false;
@@ -1766,17 +1923,40 @@ bool inventoryFirmwarePciBars(const micant::boot::UefiKernelHandoffV3& handoff) 
                 if (!address) continue;
                 const bool active = (command & (io ? 1u : 2u)) != 0 || (command & 4u) != 0;
                 const micant::boot::FirmwarePciBarV1* firmware{};
-                if (snapshot) for (uint32_t n = 0; n < snapshot->pciBarCount; ++n) {
-                    const auto& candidate = snapshot->pciBars[n];
-                    if (candidate.bus == bus && candidate.device == device && candidate.function == function &&
-                        candidate.index == originalIndex) { firmware = &candidate; matched[n] = true; break; }
+                if (snapshot) {
+                    uint32_t addressMatches{};
+                    const micant::boot::FirmwarePciBarV1* addressMatch{};
+                    for (uint32_t n = 0; n < snapshot->pciBarCount; ++n) {
+                        const auto& candidate = snapshot->pciBars[n];
+                        if (candidate.bus != bus || candidate.device != device ||
+                            candidate.function != function) continue;
+                        if (candidate.index == originalIndex) firmware = &candidate;
+                        if (!matched[n] && candidate.address == address &&
+                            candidate.type == static_cast<uint8_t>(io)) {
+                            ++addressMatches;
+                            addressMatch = &candidate;
+                        }
+                    }
+                    if (addressMatches == 1) {
+                        firmware = addressMatch;
+                        for (uint32_t n = 0; n < snapshot->pciBarCount; ++n)
+                            if (&snapshot->pciBars[n] == firmware) { matched[n] = true; break; }
+                    } else if (firmware) {
+                        complete = false;
+                    }
                 }
                 if (firmware && firmware->address == address && firmware->type == static_cast<uint8_t>(io)) {
                     if (!micant::km::arb::recordMeasuredBar({address, firmware->length, bus, device,
                                                               function, originalIndex, io, active})) return false;
                     continue;
                 }
-                if (firmware) complete = false;
+                if (firmware) {
+                    serialWrite("[MicaNT PnP] Firmware/config BAR mismatch BDF/index=");
+                    serialWriteNumber((uint64_t{bus} << 24) | (uint64_t{device} << 16) |
+                                      (uint64_t{function} << 8) | originalIndex);
+                    serialWrite("\r\n");
+                    complete = false;
+                }
                 micant::hal::amd64::PciBarInfo info{};
                 const auto result = micant::hal::amd64::probeQuiescentPciBar(
                     bus, device, function, originalIndex, info);
@@ -1786,6 +1966,10 @@ bool inventoryFirmwarePciBars(const micant::boot::UefiKernelHandoffV3& handoff) 
                     if (!micant::km::arb::recordMeasuredBar({address, info.length, bus, device,
                                                               function, originalIndex, io, active})) return false;
                 } else {
+                    serialWrite("[MicaNT PnP] PCI BAR size unavailable BDF/index=");
+                    serialWriteNumber((uint64_t{bus} << 24) | (uint64_t{device} << 16) |
+                                      (uint64_t{function} << 8) | originalIndex);
+                    serialWrite("\r\n");
                     if (!micant::km::arb::recordUnmeasuredBar({address, 0, bus, device, function,
                                                                 originalIndex, io, active})) return false;
                     complete = false;
@@ -1793,9 +1977,31 @@ bool inventoryFirmwarePciBars(const micant::boot::UefiKernelHandoffV3& handoff) 
             }
         }
     }
-    if (snapshot) for (uint32_t i = 0; i < snapshot->pciBarCount; ++i)
-        if (!matched[i]) complete = false;
+    if (snapshot) for (uint32_t i = 0; i < snapshot->pciBarCount; ++i) {
+        if (matched[i]) continue;
+        const auto& bar = snapshot->pciBars[i];
+        if (bar.index > 0) {
+            uint32_t previous{};
+            if (read(bar.bus, bar.device, bar.function,
+                     static_cast<uint16_t>(0x10 + (bar.index - 1) * 4), previous) &&
+                !(previous & 1u) && ((previous >> 1) & 3u) == 2u) {
+                serialWrite("[MicaNT PnP] Ignoring firmware descriptor for 64-bit BAR upper slot\r\n");
+                continue;
+            }
+        }
+        serialWrite("[MicaNT PnP] Unmatched firmware BAR BDF/index=");
+        serialWriteNumber((uint64_t{bar.bus} << 24) | (uint64_t{bar.device} << 16) |
+                          (uint64_t{bar.function} << 8) | bar.index);
+        uint32_t observedId{};
+        if (read(bar.bus, bar.device, bar.function, 0, observedId)) {
+            serialWrite(" config-id=");
+            serialWriteNumber(observedId);
+        }
+        serialWrite("\r\n");
+        complete = false;
+    }
     micant::km::arb::setPciInventoryComplete(complete);
+    if (!complete) serialWrite("[MicaNT PnP] PCI resource inventory incomplete\r\n");
     return true;
 }
 
@@ -1824,8 +2030,18 @@ void initializeBootStartDrivers(const micant::boot::UefiKernelHandoffV3* handoff
             stopWithError("[MicaNT Display] GOP display unavailable\r\n");
         return;
     }
-    if (micant::hal::amd64::initializeBootstrapDmaTranslationState(*handoff))
+    uint32_t dmaFailureStage{};
+    uint64_t dmaFailureDetail{};
+    if (micant::hal::amd64::initializeBootstrapDmaTranslationState(
+            *handoff, &dmaFailureStage, &dmaFailureDetail)) {
         (void)micant::io::dma::initializeDirectProvider();
+    } else {
+        serialWrite("[MicaNT DMA] bootstrap inventory rejected stage=");
+        serialWriteNumber(dmaFailureStage);
+        serialWrite(" detail=");
+        serialWriteNumber(dmaFailureDetail);
+        serialWrite("\r\n");
+    }
     if (handoff->version == micant::boot::UEFI_KERNEL_HANDOFF_VERSION) {
         if (!initializeDisplay(handoff->displayDriver) &&
             !initializeGopFramebuffer(handoff->framebuffer))
@@ -1944,16 +2160,37 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     using namespace micant;
     const auto number = args.number, first = args.first, second = args.second;
     const auto status = [](NtStatus value) { return static_cast<uint64_t>(value); };
-    if (number == sys::SSN_NtQuerySystemTime)
-        return status(sys::NtQuerySystemTime(reinterpret_cast<LargeInteger*>(first)));
-    if (number == sys::SSN_NtQueryPerformanceCounter)
-        return status(sys::NtQueryPerformanceCounter(
+    if (number == sys::SSN_NtAllocateVirtualMemory || number == sys::SSN_NtFreeVirtualMemory ||
+        number == sys::SSN_NtCreateSection || number == sys::SSN_NtMapViewOfSection ||
+        number == sys::SSN_NtUnmapViewOfSection || number == sys::SSN_NtClose) {
+        serialWrite("[MicaNT DBG] syscall=");
+        serialWriteNumber(number);
+        serialWrite(" pfn=");
+        serialWriteNumber(mm::PfnDatabase::get().getActiveCount());
+        serialWrite("\r\n");
+    }
+    if (number == sys::SSN_NtQuerySystemTime) {
+        const auto result = sys::NtQuerySystemTime(reinterpret_cast<LargeInteger*>(first));
+        return status(result);
+    }
+    if (number == sys::SSN_NtQueryPerformanceCounter) {
+        const auto result = sys::NtQueryPerformanceCounter(
             reinterpret_cast<LargeInteger*>(first),
-            reinterpret_cast<LargeInteger*>(second)));
+            reinterpret_cast<LargeInteger*>(second));
+        return status(result);
+    }
     if (number == sys::SSN_NtContinue) {
         const auto result = sys::NtContinue(reinterpret_cast<const void*>(first),
             static_cast<uint8_t>(second) != 0, args.trapFrame, args.floatingState,
-            args.floatingStateSize, args.xsaveMask);
+            args.floatingStateSize, args.xsaveMask, false, args.userSegments);
+        return result == NtStatus::Success
+            ? hal::amd64::BootstrapNtContinueApplied : status(result);
+    }
+    if (number == sys::SSN_NtRaiseException) {
+        const auto result = sys::NtRaiseException(reinterpret_cast<const void*>(first),
+            reinterpret_cast<const void*>(second), (args.third & 0xff) != 0,
+            args.trapFrame, args.floatingState, args.floatingStateSize, args.xsaveMask,
+            args.userSegments);
         return result == NtStatus::Success
             ? hal::amd64::BootstrapNtContinueApplied : status(result);
     }
@@ -2060,8 +2297,10 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
                                                 alignof(IoStatusBlock)) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
         __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         const auto cancelStatus = io::IoCancelFileReads(static_cast<Handle>(first),
                                                          reinterpret_cast<const void*>(args.second));
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         __asm__ __volatile__("swapgs" : : : "memory");
         if (cancelStatus == NtStatus::Success) {
             const IoStatusBlock result{NtStatus::Success, 0};
@@ -2095,10 +2334,11 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         const bool useCurrentOffset = !byteOffsetAddress || byteOffset.quadPart == fileUseCurrentPosition;
         if (!useCurrentOffset && byteOffset.quadPart < 0) return status(NtStatus::InvalidParameter);
         bool completionAssociated = false;
-        if (!args.second && !args.third && args.fourth) {
+        if (!args.second && !args.third) {
             const auto lookup = io::IoHasCompletionPort(static_cast<Handle>(first), completionAssociated);
             if (lookup != NtStatus::Success) return status(lookup);
-            if (!completionAssociated) return status(NtStatus::NotSupported);
+            if ((args.fourth && !completionAssociated) || (completionAssociated && !args.fourth))
+                return status(NtStatus::NotSupported);
         }
         if (args.second || args.third || completionAssociated) {
             auto* issuingThread = ke::KeGetCurrentThread();
@@ -2132,9 +2372,12 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             __asm__ __volatile__("swapgs" : : : "memory");
             __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         }
+        const bool enableReadInterrupts = canBlock && hal::amd64::bootstrapSchedulerClockActive();
+        if (enableReadInterrupts) __asm__ __volatile__("sti" : : : "memory");
         const auto readStatus = io::IoReadFileHandle(static_cast<Handle>(first), useCurrentOffset,
             useCurrentOffset ? 0 : static_cast<uint64_t>(byteOffset.quadPart),
             staging.get(), length, &bytesRead, ioStatusAddress);
+        if (enableReadInterrupts) __asm__ __volatile__("cli" : : : "memory");
         if (canBlock && readThread->terminationRequested && readThread->serviceTermination) {
             auto terminate = readThread->serviceTermination;
             void* terminationContext = readThread->terminationContext;
@@ -2153,41 +2396,112 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             copyStatus = ex::ExSafeCopyToUser(ioStatusAddress, &ioStatus, sizeof(ioStatus));
         return status(copyStatus == NtStatus::Success ? readStatus : NtStatus::AccessViolation);
     }
+    if (number == sys::SSN_NtWriteFile) {
+        uint64_t extra[5]{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(extra)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        auto* ioStatusAddress = reinterpret_cast<IoStatusBlock*>(extra[0]);
+        const auto* userBuffer = reinterpret_cast<const void*>(extra[1]);
+        if (extra[2] > 1024 * 1024 || extra[4]) return status(NtStatus::NotSupported);
+        const size_t length = static_cast<size_t>(extra[2]);
+        const auto* byteOffsetAddress = reinterpret_cast<const LargeInteger*>(extra[3]);
+        if (!ioStatusAddress || (length && !userBuffer) || args.second || args.third || args.fourth)
+            return status(args.second || args.third || args.fourth
+                ? NtStatus::NotSupported : NtStatus::InvalidParameter);
+        if (ex::ProbeForWrite(ioStatusAddress, sizeof(IoStatusBlock), alignof(IoStatusBlock)) != NtStatus::Success ||
+            ex::ProbeForRead(userBuffer, length, 1) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        LargeInteger byteOffset{};
+        if (byteOffsetAddress && ex::ExSafeCopyFromUser(&byteOffset, byteOffsetAddress,
+                sizeof(byteOffset)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        constexpr int64_t fileUseCurrentPosition = -2;
+        const bool useCurrentOffset = !byteOffsetAddress || byteOffset.quadPart == fileUseCurrentPosition;
+        if (!useCurrentOffset && byteOffset.quadPart < 0) return status(NtStatus::InvalidParameter);
+        std::unique_ptr<uint8_t[]> staging;
+        if (length) {
+            staging.reset(new (std::nothrow_t{}) uint8_t[length]);
+            if (!staging) return status(NtStatus::NoMemory);
+            if (ex::ExSafeCopyFromUser(staging.get(), userBuffer, length) != NtStatus::Success)
+                return status(NtStatus::AccessViolation);
+        }
+        const auto* issuingThread = ke::KeGetCurrentThread();
+        if (!issuingThread || !issuingThread->owningProcess || !issuingThread->kernelStackTop ||
+            ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+            return status(NtStatus::InvalidDeviceRequest);
+        __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        const bool enableWriteInterrupts = hal::amd64::bootstrapSchedulerClockActive();
+        if (enableWriteInterrupts) __asm__ __volatile__("sti" : : : "memory");
+        size_t bytesWritten{};
+        const auto writeStatus = io::IoWriteFileHandle(static_cast<Handle>(first), useCurrentOffset,
+            useCurrentOffset ? 0 : static_cast<uint64_t>(byteOffset.quadPart),
+            staging.get(), length, &bytesWritten);
+        if (enableWriteInterrupts) __asm__ __volatile__("cli" : : : "memory");
+        if (issuingThread->terminationRequested && issuingThread->serviceTermination) {
+            auto terminate = issuingThread->serviceTermination;
+            void* terminationContext = issuingThread->terminationContext;
+            staging.reset();
+            terminate(terminationContext);
+        }
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        __asm__ __volatile__("swapgs" : : : "memory");
+        const IoStatusBlock ioResult{writeStatus, bytesWritten};
+        if (ex::ExSafeCopyToUser(ioStatusAddress, &ioResult, sizeof(ioResult)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        return status(writeStatus);
+    }
     if (number == sys::SSN_NtCreateFile) {
         uint64_t extra[7]{};
         ObjectAttributes attributes{};
-        if (args.userStack > UINT64_MAX - 40 ||
-            ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
-                                   sizeof(extra)) != NtStatus::Success ||
-            ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third),
-                                   sizeof(attributes)) != NtStatus::Success ||
-            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success ||
-            ex::ProbeForWrite(reinterpret_cast<void*>(args.fourth), sizeof(IoStatusBlock),
-                              alignof(IoStatusBlock)) != NtStatus::Success)
-            return status(NtStatus::AccessViolation);
+        if (args.userStack > UINT64_MAX - 40) return status(NtStatus::AccessViolation);
+        auto captureStatus = ex::ProbeForRead(reinterpret_cast<const void*>(args.third),
+                                              sizeof(attributes), alignof(ObjectAttributes));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        captureStatus = ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), alignof(Handle));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        captureStatus = ex::ProbeForWrite(reinterpret_cast<void*>(args.fourth), sizeof(IoStatusBlock),
+                                          alignof(IoStatusBlock));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        captureStatus = ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
+                                               sizeof(extra));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        captureStatus = ex::ExSafeCopyFromUser(&attributes, reinterpret_cast<const void*>(args.third),
+                                               sizeof(attributes));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
         constexpr uint32_t fileOpen = 1;
+        constexpr uint32_t fileOpenIf = 3;
         constexpr uint32_t allowedAttributes = OBJ_INHERIT | OBJ_CASE_INSENSITIVE;
         constexpr uint32_t allowedShareAccess = 0x7;
         constexpr uint32_t allowedOpenOptions = 0x20 | 0x40;
         if (attributes.length != sizeof(ObjectAttributes) || !attributes.objectName ||
             attributes.rootDirectory || (attributes.attributes & ~allowedAttributes) ||
             attributes.securityDescriptor || attributes.securityQualityOfService ||
-            extra[0] || extra[2] > allowedShareAccess || extra[3] != fileOpen ||
+            extra[0] || extra[2] > allowedShareAccess ||
+            (extra[3] != fileOpen && extra[3] != fileOpenIf) ||
             (extra[4] & ~allowedOpenOptions))
             return status(NtStatus::NotSupported);
         UnicodeString name{};
-        if (ex::ExSafeCopyFromUser(&name, attributes.objectName, sizeof(name)) != NtStatus::Success ||
-            !name.length || (name.length & 1) || name.length > name.maximumLength || !name.buffer ||
+        captureStatus = ex::ProbeForRead(attributes.objectName, sizeof(name), alignof(UnicodeString));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        captureStatus = ex::ExSafeCopyFromUser(&name, attributes.objectName, sizeof(name));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        if (!name.length || (name.length & 1) || name.length > name.maximumLength || !name.buffer ||
             name.length > 2048 * sizeof(char16_t)) return status(NtStatus::InvalidParameter);
         char16_t path[2048]{};
-        if (ex::ExSafeCopyFromUser(path, name.buffer, name.length) != NtStatus::Success)
-            return status(NtStatus::AccessViolation);
+        captureStatus = ex::ProbeForRead(name.buffer, name.length, alignof(char16_t));
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
+        captureStatus = ex::ExSafeCopyFromUser(path, name.buffer, name.length);
+        if (captureStatus != NtStatus::Success) return status(captureStatus);
         const std::u16string_view pathView(path, name.length / sizeof(char16_t));
         constexpr std::u16string_view afdPath(u"\\Device\\Afd\\Endpoint");
         Handle handle{};
         IoStatusBlock ioStatus{};
+        bool provisionalCreated{};
         if (pathView == afdPath) {
-            if (extra[1] || extra[4] || !extra[5] || !extra[6] || extra[6] > 256)
+            if (extra[3] != fileOpen || extra[1] || extra[4] || !extra[5] || !extra[6] || extra[6] > 256)
                 return status(NtStatus::NotSupported);
             std::array<uint8_t, 256> ea{};
             if (ex::ExSafeCopyFromUser(ea.data(), reinterpret_cast<const void*>(extra[5]),
@@ -2200,7 +2514,7 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             ioStatus.status = NtStatus::Success;
             ioStatus.information = 1; // FILE_OPENED
         } else if (micant::km::hid::isInputDeviceName(pathView)) {
-            if (extra[1] || extra[5] || extra[6]) return status(NtStatus::NotSupported);
+            if (extra[3] != fileOpen || extra[1] || extra[5] || extra[6]) return status(NtStatus::NotSupported);
             ioStatus.status = micant::km::hid::openInputDevice(&handle, static_cast<uint32_t>(second), pathView,
                                                                (extra[4] & 0x20u) != 0);
             ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
@@ -2210,8 +2524,18 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             }
         } else {
             if (extra[1] || extra[5] || extra[6]) return status(NtStatus::NotSupported);
-            ioStatus.status = io::IoOpenBackendFile(&handle, static_cast<uint32_t>(second), pathView);
-            ioStatus.information = ioStatus.status == NtStatus::Success ? 1 : 0;
+            // Filesystem lookup may read a real block device or wait for its
+            // owner. The captured path is resident on this thread's stack.
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            const bool canSchedule = hal::amd64::bootstrapSchedulerClockActive();
+            if (canSchedule) __asm__ __volatile__("sti" : : : "memory");
+            ioStatus.status = io::IoOpenBackendFile(&handle, static_cast<uint32_t>(second),
+                pathView, extra[3] == fileOpenIf, &provisionalCreated, true);
+            if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+            ioStatus.information = ioStatus.status == NtStatus::Success ? (provisionalCreated ? 2 : 1) : 0;
             if (ioStatus.status != NtStatus::Success) {
                 (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
                 return status(ioStatus.status);
@@ -2220,10 +2544,40 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
         if (copy == NtStatus::Success)
             copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
+        if (copy == NtStatus::Success && provisionalCreated) {
+            // The FAT directory entry remains provisional until both user
+            // outputs are published. Committing may wait for the backend.
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            const bool canSchedule = hal::amd64::bootstrapSchedulerClockActive();
+            if (canSchedule) __asm__ __volatile__("sti" : : : "memory");
+            copy = io::IoCommitCreatedFile(handle);
+            if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+            if (copy != NtStatus::Success) {
+                ioStatus.status = copy;
+                ioStatus.information = 0;
+                (void)ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.fourth), &ioStatus, sizeof(ioStatus));
+            }
+        }
         if (copy != NtStatus::Success) {
             ob::HandleTable* table{}; Handle raw{};
-            if (ob::detail::resolveHandle(handle, table, raw) != NtStatus::Success ||
-                table->closeHandle(raw) != NtStatus::Success) __builtin_trap();
+            if (ob::detail::resolveHandle(handle, table, raw) != NtStatus::Success)
+                return status(copy);
+            auto* retired = table->takeHandle(raw);
+            if (retired) {
+                // Closing can release a provisional filesystem entry and
+                // perform I/O, so do it after leaving the syscall copy path.
+                __asm__ __volatile__("swapgs" : : : "memory");
+                __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+                const bool canSchedule = hal::amd64::bootstrapSchedulerClockActive();
+                if (canSchedule) __asm__ __volatile__("sti" : : : "memory");
+                (void)ob::ObFinishClose(retired, raw);
+                if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
+                __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+                __asm__ __volatile__("swapgs" : : : "memory");
+            }
         }
         return status(copy);
     }
@@ -2288,7 +2642,20 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         irp.length = outputLength;
         irp.byteOffset.lowPart = ioctl;
         irp.byteOffset.highPart = static_cast<int32_t>(inputLength);
+        const auto* ioctlThread = ke::KeGetCurrentThread();
+        if (!ioctlThread || !ioctlThread->owningProcess || !ioctlThread->kernelStackTop ||
+            !hal::amd64::bootstrapSchedulerClockActive()) {
+            ob::ObDereferenceObject(reference);
+            return status(NtStatus::DeviceNotReady);
+        }
+        // AFD connect/receive and transport backpressure can wait. Switch to
+        // kernel GS/segments before enabling scheduling; restore the syscall
+        // convention and interrupt exclusion before touching user buffers.
+        __asm__ __volatile__("swapgs; movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es; sti"
+                             : : : "rax", "memory");
         ioStatus = io::IoCallDriver(irp.deviceObject, &irp);
+        __asm__ __volatile__("cli; movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es; swapgs"
+                             : : : "rax", "memory");
         const bool outputIoctl = ioctl == micant::shared::afd::IoctlReceive ||
                                  ioctl == micant::shared::afd::IoctlReceiveFrom ||
                                  ioctl == micant::shared::afd::IoctlQueryNetworkConfiguration;
@@ -2356,13 +2723,19 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
     if (number == sys::SSN_NtCreateThreadEx) {
         uint64_t extra[7]{};
         ObjectAttributes attributes{};
+        if (args.third) {
+            const auto attributeProbe = ex::ProbeForRead(reinterpret_cast<void*>(args.third),
+                                                         sizeof(attributes), alignof(uint32_t));
+            if (attributeProbe != NtStatus::Success) return status(attributeProbe);
+        }
         if (args.userStack > UINT64_MAX - 40 ||
             ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
                                    sizeof(extra)) != NtStatus::Success ||
             (args.third && ex::ExSafeCopyFromUser(&attributes,
-                reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success) ||
-            ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), 1) != NtStatus::Success)
+                reinterpret_cast<const void*>(args.third), sizeof(attributes)) != NtStatus::Success))
             return status(NtStatus::AccessViolation);
+        const auto handleProbe = ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), alignof(Handle));
+        if (handleProbe != NtStatus::Success) return status(handleProbe);
         struct CapturedAttributes { size_t totalLength; PsAttribute attributes[2]; } captured{};
         PsAttribute original[2]{};
         ClientId clientId{};
@@ -2370,6 +2743,8 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         size_t returned[2]{};
         size_t count{};
         if (extra[6]) {
+            const auto listProbe = ex::ProbeForRead(reinterpret_cast<void*>(extra[6]), sizeof(size_t), alignof(size_t));
+            if (listProbe != NtStatus::Success) return status(listProbe);
             if (ex::ExSafeCopyFromUser(&captured.totalLength, reinterpret_cast<void*>(extra[6]),
                                        sizeof(size_t)) != NtStatus::Success)
                 return status(NtStatus::AccessViolation);
@@ -2387,16 +2762,20 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
                     original[i].attribute == PS_ATTRIBUTE_TEB_ADDRESS ? sizeof(teb) : 0;
                 if (!required) return status(NtStatus::NotImplemented);
                 if (original[i].size != required) return status(NtStatus::InvalidParameter);
-                if (ex::ProbeForWrite(reinterpret_cast<void*>(original[i].value), required, 1) != NtStatus::Success ||
-                    (original[i].returnLength && ex::ProbeForWrite(original[i].returnLength, sizeof(size_t), 1) != NtStatus::Success))
-                    return status(NtStatus::AccessViolation);
+                const auto valueProbe = ex::ProbeForWrite(reinterpret_cast<void*>(original[i].value), required,
+                                                           alignof(uintptr_t));
+                if (valueProbe != NtStatus::Success) return status(valueProbe);
+                if (original[i].returnLength) {
+                    const auto lengthProbe = ex::ProbeForWrite(original[i].returnLength, sizeof(size_t), alignof(size_t));
+                    if (lengthProbe != NtStatus::Success) return status(lengthProbe);
+                }
                 captured.attributes[i].value = original[i].attribute == PS_ATTRIBUTE_CLIENT_ID
                     ? reinterpret_cast<uintptr_t>(&clientId) : reinterpret_cast<uintptr_t>(&teb);
                 captured.attributes[i].returnLength = original[i].returnLength ? &returned[i] : nullptr;
             }
         }
         Handle handle{};
-        const auto result = sys::NtCreateThreadEx(&handle, static_cast<uint32_t>(second),
+        const auto result = sys::NtCreateThreadExFromKernel(&handle, static_cast<uint32_t>(second),
             args.third ? &attributes : nullptr, static_cast<Handle>(args.fourth), extra[0], extra[1],
             static_cast<uint32_t>(extra[2]) | 1u, extra[3], extra[4], extra[5], extra[6] ? &captured : nullptr);
         if (result != NtStatus::Success) return status(result);
@@ -2425,23 +2804,27 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         if (copy != NtStatus::Success) {
             ps::EThread* thread{};
             ob::ObjectHeader* reference{};
-            if (ps::detail::referenceThreadHandle(handle, 0, thread, reference) != NtStatus::Success ||
-                thread->rollbackBeforeStart() != NtStatus::Success)
+            if (ps::detail::referenceThreadHandle(handle, 0, thread, reference) != NtStatus::Success)
                 __builtin_trap();
+            if (thread->rollbackBeforeStart() != NtStatus::Success)
+                thread->deferFailedCreationReap();
             ob::ObDereferenceObject(reference);
             (void)sys::NtClose(handle);
         }
         return status(copy);
     }
+    if (number == sys::SSN_NtOpenProcess || number == sys::SSN_NtOpenThread) {
+        auto* output = reinterpret_cast<Handle*>(first);
+        auto* attributes = reinterpret_cast<ObjectAttributes*>(args.third);
+        auto* clientId = reinterpret_cast<ClientId*>(args.fourth);
+        return status(number == sys::SSN_NtOpenProcess
+            ? sys::NtOpenProcess(output, static_cast<uint32_t>(second), attributes, clientId)
+            : sys::NtOpenThread(output, static_cast<uint32_t>(second), attributes, clientId));
+    }
     if (number == sys::SSN_NtResumeThread) {
-        if (second) {
-            const auto probe = ex::ProbeForWrite(reinterpret_cast<void*>(second), sizeof(uint32_t), alignof(uint32_t));
-            if (probe != NtStatus::Success) return status(probe);
-        }
-        uint32_t previous{};
-        const auto result = sys::NtResumeThread(static_cast<Handle>(first), second ? &previous : nullptr);
-        if (result != NtStatus::Success || !second) return status(result);
-        return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &previous, sizeof(previous)));
+        // The service probes and copies the user output while the resume
+        // transition remains under the same BSP exclusion.
+        return status(sys::NtResumeThread(static_cast<Handle>(first), reinterpret_cast<uint32_t*>(second)));
     }
     if (number == sys::SSN_NtQueueApcThread) {
         uint64_t systemArgument2{};
@@ -2453,9 +2836,37 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             static_cast<uintptr_t>(second), reinterpret_cast<void*>(args.third),
             reinterpret_cast<void*>(args.fourth), reinterpret_cast<void*>(systemArgument2)));
     }
+    if (number == sys::SSN_NtQueryInformationProcess || number == sys::SSN_NtReadVirtualMemory) {
+        uint64_t fifth{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&fifth, reinterpret_cast<const void*>(args.userStack + 40),
+                                   sizeof(fifth)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        // Attach uses the kernel GS convention. Both services protect user
+        // probes and CR3 changes against preemption internally.
+        __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        const bool canSchedule = hal::amd64::bootstrapSchedulerClockActive();
+        if (canSchedule) __asm__ __volatile__("sti" : : : "memory");
+        const auto result = number == sys::SSN_NtQueryInformationProcess
+            ? sys::NtQueryInformationProcess(static_cast<Handle>(first),
+                static_cast<ProcessInformationClass>(second), reinterpret_cast<void*>(args.third),
+                static_cast<uint32_t>(args.fourth), reinterpret_cast<uint32_t*>(fifth))
+            : sys::NtReadVirtualMemory(static_cast<Handle>(first), reinterpret_cast<const void*>(second),
+                reinterpret_cast<void*>(args.third), static_cast<size_t>(args.fourth), reinterpret_cast<size_t*>(fifth));
+        if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        __asm__ __volatile__("swapgs" : : : "memory");
+        return status(result);
+    }
     if (number == sys::SSN_NtCreateProcessEx) {
         uint64_t extra[5]{};
         ObjectAttributes attributes{};
+        if (args.third) {
+            const auto attributeProbe = ex::ProbeForRead(reinterpret_cast<void*>(args.third),
+                                                         sizeof(attributes), alignof(uint32_t));
+            if (attributeProbe != NtStatus::Success) return status(attributeProbe);
+        }
         if (args.userStack > UINT64_MAX - 40 ||
             ex::ExSafeCopyFromUser(extra, reinterpret_cast<const void*>(args.userStack + 40),
                                    sizeof(extra)) != NtStatus::Success ||
@@ -2464,16 +2875,21 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             return status(NtStatus::AccessViolation);
         const auto probe = ex::ProbeForWrite(reinterpret_cast<void*>(first), sizeof(Handle), alignof(Handle));
         if (probe != NtStatus::Success) return status(probe);
-        Handle handle{};
-        const auto result = sys::NtCreateProcessEx(&handle, static_cast<uint32_t>(second),
+        // Loading an image section can wait for real file I/O. Enter the
+        // scheduler's kernel GS/segment convention before enabling clock
+        // interrupts, and return to the syscall convention before copyout.
+        __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        const bool canSchedule = hal::amd64::bootstrapSchedulerClockActive();
+        if (canSchedule) __asm__ __volatile__("sti" : : : "memory");
+        const auto result = sys::NtCreateProcessExCaptured(reinterpret_cast<Handle*>(first), static_cast<uint32_t>(second),
             args.third ? &attributes : nullptr, static_cast<Handle>(args.fourth),
             static_cast<uint32_t>(extra[0]), static_cast<Handle>(extra[1]),
             static_cast<Handle>(extra[2]), static_cast<Handle>(extra[3]), (extra[4] & 0xff) != 0);
-        if (result != NtStatus::Success) return status(result);
-        const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
-        if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
-            __builtin_trap();
-        return status(copy);
+        if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        __asm__ __volatile__("swapgs" : : : "memory");
+        return status(result);
     }
     if (number == sys::SSN_NtTerminateProcess || number == sys::SSN_NtTerminateThread) {
         // The syscall entry used SWAPGS; restore the bootstrap kernel's GS
@@ -2549,21 +2965,35 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         return status(ex::ExSafeCopyToUser(reinterpret_cast<void*>(second), &previous, sizeof(previous)));
     }
     if (number == sys::SSN_NtWaitForSingleObject) {
-        if (!args.third) {
-            const auto* thread = ke::KeGetCurrentThread();
-            if (!thread || !thread->owningProcess || !thread->kernelStackTop)
-                return status(NtStatus::NotImplemented);
-            __asm__ __volatile__("swapgs" : : : "memory");
-            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
-            const auto result = sys::NtWaitForSingleObject(first, (second & 0xff) != 0, nullptr);
-            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
-            __asm__ __volatile__("swapgs" : : : "memory");
-            return status(result);
-        }
         LargeInteger timeout{};
-        if (ex::ExSafeCopyFromUser(&timeout, reinterpret_cast<const void*>(args.third), sizeof(timeout)) != NtStatus::Success)
+        if (args.third && ex::ExSafeCopyFromUser(&timeout, reinterpret_cast<const void*>(args.third), sizeof(timeout)) != NtStatus::Success)
             return status(NtStatus::AccessViolation);
-        return status(sys::NtWaitForSingleObject(first, (second & 0xff) != 0, &timeout));
+        const auto* thread = ke::KeGetCurrentThread();
+        if (!thread || !thread->owningProcess || !thread->kernelStackTop)
+            return status(NtStatus::NotImplemented);
+        // Timed waits may block just like indefinite waits: enter the kernel
+        // segment/GS convention before either can switch to another thread.
+        __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        const auto result = sys::NtWaitForSingleObject(first, (second & 0xff) != 0,
+                                                        args.third ? &timeout : nullptr);
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        __asm__ __volatile__("swapgs" : : : "memory");
+        return status(result);
+    }
+    if (number == sys::SSN_NtFlushInstructionCache) {
+        return status(sys::NtFlushInstructionCache(static_cast<Handle>(first),
+            reinterpret_cast<const void*>(second), static_cast<size_t>(args.third)));
+    }
+    if (number == sys::SSN_NtProtectVirtualMemory) {
+        uint64_t oldProtection{};
+        if (args.userStack > UINT64_MAX - 40 ||
+            ex::ExSafeCopyFromUser(&oldProtection,
+                reinterpret_cast<const void*>(args.userStack + 40), sizeof(oldProtection)) != NtStatus::Success)
+            return status(NtStatus::AccessViolation);
+        return status(sys::NtProtectVirtualMemory(static_cast<Handle>(first),
+            reinterpret_cast<uintptr_t*>(second), reinterpret_cast<size_t*>(args.third),
+            static_cast<uint32_t>(args.fourth), reinterpret_cast<uint32_t*>(oldProtection)));
     }
     if (number == sys::SSN_NtAllocateVirtualMemory || number == sys::SSN_NtFreeVirtualMemory) {
         const uint64_t sizePointer = number == sys::SSN_NtAllocateVirtualMemory ? args.fourth : args.third;
@@ -2609,15 +3039,23 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
                 (args.fourth && ex::ExSafeCopyFromUser(&maximum,
                     reinterpret_cast<const void*>(args.fourth), sizeof(maximum)) != NtStatus::Success))
                 return status(NtStatus::AccessViolation);
-            Handle handle{};
-            const auto result = sys::NtCreateSectionFromKernel(&handle, static_cast<uint32_t>(second),
-                                                      args.third ? &attributes : nullptr, &maximum,
+            // SEC_IMAGE construction reads its file backing. Permit the
+            // canonical file backend to wait while keeping the captured
+            // inputs on this thread's kernel stack. The service publishes
+            // the handle directly to user space under BSP exclusion.
+            __asm__ __volatile__("swapgs" : : : "memory");
+            __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            const bool canSchedule = hal::amd64::bootstrapSchedulerClockActive();
+            if (canSchedule) __asm__ __volatile__("sti" : : : "memory");
+            const auto result = sys::NtCreateSectionCaptured(reinterpret_cast<Handle*>(first),
+                                                      static_cast<uint32_t>(second),
+                                                      args.third ? &attributes : nullptr,
+                                                      args.fourth ? &maximum : nullptr,
                                                       static_cast<uint32_t>(extra[0]), static_cast<uint32_t>(extra[1]), extra[2]);
-            if (result != NtStatus::Success) return status(result);
-            const auto copy = ex::ExSafeCopyToUser(reinterpret_cast<void*>(first), &handle, sizeof(handle));
-            if (copy != NtStatus::Success && sys::NtClose(handle) != NtStatus::Success)
-                __builtin_trap();
-            return status(copy);
+            if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
+            __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+            __asm__ __volatile__("swapgs" : : : "memory");
+            return status(result);
         }
         uintptr_t base{};
         size_t size{};
@@ -2632,15 +3070,14 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         const auto result = sys::NtMapViewOfSectionFromKernel(first, second, &base, args.fourth, extra[0],
             extra[1] ? &offset : nullptr, &size, static_cast<uint32_t>(extra[3]),
             static_cast<uint32_t>(extra[4]), static_cast<uint32_t>(extra[5]));
-        if (result != NtStatus::Success) return status(result);
+        if (result != NtStatus::Success && result != NtStatus::ImageNotAtBase) return status(result);
         if (ex::ExSafeCopyToUser(reinterpret_cast<void*>(args.third), &base, sizeof(base)) != NtStatus::Success ||
             ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[2]), &size, sizeof(size)) != NtStatus::Success ||
             (extra[1] && ex::ExSafeCopyToUser(reinterpret_cast<void*>(extra[1]), &offset, sizeof(offset)) != NtStatus::Success)) {
-            if (sys::NtUnmapViewOfSection(second, base) != NtStatus::Success)
-                __builtin_trap();
+            (void)sys::rollbackMappedViewFromKernel(second, base);
             return status(NtStatus::AccessViolation);
         }
-        return status(NtStatus::Success);
+        return status(result);
     }
     if (number == sys::SSN_NtUnmapViewOfSection)
         return status(sys::NtUnmapViewOfSection(first, second));
@@ -3050,6 +3487,11 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Io] Input device object initialization failed\r\n");
     if (micant::fsrtl::fat::initialize() != micant::NtStatus::Success)
         stopWithError("[MicaNT FsRtl] FAT provider initialization failed\r\n");
+    if (micant::io::IoRegisterSystemDirectoryRoutine(
+            [](void*, char16_t* output, size_t capacity, size_t& length) noexcept {
+                return micant::fsrtl::fat::systemDirectory(output, capacity, length);
+            }, nullptr) != micant::NtStatus::Success)
+        stopWithError("[MicaNT Io] System directory registration failed\r\n");
     if (micant::io::IoRegisterFileOpenRoutine(bootFileOpenRouter, nullptr) != micant::NtStatus::Success)
         stopWithError("[MicaNT Io] File provider router initialization failed\r\n");
     g_bootFileOpenRouterInstalled = true;
@@ -3146,6 +3588,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!micant::hal::amd64::verifyBootstrapSyscalls()) {
         stopWithError("[MicaNT Ke] Syscall entry verification failed\r\n");
     }
+    serialWrite("[MicaNT Test] CPL3 surface presentation completed\r\n");
     serialWrite("[MicaNT Ke] Bootstrap syscall service probes passed\r\n");
     // Enable the canonical clock and its shared user view before the real
     // CPL3 native-image probe executes time syscalls and reads KUSER data.
@@ -3170,6 +3613,8 @@ extern "C" micant::NtStatus KiSystemStartup(
         serialWrite("[MicaNT Hal] Calibrated monotonic timeout checks failed\r\n");
     if (!micant::ke::passive_work::initialize())
         stopWithError("[MicaNT Ke] Passive worker initialization failed\r\n");
+    micant::sys::scheduleDeferredTimerDeletes();
+    micant::io::IoScheduleDeferredFileDeletes();
     initializeBootStartDrivers(handoff);
     auto& bootNetworkStack = micant::tcpip::NetworkStack::get();
     bootNetworkStack.initialize();
@@ -3227,6 +3672,17 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Hal] KUSER_SHARED_DATA mapping failed\r\n");
     }
     serialWrite("[MicaNT Hal] KUSER_SHARED_DATA kernel RW/user RO mapping active\r\n");
+    {
+        // Resolve the installation from the mounted filesystem after KUSER
+        // has been initialized; failed discovery leaves NtSystemRoot empty.
+        char16_t systemDirectory[256]{};
+        size_t systemDirectoryLength{};
+        uint64_t interruptFlags{};
+        __asm__ __volatile__("pushfq; popq %0; sti" : "=r"(interruptFlags) : : "memory");
+        (void)micant::io::IoQuerySystemDirectory(systemDirectory,
+            sizeof(systemDirectory) / sizeof(systemDirectory[0]), systemDirectoryLength);
+        if (!(interruptFlags & (uint64_t{1} << 9))) __asm__ __volatile__("cli" : : : "memory");
+    }
     if (!micant::hal::amd64::verifyNativeImageLoading()) {
         stopWithError("[MicaNT Ke] Native syscall verification failed\r\n");
     }

@@ -8,6 +8,7 @@ namespace micant::ps::detail {
 namespace {
 ob::ObjectType processType;
 ob::ObjectType threadType;
+EProcess* registeredProcesses{};
 
 void deleteProcess(ob::ObjectHeader* header) {
     auto* process = header->as<EProcess>();
@@ -21,8 +22,11 @@ void deleteThread(ob::ObjectHeader* header) {
 }
 
 void initializeThreadType() noexcept {
+    // On the bootstrap processor, object creation can be preempted by a
+    // second caller. Publish the type ID only after the entire descriptor is
+    // initialized, while excluding scheduling on this processor.
+    ob::detail::HandleTableGuard guard;
     if (threadType.typeId == ob::ObjectTypeId::Thread) return;
-    threadType.typeId = ob::ObjectTypeId::Thread;
     threadType.validAccessMask = 0x001fffff;
     threadType.genericMapping = {
         ob::STANDARD_RIGHTS_READ | 0x0008 | 0x0040,
@@ -31,11 +35,13 @@ void initializeThreadType() noexcept {
         0x001fffff
     };
     threadType.deleteProcedure = deleteThread;
+    threadType.deferDelete = deferThreadObjectDelete;
+    threadType.typeId = ob::ObjectTypeId::Thread;
 }
 
 void initializeProcessType() noexcept {
+    ob::detail::HandleTableGuard guard;
     if (processType.typeId == ob::ObjectTypeId::Process) return;
-    processType.typeId = ob::ObjectTypeId::Process;
     processType.validAccessMask = 0x001fffff;
     processType.genericMapping = {
         ob::STANDARD_RIGHTS_READ | 0x0400 | 0x0010,
@@ -45,6 +51,142 @@ void initializeProcessType() noexcept {
     };
     processType.deleteProcedure = deleteProcess;
     processType.deferDelete = deferProcessObjectDelete;
+    processType.typeId = ob::ObjectTypeId::Process;
+}
+
+void releaseObjectSecurity(void* value) noexcept {
+    delete static_cast<se::FreestandingSecurityDescriptor*>(value);
+}
+
+NtStatus assignObjectSecurity(ob::ObjectHeader& header,
+    const se::FreestandingSecurityDescriptor* security, uint32_t& desiredAccess,
+    bool kernelAccess = false) noexcept {
+    constexpr uint32_t maximumAllowed = 0x02000000;
+    const bool maximum = (desiredAccess & maximumAllowed) != 0;
+    const uint32_t requested = ob::MapGenericAccess(desiredAccess & ~maximumAllowed, header.type->genericMapping);
+    if (requested & ~header.type->validAccessMask) return NtStatus::NotSupported;
+    desiredAccess = requested;
+    auto* current = ke::KeGetCurrentThread();
+    auto* currentProcess = ke::KeGetCurrentProcess();
+    const bool checkAccess = !kernelAccess && current && current->previousUserMode;
+    // Early bootstrap can create kernel objects before a process token exists.
+    // User callers always need a token-derived or explicit descriptor.
+    if (!security && !currentProcess && !checkAccess) {
+        if (maximum) desiredAccess = header.type->validAccessMask;
+        return NtStatus::Success;
+    }
+    auto* copy = security ? new (std::nothrow_t{}) se::FreestandingSecurityDescriptor(*security)
+                          : new (std::nothrow_t{}) se::FreestandingSecurityDescriptor{};
+    if (!copy) return NtStatus::NoMemory;
+    if (!security) copy->DaclPresent = false;
+    se::FreestandingAccessToken *primary{}, *impersonation{};
+    ob::ObjectHeader *primaryReference{}, *impersonationReference{};
+    NtStatus status = NtStatus::Success;
+    if (currentProcess)
+        status = currentProcess->referencePrimaryToken(primary, primaryReference);
+    if (status == NtStatus::Success && current && current->owningThread)
+        status = current->owningThread->referenceImpersonationToken(impersonation, impersonationReference);
+    const auto* token = se::SeGetEffectiveFreestandingToken(primary, impersonation);
+    if (!security && !checkAccess && !token) {
+        if (impersonationReference) se::SeDereferenceFreestandingToken(impersonationReference);
+        if (primaryReference) se::SeDereferenceFreestandingToken(primaryReference);
+        delete copy;
+        if (maximum) desiredAccess = header.type->validAccessMask;
+        return NtStatus::Success;
+    }
+    if (status == NtStatus::Success && checkAccess && copy->OwnerPresent) {
+        bool validOwner = token && token->UserSid.equals(copy->Owner);
+        if (token) {
+            for (size_t i = 0; !validOwner && i < token->GroupCount && i < token->Groups.size(); ++i) {
+                const auto& group = token->Groups[i];
+                validOwner = (group.Attributes & 0x00000008) && !(group.Attributes & 0x00000010) &&
+                             group.Sid.equals(copy->Owner);
+            }
+            if (se::SeTokenHasPrivilegeFreestanding(token, 18)) validOwner = true; // SeRestorePrivilege
+        }
+        if (!validOwner) status = NtStatus::InvalidOwner;
+    }
+    if (status == NtStatus::Success && !copy->OwnerPresent && token) {
+        copy->Owner = token->DefaultOwner;
+        copy->OwnerPresent = true;
+    }
+    if (status == NtStatus::Success && !copy->GroupPresent && token) {
+        copy->Group = token->PrimaryGroup;
+        copy->GroupPresent = true;
+    }
+    if (status == NtStatus::Success && !copy->DaclPresent) {
+        if (!token || !token->DefaultDacl.DaclPresent) status = NtStatus::NotSupported;
+        else {
+            copy->Dacl = token->DefaultDacl.Dacl;
+            copy->AceCount = token->DefaultDacl.AceCount;
+            copy->DaclPresent = true;
+            copy->DaclNull = token->DefaultDacl.DaclNull;
+        }
+    }
+    if (status == NtStatus::Success)
+        for (size_t i = 0; i < copy->AceCount; ++i)
+            copy->Dacl[i].AccessMask = ob::MapGenericAccess(copy->Dacl[i].AccessMask, header.type->genericMapping);
+    if (status == NtStatus::Success && checkAccess) {
+        uint32_t granted{};
+        if (maximum) {
+            if (!se::SeMaximumAccessFreestanding(token, *copy, header.type->validAccessMask, granted) ||
+                (requested & ~granted) || !granted) status = NtStatus::AccessDenied;
+            else desiredAccess = granted;
+        } else if (!se::SeAccessCheckFreestanding(token, *copy, requested, granted)) {
+            status = NtStatus::AccessDenied;
+        }
+    } else if (status == NtStatus::Success && maximum) {
+        desiredAccess = header.type->validAccessMask;
+    }
+    if (impersonationReference) se::SeDereferenceFreestandingToken(impersonationReference);
+    if (primaryReference) se::SeDereferenceFreestandingToken(primaryReference);
+    if (status != NtStatus::Success) { delete copy; return status; }
+    header.securityDescriptor = copy;
+    header.releaseSecurityDescriptor = releaseObjectSecurity;
+    return NtStatus::Success;
+}
+
+NtStatus checkExistingObjectAccess(const ob::ObjectHeader& header, uint32_t desiredAccess,
+                                   uint32_t& grantedAccess) noexcept {
+    constexpr uint32_t maximumAllowed = 0x02000000;
+    const bool maximum = (desiredAccess & maximumAllowed) != 0;
+    const uint32_t requested = ob::MapGenericAccess(desiredAccess & ~maximumAllowed, header.type->genericMapping);
+    if (requested & ~header.type->validAccessMask) return NtStatus::NotSupported;
+    grantedAccess = requested;
+    auto* current = ke::KeGetCurrentThread();
+    if (!current || !current->previousUserMode) {
+        if (maximum) grantedAccess = header.type->validAccessMask;
+        return NtStatus::Success;
+    }
+    const auto* descriptor = static_cast<const se::FreestandingSecurityDescriptor*>(header.securityDescriptor);
+    auto* currentProcess = ke::KeGetCurrentProcess();
+    if (!currentProcess) return NtStatus::AccessDenied;
+    se::FreestandingAccessToken *primary{}, *impersonation{};
+    ob::ObjectHeader *primaryReference{}, *impersonationReference{};
+    auto status = currentProcess->referencePrimaryToken(primary, primaryReference);
+    if (status == NtStatus::Success && current->owningThread)
+        status = current->owningThread->referenceImpersonationToken(impersonation, impersonationReference);
+    if (status == NtStatus::Success) {
+        const auto* token = se::SeGetEffectiveFreestandingToken(primary, impersonation);
+        uint32_t granted{};
+        // NtOpenProcess/NtOpenThread honor enabled SeDebugPrivilege before
+        // consulting the object's DACL. The target's protected-process policy,
+        // if introduced, must still be checked separately by its owner.
+        if (se::SeTokenHasPrivilegeFreestanding(token, 20)) {
+            grantedAccess = maximum ? header.type->validAccessMask : requested;
+        } else if (!descriptor) {
+            status = NtStatus::AccessDenied;
+        } else if (maximum) {
+            if (!se::SeMaximumAccessFreestanding(token, *descriptor, header.type->validAccessMask, granted) ||
+                (requested & ~granted) || !granted) status = NtStatus::AccessDenied;
+            else grantedAccess = granted;
+        } else if (!se::SeAccessCheckFreestanding(token, *descriptor, requested, granted)) {
+            status = NtStatus::AccessDenied;
+        }
+    }
+    if (impersonationReference) se::SeDereferenceFreestandingToken(impersonationReference);
+    if (primaryReference) se::SeDereferenceFreestandingToken(primaryReference);
+    return status;
 }
 }
 
@@ -65,14 +207,42 @@ struct ProcessObjectFactory {
     }
     static NtStatus inheritToken(EProcess& child, const EProcess& parent) noexcept {
         if (!parent.primaryTokenReference_ || !parent.primaryToken_) return NtStatus::AccessDenied;
-        parent.primaryTokenReference_->addReference();
+        se::FreestandingAccessToken* token{};
+        ob::ObjectHeader* reference{};
+        const auto status = se::SeDuplicateFreestandingPrimaryToken(*parent.primaryToken_, token, reference);
+        if (status != NtStatus::Success) return status;
         if (child.primaryTokenReference_) se::SeDereferenceFreestandingToken(child.primaryTokenReference_);
-        child.primaryTokenReference_ = parent.primaryTokenReference_;
-        child.primaryToken_ = parent.primaryToken_;
+        child.primaryTokenReference_ = reference;
+        child.primaryToken_ = token;
+        child.inheritedFromProcessId_ = parent.processId_;
         return NtStatus::Success;
     }
-    static void markPublished(EProcess& process) noexcept { process.processPublished_ = true; }
+    static void markPublished(EProcess& process) noexcept {
+        if (!process.cidRegistered_) {
+            process.cidNext_ = registeredProcesses;
+            registeredProcesses = &process;
+            process.cidRegistered_ = true;
+        }
+        process.processPublished_ = true;
+    }
+    static void unregister(EProcess& process) noexcept {
+        if (!process.cidRegistered_) return;
+        auto** link = &registeredProcesses;
+        while (*link && *link != &process) link = &(*link)->cidNext_;
+        if (!*link) __builtin_trap();
+        *link = process.cidNext_;
+        process.cidNext_ = nullptr;
+        process.cidRegistered_ = false;
+    }
+    static EProcess* find(Handle id) noexcept {
+        for (auto* process = registeredProcesses; process; process = process->cidNext_)
+            if (process->processId_ == id) return process;
+        return nullptr;
+    }
     static ob::ObjectHeader* header(EProcess& process) noexcept { return process.objectHeader_; }
+    static const se::FreestandingSecurityDescriptor* defaultSecurity(EProcess& process) noexcept {
+        return process.primaryToken_ ? &process.primaryToken_->DefaultDacl : nullptr;
+    }
     template<typename T>
     static NtStatus capture(std::span<const T> source, std::unique_ptr<T[]>& storage) noexcept {
         if (source.empty()) return NtStatus::Success;
@@ -138,8 +308,15 @@ NtStatus getSystemProcess(EProcess*& process) noexcept {
     ProcessObjectFactory::markSystem(*created);
     status = ProcessObjectFactory::assignToken(*created, true);
     if (status != NtStatus::Success) { ob::ObDereferenceObject(header); return status; }
+    uint32_t systemAccess{};
+    status = assignObjectSecurity(*header, ProcessObjectFactory::defaultSecurity(*created), systemAccess, true);
+    if (status != NtStatus::Success) { ob::ObDereferenceObject(header); return status; }
     status = created->initializeAddressSpace();
     if (status != NtStatus::Success) { ob::ObDereferenceObject(header); return status; }
+    {
+        ob::detail::HandleTableGuard guard;
+        ProcessObjectFactory::markPublished(*created);
+    }
     // The system process and its initial reference live for the kernel lifetime.
     systemProcessReference = header;
     systemProcess = created;
@@ -149,17 +326,23 @@ NtStatus getSystemProcess(EProcess*& process) noexcept {
 
 NtStatus createSystemThreadHandle(EProcess& process, EThread::SystemStartRoutine start,
                                   void* argument, uint32_t access, Handle& handle,
-                                  EThread*& thread) noexcept {
+                                  EThread*& thread,
+                                  const se::FreestandingSecurityDescriptor* security) noexcept {
+    // Keep membership, lifecycle pin and handle publication indivisible on
+    // the BSP, matching the ordinary thread creation path.
+    ob::detail::HandleTableGuard guard;
     initializeThreadType();
     thread = nullptr;
-    const uint32_t mapped = ob::MapGenericAccess(access, threadType.genericMapping);
-    if (mapped & ~threadType.validAccessMask) return NtStatus::NotImplemented;
+    uint32_t mapped = ob::MapGenericAccess(access, threadType.genericMapping);
+    if (mapped & ~(threadType.validAccessMask | uint32_t{0x02000000})) return NtStatus::NotImplemented;
     void* body{};
     ob::ObjectHeader* header{};
     auto status = ob::ObCreateObject(ob::KernelMode, &threadType, nullptr, sizeof(EThread), &body, &header);
     if (status != NtStatus::Success) return status;
     auto* created = new (body) EThread{};
-    status = created->initializeSystem(process, 65536, start, argument);
+    status = assignObjectSecurity(*header, security, mapped, true);
+    if (status == NtStatus::Success)
+        status = created->initializeSystem(process, 65536, start, argument);
     if (status == NtStatus::Success) {
         header->addReference();
         ThreadObjectFactory::bind(*created, header);
@@ -168,7 +351,7 @@ NtStatus createSystemThreadHandle(EProcess& process, EThread::SystemStartRoutine
         if (status == NtStatus::Success) {
             handle = ob::detail::encodeKernelHandle(raw);
             thread = created;
-        } else if (created->reap() != NtStatus::Success) __builtin_trap();
+        } else if (created->reap() != NtStatus::Success) created->deferFailedCreationReap();
     }
     ob::ObDereferenceObject(header);
     return status;
@@ -188,13 +371,15 @@ NtStatus createThreadHandle(EProcess& process, size_t stackSize,
     auto status = ob::ObCreateObject(ob::KernelMode, &threadType, nullptr, sizeof(EThread), &body, &header);
     if (status != NtStatus::Success) return status;
     auto* created = new (body) EThread{};
-    status = created->initialize(process, stackSize, start, argument);
+    status = assignObjectSecurity(*header, nullptr, access, true);
+    if (status == NtStatus::Success)
+        status = created->initialize(process, stackSize, start, argument);
     if (status == NtStatus::Success) {
         header->addReference();
         ThreadObjectFactory::bind(*created, header);
         status = ob::detail::currentHandleTable().createHandle(header, handle, access);
         if (status == NtStatus::Success) thread = created;
-        else if (created->reap() != NtStatus::Success) __builtin_trap();
+        else if (created->reap() != NtStatus::Success) created->deferFailedCreationReap();
     }
     ob::ObDereferenceObject(header);
     return status;
@@ -203,32 +388,45 @@ NtStatus createThreadHandle(EProcess& process, size_t stackSize,
 NtStatus createUserThreadHandle(EProcess& process, uintptr_t entry, size_t kernelStackSize,
                                 size_t userStackSize, bool interruptible, uint32_t access,
                                 Handle& handle, EThread*& thread, size_t commitSize,
-                                uint32_t handleAttributes) noexcept {
+                                uint32_t handleAttributes,
+                                const se::FreestandingSecurityDescriptor* security) noexcept {
     ob::detail::HandleTableGuard guard;
     initializeThreadType();
     thread = nullptr;
     access = ob::MapGenericAccess(access, threadType.genericMapping);
-    if (access & ~threadType.validAccessMask) return NtStatus::NotImplemented;
+    if (access & ~(threadType.validAccessMask | uint32_t{0x02000000})) return NtStatus::NotImplemented;
     void* body{};
     ob::ObjectHeader* header{};
     auto status = ob::ObCreateObject(ob::KernelMode, &threadType, nullptr, sizeof(EThread), &body, &header);
     if (status != NtStatus::Success) return status;
     auto* created = new (body) EThread{};
-    status = commitSize
-        ? created->initializeUser(process, entry, kernelStackSize, userStackSize, commitSize, interruptible)
-        : created->initializeUser(process, entry, kernelStackSize, userStackSize, interruptible);
+    status = assignObjectSecurity(*header, security, access);
+    if (status == NtStatus::Success)
+        status = commitSize
+            ? created->initializeUser(process, entry, kernelStackSize, userStackSize, commitSize, interruptible)
+            : created->initializeUser(process, entry, kernelStackSize, userStackSize, interruptible);
+    if (status != NtStatus::Success && created->kernelThread()) {
+        // Initialization already attempted rollback. If a backend cleanup
+        // failed, keep the partially initialized object alive for the same
+        // deferred reaper rather than deleting its still-owned thread/stack.
+        header->addReference();
+        ThreadObjectFactory::bind(*created, header);
+        created->deferFailedCreationReap();
+    }
     if (status == NtStatus::Success) {
         header->addReference();
         ThreadObjectFactory::bind(*created, header);
         status = ob::detail::currentHandleTable().createHandle(header, handle, access, handleAttributes);
         if (status == NtStatus::Success) thread = created;
-        else if (created->reap() != NtStatus::Success) __builtin_trap();
+        else if (created->reap() != NtStatus::Success) created->deferFailedCreationReap();
     }
     ob::ObDereferenceObject(header);
     return status;
 }
 
-NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) noexcept {
+NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference,
+    const se::FreestandingSecurityDescriptor* security, uint32_t desiredAccess,
+    uint32_t* grantedAccess) noexcept {
     initializeProcessType();
     process = nullptr;
     reference = nullptr;
@@ -238,11 +436,13 @@ NtStatus createProcessObject(EProcess*& process, ob::ObjectHeader*& reference) n
     if (status != NtStatus::Success) return status;
     auto* created = new (body) EProcess{};
     ProcessObjectFactory::bind(*created, header);
-    status = ProcessObjectFactory::assignToken(*created, false);
+    status = assignObjectSecurity(*header, security, desiredAccess);
+    if (status == NtStatus::Success) status = ProcessObjectFactory::assignToken(*created, false);
     if (status == NtStatus::Success) status = created->initializeAddressSpace();
     if (status == NtStatus::Success) {
         process = created;
         reference = header;
+        if (grantedAccess) *grantedAccess = desiredAccess;
         return NtStatus::Success;
     }
     ob::ObDereferenceObject(header);
@@ -256,12 +456,69 @@ NtStatus inheritProcessSecurityContext(EProcess& child, const EProcess& parent) 
 NtStatus publishProcessHandle(EProcess& process, ob::ObjectHeader* reference,
                               uint32_t access, uint32_t handleAttributes,
                               Handle& handle) noexcept {
-    if (!reference || reference->type != &processType) return NtStatus::InvalidParameter;
+    if (!reference || reference->type != &processType || reference->as<EProcess>() != &process)
+        return NtStatus::InvalidParameter;
     access = ob::MapGenericAccess(access, processType.genericMapping);
     if (access & ~processType.validAccessMask) return NtStatus::NotImplemented;
+    ob::detail::HandleTableGuard guard;
     const auto status = ob::detail::currentHandleTable().createHandle(reference, handle,
                                                                        access, handleAttributes);
     if (status == NtStatus::Success) ProcessObjectFactory::markPublished(process);
+    return status;
+}
+
+void unregisterProcessObject(ob::ObjectHeader* header) noexcept {
+    if (!header || header->type != &processType) return;
+    ob::detail::HandleTableGuard guard;
+    ProcessObjectFactory::unregister(*header->as<EProcess>());
+}
+
+NtStatus openProcessByClientId(const ClientId& clientId, uint32_t desiredAccess,
+                               uint32_t attributes, Handle& handle) noexcept {
+    handle = 0;
+    ob::ObjectHeader* reference{};
+    {
+        ob::detail::HandleTableGuard guard;
+        EProcess* process{};
+        if (clientId.uniqueThread) {
+            auto* thread = ke::detail::findClientThread(clientId.uniqueThread);
+            if (thread && (!clientId.uniqueProcess || thread->pid == clientId.uniqueProcess))
+                process = thread->owningProcess ? thread->owningProcess :
+                    ProcessObjectFactory::find(thread->pid);
+        } else if (clientId.uniqueProcess) {
+            process = ProcessObjectFactory::find(clientId.uniqueProcess);
+        }
+        reference = process ? ProcessObjectFactory::header(*process) : nullptr;
+        if (!reference || reference->type != &processType || !reference->tryAddReference())
+            return NtStatus::InvalidCid;
+    }
+    uint32_t granted{};
+    auto status = checkExistingObjectAccess(*reference, desiredAccess, granted);
+    if (status == NtStatus::Success)
+        status = ob::detail::currentHandleTable().createHandle(reference, handle, granted, attributes);
+    ob::ObDereferenceObject(reference);
+    return status;
+}
+
+NtStatus openThreadByClientId(const ClientId& clientId, uint32_t desiredAccess,
+                              uint32_t attributes, Handle& handle) noexcept {
+    handle = 0;
+    if (!clientId.uniqueThread) return NtStatus::InvalidCid;
+    ob::ObjectHeader* reference{};
+    {
+        ob::detail::HandleTableGuard guard;
+        auto* thread = ke::detail::findClientThread(clientId.uniqueThread);
+        if (thread && (!clientId.uniqueProcess || clientId.uniqueProcess == thread->pid) &&
+            thread->owningThread)
+            reference = ThreadObjectFactory::header(*thread->owningThread);
+        if (!reference || reference->type != &threadType || !reference->tryAddReference())
+            return NtStatus::InvalidCid;
+    }
+    uint32_t granted{};
+    auto status = checkExistingObjectAccess(*reference, desiredAccess, granted);
+    if (status == NtStatus::Success)
+        status = ob::detail::currentHandleTable().createHandle(reference, handle, granted, attributes);
+    ob::ObDereferenceObject(reference);
     return status;
 }
 
@@ -269,9 +526,10 @@ NtStatus createProcessHandle(uint32_t access, Handle& handle, EProcess*& process
                              uint32_t handleAttributes) noexcept {
     process = nullptr;
     ob::ObjectHeader* reference{};
-    auto status = createProcessObject(process, reference);
+    uint32_t grantedAccess{};
+    auto status = createProcessObject(process, reference, nullptr, access, &grantedAccess);
     if (status != NtStatus::Success) return status;
-    status = publishProcessHandle(*process, reference, access, handleAttributes, handle);
+    status = publishProcessHandle(*process, reference, grantedAccess, handleAttributes, handle);
     if (status != NtStatus::Success) process = nullptr;
     ob::ObDereferenceObject(reference);
     return status;
@@ -329,8 +587,10 @@ NtStatus createBootstrapUserProcess(std::span<const BootstrapProcessImage> image
     if (status == NtStatus::Success) status = thread->ready();
     if (status != NtStatus::Success) {
         if (thread) {
-            if (thread->cancelBeforeStart() != NtStatus::Success || thread->reap() != NtStatus::Success)
-                __builtin_trap();
+            if (thread->cancelBeforeStart() != NtStatus::Success) __builtin_trap();
+            // cancelBeforeStart queues reaping, or schedules target-context
+            // APC rundown. A failed immediate reap is retried there.
+            (void)thread->reap();
             if (sys::NtClose(threadResult) != NtStatus::Success) __builtin_trap();
         }
         if (processResult && sys::NtClose(processResult) != NtStatus::Success) __builtin_trap();
@@ -412,11 +672,19 @@ extern "C" __declspec(dllexport) NtStatus PsCreateSystemThread(
     ClientId* clientId, void (*start)(void*), void* context) noexcept {
     if (!out || !start || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
         return NtStatus::InvalidParameter;
+    se::FreestandingSecurityDescriptor capturedSecurity{};
+    const se::FreestandingSecurityDescriptor* security{};
     if (attributes) {
         if (attributes->length != sizeof(ObjectAttributes)) return NtStatus::InvalidParameter;
-        if (attributes->rootDirectory || attributes->objectName || attributes->securityDescriptor ||
+        if (attributes->rootDirectory || attributes->objectName ||
             attributes->securityQualityOfService) return NtStatus::NotImplemented;
         if (attributes->attributes & ~OBJ_KERNEL_HANDLE) return NtStatus::InvalidParameter;
+        if (attributes->securityDescriptor) {
+            const auto capture = se::SeCaptureFreestandingSecurityDescriptor(
+                attributes->securityDescriptor, mm::KernelMode, capturedSecurity);
+            if (capture != NtStatus::Success) return capture;
+            security = &capturedSecurity;
+        }
     }
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
@@ -434,6 +702,10 @@ extern "C" __declspec(dllexport) NtStatus PsCreateSystemThread(
         status = ob::detail::resolveHandle(processHandle, table, raw, true);
         if (status == NtStatus::Success) {
             detail::initializeProcessType();
+            // PsCreateSystemThread creates a thread inside the referenced
+            // process, so the handle must grant PROCESS_CREATE_THREAD. Apply
+            // the handle's granted-access mask even for kernel-mode callers;
+            // a zero-access handle must not let a driver spawn threads.
             status = ob::ObReferenceObjectByHandle(raw, *table, 0x0002, &detail::processType, &reference);
             if (status == NtStatus::Success) process = reference->as<EProcess>();
         }
@@ -441,12 +713,13 @@ extern "C" __declspec(dllexport) NtStatus PsCreateSystemThread(
     Handle handle{};
     EThread* thread{};
     if (status == NtStatus::Success && process->isTerminating()) status = NtStatus::ProcessIsTerminating;
-    if (status == NtStatus::Success) status = detail::createSystemThreadHandle(*process, start, context, access, handle, thread);
+    if (status == NtStatus::Success) status = detail::createSystemThreadHandle(*process, start, context, access, handle, thread, security);
     if (status == NtStatus::Success) {
         status = thread->ready();
         if (status != NtStatus::Success) {
-            if (thread->cancelBeforeStart() != NtStatus::Success || thread->reap() != NtStatus::Success)
-                __builtin_trap();
+            if (thread->cancelBeforeStart() != NtStatus::Success) __builtin_trap();
+            // The lifecycle reference and reaper survive closing this handle.
+            (void)thread->reap();
             ob::HandleTable* table{}; Handle raw{};
             if (ob::detail::resolveHandle(handle, table, raw, true) != NtStatus::Success ||
                 table->closeHandle(raw) != NtStatus::Success) __builtin_trap();

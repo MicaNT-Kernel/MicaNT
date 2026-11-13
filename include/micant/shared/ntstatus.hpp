@@ -27,6 +27,10 @@ enum class NtStatus : uint32_t {
     Timeout                          = 0x00000102,
     Pending                          = 0x00000103,
 
+    // Informational success: an image view was mapped away from its
+    // preferred PE image base; its loader must apply base relocations.
+    ImageNotAtBase                   = 0x40000003,
+
     // 0x80000000 - Warnings / Info
     GuardPageViolation               = 0x80000001,
     DatatypeMisalignment             = 0x80000002,
@@ -40,6 +44,7 @@ enum class NtStatus : uint32_t {
     // 0xC0000000 - Errors
     Unsuccessful                     = 0xC0000001,
     NotImplemented                   = 0xC0000002,
+    PartialCopy                      = 0x8000000D,
     InvalidInfoClass                 = 0xC0000003,
     InfoLengthMismatch               = 0xC0000004,
     AccessViolation                  = 0xC0000005,
@@ -51,6 +56,7 @@ enum class NtStatus : uint32_t {
     InvalidCid                       = 0xC000000B,
     InvalidParameter                 = 0xC000000D,
     InvalidParameter4                = 0xC00000F2,
+    Retry                            = 0xC000022D,
     StackOverflow                    = 0xC00000FD,
     NoSuchDevice                     = 0xC000000E,
     NoSuchFile                       = 0xC000000F,
@@ -66,6 +72,9 @@ enum class NtStatus : uint32_t {
     InsufficientResources            = 0xC000009A,
     IllegalInstruction               = 0xC000001D,
     AccessDenied                     = 0xC0000022,
+    InvalidAcl                       = 0xC0000077,
+    InvalidSid                       = 0xC0000078,
+    InvalidSecurityDescriptor        = 0xC0000079,
     BufferTooSmall                   = 0xC0000023,
     WmiGuidNotFound                  = 0xC0000295,
     WmiInstanceNotFound              = 0xC0000296,
@@ -79,8 +88,11 @@ enum class NtStatus : uint32_t {
     LinkEvaluationCapExceeded        = 0xC00002EB,
     SectionTooBig                    = 0xC0000040,
     InvalidPageProtection            = 0xC0000045,
+    InvalidOwner                     = 0xC000005A,
     SectionProtection                = 0xC000004E,
     PortConnectionRefused            = 0xC0000041,
+    IoTimeout                        = 0xC00000B5,
+    ConnectionReset                  = 0xC000020D,
     ServerNotRunning                 = 0xC0000042,
     SharingViolation                 = 0xC0000043,
     NoSuchProcess                    = 0xC0000043,
@@ -297,6 +309,8 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::ObjectNameCollision: return "STATUS_OBJECT_NAME_COLLISION";
         case NtStatus::LinkEvaluationCapExceeded: return "STATUS_LINK_EVALUATION_CAP_EXCEEDED";
         case NtStatus::PortConnectionRefused: return "STATUS_PORT_CONNECTION_REFUSED";
+        case NtStatus::IoTimeout: return "STATUS_IO_TIMEOUT";
+        case NtStatus::ConnectionReset: return "STATUS_CONNECTION_RESET";
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
         case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
         case NtStatus::InvalidFileForSection: return "STATUS_INVALID_FILE_FOR_SECTION";

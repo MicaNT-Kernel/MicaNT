@@ -56,6 +56,7 @@ public:
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return *handles_; }
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return root_.pfn << mm::PageShift4KB; }
     [[nodiscard]] Handle processId() const noexcept { return processId_; }
+    [[nodiscard]] Handle inheritedFromProcessId() const noexcept { return inheritedFromProcessId_; }
     [[nodiscard]] uintptr_t userPebAddress() const noexcept { return userPeb_; }
     [[nodiscard]] bool nativeImagesFinalized() const noexcept { return imagesFinalized_; }
     [[nodiscard]] std::span<const pe::PeImageView64::TlsLayout> userTlsLayouts() const noexcept {
@@ -63,7 +64,15 @@ public:
     }
     [[nodiscard]] bool isTerminating() const noexcept { return terminating_; }
     [[nodiscard]] bool isSystemProcess() const noexcept { return systemProcess_; }
-    [[nodiscard]] se::FreestandingAccessToken* primaryToken() const noexcept { return primaryToken_; }
+    [[nodiscard]] NtStatus referencePrimaryToken(se::FreestandingAccessToken*& token,
+                                                  ob::ObjectHeader*& reference) noexcept {
+        token = nullptr; reference = nullptr;
+        ob::detail::HandleTableGuard guard;
+        if (!primaryToken_ || !primaryTokenReference_) return NtStatus::AccessDenied;
+        primaryTokenReference_->addReference();
+        token = primaryToken_; reference = primaryTokenReference_;
+        return NtStatus::Success;
+    }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
     [[nodiscard]] size_t activeThreadCount() const noexcept;
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
@@ -82,6 +91,10 @@ private:
     se::FreestandingAccessToken* primaryToken_{nullptr};
     hal::amd64::ProcessPagingRoot root_{};
     Handle processId_{0};
+    Handle inheritedFromProcessId_{0};
+    // Weak CID registry link; removal precedes final Ob deletion.
+    EProcess* cidNext_{nullptr};
+    bool cidRegistered_{false};
     mm::ProcessAddressSpace addressSpace_{};
     std::unique_ptr<ob::HandleTable> handles_{};
     size_t attachedThreads_{0};
@@ -93,6 +106,8 @@ private:
     bool synchronousCleanupRetry_{false};
     EProcess* deferredNext_{nullptr};
     bool deferredQueued_{false};
+    // The reaper owns its queue reference while cleanup is in flight.
+    bool deferredProcessing_{false};
     bool systemProcess_{false};
     NtStatus exitStatus_{NtStatus::Pending};
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
@@ -160,6 +175,9 @@ public:
     // A queued APC requires asynchronous target-context rundown before reap.
     NtStatus cancelBeforeStart() noexcept;
     NtStatus rollbackBeforeStart() noexcept;
+    // Retain an unpublished, never-started object for a deferred reap when
+    // immediate rollback encounters a transient cleanup failure.
+    void deferFailedCreationReap() noexcept;
     // Successful current-thread exit never returns; stack release is deferred.
     NtStatus exitCurrent(NtStatus status) noexcept;
     // Request target-context termination on the bootstrap processor. A thread
@@ -169,14 +187,32 @@ public:
     NtStatus terminateOther(NtStatus status) noexcept;
     NtStatus reap() noexcept;
     [[nodiscard]] ke::KThread* kernelThread() noexcept { return thread_.get(); }
-    [[nodiscard]] se::FreestandingAccessToken* impersonationToken() const noexcept { return impersonationToken_; }
+    [[nodiscard]] NtStatus referenceImpersonationToken(se::FreestandingAccessToken*& token,
+                                                        ob::ObjectHeader*& reference) noexcept {
+        token = nullptr; reference = nullptr;
+        ob::detail::HandleTableGuard guard;
+        if (!impersonationToken_) return NtStatus::Success;
+        if (!impersonationTokenReference_) return NtStatus::Unsuccessful;
+        impersonationTokenReference_->addReference();
+        token = impersonationToken_; reference = impersonationTokenReference_;
+        return NtStatus::Success;
+    }
     [[nodiscard]] NtStatus setImpersonationToken(se::FreestandingAccessToken* token,
-                                                  ob::ObjectHeader* reference) noexcept {
-        if ((token == nullptr) != (reference == nullptr) || (token && token->IsPrimary))
+        ob::ObjectHeader* reference, const se::FreestandingAccessToken* callerToken,
+        uint32_t impersonationLevel) noexcept {
+        if ((token == nullptr) != (reference == nullptr))
             return NtStatus::InvalidParameter;
-        auto* old = impersonationTokenReference_;
-        impersonationTokenReference_ = reference;
-        impersonationToken_ = token;
+        if (token && (token->IsPrimary || impersonationLevel < 2 || impersonationLevel > 3 ||
+            !se::SeIsFreestandingTokenObject(token, reference))) return NtStatus::InvalidParameter;
+        if (token && !se::SeCanImpersonateFreestanding(callerToken, token)) return NtStatus::PrivilegeNotHeld;
+        if (reference) reference->addReference();
+        ob::ObjectHeader* old{};
+        {
+            ob::detail::HandleTableGuard guard;
+            old = impersonationTokenReference_;
+            impersonationTokenReference_ = reference;
+            impersonationToken_ = token;
+        }
         if (old) se::SeDereferenceFreestandingToken(old);
         return NtStatus::Success;
     }
@@ -193,7 +229,11 @@ public:
     NtStatus prepareUserException(uint32_t exceptionCode, uint32_t exceptionVector,
                                   uintptr_t address,
                                   uint64_t* hardwareFrame, uint64_t* savedRegisters,
-                                  const void* floatingState) noexcept;
+                                  const void* floatingState,
+                                  const void* capturedRecords = nullptr,
+                                  size_t capturedRecordCount = 0,
+                                  uintptr_t deliveryStackTop = 0,
+                                  const hal::amd64::UserSegmentState* savedSegments = nullptr) noexcept;
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
     NtStatus prepareUserApc(const ke::UserApcDelivery* deliveries, size_t deliveryCount,
                             uint64_t* hardwareFrame, uint64_t* savedRegisters,
@@ -223,7 +263,11 @@ private:
     ob::ObjectHeader* impersonationTokenReference_{nullptr};
     se::FreestandingAccessToken* impersonationToken_{nullptr};
     ob::ObjectHeader* reapProcessReference_{nullptr};
+    // The ETHREAD keeps its creating process object alive until the thread
+    // object itself is deleted, even after its execution resources are reaped.
+    ob::ObjectHeader* retiredProcessReference_{nullptr};
     EThread* deferredNext_{nullptr};
+    ke::KThread* retiredThreads_{nullptr};
     bool deferredQueued_{false};
     bool reapInProgress_{false};
     bool objectOwned_{false};

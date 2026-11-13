@@ -37,6 +37,17 @@ BootstrapLogRoutine g_bootstrapLog{};
 BootstrapMapPagesRoutine g_mapPages{};
 bool g_runtimeInitialized{};
 uint64_t g_rejectionLogCount{};
+struct HeapPfnLifetime {
+    const char* operation{};
+    size_t size{};
+    uint64_t firstPfn{};
+    size_t pageCount{};
+    uintptr_t userAddress{};
+    uintptr_t callerAddress{};
+};
+constexpr size_t kHeapPfnTraceCapacity = 8192;
+HeapPfnLifetime g_heapPfnLifetimeTrace[kHeapPfnTraceCapacity]{};
+size_t g_heapPfnLifetimeTraceCount{};
 
 using CInitializer = int (*)();
 using CxxInitializer = void (*)();
@@ -72,6 +83,48 @@ extern "C" CxxInitializer __CTOR_LIST__[];
 
 [[nodiscard]] bool isPowerOfTwo(size_t value) noexcept {
     return value != 0 && (value & (value - 1)) == 0;
+}
+
+void logHeapAllocationCandidate(size_t size, uintptr_t callerAddress,
+                               uint64_t firstPfn) noexcept {
+    if (!g_bootstrapLog || (size != 0x3A0 && size != 0x748)) return;
+
+    char message[96]{};
+    constexpr char digits[] = "0123456789ABCDEF";
+    size_t index{};
+    const auto append = [&](const char* text) {
+        while (*text) message[index++] = *text++;
+    };
+    const auto appendHex = [&](uint64_t value) {
+        bool started = false;
+        for (int shift = 60; shift >= 0; shift -= 4) {
+            const auto digit = static_cast<uint8_t>((value >> shift) & 0xF);
+            if (digit || started || shift == 0) {
+                message[index++] = digits[digit];
+                started = true;
+            }
+        }
+    };
+    append("[MicaNT DBG] heap candidate size/pfn/caller=0x");
+    appendHex(size);
+    append("/0x");
+    appendHex(firstPfn);
+    append("/0x");
+    appendHex(callerAddress);
+    append("\r\n");
+    message[index] = '\0';
+    g_bootstrapLog(message);
+}
+
+void logHeapPfnLifetime(const char* operation, size_t size, uint64_t firstPfn,
+                        size_t pageCount, uintptr_t userAddress,
+                        uintptr_t callerAddress) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    g_heapPfnLifetimeTrace[g_heapPfnLifetimeTraceCount % kHeapPfnTraceCapacity] =
+        {operation, size, firstPfn, pageCount, userAddress, callerAddress};
+    ++g_heapPfnLifetimeTraceCount;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
 }
 
 void logMessage(BootstrapLogRoutine log, const char* message) noexcept {
@@ -163,7 +216,8 @@ template<typename Initializer>
     return header;
 }
 
-[[nodiscard]] void* allocateMemory(size_t requestedSize, size_t alignment) noexcept {
+[[nodiscard]] void* allocateMemory(size_t requestedSize, size_t alignment,
+                                   uintptr_t callerAddress = 0) noexcept {
     requireInitialized();
     if (!isPowerOfTwo(alignment)) {
         rejectAllocation("ExHeap: allocation rejected (invalid alignment)\r\n");
@@ -227,10 +281,12 @@ template<typename Initializer>
     header->alignment = alignment;
     header->baseAddress = baseAddress;
     header->cookie = allocationCookie(userAddress, *header);
+    logHeapAllocationCandidate(requestedSize, callerAddress, firstPfn);
+    logHeapPfnLifetime("allocated", requestedSize, firstPfn, pageCount, userAddress, callerAddress);
     return reinterpret_cast<void*>(userAddress);
 }
 
-void releaseMemory(void* pointer) noexcept {
+void releaseMemory(void* pointer, uintptr_t callerAddress = 0) noexcept {
     if (!pointer) return;
     requireInitialized();
 
@@ -241,6 +297,8 @@ void releaseMemory(void* pointer) noexcept {
 
     const uint64_t firstPfn = header->firstPfn;
     const size_t pageCount = header->pageCount;
+    logHeapPfnLifetime("released", header->requestedSize, firstPfn, pageCount,
+                       reinterpret_cast<uintptr_t>(pointer), callerAddress);
     header->cookie = 0;
     PfnDatabase::get().freeContiguousPages(firstPfn, pageCount);
 }
@@ -329,6 +387,46 @@ bool shutdownBootstrapCxxRuntime() noexcept {
     g_cxxPhase = CxxPhase::Terminated;
     logMessage(g_bootstrapLog, "ExCxx: kernel atexit callbacks dispatched\r\n");
     return true;
+}
+
+void dumpHeapPfnLifetimeTrace(uint64_t pfn) noexcept {
+    if (!g_bootstrapLog) return;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    const size_t count = g_heapPfnLifetimeTraceCount;
+    const size_t begin = count > kHeapPfnTraceCapacity ? count - kHeapPfnTraceCapacity : 0;
+    if (begin) g_bootstrapLog("[MicaNT DBG] heap PFN trace oldest events overwritten\r\n");
+    for (size_t sequence = begin; sequence < count; ++sequence) {
+        const auto& event = g_heapPfnLifetimeTrace[sequence % kHeapPfnTraceCapacity];
+        if (pfn && (pfn < event.firstPfn || pfn - event.firstPfn >= event.pageCount)) continue;
+        if (!pfn && count - sequence > 64) continue;
+        char message[256]{};
+        size_t index{};
+        const auto append = [&](const char* text) {
+            while (*text) message[index++] = *text++;
+        };
+        const auto appendHex = [&](uint64_t value) {
+            constexpr char digits[] = "0123456789ABCDEF";
+            for (int shift = 60; shift >= 0; shift -= 4)
+                message[index++] = digits[(value >> shift) & 15];
+        };
+        append("[MicaNT DBG] heap PFN ");
+        append(event.operation);
+        append(" seq/size/first/count/user/caller/logger=");
+        const uint64_t values[]{sequence, event.size, event.firstPfn, event.pageCount,
+            event.userAddress, event.callerAddress, reinterpret_cast<uintptr_t>(&logHeapPfnLifetime)};
+        for (size_t i = 0; i < 7; ++i) {
+            if (i) append("/");
+            appendHex(values[i]);
+        }
+        append("\r\n");
+        g_bootstrapLog(message);
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+}
+
+size_t heapPfnLifetimeTraceCount() noexcept {
+    return g_heapPfnLifetimeTraceCount;
 }
 
 bool initializeBootstrapRuntime(
@@ -490,24 +588,24 @@ bool verifyBootstrapRuntime() noexcept {
 
     constexpr size_t overAlignment = 256;
     void* aligned = ::operator new(
-        137, static_cast<std::align_val_t>(overAlignment), std::nothrow);
+        137, static_cast<std::align_val_t>(overAlignment), std::nothrow_t{});
     if (!aligned) {
         okay = false;
     } else {
         if (reinterpret_cast<uintptr_t>(aligned) & (overAlignment - 1)) okay = false;
         okay = fillAndVerify(aligned, 137, 31) && okay;
-        ::operator delete(aligned, static_cast<std::align_val_t>(overAlignment), std::nothrow);
+        ::operator delete(aligned, static_cast<std::align_val_t>(overAlignment), std::nothrow_t{});
     }
 
     void* alignedArray = ::operator new[](
-        151, static_cast<std::align_val_t>(overAlignment), std::nothrow);
+        151, static_cast<std::align_val_t>(overAlignment), std::nothrow_t{});
     if (!alignedArray) {
         okay = false;
     } else {
         if (reinterpret_cast<uintptr_t>(alignedArray) & (overAlignment - 1)) okay = false;
         okay = fillAndVerify(alignedArray, 151, 37) && okay;
         ::operator delete[](alignedArray, static_cast<std::align_val_t>(overAlignment),
-                            std::nothrow);
+                            std::nothrow_t{});
     }
 
     free(overlap);
@@ -527,11 +625,11 @@ bool verifyBootstrapRuntime() noexcept {
         okay = false;
         free(callocOverflow);
     }
-    void* nothrowOverflow = ::operator new(static_cast<size_t>(-1), std::nothrow);
+    void* nothrowOverflow = ::operator new(static_cast<size_t>(-1), std::nothrow_t{});
     ++expectedRejections;
     if (nothrowOverflow) {
         okay = false;
-        ::operator delete(nothrowOverflow, std::nothrow);
+        ::operator delete(nothrowOverflow, std::nothrow_t{});
     }
 
     const size_t finalActive = database.getActiveCount();
@@ -572,7 +670,8 @@ extern "C" int atexit(void (*callback)()) {
 }
 
 extern "C" void* malloc(size_t size) {
-    return allocateMemory(size, kDefaultAlignment);
+    return allocateMemory(size, kDefaultAlignment,
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
 
 extern "C" void* calloc(size_t count, size_t size) {
@@ -582,7 +681,8 @@ extern "C" void* calloc(size_t count, size_t size) {
         return nullptr;
     }
     const size_t total = count * size;
-    void* memory = allocateMemory(total, kDefaultAlignment);
+    void* memory = allocateMemory(total, kDefaultAlignment,
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
     if (memory) memset(memory, 0, total);
     return memory;
 }
@@ -593,7 +693,7 @@ extern "C" void* realloc(void* pointer, size_t size) {
     }
     requireInitialized();
     if (size == 0) {
-        releaseMemory(pointer);
+        releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
         return nullptr;
     }
 
@@ -601,7 +701,8 @@ extern "C" void* realloc(void* pointer, size_t size) {
     if (!header) stop("ExHeap: invalid realloc rejected; stopping\r\n");
     const size_t oldSize = header->requestedSize;
     const size_t alignment = header->alignment;
-    void* replacement = allocateMemory(size, alignment);
+    void* replacement = allocateMemory(size, alignment,
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
     if (!replacement) return nullptr;
     memcpy(replacement, pointer, oldSize < size ? oldSize : size);
     releaseMemory(pointer);
@@ -609,70 +710,90 @@ extern "C" void* realloc(void* pointer, size_t size) {
 }
 
 extern "C" void free(void* pointer) {
-    releaseMemory(pointer);
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
 
 void* operator new(size_t size) {
-    if (void* memory = allocateMemory(size, kDefaultAlignment)) return memory;
+    if (void* memory = allocateMemory(size, kDefaultAlignment,
+            reinterpret_cast<uintptr_t>(__builtin_return_address(0)))) return memory;
     stop("ExHeap: throwing allocation rejected; stopping\r\n");
 }
 
 void* operator new[](size_t size) {
-    if (void* memory = allocateMemory(size, kDefaultAlignment)) return memory;
+    if (void* memory = allocateMemory(size, kDefaultAlignment,
+            reinterpret_cast<uintptr_t>(__builtin_return_address(0)))) return memory;
     stop("ExHeap: throwing allocation rejected; stopping\r\n");
 }
 
 void* operator new(size_t size, std::align_val_t alignment) {
-    if (void* memory = allocateMemory(size, static_cast<size_t>(alignment))) return memory;
+    if (void* memory = allocateMemory(size, static_cast<size_t>(alignment),
+            reinterpret_cast<uintptr_t>(__builtin_return_address(0)))) return memory;
     stop("ExHeap: throwing aligned allocation rejected; stopping\r\n");
 }
 
 void* operator new[](size_t size, std::align_val_t alignment) {
-    if (void* memory = allocateMemory(size, static_cast<size_t>(alignment))) return memory;
+    if (void* memory = allocateMemory(size, static_cast<size_t>(alignment),
+            reinterpret_cast<uintptr_t>(__builtin_return_address(0)))) return memory;
     stop("ExHeap: throwing aligned allocation rejected; stopping\r\n");
 }
 
 void* operator new(size_t size, const std::nothrow_t&) noexcept {
-    return allocateMemory(size, kDefaultAlignment);
+    return allocateMemory(size, kDefaultAlignment,
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
 
 void* operator new[](size_t size, const std::nothrow_t&) noexcept {
-    return allocateMemory(size, kDefaultAlignment);
+    return allocateMemory(size, kDefaultAlignment,
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
 
 void* operator new(
     size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
-    return allocateMemory(size, static_cast<size_t>(alignment));
+    return allocateMemory(size, static_cast<size_t>(alignment),
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
 
 void* operator new[](
     size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
-    return allocateMemory(size, static_cast<size_t>(alignment));
+    return allocateMemory(size, static_cast<size_t>(alignment),
+        reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
 
-void operator delete(void* pointer) noexcept { releaseMemory(pointer); }
-void operator delete[](void* pointer) noexcept { releaseMemory(pointer); }
-void operator delete(void* pointer, size_t) noexcept { releaseMemory(pointer); }
-void operator delete[](void* pointer, size_t) noexcept { releaseMemory(pointer); }
-void operator delete(void* pointer, std::align_val_t) noexcept { releaseMemory(pointer); }
-void operator delete[](void* pointer, std::align_val_t) noexcept { releaseMemory(pointer); }
-void operator delete(void* pointer, size_t, std::align_val_t) noexcept {
-    releaseMemory(pointer);
+__attribute__((noinline)) void operator delete(void* pointer) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
-void operator delete[](void* pointer, size_t, std::align_val_t) noexcept {
-    releaseMemory(pointer);
+__attribute__((noinline)) void operator delete[](void* pointer) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
-void operator delete(void* pointer, const std::nothrow_t&) noexcept {
-    releaseMemory(pointer);
+__attribute__((noinline)) void operator delete(void* pointer, size_t) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
-void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
-    releaseMemory(pointer);
+__attribute__((noinline)) void operator delete[](void* pointer, size_t) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
-void operator delete(
+__attribute__((noinline)) void operator delete(void* pointer, std::align_val_t) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+}
+__attribute__((noinline)) void operator delete[](void* pointer, std::align_val_t) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+}
+__attribute__((noinline)) void operator delete(void* pointer, size_t, std::align_val_t) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+}
+__attribute__((noinline)) void operator delete[](void* pointer, size_t, std::align_val_t) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+}
+__attribute__((noinline)) void operator delete(void* pointer, const std::nothrow_t&) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+}
+__attribute__((noinline)) void operator delete[](void* pointer, const std::nothrow_t&) noexcept {
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+}
+__attribute__((noinline)) void operator delete(
     void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
-    releaseMemory(pointer);
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }
-void operator delete[](
+__attribute__((noinline)) void operator delete[](
     void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
-    releaseMemory(pointer);
+    releaseMemory(pointer, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
 }

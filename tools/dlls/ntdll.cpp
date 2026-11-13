@@ -9,8 +9,13 @@
 #include <cstdint>
 #include <cstddef>
 #include "micant/shared/context.hpp"
+#include "micant/shared/syscall_numbers.hpp"
+
+#define MICANT_STRINGIFY_INNER(value) #value
+#define MICANT_STRINGIFY(value) MICANT_STRINGIFY_INNER(value)
 
 extern "C" {
+
 
 // System time services use the same AMD64 syscall ABI as the rest of NTDLL.
 // SSNs match the canonical Ke service table consumed by the bare-metal path.
@@ -56,29 +61,16 @@ bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
 }
 
-// LLVM-MinGW emits this helper before large AMD64 stack allocations. Touch
-// each page in the prospective frame so the kernel can grow the user stack
-// one guard page at a time instead of skipping over the guard.
-__attribute__((naked)) void ___chkstk_ms() noexcept {
-    __asm__ __volatile__(
-        "leaq 8(%rsp), %r11\n"
-        "movq %rax, %r10\n"
-        "1:\n"
-        "cmpq $4096, %r10\n"
-        "jb 2f\n"
-        "subq $4096, %r11\n"
-        "testb $0, (%r11)\n"
-        "subq $4096, %r10\n"
-        "jmp 1b\n"
-        "2:\n"
-        "subq %r10, %r11\n"
-        "testb $0, (%r11)\n"
-        "retq\n");
-}
-
 // ============================================================================
 // 1. Native NT Fast Syscall Trampolines (Ring 3 -> Ring 0)
 // ============================================================================
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtOpenProcess(void**, uint32_t, void*, void*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $" MICANT_STRINGIFY(MICANT_SSN_NT_OPEN_PROCESS) ", %rax\n\tsyscall\n\tretq\n\t");
+}
+__attribute__((naked)) __declspec(dllexport) int32_t NtOpenThread(void**, uint32_t, void*, void*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $" MICANT_STRINGIFY(MICANT_SSN_NT_OPEN_THREAD) ", %rax\n\tsyscall\n\tretq\n\t");
+}
 
 __attribute__((naked)) __declspec(dllexport) int32_t NtTerminateProcess(void* /*processHandle*/, int32_t /*exitStatus*/) noexcept {
 #if defined(__x86_64__)
@@ -117,15 +109,24 @@ struct ExceptionPointers64 { ExceptionRecord64* record; micant::CONTEXT* context
 using VectoredExceptionHandler = int32_t (*)(ExceptionPointers64*);
 static_assert(sizeof(ExceptionRecord64) == 0x98);
 
+__attribute__((naked)) __declspec(dllexport) int32_t NtRaiseException(
+    ExceptionRecord64*, micant::CONTEXT*, uint8_t) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $" MICANT_STRINGIFY(MICANT_SSN_NT_RAISE_EXCEPTION)
+                         ", %rax\n\tsyscall\n\tret\n\t");
+}
+
 extern "C" __declspec(dllexport) [[noreturn]] void RtlRestoreContext(
     micant::CONTEXT* context, ExceptionRecord64* exceptionRecord) noexcept;
 
 namespace {
-struct VectoredEntry { uintptr_t cookie{}; VectoredExceptionHandler handler{}; };
+struct alignas(16) VectoredEntry { uint64_t handler{}, state{}; };
+struct VectoredEntryValue { uint64_t handler{}, state{}; };
+static_assert(sizeof(VectoredEntry) == 16 && alignof(VectoredEntry) == 16);
 VectoredEntry g_vectoredHandlers[32]{};
 VectoredEntry g_vectoredContinueHandlers[32]{};
-uintptr_t g_nextVectoredCookie{1};
-volatile uint8_t g_vectoredLock{};
+uint64_t g_nextVectoredCookie{1};
+uint64_t g_nextVectoredOrder{1};
+uint64_t g_vectoredPublication{};
 
 struct RuntimeFunction64 { uint32_t beginAddress, endAddress, unwindInfo; };
 struct UnwindState64 {
@@ -137,9 +138,12 @@ struct UnwindState64 {
 struct alignas(64) HandlerContextStorage {
     micant::CONTEXT context{};
     micant::CONTEXT_EX contextEx{};
-    alignas(64) uint8_t xstateTail[4096]{};
+    // XSAVE requires a contiguous 512-byte legacy prefix followed by the
+    // extended state. The public CONTEXT_EX points at the latter only.
+    alignas(64) uint8_t xsaveArea[4096]{};
 };
 static_assert(offsetof(HandlerContextStorage, contextEx) == sizeof(micant::CONTEXT));
+static_assert(offsetof(HandlerContextStorage, xsaveArea) % 64 == 0);
 struct ImageView64 {
     uintptr_t base{};
     uint32_t size{};
@@ -172,6 +176,7 @@ constexpr int32_t ExceptionContinueSearch = 1;    // EXCEPTION_DISPOSITION
 constexpr uint32_t StatusNoncontinuableException = 0xC0000025u;
 constexpr uint32_t StatusInvalidDisposition = 0xC0000026u;
 constexpr uint32_t StatusUnwindConsolidate = 0x80000029u;
+[[noreturn]] void raiseDispatchFailure(uint32_t status, ExceptionRecord64* nested) noexcept;
 
 bool locateXstateChunk(micant::CONTEXT_EX* contextEx,
                        micant::XSTATE_HEADER*& header,
@@ -185,6 +190,10 @@ bool buildHandlerContext(const micant::CONTEXT& source, const UnwindState64& wal
     storage.context.Rip = walk.rip;
     for (size_t i = 0; i < 16; ++i)
         storage.context.FltSave.XmmRegisters[i] = walk.xmm[i];
+
+    // RtlUnwindEx may use its captured context as the handler context. Its
+    // extension already describes the same resident XSTATE storage.
+    if (&source == &storage.context) return true;
 
     storage.contextEx = {};
     storage.contextEx.All.Offset = -static_cast<int32_t>(sizeof(micant::CONTEXT));
@@ -201,9 +210,9 @@ bool buildHandlerContext(const micant::CONTEXT& source, const UnwindState64& wal
     micant::XSTATE_HEADER* sourceHeader{};
     uint32_t xstateLength{};
     if (!locateXstateChunk(sourceEx, sourceHeader, xstateLength) ||
-        xstateLength > sizeof(storage.xstateTail)) return false;
-    std::memcpy(storage.xstateTail, sourceHeader, xstateLength);
-    const uintptr_t offset = reinterpret_cast<uintptr_t>(storage.xstateTail) -
+        xstateLength > sizeof(storage.xsaveArea) - 512) return false;
+    std::memcpy(storage.xsaveArea + 512, sourceHeader, xstateLength);
+    const uintptr_t offset = reinterpret_cast<uintptr_t>(storage.xsaveArea + 512) -
                              reinterpret_cast<uintptr_t>(&storage.contextEx);
     if (offset > INT32_MAX || offset > UINT32_MAX - sizeof(micant::CONTEXT) - xstateLength)
         return false;
@@ -215,6 +224,7 @@ bool buildHandlerContext(const micant::CONTEXT& source, const UnwindState64& wal
 
 bool commitHandlerContext(const HandlerContextStorage& storage,
                           micant::CONTEXT& destination) noexcept {
+    if (&storage.context == &destination) return true;
     destination = storage.context;
     if (!(destination.ContextFlags & CONTEXT_XSTATE)) return true;
     auto* destinationEx = reinterpret_cast<micant::CONTEXT_EX*>(
@@ -250,12 +260,21 @@ bool inspectImage(uintptr_t base, uint32_t imageSize, ImageView64& image) noexce
         *reinterpret_cast<const uint16_t*>(nt + 4) != 0x8664) return false;
     const uint16_t optionalSize = *reinterpret_cast<const uint16_t*>(nt + 20);
     const auto* optional = nt + 24;
-    if (optionalSize < 144 || optionalSize > imageSize - 24 ||
+    if (optionalSize < 112 || optionalSize > imageSize - 24 ||
         static_cast<uint32_t>(ntOffset) > imageSize - 24 - optionalSize ||
         *reinterpret_cast<const uint16_t*>(optional) != 0x020B) return false;
     const uint32_t declaredSize = *reinterpret_cast<const uint32_t*>(optional + 56);
     const uint32_t directoryCount = *reinterpret_cast<const uint32_t*>(optional + 108);
-    if (!declaredSize || declaredSize > imageSize || directoryCount <= 3) return false;
+    if (!declaredSize || declaredSize > imageSize || directoryCount > 16 ||
+        directoryCount > (optionalSize - 112) / 8) return false;
+    // Images containing only leaf functions can legitimately omit the
+    // exception directory entirely; they still need to be discoverable so
+    // the dispatcher can unwind those frames using their return addresses.
+    if (directoryCount <= 3) {
+        image = {base, declaredSize, 0, 0};
+        return true;
+    }
+    if (optionalSize < 144) return false;
     const uint32_t exceptionRva = *reinterpret_cast<const uint32_t*>(optional + 112 + 3 * 8);
     const uint32_t exceptionSize = *reinterpret_cast<const uint32_t*>(optional + 112 + 3 * 8 + 4);
     image = {base, declaredSize, exceptionRva, exceptionSize};
@@ -325,13 +344,12 @@ uint64_t& unwindRegister(UnwindState64& context, uint8_t reg) noexcept {
 
 bool tryUnwindEpilog(const ImageView64& image, const RuntimeFunction64& function,
                      uintptr_t controlPc, UnwindState64& context,
-                     uint64_t stackLimit, uint64_t stackBase,
-                     bool& recognized) noexcept {
-    recognized = false;
+                     uint64_t stackLimit, uint64_t stackBase) noexcept {
     if (controlPc < image.base + function.beginAddress ||
         controlPc >= image.base + function.endAddress) return false;
     const uint32_t endRva = function.endAddress;
     uint32_t cursor = static_cast<uint32_t>(controlPc - image.base);
+    if (cursor > UINT32_MAX - 8) return false;
     UnwindState64 candidate = context;
     auto byteAt = [&](uint32_t rva, uint8_t& value) noexcept {
         if (rva >= endRva || !imageRange(image, rva, 1)) return false;
@@ -349,7 +367,6 @@ bool tryUnwindEpilog(const ImageView64& image, const RuntimeFunction64& function
     uint8_t b0{}, b1{}, b2{};
     if (byteAt(cursor, b0) && b0 == 0x48 && byteAt(cursor + 1, b1) &&
         (b1 == 0x83 || b1 == 0x81) && byteAt(cursor + 2, b2) && b2 == 0xC4) {
-        recognized = true;
         uint32_t amount{};
         const unsigned immediateBytes = b1 == 0x83 ? 1 : 4;
         if (!readImmediate(cursor + 3, immediateBytes, amount)) return false;
@@ -363,18 +380,25 @@ bool tryUnwindEpilog(const ImageView64& image, const RuntimeFunction64& function
     } else if (byteAt(cursor, b0) && (b0 == 0x48 || b0 == 0x49) &&
                byteAt(cursor + 1, b1) && b1 == 0x8D && byteAt(cursor + 2, b2) &&
                ((b2 >> 3) & 7) == 4 && ((b2 >> 6) & 3) != 3) {
-        recognized = true;
         const uint8_t mod = b2 >> 6;
         const uint8_t rm = b2 & 7;
-        if (rm == 4 || (mod == 0 && rm == 5)) return false; // SIB/RIP-relative forms are unsupported.
-        const uint8_t baseRegister = static_cast<uint8_t>(rm | ((b0 & 1) ? 8 : 0));
+        if (mod == 0 && rm == 5) return false; // RIP-relative is not a frame register.
+        uint8_t baseRegister = static_cast<uint8_t>(rm | ((b0 & 1) ? 8 : 0));
+        uint32_t displacementRva = cursor + 3;
+        if (rm == 4) {
+            uint8_t sib{};
+            if (!byteAt(displacementRva++, sib) || ((sib >> 3) & 7) != 4 ||
+                (mod == 0 && (sib & 7) == 5)) return false;
+            baseRegister = static_cast<uint8_t>((sib & 7) | ((b0 & 1) ? 8 : 0));
+        }
+        if (!nonvolatileRegister(baseRegister)) return false;
         int64_t displacement{};
         uint32_t raw{};
         unsigned immediateBytes{};
         if (mod == 1) immediateBytes = 1;
         else if (mod == 2) immediateBytes = 4;
         if (immediateBytes) {
-            if (!readImmediate(cursor + 3, immediateBytes, raw)) return false;
+            if (!readImmediate(displacementRva, immediateBytes, raw)) return false;
             displacement = immediateBytes == 1 ? static_cast<int8_t>(raw) : static_cast<int32_t>(raw);
         }
         const uint64_t base = candidate.registers[baseRegister];
@@ -382,89 +406,56 @@ bool tryUnwindEpilog(const ImageView64& image, const RuntimeFunction64& function
             (displacement > 0 && static_cast<uint64_t>(displacement) > UINT64_MAX - base)) return false;
         candidate.rsp() = displacement < 0 ? base - static_cast<uint64_t>(-displacement)
                                              : base + static_cast<uint64_t>(displacement);
-        cursor += 3 + immediateBytes;
+        cursor = displacementRva + immediateBytes;
     }
 
     // Remaining legal epilogue operations are pops of nonvolatile GPRs,
     // followed by RET/RET imm16. Execute only instructions inside this image.
     for (size_t instruction = 0; instruction < 32; ++instruction) {
+        if (cursor > UINT32_MAX - 8) return false;
         uint8_t opcode{};
         if (!byteAt(cursor, opcode)) return false;
         uint8_t reg{};
         uint32_t length{};
         if (opcode >= 0x58 && opcode <= 0x5F) {
-            recognized = true;
             reg = opcode & 7;
             length = 1;
         } else if (opcode == 0x41) {
             uint8_t extended{};
             if (!byteAt(cursor + 1, extended) || extended < 0x58 || extended > 0x5F) return false;
-            recognized = true;
             reg = static_cast<uint8_t>((extended & 7) + 8);
             length = 2;
         } else if (opcode == 0xFF || (opcode >= 0x40 && opcode <= 0x4F)) {
-            recognized = true;
-            uint8_t rex{};
             uint32_t opcodeRva = cursor;
             if (opcode != 0xFF) {
-                rex = opcode;
                 if (!byteAt(++opcodeRva, opcode) || opcode != 0xFF) return false;
             }
             uint8_t modrm{};
             if (!byteAt(opcodeRva + 1, modrm) || (modrm >> 6) != 0 ||
                 ((modrm >> 3) & 7) != 4) return false;
             uint32_t addressRva = opcodeRva + 2;
-            uint64_t effectiveAddress{};
             const uint8_t rm = modrm & 7;
             if (rm == 4) {
                 uint8_t sib{};
                 if (!byteAt(addressRva++, sib)) return false;
-                const uint8_t baseField = sib & 7;
-                const uint8_t indexField = (sib >> 3) & 7;
-                const bool noBase = baseField == 5;
-                const bool noIndex = indexField == 4 && !(rex & 2);
-                uint64_t base = 0;
-                if (!noBase) base = candidate.registers[baseField | ((rex & 1) ? 8 : 0)];
-                uint64_t index = 0;
-                if (!noIndex) index = candidate.registers[indexField | ((rex & 2) ? 8 : 0)];
-                const uint64_t scaledIndex = index << (sib >> 6);
-                if (scaledIndex > UINT64_MAX - base) return false;
-                effectiveAddress = base + scaledIndex;
-                if (noBase) {
+                if ((sib & 7) == 5) {
                     uint32_t displacement{};
                     if (!readImmediate(addressRva, 4, displacement)) return false;
-                    const int64_t signedDisplacement = static_cast<int32_t>(displacement);
-                    if ((signedDisplacement < 0 && static_cast<uint64_t>(-signedDisplacement) > effectiveAddress) ||
-                        (signedDisplacement > 0 && static_cast<uint64_t>(signedDisplacement) > UINT64_MAX - effectiveAddress)) return false;
-                    effectiveAddress = signedDisplacement < 0
-                        ? effectiveAddress - static_cast<uint64_t>(-signedDisplacement)
-                        : effectiveAddress + static_cast<uint64_t>(signedDisplacement);
-                    addressRva += 4;
                 }
             } else if (rm == 5) {
                 uint32_t displacement{};
                 if (!readImmediate(addressRva, 4, displacement)) return false;
-                const int64_t signedDisplacement = static_cast<int32_t>(displacement);
-                const uint64_t nextRip = image.base + addressRva + 4;
-                if ((signedDisplacement < 0 && static_cast<uint64_t>(-signedDisplacement) > nextRip) ||
-                    (signedDisplacement > 0 && static_cast<uint64_t>(signedDisplacement) > UINT64_MAX - nextRip)) return false;
-                effectiveAddress = signedDisplacement < 0
-                    ? nextRip - static_cast<uint64_t>(-signedDisplacement)
-                    : nextRip + static_cast<uint64_t>(signedDisplacement);
-                addressRva += 4;
-            } else {
-                effectiveAddress = candidate.registers[rm | ((rex & 1) ? 8 : 0)];
             }
-            // Do not dereference an indirect tail-jump slot outside a PE image
-            // whose mapping bounds are known to this dispatcher.
-            if (effectiveAddress < image.base || effectiveAddress - image.base > UINT32_MAX ||
-                !imageRange(image, static_cast<uint32_t>(effectiveAddress - image.base), sizeof(uint64_t))) return false;
-            std::memcpy(&candidate.rip, reinterpret_cast<const void*>(effectiveAddress), sizeof(candidate.rip));
-            if (!candidate.rip || (candidate.rsp() < stackLimit || candidate.rsp() >= stackBase)) return false;
+            // A tail jump leaves the caller's return address on the stack.
+            // Virtual unwind returns to that caller; it must not execute or
+            // dereference the jump target itself.
+            if (candidate.rsp() < stackLimit || candidate.rsp() > stackBase - sizeof(uint64_t)) return false;
+            std::memcpy(&candidate.rip, reinterpret_cast<const void*>(candidate.rsp()), sizeof(candidate.rip));
+            candidate.rsp() += sizeof(uint64_t);
+            if (!candidate.rip) return false;
             context = candidate;
             return true;
         } else if (opcode == 0xC3 || opcode == 0xC2) {
-            recognized = true;
             if (candidate.rsp() < stackLimit || candidate.rsp() > stackBase - sizeof(uint64_t)) return false;
             candidate.rip = *reinterpret_cast<const uint64_t*>(candidate.rsp());
             candidate.rsp() += sizeof(uint64_t);
@@ -511,23 +502,15 @@ bool unwindFrame(const ImageView64& image, uintptr_t controlPc,
     const uint32_t initialCodeOffset = static_cast<uint32_t>(controlPc - (image.base + function->beginAddress));
     const uint64_t epilogEstablisher = context.rsp();
     if (initialCodeOffset > info[1]) {
-        bool recognizedEpilog{};
-        if (tryUnwindEpilog(image, *function, controlPc, context, stackLimit, stackBase,
-                            recognizedEpilog)) {
+        if (tryUnwindEpilog(image, *function, controlPc, context, stackLimit, stackBase)) {
             establisher = epilogEstablisher;
             return true;
         }
-        // Once an epilog opcode has been recognized, reject unsupported or
-        // malformed forms rather than applying body unwind codes to a partly
-        // dismantled frame.
-        if (recognizedEpilog) return false;
+        // A prefix such as REX or POP can occur in ordinary function code.
+        // Only a complete legal epilogue is an epilogue; otherwise use the
+        // prologue unwind metadata with the original, unmodified context.
     }
-    const uint8_t initialFrameRegister = info[3] & 0xF;
-    const uint8_t initialFrameOffset = info[3] >> 4;
-    if (initialFrameRegister && !nonvolatileRegister(initialFrameRegister)) return false;
-    establisher = initialFrameRegister
-        ? unwindRegister(context, initialFrameRegister) - initialFrameOffset * 16
-        : context.rsp();
+    establisher = context.rsp();
     bool machineFrame = false;
     uint32_t codeOffset = static_cast<uint32_t>(controlPc - (image.base + function->beginAddress));
     uint8_t finalFlags{};
@@ -557,10 +540,30 @@ bool unwindFrame(const ImageView64& image, uintptr_t controlPc,
                 const uint8_t op = codes[i * 2 + 1] & 0xF;
                 const uint8_t opInfo = codes[i * 2 + 1] >> 4;
                 const size_t slots = op == 1 && opInfo ? 3 :
-                    (op == 1 || op == 4 || op == 6 || op == 8 || op == 11) ? 2 :
-                    (op == 5 || op == 9 || op == 10) ? 3 : 1;
+                    (op == 1 || op == 4 || op == 6 || op == 8) ? 2 :
+                    (op == 5 || op == 7 || op == 9 || op == 11) ? 3 : 1;
                 if (slots > codeCount - i) return false;
                 i += slots;
+            }
+            // Within a prologue the frame register is not valid until its
+            // UWOP_SET_FPREG instruction has executed. Before that point
+            // the current RSP is the establisher frame.
+            bool frameEstablished = codeOffset >= info[1] || (flags & UnwindFlagChainInfo);
+            for (size_t j = i; frameRegister && !frameEstablished && j < codeCount;) {
+                const uint8_t op = codes[j * 2 + 1] & 0xF;
+                const uint8_t opInfo = codes[j * 2 + 1] >> 4;
+                const size_t slots = op == 1 && opInfo ? 3 :
+                    (op == 1 || op == 4 || op == 6 || op == 8) ? 2 :
+                    (op == 5 || op == 7 || op == 9 || op == 11) ? 3 : 1;
+                if (slots > codeCount - j) return false;
+                if (op == 3) frameEstablished = true;
+                j += slots;
+            }
+            if (frameRegister && frameEstablished) {
+                const uint64_t frame = unwindRegister(context, frameRegister);
+                const uint64_t displacement = static_cast<uint64_t>(frameOffset) * 16;
+                if (frame < displacement) return false;
+                establisher = frame - displacement;
             }
         }
         while (i < codeCount) {
@@ -631,7 +634,7 @@ bool unwindFrame(const ImageView64& image, uintptr_t controlPc,
                 i += op == 8 ? 2 : 3;
                 break;
             case 10: // UWOP_PUSH_MACHFRAME
-                if (opInfo > 1) return false;
+                if (opInfo > 1 || i + 1 != codeCount || (flags & UnwindFlagChainInfo)) return false;
                 if (context.rsp() < stackLimit || context.rsp() > stackBase - (opInfo ? 0x28 : 0x20))
                     return false;
                 context.rsp() += opInfo ? 8 : 0;
@@ -753,18 +756,14 @@ bool dispatchFrameHandlers(ExceptionRecord64* record, micant::CONTEXT* context) 
                 // in DispatcherContext is only for RtlUnwindEx; committing it
                 // here would resume in the caller frame instead of the fault.
                 if (!(record->flags & ExceptionNoncontinuable)) return true;
-                record->code = StatusNoncontinuableException;
-                record->flags |= ExceptionNoncontinuable;
-                return false;
+                raiseDispatchFailure(StatusNoncontinuableException, record);
             }
             if (disposition == ExceptionNestedException) {
                 // Keep EXCEPTION_NESTED_CALL visible to the next frame's
                 // language handler; it is cleared after that invocation
                 // unless that handler reports another nested exception.
             } else if (disposition != ExceptionContinueSearch) {
-                record->code = StatusInvalidDisposition;
-                record->flags |= ExceptionNoncontinuable;
-                return false;
+                raiseDispatchFailure(StatusInvalidDisposition, record);
             }
         }
         if (walk.rsp() <= stackLimit || walk.rsp() >= stackBase) return false;
@@ -797,6 +796,7 @@ bool locateXstateChunk(micant::CONTEXT_EX* contextEx,
 bool copyContextRecord(const micant::CONTEXT* source,
                        micant::CONTEXT* destination) noexcept {
     if (!source || !destination) return false;
+    if (source == destination) return true;
     const bool sourceHasXstate = (source->ContextFlags & CONTEXT_XSTATE) != 0;
     if (!sourceHasXstate) {
         std::memmove(destination, source, sizeof(*destination));
@@ -814,15 +814,15 @@ bool copyContextRecord(const micant::CONTEXT* source,
         !locateXstateChunk(destinationEx, destinationHeader, destinationLength) ||
         sourceLength != destinationLength || sourceLength > 4096) return false;
 
-    alignas(64) uint8_t xstateCopy[4096]{};
-    std::memcpy(xstateCopy, sourceHeader, sourceLength);
-
-    std::memmove(destination, source, sizeof(*destination));
-    // Re-resolve the destination after copying ContextFlags and its extension
-    // descriptor, then copy only the bounded XSTATE chunk.
-    if (!locateXstateChunk(destinationEx, destinationHeader, destinationLength) ||
-        destinationLength != sourceLength) return false;
-    std::memcpy(destinationHeader, xstateCopy, sourceLength);
+    // Preserve the small legacy context and destination descriptor before
+    // moving XSTATE: either one can overlap the source or destination tail.
+    // memmove handles arbitrary tail overlap without allocating a VAD or a
+    // second 4 KiB stack buffer across a nonlocal unwind.
+    micant::CONTEXT savedContext = *source;
+    const micant::CONTEXT_EX savedDestinationEx = *destinationEx;
+    std::memmove(destinationHeader, sourceHeader, sourceLength);
+    *destinationEx = savedDestinationEx;
+    std::memcpy(destination, &savedContext, sizeof(savedContext));
     return true;
 }
 
@@ -839,57 +839,196 @@ void queryXstateFeature(uint32_t feature, uint32_t& size, uint32_t& offset) noex
     offset = ebx;
 }
 
-void lockVectoredHandlers() noexcept {
-    while (__atomic_test_and_set(&g_vectoredLock, __ATOMIC_ACQUIRE)) __asm__ __volatile__("pause");
-}
-void unlockVectoredHandlers() noexcept { __atomic_clear(&g_vectoredLock, __ATOMIC_RELEASE); }
-
-void* addVectoredHandler(VectoredEntry (&handlers)[32], unsigned long first,
-                         VectoredExceptionHandler handler) noexcept {
-    if (!handler) return nullptr;
-    lockVectoredHandlers();
-    size_t slot = 32;
-    for (size_t i = 0; i < 32; ++i) if (!handlers[i].handler) { slot = i; break; }
-    if (slot == 32) { unlockVectoredHandlers(); return nullptr; }
-    uintptr_t cookie = g_nextVectoredCookie++;
-    if (!cookie) cookie = g_nextVectoredCookie++;
-    if (first) {
-        for (size_t i = slot; i > 0; --i) handlers[i] = handlers[i - 1];
-        slot = 0;
-    }
-    handlers[slot] = {cookie, handler};
-    unlockVectoredHandlers();
-    return reinterpret_cast<void*>(cookie);
-}
-
-unsigned long removeVectoredHandler(VectoredEntry (&handlers)[32], void* cookie) noexcept {
-    if (!cookie) return 0;
-    lockVectoredHandlers();
-    for (size_t i = 0; i < 32; ++i) {
-        if (handlers[i].cookie != reinterpret_cast<uintptr_t>(cookie)) continue;
-        for (size_t j = i; j + 1 < 32; ++j) handlers[j] = handlers[j + 1];
-        handlers[31] = {};
-        unlockVectoredHandlers();
-        return 1;
-    }
-    unlockVectoredHandlers();
+// The public RtlUnwindEx buffer is only a CONTEXT. Keep any extension in our
+// own aligned stack storage. Its XSAVE area provides a contiguous legacy
+// prefix and extended tail without a temporary VAD or callback lifetime.
+int32_t captureUnwindXstate(HandlerContextStorage& storage) noexcept {
+    uint32_t eax = 1, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    if ((ecx & ((1u << 26) | (1u << 27))) != ((1u << 26) | (1u << 27))) return 0;
+    const uint64_t mask = readXcr0();
+    if (!(mask & ~uint64_t{3})) return 0;
+    if (mask >> 32) return static_cast<int32_t>(0xC00000BBu);
+    eax = 0x0d; ecx = 0;
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+    if (ebx < 576 || ebx > sizeof(storage.xsaveArea))
+        return static_cast<int32_t>(0xC00000BBu);
+    const uint32_t low = static_cast<uint32_t>(mask);
+    const uint32_t high = static_cast<uint32_t>(mask >> 32);
+    __asm__ __volatile__("xsave64 (%0)" : : "r"(storage.xsaveArea), "a"(low), "d"(high) : "memory");
+    const size_t tailLength = ebx - 512;
+    const uintptr_t offset = reinterpret_cast<uintptr_t>(storage.xsaveArea + 512) -
+                             reinterpret_cast<uintptr_t>(&storage.contextEx);
+    storage.contextEx.All.Offset = -static_cast<int32_t>(sizeof(micant::CONTEXT));
+    storage.contextEx.All.Length = static_cast<uint32_t>(sizeof(micant::CONTEXT) + offset + tailLength);
+    storage.contextEx.Legacy.Offset = storage.contextEx.All.Offset;
+    storage.contextEx.Legacy.Length = sizeof(micant::CONTEXT);
+    storage.contextEx.XState.Offset = static_cast<int32_t>(offset);
+    storage.contextEx.XState.Length = static_cast<uint32_t>(tailLength);
+    storage.context.ContextFlags |= CONTEXT_XSTATE;
     return 0;
 }
 
-void callVectoredContinueHandlers(ExceptionPointers64& pointers) noexcept {
-    uintptr_t cookies[32]{};
-    lockVectoredHandlers();
-    for (size_t i = 0; i < 32; ++i) cookies[i] = g_vectoredContinueHandlers[i].cookie;
-    unlockVectoredHandlers();
-    for (const auto cookie : cookies) {
-        if (!cookie) continue;
-        VectoredExceptionHandler handler{};
-        lockVectoredHandlers();
-        for (const auto& entry : g_vectoredContinueHandlers)
-            if (entry.cookie == cookie) { handler = entry.handler; break; }
-        unlockVectoredHandlers();
-        if (handler) (void)handler(&pointers);
+constexpr uint64_t VectoredReserved = uint64_t{1} << 63;
+constexpr uint64_t VectoredFirst = uint64_t{1} << 62;
+constexpr uint64_t VectoredIdMask = 0x7fffffffULL;
+
+bool vectoredAtomicSupported() noexcept {
+    uint32_t eax = 1, ebx{}, ecx{}, edx{};
+    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
+    return (ecx & (1u << 13)) != 0;
+}
+
+bool compareVectoredEntry(VectoredEntry& entry, VectoredEntryValue& expected,
+                          VectoredEntryValue desired) noexcept {
+    uint64_t low = expected.handler, high = expected.state;
+    uint8_t exchanged{};
+    __asm__ __volatile__("lock cmpxchg16b %1; sete %0"
+                         : "=q"(exchanged), "+m"(entry), "+a"(low), "+d"(high)
+                         : "b"(desired.handler), "c"(desired.state)
+                         : "cc", "memory");
+    expected = {low, high};
+    return exchanged != 0;
+}
+
+VectoredEntryValue loadVectoredEntry(VectoredEntry& entry) noexcept {
+    VectoredEntryValue value{};
+    (void)compareVectoredEntry(entry, value, {});
+    return value;
+}
+
+uint64_t allocateVectoredNumber(uint64_t& counter, uint64_t maximum) noexcept {
+    uint64_t next = __atomic_load_n(&counter, __ATOMIC_RELAXED);
+    while (next && next <= maximum) {
+        if (__atomic_compare_exchange_n(&counter, &next, next + 1, false,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return next;
     }
+    return 0;
+}
+
+// A publisher can be interrupted by an APC or exception on the same thread.
+// Any reader or writer can finish its fully prepared slot and release the
+// publication token; no caller waits for that interrupted thread to resume.
+void helpVectoredPublication(uint64_t ticket) noexcept {
+    if (!ticket) return;
+    const size_t slot = static_cast<size_t>((ticket & 0x7f) - 1);
+    const uint64_t cookie = ticket >> 7;
+    if (slot >= 64 || !cookie || cookie > VectoredIdMask) __builtin_trap();
+    auto& entry = slot < 32 ? g_vectoredHandlers[slot] : g_vectoredContinueHandlers[slot - 32];
+    auto expected = loadVectoredEntry(entry);
+    if ((expected.state & VectoredReserved) && (expected.state & VectoredIdMask) == cookie) {
+        const uint64_t order = allocateVectoredNumber(g_nextVectoredOrder, 0x7fffffffULL);
+        const VectoredEntryValue published = order
+            ? VectoredEntryValue{expected.handler, (expected.state & VectoredFirst) | (order << 31) | cookie}
+            : VectoredEntryValue{};
+        (void)compareVectoredEntry(entry, expected, published);
+    }
+    uint64_t pending = ticket;
+    (void)__atomic_compare_exchange_n(&g_vectoredPublication, &pending, uint64_t{0}, false,
+                                      __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+}
+
+void publishVectoredReservation(size_t index, uint64_t cookie) noexcept {
+    const uint64_t ticket = (cookie << 7) | (index + 1);
+    for (;;) {
+        uint64_t empty = 0;
+        if (__atomic_compare_exchange_n(&g_vectoredPublication, &empty, ticket, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            helpVectoredPublication(ticket);
+            return;
+        }
+        helpVectoredPublication(empty);
+    }
+}
+
+void* addVectoredHandler(VectoredEntry (&handlers)[32], unsigned long first,
+                         VectoredExceptionHandler handler) noexcept {
+    if (!handler || !vectoredAtomicSupported()) return nullptr;
+    for (size_t slot = 0; slot < 32; ++slot) {
+        auto& entry = handlers[slot];
+        const auto existing = loadVectoredEntry(entry);
+        if (existing.state & VectoredReserved) {
+            const size_t index = slot + (&handlers == &g_vectoredContinueHandlers ? 32 : 0);
+            publishVectoredReservation(index, existing.state & VectoredIdMask);
+        }
+        if (loadVectoredEntry(entry).state) continue;
+        const uint64_t cookie = allocateVectoredNumber(g_nextVectoredCookie, VectoredIdMask);
+        if (!cookie) return nullptr;
+        VectoredEntryValue free{};
+        const VectoredEntryValue reserved{reinterpret_cast<uintptr_t>(handler),
+            VectoredReserved | (first ? VectoredFirst : 0) | cookie};
+        if (!compareVectoredEntry(entry, free, reserved)) continue;
+        const size_t index = slot + (&handlers == &g_vectoredContinueHandlers ? 32 : 0);
+        publishVectoredReservation(index, cookie);
+        const auto state = loadVectoredEntry(entry).state;
+        if (!(state & VectoredReserved) && (state & VectoredIdMask) == cookie)
+            return reinterpret_cast<void*>(static_cast<uintptr_t>(cookie));
+        return nullptr;
+    }
+    return nullptr;
+}
+
+unsigned long removeVectoredHandler(VectoredEntry (&handlers)[32], void* cookie) noexcept {
+    const uintptr_t id = reinterpret_cast<uintptr_t>(cookie);
+    if (!id || id > VectoredIdMask || !vectoredAtomicSupported()) return 0;
+    helpVectoredPublication(__atomic_load_n(&g_vectoredPublication, __ATOMIC_ACQUIRE));
+    for (auto& entry : handlers) {
+        auto value = loadVectoredEntry(entry);
+        if ((value.state & VectoredReserved) || (value.state & VectoredIdMask) != id) continue;
+        if (compareVectoredEntry(entry, value, {})) return 1;
+    }
+    return 0;
+}
+
+struct VectoredSnapshot { uint64_t state{}; uint8_t slot{}; bool first{}; };
+
+size_t snapshotVectoredHandlers(VectoredEntry (&handlers)[32], VectoredSnapshot (&snapshot)[32]) noexcept {
+    size_t count{};
+    if (!vectoredAtomicSupported()) return 0;
+    helpVectoredPublication(__atomic_load_n(&g_vectoredPublication, __ATOMIC_ACQUIRE));
+    // Registrations that begin publishing after this snapshot boundary are
+    // not mixed into it even if they occupy a later physical slot.
+    const uint64_t cutoff = __atomic_load_n(&g_nextVectoredOrder, __ATOMIC_ACQUIRE) - 1;
+    for (size_t i = 0; i < 32; ++i) {
+        auto value = loadVectoredEntry(handlers[i]);
+        if (value.state & VectoredReserved) {
+            const size_t index = i + (&handlers == &g_vectoredContinueHandlers ? 32 : 0);
+            publishVectoredReservation(index, value.state & VectoredIdMask);
+            value = loadVectoredEntry(handlers[i]);
+        }
+        const uint64_t state = value.state;
+        const uint64_t order = (state & ~(VectoredFirst | VectoredReserved)) >> 31;
+        if (!state || (state & VectoredReserved) || !order || order > cutoff) continue;
+        const bool first = (state & VectoredFirst) != 0;
+        // First handlers are newest-first; the remaining handlers are
+        // oldest-first. Insert into the local snapshot without a shared lock.
+        size_t pos = count;
+        while (pos && ((first && !snapshot[pos - 1].first) ||
+               (first == snapshot[pos - 1].first &&
+                (first ? order > ((snapshot[pos - 1].state & ~(VectoredFirst | VectoredReserved)) >> 31)
+                       : order < ((snapshot[pos - 1].state & ~(VectoredFirst | VectoredReserved)) >> 31))))) {
+            snapshot[pos] = snapshot[pos - 1];
+            --pos;
+        }
+        snapshot[pos] = {state, static_cast<uint8_t>(i), first};
+        ++count;
+    }
+    return count;
+}
+
+VectoredExceptionHandler resolveVectoredHandler(VectoredEntry (&handlers)[32],
+                                                  const VectoredSnapshot& item) noexcept {
+    auto& entry = handlers[item.slot];
+    const auto value = loadVectoredEntry(entry);
+    return value.state == item.state ? reinterpret_cast<VectoredExceptionHandler>(value.handler) : nullptr;
+}
+
+void callVectoredContinueHandlers(ExceptionPointers64& pointers) noexcept {
+    VectoredSnapshot snapshot[32]{};
+    const size_t count = snapshotVectoredHandlers(g_vectoredContinueHandlers, snapshot);
+    for (size_t i = 0; i < count; ++i)
+        if (const auto handler = resolveVectoredHandler(g_vectoredContinueHandlers, snapshot[i]))
+            (void)handler(&pointers);
 }
 }
 
@@ -897,22 +1036,13 @@ extern "C" __declspec(dllexport) int32_t RtlDispatchException(
     ExceptionRecord64* record, micant::CONTEXT* context) noexcept {
     if (!record || !context) return 0;
     ExceptionPointers64 pointers{record, context};
-    uintptr_t cookies[32]{};
-    lockVectoredHandlers();
-    for (size_t i = 0; i < 32; ++i) cookies[i] = g_vectoredHandlers[i].cookie;
-    unlockVectoredHandlers();
-    for (const auto cookie : cookies) {
-        if (!cookie) continue;
-        VectoredExceptionHandler handler{};
-        lockVectoredHandlers();
-        for (const auto& entry : g_vectoredHandlers)
-            if (entry.cookie == cookie) { handler = entry.handler; break; }
-        unlockVectoredHandlers();
+    VectoredSnapshot snapshot[32]{};
+    const size_t count = snapshotVectoredHandlers(g_vectoredHandlers, snapshot);
+    for (size_t i = 0; i < count; ++i) {
+        const auto handler = resolveVectoredHandler(g_vectoredHandlers, snapshot[i]);
         if (handler && handler(&pointers) == VectoredContinueExecution) {
             if (record->flags & 1) {
-                record->code = StatusNoncontinuableException;
-                record->flags &= ~0x10u;
-                return 0;
+                raiseDispatchFailure(StatusNoncontinuableException, record);
             }
             callVectoredContinueHandlers(pointers);
             return 1;
@@ -923,12 +1053,88 @@ extern "C" __declspec(dllexport) int32_t RtlDispatchException(
     return handled ? 1 : 0;
 }
 
+// Capture the caller's continuation, including the ABI nonvolatile registers
+// and legacy floating-point state. Extended XSTATE is not advertised here:
+// callers supplying only a CONTEXT do not own a CONTEXT_EX buffer.
+extern "C" __attribute__((naked)) __declspec(dllexport) void RtlCaptureContext(
+    micant::CONTEXT*) noexcept {
+    __asm__ __volatile__(
+        "movq %rax, 120(%rcx)\n"
+        "movq %rcx, 128(%rcx)\n"
+        "movq %rdx, 136(%rcx)\n"
+        "movq %rbx, 144(%rcx)\n"
+        "movq %rbp, 160(%rcx)\n"
+        "movq %rsi, 168(%rcx)\n"
+        "movq %rdi, 176(%rcx)\n"
+        "movq %r8, 184(%rcx)\n"
+        "movq %r9, 192(%rcx)\n"
+        "movq %r10, 200(%rcx)\n"
+        "movq %r11, 208(%rcx)\n"
+        "movq %r12, 216(%rcx)\n"
+        "movq %r13, 224(%rcx)\n"
+        "movq %r14, 232(%rcx)\n"
+        "movq %r15, 240(%rcx)\n"
+        "leaq 8(%rsp), %rax\n"
+        "movq %rax, 152(%rcx)\n"
+        "movq (%rsp), %rax\n"
+        "movq %rax, 248(%rcx)\n"
+        "pushfq\n"
+        "popq %rax\n"
+        "movl %eax, 68(%rcx)\n"
+        "movw %cs, 56(%rcx)\n"
+        "movw %ds, 58(%rcx)\n"
+        "movw %es, 60(%rcx)\n"
+        "movw %fs, 62(%rcx)\n"
+        "movw %gs, 64(%rcx)\n"
+        "movw %ss, 66(%rcx)\n"
+        "fxsave64 256(%rcx)\n"
+        "stmxcsr 52(%rcx)\n"
+        "movl $0x0010000f, 48(%rcx)\n"
+        "retq\n");
+}
+
+namespace {
+[[noreturn]] void raiseDispatchFailure(uint32_t status, ExceptionRecord64* nested) noexcept {
+    alignas(16) micant::CONTEXT context{};
+    RtlCaptureContext(&context);
+    ExceptionRecord64 record{};
+    record.code = status;
+    record.flags = 1; // EXCEPTION_NONCONTINUABLE
+    record.nestedRecord = nested;
+    record.exceptionAddress = reinterpret_cast<void*>(static_cast<uintptr_t>(context.Rip));
+    // First chance builds a fresh user exception frame. If it is not handled,
+    // KiUserExceptionDispatcher invokes the kernel second-chance path.
+    const auto first = NtRaiseException(&record, &context, 1);
+    const auto second = NtRaiseException(&record, &context, 0);
+    (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
+                             second < 0 ? second : first < 0 ? first : static_cast<int32_t>(status));
+    __builtin_trap();
+}
+}
+
+extern "C" __declspec(dllexport) [[noreturn]] void RtlRaiseStatus(int32_t status) noexcept {
+    raiseDispatchFailure(static_cast<uint32_t>(status), nullptr);
+}
+
+extern "C" __declspec(dllexport) void RtlRaiseException(ExceptionRecord64* record) noexcept {
+    if (!record) RtlRaiseStatus(static_cast<int32_t>(0xC000000Du));
+    alignas(16) micant::CONTEXT context{};
+    // NtContinue resumes immediately after capture. Keep the phase in stack
+    // memory so a successfully handled continuable exception returns once
+    // instead of raising the same exception again.
+    volatile bool dispatched = false;
+    RtlCaptureContext(&context);
+    if (dispatched) return;
+    dispatched = true;
+    record->exceptionAddress = __builtin_return_address(0);
+    const auto status = NtRaiseException(record, &context, 1);
+    RtlRaiseStatus(status < 0 ? status : static_cast<int32_t>(0xC0000144u));
+}
+
 extern "C" __declspec(dllexport) [[noreturn]] void RtlRestoreContext(
     micant::CONTEXT* context, ExceptionRecord64* exceptionRecord) noexcept {
     if (!context) {
-        (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                                 static_cast<int32_t>(0xC000000Du));
-        __builtin_trap();
+        raiseDispatchFailure(0xC000000Du, exceptionRecord);
     }
 
     constexpr uint32_t StatusUnwindConsolidate = 0x80000029u;
@@ -939,17 +1145,13 @@ extern "C" __declspec(dllexport) [[noreturn]] void RtlRestoreContext(
         ImageView64 callbackImage{};
         if (!exceptionRecord->parameterCount || !callbackAddress ||
             !findImage(callbackAddress, callbackImage)) {
-            (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                                     static_cast<int32_t>(0xC0000028u));
-            __builtin_trap();
+            raiseDispatchFailure(0xC0000028u, exceptionRecord);
         }
         const auto continuation = reinterpret_cast<ConsolidateRoutine>(callbackAddress)(exceptionRecord);
         ImageView64 continuationImage{};
         const uintptr_t continuationAddress = reinterpret_cast<uintptr_t>(continuation);
         if (!continuation || !findImage(continuationAddress, continuationImage)) {
-            (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                                     static_cast<int32_t>(0xC0000028u));
-            __builtin_trap();
+            raiseDispatchFailure(0xC0000028u, exceptionRecord);
         }
         context->Rip = continuationAddress;
     } else if (exceptionRecord && exceptionRecord->code == StatusLongJump) {
@@ -964,17 +1166,13 @@ extern "C" __declspec(dllexport) [[noreturn]] void RtlRestoreContext(
         uintptr_t teb{};
         __asm__ __volatile__("movq %%gs:0x30, %0" : "=r"(teb));
         if (exceptionRecord->parameterCount < 1 || !jumpAddress || !teb) {
-            (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                                     static_cast<int32_t>(0xC0000028u));
-            __builtin_trap();
+            raiseDispatchFailure(0xC0000028u, exceptionRecord);
         }
-        const uintptr_t stackBase = *reinterpret_cast<const uintptr_t*>(teb + 8);
-        const uintptr_t stackLimit = *reinterpret_cast<const uintptr_t*>(teb + 16);
-        if (stackLimit >= stackBase || jumpAddress < stackLimit ||
-            jumpAddress > stackBase - sizeof(JumpBuffer64)) {
-            (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                                     static_cast<int32_t>(0xC0000028u));
-            __builtin_trap();
+        // A jmp_buf can live in writable user storage outside this thread's
+        // stack. NtContinue independently validates the restored RSP and RIP.
+        constexpr uintptr_t highestUser = 0x00007FFFFFFFFFFFULL;
+        if (jumpAddress < 0x10000 || jumpAddress > highestUser - sizeof(JumpBuffer64) + 1) {
+            raiseDispatchFailure(0xC0000028u, exceptionRecord);
         }
         JumpBuffer64 jump{};
         memcpy(&jump, reinterpret_cast<const void*>(jumpAddress), sizeof(jump));
@@ -992,8 +1190,8 @@ extern "C" __declspec(dllexport) [[noreturn]] void RtlRestoreContext(
     }
 
     const auto status = NtContinue(context, 0);
-    (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}), status);
-    __builtin_trap();
+    raiseDispatchFailure(status < 0 ? static_cast<uint32_t>(status) : 0xC0000144u,
+                         exceptionRecord);
 }
 
 __declspec(dllexport) uint64_t RtlGetExtendedFeaturesMask(
@@ -1073,24 +1271,45 @@ __attribute__((naked, noreturn)) __declspec(dllexport) void KiUserApcDispatcher(
 __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
     void* targetFrame, void* targetIp, ExceptionRecord64* record,
     void* returnValue, micant::CONTEXT* context, void* /*historyTable*/) noexcept {
-    if (!targetFrame || !targetIp || !context) {
-        (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                                 static_cast<int32_t>(0xC0000028u)); // STATUS_BAD_STACK
+    const bool exitUnwind = targetFrame == nullptr;
+    if (!context || (reinterpret_cast<uintptr_t>(context) & 15) ||
+        (!exitUnwind && !targetIp && (!record || record->code != StatusUnwindConsolidate))) {
+        raiseDispatchFailure(0xC0000028u, record); // STATUS_BAD_STACK
+    }
+
+    HandlerContextStorage capturedContext{};
+    RtlCaptureContext(&capturedContext.context);
+    // Preserve the public output contract without assuming that a caller's
+    // standalone CONTEXT has writable extension bytes after it.
+    *context = capturedContext.context;
+    const auto xstateStatus = captureUnwindXstate(capturedContext);
+    if (xstateStatus < 0) {
+        (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}), xstateStatus);
         __builtin_trap();
     }
+    context = &capturedContext.context;
 
     ExceptionRecord64 unwindRecord{};
     if (!record) {
-        unwindRecord.code = 0;
+        // RtlUnwindEx supplies STATUS_UNWIND when no exception record was
+        // provided; the originating control address belongs to the context
+        // from which this unwind starts.
+        unwindRecord.code = 0xC0000027u;
+        unwindRecord.exceptionAddress = reinterpret_cast<void*>(static_cast<uintptr_t>(context->Rip));
         record = &unwindRecord;
     }
-    record->flags |= 0x2; // EXCEPTION_UNWINDING
+    record->flags = 0x2 | (exitUnwind ? 0x4u : 0u); // UNWINDING | EXIT_UNWIND
 
     uintptr_t teb{};
     __asm__ __volatile__("movq %%gs:0x30, %0" : "=r"(teb));
-    if (!teb) __builtin_trap();
+    if (!teb) raiseDispatchFailure(0xC0000028u, record);
     const uint64_t stackBase = *reinterpret_cast<const uint64_t*>(teb + 8);
     const uint64_t stackLimit = *reinterpret_cast<const uint64_t*>(teb + 16);
+    const uintptr_t targetAddress = exitUnwind ? stackBase - 1 : reinterpret_cast<uintptr_t>(targetFrame);
+    if (stackLimit >= stackBase || (!exitUnwind &&
+        (targetAddress < stackLimit || targetAddress >= stackBase || (targetAddress & 7)))) {
+        raiseDispatchFailure(0xC0000028u, record);
+    }
     UnwindState64 walk{};
     auto* sourceRegisters = &context->Rax;
     for (size_t i = 0; i < 16; ++i) walk.registers[i] = sourceRegisters[i];
@@ -1098,6 +1317,7 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
     for (size_t i = 0; i < 16; ++i) walk.xmm[i] = context->FltSave.XmmRegisters[i];
 
     uint32_t unwindFailureStatus = 0xC0000028u; // STATUS_BAD_STACK
+    bool completedExitUnwind = false;
     uint64_t lastRsp{};
     uint64_t lastRip{};
     for (size_t frame = 0; frame < 128 && walk.rip &&
@@ -1111,15 +1331,27 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
         if (!findImage(controlPc, image)) break;
         RuntimeFunction64* function = lookupFunction(image, controlPc);
         const uint64_t currentRip = walk.rip;
+        UnwindState64 currentFrame = walk;
         uint64_t establisher{};
         void* languageHandler{};
         void* handlerData{};
         if (!unwindFrame(image, controlPc, walk, function, UnwindFlagTerminationHandler,
                          stackLimit, stackBase,
-                         establisher, languageHandler, handlerData)) break;
-        bool targetReached = establisher == reinterpret_cast<uintptr_t>(targetFrame);
+                         establisher, languageHandler, handlerData)) {
+            if (exitUnwind && !walk.rip && walk.rsp() == stackBase)
+                completedExitUnwind = true;
+            break;
+        }
+        // No cleanup handler beyond the requested frame may run. This also
+        // rejects a malformed unwind entry before invoking its handler.
+        if (establisher < stackLimit || establisher > targetAddress || (establisher & 7))
+            break;
+        bool targetReached = !exitUnwind && establisher == targetAddress;
         if (languageHandler) {
-            HandlerContextStorage handlerStorage{};
+            // Reuse the captured context. No heap allocation remains live
+            // across the handler, which may unwind or continue without
+            // returning to this frame.
+            auto& handlerStorage = capturedContext;
             if (!buildHandlerContext(*context, walk, handlerStorage) ||
                 !commitHandlerContext(handlerStorage, *context)) break;
             DispatcherContext64 dispatcher{};
@@ -1151,10 +1383,11 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
                     break;
                 }
                 const uintptr_t collidedAddress = reinterpret_cast<uintptr_t>(dispatcher.contextRecord);
-                if (stackBase < sizeof(micant::CONTEXT) ||
-                    !dispatcher.contextRecord || (collidedAddress & 15) ||
+                const uintptr_t sourceLimit = stackBase;
+                if (!dispatcher.contextRecord || (collidedAddress & 15) ||
+                    sourceLimit < sizeof(micant::CONTEXT) ||
                     collidedAddress < stackLimit ||
-                    collidedAddress > stackBase - sizeof(micant::CONTEXT)) {
+                    collidedAddress > sourceLimit - sizeof(micant::CONTEXT)) {
                     unwindFailureStatus = 0xC0000028u; // STATUS_BAD_STACK
                     break;
                 }
@@ -1174,8 +1407,8 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
                                                             sizeof(micant::CONTEXT_EX);
                     if (!(context->ContextFlags & CONTEXT_XSTATE) ||
                         stackBase < contextWithExtension ||
-                        sourceContextAddress < stackLimit ||
-                        sourceContextAddress > stackBase - contextWithExtension ||
+                        sourceLimit < contextWithExtension ||
+                        sourceContextAddress > sourceLimit - contextWithExtension ||
                         destinationContextAddress < stackLimit ||
                         destinationContextAddress > stackBase - contextWithExtension) {
                         xstateRangesValid = false;
@@ -1189,7 +1422,7 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
                         xstateRangesValid =
                             sourceAllLength >= sizeof(micant::CONTEXT) + sizeof(micant::CONTEXT_EX) &&
                             destinationAllLength >= sizeof(micant::CONTEXT) + sizeof(micant::CONTEXT_EX) &&
-                            sourceAllLength <= stackBase - sourceContextAddress &&
+                            sourceAllLength <= sourceLimit - sourceContextAddress &&
                             destinationAllLength <= stackBase - destinationContextAddress;
                     }
                 }
@@ -1211,6 +1444,7 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
                 for (size_t i = 0; i < 16; ++i)
                     walk.xmm[i] = context->FltSave.XmmRegisters[i];
                 const uintptr_t collidedControlPc = static_cast<uintptr_t>(walk.rip);
+                currentFrame = walk;
                 ImageView64 collidedImage{};
                 if (!findImage(collidedControlPc, collidedImage)) {
                     unwindFailureStatus = 0xC0000028u; // STATUS_BAD_STACK
@@ -1223,7 +1457,7 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
                 if (!unwindFrame(collidedImage, collidedControlPc, walk, collidedFunction,
                                  UnwindFlagTerminationHandler, stackLimit, stackBase,
                                  collidedEstablisher, collidedHandler, collidedHandlerData) ||
-                    collidedEstablisher < stackLimit || collidedEstablisher >= stackBase ||
+                    collidedEstablisher < stackLimit || collidedEstablisher > targetAddress ||
                     (collidedEstablisher & 7) ||
                     walk.rsp() < stackLimit || walk.rsp() >= stackBase ||
                     (walk.rsp() <= previousRsp && walk.rip == previousRip)) {
@@ -1236,7 +1470,7 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
                     break;
                 }
                 establisher = collidedEstablisher;
-                targetReached = establisher == reinterpret_cast<uintptr_t>(targetFrame);
+                targetReached = !exitUnwind && establisher == targetAddress;
                 image = collidedImage;
                 if (collidedHandler) languageHandler = collidedHandler;
                 handlerData = collidedHandlerData;
@@ -1262,20 +1496,27 @@ __declspec(dllexport) [[noreturn]] void RtlUnwindEx(
         }
         if (targetReached) record->flags |= 0x20u; // Retain target unwind for the transfer.
         if (targetReached) {
-            for (size_t i = 0; i < 16; ++i) sourceRegisters[i] = walk.registers[i];
-            for (size_t i = 0; i < 16; ++i) context->FltSave.XmmRegisters[i] = walk.xmm[i];
+            // Resume the target frame rather than the virtually unwound
+            // caller. A frame-register-derived establisher need not be RSP.
+            for (size_t i = 0; i < 16; ++i) sourceRegisters[i] = currentFrame.registers[i];
+            for (size_t i = 0; i < 16; ++i) context->FltSave.XmmRegisters[i] = currentFrame.xmm[i];
             if (record->code != StatusUnwindConsolidate)
                 context->Rip = reinterpret_cast<uintptr_t>(targetIp);
-            context->Rsp = reinterpret_cast<uintptr_t>(targetFrame);
             context->Rax = reinterpret_cast<uintptr_t>(returnValue);
             RtlRestoreContext(context, record);
         }
-        if (walk.rsp() <= stackLimit || walk.rsp() >= stackBase) break;
+        if (walk.rsp() <= stackLimit || walk.rsp() >= stackBase) {
+            if (exitUnwind && walk.rsp() == stackBase) completedExitUnwind = true;
+            break;
+        }
     }
 
-    (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}),
-                             static_cast<int32_t>(unwindFailureStatus));
-    __builtin_trap();
+    if (exitUnwind && completedExitUnwind) {
+        const auto status = NtRaiseException(record, context, 0);
+        (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}), status);
+        __builtin_trap();
+    }
+    raiseDispatchFailure(unwindFailureStatus, record);
 }
 
 extern "C" __declspec(dllexport) void* RtlAddVectoredExceptionHandler(
@@ -1301,6 +1542,7 @@ extern "C" __declspec(dllexport) [[noreturn]] void KiUserExceptionDispatcher(
     if (record && context && RtlDispatchException(record, context))
         RtlRestoreContext(context, nullptr);
     const auto code = record ? record->code : static_cast<uint32_t>(0xC0000005u);
+    if (record && context) (void)NtRaiseException(record, context, 0);
     (void)NtTerminateProcess(reinterpret_cast<void*>(~uintptr_t{0}), static_cast<int32_t>(code));
     __builtin_trap();
 }
@@ -1312,6 +1554,16 @@ __attribute__((naked)) __declspec(dllexport) int32_t NtResumeThread(void*, uint3
 __attribute__((naked)) __declspec(dllexport) int32_t NtCreateThreadEx(
     void**, uint32_t, void*, void*, void*, void*, uint32_t, uintptr_t, size_t, size_t, void*) noexcept {
     __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0xbd, %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtQueryInformationProcess(
+    void*, uint32_t, void*, uint32_t, uint32_t*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x19, %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtReadVirtualMemory(
+    void*, const void*, void*, size_t, size_t*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x16c, %rax\n\tsyscall\n\tret\n\t");
 }
 
 __attribute__((naked)) __declspec(dllexport) int32_t NtCreateProcessEx(
@@ -1336,8 +1588,7 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtShutdownSystem(uint32_t 
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
-        "movq $0x08, %rax\n\t"
-        "movq %rdx, %r8\n\t"
+        "movq $0x0118, %rax\n\t"
         "syscall\n\t"
         "ret\n\t"
     );
@@ -1475,6 +1726,17 @@ __attribute__((naked)) __declspec(dllexport) int32_t NtUnmapViewOfSection(
     __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x2a, %eax\n\tsyscall\n\tret\n\t");
 }
 
+__attribute__((naked)) __declspec(dllexport) int32_t NtProtectVirtualMemory(
+    void*, void**, size_t*, uint32_t, uint32_t*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $0x50, %eax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtFlushInstructionCache(
+    void*, const void*, size_t) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovl $" MICANT_STRINGIFY(MICANT_SSN_NT_FLUSH_INSTRUCTION_CACHE)
+                         ", %eax\n\tsyscall\n\tret\n\t");
+}
+
 __attribute__((naked)) __declspec(dllexport) uint64_t NtReadFile(
     void* /*fileHandle*/,
     void* /*event*/,
@@ -1534,8 +1796,7 @@ __attribute__((naked)) __declspec(dllexport) uint64_t NtWriteFile(
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rcx, %r10\n\t"
-        "movq $0x25, %rax\n\t"
-        "movq %rdx, %r8\n\t"
+        "movq $0x08, %rax\n\t"
         "syscall\n\t"
         "ret\n\t"
     );

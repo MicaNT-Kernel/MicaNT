@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace micant::shared::usb { struct HostServicesV1; }
+namespace micant::shared::usb { struct HostServicesV1; struct ClassServicesV1; }
 #include "micant/shared/ndis_adapter_abi.hpp"
 
 // MicaNT's boot-start driver ABI. Images are ordinary PE32+ native .sys files
@@ -99,6 +99,19 @@ struct KernelServices {
     uint32_t FatFilesystemVersion;
     int32_t (*MountFatBlockDevice)(void*, uint64_t, uint64_t*);
     int32_t (*UnmountFatBlockDevice)(void*, uint64_t);
+    // Optional USBD class registration; callbacks remain owned by the .sys.
+    uint32_t UsbClassVersion;
+    int32_t (*RegisterUsbClass)(void*, const shared::usb::ClassServicesV1*, uint64_t*);
+    int32_t (*UnregisterUsbClass)(void*, uint64_t);
+    // Optional writable block-device extension. Write must complete a cache
+    // flush before Success; older V2 drivers retain the unchanged prefix.
+    uint32_t WritableBlockDeviceVersion;
+    int32_t (*CreateWritableBlockDevice)(void*, uint64_t, uint32_t, void*,
+        int32_t (*)(void*, uint64_t, uint32_t, void*, uint32_t*),
+        int32_t (*)(void*, uint64_t, uint32_t, const void*, uint32_t*),
+        void (*)(void*), uint32_t, uint64_t*);
+    int32_t (*WriteBlockDevice)(void*, uint64_t, uint64_t, uint32_t,
+                                const void*, uint32_t*);
 };
 
 inline constexpr size_t KERNEL_SERVICES_V1_SIZE = offsetof(KernelServices, PciReadConfig32);
@@ -111,6 +124,8 @@ struct FileBackendV1 {
     size_t NameLength;
     int32_t (*Read)(void*, uint64_t, void*, size_t, size_t*);
     void (*Release)(void*);
+    // Optional write callback. A missing callback means the file is read-only.
+    int32_t (*Write)(void*, uint64_t, const void*, size_t, size_t*);
 };
 
 using PresentFrameRoutine = bool (*)(void*, const uint32_t*, uint32_t, uint32_t,

@@ -42,10 +42,23 @@ bool deferTimerDelete(ob::ObjectHeader* header) noexcept {
     header->deferredDeleteNext = deferredTimers;
     deferredTimers = header;
     timerDeleteWork.routine = finishDeferredTimers;
-    if (!timerDeleteWork.queued && !ke::passive_work::queue(timerDeleteWork)) __builtin_trap();
+    // A timer can lose its last reference after the clock starts but before
+    // the passive worker exists. Retain the zero-reference header until the
+    // worker is initialized rather than invoking a blocking delete at DPC or
+    // trapping solely because the queue is not ready yet.
+    if (ke::passive_work::detail::initialized && !timerDeleteWork.queued &&
+        !ke::passive_work::queue(timerDeleteWork)) __builtin_trap();
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     return true;
 }
+}
+
+void scheduleDeferredTimerDeletes() noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (deferredTimers && ke::passive_work::detail::initialized && !timerDeleteWork.queued &&
+        !ke::passive_work::queue(timerDeleteWork)) __builtin_trap();
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
 }
 
 void initializeBootstrapEventServices() noexcept {
@@ -160,7 +173,20 @@ NtStatus NtSetEvent(Handle handle, int32_t* previousState) {
 }
 
 NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* timeout) {
-    if (timeout && timeout->quadPart != 0) return NtStatus::NotImplemented;
+    bool poll = false;
+    uint64_t relativeTimeout = 0;
+    uint64_t absoluteTimeout = 0;
+    if (timeout) {
+        const int64_t due = timeout->quadPart;
+        if (due < 0) {
+            // Avoid signed overflow for INT64_MIN.
+            relativeTimeout = static_cast<uint64_t>(-(due + 1)) + 1;
+        } else if (due == 0) {
+            poll = true;
+        } else {
+            absoluteTimeout = static_cast<uint64_t>(due);
+        }
+    }
     ob::ObjectHeader* header{};
     NtStatus status{};
     if (handle == InvalidHandleValue) {
@@ -190,6 +216,15 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
         ob::ObDereferenceObject(header);
         return NtStatus::ObjectTypeMismatch;
     }
+    if (absoluteTimeout) {
+        uint64_t now{};
+        if (!ke::KeQuerySystemTime100ns(now)) {
+            ob::ObDereferenceObject(header);
+            return NtStatus::DeviceNotReady;
+        }
+        if (absoluteTimeout <= now) poll = true;
+        else relativeTimeout = absoluteTimeout - now;
+    }
     auto* current = ke::KeGetCurrentThread();
     if (!current || current->eventWaitInProgress) {
         ob::ObDereferenceObject(header);
@@ -197,8 +232,12 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
     }
     current->eventWaitInProgress = true;
     current->eventWaitUserMode = current->previousUserMode;
-    current->eventWaitCanTerminate = ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL;
-    const auto result = waitObject->wait(timeout != nullptr, alertable);
+    // Only the user syscall wait owns a termination return boundary. Kernel
+    // callers may hold unrelated resources across this wait and must unwind
+    // them before a pending termination can be serviced.
+    current->eventWaitCanTerminate = current->eventWaitUserMode &&
+        ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL;
+    const auto result = waitObject->wait(poll, alertable, relativeTimeout);
     // The wait object has unlinked its stack waiter before returning. Defer
     // termination until this syscall has also cleared the thread's wait
     // registration and released the Ob reference that pins the waited object.

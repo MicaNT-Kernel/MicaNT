@@ -1,6 +1,7 @@
 #pragma once
 
-#include "micant/km/executive/io_block_device.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +29,9 @@ class MassStorage {
     std::atomic_flag operation_ = ATOMIC_FLAG_INIT;
     std::atomic<bool> connected_{false};
     std::atomic<uint32_t> backendReferences_{0};
+    // initialize() is serialized by operation_; keep the largest supported
+    // sector off the kernel stack and owned by the device instance.
+    uint8_t probeSector_[4096]{};
 
     struct Guard {
         std::atomic_flag& flag;
@@ -57,7 +61,8 @@ class MassStorage {
         return transport_.resetRecovery(transport_.context, interface_, in_, out_);
     }
     NtStatus command(const uint8_t* cdb, size_t cdbSize, void* data,
-                     uint32_t bytes, bool dataIn) noexcept {
+                     uint32_t bytes, bool dataIn, uint32_t* actual = nullptr) noexcept {
+        if (actual) *actual = 0;
         if (!connected_.load(std::memory_order_acquire)) return NtStatus::DeviceNotReady;
         if (!cdb || !cdbSize || cdbSize > 16 || (bytes && !data) || !nextTag_)
             return NtStatus::InvalidParameter;
@@ -66,7 +71,8 @@ class MassStorage {
             BulkTransport& transport;
             ~EndTransaction() { transport.end(transport.context); }
         } end{transport_};
-        const uint32_t tag = nextTag_++;
+        const uint32_t tag = nextTag_;
+        nextTag_ = tag == UINT32_MAX ? 1u : tag + 1u;
         uint8_t cbw[31]{};
         le32(cbw, 0x43425355u); le32(cbw + 4, tag); le32(cbw + 8, bytes);
         cbw[12] = dataIn ? 0x80 : 0; cbw[14] = static_cast<uint8_t>(cdbSize);
@@ -90,7 +96,8 @@ class MassStorage {
             (void)recover(); return NtStatus::DeviceNotReady;
         }
         if (csw[12] == 2) { (void)recover(); return NtStatus::DeviceNotReady; }
-        if (csw[12] == 1 || residue) return NtStatus::DeviceDataError;
+        if (csw[12] == 1 || (residue && !actual)) return NtStatus::DeviceDataError;
+        if (actual) *actual = static_cast<uint32_t>(dataTransferred);
         return NtStatus::Success;
     }
     static NtStatus readThunk(void* context, uint64_t lba, uint32_t count,
@@ -106,12 +113,14 @@ public:
                         uint8_t bulkIn, uint8_t bulkOut) noexcept {
         Guard guard(operation_);
         if (!guard.acquired) return NtStatus::DeviceBusy;
-        if (connected_.load(std::memory_order_relaxed) || !transport.transfer || !transport.resetRecovery ||
+        if (connected_.load(std::memory_order_relaxed) || backendReferences_.load(std::memory_order_acquire) ||
+            !transport.transfer || !transport.resetRecovery ||
             !transport.begin || !transport.end ||
             transport.maximumTransfer < 4096 ||
             !(bulkIn & 0x80) || (bulkOut & 0x80) || !(bulkIn & 15) || !(bulkOut & 15))
             return NtStatus::InvalidParameter;
         transport_ = transport; interface_ = interfaceNumber; in_ = bulkIn; out_ = bulkOut;
+        nextTag_ = 1; blocks_ = 0; blockSize_ = 0;
         connected_.store(true, std::memory_order_release);
         uint8_t inquiry[36]{};
         const uint8_t inquire[6]{0x12, 0, 0, 0, sizeof(inquiry), 0};
@@ -124,10 +133,14 @@ public:
                 if (status != NtStatus::DeviceDataError) break;
                 uint8_t sense[18]{};
                 const uint8_t senseCdb[6]{0x03, 0, 0, 0, sizeof(sense), 0};
-                if (command(senseCdb, sizeof(senseCdb), sense, sizeof(sense), true) != NtStatus::Success) break;
+                uint32_t senseLength{};
+                if (command(senseCdb, sizeof(senseCdb), sense, sizeof(sense), true, &senseLength) != NtStatus::Success ||
+                    senseLength < 4) break;
                 // Retry only NOT READY / UNIT ATTENTION; other failures are
                 // reported rather than masking a persistent medium error.
-                const uint8_t key = sense[2] & 15u;
+                const uint8_t format = sense[0] & 0x7fu;
+                if (format != 0x70 && format != 0x71 && format != 0x72 && format != 0x73) break;
+                const uint8_t key = (format == 0x72 || format == 0x73 ? sense[1] : sense[2]) & 15u;
                 if (key != 2 && key != 6) break;
             }
         }
@@ -144,12 +157,11 @@ public:
                     last = getBe64(capacity16); size = getBe32(capacity16 + 8);
                 }
             }
-            if (status == NtStatus::Success && (last == UINT64_MAX || !size || size > 4096 ||
+            if (status == NtStatus::Success && (last == UINT64_MAX || size < 512 || size > 4096 ||
                 (size & (size - 1)) || last + 1 > UINT64_MAX / size)) status = NtStatus::NotSupported;
             if (status == NtStatus::Success) {
-                uint8_t sector[4096]{};
                 uint8_t readCdb[10]{0x28}; readCdb[8] = 1;
-                status = command(readCdb, sizeof(readCdb), sector, size, true);
+                status = command(readCdb, sizeof(readCdb), probeSector_, size, true);
                 if (status == NtStatus::Success) { blocks_ = uint64_t{last} + 1; blockSize_ = size; }
             }
         }
@@ -192,13 +204,15 @@ public:
     // The bus owner keeps this object alive until the final BlockDeviceObject
     // reference is released. Detach prevents subsequent transport requests.
     void detach() noexcept { connected_.store(false, std::memory_order_release); }
-    [[nodiscard]] io::BlockDeviceBackend blockBackend() noexcept {
+    // Transfer one lifetime reference to a generic Io block-device backend.
+    [[nodiscard]] bool retainBackend(uint64_t& sectors, uint32_t& sectorSize) noexcept {
         Guard guard(operation_);
         if (!guard.acquired || !connected_.load(std::memory_order_acquire) || !blocks_ || !blockSize_ ||
-            backendReferences_.load(std::memory_order_relaxed) == UINT32_MAX) return {};
+            backendReferences_.load(std::memory_order_relaxed) == UINT32_MAX) return false;
         backendReferences_.fetch_add(1, std::memory_order_relaxed);
-        return {this, blocks_, blockSize_, readThunk, releaseThunk};
+        sectors = blocks_; sectorSize = blockSize_; return true;
     }
+    void releaseBackend() noexcept { releaseThunk(this); }
     [[nodiscard]] bool canDestroy() const noexcept {
         return !connected_.load(std::memory_order_acquire) &&
             backendReferences_.load(std::memory_order_acquire) == 0 && !operation_.test(std::memory_order_acquire);
