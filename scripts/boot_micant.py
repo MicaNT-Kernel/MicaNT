@@ -329,6 +329,7 @@ def run_qemu(
     diagnostics_dir: Path | None = None,
     usb_test: bool = False,
     verify_usb_input: bool = False,
+    network_test: bool = False,
 ) -> None:
     if runtime_selftest and (interactive or verify_input):
         raise RuntimeError("runtime self-test halts before desktop/input; incompatible runner options")
@@ -433,6 +434,11 @@ def run_qemu(
             "-no-reboot",
             "-no-shutdown",
         ]
+        if network_test:
+            command.extend([
+                "-netdev", "user,id=micant_net,restrict=on",
+                "-device", "virtio-net-pci,netdev=micant_net,disable-legacy=on",
+            ])
         if usb_test:
             # Exercise the native controller and class drivers after
             # ExitBootServices. Keep the AHCI copy for the existing regression
@@ -475,6 +481,14 @@ def run_qemu(
                         if serial_path.exists()
                         else ""
                     )
+                    if network_test and "Boot-start driver failed: virtio_net.sys" in serial_log:
+                        failure = next((line for line in serial_log.splitlines()
+                                        if "Boot-start driver failed: virtio_net.sys" in line),
+                                       "VirtIO-net DriverEntry failed")
+                        raise RuntimeError(f"QEMU virtio-net miniport failed: {failure}")
+                    if network_test and "Boot-start .sys DriverEntry succeeded: virtio_net.sys" in serial_log:
+                        print("QEMU virtio-net miniport registered successfully.", flush=True)
+                        return
                     if (verify_usb_input and not usb_input_sent and
                             "USB host: matched HID interrupt interface" in serial_log):
                         # Wait until the bus reports a real boot-HID interface,
@@ -607,6 +621,7 @@ def main() -> int:
     parser.add_argument("--verify-input", action="store_true")
     parser.add_argument("--usb-test", action="store_true")
     parser.add_argument("--verify-usb-input", action="store_true")
+    parser.add_argument("--network-test", action="store_true")
     parser.add_argument("--runtime-selftest", action="store_true")
     parser.add_argument("--timer-selftest", action="store_true")
     args = parser.parse_args()
@@ -631,6 +646,7 @@ def main() -> int:
             args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None,
             args.usb_test,
             args.verify_usb_input,
+            args.network_test,
         )
     except KeyboardInterrupt:
         return 130

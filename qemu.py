@@ -260,6 +260,10 @@ def main() -> int:
         "--usb-test", action="store_true",
         help="attach QEMU xHCI, USB HID and read-only USB mass storage devices",
     )
+    parser.add_argument(
+        "--network-test", action="store_true",
+        help="attach a QEMU virtio-net device and require successful miniport registration",
+    )
     args = parser.parse_args()
     global BUILD_DIR
     if args.cmake_build_dir:
@@ -275,6 +279,8 @@ def main() -> int:
         parser.error("--runtime-selftest and --check-explorer are mutually exclusive")
     if args.timer_selftest and (args.runtime_selftest or args.check_explorer):
         parser.error("--timer-selftest is mutually exclusive with runtime self-test and Explorer checks")
+    if args.network_test and (args.runtime_selftest or args.timer_selftest or args.check_explorer):
+        parser.error("--network-test requires a normal kernel boot")
 
     try:
         cmake = shutil.which("cmake")
@@ -380,6 +386,8 @@ def main() -> int:
             boot_command.append("--verify-input")
         if args.usb_test:
             boot_command.append("--usb-test")
+        if args.network_test:
+            boot_command.append("--network-test")
         run(boot_command)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         operation = "Explorer runtime check" if args.check_explorer else "QEMU launch"

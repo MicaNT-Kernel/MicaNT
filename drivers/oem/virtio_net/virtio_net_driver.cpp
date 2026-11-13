@@ -34,11 +34,17 @@ struct VirtqUsedElement { uint32_t id, length; };
 struct alignas(4096) VirtqMemory {
     VirtqDesc descriptors[kQueueLimit];
     struct { uint16_t flags; volatile uint16_t index; uint16_t ring[kQueueLimit]; uint16_t event; } available;
-    struct { uint16_t flags; volatile uint16_t index; VirtqUsedElement ring[kQueueLimit]; uint16_t event; } used;
+    // VirtIO split-ring device elements are 32-bit aligned. The available
+    // ring has an odd byte size for this queue length, so natural struct
+    // layout would otherwise place the used ring at offset 2 mod 4.
+    struct alignas(4) { uint16_t flags; volatile uint16_t index; VirtqUsedElement ring[kQueueLimit]; uint16_t event; } used;
     alignas(16) uint8_t buffers[kQueueLimit][kFrameCapacity];
 };
 struct alignas(4096) DmaMemory { VirtqMemory rx, tx; };
 static_assert(sizeof(VirtqDesc) == 16);
+static_assert((offsetof(VirtqMemory, descriptors) & 15u) == 0);
+static_assert((offsetof(VirtqMemory, available) & 1u) == 0);
+static_assert((offsetof(VirtqMemory, used) & 3u) == 0);
 
 struct DeviceState {
     const KernelServices* services{};
@@ -308,7 +314,8 @@ bool stopDevice() noexcept {
     g_device.receive = nullptr;
     if (g_device.commandEnabled) {
         mmioWrite<uint8_t>(g_device.common, 20, 0);
-        if (!waitReset() || !pciWriteCommand(g_device.originalCommand & ~uint16_t{7}) || !waitPciDrain()) return false;
+        if (!waitReset() || !pciWriteCommand(g_device.originalCommand & ~uint16_t{7}) ||
+            !waitPciDrain() || !pciWriteCommand(g_device.originalCommand)) return false;
         g_device.commandEnabled = false;
     }
     if (g_device.dmaToken) {
@@ -515,11 +522,20 @@ extern "C" int32_t DriverEntry(DriverObject* driver,
     g_device.bus = location.Bus; g_device.device = location.Device; g_device.function = location.Function;
     g_device.claim = claimToken;
     driver->DriverUnload = unloadDriver;
+    const char* failureStage = "initialization";
     const auto fail = [&]() noexcept {
+        char message[96] = "virtio_net.sys: initialization failed at ";
+        size_t length = sizeof("virtio_net.sys: initialization failed at ") - 1;
+        const char* stage = failureStage;
+        while (*stage && length + 1 < sizeof(message))
+            message[length++] = *stage++;
+        message[length] = '\0';
+        log(services, message);
         unloadDriver(driver);
         return STATUS_DEVICE_NOT_READY;
     };
     volatile uint8_t* bars[kMaxBars]{};
+    failureStage = "BAR mapping";
     for (size_t i = 0; i < requestCount; ++i) {
         auto* mapping = services.MapDeviceMemory(services.Context, resources[i].PhysicalAddress,
                                                static_cast<size_t>(requests[i].MinimumLength));
@@ -535,6 +551,7 @@ extern "C" int32_t DriverEntry(DriverObject* driver,
     g_device.deviceConfig = bars[capabilities.Device.Bar] + capabilities.Device.Offset;
     g_device.notifyLength = capabilities.Notify.Length;
     g_device.notifyMultiplier = capabilities.Notify.NotifyMultiplier;
+    failureStage = "DMA allocation";
     void* memory{};
     if (services.AllocateDmaBuffer(services.Context, claimToken, sizeof(DmaMemory), alignof(DmaMemory),
                                    UINT64_MAX, &memory, &g_device.dmaAddress,
@@ -542,13 +559,22 @@ extern "C" int32_t DriverEntry(DriverObject* driver,
         !g_device.dmaToken || !g_device.dmaAddress ||
         g_device.dmaAddress > UINT64_MAX - sizeof(DmaMemory)) return fail();
     g_device.dma = static_cast<DmaMemory*>(memory);
+    // AllocateDmaBuffer guarantees a device-visible range and alignment, but
+    // does not promise zero-filled memory. Clear every descriptor/index before
+    // exposing any queue address to the device.
+    std::memset(g_device.dma, 0, sizeof(DmaMemory));
     uint32_t command{};
-    if (!readConfig(services, location, 4, command) || (command & 7u)) return fail();
+    failureStage = "PCI command read/enable";
+    if (!readConfig(services, location, 4, command)) return fail();
     g_device.originalCommand = static_cast<uint16_t>(command);
-    if (!pciWriteCommand(g_device.originalCommand | 6u)) return fail();
+    // Keep bus mastering off while queue addresses are not yet published.
+    // Preserve memory decoding for the common/device capability accesses.
+    if (!pciWriteCommand((g_device.originalCommand | 2u) & ~uint16_t{4})) return fail();
     g_device.commandEnabled = true;
+    failureStage = "device reset";
     mmioWrite<uint8_t>(g_device.common, 20, 0);
     if (!waitReset()) return fail();
+    failureStage = "feature negotiation";
     mmioWrite<uint8_t>(g_device.common, 20, 1);
     mmioWrite<uint8_t>(g_device.common, 20, 3);
     mmioWrite<uint32_t>(g_device.common, 0, 0);
@@ -562,8 +588,10 @@ extern "C" int32_t DriverEntry(DriverObject* driver,
     mmioWrite<uint32_t>(g_device.common, 12, 1u);
     mmioWrite<uint8_t>(g_device.common, 20, 11);
     if ((mmioRead<uint8_t>(g_device.common, 20) & 0xc8u) != 8u) return fail();
+    failureStage = "virtqueue setup";
     if (!setupQueue(0, g_device.dma->rx, g_device.dmaAddress + offsetof(DmaMemory, rx)) ||
         !setupQueue(1, g_device.dma->tx, g_device.dmaAddress + offsetof(DmaMemory, tx))) return fail();
+    failureStage = "adapter configuration";
     g_device.adapterServices = {};
     auto& adapter = g_device.adapterServices;
     adapter.Size = sizeof(adapter); adapter.Version = micant::shared::ndis::AdapterServicesVersion;
@@ -580,10 +608,14 @@ extern "C" int32_t DriverEntry(DriverObject* driver,
     if (!macNonzero) return fail();
     adapter.SendPacket = sendPacket; adapter.SetReceiveHandler = setReceive;
     adapter.PollReceive = pollReceive; adapter.Stop = stopAdapter;
+    failureStage = "PCI bus mastering enable";
+    if (!pciWriteCommand((g_device.originalCommand | 6u))) return fail();
+    failureStage = "driver ready status";
     mmioWrite<uint8_t>(g_device.common, 20, 15);
     if ((mmioRead<uint8_t>(g_device.common, 20) & 0xcfu) != 15) return fail();
     g_device.started = true;
     notifyQueue(0);
+    failureStage = "NDIS adapter registration";
     const auto registered = services.RegisterNetworkAdapter(services.Context, &adapter, &g_device.adapter);
     if (registered != STATUS_SUCCESS || !g_device.adapter) return fail();
     return STATUS_SUCCESS;

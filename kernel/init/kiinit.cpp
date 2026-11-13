@@ -1573,7 +1573,7 @@ int32_t bootRegisterNetworkAdapter(void* owner,
     if (!owner || !adapterServices || !cookie || adapterServices->Size < sizeof(AdapterServicesV1) ||
         adapterServices->Version != micant::shared::ndis::AdapterServicesVersion ||
         !adapterServices->Context || adapterServices->Mtu < 576 || adapterServices->Mtu > 9000 ||
-        !adapterServices->SpeedBps || adapterServices->LinkState > 1 ||
+        adapterServices->LinkState > 1 ||
         !adapterServices->SendPacket || !adapterServices->SetReceiveHandler ||
         !adapterServices->PollReceive || !adapterServices->Stop)
         return bootStatus(NtStatus::InvalidParameter);

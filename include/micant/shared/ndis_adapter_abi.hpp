@@ -17,7 +17,7 @@ struct AdapterServicesV1 {
     void* Context;
     uint32_t Mtu;
     uint32_t LinkState; // 0 disconnected, 1 connected
-    uint64_t SpeedBps;
+    uint64_t SpeedBps; // 0 when the miniport cannot report a negotiated link speed
     uint8_t MacAddress[6];
     uint8_t ReservedMac[2];
     int32_t (*SendPacket)(void* context, const uint8_t* frame, size_t frameLength);
