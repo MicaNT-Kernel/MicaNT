@@ -19,6 +19,8 @@ const KernelServices* g_services{};
 uint64_t g_hostToken{};
 micant::shared::usb::HostServicesV1 g_host{};
 uint16_t g_bus{}, g_device{}, g_function{};
+PciBarResourceV1 g_claimResources[2]{};
+size_t g_claimResourceCount{};
 std::atomic<uint32_t> g_msiInterrupts{};
 std::atomic<bool> g_msiReported{};
 struct MsiState {
@@ -141,20 +143,14 @@ bool configureMsi() noexcept {
             !readConfig(*g_services, g_bus, g_device, g_function, 4, command)) return false;
         const uint8_t barIndex = static_cast<uint8_t>(tableInfo & 7u);
         const uint64_t tableOffset = tableInfo & ~uint32_t{7};
-        // xHCI's initial PCI claim owns BAR0. The current HAL owner maps only
-        // ranges inside claimed BARs, so MSI-X is enabled when its table is in
-        // that BAR; other-BAR layouts remain on the bounded polling path.
-        if (barIndex != 0 || tableOffset > UINT64_MAX - 16) return false;
-        uint32_t barLow{}, barHigh{};
-        if (!readConfig(*g_services, g_bus, g_device, g_function,
-                        static_cast<uint16_t>(0x10 + barIndex * 4), barLow) || (barLow & 1u)) return false;
-        const bool bar64 = ((barLow >> 1) & 3u) == 2;
-        if (bar64 && !readConfig(*g_services, g_bus, g_device, g_function,
-                static_cast<uint16_t>(0x14 + barIndex * 4), barHigh)) return false;
-        const uint64_t barAddress = uint64_t{barLow & ~uint32_t{15}} | (uint64_t{barHigh} << 32);
-        if (!barAddress || barAddress > UINT64_MAX - tableOffset) return false;
+        if (tableOffset > UINT64_MAX - 16) return false;
+        const PciBarResourceV1* bar{};
+        for (size_t i = 0; i < g_claimResourceCount; ++i)
+            if (g_claimResources[i].BarIndex == barIndex) bar = &g_claimResources[i];
+        if (!bar || tableOffset + 16 > bar->Length ||
+            bar->PhysicalAddress > UINT64_MAX - tableOffset) return false;
         auto* table = static_cast<volatile uint32_t*>(g_services->MapDeviceMemory(
-            g_services->Context, barAddress + tableOffset, 16));
+            g_services->Context, bar->PhysicalAddress + tableOffset, 16));
         if (!table) return false;
         g_msi.capability = 0; g_msi.msixCapability = msix; g_msi.msixHeader = header;
         g_msi.command = static_cast<uint16_t>(command);
@@ -264,19 +260,27 @@ int32_t stopHost(void*) {
 int32_t restartHost(void*) {
     g_transport.disableInterrupts();
     if (!restoreMsi() || !g_services || !g_transport.stop()) return kBusy;
-    PciBarRequestV1 request{0, 0, 0, 0x1000};
-    PciBarResourceV1 resource{};
-    size_t count = 1;
+    uint16_t msix{}; uint32_t tableInfo{};
+    PciBarRequestV1 requests[2]{{0, 0, 0, 0x1000}, {0, 0, 0, 0x1000}};
+    size_t requestCount = 1;
+    if (findCapability(*g_services, g_bus, g_device, g_function, 0x11, msix) && msix &&
+        readConfig(*g_services, g_bus, g_device, g_function, msix + 4, tableInfo)) {
+        const auto tableBar = static_cast<uint8_t>(tableInfo & 7u);
+        if (tableBar) { requests[1].BarIndex = tableBar; requestCount = 2; }
+    }
+    g_claimResourceCount = requestCount;
     uint64_t claim{};
     const auto status = g_services->ClaimPciDevice(g_services->Context, 0, g_bus, g_device,
-        g_function, &request, 1, &claim, &resource, &count);
-    if (status != STATUS_SUCCESS || !claim || count != 1 || resource.BarIndex != 0 ||
-        !resource.PhysicalAddress || resource.Length < 0x1000 || resource.Length > 16u * 1024u * 1024u) {
+        g_function, requests, requestCount, &claim, g_claimResources, &g_claimResourceCount);
+    if (status != STATUS_SUCCESS || !claim || g_claimResourceCount != requestCount ||
+        g_claimResources[0].BarIndex != 0 || !g_claimResources[0].PhysicalAddress ||
+        g_claimResources[0].Length < 0x1000 || g_claimResources[0].Length > 16u * 1024u * 1024u) {
         if (claim) (void)g_services->ReleasePciDevice(g_services->Context, claim);
         return STATUS_DEVICE_NOT_READY;
     }
     if (!g_transport.initialize(*g_services, g_bus, g_device, g_function, claim,
-                                resource.PhysicalAddress, static_cast<size_t>(resource.Length))) {
+                                g_claimResources[0].PhysicalAddress,
+                                static_cast<size_t>(g_claimResources[0].Length))) {
         return g_transport.stop() ? STATUS_DEVICE_NOT_READY : kBusy;
     }
     (void)configureMsi(); // Bounded event-ring polling remains the fallback.
@@ -518,21 +522,29 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     uint64_t bar0{}, claimToken{};
     uint32_t cursor{};
     int32_t lastStatus = STATUS_NOT_SUPPORTED;
-    const PciBarRequestV1 request{0, 0, 0, 0x1000};
-    PciBarResourceV1 resource{};
     bool claimed = false;
     while (findXhci(services, cursor, bus, device, function, bar0)) {
         cursor = (uint32_t{bus} << 8) | (uint32_t{device} << 3) | function;
         ++cursor;
+        uint16_t msix{}; uint32_t tableInfo{};
+        PciBarRequestV1 requests[2]{{0, 0, 0, 0x1000}, {0, 0, 0, 0x1000}};
         size_t resourceCount = 1;
-        claimToken = 0; resource = {};
+        if (findCapability(services, bus, device, function, 0x11, msix) && msix &&
+            readConfig(services, bus, device, function, msix + 4, tableInfo)) {
+            const auto tableBar = static_cast<uint8_t>(tableInfo & 7u);
+            if (tableBar) { requests[1].BarIndex = tableBar; resourceCount = 2; }
+        }
+        g_claimResourceCount = resourceCount;
+        claimToken = 0; g_claimResources[0] = {}; g_claimResources[1] = {};
         const auto claimStatus = services.ClaimPciDevice(services.Context, 0,
-            bus, device, function, &request, 1, &claimToken, &resource, &resourceCount);
-        if (claimStatus == STATUS_SUCCESS && claimToken && resourceCount == 1 &&
-            resource.BarIndex == 0 && resource.PhysicalAddress == bar0 &&
-            resource.Length >= 0x1000 && resource.Length <= 16u * 1024u * 1024u) {
+            bus, device, function, requests, resourceCount, &claimToken,
+            g_claimResources, &g_claimResourceCount);
+        if (claimStatus == STATUS_SUCCESS && claimToken && g_claimResourceCount == resourceCount &&
+            g_claimResources[0].BarIndex == 0 && g_claimResources[0].PhysicalAddress == bar0 &&
+            g_claimResources[0].Length >= 0x1000 && g_claimResources[0].Length <= 16u * 1024u * 1024u) {
             if (g_transport.initialize(services, bus, device, function, claimToken,
-                                       resource.PhysicalAddress, static_cast<size_t>(resource.Length))) {
+                                       g_claimResources[0].PhysicalAddress,
+                                       static_cast<size_t>(g_claimResources[0].Length))) {
                 claimed = true; break;
             }
             if (!g_transport.stop()) {
