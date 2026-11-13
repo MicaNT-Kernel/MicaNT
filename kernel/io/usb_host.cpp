@@ -637,12 +637,22 @@ NtStatus registerHost(const void* owner, const Host& host, uint64_t& token) noex
     std::memcpy(&bus.host, &host, copied);
     bus.token = nextToken++; token = bus.token;
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-    if (host.Start(host.Context) != success || !ke::passive_work::startPeriodic(bus.poll, service, nullptr, 200'000)) {
+    if (host.Start(host.Context) != success) {
         if (host.Stop(host.Context) != success) return NtStatus::DeviceBusy;
         bus.owner = nullptr; bus.token = 0; bus.host = {}; token = 0;
         return NtStatus::DeviceNotReady;
     }
     return NtStatus::Success;
+}
+NtStatus startEnumeration() noexcept {
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidParameter;
+    HostGuard guard;
+    if (!guard.held) return NtStatus::DeviceBusy;
+    if (!bus.token) return NtStatus::Success;
+    if (bus.poll.deadline.inserted || bus.poll.dpc.inserted || bus.poll.work.queued || bus.poll.work.running)
+        return NtStatus::DeviceBusy;
+    return ke::passive_work::startPeriodic(bus.poll, service, nullptr, 200'000) ?
+        NtStatus::Success : NtStatus::DeviceNotReady;
 }
 NtStatus unregisterHost(const void* owner, uint64_t token) noexcept {
     if (!owner || !token || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidParameter;

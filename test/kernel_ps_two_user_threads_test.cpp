@@ -508,6 +508,9 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         bool complete{};
         ~Progress() {
             if (complete) return;
+            serialWrite("[MicaNT Ps] User worker test failed at stage: ");
+            serialWrite(stage);
+            serialWrite("\r\n");
         }
     } progress;
     auto& scheduler = PriorityScheduler::get();
@@ -527,6 +530,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         if (!processStorage) return false;
         auto& process = *processStorage;
         if (process.initializeAddressSpace() != NtStatus::Success) return false;
+        progress.stage = "event handle setup";
         ProcessAddressSpaceCleanup processCleanup{process, previous};
         ps::EThread first;
         ps::EThread second;
@@ -540,6 +544,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             source.duplicateHandle(sourceSecond, process.getHandleTable(), eventSecond) != NtStatus::Success ||
             sys::NtClose(sourceFirst) != NtStatus::Success || sys::NtClose(sourceSecond) != NtStatus::Success ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
+        progress.stage = "synthetic image construction";
         const uintptr_t code = hal::amd64::BootstrapManagedBase;
         const auto* program = reinterpret_cast<const uint8_t*>(MicantTwoUserThreads);
         const size_t programSize = reinterpret_cast<uintptr_t>(MicantTwoUserThreadsEnd) - reinterpret_cast<uintptr_t>(program);
@@ -612,6 +617,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             std::memcpy(rawData + 0x202 + i * 0x40, names[i], std::strlen(names[i]) + 1);
         }
         const size_t beforeImage = mm::PfnDatabase::get().getActiveCount();
+        progress.stage = "main PE image mapping";
         static constexpr uint8_t invalidImage[]{0};
         if (process.loadNativeImage("bad.exe", {}) != NtStatus::InvalidImageFormat ||
             process.loadNativeImage("bad.exe", invalidImage) != NtStatus::InvalidImageFormat ||
@@ -629,6 +635,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         file[0] = originalMagic;
         if (!ownsFile) return false;
         pe::PeImageView64::TlsLayout tlsLayout{};
+        progress.stage = "main PE TLS validation";
         if (image->view.tlsLayout(std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(code), 3 * mm::PageSize4KB},
                             code, tlsLayout) != NtStatus::Success || !tlsLayout.present || tlsLayout.callbackCount ||
             tlsLayout.indexRva != 2 * mm::PageSize4KB + 0x50) return false;
@@ -653,6 +660,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
             return false;
         if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}, dllPath) != NtStatus::Success)
             return false;
+        progress.stage = "TLS module construction";
         static constinit uint8_t tlsDllFile[1024]{};
         constexpr uintptr_t tlsDllBase = hal::amd64::BootstrapManagedBase + 0xe00000;
         static constinit pe::ImageNtHeaders64 tlsNt{};

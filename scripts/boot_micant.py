@@ -443,11 +443,10 @@ def run_qemu(
                         else ""
                     )
                     if (verify_usb_input and not usb_input_sent and
-                            "usbxhci.sys: native host registered" in serial_log):
-                        # Inject as soon as the kernel has claimed the real
-                        # controller, before later, unrelated boot probes can
-                        # halt the guest. The HID service verifies the report
-                        # and release from actual xHCI transfer completions.
+                            "USB host: matched HID interrupt interface" in serial_log):
+                        # Wait until the bus reports a real boot-HID interface,
+                        # then allow endpoint configuration to finish before
+                        # sending a press/release pair for transfer completion.
                         time.sleep(0.5)
                         inject_usb_keyboard(temp / "qmp.sock")
                         usb_input_sent = True

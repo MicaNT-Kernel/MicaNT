@@ -11,6 +11,7 @@
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/clock_timer.hpp"
+#include "micant/km/core/passive_work.hpp"
 #include <atomic>
 
 extern "C" volatile bool g_ring3ProbeActive{};
@@ -3267,7 +3268,13 @@ static bool verifyBootstrapPreemption() noexcept {
     using namespace ke;
     auto* boot = KeGetCurrentThread();
     auto& scheduler = PriorityScheduler::get();
-    if (!boot || boot->state != ThreadState::Running || scheduler.getReadyThreadCount()) return false;
+    const auto readyNonPassiveWorkThreads = [&scheduler]() noexcept {
+        auto count = scheduler.getReadyThreadCount();
+        for (const auto& worker : passive_work::detail::workers)
+            if (worker.readyQueued && count) --count;
+        return count;
+    };
+    if (!boot || boot->state != ThreadState::Running || readyNonPassiveWorkThreads()) return false;
     auto& firstState = g_firstTimerWorkerState;
     auto& secondState = g_secondTimerWorkerState;
     firstState.iterations = 0;
@@ -3311,7 +3318,7 @@ static bool verifyBootstrapPreemption() noexcept {
     const bool removedFirst = scheduler.removeReadyThread(&first);
     const bool removedSecond = scheduler.removeReadyThread(&second);
     first.state = second.state = ThreadState::Terminated;
-    return success && removedFirst && removedSecond && scheduler.getReadyThreadCount() == 0;
+    return success && removedFirst && removedSecond && readyNonPassiveWorkThreads() == 0;
 }
 
 extern "C" bool MicantTestPsUserPreemption() noexcept;
@@ -3389,14 +3396,25 @@ static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
         if (!g_timerApic.available() || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL ||
             g_timerApic[0x320 / 4] != (0xd1 | (1u << 17)) ||
             g_timerApic[0x380 / 4] != g_schedulerTimerPeriod ||
-            MicantTimerDispatchFailed) return false;
+            MicantTimerDispatchFailed) {
+            if (g_log) g_log("[MicaNT Hal] Live timer state precondition failed\r\n");
+            return false;
+        }
         // The live clock owns its APIC and monotonic ticks; do not reset either.
         uint64_t flags{};
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
         const uint64_t before = MicantTimerTicks;
-        const bool success = verifyClockInterruptDelivery(g_timerApic) &&
-            (!verifyScheduling || (verifyBootstrapPreemption() && MicantTestPsUserPreemption())) &&
-            MicantTimerTicks > before && !MicantTimerDispatchFailed;
+        const bool interruptDelivery = verifyClockInterruptDelivery(g_timerApic);
+        const bool kernelPreemption = !verifyScheduling || verifyBootstrapPreemption();
+        const bool userPreemption = !verifyScheduling || !kernelPreemption || MicantTestPsUserPreemption();
+        const bool ticksAdvanced = MicantTimerTicks > before && !MicantTimerDispatchFailed;
+        const bool success = interruptDelivery && kernelPreemption && userPreemption && ticksAdvanced;
+        if (!success && g_log) {
+            if (!interruptDelivery) g_log("[MicaNT Hal] Live timer interrupt delivery failed\r\n");
+            if (!kernelPreemption) g_log("[MicaNT Hal] Live kernel timer preemption failed\r\n");
+            if (!userPreemption) g_log("[MicaNT Hal] Live CPL3 timer preemption failed\r\n");
+            if (!ticksAdvanced) g_log("[MicaNT Hal] Live timer progress failed\r\n");
+        }
         if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         if (!success && g_log) g_log("[MicaNT Hal] Live scheduler clock diagnostic failed\r\n");
         return success;
@@ -3834,7 +3852,13 @@ alignas(16) uint8_t g_idleWaitProbeStack[16384]{};
 bool verifyIdleWaitAndWake() noexcept {
     auto& scheduler = ke::PriorityScheduler::get();
     auto* boot = ke::KeGetCurrentThread();
-    if (!boot || scheduler.getReadyThreadCount() ||
+    const auto readyNonPassiveWorkThreads = [&scheduler]() noexcept {
+        auto count = scheduler.getReadyThreadCount();
+        for (const auto& worker : ke::passive_work::detail::workers)
+            if (worker.readyQueued && count) --count;
+        return count;
+    };
+    if (!boot || readyNonPassiveWorkThreads() ||
         ke::g_CurrentCpu.idleThread != &g_bootstrapIdleThread) return false;
     ke::KThread waiter;
     waiter.directoryTableBase = ke::g_CurrentCpu.currentCr3;
@@ -3863,7 +3887,7 @@ bool verifyIdleWaitAndWake() noexcept {
         !g_bootstrapIdleThread.readyQueued;
     boot->priority = originalPriority;
     return secondSwitch && idleReady && probe.stage == 3 &&
-        waiter.state == ke::ThreadState::Terminated && !scheduler.getReadyThreadCount() &&
+        waiter.state == ke::ThreadState::Terminated && !readyNonPassiveWorkThreads() &&
         !MicantTimerDispatchFailed;
 }
 }

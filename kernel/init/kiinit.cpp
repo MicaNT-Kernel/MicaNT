@@ -3744,6 +3744,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (clockActive && !MicantTestKeDeferredDelivery())
         stopWithError("[MicaNT Ke] Runtime DPC/APC delivery failed\r\n");
     if (clockActive) serialWrite("[MicaNT Ke] Runtime DPC/APC delivery verified\r\n");
+    const auto usbEnumeration = micant::usb::baremetal::startEnumeration();
+    if (usbEnumeration != micant::NtStatus::Success)
+        serialWrite("[MicaNT Io] USB host enumeration did not start\r\n");
     if (clockActive && startMouseInterrupt())
         serialWrite("[MicaNT Input] PS/2 mouse interrupt routing active\r\n");
     if (!clockActive) serialWrite("[MicaNT Ke] Runtime scheduler clock unavailable\r\n");
