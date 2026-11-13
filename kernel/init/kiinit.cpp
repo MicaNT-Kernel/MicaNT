@@ -217,6 +217,7 @@ extern "C" bool MicantTestPsFileBackedImage() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int MicantTestMmManagedProtection() noexcept;
+extern "C" bool MicantTestPartitionTables() noexcept;
 extern "C" int pe_tls_freestanding_test();
 
 void writePort(uint16_t port, uint8_t value) noexcept {
@@ -3431,6 +3432,9 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Bootstrap runtime verification failed\r\n");
     }
     serialWrite("[MicaNT Ex] Canonical page-backed C and C++ allocation verified\r\n");
+    if (!MicantTestPartitionTables())
+        stopWithError("[MicaNT Storage] MBR/GPT validation failed\r\n");
+    serialWrite("[MicaNT Storage] MBR/GPT, CRC32, backup recovery and bounds verified\r\n");
     const int vadTest = MicantTestMmAvlTable();
     if (vadTest != 0) {
         serialWrite("[MicaNT Mm] Canonical VAD tree verification failed: ");

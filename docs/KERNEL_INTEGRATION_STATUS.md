@@ -85,6 +85,28 @@ integration.
 
 ## Integration increments
 
+### Native MBR/GPT discovery
+
+The canonical storage parser is shared by the hosted `PartitionManager`, the
+AHCI provider's FAT32 probe, and FsRtl's real-disk mount path. It validates MBR
+primary and bounded EBR logical partitions, GPT header/entry-array CRC32, backup
+GPT recovery, non-overlapping extents, arithmetic and device LBA bounds. The
+parser uses caller-owned fixed scratch buffers and has no hosted runtime or
+third-party dependency. FsRtl mounts FAT32 partitions by type while preserving
+the existing FAT32 superfloppy path; AHCI now selects an eligible disk without
+assuming LBA 0 is itself a FAT boot sector.
+
+| Command | Result |
+|---|---|
+| AMD64 freestanding `ntoskrnl_core_baremetal` and `storahci.sys` build | Passed |
+| `python3 qemu.py --headless` | Passed using a GPT-partitioned FAT32 AHCI disk; boot self-test covered MBR/EBR loop rejection, GPT CRCs, backup recovery, corrupt extents, arithmetic overflow and LBA bounds; FsRtl mounted the real GPT partition and file-backed `SEC_IMAGE` passed |
+| Standalone `test/partition_manager_contract_test.cpp` host build/run | Passed |
+| `cmake --build build/host-check --target micant_tests -j 8` | Did not build due existing unrelated `iomgr.cpp` errors (`resolveHandle` missing and `FileObject*` type mismatch); this feature's standalone host contract passed |
+
+UEFI GPT layout and checksum requirements follow the public [UEFI 2.10 GPT
+format](https://uefi.org/specs/UEFI/2.10/05_GUID_Partition_Table_Format.html).
+No SerenityOS source was incorporated.
+
 ### Kernel completion sprint milestones
 
 These milestones use the numbering in the kernel completion sprint, which

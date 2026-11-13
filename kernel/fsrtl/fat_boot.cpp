@@ -7,6 +7,7 @@
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/executive/se.hpp"
 #include "micant/shared/boot_driver.hpp"
+#include "micant/km/drivers/storage/partition_table.hpp"
 #include <cstring>
 
 namespace micant::fsrtl::fat {
@@ -97,8 +98,8 @@ bool rootStoreAccessAllowed(uint32_t desiredAccess) noexcept {
     return allowed;
 }
 alignas(512) uint8_t g_sectorBuffer[kSectorSize]{};
-alignas(512) uint8_t g_gptEntries[128 * 128]{};
-alignas(512) uint8_t g_backupGptEntries[128 * 128]{};
+micant::storage::partition_table::Extent g_partitionExtents[128]{};
+uint8_t g_partitionScratch[8192]{};
 alignas(4096) uint8_t g_clusterBuffer[65536]{};
 uint32_t g_writeAllocatedClusters[4096]{};
 #define g_volumes (current->volumes)
@@ -113,20 +114,6 @@ uint32_t loadLe32(const uint8_t* bytes) noexcept {
            (static_cast<uint32_t>(bytes[1]) << 8) |
            (static_cast<uint32_t>(bytes[2]) << 16) |
            (static_cast<uint32_t>(bytes[3]) << 24);
-}
-
-uint64_t loadLe64(const uint8_t* bytes) noexcept {
-    return static_cast<uint64_t>(loadLe32(bytes)) |
-           (static_cast<uint64_t>(loadLe32(bytes + 4)) << 32);
-}
-
-uint32_t crc32(const uint8_t* bytes, size_t size, uint32_t crc = 0xFFFFFFFFu) noexcept {
-    for (size_t i = 0; i < size; ++i) {
-        crc ^= bytes[i];
-        for (uint32_t bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-    }
-    return crc;
 }
 
 int32_t readIoBlocks(uint64_t lba, uint32_t count, void* buffer) noexcept {
@@ -713,167 +700,70 @@ bool writeFileAt(FatVolume& volume, FatDirEntry& entry, uint64_t offset,
     return true;
 }
 
-int32_t mountGptVolumes() noexcept {
-    if (current->sectors < 2 || readIoBlocks(1, 1, g_sectorBuffer) != STATUS_SUCCESS)
-        return STATUS_DEVICE_DATA_ERROR;
-    const uint8_t* header = g_sectorBuffer;
-    if (std::memcmp(header, "EFI PART", 8) != 0) return STATUS_UNRECOGNIZED_VOLUME;
-    const uint32_t headerSize = loadLe32(header + 12);
-    if (headerSize < 92 || headerSize > kSectorSize || loadLe64(header + 24) != 1)
-        return STATUS_DEVICE_DATA_ERROR;
-    const uint64_t backupLba = loadLe64(header + 32);
-    const uint64_t firstUsable = loadLe64(header + 40);
-    const uint64_t lastUsable = loadLe64(header + 48);
-    const uint64_t entriesLba = loadLe64(header + 72);
-    const uint32_t entryCount = loadLe32(header + 80);
-    const uint32_t entrySize = loadLe32(header + 84);
-    const uint32_t expectedEntriesCrc = loadLe32(header + 88);
-    uint8_t headerCopy[kSectorSize];
-    std::memcpy(headerCopy, header, sizeof(headerCopy));
-    const uint32_t expectedHeaderCrc = loadLe32(headerCopy + 16);
-    std::memset(headerCopy + 16, 0, sizeof(uint32_t));
-    if ((crc32(headerCopy, headerSize) ^ 0xFFFFFFFFu) != expectedHeaderCrc ||
-        backupLba <= 1 || backupLba >= current->sectors || firstUsable > lastUsable ||
-        lastUsable >= current->sectors || entriesLba < 2 ||
-        entriesLba >= current->sectors || entrySize != 128 ||
-        entryCount == 0 || entryCount > 128) return STATUS_DEVICE_DATA_ERROR;
+bool readPartitionTable(void* context, uint64_t lba, uint16_t count, void* buffer) noexcept {
+    auto* mount = static_cast<Mount*>(context);
+    if (!mount || mount != current || !count) return false;
+    return readIoBlocks(lba, count, buffer) == STATUS_SUCCESS;
+}
 
-    const uint64_t entriesBytes = static_cast<uint64_t>(entryCount) * entrySize;
-    const uint64_t entriesSectors = (entriesBytes + kSectorSize - 1) / kSectorSize;
-    if (!entriesSectors || entriesSectors > kMaximumSectorsPerCommand ||
-        entriesLba > current->sectors - entriesSectors ||
-        entriesLba + entriesSectors > firstUsable || backupLba <= lastUsable ||
-        readIoBlocks(entriesLba, static_cast<uint32_t>(entriesSectors), g_gptEntries) != STATUS_SUCCESS)
-        return STATUS_DEVICE_DATA_ERROR;
-    if ((crc32(g_gptEntries, static_cast<size_t>(entriesBytes)) ^ 0xFFFFFFFFu) !=
-        expectedEntriesCrc) return STATUS_DEVICE_DATA_ERROR;
+int32_t mountPartitions() noexcept {
+    using namespace micant::storage::partition_table;
+    const Device device{current, &readPartitionTable, current->sectors, kSectorSize,
+                        g_partitionScratch, sizeof(g_partitionScratch)};
+    Result result{};
+    const Status parseStatus = discover(device, g_partitionExtents,
+        sizeof(g_partitionExtents) / sizeof(g_partitionExtents[0]), result);
+    if (parseStatus != Status::Success) {
+        if (parseStatus == Status::IoError) return STATUS_DEVICE_DATA_ERROR;
+        // A FAT superfloppy uses the same 0x55AA trailer as an MBR. Its BPB
+        // boot code can occupy bytes where MBR records normally live; only
+        // accept raw LBA 0 if the complete FAT volume validation succeeds.
+        if (readIoBlocks(0, 1, g_sectorBuffer) == STATUS_SUCCESS) {
+            bool protective{};
+            if (g_sectorBuffer[510] == 0x55 && g_sectorBuffer[511] == 0xAA)
+                for (size_t i = 0; i < 4; ++i) protective |= g_sectorBuffer[446 + i * 16 + 4] == 0xEE;
+            if (!protective && mountVolume(g_volumes[0], 0, current->sectors, 'C')) {
+                g_volumeCount = 1;
+                return STATUS_SUCCESS;
+            }
+        }
+        return STATUS_UNRECOGNIZED_VOLUME;
+    }
+    if (result.kind == TableKind::None) {
+        if (!mountVolume(g_volumes[0], 0, current->sectors, 'C'))
+            return STATUS_UNRECOGNIZED_VOLUME;
+        g_volumeCount = 1;
+        return STATUS_SUCCESS;
+    }
+    if (result.kind == TableKind::Mbr && result.count == 0 &&
+        mountVolume(g_volumes[0], 0, current->sectors, 'C')) {
+        g_volumeCount = 1;
+        return STATUS_SUCCESS;
+    }
 
-    // GPT requires a reciprocal backup header and a duplicate partition table.
-    // Validate both before exposing any partition; accepting only the primary
-    // copy can mount a disk whose recovery metadata is already inconsistent.
-    if (readIoBlocks(backupLba, 1, g_sectorBuffer) != STATUS_SUCCESS)
-        return STATUS_DEVICE_DATA_ERROR;
-    const uint8_t* backup = g_sectorBuffer;
-    const uint32_t backupHeaderSize = loadLe32(backup + 12);
-    uint8_t backupHeaderCopy[kSectorSize];
-    if (std::memcmp(backup, "EFI PART", 8) != 0 || backupHeaderSize < 92 ||
-        backupHeaderSize > kSectorSize || loadLe64(backup + 24) != backupLba ||
-        loadLe64(backup + 32) != 1 || loadLe64(backup + 40) != firstUsable ||
-        loadLe64(backup + 48) != lastUsable ||
-        std::memcmp(backup + 56, headerCopy + 56, 16) != 0 ||
-        loadLe32(backup + 80) != entryCount || loadLe32(backup + 84) != entrySize ||
-        loadLe32(backup + 88) != expectedEntriesCrc) return STATUS_DEVICE_DATA_ERROR;
-    std::memcpy(backupHeaderCopy, backup, sizeof(backupHeaderCopy));
-    const uint32_t backupHeaderCrc = loadLe32(backupHeaderCopy + 16);
-    std::memset(backupHeaderCopy + 16, 0, sizeof(uint32_t));
-    if ((crc32(backupHeaderCopy, backupHeaderSize) ^ 0xFFFFFFFFu) != backupHeaderCrc)
-        return STATUS_DEVICE_DATA_ERROR;
-    const uint64_t backupEntriesLba = loadLe64(backup + 72);
-    if (backupEntriesLba < lastUsable + 1 || backupEntriesLba >= backupLba ||
-        entriesSectors > backupLba - backupEntriesLba ||
-        readIoBlocks(backupEntriesLba, static_cast<uint32_t>(entriesSectors),
-                     g_backupGptEntries) != STATUS_SUCCESS ||
-        (crc32(g_backupGptEntries, static_cast<size_t>(entriesBytes)) ^ 0xFFFFFFFFu) !=
-            expectedEntriesCrc ||
-        std::memcmp(g_gptEntries, g_backupGptEntries,
-                    static_cast<size_t>(entriesBytes)) != 0)
-        return STATUS_DEVICE_DATA_ERROR;
-
-    // Microsoft Basic Data and EFI System Partition type GUIDs in GPT
-    // on-disk byte order.
     static constexpr uint8_t basicDataGuid[16] = {
         0xA2,0xA0,0xD0,0xEB,0xE5,0xB9,0x33,0x44,
         0x87,0xC0,0x68,0xB6,0xB7,0x26,0x99,0xC7};
     static constexpr uint8_t efiSystemGuid[16] = {
         0x28,0x73,0x2A,0xC1,0xF8,0x1F,0xD2,0x11,
         0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B};
-    static constexpr uint8_t zeroGuid[16]{};
-    for (uint32_t i = 0; i < entryCount; ++i) {
-        const uint8_t* entry = g_gptEntries + static_cast<size_t>(i) * entrySize;
-        if (std::memcmp(entry, zeroGuid, sizeof(zeroGuid)) == 0) continue;
-        const uint64_t first = loadLe64(entry + 32);
-        const uint64_t last = loadLe64(entry + 40);
-        if (first < firstUsable || last > lastUsable || last < first ||
-            last >= current->sectors) return STATUS_DEVICE_DATA_ERROR;
-        for (uint32_t j = 0; j < i; ++j) {
-            const uint8_t* previous = g_gptEntries + static_cast<size_t>(j) * entrySize;
-            if (std::memcmp(previous, zeroGuid, sizeof(zeroGuid)) == 0) continue;
-            const uint64_t previousFirst = loadLe64(previous + 32);
-            const uint64_t previousLast = loadLe64(previous + 40);
-            if (first <= previousLast && previousFirst <= last)
-                return STATUS_DEVICE_DATA_ERROR;
-        }
-    }
-    constexpr char driveLetters[3] = {'S', 'C', 'D'};
+    static constexpr char driveLetters[3] = {'S', 'C', 'D'};
     bool mounted{};
-    for (uint32_t i = 0; i < entryCount && g_volumeCount < 3; ++i) {
-        const uint8_t* entry = g_gptEntries + static_cast<size_t>(i) * entrySize;
-        if (std::memcmp(entry, basicDataGuid, sizeof(basicDataGuid)) != 0 &&
-            std::memcmp(entry, efiSystemGuid, sizeof(efiSystemGuid)) != 0) continue;
-        const uint64_t first = loadLe64(entry + 32);
-        const uint64_t last = loadLe64(entry + 40);
-        if (first < firstUsable || last > lastUsable || last < first ||
-            last >= current->sectors) continue;
-        if (mountVolume(g_volumes[g_volumeCount], first, last - first + 1,
-                        driveLetters[g_volumeCount])) {
+    for (size_t i = 0; i < result.count && g_volumeCount < 3; ++i) {
+        const Extent& extent = g_partitionExtents[i];
+        if (result.kind == TableKind::Mbr) {
+            if (extent.mbrType != 0x0B && extent.mbrType != 0x0C && extent.mbrType != 0xEF)
+                continue;
+        } else {
+            const bool recognized = std::memcmp(extent.typeGuid, basicDataGuid, 16) == 0 ||
+                                    std::memcmp(extent.typeGuid, efiSystemGuid, 16) == 0;
+            if (!recognized) continue;
+        }
+        if (mountVolume(g_volumes[g_volumeCount], extent.firstLba,
+                        extent.sectorCount, driveLetters[g_volumeCount])) {
             ++g_volumeCount;
             mounted = true;
         }
-    }
-    return mounted ? STATUS_SUCCESS : STATUS_UNRECOGNIZED_VOLUME;
-}
-
-int32_t mountMbrVolumes() noexcept {
-    if (readIoBlocks(0, 1, g_sectorBuffer) != STATUS_SUCCESS) return STATUS_DEVICE_DATA_ERROR;
-    if (g_sectorBuffer[510] != 0x55 || g_sectorBuffer[511] != 0xAA) {
-        if (!mountVolume(g_volumes[0], 0, current->sectors, 'C'))
-            return STATUS_UNRECOGNIZED_VOLUME;
-        g_volumeCount = 1;
-        return STATUS_SUCCESS;
-    }
-    uint8_t partitions[64];
-    std::memcpy(partitions, g_sectorBuffer + 446, sizeof(partitions));
-    bool hasPartition{};
-    for (uint32_t slot = 0; slot < 4; ++slot) {
-        const uint8_t* entry = partitions + slot * 16;
-        if (entry[4] == 0xEE) return mountGptVolumes();
-        if (entry[4] != 0) hasPartition = true;
-    }
-    bool mounted{};
-    constexpr char driveLetters[3] = {'S', 'C', 'D'};
-    for (uint32_t slot = 0; slot < 4 && g_volumeCount < 3; ++slot) {
-        const uint8_t* entry = partitions + slot * 16;
-        const uint8_t type = entry[4];
-        const uint64_t start = loadLe32(entry + 8);
-        const uint64_t count = loadLe32(entry + 12);
-        if ((type != 0x0B && type != 0x0C && type != 0xEF) || !start || !count ||
-            start >= current->sectors || count > current->sectors - start) continue;
-        bool overlapsAnotherPartition{};
-        const uint64_t end = start + count;
-        for (uint32_t otherSlot = 0; otherSlot < 4; ++otherSlot) {
-            if (otherSlot == slot) continue;
-            const uint8_t* other = partitions + otherSlot * 16;
-            const uint64_t otherStart = loadLe32(other + 8);
-            const uint64_t otherCount = loadLe32(other + 12);
-            if (other[4] == 0 || otherCount == 0 || otherStart >= current->sectors ||
-                otherCount > current->sectors - otherStart) continue;
-            const uint64_t otherEnd = otherStart + otherCount;
-            if (start < otherEnd && otherStart < end) {
-                overlapsAnotherPartition = true;
-                break;
-            }
-        }
-        if (overlapsAnotherPartition) continue;
-        if (mountVolume(g_volumes[g_volumeCount], start, count,
-                        driveLetters[g_volumeCount])) {
-            ++g_volumeCount;
-            mounted = true;
-        }
-    }
-    if (!mounted && !hasPartition && mountVolume(g_volumes[0], 0,
-            current->sectors, 'C')) {
-        g_volumeCount = 1;
-        mounted = true;
     }
     return mounted ? STATUS_SUCCESS : STATUS_UNRECOGNIZED_VOLUME;
 }
@@ -1277,7 +1167,7 @@ NtStatus mount(const void* owner, Handle handle, uint64_t& token) noexcept {
             else {
                 *slot = {}; slot->owner = owner; slot->device = device; slot->reference = reference; slot->sectors = device->totalBlocks();
                 current = slot;
-                status = static_cast<NtStatus>(mountMbrVolumes());
+                status = static_cast<NtStatus>(mountPartitions());
                 current = nullptr;
                 if (status == NtStatus::Success) {
                     bool used[26]{};

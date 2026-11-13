@@ -325,6 +325,7 @@ if (MICANT_ENABLE_BAREMETAL)
         test/kernel_ps_file_image_test.cpp
         test/kernel_mm_avl_test.cpp
         test/kernel_mm_process_test.cpp
+        test/kernel_partition_table_test.cpp
         test/pe_tls_freestanding_test.cpp
         tools/explorer_shell/desktop.cpp
         tools/explorer_shell/notification_area.cpp

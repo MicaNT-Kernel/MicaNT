@@ -3,6 +3,7 @@
 import math
 import os
 from pathlib import Path
+import zlib
 
 
 SECTOR_SIZE = 512
@@ -189,3 +190,65 @@ def create_fat32_image(source: Path, destination: Path) -> None:
 
     with destination.open("xb") as output:
         output.write(image)
+
+
+def create_gpt_disk_image(volume: Path, destination: Path) -> None:
+    """Place a FAT32 volume in a standards-shaped GPT Basic Data partition."""
+    volume_sectors = volume.stat().st_size // SECTOR_SIZE
+    if volume_sectors == 0 or volume.stat().st_size % SECTOR_SIZE:
+        raise ValueError("GPT partition image must contain whole sectors")
+    partition_start = 2048
+    total_sectors = partition_start + volume_sectors + 4096
+    backup_header_lba = total_sectors - 1
+    backup_entries_lba = backup_header_lba - 32
+    first_usable = 34
+    last_usable = backup_entries_lba - 1
+    partition_last = partition_start + volume_sectors - 1
+    if partition_last > last_usable:
+        raise ValueError("GPT disk image has no room for backup metadata")
+
+    entries = bytearray(128 * 128)
+    entry = memoryview(entries)[:128]
+    entry[0:16] = bytes.fromhex("A2A0D0EBE5B9334487C068B6B72699C7")
+    entry[16:32] = bytes(range(1, 17))
+    entry[32:40] = partition_start.to_bytes(8, "little")
+    entry[40:48] = partition_last.to_bytes(8, "little")
+    entry[56:72] = "MICA_SYS".encode("utf-16le")
+    entries_crc = zlib.crc32(entries) & 0xFFFFFFFF
+    disk_guid = bytes(range(0xA0, 0xB0))
+
+    def make_header(current_lba: int, alternate_lba: int, entries_lba: int) -> bytes:
+        header = bytearray(SECTOR_SIZE)
+        header[0:8] = b"EFI PART"
+        header[8:12] = (0x00010000).to_bytes(4, "little")
+        header[12:16] = (92).to_bytes(4, "little")
+        header[24:32] = current_lba.to_bytes(8, "little")
+        header[32:40] = alternate_lba.to_bytes(8, "little")
+        header[40:48] = first_usable.to_bytes(8, "little")
+        header[48:56] = last_usable.to_bytes(8, "little")
+        header[56:72] = disk_guid
+        header[72:80] = entries_lba.to_bytes(8, "little")
+        header[80:84] = (128).to_bytes(4, "little")
+        header[84:88] = (128).to_bytes(4, "little")
+        header[88:92] = entries_crc.to_bytes(4, "little")
+        header[16:20] = (zlib.crc32(header[:92]) & 0xFFFFFFFF).to_bytes(4, "little")
+        return bytes(header)
+
+    with destination.open("xb") as output:
+        output.truncate(total_sectors * SECTOR_SIZE)
+        mbr = bytearray(SECTOR_SIZE)
+        protective = 446
+        mbr[protective + 4] = 0xEE
+        mbr[protective + 8:protective + 12] = (1).to_bytes(4, "little")
+        mbr[protective + 12:protective + 16] = min(total_sectors - 1, 0xFFFFFFFF).to_bytes(4, "little")
+        mbr[510:512] = b"\x55\xAA"
+        output.seek(0); output.write(mbr)
+        output.seek(SECTOR_SIZE); output.write(make_header(1, backup_header_lba, 2))
+        output.seek(2 * SECTOR_SIZE); output.write(entries)
+        output.seek(backup_entries_lba * SECTOR_SIZE); output.write(entries)
+        output.seek(backup_header_lba * SECTOR_SIZE)
+        output.write(make_header(backup_header_lba, 1, backup_entries_lba))
+        output.seek(partition_start * SECTOR_SIZE)
+        with volume.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                output.write(chunk)

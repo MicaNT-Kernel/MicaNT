@@ -28,6 +28,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/driver.hpp"
 #include "micant/km/executive/io.hpp"
+#include "micant/km/drivers/storage/partition_table.hpp"
 
 namespace micant::storage {
 
@@ -365,47 +366,40 @@ struct GptPartitionEntry {
  * @brief Partition Manager Utilities.
  */
 class PartitionManager {
+    static bool readForPartitionTable(void* context, uint64_t lba, uint16_t count, void* buffer) noexcept {
+        auto* device = static_cast<IBlockDevice*>(context);
+        return device && NT_SUCCESS(device->readBlocks(lba, count, buffer));
+    }
+
+    static NtStatus mapPartitionStatus(partition_table::Status status) noexcept {
+        switch (status) {
+        case partition_table::Status::Success: return NtStatus::Success;
+        case partition_table::Status::InvalidArgument: return NtStatus::InvalidParameter;
+        case partition_table::Status::IoError: return NtStatus::DeviceDataError;
+        case partition_table::Status::Corrupt: return NtStatus::UnrecognizedVolume;
+        case partition_table::Status::TooManyPartitions: return NtStatus::BufferTooSmall;
+        }
+        return NtStatus::UnrecognizedVolume;
+    }
+
 public:
     static NtStatus parseMbr(IBlockDevice& device, std::vector<MbrPartitionEntry>& outPartitions) {
         outPartitions.clear();
-        const uint32_t blockSize = device.getBlockSize();
-        const uint64_t totalBlocks = device.getTotalBlocks();
-        if (blockSize < sizeof(MasterBootRecord) || totalBlocks == 0) {
-            return NtStatus::InvalidParameter;
-        }
-
-        std::vector<uint8_t> sector(blockSize);
-        NtStatus st = device.readBlocks(0, 1, sector.data());
-        if (!NT_SUCCESS(st)) return st;
-
-        uint16_t signature = 0;
-        std::memcpy(&signature, sector.data() + offsetof(MasterBootRecord, signature), sizeof(signature));
-        if (signature != MBR_SIGNATURE) {
-            return NtStatus::UnrecognizedVolume;
-        }
-
-        MasterBootRecord mbr{};
-        std::memcpy(&mbr, sector.data(), sizeof(mbr));
-        std::vector<std::pair<uint64_t, uint64_t>> extents;
-        for (int i = 0; i < 4; ++i) {
-            const auto& p = mbr.partitions[i];
-            if (p.partitionType == MBR_TYPE_EMPTY || p.sectorCount == 0) continue;
-            const uint64_t start = p.startLba;
-            const uint64_t count = p.sectorCount;
-            if ((p.bootIndicator != 0 && p.bootIndicator != 0x80) || start == 0 ||
-                start >= totalBlocks || count > totalBlocks - start) {
-                outPartitions.clear();
-                return NtStatus::UnrecognizedVolume;
-            }
-            const uint64_t end = start + count;
-            for (const auto& extent : extents) {
-                if (start < extent.second && extent.first < end) {
-                    outPartitions.clear();
-                    return NtStatus::UnrecognizedVolume;
-                }
-            }
-            extents.emplace_back(start, end);
-            outPartitions.push_back(p);
+        std::vector<partition_table::Extent> entries(128);
+        partition_table::Result result{};
+        std::vector<uint8_t> scratch(8192);
+        const partition_table::Device source{&device, &readForPartitionTable,
+            device.getTotalBlocks(), device.getBlockSize(), scratch.data(), scratch.size()};
+        const NtStatus status = mapPartitionStatus(partition_table::parseMbr(
+            source, entries.data(), entries.size(), result));
+        if (!NT_SUCCESS(status)) return status;
+        for (size_t i = 0; i < result.count; ++i) {
+            MbrPartitionEntry entry{};
+            entry.bootIndicator = entries[i].bootable ? 0x80 : 0;
+            entry.partitionType = entries[i].mbrType;
+            entry.startLba = static_cast<uint32_t>(entries[i].firstLba);
+            entry.sectorCount = static_cast<uint32_t>(entries[i].sectorCount);
+            outPartitions.push_back(entry);
         }
         return NtStatus::Success;
     }
@@ -428,40 +422,28 @@ public:
 
     static NtStatus parseGpt(IBlockDevice& device, std::vector<GptPartitionEntry>& outEntries) {
         outEntries.clear();
-        if (device.getBlockSize() < sizeof(GptHeader)) return NtStatus::InvalidParameter;
-
-        std::vector<uint8_t> sector(device.getBlockSize());
-        NtStatus st = device.readBlocks(1, 1, sector.data()); // GPT is at LBA 1
-        if (!NT_SUCCESS(st)) return st;
-
-        const auto* hdr = reinterpret_cast<const GptHeader*>(sector.data());
-        if (hdr->signature != GPT_SIGNATURE) {
-            return NtStatus::UnrecognizedVolume;
+        std::vector<partition_table::Extent> entries(256);
+        partition_table::Result result{};
+        std::vector<uint8_t> scratch(8192);
+        const partition_table::Device source{&device, &readForPartitionTable,
+            device.getTotalBlocks(), device.getBlockSize(), scratch.data(), scratch.size()};
+        auto status = partition_table::validateGptAt(source, 1, entries.data(), entries.size(), result);
+        if (status != partition_table::Status::Success && device.getTotalBlocks() > 1)
+            status = partition_table::validateGptAt(source, device.getTotalBlocks() - 1,
+                                                     entries.data(), entries.size(), result);
+        const NtStatus mapped = mapPartitionStatus(status);
+        if (!NT_SUCCESS(mapped)) return mapped;
+        for (size_t i = 0; i < result.count; ++i) {
+            GptPartitionEntry entry{};
+            std::memcpy(entry.partitionTypeGuid, entries[i].typeGuid, 16);
+            std::memcpy(entry.uniquePartitionGuid, entries[i].uniqueGuid, 16);
+            entry.startingLba = entries[i].firstLba;
+            entry.endingLba = entries[i].firstLba + entries[i].sectorCount - 1;
+            entry.attributes = entries[i].attributes;
+            for (size_t unit = 0; unit < 36; ++unit)
+                entry.partitionName[unit] = static_cast<wchar_t>(entries[i].name[unit]);
+            outEntries.push_back(entry);
         }
-
-        uint32_t entrySize = hdr->sizeOfPartitionEntry;
-        if (entrySize < sizeof(GptPartitionEntry)) entrySize = sizeof(GptPartitionEntry);
-        uint32_t totalEntries = hdr->numPartitionEntries;
-        uint32_t entriesPerSector = device.getBlockSize() / entrySize;
-        if (entriesPerSector == 0) return NtStatus::InvalidParameter;
-
-        uint32_t sectorsToRead = (totalEntries + entriesPerSector - 1) / entriesPerSector;
-        std::vector<uint8_t> entryBuffer(sectorsToRead * device.getBlockSize());
-        st = device.readBlocks(hdr->partitionEntryLba, sectorsToRead, entryBuffer.data());
-        if (!NT_SUCCESS(st)) return st;
-
-        for (uint32_t i = 0; i < totalEntries; ++i) {
-            const auto* entry = reinterpret_cast<const GptPartitionEntry*>(entryBuffer.data() + (i * entrySize));
-            // Check if partition GUID is non-zero
-            bool isZero = true;
-            for (int b = 0; b < 16; ++b) {
-                if (entry->partitionTypeGuid[b] != 0) { isZero = false; break; }
-            }
-            if (!isZero && entry->endingLba >= entry->startingLba) {
-                outEntries.push_back(*entry);
-            }
-        }
-
         return NtStatus::Success;
     }
 };

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include "micant/km/drivers/storage/partition_table.hpp"
 
 namespace {
 
@@ -68,6 +69,8 @@ struct alignas(4096) DmaStorage {
     alignas(4096) uint8_t data[65536];
 };
 DmaStorage* g_dma{};
+micant::storage::partition_table::Extent g_partitionExtents[128]{};
+uint8_t g_partitionScratch[8192]{};
 
 struct DriverState {
     DriverObject* Driver{};
@@ -243,8 +246,12 @@ bool readSectors(uint64_t lba, uint16_t count, void* destination) noexcept {
     return true;
 }
 
-bool hasFat32BootSector() noexcept {
-    const auto* boot = g_dma->data;
+bool readPartitionSectors(void*, uint64_t lba, uint16_t count, void* destination) noexcept {
+    return readSectors(lba, count, destination);
+}
+
+bool hasFat32BootSector(const uint8_t* boot, uint64_t volumeSectors) noexcept {
+    if (!boot) return false;
     const uint16_t bytesPerSector = loadLe16(boot + 11);
     const uint8_t sectorsPerCluster = boot[13];
     const uint16_t reservedSectors = loadLe16(boot + 14);
@@ -257,7 +264,38 @@ bool hasFat32BootSector() noexcept {
         (sectorsPerCluster & (sectorsPerCluster - 1)) == 0 &&
         reservedSectors && fatCount && fatCount <= 2 &&
         !loadLe16(boot + 22) && totalSectors && fatSectors &&
-        rootCluster >= 2 && totalSectors <= g_state.DiskSectors;
+        rootCluster >= 2 && totalSectors <= volumeSectors;
+}
+
+bool hasSupportedFatVolume() noexcept {
+    using namespace micant::storage::partition_table;
+    Result result{};
+    const Device disk{nullptr, &readPartitionSectors, g_state.DiskSectors, kSectorSize,
+                      g_partitionScratch, sizeof(g_partitionScratch)};
+    if (discover(disk, g_partitionExtents,
+                 sizeof(g_partitionExtents) / sizeof(g_partitionExtents[0]), result) != Status::Success)
+        return false;
+    if (result.kind == TableKind::None ||
+        (result.kind == TableKind::Mbr && result.count == 0))
+        return readSectors(0, 1, g_dma->data) &&
+               hasFat32BootSector(g_dma->data, g_state.DiskSectors);
+    static constexpr uint8_t basicDataGuid[16] = {
+        0xA2,0xA0,0xD0,0xEB,0xE5,0xB9,0x33,0x44,
+        0x87,0xC0,0x68,0xB6,0xB7,0x26,0x99,0xC7};
+    static constexpr uint8_t efiSystemGuid[16] = {
+        0x28,0x73,0x2A,0xC1,0xF8,0x1F,0xD2,0x11,
+        0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B};
+    for (size_t i = 0; i < result.count; ++i) {
+        const Extent& p = g_partitionExtents[i];
+        bool candidate{};
+        if (result.kind == TableKind::Mbr) candidate = p.mbrType == 0x0B || p.mbrType == 0x0C || p.mbrType == 0xEF;
+        else candidate = std::memcmp(p.typeGuid, basicDataGuid, 16) == 0 ||
+                         std::memcmp(p.typeGuid, efiSystemGuid, 16) == 0;
+        if (candidate && readSectors(p.firstLba, 1, g_dma->data) &&
+            hasFat32BootSector(g_dma->data, p.sectorCount))
+            return true;
+    }
+    return false;
 }
 
 bool writeSectors(uint64_t lba, uint16_t count, const void* source) noexcept {
@@ -484,9 +522,9 @@ bool initializeController() noexcept {
             continue;
         }
         g_state.DiskSectors = sectors;
-        if (!readSectors(0, 1, g_dma->data) || !hasFat32BootSector()) {
+        if (!hasSupportedFatVolume()) {
             services->Log(services->Context,
-                "AHCI skipped SATA disk: sector zero is not a supported FAT32 boot sector");
+                "AHCI skipped SATA disk: no validated FAT32 superfloppy or partition found");
             if (!stopPort(port)) return false;
             g_state.Port = nullptr;
             g_state.DiskSectors = 0;
