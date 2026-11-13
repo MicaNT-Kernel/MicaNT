@@ -69,6 +69,12 @@ inline constexpr uint8_t IRP_MN_VERIFY_VOLUME            = 0x02;
 inline constexpr uint8_t IRP_MN_LOAD_FILE_SYSTEM         = 0x03;
 
 // Device Object Flags (Buffering Models)
+// IRP buffer ownership is recorded on the request and remains stable even
+// if a device's flags change while that request is in flight.
+inline constexpr uint32_t IRP_BUFFERED_IO               = 0x00000010;
+inline constexpr uint32_t IRP_DEALLOCATE_BUFFER         = 0x00000020;
+inline constexpr uint32_t IRP_INPUT_OPERATION           = 0x00000040;
+
 inline constexpr uint32_t DO_BUFFERED_IO                 = 0x00000004;
 inline constexpr uint32_t DO_DIRECT_IO                   = 0x00000010;
 inline constexpr uint32_t DO_NEITHER_IO                  = 0x00000000;
@@ -272,6 +278,12 @@ struct Irp {
     int8_t currentStackLocation{1};
     IoStackLocation stackLocations[IRP_MAX_STACK_LOCATIONS]{};
     bool pendingReturned{false};
+    // Internal owner hooks. A managed IRP can finish asynchronously after a
+    // completion routine returns MORE_PROCESSING_REQUIRED; these hooks keep
+    // its owner responsible for final cleanup and notification.
+    void (*ownerComplete)(Irp*, void*) noexcept{nullptr};
+    void (*ownerFree)(Irp*, void*) noexcept{nullptr};
+    void* ownerContext{nullptr};
 
     [[nodiscard]] IoStackLocation* getCurrentStack() noexcept {
         int idx = currentStackLocation - 1;
@@ -402,9 +414,10 @@ inline bool IoCancelIrp(Irp* irp) noexcept {
             g_IoTelemetry.totalCancelRoutinesInvoked++;
         }
         cancelRoutine(irp->deviceObject, irp);
-        if (g_IoCancelSpinLock.isLocked()) {
-            IoReleaseCancelSpinLock(oldIrql);
-        }
+        // The cancel routine owns the lock and must release it using the
+        // supplied CancelIrql. Once it has done so, another caller may own
+        // the same lock; inspecting its global state here cannot establish
+        // ownership and could release somebody else's lock.
         return true;
     }
 
@@ -745,6 +758,12 @@ inline Irp* IoAllocateIrp(int8_t stackSize = IRP_MAX_STACK_LOCATIONS, bool charg
 
 inline void IoFreeIrp(Irp* irp) noexcept {
     if (!irp) return;
+    if (irp->ownerFree) {
+        const auto release = irp->ownerFree;
+        auto* context = irp->ownerContext;
+        release(irp, context);
+        return;
+    }
     delete irp;
     std::lock_guard<IoTelemetryMutex> lk(g_IoTelemetryMutex);
     g_IoTelemetry.totalIrpsFreed++;
@@ -781,11 +800,8 @@ inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
 
     // Handle Buffering Teardown
     if (irp->deviceObject) {
-        if (irp->deviceObject->flags & DO_BUFFERED_IO) {
-            if ((irp->majorFunction == IRP_MJ_READ ||
-                 irp->majorFunction == IRP_MJ_DEVICE_CONTROL ||
-                 irp->majorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) &&
-                irp->systemBuffer && irp->userBuffer) {
+        if (irp->flags & IRP_BUFFERED_IO) {
+            if ((irp->flags & IRP_INPUT_OPERATION) && irp->systemBuffer && irp->userBuffer) {
                 if (irp->ioStatus.information > irp->length) {
                     irp->ioStatus.status = NtStatus::InvalidParameter;
                     irp->ioStatus.information = 0;
@@ -793,7 +809,7 @@ inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
                     std::memcpy(irp->userBuffer, irp->systemBuffer, irp->ioStatus.information);
                 }
             }
-            if (irp->systemBuffer) {
+            if ((irp->flags & IRP_DEALLOCATE_BUFFER) && irp->systemBuffer) {
                 std::free(irp->systemBuffer);
                 irp->systemBuffer = nullptr;
             }
@@ -819,7 +835,12 @@ inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
         g_IoTelemetry.totalIrpsCompleted++;
     }
 
-    return irp->ioStatus.status;
+    const auto status = irp->ioStatus.status;
+    const auto complete = irp->ownerComplete;
+    auto* context = irp->ownerContext;
+    irp->ownerComplete = nullptr;
+    if (complete) complete(irp, context);
+    return status;
 }
 
 inline NtStatus IoCallDriver(DeviceObject* device, Irp* irp) {
@@ -909,6 +930,8 @@ inline Irp* IoBuildSynchronousFsdRequest(
         }
         irp->systemBuffer = sysBuf;
         irp->userBuffer = buffer;
+        irp->flags |= IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
+        if (majorFunction == IRP_MJ_READ) irp->flags |= IRP_INPUT_OPERATION;
     } else if (deviceObject->flags & DO_DIRECT_IO) {
         if (buffer && length > 0) {
             auto* mdl = mm::IoAllocateMdl(buffer, length, false, false, irp);
@@ -979,6 +1002,7 @@ inline Irp* IoBuildDeviceIoControlRequest(
         }
         irp->systemBuffer = sysBuf;
         irp->userBuffer = outputBuffer;
+        irp->flags |= IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER | IRP_INPUT_OPERATION;
     } else {
         irp->userBuffer = outputBuffer;
     }

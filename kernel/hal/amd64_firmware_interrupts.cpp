@@ -167,82 +167,172 @@ uint32_t g_directDmaLeases{};
 bool g_iommuTransitionPending{};
 }
 
-bool initializeBootstrapDmaTranslationState(const boot::UefiKernelHandoffV3& handoff) noexcept {
+bool initializeBootstrapDmaTranslationState(const boot::UefiKernelHandoffV3& handoff,
+                                            uint32_t* failureStage,
+                                            uint64_t* failureDetail) noexcept {
     uint64_t flags{};
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
     bool success = false;
+    uint32_t failedAt{};
+    uint64_t detail{};
     do {
         if (g_directDmaInventoryReady || g_dmaRemappingUnitCount ||
             handoff.memoryMapDescriptorSize < sizeof(uefi::EfiMemoryDescriptor) ||
             !handoff.memoryMapSize || handoff.memoryMapSize % handoff.memoryMapDescriptorSize ||
             handoff.memoryMapSize > UINT64_MAX - handoff.memoryMapAddress ||
-            !bootstrapKernelRange(handoff.memoryMapAddress, handoff.memoryMapSize, false)) break;
+            !bootstrapKernelRange(handoff.memoryMapAddress, handoff.memoryMapSize, false)) {
+            failedAt = 1;
+            break;
+        }
         uint32_t eax{}, ebx{}, ecx{}, edx{};
         __asm__ __volatile__("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0), "c"(0));
-        if (ebx != 0x756e6547u || edx != 0x49656e69u || ecx != 0x6c65746eu) break;
+        if (ebx != 0x756e6547u || edx != 0x49656e69u || ecx != 0x6c65746eu) {
+            failedAt = 2;
+            break;
+        }
         const uint64_t rsdpPhysical = handoff.acpiTablePhysicalAddress;
         if (!copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, 20) ||
-            std::memcmp(g_rsdpBuffer, "RSD PTR ", 8) || !checksum(g_rsdpBuffer, 20)) break;
+            std::memcmp(g_rsdpBuffer, "RSD PTR ", 8) || !checksum(g_rsdpBuffer, 20)) {
+            failedAt = 3;
+            detail = rsdpPhysical;
+            break;
+        }
         uint64_t root = read<uint32_t>(g_rsdpBuffer + 16);
         bool xsdt = false;
         if (g_rsdpBuffer[15] >= 2) {
-            if (!copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, 36)) break;
+            if (!copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, 36)) {
+                failedAt = 3;
+                detail = rsdpPhysical;
+                break;
+            }
             const size_t length = read<uint32_t>(g_rsdpBuffer + 20);
             if (length < 36 || length > sizeof(g_rsdpBuffer) ||
                 !copyFirmware(handoff, rsdpPhysical, g_rsdpBuffer, length) ||
-                !checksum(g_rsdpBuffer, length)) break;
+                !checksum(g_rsdpBuffer, length)) {
+                failedAt = 3;
+                detail = length;
+                break;
+            }
             const auto candidate = read<uint64_t>(g_rsdpBuffer + 24);
             if (candidate) { root = candidate; xsdt = true; }
         }
         size_t rootSize{};
         const auto* entries = table(handoff, root, xsdt ? "XSDT" : "RSDT", rootSize);
         const size_t stride = xsdt ? 8 : 4;
-        if (!entries || (rootSize - headerSize) % stride) break;
+        if (!entries || (rootSize - headerSize) % stride) {
+            failedAt = 4;
+            detail = root;
+            break;
+        }
         uint64_t dmarPhysical{};
         bool invalid = false;
         for (size_t offset = headerSize; offset < rootSize; offset += stride) {
             const auto physical = xsdt ? read<uint64_t>(entries + offset) : read<uint32_t>(entries + offset);
             uint8_t signature[4]{};
-            if (!copyFirmware(handoff, physical, signature, sizeof(signature))) { invalid = true; break; }
-            if (!std::memcmp(signature, "IVRS", 4)) { invalid = true; break; }
+            if (!copyFirmware(handoff, physical, signature, sizeof(signature))) {
+                invalid = true;
+                detail = physical;
+                break;
+            }
+            if (!std::memcmp(signature, "IVRS", 4)) {
+                invalid = true;
+                detail = physical;
+                break;
+            }
             if (!std::memcmp(signature, "DMAR", 4)) {
-                if (dmarPhysical) { invalid = true; break; }
+                if (dmarPhysical) {
+                    invalid = true;
+                    detail = physical;
+                    break;
+                }
                 dmarPhysical = physical;
             }
         }
-        if (invalid || !dmarPhysical) break;
+        if (invalid || !dmarPhysical) {
+            failedAt = 5;
+            if (!detail) detail = dmarPhysical;
+            break;
+        }
         size_t length{};
         const auto* dmar = table(handoff, dmarPhysical, "DMAR", length);
-        if (!dmar || length < 48) break;
-        bool includeAll = false;
+        if (!dmar || length < 48) {
+            failedAt = 6;
+            detail = dmarPhysical;
+            break;
+        }
         for (size_t offset = 48; offset < length;) {
-            if (length - offset < 4) { invalid = true; break; }
+            if (length - offset < 4) {
+                invalid = true;
+                detail = offset;
+                break;
+            }
             const uint16_t kind = read<uint16_t>(dmar + offset);
             const uint16_t size = read<uint16_t>(dmar + offset + 2);
-            if (size < 4 || size > length - offset) { invalid = true; break; }
+            if (size < 4 || size > length - offset) {
+                invalid = true;
+                detail = (static_cast<uint64_t>(kind) << 32) | size;
+                break;
+            }
             // Other DMAR structures can impose reserved ranges or remapping
             // semantics not yet represented by the bootstrap DMA owner.
-            if (kind != 0) { invalid = true; break; }
+            if (kind != 0) {
+                invalid = true;
+                detail = (static_cast<uint64_t>(kind) << 32) | size;
+                break;
+            }
             if (kind == 0) {
                 if (size < 16 || read<uint16_t>(dmar + offset + 6) != 0 ||
-                    g_dmaRemappingUnitCount == 16) { invalid = true; break; }
+                    g_dmaRemappingUnitCount == 16) {
+                    invalid = true;
+                    failedAt = 71;
+                    detail = (static_cast<uint64_t>(kind) << 32) | size;
+                    break;
+                }
                 const auto physical = read<uint64_t>(dmar + offset + 8);
-                if (!physical || (physical & 4095)) { invalid = true; break; }
+                if (!physical || (physical & 4095)) {
+                    invalid = true;
+                    failedAt = 71;
+                    detail = physical;
+                    break;
+                }
                 // The root arbiter retains each remapping register range for
                 // the kernel IOMMU owner throughout the direct DMA lifetime.
-                if (!km::arb::reservePhysicalRange(physical, 4096)) { invalid = true; break; }
-                auto* unit = static_cast<volatile uint32_t*>(mapBootstrapDeviceMemory(physical, 4096));
-                if (!unit) { invalid = true; break; }
-                g_dmaRemappingUnits[g_dmaRemappingUnitCount++] = unit;
-                if (!protectBootstrapIommuRegisters(physical, 4096, const_cast<uint32_t*>(unit))) { invalid = true; break; }
-                if (!unit[0] || unit[0] == UINT32_MAX || (unit[0x1c / 4] & (1u << 31))) {
-                    invalid = true; break;
+                if (!km::arb::reservePhysicalRange(physical, 4096)) {
+                    invalid = true;
+                    failedAt = 72;
+                    detail = physical;
+                    break;
                 }
-                includeAll |= (dmar[offset + 4] & 1u) != 0;
+                auto* unit = static_cast<volatile uint32_t*>(mapBootstrapDeviceMemory(physical, 4096));
+                if (!unit) {
+                    invalid = true;
+                    failedAt = 73;
+                    detail = physical;
+                    break;
+                }
+                g_dmaRemappingUnits[g_dmaRemappingUnitCount++] = unit;
+                if (!protectBootstrapIommuRegisters(physical, 4096, const_cast<uint32_t*>(unit))) {
+                    invalid = true;
+                    failedAt = 74;
+                    detail = physical;
+                    break;
+                }
+                if (!unit[0] || unit[0] == UINT32_MAX || (unit[0x1c / 4] & (1u << 31))) {
+                    invalid = true;
+                    failedAt = 75;
+                    detail = (static_cast<uint64_t>(unit[0]) << 32) | unit[0x1c / 4];
+                    break;
+                }
             }
             offset += size;
         }
-        if (invalid || !includeAll || !g_dmaRemappingUnitCount) break;
+        // Device scopes do not alter DMA addresses while every inventoried
+        // remapping unit has translation disabled.
+        if (invalid || !g_dmaRemappingUnitCount) {
+            if (!failedAt) failedAt = 7;
+            if (!detail) detail = g_dmaRemappingUnitCount;
+            break;
+        }
         commitBootstrapIommuProtection();
         g_directDmaInventoryReady = true;
         success = true;
@@ -254,6 +344,8 @@ bool initializeBootstrapDmaTranslationState(const boot::UefiKernelHandoffV3& han
             g_dmaRemappingUnits[g_dmaRemappingUnitCount] = nullptr;
         }
     }
+    if (failureStage) *failureStage = success ? 0 : failedAt;
+    if (failureDetail) *failureDetail = detail;
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     return success;
 }

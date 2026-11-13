@@ -4,14 +4,17 @@
 #include "micant/km/hal/cpu.hpp"
 #include "micant/shared/user_graphics.hpp"
 #include "micant/shared/user_syscall.hpp"
+#include "micant/shared/syscall_numbers.hpp"
 #include "micant/shared/win32k_client.h"
 #include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/io_file.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/clock_timer.hpp"
 #include <atomic>
 
 extern "C" volatile bool g_ring3ProbeActive{};
+extern "C" volatile bool g_ring3ClockProbeActive{};
 
 namespace {
 
@@ -72,11 +75,14 @@ constexpr uint64_t kNoExecute = uint64_t{1} << 63;
 constexpr uint64_t kPhysicalMask = 0x000FFFFFFFFFF000ULL;
 constexpr uint64_t kOwnedTable = uint64_t{1} << 9;
 constexpr uint64_t kGuardLeaf = uint64_t{1} << 10;
+constexpr uint64_t kNoAccessLeaf = uint64_t{1} << 11;
 constexpr uint64_t kUserBase = uint64_t{128} << 39;
 constexpr uint64_t kUserTebBase = kUserBase + 0x8000;
 constexpr uint64_t kDeviceBase = uint64_t{129} << 39;
 constexpr uint64_t kDeviceMappingWindowSize = 16 * 1024 * 1024;
 constexpr uint64_t kTestBase = uint64_t{130} << 39;
+constexpr uint64_t kKuserKernelAlias = uint64_t{131} << 39;
+constexpr uint64_t kKuserRootAlias = kKuserKernelAlias + 4096;
 constexpr uint64_t kUserStackBase = kUserBase + 4096;
 alignas(4096) uint64_t g_pml4[512]{};
 uint64_t g_deviceNext = kDeviceBase;
@@ -95,6 +101,8 @@ micant::hal::amd64::ProcessPagingRoot* g_processPagingRoots{};
 bool g_ownedSharedRootSlots[2]{};
 alignas(4096) uint8_t g_kuserSharedPage[4096]{};
 bool g_kuserSharedMappingReady{};
+bool g_kuserKernelAliasReady{};
+uint64_t* g_kuserAliasPageTable{};
 alignas(4096) uint8_t g_userCode[4096]{};
 alignas(4096) uint8_t g_userStack[4 * 4096]{};
 struct alignas(4096) BootstrapTebStorage {
@@ -113,6 +121,7 @@ micant::um::NativeUserImageSet64 g_nativeProbeModules{};
 alignas(16) uint8_t g_kernelStack[32768]{};
 volatile bool g_probeSucceeded{};
 uint32_t g_probeMode{};
+
 uint64_t g_probeReturnRip{};
 micant::hal::amd64::UserServiceRoutine g_dispatch{};
 bool g_schedulerClockActive{};
@@ -236,6 +245,23 @@ uint64_t walk(uint64_t root, uint64_t address) noexcept {
     return 0;
 }
 
+bool queryPagingPermissions(uint64_t root, uint64_t address,
+                           bool& userAccessible, bool& writable) noexcept {
+    auto* table = reinterpret_cast<const uint64_t*>(root & kPhysicalMask);
+    userAccessible = true;
+    writable = true;
+    for (int shift = 39; shift >= 12; shift -= 9) {
+        const uint64_t entry = table[(address >> shift) & 511];
+        if (!(entry & kPresent)) return false;
+        userAccessible = userAccessible && (entry & kUser);
+        writable = writable && (entry & kWritable);
+        if ((shift == 30 || shift == 21) && (entry & 128)) return true;
+        if (shift == 12) return true;
+        table = reinterpret_cast<const uint64_t*>(entry & kPhysicalMask);
+    }
+    return false;
+}
+
 uint64_t* activePagingRoot() noexcept {
     uint64_t cr3{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(cr3));
@@ -288,6 +314,41 @@ bool bootstrapPagingContext() noexcept {
     return false;
 }
 
+class BootstrapWriteProtectWindow {
+public:
+    BootstrapWriteProtectWindow() noexcept {
+        // This bootstrap-only edit runs on the BSP with interrupts disabled;
+        // there are no remote CPUs or pageable callbacks in the window.
+        if (micant::ke::g_CurrentCpu.processorNumber != 0 ||
+            !bootstrapPagingContext()) return;
+        __asm__ __volatile__("mov %%cr0, %0" : "=r"(original_) : : "memory");
+        if (!(original_ & (uint64_t{1} << 16))) {
+            valid_ = true;
+            return;
+        }
+        const uint64_t writable = original_ & ~(uint64_t{1} << 16);
+        __asm__ __volatile__("mov %0, %%cr0" : : "r"(writable) : "memory");
+        valid_ = true;
+        changed_ = true;
+    }
+    BootstrapWriteProtectWindow(const BootstrapWriteProtectWindow&) = delete;
+    BootstrapWriteProtectWindow& operator=(const BootstrapWriteProtectWindow&) = delete;
+    ~BootstrapWriteProtectWindow() noexcept { restore(); }
+
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    void restore() noexcept {
+        if (!valid_) return;
+        if (changed_)
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(original_) : "memory");
+        valid_ = false;
+    }
+
+private:
+    uint64_t original_{};
+    bool valid_{};
+    bool changed_{};
+};
+
 bool pagingContextMatches(void* context) noexcept {
     if (!bootstrapPagingContext()) return false;
     const auto active = reinterpret_cast<uint64_t>(activePagingRoot());
@@ -303,7 +364,7 @@ void invalidatePage(uint64_t address) noexcept {
 
 bool ownedAddress(uint64_t address, bool user) noexcept {
     const uint64_t slot = address >> 39;
-    return user ? slot == 128 : slot == 129 || slot == 130;
+    return user ? slot == 128 : slot == 129 || slot == 130 || slot == 131;
 }
 
 bool emptyTable(const uint64_t* table) noexcept {
@@ -372,13 +433,16 @@ rollback:
 class KuserPageTableEdit {
 public:
     ~KuserPageTableEdit() noexcept {
-        if (committed_) return;
-        while (editCount_) {
-            --editCount_;
-            *entries_[editCount_] = original_[editCount_];
+        if (!committed_) {
+            while (editCount_) {
+                --editCount_;
+                *entries_[editCount_] = original_[editCount_];
+            }
         }
-        for (size_t index = 0; index < allocatedCount_; ++index)
-            micant::mm::PfnDatabase::get().freePage(allocatedPfns_[index]);
+        clearTableAliases();
+        if (!committed_)
+            for (size_t index = 0; index < allocatedCount_; ++index)
+                micant::mm::PfnDatabase::get().freePage(allocatedPfns_[index]);
     }
 
     bool set(uint64_t& entry, uint64_t value) noexcept {
@@ -399,24 +463,49 @@ public:
             return 0;
         }
         const uint64_t physical = pfn << 12;
-        if (!mappedRange(physical, 4096, false, true, false) ||
-            walk(reinterpret_cast<uint64_t>(activePagingRoot()), physical) != physical) {
-            database.freePage(pfn);
-            return 0;
-        }
         database.zeroPage(pfn);
         allocatedPfns_[allocatedCount_++] = pfn;
         return physical;
     }
 
+    uint64_t* mapTable(uint64_t physical) noexcept {
+        if (!g_kuserAliasPageTable || !physical || (physical & 4095) ||
+            physical > kPhysicalMask ||
+            aliasCount_ == sizeof(aliasSlots_) / sizeof(aliasSlots_[0])) return nullptr;
+        const uint16_t slot = static_cast<uint16_t>(3 + aliasCount_);
+        const uint64_t address = kKuserKernelAlias + uint64_t{slot} * 4096;
+        if (g_kuserAliasPageTable[slot] != 0) return nullptr;
+        g_kuserAliasPageTable[slot] = physical | kPresent | kWritable | kNoExecute;
+        invalidatePage(address);
+        if (!mappedRange(address, 4096, false, true, false) ||
+            walk(reinterpret_cast<uint64_t>(activePagingRoot()), address) != physical) {
+            g_kuserAliasPageTable[slot] = 0;
+            invalidatePage(address);
+            return nullptr;
+        }
+        aliasSlots_[aliasCount_++] = slot;
+        return reinterpret_cast<uint64_t*>(address);
+    }
+
     void commit() noexcept { committed_ = true; }
 
 private:
+    void clearTableAliases() noexcept {
+        if (!g_kuserAliasPageTable) return;
+        while (aliasCount_) {
+            const uint16_t slot = aliasSlots_[--aliasCount_];
+            g_kuserAliasPageTable[slot] = 0;
+            invalidatePage(kKuserKernelAlias + uint64_t{slot} * 4096);
+        }
+    }
+
     uint64_t* entries_[8]{};
     uint64_t original_[8]{};
     uint64_t allocatedPfns_[4]{};
+    uint16_t aliasSlots_[8]{};
     size_t editCount_{};
     size_t allocatedCount_{};
+    size_t aliasCount_{};
     bool committed_{};
 };
 
@@ -429,7 +518,8 @@ bool splitOneGiBMapping(KuserPageTableEdit& edit, uint64_t& entry) noexcept {
     const uint64_t physicalBase = old & physicalMask1GiB;
     const uint64_t flags = old & (kPresent | kWritable | kUser | 0x18ULL |
         (uint64_t{1} << 5) | (uint64_t{1} << 6) | 128ULL | 0x1800ULL | kNoExecute);
-    auto* table = reinterpret_cast<uint64_t*>(tablePhysical);
+    auto* table = edit.mapTable(tablePhysical);
+    if (!table) return false;
     for (size_t index = 0; index < 512; ++index)
         table[index] = physicalBase + index * 0x200000ULL | flags;
     return edit.set(entry, tablePhysical | kPresent | kWritable | kUser | kOwnedTable);
@@ -448,64 +538,155 @@ bool splitTwoMiBMapping(KuserPageTableEdit& edit, uint64_t& entry) noexcept {
     flags &= ~uint64_t{128}; // PS becomes PAT only when the old large-page PAT was set.
     if (old & (uint64_t{1} << 12)) flags |= uint64_t{128};
     flags &= ~(uint64_t{1} << 9); // reserve software bit 9 for owned table links.
-    auto* table = reinterpret_cast<uint64_t*>(tablePhysical);
+    auto* table = edit.mapTable(tablePhysical);
+    if (!table) return false;
     for (size_t index = 0; index < 512; ++index)
         table[index] = physicalBase + index * 4096ULL | flags;
     return edit.set(entry, tablePhysical | kPresent | kWritable | kUser | kOwnedTable);
 }
 
-bool installKuserUserMapping(uint64_t physical) noexcept {
+bool installKuserUserMapping(uint64_t physical, uint64_t* writableRoot) noexcept {
+    const auto fail = [](const char* message) noexcept {
+        if (g_log) g_log(message);
+        return false;
+    };
     constexpr uint64_t address = micant::UserSharedDataAddress;
     if (!bootstrapPagingContext() || (physical & 4095) ||
         physical > kPhysicalMask || !physical || isProtectedIommuPhysicalPage(physical) ||
-        reinterpret_cast<uint64_t>(activePagingRoot()) != reinterpret_cast<uint64_t>(g_pml4))
-        return false;
+        reinterpret_cast<uint64_t>(activePagingRoot()) != reinterpret_cast<uint64_t>(g_pml4) ||
+        !writableRoot)
+        return fail("[MicaNT Hal] KUSER map precondition failed\r\n");
 
     KuserPageTableEdit edit;
-    uint64_t& pml4Entry = g_pml4[(address >> 39) & 511];
-    if (!(pml4Entry & kPresent)) {
+    uint64_t& pml4Entry = writableRoot[(address >> 39) & 511];
+    if (pml4Entry & 128) return fail("[MicaNT Hal] KUSER PML4 large-page conflict\r\n");
+    uint64_t* pdpt{};
+    if (pml4Entry & kPresent) {
+        pdpt = edit.mapTable(pml4Entry & kPhysicalMask);
+        if (!pdpt) return fail("[MicaNT Hal] Existing KUSER PDPT alias failed\r\n");
+        if (!edit.set(pml4Entry, pml4Entry | kUser | kWritable))
+            return fail("[MicaNT Hal] KUSER PML4 permission edit failed\r\n");
+    } else {
         const uint64_t table = edit.allocateTable();
-        if (!table || !edit.set(pml4Entry,
-                table | kPresent | kWritable | kUser | kOwnedTable)) return false;
-    } else if (pml4Entry & 128) {
-        return false;
-    } else if (!edit.set(pml4Entry, pml4Entry | kUser | kWritable)) {
-        return false;
+        if (!table || !(pdpt = edit.mapTable(table)) || !edit.set(pml4Entry,
+                table | kPresent | kWritable | kUser | kOwnedTable))
+            return fail("[MicaNT Hal] KUSER PML4 allocate/edit failed\r\n");
     }
-
-    auto* pdpt = reinterpret_cast<uint64_t*>(pml4Entry & kPhysicalMask);
     uint64_t& pdptEntry = pdpt[(address >> 30) & 511];
+    uint64_t* pd{};
     if (!(pdptEntry & kPresent)) {
         const uint64_t table = edit.allocateTable();
-        if (!table || !edit.set(pdptEntry,
-                table | kPresent | kWritable | kUser | kOwnedTable)) return false;
+        if (!table || !(pd = edit.mapTable(table)) || !edit.set(pdptEntry,
+                table | kPresent | kWritable | kUser | kOwnedTable))
+            return fail("[MicaNT Hal] KUSER PDPT allocate/edit failed\r\n");
     } else if (pdptEntry & 128) {
-        if (!splitOneGiBMapping(edit, pdptEntry)) return false;
-    } else if (!edit.set(pdptEntry, pdptEntry | kUser | kWritable)) {
-        return false;
+        if (!splitOneGiBMapping(edit, pdptEntry))
+            return fail("[MicaNT Hal] KUSER split 1GiB mapping failed\r\n");
+        pd = edit.mapTable(pdptEntry & kPhysicalMask);
+        if (!pd) return fail("[MicaNT Hal] KUSER split PD alias failed\r\n");
+    } else {
+        pd = edit.mapTable(pdptEntry & kPhysicalMask);
+        if (!pd || !edit.set(pdptEntry, pdptEntry | kUser | kWritable))
+            return fail("[MicaNT Hal] KUSER PDPT permission edit failed\r\n");
     }
 
-    auto* pd = reinterpret_cast<uint64_t*>(pdptEntry & kPhysicalMask);
     uint64_t& pdEntry = pd[(address >> 21) & 511];
+    uint64_t* pt{};
     if (!(pdEntry & kPresent)) {
         const uint64_t table = edit.allocateTable();
-        if (!table || !edit.set(pdEntry,
-                table | kPresent | kWritable | kUser | kOwnedTable)) return false;
+        if (!table || !(pt = edit.mapTable(table)) || !edit.set(pdEntry,
+                table | kPresent | kWritable | kUser | kOwnedTable))
+            return fail("[MicaNT Hal] KUSER PD allocate/edit failed\r\n");
     } else if (pdEntry & 128) {
-        if (!splitTwoMiBMapping(edit, pdEntry)) return false;
-    } else if (!edit.set(pdEntry, pdEntry | kUser | kWritable)) {
-        return false;
+        if (!splitTwoMiBMapping(edit, pdEntry))
+            return fail("[MicaNT Hal] KUSER split 2MiB mapping failed\r\n");
+        pt = edit.mapTable(pdEntry & kPhysicalMask);
+        if (!pt) return fail("[MicaNT Hal] KUSER split PT alias failed\r\n");
+    } else {
+        pt = edit.mapTable(pdEntry & kPhysicalMask);
+        if (!pt || !edit.set(pdEntry, pdEntry | kUser | kWritable))
+            return fail("[MicaNT Hal] KUSER PD permission edit failed\r\n");
     }
 
-    auto* pt = reinterpret_cast<uint64_t*>(pdEntry & kPhysicalMask);
     uint64_t& leaf = pt[(address >> 12) & 511];
     const uint64_t userReadOnlyNoExecute = physical | kPresent | kUser | kNoExecute;
-    if (!edit.set(leaf, userReadOnlyNoExecute)) return false;
+    if (!edit.set(leaf, userReadOnlyNoExecute))
+        return fail("[MicaNT Hal] KUSER leaf edit failed\r\n");
     edit.commit();
     invalidatePage(address);
     uint64_t root = reinterpret_cast<uint64_t>(g_pml4);
     __asm__ __volatile__("movq %0, %%cr3" : : "r"(root) : "memory");
     return true;
+}
+
+bool installKuserKernelAliases(uint64_t backingPhysical, uint64_t rootPhysical) noexcept {
+    if (!bootstrapPagingContext() || g_pml4[(kKuserKernelAlias >> 39) & 511] != 0 ||
+        !backingPhysical || (backingPhysical & 4095) || backingPhysical > kPhysicalMask ||
+        !rootPhysical || (rootPhysical & 4095) || rootPhysical > kPhysicalMask)
+        return false;
+
+    auto& database = micant::mm::PfnDatabase::get();
+    uint64_t pfns[3]{};
+    for (size_t index = 0; index < 3; ++index) {
+        pfns[index] = database.allocatePage(false);
+        if (!pfns[index] || pfns[index] > (kPhysicalMask >> 12)) break;
+        const uint64_t page = pfns[index] << 12;
+        if (!mappedRange(page, 4096, false, true, false) ||
+            walk(reinterpret_cast<uint64_t>(activePagingRoot()), page) != page)
+            break;
+        database.zeroPage(pfns[index]);
+    }
+    if (!pfns[0] || !pfns[1] || !pfns[2] ||
+        pfns[0] > (kPhysicalMask >> 12) || pfns[1] > (kPhysicalMask >> 12) ||
+        pfns[2] > (kPhysicalMask >> 12)) {
+        for (uint64_t pfn : pfns) if (pfn && pfn <= (kPhysicalMask >> 12))
+            database.freePage(pfn);
+        return false;
+    }
+
+    const uint64_t pdptPhysical = pfns[0] << 12;
+    const uint64_t pdPhysical = pfns[1] << 12;
+    const uint64_t ptPhysical = pfns[2] << 12;
+    auto* pdpt = reinterpret_cast<uint64_t*>(pdptPhysical);
+    auto* pd = reinterpret_cast<uint64_t*>(pdPhysical);
+    auto* pt = reinterpret_cast<uint64_t*>(ptPhysical);
+    if (!mappedRange(pdptPhysical, 4096, false, true, false) ||
+        !mappedRange(pdPhysical, 4096, false, true, false) ||
+        !mappedRange(ptPhysical, 4096, false, true, false)) {
+        for (uint64_t pfn : pfns) database.freePage(pfn);
+        return false;
+    }
+    pdpt[0] = pdPhysical | kPresent | kWritable | kOwnedTable;
+    pd[0] = ptPhysical | kPresent | kWritable | kOwnedTable;
+    pt[(kKuserKernelAlias >> 12) & 511] =
+        backingPhysical | kPresent | kWritable | kNoExecute;
+    pt[(kKuserRootAlias >> 12) & 511] =
+        rootPhysical | kPresent | kWritable | kNoExecute;
+    const uint64_t aliasPageTableVa = kKuserKernelAlias + 2 * 4096;
+    pt[(aliasPageTableVa >> 12) & 511] =
+        ptPhysical | kPresent | kWritable | kNoExecute;
+
+    // The hierarchy is fully allocated, zeroed and validated before CR0.WP is
+    // changed. The protected window performs exactly one root entry store.
+    BootstrapWriteProtectWindow writeWindow;
+    if (!writeWindow.valid()) {
+        for (uint64_t pfn : pfns) database.freePage(pfn);
+        return false;
+    }
+    g_pml4[(kKuserKernelAlias >> 39) & 511] =
+        pdptPhysical | kPresent | kWritable | kOwnedTable;
+    writeWindow.restore();
+    invalidatePage(kKuserKernelAlias);
+    invalidatePage(kKuserRootAlias);
+    invalidatePage(aliasPageTableVa);
+    g_kuserAliasPageTable = reinterpret_cast<uint64_t*>(aliasPageTableVa);
+    return walk(reinterpret_cast<uint64_t>(activePagingRoot()), kKuserKernelAlias) ==
+            backingPhysical &&
+        walk(reinterpret_cast<uint64_t>(activePagingRoot()), kKuserRootAlias) == rootPhysical &&
+        walk(reinterpret_cast<uint64_t>(activePagingRoot()), aliasPageTableVa) == ptPhysical &&
+        mappedRange(kKuserKernelAlias, 4096, false, true, false) &&
+        mappedRange(kKuserRootAlias, 4096, false, true, false) &&
+        mappedRange(aliasPageTableVa, 4096, false, true, false);
 }
 
 bool unmapPage(uint64_t address, bool user) noexcept {
@@ -525,7 +706,7 @@ bool unmapPage(uint64_t address, bool user) noexcept {
         tables[level++] = table;
     }
     uint64_t& leaf = table[(address >> 12) & 511];
-    if (!(leaf & kPresent) && !(leaf & kGuardLeaf)) return false;
+    if (!(leaf & (kPresent | kGuardLeaf | kNoAccessLeaf))) return false;
     leaf = 0;
     invalidatePage(address);
     auto& database = micant::mm::PfnDatabase::get();
@@ -533,7 +714,8 @@ bool unmapPage(uint64_t address, bool user) noexcept {
         // Process roots share these supervisor branches. Keep their top-level
         // tables pinned while any process root can still reference them.
         const uint64_t slot = address >> 39;
-        if (level == 1 && g_processPagingRoots && !user && (slot == 129 || slot == 130)) break;
+        if (level == 1 && g_processPagingRoots && !user &&
+            (slot == 129 || slot == 130 || slot == 131)) break;
         --level;
         const uint64_t pfn = (*parents[level] & kPhysicalMask) >> 12;
         *parents[level] = 0;
@@ -646,6 +828,7 @@ extern uint32_t MicantAmd64ExtendedSize;
 // Private Ps hook; it must not enable interrupts, wait or switch threads:
 // the bootstrap page-fault gate currently uses a shared IST stack.
 uint32_t MicantPsResolveUserStackFault(uintptr_t address, uint64_t errorCode, uint64_t savedCs) noexcept;
+uint32_t MicantPsResolveUserCopyOnWrite(uintptr_t address) noexcept;
 bool MicantPsPrepareUserException(uint32_t exceptionCode, uint32_t exceptionVector,
                                   uintptr_t address,
                                   uint64_t* hardwareFrame, uint64_t* savedRegisters,
@@ -688,7 +871,7 @@ void MicantBootstrapInterruptExit(uint64_t* hardwareFrame, uint64_t* savedRegist
     const uint64_t savedCs = hardwareFrame[1];
     if (savedFlags & (uint64_t{1} << 9)) {
         micant::ke::detail::servicePendingDpcs();
-        micant::ke::detail::servicePendingKernelApcs();
+        micant::ke::detail::servicePendingKernelApcs(true);
         if ((savedCs & 3) == 3) {
             micant::ke::detail::serviceUserReturnTermination();
             if (micant::ke::KeGetCurrentIrql() == micant::ke::PASSIVE_LEVEL)
@@ -887,29 +1070,59 @@ uint64_t MicantProbeUserRip = kUserBase;
 uint64_t MicantProbeUserRsp =
     kUserStackBase + sizeof(g_userStack) - 16;
 
+void restoreSyscallUserSegments(const micant::hal::amd64::UserSegmentState& state) noexcept {
+    // SYSCALL's active GS is the entry structure; the user GS base lives in
+    // IA32_KERNEL_GS_BASE until the epilogue SWAPGS. Loading a selector can
+    // replace its hidden base, so restore both the entry and user bases.
+    if (!micant::hal::amd64::bootstrapSyscallGsActive()) __builtin_trap();
+    const uint64_t entryGsBase = micant::cpu::cpuRdmsr(micant::cpu::MSR_GS_BASE);
+    __asm__ __volatile__("movw %0, %%ds; movw %1, %%es; movw %2, %%fs; movw %3, %%gs"
+                         : : "rm"(state.ds), "rm"(state.es), "rm"(state.fs), "rm"(state.gs) : "memory");
+    micant::cpu::cpuWrmsr(micant::cpu::MSR_FS_BASE, state.fsBase);
+    micant::cpu::cpuWrmsr(micant::cpu::MSR_GS_BASE, entryGsBase);
+    micant::cpu::cpuWrmsr(micant::cpu::MSR_KERNEL_GS_BASE, state.userGsBase);
+}
+
 void MicantBootstrapDispatch(SyscallFrame* frame, const void* floatingState) noexcept {
-    using micant::hal::amd64::bootstrapUserRange;
     if (!g_dispatch) {
         if (g_log) g_log("[MicaNT Hal] Bootstrap syscall dispatcher is unset\r\n");
         stopOnTrap();
     }
-    if (!bootstrapUserRange(frame->rip, 1, false, true)) {
-        if (g_log) g_log("[MicaNT Hal] Syscall return address is not user executable\r\n");
+    // A process can unmap or reprotect its own stack and code while a
+    // syscall is active. Canonical user addresses are safe for IRET even if
+    // their pages are absent: the ensuing CPL3 page fault belongs to that
+    // process and must enter its ordinary exception dispatcher. Non-user or
+    // noncanonical control state would fault during IRET in ring 0 instead.
+    constexpr uint64_t highestUserAddress = 0x00007FFFFFFFFFFFULL;
+    if (frame->rip > highestUserAddress || frame->rsp > highestUserAddress ||
+        frame->cs != 0x33 || frame->ss != 0x2b) {
+        auto* current = micant::ke::KeGetCurrentThread();
+        const bool previousUserMode = current && current->previousUserMode;
+        if (current) current->previousUserMode = true;
+        (void)MicantPsTerminateFailedUserException(
+            static_cast<uint32_t>(micant::NtStatus::AccessViolation));
+        if (current) current->previousUserMode = previousUserMode;
+        if (g_log) g_log("[MicaNT Hal] Invalid syscall return frame\r\n");
         stopOnTrap();
     }
-    if (!bootstrapUserRange(frame->rsp, sizeof(uint64_t), true)) {
-        if (g_log) g_log("[MicaNT Hal] Syscall stack pointer is not user writable\r\n");
-        stopOnTrap();
-    }
+    micant::hal::amd64::UserSegmentState userSegments{};
+    __asm__ __volatile__("movw %%ds, %0; movw %%es, %1; movw %%fs, %2; movw %%gs, %3"
+                         : "=rm"(userSegments.ds), "=rm"(userSegments.es),
+                           "=rm"(userSegments.fs), "=rm"(userSegments.gs));
+    userSegments.fsBase = micant::cpu::cpuRdmsr(micant::cpu::MSR_FS_BASE);
+    userSegments.userGsBase = micant::cpu::cpuRdmsr(micant::cpu::MSR_KERNEL_GS_BASE);
     const micant::hal::amd64::UserServiceArguments args{
         frame->rax, frame->r10, frame->rdx, frame->r8, frame->r9, frame->rsp,
         frame, const_cast<void*>(floatingState), MicantAmd64ExtendedSize,
-        MicantAmd64XsaveMask
+        MicantAmd64XsaveMask, &userSegments
     };
     auto* syscallThread = micant::ke::KeGetCurrentThread();
     const bool previousUserMode = syscallThread && syscallThread->previousUserMode;
     if (syscallThread) syscallThread->previousUserMode = true;
     const uint64_t serviceResult = g_dispatch(args);
+    // Some services temporarily load kernel selectors. Recover the actual
+    // entry selectors before constructing an APC or dispatching deferred work.
+    restoreSyscallUserSegments(userSegments);
     const bool continuationApplied =
         serviceResult == micant::hal::amd64::BootstrapNtContinueApplied;
     if (!continuationApplied)
@@ -919,12 +1132,16 @@ void MicantBootstrapDispatch(SyscallFrame* frame, const void* floatingState) noe
     if (g_schedulerClockActive) {
         if (frame->flags & (uint64_t{1} << 9)) micant::ke::detail::servicePendingDpcs();
         micant::ke::detail::dispatchHigherPriority();
-        if (frame->flags & (uint64_t{1} << 9)) micant::ke::detail::servicePendingKernelApcs();
+        if (frame->flags & (uint64_t{1} << 9)) micant::ke::detail::servicePendingKernelApcs(true);
     }
     // Even early bootstrap user contexts may return with IF clear. A pending
     // process termination must be serviced before any return to user mode.
     micant::ke::detail::serviceUserReturnTermination();
-    if ((frame->cs & 3) == 3 && (frame->flags & (uint64_t{1} << 9)) && floatingState &&
+    // A successful first-chance NtRaiseException has already installed its
+    // dispatcher frame. Do not replace that return with a queued user APC.
+    const bool dispatchingRaisedException = continuationApplied &&
+        args.number == MICANT_SSN_NT_RAISE_EXCEPTION;
+    if (!dispatchingRaisedException && (frame->cs & 3) == 3 && (frame->flags & (uint64_t{1} << 9)) && floatingState &&
         micant::ke::KeGetCurrentIrql() == micant::ke::PASSIVE_LEVEL) {
         uint64_t hardwareFrame[5]{frame->rip, frame->cs, frame->flags, frame->rsp, frame->ss};
         uint64_t savedRegisters[15]{
@@ -960,6 +1177,9 @@ void MicantBootstrapDispatch(SyscallFrame* frame, const void* floatingState) noe
         frame->flags = (frame->flags & (g_schedulerClockActive ? 0xED5 : 0xCD5)) | 2;
     }
     if (syscallThread) syscallThread->previousUserMode = previousUserMode;
+    // Kernel callbacks may have switched threads; reestablish the captured
+    // or NtContinue-selected user state before the epilogue performs SWAPGS.
+    restoreSyscallUserSegments(userSegments);
 }
 
 __attribute__((naked)) void MicantBootstrapSyscallEntry() {
@@ -1010,12 +1230,17 @@ void MicantSyscallClientProgram() {
     auto* qpcFrequency = reinterpret_cast<volatile int64_t*>(clockData + 2);
     const uint64_t firstTimeStatus = micant::sys::invokeUserService(0x47,
         reinterpret_cast<uint64_t>(systemTime));
+    clockData[3] = firstTimeStatus;
+    __asm__ __volatile__("movq %%r8, %0" : "=m"(clockData[5]) : : "memory");
+    const uint64_t firstQpcStatus = micant::sys::invokeUserService(0x31,
+        reinterpret_cast<uint64_t>(qpcCounter),
+        reinterpret_cast<uint64_t>(qpcFrequency));
+    clockData[4] = firstQpcStatus;
+    __asm__ __volatile__("movq %%r8, %0" : "=m"(clockData[6]) : : "memory");
     const bool systemTimeReady = firstTimeStatus == 0;
     if ((!systemTimeReady && firstTimeStatus != 0xC00000A3ULL) ||
         (systemTimeReady && *systemTime <= 0) ||
-        micant::sys::invokeUserService(0x31,
-            reinterpret_cast<uint64_t>(qpcCounter),
-            reinterpret_cast<uint64_t>(qpcFrequency)) != 0 ||
+        firstQpcStatus != 0 ||
         *qpcCounter <= 0 || *qpcFrequency < 1'000'000 ||
         *qpcFrequency > 1'000'000'000'000LL) __builtin_trap();
     const int64_t firstSystemTime = *systemTime;
@@ -1079,9 +1304,7 @@ void MicantSyscallClientProgram() {
             ? actual100ns - expected100ns : expected100ns - actual100ns;
         if (error100ns > expected100ns / 20 + 50'000) __builtin_trap();
     }
-
     auto* video = reinterpret_cast<micant::um::UserVideoInfo64*>(kUserBase + 4096);
-    auto* message = reinterpret_cast<char*>(kUserBase + 4096 + 64);
     if (micant::sys::invokeUserService(0x80, reinterpret_cast<uint64_t>(video)) ||
         video->width != 1024 || video->height != 768 || video->physicalBase) {
         __builtin_trap();
@@ -1159,6 +1382,7 @@ void MicantSyscallClientProgram() {
         request->result != 1) {
         __builtin_trap();
     }
+    auto* message = reinterpret_cast<char*>(kUserBase + 4096 + 64);
     message[0] = 'C'; message[1] = 'P'; message[2] = 'L';
     message[3] = '3'; message[4] = '\r'; message[5] = '\n';
     if (micant::sys::invokeUserService(0x25, reinterpret_cast<uint64_t>(message), 6)) {
@@ -1192,8 +1416,9 @@ void MicantSyscallClientProgram() {
         setEvent(event, reinterpret_cast<int32_t*>(1)) != static_cast<int32_t>(0xc0000005u) ||
         wait(event, 0, reinterpret_cast<int64_t*>(1)) != static_cast<int32_t>(0xc0000005u) ||
         wait(event, 0, nullptr) != static_cast<int32_t>(0xc0000002u) ||
-        wait(event, 0, &poll) != 0x102 || setEvent(event, &previous) || previous != 0 ||
-        wait(event, 0, &poll) || wait(event, 0, &poll) != 0x102 ||
+        wait(event, 0, &poll) != static_cast<int32_t>(0xc0000002u) ||
+        setEvent(event, &previous) || previous != 0 ||
+        wait(event, 0, &poll) != static_cast<int32_t>(0xc0000002u) ||
         close(event) || setEvent(event, nullptr) != static_cast<int32_t>(0xc0000008u)) __builtin_trap();
     void* section{};
     void* first{};
@@ -1446,6 +1671,19 @@ bool MicantDispatchBootstrapPageFault(uint64_t* frame, uint64_t* savedRegisters,
         return false;
     uintptr_t address{};
     __asm__ __volatile__("movq %%cr2, %0" : "=r"(address));
+    // User write to a present, write-protected image page may be a COW
+    // request. Resolve it before stack growth or exception dispatch.
+    if ((frame[0] & 0x1f) == 0x07) {
+        const auto cowStatus = static_cast<micant::NtStatus>(MicantPsResolveUserCopyOnWrite(address));
+        if (cowStatus == micant::NtStatus::Success) return true;
+        if (cowStatus != micant::NtStatus::AccessViolation) {
+            const auto code = static_cast<uint32_t>(cowStatus);
+            if (MicantPsPrepareUserException(code, 14, address, frame, savedRegisters, floatingState))
+                return true;
+            (void)MicantPsTerminateFailedUserException(code);
+            return false;
+        }
+    }
     const auto resolved = static_cast<micant::NtStatus>(
         MicantPsResolveUserStackFault(address, frame[0], frame[2]));
     if (resolved == micant::NtStatus::Success) return true;
@@ -1512,6 +1750,21 @@ uint32_t mapFloatingPointException(uint64_t vector, const void* floatingState) n
 bool MicantDispatchBootstrapException(uint64_t* frame, uint64_t* savedRegisters,
                                       const void* floatingState, uint64_t vector) noexcept {
     if (vector == 3 && g_ring3ProbeActive) MicantProbeTrap(frame + 1);
+    if (vector == 6 && g_probeMode == 6) {
+        const auto* data = reinterpret_cast<volatile const uint64_t*>(kUserBase + 4096 + 512);
+        logTrapValue("[MicaNT DBG] time status=0x", data[3]);
+        logTrapValue("[MicaNT DBG] qpc status=0x", data[4]);
+        logTrapValue("[MicaNT DBG] r8=0x", savedRegisters[7]);
+        logTrapValue("[MicaNT DBG] rax=0x", savedRegisters[14]);
+        logTrapValue("[MicaNT DBG] rcx=0x", savedRegisters[13]);
+        logTrapValue("[MicaNT DBG] rsi=0x", savedRegisters[9]);
+        logTrapValue("[MicaNT DBG] flags=0x", frame[3]);
+        logTrapValue("[MicaNT DBG] r8 before qpc=0x", data[5]);
+        logTrapValue("[MicaNT DBG] r8 after qpc=0x", data[6]);
+        logTrapValue("[MicaNT DBG] time=0x", data[0]);
+        logTrapValue("[MicaNT DBG] qpc=0x", data[1]);
+        logTrapValue("[MicaNT DBG] frequency=0x", data[2]);
+    }
     if (g_probeMode || (frame[2] & 3) != 3 ||
         micant::ke::KeGetCurrentIrql() != micant::ke::PASSIVE_LEVEL) return false;
     uint32_t code{};
@@ -1731,13 +1984,18 @@ __attribute__((naked)) void MicantProbeEnter() {
         "movw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
         "pushq $0x2b\n"
         "movq MicantProbeUserRsp(%rip), %rax\npushq %rax\n"
-        "pushq $2\npushq $0x33\n"
+        // The native time probe must observe clock interrupts while it waits
+        // for KUSER tick advancement. Keep isolated privilege probes with IF
+        // clear so their expected fault frames remain deterministic.
+        "movl $2, %eax\ncmpb $0, g_ring3ClockProbeActive(%rip)\nje 1f\norl $0x200, %eax\n1: pushq %rax\n"
+        "pushq $0x33\n"
         "movq MicantProbeUserRip(%rip), %rax\npushq %rax\niretq\n"
     );
 }
 }
 
 namespace micant::hal::amd64 {
+
 
 PciBarProbeResult probeQuiescentPciBar(uint16_t bus, uint16_t device,
                                       uint16_t function, uint8_t index,
@@ -1867,6 +2125,25 @@ bool bootstrapSyscallGsActive() noexcept {
     return g_dispatch && cpu::cpuRdmsr(cpu::MSR_GS_BASE) == reinterpret_cast<uintptr_t>(&g_syscallCpu);
 }
 
+void saveBootstrapThreadSegments(ThreadSegmentState& state, bool syscallGsActive) noexcept {
+    __asm__ __volatile__("movw %%ds, %0; movw %%es, %1; movw %%fs, %2; movw %%gs, %3"
+                         : "=rm"(state.ds), "=rm"(state.es), "=rm"(state.fs), "=rm"(state.gs));
+    state.fsBase = cpu::cpuRdmsr(cpu::MSR_FS_BASE);
+    state.userGsBase = cpu::cpuRdmsr(syscallGsActive ? cpu::MSR_KERNEL_GS_BASE : cpu::MSR_GS_BASE);
+    state.saved = true;
+}
+
+void restoreBootstrapThreadSegments(const ThreadSegmentState& state) noexcept {
+    // KiSwapContext holds IF clear. Loading GS can replace its active base;
+    // keep that base valid until setBootstrapThreadEntryStack installs the
+    // incoming thread's user/syscall GS pair immediately afterward.
+    const uint64_t currentGsBase = cpu::cpuRdmsr(cpu::MSR_GS_BASE);
+    __asm__ __volatile__("movw %0, %%ds; movw %1, %%es; movw %2, %%fs; movw %3, %%gs"
+                         : : "rm"(state.ds), "rm"(state.es), "rm"(state.fs), "rm"(state.gs) : "memory");
+    cpu::cpuWrmsr(cpu::MSR_FS_BASE, state.saved ? state.fsBase : 0);
+    cpu::cpuWrmsr(cpu::MSR_GS_BASE, currentGsBase);
+}
+
 bool bootstrapStackHasHeadroom(uintptr_t stackPointer, uintptr_t threadBase,
                                uintptr_t threadTop, size_t required) noexcept {
     uintptr_t base = threadBase;
@@ -1923,22 +2200,37 @@ extern "C" __attribute__((naked, noreturn)) void MicantEnterBootstrapUserThread(
         "movq 40(%rsp), %r11\nmovw $0x2b, %ax\nmovw %ax, %ds\nmovw %ax, %es\n"
         "pushq $0x2b\npushq %rdx\nmovq $2, %rax\ntestb %r8b, %r8b\njz 1f\n"
         "orq $0x200, %rax\n1: pushq %rax\npushq $0x33\npushq %rcx\n"
-        "testq %r9, %r9\njz 2f\nmovq %r9, %rcx\nmovq %r11, %rdx\n"
+        // Pass even a null start routine through to RtlUserThreadStart. It
+        // must fault as a user callback, not accidentally call the entry
+        // trampoline recursively with RCX still holding the trampoline VA.
+        "movq %r9, %rcx\nmovq %r11, %rdx\n"
         "xorq %rax, %rax\nxorq %rbx, %rbx\nxorq %rbp, %rbp\n"
         "xorq %rsi, %rsi\nxorq %rdi, %rdi\nxorq %r8, %r8\nxorq %r9, %r9\n"
         "xorq %r10, %r10\nxorq %r11, %r11\nxorq %r12, %r12\nxorq %r13, %r13\n"
-        "xorq %r14, %r14\nxorq %r15, %r15\n2: iretq\n");
+        "xorq %r14, %r14\nxorq %r15, %r15\niretq\n");
 }
 
 [[noreturn]] void enterBootstrapUserThread(uintptr_t entry, uintptr_t userStack, bool interruptible,
                                             uintptr_t startRoutine, uintptr_t startArgument) noexcept {
+    // No scheduling transition may invalidate the idle-thread invariant
+    // between this check and iret; iret installs the requested user IF.
+    __asm__ __volatile__("cli" : : : "memory");
     const auto* thread = ke::KeGetCurrentThread();
-    if (!g_dispatch || (interruptible && !MicantTimerPreemptionEnabled) ||
+    const auto* idle = ke::g_CurrentCpu.idleThread;
+    if (!g_dispatch || (interruptible &&
+        (!g_schedulerClockActive || !MicantTimerPreemptionEnabled || !idle || idle == thread ||
+         idle->readyQueued || (idle->state != ke::ThreadState::Initialized &&
+                               idle->state != ke::ThreadState::Ready))) ||
         !thread || !thread->owningProcess || !thread->kernelStackTop ||
-        g_syscallCpu.kernelRsp != thread->kernelStackTop || userStack < 8 ||
-        !bootstrapUserRange(entry, 1, false, true) || !bootstrapUserRange(userStack - 8, 8, true))
+        g_syscallCpu.kernelRsp != thread->kernelStackTop ||
+        entry < um::MM_LOWEST_USER_ADDRESS || entry > um::MM_HIGHEST_USER_ADDRESS ||
+        userStack < um::MM_LOWEST_USER_ADDRESS + 8 || userStack > um::MM_HIGHEST_USER_ADDRESS ||
+        (thread->tebAddress && (thread->tebAddress < um::MM_LOWEST_USER_ADDRESS ||
+                                thread->tebAddress > um::MM_HIGHEST_USER_ADDRESS)))
         __builtin_trap();
-    if (thread->tebAddress && !bootstrapUserRange(thread->tebAddress, 1, true)) __builtin_trap();
+    // The user process may unmap or reprotect the entry, stack or TEB after
+    // creation. Keep those races on the ordinary CPL3 exception path; only
+    // corrupted kernel bookkeeping and non-user addresses are invariants.
     cpu::cpuWrmsr(cpu::MSR_GS_BASE, thread->tebAddress);
     MicantEnterBootstrapUserThread(entry, userStack, interruptible, startRoutine, startArgument);
 }
@@ -1972,8 +2264,36 @@ bool initializeBootstrapAddressSpace(void (*log)(const char*) noexcept) noexcept
     return true;
 }
 
+namespace {
+inline void dbgSerialWrite(const char* text) noexcept {
+    for (size_t i = 0; text[i] != '\0'; ++i) {
+        uint8_t status{};
+        for (uint32_t wait = 0; wait < 1000000; ++wait) {
+            __asm__ __volatile__("inb %1, %0" : "=a"(status) : "Nd"(uint16_t{0x3FD}) : "memory");
+            if (status & 0x20) break;
+            __asm__ __volatile__("pause");
+        }
+        uint8_t value = static_cast<uint8_t>(text[i]);
+        __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(uint16_t{0x3F8}) : "memory");
+    }
+}
+inline void dbgSerialWriteHexU64(uint64_t value) noexcept {
+    constexpr char kHex[] = "0123456789ABCDEF";
+    char buffer[17]{};
+    for (int i = 15; i >= 0; --i) { buffer[i] = kHex[value & 0xF]; value >>= 4; }
+    dbgSerialWrite(buffer);
+}
+}
+
 ProcessPagingRoot::~ProcessPagingRoot() {
-    if (pfn || next) __builtin_trap();
+    if (pfn || next) {
+        dbgSerialWrite("[MicaNT DBG] ~ProcessPagingRoot trap this=");
+        dbgSerialWriteHexU64(reinterpret_cast<uintptr_t>(this));
+        dbgSerialWrite(" pfn=");
+        dbgSerialWriteHexU64(pfn);
+        dbgSerialWrite("\r\n");
+        __builtin_trap();
+    }
 }
 
 static void reclaimUnusedSharedRootSlots() noexcept {
@@ -2175,12 +2495,19 @@ bool mapBootstrapManagedPage(void* context, uintptr_t address, uint64_t pfn,
         (address & mm::PageMask4KB) || !pfn ||
         pfn > (kPhysicalMask >> mm::PageShift4KB) ||
         (protection != mm::PAGE_READWRITE && protection != mm::PAGE_READONLY &&
-         protection != mm::PAGE_EXECUTE_READ)) {
+         protection != mm::PAGE_EXECUTE_READ && protection != mm::PAGE_EXECUTE_READWRITE &&
+         protection != mm::PAGE_NOACCESS)) {
         return false;
     }
-    return mapPage(address, pfn << mm::PageShift4KB, kUser |
-                   (protection == mm::PAGE_EXECUTE_READ ? 0 : kNoExecute) |
-                   (protection == mm::PAGE_READWRITE ? kWritable : 0));
+    if (!mapPage(address, pfn << mm::PageShift4KB, kUser |
+                   ((protection == mm::PAGE_EXECUTE_READ || protection == mm::PAGE_EXECUTE_READWRITE) ? 0 : kNoExecute) |
+                   ((protection == mm::PAGE_READWRITE || protection == mm::PAGE_EXECUTE_READWRITE) ? kWritable : 0))) return false;
+    if (protection == mm::PAGE_NOACCESS &&
+        !mapBootstrapProtectManagedPage(context, address, protection)) {
+        if (!unmapPage(address, true)) __builtin_trap();
+        return false;
+    }
+    return true;
 }
 
 static bool mapBootstrapManagedViewImpl(void* context, uintptr_t address, const uint64_t* pfns,
@@ -2330,13 +2657,43 @@ bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept {
     return unmapPage(address, true);
 }
 
+bool replaceBootstrapManagedPage(void* context, uintptr_t address, uint64_t expectedPfn,
+                                 uint64_t replacementPfn, uint32_t protection) noexcept {
+    if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
+        address - BootstrapManagedBase >= BootstrapManagedSize || (address & mm::PageMask4KB) ||
+        !expectedPfn || !replacementPfn || replacementPfn > (kPhysicalMask >> mm::PageShift4KB) ||
+        (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE &&
+         protection != mm::PAGE_EXECUTE_READ && protection != mm::PAGE_EXECUTE_READWRITE &&
+         protection != mm::PAGE_NOACCESS) ||
+        isProtectedIommuPhysicalPage(replacementPfn << mm::PageShift4KB)) return false;
+    uint64_t* table = activePagingRoot();
+    for (int shift = 39; shift > 12; shift -= 9) {
+        const uint64_t entry = table[(address >> shift) & 511];
+        if (!(entry & kPresent) || !(entry & kOwnedTable) || (entry & 128) ||
+            !(entry & kUser) || !(entry & kWritable) || (entry & kNoExecute)) return false;
+        table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
+    }
+    uint64_t& leaf = table[(address >> 12) & 511];
+    if (!(leaf & (kPresent | kNoAccessLeaf)) || !(leaf & kUser) || (leaf & kGuardLeaf) ||
+        ((leaf & kPhysicalMask) >> mm::PageShift4KB) != expectedPfn) return false;
+    const bool writable = protection == mm::PAGE_READWRITE || protection == mm::PAGE_EXECUTE_READWRITE;
+    const bool executable = protection == mm::PAGE_EXECUTE_READ || protection == mm::PAGE_EXECUTE_READWRITE;
+    const auto pte = mm::PageTableEntry::create(replacementPfn, true, writable, !executable);
+    leaf = protection == mm::PAGE_NOACCESS
+        ? ((pte.value & ~(kPresent | kWritable)) | kNoAccessLeaf | kNoExecute)
+        : pte.value;
+    invalidatePage(address);
+    return true;
+}
+
 bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
                                     uint32_t protection) noexcept {
     if (!pagingContextMatches(context) || address < BootstrapManagedBase ||
         address - BootstrapManagedBase >= BootstrapManagedSize ||
         (address & mm::PageMask4KB) ||
         (protection != mm::PAGE_READONLY && protection != mm::PAGE_READWRITE &&
-         protection != mm::PAGE_EXECUTE_READ)) {
+         protection != mm::PAGE_EXECUTE_READ && protection != mm::PAGE_EXECUTE_READWRITE &&
+         protection != mm::PAGE_NOACCESS)) {
         return false;
     }
     uint64_t* table = activePagingRoot();
@@ -2349,9 +2706,18 @@ bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
         table = reinterpret_cast<uint64_t*>(entry & kPhysicalMask);
     }
     uint64_t& leaf = table[(address >> 12) & 511];
-    if (!(leaf & kPresent) || !(leaf & kUser)) return false;
-    leaf = protection == mm::PAGE_READWRITE ? leaf | kWritable : leaf & ~kWritable;
-    leaf = protection == mm::PAGE_EXECUTE_READ ? leaf & ~kNoExecute : leaf | kNoExecute;
+    if (!(leaf & kUser) || (leaf & kGuardLeaf) ||
+        !(leaf & (kPresent | kNoAccessLeaf))) return false;
+    if (protection == mm::PAGE_NOACCESS) {
+        leaf = (leaf & ~(kPresent | kWritable)) | kNoAccessLeaf | kNoExecute;
+        invalidatePage(address);
+        return true;
+    }
+    leaf = (leaf | kPresent) & ~kNoAccessLeaf;
+    leaf = (protection == mm::PAGE_READWRITE || protection == mm::PAGE_EXECUTE_READWRITE)
+        ? leaf | kWritable : leaf & ~kWritable;
+    leaf = (protection == mm::PAGE_EXECUTE_READ || protection == mm::PAGE_EXECUTE_READWRITE)
+        ? leaf & ~kNoExecute : leaf | kNoExecute;
     invalidatePage(address);
     return true;
 }
@@ -2702,24 +3068,38 @@ bool verifyNativeImageLoading() noexcept {
     }
     MicantProbeUserRip = imageBase + 4096;
     g_probeMode = 6;
+    g_ring3ClockProbeActive = true;
     g_probeSucceeded = false;
     g_probeReturnRip = imageBase + 4096 + 16 + breakpointOffset + 1;
     const size_t activeBefore = mm::PfnDatabase::get().getActiveCount();
     MicantProbeEnter();
     if (g_log) g_log("[MicaNT Hal] CPL3 syscall probe returned to kernel\r\n");
+    g_ring3ClockProbeActive = false;
     MicantProbeUserRip = kUserBase;
     __asm__ __volatile__(
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
         : : : "rax", "memory"
     );
-    return g_probeSucceeded && mm::PfnDatabase::get().getActiveCount() == activeBefore;
+    uint64_t savedFlags{};
+    __asm__ __volatile__("pushfq; popq %0; sti" : "=r"(savedFlags) : : "memory");
+    const uint64_t cleanupStart = bootstrapSchedulerClockTicks();
+    for (size_t spin = 0; spin < 50000000 && io::IoDeferredFileDeletesPending() &&
+         bootstrapSchedulerClockTicks() - cleanupStart < 100; ++spin)
+        __asm__ __volatile__("pause");
+    __asm__ __volatile__("cli" : : : "memory");
+    const bool cleanupPending = io::IoDeferredFileDeletesPending();
+    if (savedFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    logTrapValue("[MicaNT DBG] native PFN before=0x", activeBefore);
+    logTrapValue("[MicaNT DBG] native PFN after=0x", mm::PfnDatabase::get().getActiveCount());
+    return g_probeSucceeded && !cleanupPending && mm::PfnDatabase::get().getActiveCount() == activeBefore;
 }
 
 // Walk every existing leaf, including large pages, before making the IOMMU
 // owner's mapping exclusive. Missing/inaccessible page tables fail closed.
 static bool hasOnlyOwnerIommuMapping(uint64_t root, uint64_t tablePhysical,
                                      unsigned level, uint64_t virtualBase,
-                                     uint64_t first, uint64_t last, uint64_t ownerPage) noexcept {
+                                     uint64_t first, uint64_t last, uint64_t ownerPage,
+                                     bool userAccessible = true) noexcept {
     if (!tablePhysical || walk(root, tablePhysical) != tablePhysical ||
         !mappedRange(tablePhysical, 4096, false, false, false)) return false;
     const auto* table = reinterpret_cast<const uint64_t*>(tablePhysical);
@@ -2758,6 +3138,8 @@ bool protectBootstrapIommuRegisters(uint64_t physical, size_t size,
         return false;
     const auto owner = reinterpret_cast<uint64_t>(ownerMapping);
     if (walk(reinterpret_cast<uint64_t>(g_pml4), owner) != physical ||
+        // Firmware's supervisor-only identity map may cover this MMIO page
+        // with a large leaf; it is not a user-accessible alias.
         !hasOnlyOwnerIommuMapping(reinterpret_cast<uint64_t>(g_pml4),
                                   reinterpret_cast<uint64_t>(g_pml4), 4, 0,
                                   physical, physical + 4095, owner)) return false;
@@ -2950,14 +3332,13 @@ static bool verifyBootstrapPreemption() noexcept {
     const auto previous = KfRaiseIrql(DISPATCH_LEVEL);
     const uint64_t switches = g_CurrentCpu.contextSwitches;
     boot->priority = PRIORITY_REALTIME_MAX;
-    MicantTimerTicks = 0;
+    const bool preemptionWasEnabled = MicantTimerPreemptionEnabled;
     MicantTimerBootThread = boot;
     MicantTimerBootQueued = false;
-    MicantTimerBootDeadline = 24;
-    MicantTimerDispatchFailed = false;
+    MicantTimerBootDeadline = MicantTimerTicks + 24;
     MicantTimerPreemptionEnabled = true;
     const bool switched = KiSwapContext(boot, &first);
-    MicantTimerPreemptionEnabled = false;
+    MicantTimerPreemptionEnabled = preemptionWasEnabled;
     MicantTimerBootThread = nullptr;
     boot->priority = originalPriority;
     KeLowerIrql(previous);
@@ -3001,6 +3382,38 @@ static bool verifyClockIrqlMask(BootstrapLocalApic& apic) noexcept {
         blocked && MicantTimerTicks > before;
 }
 
+static bool verifyClockInterruptDelivery(BootstrapLocalApic& apic) noexcept {
+    const uint64_t before = MicantTimerTicks;
+    __asm__ __volatile__("sti" : : : "memory");
+    ke::SpinLock lock;
+    const ke::KIRQL oldIrql = lock.acquire();
+    ke::SpinLock nested;
+    const ke::KIRQL nestedIrql = nested.acquire();
+    nested.release(nestedIrql);
+    uint64_t lockedFlags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(lockedFlags));
+    const uint64_t beforeLockedWait = MicantTimerTicks;
+    for (size_t spin = 0; spin < 200000; ++spin) __asm__ __volatile__("pause");
+    const bool lockMaskedInterrupts = !(lockedFlags & (uint64_t{1} << 9)) &&
+        MicantTimerTicks == beforeLockedWait;
+    lock.release(oldIrql);
+    uint64_t releasedFlags{};
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(releasedFlags));
+    const bool irqlMaskedClock = verifyClockIrqlMask(apic);
+    for (size_t spin = 0; spin < 50000000 && MicantTimerTicks - before < 3; ++spin)
+        __asm__ __volatile__("pause");
+    __asm__ __volatile__("cli" : : : "memory");
+    const bool delivered = MicantTimerTicks - before >= 3;
+    const bool success = lockMaskedInterrupts && irqlMaskedClock && delivered &&
+        (releasedFlags & (uint64_t{1} << 9));
+    if (!success) {
+        logTrapValue("[MicaNT Hal] Timer lock masked=0x", lockMaskedInterrupts);
+        logTrapValue("[MicaNT Hal] Timer IRQL masked=0x", irqlMaskedClock);
+        logTrapValue("[MicaNT Hal] Timer delivered=0x", delivered);
+    }
+    return success;
+}
+
 static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
     if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext() ||
         !ke::MicantAmd64ConfigureExtendedState()) {
@@ -3012,6 +3425,22 @@ static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
     if (current.base != reinterpret_cast<uint64_t>(g_idt) || current.limit != sizeof(g_idt) - 1) {
         if (g_log) g_log("[MicaNT Hal] Timer diagnostic bootstrap IDT is not active\r\n");
         return false;
+    }
+    if (g_schedulerClockActive) {
+        if (!g_timerApic.available() || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL ||
+            g_timerApic[0x320 / 4] != (0xd1 | (1u << 17)) ||
+            g_timerApic[0x380 / 4] != g_schedulerTimerPeriod ||
+            MicantTimerDispatchFailed) return false;
+        // The live clock owns its APIC and monotonic ticks; do not reset either.
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        const uint64_t before = MicantTimerTicks;
+        const bool success = verifyClockInterruptDelivery(g_timerApic) &&
+            (!verifyScheduling || (verifyBootstrapPreemption() && MicantTestPsUserPreemption())) &&
+            MicantTimerTicks > before && !MicantTimerDispatchFailed;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        if (!success && g_log) g_log("[MicaNT Hal] Live scheduler clock diagnostic failed\r\n");
+        return success;
     }
     uint32_t eax = 1, ebx{}, ecx{}, edx{};
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
@@ -3077,26 +3506,7 @@ static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
     apic[0x3e0 / 4] = 0xb; // Divide by one; the test does not infer a frequency.
     apic[0x320 / 4] = 0xd1 | (1u << 17); // Periodic, unmasked.
     apic[0x380 / 4] = 100000;
-    __asm__ __volatile__("sti" : : : "memory");
-    ke::SpinLock lock;
-    const ke::KIRQL oldIrql = lock.acquire();
-    ke::SpinLock nested;
-    const ke::KIRQL nestedIrql = nested.acquire();
-    nested.release(nestedIrql);
-    uint64_t lockedFlags{};
-    __asm__ __volatile__("pushfq; popq %0" : "=r"(lockedFlags));
-    const uint64_t beforeLockedWait = MicantTimerTicks;
-    for (size_t spin = 0; spin < 200000; ++spin) __asm__ __volatile__("pause");
-    const bool lockMaskedInterrupts = !(lockedFlags & (uint64_t{1} << 9)) &&
-        MicantTimerTicks == beforeLockedWait;
-    lock.release(oldIrql);
-    uint64_t releasedFlags{};
-    __asm__ __volatile__("pushfq; popq %0" : "=r"(releasedFlags));
-    const bool irqlMaskedClock = verifyClockIrqlMask(apic);
-    for (size_t spin = 0; spin < 50000000 && MicantTimerTicks < 3; ++spin)
-        __asm__ __volatile__("pause");
-    __asm__ __volatile__("cli" : : : "memory");
-    const bool timerDelivered = MicantTimerTicks >= 3;
+    const bool timerDelivered = verifyClockInterruptDelivery(apic);
     bool preemptionVerified = false;
     bool userPreemption = false;
     if (verifyScheduling) {
@@ -3120,8 +3530,7 @@ static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
             __asm__ __volatile__("pause");
         __asm__ __volatile__("cli" : : : "memory");
     }
-    const bool success = lockMaskedInterrupts && irqlMaskedClock &&
-        (releasedFlags & (uint64_t{1} << 9)) && timerDelivered &&
+    const bool success = timerDelivered &&
         (!verifyScheduling || (preemptionVerified && userPreemption)) &&
         !(apic[timerIrr] & timerBit);
     apic[0x3e0 / 4] = savedDivide;
@@ -3145,8 +3554,6 @@ static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
     g_timerApic.initialize(nullptr, false);
     if (!success) {
         logTrapValue("[MicaNT Hal] Timer ticks=0x", MicantTimerTicks);
-        logTrapValue("[MicaNT Hal] Timer lock masked=0x", lockMaskedInterrupts);
-        logTrapValue("[MicaNT Hal] Timer IRQL masked=0x", irqlMaskedClock);
         logTrapValue("[MicaNT Hal] Timer delivered=0x", timerDelivered);
         logTrapValue("[MicaNT Hal] Timer scheduling verified=0x", preemptionVerified);
         logTrapValue("[MicaNT Hal] Timer user preemption=0x", userPreemption);
@@ -3345,36 +3752,64 @@ static bool calibrateBootstrapApic(BootstrapLocalApic& apic, uint32_t& period) n
 
 bool startBootstrapSchedulerClock() noexcept {
     if (g_schedulerClockActive || !g_dispatch || !bootstrapPagingContext() ||
-        !ke::KeGetCurrentThread()) return false;
+        !ke::KeGetCurrentThread()) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: bootstrap scheduler context unavailable\r\n");
+        return false;
+    }
     uint64_t flags{};
     Idtr current{};
     __asm__ __volatile__("pushfq; popq %0; sidt %1"
                          : "=r"(flags), "=m"(current));
-    if ((flags & (uint64_t{1} << 9)) || current.base != reinterpret_cast<uint64_t>(g_idt) ||
-        !ke::MicantAmd64ConfigureExtendedState()) return false;
+    if (flags & (uint64_t{1} << 9)) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: interrupts enabled during setup\r\n");
+        return false;
+    }
+    if (current.base != reinterpret_cast<uint64_t>(g_idt)) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: bootstrap IDT is not active\r\n");
+        return false;
+    }
+    if (!ke::MicantAmd64ConfigureExtendedState()) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: extended processor state unavailable\r\n");
+        return false;
+    }
     // Prefer invariant TSC when the platform supplies one. The calibrated
     // APIC timer below remains a real monotonic clock source if it does not.
     (void)initializeBootstrapHighResolutionClock();
     uint32_t eax = 1, ebx{}, ecx{}, edx{};
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
-    if (!(edx & (1u << 9))) return false;
+    if (!(edx & (1u << 9))) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: local APIC unsupported\r\n");
+        return false;
+    }
     const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
     const bool x2 = (apicBase & (1u << 10)) != 0;
-    if (!(apicBase & (1u << 11)) || (x2 && !(ecx & (1u << 21)))) return false;
+    if (!(apicBase & (1u << 11)) || (x2 && !(ecx & (1u << 21)))) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: local APIC mode unavailable\r\n");
+        return false;
+    }
     auto* mapping = x2 ? nullptr : static_cast<volatile uint32_t*>(
         mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
     g_timerApic.initialize(mapping, x2);
     auto& apic = g_timerApic;
     if (!apic.available() || ((apic[0x30 / 4] >> 16) & 0xff) < 5 ||
-        !(apic[0x320 / 4] & (1u << 16))) return false;
+        !(apic[0x320 / 4] & (1u << 16))) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: local APIC timer unavailable\r\n");
+        return false;
+    }
     uint32_t interval{};
-    if (!calibrateBootstrapApic(apic, interval)) return false;
+    if (!calibrateBootstrapApic(apic, interval)) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: local APIC timer calibration failed\r\n");
+        return false;
+    }
     g_schedulerTimerPeriod = interval;
     // Idle outlives every process; never retain the caller's disposable CR3.
     g_bootstrapIdleThread.directoryTableBase = bootstrapKernelPagingRoot();
     g_bootstrapIdleThread.priority = ke::PRIORITY_IDLE;
     if (!ke::detail::prepareBootstrapThread(g_bootstrapIdleThread, g_bootstrapIdleStack,
-            sizeof(g_bootstrapIdleStack), bootstrapIdle, nullptr)) return false;
+            sizeof(g_bootstrapIdleStack), bootstrapIdle, nullptr)) {
+        if (g_log) g_log("[MicaNT Hal] Clock start rejected: idle thread setup failed\r\n");
+        return false;
+    }
 
     // Only the clock vector is routed in this bootstrap configuration.
     __asm__ __volatile__("outb %0, $0x21; outb %0, $0xa1" : : "a"(uint8_t{0xff}));
@@ -3753,15 +4188,17 @@ BootstrapRtcStatus readBootstrapRtc(
 }
 
 micant::KUserSharedData* bootstrapKuserSharedData() noexcept {
-    return reinterpret_cast<micant::KUserSharedData*>(g_kuserSharedPage);
+    const uintptr_t address = g_kuserKernelAliasReady
+        ? static_cast<uintptr_t>(kKuserKernelAlias)
+        : reinterpret_cast<uintptr_t>(g_kuserSharedPage);
+    return reinterpret_cast<micant::KUserSharedData*>(address);
 }
 
 BootstrapClockStatus updateBootstrapKuserSharedData() noexcept {
     if (!g_kuserSharedMappingReady) return BootstrapClockStatus::ClockUnavailable;
     uint64_t uptime{}, systemTime{};
     const auto uptimeStatus = queryBootstrapUptime(uptime);
-    if (uptimeStatus != BootstrapClockStatus::Success) return uptimeStatus;
-    const auto timeStatus = queryBootstrapSystemTime(systemTime);
+    if (uptimeStatus != BootstrapClockStatus::Success) return uptimeStatus;    const auto timeStatus = queryBootstrapSystemTime(systemTime);
     auto* shared = bootstrapKuserSharedData();
     if (timeStatus == BootstrapClockStatus::Success) {
         const uint32_t high = static_cast<uint32_t>(systemTime >> 32);
@@ -3772,6 +4209,15 @@ BootstrapClockStatus updateBootstrapKuserSharedData() noexcept {
         shared->systemTimeLow = static_cast<uint32_t>(systemTime);
         std::atomic_thread_fence(std::memory_order_release);
         shared->systemTimeHigh1 = static_cast<int32_t>(high);
+    } else if (timeStatus == BootstrapClockStatus::ClockUnavailable) {
+        // Do not leave a stale wall clock visible when UTC has no valid seed.
+        // Preserve the KSYSTEM_TIME high/low/high reader contract even while
+        // transitioning back to the unavailable state.
+        shared->systemTimeHigh2 = 0;
+        std::atomic_thread_fence(std::memory_order_release);
+        shared->systemTimeLow = 0;
+        std::atomic_thread_fence(std::memory_order_release);
+        shared->systemTimeHigh1 = 0;
     }
     const uint32_t interruptHigh = static_cast<uint32_t>(uptime >> 32);
     shared->interruptTimeHigh2 = static_cast<int32_t>(interruptHigh);
@@ -3804,18 +4250,60 @@ BootstrapClockStatus initializeBootstrapKuserSharedData() noexcept {
         if (g_log) g_log("[MicaNT Hal] KUSER backing page translation failed\r\n");
         return BootstrapClockStatus::ClockUnavailable;
     }
-    if (!installKuserUserMapping(physicalPage)) {
+    const uint64_t rootPhysical = walk(reinterpret_cast<uint64_t>(g_pml4),
+                                       reinterpret_cast<uint64_t>(g_pml4));
+    if (!installKuserKernelAliases(physicalPage, rootPhysical)) {
+        if (g_log) g_log("[MicaNT Hal] KUSER kernel aliases could not be installed\r\n");
+        return BootstrapClockStatus::ClockUnavailable;
+    }
+    g_kuserKernelAliasReady = true;
+    auto* shared = bootstrapKuserSharedData();
+    std::memset(shared, 0, sizeof(*shared));
+    if (!installKuserUserMapping(physicalPage,
+            reinterpret_cast<uint64_t*>(kKuserRootAlias))) {
+        g_kuserKernelAliasReady = false;
+        if (!unmapPage(kKuserKernelAlias, false)) __builtin_trap();
+        if (!unmapPage(kKuserRootAlias, false)) __builtin_trap();
         if (g_log) g_log("[MicaNT Hal] KUSER user mapping transaction failed\r\n");
         return BootstrapClockStatus::ClockUnavailable;
     }
     g_kuserSharedMappingReady = true;
-    auto* shared = bootstrapKuserSharedData();
     shared->tickCountMultiplier = 0xFA000000u;
     shared->timeZoneBiasHigh1 = 0;
     shared->timeZoneBiasLow = 0;
     shared->timeZoneBiasHigh2 = 0;
     shared->timeZoneId = 1; // UTC standard time until a zone provider is configured.
-    return updateBootstrapKuserSharedData();
+    const auto updateStatus = updateBootstrapKuserSharedData();
+    const uint64_t root = reinterpret_cast<uint64_t>(activePagingRoot());
+    const uint64_t kernelBacking = walk(root, kKuserKernelAlias) & ~uint64_t{4095};
+    const uint64_t userBacking = walk(root, micant::UserSharedDataAddress) & ~uint64_t{4095};
+    bool aliasUser{}, aliasWritable{}, userUser{}, userWritable{};
+    const bool aliasPermissions = queryPagingPermissions(root, kKuserKernelAlias,
+        aliasUser, aliasWritable);
+    const bool userPermissions = queryPagingPermissions(root, micant::UserSharedDataAddress,
+        userUser, userWritable);
+    if (kernelBacking != physicalPage || userBacking != physicalPage ||
+        !aliasPermissions || aliasUser || !aliasWritable || !userPermissions ||
+        !userUser || userWritable ||
+        !mappedRange(micant::UserSharedDataAddress, sizeof(*shared), true, false, false) ||
+        updateStatus != BootstrapClockStatus::Success) {
+        if (g_log) g_log("[MicaNT Hal] KUSER alias/backing permissions or initial update invalid\r\n");
+        return BootstrapClockStatus::ClockUnavailable;
+    }
+    if (g_log) {
+        uint64_t utc{};
+        const bool utcAvailable =
+            queryBootstrapSystemTime(utc) == BootstrapClockStatus::Success;
+        if (!utcAvailable &&
+            (shared->systemTimeLow || shared->systemTimeHigh1 || shared->systemTimeHigh2))
+            g_log("[MicaNT Hal] KUSER unavailable UTC fields are nonzero after initialization\r\n");
+        else if (!utcAvailable)
+            g_log("[MicaNT Hal] KUSER backing PFN shared by supervisor RW alias and user RO view; UTC zero\r\n");
+        else
+            g_log("[MicaNT Hal] KUSER backing PFN shared by supervisor RW alias and user RO view; UTC seeded\r\n");
+    }
+    if (g_log) g_log("[MicaNT Hal] KUSER backing page has a supervisor RW alias and a user RO mapping\r\n");
+    return BootstrapClockStatus::Success;
 }
 
 static BootstrapClockStatus deadlineFromCounter(uint64_t now, uint64_t frequency,

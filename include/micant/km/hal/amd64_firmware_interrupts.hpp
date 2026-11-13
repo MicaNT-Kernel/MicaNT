@@ -34,7 +34,8 @@ struct BootstrapInterruptTopology {
 // describes an include-all DRHD for segment 0 and every unit has translation
 // disabled; unknown or unsupported topologies remain unavailable.
 [[nodiscard]] bool initializeBootstrapDmaTranslationState(
-    const boot::UefiKernelHandoffV3& handoff) noexcept;
+    const boot::UefiKernelHandoffV3& handoff, uint32_t* failureStage = nullptr,
+    uint64_t* failureDetail = nullptr) noexcept;
 [[nodiscard]] bool bootstrapDirectDmaAvailable() noexcept;
 [[nodiscard]] bool acquireBootstrapDirectDmaLease() noexcept;
 void releaseBootstrapDirectDmaLease() noexcept;

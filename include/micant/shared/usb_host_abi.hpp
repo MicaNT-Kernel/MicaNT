@@ -40,5 +40,13 @@ struct HostServicesV1 {
                                   uint8_t, uint8_t, bool, Trb*);
     int32_t (*PrepareAddressDownstream)(void*, uint8_t, uint8_t, uint8_t, uint8_t,
                                        uint8_t, bool, Trb*);
+    int32_t (*PrepareAddressTopology)(void*, uint8_t, uint8_t, uint8_t, uint32_t,
+                                     uint8_t, uint8_t, bool, Trb*);
+    int32_t (*PrepareEp0Packet)(void*, uint16_t, Trb*);
+    int32_t (*PrepareSuperSpeedHubEndpoint)(void*, uint8_t, uint16_t, uint8_t, uint8_t,
+                                             uint8_t, uint8_t, uint16_t, Trb*);
+    int32_t (*BeginRootPortReset)(void*, uint8_t);
+    int32_t (*PollRootPortReset)(void*, uint8_t, uint8_t*);
+    int32_t (*AcknowledgeRootConnectionChange)(void*, uint8_t);
 };
 }
