@@ -327,7 +327,11 @@ NtStatus EProcess::initializeAddressSpace() noexcept {
     if (!processId) return NtStatus::InsufficientResources;
     handles_.reset(new (std::nothrow_t{}) ob::HandleTable{});
     if (!handles_) return NtStatus::NoMemory;
-    if (!createProcessPagingRoot(root_)) { handles_.reset(); return NtStatus::NoMemory; }
+    uint64_t interruptFlags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(interruptFlags) : : "memory");
+    const bool rootCreated = createProcessPagingRoot(root_);
+    if (interruptFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    if (!rootCreated) { handles_.reset(); return NtStatus::NoMemory; }
     const mm::ProcessAddressSpace::PagingBackend backend{
         &root_, mapBootstrapManagedPage, unmapBootstrapManagedPage,
         mapBootstrapProtectManagedPage, mapBootstrapManagedView, unmapBootstrapManagedView,
@@ -2277,10 +2281,8 @@ static NtStatus createProcessEx(Handle* processHandle, uint32_t desiredAccess,
     uint32_t grantedAccess{};
     if (result == NtStatus::Success)
         result = ps::detail::createProcessObject(child, childReference, objectSecurity, desiredAccess, &grantedAccess);
-    if (result == NtStatus::NoMemory) result = NtStatus::InsufficientResources; // temporary phase diagnostic
     if (result == NtStatus::Success)
         result = ps::detail::inheritProcessSecurityContext(*child, *parent);
-    if (result == NtStatus::NoMemory) result = NtStatus::AccessDenied; // temporary phase diagnostic
     if (result == NtStatus::Success && imageSection) {
         if (!hal::amd64::bootstrapSchedulerClockActive()) {
             // Before scheduling starts there is no attachable execution
@@ -2325,13 +2327,11 @@ static NtStatus createProcessEx(Handle* processHandle, uint32_t desiredAccess,
             auto cloneStatus = parent->getAddressSpace().clonePrivateTo(child->getAddressSpace(),
                 parentAddressSpace.root, child->getDirectoryTableBase(),
                 hal::amd64::switchProcessPagingRootByPhysical);
-            if (cloneStatus == NtStatus::NoMemory) cloneStatus = NtStatus::Conflict; // temporary phase diagnostic
             if (cloneStatus == NtStatus::Success) {
                 if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase()))
                     cloneStatus = NtStatus::Unsuccessful;
                 else {
                     cloneStatus = child->cloneNativeMetadata(*parent);
-                    if (cloneStatus == NtStatus::NoMemory) cloneStatus = NtStatus::NotSupported; // temporary phase diagnostic
                 }
             }
             if (!hal::amd64::switchProcessPagingRootByPhysical(originalRoot)) __builtin_trap();

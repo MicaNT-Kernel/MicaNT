@@ -32,6 +32,18 @@ void serialWrite(const char* text) noexcept {
         __asm__ __volatile__("outb %0, %1" : : "a"(static_cast<uint8_t>(*text++)), "Nd"(uint16_t{0x3f8}));
     }
 }
+void serialWriteHex(uint32_t value) noexcept {
+    static constexpr char digits[] = "0123456789ABCDEF";
+    char text[8]{};
+    for (size_t i = 0; i < sizeof(text); ++i)
+        text[i] = digits[(value >> ((sizeof(text) - 1 - i) * 4)) & 0x0f];
+    for (char c : text) {
+        uint8_t ready{};
+        do { __asm__ __volatile__("inb %1, %0" : "=a"(ready) : "Nd"(uint16_t{0x3fd})); }
+        while (!(ready & 0x20));
+        __asm__ __volatile__("outb %0, %1" : : "a"(static_cast<uint8_t>(c)), "Nd"(uint16_t{0x3f8}));
+    }
+}
 bool drainDeferredDeletes(uintptr_t kernelRoot, uintptr_t processRoot) noexcept {
     if (!micant::hal::amd64::switchProcessPagingRootByPhysical(kernelRoot)) return false;
     uint64_t flags{};
@@ -159,6 +171,7 @@ extern "C" {
 extern const uint8_t MicantTwoUserThreadsEnd[];
 extern const uint8_t MicantNativeThreadStart[];
 extern const uint8_t MicantGrowStackThreadStart[];
+void MicantRing3ProcessCreateStart() noexcept;
 __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexcept {
     __asm__ __volatile__(
         "movq %rsp, %r14\nmovq 0(%r14), %rbx\nmovq 8(%r14), %r12\nmovq 16(%r14), %r13\nmovq 24(%r14), %r15\n"
@@ -174,6 +187,16 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
         "movabsq $0x1020304050607080, %rdx\ncmpq %rdx, (%rax)\njne 9f\n"
         "cmpq $0, 8(%rax)\njne 9f\ntestq %r13, %r13\njnz 11f\n"
         "movq $0xabcd, (%rax)\njmp 12f\n11: movq $0xdcba, (%rax)\n12:\n"
+        // Exercise the public thread query through the loaded NTDLL from each
+        // real CPL3 thread.
+        "subq $0x88, %rsp\nmovq $0, 0x78(%rsp)\nmovq $-2, %rcx\nxorl %edx, %edx\n"
+        "leaq 0x40(%rsp), %r8\nmovq $48, %r9\nleaq 0x78(%rsp), %rax\nmovq %rax, 32(%rsp)\n"
+        "callq *32(%r15)\ntestl %eax, %eax\njz 21f\nmovl %eax, %edx\njmp 8f\n21:\n"
+        "cmpq $48, 0x78(%rsp)\nje 22f\nmovl $0xc0000002, %edx\njmp 8f\n22:\n"
+        "movq %gs:0x30, %rax\ncmpq %rax, 0x48(%rsp)\nje 23f\nmovl $0xc0000003, %edx\njmp 8f\n23:\n"
+        "movq %gs:0x40, %rax\ncmpq %rax, 0x50(%rsp)\nje 24f\nmovl $0xc0000004, %edx\njmp 8f\n24:\n"
+        "movq %gs:0x48, %rax\ncmpq %rax, 0x58(%rsp)\nje 25f\nmovl $0xc0000005, %edx\njmp 8f\n25:\n"
+        "addq $0x88, %rsp\n"
         "movabsq $0x1111222233334444, %rax\ntestq %r13, %r13\njz 1f\n"
         "movabsq $0xaaaabbbbccccdddd, %rax\n"
         "1: movq %rax, %gs:0x1480\nmovq 32(%r14), %rdx\ntestq %rdx, %rdx\njz 6f\n"
@@ -228,6 +251,56 @@ __attribute__((naked, section(".uthreads$a"))) void MicantTwoUserThreads() noexc
 }
 __asm__(".section .uthreads$z,\"xr\"\n.globl MicantTwoUserThreadsEnd\n"
         "MicantTwoUserThreadsEnd:\n.text\n");
+__attribute__((naked, section(".uthreads$a"))) void MicantRing3ProcessCreateStart() noexcept {
+    __asm__ __volatile__(
+        "pushq %r12\npushq %r13\npushq %r15\nmovq %rcx, %r12\nmovq 0(%r12), %r15\n"
+        "xorl %r13d, %r13d\nsubq $0x140, %rsp\n"
+        "movq $0, 0x60(%rsp)\nmovq $0, 0x68(%rsp)\nmovq $0, 0x70(%rsp)\nmovq $0, 0x78(%rsp)\n"
+        "leaq 0x60(%rsp), %rcx\nmovl $0x0010043b, %edx\nxorl %r8d, %r8d\nmovq $-1, %r9\n"
+        "movq $0, 0x20(%rsp)\nmovq $0, 0x28(%rsp)\nmovq $0, 0x30(%rsp)\n"
+        "movq $0, 0x38(%rsp)\nmovq $0, 0x40(%rsp)\ncallq *40(%r15)\n"
+        "testl %eax, %eax\njz 1f\nmovl %eax, %r13d\njmp 90f\n1:\n"
+        "movq 0x60(%rsp), %rcx\nxorl %edx, %edx\nleaq 0x80(%rsp), %r8\nmovl $48, %r9d\n"
+        "leaq 0x120(%rsp), %rax\nmovq %rax, 0x20(%rsp)\ncallq *80(%r15)\n"
+        "testl %eax, %eax\njz 2f\nmovl $0xc0000212, %r13d\njmp 90f\n2:\n"
+        "cmpl $48, 0x120(%rsp)\nje 3f\nmovl $0xc0000201, %r13d\njmp 90f\n3:\n"
+        "cmpq $0, 0x88(%rsp)\njne 4f\nmovl $0xc0000202, %r13d\njmp 90f\n4:\n"
+        "movq %gs:0x40, %rax\ncmpq %rax, 0xa0(%rsp)\njne 5f\nmovl $0xc0000203, %r13d\njmp 90f\n5:\n"
+        "movq 0xa0(%rsp), %rax\nmovq %rax, 0xe0(%rsp)\nmovq $0, 0xe8(%rsp)\n"
+        "movq $0, 0xf0(%rsp)\nmovq $0, 0xf8(%rsp)\nmovq $0, 0x100(%rsp)\n"
+        "movq $0, 0x108(%rsp)\nmovq $0, 0x110(%rsp)\nmovq $0, 0x118(%rsp)\nmovl $48, 0xf0(%rsp)\n"
+        "leaq 0x68(%rsp), %rcx\nmovl $0x400, %edx\nleaq 0xf0(%rsp), %r8\nleaq 0xe0(%rsp), %r9\n"
+        "callq *64(%r15)\ntestl %eax, %eax\njz 6f\nmovl $0xc0000213, %r13d\njmp 90f\n6:\n"
+        "leaq 0x70(%rsp), %rcx\nmovl $0x00100042, %edx\nxorl %r8d, %r8d\nmovq 0x68(%rsp), %r9\n"
+        "leaq MicantNativeThreadStart(%rip), %rax\nmovq %rax, 0x20(%rsp)\nleaq 16(%r12), %rax\nmovq %rax, 0x28(%rsp)\n"
+        "movq $1, 0x30(%rsp)\nmovq $0, 0x38(%rsp)\nmovq $4096, 0x40(%rsp)\nmovq $32768, 0x48(%rsp)\nmovq $0, 0x50(%rsp)\n"
+        "callq *48(%r15)\ncmpl $0xc0000022, %eax\nje 7f\nmovl $0xc0000204, %r13d\njmp 90f\n7:\n"
+        "movq 0x68(%rsp), %rcx\ncallq *88(%r15)\ntestl %eax, %eax\njz 8f\nmovl $0xc0000214, %r13d\njmp 90f\n8:\n"
+        "leaq 0x70(%rsp), %rcx\nmovl $0x00100042, %edx\nxorl %r8d, %r8d\nmovq 0x60(%rsp), %r9\n"
+        "leaq MicantNativeThreadStart(%rip), %rax\nmovq %rax, 0x20(%rsp)\nleaq 16(%r12), %rax\nmovq %rax, 0x28(%rsp)\n"
+        "movq $1, 0x30(%rsp)\nmovq $0, 0x38(%rsp)\nmovq $4096, 0x40(%rsp)\nmovq $32768, 0x48(%rsp)\nmovq $0, 0x50(%rsp)\n"
+        "callq *48(%r15)\ntestl %eax, %eax\njz 9f\nmovl $0xc0000215, %r13d\njmp 90f\n9:\n"
+        "movq 0x70(%rsp), %rcx\nxorl %edx, %edx\ncallq *56(%r15)\ntestl %eax, %eax\njz 10f\nmovl $0xc0000216, %r13d\njmp 90f\n10:\n"
+        "movq 0x70(%rsp), %rcx\nxorl %edx, %edx\nxorl %r8d, %r8d\ncallq *8(%r15)\ntestl %eax, %eax\njz 11f\nmovl $0xc0000217, %r13d\njmp 90f\n11:\n"
+        "movq 0x70(%rsp), %rcx\nxorl %edx, %edx\nleaq 0xb0(%rsp), %r8\nmovl $48, %r9d\n"
+        "leaq 0x120(%rsp), %rax\nmovq %rax, 0x20(%rsp)\ncallq *32(%r15)\ntestl %eax, %eax\njz 12f\nmovl $0xc0000218, %r13d\njmp 90f\n12:\n"
+        "cmpq $0, 0xb8(%rsp)\njne 13f\nmovl $0xc0000205, %r13d\njmp 90f\n13:\n"
+        "movq 0xc0(%rsp), %rax\ncmpq 0xa0(%rsp), %rax\nje 14f\nmovl $0xc0000206, %r13d\njmp 90f\n14:\n"
+        "leaq 0x78(%rsp), %rcx\nmovl $0x40, %edx\nleaq 0xf0(%rsp), %r8\nleaq 0xc0(%rsp), %r9\ncallq *72(%r15)\n"
+        "testl %eax, %eax\njz 15f\nmovl %eax, %r13d\njmp 90f\n15:\n"
+        "movq 0x78(%rsp), %rcx\ncallq *88(%r15)\ntestl %eax, %eax\njz 16f\nmovl $0xc000021a, %r13d\njmp 90f\n16:\n"
+        "movq 0x70(%rsp), %rcx\ncallq *88(%r15)\ntestl %eax, %eax\njz 17f\nmovl $0xc000021b, %r13d\njmp 90f\n17:\n"
+        "movq 0x60(%rsp), %rcx\nxorl %edx, %edx\ncallq *24(%r15)\ntestl %eax, %eax\njz 18f\n"
+        "cmpl $0xc000010a, %eax\nje 18f\nmovl $0xc000021c, %r13d\njmp 90f\n18:\n"
+        "movq 0x60(%rsp), %rcx\ncallq *88(%r15)\ntestl %eax, %eax\njz 19f\nmovl $0xc000021d, %r13d\njmp 90f\n19:\n"
+        "movq $0x12345678, 8(%r12)\nxorl %r13d, %r13d\njmp 91f\n"
+        "90: movl %r13d, 8(%r12)\n"
+        "movq 0x60(%rsp), %rcx\ntestq %rcx, %rcx\njz 20f\nxorl %edx, %edx\ncallq *24(%r15)\n"
+        "movq 0x78(%rsp), %rcx\ntestq %rcx, %rcx\njz 21f\ncallq *88(%r15)\n21:\n"
+        "movq 0x70(%rsp), %rcx\ntestq %rcx, %rcx\njz 22f\ncallq *88(%r15)\n22:\n"
+        "movq 0x68(%rsp), %rcx\ntestq %rcx, %rcx\njz 20f\ncallq *88(%r15)\n20:\n"
+        "91: addq $0x140, %rsp\npopq %r15\npopq %r13\npopq %r12\nmovl $0xc0000022, %eax\nretq\n");
+}
 }
 
 namespace {
@@ -382,7 +455,7 @@ void launch(void* argument) noexcept {
 
 __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processHandle,
     micant::Handle initialHandle, uintptr_t imageEntry, uintptr_t bootRoot, uintptr_t enclosingRoot,
-    bool growStack = false) noexcept {
+    bool growStack = false, bool ring3ProcessCreate = false, uintptr_t importTable = 0) noexcept {
     using namespace micant;
     using namespace micant::ke;
     ob::detail::HandleTableGuard interruptGuard;
@@ -391,15 +464,23 @@ __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processH
     ob::ObjectHeader* processReference{};
     ps::EThread* initial{};
     ob::ObjectHeader* initialReference{};
-    if (!boot || ps::detail::referenceProcessHandle(processHandle, 0, process, processReference) != NtStatus::Success ||
+    if ((ring3ProcessCreate && !importTable) || !boot ||
+        ps::detail::referenceProcessHandle(processHandle, 0, process, processReference) != NtStatus::Success ||
         ps::detail::referenceThreadHandle(initialHandle, 0, initial, initialReference) != NtStatus::Success ||
         !process || !initial || !initial->kernelThread()) return false;
     if (!hal::amd64::switchProcessPagingRootByPhysical(process->getDirectoryTableBase())) return false;
     uintptr_t resultAddress{};
     const auto allocated = process->getAddressSpace().allocate(resultAddress, mm::PageSize4KB,
         mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    if (allocated == NtStatus::Success && ring3ProcessCreate) {
+        *reinterpret_cast<uint64_t*>(resultAddress) = importTable;
+        *reinterpret_cast<uint64_t*>(resultAddress + 8) = 0;
+    }
     if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot) || allocated != NtStatus::Success) return false;
-    const uintptr_t offset = reinterpret_cast<uintptr_t>(growStack ? MicantGrowStackThreadStart : MicantNativeThreadStart) -
+    const uintptr_t start = growStack ? reinterpret_cast<uintptr_t>(MicantGrowStackThreadStart) :
+        ring3ProcessCreate ? reinterpret_cast<uintptr_t>(MicantRing3ProcessCreateStart) :
+                             reinterpret_cast<uintptr_t>(MicantNativeThreadStart);
+    const uintptr_t offset = start -
                              reinterpret_cast<uintptr_t>(MicantTwoUserThreads);
     Handle peer{};
     uintptr_t initialStackLimit{};
@@ -442,9 +523,8 @@ __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processH
     const auto old = KfRaiseIrql(DISPATCH_LEVEL);
     const bool switched = KiSwapContext(boot, &launcher);
     KeLowerIrql(old);
-    LargeInteger poll{};
-    const bool terminated = switched && thread->exitStatus() == NtStatus::AccessDenied &&
-        sys::NtWaitForSingleObject(peer, false, &poll) == NtStatus::Success;
+    const bool waited = switched && sys::NtWaitForSingleObject(peer, false, nullptr) == NtStatus::Success;
+    const bool terminated = waited && thread->exitStatus() == NtStatus::AccessDenied;
     if (!scheduler.removeReadyThread(first)) return false;
     first->state = ThreadState::Ready;
     first->priority = firstPriority;
@@ -452,9 +532,20 @@ __attribute__((noinline)) bool testNativeThreadExecution(micant::Handle processH
         return false;
     if (growStack) {
     }
-    const bool called = *reinterpret_cast<const uint64_t*>(resultAddress) == 0x12345678 &&
+    const bool called = (ring3ProcessCreate
+            ? *reinterpret_cast<const uint64_t*>(resultAddress + 8) == 0x12345678
+            : *reinterpret_cast<const uint64_t*>(resultAddress) == 0x12345678) &&
         (!growStack || *(reinterpret_cast<const uint64_t*>(resultAddress) + 1) ==
                            initialStackLimit - 5 * mm::PageSize4KB);
+    if (ring3ProcessCreate && !called) {
+        serialWrite("[MicaNT Ps] Ring 3 process test status=");
+        serialWriteHex(static_cast<uint32_t>(*reinterpret_cast<const uint64_t*>(resultAddress + 8)));
+        serialWrite(" thread exit=");
+        serialWriteHex(static_cast<uint32_t>(thread->exitStatus()));
+        serialWrite(" entry offset=");
+        serialWriteHex(static_cast<uint32_t>(offset));
+        serialWrite("\r\n");
+    }
     const auto freed = process->getAddressSpace().free(resultAddress, 0, mm::MEM_RELEASE);
     if (!hal::amd64::switchProcessPagingRootByPhysical(enclosingRoot)) return false;
     const auto reaped = thread->kernelThread() ? thread->reap() : NtStatus::Success;
@@ -518,7 +609,10 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
     if (!boot || readyNonPassiveWorkThreadCount() || threadCount < 2 || threadCount > 3 ||
         (preemptive && threadCount != 2)) return false;
     // A lifetime baseline must not include retired objects from earlier tests.
-    if (!drainPreviousDeferredCleanup()) return false;
+    if (!drainPreviousDeferredCleanup()) {
+        serialWrite("[MicaNT Ps] Deferred cleanup did not drain before thread PFN snapshot\r\n");
+        return false;
+    }
     const size_t active = mm::PfnDatabase::get().getActiveCount();
     const uint32_t sectionsBefore = sys::bootstrapSectionObjectCount();
     const uint32_t eventsBefore = sys::bootstrapEventObjectCount();
@@ -535,6 +629,16 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         ps::EThread first;
         ps::EThread second;
         ps::EThread third;
+        struct FailureTrace {
+            Progress& progress;
+            ~FailureTrace() {
+                if (!progress.complete) {
+                    serialWrite("[MicaNT Ps] User thread stage before object teardown: ");
+                    serialWrite(progress.stage);
+                    serialWrite("\r\n");
+                }
+            }
+        } failureTrace{progress};
         Handle sourceFirst{}, sourceSecond{}, eventFirst{}, eventSecond{};
         constexpr uint32_t access = ob::SYNCHRONIZE | 2;
         auto& source = ob::detail::currentHandleTable();
@@ -609,8 +713,10 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         std::memcpy(rawData + 0x80, &imports, sizeof(imports));
         constexpr char dllName[] = "ntdll.dll";
         std::memcpy(rawData + 0xc0, dllName, sizeof(dllName));
-        constexpr const char* names[]{"NtAllocateVirtualMemory", "NtWaitForSingleObject", "NtSetEvent", "NtTerminateProcess"};
-        for (size_t i = 0; i < 4; ++i) {
+        constexpr const char* names[]{"NtAllocateVirtualMemory", "NtWaitForSingleObject", "NtSetEvent",
+            "NtTerminateProcess", "NtQueryInformationThread", "NtCreateProcessEx", "NtCreateThreadEx",
+            "NtResumeThread", "NtOpenProcess", "NtOpenThread", "NtQueryInformationProcess", "NtClose"};
+        for (size_t i = 0; i < 12; ++i) {
             const uint64_t rva = 2 * mm::PageSize4KB + 0x200 + i * 0x40;
             std::memcpy(rawData + 0xe0 + i * 8, &rva, sizeof(rva));
             std::memcpy(rawData + 0x120 + i * 8, &rva, sizeof(rva));
@@ -729,7 +835,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         uintptr_t counters{};
         if (preemptive && process.getAddressSpace().allocate(counters, mm::PageSize4KB,
                 mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE) != NtStatus::Success) return false;
-        for (size_t i = 0; i < 4; ++i) {
+        for (size_t i = 0; i < 5; ++i) {
             uint64_t address{};
             if (images->resolve("ntdll.dll", names[i], 0, address) != NtStatus::Success ||
                 *reinterpret_cast<uint64_t*>(code + imports.firstThunk + i * 8) != address) return false;
@@ -779,35 +885,40 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
                 32768, preemptive, ob::SYNCHRONIZE, ob::SYNCHRONIZE,
                 createdProcess, createdThread);
         if (invalidFactoryStatus != NtStatus::InvalidParameter || createdProcess || createdThread) return false;
+        progress.stage = "bootstrap process factory";
         const auto factoryStatus = ps::detail::createBootstrapUserProcess(processImages, executablePath, commandLine, 32768,
                 32768, preemptive, ob::SYNCHRONIZE | 1 | 2 | 0x80, ob::SYNCHRONIZE,
                 createdProcess, createdThread);
         if (factoryStatus != NtStatus::Success || !createdProcess || !createdThread) return false;
+        progress.stage = "native peer thread rights";
         if (!testNativePeerThread(createdProcess, entry)) return false;
+        progress.stage = "native thread execution";
         if (!testNativeThreadExecution(createdProcess, createdThread, entry, previous,
                                        process.getDirectoryTableBase())) return false;
+        progress.stage = "native stack growth";
         if (!testNativeThreadExecution(createdProcess, createdThread, entry, previous,
                                        process.getDirectoryTableBase(), true)) return false;
+        progress.stage = "Ring 3 process and thread syscalls";
+        if (!testNativeThreadExecution(createdProcess, createdThread, entry, previous,
+                process.getDirectoryTableBase(), false, true, code + imports.firstThunk)) return false;
+        progress.stage = "kernel clone lifetime";
         Handle clonedProcess{};
         const auto cloneStatus = sys::NtCreateProcessEx(&clonedProcess,
             ob::SYNCHRONIZE | 1 | 2, nullptr, createdProcess, 0, 0, 0, 0, false);
-        if (cloneStatus != NtStatus::Success) return false;
-        ps::EThread* createdThreadObject{};
-        ob::ObjectHeader* createdThreadRef{};
-        if (ps::detail::referenceThreadHandle(createdThread, ob::SYNCHRONIZE,
-                createdThreadObject, createdThreadRef) != NtStatus::Success || !createdThreadObject) return false;
-        const auto cancelStatus = createdThreadObject->cancelBeforeStart();
-        if (cancelStatus != NtStatus::Success) return false;
-        const auto reapStatus = createdThreadObject->reap();
-        if (reapStatus != NtStatus::Success) return false;
-        ob::ObDereferenceObject(createdThreadRef);
+        if (cloneStatus != NtStatus::Success) {
+            serialWrite("[MicaNT Ps] Kernel process clone status=");
+            serialWriteHex(static_cast<uint32_t>(cloneStatus));
+            serialWrite("\r\n");
+            return false;
+        }
+        progress.stage = "kernel clone parent terminate";
+        const auto parentTerminateStatus = sys::NtTerminateProcess(createdProcess, NtStatus::Success);
+        if (parentTerminateStatus != NtStatus::Success &&
+            parentTerminateStatus != NtStatus::ProcessIsTerminating) return false;
+        progress.stage = "kernel clone thread close";
         const auto closeThreadStatus = sys::NtClose(createdThread);
         if (closeThreadStatus != NtStatus::Success) return false;
-        const auto parentTerminateStatus = sys::NtTerminateProcess(createdProcess, NtStatus::Success);
-        LargeInteger parentPoll{};
-        const auto parentWaitStatus = sys::NtWaitForSingleObject(createdProcess, false, &parentPoll);
-        if ((parentTerminateStatus != NtStatus::Success && parentTerminateStatus != NtStatus::ProcessIsTerminating) ||
-            parentWaitStatus != NtStatus::Success) return false;
+        progress.stage = "kernel clone parent close";
         const auto closeProcessStatus = sys::NtClose(createdProcess);
         if (closeProcessStatus != NtStatus::Success) return false;
         progress.stage = "clone image lifetime";
@@ -879,9 +990,28 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         const KIRQL oldIrql = KfRaiseIrql(DISPATCH_LEVEL);
         const bool switched = KiSwapContext(boot, launcher.get());
         KeLowerIrql(oldIrql);
-        if (!switched || !process.isTerminating() || process.exitStatus() != NtStatus::AccessDenied ||
-            readyNonPassiveWorkThreadCount() ||
-            !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
+        if (!switched) {
+            serialWrite("[MicaNT Ps] User workers did not switch back to launcher\r\n");
+            return false;
+        }
+        if (!process.isTerminating()) {
+            serialWrite("[MicaNT Ps] User workers left process unterminated\r\n");
+            return false;
+        }
+        if (process.exitStatus() != NtStatus::AccessDenied) {
+            serialWrite("[MicaNT Ps] User workers exit status=0x");
+            serialWriteHex(static_cast<uint32_t>(process.exitStatus()));
+            serialWrite("\r\n");
+            return false;
+        }
+        if (readyNonPassiveWorkThreadCount()) {
+            serialWrite("[MicaNT Ps] User workers left runnable non-passive work\r\n");
+            return false;
+        }
+        if (!hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) {
+            serialWrite("[MicaNT Ps] User worker process root could not be restored\r\n");
+            return false;
+        }
         progress.stage = "user workers PEB and TLS validation";
         bool tls = process.userPebAddress() != 0;
         const uintptr_t loaderAddress = *reinterpret_cast<const uint64_t*>(process.userPebAddress() + 0x18);

@@ -2822,6 +2822,11 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         const auto result = sys::NtCreateThreadExFromKernel(&handle, static_cast<uint32_t>(second),
             args.third ? &attributes : nullptr, static_cast<Handle>(args.fourth), extra[0], extra[1],
             static_cast<uint32_t>(extra[2]) | 1u, extra[3], extra[4], extra[5], extra[6] ? &captured : nullptr);
+        if (result == NtStatus::NoMemory || result == NtStatus::InsufficientResources) {
+            serialWrite("[MicaNT Ps] NtCreateThreadEx allocation status=");
+            serialWriteNumber(static_cast<uint32_t>(result));
+            serialWrite("\r\n");
+        }
         if (result != NtStatus::Success) return status(result);
         auto copy = NtStatus::Success;
         for (size_t i = 0; i < count && copy == NtStatus::Success; ++i) {
@@ -2939,6 +2944,11 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             args.third ? &attributes : nullptr, static_cast<Handle>(args.fourth),
             static_cast<uint32_t>(extra[0]), static_cast<Handle>(extra[1]),
             static_cast<Handle>(extra[2]), static_cast<Handle>(extra[3]), (extra[4] & 0xff) != 0);
+        if (result == NtStatus::NoMemory || result == NtStatus::InsufficientResources) {
+            serialWrite("[MicaNT Ps] NtCreateProcessEx allocation status=");
+            serialWriteNumber(static_cast<uint32_t>(result));
+            serialWrite("\r\n");
+        }
         if (canSchedule) __asm__ __volatile__("cli" : : : "memory");
         __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         __asm__ __volatile__("swapgs" : : : "memory");
