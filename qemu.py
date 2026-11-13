@@ -147,7 +147,9 @@ def run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
-def write_manifest(cxx: Path, *, runtime_selftest: bool = False) -> None:
+def write_manifest(
+    cxx: Path, *, runtime_selftest: bool = False, timer_selftest: bool = False
+) -> None:
     if not all(path.is_file() for path in (KERNEL, BOOTLOADER, DISPLAY_DRIVER)):
         raise RuntimeError("CMake completed without producing all boot PE artifacts")
 
@@ -186,6 +188,7 @@ def write_manifest(cxx: Path, *, runtime_selftest: bool = False) -> None:
         "toolchain": toolchain,
         "configuration": "Release",
         "runtime_selftest": runtime_selftest,
+        "timer_selftest": timer_selftest,
         "target": "ntoskrnl_core_baremetal",
         "architecture": "AMD64",
         "artifacts": {
@@ -247,6 +250,10 @@ def main() -> int:
         "--runtime-selftest", action="store_true",
         help="verify real kernel C++ construction/teardown, then halt instead of booting the desktop",
     )
+    parser.add_argument(
+        "--timer-selftest", action="store_true",
+        help="verify scheduler-clock tick delivery, then halt before process tests and desktop rendering",
+    )
     args = parser.parse_args()
     global BUILD_DIR
     if args.cmake_build_dir:
@@ -260,6 +267,8 @@ def main() -> int:
         parser.error("--build-only and --check-explorer are mutually exclusive")
     if args.runtime_selftest and args.check_explorer:
         parser.error("--runtime-selftest and --check-explorer are mutually exclusive")
+    if args.timer_selftest and (args.runtime_selftest or args.check_explorer):
+        parser.error("--timer-selftest is mutually exclusive with runtime self-test and Explorer checks")
 
     try:
         cmake = shutil.which("cmake")
@@ -292,6 +301,7 @@ def main() -> int:
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DMICANT_ENABLE_BAREMETAL:BOOL=ON",
                 f"-DMICANT_BOOTSTRAP_RUNTIME_SELFTEST:BOOL={'ON' if args.runtime_selftest else 'OFF'}",
+                f"-DMICANT_BOOTSTRAP_TIMER_SELFTEST:BOOL={'ON' if args.timer_selftest else 'OFF'}",
             ]
         )
         if args.check_explorer:
@@ -318,9 +328,16 @@ def main() -> int:
                 "virtio_net_oem_boot",
             ]
         )
-        write_manifest(cxx, runtime_selftest=args.runtime_selftest)
+        write_manifest(
+            cxx,
+            runtime_selftest=args.runtime_selftest,
+            timer_selftest=args.timer_selftest,
+        )
         validate_build_manifest(
-            ROOT, allow_dirty=True, runtime_selftest=args.runtime_selftest
+            ROOT,
+            allow_dirty=True,
+            runtime_selftest=args.runtime_selftest,
+            timer_selftest=args.timer_selftest,
         )
 
         if args.build_only:
@@ -342,6 +359,8 @@ def main() -> int:
         ]
         if args.runtime_selftest:
             boot_command.append("--runtime-selftest")
+        elif args.timer_selftest:
+            boot_command.append("--timer-selftest")
         elif not args.headless:
             boot_command.append("--interactive")
         else:

@@ -99,7 +99,9 @@ bool copyBootstrapFirmwareMemory(uint64_t physical, void* destination, size_t si
 // This validates privilege transitions, not a process loader or Win32 session.
 bool verifyRing3Transition() noexcept;
 bool verifyManagedExecutablePage() noexcept;
-// Temporary BSP-only xAPIC timer diagnostic; leaves interrupts disabled.
+// Temporary BSP-only xAPIC timer-source diagnostic; leaves interrupts disabled.
+bool verifyBootstrapTimerSource() noexcept;
+// Includes scheduler preemption and user-mode preemption checks.
 bool verifyBootstrapTimerInterrupt() noexcept;
 // Starts the bounded BSP local-APIC scheduler clock after the diagnostic restores
 // controller state. Legacy PIC and other local vectors remain masked.

@@ -2997,31 +2997,44 @@ static bool verifyClockIrqlMask(BootstrapLocalApic& apic) noexcept {
         blocked && MicantTimerTicks > before;
 }
 
-bool verifyBootstrapTimerInterrupt() noexcept {
+static bool verifyBootstrapTimerInterruptImpl(bool verifyScheduling) noexcept {
     if (!bootstrapQemuFaultTestsAvailable() || !bootstrapPagingContext() ||
-        !ke::MicantAmd64ConfigureExtendedState()) return false;
+        !ke::MicantAmd64ConfigureExtendedState()) {
+        if (g_log) g_log("[MicaNT Hal] Timer diagnostic prerequisites unavailable\r\n");
+        return false;
+    }
     Idtr current{};
     __asm__ __volatile__("sidt %0" : "=m"(current));
-    if (current.base != reinterpret_cast<uint64_t>(g_idt) || current.limit != sizeof(g_idt) - 1)
+    if (current.base != reinterpret_cast<uint64_t>(g_idt) || current.limit != sizeof(g_idt) - 1) {
+        if (g_log) g_log("[MicaNT Hal] Timer diagnostic bootstrap IDT is not active\r\n");
         return false;
+    }
     uint32_t eax = 1, ebx{}, ecx{}, edx{};
     __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx));
-    if (!(edx & (1u << 9))) return false;
+    if (!(edx & (1u << 9))) {
+        if (g_log) g_log("[MicaNT Hal] Timer diagnostic local APIC unsupported\r\n");
+        return false;
+    }
     const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
     const bool x2 = (apicBase & (1u << 10)) != 0;
     if (!(apicBase & (1u << 11)) || (x2 && !(ecx & (1u << 21)))) {
         logTrapValue("[MicaNT Hal] APIC base=0x", apicBase);
+        if (g_log) g_log("[MicaNT Hal] Timer diagnostic APIC mode unavailable\r\n");
         return false;
     }
     auto* mapping = x2 ? nullptr : static_cast<volatile uint32_t*>(
         mapBootstrapDeviceMemory(apicBase & kPhysicalMask, 4096));
     g_timerApic.initialize(mapping, x2);
     auto& apic = g_timerApic;
-    if (!apic.available()) { if (g_log) g_log("[MicaNT Hal] APIC MMIO mapping failed\r\n"); return false; }
+    if (!apic.available()) {
+        if (g_log) g_log("[MicaNT Hal] Timer diagnostic APIC MMIO mapping failed\r\n");
+        return false;
+    }
     if (((apic[0x30 / 4] >> 16) & 0xff) < 5 || !(apic[0x320 / 4] & (1u << 16))) {
         logTrapValue("[MicaNT Hal] APIC version=0x", apic[0x30 / 4]);
         logTrapValue("[MicaNT Hal] APIC timer initial=0x", apic[0x380 / 4]);
         logTrapValue("[MicaNT Hal] APIC timer LVT=0x", apic[0x320 / 4]);
+        if (g_log) g_log("[MicaNT Hal] Timer diagnostic APIC timer unavailable\r\n");
         return false;
     }
 
@@ -3080,13 +3093,17 @@ bool verifyBootstrapTimerInterrupt() noexcept {
         __asm__ __volatile__("pause");
     __asm__ __volatile__("cli" : : : "memory");
     const bool timerDelivered = MicantTimerTicks >= 3;
-    const bool preemptionVerified = timerDelivered && verifyBootstrapPreemption();
-    MicantTimerTicks = 0;
-    MicantTimerBootThread = nullptr;
-    MicantTimerDispatchFailed = false;
-    MicantTimerPreemptionEnabled = preemptionVerified;
-    const bool userPreemption = preemptionVerified && MicantTestPsUserPreemption() &&
-        MicantTimerTicks > 0 && !MicantTimerDispatchFailed;
+    bool preemptionVerified = false;
+    bool userPreemption = false;
+    if (verifyScheduling) {
+        preemptionVerified = timerDelivered && verifyBootstrapPreemption();
+        MicantTimerTicks = 0;
+        MicantTimerBootThread = nullptr;
+        MicantTimerDispatchFailed = false;
+        MicantTimerPreemptionEnabled = preemptionVerified;
+        userPreemption = preemptionVerified && MicantTestPsUserPreemption() &&
+            MicantTimerTicks > 0 && !MicantTimerDispatchFailed;
+    }
     MicantTimerPreemptionEnabled = false;
     apic[0x320 / 4] = savedLvt[0] | (1u << 16);
     apic[0x380 / 4] = 0;
@@ -3100,8 +3117,9 @@ bool verifyBootstrapTimerInterrupt() noexcept {
         __asm__ __volatile__("cli" : : : "memory");
     }
     const bool success = lockMaskedInterrupts && irqlMaskedClock &&
-        (releasedFlags & (uint64_t{1} << 9)) && timerDelivered && preemptionVerified &&
-        userPreemption && !(apic[timerIrr] & timerBit);
+        (releasedFlags & (uint64_t{1} << 9)) && timerDelivered &&
+        (!verifyScheduling || (preemptionVerified && userPreemption)) &&
+        !(apic[timerIrr] & timerBit);
     apic[0x3e0 / 4] = savedDivide;
     apic[0x380 / 4] = savedInitial;
     g_clockIrqlMaskReady = false;
@@ -3121,9 +3139,25 @@ bool verifyBootstrapTimerInterrupt() noexcept {
         apic[0x80 / 4] == savedTpr && apic[0xf0 / 4] == savedSvr &&
         apic[0x3e0 / 4] == savedDivide && apic[0x380 / 4] == savedInitial;
     g_timerApic.initialize(nullptr, false);
-    if (!success) logTrapValue("[MicaNT Hal] Timer ticks=0x", MicantTimerTicks);
+    if (!success) {
+        logTrapValue("[MicaNT Hal] Timer ticks=0x", MicantTimerTicks);
+        logTrapValue("[MicaNT Hal] Timer lock masked=0x", lockMaskedInterrupts);
+        logTrapValue("[MicaNT Hal] Timer IRQL masked=0x", irqlMaskedClock);
+        logTrapValue("[MicaNT Hal] Timer delivered=0x", timerDelivered);
+        logTrapValue("[MicaNT Hal] Timer scheduling verified=0x", preemptionVerified);
+        logTrapValue("[MicaNT Hal] Timer user preemption=0x", userPreemption);
+        logTrapValue("[MicaNT Hal] Timer IRR pending=0x", apic[timerIrr] & timerBit);
+    }
     if (!restored && g_log) g_log("[MicaNT Hal] Timer state restoration failed\r\n");
     return success && restored;
+}
+
+bool verifyBootstrapTimerSource() noexcept {
+    return verifyBootstrapTimerInterruptImpl(false);
+}
+
+bool verifyBootstrapTimerInterrupt() noexcept {
+    return verifyBootstrapTimerInterruptImpl(true);
 }
 
 static uint64_t readSerializedTsc() noexcept {

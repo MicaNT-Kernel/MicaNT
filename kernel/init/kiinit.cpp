@@ -3074,6 +3074,26 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("\r\n");
     }
     serialWrite("[MicaNT Ldr] Independent TLS templates verified\r\n");
+#if defined(MICANT_BOOTSTRAP_TIMER_SELFTEST)
+    if (!micant::hal::amd64::verifyRing3Transition()) {
+        stopWithError("[MicaNT Hal] Timer self-test interrupt context setup failed\r\n");
+    }
+    if (!micant::ke::MicantAmd64ConfigureExtendedState()) {
+        stopWithError("[MicaNT Hal] Timer self-test extended-state setup failed\r\n");
+    }
+    micant::hal::amd64::setBootstrapThreadEntryStack(
+        0, 0, false, reinterpret_cast<uintptr_t>(MicantBootstrapMainStack),
+        reinterpret_cast<uintptr_t>(MicantBootstrapMainStack + sizeof(MicantBootstrapMainStack)));
+    serialWrite("[MicaNT Hal] Bootstrap GDT/IDT, CPL3 and interrupt-stack prerequisites verified\r\n");
+    if (!micant::hal::amd64::verifyBootstrapTimerSource()) {
+        stopWithError("[MicaNT Hal] Timer-only interrupt source verification failed\r\n");
+    }
+    serialWrite("[MicaNT Hal] Timer-only interrupt tick count: ");
+    serialWriteNumber(micant::hal::amd64::bootstrapSchedulerClockTicks());
+    serialWrite("\r\n[MicaNT Hal] Timer interrupt source verified (scheduler preemption not tested)\r\n");
+    serialWrite("[MicaNT Hal] Timer-only self-test halted\r\n");
+    for (;;) __asm__ __volatile__("cli; hlt");
+#endif
 #if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
     if (!micant::ex::test::verifyCxxAfterInitialization() ||
         !micant::ex::shutdownBootstrapCxxRuntime() ||

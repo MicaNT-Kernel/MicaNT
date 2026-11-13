@@ -22,6 +22,7 @@ class RuntimeRunnerTests(unittest.TestCase):
         for expected in (
             boot_micant.EXPECTED_SERIAL,
             boot_micant.EXPECTED_RUNTIME_SELFTEST_SERIAL,
+            boot_micant.EXPECTED_TIMER_SELFTEST_SERIAL,
         ):
             log = "\n".join(expected)
             self.assertEqual(boot_micant.serial_progress(log, expected), len(expected))
@@ -38,6 +39,12 @@ class RuntimeRunnerTests(unittest.TestCase):
         self.assertLess(
             boot_micant.serial_progress(
                 "\n".join(boot_micant.EXPECTED_RUNTIME_SELFTEST_SERIAL)
+            ),
+            len(boot_micant.EXPECTED_SERIAL),
+        )
+        self.assertLess(
+            boot_micant.serial_progress(
+                "\n".join(boot_micant.EXPECTED_TIMER_SELFTEST_SERIAL)
             ),
             len(boot_micant.EXPECTED_SERIAL),
         )
@@ -61,6 +68,14 @@ class RuntimeRunnerTests(unittest.TestCase):
                     Path("unused"), 1, 1, "none", interactive, verify_input, True
                 )
 
+    def test_timer_mode_rejects_input_or_interactive_runner(self):
+        for interactive, verify_input in ((True, False), (False, True)):
+            with self.assertRaisesRegex(RuntimeError, "halts before process tests"):
+                boot_micant.run_qemu(
+                    Path("unused"), 1, 1, "none", interactive, verify_input,
+                    timer_selftest=True,
+                )
+
     def test_manifest_mode_must_be_boolean_and_match(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -78,6 +93,11 @@ class RuntimeRunnerTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "requested runtime self-test mode"):
                     validate_build_manifest(root, allow_dirty=True, runtime_selftest=requested)
             manifest.write_text(json.dumps({
+                "schema_version": 2, "timer_selftest": True,
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "requested timer self-test mode"):
+                validate_build_manifest(root, allow_dirty=True)
+            manifest.write_text(json.dumps({
                 "schema_version": 2, "runtime_selftest": True,
             }), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "requested runtime self-test mode"):
@@ -86,10 +106,12 @@ class RuntimeRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "has no build_id"):
                 validate_build_manifest(root, allow_dirty=True, runtime_selftest=False)
 
-    def check_root_mode(self, runtime_selftest):
+    def check_root_mode(self, runtime_selftest, timer_selftest=False):
         arguments = ["qemu.py", "--headless"]
         if runtime_selftest:
             arguments.append("--runtime-selftest")
+        if timer_selftest:
+            arguments.append("--timer-selftest")
         with (
             mock.patch.object(sys, "argv", arguments),
             mock.patch.object(qemu.shutil, "which", return_value="/tools/tool"),
@@ -104,17 +126,30 @@ class RuntimeRunnerTests(unittest.TestCase):
             self.assertEqual(qemu.main(), 0)
             commands = [call.args[0] for call in run.call_args_list]
             self.assertIn(
-                f"-DMICANT_BOOTSTRAP_RUNTIME_SELFTEST={'ON' if runtime_selftest else 'OFF'}",
+                f"-DMICANT_BOOTSTRAP_RUNTIME_SELFTEST:BOOL={'ON' if runtime_selftest else 'OFF'}",
+                commands[0],
+            )
+            self.assertIn(
+                f"-DMICANT_BOOTSTRAP_TIMER_SELFTEST:BOOL={'ON' if timer_selftest else 'OFF'}",
                 commands[0],
             )
             manifest.assert_called_once_with(
-                Path("/tools/clang++"), runtime_selftest=runtime_selftest
+                Path("/tools/clang++"),
+                runtime_selftest=runtime_selftest,
+                timer_selftest=timer_selftest,
             )
             validate.assert_called_once_with(
-                qemu.ROOT, allow_dirty=True, runtime_selftest=runtime_selftest
+                qemu.ROOT,
+                allow_dirty=True,
+                runtime_selftest=runtime_selftest,
+                timer_selftest=timer_selftest,
             )
             self.assertEqual("--runtime-selftest" in commands[-1], runtime_selftest)
-            self.assertEqual("--verify-input" in commands[-1], not runtime_selftest)
+            self.assertEqual("--timer-selftest" in commands[-1], timer_selftest)
+            self.assertEqual(
+                "--verify-input" in commands[-1],
+                not runtime_selftest and not timer_selftest,
+            )
             self.assertNotIn("--interactive", commands[-1])
 
     def test_root_selftest_builds_requested_mode(self):
@@ -123,9 +158,21 @@ class RuntimeRunnerTests(unittest.TestCase):
     def test_normal_boot_explicitly_disables_selftest(self):
         self.check_root_mode(False)
 
+    def test_root_timer_selftest_builds_requested_mode(self):
+        self.check_root_mode(False, True)
+
     def test_runtime_selftest_cannot_be_an_explorer_preflight(self):
         with (
             mock.patch.object(sys, "argv", ["qemu.py", "--runtime-selftest", "--check-explorer"]),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as result,
+        ):
+            qemu.main()
+        self.assertEqual(result.exception.code, 2)
+
+    def test_timer_selftest_cannot_be_an_explorer_preflight(self):
+        with (
+            mock.patch.object(sys, "argv", ["qemu.py", "--timer-selftest", "--check-explorer"]),
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit) as result,
         ):

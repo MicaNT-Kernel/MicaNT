@@ -126,7 +126,11 @@ def inspect_pe(
 
 
 def validate_build_manifest(
-    root: Path = ROOT, allow_dirty: bool = False, *, runtime_selftest: bool = False
+    root: Path = ROOT,
+    allow_dirty: bool = False,
+    *,
+    runtime_selftest: bool = False,
+    timer_selftest: bool = False,
 ) -> None:
     manifest_path = root / "build" / "baremetal" / "kernel-build-manifest.json"
     kernel_path = root / "build" / "baremetal" / "ntoskrnl.exe"
@@ -150,6 +154,8 @@ def validate_build_manifest(
         fail("unsupported or missing kernel build manifest schema_version")
     if manifest.get("runtime_selftest", False) is not runtime_selftest:
         fail("kernel build manifest does not match the requested runtime self-test mode")
+    if manifest.get("timer_selftest", False) is not timer_selftest:
+        fail("kernel build manifest does not match the requested timer self-test mode")
     if not manifest.get("build_id"):
         fail("kernel build manifest has no build_id")
     if manifest.get("target") != "ntoskrnl_core_baremetal":

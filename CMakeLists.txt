@@ -8,6 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(MICANT_ENABLE_BAREMETAL "Build the AMD64 freestanding PE boot targets" OFF)
 option(MICANT_BOOTSTRAP_RUNTIME_SELFTEST "Halt after kernel C++ lifecycle verification" OFF)
+option(MICANT_BOOTSTRAP_TIMER_SELFTEST "Halt after isolated scheduler-clock tick verification" OFF)
+
+if (MICANT_BOOTSTRAP_RUNTIME_SELFTEST AND MICANT_BOOTSTRAP_TIMER_SELFTEST)
+    message(FATAL_ERROR "Bootstrap runtime and timer self-tests are mutually exclusive")
+endif()
 
 # Canonical Include Root (all headers addressed via micant/<layer>/<header>.hpp)
 include_directories(
@@ -329,6 +334,9 @@ if (MICANT_ENABLE_BAREMETAL)
     if (MICANT_BOOTSTRAP_RUNTIME_SELFTEST)
         target_sources(ntoskrnl_core_baremetal PRIVATE test/kernel_cxx_lifecycle_fixture.cpp)
         target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
+    endif()
+    if (MICANT_BOOTSTRAP_TIMER_SELFTEST)
+        target_compile_definitions(ntoskrnl_core_baremetal PRIVATE MICANT_BOOTSTRAP_TIMER_SELFTEST)
     endif()
     target_compile_options(ntoskrnl_core_baremetal PRIVATE -fno-builtin)
 

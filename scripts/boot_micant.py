@@ -39,6 +39,10 @@ EXPECTED_RUNTIME_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ex] Compiler-generated construction and LIFO teardown verified",
     "[MicaNT Ex] Runtime self-test halted",
 )
+EXPECTED_TIMER_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
+    "[MicaNT Hal] Timer interrupt source verified (scheduler preemption not tested)",
+    "[MicaNT Hal] Timer-only self-test halted",
+)
 EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ke] Allocation-free ready queue selected cooperative contexts",
     "[MicaNT Ke] Kernel thread block and wake verified",
@@ -196,11 +200,23 @@ def run_qemu(
     interactive: bool,
     verify_input: bool,
     runtime_selftest: bool = False,
+    timer_selftest: bool = False,
 ) -> None:
     if runtime_selftest and (interactive or verify_input):
         raise RuntimeError("runtime self-test halts before desktop/input; incompatible runner options")
-    validate_build_manifest(ROOT, allow_dirty=True, runtime_selftest=runtime_selftest)
-    expected = EXPECTED_RUNTIME_SELFTEST_SERIAL if runtime_selftest else EXPECTED_SERIAL
+    if timer_selftest and (interactive or verify_input or runtime_selftest):
+        raise RuntimeError("timer self-test halts before process tests and desktop/input; incompatible runner options")
+    validate_build_manifest(
+        ROOT,
+        allow_dirty=True,
+        runtime_selftest=runtime_selftest,
+        timer_selftest=timer_selftest,
+    )
+    expected = (
+        EXPECTED_TIMER_SELFTEST_SERIAL if timer_selftest else
+        EXPECTED_RUNTIME_SELFTEST_SERIAL if runtime_selftest else
+        EXPECTED_SERIAL
+    )
 
     qemu = shutil.which(os.environ.get("MICANT_QEMU", "qemu-system-x86_64"))
     if not qemu:
@@ -282,7 +298,7 @@ def run_qemu(
                         raise RuntimeError(f"Kernel bootstrap failed:\n{serial_log[-8000:]}")
                     progress = serial_progress(serial_log, expected)
                     if progress == len(expected):
-                        time_evidence = (
+                        time_evidence = timer_selftest or runtime_selftest or (
                             "[MicaNT Hal] CPL3 UTC SystemTime advanced and matched KUSER" in serial_log or
                             "[MicaNT Hal] CPL3 UTC SystemTime correctly unavailable for local firmware time" in serial_log
                         )
@@ -294,8 +310,11 @@ def run_qemu(
                             if verify_input:
                                 verify_mouse(temp / "qmp.sock", temp, serial_path)
                                 print("PS/2 movement, scanout updates and left-click delivery passed.", flush=True)
-                            result = ("C++ runtime self-test" if runtime_selftest
-                                      else "modular boot")
+                            result = (
+                                "timer self-test" if timer_selftest else
+                                "C++ runtime self-test" if runtime_selftest else
+                                "modular boot"
+                            )
                             print(f"QEMU {result} passed; serial remained stable for "
                                   f"{stable_seconds}s.", flush=True)
                             if interactive:
@@ -350,6 +369,7 @@ def main() -> int:
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--verify-input", action="store_true")
     parser.add_argument("--runtime-selftest", action="store_true")
+    parser.add_argument("--timer-selftest", action="store_true")
     args = parser.parse_args()
 
     if args.ovmf_code is None:
@@ -368,6 +388,7 @@ def main() -> int:
             args.interactive,
             args.verify_input,
             args.runtime_selftest,
+            args.timer_selftest,
         )
     except KeyboardInterrupt:
         return 130
