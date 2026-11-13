@@ -45,17 +45,19 @@ class Transport {
     bool acquiredOwnership_{};
     bool commandPending_{};
     uint64_t pendingCommandAddress_{};
+    uint8_t pendingCommandType_{}, pendingCommandSlot_{};
     uint8_t commandIndex_{}, commandCycle_{1};
     uint8_t eventCycle_{1};
     uint16_t eventIndex_{};
     uint8_t maxPorts_{}, maxSlots_{};
     uint8_t portProtocol_[256]{}, portSlotType_[256]{};
+    uint16_t portSpeedMask_[256]{};
     uint8_t contextWords_{8};
     struct SlotState {
         DeviceDma* memory{};
         uint64_t dmaAddress{};
         uint8_t controlIndex{}, controlCycle{1}, controlSlot{};
-        bool controlPending{};
+        bool controlPending{}, disabled{};
         uint64_t controlStatusAddress{};
         uint8_t interruptDci{}, interruptIndex{}, interruptCycle{1};
         uint16_t interruptLength{};
@@ -179,10 +181,32 @@ public:
                 if ((major != 2 && major != 3) || !first || !count ||
                     unsigned{first} + count - 1 > maxPorts_ ||
                     !within(uint64_t{capability} + 16, uint64_t{speedCount} * 4)) return false;
+                uint16_t supportedSpeeds = major == 2 ? uint16_t{0x000e} : uint16_t{0x0030};
+                if (speedCount) {
+                    supportedSpeeds = 0;
+                    for (uint8_t i = 0; i < speedCount; ++i) {
+                        const uint32_t psi = read(capability + 16 + uint32_t{i} * 4u);
+                        const uint8_t id = static_cast<uint8_t>(psi & 15u);
+                        const uint8_t exponent = static_cast<uint8_t>((psi >> 4) & 3u);
+                        const uint8_t type = static_cast<uint8_t>((psi >> 6) & 3u);
+                        const uint64_t mantissa = psi >> 16;
+                        const uint64_t scale = exponent == 0 ? 1u : exponent == 1 ? 1000u :
+                                               exponent == 2 ? 1000000u : 1000000000u;
+                        const uint64_t rate = mantissa * scale;
+                        // The bus owner currently uses the standard xHCI speed
+                        // IDs. Accept PSI entries only when both ID and bit
+                        // rate match; custom/asymmetric IDs remain unavailable.
+                        const bool known = type == 0 && ((major == 2 &&
+                            ((id == 1 && rate == 12000000u) || (id == 2 && rate == 1500000u) ||
+                             (id == 3 && rate == 480000000u))) || (major == 3 &&
+                            ((id == 4 && rate == 5000000000ull) || (id == 5 && rate == 10000000000ull))));
+                        if (known) supportedSpeeds |= static_cast<uint16_t>(1u << id);
+                    }
+                }
                 for (unsigned p = first; p < unsigned{first} + count; ++p) {
                     if (portProtocol_[p]) return false;
-                    // Custom PSI encodings are not yet interpreted.
-                    portProtocol_[p] = speedCount ? 0xff : major;
+                    portProtocol_[p] = major;
+                    portSpeedMask_[p] = supportedSpeeds;
                     portSlotType_[p] = slotType;
                 }
             }
@@ -235,7 +259,16 @@ public:
     }
     bool forgetDevice(uint8_t slot) noexcept {
         for (auto& candidate : slots_) if (candidate.controlSlot == slot && slot) {
-            if (candidate.controlPending || candidate.interruptPending) return false;
+            if (!candidate.disabled || candidate.controlPending || candidate.interruptPending) return false;
+            // The caller has consumed the successful Disable Slot completion.
+            // Do not recycle the DMA ring until older events from this slot
+            // have left both the controller ring and the deferred FIFO.
+            volatile Trb& nextEvent = dma_->event[eventIndex_];
+            if ((nextEvent.control & 1u) == eventCycle_) return false;
+            for (uint8_t i = 0; i < deferredCount_; ++i) {
+                const auto& event = deferredEvents_[(deferredHead_ + i) % 64];
+                if (((event.control >> 10) & 63u) == 32 && (event.control >> 24) == slot) return false;
+            }
             dma_->dcbaa[slot] = 0;
             __atomic_thread_fence(__ATOMIC_RELEASE);
             if (active_ == &candidate) active_ = nullptr;
@@ -252,25 +285,55 @@ public:
         status = read(operational_ + 0x400 + (port - 1) * 16);
         return true;
     }
+    bool acknowledgeConnectionChange(uint8_t port) noexcept {
+        uint32_t status{};
+        if (!readPort(port, status)) return false;
+        if (status & (1u << 17)) {
+            const uint32_t offset = operational_ + 0x400 + (port - 1) * 16;
+            write(offset, (status & (1u << 9)) | (1u << 17));
+        }
+        return true;
+    }
+    bool beginPortReset(uint8_t port) noexcept {
+        uint32_t status{};
+        if (!readPort(port, status) || !(status & 1u) || !portSpeedMask_[port]) return false;
+        const uint32_t offset = operational_ + 0x400 + (port - 1) * 16;
+        const uint32_t reset = portProtocol_[port] == 3 ? (1u << 31) : (1u << 4);
+        if (status & reset) return false;
+        write(offset, (status & (1u << 9)) | (status & (1u << 17)) | reset);
+        return true;
+    }
+    // 0 = pending, 1 = reset completed, -1 = disconnected/invalid.
+    int pollPortReset(uint8_t port, uint8_t& speed) const noexcept {
+        uint32_t status{};
+        if (!readPort(port, status) || !(status & 1u) || !portSpeedMask_[port]) return -1;
+        const bool super = portProtocol_[port] == 3;
+        const uint32_t reset = super ? (1u << 31) : (1u << 4);
+        if ((status & reset) || !(status & 2u)) return 0;
+        speed = static_cast<uint8_t>((status >> 10) & 15u);
+        return speed < 16 && (portSpeedMask_[port] & (1u << speed)) &&
+               (super ? speed >= 4 && speed <= 5 : speed >= 1 && speed <= 3) ? 1 : -1;
+    }
     bool resetPort(uint8_t port, uint8_t& speed) noexcept {
         uint32_t status{};
         if (!readPort(port, status) || !(status & 1u)) return false;
         const uint32_t currentSpeed = (status >> 10) & 15u;
         const bool super = portProtocol_[port] == 3;
-        if (portProtocol_[port] == 0xff || (super ? (currentSpeed < 4 || currentSpeed > 5)
-                                                       : (currentSpeed < 1 || currentSpeed > 3))) return false;
+        if (currentSpeed >= 16 || !(portSpeedMask_[port] & (1u << currentSpeed)) ||
+            (super ? (currentSpeed < 4 || currentSpeed > 5) : (currentSpeed < 1 || currentSpeed > 3))) return false;
         const uint32_t offset = operational_ + 0x400 + (port - 1) * 16;
         // PORTSC change bits and PED are write-one-to-clear: write only PP
         // and PR, preserving port power without acknowledging notifications.
         const uint32_t reset = super ? (1u << 31) : (1u << 4);
-        write(offset, (status & (1u << 9)) | reset);
+        write(offset, (status & (1u << 9)) | (status & (1u << 17)) | reset);
         if (!wait([&]() noexcept {
             const auto value = read(offset);
             return !(value & reset) && (value & 1u) && (value & 2u);
         }, 200)) return false;
         status = read(offset);
         speed = static_cast<uint8_t>((status >> 10) & 15u);
-        return super ? speed >= 4 && speed <= 5 : speed >= 1 && speed <= 3;
+        return speed < 16 && (portSpeedMask_[port] & (1u << speed)) &&
+               (super ? speed >= 4 && speed <= 5 : speed >= 1 && speed <= 3);
     }
     bool setDeviceContext(uint8_t slot, uint64_t deviceContext) noexcept {
         if (!running_ || !dma_ || !slot || slot > maxSlots_ ||
@@ -283,10 +346,13 @@ public:
     // Prepare the input/device contexts and EP0 ring for a single USB 2
     // root-port device. The caller submits the returned Address Device TRB.
     bool prepareAddressDevice(uint8_t slot, uint8_t port, uint8_t speed, Trb& command,
-                              uint8_t hubSlot = 0, uint8_t hubPort = 0, bool multiTt = false) noexcept {
+                              uint8_t hubSlot = 0, uint8_t hubPort = 0, bool multiTt = false,
+                              uint32_t route = UINT32_MAX) noexcept {
         if (!running_ || !dma_ || !slot || slot > maxSlots_ || !port || port > maxPorts_ ||
-            speed < 1 || speed > 5 || (hubSlot && (!hubPort || hubPort > 15 || speed > 3)) ||
-            (!hubSlot && (hubPort || multiTt)) || !within(uint64_t{doorbells_} + slot * 4u, 4))
+            speed < 1 || speed > 5 || !(portSpeedMask_[port] & (1u << speed)) ||
+            (hubSlot && (!hubPort || hubPort > 15 || speed > 2)) ||
+            (!hubSlot && (multiTt || (route != UINT32_MAX && hubPort))) ||
+            (route != UINT32_MAX && route > 0xfffffu) || !within(uint64_t{doorbells_} + slot * 4u, 4))
             return false;
         if (selectDevice(slot)) return false;
         active_ = nullptr;
@@ -306,9 +372,10 @@ public:
         active_->memory->controlRing[63] = {epAddress, 0, (6u << 10) | 3u};
         active_->memory->inputContext[1] = 3; // Add slot and endpoint zero.
         auto* slotContext = active_->memory->inputContext + contextWords_;
-        slotContext[0] = (uint32_t{speed} << 20) | (1u << 27) | uint32_t{hubPort};
+        slotContext[0] = (uint32_t{speed} << 20) | (1u << 27) |
+                         (route == UINT32_MAX ? uint32_t{hubPort} : route);
         slotContext[1] = uint32_t{port} << 16;
-        if (hubSlot && speed != 3) {
+        if (hubSlot) {
             slotContext[0] |= multiTt ? 1u << 25 : 0;
             slotContext[2] = uint32_t{hubSlot} | (uint32_t{hubPort} << 8);
         }
@@ -321,6 +388,22 @@ public:
         if (!setDeviceContext(slot, active_->dmaAddress + offsetof(DeviceDma, deviceContext))) return false;
         command = {active_->dmaAddress + offsetof(DeviceDma, inputContext), 0,
                    (11u << 10) | (uint32_t{slot} << 24)};
+        return true;
+    }
+
+    bool prepareEp0Packet(uint16_t packet, Trb& command) noexcept {
+        if (!running_ || !active_ || !active_->controlSlot || active_->controlPending ||
+            (packet != 8 && packet != 16 && packet != 32 && packet != 64)) return false;
+        std::memset(active_->memory->inputContext, 0, sizeof(active_->memory->inputContext));
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        auto* endpoint = active_->memory->inputContext + contextWords_ * 2;
+        const auto* source = active_->memory->deviceContext + contextWords_;
+        for (size_t i = 0; i < contextWords_; ++i) endpoint[i] = source[i];
+        endpoint[1] = (endpoint[1] & 0x0000ffffu) | (uint32_t{packet} << 16);
+        active_->memory->inputContext[1] = 1u << 1;
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        command = {active_->dmaAddress + offsetof(DeviceDma, inputContext), 0,
+                   (13u << 10) | (uint32_t{active_->controlSlot} << 24)};
         return true;
     }
 
@@ -408,9 +491,11 @@ public:
         return true;
     }
     bool prepareHubEndpoint(uint8_t endpoint, uint16_t packet, uint8_t interval, uint8_t speed,
-                            uint8_t ports, uint8_t thinkTime, bool multiTt, Trb& command) noexcept {
-        if (!ports || ports > 15 || thinkTime > 3 || speed != 3) return false;
-        if (!prepareInterruptEndpoint(endpoint, packet, interval, speed, command)) return false;
+                            uint8_t ports, uint8_t thinkTime, bool multiTt, Trb& command,
+                            uint8_t burst = 0, uint16_t bytesPerInterval = 0) noexcept {
+        if (!ports || ports > 15 || thinkTime > 3 || (speed != 1 && speed != 3 && speed != 4) ||
+            (speed != 3 && (thinkTime || multiTt))) return false;
+        if (!prepareInterruptEndpoint(endpoint, packet, interval, speed, command, burst, bytesPerInterval)) return false;
         auto* slot = active_->memory->inputContext + contextWords_;
         slot[0] |= 1u << 26; // Hub
         if (multiTt) slot[0] |= 1u << 25;
@@ -594,6 +679,8 @@ public:
         target.control = (command.control & ~1u) | commandCycle_;
         commandAddress = dmaAddress_ + offsetof(DmaState, command) + commandIndex_ * sizeof(Trb);
         pendingCommandAddress_ = commandAddress;
+        pendingCommandType_ = static_cast<uint8_t>(type);
+        pendingCommandSlot_ = static_cast<uint8_t>(command.control >> 24);
         commandPending_ = true;
         if (++commandIndex_ == 63) {
             auto& link = dma_->command[63];
@@ -618,8 +705,18 @@ public:
         result = {event.parameter, event.status, control};
         if (((control >> 10) & 63u) == 33 && commandPending_ &&
             (result.parameter & ~uint64_t{15}) == pendingCommandAddress_) {
+            if (pendingCommandType_ == 10 && (result.status >> 24) == 1 &&
+                static_cast<uint8_t>(control >> 24) == pendingCommandSlot_) {
+                for (auto& slot : slots_) if (slot.controlSlot == pendingCommandSlot_) {
+                    slot.disabled = true;
+                    slot.controlPending = false; slot.controlStatusAddress = 0;
+                    slot.interruptPending = false; slot.interruptAddress = 0;
+                    break;
+                }
+            }
             commandPending_ = false;
             pendingCommandAddress_ = 0;
+            pendingCommandType_ = pendingCommandSlot_ = 0;
         }
         SlotState* eventSlot{};
         if (((control >> 10) & 63u) == 32)
@@ -683,10 +780,11 @@ public:
         operational_ = runtime_ = doorbells_ = legacyOffset_ = 0;
         maxPorts_ = maxSlots_ = 0;
         std::memset(portProtocol_, 0, sizeof(portProtocol_));
+        std::memset(portSpeedMask_, 0, sizeof(portSpeedMask_));
         std::memset(portSlotType_, 0, sizeof(portSlotType_));
         for (auto& slot : slots_) slot = {};
         active_ = nullptr;
-        commandPending_ = false;
+        commandPending_ = false; pendingCommandType_ = pendingCommandSlot_ = 0;
         commandIndex_ = 0;
         commandCycle_ = eventCycle_ = 1;
         eventIndex_ = 0;
