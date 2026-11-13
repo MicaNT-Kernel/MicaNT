@@ -511,12 +511,15 @@ def run_qemu(
                                             "hidusb.sys: completed USB HID activity report" in usb_serial and
                                             "hidusb.sys: completed USB HID release report" in usb_serial and
                                             "usbstor.sys: BOT/SCSI device mounted" in usb_serial):
+                                        prior_cleanups = usb_serial.count(
+                                            "USB host: disconnect cleanup completed")
                                         detach_usb_device(temp / "qmp.sock", "usb_keyboard")
                                         cleanup_deadline = time.monotonic() + 10
                                         while time.monotonic() < cleanup_deadline:
                                             usb_serial = serial_path.read_text(
                                                 encoding="utf-8", errors="replace")
-                                            if "USB host: disconnect cleanup completed" in usb_serial:
+                                            if usb_serial.count(
+                                                    "USB host: disconnect cleanup completed") > prior_cleanups:
                                                 print("USB xHCI HID press/release, detach cleanup and BOT/FAT mount evidence passed.", flush=True)
                                                 return
                                             time.sleep(0.1)
