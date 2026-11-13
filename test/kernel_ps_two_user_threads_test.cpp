@@ -4,6 +4,7 @@
 #include "micant/km/executive/io_file.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/syscalls.hpp"
+#include "micant/km/core/passive_work.hpp"
 #include "micant/km/hal/amd64_bootstrap.hpp"
 #include "micant/um/native/pe.hpp"
 #include <cstring>
@@ -15,6 +16,13 @@ uint32_t bootstrapEventObjectCount() noexcept;
 }
 
 namespace {
+size_t readyNonPassiveWorkThreadCount() noexcept {
+    auto count = micant::ke::PriorityScheduler::get().getReadyThreadCount();
+    for (const auto& worker : micant::ke::passive_work::detail::workers)
+        if (worker.readyQueued && count) --count;
+    return count;
+}
+
 void serialWrite(const char* text) noexcept {
     while (*text) {
         uint8_t ready{};
@@ -504,7 +512,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
     } progress;
     auto& scheduler = PriorityScheduler::get();
     auto* boot = KeGetCurrentThread();
-    if (!boot || scheduler.getReadyThreadCount() || threadCount < 2 || threadCount > 3 ||
+    if (!boot || readyNonPassiveWorkThreadCount() || threadCount < 2 || threadCount > 3 ||
         (preemptive && threadCount != 2)) return false;
     // A lifetime baseline must not include retired objects from earlier tests.
     if (!drainPreviousDeferredCleanup()) return false;
@@ -864,7 +872,7 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         const bool switched = KiSwapContext(boot, launcher.get());
         KeLowerIrql(oldIrql);
         if (!switched || !process.isTerminating() || process.exitStatus() != NtStatus::AccessDenied ||
-            scheduler.getReadyThreadCount() ||
+            readyNonPassiveWorkThreadCount() ||
             !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
         progress.stage = "user workers PEB and TLS validation";
         bool tls = process.userPebAddress() != 0;
