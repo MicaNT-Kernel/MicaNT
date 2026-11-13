@@ -257,11 +257,13 @@ if (MICANT_ENABLE_BAREMETAL)
     set(_ntdll_probe_header "${CMAKE_CURRENT_BINARY_DIR}/ntdll-probe.inc")
     add_custom_command(OUTPUT "${_ntdll_probe_dll}"
         COMMAND "${CMAKE_CXX_COMPILER}" -std=c++23 -ffreestanding -fno-exceptions
-            -fno-rtti -fno-stack-protector -shared -nostdlib -Wl,-e,DllMain
+            -fno-rtti -fno-stack-protector -shared -nostdlib -fuse-ld=lld -Wl,--entry=
             -Wl,--subsystem,native -Wl,--image-base,0x400000020000 -O2
             -I "${CMAKE_SOURCE_DIR}/include"
-            "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" -o "${_ntdll_probe_dll}"
-        DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" VERBATIM)
+            "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp"
+            "${CMAKE_SOURCE_DIR}/tools/dlls/native_stack_probe.cpp" -o "${_ntdll_probe_dll}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp"
+            "${CMAKE_SOURCE_DIR}/tools/dlls/native_stack_probe.cpp" VERBATIM)
     add_custom_command(OUTPUT "${_ntdll_probe_header}"
         COMMAND "${CMAKE_COMMAND}" -DINPUT=${_ntdll_probe_dll} -DOUTPUT=${_ntdll_probe_header}
             -P "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake"
@@ -271,11 +273,13 @@ if (MICANT_ENABLE_BAREMETAL)
     set(_ntdll_process_header "${CMAKE_CURRENT_BINARY_DIR}/ntdll-process.inc")
     add_custom_command(OUTPUT "${_ntdll_process_dll}"
         COMMAND "${CMAKE_CXX_COMPILER}" -std=c++23 -ffreestanding -fno-exceptions
-            -fno-rtti -fno-stack-protector -shared -nostdlib -Wl,-e,DllMain
+            -fno-rtti -fno-stack-protector -shared -nostdlib -fuse-ld=lld -Wl,--entry=
             -Wl,--subsystem,native -Wl,--image-base,0x400020f00000 -O2
             -I "${CMAKE_SOURCE_DIR}/include"
-            "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" -o "${_ntdll_process_dll}"
-        DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp" VERBATIM)
+            "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp"
+            "${CMAKE_SOURCE_DIR}/tools/dlls/native_stack_probe.cpp" -o "${_ntdll_process_dll}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/dlls/ntdll.cpp"
+            "${CMAKE_SOURCE_DIR}/tools/dlls/native_stack_probe.cpp" VERBATIM)
     add_custom_command(OUTPUT "${_ntdll_process_header}"
         COMMAND "${CMAKE_COMMAND}" -DINPUT=${_ntdll_process_dll} -DOUTPUT=${_ntdll_process_header}
             -P "${CMAKE_SOURCE_DIR}/scripts/embed_binary.cmake"
@@ -405,6 +409,7 @@ if (MICANT_ENABLE_BAREMETAL)
     )
     add_library(ntdll_boot SHARED EXCLUDE_FROM_ALL
         tools/dlls/ntdll.cpp
+        tools/dlls/native_stack_probe.cpp
     )
     target_include_directories(ntdll_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
     target_compile_options(ntdll_boot PRIVATE
@@ -412,13 +417,101 @@ if (MICANT_ENABLE_BAREMETAL)
         -fno-stack-protector -mno-red-zone -O2
     )
     target_link_options(ntdll_boot PRIVATE
-        -nostdlib -Wl,--entry,DllMain -Wl,--subsystem,native
+        -nostdlib -fuse-ld=lld -Wl,--entry= -Wl,--subsystem,native
         -Wl,--image-base,0x400020f00000
     )
     set_target_properties(ntdll_boot PROPERTIES
         PREFIX "" OUTPUT_NAME "ntdll"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
         ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
+    add_library(ws2_32_boot SHARED EXCLUDE_FROM_ALL tools/dlls/ws2_32.cpp
+        tools/dlls/native_stack_probe.cpp kernel/ex/freestanding_memory.cpp)
+    target_include_directories(ws2_32_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_compile_definitions(ws2_32_boot PRIVATE MICANT_NATIVE_USERMODE)
+    target_compile_options(ws2_32_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(ws2_32_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMain -Wl,--subsystem,native
+    )
+    target_link_libraries(ws2_32_boot PRIVATE ntdll_boot)
+    set_target_properties(ws2_32_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "ws2_32"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
+    add_library(dnsapi_boot SHARED EXCLUDE_FROM_ALL tools/dlls/dnsapi.cpp
+        tools/dlls/native_stack_probe.cpp)
+    target_include_directories(dnsapi_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_compile_definitions(dnsapi_boot PRIVATE MICANT_NATIVE_USERMODE)
+    target_compile_options(dnsapi_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(dnsapi_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMain -Wl,--subsystem,native
+    )
+    target_link_libraries(dnsapi_boot PRIVATE ws2_32_boot ntdll_boot)
+    set_target_properties(dnsapi_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "dnsapi"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
+    add_library(crypt32_boot SHARED EXCLUDE_FROM_ALL tools/dlls/crypt32.cpp
+        tools/dlls/native_stack_probe.cpp kernel/ex/freestanding_memory.cpp)
+    target_include_directories(crypt32_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_compile_definitions(crypt32_boot PRIVATE MICANT_NATIVE_USERMODE)
+    target_compile_options(crypt32_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(crypt32_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMain -Wl,--subsystem,native
+    )
+    target_link_libraries(crypt32_boot PRIVATE ntdll_boot)
+    set_target_properties(crypt32_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "crypt32"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
+    add_library(winhttp_boot SHARED EXCLUDE_FROM_ALL tools/dlls/winhttp.cpp
+        tools/dlls/native_stack_probe.cpp kernel/ex/freestanding_memory.cpp)
+    target_include_directories(winhttp_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_compile_definitions(winhttp_boot PRIVATE MICANT_NATIVE_USERMODE)
+    target_compile_options(winhttp_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(winhttp_boot PRIVATE
+        -nostdlib -Wl,--entry,DllMain -Wl,--subsystem,native
+    )
+    target_link_libraries(winhttp_boot PRIVATE ntdll_boot ws2_32_boot dnsapi_boot crypt32_boot)
+    set_target_properties(winhttp_boot PROPERTIES
+        PREFIX "" OUTPUT_NAME "winhttp"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/system32"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
+    )
+
+    add_executable(svchost_boot EXCLUDE_FROM_ALL tools/svchost_app.cpp tools/dlls/dhcpcsvc.cpp)
+    target_include_directories(svchost_boot PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_compile_definitions(svchost_boot PRIVATE MICANT_NATIVE_USERMODE)
+    target_compile_options(svchost_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-threadsafe-statics -fno-stack-protector -mno-red-zone -O2
+    )
+    target_link_options(svchost_boot PRIVATE
+        -nostdlib -Wl,--entry,_start -Wl,--subsystem,console
+    )
+    target_link_libraries(svchost_boot PRIVATE ws2_32_boot ntdll_boot)
+    set_target_properties(svchost_boot PROPERTIES
+        OUTPUT_NAME "svchost"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
     )
 
     add_library(kernel32_boot SHARED EXCLUDE_FROM_ALL
@@ -457,7 +550,7 @@ if (MICANT_ENABLE_BAREMETAL)
         ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/boot-imports"
     )
     add_custom_target(explorer_runtime_boot
-        DEPENDS explorer_boot imm32_boot kernel32_boot ntdll_boot ucrtbase_boot
+        DEPENDS explorer_boot imm32_boot kernel32_boot ntdll_boot ws2_32_boot dnsapi_boot crypt32_boot winhttp_boot svchost_boot ucrtbase_boot
     )
 
     add_executable(virtio_gpu_boot drivers/virtio_gpu/virtio_gpu.cpp)
@@ -469,6 +562,10 @@ if (MICANT_ENABLE_BAREMETAL)
     )
     add_executable(ahci_oem_boot drivers/oem/ahci/ahci_file_provider.cpp
                                    kernel/ex/freestanding_memory.cpp)
+    add_executable(hidusb_oem_boot drivers/oem/hidusb/hidusb_driver.cpp
+                                   kernel/ex/freestanding_memory.cpp)
+    add_executable(usbstor_oem_boot drivers/oem/usbstor/usbstor_driver.cpp
+                                    kernel/ex/freestanding_memory.cpp)
     add_executable(xhci_oem_boot drivers/oem/xhci/xhci_driver.cpp
                                    kernel/ex/freestanding_memory.cpp)
     add_executable(i210_oem_boot drivers/oem/i210/i210_driver.cpp
@@ -476,10 +573,12 @@ if (MICANT_ENABLE_BAREMETAL)
     add_executable(virtio_net_oem_boot drivers/oem/virtio_net/virtio_net_driver.cpp
                                        kernel/ex/freestanding_memory.cpp)
     set_target_properties(ahci_oem_boot PROPERTIES OUTPUT_NAME "storahci")
+    set_target_properties(hidusb_oem_boot PROPERTIES OUTPUT_NAME "hidusb")
+    set_target_properties(usbstor_oem_boot PROPERTIES OUTPUT_NAME "usbstor")
     set_target_properties(xhci_oem_boot PROPERTIES OUTPUT_NAME "usbxhci")
     set_target_properties(i210_oem_boot PROPERTIES OUTPUT_NAME "i210")
     set_target_properties(virtio_net_oem_boot PROPERTIES OUTPUT_NAME "virtio_net")
-    foreach(_oem_driver_target IN ITEMS ahci_oem_boot xhci_oem_boot i210_oem_boot
+    foreach(_oem_driver_target IN ITEMS ahci_oem_boot hidusb_oem_boot usbstor_oem_boot xhci_oem_boot i210_oem_boot
                                        virtio_net_oem_boot)
         set_target_properties(${_oem_driver_target} PROPERTIES
             SUFFIX ".sys"
@@ -494,7 +593,7 @@ if(WIN32 OR MICANT_ENABLE_BAREMETAL)
     add_custom_target(micant_user_mode_boundary_check)
     foreach(_user_mode_variant IN ITEMS
         micant_win32k micant_user32 micant_gdi32 micant_imm32
-        kernel32_boot ntdll_boot ucrtbase_boot win32k_boot user32_boot gdi32_boot
+        kernel32_boot ntdll_boot ws2_32_boot dnsapi_boot svchost_boot ucrtbase_boot win32k_boot user32_boot gdi32_boot
         imm32_boot explorer_boot explorer_runtime_boot
     )
         add_custom_target(micant_boundary_${_user_mode_variant}
@@ -526,7 +625,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(bootx64 PRIVATE -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-unused-parameter -Wno-missing-designated-field-initializers -O2)
     if (MICANT_ENABLE_BAREMETAL)
         foreach(_target IN ITEMS ntoskrnl_core_baremetal bootx64_efi virtio_gpu_boot
-                                  ahci_oem_boot xhci_oem_boot i210_oem_boot
+                                  ahci_oem_boot hidusb_oem_boot usbstor_oem_boot xhci_oem_boot i210_oem_boot
                                   virtio_net_oem_boot)
             target_compile_options(${_target} PRIVATE
                 -ffreestanding
@@ -555,7 +654,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_link_options(virtio_gpu_boot PRIVATE
             -nostdlib -Wl,--subsystem,native -Wl,-e,DriverEntry
         )
-        foreach(_oem_driver_target IN ITEMS ahci_oem_boot xhci_oem_boot i210_oem_boot
+        foreach(_oem_driver_target IN ITEMS ahci_oem_boot hidusb_oem_boot usbstor_oem_boot xhci_oem_boot i210_oem_boot
                                             virtio_net_oem_boot)
             target_compile_options(${_oem_driver_target} PRIVATE -fno-builtin)
             target_link_options(${_oem_driver_target} PRIVATE

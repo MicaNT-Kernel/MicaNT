@@ -1367,7 +1367,7 @@ static bool s_ntoskrnlLoadedFromDisk = false;
 static uint64_t s_ntoskrnlEntryPoint = 0;
 static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedNtoskrnlInfo{};
 
-constexpr size_t kMaxBootOemDriverImages = 4;
+constexpr size_t kMaxBootOemDriverImages = micant::boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES;
 constexpr size_t kMaxBootOemDriverImageBytes = 16777216;
 alignas(4096) static uint8_t s_bootOemDriverFileBuffer[kMaxBootOemDriverImageBytes];
 alignas(4096) static uint8_t
@@ -2061,29 +2061,45 @@ public:
         if (bs->locateHandleBuffer(uefi::BY_PROTOCOL, &kPciIoGuid, nullptr, &count, &handles) != uefi::EFI_SUCCESS ||
             !handles || count > 65536) return;
         bool complete = true;
+        const char* incompleteReason = nullptr;
+        const auto markIncomplete = [&complete, &incompleteReason](const char* reason) noexcept {
+            complete = false;
+            if (!incompleteReason) incompleteReason = reason;
+        };
         const auto read64 = [](const uint8_t* p) noexcept {
             uint64_t value{}; std::memcpy(&value, p, sizeof(value)); return value;
         };
         for (uint64_t i = 0; i < count; ++i) {
             FirmwarePciIo* pci{};
             if (bs->handleProtocol(handles[i], &kPciIoGuid, reinterpret_cast<void**>(&pci)) != uefi::EFI_SUCCESS ||
-                !pci || !pci->getLocation || !pci->getBarAttributes) { complete = false; continue; }
+                !pci || !pci->getLocation || !pci->getBarAttributes) {
+                markIncomplete("PCI inventory: invalid PCI I/O protocol\r\n");
+                continue;
+            }
             uint64_t segment{}, bus{}, device{}, function{};
             if (pci->getLocation(pci, &segment, &bus, &device, &function) != uefi::EFI_SUCCESS ||
-                segment || bus > 255 || device >= 32 || function >= 8) { complete = false; continue; }
+                segment || bus > 255 || device >= 32 || function >= 8) {
+                markIncomplete("PCI inventory: invalid PCI location\r\n");
+                continue;
+            }
             for (uint8_t index = 0; index < 6; ++index) {
                 void* allocation{};
                 const auto status = pci->getBarAttributes(pci, index, nullptr, &allocation);
                 if (status != uefi::EFI_SUCCESS) { if (allocation) (void)bs->freePool(allocation); continue; }
-                if (!allocation) { complete = false; continue; }
+                if (!allocation) {
+                    markIncomplete("PCI inventory: missing BAR descriptor\r\n");
+                    continue;
+                }
                 const auto* descriptor = static_cast<const uint8_t*>(allocation);
                 if (descriptor[0] == 0x79) {
-                    if (bs->freePool(allocation) != uefi::EFI_SUCCESS) complete = false;
+                    if (bs->freePool(allocation) != uefi::EFI_SUCCESS)
+                        markIncomplete("PCI inventory: BAR descriptor release failed\r\n");
                     continue;
                 }
                 if (descriptor[0] != 0x8a || descriptor[1] != 0x2b || descriptor[2] != 0) {
-                    complete = false;
-                    if (bs->freePool(allocation) != uefi::EFI_SUCCESS) complete = false;
+                    markIncomplete("PCI inventory: unsupported BAR descriptor\r\n");
+                    if (bs->freePool(allocation) != uefi::EFI_SUCCESS)
+                        markIncomplete("PCI inventory: BAR descriptor release failed\r\n");
                     continue;
                 }
                 // The bounded importer accepts one QWORD descriptor followed
@@ -2094,7 +2110,7 @@ public:
                 const uint64_t translation = read64(descriptor + 30), length = read64(descriptor + 38);
                 valid = valid && !translation && start && length && !(length & (length - 1)) &&
                     !(start & (length - 1)) && start <= UINT64_MAX - (length - 1) &&
-                    end == start + length - 1;
+                    end == length - 1;
                 if (valid) {
                     for (uint32_t n = 0; n < handoff.pciBarCount; ++n) {
                         const auto& prior = handoff.pciBars[n];
@@ -2102,19 +2118,50 @@ public:
                             prior.function == function && prior.index == index) { valid = false; break; }
                     }
                 }
-                if (!valid || handoff.pciBarCount == boot::UEFI_KERNEL_HANDOFF_MAX_PCI_BARS) {
-                    complete = false;
+                if (!valid) {
+                    UartSerial::print("PCI inventory: invalid BAR range at ");
+                    UartSerial::printDec(static_cast<uint32_t>(bus));
+                    UartSerial::print(":");
+                    UartSerial::printDec(static_cast<uint32_t>(device));
+                    UartSerial::print(".");
+                    UartSerial::printDec(static_cast<uint32_t>(function));
+                    UartSerial::print(" BAR ");
+                    UartSerial::printDec(index);
+                    UartSerial::print(" start=0x");
+                    UartSerial::printHex64(start);
+                    UartSerial::print(" length=0x");
+                    UartSerial::printHex64(length);
+                    UartSerial::print(" end=0x");
+                    UartSerial::printHex64(end);
+                    UartSerial::print(" translation=0x");
+                    UartSerial::printHex64(translation);
+                    UartSerial::print("\r\n");
+                    markIncomplete("PCI inventory: invalid or excessive BAR range\r\n");
+                } else if (handoff.pciBarCount == boot::UEFI_KERNEL_HANDOFF_MAX_PCI_BARS) {
+                    markIncomplete("PCI inventory: invalid or excessive BAR range\r\n");
                 } else {
                     auto& bar = handoff.pciBars[handoff.pciBarCount++];
                     bar = {static_cast<uint16_t>(segment), static_cast<uint16_t>(bus),
                            static_cast<uint8_t>(device), static_cast<uint8_t>(function), index,
                            descriptor[3], start, length};
+                    if (bus == 0 && device == 2 && function == 0) {
+                        UartSerial::print("PCI BAR snapshot index/start/length=");
+                        UartSerial::printDec(index);
+                        UartSerial::print("/0x");
+                        UartSerial::printHex64(start);
+                        UartSerial::print("/0x");
+                        UartSerial::printHex64(length);
+                        UartSerial::print("\r\n");
+                    }
                 }
-                if (bs->freePool(allocation) != uefi::EFI_SUCCESS) complete = false;
+                if (bs->freePool(allocation) != uefi::EFI_SUCCESS)
+                    markIncomplete("PCI inventory: BAR descriptor release failed\r\n");
             }
         }
-        if (bs->freePool(handles) != uefi::EFI_SUCCESS) complete = false;
+        if (bs->freePool(handles) != uefi::EFI_SUCCESS)
+            markIncomplete("PCI inventory: handle buffer release failed\r\n");
         handoff.pciInventoryComplete = complete ? 1 : 0;
+        if (!complete && incompleteReason) UartSerial::print(incompleteReason);
     }
 
     [[nodiscard]] const boot::LoaderParameterBlock& getLpb() const noexcept { return m_lpb; }
@@ -2445,6 +2492,14 @@ extern "C" micant::uefi::EfiStatus EfiMain(
             {L"storahci.sys", L"\\SystemRoot\\System32\\drivers\\storahci.sys",
              L"\\EFI\\MicaNT\\System32\\drivers\\storahci.sys",
              L"\\EFI\\MicaNT\\storahci.sys", "storahci.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"hidusb.sys", L"\\SystemRoot\\System32\\drivers\\hidusb.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\hidusb.sys",
+             L"\\EFI\\MicaNT\\hidusb.sys", "hidusb.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"usbstor.sys", L"\\SystemRoot\\System32\\drivers\\usbstor.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\usbstor.sys",
+             L"\\EFI\\MicaNT\\usbstor.sys", "usbstor.sys",
              micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
             {L"usbxhci.sys", L"\\SystemRoot\\System32\\drivers\\usbxhci.sys",
              L"\\EFI\\MicaNT\\System32\\drivers\\usbxhci.sys",

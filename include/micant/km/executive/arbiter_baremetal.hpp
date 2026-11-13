@@ -90,13 +90,24 @@ inline NtStatus claim(const void* owner, uint16_t segment, uint16_t bus, uint16_
                       uint16_t function, const boot_driver::PciBarRequestV1* requests,
                       size_t count, uint64_t* token,
                       boot_driver::PciBarResourceV1* output, size_t* capacity,
-                      ProbeBar probe) noexcept {
+                      ProbeBar probe, uint64_t* conflictAddress = nullptr,
+                      uint64_t* conflictLength = nullptr,
+                      uint64_t* requestedAddress = nullptr,
+                      uint64_t* requestedLength = nullptr,
+                      uint64_t* existingToken = nullptr,
+                      bool* sameOwner = nullptr) noexcept {
     if (!owner || !token || !capacity || !probe || !count || count > 6 || !requests || !output ||
         segment || bus > 255 || device >= 32 || function >= 8)
         return NtStatus::InvalidParameter;
     const size_t available = *capacity;
     *token = 0;
     *capacity = 0;
+    if (conflictAddress) *conflictAddress = 0;
+    if (conflictLength) *conflictLength = 0;
+    if (requestedAddress) *requestedAddress = 0;
+    if (requestedLength) *requestedLength = 0;
+    if (existingToken) *existingToken = 0;
+    if (sameOwner) *sameOwner = false;
     if (available < count) { *capacity = count; return NtStatus::BufferTooSmall; }
     for (size_t i = 0; i < count; ++i) {
         if (requests[i].BarIndex >= 6 || requests[i].Flags || requests[i].Reserved ||
@@ -109,8 +120,11 @@ inline NtStatus claim(const void* owner, uint16_t segment, uint16_t bus, uint16_
     Claim* freeClaim = nullptr;
     for (auto& existing : claims) {
         if (!existing.token) { if (!freeClaim) freeClaim = &existing; continue; }
-        if (existing.bus == bus && existing.device == device && existing.function == function)
+        if (existing.bus == bus && existing.device == device && existing.function == function) {
+            if (existingToken) *existingToken = existing.token;
+            if (sameOwner) *sameOwner = existing.owner == owner;
             return NtStatus::DeviceBusy;
+        }
     }
     if (!freeClaim || !nextToken) return NtStatus::InsufficientResources;
     Claim candidate{};
@@ -121,33 +135,47 @@ inline NtStatus claim(const void* owner, uint16_t segment, uint16_t bus, uint16_
         auto& bar = candidate.bars[i];
         const auto status = probe(bus, device, function, requests[i].BarIndex, bar);
         if (status != NtStatus::Success) return status;
+        if (requestedAddress) *requestedAddress = bar.PhysicalAddress;
+        if (requestedLength) *requestedLength = bar.Length;
         if (!bar.PhysicalAddress || bar.Length < requests[i].MinimumLength ||
             bar.PhysicalAddress > UINT64_MAX - (bar.Length - 1)) return NtStatus::DeviceNotReady;
         for (size_t j = 0; j < reservedCount; ++j)
             if (bar.PhysicalAddress <= reserved[j].last &&
-                reserved[j].first <= bar.PhysicalAddress + bar.Length - 1)
+                reserved[j].first <= bar.PhysicalAddress + bar.Length - 1) {
+                if (conflictAddress) *conflictAddress = reserved[j].first;
+                if (conflictLength) *conflictLength = reserved[j].last - reserved[j].first + 1;
                 return NtStatus::DeviceBusy;
+            }
         for (size_t j = 0; j < firmwareBarCount; ++j) {
             const auto& other = firmwareBars[j];
             if (other.ioSpace || (other.bus == bus && other.device == device &&
                                   other.function == function && other.index == bar.BarIndex)) continue;
             if (!other.length || (bar.PhysicalAddress <= other.address + other.length - 1 &&
-                                  other.address <= bar.PhysicalAddress + bar.Length - 1))
+                                  other.address <= bar.PhysicalAddress + bar.Length - 1)) {
+                if (conflictAddress) *conflictAddress = other.address;
+                if (conflictLength) *conflictLength = other.length;
                 return NtStatus::DeviceBusy;
+            }
         }
         for (size_t j = 0; j < i; ++j) {
             const auto& other = candidate.bars[j];
             if (bar.PhysicalAddress <= other.PhysicalAddress + other.Length - 1 &&
-                other.PhysicalAddress <= bar.PhysicalAddress + bar.Length - 1)
+                other.PhysicalAddress <= bar.PhysicalAddress + bar.Length - 1) {
+                if (conflictAddress) *conflictAddress = other.PhysicalAddress;
+                if (conflictLength) *conflictLength = other.Length;
                 return NtStatus::DeviceBusy;
+            }
         }
         for (const auto& existing : claims) {
             if (!existing.token) continue;
             for (size_t j = 0; j < existing.count; ++j) {
                 const auto& other = existing.bars[j];
                 if (bar.PhysicalAddress <= other.PhysicalAddress + other.Length - 1 &&
-                    other.PhysicalAddress <= bar.PhysicalAddress + bar.Length - 1)
+                    other.PhysicalAddress <= bar.PhysicalAddress + bar.Length - 1) {
+                    if (conflictAddress) *conflictAddress = other.PhysicalAddress;
+                    if (conflictLength) *conflictLength = other.Length;
                     return NtStatus::DeviceBusy;
+                }
             }
         }
     }

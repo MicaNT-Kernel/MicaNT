@@ -10,6 +10,10 @@
 #include <cstdint>
 #include <cstddef>
 
+namespace micant::services::dhcp {
+uint32_t acquireLease(uint32_t timeoutMilliseconds, uint32_t* leaseSeconds) noexcept;
+}
+
 namespace {
 
 inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
@@ -39,6 +43,26 @@ inline void PrintLine(const char* s) noexcept {
     DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
 }
 
+bool Contains(const char* text, const char* token) noexcept {
+    if (!text || !token || !*token) return false;
+    const size_t tokenLength = StrLen(token);
+    for (size_t i = 0; text[i]; ++i) {
+        size_t j = 0;
+        while (j < tokenLength && text[i + j] == token[j]) ++j;
+        if (j == tokenLength) return true;
+    }
+    return false;
+}
+
+void PrintStatus(uint32_t status) noexcept {
+    static constexpr char prefix[] = "DHCP acquisition failed; NTSTATUS 0x";
+    static constexpr char hex[] = "0123456789ABCDEF";
+    char line[sizeof(prefix) + 8]{};
+    for (size_t i = 0; i + 1 < sizeof(prefix); ++i) line[i] = prefix[i];
+    for (unsigned i = 0; i < 8; ++i) line[sizeof(prefix) - 1 + i] = hex[(status >> ((7 - i) * 4)) & 0xf];
+    DoSyscall(0x25, reinterpret_cast<uint64_t>(line), sizeof(line) - 1);
+}
+
 } // namespace
 
 extern "C" void _start(const char* cmdLine = nullptr) {
@@ -48,16 +72,19 @@ extern "C" void _start(const char* cmdLine = nullptr) {
 #endif
     DoSyscall(0x11, csVal & 3, 0);
 
-    PrintLine("Service Host Process (svchost.exe) [PID 892]");
-    PrintLine("============================================");
+    PrintLine("Service Host Process (svchost.exe)");
+    PrintLine("==================================");
     if (cmdLine && *cmdLine) {
         PrintLine("Group Parameter:    Passed via Command Line");
     } else {
         PrintLine("Group Parameter:    -k netsvcs (Network Services Container)");
     }
-    PrintLine("Hosted Services:    Dnscache, LanmanServer, W32Time, EventLog");
-    PrintLine("RPC Thread Pool:    8 Active Worker Threads (SMP Scaled)");
-    PrintLine("Process State:      Running / Non-Interactive Service Isolation");
+    if (Contains(cmdLine, "netsvcs") || Contains(cmdLine, "LocalServiceNetworkRestricted")) {
+        uint32_t leaseSeconds{};
+        const uint32_t status = micant::services::dhcp::acquireLease(2500, &leaseSeconds);
+        if (status == 0) PrintLine("DHCP lease committed through AFD.");
+        else PrintStatus(status);
+    }
 
     DoSyscall(0x01, 0, 0);
 

@@ -107,7 +107,7 @@ class RuntimeRunnerTests(unittest.TestCase):
                 validate_build_manifest(root, allow_dirty=True, runtime_selftest=False)
 
     def check_root_mode(self, runtime_selftest, timer_selftest=False):
-        arguments = ["qemu.py", "--headless"]
+        arguments = ["qemu.py", "--headless", "--diagnostics-dir", "/tmp/micant-diagnostics"]
         if runtime_selftest:
             arguments.append("--runtime-selftest")
         if timer_selftest:
@@ -151,6 +151,49 @@ class RuntimeRunnerTests(unittest.TestCase):
                 not runtime_selftest and not timer_selftest,
             )
             self.assertNotIn("--interactive", commands[-1])
+            self.assertEqual(
+                commands[-1][commands[-1].index("--diagnostics-dir") + 1],
+                str(Path("/tmp/micant-diagnostics").resolve()),
+            )
+
+    def test_diagnostics_survive_kernel_failure_with_matching_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            kernel = root / "build/baremetal/ntoskrnl.exe"
+            loader = root / "build/esp/EFI/BOOT/BOOTX64.EFI"
+            kernel.parent.mkdir(parents=True)
+            loader.parent.mkdir(parents=True)
+            kernel.write_bytes(b"exact-kernel")
+            loader.write_bytes(b"loader")
+            manifest = kernel.parent / "kernel-build-manifest.json"
+            manifest.write_bytes(b'{"build_id":"diagnostic-test"}')
+            (root / "build/virtio_gpu.sys").write_bytes(b"driver")
+            firmware = root / "ovmf.fd"
+            firmware.touch()
+            diagnostics = root / "diagnostics"
+            failure = "[MicaNT Ps] Two user threads verification failed"
+            process = mock.Mock()
+            process.poll.return_value = None
+
+            def launch(command, **kwargs):
+                serial = Path(command[command.index("-serial") + 1].removeprefix("file:"))
+                serial.write_text(failure, encoding="utf-8")
+                return process
+
+            with (
+                mock.patch.object(boot_micant, "ROOT", root),
+                mock.patch.object(boot_micant, "validate_build_manifest"),
+                mock.patch.object(boot_micant.shutil, "which", return_value="/tools/qemu"),
+                mock.patch.object(boot_micant.subprocess, "Popen", side_effect=launch),
+                self.assertRaisesRegex(RuntimeError, "Kernel bootstrap failed"),
+            ):
+                boot_micant.run_qemu(firmware, 1, 1, "none", False, False,
+                                     diagnostics_dir=diagnostics)
+            self.assertEqual((diagnostics / "serial.log").read_text(), failure)
+            self.assertEqual((diagnostics / kernel.name).read_bytes(), kernel.read_bytes())
+            self.assertEqual((diagnostics / manifest.name).read_bytes(), manifest.read_bytes())
+            process.terminate.assert_called_once()
+            self.assertTrue((diagnostics / "qemu.log").exists())
 
     def test_root_selftest_builds_requested_mode(self):
         self.check_root_mode(True)

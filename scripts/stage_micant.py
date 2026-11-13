@@ -264,6 +264,10 @@ SYSTEM32_SERVICES = [
 
 KNOWN_DLLS = [
     ("tools/dlls/ntdll.cpp", "build/ntdll.dll", "ntdll.dll"),
+    ("tools/dlls/ws2_32.cpp", "build/ws2_32.dll", "ws2_32.dll"),
+    ("tools/dlls/dnsapi.cpp", "build/dnsapi.dll", "dnsapi.dll"),
+    ("tools/dlls/crypt32.cpp", "build/crypt32.dll", "crypt32.dll"),
+    ("tools/dlls/winhttp.cpp", "build/winhttp.dll", "winhttp.dll"),
     ("tools/dlls/kernel32.cpp", "build/kernel32.dll", "kernel32.dll"),
     ("tools/dlls/kernelbase.cpp", "build/kernelbase.dll", "kernelbase.dll"),
     ("tools/dlls/user32.cpp", "build/user32.dll", "user32.dll"),
@@ -286,7 +290,6 @@ WINDOWING_DLLS = [
 
 DRIVER_STUBS = [
     ("tools/drivers/driver_template.cpp", "build/ahci.sys", "ahci.sys"),
-    ("tools/drivers/driver_template.cpp", "build/i210.sys", "i210.sys"),
     ("tools/drivers/driver_template.cpp", "build/tcpip.sys", "tcpip.sys"),
     ("tools/drivers/driver_template.cpp", "build/fltmgr.sys", "fltmgr.sys"),
     ("tools/drivers/driver_template.cpp", "build/xhci.sys", "xhci.sys"),
@@ -415,6 +418,10 @@ def run_local_build():
     # Compile System32 Subsystem Services (Incremental)
     print("      Compiling 7 System32 Subsystem Services...")
     for src, out_path, name in SYSTEM32_SERVICES:
+        # svchost links the private DHCP implementation and the native WS2
+        # import library, which are emitted by the Known DLL pass below.
+        if name == "svchost.exe":
+            continue
         full_src = os.path.join(REPO_ROOT, src)
         full_out = os.path.join(REPO_ROOT, out_path)
         if os.path.exists(full_out) and os.path.exists(full_src):
@@ -445,13 +452,54 @@ def run_local_build():
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
             sys.exit(1)
 
-    # Compile 12 Known DLLs (PE32+ Shared Libraries, Incremental)
-    print("      Compiling 12 Known DLLs...")
+    # Compile native Known DLLs (PE32+ Shared Libraries, Incremental)
+    print("      Compiling Known DLLs...")
     for src, out_path, name in KNOWN_DLLS:
         full_src = os.path.join(REPO_ROOT, src)
         full_out = os.path.join(REPO_ROOT, out_path)
+        auxiliary_output = {
+            "ntdll.dll": os.path.join(REPO_ROOT, "build", "libntdll.dll.a"),
+            "ws2_32.dll": os.path.join(REPO_ROOT, "build", "libws2_32.dll.a"),
+            "dnsapi.dll": os.path.join(REPO_ROOT, "build", "libdnsapi.dll.a"),
+            "crypt32.dll": os.path.join(REPO_ROOT, "build", "libcrypt32.dll.a"),
+        }.get(name)
+        runtime_dependencies = []
+        if name == "ntdll.dll":
+            # Rebuild when the no-entry link policy itself changes.
+            runtime_dependencies.append("scripts/stage_micant.py")
+        if name in ("ntdll.dll", "ws2_32.dll", "dnsapi.dll", "crypt32.dll", "winhttp.dll"):
+            runtime_dependencies.append("tools/dlls/native_stack_probe.cpp")
+        if name in ("ws2_32.dll", "crypt32.dll", "winhttp.dll"):
+            runtime_dependencies.append("kernel/ex/freestanding_memory.cpp")
+        if name == "winhttp.dll":
+            runtime_dependencies.extend((
+                "include/micant/um/subsystems/net/winhttp.hpp",
+                "include/micant/shared/native_network_api.hpp",
+                "include/micant/shared/native_nt_api.hpp",
+                "include/micant/shared/native_crypt32_api.hpp",
+                "include/micant/shared/bounded_containers.hpp",
+                "include/micant/shared/crypto_primitives.hpp",
+                "include/micant/shared/x509_profile.hpp",
+                "include/micant/shared/tls13_client.hpp",
+            ))
+        if name == "crypt32.dll":
+            runtime_dependencies.extend((
+                "include/micant/shared/native_nt_api.hpp",
+                "include/micant/shared/native_crypt32_api.hpp",
+                "include/micant/shared/bounded_containers.hpp",
+                "include/micant/shared/crypto_primitives.hpp",
+                "include/micant/shared/x509_profile.hpp",
+            ))
+        if name == "ws2_32.dll":
+            runtime_dependencies.extend((
+                "include/micant/shared/native_nt_api.hpp",
+                "include/micant/shared/afd_socket_abi.hpp",
+                "include/micant/shared/bounded_containers.hpp",
+            ))
         if os.path.exists(full_out) and os.path.exists(full_src):
-            if os.path.getmtime(full_out) >= os.path.getmtime(full_src):
+            if (os.path.getmtime(full_out) >= max(os.path.getmtime(os.path.join(REPO_ROOT, item))
+                    for item in [src] + runtime_dependencies) and
+                    (not auxiliary_output or os.path.exists(auxiliary_output))):
                 continue
 
         c_cmd = [
@@ -459,15 +507,60 @@ def run_local_build():
             "-target", "x86_64-w64-mingw32",
             "-shared",
             "-nostdlib",
-            "-Wl,-e,DllMain",
+            "-Iinclude",
+            "-Wl,--entry=" if name == "ntdll.dll" else "-Wl,-e,DllMain",
             "-Wl,--subsystem,native",
             "-O2",
-            src,
-            "-o", out_path
         ]
+        if name in ("ntdll.dll", "ws2_32.dll", "dnsapi.dll", "crypt32.dll", "winhttp.dll"):
+            c_cmd.extend(("-std=c++23", "-ffreestanding", "-fno-builtin",
+                          "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics",
+                          "-fno-stack-protector", "-mno-red-zone"))
+        if name == "ntdll.dll":
+            c_cmd.extend(("-fuse-ld=lld", "-Wl,--out-implib,build/libntdll.dll.a"))
+        if name == "ws2_32.dll":
+            c_cmd.extend(("-DMICANT_NATIVE_USERMODE", "-Wl,--out-implib,build/libws2_32.dll.a", src,
+                          "tools/dlls/native_stack_probe.cpp", "kernel/ex/freestanding_memory.cpp",
+                          "build/libntdll.dll.a", "-o", out_path))
+        elif name == "dnsapi.dll":
+            c_cmd.extend(("-DMICANT_NATIVE_USERMODE", "-Wl,--out-implib,build/libdnsapi.dll.a",
+                          src, "tools/dlls/native_stack_probe.cpp", "build/libws2_32.dll.a",
+                          "build/libntdll.dll.a", "-o", out_path))
+        elif name == "crypt32.dll":
+            c_cmd.extend(("-DMICANT_NATIVE_USERMODE", "-Wl,--out-implib,build/libcrypt32.dll.a", src,
+                          "tools/dlls/native_stack_probe.cpp", "kernel/ex/freestanding_memory.cpp",
+                          "build/libntdll.dll.a", "-o", out_path))
+        elif name == "winhttp.dll":
+            c_cmd.extend(("-DMICANT_NATIVE_USERMODE", "-Wl,--out-implib,build/libwinhttp.dll.a", src,
+                          "tools/dlls/native_stack_probe.cpp", "kernel/ex/freestanding_memory.cpp",
+                          "build/libcrypt32.dll.a", "build/libdnsapi.dll.a", "build/libws2_32.dll.a", "build/libntdll.dll.a",
+                          "-o", out_path))
+        elif name == "ntdll.dll":
+            c_cmd.extend((src, "tools/dlls/native_stack_probe.cpp", "-o", out_path))
+        else:
+            c_cmd.extend((src, "-o", out_path))
         r = subprocess.run(c_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
         if r.returncode != 0:
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
+            sys.exit(1)
+
+    svchost_source = os.path.join(REPO_ROOT, "tools", "svchost_app.cpp")
+    dhcp_source = os.path.join(REPO_ROOT, "tools", "dlls", "dhcpcsvc.cpp")
+    svchost_output = os.path.join(REPO_ROOT, "build", "svchost.exe")
+    ws2_import = os.path.join(REPO_ROOT, "build", "libws2_32.dll.a")
+    ntdll_import = os.path.join(REPO_ROOT, "build", "libntdll.dll.a")
+    if (not os.path.exists(svchost_output) or
+            os.path.getmtime(svchost_output) < max(os.path.getmtime(svchost_source), os.path.getmtime(dhcp_source))):
+        svchost_cmd = [
+            "clang++", "-target", "x86_64-w64-mingw32", "-std=c++23",
+            "-ffreestanding", "-fno-exceptions", "-fno-rtti", "-fno-stack-protector",
+            "-mno-red-zone", "-mno-stack-arg-probe", "-O2", "-DMICANT_NATIVE_USERMODE",
+            "-Iinclude", "-Itools", "-Wl,--subsystem,console", "-Wl,-e,_start", "-nostdlib",
+            svchost_source, dhcp_source, ws2_import, ntdll_import, "-o", "build/svchost.exe",
+        ]
+        r = subprocess.run(svchost_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[FATAL] svchost.exe build failed:\n{r.stderr}")
             sys.exit(1)
 
     # Build the real User32/GDI32/IMM32 -> win32k.dll chain, with exact
@@ -642,6 +735,12 @@ def main():
         if os.path.exists(p):
             sftp.put(p, f"/tmp/{name}")
 
+    # Real boot-start OEM images, built by the canonical CMake targets.
+    for name in ("storahci.sys", "hidusb.sys", "usbstor.sys", "usbxhci.sys", "i210.sys", "virtio_net.sys"):
+        p = os.path.join(REPO_ROOT, "build", name)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
     for src_rel, name in NETWORK_FILES:
         p = os.path.join(REPO_ROOT, src_rel)
         if os.path.exists(p):
@@ -788,6 +887,9 @@ cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI
 cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI
 cp -v /tmp/ntoskrnl.exe /mnt/micaesp/EFI/MicaNT/
 cp -v /tmp/virtio_gpu.sys /mnt/micaesp/EFI/MicaNT/System32/drivers/
+for f in storahci.sys hidusb.sys usbstor.sys usbxhci.sys i210.sys virtio_net.sys; do
+    [ ! -f "/tmp/$f" ] || cp -v "/tmp/$f" /mnt/micaesp/EFI/MicaNT/System32/drivers/
+done
 cp -v /tmp/ntoskrnl.exe /mnt/micaesp/
 rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true
 
@@ -796,6 +898,9 @@ mkdir -p /boot/efi/EFI/MicaNT/System32/drivers
 cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI
 cp -v /tmp/ntoskrnl.exe /boot/efi/EFI/MicaNT/
 cp -v /tmp/virtio_gpu.sys /boot/efi/EFI/MicaNT/System32/drivers/
+for f in storahci.sys hidusb.sys usbstor.sys usbxhci.sys i210.sys virtio_net.sys; do
+    [ ! -f "/tmp/$f" ] || cp -v "/tmp/$f" /boot/efi/EFI/MicaNT/System32/drivers/
+done
 cp -v /tmp/ntoskrnl.exe /boot/efi/
 rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true
 
