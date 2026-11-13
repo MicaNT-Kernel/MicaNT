@@ -213,6 +213,7 @@ extern "C" bool MicantTestPsDeferredReaper() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
 extern "C" bool MicantTestPsTwoUserThreads() noexcept;
 extern "C" bool MicantTestPsThreeUserThreads() noexcept;
+extern "C" bool MicantTestPsFileBackedImage() noexcept;
 extern "C" int MicantTestMmAvlTable() noexcept;
 extern "C" int MicantTestMmProcessAddressSpace() noexcept;
 extern "C" int MicantTestMmManagedProtection() noexcept;
@@ -3693,6 +3694,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (!MicantTestPsThreeUserThreads())
         stopWithError("[MicaNT Ps] Multiple user thread termination failed\r\n");
     serialWrite("[MicaNT Ps] Three CPL3 thread termination verified\r\n");
+    if (!MicantTestPsFileBackedImage())
+        stopWithError("[MicaNT Ps] File-backed SEC_IMAGE verification failed\r\n");
+    serialWrite("[MicaNT Ps] File-backed SEC_IMAGE process image verified\r\n");
     if (micant::hal::amd64::bootstrapQemuFaultTestsAvailable()) {
         if (!micant::hal::amd64::verifyBootstrapTimerInterrupt())
             stopWithError("[MicaNT Hal] Local APIC timer verification failed\r\n");

@@ -322,6 +322,7 @@ if (MICANT_ENABLE_BAREMETAL)
         test/kernel_ps_thread_test.cpp
         test/kernel_ps_user_test.cpp
         test/kernel_ps_two_user_threads_test.cpp
+        test/kernel_ps_file_image_test.cpp
         test/kernel_mm_avl_test.cpp
         test/kernel_mm_process_test.cpp
         test/pe_tls_freestanding_test.cpp
@@ -407,6 +408,34 @@ if (MICANT_ENABLE_BAREMETAL)
         OUTPUT_NAME "explorer"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
     )
+    # Self-contained image for the file-backed SEC_IMAGE verification. It has
+    # no imports and no DllMain, so the Ps loader can map it as a main image.
+    add_executable(file_image_boot EXCLUDE_FROM_ALL tools/file_image_app.cpp)
+    target_compile_options(file_image_boot PRIVATE
+        -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+        -fno-stack-protector -mno-red-zone -mno-stack-arg-probe -O2
+    )
+    target_link_options(file_image_boot PRIVATE
+        -nostdlib -Wl,--subsystem,windows -Wl,-e,_start
+        -Wl,--image-base,0x140000000 -Wl,--dynamicbase
+    )
+    set_target_properties(file_image_boot PROPERTIES
+        OUTPUT_NAME "fileimage"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build"
+    )
+    # The Ps loader rejects a DLL with a DllMain entry point because DLL
+    # initializers are not part of M4. Publish the entry-point-free NTDLL
+    # build separately so the file-backed image path can be verified without
+    # replacing the NTDLL used by the desktop path.
+    add_custom_command(TARGET file_image_boot POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${CMAKE_SOURCE_DIR}/build/fileimage-system32"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_BINARY_DIR}/ntdll-process.dll"
+            "${CMAKE_SOURCE_DIR}/build/fileimage-system32/ntdll.dll"
+        DEPENDS "${_ntdll_process_dll}"
+    )
+
     add_library(ntdll_boot SHARED EXCLUDE_FROM_ALL
         tools/dlls/ntdll.cpp
         tools/dlls/native_stack_probe.cpp

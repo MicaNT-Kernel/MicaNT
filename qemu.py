@@ -330,6 +330,7 @@ def main() -> int:
                 "xhci_oem_boot",
                 "i210_oem_boot",
                 "virtio_net_oem_boot",
+                "file_image_boot",
             ]
         )
         write_manifest(

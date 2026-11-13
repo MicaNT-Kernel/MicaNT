@@ -67,6 +67,7 @@ EXPECTED_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
     "[MicaNT Ps] Process-owned CPL3 context and termination verified",
     "[MicaNT Ps] Two CPL3 threads, TLS slots and event waits verified",
     "[MicaNT Ps] Three CPL3 thread termination verified",
+    "[MicaNT Ps] File-backed SEC_IMAGE process image verified",
     "[MicaNT Hal] Local APIC periodic interrupts verified",
     "[MicaNT Ke] Timer-preempted kernel contexts verified",
     "[MicaNT Ke] Timer-preempted CPL3 contexts verified",
@@ -310,8 +311,25 @@ def run_qemu(
             source = ROOT / "build" / name
             if source.is_file():
                 shutil.copyfile(source, driver_dir / name)
+        # The FAT32 data volume is the system volume: FsRtl selects it by the
+        # MicaNT\System32\ntdll.dll marker at the volume root, and the Ps
+        # loader opens the real DLLs from there for file-backed SEC_IMAGE.
+        system32_dir = esp / "MicaNT" / "System32"
+        system32_dir.mkdir(parents=True)
+        for source in sorted((ROOT / "build" / "system32").glob("*.dll")):
+            shutil.copyfile(source, system32_dir / source.name)
+        # The Ps loader rejects a DLL with a DllMain entry point because DLL
+        # initializers are not part of M4. Use the entry-point-free NTDLL
+        # build for the file-backed image verification volume.
+        for source in sorted((ROOT / "build" / "fileimage-system32").glob("*.dll")):
+            shutil.copyfile(source, system32_dir / source.name)
+        # A relocatable executable used to verify the file-backed SEC_IMAGE
+        # main-image path against the mounted volume.
+        image_exe = ROOT / "build" / "fileimage.exe"
+        if image_exe.is_file():
+            shutil.copyfile(image_exe, system32_dir / "fileimage.exe")
         ahci_image = temp / "ahci-fat32.img"
-        create_fat32_image(kernel_dir.parent.parent, ahci_image)
+        create_fat32_image(esp, ahci_image)
         log_directory = diagnostics_dir if diagnostics_dir is not None else temp
         serial_path = log_directory / "serial.log"
         qemu_output_path = log_directory / "qemu.log"
