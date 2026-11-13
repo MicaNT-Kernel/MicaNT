@@ -34,6 +34,17 @@ struct SyscallFrame {
     uint64_t rsi, rdi, rbp, rbx, rax;
     uint64_t rcx, r11, rip, cs, flags, rsp, ss;
 };
+// Private state associated with a syscall entry; it is not part of the
+// public NT CONTEXT or the assembly-visible IRET frame.
+struct UserSegmentState {
+    uint16_t ds{}, es{}, fs{}, gs{};
+    uint64_t fsBase{}, userGsBase{};
+};
+struct ThreadSegmentState {
+    uint16_t ds{0x18}, es{0x18}, fs{}, gs{};
+    uint64_t fsBase{}, userGsBase{};
+    bool saved{};
+};
 inline constexpr uint64_t BootstrapNtContinueApplied = 0x4D4943414E54434EULL;
 static_assert(sizeof(SyscallFrame) == 160);
 static_assert(offsetof(SyscallFrame, rax) == 96);
@@ -72,6 +83,8 @@ bool unmapBootstrapManagedPage(void* context, uintptr_t address) noexcept;
 bool mapBootstrapProtectManagedPage(void* context, uintptr_t address,
                                     uint32_t protection) noexcept;
 bool mapBootstrapGuardManagedPage(void* context, uintptr_t address, bool guarded) noexcept;
+bool replaceBootstrapManagedPage(void* context, uintptr_t address, uint64_t expectedPfn,
+                                 uint64_t replacementPfn, uint32_t protection) noexcept;
 // Deliberate faults are restricted to the QEMU TCG bootstrap diagnostic.
 bool bootstrapQemuFaultTestsAvailable() noexcept;
 bool verifyBootstrapManagedPageFault(uintptr_t address, bool write,
@@ -194,6 +207,7 @@ struct UserServiceArguments {
     void* floatingState{};
     size_t floatingStateSize{};
     uint32_t xsaveMask{};
+    UserSegmentState* userSegments{};
 };
 using UserServiceRoutine = uint64_t (*)(const UserServiceArguments&) noexcept;
 bool initializeBootstrapSyscalls(UserServiceRoutine dispatch) noexcept;
@@ -202,6 +216,8 @@ void setBootstrapThreadEntryStack(uintptr_t stackTop, uintptr_t userTeb,
                                   bool syscallGsActive = false, uintptr_t stackBase = 0,
                                   uintptr_t executionStackTop = 0) noexcept;
 bool bootstrapSyscallGsActive() noexcept;
+void saveBootstrapThreadSegments(ThreadSegmentState& state, bool syscallGsActive) noexcept;
+void restoreBootstrapThreadSegments(const ThreadSegmentState& state) noexcept;
 bool bootstrapStackHasHeadroom(uintptr_t stackPointer, uintptr_t threadBase,
                                uintptr_t threadTop, size_t required) noexcept;
 uintptr_t bootstrapThreadSyscallStack() noexcept;

@@ -80,7 +80,9 @@ HandleTable& kernelHandleTable() noexcept {
 #if defined(MICANT_FREESTANDING)
 HandleTable& currentHandleTable() noexcept {
     const auto* thread = ke::KeGetCurrentThread();
-    if (thread && thread->owningProcess) return thread->owningProcess->getHandleTable();
+    // An attached thread operates in the attached process's handle table;
+    // kernel handles remain separately tagged and resolved below.
+    if (auto* process = ke::KeGetCurrentProcess()) return process->getHandleTable();
     if (thread && thread->previousUserMode) return sys::g_BootstrapUserHandleTable;
     return kernelHandleTable();
 }

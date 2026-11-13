@@ -97,6 +97,12 @@ struct SectionFileBacking {
     bool (*acquire)(void*) noexcept{};
     void (*release)(void*) noexcept{};
     NtStatus (*read)(void*, uint64_t, void*, size_t, size_t*) noexcept{};
+    NtStatus (*acquireImage)(void*) noexcept{};
+    void (*releaseImage)(void*) noexcept{};
+    uint64_t (*querySize)(void*) noexcept{};
+    NtStatus (*publishControl)(void*, void*, bool (*)(void*) noexcept,
+                               void (*)(void*) noexcept, void**) noexcept{};
+    bool sharedControlSupported{};
 };
 
 class SectionObject {
@@ -187,14 +193,24 @@ public:
                   uint32_t pageProtection, SectionFileBacking file) noexcept
         : maximumSize_(maximumSize), allocationAttributes_(allocationAttributes),
           pageProtection_(pageProtection), fileBacking_(file) {
-        if (!file.context || !file.size || !file.acquire || !file.release || !file.read ||
+        if (!file.context || (!file.size && !file.querySize) || !file.acquire || !file.release || !file.read ||
             allocationAttributes != (SEC_FILE | SEC_IMAGE) ||
-            (pageProtection != mm::PAGE_READONLY && pageProtection != mm::PAGE_EXECUTE_READ)) {
+            (pageProtection != mm::PAGE_READONLY && pageProtection != mm::PAGE_READWRITE &&
+             pageProtection != mm::PAGE_WRITECOPY && pageProtection != mm::PAGE_EXECUTE &&
+             pageProtection != mm::PAGE_EXECUTE_READ && pageProtection != mm::PAGE_EXECUTE_READWRITE &&
+             pageProtection != mm::PAGE_EXECUTE_WRITECOPY)) {
             status_ = NtStatus::InvalidParameter;
             return;
         }
         if (!file.acquire(file.context)) { status_ = NtStatus::InvalidHandle; return; }
         fileReferenceHeld_ = true;
+        if (file.acquireImage && file.releaseImage) {
+            status_ = file.acquireImage(file.context);
+            if (status_ != NtStatus::Success) return;
+            imageLeaseHeld_ = true;
+        }
+        if (file.querySize) fileBacking_.size = file.size = file.querySize(file.context);
+        if (!file.size) { status_ = NtStatus::InvalidImageFormat; return; }
         if (file.size > SIZE_MAX) { status_ = NtStatus::SectionTooBig; return; }
         std::unique_ptr<uint8_t[]> bytes(new (std::nothrow_t{}) uint8_t[static_cast<size_t>(file.size)]);
         if (!bytes) { status_ = NtStatus::NoMemory; return; }
@@ -217,22 +233,17 @@ public:
             status_ = NtStatus::InvalidImageFormat;
             return;
         }
-        if (optional.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_IMPORT &&
-            optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT].size &&
-            (optional.numberOfRvaAndSizes <= pe::IMAGE_DIRECTORY_ENTRY_IAT ||
-             !optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IAT].size)) {
-            // Without a declared IAT range, this bounded SEC_IMAGE mapper
-            // cannot guarantee private writable slots for import binding.
-            status_ = NtStatus::NotSupported;
-            return;
-        }
         maximumSize_ = optional.sizeOfImage;
         const size_t mappedSize = (maximumSize_ + mm::PageMask4KB) & ~mm::PageMask4KB;
         const size_t pageCount = mappedSize >> mm::PageShift4KB;
         std::unique_ptr<uint8_t[]> mapped(new (std::nothrow_t{}) uint8_t[mappedSize]);
         pageProtections_.reset(new (std::nothrow_t{}) uint32_t[pageCount]);
+        imageViewProtections_.reset(new (std::nothrow_t{}) uint32_t[pageCount]);
+        sharedImagePages_.reset(new (std::nothrow_t{}) uint8_t[pageCount]{});
         std::unique_ptr<uint8_t[]> sectionPageFlags(new (std::nothrow_t{}) uint8_t[pageCount]{});
-        if (!mapped || !pageProtections_ || !sectionPageFlags) { status_ = NtStatus::NoMemory; return; }
+        if (!mapped || !pageProtections_ || !imageViewProtections_ || !sharedImagePages_ || !sectionPageFlags) {
+            status_ = NtStatus::NoMemory; return;
+        }
         std::memset(mapped.get(), 0, mappedSize);
         status_ = image.map({mapped.get(), mappedSize}, optional.imageBase);
         if (status_ != NtStatus::Success) return;
@@ -243,7 +254,13 @@ public:
                 return NtStatus::Success;
             });
         if (status_ != NtStatus::Success) return;
-        for (size_t page = 0; page < pageCount; ++page) pageProtections_[page] = mm::PAGE_READONLY;
+        for (size_t page = 0; page < pageCount; ++page) pageProtections_[page] = mm::PAGE_NOACCESS;
+        const size_t headerPages = (static_cast<size_t>(optional.sizeOfHeaders) + mm::PageMask4KB) >>
+                                   mm::PageShift4KB;
+        for (size_t page = 0; page < headerPages; ++page) {
+            sectionPageFlags[page] |= 4u | 16u;
+            pageProtections_[page] = mm::PAGE_READONLY;
+        }
         for (size_t index = 0; index < image.headers().fileHeader.numberOfSections; ++index) {
             const auto section = image.section(index);
             const size_t first = section.virtualAddress >> mm::PageShift4KB;
@@ -251,75 +268,213 @@ public:
                 ? section.misc.virtualSize : section.sizeOfRawData;
             const size_t count = (bytesInSection + (section.virtualAddress & mm::PageMask4KB) +
                                   mm::PageMask4KB) >> mm::PageShift4KB;
-            uint32_t protection = mm::PAGE_READONLY;
+            uint32_t protection = mm::PAGE_NOACCESS;
             const bool executable = section.characteristics & pe::IMAGE_SCN_MEM_EXECUTE;
             const bool writable = section.characteristics & pe::IMAGE_SCN_MEM_WRITE;
-            if (executable && writable) { status_ = NtStatus::InvalidImageFormat; return; }
-            if (executable) protection = mm::PAGE_EXECUTE_READ;
+            const bool readable = section.characteristics & pe::IMAGE_SCN_MEM_READ;
+            // Uncached PE pages require a cache-consistent physical alias.
+            if (bytesInSection && (section.characteristics & pe::IMAGE_SCN_MEM_NOT_CACHED)) {
+                status_ = NtStatus::NotSupported;
+                return;
+            }
+            const bool sharedWritable = writable && (section.characteristics & pe::IMAGE_SCN_MEM_SHARED);
+            if (bytesInSection && sharedWritable && !file.sharedControlSupported) {
+                status_ = NtStatus::NotSupported;
+                return;
+            }
+            // AMD64 PTEs cannot deny reads while permitting instruction fetch.
+            // Reject execute-only sections until the contract can be enforced;
+            // do not silently expose the bytes to user-mode reads.
+            if (bytesInSection && executable && !readable && !writable) {
+                status_ = NtStatus::NotSupported;
+                return;
+            }
+            if (executable && writable) protection = mm::PAGE_EXECUTE_READWRITE;
+            else if (executable) protection = mm::PAGE_EXECUTE_READ;
             else if (writable) protection = mm::PAGE_READWRITE;
+            else if (readable) protection = mm::PAGE_READONLY;
             if (first > pageCount || count > pageCount - first) { status_ = NtStatus::InvalidImageFormat; return; }
             const uint8_t characteristics = (executable ? 1u : 0u) | (writable ? 2u : 0u);
             for (size_t page = first; page < first + count; ++page) {
-                sectionPageFlags[page] |= characteristics;
-                if ((sectionPageFlags[page] & 3u) == 3u) {
-                    status_ = NtStatus::InvalidImageFormat;
-                    return;
+                const uint8_t sharing = sharedWritable ? 8u : 16u;
+                if (sectionPageFlags[page] & (sharedWritable ? 16u : 8u)) {
+                    status_ = NtStatus::NotSupported; return;
                 }
+                sectionPageFlags[page] |= characteristics | 4u | sharing;
+                if (sharedWritable) sharedImagePages_[page] = 1;
                 pageProtections_[page] = protection;
             }
         }
-        for (const uint32_t directoryIndex : {pe::IMAGE_DIRECTORY_ENTRY_IMPORT,
-                                               pe::IMAGE_DIRECTORY_ENTRY_IAT}) {
-            if (directoryIndex >= optional.numberOfRvaAndSizes) continue;
-            const auto directory = optional.dataDirectory[directoryIndex];
-            if (!directory.virtualAddress || !directory.size) continue;
-            const size_t directoryStart = directory.virtualAddress;
-            const size_t directoryEnd = directoryStart + directory.size;
-            for (size_t index = 0; index < image.headers().fileHeader.numberOfSections; ++index) {
-                const auto section = image.section(index);
-                if (!(section.characteristics & pe::IMAGE_SCN_MEM_EXECUTE)) continue;
-                const size_t sectionStart = section.virtualAddress;
-                const size_t sectionLength = section.misc.virtualSize > section.sizeOfRawData
-                    ? section.misc.virtualSize : section.sizeOfRawData;
-                const size_t sectionEnd = sectionStart + sectionLength;
-                if (directoryStart < sectionEnd && sectionStart < directoryEnd) {
-                    status_ = NtStatus::InvalidImageFormat;
-                    return;
-                }
-            }
+        for (size_t page = 0; page < pageCount; ++page) {
+            imageViewProtections_[page] = pageProtections_[page];
         }
-        // The image loader writes import address tables after mapping. These
-        // pages use per-view private copies, preserving the shared file image.
-        for (const uint32_t directoryIndex : {pe::IMAGE_DIRECTORY_ENTRY_IMPORT,
-                                               pe::IMAGE_DIRECTORY_ENTRY_IAT}) {
-            if (directoryIndex >= optional.numberOfRvaAndSizes) continue;
-            const auto directory = optional.dataDirectory[directoryIndex];
+        const auto readableRange = [&](size_t start, size_t length) noexcept {
+            if (!length) return true;
+            if (start >= maximumSize_ || length > maximumSize_ - start) return false;
+            const size_t last = (start + length - 1) >> mm::PageShift4KB;
+            for (size_t page = start >> mm::PageShift4KB; page <= last; ++page)
+                if (imageViewProtections_[page] == mm::PAGE_NOACCESS) return false;
+            return true;
+        };
+        const auto touchesShared = [&](size_t start, size_t length) noexcept {
+            if (!length || start >= maximumSize_ || length > maximumSize_ - start) return true;
+            const size_t last = (start + length - 1) >> mm::PageShift4KB;
+            for (size_t page = start >> mm::PageShift4KB; page <= last; ++page)
+                if (sharedImagePages_[page]) return true;
+            return false;
+        };
+        const auto readableString = [&](uint32_t rva) noexcept {
+            for (size_t p = rva; p < maximumSize_; ++p) {
+                if (!readableRange(p, 1)) return false;
+                if (!mapped[p]) return true;
+            }
+            return false;
+        };
+        // Loader and dispatcher metadata must remain readable after final
+        // protection is installed; otherwise parsing it would fault in ring 0
+        // or recursively fault the user exception dispatcher.
+        for (const uint32_t index : {pe::IMAGE_DIRECTORY_ENTRY_EXPORT,
+                                     pe::IMAGE_DIRECTORY_ENTRY_IMPORT,
+                                     pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION,
+                                     pe::IMAGE_DIRECTORY_ENTRY_BASERELOC,
+                                     pe::IMAGE_DIRECTORY_ENTRY_TLS,
+                                     pe::IMAGE_DIRECTORY_ENTRY_IAT}) {
+            if (index >= optional.numberOfRvaAndSizes) continue;
+            const auto directory = optional.dataDirectory[index];
             if (!directory.virtualAddress || !directory.size) continue;
             const size_t first = directory.virtualAddress >> mm::PageShift4KB;
             const size_t last = (static_cast<size_t>(directory.virtualAddress) + directory.size - 1) >>
                                 mm::PageShift4KB;
             if (last >= pageCount) { status_ = NtStatus::InvalidImageFormat; return; }
-            for (size_t page = first; page <= last; ++page) pageProtections_[page] = mm::PAGE_READWRITE;
-        }
-        for (size_t index = 0; index < image.headers().fileHeader.numberOfSections; ++index) {
-            const auto section = image.section(index);
-            if (!(section.characteristics & pe::IMAGE_SCN_MEM_EXECUTE)) continue;
-            const size_t sectionSize = section.misc.virtualSize > section.sizeOfRawData
-                ? section.misc.virtualSize : section.sizeOfRawData;
-            if (!sectionSize) continue;
-            const size_t first = section.virtualAddress >> mm::PageShift4KB;
-            const size_t count = (sectionSize + mm::PageMask4KB) >> mm::PageShift4KB;
-            if (first > pageCount || count > pageCount - first) {
-                status_ = NtStatus::InvalidImageFormat;
-                return;
-            }
-            for (size_t page = first; page < first + count; ++page) {
-                if (pageProtections_[page] == mm::PAGE_READWRITE) {
+            for (size_t page = first; page <= last; ++page) {
+                if (imageViewProtections_[page] == mm::PAGE_NOACCESS) {
                     status_ = NtStatus::InvalidImageFormat;
                     return;
                 }
             }
         }
+        if (optional.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_EXPORT) {
+            const auto directory = optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_EXPORT];
+            if (directory.size) {
+                pe::ImageExportDirectory exports{};
+                std::memcpy(&exports, mapped.get() + directory.virtualAddress, sizeof(exports));
+                if (!readableRange(exports.addressOfFunctions, static_cast<size_t>(exports.numberOfFunctions) * 4) ||
+                    !readableRange(exports.addressOfNames, static_cast<size_t>(exports.numberOfNames) * 4) ||
+                    !readableRange(exports.addressOfNameOrdinals, static_cast<size_t>(exports.numberOfNames) * 2) ||
+                    !readableString(exports.name)) {
+                    status_ = NtStatus::InvalidImageFormat;
+                    return;
+                }
+                for (size_t i = 0; i < exports.numberOfNames; ++i) {
+                    uint32_t nameRva{};
+                    std::memcpy(&nameRva, mapped.get() + exports.addressOfNames + i * 4, sizeof(nameRva));
+                    if (!readableString(nameRva)) { status_ = NtStatus::InvalidImageFormat; return; }
+                }
+            }
+        }
+        if (optional.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
+            const auto directory = optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT];
+            size_t cursor = directory.virtualAddress;
+            const size_t end = cursor + directory.size;
+            while (cursor < end && sizeof(pe::ImageImportDescriptor) <= end - cursor) {
+                pe::ImageImportDescriptor descriptor{};
+                std::memcpy(&descriptor, mapped.get() + cursor, sizeof(descriptor));
+                if (!descriptor.originalFirstThunk && !descriptor.timeDateStamp &&
+                    !descriptor.forwarderChain && !descriptor.name && !descriptor.firstThunk) break;
+                if (!readableString(descriptor.name)) { status_ = NtStatus::InvalidImageFormat; return; }
+                size_t lookup = descriptor.originalFirstThunk ? descriptor.originalFirstThunk : descriptor.firstThunk;
+                size_t iat = descriptor.firstThunk;
+                for (;;) {
+                    if (!readableRange(lookup, sizeof(uint64_t))) { status_ = NtStatus::InvalidImageFormat; return; }
+                    uint64_t value{};
+                    std::memcpy(&value, mapped.get() + lookup, sizeof(value));
+                    if (!value) break;
+                    if (!readableRange(iat, sizeof(uint64_t))) { status_ = NtStatus::InvalidImageFormat; return; }
+                    if (touchesShared(iat, sizeof(uint64_t))) { status_ = NtStatus::NotSupported; return; }
+                    if (!(value & pe::IMAGE_ORDINAL_FLAG64) &&
+                        (value > UINT32_MAX - 2 || !readableRange(static_cast<size_t>(value), 2) ||
+                         !readableString(static_cast<uint32_t>(value) + 2))) {
+                        status_ = NtStatus::InvalidImageFormat;
+                        return;
+                    }
+                    lookup += sizeof(uint64_t);
+                    iat += sizeof(uint64_t);
+                }
+                cursor += sizeof(descriptor);
+            }
+        }
+        if (optional.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_BASERELOC) {
+            const auto directory = optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_BASERELOC];
+            if (directory.size) {
+                const size_t end = static_cast<size_t>(directory.virtualAddress) + directory.size;
+                for (size_t cursor = directory.virtualAddress; cursor < end;) {
+                    pe::ImageBaseRelocation block{};
+                    if (end - cursor < sizeof(block)) { status_ = NtStatus::InvalidImageFormat; return; }
+                    std::memcpy(&block, mapped.get() + cursor, sizeof(block));
+                    if (block.sizeOfBlock < sizeof(block) || block.sizeOfBlock > end - cursor ||
+                        (block.sizeOfBlock - sizeof(block)) % sizeof(uint16_t)) {
+                        status_ = NtStatus::InvalidImageFormat; return;
+                    }
+                    for (size_t offset = sizeof(block); offset < block.sizeOfBlock; offset += sizeof(uint16_t)) {
+                        uint16_t entry{};
+                        std::memcpy(&entry, mapped.get() + cursor + offset, sizeof(entry));
+                        if ((entry >> 12) == pe::IMAGE_REL_BASED_ABSOLUTE) continue;
+                        const size_t target = static_cast<size_t>(block.virtualAddress) + (entry & 4095u);
+                        if ((entry >> 12) != pe::IMAGE_REL_BASED_DIR64 || !readableRange(target, sizeof(uint64_t))) {
+                            status_ = NtStatus::InvalidImageFormat; return;
+                        }
+                        if (touchesShared(target, sizeof(uint64_t))) { status_ = NtStatus::NotSupported; return; }
+                    }
+                    cursor += block.sizeOfBlock;
+                }
+            }
+        }
+        if (optional.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_TLS) {
+            const auto directory = optional.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_TLS];
+            if (directory.size) {
+                pe::ImageTlsDirectory64 tls{};
+                if (directory.size < sizeof(tls)) { status_ = NtStatus::InvalidImageFormat; return; }
+                std::memcpy(&tls, mapped.get() + directory.virtualAddress, sizeof(tls));
+                if (tls.addressOfIndex) {
+                    if (tls.addressOfIndex < optional.imageBase ||
+                        tls.addressOfIndex - optional.imageBase > SIZE_MAX ||
+                        !readableRange(static_cast<size_t>(tls.addressOfIndex - optional.imageBase), sizeof(uint32_t))) {
+                        status_ = NtStatus::InvalidImageFormat; return;
+                    }
+                    if (touchesShared(static_cast<size_t>(tls.addressOfIndex - optional.imageBase), sizeof(uint32_t))) {
+                        status_ = NtStatus::NotSupported; return;
+                    }
+                }
+                if (tls.endAddressOfRawData < tls.startAddressOfRawData ||
+                    (tls.endAddressOfRawData != tls.startAddressOfRawData &&
+                     (tls.startAddressOfRawData < optional.imageBase ||
+                      tls.startAddressOfRawData - optional.imageBase > SIZE_MAX ||
+                      tls.endAddressOfRawData - tls.startAddressOfRawData > SIZE_MAX ||
+                      !readableRange(static_cast<size_t>(tls.startAddressOfRawData - optional.imageBase),
+                                     static_cast<size_t>(tls.endAddressOfRawData - tls.startAddressOfRawData))))) {
+                    status_ = NtStatus::InvalidImageFormat;
+                    return;
+                }
+                if (tls.addressOfCallBacks) {
+                    if (tls.addressOfCallBacks < optional.imageBase ||
+                        tls.addressOfCallBacks - optional.imageBase > SIZE_MAX) {
+                        status_ = NtStatus::InvalidImageFormat;
+                        return;
+                    }
+                    size_t callback = static_cast<size_t>(tls.addressOfCallBacks - optional.imageBase);
+                    for (;;) {
+                        if (!readableRange(callback, sizeof(uint64_t))) { status_ = NtStatus::InvalidImageFormat; return; }
+                        uint64_t value{};
+                        std::memcpy(&value, mapped.get() + callback, sizeof(value));
+                        if (!value) break;
+                        callback += sizeof(uint64_t);
+                    }
+                }
+            }
+        }
+        // The process loader binds imports while using a private writable
+        // staging view. The section itself retains the PE protections, even
+        // when the import directory shares a page with executable code.
         auto* backing = new (std::nothrow_t{}) Backing;
         if (!backing) { status_ = NtStatus::NoMemory; return; }
         backing->pfns = new (std::nothrow_t{}) uint64_t[pageCount];
@@ -333,12 +488,25 @@ public:
             auto* destination = reinterpret_cast<uint8_t*>(pfn << mm::PageShift4KB);
             std::memcpy(destination, mapped.get() + page * mm::PageSize4KB, mm::PageSize4KB);
         }
+        if (file.publishControl) {
+            void* selected{};
+            status_ = file.publishControl(file.context, backing, Backing::acquire,
+                                          Backing::release, &selected);
+            if (status_ != NtStatus::Success) { Backing::release(backing); return; }
+            if (!selected) { Backing::release(backing); status_ = NtStatus::Unsuccessful; return; }
+            if (selected != backing) Backing::release(backing);
+            backing = static_cast<Backing*>(selected);
+        }
         backing_ = backing;
         imageBase_ = static_cast<uintptr_t>(optional.imageBase);
+        // The loader must parse the same bytes that produced the section's
+        // physical pages, even if the underlying file changes afterwards.
+        imageFileBytes_ = std::move(bytes);
     }
 
     ~SectionObject() {
         Backing::release(backing_);
+        if (imageLeaseHeld_) fileBacking_.releaseImage(fileBacking_.context);
         if (fileReferenceHeld_) fileBacking_.release(fileBacking_.context);
     }
     SectionObject(const SectionObject&) = delete;
@@ -355,21 +523,38 @@ public:
     }
     [[nodiscard]] uintptr_t getImageBase() const noexcept { return imageBase_; }
     [[nodiscard]] const uint32_t* getPageProtections() const noexcept { return pageProtections_.get(); }
+    // The loader stages binding in private pages; ordinary mappings retain
+    // these PE-derived per-page protections from the beginning.
+    [[nodiscard]] const uint32_t* getImageViewProtections() const noexcept {
+        return imageViewProtections_.get();
+    }
+    [[nodiscard]] const uint8_t* getSharedImagePages() const noexcept { return sharedImagePages_.get(); }
     [[nodiscard]] uint32_t getMaximumImageProtection() const noexcept {
         if (!pageProtections_) return pageProtection_;
         const size_t pages = (maximumSize_ + mm::PageMask4KB) >> mm::PageShift4KB;
         bool hasExecutablePage = false;
+        bool hasWritablePage = false;
         for (size_t page = 0; page < pages; ++page) {
-            if (pageProtections_[page] == mm::PAGE_READWRITE) return mm::PAGE_READWRITE;
+            if (pageProtections_[page] == mm::PAGE_EXECUTE_READWRITE) return mm::PAGE_EXECUTE_READWRITE;
+            if (pageProtections_[page] == mm::PAGE_READWRITE) hasWritablePage = true;
             if (pageProtections_[page] == mm::PAGE_EXECUTE_READ) hasExecutablePage = true;
         }
+        if (hasWritablePage && hasExecutablePage) return mm::PAGE_EXECUTE_READWRITE;
+        if (hasWritablePage) return mm::PAGE_READWRITE;
         return hasExecutablePage ? mm::PAGE_EXECUTE_READ : mm::PAGE_READONLY;
     }
     [[nodiscard]] uint64_t getFileSize() const noexcept { return fileBacking_.size; }
     [[nodiscard]] std::u16string_view getFileName() const noexcept { return fileBacking_.name; }
     NtStatus readFile(uint64_t offset, void* buffer, size_t length, size_t* bytesRead) const noexcept {
-        if (!fileReferenceHeld_ || !fileBacking_.read) return NtStatus::InvalidHandle;
-        return fileBacking_.read(fileBacking_.context, offset, buffer, length, bytesRead);
+        if (!bytesRead || (length && !buffer)) return NtStatus::InvalidParameter;
+        *bytesRead = 0;
+        if (!fileReferenceHeld_ || !imageFileBytes_) return NtStatus::InvalidHandle;
+        if (offset >= fileBacking_.size || !length) return NtStatus::Success;
+        const size_t available = static_cast<size_t>(fileBacking_.size - offset);
+        const size_t count = length < available ? length : available;
+        std::memcpy(buffer, imageFileBytes_.get() + static_cast<size_t>(offset), count);
+        *bytesRead = count;
+        return NtStatus::Success;
     }
     [[nodiscard]] SectionBackingReference getBackingReference() const noexcept {
         if (!backing_) return {};
@@ -389,8 +574,12 @@ private:
     NtStatus status_{NtStatus::Success};
     Backing* backing_{nullptr};
     SectionFileBacking fileBacking_{};
+    bool imageLeaseHeld_{};
     bool fileReferenceHeld_{};
+    std::unique_ptr<uint8_t[]> imageFileBytes_{};
     std::unique_ptr<uint32_t[]> pageProtections_{};
+    std::unique_ptr<uint32_t[]> imageViewProtections_{};
+    std::unique_ptr<uint8_t[]> sharedImagePages_{};
     uintptr_t imageBase_{};
 };
 

@@ -2,7 +2,8 @@
 /**
  * @file curl.hpp
  * @brief Horizon 155: Sovereign Win32 HTTPS Client Utility (curl.exe / Invoke-WebRequest),
- *        URL Parsing, TLS 1.3 Handshake Negotiation, Certificate Verification & HTTP/1.1 Pipeline.
+ *        URL parsing and HTTP via the canonical WinHTTP/AFD socket path.
+ *        HTTPS remains unavailable until the clean-room TLS verifier is complete.
  * 
  * Target Architecture: Supermicro X11SSH-F (Intel Xeon E3-1270 v6 @ 3.80GHz, 32GB DDR4 ECC).
  * Clean-Room Standard: 17 U.S.C. § 1201(f) & Google LLC v. Oracle America, Inc. (593 U.S. 1).
@@ -15,12 +16,10 @@
 #include <sstream>
 #include <memory>
 #include <optional>
-#include <atomic>
+#include <algorithm>
+#include <limits>
 
-#include "micant/km/drivers/security/cng.hpp"
-#include "micant/km/drivers/security/x509.hpp"
-#include "micant/km/drivers/security/tls13.hpp"
-#include "micant/km/drivers/net/https_console.hpp"
+#include "micant/um/subsystems/net/winhttp.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
 
 namespace micant::um::net {
@@ -79,96 +78,65 @@ public:
     {
         HttpResponse resp;
         UrlParts urlInfo = parseUrl(url);
-
-        if (urlInfo.scheme == "https") {
-            // 1. Initialize TLS 1.3 Client Session
-            km::crypto::tls13::Tls13ClientSession clientTls;
-            auto clientHello = clientTls.generateClientHello(urlInfo.host);
-
-            // 2. Transmit to HttpsExecutiveConsole
-            auto& console = km::net::HttpsExecutiveConsole::get();
-            std::vector<uint8_t> serverHandshake;
-            static std::atomic<int> s_nextSockId{15501};
-            int clientSockId = s_nextSockId.fetch_add(1);
-
-            if (!console.handleHandshake(clientSockId, clientHello, serverHandshake)) {
-                resp.statusCode = 500;
-                resp.statusText = "TLS Handshake Failed";
-                return resp;
-            }
-
-            // 3. Complete TLS 1.3 Client Handshake
-            if (!clientTls.processServerHandshake(serverHandshake)) {
-                resp.statusCode = 500;
-                resp.statusText = "Server Handshake Verification Failed";
-                return resp;
-            }
-
-            // 4. Verify Server Certificate (unless --insecure / -k)
-            auto certOpt = km::crypto::SovereignCertStoreRegistry::get().findCertificateByHost(urlInfo.host);
-            if (certOpt.has_value()) {
-                resp.tlsVerified = km::crypto::SovereignCertStoreRegistry::get().verifyCertificateChain(*certOpt);
-            }
-            if (!insecure && !resp.tlsVerified) {
-                // If not insecure and not verified, reject
-                resp.statusCode = 495;
-                resp.statusText = "SSL Certificate Verification Failed";
-                return resp;
-            }
-
-            resp.negotiatedCipher = "TLS_AES_128_GCM_SHA256";
-
-            // 5. Construct HTTP/1.1 Request
-            std::ostringstream httpReq;
-            httpReq << method << " " << urlInfo.path << " HTTP/1.1\r\n"
-                    << "Host: " << urlInfo.host << "\r\n"
-                    << "User-Agent: curl/8.4.0 (MicaNT sovereign-cng)\r\n"
-                    << "Accept: */*\r\n";
-            if (!postData.empty()) {
-                httpReq << "Content-Length: " << postData.size() << "\r\n"
-                        << "Content-Type: application/x-www-form-urlencoded\r\n";
-            }
-            httpReq << "\r\n";
-            if (!postData.empty()) {
-                httpReq << postData;
-            }
-            std::string reqStr = httpReq.str();
-
-            // 6. Encrypt Request via Client TLS Session
-            auto encReq = clientTls.encryptAppData(
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(reqStr.data()), reqStr.size())
-            );
-
-            // 7. Dispatch to HTTPS Executive Console
-            auto encResp = console.handleEncryptedRequest(clientSockId, encReq);
-            if (encResp.empty()) {
-                resp.statusCode = 502;
-                resp.statusText = "Bad Gateway";
-                return resp;
-            }
-
-            // 8. Decrypt Response via Client TLS Session
-            std::vector<uint8_t> plainResp;
-            if (!clientTls.decryptAppData(encResp, plainResp)) {
-                resp.statusCode = 500;
-                resp.statusText = "TLS Decryption Failed";
-                return resp;
-            }
-
-            std::string respStr(reinterpret_cast<const char*>(plainResp.data()), plainResp.size());
-            parseHttpResponse(respStr, resp);
-            console.closeSession(clientSockId);
-        } else {
-            // Plain HTTP fallback
-            auto& console = km::net::HttpsExecutiveConsole::get();
-            std::ostringstream httpReq;
-            httpReq << method << " " << urlInfo.path << " HTTP/1.1\r\n"
-                    << "Host: " << urlInfo.host << "\r\n\r\n"
-                    << postData;
-            std::string plainResp = console.dispatchHttpRequest(httpReq.str());
-            parseHttpResponse(plainResp, resp);
+        if (urlInfo.scheme != "http" && urlInfo.scheme != "https") {
+            resp.statusText = "Unsupported URL scheme";
+            return resp;
         }
-
+        (void)insecure; // Certificate bypass is never honored.
+        const std::wstring host(urlInfo.host.begin(), urlInfo.host.end());
+        const std::wstring path(urlInfo.path.begin(), urlInfo.path.end());
+        const std::wstring verb(method.begin(), method.end());
+        auto session = winhttp::WinHttpOpen(L"curl/8.4.0 (MicaNT)",
+            winhttp::WINHTTP_ACCESS_TYPE_NO_PROXY, nullptr, nullptr, 0);
+        if (!session) { resp.statusText = "WinHTTP session creation failed"; return resp; }
+        auto connection = winhttp::WinHttpConnect(session, host.c_str(), urlInfo.port, 0);
+        if (!connection) {
+            winhttp::WinHttpCloseHandle(session);
+            resp.statusText = "WinHTTP connection creation failed";
+            return resp;
+        }
+        const winhttp::DWORD flags = urlInfo.scheme == "https" ? winhttp::WINHTTP_FLAG_SECURE : 0;
+        auto request = winhttp::WinHttpOpenRequest(connection, verb.c_str(), path.c_str(),
+            L"HTTP/1.1", nullptr, nullptr, flags);
+        if (!request) {
+            winhttp::WinHttpCloseHandle(connection);
+            winhttp::WinHttpCloseHandle(session);
+            resp.statusText = "WinHTTP request creation failed";
+            return resp;
+        }
+        const winhttp::BOOL sent = winhttp::WinHttpSendRequest(request, nullptr, 0,
+            postData.empty() ? nullptr : const_cast<char*>(postData.data()),
+            static_cast<winhttp::DWORD>(postData.size()), static_cast<winhttp::DWORD>(postData.size()), 0);
+        if (sent && winhttp::WinHttpReceiveResponse(request, nullptr)) {
+            winhttp::DWORD statusLength = sizeof(winhttp::DWORD);
+            winhttp::DWORD statusCode = 0;
+            if (winhttp::WinHttpQueryHeaders(request,
+                    winhttp::WINHTTP_QUERY_STATUS_CODE | winhttp::WINHTTP_QUERY_FLAG_NUMBER,
+                    nullptr, &statusCode, &statusLength, nullptr)) {
+                resp.statusCode = static_cast<int>(statusCode);
+                winhttp::DWORD available = 0;
+                while (winhttp::WinHttpQueryDataAvailable(request, &available) && available) {
+                    if (available > 8 * 1024 * 1024 || resp.body.size() > 8 * 1024 * 1024 - available)
+                        break;
+                    const size_t oldSize = resp.body.size();
+                    resp.body.resize(oldSize + available);
+                    winhttp::DWORD read = 0;
+                    if (!winhttp::WinHttpReadData(request, resp.body.data() + oldSize, available, &read)) {
+                        resp.body.resize(oldSize);
+                        break;
+                    }
+                    resp.body.resize(oldSize + read);
+                    if (read == 0) break;
+                }
+            }
+        } else {
+            resp.statusText = urlInfo.scheme == "https"
+                ? "TLS authentication provider unavailable"
+                : "HTTP transport failed";
+        }
+        winhttp::WinHttpCloseHandle(request);
+        winhttp::WinHttpCloseHandle(connection);
+        winhttp::WinHttpCloseHandle(session);
         return resp;
     }
 

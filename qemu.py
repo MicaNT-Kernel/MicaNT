@@ -313,6 +313,8 @@ def main() -> int:
                 "bootx64_efi",
                 "virtio_gpu_boot",
                 "ahci_oem_boot",
+                "hidusb_oem_boot",
+                "usbstor_oem_boot",
                 "xhci_oem_boot",
                 "i210_oem_boot",
                 "virtio_net_oem_boot",

@@ -25,7 +25,7 @@ int main() {
     assert(reference == &object && object.pointerCount == 3);
     ob::ObDereferenceObject(reference);
 
-    assert(table.duplicateHandle(first, table, second, 0, true) == NtStatus::Success);
+    assert(table.duplicateHandle(first, table, second, 0, true, 2) == NtStatus::Success);
     assert(first != second && table.getActiveHandleCount() == 2);
     assert(table.lookup(second, &granted) == &object && granted == access);
     const auto* entry = table.getEntry(second);

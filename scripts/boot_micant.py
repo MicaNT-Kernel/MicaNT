@@ -226,6 +226,10 @@ def run_qemu(
         driver_dir = kernel_dir / "System32" / "drivers"
         driver_dir.mkdir(parents=True)
         shutil.copyfile(ROOT / "build" / "virtio_gpu.sys", driver_dir / "virtio_gpu.sys")
+        for name in ("storahci.sys", "hidusb.sys", "usbstor.sys", "usbxhci.sys", "i210.sys", "virtio_net.sys"):
+            source = ROOT / "build" / name
+            if source.is_file():
+                shutil.copyfile(source, driver_dir / name)
         serial_path = temp / "serial.log"
         qemu_output_path = temp / "qemu.log"
 

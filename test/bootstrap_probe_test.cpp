@@ -19,22 +19,22 @@ bool fits(uintptr_t address, size_t size, const void* base, size_t capacity) noe
            size <= capacity - (address - start);
 }
 
-bool probe(uintptr_t address, size_t size, bool write,
-           micant::mm::KPROCESSOR_MODE mode) noexcept {
-    if (!stableMappings) return false;
+micant::NtStatus probe(uintptr_t address, size_t size, bool write,
+                       micant::mm::KPROCESSOR_MODE mode) noexcept {
+    if (!stableMappings) return micant::NtStatus::AccessViolation;
     if (mode == micant::mm::KernelMode) {
-        return fits(address, size, kernelMemory, sizeof(kernelMemory)) &&
-               (!write || kernelWritable);
+        return fits(address, size, kernelMemory, sizeof(kernelMemory)) && (!write || kernelWritable)
+            ? micant::NtStatus::Success : micant::NtStatus::AccessViolation;
     }
     if (mode != micant::mm::UserMode ||
-        !fits(address, size, userMemory, sizeof(userMemory))) return false;
+        !fits(address, size, userMemory, sizeof(userMemory))) return micant::NtStatus::AccessViolation;
     const size_t first = (address - reinterpret_cast<uintptr_t>(userMemory)) / 4096;
     const size_t last = (address + size - 1 -
                          reinterpret_cast<uintptr_t>(userMemory)) / 4096;
     for (size_t page = first; page <= last; ++page) {
-        if (!present[page] || (write && !writable[page])) return false;
+        if (!present[page] || (write && !writable[page])) return micant::NtStatus::AccessViolation;
     }
-    return true;
+    return micant::NtStatus::Success;
 }
 #endif
 

@@ -42,24 +42,35 @@ public:
         if (current && current->state == ke::ThreadState::Running &&
             ke::KeGetCurrentIrql() <= ke::APC_LEVEL &&
             (!timeout100ns || ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL)) {
-            current->alertable = alertable;
+            // User APCs interrupt an alertable wait only when its wait mode
+            // is UserMode. A kernel wait may be alertable for kernel APCs
+            // without becoming a user-return boundary.
+            current->alertable = alertable && current->eventWaitUserMode;
             if (ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL && !current->kernelApcList.empty()) {
-                if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-                ke::KiDeliverApc(0);
-                __asm__ __volatile__("cli" : : : "memory");
+                // The syscall entry normally has IF clear, even though an
+                // APC kernel routine must be able to make hardware progress.
+                // Preserve bootstrap's early IF state until the clock owns
+                // interrupt routing and restore the wait boundary afterward.
+                {
+                    ke::detail::ReturnKernelContext kernelContext;
+                    if ((flags & (uint64_t{1} << 9)) || hal::amd64::bootstrapSchedulerClockActive())
+                        __asm__ __volatile__("sti" : : : "memory");
+                    ke::KiDeliverApc(0);
+                    __asm__ __volatile__("cli" : : : "memory");
+                }
             }
             // Termination is completed by the owning Ke wait syscall after it
             // has dropped the waited object's reference and cleared its wait
             // registration. This event only unlinks and returns to that owner.
             if (current->terminationRequested && current->eventWaitCanTerminate) {
                 result = NtStatus::UserApc;
-            } else if (alertable && current->userApcList.hasEnvironment(current->apcStateIndex)) {
-                current->userApcDeliveryPending = true;
-                current->userApcDrainOnReturn = true;
-                result = NtStatus::UserApc;
             } else if (signaled_) {
                 if (!notification_) signaled_ = false;
                 result = NtStatus::Success;
+            } else if (current->alertable && current->userApcList.hasEnvironment(current->apcStateIndex)) {
+                current->userApcDeliveryPending = true;
+                current->userApcDrainOnReturn = true;
+                result = NtStatus::UserApc;
             } else if (poll) {
                 result = NtStatus::Timeout;
             } else {
@@ -93,15 +104,19 @@ public:
                     }
                     if (!waiter.apcInterrupted) __builtin_trap();
                     waiter.apcInterrupted = false;
-                    if (alertable && current->userApcList.hasEnvironment(current->apcStateIndex)) {
+                    if (current->alertable && current->userApcList.hasEnvironment(current->apcStateIndex)) {
                         current->userApcDeliveryPending = true;
                         current->userApcDrainOnReturn = true;
                         result = NtStatus::UserApc;
                         break;
                     }
-                    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
-                    ke::KiDeliverApc(0);
-                    __asm__ __volatile__("cli" : : : "memory");
+                    {
+                        ke::detail::ReturnKernelContext kernelContext;
+                        if ((flags & (uint64_t{1} << 9)) || hal::amd64::bootstrapSchedulerClockActive())
+                            __asm__ __volatile__("sti" : : : "memory");
+                        ke::KiDeliverApc(0);
+                        __asm__ __volatile__("cli" : : : "memory");
+                    }
                     if (waiter.cancelled || current->eventWaitCancelled ||
                         (current->terminationRequested && current->eventWaitCanTerminate)) {
                         result = NtStatus::UserApc;
@@ -124,7 +139,10 @@ public:
                 current->eventWaitCancelled = false;
             }
             current->alertable = false;
-            if (result != NtStatus::UserApc || current->terminationRequested) {
+            // A satisfied object or timeout must not discard an APC delivery
+            // that was already pending before this wait. The queue remains
+            // owned by Ke; only termination suppresses its user return.
+            if (current->terminationRequested) {
                 current->userApcDeliveryPending = false;
                 current->userApcDrainOnReturn = false;
             }
@@ -150,7 +168,7 @@ public:
         if (flags & (uint64_t{1} << 9)) {
             ke::detail::servicePendingDpcs();
             ke::detail::dispatchHigherPriority();
-            ke::detail::servicePendingKernelApcs();
+            ke::detail::servicePendingKernelApcs(true);
             __asm__ __volatile__("sti" : : : "memory");
         }
         return previous;
@@ -202,20 +220,24 @@ private:
         BootstrapEvent* event{};
     };
     static void timeoutWaiter(ke::KDPC*, void* context, void*, void*) {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
         auto& waiter = *static_cast<Waiter*>(context);
-        if (waiter.cancelled || waiter.satisfied || waiter.timedOut) return;
-        auto* event = waiter.event;
-        auto* thread = waiter.thread;
-        if (waiter.apcInterrupted && event->signaled_) {
-            if (!event->notification_) event->signaled_ = false;
-            waiter.satisfied = true;
-            return;
+        if (!waiter.cancelled && !waiter.satisfied && !waiter.timedOut) {
+            auto* event = waiter.event;
+            auto* thread = waiter.thread;
+            if (waiter.apcInterrupted && event->signaled_) {
+                if (!event->notification_) event->signaled_ = false;
+                waiter.satisfied = true;
+            } else {
+                waiter.timedOut = true;
+                if (thread->state == ke::ThreadState::Waiting && thread->eventWaitBlock == &waiter) {
+                    event->unlink(waiter);
+                    if (!ke::PriorityScheduler::get().readyKThread(thread)) __builtin_trap();
+                }
+            }
         }
-        waiter.timedOut = true;
-        if (thread->state == ke::ThreadState::Waiting && thread->eventWaitBlock == &waiter) {
-            event->unlink(waiter);
-            if (!ke::PriorityScheduler::get().readyKThread(thread)) __builtin_trap();
-        }
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     }
     static bool interruptForKernelApc(ke::KThread& thread) noexcept {
         if (!thread.eventWaitObject || !thread.eventWaitBlock ||

@@ -116,10 +116,18 @@ __attribute__((noinline)) bool testNativePeerThread(micant::Handle process, uint
         : duplicateStatus;
     const auto restrictedCloseStatus = restricted ? sys::NtClose(restricted) : NtStatus::Success;
     const auto invalidPcStatus = sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE, nullptr, process,
-        1, 0, 0, 0, mm::PageSize4KB, 32768, nullptr);
+        1, 0, 1, 0, mm::PageSize4KB, 32768, nullptr);
     if (duplicateStatus != NtStatus::Success || restrictedCreateStatus != NtStatus::AccessDenied ||
-        restrictedCloseStatus != NtStatus::Success || peer || invalidPcStatus != NtStatus::BadInitialPc || peer)
+        restrictedCloseStatus != NtStatus::Success || invalidPcStatus != NtStatus::Success || !peer)
         return false;
+    ps::EThread* invalidThread{};
+    ob::ObjectHeader* invalidReference{};
+    if (ps::detail::referenceThreadHandle(peer, ob::SYNCHRONIZE, invalidThread, invalidReference) != NtStatus::Success ||
+        !invalidThread || invalidThread->cancelBeforeStart() != NtStatus::Success ||
+        invalidThread->reap() != NtStatus::Success) return false;
+    ob::ObDereferenceObject(invalidReference);
+    if (sys::NtClose(peer) != NtStatus::Success) return false;
+    peer = {};
     if (sys::NtCreateThreadEx(&peer, ob::SYNCHRONIZE | 2, nullptr, process,
             entry, 0x1234, 1, 0, mm::PageSize4KB, 32768, &attrs) != NtStatus::Success)
         return false;
@@ -423,7 +431,9 @@ static bool runUserThreads(bool preemptive, size_t threadCount) noexcept {
         const auto wxStatus = process.loadNativeImage("wx.exe", std::span<const uint8_t>{file});
         text.characteristics &= ~pe::IMAGE_SCN_MEM_WRITE;
         std::memcpy(file + 64 + sizeof(nt), &text, sizeof(text));
-        if (wxStatus != NtStatus::InvalidImageFormat || mm::PfnDatabase::get().getActiveCount() != beforeDuplicate)
+        // W+X is a valid PE protection; this image still conflicts with the
+        // fixture already mapped at the same preferred address.
+        if (wxStatus != NtStatus::Conflict || mm::PfnDatabase::get().getActiveCount() != beforeDuplicate)
             return false;
         if (process.loadNativeImage("ntdll.dll", std::span<const uint8_t>{nativeDll}, dllPath) != NtStatus::Success)
             return false;

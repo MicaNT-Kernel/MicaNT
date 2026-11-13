@@ -35,39 +35,70 @@ struct TokenGroupValue {
     SidValue Sid{};
     uint32_t Attributes{};
 };
-struct FreestandingAccessToken {
-    static constexpr size_t MaximumGroups = 16;
-    SidValue UserSid{};
-    std::array<TokenGroupValue, MaximumGroups> Groups{};
-    uint32_t GroupCount{};
-    uint32_t IntegrityLevel{};
-    uint64_t EnabledPrivileges{};
-    bool IsPrimary{true};
-    bool IsSystem{};
-    [[nodiscard]] bool hasEnabledGroup(const SidValue& sid) const noexcept;
-    [[nodiscard]] bool matchesSid(const SidValue& sid, bool includeDenyOnly) const noexcept;
-};
 inline constexpr uint32_t SE_NETWORK_CONFIG_WRITE = 0x00000001;
 enum class FreestandingAceType : uint8_t { Deny = 0, Allow = 1 };
 struct FreestandingAce {
     SidValue Sid{};
     uint32_t AccessMask{};
     FreestandingAceType Type{FreestandingAceType::Allow};
+    uint8_t Flags{};
 };
 struct FreestandingSecurityDescriptor {
     SidValue Owner{};
+    SidValue Group{};
     std::array<FreestandingAce, 16> Dacl{};
     uint8_t AceCount{};
+    bool OwnerPresent{};
+    bool GroupPresent{};
+    bool DaclPresent{true};
+    bool DaclNull{};
+};
+struct FreestandingAccessToken {
+    static constexpr size_t MaximumGroups = 16;
+    SidValue UserSid{};
+    SidValue DefaultOwner{};
+    SidValue PrimaryGroup{};
+    std::array<TokenGroupValue, MaximumGroups> Groups{};
+    uint32_t GroupCount{};
+    uint32_t IntegrityLevel{};
+    uint64_t EnabledPrivileges{};
+    bool IsPrimary{true};
+    bool IsSystem{};
+    // Embedded storage gives duplicated tokens independent default DACLs.
+    FreestandingSecurityDescriptor DefaultDacl{};
+    [[nodiscard]] bool hasEnabledGroup(const SidValue& sid) const noexcept;
+    [[nodiscard]] bool matchesSid(const SidValue& sid, bool includeDenyOnly) const noexcept;
 };
 [[nodiscard]] NtStatus SeCreateFreestandingPrimaryToken(bool system,
     FreestandingAccessToken*& token, ob::ObjectHeader*& reference) noexcept;
+[[nodiscard]] NtStatus SeDuplicateFreestandingPrimaryToken(
+    const FreestandingAccessToken& source, FreestandingAccessToken*& token,
+    ob::ObjectHeader*& reference) noexcept;
+[[nodiscard]] NtStatus SeCreateFreestandingImpersonationToken(
+    const FreestandingAccessToken& source, FreestandingAccessToken*& token,
+    ob::ObjectHeader*& reference) noexcept;
+[[nodiscard]] bool SeIsFreestandingTokenObject(const FreestandingAccessToken* token,
+    ob::ObjectHeader* reference) noexcept;
+[[nodiscard]] bool SeCanImpersonateFreestanding(
+    const FreestandingAccessToken* caller, const FreestandingAccessToken* target) noexcept;
+[[nodiscard]] bool SeTokenHasPrivilegeFreestanding(
+    const FreestandingAccessToken* token, uint32_t privilegeLuidLow) noexcept;
 void SeDereferenceFreestandingToken(ob::ObjectHeader* reference) noexcept;
 [[nodiscard]] const FreestandingAccessToken* SeGetEffectiveFreestandingToken(
     const FreestandingAccessToken* primary, const FreestandingAccessToken* impersonation) noexcept;
 [[nodiscard]] bool SeAccessCheckFreestanding(const FreestandingAccessToken* token,
     const FreestandingSecurityDescriptor& descriptor, uint32_t desiredAccess,
     uint32_t& grantedAccess) noexcept;
+[[nodiscard]] bool SeMaximumAccessFreestanding(const FreestandingAccessToken* token,
+    const FreestandingSecurityDescriptor& descriptor, uint32_t validAccess,
+    uint32_t& grantedAccess) noexcept;
+// Capture an AMD64 absolute or self-relative SECURITY_DESCRIPTOR and its
+// bounded basic DACL into owned kernel storage. Unsupported ACEs/SACLs fail.
+[[nodiscard]] NtStatus SeCaptureFreestandingSecurityDescriptor(
+    const void* descriptor, ob::KPROCESSOR_MODE sourceMode,
+    FreestandingSecurityDescriptor& captured) noexcept;
 void SeInitializeNetworkConfigurationAcl(FreestandingSecurityDescriptor& descriptor) noexcept;
+void SeInitializeSystemRootStoreAcl(FreestandingSecurityDescriptor& descriptor) noexcept;
 #endif
 
 // ============================================================================

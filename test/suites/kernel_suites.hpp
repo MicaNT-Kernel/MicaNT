@@ -52,7 +52,7 @@ void Test_ObjectManager_DirectoryAndHandles() {
     Handle hTarget = 0;
     NtStatus dupHandleStatus = handleTable.duplicateHandle(h1, targetTable, hTarget, ob::GENERIC_ALL, false, 0);
     TEST_ASSERT(dupHandleStatus == NtStatus::AccessDenied, "Unchecked access escalation must fail");
-    dupHandleStatus = handleTable.duplicateHandle(h1, targetTable, hTarget, 0, false, 0);
+    dupHandleStatus = handleTable.duplicateHandle(h1, targetTable, hTarget, 0, false, 2);
     TEST_ASSERT(NT_SUCCESS(dupHandleStatus), "Same-access handle duplication must succeed");
     TEST_ASSERT(hTarget == 4, "First handle in target table must be 4");
     uint32_t targetAccess = 0;

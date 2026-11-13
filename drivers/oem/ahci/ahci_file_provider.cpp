@@ -24,6 +24,8 @@ constexpr uint32_t kMaximumSectorsPerCommand = 128;
 constexpr size_t kFileContextCount = 32;
 constexpr size_t kMaximumPath = 256;
 constexpr uint32_t kFileReadData = 0x00000001;
+constexpr uint32_t kFileWriteData = 0x00000002;
+constexpr uint32_t kFileSynchronize = 0x00100000;
 
 struct __attribute__((packed)) FisRegH2D {
     uint8_t Type, Flags, Command, FeatureLow;
@@ -81,6 +83,7 @@ struct DriverState {
     volatile uint32_t* Port{};
     uint8_t PortNumber{0xFF};
     uint64_t DiskSectors{};
+    uint8_t FlushCommand{};
     uint64_t CommandListDma{};
     uint64_t ReceivedFisDma{};
     uint64_t CommandTableDma{};
@@ -183,20 +186,23 @@ bool startPort(volatile uint32_t* port) noexcept {
 }
 
 bool executeCommand(uint8_t command, uint64_t lba, uint16_t sectors) noexcept {
-    if (!g_state.Port || !sectors || sectors > kMaximumSectorsPerCommand) return false;
-    const size_t bytes = static_cast<size_t>(sectors) * kSectorSize;
+    const bool flush = command == 0xE7 || command == 0xEA;
+    if (!g_state.Port || (!sectors && !flush) || sectors > kMaximumSectorsPerCommand) return false;
     auto& header = g_dma->commandList[0];
     header = {};
-    header.Flags = 5;
-    header.PrdtLength = 1;
+    header.Flags = static_cast<uint16_t>(5 | (command == 0x35 ? (1u << 6) : 0u));
+    header.PrdtLength = sectors ? 1 : 0;
     header.TableBase = static_cast<uint32_t>(g_state.CommandTableDma);
     header.TableBaseUpper = static_cast<uint32_t>(g_state.CommandTableDma >> 32);
 
     g_dma->commandTable = {};
     auto& prdt = g_dma->commandTable.Prdt;
-    prdt.Dba = static_cast<uint32_t>(g_state.DataBufferDma);
-    prdt.Dbau = static_cast<uint32_t>(g_state.DataBufferDma >> 32);
-    prdt.ByteCountAndInterrupt = static_cast<uint32_t>(bytes - 1) | (uint32_t{1} << 31);
+    if (sectors) {
+        const size_t bytes = static_cast<size_t>(sectors) * kSectorSize;
+        prdt.Dba = static_cast<uint32_t>(g_state.DataBufferDma);
+        prdt.Dbau = static_cast<uint32_t>(g_state.DataBufferDma >> 32);
+        prdt.ByteCountAndInterrupt = static_cast<uint32_t>(bytes - 1) | (uint32_t{1} << 31);
+    }
 
     auto* fis = reinterpret_cast<FisRegH2D*>(g_dma->commandTable.CommandFis);
     fis->Type = 0x27;
@@ -232,13 +238,26 @@ bool readSectors(uint64_t lba, uint16_t count, void* destination) noexcept {
     return true;
 }
 
+bool writeSectors(uint64_t lba, uint16_t count, const void* source) noexcept {
+    if (!source || !count || count > kMaximumSectorsPerCommand ||
+        lba >= g_state.DiskSectors || count > g_state.DiskSectors - lba) return false;
+    if (source != g_dma->data)
+        std::memcpy(g_dma->data, source, static_cast<size_t>(count) * kSectorSize);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    return executeCommand(0x35, lba, count); // WRITE DMA EXT
+}
+
 bool identifyDisk(uint64_t& sectors) noexcept {
     std::memset(g_dma->data, 0, kSectorSize);
     if (!executeCommand(0xEC, 0, 1)) return false;
     const uint16_t commandSet = loadLe16(g_dma->data + 166);
-    // The provider issues READ DMA EXT only. Do not publish an ATA disk whose
-    // IDENTIFY data does not advertise valid 48-bit LBA support.
+    // The provider uses 48-bit LBA DMA reads and writes. Refuse devices that
+    // do not advertise valid 48-bit LBA support.
     if ((commandSet & 0xC400u) != 0x4400u) return false;
+    const uint16_t legacyCommands = loadLe16(g_dma->data + 164);
+    if (commandSet & (1u << 13)) g_state.FlushCommand = 0xEA;
+    else if (legacyCommands & (1u << 5)) g_state.FlushCommand = 0xE7;
+    else return false;
     sectors = loadLe64(g_dma->data + 200);
     return sectors != 0 && sectors <= (uint64_t{1} << 48);
 }
@@ -517,6 +536,34 @@ int32_t readDiskBlocks(void* context, uint64_t lba, uint32_t count,
     return STATUS_SUCCESS;
 }
 
+int32_t writeDiskBlocks(void* context, uint64_t lba, uint32_t count,
+                        const void* buffer, uint32_t* blocksWritten) noexcept {
+    if (!blocksWritten) return STATUS_INVALID_PARAMETER;
+    *blocksWritten = 0;
+    if (!context || !buffer || count == 0) return STATUS_INVALID_PARAMETER;
+    auto& state = *static_cast<DriverState*>(context);
+    if (!state.Initialized || lba >= state.DiskSectors || count > state.DiskSectors - lba)
+        return STATUS_END_OF_FILE;
+    auto* input = static_cast<const uint8_t*>(buffer);
+    spinLock(g_ioLock);
+    while (*blocksWritten < count) {
+        const uint32_t batch = (count - *blocksWritten) > kMaximumSectorsPerCommand
+            ? kMaximumSectorsPerCommand : (count - *blocksWritten);
+        if (!writeSectors(lba + *blocksWritten, static_cast<uint16_t>(batch),
+                input + static_cast<size_t>(*blocksWritten) * kSectorSize)) {
+            spinUnlock(g_ioLock);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+        *blocksWritten += batch;
+    }
+    if (!g_state.FlushCommand || !executeCommand(g_state.FlushCommand, 0, 0)) {
+        spinUnlock(g_ioLock);
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+    spinUnlock(g_ioLock);
+    return STATUS_SUCCESS;
+}
+
 void releaseBlockContext(void*) noexcept {
     // The backend context is static image state, so the generic Io object has
     // no allocation to release here. Published callbacks pin this boot image.
@@ -530,7 +577,8 @@ bool validServices(const KernelServices* services) noexcept {
         services->DmaVersion == 1 && services->AllocateDmaBuffer && services->FreeDmaBuffer &&
         services->QueryMonotonicClock &&
         services->DelayMicroseconds && services->ClaimPciDevice &&
-        services->ReleasePciDevice && services->CreateReadOnlyBlockDevice &&
+        services->ReleasePciDevice && services->WritableBlockDeviceVersion == 1 &&
+        services->CreateWritableBlockDevice && services->WriteBlockDevice &&
         services->ReadBlockDevice && services->FatFilesystemVersion == 1 &&
         services->MountFatBlockDevice && services->UnmountFatBlockDevice && services->CloseHandle;
 }
@@ -559,9 +607,10 @@ extern "C" int32_t DriverEntry(DriverObject* driverObject,
         return g_controllerStatus;
     }
 
-    const int32_t blockStatus = services->CreateReadOnlyBlockDevice(
+    const int32_t blockStatus = services->CreateWritableBlockDevice(
         services->Context, g_state.DiskSectors, kSectorSize, &g_state,
-        &readDiskBlocks, &releaseBlockContext, kFileReadData,
+        &readDiskBlocks, &writeDiskBlocks, &releaseBlockContext,
+        kFileReadData | kFileWriteData | kFileSynchronize,
         &g_state.BlockDeviceHandle);
     if (blockStatus != STATUS_SUCCESS || !g_state.BlockDeviceHandle) {
         const int32_t failureStatus = blockStatus == STATUS_SUCCESS
@@ -587,6 +636,6 @@ extern "C" int32_t DriverEntry(DriverObject* driverObject,
     g_state.Published = true;
     driverObject->DeviceExtension = &g_state;
     driverObject->DriverUnload = &unloadFailedDriver;
-    services->Log(services->Context, "AHCI read-only block device mounted by FsRtl");
+    services->Log(services->Context, "AHCI writable block device mounted by FsRtl");
     return STATUS_SUCCESS;
 }

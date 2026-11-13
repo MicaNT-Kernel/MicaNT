@@ -262,6 +262,8 @@ inline constexpr uint32_t IMAGE_SCN_MEM_EXECUTE   = 0x20000000;
 inline constexpr uint32_t IMAGE_SCN_MEM_READ      = 0x40000000;
 inline constexpr uint32_t IMAGE_SCN_MEM_WRITE     = 0x80000000;
 inline constexpr uint32_t IMAGE_SCN_MEM_DISCARDABLE = 0x02000000;
+inline constexpr uint32_t IMAGE_SCN_MEM_NOT_CACHED = 0x04000000;
+inline constexpr uint32_t IMAGE_SCN_MEM_SHARED     = 0x10000000;
 
 // Allocation-free PE32+ view used before a process runtime or heap exists.
 class PeImageView64 {
@@ -381,11 +383,6 @@ public:
                     file_ = {};
                     return NtStatus::InvalidImageFormat;
                 }
-            }
-            if ((current.characteristics & IMAGE_SCN_MEM_EXECUTE) &&
-                (current.characteristics & IMAGE_SCN_MEM_WRITE)) {
-                file_ = {};
-                return NtStatus::InvalidImageFormat;
             }
         }
         if (opt.addressOfEntryPoint && !executableRva(opt.addressOfEntryPoint)) {
@@ -516,10 +513,14 @@ public:
 
     template <typename Resolver>
     NtStatus bindImports(std::span<uint8_t> image, Resolver&& resolve,
-                         bool writeBindings = true) const {
+                         bool writeBindings = true,
+                         std::span<const uint8_t> immutableLookup = {}) const {
         if (file_.empty() || image.size() < headers_.optionalHeader.sizeOfImage) {
             return NtStatus::InvalidParameter;
         }
+        const std::span<const uint8_t> input = immutableLookup.empty()
+            ? std::span<const uint8_t>{image.data(), image.size()} : immutableLookup;
+        if (input.size() < headers_.optionalHeader.sizeOfImage) return NtStatus::InvalidParameter;
         const auto dir = directory(IMAGE_DIRECTORY_ENTRY_IMPORT);
         if (!dir.size) return NtStatus::Success;
         size_t cursor = dir.virtualAddress;
@@ -528,13 +529,13 @@ public:
         const uint64_t iatEnd = static_cast<uint64_t>(iatDirectory.virtualAddress) + iatDirectory.size;
         while (fits(end, cursor, sizeof(ImageImportDescriptor))) {
             ImageImportDescriptor descriptor{};
-            read(image, cursor, descriptor);
+            read(input, cursor, descriptor);
             if (!descriptor.originalFirstThunk && !descriptor.timeDateStamp &&
                 !descriptor.forwarderChain && !descriptor.name && !descriptor.firstThunk) {
                 return NtStatus::Success;
             }
             std::string_view library;
-            if (!descriptor.firstThunk || !stringAt(image, descriptor.name, library) ||
+            if (!descriptor.firstThunk || !stringAt(input, descriptor.name, library) ||
                 library.empty()) return NtStatus::InvalidImageFormat;
             size_t lookup = descriptor.originalFirstThunk
                 ? descriptor.originalFirstThunk : descriptor.firstThunk;
@@ -547,7 +548,7 @@ public:
                     (iatDirectory.size &&
                      (slot < iatDirectory.virtualAddress || slot > iatEnd ||
                       sizeof(entry) > iatEnd - slot)) ||
-                    !read(image, lookup, entry)) {
+                    !read(input, lookup, entry)) {
                     return NtStatus::InvalidImageFormat;
                 }
                 if (!entry) break;
@@ -560,7 +561,7 @@ public:
                     ordinal = static_cast<uint16_t>(entry);
                 } else {
                     if (entry > UINT32_MAX - 2 || !mappedRange(static_cast<uint32_t>(entry), 3) ||
-                        !stringAt(image, static_cast<uint32_t>(entry) + 2, name) || name.empty()) {
+                        !stringAt(input, static_cast<uint32_t>(entry) + 2, name) || name.empty()) {
                         return NtStatus::InvalidImageFormat;
                     }
                 }

@@ -17,11 +17,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
-#include <atomic>
 
-#include "micant/km/drivers/security/cng.hpp"
-#include "micant/km/drivers/security/tls13.hpp"
-#include "micant/km/drivers/net/https_console.hpp"
 #include "micant/um/subsystems/net/websocket.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
 
@@ -76,159 +72,24 @@ public:
         uint64_t framesReceived{0};
         bool pongReceived{false};
         bool closedCleanly{false};
+        std::string error;
     };
 
-    // Connects, performs TLS 1.3 (if wss), upgrades to WebSocket, sends message, receives replies
+// Only a real AFD/TLS transport can make this diagnostic succeed. Until that
+// path is connected, return an explicit unsupported reason and no fake frames.
     SessionResult runInteractiveSession(
         std::string_view url,
         const std::vector<std::string>& messagesToSend,
         bool sendPingProbe = false)
     {
+        (void)messagesToSend;
+        (void)sendPingProbe;
         SessionResult result;
-        auto urlParts = parseUrl(url);
-
-        static std::atomic<int> s_wscatSockId{15650};
-        int clientSockId = s_wscatSockId.fetch_add(1);
-
-        auto& console = km::net::HttpsExecutiveConsole::get();
-        km::crypto::tls13::Tls13ClientSession tlsClient;
-        WebSocketSession wsSession(true); // Client mode with masking enabled
-
-        // 1. Perform TLS 1.3 Handshake (for wss://)
-        if (urlParts.scheme == "wss") {
-            auto clientHello = tlsClient.generateClientHello(urlParts.host);
-
-            std::vector<uint8_t> serverHandshake;
-            if (!console.handleHandshake(clientSockId, clientHello, serverHandshake)) {
-                return result;
-            }
-            if (!tlsClient.processServerHandshake(serverHandshake)) {
-                console.closeSession(clientSockId);
-                return result;
-            }
-        }
-
-        // 2. Perform RFC 6455 HTTP/1.1 Upgrade Handshake
-        std::string clientKey = WebSocketHandshake::generateClientKey();
-        std::ostringstream upgradeReq;
-        upgradeReq << "GET " << urlParts.path << " HTTP/1.1\r\n"
-                   << "Host: " << urlParts.host << ":" << urlParts.port << "\r\n"
-                   << "Upgrade: websocket\r\n"
-                   << "Connection: Upgrade\r\n"
-                   << "Sec-WebSocket-Key: " << clientKey << "\r\n"
-                   << "Sec-WebSocket-Version: 13\r\n\r\n";
-
-        std::string reqStr = upgradeReq.str();
-        std::string respStr;
-
-        if (urlParts.scheme == "wss") {
-            auto encryptedReq = tlsClient.encryptAppData(
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(reqStr.data()), reqStr.size())
-            );
-            auto encryptedResp = console.handleEncryptedRequest(clientSockId, encryptedReq);
-
-            std::vector<uint8_t> plaintextResp;
-            if (!tlsClient.decryptAppData(encryptedResp, plaintextResp)) {
-                console.closeSession(clientSockId);
-                return result;
-            }
-            respStr.assign(reinterpret_cast<const char*>(plaintextResp.data()), plaintextResp.size());
-        } else {
-            respStr = console.dispatchHttpRequest(reqStr);
-        }
-
-        // 3. Verify HTTP 101 Switching Protocols & Sec-WebSocket-Accept
-        if (respStr.find("101 Switching Protocols") != std::string::npos) {
-            result.httpStatusCode = 101;
-            size_t acceptPos = respStr.find("Sec-WebSocket-Accept: ");
-            if (acceptPos != std::string::npos) {
-                size_t acceptStart = acceptPos + 22;
-                size_t acceptEnd = respStr.find("\r\n", acceptStart);
-                if (acceptEnd != std::string::npos) {
-                    result.serverAcceptKey = respStr.substr(acceptStart, acceptEnd - acceptStart);
-                    if (WebSocketHandshake::verifyAcceptKey(clientKey, result.serverAcceptKey)) {
-                        result.connected = true;
-                        wsSession.markOpen();
-                    }
-                }
-            }
-        }
-
-        if (!result.connected) {
-            console.closeSession(clientSockId);
-            return result;
-        }
-
-        // 4. Send Ping frame if requested
-        if (sendPingProbe) {
-            std::string pingData = "wscat-ping-test";
-            auto pingWire = wsSession.createPingFrame(
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(pingData.data()), pingData.size())
-            );
-            result.framesSent++;
-
-            if (urlParts.scheme == "wss") {
-                auto encPing = tlsClient.encryptAppData(pingWire);
-                auto encPong = console.handleEncryptedRequest(clientSockId, encPing);
-                std::vector<uint8_t> ptPong;
-                if (tlsClient.decryptAppData(encPong, ptPong)) {
-                    std::vector<WebSocketFrame> replyFrames;
-                    wsSession.processIncomingBytes(ptPong, replyFrames);
-                    for (const auto& f : replyFrames) {
-                        result.framesReceived++;
-                        if (f.opcode == OPCODE_PONG) {
-                            result.pongReceived = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 5. Send User Messages and Collect Server Replies
-        for (const auto& msg : messagesToSend) {
-            auto frameWire = wsSession.createTextFrame(msg);
-            result.framesSent++;
-
-            if (urlParts.scheme == "wss") {
-                auto encFrame = tlsClient.encryptAppData(frameWire);
-                auto encReply = console.handleEncryptedRequest(clientSockId, encFrame);
-
-                std::vector<uint8_t> ptReply;
-                if (tlsClient.decryptAppData(encReply, ptReply)) {
-                    std::vector<WebSocketFrame> replyFrames;
-                    wsSession.processIncomingBytes(ptReply, replyFrames);
-                    for (const auto& f : replyFrames) {
-                        result.framesReceived++;
-                        if (f.opcode == OPCODE_TEXT) {
-                            result.receivedMessages.push_back(f.asText());
-                        } else if (f.opcode == OPCODE_PONG) {
-                            result.pongReceived = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 6. Graceful Close frame
-        auto closeWire = wsSession.createCloseFrame(CLOSE_NORMAL_CLOSURE, "Session finished");
-        result.framesSent++;
-        if (urlParts.scheme == "wss") {
-            auto encClose = tlsClient.encryptAppData(closeWire);
-            auto encCloseReply = console.handleEncryptedRequest(clientSockId, encClose);
-            std::vector<uint8_t> ptClose;
-            if (tlsClient.decryptAppData(encCloseReply, ptClose)) {
-                std::vector<WebSocketFrame> closeFrames;
-                wsSession.processIncomingBytes(ptClose, closeFrames);
-                for (const auto& f : closeFrames) {
-                    result.framesReceived++;
-                    if (f.opcode == OPCODE_CLOSE) {
-                        result.closedCleanly = true;
-                    }
-                }
-            }
-        }
-
-        console.closeSession(clientSockId);
+        const auto parts = parseUrl(url);
+        if (parts.scheme == "wss")
+            result.error = "authenticated TLS transport is unavailable";
+        else
+            result.error = "WebSocket transport is not connected to the canonical AFD socket path";
         return result;
     }
 

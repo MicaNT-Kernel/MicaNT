@@ -48,6 +48,17 @@ int32_t readPort(void*, uint8_t port, uint32_t* value) {
 int32_t resetPort(void*, uint8_t port, uint8_t* speed) {
     return speed && g_transport.resetPort(port, *speed) ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
 }
+int32_t acknowledgeRootChange(void*, uint8_t port) {
+    return g_transport.acknowledgeConnectionChange(port) ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+}
+int32_t beginRootReset(void*, uint8_t port) {
+    return g_transport.beginPortReset(port) ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+}
+int32_t pollRootReset(void*, uint8_t port, uint8_t* speed) {
+    if (!speed) return STATUS_INVALID_PARAMETER;
+    const auto result = g_transport.pollPortReset(port, *speed);
+    return result > 0 ? STATUS_SUCCESS : result == 0 ? kBusy : STATUS_DEVICE_NOT_READY;
+}
 uint8_t portSlotType(void*, uint8_t port) { return g_transport.portSlotType(port); }
 int32_t prepareAddress(void*, uint8_t slot, uint8_t port, uint8_t speed, micant::shared::usb::Trb* command) {
     if (!command) return STATUS_INVALID_PARAMETER;
@@ -60,7 +71,8 @@ int32_t prepareDownstream(void*, uint8_t slot, uint8_t rootPort, uint8_t speed,
                           uint8_t hubSlot, uint8_t hubPort, bool multiTt, micant::shared::usb::Trb* command) {
     if (!command) return STATUS_INVALID_PARAMETER;
     micant::oem::xhci::Trb local{};
-    if (!g_transport.prepareAddressDevice(slot, rootPort, speed, local, hubSlot, hubPort, multiTt))
+    if (!g_transport.prepareAddressDevice(slot, rootPort, speed, local,
+                                          speed < 3 ? hubSlot : 0, hubPort, speed < 3 && multiTt))
         return STATUS_DEVICE_NOT_READY;
     *command = {local.parameter, local.status, local.control}; return STATUS_SUCCESS;
 }
@@ -69,6 +81,28 @@ int32_t prepareHub(void*, uint8_t endpoint, uint16_t packet, uint8_t interval, u
     if (!command) return STATUS_INVALID_PARAMETER;
     micant::oem::xhci::Trb local{};
     if (!g_transport.prepareHubEndpoint(endpoint, packet, interval, speed, ports, thinkTime, multiTt, local))
+        return STATUS_DEVICE_NOT_READY;
+    *command = {local.parameter, local.status, local.control}; return STATUS_SUCCESS;
+}
+int32_t prepareTopology(void*, uint8_t slot, uint8_t rootPort, uint8_t speed, uint32_t route,
+                        uint8_t ttHub, uint8_t ttPort, bool multiTt, micant::shared::usb::Trb* command) {
+    if (!command) return STATUS_INVALID_PARAMETER;
+    micant::oem::xhci::Trb local{};
+    if (!g_transport.prepareAddressDevice(slot, rootPort, speed, local, ttHub, ttPort, multiTt, route))
+        return STATUS_DEVICE_NOT_READY;
+    *command = {local.parameter, local.status, local.control}; return STATUS_SUCCESS;
+}
+int32_t prepareEp0Packet(void*, uint16_t packet, micant::shared::usb::Trb* command) {
+    if (!command) return STATUS_INVALID_PARAMETER;
+    micant::oem::xhci::Trb local{};
+    if (!g_transport.prepareEp0Packet(packet, local)) return STATUS_DEVICE_NOT_READY;
+    *command = {local.parameter, local.status, local.control}; return STATUS_SUCCESS;
+}
+int32_t prepareSuperSpeedHub(void*, uint8_t endpoint, uint16_t packet, uint8_t interval, uint8_t speed,
+                             uint8_t ports, uint8_t burst, uint16_t bytes, micant::shared::usb::Trb* command) {
+    if (!command) return STATUS_INVALID_PARAMETER;
+    micant::oem::xhci::Trb local{};
+    if (!g_transport.prepareHubEndpoint(endpoint, packet, interval, speed, ports, 0, false, local, burst, bytes))
         return STATUS_DEVICE_NOT_READY;
     *command = {local.parameter, local.status, local.control}; return STATUS_SUCCESS;
 }
@@ -163,7 +197,7 @@ bool readConfig(const KernelServices& services, uint8_t bus, uint8_t device,
         services.Context, bus, device, function, offset, &value) == STATUS_SUCCESS;
 }
 
-bool findXhci(const KernelServices& services, uint8_t& busOut,
+bool findXhci(const KernelServices& services, uint32_t firstBdf, uint8_t& busOut,
               uint8_t& deviceOut, uint8_t& functionOut,
               uint64_t& bar0) noexcept {
     for (uint32_t bus = 0; bus <= UINT8_MAX; ++bus) {
@@ -177,6 +211,8 @@ bool findXhci(const KernelServices& services, uint8_t& busOut,
                     static_cast<uint8_t>(device), 0, kPciHeaderTypeOffset, header)) return false;
             const uint8_t functionCount = ((header >> 16) & 0x80) ? 8 : 1;
             for (uint8_t function = 0; function < functionCount; ++function) {
+                const uint32_t bdf = (bus << 8) | (device << 3) | function;
+                if (bdf < firstBdf) continue;
                 if (function && !readConfig(services, static_cast<uint8_t>(bus),
                         static_cast<uint8_t>(device), function, 0, id)) return false;
                 if (static_cast<uint16_t>(id) == UINT16_MAX) continue;
@@ -189,9 +225,9 @@ bool findXhci(const KernelServices& services, uint8_t& busOut,
                 uint32_t low{};
                 if (!readConfig(services, static_cast<uint8_t>(bus),
                         static_cast<uint8_t>(device), function, kPciBar0Offset, low)) return false;
-                if (low & 1u) return false;
+                if (low & 1u) continue;
                 const uint32_t type = (low >> 1) & 3u;
-                if (type != 0 && type != 2) return false;
+                if (type != 0 && type != 2) continue;
                 bar0 = static_cast<uint64_t>(low & ~0xFu);
                 if (type == 2) {
                     uint32_t high{};
@@ -199,7 +235,7 @@ bool findXhci(const KernelServices& services, uint8_t& busOut,
                                     function, kPciBar0Offset + 4, high)) return false;
                     bar0 |= uint64_t{high} << 32;
                 }
-                if (!bar0) return false;
+                if (!bar0) continue;
                 busOut = static_cast<uint8_t>(bus);
                 deviceOut = static_cast<uint8_t>(device);
                 functionOut = function;
@@ -231,33 +267,48 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     if (g_services || g_hostToken) return kBusy;
 
     uint8_t bus{}, device{}, function{};
-    uint64_t bar0{};
-    if (!findXhci(services, bus, device, function, bar0)) {
-        log(services, "usbxhci.sys: no supported xHCI controller discovered through HAL PCI");
-        return STATUS_NOT_SUPPORTED;
-    }
-
+    uint64_t bar0{}, claimToken{};
+    uint32_t cursor{};
+    int32_t lastStatus = STATUS_NOT_SUPPORTED;
     const PciBarRequestV1 request{0, 0, 0, 0x1000};
     PciBarResourceV1 resource{};
-    size_t resourceCount = 1;
-    uint64_t claimToken{};
-    const int32_t claimStatus = services.ClaimPciDevice(services.Context, 0,
-        bus, device, function, &request, 1, &claimToken, &resource, &resourceCount);
-    if (claimStatus != STATUS_SUCCESS || !claimToken || resourceCount != 1 ||
-        resource.BarIndex != 0 || resource.PhysicalAddress != bar0 ||
-        resource.Length < 0x1000 || resource.Length > 16u * 1024u * 1024u) {
-        if (claimToken) (void)services.ReleasePciDevice(services.Context, claimToken);
-        log(services, "usbxhci.sys: Io/PnP has no PCI claim backend; controller unchanged");
-        return claimStatus == STATUS_SUCCESS ? STATUS_NOT_SUPPORTED : claimStatus;
+    bool claimed = false;
+    while (findXhci(services, cursor, bus, device, function, bar0)) {
+        cursor = (uint32_t{bus} << 8) | (uint32_t{device} << 3) | function;
+        ++cursor;
+        size_t resourceCount = 1;
+        claimToken = 0; resource = {};
+        const auto claimStatus = services.ClaimPciDevice(services.Context, 0,
+            bus, device, function, &request, 1, &claimToken, &resource, &resourceCount);
+        if (claimStatus == STATUS_SUCCESS && claimToken && resourceCount == 1 &&
+            resource.BarIndex == 0 && resource.PhysicalAddress == bar0 &&
+            resource.Length >= 0x1000 && resource.Length <= 16u * 1024u * 1024u) {
+            if (g_transport.initialize(services, bus, device, function, claimToken,
+                                       resource.PhysicalAddress, static_cast<size_t>(resource.Length))) {
+                claimed = true; break;
+            }
+            if (!g_transport.stop()) {
+                g_services = &services; driver->DriverUnload = unloadHost;
+                log(services, "usbxhci.sys: controller rollback remains busy");
+                return kBusy;
+            }
+            claimToken = 0; lastStatus = STATUS_DEVICE_NOT_READY;
+            continue;
+        }
+        lastStatus = claimStatus == STATUS_SUCCESS ? STATUS_NOT_SUPPORTED : claimStatus;
+        if (claimToken && services.ReleasePciDevice(services.Context, claimToken) != STATUS_SUCCESS) {
+            log(services, "usbxhci.sys: failed to roll back PCI claim");
+            return kBusy;
+        }
+        claimToken = 0;
+    }
+    if (!claimed) {
+        log(services, "usbxhci.sys: no available xHCI controller with safe PCI resources");
+        return lastStatus;
     }
     g_services = &services;
     g_bus = bus; g_device = device; g_function = function;
     driver->DriverUnload = unloadHost;
-    if (!g_transport.initialize(services, bus, device, function, claimToken,
-                                resource.PhysicalAddress, static_cast<size_t>(resource.Length))) {
-        unloadHost(driver);
-        return STATUS_DEVICE_NOT_READY;
-    }
     g_host = {};
     g_host.Size = sizeof(g_host); g_host.Version = micant::shared::usb::HostServicesVersion;
     g_host.Context = &g_transport; g_host.Start = startHost; g_host.Stop = stopHost; g_host.Restart = restartHost;
@@ -273,6 +324,10 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     g_host.PrepareSuperSpeedInterrupt = prepareSuperSpeedInterrupt;
     g_host.PrepareSuperSpeedBulk = prepareSuperSpeedBulk;
     g_host.PrepareHubEndpoint = prepareHub; g_host.PrepareAddressDownstream = prepareDownstream;
+    g_host.PrepareAddressTopology = prepareTopology; g_host.PrepareEp0Packet = prepareEp0Packet;
+    g_host.PrepareSuperSpeedHubEndpoint = prepareSuperSpeedHub;
+    g_host.BeginRootPortReset = beginRootReset; g_host.PollRootPortReset = pollRootReset;
+    g_host.AcknowledgeRootConnectionChange = acknowledgeRootChange;
     const auto result = services.RegisterUsbHost(services.Context, &g_host, &g_hostToken);
     if (result != STATUS_SUCCESS || !g_hostToken) {
         unloadHost(driver);

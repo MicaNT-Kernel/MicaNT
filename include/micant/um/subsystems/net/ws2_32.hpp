@@ -20,10 +20,17 @@
 #include <string_view>
 #include <vector>
 #include "micant/shared/ntdef.hpp"
-#include "micant/um/subsystems/winbase/kernel32.hpp"
-#include "micant/um/native/ldr.hpp"
-#include "micant/um/native/ntdll.hpp"
 #include "micant/shared/afd_socket_abi.hpp"
+#if defined(MICANT_NATIVE_USERMODE)
+#include "micant/shared/native_nt_api.hpp"
+namespace micant::win32 {
+using BOOL = int32_t; using DWORD = uint32_t; using HANDLE = void*; using HWND = void*;
+}
+#else
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/winbase/kernel32.hpp"
+#include "micant/um/native/ntdll.hpp"
+#endif
 
 namespace micant::ws2_32 {
 
@@ -67,6 +74,7 @@ inline constexpr int WSAEADDRINUSE      = 10048;
 inline constexpr int WSANOTINITIALISED  = 10093;
 inline constexpr int SOL_SOCKET = 0xFFFF;
 inline constexpr int SO_RCVTIMEO = 0x1006;
+inline constexpr int SO_SNDTIMEO = 0x1005;
 
 #pragma pack(push, 1)
 
@@ -153,11 +161,11 @@ using LPWSAOVERLAPPED = WSAOVERLAPPED*;
 struct WSADATA {
     uint16_t wVersion{0x0202};
     uint16_t wHighVersion{0x0202};
-    char szDescription[257]{"MicaNT Clean-Room Sockets 2.2"};
-    char szSystemStatus[129]{"Running"};
     uint16_t iMaxSockets{32767};
     uint16_t iMaxUdpDg{65467};
     char* lpVendorInfo{nullptr};
+    char szDescription[257]{"MicaNT Clean-Room Sockets 2.2"};
+    char szSystemStatus[129]{"Running"};
 };
 
 inline thread_local int g_WsaLastError = 0;
@@ -179,13 +187,33 @@ inline int afdError(micant::NtStatus status) noexcept {
     return WSAECONNRESET;
 }
 
+inline micant::NtStatus callNtDeviceIoControlFile(
+    micant::Handle file, uint32_t code, const void* input, uint32_t inputLength,
+    void* output, uint32_t outputLength, micant::IoStatusBlock* iosb) noexcept {
+#if defined(MICANT_NATIVE_USERMODE)
+    return micant::native_nt::NtDeviceIoControlFile(file, 0, nullptr, nullptr, iosb,
+        code, input, inputLength, output, outputLength);
+#else
+    return ntdll::NtDeviceIoControlFile(file, 0, nullptr, nullptr, iosb,
+        code, input, inputLength, output, outputLength);
+#endif
+}
+
+inline micant::NtStatus callNtClose(micant::Handle file) noexcept {
+#if defined(MICANT_NATIVE_USERMODE)
+    return micant::native_nt::NtClose(file);
+#else
+    return ntdll::NtClose(file);
+#endif
+}
+
 inline micant::NtStatus afdControl(SOCKET socket, uint32_t code, const void* input,
                                    uint32_t inputLength, void* output = nullptr,
                                    uint32_t outputLength = 0,
                                    micant::IoStatusBlock* result = nullptr) noexcept {
     micant::IoStatusBlock local{};
-    auto status = ntdll::NtDeviceIoControlFile(static_cast<micant::Handle>(socket), 0, nullptr, nullptr,
-        &local, code, input, inputLength, output, outputLength);
+    auto status = callNtDeviceIoControlFile(static_cast<micant::Handle>(socket),
+        code, input, inputLength, output, outputLength, &local);
     if (result) *result = local;
     return status;
 }
@@ -250,7 +278,11 @@ inline SOCKET socket(int af, int type, int protocol) noexcept {
     UnicodeString name{endpointPath};
     ObjectAttributes oa{}; oa.objectName = &name; oa.attributes = OBJ_CASE_INSENSITIVE;
     Handle handle{}; IoStatusBlock iosb{};
+#if defined(MICANT_NATIVE_USERMODE)
+    const auto status = micant::native_nt::NtCreateFile(&handle, 0x00100003u, &oa, &iosb, nullptr, 0, 0, 1, 0, ea, sizeof(ea));
+#else
     const auto status = ntdll::NtCreateFile(&handle, 0x00100003u, &oa, &iosb, nullptr, 0, 0, 1, 0, ea, sizeof(ea));
+#endif
     if (status != NtStatus::Success) { g_WsaLastError = afdError(status); return INVALID_SOCKET; }
     return static_cast<SOCKET>(handle);
 }
@@ -343,7 +375,7 @@ inline int recvfrom(SOCKET s,char* buf,int len,int flags,sockaddr* from,int* fro
 }
 inline int closesocket(SOCKET s) noexcept {
     if(s==INVALID_SOCKET){g_WsaLastError=WSAENOTSOCK;return SOCKET_ERROR;}
-    const auto status=ntdll::NtClose(static_cast<Handle>(s));
+    const auto status=callNtClose(static_cast<Handle>(s));
     if(status!=NtStatus::Success){g_WsaLastError=afdError(status);return SOCKET_ERROR;}return 0;
 }
 
@@ -375,11 +407,11 @@ inline int getpeername(SOCKET, sockaddr*, int*) noexcept { g_WsaLastError=WSAEOP
 inline int getsockname(SOCKET, sockaddr*, int*) noexcept { g_WsaLastError=WSAEOPNOTSUPP; return SOCKET_ERROR; }
 inline int setsockopt(SOCKET s,int level,int option,const char* value,int valueLength) noexcept {
     if(s==INVALID_SOCKET){g_WsaLastError=WSAENOTSOCK;return SOCKET_ERROR;}
-    if(level!=SOL_SOCKET||option!=SO_RCVTIMEO){g_WsaLastError=WSAEOPNOTSUPP;return SOCKET_ERROR;}
+    if(level!=SOL_SOCKET||(option!=SO_RCVTIMEO&&option!=SO_SNDTIMEO)){g_WsaLastError=WSAEOPNOTSUPP;return SOCKET_ERROR;}
     if(!value||valueLength!=static_cast<int>(sizeof(uint32_t))){g_WsaLastError=WSAEINVAL;return SOCKET_ERROR;}
     uint32_t timeout{};std::memcpy(&timeout,value,sizeof(timeout));
-    if(timeout>60000){g_WsaLastError=WSAEINVAL;return SOCKET_ERROR;}
-    auto status=afdControl(s,micant::shared::afd::IoctlSetReceiveTimeout,&timeout,sizeof(timeout));
+    auto status=afdControl(s,option==SO_RCVTIMEO ? micant::shared::afd::IoctlSetReceiveTimeout :
+        micant::shared::afd::IoctlSetSendTimeout,&timeout,sizeof(timeout));
     if(status!=NtStatus::Success){g_WsaLastError=afdError(status);return SOCKET_ERROR;}return 0;
 }
 inline int shutdown(SOCKET, int) noexcept { g_WsaLastError=WSAEOPNOTSUPP; return SOCKET_ERROR; }
@@ -394,11 +426,33 @@ struct hostent {
 
 inline hostent* gethostbyname(const char*) noexcept { g_WsaLastError=WSAEOPNOTSUPP; return nullptr; }
 inline int WSAAsyncSelect(SOCKET,void*,unsigned int,long) noexcept { return unsupportedSocket(); }
-inline win32::HANDLE WINAPI WSACreateEvent() noexcept { return win32::CreateEventW(nullptr,1,0,nullptr); }
-inline win32::BOOL WINAPI WSACloseEvent(win32::HANDLE e) noexcept { return win32::CloseHandle(e); }
-inline win32::BOOL WINAPI WSASetEvent(win32::HANDLE e) noexcept { return win32::SetEvent(e); }
+inline win32::HANDLE WINAPI WSACreateEvent() noexcept {
+#if defined(MICANT_NATIVE_USERMODE)
+    return nullptr;
+#else
+    return win32::CreateEventW(nullptr,1,0,nullptr);
+#endif
+}
+inline win32::BOOL WINAPI WSACloseEvent(win32::HANDLE e) noexcept {
+#if defined(MICANT_NATIVE_USERMODE)
+    (void)e; return 0;
+#else
+    return win32::CloseHandle(e);
+#endif
+}
+inline win32::BOOL WINAPI WSASetEvent(win32::HANDLE e) noexcept {
+#if defined(MICANT_NATIVE_USERMODE)
+    (void)e; return 0;
+#else
+    return win32::SetEvent(e);
+#endif
+}
 inline win32::DWORD WINAPI WSAWaitForMultipleEvents(win32::DWORD n,const win32::HANDLE* e,win32::BOOL all,win32::DWORD ms,win32::BOOL alertable) noexcept {
+#if defined(MICANT_NATIVE_USERMODE)
+    (void)n;(void)e;(void)all;(void)ms;(void)alertable; return 0xFFFFFFFFu;
+#else
     return win32::WaitForMultipleObjects(n,e,all,ms);
+#endif
 }
 inline win32::HANDLE WINAPI WSAAsyncGetHostByName(win32::HWND,unsigned int,const char*,char*,int) noexcept {g_WsaLastError=WSAEOPNOTSUPP;return nullptr;}
 inline int WINAPI WSACancelAsyncRequest(win32::HANDLE) noexcept {return unsupportedSocket();}
@@ -464,6 +518,7 @@ inline int WINAPI WSAAddressToStringW(void*,uint32_t,void*,wchar_t*,uint32_t*) n
 inline win32::BOOL WINAPI AcceptEx(SOCKET,SOCKET,void*,uint32_t,uint32_t,uint32_t,uint32_t*,void*) noexcept {g_WsaLastError=WSAEOPNOTSUPP;return 0;}
 inline void WINAPI GetAcceptExSockaddrs(void*,uint32_t,uint32_t,uint32_t,void** local,int* localLength,void** remote,int* remoteLength) noexcept {if(local)*local=nullptr;if(localLength)*localLength=0;if(remote)*remote=nullptr;if(remoteLength)*remoteLength=0;}
 
+#if !defined(MICANT_NATIVE_USERMODE)
 inline void InitializeWs2_32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -676,5 +731,6 @@ inline void InitializeWs2_32SubsystemExports() {
     ldr.registerExportOrdinal("wsock32.dll", 1142, reinterpret_cast<void*>(WSASocketA));
 
 }
+#endif
 
 } // namespace micant::ws2_32

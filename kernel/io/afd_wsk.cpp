@@ -19,7 +19,9 @@ struct Endpoint {
     uint32_t family{};
     uint32_t type{};
     uint32_t protocol{};
-    uint32_t receiveTimeoutMilliseconds{};
+    std::atomic<uint32_t> receiveTimeoutMilliseconds{0};
+    std::atomic<uint32_t> sendTimeoutMilliseconds{0};
+    std::atomic<uint32_t> connectTimeoutMilliseconds{30000};
     std::atomic<bool> closing{false};
     std::atomic<bool> socketClosed{false};
     void* socketWaitObject{};
@@ -29,6 +31,25 @@ io::DriverObject g_AfdDriver{};
 io::DeviceObject g_AfdDevice{};
 se::FreestandingSecurityDescriptor g_NetworkConfigurationSecurity{};
 bool g_Initialized{};
+
+bool makeDeadline(uint32_t milliseconds, uint64_t& deadline) noexcept {
+    deadline = 0;
+    if (!milliseconds) return true;
+    uint64_t now{};
+    if (!ke::KeQueryUptime100ns(now)) return false;
+    const uint64_t ticks = static_cast<uint64_t>(milliseconds) * 10'000;
+    deadline = now > UINT64_MAX - ticks ? UINT64_MAX : now + ticks;
+    return true;
+}
+NtStatus remainingDeadline(uint64_t deadline, uint32_t& milliseconds) noexcept {
+    milliseconds = 0;
+    if (!deadline) return NtStatus::Success;
+    uint64_t now{};
+    if (!ke::KeQueryUptime100ns(now)) return NtStatus::DeviceNotReady;
+    if (now >= deadline) return NtStatus::Timeout;
+    milliseconds = static_cast<uint32_t>((deadline - now + 9'999) / 10'000);
+    return NtStatus::Success;
+}
 
 NtStatus endpointRead(void*, uint64_t, void*, size_t, size_t* bytesRead) noexcept {
     if (bytesRead) *bytesRead = 0;
@@ -57,14 +78,19 @@ Endpoint* endpointFor(const io::FileObject* file) noexcept {
 }
 
 NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
-    if (!irp || !irp->fileObject || !irp->systemBuffer) return NtStatus::InvalidParameter;
+    if (!irp) return NtStatus::InvalidParameter;
+    if (!irp->fileObject) { irp->ioStatus = {NtStatus::InvalidParameter, 0}; return NtStatus::InvalidParameter; }
     auto* endpoint = endpointFor(irp->fileObject);
-    if (!endpoint) return NtStatus::InvalidHandle;
+    if (!endpoint) { irp->ioStatus = {NtStatus::InvalidHandle, 0}; return NtStatus::InvalidHandle; }
     const uint32_t code = irp->byteOffset.lowPart;
     const size_t inputLength = static_cast<uint32_t>(irp->byteOffset.highPart);
     const size_t outputLength = irp->length;
     auto* input = static_cast<const uint8_t*>(irp->systemBuffer);
     auto* output = static_cast<uint8_t*>(irp->userBuffer);
+    if ((inputLength && !input) || (outputLength && !output)) {
+        irp->ioStatus = {NtStatus::InvalidParameter, 0};
+        return NtStatus::InvalidParameter;
+    }
     NtStatus status = NtStatus::InvalidDeviceRequest;
     size_t information = 0;
     if (code == IoctlBind || code == IoctlConnect) {
@@ -75,11 +101,30 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
             if (address.Size != sizeof(address) || address.AddressFamily != AddressFamilyInet)
                 status = NtStatus::InvalidParameter;
             else {
+                uint64_t deadline{};
+                if (code == IoctlConnect && !makeDeadline(
+                        endpoint->connectTimeoutMilliseconds.load(std::memory_order_acquire), deadline)) {
+                    irp->ioStatus = {NtStatus::DeviceNotReady, 0};
+                    return NtStatus::DeviceNotReady;
+                }
                 const bool ok = code == IoctlBind
                     ? tcpip::kernel_api::bindSocket(endpoint->socketId, address.Ipv4AddressNetworkOrder, address.PortHostOrder)
-                    : tcpip::kernel_api::connectSocket(endpoint->socketId, address.Ipv4AddressNetworkOrder, address.PortHostOrder);
-                status = ok ? NtStatus::Success :
-                    (code == IoctlConnect ? NtStatus::PortConnectionRefused : NtStatus::Conflict);
+                    : tcpip::kernel_api::connectSocket(endpoint->socketId, address.Ipv4AddressNetworkOrder, address.PortHostOrder, deadline);
+                if (!ok) {
+                    uint32_t remaining{};
+                    const NtStatus timing = remainingDeadline(deadline, remaining);
+                    status = timing != NtStatus::Success ? timing :
+                        (code == IoctlConnect ? NtStatus::PortConnectionRefused : NtStatus::Conflict);
+                }
+                else if (code == IoctlConnect && endpoint->type == SocketStream) {
+                    // A SYN being emitted is not a connected socket. Wait for
+                    // the TCP state transition without holding an AFD lock.
+                    uint32_t remaining{};
+                    status = remainingDeadline(deadline, remaining);
+                    if (status == NtStatus::Success)
+                        status = static_cast<NtStatus>(tcpip::kernel_api::waitSocketConnected(
+                            endpoint->socketWaitObject, remaining));
+                } else status = NtStatus::Success;
             }
         }
     } else if (code == IoctlListen) {
@@ -101,25 +146,64 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
                 status = NtStatus::InvalidParameter;
             else {
                 int sent;
-                if (code == IoctlSend) sent = tcpip::kernel_api::sendSocket(endpoint->socketId, input + sizeof(request), request.DataLength);
+                if (code == IoctlSend) {
+                    uint64_t deadline{};
+                    if (!makeDeadline(endpoint->sendTimeoutMilliseconds.load(std::memory_order_acquire), deadline)) {
+                        irp->ioStatus = {NtStatus::DeviceNotReady, 0}; return NtStatus::DeviceNotReady;
+                    }
+                    if (endpoint->type == SocketStream && request.DataLength) {
+                        uint32_t remaining{};
+                        const NtStatus timing = remainingDeadline(deadline, remaining);
+                        if (timing != NtStatus::Success) { irp->ioStatus = {timing, 0}; return timing; }
+                        const auto ready = static_cast<NtStatus>(tcpip::kernel_api::waitSocketWritable(
+                            endpoint->socketWaitObject, remaining));
+                        if (ready != NtStatus::Success) {
+                            irp->ioStatus.status = ready;
+                            irp->ioStatus.information = 0;
+                            return ready;
+                        }
+                    }
+                    sent = tcpip::kernel_api::sendSocket(endpoint->socketId, input + sizeof(request), request.DataLength, deadline);
+                    if (sent < 0 && deadline) {
+                        uint32_t remaining{};
+                        const NtStatus timing = remainingDeadline(deadline, remaining);
+                        if (timing != NtStatus::Success) { irp->ioStatus = {timing, 0}; return timing; }
+                    }
+                }
                 else if (inputLength >= sizeof(request) + sizeof(SocketAddressV1)) {
                     SocketAddressV1 address{}; std::memcpy(&address, input + sizeof(request), sizeof(address));
+                    uint64_t deadline{};
+                    if (!makeDeadline(endpoint->sendTimeoutMilliseconds.load(std::memory_order_acquire), deadline)) {
+                        irp->ioStatus = {NtStatus::DeviceNotReady, 0}; return NtStatus::DeviceNotReady;
+                    }
                     if (address.Size != sizeof(address) || address.AddressFamily != AddressFamilyInet) sent = -1;
                     else sent = tcpip::kernel_api::sendToSocket(endpoint->socketId,
                         input + sizeof(request) + sizeof(address), request.DataLength,
-                        address.Ipv4AddressNetworkOrder, address.PortHostOrder);
+                        address.Ipv4AddressNetworkOrder, address.PortHostOrder, deadline);
+                    if (sent < 0 && deadline) {
+                        uint32_t remaining{};
+                        const NtStatus timing = remainingDeadline(deadline, remaining);
+                        if (timing != NtStatus::Success) { irp->ioStatus = {timing, 0}; return timing; }
+                    }
                 } else sent = -1;
-                if (sent < 0) status = NtStatus::Unsuccessful;
+                if (sent == -2 && endpoint->type == SocketDatagram) status = NtStatus::BufferOverflow;
+                else if (sent < 0) status = NtStatus::Unsuccessful;
                 else { status = NtStatus::Success; information = static_cast<size_t>(sent); }
             }
         }
-    } else if (code == IoctlSetReceiveTimeout) {
+    } else if (code == IoctlSetReceiveTimeout || code == IoctlSetSendTimeout ||
+               code == IoctlSetConnectTimeout) {
         if (inputLength != sizeof(uint32_t)) status = NtStatus::InfoLengthMismatch;
         else {
             uint32_t timeout{};
             std::memcpy(&timeout, input, sizeof(timeout));
-            if (timeout > 60000) status = NtStatus::InvalidParameter;
-            else { endpoint->receiveTimeoutMilliseconds = timeout; status = NtStatus::Success; }
+            if (code == IoctlSetReceiveTimeout)
+                endpoint->receiveTimeoutMilliseconds.store(timeout, std::memory_order_release);
+            else if (code == IoctlSetSendTimeout)
+                endpoint->sendTimeoutMilliseconds.store(timeout, std::memory_order_release);
+            else
+                endpoint->connectTimeoutMilliseconds.store(timeout, std::memory_order_release);
+            status = NtStatus::Success;
         }
     } else if (code == IoctlQueryNetworkConfiguration) {
         if (inputLength != 0 || outputLength != sizeof(NetworkConfigurationV1) || !output)
@@ -152,9 +236,18 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
             else {
                 auto* process = ke::KeGetCurrentProcess();
                 auto* currentThread = ke::KeGetCurrentThread();
-                const auto* token = process ? se::SeGetEffectiveFreestandingToken(
-                    process->primaryToken(), currentThread && currentThread->owningThread
-                        ? currentThread->owningThread->impersonationToken() : nullptr) : nullptr;
+                se::FreestandingAccessToken* primaryToken{};
+                se::FreestandingAccessToken* impersonationToken{};
+                ob::ObjectHeader* primaryTokenReference{};
+                ob::ObjectHeader* impersonationTokenReference{};
+                auto tokenStatus = process
+                    ? process->referencePrimaryToken(primaryToken, primaryTokenReference)
+                    : NtStatus::AccessDenied;
+                if (tokenStatus == NtStatus::Success && currentThread && currentThread->owningThread)
+                    tokenStatus = currentThread->owningThread->referenceImpersonationToken(
+                        impersonationToken, impersonationTokenReference);
+                const auto* token = tokenStatus == NtStatus::Success
+                    ? se::SeGetEffectiveFreestandingToken(primaryToken, impersonationToken) : nullptr;
                 uint32_t grantedAccess{};
                 if (!se::SeAccessCheckFreestanding(token, g_NetworkConfigurationSecurity,
                         se::SE_NETWORK_CONFIG_WRITE, grantedAccess))
@@ -171,10 +264,12 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
                         configuration.GatewayNetworkOrder, configuration.DnsServerNetworkOrder)
                         ? NtStatus::Success : NtStatus::InvalidParameter;
                 }
+                if (impersonationTokenReference) se::SeDereferenceFreestandingToken(impersonationTokenReference);
+                if (primaryTokenReference) se::SeDereferenceFreestandingToken(primaryTokenReference);
             }
         }
     } else if (code == IoctlReceive || code == IoctlReceiveFrom) {
-        if (inputLength != sizeof(DataRequestV1) || !output || outputLength == 0 ||
+        if (inputLength != sizeof(DataRequestV1) || (outputLength && !output) ||
             (code == IoctlReceiveFrom && endpoint->type != SocketDatagram)) status = NtStatus::InvalidParameter;
         else {
             DataRequestV1 request{}; std::memcpy(&request, input, sizeof(request));
@@ -184,23 +279,45 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
                 request.DataLength > outputLength - metadataBytes || request.DataLength > MaximumControlBuffer)
                 status = NtStatus::InvalidParameter;
             else {
-                if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) status = NtStatus::InvalidDeviceState;
+                if (code == IoctlReceive && endpoint->type == SocketStream && request.DataLength == 0)
+                    status = NtStatus::Success;
+                else if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) status = NtStatus::InvalidDeviceState;
                 else {
+                    uint64_t deadline{};
+                    const uint32_t receiveTimeout = endpoint->receiveTimeoutMilliseconds.load(std::memory_order_acquire);
+                    if (receiveTimeout) {
+                        uint64_t now{};
+                        if (!ke::KeQueryUptime100ns(now)) {
+                            irp->ioStatus = {NtStatus::DeviceNotReady, 0};
+                            return NtStatus::DeviceNotReady;
+                        }
+                        const uint64_t ticks = static_cast<uint64_t>(receiveTimeout) * 10'000u;
+                        deadline = now > UINT64_MAX - ticks ? UINT64_MAX : now + ticks;
+                    }
                     for (;;) {
                         if (endpoint->closing.load(std::memory_order_acquire)) {
                             status = NtStatus::Cancelled;
                             break;
                         }
+                        uint32_t remaining = 0;
+                        if (deadline) {
+                            uint64_t now{};
+                            if (!ke::KeQueryUptime100ns(now)) { status = NtStatus::DeviceNotReady; break; }
+                            if (now >= deadline) { status = NtStatus::Timeout; break; }
+                            const uint64_t ticks = deadline - now;
+                            remaining = static_cast<uint32_t>((ticks + 9'999u) / 10'000u);
+                        }
                         const auto waitStatus = static_cast<NtStatus>(tcpip::kernel_api::waitSocketData(
-                            endpoint->socketWaitObject, endpoint->receiveTimeoutMilliseconds));
+                            endpoint->socketWaitObject, remaining));
                         if (waitStatus != NtStatus::Success) { status = waitStatus; break; }
                         if (code == IoctlReceiveFrom) {
                             auto* result = reinterpret_cast<ReceiveFromResultV1*>(output);
                             uint32_t sourceIpNetworkOrder{};
                             uint16_t sourcePort{};
+                            bool truncated{};
                             const int received = tcpip::kernel_api::recvFromSocket(endpoint->socketId,
                                 output + sizeof(*result), request.DataLength,
-                                &sourceIpNetworkOrder, &sourcePort);
+                                &sourceIpNetworkOrder, &sourcePort, &truncated);
                             if (received < 0) continue;
                             result->Source.Size = sizeof(SocketAddressV1);
                             result->Source.AddressFamily = AddressFamilyInet;
@@ -209,14 +326,15 @@ NtStatus dispatch(io::DeviceObject*, io::Irp* irp) {
                             result->Source.Reserved = 0;
                             result->DataLength = static_cast<uint32_t>(received);
                             information = sizeof(*result) + static_cast<size_t>(received);
-                            status = NtStatus::Success;
+                            status = truncated ? NtStatus::BufferOverflow : NtStatus::Success;
                             break;
                         }
+                        bool truncated{};
                         const int received = tcpip::kernel_api::recvSocket(endpoint->socketId,
-                            output, request.DataLength);
+                            output, request.DataLength, &truncated);
                         if (received < 0) continue;
                         information = static_cast<size_t>(received);
-                        status = NtStatus::Success;
+                        status = truncated ? NtStatus::BufferOverflow : NtStatus::Success;
                         break;
                     }
                 }

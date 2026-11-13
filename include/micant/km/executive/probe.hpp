@@ -67,7 +67,7 @@ namespace detail {
 // The backend must keep mappings stable through the subsequent copy. The
 // current AMD64 binding rejects use outside single-CPU, IRQ-disabled boot.
 using BootstrapProbeRoutine =
-    bool (*)(uintptr_t, size_t, bool, KPROCESSOR_MODE) noexcept;
+    NtStatus (*)(uintptr_t, size_t, bool, KPROCESSOR_MODE) noexcept;
 inline BootstrapProbeRoutine bootstrapProbeRoutine{};
 
 inline bool initializeBootstrapProbes(BootstrapProbeRoutine routine) noexcept {
@@ -76,10 +76,10 @@ inline bool initializeBootstrapProbes(BootstrapProbeRoutine routine) noexcept {
     return true;
 }
 
-inline bool bootstrapRangeAccessible(uintptr_t address, size_t size,
-                                     bool writable, KPROCESSOR_MODE mode) noexcept {
-    return bootstrapProbeRoutine &&
-           bootstrapProbeRoutine(address, size, writable, mode);
+inline NtStatus bootstrapRangeAccessible(uintptr_t address, size_t size,
+                                         bool writable, KPROCESSOR_MODE mode) noexcept {
+    return bootstrapProbeRoutine
+        ? bootstrapProbeRoutine(address, size, writable, mode) : NtStatus::AccessViolation;
 }
 
 } // namespace detail
@@ -170,9 +170,10 @@ inline NtStatus ProbeForRead(
     }
 
 #if defined(MICANT_FREESTANDING)
-    if (!detail::bootstrapRangeAccessible(addr, length, false, mode)) {
+    const auto probeStatus = detail::bootstrapRangeAccessible(addr, length, false, mode);
+    if (probeStatus != NtStatus::Success) {
         ex::GetSyncTelemetry().totalProbeViolationsCaught++;
-        return NtStatus::AccessViolation;
+        return probeStatus;
     }
 #endif
 
@@ -216,9 +217,10 @@ inline NtStatus ProbeForWrite(
 
     uintptr_t addr = reinterpret_cast<uintptr_t>(address);
 #if defined(MICANT_FREESTANDING)
-    if (!detail::bootstrapRangeAccessible(addr, length, true, mode)) {
+    const auto probeStatus = detail::bootstrapRangeAccessible(addr, length, true, mode);
+    if (probeStatus != NtStatus::Success) {
         ex::GetSyncTelemetry().totalProbeViolationsCaught++;
-        return NtStatus::AccessViolation;
+        return probeStatus;
     }
 #else
     uintptr_t startPage = addr & ~PAGE_MASK;

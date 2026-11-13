@@ -1367,7 +1367,7 @@ static bool s_ntoskrnlLoadedFromDisk = false;
 static uint64_t s_ntoskrnlEntryPoint = 0;
 static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedNtoskrnlInfo{};
 
-constexpr size_t kMaxBootOemDriverImages = 4;
+constexpr size_t kMaxBootOemDriverImages = micant::boot::UEFI_KERNEL_HANDOFF_MAX_OEM_MODULES;
 constexpr size_t kMaxBootOemDriverImageBytes = 16777216;
 alignas(4096) static uint8_t s_bootOemDriverFileBuffer[kMaxBootOemDriverImageBytes];
 alignas(4096) static uint8_t
@@ -2445,6 +2445,14 @@ extern "C" micant::uefi::EfiStatus EfiMain(
             {L"storahci.sys", L"\\SystemRoot\\System32\\drivers\\storahci.sys",
              L"\\EFI\\MicaNT\\System32\\drivers\\storahci.sys",
              L"\\EFI\\MicaNT\\storahci.sys", "storahci.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"hidusb.sys", L"\\SystemRoot\\System32\\drivers\\hidusb.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\hidusb.sys",
+             L"\\EFI\\MicaNT\\hidusb.sys", "hidusb.sys",
+             micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
+            {L"usbstor.sys", L"\\SystemRoot\\System32\\drivers\\usbstor.sys",
+             L"\\EFI\\MicaNT\\System32\\drivers\\usbstor.sys",
+             L"\\EFI\\MicaNT\\usbstor.sys", "usbstor.sys",
              micant::boot::BOOT_MODULE_FLAG_BOOT_START_DRIVER},
             {L"usbxhci.sys", L"\\SystemRoot\\System32\\drivers\\usbxhci.sys",
              L"\\EFI\\MicaNT\\System32\\drivers\\usbxhci.sys",

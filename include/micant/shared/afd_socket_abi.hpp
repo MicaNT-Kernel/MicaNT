@@ -14,7 +14,9 @@ inline constexpr char EndpointEaName[] = "MicaAfdEndpoint";
 inline constexpr uint8_t EndpointEaNameLength = sizeof(EndpointEaName) - 1;
 inline constexpr uint32_t EndpointMagic = 0x31444641; // AFD1
 inline constexpr uint16_t EndpointAbiVersion = 1;
-inline constexpr uint32_t MaximumControlBuffer = 64 * 1024;
+// Accommodate an entire IPv4 UDP payload (65507 bytes) together with the
+// private request/address headers, while retaining a fixed kernel allocation cap.
+inline constexpr uint32_t MaximumControlBuffer = 65568;
 inline constexpr uint16_t NetworkConfigurationAddressValid = 0x0001;
 inline constexpr uint16_t NetworkConfigurationDnsValid = 0x0002;
 inline constexpr uint16_t NetworkConfigurationSet = 0x0001;
@@ -30,6 +32,8 @@ inline constexpr uint32_t IoctlReceiveFrom = 0x0001202B;
 inline constexpr uint32_t IoctlSetReceiveTimeout = 0x0001202F;
 inline constexpr uint32_t IoctlQueryNetworkConfiguration = 0x00012033;
 inline constexpr uint32_t IoctlSetNetworkConfiguration = 0x00012037;
+inline constexpr uint32_t IoctlSetSendTimeout = 0x0001203B;
+inline constexpr uint32_t IoctlSetConnectTimeout = 0x0001203F;
 
 inline constexpr uint32_t AddressFamilyInet = 2;
 inline constexpr uint32_t SocketStream = 1;

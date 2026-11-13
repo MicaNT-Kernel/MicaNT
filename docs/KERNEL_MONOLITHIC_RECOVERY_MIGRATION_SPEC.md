@@ -21,6 +21,13 @@ Obiettivo: trasformare rapidamente codice recuperabile in *driver e servizi del 
 5. Il percorso importato non deve aggirare `Io`/`PnP`/`Mm`: DMA, mapping MMIO, interrupt, risorse PCI, handle e block-device passano dai proprietari canonici.
 6. Un errore hardware o una capacità assente restituiscono uno stato di errore reale. Vietato dichiarare controller “online”, pacchetti “trasmessi”, disco “montato” o driver “avviato” senza evidenza.
 7. Si preservano manifest di build, validazione PE, UEFI handoff, test di bootstrap CPL3, QEMU e verifiche architetturali già accettate. Cambiamenti piccoli di *interfaccia*, ma consegna verticale fino al test; non fermarsi alla prima compilazione.
+8. I driver OEM di bus, storage, USB, rete e classi hardware sono immagini native `.sys` autonome e non sorgenti linkate in `ntoskrnl_core_baremetal`. Il kernel contiene HAL, Io/PnP, allocator DMA e ABI/servizi generici; il driver `.sys` possiede il protocollo e registra i dispositivi presso gli owner canonici. Un adapter filesystem hardware-specifico va nel relativo `.sys`, non nel kernel.
+
+### Collocazione dei driver OEM
+
+Per le slice AHCI/FAT32, xHCI/HID e I210, CMake deve produrre immagini `.sys` separate dal target kernel. Le immagini consumano servizi espliciti del kernel per PCI, BAR/MMIO, DMA, timer, Io/PnP e logging; non usano accessi PCI privati o puntatori virtuali come indirizzi DMA. Il loader/ABI boot-start già usato da `virtio_gpu.sys` è il punto di partenza per l’integrazione; va esteso con un contratto neutro sufficiente ai driver e lifecycle/error handling, senza copiare i driver nell’immagine kernel. Il fatto che un `.sys` sia caricato o presente nella directory di boot non prova che sia inizializzato o collegato a Io/PnP.
+
+Conseguenza per la baseline corrente: `kernel/io/ahci_file_provider.cpp`, che include e inizializza il controller AHCI/FAT32, non può restare nel manifest bare-metal del kernel. La sua parte filesystem-specifica va trasferita in un `.sys`; in `kernel/io` rimangono l’oggetto file generico e l’interfaccia read-only del block device.
 
 ## 1. Inventario reale e classificazione del recupero
 
@@ -28,7 +35,7 @@ Il file storico contiene circa 5.611 righe, ma il valore principale è nei drive
 
 | Area | Codice legacy già disponibile | Situazione modulare / azione | Priorità |
 |---|---|---|---|
-| **AHCI SATA** | `include/micant/km/drivers/storage/ahci_baremetal.hpp`: PCI class discovery, ABAR, DMA, `readSectors`, `writeSectors` | Mancante nel manifest bare-metal; adapter verso PCI/HAL/DMA/Io block device, read-only iniziale | **P0** |
+| **AHCI SATA** | `include/micant/km/drivers/storage/ahci_baremetal.hpp`: PCI class discovery, ABAR, DMA, `readSectors`, `writeSectors` | Il precedente `kernel/io/ahci_file_provider.cpp` includeva il backend direttamente nel kernel; è stato spostato in `drivers/oem/ahci` e va completato come `.sys`, con adapter HAL/DMA/Io block device e sola lettura iniziale | **P0** |
 | **FAT32 su AHCI** | Stesso header: `Fat32Volume`, `Fat32FileSystem::mountAll`, `readFile`, `createFile` | Recuperare parser/mount/read come backend FsRtl/Io, non come secondo VFS; scritture solo dopo crash/recovery test | **P0** |
 | **xHCI fisico** | `include/micant/km/drivers/usb/xhci_baremetal.hpp`; init e polling nel monolitico | Adapter xHCI reale → USBD/Io/PnP; risolvere BAR/BDF e timing hardcoded prima dell'hardware fisico | **P0** |
 | **USB HID** | Monolitico: init `XhciBareMetalEngine` e `tryGetKeystroke`; `hidusb.hpp`, `kbdhid.hpp`, `mouhid.hpp` già presenti | Convertire polling/special-case in completamenti URB → class driver di input canonico | **P0** |

@@ -26,26 +26,15 @@ NtStatus NtQueueApcThread(Handle threadHandle, uintptr_t apcRoutine,
     auto status = ps::detail::referenceThreadHandle(threadHandle, ThreadSetContext, target, reference);
     if (status != NtStatus::Success) return status;
 
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    // The Ob reference pins EThread, not its reaped KThread. Acquire the
+    // borrowed KThread and process only after excluding the reaper.
     auto* kernelThread = target->kernelThread();
     auto* process = kernelThread ? kernelThread->owningProcess : nullptr;
-    uint64_t flags{};
-    uintptr_t previousRoot{};
-    __asm__ __volatile__("pushfq; popq %0; cli; movq %%cr3, %1"
-                         : "=r"(flags), "=r"(previousRoot) : : "memory");
-    uintptr_t targetRoot{};
     if (!kernelThread || target->isSystemThread() || !process ||
         kernelThread->state == ke::ThreadState::Terminated || process->isTerminating()) {
         status = NtStatus::InvalidHandle;
-    } else {
-        targetRoot = process->getDirectoryTableBase();
-        if (previousRoot != targetRoot &&
-            !hal::amd64::switchProcessPagingRootByPhysical(targetRoot)) {
-            status = NtStatus::Unsuccessful;
-        } else if (!hal::amd64::bootstrapUserRange(apcRoutine, 1, false, true)) {
-            status = NtStatus::AccessViolation;
-        }
-        if (previousRoot != targetRoot &&
-            !hal::amd64::switchProcessPagingRootByPhysical(previousRoot)) __builtin_trap();
     }
     if (status == NtStatus::Success) {
         auto* apc = new (std::nothrow_t{}) ke::KAPC{};
@@ -68,6 +57,32 @@ NtStatus NtQueueApcThread(Handle threadHandle, uintptr_t apcRoutine,
 }
 
 namespace micant::ps {
+namespace {
+// APC delivery runs at a return-to-user boundary. Teardown is non-returning
+// on success, but if an invariant prevents it from switching away we must
+// not resume after the claimed callback was discarded.
+[[noreturn]] void terminateFailedApcDelivery(ke::KThread& current,
+                                              NtStatus status,
+                                              bool pendingTermination) noexcept {
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    {
+        ke::detail::ReturnKernelContext kernelContext;
+        if ((flags & (uint64_t{1} << 9)) || hal::amd64::bootstrapSchedulerClockActive())
+            __asm__ __volatile__("sti" : : : "memory");
+        if (pendingTermination && current.serviceTermination)
+            current.serviceTermination(current.terminationContext);
+        else if (current.owningProcess)
+            (void)current.owningProcess->terminateCurrent(status);
+        else if (current.serviceTermination)
+            current.serviceTermination(current.terminationContext);
+        __asm__ __volatile__("cli" : : : "memory");
+    }
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    __builtin_trap();
+}
+}
+
 NtStatus EThread::prepareUserApc(const ke::UserApcDelivery* deliveries,
                                  size_t deliveryCount,
                                  uint64_t* hardwareFrame, uint64_t* savedRegisters,
@@ -99,11 +114,11 @@ NtStatus EThread::prepareUserApc(const ke::UserApcDelivery* deliveries,
         !hal::amd64::bootstrapUserRange(dispatcher, 1, false, true) ||
         !hal::amd64::bootstrapUserRange(userTeb_, sizeof(um::Teb64), true))
         return NtStatus::ProcedureNotFound;
-    for (size_t i = 0; i < deliveryCount; ++i) {
-        if (!deliveries[i].routine ||
-            !hal::amd64::bootstrapUserRange(deliveries[i].routine, 1, false, true))
-            return NtStatus::AccessViolation;
-    }
+    // The callback is invoked by NTDLL in user mode. Its address may become
+    // invalid between queueing and delivery; let the ordinary user exception
+    // dispatcher handle that fault rather than probing executable pages here.
+    for (size_t i = 0; i < deliveryCount; ++i)
+        if (!deliveries[i].routine) return NtStatus::InvalidParameter;
 
     const bool hasExtendedXstate = (MicantAmd64XsaveMask & ~uint32_t{3}) != 0;
     const size_t extendedSize = ke::MicantAmd64ExtendedSize;
@@ -142,6 +157,11 @@ NtStatus EThread::prepareUserApc(const ke::UserApcDelivery* deliveries,
         frameAddress = (userStackLimit_ + dispatcherStackBytes + 15) & ~uintptr_t{15};
         if (frameAddress < userStackLimit_ || frameAddress < dispatcherStackBytes ||
             frameAddress > UINTPTR_MAX - payloadContextSize ||
+            // The fallback must stay below the interrupted stack pointer.
+            // Otherwise writing CONTEXT/XSTATE can overwrite live user frames
+            // and silently corrupt the callback's eventual continuation.
+            !stackPointerInOwnedStack || frameAddress > userStackTop ||
+            payloadContextSize > userStackTop - frameAddress ||
             !hal::amd64::bootstrapUserRange(frameAddress - dispatcherStackBytes,
                                             payloadSize, true))
             return NtStatus::StackOverflow;
@@ -218,20 +238,63 @@ extern "C" bool MicantPsPrepareUserApc(uint64_t* hardwareFrame,
                                         const void* floatingState) noexcept {
     auto* current = ke::KeGetCurrentThread();
     if (!current || !current->owningThread ||
+        (current->userApcInFlightDepth && !current->userApcDeliveryPending) ||
         (!current->userApcDeliveryPending && !current->userApcDrainOnReturn))
         return false;
+    if (current->userApcInFlightDepth >= current->userApcInterruptedRsp.size()) {
+        // Preserve the queued APCs and report a controlled stack exhaustion
+        // instead of returning STATUS_USER_APC without a delivery.
+        current->userApcDeliveryPending = false;
+        current->userApcDrainOnReturn = true;
+        uint64_t exceptionFrame[6]{0, hardwareFrame[0], hardwareFrame[1],
+                                    hardwareFrame[2], hardwareFrame[3], hardwareFrame[4]};
+        const auto status = current->owningThread->prepareUserException(
+            static_cast<uint32_t>(NtStatus::StackOverflow), UINT32_MAX, hardwareFrame[0],
+            exceptionFrame, savedRegisters, floatingState);
+        if (status == NtStatus::Success) {
+            for (size_t i = 0; i < 5; ++i) hardwareFrame[i] = exceptionFrame[i + 1];
+            return true;
+        }
+        terminateFailedApcDelivery(*current, NtStatus::StackOverflow, false);
+    }
     ke::UserApcDelivery deliveries[ke::UserApcDeliveryBatchCapacity]{};
     size_t deliveryCount{};
-    if (!ke::KePrepareUserApcDelivery(deliveries, ke::UserApcDeliveryBatchCapacity,
-                                      deliveryCount)) return false;
-    if (current->owningThread->prepareUserApc(deliveries, deliveryCount,
-                                               hardwareFrame, savedRegisters, floatingState) == NtStatus::Success)
+    // Dispatch one user callback at a time. If it faults or terminates the
+    // thread, unclaimed APCs remain on the canonical queue for rundown.
+    const bool prepared = ke::KePrepareUserApcDelivery(deliveries, 1, deliveryCount);
+    // A kernel APC routine may have enabled preemption, during which another
+    // thread can request termination. The claimed APC no longer owns queue
+    // storage; let the target terminate before constructing a user frame.
+    if (current->terminationRequested && current->serviceTermination) {
+        terminateFailedApcDelivery(*current, NtStatus::Unsuccessful, true);
+    }
+    if (!prepared) return false;
+    const uintptr_t interruptedRsp = hardwareFrame[3];
+    const NtStatus deliveryStatus = current->owningThread->prepareUserApc(
+        deliveries, deliveryCount, hardwareFrame, savedRegisters, floatingState);
+    if (deliveryStatus == NtStatus::Success) {
+        uint64_t flags{};
+        __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        if (current->terminationRequested && current->serviceTermination) {
+            terminateFailedApcDelivery(*current, NtStatus::Unsuccessful, true);
+        }
+        current->userApcInterruptedRsp[current->userApcInFlightDepth++] = interruptedRsp;
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
         return true;
-    if (current->owningProcess)
-        (void)current->owningProcess->terminateCurrent(NtStatus::StackOverflow);
-    else if (current->serviceTermination)
-        current->serviceTermination(current->terminationContext);
-    return false;
+    }
+    // A failed user APC frame is itself a user exception. Reuse the ordinary
+    // exception producer with the interrupted context; never silently resume
+    // user execution after an APC was claimed but could not be delivered.
+    uint64_t exceptionFrame[6]{0, hardwareFrame[0], hardwareFrame[1],
+                                hardwareFrame[2], hardwareFrame[3], hardwareFrame[4]};
+    const auto exceptionStatus = current->owningThread->prepareUserException(
+        static_cast<uint32_t>(deliveryStatus), UINT32_MAX, hardwareFrame[0],
+        exceptionFrame, savedRegisters, floatingState);
+    if (exceptionStatus == NtStatus::Success) {
+        for (size_t i = 0; i < 5; ++i) hardwareFrame[i] = exceptionFrame[i + 1];
+        return true;
+    }
+    terminateFailedApcDelivery(*current, deliveryStatus, false);
 }
 
 }
