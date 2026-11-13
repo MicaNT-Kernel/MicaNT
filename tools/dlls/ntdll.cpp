@@ -1561,6 +1561,27 @@ __attribute__((naked)) __declspec(dllexport) int32_t NtQueryInformationProcess(
     __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x19, %rax\n\tsyscall\n\tret\n\t");
 }
 
+__attribute__((naked)) __declspec(dllexport) int32_t NtQueryInformationThread(
+    void*, uint32_t, void*, uint32_t, uint32_t*) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $" MICANT_STRINGIFY(MICANT_SSN_NT_QUERY_INFORMATION_THREAD)
+                         ", %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtDelayExecution(
+    uint8_t /*alertable*/, const int64_t* /*delayInterval*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x34, %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtAlertThread(void* /*threadHandle*/) noexcept {
+    __asm__ __volatile__("movq %rcx, %r10\n\tmovq $" MICANT_STRINGIFY(MICANT_SSN_NT_ALERT_THREAD)
+                         ", %rax\n\tsyscall\n\tret\n\t");
+}
+
+__attribute__((naked)) __declspec(dllexport) int32_t NtTestAlert() noexcept {
+    __asm__ __volatile__("movq $" MICANT_STRINGIFY(MICANT_SSN_NT_TEST_ALERT)
+                         ", %rax\n\tsyscall\n\tret\n\t");
+}
+
 __attribute__((naked)) __declspec(dllexport) int32_t NtReadVirtualMemory(
     void*, const void*, void*, size_t, size_t*) noexcept {
     __asm__ __volatile__("movq %rcx, %r10\n\tmovq $0x16c, %rax\n\tsyscall\n\tret\n\t");

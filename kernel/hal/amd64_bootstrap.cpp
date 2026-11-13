@@ -1889,6 +1889,10 @@ void MicantProbeUnexpectedException(const uint64_t* frame, uint64_t vector) noex
     if (frame) {
         logTrapValue("[MicaNT Hal] Unhandled exception RIP=0x", frame[1]);
         logTrapValue("[MicaNT Hal] Unhandled exception CS=0x", frame[2]);
+        // The probe entry saved RAX/RCX/RDX ahead of this hardware frame.
+        // Keep the faulting service result available for bootstrap diagnosis.
+        logTrapValue("[MicaNT Hal] Unhandled exception RAX=0x", frame[-2]);
+        logTrapValue("[MicaNT Hal] Unhandled exception RDX=0x", frame[-4]);
     }
     stopOnTrap();
 }

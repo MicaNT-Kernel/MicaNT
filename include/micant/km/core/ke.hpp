@@ -836,6 +836,7 @@ struct KThread {
     bool eventWaitUserMode{false};
     bool eventWaitCanTerminate{false};
     bool eventWaitCancelled{false};
+    bool eventWaitAlerted{false};
     bool terminationRequested{false};
     bool terminationQueuedByProcess{false};
     bool terminationActive{false};

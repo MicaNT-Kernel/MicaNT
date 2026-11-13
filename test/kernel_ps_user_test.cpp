@@ -28,6 +28,8 @@ __asm__(".section .uproc$z,\"xr\"\n.globl MicantPsUserProgramEnd\n"
 }
 
 namespace {
+uint32_t g_userProcessFailureStage{};
+#define USER_PROCESS_FAIL(stage) do { g_userProcessFailureStage = (stage); return false; } while (0)
 struct UserStart {
     micant::ke::KThread* boot;
     uintptr_t entry;
@@ -46,7 +48,9 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
     using namespace micant::ke;
     auto& scheduler = PriorityScheduler::get();
     auto* boot = KeGetCurrentThread();
-    if (!boot || scheduler.getReadyThreadCount()) return false;
+    g_userProcessFailureStage = 0;
+    if (!boot) USER_PROCESS_FAIL(13);
+    if (scheduler.getReadyThreadCount()) USER_PROCESS_FAIL(14);
     const size_t active = mm::PfnDatabase::get().getActiveCount();
     uintptr_t previous{};
     __asm__ __volatile__("movq %%cr3, %0" : "=r"(previous));
@@ -54,7 +58,7 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
         ps::EProcess process;
         ps::EThread thread;
         if (process.initializeAddressSpace() != NtStatus::Success ||
-            !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
+            !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) USER_PROCESS_FAIL(2);
         uintptr_t code{};
         uintptr_t stack{};
         uintptr_t teb{};
@@ -64,7 +68,7 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
             space.allocate(stack, mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
                            mm::PAGE_READWRITE) != NtStatus::Success ||
             space.allocate(teb, 2 * mm::PageSize4KB, mm::MEM_RESERVE | mm::MEM_COMMIT,
-                           mm::PAGE_READWRITE) != NtStatus::Success) return false;
+                           mm::PAGE_READWRITE) != NtStatus::Success) USER_PROCESS_FAIL(3);
         auto* userTeb = reinterpret_cast<um::Teb64*>(teb);
         userTeb->self = teb;
         userTeb->stackBase = stack + mm::PageSize4KB;
@@ -72,7 +76,7 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
         const auto* program = reinterpret_cast<const uint8_t*>(MicantPsUserProgram);
         const size_t programSize = reinterpret_cast<uintptr_t>(MicantPsUserProgramEnd) -
                                    reinterpret_cast<uintptr_t>(program);
-        if (!programSize || programSize > mm::PageSize4KB) return false;
+        if (!programSize || programSize > mm::PageSize4KB) USER_PROCESS_FAIL(4);
         static constinit uint8_t file[512 + mm::PageSize4KB]{};
         pe::ImageDosHeader dos{};
         dos.e_magic = pe::DOS_MAGIC;
@@ -104,18 +108,18 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
         pe::PeImageView64 image;
         if (image.inspect(std::span<const uint8_t>{file}) != NtStatus::Success ||
             image.map(std::span<uint8_t>{reinterpret_cast<uint8_t*>(code), 2 * mm::PageSize4KB}, code) !=
-                NtStatus::Success) return false;
+                NtStatus::Success) USER_PROCESS_FAIL(5);
         uint32_t old{};
         if (space.protect(code, mm::PageSize4KB, mm::PAGE_READONLY, &old) != NtStatus::Success ||
             old != mm::PAGE_READWRITE ||
             space.protect(code + mm::PageSize4KB, mm::PageSize4KB, mm::PAGE_EXECUTE_READ, &old) != NtStatus::Success ||
-            old != mm::PAGE_READWRITE || !hal::amd64::switchProcessPagingRootByPhysical(previous)) return false;
+            old != mm::PAGE_READWRITE || !hal::amd64::switchProcessPagingRootByPhysical(previous)) USER_PROCESS_FAIL(6);
         UserStart start{boot, code + nt.optionalHeader.addressOfEntryPoint, stack + mm::PageSize4KB - 16};
-        if (thread.initialize(process, 32768, enterUser, &start) != NtStatus::Success) return false;
+        if (thread.initialize(process, 32768, enterUser, &start) != NtStatus::Success) USER_PROCESS_FAIL(7);
         thread.kernelThread()->tebAddress = teb;
-        if (thread.ready() != NtStatus::Success) return false;
+        if (thread.ready() != NtStatus::Success) USER_PROCESS_FAIL(8);
         auto* next = scheduler.selectNextThread();
-        if (next != thread.kernelThread()) return false;
+        if (next != thread.kernelThread()) USER_PROCESS_FAIL(9);
         const KIRQL oldIrql = KfRaiseIrql(DISPATCH_LEVEL);
         const bool switched = KiSwapContext(boot, next);
         KeLowerIrql(oldIrql);
@@ -123,11 +127,15 @@ extern "C" bool MicantTestPsUserProcess() noexcept {
             process.exitStatus() != NtStatus::AccessDenied || next->state != ThreadState::Terminated ||
             cpu::cpuRdmsr(cpu::MSR_GS_BASE) != boot->tebAddress ||
             scheduler.getReadyThreadCount() ||
-            !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) return false;
+            !hal::amd64::switchProcessPagingRootByPhysical(process.getDirectoryTableBase())) USER_PROCESS_FAIL(10);
         const bool tlsValue = userTeb->tlsSlots[0] == 0x123456789abcdef0ULL;
         if (!hal::amd64::switchProcessPagingRootByPhysical(previous) || !tlsValue ||
             thread.reap() != NtStatus::Success ||
-            process.closeAddressSpace() != NtStatus::Success) return false;
+            process.closeAddressSpace() != NtStatus::Success) USER_PROCESS_FAIL(11);
     }
-    return mm::PfnDatabase::get().getActiveCount() == active;
+    if (mm::PfnDatabase::get().getActiveCount() != active) USER_PROCESS_FAIL(12);
+    return true;
 }
+
+extern "C" uint32_t MicantPsUserProcessFailureStage() noexcept { return g_userProcessFailureStage; }
+#undef USER_PROCESS_FAIL

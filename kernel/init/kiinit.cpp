@@ -206,11 +206,16 @@ extern "C" bool MicantVerifyContextSwitch(
 extern "C" bool MicantTestKeReadyQueue() noexcept;
 extern "C" bool MicantTestKeBlockWake() noexcept;
 extern "C" bool MicantTestKeApcFifo() noexcept;
+extern "C" bool MicantTestObOpenAccess() noexcept;
+extern "C" uint32_t MicantObOpenAccessFailureStage() noexcept;
+extern "C" bool MicantTestSeFreestandingAccess() noexcept;
 extern "C" bool MicantTestKeDeferredDelivery() noexcept;
 extern "C" bool MicantTestKeEventWait() noexcept;
 extern "C" bool MicantTestPsThreadLifecycle() noexcept;
+extern "C" uint32_t MicantPsAttachFailureStage() noexcept;
 extern "C" bool MicantTestPsDeferredReaper() noexcept;
 extern "C" bool MicantTestPsUserProcess() noexcept;
+extern "C" uint32_t MicantPsUserProcessFailureStage() noexcept;
 extern "C" bool MicantTestPsTwoUserThreads() noexcept;
 extern "C" bool MicantTestPsThreeUserThreads() noexcept;
 extern "C" bool MicantTestPsFileBackedImage() noexcept;
@@ -2875,7 +2880,12 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
             static_cast<uintptr_t>(second), reinterpret_cast<void*>(args.third),
             reinterpret_cast<void*>(args.fourth), reinterpret_cast<void*>(systemArgument2)));
     }
-    if (number == sys::SSN_NtQueryInformationProcess || number == sys::SSN_NtReadVirtualMemory) {
+    if (number == sys::SSN_NtAlertThread)
+        return status(sys::NtAlertThread(static_cast<Handle>(first)));
+    if (number == sys::SSN_NtTestAlert)
+        return status(sys::NtTestAlert());
+    if (number == sys::SSN_NtQueryInformationProcess || number == sys::SSN_NtQueryInformationThread ||
+        number == sys::SSN_NtReadVirtualMemory) {
         uint64_t fifth{};
         if (args.userStack > UINT64_MAX - 40 ||
             ex::ExSafeCopyFromUser(&fifth, reinterpret_cast<const void*>(args.userStack + 40),
@@ -2890,6 +2900,10 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         const auto result = number == sys::SSN_NtQueryInformationProcess
             ? sys::NtQueryInformationProcess(static_cast<Handle>(first),
                 static_cast<ProcessInformationClass>(second), reinterpret_cast<void*>(args.third),
+                static_cast<uint32_t>(args.fourth), reinterpret_cast<uint32_t*>(fifth))
+            : number == sys::SSN_NtQueryInformationThread
+            ? sys::NtQueryInformationThread(static_cast<Handle>(first),
+                static_cast<ThreadInformationClass>(second), reinterpret_cast<void*>(args.third),
                 static_cast<uint32_t>(args.fourth), reinterpret_cast<uint32_t*>(fifth))
             : sys::NtReadVirtualMemory(static_cast<Handle>(first), reinterpret_cast<const void*>(second),
                 reinterpret_cast<void*>(args.third), static_cast<size_t>(args.fourth), reinterpret_cast<size_t*>(fifth));
@@ -3016,6 +3030,18 @@ uint64_t dispatchBootstrapService(const micant::hal::amd64::UserServiceArguments
         __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         const auto result = sys::NtWaitForSingleObject(first, (second & 0xff) != 0,
                                                         args.third ? &timeout : nullptr);
+        __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        __asm__ __volatile__("swapgs" : : : "memory");
+        return status(result);
+    }
+    if (number == sys::SSN_NtDelayExecution) {
+        const auto* thread = ke::KeGetCurrentThread();
+        if (!thread || !thread->owningProcess || !thread->kernelStackTop)
+            return status(NtStatus::NotImplemented);
+        __asm__ __volatile__("swapgs" : : : "memory");
+        __asm__ __volatile__("movw $0x18, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
+        const auto result = sys::NtDelayExecution((first & 0xff) != 0,
+            reinterpret_cast<const LargeInteger*>(second));
         __asm__ __volatile__("movw $0x2b, %%ax; movw %%ax, %%ds; movw %%ax, %%es" : : : "rax", "memory");
         __asm__ __volatile__("swapgs" : : : "memory");
         return status(result);
@@ -3519,6 +3545,19 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ex] Kernel C++ initialization failed\r\n");
     }
     serialWrite("[MicaNT Ex] Kernel C++ constructors dispatched\r\n");
+#if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
+    if (!micant::ex::test::verifyCxxAfterInitialization() ||
+        !micant::ex::shutdownBootstrapCxxRuntime() ||
+        !micant::ex::test::verifyCxxAfterDestruction() ||
+        micant::mm::PfnDatabase::get().getActiveCount() != initialActive ||
+        micant::mm::PfnDatabase::get().getFreeCount() +
+            micant::mm::PfnDatabase::get().getZeroedCount() != initialAvailable) {
+        stopWithError("[MicaNT Ex] Kernel C++ teardown verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ex] Compiler-generated construction and LIFO teardown verified\r\n");
+    serialWrite("[MicaNT Ex] Runtime self-test halted\r\n");
+    for (;;) __asm__ __volatile__("cli; hlt");
+#endif
     if (micant::io::IoInitializeFileObjects() != micant::NtStatus::Success) {
         stopWithError("[MicaNT Io] File object initialization failed\r\n");
     }
@@ -3547,6 +3586,23 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ob] Kernel handle verification failed\r\n");
     }
     serialWrite("[MicaNT Ob] Canonical kernel handle storage and references verified\r\n");
+    if (!MicantTestObOpenAccess()) {
+        const uint32_t stage = MicantObOpenAccessFailureStage();
+        serialWrite(stage == 1 ? "[MicaNT Ob] open test stage 1 failed\r\n" :
+                    stage == 2 ? "[MicaNT Ob] open test stage 2 failed\r\n" :
+                    stage == 3 ? "[MicaNT Ob] open test stage 3 failed\r\n" :
+                    stage == 4 ? "[MicaNT Ob] open test stage 4 failed\r\n" :
+                    stage == 5 ? "[MicaNT Ob] open test stage 5 failed\r\n" :
+                    stage == 6 ? "[MicaNT Ob] open test stage 6 failed\r\n" :
+                    stage == 7 ? "[MicaNT Ob] open test stage 7 failed\r\n" :
+                    stage == 8 ? "[MicaNT Ob] open test stage 8 failed\r\n" :
+                                  "[MicaNT Ob] open test stage 9 failed\r\n");
+        stopWithError("[MicaNT Ob] Open access and rollback verification failed\r\n");
+    }
+    serialWrite("[MicaNT Ob] Open access checks and callback rollback verified\r\n");
+    if (!MicantTestSeFreestandingAccess())
+        stopWithError("[MicaNT Se] Freestanding DACL access verification failed\r\n");
+    serialWrite("[MicaNT Se] DACL deny, grant, maximum access and ACE order verified\r\n");
     if (!MicantTestKeReadyQueue()) {
         stopWithError("[MicaNT Ke] Ready-queue withdrawal verification failed\r\n");
     }
@@ -3578,19 +3634,6 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Hal] Timer-only self-test halted\r\n");
     for (;;) __asm__ __volatile__("cli; hlt");
 #endif
-#if defined(MICANT_KERNEL_CXX_LIFECYCLE_SELFTEST)
-    if (!micant::ex::test::verifyCxxAfterInitialization() ||
-        !micant::ex::shutdownBootstrapCxxRuntime() ||
-        !micant::ex::test::verifyCxxAfterDestruction() ||
-        micant::mm::PfnDatabase::get().getActiveCount() != initialActive ||
-        micant::mm::PfnDatabase::get().getFreeCount() +
-            micant::mm::PfnDatabase::get().getZeroedCount() != initialAvailable) {
-        stopWithError("[MicaNT Ex] Kernel C++ teardown verification failed\r\n");
-    }
-    serialWrite("[MicaNT Ex] Compiler-generated construction and LIFO teardown verified\r\n");
-    serialWrite("[MicaNT Ex] Runtime self-test halted\r\n");
-    for (;;) __asm__ __volatile__("cli; hlt");
-#endif
     verifyKernelContextSwitch(false);
     verifyKernelContextSwitch(true);
     if (!MicantTestKeBlockWake())
@@ -3604,7 +3647,11 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Ke] Event wait verification failed\r\n");
     serialWrite("[MicaNT Ke] Kernel event wait and wake verified\r\n");
     if (!MicantTestPsThreadLifecycle())
-        stopWithError("[MicaNT Ps] Thread lifecycle verification failed\r\n");
+    {
+        serialWrite("[MicaNT Ps] Thread lifecycle verification failed; attach stage ");
+        serialWriteNumber(MicantPsAttachFailureStage());
+        stopWithError("\r\n");
+    }
     serialWrite("[MicaNT Ps] Kernel thread lifecycle verified\r\n");
     serialWrite("[MicaNT Ps] Entering isolated CPL3 probe\r\n");
     if (!micant::hal::amd64::verifyRing3Transition()) {
@@ -3714,6 +3761,15 @@ extern "C" micant::NtStatus KiSystemStartup(
         stopWithError("[MicaNT Hal] KUSER_SHARED_DATA mapping failed\r\n");
     }
     serialWrite("[MicaNT Hal] KUSER_SHARED_DATA kernel RW/user RO mapping active\r\n");
+    // Run the isolated process lifecycle probe before the file-backed native
+    // image probe can wake deferred cleanup workers and populate the ready
+    // queues. This probe deliberately switches directly between its boot and
+    // test threads so unrelated runnable threads must not be pending.
+    if (!MicantTestPsUserProcess()) {
+        serialWrite("[MicaNT Ps] User process lifecycle verification failed at stage ");
+        serialWriteNumber(MicantPsUserProcessFailureStage());
+        stopWithError("\r\n");
+    }
     {
         // Resolve the installation from the mounted filesystem after KUSER
         // has been initialized; failed discovery leaves NtSystemRoot empty.
@@ -3735,8 +3791,6 @@ extern "C" micant::NtStatus KiSystemStartup(
     serialWrite("[MicaNT Ke] CPL3 syscall ABI, register preservation and user-buffer checks verified\r\n");
     serialWrite("[MicaNT Mm] CPL3 native allocation and release verified\r\n");
     serialWrite("[MicaNT Ke] CPL3 native event polling verified\r\n");
-    if (!MicantTestPsUserProcess())
-        stopWithError("[MicaNT Ps] User process lifecycle verification failed\r\n");
     serialWrite("[MicaNT Ps] Process-owned CPL3 context and termination verified\r\n");
     if (!MicantTestPsTwoUserThreads())
         stopWithError("[MicaNT Ps] Two user threads verification failed\r\n");

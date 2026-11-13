@@ -109,6 +109,16 @@ extern "C" bool MicantTestKeEventWait() noexcept {
         sys::NtWaitForSingleObject(firstEvent, false, &poll) != NtStatus::Timeout ||
         sys::NtWaitForSingleObject(firstEvent, false, nullptr) != NtStatus::Unsuccessful)
         return false;
+    auto* current = KeGetCurrentThread();
+    const bool previousMode = current->previousUserMode;
+    current->previousUserMode = true;
+    const auto misalignedTimeout = sys::NtWaitForSingleObject(firstEvent, false,
+        reinterpret_cast<LargeInteger*>(uintptr_t{3}));
+    const auto inaccessibleTimeout = sys::NtWaitForSingleObject(firstEvent, false,
+        reinterpret_cast<LargeInteger*>(uintptr_t{0x1000}));
+    current->previousUserMode = previousMode;
+    if (misalignedTimeout != NtStatus::DatatypeMisalignment ||
+        inaccessibleTimeout != NtStatus::AccessViolation) return false;
     BootstrapEvent notification{true};
     BootstrapEvent synchronization{false};
     if (notification.set() || !notification.set() ||

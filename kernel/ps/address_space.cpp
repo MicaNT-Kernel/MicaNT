@@ -2277,8 +2277,10 @@ static NtStatus createProcessEx(Handle* processHandle, uint32_t desiredAccess,
     uint32_t grantedAccess{};
     if (result == NtStatus::Success)
         result = ps::detail::createProcessObject(child, childReference, objectSecurity, desiredAccess, &grantedAccess);
+    if (result == NtStatus::NoMemory) result = NtStatus::InsufficientResources; // temporary phase diagnostic
     if (result == NtStatus::Success)
         result = ps::detail::inheritProcessSecurityContext(*child, *parent);
+    if (result == NtStatus::NoMemory) result = NtStatus::AccessDenied; // temporary phase diagnostic
     if (result == NtStatus::Success && imageSection) {
         if (!hal::amd64::bootstrapSchedulerClockActive()) {
             // Before scheduling starts there is no attachable execution
@@ -2323,10 +2325,14 @@ static NtStatus createProcessEx(Handle* processHandle, uint32_t desiredAccess,
             auto cloneStatus = parent->getAddressSpace().clonePrivateTo(child->getAddressSpace(),
                 parentAddressSpace.root, child->getDirectoryTableBase(),
                 hal::amd64::switchProcessPagingRootByPhysical);
+            if (cloneStatus == NtStatus::NoMemory) cloneStatus = NtStatus::Conflict; // temporary phase diagnostic
             if (cloneStatus == NtStatus::Success) {
                 if (!hal::amd64::switchProcessPagingRootByPhysical(child->getDirectoryTableBase()))
                     cloneStatus = NtStatus::Unsuccessful;
-                else cloneStatus = child->cloneNativeMetadata(*parent);
+                else {
+                    cloneStatus = child->cloneNativeMetadata(*parent);
+                    if (cloneStatus == NtStatus::NoMemory) cloneStatus = NtStatus::NotSupported; // temporary phase diagnostic
+                }
             }
             if (!hal::amd64::switchProcessPagingRootByPhysical(originalRoot)) __builtin_trap();
             return cloneStatus;
@@ -2397,7 +2403,7 @@ NtStatus NtQueryInformationProcess(Handle handle, ProcessInformationClass inform
     if (returnLength) result = ex::ProbeForWrite(returnLength, sizeof(*returnLength), alignof(uint32_t), mode);
     if (result == NtStatus::Success && informationClass != ProcessInformationClass::ProcessBasicInformation)
         result = NtStatus::InvalidInfoClass;
-    if (result == NtStatus::Success && length != required) result = NtStatus::InfoLengthMismatch;
+    if (result == NtStatus::Success && length < required) result = NtStatus::InfoLengthMismatch;
     if (result == NtStatus::Success) result = ex::ProbeForWrite(information, required, alignof(uintptr_t), mode);
     ps::EProcess* process{};
     ob::ObjectHeader* reference{};
@@ -2426,6 +2432,57 @@ NtStatus NtQueryInformationProcess(Handle handle, ProcessInformationClass inform
     if (reference) ob::ObDereferenceObject(reference);
     if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
     return result;
+}
+
+NtStatus NtQueryInformationThread(Handle handle, ThreadInformationClass informationClass,
+                                  void* information, uint32_t length, uint32_t* returnLength) {
+    auto* current = ke::KeGetCurrentThread();
+    const auto mode = current && current->previousUserMode ? mm::UserMode : mm::KernelMode;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    constexpr uint32_t required = sizeof(ThreadBasicInformation);
+    NtStatus status = NtStatus::Success;
+    if (returnLength) status = ex::ProbeForWrite(returnLength, sizeof(*returnLength), alignof(uint32_t), mode);
+    if (status == NtStatus::Success && informationClass != ThreadInformationClass::ThreadBasicInformation)
+        status = NtStatus::InvalidInfoClass;
+    if (status == NtStatus::Success && length < required) status = NtStatus::InfoLengthMismatch;
+    if (status == NtStatus::Success)
+        status = ex::ProbeForWrite(information, required, alignof(uintptr_t), mode);
+
+    ps::EThread* thread{};
+    ke::KThread* currentThread{};
+    ob::ObjectHeader* reference{};
+    if (status == NtStatus::Success) {
+        if (handle == static_cast<Handle>(-2)) {
+            currentThread = ke::KeGetCurrentThread();
+            status = ps::detail::referenceCurrentThread(thread, reference);
+            // Internal bootstrap threads can precede publication of an Ob
+            // thread object. The current-thread pseudo handle still denotes
+            // the live KTHREAD and can be queried without taking a reference.
+            if (status == NtStatus::InvalidHandle && currentThread && currentThread->tid) {
+                status = NtStatus::Success;
+            }
+        } else status = ps::detail::referenceThreadHandle(handle, 0x0040, thread, reference);
+    }
+    if (status == NtStatus::Success) {
+        ThreadBasicInformation basic{};
+        basic.exitStatus = thread ? thread->exitStatus() : NtStatus::Pending;
+        basic.tebBaseAddress = thread ? thread->userTebAddress() : currentThread->tebAddress;
+        basic.clientId = thread ? ClientId{thread->ownerProcessId(), thread->threadId()}
+                                : ClientId{currentThread->pid, currentThread->tid};
+        basic.affinityMask = 1;
+        basic.priority = thread && thread->kernelThread()
+            ? thread->kernelThread()->priority : currentThread->priority;
+        basic.basePriority = basic.priority;
+        status = ex::ExSafeCopyToUser(information, &basic, sizeof(basic), mode);
+    }
+    if (returnLength && (status == NtStatus::Success || status == NtStatus::InfoLengthMismatch)) {
+        const auto copy = ex::ExSafeCopyToUser(returnLength, &required, sizeof(required), mode);
+        if (copy != NtStatus::Success) status = copy;
+    }
+    if (reference) ob::ObDereferenceObject(reference);
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return status;
 }
 
 NtStatus NtReadVirtualMemory(Handle handle, const void* baseAddress, void* buffer,

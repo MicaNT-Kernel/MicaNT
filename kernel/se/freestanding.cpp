@@ -24,6 +24,26 @@ SidValue makeSid(uint32_t authority, uint8_t count,
     return sid;
 }
 
+bool validSidValue(const SidValue& sid) noexcept {
+    return sid.Revision == 1 && sid.SubAuthorityCount <= std::size(sid.SubAuthority);
+}
+
+bool validAccessInputs(const FreestandingAccessToken& token,
+                       const FreestandingSecurityDescriptor& descriptor) noexcept {
+    if (token.GroupCount > token.Groups.size() || descriptor.AceCount > descriptor.Dacl.size() ||
+        !validSidValue(token.UserSid) ||
+        (descriptor.OwnerPresent && !validSidValue(descriptor.Owner)) ||
+        (descriptor.GroupPresent && !validSidValue(descriptor.Group))) return false;
+    for (size_t i = 0; i < token.GroupCount; ++i)
+        if (!validSidValue(token.Groups[i].Sid)) return false;
+    for (size_t i = 0; i < descriptor.AceCount; ++i) {
+        const auto& ace = descriptor.Dacl[i];
+        if ((ace.Type != FreestandingAceType::Allow && ace.Type != FreestandingAceType::Deny) ||
+            (ace.Flags & ~uint8_t{0x1f}) || !validSidValue(ace.Sid)) return false;
+    }
+    return true;
+}
+
 void addGroup(FreestandingAccessToken& token, const SidValue& sid) noexcept {
     if (token.GroupCount >= token.Groups.size()) __builtin_trap();
     token.Groups[token.GroupCount++] = TokenGroupValue{sid, 0x00000004}; // SE_GROUP_ENABLED
@@ -198,7 +218,7 @@ bool SeAccessCheckFreestanding(const FreestandingAccessToken* token,
     const FreestandingSecurityDescriptor& descriptor, uint32_t desiredAccess,
     uint32_t& grantedAccess) noexcept {
     grantedAccess = 0;
-    if (!token || descriptor.AceCount > descriptor.Dacl.size()) return false;
+    if (!token || !validAccessInputs(*token, descriptor)) return false;
     if (!descriptor.DaclPresent || descriptor.DaclNull) {
         grantedAccess = desiredAccess;
         return true;
@@ -227,7 +247,7 @@ bool SeMaximumAccessFreestanding(const FreestandingAccessToken* token,
     const FreestandingSecurityDescriptor& descriptor, uint32_t validAccess,
     uint32_t& grantedAccess) noexcept {
     grantedAccess = 0;
-    if (!token || descriptor.AceCount > descriptor.Dacl.size()) return false;
+    if (!token || !validAccessInputs(*token, descriptor)) return false;
     if (!descriptor.DaclPresent || descriptor.DaclNull) {
         grantedAccess = validAccess;
         return true;

@@ -23,6 +23,8 @@ namespace micant::ob {
 // 1. Standard NT Object Attributes & Access Rights
 // ============================================================================
 using micant::OBJ_INHERIT;
+using micant::OBJ_PROTECT_CLOSE;
+using micant::OBJ_AUDIT_OBJECT_CLOSE;
 using micant::OBJ_PERMANENT;
 using micant::OBJ_EXCLUSIVE;
 using micant::OBJ_CASE_INSENSITIVE;
@@ -31,6 +33,7 @@ using micant::OBJ_OPENLINK;
 using micant::OBJ_KERNEL_HANDLE;
 using micant::OBJ_FORCE_ACCESS_CHECK;
 inline constexpr uint32_t OBJ_VALID_ATTRIBUTES   = 0x000007F2L;
+inline constexpr uint32_t OB_VALID_HANDLE_ATTRIBUTES = OBJ_PROTECT_CLOSE | OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE;
 
 // Standard Access Rights (clean-room NT Win32 mapping)
 inline constexpr uint32_t DELETE                  = 0x00010000L;
@@ -48,6 +51,7 @@ inline constexpr uint32_t GENERIC_READ            = 0x80000000L;
 inline constexpr uint32_t GENERIC_WRITE           = 0x40000000L;
 inline constexpr uint32_t GENERIC_EXECUTE         = 0x20000000L;
 inline constexpr uint32_t GENERIC_ALL             = 0x10000000L;
+inline constexpr uint32_t MAXIMUM_ALLOWED         = 0x02000000L;
 
 using KPROCESSOR_MODE = uint8_t;
 inline constexpr KPROCESSOR_MODE KernelMode = 0;
@@ -244,7 +248,12 @@ struct ObjectHeader {
     }
 
     void addReference() noexcept {
-        pointerCount.fetch_add(1, std::memory_order_relaxed);
+        int32_t count = pointerCount.load(std::memory_order_relaxed);
+        while (count > 0 && count < INT32_MAX) {
+            if (pointerCount.compare_exchange_weak(count, count + 1,
+                    std::memory_order_acquire, std::memory_order_relaxed)) return;
+        }
+        __builtin_trap();
     }
 
     // Used by weak object registries while their lock/exclusion is held.
@@ -260,7 +269,12 @@ struct ObjectHeader {
     }
 
     bool releaseReference() noexcept {
-        return pointerCount.fetch_sub(1, std::memory_order_acq_rel) == 1;
+        int32_t count = pointerCount.load(std::memory_order_relaxed);
+        while (count > 0) {
+            if (pointerCount.compare_exchange_weak(count, count - 1,
+                    std::memory_order_acq_rel, std::memory_order_relaxed)) return count == 1;
+        }
+        __builtin_trap();
     }
 
     [[nodiscard]] bool isPermanent() const noexcept {
@@ -275,7 +289,9 @@ struct ObjectHeader {
 // ============================================================================
 // 5. Directory Object with NT 37-Bucket Hash Chains
 // ============================================================================
+#if !defined(MICANT_FREESTANDING)
 inline constexpr size_t OB_HASH_BUCKETS = 37;
+inline std::recursive_mutex g_ObjectNamespaceMutex;
 
 inline uint32_t ObpHashObjectName(std::wstring_view name) noexcept {
     uint32_t hash = 0;
@@ -295,6 +311,7 @@ public:
     explicit DirectoryObject(std::wstring name) : name_(std::move(name)) {}
 
     NtStatus insertObject(std::wstring_view name, ObjectHeader* object) {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         if (!object) return NtStatus::InvalidParameter;
         std::wstring key(name);
 
@@ -322,6 +339,7 @@ public:
     }
 
     bool removeObject(std::wstring_view name) {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         std::wstring key(name);
         uint32_t bucket = ObpHashObjectName(key);
         auto& chain = buckets_[bucket];
@@ -339,6 +357,7 @@ public:
     }
 
     [[nodiscard]] ObjectHeader* lookup(std::wstring_view name) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         {
             std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
             g_ObTelemetry.totalDirectoryLookups++;
@@ -373,6 +392,7 @@ private:
     std::array<std::vector<ObjectHeader*>, OB_HASH_BUCKETS> buckets_;
     std::unordered_map<std::wstring, ObjectHeader*> allEntries_;
 };
+#endif
 
 // ============================================================================
 // 6. Multi-Level Handle Table Subsystem (EX_HANDLE_TABLE)
@@ -399,16 +419,23 @@ inline NtStatus ObFinishClose(ObjectHeader* object, Handle handle);
 namespace detail {
 // The native dispatcher is currently single-BSP. Exclude preemption while a
 // table entry and its owning reference are changed as one transaction.
+#if !defined(MICANT_FREESTANDING)
+inline std::recursive_mutex g_HandleTableMutex;
+#endif
 class HandleTableGuard {
 public:
     HandleTableGuard() noexcept {
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags_) : : "memory");
+#elif !defined(MICANT_FREESTANDING)
+        g_HandleTableMutex.lock();
 #endif
     }
     ~HandleTableGuard() {
 #if defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
         if (flags_ & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+#elif !defined(MICANT_FREESTANDING)
+        g_HandleTableMutex.unlock();
 #endif
     }
     HandleTableGuard(const HandleTableGuard&) = delete;
@@ -436,7 +463,10 @@ public:
         uint32_t grantedAccess = STANDARD_RIGHTS_ALL,
         uint32_t attributes = 0
     ) {
-        if (!object) return NtStatus::InvalidParameter;
+        outHandle = 0;
+        if (!object || (attributes & ~OB_VALID_HANDLE_ATTRIBUTES)) return NtStatus::InvalidParameter;
+        if (object->type && (grantedAccess & ~object->type->validAccessMask))
+            return NtStatus::AccessDenied;
         detail::HandleTableGuard guard;
         if (closing_) return NtStatus::ProcessIsTerminating;
 
@@ -484,6 +514,7 @@ public:
     }
 
     NtStatus setHandleAttributes(Handle handle, uint32_t attributes) noexcept {
+        if (attributes & ~OB_VALID_HANDLE_ATTRIBUTES) return NtStatus::InvalidParameter;
         detail::HandleTableGuard guard;
         const size_t index = static_cast<size_t>(handle) / 4;
         if (index == 0 || index >= table_.size() || !table_[index].isValid()) return NtStatus::InvalidHandle;
@@ -500,7 +531,9 @@ public:
         uint32_t granted{};
         auto* object = lookup(handle, &granted);
         if (!object) return NtStatus::InvalidHandle;
-        if (desiredAccess && (granted & desiredAccess) != desiredAccess) return NtStatus::AccessDenied;
+        if (object->type) desiredAccess = MapGenericAccess(desiredAccess, object->type->genericMapping);
+        if ((desiredAccess & MAXIMUM_ALLOWED) ||
+            (desiredAccess && (granted & desiredAccess) != desiredAccess)) return NtStatus::AccessDenied;
         if (expectedType && object->type != expectedType) return NtStatus::ObjectTypeMismatch;
         object->addReference();
         if (outGrantedAccess) *outGrantedAccess = granted;
@@ -516,14 +549,27 @@ public:
     }
 
     NtStatus closeHandle(Handle handle) {
-        return ObCloseHandle(handle, *this);
+        ObjectHeader* object{};
+        {
+            detail::HandleTableGuard guard;
+            const size_t index = static_cast<size_t>(handle) / 4;
+            if (index == 0 || index >= table_.size() || !table_[index].isValid())
+                return NtStatus::InvalidHandle;
+            if (table_[index].handleAttributes & OBJ_PROTECT_CLOSE)
+                return NtStatus::HandleNotClosable;
+            object = takeHandleLocked(handle);
+        }
+        return ObFinishClose(object, handle);
     }
 
     NtStatus duplicateHandle(
         Handle sourceHandle, HandleTable& targetTable, Handle& targetHandle,
         uint32_t desiredAccess, bool inherit = false, uint32_t options = 0
     ) {
+        targetHandle = 0;
         ObjectHeader* removed{};
+        ObjectHeader* duplicated{};
+        uint32_t duplicatedAccess{};
         if (options & ~uint32_t{7}) {
             // DUPLICATE_CLOSE_SOURCE applies even when duplication fails.
             if (options & 1) {
@@ -543,12 +589,32 @@ public:
                 if (!sourceEntry) __builtin_trap();
                 const uint32_t requested = object->type ? MapGenericAccess(desiredAccess, object->type->genericMapping)
                                                         : desiredAccess;
-                const uint32_t access = (options & 2) ? granted : requested;
+                const bool maximumAllowed = (requested & MAXIMUM_ALLOWED) != 0;
+                const uint32_t required = requested & ~MAXIMUM_ALLOWED;
+                const uint32_t access = (options & 2) ? granted : maximumAllowed ? granted : requested;
                 const uint32_t attributes = (options & 4) ? sourceEntry->handleAttributes :
                                             (inherit ? OBJ_INHERIT : 0);
-                if ((access & ~granted) != 0) status = NtStatus::AccessDenied;
-                else status = targetTable.createHandle(object, targetHandle, access, attributes);
+                if ((required & ~granted) != 0 || (access & ~granted) != 0)
+                    status = NtStatus::AccessDenied;
+                else {
+                    status = targetTable.createHandle(object, targetHandle, access, attributes);
+                    if (status == NtStatus::Success) {
+                        duplicated = object;
+                        duplicatedAccess = access;
+                    }
+                }
                 if (options & 1) removed = takeHandleLocked(sourceHandle);
+            }
+        }
+        if (status == NtStatus::Success && duplicated && duplicated->type &&
+            duplicated->type->openProcedure) {
+            status = duplicated->type->openProcedure(duplicated, duplicatedAccess);
+            if (status != NtStatus::Success) {
+                auto* failed = targetTable.takeHandle(targetHandle);
+                if (!failed) __builtin_trap();
+                const auto closeStatus = ObFinishClose(failed, targetHandle);
+                if (closeStatus != NtStatus::Success) __builtin_trap();
+                targetHandle = 0;
             }
         }
         if (removed) (void)ObFinishClose(removed, sourceHandle);
@@ -573,23 +639,40 @@ public:
 
     // Preserve handle values in a newly created process. Only inheritable
     // entries are copied, and each copied entry owns its own Ob reference.
+    // The target table must remain unpublished until this transaction returns.
     NtStatus inheritHandlesFrom(const HandleTable& source) noexcept {
         if (&source == this) return NtStatus::InvalidParameter;
-        detail::HandleTableGuard guard;
-        if (closing_ || source.closing_ || table_.size() != source.table_.size())
-            return NtStatus::InvalidParameter;
-        for (size_t i = 1; i < table_.size(); ++i)
-            if (table_[i].isValid()) return NtStatus::InvalidParameter;
+        {
+            detail::HandleTableGuard guard;
+            if (closing_ || source.closing_ || table_.size() != source.table_.size())
+                return NtStatus::InvalidParameter;
+            for (size_t i = 1; i < table_.size(); ++i)
+                if (table_[i].isValid()) return NtStatus::InvalidParameter;
+            for (size_t i = 1; i < table_.size(); ++i) {
+                const auto& entry = source.table_[i];
+                if (!entry.isValid() || !(entry.handleAttributes & OBJ_INHERIT)) continue;
+                auto* object = entry.object;
+                object->addReference();
+                object->handleCount.fetch_add(1, std::memory_order_relaxed);
+                object->handleInfo.handleCount = static_cast<uint32_t>(object->handleCount.load(std::memory_order_relaxed));
+                if (object->type)
+                    const_cast<ObjectType*>(object->type)->totalNumberOfHandles.fetch_add(1, std::memory_order_relaxed);
+                table_[i] = entry;
+            }
+        }
+
         for (size_t i = 1; i < table_.size(); ++i) {
-            const auto& entry = source.table_[i];
-            if (!entry.isValid() || !(entry.handleAttributes & OBJ_INHERIT)) continue;
-            auto* object = entry.object;
-            object->addReference();
-            object->handleCount.fetch_add(1, std::memory_order_relaxed);
-            object->handleInfo.handleCount = static_cast<uint32_t>(object->handleCount.load(std::memory_order_relaxed));
-            if (object->type)
-                const_cast<ObjectType*>(object->type)->totalNumberOfHandles.fetch_add(1, std::memory_order_relaxed);
-            table_[i] = entry;
+            const Handle handle = static_cast<Handle>(i * 4);
+            const auto* entry = getEntry(handle);
+            if (!entry || !entry->object->type || !entry->object->type->openProcedure) continue;
+            const NtStatus status = entry->object->type->openProcedure(entry->object, entry->grantedAccess);
+            if (NT_SUCCESS(status)) continue;
+            for (size_t rollback = 1; rollback < table_.size(); ++rollback) {
+                const Handle rollbackHandle = static_cast<Handle>(rollback * 4);
+                if (auto* object = takeHandle(rollbackHandle))
+                    (void)ObFinishClose(object, rollbackHandle);
+            }
+            return status;
         }
         return NtStatus::Success;
     }
@@ -599,8 +682,15 @@ public:
             detail::HandleTableGuard guard;
             closing_ = true;
         }
-        for (size_t i = 1; i < table_.size(); ++i)
-            (void)closeHandle(static_cast<Handle>(i * 4));
+        for (size_t i = 1; i < table_.size(); ++i) {
+            ObjectHeader* object{};
+            const Handle handle = static_cast<Handle>(i * 4);
+            {
+                detail::HandleTableGuard guard;
+                object = takeHandleLocked(handle);
+            }
+            if (object) (void)ObFinishClose(object, handle);
+        }
     }
 
 private:
@@ -638,6 +728,7 @@ NtStatus resolveHandle(Handle handle, HandleTable*& table, Handle& untagged,
 // ============================================================================
 // 7. Symbolic Link Object
 // ============================================================================
+#if !defined(MICANT_FREESTANDING)
 class SymbolicLinkObject {
 public:
     explicit SymbolicLinkObject(std::wstring targetPath) : targetPath_(std::move(targetPath)) {}
@@ -659,6 +750,7 @@ public:
     }
 
     void initializeRoot() {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         if (initialized_) return;
         initialized_ = true;
 
@@ -702,6 +794,7 @@ public:
     }
 
     bool registerType(std::wstring_view typeName, ObjectTypeId id) {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         std::wstring name(typeName);
         if (types_.contains(name)) return true;
 
@@ -713,12 +806,14 @@ public:
     }
 
     [[nodiscard]] const ObjectType* getType(std::wstring_view typeName) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         auto it = types_.find(std::wstring(typeName));
         if (it != types_.end()) return it->second.get();
         return nullptr;
     }
 
     bool createDirectory(std::wstring_view fullPath) {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         std::wstring path(fullPath);
         if (directories_.contains(path)) return true;
 
@@ -734,15 +829,18 @@ public:
     }
 
     bool createSymbolicLink(std::wstring_view linkPath, std::wstring_view targetPath) {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         symbolicLinks_[std::wstring(linkPath)] = std::make_shared<SymbolicLinkObject>(std::wstring(targetPath));
         return true;
     }
 
     bool removeSymbolicLink(std::wstring_view linkPath) {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         return symbolicLinks_.erase(std::wstring(linkPath)) > 0;
     }
 
     [[nodiscard]] std::shared_ptr<SymbolicLinkObject> getSymbolicLink(std::wstring_view linkPath) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         auto it = symbolicLinks_.find(std::wstring(linkPath));
         if (it != symbolicLinks_.end()) return it->second;
         return nullptr;
@@ -767,6 +865,7 @@ public:
      * @brief Resolves symbolic links recursively with loop detection and depth bounds.
      */
     [[nodiscard]] std::wstring resolvePath(std::wstring_view path, NtStatus* outStatus = nullptr) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         std::wstring current = normalizePrefix(path);
         std::vector<std::wstring> visited;
         visited.push_back(current);
@@ -837,6 +936,7 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<DirectoryObject> getDirectory(std::wstring_view path) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         auto it = directories_.find(std::wstring(path));
         if (it != directories_.end()) return it->second;
         return nullptr;
@@ -850,6 +950,7 @@ public:
         const ObjectType* expectedType = nullptr,
         NtStatus* outStatus = nullptr
     ) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
         NtStatus st = NtStatus::Success;
         std::wstring resolved = resolvePath(fullPath, &st);
         if (outStatus) *outStatus = st;
@@ -905,6 +1006,27 @@ public:
         return nullptr;
     }
 
+    [[nodiscard]] ObjectHeader* lookupObjectReference(
+        std::wstring_view fullPath,
+        const ObjectType* expectedType = nullptr,
+        NtStatus* outStatus = nullptr
+    ) const {
+        std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
+        NtStatus status = NtStatus::Success;
+        auto* object = lookupObject(fullPath, expectedType, &status);
+        if (outStatus) *outStatus = status;
+        if (!object) return nullptr;
+        if (expectedType && object->type != expectedType) {
+            if (outStatus) *outStatus = NtStatus::ObjectTypeMismatch;
+            return nullptr;
+        }
+        if (!object->tryAddReference()) {
+            if (outStatus) *outStatus = NtStatus::ObjectNameNotFound;
+            return nullptr;
+        }
+        return object;
+    }
+
     [[nodiscard]] size_t getDirectoryCount() const noexcept { return directories_.size(); }
     [[nodiscard]] size_t getSymbolicLinkCount() const noexcept { return symbolicLinks_.size(); }
     [[nodiscard]] size_t getTypeCount() const noexcept { return types_.size(); }
@@ -916,6 +1038,7 @@ private:
     std::unordered_map<std::wstring, std::shared_ptr<DirectoryObject>> directories_;
     std::unordered_map<std::wstring, std::shared_ptr<SymbolicLinkObject>> symbolicLinks_;
 };
+#endif
 
 // ============================================================================
 // 9. Sovereign Object Reference & Lifetime Management API (Ob*)
@@ -997,23 +1120,45 @@ inline NtStatus ObInsertObject(
     HandleTable* handleTable,
     Handle* outHandle
 ) {
-    if (!object) return NtStatus::InvalidParameter;
+    if (!object || ((handleTable == nullptr) != (outHandle == nullptr))) return NtStatus::InvalidParameter;
+    if (outHandle) *outHandle = 0;
+    if (objectAttributes && (objectAttributes->length != sizeof(ObjectAttributes) ||
+        (objectAttributes->attributes & ~OBJ_VALID_ATTRIBUTES))) return NtStatus::InvalidParameter;
+
+    uint32_t grantedAccess = object->type
+        ? MapGenericAccess(desiredAccess, object->type->genericMapping) : desiredAccess;
+    const uint32_t validAccessMask = object->type ? object->type->validAccessMask :
+        std::numeric_limits<uint32_t>::max();
+    if (grantedAccess & ~validAccessMask) return NtStatus::AccessDenied;
 
     // Security access check if OBJ_FORCE_ACCESS_CHECK
     if (objectAttributes && (objectAttributes->attributes & OBJ_FORCE_ACCESS_CHECK)) {
-        if (g_ObpAccessCheckProcedure && object->securityDescriptor) {
+        if (!object->securityDescriptor || !g_ObpAccessCheckProcedure) return NtStatus::NotSupported;
+        if (g_ObpAccessCheckProcedure) {
             uint32_t granted = 0;
-            NtStatus chkSt = g_ObpAccessCheckProcedure(object->securityDescriptor, desiredAccess, &granted);
+            NtStatus chkSt = g_ObpAccessCheckProcedure(object->securityDescriptor, grantedAccess, &granted);
             if (!NT_SUCCESS(chkSt)) {
+#if !defined(MICANT_FREESTANDING)
                 std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
                 g_ObTelemetry.totalSecurityChecksDenied++;
+#endif
                 return NtStatus::AccessDenied;
             }
+            if ((grantedAccess & ~granted) || (granted & ~validAccessMask))
+                return NtStatus::AccessDenied;
+            grantedAccess = granted;
         }
+#if !defined(MICANT_FREESTANDING)
         std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
         g_ObTelemetry.totalSecurityChecksPassed++;
+#endif
     }
 
+#if defined(MICANT_FREESTANDING)
+    if (objectAttributes) return NtStatus::NotSupported;
+#else
+    std::unique_lock<std::recursive_mutex> namespaceLock(g_ObjectNamespaceMutex);
+    bool insertedIntoNamespace = false;
     // Resolve directory and insert
     if (!object->objectName.empty()) {
         std::wstring fullPath = object->objectName;
@@ -1035,22 +1180,51 @@ inline NtStatus ObInsertObject(
             NtStatus ins = dir->insertObject(name, object);
             if (!NT_SUCCESS(ins)) return ins;
             object->nameInfo.directory = dir.get();
+            insertedIntoNamespace = true;
         }
     }
+#endif
 
-    // If handle requested, allocate handle
+    // If handle requested, allocate it only after the namespace insertion has
+    // succeeded. Any subsequent failure rolls both publications back.
     if (handleTable && outHandle) {
-        NtStatus hst = handleTable->createHandle(object, *outHandle, desiredAccess, object->attributes);
-        if (!NT_SUCCESS(hst)) return hst;
+        const uint32_t handleAttributes = objectAttributes
+            ? (objectAttributes->attributes & OBJ_INHERIT) : 0;
+        NtStatus hst = handleTable->createHandle(object, *outHandle, grantedAccess, handleAttributes);
+        if (!NT_SUCCESS(hst)) {
+#if !defined(MICANT_FREESTANDING)
+            if (insertedIntoNamespace)
+                reinterpret_cast<DirectoryObject*>(object->parentDirectory)->removeObject(object->objectName);
+#endif
+            return hst;
+        }
 
+        if (object->type && object->type->openProcedure) {
+#if !defined(MICANT_FREESTANDING)
+            namespaceLock.unlock();
+#endif
+            hst = object->type->openProcedure(object, grantedAccess);
+            if (!NT_SUCCESS(hst)) {
+                // Rollback is an internal retirement, so OBJ_PROTECT_CLOSE
+                // must not turn a failed open callback into a leaked handle.
+                auto* failed = handleTable->takeHandle(*outHandle);
+                if (!failed) __builtin_trap();
+                const auto closeStatus = ObFinishClose(failed, *outHandle);
+                if (!NT_SUCCESS(closeStatus)) __builtin_trap();
+                *outHandle = 0;
+#if !defined(MICANT_FREESTANDING)
+                if (insertedIntoNamespace && object->parentDirectory)
+                    reinterpret_cast<DirectoryObject*>(object->parentDirectory)->removeObject(object->objectName);
+#endif
+                return hst;
+            }
+        }
+#if !defined(MICANT_FREESTANDING)
         {
             std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
             g_ObTelemetry.totalHandlesOpened++;
         }
-
-        if (object->type && object->type->openProcedure) {
-            object->type->openProcedure(object, desiredAccess);
-        }
+#endif
     }
 
     return NtStatus::Success;
@@ -1066,11 +1240,15 @@ inline NtStatus ObReferenceObjectByName(
     KPROCESSOR_MODE /*accessMode*/,
     ObjectHeader** outObject
 ) {
+#if defined(MICANT_FREESTANDING)
+    (void)fullPath; (void)expectedType; (void)outObject;
+    return NtStatus::NotSupported;
+#else
     if (!outObject) return NtStatus::InvalidParameter;
     *outObject = nullptr;
 
     NtStatus st = NtStatus::Success;
-    ObjectHeader* obj = ObjectNamespace::get().lookupObject(fullPath, expectedType, &st);
+    ObjectHeader* obj = ObjectNamespace::get().lookupObjectReference(fullPath, expectedType, &st);
     if (!obj) {
         return NT_SUCCESS(st) ? NtStatus::ObjectNameNotFound : st;
     }
@@ -1079,9 +1257,9 @@ inline NtStatus ObReferenceObjectByName(
         return NtStatus::ObjectTypeMismatch;
     }
 
-    obj->addReference();
     *outObject = obj;
     return NtStatus::Success;
+#endif
 }
 
 /**
@@ -1090,52 +1268,105 @@ inline NtStatus ObReferenceObjectByName(
 inline NtStatus ObOpenObjectByName(
     const ObjectAttributes* objectAttributes,
     const ObjectType* expectedType,
-    KPROCESSOR_MODE /*accessMode*/,
+    KPROCESSOR_MODE accessMode,
     uint32_t desiredAccess,
     HandleTable& handleTable,
     Handle& outHandle
 ) {
-    if (!objectAttributes || !objectAttributes->objectName) {
+#if defined(MICANT_FREESTANDING)
+    (void)objectAttributes; (void)expectedType; (void)accessMode;
+    (void)desiredAccess; (void)handleTable;
+    outHandle = 0;
+    return NtStatus::NotSupported;
+#else
+    outHandle = 0;
+    if (!objectAttributes || objectAttributes->length != sizeof(ObjectAttributes) ||
+        !objectAttributes->objectName || (objectAttributes->attributes & ~OBJ_VALID_ATTRIBUTES)) {
         return NtStatus::InvalidParameter;
     }
+    if (accessMode != KernelMode && accessMode != UserMode) return NtStatus::InvalidParameter;
+    if (accessMode == UserMode && (objectAttributes->attributes & OBJ_KERNEL_HANDLE))
+        return NtStatus::InvalidParameter;
+    if (objectAttributes->rootDirectory || objectAttributes->securityQualityOfService)
+        return NtStatus::NotSupported;
 
     std::wstring path(objectAttributes->objectName->view());
     NtStatus lookupSt = NtStatus::Success;
-    ObjectHeader* obj = ObjectNamespace::get().lookupObject(path, expectedType, &lookupSt);
+    ObjectHeader* obj = ObjectNamespace::get().lookupObjectReference(path, expectedType, &lookupSt);
     if (!obj) {
         return NT_SUCCESS(lookupSt) ? NtStatus::ObjectNameNotFound : lookupSt;
     }
+    struct LookupReference {
+        ObjectHeader* object;
+        ~LookupReference() { ObDereferenceObject(object); }
+    } lookupReference{obj};
 
     if (expectedType && obj->type != expectedType) {
         return NtStatus::ObjectTypeMismatch;
     }
 
+    const bool forceAccessCheck = (objectAttributes->attributes & OBJ_FORCE_ACCESS_CHECK) != 0;
+    if (accessMode == UserMode && (!obj->securityDescriptor || !g_ObpAccessCheckProcedure))
+        return NtStatus::AccessDenied;
+    if (forceAccessCheck && (!obj->securityDescriptor || !g_ObpAccessCheckProcedure))
+        return NtStatus::NotSupported;
+
+    uint32_t requestedAccess = desiredAccess;
+    uint32_t validAccessMask = std::numeric_limits<uint32_t>::max();
+    if (obj->type) {
+        requestedAccess = MapGenericAccess(desiredAccess, obj->type->genericMapping);
+        validAccessMask = obj->type->validAccessMask;
+    }
+    const bool maximumAllowed = (requestedAccess & MAXIMUM_ALLOWED) != 0;
+    const uint32_t requiredAccess = requestedAccess & ~MAXIMUM_ALLOWED;
+    if (requiredAccess & ~validAccessMask) return NtStatus::AccessDenied;
+    const bool hasAccessCheck = g_ObpAccessCheckProcedure && obj->securityDescriptor &&
+        (accessMode == UserMode || forceAccessCheck);
+    uint32_t grantedAccess = maximumAllowed && !hasAccessCheck
+        ? validAccessMask : requestedAccess;
     // Access check
-    if (g_ObpAccessCheckProcedure && obj->securityDescriptor) {
+    if (hasAccessCheck) {
         uint32_t granted = 0;
-        NtStatus chkSt = g_ObpAccessCheckProcedure(obj->securityDescriptor, desiredAccess, &granted);
+        NtStatus chkSt = g_ObpAccessCheckProcedure(obj->securityDescriptor, requestedAccess, &granted);
         if (!NT_SUCCESS(chkSt)) {
+#if !defined(MICANT_FREESTANDING)
             std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
             g_ObTelemetry.totalSecurityChecksDenied++;
-            return NtStatus::AccessDenied;
+#endif
+            return chkSt == NtStatus::AccessDenied ? chkSt : NtStatus::AccessDenied;
         }
+        if ((requiredAccess & ~granted) != 0 || (granted & ~validAccessMask) != 0 ||
+            (!maximumAllowed && (granted & ~requiredAccess) != 0)) return NtStatus::AccessDenied;
+        grantedAccess = granted;
     }
+#if !defined(MICANT_FREESTANDING)
     {
         std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
         g_ObTelemetry.totalSecurityChecksPassed++;
     }
+#endif
 
-    NtStatus st = handleTable.createHandle(obj, outHandle, desiredAccess, objectAttributes->attributes);
+    const uint32_t handleAttributes = objectAttributes->attributes & OBJ_INHERIT;
+    NtStatus st = handleTable.createHandle(obj, outHandle, grantedAccess, handleAttributes);
     if (NT_SUCCESS(st)) {
+        if (obj->type && obj->type->openProcedure) {
+            st = obj->type->openProcedure(obj, grantedAccess);
+            if (!NT_SUCCESS(st)) {
+                if (auto* failedHandle = handleTable.takeHandle(outHandle))
+                    (void)ObFinishClose(failedHandle, outHandle);
+                outHandle = 0;
+                return st;
+            }
+        }
+#if !defined(MICANT_FREESTANDING)
         {
             std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
             g_ObTelemetry.totalHandlesOpened++;
         }
-        if (obj->type && obj->type->openProcedure) {
-            obj->type->openProcedure(obj, desiredAccess);
-        }
+#endif
     }
     return st;
+#endif
 }
 
 /**
@@ -1149,20 +1380,50 @@ inline NtStatus ObOpenObjectByPointer(
     HandleTable& handleTable,
     Handle& outHandle
 ) {
+    outHandle = 0;
     if (!object) return NtStatus::InvalidParameter;
+    if (handleAttributes & ~OB_VALID_HANDLE_ATTRIBUTES) return NtStatus::InvalidParameter;
     if (expectedType && object->type != expectedType) {
         return NtStatus::ObjectTypeMismatch;
     }
 
-    NtStatus st = handleTable.createHandle(object, outHandle, desiredAccess, handleAttributes);
+    uint32_t requestedAccess = desiredAccess;
+    uint32_t validAccessMask = std::numeric_limits<uint32_t>::max();
+    if (object->type) {
+        requestedAccess = MapGenericAccess(desiredAccess, object->type->genericMapping);
+        validAccessMask = object->type->validAccessMask;
+    }
+    const bool maximumAllowed = (requestedAccess & MAXIMUM_ALLOWED) != 0;
+    const uint32_t requiredAccess = requestedAccess & ~MAXIMUM_ALLOWED;
+    if (requiredAccess & ~validAccessMask) return NtStatus::AccessDenied;
+    if (object->securityDescriptor && !g_ObpAccessCheckProcedure) return NtStatus::AccessDenied;
+    const bool hasAccessCheck = g_ObpAccessCheckProcedure && object->securityDescriptor;
+    uint32_t grantedAccess = maximumAllowed && !hasAccessCheck
+        ? validAccessMask : requestedAccess;
+    if (g_ObpAccessCheckProcedure && object->securityDescriptor) {
+        uint32_t granted{};
+        const NtStatus accessStatus = g_ObpAccessCheckProcedure(object->securityDescriptor, requestedAccess, &granted);
+        if (!NT_SUCCESS(accessStatus) || (requiredAccess & ~granted) || (granted & ~validAccessMask) ||
+            (!maximumAllowed && (granted & ~requiredAccess))) return NtStatus::AccessDenied;
+        grantedAccess = granted;
+    }
+    NtStatus st = handleTable.createHandle(object, outHandle, grantedAccess, handleAttributes);
     if (NT_SUCCESS(st)) {
+        if (object->type && object->type->openProcedure) {
+            st = object->type->openProcedure(object, grantedAccess);
+            if (!NT_SUCCESS(st)) {
+                if (auto* failedHandle = handleTable.takeHandle(outHandle))
+                    (void)ObFinishClose(failedHandle, outHandle);
+                outHandle = 0;
+                return st;
+            }
+        }
+#if !defined(MICANT_FREESTANDING)
         {
             std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
             g_ObTelemetry.totalHandlesOpened++;
         }
-        if (object->type && object->type->openProcedure) {
-            object->type->openProcedure(object, desiredAccess);
-        }
+#endif
     }
     return st;
 }
@@ -1226,6 +1487,7 @@ inline NtStatus ObFinishClose(ObjectHeader* object, Handle handle) {
     if (!object) return NtStatus::InvalidHandle;
     if (object->type && object->type->closeProcedure) object->type->closeProcedure(object, handle);
 #if !defined(MICANT_FREESTANDING)
+    std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
     {
         std::lock_guard<std::mutex> lock(g_ObTelemetryMutex);
         g_ObTelemetry.totalHandlesClosed++;
@@ -1245,9 +1507,9 @@ inline NtStatus ObFinishClose(ObjectHeader* object, Handle handle) {
 }
 
 inline NtStatus ObCloseHandle(Handle handle, HandleTable& handleTable) {
-    // The detached handle reference protects the object until the callback
-    // completes, outside the handle-table exclusion.
-    return ObFinishClose(handleTable.takeHandle(handle), handle);
+    // HandleTable owns the close policy (including OBJ_PROTECT_CLOSE) and
+    // detaches the reference before invoking object callbacks.
+    return handleTable.closeHandle(handle);
 }
 
 /**
@@ -1264,8 +1526,10 @@ inline NtStatus ObDuplicateHandle(
 ) {
     NtStatus st = sourceTable.duplicateHandle(sourceHandle, targetTable, targetHandle, desiredAccess, inherit, options);
     if (NT_SUCCESS(st)) {
+#if !defined(MICANT_FREESTANDING)
         std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
         g_ObTelemetry.totalHandlesDuplicated++;
+#endif
     }
     return st;
 }
@@ -1275,8 +1539,12 @@ inline NtStatus ObDuplicateHandle(
  */
 inline void ObMakeTemporaryObject(ObjectHeader* object) {
     if (!object) return;
+#if !defined(MICANT_FREESTANDING)
+    std::lock_guard<std::recursive_mutex> namespaceGuard(g_ObjectNamespaceMutex);
+#endif
     object->attributes &= ~OBJ_PERMANENT;
 
+#if !defined(MICANT_FREESTANDING)
     if (object->handleCount.load(std::memory_order_relaxed) == 0 && object->parentDirectory) {
         auto* dir = reinterpret_cast<DirectoryObject*>(object->parentDirectory);
         dir->removeObject(object->objectName);
@@ -1287,6 +1555,7 @@ inline void ObMakeTemporaryObject(ObjectHeader* object) {
             g_ObTelemetry.totalTemporaryObjectsUnlinked++;
         }
     }
+#endif
 }
 
 } // namespace micant::ob

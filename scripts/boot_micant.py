@@ -37,7 +37,9 @@ EXPECTED_BOOTSTRAP_SERIAL = (
     "[MicaNT Ke] Ready-queue withdrawal verified",
     "[MicaNT Ldr] Independent TLS templates verified",
 )
-EXPECTED_RUNTIME_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL + (
+# The runtime self-test halts immediately after global construction/teardown,
+# before the Ob, Ke and loader diagnostics in the normal bootstrap path.
+EXPECTED_RUNTIME_SELFTEST_SERIAL = EXPECTED_BOOTSTRAP_SERIAL[:13] + (
     "[MicaNT Ex] Compiler-generated construction and LIFO teardown verified",
     "[MicaNT Ex] Runtime self-test halted",
 )

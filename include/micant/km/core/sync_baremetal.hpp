@@ -64,6 +64,9 @@ public:
             // registration. This event only unlinks and returns to that owner.
             if (current->terminationRequested && current->eventWaitCanTerminate) {
                 result = NtStatus::UserApc;
+            } else if (current->alertable && current->alerted[current->eventWaitUserMode ? ke::UserMode : ke::KernelMode]) {
+                current->alerted[current->eventWaitUserMode ? ke::UserMode : ke::KernelMode] = false;
+                result = NtStatus::Alerted;
             } else if (signaled_) {
                 if (!notification_) signaled_ = false;
                 result = NtStatus::Success;
@@ -98,7 +101,7 @@ public:
                         break;
                     }
                     if (waiter.cancelled || waiter.satisfied || waiter.timedOut) {
-                        result = waiter.cancelled ? NtStatus::UserApc :
+                        result = waiter.cancelled ? (current->eventWaitAlerted ? NtStatus::Alerted : NtStatus::UserApc) :
                                  waiter.timedOut ? NtStatus::Timeout : NtStatus::Success;
                         break;
                     }
@@ -119,7 +122,7 @@ public:
                     }
                     if (waiter.cancelled || current->eventWaitCancelled ||
                         (current->terminationRequested && current->eventWaitCanTerminate)) {
-                        result = NtStatus::UserApc;
+                        result = current->eventWaitAlerted ? NtStatus::Alerted : NtStatus::UserApc;
                         break;
                     }
                     if (waiter.satisfied) { result = NtStatus::Success; break; }
@@ -137,6 +140,7 @@ public:
                 current->eventWaitObject = nullptr;
                 current->eventWaitBlock = nullptr;
                 current->eventWaitCancelled = false;
+                current->eventWaitAlerted = false;
             }
             current->alertable = false;
             // A satisfied object or timeout must not discard an APC delivery
@@ -191,6 +195,18 @@ public:
         unlink(waiter);
         waiter.cancelled = true;
         thread.eventWaitCancelled = true;
+        if (!ke::PriorityScheduler::get().readyKThread(&thread)) __builtin_trap();
+        return true;
+    }
+
+    [[nodiscard]] bool cancelWaitForAlert(ke::KThread& thread) noexcept {
+        if (thread.eventWaitObject != this || !thread.eventWaitBlock ||
+            thread.state != ke::ThreadState::Waiting || thread.eventWaitCancelled) return false;
+        auto& waiter = *static_cast<Waiter*>(thread.eventWaitBlock);
+        unlink(waiter);
+        waiter.cancelled = true;
+        thread.eventWaitCancelled = true;
+        thread.eventWaitAlerted = true;
         if (!ke::PriorityScheduler::get().readyKThread(&thread)) __builtin_trap();
         return true;
     }

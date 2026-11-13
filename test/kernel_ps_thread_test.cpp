@@ -2,9 +2,11 @@
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ps_objects.hpp"
+#include <array>
 
 
 namespace {
+uint32_t g_attachFailureStage{};
 struct State {
     micant::ps::EProcess* process{};
     micant::ke::KThread* boot{};
@@ -816,11 +818,14 @@ bool testSystemThreadCreation() noexcept {
         client.uniqueProcess == client.uniqueThread) return false;
     LargeInteger poll{};
     boot->previousUserMode = true;
-    const auto userWait = sys::NtWaitForSingleObject(handle, false, &poll);
+    // This check is about rejecting a kernel handle from UserMode. Keep the
+    // optional timeout absent so it does not introduce a second user-pointer
+    // validation failure before the handle access check.
+    const auto userWait = sys::NtWaitForSingleObject(handle, false, nullptr);
     const auto userClose = sys::NtClose(handle);
     constexpr uintptr_t kernelTag = uintptr_t{1} << (sizeof(Handle) * 8 - 1);
     const auto untagged = static_cast<Handle>(static_cast<uintptr_t>(handle) & ~kernelTag);
-    const auto untaggedWait = sys::NtWaitForSingleObject(untagged, false, &poll);
+    const auto untaggedWait = sys::NtWaitForSingleObject(untagged, false, nullptr);
     const auto untaggedClose = sys::NtClose(untagged);
     const auto previousModeClose = sys::ZwClose(handle);
     boot->previousUserMode = false;
@@ -946,16 +951,310 @@ bool testProcessObjectLifetime() noexcept {
         ps::detail::bootstrapProcessObjectCount() == objects &&
         mm::PfnDatabase::get().getActiveCount() == active;
 }
+
+bool testCrossProcessAttachLifecycle() noexcept {
+    using namespace micant;
+    using namespace micant::ke;
+    auto* current = KeGetCurrentThread();
+    g_attachFailureStage = 1;
+    if (!current || KeGetCurrentIrql() != PASSIVE_LEVEL || current->processAttachDepth ||
+        current->attachedProcess || current->apcStateIndex != ApcStateIndexOriginal)
+        return false;
+    uint64_t originalRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(originalRoot));
+    const size_t active = mm::PfnDatabase::get().getActiveCount();
+    const uint32_t processObjects = ps::detail::bootstrapProcessObjectCount();
+    Handle firstHandle{}, secondHandle{};
+    ps::EProcess *first{}, *second{};
+    if (ps::detail::createProcessHandle(ob::SYNCHRONIZE, firstHandle, first) != NtStatus::Success ||
+        ps::detail::createProcessHandle(ob::SYNCHRONIZE, secondHandle, second) != NtStatus::Success)
+        return false;
+    uintptr_t pinnedRoot{};
+    ob::ObjectHeader* processPin{};
+    if (first->referenceAddressSpaceForAttach(pinnedRoot, processPin) != NtStatus::Success ||
+        pinnedRoot != first->getDirectoryTableBase() || sys::NtClose(firstHandle) != NtStatus::Success)
+        return false;
+    firstHandle = 0;
+    ke::KAPC_STATE firstState{}, secondState{}, sameState{}, invalidState{};
+    KeStackAttachProcess(first, &firstState);
+    uintptr_t currentRoot{};
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    bool valid = current->processAttachDepth == 1 && current->attachedProcess == first &&
+        current->apcStateIndex == ApcStateIndexAttached &&
+        current->directoryTableBase == first->getDirectoryTableBase() &&
+        currentRoot == first->getDirectoryTableBase();
+    if (!valid) { g_attachFailureStage = 20; return false; }
+    g_attachFailureStage = 2;
+    // The explicit address-space pin keeps the process alive after its last
+    // public handle is closed; KeStackAttachProcess then takes its own pin.
+    valid = valid && pinnedRoot == currentRoot && first->getDirectoryTableBase() == currentRoot;
+    if (!valid) { g_attachFailureStage = 21; return false; }
+    g_attachFailureStage = 3;
+    KeStackAttachProcess(first, &sameState);
+    valid = valid && current->processAttachDepth == 2 && currentRoot == first->getDirectoryTableBase();
+    KeUnstackDetachProcess(&sameState);
+    valid = valid && current->processAttachDepth == 1 && current->attachedProcess == first;
+    if (!valid) { g_attachFailureStage = 22; return false; }
+    g_attachFailureStage = 4;
+
+    KeStackAttachProcess(second, &secondState);
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    valid = valid && current->processAttachDepth == 2 && current->attachedProcess == second &&
+        current->directoryTableBase == second->getDirectoryTableBase() &&
+        currentRoot == second->getDirectoryTableBase();
+    // The first process is no longer the active CR3, but its nested attach pin
+    // must still prevent teardown while this thread remains attached to it.
+    valid = valid && first->closeAddressSpace() == NtStatus::InvalidParameter &&
+        first->getDirectoryTableBase() != 0 && currentRoot == second->getDirectoryTableBase();
+    if (!valid) { g_attachFailureStage = 23; return false; }
+    KeUnstackDetachProcess(&firstState); // Out-of-order detach must be inert.
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    valid = valid && current->processAttachDepth == 2 && current->attachedProcess == second &&
+        currentRoot == second->getDirectoryTableBase();
+    if (!valid) { g_attachFailureStage = 24; return false; }
+    g_attachFailureStage = 5;
+    KeUnstackDetachProcess(&secondState);
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    valid = valid && current->processAttachDepth == 1 && current->attachedProcess == first &&
+        currentRoot == first->getDirectoryTableBase();
+    if (!valid) { g_attachFailureStage = 25; return false; }
+    g_attachFailureStage = 6;
+    KeUnstackDetachProcess(&firstState);
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    valid = valid && current->processAttachDepth == 0 && !current->attachedProcess &&
+        current->apcStateIndex == ApcStateIndexOriginal && current->directoryTableBase == originalRoot &&
+        currentRoot == originalRoot;
+    if (!valid) { g_attachFailureStage = 26; return false; }
+    first->releaseAddressSpaceAttachReference(processPin);
+    g_attachFailureStage = 7;
+    first = nullptr; // The attach reference was the process's final reference.
+
+    Handle terminatingHandle{};
+    ps::EProcess* terminatingTarget{};
+    if (ps::detail::createProcessHandle(ob::SYNCHRONIZE, terminatingHandle,
+            terminatingTarget) != NtStatus::Success || !terminatingTarget ||
+        terminatingTarget->terminateOther(NtStatus::AccessDenied) != NtStatus::Success ||
+        !terminatingTarget->isTerminating() || terminatingTarget->getDirectoryTableBase()) {
+        g_attachFailureStage = 28;
+        return false;
+    }
+    pinnedRoot = UINTPTR_MAX;
+    processPin = reinterpret_cast<ob::ObjectHeader*>(UINTPTR_MAX);
+    valid = terminatingTarget->referenceAddressSpaceForAttach(pinnedRoot, processPin) ==
+            NtStatus::InvalidParameter && pinnedRoot == 0 && processPin == nullptr;
+    ke::KAPC_STATE terminatingState{};
+    KeStackAttachProcess(terminatingTarget, &terminatingState);
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    valid = valid && current->processAttachDepth == 0 && currentRoot == originalRoot &&
+        current->apcStateIndex == ApcStateIndexOriginal;
+    KeUnstackDetachProcess(&terminatingState);
+    valid = valid && current->processAttachDepth == 0 && currentRoot == originalRoot &&
+        sys::NtClose(terminatingHandle) == NtStatus::Success &&
+        ps::detail::bootstrapProcessObjectCount() == processObjects + 1;
+    if (!valid) { g_attachFailureStage = 29; return false; }
+
+    ps::EProcess invalidTarget;
+    KeStackAttachProcess(&invalidTarget, &invalidState);
+    __asm__ __volatile__("movq %%cr3, %0" : "=r"(currentRoot));
+    valid = valid && current->processAttachDepth == 0 && currentRoot == originalRoot;
+    KeUnstackDetachProcess(&invalidState); // Invalid attach did not create a frame.
+    valid = valid && current->processAttachDepth == 0;
+    if (!valid) { g_attachFailureStage = 27; return false; }
+    const auto closeFirst = firstHandle ? sys::NtClose(firstHandle) : NtStatus::Success;
+    const auto closeSecond = sys::NtClose(secondHandle);
+    if (!valid) { g_attachFailureStage = 8; return false; }
+    if (closeFirst != NtStatus::Success || closeSecond != NtStatus::Success) {
+        g_attachFailureStage = 9; return false;
+    }
+    if (ps::detail::bootstrapProcessObjectCount() != processObjects) {
+        g_attachFailureStage = 10; return false;
+    }
+    if (mm::PfnDatabase::get().getActiveCount() != active) {
+        g_attachFailureStage = 11; return false;
+    }
+    return true;
 }
+
+bool testUserModeProcessOpenAccess() noexcept {
+    using namespace micant;
+    g_attachFailureStage = 40;
+    const size_t activePages = mm::PfnDatabase::get().getActiveCount();
+    const uint32_t processObjects = ps::detail::bootstrapProcessObjectCount();
+    auto* currentThread = ke::KeGetCurrentThread();
+    if (!currentThread) { g_attachFailureStage = 47; return false; }
+    if (currentThread->previousUserMode) { g_attachFailureStage = 48; return false; }
+    se::FreestandingAccessToken* identity{};
+    ob::ObjectHeader* identityReference{};
+    const auto tokenStatus = se::SeCreateFreestandingPrimaryToken(false, identity, identityReference);
+    if (tokenStatus != NtStatus::Success || !identity) {
+        g_attachFailureStage = 49;
+        return false;
+    }
+
+    se::FreestandingSecurityDescriptor security{};
+    security.DaclPresent = true;
+    security.AceCount = 2;
+    security.Dacl[0] = {identity->UserSid, 0x0001, se::FreestandingAceType::Deny};
+    security.Dacl[1] = {identity->UserSid, 0x0010, se::FreestandingAceType::Allow};
+    ps::EProcess* target{};
+    ob::ObjectHeader* targetReference{};
+    uint32_t processAccess{};
+    bool valid = ps::detail::createProcessObject(target, targetReference, &security,
+        0x0001 | ob::SYNCHRONIZE, &processAccess) == NtStatus::Success && target && targetReference;
+    if (!valid) g_attachFailureStage = 41;
+    Handle processHandle{}, deniedHandle{}, allowedHandle{};
+    if (valid) valid = ps::detail::publishProcessHandle(*target, targetReference, processAccess, 0,
+        processHandle) == NtStatus::Success && processHandle;
+    if (!valid) g_attachFailureStage = 42;
+
+    ke::KAPC_STATE attach{};
+    const size_t originalAttachDepth = currentThread->processAttachDepth;
+    bool attached = false;
+    if (valid) {
+        ke::KeStackAttachProcess(target, &attach);
+        attached = currentThread->processAttachDepth == originalAttachDepth + 1;
+        valid = attached && currentThread->attachedProcess == target &&
+            currentThread->directoryTableBase == target->getDirectoryTableBase();
+    }
+    const bool previousMode = currentThread->previousUserMode;
+    if (valid) currentThread->previousUserMode = true;
+    if (valid) {
+        deniedHandle = 0xdead;
+        valid = ps::detail::openProcessByClientId({target->processId(), 0}, 0x0001, 0, deniedHandle) ==
+            NtStatus::AccessDenied && deniedHandle == 0;
+        valid = valid && ps::detail::openProcessByClientId({target->processId(), 0}, 0x0010, 0,
+            allowedHandle) == NtStatus::Success && allowedHandle;
+    }
+    currentThread->previousUserMode = previousMode;
+    if (attached) ke::KeUnstackDetachProcess(&attach);
+    if (!valid) g_attachFailureStage = 43;
+
+    ob::ObjectHeader* openedReference{};
+    uint32_t openedGranted{};
+    if (valid) valid = target->getHandleTable().referenceHandle(allowedHandle, 0x0010, nullptr,
+        &openedReference, &openedGranted) == NtStatus::Success && openedReference &&
+        openedReference->as<ps::EProcess>() == target && openedGranted == 0x0010;
+    if (!valid) g_attachFailureStage = 44;
+    if (openedReference) ob::ObDereferenceObject(openedReference);
+    if (allowedHandle && target) (void)target->getHandleTable().closeHandle(allowedHandle);
+    if (target && processHandle && !target->isTerminating())
+        (void)target->terminateOther(NtStatus::Success);
+    if (processHandle && target && target->isTerminating())
+        valid = valid && sys::NtWaitForSingleObject(processHandle, false, nullptr) == NtStatus::Success;
+    if (!valid) g_attachFailureStage = 45;
+    if (processHandle) (void)sys::NtClose(processHandle);
+    if (targetReference) ob::ObDereferenceObject(targetReference);
+    if (identityReference) se::SeDereferenceFreestandingToken(identityReference);
+    valid = valid && mm::PfnDatabase::get().getActiveCount() == activePages &&
+        ps::detail::bootstrapProcessObjectCount() == processObjects;
+    if (!valid) g_attachFailureStage = 46;
+    return valid;
+}
+
+bool testClientIdOpenRights() noexcept {
+    using namespace micant;
+    g_attachFailureStage = 30;
+    const size_t active = mm::PfnDatabase::get().getActiveCount();
+    Handle processHandle{}, threadHandle{}, openedProcess{}, openedThread{};
+    ps::EProcess* process{};
+    ps::EThread* thread{};
+    if (ps::detail::createProcessHandle(ob::SYNCHRONIZE, processHandle, process) != NtStatus::Success ||
+        !process || ps::detail::createThreadHandle(*process, 16384, threadEntry, nullptr,
+            ob::SYNCHRONIZE, threadHandle, thread) != NtStatus::Success || !thread)
+        return false;
+    ClientId processId{process->processId(), 0};
+    ObjectAttributes openAttributes{};
+    openAttributes.attributes = OBJ_INHERIT;
+    bool valid = sys::NtOpenProcess(&openedProcess, 0x0010, &openAttributes, &processId) == NtStatus::Success &&
+        openedProcess && ob::detail::currentHandleTable().getEntry(openedProcess) &&
+        (ob::detail::currentHandleTable().getEntry(openedProcess)->handleAttributes & OBJ_INHERIT);
+    ps::EProcess* openedProcessObject{};
+    ob::ObjectHeader* processReference{};
+    if (valid) valid = ps::detail::referenceProcessHandle(openedProcess, 0x0010,
+        openedProcessObject, processReference) == NtStatus::Success && openedProcessObject == process;
+    if (processReference) ob::ObDereferenceObject(processReference);
+    processReference = nullptr;
+    if (valid) valid = ps::detail::referenceProcessHandle(openedProcess, 0x0020,
+        openedProcessObject, processReference) == NtStatus::AccessDenied && !processReference;
+    Handle invalidProcess{};
+    ClientId invalidProcessId{InvalidHandleValue, 0};
+    valid = valid && sys::NtOpenProcess(&invalidProcess, 0x0010, &openAttributes, &invalidProcessId) ==
+        NtStatus::InvalidCid && invalidProcess == 0;
+
+    ClientId threadId{process->processId(), thread->kernelThread()->tid};
+    valid = valid && sys::NtOpenThread(&openedThread, 0x0040, &openAttributes, &threadId) == NtStatus::Success &&
+        openedThread;
+    ps::EThread* openedThreadObject{};
+    ob::ObjectHeader* threadReference{};
+    if (valid) valid = ps::detail::referenceThreadHandle(openedThread, 0x0040,
+        openedThreadObject, threadReference) == NtStatus::Success && openedThreadObject == thread;
+    ThreadBasicInformation threadBasic{};
+    uint32_t threadBasicLength{};
+    if (valid) valid = sys::NtQueryInformationThread(openedThread,
+        ThreadInformationClass::ThreadBasicInformation, &threadBasic, sizeof(threadBasic),
+        &threadBasicLength) == NtStatus::Success && threadBasicLength == sizeof(threadBasic) &&
+        threadBasic.clientId.uniqueProcess == process->processId() &&
+        threadBasic.clientId.uniqueThread == thread->threadId() &&
+        threadBasic.exitStatus == NtStatus::Pending;
+    if (valid) {
+        std::array<uint8_t, sizeof(ThreadBasicInformation) + sizeof(uint32_t)> oversized{};
+        threadBasicLength = 0;
+        valid = sys::NtQueryInformationThread(openedThread,
+            ThreadInformationClass::ThreadBasicInformation, oversized.data(), oversized.size(),
+            &threadBasicLength) == NtStatus::Success &&
+            threadBasicLength == sizeof(ThreadBasicInformation);
+        if (!valid) g_attachFailureStage = 35;
+    }
+    if (valid) {
+        threadBasicLength = 0;
+        valid = sys::NtQueryInformationThread(openedThread, static_cast<ThreadInformationClass>(1),
+            &threadBasic, sizeof(threadBasic), &threadBasicLength) == NtStatus::InvalidInfoClass &&
+            threadBasicLength == 0;
+        if (!valid) g_attachFailureStage = 36;
+    }
+    if (threadReference) ob::ObDereferenceObject(threadReference);
+    threadReference = nullptr;
+    if (valid) valid = ps::detail::referenceThreadHandle(openedThread, 0x0080,
+        openedThreadObject, threadReference) == NtStatus::AccessDenied && !threadReference;
+    Handle invalidThread{};
+    ClientId invalidThreadId{process->processId(), 0};
+    valid = valid && sys::NtOpenThread(&invalidThread, 0x0040, &openAttributes, &invalidThreadId) ==
+        NtStatus::InvalidCid && invalidThread == 0;
+
+    if (!valid && g_attachFailureStage == 30) g_attachFailureStage = 31;
+    const bool userAccess = valid && testUserModeProcessOpenAccess();
+    const auto reapStatus = thread->cancelBeforeStart() == NtStatus::Success
+        ? thread->reap() : NtStatus::Unsuccessful;
+    const auto closeOpenedThread = openedThread ? sys::NtClose(openedThread) : NtStatus::Success;
+    const auto closeOpenedProcess = openedProcess ? sys::NtClose(openedProcess) : NtStatus::Success;
+    const auto closeThread = sys::NtClose(threadHandle);
+    const auto closeProcess = sys::NtClose(processHandle);
+    if (reapStatus != NtStatus::Success) g_attachFailureStage = 37;
+    else if (closeOpenedThread != NtStatus::Success || closeOpenedProcess != NtStatus::Success ||
+             closeThread != NtStatus::Success || closeProcess != NtStatus::Success)
+        g_attachFailureStage = 38;
+    else if (mm::PfnDatabase::get().getActiveCount() != active) g_attachFailureStage = 39;
+    valid = valid && userAccess && reapStatus == NtStatus::Success && closeOpenedThread == NtStatus::Success &&
+        closeOpenedProcess == NtStatus::Success && closeThread == NtStatus::Success &&
+        closeProcess == NtStatus::Success && mm::PfnDatabase::get().getActiveCount() == active;
+    return valid;
+}
+}
+
+extern "C" uint32_t MicantPsAttachFailureStage() noexcept { return g_attachFailureStage; }
 
 extern "C" bool MicantTestPsThreadLifecycle() noexcept {
     using namespace micant;
     using namespace micant::ke;
     auto& scheduler = PriorityScheduler::get();
     auto* boot = KeGetCurrentThread();
-    if (!boot || scheduler.getReadyThreadCount()) return false;
+    if (!testCrossProcessAttachLifecycle()) return false;
+    if (!testClientIdOpenRights()) return false;
+    g_attachFailureStage = 55;
+    if (!boot || scheduler.getReadyThreadCount()) { g_attachFailureStage = 56; return false; }
     const size_t active = mm::PfnDatabase::get().getActiveCount();
     const uintptr_t bootEntryStack = hal::amd64::bootstrapThreadSyscallStack();
+    g_attachFailureStage = 57;
     {
         ps::EProcess process;
         ps::EThread thread;
@@ -1023,6 +1322,7 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
             thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
             return false;
     }
+    g_attachFailureStage = 58;
     {
         ps::EProcess process;
         ps::EThread thread;
@@ -1046,17 +1346,28 @@ extern "C" bool MicantTestPsThreadLifecycle() noexcept {
             thread.reap() != NtStatus::Success || process.closeAddressSpace() != NtStatus::Success)
             return false;
     }
-    if (mm::PfnDatabase::get().getActiveCount() != active) return false;
+    if (mm::PfnDatabase::get().getActiveCount() != active) { g_attachFailureStage = 59; return false; }
+    g_attachFailureStage = 60;
     if (!testThreadObjectLifetime()) return false;
+    g_attachFailureStage = 61;
     if (!testCancelledThreadApcRundown()) return false;
+    g_attachFailureStage = 62;
     if (!testNativeThreadTermination()) return false;
+    g_attachFailureStage = 63;
     if (!testLastThreadExitAndDeferredReap()) return false;
+    g_attachFailureStage = 64;
     if (!testDeferredRemoteExit()) return false;
+    g_attachFailureStage = 65;
     if (!testApcSignalDuringWait()) return false;
+    g_attachFailureStage = 66;
     if (!testRemoteUnstartedThreads()) return false;
+    g_attachFailureStage = 67;
     if (!testKernelWaitDefersTermination()) return false;
+    g_attachFailureStage = 68;
     if (!testRemoteProcessWait()) return false;
+    g_attachFailureStage = 69;
     if (!testProcessObjectLifetime()) return false;
+    g_attachFailureStage = 70;
     return testSystemThreadCreation();
 }
 

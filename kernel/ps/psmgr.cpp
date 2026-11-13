@@ -42,4 +42,11 @@ NtStatus NtQueryInformationProcess(
     return NtStatus::NotImplemented;
 }
 
+NtStatus NtQueryInformationThread(Handle, ThreadInformationClass, void*, uint32_t, uint32_t*) {
+    return NtStatus::NotImplemented;
+}
+
+NtStatus NtAlertThread(Handle) { return NtStatus::NotImplemented; }
+NtStatus NtTestAlert() { return NtStatus::NotImplemented; }
+
 } // namespace micant::sys

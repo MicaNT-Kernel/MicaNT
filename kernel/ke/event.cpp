@@ -2,6 +2,7 @@
 #include "micant/km/core/timer.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/probe.hpp"
 #include "micant/km/executive/ps.hpp"
 #include "micant/km/executive/ps_objects.hpp"
 #include <new>
@@ -20,6 +21,82 @@ void deleteTimer(ob::ObjectHeader* header) {
     if (!ke::clock_timer::cancelAndRemoveDpc(timer->deadline)) __builtin_trap();
     timer->~KTIMER();
 }
+}
+
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL) && (defined(_M_X64) || defined(__x86_64__))
+NtStatus NtDelayExecution(bool alertable, const LargeInteger* interval) {
+    auto* current = ke::KeGetCurrentThread();
+    const auto mode = current && current->previousUserMode ? mm::UserMode : mm::KernelMode;
+    if (!interval) return NtStatus::AccessViolation;
+    LargeInteger captured{};
+    auto status = ex::ProbeForRead(interval, sizeof(captured), alignof(LargeInteger), mode);
+    if (status != NtStatus::Success) return status;
+    status = ex::ExSafeCopyFromUser(&captured, interval, sizeof(captured), mode);
+    if (status != NtStatus::Success) return status;
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidDeviceState;
+
+    uint64_t delay100ns{};
+    if (captured.quadPart < 0) {
+        delay100ns = static_cast<uint64_t>(-(captured.quadPart + 1)) + 1;
+    } else if (captured.quadPart > 0) {
+        uint64_t now{};
+        if (!ke::KeQuerySystemTime100ns(now)) return NtStatus::DeviceNotReady;
+        const auto absolute = static_cast<uint64_t>(captured.quadPart);
+        delay100ns = absolute > now ? absolute - now : 0;
+    }
+    if (!delay100ns) {
+        if (!current) return NtStatus::InvalidDeviceState;
+        return ke::KeTestAlertThread(mode == mm::UserMode ? ke::UserMode : ke::KernelMode)
+            ? NtStatus::Alerted : NtStatus::Success;
+    }
+    if (!current || current->eventWaitInProgress) return NtStatus::InvalidParameter;
+    current->eventWaitInProgress = true;
+    current->eventWaitUserMode = current->previousUserMode;
+    current->eventWaitCanTerminate = current->eventWaitUserMode &&
+        ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL;
+    sync::detail::BootstrapEvent delayEvent(false, false);
+    status = delayEvent.wait(false, alertable, delay100ns);
+    const bool terminate = current->terminationRequested && current->eventWaitCanTerminate &&
+        current->serviceTermination;
+    auto terminationRoutine = current->serviceTermination;
+    void* terminationContext = current->terminationContext;
+    current->eventWaitInProgress = false;
+    current->eventWaitUserMode = false;
+    current->eventWaitCanTerminate = false;
+    if (terminate) terminationRoutine(terminationContext);
+    return status == NtStatus::Timeout ? NtStatus::Success : status;
+}
+
+NtStatus NtAlertThread(Handle threadHandle) {
+    if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return NtStatus::InvalidDeviceState;
+    ps::EThread* target{};
+    ob::ObjectHeader* reference{};
+    const auto status = threadHandle == static_cast<Handle>(-2)
+        ? ps::detail::referenceCurrentThread(target, reference)
+        : ps::detail::referenceThreadHandle(threadHandle, 0x0004, target, reference);
+    if (status != NtStatus::Success) return status;
+    auto* kernelThread = target->kernelThread();
+    if (!kernelThread) {
+        ob::ObDereferenceObject(reference);
+        return NtStatus::ThreadIsTerminating;
+    }
+    {
+        ob::detail::HandleTableGuard guard;
+        kernelThread->alerted[ke::UserMode] = true;
+        if (kernelThread->alertable && kernelThread->eventWaitUserMode && kernelThread->eventWaitObject) {
+            auto* event = static_cast<sync::detail::BootstrapEvent*>(kernelThread->eventWaitObject);
+            (void)event->cancelWaitForAlert(*kernelThread);
+        }
+    }
+    ob::ObDereferenceObject(reference);
+    return NtStatus::Success;
+}
+
+NtStatus NtTestAlert() {
+    return ke::KeTestAlertThread(ke::UserMode) ? NtStatus::Alerted : NtStatus::Success;
+}
+#endif
+namespace {
 ob::ObjectHeader* deferredTimers{};
 ke::passive_work::Item timerDeleteWork{};
 void finishDeferredTimers(void*) noexcept {
@@ -177,7 +254,14 @@ NtStatus NtWaitForSingleObject(Handle handle, bool alertable, LargeInteger* time
     uint64_t relativeTimeout = 0;
     uint64_t absoluteTimeout = 0;
     if (timeout) {
-        const int64_t due = timeout->quadPart;
+        auto* caller = ke::KeGetCurrentThread();
+        const auto mode = caller && caller->previousUserMode ? mm::UserMode : mm::KernelMode;
+        LargeInteger captured{};
+        auto status = ex::ProbeForRead(timeout, sizeof(captured), alignof(LargeInteger), mode);
+        if (status != NtStatus::Success) return status;
+        status = ex::ExSafeCopyFromUser(&captured, timeout, sizeof(captured), mode);
+        if (status != NtStatus::Success) return status;
+        const int64_t due = captured.quadPart;
         if (due < 0) {
             // Avoid signed overflow for INT64_MIN.
             relativeTimeout = static_cast<uint64_t>(-(due + 1)) + 1;

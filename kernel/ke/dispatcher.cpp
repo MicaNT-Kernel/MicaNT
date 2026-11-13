@@ -497,6 +497,21 @@ void SyscallDispatcher::initializeStandardTable() {
         return NtQueryInformationProcess(proc, pClass, info, len, retLen);
     });
 
+    registerSyscall(SSN_NtQueryInformationThread, "NtQueryInformationThread", 5,
+        [](const SyscallFrame& f) -> NtStatus {
+            auto* returnLength = f.stackArgs && f.stackArgCount >= 1
+                ? reinterpret_cast<uint32_t*>(f.stackArgs[0]) : nullptr;
+            return NtQueryInformationThread(static_cast<Handle>(f.arg1),
+                static_cast<ThreadInformationClass>(f.arg2), reinterpret_cast<void*>(f.arg3),
+                static_cast<uint32_t>(f.arg4), returnLength);
+        });
+    registerSyscall(SSN_NtAlertThread, "NtAlertThread", 1,
+        [](const SyscallFrame& f) -> NtStatus {
+            return NtAlertThread(static_cast<Handle>(f.arg1));
+        });
+    registerSyscall(SSN_NtTestAlert, "NtTestAlert", 0,
+        [](const SyscallFrame&) -> NtStatus { return NtTestAlert(); });
+
     // 43. NtCreateNamedPipeFile (SSN: 0x0091)
     registerSyscall(SSN_NtCreateNamedPipeFile, "NtCreateNamedPipeFile", 14, [](const SyscallFrame& f) -> NtStatus {
         auto* fileHandle = reinterpret_cast<Handle*>(f.arg1);

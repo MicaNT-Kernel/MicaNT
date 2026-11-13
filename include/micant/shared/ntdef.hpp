@@ -361,6 +361,8 @@ struct ObjectAttributes {
 
 // Object attribute flags
 inline constexpr uint32_t OBJ_INHERIT             = 0x00000002;
+inline constexpr uint32_t OBJ_PROTECT_CLOSE       = 0x00000001;
+inline constexpr uint32_t OBJ_AUDIT_OBJECT_CLOSE   = 0x00000004;
 inline constexpr uint32_t OBJ_PERMANENT           = 0x00000010;
 inline constexpr uint32_t OBJ_EXCLUSIVE           = 0x00000020;
 inline constexpr uint32_t OBJ_CASE_INSENSITIVE     = 0x00000040;
@@ -529,6 +531,20 @@ struct ProcessBasicInformation {
     Handle uniqueProcessId{0};
     Handle inheritedFromUniqueProcessId{0};
 };
+
+enum class ThreadInformationClass : uint32_t {
+    ThreadBasicInformation = 0
+};
+
+struct ThreadBasicInformation {
+    NtStatus exitStatus{NtStatus::Pending};
+    uintptr_t tebBaseAddress{0};
+    ClientId clientId{};
+    uintptr_t affinityMask{1};
+    int32_t priority{8};
+    int32_t basePriority{8};
+};
+static_assert(sizeof(ThreadBasicInformation) == 48);
 
 #ifndef BCRYPTBUFFER_DEFINED
 #define BCRYPTBUFFER_DEFINED

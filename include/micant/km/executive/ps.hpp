@@ -217,9 +217,11 @@ public:
         return NtStatus::Success;
     }
     [[nodiscard]] NtStatus exitStatus() const noexcept { return exitStatus_; }
+    [[nodiscard]] Handle threadId() const noexcept { return thread_ ? thread_->tid : 0; }
     [[nodiscard]] uintptr_t userStackPointer() const noexcept { return userStackPointer_; }
     [[nodiscard]] bool isSystemThread() const noexcept { return systemThread_; }
     [[nodiscard]] uintptr_t userTebAddress() const noexcept { return userTeb_; }
+    [[nodiscard]] Handle ownerProcessId() const noexcept { return process_ ? process_->processId() : 0; }
     // Caller handles the trap frame and passes a fault from this thread's
     // current process; no user exception is dispatched by this helper.
     NtStatus resolveUserStackGuard(uintptr_t address) noexcept;

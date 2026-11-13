@@ -102,6 +102,9 @@ inline constexpr uint32_t SSN_NtQueryDirectoryFile       = 0x0035;
 inline constexpr uint32_t SSN_NtQueryPerformanceCounter  = 0x0031;
 inline constexpr uint32_t SSN_NtYieldExecution           = 0x0046;
 inline constexpr uint32_t SSN_NtQueryInformationProcess  = 0x0019;
+inline constexpr uint32_t SSN_NtQueryInformationThread   = MICANT_SSN_NT_QUERY_INFORMATION_THREAD;
+inline constexpr uint32_t SSN_NtAlertThread = MICANT_SSN_NT_ALERT_THREAD;
+inline constexpr uint32_t SSN_NtTestAlert = MICANT_SSN_NT_TEST_ALERT;
 
 /**
  * @brief Native NT Syscall Signatures in Modern C++23
@@ -448,6 +451,16 @@ NtStatus NtQueryInformationProcess(
     uint32_t processInformationLength,
     uint32_t* returnLength
 );
+
+NtStatus NtQueryInformationThread(
+    Handle threadHandle,
+    ThreadInformationClass threadInformationClass,
+    void* threadInformation,
+    uint32_t threadInformationLength,
+    uint32_t* returnLength
+);
+NtStatus NtAlertThread(Handle threadHandle);
+NtStatus NtTestAlert();
 
 } // namespace micant::sys
 

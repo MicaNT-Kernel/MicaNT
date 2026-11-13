@@ -24,6 +24,7 @@ enum class NtStatus : uint32_t {
     Wait63                           = 0x0000003F,
     Abandoned                        = 0x00000080,
     UserApc                          = 0x000000C0,
+    Alerted                          = 0x00000101,
     Timeout                          = 0x00000102,
     Pending                          = 0x00000103,
 
@@ -51,6 +52,7 @@ enum class NtStatus : uint32_t {
     InPageError                      = 0xC0000006,
     PagefileQuota                    = 0xC0000007,
     InvalidHandle                    = 0xC0000008,
+    HandleNotClosable                = 0xC0000235,
     BadInitialStack                  = 0xC0000009,
     BadInitialPc                     = 0xC000000A,
     InvalidCid                       = 0xC000000B,
@@ -285,6 +287,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::Success: return "STATUS_SUCCESS";
         case NtStatus::Timeout: return "STATUS_TIMEOUT";
         case NtStatus::Pending: return "STATUS_PENDING";
+        case NtStatus::Alerted: return "STATUS_ALERTED";
         case NtStatus::Breakpoint: return "STATUS_BREAKPOINT";
         case NtStatus::SingleStep: return "STATUS_SINGLE_STEP";
         case NtStatus::DatatypeMisalignment: return "STATUS_DATATYPE_MISALIGNMENT";
@@ -297,6 +300,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::AccessViolation: return "STATUS_ACCESS_VIOLATION";
         case NtStatus::IllegalInstruction: return "STATUS_ILLEGAL_INSTRUCTION";
         case NtStatus::InvalidHandle: return "STATUS_INVALID_HANDLE";
+        case NtStatus::HandleNotClosable: return "STATUS_HANDLE_NOT_CLOSABLE";
         case NtStatus::InvalidParameter: return "STATUS_INVALID_PARAMETER";
         case NtStatus::NoSuchFile: return "STATUS_NO_SUCH_FILE";
         case NtStatus::NoMemory: return "STATUS_NO_MEMORY";
