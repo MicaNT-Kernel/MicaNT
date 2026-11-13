@@ -31,7 +31,7 @@ struct Device {
     uint32_t route{};
     uint8_t hubPort{}, hubPorts{}, hubResetPort{}, hubThinkTime{}, hubChangeBit{};
     uint16_t hubStatus{}, hubChanges{}, hubObservedChanges{};
-    bool removing{}, bulkDevice{}, hubDevice{}, hubMultiTt{};
+    bool removing{}, bulkDevice{}, hubDevice{}, hubMultiTt{}, disconnecting{};
     uint64_t hubNextPoll{}, hubResetDeadline{}, hubPowerDelay{};
     uint16_t controlLength{};
     uint64_t deadline{}, commandAddress{}, transferAddress{};
@@ -189,6 +189,7 @@ void routeEvents() noexcept {
     }
 }
 void resetDevice(Device& d) noexcept {
+    const bool wasDisconnecting = d.disconnecting;
     d.phase = Phase::Empty; d.port = d.speed = d.slot = 0;
     d.parentHubSlot = d.downstreamPort = d.deviceProtocol = 0;
     d.depth = d.ttHubSlot = d.ttPort = d.ep0Packet = 0; d.route = 0;
@@ -200,6 +201,15 @@ void resetDevice(Device& d) noexcept {
     d.prepared = {}; d.hub = {}; d.interface = {}; d.transfer = {};
     d.classSlot = nullptr; d.classInstance = nullptr;
     d.eventHead = d.eventCount = 0;
+    if (wasDisconnecting) hostLog("USB host: disconnect cleanup completed");
+    d.disconnecting = false;
+}
+void markDisconnected(Device& d) noexcept {
+    if (!d.disconnecting) {
+        d.disconnecting = true;
+        hostLog("USB host: disconnect detected; cleanup started");
+    }
+    d.phase = Phase::Disconnect;
 }
 void process(Device& d) noexcept {
     // Remove runs without hostGate; retire its class reference only after
@@ -232,7 +242,7 @@ void process(Device& d) noexcept {
                 if (child.phase == Phase::WaitEnable) child.removing = true;
                 else if (child.phase != Phase::Quarantined && child.phase != Phase::ClassRemoved && child.phase != Phase::NeedDisable &&
                          child.phase != Phase::WaitDisable && child.phase != Phase::DrainDisabled)
-                    child.phase = Phase::Disconnect;
+                    markDisconnected(child);
             }
             if (childrenRemain) return;
         }
@@ -272,7 +282,7 @@ void process(Device& d) noexcept {
             if (d.phase == Phase::WaitEnable) {
                 d.slot = static_cast<uint8_t>(event.control >> 24);
                 if (!d.slot) { d.phase = Phase::Quarantined; return; }
-                if (d.removing) { d.phase = Phase::Disconnect; return; }
+                if (d.removing) { markDisconnected(d); return; }
                 const auto addressStatus = d.parentHubSlot ?
                     (bus.host.PrepareAddressTopology ? bus.host.PrepareAddressTopology(bus.host.Context,
                         d.slot, d.port, d.speed, d.route, d.ttHubSlot, d.ttPort, d.hubMultiTt, &d.prepared) :
@@ -510,7 +520,7 @@ void service(void*) noexcept {
                     if (d.phase == Phase::WaitEnable) d.removing = true;
                     else if (d.phase != Phase::Quarantined && d.phase != Phase::ClassRemoved && d.phase != Phase::NeedDisable &&
                              d.phase != Phase::WaitDisable && d.phase != Phase::DrainDisabled)
-                        d.phase = Phase::Disconnect;
+                        markDisconnected(d);
                 }
                 if (owned) (void)bus.host.AcknowledgeRootConnectionChange(bus.host.Context, static_cast<uint8_t>(port));
             }
@@ -522,7 +532,7 @@ void service(void*) noexcept {
                 uint32_t portStatus{};
                 if (bus.host.ReadPort(bus.host.Context, d.port, &portStatus) != success || !(portStatus & 1u)) {
                     if (d.phase == Phase::WaitEnable) d.removing = true;
-                    else d.phase = Phase::Disconnect;
+                    else markDisconnected(d);
                 }
             }
             if (d.phase == Phase::HubIdle && now >= d.hubNextPoll) {

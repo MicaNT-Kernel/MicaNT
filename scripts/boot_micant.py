@@ -253,6 +253,36 @@ def inject_usb_keyboard(qmp_path: Path) -> None:
                 time.sleep(0.15)
 
 
+def detach_usb_device(qmp_path: Path, device_id: str) -> None:
+    """Hot-unplug an emulated USB device through QMP."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(5)
+        connection.connect(str(qmp_path))
+        with connection.makefile("rwb") as stream:
+            def receive() -> dict:
+                line = stream.readline()
+                if not line:
+                    raise RuntimeError("QMP closed during USB disconnect verification")
+                return json.loads(line)
+
+            if "QMP" not in receive():
+                raise RuntimeError("QEMU did not send a QMP greeting")
+            stream.write(b'{"execute":"qmp_capabilities"}\n')
+            stream.flush()
+            while "return" not in receive():
+                pass
+            stream.write((json.dumps({
+                "execute": "device_del", "arguments": {"id": device_id},
+            }) + "\n").encode())
+            stream.flush()
+            while True:
+                response = receive()
+                if "error" in response:
+                    raise RuntimeError(f"QMP USB device removal failed: {response['error']}")
+                if "return" in response:
+                    return
+
+
 def serial_progress(serial_log: str, expected: tuple[str, ...] = EXPECTED_SERIAL) -> int:
     """Return how many expected messages occur, in order, in the serial log."""
     cursor = 0
@@ -481,8 +511,16 @@ def run_qemu(
                                             "hidusb.sys: completed USB HID activity report" in usb_serial and
                                             "hidusb.sys: completed USB HID release report" in usb_serial and
                                             "usbstor.sys: BOT/SCSI device mounted" in usb_serial):
-                                        print("USB xHCI HID press/release and BOT/FAT mount evidence passed.", flush=True)
-                                        return
+                                        detach_usb_device(temp / "qmp.sock", "usb_keyboard")
+                                        cleanup_deadline = time.monotonic() + 10
+                                        while time.monotonic() < cleanup_deadline:
+                                            usb_serial = serial_path.read_text(
+                                                encoding="utf-8", errors="replace")
+                                            if "USB host: disconnect cleanup completed" in usb_serial:
+                                                print("USB xHCI HID press/release, detach cleanup and BOT/FAT mount evidence passed.", flush=True)
+                                                return
+                                            time.sleep(0.1)
+                                        raise RuntimeError("USB keyboard detached but xHCI cleanup did not complete")
                                     time.sleep(0.1)
                                 raise RuntimeError(
                                     "USB test lacked real xHCI HID press/release and USBSTOR mount evidence")
