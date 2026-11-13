@@ -146,7 +146,10 @@ public:
             !memory || !dmaToken_ || !dmaAddress_ || dmaAddress_ > UINT64_MAX - sizeof(DmaState)) return false;
         dma_ = static_cast<DmaState*>(memory);
         uint32_t command{};
-        if (!pciRead(4, command) || (command & 7u)) return false;
+        // Firmware commonly leaves memory decode and bus mastering enabled
+        // after its USB driver exits. Preserve the observed command word so
+        // rollback can disable the function before releasing DMA ownership.
+        if (!pciRead(4, command)) return false;
         originalCommand_ = static_cast<uint16_t>(command);
         if (!pciWriteCommand(originalCommand_ | 6u)) return false;
         commandEnabled_ = true;
@@ -757,25 +760,45 @@ public:
         if (commandEnabled_) {
             if (running_ || operational_) {
                 write(operational_, read(operational_) & ~1u);
-                if (!wait([&]() noexcept { return (read(operational_ + 4) & 1u) != 0; }, 100)) return false;
+                if (!wait([&]() noexcept { return (read(operational_ + 4) & 1u) != 0; }, 100)) {
+                    if (services_->Log) services_->Log(services_->Context,
+                        "usbxhci.sys: controller did not halt during rollback");
+                    return false;
+                }
                 running_ = false;
             }
             if (acquiredOwnership_) {
                 write(legacyOffset_, read(legacyOffset_) & ~(1u << 24));
                 acquiredOwnership_ = false;
             }
-            if (!pciWriteCommand(originalCommand_ & ~uint16_t{7}) || !waitTransactions()) return false;
+            if (!pciWriteCommand(originalCommand_ & ~uint16_t{7}) || !waitTransactions()) {
+                if (services_->Log) services_->Log(services_->Context,
+                    "usbxhci.sys: PCI transactions remain active during rollback");
+                return false;
+            }
             commandEnabled_ = false;
         }
         if (dmaToken_) {
-            if (services_->FreeDmaBuffer(services_->Context, dmaToken_) != boot_driver::STATUS_SUCCESS) return false;
+            if (services_->FreeDmaBuffer(services_->Context, dmaToken_) != boot_driver::STATUS_SUCCESS) {
+                if (services_->Log) services_->Log(services_->Context,
+                    "usbxhci.sys: DMA buffer release failed during rollback");
+                return false;
+            }
             dmaToken_ = 0; dma_ = nullptr;
         }
         if (registers_) {
-            if (!services_->ReleaseDeviceMemory(services_->Context, const_cast<uint8_t*>(registers_), registerLength_)) return false;
+            if (!services_->ReleaseDeviceMemory(services_->Context, const_cast<uint8_t*>(registers_), registerLength_)) {
+                if (services_->Log) services_->Log(services_->Context,
+                    "usbxhci.sys: MMIO mapping release failed during rollback");
+                return false;
+            }
             registers_ = nullptr;
         }
-        if (claim_ && services_->ReleasePciDevice(services_->Context, claim_) != boot_driver::STATUS_SUCCESS) return false;
+        if (claim_ && services_->ReleasePciDevice(services_->Context, claim_) != boot_driver::STATUS_SUCCESS) {
+            if (services_->Log) services_->Log(services_->Context,
+                "usbxhci.sys: PCI ownership release failed during rollback");
+            return false;
+        }
         claim_ = 0; services_ = nullptr; dmaAddress_ = 0;
         operational_ = runtime_ = doorbells_ = legacyOffset_ = 0;
         maxPorts_ = maxSlots_ = 0;

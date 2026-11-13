@@ -16,6 +16,9 @@ using namespace micant::km::hid;
 constexpr int32_t kBusy = static_cast<int32_t>(0x80000011u);
 struct Collection {
     std::atomic<bool> used{false};
+    std::atomic<bool> activityReported{false};
+    std::atomic<bool> releaseReported{false};
+    std::atomic<bool> active{false};
     TransferServicesV1 transfer{};
     uint8_t protocol{}, keys[8]{}, buttons{};
     uint16_t unit{};
@@ -101,6 +104,9 @@ int32_t create(void*, const InterfaceV1* info, const TransferServicesV1* transfe
         bool expected = false;
         if (!d.used.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) continue;
         d.transfer = *transfer; d.protocol = info->Protocol; d.unit = unit;
+        d.activityReported.store(false, std::memory_order_relaxed);
+        d.releaseReported.store(false, std::memory_order_relaxed);
+        d.active.store(false, std::memory_order_relaxed);
         std::memset(d.keys, 0, sizeof(d.keys)); d.buttons = 0; *result = &d;
         return micant::boot_driver::STATUS_SUCCESS;
     }
@@ -113,7 +119,28 @@ int32_t start(void* context) { return context ? micant::boot_driver::STATUS_SUCC
 int32_t report(void* context, const uint8_t* data, size_t size) {
     auto* d = static_cast<Collection*>(context);
     if (!d || !d->used.load(std::memory_order_acquire)) return micant::boot_driver::STATUS_INVALID_PARAMETER;
-    return (d->protocol == 1 ? keyboard(*d, data, size) : mouse(*d, data, size)) ? micant::boot_driver::STATUS_SUCCESS : kBusy;
+    if (!(d->protocol == 1 ? keyboard(*d, data, size) : mouse(*d, data, size))) return kBusy;
+    if (size >= (d->protocol == 1 ? 8u : 3u)) {
+        const bool active = d->protocol == 1
+            ? (data[0] != 0 || data[2] != 0 || data[3] != 0 || data[4] != 0 ||
+               data[5] != 0 || data[6] != 0 || data[7] != 0)
+            : (data[0] != 0 || data[1] != 0 || data[2] != 0);
+        if (active) {
+            d->active.store(true, std::memory_order_release);
+            bool expected = false;
+            if (d->activityReported.compare_exchange_strong(expected, true, std::memory_order_acq_rel) &&
+                services && services->Log)
+                services->Log(services->Context,
+                    "hidusb.sys: completed USB HID activity report delivered to input class");
+        } else if (d->active.exchange(false, std::memory_order_acq_rel)) {
+            bool expected = false;
+            if (d->releaseReported.compare_exchange_strong(expected, true, std::memory_order_acq_rel) &&
+                services && services->Log)
+                services->Log(services->Context,
+                    "hidusb.sys: completed USB HID release report delivered to input class");
+        }
+    }
+    return micant::boot_driver::STATUS_SUCCESS;
 }
 int32_t remove(void* context) {
     auto* d = static_cast<Collection*>(context);

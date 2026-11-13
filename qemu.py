@@ -256,6 +256,10 @@ def main() -> int:
         "--timer-selftest", action="store_true",
         help="verify scheduler-clock tick delivery, then halt before process tests and desktop rendering",
     )
+    parser.add_argument(
+        "--usb-test", action="store_true",
+        help="attach QEMU xHCI, USB HID and read-only USB mass storage devices",
+    )
     args = parser.parse_args()
     global BUILD_DIR
     if args.cmake_build_dir:
@@ -370,8 +374,12 @@ def main() -> int:
             boot_command.append("--timer-selftest")
         elif not args.headless:
             boot_command.append("--interactive")
+        elif args.usb_test:
+            boot_command.append("--verify-usb-input")
         else:
             boot_command.append("--verify-input")
+        if args.usb_test:
+            boot_command.append("--usb-test")
         run(boot_command)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         operation = "Explorer runtime check" if args.check_explorer else "QEMU launch"

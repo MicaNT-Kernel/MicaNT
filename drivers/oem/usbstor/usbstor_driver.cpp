@@ -20,6 +20,8 @@ struct Device {
     MassStorage storage{};
     uint64_t block{}, mount{};
     bool initialized{};
+    bool published{};
+    bool fileVerified{};
 };
 Device devices[4]{};
 const KernelServices* services{};
@@ -29,6 +31,9 @@ int32_t match(void*, const uint8_t* bytes, size_t size, InterfaceV1* output) {
     micant::usb::baremetal::StorageInterface storage{};
     if (!micant::usb::baremetal::findBulkStorage(bytes, size, storage) || storage.alternate)
         return micant::boot_driver::STATUS_NOT_SUPPORTED;
+    if (services && services->Log)
+        services->Log(services->Context,
+            "usbstor.sys: matched USB Mass Storage BOT/SCSI interface");
     *output = {};
     output->Size = sizeof(*output); output->Kind = TransferKind::BulkPair;
     output->Configuration = storage.configuration; output->InterfaceNumber = storage.interfaceNumber;
@@ -48,7 +53,8 @@ int32_t create(void*, const InterfaceV1* info, const TransferServicesV1* transfe
     for (auto& d : devices) {
         bool expected = false;
         if (!d.used.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) continue;
-        d.interface = *info; d.transfer = *transfer; d.block = d.mount = 0; d.initialized = false;
+        d.interface = *info; d.transfer = *transfer; d.block = d.mount = 0;
+        d.initialized = d.published = d.fileVerified = false;
         *result = &d; return micant::boot_driver::STATUS_SUCCESS;
     }
     return kBusy;
@@ -95,6 +101,25 @@ int32_t start(void* context) {
         const auto result = services->MountFatBlockDevice(services->Context, d->block, &d->mount);
         if (result != micant::boot_driver::STATUS_SUCCESS) return result;
     }
+    if (!d->published && services->Log) {
+        services->Log(services->Context,
+            "usbstor.sys: BOT/SCSI device mounted through canonical FAT block path");
+        d->published = true;
+    }
+    if (!d->fileVerified && services->ReadFatFileFromMount) {
+        static constexpr char16_t path[] = u"MicaNT\\System32\\micant-usb-proof.txt";
+        static constexpr char expected[] = "MicaNT USB mass-storage FAT32 post-EBS proof v1\n";
+        char contents[sizeof(expected)]{};
+        size_t bytesRead{};
+        const auto readStatus = services->ReadFatFileFromMount(services->Context, d->mount,
+            path, sizeof(path) / sizeof(path[0]) - 1, contents, sizeof(contents), &bytesRead);
+        if (readStatus == micant::boot_driver::STATUS_SUCCESS && bytesRead == sizeof(expected) - 1 &&
+            std::memcmp(contents, expected, sizeof(expected) - 1) == 0) {
+            d->fileVerified = true;
+            if (services->Log) services->Log(services->Context,
+                "usbstor.sys: verified known file bytes through USB block device and FAT32");
+        }
+    }
     return micant::boot_driver::STATUS_SUCCESS;
 }
 int32_t remove(void* context) {
@@ -110,7 +135,8 @@ int32_t remove(void* context) {
         d->block = 0;
     }
     if (!d->storage.canDestroy()) return kBusy;
-    d->initialized = false; d->interface = {}; d->transfer = {};
+    d->initialized = d->published = d->fileVerified = false;
+    d->interface = {}; d->transfer = {};
     d->used.store(false, std::memory_order_release);
     return micant::boot_driver::STATUS_SUCCESS;
 }

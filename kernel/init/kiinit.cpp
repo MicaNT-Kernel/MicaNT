@@ -1125,6 +1125,14 @@ int32_t bootMountFat(void* owner, uint64_t handle, uint64_t* token) noexcept {
 int32_t bootUnmountFat(void* owner, uint64_t token) noexcept {
     return bootStatus(micant::fsrtl::fat::unmount(owner, token));
 }
+int32_t bootReadFatFileFromMount(void* owner, uint64_t token, const char16_t* path,
+                                 size_t pathLength, void* output, size_t capacity,
+                                 size_t* bytesRead) noexcept {
+    if (!bytesRead) return bootStatus(micant::NtStatus::InvalidParameter);
+    *bytesRead = 0;
+    return bootStatus(micant::fsrtl::fat::readMountedFile(owner, token,
+        std::u16string_view(path, pathLength), output, capacity, *bytesRead));
+}
 
 struct BootBlockBackendAdapter {
     void* Context{};
@@ -1438,6 +1446,7 @@ void initializeKernelServices(micant::boot_driver::KernelServices& services,
     services.WritableBlockDeviceVersion = 1;
     services.CreateWritableBlockDevice = bootCreateWritableBlockDevice;
     services.WriteBlockDevice = bootWriteBlockDevice;
+    services.ReadFatFileFromMount = bootReadFatFileFromMount;
     services.RegisterFileOpenRoutine = bootRegisterFileOpenRoutine;
     services.UnregisterFileOpenRoutine = bootUnregisterFileOpenRoutine;
     services.OpenBackendFile = bootOpenBackendFile;

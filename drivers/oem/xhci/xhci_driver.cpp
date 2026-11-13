@@ -333,5 +333,6 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
         unloadHost(driver);
         return result == STATUS_SUCCESS ? STATUS_DEVICE_NOT_READY : result;
     }
+    log(services, "usbxhci.sys: native host registered with PCI claimed controller");
     return STATUS_SUCCESS;
 }

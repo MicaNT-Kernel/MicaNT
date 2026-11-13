@@ -218,6 +218,41 @@ def verify_mouse(
             raise RuntimeError("PS/2 left click did not reach the kernel input loop")
 
 
+def inject_usb_keyboard(qmp_path: Path) -> None:
+    """Send a press/release pair; the kernel must report both via HID reports."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(5)
+        connection.connect(str(qmp_path))
+        with connection.makefile("rwb") as stream:
+            def receive() -> dict:
+                line = stream.readline()
+                if not line:
+                    raise RuntimeError("QMP closed during USB HID verification")
+                return json.loads(line)
+
+            if "QMP" not in receive():
+                raise RuntimeError("QEMU did not send a QMP greeting")
+            stream.write(b'{"execute":"qmp_capabilities"}\n')
+            stream.flush()
+            while "return" not in receive():
+                pass
+            for down in (True, False):
+                stream.write((json.dumps({
+                    "execute": "input-send-event",
+                    "arguments": {"events": [{"type": "key", "data": {
+                        "down": down, "key": {"type": "qcode", "data": "a"},
+                    }}]},
+                }) + "\n").encode())
+                stream.flush()
+                while True:
+                    response = receive()
+                    if "error" in response:
+                        raise RuntimeError(f"QMP USB key injection failed: {response['error']}")
+                    if "return" in response:
+                        break
+                time.sleep(0.15)
+
+
 def serial_progress(serial_log: str, expected: tuple[str, ...] = EXPECTED_SERIAL) -> int:
     """Return how many expected messages occur, in order, in the serial log."""
     cursor = 0
@@ -260,11 +295,15 @@ def run_qemu(
     runtime_selftest: bool = False,
     timer_selftest: bool = False,
     diagnostics_dir: Path | None = None,
+    usb_test: bool = False,
+    verify_usb_input: bool = False,
 ) -> None:
     if runtime_selftest and (interactive or verify_input):
         raise RuntimeError("runtime self-test halts before desktop/input; incompatible runner options")
     if timer_selftest and (interactive or verify_input or runtime_selftest):
         raise RuntimeError("timer self-test halts before process tests and desktop/input; incompatible runner options")
+    if verify_usb_input and not usb_test:
+        raise RuntimeError("USB HID verification requires --usb-test")
     validate_build_manifest(
         ROOT,
         allow_dirty=True,
@@ -328,6 +367,8 @@ def run_qemu(
         image_exe = ROOT / "build" / "fileimage.exe"
         if image_exe.is_file():
             shutil.copyfile(image_exe, system32_dir / "fileimage.exe")
+        usb_proof = system32_dir / "micant-usb-proof.txt"
+        usb_proof.write_bytes(b"MicaNT USB mass-storage FAT32 post-EBS proof v1\n")
         fat_volume = temp / "ahci-fat32-volume.img"
         ahci_image = temp / "ahci-gpt-fat32.img"
         create_fat32_image(esp, fat_volume)
@@ -338,7 +379,7 @@ def run_qemu(
 
         command = [
             qemu,
-            "-machine", "q35,usb=off",
+            "-machine", "q35" if usb_test else "q35,usb=off",
             "-accel", "tcg",
             "-cpu", "qemu64,+invtsc,vendor=GenuineIntel",
             "-device", "intel-iommu,intremap=on,caching-mode=on",
@@ -360,6 +401,17 @@ def run_qemu(
             "-no-reboot",
             "-no-shutdown",
         ]
+        if usb_test:
+            # Exercise the native controller and class drivers after
+            # ExitBootServices. Keep the AHCI copy for the existing regression
+            # path and give USBSTOR a separate read-only handle to the fixture.
+            command.extend([
+                "-drive", f"file={ahci_image},format=raw,if=none,id=usb_disk,readonly=on",
+                "-device", "qemu-xhci,id=xhci",
+                "-device", "usb-kbd,id=usb_keyboard,bus=xhci.0",
+                "-device", "usb-mouse,id=usb_mouse,bus=xhci.0",
+                "-device", "usb-storage,id=usb_storage,drive=usb_disk,bus=xhci.0",
+            ])
         started = time.monotonic()
         complete_since = None
         surface_verified = False
@@ -409,6 +461,21 @@ def run_qemu(
                         if complete_since is None:
                             complete_since = time.monotonic()
                         elif time.monotonic() - complete_since >= stable_seconds:
+                            if verify_usb_input:
+                                inject_usb_keyboard(temp / "qmp.sock")
+                                deadline = time.monotonic() + 10
+                                while time.monotonic() < deadline:
+                                    usb_serial = serial_path.read_text(
+                                        encoding="utf-8", errors="replace")
+                                    if ("usbxhci.sys: native host registered" in usb_serial and
+                                            "hidusb.sys: completed USB HID activity report" in usb_serial and
+                                            "hidusb.sys: completed USB HID release report" in usb_serial and
+                                            "usbstor.sys: BOT/SCSI device mounted" in usb_serial):
+                                        print("USB xHCI HID press/release and BOT/FAT mount evidence passed.", flush=True)
+                                        return
+                                    time.sleep(0.1)
+                                raise RuntimeError(
+                                    "USB test lacked real xHCI HID press/release and USBSTOR mount evidence")
                             if verify_input:
                                 verify_mouse(
                                     temp / "qmp.sock", temp, serial_path, diagnostics_dir,
@@ -473,6 +540,8 @@ def main() -> int:
     parser.add_argument("--display", default="none")
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--verify-input", action="store_true")
+    parser.add_argument("--usb-test", action="store_true")
+    parser.add_argument("--verify-usb-input", action="store_true")
     parser.add_argument("--runtime-selftest", action="store_true")
     parser.add_argument("--timer-selftest", action="store_true")
     args = parser.parse_args()
@@ -495,6 +564,8 @@ def main() -> int:
             args.runtime_selftest,
             args.timer_selftest,
             args.diagnostics_dir.resolve() if args.diagnostics_dir is not None else None,
+            args.usb_test,
+            args.verify_usb_input,
         )
     except KeyboardInterrupt:
         return 130

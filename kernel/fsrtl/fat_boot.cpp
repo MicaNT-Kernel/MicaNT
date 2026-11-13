@@ -1001,7 +1001,7 @@ void releaseFile(void* opaque) noexcept {
     }
     file = {};
 }
-NtStatus openFile(void*, std::u16string_view name, bool openIf, uint32_t desiredAccess,
+NtStatus openFile(uint64_t targetMount, std::u16string_view name, bool openIf, uint32_t desiredAccess,
                   io::FileBackend& backend) noexcept {
     backend = {}; Gate guard; if (!guard.held) return NtStatus::DeviceNotReady;
     // Root-store protection follows the selected system volume, not a
@@ -1012,7 +1012,7 @@ NtStatus openFile(void*, std::u16string_view name, bool openIf, uint32_t desired
     const auto rootStatus = systemRootMount ? selectSystemRootLocked() : NtStatus::DeviceNotReady;
     char pathBuffer[kMaximumPath]{}; FatVolume* volume{};
     for (auto& mount : mounts) {
-        if (!mount.token || mount.offline) continue;
+        if (!mount.token || mount.offline || (targetMount && mount.token != targetMount)) continue;
         current = &mount;
         if (!convertPath(name.data(), name.size(), pathBuffer, volume)) continue;
         if (rootStatus != NtStatus::Success && equalAsciiInsensitive(pathBuffer, "ROOT.DER")) {
@@ -1140,7 +1140,52 @@ NtStatus systemDirectory(char16_t* output, size_t capacity, size_t& length) noex
 NtStatus open(std::u16string_view name, bool openIf, uint32_t desiredAccess,
               io::FileBackend& backend) noexcept {
     if (!initialized) return NtStatus::DeviceNotReady;
-    return openFile(nullptr, name, openIf, desiredAccess, backend);
+    return openFile(0, name, openIf, desiredAccess, backend);
+}
+NtStatus readMountedFile(const void* owner, uint64_t token,
+                         std::u16string_view relativePath, void* buffer,
+                         size_t capacity, size_t& bytesRead) noexcept {
+    bytesRead = 0;
+    if (!owner || !token || relativePath.empty() || !buffer || !capacity ||
+        relativePath.size() > kMaximumPath - 4 || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
+        return NtStatus::InvalidParameter;
+    char drives[3]{};
+    uint32_t driveCount{};
+    {
+        Gate guard;
+        if (!guard.held) return NtStatus::DeviceNotReady;
+        for (auto& mount : mounts) if (mount.token == token && mount.owner == owner && !mount.offline) {
+            for (uint32_t i = 0; i < mount.volumeCount && driveCount < 3; ++i)
+                if (mount.volumes[i].Mounted) drives[driveCount++] = mount.volumes[i].Drive;
+            break;
+        }
+    }
+    if (!driveCount) return NtStatus::InvalidHandle;
+    char16_t absolute[kMaximumPath]{};
+    for (size_t i = 0; i < relativePath.size(); ++i) {
+        const char16_t ch = relativePath[i];
+        if (!ch || ch == u':' || ch == u'/' || (ch == u'\\' && i == 0))
+            return NtStatus::InvalidParameter;
+        absolute[i + 3] = ch;
+    }
+    NtStatus status = NtStatus::ObjectNameNotFound;
+    io::FileBackend backend{};
+    for (uint32_t i = 0; i < driveCount; ++i) {
+        absolute[0] = static_cast<char16_t>(drives[i]);
+        absolute[1] = u':'; absolute[2] = u'\\';
+        status = openFile(token, std::u16string_view(absolute, relativePath.size() + 3),
+                          false, 1, backend);
+        if (status == NtStatus::Success) break;
+        if (status != NtStatus::ObjectNameNotFound && status != NtStatus::ObjectPathNotFound)
+            return status;
+    }
+    if (status != NtStatus::Success) return status;
+    if (!backend.read || !backend.release) return NtStatus::InvalidDeviceState;
+    if (backend.size > capacity) { backend.release(backend.context); return NtStatus::BufferTooSmall; }
+    const auto readStatus = backend.read(backend.context, 0, buffer,
+                                          static_cast<size_t>(backend.size), &bytesRead);
+    backend.release(backend.context);
+    return readStatus;
 }
 NtStatus mount(const void* owner, Handle handle, uint64_t& token) noexcept {
     token = 0; if (!owner) return NtStatus::InvalidParameter;

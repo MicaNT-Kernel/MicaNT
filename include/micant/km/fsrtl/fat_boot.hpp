@@ -18,4 +18,10 @@ NtStatus mount(const void* owner, Handle blockHandle, uint64_t& token) noexcept;
 // Marks the volume offline immediately. Busy means open files still pin it;
 // the owner must retry before releasing the underlying controller.
 NtStatus unmount(const void* owner, uint64_t token) noexcept;
+// Read one bounded file from a specific mounted volume. The mount owner and
+// token are checked so a removable volume can be verified without selecting
+// a different globally mounted filesystem by drive-letter order.
+NtStatus readMountedFile(const void* owner, uint64_t token,
+                         std::u16string_view relativePath, void* buffer,
+                         size_t capacity, size_t& bytesRead) noexcept;
 }

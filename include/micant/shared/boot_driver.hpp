@@ -112,6 +112,11 @@ struct KernelServices {
         void (*)(void*), uint32_t, uint64_t*);
     int32_t (*WriteBlockDevice)(void*, uint64_t, uint64_t, uint32_t,
                                 const void*, uint32_t*);
+    // Read a bounded, relative path from one specific read-only FAT mount.
+    // The filesystem validates the mount owner/token and does not guess a
+    // global drive letter or select another device.
+    int32_t (*ReadFatFileFromMount)(void*, uint64_t, const char16_t*, size_t,
+                                    void*, size_t, size_t*);
 };
 
 inline constexpr size_t KERNEL_SERVICES_V1_SIZE = offsetof(KernelServices, PciReadConfig32);
