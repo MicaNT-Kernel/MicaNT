@@ -2,6 +2,7 @@
 // Controller startup remains disabled until Io/PnP claim and device-safe DMA
 // allocation services are available through KernelServices V2.
 #include <cstdint>
+#include <atomic>
 #include "micant/shared/boot_driver.hpp"
 #include "xhci_transport.hpp"
 #include "micant/shared/usb_host_abi.hpp"
@@ -18,11 +19,251 @@ const KernelServices* g_services{};
 uint64_t g_hostToken{};
 micant::shared::usb::HostServicesV1 g_host{};
 uint16_t g_bus{}, g_device{}, g_function{};
+std::atomic<uint32_t> g_msiInterrupts{};
+std::atomic<bool> g_msiReported{};
+struct MsiState {
+    uint16_t capability{}, msixCapability{};
+    uint32_t msiHeader{}, msiAddressLow{}, msiAddressHigh{}, msiData{}, msiMask{};
+    uint32_t msixHeader{};
+    uint16_t command{};
+    uint64_t routeToken{};
+    bool is64{}, hasMask{}, pciProgrammed{}, connected{};
+    volatile uint32_t* msixTable{};
+    uint32_t msixEntry[4]{};
+    size_t msixTableBytes{};
+    bool msixMapped{}, msixProgrammed{};
+    bool msixMode{};
+} g_msi{};
+void log(const KernelServices& services, const char* message) noexcept;
+bool readConfig(const KernelServices& services, uint8_t bus, uint8_t device,
+                uint8_t function, uint16_t offset, uint32_t& value) noexcept;
+bool configureMsi() noexcept;
+bool restoreMsi() noexcept;
+
+void msiInterrupt(void*) noexcept {
+    g_msiInterrupts.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool findCapability(const KernelServices& services, uint8_t bus, uint8_t device,
+                    uint8_t function, uint8_t requested, uint16_t& result) noexcept {
+    result = 0;
+    uint32_t status{}, pointerWord{};
+    if (!readConfig(services, bus, device, function, 4, status) ||
+        !(status & (1u << 20)) ||
+        !readConfig(services, bus, device, function, 0x34, pointerWord)) return false;
+    uint8_t pointer = static_cast<uint8_t>(pointerWord);
+    uint64_t visited{};
+    for (unsigned count = 0; pointer && count < 48; ++count) {
+        if (pointer < 0x40 || pointer > 0xfc || (pointer & 3u)) return false;
+        const unsigned slot = pointer >> 2;
+        const uint64_t bit = uint64_t{1} << (slot & 63u);
+        if (visited & bit) return false;
+        visited |= bit;
+        uint32_t entry{};
+        if (!readConfig(services, bus, device, function, pointer, entry)) return false;
+        if (static_cast<uint8_t>(entry) == requested) { result = pointer; return true; }
+        pointer = static_cast<uint8_t>(entry >> 8);
+    }
+    return pointer == 0;
+}
+
+bool writeConfig(const KernelServices& services, uint16_t offset, uint32_t value) noexcept {
+    return services.PciWriteConfig32 && services.PciWriteConfig32(
+        services.Context, g_bus, g_device, g_function, offset, value) == STATUS_SUCCESS;
+}
+
+bool restoreMsi() noexcept {
+    if (!g_msi.connected && !g_msi.pciProgrammed && !g_msi.msixMapped) { g_msi = {}; return true; }
+    if (g_msi.msixMode && g_msi.pciProgrammed && g_services &&
+        !writeConfig(*g_services, g_msi.msixCapability, g_msi.msixHeader & ~(1u << 31))) return false;
+    if (g_msi.msixProgrammed && g_msi.msixTable) {
+        g_msi.msixTable[3] |= 1u;
+        for (unsigned i = 0; i < 4; ++i) g_msi.msixTable[i] = g_msi.msixEntry[i];
+        g_msi.msixProgrammed = false;
+    }
+    if (g_msi.pciProgrammed && g_services && g_msi.msixMode) {
+        uint32_t currentCommand{};
+        if (!readConfig(*g_services, g_bus, g_device, g_function, 4, currentCommand)) return false;
+        const uint32_t command = (currentCommand & 0xffffu & ~(1u << 10)) |
+            (g_msi.command & (1u << 10));
+        if (!writeConfig(*g_services, 4, command) ||
+            !writeConfig(*g_services, g_msi.msixCapability, g_msi.msixHeader)) return false;
+        g_msi.pciProgrammed = false;
+    } else if (g_msi.pciProgrammed && g_services) {
+        uint32_t disabled = g_msi.msiHeader & ~(1u << 16);
+        if (!writeConfig(*g_services, g_msi.capability, disabled)) return false;
+        const uint16_t dataOffset = static_cast<uint16_t>(g_msi.capability + (g_msi.is64 ? 12 : 8));
+        if (!writeConfig(*g_services, g_msi.capability + 4, g_msi.msiAddressLow)) return false;
+        if (g_msi.is64 && !writeConfig(*g_services, g_msi.capability + 8, g_msi.msiAddressHigh)) return false;
+        if (!writeConfig(*g_services, dataOffset, g_msi.msiData)) return false;
+        if (g_msi.hasMask && !writeConfig(*g_services,
+                g_msi.capability + (g_msi.is64 ? 16 : 12), g_msi.msiMask)) return false;
+        if (g_msi.msixCapability && !writeConfig(*g_services, g_msi.msixCapability,
+                                                  g_msi.msixHeader)) return false;
+        uint32_t currentCommand{};
+        if (!readConfig(*g_services, g_bus, g_device, g_function, 4, currentCommand)) return false;
+        const uint32_t command = (currentCommand & 0xffffu & ~(1u << 10)) |
+            (g_msi.command & (1u << 10));
+        if (!writeConfig(*g_services, 4, command)) return false;
+        if (!writeConfig(*g_services, g_msi.capability, g_msi.msiHeader)) return false;
+        g_msi.pciProgrammed = false;
+    }
+    if (g_msi.msixMapped) {
+        if (!g_services || !g_services->ReleaseDeviceMemory(g_services->Context,
+                const_cast<uint32_t*>(g_msi.msixTable), g_msi.msixTableBytes)) return false;
+        g_msi.msixMapped = false;
+    }
+    if (g_msi.connected) {
+        if (!g_services || g_services->DisconnectMsiInterrupt(g_services->Context,
+                                                               g_msi.routeToken) != STATUS_SUCCESS)
+            return false;
+        g_msi.connected = false;
+    }
+    g_msi = {};
+    return true;
+}
+
+bool configureMsi() noexcept {
+    if (!g_services || !g_services->MsiInterruptVersion ||
+        g_services->MsiInterruptVersion != MSI_INTERRUPT_SERVICES_VERSION ||
+        !g_services->ConnectMsiInterrupt || !g_services->DisconnectMsiInterrupt) return false;
+    uint16_t msi{}, msix{};
+    const bool hasMsi = findCapability(*g_services, static_cast<uint8_t>(g_bus), static_cast<uint8_t>(g_device),
+                        static_cast<uint8_t>(g_function), 0x05, msi) && msi;
+    const bool hasMsix = findCapability(*g_services, static_cast<uint8_t>(g_bus), static_cast<uint8_t>(g_device),
+                         static_cast<uint8_t>(g_function), 0x11, msix) && msix;
+    if (!hasMsi && !hasMsix) return false;
+
+    if (!hasMsi && hasMsix) {
+        uint32_t header{}, tableInfo{}, command{};
+        if (!readConfig(*g_services, g_bus, g_device, g_function, msix, header) ||
+            !readConfig(*g_services, g_bus, g_device, g_function, msix + 4, tableInfo) ||
+            !readConfig(*g_services, g_bus, g_device, g_function, 4, command)) return false;
+        const uint8_t barIndex = static_cast<uint8_t>(tableInfo & 7u);
+        const uint64_t tableOffset = tableInfo & ~uint32_t{7};
+        // xHCI's initial PCI claim owns BAR0. The current HAL owner maps only
+        // ranges inside claimed BARs, so MSI-X is enabled when its table is in
+        // that BAR; other-BAR layouts remain on the bounded polling path.
+        if (barIndex != 0 || tableOffset > UINT64_MAX - 16) return false;
+        uint32_t barLow{}, barHigh{};
+        if (!readConfig(*g_services, g_bus, g_device, g_function,
+                        static_cast<uint16_t>(0x10 + barIndex * 4), barLow) || (barLow & 1u)) return false;
+        const bool bar64 = ((barLow >> 1) & 3u) == 2;
+        if (bar64 && !readConfig(*g_services, g_bus, g_device, g_function,
+                static_cast<uint16_t>(0x14 + barIndex * 4), barHigh)) return false;
+        const uint64_t barAddress = uint64_t{barLow & ~uint32_t{15}} | (uint64_t{barHigh} << 32);
+        if (!barAddress || barAddress > UINT64_MAX - tableOffset) return false;
+        auto* table = static_cast<volatile uint32_t*>(g_services->MapDeviceMemory(
+            g_services->Context, barAddress + tableOffset, 16));
+        if (!table) return false;
+        g_msi.capability = 0; g_msi.msixCapability = msix; g_msi.msixHeader = header;
+        g_msi.command = static_cast<uint16_t>(command);
+        g_msi.msixTable = table; g_msi.msixTableBytes = 16; g_msi.msixMapped = true;
+        g_msi.msixMode = true;
+        for (unsigned i = 0; i < 4; ++i) g_msi.msixEntry[i] = table[i];
+        MsiInterruptRouteV1 route{};
+        if (g_services->ConnectMsiInterrupt(g_services->Context, msiInterrupt,
+                &g_msiInterrupts, &route) != STATUS_SUCCESS || route.Size < sizeof(route) ||
+            route.Version != MSI_INTERRUPT_SERVICES_VERSION || !route.Token || !route.MessageAddress) {
+            (void)restoreMsi();
+            return false;
+        }
+        g_msi.routeToken = route.Token; g_msi.connected = true;
+        g_msi.pciProgrammed = true;
+        const uint32_t masked = (header | (1u << 30)) & ~(1u << 31);
+        if (!writeConfig(*g_services, msix, masked)) { (void)restoreMsi(); return false; }
+        table[3] |= 1u;
+        table[0] = static_cast<uint32_t>(route.MessageAddress);
+        table[1] = static_cast<uint32_t>(route.MessageAddress >> 32);
+        table[2] = route.MessageData;
+        g_msi.msixProgrammed = true;
+        if (!writeConfig(*g_services, 4, (command & 0xffffu) | (1u << 10)) ||
+            !writeConfig(*g_services, msix, (header & ~(1u << 30)) | (1u << 31))) {
+            (void)restoreMsi(); return false;
+        }
+        table[3] &= ~1u;
+        if (!g_transport.enableInterrupts()) { (void)restoreMsi(); return false; }
+        g_msiInterrupts.store(0, std::memory_order_relaxed);
+        g_msiReported.store(false, std::memory_order_relaxed);
+        return true;
+    }
+
+    uint32_t msiHeader{}, command{}, addressLow{}, dataWord{};
+    if (!readConfig(*g_services, g_bus, g_device, g_function, msi, msiHeader) ||
+        !readConfig(*g_services, g_bus, g_device, g_function, 4, command)) return false;
+    const uint16_t control = static_cast<uint16_t>(msiHeader >> 16);
+    const bool is64 = (control & (1u << 7)) != 0;
+    const bool hasMask = (control & (1u << 8)) != 0;
+    const uint16_t dataOffset = static_cast<uint16_t>(msi + (is64 ? 12 : 8));
+    if (!readConfig(*g_services, g_bus, g_device, g_function, msi + 4, addressLow) ||
+        !readConfig(*g_services, g_bus, g_device, g_function, dataOffset, dataWord)) return false;
+    uint32_t addressHigh{}, mask{};
+    if (is64 && !readConfig(*g_services, g_bus, g_device, g_function, msi + 8, addressHigh)) return false;
+    if (hasMask && !readConfig(*g_services, g_bus, g_device, g_function,
+                               msi + (is64 ? 16 : 12), mask)) return false;
+    uint32_t msixHeader{};
+    if (msix && !readConfig(*g_services, g_bus, g_device, g_function, msix, msixHeader)) return false;
+
+    g_msi.capability = msi; g_msi.msixCapability = msix;
+    g_msi.msiHeader = msiHeader; g_msi.msiAddressLow = addressLow;
+    g_msi.msiAddressHigh = addressHigh; g_msi.msiData = dataWord; g_msi.msiMask = mask;
+    g_msi.msixHeader = msixHeader; g_msi.command = static_cast<uint16_t>(command);
+    g_msi.is64 = is64; g_msi.hasMask = hasMask;
+
+    MsiInterruptRouteV1 route{};
+    const auto connected = g_services->ConnectMsiInterrupt(g_services->Context,
+        msiInterrupt, &g_msiInterrupts, &route);
+    if (connected != STATUS_SUCCESS || route.Size < sizeof(route) ||
+        route.Version != MSI_INTERRUPT_SERVICES_VERSION || !route.Token || !route.MessageAddress) {
+        if (connected == STATUS_SUCCESS && route.Token)
+            (void)g_services->DisconnectMsiInterrupt(g_services->Context, route.Token);
+        g_msi = {};
+        return false;
+    }
+    g_msi.routeToken = route.Token; g_msi.connected = true;
+    g_msi.pciProgrammed = true;
+    // Mask MSI-X while conventional MSI is active; preserve its original
+    // state for exact rollback during controller stop/unload.
+    if (msix && (msixHeader & (1u << 31))) {
+        const uint32_t maskedMsix = (msixHeader | (1u << 30)) & ~(1u << 31);
+        if (!writeConfig(*g_services, msix, maskedMsix)) { (void)restoreMsi(); return false; }
+    }
+    if (!writeConfig(*g_services, msi, msiHeader & ~(1u << 16))) { (void)restoreMsi(); return false; }
+    if (!writeConfig(*g_services, msi + 4, static_cast<uint32_t>(route.MessageAddress))) {
+        (void)restoreMsi(); return false;
+    }
+    if (is64 && !writeConfig(*g_services, msi + 8,
+                              static_cast<uint32_t>(route.MessageAddress >> 32))) {
+        (void)restoreMsi(); return false;
+    }
+    const uint32_t newData = is64 ?
+        ((dataWord & 0xffff0000u) | (route.MessageData & 0xffffu)) :
+        ((dataWord & 0x0000ffffu) | ((route.MessageData & 0xffffu) << 16));
+    if (!writeConfig(*g_services, dataOffset, newData)) { (void)restoreMsi(); return false; }
+    if (hasMask && !writeConfig(*g_services, msi + (is64 ? 16 : 12), mask & ~1u)) {
+        (void)restoreMsi(); return false;
+    }
+    if (!writeConfig(*g_services, 4, (command & 0xffffu) | (1u << 10))) {
+        (void)restoreMsi(); return false;
+    }
+    const uint32_t enabled = (msiHeader & 0x0000ffffu) |
+        (uint32_t{static_cast<uint16_t>((control & ~0x0070u) | 1u)} << 16);
+    if (!writeConfig(*g_services, msi, enabled)) { (void)restoreMsi(); return false; }
+    if (!g_transport.enableInterrupts()) { (void)restoreMsi(); return false; }
+    g_msiInterrupts.store(0, std::memory_order_relaxed);
+    g_msiReported.store(false, std::memory_order_relaxed);
+    return true;
+}
 
 int32_t startHost(void*) { return g_transport.start() ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY; }
-int32_t stopHost(void*) { return g_transport.stop() ? STATUS_SUCCESS : kBusy; }
+int32_t stopHost(void*) {
+    g_transport.disableInterrupts();
+    if (!restoreMsi() || !g_transport.stop()) return kBusy;
+    return STATUS_SUCCESS;
+}
 int32_t restartHost(void*) {
-    if (!g_services || !g_transport.stop()) return kBusy;
+    g_transport.disableInterrupts();
+    if (!restoreMsi() || !g_services || !g_transport.stop()) return kBusy;
     PciBarRequestV1 request{0, 0, 0, 0x1000};
     PciBarResourceV1 resource{};
     size_t count = 1;
@@ -35,10 +276,11 @@ int32_t restartHost(void*) {
         return STATUS_DEVICE_NOT_READY;
     }
     if (!g_transport.initialize(*g_services, g_bus, g_device, g_function, claim,
-                                resource.PhysicalAddress, static_cast<size_t>(resource.Length)) ||
-        !g_transport.start()) {
+                                resource.PhysicalAddress, static_cast<size_t>(resource.Length))) {
         return g_transport.stop() ? STATUS_DEVICE_NOT_READY : kBusy;
     }
+    (void)configureMsi(); // Bounded event-ring polling remains the fallback.
+    if (!g_transport.start()) return g_transport.stop() ? STATUS_DEVICE_NOT_READY : kBusy;
     return STATUS_SUCCESS;
 }
 uint8_t portCount(void*) { return g_transport.portCount(); }
@@ -126,6 +368,9 @@ int32_t pollEvent(void*, micant::shared::usb::Trb* event, bool* available) {
     if (!g_transport.healthy()) return STATUS_DEVICE_NOT_READY;
     micant::oem::xhci::Trb local{};
     *available = g_transport.pollEvent(local);
+    if (g_msiInterrupts.exchange(0, std::memory_order_acq_rel) &&
+        !g_msiReported.exchange(true, std::memory_order_acq_rel) && g_services && g_services->Log)
+        log(*g_services, "usbxhci.sys: native MSI notification delivered for xHCI events");
     if (*available) *event = {local.parameter, local.status, local.control};
     return STATUS_SUCCESS;
 }
@@ -182,7 +427,7 @@ void unloadHost(DriverObject* driver) noexcept {
     if (g_hostToken) {
         if (g_services->UnregisterUsbHost(g_services->Context, g_hostToken) != STATUS_SUCCESS) return;
         g_hostToken = 0;
-    } else if (!g_transport.stop()) return;
+    } else if (!restoreMsi() || !g_transport.stop()) return;
     g_services = nullptr;
     if (driver) driver->DriverUnload = nullptr;
 }
@@ -312,6 +557,8 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     g_services = &services;
     g_bus = bus; g_device = device; g_function = function;
     driver->DriverUnload = unloadHost;
+    if (configureMsi()) log(services, "usbxhci.sys: PCI MSI route and xHCI interrupter enabled");
+    else log(services, "usbxhci.sys: PCI MSI unavailable; using bounded xHCI event polling");
     g_host = {};
     g_host.Size = sizeof(g_host); g_host.Version = micant::shared::usb::HostServicesVersion;
     g_host.Context = &g_transport; g_host.Start = startHost; g_host.Stop = stopHost; g_host.Restart = restartHost;

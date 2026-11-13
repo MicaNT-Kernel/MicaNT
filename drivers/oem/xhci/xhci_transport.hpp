@@ -41,7 +41,7 @@ class Transport {
     uint32_t operational_{}, runtime_{}, doorbells_{};
     uint32_t legacyOffset_{};
     DmaState* dma_{};
-    bool commandEnabled_{}, running_{};
+    bool commandEnabled_{}, running_{}, interruptsEnabled_{};
     bool acquiredOwnership_{};
     bool commandPending_{};
     uint64_t pendingCommandAddress_{};
@@ -247,6 +247,23 @@ public:
         if (!wait([&]() noexcept { return !(read(operational_ + 4) & 1u); }, 100)) return false;
         running_ = true;
         return true;
+    }
+
+    bool enableInterrupts() noexcept {
+        if (!services_ || !dma_ || running_ || !within(runtime_ + 0x20, 4)) return false;
+        // MSI is configured by the PCI owner before this arm point. Clear any
+        // stale pending bit and enable the primary xHCI interrupter.
+        write(runtime_ + 0x20, 3u);
+        write(operational_, read(operational_) | (1u << 2));
+        interruptsEnabled_ = true;
+        return true;
+    }
+
+    void disableInterrupts() noexcept {
+        if (!services_ || !dma_ || !interruptsEnabled_) return;
+        write(runtime_ + 0x20, 0);
+        write(operational_, read(operational_) & ~(1u << 2));
+        interruptsEnabled_ = false;
     }
 
     uint8_t portCount() const noexcept { return maxPorts_; }
@@ -757,6 +774,7 @@ public:
 
     bool stop() noexcept {
         if (!services_) return true;
+        disableInterrupts();
         if (commandEnabled_) {
             if (running_ || operational_) {
                 write(operational_, read(operational_) & ~1u);
@@ -813,6 +831,7 @@ public:
         eventIndex_ = 0;
         deferredHead_ = deferredCount_ = 0;
         eventOverflow_ = false;
+        interruptsEnabled_ = false;
         return true;
     }
 };
