@@ -181,6 +181,7 @@ bool configureMsi() noexcept {
         if (!g_transport.enableInterrupts()) { (void)restoreMsi(); return false; }
         g_msiInterrupts.store(0, std::memory_order_relaxed);
         g_msiReported.store(false, std::memory_order_relaxed);
+        log(*g_services, "usbxhci.sys: PCI MSI-X table entry 0 and xHCI interrupter armed");
         return true;
     }
 
@@ -248,6 +249,7 @@ bool configureMsi() noexcept {
     if (!g_transport.enableInterrupts()) { (void)restoreMsi(); return false; }
     g_msiInterrupts.store(0, std::memory_order_relaxed);
     g_msiReported.store(false, std::memory_order_relaxed);
+    log(*g_services, "usbxhci.sys: PCI MSI capability and xHCI interrupter armed");
     return true;
 }
 
@@ -569,8 +571,8 @@ extern "C" int32_t DriverEntry(micant::boot_driver::DriverObject* driver,
     g_services = &services;
     g_bus = bus; g_device = device; g_function = function;
     driver->DriverUnload = unloadHost;
-    if (configureMsi()) log(services, "usbxhci.sys: PCI MSI route and xHCI interrupter enabled");
-    else log(services, "usbxhci.sys: PCI MSI unavailable; using bounded xHCI event polling");
+    if (!configureMsi())
+        log(services, "usbxhci.sys: PCI MSI/MSI-X unavailable; using bounded xHCI event polling");
     g_host = {};
     g_host.Size = sizeof(g_host); g_host.Version = micant::shared::usb::HostServicesVersion;
     g_host.Context = &g_transport; g_host.Start = startHost; g_host.Stop = stopHost; g_host.Restart = restartHost;
