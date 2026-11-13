@@ -72027,3 +72027,126 @@ inline void Suite516_Direct3D12_Device76_CommandList70_Options88_NtSystemInfo347
 inline void Test_Horizon300_Device76Options88_PagefileWriteCoalescingDynamicBatchWindowLatencyHistogramCpuClockPllDcoTuningJitterCompensation_InterlockedNandNotModulo_And_AsconElephantXofHash_Suite() {
     Suite516_Direct3D12_Device76_CommandList70_Options88_NtSystemInfo347_348_InterlockedNandNotModulo_And_AsconElephantXofHash();
 }
+
+// ============================================================================
+// Suite 517: Horizon 301 - Sovereign PrismX + Microsoft DirectX 2026 Integration
+//   Pillar 1: Direct3D 12 Agility SDK 1.620.2, ID3D12Device17 (PSDB),
+//             ID3D12Device18, ID3D12GraphicsCommandList12 & ID3D12TileMappingQueue
+//   Pillar 2: DirectXShaderCompiler SM 6.10, DXIL 1.10 Container (18 DFCC parts),
+//             RDAT 1.4, VERS 1.10.2611 & Wave32 SIMD LinAlg Matrix MMA
+//   Pillar 3: DirectX-Headers 1.620.2 Hardware Scheduling Queue Groupings Query &
+//             256-Byte DX_DUMP_FILE_HEADER Watson Post-Mortem GPU Diagnostics
+//   Pillar 4: NT Native Executive Graphics Pipeline Cohesion & Telemetry Seal
+// ============================================================================
+inline void Suite517_PrismX_D3D12_TileMappingQueue_SM610_DXIL110_And_DirectXHeaders16202() {
+    std::cout << "\n[TEST] Running Suite 517: Horizon 301 - Sovereign PrismX Direct3D 12 TileMappingQueue, SM 6.10, DXIL 1.10 & DirectX-Headers 1.620.2...\n" << std::flush;
+
+    using namespace micant::um::prismx_tilemapping_sm610;
+
+    // Initialize Horizon 301 subsystem
+    InitializePrismXD3D12TileMappingSm610Exports();
+    const auto& t = SovereignPrismXD3D12TileMappingSM610Manager::get().telemetry();
+
+    // ------------------------------------------------------------------------
+    // Pillar 1: Direct3D 12 Agility SDK 1.620.2, ID3D12Device17, ID3D12Device18,
+    //           ID3D12GraphicsCommandList12 & ID3D12TileMappingQueue ABI
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 1] Direct3D 12 Agility SDK 1.620.2, ID3D12Device17/18, TileMappingQueue & Tier 5 Tiled Resources...\n" << std::flush;
+        TEST_ASSERT(t.initialized, "Horizon 301 subsystem initialized");
+        TEST_ASSERT(t.agilitySdkVersionConfigured == 620u, "Agility SDK version 1.620.2 configured");
+        TEST_ASSERT(t.highestShaderModelReported == 0x6Au, "Highest Shader Model reported is SM 6.10 (0x6A)");
+        TEST_ASSERT(t.highestDxilVersionReported == 0x0001000Au, "Highest DXIL version reported is DXIL 1.10 (0x0001000A)");
+        TEST_ASSERT(t.device17PsdbArchitectureActive, "ID3D12Device17 Precompiled Shader Database (PSDB) active");
+        TEST_ASSERT(t.maxCachedShaderBlobsInDatabase == 1024u, "PSDB database cache capacity == 1024 blobs");
+        TEST_ASSERT(t.commandList12AsyncCommandsFallbackActive, "ID3D12GraphicsCommandList12 Async Commands Fallback active");
+        TEST_ASSERT(t.device18ExecuteTileMappingsActive, "ID3D12Device18 ExecuteTileMappings active");
+        TEST_ASSERT(t.tileMappingQueueActive, "ID3D12TileMappingQueue batch execution active");
+        TEST_ASSERT(t.maxTilePoolLayoutIndices == 1024u && t.maxResourceLayoutIndices == 1024u, "Layout tables support 1024 pools & resources");
+        TEST_ASSERT(t.tokenTypesSupportedMask == 0x07u, "Token types: NoOp, Linear Mapping, Box Mapping supported");
+        TEST_ASSERT(t.tier5TiledResourcesSupported, "Tier 5 tiled resources (ALLOW_EXECUTE_TILE_MAPPINGS) supported");
+
+        // Verify Tier 5 bitmask flags
+        TEST_ASSERT(PRISMX_D3D12_RESOURCE_FLAG_ALLOW_EXECUTE_TILE_MAPPINGS == 0x1000u, "Resource flag ALLOW_EXECUTE_TILE_MAPPINGS == 0x1000");
+        TEST_ASSERT(PRISMX_D3D12_HEAP_FLAG_ALLOW_EXECUTE_TILE_MAPPINGS == 0x8000u, "Heap flag ALLOW_EXECUTE_TILE_MAPPINGS == 0x8000");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 2: DirectXShaderCompiler SM 6.10, DXIL 1.10 Container (18 DFCC parts),
+    //           RDAT 1.4, VERS 1.10.2611 & Wave32 SIMD LinAlg Matrix MMA
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 2] DXIL 1.10 & SM 6.10 Container with 18 DFCC parts, RDAT 1.4, VERS & Wave32 LinAlg MMA...\n" << std::flush;
+        TEST_ASSERT(t.dxc18ContainerPartsVerified == 18u, "All 18 official DXC container part FourCCs verified");
+        TEST_ASSERT(t.rdat14PartCount == 4u, "RDAT 1.4 header contains 4 runtime data table parts");
+        TEST_ASSERT(t.compilerVersionMajor == 1u && t.compilerVersionMinor == 10u, "Compiler version is 1.10 (DXC retail SM 6.10)");
+        TEST_ASSERT(t.compilerCommitCount == 2611u, "Compiler commit count is 2611");
+        TEST_ASSERT(t.wave32LinAlgMmaResult == 1088.0f, "Wave32 SIMD cooperative LinAlg matrix MMA dot product == 1088.0f");
+        TEST_ASSERT(t.debugBreakEncountered, "IOP_DebugBreak (420) decoded and handled in VM");
+        TEST_ASSERT(t.triangleObjectPositionsQueried, "IOP_TriangleObjectPositions (397) raytracing intrinsics verified");
+
+        // FourCC constants verification
+        TEST_ASSERT(PRISMX_DFCC_Container == 0x43425844u, "DFCC Container == 'DXBC'");
+        TEST_ASSERT(PRISMX_DFCC_RuntimeData == 0x54414452u, "DFCC RuntimeData == 'RDAT'");
+        TEST_ASSERT(PRISMX_DFCC_CompilerVersion == 0x53524556u, "DFCC CompilerVersion == 'VERS'");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 3: DirectX-Headers 1.620.2 Hardware Scheduling Queue Groupings Query &
+    //           256-Byte DX_DUMP_FILE_HEADER Watson Post-Mortem GPU Diagnostics
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 3] DirectX-Headers 1.620.2 Queue Groupings & 256-Byte DRED Watson Crash Dump...\n" << std::flush;
+        TEST_ASSERT(t.hardwareSchedulingQueueGroupingsSupported, "Hardware Scheduling Queue Groupings query supported");
+        TEST_ASSERT(t.computeQueuesPer3DQueue == 4u, "Hardware scheduling reports 4 compute queues per 3D queue");
+        TEST_ASSERT(t.dxDumpFileHeaderSize == 256u, "DX_DUMP_FILE_HEADER size == 256 bytes");
+        TEST_ASSERT(t.dxDumpFileSignature == 0x4770446Du, "DX_DUMP_FILE_SIGNATURE == 0x4770446Du ('mDpG')");
+        TEST_ASSERT(t.messageIdDumpFileDriverConfigNotAvailable == 1524u, "D3D12 Message ID Driver Config Not Available == 1524");
+
+        // Validate 256-byte packed dump header layout
+        PrismXDxDumpFileHeader dmpHdr{};
+        dmpHdr.Fields.Signature = PRISMX_DX_DUMP_FILE_SIGNATURE;
+        dmpHdr.Fields.Version = 1u;
+        dmpHdr.Fields.DeviceErrorCode = 0x887A0006u; // DXGI_ERROR_DEVICE_HUNG
+        dmpHdr.Fields.CreationTimeLow = 0x1000u;
+        dmpHdr.Fields.CreationTimeHigh = 0x2000u;
+        dmpHdr.Fields.UploadedToWatson = 1u;
+        dmpHdr.Fields.LiveDebuggingEndStatus = 1u; // LIVE_DEBUGGING_DONE
+        dmpHdr.Fields.ProcessId = 1337u;
+        dmpHdr.Fields.KernelModeDeviceHandle = 0xCAFEu;
+        dmpHdr.Fields.WNFChangeStamp = 42u;
+
+        TEST_ASSERT(sizeof(dmpHdr) == 256u, "PrismXDxDumpFileHeader struct size is exactly 256 bytes");
+        TEST_ASSERT(sizeof(dmpHdr.AllBytes) == 256u, "AllBytes array footprint is exactly 256 bytes");
+        TEST_ASSERT(dmpHdr.Fields.Signature == 0x4770446Du, "Signature is 0x4770446Du ('mDpG')");
+        TEST_ASSERT(dmpHdr.Fields.ProcessId == 1337u, "ProcessId matches 1337");
+        TEST_ASSERT(dmpHdr.Fields.KernelModeDeviceHandle == 0xCAFEu, "KernelModeDeviceHandle matches 0xCAFE");
+        TEST_ASSERT(dmpHdr.Fields.WNFChangeStamp == 42u, "WNFChangeStamp matches 42");
+        TEST_ASSERT(dmpHdr.Fields.LiveDebuggingEndStatus == 1u, "LiveDebuggingEndStatus matches LIVE_DEBUGGING_DONE");
+    }
+
+    // ------------------------------------------------------------------------
+    // Pillar 4: NT Native Executive Graphics Pipeline Cohesion & Telemetry Seal
+    // ------------------------------------------------------------------------
+    {
+        std::cout << "  [PILLAR 4] NT Native Executive Graphics Pipeline Cohesion & Telemetry Seal...\n" << std::flush;
+        const auto& d3d12Telem = micant::um::prism_d3d12_abi::SovereignPrismD3D12VTableManager::get().telemetry();
+        TEST_ASSERT(d3d12Telem.initialized, "D3D12 canonical VTable initialized");
+        TEST_ASSERT(d3d12Telem.canonicalId3d12DeviceVtableSlotCount == 44u, "Canonical ID3D12Device vtable has 44 virtual methods");
+
+        const auto& waveTelem = micant::um::prismx_dxil_wave32::SovereignPrismXDxilSm69Wave32SimdVmManager::get().telemetry();
+        TEST_ASSERT(waveTelem.initialized, "DXIL Wave32 SIMD VM manager initialized");
+        TEST_ASSERT(waveTelem.waveLaneCount == 32u, "Wave32 lane count == 32");
+    }
+
+    std::cout << "  Horizon 301 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 Agility SDK 1.620.2, Device17/18, TileMappingQueue & Tier 5 Tiled Resources OK\n"
+              << "    Pillar 2: DXIL 1.10 & SM 6.10 Container with 18 DFCC parts, RDAT 1.4, VERS & Wave32 LinAlg MMA OK\n"
+              << "    Pillar 3: DirectX-Headers 1.620.2 Queue Groupings & 256-Byte DRED Watson Crash Dump OK\n"
+              << "    Pillar 4: NT Native Executive Graphics Pipeline Cohesion & Telemetry Seal OK\n";
+    std::cout << "[TEST] Suite 517: Horizon 301 - Sovereign PrismX Direct3D 12 TileMappingQueue, SM 6.10, DXIL 1.10 & DirectX-Headers 1.620.2 PASSED." << std::endl;
+}
+
+inline void Test_Horizon301_PrismX_D3D12_TileMappingQueue_SM610_DXIL110_And_DirectXHeaders16202_Suite() {
+    Suite517_PrismX_D3D12_TileMappingQueue_SM610_DXIL110_And_DirectXHeaders16202();
+}

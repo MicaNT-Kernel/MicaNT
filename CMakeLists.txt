@@ -95,6 +95,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/se/horizon100_gaming_drm_hwid_vault_seal.cpp
     kernel/io/prism_dxgi16_com_hierarchy.cpp
     kernel/io/prism_d3d12_vtable_options21.cpp
+    kernel/io/prismx_d3d12_execute_tile_mappings_sm610.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp
