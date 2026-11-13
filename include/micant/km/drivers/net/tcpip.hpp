@@ -268,14 +268,14 @@ namespace kernel_api {
 int createSocket(int addressFamily, int socketType, int protocol) noexcept;
 void closeSocket(int socketId) noexcept;
 bool bindSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
-bool connectSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
+bool connectSocket(int socketId, uint32_t ipv4NetworkOrder, uint16_t port, uint64_t deadline100ns) noexcept;
 bool listenSocket(int socketId, int backlog) noexcept;
-int sendSocket(int socketId, const void* data, size_t length) noexcept;
+int sendSocket(int socketId, const void* data, size_t length, uint64_t deadline100ns) noexcept;
 int sendToSocket(int socketId, const void* data, size_t length,
-                 uint32_t ipv4NetworkOrder, uint16_t port) noexcept;
-int recvSocket(int socketId, void* buffer, size_t capacity) noexcept;
+                 uint32_t ipv4NetworkOrder, uint16_t port, uint64_t deadline100ns) noexcept;
+int recvSocket(int socketId, void* buffer, size_t capacity, bool* truncated) noexcept;
 int recvFromSocket(int socketId, void* buffer, size_t capacity,
-                   uint32_t* sourceIpv4NetworkOrder, uint16_t* sourcePort) noexcept;
+                   uint32_t* sourceIpv4NetworkOrder, uint16_t* sourcePort, bool* truncated) noexcept;
 } // namespace kernel_api
 
 /**
@@ -691,6 +691,7 @@ struct SocketEndpoint {
     Ipv6Address remoteIpv6{};
 
     TcpState tcpState{TcpState::Closed};
+    NtStatus terminalStatus{NtStatus::Success};
     uint32_t seqNum{1000};
     uint32_t ackNum{0};
     uint32_t sndUna{1000};
@@ -704,6 +705,17 @@ struct SocketEndpoint {
     uint8_t sndWndScale{0}; // Shift count (0..14)
     uint8_t rcvWndScale{7}; // Default MicaNT receive scale: shift 7 (multiplier 128)
     uint16_t windowSize{65535};
+    // No window-scale option is sent in our SYN, so the peer's advertised
+    // window is always an unscaled 16-bit value for this connection.
+    uint16_t peerWindow{0};
+    // RFC 9293 default when the peer does not send an MSS option.
+    uint16_t peerMss{536};
+    uint64_t persistDeadline100ns{0};
+    uint32_t persistDelayMs{1000};
+    // The AFD handle may disappear before a graceful TCP close completes.
+    // Keep the TCB in the canonical table until FIN/ACK or the bounded timer.
+    bool closeRequested{false};
+    uint64_t closeDeadline100ns{0};
 
     // Jacobson / Karels RTT Estimation (RFC 6298)
     uint32_t srttMs{0};     // Smoothed Round-Trip Time
@@ -719,10 +731,16 @@ struct SocketEndpoint {
     Mutex socketMutex;
     std::atomic<uint32_t> references{1};
 #if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
-    sync::detail::BootstrapEvent receiveEvent{true, false};
-    timer::KTIMER receiveTimer{};
-    ke::KDPC receiveTimeoutDpc{};
-    std::atomic<bool> receiveWaitActive{false};
+    struct WaitSlot {
+        sync::detail::BootstrapEvent event{true, false};
+        timer::KTIMER timer{};
+        ke::KDPC timeoutDpc{};
+        std::atomic<bool> active{false};
+    };
+    // Each blocking operation owns its timer/DPC. Multiple readers or writers
+    // must not overwrite one another's timeout or consume their notification.
+    static constexpr size_t WaitersPerKind = 4;
+    std::array<WaitSlot, 3 * WaitersPerKind> waitSlots{};
     std::atomic<bool> closed{false};
 #endif
     bool isBound{false};
@@ -735,18 +753,20 @@ struct SocketEndpoint {
     void signalReceiveEvent() noexcept {
         uint64_t flags{};
         __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
-        (void)receiveEvent.set();
+        for (auto& slot : waitSlots) (void)slot.event.set();
         if (flags & (uint64_t{1} << 9)) {
             if (ke::KeGetCurrentIrql() <= ke::APC_LEVEL) ke::detail::dispatchHigherPriority();
             __asm__ __volatile__("sti" : : : "memory");
         }
     }
     void initializeReceiveWait() noexcept {
-        timer::KeInitializeTimer(&receiveTimer);
-        ke::KeInitializeDpc(&receiveTimeoutDpc, [](ke::KDPC*, void* context, void*, void*) {
-            auto* endpoint = static_cast<SocketEndpoint*>(context);
-            endpoint->signalReceiveEvent();
-        }, this);
+        for (auto& slot : waitSlots) {
+            timer::KeInitializeTimer(&slot.timer);
+            ke::KeInitializeDpc(&slot.timeoutDpc, [](ke::KDPC*, void* context, void*, void*) {
+                auto* wait = static_cast<WaitSlot*>(context);
+                (void)wait->event.set();
+            }, &slot);
+        }
     }
 #endif
 
@@ -1007,9 +1027,16 @@ public:
             std::lock_guard<Mutex> guard(mutex_);
             if (adapterServices_.load(std::memory_order_acquire) != services) return true;
         }
-        if (retransmitWork_.deadline.inserted && !stopRetransmitWorker()) return false;
+        // stopPeriodic must be retried even after its deadline was removed:
+        // a prior attempt may still have a running or queued worker.
+        if (!stopRetransmitWorker()) return false;
         if (services->SetReceiveHandler(services->Context, nullptr, nullptr) !=
             static_cast<int32_t>(NtStatus::Success)) return false;
+        if (!ke::passive_work::detail::cancelPending(rxWork_)) return false;
+        {
+            ke::SpinLockGuard guard(rxQueueLock_);
+            rxQueueHead_ = rxQueueTail_ = rxQueueCount_ = 0;
+        }
         std::lock_guard<Mutex> guard(mutex_);
         if (adapterServices_.load(std::memory_order_acquire) == services) {
             adapterServices_.store(nullptr, std::memory_order_release);
@@ -1032,6 +1059,9 @@ public:
 
     void pollNetwork() noexcept {
 #if defined(MICANT_FREESTANDING)
+        // RX indications can wake another passive worker before PollReceive
+        // drops the miniport lock. Serialize packet processing with that poll.
+        if (packetWorkGate_.test_and_set(std::memory_order_acquire)) return;
         const auto* services = adapterServices_.load(std::memory_order_acquire);
         if (services && services->PollReceive)
             (void)services->PollReceive(services->Context);
@@ -1044,6 +1074,12 @@ public:
         if (adapter) (void)adapter->pollReceive();
 #endif
         pollTcpTimers();
+#if defined(MICANT_FREESTANDING)
+        packetWorkGate_.clear(std::memory_order_release);
+        bool pending{};
+        { ke::SpinLockGuard guard(rxQueueLock_); pending = rxQueueCount_ != 0; }
+        if (pending) (void)ke::passive_work::queue(rxWork_);
+#endif
     }
 
 #if defined(MICANT_FREESTANDING)
@@ -1084,9 +1120,14 @@ public:
 
     static void drainRxFrames(void* context) noexcept {
         auto* stack = static_cast<NetworkStack*>(context);
-        if (!stack) return;
+        if (!stack || stack->packetWorkGate_.test_and_set(std::memory_order_acquire)) return;
+        struct GateRelease {
+            std::atomic_flag& gate;
+            ~GateRelease() { gate.clear(std::memory_order_release); }
+        } release{stack->packetWorkGate_};
         std::array<uint8_t, RxFrameCapacity> frame{};
-        for (;;) {
+        // Bound each turn so continuous RX cannot starve timer processing.
+        for (size_t budget = 0; budget < RxQueueSlots; ++budget) {
             size_t length = 0;
             {
                 ke::SpinLockGuard guard(stack->rxQueueLock_);
@@ -1101,6 +1142,9 @@ public:
             if (length) stack->onEthernetFrameReceived(
                 std::span<const uint8_t>(frame.data(), length));
         }
+        bool pending{};
+        { ke::SpinLockGuard guard(stack->rxQueueLock_); pending = stack->rxQueueCount_ != 0; }
+        if (pending) (void)ke::passive_work::queue(stack->rxWork_);
     }
 #endif
 
@@ -1306,15 +1350,16 @@ public:
             outMac = getMacAddress();
             return true;
         }
-        auto it = arpCache_.find(ip);
+        // Route off-subnet packets through the configured gateway; an
+        // on-link peer must be resolved directly, even if the gateway is
+        // already cached.
+        const bool onLink = !localIp_.isZero() && !subnetMask_.isZero() &&
+            (ip.addr & subnetMask_.addr) == (localIp_.addr & subnetMask_.addr);
+        const Ipv4Address nextHop = onLink ? ip : gatewayIp_;
+        if (nextHop.isZero()) return false;
+        auto it = arpCache_.find(nextHop);
         if (it != arpCache_.end()) {
             outMac = it->second.mac;
-            return true;
-        }
-        // Fallback to gateway if outside subnet
-        auto gwIt = arpCache_.find(gatewayIp_);
-        if (gwIt != arpCache_.end()) {
-            outMac = gwIt->second.mac;
             return true;
         }
         return false;
@@ -1322,6 +1367,55 @@ public:
 
     [[nodiscard]] bool resolveArp(Ipv4Address ip, ndis::MacAddress& outMac) {
         return lookupArp(ip, outMac);
+    }
+
+    // Caller is a schedulable request thread, never the passive RX worker.
+    // No network lock is held across transmit or the timed wait.
+    [[nodiscard]] bool resolveArpForSend(Ipv4Address ip, ndis::MacAddress& outMac, uint64_t deadline100ns = 0) {
+        if (lookupArp(ip, outMac)) return true;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        if (ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL) return false;
+        Ipv4Address source{}, nextHop{};
+        ndis::MacAddress sourceMac{};
+        {
+            std::lock_guard<Mutex> lock(mutex_);
+            source = localIp_;
+            sourceMac = localMac_;
+            const bool onLink = !source.isZero() && !subnetMask_.isZero() &&
+                (ip.addr & subnetMask_.addr) == (source.addr & subnetMask_.addr);
+            nextHop = onLink ? ip : gatewayIp_;
+        }
+        if (source.isZero() || nextHop.isZero() || sourceMac.isZero()) return false;
+        for (unsigned attempt = 0; attempt < 3; ++attempt) {
+            (void)arpResolutionEvent_.reset();
+            if (lookupArp(ip, outMac)) return true;
+            ArpPacket request{};
+            request.hardwareType = htons(1);
+            request.protocolType = htons(ndis::ETHERTYPE_IPV4);
+            request.hardwareSize = static_cast<uint8_t>(ndis::ETH_ALEN);
+            request.protocolSize = static_cast<uint8_t>(sizeof(Ipv4Address));
+            request.setOpcode(1);
+            request.senderMac = sourceMac;
+            request.senderIp = source;
+            request.targetIp = nextHop;
+            auto frame = ndis::buildEthernetFrame(ndis::MacAddress::broadcast(), sourceMac,
+                ndis::ETHERTYPE_ARP,
+                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&request), sizeof(request)));
+            if (sendFrame(frame) != NtStatus::Success) return false;
+            if (lookupArp(ip, outMac)) return true;
+            int64_t waitTicks = 10'000'000;
+            if (deadline100ns) {
+                uint64_t now{};
+                if (!ke::KeQueryUptime100ns(now) || now >= deadline100ns) return false;
+                const uint64_t remaining = deadline100ns - now;
+                if (remaining < static_cast<uint64_t>(waitTicks)) waitTicks = static_cast<int64_t>(remaining);
+            }
+            const auto result = arpResolutionEvent_.wait(false, false, waitTicks);
+            if (result != NtStatus::Success && result != NtStatus::Timeout) return false;
+            if (lookupArp(ip, outMac)) return true;
+        }
+#endif
+        return false;
     }
 
     /**
@@ -1594,9 +1688,12 @@ public:
         // bind: 0.0.0.0:68 while the interface itself has no IPv4 address.
         const bool dhcpBootstrapBind = ep->type == SOCK_DGRAM && ip.isZero() &&
             localIp_.isZero() && (port == 0 || port == 68);
-        if (ip.isZero() && localIp_.isZero() && !dhcpBootstrapBind) return false;
+        if (ep->isBound || (ip.isZero() && localIp_.isZero() && !dhcpBootstrapBind) ||
+            (!ip.isZero() && !ip.isLoopback() && ip != localIp_)) return false;
+        if (port && portInUseLocked(*ep, port)) return false;
+        if (!port && !(port = allocateDynamicPortLocked(*ep))) return false;
         ep->localIp = (ip.isZero()) ? localIp_ : ip;
-        ep->localPort = (port == 0) ? nextDynamicPort_++ : port;
+        ep->localPort = port;
         ep->isBound = true;
         return true;
     }
@@ -1636,7 +1733,7 @@ public:
         return -1;
     }
 
-    bool connectSocket(int sockId, Ipv4Address remoteIp, uint16_t remotePort) {
+    bool connectSocket(int sockId, Ipv4Address remoteIp, uint16_t remotePort, uint64_t deadline100ns = 0) {
         pollTcpTimers();
         IntrusivePtr<SocketEndpoint> ep;
         {
@@ -1644,20 +1741,60 @@ public:
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return false;
             ep = it->second;
+            std::lock_guard<Mutex> sLock(ep->socketMutex);
+            if (ep->type == SOCK_DGRAM) {
+                if (remoteIp.isZero() || !remotePort ||
+                    (localIp_.isZero() && !remoteIp.isLoopback())) return false;
+                if (!ep->isBound) {
+                    const uint16_t port = allocateDynamicPortLocked(*ep);
+                    if (!port) return false;
+                    ep->localIp = remoteIp.isLoopback() ? Ipv4Address::loopback() : localIp_;
+                    ep->localPort = port;
+                    ep->isBound = true;
+                }
+                ep->remoteIp = remoteIp;
+                ep->remotePort = remotePort;
+                // Datagrams queued before connect are subject to the same
+                // peer filter as packets arriving afterwards.
+                for (auto queued = ep->rxDatagrams.begin(); queued != ep->rxDatagrams.end();) {
+                    if (queued->sourceIp == remoteIp && queued->sourcePort == remotePort) {
+                        ++queued;
+                    } else {
+                        ep->rxQueuedDatagramBytes -= queued->bytes.size();
+                        queued = ep->rxDatagrams.erase(queued);
+                    }
+                }
+                return true;
+            }
         }
 
         {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            std::lock_guard<Mutex> sLock(ep->socketMutex);
+            if (remoteIp.isZero() || localIp_.isZero() || remotePort == 0 || ep->type != SOCK_STREAM ||
+                ep->tcpState != TcpState::Closed) return false;
+        }
+        ndis::MacAddress route{};
+        if (!resolveArpForSend(remoteIp, route, deadline100ns)) return false;
+
+        {
+            std::lock_guard<Mutex> lock(socketMutex_);
+            const auto live = sockets_.find(sockId);
+            if (live == sockets_.end() || live->second.get() != ep.get()) return false;
             std::lock_guard<Mutex> sLock(ep->socketMutex);
             if (remoteIp.isZero() || localIp_.isZero() || remotePort == 0 || ep->type != SOCK_STREAM ||
                 ep->tcpState != TcpState::Closed) return false;
             if (!ep->isBound) {
+                const uint16_t port = allocateDynamicPortLocked(*ep);
+                if (!port) return false;
                 ep->localIp = localIp_;
-                ep->localPort = nextDynamicPort_++;
+                ep->localPort = port;
                 ep->isBound = true;
             }
             ep->remoteIp = remoteIp;
             ep->remotePort = remotePort;
             ep->tcpState = TcpState::SynSent;
+            ep->terminalStatus = NtStatus::Success;
             ep->peerInitialSequence = 0;
             ep->ackNum = 0;
             ep->sndUna = ep->seqNum;
@@ -1672,13 +1809,15 @@ public:
         return false;
     }
 
-    int sendSocket(int sockId, const void* data, size_t length) {
+    int sendSocket(int sockId, const void* data, size_t length, uint64_t deadline100ns = 0) {
         pollTcpTimers();
-        if ((!data && length) || length > TCP_MAX_SEGMENT_PAYLOAD) return -1;
+        if (!data && length) return -1;
         int epType = 0;
         TcpState epState = TcpState::Closed;
         Ipv4Address remoteIp{};
         uint16_t remotePort{};
+        uint16_t peerWindow{};
+        uint16_t peerMss{};
         IntrusivePtr<SocketEndpoint> endpoint;
 
         {
@@ -1691,64 +1830,109 @@ public:
             epState = endpoint->tcpState;
             remoteIp = endpoint->remoteIp;
             remotePort = endpoint->remotePort;
+            peerWindow = endpoint->peerWindow;
+            peerMss = endpoint->peerMss;
         }
 
         if (epType == SOCK_STREAM) {
-            if (epState != TcpState::Established) return -1;
+            if (epState != TcpState::Established && epState != TcpState::CloseWait) return -1;
             if (length == 0) return 0;
-            const auto bytes = std::span<const uint8_t>(static_cast<const uint8_t*>(data), length);
+            const uint32_t mtu = adapterMtu();
+            if (mtu <= sizeof(Ipv4Header) + sizeof(TcpHeader)) return -1;
+            const size_t pathPayload = mtu - sizeof(Ipv4Header) - sizeof(TcpHeader);
+            // One tracked segment may be outstanding at a time. Return a
+            // genuine short write so Winsock callers can advance through a
+            // TLS record larger than the path MSS.
+            const size_t count = std::min({length, TCP_MAX_SEGMENT_PAYLOAD, pathPayload, static_cast<size_t>(peerMss),
+                                           static_cast<size_t>(peerWindow)});
+            if (!count) return -1;
+            const auto bytes = std::span<const uint8_t>(static_cast<const uint8_t*>(data), count);
             return sendTcpSegment(endpoint, TCP_FLAG_ACK | TCP_FLAG_PSH, bytes, true) == NtStatus::Success
-                ? static_cast<int>(length) : -1;
+                ? static_cast<int>(count) : -1;
         } else if (epType == SOCK_DGRAM) {
             // UDP Datagram send
-            return sendToSocket(sockId, data, length, remoteIp, remotePort);
+            return sendToSocket(sockId, data, length, remoteIp, remotePort, deadline100ns);
         }
         return -1;
     }
 
-    int sendToSocket(int sockId, const void* data, size_t length, Ipv4Address dstIp, uint16_t dstPort) {
-        if ((!data && length) || length > 65507 || dstIp.isZero() || dstPort == 0) return -1;
+    int sendToSocket(int sockId, const void* data, size_t length, Ipv4Address dstIp, uint16_t dstPort, uint64_t deadline100ns = 0) {
+        if (length > 65507) return -2; // one UDP datagram cannot encode this length
+        if ((!data && length) || dstIp.isZero() || dstPort == 0) return -1;
         uint16_t epLocalPort = 0;
         Ipv4Address epLocalIp{};
+        IntrusivePtr<SocketEndpoint> sourceEndpoint;
         {
             std::lock_guard<Mutex> lock(socketMutex_);
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return -1;
             auto ep = it->second;
+            sourceEndpoint = ep;
             std::lock_guard<Mutex> sLock(ep->socketMutex);
             if (!ep->isBound) {
+                const uint16_t port = allocateDynamicPortLocked(*ep);
+                if (!port) return -1;
                 ep->localIp = dstIp.isLoopback() ? Ipv4Address::loopback() : localIp_;
-                ep->localPort = nextDynamicPort_++;
+                ep->localPort = port;
                 ep->isBound = true;
             }
             epLocalPort = ep->localPort;
             epLocalIp = ep->localIp;
         }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        if (sourceEndpoint->closed.load(std::memory_order_acquire)) return -1;
+#endif
 
         // Loopback dispatch to local socket
-        {
+        IntrusivePtr<SocketEndpoint> localTarget;
+        if (dstIp.isLoopback() || (!localIp_.isZero() && dstIp == localIp_)) {
             std::lock_guard<Mutex> globalLock(socketMutex_);
             for (const auto& [id, target] : sockets_) {
                 if (target->type == SOCK_DGRAM && target->localPort == dstPort) {
                     std::lock_guard<Mutex> tLock(target->socketMutex);
-                    const auto* b = static_cast<const uint8_t*>(data);
+                    if (target->remotePort && (target->remoteIp != epLocalIp ||
+                                               target->remotePort != epLocalPort)) continue;
                     if (target->rxDatagrams.size() >= 64 ||
                         length > 256 * 1024 - std::min<size_t>(target->rxQueuedDatagramBytes, 256 * 1024))
                         return -1;
-                    target->rxDatagrams.push_back(SocketEndpoint::ReceivedDatagram{
-                        std::vector<uint8_t>(b, b + length), epLocalIp, epLocalPort});
+                    SocketEndpoint::ReceivedDatagram datagram{};
+                    datagram.sourceIp = epLocalIp;
+                    datagram.sourcePort = epLocalPort;
+                    if (length) {
+                        const auto* b = static_cast<const uint8_t*>(data);
+                        datagram.bytes.assign(b, b + length);
+                    }
+                    target->rxDatagrams.push_back(std::move(datagram));
                     target->rxQueuedDatagramBytes += length;
-                    return static_cast<int>(length);
+                    localTarget = target;
+                    break;
                 }
             }
         }
+        if (localTarget) {
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+            localTarget->signalReceiveEvent();
+#endif
+            return static_cast<int>(length);
+        }
+
+        // This backend sets IPv4 DF and does not implement fragmentation.
+        // Never transmit a partial datagram or ask a miniport to send a frame
+        // larger than its advertised MTU.
+        const uint32_t mtu = adapterMtu();
+        if (!mtu) return -1;
+        if (mtu < sizeof(Ipv4Header) + sizeof(UdpHeader) ||
+            length > mtu - sizeof(Ipv4Header) - sizeof(UdpHeader)) return -2;
 
         // Transmit UDP packet over NDIS adapter
         ndis::MacAddress dstMac;
         if (dstIp.isBroadcast() || (epLocalIp.isZero() && dstIp.addr == 0xFFFFFFFF))
             dstMac = ndis::MacAddress::broadcast();
-        else if (!resolveArp(dstIp, dstMac))
+        else if (!resolveArpForSend(dstIp, dstMac, deadline100ns))
             return -1;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        if (sourceEndpoint->closed.load(std::memory_order_acquire)) return -1;
+#endif
 
         size_t udpLen = sizeof(UdpHeader) + length;
         std::vector<uint8_t> udpBuf(udpLen, 0);
@@ -1756,14 +1940,15 @@ public:
         udp->setSrcPort(epLocalPort);
         udp->setDstPort(dstPort);
         udp->setLength(static_cast<uint16_t>(udpLen));
-        std::memcpy(udpBuf.data() + sizeof(UdpHeader), data, length);
+        if (length) std::memcpy(udpBuf.data() + sizeof(UdpHeader), data, length);
         udp->checksum = calculateTransportChecksum(epLocalIp, dstIp, IPPROTO_UDP, udpBuf.data(), udpLen);
 
-        (void)sendIpv4Packet(dstMac, dstIp, IPPROTO_UDP, udpBuf);
-        return static_cast<int>(length);
+        return sendIpv4Packet(dstMac, dstIp, IPPROTO_UDP, udpBuf) == NtStatus::Success
+            ? static_cast<int>(length) : -1;
     }
 
-    int recvSocket(int sockId, void* buffer, size_t maxLen) {
+    int recvSocket(int sockId, void* buffer, size_t maxLen, bool* truncated = nullptr) {
+        if (truncated) *truncated = false;
         pollTcpTimers();
         IntrusivePtr<SocketEndpoint> ep;
         {
@@ -1773,30 +1958,46 @@ public:
             ep = it->second;
         }
 
-        std::lock_guard<Mutex> sLock(ep->socketMutex);
-        if (ep->type == SOCK_STREAM) {
-            if (ep->rxStream.empty()) return 0;
-            size_t bytesToRead = std::min<size_t>(maxLen, ep->rxStream.size());
-            auto* dst = static_cast<uint8_t*>(buffer);
-            for (size_t i = 0; i < bytesToRead; ++i) {
-                dst[i] = ep->rxStream.front();
-                ep->rxStream.pop_front();
+        int result = -1;
+        bool updateWindow = false;
+        {
+            std::lock_guard<Mutex> sLock(ep->socketMutex);
+            if (ep->type == SOCK_STREAM) {
+                // An empty receive queue on a live stream is not EOF. A
+                // different reader may have consumed the bytes after a
+                // readiness notification; let AFD wait again in that case.
+                if (ep->rxStream.empty())
+                    return ep->tcpState == TcpState::CloseWait || ep->tcpState == TcpState::Closed ? 0 : -1;
+                size_t bytesToRead = std::min<size_t>(maxLen, ep->rxStream.size());
+                auto* dst = static_cast<uint8_t*>(buffer);
+                const size_t before = ep->rxStream.size();
+                for (size_t i = 0; i < bytesToRead; ++i) {
+                    dst[i] = ep->rxStream.front();
+                    ep->rxStream.pop_front();
+                }
+                // A previously constrained advertised window must be opened
+                // when the application consumes bytes, even without new RX.
+                updateWindow = bytesToRead && before > TCP_MAX_RX_BUFFER - 65535 &&
+                    (ep->tcpState == TcpState::Established || ep->tcpState == TcpState::CloseWait);
+                result = static_cast<int>(bytesToRead);
+            } else if (ep->type == SOCK_DGRAM) {
+                if (ep->rxDatagrams.empty()) return -1;
+                auto& dgram = ep->rxDatagrams.front();
+                size_t bytesToRead = std::min<size_t>(maxLen, dgram.bytes.size());
+                if (truncated) *truncated = bytesToRead < dgram.bytes.size();
+                if (bytesToRead) std::memcpy(buffer, dgram.bytes.data(), bytesToRead);
+                ep->rxQueuedDatagramBytes -= dgram.bytes.size();
+                ep->rxDatagrams.pop_front();
+                result = static_cast<int>(bytesToRead);
             }
-            return static_cast<int>(bytesToRead);
-        } else if (ep->type == SOCK_DGRAM) {
-            if (ep->rxDatagrams.empty()) return 0;
-            auto& dgram = ep->rxDatagrams.front();
-            size_t bytesToRead = std::min<size_t>(maxLen, dgram.bytes.size());
-            std::memcpy(buffer, dgram.bytes.data(), bytesToRead);
-            ep->rxQueuedDatagramBytes -= dgram.bytes.size();
-            ep->rxDatagrams.pop_front();
-            return static_cast<int>(bytesToRead);
         }
-        return -1;
+        if (updateWindow) (void)sendTcpSegment(ep, TCP_FLAG_ACK);
+        return result;
     }
 
     int recvFromSocket(int sockId, void* buffer, size_t maxLen,
-                       Ipv4Address& sourceIp, uint16_t& sourcePort) {
+                       Ipv4Address& sourceIp, uint16_t& sourcePort, bool* truncated = nullptr) {
+        if (truncated) *truncated = false;
         if ((!buffer && maxLen) || maxLen > TCP_MAX_RX_BUFFER) return -1;
         IntrusivePtr<SocketEndpoint> ep;
         {
@@ -1810,6 +2011,7 @@ public:
         if (ep->rxDatagrams.empty()) return -1;
         auto& datagram = ep->rxDatagrams.front();
         const size_t copied = std::min(maxLen, datagram.bytes.size());
+        if (truncated) *truncated = copied < datagram.bytes.size();
         if (copied) std::memcpy(buffer, datagram.bytes.data(), copied);
         sourceIp = datagram.sourceIp;
         sourcePort = datagram.sourcePort;
@@ -1838,29 +2040,40 @@ public:
             endpoint->signalReceiveEvent();
         }
     }
-    [[nodiscard]] NtStatus waitSocketData(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
+    enum class SocketWaitKind : uint8_t { Receive, Connected, Writable };
+    [[nodiscard]] NtStatus waitSocketCondition(void* waitObject, uint32_t timeoutMilliseconds,
+                                                SocketWaitKind kind) noexcept {
         auto* endpoint = static_cast<SocketEndpoint*>(waitObject);
         if (!endpoint || ke::KeGetCurrentIrql() != ke::PASSIVE_LEVEL)
             return NtStatus::InvalidDeviceState;
-        bool expected = false;
-        if (!endpoint->receiveWaitActive.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-            return NtStatus::DeviceBusy;
+        SocketEndpoint::WaitSlot* selected{};
+        const size_t first = static_cast<size_t>(kind) * SocketEndpoint::WaitersPerKind;
+        for (size_t i = first; i < first + SocketEndpoint::WaitersPerKind; ++i) {
+            bool expected = false;
+            auto& candidate = endpoint->waitSlots[i];
+            if (candidate.active.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                selected = &candidate;
+                break;
+            }
+        }
+        if (!selected) return NtStatus::DeviceBusy;
+        auto& slot = *selected;
         struct WaitRelease {
-            SocketEndpoint* endpoint;
-            ~WaitRelease() { endpoint->receiveWaitActive.store(false, std::memory_order_release); }
-        } release{endpoint};
+            SocketEndpoint::WaitSlot* slot;
+            ~WaitRelease() { slot->active.store(false, std::memory_order_release); }
+        } release{&slot};
 
         bool previous{};
         if (timeoutMilliseconds) {
             LargeInteger due{};
             due.quadPart = -static_cast<int64_t>(timeoutMilliseconds) * 10'000;
-            const auto timerStatus = timer::KiSetTimerChecked(&endpoint->receiveTimer, due, 0,
-                &endpoint->receiveTimeoutDpc, previous);
+            const auto timerStatus = timer::KiSetTimerChecked(&slot.timer, due, 0,
+                &slot.timeoutDpc, previous);
             if (timerStatus != NtStatus::Success) return timerStatus;
         }
         NtStatus result = NtStatus::Success;
         for (;;) {
-            (void)endpoint->receiveEvent.reset();
+            (void)slot.event.reset();
             bool ready = false;
             {
                 std::lock_guard<Mutex> lock(endpoint->socketMutex);
@@ -1868,27 +2081,55 @@ public:
                     result = NtStatus::Cancelled;
                     break;
                 }
-                ready = !endpoint->rxStream.empty() || !endpoint->rxDatagrams.empty() ||
-                    endpoint->tcpState == TcpState::CloseWait || endpoint->tcpState == TcpState::Closed;
+                if (kind == SocketWaitKind::Receive) {
+                    if (endpoint->rxStream.empty() && endpoint->rxDatagrams.empty() &&
+                        endpoint->terminalStatus != NtStatus::Success) {
+                        result = endpoint->terminalStatus;
+                        break;
+                    }
+                    ready = !endpoint->rxStream.empty() || !endpoint->rxDatagrams.empty() ||
+                        (endpoint->type == SOCK_STREAM &&
+                         (endpoint->tcpState == TcpState::CloseWait || endpoint->tcpState == TcpState::Closed));
+                } else if (endpoint->tcpState == TcpState::Closed ||
+                           (kind == SocketWaitKind::Connected && endpoint->tcpState == TcpState::CloseWait)) {
+                    result = endpoint->terminalStatus != NtStatus::Success
+                        ? endpoint->terminalStatus : NtStatus::PortConnectionRefused;
+                    break;
+                } else if (kind == SocketWaitKind::Connected) {
+                    ready = endpoint->tcpState == TcpState::Established;
+                } else {
+                    ready = (endpoint->tcpState == TcpState::Established ||
+                             endpoint->tcpState == TcpState::CloseWait) &&
+                            !endpoint->retransmitPending && endpoint->peerWindow != 0;
+                }
             }
             if (ready) break;
-            if (timeoutMilliseconds && endpoint->receiveTimer.event.readState()) {
+            if (timeoutMilliseconds && slot.timer.event.readState()) {
                 result = NtStatus::Timeout;
                 break;
             }
-            const NtStatus waitStatus = endpoint->receiveEvent.wait();
+            const NtStatus waitStatus = slot.event.wait();
             if (waitStatus != NtStatus::Success) { result = waitStatus; break; }
-            if (timeoutMilliseconds && endpoint->receiveTimer.event.readState()) {
+            if (timeoutMilliseconds && slot.timer.event.readState()) {
                 result = NtStatus::Timeout;
                 break;
             }
         }
         if (timeoutMilliseconds) {
-            (void)timer::KeCancelTimer(&endpoint->receiveTimer);
-            (void)ke::KeRemoveQueueDpc(&endpoint->receiveTimer.timerDpc);
-            (void)ke::KeRemoveQueueDpc(&endpoint->receiveTimeoutDpc);
+            (void)timer::KeCancelTimer(&slot.timer);
+            (void)ke::KeRemoveQueueDpc(&slot.timer.timerDpc);
+            (void)ke::KeRemoveQueueDpc(&slot.timeoutDpc);
         }
         return result;
+    }
+    [[nodiscard]] NtStatus waitSocketData(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
+        return waitSocketCondition(waitObject, timeoutMilliseconds, SocketWaitKind::Receive);
+    }
+    [[nodiscard]] NtStatus waitSocketConnected(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
+        return waitSocketCondition(waitObject, timeoutMilliseconds, SocketWaitKind::Connected);
+    }
+    [[nodiscard]] NtStatus waitSocketWritable(void* waitObject, uint32_t timeoutMilliseconds) noexcept {
+        return waitSocketCondition(waitObject, timeoutMilliseconds, SocketWaitKind::Writable);
     }
 #endif
 
@@ -1906,26 +2147,40 @@ public:
         pollTcpTimers();
         IntrusivePtr<SocketEndpoint> endpoint;
         std::vector<IntrusivePtr<SocketEndpoint>> resetEndpoints;
+        uint64_t now{};
+        const bool haveClock = queryTcpClock100ns(now);
+        bool graceful = false;
         {
             std::lock_guard<Mutex> lock(socketMutex_);
             auto it = sockets_.find(sockId);
             if (it == sockets_.end()) return;
             endpoint = it->second;
             std::lock_guard<Mutex> sLock(endpoint->socketMutex);
-            if (endpoint->type == SOCK_STREAM && endpoint->tcpState != TcpState::Closed &&
-                endpoint->tcpState != TcpState::Listen) resetEndpoints.push_back(endpoint);
-            endpoint->tcpState = TcpState::Closed;
+            // Retain a clean stream while its outstanding send and FIN are
+            // acknowledged. Closing with unread input remains abortive.
+            graceful = haveClock && endpoint->type == SOCK_STREAM && endpoint->rxStream.empty() &&
+                (endpoint->tcpState == TcpState::Established || endpoint->tcpState == TcpState::CloseWait);
+            if (graceful) {
+                endpoint->closeRequested = true;
+                constexpr uint64_t closeTimeout = 120ull * 10'000'000ull;
+                endpoint->closeDeadline100ns = now > UINT64_MAX - closeTimeout
+                    ? UINT64_MAX : now + closeTimeout;
+            } else {
+                if (endpoint->type == SOCK_STREAM && endpoint->tcpState != TcpState::Closed &&
+                    endpoint->tcpState != TcpState::Listen) resetEndpoints.push_back(endpoint);
+                endpoint->tcpState = TcpState::Closed;
+                endpoint->retransmitPending = false;
+                endpoint->pendingSegment.clear();
+                sockets_.erase(it);
+            }
 #if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
             endpoint->closed.store(true, std::memory_order_release);
 #endif
-            endpoint->retransmitPending = false;
-            endpoint->pendingSegment.clear();
-            sockets_.erase(it);
             if (endpoint->isListening) {
                 for (auto child = sockets_.begin(); child != sockets_.end();) {
                     auto childEndpoint = child->second;
                     std::lock_guard<Mutex> childLock(childEndpoint->socketMutex);
-                    if (childEndpoint->listenSocketId != sockId) {
+                    if (childEndpoint->listenSocketId != sockId || childEndpoint->acceptReturned) {
                         ++child;
                         continue;
                     }
@@ -1945,8 +2200,24 @@ public:
         endpoint->signalReceiveEvent();
         for (const auto& resetEndpoint : resetEndpoints) resetEndpoint->signalReceiveEvent();
 #endif
-        for (const auto& resetEndpoint : resetEndpoints)
-            (void)sendTcpSegment(resetEndpoint, TCP_FLAG_RST | TCP_FLAG_ACK);
+        for (const auto& resetEndpoint : resetEndpoints) {
+            Ipv4Address src{}, dst{};
+            uint16_t srcPort{}, dstPort{};
+            uint32_t seq{}, ack{};
+            {
+                std::lock_guard<Mutex> lock(resetEndpoint->socketMutex);
+                src = resetEndpoint->localIp;
+                dst = resetEndpoint->remoteIp;
+                srcPort = resetEndpoint->localPort;
+                dstPort = resetEndpoint->remotePort;
+                seq = resetEndpoint->seqNum;
+                ack = resetEndpoint->ackNum;
+            }
+            (void)emitTcpSegment(src, dst, srcPort, dstPort, seq, ack,
+                                 TCP_FLAG_RST | TCP_FLAG_ACK, {});
+        }
+        // The periodic transport worker emits the FIN after any outstanding
+        // segment is acknowledged, without holding the socket table lock.
     }
 
     struct EndpointInfo {
@@ -2011,8 +2282,33 @@ public:
     }
 
 private:
+    // socketMutex_ and the requesting endpoint lock are held by the caller.
+    // Until reuse options exist, one local port per transport is the safe
+    // policy; otherwise receive demultiplexing can deliver to the wrong TCB.
+    bool portInUseLocked(const SocketEndpoint& requester, uint16_t port) const {
+        for (const auto& [id, candidate] : sockets_) {
+            (void)id;
+            if (candidate.get() == &requester) continue;
+            std::lock_guard<Mutex> endpointLock(candidate->socketMutex);
+            if (candidate->isBound && candidate->type == requester.type &&
+                candidate->localPort == port) return true;
+        }
+        return false;
+    }
+
+    uint16_t allocateDynamicPortLocked(const SocketEndpoint& requester) {
+        constexpr uint32_t first = 49152;
+        constexpr uint32_t count = 65536 - first;
+        for (uint32_t attempt = 0; attempt < count; ++attempt) {
+            if (nextDynamicPort_ < first) nextDynamicPort_ = static_cast<uint16_t>(first);
+            const uint16_t candidate = nextDynamicPort_++;
+            if (!portInUseLocked(requester, candidate)) return candidate;
+        }
+        return 0;
+    }
 #if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
     ke::passive_work::PeriodicItem retransmitWork_{};
+    std::atomic_flag packetWorkGate_ = ATOMIC_FLAG_INIT;
     ke::SpinLock rxQueueLock_{};
     std::array<RxFrameSlot, RxQueueSlots> rxQueue_{};
     size_t rxQueueHead_{};
@@ -2064,10 +2360,20 @@ private:
         uint32_t sequence{}, acknowledgement{};
         {
             std::lock_guard<Mutex> lock(endpoint->socketMutex);
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+            // A detached handle wakes its waiters, but the retained TCB must
+            // still be able to send FIN/ACK while the close completes.
+            if (endpoint->closed.load(std::memory_order_acquire) && !data.empty())
+                return NtStatus::Cancelled;
+#endif
             if (endpoint->type != SOCK_STREAM || endpoint->remoteIp.isZero() ||
                 endpoint->remotePort == 0 || endpoint->localPort == 0)
                 return NtStatus::InvalidParameter;
             if (trackForRetransmit && endpoint->retransmitPending)
+                return NtStatus::DeviceNotReady;
+            if (!data.empty() && ((endpoint->tcpState != TcpState::Established &&
+                                   endpoint->tcpState != TcpState::CloseWait) ||
+                                  data.size() > endpoint->peerWindow || data.size() > endpoint->peerMss))
                 return NtStatus::DeviceNotReady;
             srcIp = endpoint->localIp;
             dstIp = endpoint->remoteIp;
@@ -2081,12 +2387,21 @@ private:
             tcp->setSeqNum(sequence);
             tcp->setAckNum(acknowledgement);
             tcp->setFlags(sizeof(TcpHeader), flags);
-            tcp->windowSize = htons(65535);
+            const size_t available = TCP_MAX_RX_BUFFER -
+                std::min(endpoint->rxStream.size(), TCP_MAX_RX_BUFFER);
+            tcp->windowSize = htons(static_cast<uint16_t>(std::min<size_t>(available, 65535)));
             if (!data.empty()) std::memcpy(segment.data() + sizeof(TcpHeader), data.data(), data.size());
             tcp->checksum = calculateTransportChecksum(srcIp, dstIp, IPPROTO_TCP,
                                                         segment.data(), segment.size());
 
             if (trackForRetransmit) {
+                // Register FIN sequence space and the close state atomically
+                // under the endpoint lock before a peer ACK can arrive.
+                if (flags & TCP_FLAG_FIN) {
+                    if (endpoint->tcpState == TcpState::Established) endpoint->tcpState = TcpState::FinWait1;
+                    else if (endpoint->tcpState == TcpState::CloseWait) endpoint->tcpState = TcpState::LastAck;
+                    else return NtStatus::InvalidDeviceState;
+                }
                 endpoint->pendingSegment = segment;
                 endpoint->retransmitPending = true;
                 endpoint->retransmitCount = 0;
@@ -2100,8 +2415,36 @@ private:
             }
         }
         ndis::MacAddress destination{};
-        if (!resolveArp(dstIp, destination)) return NtStatus::DeviceNotReady;
-        return sendIpv4Packet(destination, dstIp, IPPROTO_TCP, segment);
+        const bool routeResolved = resolveArp(dstIp, destination);
+        NtStatus transmit = routeResolved ? sendIpv4Packet(destination, dstIp, IPPROTO_TCP, segment)
+                                           : NtStatus::DeviceNotReady;
+        bool restored = false;
+        if (trackForRetransmit && transmit != NtStatus::Success) {
+            const uint32_t consumed = static_cast<uint32_t>(data.size()) +
+                ((flags & TCP_FLAG_SYN) ? 1u : 0u) + ((flags & TCP_FLAG_FIN) ? 1u : 0u);
+            std::lock_guard<Mutex> lock(endpoint->socketMutex);
+            if (endpoint->retransmitPending && endpoint->sndUna == sequence &&
+                endpoint->seqNum == sequence + consumed) {
+                if (!routeResolved) endpoint->seqNum = sequence;
+                else {
+                    endpoint->tcpState = TcpState::Closed; // delivery outcome is uncertain
+                    endpoint->terminalStatus = NtStatus::ConnectionReset;
+                }
+                endpoint->retransmitPending = false;
+                endpoint->pendingSegment.clear();
+                restored = true;
+            } else if (!endpoint->retransmitPending && endpoint->sndUna == sequence + consumed) {
+                // An ACK proves the peer accepted the segment despite a
+                // concurrent transmit error report.
+                transmit = NtStatus::Success;
+            }
+        }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        if (restored) endpoint->signalReceiveEvent();
+#else
+        (void)restored;
+#endif
+        return transmit;
     }
 
     void pollTcpTimers() {
@@ -2114,20 +2457,59 @@ private:
             uint16_t srcPort{}, dstPort{};
             std::vector<uint8_t> segment{};
         };
+        struct PersistWork {
+            Ipv4Address srcIp{}, dstIp{};
+            uint16_t srcPort{}, dstPort{};
+            uint32_t sequence{}, acknowledgement{};
+        };
         std::vector<RetryWork> retry;
-        std::vector<int> expired;
+        std::vector<PersistWork> probes;
+        std::vector<IntrusivePtr<SocketEndpoint>> expired;
+        std::vector<IntrusivePtr<SocketEndpoint>> pendingFin;
         {
             std::lock_guard<Mutex> lock(socketMutex_);
             for (auto& [id, endpoint] : sockets_) {
                 (void)id;
                 std::lock_guard<Mutex> endpointLock(endpoint->socketMutex);
+                if (endpoint->closeDeadline100ns && now >= endpoint->closeDeadline100ns) {
+                    endpoint->tcpState = TcpState::Closed;
+                    endpoint->retransmitPending = false;
+                    endpoint->pendingSegment.clear();
+                    expired.push_back(endpoint);
+                    continue;
+                }
+                if (endpoint->closeRequested && !endpoint->retransmitPending && endpoint->peerWindow != 0) {
+                    endpoint->closeRequested = false;
+                    pendingFin.push_back(endpoint);
+                    continue;
+                }
+                if ((endpoint->tcpState == TcpState::Established || endpoint->tcpState == TcpState::CloseWait) &&
+                    !endpoint->retransmitPending && endpoint->peerWindow == 0) {
+                    if (!endpoint->persistDeadline100ns) {
+                        endpoint->persistDeadline100ns = now > UINT64_MAX - 10'000'000u
+                            ? UINT64_MAX : now + 10'000'000u;
+                    } else if (now >= endpoint->persistDeadline100ns) {
+                        // An empty segment immediately before SND.NXT is outside
+                        // a zero window and elicits the peer's current ACK/window.
+                        probes.push_back({endpoint->localIp, endpoint->remoteIp,
+                            endpoint->localPort, endpoint->remotePort,
+                            endpoint->seqNum - 1, endpoint->ackNum});
+                        endpoint->persistDelayMs = std::min<uint32_t>(endpoint->persistDelayMs * 2u, 60'000u);
+                        const uint64_t delay = static_cast<uint64_t>(endpoint->persistDelayMs) * 10'000u;
+                        endpoint->persistDeadline100ns = now > UINT64_MAX - delay ? UINT64_MAX : now + delay;
+                    }
+                } else {
+                    endpoint->persistDeadline100ns = 0;
+                    endpoint->persistDelayMs = 1000;
+                }
                 if (!endpoint->retransmitPending || now < endpoint->retransmitDeadline100ns)
                     continue;
                 if (endpoint->retransmitCount >= TCP_MAX_RETRIES) {
                     endpoint->retransmitPending = false;
                     endpoint->pendingSegment.clear();
                     endpoint->tcpState = TcpState::Closed;
-                    expired.push_back(endpoint->id);
+                    endpoint->terminalStatus = NtStatus::IoTimeout;
+                    expired.push_back(endpoint);
                     continue;
                 }
                 ++endpoint->retransmitCount;
@@ -2138,12 +2520,36 @@ private:
                 retry.push_back({endpoint->localIp, endpoint->remoteIp,
                     endpoint->localPort, endpoint->remotePort, endpoint->pendingSegment});
             }
-            for (int id : expired) sockets_.erase(id);
+            // Established endpoints remain in the table until the owning
+            // socket closes them; otherwise a timed-out descriptor can be
+            // reused while its AFD object still references it.
+            for (const auto& endpoint : expired)
+                if (endpoint->closeDeadline100ns || (endpoint->listenSocketId && !endpoint->acceptReturned))
+                    sockets_.erase(endpoint->id);
         }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        for (const auto& endpoint : expired) endpoint->signalReceiveEvent();
+#endif
         for (const auto& work : retry) {
             ndis::MacAddress destination{};
             if (!resolveArp(work.dstIp, destination)) continue;
             (void)sendIpv4Packet(destination, work.dstIp, IPPROTO_TCP, work.segment);
+        }
+        for (const auto& probe : probes)
+            (void)emitTcpSegment(probe.srcIp, probe.dstIp, probe.srcPort, probe.dstPort,
+                                 probe.sequence, probe.acknowledgement, TCP_FLAG_ACK, {});
+        for (const auto& endpoint : pendingFin) {
+            const auto result = sendTcpSegment(endpoint, TCP_FLAG_FIN | TCP_FLAG_ACK, {}, true);
+            if (result != NtStatus::Success) {
+                std::lock_guard<Mutex> lock(endpoint->socketMutex);
+                // ARP may temporarily expire; retry FIN until the close timer.
+                if (!endpoint->retransmitPending && endpoint->tcpState != TcpState::Closed) {
+                    endpoint->tcpState = endpoint->tcpState == TcpState::LastAck ||
+                                         endpoint->tcpState == TcpState::Closing
+                        ? TcpState::CloseWait : TcpState::Established;
+                    endpoint->closeRequested = true;
+                }
+            }
         }
     }
 
@@ -2194,6 +2600,9 @@ private:
             std::lock_guard<Mutex> lock(mutex_);
             (void)arpCache_.insert_or_assign(arp->senderIp, ArpCacheEntry(arp->senderMac, 300, false));
         }
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+        (void)arpResolutionEvent_.set();
+#endif
         if (opcode != 1) return;
 
         // Construct and send outside the network lock: adapters may synchronously
@@ -2296,6 +2705,8 @@ private:
                 (void)id;
                 if (ep->type == SOCK_DGRAM && ep->localPort == dPort) {
                     std::lock_guard<Mutex> sLock(ep->socketMutex);
+                    if (ep->remotePort && (ep->remoteIp != srcIp || ep->remotePort != udp->getSrcPort()))
+                        continue;
                     if (ep->rxDatagrams.size() >= 64 ||
                         udpData.size() > 256 * 1024 - std::min<size_t>(ep->rxQueuedDatagramBytes, 256 * 1024))
                         continue;
@@ -2324,13 +2735,35 @@ private:
         uint8_t flags = tcp->getFlags();
         const uint32_t sequence = tcp->getSeqNum();
         const uint32_t acknowledgement = tcp->getAckNum();
+        uint16_t peerMss = 536;
+        if (flags & TCP_FLAG_SYN) {
+            bool seenMss = false;
+            size_t option = sizeof(TcpHeader);
+            while (option < offset) {
+                const uint8_t kind = payload[option++];
+                if (kind == 0) break;
+                if (kind == 1) continue;
+                if (option >= offset) return;
+                const uint8_t length = payload[option++];
+                if (length < 2 || static_cast<size_t>(length - 2) > offset - option) return;
+                if (kind == 2) {
+                    if (seenMss || length != 4) return;
+                    const uint16_t advertised = static_cast<uint16_t>((uint16_t{payload[option]} << 8) |
+                                                                       payload[option + 1]);
+                    if (!advertised) return;
+                    peerMss = static_cast<uint16_t>(std::min<size_t>(advertised, TCP_MAX_SEGMENT_PAYLOAD));
+                    seenMss = true;
+                }
+                option += length - 2;
+            }
+        }
         std::span<const uint8_t> tcpData = payload.subspan(offset);
         IntrusivePtr<SocketEndpoint> endpoint;
         bool sendSynAck = false;
         bool resendSynAck = false;
         bool sendAck = false;
+        bool removeClosed = false;
         bool sendReset = false;
-        bool removeEndpoint = false;
         bool notifyReceiver = false;
         Ipv4Address resendDst{};
         std::vector<uint8_t> duplicateSynAck;
@@ -2386,6 +2819,8 @@ private:
                     child->tcpState = TcpState::SynReceived;
                     child->ackNum = sequence + 1;
                     child->peerInitialSequence = sequence;
+                    child->peerWindow = ntohs(tcp->windowSize);
+                    child->peerMss = peerMss;
                     child->seqNum = g_tcpInitialSequence.fetch_add(0x10001u, std::memory_order_relaxed);
                     child->sndUna = child->seqNum;
                     if (!sockets_.emplace(child->id, child).second) { sendReset = true; break; }
@@ -2396,10 +2831,21 @@ private:
                 if (candidate->remoteIp != srcIp || candidate->remotePort != srcPort) continue;
                 endpoint = candidate;
                 if (flags & TCP_FLAG_RST) {
+                    // Reject resets that cannot belong to this connection.
+                    // For SYN-SENT the peer must acknowledge our SYN; for an
+                    // established stream accept the exact next sequence only.
+                    if (endpoint->tcpState == TcpState::SynSent
+                            ? (!(flags & TCP_FLAG_ACK) || acknowledgement != endpoint->seqNum)
+                            : sequence != endpoint->ackNum) {
+                        endpoint.reset();
+                        break;
+                    }
+                    endpoint->terminalStatus = endpoint->tcpState == TcpState::SynSent
+                        ? NtStatus::PortConnectionRefused : NtStatus::ConnectionReset;
                     endpoint->tcpState = TcpState::Closed;
                     endpoint->retransmitPending = false;
                     endpoint->pendingSegment.clear();
-                    removeEndpoint = true;
+                    removeClosed = endpoint->closeDeadline100ns != 0;
                     notifyReceiver = true;
                     break;
                 }
@@ -2409,6 +2855,8 @@ private:
                     endpoint->sndUna = acknowledgement;
                     endpoint->ackNum = sequence + 1;
                     endpoint->peerInitialSequence = sequence;
+                    endpoint->peerWindow = ntohs(tcp->windowSize);
+                    endpoint->peerMss = peerMss;
                     endpoint->retransmitPending = false;
                     endpoint->pendingSegment.clear();
                     endpoint->tcpState = TcpState::Established;
@@ -2425,13 +2873,34 @@ private:
                     endpoint->tcpState = TcpState::Established;
                     notifyReceiver = true;
                 } else if (endpoint->tcpState != TcpState::Established &&
-                           endpoint->tcpState != TcpState::CloseWait) {
+                           endpoint->tcpState != TcpState::CloseWait &&
+                           endpoint->tcpState != TcpState::FinWait1 &&
+                           endpoint->tcpState != TcpState::FinWait2 &&
+                           endpoint->tcpState != TcpState::Closing &&
+                           endpoint->tcpState != TcpState::LastAck &&
+                           endpoint->tcpState != TcpState::TimeWait) {
                     endpoint.reset();
                     break;
                 }
+                if (!(flags & TCP_FLAG_ACK)) break;
+                if (flags & TCP_FLAG_SYN) { sendAck = true; break; }
                 // Sequence validation precedes ACK processing so a forged or
                 // out-of-window segment cannot retire the outstanding send.
-                if (sequence != endpoint->ackNum) { sendAck = true; break; }
+                if (sequence != endpoint->ackNum) {
+                    // A retransmitted FIN in TIME_WAIT must be acknowledged
+                    // and restart 2*MSL, so delayed duplicates cannot be
+                    // confused with a subsequent connection on this tuple.
+                    if (endpoint->tcpState == TcpState::TimeWait && (flags & TCP_FLAG_FIN) &&
+                        sequence + static_cast<uint32_t>(tcpData.size()) + 1 == endpoint->ackNum) {
+                        uint64_t now{};
+                        if (queryTcpClock100ns(now)) {
+                            constexpr uint64_t twoMsl = 120ull * 10'000'000ull;
+                            endpoint->closeDeadline100ns = now > UINT64_MAX - twoMsl ? UINT64_MAX : now + twoMsl;
+                        }
+                    }
+                    sendAck = true;
+                    break;
+                }
                 if ((flags & TCP_FLAG_ACK) && !tcpAckInRange(acknowledgement,
                                                               endpoint->sndUna,
                                                               endpoint->seqNum)) {
@@ -2439,12 +2908,67 @@ private:
                     break;
                 }
                 if (flags & TCP_FLAG_ACK) {
+                    const uint16_t advertisedWindow = ntohs(tcp->windowSize);
+                    if (endpoint->peerWindow != advertisedWindow) {
+                        endpoint->peerWindow = advertisedWindow;
+                        notifyReceiver = true;
+                    }
+                    if (endpoint->retransmitPending && acknowledgement != endpoint->sndUna &&
+                        acknowledgement != endpoint->seqNum) {
+                        // Keep only the unacknowledged suffix; retransmitting
+                        // an already ACKed prefix can otherwise stall against
+                        // a peer that discards out-of-order duplicate bytes.
+                        auto& pending = endpoint->pendingSegment;
+                        if (pending.size() < sizeof(TcpHeader)) { endpoint.reset(); break; }
+                        auto* header = reinterpret_cast<TcpHeader*>(pending.data());
+                        const size_t headerLength = header->getDataOffset();
+                        const uint32_t consumed = acknowledgement - header->getSeqNum();
+                        if (headerLength < sizeof(TcpHeader) || headerLength > pending.size() ||
+                            (header->getFlags() & (TCP_FLAG_SYN | TCP_FLAG_FIN)) ||
+                            consumed > pending.size() - headerLength) { endpoint.reset(); break; }
+                        pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(headerLength),
+                                      pending.begin() + static_cast<std::ptrdiff_t>(headerLength + consumed));
+                        header = reinterpret_cast<TcpHeader*>(pending.data());
+                        header->setSeqNum(acknowledgement);
+                        header->checksum = 0;
+                        header->checksum = calculateTransportChecksum(endpoint->localIp, endpoint->remoteIp,
+                            IPPROTO_TCP, pending.data(), pending.size());
+                        uint64_t now{};
+                        if (queryTcpClock100ns(now)) {
+                            const uint64_t delay = static_cast<uint64_t>(endpoint->rtoMs) * 10'000u;
+                            endpoint->retransmitDeadline100ns = now > UINT64_MAX - delay ? UINT64_MAX : now + delay;
+                        }
+                    }
                     endpoint->sndUna = acknowledgement;
                     if (endpoint->retransmitPending && acknowledgement == endpoint->seqNum) {
                         endpoint->retransmitPending = false;
                         endpoint->pendingSegment.clear();
                         endpoint->retransmitCount = 0;
+                        if (endpoint->tcpState == TcpState::FinWait1)
+                            endpoint->tcpState = TcpState::FinWait2;
+                        else if (endpoint->tcpState == TcpState::Closing) {
+                            endpoint->tcpState = TcpState::TimeWait;
+                            uint64_t now{};
+                            if (queryTcpClock100ns(now)) {
+                                constexpr uint64_t twoMsl = 120ull * 10'000'000ull;
+                                endpoint->closeDeadline100ns = now > UINT64_MAX - twoMsl ? UINT64_MAX : now + twoMsl;
+                            }
+                        }
+                        else if (endpoint->tcpState == TcpState::LastAck) {
+                            endpoint->tcpState = TcpState::Closed;
+                            removeClosed = true;
+                        }
+                        notifyReceiver = true;
                     }
+                }
+                // Once the peer's FIN has been accepted its send half is
+                // closed. Continue processing ACKs for our outstanding data,
+                // but do not accept new bytes or advance RCV.NXT a second time.
+                if ((endpoint->tcpState == TcpState::CloseWait || endpoint->tcpState == TcpState::Closing ||
+                     endpoint->tcpState == TcpState::LastAck || endpoint->tcpState == TcpState::TimeWait) &&
+                    (!tcpData.empty() || (flags & TCP_FLAG_FIN))) {
+                    sendAck = true;
+                    break;
                 }
                 if (tcpData.size() > TCP_MAX_RX_BUFFER -
                     std::min(endpoint->rxStream.size(), TCP_MAX_RX_BUFFER)) {
@@ -2459,16 +2983,22 @@ private:
                 }
                 if (flags & TCP_FLAG_FIN) {
                     ++endpoint->ackNum;
-                    endpoint->tcpState = TcpState::CloseWait;
+                    if (endpoint->tcpState == TcpState::FinWait1) endpoint->tcpState = TcpState::Closing;
+                    else if (endpoint->tcpState == TcpState::FinWait2) endpoint->tcpState = TcpState::TimeWait;
+                    else endpoint->tcpState = TcpState::CloseWait;
+                    if (endpoint->tcpState == TcpState::TimeWait) {
+                        uint64_t now{};
+                        if (queryTcpClock100ns(now)) {
+                            constexpr uint64_t twoMsl = 120ull * 10'000'000ull;
+                            endpoint->closeDeadline100ns = now > UINT64_MAX - twoMsl ? UINT64_MAX : now + twoMsl;
+                        }
+                    }
                     notifyReceiver = true;
                     sendAck = true;
                 }
                 break;
             }
-        }
-        if (removeEndpoint && endpoint) {
-            std::lock_guard<Mutex> lock(socketMutex_);
-            sockets_.erase(endpoint->id);
+            if (removeClosed && endpoint) sockets_.erase(endpoint->id);
         }
 #if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
         if (endpoint && notifyReceiver) endpoint->signalReceiveEvent();
@@ -2506,6 +3036,9 @@ private:
     ndis::MacAddress localMac_{};
     static constexpr size_t MaxSocketEndpoints = 64;
     FixedMap<Ipv4Address, ArpCacheEntry, 256> arpCache_;
+#if defined(MICANT_FREESTANDING) && defined(MICANT_BAREMETAL)
+    sync::detail::BootstrapEvent arpResolutionEvent_{true, false};
+#endif
     FixedMap<Ipv6Address, NdpCacheEntry, 64> ndpCache_;
     FixedMap<int, IntrusivePtr<SocketEndpoint>, MaxSocketEndpoints> sockets_;
 

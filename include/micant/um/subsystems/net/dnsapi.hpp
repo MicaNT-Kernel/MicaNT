@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <string>
@@ -29,9 +30,11 @@
 #include <sstream>
 #include <span>
 #include "micant/shared/ntdef.hpp"
+#if !defined(MICANT_NATIVE_USERMODE)
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/winbase/kernel32.hpp"
+#endif
 #include "micant/um/subsystems/net/ws2_32.hpp"
 
 namespace micant::dnsapi {
@@ -170,6 +173,17 @@ struct DNS_RECORDW {
         DNS_AAAA_DATA AAAA;
         DNS_PTR_DATAW PTR;
     } Data{};
+};
+
+struct DNS_RECORDA {
+    DNS_RECORDA* pNext{nullptr};
+    const char* pName{nullptr};
+    uint16_t wType{DNS_TYPE_A};
+    uint16_t wDataLength{sizeof(DNS_A_DATA)};
+    DNS_RECORD_FLAGS Flags{};
+    uint32_t dwTtl{300};
+    uint32_t dwReserved{0};
+    union { DNS_A_DATA A; DNS_AAAA_DATA AAAA; } Data{};
 };
 
 #pragma pack(pop)
@@ -529,7 +543,10 @@ private:
 // Perform a bounded UDP/IPv4 DNS query using the configured resolver from the
 // canonical AFD network configuration.  A reply is accepted only when its
 // source tuple, transaction ID, flags, question, and record bounds match.
-inline uint32_t queryDnsA(std::string_view name, uint32_t& address, uint32_t& ttl) noexcept {
+struct DnsWireAnswer { std::string owner; uint16_t type{}; uint32_t ttl{}; std::vector<uint8_t> data; };
+
+inline uint32_t queryDnsRecords(std::string_view name, uint16_t queryType,
+                                std::vector<DnsWireAnswer>& output) {
     using namespace ws2_32;
     std::vector<uint8_t> encoded;
     std::vector<uint8_t> request;
@@ -556,7 +573,8 @@ inline uint32_t queryDnsA(std::string_view name, uint32_t& address, uint32_t& tt
         return DNS_ERROR_RCODE_SERVER_FAILURE;
     }
 
-    const uint64_t tick = win32::GetTickCount64();
+    static std::atomic<uint64_t> querySequence{1};
+    const uint64_t tick = querySequence.fetch_add(1, std::memory_order_relaxed);
     uint32_t hash = 2166136261u;
     for (unsigned char ch : name) hash = (hash ^ static_cast<uint8_t>(std::tolower(ch))) * 16777619u;
     const uint16_t id = static_cast<uint16_t>((tick ^ (tick >> 32) ^ hash) | 1u);
@@ -567,7 +585,7 @@ inline uint32_t queryDnsA(std::string_view name, uint32_t& address, uint32_t& tt
     put16(request.data() + 2, 0x0100); // RD
     put16(request.data() + 4, 1);
     std::memcpy(request.data() + 12, encoded.data(), encoded.size());
-    put16(request.data() + 12 + encoded.size(), DNS_TYPE_A);
+    put16(request.data() + 12 + encoded.size(), queryType);
     put16(request.data() + 14 + encoded.size(), DNS_CLASS_IN);
 
     sockaddr_in resolver{};
@@ -589,7 +607,46 @@ inline uint32_t queryDnsA(std::string_view name, uint32_t& address, uint32_t& tt
     if (sourceLength != sizeof(source) || source.sin_family != AF_INET ||
         source.sin_addr.S_un.S_addr != resolver.sin_addr.S_un.S_addr || ntohs(source.sin_port) != 53 || received < 12)
         return DNS_ERROR_RCODE_SERVER_FAILURE;
-    const auto packet = std::span<const uint8_t>(response.data(), static_cast<size_t>(received));
+    std::vector<uint8_t> tcpResponse;
+    if ((get16(response.data() + 2) & 0x0200u) != 0) {
+        SOCKET tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (tcp == INVALID_SOCKET) return DNS_ERROR_RCODE_SERVER_FAILURE;
+        const uint32_t tcpTimeout = 5000;
+        if (setsockopt(tcp, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tcpTimeout), sizeof(tcpTimeout)) != 0 ||
+            connect(tcp, reinterpret_cast<const sockaddr*>(&resolver), sizeof(resolver)) != 0) {
+            (void)closesocket(tcp); return DNS_ERROR_RCODE_SERVER_FAILURE;
+        }
+        std::vector<uint8_t> framed;
+        try { framed.resize(request.size() + 2); tcpResponse.resize(65535); }
+        catch (...) { (void)closesocket(tcp); return DNS_ERROR_NO_MEMORY; }
+        put16(framed.data(), static_cast<uint16_t>(request.size()));
+        std::memcpy(framed.data() + 2, request.data(), request.size());
+        size_t sent = 0;
+        while (sent < framed.size()) {
+            const int n = send(tcp, reinterpret_cast<const char*>(framed.data() + sent), static_cast<int>(framed.size() - sent), 0);
+            if (n <= 0) { (void)closesocket(tcp); return DNS_ERROR_RCODE_SERVER_FAILURE; }
+            sent += static_cast<size_t>(n);
+        }
+        uint8_t lengthBytes[2]{}; size_t got = 0;
+        while (got < sizeof(lengthBytes)) {
+            const int n = recv(tcp, reinterpret_cast<char*>(lengthBytes + got), static_cast<int>(sizeof(lengthBytes) - got), 0);
+            if (n <= 0) { (void)closesocket(tcp); return DNS_ERROR_RCODE_SERVER_FAILURE; }
+            got += static_cast<size_t>(n);
+        }
+        const size_t messageLength = get16(lengthBytes);
+        if (messageLength < 12 || messageLength > tcpResponse.size()) { (void)closesocket(tcp); return DNS_ERROR_RCODE_SERVER_FAILURE; }
+        got = 0;
+        while (got < messageLength) {
+            const int n = recv(tcp, reinterpret_cast<char*>(tcpResponse.data() + got), static_cast<int>(messageLength - got), 0);
+            if (n <= 0) { (void)closesocket(tcp); return DNS_ERROR_RCODE_SERVER_FAILURE; }
+            got += static_cast<size_t>(n);
+        }
+        (void)closesocket(tcp);
+        tcpResponse.resize(messageLength);
+    }
+    const auto packet = tcpResponse.empty()
+        ? std::span<const uint8_t>(response.data(), static_cast<size_t>(received))
+        : std::span<const uint8_t>(tcpResponse.data(), tcpResponse.size());
     if (get16(packet.data()) != id || (get16(packet.data() + 2) & 0x8000u) == 0 ||
         (get16(packet.data() + 2) & 0x7800u) != 0 || get16(packet.data() + 4) != 1)
         return DNS_ERROR_RCODE_SERVER_FAILURE;
@@ -599,7 +656,7 @@ inline uint32_t queryDnsA(std::string_view name, uint32_t& address, uint32_t& tt
     size_t offset = 12;
     std::string question;
     if (!DecodeDnsNameChecked(packet, offset, question) || offset + 4 > packet.size() ||
-        get16(packet.data() + offset) != DNS_TYPE_A || get16(packet.data() + offset + 2) != DNS_CLASS_IN)
+        get16(packet.data() + offset) != queryType || get16(packet.data() + offset + 2) != DNS_CLASS_IN)
         return DNS_ERROR_RCODE_SERVER_FAILURE;
     offset += 4;
     auto equalDnsName = [](std::string_view a, std::string_view b) {
@@ -619,26 +676,33 @@ inline uint32_t queryDnsA(std::string_view name, uint32_t& address, uint32_t& tt
         const uint16_t dataLength = get16(packet.data() + offset + 8);
         offset += 10;
         if (dataLength > packet.size() - offset) return DNS_ERROR_RCODE_SERVER_FAILURE;
-        if (type == DNS_TYPE_A && klass == DNS_CLASS_IN && dataLength == 4 && equalDnsName(owner, name)) {
-            std::memcpy(&address, packet.data() + offset, sizeof(address));
-            ttl = recordTtl;
-            return DNS_STATUS_SUCCESS;
+        if (type == queryType && klass == DNS_CLASS_IN && equalDnsName(owner, name) &&
+            ((queryType == DNS_TYPE_A && dataLength == 4) || (queryType == DNS_TYPE_AAAA && dataLength == 16))) {
+            DnsWireAnswer answer;
+            answer.owner = std::move(owner);
+            answer.type = type;
+            answer.ttl = recordTtl;
+            answer.data.assign(packet.begin() + offset, packet.begin() + offset + dataLength);
+            output.push_back(std::move(answer));
         }
         offset += dataLength;
     }
-    return DNS_ERROR_RCODE_NAME_ERROR;
+    return output.empty() ? DNS_ERROR_RCODE_NAME_ERROR : DNS_STATUS_SUCCESS;
 }
 
 // ----------------------------------------------------------------------------
 // Win32 C ABI Exports for dnsapi.dll
 // ----------------------------------------------------------------------------
 
+inline void WINAPI DnsRecordListFreeA(DNS_RECORDA* record) noexcept;
+inline void WINAPI DnsRecordListFree(void* record, uint32_t freeType) noexcept;
+
 inline uint32_t WINAPI DnsQuery_A(
     const char* pszName,
     uint16_t wType,
     uint32_t Options,
     void* pExtra,
-    DNS_RECORDW** ppQueryResults,
+    DNS_RECORDA** ppQueryResults,
     void** pReserved
 ) noexcept {
     if (!pszName || pExtra || pReserved) return DNS_ERROR_INVALID_PARAMETER;
@@ -647,51 +711,46 @@ inline uint32_t WINAPI DnsQuery_A(
     if (Options) return DNS_ERROR_NOT_SUPPORTED;
     if (!*pszName) return DNS_ERROR_INVALID_NAME;
 
-    auto& resolver = DnsResolverEngine::get();
-    if (wType == DNS_TYPE_A) {
-        DnsIpv4Address ip;
-        uint32_t ttl = 300;
-        if (resolver.resolveA(pszName, ip)) {
-            auto* record = new (std::nothrow) DNS_RECORDW{};
-            if (!record) return DNS_ERROR_NO_MEMORY;
-            record->wType = DNS_TYPE_A;
-            record->wDataLength = sizeof(DNS_A_DATA);
-            record->dwTtl = 300;
-            record->Data.A.IpAddress = ip.addr;
-            *ppQueryResults = record;
-            return DNS_STATUS_SUCCESS;
+    if (wType != DNS_TYPE_A && wType != DNS_TYPE_AAAA) return DNS_ERROR_NOT_SUPPORTED;
+    try {
+        auto& resolver = DnsResolverEngine::get();
+        std::vector<DnsWireAnswer> answers;
+        if (wType == DNS_TYPE_A) {
+            DnsIpv4Address cached;
+            if (resolver.resolveA(pszName, cached)) {
+                DnsWireAnswer a; a.owner = pszName; a.type = wType; a.ttl = 300; a.data.resize(4);
+                std::memcpy(a.data.data(), &cached.addr, 4); answers.push_back(std::move(a));
+            }
+        } else {
+            DnsIpv6Address cached;
+            if (resolver.resolveAaaa(pszName, cached)) {
+                DnsWireAnswer a; a.owner = pszName; a.type = wType; a.ttl = 300; a.data.assign(cached.bytes, cached.bytes + 16); answers.push_back(std::move(a));
+            }
         }
-        uint32_t queriedAddress{};
-        const uint32_t queryStatus = queryDnsA(pszName, queriedAddress, ttl);
-        if (queryStatus != DNS_STATUS_SUCCESS) return queryStatus;
-        uint8_t bytes[4]{};
-        std::memcpy(bytes, &queriedAddress, sizeof(bytes));
-        try { resolver.addCacheEntry(pszName, DNS_TYPE_A, std::span<const uint8_t>(bytes, sizeof(bytes)), ttl); }
-        catch (...) {}
-        auto* record = new (std::nothrow) DNS_RECORDW{};
-        if (!record) return DNS_ERROR_NO_MEMORY;
-        record->wType = DNS_TYPE_A;
-        record->wDataLength = sizeof(DNS_A_DATA);
-        record->dwTtl = ttl;
-        record->Data.A.IpAddress = DnsIpv4Address(queriedAddress).addr;
-        *ppQueryResults = record;
-        return DNS_STATUS_SUCCESS;
-    } else if (wType == DNS_TYPE_AAAA) {
-        DnsIpv6Address ip6;
-        if (resolver.resolveAaaa(pszName, ip6)) {
-            auto* record = new (std::nothrow) DNS_RECORDW{};
-            if (!record) return DNS_ERROR_NO_MEMORY;
-            record->wType = DNS_TYPE_AAAA;
-            record->wDataLength = sizeof(DNS_AAAA_DATA);
-            record->dwTtl = 300;
-            std::memcpy(record->Data.AAAA.Ip6Address, ip6.bytes, 16);
-            *ppQueryResults = record;
-            return DNS_STATUS_SUCCESS;
+        if (answers.empty()) {
+            const uint32_t status = queryDnsRecords(pszName, wType, answers);
+            if (status != DNS_STATUS_SUCCESS) return status;
         }
-    }
-
-    // A cache miss does not establish that a DNS server returned NXDOMAIN.
-    return DNS_ERROR_NOT_SUPPORTED;
+        DNS_RECORDA* tail = nullptr;
+        for (const auto& answer : answers) {
+            auto* record = new (std::nothrow) DNS_RECORDA{};
+            if (!record) { DnsRecordListFreeA(*ppQueryResults); *ppQueryResults = nullptr; return DNS_ERROR_NO_MEMORY; }
+            auto* owner = new (std::nothrow) uint8_t[answer.owner.size() + 1];
+            if (!owner) { delete record; DnsRecordListFreeA(*ppQueryResults); *ppQueryResults = nullptr; return DNS_ERROR_NO_MEMORY; }
+            std::memcpy(owner, answer.owner.c_str(), answer.owner.size() + 1);
+            record->pName = reinterpret_cast<const char*>(owner); record->wType = answer.type; record->dwTtl = answer.ttl;
+            if (answer.type == DNS_TYPE_A && answer.data.size() == 4) {
+                record->wDataLength = sizeof(DNS_A_DATA); std::memcpy(&record->Data.A.IpAddress, answer.data.data(), 4);
+                try { resolver.addCacheEntry(answer.owner, answer.type, answer.data, answer.ttl); } catch (...) {}
+            } else if (answer.type == DNS_TYPE_AAAA && answer.data.size() == 16) {
+                record->wDataLength = sizeof(DNS_AAAA_DATA); std::memcpy(record->Data.AAAA.Ip6Address, answer.data.data(), 16);
+                try { resolver.addCacheEntry(answer.owner, answer.type, answer.data, answer.ttl); } catch (...) {}
+            } else { delete[] owner; delete record; continue; }
+            if (tail) tail->pNext = record; else *ppQueryResults = record;
+            tail = record;
+        }
+        return *ppQueryResults ? DNS_STATUS_SUCCESS : DNS_ERROR_RCODE_NAME_ERROR;
+    } catch (...) { DnsRecordListFreeA(*ppQueryResults); *ppQueryResults = nullptr; return DNS_ERROR_NO_MEMORY; }
 }
 
 inline uint32_t WINAPI DnsQuery_W(
@@ -703,7 +762,8 @@ inline uint32_t WINAPI DnsQuery_W(
     void** pReserved
 ) noexcept {
     if (!pszName || pExtra || pReserved) return DNS_ERROR_INVALID_PARAMETER;
-    if (ppQueryResults) *ppQueryResults = nullptr;
+    if (!ppQueryResults) return DNS_ERROR_INVALID_PARAMETER;
+    *ppQueryResults = nullptr;
     if (Options) return DNS_ERROR_NOT_SUPPORTED;
     std::string narrowName;
     for (const wchar_t* p = pszName; *p; ++p) {
@@ -715,22 +775,49 @@ inline uint32_t WINAPI DnsQuery_W(
         }
         narrowName.push_back(static_cast<char>(*p));
     }
-    return DnsQuery_A(narrowName.c_str(), wType, Options, pExtra, ppQueryResults, pReserved);
+    DNS_RECORDA* ansiRecords = nullptr;
+    const uint32_t status = DnsQuery_A(narrowName.c_str(), wType, Options, pExtra, &ansiRecords, pReserved);
+    if (status != DNS_STATUS_SUCCESS) return status;
+    DNS_RECORDW* tail = nullptr;
+    try {
+        for (auto* ansi = ansiRecords; ansi; ansi = ansi->pNext) {
+            auto* wide = new (std::nothrow) DNS_RECORDW{};
+            if (!wide) { DnsRecordListFree(*ppQueryResults, 0); *ppQueryResults = nullptr; DnsRecordListFree(ansiRecords, 0); return DNS_ERROR_NO_MEMORY; }
+            const size_t length = std::strlen(ansi->pName);
+            auto* owner = new (std::nothrow) uint8_t[(length + 1) * sizeof(wchar_t)];
+            if (!owner) { delete wide; DnsRecordListFree(*ppQueryResults, 0); *ppQueryResults = nullptr; DnsRecordListFree(ansiRecords, 0); return DNS_ERROR_NO_MEMORY; }
+            auto* wideOwner = reinterpret_cast<wchar_t*>(owner);
+            for (size_t i = 0; i <= length; ++i) wideOwner[i] = static_cast<unsigned char>(ansi->pName[i]);
+            wide->pName = wideOwner; wide->wType = ansi->wType; wide->wDataLength = ansi->wDataLength; wide->dwTtl = ansi->dwTtl;
+            if (ansi->wType == DNS_TYPE_A) wide->Data.A = ansi->Data.A;
+            else if (ansi->wType == DNS_TYPE_AAAA) wide->Data.AAAA = ansi->Data.AAAA;
+            if (tail) tail->pNext = wide; else *ppQueryResults = wide;
+            tail = wide;
+        }
+    } catch (...) { DnsRecordListFree(*ppQueryResults, 0); *ppQueryResults = nullptr; DnsRecordListFree(ansiRecords, 0); return DNS_ERROR_NO_MEMORY; }
+    DnsRecordListFree(ansiRecords, 0);
+    return DNS_STATUS_SUCCESS;
 }
 
 inline void WINAPI DnsRecordListFree(void* pRecordList, uint32_t /*FreeType*/) noexcept {
+    // A and W records have different name element widths.  The caller frees
+    // through the typed wrappers below; retain the historical W ABI here.
     auto* record = static_cast<DNS_RECORDW*>(pRecordList);
     while (record) {
         auto* next = record->pNext;
+        delete[] reinterpret_cast<uint8_t*>(const_cast<wchar_t*>(record->pName));
         delete record;
         record = next;
     }
 }
 
+inline void WINAPI DnsRecordListFreeA(DNS_RECORDA* record) noexcept { DnsRecordListFree(record, 0); }
+
 inline uint32_t WINAPI DnsFlushResolverCache() noexcept {
     return DnsResolverEngine::get().flushCache();
 }
 
+#if !defined(MICANT_NATIVE_USERMODE)
 inline void InitializeDnsApiSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("dnsapi.dll", "DnsQuery_A", reinterpret_cast<void*>(DnsQuery_A));
@@ -754,5 +841,6 @@ inline void InitializeDnsApiSubsystemExports() {
     auto& verDb = version::VersionDatabase::Instance();
     verDb.RegisterModule("dnsapi.dll", "10.0.26100.5900", "MicaNT DNS Client API");
 }
+#endif
 
 } // namespace micant::dnsapi
