@@ -158,7 +158,7 @@ struct BootFileProvider {
     size_t ActiveBackends;
     bool Used;
 };
-struct BootDriverServiceContext { size_t Index{}; };
+struct BootDriverServiceContext { size_t Index{}; uint64_t MsiInterruptToken{}; };
 int32_t bootRegisterNetworkAdapter(void*,
     const micant::shared::ndis::AdapterServicesV1*, uint64_t*) noexcept;
 int32_t bootUnregisterNetworkAdapter(void*, uint64_t) noexcept;
@@ -924,6 +924,40 @@ int32_t bootPciWrite(void* owner, uint16_t bus, uint16_t device, uint16_t functi
         ? micant::NtStatus::InvalidParameter : micant::NtStatus::NotSupported);
 }
 
+int32_t bootConnectMsiInterrupt(void* rawContext,
+    micant::hal::amd64::BootstrapMsiRoutine routine, void* routineContext,
+    micant::boot_driver::MsiInterruptRouteV1* output) noexcept {
+    using namespace micant;
+    auto* context = static_cast<BootDriverServiceContext*>(rawContext);
+    if (!context || context->Index >= kMaxBootStartDrivers || !routine || !routineContext || !output)
+        return bootStatus(NtStatus::InvalidParameter);
+    *output = {};
+    if (context->MsiInterruptToken) return bootStatus(NtStatus::DeviceBusy);
+    hal::amd64::BootstrapMsiMessage message{};
+    if (!hal::amd64::connectBootstrapMsiInterrupt(routine, routineContext, message))
+        return bootStatus(NtStatus::NotSupported);
+    context->MsiInterruptToken = message.token;
+    output->Size = sizeof(*output);
+    output->Version = boot_driver::MSI_INTERRUPT_SERVICES_VERSION;
+    output->Token = message.token;
+    output->MessageAddress = message.address;
+    output->MessageData = message.data;
+    output->Vector = message.vector;
+    return bootStatus(NtStatus::Success);
+}
+
+int32_t bootDisconnectMsiInterrupt(void* rawContext, uint64_t token) noexcept {
+    using namespace micant;
+    auto* context = static_cast<BootDriverServiceContext*>(rawContext);
+    if (!context || context->Index >= kMaxBootStartDrivers || !token)
+        return bootStatus(NtStatus::InvalidParameter);
+    if (context->MsiInterruptToken != token) return bootStatus(NtStatus::InvalidHandle);
+    if (!hal::amd64::disconnectBootstrapMsiInterrupt(token))
+        return bootStatus(NtStatus::DeviceBusy);
+    context->MsiInterruptToken = 0;
+    return bootStatus(NtStatus::Success);
+}
+
 struct BootPciMapping {
     void* owner{};
     void* address{};
@@ -1447,6 +1481,9 @@ void initializeKernelServices(micant::boot_driver::KernelServices& services,
     services.CreateWritableBlockDevice = bootCreateWritableBlockDevice;
     services.WriteBlockDevice = bootWriteBlockDevice;
     services.ReadFatFileFromMount = bootReadFatFileFromMount;
+    services.MsiInterruptVersion = MSI_INTERRUPT_SERVICES_VERSION;
+    services.ConnectMsiInterrupt = bootConnectMsiInterrupt;
+    services.DisconnectMsiInterrupt = bootDisconnectMsiInterrupt;
     services.RegisterFileOpenRoutine = bootRegisterFileOpenRoutine;
     services.UnregisterFileOpenRoutine = bootUnregisterFileOpenRoutine;
     services.OpenBackendFile = bootOpenBackendFile;

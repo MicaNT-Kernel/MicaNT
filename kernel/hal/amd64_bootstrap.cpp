@@ -220,6 +220,12 @@ struct Idtr {
 
 alignas(16) InterruptGate g_idt[256]{};
 alignas(16) InterruptGate g_managedFaultIdt[256]{};
+constexpr uint8_t kBootstrapMsiVector = 0xd2;
+micant::hal::amd64::BootstrapMsiRoutine g_bootstrapMsiRoutine{};
+void* g_bootstrapMsiContext{};
+InterruptGate g_savedBootstrapMsiGate{};
+uint64_t g_bootstrapMsiToken{};
+uint64_t g_nextBootstrapMsiToken{1};
 uintptr_t g_managedFaultAddress{};
 uintptr_t g_managedFaultRip{};
 uintptr_t g_managedFaultResume{};
@@ -917,6 +923,17 @@ void MicantBootstrapTimerDispatch() noexcept {
         if (!scheduler.cancelQuantumPreemption(current, next)) __builtin_trap();
         MicantTimerDispatchFailed = true;
     }
+    KeLowerIrql(previous);
+}
+
+void MicantBootstrapMsiDispatch() noexcept {
+    using namespace micant::ke;
+    const auto previous = KfRaiseIrql(DIRQL_MIN);
+    const auto routine = g_bootstrapMsiRoutine;
+    void* const context = g_bootstrapMsiContext;
+    if (!routine || !g_bootstrapMsiToken) __builtin_trap();
+    routine(context);
+    g_timerApic.write(0xb0 / 4, 0);
     KeLowerIrql(previous);
 }
 
@@ -2081,6 +2098,63 @@ PciConfigAccessResult writePciConfig32(uint16_t bus, uint16_t device,
     (void)value;
     return PciConfigAccessResult::UnsupportedPlatform;
 #endif
+}
+
+bool connectBootstrapMsiInterrupt(BootstrapMsiRoutine routine, void* context,
+                                  BootstrapMsiMessage& message) noexcept {
+    message = {};
+    if (!routine || !context || !g_schedulerClockActive || !g_timerApic.available() ||
+        (cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE) & (uint64_t{1} << 10)) || !g_nextBootstrapMsiToken)
+        return false;
+    Idtr active{};
+    __asm__ __volatile__("sidt %0" : "=m"(active));
+    if (active.base != reinterpret_cast<uintptr_t>(g_idt) || active.limit != sizeof(g_idt) - 1)
+        return false;
+    const uint64_t apicBase = cpu::cpuRdmsr(cpu::MSR_IA32_APIC_BASE);
+    if (!(apicBase & (uint64_t{1} << 11))) return false;
+    const uint32_t localApicId = g_timerApic.read(0x20 / 4) >> 24;
+    if (localApicId > UINT8_MAX) return false;
+    const uint64_t physicalBase = apicBase & 0x0000000ffffff000ULL;
+    if (!physicalBase) return false;
+
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (g_bootstrapMsiToken) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    g_savedBootstrapMsiGate = g_idt[kBootstrapMsiVector];
+    const uint64_t handler = reinterpret_cast<uint64_t>(MicantBootstrapMsiInterrupt);
+    g_idt[kBootstrapMsiVector] = InterruptGate{
+        static_cast<uint16_t>(handler), cpu::SELECTOR_KCODE64, 0, 0x8e,
+        static_cast<uint16_t>(handler >> 16), static_cast<uint32_t>(handler >> 32), 0};
+    g_bootstrapMsiRoutine = routine;
+    g_bootstrapMsiContext = context;
+    g_bootstrapMsiToken = g_nextBootstrapMsiToken++;
+    message.address = (physicalBase & 0x0000000ffff00000ULL) |
+        (uint64_t{localApicId} << 12);
+    message.data = kBootstrapMsiVector;
+    message.vector = kBootstrapMsiVector;
+    message.token = g_bootstrapMsiToken;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return true;
+}
+
+bool disconnectBootstrapMsiInterrupt(uint64_t token) noexcept {
+    if (!token) return false;
+    uint64_t flags{};
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+    if (g_bootstrapMsiToken != token) {
+        if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+        return false;
+    }
+    g_bootstrapMsiRoutine = nullptr;
+    g_bootstrapMsiContext = nullptr;
+    g_idt[kBootstrapMsiVector] = g_savedBootstrapMsiGate;
+    g_savedBootstrapMsiGate = {};
+    g_bootstrapMsiToken = 0;
+    if (flags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return true;
 }
 
 void setBootstrapClockIrqlMask(uint8_t irql) noexcept {

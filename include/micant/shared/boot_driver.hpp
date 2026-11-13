@@ -15,6 +15,7 @@ inline constexpr uint32_t DRIVER_ABI_VERSION = 1;
 inline constexpr uint32_t KERNEL_SERVICES_VERSION = 2;
 inline constexpr uint32_t DMA_SERVICES_VERSION = 1;
 inline constexpr uint32_t NETWORK_ADAPTER_SERVICES_VERSION = 1;
+inline constexpr uint32_t MSI_INTERRUPT_SERVICES_VERSION = 1;
 inline constexpr uint32_t DRIVER_FLAG_BOOT_START = 0x00000001;
 inline constexpr uint32_t DRIVER_FLAG_DISPLAY = 0x00000002;
 
@@ -41,6 +42,16 @@ struct PciBarResourceV1 {
     uint32_t Reserved1;
     uint64_t PhysicalAddress;
     uint64_t Length;
+};
+
+struct MsiInterruptRouteV1 {
+    uint32_t Size;
+    uint32_t Version;
+    uint64_t Token;
+    uint64_t MessageAddress;
+    uint32_t MessageData;
+    uint8_t Vector;
+    uint8_t Reserved[3];
 };
 
 struct FileBackendV1;
@@ -117,6 +128,12 @@ struct KernelServices {
     // global drive letter or select another device.
     int32_t (*ReadFatFileFromMount)(void*, uint64_t, const char16_t*, size_t,
                                     void*, size_t, size_t*);
+    // Native single-BSP MSI vector ownership; the ISR callback must be
+    // resident, bounded and safe at DIRQL. PCI capability programming remains
+    // with the claiming bus driver.
+    uint32_t MsiInterruptVersion;
+    int32_t (*ConnectMsiInterrupt)(void*, void (*)(void*) noexcept, void*, MsiInterruptRouteV1*);
+    int32_t (*DisconnectMsiInterrupt)(void*, uint64_t);
 };
 
 inline constexpr size_t KERNEL_SERVICES_V1_SIZE = offsetof(KernelServices, PciReadConfig32);

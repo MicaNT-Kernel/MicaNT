@@ -17,6 +17,8 @@ enum class PciConfigAccessResult : uint8_t {
 };
 enum class PciBarProbeResult : uint8_t { Success, Invalid, Absent, Active, RestoreFailed };
 struct PciBarInfo { uint64_t address{}, length{}; bool ioSpace{}; };
+struct BootstrapMsiMessage { uint64_t address{}, token{}; uint32_t data{}; uint8_t vector{}; };
+using BootstrapMsiRoutine = void (*)(void*) noexcept;
 // Probe only a quiescent function. The config lock covers sizing and restore.
 [[nodiscard]] PciBarProbeResult probeQuiescentPciBar(
     uint16_t bus, uint16_t device, uint16_t function, uint8_t index, PciBarInfo& bar) noexcept;
@@ -26,6 +28,12 @@ struct PciBarInfo { uint64_t address{}, length{}; bool ioSpace{}; };
 [[nodiscard]] PciConfigAccessResult writePciConfig32(
     uint16_t bus, uint16_t device, uint16_t function, uint16_t registerOffset,
     uint32_t value) noexcept;
+// Single-BSP message-signaled interrupt owner for freestanding boot drivers.
+// The route is installed before the caller programs PCI MSI and must be
+// disconnected only after the device has disabled its message generation.
+[[nodiscard]] bool connectBootstrapMsiInterrupt(BootstrapMsiRoutine routine,
+    void* context, BootstrapMsiMessage& message) noexcept;
+[[nodiscard]] bool disconnectBootstrapMsiInterrupt(uint64_t token) noexcept;
 
 // Layout of the bootstrap SYSCALL entry's saved user register frame. The
 // syscall continuation service updates this frame before the common IRETQ.
