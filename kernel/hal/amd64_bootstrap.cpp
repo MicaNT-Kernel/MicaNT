@@ -7,6 +7,7 @@
 #include "micant/shared/syscall_numbers.hpp"
 #include "micant/shared/win32k_client.h"
 #include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/io_file.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/clock_timer.hpp"
@@ -3036,7 +3037,20 @@ bool verifyNativeImageLoading() noexcept {
         "movw $0x18, %%ax\nmovw %%ax, %%ds\nmovw %%ax, %%es\n"
         : : : "rax", "memory"
     );
-    return g_probeSucceeded && mm::PfnDatabase::get().getActiveCount() == activeBefore;
+    // Deferred file deletes release their PFNs from a passive worker. Drain
+    // them before comparing the active PFN count, otherwise the probe reports
+    // a leak that is only pending cleanup.
+    uint64_t savedFlags{};
+    __asm__ __volatile__("pushfq; popq %0; sti" : "=r"(savedFlags) : : "memory");
+    const uint64_t cleanupStart = bootstrapSchedulerClockTicks();
+    for (size_t spin = 0; spin < 50000000 && io::IoDeferredFileDeletesPending() &&
+         bootstrapSchedulerClockTicks() - cleanupStart < 100; ++spin)
+        __asm__ __volatile__("pause");
+    __asm__ __volatile__("cli" : : : "memory");
+    const bool cleanupPending = io::IoDeferredFileDeletesPending();
+    if (savedFlags & (uint64_t{1} << 9)) __asm__ __volatile__("sti" : : : "memory");
+    return g_probeSucceeded && !cleanupPending &&
+        mm::PfnDatabase::get().getActiveCount() == activeBefore;
 }
 
 // Walk every existing leaf, including large pages, before making the IOMMU
