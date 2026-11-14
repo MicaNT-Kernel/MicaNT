@@ -166,6 +166,7 @@
 #include "micant/um/subsystems/graphics/prismx_directsr_superresolution_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_work_graphs_11_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_dxr_12_opacity_micromaps_ser_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_cooperative_vectors_mma_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -456,6 +457,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite521") {
+        RUN_TEST(Test_Horizon305_PrismX_Cooperative_Vectors_WaveMMA_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite520") {
@@ -2611,6 +2616,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon302_PrismX_DirectSR_SuperResolution_Wddm32_Suite);
     RUN_TEST(Test_Horizon303_PrismX_Work_Graphs_11_Wddm32_Suite);
     RUN_TEST(Test_Horizon304_PrismX_Dxr_12_Opacity_Micromaps_Ser_Wddm32_Suite);
+    RUN_TEST(Test_Horizon305_PrismX_Cooperative_Vectors_WaveMMA_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
