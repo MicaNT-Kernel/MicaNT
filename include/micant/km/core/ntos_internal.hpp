@@ -234,6 +234,9 @@ void PrismXD3D12VTableOptions21InitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX + Microsoft DirectX 2026: Agility SDK 1.620.2, ID3D12Device17/18, ID3D12TileMappingQueue, SM 6.10, DXIL 1.10 (kernel/io/prismx_d3d12_execute_tile_mappings_sm610.cpp)
 void PrismXD3D12ExecuteTileMappingsSm610InitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX DirectSR (Direct Super Resolution) WDDM 3.2 Subsystem (kernel/io/prismx_directsr_superresolution_wddm32.cpp)
+void PrismXDirectSRInitializeExecutiveSubsystem() noexcept;
+
 // Sovereign PrismX System32 PE32+ DirectX Shared Library Export Router & Cross-Hierarchy D3D11-to-DXGI COM Bridge (kernel/io/prism_directx_system32_dll_router.cpp)
 void PrismXDirectXSystem32DllRouterInitializeExecutiveSubsystem() noexcept;
 
