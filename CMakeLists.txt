@@ -98,6 +98,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_d3d12_execute_tile_mappings_sm610.cpp
     kernel/io/prismx_directsr_superresolution_wddm32.cpp
     kernel/io/prismx_work_graphs_11_wddm32.cpp
+    kernel/io/prismx_dxr_12_opacity_micromaps_ser_wddm32.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp

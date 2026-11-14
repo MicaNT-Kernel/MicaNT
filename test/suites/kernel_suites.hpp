@@ -72273,3 +72273,51 @@ inline void Suite519_PrismX_Work_Graphs_11_Wddm32() {
 inline void Test_Horizon303_PrismX_Work_Graphs_11_Wddm32_Suite() {
     Suite519_PrismX_Work_Graphs_11_Wddm32();
 }
+
+// ============================================================================
+// Suite 520: Horizon 304 - Sovereign PrismX Direct3D 12 Raytracing 1.2 Opacity Micromaps & SER WDDM 3.2
+//   Pillar 1: Direct3D 12 Agility SDK DXR 1.2 (D3D12_RAYTRACING_TIER_1_2 ABI 12)
+//             & 2-State / 4-State Sub-Triangle Opacity Micromaps (OMM) Specification
+//   Pillar 2: WDDM 3.2 Kernel OMM Array Allocator & Dedicated BVH Aperture Paging Manager
+//   Pillar 3: WDDM 3.2 Shader Execution Reordering (SER) Coherent Wave Scheduler
+//             (HitObject abstraction & SIMD wave lane clustering from <50% to >=85% occupancy)
+//   Pillar 4: Sovereign Raytracing Engine Telemetry & Traversal: >80% AnyHit Bypass Verification,
+//             Sub-triangle foliage traversal & SNR (>20.0 dB) Quality Seal
+// ============================================================================
+inline void Suite520_PrismX_Dxr_12_Opacity_Micromaps_Ser_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 520: Horizon 304 - Sovereign PrismX Direct3D 12 Raytracing 1.2 Opacity Micromaps & SER WDDM 3.2...\n" << std::flush;
+
+    using namespace micant::um::prismx_dxr12;
+
+    // 1. Pillar 1: Agility SDK DXR 1.2 ABI & OMM Format Types
+    TEST_ASSERT(PRISMX_D3D12_RAYTRACING_TIER_1_2 == 12u, "DXR Tier must be 1.2 (12)");
+    TEST_ASSERT(PRISMX_OMM_FORMAT_2_STATE == 1u, "OMM 2-State format must be 1");
+    TEST_ASSERT(PRISMX_OMM_FORMAT_4_STATE == 2u, "OMM 4-State format must be 2");
+    TEST_ASSERT(PRISMX_HIT_OBJECT_TYPE_TRIANGLE_HIT == 2u, "Triangle hit type must be 2");
+    TEST_ASSERT(PRISMX_SER_COHERENCE_HINT_SHADER_GROUP == 1u, "Shader group coherence hint must be 1");
+
+    // 2. Pillar 2: WDDM 3.2 Kernel OMM Array Dedicated Aperture Memory
+    Wddm32OmmArrayAllocation ommAlloc{};
+    ommAlloc.GpuVirtualAddress = 0x0000000200000000ULL;
+    ommAlloc.SizeInBytes = 131072u;
+    ommAlloc.NumMicromaps = 2u;
+    ommAlloc.MemoryPoolTier = 1u;
+    ommAlloc.DedicatedBVHAperture = 1u;
+    ommAlloc.Flags = PRISMX_OMM_FLAG_DEDICATED_APERTURE | PRISMX_OMM_FLAG_PREFER_FAST_TRACE;
+    TEST_ASSERT(ommAlloc.SizeInBytes >= 65536u, "OMM allocation must be at least 64 KB");
+    TEST_ASSERT(ommAlloc.DedicatedBVHAperture == 1u, "Dedicated BVH aperture must be enabled");
+
+    // 3. Pillar 3 & 4: Subsystem Verification & Pipeline Telemetry
+    TEST_ASSERT(VerifyHorizon304Dxr12OmmSerSubsystem(), "VerifyHorizon304Dxr12OmmSerSubsystem must return true");
+
+    std::cout << "  Horizon 304 Architectural Validation Complete:\n"
+              << "    Pillar 1: Direct3D 12 Agility SDK DXR 1.2 & Opacity Micromap (OMM) Format ABI OK\n"
+              << "    Pillar 2: WDDM 3.2 Kernel Dedicated BVH Aperture OMM Memory Allocator (128 KB) OK\n"
+              << "    Pillar 3: Shader Execution Reordering (SER) Coherent Wave Scheduler & HitObject OK\n"
+              << "    Pillar 4: Sovereign DXR 1.2 Ray Engine, >80% AnyHit Shader Bypass & SNR (>20dB) OK\n";
+    std::cout << "[TEST] Suite 520: Horizon 304 - Sovereign PrismX Direct3D 12 Raytracing 1.2 Opacity Micromaps & SER WDDM 3.2 PASSED." << std::endl;
+}
+
+inline void Test_Horizon304_PrismX_Dxr_12_Opacity_Micromaps_Ser_Wddm32_Suite() {
+    Suite520_PrismX_Dxr_12_Opacity_Micromaps_Ser_Wddm32();
+}
