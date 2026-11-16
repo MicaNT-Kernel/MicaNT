@@ -72719,3 +72719,32 @@ inline void Suite530_PrismX_WaveRT_XAudio2_Wddm32() {
 inline void Test_Horizon314_PrismX_WaveRT_XAudio2_Wddm32_Suite() {
     Suite530_PrismX_WaveRT_XAudio2_Wddm32();
 }
+
+// ============================================================================
+// Suite 531: Horizon 315 - Sovereign MicaNT USB 3.2 / xHCI & HID 8000Hz Gamepad
+//   Driver Stack with DirectInput 8 & XInput 1.4 Hardware Synchronization
+//   Pillar 1: xHCI USB 3.2 TRB Ring Buffer Management & Cycle Bit Wrapping
+//   Pillar 2: 8000Hz Microframe Report Parsing (125us Interval)
+//   Pillar 3: Official XInput 1.4 API & Radial Deadzone Parity
+//   Pillar 4: Haptic Vibration Feedback Dispatch (xHCI OUT Endpoint)
+//   Pillar 5: Subsystem Verification & Telemetry
+// ============================================================================
+inline void Suite531_PrismX_Xhci_USB32_Gamepad_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 531: Horizon 315 - Sovereign MicaNT xHCI & XInput 8000Hz Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_hid;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon315XhciGamepadSubsystem(), "VerifyHorizon315XhciGamepadSubsystem must return true");
+
+    std::cout << "  Horizon 315 Architectural Validation Complete:\n"
+              << "    Pillar 1: xHCI USB 3.2 TRB Transfer Ring & Cycle Bit Wrapping OK\n"
+              << "    Pillar 2: 8000Hz Microframe Report Parsing (125us) OK\n"
+              << "    Pillar 3: Official XInput 1.4 API & Radial Deadzone Parity OK\n"
+              << "    Pillar 4: Haptic Vibration Feedback Dispatch OK\n";
+    std::cout << "[TEST] Suite 531: Horizon 315 - Sovereign MicaNT xHCI & XInput 8000Hz PASSED." << std::endl;
+}
+
+inline void Test_Horizon315_PrismX_Xhci_USB32_Gamepad_Wddm32_Suite() {
+    Suite531_PrismX_Xhci_USB32_Gamepad_Wddm32();
+}
