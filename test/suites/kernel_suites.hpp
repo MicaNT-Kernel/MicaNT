@@ -72748,3 +72748,32 @@ inline void Suite531_PrismX_Xhci_USB32_Gamepad_Wddm32() {
 inline void Test_Horizon315_PrismX_Xhci_USB32_Gamepad_Wddm32_Suite() {
     Suite531_PrismX_Xhci_USB32_Gamepad_Wddm32();
 }
+
+// ============================================================================
+// Suite 532: Horizon 316 - Sovereign MicaNT DirectComposition Visual Tree Node
+//   Graph & Hardware Mica / Acrylic Shader Synthesis Engine with Independent Flip
+//   Pillar 1: DirectComposition Visual Tree Node Graph & Multi-Window Z-Order
+//   Pillar 2: Sub-Millisecond Hit-Testing & Dynamic Z-Order Elevation
+//   Pillar 3: Hardware-Accelerated Mica & Acrylic Shader Synthesis
+//   Pillar 4: DirectComposition Independent Flip Promotion
+//   Pillar 5: Subsystem Verification & Telemetry
+// ============================================================================
+inline void Suite532_PrismX_Mica_Acrylic_Composition_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 532: Horizon 316 - Sovereign MicaNT Mica & Acrylic Composition Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_composition;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon316MicaAcrylicCompositionSubsystem(), "VerifyHorizon316MicaAcrylicCompositionSubsystem must return true");
+
+    std::cout << "  Horizon 316 Architectural Validation Complete:\n"
+              << "    Pillar 1: DirectComposition Visual Tree Node Graph & Multi-Window Z-Order OK\n"
+              << "    Pillar 2: Sub-Millisecond Hit-Testing & Dynamic Z-Order Elevation OK\n"
+              << "    Pillar 3: Hardware-Accelerated Mica & Acrylic Shader Synthesis OK\n"
+              << "    Pillar 4: DirectComposition Independent Flip Promotion OK\n";
+    std::cout << "[TEST] Suite 532: Horizon 316 - Sovereign MicaNT Mica & Acrylic Composition PASSED." << std::endl;
+}
+
+inline void Test_Horizon316_PrismX_Mica_Acrylic_Composition_Wddm32_Suite() {
+    Suite532_PrismX_Mica_Acrylic_Composition_Wddm32();
+}
