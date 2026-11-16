@@ -72691,3 +72691,31 @@ inline void Suite529_PrismX_Win32_MsgLoop_Latency_Wddm32() {
 inline void Test_Horizon313_PrismX_Win32_MsgLoop_Latency_Wddm32_Suite() {
     Suite529_PrismX_Win32_MsgLoop_Latency_Wddm32();
 }
+
+// ============================================================================
+// Suite 530: Horizon 314 - Sovereign MicaNT Real-Time Audio Subsystem,
+//   WaveRT DMA Engine & XAudio2 2.9 7.1.4 Dolby Atmos Spatial Engine
+//   Pillar 1: WaveRT Circular DMA Buffer Geometry (<1.5ms Period @ 48kHz)
+//   Pillar 2: 7.1.4 Dolby Atmos / Windows Sonic 3D Spatial Audio Panning & HRTF
+//   Pillar 3: GameInput 8000Hz Direct Audio Trigger Interlock
+//   Pillar 4: Intel HDA / USB Audio Class 2.0 Cyclic DMA Engine Telemetry
+// ============================================================================
+inline void Suite530_PrismX_WaveRT_XAudio2_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 530: Horizon 314 - Sovereign MicaNT WaveRT & XAudio2 7.1.4 Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_audio;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon314WaveRtXAudio2Subsystem(), "VerifyHorizon314WaveRtXAudio2Subsystem must return true");
+
+    std::cout << "  Horizon 314 Architectural Validation Complete:\n"
+              << "    Pillar 1: WaveRT Circular DMA Buffer Geometry (<1.5ms Latency) OK\n"
+              << "    Pillar 2: 7.1.4 Dolby Atmos / Windows Sonic 3D Spatial Panning OK\n"
+              << "    Pillar 3: GameInput 8000Hz Direct Audio Trigger Interlock OK\n"
+              << "    Pillar 4: Intel HDA / USB Audio Class 2.0 Cyclic DMA Engine Telemetry OK\n";
+    std::cout << "[TEST] Suite 530: Horizon 314 - Sovereign MicaNT Real-Time Audio Subsystem PASSED." << std::endl;
+}
+
+inline void Test_Horizon314_PrismX_WaveRT_XAudio2_Wddm32_Suite() {
+    Suite530_PrismX_WaveRT_XAudio2_Wddm32();
+}

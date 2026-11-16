@@ -175,6 +175,7 @@
 #include "micant/um/subsystems/graphics/prismx_ioring_lockfree_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_uefi_bootloader_iso_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_win32_msgloop_latency_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_wavert_xaudio2_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -465,6 +466,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite530") {
+        RUN_TEST(Test_Horizon314_PrismX_WaveRT_XAudio2_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite529") {
@@ -2665,6 +2670,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon311_PrismX_IoRing_LockFree_Wddm32_Suite);
     RUN_TEST(Test_Horizon312_PrismX_Uefi_Bootloader_Iso_Wddm32_Suite);
     RUN_TEST(Test_Horizon313_PrismX_Win32_MsgLoop_Latency_Wddm32_Suite);
+    RUN_TEST(Test_Horizon314_PrismX_WaveRT_XAudio2_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
