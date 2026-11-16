@@ -72777,3 +72777,33 @@ inline void Suite532_PrismX_Mica_Acrylic_Composition_Wddm32() {
 inline void Test_Horizon316_PrismX_Mica_Acrylic_Composition_Wddm32_Suite() {
     Suite532_PrismX_Mica_Acrylic_Composition_Wddm32();
 }
+
+// ============================================================================
+// Suite 533: Horizon 317 - Sovereign MicaNT SurShell Desktop Compositor,
+//   Taskbar Docking & Magnetic Window Snap Layouts Governor
+//   Pillar 1: Usable Work Area Geometry & Taskbar Positioning
+//   Pillar 2: Magnetic Window Snap Layout Rect Calculations
+//   Pillar 3: Magnetic Edge & Corner Cursor Snap Targeting
+//   Pillar 4: Taskbar Docking & System Notification Tray
+//   Pillar 5: Multi-Monitor Virtual Desktops & Telemetry
+// ============================================================================
+inline void Suite533_PrismX_SurShell_Taskbar_Snap_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 533: Horizon 317 - Sovereign MicaNT SurShell Desktop & Snap Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_surshell;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon317SurShellTaskbarSnapSubsystem(), "VerifyHorizon317SurShellTaskbarSnapSubsystem must return true");
+
+    std::cout << "  Horizon 317 Architectural Validation Complete:\n"
+              << "    Pillar 1: Usable Work Area Geometry & Taskbar Positioning OK\n"
+              << "    Pillar 2: Magnetic Window Snap Layout Rect Calculations OK\n"
+              << "    Pillar 3: Magnetic Edge & Corner Cursor Snap Targeting OK\n"
+              << "    Pillar 4: Taskbar Docking & System Notification Tray OK\n"
+              << "    Pillar 5: Multi-Monitor Virtual Desktops & Telemetry OK\n";
+    std::cout << "[TEST] Suite 533: Horizon 317 - Sovereign MicaNT SurShell Desktop & Snap PASSED." << std::endl;
+}
+
+inline void Test_Horizon317_PrismX_SurShell_Taskbar_Snap_Wddm32_Suite() {
+    Suite533_PrismX_SurShell_Taskbar_Snap_Wddm32();
+}
