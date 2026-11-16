@@ -170,6 +170,7 @@
 #include "micant/um/subsystems/graphics/prismx_directfg_optical_flow_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directlatency_reflex_antilag_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_dxr_13_curve_raytracing_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_directstorage_bypassio_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -460,6 +461,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite525") {
+        RUN_TEST(Test_Horizon309_PrismX_DirectStorage_BypassIO_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite524") {
@@ -2635,6 +2640,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon306_PrismX_DirectFG_HardwareFrameGeneration_Wddm32_Suite);
     RUN_TEST(Test_Horizon307_PrismX_DirectLatency_Reflex_AntiLag_Wddm32_Suite);
     RUN_TEST(Test_Horizon308_PrismX_Dxr_13_Curve_Raytracing_Wddm32_Suite);
+    RUN_TEST(Test_Horizon309_PrismX_DirectStorage_BypassIO_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
