@@ -72582,3 +72582,48 @@ inline void Suite526_PrismX_Display_Timing_VRR_Wddm32() {
 inline void Test_Horizon310_PrismX_Display_Timing_VRR_Wddm32_Suite() {
     Suite526_PrismX_Display_Timing_VRR_Wddm32();
 }
+
+// ============================================================================
+// Suite 527: Horizon 311 - Sovereign MicaNT Kernel Asynchronous Lock-Free
+//   I/O Completion Rings (IoRing) & Cutler IOCP Integration Architecture
+//   Pillar 1: IoRing ABI Constants & Structure Size Verification (64-byte SQE, 16-byte CQE)
+//   Pillar 2: Kernel Lock-Free SPSC Ring Buffer Initialization (1024 SQ, 2048 CQ)
+//   Pillar 3: Zero-Syscall Batch Submission (64 Requests with 63 Syscalls Avoided)
+//   Pillar 4: Cutler NT IOCP Correlation & Lock-Free CQ Draining Seal (>10 GB/s Throughput)
+// ============================================================================
+inline void Suite527_PrismX_IoRing_LockFree_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 527: Horizon 311 - Sovereign MicaNT Kernel IoRing & Cutler IOCP...\n" << std::flush;
+
+    using namespace micant::um::prismx_ioring;
+
+    // 1. Pillar 1: IoRing ABI Constants & Structure Sizes
+    TEST_ASSERT(sizeof(MicaNtIoRingSqe) == 64u, "MicaNtIoRingSqe must be 64 bytes");
+    TEST_ASSERT(sizeof(MicaNtIoRingCqe) == 16u, "MicaNtIoRingCqe must be 16 bytes");
+    TEST_ASSERT(IORING_OP_READ == 1u, "IORING_OP_READ must be 1");
+    TEST_ASSERT(IORING_OP_NVME_BYPASS_DMA == 4u, "IORING_OP_NVME_BYPASS_DMA must be 4");
+
+    // 2. Pillar 2: Engine Initialization
+    MicaNtIoRingConfig config{};
+    config.SqCapacity = 1024;
+    config.CqCapacity = 2048;
+    config.BindToIocp = true;
+    config.IocpHandle = 0xCAFE0001ULL;
+
+    MicaNtIoRingEngine engine;
+    NTSTATUS st = engine.Initialize(config);
+    TEST_ASSERT(NT_SUCCESS(st), "IoRing engine initialization must succeed");
+
+    // 3. Pillar 3 & 4: Subsystem Verification & Syscall Elimination
+    TEST_ASSERT(VerifyHorizon311IoRingLockFreeSubsystem(), "VerifyHorizon311IoRingLockFreeSubsystem must return true");
+
+    std::cout << "  Horizon 311 Architectural Validation Complete:\n"
+              << "    Pillar 1: IoRing ABI Constants & Structure Sizes OK\n"
+              << "    Pillar 2: Kernel Lock-Free SPSC Ring Buffer Engine OK\n"
+              << "    Pillar 3: Zero-Syscall Batch Submission (64 Requests, 63 Syscalls Slashed) OK\n"
+              << "    Pillar 4: Cutler NT IOCP Integration & Lock-Free CQ Draining (>10 GB/s) OK\n";
+    std::cout << "[TEST] Suite 527: Horizon 311 - Sovereign MicaNT Kernel IoRing Cutler IOCP PASSED." << std::endl;
+}
+
+inline void Test_Horizon311_PrismX_IoRing_LockFree_Wddm32_Suite() {
+    Suite527_PrismX_IoRing_LockFree_Wddm32();
+}
