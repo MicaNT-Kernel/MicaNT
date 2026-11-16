@@ -72663,3 +72663,31 @@ inline void Suite528_PrismX_Uefi_Bootloader_Iso_Wddm32() {
 inline void Test_Horizon312_PrismX_Uefi_Bootloader_Iso_Wddm32_Suite() {
     Suite528_PrismX_Uefi_Bootloader_Iso_Wddm32();
 }
+
+// ============================================================================
+// Suite 529: Horizon 313 - Sovereign MicaNT Native Win32 Subsystem,
+//   PE32+ IAT Dynamic Import Router & SurShell 540Hz Compositor Event Routing
+//   Pillar 1: PE32+ IAT Dynamic Import Router & Symbol Snapping (user32.dll, gdi32.dll, d3d12.dll)
+//   Pillar 2: Win32 Thread Message Queue (PostMessage, PeekMessage, GetMessage, PM_NOREMOVE/REMOVE)
+//   Pillar 3: Sub-Millisecond 8000Hz Raw Input Queuing & Microsecond Delta Coalescing
+//   Pillar 4: SurShell 540Hz Compositor Presentation & WDDM 3.2 DirectFlip Handover (1.85ms)
+// ============================================================================
+inline void Suite529_PrismX_Win32_MsgLoop_Latency_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 529: Horizon 313 - Sovereign MicaNT Native Win32 Subsystem & 540Hz Compositor...\n" << std::flush;
+
+    using namespace micant::um::prismx_win32;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon313Win32MsgLoopLatencySubsystem(), "VerifyHorizon313Win32MsgLoopLatencySubsystem must return true");
+
+    std::cout << "  Horizon 313 Architectural Validation Complete:\n"
+              << "    Pillar 1: PE32+ IAT Dynamic Import Router & Symbol Snapping OK\n"
+              << "    Pillar 2: Win32 Thread Message Queue & FIFO Dispatch OK\n"
+              << "    Pillar 3: Sub-Millisecond 8000Hz Raw Input Queuing & Microsecond Coalescing OK\n"
+              << "    Pillar 4: SurShell 540Hz Compositor Event Routing & WDDM 3.2 DirectFlip Handover OK\n";
+    std::cout << "[TEST] Suite 529: Horizon 313 - Sovereign MicaNT Native Win32 Subsystem PASSED." << std::endl;
+}
+
+inline void Test_Horizon313_PrismX_Win32_MsgLoop_Latency_Wddm32_Suite() {
+    Suite529_PrismX_Win32_MsgLoop_Latency_Wddm32();
+}
