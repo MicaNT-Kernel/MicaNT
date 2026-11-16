@@ -72536,3 +72536,49 @@ inline void Suite525_PrismX_DirectStorage_BypassIO_Wddm32() {
 inline void Test_Horizon309_PrismX_DirectStorage_BypassIO_Wddm32_Suite() {
     Suite525_PrismX_DirectStorage_BypassIO_Wddm32();
 }
+
+// ============================================================================
+// Suite 526: Horizon 310 - Sovereign MicaNT Kernel WDDM 3.2 Display Timing Engine,
+//   Variable Refresh Rate & Multi-Plane Overlay (MPO) DirectFlip Subsystem
+//   Pillar 1: Display Timing & VRR ABI Constants (Adaptive-Sync, G-Sync, FreeSync)
+//   Pillar 2: Native CRTC Timing Controller & 540Hz Microsecond Beam Scanning
+//   Pillar 3: Variable Refresh Rate (VRR) & Low Framerate Compensation (LFC) Governor
+//   Pillar 4: Tier-3 Hardware Multi-Plane Overlay (MPO) & DirectFlip Zero-Copy Scanout Seal
+// ============================================================================
+inline void Suite526_PrismX_Display_Timing_VRR_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 526: Horizon 310 - Sovereign MicaNT Kernel Display Timing VRR & MPO WDDM 3.2...\n" << std::flush;
+
+    using namespace micant::um::prismx_display;
+
+    // 1. Pillar 1: Display Timing & VRR ABI Constants & Enums
+    TEST_ASSERT(VRR_MODE_ADAPTIVE_SYNC == 1u, "VRR Adaptive-Sync must be 1");
+    TEST_ASSERT(MPO_PLANE_DESKTOP_UI == 0u, "MPO Plane Desktop UI must be 0");
+    TEST_ASSERT(MPO_PLANE_3D_VIEWPORT == 1u, "MPO Plane 3D Viewport must be 1");
+
+    // 2. Pillar 2: CRTC Timing Controller Engine Initialization
+    MicaNtDisplayTimingDescriptor timing{};
+    timing.HorizontalActive = 3840;
+    timing.VerticalActive = 2160;
+    timing.PixelClockMHz = 1188.0f; // 4K 144Hz
+    timing.MinRefreshHz = 48;
+    timing.MaxRefreshHz = 540;
+    timing.VrrMode = VRR_MODE_ADAPTIVE_SYNC;
+
+    MicaNtDisplayTimingEngine engine;
+    NTSTATUS st = engine.Initialize(timing);
+    TEST_ASSERT(NT_SUCCESS(st), "Display timing engine initialization must succeed");
+
+    // 3. Pillar 3 & 4: Subsystem Verification & DirectFlip Zero-Copy Scanout
+    TEST_ASSERT(VerifyHorizon310DisplayTimingVrrSubsystem(), "VerifyHorizon310DisplayTimingVrrSubsystem must return true");
+
+    std::cout << "  Horizon 310 Architectural Validation Complete:\n"
+              << "    Pillar 1: Display Timing & VRR ABI Constants OK\n"
+              << "    Pillar 2: Native CRTC Timing Controller & Microsecond Beam Scanning OK\n"
+              << "    Pillar 3: Adaptive-Sync VRR & Low Framerate Compensation (LFC) Governor OK\n"
+              << "    Pillar 4: Tier-3 Hardware Multi-Plane Overlay (MPO) & DirectFlip Scanout OK\n";
+    std::cout << "[TEST] Suite 526: Horizon 310 - Sovereign MicaNT Kernel Display Timing VRR WDDM 3.2 PASSED." << std::endl;
+}
+
+inline void Test_Horizon310_PrismX_Display_Timing_VRR_Wddm32_Suite() {
+    Suite526_PrismX_Display_Timing_VRR_Wddm32();
+}
