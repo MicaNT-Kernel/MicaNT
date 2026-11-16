@@ -72627,3 +72627,39 @@ inline void Suite527_PrismX_IoRing_LockFree_Wddm32() {
 inline void Test_Horizon311_PrismX_IoRing_LockFree_Wddm32_Suite() {
     Suite527_PrismX_IoRing_LockFree_Wddm32();
 }
+
+// ============================================================================
+// Suite 528: Horizon 312 - Sovereign MicaNT Kernel UEFI Bootloader,
+//   GPT Disk Partitioner & Setup ISO Tooling Subsystem (micant_setup.iso)
+//   Pillar 1: Boot ABI Constants & Structure Verification (Protective MBR 512B, GPT 92B/128B, El Torito 32B)
+//   Pillar 2: GUID Partition Table (GPT) & Protective MBR Formatter (ESP 260MB, MicaNT System Volume)
+//   Pillar 3: El Torito UEFI Boot Catalog Validation (Platform 0xEF, 0xAA55 Key Signature)
+//   Pillar 4: Seamless UEFI GOP Linear Framebuffer Handover to WDDM 3.2 DirectFlip Pipeline
+// ============================================================================
+inline void Suite528_PrismX_Uefi_Bootloader_Iso_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 528: Horizon 312 - Sovereign MicaNT Kernel UEFI Bootloader & Setup ISO...\n" << std::flush;
+
+    using namespace micant::um::prismx_boot;
+
+    // 1. Pillar 1: Boot ABI Structures & Specification Alignment
+    TEST_ASSERT(sizeof(ProtectiveMbrSector) == 512u, "ProtectiveMbrSector must be 512 bytes");
+    TEST_ASSERT(sizeof(GptHeaderDescriptor) == 92u, "GptHeaderDescriptor must be 92 bytes");
+    TEST_ASSERT(sizeof(GptPartitionEntry) == 128u, "GptPartitionEntry must be 128 bytes");
+    TEST_ASSERT(sizeof(ElToritoBootCatalogValidationEntry) == 32u, "ElToritoBootCatalogValidationEntry must be 32 bytes");
+    TEST_ASSERT(GPT_HEADER_SIGNATURE == 0x5452415020494645ULL, "GPT signature must match 'EFI PART'");
+    TEST_ASSERT(EL_TORITO_UEFI_PLATFORM_ID == 0xEF, "El Torito UEFI platform ID must be 0xEF");
+
+    // 2. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon312UefiBootloaderIsoSubsystem(), "VerifyHorizon312UefiBootloaderIsoSubsystem must return true");
+
+    std::cout << "  Horizon 312 Architectural Validation Complete:\n"
+              << "    Pillar 1: Boot ABI Constants & Structure Sizes OK\n"
+              << "    Pillar 2: GPT Partitioner & Protective MBR Formatting (ESP 260MB) OK\n"
+              << "    Pillar 3: El Torito UEFI Boot Catalog Validation (0xEF, 0xAA55) OK\n"
+              << "    Pillar 4: Seamless UEFI GOP Linear Framebuffer Handover to WDDM 3.2 OK\n";
+    std::cout << "[TEST] Suite 528: Horizon 312 - Sovereign MicaNT Kernel UEFI Bootloader Setup ISO PASSED." << std::endl;
+}
+
+inline void Test_Horizon312_PrismX_Uefi_Bootloader_Iso_Wddm32_Suite() {
+    Suite528_PrismX_Uefi_Bootloader_Iso_Wddm32();
+}

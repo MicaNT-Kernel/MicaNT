@@ -106,6 +106,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_directstorage_bypassio_wddm32.cpp
     kernel/io/prismx_display_timing_vrr_wddm32.cpp
     kernel/io/prismx_ioring_lockfree_wddm32.cpp
+    kernel/io/prismx_uefi_bootloader_iso_wddm32.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp
