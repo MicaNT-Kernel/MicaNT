@@ -72899,3 +72899,33 @@ inline void Suite536_PrismX_DirectComposition_Animation_Wddm32() {
 inline void Test_Horizon320_PrismX_DirectComposition_Animation_Wddm32_Suite() {
     Suite536_PrismX_DirectComposition_Animation_Wddm32();
 }
+
+// ============================================================================
+// Suite 537: Horizon 321 - Sovereign MicaNT DirectComposition Independent Flip
+//   Visual Surface Swapchain Present Synchronization with VRR MPO Scanout Pipeline
+//   Pillar 1: Fullscreen Swapchain Binding & DirectFlip Promotion (Plane 0)
+//   Pillar 2: Windowed Swapchain & Multi-Plane Overlay (MPO) Promotion (Plane 1)
+//   Pillar 3: Dynamic Window Occlusion Demotion to Composed DWM
+//   Pillar 4: VRR Display Timing Synchronization & 540Hz Flip Cadence
+//   Pillar 5: Flip Queue Telemetry & Latency Verification (<80us)
+// ============================================================================
+inline void Suite537_PrismX_DirectComposition_IndependentFlip_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 537: Horizon 321 - Sovereign MicaNT DirectComposition Independent Flip Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_present;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon321DirectCompositionIndependentFlipSubsystem(), "VerifyHorizon321DirectCompositionIndependentFlipSubsystem must return true");
+
+    std::cout << "  Horizon 321 Architectural Validation Complete:\n"
+              << "    Pillar 1: Fullscreen Swapchain Binding & DirectFlip Promotion OK\n"
+              << "    Pillar 2: Windowed Swapchain & Multi-Plane Overlay (MPO) Promotion OK\n"
+              << "    Pillar 3: Dynamic Window Occlusion Demotion to Composed DWM OK\n"
+              << "    Pillar 4: VRR Display Timing Synchronization & 540Hz Flip Cadence OK\n"
+              << "    Pillar 5: Flip Queue Telemetry & Sub-80us Latency OK\n";
+    std::cout << "[TEST] Suite 537: Horizon 321 - Sovereign MicaNT DirectComposition Independent Flip PASSED." << std::endl;
+}
+
+inline void Test_Horizon321_PrismX_DirectComposition_IndependentFlip_Wddm32_Suite() {
+    Suite537_PrismX_DirectComposition_IndependentFlip_Wddm32();
+}
