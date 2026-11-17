@@ -180,6 +180,7 @@
 #include "micant/um/subsystems/graphics/prismx_mica_acrylic_composition_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_surshell_taskbar_snap_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directwrite_cleartype_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_direct2d_geometry_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -470,6 +471,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite535") {
+        RUN_TEST(Test_Horizon319_PrismX_Direct2D_Geometry_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite534") {
@@ -2695,6 +2700,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon316_PrismX_Mica_Acrylic_Composition_Wddm32_Suite);
     RUN_TEST(Test_Horizon317_PrismX_SurShell_Taskbar_Snap_Wddm32_Suite);
     RUN_TEST(Test_Horizon318_PrismX_DirectWrite_ClearType_Wddm32_Suite);
+    RUN_TEST(Test_Horizon319_PrismX_Direct2D_Geometry_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

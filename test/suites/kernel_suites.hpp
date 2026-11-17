@@ -72840,3 +72840,32 @@ inline void Suite534_PrismX_DirectWrite_ClearType_Wddm32() {
 inline void Test_Horizon318_PrismX_DirectWrite_ClearType_Wddm32_Suite() {
     Suite534_PrismX_DirectWrite_ClearType_Wddm32();
 }
+
+// ============================================================================
+// Suite 535: Horizon 319 - Sovereign MicaNT Direct2D Hardware-Accelerated
+//   Geometry Realization & GPU Path Tessellation Pipeline
+//   Pillar 1: Path Figure Construction & Adaptive Bézier Subdivision
+//   Pillar 2: Fill Geometry Realization & Tessellation
+//   Pillar 3: Stroke Geometry Realization (Offset Quad Strips)
+//   Pillar 4: Multi-Stop Linear Gradient Brush Interpolation
+//   Pillar 5: Telemetry Verification
+// ============================================================================
+inline void Suite535_PrismX_Direct2D_Geometry_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 535: Horizon 319 - Sovereign MicaNT Direct2D Geometry Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_geometry;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon319Direct2DGeometrySubsystem(), "VerifyHorizon319Direct2DGeometrySubsystem must return true");
+
+    std::cout << "  Horizon 319 Architectural Validation Complete:\n"
+              << "    Pillar 1: Path Figure Construction & Adaptive Bézier Subdivision OK\n"
+              << "    Pillar 2: Fill Geometry Realization & Tessellation OK\n"
+              << "    Pillar 3: Stroke Geometry Realization (Offset Quad Strips) OK\n"
+              << "    Pillar 4: Multi-Stop Linear Gradient Brush Interpolation OK\n";
+    std::cout << "[TEST] Suite 535: Horizon 319 - Sovereign MicaNT Direct2D Geometry PASSED." << std::endl;
+}
+
+inline void Test_Horizon319_PrismX_Direct2D_Geometry_Wddm32_Suite() {
+    Suite535_PrismX_Direct2D_Geometry_Wddm32();
+}
