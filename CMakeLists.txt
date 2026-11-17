@@ -112,6 +112,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_xhci_usb32_gamepad_wddm32.cpp
     kernel/io/prismx_mica_acrylic_composition_wddm32.cpp
     kernel/io/prismx_surshell_taskbar_snap_wddm32.cpp
+    kernel/io/prismx_directwrite_cleartype_wddm32.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp

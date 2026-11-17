@@ -72807,3 +72807,36 @@ inline void Suite533_PrismX_SurShell_Taskbar_Snap_Wddm32() {
 inline void Test_Horizon317_PrismX_SurShell_Taskbar_Snap_Wddm32_Suite() {
     Suite533_PrismX_SurShell_Taskbar_Snap_Wddm32();
 }
+
+// ============================================================================
+// Suite 534: Horizon 318 - Sovereign MicaNT DirectWrite Hardware-Accelerated
+//   Typography & Sub-Pixel ClearType GPU Compute Pipeline
+//   Pillar 1: Font Design Metrics
+//   Pillar 2: OpenType Pairwise Kerning Tables
+//   Pillar 3: Dynamic GPU Glyph Atlas Shelf Packing
+//   Pillar 4: ClearType 5-Tap Symmetric FIR Sub-Pixel Filtering
+//   Pillar 5: Gamma 2.2 Color Correction & Sub-Pixel Blending
+//   Pillar 6: Formatted Text Run Layout
+//   Pillar 7: Telemetry Verification
+// ============================================================================
+inline void Suite534_PrismX_DirectWrite_ClearType_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 534: Horizon 318 - Sovereign MicaNT DirectWrite & ClearType Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_typography;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon318DirectWriteTypographySubsystem(), "VerifyHorizon318DirectWriteTypographySubsystem must return true");
+
+    std::cout << "  Horizon 318 Architectural Validation Complete:\n"
+              << "    Pillar 1: Font Design Metrics OK\n"
+              << "    Pillar 2: OpenType Pairwise Kerning Tables OK\n"
+              << "    Pillar 3: Dynamic GPU Glyph Atlas Shelf Packing OK\n"
+              << "    Pillar 4: ClearType 5-Tap Symmetric FIR Sub-Pixel Filtering OK\n"
+              << "    Pillar 5: Gamma 2.2 Color Correction & Sub-Pixel Blending OK\n"
+              << "    Pillar 6: Formatted Text Run Layout OK\n";
+    std::cout << "[TEST] Suite 534: Horizon 318 - Sovereign MicaNT DirectWrite & ClearType PASSED." << std::endl;
+}
+
+inline void Test_Horizon318_PrismX_DirectWrite_ClearType_Wddm32_Suite() {
+    Suite534_PrismX_DirectWrite_ClearType_Wddm32();
+}
