@@ -72869,3 +72869,33 @@ inline void Suite535_PrismX_Direct2D_Geometry_Wddm32() {
 inline void Test_Horizon319_PrismX_Direct2D_Geometry_Wddm32_Suite() {
     Suite535_PrismX_Direct2D_Geometry_Wddm32();
 }
+
+// ============================================================================
+// Suite 536: Horizon 320 - Sovereign MicaNT DirectComposition Visual Layer
+//   Animation & Transition Storyboard Engine with Cubic Bézier Spring Physics
+//   Pillar 1: Analytical Cubic Bézier Easing Curves (Newton-Raphson Solving)
+//   Pillar 2: Harmonic Spring Physics (Critically Damped Motion)
+//   Pillar 3: Harmonic Spring Physics (Underdamped Motion with Overshoot)
+//   Pillar 4: Multi-Channel 540Hz Timeline Storyboard Interpolation
+//   Pillar 5: Telemetry Verification
+// ============================================================================
+inline void Suite536_PrismX_DirectComposition_Animation_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 536: Horizon 320 - Sovereign MicaNT DirectComposition Animation Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_animation;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon320DirectCompositionAnimationSubsystem(), "VerifyHorizon320DirectCompositionAnimationSubsystem must return true");
+
+    std::cout << "  Horizon 320 Architectural Validation Complete:\n"
+              << "    Pillar 1: Analytical Cubic Bézier Easing Curves (Newton-Raphson Solving) OK\n"
+              << "    Pillar 2: Harmonic Spring Physics (Critically Damped Motion) OK\n"
+              << "    Pillar 3: Harmonic Spring Physics (Underdamped Motion with Overshoot) OK\n"
+              << "    Pillar 4: Multi-Channel 540Hz Timeline Storyboard Interpolation OK\n"
+              << "    Pillar 5: Compositor Sync & Zero-Jitter Scheduling Telemetry OK\n";
+    std::cout << "[TEST] Suite 536: Horizon 320 - Sovereign MicaNT DirectComposition Animation PASSED." << std::endl;
+}
+
+inline void Test_Horizon320_PrismX_DirectComposition_Animation_Wddm32_Suite() {
+    Suite536_PrismX_DirectComposition_Animation_Wddm32();
+}
