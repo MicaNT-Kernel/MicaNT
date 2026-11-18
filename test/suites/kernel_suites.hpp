@@ -73019,3 +73019,33 @@ inline void Suite540_PrismX_DirectComposition_VirtualSurface_Wddm32() {
 inline void Test_Horizon324_PrismX_DirectComposition_VirtualSurface_Wddm32_Suite() {
     Suite540_PrismX_DirectComposition_VirtualSurface_Wddm32();
 }
+
+// ============================================================================
+// Suite 541: Horizon 325 - Sovereign MicaNT DirectComposition Glass / Acrylic
+//   Backdrop Brush Convolution Filters, Tint Opacity & Hardware Blur Acceleration Pipeline
+//   Pillar 1: Analytical Gaussian Kernel Generation & Normalization (9-tap, 13-tap, 17-tap)
+//   Pillar 2: Separable 2-Pass Convolution Execution (Horizontal & Vertical Passes)
+//   Pillar 3: Perceptual Tint & Luminosity Blending
+//   Pillar 4: Procedural Noise Grain Dithering (Anti-Banding on 10-bit HDR)
+//   Pillar 5: Full Acrylic Recipe Execution, Cache & Telemetry Verification (<120us latency)
+// ============================================================================
+inline void Suite541_PrismX_DirectComposition_GlassAcrylic_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 541: Horizon 325 - Sovereign MicaNT DirectComposition Glass & Acrylic Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_glass;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon325DirectCompositionGlassAcrylicSubsystem(), "VerifyHorizon325DirectCompositionGlassAcrylicSubsystem must return true");
+
+    std::cout << "  Horizon 325 Architectural Validation Complete:\n"
+              << "    Pillar 1: Analytical Gaussian Kernel Generation & Normalization OK\n"
+              << "    Pillar 2: Separable 2-Pass Convolution Execution OK\n"
+              << "    Pillar 3: Perceptual Tint & Luminosity Blending OK\n"
+              << "    Pillar 4: Procedural Noise Grain Dithering OK\n"
+              << "    Pillar 5: Full Acrylic Recipe Execution, Cache & Sub-120us Latency OK\n";
+    std::cout << "[TEST] Suite 541: Horizon 325 - Sovereign MicaNT DirectComposition Glass & Acrylic PASSED." << std::endl;
+}
+
+inline void Test_Horizon325_PrismX_DirectComposition_GlassAcrylic_Wddm32_Suite() {
+    Suite541_PrismX_DirectComposition_GlassAcrylic_Wddm32();
+}
