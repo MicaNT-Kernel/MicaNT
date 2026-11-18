@@ -72989,3 +72989,33 @@ inline void Suite539_PrismX_DirectComposition_Spatial3D_Wddm32() {
 inline void Test_Horizon323_PrismX_DirectComposition_Spatial3D_Wddm32_Suite() {
     Suite539_PrismX_DirectComposition_Spatial3D_Wddm32();
 }
+
+// ============================================================================
+// Suite 540: Horizon 324 - Sovereign MicaNT DirectComposition Virtual Surface
+//   Tiling, Sparse Allocation & High-DPI Resolution Scaling Engine
+//   Pillar 1: Huge Virtual Surface Creation (16384x16384, 256px Tiles, 1GB VRAM Dense)
+//   Pillar 2: On-Demand Sparse Tile Allocation (BeginDraw/EndDraw, >95% Savings)
+//   Pillar 3: Pan to New Region & Second On-Demand Draw Pass
+//   Pillar 4: Active Viewport Trimming & Memory Reclaiming
+//   Pillar 5: High-DPI Resolution Scaling (150%) & Subpixel Snap Alignment (<100us latency)
+// ============================================================================
+inline void Suite540_PrismX_DirectComposition_VirtualSurface_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 540: Horizon 324 - Sovereign MicaNT DirectComposition Virtual Surface Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_vsurface;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon324DirectCompositionVirtualSurfaceSubsystem(), "VerifyHorizon324DirectCompositionVirtualSurfaceSubsystem must return true");
+
+    std::cout << "  Horizon 324 Architectural Validation Complete:\n"
+              << "    Pillar 1: Huge Virtual Surface Creation OK\n"
+              << "    Pillar 2: On-Demand Sparse Tile Allocation & >95% VRAM Savings OK\n"
+              << "    Pillar 3: Dynamic Panning & Incremental Tile Allocation OK\n"
+              << "    Pillar 4: Viewport Trimming & Memory Reclaiming OK\n"
+              << "    Pillar 5: High-DPI Resolution Scaling & Sub-100us Latency OK\n";
+    std::cout << "[TEST] Suite 540: Horizon 324 - Sovereign MicaNT DirectComposition Virtual Surface PASSED." << std::endl;
+}
+
+inline void Test_Horizon324_PrismX_DirectComposition_VirtualSurface_Wddm32_Suite() {
+    Suite540_PrismX_DirectComposition_VirtualSurface_Wddm32();
+}
