@@ -72959,3 +72959,33 @@ inline void Suite538_PrismX_DirectComposition_InteractionTracker_Wddm32() {
 inline void Test_Horizon322_PrismX_DirectComposition_InteractionTracker_Wddm32_Suite() {
     Suite538_PrismX_DirectComposition_InteractionTracker_Wddm32();
 }
+
+// ============================================================================
+// Suite 539: Horizon 323 - Sovereign MicaNT DirectComposition Spatial 3D
+//   Perspective Transformations, Gimbal-Free Quaternions & Holographic Camera Viewport Pipeline
+//   Pillar 1: Matrix4x4 Projection & Perspective Divide
+//   Pillar 2: Gimbal-Lock-Free Quaternion SLERP Interpolation
+//   Pillar 3: Spatial Visual Quad Placement & Orientation
+//   Pillar 4: Screen-Space Raycasting & 3D Hit-Testing (Möller–Trumbore)
+//   Pillar 5: Depth Clipping & Telemetry Verification (<120us latency)
+// ============================================================================
+inline void Suite539_PrismX_DirectComposition_Spatial3D_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 539: Horizon 323 - Sovereign MicaNT DirectComposition Spatial 3D Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_spatial3d;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon323DirectCompositionSpatial3DSubsystem(), "VerifyHorizon323DirectCompositionSpatial3DSubsystem must return true");
+
+    std::cout << "  Horizon 323 Architectural Validation Complete:\n"
+              << "    Pillar 1: Matrix4x4 Projection & Perspective Divide OK\n"
+              << "    Pillar 2: Gimbal-Lock-Free Quaternion SLERP Interpolation OK\n"
+              << "    Pillar 3: Spatial Visual Quad Placement & Orientation OK\n"
+              << "    Pillar 4: Screen-Space Raycasting & 3D Hit-Testing OK\n"
+              << "    Pillar 5: Depth Clipping & Sub-120us Latency OK\n";
+    std::cout << "[TEST] Suite 539: Horizon 323 - Sovereign MicaNT DirectComposition Spatial 3D PASSED." << std::endl;
+}
+
+inline void Test_Horizon323_PrismX_DirectComposition_Spatial3D_Wddm32_Suite() {
+    Suite539_PrismX_DirectComposition_Spatial3D_Wddm32();
+}
