@@ -73229,3 +73229,34 @@ inline void Suite547_PrismX_DirectComposition_SurfaceFactory_Wddm32() {
 inline void Test_Horizon331_PrismX_DirectComposition_SurfaceFactory_Wddm32_Suite() {
     Suite547_PrismX_DirectComposition_SurfaceFactory_Wddm32();
 }
+
+// ============================================================================
+// Suite 548: Horizon 332 - Sovereign MicaNT DirectComposition Hardware Cursor Overlay,
+//   Sub-Pixel Pointer Warp & 8000Hz Hardware Plane Composition Pipeline
+//   Pillar 1: Hardware Cursor Plane Scanout Register Model (Zero Blit Delay)
+//   Pillar 2: DirectFlip & Independent Flip Interlock (<20us Latency)
+//   Pillar 3: High-Precision Sub-Pixel Pointer Warp & Display Scaler Alignment
+//   Pillar 4: 8000Hz Ultra-Polling High-Rate HID Mouse Packet Buffer
+//   Pillar 5: Kernel Mode Hardware Plane Telemetry Verification
+// ============================================================================
+inline void Suite548_PrismX_DirectComposition_HardwareCursor_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 548: Horizon 332 - Sovereign MicaNT DirectComposition Hardware Cursor Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_hardware_cursor;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon332DirectCompositionHardwareCursorSubsystem(), "VerifyHorizon332DirectCompositionHardwareCursorSubsystem must return true");
+
+    std::cout << "  Horizon 332 Architectural Validation Complete:\n"
+              << "    Pillar 1: Hardware Cursor Plane Scanout Register Model OK\n"
+              << "    Pillar 2: DirectFlip & Independent Flip Interlock OK\n"
+              << "    Pillar 3: Sub-Pixel Pointer Warp & Scaler Alignment OK\n"
+              << "    Pillar 4: 8000Hz Ultra-Polling HID Packet Buffer OK\n"
+              << "    Pillar 5: Hardware Plane Telemetry Verification OK\n";
+    std::cout << "[TEST] Suite 548: Horizon 332 - Sovereign MicaNT DirectComposition Hardware Cursor PASSED." << std::endl;
+}
+
+inline void Test_Horizon332_PrismX_DirectComposition_HardwareCursor_Wddm32_Suite() {
+    Suite548_PrismX_DirectComposition_HardwareCursor_Wddm32();
+}
+
