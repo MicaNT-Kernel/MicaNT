@@ -73664,6 +73664,38 @@ inline void Test_Horizon345_PrismX_DirectComposition_MotionBlur_Wddm32_Suite() {
     Suite561_PrismX_DirectComposition_MotionBlur_Wddm32();
 }
 
+// ============================================================================
+// Suite 562: Horizon 346 - Sovereign MicaNT DirectComposition Dynamic
+//   Holographic Depth-of-Field (DoF), Circle of Confusion (CoC) & Bokeh
+//   Hexagonal Aperture Pipeline (IDCompositionDepthOfFieldEffect)
+//   Pillar 1: Camera Optical Parameters & Lens Setup
+//   Pillar 2: Signed Circle of Confusion Thin-Lens Math
+//   Pillar 3: Near-Field & Far-Field Blur Separation
+//   Pillar 4: Hexagonal Bokeh Kernel Diaphragm Geometry
+//   Pillar 5: Sustained High-Throughput DoF Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite562_PrismX_DirectComposition_DepthOfField_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 562: Horizon 346 - Sovereign MicaNT DirectComposition Depth-of-Field Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_dof_bokeh;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon346DirectCompositionDepthOfFieldSubsystem(), "VerifyHorizon346DirectCompositionDepthOfFieldSubsystem must return true");
+
+    std::cout << "  Horizon 346 Architectural Validation Complete:\n"
+              << "    Pillar 1: Camera Optical Parameters OK\n"
+              << "    Pillar 2: Signed Circle of Confusion Math OK\n"
+              << "    Pillar 3: Near-Field & Far-Field Separation OK\n"
+              << "    Pillar 4: Hexagonal Bokeh Kernel Geometry OK\n"
+              << "    Pillar 5: High-Throughput DoF Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 562: Horizon 346 - Sovereign MicaNT DirectComposition Depth-of-Field PASSED." << std::endl;
+}
+
+inline void Test_Horizon346_PrismX_DirectComposition_DepthOfField_Wddm32_Suite() {
+    Suite562_PrismX_DirectComposition_DepthOfField_Wddm32();
+}
+
+
 
 
 

@@ -140,6 +140,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_directcomposition_shadow_depth_wddm32.cpp
     kernel/io/prismx_directcomposition_chromatic_bloom_wddm32.cpp
     kernel/io/prismx_directcomposition_motion_blur_wddm32.cpp
+    kernel/io/prismx_directcomposition_dof_bokeh_wddm32.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp
