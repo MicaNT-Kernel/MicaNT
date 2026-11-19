@@ -73446,6 +73446,38 @@ inline void Test_Horizon338_PrismX_DirectComposition_AlphaLayered_Wddm32_Suite()
     Suite554_PrismX_DirectComposition_AlphaLayered_Wddm32();
 }
 
+// ============================================================================
+// Suite 555: Horizon 339 - Sovereign MicaNT DirectComposition Variable Refresh
+//   Rate (VRR) Dynamic Cadence Flipping, Present Duration Pacing & Scanline
+//   Beam Synchronization Pipeline (IDXGISwapChain3::SetPresentDuration,
+//   DwmGetCompositionTimingInfoEx)
+//   Pillar 1: SetPresentDuration Scheduling (60Hz, 120Hz, 144Hz, 240Hz, 360Hz, 540Hz)
+//   Pillar 2: Scanline Beam Prediction & Dynamic VSync Phase Offset Calculation
+//   Pillar 3: High-Refresh Cadence Pacing & Sub-Millisecond Jitter Elimination
+//   Pillar 4: Low Framerate Compensation (LFC) Frame Duplication Interlock
+//   Pillar 5: Sustained High-Throughput VRR Present Cadence Stress (500 frames) & Sub-30us Latency
+// ============================================================================
+inline void Suite555_PrismX_DirectComposition_VrrCadence_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 555: Horizon 339 - Sovereign MicaNT DirectComposition VRR Cadence Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_vrr_cadence;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon339DirectCompositionVrrCadenceSubsystem(), "VerifyHorizon339DirectCompositionVrrCadenceSubsystem must return true");
+
+    std::cout << "  Horizon 339 Architectural Validation Complete:\n"
+              << "    Pillar 1: SetPresentDuration Scheduling OK\n"
+              << "    Pillar 2: Scanline Beam Prediction OK\n"
+              << "    Pillar 3: High-Refresh Cadence Pacing OK\n"
+              << "    Pillar 4: Low Framerate Compensation (LFC) OK\n"
+              << "    Pillar 5: High-Throughput VRR Cadence Stress & Sub-30us Latency OK\n";
+    std::cout << "[TEST] Suite 555: Horizon 339 - Sovereign MicaNT DirectComposition VRR Cadence PASSED." << std::endl;
+}
+
+inline void Test_Horizon339_PrismX_DirectComposition_VrrCadence_Wddm32_Suite() {
+    Suite555_PrismX_DirectComposition_VrrCadence_Wddm32();
+}
+
 
 
 

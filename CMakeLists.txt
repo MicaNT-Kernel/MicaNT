@@ -133,6 +133,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_directcomposition_text_visual_wddm32.cpp
     kernel/io/prismx_directcomposition_subtree_caching_wddm32.cpp
     kernel/io/prismx_directcomposition_alpha_layered_wddm32.cpp
+    kernel/io/prismx_directcomposition_vrr_cadence_wddm32.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp
