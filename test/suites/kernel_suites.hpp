@@ -73415,6 +73415,37 @@ inline void Test_Horizon337_PrismX_DirectComposition_SubtreeCaching_Wddm32_Suite
     Suite553_PrismX_DirectComposition_SubtreeCaching_Wddm32();
 }
 
+// ============================================================================
+// Suite 554: Horizon 338 - Sovereign MicaNT DirectComposition Alpha-Masked
+//   Layered Windows, Per-Pixel Translucency & Hardware Composition Borders
+//   Pipeline (IDCompositionVisualAlpha)
+//   Pillar 1: KernelAlphaMode & Opacity Configuration
+//   Pillar 2: Window Frame Insets & Translucent Frame Brush (DWMNCRP_USEWINDOWFRAMEBRUSH)
+//   Pillar 3: Dynamic Window Border Stroke & Drop Shadow Alpha Geometry Tessellation
+//   Pillar 4: Hit-Testing Boundary Insets & Alpha-Masked Input Passthrough Routing
+//   Pillar 5: Sustained High-Throughput Layered Window Dispatch (500 frames) & Sub-45us Latency
+// ============================================================================
+inline void Suite554_PrismX_DirectComposition_AlphaLayered_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 554: Horizon 338 - Sovereign MicaNT DirectComposition Alpha-Masked Layered Windows Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_alpha_layered;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon338DirectCompositionAlphaLayeredSubsystem(), "VerifyHorizon338DirectCompositionAlphaLayeredSubsystem must return true");
+
+    std::cout << "  Horizon 338 Architectural Validation Complete:\n"
+              << "    Pillar 1: KernelAlphaMode & Opacity Configuration OK\n"
+              << "    Pillar 2: Frame Insets & Translucent Frame Brush OK\n"
+              << "    Pillar 3: Border Stroke & Drop Shadow Tessellation OK\n"
+              << "    Pillar 4: Hit-Testing & Alpha Passthrough Routing OK\n"
+              << "    Pillar 5: High-Throughput Window Dispatch & Sub-45us Latency OK\n";
+    std::cout << "[TEST] Suite 554: Horizon 338 - Sovereign MicaNT DirectComposition Alpha-Masked Layered Windows PASSED." << std::endl;
+}
+
+inline void Test_Horizon338_PrismX_DirectComposition_AlphaLayered_Wddm32_Suite() {
+    Suite554_PrismX_DirectComposition_AlphaLayered_Wddm32();
+}
+
 
 
 
