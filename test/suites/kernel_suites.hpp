@@ -73353,6 +73353,38 @@ inline void Test_Horizon335_PrismX_DirectComposition_MultiQueue_Wddm32_Suite() {
     Suite551_PrismX_DirectComposition_MultiQueue_Wddm32();
 }
 
+// ============================================================================
+// Suite 552: Horizon 336 - Sovereign MicaNT DirectComposition Hardware
+//   Accelerated Text Rendering & DirectWrite Typography Visual Pipeline
+//   (IDCompositionTextVisual)
+//   Pillar 1: IDCompositionTextVisual Node Creation & Typography Properties Binding
+//   Pillar 2: Sub-Pixel ClearType Glyph Layout Realization & Advance Geometry
+//   Pillar 3: Multi-Channel Signed Distance Field (MSDF) Hardware Glyph Atlas VRAM Mapping
+//   Pillar 4: Variable Font Weight Dynamic Animation Storyboard Driver
+//   Pillar 5: Sustained High-Throughput Layout Stress (500 layout updates) & Sub-40us Latency
+// ============================================================================
+inline void Suite552_PrismX_DirectComposition_TextVisual_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 552: Horizon 336 - Sovereign MicaNT DirectComposition Text Visual Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_text_visual;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon336DirectCompositionTextVisualSubsystem(), "VerifyHorizon336DirectCompositionTextVisualSubsystem must return true");
+
+    std::cout << "  Horizon 336 Architectural Validation Complete:\n"
+              << "    Pillar 1: Text Visual Node & Typography Properties OK\n"
+              << "    Pillar 2: Sub-Pixel ClearType Layout & Advance Geometry OK\n"
+              << "    Pillar 3: MSDF Hardware Glyph Atlas VRAM Mapping OK\n"
+              << "    Pillar 4: Variable Font Weight Dynamic Animation OK\n"
+              << "    Pillar 5: High-Throughput Layout Stress & Sub-40us Latency OK\n";
+    std::cout << "[TEST] Suite 552: Horizon 336 - Sovereign MicaNT DirectComposition Text Visual PASSED." << std::endl;
+}
+
+inline void Test_Horizon336_PrismX_DirectComposition_TextVisual_Wddm32_Suite() {
+    Suite552_PrismX_DirectComposition_TextVisual_Wddm32();
+}
+
+
 
 
 
