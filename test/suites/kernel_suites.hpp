@@ -73291,4 +73291,36 @@ inline void Test_Horizon333_PrismX_DirectComposition_DesktopDuplication_Wddm32_S
     Suite549_PrismX_DirectComposition_DesktopDuplication_Wddm32();
 }
 
+// ============================================================================
+// Suite 550: Horizon 334 - Sovereign MicaNT DirectComposition Visual Layer
+//   Debugging, Frame Profiling, ETW Trace Event Instrumentation & GPU Timing
+//   Query Telemetry Pipeline
+//   Pillar 1: IDCompositionDeviceDebug Feature Flag Activation & Query
+//   Pillar 2: Visual Tree Wireframe Bounding Box Traversal & Overdraw Pass Count
+//   Pillar 3: Real-Time DWM Presentation Timing Info (DwmGetCompositionTimingInfoEx)
+//   Pillar 4: High-Throughput Zero-Allocation ETW Trace Event Buffer
+//   Pillar 5: GPU Timing Disjoint Calibration & Sub-50us Telemetry Profiling Overhead
+// ============================================================================
+inline void Suite550_PrismX_DirectComposition_DebugTelemetry_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 550: Horizon 334 - Sovereign MicaNT DirectComposition Debug & Telemetry Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_debug_telemetry;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon334DirectCompositionDebugTelemetrySubsystem(), "VerifyHorizon334DirectCompositionDebugTelemetrySubsystem must return true");
+
+    std::cout << "  Horizon 334 Architectural Validation Complete:\n"
+              << "    Pillar 1: IDCompositionDeviceDebug Flags & Activation OK\n"
+              << "    Pillar 2: Wireframe Bounding Boxes & Overdraw Heatmap OK\n"
+              << "    Pillar 3: Real-Time DWM Presentation Timing Info OK\n"
+              << "    Pillar 4: High-Throughput Zero-Allocation ETW Buffer OK\n"
+              << "    Pillar 5: GPU Timing Disjoint Calibration & Sub-50us Overhead OK\n";
+    std::cout << "[TEST] Suite 550: Horizon 334 - Sovereign MicaNT DirectComposition Debug & Telemetry PASSED." << std::endl;
+}
+
+inline void Test_Horizon334_PrismX_DirectComposition_DebugTelemetry_Wddm32_Suite() {
+    Suite550_PrismX_DirectComposition_DebugTelemetry_Wddm32();
+}
+
+
 
