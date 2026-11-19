@@ -73785,6 +73785,36 @@ inline void Test_Horizon349_PrismX_DirectComposition_SubsurfaceScattering_Wddm32
     Suite565_PrismX_DirectComposition_SubsurfaceScattering_Wddm32();
 }
 
+// ============================================================================
+// Suite 566: Horizon 350 - Sovereign MicaNT DirectComposition Dynamic Atmospheric
+//   Fog, Volumetric God Rays & Light Shaft Scattering Pipeline
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Phase Function Physical Invariants (Mie, Rayleigh, Dual-Lobe)
+//   Pillar 3: Atmospheric Height-Layered Density Distribution
+//   Pillar 4: Epipolar Volumetric Light Shafts & Monotonic Transmittance
+//   Pillar 5: Sustained High-Throughput Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite566_PrismX_DirectComposition_AtmosphericFog_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 566: Horizon 350 - Sovereign MicaNT DirectComposition Atmospheric Fog Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_fog;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon350DirectCompositionFogSubsystem(), "VerifyHorizon350DirectCompositionFogSubsystem must return true");
+
+    std::cout << "  Horizon 350 Architectural Validation Complete:\n"
+              << "    Pillar 1: Fog Parameters & Presets OK\n"
+              << "    Pillar 2: Phase Function Invariants (Mie/Rayleigh/Dual-Lobe) OK\n"
+              << "    Pillar 3: Atmospheric Height-Layered Density OK\n"
+              << "    Pillar 4: Epipolar Volumetric Light Shafts OK\n"
+              << "    Pillar 5: High-Throughput Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 566: Horizon 350 - Sovereign MicaNT DirectComposition Atmospheric Fog PASSED." << std::endl;
+}
+
+inline void Test_Horizon350_PrismX_DirectComposition_AtmosphericFog_Wddm32_Suite() {
+    Suite566_PrismX_DirectComposition_AtmosphericFog_Wddm32();
+}
+
 
 
 
