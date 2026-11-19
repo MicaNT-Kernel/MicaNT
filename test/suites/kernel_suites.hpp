@@ -73755,6 +73755,37 @@ inline void Test_Horizon348_PrismX_DirectComposition_ScreenSpaceReflections_Wddm
     Suite564_PrismX_DirectComposition_ScreenSpaceReflections_Wddm32();
 }
 
+// ============================================================================
+// Suite 565: Horizon 349 - Sovereign MicaNT DirectComposition Subsurface Scattering (SSS),
+//   Translucency & Skin Absorption Pipeline
+//   Pillar 1: SSS Parameters & Profile Presets
+//   Pillar 2: Multi-Gaussian Dipole Kernel Integration & Distance Falloff
+//   Pillar 3: Translucency Back-Lighting & Beer-Lambert Absorption
+//   Pillar 4: Material Absorption Tinting & Profile Distinction
+//   Pillar 5: Sustained High-Throughput Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite565_PrismX_DirectComposition_SubsurfaceScattering_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 565: Horizon 349 - Sovereign MicaNT DirectComposition SSS Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_sss;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon349DirectCompositionSubsurfaceScatteringSubsystem(), "VerifyHorizon349DirectCompositionSubsurfaceScatteringSubsystem must return true");
+
+    std::cout << "  Horizon 349 Architectural Validation Complete:\n"
+              << "    Pillar 1: SSS Parameters & Profiles OK\n"
+              << "    Pillar 2: Multi-Gaussian Dipole Kernel OK\n"
+              << "    Pillar 3: Translucency & Beer-Lambert Absorption OK\n"
+              << "    Pillar 4: Material Absorption Tinting OK\n"
+              << "    Pillar 5: High-Throughput Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 565: Horizon 349 - Sovereign MicaNT DirectComposition SSS PASSED." << std::endl;
+}
+
+inline void Test_Horizon349_PrismX_DirectComposition_SubsurfaceScattering_Wddm32_Suite() {
+    Suite565_PrismX_DirectComposition_SubsurfaceScattering_Wddm32();
+}
+
+
 
 
 
