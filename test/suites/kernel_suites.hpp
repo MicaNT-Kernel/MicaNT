@@ -73540,6 +73540,38 @@ inline void Test_Horizon341_PrismX_DirectComposition_SuperResolution_Wddm32_Suit
     Suite557_PrismX_DirectComposition_SuperResolution_Wddm32();
 }
 
+// ============================================================================
+// Suite 558: Horizon 342 - Sovereign MicaNT DirectComposition Dynamic
+//   Holographic Lighting, Normal-Mapped Specular Highlights & Directional Light
+//   Visual Pipeline (IDCompositionLightVisual)
+//   Pillar 1: KernelLightType Configuration (Ambient, Distant, Point, Spot)
+//   Pillar 2: Blinn-Phong Diffuse & Specular Shading Calculation
+//   Pillar 3: Real-Time Dynamic Pointer / Cursor Spotlight Tracking
+//   Pillar 4: Spot Light Inner & Outer Cone Attenuation Falloff
+//   Pillar 5: Sustained High-Throughput Lighting Dispatch (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite558_PrismX_DirectComposition_HolographicLighting_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 558: Horizon 342 - Sovereign MicaNT DirectComposition Holographic Lighting Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_holographic_lighting;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon342DirectCompositionHolographicLightingSubsystem(), "VerifyHorizon342DirectCompositionHolographicLightingSubsystem must return true");
+
+    std::cout << "  Horizon 342 Architectural Validation Complete:\n"
+              << "    Pillar 1: KernelLightType Multi-Source Configuration OK\n"
+              << "    Pillar 2: Blinn-Phong Diffuse & Specular Shading OK\n"
+              << "    Pillar 3: Dynamic Pointer / Spotlight Tracking OK\n"
+              << "    Pillar 4: Dual-Cone Spot Falloff & Attenuation OK\n"
+              << "    Pillar 5: High-Throughput Lighting Dispatch & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 558: Horizon 342 - Sovereign MicaNT DirectComposition Holographic Lighting PASSED." << std::endl;
+}
+
+inline void Test_Horizon342_PrismX_DirectComposition_HolographicLighting_Wddm32_Suite() {
+    Suite558_PrismX_DirectComposition_HolographicLighting_Wddm32();
+}
+
+
 
 
 
