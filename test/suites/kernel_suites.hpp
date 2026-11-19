@@ -73571,6 +73571,38 @@ inline void Test_Horizon342_PrismX_DirectComposition_HolographicLighting_Wddm32_
     Suite558_PrismX_DirectComposition_HolographicLighting_Wddm32();
 }
 
+// ============================================================================
+// Suite 559: Horizon 343 - Sovereign MicaNT DirectComposition Dynamic
+//   Holographic Depth Perception, Parallax Occlusion Mapping & Per-Layer
+//   Z-Depth Shadow Casting Pipeline (IDCompositionShadowVisual)
+//   Pillar 1: KernelShadowQuality & Layer Elevation Presets Configuration
+//   Pillar 2: Contact-Hardening PCSS Penumbra Width Scaling
+//   Pillar 3: Parallax Depth Displacement Offset Computation
+//   Pillar 4: Shadow Atlas Tile Caching & Elevation Invalidation
+//   Pillar 5: Sustained High-Throughput Shadow Dispatch (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite559_PrismX_DirectComposition_ShadowDepth_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 559: Horizon 343 - Sovereign MicaNT DirectComposition Shadow Depth Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_shadow_depth;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon343DirectCompositionShadowDepthSubsystem(), "VerifyHorizon343DirectCompositionShadowDepthSubsystem must return true");
+
+    std::cout << "  Horizon 343 Architectural Validation Complete:\n"
+              << "    Pillar 1: Elevation Presets & Shadow Parameters OK\n"
+              << "    Pillar 2: Contact-Hardening PCSS Penumbra Scaling OK\n"
+              << "    Pillar 3: Parallax Occlusion Depth Displacement OK\n"
+              << "    Pillar 4: Shadow Atlas Tile Caching & Invalidation OK\n"
+              << "    Pillar 5: High-Throughput Shadow Dispatch & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 559: Horizon 343 - Sovereign MicaNT DirectComposition Shadow Depth PASSED." << std::endl;
+}
+
+inline void Test_Horizon343_PrismX_DirectComposition_ShadowDepth_Wddm32_Suite() {
+    Suite559_PrismX_DirectComposition_ShadowDepth_Wddm32();
+}
+
+
 
 
 
