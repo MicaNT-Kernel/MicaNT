@@ -73509,6 +73509,37 @@ inline void Test_Horizon340_PrismX_DirectComposition_Stereo3D_Wddm32_Suite() {
     Suite556_PrismX_DirectComposition_Stereo3D_Wddm32();
 }
 
+// ============================================================================
+// Suite 557: Horizon 341 - Sovereign MicaNT DirectComposition Hardware
+//   Super-Resolution Spatial Upscaling, Sharpening & FSR/XeSS Surface Integration
+//   Pipeline (IDCompositionSuperResolutionVisual)
+//   Pillar 1: KernelScalingMode Configuration (EASU, CAS, Lanczos, Bicubic)
+//   Pillar 2: Dynamic Render Scale Viewport & VRAM Bandwidth Savings Accounting
+//   Pillar 3: Contrast Adaptive Sharpening (CAS) Filter Kernel Weights & Ringing Suppression
+//   Pillar 4: Zero-Copy Upscale Presentation Interlock
+//   Pillar 5: Sustained High-Throughput Upscale Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite557_PrismX_DirectComposition_SuperResolution_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 557: Horizon 341 - Sovereign MicaNT DirectComposition Super-Resolution Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_super_resolution;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon341DirectCompositionSuperResolutionSubsystem(), "VerifyHorizon341DirectCompositionSuperResolutionSubsystem must return true");
+
+    std::cout << "  Horizon 341 Architectural Validation Complete:\n"
+              << "    Pillar 1: KernelScalingMode Configuration OK\n"
+              << "    Pillar 2: Dynamic Resolution Viewport & VRAM Savings OK\n"
+              << "    Pillar 3: CAS Filter Weights & Ringing Suppression OK\n"
+              << "    Pillar 4: Zero-Copy Upscale Presentation Interlock OK\n"
+              << "    Pillar 5: High-Throughput Upscale Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 557: Horizon 341 - Sovereign MicaNT DirectComposition Super-Resolution PASSED." << std::endl;
+}
+
+inline void Test_Horizon341_PrismX_DirectComposition_SuperResolution_Wddm32_Suite() {
+    Suite557_PrismX_DirectComposition_SuperResolution_Wddm32();
+}
+
 
 
 
