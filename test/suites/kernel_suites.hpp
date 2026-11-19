@@ -73633,6 +73633,38 @@ inline void Test_Horizon344_PrismX_DirectComposition_ChromaticBloom_Wddm32_Suite
     Suite560_PrismX_DirectComposition_ChromaticBloom_Wddm32();
 }
 
+// ============================================================================
+// Suite 561: Horizon 345 - Sovereign MicaNT DirectComposition Dynamic
+//   Holographic Motion Blur, Velocity Vector Reconstruction & Directional
+//   Object Smear Pipeline (IDCompositionMotionBlurEffect)
+//   Pillar 1: Motion Blur Parameters & Shutter Angle Configuration
+//   Pillar 2: Smear Vector Calculation & Clamping
+//   Pillar 3: Tile-Based Static Region Culling
+//   Pillar 4: Active vs Static Blur Sample Accounting
+//   Pillar 5: Sustained High-Throughput Blur Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite561_PrismX_DirectComposition_MotionBlur_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 561: Horizon 345 - Sovereign MicaNT DirectComposition Motion Blur Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_motion_blur;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon345DirectCompositionMotionBlurSubsystem(), "VerifyHorizon345DirectCompositionMotionBlurSubsystem must return true");
+
+    std::cout << "  Horizon 345 Architectural Validation Complete:\n"
+              << "    Pillar 1: Motion Blur & Shutter Angle Parameters OK\n"
+              << "    Pillar 2: Directional Smear Calculation & Clamping OK\n"
+              << "    Pillar 3: Tile-Based Static Region Culling OK\n"
+              << "    Pillar 4: Active Blur Sample Accounting OK\n"
+              << "    Pillar 5: High-Throughput Blur Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 561: Horizon 345 - Sovereign MicaNT DirectComposition Motion Blur PASSED." << std::endl;
+}
+
+inline void Test_Horizon345_PrismX_DirectComposition_MotionBlur_Wddm32_Suite() {
+    Suite561_PrismX_DirectComposition_MotionBlur_Wddm32();
+}
+
+
 
 
 

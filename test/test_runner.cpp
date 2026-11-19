@@ -206,6 +206,7 @@
 #include "micant/um/subsystems/graphics/prismx_directcomposition_holographic_lighting_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directcomposition_shadow_depth_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directcomposition_chromatic_bloom_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_directcomposition_motion_blur_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -496,6 +497,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite561") {
+        RUN_TEST(Test_Horizon345_PrismX_DirectComposition_MotionBlur_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite560") {
@@ -2851,6 +2856,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon342_PrismX_DirectComposition_HolographicLighting_Wddm32_Suite);
     RUN_TEST(Test_Horizon343_PrismX_DirectComposition_ShadowDepth_Wddm32_Suite);
     RUN_TEST(Test_Horizon344_PrismX_DirectComposition_ChromaticBloom_Wddm32_Suite);
+    RUN_TEST(Test_Horizon345_PrismX_DirectComposition_MotionBlur_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
