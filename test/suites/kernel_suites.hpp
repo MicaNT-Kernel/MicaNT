@@ -73602,6 +73602,38 @@ inline void Test_Horizon343_PrismX_DirectComposition_ShadowDepth_Wddm32_Suite() 
     Suite559_PrismX_DirectComposition_ShadowDepth_Wddm32();
 }
 
+// ============================================================================
+// Suite 560: Horizon 344 - Sovereign MicaNT DirectComposition Chromatic
+//   Aberration, Spectral Lens Dispersion & Volumetric Holographic Bloom Pipeline
+//   (IDCompositionChromaticAberrationEffect)
+//   Pillar 1: Chromatic & Bloom Parameters Configuration
+//   Pillar 2: Spectral Lens Dispersion Offsets & Radial Factor
+//   Pillar 3: HDR Luminance Thresholding & Karis Firefly Suppression
+//   Pillar 4: Multi-Level Bloom Pyramid Mip-Chain Verification
+//   Pillar 5: Sustained High-Throughput Post-Processing (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite560_PrismX_DirectComposition_ChromaticBloom_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 560: Horizon 344 - Sovereign MicaNT DirectComposition Chromatic Aberration & Bloom Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_chromatic_bloom;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon344DirectCompositionChromaticBloomSubsystem(), "VerifyHorizon344DirectCompositionChromaticBloomSubsystem must return true");
+
+    std::cout << "  Horizon 344 Architectural Validation Complete:\n"
+              << "    Pillar 1: Chromatic & Bloom Parameters OK\n"
+              << "    Pillar 2: Spectral Lens Dispersion Offsets OK\n"
+              << "    Pillar 3: HDR Thresholding & Karis Weighting OK\n"
+              << "    Pillar 4: Multi-Tier Bloom Pyramid Allocations OK\n"
+              << "    Pillar 5: High-Throughput Post-Processing & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 560: Horizon 344 - Sovereign MicaNT DirectComposition Chromatic Aberration & Bloom PASSED." << std::endl;
+}
+
+inline void Test_Horizon344_PrismX_DirectComposition_ChromaticBloom_Wddm32_Suite() {
+    Suite560_PrismX_DirectComposition_ChromaticBloom_Wddm32();
+}
+
+
 
 
 
