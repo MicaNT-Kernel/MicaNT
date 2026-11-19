@@ -73695,6 +73695,37 @@ inline void Test_Horizon346_PrismX_DirectComposition_DepthOfField_Wddm32_Suite()
     Suite562_PrismX_DirectComposition_DepthOfField_Wddm32();
 }
 
+// ============================================================================
+// Suite 563: Horizon 347 - Sovereign MicaNT DirectComposition Screen-Space Ambient
+//   Occlusion (SSAO), Ground-Truth Horizon-Based AO (HBAO+) & Contact Crevice Shadowing Subsystem
+//   Pillar 1: Ambient Occlusion Parameters & Quality Presets
+//   Pillar 2: Horizon Elevation Angle & HBAO+ Occlusion Math
+//   Pillar 3: Surface Normal Reconstruction & Contact Crevice Detection
+//   Pillar 4: Bilateral Depth-Aware Edge-Preserving Cross-Filter
+//   Pillar 5: Sustained High-Throughput Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite563_PrismX_DirectComposition_AmbientOcclusion_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 563: Horizon 347 - Sovereign MicaNT DirectComposition SSAO & HBAO+ Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_ssao_hbao;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon347DirectCompositionAmbientOcclusionSubsystem(), "VerifyHorizon347DirectCompositionAmbientOcclusionSubsystem must return true");
+
+    std::cout << "  Horizon 347 Architectural Validation Complete:\n"
+              << "    Pillar 1: Ambient Occlusion Parameters OK\n"
+              << "    Pillar 2: Horizon Elevation Angle & HBAO+ Math OK\n"
+              << "    Pillar 3: Surface Normal Reconstruction & Contact Crevice Detection OK\n"
+              << "    Pillar 4: Bilateral Depth-Aware Edge-Preserving Cross-Filter OK\n"
+              << "    Pillar 5: High-Throughput Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 563: Horizon 347 - Sovereign MicaNT DirectComposition SSAO & HBAO+ PASSED." << std::endl;
+}
+
+inline void Test_Horizon347_PrismX_DirectComposition_AmbientOcclusion_Wddm32_Suite() {
+    Suite563_PrismX_DirectComposition_AmbientOcclusion_Wddm32();
+}
+
+
 
 
 
