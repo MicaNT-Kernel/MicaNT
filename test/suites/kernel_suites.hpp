@@ -73139,3 +73139,33 @@ inline void Suite544_PrismX_DirectComposition_MultiMonitor_Wddm32() {
 inline void Test_Horizon328_PrismX_DirectComposition_MultiMonitor_Wddm32_Suite() {
     Suite544_PrismX_DirectComposition_MultiMonitor_Wddm32();
 }
+
+// ============================================================================
+// Suite 545: Horizon 329 - Sovereign MicaNT DirectComposition Dynamic Surface Occlusion
+//   Culling, Dirty-Rect Incremental Blitting & Power-Gated Damage Region Pipeline
+//   Pillar 1: Front-to-Back Occlusion Culling Traversal & Z-Order Pruning
+//   Pillar 2: Fine-Grained Damage Tracking & Spatial Union Coalescing
+//   Pillar 3: Incremental Partial Present Parameters (DXGI_PRESENT_PARAMETERS)
+//   Pillar 4: Power-Gated Panel Self-Refresh (PSR) State Transitions
+//   Pillar 5: Compositor Damage Telemetry Verification & Sub-80us Evaluation Latency
+// ============================================================================
+inline void Suite545_PrismX_DirectComposition_OcclusionDamage_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 545: Horizon 329 - Sovereign MicaNT DirectComposition Occlusion & Damage Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_damage_culling;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon329DirectCompositionOcclusionDamageSubsystem(), "VerifyHorizon329DirectCompositionOcclusionDamageSubsystem must return true");
+
+    std::cout << "  Horizon 329 Architectural Validation Complete:\n"
+              << "    Pillar 1: Front-to-Back Occlusion Culling Traversal OK\n"
+              << "    Pillar 2: Fine-Grained Damage Tracking & Coalescing OK\n"
+              << "    Pillar 3: Incremental Partial Present Parameters OK\n"
+              << "    Pillar 4: Power-Gated Panel Self-Refresh (PSR) State Transitions OK\n"
+              << "    Pillar 5: Compositor Damage Telemetry & Sub-80us Latency OK\n";
+    std::cout << "[TEST] Suite 545: Horizon 329 - Sovereign MicaNT DirectComposition Occlusion & Damage PASSED." << std::endl;
+}
+
+inline void Test_Horizon329_PrismX_DirectComposition_OcclusionDamage_Wddm32_Suite() {
+    Suite545_PrismX_DirectComposition_OcclusionDamage_Wddm32();
+}

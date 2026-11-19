@@ -190,6 +190,7 @@
 #include "micant/um/subsystems/graphics/prismx_directcomposition_clip_geometry_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directcomposition_video_hdr10_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directcomposition_multimonitor_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_directcomposition_occlusion_damage_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -480,6 +481,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite545") {
+        RUN_TEST(Test_Horizon329_PrismX_DirectComposition_OcclusionDamage_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite544") {
@@ -2755,6 +2760,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon326_PrismX_DirectComposition_ClipGeometry_Wddm32_Suite);
     RUN_TEST(Test_Horizon327_PrismX_DirectComposition_VideoHdr10_Wddm32_Suite);
     RUN_TEST(Test_Horizon328_PrismX_DirectComposition_MultiMonitor_Wddm32_Suite);
+    RUN_TEST(Test_Horizon329_PrismX_DirectComposition_OcclusionDamage_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
