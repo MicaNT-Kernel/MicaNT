@@ -750,8 +750,8 @@ public:
         sigData.algorithm = 8;
         sigData.labels = 2;
         sigData.originalTtl = 3600;
-        sigData.expirationEpoch = 1795000000;
-        sigData.inceptionEpoch = 1761000000;
+        sigData.expirationEpoch = now + 31536000ULL;
+        sigData.inceptionEpoch = (now > 86400ULL) ? (now - 86400ULL) : 0ULL;
         sigData.keyTag = 12345;
         sigData.signerName = "micant.local";
         sigData.signature = { 0xDE, 0xAD, 0xBE, 0xEF };

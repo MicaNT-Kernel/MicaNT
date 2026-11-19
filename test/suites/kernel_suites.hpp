@@ -73049,3 +73049,33 @@ inline void Suite541_PrismX_DirectComposition_GlassAcrylic_Wddm32() {
 inline void Test_Horizon325_PrismX_DirectComposition_GlassAcrylic_Wddm32_Suite() {
     Suite541_PrismX_DirectComposition_GlassAcrylic_Wddm32();
 }
+
+// ============================================================================
+// Suite 542: Horizon 326 - Sovereign MicaNT DirectComposition Dynamic Visual Tree
+//   Clip Geometry, Rounded Rectangles & Non-Rectangular Alpha Masking Pipeline
+//   Pillar 1: Conic Rounded Rectangle Clip Math (rx, ry Corner Conics)
+//   Pillar 2: Arbitrary Non-Rectangular Alpha Mask (Radial Vignette SmoothStep)
+//   Pillar 3: Hierarchical Visual Tree Clip Cascading & Point Hit-Testing
+//   Pillar 4: Viewport Subtree AABB Culling
+//   Pillar 5: Telemetry Verification & Sub-100us Evaluation Latency
+// ============================================================================
+inline void Suite542_PrismX_DirectComposition_ClipGeometry_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 542: Horizon 326 - Sovereign MicaNT DirectComposition Clip Geometry Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_clip;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon326DirectCompositionClipGeometrySubsystem(), "VerifyHorizon326DirectCompositionClipGeometrySubsystem must return true");
+
+    std::cout << "  Horizon 326 Architectural Validation Complete:\n"
+              << "    Pillar 1: Conic Rounded Rectangle Clip Math OK\n"
+              << "    Pillar 2: Arbitrary Non-Rectangular Alpha Masking OK\n"
+              << "    Pillar 3: Hierarchical Visual Tree Clip Cascading OK\n"
+              << "    Pillar 4: Viewport Subtree AABB Culling OK\n"
+              << "    Pillar 5: Telemetry Verification & Sub-100us Latency OK\n";
+    std::cout << "[TEST] Suite 542: Horizon 326 - Sovereign MicaNT DirectComposition Clip Geometry PASSED." << std::endl;
+}
+
+inline void Test_Horizon326_PrismX_DirectComposition_ClipGeometry_Wddm32_Suite() {
+    Suite542_PrismX_DirectComposition_ClipGeometry_Wddm32();
+}
