@@ -73384,6 +73384,37 @@ inline void Test_Horizon336_PrismX_DirectComposition_TextVisual_Wddm32_Suite() {
     Suite552_PrismX_DirectComposition_TextVisual_Wddm32();
 }
 
+// ============================================================================
+// Suite 553: Horizon 337 - Sovereign MicaNT DirectComposition Dynamic
+//   Subtree Visual Caching, Pre-Rasterized Layer Isolation & GPU Tile Eviction
+//   Pipeline (IDCompositionCache)
+//   Pillar 1: IDCompositionCache Visual Subtree Node Creation & Cache Mode Configuration
+//   Pillar 2: Pre-Rasterized Layer Isolation & Dirty Subregion Invalidation Propagation
+//   Pillar 3: Hardware Tile Cache Pool Allocation & VRAM Budget Accounting
+//   Pillar 4: Least-Recently-Used (LRU) GPU Tile Eviction Engine Under High Memory Pressure
+//   Pillar 5: Sustained High-Throughput Cache Invalidation & Re-Rasterization Latency Profiling (< 40us)
+// ============================================================================
+inline void Suite553_PrismX_DirectComposition_SubtreeCaching_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 553: Horizon 337 - Sovereign MicaNT DirectComposition Subtree Caching Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_subtree_caching;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon337DirectCompositionSubtreeCachingSubsystem(), "VerifyHorizon337DirectCompositionSubtreeCachingSubsystem must return true");
+
+    std::cout << "  Horizon 337 Architectural Validation Complete:\n"
+              << "    Pillar 1: Visual Subtree Cache Node & Cache Mode OK\n"
+              << "    Pillar 2: Layer Isolation & Dirty Invalidation Propagation OK\n"
+              << "    Pillar 3: Hardware Tile Cache Pool & VRAM Accounting OK\n"
+              << "    Pillar 4: LRU GPU Tile Eviction Under Memory Pressure OK\n"
+              << "    Pillar 5: High-Throughput Invalidation Stress & Sub-40us Latency OK\n";
+    std::cout << "[TEST] Suite 553: Horizon 337 - Sovereign MicaNT DirectComposition Subtree Caching PASSED." << std::endl;
+}
+
+inline void Test_Horizon337_PrismX_DirectComposition_SubtreeCaching_Wddm32_Suite() {
+    Suite553_PrismX_DirectComposition_SubtreeCaching_Wddm32();
+}
+
 
 
 

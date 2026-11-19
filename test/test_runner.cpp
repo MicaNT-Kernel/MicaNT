@@ -198,6 +198,7 @@
 #include "micant/um/subsystems/graphics/prismx_directcomposition_debug_telemetry_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directcomposition_multiqueue_async_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prismx_directcomposition_text_visual_wddm32.hpp"
+#include "micant/um/subsystems/graphics/prismx_directcomposition_subtree_caching_wddm32.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -488,6 +489,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite553") {
+        RUN_TEST(Test_Horizon337_PrismX_DirectComposition_SubtreeCaching_Wddm32_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite552") {
@@ -2803,6 +2808,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon334_PrismX_DirectComposition_DebugTelemetry_Wddm32_Suite);
     RUN_TEST(Test_Horizon335_PrismX_DirectComposition_MultiQueue_Wddm32_Suite);
     RUN_TEST(Test_Horizon336_PrismX_DirectComposition_TextVisual_Wddm32_Suite);
+    RUN_TEST(Test_Horizon337_PrismX_DirectComposition_SubtreeCaching_Wddm32_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
