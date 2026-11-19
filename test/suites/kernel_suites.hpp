@@ -73109,3 +73109,33 @@ inline void Suite543_PrismX_DirectComposition_VideoHdr10_Wddm32() {
 inline void Test_Horizon327_PrismX_DirectComposition_VideoHdr10_Wddm32_Suite() {
     Suite543_PrismX_DirectComposition_VideoHdr10_Wddm32();
 }
+
+// ============================================================================
+// Suite 544: Horizon 328 - Sovereign MicaNT DirectComposition Multi-Monitor Virtual Desktop
+//   Topology, Cross-Adapter Display Clone / Extend Engine & Per-Monitor DPI Synchronization Pipeline
+//   Pillar 1: Multi-Monitor Virtual Desktop Topology Graph & Combined Desktop Bounding Box
+//   Pillar 2: Cross-Adapter Shared Surface Allocation & Fence Signalling
+//   Pillar 3: Per-Monitor Independent VSync & Asymmetric Refresh Cadence Pacing (540Hz vs 144Hz)
+//   Pillar 4: Per-Monitor Fractional DPI Scaling (PROCESS_PER_MONITOR_DPI_AWARE_V2) Matrix Transition
+//   Pillar 5: Cross-Monitor Cursor Continuous Clamping, Hit-Test Routing & Telemetry
+// ============================================================================
+inline void Suite544_PrismX_DirectComposition_MultiMonitor_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 544: Horizon 328 - Sovereign MicaNT DirectComposition Multi-Monitor Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_multimonitor;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon328DirectCompositionMultiMonitorSubsystem(), "VerifyHorizon328DirectCompositionMultiMonitorSubsystem must return true");
+
+    std::cout << "  Horizon 328 Architectural Validation Complete:\n"
+              << "    Pillar 1: Multi-Monitor Virtual Desktop Topology Graph OK\n"
+              << "    Pillar 2: Cross-Adapter Shared Surface Synchronization OK\n"
+              << "    Pillar 3: Per-Monitor Independent VSync & Asymmetric Pacing OK\n"
+              << "    Pillar 4: Per-Monitor Fractional DPI Scaling Matrix Transition OK\n"
+              << "    Pillar 5: Cross-Monitor Cursor Clamping & Hit-Test Routing OK\n";
+    std::cout << "[TEST] Suite 544: Horizon 328 - Sovereign MicaNT DirectComposition Multi-Monitor PASSED." << std::endl;
+}
+
+inline void Test_Horizon328_PrismX_DirectComposition_MultiMonitor_Wddm32_Suite() {
+    Suite544_PrismX_DirectComposition_MultiMonitor_Wddm32();
+}
