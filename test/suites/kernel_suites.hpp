@@ -73725,6 +73725,37 @@ inline void Test_Horizon347_PrismX_DirectComposition_AmbientOcclusion_Wddm32_Sui
     Suite563_PrismX_DirectComposition_AmbientOcclusion_Wddm32();
 }
 
+// ============================================================================
+// Suite 564: Horizon 348 - Sovereign MicaNT DirectComposition Screen-Space Reflections (SSR),
+//   Cone-Tracing Glossy Surfaces & Roughness Falloff Subsystem
+//   Pillar 1: Reflection Parameters & Quality Presets
+//   Pillar 2: Reflection Vector Geometry & Schlick Fresnel Grazing Angle
+//   Pillar 3: Roughness Attenuation & Glossy Cone Footprint Expansion
+//   Pillar 4: Metallic vs Dielectric Material Discrimination
+//   Pillar 5: Sustained High-Throughput Stress (500 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite564_PrismX_DirectComposition_ScreenSpaceReflections_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 564: Horizon 348 - Sovereign MicaNT DirectComposition SSR Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_ssr;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon348DirectCompositionReflectionSubsystem(), "VerifyHorizon348DirectCompositionReflectionSubsystem must return true");
+
+    std::cout << "  Horizon 348 Architectural Validation Complete:\n"
+              << "    Pillar 1: Reflection Parameters OK\n"
+              << "    Pillar 2: Reflection Vector Geometry & Schlick Fresnel OK\n"
+              << "    Pillar 3: Roughness Attenuation & Glossy Cone Footprint OK\n"
+              << "    Pillar 4: Metallic vs Dielectric Discrimination OK\n"
+              << "    Pillar 5: High-Throughput Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 564: Horizon 348 - Sovereign MicaNT DirectComposition SSR PASSED." << std::endl;
+}
+
+inline void Test_Horizon348_PrismX_DirectComposition_ScreenSpaceReflections_Wddm32_Suite() {
+    Suite564_PrismX_DirectComposition_ScreenSpaceReflections_Wddm32();
+}
+
+
 
 
 
