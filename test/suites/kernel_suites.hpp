@@ -73322,5 +73322,37 @@ inline void Test_Horizon334_PrismX_DirectComposition_DebugTelemetry_Wddm32_Suite
     Suite550_PrismX_DirectComposition_DebugTelemetry_Wddm32();
 }
 
+// ============================================================================
+// Suite 551: Horizon 335 - Sovereign MicaNT DirectComposition Multi-Queue
+//   Hardware Synchronization, Asynchronous Compute Backdrop Blur & Work Graph
+//   Surface Handover Pipeline
+//   Pillar 1: Multi-Queue Initialization (Direct, Compute, Copy)
+//   Pillar 2: Asynchronous Compute Backdrop Blur Dispatch on Async Queue
+//   Pillar 3: Hardware Cross-Queue Fence Interlock (SynchronizeComputeToDirect)
+//   Pillar 4: Autonomous Work Graph Surface Handover (BindWorkGraph)
+//   Pillar 5: Multi-Queue Stress Simulation & Sub-60us Dispatch Latency
+// ============================================================================
+inline void Suite551_PrismX_DirectComposition_MultiQueue_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 551: Horizon 335 - Sovereign MicaNT DirectComposition Multi-Queue Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_multiqueue;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon335DirectCompositionMultiQueueSubsystem(), "VerifyHorizon335DirectCompositionMultiQueueSubsystem must return true");
+
+    std::cout << "  Horizon 335 Architectural Validation Complete:\n"
+              << "    Pillar 1: Multi-Queue Initialization OK\n"
+              << "    Pillar 2: Async Compute Backdrop Blur Dispatch OK\n"
+              << "    Pillar 3: Cross-Queue Fence Interlock OK\n"
+              << "    Pillar 4: Autonomous Work Graph Surface Handover OK\n"
+              << "    Pillar 5: Multi-Queue Stress & Sub-60us Latency OK\n";
+    std::cout << "[TEST] Suite 551: Horizon 335 - Sovereign MicaNT DirectComposition Multi-Queue PASSED." << std::endl;
+}
+
+inline void Test_Horizon335_PrismX_DirectComposition_MultiQueue_Wddm32_Suite() {
+    Suite551_PrismX_DirectComposition_MultiQueue_Wddm32();
+}
+
+
 
 
