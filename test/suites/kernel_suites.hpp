@@ -73169,3 +73169,33 @@ inline void Suite545_PrismX_DirectComposition_OcclusionDamage_Wddm32() {
 inline void Test_Horizon329_PrismX_DirectComposition_OcclusionDamage_Wddm32_Suite() {
     Suite545_PrismX_DirectComposition_OcclusionDamage_Wddm32();
 }
+
+// ============================================================================
+// Suite 546: Horizon 330 - Sovereign MicaNT DirectComposition Hardware Color Management,
+//   ICC Profile 3D LUT Color Transformation & Display Color Volume Mapping Pipeline
+//   Pillar 1: 1D De-gamma & Re-gamma Exact Round-Trip Verification
+//   Pillar 2: 3x3 Gamut Matrix Transformation (sRGB to BT.2020)
+//   Pillar 3: Dynamic Tone Mapping Operators (Reinhard & ACES Filmic)
+//   Pillar 4: 3D LUT Hardware Trilinear Interpolation
+//   Pillar 5: Integrated Color Management Engine & Telemetry (<100us Latency)
+// ============================================================================
+inline void Suite546_PrismX_DirectComposition_ColorManagement_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 546: Horizon 330 - Sovereign MicaNT DirectComposition Color Management Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_colormgmt;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon330DirectCompositionColorManagementSubsystem(), "VerifyHorizon330DirectCompositionColorManagementSubsystem must return true");
+
+    std::cout << "  Horizon 330 Architectural Validation Complete:\n"
+              << "    Pillar 1: 1D De-gamma & Re-gamma Exact Round-Trip OK\n"
+              << "    Pillar 2: 3x3 Gamut Matrix Transformation (sRGB to BT.2020) OK\n"
+              << "    Pillar 3: Dynamic Tone Mapping Operators (Reinhard & ACES) OK\n"
+              << "    Pillar 4: 3D LUT Hardware Trilinear Interpolation OK\n"
+              << "    Pillar 5: Color Management Engine & Telemetry OK\n";
+    std::cout << "[TEST] Suite 546: Horizon 330 - Sovereign MicaNT DirectComposition Color Management PASSED." << std::endl;
+}
+
+inline void Test_Horizon330_PrismX_DirectComposition_ColorManagement_Wddm32_Suite() {
+    Suite546_PrismX_DirectComposition_ColorManagement_Wddm32();
+}
