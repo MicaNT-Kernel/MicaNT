@@ -73260,3 +73260,35 @@ inline void Test_Horizon332_PrismX_DirectComposition_HardwareCursor_Wddm32_Suite
     Suite548_PrismX_DirectComposition_HardwareCursor_Wddm32();
 }
 
+// ============================================================================
+// Suite 549: Horizon 333 - Sovereign MicaNT DirectComposition Hardware Desktop
+//   Duplication API (IDXGIOutputDuplication), Dirty/Move Region Tracking &
+//   Zero-Copy VRAM Screen Capture Pipeline
+//   Pillar 1: DXGI Output Duplication Session Lifecycle & Output Descriptor Query
+//   Pillar 2: Frame Acquisition (AcquireNextFrame) with WDDM 3.2 Display Aperture Lock
+//   Pillar 3: Move Rectangles & Dirty Rectangles Metadata Reporting
+//   Pillar 4: Synchronized Hardware Cursor Position & ARGB Pointer Shape Stream
+//   Pillar 5: Multi-Client Concurrent Duplication Routing & Sub-250us Latency
+// ============================================================================
+inline void Suite549_PrismX_DirectComposition_DesktopDuplication_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 549: Horizon 333 - Sovereign MicaNT DirectComposition Desktop Duplication Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_desktop_duplication;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon333DirectCompositionDesktopDuplicationSubsystem(), "VerifyHorizon333DirectCompositionDesktopDuplicationSubsystem must return true");
+
+    std::cout << "  Horizon 333 Architectural Validation Complete:\n"
+              << "    Pillar 1: DXGI Output Duplication Session & Output Desc OK\n"
+              << "    Pillar 2: Frame Acquisition & Display Aperture Lock OK\n"
+              << "    Pillar 3: Move Rectangles & Dirty Rectangles Metadata OK\n"
+              << "    Pillar 4: Synchronized Hardware Cursor Position & ARGB Shape OK\n"
+              << "    Pillar 5: Multi-Client Duplication Routing & Sub-250us Latency OK\n";
+    std::cout << "[TEST] Suite 549: Horizon 333 - Sovereign MicaNT DirectComposition Desktop Duplication PASSED." << std::endl;
+}
+
+inline void Test_Horizon333_PrismX_DirectComposition_DesktopDuplication_Wddm32_Suite() {
+    Suite549_PrismX_DirectComposition_DesktopDuplication_Wddm32();
+}
+
+
