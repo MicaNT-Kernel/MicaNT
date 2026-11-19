@@ -73079,3 +73079,33 @@ inline void Suite542_PrismX_DirectComposition_ClipGeometry_Wddm32() {
 inline void Test_Horizon326_PrismX_DirectComposition_ClipGeometry_Wddm32_Suite() {
     Suite542_PrismX_DirectComposition_ClipGeometry_Wddm32();
 }
+
+// ============================================================================
+// Suite 543: Horizon 327 - Sovereign MicaNT DirectComposition Hardware Video Surface
+//   Swapchain Present Synchronization, HDR10 PQ Metadata & YUV420 Planar Scanout Pipeline
+//   Pillar 1: SMPTE ST 2084 (PQ) EOTF / OETF Mathematical Inversion Verification
+//   Pillar 2: 10-Bit P010 HDR10 Video Swapchain Creation & Visual Binding
+//   Pillar 3: Decoder BackBuffer Write & YUV420 Planar Allocation
+//   Pillar 4: Present Synchronization & MPO Plane 1 Promotion
+//   Pillar 5: NV12 8-bit Video Swapchain Verification & Telemetry
+// ============================================================================
+inline void Suite543_PrismX_DirectComposition_VideoHdr10_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 543: Horizon 327 - Sovereign MicaNT DirectComposition Video HDR10 Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_videohdr10;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon327DirectCompositionVideoHdr10Subsystem(), "VerifyHorizon327DirectCompositionVideoHdr10Subsystem must return true");
+
+    std::cout << "  Horizon 327 Architectural Validation Complete:\n"
+              << "    Pillar 1: SMPTE ST 2084 (PQ) EOTF / OETF Mathematical Inversion OK\n"
+              << "    Pillar 2: 10-Bit P010 HDR10 Video Swapchain & Visual Binding OK\n"
+              << "    Pillar 3: Decoder BackBuffer Write & YUV420 Planar Allocation OK\n"
+              << "    Pillar 4: Present Synchronization & MPO Plane 1 Promotion OK\n"
+              << "    Pillar 5: NV12 8-bit Video Swapchain & Telemetry OK\n";
+    std::cout << "[TEST] Suite 543: Horizon 327 - Sovereign MicaNT DirectComposition Video HDR10 PASSED." << std::endl;
+}
+
+inline void Test_Horizon327_PrismX_DirectComposition_VideoHdr10_Wddm32_Suite() {
+    Suite543_PrismX_DirectComposition_VideoHdr10_Wddm32();
+}
