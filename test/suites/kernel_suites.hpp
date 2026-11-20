@@ -73911,6 +73911,38 @@ inline void Test_Horizon353_PrismX_DirectComposition_Particles_Wddm32_Suite() {
     Suite569_PrismX_DirectComposition_Particles_Wddm32();
 }
 
+// ============================================================================
+// Suite 570: Horizon 354 - Sovereign MicaNT DirectComposition Volumetric Cloud
+//   Deck, Atmospheric Nebula & Multi-Scattering Celestial Raymarching Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Atmospheric Altitude Density Stratification (Cumulus bounds)
+//   Pillar 3: Dual-Lobe Henyey-Greenstein Silver Lining Phase Invariants
+//   Pillar 4: Wind Drift Advection & Galilean Shift Invariance
+//   Pillar 5: Solar In-Scattering & Monotonic Optical Transmittance
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite570_PrismX_DirectComposition_Clouds_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 570: Horizon 354 - Sovereign MicaNT DirectComposition Volumetric Cloud Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_clouds;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon354CloudSubsystem(), "VerifyHorizon354CloudSubsystem must return true");
+
+    std::cout << "  Horizon 354 Architectural Validation Complete:\n"
+              << "    Pillar 1: Cloud Parameters & Presets OK\n"
+              << "    Pillar 2: Atmospheric Altitude Stratification OK\n"
+              << "    Pillar 3: Dual-Lobe Silver Lining Phase Invariants OK\n"
+              << "    Pillar 4: Wind Drift Advection Invariance OK\n"
+              << "    Pillar 5: Solar In-Scattering & Transmittance OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 570: Horizon 354 - Sovereign MicaNT DirectComposition Volumetric Cloud PASSED." << std::endl;
+}
+
+inline void Test_Horizon354_PrismX_DirectComposition_Clouds_Wddm32_Suite() {
+    Suite570_PrismX_DirectComposition_Clouds_Wddm32();
+}
+
 
 
 
