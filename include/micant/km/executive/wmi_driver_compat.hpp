@@ -703,7 +703,7 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
         "KeConvertAuxiliaryCounterToPerformanceCounter",
         "KeQueryHighestNodeNumber",
         "ZwPowerInformation",
-        "ExAllocatePool" "WithTag",
+        "ExAllocatePoolWithTag",
         "KeGetProcessorIndexFromNumber",
         "KeGetProcessorNumberFromIndex",
         "KeReleaseInStackQueuedSpinLock",

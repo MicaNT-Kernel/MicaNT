@@ -28,7 +28,6 @@
 #include <unordered_map>
 #include <sstream>
 #include <algorithm>
-#include <format>
 #include <chrono>
 
 namespace micant::conpty {
@@ -489,7 +488,7 @@ public:
         m_cursorPos.Y = std::clamp<int16_t>(m_cursorPos.Y, 0, newSize.Y - 1);
 
         // Notify terminal of geometry change via standard xterm sequence
-        std::string resizeSeq = std::format("\x1b[8;{};{}t", newSize.Y, newSize.X);
+        std::string resizeSeq = "\x1b[8;" + std::to_string(newSize.Y) + ";" + std::to_string(newSize.X) + "t";
         m_outPipe->writeString(resizeSeq);
 
         // Queue WindowBufferSizeEvent for attached Win32 console application
@@ -558,13 +557,16 @@ public:
     void setCursorStyle(CursorStyle style) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_cursorStyle = style;
-        m_outPipe->writeString(std::format("\x1b[{} q", static_cast<uint8_t>(style)));
+        m_outPipe->writeString("\x1b[" + std::to_string(static_cast<uint32_t>(style)) + " q");
     }
 
     void setTitle(std::string_view title) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_title = title;
-        m_outPipe->writeString(std::format("\x1b]0;{}\x07", title));
+        std::string seq = "\x1b]0;";
+        seq.append(title);
+        seq.push_back('\x07');
+        m_outPipe->writeString(seq);
     }
 
     void setAlternateScreenBuffer(bool enable) {
@@ -906,7 +908,7 @@ private:
 
                 // Move cursor if not adjacent
                 if (currentEmitY != y || currentEmitX != x) {
-                    diffStream.append(std::format("\x1b[{};{}H", y + 1, x + 1));
+                    diffStream.append("\x1b[" + std::to_string(y + 1) + ";" + std::to_string(x + 1) + "H");
                     currentEmitY = y;
                     currentEmitX = x;
                 }
@@ -942,7 +944,7 @@ private:
 
         // Restore final cursor position to active cursor
         if (m_shadowCursor != m_cursorPos) {
-            diffStream.append(std::format("\x1b[{};{}H", m_cursorPos.Y + 1, m_cursorPos.X + 1));
+            diffStream.append("\x1b[" + std::to_string(m_cursorPos.Y + 1) + ";" + std::to_string(m_cursorPos.X + 1) + "H");
             m_shadowCursor = m_cursorPos;
         }
 
@@ -1003,12 +1005,12 @@ private:
         // Foreground color
         if (cell.Fg != m_shadowFg) {
             if (cell.Fg.IsTrueColor) {
-                out.append(std::format("\x1b[38;2;{};{};{}m", cell.Fg.R, cell.Fg.G, cell.Fg.B));
+                out.append("\x1b[38;2;" + std::to_string(cell.Fg.R) + ";" + std::to_string(cell.Fg.G) + ";" + std::to_string(cell.Fg.B) + "m");
             } else {
                 if (cell.Fg.AnsiCode < 8) {
-                    out.append(std::format("\x1b[{}m", 30 + cell.Fg.AnsiCode));
+                    out.append("\x1b[" + std::to_string(30 + cell.Fg.AnsiCode) + "m");
                 } else {
-                    out.append(std::format("\x1b[{}m", 90 + (cell.Fg.AnsiCode - 8)));
+                    out.append("\x1b[" + std::to_string(90 + (cell.Fg.AnsiCode - 8)) + "m");
                 }
             }
             m_shadowFg = cell.Fg;
@@ -1017,12 +1019,12 @@ private:
         // Background color
         if (cell.Bg != m_shadowBg) {
             if (cell.Bg.IsTrueColor) {
-                out.append(std::format("\x1b[48;2;{};{};{}m", cell.Bg.R, cell.Bg.G, cell.Bg.B));
+                out.append("\x1b[48;2;" + std::to_string(cell.Bg.R) + ";" + std::to_string(cell.Bg.G) + ";" + std::to_string(cell.Bg.B) + "m");
             } else {
                 if (cell.Bg.AnsiCode < 8) {
-                    out.append(std::format("\x1b[{}m", 40 + cell.Bg.AnsiCode));
+                    out.append("\x1b[" + std::to_string(40 + cell.Bg.AnsiCode) + "m");
                 } else {
-                    out.append(std::format("\x1b[{}m", 100 + (cell.Bg.AnsiCode - 8)));
+                    out.append("\x1b[" + std::to_string(100 + (cell.Bg.AnsiCode - 8)) + "m");
                 }
             }
             m_shadowBg = cell.Bg;
