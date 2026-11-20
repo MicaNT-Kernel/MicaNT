@@ -73815,6 +73815,38 @@ inline void Test_Horizon350_PrismX_DirectComposition_AtmosphericFog_Wddm32_Suite
     Suite566_PrismX_DirectComposition_AtmosphericFog_Wddm32();
 }
 
+// ============================================================================
+// Suite 567: Horizon 351 - Sovereign MicaNT DirectComposition Dynamic Screen-Space
+//   Global Illumination (SSGI), Radiosity & Multi-Bounce Indirect Diffuse Pipeline
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Cornell Box Geometric Scene Setup & Quad Representation
+//   Pillar 3: Cosine Hemispherical Distribution Physical Invariants
+//   Pillar 4: Radiosity Color Bleeding on Floor & Adjacent Surfaces
+//   Pillar 5: Multi-Bounce Secondary Radiosity Verification
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-35us Latency
+// ============================================================================
+inline void Suite567_PrismX_DirectComposition_SSGI_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 567: Horizon 351 - Sovereign MicaNT DirectComposition SSGI & Radiosity Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_ssgi;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon351SsgiSubsystem(), "VerifyHorizon351SsgiSubsystem must return true");
+
+    std::cout << "  Horizon 351 Architectural Validation Complete:\n"
+              << "    Pillar 1: SSGI Parameters & Presets OK\n"
+              << "    Pillar 2: Cornell Box Geometric Scene OK\n"
+              << "    Pillar 3: Cosine Distribution Invariants OK\n"
+              << "    Pillar 4: Radiosity Color Bleeding OK\n"
+              << "    Pillar 5: Multi-Bounce Radiosity OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 567: Horizon 351 - Sovereign MicaNT DirectComposition SSGI PASSED." << std::endl;
+}
+
+inline void Test_Horizon351_PrismX_DirectComposition_SSGI_Wddm32_Suite() {
+    Suite567_PrismX_DirectComposition_SSGI_Wddm32();
+}
+
 
 
 
