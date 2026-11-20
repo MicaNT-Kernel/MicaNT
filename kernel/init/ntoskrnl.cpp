@@ -1110,6 +1110,11 @@ static void enableUserPagingForRange(uint64_t startVa, size_t size) {
     uint64_t cr3 = 0;
 #if defined(__x86_64__)
     __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
+    uint64_t cr0Val = 0;
+    __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0Val));
+    if (cr0Val & (1ULL << 16)) {
+        __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val & ~(1ULL << 16)) : "memory");
+    }
 #endif
     uint64_t pml4Phys = cr3 & 0x000FFFFFFFFFF000ULL;
     if (pml4Phys == 0) return;
@@ -1149,6 +1154,9 @@ static void enableUserPagingForRange(uint64_t startVa, size_t size) {
 
 #if defined(__x86_64__)
     __asm__ __volatile__("mov %0, %%cr3" : : "r"(cr3) : "memory");
+    if (cr0Val & (1ULL << 16)) {
+        __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val) : "memory");
+    }
 #endif
 }
 
