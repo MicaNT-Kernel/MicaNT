@@ -73975,6 +73975,39 @@ inline void Test_Horizon355_PrismX_DirectComposition_Iridescence_Wddm32_Suite() 
     Suite571_PrismX_DirectComposition_Iridescence_Wddm32();
 }
 
+// ============================================================================
+// Suite 572: Horizon 356 - Sovereign MicaNT DirectComposition Dynamic Real-Time
+//   Sub-Surface Fluid Simulation, Navier-Stokes Eulerian Grid & Shallow Water
+//   Equations (SWE) Ripple Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Interactive Impulse Disturbance Injection
+//   Pillar 3: Shallow Water Wave Equation Propagation (Radial Expansion)
+//   Pillar 4: Analytical Normal Vector Field & Upward Invariants
+//   Pillar 5: Bounded Wave Energy & Numerical Stability (No explosion)
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite572_PrismX_DirectComposition_Fluids_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 572: Horizon 356 - Sovereign MicaNT DirectComposition Fluid Simulation Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_fluids;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon356FluidSubsystem(), "VerifyHorizon356FluidSubsystem must return true");
+
+    std::cout << "  Horizon 356 Architectural Validation Complete:\n"
+              << "    Pillar 1: Fluid Simulation Parameters & Presets OK\n"
+              << "    Pillar 2: Interactive Impulse Disturbance Injection OK\n"
+              << "    Pillar 3: Shallow Water Wave Equation Propagation OK\n"
+              << "    Pillar 4: Analytical Normal Vector Field & Upward Invariant OK\n"
+              << "    Pillar 5: Bounded Wave Energy & Numerical Stability OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 572: Horizon 356 - Sovereign MicaNT DirectComposition Fluid Simulation PASSED." << std::endl;
+}
+
+inline void Test_Horizon356_PrismX_DirectComposition_Fluids_Wddm32_Suite() {
+    Suite572_PrismX_DirectComposition_Fluids_Wddm32();
+}
+
 
 
 
