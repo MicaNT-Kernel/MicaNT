@@ -106,6 +106,12 @@ def main():
     sz = krnl_out.stat().st_size
     print(f"      {GREEN}ntoskrnl.exe ready: {sz:,} bytes{RESET}")
 
+    # Also deploy to EFI/MicaNT for UEFI loader pre-boot resolution
+    micant_efi_dir = sysroot / "EFI" / "MicaNT"
+    micant_efi_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(krnl_out, micant_efi_dir / "ntoskrnl.exe")
+    print(f"      {GREEN}ntoskrnl.exe deployed to EFI/MicaNT/ntoskrnl.exe{RESET}")
+
     # 4. Build Known DLLs
     print(f"{YELLOW}[3/6] Compiling Known DLLs into System32...{RESET}")
     dll_list = [
@@ -204,6 +210,11 @@ def main():
             ]
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
+
+    cmd_exe = system32 / "cmd.exe"
+    if cmd_exe.exists():
+        shutil.copy2(cmd_exe, micant_efi_dir / "app.exe")
+        print(f"      {GREEN}cmd.exe deployed to EFI/MicaNT/app.exe{RESET}")
 
     # 7. Generate Registry Hives & Network Configs
     print(f"{YELLOW}[6/6] Populating Registry Hives & Network Configs...{RESET}")

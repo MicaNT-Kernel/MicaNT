@@ -119,10 +119,24 @@ public:
 
         uint64_t pdptEntry = pml4Base[PML4_INDEX_USER_BASE];
 
+#if defined(__x86_64__)
+        uint64_t cr0Val = 0;
+        __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0Val));
+        if (cr0Val & (1ULL << 16)) {
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val & ~(1ULL << 16)) : "memory");
+        }
+#endif
+
         // Mirror low 512 GB identity mapping into high-canonical kernel slots
         pml4Base[PML4_INDEX_KERNEL_BASE] = pdptEntry; // 0xFFFFF800'00000000
         pml4Base[PML4_INDEX_HAL]         = pdptEntry; // 0xFFFFFF80'00000000
         pml4Base[PML4_INDEX_LEGACY]      = pdptEntry; // 0xFFFFFFFF'80000000
+
+#if defined(__x86_64__)
+        if (cr0Val & (1ULL << 16)) {
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val) : "memory");
+        }
+#endif
 
         m_context.highCanonicalActive = true;
         return true;
@@ -135,7 +149,19 @@ public:
      */
     bool unmapLowIdentitySpace(uint64_t* pml4Base) noexcept {
         if (!pml4Base) return false;
+#if defined(__x86_64__)
+        uint64_t cr0Val = 0;
+        __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0Val));
+        if (cr0Val & (1ULL << 16)) {
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val & ~(1ULL << 16)) : "memory");
+        }
+#endif
         pml4Base[PML4_INDEX_USER_BASE] = 0;
+#if defined(__x86_64__)
+        if (cr0Val & (1ULL << 16)) {
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val) : "memory");
+        }
+#endif
         m_context.identityUnmapped = true;
         return true;
     }

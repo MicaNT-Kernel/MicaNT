@@ -76,7 +76,16 @@ def main():
     # Check for QEMU
     qemu_bin = shutil.which("qemu-system-x86_64")
     if not qemu_bin:
-        print(f"{RED}[ERROR] qemu-system-x86_64 was not found in PATH.{RESET}")
+        for fallback in [
+            r"C:\Program Files\qemu\qemu-system-x86_64.exe",
+            r"C:\Program Files (x86)\qemu\qemu-system-x86_64.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\qemu\qemu-system-x86_64.exe")
+        ]:
+            if os.path.isfile(fallback):
+                qemu_bin = fallback
+                break
+    if not qemu_bin:
+        print(f"{RED}[ERROR] qemu-system-x86_64 was not found in PATH or standard installation directories.{RESET}")
         print(f"{GRAY}Please install QEMU for your platform:")
         print(f"  - Windows: winget install SoftwareFreedomConservancy.QEMU")
         print(f"  - Ubuntu/Debian: sudo apt install qemu-system-x86 ovmf")
