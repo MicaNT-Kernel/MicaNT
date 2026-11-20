@@ -248,8 +248,7 @@ public:
                 // Trace Green channel
                 KernelCausticsVector3 refrRayG{};
                 bool tirG = false;
-                RefractRayInternal(sunDirection, surfaceNormal, 1.0f / iorG, &refrRayG, &tirG);
-                if (tirG) {
+                if (!RefractRayInternal(sunDirection, surfaceNormal, 1.0f / iorG, &refrRayG, &tirG) || tirG) {
                     m_telemetry.totalInternalReflections++;
                     continue;
                 }
@@ -271,20 +270,22 @@ public:
                     // Trace Red channel
                     KernelCausticsVector3 refrRayR{};
                     bool tirR = false;
-                    RefractRayInternal(sunDirection, surfaceNormal, 1.0f / iorR, &refrRayR, &tirR);
-                    float tR = distZ / refrRayR.z;
-                    KernelCausticsVector3 landPosR = KernelCausticsVector3{surfaceX, surfaceY, elevation} + (refrRayR * tR);
-                    float distSqR = (landPosR.x - bedX) * (landPosR.x - bedX) + (landPosR.y - bedY) * (landPosR.y - bedY);
-                    totalIrradianceR += std::exp(-distSqR / (stepMm * stepMm * 4.0f));
+                    if (RefractRayInternal(sunDirection, surfaceNormal, 1.0f / iorR, &refrRayR, &tirR)) {
+                        float tR = distZ / refrRayR.z;
+                        KernelCausticsVector3 landPosR = KernelCausticsVector3{surfaceX, surfaceY, elevation} + (refrRayR * tR);
+                        float distSqR = (landPosR.x - bedX) * (landPosR.x - bedX) + (landPosR.y - bedY) * (landPosR.y - bedY);
+                        totalIrradianceR += std::exp(-distSqR / (stepMm * stepMm * 4.0f));
+                    }
 
                     // Trace Blue channel
                     KernelCausticsVector3 refrRayB{};
                     bool tirB = false;
-                    RefractRayInternal(sunDirection, surfaceNormal, 1.0f / iorB, &refrRayB, &tirB);
-                    float tB = distZ / refrRayB.z;
-                    KernelCausticsVector3 landPosB = KernelCausticsVector3{surfaceX, surfaceY, elevation} + (refrRayB * tB);
-                    float distSqB = (landPosB.x - bedX) * (landPosB.x - bedX) + (landPosB.y - bedY) * (landPosB.y - bedY);
-                    totalIrradianceB += std::exp(-distSqB / (stepMm * stepMm * 4.0f));
+                    if (RefractRayInternal(sunDirection, surfaceNormal, 1.0f / iorB, &refrRayB, &tirB)) {
+                        float tB = distZ / refrRayB.z;
+                        KernelCausticsVector3 landPosB = KernelCausticsVector3{surfaceX, surfaceY, elevation} + (refrRayB * tB);
+                        float distSqB = (landPosB.x - bedX) * (landPosB.x - bedX) + (landPosB.y - bedY) * (landPosB.y - bedY);
+                        totalIrradianceB += std::exp(-distSqB / (stepMm * stepMm * 4.0f));
+                    }
                 } else {
                     totalIrradianceR += weightG;
                     totalIrradianceB += weightG;

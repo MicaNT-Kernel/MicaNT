@@ -73879,6 +73879,38 @@ inline void Test_Horizon352_PrismX_DirectComposition_Caustics_Wddm32_Suite() {
     Suite568_PrismX_DirectComposition_Caustics_Wddm32();
 }
 
+// ============================================================================
+// Suite 569: Horizon 353 - Sovereign MicaNT DirectComposition Dynamic GPU Particle
+//   System, Divergence-Free Curl Noise Fluid Flow & Holographic Energy Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Emitter Geometry Sampling (Sphere bounds)
+//   Pillar 3: Divergence-Free Curl Noise Invariants (Div(v) = 0)
+//   Pillar 4: Particle Lifecycle & Normalized Aging Expiration
+//   Pillar 5: Floor Collision Response & Upward Restitution Bounce
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite569_PrismX_DirectComposition_Particles_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 569: Horizon 353 - Sovereign MicaNT DirectComposition Particle System Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_particles;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon353ParticleSubsystem(), "VerifyHorizon353ParticleSubsystem must return true");
+
+    std::cout << "  Horizon 353 Architectural Validation Complete:\n"
+              << "    Pillar 1: Particle Parameters & Presets OK\n"
+              << "    Pillar 2: Emitter Geometry Sampling OK\n"
+              << "    Pillar 3: Divergence-Free Curl Noise Invariants OK\n"
+              << "    Pillar 4: Particle Aging & Lifecycle Expiration OK\n"
+              << "    Pillar 5: Floor Collision & Restitution Bounce OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 569: Horizon 353 - Sovereign MicaNT DirectComposition Particle System PASSED." << std::endl;
+}
+
+inline void Test_Horizon353_PrismX_DirectComposition_Particles_Wddm32_Suite() {
+    Suite569_PrismX_DirectComposition_Particles_Wddm32();
+}
+
 
 
 
