@@ -73847,6 +73847,38 @@ inline void Test_Horizon351_PrismX_DirectComposition_SSGI_Wddm32_Suite() {
     Suite567_PrismX_DirectComposition_SSGI_Wddm32();
 }
 
+// ============================================================================
+// Suite 568: Horizon 352 - Sovereign MicaNT DirectComposition Dynamic Screen-Space
+//   Volumetric Caustics, Water Wave Refraction & Aquatic Light Scattering Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Gerstner Wave Geometry & Normal Vector Invariants
+//   Pillar 3: Snell's Law Refraction Physical Invariants & TIR Detection
+//   Pillar 4: Jerlov Oceanic Water Extinction Monotonic Attenuation
+//   Pillar 5: Dynamic Caustic Irradiance Evaluation & Chromatic Splitting
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite568_PrismX_DirectComposition_Caustics_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 568: Horizon 352 - Sovereign MicaNT DirectComposition Caustics & Refraction Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_caustics;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon352CausticsSubsystem(), "VerifyHorizon352CausticsSubsystem must return true");
+
+    std::cout << "  Horizon 352 Architectural Validation Complete:\n"
+              << "    Pillar 1: Caustics Parameters & Presets OK\n"
+              << "    Pillar 2: Gerstner Wave Geometry & Upward Normal OK\n"
+              << "    Pillar 3: Snell's Law Refraction & TIR Invariants OK\n"
+              << "    Pillar 4: Jerlov Oceanic Attenuation & Spectral Decay OK\n"
+              << "    Pillar 5: Dynamic Submerged Bed Caustic Irradiance OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 568: Horizon 352 - Sovereign MicaNT DirectComposition Caustics PASSED." << std::endl;
+}
+
+inline void Test_Horizon352_PrismX_DirectComposition_Caustics_Wddm32_Suite() {
+    Suite568_PrismX_DirectComposition_Caustics_Wddm32();
+}
+
 
 
 
