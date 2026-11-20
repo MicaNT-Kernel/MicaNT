@@ -151,6 +151,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_directcomposition_clouds_wddm32.cpp
     kernel/io/prismx_directcomposition_iridescence_wddm32.cpp
     kernel/io/prismx_directcomposition_fluids_wddm32.cpp
+    kernel/io/prismx_directcomposition_elastic_wddm32.cpp
     kernel/io/prism_directx_system32_dll_router.cpp
     kernel/io/prism_d3d9ex_com_vtable_abi.cpp
     kernel/io/prism_xaudio2_dinput8_com_abi.cpp

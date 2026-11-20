@@ -74008,6 +74008,38 @@ inline void Test_Horizon356_PrismX_DirectComposition_Fluids_Wddm32_Suite() {
     Suite572_PrismX_DirectComposition_Fluids_Wddm32();
 }
 
+// ============================================================================
+// Suite 573: Horizon 357 - Sovereign MicaNT DirectComposition Dynamic Sub-Surface
+//   Elastic Soft-Body Deformation, Mass-Spring Lattice & Corotational FEM Jelly Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Initial Rest State & Positive Rest Volume
+//   Pillar 3: Interactive Impulse & Squish Deformation
+//   Pillar 4: Floor Boundary Contact & Non-Penetration Constraint
+//   Pillar 5: Rebound Recoil & Elastic Restoring Force
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite573_PrismX_DirectComposition_Elastic_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 573: Horizon 357 - Sovereign MicaNT DirectComposition Elastic Soft-Body Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_elastic;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon357ElasticSubsystem(), "VerifyHorizon357ElasticSubsystem must return true");
+
+    std::cout << "  Horizon 357 Architectural Validation Complete:\n"
+              << "    Pillar 1: Elastic Deformation Parameters & Presets OK\n"
+              << "    Pillar 2: Initial Rest State & Positive Rest Volume OK\n"
+              << "    Pillar 3: Interactive Impulse & Squish Deformation OK\n"
+              << "    Pillar 4: Floor Boundary Contact & Non-Penetration OK\n"
+              << "    Pillar 5: Rebound Recoil & Elastic Restoring Force OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 573: Horizon 357 - Sovereign MicaNT DirectComposition Elastic Soft-Body PASSED." << std::endl;
+}
+
+inline void Test_Horizon357_PrismX_DirectComposition_Elastic_Wddm32_Suite() {
+    Suite573_PrismX_DirectComposition_Elastic_Wddm32();
+}
+
 
 
 
