@@ -74072,6 +74072,38 @@ inline void Test_Horizon358_PrismX_DirectComposition_Cloth_Wddm32_Suite() {
     Suite574_PrismX_DirectComposition_Cloth_Wddm32();
 }
 
+// ============================================================================
+// Suite 575: Horizon 359 - Sovereign MicaNT DirectComposition Rigid Body
+//   Dynamics, Continuous Collision Detection (CCD) & Multi-Contact Manifold Physics Subsystem
+//   Pillar 1: Rigid Body Definition & Inertial Initialization
+//   Pillar 2: Dynamic Sphere Body Creation & Geometric Parameters
+//   Pillar 3: Gravitational Acceleration & Free Fall
+//   Pillar 4: Floor Contact Manifold Resolution & Restitution Bounce
+//   Pillar 5: Multi-Body Kinetic Energy Dissipation & Stability
+//   Pillar 6: High-Frequency Stress Pass (250 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite575_PrismX_DirectComposition_RigidBody_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 575: Horizon 359 - Sovereign MicaNT DirectComposition Rigid Body Physics Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_rigidbody;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon359RigidBodySubsystem(), "VerifyHorizon359RigidBodySubsystem must return true");
+
+    std::cout << "  Horizon 359 Architectural Validation Complete:\n"
+              << "    Pillar 1: Rigid Body Definition & Inertial Parameters OK\n"
+              << "    Pillar 2: Dynamic Sphere Body Creation OK\n"
+              << "    Pillar 3: Gravitational Acceleration & Free Fall OK\n"
+              << "    Pillar 4: Floor Contact Manifold & Bounce OK\n"
+              << "    Pillar 5: Multi-Body Kinetic Energy Dissipation OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 575: Horizon 359 - Sovereign MicaNT DirectComposition Rigid Body Physics PASSED." << std::endl;
+}
+
+inline void Test_Horizon359_PrismX_DirectComposition_RigidBody_Wddm32_Suite() {
+    Suite575_PrismX_DirectComposition_RigidBody_Wddm32();
+}
+
 
 
 

@@ -119,7 +119,7 @@ public:
 
         uint64_t pdptEntry = pml4Base[PML4_INDEX_USER_BASE];
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         uint64_t cr0Val = 0;
         __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0Val));
         if (cr0Val & (1ULL << 16)) {
@@ -132,7 +132,7 @@ public:
         pml4Base[PML4_INDEX_HAL]         = pdptEntry; // 0xFFFFFF80'00000000
         pml4Base[PML4_INDEX_LEGACY]      = pdptEntry; // 0xFFFFFFFF'80000000
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         if (cr0Val & (1ULL << 16)) {
             __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val) : "memory");
         }
@@ -149,7 +149,7 @@ public:
      */
     bool unmapLowIdentitySpace(uint64_t* pml4Base) noexcept {
         if (!pml4Base) return false;
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         uint64_t cr0Val = 0;
         __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0Val));
         if (cr0Val & (1ULL << 16)) {
@@ -157,7 +157,7 @@ public:
         }
 #endif
         pml4Base[PML4_INDEX_USER_BASE] = 0;
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         if (cr0Val & (1ULL << 16)) {
             __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0Val) : "memory");
         }

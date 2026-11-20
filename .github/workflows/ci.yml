@@ -26,7 +26,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          clang++ -O2 -D_CRT_SECURE_NO_WARNINGS test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
+          clang++ -O2 -D_CRT_SECURE_NO_WARNINGS -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $kernelUnits = Get-ChildItem -Recurse kernel -Filter *.cpp | Where-Object { $_.Name -ne "kiinit.cpp" -and $_.Name -ne "ntoskrnl.cpp" } | Sort-Object FullName
@@ -36,7 +36,7 @@ jobs:
               $base   = [System.IO.Path]::GetFileNameWithoutExtension($unit.Name)
               $objOut = "bin/${subsys}_${base}.o"
               Write-Host "[CI] Compiling $($unit.FullName) -> $objOut"
-              clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude $unit.FullName -o $objOut
+              clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -c -Iinclude $unit.FullName -o $objOut
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               $objFiles += $objOut
           }
@@ -82,16 +82,16 @@ jobs:
                       $extraArgs += $dll.DefFile
                   }
               }
-              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
+              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
           Write-Host "[CI] Linking bin/micant_kernel.exe ($($objFiles.Count) modular kernel object units)..."
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp @objFiles -o bin/micant_kernel.exe
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -Iinclude kernel/init/kiinit.cpp @objFiles -o bin/micant_kernel.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Write-Host "[CI] Linking bin/micant_tests.exe ($($objFiles.Count) modular kernel object units)..."
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp @objFiles -o bin/micant_tests.exe
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -Iinclude test/test_runner.cpp @objFiles -o bin/micant_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Write-Host "[CI] Compiling Bare-Metal UEFI PE32+ Bootloader (build/esp/EFI/BOOT/BOOTX64.EFI)..."
