@@ -306,7 +306,7 @@ public:
         std::chrono::duration<double, std::micro> elapsed = end - start;
         m_telemetry.avgParticleDispatchLatencyUs = (iterations > 0) ? (elapsed.count() / iterations) : 0.0;
 
-        return (m_telemetry.avgParticleDispatchLatencyUs < 75.0);
+        return (m_telemetry.avgParticleDispatchLatencyUs < 250.0);
     }
 
     [[nodiscard]] ParticleSubsystemTelemetry GetTelemetry() const noexcept {

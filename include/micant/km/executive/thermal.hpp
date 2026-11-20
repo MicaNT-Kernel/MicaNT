@@ -23,7 +23,8 @@
 #include <mutex>
 #include <span>
 #include <algorithm>
-#include <format>
+#include <sstream>
+#include <iomanip>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
@@ -269,36 +270,42 @@ public:
         double ac1C = KelvinTenthsToCelsius(m_info.activeTripPoint[1]);
         double ac2C = KelvinTenthsToCelsius(m_info.activeTripPoint[2]);
 
-        out += "===============================================================================\n";
-        out += "   MicaNT Sovereign ACPI Thermal Zone (acpitz.sys) & Dynamic Fan Subsystem     \n";
-        out += "===============================================================================\n";
-        out += std::format("  Thermal Node:       \\Device\\ThermalZone0 -> {}\n", m_zone.name);
-        out += std::format("  Current Temp (_TMP): {:.1f} C ({} 0.1K) | Status: {}\n",
-            curC, m_info.currentTemperature,
-            m_zone.criticalTripFired ? "CRITICAL HARDWARE TRIP" :
-            m_zone.passiveThrottlingActive ? "PASSIVE THROTTLE ACTIVE" : "NOMINAL TEMPERATURE");
-        out += std::format("  Cooling Mode:       {} | Stamp: {}\n",
-            (m_policy.coolingMode == ThermalCoolingMode::Active) ? "Active (Performance Fan Ramp)" : "Passive (Silent Throttling)",
-            m_info.thermalStamp);
-        out += "-------------------------------------------------------------------------------\n";
-        out += "  ACPI Trip Ladder:\n";
-        out += std::format("    _CRT (Critical Shutdown):  {:.1f} C ({} 0.1K) - Immediate Silicon Protection\n", crtC, m_info.criticalTripPoint);
-        out += std::format("    _PSV (Passive Throttle):   {:.1f} C ({} 0.1K) - TC1={} TC2={} TSP={} (PPM EPP Downshift)\n",
-            psvC, m_info.passiveTripPoint, m_info.thermalConstant1, m_info.thermalConstant2, m_info.samplingPeriod);
-        out += std::format("    _AC0 (100% PWM Fan Ramp):  {:.1f} C ({} 0.1K)\n", ac0C, m_info.activeTripPoint[0]);
-        out += std::format("    _AC1 ( 70% PWM Fan Ramp):  {:.1f} C ({} 0.1K)\n", ac1C, m_info.activeTripPoint[1]);
-        out += std::format("    _AC2 ( 40% PWM Fan Ramp):  {:.1f} C ({} 0.1K)\n", ac2C, m_info.activeTripPoint[2]);
-        out += "-------------------------------------------------------------------------------\n";
-        out += " Fan ID  Label              PWM%   Current RPM   Target RPM   Stall Status\n";
-        out += "-------------------------------------------------------------------------------\n";
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(1);
+
+        oss << "===============================================================================\n";
+        oss << "   MicaNT Sovereign ACPI Thermal Zone (acpitz.sys) & Dynamic Fan Subsystem     \n";
+        oss << "===============================================================================\n";
+        oss << "  Thermal Node:       \\Device\\ThermalZone0 -> " << m_zone.name << "\n";
+        oss << "  Current Temp (_TMP): " << curC << " C (" << m_info.currentTemperature << " 0.1K) | Status: "
+            << (m_zone.criticalTripFired ? "CRITICAL HARDWARE TRIP" :
+                m_zone.passiveThrottlingActive ? "PASSIVE THROTTLE ACTIVE" : "NOMINAL TEMPERATURE") << "\n";
+        oss << "  Cooling Mode:       "
+            << ((m_policy.coolingMode == ThermalCoolingMode::Active) ? "Active (Performance Fan Ramp)" : "Passive (Silent Throttling)")
+            << " | Stamp: " << m_info.thermalStamp << "\n";
+        oss << "-------------------------------------------------------------------------------\n";
+        oss << "  ACPI Trip Ladder:\n";
+        oss << "    _CRT (Critical Shutdown):  " << crtC << " C (" << m_info.criticalTripPoint << " 0.1K) - Immediate Silicon Protection\n";
+        oss << "    _PSV (Passive Throttle):   " << psvC << " C (" << m_info.passiveTripPoint << " 0.1K) - TC1="
+            << m_info.thermalConstant1 << " TC2=" << m_info.thermalConstant2 << " TSP=" << m_info.samplingPeriod << " (PPM EPP Downshift)\n";
+        oss << "    _AC0 (100% PWM Fan Ramp):  " << ac0C << " C (" << m_info.activeTripPoint[0] << " 0.1K)\n";
+        oss << "    _AC1 ( 70% PWM Fan Ramp):  " << ac1C << " C (" << m_info.activeTripPoint[1] << " 0.1K)\n";
+        oss << "    _AC2 ( 40% PWM Fan Ramp):  " << ac2C << " C (" << m_info.activeTripPoint[2] << " 0.1K)\n";
+        oss << "-------------------------------------------------------------------------------\n";
+        oss << " Fan ID  Label              PWM%   Current RPM   Target RPM   Stall Status\n";
+        oss << "-------------------------------------------------------------------------------\n";
         for (const auto& fan : m_fans) {
             std::string label = (fan.fanId == 0) ? "CPU Socket Fan" :
                                 (fan.fanId == 1) ? "Chassis Intake" : "Chassis Exhaust";
-            out += std::format("   #{}    {:<18} {:>3}%     {:>4} RPM     {:>4} RPM   {}\n",
-                fan.fanId, label, fan.pwmPercent, fan.currentRpm, fan.targetRpm,
-                fan.isStalled ? "[STALLED / FAULT]" : "[OPERATIONAL]");
+            oss << "   #" << fan.fanId << "    "
+                << std::left << std::setw(18) << label
+                << std::right << std::setw(3) << static_cast<uint32_t>(fan.pwmPercent) << "%     "
+                << std::setw(4) << fan.currentRpm << " RPM     "
+                << std::setw(4) << fan.targetRpm << " RPM   "
+                << (fan.isStalled ? "[STALLED / FAULT]" : "[OPERATIONAL]") << "\n";
         }
-        out += "===============================================================================\n";
+        oss << "===============================================================================\n";
+        out += oss.str();
     }
 
 private:

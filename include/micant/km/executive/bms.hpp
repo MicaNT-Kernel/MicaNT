@@ -22,7 +22,6 @@
 #include <mutex>
 #include <span>
 #include <algorithm>
-#include <format>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"

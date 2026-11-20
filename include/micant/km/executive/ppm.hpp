@@ -24,7 +24,8 @@
 #include <mutex>
 #include <span>
 #include <algorithm>
-#include <format>
+#include <sstream>
+#include <iomanip>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
@@ -390,43 +391,44 @@ public:
     // ASCII Telemetry Visualizer for Executive Console
     void renderAsciiTelemetry(std::string& out) const {
         std::lock_guard<std::mutex> lock(m_lock);
-        out.clear();
-        out.reserve(2048);
+        std::ostringstream oss;
 
-        out += "===============================================================================\n";
-        out += "   MicaNT Sovereign Processor Power Management (PPM) & Intel Speed Shift (HWP) \n";
-        out += "===============================================================================\n";
-        out += std::format("  Platform Silicon:   Intel(R) Xeon(R) E3-1270 v6 @ 3.80GHz (Kaby Lake 4C/8T)\n");
-        out += std::format("  HWP Native Mode:    {} | Turbo Boost: {} | Active Policy: {}\n",
-            m_hwpEnabled ? "ENABLED (MSR 0x770)" : "DISABLED",
-            m_turboBoostEnabled ? "ACTIVE (42x Max)" : "INHIBITED",
-            (m_activePolicy == ProcessorPolicy::Performance) ? "Performance" :
-            (m_activePolicy == ProcessorPolicy::Balanced) ? "Balanced" : "PowerSaver");
-        out += std::format("  Silicon Thermals:   Package: {} C | Throttled: {}\n",
-            m_packageTemperatureCelsius,
-            (m_packageTemperatureCelsius >= 85) ? "TRIPPED (Over-Temp)" : "NOMINAL");
-        out += std::format("  HWP Capabilities:   Highest: {}x ({} MHz) | Guaranteed: {}x | Efficient: {}x | Lowest: {}x\n",
-            m_caps.highestPerformanceRatio, m_caps.highestPerformanceRatio * 100,
-            m_caps.guaranteedPerformanceRatio, m_caps.efficientPerformanceRatio, m_caps.lowestPerformanceRatio);
-        out += std::format("  Active HWP Request: Min: {}x | Max: {}x | EPP: 0x{:02X} ({})\n",
-            m_hwpRequest.minimumRatio, m_hwpRequest.maximumRatio,
-            m_hwpRequest.energyPerformancePreference,
-            (m_hwpRequest.energyPerformancePreference <= EPP_HIGH_PERFORMANCE) ? "Performance" :
-            (m_hwpRequest.energyPerformancePreference <= EPP_BALANCED_POWER) ? "Balanced" : "Energy Conserve");
-        out += "-------------------------------------------------------------------------------\n";
-        out += " Core  State     Clock    Ratio   EPP    Temp   PPM Status\n";
-        out += "-------------------------------------------------------------------------------\n";
+        oss << "===============================================================================\n";
+        oss << "   MicaNT Sovereign Processor Power Management (PPM) & Intel Speed Shift (HWP) \n";
+        oss << "===============================================================================\n";
+        oss << "  Platform Silicon:   Intel(R) Xeon(R) E3-1270 v6 @ 3.80GHz (Kaby Lake 4C/8T)\n";
+        oss << "  HWP Native Mode:    " << (m_hwpEnabled ? "ENABLED (MSR 0x770)" : "DISABLED")
+            << " | Turbo Boost: " << (m_turboBoostEnabled ? "ACTIVE (42x Max)" : "INHIBITED")
+            << " | Active Policy: " << ((m_activePolicy == ProcessorPolicy::Performance) ? "Performance" :
+                                      (m_activePolicy == ProcessorPolicy::Balanced) ? "Balanced" : "PowerSaver") << "\n";
+        oss << "  Silicon Thermals:   Package: " << m_packageTemperatureCelsius
+            << " C | Throttled: " << ((m_packageTemperatureCelsius >= 85) ? "TRIPPED (Over-Temp)" : "NOMINAL") << "\n";
+        oss << "  HWP Capabilities:   Highest: " << static_cast<uint32_t>(m_caps.highestPerformanceRatio)
+            << "x (" << (m_caps.highestPerformanceRatio * 100) << " MHz) | Guaranteed: "
+            << static_cast<uint32_t>(m_caps.guaranteedPerformanceRatio) << "x | Efficient: "
+            << static_cast<uint32_t>(m_caps.efficientPerformanceRatio) << "x | Lowest: "
+            << static_cast<uint32_t>(m_caps.lowestPerformanceRatio) << "x\n";
+        oss << "  Active HWP Request: Min: " << static_cast<uint32_t>(m_hwpRequest.minimumRatio)
+            << "x | Max: " << static_cast<uint32_t>(m_hwpRequest.maximumRatio)
+            << "x | EPP: 0x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<uint32_t>(m_hwpRequest.energyPerformancePreference) << std::dec
+            << " (" << ((m_hwpRequest.energyPerformancePreference <= EPP_HIGH_PERFORMANCE) ? "Performance" :
+                        (m_hwpRequest.energyPerformancePreference <= EPP_BALANCED_POWER) ? "Balanced" : "Energy Conserve") << ")\n";
+        oss << "-------------------------------------------------------------------------------\n";
+        oss << " Core  State     Clock    Ratio   EPP    Temp   PPM Status\n";
+        oss << "-------------------------------------------------------------------------------\n";
         for (const auto& c : m_cores) {
-            out += std::format("  #{}    {}  {} MHz   {}x   0x{:02X}   {} C   {}\n",
-                c.coreId,
-                c.isParked ? "PARKED " : "ONLINE ",
-                c.currentFrequencyMhz,
-                c.currentRatio,
-                c.eppValue,
-                c.temperatureCelsius,
-                c.isThermalThrottled ? "[THERMAL THROTTLE]" : (c.isParked ? "[SLEEP C3]" : "[ACTIVE C0]"));
+            oss << "  #" << c.coreId << "    "
+                << (c.isParked ? "PARKED " : "ONLINE ") << " "
+                << c.currentFrequencyMhz << " MHz   "
+                << static_cast<uint32_t>(c.currentRatio) << "x   0x"
+                << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+                << static_cast<uint32_t>(c.eppValue) << std::dec << "   "
+                << c.temperatureCelsius << " C   "
+                << (c.isThermalThrottled ? "[THERMAL THROTTLE]" : (c.isParked ? "[SLEEP C3]" : "[ACTIVE C0]")) << "\n";
         }
-        out += "===============================================================================\n";
+        oss << "===============================================================================\n";
+        out = oss.str();
     }
 
 private:
