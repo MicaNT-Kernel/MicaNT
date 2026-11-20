@@ -74040,6 +74040,39 @@ inline void Test_Horizon357_PrismX_DirectComposition_Elastic_Wddm32_Suite() {
     Suite573_PrismX_DirectComposition_Elastic_Wddm32();
 }
 
+// ============================================================================
+// Suite 574: Horizon 358 - Sovereign MicaNT DirectComposition Position-Based
+//   Dynamics (PBD) Cloth Simulation, Aerodynamic Wind Coupling & Collision Response Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Rest State Geometry & Invariant Pinned Boundaries
+//   Pillar 3: Position-Based Dynamics (PBD) Distance Constraints & Gravity Sag
+//   Pillar 4: Aerodynamic Wind Coupling, Normal Synthesis & Lift Forces
+//   Pillar 5: Obstacle Collision Detection & Non-Penetration Resolution
+//   Pillar 6: High-Frequency Stress Pass (250 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite574_PrismX_DirectComposition_Cloth_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 574: Horizon 358 - Sovereign MicaNT DirectComposition Cloth Dynamics Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_cloth;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon358ClothSubsystem(), "VerifyHorizon358ClothSubsystem must return true");
+
+    std::cout << "  Horizon 358 Architectural Validation Complete:\n"
+              << "    Pillar 1: Cloth Simulation Parameters & Presets OK\n"
+              << "    Pillar 2: Rest State Geometry & Invariant Pinned Boundaries OK\n"
+              << "    Pillar 3: Position-Based Dynamics (PBD) Distance Constraints OK\n"
+              << "    Pillar 4: Aerodynamic Wind Coupling, Normal Synthesis & Lift OK\n"
+              << "    Pillar 5: Obstacle Collision Detection & Non-Penetration OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 574: Horizon 358 - Sovereign MicaNT DirectComposition Cloth Dynamics PASSED." << std::endl;
+}
+
+inline void Test_Horizon358_PrismX_DirectComposition_Cloth_Wddm32_Suite() {
+    Suite574_PrismX_DirectComposition_Cloth_Wddm32();
+}
+
+
 
 
 
