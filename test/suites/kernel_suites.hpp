@@ -73943,6 +73943,38 @@ inline void Test_Horizon354_PrismX_DirectComposition_Clouds_Wddm32_Suite() {
     Suite570_PrismX_DirectComposition_Clouds_Wddm32();
 }
 
+// ============================================================================
+// Suite 571: Horizon 355 - Sovereign MicaNT DirectComposition Real-Time Thin-Film
+//   Optical Interference, Iridescence & Structural Coloration Subsystem
+//   Pillar 1: Configuration, Presets & Parameter Clamping
+//   Pillar 2: Airy Thin-Film Wave Interference Invariants (R in [0, 1] and R + T == 1.0)
+//   Pillar 3: Constructive & Destructive Interference Spectral Discrimination
+//   Pillar 4: Angular Viewing Shift (Iridescence Fringes)
+//   Pillar 5: Marangoni Fluid Flow & Spatial Dynamic Thickness Variation
+//   Pillar 6: Sustained High-Throughput Stress (200 frames) & Sub-75us Latency
+// ============================================================================
+inline void Suite571_PrismX_DirectComposition_Iridescence_Wddm32() {
+    std::cout << "\n[TEST] Running Suite 571: Horizon 355 - Sovereign MicaNT DirectComposition Iridescence Subsystem...\n" << std::flush;
+
+    using namespace micant::um::prismx_iridescence;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon355IridescenceSubsystem(), "VerifyHorizon355IridescenceSubsystem must return true");
+
+    std::cout << "  Horizon 355 Architectural Validation Complete:\n"
+              << "    Pillar 1: Thin-Film Parameters & Presets OK\n"
+              << "    Pillar 2: Airy Wave Interference & Energy Conservation OK\n"
+              << "    Pillar 3: Constructive & Destructive Spectral Discrimination OK\n"
+              << "    Pillar 4: Angular Viewing Shift & Fringe Modulation OK\n"
+              << "    Pillar 5: Marangoni Fluid Flow & Dynamic Thickness OK\n"
+              << "    Pillar 6: High-Throughput Stress & Sub-75us Latency OK\n";
+    std::cout << "[TEST] Suite 571: Horizon 355 - Sovereign MicaNT DirectComposition Iridescence PASSED." << std::endl;
+}
+
+inline void Test_Horizon355_PrismX_DirectComposition_Iridescence_Wddm32_Suite() {
+    Suite571_PrismX_DirectComposition_Iridescence_Wddm32();
+}
+
 
 
 
