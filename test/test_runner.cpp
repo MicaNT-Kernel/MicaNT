@@ -224,6 +224,7 @@
 #include "micant/km/drivers/fs/ntfs_primary_storage.hpp"
 #include "micant/km/drivers/fs/ntfs_reparse_streams.hpp"
 #include "micant/km/drivers/fs/ntfs_txf.hpp"
+#include "micant/km/drivers/fs/ntfs_vss.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -514,6 +515,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite579") {
+        RUN_TEST(Test_Horizon363_Volume_Shadow_Copy_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite578") {
@@ -2959,6 +2964,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon360_Primary_NTFS_Storage_Suite);
     RUN_TEST(Test_Horizon361_NTFS_Reparse_Streams_Suite);
     RUN_TEST(Test_Horizon362_Transactional_NTFS_Suite);
+    RUN_TEST(Test_Horizon363_Volume_Shadow_Copy_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

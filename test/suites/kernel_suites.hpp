@@ -74203,5 +74203,39 @@ inline void Test_Horizon362_Transactional_NTFS_Suite() {
     Suite578_Sovereign_Transactional_NTFS_Subsystem();
 }
 
+// ============================================================================
+// Suite 579: Horizon 363 - Sovereign NTFS Volume Shadow Copy (VSS) Provider
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: VSS Provider Registration & VolSnap Device Creation (\Device\HarddiskVolumeShadowCopy1)
+//   Pillar 2: Crash-Consistent Write Hold & Release Protocol (IOCTL_VOLSNAP_FLUSH_AND_HOLD_WRITES)
+//   Pillar 3: Differential Block Copy-On-Write (COW) Trapping & DiffArea Extent Storage
+//   Pillar 4: Snapshot Stacking & Cascade Isolation (Independent Historical Generation Preservation)
+//   Pillar 5: Point-in-Time Read-Only Virtual Mounting & Extent Verification (Pass-Through vs Redirect)
+//   Pillar 6: Snapshot Rollback Reversion & High-Throughput Stress Benchmarking (Sub-25us Latency)
+// ============================================================================
+inline void Suite579_Sovereign_Volume_Shadow_Copy_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 579: Horizon 363 - Sovereign MicaNT Volume Shadow Copy (VSS) Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::vss;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon363VolumeShadowCopySubsystem(), "VerifyHorizon363VolumeShadowCopySubsystem must return true");
+
+    std::cout << "  Horizon 363 Architectural Validation Complete:\n"
+              << "    Pillar 1: VSS Provider Registration & VolSnap Device Creation OK\n"
+              << "    Pillar 2: Crash-Consistent Write Hold & Release Protocol OK\n"
+              << "    Pillar 3: Differential Block Copy-On-Write (COW) Trapping OK\n"
+              << "    Pillar 4: Snapshot Stacking & Cascade Isolation OK\n"
+              << "    Pillar 5: Point-in-Time Read-Only Virtual Mounting OK\n"
+              << "    Pillar 6: Snapshot Rollback Reversion & Stress Benchmarking OK\n";
+    std::cout << "[TEST] Suite 579: Horizon 363 - Sovereign MicaNT Volume Shadow Copy (VSS) PASSED." << std::endl;
+}
+
+inline void Test_Horizon363_Volume_Shadow_Copy_Suite() {
+    Suite579_Sovereign_Volume_Shadow_Copy_Subsystem();
+}
+
+
 
 
