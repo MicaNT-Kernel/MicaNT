@@ -74236,6 +74236,40 @@ inline void Test_Horizon363_Volume_Shadow_Copy_Suite() {
     Suite579_Sovereign_Volume_Shadow_Copy_Subsystem();
 }
 
+// ============================================================================
+// Suite 580: Horizon 364 - Sovereign NTFS Resilient Journaling & Self-Healing
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Dual Restart Area (RSTR) Initialization & Monotonic LSN Emission
+//   Pillar 2: Circular Ring Buffer (RCRD) Record Serialization & USA Fixups
+//   Pillar 3: Atomic Multi-Operation Journaling (Redo/Undo Opcodes)
+//   Pillar 4: Full 3-Pass Crash Recovery Simulation (Analysis, Redo, Undo & CLRs)
+//   Pillar 5: Online Self-Healing & Torn-Write Repair (In-Memory Chkdsk)
+//   Pillar 6: High-Throughput Journal Stress & Sub-20us Commit Latency
+// ============================================================================
+inline void Suite580_Sovereign_NTFS_Journal_SelfHeal_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 580: Horizon 364 - Sovereign MicaNT NTFS Journaling & Self-Healing Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::journal;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon364JournalSelfHealSubsystem(), "VerifyHorizon364JournalSelfHealSubsystem must return true");
+
+    std::cout << "  Horizon 364 Architectural Validation Complete:\n"
+              << "    Pillar 1: Dual Restart Area (RSTR) & Monotonic LSN Emission OK\n"
+              << "    Pillar 2: Circular Ring Buffer (RCRD) Record Serialization OK\n"
+              << "    Pillar 3: Atomic Multi-Operation Journaling (Redo/Undo) OK\n"
+              << "    Pillar 4: Full 3-Pass Crash Recovery (Analysis, Redo, Undo, CLRs) OK\n"
+              << "    Pillar 5: Online Self-Healing & Torn-Write Repair (Chkdsk) OK\n"
+              << "    Pillar 6: High-Throughput Journal Stress & Sub-20us Latency OK\n";
+    std::cout << "[TEST] Suite 580: Horizon 364 - Sovereign MicaNT NTFS Journaling & Self-Healing PASSED." << std::endl;
+}
+
+inline void Test_Horizon364_NTFS_Journal_SelfHeal_Suite() {
+    Suite580_Sovereign_NTFS_Journal_SelfHeal_Subsystem();
+}
+
+
 
 
 

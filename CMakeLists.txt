@@ -31,6 +31,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/fsrtl/ntfs_reparse_streams.cpp
     kernel/fsrtl/ntfs_txf.cpp
     kernel/fsrtl/ntfs_vss.cpp
+    kernel/fsrtl/ntfs_journal_selfheal.cpp
     kernel/fsrtl/exfat.cpp
     kernel/fsrtl/cdfs.cpp
     kernel/fsrtl/refs.cpp

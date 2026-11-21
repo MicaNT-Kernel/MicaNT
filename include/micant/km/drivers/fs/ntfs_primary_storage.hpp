@@ -182,6 +182,26 @@ public:
         return (m_bitmap[byteIdx] & bitMask) != 0;
     }
 
+    [[nodiscard]] bool isClusterFree(uint64_t cluster) const {
+        return !isClusterAllocated(cluster);
+    }
+
+    void markClusterAllocated(uint64_t cluster) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (cluster < m_totalClusters && !isBitSetInternal(cluster)) {
+            setBitInternal(cluster, true);
+            m_allocatedCount++;
+        }
+    }
+
+    void freeCluster(uint64_t cluster) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (cluster < m_totalClusters && isBitSetInternal(cluster)) {
+            setBitInternal(cluster, false);
+            if (m_allocatedCount > 0) m_allocatedCount--;
+        }
+    }
+
     bool allocateContiguousClusters(uint64_t count, uint64_t& outStartingCluster) {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (count == 0 || count > m_totalClusters) return false;
