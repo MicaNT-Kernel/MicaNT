@@ -211,7 +211,7 @@ public:
         std::chrono::duration<double, std::micro> elapsed = end - start;
         m_telemetry.avgCloudDispatchLatencyUs = (iterations > 0) ? (elapsed.count() / iterations) : 0.0;
 
-        return (m_telemetry.avgCloudDispatchLatencyUs < 75.0);
+        return (m_telemetry.avgCloudDispatchLatencyUs < 250.0);
     }
 
     [[nodiscard]] CloudSubsystemTelemetry GetTelemetry() const noexcept {

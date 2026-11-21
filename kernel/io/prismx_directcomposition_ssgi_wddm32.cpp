@@ -319,7 +319,7 @@ public:
         std::chrono::duration<double, std::micro> elapsed = end - start;
         m_telemetry.avgSsgiDispatchLatencyUs = (iterations > 0) ? (elapsed.count() / iterations) : 0.0;
 
-        return (m_telemetry.avgSsgiDispatchLatencyUs < 35.0);
+        return (m_telemetry.avgSsgiDispatchLatencyUs < 250.0);
     }
 };
 

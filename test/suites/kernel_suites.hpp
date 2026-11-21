@@ -74104,16 +74104,36 @@ inline void Test_Horizon359_PrismX_DirectComposition_RigidBody_Wddm32_Suite() {
     Suite575_PrismX_DirectComposition_RigidBody_Wddm32();
 }
 
+// ============================================================================
+// Suite 576: Horizon 360 - Sovereign Clean-Room Primary NTFS Storage Subsystem
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Primary Volume Initialization, Cluster Dimensions & Volume Bitmap Allocations ($Bitmap)
+//   Pillar 2: USN Change Journal Creation, Record Posting & Monotonic Sequence Invariants ($UsnJrnl)
+//   Pillar 3: B-Tree Directory Indexing ($INDEX_ROOT / $INDEX_ALLOCATION), Binary Search & Collation Order
+//   Pillar 4: On-Disk 4096-Byte INDX Block Serialization & USA Fixup Protection
+//   Pillar 5: System Paging File Extent Reservation (pagefile.sys), Contiguity & BypassIO Verification
+//   Pillar 6: High-Throughput Cluster Allocation Stress & Sub-50us Allocation Latency
+// ============================================================================
+inline void Suite576_Sovereign_Primary_NTFS_Storage_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 576: Horizon 360 - Sovereign MicaNT Primary NTFS Storage Subsystem...\n" << std::flush;
 
+    using namespace micant::ntfs::primary;
 
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon360PrimaryNtfsSubsystem(), "VerifyHorizon360PrimaryNtfsSubsystem must return true");
 
+    std::cout << "  Horizon 360 Architectural Validation Complete:\n"
+              << "    Pillar 1: Primary Volume Init & Volume Bitmap Allocations ($Bitmap) OK\n"
+              << "    Pillar 2: USN Change Journal & Monotonic Sequence Invariants ($UsnJrnl) OK\n"
+              << "    Pillar 3: B-Tree Directory Indexing & Collation Ordering ($INDEX_ROOT) OK\n"
+              << "    Pillar 4: On-Disk 4096-Byte INDX Block Serialization & USA Fixups OK\n"
+              << "    Pillar 5: System Paging File Reservation (pagefile.sys) & BypassIO OK\n"
+              << "    Pillar 6: High-Throughput Allocation Stress & Sub-50us Latency OK\n";
+    std::cout << "[TEST] Suite 576: Horizon 360 - Sovereign MicaNT Primary NTFS Storage PASSED." << std::endl;
+}
 
-
-
-
-
-
-
-
-
+inline void Test_Horizon360_Primary_NTFS_Storage_Suite() {
+    Suite576_Sovereign_Primary_NTFS_Storage_Subsystem();
+}
 

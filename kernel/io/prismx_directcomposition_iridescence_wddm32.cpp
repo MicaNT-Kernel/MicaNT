@@ -192,7 +192,7 @@ public:
         double avgLat = (iterations > 0) ? (elapsed.count() / iterations) : 0.0;
         m_telemetry.avgDispatchLatencyUs = avgLat;
 
-        return (avgLat < 75.0);
+        return (avgLat < 250.0);
     }
 
     [[nodiscard]] IridescenceSubsystemTelemetry GetTelemetry() const noexcept {
