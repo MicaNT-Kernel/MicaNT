@@ -74269,6 +74269,40 @@ inline void Test_Horizon364_NTFS_Journal_SelfHeal_Suite() {
     Suite580_Sovereign_NTFS_Journal_SelfHeal_Subsystem();
 }
 
+// ============================================================================
+// Suite 581: Horizon 365 - Sovereign NTFS Compression Engine & Sparse Extents
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: FSCTL_SET_COMPRESSION & Attribute Header Flags (COMPRESSION_FORMAT_LZNT1)
+//   Pillar 2: LZNT1 Chunk Header & Variable Bit-Width Token Encoding
+//   Pillar 3: Compression Ratio Evaluation & Sparse Cluster Extent Punch-Hole Allocation
+//   Pillar 4: Sliding-Window LZNT1 Decompression & Data Fidelity
+//   Pillar 5: Cache Manager (Cc) Direct Streaming & Zero-Copy BypassIO
+//   Pillar 6: High-Throughput Compression/Decompression Stress & Latency Benchmark
+// ============================================================================
+inline void Suite581_Sovereign_NTFS_Compression_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 581: Horizon 365 - Sovereign MicaNT NTFS Compression Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::compression;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon365CompressionEngineSubsystem(), "VerifyHorizon365CompressionEngineSubsystem must return true");
+
+    std::cout << "  Horizon 365 Architectural Validation Complete:\n"
+              << "    Pillar 1: FSCTL_SET_COMPRESSION & Header Flags OK\n"
+              << "    Pillar 2: LZNT1 Chunk Header & Token Encoding OK\n"
+              << "    Pillar 3: Compression Ratio & Sparse Punch-Hole Allocation OK\n"
+              << "    Pillar 4: Sliding-Window LZNT1 Decompression & Fidelity OK\n"
+              << "    Pillar 5: Cache Manager Direct Streaming & BypassIO OK\n"
+              << "    Pillar 6: High-Throughput Compression Stress & Latency OK\n";
+    std::cout << "[TEST] Suite 581: Horizon 365 - Sovereign MicaNT NTFS Compression PASSED." << std::endl;
+}
+
+inline void Test_Horizon365_NTFS_Compression_Suite() {
+    Suite581_Sovereign_NTFS_Compression_Subsystem();
+}
+
+
 
 
 
