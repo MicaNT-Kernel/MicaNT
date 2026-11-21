@@ -28,6 +28,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/fsrtl/extfs.cpp
     kernel/fsrtl/ntfs.cpp
     kernel/fsrtl/ntfs_primary_storage.cpp
+    kernel/fsrtl/ntfs_reparse_streams.cpp
     kernel/fsrtl/exfat.cpp
     kernel/fsrtl/cdfs.cpp
     kernel/fsrtl/refs.cpp

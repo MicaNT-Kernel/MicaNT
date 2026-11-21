@@ -74137,3 +74137,37 @@ inline void Test_Horizon360_Primary_NTFS_Storage_Suite() {
     Suite576_Sovereign_Primary_NTFS_Storage_Subsystem();
 }
 
+// ============================================================================
+// Suite 577: Horizon 361 - Sovereign Clean-Room Primary NTFS Reparse & Streams Subsystem
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Reparse Point Tag Definitions & Buffer Marshaling (MountPoint & SymbolicLink)
+//   Pillar 2: Directory Junction Resolution & Target Path Translation (\??\C:\Mount\Target)
+//   Pillar 3: Symbolic Link Parsing, Relative/Absolute Flags & Infinite Loop Detection
+//   Pillar 4: Alternate Data Streams ($DATA Multiplexing, Zone.Identifier & Stream Enumeration)
+//   Pillar 5: Sparse File Allocation, Cluster Punch-Hole Zeroing & Range Queries (FSCTL_SET_ZERO_DATA)
+//   Pillar 6: High-Throughput Stream Dispatch Stress & Sub-35us Reparse Resolution Latency
+// ============================================================================
+inline void Suite577_Sovereign_NTFS_Reparse_Streams_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 577: Horizon 361 - Sovereign MicaNT NTFS Reparse & Stream Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::reparse;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon361ReparseAndStreamSubsystem(), "VerifyHorizon361ReparseAndStreamSubsystem must return true");
+
+    std::cout << "  Horizon 361 Architectural Validation Complete:\n"
+              << "    Pillar 1: Reparse Point Tag Definitions & Buffer Marshaling OK\n"
+              << "    Pillar 2: Directory Junction Resolution & Path Translation OK\n"
+              << "    Pillar 3: Symbolic Link Parsing & Loop Detection OK\n"
+              << "    Pillar 4: Alternate Data Streams ($DATA Multiplexing) OK\n"
+              << "    Pillar 5: Sparse File Allocation & Cluster Punch-Hole Zeroing OK\n"
+              << "    Pillar 6: High-Throughput Stream Dispatch Stress & Sub-35us Latency OK\n";
+    std::cout << "[TEST] Suite 577: Horizon 361 - Sovereign MicaNT NTFS Reparse & Stream PASSED." << std::endl;
+}
+
+inline void Test_Horizon361_NTFS_Reparse_Streams_Suite() {
+    Suite577_Sovereign_NTFS_Reparse_Streams_Subsystem();
+}
+
+
