@@ -74302,6 +74302,40 @@ inline void Test_Horizon365_NTFS_Compression_Suite() {
     Suite581_Sovereign_NTFS_Compression_Subsystem();
 }
 
+// ============================================================================
+// Suite 582: Horizon 366 - Sovereign NTFS Encrypting File System (EFS) Provider
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: EFS Stream Formatting & DDF/DRF Envelope Serialization ($LOGGED_UTILITY_STREAM)
+//   Pillar 2: File Encryption Key (FEK) Generation & Asymmetric Wrapping (AES-256)
+//   Pillar 3: Transparent Sector Encryption on Write (Ciphertext Verification)
+//   Pillar 4: Transparent Sector Decryption on Read (Bit-for-Bit Plaintext Identity)
+//   Pillar 5: Multi-User DDF Enlistment & Unauthorized Access Denial (STATUS_ACCESS_DENIED)
+//   Pillar 6: High-Throughput EFS Encryption Stress & Latency Benchmark
+// ============================================================================
+inline void Suite582_Sovereign_NTFS_EFS_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 582: Horizon 366 - Sovereign MicaNT NTFS Encrypting File System (EFS) Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::efs;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon366EfsProviderSubsystem(), "VerifyHorizon366EfsProviderSubsystem must return true");
+
+    std::cout << "  Horizon 366 Architectural Validation Complete:\n"
+              << "    Pillar 1: EFS Stream & DDF/DRF Envelope Serialization OK\n"
+              << "    Pillar 2: FEK Generation & Asymmetric Key Wrapping OK\n"
+              << "    Pillar 3: Transparent Sector Encryption on Write OK\n"
+              << "    Pillar 4: Transparent Sector Decryption on Read OK\n"
+              << "    Pillar 5: Multi-User DDF Enlistment & Access Denial OK\n"
+              << "    Pillar 6: High-Throughput EFS Stress & Latency OK\n";
+    std::cout << "[TEST] Suite 582: Horizon 366 - Sovereign MicaNT NTFS EFS PASSED." << std::endl;
+}
+
+inline void Test_Horizon366_NTFS_EFS_Suite() {
+    Suite582_Sovereign_NTFS_EFS_Subsystem();
+}
+
+
 
 
 
