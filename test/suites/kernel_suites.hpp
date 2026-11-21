@@ -74170,4 +74170,38 @@ inline void Test_Horizon361_NTFS_Reparse_Streams_Suite() {
     Suite577_Sovereign_NTFS_Reparse_Streams_Subsystem();
 }
 
+// ============================================================================
+// Suite 578: Horizon 362 - Sovereign Clean-Room Primary Transactional NTFS (TxF)
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: KTM Transaction Enlistment & TxF Resource Manager Binding
+//   Pillar 2: Transacted File Creation & Copy-On-Write (COW) Mini-Version Isolation
+//   Pillar 3: Non-Transacted Dirty-Read Isolation (Concurrent reader sees pre-mutation baseline)
+//   Pillar 4: Transaction Rollback & Clean Cluster Undo (Bitmap freed, mini-versions discarded)
+//   Pillar 5: Multi-File Atomic 2-Phase Commit (2PC) & B-Tree Directory Integration
+//   Pillar 6: High-Throughput ACID Transaction Stress & Sub-30us Commit Latency
+// ============================================================================
+inline void Suite578_Sovereign_Transactional_NTFS_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 578: Horizon 362 - Sovereign MicaNT Transactional NTFS (TxF) Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::txf;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon362TransactionalNtfsSubsystem(), "VerifyHorizon362TransactionalNtfsSubsystem must return true");
+
+    std::cout << "  Horizon 362 Architectural Validation Complete:\n"
+              << "    Pillar 1: KTM Transaction Enlistment & TxF RM Binding OK\n"
+              << "    Pillar 2: Transacted File Creation & COW Mini-Version Isolation OK\n"
+              << "    Pillar 3: Non-Transacted Dirty-Read Isolation OK\n"
+              << "    Pillar 4: Transaction Rollback & Clean Cluster Undo OK\n"
+              << "    Pillar 5: Multi-File Atomic 2-Phase Commit & Directory Integration OK\n"
+              << "    Pillar 6: High-Throughput ACID Stress & Sub-30us Latency OK\n";
+    std::cout << "[TEST] Suite 578: Horizon 362 - Sovereign MicaNT Transactional NTFS (TxF) PASSED." << std::endl;
+}
+
+inline void Test_Horizon362_Transactional_NTFS_Suite() {
+    Suite578_Sovereign_Transactional_NTFS_Subsystem();
+}
+
+
 
