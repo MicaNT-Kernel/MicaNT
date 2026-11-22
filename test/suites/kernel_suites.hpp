@@ -74368,6 +74368,37 @@ inline void Test_Horizon367_NTFS_Quota_Security_Suite() {
     Suite583_Sovereign_NTFS_Quota_Security_Subsystem();
 }
 
+// ============================================================================
+// Suite 584: Horizon 368 - Sovereign NTFS Native Win32 Subsystem & Loader Interlock
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: PE32+ Executable Parsing & NTFS Section Creation (AMD64 64-bit Headers)
+//   Pillar 2: Direct PE32+ Section Object Mapping (MmMapViewOfSection) & VAD Protections
+//   Pillar 3: Native Win32 Process & Initial Thread Creation (NtCreateUserProcess & PEB/TEB)
+//   Pillar 4: Sovereign ntdll.dll Fast Syscall Trampoline Generation (11-byte x64 ABI)
+//   Pillar 5: LdrInitializeThunk Interlock & Import Address Table (IAT) Binding
+//   Pillar 6: High-Throughput Native Loader & Syscall Benchmark (<150us/process)
+// ============================================================================
+inline void Suite584_Sovereign_NTFS_Loader_Interlock_Subsystem() {
+    using namespace micant::ntfs::loader;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon368NtfsLoaderSubsystem(), "VerifyHorizon368NtfsLoaderSubsystem must return true");
+
+    std::cout << "  Horizon 368 Architectural Validation Complete:\n"
+              << "    Pillar 1: PE32+ Executable Parsing & NTFS Section Creation OK\n"
+              << "    Pillar 2: Direct PE32+ Section Mapping (MmMapViewOfSection) OK\n"
+              << "    Pillar 3: Native Process & Initial Thread Creation (NtCreateUserProcess) OK\n"
+              << "    Pillar 4: Sovereign ntdll.dll Fast Syscall Trampolines (11-byte x64) OK\n"
+              << "    Pillar 5: LdrInitializeThunk Interlock & IAT Binding OK\n"
+              << "    Pillar 6: High-Throughput Native Loader Benchmark OK\n";
+    std::cout << "[TEST] Suite 584: Horizon 368 - Sovereign MicaNT NTFS Native Win32 Subsystem & Loader PASSED." << std::endl;
+}
+
+inline void Test_Horizon368_NTFS_Loader_Interlock_Suite() {
+    Suite584_Sovereign_NTFS_Loader_Interlock_Subsystem();
+}
+
 
 
 

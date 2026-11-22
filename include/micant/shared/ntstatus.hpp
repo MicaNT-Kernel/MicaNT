@@ -166,6 +166,8 @@ enum class NtStatus : uint32_t {
 
     // Hardware Resource Arbiter (Arb* / Rtl*RangeList) & WDK .sys Loader Status Codes
     InvalidImageFormat               = 0xC000007B,
+    EntryPointNotFound               = 0xC0000139,
+    ImageNotAtBase                   = 0x40000003,
     RangeListConflict                = 0xC000034F,
 
     // NTFS Reparse Points & Symbolic Links
