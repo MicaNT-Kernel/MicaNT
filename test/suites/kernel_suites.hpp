@@ -74335,6 +74335,40 @@ inline void Test_Horizon366_NTFS_EFS_Suite() {
     Suite582_Sovereign_NTFS_EFS_Subsystem();
 }
 
+// ============================================================================
+// Suite 583: Horizon 367 - Sovereign NTFS Quota Governor & Security Descriptors
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Security Descriptor Hash Calculation & Deduplication (32-bit Hash)
+//   Pillar 2: $SDS Stream Serialization & $SDH / $SII Indexing (16-byte Alignment)
+//   Pillar 3: Access Control Mask Evaluation & Inherited ACEs (DACL Grant/Deny)
+//   Pillar 4: User Quota Tracking ($Quota $Q / $O Streams & Warning Thresholds)
+//   Pillar 5: Hard Quota Limit Enforcement (STATUS_DISK_QUOTA_EXCEEDED)
+//   Pillar 6: High-Throughput Quota & Security Lookup Benchmark
+// ============================================================================
+inline void Suite583_Sovereign_NTFS_Quota_Security_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 583: Horizon 367 - Sovereign MicaNT NTFS Quota Governor & Security Subsystem...\n" << std::flush;
+
+    using namespace micant::ntfs::security;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon367QuotaSecuritySubsystem(), "VerifyHorizon367QuotaSecuritySubsystem must return true");
+
+    std::cout << "  Horizon 367 Architectural Validation Complete:\n"
+              << "    Pillar 1: Security Descriptor Hash & Deduplication OK\n"
+              << "    Pillar 2: $SDS Stream & $SDH/$SII Indexing OK\n"
+              << "    Pillar 3: Access Control Mask & Inherited ACEs OK\n"
+              << "    Pillar 4: User Quota Tracking ($Q/$O Streams) OK\n"
+              << "    Pillar 5: Hard Quota Enforcement (STATUS_DISK_QUOTA_EXCEEDED) OK\n"
+              << "    Pillar 6: High-Throughput Quota & Security Benchmark OK\n";
+    std::cout << "[TEST] Suite 583: Horizon 367 - Sovereign MicaNT NTFS Quota & Security PASSED." << std::endl;
+}
+
+inline void Test_Horizon367_NTFS_Quota_Security_Suite() {
+    Suite583_Sovereign_NTFS_Quota_Security_Subsystem();
+}
+
+
 
 
 

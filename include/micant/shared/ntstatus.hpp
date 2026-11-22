@@ -75,6 +75,7 @@ enum class NtStatus : uint32_t {
     SharingViolation                 = 0xC0000043,
     NoSuchProcess                    = 0xC0000043,
     QuotaExceeded                    = 0xC0000044,
+    DiskQuotaExceeded                = 0xC0000288,
     PagefileQuotaExceeded            = 0xC000006D,
     ProcessIsTerminating             = 0xC000010A,
     ProcessAborted                   = 0xC000010B,
