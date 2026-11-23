@@ -74585,6 +74585,38 @@ inline void Test_Horizon374_NTFS_Defrag_Suite() {
     Suite590_Sovereign_NTFS_Defrag_Subsystem();
 }
 
+// ============================================================================
+// Horizon 375 / Suite 591: Sovereign NTFS Asynchronous Change Journal Streamer
+//                           & Real-Time USN Filter Interlock
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Journal Initialization & Metadata Configuration ($UsnJrnl:$MAX)
+//   Pillar 2: Multi-Version Record Marshalling (v2, v3, and v4 Extents)
+//   Pillar 3: Range Streaming & Filter Interlock (FSCTL_READ_USN_JOURNAL)
+//   Pillar 4: Zero-Polling Async Notification Ring & Completion Port Dispatch
+//   Pillar 5: Sparse Range Truncation & Delta Pruning (LowestValidUsn Management)
+//   Pillar 6: High-Throughput Streamer Benchmark (<0.1 us/op)
+// ============================================================================
+inline void Suite591_Sovereign_NTFS_USN_Streamer() {
+    using namespace micant::ntfs::usn;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon375NtfsUsnStreamer(), "VerifyHorizon375NtfsUsnStreamer must return true");
+
+    std::cout << "  Horizon 375 Architectural Validation Complete:\n"
+              << "    Pillar 1: Journal Initialization & Metadata Config OK\n"
+              << "    Pillar 2: Multi-Version Record Marshalling (v2, v3, v4) OK\n"
+              << "    Pillar 3: Range Streaming & Filter Interlock OK\n"
+              << "    Pillar 4: Zero-Polling Async Notification Ring OK\n"
+              << "    Pillar 5: Sparse Range Truncation & Delta Pruning OK\n"
+              << "    Pillar 6: High-Throughput USN Streamer Benchmark OK\n";
+    std::cout << "[TEST] Suite 591: Horizon 375 - Sovereign MicaNT NTFS Asynchronous Change Journal Streamer PASSED." << std::endl;
+}
+
+inline void Test_Horizon375_NTFS_USN_Streamer_Suite() {
+    Suite591_Sovereign_NTFS_USN_Streamer();
+}
+
 
 
 

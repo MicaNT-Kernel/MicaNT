@@ -42,6 +42,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/fsrtl/ntfs_dedup.cpp
     kernel/fsrtl/ntfs_resize.cpp
     kernel/fsrtl/ntfs_defrag.cpp
+    kernel/fsrtl/ntfs_usn_streamer.cpp
     kernel/fsrtl/exfat.cpp
     kernel/fsrtl/cdfs.cpp
     kernel/fsrtl/refs.cpp

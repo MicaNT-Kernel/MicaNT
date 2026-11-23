@@ -236,6 +236,7 @@
 #include "micant/km/drivers/fs/ntfs_dedup.hpp"
 #include "micant/km/drivers/fs/ntfs_resize.hpp"
 #include "micant/km/drivers/fs/ntfs_defrag.hpp"
+#include "micant/km/drivers/fs/ntfs_usn_streamer.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -526,6 +527,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite591") {
+        RUN_TEST(Test_Horizon375_NTFS_USN_Streamer_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite590") {
@@ -3031,6 +3036,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon372_NTFS_Dedup_Suite);
     RUN_TEST(Test_Horizon373_NTFS_Resize_Suite);
     RUN_TEST(Test_Horizon374_NTFS_Defrag_Suite);
+    RUN_TEST(Test_Horizon375_NTFS_USN_Streamer_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

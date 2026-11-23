@@ -108,6 +108,9 @@ enum class NtStatus : uint32_t {
     VolumeNotMounted                 = 0xC0000078,
     VolumeTooSmall                   = 0xC0000287,
     VolumeContainsSysFiles           = 0xC000029D,
+    JournalDeleteInProgress          = 0xC00002B7,
+    JournalNotActive                 = 0xC00002B8,
+    JournalEntryDeleted              = 0xC00002B9,
     DeviceError                      = 0xC00000E0,
     FileCorrupted                    = 0xC0000102,
     DataChecksumError                = 0xC00003FD,
@@ -309,6 +312,9 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::VolumeNotMounted: return "STATUS_VOLUME_NOT_MOUNTED";
         case NtStatus::VolumeTooSmall: return "STATUS_VOLUME_TOO_SMALL";
         case NtStatus::VolumeContainsSysFiles: return "STATUS_VOLUME_CONTAINS_SYS_FILES";
+        case NtStatus::JournalDeleteInProgress: return "STATUS_JOURNAL_DELETE_IN_PROGRESS";
+        case NtStatus::JournalNotActive: return "STATUS_JOURNAL_NOT_ACTIVE";
+        case NtStatus::JournalEntryDeleted: return "STATUS_JOURNAL_ENTRY_DELETED";
         case NtStatus::DeviceError: return "STATUS_DEVICE_DATA_ERROR";
         case NtStatus::FileCorrupted: return "STATUS_FILE_CORRUPT_ERROR";
         case NtStatus::DataChecksumError: return "STATUS_DATA_CHECKSUM_ERROR";
