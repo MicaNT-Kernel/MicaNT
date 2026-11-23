@@ -74461,6 +74461,38 @@ inline void Test_Horizon370_NTFS_CSV_Suite() {
     Suite586_Sovereign_NTFS_CSV_Subsystem();
 }
 
+// ============================================================================
+// Suite 587: Horizon 371 - Sovereign NTFS Tiered Storage Spaces & Heat-Map Extent Migrator
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Storage Pool Initialization, Dual-Tier Physical Disks & Slab Allocation Mapping Table
+//   Pillar 2: Real-Time Heat-Map Access Tracking Subsystem & Thermal Classification (Freezing to Hot)
+//   Pillar 3: Autonomous Heat-Map Extent Migration: Hot Slab Promotion to Fast NVMe Tier
+//   Pillar 4: Dynamic Fast-Tier Space Pressure & Cold Slab Demotion to Capacity Tier
+//   Pillar 5: System Tier Pinning Policy (PinnedFast) & Write-Back Cache (WBC) Burst Absorption
+//   Pillar 6: High-Throughput Tiered Storage & Migration Engine Benchmark (<5us/op)
+// ============================================================================
+inline void Suite587_Sovereign_NTFS_Tiered_Storage_Subsystem() {
+    using namespace micant::ntfs::tiered;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon371NtfsTieredStorageSubsystem(), "VerifyHorizon371NtfsTieredStorageSubsystem must return true");
+
+    std::cout << "  Horizon 371 Architectural Validation Complete:\n"
+              << "    Pillar 1: Storage Pool Initialization & Dual-Tier Slabs OK\n"
+              << "    Pillar 2: Real-Time Heat-Map Access Tracking & Thermal Scoring OK\n"
+              << "    Pillar 3: Hot Slab Promotion to Fast NVMe Tier OK\n"
+              << "    Pillar 4: Cold Slab Demotion under Space Pressure OK\n"
+              << "    Pillar 5: System Tier Pinning & Write-Back Cache (WBC) OK\n"
+              << "    Pillar 6: High-Throughput Tiered Storage Benchmark OK\n";
+    std::cout << "[TEST] Suite 587: Horizon 371 - Sovereign MicaNT NTFS Tiered Storage Spaces PASSED." << std::endl;
+}
+
+inline void Test_Horizon371_NTFS_Tiered_Storage_Suite() {
+    Suite587_Sovereign_NTFS_Tiered_Storage_Subsystem();
+}
+
+
 
 
 
