@@ -74430,6 +74430,37 @@ inline void Test_Horizon369_NTFS_Filter_Gateway_Suite() {
     Suite585_Sovereign_NTFS_Filter_Gateway_Subsystem();
 }
 
+// ============================================================================
+// Suite 586: Horizon 370 - Sovereign NTFS Clustered Shared Volumes (CSV)
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: CSV Volume Topology & 3-Node Cluster Registration (\Device\HarddiskVolumeCsv)
+//   Pillar 2: Distributed Lock Manager (DLM) VAX/NT Lock Arbitration & Conversion
+//   Pillar 3: Opportunistic Locks (RWH Leases) & Cross-Node Oplock Break Protocol
+//   Pillar 4: Direct vs. Redirected I/O Path Switching on Cluster Fabric Disruption
+//   Pillar 5: Seamless Zero-Downtime Coordinator Failover & Cluster Epoch Advancement
+//   Pillar 6: High-Throughput Concurrent Multi-Node Cluster Benchmark (<20us/op)
+// ============================================================================
+inline void Suite586_Sovereign_NTFS_CSV_Subsystem() {
+    using namespace micant::ntfs::csv;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon370NtfsCsvSubsystem(), "VerifyHorizon370NtfsCsvSubsystem must return true");
+
+    std::cout << "  Horizon 370 Architectural Validation Complete:\n"
+              << "    Pillar 1: CSV Volume Topology & 3-Node Cluster Registration OK\n"
+              << "    Pillar 2: Distributed Lock Manager (DLM) VAX/NT Arbitration OK\n"
+              << "    Pillar 3: Opportunistic Locks (RWH Leases) & Cross-Node Break OK\n"
+              << "    Pillar 4: Direct vs. Redirected I/O Switching on Fabric Drop OK\n"
+              << "    Pillar 5: Seamless Zero-Downtime Coordinator Failover OK\n"
+              << "    Pillar 6: High-Throughput Multi-Node Cluster Benchmark OK\n";
+    std::cout << "[TEST] Suite 586: Horizon 370 - Sovereign MicaNT NTFS Clustered Shared Volumes PASSED." << std::endl;
+}
+
+inline void Test_Horizon370_NTFS_CSV_Suite() {
+    Suite586_Sovereign_NTFS_CSV_Subsystem();
+}
+
 
 
 

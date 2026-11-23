@@ -231,6 +231,7 @@
 #include "micant/km/drivers/fs/ntfs_quota_security.hpp"
 #include "micant/km/drivers/fs/ntfs_loader_interlock.hpp"
 #include "micant/km/drivers/fs/ntfs_filter_gateway.hpp"
+#include "micant/km/drivers/fs/ntfs_csv.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -521,6 +522,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite586") {
+        RUN_TEST(Test_Horizon370_NTFS_CSV_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite585") {
@@ -3001,6 +3006,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon367_NTFS_Quota_Security_Suite);
     RUN_TEST(Test_Horizon368_NTFS_Loader_Interlock_Suite);
     RUN_TEST(Test_Horizon369_NTFS_Filter_Gateway_Suite);
+    RUN_TEST(Test_Horizon370_NTFS_CSV_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
