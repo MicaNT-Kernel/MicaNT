@@ -107,6 +107,7 @@ enum class NtStatus : uint32_t {
     PipeBroken                       = 0xC000014B,
     VolumeNotMounted                 = 0xC0000078,
     VolumeTooSmall                   = 0xC0000287,
+    VolumeContainsSysFiles           = 0xC000029D,
     DeviceError                      = 0xC00000E0,
     FileCorrupted                    = 0xC0000102,
     DataChecksumError                = 0xC00003FD,
@@ -307,6 +308,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::PipeBroken: return "STATUS_PIPE_BROKEN";
         case NtStatus::VolumeNotMounted: return "STATUS_VOLUME_NOT_MOUNTED";
         case NtStatus::VolumeTooSmall: return "STATUS_VOLUME_TOO_SMALL";
+        case NtStatus::VolumeContainsSysFiles: return "STATUS_VOLUME_CONTAINS_SYS_FILES";
         case NtStatus::DeviceError: return "STATUS_DEVICE_DATA_ERROR";
         case NtStatus::FileCorrupted: return "STATUS_FILE_CORRUPT_ERROR";
         case NtStatus::DataChecksumError: return "STATUS_DATA_CHECKSUM_ERROR";

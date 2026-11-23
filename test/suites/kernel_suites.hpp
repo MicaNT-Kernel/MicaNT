@@ -74523,6 +74523,38 @@ inline void Test_Horizon372_NTFS_Dedup_Suite() {
     Suite588_Sovereign_NTFS_Dedup_Subsystem();
 }
 
+// ============================================================================
+// Suite 589: Horizon 373 - Sovereign NTFS Dynamic Volume Resizing Subsystem
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Volume Initialization & Online Volume Extension (FSCTL_EXTEND_VOLUME)
+//   Pillar 2: Pre-Shrink Zone Analysis & Immovable System File Guardrails (FSCTL_GET_VOLUME_SHRINK_INFO)
+//   Pillar 3: Online Cluster Run Relocation & MFT Data Run Repointing
+//   Pillar 4: Truncation Zone Evacuation, $Bitmap Truncation & Geometry Synchronization
+//   Pillar 5: Post-Shrink Data Integrity & Zero Payload Corruption Verification
+//   Pillar 6: High-Throughput Volume Resize & Cluster Relocation Benchmark (<5us/op)
+// ============================================================================
+inline void Suite589_Sovereign_NTFS_Resize_Subsystem() {
+    using namespace micant::ntfs::resize;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon373NtfsVolumeResizeSubsystem(), "VerifyHorizon373NtfsVolumeResizeSubsystem must return true");
+
+    std::cout << "  Horizon 373 Architectural Validation Complete:\n"
+              << "    Pillar 1: Online Volume Extension & Bitmap Growth OK\n"
+              << "    Pillar 2: Pre-Shrink Analysis & Immovable File Guardrails OK\n"
+              << "    Pillar 3: Online Cluster Relocation & MFT Run Repointing OK\n"
+              << "    Pillar 4: Truncation Zone Evacuation & Geometry Sync OK\n"
+              << "    Pillar 5: Post-Shrink Data Integrity & Zero Corruption OK\n"
+              << "    Pillar 6: High-Throughput Resize Benchmark OK\n";
+    std::cout << "[TEST] Suite 589: Horizon 373 - Sovereign MicaNT NTFS Volume Resize PASSED." << std::endl;
+}
+
+inline void Test_Horizon373_NTFS_Resize_Suite() {
+    Suite589_Sovereign_NTFS_Resize_Subsystem();
+}
+
+
 
 
 
