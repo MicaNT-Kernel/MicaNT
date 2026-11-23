@@ -74617,6 +74617,38 @@ inline void Test_Horizon375_NTFS_USN_Streamer_Suite() {
     Suite591_Sovereign_NTFS_USN_Streamer();
 }
 
+// ============================================================================
+// Horizon 376 / Suite 592: Sovereign NTFS Online Self-Healing, Hot-Fixing
+//                           & Corruption Scrubbing Subsystem
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Self-Healing Control & Configuration Interface (FSCTL_SELF_HEALING_CONTROL)
+//   Pillar 2: MFT Torn Write & USA Fixup Spot-Fixing (Zero-Dismount In-Memory Repair)
+//   Pillar 3: Bad Sector Dynamic Sparing & $BadClust Stream Relocation
+//   Pillar 4: B-Tree Index Cycle Resolution & Orphan FRN Reconnection
+//   Pillar 5: Background Scrubbing & $Bitmap Allocation Reconciliation
+//   Pillar 6: High-Throughput Self-Healing & Scrubbing Benchmark (<1.0 us/op)
+// ============================================================================
+inline void Suite592_Sovereign_NTFS_SelfHeal_Subsystem() {
+    using namespace micant::ntfs::selfheal;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon376NtfsSelfHealSubsystem(), "VerifyHorizon376NtfsSelfHealSubsystem must return true");
+
+    std::cout << "  Horizon 376 Architectural Validation Complete:\n"
+              << "    Pillar 1: Self-Healing Control & Config OK\n"
+              << "    Pillar 2: MFT Torn Write & USA Fixup Spot-Fixing OK\n"
+              << "    Pillar 3: Bad Sector Dynamic Sparing & $BadClust OK\n"
+              << "    Pillar 4: B-Tree Index Cycle & Orphan Reconnect OK\n"
+              << "    Pillar 5: Background Scrubbing & Bitmap Reconcile OK\n"
+              << "    Pillar 6: High-Throughput Self-Healing Benchmark OK\n";
+    std::cout << "[TEST] Suite 592: Horizon 376 - Sovereign MicaNT NTFS Online Self-Healing & Scrubbing PASSED." << std::endl;
+}
+
+inline void Test_Horizon376_NTFS_SelfHeal_Suite() {
+    Suite592_Sovereign_NTFS_SelfHeal_Subsystem();
+}
+
 
 
 
