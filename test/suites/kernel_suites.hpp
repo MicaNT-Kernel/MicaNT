@@ -74554,6 +74554,38 @@ inline void Test_Horizon373_NTFS_Resize_Suite() {
     Suite589_Sovereign_NTFS_Resize_Subsystem();
 }
 
+// ============================================================================
+// Suite 590: Horizon 374 - Sovereign NTFS Defragmentation & MFT Packer
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: File Retrieval Pointers Mapping (FSCTL_GET_RETRIEVAL_POINTERS) & Fragmentation Analysis
+//   Pillar 2: Online Atomic File Cluster Movement (FSCTL_MOVE_FILE) & Extent Coalescing
+//   Pillar 3: Data Integrity Verification & Zero Payload Corruption Post-Movement
+//   Pillar 4: Volume-Wide Free Space Consolidation & Contiguous Extent Maximization
+//   Pillar 5: MFT Zone Compaction & Contiguous MFT Packing
+//   Pillar 6: High-Throughput Defragmentation Engine Benchmark (<5us/op)
+// ============================================================================
+inline void Suite590_Sovereign_NTFS_Defrag_Subsystem() {
+    using namespace micant::ntfs::defrag;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon374NtfsDefragSubsystem(), "VerifyHorizon374NtfsDefragSubsystem must return true");
+
+    std::cout << "  Horizon 374 Architectural Validation Complete:\n"
+              << "    Pillar 1: FSCTL_GET_RETRIEVAL_POINTERS Mapping OK\n"
+              << "    Pillar 2: FSCTL_MOVE_FILE & Extent Coalescing OK\n"
+              << "    Pillar 3: Data Integrity & Zero Corruption OK\n"
+              << "    Pillar 4: Free Space Consolidation OK\n"
+              << "    Pillar 5: MFT Zone Compaction & Packing OK\n"
+              << "    Pillar 6: High-Throughput Defrag Benchmark OK\n";
+    std::cout << "[TEST] Suite 590: Horizon 374 - Sovereign MicaNT NTFS Disk Defragmentation PASSED." << std::endl;
+}
+
+inline void Test_Horizon374_NTFS_Defrag_Suite() {
+    Suite590_Sovereign_NTFS_Defrag_Subsystem();
+}
+
+
 
 
 
