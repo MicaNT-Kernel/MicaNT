@@ -74399,6 +74399,37 @@ inline void Test_Horizon368_NTFS_Loader_Interlock_Suite() {
     Suite584_Sovereign_NTFS_Loader_Interlock_Subsystem();
 }
 
+// ============================================================================
+// Suite 585: Horizon 369 - Sovereign NTFS File System Filter Gateway & FLTMGR
+// ============================================================================
+// Architectural Verification:
+//   Pillar 1: Filter Manager Volume Attachment & 4-Tier Altitude Stacking (385000 -> 105000)
+//   Pillar 2: Pre-Operation Dispatch Traversal in Strict Descending Order
+//   Pillar 3: Post-Operation Unwinding Dispatch Traversal in Strict Ascending Order
+//   Pillar 4: Short-Circuit Veto on NTFS Primary Storage (FLT_PREOP_COMPLETE / STATUS_ACCESS_DENIED)
+//   Pillar 5: Minifilter File & Stream Context Association (FltSetFileContext / FltGetFileContext)
+//   Pillar 6: High-Throughput Minifilter Gateway Benchmark (<25us/op)
+// ============================================================================
+inline void Suite585_Sovereign_NTFS_Filter_Gateway_Subsystem() {
+    using namespace micant::ntfs::filter;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon369NtfsFilterGatewaySubsystem(), "VerifyHorizon369NtfsFilterGatewaySubsystem must return true");
+
+    std::cout << "  Horizon 369 Architectural Validation Complete:\n"
+              << "    Pillar 1: Filter Manager Volume Attachment & 4-Tier Altitude Stacking OK\n"
+              << "    Pillar 2: Pre-Operation Dispatch Traversal (Descending) OK\n"
+              << "    Pillar 3: Post-Operation Unwinding Dispatch (Ascending) OK\n"
+              << "    Pillar 4: Short-Circuit Veto (FLT_PREOP_COMPLETE) OK\n"
+              << "    Pillar 5: Minifilter File & Stream Context Association OK\n"
+              << "    Pillar 6: High-Throughput Minifilter Gateway Benchmark OK\n";
+    std::cout << "[TEST] Suite 585: Horizon 369 - Sovereign MicaNT NTFS Filter Gateway PASSED." << std::endl;
+}
+
+inline void Test_Horizon369_NTFS_Filter_Gateway_Suite() {
+    Suite585_Sovereign_NTFS_Filter_Gateway_Subsystem();
+}
+
 
 
 

@@ -334,7 +334,7 @@ public:
         m_initialized = true;
     }
 
-    void resetForTesting() {
+    void resetForTesting(bool seedDefaults = true) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         m_filters.clear();
         m_ports.clear();
@@ -344,8 +344,13 @@ public:
         m_allocatedContexts.clear();
         m_activityLog.clear();
         m_telemetry = FLT_TELEMETRY{};
-        m_initialized = false;
-        initialize();
+        m_nextFilterHandle = 1;
+        m_nextPortHandle = 100;
+        m_nextClientHandle = 500;
+        m_initialized = true;
+        if (seedDefaults) {
+            registerDefaultMinifilters();
+        }
     }
 
     // --- Minifilter Lifecycle ---

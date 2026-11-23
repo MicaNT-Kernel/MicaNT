@@ -36,6 +36,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/fsrtl/ntfs_efs.cpp
     kernel/fsrtl/ntfs_quota_security.cpp
     kernel/fsrtl/ntfs_loader_interlock.cpp
+    kernel/fsrtl/ntfs_filter_gateway.cpp
     kernel/fsrtl/exfat.cpp
     kernel/fsrtl/cdfs.cpp
     kernel/fsrtl/refs.cpp
