@@ -20,6 +20,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/iomgr.cpp
     kernel/ob/obref.cpp
     kernel/ps/psmgr.cpp
+    kernel/ps/pico.cpp
     kernel/cm/ntreg.cpp
     kernel/se/ntsec.cpp
     kernel/lpc/ntlpc.cpp

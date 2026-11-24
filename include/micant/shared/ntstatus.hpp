@@ -187,7 +187,12 @@ enum class NtStatus : uint32_t {
     IoRingOptionsNotSupported        = 0xC0000A01,
     IoRingOpCodeNotSupported         = 0xC0000A02,
     IoRingAlreadySubmitted           = 0xC0000A03,
-    IoRingSubmissionQueueFull        = 0xC0000A04
+    IoRingSubmissionQueueFull        = 0xC0000A04,
+
+    // Pico Process Subsystem Status Codes
+    AlreadyRegistered                = 0xC0000718,
+    InvalidPicoOperation             = 0xC0000719,
+    PicoProcessTerminated            = 0xC000071A
 };
 
 // ============================================================================
@@ -258,6 +263,9 @@ inline constexpr NTSTATUS STATUS_IORING_OPTIONS_NOT_SUPPORTED = static_cast<NTST
 inline constexpr NTSTATUS STATUS_IORING_OP_CODE_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC0000A02);
 inline constexpr NTSTATUS STATUS_IORING_ALREADY_SUBMITTED = static_cast<NTSTATUS>(0xC0000A03);
 inline constexpr NTSTATUS STATUS_IORING_SUBMISSION_QUEUE_FULL = static_cast<NTSTATUS>(0xC0000A04);
+inline constexpr NTSTATUS STATUS_ALREADY_REGISTERED       = static_cast<NTSTATUS>(0xC0000718);
+inline constexpr NTSTATUS STATUS_INVALID_PICO_OPERATION    = static_cast<NTSTATUS>(0xC0000719);
+inline constexpr NTSTATUS STATUS_PICO_PROCESS_TERMINATED   = static_cast<NTSTATUS>(0xC000071A);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);
@@ -347,6 +355,9 @@ inline constexpr NTSTATUS STATUS_IORING_SUBMISSION_QUEUE_FULL = static_cast<NTST
         case NtStatus::IoRingOpCodeNotSupported: return "STATUS_IORING_OP_CODE_NOT_SUPPORTED";
         case NtStatus::IoRingAlreadySubmitted: return "STATUS_IORING_ALREADY_SUBMITTED";
         case NtStatus::IoRingSubmissionQueueFull: return "STATUS_IORING_SUBMISSION_QUEUE_FULL";
+        case NtStatus::AlreadyRegistered: return "STATUS_ALREADY_REGISTERED";
+        case NtStatus::InvalidPicoOperation: return "STATUS_INVALID_PICO_OPERATION";
+        case NtStatus::PicoProcessTerminated: return "STATUS_PICO_PROCESS_TERMINATED";
         default: return "STATUS_UNKNOWN";
     }
 }

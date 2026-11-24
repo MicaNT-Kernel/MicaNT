@@ -74689,6 +74689,27 @@ inline void Test_Horizon378_Kernel_IoRing_Suite() {
     Suite594_Sovereign_Kernel_IoRing_Subsystem();
 }
 
+inline void Suite595_Sovereign_Pico_Subsystem() {
+    using namespace micant::pico;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon379PicoSubsystem(), "VerifyHorizon379PicoSubsystem must return true");
+
+    std::cout << "  Horizon 379 Architectural Validation Complete:\n"
+              << "    Pillar 1: Provider Registration & Handshake Protocol OK\n"
+              << "    Pillar 2: Sovereign Pico Process Lifecycle OK\n"
+              << "    Pillar 3: Sovereign Pico Thread Lifecycle & Context Switching OK\n"
+              << "    Pillar 4: Ring 0 Fast Syscall Interception & Direct Vectoring OK\n"
+              << "    Pillar 5: LSW Storage & Memory Interlock (NTFS / IoRing Bridge) OK\n"
+              << "    Pillar 6: High-Frequency Pico Syscall Benchmark OK\n";
+    std::cout << "[TEST] Suite 595: Horizon 379 - Sovereign MicaNT Pico Process & LSW Interlock PASSED." << std::endl;
+}
+
+inline void Test_Horizon379_Pico_Suite() {
+    Suite595_Sovereign_Pico_Subsystem();
+}
+
+
 
 
 

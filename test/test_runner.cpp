@@ -240,6 +240,7 @@
 #include "micant/km/drivers/fs/ntfs_selfheal_scrub.hpp"
 #include "micant/km/drivers/fs/ntfs_bypassio.hpp"
 #include "micant/km/executive/ioring.hpp"
+#include "micant/km/executive/pico.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
@@ -530,6 +531,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n------------------------------------------------------------------------\n";
         std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
         std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite595") {
+        RUN_TEST(Test_Horizon379_Pico_Suite);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite594") {
@@ -3055,6 +3060,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon376_NTFS_SelfHeal_Suite);
     RUN_TEST(Test_Horizon377_NTFS_BypassIO_Suite);
     RUN_TEST(Test_Horizon378_Kernel_IoRing_Suite);
+    RUN_TEST(Test_Horizon379_Pico_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
