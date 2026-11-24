@@ -181,7 +181,13 @@ enum class NtStatus : uint32_t {
     // BypassIO Fast-Path & DirectStorage Driver Codes
     BypassIoNotSupported             = 0xC000A200,
     BypassIoPaused                   = 0xC000A201,
-    BypassIoFilterNotSupported       = 0xC000A202
+    BypassIoFilterNotSupported       = 0xC000A202,
+
+    // I/O Ring Subsystem (IoRing) Status Codes
+    IoRingOptionsNotSupported        = 0xC0000A01,
+    IoRingOpCodeNotSupported         = 0xC0000A02,
+    IoRingAlreadySubmitted           = 0xC0000A03,
+    IoRingSubmissionQueueFull        = 0xC0000A04
 };
 
 // ============================================================================
@@ -248,6 +254,10 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_BYPASS_IO_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC000A200);
 inline constexpr NTSTATUS STATUS_BYPASS_IO_PAUSED        = static_cast<NTSTATUS>(0xC000A201);
 inline constexpr NTSTATUS STATUS_BYPASS_IO_FILTER_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC000A202);
+inline constexpr NTSTATUS STATUS_IORING_OPTIONS_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC0000A01);
+inline constexpr NTSTATUS STATUS_IORING_OP_CODE_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC0000A02);
+inline constexpr NTSTATUS STATUS_IORING_ALREADY_SUBMITTED = static_cast<NTSTATUS>(0xC0000A03);
+inline constexpr NTSTATUS STATUS_IORING_SUBMISSION_QUEUE_FULL = static_cast<NTSTATUS>(0xC0000A04);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);
@@ -333,6 +343,10 @@ inline constexpr NTSTATUS STATUS_BYPASS_IO_FILTER_NOT_SUPPORTED = static_cast<NT
         case NtStatus::BypassIoNotSupported: return "STATUS_BYPASS_IO_NOT_SUPPORTED";
         case NtStatus::BypassIoPaused: return "STATUS_BYPASS_IO_PAUSED";
         case NtStatus::BypassIoFilterNotSupported: return "STATUS_BYPASS_IO_FILTER_NOT_SUPPORTED";
+        case NtStatus::IoRingOptionsNotSupported: return "STATUS_IORING_OPTIONS_NOT_SUPPORTED";
+        case NtStatus::IoRingOpCodeNotSupported: return "STATUS_IORING_OP_CODE_NOT_SUPPORTED";
+        case NtStatus::IoRingAlreadySubmitted: return "STATUS_IORING_ALREADY_SUBMITTED";
+        case NtStatus::IoRingSubmissionQueueFull: return "STATUS_IORING_SUBMISSION_QUEUE_FULL";
         default: return "STATUS_UNKNOWN";
     }
 }

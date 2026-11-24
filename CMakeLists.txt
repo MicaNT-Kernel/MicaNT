@@ -45,6 +45,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/fsrtl/ntfs_usn_streamer.cpp
     kernel/fsrtl/ntfs_selfheal_scrub.cpp
     kernel/fsrtl/ntfs_bypassio.cpp
+    kernel/io/ioring.cpp
     kernel/fsrtl/exfat.cpp
     kernel/fsrtl/cdfs.cpp
     kernel/fsrtl/refs.cpp

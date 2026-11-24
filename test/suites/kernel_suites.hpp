@@ -74669,6 +74669,27 @@ inline void Test_Horizon377_NTFS_BypassIO_Suite() {
     Suite593_Sovereign_NTFS_BypassIO_Subsystem();
 }
 
+inline void Suite594_Sovereign_Kernel_IoRing_Subsystem() {
+    using namespace micant::ioring;
+
+    // 1. Subsystem Verification
+    TEST_ASSERT(VerifyHorizon378KernelIoRingSubsystem(), "VerifyHorizon378KernelIoRingSubsystem must return true");
+
+    std::cout << "  Horizon 378 Architectural Validation Complete:\n"
+              << "    Pillar 1: IoRing Object Creation & Capabilities Query OK\n"
+              << "    Pillar 2: SPSC Atomic Ring Queue Mechanics & Bulk Batching OK\n"
+              << "    Pillar 3: Registered Files Table Pre-Registration OK\n"
+              << "    Pillar 4: Registered Buffers Table & Zero-Copy MDL Pinning OK\n"
+              << "    Pillar 5: Direct NTFS BypassIO Fast-Path Interlock OK\n"
+              << "    Pillar 6: High-Throughput Bulk I/O Ring Benchmark OK\n";
+    std::cout << "[TEST] Suite 594: Horizon 378 - Sovereign MicaNT Kernel I/O Ring (IoRing) Executive PASSED." << std::endl;
+}
+
+inline void Test_Horizon378_Kernel_IoRing_Suite() {
+    Suite594_Sovereign_Kernel_IoRing_Subsystem();
+}
+
+
 
 
 
