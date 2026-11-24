@@ -55,12 +55,14 @@ def main():
     parser.add_argument("--memory", type=str, default="2G", help="VM memory size (default: 2G)")
     parser.add_argument("--cores", type=int, default=4, help="SMP core count (default: 4)")
     parser.add_argument("--no-gui", action="store_true", help="Run without graphical display (nographic)")
+    parser.add_argument("--rebuild-ntfs", action="store_true", help="Force rebuild of GPT + NTFS 3.1 SATA disk image")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
     sysroot = repo_root / "build" / "sysroot"
     bootloader = sysroot / "EFI" / "BOOT" / "BOOTX64.EFI"
     ntoskrnl = system32_krnl = sysroot / "Windows" / "System32" / "ntoskrnl.exe"
+    ntfs_img = repo_root / "build" / "micant_ntfs.img"
 
     print(f"{CYAN}{BOLD}========================================================================{RESET}")
     print(f"{CYAN}{BOLD}                 MicaNT QEMU UEFI Virtual Machine                       {RESET}")
@@ -72,6 +74,13 @@ def main():
         print(f"{YELLOW}       Building sysroot now...{RESET}\n")
         build_script = repo_root / "scripts" / "build_sysroot.py"
         subprocess.run([sys.executable, str(build_script)], check=True)
+
+    # Check if GPT + NTFS 3.1 SATA disk image exists
+    if args.rebuild_ntfs or not ntfs_img.exists():
+        make_ntfs = repo_root / "scripts" / "make_ntfs_disk.py"
+        if make_ntfs.exists():
+            print(f"{YELLOW}[INFO] Generating GPT + NTFS 3.1 SATA disk image ({ntfs_img.name})...{RESET}")
+            subprocess.run([sys.executable, str(make_ntfs)], check=True)
 
     # Check for QEMU
     qemu_bin = shutil.which("qemu-system-x86_64")
@@ -107,8 +116,14 @@ def main():
         "-drive", f"file=fat:rw:{sysroot},format=raw",
         "-serial", "stdio"
     ]
+    if ntfs_img.exists():
+        cmd.extend([
+            "-device", "ich9-ahci,id=ahci",
+            "-drive", f"id=ntfsdisk,file={ntfs_img},format=raw,if=none",
+            "-device", "ide-hd,drive=ntfsdisk,bus=ahci.0",
+        ])
     if ovmf_path:
-        cmd.extend(["-bios", str(ovmf_path)])
+        cmd.extend(["-pflash", str(ovmf_path)])
     if args.no_gui:
         cmd.append("-nographic")
 

@@ -37,6 +37,7 @@
 #include "micant/km/hal/smp.hpp"
 #include "micant/km/drivers/usb/xhci_baremetal.hpp"
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
+#include "micant/km/drivers/fs/ntfs_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
@@ -2253,14 +2254,40 @@ extern "C" micant::NtStatus KiSystemStartup(
     iom.initialize();
     LogKernel("[Io] Phase 0: Packet-Driven I/O Subsystem Initialized (IRP Stack, Drivers, Devices).");
 
-    // Real Bare-Metal AHCI SATA Controller & Port 1 Storage Engine (/dev/sdb)
+    // Real Bare-Metal AHCI SATA Controller & Storage Engine
+    static bool s_ntfsMounted = false;
+    static char s_storageCardText[64] = "AHCI Standby";
     auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
     bool ahciOk = ahci.initialize();
     if (ahciOk && ahci.isPort1Online()) {
-        char diskLog[96];
-        copyStr(diskLog, "[Io] AHCI Port 1: ", sizeof(diskLog));
+        auto appendDec = [](char* dst, size_t cap, uint64_t val) noexcept {
+            char tmp[24]{};
+            size_t n = 0;
+            if (val == 0) { tmp[n++] = '0'; }
+            else {
+                while (val > 0 && n < 22) { tmp[n++] = static_cast<char>('0' + (val % 10)); val /= 10; }
+            }
+            char rev[24]{};
+            for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
+            rev[n] = '\0';
+            concatStr(dst, rev, cap);
+        };
+
+        uint64_t diskMB = (ahci.getPort1TotalSectors() * 512ULL) / (1024ULL * 1024ULL);
+        char diskLog[128];
+        copyStr(diskLog, "[Io] AHCI Port ", sizeof(diskLog));
+        appendDec(diskLog, sizeof(diskLog), ahci.getActivePort());
+        concatStr(diskLog, " (PCI ", sizeof(diskLog));
+        appendDec(diskLog, sizeof(diskLog), ahci.getPciBus());
+        concatStr(diskLog, ":", sizeof(diskLog));
+        appendDec(diskLog, sizeof(diskLog), ahci.getPciDev());
+        concatStr(diskLog, ".", sizeof(diskLog));
+        appendDec(diskLog, sizeof(diskLog), ahci.getPciFunc());
+        concatStr(diskLog, "): ", sizeof(diskLog));
         concatStr(diskLog, ahci.getDiskModel(), sizeof(diskLog));
-        concatStr(diskLog, " 2.0 TB SATA Gen3 6Gbps", sizeof(diskLog));
+        concatStr(diskLog, " (", sizeof(diskLog));
+        appendDec(diskLog, sizeof(diskLog), diskMB);
+        concatStr(diskLog, " MB SATA AHCI DMA)", sizeof(diskLog));
         LogKernel(diskLog);
 
         iom.setDiskIoHandler([](uint64_t lba, uint32_t count, void* buf, bool isWrite) -> bool {
@@ -2273,31 +2300,109 @@ extern "C" micant::NtStatus KiSystemStartup(
         });
         LogKernel("[Io] \\Driver\\Disk Connected to AHCI DMA Storage Engine.");
 
-        auto probe = probeMicaSysVolume(ahci);
-        if (probe.valid) {
-            char fatLog[96];
-            copyStr(fatLog, "[FastFAT] Mounted Dedicated \\DosDevices\\C: (Label '", sizeof(fatLog));
-            concatStr(fatLog, probe.volumeLabel, sizeof(fatLog));
-            concatStr(fatLog, "' FAT32 on /dev/sdb2).", sizeof(fatLog));
-            LogKernel(fatLog);
+        // 1. Primary OS Filesystem Probe: Sovereign Bare-Metal NTFS 3.1 (AHCI DMA)
+        auto& ntfsVol = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+        if (ntfsVol.mount(ahci)) {
+            s_ntfsMounted = true;
+            subsystems[10] = "[R0] NTFS: \\DosDevices\\C: (NTFS 3.1 DMA)";
+            copyStr(s_storageCardText, "NTFS 3.1 | ", sizeof(s_storageCardText));
+            concatStr(s_storageCardText, ntfsVol.getVolumeLabel(), sizeof(s_storageCardText));
+            DrawCard(2, "STORAGE & C: DRIVE", s_storageCardText, micant::bootvid::Color{100, 240, 160});
 
-            if (probe.foundSystemIni) {
-                char iniLog[96];
-                copyStr(iniLog, "[FsRtl] Verified C:\\MicaNT\\system.ini via DMA: '", sizeof(iniLog));
-                char shortPrev[42] = {0};
-                size_t pLen = strLen(probe.systemIniPreview);
-                if (pLen > 40) pLen = 40;
-                for (size_t k = 0; k < pLen; ++k) shortPrev[k] = probe.systemIniPreview[k];
-                shortPrev[pLen] = '\0';
-                concatStr(iniLog, shortPrev, sizeof(iniLog));
+            char ntfsLog[160];
+            copyStr(ntfsLog, "[NTFS] Mounted \\DosDevices\\C: (Label '", sizeof(ntfsLog));
+            concatStr(ntfsLog, ntfsVol.getVolumeLabel(), sizeof(ntfsLog));
+            concatStr(ntfsLog, "' NTFS ", sizeof(ntfsLog));
+            appendDec(ntfsLog, sizeof(ntfsLog), ntfsVol.getMajorVersion());
+            concatStr(ntfsLog, ".", sizeof(ntfsLog));
+            appendDec(ntfsLog, sizeof(ntfsLog), ntfsVol.getMinorVersion());
+            concatStr(ntfsLog, " @ LBA ", sizeof(ntfsLog));
+            appendDec(ntfsLog, sizeof(ntfsLog), ntfsVol.getPartitionLba());
+            concatStr(ntfsLog, " | $MFT LCN ", sizeof(ntfsLog));
+            appendDec(ntfsLog, sizeof(ntfsLog), ntfsVol.getMftClusterNumber());
+            concatStr(ntfsLog, " | Cluster ", sizeof(ntfsLog));
+            appendDec(ntfsLog, sizeof(ntfsLog), ntfsVol.getBytesPerCluster());
+            concatStr(ntfsLog, "B)", sizeof(ntfsLog));
+            LogKernel(ntfsLog);
+
+            // Enumerate real root directory from NTFS $INDEX_ROOT / $INDEX_ALLOCATION
+            char rootList[160];
+            copyStr(rootList, "[NTFS] C:\\ Root B-Tree Entries: ", sizeof(rootList));
+            size_t rootCount = 0;
+            ntfsVol.iterateDirectory("\\", [&](const micant::km::ntfs_baremetal::NtfsDirEntry& e) noexcept {
+                if (rootCount > 0) concatStr(rootList, ", ", sizeof(rootList));
+                concatStr(rootList, e.name, sizeof(rootList));
+                if (e.isDirectory) concatStr(rootList, "/", sizeof(rootList));
+                rootCount++;
+            });
+            LogKernel(rootList);
+
+            // Read authentic C:\MicaNT\system.ini directly via NTFS + AHCI DMA
+            char iniBuf[128]{};
+            size_t iniBytes = 0;
+            if (ntfsVol.readFile("\\MicaNT\\system.ini", iniBuf, sizeof(iniBuf) - 1, iniBytes) && iniBytes > 0) {
+                iniBuf[iniBytes] = '\0';
+                for (size_t k = 0; k < iniBytes; ++k) {
+                    if (iniBuf[k] == '\r' || iniBuf[k] == '\n') iniBuf[k] = ' ';
+                }
+                char iniLog[160];
+                copyStr(iniLog, "[NTFS] Verified C:\\MicaNT\\system.ini via AHCI DMA (", sizeof(iniLog));
+                appendDec(iniLog, sizeof(iniLog), iniBytes);
+                concatStr(iniLog, " B): '", sizeof(iniLog));
+                char prev[48]{};
+                size_t pLen = (iniBytes < 44) ? iniBytes : 44;
+                for (size_t k = 0; k < pLen; ++k) prev[k] = iniBuf[k];
+                prev[pLen] = '\0';
+                concatStr(iniLog, prev, sizeof(iniLog));
                 concatStr(iniLog, "'", sizeof(iniLog));
                 LogKernel(iniLog);
             }
+
+            // Verify authentic PE32+ binaries directly off live NTFS non-resident data runs
+            size_t peBytes = 0;
+            if (ntfsVol.readFile("\\Windows\\System32\\cmd.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), peBytes) && peBytes >= 64) {
+                bool mzOk = (s_diskAppBuffer[0] == 'M' && s_diskAppBuffer[1] == 'Z');
+                uint32_t peOff = 0;
+                std::memcpy(&peOff, s_diskAppBuffer + 0x3C, sizeof(uint32_t));
+                bool peOk = mzOk && (peOff + 4 < peBytes) &&
+                            s_diskAppBuffer[peOff] == 'P' && s_diskAppBuffer[peOff + 1] == 'E' &&
+                            s_diskAppBuffer[peOff + 2] == 0 && s_diskAppBuffer[peOff + 3] == 0;
+                char peLog[160];
+                copyStr(peLog, "[NTFS] Loaded C:\\Windows\\System32\\cmd.exe via Non-Resident DMA (", sizeof(peLog));
+                appendDec(peLog, sizeof(peLog), peBytes);
+                concatStr(peLog, peOk ? " B | PE32+ MZ/PE Verified | USA Fixups: " : " B | Raw | USA Fixups: ", sizeof(peLog));
+                appendDec(peLog, sizeof(peLog), ntfsVol.getUsaFixupsVerified());
+                concatStr(peLog, ")", sizeof(peLog));
+                LogKernel(peLog);
+            }
         } else {
-            LogKernel("[FastFAT] WARNING: MICA_SYS BPB verification failed on /dev/sdb2.");
+            // 2. Fallback Probe: FastFAT32 (Supermicro /dev/sdb2 compatibility)
+            auto probe = probeMicaSysVolume(ahci);
+            if (probe.valid) {
+                char fatLog[96];
+                copyStr(fatLog, "[FastFAT] Mounted Dedicated \\DosDevices\\C: (Label '", sizeof(fatLog));
+                concatStr(fatLog, probe.volumeLabel, sizeof(fatLog));
+                concatStr(fatLog, "' FAT32 on /dev/sdb2).", sizeof(fatLog));
+                LogKernel(fatLog);
+
+                if (probe.foundSystemIni) {
+                    char iniLog[96];
+                    copyStr(iniLog, "[FsRtl] Verified C:\\MicaNT\\system.ini via DMA: '", sizeof(iniLog));
+                    char shortPrev[42] = {0};
+                    size_t pLen = strLen(probe.systemIniPreview);
+                    if (pLen > 40) pLen = 40;
+                    for (size_t k = 0; k < pLen; ++k) shortPrev[k] = probe.systemIniPreview[k];
+                    shortPrev[pLen] = '\0';
+                    concatStr(iniLog, shortPrev, sizeof(iniLog));
+                    concatStr(iniLog, "'", sizeof(iniLog));
+                    LogKernel(iniLog);
+                }
+            } else {
+                LogKernel("[FsRtl] WARNING: Neither NTFS nor FAT32 BPB verified on active AHCI port.");
+            }
         }
     } else {
-        LogKernel("[Io] AHCI: Port 1 (/dev/sdb) initialization standby.");
+        LogKernel("[Io] AHCI: No online SATA storage port discovered (standby).");
     }
 
     LogKernel("[ExtFS] Linux Ext4 Partition Found at LBA 2 (Magic 0xEF53 Valid).");
@@ -2576,7 +2681,8 @@ extern "C" micant::NtStatus KiSystemStartup(
 
         DrawCard(0, "CPU & SMP SILICON", "8T | DTS: 37 C", micant::bootvid::Color{100, 240, 160});
         DrawCard(1, "PHYSICAL MEMORY", "32,768 MB ECC RAM", micant::bootvid::Color{100, 240, 160});
-        DrawCard(2, "STORAGE & C: DRIVE", "sdb2 FAT32 | 128GB C:", micant::bootvid::Color{0, 210, 255});
+        DrawCard(2, "STORAGE & C: DRIVE", s_ntfsMounted ? s_storageCardText : "sdb2 FAT32 | 128GB C:",
+                 s_ntfsMounted ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{0, 210, 255});
         DrawCard(3, "EXECUTIVE STATE", "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
 
         // Left Window: Subsystems

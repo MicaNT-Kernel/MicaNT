@@ -192,10 +192,53 @@ private:
     volatile uint32_t* m_abar{nullptr};
     bool     m_initialized{false};
     bool     m_port1Online{false};
+    uint8_t  m_activePort{1};
+    uint8_t  m_pciBus{0};
+    uint8_t  m_pciDev{0};
+    uint8_t  m_pciFunc{0};
+    uint16_t m_vendorId{0};
+    uint16_t m_deviceId{0};
     uint64_t m_port1TotalSectors{0};
     uint64_t m_micaSysLbaOffset{2099200}; // LBA of sdb2 (MICA_SYS 128 GB FAT32)
     uint64_t m_micaDataLbaOffset{270534656}; // LBA of sdb3 (MICA_DATA 1.7 TB FAT32)
     char     m_diskModel[41]{};
+
+    bool probeAhciDevice(uint8_t bus, uint8_t dev, uint8_t func) noexcept {
+        uint32_t vendorDev = pciRead32(bus, dev, func, 0x00);
+        uint16_t vendorId = static_cast<uint16_t>(vendorDev & 0xFFFF);
+        if (vendorId == 0xFFFF || vendorId == 0x0000) {
+            return false;
+        }
+        uint16_t deviceId = static_cast<uint16_t>((vendorDev >> 16) & 0xFFFF);
+        uint32_t classReg = pciRead32(bus, dev, func, 0x08);
+        uint8_t classCode = static_cast<uint8_t>((classReg >> 24) & 0xFF);
+        uint8_t subClass  = static_cast<uint8_t>((classReg >> 16) & 0xFF);
+        uint8_t progIf    = static_cast<uint8_t>((classReg >> 8) & 0xFF);
+
+        // Mass Storage Controller (0x01) -> SATA (0x06) -> AHCI 1.0 (0x01)
+        if (classCode != 0x01 || subClass != 0x06 || progIf != 0x01) {
+            return false;
+        }
+
+        uint32_t bar5 = pciRead32(bus, dev, func, 0x24);
+        uint32_t abar = bar5 & ~0xFULL;
+        if (abar == 0) {
+            return false;
+        }
+
+        // Enable Bus Master, Memory Space, and I/O Space in PCI Command register
+        uint32_t pciCmd = pciRead32(bus, dev, func, 0x04);
+        pciWrite32(bus, dev, func, 0x04, pciCmd | 0x07);
+
+        m_pciBus = bus;
+        m_pciDev = dev;
+        m_pciFunc = func;
+        m_vendorId = vendorId;
+        m_deviceId = deviceId;
+        m_abarPhys = abar;
+        m_abar = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(m_abarPhys));
+        return true;
+    }
 
 public:
     static BareMetalAhciController& get() noexcept {
@@ -205,59 +248,73 @@ public:
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_initialized; }
     [[nodiscard]] bool isPort1Online() const noexcept { return m_port1Online; }
+    [[nodiscard]] uint8_t getActivePort() const noexcept { return m_activePort; }
+    [[nodiscard]] uint8_t getPciBus() const noexcept { return m_pciBus; }
+    [[nodiscard]] uint8_t getPciDev() const noexcept { return m_pciDev; }
+    [[nodiscard]] uint8_t getPciFunc() const noexcept { return m_pciFunc; }
+    [[nodiscard]] uint16_t getVendorId() const noexcept { return m_vendorId; }
+    [[nodiscard]] uint16_t getDeviceId() const noexcept { return m_deviceId; }
     [[nodiscard]] uint32_t getAbarPhysical() const noexcept { return m_abarPhys; }
     [[nodiscard]] uint64_t getPort1TotalSectors() const noexcept { return m_port1TotalSectors; }
     [[nodiscard]] const char* getDiskModel() const noexcept { return m_diskModel; }
 
     /**
-     * @brief Discover Intel C236 SATA AHCI Controller and initialize SATA Port 1 (/dev/sdb).
+     * @brief Discover any PCI SATA AHCI 1.0+ Controller (Intel C236, ICH9, Q35, AMD, etc.)
+     *        and initialize the active SATA storage port.
      */
     bool initialize() noexcept {
-        // 1. Scan PCI Bus 00, Dev 0x17, Func 0x00
-        uint32_t vendorDev = pciRead32(0, 0x17, 0, 0x00);
-        uint16_t vendorId = vendorDev & 0xFFFF;
-        uint16_t deviceId = (vendorDev >> 16) & 0xFFFF;
+        m_initialized = false;
+        m_port1Online = false;
 
-        if (vendorId != 0x8086) {
+        // 1. Check Supermicro Intel C236 canonical location first (00:17.0), then scan full PCI Bus 0
+        bool found = probeAhciDevice(0, 0x17, 0);
+        if (!found) {
+            for (uint8_t dev = 0; dev < 32 && !found; ++dev) {
+                uint32_t vd0 = pciRead32(0, dev, 0, 0x00);
+                if ((vd0 & 0xFFFF) == 0xFFFF) continue;
+                uint32_t hdr = pciRead32(0, dev, 0, 0x0C);
+                uint8_t maxFunc = ((hdr >> 16) & 0x80) ? 8 : 1;
+                for (uint8_t func = 0; func < maxFunc; ++func) {
+                    if (probeAhciDevice(0, dev, func)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!found || !m_abar) {
             return false;
         }
 
-        // 2. Read BAR5 (ABAR MMIO)
-        uint32_t bar5 = pciRead32(0, 0x17, 0, 0x24);
-        m_abarPhys = bar5 & ~0xFULL;
-        if (m_abarPhys == 0) {
-            return false;
-        }
-
-        // 3. Enable Bus Master, Memory Space, and I/O Space in PCI Command register
-        uint32_t pciCmd = pciRead32(0, 0x17, 0, 0x04);
-        pciWrite32(0, 0x17, 0, 0x04, pciCmd | 0x07);
-
-        // 4. Map ABAR pointer
-        m_abar = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(m_abarPhys));
-
-        // 5. Ensure AHCI Enable (GHC.AE = 1)
+        // 2. Ensure AHCI Enable (GHC.AE = 1)
         uint32_t ghc = m_abar[AHCI_REG_GHC / 4];
         if ((ghc & AHCI_GHC_AE) == 0) {
             m_abar[AHCI_REG_GHC / 4] = ghc | AHCI_GHC_AE;
         }
 
-        // 6. Check Ports Implemented (PI)
+        // 3. Check Ports Implemented (PI): prefer Port 1 (Supermicro /dev/sdb) first, then scan 0..31
         uint32_t pi = m_abar[AHCI_REG_PI / 4];
-        if ((pi & (1u << 1)) == 0) {
-            // Port 1 not implemented
-            return false;
-        }
-
-        // 7. Initialize Port 1 (sdb)
-        bool ok = initPort(1);
-        if (ok) {
+        if ((pi & (1u << 1)) != 0 && initPort(1)) {
+            m_activePort = 1;
             m_initialized = true;
             m_port1Online = true;
             readDiskIdentify();
+            return true;
         }
 
-        return m_initialized;
+        for (uint8_t p = 0; p < 32; ++p) {
+            if (p == 1) continue;
+            if ((pi & (1u << p)) != 0 && initPort(p)) {
+                m_activePort = p;
+                m_initialized = true;
+                m_port1Online = true;
+                readDiskIdentify();
+                return true;
+            }
+        }
+
+        return false;
     }
 
 private:
@@ -349,8 +406,16 @@ private:
         alignas(512) static uint8_t idBuf[512];
         std::memset(idBuf, 0, sizeof(idBuf));
 
-        volatile uint32_t* pRegs = getPortRegs(1);
+        volatile uint32_t* pRegs = getPortRegs(m_activePort);
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
+
+        // Wait for port not busy (BSY=0x80 | DRQ=0x08)
+        for (int spin = 0; spin < 100000; ++spin) {
+            if ((pRegs[PORT_REG_TFD / 4] & 0x88) == 0) break;
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
 
         cmdHeaders[0].cfl = sizeof(FisRegH2D) / sizeof(uint32_t);
         cmdHeaders[0].w = 0; // Read
@@ -403,14 +468,16 @@ private:
         if (sectors48 > 0) {
             m_port1TotalSectors = sectors48;
         } else {
-            m_port1TotalSectors = 3907029168ULL; // 2TB default
+            uint32_t sectors28 = 0;
+            std::memcpy(&sectors28, &idBuf[120], sizeof(uint32_t));
+            m_port1TotalSectors = (sectors28 > 0) ? sectors28 : 3907029168ULL;
         }
     }
 
 public:
     /**
      * @brief Direct 48-bit LBA Sector Read via AHCI Bus-Master DMA.
-     * @param lba Starting physical LBA on /dev/sdb.
+     * @param lba Starting physical LBA on active SATA port.
      * @param sectorCount Number of 512-byte sectors to read (up to 128 = 64KB per call).
      * @param dest Destination memory buffer.
      * @return true on DMA transfer success, false on fault/timeout.
@@ -420,15 +487,23 @@ public:
             return false;
         }
 
-        volatile uint32_t* pRegs = getPortRegs(1);
+        volatile uint32_t* pRegs = getPortRegs(m_activePort);
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
+
+        for (int spin = 0; spin < 100000; ++spin) {
+            if ((pRegs[PORT_REG_TFD / 4] & 0x88) == 0) break;
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
 
         cmdHeaders[0].cfl = sizeof(FisRegH2D) / sizeof(uint32_t);
         cmdHeaders[0].w = 0; // Read DMA
         cmdHeaders[0].prdtl = 1;
         cmdHeaders[0].prdbc = 0;
 
-        uint64_t bufPhys = reinterpret_cast<uint64_t>(dest);
+        // DMA into 4KB-aligned identity-mapped bounce buffer, then copy to caller
+        uint64_t bufPhys = reinterpret_cast<uint64_t>(s_ahciDmaBuffer);
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbc  = (sectorCount * 512) - 1;
@@ -474,6 +549,7 @@ public:
             return false;
         }
 
+        std::memcpy(dest, s_ahciDmaBuffer, static_cast<size_t>(sectorCount) * 512);
         return true;
     }
 
@@ -485,15 +561,24 @@ public:
             return false;
         }
 
-        volatile uint32_t* pRegs = getPortRegs(1);
+        volatile uint32_t* pRegs = getPortRegs(m_activePort);
         auto* cmdHeaders = reinterpret_cast<AhciCommandHeader*>(s_ahciCmdListMem);
+
+        for (int spin = 0; spin < 100000; ++spin) {
+            if ((pRegs[PORT_REG_TFD / 4] & 0x88) == 0) break;
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
+
+        std::memcpy(s_ahciDmaBuffer, src, static_cast<size_t>(sectorCount) * 512);
 
         cmdHeaders[0].cfl = sizeof(FisRegH2D) / sizeof(uint32_t);
         cmdHeaders[0].w = 1; // Write DMA
         cmdHeaders[0].prdtl = 1;
         cmdHeaders[0].prdbc = 0;
 
-        uint64_t bufPhys = reinterpret_cast<uint64_t>(src);
+        uint64_t bufPhys = reinterpret_cast<uint64_t>(s_ahciDmaBuffer);
         s_ahciCmdTable.prdt[0].dba  = static_cast<uint32_t>(bufPhys & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbau = static_cast<uint32_t>((bufPhys >> 32) & 0xFFFFFFFF);
         s_ahciCmdTable.prdt[0].dbc  = (sectorCount * 512) - 1;
