@@ -176,7 +176,12 @@ enum class NtStatus : uint32_t {
 
     // NTFS Reparse Points & Symbolic Links
     ReparsePointNotResolved          = 0xC0000280,
-    StoppedOnSymlink                 = 0x8000002D
+    StoppedOnSymlink                 = 0x8000002D,
+
+    // BypassIO Fast-Path & DirectStorage Driver Codes
+    BypassIoNotSupported             = 0xC000A200,
+    BypassIoPaused                   = 0xC000A201,
+    BypassIoFilterNotSupported       = 0xC000A202
 };
 
 // ============================================================================
@@ -240,6 +245,9 @@ inline constexpr NTSTATUS STATUS_NOT_A_DIRECTORY        = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_DISK_CORRUPT_ERROR     = static_cast<NTSTATUS>(0xC0000032);
 inline constexpr NTSTATUS STATUS_DATA_CHECKSUM_ERROR     = static_cast<NTSTATUS>(0xC00003FD);
 inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(0xC00000E0);
+inline constexpr NTSTATUS STATUS_BYPASS_IO_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC000A200);
+inline constexpr NTSTATUS STATUS_BYPASS_IO_PAUSED        = static_cast<NTSTATUS>(0xC000A201);
+inline constexpr NTSTATUS STATUS_BYPASS_IO_FILTER_NOT_SUPPORTED = static_cast<NTSTATUS>(0xC000A202);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);
@@ -322,6 +330,9 @@ inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(
         case NtStatus::NoMoreEntries: return "STATUS_NO_MORE_ENTRIES";
         case NtStatus::VariableNotFound: return "STATUS_VARIABLE_NOT_FOUND";
         case NtStatus::ProcessNotInJob: return "STATUS_PROCESS_NOT_IN_JOB";
+        case NtStatus::BypassIoNotSupported: return "STATUS_BYPASS_IO_NOT_SUPPORTED";
+        case NtStatus::BypassIoPaused: return "STATUS_BYPASS_IO_PAUSED";
+        case NtStatus::BypassIoFilterNotSupported: return "STATUS_BYPASS_IO_FILTER_NOT_SUPPORTED";
         default: return "STATUS_UNKNOWN";
     }
 }
