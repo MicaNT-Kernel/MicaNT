@@ -39,6 +39,7 @@
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
 #include "micant/km/drivers/fs/ntfs_baremetal.hpp"
 #include "micant/km/executive/pe_loader_baremetal.hpp"
+#include "micant/km/executive/process_cr3_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
@@ -631,6 +632,50 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             }
             return handle;
         }
+        case 0x58: { // NtCreateUserProcess (Spawn Isolated Per-Process CR3 PE32+ from Live NTFS 3.1)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0) {
+                UartSerial::print("  -> NtCreateUserProcess: Invalid user path pointer -> STATUS_ACCESS_VIOLATION\r\n");
+                return 0;
+            }
+            const auto* wpath = reinterpret_cast<const uint16_t*>(arg1);
+            char asciiPath[128]{};
+            size_t len = 0;
+            while (len + 1 < sizeof(asciiPath) && wpath[len] != 0) {
+                asciiPath[len] = (wpath[len] < 128) ? static_cast<char>(wpath[len]) : '?';
+                ++len;
+            }
+            asciiPath[len] = '\0';
+
+            auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            uint32_t parentPid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 4;
+            int childSlot = mp.createProcessFromNtfs(ntfs, asciiPath, parentPid);
+            if (childSlot < 0) {
+                UartSerial::print("  -> NtCreateUserProcess: Failed to spawn '");
+                UartSerial::print(asciiPath);
+                UartSerial::print("' -> STATUS_OBJECT_NAME_NOT_FOUND\r\n");
+                return 0;
+            }
+            const auto* child = mp.getSlot(static_cast<size_t>(childSlot));
+            UartSerial::print("  -> NtCreateUserProcess (SSN 0x58): Spawned '");
+            UartSerial::print(child->imageName);
+            UartSerial::print("' PID=");
+            UartSerial::printDec(child->pid);
+            UartSerial::print(" | Private CR3=0x");
+            UartSerial::printHex64(child->cr3Phys);
+            UartSerial::print(" | Entry=0x");
+            UartSerial::printHex64(child->entryPointVa);
+            UartSerial::print(" | DLLs=");
+            UartSerial::printDec(child->dllCount);
+            UartSerial::print(" (IAT=");
+            UartSerial::printDec(child->exeImportsBound);
+            UartSerial::print("+");
+            UartSerial::printDec(child->dllImportsBound);
+            UartSerial::print(") -> STATUS_SUCCESS\r\n");
+            LogKernel("[Ps] NtCreateUserProcess (0x58): Isolated CR3 Child Process Spawned!");
+            return child->pid;
+        }
         case 0x0F: { // NtClose (Close Kernel File Handle)
             auto* he = lookupKernelFileHandle(arg1);
             if (he) {
@@ -675,9 +720,21 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 micant::km::mm_baremetal::MEM_COMMIT | micant::km::mm_baremetal::MEM_RESERVE,
                 micant::km::mm_baremetal::PAGE_READWRITE
             );
-            UartSerial::print("  -> NtAllocateVirtualMemory: Base=0x");
+            uint64_t activeCr3 = 0;
+#if defined(__x86_64__)
+            __asm__ __volatile__("mov %%cr3, %0" : "=r"(activeCr3));
+#endif
+            uint64_t activeCr3Phys = activeCr3 & micant::km::mm_baremetal::PTE_PHYS_MASK;
+            uint64_t backingPa = NT_SUCCESS(st)
+                ? micant::km::mm_baremetal::BareMetalPaging::getPhysicalAddress(activeCr3Phys, baseVa)
+                : 0;
+            UartSerial::print("  -> NtAllocateVirtualMemory: VA=0x");
             UartSerial::printHex64(baseVa);
-            UartSerial::print(" Size=");
+            UartSerial::print(" -> PhysPA=0x");
+            UartSerial::printHex64(backingPa);
+            UartSerial::print(" (CR3=0x");
+            UartSerial::printHex64(activeCr3Phys);
+            UartSerial::print(") Size=");
             UartSerial::printDec(static_cast<uint32_t>(regionSize));
             UartSerial::print(" Status=0x");
             UartSerial::printHex32(static_cast<uint32_t>(st));
@@ -918,15 +975,72 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     }
 }
 
+extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFrame64* frame) {
+    if (!frame) return 1;
+    uint64_t ssn  = frame->rax;
+    uint64_t arg1 = frame->rdx;
+    uint64_t arg2 = frame->r8;
+    uint64_t arg3 = frame->r9;
+
+    auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+    if (mp.isActive()) {
+        if (auto* cur = mp.getCurrentProcess()) cur->syscallCount++;
+
+        if (ssn == 0x01) { // NtTerminateProcess in Multi-Process CR3 Mode
+            uint32_t exitedPid = 0, nextPid = 0;
+            uint64_t nextCr3 = 0;
+            bool allDone = mp.onTerminateSyscall(frame, static_cast<uint32_t>(arg2), exitedPid, nextPid, nextCr3);
+            UartSerial::print("[Ps] NtTerminateProcess (Multi-CR3): PID=");
+            UartSerial::printDec(exitedPid);
+            UartSerial::print(" ExitCode=");
+            UartSerial::printDec(static_cast<uint32_t>(arg2));
+            if (!allDone) {
+                UartSerial::print(" -> Switched CR3 to surviving PID=");
+                UartSerial::printDec(nextPid);
+                UartSerial::print(" (CR3=0x");
+                UartSerial::printHex64(nextCr3);
+                UartSerial::print(")\r\n");
+                return 0; // IRETQ straight into surviving Ring-3 process!
+            }
+            UartSerial::print(" -> ALL isolated CR3 processes exited cleanly! Restoring Kernel CR3.\r\n");
+            s_ring3Telemetry.userProcessExitedCleanly = true;
+            return 1; // Return to Ring 0 caller!
+        }
+
+        if (ssn == 0x46) { // NtYieldExecution in Multi-Process CR3 Mode
+            uint32_t oldPid = 0, newPid = 0;
+            if (mp.onYieldSyscall(frame, oldPid, newPid)) {
+                UartSerial::print("[Ps] NtYieldExecution (0x46): PID ");
+                UartSerial::printDec(oldPid);
+                UartSerial::print(" -> PID ");
+                UartSerial::printDec(newPid);
+                UartSerial::print("\r\n");
+            }
+            return 0;
+        }
+
+        frame->rax = KiSystemCall64Dispatcher(ssn, arg1, arg2, arg3);
+        return 0;
+    }
+
+    uint64_t ret = KiSystemCall64Dispatcher(ssn, arg1, arg2, arg3);
+    frame->rax = ret;
+    return (ssn == 0x01) ? 1ULL : 0ULL;
+}
+
 extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "movq %rsp, s_savedUserRsp(%rip)\n\t"
         "movq s_kernelStackTopVal(%rip), %rsp\n\t"
+        "pushq $0x002B\n\t"
         "pushq s_savedUserRsp(%rip)\n\t"
         "pushq %r11\n\t"
+        "pushq $0x0033\n\t"
         "pushq %rcx\n\t"
+        "pushq %rax\n\t"
         "pushq %rbx\n\t"
+        "pushq %rcx\n\t"
         "pushq %rdx\n\t"
         "pushq %rsi\n\t"
         "pushq %rdi\n\t"
@@ -934,21 +1048,22 @@ extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
         "pushq %r8\n\t"
         "pushq %r9\n\t"
         "pushq %r10\n\t"
+        "pushq %r11\n\t"
         "pushq %r12\n\t"
         "pushq %r13\n\t"
         "pushq %r14\n\t"
         "pushq %r15\n\t"
-        "cmpq $0x01, %rax\n\t"
-        "je 2f\n\t"
-        "movq %rax, %rcx\n\t"
-        "subq $40, %rsp\n\t"
-        "callq KiSystemCall64Dispatcher\n\t"
-        "addq $40, %rsp\n\t"
-        "movq %rax, s_savedSyscallRet(%rip)\n\t"
+        "movq %rsp, %rcx\n\t"
+        "subq $32, %rsp\n\t"
+        "callq KiSystemCall64TrapHandler\n\t"
+        "addq $32, %rsp\n\t"
+        "testq %rax, %rax\n\t"
+        "jnz 2f\n\t"
         "popq %r15\n\t"
         "popq %r14\n\t"
         "popq %r13\n\t"
         "popq %r12\n\t"
+        "popq %r11\n\t"
         "popq %r10\n\t"
         "popq %r9\n\t"
         "popq %r8\n\t"
@@ -956,22 +1071,11 @@ extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
         "popq %rdi\n\t"
         "popq %rsi\n\t"
         "popq %rdx\n\t"
-        "popq %rbx\n\t"
         "popq %rcx\n\t"
-        "popq %r11\n\t"
-        "movq (%rsp), %rax\n\t"
-        "movq $0x002B, (%rsp)\n\t"
-        "pushq %rax\n\t"
-        "pushq %r11\n\t"
-        "pushq $0x0033\n\t"
-        "pushq %rcx\n\t"
-        "movq s_savedSyscallRet(%rip), %rax\n\t"
+        "popq %rbx\n\t"
+        "popq %rax\n\t"
         "iretq\n\t"
         "2:\n\t"
-        "movq %rax, %rcx\n\t"
-        "subq $40, %rsp\n\t"
-        "callq KiSystemCall64Dispatcher\n\t"
-        "addq $40, %rsp\n\t"
         "movq 0*8+s_kernelSavedGprs(%rip), %rbx\n\t"
         "movq 1*8+s_kernelSavedGprs(%rip), %rbp\n\t"
         "movq 2*8+s_kernelSavedGprs(%rip), %rdi\n\t"
@@ -1201,33 +1305,74 @@ extern "C" __attribute__((naked)) void KiPageFaultStub() {
 #endif
 }
 
-extern "C" void KiClockInterruptHandler() {
+extern "C" void KiClockPreemptHandler(micant::km::ps_baremetal::TrapFrame64* frame) {
     auto& intEngine = micant::hal::idt::InterruptEngine64::get();
-    intEngine.updateSystemTime();
+    bool quantumExpired = intEngine.updateSystemTime();
     intEngine.sendEoi();
+
+    auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+    if (mp.isActive() && frame && (frame->cs & 3ULL) == 3ULL) {
+        uint32_t oldPid = 0, newPid = 0;
+        uint64_t oldCr3 = 0, newCr3 = 0;
+        uint64_t savedRip = frame->rip;
+        if (mp.onClockInterrupt(frame, quantumExpired, oldPid, newPid, oldCr3, newCr3)) {
+            if (mp.getTotalPreemptiveSwitches() <= 10) {
+                UartSerial::print("[LAPIC Vector 0x30] PREEMPTIVE SWITCH #");
+                UartSerial::printDec(static_cast<uint32_t>(mp.getTotalPreemptiveSwitches()));
+                UartSerial::print(": PID ");
+                UartSerial::printDec(oldPid);
+                UartSerial::print(" (CR3=0x");
+                UartSerial::printHex64(oldCr3);
+                UartSerial::print(" @ RIP=0x");
+                UartSerial::printHex64(savedRip);
+                UartSerial::print(") -> PID ");
+                UartSerial::printDec(newPid);
+                UartSerial::print(" (CR3=0x");
+                UartSerial::printHex64(newCr3);
+                UartSerial::print(" @ RIP=0x");
+                UartSerial::printHex64(frame->rip);
+                UartSerial::print(")\r\n");
+            }
+        }
+    }
 }
 
 extern "C" __attribute__((naked)) void KiClockInterruptStub() {
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "pushq %rax\n\t"
+        "pushq %rbx\n\t"
         "pushq %rcx\n\t"
         "pushq %rdx\n\t"
         "pushq %rsi\n\t"
         "pushq %rdi\n\t"
+        "pushq %rbp\n\t"
         "pushq %r8\n\t"
         "pushq %r9\n\t"
         "pushq %r10\n\t"
         "pushq %r11\n\t"
-        "call KiClockInterruptHandler\n\t"
+        "pushq %r12\n\t"
+        "pushq %r13\n\t"
+        "pushq %r14\n\t"
+        "pushq %r15\n\t"
+        "movq %rsp, %rcx\n\t"
+        "subq $32, %rsp\n\t"
+        "callq KiClockPreemptHandler\n\t"
+        "addq $32, %rsp\n\t"
+        "popq %r15\n\t"
+        "popq %r14\n\t"
+        "popq %r13\n\t"
+        "popq %r12\n\t"
         "popq %r11\n\t"
         "popq %r10\n\t"
         "popq %r9\n\t"
         "popq %r8\n\t"
+        "popq %rbp\n\t"
         "popq %rdi\n\t"
         "popq %rsi\n\t"
         "popq %rdx\n\t"
         "popq %rcx\n\t"
+        "popq %rbx\n\t"
         "popq %rax\n\t"
         "iretq\n\t"
     );
@@ -1944,6 +2089,165 @@ static bool executeWin32PeFromNtfs(const char* ntfsExePath) noexcept {
         return true;
     }
     return false;
+}
+
+static void appendU64Dec(char* dst, size_t cap, uint64_t val) noexcept;
+
+/**
+ * @brief Launch a true multi-process Ring-3 session with isolated hardware CR3 address spaces
+ *        (private PML4[1] @ 0x00000080'00000000 per process), live CreateProcessW / NtCreateUserProcess
+ *        child creation off NTFS 3.1, and real 100 Hz Local APIC hardware timer preemption (Vector 0x30).
+ */
+static bool executeMultiProcessCr3FromNtfs(const char* rootNtfsExePath) noexcept {
+    auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+    if (!ntfs.isMounted() || !rootNtfsExePath) return false;
+
+    UartSerial::print("\r\n=======================================================\r\n");
+    UartSerial::print("[PsCr3] Launching Multi-Process Hardware CR3 Preemptive Session: ");
+    UartSerial::print(rootNtfsExePath);
+    UartSerial::print("\r\n");
+
+    uint64_t kernelCr3 = 0;
+#if defined(__x86_64__)
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(kernelCr3));
+#endif
+    uint64_t kernelCr3Phys = kernelCr3 & micant::km::mm_baremetal::PTE_PHYS_MASK;
+
+    // Mask all legacy 8259A PIC IRQs so ONLY Local APIC Vector 0x30 fires when IF=1 in Ring 3
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+
+    s_kernelStackTopVal = reinterpret_cast<uint64_t>(s_kernelStack + sizeof(s_kernelStack) - 64);
+    auto& cpuEngine = micant::cpu::CpuHardwareEngine::get();
+    cpuEngine.initialize(s_kernelStackTopVal, reinterpret_cast<uint64_t>(&KiSystemCall64Entry));
+    loadGdtAndTss(cpuEngine.getGdtr(), micant::cpu::SELECTOR_TSS64);
+
+    auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+    mp.reset(kernelCr3Phys);
+
+    int rootSlot = mp.createProcessFromNtfs(ntfs, rootNtfsExePath, 4);
+    if (rootSlot < 0) {
+        UartSerial::print("[PsCr3] ERROR: Failed to create isolated CR3 root process!\r\n");
+        return false;
+    }
+
+    const auto* rootProc = mp.getSlot(static_cast<size_t>(rootSlot));
+    UartSerial::print("[PsCr3] Created Root Process '");
+    UartSerial::print(rootProc->imageName);
+    UartSerial::print("' PID=");
+    UartSerial::printDec(rootProc->pid);
+    UartSerial::print(" | Private CR3=0x");
+    UartSerial::printHex64(rootProc->cr3Phys);
+    UartSerial::print(" | Entry=0x");
+    UartSerial::printHex64(rootProc->entryPointVa);
+    UartSerial::print(" | Relocs=");
+    UartSerial::printDec(rootProc->exeRelocs);
+    UartSerial::print(" | DLLs=");
+    UartSerial::printDec(rootProc->dllCount);
+    UartSerial::print(" (IAT=");
+    UartSerial::printDec(rootProc->exeImportsBound);
+    UartSerial::print("+");
+    UartSerial::printDec(rootProc->dllImportsBound);
+    UartSerial::print(")\r\n");
+
+    s_ring3Telemetry.userProcessExitedCleanly = false;
+    s_ring3Telemetry.userlandExecutionCount++;
+
+    if (!mp.activateInitialSlot(static_cast<size_t>(rootSlot))) {
+        return false;
+    }
+
+    uint64_t entryRip = rootProc->trapFrame.rip;
+    uint64_t userRsp  = rootProc->trapFrame.rsp;
+    uint64_t tebVa    = rootProc->tebVa;
+
+    UartSerial::print("[PsCr3] Entering Ring 3 (CPL=3, RFLAGS=0x0202 IF=1) with LAPIC 100Hz Preemption ARMED...\r\n");
+
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "movq %%rbx, 0*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%rbp, 1*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%rdi, 2*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%rsi, 3*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r12, 4*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r13, 5*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r14, 6*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r15, 7*8+s_kernelSavedGprs(%%rip)\n\t"
+        "leaq 1f(%%rip), %%rax\n\t"
+        "movq %%rax, s_kernelReturnRipVal(%%rip)\n\t"
+        "movq %%rsp, s_kernelReturnRspVal(%%rip)\n\t"
+        "movw $0x002B, %%ax\n\t"
+        "movw %%ax, %%ds\n\t"
+        "movw %%ax, %%es\n\t"
+        "movw %%ax, %%fs\n\t"
+        "movw %%ax, %%gs\n\t"
+        "movl $0xC0000101, %%ecx\n\t"
+        "movq %2, %%rax\n\t"
+        "movq %2, %%rdx\n\t"
+        "shrq $32, %%rdx\n\t"
+        "wrmsr\n\t"
+        "pushq $0x002B\n\t"
+        "pushq %1\n\t"
+        "pushq $0x0202\n\t"
+        "pushq $0x0033\n\t"
+        "pushq %0\n\t"
+        "iretq\n\t"
+        "1:\n\t"
+        "cli\n\t"
+        :
+        : "r"(entryRip), "r"(userRsp), "r"(tebVa)
+        : "rax", "rcx", "rdx", "memory"
+    );
+    // Guarantee kernel CR3 & default VAD restored even if a resilient trap occurred
+    __asm__ __volatile__("mov %0, %%cr3" : : "r"(kernelCr3) : "memory");
+#endif
+    micant::km::mm_baremetal::BareMetalVadTable::setActiveTable(nullptr);
+
+    UartSerial::print("[PsCr3] Multi-Process Session Complete: Procs=");
+    UartSerial::printDec(static_cast<uint32_t>(mp.getTotalProcessesCreated()));
+    UartSerial::print(" Created / ");
+    UartSerial::printDec(static_cast<uint32_t>(mp.getTotalProcessesExited()));
+    UartSerial::print(" Exited | LAPIC R3 Ticks=");
+    UartSerial::printDec(static_cast<uint32_t>(mp.getTotalClockTicksInR3()));
+    UartSerial::print(" | Hardware Preemptions=");
+    UartSerial::printDec(static_cast<uint32_t>(mp.getTotalPreemptiveSwitches()));
+    UartSerial::print("\r\n");
+    for (size_t i = 0; i < micant::km::ps_baremetal::BareMetalCr3ProcessManager::MAX_PROCS; ++i) {
+        const auto* sl = mp.getSlot(i);
+        if (!sl) continue;
+        UartSerial::print("  -> PID ");
+        UartSerial::printDec(sl->pid);
+        UartSerial::print(" (");
+        UartSerial::print(sl->imageName);
+        UartSerial::print("): CR3=0x");
+        UartSerial::printHex64(sl->cr3Phys);
+        UartSerial::print(" | Ticks=");
+        UartSerial::printDec(static_cast<uint32_t>(sl->cpuTicks));
+        UartSerial::print(" | PreemptedIn=");
+        UartSerial::printDec(static_cast<uint32_t>(sl->preemptedInCount));
+        UartSerial::print(" | Syscalls=");
+        UartSerial::printDec(static_cast<uint32_t>(sl->syscallCount));
+        UartSerial::print(" | ExitCode=");
+        UartSerial::printDec(sl->exitCode);
+        UartSerial::print("\r\n");
+    }
+    UartSerial::print("=======================================================\r\n");
+
+    bool ok = s_ring3Telemetry.userProcessExitedCleanly &&
+              mp.getTotalProcessesCreated() >= 2 &&
+              mp.getTotalProcessesExited() == mp.getTotalProcessesCreated();
+    if (ok) {
+        char sumLog[128];
+        copyStr(sumLog, "[PsCr3] Isolated CR3 Multi-Proc OK (", sizeof(sumLog));
+        appendU64Dec(sumLog, sizeof(sumLog), mp.getTotalProcessesCreated());
+        concatStr(sumLog, " Procs | ", sizeof(sumLog));
+        appendU64Dec(sumLog, sizeof(sumLog), mp.getTotalPreemptiveSwitches());
+        concatStr(sumLog, " LAPIC Preemptions | ", sizeof(sumLog));
+        appendU64Dec(sumLog, sizeof(sumLog), mp.getTotalClockTicksInR3());
+        concatStr(sumLog, " Ticks)", sizeof(sumLog));
+        LogKernel(sumLog);
+    }
+    return ok;
 }
 
 static bool peImageHasImports(const uint8_t* raw, size_t size) noexcept {
@@ -2950,10 +3254,14 @@ extern "C" micant::NtStatus KiSystemStartup(
         DrawCard(3, "EXECUTIVE STATE", "SMP 8T | High-Half | APIC 100Hz", micant::bootvid::Color{100, 240, 160});
     }
 
-    // Live Dynamic Win32 PE32+ Execution off Mounted NTFS 3.1 Volume (real kernel32.dll IAT binding)
+    // Live Dynamic Win32 PE32+ Execution off Mounted NTFS 3.1 Volume (real kernel32.dll -> ntdll.dll IAT binding)
     if (s_ntfsMounted) {
         if (executeWin32PeFromNtfs("\\Windows\\System32\\win32_ntfs_probe.exe")) {
             DrawCard(3, "EXECUTIVE STATE", "NTFS + Live Win32 DLLs OK", micant::bootvid::Color{100, 240, 160});
+        }
+        // Live Multi-Process Hardware CR3 Virtual Memory Isolation + 100 Hz LAPIC Preemptive Multitasking
+        if (executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_proc_a.exe")) {
+            DrawCard(3, "EXECUTIVE STATE", "Multi-CR3 + Preempt OK", micant::bootvid::Color{100, 240, 160});
         }
     }
 
@@ -3154,7 +3462,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         DrawCard(1, "PHYSICAL MEMORY", "32,768 MB ECC RAM", micant::bootvid::Color{100, 240, 160});
         DrawCard(2, "STORAGE & C: DRIVE", s_ntfsMounted ? s_storageCardText : "sdb2 FAT32 | 128GB C:",
                  s_ntfsMounted ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{0, 210, 255});
-        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "NTFS + Live Win32 DLLs OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
+        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "Multi-CR3 + Preempt OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
 
         // Left Window: Subsystems
         videoDriver.fillRectangle(16, midY, leftW, midH, micant::bootvid::Color{14, 18, 28});
@@ -3297,6 +3605,24 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("  Storage:      AHCI SATA 6Gbps DMA (128GB MICA_SYS / 1.7TB MICA_DATA)", micant::bootvid::Color{180, 200, 230});
             ShellAddLine("  Clean-Room:   100% ISO C++23 Clean-Room Implementation (Zero Leaked Code)", micant::bootvid::Color{255, 200, 80});
             LogKernel("Shell: ver -> MicaNT Version 10.0 Dave Cutler Bare-Metal Edition");
+        } else if (cmd[0] == 'm' && cmd[1] == 'p' && (cmd[2] == '\0' || cmd[2] == ' ')) {
+            ShellClearOutput();
+            if (s_ntfsMounted) {
+                ShellAddLine("Launching Dual-Process Isolated CR3 + 100Hz LAPIC Preemptive Suite...", micant::bootvid::Color{0, 229, 255});
+                bool ok = executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_proc_a.exe");
+                auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+                char sum[120];
+                copyStr(sum, ok ? "Multi-CR3 PASS: " : "Multi-CR3 Status: ", sizeof(sum));
+                appendU64Dec(sum, sizeof(sum), mp.getTotalProcessesCreated());
+                concatStr(sum, " Procs | ", sizeof(sum));
+                appendU64Dec(sum, sizeof(sum), mp.getTotalPreemptiveSwitches());
+                concatStr(sum, " Hardware LAPIC Preemptions | ", sizeof(sum));
+                appendU64Dec(sum, sizeof(sum), mp.getTotalClockTicksInR3());
+                concatStr(sum, " Ticks", sizeof(sum));
+                ShellAddLine(sum, ok ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{255, 200, 80});
+            } else {
+                ShellAddLine("NTFS 3.1 volume not mounted; cannot load win32_proc_a.exe.", micant::bootvid::Color{255, 100, 100});
+            }
         } else if (cmd[0] == 'c' && cmd[1] == 'l' && cmd[2] == 's') {
             ShellClearOutput();
             ShellAddLine("MicaNT Bare-Metal Executive Shell ready. Type 'help' for command list.", micant::bootvid::Color{100, 240, 160});
@@ -3744,9 +4070,15 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine(l2, micant::bootvid::Color{200, 220, 245});
 
                 LogKernel("Shell: Executing PE32+ Userland Binary from C: via AHCI DMA...");
-                bool ok = (s_ntfsMounted && peImageHasImports(s_diskAppBuffer, bytesRead))
-                    ? executeWin32PeFromNtfs(pathBuf)
-                    : transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, targetName);
+                bool useCr3Mp = s_ntfsMounted && (
+                    strEqual(cleanTarget, "win32_proc_a.exe") ||
+                    strEqual(cleanTarget, "win32_proc_b.exe")
+                );
+                bool ok = useCr3Mp
+                    ? executeMultiProcessCr3FromNtfs(pathBuf)
+                    : ((s_ntfsMounted && peImageHasImports(s_diskAppBuffer, bytesRead))
+                        ? executeWin32PeFromNtfs(pathBuf)
+                        : transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, targetName));
                 if (ok) {
                     ShellAddLine("Privilege Mode: Ring 3 User Mode Handover OK (CS=0x0033, CPL=3)", micant::bootvid::Color{100, 240, 160});
                     ShellAddLine("Execution:      NtTerminateProcess clean exit (STATUS_SUCCESS 0x00000000)", micant::bootvid::Color{100, 240, 160});

@@ -416,6 +416,43 @@ public:
 #endif
         return true;
     }
+
+    /**
+     * @brief Allocate a brand-new 4KB physical PML4 page for an isolated Ring-3 process,
+     *        cloning kernel/MMIO mappings from kernelCr3Phys while clearing private user PML4[1].
+     */
+    static uint64_t cloneKernelPml4(uint64_t kernelCr3Phys) noexcept {
+        if (kernelCr3Phys == 0) return 0;
+        uint64_t newCr3Phys = BareMetalPfnAllocator::get().allocatePage();
+        if (newCr3Phys == 0) return 0;
+
+        const auto* srcPml4 = reinterpret_cast<const uint64_t*>(kernelCr3Phys);
+        auto* dstPml4 = reinterpret_cast<uint64_t*>(newCr3Phys);
+        for (size_t i = 0; i < 512; ++i) {
+            dstPml4[i] = srcPml4[i];
+        }
+        // Clear PML4[1] (0x00000080'00000000 .. 0x000000FF'FFFFFFFF) for isolated per-process user space
+        dstPml4[1] = 0;
+        return newCr3Phys;
+    }
+
+    /**
+     * @brief Allocate distinct physical PFN pages and map [vaBase, vaBase + sizeBytes)
+     *        into the target process's private CR3 page table.
+     */
+    static bool mapPrivateUserRange(uint64_t cr3Phys, uint64_t vaBase, size_t sizeBytes, uint64_t flags) noexcept {
+        if (cr3Phys == 0 || sizeBytes == 0) return false;
+        uint64_t startVa = vaBase & ~PAGE_MASK_4KB;
+        size_t alignedSize = (sizeBytes + PAGE_MASK_4KB) & ~PAGE_MASK_4KB;
+        for (uint64_t offset = 0; offset < alignedSize; offset += PAGE_SIZE_4KB) {
+            uint64_t phys = BareMetalPfnAllocator::get().allocatePage();
+            if (phys == 0) return false;
+            if (!mapVirtualPage(cr3Phys, startVa + offset, phys, flags)) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 // ============================================================================
@@ -436,6 +473,8 @@ public:
     static constexpr size_t MAX_VADS = 64;
 
 private:
+    static inline BareMetalVadTable* s_activeTableOverride{nullptr};
+
     BareMetalVad m_vads[MAX_VADS]{};
     uint64_t     m_nextDynamicVa{0x00000000'20000000ULL}; // User dynamic allocation base: 512 MB
     uint64_t     m_heapPoolBase{0};
@@ -445,7 +484,15 @@ private:
 public:
     static BareMetalVadTable& get() noexcept {
         static BareMetalVadTable instance;
-        return instance;
+        return s_activeTableOverride ? *s_activeTableOverride : instance;
+    }
+
+    static void setActiveTable(BareMetalVadTable* tbl) noexcept {
+        s_activeTableOverride = tbl;
+    }
+
+    void setNextDynamicVa(uint64_t va) noexcept {
+        m_nextDynamicVa = va;
     }
 
     void initialize() noexcept {

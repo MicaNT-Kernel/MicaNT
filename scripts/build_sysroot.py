@@ -228,21 +228,28 @@ def main():
         shutil.copy2(cmd_exe, micant_efi_dir / "app.exe")
         print(f"      {GREEN}cmd.exe deployed to EFI/MicaNT/app.exe{RESET}")
 
-    # Build authentic dynamically linked Win32 PE32+ executable (imports KERNEL32.dll via real IAT)
-    win32_probe_src = repo_root / "tools" / "win32_ntfs_probe.cpp"
+    # Build authentic dynamically linked Win32 PE32+ executables (import KERNEL32.dll -> NTDLL.dll via real IAT)
     kernel32_implib = repo_root / "build" / "libkernel32.a"
-    if win32_probe_src.exists() and kernel32_implib.exists():
-        win32_probe_out = system32 / "win32_ntfs_probe.exe"
-        cmd_probe = [
-            cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
-            "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
-            "-mno-stack-arg-probe", "-O2",
-            "-Wl,--subsystem,console", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
-            "-nostdlib", str(win32_probe_src), str(kernel32_implib),
-            "-o", str(win32_probe_out)
-        ]
-        run_command(cmd_probe, "win32_ntfs_probe.exe")
-        print(f"      {GREEN}Compiled win32_ntfs_probe.exe ({win32_probe_out.stat().st_size:,} bytes, dynamic KERNEL32.dll IAT){RESET}")
+    win32_apps = [
+        ("tools/win32_ntfs_probe.cpp", "win32_ntfs_probe.exe"),
+        ("tools/win32_proc_a.cpp",     "win32_proc_a.exe"),
+        ("tools/win32_proc_b.cpp",     "win32_proc_b.exe"),
+    ]
+    if kernel32_implib.exists():
+        for rel_src, exe_name in win32_apps:
+            app_src = repo_root / rel_src
+            if app_src.exists():
+                app_out = system32 / exe_name
+                cmd_app = [
+                    cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
+                    "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
+                    "-mno-stack-arg-probe", "-O2",
+                    "-Wl,--subsystem,console", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
+                    "-nostdlib", str(app_src), str(kernel32_implib),
+                    "-o", str(app_out)
+                ]
+                run_command(cmd_app, exe_name)
+                print(f"      {GREEN}Compiled {exe_name} ({app_out.stat().st_size:,} bytes, dynamic KERNEL32.dll IAT){RESET}")
 
     # 7. Generate Registry Hives & Network Configs
     print(f"{YELLOW}[6/6] Populating Registry Hives & Network Configs...{RESET}")

@@ -315,6 +315,29 @@ __declspec(dllexport) uint64_t NtYieldExecution() noexcept {
     return NtSyscall3(0x46, 0, 0, 0);
 }
 
+__declspec(dllexport) uint64_t NtCreateUserProcess(
+    void** processHandle,
+    void** threadHandle,
+    ObjectAttributes* imagePathAttr,
+    uint64_t* outPid
+) noexcept {
+    if (!imagePathAttr || !imagePathAttr->objectName || !imagePathAttr->objectName->buffer) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    const wchar_t* wpath = imagePathAttr->objectName->buffer;
+    uint64_t childPid = NtSyscall3(0x58, reinterpret_cast<uint64_t>(wpath), 0, 0);
+    if (childPid == 0 || childPid == ~0ULL) {
+        if (processHandle) *processHandle = nullptr;
+        if (threadHandle)  *threadHandle  = nullptr;
+        if (outPid)        *outPid        = 0;
+        return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    if (processHandle) *processHandle = reinterpret_cast<void*>(childPid);
+    if (threadHandle)  *threadHandle  = reinterpret_cast<void*>(childPid + 100);
+    if (outPid)        *outPid        = childPid;
+    return NT_STATUS_SUCCESS;
+}
+
 __declspec(dllexport) uint64_t NtGdiGetVideoInfo(void* videoInfo) noexcept {
     return NtSyscall3(0x80, reinterpret_cast<uint64_t>(videoInfo), 0, 0);
 }

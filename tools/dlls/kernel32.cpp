@@ -91,6 +91,19 @@ __declspec(dllimport) uint64_t NtWriteFile(
     uint32_t* key
 ) noexcept;
 __declspec(dllimport) uint64_t NtClose(void* handle) noexcept;
+__declspec(dllimport) uint64_t NtCreateUserProcess(
+    void** processHandle,
+    void** threadHandle,
+    ObjectAttributes* imagePathAttr,
+    uint64_t* outPid
+) noexcept;
+
+struct ProcessInformation {
+    void*    hProcess;
+    void*    hThread;
+    uint32_t dwProcessId;
+    uint32_t dwThreadId;
+};
 
 bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
@@ -143,6 +156,45 @@ __declspec(dllexport) uint32_t GetCurrentThreadId() noexcept {
 
 __declspec(dllexport) void Sleep(uint32_t /*dwMilliseconds*/) noexcept {
     NtYieldExecution();
+}
+
+__declspec(dllexport) int32_t CreateProcessW(
+    const wchar_t* lpApplicationName,
+    wchar_t* /*lpCommandLine*/,
+    void* /*lpProcessAttributes*/,
+    void* /*lpThreadAttributes*/,
+    int32_t /*bInheritHandles*/,
+    uint32_t /*dwCreationFlags*/,
+    void* /*lpEnvironment*/,
+    const wchar_t* /*lpCurrentDirectory*/,
+    void* /*lpStartupInfo*/,
+    ProcessInformation* lpProcessInformation
+) noexcept {
+    if (!lpApplicationName) return 0;
+
+    UnicodeString uPath{0, 0, nullptr};
+    RtlInitUnicodeString(&uPath, lpApplicationName);
+
+    ObjectAttributes oa{};
+    oa.length = sizeof(ObjectAttributes);
+    oa.rootDirectory = nullptr;
+    oa.objectName = &uPath;
+    oa.attributes = 0x00000040u;
+
+    void* hProc = nullptr;
+    void* hThread = nullptr;
+    uint64_t childPid = 0;
+    uint64_t st = NtCreateUserProcess(&hProc, &hThread, &oa, &childPid);
+    if (!NtSucceeded(st) || childPid == 0) {
+        return 0;
+    }
+    if (lpProcessInformation) {
+        lpProcessInformation->hProcess = hProc;
+        lpProcessInformation->hThread = hThread;
+        lpProcessInformation->dwProcessId = static_cast<uint32_t>(childPid);
+        lpProcessInformation->dwThreadId = static_cast<uint32_t>(childPid + 100);
+    }
+    return 1;
 }
 
 // ============================================================================
