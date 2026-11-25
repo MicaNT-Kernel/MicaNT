@@ -1831,9 +1831,11 @@ static bool executeWin32PeFromNtfs(const char* ntfsExePath) noexcept {
     UartSerial::printDec(exeMod.importsUnresolved);
     UartSerial::print("\r\n");
 
+    bool allDllImportsOk = true;
     for (size_t i = 0; i < loader.getLoadedModuleCount(); ++i) {
         const auto* dll = loader.getModule(i);
         if (dll && dll->inUse) {
+            if (dll->importsUnresolved != 0) allDllImportsOk = false;
             UartSerial::print("  -> Loaded System32 DLL from NTFS: ");
             UartSerial::print(dll->name);
             UartSerial::print(" @ 0x");
@@ -1842,11 +1844,15 @@ static bool executeWin32PeFromNtfs(const char* ntfsExePath) noexcept {
             UartSerial::printDec(dll->sizeOfImage);
             UartSerial::print(" B | Relocs=");
             UartSerial::printDec(dll->relocsApplied);
+            UartSerial::print(" | IAT Bound=");
+            UartSerial::printDec(dll->importsBound);
+            UartSerial::print(" | Unresolved=");
+            UartSerial::printDec(dll->importsUnresolved);
             UartSerial::print(")\r\n");
         }
     }
 
-    if (!importsOk || exeMod.entryPointVa == 0 || exeMod.importsBound == 0) {
+    if (!importsOk || !allDllImportsOk || exeMod.entryPointVa == 0 || exeMod.importsBound == 0) {
         UartSerial::print("[LdrBareMetal] ERROR: Import binding failed or entry point missing.\r\n");
         return false;
     }
@@ -1932,11 +1938,64 @@ static bool executeWin32PeFromNtfs(const char* ntfsExePath) noexcept {
 #endif
 
     if (s_ring3Telemetry.userProcessExitedCleanly) {
-        UartSerial::print("[LdrBareMetal] Dynamic Win32 PE32+ Process Exited Cleanly via kernel32!ExitProcess!\r\n");
+        UartSerial::print("[LdrBareMetal] Dynamic Win32 PE32+ Exited Cleanly via kernel32->ntdll!NtTerminateProcess!\r\n");
         UartSerial::print("=======================================================\r\n");
-        LogKernel("[Ldr] Live Win32 PE32+ + dynamic kernel32.dll off NTFS VERIFIED OK.");
+        LogKernel("[Ldr] Live Win32 PE32+ -> kernel32.dll -> ntdll.dll off NTFS OK.");
         return true;
     }
+    return false;
+}
+
+static bool peImageHasImports(const uint8_t* raw, size_t size) noexcept {
+    if (!raw || size < sizeof(micant::km::pe_baremetal::DosHeader)) return false;
+    const auto* dos = reinterpret_cast<const micant::km::pe_baremetal::DosHeader*>(raw);
+    if (dos->e_magic != 0x5A4D || dos->e_lfanew < 0) return false;
+    size_t ntOff = static_cast<size_t>(dos->e_lfanew);
+    if (ntOff + sizeof(micant::km::pe_baremetal::NtHeaders64) > size) return false;
+    const auto* nt = reinterpret_cast<const micant::km::pe_baremetal::NtHeaders64*>(raw + ntOff);
+    if (nt->signature != 0x00004550u || nt->optionalHeader.magic != 0x020Bu) return false;
+    if (nt->optionalHeader.numberOfRvaAndSizes <= micant::km::pe_baremetal::DIR_IMPORT) return false;
+    const auto& imp = nt->optionalHeader.dataDirectory[micant::km::pe_baremetal::DIR_IMPORT];
+    return imp.virtualAddress != 0 && imp.size != 0;
+}
+
+static void appendU64Dec(char* dst, size_t cap, uint64_t val) noexcept {
+    char tmp[24]{};
+    size_t n = 0;
+    if (val == 0) {
+        tmp[n++] = '0';
+    } else {
+        while (val > 0 && n < 22) {
+            tmp[n++] = static_cast<char>('0' + (val % 10));
+            val /= 10;
+        }
+    }
+    char rev[24]{};
+    for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
+    rev[n] = '\0';
+    concatStr(dst, rev, cap);
+}
+
+static bool ntfsResolveExecutable(const char* cleanTarget, char* outPath, size_t outCap, size_t& outBytesRead) noexcept {
+    auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+    outBytesRead = 0;
+    if (!ntfs.isMounted() || !cleanTarget || !outPath) return false;
+
+    if (cleanTarget[0] == '\\' || cleanTarget[0] == '/') {
+        copyStr(outPath, cleanTarget, outCap);
+        return ntfs.readFile(outPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), outBytesRead) && outBytesRead > 0;
+    }
+
+    const char* prefixes[3] = { "\\Windows\\System32\\", "\\MicaNT\\System32\\", "\\" };
+    for (size_t i = 0; i < 3; ++i) {
+        copyStr(outPath, prefixes[i], outCap);
+        concatStr(outPath, cleanTarget, outCap);
+        if (ntfs.readFile(outPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), outBytesRead) && outBytesRead > 0) {
+            return true;
+        }
+    }
+    copyStr(outPath, "\\Windows\\System32\\", outCap);
+    concatStr(outPath, cleanTarget, outCap);
     return false;
 }
 
@@ -1951,6 +2010,7 @@ struct Fat32ProbeResult {
 };
 
 static char s_currentDrive = 'C';
+static bool s_ntfsMounted = false;
 
 static inline micant::km::ahci_baremetal::Fat32Volume& getTargetVolume(const char* path = nullptr) noexcept {
     if (path && (path[0] == 'D' || path[0] == 'd') && path[1] == ':') {
@@ -2080,10 +2140,30 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         copyStr(reply, "MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)\r\n"
                        "Sovereign 64-Bit Operating System running on Supermicro X11SSH-F\r\n", maxReply);
     } else if (cmd[0] == 'd' && cmd[1] == 'r' && cmd[2] == 'i' && cmd[3] == 'v' && cmd[4] == 'e' && (cmd[5] == 's' || cmd[5] == '\0' || cmd[5] == ' ' || cmd[5] == '\r')) { // drives
-        copyStr(reply, "Mounted Storage Volumes:\r\n"
-                       "  C: [MICA_SYS]  128 GB FAT32 (sdb2, LBA 2,099,200) - OS System Root\r\n"
-                       "  D: [MICA_DATA] 1.7 TB FAT32 (sdb3, LBA 270,534,656) - High-Capacity Volume\r\n"
-                       "  E: [EXT4]       20 GB Ext4  (sda2 RO) - Safe Landing Linux Fallback\r\n", maxReply);
+        if (s_ntfsMounted) {
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            uint64_t volMb = (ntfs.getTotalSectors() * 512ULL) / (1024ULL * 1024ULL);
+            copyStr(reply, "Mounted Storage Volumes:\r\n  C: [", maxReply);
+            concatStr(reply, ntfs.getVolumeLabel(), maxReply);
+            concatStr(reply, "]  ", maxReply);
+            appendU64Dec(reply, maxReply, volMb);
+            concatStr(reply, " MB NTFS ", maxReply);
+            appendU64Dec(reply, maxReply, ntfs.getMajorVersion());
+            concatStr(reply, ".", maxReply);
+            appendU64Dec(reply, maxReply, ntfs.getMinorVersion());
+            concatStr(reply, " (GPT LBA ", maxReply);
+            appendU64Dec(reply, maxReply, ntfs.getPartitionLba());
+            concatStr(reply, ", $MFT LCN ", maxReply);
+            appendU64Dec(reply, maxReply, ntfs.getMftClusterNumber());
+            concatStr(reply, ") - Active OS Root\r\n"
+                             "  D: [MICA_DATA] 1.7 TB FAT32 (sdb3, LBA 270,534,656) - High-Capacity Volume\r\n"
+                             "  E: [EXT4]       20 GB Ext4  (sda2 RO) - Safe Landing Linux Fallback\r\n", maxReply);
+        } else {
+            copyStr(reply, "Mounted Storage Volumes:\r\n"
+                           "  C: [MICA_SYS]  128 GB FAT32 (sdb2, LBA 2,099,200) - OS System Root\r\n"
+                           "  D: [MICA_DATA] 1.7 TB FAT32 (sdb3, LBA 270,534,656) - High-Capacity Volume\r\n"
+                           "  E: [EXT4]       20 GB Ext4  (sda2 RO) - Safe Landing Linux Fallback\r\n", maxReply);
+        }
     } else if ((cmd[0] == 'o' && cmd[1] == 'b' && cmd[2] == 'j') || (cmd[0] == 'o' && cmd[1] == 'b' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\r'))) {
         auto& ob = micant::km::ob_baremetal::BareMetalObjectManager::get();
         ob.dumpNamespace(reply, maxReply);
@@ -2218,7 +2298,72 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
     } else if (cmd[0] == 'd' && cmd[1] == 'i') { // dir
         const char* arg = cmd + 3;
         while (*arg == ' ') ++arg;
-        const char* dirPath = (*arg != '\0' && *arg != '\r' && *arg != '\n') ? arg : "\\";
+        char dirBuf[128]{};
+        size_t di = 0;
+        while (*arg && *arg != '\r' && *arg != '\n' && di + 1 < sizeof(dirBuf)) dirBuf[di++] = *arg++;
+        while (di > 0 && dirBuf[di - 1] == ' ') --di;
+        dirBuf[di] = '\0';
+        const char* dirPath = (di > 0) ? dirBuf : "\\";
+        char driveLetter = s_currentDrive;
+        if ((dirPath[0] == 'C' || dirPath[0] == 'c') && dirPath[1] == ':') driveLetter = 'C';
+        else if ((dirPath[0] == 'D' || dirPath[0] == 'd') && dirPath[1] == ':') driveLetter = 'D';
+
+        if (s_ntfsMounted && driveLetter == 'C') {
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            micant::km::ntfs_baremetal::NtfsDirEntry ntfsDir{};
+            if (ntfs.findPath(dirPath, ntfsDir) && ntfsDir.isDirectory) {
+                copyStr(reply, "Directory of C:", maxReply);
+                concatStr(reply, dirPath, maxReply);
+                concatStr(reply, " [NTFS ", maxReply);
+                appendU64Dec(reply, maxReply, ntfs.getMajorVersion());
+                concatStr(reply, ".", maxReply);
+                appendU64Dec(reply, maxReply, ntfs.getMinorVersion());
+                concatStr(reply, " DMA]\r\n\r\n", maxReply);
+
+                size_t fileCount = 0;
+                size_t dirCount = 0;
+                uint64_t totalBytes = 0;
+                ntfs.iterateDirectory(dirPath, [&](const micant::km::ntfs_baremetal::NtfsDirEntry& e) noexcept {
+                    if (e.isDirectory) {
+                        dirCount++;
+                        concatStr(reply, "  <DIR>          ", maxReply);
+                        concatStr(reply, e.name, maxReply);
+                        concatStr(reply, "\r\n", maxReply);
+                    } else {
+                        fileCount++;
+                        totalBytes += e.fileSize;
+                        char szStr[20];
+                        formatSize(e.fileSize, szStr, sizeof(szStr));
+                        concatStr(reply, "  ", maxReply);
+                        size_t sl = strLen(szStr);
+                        while (sl < 12) { concatStr(reply, " ", maxReply); sl++; }
+                        concatStr(reply, szStr, maxReply);
+                        concatStr(reply, "   ", maxReply);
+                        concatStr(reply, e.name, maxReply);
+                        concatStr(reply, "\r\n", maxReply);
+                    }
+                });
+
+                char fcStr[16], tbStr[24], dcStr[16], volBytesStr[24];
+                formatSize(fileCount, fcStr, sizeof(fcStr));
+                formatSize(totalBytes, tbStr, sizeof(tbStr));
+                formatSize(dirCount, dcStr, sizeof(dcStr));
+                formatSize(ntfs.getTotalSectors() * 512ULL, volBytesStr, sizeof(volBytesStr));
+                concatStr(reply, "\r\n               ", maxReply);
+                concatStr(reply, fcStr, maxReply);
+                concatStr(reply, " File(s)   ", maxReply);
+                concatStr(reply, tbStr, maxReply);
+                concatStr(reply, " bytes\r\n               ", maxReply);
+                concatStr(reply, dcStr, maxReply);
+                concatStr(reply, " Dir(s)    ", maxReply);
+                concatStr(reply, volBytesStr, maxReply);
+                concatStr(reply, " bytes total (NTFS 3.1)\r\n", maxReply);
+            } else {
+                copyStr(reply, "Directory not found on NTFS C:: ", maxReply);
+                concatStr(reply, dirPath, maxReply);
+                concatStr(reply, "\r\n", maxReply);
+            }
+        } else {
         auto& fs = getTargetVolume(dirPath);
 
         micant::km::ahci_baremetal::Fat32DirEntry targetDir{};
@@ -2288,6 +2433,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             concatStr(reply, dirPath, maxReply);
             concatStr(reply, "\r\n", maxReply);
         }
+        }
     } else if (cmd[0] == 't' && cmd[1] == 'y' && cmd[2] == 'p' && cmd[3] == 'e' && (cmd[4] == ' ' || cmd[4] == '\0' || cmd[4] == '\r')) { // type <file>
         const char* arg = cmd + 4;
         while (*arg == ' ') ++arg;
@@ -2295,15 +2441,30 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         size_t pi = 0;
         while (*arg && *arg != ' ' && *arg != '\r' && *arg != '\n' && pi + 1 < sizeof(pathBuf)) pathBuf[pi++] = *arg++;
         pathBuf[pi] = '\0';
-        auto& fs = getTargetVolume(pathBuf);
+        char driveLetter = s_currentDrive;
+        if ((pathBuf[0] == 'C' || pathBuf[0] == 'c') && pathBuf[1] == ':') driveLetter = 'C';
+        else if ((pathBuf[0] == 'D' || pathBuf[0] == 'd') && pathBuf[1] == ':') driveLetter = 'D';
         alignas(16) static char fileBuf[512]{};
         size_t bytesRead = 0;
-        bool ok = fs.readFile(pathBuf, fileBuf, sizeof(fileBuf) - 1, bytesRead);
-        if (!ok && pathBuf[0] != '\\' && pathBuf[0] != '/') {
-            char alt[128];
-            copyStr(alt, "\\MicaNT\\", sizeof(alt));
-            concatStr(alt, pathBuf, sizeof(alt));
-            ok = fs.readFile(alt, fileBuf, sizeof(fileBuf) - 1, bytesRead);
+        bool ok = false;
+        if (s_ntfsMounted && driveLetter == 'C') {
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            ok = ntfs.readFile(pathBuf, fileBuf, sizeof(fileBuf) - 1, bytesRead);
+            if (!ok && pathBuf[0] != '\\' && pathBuf[0] != '/') {
+                char alt[128];
+                copyStr(alt, "\\MicaNT\\", sizeof(alt));
+                concatStr(alt, pathBuf, sizeof(alt));
+                ok = ntfs.readFile(alt, fileBuf, sizeof(fileBuf) - 1, bytesRead);
+            }
+        } else {
+            auto& fs = getTargetVolume(pathBuf);
+            ok = fs.readFile(pathBuf, fileBuf, sizeof(fileBuf) - 1, bytesRead);
+            if (!ok && pathBuf[0] != '\\' && pathBuf[0] != '/') {
+                char alt[128];
+                copyStr(alt, "\\MicaNT\\", sizeof(alt));
+                concatStr(alt, pathBuf, sizeof(alt));
+                ok = fs.readFile(alt, fileBuf, sizeof(fileBuf) - 1, bytesRead);
+            }
         }
         if (ok && bytesRead > 0) {
             fileBuf[bytesRead] = '\0';
@@ -2338,30 +2499,45 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
     } else if (cmd[0] == 'r' && cmd[1] == 'u' && cmd[2] == 'n') { // run <app>
         const char* arg = cmd + 3;
         while (*arg == ' ') ++arg;
-        const char* targetName = (*arg != '\0' && *arg != '\r' && *arg != '\n') ? arg : "app.exe";
-        char pathBuf[128];
-        if (targetName[0] != '\\' && targetName[0] != '/') {
-            copyStr(pathBuf, "\\MicaNT\\System32\\", sizeof(pathBuf));
-            concatStr(pathBuf, targetName, sizeof(pathBuf));
-        } else {
-            copyStr(pathBuf, targetName, sizeof(pathBuf));
+        char cleanTarget[64]{};
+        size_t ti = 0;
+        while (*arg && *arg != ' ' && *arg != '\r' && *arg != '\n' && ti + 1 < sizeof(cleanTarget)) {
+            cleanTarget[ti++] = *arg++;
         }
+        cleanTarget[ti] = '\0';
+        if (ti == 0) copyStr(cleanTarget, s_ntfsMounted ? "win32_ntfs_probe.exe" : "app.exe", sizeof(cleanTarget));
+        size_t tl = strLen(cleanTarget);
+        if (tl < 4 || cleanTarget[tl - 4] != '.') concatStr(cleanTarget, ".exe", sizeof(cleanTarget));
 
-        auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+        char pathBuf[128]{};
         size_t bytesRead = 0;
-        bool readOk = fs.readFile(pathBuf, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
-        if (!readOk && targetName[0] != '\\' && targetName[0] != '/') {
-            char altPath[128];
-            copyStr(altPath, "\\", sizeof(altPath));
-            concatStr(altPath, targetName, sizeof(altPath));
-            readOk = fs.readFile(altPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+        bool readOk = false;
+        if (s_ntfsMounted) {
+            readOk = ntfsResolveExecutable(cleanTarget, pathBuf, sizeof(pathBuf), bytesRead);
+        } else {
+            if (cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
+                copyStr(pathBuf, "\\MicaNT\\System32\\", sizeof(pathBuf));
+                concatStr(pathBuf, cleanTarget, sizeof(pathBuf));
+            } else {
+                copyStr(pathBuf, cleanTarget, sizeof(pathBuf));
+            }
+            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            readOk = fs.readFile(pathBuf, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            if (!readOk && cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
+                char altPath[128];
+                copyStr(altPath, "\\", sizeof(altPath));
+                concatStr(altPath, cleanTarget, sizeof(altPath));
+                readOk = fs.readFile(altPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            }
         }
 
         if (readOk && bytesRead > 0) {
-            bool ok = transitionToRing3(s_diskAppBuffer, bytesRead, true, nullptr, targetName);
+            bool ok = (s_ntfsMounted && peImageHasImports(s_diskAppBuffer, bytesRead))
+                ? executeWin32PeFromNtfs(pathBuf)
+                : transitionToRing3(s_diskAppBuffer, bytesRead, true, nullptr, cleanTarget);
             if (ok) {
                 copyStr(reply, "PE32+ Binary [", maxReply);
-                concatStr(reply, targetName, maxReply);
+                concatStr(reply, pathBuf, maxReply);
                 concatStr(reply, "] executed in Ring 3 & exited cleanly via NtTerminateProcess!\r\n", maxReply);
             } else {
                 copyStr(reply, "Execution failed during Ring 3 transition.\r\n", maxReply);
@@ -2369,7 +2545,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         } else {
             copyStr(reply, "File not found: ", maxReply);
             concatStr(reply, pathBuf, maxReply);
-            concatStr(reply, " on C:\\MicaNT\\System32\\\r\n", maxReply);
+            concatStr(reply, "\r\n", maxReply);
         }
     } else if (cmd[0] == 'b' && cmd[1] == 'o' && cmd[2] == 'o' && cmd[3] == 't') { // boot [ubuntu|micant]
         const char* arg = cmd + 4;
@@ -2543,7 +2719,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     LogKernel("[Io] Phase 0: Packet-Driven I/O Subsystem Initialized (IRP Stack, Drivers, Devices).");
 
     // Real Bare-Metal AHCI SATA Controller & Storage Engine
-    static bool s_ntfsMounted = false;
+    s_ntfsMounted = false;
     static char s_storageCardText[64] = "AHCI Standby";
     auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
     bool ahciOk = ahci.initialize();
@@ -2978,7 +3154,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         DrawCard(1, "PHYSICAL MEMORY", "32,768 MB ECC RAM", micant::bootvid::Color{100, 240, 160});
         DrawCard(2, "STORAGE & C: DRIVE", s_ntfsMounted ? s_storageCardText : "sdb2 FAT32 | 128GB C:",
                  s_ntfsMounted ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{0, 210, 255});
-        DrawCard(3, "EXECUTIVE STATE", "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
+        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "NTFS + Live Win32 DLLs OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
 
         // Left Window: Subsystems
         videoDriver.fillRectangle(16, midY, leftW, midH, micant::bootvid::Color{14, 18, 28});
@@ -3131,7 +3307,27 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("Mounted Storage Volumes & Filesystem Subsystems:", micant::bootvid::Color{255, 215, 0});
             ShellAddLine("  Drive  Volume Label   File System  Total Capacity    Status", micant::bootvid::Color{0, 210, 255});
             ShellAddLine("  ------------------------------------------------------------------", micant::bootvid::Color{36, 52, 78});
-            ShellAddLine("  C:     MICA_SYS       FAT32        128 GB            Active OS Root (sdb2)", micant::bootvid::Color{100, 240, 160});
+            if (s_ntfsMounted) {
+                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+                uint64_t volMb = (ntfs.getTotalSectors() * 512ULL) / (1024ULL * 1024ULL);
+                char cLine[120];
+                copyStr(cLine, "  C:     ", sizeof(cLine));
+                concatStr(cLine, ntfs.getVolumeLabel(), sizeof(cLine));
+                size_t cl = strLen(cLine);
+                while (cl < 24 && cl + 1 < sizeof(cLine)) { cLine[cl++] = ' '; cLine[cl] = '\0'; }
+                concatStr(cLine, "NTFS ", sizeof(cLine));
+                appendU64Dec(cLine, sizeof(cLine), ntfs.getMajorVersion());
+                concatStr(cLine, ".", sizeof(cLine));
+                appendU64Dec(cLine, sizeof(cLine), ntfs.getMinorVersion());
+                concatStr(cLine, "     ", sizeof(cLine));
+                appendU64Dec(cLine, sizeof(cLine), volMb);
+                concatStr(cLine, " MB             Active OS Root (GPT LBA ", sizeof(cLine));
+                appendU64Dec(cLine, sizeof(cLine), ntfs.getPartitionLba());
+                concatStr(cLine, ")", sizeof(cLine));
+                ShellAddLine(cLine, micant::bootvid::Color{100, 240, 160});
+            } else {
+                ShellAddLine("  C:     MICA_SYS       FAT32        128 GB            Active OS Root (sdb2)", micant::bootvid::Color{100, 240, 160});
+            }
             ShellAddLine("  D:     MICA_DATA      FAT32        1.7 TB            High-Capacity Data (sdb3)", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("  E:     LINUX_ROOT     EXT4 (RO)    20 GB             Ubuntu Linux Root (sda2)", micant::bootvid::Color{180, 200, 230});
             char activeMsg[120];
@@ -3140,7 +3336,8 @@ extern "C" micant::NtStatus KiSystemStartup(
             concatStr(activeMsg, drv, sizeof(activeMsg));
             concatStr(activeMsg, (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC, sizeof(activeMsg));
             ShellAddLine(activeMsg, micant::bootvid::Color{255, 215, 80});
-            LogKernel("Shell: drives -> C: (128GB), D: (1.7TB), E: (Linux RO)");
+            LogKernel(s_ntfsMounted ? "Shell: drives -> C: (NTFS 3.1 AHCI DMA), D: (FAT32), E: (Ext4 RO)"
+                                    : "Shell: drives -> C: (128GB), D: (1.7TB), E: (Linux RO)");
         } else if ((cmd[0] == 'c' || cmd[0] == 'C') && (cmd[1] == ':' || cmd[1] == '\0')) {
             s_currentDrive = 'C';
             ShellClearOutput();
@@ -3254,6 +3451,73 @@ extern "C" micant::NtStatus KiSystemStartup(
             if ((arg[0] == 'C' || arg[0] == 'c') && arg[1] == ':') driveLetter = 'C';
             else if ((arg[0] == 'D' || arg[0] == 'd') && arg[1] == ':') driveLetter = 'D';
 
+            if (s_ntfsMounted && driveLetter == 'C') {
+                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+                micant::km::ntfs_baremetal::NtfsDirEntry ntfsDir{};
+                if (ntfs.findPath(targetPath, ntfsDir) && ntfsDir.isDirectory) {
+                    char hdr1[120];
+                    copyStr(hdr1, " Volume in drive C: is ", sizeof(hdr1));
+                    concatStr(hdr1, ntfs.getVolumeLabel(), sizeof(hdr1));
+                    concatStr(hdr1, " [NTFS ", sizeof(hdr1));
+                    appendU64Dec(hdr1, sizeof(hdr1), ntfs.getMajorVersion());
+                    concatStr(hdr1, ".", sizeof(hdr1));
+                    appendU64Dec(hdr1, sizeof(hdr1), ntfs.getMinorVersion());
+                    concatStr(hdr1, "]", sizeof(hdr1));
+                    ShellAddLine(hdr1, micant::bootvid::Color{0, 210, 255});
+
+                    char hdr2[120];
+                    copyStr(hdr2, " Directory of C:", sizeof(hdr2));
+                    concatStr(hdr2, targetPath, sizeof(hdr2));
+                    ShellAddLine(hdr2, micant::bootvid::Color{0, 229, 255});
+
+                    size_t fileCount = 0;
+                    size_t dirCount = 0;
+                    uint64_t totalBytes = 0;
+
+                    ntfs.iterateDirectory(targetPath, [&](const micant::km::ntfs_baremetal::NtfsDirEntry& e) noexcept {
+                        char entryLine[120]{};
+                        if (e.isDirectory) {
+                            dirCount++;
+                            copyStr(entryLine, "  <DIR>          ", sizeof(entryLine));
+                            concatStr(entryLine, e.name, sizeof(entryLine));
+                            ShellAddLine(entryLine, micant::bootvid::Color{100, 240, 160});
+                        } else {
+                            fileCount++;
+                            totalBytes += e.fileSize;
+                            char szStr[20];
+                            formatSize(e.fileSize, szStr, sizeof(szStr));
+                            copyStr(entryLine, "  ", sizeof(entryLine));
+                            size_t sl = strLen(szStr);
+                            while (sl < 12) { concatStr(entryLine, " ", sizeof(entryLine)); sl++; }
+                            concatStr(entryLine, szStr, sizeof(entryLine));
+                            concatStr(entryLine, "   ", sizeof(entryLine));
+                            concatStr(entryLine, e.name, sizeof(entryLine));
+                            ShellAddLine(entryLine, micant::bootvid::Color{240, 245, 255});
+                        }
+                    });
+
+                    char sum1[120];
+                    char fcStr[16], tbStr[24], dcStr[16];
+                    formatSize(fileCount, fcStr, sizeof(fcStr));
+                    formatSize(totalBytes, tbStr, sizeof(tbStr));
+                    formatSize(dirCount, dcStr, sizeof(dcStr));
+                    copyStr(sum1, "               ", sizeof(sum1));
+                    concatStr(sum1, fcStr, sizeof(sum1));
+                    concatStr(sum1, " File(s)   ", sizeof(sum1));
+                    concatStr(sum1, tbStr, sizeof(sum1));
+                    concatStr(sum1, " bytes | ", sizeof(sum1));
+                    concatStr(sum1, dcStr, sizeof(sum1));
+                    concatStr(sum1, " Dir(s) [NTFS 3.1 DMA]", sizeof(sum1));
+                    ShellAddLine(sum1, micant::bootvid::Color{200, 220, 245});
+                    LogKernel("Shell: NTFS 3.1 directory enumerated live via AHCI DMA.");
+                } else {
+                    char err[120];
+                    copyStr(err, "Directory not found on NTFS C:: ", sizeof(err));
+                    concatStr(err, targetPath, sizeof(err));
+                    ShellAddLine(err, micant::bootvid::Color{255, 100, 100});
+                    LogKernel("Shell: 'dir' NTFS target directory not found.");
+                }
+            } else {
             auto& fs = (driveLetter == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
                                             : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
 
@@ -3331,6 +3595,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine("Check path syntax (e.g. 'dir \\MicaNT\\System32' or 'dir D:\\').", micant::bootvid::Color{180, 200, 220});
                 LogKernel("Shell: 'dir' target directory not found.");
             }
+            }
         } else if (((cmd[0] == 't' && cmd[1] == 'y' && cmd[2] == 'p' && cmd[3] == 'e' && (cmd[4] == ' ' || cmd[4] == '\0')) ||
                    (cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0')))) {
             ShellClearOutput();
@@ -3349,18 +3614,30 @@ extern "C" micant::NtStatus KiSystemStartup(
             if ((arg[0] == 'C' || arg[0] == 'c') && arg[1] == ':') driveLetter = 'C';
             else if ((arg[0] == 'D' || arg[0] == 'd') && arg[1] == ':') driveLetter = 'D';
 
-            auto& fs = (driveLetter == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
-                                            : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
-
             alignas(512) char textBuf[2048];
             size_t bytesRead = 0;
-            bool ok = fs.readFile(targetPath, textBuf, sizeof(textBuf) - 1, bytesRead);
-            if (!ok && arg[0] != '\\' && arg[0] != '/') {
-                char alt[128];
-                copyStr(alt, "\\MicaNT\\", sizeof(alt));
-                concatStr(alt, arg, sizeof(alt));
-                ok = fs.readFile(alt, textBuf, sizeof(textBuf) - 1, bytesRead);
-                if (ok) copyStr(targetPath, alt, sizeof(targetPath));
+            bool ok = false;
+            if (s_ntfsMounted && driveLetter == 'C') {
+                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+                ok = ntfs.readFile(targetPath, textBuf, sizeof(textBuf) - 1, bytesRead);
+                if (!ok && arg[0] != '\\' && arg[0] != '/') {
+                    char alt[128];
+                    copyStr(alt, "\\MicaNT\\", sizeof(alt));
+                    concatStr(alt, arg, sizeof(alt));
+                    ok = ntfs.readFile(alt, textBuf, sizeof(textBuf) - 1, bytesRead);
+                    if (ok) copyStr(targetPath, alt, sizeof(targetPath));
+                }
+            } else {
+                auto& fs = (driveLetter == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
+                                                : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+                ok = fs.readFile(targetPath, textBuf, sizeof(textBuf) - 1, bytesRead);
+                if (!ok && arg[0] != '\\' && arg[0] != '/') {
+                    char alt[128];
+                    copyStr(alt, "\\MicaNT\\", sizeof(alt));
+                    concatStr(alt, arg, sizeof(alt));
+                    ok = fs.readFile(alt, textBuf, sizeof(textBuf) - 1, bytesRead);
+                    if (ok) copyStr(targetPath, alt, sizeof(targetPath));
+                }
             }
 
             if (ok && bytesRead > 0) {
@@ -3409,13 +3686,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                    (cmd[0] == 'a' && cmd[1] == 'p' && cmd[2] == 'p') ||
                    (cmd[0] == 'p' && cmd[1] == 'r' && cmd[2] == 'i')) {
             ShellClearOutput();
-            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::get();
-            if (!fs.isMounted()) {
-                auto& ahciCtrl = micant::km::ahci_baremetal::BareMetalAhciController::get();
-                fs.mount(ahciCtrl);
-            }
-
-            const char* targetName = "app.exe";
+            const char* targetName = s_ntfsMounted ? "win32_ntfs_probe.exe" : "app.exe";
             if (cmd[0] == 'r' && cmd[1] == 'u' && cmd[2] == 'n') {
                 const char* arg = cmd + 3;
                 while (*arg == ' ') ++arg;
@@ -3431,40 +3702,51 @@ extern "C" micant::NtStatus KiSystemStartup(
                 concatStr(cleanTarget, ".exe", sizeof(cleanTarget));
             }
 
-            char pathBuf[128];
-            if (cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
-                copyStr(pathBuf, "\\MicaNT\\System32\\", sizeof(pathBuf));
-                concatStr(pathBuf, cleanTarget, sizeof(pathBuf));
-            } else {
-                copyStr(pathBuf, cleanTarget, sizeof(pathBuf));
-            }
-
+            char pathBuf[128]{};
             size_t bytesRead = 0;
-            bool readOk = fs.readFile(pathBuf, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
-            if (!readOk && cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
-                char altPath[128];
-                copyStr(altPath, "\\", sizeof(altPath));
-                concatStr(altPath, cleanTarget, sizeof(altPath));
-                readOk = fs.readFile(altPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
-                if (readOk) copyStr(pathBuf, altPath, sizeof(pathBuf));
+            bool readOk = false;
+            if (s_ntfsMounted) {
+                readOk = ntfsResolveExecutable(cleanTarget, pathBuf, sizeof(pathBuf), bytesRead);
+            } else {
+                auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::get();
+                if (!fs.isMounted()) {
+                    auto& ahciCtrl = micant::km::ahci_baremetal::BareMetalAhciController::get();
+                    fs.mount(ahciCtrl);
+                }
+                if (cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
+                    copyStr(pathBuf, "\\MicaNT\\System32\\", sizeof(pathBuf));
+                    concatStr(pathBuf, cleanTarget, sizeof(pathBuf));
+                } else {
+                    copyStr(pathBuf, cleanTarget, sizeof(pathBuf));
+                }
+                readOk = fs.readFile(pathBuf, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+                if (!readOk && cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
+                    char altPath[128];
+                    copyStr(altPath, "\\", sizeof(altPath));
+                    concatStr(altPath, cleanTarget, sizeof(altPath));
+                    readOk = fs.readFile(altPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+                    if (readOk) copyStr(pathBuf, altPath, sizeof(pathBuf));
+                }
             }
 
             if (readOk && bytesRead > 0) {
                 char l1[128];
                 copyStr(l1, "Ingested PE32+: ", sizeof(l1));
                 concatStr(l1, pathBuf, sizeof(l1));
-                concatStr(l1, " via AHCI DMA", sizeof(l1));
+                concatStr(l1, s_ntfsMounted ? " via NTFS 3.1 DMA" : " via AHCI DMA", sizeof(l1));
                 ShellAddLine(l1, micant::bootvid::Color{0, 229, 255});
 
                 char l2[128];
                 copyStr(l2, "Binary Size:    ", sizeof(l2));
                 char szStr[24]; formatSize(bytesRead, szStr, sizeof(szStr));
-                concatStr(l2, szStr, sizeof(l2));
+                concatStr(l2, szStr, sizeof(szStr));
                 concatStr(l2, " bytes | Format: IMAGE_SUBSYSTEM_WINDOWS_CUI", sizeof(l2));
                 ShellAddLine(l2, micant::bootvid::Color{200, 220, 245});
 
                 LogKernel("Shell: Executing PE32+ Userland Binary from C: via AHCI DMA...");
-                bool ok = transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, targetName);
+                bool ok = (s_ntfsMounted && peImageHasImports(s_diskAppBuffer, bytesRead))
+                    ? executeWin32PeFromNtfs(pathBuf)
+                    : transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, targetName);
                 if (ok) {
                     ShellAddLine("Privilege Mode: Ring 3 User Mode Handover OK (CS=0x0033, CPL=3)", micant::bootvid::Color{100, 240, 160});
                     ShellAddLine("Execution:      NtTerminateProcess clean exit (STATUS_SUCCESS 0x00000000)", micant::bootvid::Color{100, 240, 160});
@@ -3958,8 +4240,15 @@ extern "C" micant::NtStatus KiSystemStartup(
             } else {
                 char targetPath[128]{};
                 resolveShellPath(arg, curDir, targetPath, sizeof(targetPath));
-                micant::km::ahci_baremetal::Fat32DirEntry ent{};
-                if (vol.findPath(targetPath, ent) && ent.isDirectory) {
+                bool dirExists = false;
+                if (s_ntfsMounted && s_currentDrive == 'C') {
+                    micant::km::ntfs_baremetal::NtfsDirEntry ntfsEnt{};
+                    dirExists = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().findPath(targetPath, ntfsEnt) && ntfsEnt.isDirectory;
+                } else {
+                    micant::km::ahci_baremetal::Fat32DirEntry ent{};
+                    dirExists = vol.findPath(targetPath, ent) && ent.isDirectory;
+                }
+                if (dirExists) {
                     copyStr(curDir, targetPath, 64);
                     char msg[120];
                     copyStr(msg, "Working directory changed to: ", sizeof(msg));

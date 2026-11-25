@@ -77,7 +77,7 @@ static void appendDec(char* dst, size_t& pos, uint32_t val) {
 void WinMainEntry() {
     void* hOut = GetStdHandle(STD_OUTPUT_HANDLE);
 
-    writeStr(hOut, "[Win32 PE32+ App] Live Ring-3 Win32 executable running via dynamic kernel32.dll!\r\n");
+    writeStr(hOut, "[Win32 PE32+ App] Live Ring-3 Win32 app -> kernel32.dll -> ntdll.dll -> Ring 0!\r\n");
 
     uint32_t pid = GetCurrentProcessId();
     char pidLine[64];

@@ -136,12 +136,19 @@ def main():
                 cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
                 "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
                 "-mno-stack-arg-probe", "-shared", "-nostdlib",
-                "-Wl,-e,DllMain", "-Wl,--subsystem,native", "-O2",
-                f"-I{include_dir}", str(src_path), "-o", str(out_path)
+                "-Wl,-e,DllMain", "-Wl,--subsystem,native", "-Wl,--dynamicbase", "-O2",
+                f"-I{include_dir}", str(src_path)
             ]
-            if name == "kernel32.dll":
+            if name == "ntdll.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                cmd.append(f"-Wl,--out-implib,{ntdll_implib}")
+            elif name == "kernel32.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
                 implib = repo_root / "build" / "libkernel32.a"
                 cmd.append(f"-Wl,--out-implib,{implib}")
+            cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
 

@@ -3,16 +3,10 @@
  * @brief Sovereign Win32 Base API DLL (kernel32.dll) for MicaNT System32.
  *
  * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
- * Implements real Win32 Process, Thread, Memory, and NTFS File I/O exports
- * backed directly by MicaNT Ring 3 -> Ring 0 fast syscalls:
- *   0x01 = NtTerminateProcess
- *   0x0F = NtClose
- *   0x18 = NtAllocateVirtualMemory
- *   0x1B = NtFreeVirtualMemory
- *   0x24 = NtReadFile  (live NTFS AHCI DMA read)
- *   0x25 = NtWriteFile (console / file write)
- *   0x46 = NtYieldExecution
- *   0x52 = NtCreateFile (live NTFS open)
+ * ZERO direct syscall instructions: authentic Windows NT 2-level DLL chaining
+ * where kernel32.dll dynamically imports native Nt* / Rtl* APIs from ntdll.dll
+ * via a genuine PE32+ Import Directory Table (IAT):
+ *   Win32 App -> kernel32.dll (IAT) -> ntdll.dll (IAT) -> Ring 0 KiSystemCall64
  */
 
 #include <cstdint>
@@ -20,43 +14,95 @@
 
 extern "C" {
 
+// ============================================================================
+// 0. Dynamic Imports from C:\Windows\System32\ntdll.dll (Real PE32+ IAT)
+// ============================================================================
+
+struct UnicodeString {
+    uint16_t length;
+    uint16_t maximumLength;
+    wchar_t* buffer;
+};
+
+struct ObjectAttributes {
+    uint32_t       length;
+    void*          rootDirectory;
+    UnicodeString* objectName;
+    uint32_t       attributes;
+    void*          securityDescriptor;
+    void*          securityQualityOfService;
+};
+
+struct IoStatusBlock {
+    uint64_t status;
+    uint64_t information;
+};
+
+__declspec(dllimport) void     RtlInitUnicodeString(UnicodeString* dest, const wchar_t* source) noexcept;
+__declspec(dllimport) uint64_t NtTerminateProcess(void* processHandle, uint64_t exitStatus) noexcept;
+__declspec(dllimport) uint64_t NtYieldExecution() noexcept;
+__declspec(dllimport) uint64_t NtAllocateVirtualMemory(
+    void* processHandle,
+    void** baseAddress,
+    uint64_t zeroBits,
+    size_t* regionSize,
+    uint32_t allocationType,
+    uint32_t protect
+) noexcept;
+__declspec(dllimport) uint64_t NtFreeVirtualMemory(
+    void* processHandle,
+    void** baseAddress,
+    size_t* regionSize,
+    uint32_t freeType
+) noexcept;
+__declspec(dllimport) uint64_t NtCreateFile(
+    void** fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    void* allocationSize,
+    uint32_t fileAttributes,
+    uint32_t shareAccess,
+    uint32_t createDisposition,
+    uint32_t createOptions,
+    void* eaBuffer,
+    uint32_t eaLength
+) noexcept;
+__declspec(dllimport) uint64_t NtReadFile(
+    void* fileHandle,
+    void* event,
+    void* apcRoutine,
+    void* apcContext,
+    IoStatusBlock* ioStatusBlock,
+    void* buffer,
+    uint32_t length,
+    void* byteOffset,
+    uint32_t* key
+) noexcept;
+__declspec(dllimport) uint64_t NtWriteFile(
+    void* fileHandle,
+    void* event,
+    void* apcRoutine,
+    void* apcContext,
+    IoStatusBlock* ioStatusBlock,
+    const void* buffer,
+    uint32_t length,
+    void* byteOffset,
+    uint32_t* key
+) noexcept;
+__declspec(dllimport) uint64_t NtClose(void* handle) noexcept;
+
 bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
 }
 
-// Low-level x86_64 fast syscall helper (RAX=SSN, RDX=arg1, R8=arg2, R9=arg3)
-static inline uint64_t SyscallDispatch(
-    uint64_t ssn,
-    uint64_t arg1 = 0,
-    uint64_t arg2 = 0,
-    uint64_t arg3 = 0
-) noexcept {
-#if defined(__x86_64__)
-    register uint64_t r_rax __asm__("rax") = ssn;
-    register uint64_t r_rdx __asm__("rdx") = arg1;
-    register uint64_t r_r8  __asm__("r8")  = arg2;
-    register uint64_t r_r9  __asm__("r9")  = arg3;
-    __asm__ __volatile__(
-        "syscall"
-        : "+r"(r_rax)
-        : "r"(r_rdx), "r"(r_r8), "r"(r_r9)
-        : "rcx", "r11", "memory"
-    );
-    return r_rax;
-#else
-    (void)ssn; (void)arg1; (void)arg2; (void)arg3;
-    return 0;
-#endif
+static inline bool NtSucceeded(uint64_t status) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(status)) >= 0;
 }
 
 // ============================================================================
 // 1. Process & Thread Management
 // ============================================================================
-
-__declspec(dllexport) void ExitProcess(uint32_t uExitCode) noexcept {
-    SyscallDispatch(0x01, 0, uExitCode, 0); // NtTerminateProcess
-    while (true) {}
-}
 
 __declspec(dllexport) void* GetCurrentProcess() noexcept {
     return reinterpret_cast<void*>(-1);
@@ -64,6 +110,11 @@ __declspec(dllexport) void* GetCurrentProcess() noexcept {
 
 __declspec(dllexport) void* GetCurrentThread() noexcept {
     return reinterpret_cast<void*>(-2);
+}
+
+__declspec(dllexport) void ExitProcess(uint32_t uExitCode) noexcept {
+    NtTerminateProcess(GetCurrentProcess(), uExitCode);
+    while (true) {}
 }
 
 __declspec(dllexport) uint32_t GetCurrentProcessId() noexcept {
@@ -91,36 +142,50 @@ __declspec(dllexport) uint32_t GetCurrentThreadId() noexcept {
 }
 
 __declspec(dllexport) void Sleep(uint32_t /*dwMilliseconds*/) noexcept {
-    SyscallDispatch(0x46, 0, 0, 0); // NtYieldExecution
+    NtYieldExecution();
 }
 
 // ============================================================================
-// 2. Memory Management
+// 2. Memory Management (Routed through ntdll.dll)
 // ============================================================================
 
 __declspec(dllexport) void* VirtualAlloc(
     void* lpAddress,
     size_t dwSize,
-    uint32_t /*flAllocationType*/,
-    uint32_t /*flProtect*/
+    uint32_t flAllocationType,
+    uint32_t flProtect
 ) noexcept {
-    uint64_t addr = reinterpret_cast<uint64_t>(lpAddress);
-    uint64_t res = SyscallDispatch(0x18, addr, dwSize, 0); // NtAllocateVirtualMemory
-    return reinterpret_cast<void*>(res);
+    void* base = lpAddress;
+    size_t regionSize = dwSize ? dwSize : 4096;
+    uint64_t st = NtAllocateVirtualMemory(
+        GetCurrentProcess(),
+        &base,
+        0,
+        &regionSize,
+        flAllocationType,
+        flProtect
+    );
+    return NtSucceeded(st) ? base : nullptr;
 }
 
 __declspec(dllexport) int32_t VirtualFree(
     void* lpAddress,
     size_t dwSize,
-    uint32_t /*dwFreeType*/
+    uint32_t dwFreeType
 ) noexcept {
-    uint64_t addr = reinterpret_cast<uint64_t>(lpAddress);
-    uint64_t st = SyscallDispatch(0x1B, addr, dwSize, 0); // NtFreeVirtualMemory
-    return (static_cast<int32_t>(st) >= 0) ? 1 : 0;
+    void* base = lpAddress;
+    size_t regionSize = dwSize;
+    uint64_t st = NtFreeVirtualMemory(
+        GetCurrentProcess(),
+        &base,
+        &regionSize,
+        dwFreeType
+    );
+    return NtSucceeded(st) ? 1 : 0;
 }
 
 // ============================================================================
-// 3. File & Console I/O (Real Ring 0 NTFS Syscalls)
+// 3. File & Console I/O (Routed through ntdll.dll -> Ring 0 NTFS 3.1)
 // ============================================================================
 
 __declspec(dllexport) void* GetStdHandle(uint32_t nStdHandle) noexcept {
@@ -135,23 +200,44 @@ __declspec(dllexport) void* GetStdHandle(uint32_t nStdHandle) noexcept {
 __declspec(dllexport) void* CreateFileW(
     const wchar_t* lpFileName,
     uint32_t dwDesiredAccess,
-    uint32_t /*dwShareMode*/,
+    uint32_t dwShareMode,
     void* /*lpSecurityAttributes*/,
     uint32_t dwCreationDisposition,
-    uint32_t /*dwFlagsAndAttributes*/,
+    uint32_t dwFlagsAndAttributes,
     void* /*hTemplateFile*/
 ) noexcept {
     if (!lpFileName) return reinterpret_cast<void*>(-1);
-    uint64_t res = SyscallDispatch(
-        0x52, // NtCreateFile
-        reinterpret_cast<uint64_t>(lpFileName),
+
+    UnicodeString uPath{0, 0, nullptr};
+    RtlInitUnicodeString(&uPath, lpFileName);
+
+    ObjectAttributes oa{};
+    oa.length = sizeof(ObjectAttributes);
+    oa.rootDirectory = nullptr;
+    oa.objectName = &uPath;
+    oa.attributes = 0x00000040u; // OBJ_CASE_INSENSITIVE
+    oa.securityDescriptor = nullptr;
+    oa.securityQualityOfService = nullptr;
+
+    IoStatusBlock iosb{0, 0};
+    void* hFile = nullptr;
+    uint64_t st = NtCreateFile(
+        &hFile,
         dwDesiredAccess,
-        dwCreationDisposition
+        &oa,
+        &iosb,
+        nullptr,
+        dwFlagsAndAttributes,
+        dwShareMode,
+        dwCreationDisposition,
+        0,
+        nullptr,
+        0
     );
-    if (res == 0 || res == ~0ULL) {
+    if (!NtSucceeded(st) || hFile == nullptr) {
         return reinterpret_cast<void*>(-1); // INVALID_HANDLE_VALUE
     }
-    return reinterpret_cast<void*>(res);
+    return hFile;
 }
 
 __declspec(dllexport) void* CreateFileA(
@@ -183,15 +269,24 @@ __declspec(dllexport) int32_t ReadFile(
     void* /*lpOverlapped*/
 ) noexcept {
     if (!lpBuffer) return 0;
-    uint64_t h = reinterpret_cast<uint64_t>(hFile);
-    uint64_t buf = reinterpret_cast<uint64_t>(lpBuffer);
-    int64_t res = static_cast<int64_t>(SyscallDispatch(0x24, h, buf, nNumberOfBytesToRead)); // NtReadFile
-    if (res < 0) {
+    IoStatusBlock iosb{0, 0};
+    uint64_t st = NtReadFile(
+        hFile,
+        nullptr,
+        nullptr,
+        nullptr,
+        &iosb,
+        lpBuffer,
+        nNumberOfBytesToRead,
+        nullptr,
+        nullptr
+    );
+    if (!NtSucceeded(st)) {
         if (lpNumberOfBytesRead) *lpNumberOfBytesRead = 0;
         return 0;
     }
     if (lpNumberOfBytesRead) {
-        *lpNumberOfBytesRead = static_cast<uint32_t>(res);
+        *lpNumberOfBytesRead = static_cast<uint32_t>(iosb.information);
     }
     return 1;
 }
@@ -204,23 +299,31 @@ __declspec(dllexport) int32_t WriteFile(
     void* /*lpOverlapped*/
 ) noexcept {
     if (!lpBuffer) return 0;
-    uint64_t h = reinterpret_cast<uint64_t>(hFile);
-    uint64_t buf = reinterpret_cast<uint64_t>(lpBuffer);
-    int64_t res = static_cast<int64_t>(SyscallDispatch(0x25, buf, nNumberOfBytesToWrite, h)); // NtWriteFile
-    if (res < 0) {
+    IoStatusBlock iosb{0, 0};
+    uint64_t st = NtWriteFile(
+        hFile,
+        nullptr,
+        nullptr,
+        nullptr,
+        &iosb,
+        lpBuffer,
+        nNumberOfBytesToWrite,
+        nullptr,
+        nullptr
+    );
+    if (!NtSucceeded(st)) {
         if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = 0;
         return 0;
     }
     if (lpNumberOfBytesWritten) {
-        *lpNumberOfBytesWritten = static_cast<uint32_t>(res);
+        *lpNumberOfBytesWritten = static_cast<uint32_t>(iosb.information);
     }
     return 1;
 }
 
 __declspec(dllexport) int32_t CloseHandle(void* hObject) noexcept {
-    uint64_t h = reinterpret_cast<uint64_t>(hObject);
-    uint64_t st = SyscallDispatch(0x0F, h, 0, 0); // NtClose
-    return (static_cast<int32_t>(st) >= 0) ? 1 : 0;
+    uint64_t st = NtClose(hObject);
+    return NtSucceeded(st) ? 1 : 0;
 }
 
 // ============================================================================
