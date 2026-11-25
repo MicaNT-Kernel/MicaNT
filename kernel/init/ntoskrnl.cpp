@@ -38,6 +38,7 @@
 #include "micant/km/drivers/usb/xhci_baremetal.hpp"
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
 #include "micant/km/drivers/fs/ntfs_baremetal.hpp"
+#include "micant/km/executive/pe_loader_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
@@ -375,6 +376,7 @@ static inline uint32_t getCpuTemperatureC() noexcept {
 
 // Userland Ring 3 Buffers
 alignas(4096) static uint8_t s_userImageBuffer[8388608]{}; // 8 MB Userland PE buffer
+alignas(4096) static uint8_t s_userDllArena[4194304]{};    // 4 MB Userland Dynamic System32 DLL Arena (kernel32/ntdll)
 alignas(4096) static uint8_t s_userSurfaceBuffer[4194304]{}; // 4 MB Dedicated Userland Surface buffer (1024x768x4 = 3.14MB)
 alignas(4096) static uint8_t s_userHeapBuffer[16777216]{}; // 16 MB Dedicated Userland Dynamic Heap buffer
 alignas(4096) static uint8_t s_userTrampolinePage[4096]{};
@@ -534,15 +536,57 @@ static void ShellAddLine(const char* text, micant::bootvid::Color col = micant::
     UartSerial::print("\r\n");
 }
 
-// Fast Syscall Dispatcher
-extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64_t arg2) {
+// Bare-Metal Ring 0 Kernel File Handle Table (backed by live NTFS 3.1 volume)
+struct BareMetalFileHandleEntry {
+    bool     inUse{false};
+    char     path[128]{};
+    uint64_t mftRecordNumber{0};
+    uint64_t fileSize{0};
+    uint64_t cursor{0};
+};
+
+static constexpr size_t MAX_KERNEL_FILE_HANDLES = 32;
+static BareMetalFileHandleEntry s_kernelFileHandles[MAX_KERNEL_FILE_HANDLES]{};
+alignas(4096) static uint8_t s_ntfsSyscallReadBuf[65536]{};
+
+static uint64_t openNtfsKernelHandle(const char* asciiPath) noexcept {
+    auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+    if (!ntfs.isMounted() || !asciiPath) return 0;
+
+    micant::km::ntfs_baremetal::NtfsDirEntry entry{};
+    if (!ntfs.findPath(asciiPath, entry) || entry.isDirectory) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < MAX_KERNEL_FILE_HANDLES; ++i) {
+        if (!s_kernelFileHandles[i].inUse) {
+            s_kernelFileHandles[i].inUse = true;
+            copyStr(s_kernelFileHandles[i].path, asciiPath, sizeof(s_kernelFileHandles[i].path));
+            s_kernelFileHandles[i].mftRecordNumber = entry.mftRecordNumber;
+            s_kernelFileHandles[i].fileSize = entry.fileSize;
+            s_kernelFileHandles[i].cursor = 0;
+            return 0x100ULL + static_cast<uint64_t>(i * 4);
+        }
+    }
+    return 0;
+}
+
+static BareMetalFileHandleEntry* lookupKernelFileHandle(uint64_t handle) noexcept {
+    if (handle < 0x100ULL || ((handle - 0x100ULL) % 4) != 0) return nullptr;
+    size_t idx = static_cast<size_t>((handle - 0x100ULL) / 4);
+    if (idx >= MAX_KERNEL_FILE_HANDLES || !s_kernelFileHandles[idx].inUse) return nullptr;
+    return &s_kernelFileHandles[idx];
+}
+
+// Fast Syscall Dispatcher (RAX=ssn -> RCX, RDX=arg1, R8=arg2, R9=arg3)
+extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
     s_ring3Telemetry.syscallDispatchCount++;
     s_ring3Telemetry.lastSyscallNumber = ssn;
     s_ring3Telemetry.lastSyscallArg1 = arg1;
     s_ring3Telemetry.lastSyscallArg2 = arg2;
 
     auto& pm = micant::um::UserProcessManager64::get();
-    pm.dispatchSyscall(ssn, arg1, arg2, 0, 0, s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
+    pm.dispatchSyscall(ssn, arg1, arg2, arg3, 0, s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
 
     UartSerial::print("[KiSystemCall64] Fast Syscall #");
     UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
@@ -553,6 +597,55 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     UartSerial::print("\r\n");
 
     switch (ssn) {
+        case 0x52: { // NtCreateFile (Live NTFS 3.1 File Open from Ring 3 UTF-16LE Path)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0) {
+                UartSerial::print("  -> NtCreateFile: Invalid user path pointer -> STATUS_ACCESS_VIOLATION\r\n");
+                return 0;
+            }
+            const auto* wpath = reinterpret_cast<const uint16_t*>(arg1);
+            char asciiPath[128]{};
+            size_t len = 0;
+            while (len + 1 < sizeof(asciiPath) && wpath[len] != 0) {
+                asciiPath[len] = (wpath[len] < 128) ? static_cast<char>(wpath[len]) : '?';
+                ++len;
+            }
+            asciiPath[len] = '\0';
+
+            uint64_t handle = openNtfsKernelHandle(asciiPath);
+            UartSerial::print("  -> NtCreateFile (NTFS 3.1): Path='");
+            UartSerial::print(asciiPath);
+            if (handle != 0) {
+                auto* he = lookupKernelFileHandle(handle);
+                UartSerial::print("' -> Handle=0x");
+                UartSerial::printHex64(handle);
+                UartSerial::print(" (Size=");
+                UartSerial::printDec(static_cast<uint32_t>(he ? he->fileSize : 0));
+                UartSerial::print(" B) -> STATUS_SUCCESS\r\n");
+                char logMsg[128];
+                copyStr(logMsg, "[Syscall] NtCreateFile (0x52) Opened ", sizeof(logMsg));
+                concatStr(logMsg, asciiPath, sizeof(logMsg));
+                LogKernel(logMsg);
+            } else {
+                UartSerial::print("' -> STATUS_OBJECT_NAME_NOT_FOUND\r\n");
+            }
+            return handle;
+        }
+        case 0x0F: { // NtClose (Close Kernel File Handle)
+            auto* he = lookupKernelFileHandle(arg1);
+            if (he) {
+                he->inUse = false;
+                UartSerial::print("  -> NtClose: Closed Handle 0x");
+                UartSerial::printHex64(arg1);
+                UartSerial::print(" -> STATUS_SUCCESS\r\n");
+                LogKernel("[Syscall] NtClose (0x0F): Kernel File Handle Closed");
+            } else {
+                UartSerial::print("  -> NtClose: Handle 0x");
+                UartSerial::printHex64(arg1);
+                UartSerial::print(" -> STATUS_SUCCESS\r\n");
+            }
+            return 0;
+        }
         case 0x08: { // NtShutdownSystem (0=Shutdown, 1=Reboot, 2=PowerOff)
             UartSerial::print("  -> NtShutdownSystem: Action=");
             UartSerial::printDec(static_cast<uint32_t>(arg1));
@@ -616,7 +709,41 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" -> STATUS_SUCCESS\r\n");
             return 0;
         }
-        case 0x24: { // NtReadFile (Dispatches IRP_MJ_READ to \Device\Harddisk0\Partition2 via Dave Cutler I/O subsystem)
+        case 0x24: { // NtReadFile (Live NTFS 3.1 AHCI DMA Read for Open Handles + Legacy IRP Fallback)
+            auto* he = lookupKernelFileHandle(arg1);
+            if (he) {
+                const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
+                if (!vad || arg2 == 0) {
+                    UartSerial::print("  -> NtReadFile: Invalid user destination buffer -> STATUS_ACCESS_VIOLATION\r\n");
+                    return static_cast<uint64_t>(-1);
+                }
+                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+                size_t totalRead = 0;
+                if (!ntfs.readFile(he->path, s_ntfsSyscallReadBuf, sizeof(s_ntfsSyscallReadBuf), totalRead)) {
+                    UartSerial::print("  -> NtReadFile: NTFS AHCI DMA read failed\r\n");
+                    return static_cast<uint64_t>(-1);
+                }
+                if (he->cursor >= totalRead) {
+                    return 0; // EOF
+                }
+                size_t avail = totalRead - static_cast<size_t>(he->cursor);
+                size_t reqLen = static_cast<size_t>(arg3 ? arg3 : avail);
+                size_t maxVad = static_cast<size_t>(vad->endVa - arg2);
+                size_t toCopy = avail;
+                if (reqLen < toCopy) toCopy = reqLen;
+                if (maxVad < toCopy) toCopy = maxVad;
+                std::memcpy(reinterpret_cast<void*>(arg2), s_ntfsSyscallReadBuf + he->cursor, toCopy);
+                he->cursor += toCopy;
+                UartSerial::print("  -> NtReadFile (NTFS 3.1 AHCI DMA): Handle=0x");
+                UartSerial::printHex64(arg1);
+                UartSerial::print(" -> Copied ");
+                UartSerial::printDec(static_cast<uint32_t>(toCopy));
+                UartSerial::print(" B into Ring 3 VA 0x");
+                UartSerial::printHex64(arg2);
+                UartSerial::print(" -> STATUS_SUCCESS\r\n");
+                LogKernel("[Syscall] NtReadFile (0x24): Live NTFS DMA Read into Ring 3 OK");
+                return static_cast<uint64_t>(toCopy);
+            }
             auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
             auto* dev = iom.findDevice("\\Device\\Harddisk0\\Partition2");
             if (dev) {
@@ -678,12 +805,14 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                         lineBuf[k] = (c >= 0x20 && c <= 0x7E) ? c : ' ';
                     }
                     lineBuf[lineLen] = '\0';
-                    ShellAddLine(lineBuf, micant::bootvid::Color{0, 229, 255});
+                    UartSerial::print("\r\n    [Ring3 stdout] ");
+                    ShellAddLine(lineBuf, micant::bootvid::Color{100, 240, 160});
 
                     start = end;
                     if (start < len && str[start] == '\r') start++;
                     if (start < len && str[start] == '\n') start++;
                 }
+                UartSerial::print("\r\n");
                 char dispLog[144] = "[User Output] Dispatched to Console";
                 LogKernel(dispLog);
                 return static_cast<int64_t>(len);
@@ -1652,6 +1781,165 @@ static bool transitionToRing3(
     return s_ring3Telemetry.userProcessExitedCleanly;
 }
 
+/**
+ * @brief Dynamically load a real unmodified-ABI Win32 PE32+ executable AND its
+ *        imported System32 DLLs (kernel32.dll / ntdll.dll) directly off the live
+ *        mounted NTFS 3.1 partition via AHCI DMA, apply .reloc base relocations,
+ *        patch IAT entries against real PE32+ Export Directory Tables, and execute
+ *        in Ring 3 (CPL=3) via IRETQ.
+ */
+static bool executeWin32PeFromNtfs(const char* ntfsExePath) noexcept {
+    auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+    if (!ntfs.isMounted() || !ntfsExePath) return false;
+
+    UartSerial::print("\r\n=======================================================\r\n");
+    UartSerial::print("[LdrBareMetal] Dynamic PE32+ Load from Live NTFS 3.1: ");
+    UartSerial::print(ntfsExePath);
+    UartSerial::print("\r\n");
+
+    size_t exeBytes = 0;
+    if (!ntfs.readFile(ntfsExePath, s_diskAppBuffer, sizeof(s_diskAppBuffer), exeBytes) || exeBytes < 128) {
+        UartSerial::print("[LdrBareMetal] ERROR: Failed to DMA-read executable off NTFS.\r\n");
+        return false;
+    }
+
+    auto& loader = micant::km::pe_baremetal::BareMetalPeLoader::get();
+    loader.initialize(s_userDllArena, sizeof(s_userDllArena));
+
+    micant::km::pe_baremetal::LoadedPeModule exeMod{};
+    if (!loader.mapAndRelocateImage(
+            s_diskAppBuffer, exeBytes,
+            s_userImageBuffer, sizeof(s_userImageBuffer),
+            ntfsExePath, exeMod)) {
+        UartSerial::print("[LdrBareMetal] ERROR: Invalid PE32+ headers or section mapping failed.\r\n");
+        return false;
+    }
+
+    bool importsOk = loader.bindImportsFromNtfs(ntfs, exeMod);
+
+    UartSerial::print("[LdrBareMetal] Mapped EXE @ 0x");
+    UartSerial::printHex64(exeMod.baseVa);
+    UartSerial::print(" | Entry=0x");
+    UartSerial::printHex64(exeMod.entryPointVa);
+    UartSerial::print(" | Size=");
+    UartSerial::printDec(exeMod.sizeOfImage);
+    UartSerial::print(" B | Relocs=");
+    UartSerial::printDec(exeMod.relocsApplied);
+    UartSerial::print(" | IAT Bound=");
+    UartSerial::printDec(exeMod.importsBound);
+    UartSerial::print(" | Unresolved=");
+    UartSerial::printDec(exeMod.importsUnresolved);
+    UartSerial::print("\r\n");
+
+    for (size_t i = 0; i < loader.getLoadedModuleCount(); ++i) {
+        const auto* dll = loader.getModule(i);
+        if (dll && dll->inUse) {
+            UartSerial::print("  -> Loaded System32 DLL from NTFS: ");
+            UartSerial::print(dll->name);
+            UartSerial::print(" @ 0x");
+            UartSerial::printHex64(dll->baseVa);
+            UartSerial::print(" (Size=");
+            UartSerial::printDec(dll->sizeOfImage);
+            UartSerial::print(" B | Relocs=");
+            UartSerial::printDec(dll->relocsApplied);
+            UartSerial::print(")\r\n");
+        }
+    }
+
+    if (!importsOk || exeMod.entryPointVa == 0 || exeMod.importsBound == 0) {
+        UartSerial::print("[LdrBareMetal] ERROR: Import binding failed or entry point missing.\r\n");
+        return false;
+    }
+
+    // Prepare Ring 3 user stack, canonical x64 TEB, paging U/S=1 + NX=0, and VAD entries
+    s_kernelStackTopVal = reinterpret_cast<uint64_t>(s_kernelStack + sizeof(s_kernelStack) - 64);
+    uint64_t userStackTop = reinterpret_cast<uint64_t>(s_userStack + sizeof(s_userStack) - 64);
+    userStackTop = (userStackTop & ~0xFULL) - 8; // Microsoft x64 ABI entry stack alignment (RSP % 16 == 8)
+
+    std::memset(s_userPebTebPage, 0, sizeof(s_userPebTebPage));
+    uint64_t pebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[0]);
+    uint64_t tebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[512]);
+    // Authentic Windows x64 TEB offsets:
+    //   +0x30: NtTib.Self (linear address of TEB)
+    //   +0x40: ClientId.UniqueProcess (PID)
+    //   +0x48: ClientId.UniqueThread  (TID)
+    //   +0x60: ProcessEnvironmentBlock (PEB)
+    *reinterpret_cast<uint64_t*>(tebVa + 0x30) = tebVa;
+    *reinterpret_cast<uint32_t*>(tebVa + 0x40) = 1337;
+    *reinterpret_cast<uint32_t*>(tebVa + 0x48) = 1338;
+    *reinterpret_cast<uint64_t*>(tebVa + 0x60) = pebVa;
+
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer));
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userDllArena), sizeof(s_userDllArena));
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer));
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userStack), sizeof(s_userStack));
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage));
+
+    auto& vad = micant::km::mm_baremetal::BareMetalVadTable::get();
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer),
+                       micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userDllArena), sizeof(s_userDllArena),
+                       micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer),
+                       micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userStack), sizeof(s_userStack),
+                       micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE, true);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage),
+                       micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.setHeapPool(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer));
+
+    s_ring3Telemetry.userProcessExitedCleanly = false;
+    s_ring3Telemetry.userlandExecutionCount++;
+
+    UartSerial::print("[LdrBareMetal] Transitioning CPU to Ring 3 (CPL=3) @ EntryPoint=0x");
+    UartSerial::printHex64(exeMod.entryPointVa);
+    UartSerial::print("...\r\n");
+
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "movq %%rbx, 0*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%rbp, 1*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%rdi, 2*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%rsi, 3*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r12, 4*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r13, 5*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r14, 6*8+s_kernelSavedGprs(%%rip)\n\t"
+        "movq %%r15, 7*8+s_kernelSavedGprs(%%rip)\n\t"
+        "leaq 1f(%%rip), %%rax\n\t"
+        "movq %%rax, s_kernelReturnRipVal(%%rip)\n\t"
+        "movq %%rsp, s_kernelReturnRspVal(%%rip)\n\t"
+        "movw $0x002B, %%ax\n\t"
+        "movw %%ax, %%ds\n\t"
+        "movw %%ax, %%es\n\t"
+        "movw %%ax, %%fs\n\t"
+        "movw %%ax, %%gs\n\t"
+        "movl $0xC0000101, %%ecx\n\t"
+        "movq %2, %%rax\n\t"
+        "movq %2, %%rdx\n\t"
+        "shrq $32, %%rdx\n\t"
+        "wrmsr\n\t"
+        "pushq $0x002B\n\t"
+        "pushq %1\n\t"
+        "pushq $0x0002\n\t"
+        "pushq $0x0033\n\t"
+        "pushq %0\n\t"
+        "iretq\n\t"
+        "1:\n\t"
+        :
+        : "r"(exeMod.entryPointVa), "r"(userStackTop), "r"(tebVa)
+        : "rax", "rcx", "rdx", "memory"
+    );
+#endif
+
+    if (s_ring3Telemetry.userProcessExitedCleanly) {
+        UartSerial::print("[LdrBareMetal] Dynamic Win32 PE32+ Process Exited Cleanly via kernel32!ExitProcess!\r\n");
+        UartSerial::print("=======================================================\r\n");
+        LogKernel("[Ldr] Live Win32 PE32+ + dynamic kernel32.dll off NTFS VERIFIED OK.");
+        return true;
+    }
+    return false;
+}
+
 struct Fat32ProbeResult {
     bool valid{false};
     char volumeLabel[12]{};
@@ -2484,6 +2772,13 @@ extern "C" micant::NtStatus KiSystemStartup(
         LogKernel("[Ps] Process Clean Termination (NtTerminateProcess) Verified.");
         LogKernel("[Executive] Sovereign Userland Subsystem ONLINE & VERIFIED.");
         DrawCard(3, "EXECUTIVE STATE", "SMP 8T | High-Half | APIC 100Hz", micant::bootvid::Color{100, 240, 160});
+    }
+
+    // Live Dynamic Win32 PE32+ Execution off Mounted NTFS 3.1 Volume (real kernel32.dll IAT binding)
+    if (s_ntfsMounted) {
+        if (executeWin32PeFromNtfs("\\Windows\\System32\\win32_ntfs_probe.exe")) {
+            DrawCard(3, "EXECUTIVE STATE", "NTFS + Live Win32 DLLs OK", micant::bootvid::Color{100, 240, 160});
+        }
     }
 
     LogKernel("MicaNT Kernel Ready for Ring 3 binaries. SurShell Desktop Active.");

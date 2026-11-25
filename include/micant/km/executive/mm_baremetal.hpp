@@ -171,6 +171,28 @@ public:
         va &= ~PAGE_MASK_4KB;
         physAddr &= ~PAGE_MASK_4KB;
 
+        // Temporarily clear CR0.WP (bit 16) so Ring 0 can update UEFI OVMF read-only page-table pages
+        uint64_t savedCr0 = 0;
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+        __asm__ __volatile__("mov %%cr0, %0" : "=r"(savedCr0));
+        if (savedCr0 & (1ULL << 16)) {
+            uint64_t wpOff = savedCr0 & ~(1ULL << 16);
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(wpOff) : "memory");
+        }
+#endif
+        struct Cr0WpRestore {
+            uint64_t orig;
+            ~Cr0WpRestore() noexcept {
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+                if (orig & (1ULL << 16)) {
+                    __asm__ __volatile__("mov %0, %%cr0" : : "r"(orig) : "memory");
+                }
+#else
+                (void)orig;
+#endif
+            }
+        } wpRestore{savedCr0};
+
         uint64_t pml4Idx = (va >> 39) & 0x1FF;
         uint64_t pdptIdx = (va >> 30) & 0x1FF;
         uint64_t pdIdx   = (va >> 21) & 0x1FF;
@@ -259,6 +281,27 @@ public:
     static bool unmapVirtualPage(uint64_t cr3Phys, uint64_t va, bool freePhysical = true) noexcept {
         if (cr3Phys == 0) return false;
         va &= ~PAGE_MASK_4KB;
+
+        uint64_t savedCr0 = 0;
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+        __asm__ __volatile__("mov %%cr0, %0" : "=r"(savedCr0));
+        if (savedCr0 & (1ULL << 16)) {
+            uint64_t wpOff = savedCr0 & ~(1ULL << 16);
+            __asm__ __volatile__("mov %0, %%cr0" : : "r"(wpOff) : "memory");
+        }
+#endif
+        struct Cr0WpRestore {
+            uint64_t orig;
+            ~Cr0WpRestore() noexcept {
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+                if (orig & (1ULL << 16)) {
+                    __asm__ __volatile__("mov %0, %%cr0" : : "r"(orig) : "memory");
+                }
+#else
+                (void)orig;
+#endif
+            }
+        } wpRestore{savedCr0};
 
         uint64_t pml4Idx = (va >> 39) & 0x1FF;
         uint64_t pdptIdx = (va >> 30) & 0x1FF;
@@ -571,8 +614,8 @@ public:
                         for (uint64_t va = baseAddress; va < baseAddress + alignedSize; va += PAGE_SIZE_4KB) {
                             BareMetalPaging::unmapVirtualPage(cr3Phys, va, true);
                         }
+                        m_vads[i].inUse = false;
                     }
-                    m_vads[i].inUse = false;
                 } else if (freeType & MEM_DECOMMIT) {
                     if (!inHeapPool) {
                         for (uint64_t va = baseAddress; va < baseAddress + alignedSize; va += PAGE_SIZE_4KB) {
