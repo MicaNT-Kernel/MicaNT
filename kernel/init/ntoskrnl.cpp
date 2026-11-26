@@ -35,6 +35,7 @@
 #include "micant/km/hal/highhalf.hpp"
 #include "micant/km/hal/idt.hpp"
 #include "micant/km/hal/smp.hpp"
+#include "micant/km/hal/smp_baremetal.hpp"
 #include "micant/km/drivers/usb/xhci_baremetal.hpp"
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
 #include "micant/km/drivers/fs/ntfs_baremetal.hpp"
@@ -542,6 +543,9 @@ static uint32_t s_shellGopH = 0;
 static uint32_t s_shellGopAvailW = 0;
 static char s_ring3ActivePrompt[64] = "[R3 cmd] C:\\> ";
 static bool s_guiWindowDirtyOnGop = false;
+static char s_cpuCardText[64] = "SMP Initializing...";
+static char s_smpSubsysText[64] = "[R0] SMP: Probing ACPI MADT...";
+static char s_shellStatusLine[128] = "STATUS: ntoskrnl.exe Active | SMP Live | LAPIC 100Hz | TAB: Toggle SurShell";
 
 static void RepaintRing3ConsoleGop(const char* livePrompt, const char* liveInput) noexcept {
     if (!s_globalVideoDriver || s_shellGopH == 0 || s_shellGopAvailW == 0) return;
@@ -1414,9 +1418,9 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
                         s_globalVideoDriver->drawRectangle(16, s_logMidY, lw, s_logMidH, micant::bootvid::Color{32, 46, 68});
                         s_globalVideoDriver->fillRectangle(16, s_logMidY, lw, 24, micant::bootvid::Color{22, 30, 46});
                         s_globalVideoDriver->drawString(24, s_logMidY + 5, "EXECUTIVE SUBSYSTEM HIERARCHY", micant::bootvid::Color{0, 210, 255}, micant::bootvid::Color{22, 30, 46}, 1);
-                        static const char* const kSubs[15] = {
+                        const char* const kSubs[15] = {
                             "[R0] NTOSKRNL: Standalone PE32+ Image",
-                            "[R0] SMP: 8/8 Cores Online (INIT-SIPI)",
+                            s_smpSubsysText,
                             "[R0] HAL: KPCR GS:[0] LAPIC 100Hz Timer",
                             "[R0] IDT: 256 Gates (FXSAVE64 Armed)",
                             "[R0] HIGH-HALF: 0xFFFFF800... PML4[496]",
@@ -1447,7 +1451,7 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
                     s_globalVideoDriver->drawRectangle(16, s_shellGopY, s_shellGopAvailW, s_shellGopH, micant::bootvid::Color{0, 180, 220});
                     s_globalVideoDriver->fillRectangle(16, s_shellGopY, s_shellGopAvailW, 22, micant::bootvid::Color{20, 28, 44});
                     s_globalVideoDriver->drawString(24, s_shellGopY + 4, "MicaNT BARE-METAL EXECUTIVE SHELL (ntoskrnl.exe)", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{20, 28, 44}, 1);
-                    s_globalVideoDriver->drawString(24, s_shellGopY + 24, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | TAB: Toggle SurShell", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
+                    s_globalVideoDriver->drawString(24, s_shellGopY + 24, s_shellStatusLine, micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
                     s_globalVideoDriver->drawString(24, s_shellGopY + 36, "COMMANDS: 'cmd', 'gui', 'dir', 'cd', 'run', 'pci', 'dmesg', 'del', 'echo', 'help'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
                     RepaintRing3ConsoleGop(s_ring3ActivePrompt, "");
                 }
@@ -1864,7 +1868,42 @@ extern "C" __attribute__((naked)) void KiClockInterruptStub() {
 #endif
 }
 
+extern "C" __attribute__((used)) void KiApIpiHandler() {
+    micant::km::smp_baremetal::BareMetalSmpEngine::get().onApIpiInterrupt();
+}
 
+extern "C" __attribute__((naked)) void KiApIpiStub() {
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "pushq %rax\n\t"
+        "pushq %rbx\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rdx\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "movq %rsp, %rbx\n\t"
+        "andq $-16, %rsp\n\t"
+        "subq $512, %rsp\n\t"
+        "fxsave64 (%rsp)\n\t"
+        "subq $32, %rsp\n\t"
+        "callq KiApIpiHandler\n\t"
+        "addq $32, %rsp\n\t"
+        "fxrstor64 (%rsp)\n\t"
+        "movq %rbx, %rsp\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
+        "popq %rbx\n\t"
+        "popq %rax\n\t"
+        "iretq\n\t"
+    );
+#endif
+}
 
 static void enableUserPagingForRange(uint64_t startVa, size_t size) {
     uint64_t cr3 = 0;
@@ -3713,8 +3752,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     intEngine.setGate(micant::hal::idt::VECTOR_GENERAL_PROTECTION, reinterpret_cast<uint64_t>(&KiResilientExceptionStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.setGate(micant::hal::idt::VECTOR_PAGE_FAULT, reinterpret_cast<uint64_t>(&KiPageFaultStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.setGate(micant::hal::idt::VECTOR_CLOCK_TIMER, reinterpret_cast<uint64_t>(&KiClockInterruptStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
+    intEngine.setGate(micant::km::smp_baremetal::VECTOR_SMP_IPI, reinterpret_cast<uint64_t>(&KiApIpiStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.loadIdtr();
-    LogKernel("[Hal] 64-bit IDT Prepared (256 vectors configured, Resilient Trap Active, LIDT executed).");
+    LogKernel("[Hal] 64-bit IDT Prepared (256 vectors configured, Clock 0x30 + SMP IPI 0x3E Armed).");
     intEngine.initializeLocalApic(micant::hal::idt::LAPIC_DEFAULT_PHYSICAL_BASE);
     if (intEngine.isX2Apic()) {
         LogKernel("[Hal] Local APIC Discovered (x2APIC Active | MSR 0x80F SVR=0x1FF | MSR 0x808 TPR=0x00).");
@@ -3726,12 +3766,103 @@ extern "C" micant::NtStatus KiSystemStartup(
         LogKernel("[Hal] Local APIC 100Hz Periodic Preemption Timer Initialized (Vector 0x30).");
     }
 
-    // Initialize SMP Multi-Core AP Discovery (Horizon 98 / Suite 342)
+    // Real Bare-Metal Multi-Core x86_64 SMP Bring-Up (ACPI MADT -> 0x8000 Trampoline -> INIT-SIPI-SIPI)
+    auto& hwSmp = micant::km::smp_baremetal::BareMetalSmpEngine::get();
+    uint32_t hwOnlineCores = hwSmp.bringUpAllHardwareCores(
+        lpb->acpiTablePhysicalAddress,
+        micant::hal::idt::LAPIC_DEFAULT_PHYSICAL_BASE
+    );
+    uint32_t hwMadtCores = hwSmp.getMadtCoreCount();
+
+    auto appendU64Dec = [](char* dst, size_t cap, uint64_t val) noexcept {
+        char tmp[24]{};
+        size_t n = 0;
+        if (val == 0) { tmp[n++] = '0'; }
+        else { while (val > 0 && n < 22) { tmp[n++] = static_cast<char>('0' + (val % 10)); val /= 10; } }
+        char rev[24]{};
+        for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
+        rev[n] = '\0';
+        concatStr(dst, rev, cap);
+    };
+    auto appendU64Hex = [](char* dst, size_t cap, uint64_t val) noexcept {
+        static const char hex[] = "0123456789ABCDEF";
+        char buf[19];
+        buf[0] = '0'; buf[1] = 'x';
+        int start = 0;
+        while (start < 12 && ((val >> ((15 - start) * 4)) & 0xF) == 0) start++;
+        size_t pos = 2;
+        for (int i = start; i < 16; ++i) {
+            buf[pos++] = hex[(val >> ((15 - i) * 4)) & 0xF];
+        }
+        buf[pos] = '\0';
+        concatStr(dst, buf, cap);
+    };
+
+    // Update live dashboard & subsystem banners from real hardware SMP discovery
+    copyStr(s_cpuCardText, "", sizeof(s_cpuCardText));
+    appendU64Dec(s_cpuCardText, sizeof(s_cpuCardText), hwOnlineCores);
+    concatStr(s_cpuCardText, "/", sizeof(s_cpuCardText));
+    appendU64Dec(s_cpuCardText, sizeof(s_cpuCardText), hwMadtCores);
+    concatStr(s_cpuCardText, " HW CORES | APIC 0..", sizeof(s_cpuCardText));
+    appendU64Dec(s_cpuCardText, sizeof(s_cpuCardText), (hwOnlineCores > 0) ? (hwOnlineCores - 1) : 0);
+
+    copyStr(s_smpSubsysText, "[R0] SMP: ", sizeof(s_smpSubsysText));
+    appendU64Dec(s_smpSubsysText, sizeof(s_smpSubsysText), hwOnlineCores);
+    concatStr(s_smpSubsysText, "/", sizeof(s_smpSubsysText));
+    appendU64Dec(s_smpSubsysText, sizeof(s_smpSubsysText), hwMadtCores);
+    concatStr(s_smpSubsysText, " HW Cores (INIT-SIPI)", sizeof(s_smpSubsysText));
+    subsystems[1] = s_smpSubsysText;
+
+    copyStr(s_shellStatusLine, "STATUS: ntoskrnl.exe Active | SMP ", sizeof(s_shellStatusLine));
+    appendU64Dec(s_shellStatusLine, sizeof(s_shellStatusLine), hwOnlineCores);
+    concatStr(s_shellStatusLine, "/", sizeof(s_shellStatusLine));
+    appendU64Dec(s_shellStatusLine, sizeof(s_shellStatusLine), hwMadtCores);
+    concatStr(s_shellStatusLine, " HW Cores | IPI 0x3E + LAPIC 100Hz | TAB: SurShell", sizeof(s_shellStatusLine));
+
+    DrawCard(0, "CPU & SMP SILICON", s_cpuCardText, micant::bootvid::Color{100, 240, 160});
+
+    {
+        char smpHdr[160];
+        copyStr(smpHdr, "[SMP] ACPI MADT (RSDP=", sizeof(smpHdr));
+        appendU64Hex(smpHdr, sizeof(smpHdr), lpb->acpiTablePhysicalAddress);
+        concatStr(smpHdr, "): ", sizeof(smpHdr));
+        appendU64Dec(smpHdr, sizeof(smpHdr), hwOnlineCores);
+        concatStr(smpHdr, "/", sizeof(smpHdr));
+        appendU64Dec(smpHdr, sizeof(smpHdr), hwMadtCores);
+        concatStr(smpHdr, " Physical Cores ONLINE in 64-bit Long Mode!", sizeof(smpHdr));
+        LogKernel(smpHdr);
+
+        for (uint32_t ci = 0; ci < hwMadtCores; ++ci) {
+            const auto* kp = hwSmp.getKpcr(ci);
+            if (!kp) continue;
+            char cLine[160];
+            copyStr(cLine, "[SMP]   Core ", sizeof(cLine));
+            appendU64Dec(cLine, sizeof(cLine), ci);
+            concatStr(cLine, kp->isBsp ? " [BSP] APIC=" : " [AP ] APIC=", sizeof(cLine));
+            appendU64Dec(cLine, sizeof(cLine), kp->hardwareApicId);
+            concatStr(cLine, " GS_KPCR=", sizeof(cLine));
+            appendU64Hex(cLine, sizeof(cLine), kp->self);
+            concatStr(cLine, " GS[0x14]=", sizeof(cLine));
+            appendU64Dec(cLine, sizeof(cLine), kp->verifiedGsApic);
+            concatStr(cLine, " IPIs=", sizeof(cLine));
+            appendU64Dec(cLine, sizeof(cLine), kp->ipiReceived);
+            LogKernel(cLine);
+        }
+
+        char benchLine[160];
+        copyStr(benchLine, "[SMP] ", sizeof(benchLine));
+        appendU64Dec(benchLine, sizeof(benchLine), hwOnlineCores);
+        concatStr(benchLine, "-Core Ticket Spinlock Stress: ", sizeof(benchLine));
+        appendU64Dec(benchLine, sizeof(benchLine), hwSmp.getSharedProtectedCounter());
+        concatStr(benchLine, "/", sizeof(benchLine));
+        appendU64Dec(benchLine, sizeof(benchLine), hwSmp.getBenchExpectedTotal());
+        concatStr(benchLine, hwSmp.isBenchPassed() ? " PASS (0 lost updates!)" : " MISMATCH", sizeof(benchLine));
+        LogKernel(benchLine);
+    }
+
     auto& smpEngine = micant::hal::smp::SmpEngine64::get();
     std::array<uint8_t, 8> madtApicIds = {0, 1, 2, 3, 4, 5, 6, 7};
     smpEngine.discoverFromMadt(madtApicIds, 0);
-    LogKernel("[SMP] ACPI MADT: 8 Logical Cores Discovered (Xeon E3-1270 v6).");
-    LogKernel("[SMP] BSP APIC 0 Online | APICs 1..7 Topology Initialized (KPCR Bound).");
     LogKernel("[Executive] ExpInitializeExecutive (Phase 1) COMPLETED OK.");
 
     // Userland Execution (Horizon 95 / Suite 339)
@@ -3791,7 +3922,13 @@ extern "C" micant::NtStatus KiSystemStartup(
     if (s_shellOutputCount == 0) {
         ShellAddLine("MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)", micant::bootvid::Color{100, 240, 160});
         ShellAddLine("Sovereign 64-Bit Operating System running on Supermicro X11SSH-F", micant::bootvid::Color{0, 210, 255});
-        ShellAddLine("SMP 8/8 Cores Online | 32 GB ECC RAM | High-Half PML4[496] Active", micant::bootvid::Color{240, 245, 255});
+        {
+            char bannerSmp[128];
+            copyStr(bannerSmp, "Hardware SMP ", sizeof(bannerSmp));
+            concatStr(bannerSmp, s_cpuCardText, sizeof(bannerSmp));
+            concatStr(bannerSmp, " | High-Half PML4[496] Active", sizeof(bannerSmp));
+            ShellAddLine(bannerSmp, micant::bootvid::Color{240, 245, 255});
+        }
         ShellAddLine("System ready. Type 'help' for command reference or 'dir' to list files.", micant::bootvid::Color{255, 215, 0});
     }
 
@@ -3972,7 +4109,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         videoDriver.drawString(width - 320, 8, "Two-Stage Split Active | 91 Units",
                                micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{18, 24, 38}, 1);
 
-        DrawCard(0, "CPU & SMP SILICON", "8T | DTS: 37 C", micant::bootvid::Color{100, 240, 160});
+        DrawCard(0, "CPU & SMP SILICON", s_cpuCardText, micant::bootvid::Color{100, 240, 160});
         DrawCard(1, "PHYSICAL MEMORY", "32,768 MB ECC RAM", micant::bootvid::Color{100, 240, 160});
         DrawCard(2, "STORAGE & C: DRIVE", s_ntfsMounted ? s_storageCardText : "sdb2 FAT32 | 128GB C:",
                  s_ntfsMounted ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{0, 210, 255});
@@ -4013,7 +4150,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         videoDriver.drawRectangle(16, shellY, availW, shellH, micant::bootvid::Color{0, 180, 220});
         videoDriver.fillRectangle(16, shellY, availW, 22, micant::bootvid::Color{20, 28, 44});
         videoDriver.drawString(24, shellY + 4, "MicaNT BARE-METAL EXECUTIVE SHELL (ntoskrnl.exe)", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{20, 28, 44}, 1);
-        videoDriver.drawString(24, shellY + 24, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | TAB: Toggle SurShell", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
+        videoDriver.drawString(24, shellY + 24, s_shellStatusLine, micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
         videoDriver.drawString(24, shellY + 36, "COMMANDS: 'dir', 'cd', 'run', 'pci', 'dmesg', 'copy', 'del', 'echo', 'history', 'help'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
     };
 
@@ -4719,14 +4856,60 @@ extern "C" micant::NtStatus KiSystemStartup(
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp, s_prismRot);
         } else if (cmd[0] == 's' && cmd[1] == 'm' && cmd[2] == 'p' && (cmd[3] == '\0' || cmd[3] == ' ')) {
             ShellClearOutput();
-            ShellAddLine("SMP Topology: 8/8 Logical Processors Online & Synchronized", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("Processor:    Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz (Kaby Lake-S)", micant::bootvid::Color{220, 235, 255});
-            ShellAddLine("BSP:          APIC ID 0 (Executive Shell & KeClockInterrupt 100Hz)", micant::bootvid::Color{200, 220, 245});
-            ShellAddLine("APs:          APIC IDs 1..7 (SIPI 0x8000 Trampoline -> 64-bit Long Mode)", micant::bootvid::Color{200, 220, 245});
-            ShellAddLine("KPCR:         8x Per-CPU Structures bound to IA32_GS_BASE (KPRCB Active)", micant::bootvid::Color{200, 220, 245});
-            ShellAddLine("IPI Engine:   Vector 0x3E Dispatch (TLB Shootdown & Inter-Core Resched)", micant::bootvid::Color{200, 220, 245});
-            ShellAddLine("Status:       All 8 Cores Sovereign in Non-Paged Kernel Space (CPL=0)", micant::bootvid::Color{140, 255, 180});
-            LogKernel("Shell: SMP: 8 Logical Cores Online (Xeon E3-1270 v6) | APIC 0..7 Synchronized");
+            auto& liveSmp = micant::km::smp_baremetal::BareMetalSmpEngine::get();
+            uint32_t liveIpiAck = liveSmp.broadcastIpiToAps();
+            uint32_t liveOnline = liveSmp.getOnlineCoreCount();
+            uint32_t liveMadt   = liveSmp.getMadtCoreCount();
+
+            char hdr[128];
+            copyStr(hdr, "Hardware SMP: ", sizeof(hdr));
+            appendU64Dec(hdr, sizeof(hdr), liveOnline);
+            concatStr(hdr, "/", sizeof(hdr));
+            appendU64Dec(hdr, sizeof(hdr), liveMadt);
+            concatStr(hdr, " Physical Cores ONLINE (ACPI MADT -> INIT-SIPI-SIPI @ 0x8000)", sizeof(hdr));
+            ShellAddLine(hdr, micant::bootvid::Color{100, 240, 160});
+
+            for (uint32_t ci = 0; ci < liveMadt && ci < 8; ++ci) {
+                const auto* kp = liveSmp.getKpcr(ci);
+                if (!kp) continue;
+                char row[140];
+                copyStr(row, "  Core ", sizeof(row));
+                appendU64Dec(row, sizeof(row), ci);
+                concatStr(row, kp->isBsp ? " [BSP] APIC=" : " [AP ] APIC=", sizeof(row));
+                appendU64Dec(row, sizeof(row), kp->hardwareApicId);
+                concatStr(row, "  KPCR=", sizeof(row));
+                appendU64Hex(row, sizeof(row), kp->self);
+                concatStr(row, "  GS[14]=", sizeof(row));
+                appendU64Dec(row, sizeof(row), kp->verifiedGsApic);
+                concatStr(row, "  LockIters=", sizeof(row));
+                appendU64Dec(row, sizeof(row), kp->benchItersDone);
+                if (kp->isBsp) {
+                    concatStr(row, "  [Exec+100Hz]", sizeof(row));
+                } else {
+                    concatStr(row, "  IPIs=", sizeof(row));
+                    appendU64Dec(row, sizeof(row), kp->ipiReceived);
+                    concatStr(row, " (HLT->0x3E)", sizeof(row));
+                }
+                ShellAddLine(row, kp->isBsp ? micant::bootvid::Color{0, 229, 255} : micant::bootvid::Color{200, 220, 245});
+            }
+
+            char spinMsg[128];
+            copyStr(spinMsg, "Ticket Spinlock Proof: ", sizeof(spinMsg));
+            appendU64Dec(spinMsg, sizeof(spinMsg), liveSmp.getSharedProtectedCounter());
+            concatStr(spinMsg, " / ", sizeof(spinMsg));
+            appendU64Dec(spinMsg, sizeof(spinMsg), liveSmp.getBenchExpectedTotal());
+            concatStr(spinMsg, liveSmp.isBenchPassed() ? " PASS (0 lost updates across all cores!)" : " FAIL", sizeof(spinMsg));
+            ShellAddLine(spinMsg, micant::bootvid::Color{140, 255, 180});
+
+            char ipiMsg[128];
+            copyStr(ipiMsg, "Live Hardware IPI (Vector 0x3E): ", sizeof(ipiMsg));
+            appendU64Dec(ipiMsg, sizeof(ipiMsg), liveIpiAck);
+            concatStr(ipiMsg, "/", sizeof(ipiMsg));
+            appendU64Dec(ipiMsg, sizeof(ipiMsg), (liveOnline > 0) ? (liveOnline - 1) : 0);
+            concatStr(ipiMsg, " APs woken from HLT & acknowledged!", sizeof(ipiMsg));
+            ShellAddLine(ipiMsg, micant::bootvid::Color{255, 215, 0});
+
+            LogKernel(ipiMsg);
         } else if (cmd[0] == 'a' && cmd[1] == 'p' && cmd[2] == 'p') {
             copyStr(lastResultLine1, "PE32+ Userland: Executing sovereign subsystems cleanly in Ring 3 (CPL=3)...", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "SSDT Syscalls: NtQuerySystemInfo (0x11), NtWriteFile (0x25), NtTerminateProcess (0x01) OK", sizeof(lastResultLine2));
@@ -6195,16 +6378,16 @@ extern "C" micant::NtStatus KiSystemStartup(
                 videoDriver.fillRectangle(16, 28, width - 32, 16, micant::bootvid::Color{14, 20, 32});
                 videoDriver.drawString(16, 28, topHelp, micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{14, 20, 32}, 1);
             } else {
-                char cpuCardVal[32];
-                copyStr(cpuCardVal, "8T | DTS: ", sizeof(cpuCardVal));
+                char cpuCardVal[64];
+                copyStr(cpuCardVal, s_cpuCardText, sizeof(cpuCardVal));
+                concatStr(cpuCardVal, " | ", sizeof(cpuCardVal));
                 size_t cLen = strLen(cpuCardVal);
                 cpuCardVal[cLen++] = '0' + (char)((lastDtsTemp / 10) % 10);
                 cpuCardVal[cLen++] = '0' + (char)(lastDtsTemp % 10);
-                cpuCardVal[cLen++] = ' ';
                 cpuCardVal[cLen++] = 'C';
                 cpuCardVal[cLen] = '\0';
                 videoDriver.fillRectangle(18, cardY + 22, cardW - 4, 20, micant::bootvid::Color{16, 22, 34});
-                videoDriver.drawString(26, cardY + 24, cpuCardVal, micant::bootvid::Color{240, 245, 255}, micant::bootvid::Color{16, 22, 34}, 1);
+                videoDriver.drawString(26, cardY + 24, cpuCardVal, micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{16, 22, 34}, 1);
             }
 
             UartSerial::print("[ntoskrnl.exe Heartbeat] Ring 0 Active | Mode: ");
