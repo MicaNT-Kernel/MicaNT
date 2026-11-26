@@ -541,6 +541,7 @@ static void ShellAddLine(const char* text, micant::bootvid::Color col = micant::
 struct BareMetalFileHandleEntry {
     bool     inUse{false};
     bool     isDirectory{false};
+    bool     writable{false};
     char     path[128]{};
     uint64_t mftRecordNumber{0};
     uint64_t fileSize{0};
@@ -558,20 +559,36 @@ struct NtDirEntryInfo {
 static constexpr size_t MAX_KERNEL_FILE_HANDLES = 32;
 static BareMetalFileHandleEntry s_kernelFileHandles[MAX_KERNEL_FILE_HANDLES]{};
 alignas(4096) static uint8_t s_ntfsSyscallReadBuf[65536]{};
+alignas(4096) static uint8_t s_ntfsSyscallWriteBuf[65536]{};
 
-static uint64_t openNtfsKernelHandle(const char* asciiPath) noexcept {
+static uint64_t openNtfsKernelHandle(const char* asciiPath, uint32_t desiredAccess = 0, uint32_t creationDisposition = 3) noexcept {
     auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
     if (!ntfs.isMounted() || !asciiPath) return 0;
 
     micant::km::ntfs_baremetal::NtfsDirEntry entry{};
-    if (!ntfs.findPath(asciiPath, entry)) {
-        return 0;
+    bool exists = ntfs.findPath(asciiPath, entry);
+
+    // Win32 CreationDisposition: 1=CREATE_NEW, 2=CREATE_ALWAYS, 3=OPEN_EXISTING, 4=OPEN_ALWAYS, 5=TRUNCATE_EXISTING
+    if (creationDisposition == 2 || creationDisposition == 5) {
+        if (exists && entry.isDirectory) return 0;
+        if (!ntfs.writeFile(asciiPath, "", 0)) return 0;
+        exists = ntfs.findPath(asciiPath, entry);
+    } else if (creationDisposition == 1) {
+        if (exists) return 0;
+        if (!ntfs.writeFile(asciiPath, "", 0)) return 0;
+        exists = ntfs.findPath(asciiPath, entry);
+    } else if (creationDisposition == 4 && !exists) {
+        if (!ntfs.writeFile(asciiPath, "", 0)) return 0;
+        exists = ntfs.findPath(asciiPath, entry);
     }
+
+    if (!exists) return 0;
 
     for (size_t i = 0; i < MAX_KERNEL_FILE_HANDLES; ++i) {
         if (!s_kernelFileHandles[i].inUse) {
             s_kernelFileHandles[i].inUse = true;
             s_kernelFileHandles[i].isDirectory = entry.isDirectory;
+            s_kernelFileHandles[i].writable = (!entry.isDirectory) && ((desiredAccess & 0x40000000u) != 0 || creationDisposition != 3);
             copyStr(s_kernelFileHandles[i].path, asciiPath, sizeof(s_kernelFileHandles[i].path));
             s_kernelFileHandles[i].mftRecordNumber = entry.mftRecordNumber;
             s_kernelFileHandles[i].fileSize = entry.fileSize;
@@ -624,7 +641,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             }
             asciiPath[len] = '\0';
 
-            uint64_t handle = openNtfsKernelHandle(asciiPath);
+            uint64_t handle = openNtfsKernelHandle(asciiPath, static_cast<uint32_t>(arg2), static_cast<uint32_t>(arg3 ? arg3 : 3));
             UartSerial::print("  -> NtCreateFile (NTFS 3.1): Path='");
             UartSerial::print(asciiPath);
             if (handle != 0) {
@@ -930,7 +947,48 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print("  -> NtReadFile [IRP_MJ_READ Dispatched to \\Device\\Harddisk0\\Partition2]\r\n");
             return 0;
         }
-        case 0x25: { // NtWriteFile / Disk Write & Console Log via IRP
+        case 0x25: { // NtWriteFile (Live NTFS 3.1 AHCI DMA File Write OR Console Stdout)
+            if (auto* he = lookupKernelFileHandle(arg3)) {
+                if (he->isDirectory) return static_cast<uint64_t>(-1);
+                const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+                if (!vad || arg1 == 0) {
+                    UartSerial::print("  -> NtWriteFile (NTFS): Invalid user buffer -> STATUS_ACCESS_VIOLATION\r\n");
+                    return static_cast<uint64_t>(-1);
+                }
+                size_t writeLen = static_cast<size_t>(arg2);
+                size_t maxVad = static_cast<size_t>(vad->endVa - arg1);
+                if (writeLen > maxVad) writeLen = maxVad;
+                if (he->cursor + writeLen > sizeof(s_ntfsSyscallWriteBuf)) {
+                    writeLen = sizeof(s_ntfsSyscallWriteBuf) - static_cast<size_t>(he->cursor);
+                }
+                auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+                size_t existingLen = 0;
+                if (he->cursor > 0 && he->fileSize > 0) {
+                    ntfs.readFile(he->path, s_ntfsSyscallWriteBuf, sizeof(s_ntfsSyscallWriteBuf), existingLen);
+                }
+                std::memcpy(s_ntfsSyscallWriteBuf + he->cursor, reinterpret_cast<const void*>(arg1), writeLen);
+                size_t newTotal = static_cast<size_t>(he->cursor) + writeLen;
+                if (existingLen > newTotal) newTotal = existingLen;
+                if (!ntfs.writeFile(he->path, s_ntfsSyscallWriteBuf, newTotal)) {
+                    UartSerial::print("  -> NtWriteFile (NTFS 3.1): AHCI DMA commit FAILED\r\n");
+                    return static_cast<uint64_t>(-1);
+                }
+                he->cursor += writeLen;
+                he->fileSize = newTotal;
+                UartSerial::print("  -> NtWriteFile (NTFS 3.1 AHCI DMA): Handle=0x");
+                UartSerial::printHex64(arg3);
+                UartSerial::print(" -> Committed ");
+                UartSerial::printDec(static_cast<uint32_t>(writeLen));
+                UartSerial::print(" B to '");
+                UartSerial::print(he->path);
+                UartSerial::print("' (DMA Writes=");
+                UartSerial::printDec(static_cast<uint32_t>(ntfs.getDmaWritesIssued()));
+                UartSerial::print(" | USA Sealed=");
+                UartSerial::printDec(ntfs.getUsaFixupsSealed());
+                UartSerial::print(") -> STATUS_SUCCESS\r\n");
+                LogKernel("[Syscall] NtWriteFile (0x25): Committed File to NTFS 3.1 via AHCI DMA!");
+                return static_cast<uint64_t>(writeLen);
+            }
             auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
             auto* dev = iom.findDevice("\\Device\\Harddisk0\\Partition2");
             if (!dev) dev = iom.findDevice("\\Device\\Null");
@@ -2736,11 +2794,17 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         while (*arg && *arg != ' ' && fi + 1 < sizeof(fn)) fn[fi++] = *arg++;
         fn[fi] = '\0';
         while (*arg == ' ') ++arg;
-        auto& vol = getTargetVolume(fn);
         size_t pLen = strLen(arg);
         while (pLen > 0 && (arg[pLen - 1] == '\r' || arg[pLen - 1] == '\n')) --pLen;
-        if (vol.createFile(fn, arg, pLen)) {
-            copyStr(reply, "Wrote file to disk successfully via AHCI DMA.\r\n", maxReply);
+        char wrDrive = s_currentDrive;
+        if ((fn[0] == 'C' || fn[0] == 'c') && fn[1] == ':') wrDrive = 'C';
+        else if ((fn[0] == 'D' || fn[0] == 'd') && fn[1] == ':') wrDrive = 'D';
+        bool wrOk = (s_ntfsMounted && wrDrive == 'C')
+            ? micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().writeFile(fn, arg, pLen)
+            : getTargetVolume(fn).createFile(fn, arg, pLen);
+        if (wrOk) {
+            copyStr(reply, s_ntfsMounted ? "Wrote file to NTFS 3.1 disk successfully via AHCI DMA.\r\n"
+                                         : "Wrote file to disk successfully via AHCI DMA.\r\n", maxReply);
         } else {
             copyStr(reply, "Write failed to persist to disk.\r\n", maxReply);
         }
@@ -3269,6 +3333,18 @@ extern "C" micant::NtStatus KiSystemStartup(
                 concatStr(iniLog, prev, sizeof(iniLog));
                 concatStr(iniLog, "'", sizeof(iniLog));
                 LogKernel(iniLog);
+            }
+
+            // Check if files written on a previous boot survived cold power-cycle on NTFS 3.1!
+            char persistCheckBuf[256]{};
+            size_t persistBytes = 0;
+            if (ntfsVol.readFile("\\MicaNT\\persist_m6.txt", persistCheckBuf, sizeof(persistCheckBuf) - 1, persistBytes) && persistBytes > 0) {
+                persistCheckBuf[persistBytes] = '\0';
+                char pLog[160];
+                copyStr(pLog, "[NTFS] COLD-REBOOT PERSISTENCE VERIFIED: C:\\MicaNT\\persist_m6.txt (", sizeof(pLog));
+                appendDec(pLog, sizeof(pLog), persistBytes);
+                concatStr(pLog, " B survived power-cycle!)", sizeof(pLog));
+                LogKernel(pLog);
             }
 
             // Verify authentic PE32+ binaries directly off live NTFS non-resident data runs
@@ -4283,15 +4359,21 @@ extern "C" micant::NtStatus KiSystemStartup(
             resolveShellPath(filename, cur, fullTarget, sizeof(fullTarget));
 
             ShellClearOutput();
-            auto& vol = getTargetVolume(fullTarget);
-            bool ok = vol.createFile(fullTarget, payload, payloadLen);
+            char wrDrive = s_currentDrive;
+            if ((fullTarget[0] == 'C' || fullTarget[0] == 'c') && fullTarget[1] == ':') wrDrive = 'C';
+            else if ((fullTarget[0] == 'D' || fullTarget[0] == 'd') && fullTarget[1] == ':') wrDrive = 'D';
+            bool ok = (s_ntfsMounted && wrDrive == 'C')
+                ? micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().writeFile(fullTarget, payload, payloadLen)
+                : getTargetVolume(fullTarget).createFile(fullTarget, payload, payloadLen);
             if (ok) {
-                char w1[96];
-                copyStr(w1, "FAT32 File Written OK: ", sizeof(w1));
+                char w1[120];
+                copyStr(w1, s_ntfsMounted ? "NTFS 3.1 File Written OK: " : "FAT32 File Written OK: ", sizeof(w1));
                 concatStr(w1, fullTarget, sizeof(w1));
                 ShellAddLine(w1, micant::bootvid::Color{100, 240, 160});
-                ShellAddLine("Sectors committed to HGST Ultrastar disk via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
-                LogKernel("Shell: AHCI DMA Write committed to FAT32 disk.");
+                ShellAddLine(s_ntfsMounted ? "MFT + USA Fixups + Data committed to NTFS 3.1 via AHCI DMA."
+                                           : "Sectors committed to HGST Ultrastar disk via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
+                LogKernel(s_ntfsMounted ? "Shell: AHCI DMA Write committed to NTFS 3.1 disk."
+                                        : "Shell: AHCI DMA Write committed to FAT32 disk.");
             } else {
                 ShellAddLine("FAT32 Write Failed: Disk error or volume full.", micant::bootvid::Color{255, 100, 100});
                 ShellAddLine("Usage: write <file> <text>", micant::bootvid::Color{200, 220, 245});
@@ -5022,15 +5104,20 @@ extern "C" micant::NtStatus KiSystemStartup(
                     const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
                     resolveShellPath(filename, cur, fullTarget, sizeof(fullTarget));
 
-                    auto& vol = getTargetVolume(fullTarget);
-                    bool ok = vol.createFile(fullTarget, text, tlen);
+                    char wrDrive = s_currentDrive;
+                    if ((fullTarget[0] == 'C' || fullTarget[0] == 'c') && fullTarget[1] == ':') wrDrive = 'C';
+                    else if ((fullTarget[0] == 'D' || fullTarget[0] == 'd') && fullTarget[1] == ':') wrDrive = 'D';
+                    bool ok = (s_ntfsMounted && wrDrive == 'C')
+                        ? micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().writeFile(fullTarget, text, tlen)
+                        : getTargetVolume(fullTarget).createFile(fullTarget, text, tlen);
                     if (ok) {
                         char m[128];
                         copyStr(m, "Wrote text to: ", sizeof(m));
                         concatStr(m, fullTarget, sizeof(m));
-                        concatStr(m, " (via AHCI DMA)", sizeof(m));
+                        concatStr(m, s_ntfsMounted ? " (NTFS 3.1 AHCI DMA)" : " (via AHCI DMA)", sizeof(m));
                         ShellAddLine(m, micant::bootvid::Color{100, 240, 160});
-                        ShellAddLine("FAT32 cluster allocated and sectors committed to disk.", micant::bootvid::Color{200, 220, 245});
+                        ShellAddLine(s_ntfsMounted ? "NTFS 3.1 MFT + USA Fixups + Index committed via AHCI DMA."
+                                                   : "FAT32 cluster allocated and sectors committed to disk.", micant::bootvid::Color{200, 220, 245});
                         LogKernel(m);
                     } else {
                         ShellAddLine("Echo write failed: unable to create target file.", micant::bootvid::Color{255, 100, 100});
