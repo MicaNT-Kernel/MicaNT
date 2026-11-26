@@ -645,6 +645,60 @@ __declspec(dllexport) uint64_t NtFlushKey(void* keyHandle) noexcept {
 }
 
 // ============================================================================
+// 1c. Native NT Bare-Metal Network Socket Syscalls (0x90..0x95 -> e1000 DMA)
+// ============================================================================
+
+struct NtNetConnectReq {
+    uint64_t hSocket;
+    uint32_t ipv4NetOrder;
+    uint16_t portHostOrder;
+    uint16_t reserved;
+};
+
+struct NtNetIoReq {
+    uint64_t hSocket;
+    uint64_t bufPtr;
+    uint32_t length;
+    int32_t  outBytes;
+};
+
+__declspec(dllexport) uint64_t NtNetQueryAdapterInfo(void* outInfoBuf, uint32_t bufLen) noexcept {
+    return NtSyscall3(0x90, reinterpret_cast<uint64_t>(outInfoBuf), bufLen, 0);
+}
+
+__declspec(dllexport) uint64_t NtNetSocketCreate(void** outSocketHandle) noexcept {
+    if (!outSocketHandle) return NT_STATUS_INVALID_PARAMETER;
+    uint64_t h = NtSyscall3(0x91, 0, 0, 0);
+    if (h == 0) {
+        *outSocketHandle = nullptr;
+        return NT_STATUS_UNSUCCESSFUL;
+    }
+    *outSocketHandle = reinterpret_cast<void*>(h);
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t NtNetSocketConnect(void* hSocket, uint32_t ipv4NetOrder, uint16_t portHostOrder) noexcept {
+    NtNetConnectReq req{reinterpret_cast<uint64_t>(hSocket), ipv4NetOrder, portHostOrder, 0};
+    return NtSyscall3(0x92, reinterpret_cast<uint64_t>(&req), 0, 0);
+}
+
+__declspec(dllexport) int32_t NtNetSocketSend(void* hSocket, const void* buf, uint32_t len) noexcept {
+    NtNetIoReq req{reinterpret_cast<uint64_t>(hSocket), reinterpret_cast<uint64_t>(buf), len, -1};
+    uint64_t st = NtSyscall3(0x93, reinterpret_cast<uint64_t>(&req), 0, 0);
+    return (st == NT_STATUS_SUCCESS) ? req.outBytes : -1;
+}
+
+__declspec(dllexport) int32_t NtNetSocketRecv(void* hSocket, void* buf, uint32_t maxLen) noexcept {
+    NtNetIoReq req{reinterpret_cast<uint64_t>(hSocket), reinterpret_cast<uint64_t>(buf), maxLen, -1};
+    uint64_t st = NtSyscall3(0x94, reinterpret_cast<uint64_t>(&req), 0, 0);
+    return (st == NT_STATUS_SUCCESS) ? req.outBytes : -1;
+}
+
+__declspec(dllexport) uint64_t NtNetSocketClose(void* hSocket) noexcept {
+    return NtSyscall3(0x95, reinterpret_cast<uint64_t>(hSocket), 0, 0);
+}
+
+// ============================================================================
 // 2. RTL Runtime Library Functions
 // ============================================================================
 

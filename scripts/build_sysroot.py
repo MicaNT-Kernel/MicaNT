@@ -121,6 +121,7 @@ def main():
         ("tools/dlls/gdi32.cpp", "gdi32.dll"),
         ("tools/dlls/user32.cpp", "user32.dll"),
         ("tools/dlls/advapi32.cpp", "advapi32.dll"),
+        ("tools/dlls/ws2_32.cpp", "ws2_32.dll"),
         ("tools/dlls/comctl32.cpp", "comctl32.dll"),
         ("tools/dlls/comdlg32.cpp", "comdlg32.dll"),
         ("tools/dlls/shell32.cpp", "shell32.dll"),
@@ -169,6 +170,12 @@ def main():
                     cmd.append(str(ntdll_implib))
                 adv_implib = repo_root / "build" / "libadvapi32.a"
                 cmd.append(f"-Wl,--out-implib,{adv_implib}")
+            elif name == "ws2_32.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
+                ws2_implib = repo_root / "build" / "libws2_32.a"
+                cmd.append(f"-Wl,--out-implib,{ws2_implib}")
             cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
@@ -214,11 +221,9 @@ def main():
         ("tools/lsass_app.cpp", "lsass.exe"),
         ("tools/svchost_app.cpp", "svchost.exe"),
         ("tools/conhost_app.cpp", "conhost.exe"),
-        ("tools/ipconfig_app.cpp", "ipconfig.exe"),
         ("tools/whoami_app.cpp", "whoami.exe"),
         ("tools/tasklist_app.cpp", "tasklist.exe"),
         ("tools/systeminfo_app.cpp", "systeminfo.exe"),
-        ("tools/ping_app.cpp", "ping.exe"),
         ("tools/netstat_app.cpp", "netstat.exe"),
         ("tools/chkdsk_app.cpp", "chkdsk.exe"),
         ("tools/diskpart_app.cpp", "diskpart.exe"),
@@ -300,6 +305,28 @@ def main():
         ]
         run_command(cmd_reg, "reg.exe")
         print(f"      {GREEN}Compiled reg.exe ({reg_out.stat().st_size:,} bytes, dynamic KERNEL32+ADVAPI32 IAT){RESET}")
+
+    # Build authentic dynamic Ring-3 Network Utilities (import KERNEL32.dll + WS2_32.dll -> NTDLL.dll)
+    ws2_implib = repo_root / "build" / "libws2_32.a"
+    if kernel32_implib.exists() and ws2_implib.exists():
+        for rel_src, exe_name in [
+            ("tools/ipconfig_app.cpp", "ipconfig.exe"),
+            ("tools/ping_app.cpp",     "ping.exe"),
+            ("tools/curl_app.cpp",     "curl.exe"),
+        ]:
+            nsrc = repo_root / rel_src
+            if nsrc.exists():
+                nout = system32 / exe_name
+                cmd_net = [
+                    cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
+                    "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
+                    "-mno-stack-arg-probe", "-O2",
+                    "-Wl,--subsystem,console", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
+                    "-nostdlib", str(nsrc), str(kernel32_implib), str(ws2_implib),
+                    "-o", str(nout)
+                ]
+                run_command(cmd_net, exe_name)
+                print(f"      {GREEN}Compiled {exe_name} ({nout.stat().st_size:,} bytes, dynamic KERNEL32+WS2_32 IAT){RESET}")
 
     cmd_exe = system32 / "cmd.exe"
     if cmd_exe.exists():

@@ -42,6 +42,7 @@
 #include "micant/km/executive/pe_loader_baremetal.hpp"
 #include "micant/km/executive/process_cr3_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
+#include "micant/km/drivers/net/e1000_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
 #include "micant/km/executive/mm_baremetal.hpp"
@@ -1149,7 +1150,11 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
         case 0x77: { // NtFlushKey
             return micant::km::cm_baremetal::BareMetalConfigManager::get().flushKey(arg1) ? 0ULL : 0xC0000008ULL;
         }
-        case 0x0F: { // NtClose (File Handle, SMP Thread Handle, or Registry Key Handle)
+        case 0x0F: { // NtClose (File, SMP Thread, Registry Key, or Network Socket Handle)
+            if ((arg1 & micant::km::e1000_baremetal::NET_SOCKET_HANDLE_TAG) != 0) {
+                micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpClose(arg1);
+                return 0;
+            }
             if ((arg1 & micant::km::cm_baremetal::REG_KEY_HANDLE_TAG) != 0) {
                 micant::km::cm_baremetal::BareMetalConfigManager::get().closeKey(arg1);
                 return 0;
@@ -1514,16 +1519,89 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             LogKernel(dispLog);
             return 0;
         }
-        case 0x26: { // NtIcmpSendEcho (Hardware ICMP Echo Request via Intel I210 DMA)
+        case 0x26: { // NtIcmpSendEcho (Real Hardware ICMP Echo Request/Reply via Intel e1000/I210 DMA!)
             uint32_t targetIp = static_cast<uint32_t>(arg1);
-            if (targetIp != 0) {
-                auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
-                nic.sendPing(targetIp);
-                UartSerial::print("  -> NtIcmpSendEcho: Dispatched 32-byte ICMP Echo Request via Intel I210 DMA\r\n");
-                LogKernel("[Syscall] NtIcmpSendEcho (0x26) Dispatched");
-                return 0;
+            if (targetIp == 0) return 1;
+            auto& e1k = micant::km::e1000_baremetal::BareMetalE1000Engine::get();
+            if (e1k.isInitialized()) {
+                micant::km::e1000_baremetal::NetIcmpReplyInfo rep{};
+                bool ok = e1k.sendPingAndWaitReply(targetIp, rep);
+                if (ok && arg2 != 0 && arg3 >= sizeof(rep)) {
+                    const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
+                    if (vad && arg2 + sizeof(rep) <= vad->endVa) {
+                        std::memcpy(reinterpret_cast<void*>(arg2), &rep, sizeof(rep));
+                    }
+                }
+                UartSerial::print("  -> NtIcmpSendEcho (0x26 e1000 DMA): ");
+                UartSerial::print(ok ? "REAL WIRE ECHO REPLY RECEIVED (TTL=" : "TIMEOUT");
+                if (ok) {
+                    UartSerial::printDec(rep.ttl);
+                    UartSerial::print(", RTT=");
+                    UartSerial::printDec(rep.rttUs);
+                    UartSerial::print("us)\r\n");
+                } else {
+                    UartSerial::print("\r\n");
+                }
+                return ok ? 0ULL : 1ULL;
             }
-            return 1;
+            auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
+            nic.sendPing(targetIp);
+            return 0;
+        }
+        case 0x90: { // NtNetQueryAdapterInfo
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg2 < sizeof(micant::km::e1000_baremetal::NetAdapterInfo) ||
+                arg1 + sizeof(micant::km::e1000_baremetal::NetAdapterInfo) > vad->endVa) {
+                return 0xC0000005ULL;
+            }
+            micant::km::e1000_baremetal::NetAdapterInfo info{};
+            micant::km::e1000_baremetal::BareMetalE1000Engine::get().queryAdapterInfo(info);
+            std::memcpy(reinterpret_cast<void*>(arg1), &info, sizeof(info));
+            return 0;
+        }
+        case 0x91: { // NtNetSocketCreate
+            return micant::km::e1000_baremetal::BareMetalE1000Engine::get().createTcpSocket();
+        }
+        case 0x92: { // NtNetSocketConnect (Real ARP + RFC 793 TCP 3-Way Handshake SYN/SYN-ACK/ACK!)
+            struct NtNetConnK { uint64_t hSock; uint32_t ipNet; uint16_t portHost; uint16_t res; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetConnK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<const NtNetConnK*>(arg1);
+            bool ok = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpConnect(req->hSock, req->ipNet, req->portHost);
+            UartSerial::print("  -> NtNetSocketConnect (0x92 e1000 TCP): Port=");
+            UartSerial::printDec(req->portHost);
+            UartSerial::print(ok ? " -> ESTABLISHED (3-Way SYN/SYN-ACK/ACK OK!)\r\n" : " -> FAILED\r\n");
+            if (ok) LogKernel("[NET] TCP 3-Way Handshake ESTABLISHED via Intel e1000 DMA!");
+            return ok ? 0ULL : 0xC0000001ULL;
+        }
+        case 0x93: { // NtNetSocketSend
+            struct NtNetIoK { uint64_t hSock; uint64_t bufPtr; uint32_t len; int32_t outBytes; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetIoK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtNetIoK*>(arg1);
+            const auto* bvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->bufPtr);
+            if (!bvad || req->bufPtr == 0 || req->bufPtr + req->len > bvad->endVa) return 0xC0000005ULL;
+            int32_t sent = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpSend(
+                req->hSock, reinterpret_cast<const void*>(req->bufPtr), req->len
+            );
+            req->outBytes = sent;
+            return (sent >= 0) ? 0ULL : 0xC0000001ULL;
+        }
+        case 0x94: { // NtNetSocketRecv
+            struct NtNetIoK { uint64_t hSock; uint64_t bufPtr; uint32_t len; int32_t outBytes; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetIoK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtNetIoK*>(arg1);
+            const auto* bvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->bufPtr);
+            if (!bvad || req->bufPtr == 0 || req->bufPtr + req->len > bvad->endVa) return 0xC0000005ULL;
+            int32_t got = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpRecv(
+                req->hSock, reinterpret_cast<void*>(req->bufPtr), req->len
+            );
+            req->outBytes = got;
+            return (got >= 0) ? 0ULL : 0xC0000001ULL;
+        }
+        case 0x95: { // NtNetSocketClose
+            return micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpClose(arg1) ? 0ULL : 0xC0000008ULL;
         }
         case 0x46: { // NtYieldExecution
             auto& sched = micant::um::UserThreadScheduler64::get();
@@ -4638,13 +4716,36 @@ extern "C" micant::NtStatus KiSystemStartup(
         LogKernel("[USB] Intel xHCI 3.0: xHCI Controller probed (PS/2 + UART active).");
     }
 
-    bool i210Ok = micant::km::i210_baremetal::BareMetalI210Driver::get().initialize();
+    auto& e1k = micant::km::e1000_baremetal::BareMetalE1000Engine::get();
+    bool e1kOk = e1k.initialize();
+    if (e1kOk) {
+        char netLog[160];
+        static const char hx[] = "0123456789ABCDEF";
+        copyStr(netLog, "[NET] Intel PRO/1000 (8086:", sizeof(netLog));
+        uint16_t did = e1k.getDeviceId();
+        char dhex[5] = {hx[(did>>12)&0xF], hx[(did>>8)&0xF], hx[(did>>4)&0xF], hx[did&0xF], '\0'};
+        concatStr(netLog, dhex, sizeof(netLog));
+        concatStr(netLog, " @ PCI ", sizeof(netLog));
+        appendU64Dec(netLog, sizeof(netLog), e1k.getPciBus());
+        concatStr(netLog, ":", sizeof(netLog));
+        appendU64Dec(netLog, sizeof(netLog), e1k.getPciDev());
+        concatStr(netLog, ") DMA Online! MAC=", sizeof(netLog));
+        const uint8_t* m = e1k.getMac();
+        for (int mi = 0; mi < 6; ++mi) {
+            if (mi > 0) concatStr(netLog, ":", sizeof(netLog));
+            char b[3] = {hx[m[mi]>>4], hx[m[mi]&0xF], '\0'};
+            concatStr(netLog, b, sizeof(netLog));
+        }
+        concatStr(netLog, e1k.isGatewayMacValid() ? " | IP=10.0.2.15 | GW ARP OK!" : " | IP=10.0.2.15", sizeof(netLog));
+        LogKernel(netLog);
+    }
+    bool i210Ok = !e1kOk && micant::km::i210_baremetal::BareMetalI210Driver::get().initialize();
     if (i210Ok) {
         micant::km::i210_baremetal::BareMetalI210Driver::get().registerShellCallback(RemoteShellDispatcher);
         LogKernel("[NET] Intel I210 Gigabit Ethernet (8086:1533) Online & Link Up!");
         LogKernel("[NET] IPv4: 147.135.1.229/24 | MAC: a4:bf:01:1e:a3:be | ARP & ICMP Active");
-    } else {
-        LogKernel("[NET] Intel I210: Controller probed (PCIe 02:00.0).");
+    } else if (!e1kOk) {
+        LogKernel("[NET] Intel I210/e1000: Controller probed (standby).");
     }
 
     bool s_showDesktop = false;
@@ -6836,7 +6937,8 @@ extern "C" micant::NtStatus KiSystemStartup(
             lastTsc = nowTsc;
             lastDtsTemp = getCpuTemperatureC();
 
-            // Refresh network ARP / keepalive with Cisco HSRP Gateway
+            // Poll Intel e1000 / I210 RX DMA rings
+            micant::km::e1000_baremetal::BareMetalE1000Engine::get().pollRx();
             micant::km::i210_baremetal::BareMetalI210Driver::get().heartbeat();
 
             if (s_showDesktop) {
