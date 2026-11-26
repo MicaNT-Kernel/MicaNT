@@ -491,6 +491,7 @@ def main():
     dir_windows = next_mft; next_mft += 1
     dir_win_sys32 = next_mft; next_mft += 1
     dir_win_drivers = next_mft; next_mft += 1
+    dir_win_config = next_mft; next_mft += 1
 
     # Create C:\MicaNT\system.ini
     system_ini_bytes = (
@@ -511,13 +512,16 @@ def main():
     if app_src.exists():
         micant_sys32_children.append(add_file(dir_micant_sys32, "app.exe", app_src.read_bytes()))
 
-    # Populate C:\Windows\System32 & C:\Windows\System32\drivers from compiled sysroot
-    win_sys32_children = [(dir_win_drivers, dir_win_sys32, "drivers", 0, 0, True)]
+    # Populate C:\Windows\System32, drivers, & config (real binary regf hives!) from compiled sysroot
+    win_sys32_children = [
+        (dir_win_drivers, dir_win_sys32, "drivers", 0, 0, True),
+        (dir_win_config, dir_win_sys32, "config", 0, 0, True),
+    ]
     sys32_dir = sysroot / "Windows" / "System32"
     for fname in [
         "ntoskrnl.exe", "ntdll.dll", "kernel32.dll", "kernelbase.dll",
         "user32.dll", "gdi32.dll", "advapi32.dll", "ucrtbase.dll",
-        "cmd.exe", "win32_ntfs_probe.exe", "win32_proc_a.exe", "win32_proc_b.exe",
+        "cmd.exe", "reg.exe", "win32_ntfs_probe.exe", "win32_proc_a.exe", "win32_proc_b.exe",
         "win32_nt_suite.exe", "win32_gui_app.exe", "win32_smp_threads.exe",
         "smss.exe", "csrss.exe", "explorer.exe", "taskmgr.exe",
     ]:
@@ -531,6 +535,13 @@ def main():
         dpath = drv_dir / dname
         if dpath.exists():
             win_drivers_children.append(add_file(dir_win_drivers, dname, dpath.read_bytes()))
+
+    win_config_children = []
+    cfg_dir = sys32_dir / "config"
+    for hname in ["SYSTEM", "SOFTWARE", "SAM", "SECURITY", "DEFAULT"]:
+        hpath = cfg_dir / hname
+        if hpath.exists():
+            win_config_children.append(add_file(dir_win_config, hname, hpath.read_bytes()))
 
     readme_bytes = (
         "MicaNT Sovereign Bare-Metal NTFS 3.1 Volume (C:\\)\r\n"
@@ -549,6 +560,7 @@ def main():
     mft_records[dir_windows] = build_dir_mft_record(dir_windows, 5, "Windows", [(dir_win_sys32, dir_windows, "System32", 0, 0, True)], alloc_clusters, write_cluster)
     mft_records[dir_win_sys32] = build_dir_mft_record(dir_win_sys32, dir_windows, "System32", win_sys32_children, alloc_clusters, write_cluster)
     mft_records[dir_win_drivers] = build_dir_mft_record(dir_win_drivers, dir_win_sys32, "drivers", win_drivers_children, alloc_clusters, write_cluster)
+    mft_records[dir_win_config] = build_dir_mft_record(dir_win_config, dir_win_sys32, "config", win_config_children, alloc_clusters, write_cluster)
 
     # ------------------------------------------------------------------
     # 4. Build Core System MFT Metafiles (#0..#7)

@@ -45,6 +45,7 @@
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
 #include "micant/km/executive/mm_baremetal.hpp"
+#include "micant/km/executive/cm_baremetal.hpp"
 #include "../test/unmodified_fixture.hpp"
 
 extern "C" void ___chkstk_ms() {}
@@ -717,10 +718,24 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             }
             asciiPath[len] = '\0';
 
+            char cmdLineAscii[256]{};
+            if (arg2 != 0) {
+                const auto* cmdVad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
+                if (cmdVad) {
+                    const auto* wcmd = reinterpret_cast<const uint16_t*>(arg2);
+                    size_t clen = 0;
+                    while (clen + 1 < sizeof(cmdLineAscii) && wcmd[clen] != 0) {
+                        cmdLineAscii[clen] = (wcmd[clen] < 128) ? static_cast<char>(wcmd[clen]) : '?';
+                        ++clen;
+                    }
+                    cmdLineAscii[clen] = '\0';
+                }
+            }
+
             auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
             auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
             uint32_t parentPid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 4;
-            int childSlot = mp.createProcessFromNtfs(ntfs, asciiPath, parentPid);
+            int childSlot = mp.createProcessFromNtfs(ntfs, asciiPath, parentPid, cmdLineAscii[0] ? cmdLineAscii : nullptr);
             if (childSlot < 0) {
                 UartSerial::print("  -> NtCreateUserProcess: Failed to spawn '");
                 UartSerial::print(asciiPath);
@@ -943,7 +958,202 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             *reinterpret_cast<uint32_t*>(arg3) = code;
             return 0;
         }
-        case 0x0F: { // NtClose (Close Kernel File Handle or SMP Hardware Thread Handle)
+        case 0x70:   // NtOpenKey (Binary NTFS regf Hive)
+        case 0x71: { // NtCreateKey (Binary NTFS regf Hive + Immediate AHCI DMA Flush)
+            struct NtRegKeyReqK {
+                uint64_t rootHandle;
+                uint64_t subKeyAsciiPtr;
+                uint64_t outHandle;
+                uint32_t outDisposition;
+                uint32_t reserved;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtRegKeyReqK) > vad->endVa) {
+                return 0xC0000005ULL;
+            }
+            auto* req = reinterpret_cast<NtRegKeyReqK*>(arg1);
+            char subKey[192]{};
+            if (req->subKeyAsciiPtr != 0) {
+                const auto* svad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->subKeyAsciiPtr);
+                if (!svad) return 0xC0000005ULL;
+                const char* src = reinterpret_cast<const char*>(req->subKeyAsciiPtr);
+                size_t k = 0;
+                while (k + 1 < sizeof(subKey) && src[k]) { subKey[k] = src[k]; ++k; }
+                subKey[k] = '\0';
+            }
+            auto& cm = micant::km::cm_baremetal::BareMetalConfigManager::get();
+            uint64_t outH = 0;
+            uint32_t outDisp = 0;
+            bool ok = cm.openOrCreateKey(req->rootHandle, subKey, (ssn == 0x71), outH, outDisp);
+            if (!ok) return 0xC0000034ULL; // STATUS_OBJECT_NAME_NOT_FOUND
+            req->outHandle = outH;
+            req->outDisposition = outDisp;
+            UartSerial::print((ssn == 0x71) ? "  -> NtCreateKey (0x71): '" : "  -> NtOpenKey (0x70): '");
+            UartSerial::print(subKey);
+            UartSerial::print("' -> HKEY=0x");
+            UartSerial::printHex64(outH);
+            UartSerial::print("\r\n");
+            return 0;
+        }
+        case 0x72: { // NtQueryValueKey
+            struct NtRegValReqK {
+                uint64_t hKey;
+                uint64_t valueNameAsciiPtr;
+                uint64_t dataPtr;
+                uint32_t type;
+                uint32_t dataLen;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtRegValReqK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtRegValReqK*>(arg1);
+            char vname[64]{};
+            if (req->valueNameAsciiPtr != 0) {
+                const auto* nvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->valueNameAsciiPtr);
+                if (!nvad) return 0xC0000005ULL;
+                const char* src = reinterpret_cast<const char*>(req->valueNameAsciiPtr);
+                size_t k = 0;
+                while (k + 1 < sizeof(vname) && src[k]) { vname[k] = src[k]; ++k; }
+                vname[k] = '\0';
+            }
+            void* dstData = nullptr;
+            if (req->dataPtr != 0) {
+                const auto* dvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->dataPtr);
+                if (!dvad || req->dataPtr + req->dataLen > dvad->endVa) return 0xC0000005ULL;
+                dstData = reinterpret_cast<void*>(req->dataPtr);
+            }
+            uint32_t outType = 0;
+            uint32_t len = req->dataLen;
+            if (!micant::km::cm_baremetal::BareMetalConfigManager::get().queryValue(req->hKey, vname, outType, dstData, len)) {
+                return 0xC0000034ULL;
+            }
+            req->type = outType;
+            req->dataLen = len;
+            return 0;
+        }
+        case 0x73: { // NtSetValueKey (Mutates Hive & Flushes Binary regf to NTFS 3.1 via AHCI DMA!)
+            struct NtRegValReqK {
+                uint64_t hKey;
+                uint64_t valueNameAsciiPtr;
+                uint64_t dataPtr;
+                uint32_t type;
+                uint32_t dataLen;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtRegValReqK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtRegValReqK*>(arg1);
+            char vname[64]{};
+            if (req->valueNameAsciiPtr != 0) {
+                const auto* nvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->valueNameAsciiPtr);
+                if (!nvad) return 0xC0000005ULL;
+                const char* src = reinterpret_cast<const char*>(req->valueNameAsciiPtr);
+                size_t k = 0;
+                while (k + 1 < sizeof(vname) && src[k]) { vname[k] = src[k]; ++k; }
+                vname[k] = '\0';
+            }
+            uint8_t kdata[160]{};
+            uint32_t dlen = (req->dataLen > sizeof(kdata)) ? static_cast<uint32_t>(sizeof(kdata)) : req->dataLen;
+            if (dlen > 0 && req->dataPtr != 0) {
+                const auto* dvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->dataPtr);
+                if (!dvad || req->dataPtr + dlen > dvad->endVa) return 0xC0000005ULL;
+                std::memcpy(kdata, reinterpret_cast<const void*>(req->dataPtr), dlen);
+            }
+            auto& cm = micant::km::cm_baremetal::BareMetalConfigManager::get();
+            if (!cm.setValue(req->hKey, vname, req->type, kdata, dlen)) {
+                return 0xC0000001ULL;
+            }
+            UartSerial::print("  -> NtSetValueKey (0x73): Committed '");
+            UartSerial::print(vname);
+            UartSerial::print("' (Type=");
+            UartSerial::printDec(req->type);
+            UartSerial::print(", ");
+            UartSerial::printDec(dlen);
+            UartSerial::print(" B) -> Binary regf Hive Flushed to NTFS 3.1 via AHCI DMA!\r\n");
+            LogKernel("[Cm] NtSetValueKey (0x73): Flushed Binary regf Hive to NTFS 3.1!");
+            return 0;
+        }
+        case 0x74: { // NtDeleteValueKey
+            struct NtRegValReqK {
+                uint64_t hKey;
+                uint64_t valueNameAsciiPtr;
+                uint64_t dataPtr;
+                uint32_t type;
+                uint32_t dataLen;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtRegValReqK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtRegValReqK*>(arg1);
+            char vname[64]{};
+            if (req->valueNameAsciiPtr != 0) {
+                const auto* nvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->valueNameAsciiPtr);
+                if (!nvad) return 0xC0000005ULL;
+                const char* src = reinterpret_cast<const char*>(req->valueNameAsciiPtr);
+                size_t k = 0;
+                while (k + 1 < sizeof(vname) && src[k]) { vname[k] = src[k]; ++k; }
+                vname[k] = '\0';
+            }
+            return micant::km::cm_baremetal::BareMetalConfigManager::get().deleteValue(req->hKey, vname)
+                ? 0ULL : 0xC0000034ULL;
+        }
+        case 0x75: { // NtEnumerateValueKey
+            struct NtRegEnumReqK {
+                uint64_t hKey;
+                uint32_t index;
+                uint32_t outType;
+                uint64_t outNamePtr;
+                uint32_t nameCap;
+                uint32_t dataLen;
+                uint64_t outDataPtr;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtRegEnumReqK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtRegEnumReqK*>(arg1);
+            const auto* nvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->outNamePtr);
+            if (!nvad || req->outNamePtr == 0 || req->outNamePtr + req->nameCap > nvad->endVa) return 0xC0000005ULL;
+            void* dstData = nullptr;
+            if (req->outDataPtr != 0 && req->dataLen > 0) {
+                const auto* dvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->outDataPtr);
+                if (!dvad || req->outDataPtr + req->dataLen > dvad->endVa) return 0xC0000005ULL;
+                dstData = reinterpret_cast<void*>(req->outDataPtr);
+            }
+            uint32_t outType = 0;
+            uint32_t dlen = req->dataLen;
+            if (!micant::km::cm_baremetal::BareMetalConfigManager::get().enumValue(
+                    req->hKey, req->index, reinterpret_cast<char*>(req->outNamePtr), req->nameCap, outType, dstData, dlen)) {
+                return 0x8000001AULL; // STATUS_NO_MORE_ENTRIES
+            }
+            req->outType = outType;
+            req->dataLen = dlen;
+            return 0;
+        }
+        case 0x76: { // NtEnumerateKey
+            struct NtRegEnumReqK {
+                uint64_t hKey;
+                uint32_t index;
+                uint32_t outType;
+                uint64_t outNamePtr;
+                uint32_t nameCap;
+                uint32_t dataLen;
+                uint64_t outDataPtr;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtRegEnumReqK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtRegEnumReqK*>(arg1);
+            const auto* nvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->outNamePtr);
+            if (!nvad || req->outNamePtr == 0 || req->outNamePtr + req->nameCap > nvad->endVa) return 0xC0000005ULL;
+            if (!micant::km::cm_baremetal::BareMetalConfigManager::get().enumSubKey(
+                    req->hKey, req->index, reinterpret_cast<char*>(req->outNamePtr), req->nameCap)) {
+                return 0x8000001AULL;
+            }
+            return 0;
+        }
+        case 0x77: { // NtFlushKey
+            return micant::km::cm_baremetal::BareMetalConfigManager::get().flushKey(arg1) ? 0ULL : 0xC0000008ULL;
+        }
+        case 0x0F: { // NtClose (File Handle, SMP Thread Handle, or Registry Key Handle)
+            if ((arg1 & micant::km::cm_baremetal::REG_KEY_HANDLE_TAG) != 0) {
+                micant::km::cm_baremetal::BareMetalConfigManager::get().closeKey(arg1);
+                return 0;
+            }
             if ((arg1 & micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) != 0) {
                 micant::km::smp_baremetal::BareMetalSmpEngine::get().closeThreadHandle(arg1);
                 return 0;
@@ -3901,6 +4111,55 @@ extern "C" micant::NtStatus KiSystemStartup(
                 appendDec(peLog, sizeof(peLog), ntfsVol.getUsaFixupsVerified());
                 concatStr(peLog, ")", sizeof(peLog));
                 LogKernel(peLog);
+            }
+
+            // Mount Real Binary Windows NT `regf` Registry Hives (SYSTEM & SOFTWARE) directly off NTFS 3.1!
+            auto& cm = micant::km::cm_baremetal::BareMetalConfigManager::get();
+            if (cm.initializeFromNtfs()) {
+                for (size_t hi = 0; hi < micant::km::cm_baremetal::MAX_HIVES; ++hi) {
+                    const auto* hv = cm.getHive(hi);
+                    if (!hv || !hv->loaded) continue;
+                    char cmLog[160];
+                    copyStr(cmLog, "[Cm] Mounted Binary regf Hive ", sizeof(cmLog));
+                    concatStr(cmLog, hv->ntfsPath, sizeof(cmLog));
+                    concatStr(cmLog, " (Seq=", sizeof(cmLog));
+                    appendDec(cmLog, sizeof(cmLog), hv->sequence);
+                    concatStr(cmLog, " | Keys=", sizeof(cmLog));
+                    appendDec(cmLog, sizeof(cmLog), hv->keyCount);
+                    concatStr(cmLog, " | Vals=", sizeof(cmLog));
+                    appendDec(cmLog, sizeof(cmLog), hv->totalValuesLoaded);
+                    concatStr(cmLog, " | ", sizeof(cmLog));
+                    appendDec(cmLog, sizeof(cmLog), hv->rawSizeBytes);
+                    concatStr(cmLog, " B | CRC OK)", sizeof(cmLog));
+                    LogKernel(cmLog);
+                }
+
+                // Check if cold-reboot persisted Registry key HKLM\SOFTWARE\MicaNT\Persist\BootTag survived power-cycle!
+                uint64_t hPersist = 0;
+                uint32_t disp = 0;
+                if (cm.openOrCreateKey(micant::km::cm_baremetal::HKEY_LOCAL_MACHINE_VAL,
+                                       "SOFTWARE\\MicaNT\\Persist", false, hPersist, disp)) {
+                    uint8_t tagUtf16[128]{};
+                    uint32_t tagType = 0, tagLen = sizeof(tagUtf16);
+                    if (cm.queryValue(hPersist, "BootTag", tagType, tagUtf16, tagLen) && tagLen >= 2) {
+                        char tagAscii[64]{};
+                        size_t chars = tagLen / 2;
+                        size_t out = 0;
+                        for (size_t ci = 0; ci < chars && out + 1 < sizeof(tagAscii); ++ci) {
+                            uint16_t ch = static_cast<uint16_t>(tagUtf16[ci * 2]) |
+                                          (static_cast<uint16_t>(tagUtf16[ci * 2 + 1]) << 8);
+                            if (ch == 0) break;
+                            tagAscii[out++] = (ch < 128) ? static_cast<char>(ch) : '?';
+                        }
+                        tagAscii[out] = '\0';
+                        char pLog[160];
+                        copyStr(pLog, "[Cm] COLD-REBOOT REGISTRY PERSISTENCE VERIFIED: HKLM\\SOFTWARE\\MicaNT\\Persist\\BootTag='", sizeof(pLog));
+                        concatStr(pLog, tagAscii, sizeof(pLog));
+                        concatStr(pLog, "'", sizeof(pLog));
+                        LogKernel(pLog);
+                    }
+                    cm.closeKey(hPersist);
+                }
             }
         } else {
             // 2. Fallback Probe: FastFAT32 (Supermicro /dev/sdb2 compatibility)

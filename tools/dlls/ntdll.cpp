@@ -386,7 +386,9 @@ __declspec(dllexport) uint64_t NtCreateUserProcess(
         return NT_STATUS_INVALID_PARAMETER;
     }
     const wchar_t* wpath = imagePathAttr->objectName->buffer;
-    uint64_t childPid = NtSyscall3(0x58, reinterpret_cast<uint64_t>(wpath), 0, 0);
+    // Optional command line passed via rootDirectory pointer when provided by CreateProcessW
+    uint64_t cmdLineW = reinterpret_cast<uint64_t>(imagePathAttr->rootDirectory);
+    uint64_t childPid = NtSyscall3(0x58, reinterpret_cast<uint64_t>(wpath), cmdLineW, 0);
     if (childPid == 0 || childPid == ~0ULL) {
         if (processHandle) *processHandle = nullptr;
         if (threadHandle)  *threadHandle  = nullptr;
@@ -480,6 +482,166 @@ __declspec(dllexport) uint64_t NtQueryInformationThread(
         threadInfoClass,
         reinterpret_cast<uint64_t>(threadInfoBuf)
     );
+}
+
+// ============================================================================
+// 1b. Native NT Configuration Manager (Registry) Syscall Gateways (0x70..0x77)
+// ============================================================================
+
+struct NtRegKeyReq {
+    uint64_t rootHandle;
+    uint64_t subKeyAsciiPtr;
+    uint64_t outHandle;
+    uint32_t outDisposition;
+    uint32_t reserved;
+};
+
+struct NtRegValueReq {
+    uint64_t hKey;
+    uint64_t valueNameAsciiPtr;
+    uint64_t dataPtr;
+    uint32_t type;
+    uint32_t dataLen;
+};
+
+struct NtRegEnumReq {
+    uint64_t hKey;
+    uint32_t index;
+    uint32_t outType;
+    uint64_t outNamePtr;
+    uint32_t nameCap;
+    uint32_t dataLen;
+    uint64_t outDataPtr;
+};
+
+__declspec(dllexport) uint64_t NtOpenKey(
+    void** keyHandle,
+    void* rootHandle,
+    const char* subKeyAscii
+) noexcept {
+    if (!keyHandle) return NT_STATUS_INVALID_PARAMETER;
+    NtRegKeyReq req{};
+    req.rootHandle = reinterpret_cast<uint64_t>(rootHandle);
+    req.subKeyAsciiPtr = reinterpret_cast<uint64_t>(subKeyAscii);
+    uint64_t st = NtSyscall3(0x70, reinterpret_cast<uint64_t>(&req), 0, 0);
+    if (st != NT_STATUS_SUCCESS || req.outHandle == 0) {
+        *keyHandle = nullptr;
+        return (st != NT_STATUS_SUCCESS) ? st : NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    *keyHandle = reinterpret_cast<void*>(req.outHandle);
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t NtCreateKey(
+    void** keyHandle,
+    void* rootHandle,
+    const char* subKeyAscii,
+    uint32_t* outDisposition
+) noexcept {
+    if (!keyHandle) return NT_STATUS_INVALID_PARAMETER;
+    NtRegKeyReq req{};
+    req.rootHandle = reinterpret_cast<uint64_t>(rootHandle);
+    req.subKeyAsciiPtr = reinterpret_cast<uint64_t>(subKeyAscii);
+    uint64_t st = NtSyscall3(0x71, reinterpret_cast<uint64_t>(&req), 0, 0);
+    if (st != NT_STATUS_SUCCESS || req.outHandle == 0) {
+        *keyHandle = nullptr;
+        return (st != NT_STATUS_SUCCESS) ? st : NT_STATUS_UNSUCCESSFUL;
+    }
+    *keyHandle = reinterpret_cast<void*>(req.outHandle);
+    if (outDisposition) *outDisposition = req.outDisposition;
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t NtQueryValueKey(
+    void* keyHandle,
+    const char* valueNameAscii,
+    uint32_t* outType,
+    void* dataBuf,
+    uint32_t* inOutDataLen
+) noexcept {
+    if (!keyHandle || !inOutDataLen) return NT_STATUS_INVALID_PARAMETER;
+    NtRegValueReq req{};
+    req.hKey = reinterpret_cast<uint64_t>(keyHandle);
+    req.valueNameAsciiPtr = reinterpret_cast<uint64_t>(valueNameAscii);
+    req.dataPtr = reinterpret_cast<uint64_t>(dataBuf);
+    req.type = 0;
+    req.dataLen = *inOutDataLen;
+    uint64_t st = NtSyscall3(0x72, reinterpret_cast<uint64_t>(&req), 0, 0);
+    if (st != NT_STATUS_SUCCESS) return st;
+    if (outType) *outType = req.type;
+    *inOutDataLen = req.dataLen;
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t NtSetValueKey(
+    void* keyHandle,
+    const char* valueNameAscii,
+    uint32_t type,
+    const void* dataBuf,
+    uint32_t dataLen
+) noexcept {
+    if (!keyHandle) return NT_STATUS_INVALID_PARAMETER;
+    NtRegValueReq req{};
+    req.hKey = reinterpret_cast<uint64_t>(keyHandle);
+    req.valueNameAsciiPtr = reinterpret_cast<uint64_t>(valueNameAscii);
+    req.dataPtr = reinterpret_cast<uint64_t>(dataBuf);
+    req.type = type;
+    req.dataLen = dataLen;
+    return NtSyscall3(0x73, reinterpret_cast<uint64_t>(&req), 0, 0);
+}
+
+__declspec(dllexport) uint64_t NtDeleteValueKey(
+    void* keyHandle,
+    const char* valueNameAscii
+) noexcept {
+    if (!keyHandle) return NT_STATUS_INVALID_PARAMETER;
+    NtRegValueReq req{};
+    req.hKey = reinterpret_cast<uint64_t>(keyHandle);
+    req.valueNameAsciiPtr = reinterpret_cast<uint64_t>(valueNameAscii);
+    return NtSyscall3(0x74, reinterpret_cast<uint64_t>(&req), 0, 0);
+}
+
+__declspec(dllexport) uint64_t NtEnumerateValueKey(
+    void* keyHandle,
+    uint32_t index,
+    char* outNameBuf,
+    uint32_t nameCap,
+    uint32_t* outType,
+    void* outDataBuf,
+    uint32_t* inOutDataLen
+) noexcept {
+    if (!keyHandle || !outNameBuf) return NT_STATUS_INVALID_PARAMETER;
+    NtRegEnumReq req{};
+    req.hKey = reinterpret_cast<uint64_t>(keyHandle);
+    req.index = index;
+    req.outNamePtr = reinterpret_cast<uint64_t>(outNameBuf);
+    req.nameCap = nameCap;
+    req.outDataPtr = reinterpret_cast<uint64_t>(outDataBuf);
+    req.dataLen = inOutDataLen ? *inOutDataLen : 0;
+    uint64_t st = NtSyscall3(0x75, reinterpret_cast<uint64_t>(&req), 0, 0);
+    if (st != NT_STATUS_SUCCESS) return st;
+    if (outType) *outType = req.outType;
+    if (inOutDataLen) *inOutDataLen = req.dataLen;
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t NtEnumerateKey(
+    void* keyHandle,
+    uint32_t index,
+    char* outNameBuf,
+    uint32_t nameCap
+) noexcept {
+    if (!keyHandle || !outNameBuf) return NT_STATUS_INVALID_PARAMETER;
+    NtRegEnumReq req{};
+    req.hKey = reinterpret_cast<uint64_t>(keyHandle);
+    req.index = index;
+    req.outNamePtr = reinterpret_cast<uint64_t>(outNameBuf);
+    req.nameCap = nameCap;
+    return NtSyscall3(0x76, reinterpret_cast<uint64_t>(&req), 0, 0);
+}
+
+__declspec(dllexport) uint64_t NtFlushKey(void* keyHandle) noexcept {
+    return NtSyscall3(0x77, reinterpret_cast<uint64_t>(keyHandle), 0, 0);
 }
 
 // ============================================================================

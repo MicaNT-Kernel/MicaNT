@@ -239,7 +239,7 @@ __declspec(dllexport) uint32_t GetCurrentProcessorNumber() noexcept {
 
 __declspec(dllexport) int32_t CreateProcessW(
     const wchar_t* lpApplicationName,
-    wchar_t* /*lpCommandLine*/,
+    wchar_t* lpCommandLine,
     void* /*lpProcessAttributes*/,
     void* /*lpThreadAttributes*/,
     int32_t /*bInheritHandles*/,
@@ -256,7 +256,7 @@ __declspec(dllexport) int32_t CreateProcessW(
 
     ObjectAttributes oa{};
     oa.length = sizeof(ObjectAttributes);
-    oa.rootDirectory = nullptr;
+    oa.rootDirectory = reinterpret_cast<void*>(lpCommandLine);
     oa.objectName = &uPath;
     oa.attributes = 0x00000040u;
 
@@ -549,11 +549,32 @@ __declspec(dllexport) int32_t FindClose(void* hFindFile) noexcept {
 // 4. Dynamic Runtime Loader & Module APIs (Routed through ntdll!Ldr*)
 // ============================================================================
 
-static const char s_cmdLineA[] = "win32_nt_suite.exe";
-static const wchar_t s_cmdLineW[] = L"win32_nt_suite.exe";
+static const char s_cmdLineA[] = "micant_app.exe";
+static const wchar_t s_cmdLineW[] = L"micant_app.exe";
 
-__declspec(dllexport) const char* GetCommandLineA() noexcept { return s_cmdLineA; }
-__declspec(dllexport) const wchar_t* GetCommandLineW() noexcept { return s_cmdLineW; }
+__declspec(dllexport) const char* GetCommandLineA() noexcept {
+#if defined(__x86_64__)
+    uint64_t peb = 0;
+    __asm__ __volatile__("movq %%gs:0x60, %0" : "=r"(peb));
+    if (peb) {
+        const char* p = reinterpret_cast<const char*>(peb + 0x1000ULL);
+        if (p[0] != '\0') return p;
+    }
+#endif
+    return s_cmdLineA;
+}
+
+__declspec(dllexport) const wchar_t* GetCommandLineW() noexcept {
+#if defined(__x86_64__)
+    uint64_t peb = 0;
+    __asm__ __volatile__("movq %%gs:0x60, %0" : "=r"(peb));
+    if (peb) {
+        const wchar_t* p = reinterpret_cast<const wchar_t*>(peb + 0x1400ULL);
+        if (p[0] != L'\0') return p;
+    }
+#endif
+    return s_cmdLineW;
+}
 
 __declspec(dllexport) void* GetModuleHandleW(const wchar_t* lpModuleName) noexcept {
     if (!lpModuleName) {

@@ -163,6 +163,12 @@ def main():
                     cmd.append(str(gdi_implib))
                 user_implib = repo_root / "build" / "libuser32.a"
                 cmd.append(f"-Wl,--out-implib,{user_implib}")
+            elif name == "advapi32.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
+                adv_implib = repo_root / "build" / "libadvapi32.a"
+                cmd.append(f"-Wl,--out-implib,{adv_implib}")
             cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
@@ -216,7 +222,6 @@ def main():
         ("tools/netstat_app.cpp", "netstat.exe"),
         ("tools/chkdsk_app.cpp", "chkdsk.exe"),
         ("tools/diskpart_app.cpp", "diskpart.exe"),
-        ("tools/reg_app.cpp", "reg.exe"),
         ("tools/taskkill_app.cpp", "taskkill.exe"),
         ("tools/shutdown_app.cpp", "shutdown.exe"),
         ("tools/explorer_app.cpp", "explorer.exe"),
@@ -279,6 +284,22 @@ def main():
         ]
         run_command(cmd_gui, "win32_gui_app.exe")
         print(f"      {GREEN}Compiled win32_gui_app.exe ({gui_out.stat().st_size:,} bytes, dynamic KERNEL32+USER32+GDI32 IAT){RESET}")
+
+    # Build authentic dynamic Ring-3 reg.exe (imports KERNEL32.dll + ADVAPI32.dll -> NTDLL.dll)
+    advapi32_implib = repo_root / "build" / "libadvapi32.a"
+    reg_src = repo_root / "tools" / "reg_app.cpp"
+    if kernel32_implib.exists() and advapi32_implib.exists() and reg_src.exists():
+        reg_out = system32 / "reg.exe"
+        cmd_reg = [
+            cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
+            "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
+            "-mno-stack-arg-probe", "-O2",
+            "-Wl,--subsystem,console", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
+            "-nostdlib", str(reg_src), str(kernel32_implib), str(advapi32_implib),
+            "-o", str(reg_out)
+        ]
+        run_command(cmd_reg, "reg.exe")
+        print(f"      {GREEN}Compiled reg.exe ({reg_out.stat().st_size:,} bytes, dynamic KERNEL32+ADVAPI32 IAT){RESET}")
 
     cmd_exe = system32 / "cmd.exe"
     if cmd_exe.exists():

@@ -261,7 +261,8 @@ public:
     int createProcessFromNtfs(
         ntfs_baremetal::BareMetalNtfsVolume& ntfs,
         const char* ntfsExePath,
-        uint32_t parentPid = 4
+        uint32_t parentPid = 4,
+        const char* cmdLineAscii = nullptr
     ) noexcept {
         if (!ntfs.isMounted() || !ntfsExePath || m_kernelCr3Phys == 0) return -1;
 
@@ -326,6 +327,7 @@ public:
         }
 
         // 5. Populate canonical Windows x64 TEB (+0x30 Self, +0x40 PID, +0x48 TID, +0x60 PEB)
+        //    and ProcessParameters CommandLine at PEB+0x1000 (ASCII) & PEB+0x1400 (UTF-16LE)
         uint32_t pid = m_nextPid++;
         uint32_t tid = pid + 100;
         std::memset(reinterpret_cast<void*>(PROC_VA_TEB_BASE), 0, PROC_TEB_SIZE);
@@ -333,6 +335,20 @@ public:
         *reinterpret_cast<uint32_t*>(PROC_VA_TEB + 0x40) = pid;
         *reinterpret_cast<uint32_t*>(PROC_VA_TEB + 0x48) = tid;
         *reinterpret_cast<uint64_t*>(PROC_VA_TEB + 0x60) = PROC_VA_PEB;
+
+        const char* effectiveCmd = (cmdLineAscii && cmdLineAscii[0]) ? cmdLineAscii : ntfsExePath;
+        if (effectiveCmd) {
+            auto* cmdA = reinterpret_cast<char*>(PROC_VA_PEB + 0x1000ULL);
+            auto* cmdW = reinterpret_cast<uint16_t*>(PROC_VA_PEB + 0x1400ULL);
+            size_t ci = 0;
+            while (effectiveCmd[ci] && ci < 250) {
+                cmdA[ci] = effectiveCmd[ci];
+                cmdW[ci] = static_cast<uint16_t>(static_cast<unsigned char>(effectiveCmd[ci]));
+                ++ci;
+            }
+            cmdA[ci] = '\0';
+            cmdW[ci] = 0;
+        }
 
         // Restore caller CR3 immediately
         writeCr3(savedCr3);

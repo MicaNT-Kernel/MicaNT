@@ -397,11 +397,21 @@ static void cmdCd(void* hOut, char* cwd, size_t cwdCap, const char* arg) noexcep
     appendStr(cwd, p, cwdCap, nextDir);
 }
 
-static void cmdSpawnExe(void* hOut, const char* exeToken) noexcept {
+static void cmdSpawnExe(void* hOut, const char* fullCmdLine) noexcept {
+    while (*fullCmdLine == ' ' || *fullCmdLine == '\t') ++fullCmdLine;
+    char exeToken[96];
+    size_t ti = 0;
+    while (fullCmdLine[ti] && fullCmdLine[ti] != ' ' && fullCmdLine[ti] != '\t' && ti + 1 < sizeof(exeToken)) {
+        exeToken[ti] = fullCmdLine[ti];
+        ++ti;
+    }
+    exeToken[ti] = '\0';
+    if (ti == 0) return;
+
     char exePath[160];
     size_t ep = 0;
     bool hasSlash = false, hasExe = false;
-    size_t tlen = cstrlen(exeToken);
+    size_t tlen = ti;
     for (size_t i = 0; i < tlen; ++i) {
         if (exeToken[i] == '\\' || exeToken[i] == '/') hasSlash = true;
     }
@@ -418,8 +428,16 @@ static void cmdSpawnExe(void* hOut, const char* exeToken) noexcept {
     wchar_t wExe[160];
     asciiToWide(exePath, wExe, sizeof(wExe) / sizeof(wExe[0]));
 
+    wchar_t wCmdLine[256];
+    size_t cl = 0;
+    while (fullCmdLine[cl] && cl + 1 < 256) {
+        wCmdLine[cl] = static_cast<wchar_t>(static_cast<unsigned char>(fullCmdLine[cl]));
+        ++cl;
+    }
+    wCmdLine[cl] = L'\0';
+
     ProcessInformation pi{nullptr, nullptr, 0, 0};
-    if (!CreateProcessW(wExe, nullptr, nullptr, nullptr, 0, 0, nullptr, nullptr, nullptr, &pi)) {
+    if (!CreateProcessW(wExe, wCmdLine, nullptr, nullptr, 0, 0, nullptr, nullptr, nullptr, &pi)) {
         char err[160];
         size_t p = 0;
         appendStr(err, p, sizeof(err), "'");
@@ -512,14 +530,7 @@ void WinMainEntry() {
         } else if (matchCmd(cmd, "run")) {
             cmdSpawnExe(hOut, skipWordAndSpaces(cmd));
         } else {
-            char token[96];
-            size_t ti = 0;
-            while (cmd[ti] && cmd[ti] != ' ' && cmd[ti] != '\t' && ti + 1 < sizeof(token)) {
-                token[ti] = cmd[ti];
-                ++ti;
-            }
-            token[ti] = '\0';
-            cmdSpawnExe(hOut, token);
+            cmdSpawnExe(hOut, cmd);
         }
     }
 
