@@ -88,6 +88,7 @@ __declspec(dllimport) uint64_t NtWriteFile(
     const void* buffer, uint32_t length, void* byteOffset, uint32_t* key
 ) noexcept;
 __declspec(dllimport) uint64_t NtClose(void* handle) noexcept;
+__declspec(dllimport) uint64_t NtDeleteFile(ObjectAttributes* objectAttributes) noexcept;
 __declspec(dllimport) uint64_t NtCreateUserProcess(
     void** processHandle, void** threadHandle, ObjectAttributes* imagePathAttr, uint64_t* outPid
 ) noexcept;
@@ -349,6 +350,71 @@ __declspec(dllexport) int32_t WriteFile(
 __declspec(dllexport) int32_t CloseHandle(void* hObject) noexcept {
     uint64_t st = NtClose(hObject);
     return NtSucceeded(st) ? 1 : 0;
+}
+
+__declspec(dllexport) int32_t CreateDirectoryW(
+    const wchar_t* lpPathName,
+    void* /*lpSecurityAttributes*/
+) noexcept {
+    if (!lpPathName) return 0;
+    UnicodeString uPath{0, 0, nullptr};
+    RtlInitUnicodeString(&uPath, lpPathName);
+
+    ObjectAttributes oa{};
+    oa.length = sizeof(ObjectAttributes);
+    oa.rootDirectory = nullptr;
+    oa.objectName = &uPath;
+    oa.attributes = 0x00000040u;
+
+    IoStatusBlock iosb{0, 0};
+    void* hDir = nullptr;
+    // FILE_CREATE = 2, FILE_DIRECTORY_FILE = 0x00000001
+    uint64_t st = NtCreateFile(
+        &hDir, 0x00100001u, &oa, &iosb, nullptr, 0x00000010u,
+        3u, 2u, 0x00000001u, nullptr, 0
+    );
+    if (!NtSucceeded(st) || hDir == nullptr) return 0;
+    NtClose(hDir);
+    return 1;
+}
+
+__declspec(dllexport) int32_t CreateDirectoryA(const char* lpPathName, void* lpSecurityAttributes) noexcept {
+    if (!lpPathName) return 0;
+    wchar_t wideBuf[256];
+    size_t i = 0;
+    while (lpPathName[i] && i + 1 < 256) {
+        wideBuf[i] = static_cast<wchar_t>(static_cast<unsigned char>(lpPathName[i]));
+        ++i;
+    }
+    wideBuf[i] = L'\0';
+    return CreateDirectoryW(wideBuf, lpSecurityAttributes);
+}
+
+__declspec(dllexport) int32_t DeleteFileW(const wchar_t* lpFileName) noexcept {
+    if (!lpFileName) return 0;
+    UnicodeString uPath{0, 0, nullptr};
+    RtlInitUnicodeString(&uPath, lpFileName);
+
+    ObjectAttributes oa{};
+    oa.length = sizeof(ObjectAttributes);
+    oa.rootDirectory = nullptr;
+    oa.objectName = &uPath;
+    oa.attributes = 0x00000040u;
+
+    uint64_t st = NtDeleteFile(&oa);
+    return NtSucceeded(st) ? 1 : 0;
+}
+
+__declspec(dllexport) int32_t DeleteFileA(const char* lpFileName) noexcept {
+    if (!lpFileName) return 0;
+    wchar_t wideBuf[256];
+    size_t i = 0;
+    while (lpFileName[i] && i + 1 < 256) {
+        wideBuf[i] = static_cast<wchar_t>(static_cast<unsigned char>(lpFileName[i]));
+        ++i;
+    }
+    wideBuf[i] = L'\0';
+    return DeleteFileW(wideBuf);
 }
 
 static void populateFindData(Win32FindDataW* dst, const NtDirEntryInfo& src) noexcept {

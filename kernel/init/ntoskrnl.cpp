@@ -537,6 +537,37 @@ static void ShellAddLine(const char* text, micant::bootvid::Color col = micant::
     UartSerial::print("\r\n");
 }
 
+static uint32_t s_shellGopY = 0;
+static uint32_t s_shellGopH = 0;
+static uint32_t s_shellGopAvailW = 0;
+static char s_ring3ActivePrompt[64] = "[R3 cmd] C:\\> ";
+
+static void RepaintRing3ConsoleGop(const char* livePrompt, const char* liveInput) noexcept {
+    if (!s_globalVideoDriver || s_shellGopH == 0 || s_shellGopAvailW == 0) return;
+    const char* pr = (livePrompt && livePrompt[0]) ? livePrompt : s_ring3ActivePrompt;
+    const char* inp = liveInput ? liveInput : "";
+
+    s_globalVideoDriver->fillRectangle(20, s_shellGopY + 50, s_shellGopAvailW - 40, 24, micant::bootvid::Color{10, 14, 22});
+    s_globalVideoDriver->drawRectangle(20, s_shellGopY + 50, s_shellGopAvailW - 40, 24, micant::bootvid::Color{0, 229, 255});
+    s_globalVideoDriver->drawString(28, s_shellGopY + 55, pr, micant::bootvid::Color{100, 255, 160}, micant::bootvid::Color{10, 14, 22}, 1);
+    uint32_t prW = static_cast<uint32_t>(strLen(pr) * 8);
+    s_globalVideoDriver->drawString(28 + prW, s_shellGopY + 55, inp, micant::bootvid::Color{255, 255, 255}, micant::bootvid::Color{10, 14, 22}, 1);
+    uint32_t cx = 28 + prW + static_cast<uint32_t>(strLen(inp) * 8);
+    s_globalVideoDriver->fillRectangle(cx, s_shellGopY + 55, 8, 14, micant::bootvid::Color{0, 229, 255});
+
+    uint32_t outBoxY = s_shellGopY + 78;
+    uint32_t outBoxH = (s_shellGopH > 86) ? (s_shellGopH - 86) : 64;
+    s_globalVideoDriver->fillRectangle(20, outBoxY, s_shellGopAvailW - 40, outBoxH, micant::bootvid::Color{10, 14, 22});
+    s_globalVideoDriver->drawRectangle(20, outBoxY, s_shellGopAvailW - 40, outBoxH, micant::bootvid::Color{36, 52, 78});
+    s_globalVideoDriver->drawString(28, outBoxY + 5, "[RING-3 WIN32 CONSOLE OUTPUT]", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{10, 14, 22}, 1);
+
+    for (size_t i = 0; i < s_shellOutputCount; ++i) {
+        uint32_t ly = outBoxY + 24 + static_cast<uint32_t>(i * 17);
+        if (ly + 16 > outBoxY + outBoxH) break;
+        s_globalVideoDriver->drawString(28, ly, s_shellOutputLines[i].text, s_shellOutputLines[i].color, micant::bootvid::Color{10, 14, 22}, 1);
+    }
+}
+
 // Bare-Metal Ring 0 Kernel File & Directory Handle Table (backed by live NTFS 3.1 volume)
 struct BareMetalFileHandleEntry {
     bool     inUse{false};
@@ -568,16 +599,22 @@ static uint64_t openNtfsKernelHandle(const char* asciiPath, uint32_t desiredAcce
     micant::km::ntfs_baremetal::NtfsDirEntry entry{};
     bool exists = ntfs.findPath(asciiPath, entry);
 
-    // Win32 CreationDisposition: 1=CREATE_NEW, 2=CREATE_ALWAYS, 3=OPEN_EXISTING, 4=OPEN_ALWAYS, 5=TRUNCATE_EXISTING
-    if (creationDisposition == 2 || creationDisposition == 5) {
+    // FILE_DIRECTORY_FILE (0x10000 bit from ntdll!NtCreateFile -> CreateDirectoryW)
+    bool isDirCreate = (creationDisposition & 0x10000u) != 0;
+    uint32_t disp = creationDisposition & 0xFFFFu;
+    if (isDirCreate) {
+        if (exists) return 0;
+        if (!ntfs.createDirectory(asciiPath)) return 0;
+        exists = ntfs.findPath(asciiPath, entry);
+    } else if (disp == 2 || disp == 5) {
         if (exists && entry.isDirectory) return 0;
         if (!ntfs.writeFile(asciiPath, "", 0)) return 0;
         exists = ntfs.findPath(asciiPath, entry);
-    } else if (creationDisposition == 1) {
+    } else if (disp == 1) {
         if (exists) return 0;
         if (!ntfs.writeFile(asciiPath, "", 0)) return 0;
         exists = ntfs.findPath(asciiPath, entry);
-    } else if (creationDisposition == 4 && !exists) {
+    } else if (disp == 4 && !exists) {
         if (!ntfs.writeFile(asciiPath, "", 0)) return 0;
         exists = ntfs.findPath(asciiPath, entry);
     }
@@ -740,6 +777,33 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             std::memcpy(reinterpret_cast<void*>(arg2), &outInfo, sizeof(outInfo));
             return 0; // STATUS_SUCCESS
         }
+        case 0x36: { // NtDeleteFile (Live NTFS 3.1 File Delete + MFT/$Bitmap/$I30 Reclaim)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0) {
+                return 0xC0000005ULL; // STATUS_ACCESS_VIOLATION
+            }
+            const auto* wpath = reinterpret_cast<const uint16_t*>(arg1);
+            char asciiPath[128]{};
+            size_t len = 0;
+            while (len + 1 < sizeof(asciiPath) && wpath[len] != 0) {
+                asciiPath[len] = (wpath[len] < 128) ? static_cast<char>(wpath[len]) : '?';
+                ++len;
+            }
+            asciiPath[len] = '\0';
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            bool ok = ntfs.isMounted() && ntfs.deleteFile(asciiPath);
+            UartSerial::print("  -> NtDeleteFile (0x36 NTFS 3.1): Path='");
+            UartSerial::print(asciiPath);
+            UartSerial::print(ok ? "' -> STATUS_SUCCESS (MFT+Bitmap+$I30 reclaimed)\r\n" : "' -> STATUS_OBJECT_NAME_NOT_FOUND\r\n");
+            if (ok) {
+                char logMsg[128];
+                copyStr(logMsg, "[Syscall] NtDeleteFile (0x36): Deleted ", sizeof(logMsg));
+                concatStr(logMsg, asciiPath, sizeof(logMsg));
+                LogKernel(logMsg);
+                return 0; // STATUS_SUCCESS
+            }
+            return 0xC0000034ULL; // STATUS_OBJECT_NAME_NOT_FOUND
+        }
         case 0x60: { // NtLoadDll (Runtime LoadLibraryW / GetModuleHandleW into Active Process CR3 Arena)
             const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
             if (!vad || arg1 == 0) {
@@ -896,7 +960,84 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" -> STATUS_SUCCESS\r\n");
             return 0;
         }
-        case 0x24: { // NtReadFile (Live NTFS 3.1 AHCI DMA Read for Open Handles + Legacy IRP Fallback)
+        case 0x24: { // NtReadFile (Live Hardware Console Input OR NTFS 3.1 AHCI DMA File Read)
+            if (arg1 == 0x10ULL) { // STD_INPUT_HANDLE -> Live Hardware PS/2 + COM1 + xHCI Line Input
+                const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
+                if (!vad || arg2 == 0) {
+                    return static_cast<uint64_t>(-1);
+                }
+                size_t maxLen = static_cast<size_t>(arg3 ? arg3 : 128);
+                size_t maxVad = static_cast<size_t>(vad->endVa - arg2);
+                if (maxLen > maxVad) maxLen = maxVad;
+                if (maxLen > 156) maxLen = 156;
+
+                char lineBuf[160]{};
+                size_t lineLen = 0;
+                bool ps2Ext = false;
+                RepaintRing3ConsoleGop(s_ring3ActivePrompt, "");
+
+                while (true) {
+                    char ch = 0;
+                    // 1. Hardware PS/2 Keyboard Controller (Ports 0x64/0x60)
+                    uint8_t kbdStatus = inb(0x64);
+                    if ((kbdStatus & 1) != 0) {
+                        uint8_t dataByte = inb(0x60);
+                        if ((kbdStatus & 0x20) == 0) {
+                            if (dataByte == 0xE0) {
+                                ps2Ext = true;
+                            } else if (ps2Ext) {
+                                ps2Ext = false;
+                            } else {
+                                ch = decodePs2Scancode(dataByte, s_ps2ShiftState);
+                            }
+                        }
+                    }
+                    // 2. COM1 UART Serial Port (0x3F8)
+                    if (ch == 0) {
+                        UartSerial::tryGetChar(ch);
+                    }
+                    // 3. Intel xHCI USB HID Keyboard
+                    if (ch == 0) {
+                        char xc = 0; bool isTab = false, isEsc = false, isEnter = false;
+                        if (micant::km::xhci_baremetal::XhciBareMetalEngine::get().tryGetKeystroke(xc, isTab, isEsc, isEnter)) {
+                            ch = isEnter ? '\r' : xc;
+                        }
+                    }
+
+                    if (ch == 0) {
+                        __asm__ __volatile__("pause");
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        UartSerial::print("\r\n");
+                        char echoLine[160]{};
+                        copyStr(echoLine, s_ring3ActivePrompt, sizeof(echoLine));
+                        concatStr(echoLine, lineBuf, sizeof(echoLine));
+                        ShellAddLine(echoLine, micant::bootvid::Color{0, 229, 255});
+                        RepaintRing3ConsoleGop(s_ring3ActivePrompt, "");
+                        if (lineLen + 2 <= maxLen) {
+                            lineBuf[lineLen++] = '\r';
+                            lineBuf[lineLen++] = '\n';
+                        } else if (lineLen + 1 <= maxLen) {
+                            lineBuf[lineLen++] = '\n';
+                        }
+                        std::memcpy(reinterpret_cast<void*>(arg2), lineBuf, lineLen);
+                        return static_cast<uint64_t>(lineLen);
+                    } else if (ch == '\b' || ch == 127) {
+                        if (lineLen > 0) {
+                            --lineLen;
+                            lineBuf[lineLen] = '\0';
+                            UartSerial::print("\b \b");
+                            RepaintRing3ConsoleGop(s_ring3ActivePrompt, lineBuf);
+                        }
+                    } else if (ch >= 32 && ch < 127 && lineLen + 2 < maxLen) {
+                        lineBuf[lineLen++] = ch;
+                        lineBuf[lineLen] = '\0';
+                        UartSerial::putChar(ch);
+                        RepaintRing3ConsoleGop(s_ring3ActivePrompt, lineBuf);
+                    }
+                }
+            }
             auto* he = lookupKernelFileHandle(arg1);
             if (he) {
                 if (he->isDirectory) return static_cast<uint64_t>(-1);
@@ -1011,6 +1152,18 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                     while (len < 512 && len < maxPossible && str[len] != '\0') len++;
                 }
 
+                // Prompt write without trailing newline (e.g. "[R3 cmd] C:\> ") -> update live prompt box cleanly
+                if (len > 0 && len < 62 && str[len - 1] != '\n' && str[len - 1] != '\r') {
+                    for (size_t k = 0; k < len; ++k) {
+                        char c = str[k];
+                        s_ring3ActivePrompt[k] = (c >= 0x20 && c <= 0x7E) ? c : ' ';
+                    }
+                    s_ring3ActivePrompt[len] = '\0';
+                    UartSerial::print(s_ring3ActivePrompt);
+                    RepaintRing3ConsoleGop(s_ring3ActivePrompt, "");
+                    return static_cast<int64_t>(len);
+                }
+
                 // Parse string line-by-line and dispatch to ShellAddLine
                 size_t start = 0;
                 while (start < len) {
@@ -1042,6 +1195,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                     if (start < len && str[start] == '\n') start++;
                 }
                 UartSerial::print("\r\n");
+                RepaintRing3ConsoleGop(s_ring3ActivePrompt, "");
                 char dispLog[144] = "[User Output] Dispatched to Console";
                 LogKernel(dispLog);
                 return static_cast<int64_t>(len);
@@ -3168,6 +3322,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     uint32_t midH = (height >= 768) ? 310 : 250;
     uint32_t shellY = midY + midH + 8;
     uint32_t shellH = (height >= 768) ? (height - shellY - 10) : 160;
+    s_shellGopY = shellY;
+    s_shellGopH = shellH;
+    s_shellGopAvailW = availW;
 
     uint32_t leftW = (availW * 35) / 100;
     uint32_t rightX = 16 + leftW + 12;
@@ -3830,6 +3987,15 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("  Storage:      AHCI SATA 6Gbps DMA (128GB MICA_SYS / 1.7TB MICA_DATA)", micant::bootvid::Color{180, 200, 230});
             ShellAddLine("  Clean-Room:   100% ISO C++23 Clean-Room Implementation (Zero Leaked Code)", micant::bootvid::Color{255, 200, 80});
             LogKernel("Shell: ver -> MicaNT Version 10.0 Dave Cutler Bare-Metal Edition");
+        } else if (cmd[0] == 'c' && cmd[1] == 'm' && cmd[2] == 'd' && (cmd[3] == '\0' || cmd[3] == ' ' || cmd[3] == '.')) {
+            ShellClearOutput();
+            if (s_ntfsMounted) {
+                LogKernel("Shell: Launching Sovereign Ring-3 cmd.exe in isolated hardware CR3...");
+                executeMultiProcessCr3FromNtfs("\\Windows\\System32\\cmd.exe");
+                ShellAddLine("Returned from Ring-3 cmd.exe to Ring-0 Executive Shell cleanly.", micant::bootvid::Color{100, 240, 160});
+            } else {
+                ShellAddLine("NTFS 3.1 volume not mounted; cannot launch Ring-3 cmd.exe.", micant::bootvid::Color{255, 100, 100});
+            }
         } else if (cmd[0] == 'n' && cmd[1] == 't' && cmd[2] == 's' && cmd[3] == 'u') {
             ShellClearOutput();
             if (s_ntfsMounted) {
@@ -3988,13 +4154,19 @@ extern "C" micant::NtStatus KiSystemStartup(
                 const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
                 resolveShellPath(target, cur, fullTarget, sizeof(fullTarget));
 
-                auto& vol = getTargetVolume(fullTarget);
-                if (vol.deleteFile(fullTarget)) {
+                char delDrive = s_currentDrive;
+                if ((fullTarget[0] == 'C' || fullTarget[0] == 'c') && fullTarget[1] == ':') delDrive = 'C';
+                else if ((fullTarget[0] == 'D' || fullTarget[0] == 'd') && fullTarget[1] == ':') delDrive = 'D';
+                bool delOk = (s_ntfsMounted && delDrive == 'C')
+                    ? micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().deleteFile(fullTarget)
+                    : getTargetVolume(fullTarget).deleteFile(fullTarget);
+                if (delOk) {
                     char msg[128];
-                    copyStr(msg, "FAT32 File Deleted: ", sizeof(msg));
+                    copyStr(msg, s_ntfsMounted ? "NTFS 3.1 File Deleted: " : "FAT32 File Deleted: ", sizeof(msg));
                     concatStr(msg, fullTarget, sizeof(msg));
                     ShellAddLine(msg, micant::bootvid::Color{100, 240, 160});
-                    ShellAddLine("Directory entry marked 0xE5; cluster chain reclaimed in FAT table via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
+                    ShellAddLine(s_ntfsMounted ? "MFT record freed, $Bitmap clusters reclaimed, $I30 entry removed via AHCI DMA."
+                                               : "Directory entry marked 0xE5; cluster chain reclaimed in FAT table via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
                     ShellAddLine("Sectors committed to HGST Ultrastar disk (sdb2).", micant::bootvid::Color{180, 200, 230});
                     LogKernel(msg);
                 } else {
@@ -4316,7 +4488,8 @@ extern "C" micant::NtStatus KiSystemStartup(
                 bool useCr3Mp = s_ntfsMounted && (
                     strEqual(cleanTarget, "win32_proc_a.exe") ||
                     strEqual(cleanTarget, "win32_proc_b.exe") ||
-                    strEqual(cleanTarget, "win32_nt_suite.exe")
+                    strEqual(cleanTarget, "win32_nt_suite.exe") ||
+                    strEqual(cleanTarget, "cmd.exe")
                 );
                 bool ok = useCr3Mp
                     ? executeMultiProcessCr3FromNtfs(pathBuf)
@@ -4857,14 +5030,19 @@ extern "C" micant::NtStatus KiSystemStartup(
                 char fullPath[128]{};
                 const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
                 resolveShellPath(arg, cur, fullPath, sizeof(fullPath));
-                auto& vol = getTargetVolume(fullPath);
-
-                if (vol.createDirectory(fullPath)) {
+                char mkDrive = s_currentDrive;
+                if ((fullPath[0] == 'C' || fullPath[0] == 'c') && fullPath[1] == ':') mkDrive = 'C';
+                else if ((fullPath[0] == 'D' || fullPath[0] == 'd') && fullPath[1] == ':') mkDrive = 'D';
+                bool mkOk = (s_ntfsMounted && mkDrive == 'C')
+                    ? micant::km::ntfs_baremetal::BareMetalNtfsVolume::get().createDirectory(fullPath)
+                    : getTargetVolume(fullPath).createDirectory(fullPath);
+                if (mkOk) {
                     char m[96];
                     copyStr(m, "Created directory: ", sizeof(m));
                     concatStr(m, fullPath, sizeof(m));
                     ShellAddLine(m, micant::bootvid::Color{100, 240, 160});
-                    ShellAddLine("FAT32 cluster formatted with '.' and '..' entries via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
+                    ShellAddLine(s_ntfsMounted ? "NTFS 3.1 MFT directory record + $I30 B-tree entry committed via AHCI DMA."
+                                               : "FAT32 cluster formatted with '.' and '..' entries via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
                     LogKernel(m);
                 } else {
                     ShellAddLine("Failed to create directory (already exists or invalid path):", micant::bootvid::Color{255, 100, 100});

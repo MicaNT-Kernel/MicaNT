@@ -197,7 +197,6 @@ def main():
         ("tools/lsass_app.cpp", "lsass.exe"),
         ("tools/svchost_app.cpp", "svchost.exe"),
         ("tools/conhost_app.cpp", "conhost.exe"),
-        ("tools/cmd_app.cpp", "cmd.exe"),
         ("tools/ipconfig_app.cpp", "ipconfig.exe"),
         ("tools/whoami_app.cpp", "whoami.exe"),
         ("tools/tasklist_app.cpp", "tasklist.exe"),
@@ -227,14 +226,10 @@ def main():
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
 
-    cmd_exe = system32 / "cmd.exe"
-    if cmd_exe.exists():
-        shutil.copy2(cmd_exe, micant_efi_dir / "app.exe")
-        print(f"      {GREEN}cmd.exe deployed to EFI/MicaNT/app.exe{RESET}")
-
     # Build authentic dynamically linked Win32 PE32+ executables (import KERNEL32.dll -> NTDLL.dll via real IAT)
     kernel32_implib = repo_root / "build" / "libkernel32.a"
     win32_apps = [
+        ("tools/cmd_app.cpp",          "cmd.exe"),
         ("tools/win32_ntfs_probe.cpp", "win32_ntfs_probe.exe"),
         ("tools/win32_proc_a.cpp",     "win32_proc_a.exe"),
         ("tools/win32_proc_b.cpp",     "win32_proc_b.exe"),
@@ -255,6 +250,11 @@ def main():
                 ]
                 run_command(cmd_app, exe_name)
                 print(f"      {GREEN}Compiled {exe_name} ({app_out.stat().st_size:,} bytes, dynamic KERNEL32.dll IAT){RESET}")
+
+    cmd_exe = system32 / "cmd.exe"
+    if cmd_exe.exists():
+        shutil.copy2(cmd_exe, micant_efi_dir / "app.exe")
+        print(f"      {GREEN}cmd.exe deployed to EFI/MicaNT/app.exe{RESET}")
 
     # 7. Generate Registry Hives & Network Configs
     print(f"{YELLOW}[6/6] Populating Registry Hives & Network Configs...{RESET}")

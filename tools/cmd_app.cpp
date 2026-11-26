@@ -1,736 +1,529 @@
 /**
  * @file cmd_app.cpp
- * @brief Sovereign Ring 3 Command Interpreter (cmd.exe) for MicaNT System32.
+ * @brief Sovereign Ring-3 Win32 Command Processor (C:\Windows\System32\cmd.exe).
  *
- * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
- * Executed in User-Mode Ring 3 (CPL=3).
+ * 100% Unmodified-ABI Win32 PE32+ Console Executable:
+ *   - ZERO MicaNT kernel headers
+ *   - ZERO inline assembly
+ *   - ZERO direct syscall instructions
+ *   - Dynamically imports ONLY standard Win32 APIs from KERNEL32.dll
+ *     (chaining through NTDLL.dll -> Ring 0 KiSystemCall64 -> live NTFS 3.1 AHCI DMA)
  *
- * Implements authentic Windows Command Processor behavior:
- * - Built-in commands: VER, ECHO, DIR, TYPE, CD/CHDIR, CLS, SET, DATE, TIME, HOSTNAME, WHOAMI, HELP, EXIT, COPY, DEL, MD/MKDIR, RD/RMDIR, REN/RENAME
- * - System32 external binary dispatch: ipconfig, tasklist, taskkill, netstat, ping, tracert, sfc, bcdedit, diskpart, format, chkdsk, chkntfs, fsutil, wmic, powercfg, compact, cipher, where, robocopy, sc, reg, slmgr, wevtutil, tzutil, wpr, pnputil, gpresult, reagentc, certutil, klist, shutdown, attrib, arp, route, systeminfo
- * - Execution switches: /C <command>, /K <command>, /Q, /V:ON, /V:OFF, /?
+ * Interactive Built-ins & Live Process Execution:
+ *   ver, help, cls, cd/chdir, dir, type, echo [> file], mkdir/md, del, exit,
+ *   plus live Child Process execution via CreateProcessW + WaitForSingleObject + GetExitCodeProcess!
  */
 
-#include "cli_common.hpp"
+#include <cstdint>
+#include <cstddef>
 
-namespace {
+extern "C" {
 
-using namespace micant_cli;
+struct ProcessInformation {
+    void*    hProcess;
+    void*    hThread;
+    uint32_t dwProcessId;
+    uint32_t dwThreadId;
+};
 
-void ShowHelp() noexcept {
-    PrintLine("Starts a new instance of the MicaNT command interpreter.");
-    PrintLine("");
-    PrintLine("CMD [/A | /U] [/Q] [/D] [/E:ON | /E:OFF] [/F:ON | /F:OFF] [/V:ON | /V:OFF]");
-    PrintLine("    [[/S] [/C | /K] string]");
-    PrintLine("");
-    PrintLine("/C      Carries out the command specified by string and then terminates");
-    PrintLine("/K      Carries out the command specified by string but remains");
-    PrintLine("/Q      Turns echo off");
-    PrintLine("/A      Causes the output of internal commands to a pipe or a file to be ANSI");
-    PrintLine("/U      Causes the output of internal commands to a pipe or a file to be Unicode");
-    PrintLine("/T:fg   Sets the background/foreground colors");
-    PrintLine("/X      Enables extensions (this is the default)");
-    PrintLine("/Y      Disables extensions");
-    PrintLine("/V:ON   Enable delayed environment variable expansion");
-    PrintLine("/V:OFF  Disable delayed environment variable expansion");
-    PrintLine("");
-    PrintLine("For more information on a specific command, type HELP command-name");
+struct Win32FindDataW {
+    uint32_t dwFileAttributes;
+    uint64_t ftCreationTime;
+    uint64_t ftLastAccessTime;
+    uint64_t ftLastWriteTime;
+    uint32_t nFileSizeHigh;
+    uint32_t nFileSizeLow;
+    uint32_t dwReserved0;
+    uint32_t dwReserved1;
+    wchar_t  cFileName[260];
+    wchar_t  cAlternateFileName[14];
+};
+
+__declspec(dllimport) void*    GetStdHandle(uint32_t nStdHandle);
+__declspec(dllimport) void*    CreateFileW(const wchar_t* lpFileName, uint32_t dwDesiredAccess, uint32_t dwShareMode,
+                                           void* lpSecurityAttributes, uint32_t dwCreationDisposition,
+                                           uint32_t dwFlagsAndAttributes, void* hTemplateFile);
+__declspec(dllimport) int32_t  ReadFile(void* hFile, void* lpBuffer, uint32_t nNumberOfBytesToRead,
+                                        uint32_t* lpNumberOfBytesRead, void* lpOverlapped);
+__declspec(dllimport) int32_t  WriteFile(void* hFile, const void* lpBuffer, uint32_t nNumberOfBytesToWrite,
+                                         uint32_t* lpNumberOfBytesWritten, void* lpOverlapped);
+__declspec(dllimport) int32_t  CloseHandle(void* hObject);
+__declspec(dllimport) int32_t  CreateDirectoryW(const wchar_t* lpPathName, void* lpSecurityAttributes);
+__declspec(dllimport) int32_t  DeleteFileW(const wchar_t* lpFileName);
+__declspec(dllimport) void*    FindFirstFileW(const wchar_t* lpFileName, Win32FindDataW* lpFindFileData);
+__declspec(dllimport) int32_t  FindNextFileW(void* hFindFile, Win32FindDataW* lpFindFileData);
+__declspec(dllimport) int32_t  FindClose(void* hFindFile);
+__declspec(dllimport) void*    VirtualAlloc(void* lpAddress, size_t dwSize, uint32_t flAllocationType, uint32_t flProtect);
+__declspec(dllimport) int32_t  VirtualFree(void* lpAddress, size_t dwSize, uint32_t dwFreeType);
+__declspec(dllimport) uint32_t GetCurrentProcessId();
+__declspec(dllimport) int32_t  CreateProcessW(const wchar_t* lpApplicationName, wchar_t* lpCommandLine,
+                                              void* lpProcessAttributes, void* lpThreadAttributes,
+                                              int32_t bInheritHandles, uint32_t dwCreationFlags,
+                                              void* lpEnvironment, const wchar_t* lpCurrentDirectory,
+                                              void* lpStartupInfo, ProcessInformation* lpProcessInformation);
+__declspec(dllimport) uint32_t WaitForSingleObject(void* hHandle, uint32_t dwMilliseconds);
+__declspec(dllimport) int32_t  GetExitCodeProcess(void* hProcess, uint32_t* lpExitCode);
+__declspec(dllimport) void     ExitProcess(uint32_t uExitCode);
+
+static constexpr uint32_t STD_INPUT_HANDLE   = 0xFFFFFFF6u;
+static constexpr uint32_t STD_OUTPUT_HANDLE  = 0xFFFFFFF5u;
+static constexpr uint32_t GENERIC_READ       = 0x80000000u;
+static constexpr uint32_t GENERIC_WRITE      = 0x40000000u;
+static constexpr uint32_t FILE_SHARE_READ    = 0x00000001u;
+static constexpr uint32_t CREATE_ALWAYS      = 2u;
+static constexpr uint32_t OPEN_EXISTING      = 3u;
+static constexpr uint32_t FILE_ATTR_DIR      = 0x00000010u;
+static constexpr uint32_t FILE_ATTR_NORMAL   = 0x00000080u;
+static constexpr uint32_t MEM_COMMIT_RESERVE = 0x00003000u;
+static constexpr uint32_t MEM_RELEASE        = 0x00008000u;
+static constexpr uint32_t PAGE_READWRITE     = 0x00000004u;
+static constexpr uint32_t INFINITE_TIMEOUT   = 0xFFFFFFFFu;
+
+static size_t cstrlen(const char* s) noexcept {
+    size_t n = 0;
+    while (s[n]) ++n;
+    return n;
 }
 
-void PrintBanner() noexcept {
-    PrintLine("MicaNT [Version 10.0.26100.1]");
-    PrintLine("(c) 2026 MicaNT Foundation. All rights reserved.");
-    PrintLine("");
+static char toLowerCh(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
 }
 
-void PrintEnvironment() noexcept {
-    PrintLine("ALLUSERSPROFILE=C:\\ProgramData");
-    PrintLine("APPDATA=C:\\Users\\admin\\AppData\\Roaming");
-    PrintLine("CommonProgramFiles=C:\\Program Files\\Common Files");
-    PrintLine("COMPUTERNAME=MICANT-XEON");
-    PrintLine("ComSpec=C:\\MicaNT\\System32\\cmd.exe");
-    PrintLine("HOMEDRIVE=C:");
-    PrintLine("HOMEPATH=\\Users\\admin");
-    PrintLine("LOCALAPPDATA=C:\\Users\\admin\\AppData\\Local");
-    PrintLine("NUMBER_OF_PROCESSORS=8");
-    PrintLine("OS=Windows_NT");
-    PrintLine("Path=C:\\MicaNT\\System32;C:\\MicaNT;C:\\MicaNT\\System32\\Wbem");
-    PrintLine("PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC");
-    PrintLine("PROCESSOR_ARCHITECTURE=AMD64");
-    PrintLine("PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 158 Stepping 9, GenuineIntel");
-    PrintLine("PROCESSOR_LEVEL=6");
-    PrintLine("PROCESSOR_REVISION=9e09");
-    PrintLine("ProgramData=C:\\ProgramData");
-    PrintLine("ProgramFiles=C:\\Program Files");
-    PrintLine("PROMPT=$P$G");
-    PrintLine("PSModulePath=C:\\Program Files\\WindowsPowerShell\\Modules");
-    PrintLine("PUBLIC=C:\\Users\\Public");
-    PrintLine("SystemDrive=C:");
-    PrintLine("SystemRoot=C:\\MicaNT");
-    PrintLine("TEMP=C:\\Users\\admin\\AppData\\Local\\Temp");
-    PrintLine("TMP=C:\\Users\\admin\\AppData\\Local\\Temp");
-    PrintLine("USERDOMAIN=MICANT");
-    PrintLine("USERNAME=admin");
-    PrintLine("USERPROFILE=C:\\Users\\admin");
-    PrintLine("windir=C:\\MicaNT");
+static bool matchCmd(const char* line, const char* word) noexcept {
+    size_t i = 0;
+    while (word[i]) {
+        if (toLowerCh(line[i]) != toLowerCh(word[i])) return false;
+        ++i;
+    }
+    return line[i] == '\0' || line[i] == ' ' || line[i] == '\t';
 }
 
-void ExecuteDir() noexcept {
-    PrintLine(" Volume in drive C is MICANT");
-    PrintLine(" Volume Serial Number is 4C2A-18E9");
-    PrintLine("");
-    PrintLine(" Directory of C:\\MicaNT\\System32");
-    PrintLine("");
-    PrintLine("10/24/2026  12:00 AM    <DIR>          .");
-    PrintLine("10/24/2026  12:00 AM    <DIR>          ..");
-    PrintLine("10/24/2026  12:00 AM           143,360 cmd.exe");
-    PrintLine("10/24/2026  12:00 AM            98,304 hostname.exe");
-    PrintLine("10/24/2026  12:00 AM            98,304 whoami.exe");
-    PrintLine("10/24/2026  12:00 AM           114,688 tasklist.exe");
-    PrintLine("10/24/2026  12:00 AM           106,496 taskkill.exe");
-    PrintLine("10/24/2026  12:00 AM           131,072 ipconfig.exe");
-    PrintLine("10/24/2026  12:00 AM           114,688 ping.exe");
-    PrintLine("10/24/2026  12:00 AM            98,304 type.exe");
-    PrintLine("10/24/2026  12:00 AM           102,400 find.exe");
-    PrintLine("10/24/2026  12:00 AM            86,016 netmsg.exe");
-    PrintLine("10/24/2026  12:00 AM            90,112 help.exe");
-    PrintLine("10/24/2026  12:00 AM            94,208 setx.exe");
-    PrintLine("10/24/2026  12:00 AM           135,168 chkdsk.exe");
-    PrintLine("10/24/2026  12:00 AM           122,880 diskpart.exe");
-    PrintLine("10/24/2026  12:00 AM           139,264 reg.exe");
-    PrintLine("10/24/2026  12:00 AM           118,784 sc.exe");
-    PrintLine("10/24/2026  12:00 AM           102,400 driverquery.exe");
-    PrintLine("10/24/2026  12:00 AM           110,592 fc.exe");
-    PrintLine("10/24/2026  12:00 AM            98,304 attrib.exe");
-    PrintLine("10/24/2026  12:00 AM            98,304 more.exe");
-    PrintLine("10/24/2026  12:00 AM           106,496 format.exe");
-    PrintLine("10/24/2026  12:00 AM            98,304 shutdown.exe");
-    PrintLine("10/24/2026  12:00 AM           131,072 robocopy.exe");
-    PrintLine("10/24/2026  12:00 AM           122,880 sfc.exe");
-    PrintLine("10/24/2026  12:00 AM           118,784 bcdedit.exe");
-    PrintLine("10/24/2026  12:00 AM           106,496 where.exe");
-    PrintLine("10/24/2026  12:00 AM           110,592 wmic.exe");
-    PrintLine("10/24/2026  12:00 AM           114,688 powercfg.exe");
-    PrintLine("              30 File(s)      3,325,952 bytes");
-    PrintLine("               2 Dir(s)   2,019,524,608 bytes free");
+static const char* skipWordAndSpaces(const char* s) noexcept {
+    while (*s && *s != ' ' && *s != '\t') ++s;
+    while (*s == ' ' || *s == '\t') ++s;
+    return s;
 }
 
-bool MatchCmdToken(const char* input, const char* name) noexcept {
-    if (!input || !name) return false;
-    size_t nLen = StrLen(name);
-    if (!StrCaseStartsWith(input, name)) return false;
-    char next = input[nLen];
-    if (next == '\0' || next == ' ' || next == '\t' || next == '/' || next == '-') return true;
-
-    // Check with .exe
-    if (StrCaseStartsWith(input + nLen, ".exe")) {
-        char afterExe = input[nLen + 4];
-        if (afterExe == '\0' || afterExe == ' ' || afterExe == '\t' || afterExe == '/' || afterExe == '-') return true;
-    }
-    return false;
+static void appendStr(char* dst, size_t& pos, size_t cap, const char* s) noexcept {
+    while (*s && pos + 1 < cap) dst[pos++] = *s++;
+    dst[pos] = '\0';
 }
 
-void ExecuteCommand(const char* cmd) noexcept {
-    while (*cmd == ' ' || *cmd == '\t') ++cmd;
-    if (*cmd == '\0') return;
-
-    // Internal commands
-    if (MatchCmdToken(cmd, "ver")) {
-        PrintLine("MicaNT [Version 10.0.26100.1]");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "echo")) {
-        const char* text = cmd + 4;
-        while (*text == ' ' || *text == '\t') ++text;
-        if (*text == '\0') {
-            PrintLine("ECHO is on.");
-        } else {
-            PrintLine(text);
+static void appendDec(char* dst, size_t& pos, size_t cap, uint64_t val) noexcept {
+    char tmp[24];
+    size_t n = 0;
+    if (val == 0) tmp[n++] = '0';
+    else {
+        while (val > 0 && n < 22) {
+            tmp[n++] = static_cast<char>('0' + (val % 10));
+            val /= 10;
         }
-        return;
     }
-
-    if (MatchCmdToken(cmd, "hostname")) {
-        PrintLine("MICANT-XEON");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "whoami")) {
-        if (StrCaseContains(cmd, "/user")) {
-            PrintLine("USER INFORMATION");
-            PrintLine("----------------\n");
-            PrintLine("User Name    SID");
-            PrintLine("============ ==============================================");
-            PrintLine("micant\\admin S-1-5-21-3623811015-3361044348-30300820-1001");
-        } else if (StrCaseContains(cmd, "/priv")) {
-            PrintLine("PRIVILEGES INFORMATION");
-            PrintLine("----------------------\n");
-            PrintLine("Privilege Name                Description                          State");
-            PrintLine("============================= ==================================== ========");
-            PrintLine("SeShutdownPrivilege           Shut down the system                 Enabled");
-            PrintLine("SeDebugPrivilege              Debug programs                       Enabled");
-        } else {
-            PrintLine("MICANT\\admin");
-        }
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "cd") || MatchCmdToken(cmd, "chdir")) {
-        PrintLine("C:\\MicaNT\\System32");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "cls")) {
-        Print("\033[2J\033[H");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "dir")) {
-        ExecuteDir();
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "set")) {
-        PrintEnvironment();
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "date")) {
-        PrintLine("The current date is: Sun 10/25/2026");
-        PrintLine("Enter new date: (mm-dd-yy) ");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "time")) {
-        PrintLine("The current time is: 12:00:00.00");
-        PrintLine("Enter new time: ");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "help")) {
-        PrintLine("For more information on a specific command, type HELP command-name");
-        PrintLine("MICA     Displays the MICA architectural vision, pillars & vitals.");
-        PrintLine("ASSOC    Displays or modifies file extension associations.");
-        PrintLine("ATTRIB   Displays or changes file attributes.");
-        PrintLine("BCDEDIT  Sets properties in boot database to control boot loading.");
-        PrintLine("CD       Displays the name of or changes the current directory.");
-        PrintLine("CHKDSK   Checks a disk and displays a status report.");
-        PrintLine("CHKNTFS  Displays or modifies the checking of disk at boot time.");
-        PrintLine("CLS      Clears the screen.");
-        PrintLine("CMD      Starts a new instance of the MicaNT command interpreter.");
-        PrintLine("COPY     Copies one or more files to another location.");
-        PrintLine("DATE     Displays or sets the date.");
-        PrintLine("DEL      Deletes one or more files.");
-        PrintLine("DIR      Displays a list of files and subdirectories in a directory.");
-        PrintLine("DISKPART Displays or configures Disk Partition properties.");
-        PrintLine("DRIVERQUERY Displays current device driver status and properties.");
-        PrintLine("ECHO     Displays messages, or turns command echoing on or off.");
-        PrintLine("EXIT     Quits the CMD.EXE program (command interpreter).");
-        PrintLine("FC       Compares two files or sets of files.");
-        PrintLine("FIND     Searches for a text string in a file or files.");
-        PrintLine("FORMAT   Formats a disk for use with MicaNT.");
-        PrintLine("FSUTIL   Displays or configures file system properties.");
-        PrintLine("HELP     Provides Help information for MicaNT commands.");
-        PrintLine("HOSTNAME Displays current host name.");
-        PrintLine("IPCONFIG Displays all current TCP/IP network configuration values.");
-        PrintLine("MD       Creates a directory.");
-        PrintLine("MOVE     Moves one or more files from one directory to another directory.");
-        PrintLine("NETSTAT  Displays protocol statistics and current TCP/IP connections.");
-        PrintLine("PING     Verifies IP-level connectivity to another TCP/IP computer.");
-        PrintLine("POWERCFG Controls power settings and battery states.");
-        PrintLine("RD       Removes a directory.");
-        PrintLine("REG      Console Registry Tool for MicaNT.");
-        PrintLine("REN      Renames a file or files.");
-        PrintLine("ROBOCOPY Robust File and Folder Copy for MicaNT.");
-        PrintLine("SC       Communicates with the Service Controller and installed services.");
-        PrintLine("SET      Displays, sets, or removes MicaNT environment variables.");
-        PrintLine("SFC      Scans integrity of all protected system files.");
-        PrintLine("SHUTDOWN Allows complete local or remote machine shutdown.");
-        PrintLine("TASKKILL Terminate tasks by process id (PID) or image name.");
-        PrintLine("TASKLIST Displays a list of currently running processes.");
-        PrintLine("TIME     Displays or sets the system time.");
-        PrintLine("TRACERT  Traces network route to target computer.");
-        PrintLine("TYPE     Displays the contents of a text file.");
-        PrintLine("VER      Displays the MicaNT version.");
-        PrintLine("WHERE    Locates files matching search patterns across path.");
-        PrintLine("WHOAMI   Displays user, group and privileges information.");
-        PrintLine("WMIC     Displays WMI information inside interactive command shell.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "mica") || MatchCmdToken(cmd, "tour") || MatchCmdToken(cmd, "about")) {
-        PrintLine("========================================================================");
-        PrintLine("  Project MICA: Memory, IPC, Compute, Architecture                      ");
-        PrintLine("  \"The cleanest NT architecture on Earth.\"                              ");
-        PrintLine("========================================================================");
-        PrintLine("");
-        PrintLine("In 1988, Dave Cutler and his engineering team designed MICA at Digital");
-        PrintLine("Equipment Corporation (DEC) for the PRISM RISC architecture. At Microsoft,");
-        PrintLine("that breakthrough architecture became Windows NT.");
-        PrintLine("");
-        PrintLine("MicaNT resurrects Cutler's pure, uncompromised soul in ISO C++23:");
-        PrintLine("  * Zero Telemetry & Adware      * Sub-32 MB Idle Memory Footprint");
-        PrintLine("  * 100% Clean-Room Metadata     * Sub-Millisecond Cold Boot");
-        PrintLine("  * True Object-Oriented Handles * Proactive IOCP Asynchronous I/O");
-        PrintLine("");
-        PrintLine("THE FOUR PILLARS OF MICA:");
-        PrintLine("  [M] Memory Management: 64-bit 4-Level Paging, VAD binary trees, zero-copy sections");
-        PrintLine("  [I] IPC & LPC: ALPC port rendezvous, Named Pipes, IOCP async completion queues");
-        PrintLine("  [C] Compute & Scheduling: Symmetric Multiprocessing (SMP HAL), Speed Shift HWP");
-        PrintLine("  [A] Architecture & Clean-Room: 100% ISO C++23, 44 LSTAR syscalls, modular sysroot");
-        PrintLine("");
-        PrintLine("INTERACTIVE EXPLORATION:");
-        PrintLine("  systeminfo  - View hardware architecture and OS telemetry");
-        PrintLine("  tasklist    - View active Ring 3 processes and daemons");
-        PrintLine("  netstat     - View active TCP/IP connections and NDIS bindings");
-        PrintLine("  ipconfig    - View network adapter configuration");
-        PrintLine("========================================================================");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "exit")) {
-        ExitProcess(0);
-    }
-
-    // System32 external binary dispatch
-    if (MatchCmdToken(cmd, "ipconfig")) {
-        PrintLine("MicaNT IP Configuration\n");
-        PrintLine("Ethernet adapter Ethernet0:\n");
-        PrintLine("   Connection-specific DNS Suffix  . :");
-        PrintLine("   IPv4 Address. . . . . . . . . . . : 147.135.1.229");
-        PrintLine("   Subnet Mask . . . . . . . . . . . : 255.255.255.0");
-        PrintLine("   Default Gateway . . . . . . . . . : 147.135.1.254");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "ping")) {
-        PrintLine("Pinging 147.135.1.254 with 32 bytes of data:");
-        PrintLine("Reply from 147.135.1.254: bytes=32 time<1ms TTL=64");
-        PrintLine("Reply from 147.135.1.254: bytes=32 time<1ms TTL=64");
-        PrintLine("Reply from 147.135.1.254: bytes=32 time<1ms TTL=64");
-        PrintLine("Reply from 147.135.1.254: bytes=32 time<1ms TTL=64\n");
-        PrintLine("Ping statistics for 147.135.1.254:");
-        PrintLine("    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "netstat")) {
-        PrintLine("Active Connections\n");
-        PrintLine("  Proto  Local Address          Foreign Address        State           PID");
-        PrintLine("  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       892");
-        PrintLine("  TCP    0.0.0.0:445            0.0.0.0:0              LISTENING       948");
-        PrintLine("  TCP    147.135.1.229:22       0.0.0.0:0              LISTENING       1024");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "tasklist")) {
-        PrintLine("Image Name                     PID Session Name        Session#    Mem Usage");
-        PrintLine("========================= ======== ================ =========== ============");
-        PrintLine("System Idle Process              0 Services                   0          8 K");
-        PrintLine("System                           4 Services                   0        280 K");
-        PrintLine("smss.exe                       368 Services                   0      1,024 K");
-        PrintLine("csrss.exe                      480 Console                    1      4,096 K");
-        PrintLine("services.exe                   640 Services                   0      3,072 K");
-        PrintLine("lsass.exe                      652 Services                   0      7,168 K");
-        PrintLine("cmd.exe                       1024 Console                    1      2,048 K");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "sfc")) {
-        PrintLine("Beginning system scan. This process will take some time.\n");
-        PrintLine("Beginning verification phase of system scan.");
-        PrintLine("Verification 100% complete.");
-        PrintLine("MicaNT Resource Protection did not find any integrity violations.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "bcdedit")) {
-        PrintLine("MicaNT Boot Manager");
-        PrintLine("--------------------");
-        PrintLine("identifier              {bootmgr}");
-        PrintLine("device                  partition=\\Device\\HarddiskVolume1");
-        PrintLine("path                    \\EFI\\MicaNT\\BOOTX64.EFI");
-        PrintLine("description             MicaNT Sovereign Boot Manager");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "where")) {
-        PrintLine("C:\\MicaNT\\System32\\cmd.exe");
-        PrintLine("C:\\MicaNT\\System32\\powershell.exe");
-        PrintLine("C:\\MicaNT\\System32\\ping.exe");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "wmic")) {
-        PrintLine("MaxClockSpeed  Name                                           NumberOfCores  NumberOfLogicalProcessors");
-        PrintLine("3801           Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz       4              8");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "powercfg")) {
-        PrintLine("Existing Power Schemes (* Active)");
-        PrintLine("----------------------------------");
-        PrintLine("Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced) *");
-        PrintLine("Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (High performance)");
-        PrintLine("Power Scheme GUID: a1841308-3541-4fab-bc81-f71556f20b4a  (Power saver)");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "diskpart")) {
-        if (StrCaseContains(cmd, "vol")) {
-            PrintLine("  Volume ###  Ltr  Label        Fs     Type        Size     Status     Info");
-            PrintLine("  ----------  ---  -----------  -----  ----------  -------  ---------  --------");
-            PrintLine("  Volume 0     C   MICA_SYS     FAT32  Partition    128 GB  Healthy    System");
-            PrintLine("  Volume 1     D   MICA_NTFS    NTFS   Partition    128 GB  Healthy    Boot");
-            PrintLine("  Volume 2     E   MICA_EXFAT   exFAT  Partition    128 GB  Healthy    Data");
-            PrintLine("  Volume 3     F   MICA_CDFS    CDFS   CD-ROM       700 MB  Healthy    Media");
-            PrintLine("  Volume 4     G   MICA_REFS    ReFS   Partition    128 GB  Healthy    Resilient");
-            PrintLine("  Volume 5     Z   MICA_ZFS     ZFS    Pool         128 GB  Healthy    RAID-Z1");
-            return;
-        }
-        PrintLine("  Disk ###  Status         Size     Free     Dyn  Gpt");
-        PrintLine("  --------  -------------  -------  -------  ---  ---");
-        PrintLine("  Disk 0    Online         1863 GB      0 B        *");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "chkntfs")) {
-        PrintLine("The type of the file system is NTFS (Sovereign Clean-Room).");
-        PrintLine("C: is not dirty.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "fsutil")) {
-        PrintLine("Drives:");
-        PrintLine("C:\\");
-        PrintLine("D:\\");
-        PrintLine("E:\\");
-        PrintLine("F:\\");
-        PrintLine("G:\\");
-        PrintLine("Z:\\");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "format")) {
-        if (StrCaseContains(cmd, "f:")) {
-            PrintLine("Format cannot run on this volume because the volume is write-protected.");
-        } else if (StrCaseContains(cmd, "zfs") || StrCaseContains(cmd, "z:")) {
-            PrintLine("The type of the file system is ZFS.");
-            PrintLine("Formatting 128.0 GB");
-            PrintLine("Initializing TitanZFS Storage Pool (tank) and 128-Slot Uberblock Ring...");
-            PrintLine("Volume label is MICA_ZFS");
-            PrintLine("Volume Serial Number is 00BA-B10C");
-            PrintLine("Format complete.");
-        } else if (StrCaseContains(cmd, "refs") || StrCaseContains(cmd, "g:")) {
-            PrintLine("The type of the file system is ReFS.");
-            PrintLine("Formatting 16.0 MB");
-            PrintLine("Initializing ReFS B+ Tree Allocator and Object Tables...");
-            PrintLine("Volume label is MICA_REFS");
-            PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5");
-            PrintLine("Format complete.");
-        } else if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
-            PrintLine("The type of the file system is exFAT.");
-            PrintLine("Formatting 16.0 MB");
-            PrintLine("Initializing the File Allocation Table (FAT)...");
-            PrintLine("Volume label is MICA_EXFAT");
-            PrintLine("Volume Serial Number is 6A12-9F04");
-            PrintLine("Format complete.");
-        } else {
-            PrintLine("The type of the file system is NTFS.");
-            PrintLine("Formatting volume C:...");
-            PrintLine("Volume label is MICA_NTFS");
-            PrintLine("Volume Serial Number is 78E2-A1C9");
-            PrintLine("Format complete.");
-        }
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "chkdsk")) {
-        if (StrCaseContains(cmd, "cdfs") || StrCaseContains(cmd, "udfs") || StrCaseContains(cmd, "f:")) {
-            PrintLine("The type of the file system is CDFS.");
-            PrintLine("Volume F: is Sovereign Clean-Room ISO 9660 / Joliet / UDF Optical Media.");
-            PrintLine("Volume Serial Number is C0DE-1509.");
-            PrintLine("Validating volume structures...");
-            PrintLine("Path table and directory descriptors verified.");
-            PrintLine("MicaNT has checked the file system and found no problems.");
-            PrintLine("Read-only media. No further action is required.");
-        } else if (StrCaseContains(cmd, "zfs") || StrCaseContains(cmd, "z:")) {
-            PrintLine("The type of the file system is ZFS.");
-            PrintLine("Volume Z: is Sovereign Clean-Room TitanZFS Storage Pool (tank).");
-            PrintLine("Volume Serial Number is 00BA-B10C.");
-            PrintLine("TitanZFS is a Copy-on-Write (CoW) pool with 256-bit Fletcher-4 checksum verification.");
-            PrintLine("Active TXG: 42 | Uberblock Ring: 128 slots intact | Pool State: ONLINE");
-            PrintLine("Scrub complete: 0 checksum errors, 0 read errors, 0 write errors repaired.");
-            PrintLine("MicaNT TitanZFS has verified the pool and found no problems.");
-        } else if (StrCaseContains(cmd, "refs") || StrCaseContains(cmd, "g:")) {
-            PrintLine("The type of the file system is ReFS.");
-            PrintLine("Volume G: is Sovereign Clean-Room ReFS Resilient File System.");
-            PrintLine("Volume Serial Number is 8E21-F4A0-B9C3-71D5.");
-            PrintLine("ReFS is an online-repairing, allocate-on-write file system.");
-            PrintLine("Traditional offline check disk is not required.");
-            PrintLine("Online background scrubber verified all B+ tree roots and checkpoints.");
-            PrintLine("No corruption detected.");
-        } else if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
-            PrintLine("The type of the file system is exFAT.");
-            PrintLine("Volume E: is Sovereign Clean-Room exFAT.");
-            PrintLine("Volume Serial Number is 6A12-9F04.");
-            PrintLine("Validating file system structures...");
-            PrintLine("Volume bitmap verification is complete.");
-            PrintLine("File and folder verification is complete.");
-            PrintLine("MicaNT has scanned the file system and found no problems.");
-            PrintLine("No further action is required.");
-        } else {
-            PrintLine("The type of the file system is NTFS.");
-            PrintLine("Volume MICANT created 10/24/2026 00:00 AM");
-            PrintLine("Volume Serial Number is 78E2-A1C9");
-            PrintLine("Stage 1: Examining basic file system structure...");
-            PrintLine("Stage 2: Examining file name linkage...");
-            PrintLine("Stage 3: Examining security descriptors...");
-            PrintLine("MicaNT has scanned the file system and found no problems.");
-        }
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "chcp")) {
-        PrintLine("Active code page: 65001");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "defrag")) {
-        PrintLine("MicaNT Drive Optimizer (MicaNT Sovereign Cutler Edition)");
-        PrintLine("Copyright (c) 2026 MicaNT Operating System Authority. All rights reserved.\n");
-        PrintLine("Invoking analysis on Local Disk (C:)...");
-        PrintLine("    Analysis Report:");
-        PrintLine("        Total volume size          = 119.24 GB");
-        PrintLine("        Free space                 = 84.60 GB");
-        PrintLine("        Total fragmented space     = 0 %");
-        PrintLine("        Media Type                 = Solid State Drive (NVMe/SATA SSD)");
-        PrintLine("        Recommended Action         = No defragmentation needed.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "bootsect")) {
-        PrintLine("Target volumes will be updated with BOOTMGR compatible bootcode.\n");
-        PrintLine("C: (\\\\?\\Volume{3a8b4129-0000-0000-0000-100000000000})");
-        PrintLine("    Successfully updated NTFS filesystem bootcode.\n");
-        PrintLine("Bootcode was successfully updated on all targeted volumes.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "bootcfg")) {
-        PrintLine("Boot Loader Settings");
-        PrintLine("--------------------");
-        PrintLine("timeout: 5");
-        PrintLine("default: multi(0)disk(0)rdisk(0)partition(1)\\MicaNT\n");
-        PrintLine("Boot Entries");
-        PrintLine("------------");
-        PrintLine("Boot entry ID:    1");
-        PrintLine("Friendly Name:    \"MicaNT Cutler Sovereign Edition x64\"");
-        PrintLine("Path:             multi(0)disk(0)rdisk(0)partition(1)\\MicaNT");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "auditpol")) {
-        PrintLine("System audit policy");
-        PrintLine("Category/Subcategory                      Setting");
-        PrintLine("System");
-        PrintLine("  Security State Change                   Success and Failure");
-        PrintLine("  Security System Extension               Success and Failure");
-        PrintLine("Logon/Logoff");
-        PrintLine("  Logon                                   Success and Failure");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "bitsadmin")) {
-        PrintLine("BITSADMIN version 3.0");
-        PrintLine("BITS administration utility.");
-        PrintLine("(C) Copyright MicaNT System Authority.\n");
-        PrintLine("{B8A5B9C2-4E2F-43B0-8F9E-6C0D9B7B8D10} 'MicaKernelUpdate' TRANSFERRED 1 / 1 1048576 / 1048576");
-        PrintLine("Listed 1 job(s).");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "at")) {
-        PrintLine("Status ID   Day                     Time          Command Line");
-        PrintLine("-------------------------------------------------------------------------------");
-        PrintLine("        1   Each M T W Th F         04:00 AM      defrag C: /O");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "comp")) {
-        PrintLine("Comparing files...");
-        PrintLine("Files compare OK");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "bdehdcfg")) {
-        PrintLine("BitLocker Drive Preparation Tool version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n");
-        PrintLine("System Partition Status: EFI System Partition (ESP) & WinRE ready for BitLocker.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "change")) {
-        PrintLine("Session logons are currently ENABLED.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "vol")) {
-        if (StrCaseContains(cmd, "d:")) {
-            PrintLine(" Volume in drive D is MICA_NTFS");
-            PrintLine(" Volume Serial Number is 78E2-A1C9");
-        } else if (StrCaseContains(cmd, "e:")) {
-            PrintLine(" Volume in drive E is MICA_EXFAT");
-            PrintLine(" Volume Serial Number is 6A12-9F04");
-        } else if (StrCaseContains(cmd, "f:")) {
-            PrintLine(" Volume in drive F is MICANT_OS");
-            PrintLine(" Volume Serial Number is C0DE-1509");
-        } else if (StrCaseContains(cmd, "g:")) {
-            PrintLine(" Volume in drive G is MICA_REFS");
-            PrintLine(" Volume Serial Number is 8E21-F4A0");
-        } else if (StrCaseContains(cmd, "z:")) {
-            PrintLine(" Volume in drive Z is MICA_ZFS");
-            PrintLine(" Volume Serial Number is 00BA-B10C");
-        } else {
-            PrintLine(" Volume in drive C is MICA_SYS");
-            PrintLine(" Volume Serial Number is 4C2A-18E9");
-        }
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "label")) {
-        PrintLine("Volume in drive C: is MICA_SYS");
-        PrintLine("Volume Serial Number is 4C2A-18E9");
-        PrintLine("Volume label unchanged.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "subst")) {
-        PrintLine("P:\\: => \\Device\\HmbPagingVolume (Haven Memory Bus 2.0 Direct-Stride Volume)");
-        PrintLine("X:\\: => C:\\MicaNT\\System32");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "tree")) {
-        PrintLine("Folder PATH listing for volume MICA_SYS");
-        PrintLine("Volume serial number is 4C2A-18E9");
-        PrintLine("C:\\MICANT");
-        PrintLine("+---Config");
-        PrintLine("+---Fonts");
-        PrintLine("\\---System32");
-        PrintLine("    +---drivers");
-        PrintLine("    \\---etc");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "recover")) {
-        PrintLine("Reading file cluster map from file system driver...");
-        PrintLine("Scanning clusters with hardware read-retry and ECC syndrome correction...");
-        PrintLine("16,769,024 of 16,777,216 bytes recovered (99.95% data integrity preserved).");
-        PrintLine("File recovery completed.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "vssadmin")) {
-        PrintLine("vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool");
-        PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
-        PrintLine("Contents of shadow copy set ID: {3E8C127A-45DF-4A1B-9430-652D0F08B9B1}");
-        PrintLine("   Contained 1 shadow copies at creation time: 10/25/2026 12:00:00 PM");
-        PrintLine("      Shadow Copy Volume: \\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "diskshadow")) {
-        PrintLine("MicaNT DiskShadow version 1.0 (MicaNT Sovereign Cutler Edition)");
-        PrintLine("Shadow copy set successfully created.");
-        PrintLine("Backup sequence completed successfully.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "manage-bde")) {
-        PrintLine("BitLocker Drive Encryption: Configuration Tool version 10.0.26100\n");
-        PrintLine("Volume C: [MicaNT OS]");
-        PrintLine("    Conversion Status:    Fully Encrypted (100.0%)");
-        PrintLine("    Encryption Method:    XTS-AES 256");
-        PrintLine("    Protection Status:    Protection On");
-        PrintLine("    Lock Status:          Unlocked");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "repair-bde")) {
-        PrintLine("BitLocker Recovery Tool (repair-bde.exe) Version 10.0.26100\n");
-        PrintLine("Validating encrypted volume metadata and FVEK key package...");
-        PrintLine("Decryption progress: 100% complete.");
-        PrintLine("Action: repair-bde completed successfully.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "wbadmin")) {
-        PrintLine("wbadmin 1.0 - Backup command-line tool");
-        PrintLine("(C) Copyright MicaNT Operating System Authority.\n");
-        PrintLine("Snapshot Volume: C: (MicaNT OS Partition)");
-        PrintLine("Status         : The backup operation has completed successfully.");
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "zpool")) {
-        if (StrCaseContains(cmd, "list")) {
-            PrintLine("NAME    SIZE  ALLOC   FREE  CKPOINT  EXPANDSZ   FRAG    CAP  DEDUP    HEALTH  ALTROOT");
-            PrintLine("tank    768M   128K   768M        -         -     0%     0%  1.00x    ONLINE  -");
-        } else {
-            PrintLine("  pool: tank\n state: ONLINE\nconfig:\n        NAME        STATE     READ WRITE CKSUM\n        tank        ONLINE       0     0     0\n          raidz1-0  ONLINE       0     0     0\n            c1t0d0  ONLINE       0     0     0\n            c1t1d0  ONLINE       0     0     0\n            c1t2d0  ONLINE       0     0     0\nerrors: No known data errors");
-        }
-        return;
-    }
-
-    if (MatchCmdToken(cmd, "zfs")) {
-        PrintLine("NAME          USED  AVAIL  REFER  MOUNTPOINT\ntank          128K   768M    24K  /tank\ntank/data      64K   768M    64K  Z:");
-        return;
-    }
-
-    // Unrecognized command
-    char err[128];
-    StrCopy(err, "'", sizeof(err));
-    StrConcat(err, cmd, sizeof(err));
-    StrConcat(err, "' is not recognized as an internal or external command,", sizeof(err));
-    PrintLine(err);
-    PrintLine("operable program or batch file.");
+    while (n > 0 && pos + 1 < cap) dst[pos++] = tmp[--n];
+    dst[pos] = '\0';
 }
 
-} // namespace
+static void asciiToWide(const char* src, wchar_t* dst, size_t cap) noexcept {
+    size_t i = 0;
+    while (src[i] && i + 1 < cap) {
+        dst[i] = static_cast<wchar_t>(static_cast<unsigned char>(src[i]));
+        ++i;
+    }
+    dst[i] = L'\0';
+}
 
-extern "C" void _start(const char* rawCmdLine = nullptr) {
-    VerifyRing3Cpl();
+static void wideToAscii(const wchar_t* src, char* dst, size_t cap) noexcept {
+    size_t i = 0;
+    while (src[i] && i + 1 < cap) {
+        dst[i] = (src[i] < 128) ? static_cast<char>(src[i]) : '?';
+        ++i;
+    }
+    dst[i] = '\0';
+}
 
-    CommandLineParser parser(rawCmdLine, "cmd.exe");
+static void writeOut(void* hOut, const char* s) noexcept {
+    uint32_t nw = 0;
+    WriteFile(hOut, s, static_cast<uint32_t>(cstrlen(s)), &nw, nullptr);
+}
 
-    if (parser.HasSwitch("?")) {
-        ShowHelp();
-        ExitProcess(0);
+static void writeLine(void* hOut, const char* s) noexcept {
+    char buf[160];
+    size_t p = 0;
+    appendStr(buf, p, sizeof(buf) - 2, s);
+    buf[p++] = '\r';
+    buf[p++] = '\n';
+    buf[p] = '\0';
+    uint32_t nw = 0;
+    WriteFile(hOut, buf, static_cast<uint32_t>(p), &nw, nullptr);
+}
+
+static void resolvePath(const char* cwd, const char* arg, char* out, size_t cap) noexcept {
+    size_t p = 0;
+    if (!arg || arg[0] == '\0') {
+        appendStr(out, p, cap, cwd);
+        return;
+    }
+    if (((arg[0] >= 'A' && arg[0] <= 'Z') || (arg[0] >= 'a' && arg[0] <= 'z')) && arg[1] == ':') {
+        appendStr(out, p, cap, arg);
+    } else if (arg[0] == '\\' || arg[0] == '/') {
+        appendStr(out, p, cap, "C:");
+        appendStr(out, p, cap, arg);
+    } else {
+        appendStr(out, p, cap, cwd);
+        if (p > 0 && out[p - 1] != '\\') appendStr(out, p, cap, "\\");
+        appendStr(out, p, cap, arg);
+    }
+    for (size_t i = 0; out[i]; ++i) {
+        if (out[i] == '/') out[i] = '\\';
+    }
+}
+
+static void cmdDir(void* hOut, const char* cwd, const char* arg) noexcept {
+    char target[160];
+    resolvePath(cwd, arg, target, sizeof(target));
+
+    char pattern[168];
+    size_t pp = 0;
+    appendStr(pattern, pp, sizeof(pattern), target);
+    if (pp > 0 && pattern[pp - 1] != '\\') appendStr(pattern, pp, sizeof(pattern), "\\");
+    appendStr(pattern, pp, sizeof(pattern), "*");
+
+    wchar_t wPat[168];
+    asciiToWide(pattern, wPat, sizeof(wPat) / sizeof(wPat[0]));
+
+    Win32FindDataW fd;
+    fd.dwFileAttributes = 0;
+    fd.nFileSizeHigh = 0;
+    fd.nFileSizeLow = 0;
+    fd.cFileName[0] = L'\0';
+
+    char hdr[160];
+    size_t hp = 0;
+    appendStr(hdr, hp, sizeof(hdr), " Directory of ");
+    appendStr(hdr, hp, sizeof(hdr), target);
+    writeLine(hOut, hdr);
+
+    void* hFind = FindFirstFileW(wPat, &fd);
+    if (hFind == reinterpret_cast<void*>(-1) || hFind == nullptr) {
+        writeLine(hOut, "  (Directory empty or not found)");
+        return;
     }
 
-    if (parser.HasSwitch("c")) {
-        const char* toExec = parser.GetRemainingAfterSwitch("c");
-        ExecuteCommand(toExec);
-        ExitProcess(0);
-    }
-
-    if (parser.HasSwitch("k")) {
-        PrintBanner();
-        const char* toExec = parser.GetRemainingAfterSwitch("k");
-        if (toExec && *toExec) {
-            ExecuteCommand(toExec);
+    uint32_t files = 0, dirs = 0;
+    uint64_t totalBytes = 0;
+    do {
+        char nameA[128];
+        wideToAscii(fd.cFileName, nameA, sizeof(nameA));
+        char row[160];
+        size_t rp = 0;
+        if (fd.dwFileAttributes & FILE_ATTR_DIR) {
+            dirs++;
+            appendStr(row, rp, sizeof(row), "  <DIR>        ");
+            appendStr(row, rp, sizeof(row), nameA);
+        } else {
+            files++;
+            uint64_t sz = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+            totalBytes += sz;
+            char szBuf[24];
+            size_t sp = 0;
+            appendDec(szBuf, sp, sizeof(szBuf), sz);
+            appendStr(row, rp, sizeof(row), "  ");
+            for (size_t pad = sp; pad < 10; ++pad) appendStr(row, rp, sizeof(row), " ");
+            appendStr(row, rp, sizeof(row), szBuf);
+            appendStr(row, rp, sizeof(row), "   ");
+            appendStr(row, rp, sizeof(row), nameA);
         }
-        Print("C:\\MicaNT\\System32>");
-        ExitProcess(0);
+        writeLine(hOut, row);
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+
+    char sum[160];
+    size_t sp = 0;
+    appendStr(sum, sp, sizeof(sum), "     ");
+    appendDec(sum, sp, sizeof(sum), files);
+    appendStr(sum, sp, sizeof(sum), " File(s) ");
+    appendDec(sum, sp, sizeof(sum), totalBytes);
+    appendStr(sum, sp, sizeof(sum), " B | ");
+    appendDec(sum, sp, sizeof(sum), dirs);
+    appendStr(sum, sp, sizeof(sum), " Dir(s) [Ring-3 FindFirstFileW]");
+    writeLine(hOut, sum);
+}
+
+static void cmdType(void* hOut, const char* cwd, const char* arg) noexcept {
+    if (!arg || !*arg) {
+        writeLine(hOut, "Usage: type <file>");
+        return;
+    }
+    char target[160];
+    resolvePath(cwd, arg, target, sizeof(target));
+    wchar_t wPath[160];
+    asciiToWide(target, wPath, sizeof(wPath) / sizeof(wPath[0]));
+
+    void* hFile = CreateFileW(wPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTR_NORMAL, nullptr);
+    if (hFile == reinterpret_cast<void*>(-1) || hFile == nullptr) {
+        writeLine(hOut, "The system cannot find the file specified.");
+        return;
+    }
+    auto* buf = static_cast<char*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT_RESERVE, PAGE_READWRITE));
+    if (buf) {
+        uint32_t nr = 0;
+        if (ReadFile(hFile, buf, 4095, &nr, nullptr) && nr > 0) {
+            buf[nr] = '\0';
+            uint32_t nw = 0;
+            WriteFile(hOut, buf, nr, &nw, nullptr);
+            if (buf[nr - 1] != '\n') writeOut(hOut, "\r\n");
+        }
+        VirtualFree(buf, 0, MEM_RELEASE);
+    }
+    CloseHandle(hFile);
+}
+
+static void cmdEcho(void* hOut, const char* cwd, const char* arg) noexcept {
+    if (!arg || !*arg) {
+        writeLine(hOut, "ECHO is on.");
+        return;
+    }
+    const char* gt = nullptr;
+    for (const char* p = arg; *p; ++p) {
+        if (*p == '>') { gt = p; break; }
+    }
+    if (!gt) {
+        writeLine(hOut, arg);
+        return;
     }
 
-    // Default interactive session invocation
-    PrintBanner();
-    PrintLine("C:\\MicaNT\\System32>ver");
-    ExecuteCommand("ver");
-    PrintLine("");
-    Print("C:\\MicaNT\\System32>");
+    char payload[160];
+    size_t plen = static_cast<size_t>(gt - arg);
+    while (plen > 0 && (arg[plen - 1] == ' ' || arg[plen - 1] == '\t')) --plen;
+    if (plen + 3 >= sizeof(payload)) plen = sizeof(payload) - 3;
+    for (size_t i = 0; i < plen; ++i) payload[i] = arg[i];
+    payload[plen++] = '\r';
+    payload[plen++] = '\n';
+    payload[plen] = '\0';
+
+    const char* fn = gt + 1;
+    while (*fn == ' ' || *fn == '\t') ++fn;
+    char target[160];
+    resolvePath(cwd, fn, target, sizeof(target));
+    wchar_t wPath[160];
+    asciiToWide(target, wPath, sizeof(wPath) / sizeof(wPath[0]));
+
+    void* hFile = CreateFileW(wPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTR_NORMAL, nullptr);
+    if (hFile == reinterpret_cast<void*>(-1) || hFile == nullptr) {
+        writeLine(hOut, "ERROR: CreateFileW(CREATE_ALWAYS) failed on NTFS 3.1.");
+        return;
+    }
+    uint32_t nw = 0;
+    bool ok = WriteFile(hFile, payload, static_cast<uint32_t>(plen), &nw, nullptr) && nw == plen;
+    CloseHandle(hFile);
+    if (ok) {
+        char msg[160];
+        size_t mp = 0;
+        appendStr(msg, mp, sizeof(msg), "[cmd.exe] Wrote ");
+        appendDec(msg, mp, sizeof(msg), nw);
+        appendStr(msg, mp, sizeof(msg), " B -> ");
+        appendStr(msg, mp, sizeof(msg), target);
+        appendStr(msg, mp, sizeof(msg), " (NTFS 3.1 DMA OK)");
+        writeLine(hOut, msg);
+    } else {
+        writeLine(hOut, "ERROR: WriteFile failed.");
+    }
+}
+
+static void cmdMkdir(void* hOut, const char* cwd, const char* arg) noexcept {
+    if (!arg || !*arg) {
+        writeLine(hOut, "Usage: mkdir <directory>");
+        return;
+    }
+    char target[160];
+    resolvePath(cwd, arg, target, sizeof(target));
+    wchar_t wPath[160];
+    asciiToWide(target, wPath, sizeof(wPath) / sizeof(wPath[0]));
+
+    if (CreateDirectoryW(wPath, nullptr)) {
+        char msg[160];
+        size_t mp = 0;
+        appendStr(msg, mp, sizeof(msg), "[cmd.exe] Created directory: ");
+        appendStr(msg, mp, sizeof(msg), target);
+        appendStr(msg, mp, sizeof(msg), " (NTFS 3.1 MFT+$I30 OK)");
+        writeLine(hOut, msg);
+    } else {
+        writeLine(hOut, "ERROR: CreateDirectoryW failed (exists or invalid parent).");
+    }
+}
+
+static void cmdDel(void* hOut, const char* cwd, const char* arg) noexcept {
+    if (!arg || !*arg) {
+        writeLine(hOut, "Usage: del <file>");
+        return;
+    }
+    char target[160];
+    resolvePath(cwd, arg, target, sizeof(target));
+    wchar_t wPath[160];
+    asciiToWide(target, wPath, sizeof(wPath) / sizeof(wPath[0]));
+
+    if (DeleteFileW(wPath)) {
+        char msg[160];
+        size_t mp = 0;
+        appendStr(msg, mp, sizeof(msg), "[cmd.exe] Deleted file: ");
+        appendStr(msg, mp, sizeof(msg), target);
+        appendStr(msg, mp, sizeof(msg), " (MFT+Bitmap+$I30 reclaimed)");
+        writeLine(hOut, msg);
+    } else {
+        writeLine(hOut, "ERROR: DeleteFileW failed (file not found).");
+    }
+}
+
+static void cmdCd(void* hOut, char* cwd, size_t cwdCap, const char* arg) noexcept {
+    if (!arg || !*arg) {
+        writeLine(hOut, cwd);
+        return;
+    }
+    if (arg[0] == '\\' && arg[1] == '\0') {
+        size_t p = 0;
+        appendStr(cwd, p, cwdCap, "C:\\");
+        return;
+    }
+    if (arg[0] == '.' && arg[1] == '.' && arg[2] == '\0') {
+        size_t len = cstrlen(cwd);
+        while (len > 3 && cwd[len - 1] == '\\') cwd[--len] = '\0';
+        while (len > 3 && cwd[len - 1] != '\\') cwd[--len] = '\0';
+        if (len > 3 && cwd[len - 1] == '\\') cwd[--len] = '\0';
+        return;
+    }
+    char nextDir[128];
+    resolvePath(cwd, arg, nextDir, sizeof(nextDir));
+    size_t p = 0;
+    appendStr(cwd, p, cwdCap, nextDir);
+}
+
+static void cmdSpawnExe(void* hOut, const char* exeToken) noexcept {
+    char exePath[160];
+    size_t ep = 0;
+    bool hasSlash = false, hasExe = false;
+    size_t tlen = cstrlen(exeToken);
+    for (size_t i = 0; i < tlen; ++i) {
+        if (exeToken[i] == '\\' || exeToken[i] == '/') hasSlash = true;
+    }
+    if (tlen > 4 && exeToken[tlen - 4] == '.' &&
+        toLowerCh(exeToken[tlen - 3]) == 'e' &&
+        toLowerCh(exeToken[tlen - 2]) == 'x' &&
+        toLowerCh(exeToken[tlen - 1]) == 'e') {
+        hasExe = true;
+    }
+    if (!hasSlash) appendStr(exePath, ep, sizeof(exePath), "\\Windows\\System32\\");
+    appendStr(exePath, ep, sizeof(exePath), exeToken);
+    if (!hasExe) appendStr(exePath, ep, sizeof(exePath), ".exe");
+
+    wchar_t wExe[160];
+    asciiToWide(exePath, wExe, sizeof(wExe) / sizeof(wExe[0]));
+
+    ProcessInformation pi{nullptr, nullptr, 0, 0};
+    if (!CreateProcessW(wExe, nullptr, nullptr, nullptr, 0, 0, nullptr, nullptr, nullptr, &pi)) {
+        char err[160];
+        size_t p = 0;
+        appendStr(err, p, sizeof(err), "'");
+        appendStr(err, p, sizeof(err), exeToken);
+        appendStr(err, p, sizeof(err), "' is not recognized as an internal command or System32 PE32+ executable.");
+        writeLine(hOut, err);
+        return;
+    }
+
+    uint32_t waitRes = WaitForSingleObject(pi.hProcess, INFINITE_TIMEOUT);
+    uint32_t exitCode = 0xBADu;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+
+    char done[160];
+    size_t dp = 0;
+    appendStr(done, dp, sizeof(done), "[cmd.exe] Child '");
+    appendStr(done, dp, sizeof(done), exeToken);
+    appendStr(done, dp, sizeof(done), "' (PID=");
+    appendDec(done, dp, sizeof(done), pi.dwProcessId);
+    appendStr(done, dp, sizeof(done), ") Wait=");
+    appendDec(done, dp, sizeof(done), waitRes);
+    appendStr(done, dp, sizeof(done), " ExitCode=");
+    appendDec(done, dp, sizeof(done), exitCode);
+    writeLine(hOut, done);
+}
+
+void WinMainEntry() {
+    void* hIn  = GetStdHandle(STD_INPUT_HANDLE);
+    void* hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    uint32_t myPid = GetCurrentProcessId();
+
+    char cwd[128];
+    size_t cp = 0;
+    appendStr(cwd, cp, sizeof(cwd), "C:\\");
+
+    char banner[160];
+    size_t bp = 0;
+    appendStr(banner, bp, sizeof(banner), "MicaNT Sovereign Ring-3 cmd.exe [PID=");
+    appendDec(banner, bp, sizeof(banner), myPid);
+    appendStr(banner, bp, sizeof(banner), " | Isolated CR3 | Dynamic KERNEL32->NTDLL IAT]");
+    writeLine(hOut, banner);
+    writeLine(hOut, "Type 'ver', 'dir', 'cd', 'type', 'echo >', 'mkdir', 'del', '<app>.exe', or 'exit'.");
+
+    char lineBuf[160];
+    while (true) {
+        char prompt[140];
+        size_t pp = 0;
+        appendStr(prompt, pp, sizeof(prompt), "[R3 cmd] ");
+        appendStr(prompt, pp, sizeof(prompt), cwd);
+        appendStr(prompt, pp, sizeof(prompt), "> ");
+        writeOut(hOut, prompt);
+
+        uint32_t nRead = 0;
+        if (!ReadFile(hIn, lineBuf, sizeof(lineBuf) - 1, &nRead, nullptr) || nRead == 0) {
+            break;
+        }
+        while (nRead > 0 && (lineBuf[nRead - 1] == '\r' || lineBuf[nRead - 1] == '\n' || lineBuf[nRead - 1] == ' ')) {
+            --nRead;
+        }
+        lineBuf[nRead] = '\0';
+
+        const char* cmd = lineBuf;
+        while (*cmd == ' ' || *cmd == '\t') ++cmd;
+        if (*cmd == '\0') continue;
+
+        if (matchCmd(cmd, "exit")) {
+            writeLine(hOut, "[cmd.exe] Exiting Ring-3 Command Processor cleanly -> ExitProcess(0).");
+            ExitProcess(0);
+        } else if (matchCmd(cmd, "ver")) {
+            char v[160];
+            size_t vp = 0;
+            appendStr(v, vp, sizeof(v), "MicaNT [Version 10.0.26100.1] Ring-3 cmd.exe PID=");
+            appendDec(v, vp, sizeof(v), myPid);
+            appendStr(v, vp, sizeof(v), " (0 direct syscalls | Live NTFS 3.1)");
+            writeLine(hOut, v);
+        } else if (matchCmd(cmd, "help")) {
+            writeLine(hOut, "Ring-3 cmd.exe Commands: ver, dir [p], cd [p], type <f>, echo <t> [>f], mkdir <d>, del <f>, <exe>, exit");
+        } else if (matchCmd(cmd, "dir")) {
+            cmdDir(hOut, cwd, skipWordAndSpaces(cmd));
+        } else if (matchCmd(cmd, "cd") || matchCmd(cmd, "chdir")) {
+            cmdCd(hOut, cwd, sizeof(cwd), skipWordAndSpaces(cmd));
+        } else if (matchCmd(cmd, "type")) {
+            cmdType(hOut, cwd, skipWordAndSpaces(cmd));
+        } else if (matchCmd(cmd, "echo")) {
+            cmdEcho(hOut, cwd, skipWordAndSpaces(cmd));
+        } else if (matchCmd(cmd, "mkdir") || matchCmd(cmd, "md")) {
+            cmdMkdir(hOut, cwd, skipWordAndSpaces(cmd));
+        } else if (matchCmd(cmd, "del")) {
+            cmdDel(hOut, cwd, skipWordAndSpaces(cmd));
+        } else if (matchCmd(cmd, "run")) {
+            cmdSpawnExe(hOut, skipWordAndSpaces(cmd));
+        } else {
+            char token[96];
+            size_t ti = 0;
+            while (cmd[ti] && cmd[ti] != ' ' && cmd[ti] != '\t' && ti + 1 < sizeof(token)) {
+                token[ti] = cmd[ti];
+                ++ti;
+            }
+            token[ti] = '\0';
+            cmdSpawnExe(hOut, token);
+        }
+    }
 
     ExitProcess(0);
 }
+
+} // extern "C"

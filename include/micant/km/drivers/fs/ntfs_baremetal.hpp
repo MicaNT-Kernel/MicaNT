@@ -282,7 +282,10 @@ private:
     uint64_t m_dmaReadsIssued{0};
     uint64_t m_dmaWritesIssued{0};
     uint64_t m_clustersAllocated{0};
+    uint64_t m_clustersFreed{0};
     uint32_t m_filesCreated{0};
+    uint32_t m_dirsCreated{0};
+    uint32_t m_filesDeleted{0};
     char     m_volumeLabel[64]{};
 
     // Cached $MFT data runs (supports fragmented MFT up to 32 runs)
@@ -539,6 +542,53 @@ private:
         return false;
     }
 
+    // Reclaim contiguous clusters back into on-disk $Bitmap (MFT Record #6) via AHCI DMA
+    bool freeClusters(uint64_t startLcn, uint64_t clusterCount) noexcept {
+        if (!m_mounted || clusterCount == 0 || startLcn < 256) return false;
+        if (!readMftRecord(MFT_RECORD_BITMAP, s_ntfsMftBuf, sizeof(s_ntfsMftBuf))) return false;
+
+        const auto* hdr = reinterpret_cast<const MftRecordHeader*>(s_ntfsMftBuf);
+        size_t off = hdr->firstAttributeOffset;
+        NtfsDataRun bmRuns[8]{};
+        size_t bmRunCnt = 0;
+
+        while (off + sizeof(NtfsAttrHeader) <= m_mftRecordSize) {
+            const auto* attr = reinterpret_cast<const NtfsAttrHeader*>(s_ntfsMftBuf + off);
+            if (attr->type == NTFS_ATTR_END || attr->length == 0 || off + attr->length > m_mftRecordSize) break;
+            if (attr->type == NTFS_ATTR_DATA && attr->nameLength == 0 && attr->nonResident != 0) {
+                const auto* nr = reinterpret_cast<const NtfsNonResidentAttr*>(s_ntfsMftBuf + off);
+                bmRunCnt = decodeRunlist(
+                    s_ntfsMftBuf + off + nr->mappingPairsOffset,
+                    attr->length - nr->mappingPairsOffset,
+                    bmRuns,
+                    8
+                );
+                break;
+            }
+            off += attr->length;
+        }
+        if (bmRunCnt == 0 || bmRuns[0].lcn < 0) return false;
+
+        uint64_t bmClusters = bmRuns[0].clusterCount;
+        if (bmClusters * m_bytesPerCluster > sizeof(s_ntfsBitmapBuf)) {
+            bmClusters = sizeof(s_ntfsBitmapBuf) / m_bytesPerCluster;
+        }
+        uint16_t bmSectors = static_cast<uint16_t>(bmClusters * m_sectorsPerCluster);
+        uint64_t bmRelLba = static_cast<uint64_t>(bmRuns[0].lcn) * m_sectorsPerCluster;
+        if (!readPartitionSectors(bmRelLba, bmSectors, s_ntfsBitmapBuf)) return false;
+
+        uint64_t bitCap = bmClusters * m_bytesPerCluster * 8ULL;
+        for (uint64_t k = 0; k < clusterCount; ++k) {
+            uint64_t bit = startLcn + k;
+            if (bit >= 256 && bit < bitCap) {
+                s_ntfsBitmapBuf[bit >> 3] &= static_cast<uint8_t>(~(1u << (bit & 7)));
+            }
+        }
+        if (!writePartitionSectors(bmRelLba, bmSectors, s_ntfsBitmapBuf)) return false;
+        m_clustersFreed += clusterCount;
+        return true;
+    }
+
     // Locate an unused MFT record (record >= 16 where signature != "FILE" or InUse flag == 0)
     bool allocateMftRecord(uint64_t& outRecNum) noexcept {
         outRecNum = 0;
@@ -731,7 +781,8 @@ private:
         uint64_t childMftRec,
         const char* childName,
         uint64_t realSize,
-        uint64_t allocSize
+        uint64_t allocSize,
+        bool isDirectory = false
     ) noexcept {
         if (!readMftRecord(dirMftRec, s_ntfsDirMftBuf, sizeof(s_ntfsDirMftBuf))) return false;
         auto* hdr = reinterpret_cast<MftRecordHeader*>(s_ntfsDirMftBuf);
@@ -760,7 +811,7 @@ private:
         fn->lastAccessTime = NT_TIME;
         fn->allocatedSize = allocSize;
         fn->realSize = realSize;
-        fn->fileAttributes = 0x00000020u;
+        fn->fileAttributes = isDirectory ? 0x10000000u : 0x00000020u;
         fn->reparseTag = 0;
         fn->nameLength = static_cast<uint8_t>(nameLen);
         fn->nameNamespace = 3;
@@ -838,6 +889,97 @@ private:
                     return writeMftRecord(dirMftRec, s_ntfsDirMftBuf);
                 }
                 if (cur->entryLength < sizeof(NtfsIndexEntryHeader)) break;
+                pos += cur->entryLength;
+            }
+        }
+        return false;
+    }
+
+    // Remove a child entry from parent directory's $INDEX_ALLOCATION (INDX) or $INDEX_ROOT (0x90)
+    bool removeFromDirectoryIndex(uint64_t dirMftRec, const char* childName, size_t childNameLen) noexcept {
+        if (!readMftRecord(dirMftRec, s_ntfsDirMftBuf, sizeof(s_ntfsDirMftBuf))) return false;
+        auto* hdr = reinterpret_cast<MftRecordHeader*>(s_ntfsDirMftBuf);
+        if ((hdr->flags & 0x02) == 0) return false;
+
+        size_t off = hdr->firstAttributeOffset;
+        size_t irAttrOff = 0;
+        while (off + sizeof(NtfsAttrHeader) <= m_mftRecordSize) {
+            const auto* attr = reinterpret_cast<const NtfsAttrHeader*>(s_ntfsDirMftBuf + off);
+            if (attr->type == NTFS_ATTR_END || attr->length == 0 || off + attr->length > m_mftRecordSize) break;
+            if (attr->type == NTFS_ATTR_INDEX_ROOT && attr->nonResident == 0) {
+                irAttrOff = off;
+            } else if (attr->type == NTFS_ATTR_INDEX_ALLOCATION && attr->nonResident != 0) {
+                const auto* nr = reinterpret_cast<const NtfsNonResidentAttr*>(s_ntfsDirMftBuf + off);
+                NtfsDataRun runs[16]{};
+                size_t runCnt = decodeRunlist(
+                    s_ntfsDirMftBuf + off + nr->mappingPairsOffset,
+                    attr->length - nr->mappingPairsOffset,
+                    runs,
+                    16
+                );
+                uint16_t blkSectors = static_cast<uint16_t>(m_indexBlockSize / m_bytesPerSector);
+                uint32_t blksPerCluster = (m_bytesPerCluster >= m_indexBlockSize) ? (m_bytesPerCluster / m_indexBlockSize) : 1;
+                for (size_t r = 0; r < runCnt; ++r) {
+                    if (runs[r].lcn < 0) continue;
+                    for (uint64_t c = 0; c < runs[r].clusterCount; ++c) {
+                        for (uint32_t b = 0; b < blksPerCluster; ++b) {
+                            uint64_t lba = (static_cast<uint64_t>(runs[r].lcn) + c) * m_sectorsPerCluster + b * blkSectors;
+                            if (!readPartitionSectors(lba, blkSectors, s_ntfsIndxBuf)) continue;
+                            auto* indx = reinterpret_cast<NtfsIndxBlockHeader*>(s_ntfsIndxBuf);
+                            if (indx->signature != NTFS_INDX_MAGIC) continue;
+                            if (!applyUsaFixup(s_ntfsIndxBuf, m_indexBlockSize, indx->usaOffset, indx->usaCount)) continue;
+                            uint8_t* ihBase = reinterpret_cast<uint8_t*>(&indx->indexHeader);
+                            uint32_t pos = indx->indexHeader.entriesOffset;
+                            while (pos + sizeof(NtfsIndexEntryHeader) <= indx->indexHeader.totalEntriesSize) {
+                                const auto* cur = reinterpret_cast<const NtfsIndexEntryHeader*>(ihBase + pos);
+                                if (cur->flags & 0x02) break;
+                                if (cur->entryLength < sizeof(NtfsIndexEntryHeader) || pos + cur->entryLength > indx->indexHeader.totalEntriesSize) break;
+                                if (cur->keyLength >= sizeof(NtfsFileNameAttr)) {
+                                    const auto* fn = reinterpret_cast<const NtfsFileNameAttr*>(ihBase + pos + sizeof(NtfsIndexEntryHeader));
+                                    if (equalUtf16ToAsciiIgnoreCase(fn->name, fn->nameLength, childName, childNameLen)) {
+                                        uint16_t elen = cur->entryLength;
+                                        size_t tailLen = indx->indexHeader.totalEntriesSize - (pos + elen);
+                                        std::memmove(ihBase + pos, ihBase + pos + elen, tailLen);
+                                        std::memset(ihBase + indx->indexHeader.totalEntriesSize - elen, 0, elen);
+                                        indx->indexHeader.totalEntriesSize -= elen;
+                                        if (!sealUsaFixup(s_ntfsIndxBuf, m_indexBlockSize, indx->usaOffset, indx->usaCount)) return false;
+                                        return writePartitionSectors(lba, blkSectors, s_ntfsIndxBuf);
+                                    }
+                                }
+                                pos += cur->entryLength;
+                            }
+                        }
+                    }
+                }
+            }
+            off += attr->length;
+        }
+
+        if (irAttrOff != 0) {
+            auto* res = reinterpret_cast<NtfsResidentAttr*>(s_ntfsDirMftBuf + irAttrOff);
+            auto* ir  = reinterpret_cast<NtfsIndexRootAttr*>(s_ntfsDirMftBuf + irAttrOff + res->valueOffset);
+            uint8_t* ihBase = reinterpret_cast<uint8_t*>(&ir->indexHeader);
+            uint32_t pos = ir->indexHeader.entriesOffset;
+            while (pos + sizeof(NtfsIndexEntryHeader) <= ir->indexHeader.totalEntriesSize) {
+                const auto* cur = reinterpret_cast<const NtfsIndexEntryHeader*>(ihBase + pos);
+                if (cur->flags & 0x02) break;
+                if (cur->entryLength < sizeof(NtfsIndexEntryHeader) || pos + cur->entryLength > ir->indexHeader.totalEntriesSize) break;
+                if (cur->keyLength >= sizeof(NtfsFileNameAttr)) {
+                    const auto* fn = reinterpret_cast<const NtfsFileNameAttr*>(ihBase + pos + sizeof(NtfsIndexEntryHeader));
+                    if (equalUtf16ToAsciiIgnoreCase(fn->name, fn->nameLength, childName, childNameLen)) {
+                        uint16_t elen = cur->entryLength;
+                        size_t absPos = static_cast<size_t>((ihBase + pos) - s_ntfsDirMftBuf);
+                        size_t tailLen = hdr->usedSize - (absPos + elen);
+                        std::memmove(s_ntfsDirMftBuf + absPos, s_ntfsDirMftBuf + absPos + elen, tailLen);
+                        std::memset(s_ntfsDirMftBuf + hdr->usedSize - elen, 0, elen);
+                        res->header.length -= elen;
+                        res->valueLength -= elen;
+                        ir->indexHeader.totalEntriesSize -= elen;
+                        ir->indexHeader.allocatedSize -= elen;
+                        hdr->usedSize -= elen;
+                        return writeMftRecord(dirMftRec, s_ntfsDirMftBuf);
+                    }
+                }
                 pos += cur->entryLength;
             }
         }
@@ -1051,7 +1193,10 @@ public:
     [[nodiscard]] uint64_t getDmaReadsIssued() const noexcept { return m_dmaReadsIssued; }
     [[nodiscard]] uint64_t getDmaWritesIssued() const noexcept { return m_dmaWritesIssued; }
     [[nodiscard]] uint64_t getClustersAllocated() const noexcept { return m_clustersAllocated; }
+    [[nodiscard]] uint64_t getClustersFreed() const noexcept { return m_clustersFreed; }
     [[nodiscard]] uint32_t getFilesCreated() const noexcept { return m_filesCreated; }
+    [[nodiscard]] uint32_t getDirsCreated() const noexcept { return m_dirsCreated; }
+    [[nodiscard]] uint32_t getFilesDeleted() const noexcept { return m_filesDeleted; }
 
     /**
      * @brief Probe GPT, MBR, and Raw LBA 0 via real AHCI DMA and mount the NTFS 3.1 volume.
@@ -1558,6 +1703,264 @@ public:
             return false;
         }
         m_filesCreated++;
+        return true;
+    }
+
+    /**
+     * @brief Create a genuine NTFS 3.1 directory MFT record (flags=0x03, $STANDARD_INFORMATION,
+     *        $FILE_NAME, resident $INDEX_ROOT "$I30") and splice it into parent's $I30 index via AHCI DMA.
+     */
+    bool createDirectory(const char* path) noexcept {
+        if (!m_mounted || !path) return false;
+
+        const char* p = path;
+        if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':') p += 2;
+        while (*p == '\\' || *p == '/') ++p;
+        if (*p == '\0') return false;
+
+        const char* lastSlash = nullptr;
+        for (const char* q = p; *q; ++q) {
+            if (*q == '\\' || *q == '/') lastSlash = q;
+        }
+        char parentPath[128]{};
+        char leafName[128]{};
+        if (lastSlash) {
+            size_t plen = static_cast<size_t>(lastSlash - p);
+            if (plen + 2 >= sizeof(parentPath)) return false;
+            parentPath[0] = '\\';
+            std::memcpy(parentPath + 1, p, plen);
+            parentPath[plen + 1] = '\0';
+            const char* leaf = lastSlash + 1;
+            size_t l = 0;
+            while (leaf[l] && leaf[l] != '\\' && leaf[l] != '/' && l + 1 < sizeof(leafName)) { leafName[l] = leaf[l]; ++l; }
+            leafName[l] = '\0';
+        } else {
+            parentPath[0] = '\\';
+            parentPath[1] = '\0';
+            size_t l = 0;
+            while (p[l] && p[l] != '\\' && p[l] != '/' && l + 1 < sizeof(leafName)) { leafName[l] = p[l]; ++l; }
+            leafName[l] = '\0';
+        }
+        if (leafName[0] == '\0') return false;
+
+        NtfsDirEntry parentDir{};
+        if (!findPath(parentPath, parentDir) || !parentDir.isDirectory) return false;
+
+        size_t leafLen = 0;
+        while (leafName[leafLen]) ++leafLen;
+        NtfsDirEntry existing{};
+        if (findChildInDirectory(parentDir.mftRecordNumber, leafName, leafLen, existing)) {
+            return false; // Already exists
+        }
+
+        uint64_t newRecNum = 0;
+        if (!allocateMftRecord(newRecNum)) return false;
+
+        alignas(16) uint8_t recBuf[1024]{};
+        std::memset(recBuf, 0, sizeof(recBuf));
+        constexpr uint64_t NT_TIME = 133769000000000000ULL;
+        constexpr uint16_t USA_OFF = 0x30;
+        uint16_t usaCount = static_cast<uint16_t>(1 + (m_mftRecordSize / 512));
+        size_t pos = 0x38;
+
+        // 1. $STANDARD_INFORMATION (0x10)
+        {
+            uint32_t payloadLen = 48;
+            uint16_t valOff = 24;
+            uint32_t attrLen = (valOff + payloadLen + 7u) & ~7u;
+            auto* res = reinterpret_cast<NtfsResidentAttr*>(recBuf + pos);
+            res->header.type = NTFS_ATTR_STANDARD_INFO;
+            res->header.length = attrLen;
+            res->header.nonResident = 0;
+            res->header.attributeId = 0;
+            res->valueLength = payloadLen;
+            res->valueOffset = valOff;
+            uint64_t times[4] = { NT_TIME, NT_TIME, NT_TIME, NT_TIME };
+            std::memcpy(recBuf + pos + valOff, times, sizeof(times));
+            uint32_t dosAttr = 0x10;
+            std::memcpy(recBuf + pos + valOff + 32, &dosAttr, sizeof(dosAttr));
+            pos += attrLen;
+        }
+
+        // 2. $FILE_NAME (0x30)
+        {
+            uint32_t payloadLen = static_cast<uint32_t>(66 + leafLen * 2);
+            uint16_t valOff = 24;
+            uint32_t attrLen = (valOff + payloadLen + 7u) & ~7u;
+            if (pos + attrLen + 96 > m_mftRecordSize) return false;
+            auto* res = reinterpret_cast<NtfsResidentAttr*>(recBuf + pos);
+            res->header.type = NTFS_ATTR_FILE_NAME;
+            res->header.length = attrLen;
+            res->header.nonResident = 0;
+            res->header.attributeId = 1;
+            res->valueLength = payloadLen;
+            res->valueOffset = valOff;
+            auto* fn = reinterpret_cast<NtfsFileNameAttr*>(recBuf + pos + valOff);
+            fn->parentDirectory = (1ULL << 48) | (parentDir.mftRecordNumber & 0x0000FFFFFFFFFFFFULL);
+            fn->creationTime = NT_TIME;
+            fn->modificationTime = NT_TIME;
+            fn->mftChangeTime = NT_TIME;
+            fn->lastAccessTime = NT_TIME;
+            fn->allocatedSize = 0;
+            fn->realSize = 0;
+            fn->fileAttributes = 0x10000000u; // NTFS Directory
+            fn->reparseTag = 0;
+            fn->nameLength = static_cast<uint8_t>(leafLen);
+            fn->nameNamespace = 3;
+            for (size_t i = 0; i < leafLen; ++i) {
+                fn->name[i] = static_cast<uint16_t>(static_cast<unsigned char>(leafName[i]));
+            }
+            pos += attrLen;
+        }
+
+        // 3. Resident $INDEX_ROOT (0x90) named "$I30" with End sentinel (flags=0x02)
+        {
+            constexpr uint16_t nameOff = 24;
+            constexpr uint16_t valOff = 32; // (24 + 8 + 7) & ~7
+            constexpr uint32_t payloadLen = sizeof(NtfsIndexRootAttr) + sizeof(NtfsIndexEntryHeader); // 32 + 16 = 48
+            constexpr uint32_t attrLen = (valOff + payloadLen + 7u) & ~7u; // 80
+            auto* res = reinterpret_cast<NtfsResidentAttr*>(recBuf + pos);
+            res->header.type = NTFS_ATTR_INDEX_ROOT;
+            res->header.length = attrLen;
+            res->header.nonResident = 0;
+            res->header.nameLength = 4;
+            res->header.nameOffset = nameOff;
+            res->header.attributeId = 2;
+            res->valueLength = payloadLen;
+            res->valueOffset = valOff;
+
+            const uint16_t i30Name[4] = { '$', 'I', '3', '0' };
+            std::memcpy(recBuf + pos + nameOff, i30Name, sizeof(i30Name));
+
+            auto* ir = reinterpret_cast<NtfsIndexRootAttr*>(recBuf + pos + valOff);
+            ir->indexedAttrType = NTFS_ATTR_FILE_NAME;
+            ir->collationRule = 1;
+            ir->indexBlockSize = m_indexBlockSize;
+            ir->clustersPerIndexBlock = 1;
+            ir->indexHeader.entriesOffset = 16;
+            ir->indexHeader.totalEntriesSize = 32; // 16 + 16
+            ir->indexHeader.allocatedSize = 32;
+            ir->indexHeader.flags = 0;
+
+            auto* endEnt = reinterpret_cast<NtfsIndexEntryHeader*>(recBuf + pos + valOff + sizeof(NtfsIndexRootAttr));
+            endEnt->fileReference = 0;
+            endEnt->entryLength = sizeof(NtfsIndexEntryHeader);
+            endEnt->keyLength = 0;
+            endEnt->flags = 0x02; // Last entry sentinel
+            pos += attrLen;
+        }
+
+        uint32_t endMarker = NTFS_ATTR_END;
+        std::memcpy(recBuf + pos, &endMarker, sizeof(endMarker));
+        uint32_t usedSize = static_cast<uint32_t>(pos + 8);
+
+        auto* hdr = reinterpret_cast<MftRecordHeader*>(recBuf);
+        hdr->signature = NTFS_FILE_MAGIC;
+        hdr->usaOffset = USA_OFF;
+        hdr->usaCount = usaCount;
+        hdr->lsn = 300 + newRecNum;
+        hdr->sequenceNumber = 1;
+        hdr->hardLinkCount = 1;
+        hdr->firstAttributeOffset = 0x38;
+        hdr->flags = 0x03; // InUse | Directory
+        hdr->usedSize = usedSize;
+        hdr->allocatedSize = m_mftRecordSize;
+        hdr->baseFileRecord = 0;
+        hdr->nextAttributeId = 3;
+        hdr->mftRecordNumber = static_cast<uint32_t>(newRecNum);
+
+        if (!writeMftRecord(newRecNum, recBuf)) return false;
+        if (!insertIntoDirectoryIndex(parentDir.mftRecordNumber, newRecNum, leafName, 0, 0, true)) return false;
+        m_dirsCreated++;
+        return true;
+    }
+
+    /**
+     * @brief Delete a file on the mounted NTFS 3.1 partition via AHCI DMA:
+     *        reclaims Non-Resident $DATA clusters in $Bitmap, marks MFT record unused
+     *        (InUse=0 + USA sealed), and removes its $I30 entry from parent directory.
+     */
+    bool deleteFile(const char* path) noexcept {
+        if (!m_mounted || !path) return false;
+
+        const char* p = path;
+        if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':') p += 2;
+        while (*p == '\\' || *p == '/') ++p;
+        if (*p == '\0') return false;
+
+        const char* lastSlash = nullptr;
+        for (const char* q = p; *q; ++q) {
+            if (*q == '\\' || *q == '/') lastSlash = q;
+        }
+        char parentPath[128]{};
+        char leafName[128]{};
+        if (lastSlash) {
+            size_t plen = static_cast<size_t>(lastSlash - p);
+            if (plen + 2 >= sizeof(parentPath)) return false;
+            parentPath[0] = '\\';
+            std::memcpy(parentPath + 1, p, plen);
+            parentPath[plen + 1] = '\0';
+            const char* leaf = lastSlash + 1;
+            size_t l = 0;
+            while (leaf[l] && l + 1 < sizeof(leafName)) { leafName[l] = leaf[l]; ++l; }
+            leafName[l] = '\0';
+        } else {
+            parentPath[0] = '\\';
+            parentPath[1] = '\0';
+            size_t l = 0;
+            while (p[l] && l + 1 < sizeof(leafName)) { leafName[l] = p[l]; ++l; }
+            leafName[l] = '\0';
+        }
+        if (leafName[0] == '\0') return false;
+
+        NtfsDirEntry parentDir{};
+        if (!findPath(parentPath, parentDir) || !parentDir.isDirectory) return false;
+
+        size_t leafLen = 0;
+        while (leafName[leafLen]) ++leafLen;
+        NtfsDirEntry target{};
+        if (!findChildInDirectory(parentDir.mftRecordNumber, leafName, leafLen, target)) return false;
+        if (target.isDirectory || target.mftRecordNumber < 16) return false;
+
+        // 1. Decode any Non-Resident $DATA runs and reclaim clusters in $Bitmap
+        NtfsDataRun runsToFree[32]{};
+        size_t runCnt = 0;
+        if (readMftRecord(target.mftRecordNumber, s_ntfsMftBuf, sizeof(s_ntfsMftBuf))) {
+            const auto* hdr = reinterpret_cast<const MftRecordHeader*>(s_ntfsMftBuf);
+            size_t off = hdr->firstAttributeOffset;
+            while (off + sizeof(NtfsAttrHeader) <= m_mftRecordSize) {
+                const auto* attr = reinterpret_cast<const NtfsAttrHeader*>(s_ntfsMftBuf + off);
+                if (attr->type == NTFS_ATTR_END || attr->length == 0 || off + attr->length > m_mftRecordSize) break;
+                if (attr->type == NTFS_ATTR_DATA && attr->nameLength == 0 && attr->nonResident != 0) {
+                    const auto* nr = reinterpret_cast<const NtfsNonResidentAttr*>(s_ntfsMftBuf + off);
+                    runCnt = decodeRunlist(
+                        s_ntfsMftBuf + off + nr->mappingPairsOffset,
+                        attr->length - nr->mappingPairsOffset,
+                        runsToFree,
+                        32
+                    );
+                    break;
+                }
+                off += attr->length;
+            }
+        }
+        for (size_t r = 0; r < runCnt; ++r) {
+            if (runsToFree[r].lcn >= 256 && runsToFree[r].clusterCount > 0) {
+                freeClusters(static_cast<uint64_t>(runsToFree[r].lcn), runsToFree[r].clusterCount);
+            }
+        }
+
+        // 2. Mark MFT record unused (InUse=0), bump sequenceNumber, seal USA fixups & commit via DMA
+        if (readMftRecord(target.mftRecordNumber, s_ntfsMftBuf, sizeof(s_ntfsMftBuf))) {
+            auto* hdr = reinterpret_cast<MftRecordHeader*>(s_ntfsMftBuf);
+            hdr->flags &= ~static_cast<uint16_t>(0x01u);
+            hdr->sequenceNumber++;
+            if (!writeMftRecord(target.mftRecordNumber, s_ntfsMftBuf)) return false;
+        }
+
+        // 3. Remove $I30 entry from parent directory index
+        if (!removeFromDirectoryIndex(parentDir.mftRecordNumber, leafName, leafLen)) return false;
+        m_filesDeleted++;
         return true;
     }
 };

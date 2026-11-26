@@ -131,6 +131,13 @@ __declspec(dllexport) uint64_t NtClose(void* handle) noexcept {
     return NtSyscall3(0x0F, reinterpret_cast<uint64_t>(handle), 0, 0);
 }
 
+__declspec(dllexport) uint64_t NtDeleteFile(ObjectAttributes* objectAttributes) noexcept {
+    if (!objectAttributes || !objectAttributes->objectName || !objectAttributes->objectName->buffer) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    return NtSyscall3(0x36, reinterpret_cast<uint64_t>(objectAttributes->objectName->buffer), 0, 0);
+}
+
 __declspec(dllexport) uint64_t NtQuerySystemInformation(
     uint32_t infoClass,
     void* infoBuffer,
@@ -192,7 +199,7 @@ __declspec(dllexport) uint64_t NtCreateFile(
     uint32_t /*fileAttributes*/,
     uint32_t /*shareAccess*/,
     uint32_t createDisposition,
-    uint32_t /*createOptions*/,
+    uint32_t createOptions,
     void* /*eaBuffer*/,
     uint32_t /*eaLength*/
 ) noexcept {
@@ -204,11 +211,12 @@ __declspec(dllexport) uint64_t NtCreateFile(
         return NT_STATUS_INVALID_PARAMETER;
     }
     const wchar_t* wpath = objectAttributes->objectName->buffer;
+    uint32_t dispFlags = createDisposition | ((createOptions & 0x00000001u) ? 0x10000u : 0u);
     uint64_t h = NtSyscall3(
         0x52,
         reinterpret_cast<uint64_t>(wpath),
         desiredAccess,
-        createDisposition
+        dispFlags
     );
     if (h == 0 || h == ~0ULL) {
         *fileHandle = nullptr;
