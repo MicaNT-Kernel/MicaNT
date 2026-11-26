@@ -315,6 +315,59 @@ __declspec(dllexport) uint64_t NtYieldExecution() noexcept {
     return NtSyscall3(0x46, 0, 0, 0);
 }
 
+__declspec(dllexport) uint64_t NtWaitForSingleObject(
+    void* handle,
+    bool /*alertable*/,
+    uint64_t* timeoutMs
+) noexcept {
+    uint64_t t = timeoutMs ? *timeoutMs : 0xFFFFFFFFULL;
+    return NtSyscall3(0x04, reinterpret_cast<uint64_t>(handle), t, 0);
+}
+
+__declspec(dllexport) uint64_t NtQueryInformationProcess(
+    void* processHandle,
+    uint32_t processInfoClass,
+    void* processInfoBuf,
+    uint32_t processInfoLen,
+    uint32_t* /*returnLength*/
+) noexcept {
+    if (!processInfoBuf || processInfoLen < sizeof(uint32_t)) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    return NtSyscall3(
+        0x19,
+        reinterpret_cast<uint64_t>(processHandle),
+        processInfoClass,
+        reinterpret_cast<uint64_t>(processInfoBuf)
+    );
+}
+
+__declspec(dllexport) uint64_t NtQueryDirectoryFile(
+    void* fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length
+) noexcept {
+    if (!fileInformation || length == 0) {
+        if (ioStatusBlock) {
+            ioStatusBlock->status = NT_STATUS_INVALID_PARAMETER;
+            ioStatusBlock->information = 0;
+        }
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    uint64_t st = NtSyscall3(
+        0x35,
+        reinterpret_cast<uint64_t>(fileHandle),
+        reinterpret_cast<uint64_t>(fileInformation),
+        length
+    );
+    if (ioStatusBlock) {
+        ioStatusBlock->status = st;
+        ioStatusBlock->information = (st == NT_STATUS_SUCCESS) ? length : 0;
+    }
+    return st;
+}
+
 __declspec(dllexport) uint64_t NtCreateUserProcess(
     void** processHandle,
     void** threadHandle,
@@ -411,11 +464,114 @@ __declspec(dllexport) bool RtlFreeHeap(void* /*heapHandle*/, uint32_t /*flags*/,
 }
 
 // ============================================================================
-// 3. Loader Thunks
+// 3. Native PE32+ Runtime Loader (LdrLoadDll / LdrGetDllHandle / LdrGetProcedureAddress)
 // ============================================================================
 
 __declspec(dllexport) void LdrInitializeThunk() noexcept {}
-__declspec(dllexport) void LdrLoadDll() noexcept {}
-__declspec(dllexport) void LdrGetProcedureAddress() noexcept {}
+
+__declspec(dllexport) uint64_t LdrLoadDll(
+    const wchar_t* /*pathToFile*/,
+    uint32_t /*flags*/,
+    UnicodeString* moduleFileName,
+    void** outModuleHandle
+) noexcept {
+    if (!moduleFileName || !moduleFileName->buffer || !outModuleHandle) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    uint64_t baseVa = NtSyscall3(0x60, reinterpret_cast<uint64_t>(moduleFileName->buffer), 0, 0);
+    if (baseVa == 0) {
+        *outModuleHandle = nullptr;
+        return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    *outModuleHandle = reinterpret_cast<void*>(baseVa);
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t LdrGetDllHandle(
+    const wchar_t* /*dllPath*/,
+    uint32_t* /*dllCharacteristics*/,
+    UnicodeString* dllName,
+    void** outModuleHandle
+) noexcept {
+    if (!dllName || !dllName->buffer || !outModuleHandle) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    uint64_t baseVa = NtSyscall3(0x60, reinterpret_cast<uint64_t>(dllName->buffer), 1, 0);
+    if (baseVa == 0) {
+        *outModuleHandle = nullptr;
+        return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    *outModuleHandle = reinterpret_cast<void*>(baseVa);
+    return NT_STATUS_SUCCESS;
+}
+
+// Pure Ring-3 PE32+ Export Directory Table (EAT) walker — zero syscall required!
+__declspec(dllexport) uint64_t LdrGetProcedureAddress(
+    void* moduleBase,
+    const char* procedureName,
+    uint32_t /*ordinal*/,
+    void** outProcedureAddress
+) noexcept {
+    if (!moduleBase || !procedureName || !outProcedureAddress) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    *outProcedureAddress = nullptr;
+
+    const auto* base = static_cast<const uint8_t*>(moduleBase);
+    uint16_t mz = *reinterpret_cast<const uint16_t*>(base);
+    if (mz != 0x5A4Du) return NT_STATUS_UNSUCCESSFUL;
+
+    int32_t lfanew = *reinterpret_cast<const int32_t*>(base + 0x3C);
+    if (lfanew <= 0 || lfanew > 0x10000) return NT_STATUS_UNSUCCESSFUL;
+
+    uint32_t peSig = *reinterpret_cast<const uint32_t*>(base + lfanew);
+    if (peSig != 0x00004550u) return NT_STATUS_UNSUCCESSFUL;
+
+    // OptionalHeader64 starts at lfanew + 24; DataDirectory[0] (Export Table) is at +112 (0x70)
+    uint16_t optMagic = *reinterpret_cast<const uint16_t*>(base + lfanew + 24);
+    if (optMagic != 0x020Bu) return NT_STATUS_UNSUCCESSFUL;
+
+    uint32_t exportRva = *reinterpret_cast<const uint32_t*>(base + lfanew + 24 + 112);
+    if (exportRva == 0) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+
+    struct PeExportDir {
+        uint32_t characteristics;
+        uint32_t timeDateStamp;
+        uint16_t majorVersion;
+        uint16_t minorVersion;
+        uint32_t name;
+        uint32_t base;
+        uint32_t numberOfFunctions;
+        uint32_t numberOfNames;
+        uint32_t addressOfFunctions;
+        uint32_t addressOfNames;
+        uint32_t addressOfNameOrdinals;
+    };
+
+    const auto* exp = reinterpret_cast<const PeExportDir*>(base + exportRva);
+    if (exp->numberOfNames == 0 || exp->addressOfNames == 0 ||
+        exp->addressOfNameOrdinals == 0 || exp->addressOfFunctions == 0) {
+        return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    const auto* names = reinterpret_cast<const uint32_t*>(base + exp->addressOfNames);
+    const auto* ords  = reinterpret_cast<const uint16_t*>(base + exp->addressOfNameOrdinals);
+    const auto* funcs = reinterpret_cast<const uint32_t*>(base + exp->addressOfFunctions);
+
+    for (uint32_t i = 0; i < exp->numberOfNames; ++i) {
+        const char* cand = reinterpret_cast<const char*>(base + names[i]);
+        size_t k = 0;
+        while (cand[k] && procedureName[k] && cand[k] == procedureName[k]) ++k;
+        if (cand[k] == '\0' && procedureName[k] == '\0') {
+            uint16_t ordIdx = ords[i];
+            if (ordIdx >= exp->numberOfFunctions) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+            uint32_t fnRva = funcs[ordIdx];
+            if (fnRva == 0) return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+            *outProcedureAddress = const_cast<uint8_t*>(base + fnRva);
+            return NT_STATUS_SUCCESS;
+        }
+    }
+    return NT_STATUS_OBJECT_NAME_NOT_FOUND;
+}
 
 } // extern "C"

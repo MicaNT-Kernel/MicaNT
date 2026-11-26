@@ -6,18 +6,21 @@
 //   Pure -ffreestanding -nostdlib ISO C++23 bare-metal multi-process executive
 //   compiled directly into ntoskrnl.exe.
 //
-//   Implements genuine Dave Cutler Windows NT virtual memory & scheduling:
+//   Implements genuine Dave Cutler Windows NT virtual memory, loader & scheduling:
 //     - Isolated per-process 4-level x86_64 page tables (distinct hardware CR3)
 //     - Identical canonical user virtual layout across all processes in PML4[1]:
 //         0x00000080'00000000 (256 KB) : PE32+ Executable Image (.reloc applied)
-//         0x00000080'00100000 (512 KB) : System32 DLLs (kernel32.dll -> ntdll.dll)
+//         0x00000080'00100000 (512 KB) : Per-Process System32 DLL Arena (PEB.Ldr)
 //         0x00000080'00200000 ( 64 KB) : Private Ring-3 User Stack
 //         0x00000080'00300000 ( 16 KB) : Private PEB (+0x000) & TEB (+0x200)
 //         0x00000080'00400000+         : Private PFN-backed VirtualAlloc Heap
 //     - Unified 20-qword (160-byte) KTRAP_FRAME (TrapFrame64) shared across both
 //       Local APIC Timer interrupts (Vector 0x30) and KiSystemCall64Entry
 //     - Real hardware preemptive CR3 + MSR_GS_BASE + VAD context switching
-//       triggered directly by the 100 Hz Local APIC timer while CPL == 3
+//     - Real blocking synchronization: Running -> Waiting -> Ready transitions
+//       for NtWaitForSingleObject (SSN 0x04) + NtQueryInformationProcess (0x19)
+//     - Runtime dynamic DLL loading into the calling process's private CR3 arena
+//       via NtLoadDll (SSN 0x60) -> LoadLibraryW / GetModuleHandleW
 //     - Live NtCreateUserProcess (SSN 0x58) spawning isolated child PE32+ processes
 //       directly off the mounted NTFS 3.1 volume via AHCI Bus-Master DMA
 //
@@ -57,6 +60,8 @@ inline constexpr uint64_t PROC_VA_TEB        = PROC_VA_TEB_BASE + 0x0200ULL;
 
 inline constexpr uint64_t PROC_VA_HEAP_BASE  = 0x00000080'00400000ULL;
 
+inline constexpr uint32_t NT_STILL_ACTIVE    = 259u;       // STATUS_PENDING / STILL_ACTIVE
+
 // ============================================================================
 // 2. Unified Hardware x86_64 KTRAP_FRAME (160 bytes, 16-byte aligned)
 // ============================================================================
@@ -90,7 +95,8 @@ enum class Cr3ProcState : uint8_t {
     Free       = 0,
     Ready      = 1,
     Running    = 2,
-    Terminated = 3
+    Waiting    = 3,
+    Terminated = 4
 };
 
 struct Cr3ProcessSlot {
@@ -99,7 +105,8 @@ struct Cr3ProcessSlot {
     uint32_t     pid{0};
     uint32_t     tid{0};
     uint32_t     parentPid{0};
-    uint32_t     exitCode{0};
+    uint32_t     exitCode{NT_STILL_ACTIVE};
+    uint32_t     waitTargetPid{0};
     char         imageName[64]{};
 
     uint64_t     cr3Phys{0};
@@ -115,10 +122,12 @@ struct Cr3ProcessSlot {
     uint64_t     cpuTicks{0};
     uint64_t     preemptedInCount{0};
     uint64_t     yieldCount{0};
+    uint64_t     waitCount{0};
     uint64_t     syscallCount{0};
 
     TrapFrame64  trapFrame{};
     mm_baremetal::BareMetalVadTable vadTable{};
+    pe_baremetal::BareMetalPeLoader peLoader{};
 };
 
 // Scratch kernel buffer for raw EXE DMA reads during NtCreateUserProcess (512 KB)
@@ -142,6 +151,8 @@ private:
     uint64_t       m_totalClockTicksInR3{0};
     uint64_t       m_totalPreemptiveSwitches{0};
     uint64_t       m_totalVoluntaryYields{0};
+    uint64_t       m_totalBlockingWaits{0};
+    uint64_t       m_totalWaitWakeups{0};
     uint64_t       m_totalProcessesCreated{0};
     uint64_t       m_totalProcessesExited{0};
 
@@ -189,6 +200,15 @@ private:
         return -1;
     }
 
+    int findSlotByPid(uint32_t pid) const noexcept {
+        for (size_t i = 0; i < MAX_PROCS; ++i) {
+            if (m_procs[i].inUse && m_procs[i].pid == pid) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
 public:
     static BareMetalCr3ProcessManager& get() noexcept {
         static BareMetalCr3ProcessManager instance;
@@ -203,6 +223,8 @@ public:
         m_totalClockTicksInR3 = 0;
         m_totalPreemptiveSwitches = 0;
         m_totalVoluntaryYields = 0;
+        m_totalBlockingWaits = 0;
+        m_totalWaitWakeups = 0;
         m_totalProcessesCreated = 0;
         m_totalProcessesExited = 0;
         for (size_t i = 0; i < MAX_PROCS; ++i) {
@@ -222,13 +244,16 @@ public:
     [[nodiscard]] uint64_t getTotalClockTicksInR3() const noexcept { return m_totalClockTicksInR3; }
     [[nodiscard]] uint64_t getTotalPreemptiveSwitches() const noexcept { return m_totalPreemptiveSwitches; }
     [[nodiscard]] uint64_t getTotalVoluntaryYields() const noexcept { return m_totalVoluntaryYields; }
+    [[nodiscard]] uint64_t getTotalBlockingWaits() const noexcept { return m_totalBlockingWaits; }
+    [[nodiscard]] uint64_t getTotalWaitWakeups() const noexcept { return m_totalWaitWakeups; }
     [[nodiscard]] uint64_t getTotalProcessesCreated() const noexcept { return m_totalProcessesCreated; }
     [[nodiscard]] uint64_t getTotalProcessesExited() const noexcept { return m_totalProcessesExited; }
 
     /**
      * @brief Create a fully isolated Ring-3 Win32 PE32+ process with its OWN hardware CR3,
-     *        private PFN-backed PML4[1] address space, dynamically loaded kernel32.dll -> ntdll.dll
-     *        off live NTFS 3.1, private TEB/PEB, and IF=1 preemptive TrapFrame64.
+     *        private PFN-backed PML4[1] address space, per-process PEB.Ldr (peLoader),
+     *        dynamically loaded kernel32.dll -> ntdll.dll off live NTFS 3.1, private TEB/PEB,
+     *        and IF=1 preemptive TrapFrame64.
      * @return Process slot index (>= 0) on success, or -1 on error.
      */
     int createProcessFromNtfs(
@@ -264,26 +289,28 @@ public:
         if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_STACK_BASE, PROC_STACK_SIZE, rwxUser)) return -1;
         if (!mm_baremetal::BareMetalPaging::mapPrivateUserRange(procCr3, PROC_VA_TEB_BASE,   PROC_TEB_SIZE,   rwxUser)) return -1;
 
+        auto& slot = m_procs[freeSlot];
+        slot = Cr3ProcessSlot{};
+
         // 4. Switch CR3 temporarily into the new process's address space to map PE32+ + DLLs
         uint64_t savedCr3 = readCr3();
         writeCr3(procCr3);
 
-        auto& loader = pe_baremetal::BareMetalPeLoader::get();
-        loader.initialize(reinterpret_cast<uint8_t*>(PROC_VA_DLL_BASE), PROC_DLL_SIZE);
+        slot.peLoader.initialize(reinterpret_cast<uint8_t*>(PROC_VA_DLL_BASE), PROC_DLL_SIZE);
 
         pe_baremetal::LoadedPeModule exeMod{};
-        bool mapped = loader.mapAndRelocateImage(
+        bool mapped = slot.peLoader.mapAndRelocateImage(
             s_mpExeRawBuf, exeBytes,
             reinterpret_cast<uint8_t*>(PROC_VA_IMAGE_BASE), PROC_IMAGE_SIZE,
             ntfsExePath, exeMod
         );
-        bool importsOk = mapped && loader.bindImportsFromNtfs(ntfs, exeMod);
+        bool importsOk = mapped && slot.peLoader.bindImportsFromNtfs(ntfs, exeMod);
 
         bool allDllsOk = true;
-        uint32_t dllCount = static_cast<uint32_t>(loader.getLoadedModuleCount());
+        uint32_t dllCount = static_cast<uint32_t>(slot.peLoader.getLoadedModuleCount());
         uint32_t dllImports = 0;
-        for (size_t d = 0; d < loader.getLoadedModuleCount(); ++d) {
-            const auto* mod = loader.getModule(d);
+        for (size_t d = 0; d < slot.peLoader.getLoadedModuleCount(); ++d) {
+            const auto* mod = slot.peLoader.getModule(d);
             if (mod && mod->inUse) {
                 dllImports += mod->importsBound;
                 if (mod->importsUnresolved != 0) allDllsOk = false;
@@ -292,6 +319,7 @@ public:
 
         if (!mapped || !importsOk || !allDllsOk || exeMod.entryPointVa == 0) {
             writeCr3(savedCr3);
+            slot = Cr3ProcessSlot{};
             return -1;
         }
 
@@ -308,13 +336,13 @@ public:
         writeCr3(savedCr3);
 
         // 6. Initialize Cr3ProcessSlot, private VAD Table (PFN-backed heap at 0x80'00400000), & TrapFrame64
-        auto& slot = m_procs[freeSlot];
-        slot = Cr3ProcessSlot{};
         slot.inUse = true;
         slot.state = Cr3ProcState::Ready;
         slot.pid = pid;
         slot.tid = tid;
         slot.parentPid = parentPid;
+        slot.exitCode = NT_STILL_ACTIVE;
+        slot.waitTargetPid = 0;
         copyShortName(slot.imageName, ntfsExePath, sizeof(slot.imageName));
 
         slot.cr3Phys = procCr3;
@@ -331,7 +359,6 @@ public:
         slot.vadTable.registerRegion(PROC_VA_DLL_BASE,   PROC_DLL_SIZE,   mm_baremetal::MEM_COMMIT, mm_baremetal::PAGE_EXECUTE_READWRITE);
         slot.vadTable.registerRegion(PROC_VA_STACK_BASE, PROC_STACK_SIZE, mm_baremetal::MEM_COMMIT, mm_baremetal::PAGE_READWRITE, true);
         slot.vadTable.registerRegion(PROC_VA_TEB_BASE,   PROC_TEB_SIZE,   mm_baremetal::MEM_COMMIT, mm_baremetal::PAGE_READWRITE);
-        // Leave heapPoolBase = 0 so NtAllocateVirtualMemory allocates fresh PFN physical pages at 0x00000080'00400000!
         slot.vadTable.setNextDynamicVa(PROC_VA_HEAP_BASE);
 
         // Hardware IRETQ frame: Ring 3 CS=0x33, SS=0x2B, RFLAGS=0x0202 (IF=1 for real LAPIC preemption!)
@@ -343,6 +370,43 @@ public:
 
         m_totalProcessesCreated++;
         return freeSlot;
+    }
+
+    /**
+     * @brief Dynamically load or query a System32 DLL directly inside the active process's private CR3 arena.
+     */
+    const pe_baremetal::LoadedPeModule* loadOrFindDllForCurrentProcess(
+        ntfs_baremetal::BareMetalNtfsVolume& ntfs,
+        const char* dllName,
+        bool loadIfMissing
+    ) noexcept {
+        auto* cur = getCurrentProcess();
+        if (!cur || !dllName) return nullptr;
+        if (!loadIfMissing) {
+            return cur->peLoader.findModule(dllName);
+        }
+        const auto* mod = cur->peLoader.loadSystemDllFromNtfs(ntfs, dllName);
+        if (mod) {
+            cur->dllCount = static_cast<uint32_t>(cur->peLoader.getLoadedModuleCount());
+        }
+        return mod;
+    }
+
+    /**
+     * @brief Query process exit code (returns STILL_ACTIVE = 259 while running/ready/waiting).
+     */
+    bool queryProcessExitCode(uint32_t targetPid, uint32_t& outExitCode, bool& outStillActive) const noexcept {
+        int idx = findSlotByPid(targetPid);
+        if (idx < 0) return false;
+        const auto& sl = m_procs[idx];
+        if (sl.state == Cr3ProcState::Terminated) {
+            outStillActive = false;
+            outExitCode = sl.exitCode;
+        } else {
+            outStillActive = true;
+            outExitCode = NT_STILL_ACTIVE;
+        }
+        return true;
     }
 
     /**
@@ -363,7 +427,6 @@ public:
 
     /**
      * @brief Preemptive 100 Hz Local APIC Timer hook (Vector 0x30).
-     * @return true if a real hardware CR3 context switch occurred (populates outOldPid/outNewPid).
      */
     bool onClockInterrupt(
         TrapFrame64* frame,
@@ -395,15 +458,66 @@ public:
         outOldCr3 = cur.cr3Phys;
         outNewCr3 = nxt.cr3Phys;
 
-        // Save outgoing Ring-3 hardware context & mark Ready
         cur.trapFrame = *frame;
         cur.state = Cr3ProcState::Ready;
 
-        // Switch to incoming Ring-3 process (new hardware CR3 + TEB + VAD + TrapFrame!)
         m_currentIdx = static_cast<size_t>(nextIdx);
         nxt.state = Cr3ProcState::Running;
         nxt.preemptedInCount++;
         m_totalPreemptiveSwitches++;
+
+        *frame = nxt.trapFrame;
+        mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
+        writeCr3(nxt.cr3Phys);
+        writeGsBase(nxt.tebVa);
+        return true;
+    }
+
+    /**
+     * @brief Blocking wait on NtWaitForSingleObject (SSN 0x04): transitions caller Running -> Waiting
+     *        until targetPid terminates, switching CR3 straight to target (or next Ready process).
+     * @return true if caller was blocked and CR3 switched; false if target was already signaled.
+     */
+    bool onWaitForProcessSyscall(
+        TrapFrame64* frame,
+        uint32_t targetPid,
+        uint32_t& outCallerPid,
+        uint32_t& outSwitchedPid,
+        uint64_t& outNextCr3
+    ) noexcept {
+        outCallerPid = outSwitchedPid = 0;
+        outNextCr3 = 0;
+        if (!m_active || !frame) return false;
+
+        auto& cur = m_procs[m_currentIdx];
+        outCallerPid = cur.pid;
+        frame->rax = 0; // WAIT_OBJECT_0 upon wakeup or immediate completion
+
+        int targetIdx = findSlotByPid(targetPid);
+        if (targetIdx < 0 || m_procs[targetIdx].state == Cr3ProcState::Terminated ||
+            static_cast<size_t>(targetIdx) == m_currentIdx) {
+            return false; // Already signaled!
+        }
+
+        // Prefer scheduling the waited-on child directly if Ready, else next Ready slot
+        int nextIdx = (m_procs[targetIdx].state == Cr3ProcState::Ready)
+            ? targetIdx
+            : findNextReadySlot(m_currentIdx);
+        if (nextIdx < 0) {
+            return false;
+        }
+
+        cur.trapFrame = *frame;
+        cur.state = Cr3ProcState::Waiting;
+        cur.waitTargetPid = targetPid;
+        cur.waitCount++;
+        m_totalBlockingWaits++;
+
+        auto& nxt = m_procs[nextIdx];
+        m_currentIdx = static_cast<size_t>(nextIdx);
+        nxt.state = Cr3ProcState::Running;
+        outSwitchedPid = nxt.pid;
+        outNextCr3 = nxt.cr3Phys;
 
         *frame = nxt.trapFrame;
         mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
@@ -446,18 +560,17 @@ public:
     }
 
     /**
-     * @brief Handle NtTerminateProcess (SSN 0x01) in multi-process CR3 mode.
-     * @return true if ALL processes have terminated (caller must return to kernel shell);
-     *         false if switched to another surviving Ready process (caller executes IRETQ).
+     * @brief Handle NtTerminateProcess (SSN 0x01) in multi-process CR3 mode, waking any Waiting parents.
      */
     bool onTerminateSyscall(
         TrapFrame64* frame,
         uint32_t exitCode,
         uint32_t& outExitedPid,
         uint32_t& outNextPid,
-        uint64_t& outNextCr3
+        uint64_t& outNextCr3,
+        uint32_t& outWokenPid
     ) noexcept {
-        outExitedPid = outNextPid = 0;
+        outExitedPid = outNextPid = outWokenPid = 0;
         outNextCr3 = 0;
         if (!m_active || !frame) return true;
 
@@ -466,6 +579,18 @@ public:
         cur.exitCode = exitCode;
         cur.state = Cr3ProcState::Terminated;
         m_totalProcessesExited++;
+
+        // Wake any parent process blocked in NtWaitForSingleObject(cur.pid)
+        for (size_t i = 0; i < MAX_PROCS; ++i) {
+            if (m_procs[i].inUse &&
+                m_procs[i].state == Cr3ProcState::Waiting &&
+                m_procs[i].waitTargetPid == cur.pid) {
+                m_procs[i].state = Cr3ProcState::Ready;
+                m_procs[i].waitTargetPid = 0;
+                outWokenPid = m_procs[i].pid;
+                m_totalWaitWakeups++;
+            }
+        }
 
         int nextIdx = findNextReadySlot(m_currentIdx);
         if (nextIdx >= 0) {
@@ -479,7 +604,7 @@ public:
             mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
             writeCr3(nxt.cr3Phys);
             writeGsBase(nxt.tebVa);
-            return false; // Continue running surviving process!
+            return false; // Continue running surviving / woken process!
         }
 
         // All isolated Ring-3 processes exited cleanly -> restore kernel CR3 & VAD!

@@ -148,6 +148,10 @@ def main():
                     cmd.append(str(ntdll_implib))
                 implib = repo_root / "build" / "libkernel32.a"
                 cmd.append(f"-Wl,--out-implib,{implib}")
+            elif name == "user32.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
             cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
@@ -234,6 +238,7 @@ def main():
         ("tools/win32_ntfs_probe.cpp", "win32_ntfs_probe.exe"),
         ("tools/win32_proc_a.cpp",     "win32_proc_a.exe"),
         ("tools/win32_proc_b.cpp",     "win32_proc_b.exe"),
+        ("tools/win32_nt_suite.cpp",   "win32_nt_suite.exe"),
     ]
     if kernel32_implib.exists():
         for rel_src, exe_name in win32_apps:

@@ -4,7 +4,7 @@
  *
  * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
  * ZERO direct syscall instructions: authentic Windows NT 2-level DLL chaining
- * where kernel32.dll dynamically imports native Nt* / Rtl* APIs from ntdll.dll
+ * where kernel32.dll dynamically imports native Nt* / Rtl* / Ldr* APIs from ntdll.dll
  * via a genuine PE32+ Import Directory Table (IAT):
  *   Win32 App -> kernel32.dll (IAT) -> ntdll.dll (IAT) -> Ring 0 KiSystemCall64
  */
@@ -38,64 +38,67 @@ struct IoStatusBlock {
     uint64_t information;
 };
 
+struct NtDirEntryInfo {
+    uint64_t fileSize;
+    uint32_t fileAttributes;
+    uint32_t nameLengthChars;
+    uint16_t fileName[128];
+};
+
+struct Win32FindDataW {
+    uint32_t dwFileAttributes;
+    uint64_t ftCreationTime;
+    uint64_t ftLastAccessTime;
+    uint64_t ftLastWriteTime;
+    uint32_t nFileSizeHigh;
+    uint32_t nFileSizeLow;
+    uint32_t dwReserved0;
+    uint32_t dwReserved1;
+    wchar_t  cFileName[260];
+    wchar_t  cAlternateFileName[14];
+};
+
 __declspec(dllimport) void     RtlInitUnicodeString(UnicodeString* dest, const wchar_t* source) noexcept;
 __declspec(dllimport) uint64_t NtTerminateProcess(void* processHandle, uint64_t exitStatus) noexcept;
 __declspec(dllimport) uint64_t NtYieldExecution() noexcept;
+__declspec(dllimport) uint64_t NtWaitForSingleObject(void* handle, bool alertable, uint64_t* timeoutMs) noexcept;
+__declspec(dllimport) uint64_t NtQueryInformationProcess(
+    void* processHandle, uint32_t processInfoClass, void* processInfoBuf, uint32_t processInfoLen, uint32_t* returnLength
+) noexcept;
+__declspec(dllimport) uint64_t NtQueryDirectoryFile(
+    void* fileHandle, IoStatusBlock* ioStatusBlock, void* fileInformation, uint32_t length
+) noexcept;
 __declspec(dllimport) uint64_t NtAllocateVirtualMemory(
-    void* processHandle,
-    void** baseAddress,
-    uint64_t zeroBits,
-    size_t* regionSize,
-    uint32_t allocationType,
-    uint32_t protect
+    void* processHandle, void** baseAddress, uint64_t zeroBits, size_t* regionSize, uint32_t allocationType, uint32_t protect
 ) noexcept;
 __declspec(dllimport) uint64_t NtFreeVirtualMemory(
-    void* processHandle,
-    void** baseAddress,
-    size_t* regionSize,
-    uint32_t freeType
+    void* processHandle, void** baseAddress, size_t* regionSize, uint32_t freeType
 ) noexcept;
 __declspec(dllimport) uint64_t NtCreateFile(
-    void** fileHandle,
-    uint32_t desiredAccess,
-    ObjectAttributes* objectAttributes,
-    IoStatusBlock* ioStatusBlock,
-    void* allocationSize,
-    uint32_t fileAttributes,
-    uint32_t shareAccess,
-    uint32_t createDisposition,
-    uint32_t createOptions,
-    void* eaBuffer,
-    uint32_t eaLength
+    void** fileHandle, uint32_t desiredAccess, ObjectAttributes* objectAttributes, IoStatusBlock* ioStatusBlock,
+    void* allocationSize, uint32_t fileAttributes, uint32_t shareAccess, uint32_t createDisposition,
+    uint32_t createOptions, void* eaBuffer, uint32_t eaLength
 ) noexcept;
 __declspec(dllimport) uint64_t NtReadFile(
-    void* fileHandle,
-    void* event,
-    void* apcRoutine,
-    void* apcContext,
-    IoStatusBlock* ioStatusBlock,
-    void* buffer,
-    uint32_t length,
-    void* byteOffset,
-    uint32_t* key
+    void* fileHandle, void* event, void* apcRoutine, void* apcContext, IoStatusBlock* ioStatusBlock,
+    void* buffer, uint32_t length, void* byteOffset, uint32_t* key
 ) noexcept;
 __declspec(dllimport) uint64_t NtWriteFile(
-    void* fileHandle,
-    void* event,
-    void* apcRoutine,
-    void* apcContext,
-    IoStatusBlock* ioStatusBlock,
-    const void* buffer,
-    uint32_t length,
-    void* byteOffset,
-    uint32_t* key
+    void* fileHandle, void* event, void* apcRoutine, void* apcContext, IoStatusBlock* ioStatusBlock,
+    const void* buffer, uint32_t length, void* byteOffset, uint32_t* key
 ) noexcept;
 __declspec(dllimport) uint64_t NtClose(void* handle) noexcept;
 __declspec(dllimport) uint64_t NtCreateUserProcess(
-    void** processHandle,
-    void** threadHandle,
-    ObjectAttributes* imagePathAttr,
-    uint64_t* outPid
+    void** processHandle, void** threadHandle, ObjectAttributes* imagePathAttr, uint64_t* outPid
+) noexcept;
+__declspec(dllimport) uint64_t LdrLoadDll(
+    const wchar_t* pathToFile, uint32_t flags, UnicodeString* moduleFileName, void** outModuleHandle
+) noexcept;
+__declspec(dllimport) uint64_t LdrGetDllHandle(
+    const wchar_t* dllPath, uint32_t* dllCharacteristics, UnicodeString* dllName, void** outModuleHandle
+) noexcept;
+__declspec(dllimport) uint64_t LdrGetProcedureAddress(
+    void* moduleBase, const char* procedureName, uint32_t ordinal, void** outProcedureAddress
 ) noexcept;
 
 struct ProcessInformation {
@@ -114,7 +117,7 @@ static inline bool NtSucceeded(uint64_t status) noexcept {
 }
 
 // ============================================================================
-// 1. Process & Thread Management
+// 1. Process, Thread & Synchronization Management
 // ============================================================================
 
 __declspec(dllexport) void* GetCurrentProcess() noexcept {
@@ -156,6 +159,21 @@ __declspec(dllexport) uint32_t GetCurrentThreadId() noexcept {
 
 __declspec(dllexport) void Sleep(uint32_t /*dwMilliseconds*/) noexcept {
     NtYieldExecution();
+}
+
+__declspec(dllexport) uint32_t WaitForSingleObject(void* hHandle, uint32_t dwMilliseconds) noexcept {
+    uint64_t timeout = dwMilliseconds;
+    uint64_t st = NtWaitForSingleObject(hHandle, false, &timeout);
+    return NtSucceeded(st) ? 0u : 0xFFFFFFFFu; // WAIT_OBJECT_0 or WAIT_FAILED
+}
+
+__declspec(dllexport) int32_t GetExitCodeProcess(void* hProcess, uint32_t* lpExitCode) noexcept {
+    if (!lpExitCode) return 0;
+    uint32_t code = 0;
+    uint64_t st = NtQueryInformationProcess(hProcess, 0, &code, sizeof(code), nullptr);
+    if (!NtSucceeded(st)) return 0;
+    *lpExitCode = code;
+    return 1;
 }
 
 __declspec(dllexport) int32_t CreateProcessW(
@@ -210,12 +228,7 @@ __declspec(dllexport) void* VirtualAlloc(
     void* base = lpAddress;
     size_t regionSize = dwSize ? dwSize : 4096;
     uint64_t st = NtAllocateVirtualMemory(
-        GetCurrentProcess(),
-        &base,
-        0,
-        &regionSize,
-        flAllocationType,
-        flProtect
+        GetCurrentProcess(), &base, 0, &regionSize, flAllocationType, flProtect
     );
     return NtSucceeded(st) ? base : nullptr;
 }
@@ -227,17 +240,12 @@ __declspec(dllexport) int32_t VirtualFree(
 ) noexcept {
     void* base = lpAddress;
     size_t regionSize = dwSize;
-    uint64_t st = NtFreeVirtualMemory(
-        GetCurrentProcess(),
-        &base,
-        &regionSize,
-        dwFreeType
-    );
+    uint64_t st = NtFreeVirtualMemory(GetCurrentProcess(), &base, &regionSize, dwFreeType);
     return NtSucceeded(st) ? 1 : 0;
 }
 
 // ============================================================================
-// 3. File & Console I/O (Routed through ntdll.dll -> Ring 0 NTFS 3.1)
+// 3. File, Console & Directory Enumeration I/O (Routed through ntdll.dll -> NTFS 3.1)
 // ============================================================================
 
 __declspec(dllexport) void* GetStdHandle(uint32_t nStdHandle) noexcept {
@@ -267,27 +275,16 @@ __declspec(dllexport) void* CreateFileW(
     oa.length = sizeof(ObjectAttributes);
     oa.rootDirectory = nullptr;
     oa.objectName = &uPath;
-    oa.attributes = 0x00000040u; // OBJ_CASE_INSENSITIVE
-    oa.securityDescriptor = nullptr;
-    oa.securityQualityOfService = nullptr;
+    oa.attributes = 0x00000040u;
 
     IoStatusBlock iosb{0, 0};
     void* hFile = nullptr;
     uint64_t st = NtCreateFile(
-        &hFile,
-        dwDesiredAccess,
-        &oa,
-        &iosb,
-        nullptr,
-        dwFlagsAndAttributes,
-        dwShareMode,
-        dwCreationDisposition,
-        0,
-        nullptr,
-        0
+        &hFile, dwDesiredAccess, &oa, &iosb, nullptr, dwFlagsAndAttributes,
+        dwShareMode, dwCreationDisposition, 0, nullptr, 0
     );
     if (!NtSucceeded(st) || hFile == nullptr) {
-        return reinterpret_cast<void*>(-1); // INVALID_HANDLE_VALUE
+        return reinterpret_cast<void*>(-1);
     }
     return hFile;
 }
@@ -322,24 +319,12 @@ __declspec(dllexport) int32_t ReadFile(
 ) noexcept {
     if (!lpBuffer) return 0;
     IoStatusBlock iosb{0, 0};
-    uint64_t st = NtReadFile(
-        hFile,
-        nullptr,
-        nullptr,
-        nullptr,
-        &iosb,
-        lpBuffer,
-        nNumberOfBytesToRead,
-        nullptr,
-        nullptr
-    );
+    uint64_t st = NtReadFile(hFile, nullptr, nullptr, nullptr, &iosb, lpBuffer, nNumberOfBytesToRead, nullptr, nullptr);
     if (!NtSucceeded(st)) {
         if (lpNumberOfBytesRead) *lpNumberOfBytesRead = 0;
         return 0;
     }
-    if (lpNumberOfBytesRead) {
-        *lpNumberOfBytesRead = static_cast<uint32_t>(iosb.information);
-    }
+    if (lpNumberOfBytesRead) *lpNumberOfBytesRead = static_cast<uint32_t>(iosb.information);
     return 1;
 }
 
@@ -352,24 +337,12 @@ __declspec(dllexport) int32_t WriteFile(
 ) noexcept {
     if (!lpBuffer) return 0;
     IoStatusBlock iosb{0, 0};
-    uint64_t st = NtWriteFile(
-        hFile,
-        nullptr,
-        nullptr,
-        nullptr,
-        &iosb,
-        lpBuffer,
-        nNumberOfBytesToWrite,
-        nullptr,
-        nullptr
-    );
+    uint64_t st = NtWriteFile(hFile, nullptr, nullptr, nullptr, &iosb, lpBuffer, nNumberOfBytesToWrite, nullptr, nullptr);
     if (!NtSucceeded(st)) {
         if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = 0;
         return 0;
     }
-    if (lpNumberOfBytesWritten) {
-        *lpNumberOfBytesWritten = static_cast<uint32_t>(iosb.information);
-    }
+    if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = static_cast<uint32_t>(iosb.information);
     return 1;
 }
 
@@ -378,22 +351,122 @@ __declspec(dllexport) int32_t CloseHandle(void* hObject) noexcept {
     return NtSucceeded(st) ? 1 : 0;
 }
 
+static void populateFindData(Win32FindDataW* dst, const NtDirEntryInfo& src) noexcept {
+    dst->dwFileAttributes = src.fileAttributes;
+    dst->ftCreationTime = 0;
+    dst->ftLastAccessTime = 0;
+    dst->ftLastWriteTime = 0;
+    dst->nFileSizeHigh = static_cast<uint32_t>(src.fileSize >> 32);
+    dst->nFileSizeLow  = static_cast<uint32_t>(src.fileSize & 0xFFFFFFFFu);
+    dst->dwReserved0 = 0;
+    dst->dwReserved1 = 0;
+    size_t n = (src.nameLengthChars < 127) ? src.nameLengthChars : 127;
+    for (size_t i = 0; i < n; ++i) {
+        dst->cFileName[i] = static_cast<wchar_t>(src.fileName[i]);
+    }
+    dst->cFileName[n] = L'\0';
+    dst->cAlternateFileName[0] = L'\0';
+}
+
+__declspec(dllexport) int32_t FindNextFileW(void* hFindFile, Win32FindDataW* lpFindFileData) noexcept {
+    if (!lpFindFileData || hFindFile == reinterpret_cast<void*>(-1) || hFindFile == nullptr) return 0;
+    NtDirEntryInfo info{};
+    IoStatusBlock iosb{0, 0};
+    uint64_t st = NtQueryDirectoryFile(hFindFile, &iosb, &info, sizeof(info));
+    if (!NtSucceeded(st)) return 0;
+    populateFindData(lpFindFileData, info);
+    return 1;
+}
+
+__declspec(dllexport) void* FindFirstFileW(const wchar_t* lpFileName, Win32FindDataW* lpFindFileData) noexcept {
+    if (!lpFileName || !lpFindFileData) return reinterpret_cast<void*>(-1);
+
+    // Strip trailing wildcard ("\*", "\*.*", or "*") to resolve parent NTFS directory path
+    wchar_t dirBuf[256];
+    size_t len = 0;
+    while (lpFileName[len] && len + 1 < 256) {
+        dirBuf[len] = lpFileName[len];
+        ++len;
+    }
+    dirBuf[len] = L'\0';
+
+    while (len > 0 && (dirBuf[len - 1] == L'*' || dirBuf[len - 1] == L'.' || dirBuf[len - 1] == L'?')) {
+        dirBuf[--len] = L'\0';
+    }
+    if (len > 1 && (dirBuf[len - 1] == L'\\' || dirBuf[len - 1] == L'/')) {
+        // Keep root "\" or "C:\" intact
+        if (!(len == 3 && dirBuf[1] == L':')) {
+            dirBuf[--len] = L'\0';
+        }
+    }
+    if (len == 0) {
+        dirBuf[0] = L'\\';
+        dirBuf[1] = L'\0';
+    }
+
+    void* hDir = CreateFileW(dirBuf, 0x80000000u, 1u, nullptr, 3u, 0x02000000u, nullptr);
+    if (hDir == reinterpret_cast<void*>(-1) || hDir == nullptr) {
+        return reinterpret_cast<void*>(-1);
+    }
+    if (!FindNextFileW(hDir, lpFindFileData)) {
+        CloseHandle(hDir);
+        return reinterpret_cast<void*>(-1);
+    }
+    return hDir;
+}
+
+__declspec(dllexport) int32_t FindClose(void* hFindFile) noexcept {
+    return CloseHandle(hFindFile);
+}
+
 // ============================================================================
-// 4. Module & Environment APIs
+// 4. Dynamic Runtime Loader & Module APIs (Routed through ntdll!Ldr*)
 // ============================================================================
 
-static const char s_cmdLineA[] = "win32_ntfs_probe.exe";
-static const wchar_t s_cmdLineW[] = L"win32_ntfs_probe.exe";
+static const char s_cmdLineA[] = "win32_nt_suite.exe";
+static const wchar_t s_cmdLineW[] = L"win32_nt_suite.exe";
 
 __declspec(dllexport) const char* GetCommandLineA() noexcept { return s_cmdLineA; }
 __declspec(dllexport) const wchar_t* GetCommandLineW() noexcept { return s_cmdLineW; }
 
-__declspec(dllexport) void* GetModuleHandleW(const wchar_t* /*lpModuleName*/) noexcept {
-    return reinterpret_cast<void*>(0x00007FF600000000ULL);
+__declspec(dllexport) void* GetModuleHandleW(const wchar_t* lpModuleName) noexcept {
+    if (!lpModuleName) {
+        return reinterpret_cast<void*>(0x0000008000000000ULL);
+    }
+    UnicodeString uName{0, 0, nullptr};
+    RtlInitUnicodeString(&uName, lpModuleName);
+    void* hMod = nullptr;
+    uint64_t st = LdrGetDllHandle(nullptr, nullptr, &uName, &hMod);
+    return NtSucceeded(st) ? hMod : nullptr;
 }
 
-__declspec(dllexport) void* LoadLibraryW(const wchar_t* /*lpLibFileName*/) noexcept { return nullptr; }
-__declspec(dllexport) void* GetProcAddress(void* /*hModule*/, const char* /*lpProcName*/) noexcept { return nullptr; }
+__declspec(dllexport) void* LoadLibraryW(const wchar_t* lpLibFileName) noexcept {
+    if (!lpLibFileName) return nullptr;
+    UnicodeString uName{0, 0, nullptr};
+    RtlInitUnicodeString(&uName, lpLibFileName);
+    void* hMod = nullptr;
+    uint64_t st = LdrLoadDll(nullptr, 0, &uName, &hMod);
+    return NtSucceeded(st) ? hMod : nullptr;
+}
+
+__declspec(dllexport) void* LoadLibraryA(const char* lpLibFileName) noexcept {
+    if (!lpLibFileName) return nullptr;
+    wchar_t wideBuf[128];
+    size_t i = 0;
+    while (lpLibFileName[i] && i + 1 < 128) {
+        wideBuf[i] = static_cast<wchar_t>(static_cast<unsigned char>(lpLibFileName[i]));
+        ++i;
+    }
+    wideBuf[i] = L'\0';
+    return LoadLibraryW(wideBuf);
+}
+
+__declspec(dllexport) void* GetProcAddress(void* hModule, const char* lpProcName) noexcept {
+    if (!hModule || !lpProcName) return nullptr;
+    void* procAddr = nullptr;
+    uint64_t st = LdrGetProcedureAddress(hModule, lpProcName, 0, &procAddr);
+    return NtSucceeded(st) ? procAddr : nullptr;
+}
 
 // ============================================================================
 // 5. System Info & Diagnostics

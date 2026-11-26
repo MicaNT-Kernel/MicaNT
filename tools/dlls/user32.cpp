@@ -3,13 +3,15 @@
  * @brief Sovereign User Windowing Subsystem DLL (user32.dll) for MicaNT System32.
  *
  * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
- * Connects standard Win32 message dispatching directly to MicaNT desktop compositor.
+ * ZERO direct syscall instructions: dynamically chains to ntdll.dll via real PE32+ IAT!
  */
 
 #include <cstdint>
 #include <cstddef>
 
 extern "C" {
+
+__declspec(dllimport) uint64_t NtYieldExecution() noexcept;
 
 bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
@@ -35,6 +37,16 @@ struct Msg {
 static bool s_quitPosted = false;
 static int s_quitExitCode = 0;
 static uint64_t s_windowHandleCounter = 0x1000;
+
+__declspec(dllexport) int32_t GetSystemMetrics(int32_t nIndex) noexcept {
+    switch (nIndex) {
+        case 0:  return 1920; // SM_CXSCREEN
+        case 1:  return 1080; // SM_CYSCREEN
+        case 4:  return 32;   // SM_CYCAPTION
+        case 80: return 1;    // SM_CMONITORS
+        default: return 0;
+    }
+}
 
 __declspec(dllexport) void* CreateWindowExW(
     uint32_t /*dwExStyle*/,
@@ -75,11 +87,9 @@ __declspec(dllexport) bool GetMessageW(
     if (s_quitPosted) {
         lpMsg->message = 0x0012; // WM_QUIT
         lpMsg->wParam = static_cast<uint64_t>(s_quitExitCode);
-        return false; // Standard Win32: WM_QUIT returns 0
+        return false;
     }
-    // Yield CPU once
-    __asm__ __volatile__("movq $0x46, %%rax; syscall" ::: "rax", "rcx", "r11");
-    // Return WM_PAINT or WM_NULL
+    NtYieldExecution();
     lpMsg->message = 0x000F; // WM_PAINT
     lpMsg->hwnd = reinterpret_cast<void*>(s_windowHandleCounter);
     return true;
@@ -124,7 +134,7 @@ __declspec(dllexport) void PostQuitMessage(int nExitCode) noexcept {
 }
 
 __declspec(dllexport) void* GetDC(void* /*hWnd*/) noexcept {
-    return reinterpret_cast<void*>(0x2001); // Standard DC handle
+    return reinterpret_cast<void*>(0x2001);
 }
 
 __declspec(dllexport) int ReleaseDC(void* /*hWnd*/, void* /*hDC*/) noexcept {

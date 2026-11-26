@@ -517,7 +517,7 @@ def main():
     for fname in [
         "ntoskrnl.exe", "ntdll.dll", "kernel32.dll", "kernelbase.dll",
         "user32.dll", "gdi32.dll", "advapi32.dll", "ucrtbase.dll",
-        "cmd.exe", "win32_ntfs_probe.exe", "win32_proc_a.exe", "win32_proc_b.exe",
+        "cmd.exe", "win32_ntfs_probe.exe", "win32_proc_a.exe", "win32_proc_b.exe", "win32_nt_suite.exe",
         "smss.exe", "csrss.exe", "explorer.exe", "taskmgr.exe",
     ]:
         fpath = sys32_dir / fname

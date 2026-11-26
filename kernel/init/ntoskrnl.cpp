@@ -537,13 +537,22 @@ static void ShellAddLine(const char* text, micant::bootvid::Color col = micant::
     UartSerial::print("\r\n");
 }
 
-// Bare-Metal Ring 0 Kernel File Handle Table (backed by live NTFS 3.1 volume)
+// Bare-Metal Ring 0 Kernel File & Directory Handle Table (backed by live NTFS 3.1 volume)
 struct BareMetalFileHandleEntry {
     bool     inUse{false};
+    bool     isDirectory{false};
     char     path[128]{};
     uint64_t mftRecordNumber{0};
     uint64_t fileSize{0};
     uint64_t cursor{0};
+    uint32_t dirEnumCursor{0};
+};
+
+struct NtDirEntryInfo {
+    uint64_t fileSize;
+    uint32_t fileAttributes;
+    uint32_t nameLengthChars;
+    uint16_t fileName[128];
 };
 
 static constexpr size_t MAX_KERNEL_FILE_HANDLES = 32;
@@ -555,17 +564,19 @@ static uint64_t openNtfsKernelHandle(const char* asciiPath) noexcept {
     if (!ntfs.isMounted() || !asciiPath) return 0;
 
     micant::km::ntfs_baremetal::NtfsDirEntry entry{};
-    if (!ntfs.findPath(asciiPath, entry) || entry.isDirectory) {
+    if (!ntfs.findPath(asciiPath, entry)) {
         return 0;
     }
 
     for (size_t i = 0; i < MAX_KERNEL_FILE_HANDLES; ++i) {
         if (!s_kernelFileHandles[i].inUse) {
             s_kernelFileHandles[i].inUse = true;
+            s_kernelFileHandles[i].isDirectory = entry.isDirectory;
             copyStr(s_kernelFileHandles[i].path, asciiPath, sizeof(s_kernelFileHandles[i].path));
             s_kernelFileHandles[i].mftRecordNumber = entry.mftRecordNumber;
             s_kernelFileHandles[i].fileSize = entry.fileSize;
             s_kernelFileHandles[i].cursor = 0;
+            s_kernelFileHandles[i].dirEnumCursor = 0;
             return 0x100ULL + static_cast<uint64_t>(i * 4);
         }
     }
@@ -676,6 +687,108 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             LogKernel("[Ps] NtCreateUserProcess (0x58): Isolated CR3 Child Process Spawned!");
             return child->pid;
         }
+        case 0x35: { // NtQueryDirectoryFile (Live NTFS 3.1 Directory Enumeration -> FindFirstFileW/FindNextFileW)
+            auto* he = lookupKernelFileHandle(arg1);
+            if (!he || !he->isDirectory) {
+                return 0xC0000008ULL; // STATUS_INVALID_HANDLE
+            }
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
+            if (!vad || arg2 == 0 || arg3 < sizeof(NtDirEntryInfo) || arg2 + sizeof(NtDirEntryInfo) > vad->endVa) {
+                return 0xC0000005ULL; // STATUS_ACCESS_VIOLATION
+            }
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            NtDirEntryInfo outInfo{};
+            uint32_t targetIdx = he->dirEnumCursor;
+            uint32_t curIdx = 0;
+            bool found = false;
+            ntfs.iterateDirectory(he->path, [&](const micant::km::ntfs_baremetal::NtfsDirEntry& e) noexcept {
+                if (!found && curIdx == targetIdx) {
+                    outInfo.fileSize = e.fileSize;
+                    outInfo.fileAttributes = e.isDirectory ? 0x00000010u : 0x00000020u;
+                    size_t n = 0;
+                    while (e.name[n] && n + 1 < 128) {
+                        outInfo.fileName[n] = static_cast<uint16_t>(static_cast<unsigned char>(e.name[n]));
+                        ++n;
+                    }
+                    outInfo.fileName[n] = 0;
+                    outInfo.nameLengthChars = static_cast<uint32_t>(n);
+                    found = true;
+                }
+                curIdx++;
+            });
+            if (!found) {
+                return 0x80000006ULL; // STATUS_NO_MORE_FILES
+            }
+            he->dirEnumCursor++;
+            std::memcpy(reinterpret_cast<void*>(arg2), &outInfo, sizeof(outInfo));
+            return 0; // STATUS_SUCCESS
+        }
+        case 0x60: { // NtLoadDll (Runtime LoadLibraryW / GetModuleHandleW into Active Process CR3 Arena)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0) {
+                return 0;
+            }
+            const auto* wname = reinterpret_cast<const uint16_t*>(arg1);
+            char dllName[64]{};
+            size_t len = 0;
+            while (len + 1 < sizeof(dllName) && wname[len] != 0) {
+                dllName[len] = (wname[len] < 128) ? static_cast<char>(wname[len]) : '?';
+                ++len;
+            }
+            dllName[len] = '\0';
+
+            auto& ntfs = micant::km::ntfs_baremetal::BareMetalNtfsVolume::get();
+            auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+            bool loadIfMissing = (arg2 == 0);
+            const micant::km::pe_baremetal::LoadedPeModule* mod = nullptr;
+            if (mp.isActive()) {
+                mod = mp.loadOrFindDllForCurrentProcess(ntfs, dllName, loadIfMissing);
+            } else {
+                auto& loader = micant::km::pe_baremetal::BareMetalPeLoader::get();
+                mod = loadIfMissing ? loader.loadSystemDllFromNtfs(ntfs, dllName) : loader.findModule(dllName);
+            }
+            if (!mod) {
+                UartSerial::print("  -> NtLoadDll (0x60): Module '");
+                UartSerial::print(dllName);
+                UartSerial::print("' not found -> 0\r\n");
+                return 0;
+            }
+            UartSerial::print("  -> NtLoadDll (0x60): ");
+            UartSerial::print(loadIfMissing ? "Loaded '" : "Handle '");
+            UartSerial::print(mod->name);
+            UartSerial::print("' @ 0x");
+            UartSerial::printHex64(mod->baseVa);
+            UartSerial::print(" (Size=");
+            UartSerial::printDec(mod->sizeOfImage);
+            UartSerial::print(" B | IAT Bound=");
+            UartSerial::printDec(mod->importsBound);
+            UartSerial::print(" | Unresolved=");
+            UartSerial::printDec(mod->importsUnresolved);
+            UartSerial::print(")\r\n");
+            if (loadIfMissing) {
+                LogKernel("[Ldr] NtLoadDll (0x60): Dynamically Loaded System32 DLL into CR3!");
+            }
+            return mod->baseVa;
+        }
+        case 0x19: { // NtQueryInformationProcess (GetExitCodeProcess)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg3);
+            if (!vad || arg3 == 0 || arg3 + sizeof(uint32_t) > vad->endVa) {
+                return 0xC0000005ULL;
+            }
+            auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+            uint32_t exitCode = 0;
+            bool stillActive = false;
+            if (!mp.queryProcessExitCode(static_cast<uint32_t>(arg1), exitCode, stillActive)) {
+                return 0xC0000008ULL;
+            }
+            *reinterpret_cast<uint32_t*>(arg3) = exitCode;
+            UartSerial::print("  -> NtQueryInformationProcess (0x19): PID=");
+            UartSerial::printDec(static_cast<uint32_t>(arg1));
+            UartSerial::print(" -> ExitCode=");
+            UartSerial::printDec(exitCode);
+            UartSerial::print(stillActive ? " (STILL_ACTIVE)\r\n" : " (TERMINATED)\r\n");
+            return 0;
+        }
         case 0x0F: { // NtClose (Close Kernel File Handle)
             auto* he = lookupKernelFileHandle(arg1);
             if (he) {
@@ -769,6 +882,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
         case 0x24: { // NtReadFile (Live NTFS 3.1 AHCI DMA Read for Open Handles + Legacy IRP Fallback)
             auto* he = lookupKernelFileHandle(arg1);
             if (he) {
+                if (he->isDirectory) return static_cast<uint64_t>(-1);
                 const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
                 if (!vad || arg2 == 0) {
                     UartSerial::print("  -> NtReadFile: Invalid user destination buffer -> STATUS_ACCESS_VIOLATION\r\n");
@@ -987,24 +1101,51 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         if (auto* cur = mp.getCurrentProcess()) cur->syscallCount++;
 
         if (ssn == 0x01) { // NtTerminateProcess in Multi-Process CR3 Mode
-            uint32_t exitedPid = 0, nextPid = 0;
+            uint32_t exitedPid = 0, nextPid = 0, wokenPid = 0;
             uint64_t nextCr3 = 0;
-            bool allDone = mp.onTerminateSyscall(frame, static_cast<uint32_t>(arg2), exitedPid, nextPid, nextCr3);
+            bool allDone = mp.onTerminateSyscall(frame, static_cast<uint32_t>(arg2), exitedPid, nextPid, nextCr3, wokenPid);
             UartSerial::print("[Ps] NtTerminateProcess (Multi-CR3): PID=");
             UartSerial::printDec(exitedPid);
             UartSerial::print(" ExitCode=");
             UartSerial::printDec(static_cast<uint32_t>(arg2));
+            if (wokenPid != 0) {
+                UartSerial::print(" [Woke Waiting Parent PID=");
+                UartSerial::printDec(wokenPid);
+                UartSerial::print("]");
+            }
             if (!allDone) {
-                UartSerial::print(" -> Switched CR3 to surviving PID=");
+                UartSerial::print(" -> Switched CR3 to PID=");
                 UartSerial::printDec(nextPid);
                 UartSerial::print(" (CR3=0x");
                 UartSerial::printHex64(nextCr3);
                 UartSerial::print(")\r\n");
-                return 0; // IRETQ straight into surviving Ring-3 process!
+                return 0; // IRETQ straight into surviving/woken Ring-3 process!
             }
             UartSerial::print(" -> ALL isolated CR3 processes exited cleanly! Restoring Kernel CR3.\r\n");
             s_ring3Telemetry.userProcessExitedCleanly = true;
             return 1; // Return to Ring 0 caller!
+        }
+
+        if (ssn == 0x04) { // NtWaitForSingleObject (Blocking Parent->Child Sync with CR3 Switch)
+            uint32_t callerPid = 0, switchedPid = 0;
+            uint64_t nextCr3 = 0;
+            if (mp.onWaitForProcessSyscall(frame, static_cast<uint32_t>(arg1), callerPid, switchedPid, nextCr3)) {
+                UartSerial::print("[Ps] NtWaitForSingleObject (0x04): PID=");
+                UartSerial::printDec(callerPid);
+                UartSerial::print(" BLOCKED waiting on PID=");
+                UartSerial::printDec(static_cast<uint32_t>(arg1));
+                UartSerial::print(" -> Switched CR3 to PID=");
+                UartSerial::printDec(switchedPid);
+                UartSerial::print(" (CR3=0x");
+                UartSerial::printHex64(nextCr3);
+                UartSerial::print(")\r\n");
+                LogKernel("[Ps] NtWaitForSingleObject (0x04): Parent Blocked -> Child CR3 Scheduled");
+            } else {
+                UartSerial::print("[Ps] NtWaitForSingleObject (0x04): Target PID=");
+                UartSerial::printDec(static_cast<uint32_t>(arg1));
+                UartSerial::print(" already signaled -> WAIT_OBJECT_0\r\n");
+            }
+            return 0;
         }
 
         if (ssn == 0x46) { // NtYieldExecution in Multi-Process CR3 Mode
@@ -2211,6 +2352,10 @@ static bool executeMultiProcessCr3FromNtfs(const char* rootNtfsExePath) noexcept
     UartSerial::printDec(static_cast<uint32_t>(mp.getTotalClockTicksInR3()));
     UartSerial::print(" | Hardware Preemptions=");
     UartSerial::printDec(static_cast<uint32_t>(mp.getTotalPreemptiveSwitches()));
+    UartSerial::print(" | BlockingWaits=");
+    UartSerial::printDec(static_cast<uint32_t>(mp.getTotalBlockingWaits()));
+    UartSerial::print(" | Wakeups=");
+    UartSerial::printDec(static_cast<uint32_t>(mp.getTotalWaitWakeups()));
     UartSerial::print("\r\n");
     for (size_t i = 0; i < micant::km::ps_baremetal::BareMetalCr3ProcessManager::MAX_PROCS; ++i) {
         const auto* sl = mp.getSlot(i);
@@ -3263,6 +3408,10 @@ extern "C" micant::NtStatus KiSystemStartup(
         if (executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_proc_a.exe")) {
             DrawCard(3, "EXECUTIVE STATE", "Multi-CR3 + Preempt OK", micant::bootvid::Color{100, 240, 160});
         }
+        // Live Runtime Win32 Suite: FindFirstFileW + LoadLibraryW/GetProcAddress + WaitForSingleObject/GetExitCodeProcess
+        if (executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_nt_suite.exe")) {
+            DrawCard(3, "EXECUTIVE STATE", "Win32 Ldr+Wait+CR3 OK", micant::bootvid::Color{100, 240, 160});
+        }
     }
 
     LogKernel("MicaNT Kernel Ready for Ring 3 binaries. SurShell Desktop Active.");
@@ -3462,7 +3611,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         DrawCard(1, "PHYSICAL MEMORY", "32,768 MB ECC RAM", micant::bootvid::Color{100, 240, 160});
         DrawCard(2, "STORAGE & C: DRIVE", s_ntfsMounted ? s_storageCardText : "sdb2 FAT32 | 128GB C:",
                  s_ntfsMounted ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{0, 210, 255});
-        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "Multi-CR3 + Preempt OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
+        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "Win32 Ldr+Wait+CR3 OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
 
         // Left Window: Subsystems
         videoDriver.fillRectangle(16, midY, leftW, midH, micant::bootvid::Color{14, 18, 28});
@@ -3605,6 +3754,24 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("  Storage:      AHCI SATA 6Gbps DMA (128GB MICA_SYS / 1.7TB MICA_DATA)", micant::bootvid::Color{180, 200, 230});
             ShellAddLine("  Clean-Room:   100% ISO C++23 Clean-Room Implementation (Zero Leaked Code)", micant::bootvid::Color{255, 200, 80});
             LogKernel("Shell: ver -> MicaNT Version 10.0 Dave Cutler Bare-Metal Edition");
+        } else if (cmd[0] == 'n' && cmd[1] == 't' && cmd[2] == 's' && cmd[3] == 'u') {
+            ShellClearOutput();
+            if (s_ntfsMounted) {
+                ShellAddLine("Launching Win32 Runtime Suite (FindFirstFileW + LoadLibraryW + WaitForSingleObject)...", micant::bootvid::Color{0, 229, 255});
+                bool ok = executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_nt_suite.exe");
+                auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+                char sum[120];
+                copyStr(sum, ok ? "Win32 NT Suite PASS: " : "Win32 NT Suite Status: ", sizeof(sum));
+                appendU64Dec(sum, sizeof(sum), mp.getTotalProcessesCreated());
+                concatStr(sum, " Procs | ", sizeof(sum));
+                appendU64Dec(sum, sizeof(sum), mp.getTotalBlockingWaits());
+                concatStr(sum, " Blocking Waits | ", sizeof(sum));
+                appendU64Dec(sum, sizeof(sum), mp.getTotalWaitWakeups());
+                concatStr(sum, " Wakeups", sizeof(sum));
+                ShellAddLine(sum, ok ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{255, 200, 80});
+            } else {
+                ShellAddLine("NTFS 3.1 volume not mounted.", micant::bootvid::Color{255, 100, 100});
+            }
         } else if (cmd[0] == 'm' && cmd[1] == 'p' && (cmd[2] == '\0' || cmd[2] == ' ')) {
             ShellClearOutput();
             if (s_ntfsMounted) {
@@ -4072,7 +4239,8 @@ extern "C" micant::NtStatus KiSystemStartup(
                 LogKernel("Shell: Executing PE32+ Userland Binary from C: via AHCI DMA...");
                 bool useCr3Mp = s_ntfsMounted && (
                     strEqual(cleanTarget, "win32_proc_a.exe") ||
-                    strEqual(cleanTarget, "win32_proc_b.exe")
+                    strEqual(cleanTarget, "win32_proc_b.exe") ||
+                    strEqual(cleanTarget, "win32_nt_suite.exe")
                 );
                 bool ok = useCr3Mp
                     ? executeMultiProcessCr3FromNtfs(pathBuf)
