@@ -229,9 +229,6 @@ def main():
         ("tools/diskpart_app.cpp", "diskpart.exe"),
         ("tools/taskkill_app.cpp", "taskkill.exe"),
         ("tools/shutdown_app.cpp", "shutdown.exe"),
-        ("tools/explorer_app.cpp", "explorer.exe"),
-        ("tools/taskmgr_app.cpp", "taskmgr.exe"),
-        ("tools/notepad_app.cpp", "notepad.exe"),
     ]
     for rel_src, name in svc_list:
         src_path = repo_root / rel_src
@@ -273,22 +270,33 @@ def main():
                 run_command(cmd_app, exe_name)
                 print(f"      {GREEN}Compiled {exe_name} ({app_out.stat().st_size:,} bytes, dynamic KERNEL32.dll IAT){RESET}")
 
-    # Build authentic dynamic Win32 GUI PE32+ executable (imports KERNEL32.dll + USER32.dll + GDI32.dll -> NTDLL.dll)
+    # Build authentic dynamic Win32 GUI PE32+ executables (import KERNEL32.dll + USER32.dll + GDI32.dll [+ WS2_32.dll] -> NTDLL.dll)
     user32_implib = repo_root / "build" / "libuser32.a"
     gdi32_implib = repo_root / "build" / "libgdi32.a"
-    gui_src = repo_root / "tools" / "win32_gui_app.cpp"
-    if kernel32_implib.exists() and user32_implib.exists() and gdi32_implib.exists() and gui_src.exists():
-        gui_out = system32 / "win32_gui_app.exe"
-        cmd_gui = [
-            cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
-            "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
-            "-mno-stack-arg-probe", "-O2",
-            "-Wl,--subsystem,windows", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
-            "-nostdlib", str(gui_src), str(kernel32_implib), str(user32_implib), str(gdi32_implib),
-            "-o", str(gui_out)
-        ]
-        run_command(cmd_gui, "win32_gui_app.exe")
-        print(f"      {GREEN}Compiled win32_gui_app.exe ({gui_out.stat().st_size:,} bytes, dynamic KERNEL32+USER32+GDI32 IAT){RESET}")
+    ws2_implib_gui = repo_root / "build" / "libws2_32.a"
+    if kernel32_implib.exists() and user32_implib.exists() and gdi32_implib.exists():
+        for rel_src, exe_name, extra_ws2 in [
+            ("tools/win32_gui_app.cpp", "win32_gui_app.exe", False),
+            ("tools/explorer_app.cpp",  "explorer.exe",      False),
+            ("tools/notepad_app.cpp",   "notepad.exe",       False),
+            ("tools/taskmgr_app.cpp",   "taskmgr.exe",       True),
+        ]:
+            gui_src = repo_root / rel_src
+            if gui_src.exists():
+                gui_out = system32 / exe_name
+                cmd_gui = [
+                    cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
+                    "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
+                    "-mno-stack-arg-probe", "-O2",
+                    "-Wl,--subsystem,windows", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
+                    "-nostdlib", str(gui_src), str(kernel32_implib), str(user32_implib), str(gdi32_implib),
+                ]
+                if extra_ws2 and ws2_implib_gui.exists():
+                    cmd_gui.append(str(ws2_implib_gui))
+                cmd_gui.extend(["-o", str(gui_out)])
+                run_command(cmd_gui, exe_name)
+                iat_tag = "KERNEL32+USER32+GDI32+WS2_32" if extra_ws2 else "KERNEL32+USER32+GDI32"
+                print(f"      {GREEN}Compiled {exe_name} ({gui_out.stat().st_size:,} bytes, dynamic {iat_tag} IAT){RESET}")
 
     # Build authentic dynamic Ring-3 reg.exe (imports KERNEL32.dll + ADVAPI32.dll -> NTDLL.dll)
     advapi32_implib = repo_root / "build" / "libadvapi32.a"

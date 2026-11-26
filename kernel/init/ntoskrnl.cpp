@@ -46,7 +46,8 @@
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
 #include "micant/km/executive/mm_baremetal.hpp"
-#include "micant/km/executive/cm_baremetal.hpp"
+#include "micant/km/executive/cm_baremetal.hpp"
+#include "micant/km/executive/win32k_baremetal.hpp"
 #include "../test/unmodified_fixture.hpp"
 
 extern "C" void ___chkstk_ms() {}
@@ -1185,7 +1186,67 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             HalpColdResetServer();
             return 0;
         }
-        case 0x11: { // NtQuerySystemInformation
+        case 0x11: { // NtQuerySystemInformation (Class 5 = Live Process & SMP/DWM Telemetry Snapshot)
+            if (arg1 == 5 && arg2 != 0 && arg3 >= 64) {
+                const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg2);
+                if (!vad || arg2 + arg3 > vad->endVa) return 0xC0000005ULL;
+                #pragma pack(push, 1)
+                struct NtProcRow {
+                    uint32_t pid;
+                    uint32_t parentPid;
+                    uint32_t state;
+                    uint32_t dllCount;
+                    uint64_t cr3Phys;
+                    uint64_t cpuTicks;
+                    uint64_t syscallCount;
+                    char     imageName[32];
+                };
+                struct NtSysProcSnap {
+                    uint32_t onlineCores;
+                    uint32_t procCount;
+                    uint64_t totalPreemptSwitches;
+                    uint64_t totalClockTicks;
+                    uint64_t mousePackets;
+                    uint64_t dwmComposites;
+                    uint32_t activeWindows;
+                    uint32_t reserved;
+                    NtProcRow rows[8];
+                };
+                #pragma pack(pop)
+                if (arg3 < sizeof(NtSysProcSnap)) return 0xC0000004ULL;
+                NtSysProcSnap snap{};
+                auto& smp = micant::km::smp_baremetal::BareMetalSmpEngine::get();
+                auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+                auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+                snap.onlineCores = smp.getOnlineCoreCount() ? smp.getOnlineCoreCount() : 1u;
+                snap.totalPreemptSwitches = mp.getTotalPreemptiveSwitches();
+                snap.totalClockTicks = mp.getTotalClockTicksInR3();
+                snap.mousePackets = dwm.getMousePacketCount();
+                snap.dwmComposites = dwm.getCompositeCount();
+                snap.activeWindows = dwm.getActiveWindowCount();
+                uint32_t cnt = 0;
+                for (size_t i = 0; i < micant::km::ps_baremetal::BareMetalCr3ProcessManager::MAX_PROCS && cnt < 8; ++i) {
+                    const auto* sl = mp.getSlot(i);
+                    if (!sl || !sl->inUse) continue;
+                    auto& r = snap.rows[cnt++];
+                    r.pid = sl->pid;
+                    r.parentPid = sl->parentPid;
+                    r.state = static_cast<uint32_t>(sl->state);
+                    r.dllCount = sl->dllCount;
+                    r.cr3Phys = sl->cr3Phys;
+                    r.cpuTicks = sl->cpuTicks;
+                    r.syscallCount = sl->syscallCount;
+                    size_t ni = 0;
+                    while (sl->imageName[ni] && ni + 1 < sizeof(r.imageName)) {
+                        r.imageName[ni] = sl->imageName[ni];
+                        ++ni;
+                    }
+                    r.imageName[ni] = '\0';
+                }
+                snap.procCount = cnt;
+                std::memcpy(reinterpret_cast<void*>(arg2), &snap, sizeof(snap));
+                return 0;
+            }
             s_ring3Telemetry.verifiedUserCs = arg1;
             s_ring3Telemetry.verifiedCpl = arg2;
             UartSerial::print("  -> NtQuerySystemInformation: User CS=0x");
@@ -1754,8 +1815,108 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
     if (mp.isActive()) {
         if (auto* cur = mp.getCurrentProcess()) cur->syscallCount++;
 
+        // Fast-path Ring-0 Win32k DWM Compositor & Live Process Telemetry (Zero COM1 flood!)
+        if (ssn == 0x83) { // NtUserCreateWindow
+            auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            uint64_t hwnd = 0;
+            if (vad && arg1 != 0 && arg1 + sizeof(micant::km::win32k_baremetal::NtCreateWindowReq) <= vad->endVa) {
+                micant::km::win32k_baremetal::NtCreateWindowReq req{};
+                std::memcpy(&req, reinterpret_cast<const void*>(arg1), sizeof(req));
+                uint32_t pid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 0;
+                hwnd = dwm.createWindow(pid, req);
+                if (hwnd != 0) {
+                    s_guiWindowDirtyOnGop = true;
+                    UartSerial::print("[Win32k] NtUserCreateWindow (0x83): HWND=0x");
+                    UartSerial::printHex64(hwnd);
+                    UartSerial::print(" PID=");
+                    UartSerial::printDec(pid);
+                    UartSerial::print(" '");
+                    UartSerial::print(req.title);
+                    UartSerial::print("' @ (");
+                    UartSerial::printDec(static_cast<uint32_t>(req.x > 0 ? req.x : 0));
+                    UartSerial::print(",");
+                    UartSerial::printDec(static_cast<uint32_t>(req.y > 0 ? req.y : 0));
+                    UartSerial::print(") ");
+                    UartSerial::printDec(static_cast<uint32_t>(req.width));
+                    UartSerial::print("x");
+                    UartSerial::printDec(static_cast<uint32_t>(req.height));
+                    UartSerial::print("\r\n");
+                }
+            }
+            frame->rax = hwnd;
+            return 0;
+        }
+        if (ssn == 0x84) { // NtUserDestroyWindow
+            auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+            bool ok = dwm.destroyWindow(arg1);
+            UartSerial::print("[Win32k] NtUserDestroyWindow (0x84): HWND=0x");
+            UartSerial::printHex64(arg1);
+            UartSerial::print(ok ? " -> Destroyed\r\n" : " -> NotFound\r\n");
+            frame->rax = ok ? 0ULL : 1ULL;
+            return 0;
+        }
+        if (ssn == 0x85) { // NtUserPeekMessage (Non-blocking Hardware PS/2 Mouse+Kbd Pump + Window Queue Pop)
+            auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(micant::km::win32k_baremetal::DwmMsg) > vad->endVa) {
+                frame->rax = 0;
+                return 0;
+            }
+            uint32_t pid = mp.getCurrentProcess() ? mp.getCurrentProcess()->pid : 0;
+            micant::km::win32k_baremetal::DwmMsg msg{};
+            bool got = dwm.peekMessage(arg2, pid, msg, (arg3 & 1u) != 0);
+            if (got) {
+                std::memcpy(reinterpret_cast<void*>(arg1), &msg, sizeof(msg));
+            }
+            frame->rax = got ? 1ULL : 0ULL;
+            return 0;
+        }
+        if (ssn == 0x81) { // Fast-path NtGdiPresentSurface for DWM Composited Windows (params->reserved >= 0x10001)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (vad && arg1 != 0 && arg1 + sizeof(micant::um::UserPresentSurfaceParams64) <= vad->endVa) {
+                const auto* p = reinterpret_cast<const micant::um::UserPresentSurfaceParams64*>(arg1);
+                if (p->reserved >= micant::km::win32k_baremetal::DWM_HWND_BASE) {
+                    const auto* surfVad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(p->surfaceBufferVa);
+                    if (surfVad && p->surfaceBufferVa != 0) {
+                        auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+                        bool ok = dwm.updateWindowSurface(
+                            p->reserved,
+                            reinterpret_cast<const uint32_t*>(p->surfaceBufferVa),
+                            p->width,
+                            p->height,
+                            p->pitch
+                        );
+                        s_guiWindowDirtyOnGop = true;
+                        frame->rax = ok ? 0ULL : 1ULL;
+                        return 0;
+                    }
+                }
+            }
+        }
+        if (ssn == 0x11 && arg1 == 5 && arg2 != 0 && arg3 >= 64) {
+            // Fast-path quiet live process table snapshot for taskmgr.exe
+            frame->rax = KiSystemCall64Dispatcher(ssn, arg1, arg2, arg3);
+            return 0;
+        }
+        if (ssn == 0x90 && micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().isDesktopActive()) {
+            // Fast-path quiet NIC telemetry query for taskmgr.exe inside DWM desktop
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (vad && arg1 != 0 && arg2 >= sizeof(micant::km::e1000_baremetal::NetAdapterInfo) &&
+                arg1 + sizeof(micant::km::e1000_baremetal::NetAdapterInfo) <= vad->endVa) {
+                micant::km::e1000_baremetal::NetAdapterInfo info{};
+                micant::km::e1000_baremetal::BareMetalE1000Engine::get().queryAdapterInfo(info);
+                std::memcpy(reinterpret_cast<void*>(arg1), &info, sizeof(info));
+                frame->rax = 0;
+            } else {
+                frame->rax = 0xC0000005ULL;
+            }
+            return 0;
+        }
+
         if (ssn == 0x01) { // NtTerminateProcess in Multi-Process CR3 Mode
             if (auto* curP = mp.getCurrentProcess()) {
+                micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().destroyWindowsForPid(curP->pid);
                 micant::km::smp_baremetal::BareMetalSmpEngine::get().waitAllThreadsForProcess(curP->pid);
             }
             uint32_t exitedPid = 0, nextPid = 0, wokenPid = 0;
@@ -1858,13 +2019,19 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         }
 
         if (ssn == 0x46) { // NtYieldExecution in Multi-Process CR3 Mode
+            auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+            if (dwm.isDesktopActive()) {
+                dwm.pumpHardwareInput();
+            }
             uint32_t oldPid = 0, newPid = 0;
             if (mp.onYieldSyscall(frame, oldPid, newPid)) {
-                UartSerial::print("[Ps] NtYieldExecution (0x46): PID ");
-                UartSerial::printDec(oldPid);
-                UartSerial::print(" -> PID ");
-                UartSerial::printDec(newPid);
-                UartSerial::print("\r\n");
+                if (!dwm.isDesktopActive()) {
+                    UartSerial::print("[Ps] NtYieldExecution (0x46): PID ");
+                    UartSerial::printDec(oldPid);
+                    UartSerial::print(" -> PID ");
+                    UartSerial::printDec(newPid);
+                    UartSerial::print("\r\n");
+                }
             }
             return 0;
         }
@@ -4747,6 +4914,14 @@ extern "C" micant::NtStatus KiSystemStartup(
     } else if (!e1kOk) {
         LogKernel("[NET] Intel I210/e1000: Controller probed (standby).");
     }
+    {
+        auto& dwm = micant::km::win32k_baremetal::BareMetalWin32kCompositor::get();
+        dwm.initialize(&videoDriver, &UartSerial::print);
+        char dwmLog[128];
+        copyStr(dwmLog, "[Win32k] DWM Multi-Window Compositor Ready (1920x1080 Shadow + i8042 PS/2 Mouse ", sizeof(dwmLog));
+        concatStr(dwmLog, dwm.isMouseReady() ? "ACK OK)" : "Polled)", sizeof(dwmLog));
+        LogKernel(dwmLog);
+    }
 
     bool s_showDesktop = false;
     DrawExecutiveConsole();
@@ -4831,6 +5006,16 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("  Storage:      AHCI SATA 6Gbps DMA (128GB MICA_SYS / 1.7TB MICA_DATA)", micant::bootvid::Color{180, 200, 230});
             ShellAddLine("  Clean-Room:   100% ISO C++23 Clean-Room Implementation (Zero Leaked Code)", micant::bootvid::Color{255, 200, 80});
             LogKernel("Shell: ver -> MicaNT Version 10.0 Dave Cutler Bare-Metal Edition");
+        } else if (cmd[0] == 'd' && cmd[1] == 'e' && cmd[2] == 's' && cmd[3] == 'k') {
+            ShellClearOutput();
+            if (s_ntfsMounted) {
+                LogKernel("Shell: Launching Multi-Window Preemptive Ring-3 Desktop (explorer.exe)...");
+                executeMultiProcessCr3FromNtfs("\\Windows\\System32\\explorer.exe");
+                DrawExecutiveConsole();
+                ShellAddLine("Returned from Multi-Window Ring-3 Desktop cleanly.", micant::bootvid::Color{100, 240, 160});
+            } else {
+                ShellAddLine("NTFS 3.1 volume not mounted.", micant::bootvid::Color{255, 100, 100});
+            }
         } else if (cmd[0] == 'g' && cmd[1] == 'u' && cmd[2] == 'i' && (cmd[3] == '\0' || cmd[3] == ' ')) {
             ShellClearOutput();
             if (s_ntfsMounted) {

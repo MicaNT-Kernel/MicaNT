@@ -429,4 +429,28 @@ __declspec(dllexport) bool BitBlt(
     return NtGdiPresentSurface(&params) == 0;
 }
 
+// Present Ring-3 DC surface into a Ring-0 DWM Compositor window backing surface (params.reserved = HWND)
+__declspec(dllexport) bool GdiPresentWindowSurface(
+    void* hdcSrc,
+    void* hwnd,
+    int w,
+    int h
+) noexcept {
+    auto* srcDc = lookupDc(hdcSrc);
+    if (!srcDc || !srcDc->pixels) return false;
+    uint32_t bw = (w > 0 && static_cast<uint32_t>(w) <= srcDc->width) ? static_cast<uint32_t>(w) : srcDc->width;
+    uint32_t bh = (h > 0 && static_cast<uint32_t>(h) <= srcDc->height) ? static_cast<uint32_t>(h) : srcDc->height;
+
+    alignas(8) UserPresentSurfaceParams64 params;
+    params.surfaceBufferVa = reinterpret_cast<uint64_t>(srcDc->pixels);
+    params.dstX = static_cast<uint32_t>(srcDc->dstX >= 0 ? srcDc->dstX : 0);
+    params.dstY = static_cast<uint32_t>(srcDc->dstY >= 0 ? srcDc->dstY : 0);
+    params.width = bw;
+    params.height = bh;
+    params.pitch = srcDc->width;
+    params.reserved = static_cast<uint32_t>(reinterpret_cast<uint64_t>(hwnd) & 0xFFFFFFFFULL);
+
+    return NtGdiPresentSurface(&params) == 0;
+}
+
 } // extern "C"

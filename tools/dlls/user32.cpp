@@ -21,10 +21,14 @@ extern "C" {
 __declspec(dllimport) uint64_t NtYieldExecution() noexcept;
 __declspec(dllimport) uint64_t NtGdiGetVideoInfo(void* videoInfo) noexcept;
 __declspec(dllimport) uint64_t NtUserGetMessage(void* msgOut, void* hwnd, uint32_t filterMin, uint32_t filterMax) noexcept;
+__declspec(dllimport) uint64_t NtUserCreateWindow(const void* createReq) noexcept;
+__declspec(dllimport) uint64_t NtUserDestroyWindow(void* hwnd) noexcept;
+__declspec(dllimport) uint64_t NtUserPeekMessage(void* msgOut, void* hwnd, uint32_t removeFlags) noexcept;
 
 __declspec(dllimport) void* GdiCreateSurfaceDC(int x, int y, int width, int height) noexcept;
 __declspec(dllimport) bool  DeleteDC(void* hdc) noexcept;
 __declspec(dllimport) bool  BitBlt(void* hdcDest, int xDest, int yDest, int w, int h, void* hdcSrc, int xSrc, int ySrc, uint32_t rop) noexcept;
+__declspec(dllimport) bool  GdiPresentWindowSurface(void* hdcSrc, void* hwnd, int w, int h) noexcept;
 __declspec(dllimport) bool  GdiFillSolidRect(void* hdc, int x, int y, int w, int h, uint32_t color) noexcept;
 
 bool DllMain(void*, unsigned long, void*) noexcept {
@@ -97,8 +101,19 @@ struct WindowClassEntry {
     WndProcFn wndProc;
 };
 
+struct NtCreateWindowReq {
+    int32_t  x;
+    int32_t  y;
+    int32_t  width;
+    int32_t  height;
+    uint32_t style;
+    uint32_t reserved;
+    char     title[64];
+};
+
 struct WindowObjectEntry {
     bool      inUse;
+    bool      isDwm;
     uint64_t  hwnd;
     int32_t   x;
     int32_t   y;
@@ -182,10 +197,10 @@ __declspec(dllexport) uint16_t RegisterClassExW(const WndClassExW* lpWndClass) n
 }
 
 __declspec(dllexport) void* CreateWindowExW(
-    uint32_t /*dwExStyle*/,
+    uint32_t dwExStyle,
     const wchar_t* lpClassName,
-    const wchar_t* /*lpWindowName*/,
-    uint32_t /*dwStyle*/,
+    const wchar_t* lpWindowName,
+    uint32_t dwStyle,
     int X,
     int Y,
     int nWidth,
@@ -205,15 +220,42 @@ __declspec(dllexport) void* CreateWindowExW(
         }
     }
 
-    uint64_t newHwnd = ++s_windowHandleCounter;
+    int effW = (nWidth > 0) ? nWidth : 640;
+    int effH = (nHeight > 0) ? nHeight : 480;
+    bool useDwm = (dwExStyle & 0x02000000u) != 0; // WS_EX_COMPOSITED -> Ring-0 Multi-Window DWM Compositor
+    uint64_t newHwnd = 0;
+    if (useDwm) {
+        NtCreateWindowReq req{};
+        req.x = X;
+        req.y = Y;
+        req.width = effW;
+        req.height = effH;
+        req.style = dwStyle;
+        req.reserved = 0;
+        size_t ti = 0;
+        if (lpWindowName) {
+            while (lpWindowName[ti] && ti + 1 < sizeof(req.title)) {
+                req.title[ti] = (lpWindowName[ti] < 128) ? static_cast<char>(lpWindowName[ti]) : '?';
+                ++ti;
+            }
+        }
+        req.title[ti] = '\0';
+        newHwnd = NtUserCreateWindow(&req);
+    }
+    if (newHwnd == 0) {
+        useDwm = false;
+        newHwnd = ++s_windowHandleCounter;
+    }
+
     for (size_t i = 0; i < MAX_WINDOWS; ++i) {
         if (!s_windows[i].inUse) {
             s_windows[i].inUse = true;
+            s_windows[i].isDwm = useDwm;
             s_windows[i].hwnd = newHwnd;
             s_windows[i].x = X;
             s_windows[i].y = Y;
-            s_windows[i].width = (nWidth > 0) ? nWidth : 640;
-            s_windows[i].height = (nHeight > 0) ? nHeight : 480;
+            s_windows[i].width = effW;
+            s_windows[i].height = effH;
             s_windows[i].wndProc = proc;
             s_windows[i].surfaceDc = nullptr; // Lazy-allocated on BeginPaint/GetDC
             s_windows[i].visible = false;
@@ -229,11 +271,15 @@ __declspec(dllexport) void* CreateWindowExW(
 
 __declspec(dllexport) bool DestroyWindow(void* hWnd) noexcept {
     if (auto* w = lookupWindow(hWnd)) {
+        if (w->isDwm) {
+            NtUserDestroyWindow(hWnd);
+        }
         if (w->surfaceDc) {
             DeleteDC(w->surfaceDc);
             w->surfaceDc = nullptr;
         }
         w->inUse = false;
+        w->isDwm = false;
         return true;
     }
     return true;
@@ -300,6 +346,9 @@ __declspec(dllexport) bool EndPaint(void* hWnd, const PaintStruct* lpPaint) noex
     auto* w = lookupWindow(hWnd);
     if (!w || !w->surfaceDc) return false;
     (void)lpPaint;
+    if (w->isDwm) {
+        return GdiPresentWindowSurface(w->surfaceDc, hWnd, w->width, w->height);
+    }
     return BitBlt(nullptr, w->x, w->y, w->width, w->height, w->surfaceDc, 0, 0, 0x00CC0020u /*SRCCOPY*/);
 }
 
@@ -335,8 +384,29 @@ __declspec(dllexport) bool GetMessageW(
         return true;
     }
 
-    // Block in Ring 0 Win32k waiting for live PS/2 / COM1 / xHCI hardware event
     void* effectiveHwnd = target ? reinterpret_cast<void*>(target->hwnd) : hWnd;
+    if (target && target->isDwm) {
+        // Preemptive multi-process DWM loop: poll Ring-0 queue + yield CR3 so sibling GUI processes run concurrently!
+        while (!s_quitPosted) {
+            if (target->needsPaint) {
+                target->needsPaint = false;
+                lpMsg->hwnd = effectiveHwnd;
+                lpMsg->message = 0x000Fu;
+                lpMsg->wParam = 0;
+                lpMsg->lParam = 0;
+                return true;
+            }
+            if (NtUserPeekMessage(lpMsg, effectiveHwnd, 1u) != 0) {
+                if (lpMsg->message == 0x0012u) return false;
+                if (!lpMsg->hwnd) lpMsg->hwnd = effectiveHwnd;
+                return true;
+            }
+            NtYieldExecution();
+        }
+        return false;
+    }
+
+    // Legacy single-window blocking hardware wait (win32_gui_app.exe)
     uint64_t got = NtUserGetMessage(lpMsg, effectiveHwnd, wMsgFilterMin, wMsgFilterMax);
     if (got == 0 || lpMsg->message == 0x0012u) {
         return false;
@@ -347,16 +417,33 @@ __declspec(dllexport) bool GetMessageW(
 
 __declspec(dllexport) bool PeekMessageW(
     Msg* lpMsg,
-    void* /*hWnd*/,
+    void* hWnd,
     uint32_t /*wMsgFilterMin*/,
     uint32_t /*wMsgFilterMax*/,
-    uint32_t /*wRemoveMsg*/
+    uint32_t wRemoveMsg
 ) noexcept {
     if (!lpMsg) return false;
     if (s_quitPosted) {
+        lpMsg->hwnd = hWnd;
         lpMsg->message = 0x0012u;
         lpMsg->wParam = static_cast<uint64_t>(s_quitExitCode);
+        lpMsg->lParam = 0;
         return true;
+    }
+    WindowObjectEntry* target = hWnd ? lookupWindow(hWnd) : findFirstWindow();
+    if (target && target->needsPaint) {
+        if (wRemoveMsg & 1u) target->needsPaint = false;
+        lpMsg->hwnd = reinterpret_cast<void*>(target->hwnd);
+        lpMsg->message = 0x000Fu;
+        lpMsg->wParam = 0;
+        lpMsg->lParam = 0;
+        return true;
+    }
+    if (target && target->isDwm) {
+        if (NtUserPeekMessage(lpMsg, reinterpret_cast<void*>(target->hwnd), wRemoveMsg) != 0) {
+            if (!lpMsg->hwnd) lpMsg->hwnd = reinterpret_cast<void*>(target->hwnd);
+            return true;
+        }
     }
     return false;
 }

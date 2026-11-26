@@ -524,7 +524,7 @@ def main():
         "cmd.exe", "reg.exe", "ipconfig.exe", "ping.exe", "curl.exe",
         "win32_ntfs_probe.exe", "win32_proc_a.exe", "win32_proc_b.exe",
         "win32_nt_suite.exe", "win32_gui_app.exe", "win32_smp_threads.exe",
-        "smss.exe", "csrss.exe", "explorer.exe", "taskmgr.exe",
+        "smss.exe", "csrss.exe", "explorer.exe", "taskmgr.exe", "notepad.exe",
     ]:
         fpath = sys32_dir / fname
         if fpath.exists():

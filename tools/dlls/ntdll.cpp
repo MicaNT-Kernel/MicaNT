@@ -419,6 +419,22 @@ __declspec(dllexport) uint64_t NtUserGetMessage(
     return NtSyscall3(0x82, reinterpret_cast<uint64_t>(msgOut), reinterpret_cast<uint64_t>(hwnd), packedFilter);
 }
 
+__declspec(dllexport) uint64_t NtUserCreateWindow(const void* createReq) noexcept {
+    return NtSyscall3(0x83, reinterpret_cast<uint64_t>(createReq), 0, 0);
+}
+
+__declspec(dllexport) uint64_t NtUserDestroyWindow(void* hwnd) noexcept {
+    return NtSyscall3(0x84, reinterpret_cast<uint64_t>(hwnd), 0, 0);
+}
+
+__declspec(dllexport) uint64_t NtUserPeekMessage(
+    void* msgOut,
+    void* hwnd,
+    uint32_t removeFlags
+) noexcept {
+    return NtSyscall3(0x85, reinterpret_cast<uint64_t>(msgOut), reinterpret_cast<uint64_t>(hwnd), removeFlags);
+}
+
 struct NtCreateThreadParams {
     uint64_t startAddress;
     uint64_t parameter;

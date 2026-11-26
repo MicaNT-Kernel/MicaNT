@@ -110,6 +110,9 @@ __declspec(dllimport) uint64_t NtTerminateThread(void* threadHandle, uint64_t ex
 __declspec(dllimport) uint64_t NtQueryInformationThread(
     void* threadHandle, uint32_t threadInfoClass, void* threadInfoBuf, uint32_t threadInfoLen, uint32_t* returnLength
 ) noexcept;
+__declspec(dllimport) uint64_t NtQuerySystemInformation(
+    uint32_t infoClass, void* infoBuffer, uint32_t length, uint32_t* returnLength
+) noexcept;
 
 struct ProcessInformation {
     void*    hProcess;
@@ -235,6 +238,11 @@ __declspec(dllexport) int32_t GetExitCodeThread(void* hThread, uint32_t* lpExitC
 
 __declspec(dllexport) uint32_t GetCurrentProcessorNumber() noexcept {
     return NtGetCurrentProcessorNumber();
+}
+
+__declspec(dllexport) int32_t QuerySystemProcessesMica(void* outBuf, uint32_t bufLen) noexcept {
+    if (!outBuf || bufLen < 64) return 0;
+    return NtSucceeded(NtQuerySystemInformation(5u, outBuf, bufLen, nullptr)) ? 1 : 0;
 }
 
 __declspec(dllexport) int32_t CreateProcessW(
