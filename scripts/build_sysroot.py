@@ -118,8 +118,8 @@ def main():
         ("tools/dlls/ntdll.cpp", "ntdll.dll"),
         ("tools/dlls/kernel32.cpp", "kernel32.dll"),
         ("tools/dlls/kernelbase.cpp", "kernelbase.dll"),
-        ("tools/dlls/user32.cpp", "user32.dll"),
         ("tools/dlls/gdi32.cpp", "gdi32.dll"),
+        ("tools/dlls/user32.cpp", "user32.dll"),
         ("tools/dlls/advapi32.cpp", "advapi32.dll"),
         ("tools/dlls/comctl32.cpp", "comctl32.dll"),
         ("tools/dlls/comdlg32.cpp", "comdlg32.dll"),
@@ -148,10 +148,21 @@ def main():
                     cmd.append(str(ntdll_implib))
                 implib = repo_root / "build" / "libkernel32.a"
                 cmd.append(f"-Wl,--out-implib,{implib}")
-            elif name == "user32.dll":
+            elif name == "gdi32.dll":
                 ntdll_implib = repo_root / "build" / "libntdll.a"
                 if ntdll_implib.exists():
                     cmd.append(str(ntdll_implib))
+                gdi_implib = repo_root / "build" / "libgdi32.a"
+                cmd.append(f"-Wl,--out-implib,{gdi_implib}")
+            elif name == "user32.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                gdi_implib = repo_root / "build" / "libgdi32.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
+                if gdi_implib.exists():
+                    cmd.append(str(gdi_implib))
+                user_implib = repo_root / "build" / "libuser32.a"
+                cmd.append(f"-Wl,--out-implib,{user_implib}")
             cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
@@ -250,6 +261,23 @@ def main():
                 ]
                 run_command(cmd_app, exe_name)
                 print(f"      {GREEN}Compiled {exe_name} ({app_out.stat().st_size:,} bytes, dynamic KERNEL32.dll IAT){RESET}")
+
+    # Build authentic dynamic Win32 GUI PE32+ executable (imports KERNEL32.dll + USER32.dll + GDI32.dll -> NTDLL.dll)
+    user32_implib = repo_root / "build" / "libuser32.a"
+    gdi32_implib = repo_root / "build" / "libgdi32.a"
+    gui_src = repo_root / "tools" / "win32_gui_app.cpp"
+    if kernel32_implib.exists() and user32_implib.exists() and gdi32_implib.exists() and gui_src.exists():
+        gui_out = system32 / "win32_gui_app.exe"
+        cmd_gui = [
+            cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
+            "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
+            "-mno-stack-arg-probe", "-O2",
+            "-Wl,--subsystem,windows", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
+            "-nostdlib", str(gui_src), str(kernel32_implib), str(user32_implib), str(gdi32_implib),
+            "-o", str(gui_out)
+        ]
+        run_command(cmd_gui, "win32_gui_app.exe")
+        print(f"      {GREEN}Compiled win32_gui_app.exe ({gui_out.stat().st_size:,} bytes, dynamic KERNEL32+USER32+GDI32 IAT){RESET}")
 
     cmd_exe = system32 / "cmd.exe"
     if cmd_exe.exists():

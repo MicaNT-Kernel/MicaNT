@@ -541,6 +541,7 @@ static uint32_t s_shellGopY = 0;
 static uint32_t s_shellGopH = 0;
 static uint32_t s_shellGopAvailW = 0;
 static char s_ring3ActivePrompt[64] = "[R3 cmd] C:\\> ";
+static bool s_guiWindowDirtyOnGop = false;
 
 static void RepaintRing3ConsoleGop(const char* livePrompt, const char* liveInput) noexcept {
     if (!s_globalVideoDriver || s_shellGopH == 0 || s_shellGopAvailW == 0) return;
@@ -1269,11 +1270,10 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             } else {
                 UartSerial::print("OK\r\n");
             }
-            LogKernel("[Syscall] NtGdiGetVideoInfo (0x80) OK");
             return 0;
         }
-        case 0x81: { // NtGdiPresentSurface
-            UartSerial::print("  -> NtGdiPresentSurface: 32-bpp BGRA surface blitted to physical VRAM: ");
+        case 0x81: { // NtGdiPresentSurface (32-bpp BGRA Surface Burst Blit -> Physical UEFI GOP VRAM)
+            UartSerial::print("  -> NtGdiPresentSurface (0x81): 32-bpp BGRA surface blitted to physical GOP VRAM: ");
             const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
             if (vad != nullptr && arg1 != 0) {
                 auto* p = reinterpret_cast<micant::um::UserPresentSurfaceParams64*>(arg1);
@@ -1286,6 +1286,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 UartSerial::printDec(p->dstY);
                 UartSerial::print(")");
             }
+            s_guiWindowDirtyOnGop = true;
             s_ring3Telemetry.totalFramesPresented = pm.getTotalFramesPresented();
             s_ring3Telemetry.totalPixelsBlitted = pm.getTotalPixelsBlitted();
             UartSerial::print(" [Total Frames: ");
@@ -1293,8 +1294,85 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" | Total Pixels: ");
             UartSerial::printDec(static_cast<uint32_t>(pm.getTotalPixelsBlitted()));
             UartSerial::print("] -> STATUS_SUCCESS\r\n");
-            LogKernel("[Syscall] NtGdiPresentSurface (0x81) Surface Blitted");
             return 0;
+        }
+        case 0x82: { // NtUserGetMessage (Win32k Hardware PS/2 + COM1 + xHCI Event Delivery -> Ring 3 MSG)
+            #pragma pack(push, 1)
+            struct Win32UserPoint { int32_t x; int32_t y; };
+            struct Win32UserMsg {
+                void*          hwnd;
+                uint32_t       message;
+                uint64_t       wParam;
+                int64_t        lParam;
+                uint32_t       time;
+                Win32UserPoint pt;
+                uint32_t       lPrivate;
+            };
+            #pragma pack(pop)
+
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(Win32UserMsg) > vad->endVa) {
+                return 0;
+            }
+
+            bool ps2Ext = false;
+            while (true) {
+                char ch = 0;
+                uint8_t kbdStatus = inb(0x64);
+                if ((kbdStatus & 1) != 0) {
+                    uint8_t dataByte = inb(0x60);
+                    if ((kbdStatus & 0x20) == 0) {
+                        if (dataByte == 0xE0) {
+                            ps2Ext = true;
+                        } else if (ps2Ext) {
+                            ps2Ext = false;
+                        } else {
+                            ch = decodePs2Scancode(dataByte, s_ps2ShiftState);
+                        }
+                    }
+                }
+                if (ch == 0) {
+                    UartSerial::tryGetChar(ch);
+                }
+                if (ch == 0) {
+                    char xc = 0; bool isTab = false, isEsc = false, isEnter = false;
+                    if (micant::km::xhci_baremetal::XhciBareMetalEngine::get().tryGetKeystroke(xc, isTab, isEsc, isEnter)) {
+                        ch = isEsc ? 27 : (isEnter ? '\r' : xc);
+                    }
+                }
+                if (ch == 0) {
+                    __asm__ __volatile__("pause");
+                    continue;
+                }
+
+                Win32UserMsg outMsg{};
+                outMsg.hwnd = reinterpret_cast<void*>(arg2);
+                if (ch == 27) {
+                    outMsg.message = 0x0100u; // WM_KEYDOWN
+                    outMsg.wParam = 0x1Bu;    // VK_ESCAPE
+                } else {
+                    outMsg.message = 0x0102u; // WM_CHAR
+                    outMsg.wParam = static_cast<uint64_t>(static_cast<uint8_t>(ch));
+                }
+                outMsg.lParam = 1;
+                outMsg.time = 1000;
+                outMsg.pt.x = 960;
+                outMsg.pt.y = 540;
+                outMsg.lPrivate = 0;
+                std::memcpy(reinterpret_cast<void*>(arg1), &outMsg, sizeof(outMsg));
+
+                UartSerial::print("  -> NtUserGetMessage (0x82 Win32k): Dispatched ");
+                if (outMsg.message == 0x0100u) {
+                    UartSerial::print("WM_KEYDOWN(VK_ESCAPE)");
+                } else {
+                    UartSerial::print("WM_CHAR('");
+                    if (ch >= 32 && ch < 127) UartSerial::putChar(ch);
+                    else UartSerial::printDec(static_cast<uint32_t>(static_cast<uint8_t>(ch)));
+                    UartSerial::print("')");
+                }
+                UartSerial::print(" -> Ring 3 WndProc\r\n");
+                return 1;
+            }
         }
         default:
             return 0;
@@ -1326,6 +1404,53 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
                 UartSerial::print("]");
             }
             if (!allDone) {
+                if (s_guiWindowDirtyOnGop && s_globalVideoDriver && s_shellGopH > 0) {
+                    s_guiWindowDirtyOnGop = false;
+                    // Clear closed Ring-3 GUI window region & cleanly restore Executive Console chrome
+                    s_globalVideoDriver->fillRectangle(0, 86, s_globalVideoDriver->getWidth(), s_shellGopY - 86, micant::bootvid::Color{10, 14, 22});
+                    if (s_logRightX > 28 && s_logMidH > 0) {
+                        uint32_t lw = s_logRightX - 28;
+                        s_globalVideoDriver->fillRectangle(16, s_logMidY, lw, s_logMidH, micant::bootvid::Color{14, 18, 28});
+                        s_globalVideoDriver->drawRectangle(16, s_logMidY, lw, s_logMidH, micant::bootvid::Color{32, 46, 68});
+                        s_globalVideoDriver->fillRectangle(16, s_logMidY, lw, 24, micant::bootvid::Color{22, 30, 46});
+                        s_globalVideoDriver->drawString(24, s_logMidY + 5, "EXECUTIVE SUBSYSTEM HIERARCHY", micant::bootvid::Color{0, 210, 255}, micant::bootvid::Color{22, 30, 46}, 1);
+                        static const char* const kSubs[15] = {
+                            "[R0] NTOSKRNL: Standalone PE32+ Image",
+                            "[R0] SMP: 8/8 Cores Online (INIT-SIPI)",
+                            "[R0] HAL: KPCR GS:[0] LAPIC 100Hz Timer",
+                            "[R0] IDT: 256 Gates (FXSAVE64 Armed)",
+                            "[R0] HIGH-HALF: 0xFFFFF800... PML4[496]",
+                            "[R0] USB: Intel xHCI 3.0 (AMI HID Kbd)",
+                            "[R0] NTOSKRNL: Ob Root (\\Device,\\Driver)",
+                            "[R0] MM: PFN DB 32GB | NonPaged 64KB",
+                            "[R0] PS: PID 0 Idle | PID 4 System",
+                            "[R0] IO: AHCI SATA 2x 2TB Disks",
+                            "[R0] NTFS: \\DosDevices\\C: (NTFS 3.1 DMA)",
+                            "[R0] EXTFS: \\DosDevices\\E: (Ext4 RO)",
+                            "[R0] SE: SRM Token (S-1-5-18)",
+                            "[R0] PO: ACPI 2.0 S0 State Active",
+                            "[R1] VFS / WIN32K / GDI32 Subsystems"
+                        };
+                        for (size_t si = 0; si < 15; ++si) {
+                            uint32_t sy = s_logMidY + 30 + static_cast<uint32_t>(si * 18);
+                            if (sy + 16 > s_logMidY + s_logMidH) break;
+                            s_globalVideoDriver->drawString(24, sy, kSubs[si], micant::bootvid::Color{180, 205, 235}, micant::bootvid::Color{14, 18, 28}, 1);
+                        }
+                    }
+                    if (s_logRightW > 0 && s_logMidH > 0) {
+                        s_globalVideoDriver->fillRectangle(s_logRightX, s_logMidY, s_logRightW, s_logMidH, micant::bootvid::Color{12, 16, 24});
+                        s_globalVideoDriver->drawRectangle(s_logRightX, s_logMidY, s_logRightW, s_logMidH, micant::bootvid::Color{32, 46, 68});
+                        s_globalVideoDriver->fillRectangle(s_logRightX, s_logMidY, s_logRightW, 24, micant::bootvid::Color{20, 28, 42});
+                        s_globalVideoDriver->drawString(s_logRightX + 10, s_logMidY + 5, "KERNEL EXECUTIVE EVENT STREAM & LIVE COM1 SINK", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{20, 28, 42}, 1);
+                    }
+                    s_globalVideoDriver->fillRectangle(16, s_shellGopY, s_shellGopAvailW, 48, micant::bootvid::Color{14, 18, 28});
+                    s_globalVideoDriver->drawRectangle(16, s_shellGopY, s_shellGopAvailW, s_shellGopH, micant::bootvid::Color{0, 180, 220});
+                    s_globalVideoDriver->fillRectangle(16, s_shellGopY, s_shellGopAvailW, 22, micant::bootvid::Color{20, 28, 44});
+                    s_globalVideoDriver->drawString(24, s_shellGopY + 4, "MicaNT BARE-METAL EXECUTIVE SHELL (ntoskrnl.exe)", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{20, 28, 44}, 1);
+                    s_globalVideoDriver->drawString(24, s_shellGopY + 24, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | TAB: Toggle SurShell", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
+                    s_globalVideoDriver->drawString(24, s_shellGopY + 36, "COMMANDS: 'cmd', 'gui', 'dir', 'cd', 'run', 'pci', 'dmesg', 'del', 'echo', 'help'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
+                    RepaintRing3ConsoleGop(s_ring3ActivePrompt, "");
+                }
                 UartSerial::print(" -> Switched CR3 to PID=");
                 UartSerial::printDec(nextPid);
                 UartSerial::print(" (CR3=0x");
@@ -1658,7 +1783,7 @@ extern "C" __attribute__((naked)) void KiPageFaultStub() {
 #endif
 }
 
-extern "C" void KiClockPreemptHandler(micant::km::ps_baremetal::TrapFrame64* frame) {
+extern "C" void KiClockPreemptHandler(micant::km::ps_baremetal::TrapFrame64* frame, uint8_t* fxBuf) {
     auto& intEngine = micant::hal::idt::InterruptEngine64::get();
     bool quantumExpired = intEngine.updateSystemTime();
     intEngine.sendEoi();
@@ -1668,7 +1793,7 @@ extern "C" void KiClockPreemptHandler(micant::km::ps_baremetal::TrapFrame64* fra
         uint32_t oldPid = 0, newPid = 0;
         uint64_t oldCr3 = 0, newCr3 = 0;
         uint64_t savedRip = frame->rip;
-        if (mp.onClockInterrupt(frame, quantumExpired, oldPid, newPid, oldCr3, newCr3)) {
+        if (mp.onClockInterrupt(frame, quantumExpired, oldPid, newPid, oldCr3, newCr3, fxBuf)) {
             if (mp.getTotalPreemptiveSwitches() <= 10) {
                 UartSerial::print("[LAPIC Vector 0x30] PREEMPTIVE SWITCH #");
                 UartSerial::printDec(static_cast<uint32_t>(mp.getTotalPreemptiveSwitches()));
@@ -1708,10 +1833,17 @@ extern "C" __attribute__((naked)) void KiClockInterruptStub() {
         "pushq %r13\n\t"
         "pushq %r14\n\t"
         "pushq %r15\n\t"
-        "movq %rsp, %rcx\n\t"
+        "movq %rsp, %rbx\n\t"
+        "andq $-16, %rsp\n\t"
+        "subq $512, %rsp\n\t"
+        "fxsave64 (%rsp)\n\t"
+        "movq %rbx, %rcx\n\t"
+        "movq %rsp, %rdx\n\t"
         "subq $32, %rsp\n\t"
         "callq KiClockPreemptHandler\n\t"
         "addq $32, %rsp\n\t"
+        "fxrstor64 (%rsp)\n\t"
+        "movq %rbx, %rsp\n\t"
         "popq %r15\n\t"
         "popq %r14\n\t"
         "popq %r13\n\t"
@@ -3987,6 +4119,16 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("  Storage:      AHCI SATA 6Gbps DMA (128GB MICA_SYS / 1.7TB MICA_DATA)", micant::bootvid::Color{180, 200, 230});
             ShellAddLine("  Clean-Room:   100% ISO C++23 Clean-Room Implementation (Zero Leaked Code)", micant::bootvid::Color{255, 200, 80});
             LogKernel("Shell: ver -> MicaNT Version 10.0 Dave Cutler Bare-Metal Edition");
+        } else if (cmd[0] == 'g' && cmd[1] == 'u' && cmd[2] == 'i' && (cmd[3] == '\0' || cmd[3] == ' ')) {
+            ShellClearOutput();
+            if (s_ntfsMounted) {
+                LogKernel("Shell: Launching Sovereign Ring-3 Win32 GUI App (win32_gui_app.exe)...");
+                executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_gui_app.exe");
+                DrawExecutiveConsole();
+                ShellAddLine("Returned from Ring-3 Win32 GUI Application cleanly.", micant::bootvid::Color{100, 240, 160});
+            } else {
+                ShellAddLine("NTFS 3.1 volume not mounted.", micant::bootvid::Color{255, 100, 100});
+            }
         } else if (cmd[0] == 'c' && cmd[1] == 'm' && cmd[2] == 'd' && (cmd[3] == '\0' || cmd[3] == ' ' || cmd[3] == '.')) {
             ShellClearOutput();
             if (s_ntfsMounted) {
@@ -4489,7 +4631,8 @@ extern "C" micant::NtStatus KiSystemStartup(
                     strEqual(cleanTarget, "win32_proc_a.exe") ||
                     strEqual(cleanTarget, "win32_proc_b.exe") ||
                     strEqual(cleanTarget, "win32_nt_suite.exe") ||
-                    strEqual(cleanTarget, "cmd.exe")
+                    strEqual(cleanTarget, "cmd.exe") ||
+                    strEqual(cleanTarget, "win32_gui_app.exe")
                 );
                 bool ok = useCr3Mp
                     ? executeMultiProcessCr3FromNtfs(pathBuf)

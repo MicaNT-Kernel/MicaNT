@@ -407,6 +407,16 @@ __declspec(dllexport) uint64_t NtGdiPresentSurface(const void* params) noexcept 
     return NtSyscall3(0x81, reinterpret_cast<uint64_t>(params), 0, 0);
 }
 
+__declspec(dllexport) uint64_t NtUserGetMessage(
+    void* msgOut,
+    void* hwnd,
+    uint32_t filterMin,
+    uint32_t filterMax
+) noexcept {
+    uint64_t packedFilter = (static_cast<uint64_t>(filterMax) << 32) | filterMin;
+    return NtSyscall3(0x82, reinterpret_cast<uint64_t>(msgOut), reinterpret_cast<uint64_t>(hwnd), packedFilter);
+}
+
 // ============================================================================
 // 2. RTL Runtime Library Functions
 // ============================================================================

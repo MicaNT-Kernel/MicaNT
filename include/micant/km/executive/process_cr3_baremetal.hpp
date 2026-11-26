@@ -126,6 +126,8 @@ struct Cr3ProcessSlot {
     uint64_t     syscallCount{0};
 
     TrapFrame64  trapFrame{};
+    alignas(16) uint8_t fxState[512]{};
+    bool         fxValid{false};
     mm_baremetal::BareMetalVadTable vadTable{};
     pe_baremetal::BareMetalPeLoader peLoader{};
 };
@@ -434,7 +436,8 @@ public:
         uint32_t& outOldPid,
         uint32_t& outNewPid,
         uint64_t& outOldCr3,
-        uint64_t& outNewCr3
+        uint64_t& outNewCr3,
+        uint8_t* fxBuf = nullptr
     ) noexcept {
         outOldPid = outNewPid = 0;
         outOldCr3 = outNewCr3 = 0;
@@ -458,15 +461,24 @@ public:
         outOldCr3 = cur.cr3Phys;
         outNewCr3 = nxt.cr3Phys;
 
+        // Save preempted process full 160-byte hardware TrapFrame64 + 512-byte FXSAVE XMM state
         cur.trapFrame = *frame;
+        if (fxBuf) {
+            std::memcpy(cur.fxState, fxBuf, 512);
+            cur.fxValid = true;
+        }
         cur.state = Cr3ProcState::Ready;
 
+        // Restore next process TrapFrame64, FXSAVE XMM state, VAD table, CR3 page tables & TEB GS_BASE
         m_currentIdx = static_cast<size_t>(nextIdx);
         nxt.state = Cr3ProcState::Running;
         nxt.preemptedInCount++;
         m_totalPreemptiveSwitches++;
 
         *frame = nxt.trapFrame;
+        if (fxBuf && nxt.fxValid) {
+            std::memcpy(fxBuf, nxt.fxState, 512);
+        }
         mm_baremetal::BareMetalVadTable::setActiveTable(&nxt.vadTable);
         writeCr3(nxt.cr3Phys);
         writeGsBase(nxt.tebVa);
