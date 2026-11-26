@@ -240,11 +240,12 @@ def main():
     # Build authentic dynamically linked Win32 PE32+ executables (import KERNEL32.dll -> NTDLL.dll via real IAT)
     kernel32_implib = repo_root / "build" / "libkernel32.a"
     win32_apps = [
-        ("tools/cmd_app.cpp",          "cmd.exe"),
-        ("tools/win32_ntfs_probe.cpp", "win32_ntfs_probe.exe"),
-        ("tools/win32_proc_a.cpp",     "win32_proc_a.exe"),
-        ("tools/win32_proc_b.cpp",     "win32_proc_b.exe"),
-        ("tools/win32_nt_suite.cpp",   "win32_nt_suite.exe"),
+        ("tools/cmd_app.cpp",           "cmd.exe"),
+        ("tools/win32_ntfs_probe.cpp",  "win32_ntfs_probe.exe"),
+        ("tools/win32_proc_a.cpp",      "win32_proc_a.exe"),
+        ("tools/win32_proc_b.cpp",      "win32_proc_b.exe"),
+        ("tools/win32_nt_suite.cpp",    "win32_nt_suite.exe"),
+        ("tools/win32_smp_threads.cpp", "win32_smp_threads.exe"),
     ]
     if kernel32_implib.exists():
         for rel_src, exe_name in win32_apps:

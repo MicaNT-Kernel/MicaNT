@@ -875,7 +875,79 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(stillActive ? " (STILL_ACTIVE)\r\n" : " (TERMINATED)\r\n");
             return 0;
         }
-        case 0x0F: { // NtClose (Close Kernel File Handle)
+        case 0x59: { // NtCreateThreadEx (True Multi-Core Ring-3 Win32 Thread Dispatch onto Physical APs!)
+            struct NtCreateThreadParamsKernel {
+                uint64_t startAddress;
+                uint64_t parameter;
+                uint64_t exitThunkAddress;
+                uint32_t preferredCore;
+                uint32_t outThreadId;
+                uint64_t outThreadHandle;
+            };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtCreateThreadParamsKernel) > vad->endVa) {
+                return 0xC0000005ULL; // STATUS_ACCESS_VIOLATION
+            }
+            auto& mp = micant::km::ps_baremetal::BareMetalCr3ProcessManager::get();
+            auto* cur = mp.isActive() ? mp.getCurrentProcess() : nullptr;
+            if (!cur) return 0xC0000001ULL;
+
+            auto* pReq = reinterpret_cast<NtCreateThreadParamsKernel*>(arg1);
+            uint64_t outH = 0;
+            uint32_t outTid = 0;
+            uint32_t outApic = 0;
+            auto& hwSmp = micant::km::smp_baremetal::BareMetalSmpEngine::get();
+            bool ok = hwSmp.dispatchRing3ThreadToAp(
+                cur->pid,
+                cur->cr3Phys,
+                cur->pebVa,
+                pReq->startAddress,
+                pReq->parameter,
+                pReq->exitThunkAddress,
+                pReq->preferredCore,
+                outH,
+                outTid,
+                outApic
+            );
+            if (!ok) {
+                UartSerial::print("  -> NtCreateThreadEx (0x59): No idle AP core available -> STATUS_UNSUCCESSFUL\r\n");
+                return 0xC0000001ULL;
+            }
+            pReq->outThreadHandle = outH;
+            pReq->outThreadId = outTid;
+            UartSerial::print("  -> NtCreateThreadEx (0x59): Dispatched Ring-3 TID=");
+            UartSerial::printDec(outTid);
+            UartSerial::print(" (PID=");
+            UartSerial::printDec(cur->pid);
+            UartSerial::print(" CR3=0x");
+            UartSerial::printHex64(cur->cr3Phys);
+            UartSerial::print(") -> Physical AP Core APIC=");
+            UartSerial::printDec(outApic);
+            UartSerial::print(" (IPI 0x3E -> CPL=3) Handle=0x");
+            UartSerial::printHex64(outH);
+            UartSerial::print("\r\n");
+            return 0; // STATUS_SUCCESS
+        }
+        case 0x5A: { // NtGetCurrentProcessorNumber (Hardware LAPIC ID of executing core)
+            return micant::km::smp_baremetal::BareMetalSmpEngine::get().readSelfApicId();
+        }
+        case 0x5C: { // NtQueryInformationThread (GetExitCodeThread)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg3);
+            if (!vad || arg3 == 0 || arg3 + sizeof(uint32_t) > vad->endVa) {
+                return 0xC0000005ULL;
+            }
+            uint32_t code = 0;
+            if (!micant::km::smp_baremetal::BareMetalSmpEngine::get().queryThreadExitCode(arg1, code)) {
+                return 0xC0000008ULL; // STATUS_INVALID_HANDLE
+            }
+            *reinterpret_cast<uint32_t*>(arg3) = code;
+            return 0;
+        }
+        case 0x0F: { // NtClose (Close Kernel File Handle or SMP Hardware Thread Handle)
+            if ((arg1 & micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) != 0) {
+                micant::km::smp_baremetal::BareMetalSmpEngine::get().closeThreadHandle(arg1);
+                return 0;
+            }
             auto* he = lookupKernelFileHandle(arg1);
             if (he) {
                 he->inUse = false;
@@ -1395,6 +1467,9 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         if (auto* cur = mp.getCurrentProcess()) cur->syscallCount++;
 
         if (ssn == 0x01) { // NtTerminateProcess in Multi-Process CR3 Mode
+            if (auto* curP = mp.getCurrentProcess()) {
+                micant::km::smp_baremetal::BareMetalSmpEngine::get().waitAllThreadsForProcess(curP->pid);
+            }
             uint32_t exitedPid = 0, nextPid = 0, wokenPid = 0;
             uint64_t nextCr3 = 0;
             bool allDone = mp.onTerminateSyscall(frame, static_cast<uint32_t>(arg2), exitedPid, nextPid, nextCr3, wokenPid);
@@ -1467,7 +1542,12 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
             return 1; // Return to Ring 0 caller!
         }
 
-        if (ssn == 0x04) { // NtWaitForSingleObject (Blocking Parent->Child Sync with CR3 Switch)
+        if (ssn == 0x04) { // NtWaitForSingleObject (SMP AP Thread Join OR Blocking Parent->Child Sync)
+            if ((arg1 & micant::km::smp_baremetal::SMP_THREAD_HANDLE_TAG) != 0) {
+                bool joined = micant::km::smp_baremetal::BareMetalSmpEngine::get().waitForThreadHandle(arg1);
+                frame->rax = joined ? 0ULL : 0xFFFFFFFFULL;
+                return 0;
+            }
             uint32_t callerPid = 0, switchedPid = 0;
             uint64_t nextCr3 = 0;
             if (mp.onWaitForProcessSyscall(frame, static_cast<uint32_t>(arg1), callerPid, switchedPid, nextCr3)) {
@@ -1901,6 +1981,136 @@ extern "C" __attribute__((naked)) void KiApIpiStub() {
         "popq %rbx\n\t"
         "popq %rax\n\t"
         "iretq\n\t"
+    );
+#endif
+}
+
+static micant::km::smp_baremetal::TicketSpinLock s_apUartLock{};
+
+extern "C" __attribute__((used)) uint64_t KiApSyscallDispatch(
+    micant::km::smp_baremetal::KpcrBareMetal64* kpcr,
+    micant::km::ps_baremetal::TrapFrame64* frame
+) {
+    if (!kpcr || !frame) return 1;
+    uint64_t ssn  = frame->rax;
+    uint64_t arg1 = frame->rdx;
+    uint64_t arg2 = frame->r8;
+    __atomic_fetch_add(&kpcr->r3SyscallsHandled, 1u, __ATOMIC_RELAXED);
+
+    auto& hwSmp = micant::km::smp_baremetal::BareMetalSmpEngine::get();
+    uint64_t slotIdx = __atomic_load_n(&kpcr->activeThreadSlot, __ATOMIC_RELAXED);
+    if (auto* th = hwSmp.getThreadSlot(static_cast<size_t>(slotIdx))) {
+        __atomic_fetch_add(&th->syscallsExecuted, 1u, __ATOMIC_RELAXED);
+    }
+
+    if (ssn == 0x5A) { // NtGetCurrentProcessorNumber (lockless per-CPU hardware APIC ID!)
+        frame->rax = kpcr->hardwareApicId;
+        return 0;
+    }
+    if (ssn == 0x5B) { // NtTerminateThread (exit AP Ring-3 worker cleanly back to AP Ring-0 HLT loop!)
+        hwSmp.completeApRing3Thread(kpcr, static_cast<uint32_t>(arg2));
+        return 1;
+    }
+    if (ssn == 0x25) { // NtWriteFile (serialized UART stdout from Ring-3 AP thread)
+        if (arg1 != 0 && arg2 > 0) {
+            size_t len = (arg2 < 256) ? static_cast<size_t>(arg2) : 256;
+            const char* s = reinterpret_cast<const char*>(arg1);
+            s_apUartLock.lock();
+            UartSerial::print("[AP Core ");
+            UartSerial::printDec(kpcr->hardwareApicId);
+            UartSerial::print(" R3] ");
+            for (size_t i = 0; i < len; ++i) {
+                char c = s[i];
+                if (c >= 0x20 && c <= 0x7E) UartSerial::putChar(c);
+            }
+            UartSerial::print("\r\n");
+            s_apUartLock.unlock();
+        }
+        frame->rax = arg2;
+        return 0;
+    }
+    if (ssn == 0x46) { // NtYieldExecution
+#if defined(__x86_64__)
+        __asm__ __volatile__("pause");
+#endif
+        frame->rax = 0;
+        return 0;
+    }
+    frame->rax = 0;
+    return 0;
+}
+
+extern "C" __attribute__((naked)) void KiApSystemCall64Entry() {
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "swapgs\n\t"
+        "movq %rsp, %gs:0x38\n\t"
+        "movq %gs:0x08, %rsp\n\t"
+        "pushq $0x002B\n\t"
+        "pushq %gs:0x38\n\t"
+        "pushq %r11\n\t"
+        "pushq $0x0033\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rax\n\t"
+        "pushq %rbx\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rdx\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdi\n\t"
+        "pushq %rbp\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "pushq %r12\n\t"
+        "pushq %r13\n\t"
+        "pushq %r14\n\t"
+        "pushq %r15\n\t"
+        "movq %rsp, %rbx\n\t"
+        "andq $-16, %rsp\n\t"
+        "subq $512, %rsp\n\t"
+        "fxsave64 (%rsp)\n\t"
+        "movq %gs:0x00, %rcx\n\t"
+        "movq %rbx, %rdx\n\t"
+        "subq $32, %rsp\n\t"
+        "callq KiApSyscallDispatch\n\t"
+        "addq $32, %rsp\n\t"
+        "testq %rax, %rax\n\t"
+        "jnz 2f\n\t"
+        "fxrstor64 (%rsp)\n\t"
+        "movq %rbx, %rsp\n\t"
+        "popq %r15\n\t"
+        "popq %r14\n\t"
+        "popq %r13\n\t"
+        "popq %r12\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rbp\n\t"
+        "popq %rdi\n\t"
+        "popq %rsi\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
+        "popq %rbx\n\t"
+        "popq %rax\n\t"
+        "swapgs\n\t"
+        "iretq\n\t"
+        "2:\n\t"
+        "movw $0x0018, %ax\n\t"
+        "movw %ax, %ds\n\t"
+        "movw %ax, %es\n\t"
+        "movq %gs:0x50, %rbx\n\t"
+        "movq %gs:0x58, %rbp\n\t"
+        "movq %gs:0x60, %rdi\n\t"
+        "movq %gs:0x68, %rsi\n\t"
+        "movq %gs:0x70, %r12\n\t"
+        "movq %gs:0x78, %r13\n\t"
+        "movq %gs:0x80, %r14\n\t"
+        "movq %gs:0x88, %r15\n\t"
+        "movq %gs:0x48, %rsp\n\t"
+        "movq %gs:0x40, %rax\n\t"
+        "jmpq *%rax\n\t"
     );
 #endif
 }
@@ -3768,6 +3978,7 @@ extern "C" micant::NtStatus KiSystemStartup(
 
     // Real Bare-Metal Multi-Core x86_64 SMP Bring-Up (ACPI MADT -> 0x8000 Trampoline -> INIT-SIPI-SIPI)
     auto& hwSmp = micant::km::smp_baremetal::BareMetalSmpEngine::get();
+    hwSmp.setApSyscallEntry(reinterpret_cast<uint64_t>(&KiApSystemCall64Entry));
     uint32_t hwOnlineCores = hwSmp.bringUpAllHardwareCores(
         lpb->acpiTablePhysicalAddress,
         micant::hal::idt::LAPIC_DEFAULT_PHYSICAL_BASE
@@ -3907,6 +4118,10 @@ extern "C" micant::NtStatus KiSystemStartup(
         // Live Runtime Win32 Suite: FindFirstFileW + LoadLibraryW/GetProcAddress + WaitForSingleObject/GetExitCodeProcess
         if (executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_nt_suite.exe")) {
             DrawCard(3, "EXECUTIVE STATE", "Win32 Ldr+Wait+CR3 OK", micant::bootvid::Color{100, 240, 160});
+        }
+        // Live True Multi-Core SMP Ring-3 Threading: CreateThread x3 -> Parallel Ring-3 on Physical APs 1..3!
+        if (executeMultiProcessCr3FromNtfs("\\Windows\\System32\\win32_smp_threads.exe")) {
+            DrawCard(3, "EXECUTIVE STATE", "4-Core SMP Ring-3 OK", micant::bootvid::Color{100, 240, 160});
         }
     }
 
@@ -4113,7 +4328,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         DrawCard(1, "PHYSICAL MEMORY", "32,768 MB ECC RAM", micant::bootvid::Color{100, 240, 160});
         DrawCard(2, "STORAGE & C: DRIVE", s_ntfsMounted ? s_storageCardText : "sdb2 FAT32 | 128GB C:",
                  s_ntfsMounted ? micant::bootvid::Color{100, 240, 160} : micant::bootvid::Color{0, 210, 255});
-        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "Win32 Ldr+Wait+CR3 OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
+        DrawCard(3, "EXECUTIVE STATE", s_ntfsMounted ? "4-Core SMP Ring-3 OK" : "SMP 8T | High-Half | APIC", micant::bootvid::Color{100, 240, 160});
 
         // Left Window: Subsystems
         videoDriver.fillRectangle(16, midY, leftW, midH, micant::bootvid::Color{14, 18, 28});
@@ -4884,11 +5099,14 @@ extern "C" micant::NtStatus KiSystemStartup(
                 concatStr(row, "  LockIters=", sizeof(row));
                 appendU64Dec(row, sizeof(row), kp->benchItersDone);
                 if (kp->isBsp) {
-                    concatStr(row, "  [Exec+100Hz]", sizeof(row));
+                    concatStr(row, "  [BSP Exec+100Hz]", sizeof(row));
                 } else {
                     concatStr(row, "  IPIs=", sizeof(row));
                     appendU64Dec(row, sizeof(row), kp->ipiReceived);
-                    concatStr(row, " (HLT->0x3E)", sizeof(row));
+                    concatStr(row, " R3Thr=", sizeof(row));
+                    appendU64Dec(row, sizeof(row), kp->r3ThreadsExecuted);
+                    concatStr(row, " R3Sys=", sizeof(row));
+                    appendU64Dec(row, sizeof(row), kp->r3SyscallsHandled);
                 }
                 ShellAddLine(row, kp->isBsp ? micant::bootvid::Color{0, 229, 255} : micant::bootvid::Color{200, 220, 245});
             }

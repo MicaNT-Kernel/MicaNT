@@ -417,6 +417,71 @@ __declspec(dllexport) uint64_t NtUserGetMessage(
     return NtSyscall3(0x82, reinterpret_cast<uint64_t>(msgOut), reinterpret_cast<uint64_t>(hwnd), packedFilter);
 }
 
+struct NtCreateThreadParams {
+    uint64_t startAddress;
+    uint64_t parameter;
+    uint64_t exitThunkAddress;
+    uint32_t preferredCore;
+    uint32_t outThreadId;
+    uint64_t outThreadHandle;
+};
+
+__declspec(dllexport) uint64_t NtCreateThreadEx(
+    void** threadHandle,
+    uint64_t startAddress,
+    uint64_t parameter,
+    uint64_t exitThunkAddress,
+    uint32_t preferredCore,
+    uint32_t* outThreadId
+) noexcept {
+    if (!threadHandle || startAddress == 0) return NT_STATUS_INVALID_PARAMETER;
+    NtCreateThreadParams params{};
+    params.startAddress = startAddress;
+    params.parameter = parameter;
+    params.exitThunkAddress = exitThunkAddress;
+    params.preferredCore = preferredCore;
+    params.outThreadId = 0;
+    params.outThreadHandle = 0;
+    uint64_t st = NtSyscall3(0x59, reinterpret_cast<uint64_t>(&params), 0, 0);
+    if (st != NT_STATUS_SUCCESS || params.outThreadHandle == 0) {
+        *threadHandle = nullptr;
+        if (outThreadId) *outThreadId = 0;
+        return (st != NT_STATUS_SUCCESS) ? st : NT_STATUS_UNSUCCESSFUL;
+    }
+    *threadHandle = reinterpret_cast<void*>(params.outThreadHandle);
+    if (outThreadId) *outThreadId = params.outThreadId;
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint32_t NtGetCurrentProcessorNumber() noexcept {
+    return static_cast<uint32_t>(NtSyscall3(0x5A, 0, 0, 0));
+}
+
+__declspec(dllexport) uint64_t NtTerminateThread(
+    void* threadHandle,
+    uint64_t exitStatus
+) noexcept {
+    return NtSyscall3(0x5B, reinterpret_cast<uint64_t>(threadHandle), exitStatus, 0);
+}
+
+__declspec(dllexport) uint64_t NtQueryInformationThread(
+    void* threadHandle,
+    uint32_t threadInfoClass,
+    void* threadInfoBuf,
+    uint32_t threadInfoLen,
+    uint32_t* /*returnLength*/
+) noexcept {
+    if (!threadInfoBuf || threadInfoLen < sizeof(uint32_t)) {
+        return NT_STATUS_INVALID_PARAMETER;
+    }
+    return NtSyscall3(
+        0x5C,
+        reinterpret_cast<uint64_t>(threadHandle),
+        threadInfoClass,
+        reinterpret_cast<uint64_t>(threadInfoBuf)
+    );
+}
+
 // ============================================================================
 // 2. RTL Runtime Library Functions
 // ============================================================================

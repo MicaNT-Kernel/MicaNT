@@ -101,6 +101,15 @@ __declspec(dllimport) uint64_t LdrGetDllHandle(
 __declspec(dllimport) uint64_t LdrGetProcedureAddress(
     void* moduleBase, const char* procedureName, uint32_t ordinal, void** outProcedureAddress
 ) noexcept;
+__declspec(dllimport) uint64_t NtCreateThreadEx(
+    void** threadHandle, uint64_t startAddress, uint64_t parameter, uint64_t exitThunkAddress,
+    uint32_t preferredCore, uint32_t* outThreadId
+) noexcept;
+__declspec(dllimport) uint32_t NtGetCurrentProcessorNumber() noexcept;
+__declspec(dllimport) uint64_t NtTerminateThread(void* threadHandle, uint64_t exitStatus) noexcept;
+__declspec(dllimport) uint64_t NtQueryInformationThread(
+    void* threadHandle, uint32_t threadInfoClass, void* threadInfoBuf, uint32_t threadInfoLen, uint32_t* returnLength
+) noexcept;
 
 struct ProcessInformation {
     void*    hProcess;
@@ -175,6 +184,57 @@ __declspec(dllexport) int32_t GetExitCodeProcess(void* hProcess, uint32_t* lpExi
     if (!NtSucceeded(st)) return 0;
     *lpExitCode = code;
     return 1;
+}
+
+__declspec(dllexport) void ExitThread(uint32_t dwExitCode) noexcept {
+    NtTerminateThread(GetCurrentThread(), dwExitCode);
+    while (true) {}
+}
+
+// Authentic Windows NT BaseThreadInitThunk equivalent (runs in Ring 3 on the target hardware core!)
+static void BaseThreadStartThunk(void* lpParameter, uint32_t (*lpStartAddress)(void*)) noexcept {
+    uint32_t exitCode = lpStartAddress ? lpStartAddress(lpParameter) : 0u;
+    ExitThread(exitCode);
+}
+
+__declspec(dllexport) void* CreateThread(
+    void* /*lpThreadAttributes*/,
+    size_t /*dwStackSize*/,
+    uint32_t (*lpStartAddress)(void*),
+    void* lpParameter,
+    uint32_t /*dwCreationFlags*/,
+    uint32_t* lpThreadId
+) noexcept {
+    if (!lpStartAddress) return nullptr;
+    void* hThread = nullptr;
+    uint32_t tid = 0;
+    uint64_t st = NtCreateThreadEx(
+        &hThread,
+        reinterpret_cast<uint64_t>(lpStartAddress),
+        reinterpret_cast<uint64_t>(lpParameter),
+        reinterpret_cast<uint64_t>(&BaseThreadStartThunk),
+        0,
+        &tid
+    );
+    if (!NtSucceeded(st) || hThread == nullptr) {
+        if (lpThreadId) *lpThreadId = 0;
+        return nullptr;
+    }
+    if (lpThreadId) *lpThreadId = tid;
+    return hThread;
+}
+
+__declspec(dllexport) int32_t GetExitCodeThread(void* hThread, uint32_t* lpExitCode) noexcept {
+    if (!lpExitCode || !hThread) return 0;
+    uint32_t code = 0;
+    uint64_t st = NtQueryInformationThread(hThread, 0, &code, sizeof(code), nullptr);
+    if (!NtSucceeded(st)) return 0;
+    *lpExitCode = code;
+    return 1;
+}
+
+__declspec(dllexport) uint32_t GetCurrentProcessorNumber() noexcept {
+    return NtGetCurrentProcessorNumber();
 }
 
 __declspec(dllexport) int32_t CreateProcessW(
