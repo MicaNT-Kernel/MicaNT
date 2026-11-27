@@ -33,7 +33,7 @@ inline constexpr size_t   E1000_NUM_RX_DESC     = 32;
 inline constexpr size_t   E1000_NUM_TX_DESC     = 32;
 inline constexpr size_t   E1000_BUF_SIZE        = 2048;
 inline constexpr size_t   MAX_ARP_ENTRIES       = 16;
-inline constexpr size_t   MAX_TCP_SOCKETS       = 8;
+inline constexpr size_t   MAX_TCP_SOCKETS       = 16;
 inline constexpr size_t   MAX_UDP_SOCKETS       = 8;
 inline constexpr size_t   TCP_RX_BUF_CAP        = 8192;
 inline constexpr size_t   UDP_RX_PKT_CAP        = 1500;
@@ -267,7 +267,9 @@ enum class ClientTcpState : uint8_t {
     SynSent     = 2,
     Established = 3,
     CloseWait   = 4,
-    Closed      = 5
+    Closed      = 5,
+    Listen      = 6,
+    SynReceived = 7
 };
 
 struct ClientTcpSocket {
@@ -282,6 +284,8 @@ struct ClientTcpSocket {
     uint32_t       rxTail;
     bool           peerFin;
     bool           peerRst;
+    bool           acceptedByApp;
+    uint8_t        parentListenerIdx;
 };
 
 class BareMetalE1000Engine {
@@ -585,7 +589,8 @@ private:
 
     bool sendTcpSegment(ClientTcpSocket& s, uint8_t flags, const void* payload, uint16_t payloadLen) noexcept {
         uint8_t frame[1514];
-        uint16_t tcpHdrLen = (flags == 0x02) ? 24 : 20; // MSS option on SYN
+        bool isSyn = ((flags & 0x02u) != 0);
+        uint16_t tcpHdrLen = isSyn ? 24 : 20; // MSS option on SYN and SYN|ACK
         size_t totalLen = sizeof(EthHdr) + sizeof(Ipv4Hdr) + tcpHdrLen + payloadLen;
         if (totalLen > sizeof(frame)) return false;
 
@@ -620,7 +625,7 @@ private:
         tcp->checksum = 0;
         tcp->urgentPtr = 0;
 
-        if (flags == 0x02) {
+        if (isSyn) {
             optOrData[0] = 2; optOrData[1] = 4; optOrData[2] = 0x05; optOrData[3] = 0xB4; // MSS 1460
         } else if (payload && payloadLen > 0) {
             std::memcpy(optOrData, payload, payloadLen);
@@ -895,10 +900,11 @@ private:
             const uint8_t* payload = l4 + tcpHdrLen;
             size_t payloadLen = l4Len - tcpHdrLen;
 
+            // Pass 1: Match active client or accepted/half-open server sockets (4-tuple match)
             for (size_t i = 1; i < MAX_TCP_SOCKETS; ++i) {
                 auto& s = m_sockets[i];
-                if (s.state == ClientTcpState::Free || s.localPort != dstPort ||
-                    s.remotePort != srcPort || s.remoteIp != ip->srcIp) {
+                if (s.state == ClientTcpState::Free || s.state == ClientTcpState::Listen ||
+                    s.localPort != dstPort || s.remotePort != srcPort || s.remoteIp != ip->srcIp) {
                     continue;
                 }
 
@@ -913,8 +919,24 @@ private:
                     s.remoteSeq = segSeq + 1u;
                     s.state = ClientTcpState::Established;
                     m_tcpHandshakes++;
-                    sendTcpSegment(s, 0x10u, nullptr, 0); // Complete 3-way handshake with ACK!
+                    sendTcpSegment(s, 0x10u, nullptr, 0); // Complete active 3-way handshake with ACK!
                     return;
+                }
+
+                if (s.state == ClientTcpState::SynReceived) {
+                    if ((tcp->flags & 0x02u) != 0 && (tcp->flags & 0x10u) == 0) {
+                        // Duplicate SYN retransmission -> resend SYN|ACK
+                        sendTcpSegment(s, 0x12u, nullptr, 0);
+                        return;
+                    }
+                    if ((tcp->flags & 0x10u) != 0 && segAck == s.localSeq + 1u) {
+                        // Passive server 3-way handshake COMPLETE! Fall through to capture any piggybacked payload!
+                        s.localSeq += 1u;
+                        s.state = ClientTcpState::Established;
+                        m_tcpHandshakes++;
+                    } else {
+                        return;
+                    }
                 }
 
                 if (s.state == ClientTcpState::Established || s.state == ClientTcpState::CloseWait) {
@@ -943,6 +965,35 @@ private:
                         sendTcpSegment(s, 0x10u, nullptr, 0); // ACK received data/FIN
                     }
                     return;
+                }
+            }
+
+            // Pass 2: Incoming pure TCP SYN -> check passive Listen sockets & respond with SYN|ACK!
+            if ((tcp->flags & 0x02u) != 0 && (tcp->flags & 0x10u) == 0) {
+                for (size_t lidx = 1; lidx < MAX_TCP_SOCKETS; ++lidx) {
+                    if (m_sockets[lidx].state != ClientTcpState::Listen || m_sockets[lidx].localPort != dstPort) {
+                        continue;
+                    }
+                    // Allocate child socket slot for this inbound connection
+                    for (size_t cidx = 1; cidx < MAX_TCP_SOCKETS; ++cidx) {
+                        if (m_sockets[cidx].state == ClientTcpState::Free ||
+                            (m_sockets[cidx].state == ClientTcpState::Closed && m_sockets[cidx].acceptedByApp)) {
+                            auto& child = m_sockets[cidx];
+                            std::memset(&child, 0, sizeof(child));
+                            child.state = ClientTcpState::SynReceived;
+                            child.localPort = dstPort;
+                            child.remotePort = srcPort;
+                            child.remoteIp = ip->srcIp;
+                            std::memcpy(child.nextHopMac, eth->src, 6);
+                            cacheArp(ip->srcIp, eth->src);
+                            child.localSeq = 0x50607000u + static_cast<uint32_t>(rdtsc64() & 0xFFFFu);
+                            child.remoteSeq = segSeq + 1u;
+                            child.acceptedByApp = false;
+                            child.parentListenerIdx = static_cast<uint8_t>(lidx);
+                            sendTcpSegment(child, 0x12u /* SYN | ACK */, nullptr, 0);
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -1455,7 +1506,7 @@ public:
         size_t idx = static_cast<size_t>(hSock & ~NET_SOCKET_HANDLE_TAG);
         if (idx == 0 || idx >= MAX_TCP_SOCKETS) return -1;
         auto& s = m_sockets[idx];
-        if (s.state != ClientTcpState::Established) return -1;
+        if (s.state != ClientTcpState::Established && s.state != ClientTcpState::CloseWait) return -1;
 
         const auto* p = static_cast<const uint8_t*>(data);
         uint32_t sent = 0;
@@ -1501,6 +1552,56 @@ public:
             s.rxHead = (s.rxHead + 1u) % TCP_RX_BUF_CAP;
         }
         return static_cast<int32_t>(copied);
+    }
+
+    bool tcpBind(uint64_t hSock, uint16_t localPortHost) noexcept {
+        if ((hSock & NET_SOCKET_HANDLE_TAG) == 0 || localPortHost == 0) return false;
+        size_t idx = static_cast<size_t>(hSock & ~NET_SOCKET_HANDLE_TAG);
+        if (idx == 0 || idx >= MAX_TCP_SOCKETS) return false;
+        auto& s = m_sockets[idx];
+        if (s.state != ClientTcpState::Created) return false;
+        s.localPort = localPortHost;
+        return true;
+    }
+
+    bool tcpListen(uint64_t hSock, uint32_t /*backlog*/) noexcept {
+        if ((hSock & NET_SOCKET_HANDLE_TAG) == 0) return false;
+        size_t idx = static_cast<size_t>(hSock & ~NET_SOCKET_HANDLE_TAG);
+        if (idx == 0 || idx >= MAX_TCP_SOCKETS) return false;
+        auto& s = m_sockets[idx];
+        if (s.state != ClientTcpState::Created || s.localPort == 0) return false;
+        s.state = ClientTcpState::Listen;
+        return true;
+    }
+
+    // Non-blocking poll-accept (returns 0 if no completed inbound 3-way handshake ready yet -> ws2_32 yields!)
+    uint64_t tcpAcceptNonBlocking(uint64_t hListenSock, uint32_t& outPeerIp, uint16_t& outPeerPortHost) noexcept {
+        outPeerIp = 0;
+        outPeerPortHost = 0;
+        if ((hListenSock & NET_SOCKET_HANDLE_TAG) == 0) return 0;
+        size_t lidx = static_cast<size_t>(hListenSock & ~NET_SOCKET_HANDLE_TAG);
+        if (lidx == 0 || lidx >= MAX_TCP_SOCKETS || m_sockets[lidx].state != ClientTcpState::Listen) return 0;
+
+        // Pump hardware RX ring briefly so inbound SYN -> SYN|ACK -> ACK advances smoothly
+        for (int p = 0; p < 8; ++p) {
+            pollRx();
+            for (size_t i = 1; i < MAX_TCP_SOCKETS; ++i) {
+                auto& c = m_sockets[i];
+                if (c.parentListenerIdx == static_cast<uint8_t>(lidx) && !c.acceptedByApp &&
+                    (c.state == ClientTcpState::Established || c.state == ClientTcpState::CloseWait)) {
+                    c.acceptedByApp = true;
+                    outPeerIp = c.remoteIp;
+                    outPeerPortHost = c.remotePort;
+                    return NET_SOCKET_HANDLE_TAG | static_cast<uint64_t>(i);
+                }
+            }
+            for (int k = 0; k < 200; ++k) {
+#if defined(__x86_64__)
+                __asm__ __volatile__("pause");
+#endif
+            }
+        }
+        return 0;
     }
 
     bool tcpClose(uint64_t hSock) noexcept {

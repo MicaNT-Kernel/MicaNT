@@ -329,6 +329,7 @@ def main():
             ("tools/ping_app.cpp",     "ping.exe"),
             ("tools/curl_app.cpp",     "curl.exe"),
             ("tools/nslookup_app.cpp", "nslookup.exe"),
+            ("tools/httpd_app.cpp",    "httpd.exe"),
         ]:
             nsrc = repo_root / rel_src
             if nsrc.exists():

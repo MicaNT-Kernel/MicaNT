@@ -42,7 +42,8 @@
 #include "micant/km/executive/pe_loader_baremetal.hpp"
 #include "micant/km/executive/process_cr3_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
-#include "micant/km/drivers/net/e1000_baremetal.hpp"
+#include "micant/km/drivers/net/e1000_baremetal.hpp"
+
 #include "micant/km/drivers/audio/ac97_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
@@ -1767,6 +1768,20 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             if (ok) LogKernel("[NET] DHCP 4-Way Lease Renewed (DISCOVER/OFFER/REQUEST/ACK)!");
             return ok ? 0ULL : 0xC0000001ULL;
         }
+        case 0x9A: { // NtNetSocketBind (Bind Server TCP Port on Intel e1000)
+            bool ok = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpBind(arg1, static_cast<uint16_t>(arg2));
+            UartSerial::print("  -> NtNetSocketBind (0x9A e1000 TCP): Port=");
+            UartSerial::printDec(static_cast<uint32_t>(arg2));
+            UartSerial::print(ok ? " -> BOUND OK\r\n" : " -> FAILED\r\n");
+            return ok ? 0ULL : 0xC0000001ULL;
+        }
+        case 0x9B: { // NtNetSocketListen (Transition Socket to RFC 793 LISTEN State!)
+            bool ok = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpListen(arg1, static_cast<uint32_t>(arg2));
+            UartSerial::print("  -> NtNetSocketListen (0x9B e1000 TCP): ");
+            UartSerial::print(ok ? "LISTEN STATE ARMED!\r\n" : "FAILED\r\n");
+            if (ok) LogKernel("[NET] RFC 793 Server TCP Socket Listening on Intel e1000 DMA!");
+            return ok ? 0ULL : 0xC0000001ULL;
+        }
         case 0xA0: { // NtAudioQueryDevice (Live Intel ICH AC'97 PCIe DMA Controller Telemetry)
             const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
             if (!vad || arg1 == 0 || arg2 < sizeof(micant::km::ac97_baremetal::NtAudioDeviceInfo) ||
@@ -2048,6 +2063,35 @@ extern "C" uint64_t KiSystemCall64TrapHandler(micant::km::ps_baremetal::TrapFram
         if (ssn == 0x11 && arg1 == 5 && arg2 != 0 && arg3 >= 64) {
             // Fast-path quiet live process table snapshot for taskmgr.exe
             frame->rax = KiSystemCall64Dispatcher(ssn, arg1, arg2, arg3);
+            return 0;
+        }
+        if (ssn == 0x9C) { // Fast-path NtNetSocketAccept (Zero COM1 flood while waiting for inbound TCP SYN!)
+            struct NtNetAccK { uint64_t hListen; uint64_t outClient; uint32_t peerIp; uint16_t peerPort; uint16_t res; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetAccK) > vad->endVa) {
+                frame->rax = 0xC0000005ULL;
+                return 0;
+            }
+            auto* req = reinterpret_cast<NtNetAccK*>(arg1);
+            uint32_t pip = 0; uint16_t pport = 0;
+            uint64_t hc = micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpAcceptNonBlocking(req->hListen, pip, pport);
+            if (hc != 0) {
+                req->outClient = hc;
+                req->peerIp = pip;
+                req->peerPort = pport;
+                UartSerial::print("  -> NtNetSocketAccept (0x9C e1000 Server TCP): ACCEPTED ");
+                UartSerial::printDec(pip & 0xFFu); UartSerial::putChar('.');
+                UartSerial::printDec((pip >> 8) & 0xFFu); UartSerial::putChar('.');
+                UartSerial::printDec((pip >> 16) & 0xFFu); UartSerial::putChar('.');
+                UartSerial::printDec((pip >> 24) & 0xFFu); UartSerial::putChar(':');
+                UartSerial::printDec(pport);
+                UartSerial::print(" -> Handle=0x"); UartSerial::printHex64(hc); UartSerial::print("\r\n");
+                LogKernel("[NET] Server TCP 3-Way Handshake ACCEPTED via Intel e1000 DMA!");
+                frame->rax = 0;
+            } else {
+                req->outClient = 0;
+                frame->rax = 0x00000103ULL; // STATUS_PENDING
+            }
             return 0;
         }
         if (ssn == 0x90 && micant::km::win32k_baremetal::BareMetalWin32kCompositor::get().isDesktopActive()) {

@@ -783,6 +783,38 @@ __declspec(dllexport) uint64_t NtNetDhcpRenew(void* outAdapterInfo, uint32_t buf
     return NtSyscall3(0x99, reinterpret_cast<uint64_t>(outAdapterInfo), bufLen, 0);
 }
 
+struct NtNetAcceptReq {
+    uint64_t hListenSocket;
+    uint64_t outClientSocket;
+    uint32_t outPeerIpNet;
+    uint16_t outPeerPortHost;
+    uint16_t reserved;
+};
+
+__declspec(dllexport) uint64_t NtNetSocketBind(void* hSocket, uint16_t localPortHost) noexcept {
+    return NtSyscall3(0x9A, reinterpret_cast<uint64_t>(hSocket), localPortHost, 0);
+}
+
+__declspec(dllexport) uint64_t NtNetSocketListen(void* hSocket, uint32_t backlog) noexcept {
+    return NtSyscall3(0x9B, reinterpret_cast<uint64_t>(hSocket), backlog, 0);
+}
+
+__declspec(dllexport) uint64_t NtNetSocketAccept(
+    void* hListenSocket, void** outClientSocket, uint32_t* outPeerIpNet, uint16_t* outPeerPortHost
+) noexcept {
+    if (!hListenSocket || !outClientSocket) return NT_STATUS_INVALID_PARAMETER;
+    NtNetAcceptReq req{reinterpret_cast<uint64_t>(hListenSocket), 0, 0, 0, 0};
+    uint64_t st = NtSyscall3(0x9C, reinterpret_cast<uint64_t>(&req), 0, 0);
+    if (st != NT_STATUS_SUCCESS || req.outClientSocket == 0) {
+        *outClientSocket = nullptr;
+        return st ? st : 0x00000103ULL; // STATUS_PENDING (no inbound connection yet)
+    }
+    *outClientSocket = reinterpret_cast<void*>(req.outClientSocket);
+    if (outPeerIpNet) *outPeerIpNet = req.outPeerIpNet;
+    if (outPeerPortHost) *outPeerPortHost = req.outPeerPortHost;
+    return NT_STATUS_SUCCESS;
+}
+
 // ============================================================================
 // 1d. Native NT Bare-Metal Audio DMA Syscalls (0xA0..0xA3 -> Intel AC'97 DMA)
 // ============================================================================

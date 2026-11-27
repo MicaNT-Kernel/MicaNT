@@ -18,6 +18,7 @@
 
 extern "C" {
 
+__declspec(dllimport) uint64_t NtYieldExecution() noexcept;
 __declspec(dllimport) uint64_t NtIcmpSendEcho(uint32_t destIp, const void* buffer, uint32_t size, uint32_t timeoutMs) noexcept;
 __declspec(dllimport) uint64_t NtNetQueryAdapterInfo(void* outInfoBuf, uint32_t bufLen) noexcept;
 __declspec(dllimport) uint64_t NtNetSocketCreateTyped(void** outSocketHandle, uint32_t sockType) noexcept;
@@ -29,6 +30,9 @@ __declspec(dllimport) int32_t  NtNetUdpSendTo(void* hSocket, uint32_t ipv4NetOrd
 __declspec(dllimport) int32_t  NtNetUdpRecvFrom(void* hSocket, void* buf, uint32_t maxLen, uint32_t* outIpNet, uint16_t* outPortHost) noexcept;
 __declspec(dllimport) uint64_t NtNetDnsResolve(const char* hostname, uint32_t dnsServerIpNet, uint16_t dnsPortHost, void* outResult) noexcept;
 __declspec(dllimport) uint64_t NtNetDhcpRenew(void* outAdapterInfo, uint32_t bufLen) noexcept;
+__declspec(dllimport) uint64_t NtNetSocketBind(void* hSocket, uint16_t localPortHost) noexcept;
+__declspec(dllimport) uint64_t NtNetSocketListen(void* hSocket, uint32_t backlog) noexcept;
+__declspec(dllimport) uint64_t NtNetSocketAccept(void* hListenSocket, void** outClientSocket, uint32_t* outPeerIpNet, uint16_t* outPeerPortHost) noexcept;
 
 static constexpr uint64_t INVALID_SOCKET_VAL = ~0ULL;
 
@@ -201,6 +205,44 @@ __declspec(dllexport) int32_t recvfrom(
 __declspec(dllexport) int32_t closesocket(uint64_t s) noexcept {
     if (s == INVALID_SOCKET_VAL) return -1;
     return (NtNetSocketClose(reinterpret_cast<void*>(s)) == 0) ? 0 : -1;
+}
+
+__declspec(dllexport) int32_t bind(uint64_t s, const void* addr, int32_t namelen) noexcept {
+    if (s == INVALID_SOCKET_VAL || !addr || namelen < static_cast<int32_t>(sizeof(SockAddrIn))) return -1;
+    const auto* sa = static_cast<const SockAddrIn*>(addr);
+    if (sa->sin_family != 2 /* AF_INET */) return -1;
+    uint16_t portHost = ntohs(sa->sin_port);
+    return (NtNetSocketBind(reinterpret_cast<void*>(s), portHost) == 0) ? 0 : -1;
+}
+
+__declspec(dllexport) int32_t listen(uint64_t s, int32_t backlog) noexcept {
+    if (s == INVALID_SOCKET_VAL) return -1;
+    return (NtNetSocketListen(reinterpret_cast<void*>(s), static_cast<uint32_t>(backlog > 0 ? backlog : 8)) == 0) ? 0 : -1;
+}
+
+__declspec(dllexport) uint64_t accept(uint64_t s, void* addr, int32_t* addrlen) noexcept {
+    if (s == INVALID_SOCKET_VAL) return INVALID_SOCKET_VAL;
+    while (true) {
+        void* clientSock = nullptr;
+        uint32_t peerIp = 0;
+        uint16_t peerPort = 0;
+        uint64_t st = NtNetSocketAccept(reinterpret_cast<void*>(s), &clientSock, &peerIp, &peerPort);
+        if (st == 0 && clientSock != nullptr) {
+            if (addr && addrlen && *addrlen >= static_cast<int32_t>(sizeof(SockAddrIn))) {
+                auto* sa = static_cast<SockAddrIn*>(addr);
+                sa->sin_family = 2;
+                sa->sin_port = htons(peerPort);
+                sa->sin_addr = peerIp;
+                for (int i = 0; i < 8; ++i) sa->sin_zero[i] = 0;
+                *addrlen = static_cast<int32_t>(sizeof(SockAddrIn));
+            }
+            return reinterpret_cast<uint64_t>(clientSock);
+        }
+        if (st != 0x00000103ULL /* STATUS_PENDING */) {
+            return INVALID_SOCKET_VAL;
+        }
+        NtYieldExecution(); // Cooperatively yield CR3 while polling hardware RX ring!
+    }
 }
 
 __declspec(dllexport) HostEnt* gethostbyname(const char* name) noexcept {
