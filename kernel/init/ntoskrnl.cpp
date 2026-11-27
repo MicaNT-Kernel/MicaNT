@@ -42,7 +42,8 @@
 #include "micant/km/executive/pe_loader_baremetal.hpp"
 #include "micant/km/executive/process_cr3_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
-#include "micant/km/drivers/net/e1000_baremetal.hpp"
+#include "micant/km/drivers/net/e1000_baremetal.hpp"
+#include "micant/km/drivers/audio/ac97_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
 #include "micant/km/executive/mm_baremetal.hpp"
@@ -1153,6 +1154,10 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             return micant::km::cm_baremetal::BareMetalConfigManager::get().flushKey(arg1) ? 0ULL : 0xC0000008ULL;
         }
         case 0x0F: { // NtClose (File, SMP Thread, Registry Key, or Network Socket Handle)
+            if ((arg1 & micant::km::ac97_baremetal::AUDIO_STREAM_HANDLE_TAG) == micant::km::ac97_baremetal::AUDIO_STREAM_HANDLE_TAG) {
+                micant::km::ac97_baremetal::BareMetalAc97Engine::get().closeStream(arg1);
+                return 0;
+            }
             if ((arg1 & micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) == micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) {
                 micant::km::e1000_baremetal::BareMetalE1000Engine::get().udpClose(arg1);
                 return 0;
@@ -1761,6 +1766,54 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(ok ? "4-Way DISCOVER/OFFER/REQUEST/ACK LEASE BOUND!\r\n" : "FAILED\r\n");
             if (ok) LogKernel("[NET] DHCP 4-Way Lease Renewed (DISCOVER/OFFER/REQUEST/ACK)!");
             return ok ? 0ULL : 0xC0000001ULL;
+        }
+        case 0xA0: { // NtAudioQueryDevice (Live Intel ICH AC'97 PCIe DMA Controller Telemetry)
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg2 < sizeof(micant::km::ac97_baremetal::NtAudioDeviceInfo) ||
+                arg1 + sizeof(micant::km::ac97_baremetal::NtAudioDeviceInfo) > vad->endVa) {
+                return 0xC0000005ULL;
+            }
+            micant::km::ac97_baremetal::NtAudioDeviceInfo info{};
+            micant::km::ac97_baremetal::BareMetalAc97Engine::get().queryDeviceInfo(info);
+            std::memcpy(reinterpret_cast<void*>(arg1), &info, sizeof(info));
+            return 0;
+        }
+        case 0xA1: { // NtAudioOpenStream (48 kHz 16-bit Stereo PCM Stream -> Intel AC'97 DMA)
+            uint64_t h = micant::km::ac97_baremetal::BareMetalAc97Engine::get().openStream(
+                static_cast<uint32_t>(arg1), static_cast<uint32_t>(arg2), static_cast<uint32_t>(arg3)
+            );
+            UartSerial::print("  -> NtAudioOpenStream (0xA1 AC97): ");
+            UartSerial::printDec(static_cast<uint32_t>(arg1));
+            UartSerial::print("Hz ");
+            UartSerial::printDec(static_cast<uint32_t>(arg2));
+            UartSerial::print("ch ");
+            UartSerial::printDec(static_cast<uint32_t>(arg3));
+            UartSerial::print("-bit -> Handle=0x");
+            UartSerial::printHex64(h);
+            UartSerial::print("\r\n");
+            return h;
+        }
+        case 0xA2: { // NtAudioWritePcm (Real PCIe Bus-Master DMA PCM Streaming to Hardware Codec DAC!)
+            struct NtAudioWriteK { uint64_t hStream; uint64_t bufPtr; uint32_t len; int32_t outWritten; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtAudioWriteK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtAudioWriteK*>(arg1);
+            const auto* bvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->bufPtr);
+            if (!bvad || req->bufPtr == 0 || req->bufPtr + req->len > bvad->endVa) return 0xC0000005ULL;
+            int32_t written = micant::km::ac97_baremetal::BareMetalAc97Engine::get().writePcmDma(
+                req->hStream, reinterpret_cast<const void*>(req->bufPtr), req->len
+            );
+            req->outWritten = written;
+            UartSerial::print("  -> NtAudioWritePcm (0xA2 AC97 DMA): Streamed ");
+            UartSerial::printDec(written > 0 ? static_cast<uint32_t>(written) : 0u);
+            UartSerial::print(" B (");
+            UartSerial::printDec(written > 0 ? static_cast<uint32_t>(written / 4) : 0u);
+            UartSerial::print(" stereo frames) -> Hardware DAC OK!\r\n");
+            if (written > 0) LogKernel("[AUDIO] Intel AC'97 PCIe DMA Streamed Live 48kHz Stereo PCM!");
+            return (written > 0) ? 0ULL : 0xC0000001ULL;
+        }
+        case 0xA3: { // NtAudioCloseStream
+            return micant::km::ac97_baremetal::BareMetalAc97Engine::get().closeStream(arg1) ? 0ULL : 0xC0000008ULL;
         }
         case 0x46: { // NtYieldExecution
             auto& sched = micant::um::UserThreadScheduler64::get();
@@ -5025,6 +5078,25 @@ extern "C" micant::NtStatus KiSystemStartup(
         copyStr(dwmLog, "[Win32k] DWM Multi-Window Compositor Ready (1920x1080 Shadow + i8042 PS/2 Mouse ", sizeof(dwmLog));
         concatStr(dwmLog, dwm.isMouseReady() ? "ACK OK)" : "Polled)", sizeof(dwmLog));
         LogKernel(dwmLog);
+    }
+    {
+        auto& ac97 = micant::km::ac97_baremetal::BareMetalAc97Engine::get();
+        if (ac97.initialize()) {
+            char audLog[160];
+            static const char hx[] = "0123456789ABCDEF";
+            copyStr(audLog, "[AUDIO] Intel AC'97 (8086:", sizeof(audLog));
+            uint16_t did = ac97.getDeviceId();
+            char dh[5] = {hx[(did>>12)&0xF], hx[(did>>8)&0xF], hx[(did>>4)&0xF], hx[did&0xF], '\0'};
+            concatStr(audLog, dh, sizeof(audLog));
+            concatStr(audLog, " @ PCI ", sizeof(audLog));
+            appendU64Dec(audLog, sizeof(audLog), ac97.getPciBus());
+            concatStr(audLog, ":", sizeof(audLog));
+            appendU64Dec(audLog, sizeof(audLog), ac97.getPciDev());
+            concatStr(audLog, ") Bus-Master DMA Ready | ", sizeof(audLog));
+            appendU64Dec(audLog, sizeof(audLog), ac97.getSampleRate());
+            concatStr(audLog, "Hz 16-bit Stereo!", sizeof(audLog));
+            LogKernel(audLog);
+        }
     }
 
     bool s_showDesktop = false;

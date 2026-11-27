@@ -784,6 +784,49 @@ __declspec(dllexport) uint64_t NtNetDhcpRenew(void* outAdapterInfo, uint32_t buf
 }
 
 // ============================================================================
+// 1d. Native NT Bare-Metal Audio DMA Syscalls (0xA0..0xA3 -> Intel AC'97 DMA)
+// ============================================================================
+
+struct NtAudioWriteReq {
+    uint64_t hStream;
+    uint64_t pcmBufPtr;
+    uint32_t byteLength;
+    int32_t  outBytesWritten;
+};
+
+__declspec(dllexport) uint64_t NtAudioQueryDevice(void* outInfoBuf, uint32_t bufLen) noexcept {
+    return NtSyscall3(0xA0, reinterpret_cast<uint64_t>(outInfoBuf), bufLen, 0);
+}
+
+__declspec(dllexport) uint64_t NtAudioOpenStream(
+    void** outStreamHandle, uint32_t sampleRate, uint32_t channels, uint32_t bitsPerSample
+) noexcept {
+    if (!outStreamHandle) return NT_STATUS_INVALID_PARAMETER;
+    uint64_t h = NtSyscall3(0xA1, sampleRate, channels, bitsPerSample);
+    if (h == 0) {
+        *outStreamHandle = nullptr;
+        return NT_STATUS_UNSUCCESSFUL;
+    }
+    *outStreamHandle = reinterpret_cast<void*>(h);
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) int32_t NtAudioWritePcm(void* hStream, const void* pcmBuf, uint32_t byteLen) noexcept {
+    NtAudioWriteReq req{
+        reinterpret_cast<uint64_t>(hStream),
+        reinterpret_cast<uint64_t>(pcmBuf),
+        byteLen,
+        -1
+    };
+    uint64_t st = NtSyscall3(0xA2, reinterpret_cast<uint64_t>(&req), 0, 0);
+    return (st == NT_STATUS_SUCCESS) ? req.outBytesWritten : -1;
+}
+
+__declspec(dllexport) uint64_t NtAudioCloseStream(void* hStream) noexcept {
+    return NtSyscall3(0xA3, reinterpret_cast<uint64_t>(hStream), 0, 0);
+}
+
+// ============================================================================
 // 2. RTL Runtime Library Functions
 // ============================================================================
 

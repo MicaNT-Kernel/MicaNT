@@ -18,6 +18,7 @@ Generates a genuine raw 64 MiB SATA disk image (build/micant_ntfs.img) with:
       C:\README.txt
 """
 
+import math
 import os
 import sys
 import uuid
@@ -492,6 +493,7 @@ def main():
     dir_win_sys32 = next_mft; next_mft += 1
     dir_win_drivers = next_mft; next_mft += 1
     dir_win_config = next_mft; next_mft += 1
+    dir_win_media = next_mft; next_mft += 1
 
     # Create C:\MicaNT\system.ini
     system_ini_bytes = (
@@ -520,8 +522,8 @@ def main():
     sys32_dir = sysroot / "Windows" / "System32"
     for fname in [
         "ntoskrnl.exe", "ntdll.dll", "kernel32.dll", "kernelbase.dll",
-        "user32.dll", "gdi32.dll", "advapi32.dll", "ws2_32.dll", "ucrtbase.dll",
-        "cmd.exe", "reg.exe", "ipconfig.exe", "ping.exe", "curl.exe", "nslookup.exe",
+        "user32.dll", "gdi32.dll", "advapi32.dll", "ws2_32.dll", "winmm.dll", "ucrtbase.dll",
+        "cmd.exe", "reg.exe", "ipconfig.exe", "ping.exe", "curl.exe", "nslookup.exe", "sndrec.exe",
         "win32_ntfs_probe.exe", "win32_proc_a.exe", "win32_proc_b.exe",
         "win32_nt_suite.exe", "win32_gui_app.exe", "win32_smp_threads.exe",
         "smss.exe", "csrss.exe", "explorer.exe", "taskmgr.exe", "notepad.exe",
@@ -544,6 +546,23 @@ def main():
         if hpath.exists():
             win_config_children.append(add_file(dir_win_config, hname, hpath.read_bytes()))
 
+    # Synthesize real 48 kHz 16-bit Stereo RIFF/WAVE startup chime (659.25 Hz E5 + 880 Hz A5 chord) on NTFS!
+    wav_rate = 48000
+    wav_frames = int(wav_rate * 0.32)  # 0.32s = 15,360 stereo frames (61,440 B PCM + 44 B hdr < 64 KB!)
+    pcm = bytearray(wav_frames * 4)
+    for i in range(wav_frames):
+        t = i / wav_rate
+        env = min(1.0, i / 480.0, (wav_frames - 1 - i) / 480.0)
+        val = env * (0.42 * math.sin(2.0 * math.pi * 659.25 * t) + 0.42 * math.sin(2.0 * math.pi * 880.0 * t))
+        s16 = max(-32767, min(32767, int(val * 26000.0)))
+        struct.pack_into("<hh", pcm, i * 4, s16, s16)
+    startup_wav = (
+        b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE" +
+        b"fmt " + struct.pack("<IHHIIHH", 16, 1, 2, wav_rate, wav_rate * 4, 4, 16) +
+        b"data" + struct.pack("<I", len(pcm)) + bytes(pcm)
+    )
+    win_media_children = [add_file(dir_win_media, "startup.wav", startup_wav)]
+
     readme_bytes = (
         "MicaNT Sovereign Bare-Metal NTFS 3.1 Volume (C:\\)\r\n"
         "Mounted directly via Ring-0 AHCI Bus-Master DMA (ntfs_baremetal.hpp).\r\n"
@@ -558,10 +577,15 @@ def main():
     # Build directory MFT records (triggers both Resident $INDEX_ROOT and 4096B $INDEX_ALLOCATION INDX blocks!)
     mft_records[dir_micant] = build_dir_mft_record(dir_micant, 5, "MicaNT", micant_children, alloc_clusters, write_cluster)
     mft_records[dir_micant_sys32] = build_dir_mft_record(dir_micant_sys32, dir_micant, "System32", micant_sys32_children, alloc_clusters, write_cluster)
-    mft_records[dir_windows] = build_dir_mft_record(dir_windows, 5, "Windows", [(dir_win_sys32, dir_windows, "System32", 0, 0, True)], alloc_clusters, write_cluster)
+    mft_records[dir_windows] = build_dir_mft_record(
+        dir_windows, 5, "Windows",
+        [(dir_win_sys32, dir_windows, "System32", 0, 0, True), (dir_win_media, dir_windows, "Media", 0, 0, True)],
+        alloc_clusters, write_cluster
+    )
     mft_records[dir_win_sys32] = build_dir_mft_record(dir_win_sys32, dir_windows, "System32", win_sys32_children, alloc_clusters, write_cluster)
     mft_records[dir_win_drivers] = build_dir_mft_record(dir_win_drivers, dir_win_sys32, "drivers", win_drivers_children, alloc_clusters, write_cluster)
     mft_records[dir_win_config] = build_dir_mft_record(dir_win_config, dir_win_sys32, "config", win_config_children, alloc_clusters, write_cluster)
+    mft_records[dir_win_media] = build_dir_mft_record(dir_win_media, dir_windows, "Media", win_media_children, alloc_clusters, write_cluster)
 
     # ------------------------------------------------------------------
     # 4. Build Core System MFT Metafiles (#0..#7)

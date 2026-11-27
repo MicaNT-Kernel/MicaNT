@@ -122,6 +122,7 @@ def main():
         ("tools/dlls/user32.cpp", "user32.dll"),
         ("tools/dlls/advapi32.cpp", "advapi32.dll"),
         ("tools/dlls/ws2_32.cpp", "ws2_32.dll"),
+        ("tools/dlls/winmm.cpp", "winmm.dll"),
         ("tools/dlls/comctl32.cpp", "comctl32.dll"),
         ("tools/dlls/comdlg32.cpp", "comdlg32.dll"),
         ("tools/dlls/shell32.cpp", "shell32.dll"),
@@ -176,6 +177,12 @@ def main():
                     cmd.append(str(ntdll_implib))
                 ws2_implib = repo_root / "build" / "libws2_32.a"
                 cmd.append(f"-Wl,--out-implib,{ws2_implib}")
+            elif name == "winmm.dll":
+                ntdll_implib = repo_root / "build" / "libntdll.a"
+                if ntdll_implib.exists():
+                    cmd.append(str(ntdll_implib))
+                winmm_implib = repo_root / "build" / "libwinmm.a"
+                cmd.append(f"-Wl,--out-implib,{winmm_implib}")
             cmd.extend(["-o", str(out_path)])
             run_command(cmd, name)
             print(f"      {GRAY}Compiled {name} ({out_path.stat().st_size:,} bytes){RESET}")
@@ -336,6 +343,22 @@ def main():
                 ]
                 run_command(cmd_net, exe_name)
                 print(f"      {GREEN}Compiled {exe_name} ({nout.stat().st_size:,} bytes, dynamic KERNEL32+WS2_32 IAT){RESET}")
+
+    # Build authentic dynamic Ring-3 Multimedia Audio App (imports KERNEL32.dll + WINMM.dll -> NTDLL.dll)
+    winmm_implib = repo_root / "build" / "libwinmm.a"
+    snd_src = repo_root / "tools" / "sndrec_app.cpp"
+    if kernel32_implib.exists() and winmm_implib.exists() and snd_src.exists():
+        snd_out = system32 / "sndrec.exe"
+        cmd_snd = [
+            cxx, "-target", "x86_64-w64-mingw32", "-std=c++23", "-ffreestanding",
+            "-fno-exceptions", "-fno-rtti", "-fno-stack-protector", "-mno-red-zone",
+            "-mno-stack-arg-probe", "-O2",
+            "-Wl,--subsystem,console", "-Wl,-e,WinMainEntry", "-Wl,--dynamicbase",
+            "-nostdlib", str(snd_src), str(kernel32_implib), str(winmm_implib),
+            "-o", str(snd_out)
+        ]
+        run_command(cmd_snd, "sndrec.exe")
+        print(f"      {GREEN}Compiled sndrec.exe ({snd_out.stat().st_size:,} bytes, dynamic KERNEL32+WINMM IAT){RESET}")
 
     cmd_exe = system32 / "cmd.exe"
     if cmd_exe.exists():
