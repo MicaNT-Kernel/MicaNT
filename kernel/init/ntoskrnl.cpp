@@ -46,7 +46,8 @@
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
 #include "micant/km/executive/mm_baremetal.hpp"
-#include "micant/km/executive/cm_baremetal.hpp"
+#include "micant/km/executive/cm_baremetal.hpp"
+
 #include "micant/km/executive/win32k_baremetal.hpp"
 #include "../test/unmodified_fixture.hpp"
 
@@ -1152,6 +1153,10 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             return micant::km::cm_baremetal::BareMetalConfigManager::get().flushKey(arg1) ? 0ULL : 0xC0000008ULL;
         }
         case 0x0F: { // NtClose (File, SMP Thread, Registry Key, or Network Socket Handle)
+            if ((arg1 & micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) == micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) {
+                micant::km::e1000_baremetal::BareMetalE1000Engine::get().udpClose(arg1);
+                return 0;
+            }
             if ((arg1 & micant::km::e1000_baremetal::NET_SOCKET_HANDLE_TAG) != 0) {
                 micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpClose(arg1);
                 return 0;
@@ -1620,7 +1625,10 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             std::memcpy(reinterpret_cast<void*>(arg1), &info, sizeof(info));
             return 0;
         }
-        case 0x91: { // NtNetSocketCreate
+        case 0x91: { // NtNetSocketCreate (arg1 == 2 -> SOCK_DGRAM UDP, else SOCK_STREAM TCP)
+            if (arg1 == 2) {
+                return micant::km::e1000_baremetal::BareMetalE1000Engine::get().createUdpSocket();
+            }
             return micant::km::e1000_baremetal::BareMetalE1000Engine::get().createTcpSocket();
         }
         case 0x92: { // NtNetSocketConnect (Real ARP + RFC 793 TCP 3-Way Handshake SYN/SYN-ACK/ACK!)
@@ -1661,8 +1669,98 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             req->outBytes = got;
             return (got >= 0) ? 0ULL : 0xC0000001ULL;
         }
-        case 0x95: { // NtNetSocketClose
-            return micant::km::e1000_baremetal::BareMetalE1000Engine::get().tcpClose(arg1) ? 0ULL : 0xC0000008ULL;
+        case 0x95: { // NtNetSocketClose (TCP or UDP)
+            auto& e1k = micant::km::e1000_baremetal::BareMetalE1000Engine::get();
+            if ((arg1 & micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) == micant::km::e1000_baremetal::NET_UDP_HANDLE_TAG) {
+                return e1k.udpClose(arg1) ? 0ULL : 0xC0000008ULL;
+            }
+            return e1k.tcpClose(arg1) ? 0ULL : 0xC0000008ULL;
+        }
+        case 0x96: { // NtNetUdpSendTo (Real RFC 768 UDP Datagram TX via Intel e1000 DMA)
+            struct NtNetUdpK { uint64_t hSock; uint32_t ipNet; uint16_t portHost; uint16_t res; uint64_t bufPtr; uint32_t len; int32_t outBytes; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetUdpK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtNetUdpK*>(arg1);
+            const auto* bvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->bufPtr);
+            if (!bvad || req->bufPtr == 0 || req->bufPtr + req->len > bvad->endVa) return 0xC0000005ULL;
+            int32_t sent = micant::km::e1000_baremetal::BareMetalE1000Engine::get().udpSendTo(
+                req->hSock, req->ipNet, req->portHost, reinterpret_cast<const void*>(req->bufPtr), req->len
+            );
+            req->outBytes = sent;
+            return (sent >= 0) ? 0ULL : 0xC0000001ULL;
+        }
+        case 0x97: { // NtNetUdpRecvFrom (Real RFC 768 UDP Datagram RX via Intel e1000 DMA)
+            struct NtNetUdpK { uint64_t hSock; uint32_t ipNet; uint16_t portHost; uint16_t res; uint64_t bufPtr; uint32_t len; int32_t outBytes; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetUdpK) > vad->endVa) return 0xC0000005ULL;
+            auto* req = reinterpret_cast<NtNetUdpK*>(arg1);
+            const auto* bvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->bufPtr);
+            if (!bvad || req->bufPtr == 0 || req->bufPtr + req->len > bvad->endVa) return 0xC0000005ULL;
+            uint32_t srcIp = 0; uint16_t srcPort = 0;
+            int32_t got = micant::km::e1000_baremetal::BareMetalE1000Engine::get().udpRecvFrom(
+                req->hSock, reinterpret_cast<void*>(req->bufPtr), req->len, srcIp, srcPort
+            );
+            req->ipNet = srcIp;
+            req->portHost = srcPort;
+            req->outBytes = got;
+            return (got >= 0) ? 0ULL : 0xC0000001ULL;
+        }
+        case 0x98: { // NtNetDnsResolve (Real RFC 1035 Wire UDP DNS A-Record Query via Intel e1000 DMA)
+            struct NtNetDnsK { uint64_t hostPtr; uint32_t dnsIpNet; uint16_t dnsPortHost; uint16_t res; uint64_t outResPtr; };
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (!vad || arg1 == 0 || arg1 + sizeof(NtNetDnsK) > vad->endVa) return 0xC0000005ULL;
+            const auto* req = reinterpret_cast<const NtNetDnsK*>(arg1);
+            const auto* hvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->hostPtr);
+            const auto* rvad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(req->outResPtr);
+            if (!hvad || !rvad || req->hostPtr == 0 || req->outResPtr == 0 ||
+                req->outResPtr + sizeof(micant::km::e1000_baremetal::NetDnsResult) > rvad->endVa) {
+                return 0xC0000005ULL;
+            }
+            char hostBuf[128]{};
+            const char* uh = reinterpret_cast<const char*>(req->hostPtr);
+            size_t hl = 0;
+            while (uh[hl] && hl + 1 < sizeof(hostBuf)) { hostBuf[hl] = uh[hl]; ++hl; }
+            hostBuf[hl] = '\0';
+
+            micant::km::e1000_baremetal::NetDnsResult res{};
+            bool ok = micant::km::e1000_baremetal::BareMetalE1000Engine::get().dnsResolveA(
+                hostBuf, req->dnsIpNet, req->dnsPortHost, res
+            );
+            if (ok) {
+                std::memcpy(reinterpret_cast<void*>(req->outResPtr), &res, sizeof(res));
+                UartSerial::print("  -> NtNetDnsResolve (0x98 RFC 1035 UDP): '");
+                UartSerial::print(hostBuf);
+                UartSerial::print("' -> ");
+                UartSerial::printDec(res.resolvedIpNet & 0xFFu); UartSerial::putChar('.');
+                UartSerial::printDec((res.resolvedIpNet >> 8) & 0xFFu); UartSerial::putChar('.');
+                UartSerial::printDec((res.resolvedIpNet >> 16) & 0xFFu); UartSerial::putChar('.');
+                UartSerial::printDec((res.resolvedIpNet >> 24) & 0xFFu);
+                UartSerial::print(" (TTL="); UartSerial::printDec(res.ttlSeconds);
+                UartSerial::print("s, RTT="); UartSerial::printDec(res.rttUs);
+                UartSerial::print("us) -> STATUS_SUCCESS\r\n");
+                LogKernel("[NET] RFC 1035 Wire DNS A-Record Resolved via Intel e1000 UDP DMA!");
+                return 0;
+            }
+            UartSerial::print("  -> NtNetDnsResolve (0x98): Failed to resolve '");
+            UartSerial::print(hostBuf);
+            UartSerial::print("'\r\n");
+            return 0xC0000001ULL;
+        }
+        case 0x99: { // NtNetDhcpRenew (Live 4-Way RFC 2131 DHCP DISCOVER/OFFER/REQUEST/ACK!)
+            auto& e1k = micant::km::e1000_baremetal::BareMetalE1000Engine::get();
+            bool ok = e1k.runDhcpHandshake();
+            if (ok && arg1 != 0 && arg2 >= sizeof(micant::km::e1000_baremetal::NetAdapterInfo)) {
+                const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+                if (vad && arg1 + sizeof(micant::km::e1000_baremetal::NetAdapterInfo) <= vad->endVa) {
+                    micant::km::e1000_baremetal::NetAdapterInfo info{};
+                    e1k.queryAdapterInfo(info);
+                    std::memcpy(reinterpret_cast<void*>(arg1), &info, sizeof(info));
+                }
+            }
+            UartSerial::print("  -> NtNetDhcpRenew (0x99 RFC 2131): ");
+            UartSerial::print(ok ? "4-Way DISCOVER/OFFER/REQUEST/ACK LEASE BOUND!\r\n" : "FAILED\r\n");
+            if (ok) LogKernel("[NET] DHCP 4-Way Lease Renewed (DISCOVER/OFFER/REQUEST/ACK)!");
+            return ok ? 0ULL : 0xC0000001ULL;
         }
         case 0x46: { // NtYieldExecution
             auto& sched = micant::um::UserThreadScheduler64::get();
@@ -4903,7 +5001,13 @@ extern "C" micant::NtStatus KiSystemStartup(
             char b[3] = {hx[m[mi]>>4], hx[m[mi]&0xF], '\0'};
             concatStr(netLog, b, sizeof(netLog));
         }
-        concatStr(netLog, e1k.isGatewayMacValid() ? " | IP=10.0.2.15 | GW ARP OK!" : " | IP=10.0.2.15", sizeof(netLog));
+        concatStr(netLog, " | IP=", sizeof(netLog));
+        uint32_t lip = e1k.getLocalIp();
+        appendU64Dec(netLog, sizeof(netLog), lip & 0xFFu); concatStr(netLog, ".", sizeof(netLog));
+        appendU64Dec(netLog, sizeof(netLog), (lip >> 8) & 0xFFu); concatStr(netLog, ".", sizeof(netLog));
+        appendU64Dec(netLog, sizeof(netLog), (lip >> 16) & 0xFFu); concatStr(netLog, ".", sizeof(netLog));
+        appendU64Dec(netLog, sizeof(netLog), (lip >> 24) & 0xFFu);
+        concatStr(netLog, e1k.isDhcpBound() ? " [DHCP 4-Way BOUND!]" : " [Static]", sizeof(netLog));
         LogKernel(netLog);
     }
     bool i210Ok = !e1kOk && micant::km::i210_baremetal::BareMetalI210Driver::get().initialize();

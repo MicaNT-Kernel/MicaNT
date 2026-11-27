@@ -1,13 +1,16 @@
 /**
  * @file curl_app.cpp
- * @brief Sovereign Dynamic Ring-3 WinSock2 TCP/HTTP Client (C:\Windows\System32\curl.exe).
+ * @brief Sovereign Dynamic Ring-3 WinSock2 Hostname-Aware TCP/HTTP Client (C:\Windows\System32\curl.exe).
  *
  * ZERO direct syscall instructions! Dynamically imports ONLY standard Win32 & WinSock2
- * APIs from KERNEL32.dll + WS2_32.dll (WSAStartup, socket, connect, send, recv, closesocket,
- * WSACleanup, inet_addr, htons) -> NTDLL.dll -> Ring 0 Intel e1000 PCIe DMA TCP/IP stack!
+ * APIs from KERNEL32.dll + WS2_32.dll (WSAStartup, gethostbyname, DnsResolveMica, socket,
+ * connect, send, recv, closesocket, WSACleanup, inet_addr, htons) -> NTDLL.dll -> Ring 0 e1000 DMA!
  *
- * Usage: curl.exe <ipv4> <port> <path>
- * Example: curl.exe 10.0.2.2 18080 /micant
+ * Usage:
+ *   curl.exe <host_or_ipv4> [port] [path] [dns_server_ip] [dns_port]
+ * Examples:
+ *   curl.exe 10.0.2.2 18080 /micant
+ *   curl.exe api.micant.local 18080 /m14 10.0.2.2 15353
  */
 
 #include <cstdint>
@@ -20,6 +23,14 @@ void* memset(void* dst, int c, size_t n) noexcept {
     while (n--) *d++ = static_cast<unsigned char>(c);
     return dst;
 }
+
+struct HostEnt {
+    char*   h_name;
+    char**  h_aliases;
+    int16_t h_addrtype;
+    int16_t h_length;
+    char**  h_addr_list;
+};
 
 __declspec(dllimport) void*       GetStdHandle(uint32_t nStdHandle) noexcept;
 __declspec(dllimport) int32_t     WriteFile(void* hFile, const void* buf, uint32_t len, uint32_t* written, void* ov) noexcept;
@@ -35,6 +46,8 @@ __declspec(dllimport) int32_t  recv(uint64_t s, char* buf, int32_t len, int32_t 
 __declspec(dllimport) int32_t  closesocket(uint64_t s) noexcept;
 __declspec(dllimport) uint32_t inet_addr(const char* cp) noexcept;
 __declspec(dllimport) uint16_t htons(uint16_t v) noexcept;
+__declspec(dllimport) HostEnt* gethostbyname(const char* name) noexcept;
+__declspec(dllimport) int32_t  DnsResolveMica(const char* hostname, uint32_t dnsIpNet, uint16_t dnsPortHost, void* outRes) noexcept;
 
 } // extern "C"
 
@@ -49,6 +62,16 @@ struct SockAddrIn {
     uint16_t sin_port;
     uint32_t sin_addr;
     uint8_t  sin_zero[8];
+};
+
+struct NetDnsResult {
+    uint32_t resolvedIpNet;
+    uint32_t ttlSeconds;
+    uint32_t rttUs;
+    uint32_t answerCount;
+    uint32_t serverIpNet;
+    uint16_t serverPort;
+    uint16_t reserved;
 };
 #pragma pack(pop)
 
@@ -68,6 +91,13 @@ static void AppendU64(char* dst, size_t cap, uint64_t v) noexcept {
     for (size_t i = 0; i < n; ++i) rev[i] = tmp[n - 1 - i];
     rev[n] = '\0';
     AppendStr(dst, cap, rev);
+}
+
+static void AppendIpv4(char* dst, size_t cap, uint32_t ip) noexcept {
+    AppendU64(dst, cap, ip & 0xFFu); AppendStr(dst, cap, ".");
+    AppendU64(dst, cap, (ip >> 8) & 0xFFu); AppendStr(dst, cap, ".");
+    AppendU64(dst, cap, (ip >> 16) & 0xFFu); AppendStr(dst, cap, ".");
+    AppendU64(dst, cap, (ip >> 24) & 0xFFu);
 }
 
 static void PrintLine(void* hOut, const char* s) noexcept {
@@ -92,6 +122,12 @@ static int Tokenize(const char* cmd, char argvBuf[8][64]) noexcept {
     return argc;
 }
 
+static uint16_t ParsePort(const char* s, uint16_t fallback) noexcept {
+    uint32_t p = 0;
+    for (size_t k = 0; s[k] >= '0' && s[k] <= '9'; ++k) p = p * 10u + static_cast<uint32_t>(s[k] - '0');
+    return (p > 0 && p <= 65535u) ? static_cast<uint16_t>(p) : fallback;
+}
+
 } // namespace
 
 extern "C" void WinMainEntry() noexcept {
@@ -100,18 +136,57 @@ extern "C" void WinMainEntry() noexcept {
     int argc = Tokenize(GetCommandLineA(), argv);
 
     const char* hostStr = (argc >= 2) ? argv[1] : "10.0.2.2";
-    uint16_t port = 18080;
-    if (argc >= 3) {
-        uint32_t p = 0;
-        for (size_t k = 0; argv[2][k] >= '0' && argv[2][k] <= '9'; ++k) p = p * 10u + static_cast<uint32_t>(argv[2][k] - '0');
-        if (p > 0 && p <= 65535u) port = static_cast<uint16_t>(p);
-    }
+    uint16_t port = (argc >= 3) ? ParsePort(argv[2], 18080) : 18080;
     const char* pathStr = (argc >= 4) ? argv[3] : "/micant";
+    uint32_t customDnsIp = (argc >= 5) ? inet_addr(argv[4]) : 0u;
+    if (customDnsIp == 0xFFFFFFFFu) customDnsIp = 0u;
+    uint16_t customDnsPort = (argc >= 6) ? ParsePort(argv[5], 53u) : 53u;
 
     uint8_t wsaBuf[512]{};
     if (WSAStartup(0x0202u, wsaBuf) != 0) {
         PrintLine(hOut, "[curl] ERROR: WSAStartup failed.");
         ExitProcess(1);
+    }
+
+    // Resolve hostname via RFC 1035 DNS if not already a dotted-quad IPv4 literal!
+    uint32_t targetIp = inet_addr(hostStr);
+    if (targetIp == 0xFFFFFFFFu) {
+        if (customDnsIp != 0) {
+            NetDnsResult dres{};
+            if (!DnsResolveMica(hostStr, customDnsIp, customDnsPort, &dres) || dres.resolvedIpNet == 0) {
+                PrintLine(hOut, "[curl] ERROR: RFC 1035 DNS resolution failed.");
+                WSACleanup();
+                ExitProcess(1);
+            }
+            targetIp = dres.resolvedIpNet;
+            char dmsg[160]{};
+            AppendStr(dmsg, sizeof(dmsg), "[ws2_32] DNS Resolved '");
+            AppendStr(dmsg, sizeof(dmsg), hostStr);
+            AppendStr(dmsg, sizeof(dmsg), "' -> ");
+            AppendIpv4(dmsg, sizeof(dmsg), targetIp);
+            AppendStr(dmsg, sizeof(dmsg), " (TTL=");
+            AppendU64(dmsg, sizeof(dmsg), dres.ttlSeconds);
+            AppendStr(dmsg, sizeof(dmsg), "s | RTT=");
+            AppendU64(dmsg, sizeof(dmsg), dres.rttUs);
+            AppendStr(dmsg, sizeof(dmsg), "us)");
+            PrintLine(hOut, dmsg);
+        } else {
+            HostEnt* he = gethostbyname(hostStr);
+            if (!he || !he->h_addr_list || !he->h_addr_list[0]) {
+                PrintLine(hOut, "[curl] ERROR: ws2_32!gethostbyname failed.");
+                WSACleanup();
+                ExitProcess(1);
+            }
+            const auto* p = reinterpret_cast<const uint8_t*>(he->h_addr_list[0]);
+            targetIp = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+            char dmsg[160]{};
+            AppendStr(dmsg, sizeof(dmsg), "[ws2_32] gethostbyname('");
+            AppendStr(dmsg, sizeof(dmsg), hostStr);
+            AppendStr(dmsg, sizeof(dmsg), "') -> ");
+            AppendIpv4(dmsg, sizeof(dmsg), targetIp);
+            PrintLine(hOut, dmsg);
+        }
     }
 
     uint64_t sock = socket(2 /* AF_INET */, 1 /* SOCK_STREAM */, 6 /* IPPROTO_TCP */);
@@ -124,11 +199,11 @@ extern "C" void WinMainEntry() noexcept {
     SockAddrIn sa{};
     sa.sin_family = 2;
     sa.sin_port = htons(port);
-    sa.sin_addr = inet_addr(hostStr);
+    sa.sin_addr = targetIp;
 
     char hdr[160]{};
     AppendStr(hdr, sizeof(hdr), "[ws2_32] TCP connect(");
-    AppendStr(hdr, sizeof(hdr), hostStr);
+    AppendIpv4(hdr, sizeof(hdr), targetIp);
     AppendStr(hdr, sizeof(hdr), ":");
     AppendU64(hdr, sizeof(hdr), port);
     AppendStr(hdr, sizeof(hdr), ") -> SYN/SYN-ACK/ACK...");
@@ -176,7 +251,6 @@ extern "C" void WinMainEntry() noexcept {
     AppendStr(stats, sizeof(stats), " B (FIN closed cleanly):");
     PrintLine(hOut, stats);
 
-    // Print HTTP status line + body cleanly (skipping intermediate headers to keep console tidy!)
     int32_t pos = 0;
     bool firstLine = true;
     bool inBody = false;

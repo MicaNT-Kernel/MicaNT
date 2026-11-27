@@ -5,7 +5,12 @@
  * Freestanding ISO C++23. Clean-Room design. ZERO direct `syscall` instructions!
  * Dynamically imports native NtNet* & NtIcmpSendEcho gateways strictly from ntdll.dll
  * via real PE32+ IAT chaining:
- *   App (ping/ipconfig/curl) -> ws2_32.dll (IAT) -> ntdll.dll (IAT) -> Ring 0 e1000 DMA!
+ *   App (ipconfig/ping/nslookup/curl/taskmgr) -> ws2_32.dll (IAT) -> ntdll.dll (IAT) -> Ring 0 e1000 DMA!
+ *
+ * Exports standard WinSock2 APIs:
+ *   WSAStartup, WSACleanup, socket (SOCK_STREAM + SOCK_DGRAM), connect, send, recv,
+ *   sendto, recvfrom, closesocket, gethostbyname, inet_addr, htons/ntohs/htonl/ntohl,
+ *   plus IcmpSendEchoMica, QueryNetAdapterInfoMica, DnsResolveMica, DhcpRenewMica.
  */
 
 #include <cstdint>
@@ -15,11 +20,15 @@ extern "C" {
 
 __declspec(dllimport) uint64_t NtIcmpSendEcho(uint32_t destIp, const void* buffer, uint32_t size, uint32_t timeoutMs) noexcept;
 __declspec(dllimport) uint64_t NtNetQueryAdapterInfo(void* outInfoBuf, uint32_t bufLen) noexcept;
-__declspec(dllimport) uint64_t NtNetSocketCreate(void** outSocketHandle) noexcept;
+__declspec(dllimport) uint64_t NtNetSocketCreateTyped(void** outSocketHandle, uint32_t sockType) noexcept;
 __declspec(dllimport) uint64_t NtNetSocketConnect(void* hSocket, uint32_t ipv4NetOrder, uint16_t portHostOrder) noexcept;
 __declspec(dllimport) int32_t  NtNetSocketSend(void* hSocket, const void* buf, uint32_t len) noexcept;
 __declspec(dllimport) int32_t  NtNetSocketRecv(void* hSocket, void* buf, uint32_t maxLen) noexcept;
 __declspec(dllimport) uint64_t NtNetSocketClose(void* hSocket) noexcept;
+__declspec(dllimport) int32_t  NtNetUdpSendTo(void* hSocket, uint32_t ipv4NetOrder, uint16_t portHostOrder, const void* buf, uint32_t len) noexcept;
+__declspec(dllimport) int32_t  NtNetUdpRecvFrom(void* hSocket, void* buf, uint32_t maxLen, uint32_t* outIpNet, uint16_t* outPortHost) noexcept;
+__declspec(dllimport) uint64_t NtNetDnsResolve(const char* hostname, uint32_t dnsServerIpNet, uint16_t dnsPortHost, void* outResult) noexcept;
+__declspec(dllimport) uint64_t NtNetDhcpRenew(void* outAdapterInfo, uint32_t bufLen) noexcept;
 
 static constexpr uint64_t INVALID_SOCKET_VAL = ~0ULL;
 
@@ -40,7 +49,31 @@ struct SockAddrIn {
     uint32_t sin_addr;   // Network byte order
     uint8_t  sin_zero[8];
 };
+
+struct NetDnsResult {
+    uint32_t resolvedIpNet;
+    uint32_t ttlSeconds;
+    uint32_t rttUs;
+    uint32_t answerCount;
+    uint32_t serverIpNet;
+    uint16_t serverPort;
+    uint16_t reserved;
+};
 #pragma pack(pop)
+
+struct HostEnt {
+    char*   h_name;
+    char**  h_aliases;
+    int16_t h_addrtype;
+    int16_t h_length;
+    char**  h_addr_list;
+};
+
+static char     s_hostNameBuf[128];
+static uint32_t s_hostAddrStorage;
+static char*    s_hostAliases[1];
+static char*    s_hostAddrList[2];
+static HostEnt  s_hostEnt;
 
 bool DllMain(void*, unsigned long, void*) noexcept {
     return true;
@@ -98,7 +131,7 @@ __declspec(dllexport) int32_t WSAStartup(uint16_t wVersionRequested, WSAData* lp
         lpWSAData->iMaxSockets = 64;
         lpWSAData->iMaxUdpDg = 1472;
         lpWSAData->lpVendorInfo = nullptr;
-        const char desc[] = "MicaNT WinSock 2.2 (Intel e1000/I210 DMA)";
+        const char desc[] = "MicaNT WinSock 2.2 (Intel e1000/I210 DMA TCP+UDP+DNS+DHCP)";
         const char stat[] = "Running";
         for (size_t i = 0; i < sizeof(desc); ++i) lpWSAData->szDescription[i] = desc[i];
         for (size_t i = 0; i < sizeof(stat); ++i) lpWSAData->szSystemStatus[i] = stat[i];
@@ -111,9 +144,11 @@ __declspec(dllexport) int32_t WSACleanup() noexcept {
 }
 
 __declspec(dllexport) uint64_t socket(int32_t af, int32_t type, int32_t /*protocol*/) noexcept {
-    if (af != 2 /* AF_INET */ || type != 1 /* SOCK_STREAM */) return INVALID_SOCKET_VAL;
+    if (af != 2 /* AF_INET */ || (type != 1 /* SOCK_STREAM */ && type != 2 /* SOCK_DGRAM */)) {
+        return INVALID_SOCKET_VAL;
+    }
     void* h = nullptr;
-    if (NtNetSocketCreate(&h) != 0 || h == nullptr) return INVALID_SOCKET_VAL;
+    if (NtNetSocketCreateTyped(&h, static_cast<uint32_t>(type)) != 0 || h == nullptr) return INVALID_SOCKET_VAL;
     return reinterpret_cast<uint64_t>(h);
 }
 
@@ -136,12 +171,64 @@ __declspec(dllexport) int32_t recv(uint64_t s, char* buf, int32_t len, int32_t /
     return NtNetSocketRecv(reinterpret_cast<void*>(s), buf, static_cast<uint32_t>(len));
 }
 
+__declspec(dllexport) int32_t sendto(
+    uint64_t s, const char* buf, int32_t len, int32_t /*flags*/, const void* to, int32_t tolen
+) noexcept {
+    if (s == INVALID_SOCKET_VAL || !buf || len < 0 || !to || tolen < static_cast<int32_t>(sizeof(SockAddrIn))) return -1;
+    const auto* sa = static_cast<const SockAddrIn*>(to);
+    if (sa->sin_family != 2) return -1;
+    return NtNetUdpSendTo(reinterpret_cast<void*>(s), sa->sin_addr, ntohs(sa->sin_port), buf, static_cast<uint32_t>(len));
+}
+
+__declspec(dllexport) int32_t recvfrom(
+    uint64_t s, char* buf, int32_t len, int32_t /*flags*/, void* from, int32_t* fromlen
+) noexcept {
+    if (s == INVALID_SOCKET_VAL || !buf || len <= 0) return -1;
+    uint32_t srcIp = 0;
+    uint16_t srcPort = 0;
+    int32_t got = NtNetUdpRecvFrom(reinterpret_cast<void*>(s), buf, static_cast<uint32_t>(len), &srcIp, &srcPort);
+    if (got >= 0 && from && fromlen && *fromlen >= static_cast<int32_t>(sizeof(SockAddrIn))) {
+        auto* sa = static_cast<SockAddrIn*>(from);
+        sa->sin_family = 2;
+        sa->sin_port = htons(srcPort);
+        sa->sin_addr = srcIp;
+        for (int i = 0; i < 8; ++i) sa->sin_zero[i] = 0;
+        *fromlen = static_cast<int32_t>(sizeof(SockAddrIn));
+    }
+    return got;
+}
+
 __declspec(dllexport) int32_t closesocket(uint64_t s) noexcept {
     if (s == INVALID_SOCKET_VAL) return -1;
     return (NtNetSocketClose(reinterpret_cast<void*>(s)) == 0) ? 0 : -1;
 }
 
-// Sovereign IPHLP / ICMP wrappers over ntdll (keeps ping.exe & ipconfig.exe at 0 direct syscalls!)
+__declspec(dllexport) HostEnt* gethostbyname(const char* name) noexcept {
+    if (!name || !name[0]) return nullptr;
+    uint32_t ip = inet_addr(name);
+    if (ip == 0xFFFFFFFFu) {
+        NetDnsResult res{};
+        if (NtNetDnsResolve(name, 0, 53, &res) != 0 || res.resolvedIpNet == 0) {
+            return nullptr;
+        }
+        ip = res.resolvedIpNet;
+    }
+    size_t i = 0;
+    while (name[i] && i + 1 < sizeof(s_hostNameBuf)) { s_hostNameBuf[i] = name[i]; ++i; }
+    s_hostNameBuf[i] = '\0';
+    s_hostAddrStorage = ip;
+    s_hostAliases[0] = nullptr;
+    s_hostAddrList[0] = reinterpret_cast<char*>(&s_hostAddrStorage);
+    s_hostAddrList[1] = nullptr;
+    s_hostEnt.h_name = s_hostNameBuf;
+    s_hostEnt.h_aliases = s_hostAliases;
+    s_hostEnt.h_addrtype = 2; // AF_INET
+    s_hostEnt.h_length = 4;
+    s_hostEnt.h_addr_list = s_hostAddrList;
+    return &s_hostEnt;
+}
+
+// Sovereign IPHLP / ICMP / DNS / DHCP wrappers over ntdll (0 direct syscalls across all System32 apps!)
 __declspec(dllexport) int32_t IcmpSendEchoMica(uint32_t destIp, void* replyInfoBuf, uint32_t replyInfoSize) noexcept {
     uint64_t st = NtIcmpSendEcho(destIp, replyInfoBuf, replyInfoSize, 1000);
     return (st == 0) ? 1 : 0;
@@ -150,6 +237,15 @@ __declspec(dllexport) int32_t IcmpSendEchoMica(uint32_t destIp, void* replyInfoB
 __declspec(dllexport) int32_t QueryNetAdapterInfoMica(void* outInfoBuf, uint32_t bufLen) noexcept {
     uint64_t st = NtNetQueryAdapterInfo(outInfoBuf, bufLen);
     return (st == 0) ? 1 : 0;
+}
+
+__declspec(dllexport) int32_t DnsResolveMica(const char* hostname, uint32_t dnsIpNet, uint16_t dnsPortHost, void* outRes) noexcept {
+    if (!hostname || !outRes) return 0;
+    return (NtNetDnsResolve(hostname, dnsIpNet, dnsPortHost, outRes) == 0) ? 1 : 0;
+}
+
+__declspec(dllexport) int32_t DhcpRenewMica(void* outInfoBuf, uint32_t bufLen) noexcept {
+    return (NtNetDhcpRenew(outInfoBuf, bufLen) == 0) ? 1 : 0;
 }
 
 } // extern "C"

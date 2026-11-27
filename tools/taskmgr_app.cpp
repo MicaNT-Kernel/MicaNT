@@ -51,12 +51,14 @@ struct NtSysProcSnap {
     NtProcRow rows[8];
 };
 struct NetAdapterInfo {
-    uint32_t online; uint16_t vendorId; uint16_t deviceId;
-    uint8_t bus; uint8_t device; uint8_t function; uint8_t linkUp;
-    uint8_t mac[6]; uint8_t gwMac[6]; uint8_t gwArpValid; uint8_t pad[3];
+    uint32_t online; uint32_t linkUp;
+    uint16_t vendorId; uint16_t deviceId;
+    uint8_t bus; uint8_t device; uint8_t function; uint8_t reserved0;
+    uint8_t mac[6]; uint8_t gwMac[6];
     uint32_t localIpNet; uint32_t subnetMaskNet; uint32_t gatewayIpNet; uint32_t dnsIpNet;
     uint64_t txPackets; uint64_t rxPackets; uint64_t arpReplies; uint64_t icmpReplies; uint64_t tcpEstablished;
-    char adapterName[48];
+    uint32_t dhcpBound; uint32_t dhcpServerIp; uint32_t dhcpLeaseSeconds; uint32_t dhcpRenewCount;
+    uint64_t udpPackets; uint64_t dnsResolved;
 };
 #pragma pack(pop)
 

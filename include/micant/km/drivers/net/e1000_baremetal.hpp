@@ -28,12 +28,15 @@
 namespace micant::km::e1000_baremetal {
 
 inline constexpr uint64_t NET_SOCKET_HANDLE_TAG = 0x60000000ULL;
+inline constexpr uint64_t NET_UDP_HANDLE_TAG    = 0x61000000ULL;
 inline constexpr size_t   E1000_NUM_RX_DESC     = 32;
 inline constexpr size_t   E1000_NUM_TX_DESC     = 32;
 inline constexpr size_t   E1000_BUF_SIZE        = 2048;
 inline constexpr size_t   MAX_ARP_ENTRIES       = 16;
 inline constexpr size_t   MAX_TCP_SOCKETS       = 8;
+inline constexpr size_t   MAX_UDP_SOCKETS       = 8;
 inline constexpr size_t   TCP_RX_BUF_CAP        = 8192;
+inline constexpr size_t   UDP_RX_PKT_CAP        = 1500;
 
 // Intel PRO/1000 MMIO Register Offsets
 inline constexpr uint32_t REG_CTRL     = 0x00000;
@@ -153,6 +156,50 @@ struct TcpPseudoHdr {
     uint16_t tcpLen;
 };
 
+struct UdpHdr {
+    uint16_t srcPort;
+    uint16_t dstPort;
+    uint16_t length;
+    uint16_t checksum;
+};
+
+struct DhcpFixedHdr {
+    uint8_t  op;      // 1 = BOOTREQUEST, 2 = BOOTREPLY
+    uint8_t  htype;   // 1 = Ethernet
+    uint8_t  hlen;    // 6
+    uint8_t  hops;
+    uint32_t xid;
+    uint16_t secs;
+    uint16_t flags;
+    uint32_t ciaddr;
+    uint32_t yiaddr;
+    uint32_t siaddr;
+    uint32_t giaddr;
+    uint8_t  chaddr[16];
+    uint8_t  sname[64];
+    uint8_t  file[128];
+    uint32_t magic;   // 0x63538263 in little-endian (network 0x63825363)
+};
+
+struct DnsHdr {
+    uint16_t id;
+    uint16_t flags;
+    uint16_t qdCount;
+    uint16_t anCount;
+    uint16_t nsCount;
+    uint16_t arCount;
+};
+
+struct NetDnsResult {
+    uint32_t resolvedIpNet;
+    uint32_t ttlSeconds;
+    uint32_t rttUs;
+    uint32_t answerCount;
+    uint32_t serverIpNet;
+    uint16_t serverPort;
+    uint16_t reserved;
+};
+
 struct NetAdapterInfo {
     uint32_t present;
     uint32_t linkUp;
@@ -173,6 +220,13 @@ struct NetAdapterInfo {
     uint64_t arpResolved;
     uint64_t icmpReplies;
     uint64_t tcpHandshakes;
+    // Milestone 14 appended fields (ABI backwards-compatible!)
+    uint32_t dhcpBound;
+    uint32_t dhcpServerIp;
+    uint32_t dhcpLeaseSeconds;
+    uint32_t dhcpRenewCount;
+    uint64_t udpPackets;
+    uint64_t dnsResolved;
 };
 
 struct NetIcmpReplyInfo {
@@ -190,6 +244,16 @@ alignas(128)  static E1000TxDesc s_e1000TxRing[E1000_NUM_TX_DESC];
 alignas(4096) static uint8_t     s_e1000RxBufs[E1000_NUM_RX_DESC][E1000_BUF_SIZE];
 alignas(4096) static uint8_t     s_e1000TxBufs[E1000_NUM_TX_DESC][E1000_BUF_SIZE];
 alignas(64)   static uint8_t     s_tcpRxStorage[MAX_TCP_SOCKETS][TCP_RX_BUF_CAP];
+alignas(64)   static uint8_t     s_udpRxStorage[MAX_UDP_SOCKETS][UDP_RX_PKT_CAP];
+
+struct ClientUdpSocket {
+    bool     inUse;
+    uint16_t localPort;
+    bool     rxReady;
+    uint32_t rxSrcIp;
+    uint16_t rxSrcPort;
+    uint16_t rxLen;
+};
 
 struct ArpEntry {
     bool     valid;
@@ -251,6 +315,26 @@ private:
     uint64_t m_arpResolved;
     uint64_t m_icmpReplies;
     uint64_t m_tcpHandshakes;
+    uint64_t m_udpPackets;
+    uint64_t m_dnsResolved;
+
+    // RFC 2131 DHCP Client State
+    bool     m_dhcpBound;
+    bool     m_dhcpInFlight;
+    volatile bool m_dhcpOfferReceived;
+    volatile bool m_dhcpAckReceived;
+    uint32_t m_dhcpXid;
+    uint32_t m_dhcpSeq;
+    uint32_t m_dhcpServerIp;
+    uint32_t m_dhcpLeaseSeconds;
+    uint32_t m_dhcpRenewCount;
+    uint32_t m_dhcpOfferedIp;
+    uint32_t m_dhcpOfferServer;
+    uint32_t m_dhcpOfferMask;
+    uint32_t m_dhcpOfferGw;
+    uint32_t m_dhcpOfferDns;
+    uint32_t m_dhcpOfferLease;
+    uint16_t m_dnsTxIdCounter;
 
     // Pending ICMP Echo probe state
     volatile bool     m_icmpGotReply;
@@ -261,6 +345,7 @@ private:
 
     ArpEntry        m_arpTable[MAX_ARP_ENTRIES];
     ClientTcpSocket m_sockets[MAX_TCP_SOCKETS];
+    ClientUdpSocket m_udpSockets[MAX_UDP_SOCKETS];
 
     static inline void outl(uint16_t port, uint32_t val) noexcept {
 #if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
@@ -545,6 +630,185 @@ private:
         return sendRawFrame(frame, static_cast<uint16_t>(totalLen));
     }
 
+    static uint16_t udpChecksum(uint32_t srcIp, uint32_t dstIp, const void* udpSeg, size_t udpLen) noexcept {
+        uint32_t sum = 0;
+        TcpPseudoHdr ph{srcIp, dstIp, 0, 17, bswap16(static_cast<uint16_t>(udpLen))};
+        const auto* p = reinterpret_cast<const uint8_t*>(&ph);
+        for (size_t i = 0; i < sizeof(ph); i += 2) {
+            sum += static_cast<uint16_t>((static_cast<uint16_t>(p[i]) << 8) | p[i + 1]);
+        }
+        const auto* u = static_cast<const uint8_t*>(udpSeg);
+        size_t i = 0;
+        while (i + 1 < udpLen) {
+            sum += static_cast<uint16_t>((static_cast<uint16_t>(u[i]) << 8) | u[i + 1]);
+            i += 2;
+        }
+        if (i < udpLen) sum += static_cast<uint16_t>(static_cast<uint16_t>(u[i]) << 8);
+        while (sum >> 16) sum = (sum & 0xFFFFu) + (sum >> 16);
+        uint16_t cs = bswap16(static_cast<uint16_t>(~sum));
+        return (cs == 0) ? 0xFFFFu : cs;
+    }
+
+    bool sendUdpRaw(
+        const uint8_t dstMac[6],
+        uint32_t srcIp,
+        uint32_t dstIp,
+        uint16_t srcPortHost,
+        uint16_t dstPortHost,
+        const void* payload,
+        uint16_t payloadLen
+    ) noexcept {
+        uint8_t frame[1514];
+        size_t totalLen = sizeof(EthHdr) + sizeof(Ipv4Hdr) + sizeof(UdpHdr) + payloadLen;
+        if (totalLen > sizeof(frame)) return false;
+
+        auto* eth = reinterpret_cast<EthHdr*>(frame);
+        auto* ip  = reinterpret_cast<Ipv4Hdr*>(frame + sizeof(EthHdr));
+        auto* udp = reinterpret_cast<UdpHdr*>(frame + sizeof(EthHdr) + sizeof(Ipv4Hdr));
+        uint8_t* data = frame + sizeof(EthHdr) + sizeof(Ipv4Hdr) + sizeof(UdpHdr);
+
+        std::memcpy(eth->dst, dstMac, 6);
+        std::memcpy(eth->src, m_mac, 6);
+        eth->etherType = bswap16(0x0800u);
+
+        ip->verIhl = 0x45;
+        ip->tos = 0;
+        ip->totalLen = bswap16(static_cast<uint16_t>(sizeof(Ipv4Hdr) + sizeof(UdpHdr) + payloadLen));
+        ip->id = bswap16(m_ipIdCounter++);
+        ip->flagsFrag = 0;
+        ip->ttl = 64;
+        ip->proto = 17; // UDP
+        ip->checksum = 0;
+        ip->srcIp = srcIp;
+        ip->dstIp = dstIp;
+        ip->checksum = inetChecksum(ip, sizeof(Ipv4Hdr));
+
+        uint16_t udpLen = static_cast<uint16_t>(sizeof(UdpHdr) + payloadLen);
+        udp->srcPort = bswap16(srcPortHost);
+        udp->dstPort = bswap16(dstPortHost);
+        udp->length = bswap16(udpLen);
+        udp->checksum = 0;
+        if (payload && payloadLen > 0) {
+            std::memcpy(data, payload, payloadLen);
+        }
+        udp->checksum = udpChecksum(srcIp, dstIp, udp, udpLen);
+        bool ok = sendRawFrame(frame, static_cast<uint16_t>(totalLen));
+        if (ok) m_udpPackets++;
+        return ok;
+    }
+
+    bool sendDhcpMessage(uint8_t msgType, uint32_t requestedIp, uint32_t serverIp) noexcept {
+        uint8_t pkt[320];
+        std::memset(pkt, 0, sizeof(pkt));
+        auto* hdr = reinterpret_cast<DhcpFixedHdr*>(pkt);
+        hdr->op = 1; // BOOTREQUEST
+        hdr->htype = 1; // Ethernet
+        hdr->hlen = 6;
+        hdr->hops = 0;
+        hdr->xid = bswap32(m_dhcpXid);
+        hdr->secs = 0;
+        hdr->flags = bswap16(0x8000u); // Broadcast reply flag
+        std::memcpy(hdr->chaddr, m_mac, 6);
+        hdr->magic = 0x63538263u; // 63 82 53 63 in network byte order
+
+        size_t o = sizeof(DhcpFixedHdr);
+        pkt[o++] = 53; pkt[o++] = 1; pkt[o++] = msgType; // DHCP Message Type
+        if (msgType == 3 && requestedIp != 0) {
+            pkt[o++] = 50; pkt[o++] = 4;
+            std::memcpy(&pkt[o], &requestedIp, 4); o += 4;
+            if (serverIp != 0) {
+                pkt[o++] = 54; pkt[o++] = 4;
+                std::memcpy(&pkt[o], &serverIp, 4); o += 4;
+            }
+        }
+        // Parameter Request List: Subnet(1), Router(3), DNS(6), LeaseTime(51)
+        pkt[o++] = 55; pkt[o++] = 4; pkt[o++] = 1; pkt[o++] = 3; pkt[o++] = 6; pkt[o++] = 51;
+        pkt[o++] = 255; // END
+
+        uint16_t sendLen = (o < 300) ? 300u : static_cast<uint16_t>(o);
+        const uint8_t bcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        return sendUdpRaw(bcastMac, 0u, 0xFFFFFFFFu, 68u, 67u, pkt, sendLen);
+    }
+
+    void handleDhcpReply(const uint8_t* payload, size_t len) noexcept {
+        if (!m_dhcpInFlight || len < sizeof(DhcpFixedHdr)) return;
+        const auto* hdr = reinterpret_cast<const DhcpFixedHdr*>(payload);
+        if (hdr->op != 2 || bswap32(hdr->xid) != m_dhcpXid || hdr->magic != 0x63538263u) return;
+        if (std::memcmp(hdr->chaddr, m_mac, 6) != 0) return;
+
+        uint8_t  msgType = 0;
+        uint32_t optMask = 0;
+        uint32_t optGw = 0;
+        uint32_t optDns = 0;
+        uint32_t optServer = hdr->siaddr;
+        uint32_t optLease = 86400u;
+
+        size_t o = sizeof(DhcpFixedHdr);
+        while (o < len) {
+            uint8_t code = payload[o++];
+            if (code == 0) continue;
+            if (code == 255) break;
+            if (o >= len) break;
+            uint8_t olen = payload[o++];
+            if (o + olen > len) break;
+            if (code == 53 && olen >= 1) {
+                msgType = payload[o];
+            } else if (code == 1 && olen >= 4) {
+                std::memcpy(&optMask, &payload[o], 4);
+            } else if (code == 3 && olen >= 4) {
+                std::memcpy(&optGw, &payload[o], 4);
+            } else if (code == 6 && olen >= 4) {
+                std::memcpy(&optDns, &payload[o], 4);
+            } else if (code == 51 && olen >= 4) {
+                uint32_t rawLease = 0;
+                std::memcpy(&rawLease, &payload[o], 4);
+                optLease = bswap32(rawLease);
+            } else if (code == 54 && olen >= 4) {
+                std::memcpy(&optServer, &payload[o], 4);
+            }
+            o += olen;
+        }
+
+        if (msgType == 2 && hdr->yiaddr != 0) { // DHCP OFFER
+            m_dhcpOfferedIp = hdr->yiaddr;
+            m_dhcpOfferServer = optServer ? optServer : optGw;
+            m_dhcpOfferMask = optMask ? optMask : (255u | (255u << 8) | (255u << 16));
+            m_dhcpOfferGw = optGw;
+            m_dhcpOfferDns = optDns;
+            m_dhcpOfferLease = optLease ? optLease : 86400u;
+            __atomic_store_n(&m_dhcpOfferReceived, true, __ATOMIC_RELEASE);
+        } else if (msgType == 5 && hdr->yiaddr != 0) { // DHCP ACK
+            m_ip = hdr->yiaddr;
+            if (optMask != 0) m_netmask = optMask;
+            else if (m_dhcpOfferMask != 0) m_netmask = m_dhcpOfferMask;
+            if (optGw != 0) m_gatewayIp = optGw;
+            else if (m_dhcpOfferGw != 0) m_gatewayIp = m_dhcpOfferGw;
+            if (optDns != 0) m_dnsIp = optDns;
+            else if (m_dhcpOfferDns != 0) m_dnsIp = m_dhcpOfferDns;
+            m_dhcpServerIp = optServer ? optServer : (m_dhcpOfferServer ? m_dhcpOfferServer : m_gatewayIp);
+            m_dhcpLeaseSeconds = optLease ? optLease : (m_dhcpOfferLease ? m_dhcpOfferLease : 86400u);
+            m_dhcpBound = true;
+            m_dhcpRenewCount++;
+            __atomic_store_n(&m_dhcpAckReceived, true, __ATOMIC_RELEASE);
+        }
+    }
+
+    static bool skipDnsName(const uint8_t* pkt, size_t pktLen, size_t& off) noexcept {
+        int guard = 0;
+        while (off < pktLen && ++guard < 64) {
+            uint8_t b = pkt[off];
+            if (b == 0) { off++; return true; }
+            if ((b & 0xC0u) == 0xC0u) {
+                if (off + 2 > pktLen) return false;
+                off += 2;
+                return true;
+            }
+            off += 1u + b;
+            if (off > pktLen) return false;
+        }
+        return false;
+    }
+
     void handleRxFrame(const uint8_t* data, uint16_t len) noexcept {
         if (len < sizeof(EthHdr)) return;
         const auto* eth = reinterpret_cast<const EthHdr*>(data);
@@ -566,14 +830,47 @@ private:
         const auto* ip = reinterpret_cast<const Ipv4Hdr*>(data + sizeof(EthHdr));
         uint8_t ihl = static_cast<uint8_t>((ip->verIhl & 0x0Fu) * 4u);
         if ((ip->verIhl >> 4) != 4 || ihl < 20 || sizeof(EthHdr) + ihl > len) return;
-        if (ip->dstIp != m_ip) return;
-
         uint16_t ipTot = bswap16(ip->totalLen);
         if (ipTot < ihl) return;
         size_t l4Avail = len - (sizeof(EthHdr) + ihl);
         size_t l4Len = ipTot - ihl;
         if (l4Len > l4Avail) l4Len = l4Avail;
         const uint8_t* l4 = data + sizeof(EthHdr) + ihl;
+
+        bool isBcastIp = (ip->dstIp == 0xFFFFFFFFu);
+        bool isDhcpReplyPkt = (ip->proto == 17 && l4Len >= sizeof(UdpHdr) &&
+                               bswap16(reinterpret_cast<const UdpHdr*>(l4)->dstPort) == 68u);
+        if (ip->dstIp != m_ip && !isBcastIp && !(m_dhcpInFlight && isDhcpReplyPkt)) return;
+
+        if (ip->proto == 17 && l4Len >= sizeof(UdpHdr)) { // UDP (RFC 768)
+            const auto* udp = reinterpret_cast<const UdpHdr*>(l4);
+            uint16_t srcPort = bswap16(udp->srcPort);
+            uint16_t dstPort = bswap16(udp->dstPort);
+            uint16_t udpTot = bswap16(udp->length);
+            if (udpTot < sizeof(UdpHdr)) return;
+            size_t payloadLen = udpTot - sizeof(UdpHdr);
+            if (sizeof(UdpHdr) + payloadLen > l4Len) payloadLen = l4Len - sizeof(UdpHdr);
+            const uint8_t* payload = l4 + sizeof(UdpHdr);
+            m_udpPackets++;
+
+            if (dstPort == 68u) {
+                handleDhcpReply(payload, payloadLen);
+                return;
+            }
+            for (size_t i = 1; i < MAX_UDP_SOCKETS; ++i) {
+                auto& us = m_udpSockets[i];
+                if (us.inUse && us.localPort == dstPort) {
+                    size_t copyLen = (payloadLen <= UDP_RX_PKT_CAP) ? payloadLen : UDP_RX_PKT_CAP;
+                    if (copyLen > 0) std::memcpy(s_udpRxStorage[i], payload, copyLen);
+                    us.rxSrcIp = ip->srcIp;
+                    us.rxSrcPort = srcPort;
+                    us.rxLen = static_cast<uint16_t>(copyLen);
+                    us.rxReady = true;
+                    return;
+                }
+            }
+            return;
+        }
 
         if (ip->proto == 1 && l4Len >= sizeof(IcmpHdr)) { // ICMP
             const auto* icmp = reinterpret_cast<const IcmpHdr*>(l4);
@@ -708,14 +1005,14 @@ public:
         // 3. Hardware reset & mask NIC interrupts (clean polled DMA driver)
         wr32(REG_IMC, 0xFFFFFFFFu);
         wr32(REG_CTRL, rd32(REG_CTRL) | (1u << 26)); // CTRL_RST
-        for (volatile int i = 0; i < 200000; ++i) {
+        for (int i = 0; i < 200000; ++i) {
             if ((rd32(REG_CTRL) & (1u << 26)) == 0) break;
         }
         wr32(REG_IMC, 0xFFFFFFFFu);
         (void)rd32(REG_ICR);
 
-        // Set Link Up + Auto-Speed Detect
-        wr32(REG_CTRL, (rd32(REG_CTRL) | (1u << 6) | (1u << 5)) & ~((1u << 3) | (1u << 31)));
+        // Set Link Up (CTRL_SLU) without re-triggering PHY autonegotiation delay
+        wr32(REG_CTRL, (rd32(REG_CTRL) | (1u << 6)) & ~((1u << 3) | (1u << 31)));
 
         // 4. Read genuine hardware MAC from RAL0/RAH0 (or EEPROM fallback)
         uint32_t ral = rd32(REG_RAL0);
@@ -762,9 +1059,10 @@ public:
         wr32(m_isI210 ? I210_RDBAH : LEG_RDBAH, static_cast<uint32_t>(rxPhys >> 32));
         wr32(m_isI210 ? I210_RDLEN : LEG_RDLEN, static_cast<uint32_t>(E1000_NUM_RX_DESC * sizeof(E1000RxDesc)));
         wr32(m_isI210 ? I210_RDH   : LEG_RDH,   0);
-        wr32(m_isI210 ? I210_RDT   : LEG_RDT,   static_cast<uint32_t>(E1000_NUM_RX_DESC - 1));
         if (m_isI210) wr32(I210_RXDCTL, rd32(I210_RXDCTL) | (1u << 25));
+        // Intel 82540EM Section 14.4: Enable RCTL before advancing RDT tail so hardware/QEMU arms RX immediately!
         wr32(REG_RCTL, (1u << 1) | (1u << 15) | (1u << 26)); // EN | BAM | SECRC | 2048B
+        wr32(m_isI210 ? I210_RDT   : LEG_RDT,   static_cast<uint32_t>(E1000_NUM_RX_DESC - 1));
 
         // 6. Program 32-descriptor TX DMA Ring
         uint64_t txPhys = reinterpret_cast<uint64_t>(s_e1000TxRing);
@@ -777,22 +1075,250 @@ public:
         wr32(REG_TCTL, (1u << 1) | (1u << 3) | (0x0Fu << 4) | (0x40u << 12)); // EN | PSP | CT | COLD
         wr32(REG_TIPG, 0x0060200Au);
 
-        // Configure canonical QEMU SLIRP IPv4 subnet (10.0.2.15/24, GW 10.0.2.2, DNS 10.0.2.3)
-        m_ip        = 10u | (0u << 8) | (2u << 16) | (15u << 24);
-        m_netmask   = 255u | (255u << 8) | (255u << 16) | (0u << 24);
-        m_gatewayIp = 10u | (0u << 8) | (2u << 16) | (2u << 24);
-        m_dnsIp     = 10u | (0u << 8) | (2u << 16) | (3u << 24);
         m_ipIdCounter = 1;
         m_ephemeralPort = 49152;
+        m_dnsTxIdCounter = 0x5100;
         m_rxCur = 0;
         m_txCur = 0;
-        m_linkUp = ((rd32(REG_STATUS) & 0x02u) != 0);
         m_initialized = true;
+
+        // Wait for real PHY Link-Up (STATUS.LU bit 1) after CTRL_RST autonegotiation before DHCP!
+        uint64_t linkWaitStart = rdtsc64();
+        while ((rd32(REG_STATUS) & 0x02u) == 0 && (rdtsc64() - linkWaitStart) < 2500000000ULL) {
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
+        // Brief 20ms PHY settle guard after LU rises so RX ring catches first DHCP OFFER
+        uint64_t settleStart = rdtsc64();
+        while ((rdtsc64() - settleStart) < 60000000ULL) {
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
+        m_linkUp = ((rd32(REG_STATUS) & 0x02u) != 0);
+
+        // Perform REAL wire 4-Way RFC 2131 DHCP Handshake (DISCOVER -> OFFER -> REQUEST -> ACK)!
+        if (!runDhcpHandshake()) {
+            // Clean static fallback only if no DHCP server responds on a disconnected NIC
+            m_ip        = 10u | (0u << 8) | (2u << 16) | (15u << 24);
+            m_netmask   = 255u | (255u << 8) | (255u << 16) | (0u << 24);
+            m_gatewayIp = 10u | (0u << 8) | (2u << 16) | (2u << 24);
+            m_dnsIp     = 10u | (0u << 8) | (2u << 16) | (3u << 24);
+        }
 
         // Immediately resolve Gateway MAC via real hardware ARP broadcast!
         uint8_t gwMac[6]{};
         resolveNextHopMac(m_gatewayIp, gwMac);
         return true;
+    }
+
+    bool runDhcpHandshake() noexcept {
+        if (!m_initialized) return false;
+        m_dhcpXid = 0x4D494300u | (++m_dhcpSeq);
+        m_dhcpOfferedIp = 0;
+        m_dhcpOfferServer = 0;
+        m_dhcpOfferMask = 0;
+        m_dhcpOfferGw = 0;
+        m_dhcpOfferDns = 0;
+        m_dhcpOfferLease = 86400u;
+        __atomic_store_n(&m_dhcpOfferReceived, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&m_dhcpAckReceived, false, __ATOMIC_RELEASE);
+        m_dhcpInFlight = true;
+
+        // Phase 1 & 2: Broadcast DHCP DISCOVER -> wait for DHCP OFFER
+        for (int attempt = 0; attempt < 5 && !__atomic_load_n(&m_dhcpOfferReceived, __ATOMIC_ACQUIRE); ++attempt) {
+            if (!sendDhcpMessage(1u /* DISCOVER */, 0, 0)) break;
+            uint64_t t0 = rdtsc64();
+            while ((rdtsc64() - t0) < 700000000ULL) {
+                pollRx();
+                if (__atomic_load_n(&m_dhcpOfferReceived, __ATOMIC_ACQUIRE)) break;
+#if defined(__x86_64__)
+                __asm__ __volatile__("pause");
+#endif
+            }
+        }
+        if (!__atomic_load_n(&m_dhcpOfferReceived, __ATOMIC_ACQUIRE) || m_dhcpOfferedIp == 0) {
+            m_dhcpInFlight = false;
+            return false;
+        }
+
+        // Phase 3 & 4: Broadcast DHCP REQUEST -> wait for DHCP ACK
+        for (int attempt = 0; attempt < 4 && !__atomic_load_n(&m_dhcpAckReceived, __ATOMIC_ACQUIRE); ++attempt) {
+            if (!sendDhcpMessage(3u /* REQUEST */, m_dhcpOfferedIp, m_dhcpOfferServer)) break;
+            uint64_t t0 = rdtsc64();
+            while ((rdtsc64() - t0) < 700000000ULL) {
+                pollRx();
+                if (__atomic_load_n(&m_dhcpAckReceived, __ATOMIC_ACQUIRE)) break;
+#if defined(__x86_64__)
+                __asm__ __volatile__("pause");
+#endif
+            }
+        }
+        m_dhcpInFlight = false;
+        if (!__atomic_load_n(&m_dhcpAckReceived, __ATOMIC_ACQUIRE)) {
+            return false;
+        }
+        // Refresh ARP entry for the dynamically leased gateway
+        uint8_t gwMac[6]{};
+        resolveNextHopMac(m_gatewayIp, gwMac);
+        return true;
+    }
+
+    uint64_t createUdpSocket() noexcept {
+        if (!m_initialized) return 0;
+        for (size_t i = 1; i < MAX_UDP_SOCKETS; ++i) {
+            if (!m_udpSockets[i].inUse) {
+                std::memset(&m_udpSockets[i], 0, sizeof(m_udpSockets[i]));
+                m_udpSockets[i].inUse = true;
+                m_udpSockets[i].localPort = m_ephemeralPort++;
+                if (m_ephemeralPort < 49152) m_ephemeralPort = 49152;
+                return NET_UDP_HANDLE_TAG | static_cast<uint64_t>(i);
+            }
+        }
+        return 0;
+    }
+
+    int32_t udpSendTo(uint64_t hSock, uint32_t dstIp, uint16_t dstPortHost, const void* data, uint32_t len) noexcept {
+        if ((hSock & NET_UDP_HANDLE_TAG) != NET_UDP_HANDLE_TAG || !data || len > 1460u) return -1;
+        size_t idx = static_cast<size_t>(hSock & ~NET_UDP_HANDLE_TAG);
+        if (idx == 0 || idx >= MAX_UDP_SOCKETS || !m_udpSockets[idx].inUse) return -1;
+
+        uint8_t dstMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        if (dstIp != 0xFFFFFFFFu) {
+            if (!resolveNextHopMac(dstIp, dstMac)) return -1;
+        }
+        m_udpSockets[idx].rxReady = false;
+        bool ok = sendUdpRaw(dstMac, m_ip, dstIp, m_udpSockets[idx].localPort, dstPortHost, data, static_cast<uint16_t>(len));
+        return ok ? static_cast<int32_t>(len) : -1;
+    }
+
+    int32_t udpRecvFrom(
+        uint64_t hSock, void* outBuf, uint32_t maxLen, uint32_t& outSrcIp, uint16_t& outSrcPortHost
+    ) noexcept {
+        if ((hSock & NET_UDP_HANDLE_TAG) != NET_UDP_HANDLE_TAG || !outBuf || maxLen == 0) return -1;
+        size_t idx = static_cast<size_t>(hSock & ~NET_UDP_HANDLE_TAG);
+        if (idx == 0 || idx >= MAX_UDP_SOCKETS || !m_udpSockets[idx].inUse) return -1;
+        auto& us = m_udpSockets[idx];
+
+        uint64_t t0 = rdtsc64();
+        while (!us.rxReady && (rdtsc64() - t0) < 2000000000ULL) {
+            pollRx();
+            if (us.rxReady) break;
+#if defined(__x86_64__)
+            __asm__ __volatile__("pause");
+#endif
+        }
+        if (!us.rxReady) return -1;
+
+        uint32_t copyLen = (us.rxLen <= maxLen) ? us.rxLen : maxLen;
+        if (copyLen > 0) std::memcpy(outBuf, s_udpRxStorage[idx], copyLen);
+        outSrcIp = us.rxSrcIp;
+        outSrcPortHost = us.rxSrcPort;
+        us.rxReady = false;
+        return static_cast<int32_t>(copyLen);
+    }
+
+    bool udpClose(uint64_t hSock) noexcept {
+        if ((hSock & NET_UDP_HANDLE_TAG) != NET_UDP_HANDLE_TAG) return false;
+        size_t idx = static_cast<size_t>(hSock & ~NET_UDP_HANDLE_TAG);
+        if (idx == 0 || idx >= MAX_UDP_SOCKETS) return false;
+        m_udpSockets[idx].inUse = false;
+        m_udpSockets[idx].rxReady = false;
+        return true;
+    }
+
+    bool dnsResolveA(const char* hostname, uint32_t dnsServerIpNet, uint16_t dnsPortHost, NetDnsResult& outRes) noexcept {
+        std::memset(&outRes, 0, sizeof(outRes));
+        if (!m_initialized || !hostname || !hostname[0]) return false;
+
+        uint32_t srvIp = (dnsServerIpNet != 0) ? dnsServerIpNet : m_dnsIp;
+        uint16_t srvPort = (dnsPortHost != 0) ? dnsPortHost : 53u;
+        if (srvIp == 0) return false;
+
+        uint8_t qbuf[512];
+        std::memset(qbuf, 0, sizeof(qbuf));
+        auto* qhdr = reinterpret_cast<DnsHdr*>(qbuf);
+        uint16_t txid = ++m_dnsTxIdCounter;
+        qhdr->id = bswap16(txid);
+        qhdr->flags = bswap16(0x0100u); // Standard query, Recursion Desired (RD=1)
+        qhdr->qdCount = bswap16(1u);
+
+        // Encode QNAME labels (RFC 1035 Section 3.1)
+        size_t o = sizeof(DnsHdr);
+        const char* p = hostname;
+        while (*p && o + 66 < sizeof(qbuf)) {
+            if (*p == '.') { ++p; continue; }
+            size_t lenPos = o++;
+            uint8_t labLen = 0;
+            while (*p && *p != '.' && labLen < 63u) {
+                qbuf[o++] = static_cast<uint8_t>(*p++);
+                labLen++;
+            }
+            qbuf[lenPos] = labLen;
+        }
+        qbuf[o++] = 0; // Root label
+        if (o + 4 > sizeof(qbuf)) return false;
+        qbuf[o++] = 0; qbuf[o++] = 1; // QTYPE = A (1)
+        qbuf[o++] = 0; qbuf[o++] = 1; // QCLASS = IN (1)
+
+        uint64_t hUdp = createUdpSocket();
+        if (hUdp == 0) return false;
+
+        uint64_t tStart = rdtsc64();
+        int32_t sent = udpSendTo(hUdp, srvIp, srvPort, qbuf, static_cast<uint32_t>(o));
+        if (sent <= 0) {
+            udpClose(hUdp);
+            return false;
+        }
+
+        uint8_t rbuf[512];
+        uint32_t respIp = 0;
+        uint16_t respPort = 0;
+        int32_t rlen = udpRecvFrom(hUdp, rbuf, sizeof(rbuf), respIp, respPort);
+        uint64_t dt = rdtsc64() - tStart;
+        udpClose(hUdp);
+
+        if (rlen < static_cast<int32_t>(sizeof(DnsHdr))) return false;
+        const auto* rhdr = reinterpret_cast<const DnsHdr*>(rbuf);
+        if (bswap16(rhdr->id) != txid) return false;
+        if ((bswap16(rhdr->flags) & 0x8000u) == 0) return false; // Must be response (QR=1)
+        uint16_t qdCount = bswap16(rhdr->qdCount);
+        uint16_t anCount = bswap16(rhdr->anCount);
+        if (anCount == 0) return false;
+
+        size_t off = sizeof(DnsHdr);
+        size_t ulen = static_cast<size_t>(rlen);
+        for (uint16_t q = 0; q < qdCount; ++q) {
+            if (!skipDnsName(rbuf, ulen, off) || off + 4 > ulen) return false;
+            off += 4; // QTYPE + QCLASS
+        }
+
+        for (uint16_t a = 0; a < anCount; ++a) {
+            if (!skipDnsName(rbuf, ulen, off) || off + 10 > ulen) break;
+            uint16_t rtype  = static_cast<uint16_t>((static_cast<uint16_t>(rbuf[off]) << 8) | rbuf[off + 1]);
+            uint16_t rclass = static_cast<uint16_t>((static_cast<uint16_t>(rbuf[off + 2]) << 8) | rbuf[off + 3]);
+            uint32_t rttl   = (static_cast<uint32_t>(rbuf[off + 4]) << 24) |
+                              (static_cast<uint32_t>(rbuf[off + 5]) << 16) |
+                              (static_cast<uint32_t>(rbuf[off + 6]) << 8)  |
+                              static_cast<uint32_t>(rbuf[off + 7]);
+            uint16_t rdlen  = static_cast<uint16_t>((static_cast<uint16_t>(rbuf[off + 8]) << 8) | rbuf[off + 9]);
+            off += 10;
+            if (off + rdlen > ulen) break;
+
+            if (rtype == 1u && rclass == 1u && rdlen == 4u) {
+                std::memcpy(&outRes.resolvedIpNet, &rbuf[off], 4);
+                outRes.ttlSeconds = rttl;
+                outRes.rttUs = static_cast<uint32_t>(dt / 3000ULL);
+                outRes.answerCount = anCount;
+                outRes.serverIpNet = srvIp;
+                outRes.serverPort = srvPort;
+                m_dnsResolved++;
+                return true;
+            }
+            off += rdlen;
+        }
+        return false;
     }
 
     void pollRx() noexcept {
@@ -1014,10 +1540,20 @@ public:
         info.arpResolved = m_arpResolved;
         info.icmpReplies = m_icmpReplies;
         info.tcpHandshakes = m_tcpHandshakes;
+        info.dhcpBound = m_dhcpBound ? 1u : 0u;
+        info.dhcpServerIp = m_dhcpServerIp;
+        info.dhcpLeaseSeconds = m_dhcpLeaseSeconds;
+        info.dhcpRenewCount = m_dhcpRenewCount;
+        info.udpPackets = m_udpPackets;
+        info.dnsResolved = m_dnsResolved;
     }
 
     [[nodiscard]] bool     isInitialized() const noexcept { return m_initialized; }
     [[nodiscard]] bool     isLinkUp() const noexcept { return m_linkUp; }
+    [[nodiscard]] bool     isDhcpBound() const noexcept { return m_dhcpBound; }
+    [[nodiscard]] uint32_t getLocalIp() const noexcept { return m_ip; }
+    [[nodiscard]] uint32_t getDnsIp() const noexcept { return m_dnsIp; }
+    [[nodiscard]] uint32_t getDhcpLeaseSeconds() const noexcept { return m_dhcpLeaseSeconds; }
     [[nodiscard]] uint16_t getVendorId() const noexcept { return m_vendorId; }
     [[nodiscard]] uint16_t getDeviceId() const noexcept { return m_deviceId; }
     [[nodiscard]] uint8_t  getPciBus() const noexcept { return m_pciBus; }

@@ -321,6 +321,7 @@ def main():
             ("tools/ipconfig_app.cpp", "ipconfig.exe"),
             ("tools/ping_app.cpp",     "ping.exe"),
             ("tools/curl_app.cpp",     "curl.exe"),
+            ("tools/nslookup_app.cpp", "nslookup.exe"),
         ]:
             nsrc = repo_root / rel_src
             if nsrc.exists():

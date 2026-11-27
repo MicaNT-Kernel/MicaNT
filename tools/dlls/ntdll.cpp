@@ -678,13 +678,42 @@ struct NtNetIoReq {
     int32_t  outBytes;
 };
 
+struct NtNetUdpReq {
+    uint64_t hSocket;
+    uint32_t ipv4NetOrder;
+    uint16_t portHostOrder;
+    uint16_t reserved;
+    uint64_t bufPtr;
+    uint32_t length;
+    int32_t  outBytes;
+};
+
+struct NtNetDnsReq {
+    uint64_t hostnamePtr;
+    uint32_t dnsServerIpNet;
+    uint16_t dnsPortHost;
+    uint16_t reserved;
+    uint64_t outResultPtr;
+};
+
 __declspec(dllexport) uint64_t NtNetQueryAdapterInfo(void* outInfoBuf, uint32_t bufLen) noexcept {
     return NtSyscall3(0x90, reinterpret_cast<uint64_t>(outInfoBuf), bufLen, 0);
 }
 
 __declspec(dllexport) uint64_t NtNetSocketCreate(void** outSocketHandle) noexcept {
     if (!outSocketHandle) return NT_STATUS_INVALID_PARAMETER;
-    uint64_t h = NtSyscall3(0x91, 0, 0, 0);
+    uint64_t h = NtSyscall3(0x91, 1, 0, 0);
+    if (h == 0) {
+        *outSocketHandle = nullptr;
+        return NT_STATUS_UNSUCCESSFUL;
+    }
+    *outSocketHandle = reinterpret_cast<void*>(h);
+    return NT_STATUS_SUCCESS;
+}
+
+__declspec(dllexport) uint64_t NtNetSocketCreateTyped(void** outSocketHandle, uint32_t sockType) noexcept {
+    if (!outSocketHandle) return NT_STATUS_INVALID_PARAMETER;
+    uint64_t h = NtSyscall3(0x91, sockType, 0, 0);
     if (h == 0) {
         *outSocketHandle = nullptr;
         return NT_STATUS_UNSUCCESSFUL;
@@ -712,6 +741,46 @@ __declspec(dllexport) int32_t NtNetSocketRecv(void* hSocket, void* buf, uint32_t
 
 __declspec(dllexport) uint64_t NtNetSocketClose(void* hSocket) noexcept {
     return NtSyscall3(0x95, reinterpret_cast<uint64_t>(hSocket), 0, 0);
+}
+
+__declspec(dllexport) int32_t NtNetUdpSendTo(
+    void* hSocket, uint32_t ipv4NetOrder, uint16_t portHostOrder, const void* buf, uint32_t len
+) noexcept {
+    NtNetUdpReq req{
+        reinterpret_cast<uint64_t>(hSocket), ipv4NetOrder, portHostOrder, 0,
+        reinterpret_cast<uint64_t>(buf), len, -1
+    };
+    uint64_t st = NtSyscall3(0x96, reinterpret_cast<uint64_t>(&req), 0, 0);
+    return (st == NT_STATUS_SUCCESS) ? req.outBytes : -1;
+}
+
+__declspec(dllexport) int32_t NtNetUdpRecvFrom(
+    void* hSocket, void* buf, uint32_t maxLen, uint32_t* outIpNet, uint16_t* outPortHost
+) noexcept {
+    NtNetUdpReq req{
+        reinterpret_cast<uint64_t>(hSocket), 0, 0, 0,
+        reinterpret_cast<uint64_t>(buf), maxLen, -1
+    };
+    uint64_t st = NtSyscall3(0x97, reinterpret_cast<uint64_t>(&req), 0, 0);
+    if (st != NT_STATUS_SUCCESS) return -1;
+    if (outIpNet) *outIpNet = req.ipv4NetOrder;
+    if (outPortHost) *outPortHost = req.portHostOrder;
+    return req.outBytes;
+}
+
+__declspec(dllexport) uint64_t NtNetDnsResolve(
+    const char* hostname, uint32_t dnsServerIpNet, uint16_t dnsPortHost, void* outResult
+) noexcept {
+    if (!hostname || !outResult) return NT_STATUS_INVALID_PARAMETER;
+    NtNetDnsReq req{
+        reinterpret_cast<uint64_t>(hostname), dnsServerIpNet, dnsPortHost, 0,
+        reinterpret_cast<uint64_t>(outResult)
+    };
+    return NtSyscall3(0x98, reinterpret_cast<uint64_t>(&req), 0, 0);
+}
+
+__declspec(dllexport) uint64_t NtNetDhcpRenew(void* outAdapterInfo, uint32_t bufLen) noexcept {
+    return NtSyscall3(0x99, reinterpret_cast<uint64_t>(outAdapterInfo), bufLen, 0);
 }
 
 // ============================================================================
